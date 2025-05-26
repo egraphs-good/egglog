@@ -113,8 +113,8 @@ impl Sort for SetSort {
         self.element.is_eq_sort()
     }
 
-    fn inner_values(&self, containers: &Containers, value: &Value) -> Vec<(ArcSort, Value)> {
-        let val = containers.get_val::<SetContainer>(*value).unwrap().clone();
+    fn inner_values(&self, containers: &Containers, value: Value) -> Vec<(ArcSort, Value)> {
+        let val = containers.get_val::<SetContainer>(value).unwrap().clone();
         val.data
             .iter()
             .map(|e| (self.element.clone(), *e))
@@ -141,14 +141,14 @@ impl Sort for SetSort {
     fn reconstruct_termdag_container(
         &self,
         _containers: &Containers,
-        _value: &Value,
+        _value: Value,
         termdag: &mut TermDag,
         element_terms: Vec<Term>,
     ) -> Term {
         termdag.app("set-of".into(), element_terms)
     }
 
-    fn serialized_name(&self, _value: &Value) -> Symbol {
+    fn serialized_name(&self, _value: Value) -> Symbol {
         "set-of".into()
     }
 

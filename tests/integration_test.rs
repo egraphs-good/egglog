@@ -670,7 +670,7 @@ fn test_value_to_classid() {
     let (sort, value) = egraph.eval_expr(&expr).unwrap();
 
     let serialized = egraph.serialize(SerializeConfig::default());
-    let class_id = egraph.value_to_class_id(&sort, &value);
+    let class_id = egraph.value_to_class_id(&sort, value);
     assert!(serialized.class_data.get(&class_id).is_some());
     assert_eq!(value, egraph.class_id_to_value(&class_id));
 }

@@ -69,10 +69,10 @@ impl Sort for BigIntSort {
     fn reconstruct_termdag_leaf(
         &self,
         primitives: &Primitives,
-        value: &Value,
+        value: Value,
         termdag: &mut TermDag,
     ) -> Term {
-        let bigint = primitives.unwrap_ref::<BigInt>(*value);
+        let bigint = primitives.unwrap_ref::<BigInt>(value);
 
         let as_string = termdag.lit(Literal::String(bigint.to_string().into()));
         termdag.app("from_string".into(), vec![as_string])

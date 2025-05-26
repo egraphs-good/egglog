@@ -189,12 +189,12 @@ impl ExtractorAlter {
     /// Compute the cost of a single enode
     /// Recurse if container
     /// Returns None if contains an undefined eqsort term (potentially after unfolding)
-    fn compute_cost_node(&self, egraph: &EGraph, value: &Value, sort: &ArcSort) -> Option<Cost> {
+    fn compute_cost_node(&self, egraph: &EGraph, value: Value, sort: &ArcSort) -> Option<Cost> {
         if sort.is_container_sort() {
             let elements = sort.inner_values(egraph.backend.containers(), value);
             let mut ch_costs: Vec<Cost> = Vec::new();
             for ch in elements.iter() {
-                if let Some(c) = self.compute_cost_node(egraph, &ch.1, &ch.0) {
+                if let Some(c) = self.compute_cost_node(egraph, ch.1, &ch.0) {
                     ch_costs.push(c);
                 } else {
                     return None;
@@ -202,21 +202,21 @@ impl ExtractorAlter {
             }
             Some(
                 self.cost_model
-                    .container_primitive(egraph, sort, *value, &ch_costs),
+                    .container_primitive(egraph, sort, value, &ch_costs),
             )
         } else if sort.is_eq_sort() {
             if self
                 .costs
                 .get(&sort.name())
-                .is_some_and(|t| t.get(value).is_some())
+                .is_some_and(|t| t.get(&value).is_some())
             {
-                Some(*self.costs.get(&sort.name()).unwrap().get(value).unwrap())
+                Some(*self.costs.get(&sort.name()).unwrap().get(&value).unwrap())
             } else {
                 None
             }
         } else {
             // Primitive
-            Some(self.cost_model.leaf_primitive(egraph, sort, *value))
+            Some(self.cost_model.leaf_primitive(egraph, sort, value))
         }
     }
 
@@ -232,7 +232,7 @@ impl ExtractorAlter {
         //log::debug!("compute_cost_hyperedge head {} sorts {:?}", head, sorts);
         // Relying on .zip to truncate the values
         for (value, sort) in row.vals.iter().zip(sorts.iter()) {
-            if let Some(c) = self.compute_cost_node(egraph, value, sort) {
+            if let Some(c) = self.compute_cost_node(egraph, *value, sort) {
                 ch_costs.push(c);
             } else {
                 return None;
@@ -245,16 +245,16 @@ impl ExtractorAlter {
         ))
     }
 
-    fn compute_topo_rnk_node(&self, egraph: &EGraph, value: &Value, sort: &ArcSort) -> usize {
+    fn compute_topo_rnk_node(&self, egraph: &EGraph, value: Value, sort: &ArcSort) -> usize {
         if sort.is_container_sort() {
             sort.inner_values(egraph.backend.containers(), value)
                 .iter()
                 .fold(0, |ret, (sort, value)| {
-                    usize::max(ret, self.compute_topo_rnk_node(egraph, value, sort))
+                    usize::max(ret, self.compute_topo_rnk_node(egraph, *value, sort))
                 })
         } else if sort.is_eq_sort() {
             if let Some(t) = self.topo_rnk.get(&sort.name()) {
-                *t.get(value).unwrap_or(&usize::MAX)
+                *t.get(&value).unwrap_or(&usize::MAX)
             } else {
                 usize::MAX
             }
@@ -274,7 +274,7 @@ impl ExtractorAlter {
             .iter()
             .zip(sorts.iter())
             .fold(0, |ret, (value, sort)| {
-                usize::max(ret, self.compute_topo_rnk_node(egraph, value, sort))
+                usize::max(ret, self.compute_topo_rnk_node(egraph, *value, sort))
             })
     }
 
@@ -389,7 +389,7 @@ impl ExtractorAlter {
         &self,
         egraph: &EGraph,
         termdag: &mut TermDag,
-        value: &Value,
+        value: Value,
         sort: &ArcSort,
     ) -> Term {
         self.reconstruct_termdag_node_helper(egraph, termdag, value, sort, &mut Default::default())
@@ -399,11 +399,11 @@ impl ExtractorAlter {
         &self,
         egraph: &EGraph,
         termdag: &mut TermDag,
-        value: &Value,
+        value: Value,
         sort: &ArcSort,
         cache: &mut HashMap<(Value, Symbol), Term>,
     ) -> Term {
-        let key = (*value, sort.name());
+        let key = (value, sort.name());
         if let Some(term) = cache.get(&key) {
             return term.clone();
         }
@@ -413,7 +413,7 @@ impl ExtractorAlter {
             let mut ch_terms: Vec<Term> = Vec::new();
             for ch in elements.iter() {
                 ch_terms.push(
-                    self.reconstruct_termdag_node_helper(egraph, termdag, &ch.1, &ch.0, cache),
+                    self.reconstruct_termdag_node_helper(egraph, termdag, ch.1, &ch.0, cache),
                 );
             }
             sort.reconstruct_termdag_container(
@@ -427,13 +427,13 @@ impl ExtractorAlter {
                 .parent_edge
                 .get(&sort.name())
                 .unwrap()
-                .get(value)
+                .get(&value)
                 .unwrap();
             let mut ch_terms: Vec<Term> = Vec::new();
             let ch_sorts = &egraph.functions.get(func_name).unwrap().schema.input;
             for (value, sort) in hyperedge.iter().zip(ch_sorts.iter()) {
                 ch_terms.push(
-                    self.reconstruct_termdag_node_helper(egraph, termdag, value, sort, cache),
+                    self.reconstruct_termdag_node_helper(egraph, termdag, *value, sort, cache),
                 );
             }
             termdag.app(*func_name, ch_terms)
@@ -455,11 +455,11 @@ impl ExtractorAlter {
         value: Value,
         sort: ArcSort,
     ) -> Option<(Cost, Term)> {
-        match self.compute_cost_node(egraph, &value, &sort) {
+        match self.compute_cost_node(egraph, value, &sort) {
             Some(best_cost) => {
                 log::debug!("Best cost for the extract root: {:?}", best_cost);
 
-                let term = self.reconstruct_termdag_node(egraph, termdag, &value, &sort);
+                let term = self.reconstruct_termdag_node(egraph, termdag, value, &sort);
 
                 Some((best_cost, term))
             }
@@ -546,7 +546,7 @@ impl ExtractorAlter {
                 let ch_sorts = &egraph.functions.get(&func_name).unwrap().schema.input;
                 // zip truncates the row
                 for (value, sort) in hyperedge.iter().zip(ch_sorts.iter()) {
-                    ch_terms.push(self.reconstruct_termdag_node(egraph, termdag, value, sort));
+                    ch_terms.push(self.reconstruct_termdag_node(egraph, termdag, *value, sort));
                 }
                 res.push((cost, termdag.app(func_name, ch_terms)));
             }

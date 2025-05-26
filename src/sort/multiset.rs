@@ -110,9 +110,9 @@ impl Sort for MultiSetSort {
         self.element.is_eq_sort()
     }
 
-    fn inner_values(&self, containers: &Containers, value: &Value) -> Vec<(ArcSort, Value)> {
+    fn inner_values(&self, containers: &Containers, value: Value) -> Vec<(ArcSort, Value)> {
         let val = containers
-            .get_val::<MultiSetContainer>(*value)
+            .get_val::<MultiSetContainer>(value)
             .unwrap()
             .clone();
         val.data
@@ -154,14 +154,14 @@ impl Sort for MultiSetSort {
     fn reconstruct_termdag_container(
         &self,
         _containers: &Containers,
-        _value: &Value,
+        _value: Value,
         termdag: &mut TermDag,
         element_terms: Vec<Term>,
     ) -> Term {
         termdag.app("multiset-of".into(), element_terms)
     }
 
-    fn serialized_name(&self, _value: &Value) -> Symbol {
+    fn serialized_name(&self, _value: Value) -> Symbol {
         "multiset-of".into()
     }
 
