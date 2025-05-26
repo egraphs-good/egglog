@@ -43,10 +43,10 @@ impl Sort for StringSort {
     fn reconstruct_termdag_leaf(
         &self,
         primitives: &Primitives,
-        value: &Value,
+        value: Value,
         termdag: &mut TermDag,
     ) -> Term {
-        let s = primitives.unwrap_ref::<S>(*value);
+        let s = primitives.unwrap_ref::<S>(value);
 
         termdag.lit(Literal::String(*s))
     }

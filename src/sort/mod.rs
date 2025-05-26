@@ -84,13 +84,13 @@ pub trait Sort: Any + Send + Sync + Debug {
     /// Return the serialized name of the sort
     ///
     /// Only used for container sorts, which cannot be serialized with make_expr so need an explicit name
-    fn serialized_name(&self, _value: &Value) -> Symbol {
+    fn serialized_name(&self, _value: Value) -> Symbol {
         self.name()
     }
 
     /// Return the inner values and sorts.
     /// Only container sort need to implement this method,
-    fn inner_values(&self, containers: &Containers, value: &Value) -> Vec<(ArcSort, Value)> {
+    fn inner_values(&self, containers: &Containers, value: Value) -> Vec<(ArcSort, Value)> {
         debug_assert!(!self.is_container_sort());
         let _ = value;
         let _ = containers;
@@ -125,7 +125,7 @@ pub trait Sort: Any + Send + Sync + Debug {
     fn reconstruct_termdag_container(
         &self,
         containers: &Containers,
-        value: &Value,
+        value: Value,
         termdag: &mut TermDag,
         element_terms: Vec<Term>,
     ) -> Term {
@@ -140,7 +140,7 @@ pub trait Sort: Any + Send + Sync + Debug {
     fn reconstruct_termdag_leaf(
         &self,
         primitives: &Primitives,
-        value: &Value,
+        value: Value,
         termdag: &mut TermDag,
     ) -> Term {
         let _primitives = primitives;

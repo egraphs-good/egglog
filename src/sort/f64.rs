@@ -64,10 +64,10 @@ impl Sort for F64Sort {
     fn reconstruct_termdag_leaf(
         &self,
         primitives: &Primitives,
-        value: &Value,
+        value: Value,
         termdag: &mut TermDag,
     ) -> Term {
-        let f = primitives.unwrap_ref::<F>(*value);
+        let f = primitives.unwrap_ref::<F>(value);
 
         termdag.lit(Literal::Float(*f))
     }

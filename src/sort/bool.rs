@@ -40,10 +40,10 @@ impl Sort for BoolSort {
     fn reconstruct_termdag_leaf(
         &self,
         primitives: &Primitives,
-        value: &Value,
+        value: Value,
         termdag: &mut TermDag,
     ) -> Term {
-        let b = primitives.unwrap_ref::<bool>(*value);
+        let b = primitives.unwrap_ref::<bool>(value);
 
         termdag.lit(Literal::Bool(*b))
     }
