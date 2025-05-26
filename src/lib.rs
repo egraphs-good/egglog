@@ -16,6 +16,7 @@ mod cli;
 pub mod constraint;
 mod core;
 pub mod extract;
+pub mod prelude;
 mod serialize;
 pub mod sort;
 mod termdag;
