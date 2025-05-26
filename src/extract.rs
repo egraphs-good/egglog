@@ -392,11 +392,29 @@ impl ExtractorAlter {
         value: &Value,
         sort: &ArcSort,
     ) -> Term {
-        if sort.is_container_sort() {
+        self.reconstruct_termdag_node_helper(egraph, termdag, value, sort, &mut Default::default())
+    }
+
+    fn reconstruct_termdag_node_helper(
+        &self,
+        egraph: &EGraph,
+        termdag: &mut TermDag,
+        value: &Value,
+        sort: &ArcSort,
+        cache: &mut HashMap<(Value, Symbol), Term>,
+    ) -> Term {
+        let key = (*value, sort.name());
+        if let Some(term) = cache.get(&key) {
+            return term.clone();
+        }
+
+        let term = if sort.is_container_sort() {
             let elements = sort.inner_values(egraph.backend.containers(), value);
             let mut ch_terms: Vec<Term> = Vec::new();
             for ch in elements.iter() {
-                ch_terms.push(self.reconstruct_termdag_node(egraph, termdag, &ch.1, &ch.0));
+                ch_terms.push(
+                    self.reconstruct_termdag_node_helper(egraph, termdag, &ch.1, &ch.0, cache),
+                );
             }
             sort.reconstruct_termdag_container(
                 egraph.backend.containers(),
@@ -414,13 +432,18 @@ impl ExtractorAlter {
             let mut ch_terms: Vec<Term> = Vec::new();
             let ch_sorts = &egraph.functions.get(func_name).unwrap().schema.input;
             for (value, sort) in hyperedge.iter().zip(ch_sorts.iter()) {
-                ch_terms.push(self.reconstruct_termdag_node(egraph, termdag, value, sort));
+                ch_terms.push(
+                    self.reconstruct_termdag_node_helper(egraph, termdag, value, sort, cache),
+                );
             }
             termdag.app(*func_name, ch_terms)
         } else {
             // Primitive
             sort.reconstruct_termdag_leaf(egraph.backend.primitives(), value, termdag)
-        }
+        };
+
+        cache.insert(key, term.clone());
+        term
     }
 
     /// This expects the sort to be already computed
