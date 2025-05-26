@@ -37,7 +37,7 @@ use constraint::{Constraint, SimpleTypeConstraint, TypeConstraint};
 pub use core_relations::Value;
 use core_relations::{make_external_func, ExternalFunctionId};
 use egglog_bridge::{ColumnTy, IterationReport, QueryEntry};
-use extract::{ExtractorAlter, TreeAdditiveCostModel};
+use extract::{Extractor, TreeAdditiveCostModel};
 use indexmap::map::Entry;
 pub use serialize::{SerializeConfig, SerializedNode};
 use sort::*;
@@ -553,7 +553,7 @@ impl EGraph {
         if include_output {
             rootsorts.push(func.schema.output.clone());
         }
-        let extractor = ExtractorAlter::compute_costs_from_rootsorts(
+        let extractor = Extractor::compute_costs_from_rootsorts(
             Some(rootsorts),
             self,
             TreeAdditiveCostModel::default(),
@@ -708,7 +708,7 @@ impl EGraph {
     /// Note that the `TermDag` may contain a superset of the nodes in the `Term`.
     /// See also `extract_value_to_string` for convenience.
     pub fn extract_value(&self, sort: &ArcSort, value: Value) -> Result<(TermDag, Term), Error> {
-        let extractor = ExtractorAlter::compute_costs_from_rootsorts(
+        let extractor = Extractor::compute_costs_from_rootsorts(
             Some(vec![sort.clone()]),
             self,
             TreeAdditiveCostModel::default(),
@@ -1078,7 +1078,7 @@ impl EGraph {
 
                 let mut termdag = TermDag::default();
 
-                let extractor = ExtractorAlter::compute_costs_from_rootsorts(
+                let extractor = Extractor::compute_costs_from_rootsorts(
                     Some(vec![sort]),
                     self,
                     TreeAdditiveCostModel::default(),
@@ -1187,7 +1187,7 @@ impl EGraph {
                     .open(&filename)
                     .map_err(|e| Error::IoError(filename.clone(), e, span.clone()))?;
 
-                let extractor = ExtractorAlter::compute_costs_from_rootsorts(
+                let extractor = Extractor::compute_costs_from_rootsorts(
                     None,
                     self,
                     TreeAdditiveCostModel::default(),

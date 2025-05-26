@@ -72,7 +72,7 @@ impl CostModel for TreeAdditiveCostModel {
     }
 }
 
-pub struct ExtractorAlter {
+pub struct Extractor {
     rootsorts: Vec<ArcSort>,
     funcs: Vec<Symbol>,
     cost_model: Box<dyn CostModel>,
@@ -82,7 +82,7 @@ pub struct ExtractorAlter {
     parent_edge: HashMap<Symbol, HashMap<Value, (Symbol, Vec<Value>)>>,
 }
 
-impl ExtractorAlter {
+impl Extractor {
     /// Bulk of the computation happens at initialization time.
     /// The later extractions only reuses saved results.
     /// This means a new extractor must be created if the egraph changes.
@@ -171,7 +171,7 @@ impl ExtractorAlter {
             }
         }
 
-        let mut extractor = ExtractorAlter {
+        let mut extractor = Extractor {
             rootsorts,
             funcs,
             cost_model: Box::new(cost_model),
