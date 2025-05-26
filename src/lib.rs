@@ -36,7 +36,7 @@ pub use cli::bin::*;
 use constraint::{Constraint, SimpleTypeConstraint, TypeConstraint};
 pub use core_relations::Value;
 use core_relations::{make_external_func, ExternalFunctionId};
-use egglog_bridge::{ColumnTy, QueryEntry};
+use egglog_bridge::{ColumnTy, IterationReport, QueryEntry};
 use extract::{ExtractorAlter, TreeAdditiveCostModel};
 use indexmap::map::Entry;
 pub use serialize::{SerializeConfig, SerializedNode};
@@ -54,6 +54,7 @@ pub use termdag::{Term, TermDag, TermId};
 use thiserror::Error;
 pub use typechecking::TypeInfo;
 use util::*;
+use web_time::Duration;
 
 pub type ArcSort = Arc<dyn Sort>;
 
@@ -66,15 +67,85 @@ pub trait Primitive {
 }
 
 /// Running a schedule produces a report of the results.
+/// This includes rough timing information and whether
+/// the database was updated.
+/// Calling `union` on two run reports adds the timing
+/// information together.
 #[derive(Debug, Clone, Default)]
 pub struct RunReport {
     /// If any changes were made to the database.
     pub updated: bool,
+    pub search_and_apply_time_per_rule: HashMap<Symbol, Duration>,
+    pub num_matches_per_rule: HashMap<Symbol, usize>,
+    pub search_and_apply_time_per_ruleset: HashMap<Symbol, Duration>,
+    pub merge_time_per_ruleset: HashMap<Symbol, Duration>,
+    pub rebuild_time_per_ruleset: HashMap<Symbol, Duration>,
+}
+
+impl RunReport {
+    /// add a ... and a maximum size to the name
+    /// for printing, since they may be the rule itself
+    fn truncate_rule_name(sym: Symbol) -> String {
+        let mut s = sym.to_string();
+        // replace newlines in s with a space
+        s = s.replace('\n', " ");
+        if s.len() > 80 {
+            s.truncate(80);
+            s.push_str("...");
+        }
+        s
+    }
 }
 
 impl Display for RunReport {
     fn fmt(&self, f: &mut Formatter<'_>) -> std::fmt::Result {
-        writeln!(f, "Updated: {}", self.updated)
+        let mut rule_times_vec: Vec<_> = self.search_and_apply_time_per_rule.iter().collect();
+        rule_times_vec.sort_by_key(|(_, time)| **time);
+
+        for (rule, time) in rule_times_vec {
+            let name = Self::truncate_rule_name(*rule);
+            let time = time.as_secs_f64();
+            let num_matches = self.num_matches_per_rule.get(rule).copied().unwrap_or(0);
+            writeln!(
+                f,
+                "Rule {name}: search and apply {time:.3}s, num matches {num_matches}",
+            )?;
+        }
+
+        let rulesets = self
+            .search_and_apply_time_per_ruleset
+            .keys()
+            .chain(self.merge_time_per_ruleset.keys())
+            .chain(self.rebuild_time_per_ruleset.keys())
+            .collect::<IndexSet<_>>();
+
+        for ruleset in rulesets {
+            // print out the search and apply time for rule
+            let search_and_apply_time = self
+                .search_and_apply_time_per_ruleset
+                .get(ruleset)
+                .cloned()
+                .unwrap_or(Duration::ZERO)
+                .as_secs_f64();
+            let merge_time = self
+                .merge_time_per_ruleset
+                .get(ruleset)
+                .cloned()
+                .unwrap_or(Duration::ZERO)
+                .as_secs_f64();
+            let rebuild_time = self
+                .rebuild_time_per_ruleset
+                .get(ruleset)
+                .cloned()
+                .unwrap_or(Duration::ZERO)
+                .as_secs_f64();
+            writeln!(
+                f,
+                "Ruleset {ruleset}: search {search_and_apply_time:.3}s, merge {merge_time:.3}s, rebuild {rebuild_time:.3}s",
+            )?;
+        }
+
+        Ok(())
     }
 }
 
@@ -93,9 +164,53 @@ pub enum ExtractReport {
 }
 
 impl RunReport {
+    fn union_times(
+        times: &HashMap<Symbol, Duration>,
+        other_times: &HashMap<Symbol, Duration>,
+    ) -> HashMap<Symbol, Duration> {
+        let mut new_times = times.clone();
+        for (k, v) in other_times {
+            let entry = new_times.entry(*k).or_default();
+            *entry += *v;
+        }
+        new_times
+    }
+
+    fn union_counts(
+        counts: &HashMap<Symbol, usize>,
+        other_counts: &HashMap<Symbol, usize>,
+    ) -> HashMap<Symbol, usize> {
+        let mut new_counts = counts.clone();
+        for (k, v) in other_counts {
+            let entry = new_counts.entry(*k).or_default();
+            *entry += *v;
+        }
+        new_counts
+    }
+
     pub fn union(&self, other: &Self) -> Self {
         Self {
             updated: self.updated || other.updated,
+            search_and_apply_time_per_rule: Self::union_times(
+                &self.search_and_apply_time_per_rule,
+                &other.search_and_apply_time_per_rule,
+            ),
+            num_matches_per_rule: Self::union_counts(
+                &self.num_matches_per_rule,
+                &other.num_matches_per_rule,
+            ),
+            search_and_apply_time_per_ruleset: Self::union_times(
+                &self.search_and_apply_time_per_ruleset,
+                &other.search_and_apply_time_per_ruleset,
+            ),
+            merge_time_per_ruleset: Self::union_times(
+                &self.merge_time_per_ruleset,
+                &other.merge_time_per_ruleset,
+            ),
+            rebuild_time_per_ruleset: Self::union_times(
+                &self.rebuild_time_per_ruleset,
+                &other.rebuild_time_per_ruleset,
+            ),
         }
     }
 }
@@ -471,10 +586,13 @@ impl EGraph {
                         .unwrap_or_else(|| (0, termdag.var("Unextractable".into())));
                     output.as_mut().unwrap().push(term);
                 }
+                true
+            } else {
+                false
             }
         };
 
-        self.backend.dump_table(func.backend_id, extract_row);
+        self.backend.for_each_while(func.backend_id, extract_row);
 
         Ok((inputs, output, termdag))
     }
@@ -653,9 +771,35 @@ impl EGraph {
 
         let mut rule_ids = Vec::new();
         collect_rule_ids(ruleset, &self.rulesets, &mut rule_ids);
-        let updated = self.backend.run_rules(&rule_ids).unwrap();
+        let iteration_report = self.backend.run_rules(&rule_ids).unwrap();
+        let IterationReport {
+            changed: updated,
+            rule_reports,
+            search_and_apply_time,
+            merge_time,
+            rebuild_time,
+        } = iteration_report;
 
-        RunReport { updated }
+        let (search_and_apply_time_per_rule, num_matches_per_rule) = rule_reports
+            .into_iter()
+            .map(|(rule, report)| {
+                (
+                    (rule.as_str().into(), report.search_and_apply_time),
+                    (rule.as_str().into(), report.num_matches),
+                )
+            })
+            .unzip();
+
+        let per_ruleset = |x| [(ruleset, x)].into_iter().collect();
+
+        RunReport {
+            updated,
+            search_and_apply_time_per_rule,
+            num_matches_per_rule,
+            search_and_apply_time_per_ruleset: per_ruleset(search_and_apply_time),
+            merge_time_per_ruleset: per_ruleset(merge_time),
+            rebuild_time_per_ruleset: per_ruleset(rebuild_time),
+        }
     }
 
     fn add_rule_with_name(
@@ -1616,7 +1760,7 @@ mod tests {
     fn get_value(egraph: &EGraph, name: &str) -> Value {
         let mut out = None;
         let id = get_function(egraph, name).backend_id;
-        egraph.backend.dump_table(id, |row| out = Some(row.vals[0]));
+        egraph.backend.for_each(id, |row| out = Some(row.vals[0]));
         out.unwrap()
     }
 
