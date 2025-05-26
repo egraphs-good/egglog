@@ -264,6 +264,7 @@ impl Counters {
 pub struct RuleSetReport {
     pub changed: bool,
     pub rule_reports: DashMap<String, RuleReport>,
+    pub search_and_apply_time: Duration,
     pub merge_time: Duration,
 }
 

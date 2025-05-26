@@ -188,6 +188,7 @@ impl Database {
         let preds = with_pool_set(|ps| ps.get::<PredictedVals>());
         let index_cache = IndexCache::default();
 
+        let search_and_apply_timer = Instant::now();
         let rule_reports = DashMap::default();
         if do_parallel() {
             self.update_cached_indexes();
@@ -255,6 +256,7 @@ impl Database {
                 Default::default(),
             ));
         }
+        let search_and_apply_time = search_and_apply_timer.elapsed();
 
         let merge_timer = Instant::now();
         let changed = self.merge_all();
@@ -263,6 +265,7 @@ impl Database {
         RuleSetReport {
             changed,
             rule_reports,
+            search_and_apply_time,
             merge_time,
         }
     }

@@ -668,15 +668,14 @@ impl EGraph {
             return Err(PanicError(message).into());
         }
 
-        let search_and_apply_time_per_rule: HashMap<_, _> = rule_set_report
-            .rule_reports
-            .into_iter()
-            .map(|(rule, report)| (rule, report.search_and_apply_time))
-            .collect();
         let mut iteration_report = IterationReport {
             changed: rule_set_report.changed,
-            search_and_apply_time: search_and_apply_time_per_rule.values().sum(),
-            search_and_apply_time_per_rule,
+            search_and_apply_time_per_rule: rule_set_report
+                .rule_reports
+                .into_iter()
+                .map(|(rule, report)| (rule, report.search_and_apply_time))
+                .collect(),
+            search_and_apply_time: rule_set_report.search_and_apply_time,
             merge_time: rule_set_report.merge_time,
             rebuild_time: Duration::ZERO,
         };
@@ -1585,8 +1584,8 @@ impl<T, A: smallvec::Array<Item = T>> HasResizeWith<T> for SmallVec<A> {
 #[derive(Clone, Debug, Default)]
 pub struct IterationReport {
     pub changed: bool,
-    pub search_and_apply_time: Duration,
     pub search_and_apply_time_per_rule: HashMap<String, Duration>,
+    pub search_and_apply_time: Duration,
     pub merge_time: Duration,
     pub rebuild_time: Duration,
 }
