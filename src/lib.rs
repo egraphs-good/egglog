@@ -164,54 +164,39 @@ pub enum ExtractReport {
 }
 
 impl RunReport {
-    fn union_times(
-        times: &HashMap<Symbol, Duration>,
-        other_times: &HashMap<Symbol, Duration>,
-    ) -> HashMap<Symbol, Duration> {
-        let mut new_times = times.clone();
+    fn union_times(times: &mut HashMap<Symbol, Duration>, other_times: &HashMap<Symbol, Duration>) {
         for (k, v) in other_times {
-            let entry = new_times.entry(*k).or_default();
+            let entry = times.entry(*k).or_default();
             *entry += *v;
         }
-        new_times
     }
 
-    fn union_counts(
-        counts: &HashMap<Symbol, usize>,
-        other_counts: &HashMap<Symbol, usize>,
-    ) -> HashMap<Symbol, usize> {
-        let mut new_counts = counts.clone();
+    fn union_counts(counts: &mut HashMap<Symbol, usize>, other_counts: &HashMap<Symbol, usize>) {
         for (k, v) in other_counts {
-            let entry = new_counts.entry(*k).or_default();
+            let entry = counts.entry(*k).or_default();
             *entry += *v;
         }
-        new_counts
     }
 
-    pub fn union(&self, other: &Self) -> Self {
-        Self {
-            updated: self.updated || other.updated,
-            search_and_apply_time_per_rule: Self::union_times(
-                &self.search_and_apply_time_per_rule,
-                &other.search_and_apply_time_per_rule,
-            ),
-            num_matches_per_rule: Self::union_counts(
-                &self.num_matches_per_rule,
-                &other.num_matches_per_rule,
-            ),
-            search_and_apply_time_per_ruleset: Self::union_times(
-                &self.search_and_apply_time_per_ruleset,
-                &other.search_and_apply_time_per_ruleset,
-            ),
-            merge_time_per_ruleset: Self::union_times(
-                &self.merge_time_per_ruleset,
-                &other.merge_time_per_ruleset,
-            ),
-            rebuild_time_per_ruleset: Self::union_times(
-                &self.rebuild_time_per_ruleset,
-                &other.rebuild_time_per_ruleset,
-            ),
-        }
+    pub fn union(&mut self, other: &Self) {
+        self.updated |= other.updated;
+        RunReport::union_times(
+            &mut self.search_and_apply_time_per_rule,
+            &other.search_and_apply_time_per_rule,
+        );
+        RunReport::union_counts(&mut self.num_matches_per_rule, &other.num_matches_per_rule);
+        RunReport::union_times(
+            &mut self.search_and_apply_time_per_ruleset,
+            &other.search_and_apply_time_per_ruleset,
+        );
+        RunReport::union_times(
+            &mut self.merge_time_per_ruleset,
+            &other.merge_time_per_ruleset,
+        );
+        RunReport::union_times(
+            &mut self.rebuild_time_per_ruleset,
+            &other.rebuild_time_per_ruleset,
+        );
     }
 }
 
@@ -676,7 +661,7 @@ impl EGraph {
                 let mut report = RunReport::default();
                 for _i in 0..*limit {
                     let rec = self.run_schedule(sched);
-                    report = report.union(&rec);
+                    report.union(&rec);
                     if !rec.updated {
                         break;
                     }
@@ -687,7 +672,7 @@ impl EGraph {
                 let mut report = RunReport::default();
                 loop {
                     let rec = self.run_schedule(sched);
-                    report = report.union(&rec);
+                    report.union(&rec);
                     if !rec.updated {
                         break;
                     }
@@ -697,7 +682,7 @@ impl EGraph {
             ResolvedSchedule::Sequence(_span, scheds) => {
                 let mut report = RunReport::default();
                 for sched in scheds {
-                    report = report.union(&self.run_schedule(sched));
+                    report.union(&self.run_schedule(sched));
                 }
                 report
             }
@@ -741,7 +726,7 @@ impl EGraph {
         }
 
         let subreport = self.step_rules(*ruleset);
-        report = report.union(&subreport);
+        report.union(&subreport);
 
         log::debug!("database size: {}", self.num_tuples());
         self.timestamp += 1;
@@ -1050,7 +1035,7 @@ impl EGraph {
                 let report = self.run_schedule(&sched);
                 log::info!("Ran schedule {}.", sched);
                 log::info!("Report: {}", report);
-                self.overall_run_report = self.overall_run_report.union(&report);
+                self.overall_run_report.union(&report);
                 self.recent_run_report = Some(report);
             }
             ResolvedNCommand::PrintOverallStatistics => {
