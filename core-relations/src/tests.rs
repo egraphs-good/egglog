@@ -101,10 +101,17 @@ fn basic_query() {
     rules
         .insert(num, &[add_a_b.into(), z.into(), Value::new(1).into()])
         .unwrap();
-    rules.build();
+    rules.build_with_description("add");
     let rule_set = rsb.build();
 
-    assert!(db.run_rule_set(&rule_set).changed);
+    let report = db.run_rule_set(&rule_set);
+
+    assert!(report.changed, "{report:?}");
+    assert_eq!(
+        report.rule_reports.get("add").unwrap().num_matches,
+        5,
+        "{report:?}"
+    );
     let num_table = db.get_table(num);
     let all_num = num_table.all();
     let items = num_table.scan(all_num.as_ref());

@@ -24,7 +24,14 @@ use crate::{
 /// See [`Database::new_rule_set`] for more information.
 #[derive(Default)]
 pub struct RuleSet {
-    pub(crate) plans: Vec<(Plan, String /* description */)>,
+    /// The contents of the queries (i.e. the LHS of the rules) for each rule in the set, along
+    /// with a description of the rule.
+    ///
+    /// The action here is used to map between rule descriptions and ActionIds. The current
+    /// accounting logic assumes that rules and actions stand in a bijection. If we relaxed that
+    /// later on, most of the core logic would still work but the accounting logic could get more
+    /// complex.
+    pub(crate) plans: Vec<(Plan, String /* description */, ActionId)>,
     pub(crate) actions: DenseIdMap<ActionId, Pooled<Vec<Instr>>>,
 }
 
@@ -281,7 +288,11 @@ impl RuleBuilder<'_, '_> {
         // Plan the query
         let plan = self.qb.rsb.db.plan_query(self.qb.query);
         // Add it to the ruleset.
-        self.qb.rsb.rule_set.plans.push((plan, desc.into()));
+        self.qb
+            .rsb
+            .rule_set
+            .plans
+            .push((plan, desc.into(), action_id));
     }
 
     /// Return a variable containing the result of looking up the specified

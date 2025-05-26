@@ -1,8 +1,11 @@
 //! Core free join execution.
 
-use std::{iter, mem, sync::Arc};
+use std::{
+    iter, mem,
+    sync::{atomic::AtomicUsize, Arc},
+};
 
-use numeric_id::{DenseIdMap, NumericId};
+use numeric_id::{DenseIdMap, IdVec, NumericId};
 use smallvec::SmallVec;
 use web_time::Instant;
 
@@ -187,16 +190,18 @@ impl Database {
         }
         let preds = with_pool_set(|ps| ps.get::<PredictedVals>());
         let index_cache = IndexCache::default();
+        let match_counter = MatchCounter::new(rule_set.actions.n_ids());
 
         let search_and_apply_timer = Instant::now();
         let rule_reports = DashMap::default();
         if do_parallel() {
             self.update_cached_indexes();
             rayon::in_place_scope(|scope| {
-                for (plan, desc) in &rule_set.plans {
+                for (plan, desc, _action) in &rule_set.plans {
                     scope.spawn(|scope| {
                         let join_state = JoinState::new(self, &preds, &index_cache);
-                        let mut action_buf = ScopedActionBuffer::new(scope, rule_set);
+                        let mut action_buf =
+                            ScopedActionBuffer::new(scope, rule_set, &match_counter);
                         let mut binding_info = BindingInfo::default();
                         for (id, info) in plan.atoms.iter() {
                             let table = join_state.db.get_table(info.table);
@@ -207,13 +212,6 @@ impl Database {
                         join_state.run_plan(plan, 0, 0, &mut binding_info, &mut action_buf);
                         let search_and_apply_time = search_and_apply_timer.elapsed();
 
-                        rule_reports.insert(
-                            desc.clone(),
-                            RuleReport {
-                                search_and_apply_time,
-                            },
-                        );
-
                         if action_buf.needs_flush {
                             action_buf.flush(&mut ExecutionState::new(
                                 &preds,
@@ -221,6 +219,13 @@ impl Database {
                                 Default::default(),
                             ));
                         }
+                        rule_reports.insert(
+                            desc.clone(),
+                            RuleReport {
+                                search_and_apply_time,
+                                num_matches: 0,
+                            },
+                        );
                     });
                 }
             });
@@ -230,9 +235,10 @@ impl Database {
             // buffer.
             let mut action_buf = InPlaceActionBuffer {
                 rule_set,
+                match_counter: &match_counter,
                 batches: Default::default(),
             };
-            for (plan, desc) in &rule_set.plans {
+            for (plan, desc, _action) in &rule_set.plans {
                 let mut binding_info = BindingInfo::default();
                 for (id, info) in plan.atoms.iter() {
                     let table = join_state.db.get_table(info.table);
@@ -247,6 +253,7 @@ impl Database {
                     desc.clone(),
                     RuleReport {
                         search_and_apply_time,
+                        num_matches: 0,
                     },
                 );
             }
@@ -255,6 +262,11 @@ impl Database {
                 self.read_only_view(),
                 Default::default(),
             ));
+        }
+        for (_plan, desc, action) in &rule_set.plans {
+            let mut reservation = rule_reports.get_mut(desc).unwrap();
+            let RuleReport { num_matches, .. } = reservation.value_mut();
+            *num_matches = match_counter.read_matches(*action);
         }
         let search_and_apply_time = search_and_apply_timer.elapsed();
 
@@ -874,6 +886,7 @@ trait ActionBuffer<'state>: Send {
 /// environment. It builds up local batches and then flushes them inline.
 struct InPlaceActionBuffer<'a> {
     rule_set: &'a RuleSet,
+    match_counter: &'a MatchCounter,
     batches: DenseIdMap<ActionId, ActionState>,
 }
 
@@ -902,7 +915,12 @@ impl<'a, 'outer: 'a> ActionBuffer<'a> for InPlaceActionBuffer<'outer> {
     }
 
     fn flush(&mut self, exec_state: &mut ExecutionState) {
-        flush_action_states(exec_state, &mut self.batches, self.rule_set);
+        flush_action_states(
+            exec_state,
+            &mut self.batches,
+            self.rule_set,
+            self.match_counter,
+        );
     }
     fn recur<Local: Clone + Send + 'a>(
         &mut self,
@@ -918,16 +936,22 @@ impl<'a, 'outer: 'a> ActionBuffer<'a> for InPlaceActionBuffer<'outer> {
 struct ScopedActionBuffer<'inner, 'scope> {
     scope: &'inner rayon::Scope<'scope>,
     rule_set: &'scope RuleSet,
+    match_counter: &'scope MatchCounter,
     batches: DenseIdMap<ActionId, ActionState>,
     needs_flush: bool,
 }
 
 impl<'inner, 'scope> ScopedActionBuffer<'inner, 'scope> {
-    fn new(scope: &'inner rayon::Scope<'scope>, rule_set: &'scope RuleSet) -> Self {
+    fn new(
+        scope: &'inner rayon::Scope<'scope>,
+        rule_set: &'scope RuleSet,
+        match_counter: &'scope MatchCounter,
+    ) -> Self {
         Self {
             scope,
             rule_set,
             batches: Default::default(),
+            match_counter,
             needs_flush: false,
         }
     }
@@ -961,7 +985,12 @@ impl<'scope> ActionBuffer<'scope> for ScopedActionBuffer<'_, 'scope> {
     }
 
     fn flush(&mut self, exec_state: &mut ExecutionState) {
-        flush_action_states(exec_state, &mut self.batches, self.rule_set);
+        flush_action_states(
+            exec_state,
+            &mut self.batches,
+            self.rule_set,
+            self.match_counter,
+        );
         self.needs_flush = false;
     }
     fn recur<Local: Clone + Send + 'scope>(
@@ -971,17 +1000,24 @@ impl<'scope> ActionBuffer<'scope> for ScopedActionBuffer<'_, 'scope> {
         work: impl for<'a> FnOnce(&mut Local, &mut ScopedActionBuffer<'a, 'scope>) + Send + 'scope,
     ) {
         let rule_set = self.rule_set;
+        let match_counter = self.match_counter;
         let mut inner = local.clone();
         self.scope.spawn(move |scope| {
             let mut buf: ScopedActionBuffer<'_, 'scope> = ScopedActionBuffer {
                 scope,
                 rule_set,
+                match_counter,
                 needs_flush: false,
                 batches: Default::default(),
             };
             work(&mut inner, &mut buf);
             if buf.needs_flush {
-                flush_action_states(&mut to_exec_state(), &mut buf.batches, buf.rule_set);
+                flush_action_states(
+                    &mut to_exec_state(),
+                    &mut buf.batches,
+                    buf.rule_set,
+                    buf.match_counter,
+                );
             }
         });
     }
@@ -995,12 +1031,33 @@ fn flush_action_states(
     exec_state: &mut ExecutionState,
     actions: &mut DenseIdMap<ActionId, ActionState>,
     rule_set: &RuleSet,
+    match_counter: &MatchCounter,
 ) {
     for (action, ActionState { bindings, len, .. }) in actions.iter_mut() {
         if *len > 0 {
             exec_state.run_instrs(&rule_set.actions[action], bindings);
             bindings.clear();
+            match_counter.inc_matches(action, *len);
             *len = 0;
         }
+    }
+}
+
+struct MatchCounter {
+    matches: IdVec<ActionId, AtomicUsize>,
+}
+
+impl MatchCounter {
+    fn new(n_ids: usize) -> Self {
+        let mut matches = IdVec::with_capacity(n_ids);
+        matches.resize_with(n_ids, || AtomicUsize::new(0));
+        Self { matches }
+    }
+
+    fn inc_matches(&self, action: ActionId, by: usize) {
+        self.matches[action].fetch_add(by, std::sync::atomic::Ordering::Relaxed);
+    }
+    fn read_matches(&self, action: ActionId) -> usize {
+        self.matches[action].load(std::sync::atomic::Ordering::Acquire)
     }
 }

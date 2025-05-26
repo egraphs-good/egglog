@@ -271,6 +271,7 @@ pub struct RuleSetReport {
 #[derive(Debug)]
 pub struct RuleReport {
     pub search_and_apply_time: Duration,
+    pub num_matches: usize,
 }
 
 /// A collection of tables and indexes over them.
