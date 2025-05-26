@@ -25,7 +25,7 @@ pub use common::Value;
 pub use containers::{Container, ContainerId, Containers};
 pub use free_join::{
     make_external_func, plan::PlanStrategy, CounterId, Database, ExternalFunction,
-    ExternalFunctionId, TableId, Variable,
+    ExternalFunctionId, RuleReport, RuleSetReport, TableId, Variable,
 };
 pub use hash_index::TupleIndex;
 pub use offsets::{OffsetRange, RowId, Subset, SubsetRef};

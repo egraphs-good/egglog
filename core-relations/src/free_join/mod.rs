@@ -11,6 +11,7 @@ use concurrency::ReadOptimizedLock;
 use numeric_id::{define_id, DenseIdMap, DenseIdMapWithReuse, NumericId};
 use rayon::prelude::*;
 use smallvec::SmallVec;
+use web_time::Duration;
 
 use crate::{
     action::{
@@ -257,6 +258,18 @@ impl Counters {
         // NB: we may want to experiment with Ordering::Relaxed here.
         self.0[ctr].fetch_add(1, Ordering::Release)
     }
+}
+
+#[derive(Debug, Default)]
+pub struct RuleSetReport {
+    pub changed: bool,
+    pub rule_reports: DashMap<String, RuleReport>,
+    pub merge_time: Duration,
+}
+
+#[derive(Debug)]
+pub struct RuleReport {
+    pub search_and_apply_time: Duration,
 }
 
 /// A collection of tables and indexes over them.

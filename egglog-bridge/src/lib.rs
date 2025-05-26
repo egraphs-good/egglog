@@ -20,8 +20,8 @@ use std::{
 use core_relations::{
     ColumnId, Constraint, Container, Containers, CounterId, Database, DisplacedTable,
     DisplacedTableWithProvenance, ExecutionState, ExternalFunction, ExternalFunctionId, MergeVal,
-    Offset, PlanStrategy, PrimitiveId, Primitives, SortedWritesTable, TableId, TaggedRowBuffer,
-    Value, WrappedTable,
+    Offset, PlanStrategy, PrimitiveId, Primitives, RuleSetReport, SortedWritesTable, TableId,
+    TaggedRowBuffer, Value, WrappedTable,
 };
 use hashbrown::HashMap;
 use indexmap::{map::Entry, IndexMap, IndexSet};
@@ -660,35 +660,39 @@ impl EGraph {
     /// Run the given rules, returning whether the database changed.
     ///
     /// If the given rules are malformed, this method can return an error.
-    pub fn run_rules(&mut self, rules: &[RuleId]) -> Result<RunReport> {
+    pub fn run_rules(&mut self, rules: &[RuleId]) -> Result<IterationReport> {
         let ts = self.next_ts();
 
-        let rule_timer = Instant::now();
-        let changed = run_rules_impl(&mut self.db, &mut self.rules, rules, ts)?;
-        let rule_time = rule_timer.elapsed();
-
+        let rule_set_report = run_rules_impl(&mut self.db, &mut self.rules, rules, ts)?;
         if let Some(message) = self.panic_message.lock().unwrap().take() {
             return Err(PanicError(message).into());
         }
 
-        let mut report = RunReport {
-            changed,
-            rule_time,
+        let search_and_apply_time_per_rule: HashMap<_, _> = rule_set_report
+            .rule_reports
+            .into_iter()
+            .map(|(rule, report)| (rule, report.search_and_apply_time))
+            .collect();
+        let mut iteration_report = IterationReport {
+            changed: rule_set_report.changed,
+            search_and_apply_time: search_and_apply_time_per_rule.values().sum(),
+            search_and_apply_time_per_rule,
+            merge_time: rule_set_report.merge_time,
             rebuild_time: Duration::ZERO,
         };
-        if !changed {
-            return Ok(report);
+        if !iteration_report.changed {
+            return Ok(iteration_report);
         }
 
         let rebuild_timer = Instant::now();
         self.rebuild()?;
-        report.rebuild_time = rebuild_timer.elapsed();
+        iteration_report.rebuild_time = rebuild_timer.elapsed();
 
         if let Some(message) = self.panic_message.lock().unwrap().take() {
             return Err(PanicError(message).into());
         }
 
-        Ok(report)
+        Ok(iteration_report)
     }
 
     fn rebuild(&mut self) -> Result<()> {
@@ -782,7 +786,8 @@ impl EGraph {
                         // This is to avoid recanonicalizing the same row multiple
                         // times.
                         for rule in &info.incremental_rebuild_rules {
-                            changed |= run_rules_impl(&mut self.db, &mut self.rules, &[*rule], ts)?;
+                            changed |= run_rules_impl(&mut self.db, &mut self.rules, &[*rule], ts)?
+                                .changed;
                         }
                         // Reset the rule we did not run. These two should be equivalent.
                         self.rules[info.nonincremental_rebuild_rule].last_run_at = ts;
@@ -795,7 +800,8 @@ impl EGraph {
                             &mut self.rules,
                             &[info.nonincremental_rebuild_rule],
                             ts,
-                        )?;
+                        )?
+                        .changed;
                         for rule in &info.incremental_rebuild_rules {
                             self.rules[*rule].last_run_at = ts;
                         }
@@ -861,7 +867,7 @@ impl EGraph {
                     self.rules[*rule].last_run_at = ts;
                 }
             }
-            changed |= run_rules_impl(&mut self.db, &mut self.rules, &scratch, ts)?;
+            changed |= run_rules_impl(&mut self.db, &mut self.rules, &scratch, ts)?.changed;
             scratch.clear();
             let ts = self.next_ts();
             for (i, funcs) in state.incremental.iter() {
@@ -870,7 +876,7 @@ impl EGraph {
                     scratch.push(info.incremental_rebuild_rules[i]);
                     self.rules[info.nonincremental_rebuild_rule].last_run_at = ts;
                 }
-                changed |= run_rules_impl(&mut self.db, &mut self.rules, &scratch, ts)?;
+                changed |= run_rules_impl(&mut self.db, &mut self.rules, &scratch, ts)?.changed;
                 scratch.clear();
             }
         }
@@ -1329,7 +1335,7 @@ fn run_rules_impl(
     rule_info: &mut DenseIdMapWithReuse<RuleId, RuleInfo>,
     rules: &[RuleId],
     next_ts: Timestamp,
-) -> Result<bool> {
+) -> Result<RuleSetReport> {
     let mut rsb = db.new_rule_set();
     for rule in rules {
         let info = &mut rule_info[*rule];
@@ -1577,8 +1583,10 @@ impl<T, A: smallvec::Array<Item = T>> HasResizeWith<T> for SmallVec<A> {
 /// This includes rough timing information and whether
 /// the database was changed.
 #[derive(Clone, Debug, Default)]
-pub struct RunReport {
+pub struct IterationReport {
     pub changed: bool,
-    pub rule_time: Duration,
+    pub search_and_apply_time: Duration,
+    pub search_and_apply_time_per_rule: HashMap<String, Duration>,
+    pub merge_time: Duration,
     pub rebuild_time: Duration,
 }

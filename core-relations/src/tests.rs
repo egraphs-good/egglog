@@ -104,7 +104,7 @@ fn basic_query() {
     rules.build();
     let rule_set = rsb.build();
 
-    assert!(db.run_rule_set(&rule_set));
+    assert!(db.run_rule_set(&rule_set).changed);
     let num_table = db.get_table(num);
     let all_num = num_table.all();
     let items = num_table.scan(all_num.as_ref());
@@ -171,7 +171,7 @@ fn line_graph_1_test(strat: PlanStrategy) {
     rule.build();
     let rule_set = rsb.build();
 
-    assert!(db.run_rule_set(&rule_set));
+    assert!(db.run_rule_set(&rule_set).changed);
 
     let mut expected = Vec::from_iter(
         nodes
@@ -252,7 +252,7 @@ fn line_graph_2_test(strat: PlanStrategy) {
     rule.build();
     let rule_set = rsb.build();
 
-    assert!(db.run_rule_set(&rule_set));
+    assert!(db.run_rule_set(&rule_set).changed);
 
     let mut expected = Vec::from_iter(
         nodes.windows(2).map(|x| vec![x[0], x[1]]).chain(
@@ -674,7 +674,7 @@ fn ac_test(strat: PlanStrategy) {
                 .unwrap();
             rules.build();
             let rs = rsb.build();
-            changed |= db.run_rule_set(&rs);
+            changed |= db.run_rule_set(&rs).changed;
             let mut rsb = db.new_rule_set();
             num_rebuild(&mut rsb, cur_ts, next_ts);
             let mut add_rebuild_l = rsb.new_rule();
@@ -715,7 +715,7 @@ fn ac_test(strat: PlanStrategy) {
             rules.build();
 
             let rs = rsb.build();
-            changed |= db.run_rule_set(&rs);
+            changed |= db.run_rule_set(&rs).changed;
             let mut rsb = db.new_rule_set();
             num_rebuild(&mut rsb, cur_ts, next_ts);
             let mut add_rebuild_r = rsb.new_rule();
@@ -755,7 +755,7 @@ fn ac_test(strat: PlanStrategy) {
                 .unwrap();
             rules.build();
             let rs = rsb.build();
-            changed |= db.run_rule_set(&rs);
+            changed |= db.run_rule_set(&rs).changed;
         } else {
             // nonincremental. Just run one rule and recanonicalize everything.
             // add(x, y, id, t1) =>
@@ -804,14 +804,14 @@ fn ac_test(strat: PlanStrategy) {
                 .unwrap();
             rules.build();
             let rs = rsb.build();
-            changed |= db.run_rule_set(&rs);
+            changed |= db.run_rule_set(&rs).changed;
         }
         (next_ts, changed)
     };
     let mut cur_ts = Value::new(0);
     let mut next_ts = Value::new(1);
     loop {
-        if !run_ac_rule(&mut db, cur_ts..next_ts) {
+        if !run_ac_rule(&mut db, cur_ts..next_ts).changed {
             break;
         }
         let start = next_ts;
@@ -977,7 +977,7 @@ fn lookup_with_fallback_partial_success() {
     rb.insert(h, &[res.into(), y.into()]).unwrap();
     rb.build();
     let rs = rsb.build();
-    assert!(db.run_rule_set(&rs));
+    assert!(db.run_rule_set(&rs).changed);
 
     let h = db.get_table(h);
     let all = h.all();
@@ -1069,7 +1069,7 @@ fn call_external_with_fallback() {
     rb.insert(h, &[res.into(), y.into()]).unwrap();
     rb.build();
     let rs = rsb.build();
-    assert!(db.run_rule_set(&rs));
+    assert!(db.run_rule_set(&rs).changed);
 
     let h = db.get_table(h);
     let all = h.all();

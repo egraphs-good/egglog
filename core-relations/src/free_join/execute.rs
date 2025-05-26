@@ -4,11 +4,12 @@ use std::{iter, mem, sync::Arc};
 
 use numeric_id::{DenseIdMap, NumericId};
 use smallvec::SmallVec;
+use web_time::Instant;
 
 use crate::{
     action::{Bindings, ExecutionState, PredictedVals},
     common::{DashMap, Value},
-    free_join::get_index_from_tableinfo,
+    free_join::{get_index_from_tableinfo, RuleReport, RuleSetReport},
     hash_index::{ColumnIndex, IndexBase, TupleIndex},
     offsets::{Offsets, SortedOffsetVector, Subset},
     pool::{Clear, Pooled},
@@ -168,7 +169,7 @@ impl Database {
         });
     }
 
-    pub fn run_rule_set(&mut self, rule_set: &RuleSet) -> bool {
+    pub fn run_rule_set(&mut self, rule_set: &RuleSet) -> RuleSetReport {
         fn do_parallel() -> bool {
             #[cfg(debug_assertions)]
             {
@@ -182,15 +183,16 @@ impl Database {
             }
         }
         if rule_set.plans.is_empty() {
-            return false;
+            return RuleSetReport::default();
         }
         let preds = with_pool_set(|ps| ps.get::<PredictedVals>());
         let index_cache = IndexCache::default();
 
+        let rule_reports = DashMap::default();
         if do_parallel() {
             self.update_cached_indexes();
             rayon::in_place_scope(|scope| {
-                for (plan, _) in &rule_set.plans {
+                for (plan, desc) in &rule_set.plans {
                     scope.spawn(|scope| {
                         let join_state = JoinState::new(self, &preds, &index_cache);
                         let mut action_buf = ScopedActionBuffer::new(scope, rule_set);
@@ -199,7 +201,18 @@ impl Database {
                             let table = join_state.db.get_table(info.table);
                             binding_info.subsets.insert(id, table.all());
                         }
+
+                        let search_and_apply_timer = Instant::now();
                         join_state.run_plan(plan, 0, 0, &mut binding_info, &mut action_buf);
+                        let search_and_apply_time = search_and_apply_timer.elapsed();
+
+                        rule_reports.insert(
+                            desc.clone(),
+                            RuleReport {
+                                search_and_apply_time,
+                            },
+                        );
+
                         if action_buf.needs_flush {
                             action_buf.flush(&mut ExecutionState::new(
                                 &preds,
@@ -218,13 +231,23 @@ impl Database {
                 rule_set,
                 batches: Default::default(),
             };
-            for (plan, _) in &rule_set.plans {
+            for (plan, desc) in &rule_set.plans {
                 let mut binding_info = BindingInfo::default();
                 for (id, info) in plan.atoms.iter() {
                     let table = join_state.db.get_table(info.table);
                     binding_info.subsets.insert(id, table.all());
                 }
+
+                let search_and_apply_timer = Instant::now();
                 join_state.run_plan(plan, 0, 0, &mut binding_info, &mut action_buf);
+                let search_and_apply_time = search_and_apply_timer.elapsed();
+
+                rule_reports.insert(
+                    desc.clone(),
+                    RuleReport {
+                        search_and_apply_time,
+                    },
+                );
             }
             action_buf.flush(&mut ExecutionState::new(
                 &preds,
@@ -232,7 +255,16 @@ impl Database {
                 Default::default(),
             ));
         }
-        self.merge_all()
+
+        let merge_timer = Instant::now();
+        let changed = self.merge_all();
+        let merge_time = merge_timer.elapsed();
+
+        RuleSetReport {
+            changed,
+            rule_reports,
+            merge_time,
+        }
     }
 }
 
