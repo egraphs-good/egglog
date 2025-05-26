@@ -148,8 +148,8 @@ impl Sort for MapSort {
         self.key.is_eq_sort() || self.value.is_eq_sort()
     }
 
-    fn inner_values(&self, containers: &Containers, value: &Value) -> Vec<(ArcSort, Value)> {
-        let val = containers.get_val::<MapContainer>(*value).unwrap().clone();
+    fn inner_values(&self, containers: &Containers, value: Value) -> Vec<(ArcSort, Value)> {
+        let val = containers.get_val::<MapContainer>(value).unwrap().clone();
         val.data
             .iter()
             .flat_map(|(k, v)| [(self.key.clone(), *k), (self.value.clone(), *v)])
@@ -175,7 +175,7 @@ impl Sort for MapSort {
     fn reconstruct_termdag_container(
         &self,
         _containers: &Containers,
-        _value: &Value,
+        _value: Value,
         termdag: &mut TermDag,
         element_terms: Vec<Term>,
     ) -> Term {

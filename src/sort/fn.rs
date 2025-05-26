@@ -132,7 +132,7 @@ impl Sort for FunctionSort {
         self.inputs.iter().any(|s| s.is_eq_sort())
     }
 
-    fn serialized_name(&self, _value: &Value) -> Symbol {
+    fn serialized_name(&self, _value: Value) -> Symbol {
         // TODO: The old implementation looks up the function name contained in the function structure.
         // In the new backend, this requires a handle to the new backend to get the container value.
         // We can change the interface of `serialized_name` to take an `EGraph` in a follow-up PR.
@@ -143,8 +143,8 @@ impl Sort for FunctionSort {
         self.inputs.clone()
     }
 
-    fn inner_values(&self, containers: &Containers, value: &Value) -> Vec<(ArcSort, Value)> {
-        let val = containers.get_val::<FunctionContainer>(*value).unwrap();
+    fn inner_values(&self, containers: &Containers, value: Value) -> Vec<(ArcSort, Value)> {
+        let val = containers.get_val::<FunctionContainer>(value).unwrap();
         self.inputs.iter().cloned().zip(val.iter()).collect()
     }
 
@@ -175,11 +175,11 @@ impl Sort for FunctionSort {
     fn reconstruct_termdag_container(
         &self,
         containers: &Containers,
-        value: &Value,
+        value: Value,
         termdag: &mut TermDag,
         mut element_terms: Vec<Term>,
     ) -> Term {
-        let name = containers.get_val::<FunctionContainer>(*value).unwrap().2;
+        let name = containers.get_val::<FunctionContainer>(value).unwrap().2;
         let head = termdag.lit(Literal::String(name));
         element_terms.insert(0, head);
         termdag.app("unstable-fn".into(), element_terms)
