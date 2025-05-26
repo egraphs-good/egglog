@@ -721,15 +721,17 @@ impl EGraph {
     }
 
     pub fn eval_expr(&mut self, expr: &Expr) -> Result<(ArcSort, Value), Error> {
-        // TODO: call eval_resolved_expr
-        let fresh_name = self.parser.symbol_gen.fresh(&"egraph_evalexpr".into());
-        let command = Command::Action(Action::Let(expr.span(), fresh_name, expr.clone()));
-        self.run_program(vec![command])?;
-        // find the table with the same name as the fresh name
-        let func = self.functions.get(&fresh_name).unwrap();
-
-        let value = self.backend.lookup_id(func.backend_id, &[]).unwrap();
-        let sort = func.schema.output.clone();
+        let span = expr.span();
+        let command = Command::Action(Action::Expr(span.clone(), expr.clone()));
+        let resolved_commands = self.process_command(command)?;
+        assert_eq!(resolved_commands.len(), 1);
+        let resolved_command = resolved_commands.into_iter().next().unwrap();
+        let resolved_expr = match resolved_command {
+            ResolvedNCommand::CoreAction(ResolvedAction::Expr(_, resolved_expr)) => resolved_expr,
+            _ => unreachable!(),
+        };
+        let sort = resolved_expr.output_type();
+        let value = self.eval_resolved_expr(span, &resolved_expr)?;
         Ok((sort, value))
     }
 
