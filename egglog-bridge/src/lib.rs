@@ -670,11 +670,7 @@ impl EGraph {
 
         let mut iteration_report = IterationReport {
             changed: rule_set_report.changed,
-            search_and_apply_time_per_rule: rule_set_report
-                .rule_reports
-                .into_iter()
-                .map(|(rule, report)| (rule, report.search_and_apply_time))
-                .collect(),
+            rule_reports: rule_set_report.rule_reports.into_iter().collect(),
             search_and_apply_time: rule_set_report.search_and_apply_time,
             merge_time: rule_set_report.merge_time,
             rebuild_time: Duration::ZERO,
@@ -1581,11 +1577,13 @@ impl<T, A: smallvec::Array<Item = T>> HasResizeWith<T> for SmallVec<A> {
 /// Running rules produces a report of the results.
 /// This includes rough timing information and whether
 /// the database was changed.
-#[derive(Clone, Debug, Default)]
+#[derive(Debug, Default)]
 pub struct IterationReport {
     pub changed: bool,
-    pub search_and_apply_time_per_rule: HashMap<String, Duration>,
+    pub rule_reports: HashMap<String, RuleReport>,
     pub search_and_apply_time: Duration,
     pub merge_time: Duration,
     pub rebuild_time: Duration,
 }
+
+pub use core_relations::RuleReport;
