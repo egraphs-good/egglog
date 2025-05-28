@@ -19,8 +19,8 @@ pub mod expr {
 pub mod fact {
     use super::*;
 
-    pub fn equals(args: Vec<Expr>) -> Fact {
-        Fact::Eq(span!(), args)
+    pub fn equals(x: Expr, y: Expr) -> Fact {
+        Fact::Eq(span!(), x, y)
     }
 }
 
@@ -43,7 +43,7 @@ macro_rules! expr {
 
 #[macro_export]
 macro_rules! fact {
-    ((= $($arg:tt)*)) => { fact::equals(vec![$(expr!($arg)),*]) };
+    ((= $($arg:tt)*)) => { fact::equals($(expr!($arg)),*) };
     ($a:tt) => { Fact::Fact(expr!($a)) };
 }
 
@@ -52,13 +52,15 @@ macro_rules! facts {
     ($($tree:tt)*) => { Facts(vec![$(fact!($tree)),*]) };
 }
 
-struct RustRuleRhs<F: Fn(&[Value], (&[ArcSort], &ArcSort), &mut EGraph)> {
+#[derive(Clone)]
+struct RustRuleRhs<F: Fn(&mut ExecutionState, &[Value]) -> Option<()>> {
     name: Symbol,
+    // TODO: just store the TypeConstraint here
     input: Vec<ArcSort>,
     func: F,
 }
 
-impl<F: Fn(&[Value], (&[ArcSort], &ArcSort), &mut EGraph)> PrimitiveLike for RustRuleRhs<F> {
+impl<F: Fn(&mut ExecutionState, &[Value]) -> Option<()>> Primitive for RustRuleRhs<F> {
     fn name(&self) -> Symbol {
         self.name
     }
@@ -72,15 +74,10 @@ impl<F: Fn(&[Value], (&[ArcSort], &ArcSort), &mut EGraph)> PrimitiveLike for Rus
             .collect();
         SimpleTypeConstraint::new(self.name(), sorts, span.clone()).into_box()
     }
-    fn apply(
-        &self,
-        values: &[Value],
-        sorts: (&[ArcSort], &ArcSort),
-        egraph: Option<&mut EGraph>,
-    ) -> Option<Value> {
-        let egraph = egraph.expect("RustRuleRhs should not be used in a query");
-        (self.func)(values, sorts, egraph);
-        Some(Value::unit())
+
+    fn apply(&self, exec_state: &mut ExecutionState, values: &[Value]) -> Option<Value> {
+        (self.func)(exec_state, values)?;
+        Some(exec_state.prims().get(()))
     }
 }
 
@@ -89,9 +86,12 @@ pub fn rule(
     egraph: &mut EGraph,
     vars: &[(&str, ArcSort)],
     facts: Facts<Symbol, Symbol>,
-    func: impl Fn(&[Value], (&[ArcSort], &ArcSort), &mut EGraph) + 'static,
+    func: impl Fn(&mut ExecutionState, &[Value]) -> Option<()> + Clone + Send + Sync + 'static,
 ) -> Result<Symbol, Error> {
-    let prim_name = egraph.symbol_gen.fresh(&Symbol::from("rust_rule_prim"));
+    let prim_name = egraph
+        .parser
+        .symbol_gen
+        .fresh(&Symbol::from("rust_rule_prim"));
     egraph.add_primitive(RustRuleRhs {
         name: prim_name,
         input: vars.iter().map(|(_, s)| s.clone()).collect(),
@@ -110,14 +110,14 @@ pub fn rule(
         body: facts.0,
     };
 
-    let rule_name = format!("{}", rule).into();
-    let ruleset = egraph.symbol_gen.fresh(&"rust_rule_ruleset".into());
+    let rule_name = egraph.parser.symbol_gen.fresh(&"rust_rule".into());
+    let ruleset = egraph.parser.symbol_gen.fresh(&"rust_rule_ruleset".into());
     egraph.run_program(vec![
-        Command::AddRuleset(ruleset),
+        Command::AddRuleset(span!(), ruleset),
         Command::Rule {
             name: rule_name,
-            rule,
             ruleset,
+            rule,
         },
     ])?;
 
@@ -140,24 +140,24 @@ pub fn query(
     vars: &[(&str, ArcSort)],
     facts: Facts<Symbol, Symbol>,
 ) -> Result<Vec<Vec<Value>>, Error> {
-    use std::{cell::RefCell, rc::Rc};
+    use std::sync::{Arc, Mutex};
 
-    let results = Rc::new(RefCell::new(Vec::new()));
-    let results_weak = Rc::downgrade(&results);
+    let results = Arc::new(Mutex::new(Vec::new()));
+    let results_weak = Arc::downgrade(&results);
 
-    let ruleset = rule(
-        egraph,
-        vars,
-        facts,
-        move |values, _, _| match results_weak.upgrade() {
-            Some(rc) => rc.borrow_mut().push(values.to_vec()),
+    let ruleset = rule(egraph, vars, facts, move |_, values| {
+        match results_weak.upgrade() {
             None => panic!("one-shot rule was called twice"),
-        },
-    )?;
+            Some(arc) => {
+                arc.lock().unwrap().push(values.to_vec());
+                Some(())
+            }
+        }
+    })?;
     run_ruleset(egraph, ruleset)?;
 
-    match Rc::into_inner(results) {
-        Some(refcell) => Ok(refcell.into_inner()),
+    match Arc::into_inner(results) {
+        Some(mutex) => Ok(mutex.into_inner().unwrap()),
         None => panic!("results_weak.upgrade() was not dropped"),
     }
 }
@@ -171,7 +171,7 @@ mod tests {
         egraph.parse_and_run_program(
             None,
             "
-(function fib (i64) i64)
+(function fib (i64) i64 :no-merge)
 (set (fib 0) 0)
 (set (fib 1) 1)
 (rule (
@@ -199,7 +199,9 @@ mod tests {
             ],
         )?;
 
-        assert_eq!(results, [[Value::from(7), Value::from(13)]]);
+        let x = egraph.backend.primitives().get::<i64>(7);
+        let y = egraph.backend.primitives().get::<i64>(13);
+        assert_eq!(results, [[x, y]]);
 
         Ok(())
     }
@@ -219,6 +221,11 @@ mod tests {
 
         assert!(results.is_empty());
 
+        let fib = egglog_bridge::TableAction::new(
+            &egraph.backend,
+            egraph.functions[&Symbol::from("fib")].backend_id,
+        );
+
         // add the rule from `build_test_database` to the egraph with a handle
         let ruleset = rule(
             &mut egraph,
@@ -227,11 +234,17 @@ mod tests {
                 (= f0 (fib x))
                 (= f1 (fib (+ x 1)))
             ],
-            |values, _, egraph| {
+            move |exec_state, values| {
                 let [x, f0, f1] = values else { unreachable!() };
-                let a = Value::from(i64::load(&I64Sort, x) + 2);
-                let b = Value::from(i64::load(&I64Sort, f0) + i64::load(&I64Sort, f1));
-                egraph.functions[&Symbol::from("fib")].insert(&[a], b, egraph.timestamp);
+                let x = exec_state.prims().unwrap::<i64>(*x);
+                let f0 = exec_state.prims().unwrap::<i64>(*f0);
+                let f1 = exec_state.prims().unwrap::<i64>(*f1);
+
+                let y = exec_state.prims().get::<i64>(x + 2);
+                let f2 = exec_state.prims().get::<i64>(f0 + f1);
+                fib.insert(exec_state, vec![y, f2]);
+
+                Some(())
             },
         )?;
 
@@ -246,7 +259,9 @@ mod tests {
             &[("f", sort::int())],
             facts![(= (fib (unquote expr::int(big_number))) f)],
         )?;
-        assert_eq!(results, [[Value::from(6765)]]);
+
+        let y = egraph.backend.primitives().get::<i64>(6765);
+        assert_eq!(results, [[y]]);
 
         Ok(())
     }
