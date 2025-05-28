@@ -1353,6 +1353,7 @@ impl TableAction {
 }
 
 /// A variant of `TableAction` for the union-find.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
 pub struct UnionAction {
     table: TableId,
     timestamp: CounterId,
