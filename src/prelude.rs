@@ -108,8 +108,7 @@ impl Context<'_, '_> {
 #[derive(Clone)]
 struct RustRuleRhs<F: Fn(&mut Context, &[Value]) -> Option<()>> {
     name: Symbol,
-    // TODO: just store the TypeConstraint here
-    input: Vec<ArcSort>,
+    inputs: Vec<ArcSort>,
     union_action: egglog_bridge::UnionAction,
     table_actions: HashMap<Symbol, egglog_bridge::TableAction>,
     func: F,
@@ -122,7 +121,7 @@ impl<F: Fn(&mut Context, &[Value]) -> Option<()>> Primitive for RustRuleRhs<F> {
 
     fn get_type_constraints(&self, span: &Span) -> Box<dyn TypeConstraint> {
         let sorts: Vec<_> = self
-            .input
+            .inputs
             .iter()
             .chain(once(&(Arc::new(UnitSort) as Arc<dyn Sort>)))
             .cloned()
@@ -141,7 +140,7 @@ impl<F: Fn(&mut Context, &[Value]) -> Option<()>> Primitive for RustRuleRhs<F> {
     }
 }
 
-/// Add a rule to the e-graph. Returns the ruleset name.
+/// Add a rule to the e-graph in a new ruleset. Returns the ruleset name.
 pub fn rule(
     egraph: &mut EGraph,
     vars: &[(&str, ArcSort)],
@@ -155,7 +154,7 @@ pub fn rule(
 
     egraph.add_primitive(RustRuleRhs {
         name: prim_name,
-        input: vars.iter().map(|(_, s)| s.clone()).collect(),
+        inputs: vars.iter().map(|(_, s)| s.clone()).collect(),
         union_action: egglog_bridge::UnionAction::new(&egraph.backend),
         table_actions: egraph
             .functions
@@ -196,6 +195,7 @@ pub fn rule(
     Ok(ruleset)
 }
 
+/// Run one iteration of a ruleset.
 pub fn run_ruleset(egraph: &mut EGraph, ruleset: Symbol) -> Result<(), Error> {
     egraph.run_program(vec![Command::RunSchedule(Schedule::Run(
         span!(),
@@ -207,6 +207,8 @@ pub fn run_ruleset(egraph: &mut EGraph, ruleset: Symbol) -> Result<(), Error> {
     Ok(())
 }
 
+/// Run a query over the database. Each match is returned as a `Vec<Value>`
+/// whose order is the order of the `vars`.
 pub fn query(
     egraph: &mut EGraph,
     vars: &[(&str, ArcSort)],
