@@ -52,15 +52,70 @@ macro_rules! facts {
     ($($tree:tt)*) => { Facts(vec![$(fact!($tree)),*]) };
 }
 
+/// A wrapper around an `ExecutionState` for rules that are written in Rust.
+pub struct Context<'a, 'b> {
+    exec_state: &'a mut ExecutionState<'b>,
+    union_action: egglog_bridge::UnionAction,
+    table_actions: HashMap<Symbol, egglog_bridge::TableAction>,
+}
+
+impl Context<'_, '_> {
+    /// Convert from an egglog value to a Rust type.
+    pub fn value_to_rust<T: core_relations::Primitive>(&self, x: Value) -> T {
+        self.exec_state.prims().unwrap::<T>(x)
+    }
+
+    /// Convert from a Rust type to an egglog value.
+    pub fn rust_to_value<T: core_relations::Primitive>(&self, x: T) -> Value {
+        self.exec_state.prims().get::<T>(x)
+    }
+
+    fn get_table_action(&self, table: &str) -> egglog_bridge::TableAction {
+        self.table_actions[&Symbol::from(table)]
+    }
+
+    /// Do a table lookup. This is potentially a mutable operation!
+    /// For more information, see `egglog_bridge::TableAction::lookup`.
+    pub fn lookup(&mut self, table: &str, key: Vec<Value>) -> Option<Value> {
+        self.get_table_action(table).lookup(self.exec_state, &key)
+    }
+
+    /// Union two values in the e-graph.
+    /// For more information, see `egglog_bridge::UnionAction::union`.
+    pub fn union(&mut self, x: Value, y: Value) {
+        self.union_action.union(self.exec_state, x, y)
+    }
+
+    /// Insert a row into a table.
+    /// For more information, see `egglog_bridge::TableAction::insert`.
+    pub fn insert(&mut self, table: &str, row: Vec<Value>) {
+        self.get_table_action(table).insert(self.exec_state, row)
+    }
+
+    /// Remove a row from a table.
+    /// For more information, see `egglog_bridge::TableAction::remove`.
+    pub fn remove(&mut self, table: &str, key: &[Value]) {
+        self.get_table_action(table).remove(self.exec_state, key)
+    }
+
+    /// Subsume a row in a table.
+    /// For more information, see `egglog_bridge::TableAction::subsume`.
+    pub fn subsume(&mut self, table: &str, key: &[Value]) {
+        self.get_table_action(table).subsume(self.exec_state, key)
+    }
+}
+
 #[derive(Clone)]
-struct RustRuleRhs<F: Fn(&mut ExecutionState, &[Value]) -> Option<()>> {
+struct RustRuleRhs<F: Fn(&mut Context, &[Value]) -> Option<()>> {
     name: Symbol,
     // TODO: just store the TypeConstraint here
     input: Vec<ArcSort>,
+    union_action: egglog_bridge::UnionAction,
+    table_actions: HashMap<Symbol, egglog_bridge::TableAction>,
     func: F,
 }
 
-impl<F: Fn(&mut ExecutionState, &[Value]) -> Option<()>> Primitive for RustRuleRhs<F> {
+impl<F: Fn(&mut Context, &[Value]) -> Option<()>> Primitive for RustRuleRhs<F> {
     fn name(&self) -> Symbol {
         self.name
     }
@@ -76,7 +131,12 @@ impl<F: Fn(&mut ExecutionState, &[Value]) -> Option<()>> Primitive for RustRuleR
     }
 
     fn apply(&self, exec_state: &mut ExecutionState, values: &[Value]) -> Option<Value> {
-        (self.func)(exec_state, values)?;
+        let mut context = Context {
+            exec_state,
+            union_action: self.union_action,
+            table_actions: self.table_actions.clone(),
+        };
+        (self.func)(&mut context, values)?;
         Some(exec_state.prims().get(()))
     }
 }
@@ -86,15 +146,27 @@ pub fn rule(
     egraph: &mut EGraph,
     vars: &[(&str, ArcSort)],
     facts: Facts<Symbol, Symbol>,
-    func: impl Fn(&mut ExecutionState, &[Value]) -> Option<()> + Clone + Send + Sync + 'static,
+    func: impl Fn(&mut Context, &[Value]) -> Option<()> + Clone + Send + Sync + 'static,
 ) -> Result<Symbol, Error> {
     let prim_name = egraph
         .parser
         .symbol_gen
         .fresh(&Symbol::from("rust_rule_prim"));
+
     egraph.add_primitive(RustRuleRhs {
         name: prim_name,
         input: vars.iter().map(|(_, s)| s.clone()).collect(),
+        union_action: egglog_bridge::UnionAction::new(&egraph.backend),
+        table_actions: egraph
+            .functions
+            .iter()
+            .map(|(k, v)| {
+                (
+                    *k,
+                    egglog_bridge::TableAction::new(&egraph.backend, v.backend_id),
+                )
+            })
+            .collect(),
         func,
     });
 
@@ -221,11 +293,6 @@ mod tests {
 
         assert!(results.is_empty());
 
-        let fib = egglog_bridge::TableAction::new(
-            &egraph.backend,
-            egraph.functions[&Symbol::from("fib")].backend_id,
-        );
-
         // add the rule from `build_test_database` to the egraph with a handle
         let ruleset = rule(
             &mut egraph,
@@ -234,15 +301,15 @@ mod tests {
                 (= f0 (fib x))
                 (= f1 (fib (+ x 1)))
             ],
-            move |exec_state, values| {
+            move |ctx, values| {
                 let [x, f0, f1] = values else { unreachable!() };
-                let x = exec_state.prims().unwrap::<i64>(*x);
-                let f0 = exec_state.prims().unwrap::<i64>(*f0);
-                let f1 = exec_state.prims().unwrap::<i64>(*f1);
+                let x = ctx.value_to_rust::<i64>(*x);
+                let f0 = ctx.value_to_rust::<i64>(*f0);
+                let f1 = ctx.value_to_rust::<i64>(*f1);
 
-                let y = exec_state.prims().get::<i64>(x + 2);
-                let f2 = exec_state.prims().get::<i64>(f0 + f1);
-                fib.insert(exec_state, vec![y, f2]);
+                let y = ctx.rust_to_value::<i64>(x + 2);
+                let f2 = ctx.rust_to_value::<i64>(f0 + f1);
+                ctx.insert("fib", vec![y, f2]);
 
                 Some(())
             },

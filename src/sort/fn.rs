@@ -364,7 +364,7 @@ impl Primitive for Apply {
 }
 
 impl FunctionContainer {
-    /// Call function (primitive or table) <name> with value args <args> and return the value.
+    /// Call function (primitive or table) `name` with value args `args` and return the value.
     ///
     /// Public so that other primitive sorts (external or internal) have access.
     pub fn apply(&self, exec_state: &mut ExecutionState, args: &[Value]) -> Option<Value> {
