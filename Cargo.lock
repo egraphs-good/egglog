@@ -293,7 +293,7 @@ dependencies = [
 [[package]]
 name = "concurrency"
 version = "0.1.0"
-source = "git+https://github.com/egraphs-good/egglog-backend.git?rev=76dc8d7#76dc8d7260bc70dd0ad49ed2e46781ac3865918e"
+source = "git+https://github.com/egraphs-good/egglog-backend.git?rev=3cb8ab5#3cb8ab508a21bfef385c2ddf6230f2e193cef9fe"
 dependencies = [
  "arc-swap",
  "rayon",
@@ -312,7 +312,7 @@ dependencies = [
 [[package]]
 name = "core-relations"
 version = "0.1.0"
-source = "git+https://github.com/egraphs-good/egglog-backend.git?rev=76dc8d7#76dc8d7260bc70dd0ad49ed2e46781ac3865918e"
+source = "git+https://github.com/egraphs-good/egglog-backend.git?rev=3cb8ab5#3cb8ab508a21bfef385c2ddf6230f2e193cef9fe"
 dependencies = [
  "anyhow",
  "bumpalo",
@@ -505,7 +505,7 @@ dependencies = [
 [[package]]
 name = "egglog-bridge"
 version = "0.1.0"
-source = "git+https://github.com/egraphs-good/egglog-backend.git?rev=76dc8d7#76dc8d7260bc70dd0ad49ed2e46781ac3865918e"
+source = "git+https://github.com/egraphs-good/egglog-backend.git?rev=3cb8ab5#3cb8ab508a21bfef385c2ddf6230f2e193cef9fe"
 dependencies = [
  "anyhow",
  "core-relations",
@@ -936,7 +936,7 @@ dependencies = [
 [[package]]
 name = "numeric-id"
 version = "0.1.0"
-source = "git+https://github.com/egraphs-good/egglog-backend.git?rev=76dc8d7#76dc8d7260bc70dd0ad49ed2e46781ac3865918e"
+source = "git+https://github.com/egraphs-good/egglog-backend.git?rev=3cb8ab5#3cb8ab508a21bfef385c2ddf6230f2e193cef9fe"
 dependencies = [
  "lazy_static",
  "rayon",
@@ -1446,7 +1446,7 @@ checksum = "5a5f39404a5da50712a4c1eecf25e90dd62b613502b7e925fd4e4d19b5c96512"
 [[package]]
 name = "union-find"
 version = "0.1.0"
-source = "git+https://github.com/egraphs-good/egglog-backend.git?rev=76dc8d7#76dc8d7260bc70dd0ad49ed2e46781ac3865918e"
+source = "git+https://github.com/egraphs-good/egglog-backend.git?rev=3cb8ab5#3cb8ab508a21bfef385c2ddf6230f2e193cef9fe"
 dependencies = [
  "concurrency",
  "crossbeam",
