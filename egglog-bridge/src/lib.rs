@@ -1148,7 +1148,7 @@ impl MergeFn {
                     func_info.name
                 );
                 ResolvedMergeFn::Function {
-                    func: Lookup::new(egraph, *func),
+                    func: TableAction::new(egraph, *func),
                     panic: egraph.new_panic(format!(
                         "Lookup on {} failed in the merge function for {function_name}",
                         func_info.name
@@ -1184,7 +1184,7 @@ enum ResolvedMergeFn {
         panic: ExternalFunctionId,
     },
     Function {
-        func: Lookup,
+        func: TableAction,
         args: Vec<ResolvedMergeFn>,
         panic: ExternalFunctionId,
     },
@@ -1245,7 +1245,7 @@ impl ResolvedMergeFn {
                     .map(|arg| arg.run(state, cur, new, ts))
                     .collect::<Vec<_>>();
 
-                func.run(state, &args).unwrap_or_else(|| {
+                func.lookup(state, &args).unwrap_or_else(|| {
                     let res = state.call_external_func(*panic, &[]);
                     assert_eq!(res, None);
                     cur
@@ -1256,24 +1256,24 @@ impl ResolvedMergeFn {
 }
 
 /// This is an intern-able struct that holds all the data needed
-/// to do a "table lookup" on an [`ExecutionState`], assuming that
-/// the [`FunctionId`] for the table is known ahead of time.
-///
-/// A "table lookup" is not a read-only operation. It will insert a row when
-/// the [`DefaultVal`] for the table is not [`DefaultVal::Fail`] and
-/// the `args` in [`Lookup::run`] are not already present in the table.
+/// to do table operations with an [`ExecutionState`], assuming
+/// that the [`FunctionId`] for the table is known ahead of time.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
-pub struct Lookup {
+pub struct TableAction {
     table: TableId,
     table_math: SchemaMath,
     default: Option<MergeVal>,
     timestamp: CounterId,
 }
 
-impl Lookup {
-    pub fn new(egraph: &EGraph, func: FunctionId) -> Lookup {
+impl TableAction {
+    /// Create a new `TableAction` to be used later.
+    /// This requires access to the `egglog_bridge::EGraph`.
+    pub fn new(egraph: &EGraph, func: FunctionId) -> TableAction {
+        assert!(!egraph.tracing, "proofs not supported yet");
+
         let func_info = &egraph.funcs[func];
-        Lookup {
+        TableAction {
             table: func_info.table,
             table_math: SchemaMath {
                 func_cols: func_info.schema.len(),
@@ -1289,8 +1289,10 @@ impl Lookup {
         }
     }
 
-    pub fn run(&self, state: &mut ExecutionState, args: &[Value]) -> Option<Value> {
-        assert!(!self.table_math.tracing, "proofs not supported yet");
+    /// A "table lookup" is not a read-only operation. It will insert a row when
+    /// the [`DefaultVal`] for the table is not [`DefaultVal::Fail`] and
+    /// the `args` in [`Lookup::run`] are not already present in the table.
+    pub fn lookup(&self, state: &mut ExecutionState, args: &[Value]) -> Option<Value> {
         match self.default {
             Some(default) => {
                 let timestamp =
@@ -1322,6 +1324,55 @@ impl Lookup {
                 .get_row(args)
                 .map(|row| row.vals[self.table_math.ret_val_col()]),
         }
+    }
+
+    /// Insert a row into this table.
+    pub fn insert(&self, state: &mut ExecutionState, mut row: Vec<Value>) {
+        let ts = Value::from_usize(state.read_counter(self.timestamp));
+        self.table_math.write_table_row(
+            &mut row,
+            RowVals {
+                timestamp: ts,
+                proof: None,
+                subsume: self.table_math.subsume.then_some(NOT_SUBSUMED),
+                ret_val: None,
+            },
+        );
+        state.stage_insert(self.table, &row);
+    }
+
+    /// Delete a row from this table.
+    pub fn remove(&self, state: &mut ExecutionState, key: &[Value]) {
+        state.stage_remove(self.table, key);
+    }
+
+    /// Subsume a row in this table.
+    pub fn subsume(&self, _state: &mut ExecutionState, _key: &[Value]) {
+        todo!()
+    }
+}
+
+/// A variant of `TableAction` for the union-find.
+pub struct UnionAction {
+    table: TableId,
+    timestamp: CounterId,
+}
+
+impl UnionAction {
+    /// Create a new `UnionAction` to be used later.
+    /// This requires access to the `egglog_bridge::EGraph`.
+    pub fn new(egraph: &EGraph) -> UnionAction {
+        assert!(!egraph.tracing, "proofs not supported yet");
+        UnionAction {
+            table: egraph.uf_table,
+            timestamp: egraph.timestamp_counter,
+        }
+    }
+
+    /// Union two values.
+    pub fn union(&self, state: &mut ExecutionState, x: Value, y: Value) {
+        let ts = Value::from_usize(state.read_counter(self.timestamp));
+        state.stage_insert(self.table, &[x, y, ts]);
     }
 }
 

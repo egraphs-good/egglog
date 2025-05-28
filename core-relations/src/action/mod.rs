@@ -264,7 +264,10 @@ impl<'a> ExecutionState<'a> {
             changed: false,
         }
     }
+
     /// Stage an insertion of the given row into `table`.
+    ///
+    /// If you are using `egglog`, consider using `egglog_bridge::TableAction`.
     pub fn stage_insert(&mut self, table: TableId, row: &[Value]) {
         self.buffers
             .get_or_insert(table, || self.db.table_info[table].table.new_buffer())
@@ -273,6 +276,8 @@ impl<'a> ExecutionState<'a> {
     }
 
     /// Stage a removal of the given row from `table` if it is present.
+    ///
+    /// If you are using `egglog`, consider using `egglog_bridge::TableAction`.
     pub fn stage_remove(&mut self, table: TableId, key: &[Value]) {
         self.buffers
             .get_or_insert(table, || self.db.table_info[table].table.new_buffer())
@@ -318,6 +323,8 @@ impl<'a> ExecutionState<'a> {
     /// merge functions sometimes need to get the result of an insertion. For
     /// such cases, executions keep a cache of "predicted" values for a given
     /// mapping that manage the insertions, etc.
+    ///
+    /// If you are using `egglog`, consider using `egglog_bridge::TableAction`.
     pub fn predict_val(
         &mut self,
         table: TableId,
