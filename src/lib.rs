@@ -1452,7 +1452,7 @@ impl<'a> BackendRule<'a> {
                 panic!("expected string literal after `unstable-fn`")
             };
             let id = if let Some(f) = self.type_info.get_func_type(&name) {
-                ResolvedFunctionId::Lookup(egglog_bridge::Lookup::new(
+                ResolvedFunctionId::Lookup(egglog_bridge::TableAction::new(
                     self.rb.egraph(),
                     self.func(f),
                 ))

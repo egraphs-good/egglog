@@ -329,7 +329,7 @@ pub struct ResolvedFunction {
 
 #[derive(Clone, Debug, PartialEq, Eq, Hash)]
 pub enum ResolvedFunctionId {
-    Lookup(egglog_bridge::Lookup),
+    Lookup(egglog_bridge::TableAction),
     Prim(ExternalFunctionId),
 }
 
@@ -370,7 +370,7 @@ impl FunctionContainer {
     pub fn apply(&self, exec_state: &mut ExecutionState, args: &[Value]) -> Option<Value> {
         let args: Vec<_> = self.1.iter().map(|(_, x)| x).chain(args).copied().collect();
         match &self.0 {
-            ResolvedFunctionId::Lookup(lookup) => lookup.run(exec_state, &args),
+            ResolvedFunctionId::Lookup(table) => table.lookup(exec_state, &args),
             ResolvedFunctionId::Prim(prim) => exec_state.call_external_func(*prim, &args),
         }
     }
