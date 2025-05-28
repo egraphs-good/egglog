@@ -4,15 +4,15 @@ pub mod expr {
     use super::*;
 
     pub fn var(name: &str) -> Expr {
-        Expr::Var(DUMMY_SPAN.clone(), name.into())
+        Expr::Var(span!(), name.into())
     }
 
     pub fn int(value: i64) -> Expr {
-        Expr::Lit(DUMMY_SPAN.clone(), Literal::Int(value))
+        Expr::Lit(span!(), Literal::Int(value))
     }
 
     pub fn call(f: &str, xs: Vec<Expr>) -> Expr {
-        Expr::Call(DUMMY_SPAN.clone(), f.into(), xs)
+        Expr::Call(span!(), f.into(), xs)
     }
 }
 
@@ -20,7 +20,7 @@ pub mod fact {
     use super::*;
 
     pub fn equals(args: Vec<Expr>) -> Fact {
-        Fact::Eq(DUMMY_SPAN.clone(), args)
+        Fact::Eq(span!(), args)
     }
 }
 
@@ -99,9 +99,9 @@ pub fn rule(
     });
 
     let rule = Rule {
-        span: DUMMY_SPAN.clone(),
+        span: span!(),
         head: GenericActions(vec![GenericAction::Expr(
-            DUMMY_SPAN.clone(),
+            span!(),
             expr::call(
                 prim_name.into(),
                 vars.iter().map(|(v, _)| expr::var(v)).collect(),
@@ -126,7 +126,7 @@ pub fn rule(
 
 pub fn run_ruleset(egraph: &mut EGraph, ruleset: Symbol) -> Result<(), Error> {
     egraph.run_program(vec![Command::RunSchedule(Schedule::Run(
-        DUMMY_SPAN.clone(),
+        span!(),
         RunConfig {
             ruleset,
             until: None,
