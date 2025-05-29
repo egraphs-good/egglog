@@ -32,6 +32,28 @@ pub mod sort {
     }
 }
 
+pub mod ruleset {
+    use super::*;
+
+    /// Create a new ruleset.
+    pub fn add(egraph: &mut EGraph, ruleset: Symbol) -> Result<(), Error> {
+        egraph.run_program(vec![Command::AddRuleset(span!(), ruleset)])?;
+        Ok(())
+    }
+
+    /// Run one iteration of a ruleset.
+    pub fn run(egraph: &mut EGraph, ruleset: Symbol) -> Result<(), Error> {
+        egraph.run_program(vec![Command::RunSchedule(Schedule::Run(
+            span!(),
+            RunConfig {
+                ruleset,
+                until: None,
+            },
+        ))])?;
+        Ok(())
+    }
+}
+
 #[macro_export]
 macro_rules! expr {
     ((unquote $unquoted:expr)) => { $unquoted };
@@ -51,6 +73,10 @@ macro_rules! fact {
 macro_rules! facts {
     ($($tree:tt)*) => { Facts(vec![$(fact!($tree)),*]) };
 }
+
+// TODO: actions macro
+
+// TODO: rule vs rust_rule
 
 /// A wrapper around an `ExecutionState` for rules that are written in Rust.
 pub struct Context<'a, 'b> {
@@ -143,10 +169,11 @@ impl<F: Fn(&mut Context, &[Value]) -> Option<()>> Primitive for RustRuleRhs<F> {
 /// Add a rule to the e-graph in a new ruleset. Returns the ruleset name.
 pub fn rule(
     egraph: &mut EGraph,
+    ruleset: Symbol,
     vars: &[(&str, ArcSort)],
     facts: Facts<Symbol, Symbol>,
     func: impl Fn(&mut Context, &[Value]) -> Option<()> + Clone + Send + Sync + 'static,
-) -> Result<Symbol, Error> {
+) -> Result<(), Error> {
     let prim_name = egraph
         .parser
         .symbol_gen
@@ -182,33 +209,19 @@ pub fn rule(
     };
 
     let rule_name = egraph.parser.symbol_gen.fresh(&"rust_rule".into());
-    let ruleset = egraph.parser.symbol_gen.fresh(&"rust_rule_ruleset".into());
-    egraph.run_program(vec![
-        Command::AddRuleset(span!(), ruleset),
-        Command::Rule {
-            name: rule_name,
-            ruleset,
-            rule,
-        },
-    ])?;
+    egraph.run_program(vec![Command::Rule {
+        name: rule_name,
+        ruleset,
+        rule,
+    }])?;
 
-    Ok(ruleset)
-}
-
-/// Run one iteration of a ruleset.
-pub fn run_ruleset(egraph: &mut EGraph, ruleset: Symbol) -> Result<(), Error> {
-    egraph.run_program(vec![Command::RunSchedule(Schedule::Run(
-        span!(),
-        RunConfig {
-            ruleset,
-            until: None,
-        },
-    ))])?;
     Ok(())
 }
 
 /// Run a query over the database. Each match is returned as a `Vec<Value>`
 /// whose order is the order of the `vars`.
+/// TODO: return just one wrapped vec and expose getting rows
+/// TODO: add vars macro
 pub fn query(
     egraph: &mut EGraph,
     vars: &[(&str, ArcSort)],
@@ -219,16 +232,36 @@ pub fn query(
     let results = Arc::new(Mutex::new(Vec::new()));
     let results_weak = Arc::downgrade(&results);
 
-    let ruleset = rule(egraph, vars, facts, move |_, values| {
-        match results_weak.upgrade() {
+    let ruleset = egraph
+        .parser
+        .symbol_gen
+        .fresh(&Symbol::from("query_ruleset"));
+    ruleset::add(egraph, ruleset)?;
+
+    rule(
+        egraph,
+        ruleset,
+        vars,
+        facts,
+        move |_, values| match results_weak.upgrade() {
             None => panic!("one-shot rule was called twice"),
             Some(arc) => {
                 arc.lock().unwrap().push(values.to_vec());
                 Some(())
             }
-        }
-    })?;
-    run_ruleset(egraph, ruleset)?;
+        },
+    )?;
+
+    ruleset::run(egraph, ruleset)?;
+
+    let ruleset = egraph.rulesets.swap_remove(&ruleset).unwrap();
+
+    let Ruleset::Rules(rules) = ruleset else {
+        unreachable!()
+    };
+    assert_eq!(rules.len(), 1);
+    let rule = rules.into_iter().next().unwrap().1;
+    egraph.backend.free_rule(rule);
 
     match Arc::into_inner(results) {
         Some(mutex) => Ok(mutex.into_inner().unwrap()),
@@ -295,9 +328,13 @@ mod tests {
 
         assert!(results.is_empty());
 
-        // add the rule from `build_test_database` to the egraph with a handle
-        let ruleset = rule(
+        let ruleset = Symbol::from("custom_ruleset");
+        ruleset::add(&mut egraph, ruleset)?;
+
+        // add the rule from `build_test_database` to the egraph
+        rule(
             &mut egraph,
+            ruleset,
             &[("x", sort::int()), ("f0", sort::int()), ("f1", sort::int())],
             facts![
                 (= f0 (fib x))
@@ -319,7 +356,7 @@ mod tests {
 
         // run that rule 10 times
         for _ in 0..10 {
-            run_ruleset(&mut egraph, ruleset)?;
+            ruleset::run(&mut egraph, ruleset)?;
         }
 
         // check that `fib` now contains `20`
