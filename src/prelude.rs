@@ -65,7 +65,6 @@ macro_rules! vars {
 macro_rules! expr {
     ((unquote $unquoted:expr)) => { $unquoted };
     (($func:tt $($arg:tt)*)) => { expr::call(stringify!($func), vec![$(expr!($arg)),*]) };
-    // TODO: this matches ALL literals as ints
     ($value:literal) => { expr::int($value) };
     ($quoted:tt) => { expr::var(stringify!($quoted)) };
 }
@@ -81,9 +80,58 @@ macro_rules! facts {
     ($($tree:tt)*) => { Facts(vec![$(fact!($tree)),*]) };
 }
 
-// TODO: actions macro
+#[macro_export]
+macro_rules! action {
+    ((let $name:ident $value:tt)) => {
+        Action::Let(span!(), $name, expr!(value))
+    };
+    ((set ($f:ident $($x:tt)*) $value:tt)) => {
+        Action::Set(span!(), Symbol::from(stringify!($f)), vec![$(expr!($x)),*], expr!($value))
+    };
+    ((delete ($f:ident $($x:tt)*))) => {
+        Action::Change(span!(), Change::Delete, Symbol::from(stringify!($f)), vec![$(expr!($x)),*])
+    };
+    ((subsume ($f:ident $($x:tt)*))) => {
+        Action::Change(span!(), Change::Subsume, Symbol::from(stringify!($f)), vec![$(expr!($x)),*])
+    };
+    ((union $x:tt $y:tt)) => {
+        Action::Union(span!(), expr!($x), expr!($y))
+    };
+    ((panic $message:literal)) => {
+        Action::Panic(span!(), $message)
+    };
+    ($x:tt) => {
+        Action::Expr(span, expr!($x))
+    };
+}
 
-// TODO: rule vs rust_rule
+#[macro_export]
+macro_rules! actions {
+    ($($tree:tt)*) => { GenericActions(vec![$(action!($tree)),*]) };
+}
+
+/// Add a rule to the e-graph whose right-hand side is made up of actions.
+pub fn rule(
+    egraph: &mut EGraph,
+    ruleset: Symbol,
+    facts: Facts<Symbol, Symbol>,
+    actions: Actions,
+) -> Result<(), Error> {
+    let rule = Rule {
+        span: span!(),
+        head: actions,
+        body: facts.0,
+    };
+
+    let rule_name = egraph.parser.symbol_gen.fresh(&"prelude::rule".into());
+    egraph.run_program(vec![Command::Rule {
+        name: rule_name,
+        ruleset,
+        rule,
+    }])?;
+
+    Ok(())
+}
 
 /// A wrapper around an `ExecutionState` for rules that are written in Rust.
 pub struct Context<'a, 'b> {
@@ -173,8 +221,8 @@ impl<F: Fn(&mut Context, &[Value]) -> Option<()>> Primitive for RustRuleRhs<F> {
     }
 }
 
-/// Add a rule to the e-graph in a new ruleset. Returns the ruleset name.
-pub fn rule(
+/// Add a rule to the e-graph whose right-hand side is a Rust callback.
+pub fn rust_rule(
     egraph: &mut EGraph,
     ruleset: Symbol,
     vars: &[(&str, ArcSort)],
@@ -215,7 +263,7 @@ pub fn rule(
         body: facts.0,
     };
 
-    let rule_name = egraph.parser.symbol_gen.fresh(&"rust_rule".into());
+    let rule_name = egraph.parser.symbol_gen.fresh(&"prelude::rust_rule".into());
     egraph.run_program(vec![Command::Rule {
         name: rule_name,
         ruleset,
@@ -279,7 +327,7 @@ pub fn query(
         .fresh(&Symbol::from("query_ruleset"));
     ruleset::add(egraph, ruleset)?;
 
-    rule(
+    rust_rule(
         egraph,
         ruleset,
         vars,
@@ -378,6 +426,55 @@ mod tests {
 
         // add the rule from `build_test_database` to the egraph
         rule(
+            &mut egraph,
+            ruleset,
+            facts![
+                (= f0 (fib x))
+                (= f1 (fib (+ x 1)))
+            ],
+            actions![
+                (set (fib (+ x 2)) (+ f0 f1))
+            ],
+        )?;
+
+        // run that rule 10 times
+        for _ in 0..10 {
+            ruleset::run(&mut egraph, ruleset)?;
+        }
+
+        // check that `fib` now contains `20`
+        let results = query(
+            &mut egraph,
+            vars![f: i64],
+            facts![(= (fib (unquote expr::int(big_number))) f)],
+        )?;
+
+        let y = egraph.backend.primitives().get::<i64>(6765);
+        assert_eq!(results.data, [y]);
+
+        Ok(())
+    }
+
+    #[test]
+    fn rust_api_rust_rule() -> Result<(), Error> {
+        let mut egraph = build_test_database()?;
+
+        let big_number = 20;
+
+        // check that `fib` does not contain `20`
+        let results = query(
+            &mut egraph,
+            vars![f: i64],
+            facts![(= (fib (unquote expr::int(big_number))) f)],
+        )?;
+
+        assert!(results.data.is_empty());
+
+        let ruleset = Symbol::from("custom_ruleset");
+        ruleset::add(&mut egraph, ruleset)?;
+
+        // add the rule from `build_test_database` to the egraph
+        rust_rule(
             &mut egraph,
             ruleset,
             vars![x: i64, f0: i64, f1: i64],
