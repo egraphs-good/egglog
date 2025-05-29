@@ -218,15 +218,50 @@ pub fn rule(
     Ok(())
 }
 
-/// Run a query over the database. Each match is returned as a `Vec<Value>`
-/// whose order is the order of the `vars`.
-/// TODO: return just one wrapped vec and expose getting rows
+/// The result of a query.
+pub struct QueryResult {
+    cols: usize,
+    data: Vec<Value>,
+}
+
+impl QueryResult {
+    /// Get an iterator over the query results,
+    /// where each match is a `&[Value]` in the same order
+    /// as the `vars` that were passed to `query`.
+    pub fn iter(&self) -> QueryResultIterator {
+        QueryResultIterator {
+            index: 0,
+            query: self,
+        }
+    }
+}
+
+/// Immutable iterator on the result of `query`.
+pub struct QueryResultIterator<'a> {
+    index: usize,
+    query: &'a QueryResult,
+}
+
+impl<'a> Iterator for QueryResultIterator<'a> {
+    type Item = &'a [Value];
+    fn next(&mut self) -> Option<&'a [Value]> {
+        let rest = &self.query.data[self.index..];
+        if rest.is_empty() {
+            None
+        } else {
+            self.index += self.query.cols;
+            Some(&rest[..self.query.cols])
+        }
+    }
+}
+
+/// Run a query over the database.
 /// TODO: add vars macro
 pub fn query(
     egraph: &mut EGraph,
     vars: &[(&str, ArcSort)],
     facts: Facts<Symbol, Symbol>,
-) -> Result<Vec<Vec<Value>>, Error> {
+) -> Result<QueryResult, Error> {
     use std::sync::{Arc, Mutex};
 
     let results = Arc::new(Mutex::new(Vec::new()));
@@ -246,7 +281,7 @@ pub fn query(
         move |_, values| match results_weak.upgrade() {
             None => panic!("one-shot rule was called twice"),
             Some(arc) => {
-                arc.lock().unwrap().push(values.to_vec());
+                arc.lock().unwrap().extend(values);
                 Some(())
             }
         },
@@ -263,10 +298,14 @@ pub fn query(
     let rule = rules.into_iter().next().unwrap().1;
     egraph.backend.free_rule(rule);
 
-    match Arc::into_inner(results) {
-        Some(mutex) => Ok(mutex.into_inner().unwrap()),
-        None => panic!("results_weak.upgrade() was not dropped"),
-    }
+    let Some(mutex) = Arc::into_inner(results) else {
+        panic!("results_weak.upgrade() was not dropped");
+    };
+    let data = mutex.into_inner().unwrap();
+    Ok(QueryResult {
+        cols: vars.len(),
+        data,
+    })
 }
 
 #[cfg(test)]
@@ -308,7 +347,7 @@ mod tests {
 
         let x = egraph.backend.primitives().get::<i64>(7);
         let y = egraph.backend.primitives().get::<i64>(13);
-        assert_eq!(results, [[x, y]]);
+        assert_eq!(results.data, [x, y]);
 
         Ok(())
     }
@@ -326,7 +365,7 @@ mod tests {
             facts![(= (fib (unquote expr::int(big_number))) f)],
         )?;
 
-        assert!(results.is_empty());
+        assert!(results.data.is_empty());
 
         let ruleset = Symbol::from("custom_ruleset");
         ruleset::add(&mut egraph, ruleset)?;
@@ -367,7 +406,7 @@ mod tests {
         )?;
 
         let y = egraph.backend.primitives().get::<i64>(6765);
-        assert_eq!(results, [[y]]);
+        assert_eq!(results.data, [y]);
 
         Ok(())
     }
