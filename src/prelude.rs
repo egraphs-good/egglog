@@ -138,6 +138,7 @@ pub struct Context<'a, 'b> {
     exec_state: &'a mut ExecutionState<'b>,
     union_action: egglog_bridge::UnionAction,
     table_actions: HashMap<Symbol, egglog_bridge::TableAction>,
+    panic_id: ExternalFunctionId,
 }
 
 impl Context<'_, '_> {
@@ -184,6 +185,15 @@ impl Context<'_, '_> {
     pub fn subsume(&mut self, table: &str, key: &[Value]) {
         self.get_table_action(table).subsume(self.exec_state, key)
     }
+
+    /// Panic.
+    /// You should also return `None` from your callback if you call
+    /// this function, which this function hopefully makes easier by
+    /// always returning `None` so that you can use `?`.
+    pub fn panic(&mut self) -> Option<()> {
+        self.exec_state.call_external_func(self.panic_id, &[]);
+        None
+    }
 }
 
 #[derive(Clone)]
@@ -192,6 +202,7 @@ struct RustRuleRhs<F: Fn(&mut Context, &[Value]) -> Option<()>> {
     inputs: Vec<ArcSort>,
     union_action: egglog_bridge::UnionAction,
     table_actions: HashMap<Symbol, egglog_bridge::TableAction>,
+    panic_id: ExternalFunctionId,
     func: F,
 }
 
@@ -215,6 +226,7 @@ impl<F: Fn(&mut Context, &[Value]) -> Option<()>> Primitive for RustRuleRhs<F> {
             exec_state,
             union_action: self.union_action,
             table_actions: self.table_actions.clone(),
+            panic_id: self.panic_id,
         };
         (self.func)(&mut context, values)?;
         Some(exec_state.prims().get(()))
@@ -229,11 +241,10 @@ pub fn rust_rule(
     facts: Facts<Symbol, Symbol>,
     func: impl Fn(&mut Context, &[Value]) -> Option<()> + Clone + Send + Sync + 'static,
 ) -> Result<(), Error> {
-    let prim_name = egraph
-        .parser
-        .symbol_gen
-        .fresh(&Symbol::from("rust_rule_prim"));
+    let rule_name = egraph.parser.symbol_gen.fresh(&"prelude::rust_rule".into());
+    let prim_name = egraph.parser.symbol_gen.fresh(&"rust_rule_prim".into());
 
+    let panic_id = egraph.backend.new_panic(format!("{rule_name}"));
     egraph.add_primitive(RustRuleRhs {
         name: prim_name,
         inputs: vars.iter().map(|(_, s)| s.clone()).collect(),
@@ -248,6 +259,7 @@ pub fn rust_rule(
                 )
             })
             .collect(),
+        panic_id,
         func,
     });
 
@@ -263,7 +275,6 @@ pub fn rust_rule(
         body: facts.0,
     };
 
-    let rule_name = egraph.parser.symbol_gen.fresh(&"prelude::rust_rule".into());
     egraph.run_program(vec![Command::Rule {
         name: rule_name,
         ruleset,
