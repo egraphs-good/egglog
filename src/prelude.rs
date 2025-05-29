@@ -27,7 +27,7 @@ pub mod fact {
 pub mod sort {
     use super::*;
 
-    pub fn int() -> ArcSort {
+    pub fn i64() -> ArcSort {
         Arc::new(I64Sort)
     }
 }
@@ -52,6 +52,13 @@ pub mod ruleset {
         ))])?;
         Ok(())
     }
+}
+
+#[macro_export]
+macro_rules! vars {
+    [$($x:ident : $t:ident),* $(,)?] => {
+        &[$((stringify!($x), sort::$t())),*]
+    };
 }
 
 #[macro_export]
@@ -256,7 +263,6 @@ impl<'a> Iterator for QueryResultIterator<'a> {
 }
 
 /// Run a query over the database.
-/// TODO: add vars macro
 pub fn query(
     egraph: &mut EGraph,
     vars: &[(&str, ArcSort)],
@@ -338,7 +344,7 @@ mod tests {
 
         let results = query(
             &mut egraph,
-            &[("x", sort::int()), ("y", sort::int())],
+            vars![x: i64, y: i64],
             facts![
                 (= (fib x) y)
                 (= y 13)
@@ -361,7 +367,7 @@ mod tests {
         // check that `fib` does not contain `20`
         let results = query(
             &mut egraph,
-            &[("f", sort::int())],
+            vars![f: i64],
             facts![(= (fib (unquote expr::int(big_number))) f)],
         )?;
 
@@ -374,7 +380,7 @@ mod tests {
         rule(
             &mut egraph,
             ruleset,
-            &[("x", sort::int()), ("f0", sort::int()), ("f1", sort::int())],
+            vars![x: i64, f0: i64, f1: i64],
             facts![
                 (= f0 (fib x))
                 (= f1 (fib (+ x 1)))
@@ -401,7 +407,7 @@ mod tests {
         // check that `fib` now contains `20`
         let results = query(
             &mut egraph,
-            &[("f", sort::int())],
+            vars![f: i64],
             facts![(= (fib (unquote expr::int(big_number))) f)],
         )?;
 
