@@ -83,7 +83,7 @@ macro_rules! facts {
 #[macro_export]
 macro_rules! action {
     ((let $name:ident $value:tt)) => {
-        Action::Let(span!(), $name, expr!(value))
+        Action::Let(span!(), Symbol::from(stringify!($name)), expr!(value))
     };
     ((set ($f:ident $($x:tt)*) $value:tt)) => {
         Action::Set(span!(), Symbol::from(stringify!($f)), vec![$(expr!($x)),*], expr!($value))
@@ -101,7 +101,7 @@ macro_rules! action {
         Action::Panic(span!(), $message)
     };
     ($x:tt) => {
-        Action::Expr(span, expr!($x))
+        Action::Expr(span!(), expr!($x))
     };
 }
 
