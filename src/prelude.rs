@@ -369,6 +369,59 @@ pub fn query(
     })
 }
 
+/// Declare a new sort.
+pub fn add_sort(egraph: &mut EGraph, name: Symbol) -> Result<(), Error> {
+    egraph.run_program(vec![Command::Sort(span!(), name, None)])?;
+    Ok(())
+}
+
+/// Declare a new function table.
+pub fn add_function(
+    egraph: &mut EGraph,
+    name: Symbol,
+    schema: Schema,
+    merge: Option<GenericExpr<Symbol, Symbol>>,
+) -> Result<(), Error> {
+    egraph.run_program(vec![Command::Function {
+        span: span!(),
+        name,
+        schema,
+        merge,
+    }])?;
+    Ok(())
+}
+
+/// Declare a new constructor table.
+pub fn add_constructor(
+    egraph: &mut EGraph,
+    name: Symbol,
+    schema: Schema,
+    cost: Option<usize>,
+    unextractable: bool,
+) -> Result<(), Error> {
+    egraph.run_program(vec![Command::Constructor {
+        span: span!(),
+        name,
+        schema,
+        cost,
+        unextractable,
+    }])?;
+    Ok(())
+}
+
+/// Declare a new relation table.
+pub fn add_relation(
+    egraph: &mut EGraph,
+    name: Symbol,
+    inputs: Vec<Symbol>,
+) -> Result<Vec<String>, Error> {
+    egraph.run_program(vec![Command::Relation {
+        span: span!(),
+        name,
+        inputs,
+    }])
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
