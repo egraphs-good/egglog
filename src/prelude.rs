@@ -33,21 +33,19 @@ pub mod sort {
 }
 
 /// Create a new ruleset.
-pub fn add_ruleset(egraph: &mut EGraph, ruleset: Symbol) -> Result<(), Error> {
-    egraph.run_program(vec![Command::AddRuleset(span!(), ruleset)])?;
-    Ok(())
+pub fn add_ruleset(egraph: &mut EGraph, ruleset: Symbol) -> Result<Vec<String>, Error> {
+    egraph.run_program(vec![Command::AddRuleset(span!(), ruleset)])
 }
 
 /// Run one iteration of a ruleset.
-pub fn run_ruleset(egraph: &mut EGraph, ruleset: Symbol) -> Result<(), Error> {
+pub fn run_ruleset(egraph: &mut EGraph, ruleset: Symbol) -> Result<Vec<String>, Error> {
     egraph.run_program(vec![Command::RunSchedule(Schedule::Run(
         span!(),
         RunConfig {
             ruleset,
             until: None,
         },
-    ))])?;
-    Ok(())
+    ))])
 }
 
 #[macro_export]
@@ -112,7 +110,7 @@ pub fn rule(
     ruleset: Symbol,
     facts: Facts<Symbol, Symbol>,
     actions: Actions,
-) -> Result<(), Error> {
+) -> Result<Vec<String>, Error> {
     let rule = Rule {
         span: span!(),
         head: actions,
@@ -124,9 +122,7 @@ pub fn rule(
         name: rule_name,
         ruleset,
         rule,
-    }])?;
-
-    Ok(())
+    }])
 }
 
 /// A wrapper around an `ExecutionState` for rules that are written in Rust.
@@ -236,7 +232,7 @@ pub fn rust_rule(
     vars: &[(&str, ArcSort)],
     facts: Facts<Symbol, Symbol>,
     func: impl Fn(&mut Context, &[Value]) -> Option<()> + Clone + Send + Sync + 'static,
-) -> Result<(), Error> {
+) -> Result<Vec<String>, Error> {
     let rule_name = egraph.parser.symbol_gen.fresh(&"prelude::rust_rule".into());
     let prim_name = egraph.parser.symbol_gen.fresh(&"rust_rule_prim".into());
 
@@ -275,9 +271,7 @@ pub fn rust_rule(
         name: rule_name,
         ruleset,
         rule,
-    }])?;
-
-    Ok(())
+    }])
 }
 
 /// The result of a query.
@@ -370,9 +364,8 @@ pub fn query(
 }
 
 /// Declare a new sort.
-pub fn add_sort(egraph: &mut EGraph, name: Symbol) -> Result<(), Error> {
-    egraph.run_program(vec![Command::Sort(span!(), name, None)])?;
-    Ok(())
+pub fn add_sort(egraph: &mut EGraph, name: Symbol) -> Result<Vec<String>, Error> {
+    egraph.run_program(vec![Command::Sort(span!(), name, None)])
 }
 
 /// Declare a new function table.
@@ -381,14 +374,13 @@ pub fn add_function(
     name: Symbol,
     schema: Schema,
     merge: Option<GenericExpr<Symbol, Symbol>>,
-) -> Result<(), Error> {
+) -> Result<Vec<String>, Error> {
     egraph.run_program(vec![Command::Function {
         span: span!(),
         name,
         schema,
         merge,
-    }])?;
-    Ok(())
+    }])
 }
 
 /// Declare a new constructor table.
@@ -398,15 +390,14 @@ pub fn add_constructor(
     schema: Schema,
     cost: Option<usize>,
     unextractable: bool,
-) -> Result<(), Error> {
+) -> Result<Vec<String>, Error> {
     egraph.run_program(vec![Command::Constructor {
         span: span!(),
         name,
         schema,
         cost,
         unextractable,
-    }])?;
-    Ok(())
+    }])
 }
 
 /// Declare a new relation table.
