@@ -32,26 +32,22 @@ pub mod sort {
     }
 }
 
-pub mod ruleset {
-    use super::*;
+/// Create a new ruleset.
+pub fn add_ruleset(egraph: &mut EGraph, ruleset: Symbol) -> Result<(), Error> {
+    egraph.run_program(vec![Command::AddRuleset(span!(), ruleset)])?;
+    Ok(())
+}
 
-    /// Create a new ruleset.
-    pub fn add(egraph: &mut EGraph, ruleset: Symbol) -> Result<(), Error> {
-        egraph.run_program(vec![Command::AddRuleset(span!(), ruleset)])?;
-        Ok(())
-    }
-
-    /// Run one iteration of a ruleset.
-    pub fn run(egraph: &mut EGraph, ruleset: Symbol) -> Result<(), Error> {
-        egraph.run_program(vec![Command::RunSchedule(Schedule::Run(
-            span!(),
-            RunConfig {
-                ruleset,
-                until: None,
-            },
-        ))])?;
-        Ok(())
-    }
+/// Run one iteration of a ruleset.
+pub fn run_ruleset(egraph: &mut EGraph, ruleset: Symbol) -> Result<(), Error> {
+    egraph.run_program(vec![Command::RunSchedule(Schedule::Run(
+        span!(),
+        RunConfig {
+            ruleset,
+            until: None,
+        },
+    ))])?;
+    Ok(())
 }
 
 #[macro_export]
@@ -336,7 +332,7 @@ pub fn query(
         .parser
         .symbol_gen
         .fresh(&Symbol::from("query_ruleset"));
-    ruleset::add(egraph, ruleset)?;
+    add_ruleset(egraph, ruleset)?;
 
     rust_rule(
         egraph,
@@ -352,7 +348,7 @@ pub fn query(
         },
     )?;
 
-    ruleset::run(egraph, ruleset)?;
+    run_ruleset(egraph, ruleset)?;
 
     let ruleset = egraph.rulesets.swap_remove(&ruleset).unwrap();
 
@@ -433,7 +429,7 @@ mod tests {
         assert!(results.data.is_empty());
 
         let ruleset = Symbol::from("custom_ruleset");
-        ruleset::add(&mut egraph, ruleset)?;
+        add_ruleset(&mut egraph, ruleset)?;
 
         // add the rule from `build_test_database` to the egraph
         rule(
@@ -450,7 +446,7 @@ mod tests {
 
         // run that rule 10 times
         for _ in 0..10 {
-            ruleset::run(&mut egraph, ruleset)?;
+            run_ruleset(&mut egraph, ruleset)?;
         }
 
         // check that `fib` now contains `20`
@@ -473,7 +469,7 @@ mod tests {
         egraph.parse_and_run_program(None, "(datatype Unionable (One) (Two))")?;
 
         let ruleset = Symbol::from("custom_ruleset");
-        ruleset::add(&mut egraph, ruleset)?;
+        add_ruleset(&mut egraph, ruleset)?;
 
         rule(
             &mut egraph,
@@ -513,7 +509,7 @@ mod tests {
         assert!(results.data.is_empty());
 
         let ruleset = Symbol::from("custom_ruleset");
-        ruleset::add(&mut egraph, ruleset)?;
+        add_ruleset(&mut egraph, ruleset)?;
 
         // add the rule from `build_test_database` to the egraph
         rust_rule(
@@ -540,7 +536,7 @@ mod tests {
 
         // run that rule 10 times
         for _ in 0..10 {
-            ruleset::run(&mut egraph, ruleset)?;
+            run_ruleset(&mut egraph, ruleset)?;
         }
 
         // check that `fib` now contains `20`
