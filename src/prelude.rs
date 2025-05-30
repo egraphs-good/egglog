@@ -83,7 +83,7 @@ macro_rules! facts {
 #[macro_export]
 macro_rules! action {
     ((let $name:ident $value:tt)) => {
-        Action::Let(span!(), Symbol::from(stringify!($name)), expr!(value))
+        Action::Let(span!(), Symbol::from(stringify!($name)), expr!($value))
     };
     ((set ($f:ident $($x:tt)*) $value:tt)) => {
         Action::Set(span!(), Symbol::from(stringify!($f)), vec![$(expr!($x)),*], expr!($value))
@@ -98,7 +98,7 @@ macro_rules! action {
         Action::Union(span!(), expr!($x), expr!($y))
     };
     ((panic $message:literal)) => {
-        Action::Panic(span!(), $message)
+        Action::Panic(span!(), $message.to_owned())
     };
     ($x:tt) => {
         Action::Expr(span!(), expr!($x))
@@ -462,6 +462,37 @@ mod tests {
 
         let y = egraph.backend.primitives().get::<i64>(6765);
         assert_eq!(results.data, [y]);
+
+        Ok(())
+    }
+
+    #[test]
+    fn rust_api_macros() -> Result<(), Error> {
+        let mut egraph = build_test_database()?;
+
+        egraph.parse_and_run_program(None, "(datatype Unionable (One) (Two))")?;
+
+        let ruleset = Symbol::from("custom_ruleset");
+        ruleset::add(&mut egraph, ruleset)?;
+
+        rule(
+            &mut egraph,
+            ruleset,
+            facts![
+                (fib 5)
+                (= f1 (fib (+ x 1)))
+                (= 3 (unquote expr::int(1 + 2)))
+            ],
+            actions![
+                (let y (+ x 2))
+                (set (fib (+ x 2)) (+ f1 f1))
+                (delete (fib 0))
+                (subsume (Two))
+                (union (One) (Two))
+                (panic "message")
+                (+ 6 87)
+            ],
+        )?;
 
         Ok(())
     }
