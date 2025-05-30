@@ -1330,7 +1330,7 @@ impl TableAction {
     /// A "table lookup" is not a read-only operation. It will insert a row when
     /// the [`DefaultVal`] for the table is not [`DefaultVal::Fail`] and
     /// the `args` in [`Lookup::run`] are not already present in the table.
-    pub fn lookup(&self, state: &mut ExecutionState, args: &[Value]) -> Option<Value> {
+    pub fn lookup(&self, state: &mut ExecutionState, key: &[Value]) -> Option<Value> {
         match self.default {
             Some(default) => {
                 let timestamp =
@@ -1353,13 +1353,13 @@ impl TableAction {
                     },
                 );
                 Some(
-                    state.predict_val(self.table, args, merge_vals.iter().copied())
+                    state.predict_val(self.table, key, merge_vals.iter().copied())
                         [self.table_math.ret_val_col()],
                 )
             }
             None => state
                 .get_table(self.table)
-                .get_row(args)
+                .get_row(key)
                 .map(|row| row.vals[self.table_math.ret_val_col()]),
         }
     }
@@ -1387,8 +1387,20 @@ impl TableAction {
     }
 
     /// Subsume a row in this table.
-    pub fn subsume(&self, _state: &mut ExecutionState, _key: &[Value]) {
-        todo!()
+    pub fn subsume(&self, state: &mut ExecutionState, mut key: Vec<Value>) {
+        let ret_val = self.lookup(state, &key).expect("subsume lookup failed");
+
+        let ts = Value::from_usize(state.read_counter(self.timestamp));
+        self.table_math.write_table_row(
+            &mut key,
+            RowVals {
+                timestamp: ts,
+                proof: None,
+                subsume: Some(SUBSUMED),
+                ret_val: Some(ret_val),
+            },
+        );
+        state.stage_insert(self.table, &key);
     }
 }
 
