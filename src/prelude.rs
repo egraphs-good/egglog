@@ -33,16 +33,16 @@ pub mod sort {
 }
 
 /// Create a new ruleset.
-pub fn add_ruleset(egraph: &mut EGraph, ruleset: Symbol) -> Result<Vec<String>, Error> {
-    egraph.run_program(vec![Command::AddRuleset(span!(), ruleset)])
+pub fn add_ruleset(egraph: &mut EGraph, ruleset: &str) -> Result<Vec<String>, Error> {
+    egraph.run_program(vec![Command::AddRuleset(span!(), ruleset.into())])
 }
 
 /// Run one iteration of a ruleset.
-pub fn run_ruleset(egraph: &mut EGraph, ruleset: Symbol) -> Result<Vec<String>, Error> {
+pub fn run_ruleset(egraph: &mut EGraph, ruleset: &str) -> Result<Vec<String>, Error> {
     egraph.run_program(vec![Command::RunSchedule(Schedule::Run(
         span!(),
         RunConfig {
-            ruleset,
+            ruleset: ruleset.into(),
             until: None,
         },
     ))])
@@ -107,7 +107,7 @@ macro_rules! actions {
 /// Add a rule to the e-graph whose right-hand side is made up of actions.
 pub fn rule(
     egraph: &mut EGraph,
-    ruleset: Symbol,
+    ruleset: &str,
     facts: Facts<Symbol, Symbol>,
     actions: Actions,
 ) -> Result<Vec<String>, Error> {
@@ -120,7 +120,7 @@ pub fn rule(
     let rule_name = egraph.parser.symbol_gen.fresh(&"prelude::rule".into());
     egraph.run_program(vec![Command::Rule {
         name: rule_name,
-        ruleset,
+        ruleset: ruleset.into(),
         rule,
     }])
 }
@@ -228,7 +228,7 @@ impl<F: Fn(&mut Context, &[Value]) -> Option<()>> Primitive for RustRuleRhs<F> {
 /// Add a rule to the e-graph whose right-hand side is a Rust callback.
 pub fn rust_rule(
     egraph: &mut EGraph,
-    ruleset: Symbol,
+    ruleset: &str,
     vars: &[(&str, ArcSort)],
     facts: Facts<Symbol, Symbol>,
     func: impl Fn(&mut Context, &[Value]) -> Option<()> + Clone + Send + Sync + 'static,
@@ -269,7 +269,7 @@ pub fn rust_rule(
 
     egraph.run_program(vec![Command::Rule {
         name: rule_name,
-        ruleset,
+        ruleset: ruleset.into(),
         rule,
     }])
 }
@@ -326,11 +326,11 @@ pub fn query(
         .parser
         .symbol_gen
         .fresh(&Symbol::from("query_ruleset"));
-    add_ruleset(egraph, ruleset)?;
+    add_ruleset(egraph, ruleset.into())?;
 
     rust_rule(
         egraph,
-        ruleset,
+        ruleset.into(),
         vars,
         facts,
         move |_, values| match results_weak.upgrade() {
@@ -342,7 +342,7 @@ pub fn query(
         },
     )?;
 
-    run_ruleset(egraph, ruleset)?;
+    run_ruleset(egraph, ruleset.into())?;
 
     let ruleset = egraph.rulesets.swap_remove(&ruleset).unwrap();
 
@@ -364,20 +364,20 @@ pub fn query(
 }
 
 /// Declare a new sort.
-pub fn add_sort(egraph: &mut EGraph, name: Symbol) -> Result<Vec<String>, Error> {
-    egraph.run_program(vec![Command::Sort(span!(), name, None)])
+pub fn add_sort(egraph: &mut EGraph, name: &str) -> Result<Vec<String>, Error> {
+    egraph.run_program(vec![Command::Sort(span!(), name.into(), None)])
 }
 
 /// Declare a new function table.
 pub fn add_function(
     egraph: &mut EGraph,
-    name: Symbol,
+    name: &str,
     schema: Schema,
     merge: Option<GenericExpr<Symbol, Symbol>>,
 ) -> Result<Vec<String>, Error> {
     egraph.run_program(vec![Command::Function {
         span: span!(),
-        name,
+        name: name.into(),
         schema,
         merge,
     }])
@@ -386,14 +386,14 @@ pub fn add_function(
 /// Declare a new constructor table.
 pub fn add_constructor(
     egraph: &mut EGraph,
-    name: Symbol,
+    name: &str,
     schema: Schema,
     cost: Option<usize>,
     unextractable: bool,
 ) -> Result<Vec<String>, Error> {
     egraph.run_program(vec![Command::Constructor {
         span: span!(),
-        name,
+        name: name.into(),
         schema,
         cost,
         unextractable,
@@ -403,12 +403,12 @@ pub fn add_constructor(
 /// Declare a new relation table.
 pub fn add_relation(
     egraph: &mut EGraph,
-    name: Symbol,
+    name: &str,
     inputs: Vec<Symbol>,
 ) -> Result<Vec<String>, Error> {
     egraph.run_program(vec![Command::Relation {
         span: span!(),
-        name,
+        name: name.into(),
         inputs,
     }])
 }
@@ -472,7 +472,7 @@ mod tests {
 
         assert!(results.data.is_empty());
 
-        let ruleset = Symbol::from("custom_ruleset");
+        let ruleset = "custom_ruleset";
         add_ruleset(&mut egraph, ruleset)?;
 
         // add the rule from `build_test_database` to the egraph
@@ -510,9 +510,9 @@ mod tests {
     fn rust_api_macros() -> Result<(), Error> {
         let mut egraph = build_test_database()?;
 
-        egraph.parse_and_run_program(None, "(datatype Unionable (One) (Two))")?;
+        egraph.parse_and_run_program(None, "(datatype Expr (One) (Two Expr Expr))")?;
 
-        let ruleset = Symbol::from("custom_ruleset");
+        let ruleset = "custom_ruleset";
         add_ruleset(&mut egraph, ruleset)?;
 
         rule(
@@ -527,8 +527,8 @@ mod tests {
                 (let y (+ x 2))
                 (set (fib (+ x 2)) (+ f1 f1))
                 (delete (fib 0))
-                (subsume (Two))
-                (union (One) (Two))
+                (subsume (Two (One) (One)))
+                (union (One) (Two (One) (One)))
                 (panic "message")
                 (+ 6 87)
             ],
@@ -552,7 +552,7 @@ mod tests {
 
         assert!(results.data.is_empty());
 
-        let ruleset = Symbol::from("custom_ruleset");
+        let ruleset = "custom_ruleset";
         add_ruleset(&mut egraph, ruleset)?;
 
         // add the rule from `build_test_database` to the egraph
