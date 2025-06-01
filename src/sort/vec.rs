@@ -157,10 +157,6 @@ impl Sort for VecSort {
     }
 }
 
-impl IntoSort for VecContainer {
-    type Sort = VecSort;
-}
-
 #[cfg(test)]
 mod tests {
     use super::*;
