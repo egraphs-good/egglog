@@ -437,6 +437,13 @@ pub trait LeafSort: Any + Send + Sync + Debug {
     fn name(&self) -> &str;
     fn register_primitives(&self, eg: &mut EGraph);
     fn reconstruct_termdag(&self, _: &Primitives, _: Value, _: &mut TermDag) -> Term;
+
+    fn to_arcsort(self) -> ArcSort
+    where
+        Self: Sized,
+    {
+        Arc::new(LeafSortImpl(self))
+    }
 }
 
 #[derive(Debug)]
@@ -487,6 +494,13 @@ pub trait ContainerSort: Any + Send + Sync + Debug {
     fn register_primitives(&self, eg: &mut EGraph);
     fn reconstruct_termdag(&self, _: &Containers, _: Value, _: &mut TermDag, _: Vec<Term>) -> Term;
     fn serialized_name(&self, _: Value) -> &str;
+
+    fn to_arcsort(self) -> ArcSort
+    where
+        Self: Sized,
+    {
+        Arc::new(ContainerSortImpl(self))
+    }
 }
 
 #[derive(Debug)]
