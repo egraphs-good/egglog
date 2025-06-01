@@ -274,7 +274,7 @@ impl Parser {
         filename: Option<String>,
         input: &str,
     ) -> Result<Vec<Command>, ParseError> {
-        let sexps = all_sexps(Context::new(filename, input))?;
+        let sexps = all_sexps(SexpParser::new(filename, input))?;
         let nested: Vec<Vec<_>> = map_fallible(&sexps, self, Self::parse_command)?;
         Ok(nested.into_iter().flatten().collect())
     }
@@ -285,7 +285,7 @@ impl Parser {
         filename: Option<String>,
         input: &str,
     ) -> Result<Expr, ParseError> {
-        let sexp = sexp(&mut Context::new(filename, input))?;
+        let sexp = sexp(&mut SexpParser::new(filename, input))?;
         self.parse_expr(&sexp)
     }
 
@@ -892,14 +892,14 @@ impl Parser {
 }
 
 #[derive(Clone, Debug)]
-pub(crate) struct Context {
+pub(crate) struct SexpParser {
     source: Arc<SrcFile>,
     index: usize,
 }
 
-impl Context {
-    pub(crate) fn new(name: Option<String>, contents: &str) -> Context {
-        Context {
+impl SexpParser {
+    pub(crate) fn new(name: Option<String>, contents: &str) -> SexpParser {
+        SexpParser {
             source: Arc::new(SrcFile {
                 name,
                 contents: contents.to_string(),
@@ -1018,7 +1018,7 @@ enum Token {
     Other,
 }
 
-fn sexp(ctx: &mut Context) -> Result<Sexp, ParseError> {
+fn sexp(ctx: &mut SexpParser) -> Result<Sexp, ParseError> {
     let mut stack: Vec<(EgglogSpan, Vec<Sexp>)> = vec![];
 
     loop {
@@ -1074,7 +1074,7 @@ fn sexp(ctx: &mut Context) -> Result<Sexp, ParseError> {
     }
 }
 
-pub(crate) fn all_sexps(mut ctx: Context) -> Result<Vec<Sexp>, ParseError> {
+pub(crate) fn all_sexps(mut ctx: SexpParser) -> Result<Vec<Sexp>, ParseError> {
     let mut sexps = Vec::new();
     ctx.advance_past_whitespace();
     while !ctx.is_at_end() {
