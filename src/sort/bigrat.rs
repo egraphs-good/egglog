@@ -1,10 +1,5 @@
 use super::*;
 
-lazy_static! {
-    static ref BIG_RAT_SORT_NAME: Symbol = "BigRat".into();
-    static ref RATS: Mutex<IndexSet<Q>> = Default::default();
-}
-
 /// Rational numbers supporting these primitives:
 /// - Arithmetic: `+`, `-`, `*`, `/`, `neg`, `abs`
 /// - Exponential: `pow`, `log`, `sqrt`, `cbrt`
@@ -15,25 +10,15 @@ lazy_static! {
 #[derive(Debug)]
 pub struct BigRatSort;
 
-impl Sort for BigRatSort {
-    fn name(&self) -> Symbol {
-        *BIG_RAT_SORT_NAME
-    }
+impl LeafSort for BigRatSort {
+    type Leaf = Q;
 
-    fn column_ty(&self, backend: &egglog_bridge::EGraph) -> ColumnTy {
-        ColumnTy::Primitive(backend.primitives().get_ty::<Q>())
-    }
-
-    fn register_type(&self, backend: &mut egglog_bridge::EGraph) {
-        backend.primitives_mut().register_type::<Q>();
-    }
-
-    fn as_arc_any(self: Arc<Self>) -> Arc<dyn Any + Send + Sync + 'static> {
-        self
+    fn name(&self) -> &str {
+        "BigRat"
     }
 
     #[rustfmt::skip]
-    fn register_primitives(self: Arc<Self>, eg: &mut EGraph) {
+    fn register_primitives(&self, eg: &mut EGraph) {
         add_primitive!(eg, "+" = |a: Q, b: Q| -?> Q { a.checked_add(&b) });
         add_primitive!(eg, "-" = |a: Q, b: Q| -?> Q { a.checked_sub(&b) });
         add_primitive!(eg, "*" = |a: Q, b: Q| -?> Q { a.checked_mul(&b) });
@@ -120,17 +105,13 @@ impl Sort for BigRatSort {
         add_primitive!(eg, ">=" = |a: Q, b: Q| -?> () { if a >= b {Some(())} else {None} });
     }
 
-    fn value_type(&self) -> Option<TypeId> {
-        Some(TypeId::of::<Q>())
-    }
-
-    fn reconstruct_termdag_leaf(
+    fn reconstruct_termdag(
         &self,
         primitives: &Primitives,
         value: Value,
         termdag: &mut TermDag,
     ) -> Term {
-        let rat = primitives.unwrap_ref::<BigRational>(value);
+        let rat = primitives.unwrap_ref::<Q>(value);
         let numer = rat.numer();
         let denom = rat.denom();
 

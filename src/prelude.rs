@@ -208,7 +208,7 @@ impl<F: Fn(&mut RustRuleContext, &[Value]) -> Option<()>> Primitive for RustRule
         let sorts: Vec<_> = self
             .inputs
             .iter()
-            .chain(once(&(Arc::new(UnitSort) as Arc<dyn Sort>)))
+            .chain(once(&UnitSort.to_arcsort()))
             .cloned()
             .collect();
         SimpleTypeConstraint::new(self.name(), sorts, span.clone()).into_box()
@@ -435,7 +435,7 @@ macro_rules! datatype {
 pub trait LeafSort: Any + Send + Sync + Debug {
     type Leaf: core_relations::Primitive;
     fn name(&self) -> &str;
-    fn register_primitives(&self, eg: &mut EGraph);
+    fn register_primitives(&self, _eg: &mut EGraph) {}
     fn reconstruct_termdag(&self, _: &Primitives, _: Value, _: &mut TermDag) -> Term;
 
     fn to_arcsort(self) -> ArcSort
@@ -491,7 +491,7 @@ pub trait ContainerSort: Any + Send + Sync + Debug {
     fn is_eq_container_sort(&self) -> bool;
     fn inner_sorts(&self) -> Vec<ArcSort>;
     fn inner_values(&self, _: &Containers, _: Value) -> Vec<(ArcSort, Value)>;
-    fn register_primitives(&self, eg: &mut EGraph);
+    fn register_primitives(&self, _eg: &mut EGraph) {}
     fn reconstruct_termdag(&self, _: &Containers, _: Value, _: &mut TermDag, _: Vec<Term>) -> Term;
     fn serialized_name(&self, _: Value) -> &str;
 
@@ -563,18 +563,23 @@ impl<T: ContainerSort> Sort for ContainerSortImpl<T> {
     }
 }
 
-pub fn add_leaf_sort(egraph: &mut EGraph, leaf_sort: impl LeafSort) -> Result<(), Error> {
+pub fn add_leaf_sort(
+    egraph: &mut EGraph,
+    leaf_sort: impl LeafSort,
+    span: Span,
+) -> Result<(), Error> {
     egraph
-        .add_sort(LeafSortImpl(leaf_sort), span!())
+        .add_sort(LeafSortImpl(leaf_sort), span)
         .map_err(Error::TypeError)
 }
 
 pub fn add_container_sort(
     egraph: &mut EGraph,
     container_sort: impl ContainerSort,
+    span: Span,
 ) -> Result<(), Error> {
     egraph
-        .add_sort(ContainerSortImpl(container_sort), span!())
+        .add_sort(ContainerSortImpl(container_sort), span)
         .map_err(Error::TypeError)
 }
 
