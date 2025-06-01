@@ -48,7 +48,3 @@ impl Sort for BoolSort {
         termdag.lit(Literal::Bool(b))
     }
 }
-
-impl IntoSort for bool {
-    type Sort = BoolSort;
-}

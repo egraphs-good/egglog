@@ -57,10 +57,6 @@ impl Sort for StringSort {
     }
 }
 
-impl IntoSort for S {
-    type Sort = StringSort;
-}
-
 /// A newtype wrapper for [`Symbol`] to allow for a custom implementation of the
 /// [`core_relations::Primitive`] trait.
 #[derive(Debug, Clone, PartialEq, Eq, Hash, PartialOrd, Ord)]
