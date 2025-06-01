@@ -270,6 +270,7 @@ impl TypeInfo {
         }
     }
 
+    /// Returns all sorts that satisfy the type and predicate.
     pub fn get_sorts_by<S: Sort>(&self, pred: impl Fn(&Arc<S>) -> bool) -> Vec<Arc<S>> {
         let mut results = Vec::new();
         for sort in self.sorts.values() {
@@ -283,10 +284,12 @@ impl TypeInfo {
         results
     }
 
+    /// Returns all sorts based on the type.
     pub fn get_sorts<S: Sort>(&self) -> Vec<Arc<S>> {
         self.get_sorts_by(|_| true)
     }
 
+    /// Returns a sort that satisfies the type and predicate.
     pub fn get_sort_by<S: Sort>(&self, pred: impl Fn(&Arc<S>) -> bool) -> Arc<S> {
         let results = self.get_sorts_by(pred);
         assert_eq!(
@@ -298,8 +301,26 @@ impl TypeInfo {
         results.into_iter().next().unwrap()
     }
 
+    /// Returns a sort based on the type.
     pub fn get_sort<S: Sort>(&self) -> Arc<S> {
         self.get_sort_by(|_| true)
+    }
+
+    /// Returns all sorts that satisfy the predicate.
+    pub fn get_arcsorts_by(&self, f: impl Fn(&ArcSort) -> bool) -> Vec<ArcSort> {
+        self.sorts.values().filter(|&x| f(x)).cloned().collect()
+    }
+
+    /// Returns a sort based on the predicate.
+    pub fn get_arcsort_by(&self, f: impl Fn(&ArcSort) -> bool) -> ArcSort {
+        let results = self.get_arcsorts_by(f);
+        assert_eq!(
+            results.len(),
+            1,
+            "Expected exactly one sort for type {}",
+            std::any::type_name::<S>()
+        );
+        results.into_iter().next().unwrap()
     }
 
     fn function_to_functype(&self, func: &FunctionDecl) -> Result<FuncType, TypeError> {
