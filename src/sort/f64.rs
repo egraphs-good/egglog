@@ -7,32 +7,18 @@ use super::*;
 #[derive(Debug)]
 pub struct F64Sort;
 
-lazy_static! {
-    static ref F64_SORT_NAME: Symbol = "f64".into();
-}
+impl LeafSort for F64Sort {
+    type Leaf = F;
 
-impl Sort for F64Sort {
-    fn name(&self) -> Symbol {
-        *F64_SORT_NAME
-    }
-
-    fn column_ty(&self, backend: &egglog_bridge::EGraph) -> ColumnTy {
-        ColumnTy::Primitive(backend.primitives().get_ty::<F>())
-    }
-
-    fn register_type(&self, backend: &mut egglog_bridge::EGraph) {
-        backend.primitives_mut().register_type::<F>();
-    }
-
-    fn as_arc_any(self: Arc<Self>) -> Arc<dyn Any + Send + Sync + 'static> {
-        self
+    fn name(&self) -> &str {
+        "f64"
     }
 
     #[rustfmt::skip]
     // We need the closure for division and mod operations, as they can panic.
     // cf https://github.com/rust-lang/rust-clippy/issues/9422
     #[allow(clippy::unnecessary_lazy_evaluations)]
-    fn register_primitives(self: Arc<Self>, eg: &mut EGraph) {
+    fn register_primitives(&self, eg: &mut EGraph) {
         add_primitive!(eg, "+" = |a: F, b: F| -> F { a + b });
         add_primitive!(eg, "-" = |a: F, b: F| -> F { a - b });
         add_primitive!(eg, "*" = |a: F, b: F| -> F { a * b });
@@ -57,11 +43,7 @@ impl Sort for F64Sort {
         add_primitive!(eg, "to-string" = |a: F| -> S { S::new(format!("{:?}", a.0.0).into()) });
     }
 
-    fn value_type(&self) -> Option<TypeId> {
-        Some(TypeId::of::<F>())
-    }
-
-    fn reconstruct_termdag_leaf(
+    fn reconstruct_termdag(
         &self,
         primitives: &Primitives,
         value: Value,

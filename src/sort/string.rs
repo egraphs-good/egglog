@@ -6,28 +6,14 @@ use super::*;
 #[derive(Debug)]
 pub struct StringSort;
 
-lazy_static! {
-    static ref STRING_SORT_NAME: Symbol = "String".into();
-}
+impl LeafSort for StringSort {
+    type Leaf = S;
 
-impl Sort for StringSort {
-    fn name(&self) -> Symbol {
-        *STRING_SORT_NAME
+    fn name(&self) -> &str {
+        "String"
     }
 
-    fn column_ty(&self, backend: &egglog_bridge::EGraph) -> ColumnTy {
-        ColumnTy::Primitive(backend.primitives().get_ty::<S>())
-    }
-
-    fn register_type(&self, backend: &mut egglog_bridge::EGraph) {
-        backend.primitives_mut().register_type::<S>();
-    }
-
-    fn as_arc_any(self: Arc<Self>) -> Arc<dyn Any + Send + Sync + 'static> {
-        self
-    }
-
-    fn register_primitives(self: Arc<Self>, eg: &mut EGraph) {
+    fn register_primitives(&self, eg: &mut EGraph) {
         add_primitive!(eg, "+" = [xs: S] -> S {{
             let mut y = String::new();
             xs.for_each(|x| y.push_str(x.as_str()));
@@ -42,10 +28,7 @@ impl Sort for StringSort {
         );
     }
 
-    fn value_type(&self) -> Option<TypeId> {
-        Some(TypeId::of::<S>())
-    }
-    fn reconstruct_termdag_leaf(
+    fn reconstruct_termdag(
         &self,
         primitives: &Primitives,
         value: Value,
