@@ -127,14 +127,14 @@ pub fn rule(
 }
 
 /// A wrapper around an `ExecutionState` for rules that are written in Rust.
-pub struct Context<'a, 'b> {
+pub struct RustRuleContext<'a, 'b> {
     exec_state: &'a mut ExecutionState<'b>,
     union_action: egglog_bridge::UnionAction,
     table_actions: HashMap<Symbol, egglog_bridge::TableAction>,
     panic_id: ExternalFunctionId,
 }
 
-impl Context<'_, '_> {
+impl RustRuleContext<'_, '_> {
     /// Convert from an egglog value to a Rust type.
     pub fn value_to_rust<T: core_relations::Primitive>(&self, x: Value) -> T {
         self.exec_state.prims().unwrap::<T>(x)
@@ -190,7 +190,7 @@ impl Context<'_, '_> {
 }
 
 #[derive(Clone)]
-struct RustRuleRhs<F: Fn(&mut Context, &[Value]) -> Option<()>> {
+struct RustRuleRhs<F: Fn(&mut RustRuleContext, &[Value]) -> Option<()>> {
     name: Symbol,
     inputs: Vec<ArcSort>,
     union_action: egglog_bridge::UnionAction,
@@ -199,7 +199,7 @@ struct RustRuleRhs<F: Fn(&mut Context, &[Value]) -> Option<()>> {
     func: F,
 }
 
-impl<F: Fn(&mut Context, &[Value]) -> Option<()>> Primitive for RustRuleRhs<F> {
+impl<F: Fn(&mut RustRuleContext, &[Value]) -> Option<()>> Primitive for RustRuleRhs<F> {
     fn name(&self) -> Symbol {
         self.name
     }
@@ -215,7 +215,7 @@ impl<F: Fn(&mut Context, &[Value]) -> Option<()>> Primitive for RustRuleRhs<F> {
     }
 
     fn apply(&self, exec_state: &mut ExecutionState, values: &[Value]) -> Option<Value> {
-        let mut context = Context {
+        let mut context = RustRuleContext {
             exec_state,
             union_action: self.union_action,
             table_actions: self.table_actions.clone(),
@@ -232,7 +232,7 @@ pub fn rust_rule(
     ruleset: &str,
     vars: &[(&str, ArcSort)],
     facts: Facts<Symbol, Symbol>,
-    func: impl Fn(&mut Context, &[Value]) -> Option<()> + Clone + Send + Sync + 'static,
+    func: impl Fn(&mut RustRuleContext, &[Value]) -> Option<()> + Clone + Send + Sync + 'static,
 ) -> Result<Vec<String>, Error> {
     let rule_name = egraph.parser.symbol_gen.fresh(&"prelude::rust_rule".into());
     let prim_name = egraph.parser.symbol_gen.fresh(&"rust_rule_prim".into());
