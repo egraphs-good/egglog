@@ -157,9 +157,9 @@ impl Sort for MapSort {
     }
 
     fn register_primitives(self: Arc<Self>, eg: &mut EGraph) {
-        add_primitive!(eg, "map-empty" = || -> @MapContainer (self.clone()) { MapContainer {
-            do_rebuild_keys: self.__y.inner_sorts()[0].is_eq_sort(),
-            do_rebuild_vals: self.__y.inner_sorts()[1].is_eq_sort(),
+        add_primitive!(eg, "map-empty" = {self.clone(): Arc<MapSort>} || -> @MapContainer (self.clone()) { MapContainer {
+            do_rebuild_keys: self.ctx.key.is_eq_sort(),
+            do_rebuild_vals: self.ctx.value.is_eq_sort(),
             data: BTreeMap::new()
         } });
 

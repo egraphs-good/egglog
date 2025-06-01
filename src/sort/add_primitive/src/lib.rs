@@ -25,6 +25,10 @@ use syn::{braced, bracketed, parenthesized, parse_macro_input, Expr, Ident, LitS
 ///   This is necessary because the relationship between Rust types
 ///   and egglog sorts is not 1-to-1.
 ///
+/// - Context: putting `{x: T}` between the `=` and the argument list
+///   will let you access the expression `x` of type `T` from inside
+///   the body as `self.ctx`. `T` must be the real Rust type of `x`.
+///   `T` must be `Clone` and `'static`.
 #[proc_macro]
 pub fn add_primitive(input: TokenStream) -> TokenStream {
     // If you're trying to read this code, you should read the big
@@ -36,6 +40,7 @@ pub fn add_primitive(input: TokenStream) -> TokenStream {
     let AddPrimitive {
         eg,
         name,
+        context,
         is_varargs,
         args,
         is_fallible,
@@ -58,6 +63,10 @@ pub fn add_primitive(input: TokenStream) -> TokenStream {
             t.field
                 .as_ref()
                 .map(|(d, u)| (quote!(#x: #d), quote!(#x: #u)))
+        })
+        .chain(match context.0 {
+            Some((e, t)) => vec![(quote!(ctx: #t), quote!(ctx: #e))],
+            None => vec![],
         })
         .unzip();
     // Bundle up the defs and uses into structs.
@@ -211,6 +220,7 @@ pub fn add_primitive(input: TokenStream) -> TokenStream {
 struct AddPrimitive {
     eg: Expr,
     name: LitStr,
+    context: Context,
     args: Vec<Arg>,
     ret: Type,
     body: Expr,
@@ -224,6 +234,7 @@ impl Parse for AddPrimitive {
         input.parse::<Token![,]>()?;
         let name = input.parse()?;
         input.parse::<Token![=]>()?;
+        let context = input.parse()?;
         let Args { is_varargs, args } = input.parse()?;
         let Arrow { is_fallible } = input.parse()?;
         let ret = input.parse()?;
@@ -235,12 +246,32 @@ impl Parse for AddPrimitive {
         Ok(AddPrimitive {
             eg,
             name,
+            context,
             args,
             ret,
             body,
             is_varargs,
             is_fallible,
         })
+    }
+}
+
+struct Context(Option<(Expr, syn::Type)>);
+
+impl Parse for Context {
+    fn parse(input: ParseStream) -> Result<Self> {
+        if let Ok(context) = (|| {
+            let context;
+            braced!(context in input);
+            Ok(context)
+        })() {
+            let e = context.parse()?;
+            context.parse::<Token![:]>()?;
+            let t = context.parse()?;
+            Ok(Context(Some((e, t))))
+        } else {
+            Ok(Context(None))
+        }
     }
 }
 

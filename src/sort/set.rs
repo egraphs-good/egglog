@@ -122,8 +122,14 @@ impl Sort for SetSort {
     }
 
     fn register_primitives(self: Arc<Self>, eg: &mut EGraph) {
-        add_primitive!(eg, "set-empty" = |                      | -> @SetContainer (self.clone()) { SetContainer { do_rebuild: self.__y.is_eq_container_sort(), data: BTreeSet::new() } });
-        add_primitive!(eg, "set-of"    = [xs: # (self.element())] -> @SetContainer (self.clone()) { SetContainer { do_rebuild: self.__y.is_eq_container_sort(), data: xs.collect()    } });
+        add_primitive!(eg, "set-empty" = {self.clone(): Arc<SetSort>} |                      | -> @SetContainer (self.clone()) { SetContainer {
+            do_rebuild: self.ctx.element.is_eq_sort(),
+            data: BTreeSet::new()
+        } });
+        add_primitive!(eg, "set-of"    = {self.clone(): Arc<SetSort>} [xs: # (self.element())] -> @SetContainer (self.clone()) { SetContainer {
+            do_rebuild: self.ctx.element.is_eq_sort(),
+            data: xs.collect()
+        } });
 
         add_primitive!(eg, "set-get" = |xs: @SetContainer (self.clone()), i: i64| -?> # (self.element()) { xs.data.iter().nth(i as usize).copied() });
         add_primitive!(eg, "set-insert" = |mut xs: @SetContainer (self.clone()), x: # (self.element())| -> @SetContainer (self.clone()) {{ xs.data.insert( x); xs }});
