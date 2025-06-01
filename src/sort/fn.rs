@@ -186,10 +186,6 @@ impl Sort for FunctionSort {
     }
 }
 
-impl IntoSort for FunctionContainer {
-    type Sort = FunctionSort;
-}
-
 /// Takes a string and any number of partially applied args of any sort and returns a function
 struct FunctionCTorTypeConstraint {
     name: Symbol,
