@@ -175,7 +175,7 @@ impl EGraph {
 }
 
 fn should_eval(curr_cmd: &str) -> bool {
-    all_sexps(Context::new(None, curr_cmd)).is_ok()
+    all_sexps(SexpParser::new(None, curr_cmd)).is_ok()
 }
 
 fn run_command_in_scripting<W>(egraph: &mut EGraph, command: &str, mut output: W) -> io::Result<()>
