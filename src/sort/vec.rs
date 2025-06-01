@@ -118,9 +118,18 @@ impl Sort for VecSort {
     }
 
     fn register_primitives(self: Arc<Self>, eg: &mut EGraph) {
-        add_primitive!(eg, "vec-empty"  = |                                | -> @VecContainer (self.clone()) { VecContainer { do_rebuild: self.__y.is_eq_container_sort(), data: Vec::new()                        } });
-        add_primitive!(eg, "vec-of"     = [xs: # (self.element())          ] -> @VecContainer (self.clone()) { VecContainer { do_rebuild: self.__y.is_eq_container_sort(), data: xs                     .collect() } });
-        add_primitive!(eg, "vec-append" = [xs: @VecContainer (self.clone())] -> @VecContainer (self.clone()) { VecContainer { do_rebuild: self.__y.is_eq_container_sort(), data: xs.flat_map(|x| x.data).collect() } });
+        add_primitive!(eg, "vec-empty"  = {self.clone(): Arc<VecSort>} |                                | -> @VecContainer (self.clone()) { VecContainer {
+            do_rebuild: self.ctx.element.is_eq_sort(),
+            data: Vec::new()
+        } });
+        add_primitive!(eg, "vec-of"     = {self.clone(): Arc<VecSort>} [xs: # (self.element())          ] -> @VecContainer (self.clone()) { VecContainer {
+            do_rebuild: self.ctx.element.is_eq_sort(),
+            data: xs                     .collect()
+        } });
+        add_primitive!(eg, "vec-append" = {self.clone(): Arc<VecSort>} [xs: @VecContainer (self.clone())] -> @VecContainer (self.clone()) { VecContainer {
+            do_rebuild: self.ctx.element.is_eq_sort(),
+            data: xs.flat_map(|x| x.data).collect()
+        } });
 
         add_primitive!(eg, "vec-push" = |mut xs: @VecContainer (self.clone()), x: # (self.element())| -> @VecContainer (self.clone()) {{ xs.data.push(x); xs }});
         add_primitive!(eg, "vec-pop"  = |mut xs: @VecContainer (self.clone())                       | -> @VecContainer (self.clone()) {{ xs.data.pop();   xs }});

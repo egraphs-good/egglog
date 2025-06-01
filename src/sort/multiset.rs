@@ -122,7 +122,10 @@ impl Sort for MultiSetSort {
     }
 
     fn register_primitives(self: Arc<Self>, eg: &mut EGraph) {
-        add_primitive!(eg, "multiset-of" = [xs: # (self.element())] -> @MultiSetContainer (self.clone()) { MultiSetContainer { do_rebuild: self.__y.is_eq_container_sort(), data: xs.collect() } });
+        add_primitive!(eg, "multiset-of" = {self.clone(): Arc<MultiSetSort>} [xs: # (self.element())] -> @MultiSetContainer (self.clone()) { MultiSetContainer {
+            do_rebuild: self.ctx.element.is_eq_sort(),
+            data: xs.collect()
+        } });
 
         add_primitive!(eg, "multiset-pick" = |xs: @MultiSetContainer (self.clone())| -> # (self.element()) { *xs.data.pick().expect("Cannot pick from an empty multiset") });
         add_primitive!(eg, "multiset-insert" = |mut xs: @MultiSetContainer (self.clone()), x: # (self.element())| -> @MultiSetContainer (self.clone()) { MultiSetContainer { data: xs.data.insert( x) , ..xs } });
