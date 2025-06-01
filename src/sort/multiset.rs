@@ -122,20 +122,20 @@ impl Sort for MultiSetSort {
     }
 
     fn register_primitives(self: Arc<Self>, eg: &mut EGraph) {
-        add_primitive!(eg, "multiset-of" = {self.clone(): Arc<MultiSetSort>} [xs: # (self.element())] -> @MultiSetContainer (self.clone()) { MultiSetContainer {
+        add_primitive!(eg, "multiset-of" = {self.clone(): Arc<MultiSetSort>} [xs: # (self.element())] -> @MultiSetContainer (self) { MultiSetContainer {
             do_rebuild: self.ctx.element.is_eq_sort(),
             data: xs.collect()
         } });
 
-        add_primitive!(eg, "multiset-pick" = |xs: @MultiSetContainer (self.clone())| -> # (self.element()) { *xs.data.pick().expect("Cannot pick from an empty multiset") });
-        add_primitive!(eg, "multiset-insert" = |mut xs: @MultiSetContainer (self.clone()), x: # (self.element())| -> @MultiSetContainer (self.clone()) { MultiSetContainer { data: xs.data.insert( x) , ..xs } });
-        add_primitive!(eg, "multiset-remove" = |mut xs: @MultiSetContainer (self.clone()), x: # (self.element())| -> @MultiSetContainer (self.clone()) { MultiSetContainer { data: xs.data.remove(&x)?, ..xs } });
+        add_primitive!(eg, "multiset-pick" = |xs: @MultiSetContainer (self)| -> # (self.element()) { *xs.data.pick().expect("Cannot pick from an empty multiset") });
+        add_primitive!(eg, "multiset-insert" = |mut xs: @MultiSetContainer (self), x: # (self.element())| -> @MultiSetContainer (self) { MultiSetContainer { data: xs.data.insert( x) , ..xs } });
+        add_primitive!(eg, "multiset-remove" = |mut xs: @MultiSetContainer (self), x: # (self.element())| -> @MultiSetContainer (self) { MultiSetContainer { data: xs.data.remove(&x)?, ..xs } });
 
-        add_primitive!(eg, "multiset-length"       = |xs: @MultiSetContainer (self.clone())| -> i64 { xs.data.len() as i64 });
-        add_primitive!(eg, "multiset-contains"     = |xs: @MultiSetContainer (self.clone()), x: # (self.element())| -?> () { ( xs.data.contains(&x)).then_some(()) });
-        add_primitive!(eg, "multiset-not-contains" = |xs: @MultiSetContainer (self.clone()), x: # (self.element())| -?> () { (!xs.data.contains(&x)).then_some(()) });
+        add_primitive!(eg, "multiset-length"       = |xs: @MultiSetContainer (self)| -> i64 { xs.data.len() as i64 });
+        add_primitive!(eg, "multiset-contains"     = |xs: @MultiSetContainer (self), x: # (self.element())| -?> () { ( xs.data.contains(&x)).then_some(()) });
+        add_primitive!(eg, "multiset-not-contains" = |xs: @MultiSetContainer (self), x: # (self.element())| -?> () { (!xs.data.contains(&x)).then_some(()) });
 
-        add_primitive!(eg, "multiset-sum" = |xs: @MultiSetContainer (self.clone()), ys: @MultiSetContainer (self.clone())| -> @MultiSetContainer (self.clone()) { MultiSetContainer { data: xs.data.sum(ys.data), ..xs } });
+        add_primitive!(eg, "multiset-sum" = |xs: @MultiSetContainer (self), ys: @MultiSetContainer (self)| -> @MultiSetContainer (self) { MultiSetContainer { data: xs.data.sum(ys.data), ..xs } });
 
         // Only include map function if we already declared a function sort with the correct signature
         let fn_sorts = eg.type_info.get_sorts_by(|s: &Arc<FunctionSort>| {
@@ -147,7 +147,7 @@ impl Sort for MultiSetSort {
             0 => {}
             1 => eg.add_primitive(Map {
                 name: "unstable-multiset-map".into(),
-                multiset: self.clone(),
+                multiset: self,
                 fn_: fn_sorts.into_iter().next().unwrap(),
             }),
             _ => panic!("too many applicable function sorts"),
