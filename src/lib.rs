@@ -1350,23 +1350,33 @@ impl EGraph {
     }
 
     /// Returns a sort based on the type.
-    pub fn get_sort<S: Sort + Send + Sync>(&self) -> Arc<S> {
+    pub fn get_sort<S: Sort>(&self) -> Arc<S> {
         self.type_info.get_sort()
     }
 
     /// Returns a sort that satisfies the type and predicate.
-    pub fn get_sort_by<S: Sort + Send + Sync>(&self, f: impl Fn(&Arc<S>) -> bool) -> Arc<S> {
+    pub fn get_sort_by<S: Sort>(&self, f: impl Fn(&Arc<S>) -> bool) -> Arc<S> {
         self.type_info.get_sort_by(f)
     }
 
     /// Returns all sorts based on the type.
-    pub fn get_sorts<S: Sort + Send + Sync>(&self) -> Vec<Arc<S>> {
+    pub fn get_sorts<S: Sort>(&self) -> Vec<Arc<S>> {
         self.type_info.get_sorts()
     }
 
     /// Returns all sorts that satisfy the type and predicate.
-    pub fn get_sorts_by<S: Sort + Send + Sync>(&self, f: impl Fn(&Arc<S>) -> bool) -> Vec<Arc<S>> {
+    pub fn get_sorts_by<S: Sort>(&self, f: impl Fn(&Arc<S>) -> bool) -> Vec<Arc<S>> {
         self.type_info.get_sorts_by(f)
+    }
+
+    /// Returns a sort based on the predicate.
+    pub fn get_arcsort_by(&self, f: impl Fn(&ArcSort) -> bool) -> ArcSort {
+        self.type_info.get_arcsort_by(f)
+    }
+
+    /// Returns all sorts that satisfy the predicate.
+    pub fn get_arcsorts_by(&self, f: impl Fn(&ArcSort) -> bool) -> Vec<ArcSort> {
+        self.type_info.get_arcsorts_by(f)
     }
 
     /// Gets the last extract report and returns it, if the last command saved it.
