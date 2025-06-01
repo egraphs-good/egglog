@@ -1,11 +1,9 @@
-use lazy_static::lazy_static;
 use num::traits::{CheckedAdd, CheckedDiv, CheckedMul, CheckedSub, One, Signed, ToPrimitive, Zero};
-use num::{rational::BigRational, BigInt};
+use num::{BigInt, BigRational};
 use ordered_float::OrderedFloat;
 use std::any::TypeId;
 use std::fmt::Debug;
 use std::ops::{Shl, Shr};
-use std::sync::Mutex;
 use std::{any::Any, sync::Arc};
 
 pub use core_relations::{Container, Containers, ExecutionState, Primitives, Rebuilder};
@@ -13,7 +11,6 @@ pub use egglog_bridge::ColumnTy;
 
 use crate::ast::Literal;
 use crate::extract::Cost;
-use crate::util::IndexSet;
 use crate::*;
 
 pub type Z = core_relations::Boxed<BigInt>;
@@ -199,9 +196,9 @@ pub type PreSort =
 pub fn literal_sort(lit: &Literal) -> ArcSort {
     match lit {
         Literal::Int(_) => I64Sort.to_arcsort(),
-        Literal::Float(_) => Arc::new(F64Sort) as ArcSort,
-        Literal::String(_) => Arc::new(StringSort) as ArcSort,
-        Literal::Bool(_) => Arc::new(BoolSort) as ArcSort,
-        Literal::Unit => Arc::new(UnitSort) as ArcSort,
+        Literal::Float(_) => F64Sort.to_arcsort(),
+        Literal::String(_) => StringSort.to_arcsort(),
+        Literal::Bool(_) => BoolSort.to_arcsort(),
+        Literal::Unit => UnitSort.to_arcsort(),
     }
 }
