@@ -823,7 +823,7 @@ impl ResolvedRule {
             ResolvedCall::Primitive(SpecializedPrimitive {
                 primitive: value_eq.clone(),
                 input: vec![at1.output(), at2.output()],
-                output: Arc::new(UnitSort),
+                output: UnitSort.to_arcsort(),
             })
         })
     }

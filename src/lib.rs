@@ -326,13 +326,13 @@ impl Default for EGraph {
             type_info: Default::default(),
         };
 
-        eg.add_sort(UnitSort, span!()).unwrap();
-        eg.add_sort(StringSort, span!()).unwrap();
-        eg.add_sort(BoolSort, span!()).unwrap();
-        prelude::add_leaf_sort(&mut eg, I64Sort).unwrap();
-        eg.add_sort(F64Sort, span!()).unwrap();
-        eg.add_sort(BigIntSort, span!()).unwrap();
-        eg.add_sort(BigRatSort, span!()).unwrap();
+        add_leaf_sort(&mut eg, UnitSort, span!()).unwrap();
+        add_leaf_sort(&mut eg, StringSort, span!()).unwrap();
+        add_leaf_sort(&mut eg, BoolSort, span!()).unwrap();
+        add_leaf_sort(&mut eg, I64Sort, span!()).unwrap();
+        add_leaf_sort(&mut eg, F64Sort, span!()).unwrap();
+        add_leaf_sort(&mut eg, BigIntSort, span!()).unwrap();
+        add_leaf_sort(&mut eg, BigRatSort, span!()).unwrap();
         eg.type_info.add_presort::<MapSort>(span!()).unwrap();
         eg.type_info.add_presort::<SetSort>(span!()).unwrap();
         eg.type_info.add_presort::<VecSort>(span!()).unwrap();
@@ -592,7 +592,7 @@ impl EGraph {
             .get(&sym)
             // function_to_dag should have checked this
             .unwrap();
-        let out_is_unit = f.schema.output.name() == UnitSort.name();
+        let out_is_unit = f.schema.output.name() == UnitSort.name().into();
 
         let mut buf = String::new();
         let s = &mut buf;

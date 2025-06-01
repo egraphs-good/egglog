@@ -277,7 +277,7 @@ impl TypeConstraint for FunctionCTorTypeConstraint {
 
         // Otherwise we just try assuming it's this function, we don't know if it is or not
         vec![
-            constraint::assign(arguments[0].clone(), Arc::new(StringSort)),
+            constraint::assign(arguments[0].clone(), StringSort.to_arcsort()),
             output_sort_constraint,
         ]
     }

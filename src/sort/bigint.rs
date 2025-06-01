@@ -1,39 +1,24 @@
 use super::*;
 
-lazy_static! {
-    static ref BIG_INT_SORT_NAME: Symbol = "BigInt".into();
-    static ref INTS: Mutex<IndexSet<Z>> = Default::default();
-}
-
 #[derive(Debug)]
 pub struct BigIntSort;
 
-impl Sort for BigIntSort {
-    fn name(&self) -> Symbol {
-        *BIG_INT_SORT_NAME
-    }
+impl LeafSort for BigIntSort {
+    type Leaf = Z;
 
-    fn column_ty(&self, backend: &egglog_bridge::EGraph) -> ColumnTy {
-        ColumnTy::Primitive(backend.primitives().get_ty::<Z>())
-    }
-
-    fn register_type(&self, backend: &mut egglog_bridge::EGraph) {
-        backend.primitives_mut().register_type::<Z>();
-    }
-
-    fn as_arc_any(self: Arc<Self>) -> Arc<dyn Any + Send + Sync + 'static> {
-        self
+    fn name(&self) -> &str {
+        "BigInt"
     }
 
     #[rustfmt::skip]
-    fn register_primitives(self: Arc<Self>, eg: &mut EGraph) {
+    fn register_primitives(&self, eg: &mut EGraph) {
         add_primitive!(eg, "bigint" = |a: i64| -> Z { a.into() });
 
         add_primitive!(eg, "+" = |a: Z, b: Z| -> Z { a + b });
         add_primitive!(eg, "-" = |a: Z, b: Z| -> Z { a - b });
         add_primitive!(eg, "*" = |a: Z, b: Z| -> Z { a * b });
-        add_primitive!(eg, "/" = |a: Z, b: Z| -?> Z { (b != BigInt::ZERO).then(|| a / b) });
-        add_primitive!(eg, "%" = |a: Z, b: Z| -?> Z { (b != BigInt::ZERO).then(|| a % b) });
+        add_primitive!(eg, "/" = |a: Z, b: Z| -?> Z { (b != Z::ZERO).then(|| a / b) });
+        add_primitive!(eg, "%" = |a: Z, b: Z| -?> Z { (b != Z::ZERO).then(|| a % b) });
 
         add_primitive!(eg, "&" = |a: Z, b: Z| -> Z { a & b });
         add_primitive!(eg, "|" = |a: Z, b: Z| -> Z { a | b });
@@ -62,17 +47,13 @@ impl Sort for BigIntSort {
         add_primitive!(eg, "from-string" = |a: Symbol| -?> Z { a.as_str().parse::<Z>().ok() });
     }
 
-    fn value_type(&self) -> Option<TypeId> {
-        Some(TypeId::of::<Z>())
-    }
-
-    fn reconstruct_termdag_leaf(
+    fn reconstruct_termdag(
         &self,
         primitives: &Primitives,
         value: Value,
         termdag: &mut TermDag,
     ) -> Term {
-        let bigint = primitives.unwrap_ref::<BigInt>(value);
+        let bigint = primitives.unwrap_ref::<Z>(value);
 
         let as_string = termdag.lit(Literal::String(bigint.to_string().into()));
         termdag.app("from_string".into(), vec![as_string])
