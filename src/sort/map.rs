@@ -157,19 +157,19 @@ impl Sort for MapSort {
     }
 
     fn register_primitives(self: Arc<Self>, eg: &mut EGraph) {
-        add_primitive!(eg, "map-empty" = {self.clone(): Arc<MapSort>} || -> @MapContainer (self.clone()) { MapContainer {
+        add_primitive!(eg, "map-empty" = {self.clone(): Arc<MapSort>} || -> @MapContainer (self) { MapContainer {
             do_rebuild_keys: self.ctx.key.is_eq_sort(),
             do_rebuild_vals: self.ctx.value.is_eq_sort(),
             data: BTreeMap::new()
         } });
 
-        add_primitive!(eg, "map-get"    = |    xs: @MapContainer (self.clone()), x: # (self.key())                     | -?> # (self.value()) { xs.data.get(&x).copied() });
-        add_primitive!(eg, "map-insert" = |mut xs: @MapContainer (self.clone()), x: # (self.key()), y: # (self.value())| -> @MapContainer (self.clone()) {{ xs.data.insert(x, y); xs }});
-        add_primitive!(eg, "map-remove" = |mut xs: @MapContainer (self.clone()), x: # (self.key())                     | -> @MapContainer (self.clone()) {{ xs.data.remove(&x);   xs }});
+        add_primitive!(eg, "map-get"    = |    xs: @MapContainer (self), x: # (self.key())                     | -?> # (self.value()) { xs.data.get(&x).copied() });
+        add_primitive!(eg, "map-insert" = |mut xs: @MapContainer (self), x: # (self.key()), y: # (self.value())| -> @MapContainer (self) {{ xs.data.insert(x, y); xs }});
+        add_primitive!(eg, "map-remove" = |mut xs: @MapContainer (self), x: # (self.key())                     | -> @MapContainer (self) {{ xs.data.remove(&x);   xs }});
 
-        add_primitive!(eg, "map-length"       = |xs: @MapContainer (self.clone())| -> i64 { xs.data.len() as i64 });
-        add_primitive!(eg, "map-contains"     = |xs: @MapContainer (self.clone()), x: # (self.key())| -?> () { ( xs.data.contains_key(&x)).then_some(()) });
-        add_primitive!(eg, "map-not-contains" = |xs: @MapContainer (self.clone()), x: # (self.key())| -?> () { (!xs.data.contains_key(&x)).then_some(()) });
+        add_primitive!(eg, "map-length"       = |xs: @MapContainer (self)| -> i64 { xs.data.len() as i64 });
+        add_primitive!(eg, "map-contains"     = |xs: @MapContainer (self), x: # (self.key())| -?> () { ( xs.data.contains_key(&x)).then_some(()) });
+        add_primitive!(eg, "map-not-contains" = |xs: @MapContainer (self), x: # (self.key())| -?> () { (!xs.data.contains_key(&x)).then_some(()) });
     }
 
     fn value_type(&self) -> Option<TypeId> {

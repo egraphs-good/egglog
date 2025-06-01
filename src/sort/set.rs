@@ -122,26 +122,26 @@ impl Sort for SetSort {
     }
 
     fn register_primitives(self: Arc<Self>, eg: &mut EGraph) {
-        add_primitive!(eg, "set-empty" = {self.clone(): Arc<SetSort>} |                      | -> @SetContainer (self.clone()) { SetContainer {
+        add_primitive!(eg, "set-empty" = {self.clone(): Arc<SetSort>} |                      | -> @SetContainer (self) { SetContainer {
             do_rebuild: self.ctx.element.is_eq_sort(),
             data: BTreeSet::new()
         } });
-        add_primitive!(eg, "set-of"    = {self.clone(): Arc<SetSort>} [xs: # (self.element())] -> @SetContainer (self.clone()) { SetContainer {
+        add_primitive!(eg, "set-of"    = {self.clone(): Arc<SetSort>} [xs: # (self.element())] -> @SetContainer (self) { SetContainer {
             do_rebuild: self.ctx.element.is_eq_sort(),
             data: xs.collect()
         } });
 
-        add_primitive!(eg, "set-get" = |xs: @SetContainer (self.clone()), i: i64| -?> # (self.element()) { xs.data.iter().nth(i as usize).copied() });
-        add_primitive!(eg, "set-insert" = |mut xs: @SetContainer (self.clone()), x: # (self.element())| -> @SetContainer (self.clone()) {{ xs.data.insert( x); xs }});
-        add_primitive!(eg, "set-remove" = |mut xs: @SetContainer (self.clone()), x: # (self.element())| -> @SetContainer (self.clone()) {{ xs.data.remove(&x); xs }});
+        add_primitive!(eg, "set-get" = |xs: @SetContainer (self), i: i64| -?> # (self.element()) { xs.data.iter().nth(i as usize).copied() });
+        add_primitive!(eg, "set-insert" = |mut xs: @SetContainer (self), x: # (self.element())| -> @SetContainer (self) {{ xs.data.insert( x); xs }});
+        add_primitive!(eg, "set-remove" = |mut xs: @SetContainer (self), x: # (self.element())| -> @SetContainer (self) {{ xs.data.remove(&x); xs }});
 
-        add_primitive!(eg, "set-length"       = |xs: @SetContainer (self.clone())| -> i64 { xs.data.len() as i64 });
-        add_primitive!(eg, "set-contains"     = |xs: @SetContainer (self.clone()), x: # (self.element())| -?> () { ( xs.data.contains(&x)).then_some(()) });
-        add_primitive!(eg, "set-not-contains" = |xs: @SetContainer (self.clone()), x: # (self.element())| -?> () { (!xs.data.contains(&x)).then_some(()) });
+        add_primitive!(eg, "set-length"       = |xs: @SetContainer (self)| -> i64 { xs.data.len() as i64 });
+        add_primitive!(eg, "set-contains"     = |xs: @SetContainer (self), x: # (self.element())| -?> () { ( xs.data.contains(&x)).then_some(()) });
+        add_primitive!(eg, "set-not-contains" = |xs: @SetContainer (self), x: # (self.element())| -?> () { (!xs.data.contains(&x)).then_some(()) });
 
-        add_primitive!(eg, "set-union"      = |mut xs: @SetContainer (self.clone()), ys: @SetContainer (self.clone())| -> @SetContainer (self.clone()) {{ xs.data.extend(ys.data);                  xs }});
-        add_primitive!(eg, "set-diff"       = |mut xs: @SetContainer (self.clone()), ys: @SetContainer (self.clone())| -> @SetContainer (self.clone()) {{ xs.data.retain(|k| !ys.data.contains(k)); xs }});
-        add_primitive!(eg, "set-intersect"  = |mut xs: @SetContainer (self.clone()), ys: @SetContainer (self.clone())| -> @SetContainer (self.clone()) {{ xs.data.retain(|k|  ys.data.contains(k)); xs }});
+        add_primitive!(eg, "set-union"      = |mut xs: @SetContainer (self), ys: @SetContainer (self)| -> @SetContainer (self) {{ xs.data.extend(ys.data);                  xs }});
+        add_primitive!(eg, "set-diff"       = |mut xs: @SetContainer (self), ys: @SetContainer (self)| -> @SetContainer (self) {{ xs.data.retain(|k| !ys.data.contains(k)); xs }});
+        add_primitive!(eg, "set-intersect"  = |mut xs: @SetContainer (self), ys: @SetContainer (self)| -> @SetContainer (self) {{ xs.data.retain(|k|  ys.data.contains(k)); xs }});
     }
 
     fn reconstruct_termdag_container(

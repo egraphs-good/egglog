@@ -21,7 +21,7 @@ use syn::{braced, bracketed, parenthesized, parse_macro_input, Expr, Ident, LitS
 /// - Containers: you must put an `@` in front of container types.
 ///
 /// - Specialized Constraints: using `T (E)` as a type will use
-///   `E:expr` in the type constraint but `T:ty` in the body.
+///   `(E:expr).clone()` in the type constraint but `T:ty` in the body.
 ///   This is necessary because the relationship between Rust types
 ///   and egglog sorts is not 1-to-1.
 ///
@@ -62,7 +62,7 @@ pub fn add_primitive(input: TokenStream) -> TokenStream {
         .filter_map(|(x, t)| {
             t.field
                 .as_ref()
-                .map(|(d, u)| (quote!(#x: #d), quote!(#x: #u)))
+                .map(|(d, u)| (quote!(#x: #d), quote!(#x: #u.clone())))
         })
         .chain(match context.0 {
             Some((e, t)) => vec![(quote!(ctx: #t), quote!(ctx: #e))],

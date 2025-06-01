@@ -160,6 +160,9 @@ pub trait Presort {
     ) -> Result<ArcSort, TypeError>;
 }
 
+pub type MakeSort =
+    fn(typeinfo: &mut TypeInfo, name: Symbol, params: &[Expr]) -> Result<ArcSort, TypeError>;
+
 #[derive(Debug)]
 pub struct EqSort {
     pub name: Symbol,
@@ -188,9 +191,6 @@ impl Sort for EqSort {
         None
     }
 }
-
-pub type PreSort =
-    fn(typeinfo: &mut TypeInfo, name: Symbol, params: &[Expr]) -> Result<ArcSort, TypeError>;
 
 pub fn literal_sort(lit: &Literal) -> ArcSort {
     match lit {
