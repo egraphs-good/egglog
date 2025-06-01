@@ -415,7 +415,7 @@ pub fn add_relation(
 
 /// Adds sorts and constructor tables to the database.
 #[macro_export]
-macro_rules! define_language {
+macro_rules! datatype {
     ($egraph:expr, (datatype $sort:ident $(($name:ident $($args:ident)* $(:cost $cost:expr)?))*)) => {
         add_sort($egraph, stringify!($sort))?;
         $(add_constructor(
@@ -528,7 +528,7 @@ mod tests {
     fn rust_api_macros() -> Result<(), Error> {
         let mut egraph = build_test_database()?;
 
-        define_language!(&mut egraph, (datatype Expr (One) (Two Expr Expr :cost 10)));
+        datatype!(&mut egraph, (datatype Expr (One) (Two Expr Expr :cost 10)));
 
         let ruleset = "custom_ruleset";
         add_ruleset(&mut egraph, ruleset)?;
