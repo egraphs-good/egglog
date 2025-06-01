@@ -1,4 +1,5 @@
 use crate::*;
+use std::any::{Any, TypeId};
 
 pub mod expr {
     use super::*;
@@ -429,6 +430,138 @@ macro_rules! datatype {
             false,
         )?;)*
     };
+}
+
+pub trait LeafSort: Any + Send + Sync + Debug {
+    type Leaf: core_relations::Primitive;
+    fn name(&self) -> &str;
+    fn register_primitives(&self, eg: &mut EGraph);
+    fn reconstruct_termdag(&self, _: &Primitives, _: Value, _: &mut TermDag) -> Term;
+}
+
+#[derive(Debug)]
+struct LeafSortImpl<T: LeafSort>(T);
+
+impl<T: LeafSort> Sort for LeafSortImpl<T> {
+    fn name(&self) -> Symbol {
+        self.0.name().into()
+    }
+
+    fn column_ty(&self, backend: &egglog_bridge::EGraph) -> ColumnTy {
+        ColumnTy::Primitive(backend.primitives().get_ty::<T::Leaf>())
+    }
+
+    fn register_type(&self, backend: &mut egglog_bridge::EGraph) {
+        backend.primitives_mut().register_type::<T::Leaf>();
+    }
+
+    fn value_type(&self) -> Option<TypeId> {
+        Some(TypeId::of::<T::Leaf>())
+    }
+
+    fn as_arc_any(self: Arc<Self>) -> Arc<dyn Any + Send + Sync + 'static> {
+        self
+    }
+
+    fn register_primitives(self: Arc<Self>, eg: &mut EGraph) {
+        self.0.register_primitives(eg)
+    }
+
+    /// Reconstruct a leaf primitive value in a TermDag
+    fn reconstruct_termdag_leaf(
+        &self,
+        primitives: &Primitives,
+        value: Value,
+        termdag: &mut TermDag,
+    ) -> Term {
+        self.0.reconstruct_termdag(primitives, value, termdag)
+    }
+}
+
+pub trait ContainerSort: Any + Send + Sync + Debug {
+    type Container: core_relations::Container;
+    fn name(&self) -> Symbol;
+    fn is_eq_container_sort(&self) -> bool;
+    fn inner_sorts(&self) -> Vec<ArcSort>;
+    fn inner_values(&self, _: &Containers, _: Value) -> Vec<(ArcSort, Value)>;
+    fn register_primitives(&self, eg: &mut EGraph);
+    fn reconstruct_termdag(&self, _: &Containers, _: Value, _: &mut TermDag, _: Vec<Term>) -> Term;
+    fn serialized_name(&self, _: Value) -> &str;
+}
+
+#[derive(Debug)]
+struct ContainerSortImpl<T: ContainerSort>(T);
+
+impl<T: ContainerSort> Sort for ContainerSortImpl<T> {
+    fn name(&self) -> Symbol {
+        self.0.name()
+    }
+
+    fn column_ty(&self, _backend: &egglog_bridge::EGraph) -> ColumnTy {
+        ColumnTy::Id
+    }
+
+    fn register_type(&self, backend: &mut egglog_bridge::EGraph) {
+        backend.register_container_ty::<T::Container>();
+    }
+
+    fn value_type(&self) -> Option<TypeId> {
+        Some(TypeId::of::<T::Container>())
+    }
+
+    fn as_arc_any(self: Arc<Self>) -> Arc<dyn Any + Send + Sync + 'static> {
+        self
+    }
+
+    fn inner_sorts(&self) -> Vec<ArcSort> {
+        self.0.inner_sorts()
+    }
+
+    fn inner_values(&self, containers: &Containers, value: Value) -> Vec<(ArcSort, Value)> {
+        self.0.inner_values(containers, value)
+    }
+
+    fn is_container_sort(&self) -> bool {
+        true
+    }
+
+    fn is_eq_container_sort(&self) -> bool {
+        self.0.is_eq_container_sort()
+    }
+
+    fn serialized_name(&self, value: Value) -> Symbol {
+        self.0.serialized_name(value).into()
+    }
+
+    fn register_primitives(self: Arc<Self>, eg: &mut EGraph) {
+        self.0.register_primitives(eg);
+    }
+
+    fn reconstruct_termdag_container(
+        &self,
+        containers: &Containers,
+        value: Value,
+        termdag: &mut TermDag,
+        element_terms: Vec<Term>,
+    ) -> Term {
+        self.0
+            .reconstruct_termdag(containers, value, termdag, element_terms)
+    }
+}
+
+pub fn add_leaf_sort(egraph: &mut EGraph, leaf_sort: impl LeafSort) -> Result<(), Error> {
+    egraph
+        .add_sort(LeafSortImpl(leaf_sort), span!())
+        .map_err(Error::TypeError)
+}
+
+pub fn add_container_sort(
+    egraph: &mut EGraph,
+    container_sort: impl ContainerSort,
+) -> Result<(), Error> {
+    egraph
+        .add_sort(ContainerSortImpl(container_sort), span!())
+        .map_err(Error::TypeError)
 }
 
 #[cfg(test)]
