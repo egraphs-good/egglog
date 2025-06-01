@@ -157,7 +157,11 @@ impl Sort for MapSort {
     }
 
     fn register_primitives(self: Arc<Self>, eg: &mut EGraph) {
-        add_primitive!(eg, "map-empty" = || -> @MapContainer (self.clone()) { MapContainer { do_rebuild_keys: self.__y.key.is_eq_sort(), do_rebuild_vals: self.__y.value.is_eq_sort(), data: BTreeMap::new() } });
+        add_primitive!(eg, "map-empty" = || -> @MapContainer (self.clone()) { MapContainer {
+            do_rebuild_keys: self.__y.inner_sorts()[0].is_eq_sort(),
+            do_rebuild_vals: self.__y.inner_sorts()[1].is_eq_sort(),
+            data: BTreeMap::new()
+        } });
 
         add_primitive!(eg, "map-get"    = |    xs: @MapContainer (self.clone()), x: # (self.key())                     | -?> # (self.value()) { xs.data.get(&x).copied() });
         add_primitive!(eg, "map-insert" = |mut xs: @MapContainer (self.clone()), x: # (self.key()), y: # (self.value())| -> @MapContainer (self.clone()) {{ xs.data.insert(x, y); xs }});
@@ -187,8 +191,4 @@ impl Sort for MapSort {
 
         term
     }
-}
-
-impl IntoSort for MapContainer {
-    type Sort = MapSort;
 }

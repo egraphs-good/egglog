@@ -182,6 +182,7 @@ pub fn add_primitive(input: TokenStream) -> TokenStream {
     // This is the big `quote!` block that ties everything together.
     quote! {{
         #[allow(unused_imports)] use ::egglog::{*, constraint::*};
+        #[allow(unused_imports)] use ::std::any::TypeId;
         #[allow(unused_imports)] use ::std::sync::Arc;
 
         #[derive(Clone)]
@@ -320,10 +321,7 @@ impl Parse for Type {
             Err(_) => Some((input.parse()?, is_container)),
         };
 
-        let field_def = syn::Type::Verbatim(match &cast {
-            None => quote!(ArcSort),
-            Some((t, _)) => quote!(Arc<<#t as IntoSort>::Sort>),
-        });
+        let field_def = syn::Type::Verbatim(quote!(ArcSort));
 
         let field = if input.peek(syn::token::Paren) {
             let inner;
@@ -333,7 +331,7 @@ impl Parse for Type {
             Some((field_def, field_use))
         } else if let Some((t, _)) = &cast {
             let field_use = Expr::Verbatim(quote! {
-                eg.get_sort::<<#t as IntoSort>::Sort>()
+                eg.get_arcsort_by(|s| s.value_type() == Some(TypeId::of::<#t>()))
             });
 
             Some((field_def, field_use))

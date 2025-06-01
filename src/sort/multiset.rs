@@ -170,10 +170,6 @@ impl Sort for MultiSetSort {
     }
 }
 
-impl IntoSort for MultiSetContainer {
-    type Sort = MultiSetSort;
-}
-
 #[derive(Clone)]
 struct Map {
     name: Symbol,

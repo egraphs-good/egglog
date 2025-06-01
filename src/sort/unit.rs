@@ -37,7 +37,3 @@ impl Sort for UnitSort {
         termdag.lit(Literal::Unit)
     }
 }
-
-impl IntoSort for () {
-    type Sort = UnitSort;
-}

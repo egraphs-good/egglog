@@ -143,7 +143,3 @@ impl Sort for BigRatSort {
         termdag.app("bigrat".into(), vec![numer_term, denom_term])
     }
 }
-
-impl IntoSort for Q {
-    type Sort = BigRatSort;
-}

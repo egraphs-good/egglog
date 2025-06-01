@@ -156,7 +156,3 @@ impl Sort for SetSort {
         Some(TypeId::of::<SetContainer>())
     }
 }
-
-impl IntoSort for SetContainer {
-    type Sort = SetSort;
-}
