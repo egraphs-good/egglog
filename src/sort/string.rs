@@ -51,7 +51,3 @@ impl Sort for StringSort {
         termdag.lit(Literal::String(*s))
     }
 }
-
-impl IntoSort for Symbol {
-    type Sort = StringSort;
-}

@@ -78,7 +78,3 @@ impl Sort for BigIntSort {
         termdag.app("from_string".into(), vec![as_string])
     }
 }
-
-impl IntoSort for Z {
-    type Sort = BigIntSort;
-}

@@ -93,7 +93,3 @@ impl Sort for I64Sort {
         termdag.lit(Literal::Int(*i))
     }
 }
-
-impl IntoSort for i64 {
-    type Sort = I64Sort;
-}

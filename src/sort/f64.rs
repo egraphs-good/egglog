@@ -72,7 +72,3 @@ impl Sort for F64Sort {
         termdag.lit(Literal::Float(*f))
     }
 }
-
-impl IntoSort for F {
-    type Sort = F64Sort;
-}
