@@ -30,6 +30,7 @@ pub use add_primitive::add_primitive;
 
 use crate::constraint::Problem;
 use crate::core::{AtomTerm, ResolvedAtomTerm, ResolvedCall};
+pub use crate::prelude::*;
 use crate::typechecking::TypeError;
 use ast::*;
 #[cfg(feature = "bin")]
