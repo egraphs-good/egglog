@@ -17,29 +17,15 @@ use super::*;
 #[derive(Debug)]
 pub struct I64Sort;
 
-lazy_static! {
-    static ref I64_SORT_NAME: Symbol = "i64".into();
-}
+impl LeafSort for I64Sort {
+    type Leaf = i64;
 
-impl Sort for I64Sort {
-    fn name(&self) -> Symbol {
-        *I64_SORT_NAME
-    }
-
-    fn column_ty(&self, backend: &egglog_bridge::EGraph) -> ColumnTy {
-        ColumnTy::Primitive(backend.primitives().get_ty::<i64>())
-    }
-
-    fn register_type(&self, backend: &mut egglog_bridge::EGraph) {
-        backend.primitives_mut().register_type::<i64>();
-    }
-
-    fn as_arc_any(self: Arc<Self>) -> Arc<dyn Any + Send + Sync + 'static> {
-        self
+    fn name(&self) -> &str {
+        "i64"
     }
 
     #[rustfmt::skip]
-    fn register_primitives(self: Arc<Self>, eg: &mut EGraph) {
+    fn register_primitives(&self, eg: &mut EGraph) {
         add_primitive!(eg, "+" = |a: i64, b: i64| -?> i64 { a.checked_add(b) });
         add_primitive!(eg, "-" = |a: i64, b: i64| -?> i64 { a.checked_sub(b) });
         add_primitive!(eg, "*" = |a: i64, b: i64| -?> i64 { a.checked_mul(b) });
@@ -78,11 +64,7 @@ impl Sort for I64Sort {
         });
     }
 
-    fn value_type(&self) -> Option<TypeId> {
-        Some(TypeId::of::<i64>())
-    }
-
-    fn reconstruct_termdag_leaf(
+    fn reconstruct_termdag(
         &self,
         primitives: &Primitives,
         value: Value,

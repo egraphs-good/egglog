@@ -29,7 +29,7 @@ pub mod sort {
     use super::*;
 
     pub fn i64() -> ArcSort {
-        Arc::new(I64Sort)
+        I64Sort.to_arcsort()
     }
 }
 

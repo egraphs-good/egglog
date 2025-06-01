@@ -329,7 +329,7 @@ impl Default for EGraph {
         eg.add_sort(UnitSort, span!()).unwrap();
         eg.add_sort(StringSort, span!()).unwrap();
         eg.add_sort(BoolSort, span!()).unwrap();
-        eg.add_sort(I64Sort, span!()).unwrap();
+        prelude::add_leaf_sort(&mut eg, I64Sort).unwrap();
         eg.add_sort(F64Sort, span!()).unwrap();
         eg.add_sort(BigIntSort, span!()).unwrap();
         eg.add_sort(BigRatSort, span!()).unwrap();
@@ -1680,7 +1680,6 @@ mod tests {
 
     #[derive(Clone)]
     struct InnerProduct {
-        ele: Arc<I64Sort>,
         vec: Arc<VecSort>,
     }
 
@@ -1692,7 +1691,7 @@ mod tests {
         fn get_type_constraints(&self, span: &Span) -> Box<dyn crate::constraint::TypeConstraint> {
             SimpleTypeConstraint::new(
                 self.name(),
-                vec![self.vec.clone(), self.vec.clone(), self.ele.clone()],
+                vec![self.vec.clone(), self.vec.clone(), I64Sort.to_arcsort()],
                 span.clone(),
             )
             .into_box()
@@ -1726,12 +1725,9 @@ mod tests {
             .unwrap();
 
         let int_vec_sort =
-            egraph.get_sort_by(|s: &Arc<VecSort>| s.element().name() == I64Sort.name());
+            egraph.get_sort_by(|s: &Arc<VecSort>| s.element().name() == I64Sort.name().into());
 
-        egraph.add_primitive(InnerProduct {
-            ele: I64Sort.into(),
-            vec: int_vec_sort,
-        });
+        egraph.add_primitive(InnerProduct { vec: int_vec_sort });
 
         egraph
             .parse_and_run_program(

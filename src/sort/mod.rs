@@ -198,7 +198,7 @@ pub type PreSort =
 
 pub fn literal_sort(lit: &Literal) -> ArcSort {
     match lit {
-        Literal::Int(_) => Arc::new(I64Sort) as ArcSort,
+        Literal::Int(_) => I64Sort.to_arcsort(),
         Literal::Float(_) => Arc::new(F64Sort) as ArcSort,
         Literal::String(_) => Arc::new(StringSort) as ArcSort,
         Literal::Bool(_) => Arc::new(BoolSort) as ArcSort,

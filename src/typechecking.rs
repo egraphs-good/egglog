@@ -190,10 +190,10 @@ impl EGraph {
                 let res_variants =
                     self.type_info
                         .typecheck_expr(symbol_gen, variants, &Default::default())?;
-                if res_variants.output_type().name() != I64Sort.name() {
+                if res_variants.output_type().name() != I64Sort.name().into() {
                     return Err(TypeError::Mismatch {
                         expr: variants.clone(),
-                        expected: Arc::new(I64Sort),
+                        expected: I64Sort.to_arcsort(),
                         actual: res_variants.output_type(),
                     });
                 }
