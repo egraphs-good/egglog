@@ -47,7 +47,7 @@ impl Debug for PrimitiveWithId {
 #[derive(Clone, Default)]
 pub struct TypeInfo {
     // get the sort from the sorts name()
-    presorts: HashMap<Symbol, PreSort>,
+    presorts: HashMap<Symbol, MakeSort>,
     // TODO(yz): I want to get rid of this as now we have user-defined primitives and constraint based type checking
     reserved_primitives: HashSet<Symbol>,
     sorts: HashMap<Symbol, Arc<dyn Sort>>,
