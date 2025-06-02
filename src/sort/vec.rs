@@ -19,7 +19,7 @@ impl Container for VecContainer {
     }
 }
 
-#[derive(Debug)]
+#[derive(Clone, Debug)]
 pub struct VecSort {
     name: Symbol,
     element: ArcSort,
@@ -53,56 +53,47 @@ impl Presort for VecSort {
     }
 
     fn make_sort(
-        typeinfo: &mut TypeInfo,
+        eg: &mut EGraph,
         name: Symbol,
         args: &[Expr],
-    ) -> Result<ArcSort, TypeError> {
-        if let [Expr::Var(span, e)] = args {
-            let e = typeinfo
+        span: Span,
+    ) -> Result<(), TypeError> {
+        if let [Expr::Var(arg_span, e)] = args {
+            let e = eg
                 .get_sort_by_name(e)
-                .ok_or(TypeError::UndefinedSort(*e, span.clone()))?;
+                .ok_or(TypeError::UndefinedSort(*e, arg_span.clone()))?;
 
             if e.is_eq_container_sort() {
                 return Err(TypeError::DisallowedSort(
                     name,
                     "Vec nested with other EqSort containers are not allowed".into(),
-                    span.clone(),
+                    arg_span.clone(),
                 ));
             }
 
-            Ok(Arc::new(Self {
-                name,
-                element: e.clone(),
-            }))
+            add_container_sort(
+                eg,
+                Self {
+                    name,
+                    element: e.clone(),
+                },
+                span,
+            )
         } else {
             panic!("Vec sort must have sort as argument. Got {:?}", args)
         }
     }
 }
 
-impl Sort for VecSort {
+impl ContainerSort for VecSort {
+    type Container = VecContainer;
+
     fn name(&self) -> Symbol {
         self.name
     }
 
-    fn column_ty(&self, _backend: &egglog_bridge::EGraph) -> ColumnTy {
-        ColumnTy::Id
-    }
-
-    fn register_type(&self, backend: &mut egglog_bridge::EGraph) {
-        backend.register_container_ty::<VecContainer>();
-    }
-
-    fn as_arc_any(self: Arc<Self>) -> Arc<dyn Any + Send + Sync + 'static> {
-        self
-    }
-
     fn inner_sorts(&self) -> Vec<ArcSort> {
         vec![self.element.clone()]
-    }
-
-    fn is_container_sort(&self) -> bool {
-        true
     }
 
     fn is_eq_container_sort(&self) -> bool {
@@ -117,33 +108,33 @@ impl Sort for VecSort {
             .collect()
     }
 
-    fn register_primitives(self: Arc<Self>, eg: &mut EGraph) {
-        add_primitive!(eg, "vec-empty"  = {self.clone(): Arc<VecSort>} |                                | -> @VecContainer (self) { VecContainer {
+    fn register_primitives(&self, eg: &mut EGraph, arc: ArcSort) {
+        add_primitive!(eg, "vec-empty"  = {self.clone(): VecSort} |                                | -> @VecContainer (arc) { VecContainer {
             do_rebuild: self.ctx.element.is_eq_sort(),
             data: Vec::new()
         } });
-        add_primitive!(eg, "vec-of"     = {self.clone(): Arc<VecSort>} [xs: # (self.element())          ] -> @VecContainer (self) { VecContainer {
+        add_primitive!(eg, "vec-of"     = {self.clone(): VecSort} [xs: # (self.element())          ] -> @VecContainer (arc) { VecContainer {
             do_rebuild: self.ctx.element.is_eq_sort(),
             data: xs                     .collect()
         } });
-        add_primitive!(eg, "vec-append" = {self.clone(): Arc<VecSort>} [xs: @VecContainer (self)] -> @VecContainer (self) { VecContainer {
+        add_primitive!(eg, "vec-append" = {self.clone(): VecSort} [xs: @VecContainer (arc)] -> @VecContainer (arc) { VecContainer {
             do_rebuild: self.ctx.element.is_eq_sort(),
             data: xs.flat_map(|x| x.data).collect()
         } });
 
-        add_primitive!(eg, "vec-push" = |mut xs: @VecContainer (self), x: # (self.element())| -> @VecContainer (self) {{ xs.data.push(x); xs }});
-        add_primitive!(eg, "vec-pop"  = |mut xs: @VecContainer (self)                       | -> @VecContainer (self) {{ xs.data.pop();   xs }});
+        add_primitive!(eg, "vec-push" = |mut xs: @VecContainer (arc), x: # (self.element())| -> @VecContainer (arc) {{ xs.data.push(x); xs }});
+        add_primitive!(eg, "vec-pop"  = |mut xs: @VecContainer (arc)                       | -> @VecContainer (arc) {{ xs.data.pop();   xs }});
 
-        add_primitive!(eg, "vec-length"       = |xs: @VecContainer (self)| -> i64 { xs.data.len() as i64 });
-        add_primitive!(eg, "vec-contains"     = |xs: @VecContainer (self), x: # (self.element())| -?> () { ( xs.data.contains(&x)).then_some(()) });
-        add_primitive!(eg, "vec-not-contains" = |xs: @VecContainer (self), x: # (self.element())| -?> () { (!xs.data.contains(&x)).then_some(()) });
+        add_primitive!(eg, "vec-length"       = |xs: @VecContainer (arc)| -> i64 { xs.data.len() as i64 });
+        add_primitive!(eg, "vec-contains"     = |xs: @VecContainer (arc), x: # (self.element())| -?> () { ( xs.data.contains(&x)).then_some(()) });
+        add_primitive!(eg, "vec-not-contains" = |xs: @VecContainer (arc), x: # (self.element())| -?> () { (!xs.data.contains(&x)).then_some(()) });
 
-        add_primitive!(eg, "vec-get"    = |    xs: @VecContainer (self), i: i64                       | -?> # (self.element()) { xs.data.get(i as usize).copied() });
-        add_primitive!(eg, "vec-set"    = |mut xs: @VecContainer (self), i: i64, x: # (self.element())| -> @VecContainer (self) {{ xs.data[i as usize] = x;    xs }});
-        add_primitive!(eg, "vec-remove" = |mut xs: @VecContainer (self), i: i64                       | -> @VecContainer (self) {{ xs.data.remove(i as usize); xs }});
+        add_primitive!(eg, "vec-get"    = |    xs: @VecContainer (arc), i: i64                       | -?> # (self.element()) { xs.data.get(i as usize).copied() });
+        add_primitive!(eg, "vec-set"    = |mut xs: @VecContainer (arc), i: i64, x: # (self.element())| -> @VecContainer (arc) {{ xs.data[i as usize] = x;    xs }});
+        add_primitive!(eg, "vec-remove" = |mut xs: @VecContainer (arc), i: i64                       | -> @VecContainer (arc) {{ xs.data.remove(i as usize); xs }});
     }
 
-    fn reconstruct_termdag_container(
+    fn reconstruct_termdag(
         &self,
         _containers: &Containers,
         _value: Value,
@@ -157,12 +148,8 @@ impl Sort for VecSort {
         }
     }
 
-    fn serialized_name(&self, _value: Value) -> Symbol {
-        "vec-of".into()
-    }
-
-    fn value_type(&self) -> Option<TypeId> {
-        Some(TypeId::of::<VecContainer>())
+    fn serialized_name(&self, _value: Value) -> &str {
+        "vec-of"
     }
 }
 

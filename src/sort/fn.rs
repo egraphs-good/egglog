@@ -63,14 +63,15 @@ impl Presort for FunctionSort {
     }
 
     fn make_sort(
-        typeinfo: &mut TypeInfo,
+        eg: &mut EGraph,
         name: Symbol,
         args: &[Expr],
-    ) -> Result<ArcSort, TypeError> {
-        if let [inputs, Expr::Var(span, output)] = args {
-            let output_sort = typeinfo
+        span: Span,
+    ) -> Result<(), TypeError> {
+        if let [inputs, Expr::Var(out_span, output)] = args {
+            let output_sort = eg
                 .get_sort_by_name(output)
-                .ok_or(TypeError::UndefinedSort(*output, span.clone()))?;
+                .ok_or(TypeError::UndefinedSort(*output, out_span.clone()))?;
 
             let input_sorts = match inputs {
                 Expr::Call(_, first, rest_args) => {
@@ -83,9 +84,8 @@ impl Presort for FunctionSort {
                     }));
                     all_args
                         .map(|arg| {
-                            typeinfo
-                                .get_sort_by_name(arg)
-                                .ok_or(TypeError::UndefinedSort(*arg, span.clone()))
+                            eg.get_sort_by_name(arg)
+                                .ok_or(TypeError::UndefinedSort(*arg, out_span.clone()))
                                 .cloned()
                         })
                         .collect::<Result<Vec<_>, _>>()?
@@ -95,11 +95,14 @@ impl Presort for FunctionSort {
                 _ => panic!("function sort must be called with list of input sorts"),
             };
 
-            Ok(Arc::new(Self {
-                name,
-                inputs: input_sorts,
-                output: output_sort.clone(),
-            }))
+            eg.add_sort(
+                Self {
+                    name,
+                    inputs: input_sorts,
+                    output: output_sort.clone(),
+                },
+                span,
+            )
         } else {
             panic!("function sort must be called with list of input args and output sort");
         }
