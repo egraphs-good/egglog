@@ -491,7 +491,7 @@ pub trait ContainerSort: Any + Send + Sync + Debug {
     fn is_eq_container_sort(&self) -> bool;
     fn inner_sorts(&self) -> Vec<ArcSort>;
     fn inner_values(&self, _: &Containers, _: Value) -> Vec<(ArcSort, Value)>;
-    fn register_primitives(&self, _eg: &mut EGraph) {}
+    fn register_primitives(&self, _eg: &mut EGraph, _: ArcSort) {}
     fn reconstruct_termdag(&self, _: &Containers, _: Value, _: &mut TermDag, _: Vec<Term>) -> Term;
     fn serialized_name(&self, _: Value) -> &str;
 
@@ -548,7 +548,7 @@ impl<T: ContainerSort> Sort for ContainerSortImpl<T> {
     }
 
     fn register_primitives(self: Arc<Self>, eg: &mut EGraph) {
-        self.0.register_primitives(eg);
+        self.0.register_primitives(eg, self.clone() as ArcSort);
     }
 
     fn reconstruct_termdag_container(
@@ -567,20 +567,16 @@ pub fn add_leaf_sort(
     egraph: &mut EGraph,
     leaf_sort: impl LeafSort,
     span: Span,
-) -> Result<(), Error> {
-    egraph
-        .add_sort(LeafSortImpl(leaf_sort), span)
-        .map_err(Error::TypeError)
+) -> Result<(), TypeError> {
+    egraph.add_sort(LeafSortImpl(leaf_sort), span)
 }
 
 pub fn add_container_sort(
     egraph: &mut EGraph,
     container_sort: impl ContainerSort,
     span: Span,
-) -> Result<(), Error> {
-    egraph
-        .add_sort(ContainerSortImpl(container_sort), span)
-        .map_err(Error::TypeError)
+) -> Result<(), TypeError> {
+    egraph.add_sort(ContainerSortImpl(container_sort), span)
 }
 
 #[cfg(test)]
