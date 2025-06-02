@@ -147,7 +147,9 @@ impl ContainerSort for MapSort {
             .collect()
     }
 
-    fn register_primitives(&self, eg: &mut EGraph, arc: ArcSort) {
+    fn register_primitives(&self, eg: &mut EGraph) {
+        let arc = self.clone().to_arcsort();
+
         add_primitive!(eg, "map-empty" = {self.clone(): MapSort} || -> @MapContainer (arc) { MapContainer {
             do_rebuild_keys: self.ctx.key.is_eq_sort(),
             do_rebuild_vals: self.ctx.value.is_eq_sort(),
