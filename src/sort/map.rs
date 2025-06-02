@@ -79,16 +79,15 @@ impl Presort for MapSort {
     }
 
     fn make_sort(
-        eg: &mut EGraph,
+        typeinfo: &mut TypeInfo,
         name: Symbol,
         args: &[Expr],
-        span: Span,
-    ) -> Result<(), TypeError> {
+    ) -> Result<ArcSort, TypeError> {
         if let [Expr::Var(k_span, k), Expr::Var(v_span, v)] = args {
-            let k = eg
+            let k = typeinfo
                 .get_sort_by_name(k)
                 .ok_or(TypeError::UndefinedSort(*k, k_span.clone()))?;
-            let v = eg
+            let v = typeinfo
                 .get_sort_by_name(v)
                 .ok_or(TypeError::UndefinedSort(*v, v_span.clone()))?;
 
@@ -100,7 +99,6 @@ impl Presort for MapSort {
                     k_span.clone(),
                 ));
             }
-
             if v.is_container_sort() {
                 return Err(TypeError::DisallowedSort(
                     name,
@@ -109,15 +107,12 @@ impl Presort for MapSort {
                 ));
             }
 
-            add_container_sort(
-                eg,
-                Self {
-                    name,
-                    key: k.clone(),
-                    value: v.clone(),
-                },
-                span,
-            )
+            let out = Self {
+                name,
+                key: k.clone(),
+                value: v.clone(),
+            };
+            Ok(out.to_arcsort())
         } else {
             panic!()
         }
