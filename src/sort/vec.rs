@@ -108,7 +108,9 @@ impl ContainerSort for VecSort {
             .collect()
     }
 
-    fn register_primitives(&self, eg: &mut EGraph, arc: ArcSort) {
+    fn register_primitives(&self, eg: &mut EGraph) {
+        let arc = self.clone().to_arcsort();
+
         add_primitive!(eg, "vec-empty"  = {self.clone(): VecSort} |                                | -> @VecContainer (arc) { VecContainer {
             do_rebuild: self.ctx.element.is_eq_sort(),
             data: Vec::new()
