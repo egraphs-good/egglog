@@ -491,7 +491,7 @@ pub trait ContainerSort: Any + Send + Sync + Debug {
     fn is_eq_container_sort(&self) -> bool;
     fn inner_sorts(&self) -> Vec<ArcSort>;
     fn inner_values(&self, _: &Containers, _: Value) -> Vec<(ArcSort, Value)>;
-    fn register_primitives(&self, _eg: &mut EGraph, _: ArcSort) {}
+    fn register_primitives(&self, _eg: &mut EGraph) {}
     fn reconstruct_termdag(&self, _: &Containers, _: Value, _: &mut TermDag, _: Vec<Term>) -> Term;
     fn serialized_name(&self, _: Value) -> &str;
 
@@ -548,7 +548,7 @@ impl<T: ContainerSort> Sort for ContainerSortImpl<T> {
     }
 
     fn register_primitives(self: Arc<Self>, eg: &mut EGraph) {
-        self.0.register_primitives(eg, self.clone() as ArcSort);
+        self.0.register_primitives(eg);
     }
 
     fn reconstruct_termdag_container(
