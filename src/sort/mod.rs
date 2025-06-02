@@ -154,14 +154,14 @@ pub trait Presort {
     fn presort_name() -> Symbol;
     fn reserved_primitives() -> Vec<Symbol>;
     fn make_sort(
-        typeinfo: &mut TypeInfo,
+        egraph: &mut EGraph,
         name: Symbol,
         args: &[Expr],
-    ) -> Result<ArcSort, TypeError>;
+        span: Span,
+    ) -> Result<(), TypeError>;
 }
 
-pub type MakeSort =
-    fn(typeinfo: &mut TypeInfo, name: Symbol, params: &[Expr]) -> Result<ArcSort, TypeError>;
+pub type MkSort = fn(&mut EGraph, Symbol, &[Expr], Span) -> Result<(), TypeError>;
 
 #[derive(Debug)]
 pub struct EqSort {

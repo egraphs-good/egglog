@@ -23,7 +23,7 @@ impl Container for SetContainer {
     }
 }
 
-#[derive(Debug)]
+#[derive(Clone, Debug)]
 pub struct SetSort {
     name: Symbol,
     element: ArcSort,
@@ -57,56 +57,47 @@ impl Presort for SetSort {
     }
 
     fn make_sort(
-        typeinfo: &mut TypeInfo,
+        eg: &mut EGraph,
         name: Symbol,
         args: &[Expr],
-    ) -> Result<ArcSort, TypeError> {
-        if let [Expr::Var(span, e)] = args {
-            let e = typeinfo
+        span: Span,
+    ) -> Result<(), TypeError> {
+        if let [Expr::Var(arg_span, e)] = args {
+            let e = eg
                 .get_sort_by_name(e)
-                .ok_or(TypeError::UndefinedSort(*e, span.clone()))?;
+                .ok_or(TypeError::UndefinedSort(*e, arg_span.clone()))?;
 
             if e.is_eq_container_sort() {
                 return Err(TypeError::DisallowedSort(
                     name,
                     "Sets nested with other EqSort containers are not allowed".into(),
-                    span.clone(),
+                    arg_span.clone(),
                 ));
             }
 
-            Ok(Arc::new(Self {
-                name,
-                element: e.clone(),
-            }))
+            add_container_sort(
+                eg,
+                Self {
+                    name,
+                    element: e.clone(),
+                },
+                span,
+            )
         } else {
             panic!()
         }
     }
 }
 
-impl Sort for SetSort {
+impl ContainerSort for SetSort {
+    type Container = SetContainer;
+
     fn name(&self) -> Symbol {
         self.name
     }
 
-    fn column_ty(&self, _backend: &egglog_bridge::EGraph) -> ColumnTy {
-        ColumnTy::Id
-    }
-
-    fn register_type(&self, backend: &mut egglog_bridge::EGraph) {
-        backend.register_container_ty::<SetContainer>();
-    }
-
-    fn as_arc_any(self: Arc<Self>) -> Arc<dyn Any + Send + Sync + 'static> {
-        self
-    }
-
     fn inner_sorts(&self) -> Vec<ArcSort> {
         vec![self.element.clone()]
-    }
-
-    fn is_container_sort(&self) -> bool {
-        true
     }
 
     fn is_eq_container_sort(&self) -> bool {
@@ -121,30 +112,30 @@ impl Sort for SetSort {
             .collect()
     }
 
-    fn register_primitives(self: Arc<Self>, eg: &mut EGraph) {
-        add_primitive!(eg, "set-empty" = {self.clone(): Arc<SetSort>} |                      | -> @SetContainer (self) { SetContainer {
+    fn register_primitives(&self, eg: &mut EGraph, arc: ArcSort) {
+        add_primitive!(eg, "set-empty" = {self.clone(): SetSort} |                      | -> @SetContainer (arc) { SetContainer {
             do_rebuild: self.ctx.element.is_eq_sort(),
             data: BTreeSet::new()
         } });
-        add_primitive!(eg, "set-of"    = {self.clone(): Arc<SetSort>} [xs: # (self.element())] -> @SetContainer (self) { SetContainer {
+        add_primitive!(eg, "set-of"    = {self.clone(): SetSort} [xs: # (self.element())] -> @SetContainer (arc) { SetContainer {
             do_rebuild: self.ctx.element.is_eq_sort(),
             data: xs.collect()
         } });
 
-        add_primitive!(eg, "set-get" = |xs: @SetContainer (self), i: i64| -?> # (self.element()) { xs.data.iter().nth(i as usize).copied() });
-        add_primitive!(eg, "set-insert" = |mut xs: @SetContainer (self), x: # (self.element())| -> @SetContainer (self) {{ xs.data.insert( x); xs }});
-        add_primitive!(eg, "set-remove" = |mut xs: @SetContainer (self), x: # (self.element())| -> @SetContainer (self) {{ xs.data.remove(&x); xs }});
+        add_primitive!(eg, "set-get" = |xs: @SetContainer (arc), i: i64| -?> # (self.element()) { xs.data.iter().nth(i as usize).copied() });
+        add_primitive!(eg, "set-insert" = |mut xs: @SetContainer (arc), x: # (self.element())| -> @SetContainer (arc) {{ xs.data.insert( x); xs }});
+        add_primitive!(eg, "set-remove" = |mut xs: @SetContainer (arc), x: # (self.element())| -> @SetContainer (arc) {{ xs.data.remove(&x); xs }});
 
-        add_primitive!(eg, "set-length"       = |xs: @SetContainer (self)| -> i64 { xs.data.len() as i64 });
-        add_primitive!(eg, "set-contains"     = |xs: @SetContainer (self), x: # (self.element())| -?> () { ( xs.data.contains(&x)).then_some(()) });
-        add_primitive!(eg, "set-not-contains" = |xs: @SetContainer (self), x: # (self.element())| -?> () { (!xs.data.contains(&x)).then_some(()) });
+        add_primitive!(eg, "set-length"       = |xs: @SetContainer (arc)| -> i64 { xs.data.len() as i64 });
+        add_primitive!(eg, "set-contains"     = |xs: @SetContainer (arc), x: # (self.element())| -?> () { ( xs.data.contains(&x)).then_some(()) });
+        add_primitive!(eg, "set-not-contains" = |xs: @SetContainer (arc), x: # (self.element())| -?> () { (!xs.data.contains(&x)).then_some(()) });
 
-        add_primitive!(eg, "set-union"      = |mut xs: @SetContainer (self), ys: @SetContainer (self)| -> @SetContainer (self) {{ xs.data.extend(ys.data);                  xs }});
-        add_primitive!(eg, "set-diff"       = |mut xs: @SetContainer (self), ys: @SetContainer (self)| -> @SetContainer (self) {{ xs.data.retain(|k| !ys.data.contains(k)); xs }});
-        add_primitive!(eg, "set-intersect"  = |mut xs: @SetContainer (self), ys: @SetContainer (self)| -> @SetContainer (self) {{ xs.data.retain(|k|  ys.data.contains(k)); xs }});
+        add_primitive!(eg, "set-union"      = |mut xs: @SetContainer (arc), ys: @SetContainer (arc)| -> @SetContainer (arc) {{ xs.data.extend(ys.data);                  xs }});
+        add_primitive!(eg, "set-diff"       = |mut xs: @SetContainer (arc), ys: @SetContainer (arc)| -> @SetContainer (arc) {{ xs.data.retain(|k| !ys.data.contains(k)); xs }});
+        add_primitive!(eg, "set-intersect"  = |mut xs: @SetContainer (arc), ys: @SetContainer (arc)| -> @SetContainer (arc) {{ xs.data.retain(|k|  ys.data.contains(k)); xs }});
     }
 
-    fn reconstruct_termdag_container(
+    fn reconstruct_termdag(
         &self,
         _containers: &Containers,
         _value: Value,
@@ -154,11 +145,7 @@ impl Sort for SetSort {
         termdag.app("set-of".into(), element_terms)
     }
 
-    fn serialized_name(&self, _value: Value) -> Symbol {
-        "set-of".into()
-    }
-
-    fn value_type(&self) -> Option<TypeId> {
-        Some(TypeId::of::<SetContainer>())
+    fn serialized_name(&self, _value: Value) -> &str {
+        "set-of"
     }
 }
