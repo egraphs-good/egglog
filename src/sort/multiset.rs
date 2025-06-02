@@ -23,7 +23,7 @@ impl Container for MultiSetContainer {
     }
 }
 
-#[derive(Debug)]
+#[derive(Clone, Debug)]
 pub struct MultiSetSort {
     name: Symbol,
     element: ArcSort,
@@ -54,56 +54,47 @@ impl Presort for MultiSetSort {
     }
 
     fn make_sort(
-        typeinfo: &mut TypeInfo,
+        eg: &mut EGraph,
         name: Symbol,
         args: &[Expr],
-    ) -> Result<ArcSort, TypeError> {
-        if let [Expr::Var(span, e)] = args {
-            let e = typeinfo
+        span: Span,
+    ) -> Result<(), TypeError> {
+        if let [Expr::Var(arg_span, e)] = args {
+            let e = eg
                 .get_sort_by_name(e)
-                .ok_or(TypeError::UndefinedSort(*e, span.clone()))?;
+                .ok_or(TypeError::UndefinedSort(*e, arg_span.clone()))?;
 
             if e.is_eq_container_sort() {
                 return Err(TypeError::DisallowedSort(
                     name,
                     "Multisets nested with other EqSort containers are not allowed".into(),
-                    span.clone(),
+                    arg_span.clone(),
                 ));
             }
 
-            Ok(Arc::new(Self {
-                name,
-                element: e.clone(),
-            }))
+            add_container_sort(
+                eg,
+                Self {
+                    name,
+                    element: e.clone(),
+                },
+                span,
+            )
         } else {
             panic!()
         }
     }
 }
 
-impl Sort for MultiSetSort {
+impl ContainerSort for MultiSetSort {
+    type Container = MultiSetContainer;
+
     fn name(&self) -> Symbol {
         self.name
     }
 
-    fn column_ty(&self, _backend: &egglog_bridge::EGraph) -> ColumnTy {
-        ColumnTy::Id
-    }
-
-    fn register_type(&self, backend: &mut egglog_bridge::EGraph) {
-        backend.register_container_ty::<MultiSetContainer>();
-    }
-
     fn inner_sorts(&self) -> Vec<ArcSort> {
         vec![self.element.clone()]
-    }
-
-    fn as_arc_any(self: Arc<Self>) -> Arc<dyn Any + Send + Sync + 'static> {
-        self
-    }
-
-    fn is_container_sort(&self) -> bool {
-        true
     }
 
     fn is_eq_container_sort(&self) -> bool {
@@ -121,21 +112,21 @@ impl Sort for MultiSetSort {
             .collect()
     }
 
-    fn register_primitives(self: Arc<Self>, eg: &mut EGraph) {
-        add_primitive!(eg, "multiset-of" = {self.clone(): Arc<MultiSetSort>} [xs: # (self.element())] -> @MultiSetContainer (self) { MultiSetContainer {
+    fn register_primitives(&self, eg: &mut EGraph, arc: ArcSort) {
+        add_primitive!(eg, "multiset-of" = {self.clone(): MultiSetSort} [xs: # (self.element())] -> @MultiSetContainer (arc) { MultiSetContainer {
             do_rebuild: self.ctx.element.is_eq_sort(),
             data: xs.collect()
         } });
 
-        add_primitive!(eg, "multiset-pick" = |xs: @MultiSetContainer (self)| -> # (self.element()) { *xs.data.pick().expect("Cannot pick from an empty multiset") });
-        add_primitive!(eg, "multiset-insert" = |mut xs: @MultiSetContainer (self), x: # (self.element())| -> @MultiSetContainer (self) { MultiSetContainer { data: xs.data.insert( x) , ..xs } });
-        add_primitive!(eg, "multiset-remove" = |mut xs: @MultiSetContainer (self), x: # (self.element())| -> @MultiSetContainer (self) { MultiSetContainer { data: xs.data.remove(&x)?, ..xs } });
+        add_primitive!(eg, "multiset-pick" = |xs: @MultiSetContainer (arc)| -> # (self.element()) { *xs.data.pick().expect("Cannot pick from an empty multiset") });
+        add_primitive!(eg, "multiset-insert" = |mut xs: @MultiSetContainer (arc), x: # (self.element())| -> @MultiSetContainer (arc) { MultiSetContainer { data: xs.data.insert( x) , ..xs } });
+        add_primitive!(eg, "multiset-remove" = |mut xs: @MultiSetContainer (arc), x: # (self.element())| -> @MultiSetContainer (arc) { MultiSetContainer { data: xs.data.remove(&x)?, ..xs } });
 
-        add_primitive!(eg, "multiset-length"       = |xs: @MultiSetContainer (self)| -> i64 { xs.data.len() as i64 });
-        add_primitive!(eg, "multiset-contains"     = |xs: @MultiSetContainer (self), x: # (self.element())| -?> () { ( xs.data.contains(&x)).then_some(()) });
-        add_primitive!(eg, "multiset-not-contains" = |xs: @MultiSetContainer (self), x: # (self.element())| -?> () { (!xs.data.contains(&x)).then_some(()) });
+        add_primitive!(eg, "multiset-length"       = |xs: @MultiSetContainer (arc)| -> i64 { xs.data.len() as i64 });
+        add_primitive!(eg, "multiset-contains"     = |xs: @MultiSetContainer (arc), x: # (self.element())| -?> () { ( xs.data.contains(&x)).then_some(()) });
+        add_primitive!(eg, "multiset-not-contains" = |xs: @MultiSetContainer (arc), x: # (self.element())| -?> () { (!xs.data.contains(&x)).then_some(()) });
 
-        add_primitive!(eg, "multiset-sum" = |xs: @MultiSetContainer (self), ys: @MultiSetContainer (self)| -> @MultiSetContainer (self) { MultiSetContainer { data: xs.data.sum(ys.data), ..xs } });
+        add_primitive!(eg, "multiset-sum" = |xs: @MultiSetContainer (arc), ys: @MultiSetContainer (arc)| -> @MultiSetContainer (arc) { MultiSetContainer { data: xs.data.sum(ys.data), ..xs } });
 
         // Only include map function if we already declared a function sort with the correct signature
         let fn_sorts = eg.type_info.get_sorts_by(|s: &Arc<FunctionSort>| {
@@ -147,14 +138,14 @@ impl Sort for MultiSetSort {
             0 => {}
             1 => eg.add_primitive(Map {
                 name: "unstable-multiset-map".into(),
-                multiset: self,
+                multiset: arc,
                 fn_: fn_sorts.into_iter().next().unwrap(),
             }),
             _ => panic!("too many applicable function sorts"),
         }
     }
 
-    fn reconstruct_termdag_container(
+    fn reconstruct_termdag(
         &self,
         _containers: &Containers,
         _value: Value,
@@ -164,19 +155,15 @@ impl Sort for MultiSetSort {
         termdag.app("multiset-of".into(), element_terms)
     }
 
-    fn serialized_name(&self, _value: Value) -> Symbol {
-        "multiset-of".into()
-    }
-
-    fn value_type(&self) -> Option<TypeId> {
-        Some(TypeId::of::<MultiSetContainer>())
+    fn serialized_name(&self, _value: Value) -> &str {
+        "multiset-of"
     }
 }
 
 #[derive(Clone)]
 struct Map {
     name: Symbol,
-    multiset: Arc<MultiSetSort>,
+    multiset: ArcSort,
     fn_: Arc<FunctionSort>,
 }
 
