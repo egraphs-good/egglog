@@ -44,7 +44,7 @@ impl Container for MapContainer {
 /// - `map-not-contains`
 /// - `map-remove`
 /// - `map-length`
-#[derive(Debug)]
+#[derive(Clone, Debug)]
 pub struct MapSort {
     name: Symbol,
     key: ArcSort,
@@ -79,15 +79,16 @@ impl Presort for MapSort {
     }
 
     fn make_sort(
-        typeinfo: &mut TypeInfo,
+        eg: &mut EGraph,
         name: Symbol,
         args: &[Expr],
-    ) -> Result<ArcSort, TypeError> {
+        span: Span,
+    ) -> Result<(), TypeError> {
         if let [Expr::Var(k_span, k), Expr::Var(v_span, v)] = args {
-            let k = typeinfo
+            let k = eg
                 .get_sort_by_name(k)
                 .ok_or(TypeError::UndefinedSort(*k, k_span.clone()))?;
-            let v = typeinfo
+            let v = eg
                 .get_sort_by_name(v)
                 .ok_or(TypeError::UndefinedSort(*v, v_span.clone()))?;
 
@@ -108,40 +109,30 @@ impl Presort for MapSort {
                 ));
             }
 
-            Ok(Arc::new(Self {
-                name,
-                key: k.clone(),
-                value: v.clone(),
-            }))
+            add_container_sort(
+                eg,
+                Self {
+                    name,
+                    key: k.clone(),
+                    value: v.clone(),
+                },
+                span,
+            )
         } else {
             panic!()
         }
     }
 }
 
-impl Sort for MapSort {
+impl ContainerSort for MapSort {
+    type Container = MapContainer;
+
     fn name(&self) -> Symbol {
         self.name
     }
 
-    fn column_ty(&self, _backend: &egglog_bridge::EGraph) -> ColumnTy {
-        ColumnTy::Id
-    }
-
-    fn register_type(&self, backend: &mut egglog_bridge::EGraph) {
-        backend.register_container_ty::<MapContainer>();
-    }
-
-    fn as_arc_any(self: Arc<Self>) -> Arc<dyn Any + Send + Sync + 'static> {
-        self
-    }
-
     fn inner_sorts(&self) -> Vec<ArcSort> {
         vec![self.key.clone(), self.value.clone()]
-    }
-
-    fn is_container_sort(&self) -> bool {
-        true
     }
 
     fn is_eq_container_sort(&self) -> bool {
@@ -156,27 +147,23 @@ impl Sort for MapSort {
             .collect()
     }
 
-    fn register_primitives(self: Arc<Self>, eg: &mut EGraph) {
-        add_primitive!(eg, "map-empty" = {self.clone(): Arc<MapSort>} || -> @MapContainer (self) { MapContainer {
+    fn register_primitives(&self, eg: &mut EGraph, arc: ArcSort) {
+        add_primitive!(eg, "map-empty" = {self.clone(): MapSort} || -> @MapContainer (arc) { MapContainer {
             do_rebuild_keys: self.ctx.key.is_eq_sort(),
             do_rebuild_vals: self.ctx.value.is_eq_sort(),
             data: BTreeMap::new()
         } });
 
-        add_primitive!(eg, "map-get"    = |    xs: @MapContainer (self), x: # (self.key())                     | -?> # (self.value()) { xs.data.get(&x).copied() });
-        add_primitive!(eg, "map-insert" = |mut xs: @MapContainer (self), x: # (self.key()), y: # (self.value())| -> @MapContainer (self) {{ xs.data.insert(x, y); xs }});
-        add_primitive!(eg, "map-remove" = |mut xs: @MapContainer (self), x: # (self.key())                     | -> @MapContainer (self) {{ xs.data.remove(&x);   xs }});
+        add_primitive!(eg, "map-get"    = |    xs: @MapContainer (arc), x: # (self.key())                     | -?> # (self.value()) { xs.data.get(&x).copied() });
+        add_primitive!(eg, "map-insert" = |mut xs: @MapContainer (arc), x: # (self.key()), y: # (self.value())| -> @MapContainer (arc) {{ xs.data.insert(x, y); xs }});
+        add_primitive!(eg, "map-remove" = |mut xs: @MapContainer (arc), x: # (self.key())                     | -> @MapContainer (arc) {{ xs.data.remove(&x);   xs }});
 
-        add_primitive!(eg, "map-length"       = |xs: @MapContainer (self)| -> i64 { xs.data.len() as i64 });
-        add_primitive!(eg, "map-contains"     = |xs: @MapContainer (self), x: # (self.key())| -?> () { ( xs.data.contains_key(&x)).then_some(()) });
-        add_primitive!(eg, "map-not-contains" = |xs: @MapContainer (self), x: # (self.key())| -?> () { (!xs.data.contains_key(&x)).then_some(()) });
+        add_primitive!(eg, "map-length"       = |xs: @MapContainer (arc)| -> i64 { xs.data.len() as i64 });
+        add_primitive!(eg, "map-contains"     = |xs: @MapContainer (arc), x: # (self.key())| -?> () { ( xs.data.contains_key(&x)).then_some(()) });
+        add_primitive!(eg, "map-not-contains" = |xs: @MapContainer (arc), x: # (self.key())| -?> () { (!xs.data.contains_key(&x)).then_some(()) });
     }
 
-    fn value_type(&self) -> Option<TypeId> {
-        Some(TypeId::of::<MapContainer>())
-    }
-
-    fn reconstruct_termdag_container(
+    fn reconstruct_termdag(
         &self,
         _containers: &Containers,
         _value: Value,
@@ -190,5 +177,9 @@ impl Sort for MapSort {
         }
 
         term
+    }
+
+    fn serialized_name(&self, _: Value) -> &str {
+        self.name().into()
     }
 }

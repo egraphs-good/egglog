@@ -1379,6 +1379,11 @@ impl EGraph {
         self.type_info.get_arcsorts_by(f)
     }
 
+    /// Returns the sort with the given name if it exists.
+    pub fn get_sort_by_name(&self, sym: &Symbol) -> Option<&ArcSort> {
+        self.type_info.get_sort_by_name(sym)
+    }
+
     /// Gets the last extract report and returns it, if the last command saved it.
     pub fn get_extract_report(&self) -> &Option<ExtractReport> {
         &self.extract_report
@@ -1668,9 +1673,8 @@ pub enum Error {
 
 #[cfg(test)]
 mod tests {
-    use std::sync::{Arc, Mutex};
-
     use lazy_static::lazy_static;
+    use std::sync::Mutex;
 
     use crate::constraint::SimpleTypeConstraint;
     use crate::sort::*;
@@ -1678,7 +1682,7 @@ mod tests {
 
     #[derive(Clone)]
     struct InnerProduct {
-        vec: Arc<VecSort>,
+        vec: ArcSort,
     }
 
     impl Primitive for InnerProduct {
@@ -1722,8 +1726,10 @@ mod tests {
             .parse_and_run_program(None, "(sort IntVec (Vec i64))")
             .unwrap();
 
-        let int_vec_sort =
-            egraph.get_sort_by(|s: &Arc<VecSort>| s.element().name() == I64Sort.name().into());
+        let int_vec_sort = egraph.get_arcsort_by(|s| {
+            s.value_type() == Some(std::any::TypeId::of::<VecContainer>())
+                && s.inner_sorts()[0].name() == I64Sort.name().into()
+        });
 
         egraph.add_primitive(InnerProduct { vec: int_vec_sort });
 

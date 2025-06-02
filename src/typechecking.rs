@@ -46,8 +46,7 @@ impl Debug for PrimitiveWithId {
 /// Stores resolved typechecking information.
 #[derive(Clone, Default)]
 pub struct TypeInfo {
-    // get the sort from the sorts name()
-    presorts: HashMap<Symbol, MakeSort>,
+    mksorts: HashMap<Symbol, MkSort>,
     // TODO(yz): I want to get rid of this as now we have user-defined primitives and constraint based type checking
     reserved_primitives: HashSet<Symbol>,
     sorts: HashMap<Symbol, Arc<dyn Sort>>,
@@ -74,18 +73,16 @@ impl EGraph {
             return Err(TypeError::FunctionAlreadyBound(name, span));
         }
 
-        let sort = match presort_and_args {
-            None => Arc::new(EqSort { name }),
+        match presort_and_args {
+            None => self.add_arcsort(Arc::new(EqSort { name }), span),
             Some((presort, args)) => {
-                if let Some(mksort) = self.type_info.presorts.get(presort) {
-                    mksort(&mut self.type_info, name, args)?
+                if let Some(mksort) = self.type_info.mksorts.get(presort) {
+                    mksort(self, name, args, span)
                 } else {
-                    return Err(TypeError::PresortNotFound(*presort, span));
+                    Err(TypeError::PresortNotFound(*presort, span))
                 }
             }
-        };
-
-        self.add_arcsort(sort, span)
+        }
     }
 
     /// Add a user-defined sort
@@ -260,7 +257,7 @@ impl TypeInfo {
     /// Adds a sort constructor to the typechecker's known set of types.
     pub fn add_presort<S: Presort>(&mut self, span: Span) -> Result<(), TypeError> {
         let name = S::presort_name();
-        match self.presorts.entry(name) {
+        match self.mksorts.entry(name) {
             HEntry::Occupied(_) => Err(TypeError::SortAlreadyBound(name, span)),
             HEntry::Vacant(e) => {
                 e.insert(S::make_sort);
