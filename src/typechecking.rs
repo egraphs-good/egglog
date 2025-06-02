@@ -73,16 +73,18 @@ impl EGraph {
             return Err(TypeError::FunctionAlreadyBound(name, span));
         }
 
-        match presort_and_args {
-            None => self.add_arcsort(Arc::new(EqSort { name }), span),
+        let sort = match presort_and_args {
+            None => Arc::new(EqSort { name }),
             Some((presort, args)) => {
                 if let Some(mksort) = self.type_info.mksorts.get(presort) {
-                    mksort(self, name, args, span)
+                    mksort(&mut self.type_info, name, args)?
                 } else {
-                    Err(TypeError::PresortNotFound(*presort, span))
+                    return Err(TypeError::PresortNotFound(*presort, span));
                 }
             }
-        }
+        };
+
+        self.add_arcsort(sort, span)
     }
 
     /// Add a user-defined sort

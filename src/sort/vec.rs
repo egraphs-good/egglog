@@ -53,32 +53,28 @@ impl Presort for VecSort {
     }
 
     fn make_sort(
-        eg: &mut EGraph,
+        typeinfo: &mut TypeInfo,
         name: Symbol,
         args: &[Expr],
-        span: Span,
-    ) -> Result<(), TypeError> {
-        if let [Expr::Var(arg_span, e)] = args {
-            let e = eg
+    ) -> Result<ArcSort, TypeError> {
+        if let [Expr::Var(span, e)] = args {
+            let e = typeinfo
                 .get_sort_by_name(e)
-                .ok_or(TypeError::UndefinedSort(*e, arg_span.clone()))?;
+                .ok_or(TypeError::UndefinedSort(*e, span.clone()))?;
 
             if e.is_eq_container_sort() {
                 return Err(TypeError::DisallowedSort(
                     name,
                     "Vec nested with other EqSort containers are not allowed".into(),
-                    arg_span.clone(),
+                    span.clone(),
                 ));
             }
 
-            add_container_sort(
-                eg,
-                Self {
-                    name,
-                    element: e.clone(),
-                },
-                span,
-            )
+            let out = Self {
+                name,
+                element: e.clone(),
+            };
+            Ok(out.to_arcsort())
         } else {
             panic!("Vec sort must have sort as argument. Got {:?}", args)
         }
