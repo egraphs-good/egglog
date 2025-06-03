@@ -754,7 +754,7 @@ impl EGraph {
         ) {
             match &rulesets[&ruleset] {
                 Ruleset::Rules(rules) => {
-                    for id in rules.values() {
+                    for (_, id) in rules.values() {
                         ids.push(*id);
                     }
                 }
@@ -807,7 +807,7 @@ impl EGraph {
     ) -> Result<Symbol, Error> {
         let core_rule =
             rule.to_canonicalized_core_rule(&self.type_info, &mut self.parser.symbol_gen)?;
-        let (query, actions) = (core_rule.body, core_rule.head);
+        let (query, actions) = (&core_rule.body, &core_rule.head);
 
         let rule_id = {
             let mut translator = BackendRule::new(
@@ -827,7 +827,7 @@ impl EGraph {
                         indexmap::map::Entry::Occupied(_) => {
                             panic!("Rule '{name}' was already present")
                         }
-                        indexmap::map::Entry::Vacant(e) => e.insert(rule_id),
+                        indexmap::map::Entry::Vacant(e) => e.insert((core_rule, rule_id)),
                     };
                     Ok(name)
                 }

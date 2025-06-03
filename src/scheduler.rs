@@ -90,12 +90,12 @@ fn collect_rules<'a>(
     ids: &mut Vec<(Symbol, &'a ResolvedCoreRule)>,
 ) {
     match &rulesets[&ruleset] {
-        Ruleset::Rules(rule_name, rules) => {
-            for (_, _, core_rule) in rules.values() {
+        Ruleset::Rules(rules) => {
+            for (rule_name, (core_rule, _)) in rules.iter() {
                 ids.push((*rule_name, core_rule));
             }
         }
-        Ruleset::Combined(_, sub_rulesets) => {
+        Ruleset::Combined(sub_rulesets) => {
             for sub_ruleset in sub_rulesets {
                 collect_rules(*sub_ruleset, rulesets, ids);
             }
