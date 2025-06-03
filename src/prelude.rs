@@ -285,30 +285,9 @@ impl QueryResult {
     /// Get an iterator over the query results,
     /// where each match is a `&[Value]` in the same order
     /// as the `vars` that were passed to `query`.
-    pub fn iter(&self) -> QueryResultIterator {
-        QueryResultIterator {
-            index: 0,
-            query: self,
-        }
-    }
-}
-
-/// Immutable iterator on the result of `query`.
-pub struct QueryResultIterator<'a> {
-    index: usize,
-    query: &'a QueryResult,
-}
-
-impl<'a> Iterator for QueryResultIterator<'a> {
-    type Item = &'a [Value];
-    fn next(&mut self) -> Option<&'a [Value]> {
-        let rest = &self.query.data[self.index..];
-        if rest.is_empty() {
-            None
-        } else {
-            self.index += self.query.cols;
-            Some(&rest[..self.query.cols])
-        }
+    pub fn iter(&self) -> impl Iterator<Item = &[Value]> {
+        assert!(self.data.len() % self.cols == 0);
+        self.data.chunks_exact(self.cols)
     }
 }
 
