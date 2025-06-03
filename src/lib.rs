@@ -11,22 +11,17 @@
 //! [Here](https://www.youtube.com/watch?v=N2RDQGRBrSY) is the video tutorial on what egglog is and how to use it.
 //! We plan to have a text tutorial here soon, PRs welcome!
 //!
-mod actions;
 pub mod ast;
 mod cli;
 pub mod constraint;
 mod core;
 pub mod extract;
-mod function;
-mod gj;
 pub mod scheduler;
 mod serialize;
 pub mod sort;
 mod termdag;
 mod typechecking;
-mod unionfind;
 pub mod util;
-mod value;
 
 // This is used to allow the `add_primitive` macro to work in
 // both this crate and other crates by referring to `::egglog`.
@@ -35,23 +30,17 @@ pub use add_primitive::add_primitive;
 use scheduler::SchedulerRecord;
 
 use crate::constraint::Problem;
-use crate::core::{AtomTerm, ResolvedCall};
+use crate::core::{AtomTerm, ResolvedAtomTerm, ResolvedCall};
 use crate::typechecking::TypeError;
-use actions::Program;
 use ast::*;
 #[cfg(feature = "bin")]
 pub use cli::bin::*;
 use constraint::{Constraint, SimpleTypeConstraint, TypeConstraint};
-use core::ResolvedAtomTerm;
-use core_relations::{ExternalFunctionId, PrimitivePrinter};
-use egglog_bridge::{ColumnTy, QueryEntry};
-use extract::Extractor;
-pub use function::Function;
-use function::*;
-use gj::*;
-use index::ColumnIndex;
+pub use core_relations::Value;
+use core_relations::{make_external_func, ExternalFunctionId};
+use egglog_bridge::{ColumnTy, IterationReport, QueryEntry};
+use extract::{Extractor, TreeAdditiveCostModel};
 use indexmap::map::Entry;
-use instant::{Duration, Instant};
 pub use serialize::{SerializeConfig, SerializedNode};
 use sort::*;
 use std::fmt::Debug;
@@ -60,32 +49,23 @@ use std::fs::File;
 use std::hash::Hash;
 use std::io::Read;
 use std::iter::once;
-use std::ops::{Deref, Range};
 use std::path::PathBuf;
 use std::str::FromStr;
-use std::sync::{Arc, Mutex};
+use std::sync::Arc;
 pub use termdag::{Term, TermDag, TermId};
 use thiserror::Error;
 pub use typechecking::TypeInfo;
-pub use unionfind::*;
 use util::*;
-pub use value::*;
+use web_time::Duration;
 
 pub type ArcSort = Arc<dyn Sort>;
 
-pub type Subst = IndexMap<Symbol, Value>;
-
-pub trait PrimitiveLike {
+pub trait Primitive {
     fn name(&self) -> Symbol;
     /// Constructs a type constraint for the primitive that uses the span information
     /// for error localization.
     fn get_type_constraints(&self, span: &Span) -> Box<dyn TypeConstraint>;
-    fn apply(
-        &self,
-        values: &[Value],
-        _sorts: (&[ArcSort], &ArcSort),
-        egraph: Option<&mut EGraph>,
-    ) -> Option<Value>;
+    fn apply(&self, exec_state: &mut ExecutionState, args: &[Value]) -> Option<Value>;
 }
 
 /// Running a schedule produces a report of the results.
@@ -95,15 +75,12 @@ pub trait PrimitiveLike {
 /// information together.
 #[derive(Debug, Clone, Default)]
 pub struct RunReport {
-    /// If any changes were made to the database, this is
-    /// true.
+    /// If any changes were made to the database.
     pub updated: bool,
-    /// The time it took to run the query, for each rule.
-    pub search_time_per_rule: HashMap<Symbol, Duration>,
-    pub apply_time_per_rule: HashMap<Symbol, Duration>,
-    pub search_time_per_ruleset: HashMap<Symbol, Duration>,
+    pub search_and_apply_time_per_rule: HashMap<Symbol, Duration>,
     pub num_matches_per_rule: HashMap<Symbol, usize>,
-    pub apply_time_per_ruleset: HashMap<Symbol, Duration>,
+    pub search_and_apply_time_per_ruleset: HashMap<Symbol, Duration>,
+    pub merge_time_per_ruleset: HashMap<Symbol, Duration>,
     pub rebuild_time_per_ruleset: HashMap<Symbol, Duration>,
 }
 
@@ -120,109 +97,53 @@ impl RunReport {
         }
         s
     }
-
-    fn add_rule_search_time(&mut self, rule: Symbol, time: Duration) {
-        *self.search_time_per_rule.entry(rule).or_default() += time;
-    }
-
-    fn add_ruleset_search_time(&mut self, ruleset: Symbol, time: Duration) {
-        *self.search_time_per_ruleset.entry(ruleset).or_default() += time;
-    }
-
-    fn add_rule_apply_time(&mut self, rule: Symbol, time: Duration) {
-        *self.apply_time_per_rule.entry(rule).or_default() += time;
-    }
-
-    fn add_ruleset_apply_time(&mut self, ruleset: Symbol, time: Duration) {
-        *self.apply_time_per_ruleset.entry(ruleset).or_default() += time;
-    }
-
-    fn add_ruleset_rebuild_time(&mut self, ruleset: Symbol, time: Duration) {
-        *self.rebuild_time_per_ruleset.entry(ruleset).or_default() += time;
-    }
-
-    fn add_rule_num_matches(&mut self, rule: Symbol, num_matches: usize) {
-        *self.num_matches_per_rule.entry(rule).or_default() += num_matches;
-    }
 }
 
 impl Display for RunReport {
     fn fmt(&self, f: &mut Formatter<'_>) -> std::fmt::Result {
-        let all_rules = self
-            .search_time_per_rule
-            .keys()
-            .chain(self.apply_time_per_rule.keys())
-            .collect::<HashSet<_>>();
-        let mut all_rules_vec = all_rules.iter().cloned().collect::<Vec<_>>();
-        // sort rules by search and apply time
-        all_rules_vec.sort_by_key(|rule| {
-            let search_time = self
-                .search_time_per_rule
-                .get(*rule)
-                .cloned()
-                .unwrap_or(Duration::default())
-                .as_millis();
-            let apply_time = self
-                .apply_time_per_rule
-                .get(*rule)
-                .cloned()
-                .unwrap_or(Duration::default())
-                .as_millis();
-            search_time + apply_time
-        });
+        let mut rule_times_vec: Vec<_> = self.search_and_apply_time_per_rule.iter().collect();
+        rule_times_vec.sort_by_key(|(_, time)| **time);
 
-        for rule in all_rules_vec {
-            let truncated = Self::truncate_rule_name(*rule);
-            // print out the search and apply time for rule
-            let search_time = self
-                .search_time_per_rule
-                .get(rule)
-                .cloned()
-                .unwrap_or(Duration::default())
-                .as_secs_f64();
-            let apply_time = self
-                .apply_time_per_rule
-                .get(rule)
-                .cloned()
-                .unwrap_or(Duration::default())
-                .as_secs_f64();
-            let num_matches = self.num_matches_per_rule.get(rule).cloned().unwrap_or(0);
+        for (rule, time) in rule_times_vec {
+            let name = Self::truncate_rule_name(*rule);
+            let time = time.as_secs_f64();
+            let num_matches = self.num_matches_per_rule.get(rule).copied().unwrap_or(0);
             writeln!(
                 f,
-                "Rule {truncated}: search {search_time:.3}s, apply {apply_time:.3}s, num matches {num_matches}",
+                "Rule {name}: search and apply {time:.3}s, num matches {num_matches}",
             )?;
         }
 
         let rulesets = self
-            .search_time_per_ruleset
+            .search_and_apply_time_per_ruleset
             .keys()
-            .chain(self.apply_time_per_ruleset.keys())
+            .chain(self.merge_time_per_ruleset.keys())
             .chain(self.rebuild_time_per_ruleset.keys())
-            .collect::<HashSet<_>>();
+            .collect::<IndexSet<_>>();
 
         for ruleset in rulesets {
             // print out the search and apply time for rule
-            let search_time = self
-                .search_time_per_ruleset
+            let search_and_apply_time = self
+                .search_and_apply_time_per_ruleset
                 .get(ruleset)
                 .cloned()
-                .unwrap_or(Duration::default())
+                .unwrap_or(Duration::ZERO)
                 .as_secs_f64();
-            let apply_time = self
-                .apply_time_per_ruleset
+            let merge_time = self
+                .merge_time_per_ruleset
                 .get(ruleset)
                 .cloned()
-                .unwrap_or(Duration::default())
+                .unwrap_or(Duration::ZERO)
                 .as_secs_f64();
             let rebuild_time = self
                 .rebuild_time_per_ruleset
                 .get(ruleset)
                 .cloned()
-                .unwrap_or(Duration::default())
+                .unwrap_or(Duration::ZERO)
                 .as_secs_f64();
             writeln!(
                 f,
-                "Ruleset {ruleset}: search {search_time:.3}s, apply {apply_time:.3}s, rebuild {rebuild_time:.3}s",
+                "Ruleset {ruleset}: search {search_and_apply_time:.3}s, merge {merge_time:.3}s, rebuild {rebuild_time:.3}s",
             )?;
         }
 
@@ -245,111 +166,39 @@ pub enum ExtractReport {
 }
 
 impl RunReport {
-    fn union_times(
-        times: &HashMap<Symbol, Duration>,
-        other_times: &HashMap<Symbol, Duration>,
-    ) -> HashMap<Symbol, Duration> {
-        let mut new_times = times.clone();
+    fn union_times(times: &mut HashMap<Symbol, Duration>, other_times: &HashMap<Symbol, Duration>) {
         for (k, v) in other_times {
-            let entry = new_times.entry(*k).or_default();
+            let entry = times.entry(*k).or_default();
             *entry += *v;
         }
-        new_times
     }
 
-    fn union_counts(
-        counts: &HashMap<Symbol, usize>,
-        other_counts: &HashMap<Symbol, usize>,
-    ) -> HashMap<Symbol, usize> {
-        let mut new_counts = counts.clone();
+    fn union_counts(counts: &mut HashMap<Symbol, usize>, other_counts: &HashMap<Symbol, usize>) {
         for (k, v) in other_counts {
-            let entry = new_counts.entry(*k).or_default();
+            let entry = counts.entry(*k).or_default();
             *entry += *v;
         }
-        new_counts
     }
 
-    pub fn union(&self, other: &Self) -> Self {
-        Self {
-            updated: self.updated || other.updated,
-            search_time_per_rule: Self::union_times(
-                &self.search_time_per_rule,
-                &other.search_time_per_rule,
-            ),
-            apply_time_per_rule: Self::union_times(
-                &self.apply_time_per_rule,
-                &other.apply_time_per_rule,
-            ),
-            num_matches_per_rule: Self::union_counts(
-                &self.num_matches_per_rule,
-                &other.num_matches_per_rule,
-            ),
-            search_time_per_ruleset: Self::union_times(
-                &self.search_time_per_ruleset,
-                &other.search_time_per_ruleset,
-            ),
-            apply_time_per_ruleset: Self::union_times(
-                &self.apply_time_per_ruleset,
-                &other.apply_time_per_ruleset,
-            ),
-            rebuild_time_per_ruleset: Self::union_times(
-                &self.rebuild_time_per_ruleset,
-                &other.rebuild_time_per_ruleset,
-            ),
-        }
-    }
-}
-
-#[derive(Clone)]
-pub struct Primitive(Arc<dyn PrimitiveLike + Send + Sync>, ExternalFunctionId);
-impl Primitive {
-    // Takes the full signature of a primitive (including input and output types)
-    // Returns whether the primitive is compatible with this signature
-    fn accept(&self, tys: &[Arc<dyn Sort>], typeinfo: &TypeInfo) -> bool {
-        let mut constraints = vec![];
-        let lits: Vec<_> = (0..tys.len())
-            .map(|i| AtomTerm::Literal(Span::Panic, Literal::Int(i as i64)))
-            .collect();
-        for (lit, ty) in lits.iter().zip(tys.iter()) {
-            constraints.push(constraint::assign(lit.clone(), ty.clone()))
-        }
-        constraints.extend(self.get_type_constraints(&Span::Panic).get(&lits, typeinfo));
-        let problem = Problem {
-            constraints,
-            range: HashSet::default(),
-        };
-        problem.solve(|sort| sort.name()).is_ok()
-    }
-}
-
-impl Deref for Primitive {
-    type Target = dyn PrimitiveLike;
-    fn deref(&self) -> &Self::Target {
-        &*self.0
-    }
-}
-
-impl Hash for Primitive {
-    fn hash<H: std::hash::Hasher>(&self, state: &mut H) {
-        Arc::as_ptr(&self.0).hash(state);
-    }
-}
-
-impl Eq for Primitive {}
-impl PartialEq for Primitive {
-    fn eq(&self, other: &Self) -> bool {
-        // this is a bit of a hack, but clippy says we don't want to compare the
-        // vtables, just the data pointers
-        std::ptr::eq(
-            Arc::as_ptr(&self.0) as *const u8,
-            Arc::as_ptr(&other.0) as *const u8,
-        )
-    }
-}
-
-impl Debug for Primitive {
-    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        write!(f, "Prim({})", self.0.name())
+    pub fn union(&mut self, other: &Self) {
+        self.updated |= other.updated;
+        RunReport::union_times(
+            &mut self.search_and_apply_time_per_rule,
+            &other.search_and_apply_time_per_rule,
+        );
+        RunReport::union_counts(&mut self.num_matches_per_rule, &other.num_matches_per_rule);
+        RunReport::union_times(
+            &mut self.search_and_apply_time_per_ruleset,
+            &other.search_and_apply_time_per_ruleset,
+        );
+        RunReport::union_times(
+            &mut self.merge_time_per_ruleset,
+            &other.merge_time_per_ruleset,
+        );
+        RunReport::union_times(
+            &mut self.rebuild_time_per_ruleset,
+            &other.rebuild_time_per_ruleset,
+        );
     }
 }
 
@@ -400,16 +249,14 @@ impl FromStr for RunMode {
 
 #[derive(Clone)]
 pub struct EGraph {
-    pub backend: egglog_bridge::EGraph,
+    backend: egglog_bridge::EGraph,
     pub parser: Parser,
     names: check_shadowing::Names,
     /// pushed_egraph forms a linked list of pushed egraphs.
     /// Pop reverts the egraph to the last pushed egraph.
     pushed_egraph: Option<Box<Self>>,
-    unionfind: UnionFind,
-    pub functions: IndexMap<Symbol, Function>,
+    functions: IndexMap<Symbol, Function>,
     rulesets: IndexMap<Symbol, Ruleset>,
-    rule_last_run_timestamp: HashMap<Symbol, u32>,
     interactive_mode: bool,
     timestamp: u32,
     pub run_mode: RunMode,
@@ -426,6 +273,39 @@ pub struct EGraph {
     schedulers: Vec<SchedulerRecord>,
 }
 
+#[derive(Clone)]
+pub struct Function {
+    decl: ResolvedFunctionDecl,
+    pub schema: ResolvedSchema,
+    pub can_subsume: bool,
+    backend_id: egglog_bridge::FunctionId,
+}
+
+#[derive(Clone, Debug)]
+pub struct ResolvedSchema {
+    pub input: Vec<ArcSort>,
+    pub output: ArcSort,
+}
+
+impl ResolvedSchema {
+    pub fn get_by_pos(&self, index: usize) -> Option<&ArcSort> {
+        if self.input.len() == index {
+            Some(&self.output)
+        } else {
+            self.input.get(index)
+        }
+    }
+}
+
+impl Debug for Function {
+    fn fmt(&self, f: &mut Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("Function")
+            .field("decl", &self.decl)
+            .field("schema", &self.schema)
+            .finish()
+    }
+}
+
 impl Default for EGraph {
     fn default() -> Self {
         let mut eg = Self {
@@ -433,10 +313,8 @@ impl Default for EGraph {
             parser: Default::default(),
             names: Default::default(),
             pushed_egraph: Default::default(),
-            unionfind: Default::default(),
             functions: Default::default(),
             rulesets: Default::default(),
-            rule_last_run_timestamp: Default::default(),
             timestamp: 0,
             run_mode: RunMode::Normal,
             interactive_mode: false,
@@ -447,7 +325,7 @@ impl Default for EGraph {
             overall_run_report: Default::default(),
             msgs: Some(vec![]),
             type_info: Default::default(),
-            schedulers: Default::default(),
+            schedulers: vec![],
         };
 
         eg.add_sort(UnitSort, span!()).unwrap();
@@ -477,7 +355,7 @@ impl Default for EGraph {
         });
 
         eg.rulesets
-            .insert("".into(), Ruleset::Rules("".into(), Default::default()));
+            .insert("".into(), Ruleset::Rules(Default::default()));
 
         eg
     }
@@ -486,15 +364,6 @@ impl Default for EGraph {
 #[derive(Debug, Error)]
 #[error("Not found: {0}")]
 pub struct NotFoundError(String);
-
-/// For each rule, we produce a `SearchResult`
-/// storing data about that rule's matches.
-/// When a rule has no variables, it may still match- in this case
-/// the `did_match` field is used.
-struct SearchResult {
-    all_matches: Vec<Value>,
-    did_match: bool,
-}
 
 impl EGraph {
     pub fn is_interactive_mode(&self) -> bool {
@@ -552,150 +421,98 @@ impl EGraph {
         }
     }
 
-    pub fn union(&mut self, id1: Id, id2: Id, sort: Symbol) -> Result<Id, Error> {
-        self.unionfind.union(id1, id2, sort);
-        self.rebuild()?;
-        Ok(self.unionfind.find(id1))
-    }
-
-    #[track_caller]
-    fn debug_assert_invariants(&self) {
-        #[cfg(debug_assertions)]
-        for (name, function) in self.functions.iter() {
-            function.nodes.assert_sorted();
-            for (i, inputs, output) in function.nodes.iter_range(0..function.nodes.len(), true) {
-                assert_eq!(inputs.len(), function.schema.input.len());
-                for (input, sort) in inputs.iter().zip(&function.schema.input) {
-                    assert_eq!(
-                        input,
-                        &self.find(sort, *input),
-                        "[{i}] {name}({inputs:?}) = {output:?}\n{:?}",
-                        function.schema,
-                    )
-                }
-                assert_eq!(
-                    output.value,
-                    self.find(&function.schema.output, output.value),
-                    "[{i}] {name}({inputs:?}) = {output:?}\n{:?}",
-                    function.schema,
-                )
+    fn translate_expr_to_mergefn(
+        &self,
+        expr: &ResolvedExpr,
+    ) -> Result<egglog_bridge::MergeFn, Error> {
+        match expr {
+            GenericExpr::Lit(_, literal) => {
+                let val = literal_to_value(&self.backend, literal);
+                Ok(egglog_bridge::MergeFn::Const(val))
             }
-            for ix in &function.indexes {
-                for (_, offs) in ix.iter() {
-                    for off in offs {
-                        assert!(
-                            (*off as usize) < function.nodes.num_offsets(),
-                            "index contains offset {off:?}, which is out of range for function {name}"
-                        );
-                    }
-                }
-            }
-            for (rix, sort) in function.rebuild_indexes.iter().zip(
-                function
-                    .schema
-                    .input
+            GenericExpr::Var(span, resolved_var) => match resolved_var.name.as_str() {
+                "old" => Ok(egglog_bridge::MergeFn::Old),
+                "new" => Ok(egglog_bridge::MergeFn::New),
+                // NB: type-checking should already catch unbound variables here.
+                _ => Err(TypeError::Unbound(resolved_var.name, span.clone()).into()),
+            },
+            GenericExpr::Call(_, ResolvedCall::Func(f), args) => {
+                let translated_args = args
                     .iter()
-                    .chain(once(&function.schema.output)),
-            ) {
-                assert!(sort.is_eq_container_sort() == rix.is_some());
-                if sort.is_eq_container_sort() {
-                    let rix = rix.as_ref().unwrap();
-                    for ix in rix.iter() {
-                        for (_, offs) in ix.iter() {
-                            for off in offs {
-                                assert!(
-                                (*off as usize) < function.nodes.num_offsets(),
-                                "index contains offset {off:?}, which is out of range for function {name}"
-                            );
-                            }
-                        }
-                    }
-                }
+                    .map(|arg| self.translate_expr_to_mergefn(arg))
+                    .collect::<Result<Vec<_>, _>>()?;
+                Ok(egglog_bridge::MergeFn::Function(
+                    self.functions[&f.name].backend_id,
+                    translated_args,
+                ))
+            }
+            GenericExpr::Call(_, ResolvedCall::Primitive(p), args) => {
+                let translated_args = args
+                    .iter()
+                    .map(|arg| self.translate_expr_to_mergefn(arg))
+                    .collect::<Result<Vec<_>, _>>()?;
+                Ok(egglog_bridge::MergeFn::Primitive(
+                    p.primitive.1,
+                    translated_args,
+                ))
             }
         }
-    }
-
-    /// find the leader value for a particular eclass
-    pub fn find(&self, sort: &ArcSort, value: Value) -> Value {
-        if sort.is_eq_sort() {
-            Value {
-                #[cfg(debug_assertions)]
-                tag: value.tag,
-                bits: self.unionfind.find(value.bits),
-            }
-        } else {
-            value
-        }
-    }
-
-    pub fn rebuild_nofail(&mut self) -> usize {
-        match self.rebuild() {
-            Ok(updates) => updates,
-            Err(e) => {
-                panic!("Unsoundness detected during rebuild. Exiting: {e}")
-            }
-        }
-    }
-
-    pub fn rebuild(&mut self) -> Result<usize, Error> {
-        self.unionfind.clear_recent_ids();
-
-        let mut updates = 0;
-        loop {
-            let new = self.rebuild_one()?;
-            log::debug!("{new} rebuilds?");
-            self.unionfind.clear_recent_ids();
-            updates += new;
-            if new == 0 {
-                break;
-            }
-        }
-
-        self.debug_assert_invariants();
-        Ok(updates)
-    }
-
-    fn rebuild_one(&mut self) -> Result<usize, Error> {
-        let mut new_unions = 0;
-        let mut deferred_merges = Vec::new();
-        for function in self.functions.values_mut() {
-            let (unions, merges) = function.rebuild(&mut self.unionfind, self.timestamp)?;
-            if !merges.is_empty() {
-                deferred_merges.push((function.decl.name, merges));
-            }
-            new_unions += unions;
-        }
-        for (func, merges) in deferred_merges {
-            new_unions += self.apply_merges(func, &merges);
-        }
-
-        Ok(new_unions)
-    }
-
-    fn apply_merges(&mut self, func: Symbol, merges: &[DeferredMerge]) -> usize {
-        let mut stack = Vec::new();
-        let mut function = self.functions.get_mut(&func).unwrap();
-        let n_unions = self.unionfind.n_unions();
-        let merge_prog = match &function.merge {
-            MergeFn::Expr(e) => Some(e.clone()),
-            MergeFn::AssertEq | MergeFn::Union => None,
-        };
-
-        for (inputs, old, new) in merges {
-            if let Some(prog) = &merge_prog {
-                // TODO: error handling?
-                self.run_actions(&mut stack, &[*old, *new], prog).unwrap();
-                let merged = stack.pop().expect("merges should produce a value");
-                stack.clear();
-                function = self.functions.get_mut(&func).unwrap();
-                function.insert(inputs, merged, self.timestamp);
-            }
-        }
-        self.unionfind.n_unions() - n_unions + function.clear_updates()
     }
 
     fn declare_function(&mut self, decl: &ResolvedFunctionDecl) -> Result<(), Error> {
-        let function = Function::new(self, decl)?;
+        let get_sort = |name: &Symbol| match self.type_info.get_sort_by_name(name) {
+            Some(sort) => Ok(sort.clone()),
+            None => Err(Error::TypeError(TypeError::UndefinedSort(
+                *name,
+                decl.span.clone(),
+            ))),
+        };
+
+        let input = decl
+            .schema
+            .input
+            .iter()
+            .map(get_sort)
+            .collect::<Result<Vec<_>, _>>()?;
+        let output = get_sort(&decl.schema.output)?;
+
+        let can_subsume = match decl.subtype {
+            FunctionSubtype::Constructor => true,
+            FunctionSubtype::Relation => true,
+            FunctionSubtype::Custom => false,
+        };
+
+        use egglog_bridge::{DefaultVal, MergeFn};
+        let backend_id = self.backend.add_table(egglog_bridge::FunctionConfig {
+            schema: input
+                .iter()
+                .chain([&output])
+                .map(|sort| sort.column_ty(&self.backend))
+                .collect(),
+            default: match decl.subtype {
+                FunctionSubtype::Constructor => DefaultVal::FreshId,
+                FunctionSubtype::Custom => DefaultVal::Fail,
+                FunctionSubtype::Relation => DefaultVal::Const(self.backend.primitives().get(())),
+            },
+            merge: match decl.subtype {
+                FunctionSubtype::Constructor => MergeFn::UnionId,
+                FunctionSubtype::Relation => MergeFn::AssertEq,
+                FunctionSubtype::Custom => match &decl.merge {
+                    None => MergeFn::AssertEq,
+                    Some(expr) => self.translate_expr_to_mergefn(expr)?,
+                },
+            },
+            name: decl.name.to_string(),
+            can_subsume,
+        });
+
+        let function = Function {
+            decl: decl.clone(),
+            schema: ResolvedSchema { input, output },
+            can_subsume,
+            backend_id,
+        };
+
         let old = self.functions.insert(decl.name, function);
         if old.is_some() {
             panic!(
@@ -707,77 +524,71 @@ impl EGraph {
         Ok(())
     }
 
-    pub fn eval_lit(&self, lit: &Literal) -> Value {
-        match lit {
-            Literal::Int(i) => i.store(&I64Sort),
-            Literal::Float(f) => f.store(&F64Sort),
-            Literal::String(s) => s.store(&StringSort),
-            Literal::Unit => ().store(&UnitSort),
-            Literal::Bool(b) => b.store(&BoolSort),
-        }
-    }
-
+    /// Extract rows of a table using the default cost model with name sym
+    /// The `include_output` parameter controls whether the output column is always extracted
+    /// For functions, the output column is usually useful
+    /// For constructors and relations, the output column can be ignored
     pub fn function_to_dag(
         &self,
         sym: Symbol,
         n: usize,
-    ) -> Result<(Vec<(Term, Term)>, TermDag), Error> {
-        if true {
-            todo!("function_to_dag")
-        }
-
-        let f = self
+        include_output: bool,
+    ) -> Result<(Vec<Term>, Option<Vec<Term>>, TermDag), Error> {
+        let func = self
             .functions
             .get(&sym)
             .ok_or(TypeError::UnboundFunction(sym, span!()))?;
-        let schema = f.schema.clone();
-        let nodes = f
-            .nodes
-            .iter(true)
-            .take(n)
-            .map(|(k, v)| (ValueVec::from(k), v.clone()))
-            .collect::<Vec<_>>();
+        let mut rootsorts = func.schema.input.clone();
+        if include_output {
+            rootsorts.push(func.schema.output.clone());
+        }
+        let extractor = Extractor::compute_costs_from_rootsorts(
+            Some(rootsorts),
+            self,
+            TreeAdditiveCostModel::default(),
+        );
 
         let mut termdag = TermDag::default();
-        let extractor = Extractor::new(self, &mut termdag);
-        let mut terms = Vec::new();
-        for (ins, out) in nodes {
-            let mut children = Vec::new();
-            for (a, a_type) in ins.iter().copied().zip(&schema.input) {
-                if a_type.is_eq_sort() {
-                    children.push(extractor.find_best(a, &mut termdag, a_type).unwrap().1);
-                } else {
-                    children.push(
-                        a_type
-                            .extract_term(self, a, &extractor, &mut termdag)
-                            .unwrap()
-                            .1,
-                    )
-                };
-            }
+        let mut inputs: Vec<Term> = Vec::new();
+        let mut output: Option<Vec<Term>> = if include_output {
+            Some(Vec::new())
+        } else {
+            None
+        };
 
-            let out = if schema.output.is_eq_sort() {
-                extractor
-                    .find_best(out.value, &mut termdag, &schema.output)
-                    .unwrap()
-                    .1
+        let extract_row = |row: egglog_bridge::FunctionRow| {
+            if inputs.len() < n {
+                // include subsumed rows
+                let mut children: Vec<Term> = Vec::new();
+                for (value, sort) in row.vals.iter().zip(&func.schema.input) {
+                    let (_, term) = extractor
+                        .extract_best_with_sort(self, &mut termdag, *value, sort.clone())
+                        .unwrap_or_else(|| (0, termdag.var("Unextractable".into())));
+                    children.push(term);
+                }
+                inputs.push(termdag.app(sym, children));
+                if include_output {
+                    let value = row.vals[func.schema.input.len()];
+                    let sort = &func.schema.output;
+                    let (_, term) = extractor
+                        .extract_best_with_sort(self, &mut termdag, value, sort.clone())
+                        .unwrap_or_else(|| (0, termdag.var("Unextractable".into())));
+                    output.as_mut().unwrap().push(term);
+                }
+                true
             } else {
-                schema
-                    .output
-                    .extract_term(self, out.value, &extractor, &mut termdag)
-                    .unwrap()
-                    .1
-            };
-            terms.push((termdag.app(sym, children), out));
-        }
-        drop(extractor);
+                false
+            }
+        };
 
-        Ok((terms, termdag))
+        self.backend.for_each_while(func.backend_id, extract_row);
+
+        Ok((inputs, output, termdag))
     }
 
     pub fn print_function(&mut self, sym: Symbol, n: usize) -> Result<(), Error> {
         log::info!("Printing up to {n} tuples of table {sym}: ");
-        let (terms_with_outputs, termdag) = self.function_to_dag(sym, n)?;
+        let (terms, outputs, termdag) = self.function_to_dag(sym, n, true)?;
         let f = self
             .functions
             .get(&sym)
@@ -788,15 +599,15 @@ impl EGraph {
         let mut buf = String::new();
         let s = &mut buf;
         s.push_str("(\n");
-        if terms_with_outputs.is_empty() {
+        if terms.is_empty() {
             log::info!("   (none)");
         }
-        for (term, output) in terms_with_outputs {
+        for (term, output) in terms.iter().zip(&outputs.unwrap()) {
             let tuple_str = format!(
                 "   {}{}",
-                termdag.to_string(&term),
+                termdag.to_string(term),
                 if !out_is_unit {
-                    format!(" -> {}", termdag.to_string(&output))
+                    format!(" -> {}", termdag.to_string(output))
                 } else {
                     "".into()
                 },
@@ -815,7 +626,7 @@ impl EGraph {
             .functions
             .get(&sym)
             .ok_or(TypeError::UnboundFunction(sym, span!()))?;
-        Ok(self.backend.table_size(f.new_backend_id))
+        Ok(self.backend.table_size(f.backend_id))
     }
 
     pub fn print_size(&mut self, sym: Option<Symbol>) -> Result<(), Error> {
@@ -824,19 +635,16 @@ impl EGraph {
                 .functions
                 .get(&sym)
                 .ok_or(TypeError::UnboundFunction(sym, span!()))?;
-            log::info!("Function {} has size {}", sym, f.nodes.len());
-            assert_eq!(f.nodes.len(), self.backend.table_size(f.new_backend_id));
-            self.print_msg(f.nodes.len().to_string());
+            let size = self.backend.table_size(f.backend_id);
+            log::info!("Function {} has size {}", sym, size);
+            self.print_msg(size.to_string());
             Ok(())
         } else {
             // Print size of all functions
             let mut lens = self
                 .functions
                 .iter()
-                .map(|(sym, f)| {
-                    assert_eq!(f.nodes.len(), self.backend.table_size(f.new_backend_id));
-                    (*sym, f.nodes.len())
-                })
+                .map(|(sym, f)| (*sym, self.backend.table_size(f.backend_id)))
                 .collect::<Vec<_>>();
 
             // Function name's alphabetical order
@@ -865,7 +673,7 @@ impl EGraph {
                 let mut report = RunReport::default();
                 for _i in 0..*limit {
                     let rec = self.run_schedule(sched);
-                    report = report.union(&rec);
+                    report.union(&rec);
                     if !rec.updated {
                         break;
                     }
@@ -876,7 +684,7 @@ impl EGraph {
                 let mut report = RunReport::default();
                 loop {
                     let rec = self.run_schedule(sched);
-                    report = report.union(&rec);
+                    report.union(&rec);
                     if !rec.updated {
                         break;
                     }
@@ -886,7 +694,7 @@ impl EGraph {
             ResolvedSchedule::Sequence(_span, scheds) => {
                 let mut report = RunReport::default();
                 for sched in scheds {
-                    report = report.union(&self.run_schedule(sched));
+                    report.union(&self.run_schedule(sched));
                 }
                 report
             }
@@ -897,8 +705,13 @@ impl EGraph {
     /// Note that the `TermDag` may contain a superset of the nodes in the `Term`.
     /// See also `extract_value_to_string` for convenience.
     pub fn extract_value(&self, sort: &ArcSort, value: Value) -> Result<(TermDag, Term), Error> {
+        let extractor = Extractor::compute_costs_from_rootsorts(
+            Some(vec![sort.clone()]),
+            self,
+            TreeAdditiveCostModel::default(),
+        );
         let mut termdag = TermDag::default();
-        let term = self.extract(value, &mut termdag, sort)?.1;
+        let (_, term) = extractor.extract_best(self, &mut termdag, value).unwrap();
         Ok((termdag, term))
     }
 
@@ -911,15 +724,6 @@ impl EGraph {
 
     fn run_rules(&mut self, span: &Span, config: &ResolvedRunConfig) -> RunReport {
         let mut report: RunReport = Default::default();
-
-        // first rebuild
-        let rebuild_start = Instant::now();
-        let updates = self.rebuild_nofail();
-        log::debug!("database size: {}", self.num_tuples());
-        log::debug!("Made {updates} updates");
-        // add to the rebuild time for this ruleset
-        report.add_ruleset_rebuild_time(config.ruleset, rebuild_start.elapsed());
-        self.timestamp += 1;
 
         let GenericRunConfig { ruleset, until } = config;
 
@@ -934,7 +738,7 @@ impl EGraph {
         }
 
         let subreport = self.step_rules(*ruleset);
-        report = report.union(&subreport);
+        report.union(&subreport);
 
         log::debug!("database size: {}", self.num_tuples());
         self.timestamp += 1;
@@ -942,177 +746,57 @@ impl EGraph {
         report
     }
 
-    /// Search all the rules in a ruleset.
-    /// Add the search results for a rule to search_results, a map indexed by rule name.
-    fn search_rules(
-        &self,
-        ruleset: Symbol,
-        run_report: &mut RunReport,
-        search_results: &mut HashMap<Symbol, SearchResult>,
-    ) {
-        let rules = self
-            .rulesets
-            .get(&ruleset)
-            .unwrap_or_else(|| panic!("ruleset does not exist: {}", &ruleset));
-        match rules {
-            Ruleset::Rules(_ruleset_name, rule_names) => {
-                let copy_rules = rule_names.clone();
-                let search_start = Instant::now();
-
-                for (rule_name, (rule, _, _)) in copy_rules.iter() {
-                    let mut all_matches = vec![];
-                    let rule_search_start = Instant::now();
-                    let mut did_match = false;
-                    let timestamp = self.rule_last_run_timestamp.get(rule_name).unwrap_or(&0);
-                    self.run_query(&rule.query, *timestamp, false, |values| {
-                        did_match = true;
-                        assert_eq!(values.len(), rule.query.vars.len());
-                        all_matches.extend_from_slice(values);
-                        Ok(())
-                    });
-                    let rule_search_time = rule_search_start.elapsed();
-                    log::trace!(
-                        "Searched for {rule_name} in {:.3}s ({} results)",
-                        rule_search_time.as_secs_f64(),
-                        all_matches.len()
-                    );
-                    run_report.add_rule_search_time(*rule_name, rule_search_time);
-                    search_results.insert(
-                        *rule_name,
-                        SearchResult {
-                            all_matches,
-                            did_match,
-                        },
-                    );
-                }
-
-                let search_time = search_start.elapsed();
-                run_report.add_ruleset_search_time(ruleset, search_time);
-            }
-            Ruleset::Combined(_name, sub_rulesets) => {
-                let start_time = Instant::now();
-                for sub_ruleset in sub_rulesets {
-                    self.search_rules(*sub_ruleset, run_report, search_results);
-                }
-                let search_time = start_time.elapsed();
-                run_report.add_ruleset_search_time(ruleset, search_time);
-            }
-        }
-    }
-
-    fn apply_rules(
-        &mut self,
-        ruleset: Symbol,
-        run_report: &mut RunReport,
-        search_results: &HashMap<Symbol, SearchResult>,
-    ) {
-        // TODO this clone is not efficient
-        let rules = self.rulesets.get(&ruleset).unwrap().clone();
-        match rules {
-            Ruleset::Rules(_name, compiled_rules) => {
-                let apply_start = Instant::now();
-                let rule_names = compiled_rules.keys().cloned().collect::<Vec<_>>();
-                for rule_name in rule_names {
-                    let SearchResult {
-                        all_matches,
-                        did_match,
-                    } = search_results.get(&rule_name).unwrap();
-                    let (rule, _, _) = compiled_rules.get(&rule_name).unwrap();
-                    let num_vars = rule.query.vars.len();
-
-                    // make sure the query requires matches
-                    if num_vars != 0 {
-                        run_report.add_rule_num_matches(rule_name, all_matches.len() / num_vars);
-                    }
-
-                    self.rule_last_run_timestamp
-                        .insert(rule_name, self.timestamp);
-                    let rule_apply_start = Instant::now();
-
-                    let stack = &mut vec![];
-
-                    // when there are no variables, a query can still fail to match
-                    // here we handle that case
-                    if num_vars == 0 {
-                        if *did_match {
-                            stack.clear();
-                            self.run_actions(stack, &[], &rule.program)
-                                .unwrap_or_else(|e| {
-                                    panic!("error while running actions for {rule_name}: {e}")
-                                });
-                        }
-                    } else {
-                        for values in all_matches.chunks(num_vars) {
-                            stack.clear();
-                            self.run_actions(stack, values, &rule.program)
-                                .unwrap_or_else(|e| {
-                                    panic!("error while running actions for {rule_name}: {e}")
-                                });
-                        }
-                    }
-
-                    // add to the rule's apply time
-                    run_report.add_rule_apply_time(rule_name, rule_apply_start.elapsed());
-                }
-                run_report.add_ruleset_apply_time(ruleset, apply_start.elapsed());
-            }
-            Ruleset::Combined(_name, sub_rulesets) => {
-                let start_time = Instant::now();
-                for sub_ruleset in sub_rulesets {
-                    self.apply_rules(sub_ruleset, run_report, search_results);
-                }
-                let apply_time = start_time.elapsed();
-                run_report.add_ruleset_apply_time(ruleset, apply_time);
-            }
-        }
-    }
-
     fn step_rules(&mut self, ruleset: Symbol) -> RunReport {
-        let n_unions_before = self.unionfind.n_unions();
-        let mut run_report = Default::default();
-        let mut search_results = HashMap::<Symbol, SearchResult>::default();
-        self.search_rules(ruleset, &mut run_report, &mut search_results);
-        self.apply_rules(ruleset, &mut run_report, &search_results);
-        let old_updated = self.did_change_tables() || n_unions_before != self.unionfind.n_unions();
-        run_report.updated |= old_updated;
-
-        {
-            fn collect_rule_ids(
-                ruleset: Symbol,
-                rulesets: &IndexMap<Symbol, Ruleset>,
-                ids: &mut Vec<egglog_bridge::RuleId>,
-            ) {
-                match &rulesets[&ruleset] {
-                    Ruleset::Rules(_, rules) => {
-                        for (_, id, _) in rules.values() {
-                            ids.push(*id);
-                        }
+        fn collect_rule_ids(
+            ruleset: Symbol,
+            rulesets: &IndexMap<Symbol, Ruleset>,
+            ids: &mut Vec<egglog_bridge::RuleId>,
+        ) {
+            match &rulesets[&ruleset] {
+                Ruleset::Rules(rules) => {
+                    for id in rules.values() {
+                        ids.push(*id);
                     }
-                    Ruleset::Combined(_, sub_rulesets) => {
-                        for sub_ruleset in sub_rulesets {
-                            collect_rule_ids(*sub_ruleset, rulesets, ids);
-                        }
+                }
+                Ruleset::Combined(sub_rulesets) => {
+                    for sub_ruleset in sub_rulesets {
+                        collect_rule_ids(*sub_ruleset, rulesets, ids);
                     }
                 }
             }
-
-            let mut rule_ids = Vec::new();
-            collect_rule_ids(ruleset, &self.rulesets, &mut rule_ids);
-            let new_updated = self.backend.run_rules(&rule_ids).unwrap();
-            assert_eq!(old_updated, new_updated);
         }
 
-        run_report
-    }
+        let mut rule_ids = Vec::new();
+        collect_rule_ids(ruleset, &self.rulesets, &mut rule_ids);
+        let iteration_report = self.backend.run_rules(&rule_ids).unwrap();
+        let IterationReport {
+            changed: updated,
+            rule_reports,
+            search_and_apply_time,
+            merge_time,
+            rebuild_time,
+        } = iteration_report;
 
-    fn did_change_tables(&self) -> bool {
-        for (_name, function) in &self.functions {
-            if function.nodes.max_ts() >= self.timestamp {
-                return true;
-            }
+        let (search_and_apply_time_per_rule, num_matches_per_rule) = rule_reports
+            .into_iter()
+            .map(|(rule, report)| {
+                (
+                    (rule.as_str().into(), report.search_and_apply_time),
+                    (rule.as_str().into(), report.num_matches),
+                )
+            })
+            .unzip();
+
+        let per_ruleset = |x| [(ruleset, x)].into_iter().collect();
+
+        RunReport {
+            updated,
+            search_and_apply_time_per_rule,
+            num_matches_per_rule,
+            search_and_apply_time_per_ruleset: per_ruleset(search_and_apply_time),
+            merge_time_per_ruleset: per_ruleset(merge_time),
+            rebuild_time_per_ruleset: per_ruleset(rebuild_time),
         }
-
-        false
     }
 
     fn add_rule_with_name(
@@ -1123,7 +807,7 @@ impl EGraph {
     ) -> Result<Symbol, Error> {
         let core_rule =
             rule.to_canonicalized_core_rule(&self.type_info, &mut self.parser.symbol_gen)?;
-        let (query, actions) = (&core_rule.body, &core_rule.head);
+        let (query, actions) = (core_rule.body, core_rule.head);
 
         let rule_id = {
             let mut translator = BackendRule::new(
@@ -1136,27 +820,18 @@ impl EGraph {
             translator.build()
         };
 
-        let vars = query.get_vars();
-        let query = self.compile_gj_query(query.clone(), &vars);
-
-        let program = self
-            .compile_actions(&vars, &actions)
-            .map_err(Error::TypeErrors)?;
-        let compiled_rule = CompiledRule { query, program };
         if let Some(rules) = self.rulesets.get_mut(&ruleset) {
             match rules {
-                Ruleset::Rules(_, rules) => {
+                Ruleset::Rules(rules) => {
                     match rules.entry(name) {
                         indexmap::map::Entry::Occupied(_) => {
                             panic!("Rule '{name}' was already present")
                         }
-                        indexmap::map::Entry::Vacant(e) => {
-                            e.insert((compiled_rule, rule_id, core_rule))
-                        }
+                        indexmap::map::Entry::Vacant(e) => e.insert(rule_id),
                     };
                     Ok(name)
                 }
-                Ruleset::Combined(_, _) => Err(Error::CombinedRulesetError(ruleset, rule.span)),
+                Ruleset::Combined(_) => Err(Error::CombinedRulesetError(ruleset, rule.span)),
             }
         } else {
             Err(Error::NoSuchRuleset(ruleset, rule.span))
@@ -1170,69 +845,107 @@ impl EGraph {
             &mut self.parser.symbol_gen,
         )?;
 
-        let new_result = {
-            let mut translator = BackendRule::new(
-                self.backend.new_rule("eval_actions", false),
-                &self.functions,
-                &self.type_info,
-            );
-            translator.actions(&actions)?;
-            let id = translator.build();
-            let result = self.backend.run_rules(&[id]);
-            self.backend.free_rule(id);
-            result
-        };
+        let mut translator = BackendRule::new(
+            self.backend.new_rule("eval_actions", false),
+            &self.functions,
+            &self.type_info,
+        );
+        translator.actions(&actions)?;
+        let id = translator.build();
+        let result = self.backend.run_rules(&[id]);
+        self.backend.free_rule(id);
 
-        let program = self
-            .compile_actions(&Default::default(), &actions)
-            .map_err(Error::TypeErrors)?;
-        let mut stack = vec![];
-        let old_result = self.run_actions(&mut stack, &[], &program);
-
-        match (old_result, new_result) {
-            (Ok(()), Ok(_)) => Ok(()),
-            (Err(e), Err(_)) => Err(e),
-            (old, new) => panic!("backends did not match:\nold={old:?}\nnew={new:?}"),
+        match result {
+            Ok(_) => Ok(()),
+            Err(e) => Err(Error::BackendError(e.to_string())),
         }
     }
 
-    pub fn eval_expr(&mut self, expr: &Expr) -> Result<(ArcSort, core_relations::Value), Error> {
-        let fresh_name = self.parser.symbol_gen.fresh(&"egraph_evalexpr".into());
-        let command = Command::Action(Action::Let(expr.span(), fresh_name, expr.clone()));
-        self.run_program(vec![command])?;
-        // find the table with the same name as the fresh name
-        let func = self.functions.get(&fresh_name).unwrap();
-        let value_new_backend = self.backend.lookup_id(func.new_backend_id, &[]).unwrap();
+    pub fn eval_expr(&mut self, expr: &Expr) -> Result<(ArcSort, Value), Error> {
+        let span = expr.span();
+        let command = Command::Action(Action::Expr(span.clone(), expr.clone()));
+        let resolved_commands = self.process_command(command)?;
+        assert_eq!(resolved_commands.len(), 1);
+        let resolved_command = resolved_commands.into_iter().next().unwrap();
+        let resolved_expr = match resolved_command {
+            ResolvedNCommand::CoreAction(ResolvedAction::Expr(_, resolved_expr)) => resolved_expr,
+            _ => unreachable!(),
+        };
+        let sort = resolved_expr.output_type();
+        let value = self.eval_resolved_expr(span, &resolved_expr)?;
+        Ok((sort, value))
+    }
 
-        let value = func.nodes.get(&[]).unwrap().value;
+    fn eval_resolved_expr(&mut self, span: Span, expr: &ResolvedExpr) -> Result<Value, Error> {
+        let unit_id = self.backend.primitives().get_ty::<()>();
+        let unit_val = self.backend.primitives().get(());
 
-        let sort = func.schema.output.clone();
+        let result: egglog_bridge::SideChannel<Value> = Default::default();
+        let result_ref = result.clone();
+        let ext_id = self
+            .backend
+            .register_external_func(make_external_func(move |_es, vals| {
+                debug_assert!(vals.len() == 1);
+                *result_ref.lock().unwrap() = Some(vals[0]);
+                Some(unit_val)
+            }));
 
-        // to be removed once the old backend is gone
-        if sort.name().as_str() == "i64" {
-            let value_new_backend: &i64 = &self.backend.primitives().unwrap_ref(value_new_backend);
-            assert_eq!(value_new_backend, &(value.bits as i64));
-        } else if sort.name().as_str() == "String" {
-            let symbol_new: &Symbol = &self.backend.primitives().unwrap_ref(value_new_backend);
-            let string_sort = self.get_sort::<StringSort>();
-            let symbol_old = &Symbol::load(&string_sort, &value);
-            assert_eq!(symbol_new, symbol_old);
-        }
+        let mut translator = BackendRule::new(
+            self.backend.new_rule("eval_resolved_expr", false),
+            &self.functions,
+            &self.type_info,
+        );
 
-        Ok((sort, value_new_backend))
+        let result_var = ResolvedVar {
+            name: self
+                .parser
+                .symbol_gen
+                .fresh(&Symbol::from("eval_resolved_expr")),
+            sort: expr.output_type(),
+            is_global_ref: false,
+        };
+        let actions = ResolvedActions::singleton(ResolvedAction::Let(
+            span.clone(),
+            result_var.clone(),
+            expr.clone(),
+        ));
+        let actions = actions
+            .to_core_actions(
+                &self.type_info,
+                &mut Default::default(),
+                &mut self.parser.symbol_gen,
+            )?
+            .0;
+        translator.actions(&actions)?;
+
+        let arg = translator.entry(&ResolvedAtomTerm::Var(span.clone(), result_var));
+        translator.rb.call_external_func(
+            ext_id,
+            &[arg],
+            egglog_bridge::ColumnTy::Primitive(unit_id),
+            "this function will never panic",
+        );
+
+        let id = translator.build();
+        let _ = self.backend.run_rules(&[id]).unwrap();
+        self.backend.free_rule(id);
+        self.backend.free_external_func(ext_id);
+
+        let result = result.lock().unwrap().unwrap();
+        Ok(result)
     }
 
     fn add_combined_ruleset(&mut self, name: Symbol, rulesets: Vec<Symbol>) {
         match self.rulesets.entry(name) {
             Entry::Occupied(_) => panic!("Ruleset '{name}' was already present"),
-            Entry::Vacant(e) => e.insert(Ruleset::Combined(name, rulesets)),
+            Entry::Vacant(e) => e.insert(Ruleset::Combined(rulesets)),
         };
     }
 
     fn add_ruleset(&mut self, name: Symbol) {
         match self.rulesets.entry(name) {
             Entry::Occupied(_) => panic!("Ruleset '{name}' was already present"),
-            Entry::Vacant(e) => e.insert(Ruleset::Rules(name, Default::default())),
+            Entry::Vacant(e) => e.insert(Ruleset::Rules(Default::default())),
         };
     }
 
@@ -1259,49 +972,35 @@ impl EGraph {
             rule.to_canonicalized_core_rule(&self.type_info, &mut self.parser.symbol_gen)?;
         let query = core_rule.body;
 
-        let new_matched = {
-            let ext_sc = egglog_bridge::SideChannel::default();
-            let ext_sc_ref = ext_sc.clone();
-            let ext_id = self
-                .backend
-                .register_external_func(core_relations::make_external_func(move |_, _| {
-                    *ext_sc_ref.lock().unwrap() = Some(());
-                    Some(core_relations::Value::new_const(0))
-                }));
+        let ext_sc = egglog_bridge::SideChannel::default();
+        let ext_sc_ref = ext_sc.clone();
+        let ext_id = self
+            .backend
+            .register_external_func(make_external_func(move |_, _| {
+                *ext_sc_ref.lock().unwrap() = Some(());
+                Some(Value::new_const(0))
+            }));
 
-            let mut translator = BackendRule::new(
-                self.backend.new_rule("check_facts", false),
-                &self.functions,
-                &self.type_info,
-            );
-            translator.query(&query, true);
-            translator.rb.call_external_func(
-                ext_id,
-                &[],
-                egglog_bridge::ColumnTy::Id,
-                "this function will never panic",
-            );
-            let id = translator.build();
-            let _ = self.backend.run_rules(&[id]).unwrap();
-            self.backend.free_rule(id);
+        let mut translator = BackendRule::new(
+            self.backend.new_rule("check_facts", false),
+            &self.functions,
+            &self.type_info,
+        );
+        translator.query(&query, true);
+        translator.rb.call_external_func(
+            ext_id,
+            &[],
+            egglog_bridge::ColumnTy::Id,
+            "this function will never panic",
+        );
+        let id = translator.build();
+        let _ = self.backend.run_rules(&[id]).unwrap();
+        self.backend.free_rule(id);
 
-            self.backend.free_external_func(ext_id);
+        self.backend.free_external_func(ext_id);
 
-            let ext_sc_val = ext_sc.lock().unwrap().take();
-            matches!(ext_sc_val, Some(()))
-        };
-
-        let ordering = &query.get_vars();
-        let query = self.compile_gj_query(query, ordering);
-
-        let mut matched = false;
-        self.run_query(&query, 0, true, |values| {
-            assert_eq!(values.len(), query.vars.len());
-            matched = true;
-            Err(())
-        });
-
-        assert_eq!(matched, new_matched);
+        let ext_sc_val = ext_sc.lock().unwrap().take();
+        let matched = matches!(ext_sc_val, Some(()));
 
         if !matched {
             Err(Error::CheckError(
@@ -1348,7 +1047,7 @@ impl EGraph {
                 let report = self.run_schedule(&sched);
                 log::info!("Ran schedule {}.", sched);
                 log::info!("Report: {}", report);
-                self.overall_run_report = self.overall_run_report.union(&report);
+                self.overall_run_report.union(&report);
                 self.recent_run_report = Some(report);
             }
             ResolvedNCommand::PrintOverallStatistics => {
@@ -1367,6 +1066,65 @@ impl EGraph {
                     self.eval_actions(&ResolvedActions::new(vec![action.clone()]))?;
                 }
             },
+            ResolvedNCommand::Extract(span, expr, variants) => {
+                let sort = expr.output_type();
+
+                let x = self.eval_resolved_expr(span.clone(), &expr)?;
+                let n = self.eval_resolved_expr(span, &variants)?;
+                let n: i64 = self.backend.primitives().unwrap(n);
+
+                let mut termdag = TermDag::default();
+
+                let extractor = Extractor::compute_costs_from_rootsorts(
+                    Some(vec![sort]),
+                    self,
+                    TreeAdditiveCostModel::default(),
+                );
+                if n == 0 {
+                    if let Some((cost, term)) = extractor.extract_best(self, &mut termdag, x) {
+                        // dont turn termdag into a string if we have messages disabled for performance reasons
+                        if self.messages_enabled() {
+                            let extracted = termdag.to_string(&term);
+                            log::info!("extracted with cost {cost}: {extracted}");
+                            self.print_msg(extracted);
+                        }
+                        self.extract_report = Some(ExtractReport::Best {
+                            termdag,
+                            cost,
+                            term,
+                        });
+                    } else {
+                        return Err(Error::ExtractError(
+                            "Unable to find any valid extraction (likely due to subsume or delete)"
+                                .to_string(),
+                        ));
+                    }
+                } else {
+                    if n < 0 {
+                        panic!("Cannot extract negative number of variants");
+                    }
+                    let terms: Vec<Term> = extractor
+                        .extract_variants(self, &mut termdag, x, n as usize)
+                        .iter()
+                        .map(|e| e.1.clone())
+                        .collect();
+                    // Same as above, avoid turning termdag into a string if we have messages disabled for performance
+                    if self.messages_enabled() {
+                        log::info!("extracted variants:");
+                        let mut msg = String::default();
+                        msg += "(\n";
+                        assert!(!terms.is_empty());
+                        for expr in &terms {
+                            let str = termdag.to_string(expr);
+                            log::info!("   {str}");
+                            msg += &format!("   {str}\n");
+                        }
+                        msg += ")";
+                        self.print_msg(msg);
+                    }
+                    self.extract_report = Some(ExtractReport::Variants { termdag, terms });
+                }
+            }
             ResolvedNCommand::Push(n) => {
                 (0..n).for_each(|_| self.push());
                 log::info!("Pushed {n} levels.")
@@ -1426,101 +1184,30 @@ impl EGraph {
                     .open(&filename)
                     .map_err(|e| Error::IoError(filename.clone(), e, span.clone()))?;
 
-                let unit_id = self.backend.primitives().get_ty::<()>();
-                let unit_val = self.backend.primitives().get(());
-
-                let results: Arc<Mutex<Vec<core_relations::Value>>> = Default::default();
-                let results_ref = results.clone();
-                let ext_id =
-                    self.backend
-                        .register_external_func(core_relations::make_external_func(
-                            move |_es, vals| {
-                                debug_assert!(vals.len() == 1);
-                                results_ref.lock().unwrap().push(vals[0]);
-                                Some(unit_val)
-                            },
-                        ));
-
-                let mut translator = BackendRule::new(
-                    self.backend.new_rule("outputs", false),
-                    &self.functions,
-                    &self.type_info,
+                let extractor = Extractor::compute_costs_from_rootsorts(
+                    None,
+                    self,
+                    TreeAdditiveCostModel::default(),
                 );
-                let expr_types = exprs.iter().map(|e| e.output_type()).collect::<Vec<_>>();
-                for expr in exprs {
-                    let result_var = ResolvedVar {
-                        name: self
-                            .parser
-                            .symbol_gen
-                            .fresh(&Symbol::from("__egglog_output")),
-                        sort: expr.output_type(),
-                        is_global_ref: false,
-                    };
-                    let actions = ResolvedActions::singleton(ResolvedAction::Let(
-                        span.clone(),
-                        result_var.clone(),
-                        expr,
-                    ));
-                    let actions = actions
-                        .to_core_actions(
-                            &self.type_info,
-                            &mut Default::default(),
-                            &mut self.parser.symbol_gen,
-                        )?
-                        .0;
-                    translator.actions(&actions)?;
-                    let arg = translator.entry(&ResolvedAtomTerm::Var(span.clone(), result_var));
-                    translator.rb.call_external_func(
-                        ext_id,
-                        &[arg],
-                        egglog_bridge::ColumnTy::Primitive(unit_id),
-                        "this function will never panic",
-                    );
-                }
-                let id = translator.build();
-                let _ = self.backend.run_rules(&[id]).unwrap();
-                self.backend.free_rule(id);
-                self.backend.free_external_func(ext_id);
+                let mut termdag: TermDag = Default::default();
 
-                let results: Vec<_> = std::mem::take(results.lock().unwrap().as_mut());
                 use std::io::Write;
-                for (value, expr_type) in results.into_iter().zip(expr_types) {
-                    // hack before extraction for the new backend gets merged:
-                    if !expr_type.is_container_sort() && !expr_type.is_eq_sort() {
-                        let primitive_id = self
-                            .backend
-                            .primitives()
-                            .get_ty_by_id(expr_type.value_type().unwrap());
-                        let formatted_val = PrimitivePrinter {
-                            prim: self.backend.primitives(),
-                            ty: primitive_id,
-                            val: value,
-                        };
-                        writeln!(f, "{:?}", formatted_val)
-                            .map_err(|e| Error::IoError(filename.clone(), e, span.clone()))?
-                    } else {
-                        todo!("handle the general case with extract")
-                        // let term = self.extract(value, &mut termdag, &expr_type)?.1;
-                        // use std::io::Write;
-                        // writeln!(f, "{}", termdag.to_string(&term))
-                        //     .map_err(|e| Error::IoError(filename.clone(), e, span.clone()))?;
-                    }
+                for expr in exprs {
+                    let value = self.eval_resolved_expr(span.clone(), &expr)?;
+                    let expr_type = expr.output_type();
+
+                    let term = extractor
+                        .extract_best_with_sort(self, &mut termdag, value, expr_type)
+                        .unwrap()
+                        .1;
+                    writeln!(f, "{}", termdag.to_string(&term))
+                        .map_err(|e| Error::IoError(filename.clone(), e, span.clone()))?;
                 }
 
                 log::info!("Output to '{filename:?}'.")
             }
         };
 
-        let post_rebuild = Instant::now();
-        let rebuild_num = self.rebuild()?;
-        if rebuild_num > 0 {
-            log::info!(
-                "Rebuild after command: {:10}ms",
-                post_rebuild.elapsed().as_millis()
-            );
-        }
-
-        self.debug_assert_invariants();
         Ok(())
     }
 
@@ -1601,12 +1288,6 @@ impl EGraph {
         Ok(())
     }
 
-    pub fn clear(&mut self) {
-        for f in self.functions.values_mut() {
-            f.clear();
-        }
-    }
-
     fn process_command(&mut self, command: Command) -> Result<Vec<ResolvedNCommand>, Error> {
         let program = desugar::desugar_program(vec![command], &mut self.parser, self.seminaive)?;
 
@@ -1673,7 +1354,10 @@ impl EGraph {
     }
 
     pub fn num_tuples(&self) -> usize {
-        self.functions.values().map(|f| f.nodes.len()).sum()
+        self.functions
+            .values()
+            .map(|f| self.backend.table_size(f.backend_id))
+            .sum()
     }
 
     /// Returns a sort based on the type.
@@ -1728,7 +1412,7 @@ impl EGraph {
 }
 
 struct BackendRule<'a> {
-    pub rb: egglog_bridge::RuleBuilder<'a>,
+    rb: egglog_bridge::RuleBuilder<'a>,
     entries: HashMap<core::ResolvedAtomTerm, QueryEntry>,
     functions: &'a IndexMap<Symbol, Function>,
     type_info: &'a TypeInfo,
@@ -1764,7 +1448,7 @@ impl<'a> BackendRule<'a> {
     }
 
     fn func(&self, f: &typechecking::FuncType) -> egglog_bridge::FunctionId {
-        self.functions[&f.name].new_backend_id
+        self.functions[&f.name].backend_id
     }
 
     fn prim(
@@ -1813,10 +1497,11 @@ impl<'a> BackendRule<'a> {
                 .map(|s| s.is_eq_sort() || s.is_eq_container_sort())
                 .collect();
 
-            qe_args[0] = self
-                .rb
-                .egraph()
-                .primitive_constant(ResolvedFunction { id, do_rebuild });
+            qe_args[0] = self.rb.egraph().primitive_constant(ResolvedFunction {
+                id,
+                do_rebuild,
+                name,
+            });
         }
 
         (
@@ -1917,7 +1602,6 @@ impl<'a> BackendRule<'a> {
                     self.rb.union(x, y)
                 }
                 core::GenericCoreAction::Panic(_, message) => self.rb.panic(message.clone()),
-                core::GenericCoreAction::Extract(_, _x, _n) => todo!("no extraction yet"),
             }
         }
         Ok(())
@@ -1938,7 +1622,7 @@ fn literal_to_entry(egraph: &egglog_bridge::EGraph, l: &Literal) -> QueryEntry {
     }
 }
 
-fn literal_to_value(egraph: &egglog_bridge::EGraph, l: &Literal) -> core_relations::Value {
+fn literal_to_value(egraph: &egglog_bridge::EGraph, l: &Literal) -> Value {
     match l {
         Literal::Int(x) => egraph.primitives().get::<i64>(*x),
         Literal::Float(x) => egraph.primitives().get::<sort::F>(*x),
@@ -1968,10 +1652,8 @@ pub enum Error {
     NoSuchRuleset(Symbol, Span),
     #[error("{1}\nAttempted to add a rule to combined ruleset {0}. Combined rulesets may only depend on other rulesets.")]
     CombinedRulesetError(Symbol, Span),
-    #[error("Evaluating primitive {0:?} failed. ({0:?} {:?})", ListDebug(.1, " "))]
-    PrimitiveError(Primitive, Vec<Value>),
-    #[error("Illegal merge attempted for function {0}, {1:?} != {2:?}")]
-    MergeError(Symbol, Value, Value),
+    #[error("{0}")]
+    BackendError(String),
     #[error("{0}\nTried to pop too much")]
     Pop(Span),
     #[error("{0}\nCommand should have failed.")]
@@ -1981,7 +1663,7 @@ pub enum Error {
     #[error("Cannot subsume function with merge: {0}")]
     SubsumeMergeError(Symbol),
     #[error("extraction failure: {:?}", .0)]
-    ExtractError(Value),
+    ExtractError(String),
     #[error("{1}\n{2}\nShadowing is not allowed, but found {0}")]
     Shadowing(Symbol, Span, Span),
 }
@@ -2002,7 +1684,7 @@ mod tests {
         vec: Arc<VecSort>,
     }
 
-    impl PrimitiveLike for InnerProduct {
+    impl Primitive for InnerProduct {
         fn name(&self) -> symbol_table::GlobalSymbol {
             "inner-product".into()
         }
@@ -2016,39 +1698,15 @@ mod tests {
             .into_box()
         }
 
-        fn apply(
-            &self,
-            values: &[Value],
-            _sorts: (&[ArcSort], &ArcSort),
-            _egraph: Option<&mut EGraph>,
-        ) -> Option<Value> {
-            let mut sum = 0;
-            let vec1 = VecContainer::load(&self.vec, &values[0]);
-            let vec2 = VecContainer::load(&self.vec, &values[1]);
-            assert_eq!(vec1.data.len(), vec2.data.len());
-            for (a, b) in vec1.data.iter().zip(vec2.data.iter()) {
-                let a = i64::load(&self.ele, a);
-                let b = i64::load(&self.ele, b);
-                sum += a * b;
-            }
-            Some(sum.store(&self.ele))
-        }
-    }
-
-    impl ExternalFunction for InnerProduct {
-        fn invoke(
-            &self,
-            exec_state: &mut core_relations::ExecutionState<'_>,
-            args: &[core_relations::Value],
-        ) -> Option<core_relations::Value> {
+        fn apply(&self, exec_state: &mut ExecutionState<'_>, args: &[Value]) -> Option<Value> {
             let mut sum = 0;
             let vec1 = exec_state
                 .containers()
-                .get_val::<VecContainer<_>>(args[0])
+                .get_val::<VecContainer>(args[0])
                 .unwrap();
             let vec2 = exec_state
                 .containers()
-                .get_val::<VecContainer<_>>(args[1])
+                .get_val::<VecContainer>(args[1])
                 .unwrap();
             assert_eq!(vec1.data.len(), vec2.data.len());
             for (a, b) in vec1.data.iter().zip(vec2.data.iter()) {
@@ -2087,7 +1745,130 @@ mod tests {
             .unwrap();
     }
 
+    // Test that `EGraph` is `Send` and `Sync`
     lazy_static! {
         pub static ref RT: Mutex<EGraph> = Mutex::new(EGraph::default());
+    }
+
+    fn get_function(egraph: &EGraph, name: &str) -> Function {
+        egraph.functions.get(&Symbol::from(name)).unwrap().clone()
+    }
+
+    fn get_value(egraph: &EGraph, name: &str) -> Value {
+        let mut out = None;
+        let id = get_function(egraph, name).backend_id;
+        egraph.backend.for_each(id, |row| out = Some(row.vals[0]));
+        out.unwrap()
+    }
+
+    #[test]
+    fn test_subsumed_unextractable_rebuild_arg() {
+        // Tests that a term stays unextractable even after a rebuild after a union would change the value of one of its args
+        let mut egraph = EGraph::default();
+
+        egraph
+            .parse_and_run_program(
+                None,
+                r#"
+                (datatype Math)
+                (constructor container (Math) Math)
+                (constructor exp () Math :cost 100)
+                (constructor cheap () Math)
+                (constructor cheap-1 () Math)
+                ; we make the container cheap so that it will be extracted if possible, but then we mark it as subsumed
+                ; so the (exp) expr should be extracted instead
+                (let res (container (cheap)))
+                (union res (exp))
+                (cheap)
+                (cheap-1)
+                (subsume (container (cheap)))
+                "#,
+            ).unwrap();
+        // At this point (cheap) and (cheap-1) should have different values, because they aren't unioned
+        let orig_cheap_value = get_value(&egraph, "cheap");
+        let orig_cheap_1_value = get_value(&egraph, "cheap-1");
+        assert_ne!(orig_cheap_value, orig_cheap_1_value);
+        // Then we can union them
+        egraph
+            .parse_and_run_program(
+                None,
+                r#"
+                (union (cheap-1) (cheap))
+                "#,
+            )
+            .unwrap();
+        // And verify that their values are now the same and different from the original (cheap) value.
+        let new_cheap_value = get_value(&egraph, "cheap");
+        let new_cheap_1_value = get_value(&egraph, "cheap-1");
+        assert_eq!(new_cheap_value, new_cheap_1_value);
+        assert!(new_cheap_value != orig_cheap_value || new_cheap_1_value != orig_cheap_1_value);
+        // Now verify that if we extract, it still respects the unextractable, even though it's a different values now
+        egraph
+            .parse_and_run_program(
+                None,
+                r#"
+                (extract res)
+                "#,
+            )
+            .unwrap();
+        let report = egraph.get_extract_report().clone().unwrap();
+        let ExtractReport::Best { term, termdag, .. } = report else {
+            panic!();
+        };
+        let span = span!();
+        let expr = termdag.term_to_expr(&term, span.clone());
+        assert_eq!(expr, Expr::Call(span, Symbol::from("exp"), vec![]));
+    }
+
+    #[test]
+    fn test_subsumed_unextractable_rebuild_self() {
+        // Tests that a term stays unextractable even after a rebuild after a union change its output value.
+        let mut egraph = EGraph::default();
+
+        egraph
+            .parse_and_run_program(
+                None,
+                r#"
+                (datatype Math)
+                (constructor container (Math) Math)
+                (constructor exp () Math :cost 100)
+                (constructor cheap () Math)
+                (exp)
+                (let x (cheap))
+                (subsume (cheap))
+                "#,
+            )
+            .unwrap();
+
+        let orig_cheap_value = get_value(&egraph, "cheap");
+        // Then we can union them
+        egraph
+            .parse_and_run_program(
+                None,
+                r#"
+                (union (exp) x)
+                "#,
+            )
+            .unwrap();
+        // And verify that the cheap value is now different
+        let new_cheap_value = get_value(&egraph, "cheap");
+        assert_ne!(new_cheap_value, orig_cheap_value);
+
+        // Now verify that if we extract, it still respects the subsumption, even though it's a different values now
+        egraph
+            .parse_and_run_program(
+                None,
+                r#"
+                (extract x)
+                "#,
+            )
+            .unwrap();
+        let report = egraph.get_extract_report().clone().unwrap();
+        let ExtractReport::Best { term, termdag, .. } = report else {
+            panic!();
+        };
+        let span = span!();
+        let expr = termdag.term_to_expr(&term, span.clone());
+        assert_eq!(expr, Expr::Call(span, Symbol::from("exp"), vec![]));
     }
 }

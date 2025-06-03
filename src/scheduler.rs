@@ -75,12 +75,11 @@ impl EGraph {
         self.schedulers = schedulers;
         RunReport {
             updated: true,
-            search_time_per_rule: Default::default(),
-            apply_time_per_rule: Default::default(),
-            search_time_per_ruleset: Default::default(),
             num_matches_per_rule: Default::default(),
-            apply_time_per_ruleset: Default::default(),
             rebuild_time_per_ruleset: Default::default(),
+            search_and_apply_time_per_rule: Default::default(),
+            search_and_apply_time_per_ruleset: Default::default(),
+            merge_time_per_ruleset: Default::default(),
         }
     }
 }

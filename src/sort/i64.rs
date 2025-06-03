@@ -78,35 +78,22 @@ impl Sort for I64Sort {
         });
     }
 
-    fn extract_term(
-        &self,
-        _egraph: &EGraph,
-        value: Value,
-        _extractor: &Extractor,
-        termdag: &mut TermDag,
-    ) -> Option<(Cost, Term)> {
-        Some((1, termdag.lit(Literal::Int(value.bits as _))))
-    }
-
     fn value_type(&self) -> Option<TypeId> {
         Some(TypeId::of::<i64>())
+    }
+
+    fn reconstruct_termdag_leaf(
+        &self,
+        primitives: &Primitives,
+        value: Value,
+        termdag: &mut TermDag,
+    ) -> Term {
+        let i = primitives.unwrap_ref::<i64>(value);
+
+        termdag.lit(Literal::Int(*i))
     }
 }
 
 impl IntoSort for i64 {
     type Sort = I64Sort;
-    fn store(self, _sort: &Self::Sort) -> Value {
-        Value {
-            #[cfg(debug_assertions)]
-            tag: I64Sort.name(),
-            bits: self as u64,
-        }
-    }
-}
-
-impl FromSort for i64 {
-    type Sort = I64Sort;
-    fn load(_sort: &Self::Sort, value: &Value) -> Self {
-        value.bits as Self
-    }
 }

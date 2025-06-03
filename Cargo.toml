@@ -37,7 +37,7 @@ bin = [
 ]
 serde = ["egraph-serialize/serde"]
 graphviz = ["egraph-serialize/graphviz"]
-wasm-bindgen = ["instant/wasm-bindgen", "dep:getrandom"]
+wasm-bindgen = ["dep:getrandom"]
 nondeterministic = []
 
 [dependencies]
@@ -48,22 +48,22 @@ env_logger = { version = "0.10", optional = true }
 hashbrown = { version = "0.15" }
 im-rc = "15.1.0"
 indexmap = "2.0"
-instant = "0.1"
 lazy_static = "1.4"
 log = "0.4"
 num = "0.4.3"
 ordered-float = { version = "3.7" }
 rustc-hash = "1.1"
-smallvec = "1.11"
 symbol_table = { version = "0.4.0", features = ["global"] }
 thiserror = "1"
+web-time = "1.1"
 dyn-clone = "1.0.17"
+
 
 # Backend
 # TODO: move egglog-backend repo into core egglog repo
-core-relations = { git = "https://github.com/egraphs-good/egglog-backend.git", rev = "e1c938d" }
-egglog-bridge = { git = "https://github.com/egraphs-good/egglog-backend.git", rev = "e1c938d" }
-numeric-id = { git = "https://github.com/egraphs-good/egglog-backend.git", rev = "e1c938d" }
+core-relations = { git = "https://github.com/egraphs-good/egglog-backend.git", rev = "38c2c0e" }
+egglog-bridge = { git = "https://github.com/egraphs-good/egglog-backend.git", rev = "38c2c0e" }
+numeric-id = { git = "https://github.com/egraphs-good/egglog-backend.git", rev = "38c2c0e" }
 
 # Need to add "js" feature for "graphviz-rust" to work in wasm
 getrandom = { version = "0.2.10", optional = true, features = ["js"] }

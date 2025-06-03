@@ -2,12 +2,12 @@ use super::*;
 use inner::MultiSet;
 
 #[derive(Clone, Debug, PartialEq, Eq, Hash)]
-pub struct MultiSetContainer<V: Clone + Hash + Ord> {
+pub struct MultiSetContainer {
     do_rebuild: bool,
-    pub data: MultiSet<V>,
+    pub data: MultiSet<Value>,
 }
 
-impl Container for MultiSetContainer<core_relations::Value> {
+impl Container for MultiSetContainer {
     fn rebuild_contents(&mut self, rebuilder: &dyn Rebuilder) -> bool {
         if self.do_rebuild {
             let mut xs: Vec<_> = self.data.iter().copied().collect();
@@ -18,7 +18,7 @@ impl Container for MultiSetContainer<core_relations::Value> {
             false
         }
     }
-    fn iter(&self) -> impl Iterator<Item = core_relations::Value> + '_ {
+    fn iter(&self) -> impl Iterator<Item = Value> + '_ {
         self.data.iter().copied()
     }
 }
@@ -27,7 +27,6 @@ impl Container for MultiSetContainer<core_relations::Value> {
 pub struct MultiSetSort {
     name: Symbol,
     element: ArcSort,
-    multisets: Mutex<IndexSet<MultiSetContainer<Value>>>,
 }
 
 impl MultiSetSort {
@@ -75,7 +74,6 @@ impl Presort for MultiSetSort {
             Ok(Arc::new(Self {
                 name,
                 element: e.clone(),
-                multisets: Default::default(),
             }))
         } else {
             panic!()
@@ -93,7 +91,11 @@ impl Sort for MultiSetSort {
     }
 
     fn register_type(&self, backend: &mut egglog_bridge::EGraph) {
-        backend.register_container_ty::<MultiSetContainer<core_relations::Value>>();
+        backend.register_container_ty::<MultiSetContainer>();
+    }
+
+    fn inner_sorts(&self) -> Vec<ArcSort> {
+        vec![self.element.clone()]
     }
 
     fn as_arc_any(self: Arc<Self>) -> Arc<dyn Any + Send + Sync + 'static> {
@@ -108,15 +110,9 @@ impl Sort for MultiSetSort {
         self.element.is_eq_sort()
     }
 
-    fn inner_values(
-        &self,
-        egraph: &EGraph,
-        value: &core_relations::Value,
-    ) -> Vec<(ArcSort, core_relations::Value)> {
-        let val = egraph
-            .backend
-            .containers()
-            .get_val::<MultiSetContainer<core_relations::Value>>(*value)
+    fn inner_values(&self, containers: &Containers, value: Value) -> Vec<(ArcSort, Value)> {
+        let val = containers
+            .get_val::<MultiSetContainer>(value)
             .unwrap()
             .clone();
         val.data
@@ -125,49 +121,18 @@ impl Sort for MultiSetSort {
             .collect()
     }
 
-    fn old_inner_values(&self, value: &Value) -> Vec<(ArcSort, Value)> {
-        let multisets = self.multisets.lock().unwrap();
-        let multiset = multisets.get_index(value.bits as usize).unwrap();
-        multiset
-            .data
-            .iter()
-            .map(|k| (self.element.clone(), *k))
-            .collect()
-    }
-
-    fn canonicalize(&self, value: &mut Value, unionfind: &UnionFind) -> bool {
-        let multisets = self.multisets.lock().unwrap();
-        let multiset = multisets.get_index(value.bits as usize).unwrap().clone();
-        let mut changed = false;
-        let new_multiset = MultiSetContainer {
-            do_rebuild: multiset.do_rebuild,
-            data: multiset
-                .data
-                .iter()
-                .map(|e| {
-                    let mut e = *e;
-                    changed |= self.element.canonicalize(&mut e, unionfind);
-                    e
-                })
-                .collect(),
-        };
-        drop(multisets);
-        *value = new_multiset.store(self);
-        changed
-    }
-
     fn register_primitives(self: Arc<Self>, eg: &mut EGraph) {
-        add_primitive!(eg, "multiset-of" = [xs: # (self.element())] -> @MultiSetContainer<Value> (self.clone()) { MultiSetContainer { do_rebuild: self.__y.is_eq_container_sort(), data: xs.collect() } });
+        add_primitive!(eg, "multiset-of" = [xs: # (self.element())] -> @MultiSetContainer (self.clone()) { MultiSetContainer { do_rebuild: self.__y.is_eq_container_sort(), data: xs.collect() } });
 
-        add_primitive!(eg, "multiset-pick" = |xs: @MultiSetContainer<Value> (self.clone())| -> # (self.element()) { *xs.data.pick().expect("Cannot pick from an empty multiset") });
-        add_primitive!(eg, "multiset-insert" = |mut xs: @MultiSetContainer<Value> (self.clone()), x: # (self.element())| -> @MultiSetContainer<Value> (self.clone()) { MultiSetContainer { data: xs.data.insert( x) , ..xs } });
-        add_primitive!(eg, "multiset-remove" = |mut xs: @MultiSetContainer<Value> (self.clone()), x: # (self.element())| -> @MultiSetContainer<Value> (self.clone()) { MultiSetContainer { data: xs.data.remove(&x)?, ..xs } });
+        add_primitive!(eg, "multiset-pick" = |xs: @MultiSetContainer (self.clone())| -> # (self.element()) { *xs.data.pick().expect("Cannot pick from an empty multiset") });
+        add_primitive!(eg, "multiset-insert" = |mut xs: @MultiSetContainer (self.clone()), x: # (self.element())| -> @MultiSetContainer (self.clone()) { MultiSetContainer { data: xs.data.insert( x) , ..xs } });
+        add_primitive!(eg, "multiset-remove" = |mut xs: @MultiSetContainer (self.clone()), x: # (self.element())| -> @MultiSetContainer (self.clone()) { MultiSetContainer { data: xs.data.remove(&x)?, ..xs } });
 
-        add_primitive!(eg, "multiset-length"       = |xs: @MultiSetContainer<Value> (self.clone())| -> i64 { xs.data.len() as i64 });
-        add_primitive!(eg, "multiset-contains"     = |xs: @MultiSetContainer<Value> (self.clone()), x: # (self.element())| -?> () { ( xs.data.contains(&x)).then_some(()) });
-        add_primitive!(eg, "multiset-not-contains" = |xs: @MultiSetContainer<Value> (self.clone()), x: # (self.element())| -?> () { (!xs.data.contains(&x)).then_some(()) });
+        add_primitive!(eg, "multiset-length"       = |xs: @MultiSetContainer (self.clone())| -> i64 { xs.data.len() as i64 });
+        add_primitive!(eg, "multiset-contains"     = |xs: @MultiSetContainer (self.clone()), x: # (self.element())| -?> () { ( xs.data.contains(&x)).then_some(()) });
+        add_primitive!(eg, "multiset-not-contains" = |xs: @MultiSetContainer (self.clone()), x: # (self.element())| -?> () { (!xs.data.contains(&x)).then_some(()) });
 
-        add_primitive!(eg, "multiset-sum" = |xs: @MultiSetContainer<Value> (self.clone()), ys: @MultiSetContainer<Value> (self.clone())| -> @MultiSetContainer<Value> (self.clone()) { MultiSetContainer { data: xs.data.sum(ys.data), ..xs } });
+        add_primitive!(eg, "multiset-sum" = |xs: @MultiSetContainer (self.clone()), ys: @MultiSetContainer (self.clone())| -> @MultiSetContainer (self.clone()) { MultiSetContainer { data: xs.data.sum(ys.data), ..xs } });
 
         // Only include map function if we already declared a function sort with the correct signature
         let fn_sorts = eg.type_info.get_sorts_by(|s: &Arc<FunctionSort>| {
@@ -186,52 +151,27 @@ impl Sort for MultiSetSort {
         }
     }
 
-    fn extract_term(
+    fn reconstruct_termdag_container(
         &self,
-        _egraph: &EGraph,
-        value: Value,
-        extractor: &Extractor,
+        _containers: &Containers,
+        _value: Value,
         termdag: &mut TermDag,
-    ) -> Option<(Cost, Term)> {
-        let multiset = MultiSetContainer::load(self, &value);
-        let mut children = vec![];
-        let mut cost = 0usize;
-        for e in multiset.data.iter() {
-            let (child_cost, child_term) = extractor.find_best(*e, termdag, &self.element)?;
-            cost = cost.saturating_add(child_cost);
-            children.push(child_term);
-        }
-        Some((cost, termdag.app("multiset-of".into(), children)))
+        element_terms: Vec<Term>,
+    ) -> Term {
+        termdag.app("multiset-of".into(), element_terms)
     }
 
-    fn serialized_name(&self, _value: &core_relations::Value) -> Symbol {
+    fn serialized_name(&self, _value: Value) -> Symbol {
         "multiset-of".into()
     }
 
     fn value_type(&self) -> Option<TypeId> {
-        Some(TypeId::of::<MultiSetContainer<core_relations::Value>>())
+        Some(TypeId::of::<MultiSetContainer>())
     }
 }
 
-impl IntoSort for MultiSetContainer<Value> {
+impl IntoSort for MultiSetContainer {
     type Sort = MultiSetSort;
-    fn store(self, sort: &Self::Sort) -> Value {
-        let mut multisets = sort.multisets.lock().unwrap();
-        let (i, _) = multisets.insert_full(self);
-        Value {
-            #[cfg(debug_assertions)]
-            tag: sort.name,
-            bits: i as u64,
-        }
-    }
-}
-
-impl FromSort for MultiSetContainer<Value> {
-    type Sort = MultiSetSort;
-    fn load(sort: &Self::Sort, value: &Value) -> Self {
-        let sets = sort.multisets.lock().unwrap();
-        sets.get_index(value.bits as usize).unwrap().clone()
-    }
 }
 
 #[derive(Clone)]
@@ -241,7 +181,7 @@ struct Map {
     fn_: Arc<FunctionSort>,
 }
 
-impl PrimitiveLike for Map {
+impl Primitive for Map {
     fn name(&self) -> Symbol {
         self.name
     }
@@ -259,41 +199,15 @@ impl PrimitiveLike for Map {
         .into_box()
     }
 
-    fn apply(
-        &self,
-        values: &[Value],
-        _sorts: (&[ArcSort], &ArcSort),
-        egraph: Option<&mut EGraph>,
-    ) -> Option<Value> {
-        let egraph =
-            egraph.unwrap_or_else(|| panic!("`{}` is not supported yet in facts.", self.name));
-        let multiset = MultiSetContainer::load(&self.multiset, &values[1]);
-        let multiset = MultiSetContainer {
-            data: multiset
-                .data
-                .iter()
-                .map(|e| self.fn_.apply(&values[0], &[*e], egraph))
-                .collect(),
-            ..multiset
-        };
-        Some(multiset.store(&self.multiset))
-    }
-}
-
-impl ExternalFunction for Map {
-    fn invoke(
-        &self,
-        exec_state: &mut ExecutionState,
-        args: &[core_relations::Value],
-    ) -> Option<core_relations::Value> {
+    fn apply(&self, exec_state: &mut ExecutionState, args: &[Value]) -> Option<Value> {
         let fc = exec_state
             .containers()
-            .get_val::<NewFunctionContainer>(args[0])
+            .get_val::<FunctionContainer>(args[0])
             .unwrap()
             .clone();
         let multiset = exec_state
             .containers()
-            .get_val::<MultiSetContainer<core_relations::Value>>(args[1])
+            .get_val::<MultiSetContainer>(args[1])
             .unwrap()
             .clone();
         let multiset = MultiSetContainer {

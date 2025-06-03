@@ -13,8 +13,8 @@
 use std::hash::Hasher;
 use std::ops::AddAssign;
 
-use crate::{typechecking::FuncType, HashMap, *};
-use typechecking::TypeError;
+use crate::*;
+use typechecking::{FuncType, PrimitiveWithId, TypeError};
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub(crate) enum HeadOrEq<Head> {
@@ -38,7 +38,7 @@ impl<Head> HeadOrEq<Head> {
 
 #[derive(Debug, Clone)]
 pub(crate) struct SpecializedPrimitive {
-    pub(crate) primitive: Primitive,
+    pub(crate) primitive: PrimitiveWithId,
     pub(crate) input: Vec<ArcSort>,
     pub(crate) output: ArcSort,
 }
@@ -334,7 +334,7 @@ impl std::fmt::Display for Query<ResolvedCall, Symbol> {
                 writeln!(
                     f,
                     "({} {})",
-                    filter.head.primitive.name(),
+                    filter.head.primitive.0.name(),
                     ListDisplay(&filter.args, " ")
                 )?;
             }
@@ -371,7 +371,6 @@ impl<Leaf: Clone> Query<ResolvedCall, Leaf> {
 pub enum GenericCoreAction<Head, Leaf> {
     Let(Span, Leaf, Head, Vec<GenericAtomTerm<Leaf>>),
     LetAtomTerm(Span, Leaf, GenericAtomTerm<Leaf>),
-    Extract(Span, GenericAtomTerm<Leaf>, GenericAtomTerm<Leaf>),
     Set(
         Span,
         Head,
@@ -444,10 +443,6 @@ where
                 GenericCoreAction::LetAtomTerm(_span, v, at) => {
                     add_from_atom(&mut free_vars, at);
                     free_vars.swap_remove(v);
-                }
-                GenericCoreAction::Extract(_span, at, at1) => {
-                    add_from_atom(&mut free_vars, at);
-                    add_from_atom(&mut free_vars, at1);
                 }
                 GenericCoreAction::Set(_span, _, ats, at) => {
                     add_from_atoms(&mut free_vars, ats);
@@ -575,20 +570,6 @@ where
                     mapped_actions
                         .0
                         .push(GenericAction::Union(span.clone(), mapped_e1, mapped_e2));
-                }
-                GenericAction::Extract(span, e, n) => {
-                    let (actions, mapped_e) = e.to_core_actions(typeinfo, binding, fresh_gen)?;
-                    norm_actions.extend(actions.0);
-                    let (actions, mapped_n) = n.to_core_actions(typeinfo, binding, fresh_gen)?;
-                    norm_actions.extend(actions.0);
-                    norm_actions.push(GenericCoreAction::Extract(
-                        span.clone(),
-                        mapped_e.get_corresponding_var_or_lit(typeinfo),
-                        mapped_n.get_corresponding_var_or_lit(typeinfo),
-                    ));
-                    mapped_actions
-                        .0
-                        .push(GenericAction::Extract(span.clone(), mapped_e, mapped_n));
                 }
                 GenericAction::Panic(span, string) => {
                     norm_actions.push(GenericCoreAction::Panic(span.clone(), string.clone()));

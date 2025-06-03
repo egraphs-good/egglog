@@ -10,6 +10,39 @@ pub struct FuncType {
     pub output: ArcSort,
 }
 
+#[derive(Clone)]
+pub struct PrimitiveWithId(pub Arc<dyn Primitive + Send + Sync>, pub ExternalFunctionId);
+
+impl PrimitiveWithId {
+    /// Takes the full signature of a primitive (both input and output types).
+    /// Returns whether the primitive is compatible with this signature.
+    pub fn accept(&self, tys: &[Arc<dyn Sort>], typeinfo: &TypeInfo) -> bool {
+        let mut constraints = vec![];
+        let lits: Vec<_> = (0..tys.len())
+            .map(|i| AtomTerm::Literal(Span::Panic, Literal::Int(i as i64)))
+            .collect();
+        for (lit, ty) in lits.iter().zip(tys.iter()) {
+            constraints.push(constraint::assign(lit.clone(), ty.clone()))
+        }
+        constraints.extend(
+            self.0
+                .get_type_constraints(&Span::Panic)
+                .get(&lits, typeinfo),
+        );
+        let problem = Problem {
+            constraints,
+            range: HashSet::default(),
+        };
+        problem.solve(|sort| sort.name()).is_ok()
+    }
+}
+
+impl Debug for PrimitiveWithId {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        write!(f, "Prim({})", self.0.name())
+    }
+}
+
 /// Stores resolved typechecking information.
 #[derive(Clone, Default)]
 pub struct TypeInfo {
@@ -18,7 +51,7 @@ pub struct TypeInfo {
     // TODO(yz): I want to get rid of this as now we have user-defined primitives and constraint based type checking
     reserved_primitives: HashSet<Symbol>,
     sorts: HashMap<Symbol, Arc<dyn Sort>>,
-    primitives: HashMap<Symbol, Vec<Primitive>>,
+    primitives: HashMap<Symbol, Vec<PrimitiveWithId>>,
     func_types: HashMap<Symbol, FuncType>,
     global_sorts: HashMap<Symbol, ArcSort>,
 }
@@ -73,15 +106,27 @@ impl EGraph {
     /// Add a user-defined primitive
     pub fn add_primitive<T>(&mut self, x: T)
     where
-        T: Clone + ExternalFunction + PrimitiveLike + Send + Sync + 'static,
+        T: Clone + Primitive + Send + Sync + 'static,
     {
+        // We need to use a wrapper because of the orphan rule.
+        // If we just try to implement `ExternalFunction` directly on
+        // all `PrimitiveLike`s then it would be possible for a
+        // downstream crate to create a conflict.
+        #[derive(Clone)]
+        struct Wrapper<T>(T);
+        impl<T: Clone + Primitive + Send + Sync> ExternalFunction for Wrapper<T> {
+            fn invoke(&self, exec_state: &mut ExecutionState, args: &[Value]) -> Option<Value> {
+                self.0.apply(exec_state, args)
+            }
+        }
+
         let prim = Arc::new(x.clone());
-        let ext = self.backend.register_external_func(x);
+        let ext = self.backend.register_external_func(Wrapper(x));
         self.type_info
             .primitives
             .entry(prim.name())
             .or_default()
-            .push(Primitive(prim, ext));
+            .push(PrimitiveWithId(prim, ext));
     }
 
     pub(crate) fn typecheck_program(
@@ -97,6 +142,7 @@ impl EGraph {
 
     fn typecheck_command(&mut self, command: &NCommand) -> Result<ResolvedNCommand, TypeError> {
         let symbol_gen = &mut self.parser.symbol_gen;
+
         let command: ResolvedNCommand = match command {
             NCommand::Function(fdecl) => {
                 ResolvedNCommand::Function(self.type_info.typecheck_function(symbol_gen, fdecl)?)
@@ -136,6 +182,24 @@ impl EGraph {
                 self.type_info
                     .typecheck_action(symbol_gen, action, &Default::default())?,
             ),
+            NCommand::Extract(span, expr, variants) => {
+                let res_expr =
+                    self.type_info
+                        .typecheck_expr(symbol_gen, expr, &Default::default())?;
+
+                let res_variants =
+                    self.type_info
+                        .typecheck_expr(symbol_gen, variants, &Default::default())?;
+                if res_variants.output_type().name() != I64Sort.name() {
+                    return Err(TypeError::Mismatch {
+                        expr: variants.clone(),
+                        expected: Arc::new(I64Sort),
+                        actual: res_variants.output_type(),
+                    });
+                }
+
+                ResolvedNCommand::Extract(span.clone(), res_expr, res_variants)
+            }
             NCommand::Check(span, facts) => ResolvedNCommand::Check(
                 span.clone(),
                 self.type_info.typecheck_facts(symbol_gen, facts)?,
@@ -444,10 +508,6 @@ impl TypeInfo {
                     }
                     Ok(())
                 }
-                GenericAction::Extract(_, expr, variants) => {
-                    Self::check_lookup_expr(expr)?;
-                    Self::check_lookup_expr(variants)
-                }
                 GenericAction::Panic(..) => Ok(()),
                 GenericAction::Expr(_, expr) => Self::check_lookup_expr(expr),
             }?
@@ -528,8 +588,8 @@ impl TypeInfo {
         self.sorts.get(sym)
     }
 
-    pub fn get_prims(&self, sym: &Symbol) -> Option<&Vec<Primitive>> {
-        self.primitives.get(sym)
+    pub fn get_prims(&self, sym: &Symbol) -> Option<&[PrimitiveWithId]> {
+        self.primitives.get(sym).map(Vec::as_slice)
     }
 
     pub fn is_primitive(&self, sym: Symbol) -> bool {

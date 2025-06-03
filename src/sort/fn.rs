@@ -12,38 +12,10 @@
 //! the list of partially applied arguments.
 use super::*;
 
-/// A function value is a name of a function, a list of partially applied arguments (values and sort)
-/// Note that we must store the actual arcsorts so we can return them when returning inner values
-/// and when canonicalizing
-#[derive(Clone, Debug)]
-pub struct OldFunctionContainer(Symbol, Vec<(ArcSort, Value)>);
-
 #[derive(Clone, Debug, PartialEq, Eq, Hash)]
-pub struct NewFunctionContainer(ResolvedFunctionId, Vec<(bool, core_relations::Value)>);
+pub struct FunctionContainer(ResolvedFunctionId, Vec<(bool, Value)>, Symbol);
 
-impl OldFunctionContainer {
-    /// Remove the arcsorts to make this hashable
-    /// The arg values contain the sort name anyways
-    fn hashable(&self) -> (Symbol, Vec<&Value>) {
-        (self.0, self.1.iter().map(|(_, v)| v).collect())
-    }
-}
-
-impl Hash for OldFunctionContainer {
-    fn hash<H: std::hash::Hasher>(&self, state: &mut H) {
-        self.hashable().hash(state);
-    }
-}
-
-impl PartialEq for OldFunctionContainer {
-    fn eq(&self, other: &Self) -> bool {
-        self.hashable() == other.hashable()
-    }
-}
-
-impl Eq for OldFunctionContainer {}
-
-impl Container for NewFunctionContainer {
+impl Container for FunctionContainer {
     fn rebuild_contents(&mut self, rebuilder: &dyn Rebuilder) -> bool {
         let mut changed = false;
         for (do_rebuild, old) in &mut self.1 {
@@ -55,7 +27,7 @@ impl Container for NewFunctionContainer {
         }
         changed
     }
-    fn iter(&self) -> impl Iterator<Item = core_relations::Value> + '_ {
+    fn iter(&self) -> impl Iterator<Item = Value> + '_ {
         self.1.iter().map(|(_, v)| v).copied()
     }
 }
@@ -65,7 +37,6 @@ pub struct FunctionSort {
     name: Symbol,
     inputs: Vec<ArcSort>,
     output: ArcSort,
-    functions: Mutex<IndexSet<OldFunctionContainer>>,
 }
 
 impl FunctionSort {
@@ -128,7 +99,6 @@ impl Presort for FunctionSort {
                 name,
                 inputs: input_sorts,
                 output: output_sort.clone(),
-                functions: Default::default(),
             }))
         } else {
             panic!("function sort must be called with list of input args and output sort");
@@ -146,7 +116,7 @@ impl Sort for FunctionSort {
     }
 
     fn register_type(&self, backend: &mut egglog_bridge::EGraph) {
-        backend.register_container_ty::<NewFunctionContainer>();
+        backend.register_container_ty::<FunctionContainer>();
         backend.primitives_mut().register_type::<ResolvedFunction>();
     }
 
@@ -162,42 +132,20 @@ impl Sort for FunctionSort {
         self.inputs.iter().any(|s| s.is_eq_sort())
     }
 
-    fn serialized_name(&self, _value: &core_relations::Value) -> Symbol {
+    fn serialized_name(&self, _value: Value) -> Symbol {
         // TODO: The old implementation looks up the function name contained in the function structure.
         // In the new backend, this requires a handle to the new backend to get the container value.
         // We can change the interface of `serialized_name` to take an `EGraph` in a follow-up PR.
         "unstable-fn".into()
     }
 
-    fn old_inner_values(&self, value: &Value) -> Vec<(ArcSort, Value)> {
-        let functions = self.functions.lock().unwrap();
-        let input_values = functions.get_index(value.bits as usize).unwrap();
-        input_values.1.clone()
+    fn inner_sorts(&self) -> Vec<ArcSort> {
+        self.inputs.clone()
     }
 
-    fn inner_values(
-        &self,
-        egraph: &EGraph,
-        value: &core_relations::Value,
-    ) -> Vec<(ArcSort, core_relations::Value)> {
-        let val = egraph
-            .backend
-            .containers()
-            .get_val::<NewFunctionContainer>(*value)
-            .unwrap();
+    fn inner_values(&self, containers: &Containers, value: Value) -> Vec<(ArcSort, Value)> {
+        let val = containers.get_val::<FunctionContainer>(value).unwrap();
         self.inputs.iter().cloned().zip(val.iter()).collect()
-    }
-
-    fn canonicalize(&self, value: &mut Value, unionfind: &UnionFind) -> bool {
-        let OldFunctionContainer(name, inputs) = OldFunctionContainer::load(self, value);
-        let mut changed = false;
-        let mut new_outputs = vec![];
-        for (s, mut v) in inputs.into_iter() {
-            changed |= s.canonicalize(&mut v, unionfind);
-            new_outputs.push((s, v));
-        }
-        *value = OldFunctionContainer(name, new_outputs).store(self);
-        changed
     }
 
     fn register_primitives(self: Arc<Self>, eg: &mut EGraph) {
@@ -211,50 +159,35 @@ impl Sort for FunctionSort {
         });
     }
 
-    fn extract_term(
-        &self,
-        _egraph: &EGraph,
-        value: Value,
-        extractor: &Extractor,
-        termdag: &mut TermDag,
-    ) -> Option<(Cost, Term)> {
-        let OldFunctionContainer(name, inputs) = OldFunctionContainer::load(self, &value);
-        let (cost, args) = inputs.into_iter().try_fold(
-            (1usize, vec![termdag.lit(Literal::String(name))]),
-            |(cost, mut args), (sort, value)| {
-                let (new_cost, term) = extractor.find_best(value, termdag, &sort)?;
-                args.push(term);
-                Some((cost.saturating_add(new_cost), args))
-            },
-        )?;
-
-        Some((cost, termdag.app("unstable-fn".into(), args)))
-    }
-
     fn value_type(&self) -> Option<TypeId> {
-        Some(TypeId::of::<NewFunctionContainer>())
+        Some(TypeId::of::<FunctionContainer>())
+    }
+
+    fn default_container_cost(
+        &self,
+        _containers: &Containers,
+        _value: Value,
+        element_costs: &[Cost],
+    ) -> Cost {
+        element_costs.iter().fold(1, |s, c| s.saturating_add(*c))
+    }
+
+    fn reconstruct_termdag_container(
+        &self,
+        containers: &Containers,
+        value: Value,
+        termdag: &mut TermDag,
+        mut element_terms: Vec<Term>,
+    ) -> Term {
+        let name = containers.get_val::<FunctionContainer>(value).unwrap().2;
+        let head = termdag.lit(Literal::String(name));
+        element_terms.insert(0, head);
+        termdag.app("unstable-fn".into(), element_terms)
     }
 }
 
-impl IntoSort for OldFunctionContainer {
+impl IntoSort for FunctionContainer {
     type Sort = FunctionSort;
-    fn store(self, sort: &Self::Sort) -> Value {
-        let mut functions = sort.functions.lock().unwrap();
-        let (i, _) = functions.insert_full(self);
-        Value {
-            #[cfg(debug_assertions)]
-            tag: sort.name,
-            bits: i as u64,
-        }
-    }
-}
-
-impl FromSort for OldFunctionContainer {
-    type Sort = FunctionSort;
-    fn load(sort: &Self::Sort, value: &Value) -> Self {
-        let functions = sort.functions.lock().unwrap();
-        functions.get_index(value.bits as usize).unwrap().clone()
-    }
 }
 
 /// Takes a string and any number of partially applied args of any sort and returns a function
@@ -361,7 +294,7 @@ struct Ctor {
     function: Arc<FunctionSort>,
 }
 
-impl PrimitiveLike for Ctor {
+impl Primitive for Ctor {
     fn name(&self) -> Symbol {
         self.name
     }
@@ -374,22 +307,16 @@ impl PrimitiveLike for Ctor {
         })
     }
 
-    fn apply(
-        &self,
-        values: &[Value],
-        sorts: (&[ArcSort], &ArcSort),
-        _egraph: Option<&mut EGraph>,
-    ) -> Option<Value> {
-        let name = Symbol::load(&StringSort, &values[0]);
-
-        assert!(values.len() == sorts.0.len());
-        let args: Vec<(ArcSort, Value)> = values[1..]
-            .iter()
-            .zip(&sorts.0[1..])
-            .map(|(value, sort)| (sort.clone(), *value))
-            .collect();
-
-        Some(OldFunctionContainer(name, args).store(&self.function))
+    fn apply(&self, exec_state: &mut ExecutionState, args: &[Value]) -> Option<Value> {
+        let (rf, args) = args.split_first().unwrap();
+        let ResolvedFunction {
+            id,
+            do_rebuild,
+            name,
+        } = exec_state.prims().unwrap(*rf);
+        let args = do_rebuild.iter().zip(args).map(|(b, x)| (*b, *x)).collect();
+        let y = FunctionContainer(id, args, name);
+        Some(exec_state.clone().containers().register_val(y, exec_state))
     }
 }
 
@@ -397,26 +324,13 @@ impl PrimitiveLike for Ctor {
 pub struct ResolvedFunction {
     pub id: ResolvedFunctionId,
     pub do_rebuild: Vec<bool>,
+    pub name: Symbol,
 }
 
 #[derive(Clone, Debug, PartialEq, Eq, Hash)]
 pub enum ResolvedFunctionId {
     Lookup(egglog_bridge::Lookup),
     Prim(ExternalFunctionId),
-}
-
-impl ExternalFunction for Ctor {
-    fn invoke(
-        &self,
-        exec_state: &mut ExecutionState,
-        args: &[core_relations::Value],
-    ) -> Option<core_relations::Value> {
-        let (rf, args) = args.split_first().unwrap();
-        let ResolvedFunction { id, do_rebuild } = exec_state.prims().unwrap(*rf);
-        let args = do_rebuild.iter().zip(args).map(|(b, x)| (*b, *x)).collect();
-        let y = NewFunctionContainer(id, args);
-        Some(exec_state.clone().containers().register_val(y, exec_state))
-    }
 }
 
 // (unstable-app <function> [<arg1>, <arg2>, ...])
@@ -426,7 +340,7 @@ struct Apply {
     function: Arc<FunctionSort>,
 }
 
-impl PrimitiveLike for Apply {
+impl Primitive for Apply {
     fn name(&self) -> Symbol {
         self.name
     }
@@ -438,88 +352,22 @@ impl PrimitiveLike for Apply {
         SimpleTypeConstraint::new(self.name(), sorts, span.clone()).into_box()
     }
 
-    fn apply(
-        &self,
-        values: &[Value],
-        _sorts: (&[ArcSort], &ArcSort),
-        egraph: Option<&mut EGraph>,
-    ) -> Option<Value> {
-        let egraph = egraph.expect("`unstable-app` is not supported yet in facts.");
-        Some(self.function.apply(&values[0], &values[1..], egraph))
-    }
-}
-
-impl ExternalFunction for Apply {
-    fn invoke(
-        &self,
-        exec_state: &mut ExecutionState,
-        args: &[core_relations::Value],
-    ) -> Option<core_relations::Value> {
+    fn apply(&self, exec_state: &mut ExecutionState, args: &[Value]) -> Option<Value> {
         let (fc, args) = args.split_first().unwrap();
         let fc = exec_state
             .containers()
-            .get_val::<NewFunctionContainer>(*fc)
+            .get_val::<FunctionContainer>(*fc)
             .unwrap()
             .clone();
         fc.apply(exec_state, args)
     }
 }
 
-impl FunctionSort {
+impl FunctionContainer {
     /// Call function (primitive or table) <name> with value args <args> and return the value.
     ///
     /// Public so that other primitive sorts (external or internal) have access.
-    pub fn apply(&self, fn_value: &Value, arg_values: &[Value], egraph: &mut EGraph) -> Value {
-        let OldFunctionContainer(name, args) = OldFunctionContainer::load(self, fn_value);
-        let (mut types, mut args): (Vec<_>, Vec<_>) = args.into_iter().unzip();
-        types.extend(self.inputs.clone());
-        types.push(self.output.clone());
-        args.extend(arg_values);
-
-        // Make a call with temp vars as each of the args
-        let resolved_call =
-            ResolvedCall::from_resolution(&name, types.as_slice(), &egraph.type_info);
-        let arg_vars: Vec<_> = types
-            .into_iter()
-            // Skip last sort which is the output sort
-            .take(args.len())
-            .enumerate()
-            .map(|(i, sort)| ResolvedVar {
-                name: format!("__arg_{}", i).into(),
-                sort,
-                is_global_ref: false,
-            })
-            .collect();
-        let binding = IndexSet::from_iter(arg_vars.clone());
-        let resolved_args = arg_vars.into_iter().map(|v| var!(v));
-        let expr = call!(resolved_call, resolved_args);
-        // Similar to how the merge function is created in `Function::new`
-        let (actions, mapped_expr) = expr
-            .to_core_actions(
-                &egraph.type_info,
-                &mut binding.clone(),
-                &mut egraph.parser.symbol_gen,
-            )
-            .unwrap();
-        let target = mapped_expr.get_corresponding_var_or_lit(&egraph.type_info);
-        let program = egraph.compile_expr(&binding, &actions, &target).unwrap();
-        // Similar to how the `MergeFn::Expr` case is handled in `Egraph::perform_set`
-        // egraph.rebuild().unwrap();
-        let mut stack = vec![];
-        egraph.run_actions(&mut stack, &args, &program).unwrap();
-        stack.pop().unwrap()
-    }
-}
-
-impl NewFunctionContainer {
-    /// Call function (primitive or table) <name> with value args <args> and return the value.
-    ///
-    /// Public so that other primitive sorts (external or internal) have access.
-    pub fn apply(
-        &self,
-        exec_state: &mut ExecutionState,
-        args: &[core_relations::Value],
-    ) -> Option<core_relations::Value> {
+    pub fn apply(&self, exec_state: &mut ExecutionState, args: &[Value]) -> Option<Value> {
         let args: Vec<_> = self.1.iter().map(|(_, x)| x).chain(args).copied().collect();
         match &self.0 {
             ResolvedFunctionId::Lookup(lookup) => lookup.run(exec_state, &args),

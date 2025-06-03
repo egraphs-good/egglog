@@ -2,12 +2,12 @@ use super::*;
 use std::collections::BTreeSet;
 
 #[derive(Clone, Debug, PartialEq, Eq, Hash)]
-pub struct SetContainer<V> {
+pub struct SetContainer {
     do_rebuild: bool,
-    pub data: BTreeSet<V>,
+    pub data: BTreeSet<Value>,
 }
 
-impl Container for SetContainer<core_relations::Value> {
+impl Container for SetContainer {
     fn rebuild_contents(&mut self, rebuilder: &dyn Rebuilder) -> bool {
         if self.do_rebuild {
             let mut xs: Vec<_> = self.data.iter().copied().collect();
@@ -18,7 +18,7 @@ impl Container for SetContainer<core_relations::Value> {
             false
         }
     }
-    fn iter(&self) -> impl Iterator<Item = core_relations::Value> + '_ {
+    fn iter(&self) -> impl Iterator<Item = Value> + '_ {
         self.data.iter().copied()
     }
 }
@@ -27,7 +27,6 @@ impl Container for SetContainer<core_relations::Value> {
 pub struct SetSort {
     name: Symbol,
     element: ArcSort,
-    sets: Mutex<IndexSet<SetContainer<Value>>>,
 }
 
 impl SetSort {
@@ -78,7 +77,6 @@ impl Presort for SetSort {
             Ok(Arc::new(Self {
                 name,
                 element: e.clone(),
-                sets: Default::default(),
             }))
         } else {
             panic!()
@@ -96,11 +94,15 @@ impl Sort for SetSort {
     }
 
     fn register_type(&self, backend: &mut egglog_bridge::EGraph) {
-        backend.register_container_ty::<SetContainer<core_relations::Value>>();
+        backend.register_container_ty::<SetContainer>();
     }
 
     fn as_arc_any(self: Arc<Self>) -> Arc<dyn Any + Send + Sync + 'static> {
         self
+    }
+
+    fn inner_sorts(&self) -> Vec<ArcSort> {
+        vec![self.element.clone()]
     }
 
     fn is_container_sort(&self) -> bool {
@@ -111,115 +113,50 @@ impl Sort for SetSort {
         self.element.is_eq_sort()
     }
 
-    fn inner_values(
-        &self,
-        egraph: &EGraph,
-        value: &core_relations::Value,
-    ) -> Vec<(ArcSort, core_relations::Value)> {
-        let val = egraph
-            .backend
-            .containers()
-            .get_val::<SetContainer<core_relations::Value>>(*value)
-            .unwrap()
-            .clone();
+    fn inner_values(&self, containers: &Containers, value: Value) -> Vec<(ArcSort, Value)> {
+        let val = containers.get_val::<SetContainer>(value).unwrap().clone();
         val.data
             .iter()
             .map(|e| (self.element.clone(), *e))
             .collect()
     }
 
-    fn old_inner_values(&self, value: &Value) -> Vec<(ArcSort, Value)> {
-        // TODO: Potential duplication of code
-        let sets = self.sets.lock().unwrap();
-        let set = sets.get_index(value.bits as usize).unwrap();
-        let mut result = Vec::new();
-        for e in set.data.iter() {
-            result.push((self.element.clone(), *e));
-        }
-        result
-    }
-    fn canonicalize(&self, value: &mut Value, unionfind: &UnionFind) -> bool {
-        let sets = self.sets.lock().unwrap();
-        let set = sets.get_index(value.bits as usize).unwrap();
-        let mut changed = false;
-        let new_set = SetContainer {
-            do_rebuild: set.do_rebuild,
-            data: set
-                .data
-                .iter()
-                .map(|e| {
-                    let mut e = *e;
-                    changed |= self.element.canonicalize(&mut e, unionfind);
-                    e
-                })
-                .collect(),
-        };
-        drop(sets);
-        *value = new_set.store(self);
-        changed
-    }
-
     fn register_primitives(self: Arc<Self>, eg: &mut EGraph) {
-        add_primitive!(eg, "set-empty" = |                      | -> @SetContainer<Value> (self.clone()) { SetContainer { do_rebuild: self.__y.is_eq_container_sort(), data: BTreeSet::new() } });
-        add_primitive!(eg, "set-of"    = [xs: # (self.element())] -> @SetContainer<Value> (self.clone()) { SetContainer { do_rebuild: self.__y.is_eq_container_sort(), data: xs.collect()    } });
+        add_primitive!(eg, "set-empty" = |                      | -> @SetContainer (self.clone()) { SetContainer { do_rebuild: self.__y.is_eq_container_sort(), data: BTreeSet::new() } });
+        add_primitive!(eg, "set-of"    = [xs: # (self.element())] -> @SetContainer (self.clone()) { SetContainer { do_rebuild: self.__y.is_eq_container_sort(), data: xs.collect()    } });
 
-        add_primitive!(eg, "set-get" = |xs: @SetContainer<Value> (self.clone()), i: i64| -?> # (self.element()) { xs.data.iter().nth(i as usize).copied() });
-        add_primitive!(eg, "set-insert" = |mut xs: @SetContainer<Value> (self.clone()), x: # (self.element())| -> @SetContainer<Value> (self.clone()) {{ xs.data.insert( x); xs }});
-        add_primitive!(eg, "set-remove" = |mut xs: @SetContainer<Value> (self.clone()), x: # (self.element())| -> @SetContainer<Value> (self.clone()) {{ xs.data.remove(&x); xs }});
+        add_primitive!(eg, "set-get" = |xs: @SetContainer (self.clone()), i: i64| -?> # (self.element()) { xs.data.iter().nth(i as usize).copied() });
+        add_primitive!(eg, "set-insert" = |mut xs: @SetContainer (self.clone()), x: # (self.element())| -> @SetContainer (self.clone()) {{ xs.data.insert( x); xs }});
+        add_primitive!(eg, "set-remove" = |mut xs: @SetContainer (self.clone()), x: # (self.element())| -> @SetContainer (self.clone()) {{ xs.data.remove(&x); xs }});
 
-        add_primitive!(eg, "set-length"       = |xs: @SetContainer<Value> (self.clone())| -> i64 { xs.data.len() as i64 });
-        add_primitive!(eg, "set-contains"     = |xs: @SetContainer<Value> (self.clone()), x: # (self.element())| -?> () { ( xs.data.contains(&x)).then_some(()) });
-        add_primitive!(eg, "set-not-contains" = |xs: @SetContainer<Value> (self.clone()), x: # (self.element())| -?> () { (!xs.data.contains(&x)).then_some(()) });
+        add_primitive!(eg, "set-length"       = |xs: @SetContainer (self.clone())| -> i64 { xs.data.len() as i64 });
+        add_primitive!(eg, "set-contains"     = |xs: @SetContainer (self.clone()), x: # (self.element())| -?> () { ( xs.data.contains(&x)).then_some(()) });
+        add_primitive!(eg, "set-not-contains" = |xs: @SetContainer (self.clone()), x: # (self.element())| -?> () { (!xs.data.contains(&x)).then_some(()) });
 
-        add_primitive!(eg, "set-union"      = |mut xs: @SetContainer<Value> (self.clone()), ys: @SetContainer<Value> (self.clone())| -> @SetContainer<Value> (self.clone()) {{ xs.data.extend(ys.data);                  xs }});
-        add_primitive!(eg, "set-diff"       = |mut xs: @SetContainer<Value> (self.clone()), ys: @SetContainer<Value> (self.clone())| -> @SetContainer<Value> (self.clone()) {{ xs.data.retain(|k| !ys.data.contains(k)); xs }});
-        add_primitive!(eg, "set-intersect"  = |mut xs: @SetContainer<Value> (self.clone()), ys: @SetContainer<Value> (self.clone())| -> @SetContainer<Value> (self.clone()) {{ xs.data.retain(|k|  ys.data.contains(k)); xs }});
+        add_primitive!(eg, "set-union"      = |mut xs: @SetContainer (self.clone()), ys: @SetContainer (self.clone())| -> @SetContainer (self.clone()) {{ xs.data.extend(ys.data);                  xs }});
+        add_primitive!(eg, "set-diff"       = |mut xs: @SetContainer (self.clone()), ys: @SetContainer (self.clone())| -> @SetContainer (self.clone()) {{ xs.data.retain(|k| !ys.data.contains(k)); xs }});
+        add_primitive!(eg, "set-intersect"  = |mut xs: @SetContainer (self.clone()), ys: @SetContainer (self.clone())| -> @SetContainer (self.clone()) {{ xs.data.retain(|k|  ys.data.contains(k)); xs }});
     }
 
-    fn extract_term(
+    fn reconstruct_termdag_container(
         &self,
-        _egraph: &EGraph,
-        value: Value,
-        extractor: &Extractor,
+        _containers: &Containers,
+        _value: Value,
         termdag: &mut TermDag,
-    ) -> Option<(Cost, Term)> {
-        let set = SetContainer::load(self, &value);
-        let mut children = vec![];
-        let mut cost = 0usize;
-        for e in set.data.iter() {
-            let (child_cost, child_term) = extractor.find_best(*e, termdag, &self.element)?;
-            cost = cost.saturating_add(child_cost);
-            children.push(child_term);
-        }
-        Some((cost, termdag.app("set-of".into(), children)))
+        element_terms: Vec<Term>,
+    ) -> Term {
+        termdag.app("set-of".into(), element_terms)
     }
 
-    fn serialized_name(&self, _value: &core_relations::Value) -> Symbol {
+    fn serialized_name(&self, _value: Value) -> Symbol {
         "set-of".into()
     }
 
     fn value_type(&self) -> Option<TypeId> {
-        Some(TypeId::of::<SetContainer<core_relations::Value>>())
+        Some(TypeId::of::<SetContainer>())
     }
 }
 
-impl IntoSort for SetContainer<Value> {
+impl IntoSort for SetContainer {
     type Sort = SetSort;
-    fn store(self, sort: &Self::Sort) -> Value {
-        let mut sets = sort.sets.lock().unwrap();
-        let (i, _) = sets.insert_full(self);
-        Value {
-            #[cfg(debug_assertions)]
-            tag: sort.name,
-            bits: i as u64,
-        }
-    }
-}
-
-impl FromSort for SetContainer<Value> {
-    type Sort = SetSort;
-    fn load(sort: &Self::Sort, value: &Value) -> Self {
-        let sets = sort.sets.lock().unwrap();
-        sets.get_index(value.bits as usize).unwrap().clone()
-    }
 }

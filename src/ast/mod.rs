@@ -4,7 +4,7 @@ mod expr;
 mod parse;
 pub mod remove_globals;
 
-use crate::core::{GenericAtom, GenericAtomTerm, HeadOrEq, Query, ResolvedCall, ResolvedCoreRule};
+use crate::core::{GenericAtom, GenericAtomTerm, HeadOrEq, Query, ResolvedCall};
 use crate::*;
 pub use expr::*;
 pub use parse::*;
@@ -14,15 +14,9 @@ pub use symbol_table::GlobalSymbol as Symbol;
 /// The egglog internal representation of already compiled rules
 pub(crate) enum Ruleset {
     /// Represents a ruleset with a set of rules.
-    /// Use an [`IndexMap`] to ensure egglog is deterministic.
-    /// Rules added to the [`IndexMap`] first apply their
-    /// actions first.
-    Rules(
-        Symbol,
-        IndexMap<Symbol, (CompiledRule, egglog_bridge::RuleId, ResolvedCoreRule)>,
-    ),
+    Rules(IndexMap<Symbol, egglog_bridge::RuleId>),
     /// A combined ruleset may contain other rulesets.
-    Combined(Symbol, Vec<Symbol>),
+    Combined(Vec<Symbol>),
 }
 
 pub type NCommand = GenericNCommand<Symbol, Symbol>;
@@ -66,6 +60,7 @@ where
         rule: GenericRule<Head, Leaf>,
     },
     CoreAction(GenericAction<Head, Leaf>),
+    Extract(Span, GenericExpr<Head, Leaf>, GenericExpr<Head, Leaf>),
     RunSchedule(GenericSchedule<Head, Leaf>),
     PrintOverallStatistics,
     Check(Span, Vec<GenericFact<Head, Leaf>>),
@@ -139,6 +134,9 @@ where
             GenericNCommand::RunSchedule(schedule) => GenericCommand::RunSchedule(schedule.clone()),
             GenericNCommand::PrintOverallStatistics => GenericCommand::PrintOverallStatistics,
             GenericNCommand::CoreAction(action) => GenericCommand::Action(action.clone()),
+            GenericNCommand::Extract(span, expr, variants) => {
+                GenericCommand::Extract(span.clone(), expr.clone(), variants.clone())
+            }
             GenericNCommand::Check(span, facts) => {
                 GenericCommand::Check(span.clone(), facts.clone())
             }
@@ -196,6 +194,9 @@ where
             GenericNCommand::PrintOverallStatistics => GenericNCommand::PrintOverallStatistics,
             GenericNCommand::CoreAction(action) => {
                 GenericNCommand::CoreAction(action.visit_exprs(f))
+            }
+            GenericNCommand::Extract(span, expr, variants) => {
+                GenericNCommand::Extract(span, expr.visit_exprs(f), variants.visit_exprs(f))
             }
             GenericNCommand::Check(span, facts) => GenericNCommand::Check(
                 span,
@@ -561,6 +562,12 @@ where
     /// (let xplusone (Add (Var "x") (Num 1)))
     /// ```
     Action(GenericAction<Head, Leaf>),
+    /// `extract` a datatype from the egraph, choosing
+    /// the smallest representative.
+    /// By default, each constructor costs 1 to extract
+    /// (common subexpressions are not shared in the cost
+    /// model).
+    Extract(Span, GenericExpr<Head, Leaf>, GenericExpr<Head, Leaf>),
     /// Runs a [`Schedule`], which specifies
     /// rulesets and the number of times to run them.
     ///
@@ -579,42 +586,6 @@ where
     /// Print runtime statistics about rules
     /// and rulesets so far.
     PrintOverallStatistics,
-    // TODO provide simplify docs
-    Simplify {
-        span: Span,
-        expr: GenericExpr<Head, Leaf>,
-        schedule: GenericSchedule<Head, Leaf>,
-    },
-    /// The `query-extract` command runs a query,
-    /// extracting the result for each match that it finds.
-    /// For a simpler extraction command, use [`Action::Extract`] instead.
-    ///
-    /// Example:
-    /// ```text
-    /// (query-extract (Add a b))
-    /// ```
-    ///
-    /// Extracts every `Add` term in the database, once
-    /// for each class of equivalent `a` and `b`.
-    ///
-    /// The resulting datatype is chosen from the egraph
-    /// as the smallest term by size (taking into account
-    /// the `:cost` annotations for each constructor).
-    /// This cost does *not* take into account common sub-expressions.
-    /// For example, the following term has cost 5:
-    /// ```text
-    /// (Add
-    ///     (Num 1)
-    ///     (Num 1))
-    /// ```
-    ///
-    /// Under the hood, this command is implemented with the [`EGraph::extract`]
-    /// function.
-    QueryExtract {
-        span: Span,
-        variants: usize,
-        expr: GenericExpr<Head, Leaf>,
-    },
     /// The `check` command checks that the given facts
     /// match at least once in the current database.
     /// The list of facts is matched in the same way a [`Command::Rule`] is matched.
@@ -690,6 +661,9 @@ where
                 variants,
             } => write!(f, "(datatype {name} {})", ListDisplay(variants, " ")),
             GenericCommand::Action(a) => write!(f, "{a}"),
+            GenericCommand::Extract(_span, expr, variants) => {
+                write!(f, "(extract {expr} {variants})")
+            }
             GenericCommand::Sort(_span, name, None) => write!(f, "(sort {name})"),
             GenericCommand::Sort(_span, name, Some((name2, args))) => {
                 write!(f, "(sort {name} ({name2} {}))", ListDisplay(args, " "))
@@ -746,13 +720,6 @@ where
             } => rule.fmt_with_ruleset(f, *ruleset, *name),
             GenericCommand::RunSchedule(sched) => write!(f, "(run-schedule {sched})"),
             GenericCommand::PrintOverallStatistics => write!(f, "(print-stats)"),
-            GenericCommand::QueryExtract {
-                span: _,
-                variants,
-                expr,
-            } => {
-                write!(f, "(query-extract :variants {variants} {expr})")
-            }
             GenericCommand::Check(_ann, facts) => {
                 write!(f, "(check {})", ListDisplay(facts, "\n"))
             }
@@ -776,11 +743,6 @@ where
             } => write!(f, "(output {file:?} {})", ListDisplay(exprs, " ")),
             GenericCommand::Fail(_span, cmd) => write!(f, "(fail {cmd})"),
             GenericCommand::Include(_span, file) => write!(f, "(include {file:?})"),
-            GenericCommand::Simplify {
-                span: _,
-                expr,
-                schedule,
-            } => write!(f, "(simplify {schedule} {expr})"),
             GenericCommand::Datatypes { span: _, datatypes } => {
                 let datatypes: Vec<_> = datatypes
                     .iter()
@@ -1227,15 +1189,6 @@ where
     /// (extract (Num 2)); Extracts Num 1
     /// ```
     Union(Span, GenericExpr<Head, Leaf>, GenericExpr<Head, Leaf>),
-    /// `extract` a datatype from the egraph, choosing
-    /// the smallest representative.
-    /// By default, each constructor costs 1 to extract
-    /// (common subexpressions are not shared in the cost
-    /// model).
-    /// The second argument is the number of variants to
-    /// extract, picking different terms in the
-    /// same equivalence class.
-    Extract(Span, GenericExpr<Head, Leaf>, GenericExpr<Head, Leaf>),
     Panic(Span, String),
     Expr(Span, GenericExpr<Head, Leaf>),
     // If(Expr, Action, Action),
@@ -1300,9 +1253,6 @@ where
                 };
                 write!(f, "({change} ({lhs} {}))", ListDisplay(args, " "))
             }
-            GenericAction::Extract(_ann, expr, variants) => {
-                write!(f, "(extract {expr} {variants})")
-            }
             GenericAction::Panic(_ann, msg) => write!(f, "(panic {msg:?})"),
             GenericAction::Expr(_ann, e) => write!(f, "{e}"),
         }
@@ -1341,9 +1291,6 @@ where
             GenericAction::Union(span, lhs, rhs) => {
                 GenericAction::Union(span.clone(), f(lhs), f(rhs))
             }
-            GenericAction::Extract(span, expr, variants) => {
-                GenericAction::Extract(span.clone(), f(expr), f(variants))
-            }
             GenericAction::Panic(span, msg) => GenericAction::Panic(span.clone(), msg.clone()),
             GenericAction::Expr(span, e) => GenericAction::Expr(span.clone(), f(e)),
         }
@@ -1372,9 +1319,6 @@ where
             }
             GenericAction::Union(span, lhs, rhs) => {
                 GenericAction::Union(span, lhs.visit_exprs(f), rhs.visit_exprs(f))
-            }
-            GenericAction::Extract(span, expr, variants) => {
-                GenericAction::Extract(span, expr.visit_exprs(f), variants.visit_exprs(f))
             }
             GenericAction::Panic(span, msg) => GenericAction::Panic(span, msg.clone()),
             GenericAction::Expr(span, e) => GenericAction::Expr(span, e.visit_exprs(f)),
@@ -1417,23 +1361,12 @@ where
                 let rhs = rhs.subst_leaf(&mut fvar_expr!());
                 GenericAction::Union(span, lhs, rhs)
             }
-            GenericAction::Extract(span, expr, variants) => {
-                let expr = expr.subst_leaf(&mut fvar_expr!());
-                let variants = variants.subst_leaf(&mut fvar_expr!());
-                GenericAction::Extract(span, expr, variants)
-            }
             GenericAction::Panic(span, msg) => GenericAction::Panic(span, msg.clone()),
             GenericAction::Expr(span, e) => {
                 GenericAction::Expr(span, e.subst_leaf(&mut fvar_expr!()))
             }
         }
     }
-}
-
-#[derive(Clone, Debug)]
-pub(crate) struct CompiledRule {
-    pub(crate) query: CompiledQuery,
-    pub(crate) program: Program,
 }
 
 pub type Rule = GenericRule<Symbol, Symbol>;
