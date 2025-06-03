@@ -411,6 +411,12 @@ macro_rules! datatype {
     };
 }
 
+/// A "default" implementation of [`Sort`] for simple types
+/// which just want to put some data in the e-graph. If you
+/// implement this trait, do not implement `Sort` or
+/// `ContainerSort. Use `add_leaf_sort` to register leaf
+/// sorts with the `EGraph`. See `Sort` for documentation
+/// of the methods. Do not override `to_arcsort`.
 pub trait LeafSort: Any + Send + Sync + Debug {
     type Leaf: core_relations::Primitive;
     fn name(&self) -> &str;
@@ -464,6 +470,12 @@ impl<T: LeafSort> Sort for LeafSortImpl<T> {
     }
 }
 
+/// A "default" implementation of [`Sort`] for types which
+/// just want to store a pure data structure in the e-graph.
+/// If you implement this trait, do not implement `Sort` or
+/// `LeafSort`. Use `add_container_sort` to register container
+/// sorts with the `EGraph`. See `Sort` for documentation
+/// of the methods. Do not override `to_arcsort`.
 pub trait ContainerSort: Any + Send + Sync + Debug {
     type Container: core_relations::Container;
     fn name(&self) -> Symbol;
