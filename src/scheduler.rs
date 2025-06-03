@@ -11,6 +11,15 @@ use crate::{EGraph, HashMap, RunReport};
 type SchedulerId = usize;
 
 impl EGraph {
+    pub fn add_scheduler(&mut self, scheduler: Box<dyn Scheduler>) -> SchedulerId {
+        let id = self.schedulers.len();
+        self.schedulers.push(SchedulerRecord {
+            scheduler,
+            rule_info: IndexMap::default(),
+        });
+        id
+    }
+
     pub fn step_rules_with_scheduler(&mut self, ruleset: Symbol, id: SchedulerId) -> RunReport {
         let mut rules = Vec::new();
         let rulesets = std::mem::take(&mut self.rulesets);
@@ -64,7 +73,15 @@ impl EGraph {
 
         self.rulesets = rulesets;
         self.schedulers = schedulers;
-        todo!()
+        RunReport {
+            updated: true,
+            search_time_per_rule: Default::default(),
+            apply_time_per_rule: Default::default(),
+            search_time_per_ruleset: Default::default(),
+            num_matches_per_rule: Default::default(),
+            apply_time_per_ruleset: Default::default(),
+            rebuild_time_per_ruleset: Default::default(),
+        }
     }
 }
 
@@ -110,7 +127,6 @@ pub(crate) struct SchedulerRecord {
 /// (rule (worklist vars false) (action ... (delete (worklist vars false))))
 #[derive(Clone)]
 struct SchedulerRuleInfo {
-    // timestamp: u32,
     worklist_id: FunctionId,
     query_rule: RuleId,
     action_rule: RuleId,
@@ -198,7 +214,9 @@ impl SchedulerRuleInfo {
     ) -> RuleId {
         let schedule_prim = SchedulingPrim { stats, scheduler };
         let schedule_prim_id = egraph.backend.register_external_func(schedule_prim);
+        let bool_false = egraph.backend.primitive_constant(false);
         let bool_true = egraph.backend.primitive_constant(true);
+        let bool_type = ColumnTy::Primitive(egraph.backend.primitives().get_ty::<bool>());
         let mut srule_builder = BackendRule::new(
             egraph.backend.new_rule("schedule", false),
             &egraph.functions,
@@ -210,15 +228,18 @@ impl SchedulerRuleInfo {
             .map(|fv| srule_builder.entry(&GenericAtomTerm::Var(span!(), fv.clone())))
             .collect::<Vec<_>>();
 
-        entries.push(bool_true);
+        entries.push(bool_false);
         srule_builder
             .rb
             .query_table(self.worklist_id, &entries, Some(false))
             .unwrap();
+        entries.pop();
+        entries.push(bool_true);
         srule_builder
             .rb
-            .query_prim(schedule_prim_id, &entries, ColumnTy::Id)
+            .query_prim(schedule_prim_id, &entries, bool_type)
             .unwrap();
+        srule_builder.rb.set(self.worklist_id, &entries);
 
         srule_builder.build()
     }
@@ -242,3 +263,60 @@ impl ExternalFunction for SchedulingPrim {
 }
 
 dyn_clone::clone_trait_object!(Scheduler);
+
+#[cfg(test)]
+mod test {
+    use std::sync::atomic::{AtomicUsize, Ordering};
+
+    use super::*;
+
+    struct TestScheduler {
+        match_limit: usize,
+        match_count: AtomicUsize,
+    }
+
+    impl Clone for TestScheduler {
+        fn clone(&self) -> Self {
+            Self {
+                match_limit: self.match_limit,
+                match_count: AtomicUsize::new(self.match_count.load(Ordering::Relaxed)),
+            }
+        }
+    }
+
+    impl Scheduler for TestScheduler {
+        fn can_stop(&mut self, _iteration: usize) -> bool {
+            self.match_count.load(Ordering::Relaxed) >= self.match_limit
+        }
+
+        fn schedule_matches<'a>(&self, _stats: MatchesStats, _ms: &'a [core_relations::Value]) -> bool {
+            let count = self.match_count.fetch_add(1, Ordering::Relaxed);
+            count < self.match_limit
+        }
+    }
+
+    #[test]
+    fn test_scheduler() {
+        let mut egraph = crate::EGraph::default();
+        let input = r#"
+        (relation R (i64))
+        (R 0)
+        (rule ((R x) (< x 100)) 
+              ((R (+ x 1))))
+        (run-schedule (saturate (run)))
+
+        (ruleset test)
+        (relation S (i64))
+        (rule ((R x)) ((S x)) :ruleset test)
+        "#;
+        egraph.parse_and_run_program(None, input).unwrap();
+        let scheduler = TestScheduler {
+            match_limit: 10,
+            match_count: AtomicUsize::new(0),
+        };
+        let scheduler_id = egraph.add_scheduler(Box::new(scheduler));
+        egraph.step_rules_with_scheduler(Symbol::new("test"), scheduler_id);
+        let table = egraph.get_size(Symbol::new("S")).unwrap();
+        assert_eq!(table, 10);
+    }
+}

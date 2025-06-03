@@ -810,6 +810,14 @@ impl EGraph {
         Ok(())
     }
 
+    pub fn get_size(&self, sym: Symbol) -> Result<usize, Error> {
+        let f = self
+            .functions
+            .get(&sym)
+            .ok_or(TypeError::UnboundFunction(sym, span!()))?;
+        Ok(self.backend.table_size(f.new_backend_id))
+    }
+
     pub fn print_size(&mut self, sym: Option<Symbol>) -> Result<(), Error> {
         if let Some(sym) = sym {
             let f = self
