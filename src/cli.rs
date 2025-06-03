@@ -19,11 +19,6 @@ pub mod bin {
         /// Prints extra information, which can be useful for debugging
         #[clap(long, default_value_t = RunMode::Normal)]
         show: RunMode,
-        /// Changes the prefix of the generated symbols
-        // TODO why do we support this?
-        // TODO remove this evil hack
-        #[clap(long, default_value = "__")]
-        reserved_symbol: String,
         /// The file names for the egglog files to run
         inputs: Vec<PathBuf>,
         /// Serializes the egraph for each egglog file as JSON
@@ -62,7 +57,6 @@ pub mod bin {
             .init();
 
         let args = Args::parse();
-        egraph.set_reserved_symbol(args.reserved_symbol.clone().into());
         egraph.fact_directory.clone_from(&args.fact_directory);
         egraph.seminaive = !args.naive;
         egraph.run_mode = args.show;
@@ -122,15 +116,23 @@ pub mod bin {
                     };
                     if args.to_dot {
                         let dot_path = serialize_filename.with_extension("dot");
-                        serialized.to_dot_file(dot_path).unwrap()
+                        serialized
+                            .to_dot_file(dot_path.clone())
+                            .unwrap_or_else(|_| panic!("Failed to write dot file to {dot_path:?}"));
                     }
                     if args.to_svg {
                         let svg_path = serialize_filename.with_extension("svg");
-                        serialized.to_svg_file(svg_path).unwrap()
+                        serialized.to_svg_file(svg_path.clone()).unwrap_or_else( |_|
+                            panic!("Failed to write svg file to {svg_path:?}. Make sure you have the `dot` executable installed")
+                        );
                     }
                     if args.to_json {
                         let json_path = serialize_filename.with_extension("json");
-                        serialized.to_json_file(json_path).unwrap();
+                        serialized
+                            .to_json_file(json_path.clone())
+                            .unwrap_or_else(|_| {
+                                panic!("Failed to write json file to {json_path:?}")
+                            });
                     }
                 }
             }

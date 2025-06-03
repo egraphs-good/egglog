@@ -32,13 +32,12 @@ mod value;
 // both this crate and other crates by referring to `::egglog`.
 extern crate self as egglog;
 pub use add_primitive::add_primitive;
-use scheduler::{Scheduler, SchedulerRecord};
+use scheduler::SchedulerRecord;
 
 use crate::constraint::Problem;
 use crate::core::{AtomTerm, ResolvedCall};
 use crate::typechecking::TypeError;
 use actions::Program;
-use ast::remove_globals::remove_globals;
 use ast::*;
 #[cfg(feature = "bin")]
 pub use cli::bin::*;
@@ -68,7 +67,7 @@ use std::sync::{Arc, Mutex};
 pub use termdag::{Term, TermDag, TermId};
 use thiserror::Error;
 pub use typechecking::TypeInfo;
-use unionfind::*;
+pub use unionfind::*;
 use util::*;
 pub use value::*;
 
@@ -403,7 +402,10 @@ impl FromStr for RunMode {
 pub struct EGraph {
     pub backend: egglog_bridge::EGraph,
     pub parser: Parser,
-    egraphs: Vec<Self>,
+    names: check_shadowing::Names,
+    /// pushed_egraph forms a linked list of pushed egraphs.
+    /// Pop reverts the egraph to the last pushed egraph.
+    pushed_egraph: Option<Box<Self>>,
     unionfind: UnionFind,
     pub functions: IndexMap<Symbol, Function>,
     rulesets: IndexMap<Symbol, Ruleset>,
@@ -429,7 +431,8 @@ impl Default for EGraph {
         let mut eg = Self {
             backend: Default::default(),
             parser: Default::default(),
-            egraphs: vec![],
+            names: Default::default(),
+            pushed_egraph: Default::default(),
             unionfind: Default::default(),
             functions: Default::default(),
             rulesets: Default::default(),
@@ -499,7 +502,10 @@ impl EGraph {
     }
 
     pub fn push(&mut self) {
-        self.egraphs.push(self.clone());
+        let prev_prev: Option<Box<Self>> = self.pushed_egraph.take();
+        let mut prev = self.clone();
+        prev.pushed_egraph = prev_prev;
+        self.pushed_egraph = Some(Box::new(prev));
     }
 
     /// Disable saving messages to be printed to the user and remove any saved messages.
@@ -524,7 +530,7 @@ impl EGraph {
     /// It preserves the run report and messages from the popped
     /// egraph.
     pub fn pop(&mut self) -> Result<(), Error> {
-        match self.egraphs.pop() {
+        match self.pushed_egraph.take() {
             Some(e) => {
                 // Copy the reports and messages from the popped egraph
                 let extract_report = self.extract_report.clone();
@@ -532,7 +538,7 @@ impl EGraph {
                 let overall_run_report = self.overall_run_report.clone();
                 let messages = self.msgs.clone();
 
-                *self = e;
+                *self = *e;
                 self.extract_report = extract_report.or(self.extract_report.clone());
                 // We union the run reports, meaning
                 // that statistics are shared across
@@ -546,8 +552,10 @@ impl EGraph {
         }
     }
 
-    pub fn union(&mut self, id1: Id, id2: Id, sort: Symbol) -> Id {
-        self.unionfind.union(id1, id2, sort)
+    pub fn union(&mut self, id1: Id, id2: Id, sort: Symbol) -> Result<Id, Error> {
+        self.unionfind.union(id1, id2, sort);
+        self.rebuild()?;
+        Ok(self.unionfind.find(id1))
     }
 
     #[track_caller]
@@ -1134,7 +1142,9 @@ impl EGraph {
                         indexmap::map::Entry::Occupied(_) => {
                             panic!("Rule '{name}' was already present")
                         }
-                        indexmap::map::Entry::Vacant(e) => e.insert((compiled_rule, rule_id, core_rule)),
+                        indexmap::map::Entry::Vacant(e) => {
+                            e.insert((compiled_rule, rule_id, core_rule))
+                        }
                     };
                     Ok(name)
                 }
@@ -1296,17 +1306,6 @@ impl EGraph {
     }
 
     fn run_command(&mut self, command: ResolvedNCommand) -> Result<(), Error> {
-        let pre_rebuild = Instant::now();
-        let rebuild_num = self.rebuild()?;
-        if rebuild_num > 0 {
-            log::info!(
-                "Rebuild before command: {:10}ms",
-                pre_rebuild.elapsed().as_millis()
-            );
-        }
-
-        self.debug_assert_invariants();
-
         match command {
             ResolvedNCommand::SetOption { name, value } => {
                 let str = format!("Set option {} to {}", name, value);
@@ -1321,11 +1320,11 @@ impl EGraph {
                 self.declare_function(&fdecl)?;
                 log::info!("Declared function {}.", fdecl.name)
             }
-            ResolvedNCommand::AddRuleset(name) => {
+            ResolvedNCommand::AddRuleset(_span, name) => {
                 self.add_ruleset(name);
                 log::info!("Declared ruleset {name}.");
             }
-            ResolvedNCommand::UnstableCombinedRuleset(name, others) => {
+            ResolvedNCommand::UnstableCombinedRuleset(_span, name, others) => {
                 self.add_combined_ruleset(name, others);
                 log::info!("Declared ruleset {name}.");
             }
@@ -1503,6 +1502,17 @@ impl EGraph {
                 log::info!("Output to '{filename:?}'.")
             }
         };
+
+        let post_rebuild = Instant::now();
+        let rebuild_num = self.rebuild()?;
+        if rebuild_num > 0 {
+            log::info!(
+                "Rebuild after command: {:10}ms",
+                post_rebuild.elapsed().as_millis()
+            );
+        }
+
+        self.debug_assert_invariants();
         Ok(())
     }
 
@@ -1589,20 +1599,16 @@ impl EGraph {
         }
     }
 
-    pub fn set_reserved_symbol(&mut self, sym: Symbol) {
-        assert!(
-            !self.parser.symbol_gen.has_been_used(),
-            "Reserved symbol must be set before any symbols are generated"
-        );
-        self.parser.symbol_gen = SymbolGen::new(sym.to_string());
-    }
-
     fn process_command(&mut self, command: Command) -> Result<Vec<ResolvedNCommand>, Error> {
         let program = desugar::desugar_program(vec![command], &mut self.parser, self.seminaive)?;
 
         let program = self.typecheck_program(&program)?;
 
-        let program = remove_globals(program, &mut self.parser.symbol_gen);
+        let program = remove_globals::remove_globals(program, &mut self.parser.symbol_gen);
+
+        for command in &program {
+            self.names.check_shadowing(command)?;
+        }
 
         Ok(program)
     }
@@ -1968,6 +1974,8 @@ pub enum Error {
     SubsumeMergeError(Symbol),
     #[error("extraction failure: {:?}", .0)]
     ExtractError(Value),
+    #[error("{1}\n{2}\nShadowing is not allowed, but found {0}")]
+    Shadowing(Symbol, Span, Span),
 }
 
 #[cfg(test)]

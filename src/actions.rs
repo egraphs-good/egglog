@@ -392,20 +392,29 @@ impl EGraph {
                             function.remove(args, self.timestamp);
                         }
                         Change::Subsume => {
-                            if function.decl.subtype != FunctionSubtype::Constructor
-                                && function.decl.subtype != FunctionSubtype::Relation
-                            {
-                                return Err(Error::SubsumeMergeError(*f));
-                            }
-                            function
-                                .nodes
-                                .insert_and_merge(args, self.timestamp, true, |old| {
-                                    old.unwrap_or_else(|| Value {
-                                        #[cfg(debug_assertions)]
-                                        tag: function.schema.output.name(),
-                                        bits: self.unionfind.make_set(),
-                                    })
-                                });
+                            match function.decl.subtype {
+                                FunctionSubtype::Constructor => function.nodes.insert_and_merge(
+                                    args,
+                                    self.timestamp,
+                                    true,
+                                    |old| {
+                                        old.unwrap_or_else(|| Value {
+                                            #[cfg(debug_assertions)]
+                                            tag: function.schema.output.name(),
+                                            bits: self.unionfind.make_set(),
+                                        })
+                                    },
+                                ),
+                                FunctionSubtype::Relation => function.nodes.insert_and_merge(
+                                    args,
+                                    self.timestamp,
+                                    true,
+                                    |_| Value::unit(),
+                                ),
+                                FunctionSubtype::Custom => {
+                                    return Err(Error::SubsumeMergeError(*f))
+                                }
+                            };
                         }
                     }
                     stack.truncate(new_len);

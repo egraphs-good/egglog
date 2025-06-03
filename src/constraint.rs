@@ -516,11 +516,18 @@ impl Assignment<AtomTerm, ArcSort> {
                     children.clone(),
                 ))
             }
-            GenericAction::Union(span, lhs, rhs) => Ok(ResolvedAction::Union(
-                span.clone(),
-                self.annotate_expr(lhs, typeinfo),
-                self.annotate_expr(rhs, typeinfo),
-            )),
+            GenericAction::Union(span, lhs, rhs) => {
+                let lhs = self.annotate_expr(lhs, typeinfo);
+                let rhs = self.annotate_expr(rhs, typeinfo);
+
+                let sort = lhs.output_type();
+                assert_eq!(sort.name(), rhs.output_type().name());
+                if !sort.is_eq_sort() {
+                    return Err(TypeError::NonEqsortUnion(sort, span.clone()));
+                }
+
+                Ok(ResolvedAction::Union(span.clone(), lhs, rhs))
+            }
             GenericAction::Extract(span, lhs, rhs) => Ok(ResolvedAction::Extract(
                 span.clone(),
                 self.annotate_expr(lhs, typeinfo),
