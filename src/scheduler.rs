@@ -1,13 +1,10 @@
-use std::sync::Arc;
-
-use dyn_clone::DynClone;
+use core_relations::ExternalFunction;
 use egglog_bridge::{ColumnTy, DefaultVal, FunctionConfig, FunctionId, MergeFn, RuleId};
 
-use crate::core::{
-    CoreAction, CoreRule, GenericAtomTerm, GenericCoreAction, GenericCoreActions, ResolvedCoreRule,
-};
+use crate::ast::ResolvedVar;
+use crate::core::{GenericAtomTerm, ResolvedCoreRule};
 use crate::util::IndexMap;
-use crate::{actions, span, BackendRule, Ruleset, Symbol};
+use crate::{span, BackendRule, Ruleset, Symbol};
 
 use crate::{EGraph, HashMap, RunReport};
 
@@ -22,33 +19,47 @@ impl EGraph {
 
         // Step 1: build all the query/action rules and worklist if have not already
         let record = &mut schedulers[id];
-        rules
-            .iter()
-            .for_each(|(id, rule)| {
-                record
-                    .rule_info
-                    .entry(*id)
-                    .or_insert_with(|| SchedulerRuleInfo::new(self, rule));
-            });
-        
+        rules.iter().for_each(|(id, rule)| {
+            record
+                .rule_info
+                .entry(*id)
+                .or_insert_with(|| SchedulerRuleInfo::new(self, rule));
+        });
+
         // Step 2: run all the queries for one iteration
-        let query_rules = rules.iter().map(|(rule_id, _rule)| {
-            let rule_info = record.rule_info.get(rule_id).unwrap();
-            rule_info.query_rule
-        }).collect::<Vec<_>>();
+        let query_rules = rules
+            .iter()
+            .map(|(rule_id, _rule)| {
+                let rule_info = record.rule_info.get(rule_id).unwrap();
+                rule_info.query_rule
+            })
+            .collect::<Vec<_>>();
         self.backend.run_rules(&query_rules).unwrap();
 
         // Step 3: let the scheduler decide which matches need to be kept
+        let mut scheduling_rules = Vec::new();
         for (rule_id, _rule) in rules.iter() {
             let rule_info = record.rule_info.get(rule_id).unwrap();
-            let ms = Matches { function: rule_info.worklist_id };
-            record.scheduler.schedule_matches(self, &ms);
+            let matches = self.backend.table_size(rule_info.worklist_id);
+            let scheduling_rule = rule_info.build_scheduling_rule(
+                self,
+                record.scheduler.clone(),
+                MatchesStats {
+                    total_matches: matches,
+                },
+            );
+            scheduling_rules.push(scheduling_rule);
         }
+        self.backend.run_rules(&scheduling_rules).unwrap();
 
-        let action_rules = rules.iter().map(|(rule_id, _rule)| {
-            let rule_info = record.rule_info.get(rule_id).unwrap();
-            rule_info.action_rule
-        }).collect::<Vec<_>>();
+        // Step 4: run the action rules
+        let action_rules = rules
+            .iter()
+            .map(|(rule_id, _rule)| {
+                let rule_info = record.rule_info.get(rule_id).unwrap();
+                rule_info.action_rule
+            })
+            .collect::<Vec<_>>();
         self.backend.run_rules(&action_rules).unwrap();
 
         self.rulesets = rulesets;
@@ -76,34 +87,20 @@ fn collect_rules<'a>(
     }
 }
 
+#[derive(Clone)]
+pub struct MatchesStats {
+    pub total_matches: usize,
+}
+
 pub trait Scheduler: dyn_clone::DynClone + Send + Sync {
     fn can_stop(&mut self, iteration: usize) -> bool;
 
-    fn schedule_matches(&mut self, egraph: &mut EGraph, matches: &Matches);
-}
-
-dyn_clone::clone_trait_object!(Scheduler);
-
-#[derive(Clone)]
-pub struct Matches {
-    function: egglog_bridge::FunctionId,
-}
-
-struct MatchIterator<'a> {
-    egraph: &'a EGraph,
-}
-
-impl Matches {
-    fn iter(&self, egraph: &EGraph) -> MatchIterator<'_> {
-        // egraph.backend.
-        todo!()
-    }
+    fn schedule_matches<'a>(&self, stats: MatchesStats, ms: &'a [core_relations::Value]) -> bool;
 }
 
 #[derive(Clone)]
 pub(crate) struct SchedulerRecord {
     scheduler: Box<dyn Scheduler>,
-    matches: Matches,
     rule_info: HashMap<Symbol, SchedulerRuleInfo>,
 }
 
@@ -111,20 +108,19 @@ pub(crate) struct SchedulerRecord {
 /// we split a rule (rule query action) into a worklist relation
 /// two rules (rule query (worklist vars false)) and
 /// (rule (worklist vars false) (action ... (delete (worklist vars false))))
-///
-/// Every time
 #[derive(Clone)]
 struct SchedulerRuleInfo {
-    timestamp: u32,
+    // timestamp: u32,
     worklist_id: FunctionId,
     query_rule: RuleId,
     action_rule: RuleId,
+    free_vars: Vec<ResolvedVar>,
 }
 
 impl SchedulerRuleInfo {
     pub fn new(egraph: &mut EGraph, rule: &ResolvedCoreRule) -> SchedulerRuleInfo {
         // step 1: create the worklist table
-        let free_vars = rule.head.get_free_vars();
+        let free_vars = rule.head.get_free_vars().into_iter().collect::<Vec<_>>();
         let bool_ty = ColumnTy::Primitive(egraph.backend.primitives().get_ty::<bool>());
         let bool_true = egraph.backend.primitive_constant(true);
         let bool_false = egraph.backend.primitive_constant(false);
@@ -187,10 +183,62 @@ impl SchedulerRuleInfo {
         let arule_id = arule_builder.build();
 
         SchedulerRuleInfo {
-            timestamp: 0,
             worklist_id,
             query_rule: qrule_id,
             action_rule: arule_id,
+            free_vars,
         }
     }
+
+    fn build_scheduling_rule(
+        &self,
+        egraph: &mut EGraph,
+        scheduler: Box<dyn Scheduler>,
+        stats: MatchesStats,
+    ) -> RuleId {
+        let schedule_prim = SchedulingPrim { stats, scheduler };
+        let schedule_prim_id = egraph.backend.register_external_func(schedule_prim);
+        let bool_true = egraph.backend.primitive_constant(true);
+        let mut srule_builder = BackendRule::new(
+            egraph.backend.new_rule("schedule", false),
+            &egraph.functions,
+            &egraph.type_info,
+        );
+        let mut entries = self
+            .free_vars
+            .iter()
+            .map(|fv| srule_builder.entry(&GenericAtomTerm::Var(span!(), fv.clone())))
+            .collect::<Vec<_>>();
+
+        entries.push(bool_true);
+        srule_builder
+            .rb
+            .query_table(self.worklist_id, &entries, Some(false))
+            .unwrap();
+        srule_builder
+            .rb
+            .query_prim(schedule_prim_id, &entries, ColumnTy::Id)
+            .unwrap();
+
+        srule_builder.build()
+    }
 }
+
+#[derive(Clone)]
+struct SchedulingPrim {
+    stats: MatchesStats,
+    scheduler: Box<dyn Scheduler>,
+}
+
+impl ExternalFunction for SchedulingPrim {
+    fn invoke(
+        &self,
+        state: &mut core_relations::ExecutionState,
+        args: &[core_relations::Value],
+    ) -> Option<core_relations::Value> {
+        let keep = self.scheduler.schedule_matches(self.stats.clone(), args);
+        Some(state.prims().get(keep))
+    }
+}
+
+dyn_clone::clone_trait_object!(Scheduler);
