@@ -22,6 +22,7 @@ pub mod sort;
 mod termdag;
 mod typechecking;
 pub mod util;
+pub mod scheduler;
 
 // This is used to allow the `add_primitive` macro to work in
 // both this crate and other crates by referring to `::egglog`.
@@ -31,6 +32,7 @@ pub use add_primitive::add_primitive;
 use crate::constraint::Problem;
 use crate::core::{AtomTerm, ResolvedAtomTerm, ResolvedCall};
 pub use crate::prelude::*;
+use crate::scheduler::{Scheduler, SchedulerRecord};
 use crate::typechecking::TypeError;
 use ast::*;
 #[cfg(feature = "bin")]
@@ -270,6 +272,7 @@ pub struct EGraph {
     overall_run_report: RunReport,
     /// Messages to be printed to the user. If this is `None`, then we are ignoring messages.
     msgs: Option<Vec<String>>,
+    schedulers: Vec<SchedulerRecord>,
 }
 
 #[derive(Clone)]
@@ -324,6 +327,7 @@ impl Default for EGraph {
             overall_run_report: Default::default(),
             msgs: Some(vec![]),
             type_info: Default::default(),
+            schedulers: vec![],
         };
 
         add_leaf_sort(&mut eg, UnitSort, span!()).unwrap();
@@ -744,7 +748,7 @@ impl EGraph {
         ) {
             match &rulesets[&ruleset] {
                 Ruleset::Rules(rules) => {
-                    for id in rules.values() {
+                    for (_, id) in rules.values() {
                         ids.push(*id);
                     }
                 }
@@ -797,7 +801,7 @@ impl EGraph {
     ) -> Result<Symbol, Error> {
         let core_rule =
             rule.to_canonicalized_core_rule(&self.type_info, &mut self.parser.symbol_gen)?;
-        let (query, actions) = (core_rule.body, core_rule.head);
+        let (query, actions) = (&core_rule.body, &core_rule.head);
 
         let rule_id = {
             let mut translator = BackendRule::new(
@@ -817,7 +821,7 @@ impl EGraph {
                         indexmap::map::Entry::Occupied(_) => {
                             panic!("Rule '{name}' was already present")
                         }
-                        indexmap::map::Entry::Vacant(e) => e.insert(rule_id),
+                        indexmap::map::Entry::Vacant(e) => e.insert((core_rule, rule_id)),
                     };
                     Ok(name)
                 }
