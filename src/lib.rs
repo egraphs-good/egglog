@@ -32,7 +32,7 @@ pub use add_primitive::add_primitive;
 use crate::constraint::Problem;
 use crate::core::{AtomTerm, ResolvedAtomTerm, ResolvedCall};
 pub use crate::prelude::*;
-use crate::scheduler::{Scheduler, SchedulerRecord};
+use crate::scheduler::SchedulerRecord;
 use crate::typechecking::TypeError;
 use ast::*;
 #[cfg(feature = "bin")]
@@ -809,8 +809,8 @@ impl EGraph {
                 &self.functions,
                 &self.type_info,
             );
-            translator.query(&query, false);
-            translator.actions(&actions)?;
+            translator.query(query, false);
+            translator.actions(actions)?;
             translator.build()
         };
 
@@ -1417,6 +1417,10 @@ impl EGraph {
         } else {
             vec![]
         }
+    }
+
+    pub fn get_size(&self, function_id: egglog_bridge::FunctionId) -> usize {
+        self.backend.table_size(function_id)
     }
 }
 

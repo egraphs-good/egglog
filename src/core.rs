@@ -428,7 +428,7 @@ where
         };
 
         let add_from_atoms = |free_vars: &mut HashSet<Leaf>, ats: &[GenericAtomTerm<Leaf>]| {
-            ats.iter().flat_map(|at| at_free_var(at)).for_each(|v| {
+            ats.iter().flat_map(&at_free_var).for_each(|v| {
                 free_vars.insert(v);
             });
         };

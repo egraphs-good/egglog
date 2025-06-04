@@ -56,6 +56,8 @@ rustc-hash = "1.1"
 symbol_table = { version = "0.4.0", features = ["global"] }
 thiserror = "1"
 web-time = "1.1"
+dyn-clone = "1.0.17"
+bit-vec = "0.8.0"
 
 # Backend
 # TODO: move egglog-backend repo into core egglog repo
