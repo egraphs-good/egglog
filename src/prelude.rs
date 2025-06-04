@@ -330,7 +330,7 @@ pub fn query(
         unreachable!()
     };
     assert_eq!(rules.len(), 1);
-    let rule = rules.into_iter().next().unwrap().1.1;
+    let rule = rules.into_iter().next().unwrap().1 .1;
     egraph.backend.free_rule(rule);
 
     let Some(mutex) = Arc::into_inner(results) else {

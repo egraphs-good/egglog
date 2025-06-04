@@ -136,9 +136,10 @@ impl EGraph {
         // Step 1: build all the query/action rules and worklist if have not already
         let record = &mut schedulers[scheduler_id];
         rules.iter().for_each(|(id, rule)| {
-            record.rule_info.entry(*id).or_insert_with(|| {
-                SchedulerRuleInfo::new(self, rule, id.as_str())
-            });
+            record
+                .rule_info
+                .entry(*id)
+                .or_insert_with(|| SchedulerRuleInfo::new(self, rule, id.as_str()));
         });
 
         // Step 2: run all the queries for one iteration
@@ -362,7 +363,6 @@ mod test {
 
     impl Scheduler for FirstNScheduler {
         fn filter_matches(&self, matches: &mut Matches) {
-            dbg!(&matches.match_size());
             for i in 0..std::cmp::min(self.n, matches.match_size()) {
                 matches.choose(i);
             }
@@ -392,18 +392,32 @@ mod test {
         loop {
             let report = egraph.step_rule_with_scheduler(scheduler_id, "test".into());
             let table_size = egraph.get_size(s_id);
-            dbg!(&table_size);
             iter += 1;
             assert_eq!(table_size, std::cmp::min(iter * 10, 101));
 
             let expected_matches = if iter <= 10 { 10 } else { 12 - iter };
-            assert_eq!(report.num_matches_per_rule.iter().collect::<Vec<_>>(), vec![(&Symbol::from("test-rule"), &expected_matches)]);
+            assert_eq!(
+                report.num_matches_per_rule.iter().collect::<Vec<_>>(),
+                vec![(&Symbol::from("test-rule"), &expected_matches)]
+            );
 
             // Because of semi-naive, the exact rules that are run are more than just `test-rule`
-            assert!(report.search_and_apply_time_per_rule.keys().all(|k| k.as_str().starts_with("test-rule")));
-            assert_eq!(report.merge_time_per_ruleset.keys().collect::<Vec<_>>(), vec![&Symbol::from("test")]);
-            assert_eq!(report.search_and_apply_time_per_ruleset.keys().collect::<Vec<_>>(), vec![&Symbol::from("test")]);
-            
+            assert!(report
+                .search_and_apply_time_per_rule
+                .keys()
+                .all(|k| k.as_str().starts_with("test-rule")));
+            assert_eq!(
+                report.merge_time_per_ruleset.keys().collect::<Vec<_>>(),
+                vec![&Symbol::from("test")]
+            );
+            assert_eq!(
+                report
+                    .search_and_apply_time_per_ruleset
+                    .keys()
+                    .collect::<Vec<_>>(),
+                vec![&Symbol::from("test")]
+            );
+
             if !report.updated {
                 break;
             }

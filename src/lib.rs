@@ -17,12 +17,12 @@ pub mod constraint;
 mod core;
 pub mod extract;
 pub mod prelude;
+pub mod scheduler;
 mod serialize;
 pub mod sort;
 mod termdag;
 mod typechecking;
 pub mod util;
-pub mod scheduler;
 
 // This is used to allow the `add_primitive` macro to work in
 // both this crate and other crates by referring to `::egglog`.
