@@ -2,15 +2,16 @@ use std::sync::Arc;
 use std::sync::Mutex;
 
 use bit_vec::BitVec;
+use core_relations::ExecutionState;
 use core_relations::ExternalFunction;
 use core_relations::Value;
 use egglog_bridge::ColumnTy;
 use egglog_bridge::DefaultVal;
-use egglog_bridge::ExecutionState;
 use egglog_bridge::FunctionConfig;
 use egglog_bridge::FunctionId;
 use egglog_bridge::MergeFn;
 use egglog_bridge::RuleId;
+use egglog_bridge::TableAction;
 
 use crate::ast::ResolvedVar;
 use crate::core::GenericAtomTerm;
@@ -80,7 +81,7 @@ impl Matches {
         self.chosen.set(idx, true);
     }
 
-    fn instantiate(self, state: &mut ExecutionState, function_id: FunctionId) -> Vec<Value> {
+    fn instantiate(self, state: &mut ExecutionState<'_>, mut table_action: TableAction) -> Vec<Value> {
         let tuple_len = self.tuple_len();
         let idx_of = |i: usize| i / tuple_len;
         let mut chosen = Vec::new();
@@ -99,7 +100,7 @@ impl Matches {
             }
         });
         chosen.chunks(tuple_len).for_each(|row| {
-            state.stage_insert(function_id, row, Some(unit));
+            table_action.insert(state, row.iter().cloned().chain(std::iter::once(unit)));
         });
         matches
     }
@@ -148,7 +149,7 @@ impl EGraph {
         let query_iter_report = self.backend.run_rules(&query_rules).unwrap();
 
         // Step 3: let the scheduler decide which matches need to be kept
-        self.backend.with_execution_state(|mut state| {
+        self.backend.with_execution_state(|state| {
             for (rule_id, _rule) in rules.iter() {
                 let rule_info = record.rule_info.get(rule_id).unwrap();
 
@@ -156,10 +157,12 @@ impl EGraph {
                     std::mem::take(rule_info.matches.lock().unwrap().as_mut());
                 let mut matches = Matches::new(matches, rule_info.free_vars.clone());
                 record.scheduler.filter_matches(&mut matches);
+                let table_action = TableAction::new(&self.backend, rule_info.decided);
                 *rule_info.matches.lock().unwrap() =
-                    matches.instantiate(&mut state, rule_info.decided);
+                    matches.instantiate(state, table_action);
             }
         });
+        self.backend.flush_updates();
 
         // Step 4: run the action rules
         let action_rules = rules

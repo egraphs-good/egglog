@@ -146,7 +146,7 @@ impl RustRuleContext<'_, '_> {
     }
 
     fn get_table_action(&self, table: &str) -> egglog_bridge::TableAction {
-        self.table_actions[&Symbol::from(table)]
+        self.table_actions[&Symbol::from(table)].clone()
     }
 
     /// Do a table lookup. This is potentially a mutable operation!
@@ -163,7 +163,7 @@ impl RustRuleContext<'_, '_> {
 
     /// Insert a row into a table.
     /// For more information, see `egglog_bridge::TableAction::insert`.
-    pub fn insert(&mut self, table: &str, row: Vec<Value>) {
+    pub fn insert(&mut self, table: &str, row: impl Iterator<Item = Value>) {
         self.get_table_action(table).insert(self.exec_state, row)
     }
 
@@ -330,7 +330,7 @@ pub fn query(
         unreachable!()
     };
     assert_eq!(rules.len(), 1);
-    let rule = rules.into_iter().next().unwrap().1;
+    let rule = rules.into_iter().next().unwrap().1.1;
     egraph.backend.free_rule(rule);
 
     let Some(mutex) = Arc::into_inner(results) else {
@@ -729,7 +729,7 @@ mod tests {
 
                 let y = ctx.rust_to_value::<i64>(x + 2);
                 let f2 = ctx.rust_to_value::<i64>(f0 + f1);
-                ctx.insert("fib", vec![y, f2]);
+                ctx.insert("fib", vec![y, f2].into_iter());
 
                 Some(())
             },
