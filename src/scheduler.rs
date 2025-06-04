@@ -1,5 +1,6 @@
 use std::sync::Arc;
 use std::sync::Mutex;
+use std::time::Duration;
 
 use bit_vec::BitVec;
 use core_relations::ExecutionState;
@@ -81,7 +82,11 @@ impl Matches {
         self.chosen.set(idx, true);
     }
 
-    fn instantiate(self, state: &mut ExecutionState<'_>, mut table_action: TableAction) -> Vec<Value> {
+    fn instantiate(
+        self,
+        state: &mut ExecutionState<'_>,
+        mut table_action: TableAction,
+    ) -> Vec<Value> {
         let tuple_len = self.tuple_len();
         let idx_of = |i: usize| i / tuple_len;
         let mut chosen = Vec::new();
@@ -131,10 +136,9 @@ impl EGraph {
         // Step 1: build all the query/action rules and worklist if have not already
         let record = &mut schedulers[scheduler_id];
         rules.iter().for_each(|(id, rule)| {
-            record
-                .rule_info
-                .entry(*id)
-                .or_insert_with(|| SchedulerRuleInfo::new(self, rule));
+            record.rule_info.entry(*id).or_insert_with(|| {
+                SchedulerRuleInfo::new(self, rule, id.as_str())
+            });
         });
 
         // Step 2: run all the queries for one iteration
@@ -158,8 +162,7 @@ impl EGraph {
                 let mut matches = Matches::new(matches, rule_info.free_vars.clone());
                 record.scheduler.filter_matches(&mut matches);
                 let table_action = TableAction::new(&self.backend, rule_info.decided);
-                *rule_info.matches.lock().unwrap() =
-                    matches.instantiate(state, table_action);
+                *rule_info.matches.lock().unwrap() = matches.instantiate(state, table_action);
             }
         });
         self.backend.flush_updates();
@@ -190,9 +193,20 @@ impl EGraph {
         report.rebuild_time_per_ruleset =
             per_ruleset(query_iter_report.rebuild_time + action_iter_report.rebuild_time);
 
-        // TODO: correctly track the provenance of each rule
-        // report.search_and_apply_time_per_rule = query_iter_report
-        report.num_matches_per_rule = action_iter_report.rule_reports
+        report.search_and_apply_time_per_rule = {
+            let mut map = HashMap::default();
+            for (rule, report) in query_iter_report.rule_reports.iter() {
+                *map.entry(rule.as_str().into())
+                    .or_insert_with(|| Duration::from_nanos(0)) += report.search_and_apply_time;
+            }
+            for (rule, report) in action_iter_report.rule_reports.iter() {
+                *map.entry(rule.as_str().into())
+                    .or_insert_with(|| Duration::from_nanos(0)) += report.search_and_apply_time;
+            }
+            map
+        };
+        report.num_matches_per_rule = action_iter_report
+            .rule_reports
             .iter()
             .map(|(rule, report)| (rule.as_str().into(), report.num_matches))
             .collect();
@@ -258,16 +272,13 @@ impl CollectMatches {
 
 impl ExternalFunction for CollectMatches {
     fn invoke(&self, state: &mut core_relations::ExecutionState, args: &[Value]) -> Option<Value> {
-        self.matches
-            .lock()
-            .unwrap()
-            .extend(args.iter().copied());
+        self.matches.lock().unwrap().extend(args.iter().copied());
         Some(state.prims().get(()))
     }
 }
 
 impl SchedulerRuleInfo {
-    pub fn new(egraph: &mut EGraph, rule: &ResolvedCoreRule) -> SchedulerRuleInfo {
+    pub fn new(egraph: &mut EGraph, rule: &ResolvedCoreRule, name: &str) -> SchedulerRuleInfo {
         let free_vars = rule.head.get_free_vars().into_iter().collect::<Vec<_>>();
         let unit_type = egraph.backend.primitives().get_ty::<()>();
         let unit = egraph.backend.primitives().get(());
@@ -292,7 +303,7 @@ impl SchedulerRuleInfo {
 
         // Step 1: build the query rule
         let mut qrule_builder = BackendRule::new(
-            egraph.backend.new_rule("scheduler_query", true),
+            egraph.backend.new_rule(name, true),
             &egraph.functions,
             &egraph.type_info,
         );
@@ -311,7 +322,7 @@ impl SchedulerRuleInfo {
 
         // Step 2: build the action rule
         let mut arule_builder = BackendRule::new(
-            egraph.backend.new_rule("scheduler_action", false),
+            egraph.backend.new_rule(name, false),
             &egraph.functions,
             &egraph.type_info,
         );
@@ -371,7 +382,7 @@ mod test {
 
         (ruleset test)
         (relation S (i64))
-        (rule ((R x)) ((S x)) :ruleset test)
+        (rule ((R x)) ((S x)) :ruleset test :name "test-rule")
         "#;
         egraph.parse_and_run_program(None, input).unwrap();
         let r_id = egraph.functions.get(&Symbol::from("R")).unwrap().backend_id;
@@ -384,6 +395,15 @@ mod test {
             dbg!(&table_size);
             iter += 1;
             assert_eq!(table_size, std::cmp::min(iter * 10, 101));
+
+            let expected_matches = if iter <= 10 { 10 } else { 12 - iter };
+            assert_eq!(report.num_matches_per_rule.iter().collect::<Vec<_>>(), vec![(&Symbol::from("test-rule"), &expected_matches)]);
+
+            // Because of semi-naive, the exact rules that are run are more than just `test-rule`
+            assert!(report.search_and_apply_time_per_rule.keys().all(|k| k.as_str().starts_with("test-rule")));
+            assert_eq!(report.merge_time_per_ruleset.keys().collect::<Vec<_>>(), vec![&Symbol::from("test")]);
+            assert_eq!(report.search_and_apply_time_per_ruleset.keys().collect::<Vec<_>>(), vec![&Symbol::from("test")]);
+            
             if !report.updated {
                 break;
             }
