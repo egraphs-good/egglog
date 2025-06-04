@@ -75,7 +75,7 @@ impl Sort for BigIntSort {
         let bigint = primitives.unwrap_ref::<BigInt>(value);
 
         let as_string = termdag.lit(Literal::String(bigint.to_string().into()));
-        termdag.app("from_string".into(), vec![as_string])
+        termdag.app("from-string".into(), vec![as_string])
     }
 }
 
