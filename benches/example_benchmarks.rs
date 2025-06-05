@@ -1,6 +1,9 @@
 use codspeed_criterion_compat::{criterion_group, criterion_main, Criterion};
 use egglog::EGraph;
 
+#[global_allocator]
+static GLOBAL: mimalloc::MiMalloc = mimalloc::MiMalloc;
+
 fn run_example(filename: &str, program: &str, no_messages: bool) {
     let mut egraph = EGraph::default();
     if no_messages {
