@@ -507,6 +507,7 @@ dependencies = [
  "num",
  "numeric-id",
  "ordered-float",
+ "rayon",
  "rustc-hash 1.1.0",
  "symbol_table",
  "thiserror 1.0.69",
