@@ -3,11 +3,14 @@
 //! ```
 //! use egglog::prelude::*;
 //! ```
+//! See also [`rule`], [`rust_rule`], [`query`], [`LeafSort`],
+//! and [`ContainerSort`].
 
 use crate::*;
 use std::any::{Any, TypeId};
 
 // Re-exports in `prelude` for convenience.
+pub use egglog::ast::{Action, Fact, Facts, GenericActions, Symbol};
 pub use egglog::{action, actions, datatype, expr, fact, facts, vars};
 pub use egglog::{span, EGraph};
 
@@ -68,13 +71,13 @@ macro_rules! expr {
 
 #[macro_export]
 macro_rules! fact {
-    ((= $($arg:tt)*)) => { egglog::ast::Fact::Eq(span!(), $(expr!($arg)),*) };
-    ($a:tt) => { egglog::ast::Fact::Fact(expr!($a)) };
+    ((= $($arg:tt)*)) => { Fact::Eq(span!(), $(expr!($arg)),*) };
+    ($a:tt) => { Fact::Fact(expr!($a)) };
 }
 
 #[macro_export]
 macro_rules! facts {
-    ($($tree:tt)*) => { egglog::ast::Facts(vec![$(fact!($tree)),*]) };
+    ($($tree:tt)*) => { Facts(vec![$(fact!($tree)),*]) };
 }
 
 #[macro_export]
@@ -108,6 +111,71 @@ macro_rules! actions {
 }
 
 /// Add a rule to the e-graph whose right-hand side is made up of actions.
+/// ```
+/// use egglog::prelude::*;
+///
+/// let mut egraph = EGraph::default();
+/// egraph.parse_and_run_program(
+///     None,
+///     "
+/// (function fib (i64) i64 :no-merge)
+/// (set (fib 0) 0)
+/// (set (fib 1) 1)
+/// (rule (
+///     (= f0 (fib x))
+///     (= f1 (fib (+ x 1)))
+/// ) (
+///     (set (fib (+ x 2)) (+ f0 f1))
+/// ))
+/// (run 10)
+///     ",
+/// )?;
+///
+/// let big_number = 20;
+///
+/// // check that `fib` does not contain `20`
+/// let results = query(
+///     &mut egraph,
+///     vars![f: i64],
+///     facts![(= (fib (unquote exprs::int(big_number))) f)],
+/// )?;
+///
+/// assert!(results.iter().next().is_none());
+///
+/// let ruleset = "custom_ruleset";
+/// add_ruleset(&mut egraph, ruleset)?;
+///
+/// // add the rule from `build_test_database` to the egraph
+/// rule(
+///     &mut egraph,
+///     ruleset,
+///     facts![
+///         (= f0 (fib x))
+///         (= f1 (fib (+ x 1)))
+///     ],
+///     actions![
+///         (set (fib (+ x 2)) (+ f0 f1))
+///     ],
+/// )?;
+///
+/// // run that rule 10 times
+/// for _ in 0..10 {
+///     run_ruleset(&mut egraph, ruleset)?;
+/// }
+///
+/// // check that `fib` now contains `20`
+/// let results = query(
+///     &mut egraph,
+///     vars![f: i64],
+///     facts![(= (fib (unquote exprs::int(big_number))) f)],
+/// )?;
+///
+/// let y = egraph.rust_to_value::<i64>(6765);
+/// let results: Vec<_> = results.iter().collect();
+/// assert_eq!(results, [[y]]);
+///
+/// # Ok::<(), egglog::Error>(())
+/// ```
 pub fn rule(
     egraph: &mut EGraph,
     ruleset: &str,
