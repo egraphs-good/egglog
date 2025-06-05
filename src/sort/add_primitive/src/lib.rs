@@ -190,9 +190,8 @@ pub fn add_primitive(input: TokenStream) -> TokenStream {
 
     // This is the big `quote!` block that ties everything together.
     quote! {{
-        #[allow(unused_imports)] use ::egglog::{*, constraint::*};
-        #[allow(unused_imports)] use ::std::any::TypeId;
-        #[allow(unused_imports)] use ::std::sync::Arc;
+        #[allow(unused_imports)] use ::egglog::{*, ast::*, constraint::*};
+        #[allow(unused_imports)] use ::std::{any::TypeId, sync::Arc};
 
         #[derive(Clone)]
         #prim_def
