@@ -122,6 +122,7 @@ pub fn rule(
 }
 
 /// A wrapper around an `ExecutionState` for rules that are written in Rust.
+/// See the [`rust_rule`] documentation for an example of how to use this.
 pub struct RustRuleContext<'a, 'b> {
     exec_state: &'a mut ExecutionState<'b>,
     union_action: egglog_bridge::UnionAction,
