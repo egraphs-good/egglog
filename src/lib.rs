@@ -1398,6 +1398,16 @@ impl EGraph {
         &self.overall_run_report
     }
 
+    /// Convert from an egglog value to a Rust type.
+    pub fn value_to_rust<T: core_relations::Primitive>(&self, x: Value) -> T {
+        self.backend.primitives().unwrap::<T>(x)
+    }
+
+    /// Convert from a Rust type to an egglog value.
+    pub fn rust_to_value<T: core_relations::Primitive>(&self, x: T) -> Value {
+        self.backend.primitives().get::<T>(x)
+    }
+
     pub(crate) fn print_msg(&mut self, msg: String) {
         if let Some(ref mut msgs) = self.msgs {
             msgs.push(msg);
