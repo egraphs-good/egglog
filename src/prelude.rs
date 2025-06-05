@@ -1,7 +1,11 @@
 use crate::*;
 use std::any::{Any, TypeId};
 
-pub mod expr {
+// Re-exports in `prelude` for convenience.
+pub use egglog::{action, actions, datatype, expr, fact, facts, vars};
+pub use egglog::{span, EGraph};
+
+pub mod exprs {
     use super::*;
 
     pub fn var(name: &str) -> Expr {
@@ -14,14 +18,6 @@ pub mod expr {
 
     pub fn call(f: &str, xs: Vec<Expr>) -> Expr {
         Expr::Call(span!(), f.into(), xs)
-    }
-}
-
-pub mod fact {
-    use super::*;
-
-    pub fn equals(x: Expr, y: Expr) -> Fact {
-        Fact::Eq(span!(), x, y)
     }
 }
 
@@ -59,20 +55,20 @@ macro_rules! vars {
 #[macro_export]
 macro_rules! expr {
     ((unquote $unquoted:expr)) => { $unquoted };
-    (($func:tt $($arg:tt)*)) => { expr::call(stringify!($func), vec![$(expr!($arg)),*]) };
-    ($value:literal) => { expr::int($value) };
-    ($quoted:tt) => { expr::var(stringify!($quoted)) };
+    (($func:tt $($arg:tt)*)) => { exprs::call(stringify!($func), vec![$(expr!($arg)),*]) };
+    ($value:literal) => { exprs::int($value) };
+    ($quoted:tt) => { exprs::var(stringify!($quoted)) };
 }
 
 #[macro_export]
 macro_rules! fact {
-    ((= $($arg:tt)*)) => { fact::equals($(expr!($arg)),*) };
-    ($a:tt) => { Fact::Fact(expr!($a)) };
+    ((= $($arg:tt)*)) => { egglog::ast::Fact::Eq(span!(), $(expr!($arg)),*) };
+    ($a:tt) => { egglog::ast::Fact::Fact(expr!($a)) };
 }
 
 #[macro_export]
 macro_rules! facts {
-    ($($tree:tt)*) => { Facts(vec![$(fact!($tree)),*]) };
+    ($($tree:tt)*) => { egglog::ast::Facts(vec![$(fact!($tree)),*]) };
 }
 
 #[macro_export]
@@ -257,9 +253,9 @@ pub fn rust_rule(
         span: span!(),
         head: GenericActions(vec![GenericAction::Expr(
             span!(),
-            expr::call(
+            exprs::call(
                 prim_name.into(),
-                vars.iter().map(|(v, _)| expr::var(v)).collect(),
+                vars.iter().map(|(v, _)| exprs::var(v)).collect(),
             ),
         )]),
         body: facts.0,
@@ -289,6 +285,40 @@ impl QueryResult {
 }
 
 /// Run a query over the database.
+/// ```
+/// use egglog::prelude::*;
+///
+/// let mut egraph = EGraph::default();
+/// egraph.parse_and_run_program(
+///     None,
+///     "
+/// (function fib (i64) i64 :no-merge)
+/// (set (fib 0) 0)
+/// (set (fib 1) 1)
+/// (rule (
+///     (= f0 (fib x))
+///     (= f1 (fib (+ x 1)))
+/// ) (
+///     (set (fib (+ x 2)) (+ f0 f1))
+/// ))
+/// (run 10)
+///     ",
+/// ).unwrap();
+///
+/// let results = query(
+///     &mut egraph,
+///     vars![x: i64, y: i64],
+///     facts![
+///         (= (fib x) y)
+///         (= y 13)
+///     ],
+/// ).unwrap();
+///
+/// let x = egraph.rust_to_value::<i64>(7);
+/// let y = egraph.rust_to_value::<i64>(13);
+/// let results: Vec<_> = results.iter().collect();
+/// assert_eq!(results, vec![vec![x, y]]);
+/// ```
 pub fn query(
     egraph: &mut EGraph,
     vars: &[(&str, ArcSort)],
@@ -621,7 +651,7 @@ mod tests {
         let results = query(
             &mut egraph,
             vars![f: i64],
-            facts![(= (fib (unquote expr::int(big_number))) f)],
+            facts![(= (fib (unquote exprs::int(big_number))) f)],
         )?;
 
         assert!(results.data.is_empty());
@@ -651,7 +681,7 @@ mod tests {
         let results = query(
             &mut egraph,
             vars![f: i64],
-            facts![(= (fib (unquote expr::int(big_number))) f)],
+            facts![(= (fib (unquote exprs::int(big_number))) f)],
         )?;
 
         let y = egraph.backend.primitives().get::<i64>(6765);
@@ -675,7 +705,7 @@ mod tests {
             facts![
                 (fib 5)
                 (= f1 (fib (+ x 1)))
-                (= 3 (unquote expr::int(1 + 2)))
+                (= 3 (unquote exprs::int(1 + 2)))
             ],
             actions![
                 (let y (+ x 2))
@@ -701,7 +731,7 @@ mod tests {
         let results = query(
             &mut egraph,
             vars![f: i64],
-            facts![(= (fib (unquote expr::int(big_number))) f)],
+            facts![(= (fib (unquote exprs::int(big_number))) f)],
         )?;
 
         assert!(results.data.is_empty());
@@ -741,7 +771,7 @@ mod tests {
         let results = query(
             &mut egraph,
             vars![f: i64],
-            facts![(= (fib (unquote expr::int(big_number))) f)],
+            facts![(= (fib (unquote exprs::int(big_number))) f)],
         )?;
 
         let y = egraph.backend.primitives().get::<i64>(6765);
