@@ -1,3 +1,9 @@
+//! This module makes it easier to use `egglog` from Rust.
+//! It is intended to be imported fully.
+//! ```
+//! use egglog::prelude::*;
+//! ```
+
 use crate::*;
 use std::any::{Any, TypeId};
 
