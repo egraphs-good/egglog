@@ -1,5 +1,4 @@
 use num::traits::{CheckedAdd, CheckedDiv, CheckedMul, CheckedSub, One, Signed, ToPrimitive, Zero};
-use ordered_float::OrderedFloat;
 use std::any::TypeId;
 use std::fmt::Debug;
 use std::ops::{Shl, Shr};
@@ -7,6 +6,7 @@ use std::{any::Any, sync::Arc};
 
 pub use core_relations::{Container, Containers, ExecutionState, Primitives, Rebuilder};
 pub use egglog_bridge::ColumnTy;
+pub use ordered_float::OrderedFloat;
 
 use crate::ast::Literal;
 use crate::extract::Cost;
