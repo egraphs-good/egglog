@@ -25,7 +25,9 @@ use syn::{braced, bracketed, parenthesized, parse_macro_input, Expr, Ident, LitS
 ///   This is necessary because the relationship between Rust types
 ///   and egglog sorts is not 1-to-1.
 ///
-/// - Context: putting `{x: T}` between the `=` and the argument list
+/// - Context: sometimes you want your primitive to reference
+///   information from the scope of the `add_primitive!` call.
+///   Putting `{x: T}` between the `=` and the argument list
 ///   will let you access the expression `x` of type `T` from inside
 ///   the body as `self.ctx`. `T` must be the real Rust type of `x`.
 ///   `T` must be `Clone` and `'static`.
