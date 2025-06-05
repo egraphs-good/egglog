@@ -38,7 +38,7 @@ impl Sort for F64Sort {
         add_primitive!(eg, "*" = |a: F, b: F| -> F { a * b });
         add_primitive!(eg, "/" = |a: F, b: F| -?> F { (*b != 0.0).then(|| a / b) });
         add_primitive!(eg, "%" = |a: F, b: F| -?> F { (*b != 0.0).then(|| a % b) });
-        add_primitive!(eg, "^" = |a: F, b: F| -> F { F::from(OrderedFloat((&*a).powf(**b))) });
+        add_primitive!(eg, "^" = |a: F, b: F| -> F { F::from(OrderedFloat(a.powf(**b))) });
         add_primitive!(eg, "neg" = |a: F| -> F { -a });
 
         add_primitive!(eg, "<" = |a: F, b: F| -?> () { (a < b).then(|| ()) });
@@ -48,7 +48,7 @@ impl Sort for F64Sort {
 
         add_primitive!(eg, "min" = |a: F, b: F| -> F { a.min(b) });
         add_primitive!(eg, "max" = |a: F, b: F| -> F { a.max(b) });
-        add_primitive!(eg, "abs" = |a: F| -> F { F::from((&*a).abs()) });
+        add_primitive!(eg, "abs" = |a: F| -> F { F::from(a.abs()) });
 
         // `to-f64` should be in `i64.rs`, but `F64Sort` wouldn't exist yet
         add_primitive!(eg, "to-f64" = |a: i64| -> F { F::from(OrderedFloat(a as f64)) });

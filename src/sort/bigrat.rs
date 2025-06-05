@@ -34,10 +34,10 @@ impl Sort for BigRatSort {
 
     #[rustfmt::skip]
     fn register_primitives(self: Arc<Self>, eg: &mut EGraph) {
-        add_primitive!(eg, "+" = |a: Q, b: Q| -?> Q { (&*a).checked_add(&b).map(Q::new) });
-        add_primitive!(eg, "-" = |a: Q, b: Q| -?> Q { (&*a).checked_sub(&b).map(Q::new) });
-        add_primitive!(eg, "*" = |a: Q, b: Q| -?> Q { (&*a).checked_mul(&b).map(Q::new) });
-        add_primitive!(eg, "/" = |a: Q, b: Q| -?> Q { (&*a).checked_div(&b).map(Q::new) });
+        add_primitive!(eg, "+" = |a: Q, b: Q| -?> Q { a.checked_add(&b).map(Q::new) });
+        add_primitive!(eg, "-" = |a: Q, b: Q| -?> Q { a.checked_sub(&b).map(Q::new) });
+        add_primitive!(eg, "*" = |a: Q, b: Q| -?> Q { a.checked_mul(&b).map(Q::new) });
+        add_primitive!(eg, "/" = |a: Q, b: Q| -?> Q { a.checked_div(&b).map(Q::new) });
 
         add_primitive!(eg, "min" = |a: Q, b: Q| -> Q { a.min(b) });
         add_primitive!(eg, "max" = |a: Q, b: Q| -> Q { a.max(b) });
@@ -45,11 +45,11 @@ impl Sort for BigRatSort {
         add_primitive!(eg, "abs" = |a: Q| -> Q { Q::new(a.0.abs()) });
         add_primitive!(eg, "floor" = |a: Q| -> Q { Q::new(a.0.floor()) });
         add_primitive!(eg, "ceil" = |a: Q| -> Q { Q::new(a.0.ceil()) });
-        add_primitive!(eg, "round" = |a: Q| -> Q { Q::new((&*a).round()) });
+        add_primitive!(eg, "round" = |a: Q| -> Q { Q::new(a.round()) });
 
         add_primitive!(eg, "bigrat" = |a: Z, b: Z| -> Q { Q::new(BigRational::new(a.0, b.0)) });
-        add_primitive!(eg, "numer" = |a: Q| -> Z { Z::new((&*a).numer().clone()) });
-        add_primitive!(eg, "denom" = |a: Q| -> Z { Z::new((&*a).denom().clone()) });
+        add_primitive!(eg, "numer" = |a: Q| -> Z { Z::new(a.numer().clone()) });
+        add_primitive!(eg, "denom" = |a: Q| -> Z { Z::new(a.denom().clone()) });
         add_primitive!(eg, "to-f64" = |a: Q| -> F { F::new(OrderedFloat(a.to_f64().unwrap())) });
 
         add_primitive!(eg, "pow" = |a: Q, b: Q| -?> Q {
