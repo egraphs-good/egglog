@@ -12,8 +12,6 @@ readme = "README.md"
 name = "example_benchmarks"
 harness = false
 
-[workspace]
-
 [[test]]
 name = "files"
 harness = false
