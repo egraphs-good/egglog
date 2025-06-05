@@ -115,10 +115,16 @@ fn bench_workload<const K: usize, const C: usize>(
         .with_inputs(|| {
             (
                 Database::default(),
-                SortedWritesTable::new(K, C, None, vec![], |_, old, new, out| {
-                    out.extend_from_slice(new);
-                    old != new
-                }),
+                SortedWritesTable::new(
+                    K,
+                    C,
+                    None,
+                    vec![],
+                    Box::new(|_, old, new, out: &mut Vec<Value>| {
+                        out.extend_from_slice(new);
+                        old != new
+                    }),
+                ),
             )
         })
         .input_counter(move |_| ItemsCount::new(workload_size))

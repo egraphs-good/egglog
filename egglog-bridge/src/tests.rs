@@ -1,6 +1,7 @@
 use std::{
     fmt::Debug,
     hash::Hash,
+    slice,
     sync::{
         atomic::{AtomicUsize, Ordering},
         Arc,
@@ -666,10 +667,18 @@ fn container_test() {
             ],
             || "add_0_last".to_string(),
         );
-        let new_vec_1 =
-            rb.call_external_func(vec_push, &[vec.into(), add_last_0.into()], ColumnTy::Id, "");
-        let new_vec_2 =
-            rb.call_external_func(vec_push, &[vec.into(), add_0_last.into()], ColumnTy::Id, "");
+        let new_vec_1 = rb.call_external_func(
+            vec_push,
+            &[vec.into(), add_last_0.into()],
+            ColumnTy::Id,
+            || "".to_string(),
+        );
+        let new_vec_2 = rb.call_external_func(
+            vec_push,
+            &[vec.into(), add_0_last.into()],
+            ColumnTy::Id,
+            || "".to_string(),
+        );
         rb.lookup(vec_table, &[new_vec_1.into()], String::new);
         rb.lookup(vec_table, &[new_vec_2.into()], String::new);
         rb.build()
@@ -696,7 +705,7 @@ fn container_test() {
             int_add,
             &[lhs_raw.into(), rhs_raw.into()],
             ColumnTy::Primitive(int_prim),
-            "",
+            || "".to_string(),
         );
         let boxed = rb.lookup(num_table, &[evaled.into()], String::new);
         rb.union(add_id.into(), boxed.into());
@@ -798,7 +807,7 @@ fn rhs_only_rule_only_runs_once() {
     }));
     let inc_counter_rule = {
         let mut rb = egraph.new_rule("", true);
-        rb.call_external_func(inc_counter_func, &[], ColumnTy::Id, "");
+        rb.call_external_func(inc_counter_func, &[], ColumnTy::Id, || "".to_string());
         rb.build()
     };
 
@@ -819,8 +828,8 @@ fn mergefn_arithmetic() {
             let [a, b] = vals else {
                 return None;
             };
-            let a_val = *state.prims().unwrap_ref::<i64>(*a);
-            let b_val = *state.prims().unwrap_ref::<i64>(*b);
+            let a_val = state.prims().unwrap::<i64>(*a);
+            let b_val = state.prims().unwrap::<i64>(*b);
             let res = state.prims().get::<i64>(a_val * b_val);
             Some(res)
         },
@@ -831,8 +840,8 @@ fn mergefn_arithmetic() {
             let [a, b] = vals else {
                 return None;
             };
-            let a_val = *state.prims().unwrap_ref::<i64>(*a);
-            let b_val = *state.prims().unwrap_ref::<i64>(*b);
+            let a_val = state.prims().unwrap::<i64>(*a);
+            let b_val = state.prims().unwrap::<i64>(*b);
             let res = state.prims().get::<i64>(a_val + b_val);
             Some(res)
         },
@@ -878,8 +887,8 @@ fn mergefn_arithmetic() {
     egraph.for_each(f_table, |func_row| {
         assert!(!func_row.subsumed);
         contents.push((
-            *egraph.primitives().unwrap_ref::<i64>(func_row.vals[0]),
-            *egraph.primitives().unwrap_ref::<i64>(func_row.vals[1]),
+            egraph.primitives().unwrap::<i64>(func_row.vals[0]),
+            egraph.primitives().unwrap::<i64>(func_row.vals[1]),
         ));
     });
     contents.sort();
@@ -901,8 +910,8 @@ fn mergefn_arithmetic() {
     egraph.for_each(f_table, |func_row| {
         assert!(!func_row.subsumed);
         contents.push((
-            *egraph.primitives().unwrap_ref::<i64>(func_row.vals[0]),
-            *egraph.primitives().unwrap_ref::<i64>(func_row.vals[1]),
+            egraph.primitives().unwrap::<i64>(func_row.vals[0]),
+            egraph.primitives().unwrap::<i64>(func_row.vals[1]),
         ));
     });
     contents.sort();
@@ -924,8 +933,8 @@ fn mergefn_arithmetic() {
     egraph.for_each(f_table, |func_row| {
         assert!(!func_row.subsumed);
         contents.push((
-            *egraph.primitives().unwrap_ref::<i64>(func_row.vals[0]),
-            *egraph.primitives().unwrap_ref::<i64>(func_row.vals[1]),
+            egraph.primitives().unwrap::<i64>(func_row.vals[0]),
+            egraph.primitives().unwrap::<i64>(func_row.vals[1]),
         ));
     });
     contents.sort();
@@ -970,7 +979,7 @@ fn mergefn_nested_function() {
 
     let write_rule = {
         let mut rb = egraph.new_rule("write_rule", true);
-        rb.lookup(f_table, &[value_1.clone()], String::new);
+        rb.lookup(f_table, slice::from_ref(&value_1), String::new);
         rb.lookup(f_table, &[value_2], String::new);
         rb.build()
     };
@@ -992,7 +1001,7 @@ fn mergefn_nested_function() {
         egraph.for_each(f_table, |func_row| {
             assert!(!func_row.subsumed);
             entries.push((
-                *egraph.primitives().unwrap_ref::<i64>(func_row.vals[0]),
+                egraph.primitives().unwrap::<i64>(func_row.vals[0]),
                 func_row.vals[1],
             ));
         });
@@ -1080,7 +1089,7 @@ fn constrain_prims_simple() {
             let [a] = vals else {
                 return None;
             };
-            let a_val = *state.prims().unwrap_ref::<i64>(*a);
+            let a_val = state.prims().unwrap::<i64>(*a);
             let result: bool = a_val % 2 == 0;
             Some(state.prims().get(result))
         },
@@ -1092,9 +1101,9 @@ fn constrain_prims_simple() {
     let value_true = egraph.primitive_constant(true);
     let write_f = {
         let mut rb = egraph.new_rule("write_f", true);
-        rb.lookup(f_table, &[value_1.clone()], String::new);
-        rb.lookup(f_table, &[value_2.clone()], String::new);
-        rb.lookup(f_table, &[value_3.clone()], String::new);
+        rb.lookup(f_table, &[value_1], String::new);
+        rb.lookup(f_table, &[value_2], String::new);
+        rb.lookup(f_table, &[value_3], String::new);
         rb.build()
     };
 
@@ -1118,7 +1127,7 @@ fn constrain_prims_simple() {
         egraph.for_each(table, |func_row| {
             assert!(!func_row.subsumed);
             entries.push((
-                *egraph.primitives().unwrap_ref::<i64>(func_row.vals[0]),
+                egraph.primitives().unwrap::<i64>(func_row.vals[0]),
                 func_row.vals[1],
             ));
         });
@@ -1163,7 +1172,7 @@ fn constrain_prims_abstract() {
             let [a] = vals else {
                 return None;
             };
-            let a_val = *state.prims().unwrap_ref::<i64>(*a);
+            let a_val = state.prims().unwrap::<i64>(*a);
             Some(state.prims().get(-a_val))
         },
     ));
@@ -1172,7 +1181,7 @@ fn constrain_prims_abstract() {
             let [a] = vals else {
                 return None;
             };
-            let a_val = *state.prims().unwrap_ref::<i64>(*a);
+            let a_val = state.prims().unwrap::<i64>(*a);
             Some(state.prims().get(a_val.abs()))
         },
     ));
@@ -1182,9 +1191,9 @@ fn constrain_prims_abstract() {
     let value_1 = egraph.primitive_constant(1i64);
     let write_f = {
         let mut rb = egraph.new_rule("write_f", true);
-        rb.lookup(f_table, &[value_n1.clone()], String::new);
-        rb.lookup(f_table, &[value_0.clone()], String::new);
-        rb.lookup(f_table, &[value_1.clone()], String::new);
+        rb.lookup(f_table, &[value_n1], String::new);
+        rb.lookup(f_table, &[value_0], String::new);
+        rb.lookup(f_table, &[value_1], String::new);
         rb.build()
     };
 
@@ -1215,7 +1224,7 @@ fn constrain_prims_abstract() {
         egraph.for_each(table, |func_row| {
             assert!(!func_row.subsumed);
             entries.push((
-                *egraph.primitives().unwrap_ref::<i64>(func_row.vals[0]),
+                egraph.primitives().unwrap::<i64>(func_row.vals[0]),
                 func_row.vals[1],
             ));
         });
@@ -1260,15 +1269,15 @@ fn basic_subsumption() {
     let value_3 = egraph.primitive_constant(3i64);
     let write_f = {
         let mut rb = egraph.new_rule("write_f", true);
-        rb.lookup(f_table, &[value_1.clone()], String::new);
-        rb.lookup(f_table, &[value_2.clone()], String::new);
+        rb.lookup(f_table, slice::from_ref(&value_1), String::new);
+        rb.lookup(f_table, slice::from_ref(&value_2), String::new);
         rb.build()
     };
 
     let subsume_f = {
         let mut rb = egraph.new_rule("write_f", true);
-        rb.subsume(f_table, &[value_2.clone()]);
-        rb.subsume(f_table, &[value_3.clone()]);
+        rb.subsume(f_table, slice::from_ref(&value_2));
+        rb.subsume(f_table, slice::from_ref(&value_3));
         rb.build()
     };
 
@@ -1286,7 +1295,7 @@ fn basic_subsumption() {
         let mut num_subsumed = 0;
         egraph.for_each(table, |func_row| {
             entries.push((
-                *egraph.primitives().unwrap_ref::<i64>(func_row.vals[0]),
+                egraph.primitives().unwrap::<i64>(func_row.vals[0]),
                 func_row.vals[1],
             ));
             if func_row.subsumed {
@@ -1345,14 +1354,14 @@ fn lookup_failure_panics() {
 
     let lookup_success = {
         let mut rb = egraph.new_rule("lookup_success", true);
-        rb.lookup(f, &[value_1.clone()], String::new);
+        rb.lookup(f, slice::from_ref(&value_1), String::new);
         rb.build()
     };
     egraph.run_rules(&[lookup_success]).unwrap();
 
     let lookup_failure = {
         let mut rb = egraph.new_rule("lookup_fail", true);
-        rb.lookup(f, &[value_3.clone()], String::new);
+        rb.lookup(f, slice::from_ref(&value_3), String::new);
         rb.build()
     };
     egraph.run_rules(&[lookup_failure]).err().unwrap();
@@ -1372,7 +1381,7 @@ fn primitive_failure_panics() {
             let [a] = vals else {
                 return None;
             };
-            let a_val = *state.prims().unwrap_ref::<i64>(*a);
+            let a_val = state.prims().unwrap::<i64>(*a);
             if a_val % 2 == 1 {
                 Some(state.prims().get(()))
             } else {
@@ -1385,15 +1394,15 @@ fn primitive_failure_panics() {
         let mut rb = egraph.new_rule("assert_odd", true);
         rb.call_external_func(
             assert_odd,
-            &[value_1.clone()],
+            slice::from_ref(&value_1),
             ColumnTy::Primitive(unit_prim),
-            "",
+            || "".to_string(),
         );
         rb.call_external_func(
             assert_odd,
-            &[value_2.clone()],
+            slice::from_ref(&value_2),
             ColumnTy::Primitive(unit_prim),
-            "",
+            || "".to_string(),
         );
         rb.build()
     };

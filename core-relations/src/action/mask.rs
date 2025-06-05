@@ -50,6 +50,10 @@ impl Mask {
         self.data.is_clear()
     }
 
+    pub(crate) fn len(&self) -> usize {
+        self.data.len()
+    }
+
     pub(super) fn symmetric_difference(&mut self, other: &Mask) {
         debug_assert!(self.data.is_subset(&other.data));
         self.data.symmetric_difference_with(&other.data);

@@ -1,23 +1,32 @@
 //! APIs for building a query of a database.
 
-use std::iter::once;
+use std::{iter::once, sync::Arc};
 
-use numeric_id::{DenseIdMap, NumericId};
+use numeric_id::{define_id, DenseIdMap, IdVec, NumericId};
 use thiserror::Error;
 
 use crate::{
     action::{Instr, QueryEntry, WriteVal},
     common::HashMap,
     free_join::{
-        plan::{Plan, PlanStrategy},
+        plan::{JoinHeader, JoinStages, Plan, PlanStrategy},
         ActionId, AtomId, Database, ProcessedConstraints, SubAtom, TableId, TableInfo, VarInfo,
         Variable,
     },
     pool::{with_pool_set, Pooled},
     primitives::PrimitiveId,
     table_spec::{ColumnId, Constraint},
-    ExternalFunctionId, PoolSet,
+    CounterId, ExternalFunctionId, PoolSet,
 };
+
+define_id!(pub RuleId, u32, "An identifier for a rule in a rule set");
+
+/// A cached plan for a given rule.
+pub struct CachedPlan {
+    plan: Plan,
+    desc: String,
+    actions: Arc<Pooled<Vec<Instr>>>,
+}
 
 /// A set of rules to run against a [`Database`].
 ///
@@ -31,8 +40,24 @@ pub struct RuleSet {
     /// accounting logic assumes that rules and actions stand in a bijection. If we relaxed that
     /// later on, most of the core logic would still work but the accounting logic could get more
     /// complex.
-    pub(crate) plans: Vec<(Plan, String /* description */, ActionId)>,
-    pub(crate) actions: DenseIdMap<ActionId, Pooled<Vec<Instr>>>,
+    pub(crate) plans: IdVec<RuleId, (Plan, String /* description */, ActionId)>,
+    pub(crate) actions: DenseIdMap<ActionId, Arc<Pooled<Vec<Instr>>>>,
+}
+
+impl RuleSet {
+    pub fn build_cached_plan(&self, rule_id: RuleId) -> CachedPlan {
+        let (plan, desc, action_id) = self.plans.get(rule_id).expect("rule must exist");
+        let actions = self
+            .actions
+            .get(*action_id)
+            .expect("action must exist")
+            .clone();
+        CachedPlan {
+            plan: plan.clone(),
+            desc: desc.clone(),
+            actions,
+        }
+    }
 }
 
 /// Builder for a [`RuleSet`].
@@ -73,6 +98,67 @@ impl<'outer> RuleSetBuilder<'outer> {
                 plan_strategy: Default::default(),
             },
         }
+    }
+
+    pub fn add_rule_from_cached_plan(
+        &mut self,
+        cached: &CachedPlan,
+        extra_constraints: &[(AtomId, Constraint)],
+    ) -> RuleId {
+        // First, patch in the new action id.
+        let action_id = self.rule_set.actions.push(cached.actions.clone());
+        let mut plan = Plan {
+            atoms: cached.plan.atoms.clone(),
+            stages: JoinStages {
+                header: Default::default(),
+                instrs: cached.plan.stages.instrs.clone(),
+                actions: action_id,
+            },
+        };
+
+        // Next, patch in the "extra constraints" that we want to add to the plan.
+        for (atom_id, constraint) in extra_constraints {
+            let atom_info = plan.atoms.get(*atom_id).expect("atom must exist in plan");
+            let table = atom_info.table;
+            let processed = self
+                .db
+                .process_constraints(table, std::slice::from_ref(constraint));
+            if !processed.slow.is_empty() {
+                panic!(
+                    "Cached plans only support constraints with a fast pushdown. Got: {constraint:?} for table {table:?}",
+                );
+            }
+            plan.stages.header.push(JoinHeader {
+                atom: *atom_id,
+                constraints: processed.fast,
+                subset: processed.subset,
+            });
+        }
+
+        // Finally: re-process the rest of the constraints in the plan header and slot in the new
+        // plan.
+        for JoinHeader {
+            atom, constraints, ..
+        } in &cached.plan.stages.header
+        {
+            let atom_info = plan.atoms.get(*atom).expect("atom must exist in plan");
+            let table = atom_info.table;
+            let processed = self.db.process_constraints(table, constraints);
+            if !processed.slow.is_empty() {
+                panic!(
+                    "Cached plans only support constraints with a fast pushdown. Got: {constraints:?} for table {table:?}",
+                );
+            }
+            plan.stages.header.push(JoinHeader {
+                atom: *atom,
+                constraints: processed.fast,
+                subset: processed.subset,
+            });
+        }
+
+        self.rule_set
+            .plans
+            .push((plan, cached.desc.clone(), action_id))
     }
 
     /// Build the ruleset.
@@ -124,6 +210,9 @@ impl<'outer, 'a> QueryBuilder<'outer, 'a> {
     /// given this setup. Doing this will not cause any problems but
     /// nevertheless is not recommended.
     ///
+    /// The returned `AtomId` can be used to refer to this atom when adding constraints in
+    /// [`RuleSetBuilder::rule_from_cached_plan`].
+    ///
     /// # Panics
     /// Like most methods that take a [`TableId`], this method will panic if the
     /// given table is not declared in the corresponding database.
@@ -132,7 +221,7 @@ impl<'outer, 'a> QueryBuilder<'outer, 'a> {
         table_id: TableId,
         vars: &[QueryEntry],
         cs: impl IntoIterator<Item = &'b Constraint>,
-    ) -> Result<(), QueryError> {
+    ) -> Result<AtomId, QueryError> {
         let info = &self.rsb.db.tables[table_id];
         let arity = info.spec.arity();
         let check_constraint = |c: &Constraint| {
@@ -220,8 +309,7 @@ impl<'outer, 'a> QueryBuilder<'outer, 'a> {
                 .occurrences
                 .push(subatom);
         }
-        self.query.atoms.push(atom);
-        Ok(())
+        Ok(self.query.atoms.push(atom))
     }
 }
 
@@ -278,12 +366,12 @@ pub struct RuleBuilder<'outer, 'a> {
 
 impl RuleBuilder<'_, '_> {
     /// Build the finished query.
-    pub fn build(self) {
+    pub fn build(self) -> RuleId {
         self.build_with_description("")
     }
-    pub fn build_with_description(mut self, desc: impl Into<String>) {
+    pub fn build_with_description(mut self, desc: impl Into<String>) -> RuleId {
         // Generate an id for our actions and slot them in.
-        let action_id = self.qb.rsb.rule_set.actions.push(self.qb.instrs);
+        let action_id = self.qb.rsb.rule_set.actions.push(Arc::new(self.qb.instrs));
         self.qb.query.action = action_id;
         // Plan the query
         let plan = self.qb.rsb.db.plan_query(self.qb.query);
@@ -292,7 +380,14 @@ impl RuleBuilder<'_, '_> {
             .rsb
             .rule_set
             .plans
-            .push((plan, desc.into(), action_id));
+            .push((plan, desc.into(), action_id))
+    }
+
+    /// Return a variable containing the result of reading the specified counter.
+    pub fn read_counter(&mut self, counter: CounterId) -> Variable {
+        let dst = self.qb.new_var();
+        self.qb.instrs.push(Instr::ReadCounter { counter, dst });
+        dst
     }
 
     /// Return a variable containing the result of looking up the specified
@@ -626,6 +721,11 @@ pub(crate) struct Atom {
     pub(crate) table: TableId,
     pub(crate) var_to_column: HashMap<Variable, ColumnId>,
     pub(crate) column_to_var: DenseIdMap<ColumnId, Variable>,
+    /// These constraints are an initial take at processing "fast" constraints as well as a
+    /// potential list of "slow" constraints.
+    ///
+    /// Fast constraints get re-computed when queries are executed. In particular, this makes it
+    /// possible to cache plans and add new fast constraints to them without re-planning.
     pub(crate) constraints: ProcessedConstraints,
 }
 

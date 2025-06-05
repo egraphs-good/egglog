@@ -4,12 +4,14 @@ pub(crate) mod bitset;
 pub(crate) mod concurrent_vec;
 pub(crate) mod notification;
 pub mod parallel_writer;
+pub(crate) mod resettable_oncelock;
 use arc_swap::{ArcSwap, Guard};
 
 pub use bitset::BitSet;
 pub use concurrent_vec::ConcurrentVec;
 pub use notification::Notification;
 pub use parallel_writer::ParallelVecWriter;
+pub use resettable_oncelock::ResettableOnceLock;
 
 #[cfg(test)]
 mod tests;
@@ -146,7 +148,7 @@ impl<T> ReadOptimizedLock<T> {
                     let write_token = ReadToken::WriteOngoing(unblock_waiters.clone());
                     let readers_done = n.0.clone();
                     let prev = self.token.compare_and_swap(&guard, Arc::new(write_token));
-                    if prev.as_ref() as *const _ != guard.as_ref() as *const _ {
+                    if !std::ptr::eq(prev.as_ref(), guard.as_ref()) {
                         // CAS failed, retry.
                         continue;
                     }

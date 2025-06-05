@@ -15,6 +15,7 @@ use crate::{
     free_join::{get_index_from_tableinfo, RuleReport, RuleSetReport},
     hash_index::{ColumnIndex, IndexBase, TupleIndex},
     offsets::{Offsets, SortedOffsetVector, Subset},
+    parallel_heuristics::parallelize_db_level_op,
     pool::{Clear, Pooled},
     query::RuleSet,
     row_buffer::TaggedRowBuffer,
@@ -24,7 +25,7 @@ use crate::{
 
 use super::{
     get_column_index_from_tableinfo,
-    plan::{JoinStage, Plan},
+    plan::{JoinHeader, JoinStage, Plan},
     with_pool_set, ActionId, AtomId, Database, HashColumnIndex, HashIndex, TableId, Variable,
 };
 
@@ -54,7 +55,7 @@ impl Prober {
                 intersect_outer,
                 table,
             } => {
-                let mut sub = table.read().get_subset(key)?.to_owned(&self.pool);
+                let mut sub = table.get().unwrap().get_subset(key)?.to_owned(&self.pool);
                 if *intersect_outer {
                     sub.intersect(self.subset.as_ref(), &self.pool);
                     if sub.is_empty() {
@@ -68,7 +69,11 @@ impl Prober {
                 table,
             } => {
                 debug_assert_eq!(key.len(), 1);
-                let mut sub = table.read().get_subset(&key[0])?.to_owned(&self.pool);
+                let mut sub = table
+                    .get()
+                    .unwrap()
+                    .get_subset(&key[0])?
+                    .to_owned(&self.pool);
                 if *intersect_outer {
                     sub.intersect(self.subset.as_ref(), &self.pool);
                     if sub.is_empty() {
@@ -88,7 +93,7 @@ impl Prober {
             DynamicIndex::Cached {
                 intersect_outer: true,
                 table,
-            } => table.read().for_each(|k, v| {
+            } => table.get().unwrap().for_each(|k, v| {
                 let mut res = v.to_owned(&self.pool);
                 res.intersect(self.subset.as_ref(), &self.pool);
                 if !res.is_empty() {
@@ -98,12 +103,12 @@ impl Prober {
             DynamicIndex::Cached {
                 intersect_outer: false,
                 table,
-            } => table.read().for_each(|k, v| f(k, v)),
+            } => table.get().unwrap().for_each(|k, v| f(k, v)),
             DynamicIndex::CachedColumn {
                 intersect_outer: true,
                 table,
             } => {
-                table.read().for_each(|k, v| {
+                table.get().unwrap().for_each(|k, v| {
                     let mut res = v.to_owned(&self.pool);
                     res.intersect(self.subset.as_ref(), &self.pool);
                     if !res.is_empty() {
@@ -115,7 +120,7 @@ impl Prober {
                 intersect_outer: false,
                 table,
             } => {
-                table.read().for_each(|k, v| f(&[*k], v));
+                table.get().unwrap().for_each(|k, v| f(&[*k], v));
             }
             DynamicIndex::Dynamic(tab) => {
                 tab.for_each(f);
@@ -128,8 +133,8 @@ impl Prober {
 
     fn len(&self) -> usize {
         match &self.ix {
-            DynamicIndex::Cached { table, .. } => table.read().len(),
-            DynamicIndex::CachedColumn { table, .. } => table.read().len(),
+            DynamicIndex::Cached { table, .. } => table.get().unwrap().len(),
+            DynamicIndex::CachedColumn { table, .. } => table.get().unwrap().len(),
             DynamicIndex::Dynamic(tab) => tab.len(),
             DynamicIndex::DynamicColumn(tab) => tab.len(),
         }
@@ -137,54 +142,7 @@ impl Prober {
 }
 
 impl Database {
-    /// Update any cached indexes eagerly in parallel before the start of a rule set.
-    ///
-    /// This can improve the parallelism of index rebuilding when running in
-    /// parallel, though for serial execution there isn't really a point.
-    fn update_cached_indexes(&mut self) {
-        rayon::in_place_scope(|scope| {
-            for (_, info) in self.tables.iter_mut() {
-                let table = &info.table;
-                for ci in info.column_indexes.iter_mut() {
-                    let (_, v) = ci.pair();
-                    let reader = v.read();
-                    if reader.needs_refresh(table.as_ref()) {
-                        mem::drop(reader);
-                        let v = v.clone();
-                        scope.spawn(move |_| {
-                            v.lock().refresh(table.as_ref());
-                        });
-                    }
-                }
-
-                for ix in info.indexes.iter_mut() {
-                    let (_, v) = ix.pair();
-                    let reader = v.read();
-                    if reader.needs_refresh(table.as_ref()) {
-                        mem::drop(reader);
-                        let v = v.clone();
-                        scope.spawn(move |_| {
-                            v.lock().refresh(table.as_ref());
-                        });
-                    }
-                }
-            }
-        });
-    }
-
     pub fn run_rule_set(&mut self, rule_set: &RuleSet) -> RuleSetReport {
-        fn do_parallel() -> bool {
-            #[cfg(debug_assertions)]
-            {
-                use rand::Rng;
-                rand::thread_rng().gen_bool(0.5)
-            }
-
-            #[cfg(not(debug_assertions))]
-            {
-                rayon::current_num_threads() > 1
-            }
-        }
         if rule_set.plans.is_empty() {
             return RuleSetReport::default();
         }
@@ -194,10 +152,9 @@ impl Database {
 
         let search_and_apply_timer = Instant::now();
         let rule_reports = DashMap::default();
-        if do_parallel() {
-            self.update_cached_indexes();
+        if parallelize_db_level_op(self.total_size_estimate) {
             rayon::in_place_scope(|scope| {
-                for (plan, desc, _action) in &rule_set.plans {
+                for (plan, desc, _action) in rule_set.plans.values() {
                     scope.spawn(|scope| {
                         let join_state = JoinState::new(self, &preds, &index_cache);
                         let mut action_buf =
@@ -209,7 +166,7 @@ impl Database {
                         }
 
                         let search_and_apply_timer = Instant::now();
-                        join_state.run_plan(plan, 0, 0, &mut binding_info, &mut action_buf);
+                        join_state.run_header(plan, &mut binding_info, &mut action_buf);
                         let search_and_apply_time = search_and_apply_timer.elapsed();
 
                         if action_buf.needs_flush {
@@ -238,7 +195,7 @@ impl Database {
                 match_counter: &match_counter,
                 batches: Default::default(),
             };
-            for (plan, desc, _action) in &rule_set.plans {
+            for (plan, desc, _action) in rule_set.plans.values() {
                 let mut binding_info = BindingInfo::default();
                 for (id, info) in plan.atoms.iter() {
                     let table = join_state.db.get_table(info.table);
@@ -246,7 +203,7 @@ impl Database {
                 }
 
                 let search_and_apply_timer = Instant::now();
-                join_state.run_plan(plan, 0, 0, &mut binding_info, &mut action_buf);
+                join_state.run_header(plan, &mut binding_info, &mut action_buf);
                 let search_and_apply_time = search_and_apply_timer.elapsed();
 
                 rule_reports.insert(
@@ -263,7 +220,7 @@ impl Database {
                 Default::default(),
             ));
         }
-        for (_plan, desc, action) in &rule_set.plans {
+        for (_plan, desc, action) in rule_set.plans.values() {
             let mut reservation = rule_reports.get_mut(desc).unwrap();
             let RuleReport { num_matches, .. } = reservation.value_mut();
             *num_matches = match_counter.read_matches(*action);
@@ -387,6 +344,39 @@ impl<'a> JoinState<'a> {
         self.get_index(plan, atom, binding_info, iter::once(col))
     }
 
+    /// Runs the free join plan, starting with the header.
+    ///
+    /// A bit about the `instr_order` parameter: This defines the order in which the [`JoinStage`]
+    /// instructions will run. We want to support cached [`Plan`]s that may be based on stale
+    /// ordering information. `instr_order` allows us to specify a new ordering of the instructions
+    /// without mutating the plan itself: `run_plan` simply executes
+    /// `plan.stages.instrs[instr_order[i]]` at stage `i`.
+    ///
+    /// This is also a stepping stone towards supporting fully dynamic variable ordering.
+    fn run_header<'buf, BUF: ActionBuffer<'buf>>(
+        &self,
+        plan: &'a Plan,
+        binding_info: &mut BindingInfo,
+        action_buf: &mut BUF,
+    ) where
+        'a: 'buf,
+    {
+        for JoinHeader { atom, subset, .. } in &plan.stages.header {
+            if subset.is_empty() {
+                return;
+            }
+            let mut cur = binding_info.subsets.unwrap_val(*atom);
+            cur.intersect(subset.as_ref(), &with_pool_set(|ps| ps.get_pool()));
+            binding_info.subsets.insert(*atom, cur);
+        }
+        let mut order: Pooled<Vec<u32>> = with_pool_set(|ps| ps.get());
+        order.extend(
+            0..u32::try_from(plan.stages.instrs.len()).expect("plans should be smaller than this"),
+        );
+        sort_plan_by_size(order.as_mut_slice(), &plan.stages.instrs, binding_info);
+        self.run_plan(plan, order, 0, binding_info, action_buf);
+    }
+
     /// The core method for executing a free join plan.
     ///
     /// This method takes the plan, mutable data-structures for variable binding and staging
@@ -398,21 +388,29 @@ impl<'a> JoinState<'a> {
     fn run_plan<'buf, BUF: ActionBuffer<'buf>>(
         &self,
         plan: &'a Plan,
+        mut instr_order: Pooled<Vec<u32>>,
         cur: usize,
-        level: usize,
         binding_info: &mut BindingInfo,
         action_buf: &mut BUF,
     ) where
         'a: 'buf,
     {
-        if cur >= plan.stages.len() {
+        if cur >= instr_order.len() {
+            action_buf.push_bindings(plan.stages.actions, &binding_info.bindings, || {
+                ExecutionState::new(self.preds, self.db.read_only_view(), Default::default())
+            });
             return;
         }
-        let chunk_size = action_buf.morsel_size(level);
+        let chunk_size = action_buf.morsel_size(cur, instr_order.len());
+        let cur_size = estimate_size(&plan.stages.instrs[instr_order[cur] as usize], binding_info);
+        if cur_size > 32 && cur < instr_order.len() - 1 {
+            // If we have a reasonable number of tuples to process, adjust the variable order.
+            sort_plan_by_size(&mut instr_order[cur..], &plan.stages.instrs, binding_info);
+        }
         // Helper macro (not its own method to appease the borrow checker).
         macro_rules! drain_updates {
             ($updates:expr) => {
-                if level == 0 || level == 1 {
+                if cur == 0 || cur == 1 {
                     drain_updates_parallel!($updates)
                 } else {
                     for mut update in $updates.drain(..) {
@@ -422,7 +420,13 @@ impl<'a> JoinState<'a> {
                         for (atom, subset) in update.refinements.drain(..) {
                             binding_info.subsets.insert(atom, subset);
                         }
-                        self.run_plan(plan, cur + 1, level + 1, binding_info, action_buf);
+                        self.run_plan(
+                            plan,
+                            Pooled::cloned(&instr_order),
+                            cur + 1,
+                            binding_info,
+                            action_buf,
+                        );
                     }
                 }
             };
@@ -433,6 +437,7 @@ impl<'a> JoinState<'a> {
                 let predicted = self.preds;
                 let index_cache = self.index_cache;
                 let db = self.db;
+                let next_order = Pooled::cloned(&instr_order);
                 action_buf.recur(
                     binding_info,
                     move || ExecutionState::new(predicted, db.read_only_view(), Default::default()),
@@ -451,8 +456,8 @@ impl<'a> JoinState<'a> {
                             }
                             .run_plan(
                                 plan,
+                                Pooled::cloned(&next_order),
                                 cur + 1,
-                                level + 1,
                                 binding_info,
                                 buf,
                             );
@@ -471,16 +476,7 @@ impl<'a> JoinState<'a> {
             table.refine(sub, constraints)
         }
 
-        match &plan.stages[cur] {
-            JoinStage::EvalConstraints { atom, subset, .. } => {
-                if subset.is_empty() {
-                    return;
-                }
-                let prev = binding_info.subsets.unwrap_val(*atom);
-                binding_info.subsets.insert(*atom, subset.clone());
-                self.run_plan(plan, cur + 1, level, binding_info, action_buf);
-                binding_info.subsets.insert(*atom, prev);
-            }
+        match &plan.stages.instrs[instr_order[cur] as usize] {
             JoinStage::Intersect { var, scans } => match scans.as_slice() {
                 [] => {}
                 [a] if a.cs.is_empty() => {
@@ -795,11 +791,6 @@ impl<'a> JoinState<'a> {
                     binding_info.subsets.insert(atom, prober.subset);
                 }
             }
-            JoinStage::RunInstrs { actions } => {
-                action_buf.push_bindings(*actions, &binding_info.bindings, || {
-                    ExecutionState::new(self.preds, self.db.read_only_view(), Default::default())
-                });
-            }
         }
     }
 }
@@ -877,7 +868,7 @@ trait ActionBuffer<'state>: Send {
     ///
     /// As of right now this is just a hard-coded value. We may change it in the
     /// future to fan out more at higher levels though.
-    fn morsel_size(&mut self, _level: usize) -> usize {
+    fn morsel_size(&mut self, _level: usize, _total: usize) -> usize {
         1024
     }
 }
@@ -1021,9 +1012,12 @@ impl<'scope> ActionBuffer<'scope> for ScopedActionBuffer<'_, 'scope> {
             }
         });
     }
-    fn morsel_size(&mut self, _level: usize) -> usize {
+    fn morsel_size(&mut self, _level: usize, _total: usize) -> usize {
         // Lower morsel size to increase parallelism.
-        256
+        match _level {
+            0 if _total > 2 => 32,
+            _ => 256,
+        }
     }
 }
 
@@ -1060,4 +1054,34 @@ impl MatchCounter {
     fn read_matches(&self, action: ActionId) -> usize {
         self.matches[action].load(std::sync::atomic::Ordering::Acquire)
     }
+}
+
+fn estimate_size(join_stage: &JoinStage, binding_info: &BindingInfo) -> usize {
+    join_stage_order_key(join_stage, binding_info).0
+}
+
+fn join_stage_order_key(join_stage: &JoinStage, binding_info: &BindingInfo) -> (usize, i32) {
+    // Sort increasing by size of scan, decreasing by number of intersections.
+    match join_stage {
+        JoinStage::Intersect { scans, .. } => (
+            scans
+                .iter()
+                .map(|scan| binding_info.subsets[scan.atom].size())
+                .min()
+                .unwrap_or(0),
+            -(scans.len() as i32),
+        ),
+        JoinStage::FusedIntersect {
+            cover,
+            to_intersect,
+            ..
+        } => (
+            binding_info.subsets[cover.to_index.atom].size(),
+            -(to_intersect.len() as i32),
+        ),
+    }
+}
+
+fn sort_plan_by_size(order: &mut [u32], instrs: &[JoinStage], binding_info: &mut BindingInfo) {
+    order.sort_by_key(|index| join_stage_order_key(&instrs[*index as usize], binding_info));
 }

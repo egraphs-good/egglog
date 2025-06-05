@@ -27,6 +27,7 @@ use crate::{
     common::{HashMap, ShardData, ShardId, SubsetTracker, Value},
     hash_index::{ColumnIndex, Index},
     offsets::{OffsetRange, Offsets, RowId, Subset, SubsetRef},
+    parallel_heuristics::parallelize_table_op,
     pool::with_pool_set,
     row_buffer::{ParallelRowBufWriter, RowBuffer},
     table_spec::{
@@ -636,7 +637,7 @@ impl SortedWritesTable {
     fn do_delete(&mut self) -> bool {
         let total = self.pending_state.total_removals.swap(0, Ordering::Relaxed);
 
-        if do_parallel(total) {
+        if parallelize_table_op(total) {
             self.parallel_delete()
         } else {
             self.serial_delete()
@@ -646,7 +647,7 @@ impl SortedWritesTable {
     fn do_insert(&mut self, exec_state: &mut ExecutionState) -> bool {
         let total = self.pending_state.total_rows.swap(0, Ordering::Relaxed);
         self.data.data.reserve(total);
-        if do_parallel(total) {
+        if parallelize_table_op(total) {
             if let Some(col) = self.sort_by {
                 self.parallel_insert(
                     exec_state,
@@ -990,8 +991,7 @@ impl SortedWritesTable {
             return;
         }
 
-        // The '* 4' biases the heuristic towards background evaluation.
-        if do_parallel(self.data.data.len() * 4) {
+        if parallelize_table_op(self.data.data.len()) {
             self.parallel_rehash();
         } else {
             self.rehash();
@@ -1409,21 +1409,6 @@ impl OrderingChecker for SortChecker {
                 offsets.push((cur, start));
             }
         }
-    }
-}
-
-fn do_parallel(_workload_size: usize) -> bool {
-    #[cfg(test)]
-    {
-        // In tests, run serial and parallel variants half the time,
-        // nondeterministically.
-        use rand::{thread_rng, Rng};
-        thread_rng().gen::<bool>()
-    }
-
-    #[cfg(not(test))]
-    {
-        _workload_size > 20_000 && rayon::current_num_threads() > 1
     }
 }
 

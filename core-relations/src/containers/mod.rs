@@ -25,6 +25,7 @@ use rustc_hash::FxHasher;
 
 use crate::{
     common::{DashMap, IndexSet, InternTable, SubsetTracker},
+    parallel_heuristics::{parallelize_inter_container_op, parallelize_intra_container_op},
     table_spec::Rebuilder,
     ColumnId, CounterId, ExecutionState, Offset, SubsetRef, TableId, TaggedRowBuffer, Value,
     WrappedTable,
@@ -106,7 +107,7 @@ impl Containers {
             // We may attempt an incremental rebuild.
             self.subset_tracker.recent_updates(table_id, table)
         });
-        if do_parallel() {
+        if parallelize_inter_container_op(self.data.next_id().index()) {
             self.data
                 .iter_mut()
                 .zip(std::iter::repeat_with(|| exec_state.clone()))
@@ -216,7 +217,11 @@ impl<C: Container> DynamicContainerEnv for ContainerEnv<C> {
         exec_state: &mut ExecutionState,
     ) -> bool {
         if let Some(subset) = subset {
-            if incremental_rebuild(subset.size(), self.to_id.len(), do_parallel()) {
+            if incremental_rebuild(
+                subset.size(),
+                self.to_id.len(),
+                parallelize_intra_container_op(self.to_id.len()),
+            ) {
                 return self.apply_rebuild_incremental(
                     table,
                     rebuilder,
@@ -367,7 +372,7 @@ impl<C: Container> ContainerEnv<C> {
         rebuilder: &dyn Rebuilder,
         exec_state: &mut ExecutionState,
     ) -> bool {
-        if do_parallel() {
+        if parallelize_inter_container_op(self.to_id.len()) {
             return self.apply_rebuild_nonincremental_parallel(rebuilder, exec_state);
         }
         let mut changed = false;
@@ -548,22 +553,6 @@ impl<C: Container> ContainerEnv<C> {
                 &unwrapped.0
             },
         })
-    }
-}
-
-// We use debug_assertions to gate the random choice here because most of the test coverage here
-// comes from egglog-bridge. And cfg(test) does not propagate between crates.
-
-fn do_parallel() -> bool {
-    #[cfg(debug_assertions)]
-    {
-        use rand::Rng;
-        rand::thread_rng().gen_bool(0.5)
-    }
-
-    #[cfg(not(debug_assertions))]
-    {
-        rayon::current_num_threads() > 1
     }
 }
 

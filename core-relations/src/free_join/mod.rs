@@ -7,7 +7,7 @@ use std::{
     },
 };
 
-use concurrency::ReadOptimizedLock;
+use concurrency::ResettableOnceLock;
 use numeric_id::{define_id, DenseIdMap, DenseIdMapWithReuse, NumericId};
 use rayon::prelude::*;
 use smallvec::SmallVec;
@@ -18,14 +18,17 @@ use crate::{
         mask::{Mask, MaskIter, ValueSource},
         Bindings, DbView,
     },
-    common::DashMap,
+    common::{iter_dashmap_bulk, DashMap},
     dependency_graph::DependencyGraph,
-    hash_index::{ColumnIndex, Index},
+    hash_index::{ColumnIndex, Index, IndexBase},
     offsets::Subset,
+    parallel_heuristics::parallelize_db_level_op,
     pool::{with_pool_set, Pool, Pooled},
     primitives::Primitives,
     query::{Query, RuleSetBuilder},
-    table_spec::{ColumnId, Constraint, MutationBuffer, Table, TableSpec, WrappedTable},
+    table_spec::{
+        ColumnId, Constraint, MutationBuffer, Table, TableSpec, WrappedTable, WrappedTableRef,
+    },
     Containers, PoolSet, QueryEntry, TupleIndex, Value,
 };
 
@@ -36,7 +39,7 @@ pub(crate) mod execute;
 pub(crate) mod plan;
 
 define_id!(
-    pub(crate) AtomId,
+    pub AtomId,
     u32,
     "A component of a query consisting of a function and a list of variables or constants"
 );
@@ -102,8 +105,8 @@ pub(crate) struct VarInfo {
     pub(crate) used_in_rhs: bool,
 }
 
-pub(crate) type HashIndex = Arc<ReadOptimizedLock<Index<TupleIndex>>>;
-pub(crate) type HashColumnIndex = Arc<ReadOptimizedLock<Index<ColumnIndex>>>;
+pub(crate) type HashIndex = Arc<ResettableOnceLock<Index<TupleIndex>>>;
+pub(crate) type HashColumnIndex = Arc<ResettableOnceLock<Index<ColumnIndex>>>;
 
 pub struct TableInfo {
     pub(crate) spec: TableSpec,
@@ -114,24 +117,27 @@ pub struct TableInfo {
 
 impl Clone for TableInfo {
     fn clone(&self) -> Self {
-        fn deep_clone_map<K: Clone + std::hash::Hash + Eq, TI: Clone>(
-            map: &DashMap<K, Arc<ReadOptimizedLock<TI>>>,
-        ) -> DashMap<K, Arc<ReadOptimizedLock<TI>>> {
+        fn deep_clone_map<K: Clone + std::hash::Hash + Eq, TI: IndexBase + Clone>(
+            map: &DashMap<K, Arc<ResettableOnceLock<Index<TI>>>>,
+            table: WrappedTableRef,
+        ) -> DashMap<K, Arc<ResettableOnceLock<Index<TI>>>> {
             map.iter()
                 .map(|table_ref| {
                     let (k, v) = table_ref.pair();
-                    (
-                        k.clone(),
-                        Arc::new(ReadOptimizedLock::new(v.read().clone())),
-                    )
+                    let v: Index<TI> = v
+                        .get_or_update(|index| {
+                            index.refresh(table);
+                        })
+                        .clone();
+                    (k.clone(), Arc::new(ResettableOnceLock::new(v)))
                 })
                 .collect()
         }
         TableInfo {
             spec: self.spec.clone(),
             table: self.table.dyn_clone(),
-            indexes: deep_clone_map(&self.indexes),
-            column_indexes: deep_clone_map(&self.column_indexes),
+            indexes: deep_clone_map(&self.indexes, self.table.as_ref()),
+            column_indexes: deep_clone_map(&self.column_indexes, self.table.as_ref()),
         }
     }
 }
@@ -186,6 +192,7 @@ pub(crate) trait ExternalFunctionExt: ExternalFunction {
     ) {
         let pool: Pool<Vec<Value>> = with_pool_set(|ps| ps.get_pool().clone());
         let mut out = pool.get();
+        out.reserve(mask.len());
         mask.iter_dynamic(
             pool,
             args.iter().map(|v| match v {
@@ -292,6 +299,11 @@ pub struct Database {
     // Tracks the relative dependencies between tables during merge operations.
     deps: DependencyGraph,
     primitives: Primitives,
+    /// A rough estimate of the total size of the database.
+    ///
+    /// This is primarily used to determine whether or not to attempt to do some operations in
+    /// parallel.
+    total_size_estimate: usize,
 }
 
 impl Database {
@@ -357,21 +369,9 @@ impl Database {
         to_rebuild: &[TableId],
         next_ts: Value,
     ) -> bool {
-        fn do_parallel() -> bool {
-            #[cfg(test)]
-            {
-                use rand::Rng;
-                rand::thread_rng().gen_bool(0.5)
-            }
-            #[cfg(not(test))]
-            {
-                rayon::current_num_threads() > 1
-            }
-        }
-
         let func = self.tables.take(func_id).unwrap();
         let predicted = PredictedVals::default();
-        if do_parallel() {
+        if parallelize_db_level_op(self.total_size_estimate) {
             let mut tables = Vec::with_capacity(to_rebuild.len());
             for id in to_rebuild {
                 tables.push((*id, self.tables.take(*id).unwrap()));
@@ -466,7 +466,7 @@ impl Database {
     /// Useful for out-of-band insertions into the database.
     pub fn merge_all(&mut self) -> bool {
         let mut ever_changed = false;
-        let do_parallel = rayon::current_num_threads() > 1;
+        let do_parallel = parallelize_db_level_op(self.total_size_estimate);
         loop {
             let mut changed = false;
             let predicted = with_pool_set(|ps| ps.get::<PredictedVals>());
@@ -525,6 +525,18 @@ impl Database {
                 break;
             }
         }
+        // Reset all indexes to force an update on the next access.
+        let mut size_estimate = 0;
+        for (_, info) in self.tables.iter_mut() {
+            iter_dashmap_bulk(&mut info.column_indexes, |_, ci| {
+                Arc::get_mut(ci).unwrap().reset();
+            });
+            iter_dashmap_bulk(&mut info.indexes, |_, ti| {
+                Arc::get_mut(ti).unwrap().reset();
+            });
+            size_estimate += info.table.len();
+        }
+        self.total_size_estimate = size_estimate;
         ever_changed
     }
 
@@ -537,11 +549,13 @@ impl Database {
     pub fn merge_table(&mut self, table: TableId) {
         let mut info = self.tables.unwrap_val(table);
         let predicted = with_pool_set(|ps| ps.get::<PredictedVals>());
+        self.total_size_estimate = self.total_size_estimate.wrapping_sub(info.table.len());
         let _table_changed = info.table.merge(&mut ExecutionState::new(
             &predicted,
             self.read_only_view(),
             Default::default(),
         ));
+        self.total_size_estimate = self.total_size_estimate.wrapping_add(info.table.len());
         self.tables.insert(table, info);
     }
 
@@ -616,7 +630,7 @@ impl Database {
             // 'fast'.
             fast.push(c.clone());
             let index = get_column_index_from_tableinfo(table_info, col);
-            match index.read().get_subset(&val) {
+            match index.get().unwrap().get_subset(&val) {
                 Some(s) => {
                     with_pool_set(|ps| subset.intersect(s, &ps.get_pool()));
                 }
@@ -666,18 +680,19 @@ fn get_index_from_tableinfo(table_info: &TableInfo, cols: &[ColumnId]) -> HashIn
         .indexes
         .entry(cols.into())
         .or_insert_with(|| {
-            Arc::new(ReadOptimizedLock::new(Index::new(
+            Arc::new(ResettableOnceLock::new(Index::new(
                 cols.to_vec(),
                 TupleIndex::new(cols.len()),
             )))
         })
         .clone();
-    let ix = index.read();
-    if ix.needs_refresh(table_info.table.as_ref()) {
-        mem::drop(ix);
-        let mut ix = index.lock();
-        ix.refresh(table_info.table.as_ref());
-    }
+    index.get_or_update(|index| {
+        index.refresh(table_info.table.as_ref());
+    });
+    debug_assert!(!index
+        .get()
+        .unwrap()
+        .needs_refresh(table_info.table.as_ref()));
     index
 }
 
@@ -689,17 +704,18 @@ fn get_column_index_from_tableinfo(table_info: &TableInfo, col: ColumnId) -> Has
         .column_indexes
         .entry(col)
         .or_insert_with(|| {
-            Arc::new(ReadOptimizedLock::new(Index::new(
+            Arc::new(ResettableOnceLock::new(Index::new(
                 vec![col],
                 ColumnIndex::new(),
             )))
         })
         .clone();
-    let ix = index.read();
-    if ix.needs_refresh(table_info.table.as_ref()) {
-        mem::drop(ix);
-        let mut ix = index.lock();
-        ix.refresh(table_info.table.as_ref());
-    }
+    index.get_or_update(|index| {
+        index.refresh(table_info.table.as_ref());
+    });
+    debug_assert!(!index
+        .get()
+        .unwrap()
+        .needs_refresh(table_info.table.as_ref()));
     index
 }

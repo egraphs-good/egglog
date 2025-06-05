@@ -643,11 +643,17 @@ impl ExecutionState<'_> {
             }
             Instr::AssertEq(l, r) => assert_impl(bindings, mask, l, r, |l, r| l == r),
             Instr::AssertNe(l, r) => assert_impl(bindings, mask, l, r, |l, r| l != r),
+            Instr::ReadCounter { counter, dst } => {
+                let mut vals = pool_set.get::<Vec<Value>>();
+                let ctr_val = Value::from_usize(self.read_counter(*counter));
+                vals.resize(bindings.matches, ctr_val);
+                bindings.insert(*dst, vals);
+            }
         }
     }
 }
 
-#[derive(Debug)]
+#[derive(Debug, Clone)]
 pub(crate) enum Instr {
     /// Look up the value of the given table, inserting a new entry with a
     /// default value if it is not there.
@@ -742,5 +748,13 @@ pub(crate) enum Instr {
     AssertAnyNe {
         ops: Vec<QueryEntry>,
         divider: usize,
+    },
+
+    /// Read the value of a counter and write it to the given variable.
+    ReadCounter {
+        /// The counter to broadcast.
+        counter: CounterId,
+        /// The variable to write the value to.
+        dst: Variable,
     },
 }

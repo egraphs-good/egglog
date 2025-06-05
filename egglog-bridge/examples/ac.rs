@@ -27,7 +27,7 @@ fn main() {
     for _ in 0..2 {
         let start = web_time::Instant::now();
         let mut egraph = EGraph::default();
-        let int_prim = egraph.primitives_mut().get_ty::<i64>();
+        let int_prim = egraph.primitives_mut().register_type::<i64>();
         let num_table = egraph.add_table(FunctionConfig {
             schema: vec![ColumnTy::Primitive(int_prim), ColumnTy::Id],
             default: DefaultVal::FreshId,

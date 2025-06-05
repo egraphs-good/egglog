@@ -462,11 +462,11 @@ pub enum Term {
 impl fmt::Display for Term {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         match self {
-            Term::Prim(c) => write!(f, "{}", c),
+            Term::Prim(c) => write!(f, "{c}"),
             Term::Expr { func, subterms, .. } => {
-                write!(f, "({}", func)?;
+                write!(f, "({func}")?;
                 for subterm in subterms {
-                    write!(f, " {}", subterm)?;
+                    write!(f, " {subterm}")?;
                 }
                 write!(f, ")")
             }
@@ -935,7 +935,7 @@ impl Substitution<'_> {
         let result: Rc<Term> = match rule {
             TermFragment::Prim(func, args, ty) => {
                 let ColumnTy::Primitive(ty) = *ty else {
-                    panic!("expected primitive type, found {:?}", ty);
+                    panic!("expected primitive type, found {ty:?}");
                 };
                 // This is the hardest case but still fairly straight-forwad: we
                 // need to extract primitives from `args`, then apply `func` to

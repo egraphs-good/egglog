@@ -328,6 +328,14 @@ impl<K: NumericId, V> IdVec<K, V> {
         self.data.resize_with(size, init)
     }
 
+    pub fn is_empty(&self) -> bool {
+        self.data.is_empty()
+    }
+
+    pub fn values(&self) -> impl Iterator<Item = &V> {
+        self.data.iter()
+    }
+
     pub fn iter(&self) -> impl Iterator<Item = (K, &V)> {
         self.data
             .iter()

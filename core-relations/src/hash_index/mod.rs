@@ -15,6 +15,7 @@ use rustc_hash::FxHasher;
 use crate::{
     common::{HashMap, IndexMap, ShardData, ShardId, Value},
     offsets::{RowId, SortedOffsetSlice, SubsetRef},
+    parallel_heuristics::parallelize_index_construction,
     pool::{with_pool_set, Pooled},
     row_buffer::{RowBuffer, TaggedRowBuffer},
     table_spec::{ColumnId, Generation, Offset, TableVersion, WrappedTableRef},
@@ -72,7 +73,7 @@ impl<TI: IndexBase> Index<TI> {
         } else {
             table.updates_since(self.updated_to.minor)
         };
-        if do_parallel(subset.size()) {
+        if parallelize_index_construction(subset.size()) {
             self.table.merge_parallel(&self.key, table, subset.as_ref());
         } else {
             self.refresh_serial(table, subset);
@@ -739,18 +740,6 @@ fn num_shards() -> usize {
         1
     } else {
         n_threads * 2
-    }
-}
-
-fn do_parallel(_workload_size: usize) -> bool {
-    #[cfg(test)]
-    {
-        use rand::Rng;
-        rand::thread_rng().gen::<bool>()
-    }
-    #[cfg(not(test))]
-    {
-        rayon::current_num_threads() > 1 && _workload_size > 20_000
     }
 }
 

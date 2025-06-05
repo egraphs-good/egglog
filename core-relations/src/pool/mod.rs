@@ -424,6 +424,7 @@ pool_set! {
         staged_outputs: HashTable<SwTableEntry> [ 1 << 25 ],
         predicted_vals: PredictedVals [ 1 << 20 ],
         shard_hist: DenseIdMap<ShardId, usize> [ 1 << 20 ],
+        instr_indexes: Vec<u32> [ 1 << 20 ],
     }
 }
 

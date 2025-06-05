@@ -9,6 +9,7 @@ use rayon::prelude::*;
 use crate::{
     common::ShardId,
     hash_index::{ColumnIndex, Index},
+    parallel_heuristics::parallelize_rebuild,
     table_spec::{Rebuilder, WrappedTableRef},
     ColumnId, ExecutionState, Offset, RowId, Subset, Table, TableId, TaggedRowBuffer, Value,
     WrappedTable,
@@ -51,7 +52,7 @@ impl SortedWritesTable {
             if incremental_rebuild(
                 to_scan.size(),
                 self.data.next_row().index(),
-                do_parallel(to_scan.size()),
+                parallelize_rebuild(to_scan.size()),
             ) {
                 self.rebuild_incremental(
                     table,
@@ -97,7 +98,7 @@ impl SortedWritesTable {
             &mut buf,
         );
 
-        if do_parallel(to_scan.size()) {
+        if parallelize_rebuild(to_scan.size()) {
             // Iterate over `buf` in parallel and then fan out to a per-shard set of rows then
             // process each shard in parallel.
             let mut queues = IdVec::<ShardId, SegQueue<TaggedRowBuffer>>::default();
@@ -160,7 +161,7 @@ impl SortedWritesTable {
         exec_state: &mut ExecutionState,
     ) {
         const STEP_SIZE: usize = 2048;
-        if do_parallel(self.data.next_row().index()) {
+        if parallelize_rebuild(self.data.next_row().index()) {
             (0..self.data.next_row().index())
                 .into_par_iter()
                 .step_by(STEP_SIZE)
@@ -216,18 +217,6 @@ impl SortedWritesTable {
                 buf.clear();
             }
         }
-    }
-}
-
-fn do_parallel(_workload_size: usize) -> bool {
-    #[cfg(debug_assertions)]
-    {
-        use rand::{thread_rng, Rng};
-        thread_rng().gen::<bool>()
-    }
-    #[cfg(not(debug_assertions))]
-    {
-        _workload_size > 1000 && rayon::current_num_threads() > 1
     }
 }
 

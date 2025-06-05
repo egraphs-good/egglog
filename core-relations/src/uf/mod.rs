@@ -714,7 +714,7 @@ impl DisplacedTableWithProvenance {
 
     fn insert_impl(&mut self, row: &[Value]) {
         let [a, b, ts, reason] = row else {
-            panic!("attempt to insert a row with the wrong arity ({:?})", row);
+            panic!("attempt to insert a row with the wrong arity ({row:?})");
         };
         match self.base.insert_impl(&[*a, *b, *ts]) {
             Some((parent, child)) => {

@@ -83,7 +83,7 @@ fn intersect() {
             expected.sort();
             let mut got = Vec::new();
             l_sub.offsets(|row| got.push(row));
-            assert_eq!(expected, got, "l: {:?}, r: {:?}", l, r);
+            assert_eq!(expected, got, "l: {l:?}, r: {r:?}");
         }
     }
 }
