@@ -16,10 +16,127 @@ use crate::extract::Cost;
 use crate::util::IndexSet;
 use crate::*;
 
-pub type Z = BigInt;
-pub type Q = BigRational;
-pub type F = OrderedFloat<f64>;
-pub type S = Symbol;
+/// A newtype wrapper used to implement the [`core_relations::Primitive`] trait on types not
+/// defined in this crate.
+#[derive(Debug, Copy, Clone, PartialEq, Eq, PartialOrd, Ord, Hash)]
+pub struct BaseTypeWrapper<T>(pub T);
+
+impl<T> BaseTypeWrapper<T> {
+    pub fn new(value: T) -> Self {
+        BaseTypeWrapper(value)
+    }
+
+    pub fn into_inner(self) -> T {
+        self.0
+    }
+}
+
+impl<T> std::ops::Deref for BaseTypeWrapper<T> {
+    type Target = T;
+
+    fn deref(&self) -> &Self::Target {
+        &self.0
+    }
+}
+
+impl<T> std::ops::DerefMut for BaseTypeWrapper<T> {
+    fn deref_mut(&mut self) -> &mut Self::Target {
+        &mut self.0
+    }
+}
+
+impl<T> From<T> for BaseTypeWrapper<T> {
+    fn from(value: T) -> Self {
+        BaseTypeWrapper(value)
+    }
+}
+
+impl<T: Copy> From<&T> for BaseTypeWrapper<T> {
+    fn from(value: &T) -> Self {
+        BaseTypeWrapper(*value)
+    }
+}
+
+impl<T: std::ops::Add<Output = T>> std::ops::Add for BaseTypeWrapper<T> {
+    type Output = Self;
+
+    fn add(self, other: Self) -> Self::Output {
+        BaseTypeWrapper(self.0 + other.0)
+    }
+}
+
+impl<T: std::ops::Sub<Output = T>> std::ops::Sub for BaseTypeWrapper<T> {
+    type Output = Self;
+
+    fn sub(self, other: Self) -> Self::Output {
+        BaseTypeWrapper(self.0 - other.0)
+    }
+}
+
+impl<T: std::ops::Mul<Output = T>> std::ops::Mul for BaseTypeWrapper<T> {
+    type Output = Self;
+
+    fn mul(self, other: Self) -> Self::Output {
+        BaseTypeWrapper(self.0 * other.0)
+    }
+}
+
+impl<T: std::ops::Div<Output = T>> std::ops::Div for BaseTypeWrapper<T> {
+    type Output = Self;
+
+    fn div(self, other: Self) -> Self::Output {
+        BaseTypeWrapper(self.0 / other.0)
+    }
+}
+
+impl<T: std::ops::Rem<Output = T>> std::ops::Rem for BaseTypeWrapper<T> {
+    type Output = Self;
+
+    fn rem(self, other: Self) -> Self::Output {
+        BaseTypeWrapper(self.0 % other.0)
+    }
+}
+
+impl<T: std::ops::Neg<Output = T>> std::ops::Neg for BaseTypeWrapper<T> {
+    type Output = Self;
+
+    fn neg(self) -> Self::Output {
+        BaseTypeWrapper(-self.0)
+    }
+}
+
+impl<T: std::ops::BitAnd<Output = T>> std::ops::BitAnd for BaseTypeWrapper<T> {
+    type Output = Self;
+
+    fn bitand(self, other: Self) -> Self::Output {
+        BaseTypeWrapper(self.0 & other.0)
+    }
+}
+
+impl<T: std::ops::BitOr<Output = T>> std::ops::BitOr for BaseTypeWrapper<T> {
+    type Output = Self;
+
+    fn bitor(self, other: Self) -> Self::Output {
+        BaseTypeWrapper(self.0 | other.0)
+    }
+}
+
+impl<T: std::ops::BitXor<Output = T>> std::ops::BitXor for BaseTypeWrapper<T> {
+    type Output = Self;
+
+    fn bitxor(self, other: Self) -> Self::Output {
+        BaseTypeWrapper(self.0 ^ other.0)
+    }
+}
+
+impl core_relations::Primitive for BaseTypeWrapper<BigInt> {}
+impl core_relations::Primitive for BaseTypeWrapper<BigRational> {}
+impl core_relations::Primitive for BaseTypeWrapper<OrderedFloat<f64>> {}
+
+pub type Z = BaseTypeWrapper<BigInt>;
+pub type Q = BaseTypeWrapper<BigRational>;
+pub type F = BaseTypeWrapper<OrderedFloat<f64>>;
+pub type S = BaseTypeWrapper<Symbol>;
 
 mod bigint;
 pub use bigint::*;

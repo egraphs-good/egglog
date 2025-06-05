@@ -27,22 +27,22 @@ impl Sort for BigIntSort {
 
     #[rustfmt::skip]
     fn register_primitives(self: Arc<Self>, eg: &mut EGraph) {
-        add_primitive!(eg, "bigint" = |a: i64| -> Z { a.into() });
+        add_primitive!(eg, "bigint" = |a: i64| -> Z { Z::new(a.into()) });
 
         add_primitive!(eg, "+" = |a: Z, b: Z| -> Z { a + b });
         add_primitive!(eg, "-" = |a: Z, b: Z| -> Z { a - b });
         add_primitive!(eg, "*" = |a: Z, b: Z| -> Z { a * b });
-        add_primitive!(eg, "/" = |a: Z, b: Z| -?> Z { (b != BigInt::ZERO).then(|| a / b) });
-        add_primitive!(eg, "%" = |a: Z, b: Z| -?> Z { (b != BigInt::ZERO).then(|| a % b) });
+        add_primitive!(eg, "/" = |a: Z, b: Z| -?> Z { (*b != BigInt::ZERO).then(|| a / b) });
+        add_primitive!(eg, "%" = |a: Z, b: Z| -?> Z { (*b != BigInt::ZERO).then(|| a % b) });
 
         add_primitive!(eg, "&" = |a: Z, b: Z| -> Z { a & b });
         add_primitive!(eg, "|" = |a: Z, b: Z| -> Z { a | b });
         add_primitive!(eg, "^" = |a: Z, b: Z| -> Z { a ^ b });
-        add_primitive!(eg, "<<" = |a: Z, b: i64| -> Z { a.shl(b) });
-        add_primitive!(eg, ">>" = |a: Z, b: i64| -> Z { a.shr(b) });
-        add_primitive!(eg, "not-Z" = |a: Z| -> Z { !a });
+        add_primitive!(eg, "<<" = |a: Z, b: i64| -> Z { (&*a).shl(b).into() });
+        add_primitive!(eg, ">>" = |a: Z, b: i64| -> Z { (&*a).shr(b).into() });
+        add_primitive!(eg, "not-Z" = |a: Z| -> Z { Z::new(!&*a) });
 
-        add_primitive!(eg, "bits" = |a: Z| -> Z { a.bits().into() });
+        add_primitive!(eg, "bits" = |a: Z| -> Z { Z::new(a.bits().into()) });
 
         add_primitive!(eg, "<" = |a: Z, b: Z| -?> () { (a < b).then_some(()) });
         add_primitive!(eg, ">" = |a: Z, b: Z| -?> () { (a > b).then_some(()) });
@@ -58,8 +58,10 @@ impl Sort for BigIntSort {
         add_primitive!(eg, "min" = |a: Z, b: Z| -> Z { a.min(b) });
         add_primitive!(eg, "max" = |a: Z, b: Z| -> Z { a.max(b) });
 
-        add_primitive!(eg, "to-string" = |a: Z| -> Symbol { a.to_string().into() });
-        add_primitive!(eg, "from-string" = |a: Symbol| -?> Z { a.as_str().parse::<Z>().ok() });
+        add_primitive!(eg, "to-string" = |a: Z| -> S { S::new(a.to_string().into()) });
+        add_primitive!(eg, "from-string" = |a: S| -?> Z {
+            a.as_str().parse::<BigInt>().ok().map(Z::new)
+        });
     }
 
     fn value_type(&self) -> Option<TypeId> {
@@ -72,9 +74,9 @@ impl Sort for BigIntSort {
         value: Value,
         termdag: &mut TermDag,
     ) -> Term {
-        let bigint = primitives.unwrap_ref::<BigInt>(value);
+        let bigint = primitives.unwrap::<Z>(value);
 
-        let as_string = termdag.lit(Literal::String(bigint.to_string().into()));
+        let as_string = termdag.lit(Literal::String(bigint.0.to_string().into()));
         termdag.app("from-string".into(), vec![as_string])
     }
 }

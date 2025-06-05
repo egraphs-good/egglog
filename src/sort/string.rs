@@ -1,3 +1,6 @@
+use numeric_id::NumericId;
+use std::num::NonZeroU32;
+
 use super::*;
 
 #[derive(Debug)]
@@ -28,12 +31,14 @@ impl Sort for StringSort {
         add_primitive!(eg, "+" = [xs: S] -> S {{
             let mut y = String::new();
             xs.for_each(|x| y.push_str(x.as_str()));
-            y.into()
+            let x: Symbol = y.into();
+            BaseTypeWrapper(x)
         }});
         add_primitive!(
             eg,
-            "replace" =
-                |a: S, b: S, c: S| -> S { a.as_str().replace(b.as_str(), c.as_str()).into() }
+            "replace" = |a: S, b: S, c: S| -> S {
+                BaseTypeWrapper(a.as_str().replace(b.as_str(), c.as_str()).into())
+            }
         );
     }
 
@@ -46,12 +51,23 @@ impl Sort for StringSort {
         value: Value,
         termdag: &mut TermDag,
     ) -> Term {
-        let s = primitives.unwrap_ref::<S>(value);
+        let s = primitives.unwrap::<S>(value);
 
-        termdag.lit(Literal::String(*s))
+        termdag.lit(Literal::String(s.0))
     }
 }
 
-impl IntoSort for Symbol {
+impl IntoSort for S {
     type Sort = StringSort;
+}
+
+impl core_relations::Primitive for BaseTypeWrapper<Symbol> {
+    const MAY_UNBOX: bool = true;
+    fn try_box(&self) -> Option<core_relations::Value> {
+        let x: NonZeroU32 = self.0.into();
+        Some(core_relations::Value::new_const(x.get()))
+    }
+    fn try_unbox(val: core_relations::Value) -> Option<Self> {
+        Some(BaseTypeWrapper(NonZeroU32::new(val.rep()).unwrap().into()))
+    }
 }
