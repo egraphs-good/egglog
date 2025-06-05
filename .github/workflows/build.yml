@@ -33,7 +33,7 @@ jobs:
         with:
           tool: cargo-codspeed
       - uses: Swatinem/rust-cache@v2
-      - run: cargo codspeed build example_benchmarks
+      - run: cargo codspeed build
       - uses: CodSpeedHQ/action@v3
         with:
-          run: cargo codspeed run example_benchmarks
+          run: cargo codspeed run
