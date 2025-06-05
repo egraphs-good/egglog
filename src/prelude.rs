@@ -222,6 +222,81 @@ impl<F: Fn(&mut RustRuleContext, &[Value]) -> Option<()>> Primitive for RustRule
 }
 
 /// Add a rule to the e-graph whose right-hand side is a Rust callback.
+/// ```
+/// use egglog::prelude::*;
+///
+/// let mut egraph = EGraph::default();
+/// egraph.parse_and_run_program(
+///     None,
+///     "
+/// (function fib (i64) i64 :no-merge)
+/// (set (fib 0) 0)
+/// (set (fib 1) 1)
+/// (rule (
+///     (= f0 (fib x))
+///     (= f1 (fib (+ x 1)))
+/// ) (
+///     (set (fib (+ x 2)) (+ f0 f1))
+/// ))
+/// (run 10)
+///     ",
+/// )?;
+///
+/// let big_number = 20;
+///
+/// // check that `fib` does not contain `20`
+/// let results = query(
+///     &mut egraph,
+///     vars![f: i64],
+///     facts![(= (fib (unquote exprs::int(big_number))) f)],
+/// )?;
+///
+/// assert!(results.iter().next().is_none());
+///
+/// let ruleset = "custom_ruleset";
+/// add_ruleset(&mut egraph, ruleset)?;
+///
+/// // add the rule from `build_test_database` to the egraph
+/// rust_rule(
+///     &mut egraph,
+///     ruleset,
+///     vars![x: i64, f0: i64, f1: i64],
+///     facts![
+///         (= f0 (fib x))
+///         (= f1 (fib (+ x 1)))
+///     ],
+///     move |ctx, values| {
+///         let [x, f0, f1] = values else { unreachable!() };
+///         let x = ctx.value_to_rust::<i64>(*x);
+///         let f0 = ctx.value_to_rust::<i64>(*f0);
+///         let f1 = ctx.value_to_rust::<i64>(*f1);
+///
+///         let y = ctx.rust_to_value::<i64>(x + 2);
+///         let f2 = ctx.rust_to_value::<i64>(f0 + f1);
+///         ctx.insert("fib", vec![y, f2]);
+///
+///         Some(())
+///     },
+/// )?;
+///
+/// // run that rule 10 times
+/// for _ in 0..10 {
+///     run_ruleset(&mut egraph, ruleset)?;
+/// }
+///
+/// // check that `fib` now contains `20`
+/// let results = query(
+///     &mut egraph,
+///     vars![f: i64],
+///     facts![(= (fib (unquote exprs::int(big_number))) f)],
+/// )?;
+///
+/// let y = egraph.rust_to_value::<i64>(6765);
+/// let results: Vec<_> = results.iter().collect();
+/// assert_eq!(results, [[y]]);
+///
+/// # Ok::<(), egglog::Error>(())
+/// ```
 pub fn rust_rule(
     egraph: &mut EGraph,
     ruleset: &str,
@@ -303,7 +378,7 @@ impl QueryResult {
 /// ))
 /// (run 10)
 ///     ",
-/// ).unwrap();
+/// )?;
 ///
 /// let results = query(
 ///     &mut egraph,
@@ -312,12 +387,14 @@ impl QueryResult {
 ///         (= (fib x) y)
 ///         (= y 13)
 ///     ],
-/// ).unwrap();
+/// )?;
 ///
 /// let x = egraph.rust_to_value::<i64>(7);
 /// let y = egraph.rust_to_value::<i64>(13);
 /// let results: Vec<_> = results.iter().collect();
-/// assert_eq!(results, vec![vec![x, y]]);
+/// assert_eq!(results, [[x, y]]);
+///
+/// # Ok::<(), egglog::Error>(())
 /// ```
 pub fn query(
     egraph: &mut EGraph,
