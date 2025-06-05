@@ -420,6 +420,7 @@ pub fn rust_rule(
 
 /// The result of a query.
 pub struct QueryResult {
+    rows: usize,
     cols: usize,
     data: Vec<Value>,
 }
@@ -429,8 +430,14 @@ impl QueryResult {
     /// where each match is a `&[Value]` in the same order
     /// as the `vars` that were passed to `query`.
     pub fn iter(&self) -> impl Iterator<Item = &[Value]> {
+        assert!(self.cols > 0, "no vars; use `any_matches` instead");
         assert!(self.data.len() % self.cols == 0);
         self.data.chunks_exact(self.cols)
+    }
+
+    /// Check if any matches were returned at all.
+    pub fn any_matches(&self) -> bool {
+        self.rows > 0
     }
 }
 
@@ -478,7 +485,11 @@ pub fn query(
 ) -> Result<QueryResult, Error> {
     use std::sync::{Arc, Mutex};
 
-    let results = Arc::new(Mutex::new(Vec::new()));
+    let results = Arc::new(Mutex::new(QueryResult {
+        rows: 0,
+        cols: vars.len(),
+        data: Vec::new(),
+    }));
     let results_weak = Arc::downgrade(&results);
 
     let ruleset = egraph
@@ -487,19 +498,13 @@ pub fn query(
         .fresh(&Symbol::from("query_ruleset"));
     add_ruleset(egraph, ruleset.into())?;
 
-    rust_rule(
-        egraph,
-        ruleset.into(),
-        vars,
-        facts,
-        move |_, values| match results_weak.upgrade() {
-            None => panic!("one-shot rule was called twice"),
-            Some(arc) => {
-                arc.lock().unwrap().extend(values);
-                Some(())
-            }
-        },
-    )?;
+    rust_rule(egraph, ruleset.into(), vars, facts, move |_, values| {
+        let arc = results_weak.upgrade().unwrap();
+        let mut results = arc.lock().unwrap();
+        results.rows += 1;
+        results.data.extend(values);
+        Some(())
+    })?;
 
     run_ruleset(egraph, ruleset.into())?;
 
@@ -515,11 +520,7 @@ pub fn query(
     let Some(mutex) = Arc::into_inner(results) else {
         panic!("results_weak.upgrade() was not dropped");
     };
-    let data = mutex.into_inner().unwrap();
-    Ok(QueryResult {
-        cols: vars.len(),
-        data,
-    })
+    Ok(mutex.into_inner().unwrap())
 }
 
 /// Declare a new sort.
