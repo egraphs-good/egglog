@@ -100,6 +100,12 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "ace50bade8e6234aa140d9a2f552bbee1db4d353f69b8217bc503490fc1a9f26"
 
 [[package]]
+name = "bit-vec"
+version = "0.8.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "5e764a1d40d510daf35e07be9eb06e75770908c27d411ee6c92109c9840eaaf7"
+
+[[package]]
 name = "bitflags"
 version = "2.9.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -293,7 +299,7 @@ dependencies = [
 [[package]]
 name = "concurrency"
 version = "0.1.0"
-source = "git+https://github.com/egraphs-good/egglog-backend.git?rev=4236684#42366849236b1dc6c2c421ccc29a5cf30a59dbc9"
+source = "git+https://github.com/egraphs-good/egglog-backend.git?rev=32c630#32c630f8f6c83772d4eaca1ad587ed59a3b6f82a"
 dependencies = [
  "arc-swap",
  "rayon",
@@ -312,7 +318,7 @@ dependencies = [
 [[package]]
 name = "core-relations"
 version = "0.1.0"
-source = "git+https://github.com/egraphs-good/egglog-backend.git?rev=4236684#42366849236b1dc6c2c421ccc29a5cf30a59dbc9"
+source = "git+https://github.com/egraphs-good/egglog-backend.git?rev=32c630#32c630f8f6c83772d4eaca1ad587ed59a3b6f82a"
 dependencies = [
  "anyhow",
  "bumpalo",
@@ -478,10 +484,12 @@ name = "egglog"
 version = "0.4.0"
 dependencies = [
  "add_primitive",
+ "bit-vec",
  "chrono",
  "clap",
  "codspeed-criterion-compat",
  "core-relations",
+ "dyn-clone",
  "egglog-bridge",
  "egraph-serialize",
  "env_logger",
@@ -505,7 +513,7 @@ dependencies = [
 [[package]]
 name = "egglog-bridge"
 version = "0.1.0"
-source = "git+https://github.com/egraphs-good/egglog-backend.git?rev=4236684#42366849236b1dc6c2c421ccc29a5cf30a59dbc9"
+source = "git+https://github.com/egraphs-good/egglog-backend.git?rev=32c630#32c630f8f6c83772d4eaca1ad587ed59a3b6f82a"
 dependencies = [
  "anyhow",
  "core-relations",
@@ -936,7 +944,7 @@ dependencies = [
 [[package]]
 name = "numeric-id"
 version = "0.1.0"
-source = "git+https://github.com/egraphs-good/egglog-backend.git?rev=4236684#42366849236b1dc6c2c421ccc29a5cf30a59dbc9"
+source = "git+https://github.com/egraphs-good/egglog-backend.git?rev=32c630#32c630f8f6c83772d4eaca1ad587ed59a3b6f82a"
 dependencies = [
  "lazy_static",
  "rayon",
@@ -1446,7 +1454,7 @@ checksum = "5a5f39404a5da50712a4c1eecf25e90dd62b613502b7e925fd4e4d19b5c96512"
 [[package]]
 name = "union-find"
 version = "0.1.0"
-source = "git+https://github.com/egraphs-good/egglog-backend.git?rev=4236684#42366849236b1dc6c2c421ccc29a5cf30a59dbc9"
+source = "git+https://github.com/egraphs-good/egglog-backend.git?rev=32c630#32c630f8f6c83772d4eaca1ad587ed59a3b6f82a"
 dependencies = [
  "concurrency",
  "crossbeam",
