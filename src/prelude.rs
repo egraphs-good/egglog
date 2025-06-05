@@ -118,9 +118,8 @@ pub fn rule(
         body: facts.0,
     };
 
-    let rule_name = egraph.parser.symbol_gen.fresh(&"prelude::rule".into());
     egraph.run_program(vec![Command::Rule {
-        name: rule_name,
+        name: format!("{rule:?}").into(),
         ruleset: ruleset.into(),
         rule,
     }])
@@ -234,10 +233,8 @@ pub fn rust_rule(
     facts: Facts<Symbol, Symbol>,
     func: impl Fn(&mut RustRuleContext, &[Value]) -> Option<()> + Clone + Send + Sync + 'static,
 ) -> Result<Vec<String>, Error> {
-    let rule_name = egraph.parser.symbol_gen.fresh(&"prelude::rust_rule".into());
     let prim_name = egraph.parser.symbol_gen.fresh(&"rust_rule_prim".into());
-
-    let panic_id = egraph.backend.new_panic(format!("{rule_name}"));
+    let panic_id = egraph.backend.new_panic(format!("{prim_name}_panic"));
     egraph.add_primitive(RustRuleRhs {
         name: prim_name,
         inputs: vars.iter().map(|(_, s)| s.clone()).collect(),
@@ -269,7 +266,7 @@ pub fn rust_rule(
     };
 
     egraph.run_program(vec![Command::Rule {
-        name: rule_name,
+        name: format!("{rule:?}").into(),
         ruleset: ruleset.into(),
         rule,
     }])
