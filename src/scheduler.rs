@@ -27,8 +27,8 @@ use crate::Symbol;
 use crate::EGraph;
 
 /// A scheduler decides which matches to be applied for a rule.
-/// 
-/// The matches that are not chosen in this iteration will be delayed 
+///
+/// The matches that are not chosen in this iteration will be delayed
 /// to the next iteration.
 pub trait Scheduler: dyn_clone::DynClone + Send + Sync {
     fn filter_matches(&self, matches: &mut Matches);
@@ -120,9 +120,7 @@ impl Matches {
                 let idx_c = c * tuple_len;
                 let idx_p = p * tuple_len;
                 for i in 0..tuple_len {
-                    let tmp = self.matches[idx_c + i];
-                    self.matches[idx_c + i] = self.matches[idx_p + i];
-                    self.matches[idx_p + i] = tmp;
+                    self.matches.swap(idx_c + i, idx_p + i);
                 }
             }
         }
