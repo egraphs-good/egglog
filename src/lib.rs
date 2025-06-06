@@ -28,11 +28,12 @@ pub mod util;
 // both this crate and other crates by referring to `::egglog`.
 extern crate self as egglog;
 pub use add_primitive::add_primitive;
+use numeric_id::DenseIdMap;
 
 use crate::constraint::Problem;
 use crate::core::{AtomTerm, ResolvedAtomTerm, ResolvedCall};
 pub use crate::prelude::*;
-use crate::scheduler::SchedulerRecord;
+use crate::scheduler::{SchedulerId, SchedulerRecord};
 use crate::typechecking::TypeError;
 use ast::*;
 #[cfg(feature = "bin")]
@@ -272,7 +273,7 @@ pub struct EGraph {
     overall_run_report: RunReport,
     /// Messages to be printed to the user. If this is `None`, then we are ignoring messages.
     msgs: Option<Vec<String>>,
-    schedulers: Vec<SchedulerRecord>,
+    schedulers: DenseIdMap<SchedulerId, SchedulerRecord>,
     commands: IndexMap<Symbol, Arc<dyn UserDefinedCommand>>,
 }
 
@@ -338,7 +339,7 @@ impl Default for EGraph {
             overall_run_report: Default::default(),
             msgs: Some(vec![]),
             type_info: Default::default(),
-            schedulers: vec![],
+            schedulers: Default::default(),
             commands: Default::default(),
         };
 

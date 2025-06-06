@@ -12,6 +12,7 @@ use egglog_bridge::FunctionId;
 use egglog_bridge::MergeFn;
 use egglog_bridge::RuleId;
 use egglog_bridge::TableAction;
+use numeric_id::define_id;
 
 use crate::ast::ResolvedVar;
 use crate::core::GenericAtomTerm;
@@ -130,17 +131,18 @@ impl Matches {
     }
 }
 
-type SchedulerId = usize;
+define_id!(
+    pub SchedulerId, u32,
+    "A unique identifier for a scheduler in the EGraph."
+);
 
 impl EGraph {
     /// Register a new scheduler and return its id.
-    pub fn register_scheduler<S: Scheduler + 'static>(&mut self, scheduler: S) -> SchedulerId {
-        let id = self.schedulers.len();
+    pub fn add_scheduler<S: Scheduler + 'static>(&mut self, scheduler: S) -> SchedulerId {
         self.schedulers.push(SchedulerRecord {
             scheduler: Box::new(scheduler),
             rule_info: Default::default(),
-        });
-        id
+        })
     }
 
     /// Get the scheduler by its id.
@@ -394,7 +396,7 @@ mod test {
     fn test_first_n_scheduler() {
         let mut egraph = EGraph::default();
         let scheduler = FirstNScheduler { n: 10 };
-        let scheduler_id = egraph.register_scheduler(scheduler);
+        let scheduler_id = egraph.add_scheduler(scheduler);
         let input = r#"
         (relation R (i64))
         (R 0)
