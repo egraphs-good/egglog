@@ -608,7 +608,7 @@ impl RuleBuilder<'_> {
         func: FunctionId,
         entries: &[QueryEntry],
         subsumed: QueryEntry,
-        panic_msg: impl FnOnce() -> String,
+        panic_msg: impl FnOnce() -> String + Send + 'static,
     ) -> Variable {
         let entries = entries.to_vec();
         let info = &self.egraph.funcs[func];
@@ -723,7 +723,7 @@ impl RuleBuilder<'_> {
                 }
             }
             DefaultVal::Fail => {
-                let panic_func = self.egraph.new_panic(panic_msg());
+                let panic_func = self.egraph.new_panic_lazy(panic_msg);
                 if self.egraph.tracing {
                     let term_var = self.new_var(ColumnTy::Id);
                     self.proof_builder.add_lhs(&entries, term_var);
@@ -774,7 +774,7 @@ impl RuleBuilder<'_> {
         &mut self,
         func: FunctionId,
         entries: &[QueryEntry],
-        panic_msg: impl FnOnce() -> String,
+        panic_msg: impl FnOnce() -> String + Send + 'static,
     ) -> Variable {
         self.lookup_with_subsumed(
             func,
