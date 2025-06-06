@@ -171,6 +171,9 @@ pub(crate) fn desugar_command(
         Command::Input { span, name, file } => {
             vec![NCommand::Input { span, name, file }]
         }
+        Command::UserDefined(span, name, args) => {
+            vec![NCommand::UserDefined(span, name, args)]
+        }
     };
 
     Ok(res)

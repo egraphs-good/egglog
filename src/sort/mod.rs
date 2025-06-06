@@ -1,6 +1,6 @@
 use num::traits::{CheckedAdd, CheckedDiv, CheckedMul, CheckedSub, One, Signed, ToPrimitive, Zero};
 use num::{BigInt, BigRational};
-use ordered_float::OrderedFloat;
+pub use ordered_float::OrderedFloat;
 use std::any::TypeId;
 use std::fmt::Debug;
 use std::ops::{Shl, Shr};
