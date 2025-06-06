@@ -1535,8 +1535,9 @@ impl<'a> BackendRule<'a> {
                             let name = f.name;
                             let f = self.func(f);
                             let args = self.args(args);
+                            let span = span.clone();
                             self.rb
-                                .lookup(f, &args, || {
+                                .lookup(f, &args, move || {
                                     format!("{span}: lookup of function {name} failed")
                                 })
                                 .into()
