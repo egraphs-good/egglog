@@ -79,6 +79,7 @@ where
         name: Symbol,
         file: String,
     },
+    UserDefined(Span, Symbol, Vec<Expr>),
 }
 
 impl<Head, Leaf> GenericNCommand<Head, Leaf>
@@ -95,7 +96,6 @@ where
             GenericNCommand::Sort(span, name, params) => {
                 GenericCommand::Sort(span.clone(), *name, params.clone())
             }
-            // This is awkward for the three subtypes change
             GenericNCommand::Function(f) => match f.subtype {
                 FunctionSubtype::Constructor => GenericCommand::Constructor {
                     span: f.span.clone(),
@@ -161,6 +161,9 @@ where
                 name: *name,
                 file: file.clone(),
             },
+            GenericNCommand::UserDefined(span, name, exprs) => {
+                GenericCommand::UserDefined(span.clone(), *name, exprs.clone())
+            }
         }
     }
 
@@ -218,6 +221,10 @@ where
             }
             GenericNCommand::Input { span, name, file } => {
                 GenericNCommand::Input { span, name, file }
+            }
+            GenericNCommand::UserDefined(span, name, exprs) => {
+                // We can't map `f` over UserDefined because UserDefined always assumes plain `Expr`s
+                GenericNCommand::UserDefined(span, name, exprs)
             }
         }
     }
@@ -639,6 +646,8 @@ where
     Fail(Span, Box<GenericCommand<Head, Leaf>>),
     /// Include another egglog file directly as text and run it.
     Include(Span, String),
+    /// User-defined command.
+    UserDefined(Span, Symbol, Vec<Expr>),
 }
 
 impl<Head, Leaf> Display for GenericCommand<Head, Leaf>
@@ -756,6 +765,9 @@ where
                     })
                     .collect();
                 write!(f, "(datatype* {})", ListDisplay(datatypes, " "))
+            }
+            GenericCommand::UserDefined(_span, name, exprs) => {
+                write!(f, "({name} {})", ListDisplay(exprs, " "))
             }
         }
     }
