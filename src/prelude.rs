@@ -154,7 +154,7 @@ macro_rules! actions {
 ///
 /// let big_number = 20;
 ///
-/// // check that `fib` does not contain `20`
+/// // check that `(fib 20)` is not in the e-graph
 /// let results = query(
 ///     &mut egraph,
 ///     vars![f: i64],
@@ -184,7 +184,7 @@ macro_rules! actions {
 ///     run_ruleset(&mut egraph, ruleset)?;
 /// }
 ///
-/// // check that `fib` now contains `20`
+/// // check that `(fib 20)` is now in the e-graph
 /// let results = query(
 ///     &mut egraph,
 ///     vars![f: i64],
@@ -340,7 +340,7 @@ impl<F: Fn(&mut RustRuleContext, &[Value]) -> Option<()>> Primitive for RustRule
 ///
 /// let big_number = 20;
 ///
-/// // check that `fib` does not contain `20`
+/// // check that `(fib 20)` is not in the e-graph
 /// let results = query(
 ///     &mut egraph,
 ///     vars![f: i64],
@@ -380,7 +380,7 @@ impl<F: Fn(&mut RustRuleContext, &[Value]) -> Option<()>> Primitive for RustRule
 ///     run_ruleset(&mut egraph, ruleset)?;
 /// }
 ///
-/// // check that `fib` now contains `20`
+/// // check that `(fib 20)` is now in the e-graph
 /// let results = query(
 ///     &mut egraph,
 ///     vars![f: i64],
@@ -821,7 +821,7 @@ mod tests {
 
         let big_number = 20;
 
-        // check that `fib` does not contain `20`
+        // check that `(fib 20)` is not in the e-graph
         let results = query(
             &mut egraph,
             vars![f: i64],
@@ -851,7 +851,7 @@ mod tests {
             run_ruleset(&mut egraph, ruleset)?;
         }
 
-        // check that `fib` now contains `20`
+        // check that `(fib 20)` is now in the e-graph
         let results = query(
             &mut egraph,
             vars![f: i64],
@@ -901,7 +901,7 @@ mod tests {
 
         let big_number = 20;
 
-        // check that `fib` does not contain `20`
+        // check that `(fib 20)` is not in the e-graph
         let results = query(
             &mut egraph,
             vars![f: i64],
@@ -941,7 +941,7 @@ mod tests {
             run_ruleset(&mut egraph, ruleset)?;
         }
 
-        // check that `fib` now contains `20`
+        // check that `(fib 20)` is now in the e-graph
         let results = query(
             &mut egraph,
             vars![f: i64],
