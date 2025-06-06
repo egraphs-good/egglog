@@ -385,6 +385,7 @@ impl EGraph {
             return Err(Error::CommandAlreadyExists(name, span!()));
         }
         self.commands.insert(name, command);
+        self.parser.add_user_defined(name);
         Ok(())
     }
 

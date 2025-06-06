@@ -254,6 +254,7 @@ pub struct Parser {
     commands: HashMap<Symbol, Arc<dyn Macro<Vec<Command>>>>,
     actions: HashMap<Symbol, Arc<dyn Macro<Vec<Action>>>>,
     exprs: HashMap<Symbol, Arc<dyn Macro<Expr>>>,
+    user_defined: HashSet<Symbol>,
     pub symbol_gen: SymbolGen,
 }
 
@@ -263,6 +264,7 @@ impl Default for Parser {
             commands: Default::default(),
             actions: Default::default(),
             exprs: Default::default(),
+            user_defined: Default::default(),
             symbol_gen: SymbolGen::new("$".to_string()),
         }
     }
@@ -301,11 +303,21 @@ impl Parser {
         self.exprs.insert(ma.name(), ma);
     }
 
+    pub(crate) fn add_user_defined(&mut self, name: Symbol) {
+        self.user_defined.insert(name);
+    }
+
     pub fn parse_command(&mut self, sexp: &Sexp) -> Result<Vec<Command>, ParseError> {
         let (head, tail, span) = sexp.expect_call("command")?;
 
         if let Some(macr0) = self.commands.get(&head).cloned() {
             return macr0.parse(tail, span, self);
+        }
+
+        // This prevents user-defined commands from being parsed as built-in commands.
+        if self.user_defined.contains(&head) {
+            let args = map_fallible(tail, self, Self::parse_expr)?;
+            return Ok(vec![Command::UserDefined(span, head, args)]);
         }
 
         Ok(match head.into() {
