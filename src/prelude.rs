@@ -11,7 +11,8 @@ use std::any::{Any, TypeId};
 
 // Re-exports in `prelude` for convenience.
 pub use egglog::ast::{Action, Fact, Facts, GenericActions, Symbol};
-pub use egglog::{action, actions, datatype, expr, fact, facts, vars};
+pub use egglog::sort::{BigIntSort, BigRatSort, BoolSort, F64Sort, I64Sort, StringSort, UnitSort};
+pub use egglog::{action, actions, datatype, expr, fact, facts, sort, vars};
 pub use egglog::{span, EGraph};
 
 pub mod exprs {
@@ -27,14 +28,6 @@ pub mod exprs {
 
     pub fn call(f: &str, xs: Vec<Expr>) -> Expr {
         Expr::Call(span!(), f.into(), xs)
-    }
-}
-
-pub mod sort {
-    use super::*;
-
-    pub fn i64() -> ArcSort {
-        I64Sort.to_arcsort()
     }
 }
 
@@ -55,9 +48,37 @@ pub fn run_ruleset(egraph: &mut EGraph, ruleset: &str) -> Result<Vec<String>, Er
 }
 
 #[macro_export]
+macro_rules! sort {
+    (BigInt) => {
+        BigIntSort.to_arcsort()
+    };
+    (BigRat) => {
+        BigRatSort.to_arcsort()
+    };
+    (bool) => {
+        BoolSort.to_arcsort()
+    };
+    (f64) => {
+        F64Sort.to_arcsort()
+    };
+    (i64) => {
+        I64Sort.to_arcsort()
+    };
+    (String) => {
+        StringSort.to_arcsort()
+    };
+    (Unit) => {
+        UnitSort.to_arcsort()
+    };
+    ($t:expr) => {
+        $t
+    };
+}
+
+#[macro_export]
 macro_rules! vars {
-    [$($x:ident : $t:ident),* $(,)?] => {
-        &[$((stringify!($x), sort::$t())),*]
+    [$($x:ident : $t:tt),* $(,)?] => {
+        &[$((stringify!($x), sort!($t))),*]
     };
 }
 
