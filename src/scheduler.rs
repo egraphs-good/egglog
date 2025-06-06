@@ -26,24 +26,33 @@ use crate::Symbol;
 
 use crate::EGraph;
 
+/// A scheduler decides which matches to be applied for a rule.
+/// 
+/// The matches that are not chosen in this iteration will be delayed 
+/// to the next iteration.
 pub trait Scheduler: dyn_clone::DynClone + Send + Sync {
     fn filter_matches(&self, matches: &mut Matches);
 }
 
 dyn_clone::clone_trait_object!(Scheduler);
 
+/// A collection of matches produced by a rule.
+/// The user can choose which matches to be fired.
 pub struct Matches {
     matches: Vec<Value>,
     chosen: Vec<usize>,
     vars: Vec<ResolvedVar>,
 }
 
+/// A match is a tuple of values corresponding to the variables in a rule.
+/// It allows you to retrieve the value corresponding to a variable in the match.
 pub struct Match<'a> {
     values: &'a [Value],
     vars: &'a [ResolvedVar],
 }
 
 impl Match<'_> {
+    /// Get the value corresponding a variable in this match.
     pub fn get_value(&self, var: Symbol) -> Value {
         let idx = self.vars.iter().position(|v| v.name == var).unwrap();
         self.values[idx]
@@ -62,14 +71,17 @@ impl Matches {
         }
     }
 
+    /// The number of matches in total.
     pub fn match_size(&self) -> usize {
         self.matches.len() / self.vars.len()
     }
 
+    /// The length of a tuple.
     pub fn tuple_len(&self) -> usize {
         self.vars.len()
     }
 
+    /// Get `idx`-th match.
     pub fn get_match(&self, idx: usize) -> Match {
         Match {
             values: &self.matches[idx * self.tuple_len()..(idx + 1) * self.tuple_len()],
@@ -77,10 +89,12 @@ impl Matches {
         }
     }
 
+    /// Pick the match at `idx` to be fired.
     pub fn choose(&mut self, idx: usize) {
         self.chosen.push(idx);
     }
 
+    /// Apply the chosen matches and return the residual matches.
     fn instantiate(
         mut self,
         state: &mut ExecutionState<'_>,
@@ -121,6 +135,7 @@ impl Matches {
 type SchedulerId = usize;
 
 impl EGraph {
+    /// Register a new scheduler and return its id.
     pub fn register_scheduler<S: Scheduler + 'static>(&mut self, scheduler: S) -> SchedulerId {
         let id = self.schedulers.len();
         self.schedulers.push(SchedulerRecord {
@@ -130,6 +145,7 @@ impl EGraph {
         id
     }
 
+    /// Get the scheduler by its id.
     pub fn step_rule_with_scheduler(
         &mut self,
         scheduler_id: SchedulerId,
@@ -286,7 +302,7 @@ impl ExternalFunction for CollectMatches {
 }
 
 impl SchedulerRuleInfo {
-    pub fn new(egraph: &mut EGraph, rule: &ResolvedCoreRule, name: &str) -> SchedulerRuleInfo {
+    fn new(egraph: &mut EGraph, rule: &ResolvedCoreRule, name: &str) -> SchedulerRuleInfo {
         let free_vars = rule.head.get_free_vars().into_iter().collect::<Vec<_>>();
         let unit_type = egraph.backend.primitives().get_ty::<()>();
         let unit = egraph.backend.primitives().get(());
