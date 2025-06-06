@@ -59,9 +59,9 @@ web-time = "1.1"
 
 # Backend
 # TODO: move egglog-backend repo into core egglog repo
-core-relations = { git = "https://github.com/egraphs-good/egglog-backend.git", rev = "51a4275" }
-egglog-bridge = { git = "https://github.com/egraphs-good/egglog-backend.git", rev = "51a4275" }
-numeric-id = { git = "https://github.com/egraphs-good/egglog-backend.git", rev = "51a4275" }
+core-relations = { git = "https://github.com/egraphs-good/egglog-backend.git", rev = "4b35d00" }
+egglog-bridge = { git = "https://github.com/egraphs-good/egglog-backend.git", rev = "4b35d00" }
+numeric-id = { git = "https://github.com/egraphs-good/egglog-backend.git", rev = "4b35d00" }
 
 # Need to add "js" feature for "graphviz-rust" to work in wasm
 getrandom = { version = "0.2.10", optional = true, features = ["js"] }

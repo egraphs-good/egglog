@@ -32,12 +32,12 @@ impl Sort for StringSort {
             let mut y = String::new();
             xs.for_each(|x| y.push_str(x.as_str()));
             let x: Symbol = y.into();
-            BaseTypeWrapper(x)
+            SymbolWrapper(x)
         }});
         add_primitive!(
             eg,
             "replace" = |a: S, b: S, c: S| -> S {
-                BaseTypeWrapper(a.as_str().replace(b.as_str(), c.as_str()).into())
+                SymbolWrapper(a.as_str().replace(b.as_str(), c.as_str()).into())
             }
         );
     }
@@ -61,13 +61,32 @@ impl IntoSort for S {
     type Sort = StringSort;
 }
 
-impl core_relations::Primitive for BaseTypeWrapper<Symbol> {
+/// A newtype wrapper for [`Symbol`] to allow for a custom implementation of the
+/// [`core_relations::Primitive`] trait.
+#[derive(Debug, Clone, PartialEq, Eq, Hash, PartialOrd, Ord)]
+pub struct SymbolWrapper(pub Symbol);
+
+impl SymbolWrapper {
+    pub fn new(symbol: Symbol) -> Self {
+        SymbolWrapper(symbol)
+    }
+}
+
+impl core_relations::Primitive for SymbolWrapper {
     const MAY_UNBOX: bool = true;
     fn try_box(&self) -> Option<core_relations::Value> {
         let x: NonZeroU32 = self.0.into();
         Some(core_relations::Value::new_const(x.get()))
     }
     fn try_unbox(val: core_relations::Value) -> Option<Self> {
-        Some(BaseTypeWrapper(NonZeroU32::new(val.rep()).unwrap().into()))
+        Some(SymbolWrapper(NonZeroU32::new(val.rep()).unwrap().into()))
+    }
+}
+
+impl std::ops::Deref for SymbolWrapper {
+    type Target = Symbol;
+
+    fn deref(&self) -> &Self::Target {
+        &self.0
     }
 }

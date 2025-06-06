@@ -1602,7 +1602,7 @@ fn literal_to_entry(egraph: &egglog_bridge::EGraph, l: &Literal) -> QueryEntry {
     match l {
         Literal::Int(x) => egraph.primitive_constant::<i64>(*x),
         Literal::Float(x) => egraph.primitive_constant::<sort::F>(x.into()),
-        Literal::String(x) => egraph.primitive_constant::<sort::S>(x.into()),
+        Literal::String(x) => egraph.primitive_constant::<sort::S>(sort::S::new(*x)),
         Literal::Bool(x) => egraph.primitive_constant::<bool>(*x),
         Literal::Unit => egraph.primitive_constant::<()>(()),
     }
@@ -1612,7 +1612,7 @@ fn literal_to_value(egraph: &egglog_bridge::EGraph, l: &Literal) -> Value {
     match l {
         Literal::Int(x) => egraph.primitives().get::<i64>(*x),
         Literal::Float(x) => egraph.primitives().get::<sort::F>(x.into()),
-        Literal::String(x) => egraph.primitives().get::<sort::S>(x.into()),
+        Literal::String(x) => egraph.primitives().get::<sort::S>(sort::S::new(*x)),
         Literal::Bool(x) => egraph.primitives().get::<bool>(*x),
         Literal::Unit => egraph.primitives().get::<()>(()),
     }
