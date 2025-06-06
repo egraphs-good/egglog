@@ -2,7 +2,6 @@ use std::sync::Arc;
 use std::sync::Mutex;
 use std::time::Duration;
 
-use bit_vec::BitVec;
 use core_relations::ExecutionState;
 use core_relations::ExternalFunction;
 use core_relations::Value;
@@ -35,7 +34,7 @@ dyn_clone::clone_trait_object!(Scheduler);
 
 pub struct Matches {
     matches: Vec<Value>,
-    chosen: BitVec,
+    chosen: Vec<usize>,
     vars: Vec<ResolvedVar>,
 }
 
@@ -55,16 +54,16 @@ impl Matches {
     fn new(matches: Vec<Value>, vars: Vec<ResolvedVar>) -> Self {
         let total_len = matches.len();
         let tuple_len = vars.len();
-        debug_assert!(total_len % tuple_len == 0);
+        assert!(total_len % tuple_len == 0);
         Self {
             matches,
             vars,
-            chosen: BitVec::from_elem(total_len / tuple_len, false),
+            chosen: Vec::new(),
         }
     }
 
     pub fn match_size(&self) -> usize {
-        self.chosen.len()
+        self.matches.len() / self.vars.len()
     }
 
     pub fn tuple_len(&self) -> usize {
@@ -79,35 +78,43 @@ impl Matches {
     }
 
     pub fn choose(&mut self, idx: usize) {
-        self.chosen.set(idx, true);
+        self.chosen.push(idx);
     }
 
     fn instantiate(
-        self,
+        mut self,
         state: &mut ExecutionState<'_>,
         mut table_action: TableAction,
     ) -> Vec<Value> {
         let tuple_len = self.tuple_len();
-        let idx_of = |i: usize| i / tuple_len;
-        let mut chosen = Vec::new();
-        let mut matches = self.matches;
         let unit = state.prims().get(());
 
-        let mut i = 0;
-        matches.retain(|item| {
-            let index = idx_of(i);
-            i += 1;
-            if self.chosen[index] {
-                chosen.push(*item);
-                false
-            } else {
-                true
-            }
-        });
-        chosen.chunks(tuple_len).for_each(|row| {
+        for idx in self.chosen.iter() {
+            let row = &self.matches[idx * tuple_len..(idx + 1) * tuple_len];
             table_action.insert(state, row.iter().cloned().chain(std::iter::once(unit)));
-        });
-        matches
+        }
+
+        // swap remove the chosen matches
+        self.chosen.sort_unstable();
+        self.chosen.dedup();
+        let mut p = self.match_size();
+        for c in self.chosen.into_iter().rev() {
+            // It's important to decrement `p` first, because otherwise it might underflow when
+            // matches are exhausted.
+            p -= 1;
+            if c != p {
+                let idx_c = c * tuple_len;
+                let idx_p = p * tuple_len;
+                for i in 0..tuple_len {
+                    let tmp = self.matches[idx_c + i];
+                    self.matches[idx_c + i] = self.matches[idx_p + i];
+                    self.matches[idx_p + i] = tmp;
+                }
+            }
+        }
+        self.matches.truncate(p * tuple_len);
+
+        self.matches
     }
 }
 
@@ -128,6 +135,25 @@ impl EGraph {
         scheduler_id: SchedulerId,
         ruleset: Symbol,
     ) -> RunReport {
+        fn collect_rules<'a>(
+            ruleset: Symbol,
+            rulesets: &'a IndexMap<Symbol, Ruleset>,
+            ids: &mut Vec<(Symbol, &'a ResolvedCoreRule)>,
+        ) {
+            match &rulesets[&ruleset] {
+                Ruleset::Rules(rules) => {
+                    for (rule_name, (core_rule, _)) in rules.iter() {
+                        ids.push((*rule_name, core_rule));
+                    }
+                }
+                Ruleset::Combined(sub_rulesets) => {
+                    for sub_ruleset in sub_rulesets {
+                        collect_rules(*sub_ruleset, rulesets, ids);
+                    }
+                }
+            }
+        }
+
         let mut rules = Vec::new();
         let rulesets = std::mem::take(&mut self.rulesets);
         collect_rules(ruleset, &rulesets, &mut rules);
@@ -212,25 +238,6 @@ impl EGraph {
             .map(|(rule, report)| (rule.as_str().into(), report.num_matches))
             .collect();
         report
-    }
-}
-
-fn collect_rules<'a>(
-    ruleset: Symbol,
-    rulesets: &'a IndexMap<Symbol, Ruleset>,
-    ids: &mut Vec<(Symbol, &'a ResolvedCoreRule)>,
-) {
-    match &rulesets[&ruleset] {
-        Ruleset::Rules(rules) => {
-            for (rule_name, (core_rule, _)) in rules.iter() {
-                ids.push((*rule_name, core_rule));
-            }
-        }
-        Ruleset::Combined(sub_rulesets) => {
-            for sub_ruleset in sub_rulesets {
-                collect_rules(*sub_ruleset, rulesets, ids);
-            }
-        }
     }
 }
 
