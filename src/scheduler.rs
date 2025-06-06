@@ -138,15 +138,19 @@ define_id!(
 
 impl EGraph {
     /// Register a new scheduler and return its id.
-    pub fn add_scheduler<S: Scheduler + 'static>(&mut self, scheduler: S) -> SchedulerId {
+    pub fn add_scheduler(&mut self, scheduler: Box<dyn Scheduler>) -> SchedulerId {
         self.schedulers.push(SchedulerRecord {
-            scheduler: Box::new(scheduler),
+            scheduler,
             rule_info: Default::default(),
         })
     }
 
+    pub fn remove_scheduler(&mut self, scheduler_id: SchedulerId) -> Option<Box<dyn Scheduler>> {
+        self.schedulers.take(scheduler_id).map(|r| r.scheduler)
+    }
+
     /// Get the scheduler by its id.
-    pub fn step_rule_with_scheduler(
+    pub fn step_rules_with_scheduler(
         &mut self,
         scheduler_id: SchedulerId,
         ruleset: Symbol,
@@ -396,7 +400,7 @@ mod test {
     fn test_first_n_scheduler() {
         let mut egraph = EGraph::default();
         let scheduler = FirstNScheduler { n: 10 };
-        let scheduler_id = egraph.add_scheduler(scheduler);
+        let scheduler_id = egraph.add_scheduler(Box::new(scheduler));
         let input = r#"
         (relation R (i64))
         (R 0)
@@ -413,7 +417,7 @@ mod test {
         let s_id = egraph.functions.get(&Symbol::from("S")).unwrap().backend_id;
         let mut iter = 0;
         loop {
-            let report = egraph.step_rule_with_scheduler(scheduler_id, "test".into());
+            let report = egraph.step_rules_with_scheduler(scheduler_id, "test".into());
             let table_size = egraph.get_size(s_id);
             iter += 1;
             assert_eq!(table_size, std::cmp::min(iter * 10, 101));

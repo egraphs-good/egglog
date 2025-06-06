@@ -261,7 +261,6 @@ pub struct EGraph {
     functions: IndexMap<Symbol, Function>,
     rulesets: IndexMap<Symbol, Ruleset>,
     interactive_mode: bool,
-    timestamp: u32,
     pub run_mode: RunMode,
     pub fact_directory: Option<PathBuf>,
     pub seminaive: bool,
@@ -329,7 +328,6 @@ impl Default for EGraph {
             pushed_egraph: Default::default(),
             functions: Default::default(),
             rulesets: Default::default(),
-            timestamp: 0,
             run_mode: RunMode::Normal,
             interactive_mode: false,
             fact_directory: None,
@@ -757,12 +755,11 @@ impl EGraph {
         report.union(&subreport);
 
         log::debug!("database size: {}", self.num_tuples());
-        self.timestamp += 1;
 
         report
     }
 
-    fn step_rules(&mut self, ruleset: Symbol) -> RunReport {
+    pub fn step_rules(&mut self, ruleset: Symbol) -> RunReport {
         fn collect_rule_ids(
             ruleset: Symbol,
             rulesets: &IndexMap<Symbol, Ruleset>,
