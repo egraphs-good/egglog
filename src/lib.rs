@@ -911,7 +911,7 @@ impl EGraph {
             ext_id,
             &[arg],
             egglog_bridge::ColumnTy::Primitive(unit_id),
-            "this function will never panic",
+            || "this function will never panic".to_string(),
         );
 
         let id = translator.build();
@@ -975,12 +975,11 @@ impl EGraph {
             &self.type_info,
         );
         translator.query(&query, true);
-        translator.rb.call_external_func(
-            ext_id,
-            &[],
-            egglog_bridge::ColumnTy::Id,
-            "this function will never panic",
-        );
+        translator
+            .rb
+            .call_external_func(ext_id, &[], egglog_bridge::ColumnTy::Id, || {
+                "this function will never panic".to_string()
+            });
         let id = translator.build();
         let _ = self.backend.run_rules(&[id]).unwrap();
         self.backend.free_rule(id);
@@ -1451,7 +1450,7 @@ impl<'a> BackendRule<'a> {
                 panic!("expected string literal after `unstable-fn`")
             };
             let id = if let Some(f) = self.type_info.get_func_type(&name) {
-                ResolvedFunctionId::Lookup(egglog_bridge::Lookup::new(
+                ResolvedFunctionId::Lookup(egglog_bridge::TableAction::new(
                     self.rb.egraph(),
                     self.func(f),
                 ))
@@ -1536,8 +1535,9 @@ impl<'a> BackendRule<'a> {
                             let name = f.name;
                             let f = self.func(f);
                             let args = self.args(args);
+                            let span = span.clone();
                             self.rb
-                                .lookup(f, &args, || {
+                                .lookup(f, &args, move || {
                                     format!("{span}: lookup of function {name} failed")
                                 })
                                 .into()
@@ -1545,13 +1545,11 @@ impl<'a> BackendRule<'a> {
                         ResolvedCall::Primitive(p) => {
                             let name = p.primitive.0.name();
                             let (p, args, ty) = self.prim(p, args);
+                            let span = span.clone();
                             self.rb
-                                .call_external_func(
-                                    p,
-                                    &args,
-                                    ty,
-                                    format!("{span}: call of primitive {name} failed").as_str(),
-                                )
+                                .call_external_func(p, &args, ty, move || {
+                                    format!("{span}: call of primitive {name} failed")
+                                })
                                 .into()
                         }
                     };
@@ -1603,8 +1601,8 @@ impl<'a> BackendRule<'a> {
 fn literal_to_entry(egraph: &egglog_bridge::EGraph, l: &Literal) -> QueryEntry {
     match l {
         Literal::Int(x) => egraph.primitive_constant::<i64>(*x),
-        Literal::Float(x) => egraph.primitive_constant::<sort::F>(*x),
-        Literal::String(x) => egraph.primitive_constant::<sort::S>(*x),
+        Literal::Float(x) => egraph.primitive_constant::<sort::F>(x.into()),
+        Literal::String(x) => egraph.primitive_constant::<sort::S>(sort::S::new(*x)),
         Literal::Bool(x) => egraph.primitive_constant::<bool>(*x),
         Literal::Unit => egraph.primitive_constant::<()>(()),
     }
@@ -1613,8 +1611,8 @@ fn literal_to_entry(egraph: &egglog_bridge::EGraph, l: &Literal) -> QueryEntry {
 fn literal_to_value(egraph: &egglog_bridge::EGraph, l: &Literal) -> Value {
     match l {
         Literal::Int(x) => egraph.primitives().get::<i64>(*x),
-        Literal::Float(x) => egraph.primitives().get::<sort::F>(*x),
-        Literal::String(x) => egraph.primitives().get::<sort::S>(*x),
+        Literal::Float(x) => egraph.primitives().get::<sort::F>(x.into()),
+        Literal::String(x) => egraph.primitives().get::<sort::S>(sort::S::new(*x)),
         Literal::Bool(x) => egraph.primitives().get::<bool>(*x),
         Literal::Unit => egraph.primitives().get::<()>(()),
     }

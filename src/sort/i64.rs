@@ -69,7 +69,7 @@ impl Sort for I64Sort {
         add_primitive!(eg, "min" = |a: i64, b: i64| -> i64 { a.min(b) });
         add_primitive!(eg, "max" = |a: i64, b: i64| -> i64 { a.max(b) });
 
-        add_primitive!(eg, "to-string" = |a: i64| -> Symbol { a.to_string().into() });
+        add_primitive!(eg, "to-string" = |a: i64| -> S { S::new(a.to_string().into()) });
 
         // Must be in the i64 sort register function because
         // the string sort is registered before the i64 sort.
@@ -88,9 +88,9 @@ impl Sort for I64Sort {
         value: Value,
         termdag: &mut TermDag,
     ) -> Term {
-        let i = primitives.unwrap_ref::<i64>(value);
+        let i = primitives.unwrap::<i64>(value);
 
-        termdag.lit(Literal::Int(*i))
+        termdag.lit(Literal::Int(i))
     }
 }
 

@@ -16,10 +16,10 @@ use crate::extract::Cost;
 use crate::util::IndexSet;
 use crate::*;
 
-pub type Z = BigInt;
-pub type Q = BigRational;
-pub type F = OrderedFloat<f64>;
-pub type S = Symbol;
+pub type Z = core_relations::Boxed<BigInt>;
+pub type Q = core_relations::Boxed<BigRational>;
+pub type F = core_relations::Boxed<OrderedFloat<f64>>;
+pub type S = SymbolWrapper;
 
 mod bigint;
 pub use bigint::*;
