@@ -43,9 +43,9 @@ impl Sort for BoolSort {
         value: Value,
         termdag: &mut TermDag,
     ) -> Term {
-        let b = primitives.unwrap_ref::<bool>(value);
+        let b = primitives.unwrap::<bool>(value);
 
-        termdag.lit(Literal::Bool(*b))
+        termdag.lit(Literal::Bool(b))
     }
 }
 
