@@ -250,6 +250,9 @@ impl EGraph {
                 name: *name,
                 file: file.clone(),
             },
+            NCommand::UserDefined(span, name, exprs) => {
+                ResolvedNCommand::UserDefined(span.clone(), *name, exprs.clone())
+            }
         };
         Ok(command)
     }
