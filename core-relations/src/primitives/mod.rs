@@ -185,3 +185,122 @@ impl<P: Primitive> PrimitiveInternTable<P> {
         }
     }
 }
+
+/// A newtype wrapper used to implement the [`Primitive`] trait on types not
+/// defined in this crate.
+///
+/// This type is just a helper: users can also implement the [`Primitive`] trait directly on their
+/// types if the type is defined in the crate in which the implementation is defined, or if they
+/// need custom logic for boxing or unboxing the type.
+#[derive(Debug, Copy, Clone, PartialEq, Eq, PartialOrd, Ord, Hash)]
+pub struct Boxed<T>(pub T);
+
+impl<T> Boxed<T> {
+    pub fn new(value: T) -> Self {
+        Boxed(value)
+    }
+
+    pub fn into_inner(self) -> T {
+        self.0
+    }
+}
+
+impl<T: Hash + Eq + Debug + Clone + Send + Sync + 'static> Primitive for Boxed<T> {}
+
+impl<T> std::ops::Deref for Boxed<T> {
+    type Target = T;
+
+    fn deref(&self) -> &Self::Target {
+        &self.0
+    }
+}
+
+impl<T> std::ops::DerefMut for Boxed<T> {
+    fn deref_mut(&mut self) -> &mut Self::Target {
+        &mut self.0
+    }
+}
+
+impl<T> From<T> for Boxed<T> {
+    fn from(value: T) -> Self {
+        Boxed(value)
+    }
+}
+
+impl<T: Copy> From<&T> for Boxed<T> {
+    fn from(value: &T) -> Self {
+        Boxed(*value)
+    }
+}
+
+impl<T: std::ops::Add<Output = T>> std::ops::Add for Boxed<T> {
+    type Output = Self;
+
+    fn add(self, other: Self) -> Self::Output {
+        Boxed(self.0 + other.0)
+    }
+}
+
+impl<T: std::ops::Sub<Output = T>> std::ops::Sub for Boxed<T> {
+    type Output = Self;
+
+    fn sub(self, other: Self) -> Self::Output {
+        Boxed(self.0 - other.0)
+    }
+}
+
+impl<T: std::ops::Mul<Output = T>> std::ops::Mul for Boxed<T> {
+    type Output = Self;
+
+    fn mul(self, other: Self) -> Self::Output {
+        Boxed(self.0 * other.0)
+    }
+}
+
+impl<T: std::ops::Div<Output = T>> std::ops::Div for Boxed<T> {
+    type Output = Self;
+
+    fn div(self, other: Self) -> Self::Output {
+        Boxed(self.0 / other.0)
+    }
+}
+
+impl<T: std::ops::Rem<Output = T>> std::ops::Rem for Boxed<T> {
+    type Output = Self;
+
+    fn rem(self, other: Self) -> Self::Output {
+        Boxed(self.0 % other.0)
+    }
+}
+
+impl<T: std::ops::Neg<Output = T>> std::ops::Neg for Boxed<T> {
+    type Output = Self;
+
+    fn neg(self) -> Self::Output {
+        Boxed(-self.0)
+    }
+}
+
+impl<T: std::ops::BitAnd<Output = T>> std::ops::BitAnd for Boxed<T> {
+    type Output = Self;
+
+    fn bitand(self, other: Self) -> Self::Output {
+        Boxed(self.0 & other.0)
+    }
+}
+
+impl<T: std::ops::BitOr<Output = T>> std::ops::BitOr for Boxed<T> {
+    type Output = Self;
+
+    fn bitor(self, other: Self) -> Self::Output {
+        Boxed(self.0 | other.0)
+    }
+}
+
+impl<T: std::ops::BitXor<Output = T>> std::ops::BitXor for Boxed<T> {
+    type Output = Self;
+
+    fn bitxor(self, other: Self) -> Self::Output {
+        Boxed(self.0 ^ other.0)
+    }
+}

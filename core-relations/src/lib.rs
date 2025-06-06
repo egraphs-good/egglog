@@ -31,7 +31,7 @@ pub use free_join::{
 pub use hash_index::TupleIndex;
 pub use offsets::{OffsetRange, RowId, Subset, SubsetRef};
 pub use pool::{Pool, PoolSet, Pooled};
-pub use primitives::{Primitive, PrimitiveId, PrimitivePrinter, Primitives};
+pub use primitives::{Boxed, Primitive, PrimitiveId, PrimitivePrinter, Primitives};
 pub use query::{
     CachedPlan, QueryBuilder, QueryError, RuleBuilder, RuleId, RuleSet, RuleSetBuilder,
 };
