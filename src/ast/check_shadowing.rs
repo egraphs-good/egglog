@@ -53,6 +53,7 @@ impl Names {
             ResolvedNCommand::Output { .. } => Ok(()),
             ResolvedNCommand::Push(..) => Ok(()),
             ResolvedNCommand::Pop(..) => Ok(()),
+            ResolvedNCommand::UserDefined(..) => Ok(()),
         }
     }
 

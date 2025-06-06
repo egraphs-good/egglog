@@ -12,6 +12,7 @@ use egglog_bridge::FunctionId;
 use egglog_bridge::MergeFn;
 use egglog_bridge::RuleId;
 use egglog_bridge::TableAction;
+use numeric_id::define_id;
 
 use crate::ast::ResolvedVar;
 use crate::core::GenericAtomTerm;
@@ -31,7 +32,21 @@ use crate::EGraph;
 /// The matches that are not chosen in this iteration will be delayed
 /// to the next iteration.
 pub trait Scheduler: dyn_clone::DynClone + Send + Sync {
-    fn filter_matches(&self, matches: &mut Matches);
+    /// Whether or not the rules can be considered as saturated (i.e.,
+    /// `run_report.updated == false`).
+    ///
+    /// This is only called when the runner is otherwise saturated.
+    /// Default implementation just returns `true`.
+    fn can_stop(&mut self, rules: &[Symbol], ruleset: Symbol) -> bool {
+        let _ = (rules, ruleset);
+        true
+    }
+
+    /// Filter the matches for a rule.
+    ///
+    /// Return `true` if the scheduler's next run of the rule should feed
+    /// `filter_matches` with a new iteration of matches.
+    fn filter_matches(&mut self, rule: Symbol, ruleset: Symbol, matches: &mut Matches) -> bool;
 }
 
 dyn_clone::clone_trait_object!(Scheduler);
@@ -42,6 +57,7 @@ pub struct Matches {
     matches: Vec<Value>,
     chosen: Vec<usize>,
     vars: Vec<ResolvedVar>,
+    all_chosen: bool,
 }
 
 /// A match is a tuple of values corresponding to the variables in a rule.
@@ -68,6 +84,7 @@ impl Matches {
             matches,
             vars,
             chosen: Vec::new(),
+            all_chosen: false,
         }
     }
 
@@ -94,6 +111,13 @@ impl Matches {
         self.chosen.push(idx);
     }
 
+    /// Pick all matches to be fired.
+    ///
+    /// This is more efficient than calling `choose` for each match.
+    pub fn choose_all(&mut self) {
+        self.all_chosen = true;
+    }
+
     /// Apply the chosen matches and return the residual matches.
     fn instantiate(
         mut self,
@@ -103,48 +127,60 @@ impl Matches {
         let tuple_len = self.tuple_len();
         let unit = state.prims().get(());
 
-        for idx in self.chosen.iter() {
-            let row = &self.matches[idx * tuple_len..(idx + 1) * tuple_len];
-            table_action.insert(state, row.iter().cloned().chain(std::iter::once(unit)));
-        }
+        if self.all_chosen {
+            for row in self.matches.chunks(tuple_len) {
+                table_action.insert(state, row.iter().cloned().chain(std::iter::once(unit)));
+            }
+            vec![]
+        } else {
+            for idx in self.chosen.iter() {
+                let row = &self.matches[idx * tuple_len..(idx + 1) * tuple_len];
+                table_action.insert(state, row.iter().cloned().chain(std::iter::once(unit)));
+            }
 
-        // swap remove the chosen matches
-        self.chosen.sort_unstable();
-        self.chosen.dedup();
-        let mut p = self.match_size();
-        for c in self.chosen.into_iter().rev() {
-            // It's important to decrement `p` first, because otherwise it might underflow when
-            // matches are exhausted.
-            p -= 1;
-            if c != p {
-                let idx_c = c * tuple_len;
-                let idx_p = p * tuple_len;
-                for i in 0..tuple_len {
-                    self.matches.swap(idx_c + i, idx_p + i);
+            // swap remove the chosen matches
+            self.chosen.sort_unstable();
+            self.chosen.dedup();
+            let mut p = self.match_size();
+            for c in self.chosen.into_iter().rev() {
+                // It's important to decrement `p` first, because otherwise it might underflow when
+                // matches are exhausted.
+                p -= 1;
+                if c != p {
+                    let idx_c = c * tuple_len;
+                    let idx_p = p * tuple_len;
+                    for i in 0..tuple_len {
+                        self.matches.swap(idx_c + i, idx_p + i);
+                    }
                 }
             }
-        }
-        self.matches.truncate(p * tuple_len);
+            self.matches.truncate(p * tuple_len);
 
-        self.matches
+            self.matches
+        }
     }
 }
 
-type SchedulerId = usize;
+define_id!(
+    pub SchedulerId, u32,
+    "A unique identifier for a scheduler in the EGraph."
+);
 
 impl EGraph {
     /// Register a new scheduler and return its id.
-    pub fn register_scheduler<S: Scheduler + 'static>(&mut self, scheduler: S) -> SchedulerId {
-        let id = self.schedulers.len();
+    pub fn add_scheduler(&mut self, scheduler: Box<dyn Scheduler>) -> SchedulerId {
         self.schedulers.push(SchedulerRecord {
-            scheduler: Box::new(scheduler),
+            scheduler,
             rule_info: Default::default(),
-        });
-        id
+        })
+    }
+
+    pub fn remove_scheduler(&mut self, scheduler_id: SchedulerId) -> Option<Box<dyn Scheduler>> {
+        self.schedulers.take(scheduler_id).map(|r| r.scheduler)
     }
 
     /// Get the scheduler by its id.
-    pub fn step_rule_with_scheduler(
+    pub fn step_rules_with_scheduler(
         &mut self,
         scheduler_id: SchedulerId,
         ruleset: Symbol,
@@ -185,9 +221,14 @@ impl EGraph {
         // Step 2: run all the queries for one iteration
         let query_rules = rules
             .iter()
-            .map(|(rule_id, _rule)| {
+            .filter_map(|(rule_id, _rule)| {
                 let rule_info = record.rule_info.get(rule_id).unwrap();
-                rule_info.query_rule
+
+                if rule_info.should_seek {
+                    Some(rule_info.query_rule)
+                } else {
+                    None
+                }
             })
             .collect::<Vec<_>>();
 
@@ -196,12 +237,15 @@ impl EGraph {
         // Step 3: let the scheduler decide which matches need to be kept
         self.backend.with_execution_state(|state| {
             for (rule_id, _rule) in rules.iter() {
-                let rule_info = record.rule_info.get(rule_id).unwrap();
+                let rule_info = record.rule_info.get_mut(rule_id).unwrap();
 
                 let matches: Vec<Value> =
                     std::mem::take(rule_info.matches.lock().unwrap().as_mut());
                 let mut matches = Matches::new(matches, rule_info.free_vars.clone());
-                record.scheduler.filter_matches(&mut matches);
+                rule_info.should_seek =
+                    record
+                        .scheduler
+                        .filter_matches(*rule_id, ruleset, &mut matches);
                 let table_action = TableAction::new(&self.backend, rule_info.decided);
                 *rule_info.matches.lock().unwrap() = matches.instantiate(state, table_action);
             }
@@ -218,13 +262,13 @@ impl EGraph {
             .collect::<Vec<_>>();
         let action_iter_report = self.backend.run_rules(&action_rules).unwrap();
 
-        self.rulesets = rulesets;
-        self.schedulers = schedulers;
-
         // Step 5: combine the reports
         let per_ruleset = |x| [(ruleset, x)].into_iter().collect();
         let mut report = RunReport::default();
-        report.updated = action_iter_report.changed;
+        report.updated = action_iter_report.changed || {
+            let rule_ids = rules.iter().map(|(id, _)| *id).collect::<Vec<_>>();
+            !record.scheduler.can_stop(&rule_ids, ruleset)
+        };
 
         report.search_and_apply_time_per_ruleset = per_ruleset(
             query_iter_report.search_and_apply_time + action_iter_report.search_and_apply_time,
@@ -251,6 +295,10 @@ impl EGraph {
             .iter()
             .map(|(rule, report)| (rule.as_str().into(), report.num_matches))
             .collect();
+
+        self.rulesets = rulesets;
+        self.schedulers = schedulers;
+
         report
     }
 }
@@ -268,6 +316,7 @@ pub(crate) struct SchedulerRecord {
 #[derive(Clone)]
 struct SchedulerRuleInfo {
     matches: Arc<Mutex<Vec<Value>>>,
+    should_seek: bool,
     decided: FunctionId,
     query_rule: RuleId,
     action_rule: RuleId,
@@ -369,6 +418,7 @@ impl SchedulerRuleInfo {
             action_rule: arule_id,
             matches,
             decided,
+            should_seek: true,
         }
     }
 }
@@ -383,10 +433,20 @@ mod test {
     }
 
     impl Scheduler for FirstNScheduler {
-        fn filter_matches(&self, matches: &mut Matches) {
-            for i in 0..std::cmp::min(self.n, matches.match_size()) {
-                matches.choose(i);
+        fn filter_matches(
+            &mut self,
+            _rule: Symbol,
+            _ruleset: Symbol,
+            matches: &mut Matches,
+        ) -> bool {
+            if matches.match_size() <= self.n {
+                matches.choose_all();
+            } else {
+                for i in 0..self.n {
+                    matches.choose(i);
+                }
             }
+            matches.match_size() < self.n * 2
         }
     }
 
@@ -394,7 +454,7 @@ mod test {
     fn test_first_n_scheduler() {
         let mut egraph = EGraph::default();
         let scheduler = FirstNScheduler { n: 10 };
-        let scheduler_id = egraph.register_scheduler(scheduler);
+        let scheduler_id = egraph.add_scheduler(Box::new(scheduler));
         let input = r#"
         (relation R (i64))
         (R 0)
@@ -411,7 +471,7 @@ mod test {
         let s_id = egraph.functions.get(&Symbol::from("S")).unwrap().backend_id;
         let mut iter = 0;
         loop {
-            let report = egraph.step_rule_with_scheduler(scheduler_id, "test".into());
+            let report = egraph.step_rules_with_scheduler(scheduler_id, "test".into());
             let table_size = egraph.get_size(s_id);
             iter += 1;
             assert_eq!(table_size, std::cmp::min(iter * 10, 101));

@@ -28,18 +28,19 @@ pub mod util;
 // both this crate and other crates by referring to `::egglog`.
 extern crate self as egglog;
 pub use add_primitive::add_primitive;
+use numeric_id::DenseIdMap;
 
 use crate::constraint::Problem;
 use crate::core::{AtomTerm, ResolvedAtomTerm, ResolvedCall};
 pub use crate::prelude::*;
-use crate::scheduler::SchedulerRecord;
+use crate::scheduler::{SchedulerId, SchedulerRecord};
 use crate::typechecking::TypeError;
 use ast::*;
 #[cfg(feature = "bin")]
 pub use cli::bin::*;
 use constraint::{Constraint, SimpleTypeConstraint, TypeConstraint};
 use core_relations::{make_external_func, ExternalFunctionId};
-pub use core_relations::{ExecutionState, Value};
+pub use core_relations::{ExecutionState, Value, Boxed};
 use egglog_bridge::{ColumnTy, IterationReport, QueryEntry};
 use extract::{Extractor, TreeAdditiveCostModel};
 pub use serialize::{SerializeConfig, SerializedNode};
@@ -272,7 +273,18 @@ pub struct EGraph {
     overall_run_report: RunReport,
     /// Messages to be printed to the user. If this is `None`, then we are ignoring messages.
     msgs: Option<Vec<String>>,
-    schedulers: Vec<SchedulerRecord>,
+    schedulers: DenseIdMap<SchedulerId, SchedulerRecord>,
+    commands: IndexMap<Symbol, Arc<dyn UserDefinedCommand>>,
+}
+
+/// A user-defined command allows users to inject custom command that can be called
+/// in an egglog program.
+///
+/// Compared to an external function, a user-defined command is more powerful because
+/// it has an exclusive access to the e-graph.
+pub trait UserDefinedCommand: Send + Sync {
+    /// Run the command with the given arguments.
+    fn update(&self, egraph: &mut EGraph, args: &[Expr]) -> Result<(), Error>;
 }
 
 #[derive(Clone)]
@@ -326,7 +338,8 @@ impl Default for EGraph {
             overall_run_report: Default::default(),
             msgs: Some(vec![]),
             type_info: Default::default(),
-            schedulers: vec![],
+            schedulers: Default::default(),
+            commands: Default::default(),
         };
 
         add_leaf_sort(&mut eg, UnitSort, span!()).unwrap();
@@ -367,6 +380,22 @@ impl Default for EGraph {
 pub struct NotFoundError(String);
 
 impl EGraph {
+    pub fn add_command(
+        &mut self,
+        name: Symbol,
+        command: Arc<dyn UserDefinedCommand>,
+    ) -> Result<(), Error> {
+        if self.commands.contains_key(&name)
+            || self.functions.contains_key(&name)
+            || self.type_info.get_prims(&name).is_some()
+        {
+            return Err(Error::CommandAlreadyExists(name, span!()));
+        }
+        self.commands.insert(name, command);
+        self.parser.add_user_defined(name)?;
+        Ok(())
+    }
+
     pub fn is_interactive_mode(&self) -> bool {
         self.interactive_mode
     }
@@ -738,7 +767,7 @@ impl EGraph {
         report
     }
 
-    fn step_rules(&mut self, ruleset: Symbol) -> RunReport {
+    pub fn step_rules(&mut self, ruleset: Symbol) -> RunReport {
         fn collect_rule_ids(
             ruleset: Symbol,
             rulesets: &IndexMap<Symbol, Ruleset>,
@@ -1196,6 +1225,13 @@ impl EGraph {
                 }
 
                 log::info!("Output to '{filename:?}'.")
+            }
+            ResolvedNCommand::UserDefined(_span, name, exprs) => {
+                let command = self.commands.swap_remove(&name).unwrap_or_else(|| {
+                    panic!("Unrecognized user-defined command: {}", name);
+                });
+                command.update(self, &exprs)?;
+                self.commands.insert(name, command);
             }
         };
 
@@ -1685,6 +1721,8 @@ pub enum Error {
     ExtractError(String),
     #[error("{1}\n{2}\nShadowing is not allowed, but found {0}")]
     Shadowing(Symbol, Span, Span),
+    #[error("{1}\nCommand already exists: {0}")]
+    CommandAlreadyExists(Symbol, Span),
 }
 
 #[cfg(test)]
