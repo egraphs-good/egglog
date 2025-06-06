@@ -108,9 +108,10 @@ fn test_subsumed_unextractable_rebuild_arg() {
         )
         .unwrap();
     let report = egraph.get_extract_report().clone().unwrap();
-    let ExtractReport::Best { term, termdag, .. } = report else {
+    let ExtractReport::Best { term, .. } = report else {
         panic!();
     };
+    let termdag = egraph.termdag();
     let span = span!();
     let expr = termdag.term_to_expr(&term, span.clone());
     assert_eq!(expr, Expr::Call(span, GlobalSymbol::from("exp"), vec![]));
@@ -160,9 +161,10 @@ fn test_subsumed_unextractable_rebuild_self() {
         )
         .unwrap();
     let report = egraph.get_extract_report().clone().unwrap();
-    let ExtractReport::Best { term, termdag, .. } = report else {
+    let ExtractReport::Best { term, .. } = report else {
         panic!();
     };
+    let termdag = egraph.termdag();
     let span = span!();
     let expr = termdag.term_to_expr(&term, span.clone());
     assert_eq!(expr, Expr::Call(span, GlobalSymbol::from("exp"), vec![]));
@@ -421,9 +423,10 @@ fn test_value_to_classid() {
         )
         .unwrap();
     let report = egraph.get_extract_report().clone().unwrap();
-    let ExtractReport::Best { term, termdag, .. } = report else {
+    let ExtractReport::Best { term, .. } = report else {
         panic!();
     };
+    let termdag = egraph.termdag();
     let expr = termdag.term_to_expr(&term, span!());
     let (sort, value) = egraph.eval_expr(&expr).unwrap();
 

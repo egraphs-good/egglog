@@ -35,7 +35,7 @@ use ast::*;
 #[cfg(feature = "bin")]
 pub use cli::bin::*;
 use constraint::{Constraint, SimpleTypeConstraint, TypeConstraint};
-use extract::Extractor;
+use extract::{CostMap, Extractor};
 pub use function::Function;
 use function::*;
 use gj::*;
@@ -223,15 +223,8 @@ impl Display for RunReport {
 /// A report of the results of an extract action.
 #[derive(Debug, Clone)]
 pub enum ExtractReport {
-    Best {
-        termdag: TermDag,
-        cost: usize,
-        term: Term,
-    },
-    Variants {
-        termdag: TermDag,
-        terms: Vec<Term>,
-    },
+    Best { cost: usize, term: Term },
+    Variants { terms: Vec<Term> },
 }
 
 impl RunReport {
@@ -449,6 +442,8 @@ pub struct EGraph {
     overall_run_report: RunReport,
     /// Messages to be printed to the user. If this is `None`, then we are ignoring messages.
     msgs: Option<Vec<String>>,
+    cost_cache: Option<(u32, CostMap)>,
+    termdag: TermDag,
 }
 
 impl Default for EGraph {
@@ -471,6 +466,8 @@ impl Default for EGraph {
             overall_run_report: Default::default(),
             msgs: Some(vec![]),
             type_info: Default::default(),
+            cost_cache: None,
+            termdag: Default::default(),
         };
         egraph
             .rulesets
@@ -730,8 +727,15 @@ impl EGraph {
             .map(|(k, v)| (ValueVec::from(k), v.clone()))
             .collect::<Vec<_>>();
 
+        let mut cost_map = None;
+        if self.cost_cache.is_some() {
+            let cost_map_ts = std::mem::take(&mut self.cost_cache).unwrap();
+            if cost_map_ts.0 == self.timestamp {
+                cost_map = Some(cost_map_ts.1);
+            }
+        }
         let mut termdag = TermDag::default();
-        let extractor = Extractor::new(self, &mut termdag);
+        let extractor = Extractor::new(self, &mut termdag, cost_map);
         let mut terms = Vec::new();
         for (ins, out) in nodes {
             let mut children = Vec::new();
@@ -762,7 +766,10 @@ impl EGraph {
             };
             terms.push((termdag.app(sym, children), out));
         }
-        drop(extractor);
+
+        self.cost_cache = Some((self.timestamp, extractor.cost_map()));
+        // TODO: this clone is bad but this is just to avoid introducing breaking changes to termdag
+        self.termdag = termdag.clone();
 
         Ok((terms, termdag))
     }
@@ -876,15 +883,22 @@ impl EGraph {
     /// Extract a value to a [`TermDag`] and [`Term`] in the [`TermDag`].
     /// Note that the `TermDag` may contain a superset of the nodes in the `Term`.
     /// See also `extract_value_to_string` for convenience.
-    pub fn extract_value(&self, sort: &ArcSort, value: Value) -> Result<(TermDag, Term), Error> {
-        let mut termdag = TermDag::default();
-        let term = self.extract(value, &mut termdag, sort)?.1;
-        Ok((termdag, term))
+    pub fn extract_value(
+        &mut self,
+        sort: &ArcSort,
+        value: Value,
+    ) -> Result<(&mut TermDag, Term), Error> {
+        let term = self.extract(value, sort)?.1;
+        Ok((&mut self.termdag, term))
     }
 
     /// Extract a value to a string for printing.
     /// See also `extract_value` for more control.
-    pub fn extract_value_to_string(&self, sort: &ArcSort, value: Value) -> Result<String, Error> {
+    pub fn extract_value_to_string(
+        &mut self,
+        sort: &ArcSort,
+        value: Value,
+    ) -> Result<String, Error> {
         let (termdag, term) = self.extract_value(sort, value)?;
         Ok(termdag.to_string(&term))
     }
@@ -1313,13 +1327,12 @@ impl EGraph {
                     .create(true)
                     .open(&filename)
                     .map_err(|e| Error::IoError(filename.clone(), e, span.clone()))?;
-                let mut termdag = TermDag::default();
                 for expr in exprs {
                     let value = self.eval_resolved_expr(&expr)?;
                     let expr_type = expr.output_type();
-                    let term = self.extract(value, &mut termdag, &expr_type)?.1;
+                    let term = self.extract(value, &expr_type)?.1;
                     use std::io::Write;
-                    writeln!(f, "{}", termdag.to_string(&term))
+                    writeln!(f, "{}", self.termdag().to_string(&term))
                         .map_err(|e| Error::IoError(filename.clone(), e, span.clone()))?;
                 }
 
@@ -1548,6 +1561,13 @@ impl EGraph {
         } else {
             vec![]
         }
+    }
+
+    /// Gets a reference to the internal TermDag structure EGraph keeps for extracted programs.
+    ///
+    /// The TermDag is refreshed when (1) a new `extract` is performed AND (2) the internal timestamp of the EGraph is increased.
+    pub fn termdag(&self) -> &TermDag {
+        &self.termdag
     }
 }
 
