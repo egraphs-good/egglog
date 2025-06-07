@@ -12,6 +12,10 @@ readme = "README.md"
 name = "example_benchmarks"
 harness = false
 
+[[bench]]
+name = "nightly_benchmarking"
+harness = false
+
 [[test]]
 name = "files"
 harness = false
