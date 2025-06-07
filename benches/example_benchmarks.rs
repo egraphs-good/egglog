@@ -4,13 +4,13 @@ mod common;
 
 use codspeed_criterion_compat::{criterion_group, criterion_main, Criterion};
 
-fn bench(c: &mut Criterion) {
-    common::criterion_benchmark(c, "tests/**/*.egg");
+fn criterion_benchmark(c: &mut Criterion) {
+    common::benchmark_files_in_glob(c, "tests/**/*.egg");
 }
 
 criterion_group!(
     name = benches;
     config = Criterion::default();
-    targets = bench
+    targets = criterion_benchmark
 );
 criterion_main!(benches);

@@ -13,7 +13,7 @@ pub fn run_example(filename: &str, program: &str, no_messages: bool) {
     let _ = egraph.serialize(egglog::SerializeConfig::default());
 }
 
-pub fn criterion_benchmark(c: &mut Criterion, glob: &str) {
+pub fn benchmark_files_in_glob(c: &mut Criterion, glob: &str) {
     for entry in glob::glob(glob).unwrap() {
         let path = entry.unwrap().clone();
         let path_string = path.to_string_lossy().to_string();
