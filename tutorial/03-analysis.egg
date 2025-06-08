@@ -1,0 +1,60 @@
+
+(datatype Expr
+  (Num i64)
+  (Var String)
+  (Add Expr Expr)
+  (Mul Expr Expr))
+
+; the less-than-or-equal relation
+; between two expressions
+(relation leq (Expr Expr))
+
+; transitivity rule of less-than-or-equal
+(rule (
+    (leq e1 e2)
+    (leq e2 e3)
+) (
+    (leq e1 e3)
+))
+
+; leq for numbers
+(rule (
+    (= e1 (Num n1))
+    (= e2 (Num n2))
+    (< n1 n2)
+) (
+    (leq e1 e2)
+))
+
+; leq for variables
+(rule (
+    (= v (Var x))
+) (
+    (leq v v)
+))
+
+; leq for additions
+(rule (
+    (= e1 (Add e1a e1b))
+    (= e2 (Add e2a e2b))
+    (leq e1a e2a)
+    (leq e1b e2b)
+) (
+    (leq e1 e2))
+)
+
+;; These rules by themselves are weak. For example, they cannot deduce x + 1 <= 2 + x.
+;; But EqSat-style axiomatic rules make these rules more powerful:
+
+(birewrite (Add x (Add y z)) (Add (Add x y) z))
+(rewrite (Add x y) (Add y x))
+(rewrite (Add x (Num 0)) x)
+(rewrite (Add (Num a) (Num b)) (Num (+ a b)))
+
+;; To check our rules
+
+(let e1 (Add (Var "y") (Add (Num 2) (Var "x"))))
+(let e2 (Add (Add (Add (Var "x") (Var "y")) (Num 1)) (Num 2)))
+
+(run-schedule (saturate (run)))
+(check (leq e1 e2)) ; should pass

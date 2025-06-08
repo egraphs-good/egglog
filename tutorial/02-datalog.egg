@@ -1,3 +1,5 @@
+;; Datalog in egglog
+
 ;; Datalog is a relational language for deductive reasoning. In the last lesson, we write our first 
 ;; equality saturation program in egglog, but you can also write Datalog rules in egglog.
 ;; In this lesson, we will write several classic Datalog programs in egglog. One of the benifits
@@ -29,8 +31,8 @@
 ;;
 ;; First, if an edge from a to b exists, then it is already a proof
 ;; that there exists a path from a to b.
-(rule ((path a b))
-      ((edge a b)))
+(rule ((edge a b))
+      ((path a b)))
 
 ;; A rule has the form `(rule (atom1 atom2 ..) (action1 action2 ..))`.
 ;;
@@ -81,8 +83,8 @@
 ;; Our last example determines whether there is a path from one node to another,
 ;; but we don't know the details about the path.
 ;; Let's slightly extend our program to obtain the length of the shortest path between any two nodes.
-(function edge (i64 i64) :no-merge)
-(function path (i64 i64) :merge (min old new))
+(function edge (i64 i64) i64 :no-merge)
+(function path (i64 i64) i64 :merge (min old new))
 
 ;; Here, we use a new keyword called `function` to define a function relation.
 ;; A function is like a generalization of relation, which can be viewed as a function with output domain `Unit`.
@@ -124,5 +126,81 @@
 
 (pop)
 (push)
+;; Now let us combine the knowledge we have learned in lessons 1 and 2 to write a program that combines
+;; both equality saturation and Datalog.
 
-;; Now let us combine the knowledge we have learned in lessons 1 and 2 to write a program
+;; We reuse our path example, but this time the nodes are terms constructed using the `mk` constructor,
+
+(datatype Node
+    (mk i64))
+
+(relation edge (Node Node))
+(relation path (Node Node))
+
+(rule ((edge x y))
+      ((path x y)))
+(rule ((path x y) (edge y z))
+      ((path x z)))
+
+(edge (mk 1) (mk 2))
+(edge (mk 2) (mk 3))
+(edge (mk 3) (mk 1))
+(edge (mk 5) (mk 6))
+
+;; This means that we can "union" two nodes, so that they are indistinguishable to the rules.
+(union (mk 3) (mk 5))
+
+;; `union` is a new keyword here, but it is our old friend: `rewrite`s are implemented as rules whose
+;; actions are `union`s. For instance, `(rewrite (Add a b) (Add b a))` is lowered to the following
+;; rule:
+;; ```
+;; (rule ((= e (Add x y)))
+;;       ((union e (Add y x))))
+;; ```
+
+(run-schedule (saturate (run)))
+
+(check (edge (mk 3) (mk 6)))
+(check (path (mk 1) (mk 6)))
+
+;; We can also give a new meaning to equivalence: Two nodes are equivalent if the are in the same
+;; connected component, which would be the same as adding the following rule:
+(rule ((path x y)
+       (path y x))
+      ((union x y)))
+
+;; This is equivalent to say, if there is a path from `x` to `y` and from `y` to `x`, then 
+;; `x` and `y` are equivalent.
+(run-schedule (saturate (run)))
+(check (= (mk 1) (mk 2))
+       (= (mk 1) (mk 3))
+       (= (mk 2) (mk 3)))
+
+
+;; **Exercises:**
+;;
+;; 1. In our lesson 1, it is tedious to write associativity and commutativity (AC) rules for
+;;    every AC operators (e.g., Add, Mul, ...). One way to save us from this repetitive work
+;;    is to parameterize over the operators.
+;;    Rewrite this program so that instead of `Mul` and `Add`, `Expr` has a `Bop` operator
+;;    that takes an operator kind and two operands.
+;; 2. One of the rewrite rules that we cannot make a `birewrite` in lesson 1 is the rule
+;;    `(rewrite (Add x (Num 0)) x)`. This is because it is not clear what `x` is bound to 
+;;    in the inverse rule, `(rewrite x (Add x (Num 0)))`. Therefore, defining this rule in egglog
+;;    causes an error. One way to fix this is to introduce a _universe_ relation, which contains
+;;    every term in the e-graph. So we can write our rules as follows:
+;;
+;;     ```
+;;     (rule ((universe x))
+;;           ((union x (Add x (Num 0)))))
+;;     ```
+;;
+;;     Please define such a `universe` relation so that the above rule works.
+;;
+;;     Side Note: The above rule can also be written using the shorthand `rewrite` with a `:when` 
+;;     condition: `(rewrite x (Add x (Num 0)) :when ((universe x)))`, and similarly the birewrite
+;;     rule `(birewrite (Add x (Num 0)) x :when ((universe x)))`, which introduces a bit of 
+;;     overhead for the forward direction, but is more concise.
+
+
+

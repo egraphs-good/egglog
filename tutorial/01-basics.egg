@@ -1,3 +1,5 @@
+;; # First Equality Saturation example in egglog
+
 ;; Our simple DSL has numbers, variables, and two operations: addition and multiplication.
 (datatype Expr
   (Num i64)
@@ -57,6 +59,8 @@
 (rewrite (Add x (Add y z)) (Add (Add x y) z))
 (rewrite (Mul x y) (Mul y x))
 (rewrite (Mul x (Add y z)) (Add (Mul x y) (Mul x z)))
+(rewrite (Add x (Num 0)) x)
+(rewrite (Mul x (Num 1)) x)
 
 ;; egglog also defines a set of built-in functions over the primitive types, such as `+`, `-`,
 ;; `*`, `/`. Egglog uses a constraint-based type inference algorithm, so the same operator can be
@@ -105,14 +109,3 @@
 ;;    in both directions. Make the associativity rule above a birewrite rule. Looking at the rules
 ;;    we have defined, when is a birewrite rule useful and when it is not? When is it not 
 ;;    even well-defined?
-;;
-;; TODO: have this problem after we introduce what a `relation` is.
-;; 1. It is tedious to write associativity and commutativity (AC) rules for every AC operators.
-;;    One way to save us from this repetitive work is to parameterize over the operators.
-;;    Rewrite this program so that instead of `Mul` and `Add`, `Expr` has a `Bop` operator
-;;    that takes an operator kind and two operands.
-;; 2. Define a universe relation
-
-
-
-

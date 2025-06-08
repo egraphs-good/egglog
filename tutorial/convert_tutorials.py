@@ -21,6 +21,7 @@ def parse_egg_file(file_path: Path) -> List[Tuple[str, str]]:
     blocks = []
     current_block = []
     current_type = None
+    title = None
     
     for line in lines:
         stripped = line.strip()
@@ -45,6 +46,11 @@ def parse_egg_file(file_path: Path) -> List[Tuple[str, str]]:
             line_type = 'code'
             content = line
         
+        if title is None and line_type == 'comment':
+            # Extract title from the first comment block
+            title = content.strip()
+            continue
+
         # Handle block transitions
         if current_type is None:
             current_type = line_type
@@ -61,18 +67,13 @@ def parse_egg_file(file_path: Path) -> List[Tuple[str, str]]:
     if current_block:
         blocks.append((current_type, ''.join(current_block)))
 
-    return blocks
+    return title, blocks
 
 def extract_title(blocks: List[Tuple[str, str]]) -> str:
     """Extract title from the first comment block"""
-    for block_type, content in blocks:
-        if block_type == 'comment':
-            # Get first non-empty line as title
-            for line in content.split('\n'):
-                line = line.strip()
-                if line:
-                    return line
-    return "Egglog Tutorial"
+    block_type, content = blocks[0]
+    assert block_type == 'comment', "First block should be a comment for title extraction"
+    return content
 
 def blocks_to_html(blocks: List[Tuple[str, str]]) -> str:
     """Convert parsed blocks to HTML using markdown parser"""
@@ -136,8 +137,7 @@ def generate_navigation(current_file: Path, all_files: List[Path]) -> str:
 
 def generate_html_page(file_path: Path, all_files: List[Path]) -> str:
     """Generate complete HTML page for a tutorial file"""
-    blocks = parse_egg_file(file_path)
-    title = extract_title(blocks)
+    title, blocks = parse_egg_file(file_path)
     content = blocks_to_html(blocks)
     navigation = generate_navigation(file_path, all_files)
     
