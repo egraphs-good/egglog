@@ -14,9 +14,10 @@
 ;; TODO: what about types egglog-experimental?
 
 ;; Now, let's define some simple expressions.
-;; expr1 = 2 * (x + 3)
+;;
+;; `expr1 = 2 * (x + 3)`
 (let expr1 (Mul (Num 2) (Add (Var "x") (Num 3))))
-;; expr2 = 6 + 2 * x
+;; `expr2 = 6 + 2 * x`
 (let expr2 (Add (Num 6) (Mul (Num 2) (Var "x"))))
 ;; If you are running the program in the web demo. At this point, you should see an e-graph
 ;; with two expressions, each corresponding to the two expressions we defined above.

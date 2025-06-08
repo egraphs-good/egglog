@@ -61,7 +61,7 @@
 (check (path 1 4)) ; the check passes
 
 ;; In many cases, especially for Datalog programs, we do not know the number of iterations
-;; needed to reach a fixpoint. You can use the following command to run the rules until fixpoint.
+;; needed to reach a fixpoint. Egglog provides the `saturate` scheduling primitive to run the rules until fixpoint.
 (run-schedule (saturate (run)))
 ;; We will cover more details about schedules in TODO.
 
@@ -77,5 +77,52 @@
 ;; compare to the original rule? Hint: it's slow, why?
 
 (pop)
+(push)
+;; Our last example determines whether there is a path from one node to another,
+;; but we don't know the details about the path.
+;; Let's slightly extend our program to obtain the length of the shortest path between any two nodes.
+(function edge (i64 i64) :no-merge)
+(function path (i64 i64) :merge (min old new))
 
+;; Here, we use a new keyword called `function` to define a function relation.
+;; A function is like a generalization of relation, which can be viewed as a function with output domain `Unit`.
+;; This allows us to associate a length to each path.
+;;
+;; What happens it the same tuple of a function is mapped to two values?
+;; In the case of relation, this is easy: `Unit` only has one value, so the two values must be identical.
+;; But in general, that would be a violation of functional dependency, the property that `a = b` implies `f(a) = f(b)`.
+;; Egglog allows us to specify how to reconcile two values that are mapped from the same tuple using _merge expressions_.
+;; For instance, for `path`, the merge expression is `(min old new)`; `old` and `new` are two special values in an expression
+;; that denotes the current output of the tuple and the output of the new, to-be-inserted value.
+;; The merge expression for `path` says that, when there are two paths from `a` to `b` with lengths `old` and `new`,
+;; we keep the shorter one, i.e., `(min old new)`.
+;;
+;; For `edge`, we can define the merge expression the same as `path`, which means that we only keep the shortest edge
+;; if there are multiple edges. But we can also assert that `edge` does not have a merge expression using `no-merge`. 
+;; This means we don't expect there will be multiple edges between two nodes. More generally, it is the user's
+;; responsibility to ensure no tuples with conflicting output values exist. If a conflict happens, egglog will
+;; panic.
 
+;; Now let's insert the same edges as before, but we will assign a length to each edge. This is done using the `set` action,
+;; which takes a tuple and an output value:
+(set (edge 1 2) 10)
+(set (edge 2 3) 10)
+(set (edge 1 3) 30)
+
+;; Let us define the reflexive rule and transitive rule for the `path` function.
+;; In this rule, we use the `set` action to set the output value of the `path` function.
+;; Moreover, on the query side, we use `=` to bind the output value of a function.
+(rule ((= (edge x y) len))
+      ((set (path x y) len)))
+(rule ((= (path x y) xy) 
+       (= (edge y z) yz))
+      ((set (path x z) (+ xy yz))))
+
+;; Let's run our rules and check we get the desired shortest path.
+(run-schedule (saturate (run)))
+(check (= (path 1 3) 20))
+
+(pop)
+(push)
+
+;; Now let us combine the knowledge we have learned in lessons 1 and 2 to write a program
