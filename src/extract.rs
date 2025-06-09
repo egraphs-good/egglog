@@ -14,10 +14,10 @@ pub type Cost = usize;
 /// the default extractor is guaranteed to terminate in computing the costs.
 /// However, the user needs to be careful to guarantee acyclicity in the extracted terms.
 pub trait CostModel {
-    /// Compute the cost of term given the costs of the head symbol and the subterms
+    /// Compute the total cost of a term given the cost of the root enode and its immediate children's total costs
     fn fold(&self, head: Symbol, children_cost: &[Cost], head_cost: Cost) -> Cost;
 
-    /// Compute the cost of a particular enode.
+    /// Compute the cost of just a enode by itself, without taking its children into account
     fn enode_cost(
         &self,
         egraph: &EGraph,
