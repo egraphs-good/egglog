@@ -15,7 +15,6 @@ use std::collections::VecDeque;
 /// As long as there is no negative cost cycle,
 /// the default extractor is guaranteed to terminate in computing the costs.
 /// However, the user needs to be careful to guarantee acyclicity in the extracted terms.
-
 pub trait CostModel<C: SaturatingAdd + Zero + One> {
     /// Compute the total cost of a term given the cost of the root enode and its immediate children's total costs
     fn fold(&self, head: Symbol, children_cost: &[C], head_cost: C) -> C;
