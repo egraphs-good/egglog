@@ -1283,7 +1283,7 @@ impl EGraph {
             let mut row: Vec<Value> = Vec::with_capacity(row_schema.len());
 
             for sort in row_schema.iter() {
-                if let Some (raw) = it.next() {
+                if let Some(raw) = it.next() {
                     let val = match sort.name().as_str() {
                         "i64" => {
                             if let Ok(i) = raw.parse::<i64>() {
