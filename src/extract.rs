@@ -4,8 +4,6 @@ use crate::util::{HashMap, HashSet};
 use crate::*;
 use std::collections::VecDeque;
 
-pub type Cost = usize;
-
 /// An interface for custom cost model
 /// For common case usage, the model should guarantee a term has a no-smaller cost
 /// than its subterms to avoid cycles in the extracted terms.
@@ -13,17 +11,12 @@ pub type Cost = usize;
 /// As long as there is no negative cost cycle,
 /// the default extractor is guaranteed to terminate in computing the costs.
 /// However, the user needs to be careful to guarantee acyclicity in the extracted terms.
-pub trait CostModel {
+pub trait CostModel<C> {
     /// Compute the total cost of a term given the cost of the root enode and its immediate children's total costs
-    fn fold(&self, head: Symbol, children_cost: &[Cost], head_cost: Cost) -> Cost;
+    fn fold(&self, head: Symbol, children_cost: &[C], head_cost: C) -> C;
 
     /// Compute the cost of just a enode by itself, without taking its children into account
-    fn enode_cost(
-        &self,
-        egraph: &EGraph,
-        func: &Function,
-        row: &egglog_bridge::FunctionRow,
-    ) -> Cost;
+    fn enode_cost(&self, egraph: &EGraph, func: &Function, row: &egglog_bridge::FunctionRow) -> C;
 
     /// Compute the cost of a container value given the costs of its elements
     fn container_primitive(
@@ -31,18 +24,20 @@ pub trait CostModel {
         egraph: &EGraph,
         sort: &ArcSort,
         value: Value,
-        element_costs: &[Cost],
-    ) -> Cost;
+        element_costs: &[C],
+    ) -> C;
 
     /// Compute the cost of a primitive, non-container, value
-    fn leaf_primitive(&self, egraph: &EGraph, sort: &ArcSort, value: Value) -> Cost;
+    fn leaf_primitive(&self, egraph: &EGraph, sort: &ArcSort, value: Value) -> C;
 }
+
+/// default cost type
+pub type Cost = usize;
 
 #[derive(Default, Clone)]
 pub struct TreeAdditiveCostModel {}
 
 impl TreeAdditiveCostModel {
-
     /// Default cost for containers is just the sum of all the elements inside
     fn default_container_cost(
         &self,
@@ -57,10 +52,9 @@ impl TreeAdditiveCostModel {
     fn default_leaf_cost(&self, _egraph: &EGraph, _value: Value) -> Cost {
         1
     }
-
 }
 
-impl CostModel for TreeAdditiveCostModel {
+impl CostModel<Cost> for TreeAdditiveCostModel {
     fn fold(&self, _head: Symbol, children_cost: &[Cost], head_cost: Cost) -> Cost {
         children_cost
             .iter()
@@ -94,7 +88,7 @@ impl CostModel for TreeAdditiveCostModel {
 pub struct Extractor {
     rootsorts: Vec<ArcSort>,
     funcs: Vec<Symbol>,
-    cost_model: Box<dyn CostModel>,
+    cost_model: Box<dyn CostModel<Cost>>,
     costs: HashMap<Symbol, HashMap<Value, Cost>>,
     topo_rnk_cnt: usize,
     topo_rnk: HashMap<Symbol, HashMap<Value, usize>>,
@@ -110,7 +104,7 @@ impl Extractor {
     pub fn compute_costs_from_rootsorts(
         rootsorts: Option<Vec<ArcSort>>,
         egraph: &EGraph,
-        cost_model: impl CostModel + 'static,
+        cost_model: impl CostModel<Cost> + 'static,
     ) -> Self {
         // We filter out tables unreachable from the root sorts
         let extract_all_sorts = rootsorts.is_none();
