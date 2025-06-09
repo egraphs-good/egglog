@@ -5,9 +5,10 @@ use crate::*;
 use std::collections::VecDeque;
 
 /// An interface for custom cost model
-/// For common case usage, the model should guarantee a term has a no-smaller cost
-/// than its subterms to avoid cycles in the extracted terms.
-/// For more niech usage, a term can have a cost less than its subterms.
+/// To use it with the default extractor, the cost type must be usize
+/// Additionally, the model should guarantee a term has a no-smaller cost
+/// than its subterms to avoid cycles in the extracted terms for common case usages.
+/// For more niech usages, a term can have a cost less than its subterms.
 /// As long as there is no negative cost cycle,
 /// the default extractor is guaranteed to terminate in computing the costs.
 /// However, the user needs to be careful to guarantee acyclicity in the extracted terms.
