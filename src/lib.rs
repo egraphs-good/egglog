@@ -1265,48 +1265,90 @@ impl EGraph {
         let mut contents = String::new();
         f.read_to_string(&mut contents).unwrap();
 
-        let span: Span = span!();
-        let mut actions: Vec<Action> = vec![];
-        let mut str_buf: Vec<&str> = vec![];
+        let mut parsed_contents: Vec<Vec<Value>> = Vec::with_capacity(contents.lines().count());
+
+        let mut row_schema = func.schema.input.clone();
+        if function_type.subtype == FunctionSubtype::Custom {
+            row_schema.push(func.schema.output.clone());
+        }
+
+        log::debug!("{:?}", row_schema);
+
         for line in contents.lines() {
-            str_buf.clear();
-            str_buf.extend(line.split('\t').map(|s| s.trim()));
-            if str_buf.is_empty() {
-                continue;
+            let mut row: Vec<Value> = Vec::with_capacity(row_schema.len());
+
+            for (sort, raw) in row_schema.iter().zip(line.split('\t').map(|s| s.trim())) {
+                let val = 
+                    match sort.name().as_str() {
+                        "i64" => {
+                            if let Ok(i) = raw.parse::<i64>() {
+                                self.backend.primitives().get(i)
+                            } else {
+                                return Err(Error::InputFileFormatError(file));
+                            }
+                        },
+                        "f64" => {
+                            if let Ok(f) = raw.parse::<f64>() {
+                                self.backend.primitives().get::<F>(core_relations::Boxed::new(f.into()))
+                            } else {
+                                return Err(Error::InputFileFormatError(file));
+                            }
+                        },
+                        "String" => {
+                            self.backend.primitives().get::<S>(SymbolWrapper::new(raw.to_string().into()))
+                        },
+                        _ => panic!("Unreachable")
+                    };
+                row.push(val);
             }
 
-            let parse = |s: &str| -> Expr {
-                match s.parse::<i64>() {
-                    Ok(i) => Expr::Lit(span.clone(), Literal::Int(i)),
-                    Err(_) => match s.parse::<f64>() {
-                        Ok(f) => Expr::Lit(span.clone(), Literal::Float(f.into())),
-                        Err(_) => Expr::Lit(span.clone(), Literal::String(s.into())),
-                    },
+            if row.len() == 0 {
+                continue
+            }
+
+            if row.len() != row_schema.len() {
+                return Err(Error::InputFileFormatError(file));
+            }
+
+            parsed_contents.push(row);
+        }
+
+        log::debug!("Successfully loaded file.");
+
+        let num_facts = parsed_contents.len();
+
+        let table_action = egglog_bridge::TableAction::new(&self.backend, func.backend_id);
+
+        let unit_id = self.backend.primitives().get_ty::<()>();
+        let unit_val = self.backend.primitives().get(());
+
+        let ext_id = self
+            .backend
+            .register_external_func(make_external_func(move |es, _| {
+                for row in parsed_contents.iter() {
+                    table_action.insert(es, row.to_vec());
                 }
-            };
+                Some(unit_val)
+            }));g
 
-            let mut exprs: Vec<Expr> = str_buf.iter().map(|&s| parse(s)).collect();
+        let mut translator = BackendRule::new(
+            self.backend.new_rule("input_file", false),
+            &self.functions,
+            &self.type_info,
+        );
 
-            actions.push(
-                if function_type.subtype == FunctionSubtype::Constructor
-                    || function_type.subtype == FunctionSubtype::Relation
-                {
-                    Action::Expr(span.clone(), Expr::Call(span.clone(), func_name, exprs))
-                } else {
-                    let out = exprs.pop().unwrap();
-                    Action::Set(span.clone(), func_name, exprs, out)
-                },
-            );
-        }
-        let num_facts = actions.len();
-        let commands = actions
-            .into_iter()
-            .map(NCommand::CoreAction)
-            .collect::<Vec<_>>();
-        let commands: Vec<_> = self.typecheck_program(&commands)?;
-        for command in commands {
-            self.run_command(command)?;
-        }
+        translator.rb.call_external_func(
+            ext_id,
+            &[],
+            egglog_bridge::ColumnTy::Primitive(unit_id),
+            || "this function will never panic".to_string(),
+        );
+
+        let id = translator.build();
+        let _ = self.backend.run_rules(&[id]).unwrap();
+        self.backend.free_rule(id);
+        self.backend.free_external_func(ext_id);
+
         log::info!("Read {num_facts} facts into {func_name} from '{file}'.");
         Ok(())
     }
@@ -1719,6 +1761,8 @@ pub enum Error {
     Shadowing(Symbol, Span, Span),
     #[error("{1}\nCommand already exists: {0}")]
     CommandAlreadyExists(Symbol, Span),
+    #[error("Incorrect format in file '{0}'.")]
+    InputFileFormatError(String),
 }
 
 #[cfg(test)]
