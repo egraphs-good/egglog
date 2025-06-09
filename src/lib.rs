@@ -1265,6 +1265,7 @@ impl EGraph {
         let mut contents = String::new();
         f.read_to_string(&mut contents).unwrap();
 
+        // Can also do a row-major Vec<Value>
         let mut parsed_contents: Vec<Vec<Value>> = Vec::with_capacity(contents.lines().count());
 
         let mut row_schema = func.schema.input.clone();
@@ -1277,12 +1278,12 @@ impl EGraph {
         let unit_val = self.backend.primitives().get(());
 
         for line in contents.lines() {
-            let mut row: Vec<Value> = Vec::with_capacity(row_schema.len());
-
             let mut it = line.split('\t').map(|s| s.trim());
 
+            let mut row: Vec<Value> = Vec::with_capacity(row_schema.len());
+
             for sort in row_schema.iter() {
-                if let Some(raw) = it.next() {
+                if let Some (raw) = it.next() {
                     let val = match sort.name().as_str() {
                         "i64" => {
                             if let Ok(i) = raw.parse::<i64>() {
@@ -1331,13 +1332,13 @@ impl EGraph {
         let table_action = egglog_bridge::TableAction::new(&self.backend, func.backend_id);
 
         let unit_id = self.backend.primitives().get_ty::<()>();
-        let use_lookup = function_type.subtype != FunctionSubtype::Constructor;
+        let use_insert = function_type.subtype != FunctionSubtype::Constructor;
 
         let ext_id = self
             .backend
             .register_external_func(make_external_func(move |es, _| {
                 for row in parsed_contents.iter() {
-                    if use_lookup {
+                    if use_insert {
                         table_action.insert(es, row.to_vec());
                     } else {
                         table_action.lookup(es, row);
