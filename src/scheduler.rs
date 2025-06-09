@@ -2,29 +2,12 @@ use std::sync::Arc;
 use std::sync::Mutex;
 use std::time::Duration;
 
-use core_relations::ExecutionState;
-use core_relations::ExternalFunction;
-use core_relations::Value;
-use egglog_bridge::ColumnTy;
-use egglog_bridge::DefaultVal;
-use egglog_bridge::FunctionConfig;
-use egglog_bridge::FunctionId;
-use egglog_bridge::MergeFn;
-use egglog_bridge::RuleId;
-use egglog_bridge::TableAction;
+use core_relations::{ExecutionState, ExternalFunction, Value};
+use egglog_bridge::{
+    ColumnTy, DefaultVal, FunctionConfig, FunctionId, MergeFn, RuleId, TableAction,
+};
 
-use crate::ast::ResolvedVar;
-use crate::core::GenericAtomTerm;
-use crate::core::ResolvedCoreRule;
-use crate::span;
-use crate::util::IndexMap;
-use crate::BackendRule;
-use crate::HashMap;
-use crate::Ruleset;
-use crate::RunReport;
-use crate::Symbol;
-
-use crate::EGraph;
+use crate::{ast::ResolvedVar, core::GenericAtomTerm, core::ResolvedCoreRule, util::IndexMap, *};
 
 /// A scheduler decides which matches to be applied for a rule.
 ///
