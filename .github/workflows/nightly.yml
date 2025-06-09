@@ -1,0 +1,25 @@
+name: Nightly Benchmark
+
+on:
+  schedule:
+    - cron: '0 3 * * *'  # every night at 3 AM UTC
+  workflow_dispatch:
+
+jobs:
+  nightly-benchmark:
+    runs-on: ubuntu-latest
+    steps:
+      - run: echo "CARGO_INCREMENTAL=0" >> "$GITHUB_ENV"
+      - uses: actions/checkout@v4
+      - uses: taiki-e/install-action@v2
+        with:
+          tool: cargo-codspeed
+      - run: |
+          git clone https://github.com/egraphs-good/egglog-benchmarks.git
+          cd egglog-benchmarks
+          git checkout 4e9061a2c3cf19cc070261e0f486e49439c20c22
+      - uses: Swatinem/rust-cache@v2
+      - run: cargo codspeed build nightly_benchmarking -m walltime
+      - uses: CodSpeedHQ/action@v3
+        with:
+          run: cargo codspeed run nightly_benchmarking -m walltime
