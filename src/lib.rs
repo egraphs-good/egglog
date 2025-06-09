@@ -156,7 +156,7 @@ impl Display for RunReport {
 pub enum ExtractReport {
     Best {
         termdag: TermDag,
-        cost: usize,
+        cost: extract::DefaultCost,
         term: Term,
     },
     Variants {

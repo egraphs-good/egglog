@@ -1,3 +1,6 @@
+use num::traits::SaturatingAdd;
+use num::{One, Zero};
+
 use crate::ast::Symbol;
 use crate::termdag::{Term, TermDag};
 use crate::util::{HashMap, HashSet};
@@ -5,14 +8,15 @@ use crate::*;
 use std::collections::VecDeque;
 
 /// An interface for custom cost model
-/// To use it with the default extractor, the cost type must be usize
+/// To use it with the default extractor, the cost type must also satisify Ord + Eq + Copy + Debug
 /// Additionally, the model should guarantee a term has a no-smaller cost
 /// than its subterms to avoid cycles in the extracted terms for common case usages.
-/// For more niech usages, a term can have a cost less than its subterms.
+/// For more niche usages, a term can have a cost less than its subterms.
 /// As long as there is no negative cost cycle,
 /// the default extractor is guaranteed to terminate in computing the costs.
 /// However, the user needs to be careful to guarantee acyclicity in the extracted terms.
-pub trait CostModel<C> {
+
+pub trait CostModel<C: SaturatingAdd + Zero + One> {
     /// Compute the total cost of a term given the cost of the root enode and its immediate children's total costs
     fn fold(&self, head: Symbol, children_cost: &[C], head_cost: C) -> C;
 
@@ -20,43 +24,39 @@ pub trait CostModel<C> {
     fn enode_cost(&self, egraph: &EGraph, func: &Function, row: &egglog_bridge::FunctionRow) -> C;
 
     /// Compute the cost of a container value given the costs of its elements
+    /// The default cost for containers is just the sum of all the elements inside
     fn container_primitive(
         &self,
         egraph: &EGraph,
         sort: &ArcSort,
         value: Value,
         element_costs: &[C],
-    ) -> C;
+    ) -> C {
+        let _egraph = egraph;
+        let _sort = sort;
+        let _value = value;
+        element_costs.iter().fold(C::zero(), |s, c| s.saturating_add(c))
+    }
 
     /// Compute the cost of a primitive, non-container, value
-    fn leaf_primitive(&self, egraph: &EGraph, sort: &ArcSort, value: Value) -> C;
+    /// The default cost for leaf primitives is the constant one
+    fn leaf_primitive(&self, egraph: &EGraph, sort: &ArcSort, value: Value) -> C {
+        let _egraph = egraph;
+        let _sort = sort;
+        let _value = value;
+        C::one()
+    }
 }
 
-/// default cost type
-pub type Cost = usize;
+/// The default cost type is usize
+pub type DefaultCost = usize;
 
 #[derive(Default, Clone)]
 pub struct TreeAdditiveCostModel {}
 
-impl TreeAdditiveCostModel {
-    /// Default cost for containers is just the sum of all the elements inside
-    fn default_container_cost(
-        &self,
-        _egraph: &EGraph,
-        _value: Value,
-        element_costs: &[Cost],
-    ) -> Cost {
-        element_costs.iter().fold(0, |s, c| s.saturating_add(*c))
-    }
+impl CostModel<DefaultCost> for TreeAdditiveCostModel {
 
-    /// Default cost for leaf primitives is the constant one
-    fn default_leaf_cost(&self, _egraph: &EGraph, _value: Value) -> Cost {
-        1
-    }
-}
-
-impl CostModel<Cost> for TreeAdditiveCostModel {
-    fn fold(&self, _head: Symbol, children_cost: &[Cost], head_cost: Cost) -> Cost {
+    fn fold(&self, _head: Symbol, children_cost: &[DefaultCost], head_cost: DefaultCost) -> DefaultCost {
         children_cost
             .iter()
             .fold(head_cost, |s, c| s.saturating_add(*c))
@@ -67,26 +67,12 @@ impl CostModel<Cost> for TreeAdditiveCostModel {
         _egraph: &EGraph,
         func: &Function,
         _row: &egglog_bridge::FunctionRow,
-    ) -> Cost {
+    ) -> DefaultCost {
         func.decl.cost.unwrap_or(1)
-    }
-
-    fn container_primitive(
-        &self,
-        egraph: &EGraph,
-        _sort: &ArcSort,
-        value: Value,
-        element_costs: &[Cost],
-    ) -> Cost {
-        self.default_container_cost(egraph, value, element_costs)
-    }
-
-    fn leaf_primitive(&self, egraph: &EGraph, _sort: &ArcSort, value: Value) -> Cost {
-        self.default_leaf_cost(egraph, value)
     }
 }
 
-pub struct Extractor {
+pub struct Extractor<Cost: SaturatingAdd + Zero + One + Ord + Eq + Copy + Debug> {
     rootsorts: Vec<ArcSort>,
     funcs: Vec<Symbol>,
     cost_model: Box<dyn CostModel<Cost>>,
@@ -96,7 +82,7 @@ pub struct Extractor {
     parent_edge: HashMap<Symbol, HashMap<Value, (Symbol, Vec<Value>)>>,
 }
 
-impl Extractor {
+impl<Cost: SaturatingAdd + Zero + One + Ord + Eq + Copy + Debug> Extractor<Cost> {
     /// Bulk of the computation happens at initialization time.
     /// The later extractions only reuses saved results.
     /// This means a new extractor must be created if the egraph changes.
