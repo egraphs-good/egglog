@@ -1274,6 +1274,8 @@ impl EGraph {
 
         log::debug!("{:?}", row_schema);
 
+        let unit_val = self.backend.primitives().get(());
+
         for line in contents.lines() {
             let mut row: Vec<Value> = Vec::with_capacity(row_schema.len());
 
@@ -1297,6 +1299,9 @@ impl EGraph {
                         "String" => {
                             self.backend.primitives().get::<S>(SymbolWrapper::new(raw.to_string().into()))
                         },
+                        "Unit" => {
+                            unit_val
+                        }
                         _ => panic!("Unreachable")
                     };
                 row.push(val);
@@ -1320,13 +1325,17 @@ impl EGraph {
         let table_action = egglog_bridge::TableAction::new(&self.backend, func.backend_id);
 
         let unit_id = self.backend.primitives().get_ty::<()>();
-        let unit_val = self.backend.primitives().get(());
+        let use_lookup = function_type.subtype != FunctionSubtype::Constructor;
 
         let ext_id = self
             .backend
             .register_external_func(make_external_func(move |es, _| {
                 for row in parsed_contents.iter() {
-                    table_action.insert(es, row.to_vec());
+                    if use_lookup {
+                        table_action.insert(es, row.to_vec());
+                    } else {
+                        table_action.lookup(es, row);
+                    }
                 }
                 Some(unit_val)
             }));
