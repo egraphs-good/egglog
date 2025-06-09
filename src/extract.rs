@@ -41,6 +41,25 @@ pub trait CostModel {
 #[derive(Default, Clone)]
 pub struct TreeAdditiveCostModel {}
 
+impl TreeAdditiveCostModel {
+
+    /// Default cost for containers is just the sum of all the elements inside
+    fn default_container_cost(
+        &self,
+        _egraph: &EGraph,
+        _value: Value,
+        element_costs: &[Cost],
+    ) -> Cost {
+        element_costs.iter().fold(0, |s, c| s.saturating_add(*c))
+    }
+
+    /// Default cost for leaf primitives is the constant one
+    fn default_leaf_cost(&self, _egraph: &EGraph, _value: Value) -> Cost {
+        1
+    }
+
+}
+
 impl CostModel for TreeAdditiveCostModel {
     fn fold(&self, _head: Symbol, children_cost: &[Cost], head_cost: Cost) -> Cost {
         children_cost
@@ -60,15 +79,15 @@ impl CostModel for TreeAdditiveCostModel {
     fn container_primitive(
         &self,
         egraph: &EGraph,
-        sort: &ArcSort,
+        _sort: &ArcSort,
         value: Value,
         element_costs: &[Cost],
     ) -> Cost {
-        sort.default_container_cost(egraph.backend.containers(), value, element_costs)
+        self.default_container_cost(egraph, value, element_costs)
     }
 
-    fn leaf_primitive(&self, egraph: &EGraph, sort: &ArcSort, value: Value) -> Cost {
-        sort.default_leaf_cost(egraph.backend.primitives(), value)
+    fn leaf_primitive(&self, egraph: &EGraph, _sort: &ArcSort, value: Value) -> Cost {
+        self.default_leaf_cost(egraph, value)
     }
 }
 

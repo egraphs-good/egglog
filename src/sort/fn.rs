@@ -163,15 +163,6 @@ impl Sort for FunctionSort {
         Some(TypeId::of::<FunctionContainer>())
     }
 
-    fn default_container_cost(
-        &self,
-        _containers: &Containers,
-        _value: Value,
-        element_costs: &[Cost],
-    ) -> Cost {
-        element_costs.iter().fold(1, |s, c| s.saturating_add(*c))
-    }
-
     fn reconstruct_termdag_container(
         &self,
         containers: &Containers,
