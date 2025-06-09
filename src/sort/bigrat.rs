@@ -115,12 +115,12 @@ impl LeafSort for BigRatSort {
         let numer = rat.numer();
         let denom = rat.denom();
 
-        let numer_as_string = termdag.lit(Literal::String(numer.to_string().into()));
-        let denom_as_string = termdag.lit(Literal::String(denom.to_string().into()));
+        let numer_as_string = termdag.lit(Literal::String(numer.to_string()));
+        let denom_as_string = termdag.lit(Literal::String(denom.to_string()));
 
-        let numer_term = termdag.app("from_string".into(), vec![numer_as_string]);
-        let denom_term = termdag.app("from_string".into(), vec![denom_as_string]);
+        let numer_term = termdag.app("from_string".to_owned(), vec![numer_as_string]);
+        let denom_term = termdag.app("from_string".to_owned(), vec![denom_as_string]);
 
-        termdag.app("bigrat".into(), vec![numer_term, denom_term])
+        termdag.app("bigrat".to_owned(), vec![numer_term, denom_term])
     }
 }

@@ -21,7 +21,7 @@ impl Container for VecContainer {
 
 #[derive(Clone, Debug)]
 pub struct VecSort {
-    name: Symbol,
+    name: String,
     element: ArcSort,
 }
 
@@ -32,35 +32,35 @@ impl VecSort {
 }
 
 impl Presort for VecSort {
-    fn presort_name() -> Symbol {
-        "Vec".into()
+    fn presort_name() -> &'static str {
+        "Vec"
     }
 
-    fn reserved_primitives() -> Vec<Symbol> {
+    fn reserved_primitives() -> Vec<&'static str> {
         vec![
-            "vec-of".into(),
-            "vec-append".into(),
-            "vec-empty".into(),
-            "vec-push".into(),
-            "vec-pop".into(),
-            "vec-not-contains".into(),
-            "vec-contains".into(),
-            "vec-length".into(),
-            "vec-get".into(),
-            "vec-set".into(),
-            "vec-remove".into(),
+            "vec-of",
+            "vec-append",
+            "vec-empty",
+            "vec-push",
+            "vec-pop",
+            "vec-not-contains",
+            "vec-contains",
+            "vec-length",
+            "vec-get",
+            "vec-set",
+            "vec-remove",
         ]
     }
 
     fn make_sort(
         typeinfo: &mut TypeInfo,
-        name: Symbol,
+        name: String,
         args: &[Expr],
     ) -> Result<ArcSort, TypeError> {
         if let [Expr::Var(span, e)] = args {
             let e = typeinfo
                 .get_sort_by_name(e)
-                .ok_or(TypeError::UndefinedSort(*e, span.clone()))?;
+                .ok_or(TypeError::UndefinedSort(e.clone(), span.clone()))?;
 
             if e.is_eq_container_sort() {
                 return Err(TypeError::DisallowedSort(
@@ -84,8 +84,8 @@ impl Presort for VecSort {
 impl ContainerSort for VecSort {
     type Container = VecContainer;
 
-    fn name(&self) -> Symbol {
-        self.name
+    fn name(&self) -> &str {
+        &self.name
     }
 
     fn inner_sorts(&self) -> Vec<ArcSort> {

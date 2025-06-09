@@ -40,7 +40,7 @@ impl LeafSort for F64Sort {
         add_primitive!(eg, "to-f64" = |a: i64| -> F { F::from(OrderedFloat(a as f64)) });
         add_primitive!(eg, "to-i64" = |a: F| -> i64 { a.0.0 as i64 });
         // Use debug instead of to_string so that decimal place is always printed
-        add_primitive!(eg, "to-string" = |a: F| -> S { S::new(format!("{:?}", a.0.0).into()) });
+        add_primitive!(eg, "to-string" = |a: F| -> S { S::new(format!("{:?}", a.0.0)) });
     }
 
     fn reconstruct_termdag(

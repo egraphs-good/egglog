@@ -8,18 +8,17 @@ use crate::core::{GenericAtom, GenericAtomTerm, HeadOrEq, Query, ResolvedCall, R
 use crate::*;
 pub use expr::*;
 pub use parse::*;
-pub use symbol_table::GlobalSymbol as Symbol;
 
 #[derive(Clone, Debug)]
 /// The egglog internal representation of already compiled rules
 pub(crate) enum Ruleset {
     /// Represents a ruleset with a set of rules.
-    Rules(IndexMap<Symbol, (ResolvedCoreRule, egglog_bridge::RuleId)>),
+    Rules(IndexMap<String, (ResolvedCoreRule, egglog_bridge::RuleId)>),
     /// A combined ruleset may contain other rulesets.
-    Combined(Vec<Symbol>),
+    Combined(Vec<String>),
 }
 
-pub type NCommand = GenericNCommand<Symbol, Symbol>;
+pub type NCommand = GenericNCommand<String, String>;
 /// [`ResolvedNCommand`] is another specialization of [`GenericNCommand`], which
 /// adds the type information to heads and leaves of commands.
 /// [`TypeInfo::typecheck_command`] turns an [`NCommand`] into a [`ResolvedNCommand`].
@@ -43,20 +42,20 @@ where
     Leaf: Clone + PartialEq + Eq + Display + Hash,
 {
     SetOption {
-        name: Symbol,
+        name: String,
         value: GenericExpr<Head, Leaf>,
     },
     Sort(
         Span,
-        Symbol,
-        Option<(Symbol, Vec<GenericExpr<Symbol, Symbol>>)>,
+        String,
+        Option<(String, Vec<GenericExpr<String, String>>)>,
     ),
     Function(GenericFunctionDecl<Head, Leaf>),
-    AddRuleset(Span, Symbol),
-    UnstableCombinedRuleset(Span, Symbol, Vec<Symbol>),
+    AddRuleset(Span, String),
+    UnstableCombinedRuleset(Span, String, Vec<String>),
     NormRule {
-        name: Symbol,
-        ruleset: Symbol,
+        name: String,
+        ruleset: String,
         rule: GenericRule<Head, Leaf>,
     },
     CoreAction(GenericAction<Head, Leaf>),
@@ -64,8 +63,8 @@ where
     RunSchedule(GenericSchedule<Head, Leaf>),
     PrintOverallStatistics,
     Check(Span, Vec<GenericFact<Head, Leaf>>),
-    PrintTable(Span, Symbol, usize),
-    PrintSize(Span, Option<Symbol>),
+    PrintTable(Span, String, usize),
+    PrintSize(Span, Option<String>),
     Output {
         span: Span,
         file: String,
@@ -76,10 +75,10 @@ where
     Fail(Span, Box<GenericNCommand<Head, Leaf>>),
     Input {
         span: Span,
-        name: Symbol,
+        name: String,
         file: String,
     },
-    UserDefined(Span, Symbol, Vec<Expr>),
+    UserDefined(Span, String, Vec<Expr>),
 }
 
 impl<Head, Leaf> GenericNCommand<Head, Leaf>
@@ -90,45 +89,45 @@ where
     pub fn to_command(&self) -> GenericCommand<Head, Leaf> {
         match self {
             GenericNCommand::SetOption { name, value } => GenericCommand::SetOption {
-                name: *name,
+                name: name.clone(),
                 value: value.clone(),
             },
             GenericNCommand::Sort(span, name, params) => {
-                GenericCommand::Sort(span.clone(), *name, params.clone())
+                GenericCommand::Sort(span.clone(), name.clone(), params.clone())
             }
             GenericNCommand::Function(f) => match f.subtype {
                 FunctionSubtype::Constructor => GenericCommand::Constructor {
                     span: f.span.clone(),
-                    name: f.name,
+                    name: f.name.clone(),
                     schema: f.schema.clone(),
                     cost: f.cost,
                     unextractable: f.unextractable,
                 },
                 FunctionSubtype::Relation => GenericCommand::Relation {
                     span: f.span.clone(),
-                    name: f.name,
+                    name: f.name.clone(),
                     inputs: f.schema.input.clone(),
                 },
                 FunctionSubtype::Custom => GenericCommand::Function {
                     span: f.span.clone(),
                     schema: f.schema.clone(),
-                    name: f.name,
+                    name: f.name.clone(),
                     merge: f.merge.clone(),
                 },
             },
             GenericNCommand::AddRuleset(span, name) => {
-                GenericCommand::AddRuleset(span.clone(), *name)
+                GenericCommand::AddRuleset(span.clone(), name.clone())
             }
             GenericNCommand::UnstableCombinedRuleset(span, name, others) => {
-                GenericCommand::UnstableCombinedRuleset(span.clone(), *name, others.clone())
+                GenericCommand::UnstableCombinedRuleset(span.clone(), name.clone(), others.clone())
             }
             GenericNCommand::NormRule {
                 name,
                 ruleset,
                 rule,
             } => GenericCommand::Rule {
-                name: *name,
-                ruleset: *ruleset,
+                name: name.clone(),
+                ruleset: ruleset.clone(),
                 rule: rule.clone(),
             },
             GenericNCommand::RunSchedule(schedule) => GenericCommand::RunSchedule(schedule.clone()),
@@ -141,10 +140,10 @@ where
                 GenericCommand::Check(span.clone(), facts.clone())
             }
             GenericNCommand::PrintTable(span, name, n) => {
-                GenericCommand::PrintFunction(span.clone(), *name, *n)
+                GenericCommand::PrintFunction(span.clone(), name.clone(), *n)
             }
             GenericNCommand::PrintSize(span, name) => {
-                GenericCommand::PrintSize(span.clone(), *name)
+                GenericCommand::PrintSize(span.clone(), name.clone())
             }
             GenericNCommand::Output { span, file, exprs } => GenericCommand::Output {
                 span: span.clone(),
@@ -158,11 +157,11 @@ where
             }
             GenericNCommand::Input { span, name, file } => GenericCommand::Input {
                 span: span.clone(),
-                name: *name,
+                name: name.clone(),
                 file: file.clone(),
             },
             GenericNCommand::UserDefined(span, name, exprs) => {
-                GenericCommand::UserDefined(span.clone(), *name, exprs.clone())
+                GenericCommand::UserDefined(span.clone(), name.clone(), exprs.clone())
             }
         }
     }
@@ -230,7 +229,7 @@ where
     }
 }
 
-pub type Schedule = GenericSchedule<Symbol, Symbol>;
+pub type Schedule = GenericSchedule<String, String>;
 pub(crate) type ResolvedSchedule = GenericSchedule<ResolvedCall, ResolvedVar>;
 
 #[derive(Debug, Clone, PartialEq, Eq, Hash)]
@@ -279,14 +278,14 @@ impl<Head: Display, Leaf: Display> Display for GenericSchedule<Head, Leaf> {
     }
 }
 
-pub type Command = GenericCommand<Symbol, Symbol>;
+pub type Command = GenericCommand<String, String>;
 
 pub type Subsume = bool;
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum Subdatatypes {
     Variants(Vec<Variant>),
-    NewSort(Symbol, Vec<Expr>),
+    NewSort(String, Vec<Expr>),
 }
 
 /// A [`Command`] is the top-level construct in egglog.
@@ -305,7 +304,7 @@ where
     /// - "interactive_mode" (default: false): when enabled, egglog prints "(done)" after each command, allowing an external
     ///   tool to know when each command has finished running.
     SetOption {
-        name: Symbol,
+        name: String,
         value: GenericExpr<Head, Leaf>,
     },
 
@@ -324,7 +323,7 @@ where
     /// ```
     ///
     /// Now `MathVec` can be used as an input or output sort.
-    Sort(Span, Symbol, Option<(Symbol, Vec<Expr>)>),
+    Sort(Span, String, Option<(String, Vec<Expr>)>),
 
     /// Egglog supports three types of functions
     ///
@@ -366,12 +365,12 @@ where
     /// Datatypes are also known as algebraic data types, tagged unions and sum types.
     Datatype {
         span: Span,
-        name: Symbol,
+        name: String,
         variants: Vec<Variant>,
     },
     Datatypes {
         span: Span,
-        datatypes: Vec<(Span, Symbol, Subdatatypes)>,
+        datatypes: Vec<(Span, String, Subdatatypes)>,
     },
 
     /// The `constructor` command defines a new constructor for a user-defined datatype
@@ -382,7 +381,7 @@ where
     ///
     Constructor {
         span: Span,
-        name: Symbol,
+        name: String,
         schema: Schema,
         cost: Option<usize>,
         unextractable: bool,
@@ -396,8 +395,8 @@ where
     /// ```
     Relation {
         span: Span,
-        name: Symbol,
-        inputs: Vec<Symbol>,
+        name: String,
+        inputs: Vec<String>,
     },
 
     /// The `function` command declare an egglog custom function, which is a database table with a
@@ -441,7 +440,7 @@ where
     ///
     Function {
         span: Span,
-        name: Symbol,
+        name: String,
         schema: Schema,
         merge: Option<GenericExpr<Head, Leaf>>,
     },
@@ -461,7 +460,7 @@ where
     ///       :ruleset myrules)
     /// (run myrules 2)
     /// ```
-    AddRuleset(Span, Symbol),
+    AddRuleset(Span, String),
     /// Using the `combined-ruleset` command, construct another ruleset
     /// which runs all the rules in the given rulesets.
     /// This is useful for running multiple rulesets together.
@@ -479,7 +478,7 @@ where
     ///       ((path x z))
     ///       :ruleset myrules2)
     /// (combined-ruleset myrules-combined myrules1 myrules2)
-    UnstableCombinedRuleset(Span, Symbol, Vec<Symbol>),
+    UnstableCombinedRuleset(Span, String, Vec<String>),
     /// ```text
     /// (rule <body:List<Fact>> <head:List<Action>>)
     /// ```
@@ -501,8 +500,8 @@ where
     ///       ((path x z)))
     /// ```
     Rule {
-        name: Symbol,
-        ruleset: Symbol,
+        name: String,
+        ruleset: String,
         rule: GenericRule<Head, Leaf>,
     },
     /// `rewrite` is syntactic sugar for a specific form of `rule`
@@ -544,7 +543,7 @@ where
     ///       ((union lhs (bitshift-left a 1))
     ///        (subsume (Mul a 2))))
     /// ```
-    Rewrite(Symbol, GenericRewrite<Head, Leaf>, Subsume),
+    Rewrite(String, GenericRewrite<Head, Leaf>, Subsume),
     /// Similar to [`Command::Rewrite`], but
     /// generates two rules, one for each direction.
     ///
@@ -561,7 +560,7 @@ where
     /// (rule ((= lhs (Var x)))
     ///       ((union lhs (Mul (Var x) (Num 0)))))
     /// ```
-    BiRewrite(Symbol, GenericRewrite<Head, Leaf>),
+    BiRewrite(String, GenericRewrite<Head, Leaf>),
     /// Perform an [`Action`] on the global database
     /// (see documentation for [`Action`] for more details).
     /// Example:
@@ -621,13 +620,13 @@ where
     /// ```
     /// prints the first 20 rows of the `Add` function.
     ///
-    PrintFunction(Span, Symbol, usize),
+    PrintFunction(Span, String, usize),
     /// Print out the number of rows in a function or all functions.
-    PrintSize(Span, Option<Symbol>),
+    PrintSize(Span, Option<String>),
     /// Input a CSV file directly into a function.
     Input {
         span: Span,
-        name: Symbol,
+        name: String,
         file: String,
     },
     /// Extract and output a set of expressions to a file.
@@ -647,7 +646,7 @@ where
     /// Include another egglog file directly as text and run it.
     Include(Span, String),
     /// User-defined command.
-    UserDefined(Span, Symbol, Vec<Expr>),
+    UserDefined(Span, String, Vec<Expr>),
 }
 
 impl<Head, Leaf> Display for GenericCommand<Head, Leaf>
@@ -659,10 +658,10 @@ where
         match self {
             GenericCommand::SetOption { name, value } => write!(f, "(set-option {name} {value})"),
             GenericCommand::Rewrite(name, rewrite, subsume) => {
-                rewrite.fmt_with_ruleset(f, *name, false, *subsume)
+                rewrite.fmt_with_ruleset(f, name, false, *subsume)
             }
             GenericCommand::BiRewrite(name, rewrite) => {
-                rewrite.fmt_with_ruleset(f, *name, true, false)
+                rewrite.fmt_with_ruleset(f, name, true, false)
             }
             GenericCommand::Datatype {
                 span: _,
@@ -726,7 +725,7 @@ where
                 ruleset,
                 name,
                 rule,
-            } => rule.fmt_with_ruleset(f, *ruleset, *name),
+            } => rule.fmt_with_ruleset(f, ruleset, name),
             GenericCommand::RunSchedule(sched) => write!(f, "(run-schedule {sched})"),
             GenericCommand::PrintOverallStatistics => write!(f, "(print-stats)"),
             GenericCommand::Check(_ann, facts) => {
@@ -775,8 +774,8 @@ where
 
 #[derive(Clone, Debug, PartialEq, Eq, Hash)]
 pub struct IdentSort {
-    pub ident: Symbol,
-    pub sort: Symbol,
+    pub ident: String,
+    pub sort: String,
 }
 
 impl Display for IdentSort {
@@ -785,12 +784,12 @@ impl Display for IdentSort {
     }
 }
 
-pub type RunConfig = GenericRunConfig<Symbol, Symbol>;
+pub type RunConfig = GenericRunConfig<String, String>;
 pub(crate) type ResolvedRunConfig = GenericRunConfig<ResolvedCall, ResolvedVar>;
 
 #[derive(Clone, Debug, PartialEq, Eq, Hash)]
 pub struct GenericRunConfig<Head, Leaf> {
-    pub ruleset: Symbol,
+    pub ruleset: String,
     pub until: Option<Vec<GenericFact<Head, Leaf>>>,
 }
 
@@ -819,7 +818,7 @@ where
 {
     fn fmt(&self, f: &mut Formatter) -> std::fmt::Result {
         write!(f, "(run")?;
-        if self.ruleset != "".into() {
+        if !self.ruleset.is_empty() {
             write!(f, " {}", self.ruleset)?;
         }
         if let Some(until) = &self.until {
@@ -829,7 +828,7 @@ where
     }
 }
 
-pub type FunctionDecl = GenericFunctionDecl<Symbol, Symbol>;
+pub type FunctionDecl = GenericFunctionDecl<String, String>;
 pub(crate) type ResolvedFunctionDecl = GenericFunctionDecl<ResolvedCall, ResolvedVar>;
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
@@ -857,7 +856,7 @@ where
     Head: Clone + Display,
     Leaf: Clone + PartialEq + Eq + Display + Hash,
 {
-    pub name: Symbol,
+    pub name: String,
     pub subtype: FunctionSubtype,
     pub schema: Schema,
     pub merge: Option<GenericExpr<Head, Leaf>>,
@@ -872,8 +871,8 @@ where
 #[derive(Clone, Debug, PartialEq, Eq, Hash)]
 pub struct Variant {
     pub span: Span,
-    pub name: Symbol,
-    pub types: Vec<Symbol>,
+    pub name: String,
+    pub types: Vec<String>,
     pub cost: Option<usize>,
 }
 
@@ -892,8 +891,8 @@ impl Display for Variant {
 
 #[derive(Clone, Debug, PartialEq, Eq, Hash)]
 pub struct Schema {
-    pub input: Vec<Symbol>,
-    pub output: Symbol,
+    pub input: Vec<String>,
+    pub output: String,
 }
 
 impl Display for Schema {
@@ -903,7 +902,7 @@ impl Display for Schema {
 }
 
 impl Schema {
-    pub fn new(input: Vec<Symbol>, output: Symbol) -> Self {
+    pub fn new(input: Vec<String>, output: String) -> Self {
         Self { input, output }
     }
 }
@@ -911,9 +910,9 @@ impl Schema {
 impl FunctionDecl {
     pub fn function(
         span: Span,
-        name: Symbol,
+        name: String,
         schema: Schema,
-        merge: Option<GenericExpr<Symbol, Symbol>>,
+        merge: Option<GenericExpr<String, String>>,
     ) -> Self {
         Self {
             name,
@@ -929,7 +928,7 @@ impl FunctionDecl {
 
     pub fn constructor(
         span: Span,
-        name: Symbol,
+        name: String,
         schema: Schema,
         cost: Option<usize>,
         unextractable: bool,
@@ -946,13 +945,13 @@ impl FunctionDecl {
         }
     }
 
-    pub fn relation(span: Span, name: Symbol, input: Vec<Symbol>) -> Self {
+    pub fn relation(span: Span, name: String, input: Vec<String>) -> Self {
         Self {
             name,
             subtype: FunctionSubtype::Relation,
             schema: Schema {
                 input,
-                output: Symbol::from("Unit"),
+                output: String::from("Unit"),
             },
             merge: None,
             cost: None,
@@ -985,7 +984,7 @@ where
     }
 }
 
-pub type Fact = GenericFact<Symbol, Symbol>;
+pub type Fact = GenericFact<String, String>;
 pub(crate) type ResolvedFact = GenericFact<ResolvedCall, ResolvedVar>;
 pub(crate) type MappedFact<Head, Leaf> = GenericFact<CorrespondingVar<Head, Leaf>, Leaf>;
 
@@ -1023,10 +1022,7 @@ where
         &self,
         typeinfo: &TypeInfo,
         fresh_gen: &mut impl FreshGen<Head, Leaf>,
-    ) -> (Query<HeadOrEq<Head>, Leaf>, Vec<MappedFact<Head, Leaf>>)
-    where
-        Leaf: SymbolLike,
-    {
+    ) -> (Query<HeadOrEq<Head>, Leaf>, Vec<MappedFact<Head, Leaf>>) {
         let mut atoms = vec![];
         let mut new_body = vec![];
 
@@ -1110,14 +1106,10 @@ where
     Leaf: Clone + PartialEq + Eq + Display + Hash,
     Head: Clone + Display,
 {
-    pub(crate) fn make_unresolved(self) -> GenericFact<Symbol, Symbol>
-    where
-        Leaf: SymbolLike,
-        Head: SymbolLike,
-    {
+    pub(crate) fn make_unresolved(self) -> GenericFact<String, String> {
         self.subst(
-            &mut |span, v| GenericExpr::Var(span.clone(), v.to_symbol()),
-            &mut |h| h.to_symbol(),
+            &mut |span, v| GenericExpr::Var(span.clone(), v.to_string()),
+            &mut |h| h.to_string(),
         )
     }
 }
@@ -1163,8 +1155,8 @@ pub enum Change {
     Subsume,
 }
 
-pub type Action = GenericAction<Symbol, Symbol>;
-pub(crate) type MappedAction = GenericAction<CorrespondingVar<Symbol, Symbol>, Symbol>;
+pub type Action = GenericAction<String, String>;
+pub(crate) type MappedAction = GenericAction<CorrespondingVar<String, String>, String>;
 pub(crate) type ResolvedAction = GenericAction<ResolvedCall, ResolvedVar>;
 
 #[derive(Clone, Debug, PartialEq, Eq, Hash)]
@@ -1211,7 +1203,7 @@ where
 pub struct GenericActions<Head: Clone + Display, Leaf: Clone + PartialEq + Eq + Display + Hash>(
     pub Vec<GenericAction<Head, Leaf>>,
 );
-pub type Actions = GenericActions<Symbol, Symbol>;
+pub type Actions = GenericActions<String, String>;
 pub(crate) type ResolvedActions = GenericActions<ResolvedCall, ResolvedVar>;
 pub(crate) type MappedActions<Head, Leaf> = GenericActions<CorrespondingVar<Head, Leaf>, Leaf>;
 
@@ -1381,7 +1373,7 @@ where
     }
 }
 
-pub type Rule = GenericRule<Symbol, Symbol>;
+pub type Rule = GenericRule<String, String>;
 pub(crate) type ResolvedRule = GenericRule<ResolvedCall, ResolvedVar>;
 
 #[derive(Clone, Debug, PartialEq, Eq, Hash)]
@@ -1424,8 +1416,8 @@ where
     pub(crate) fn fmt_with_ruleset(
         &self,
         f: &mut Formatter,
-        ruleset: Symbol,
-        name: Symbol,
+        ruleset: &str,
+        name: &str,
     ) -> std::fmt::Result {
         let indent = " ".repeat(7);
         write!(f, "(rule (")?;
@@ -1451,12 +1443,12 @@ where
                 write!(f, "{}", action)?;
             }
         }
-        let ruleset = if ruleset != "".into() {
+        let ruleset = if !ruleset.is_empty() {
             format!(":ruleset {}", ruleset)
         } else {
             "".into()
         };
-        let name = if name != "".into() {
+        let name = if !name.is_empty() {
             format!(":name \"{}\"", name)
         } else {
             "".into()
@@ -1465,7 +1457,7 @@ where
     }
 }
 
-pub type Rewrite = GenericRewrite<Symbol, Symbol>;
+pub type Rewrite = GenericRewrite<String, String>;
 
 #[derive(Clone, Debug)]
 pub struct GenericRewrite<Head, Leaf> {
@@ -1480,7 +1472,7 @@ impl<Head: Display, Leaf: Display> GenericRewrite<Head, Leaf> {
     pub fn fmt_with_ruleset(
         &self,
         f: &mut Formatter,
-        ruleset: Symbol,
+        ruleset: &str,
         is_bidirectional: bool,
         subsume: bool,
     ) -> std::fmt::Result {
@@ -1496,7 +1488,7 @@ impl<Head: Display, Leaf: Display> GenericRewrite<Head, Leaf> {
         if !self.conditions.is_empty() {
             write!(f, " :when ({})", ListDisplay(&self.conditions, " "))?;
         }
-        if ruleset != "".into() {
+        if !ruleset.is_empty() {
             write!(f, " :ruleset {ruleset}")?;
         }
         write!(f, ")")
@@ -1508,16 +1500,16 @@ where
     Head: Clone + Display,
     Leaf: Clone + PartialEq + Eq + Display + Hash,
 {
-    pub(crate) fn get_corresponding_var_or_lit(&self, typeinfo: &TypeInfo) -> GenericAtomTerm<Leaf>
-    where
-        Leaf: SymbolLike,
-    {
+    pub(crate) fn get_corresponding_var_or_lit(
+        &self,
+        typeinfo: &TypeInfo,
+    ) -> GenericAtomTerm<Leaf> {
         // Note: need typeinfo to resolve whether a symbol is a global or not
         // This is error-prone and the complexities can be avoided by treating globals
         // as nullary functions.
         match self {
             GenericExpr::Var(span, v) => {
-                if typeinfo.is_global(v.to_symbol()) {
+                if typeinfo.is_global(&v.to_string()) {
                     GenericAtomTerm::Global(span.clone(), v.clone())
                 } else {
                     GenericAtomTerm::Var(span.clone(), v.clone())

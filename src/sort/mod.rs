@@ -15,7 +15,7 @@ use crate::*;
 pub type Z = core_relations::Boxed<BigInt>;
 pub type Q = core_relations::Boxed<BigRational>;
 pub type F = core_relations::Boxed<OrderedFloat<f64>>;
-pub type S = SymbolWrapper;
+pub type S = core_relations::Boxed<String>;
 
 mod bigint;
 pub use bigint::*;
@@ -43,7 +43,7 @@ mod multiset;
 pub use multiset::*;
 
 pub trait Sort: Any + Send + Sync + Debug {
-    fn name(&self) -> Symbol;
+    fn name(&self) -> &str;
 
     fn column_ty(&self, backend: &egglog_bridge::EGraph) -> ColumnTy;
 
@@ -80,7 +80,7 @@ pub trait Sort: Any + Send + Sync + Debug {
     /// Return the serialized name of the sort
     ///
     /// Only used for container sorts, which cannot be serialized with make_expr so need an explicit name
-    fn serialized_name(&self, _value: Value) -> Symbol {
+    fn serialized_name(&self, _value: Value) -> &str {
         self.name()
     }
 
@@ -136,25 +136,25 @@ pub trait Sort: Any + Send + Sync + Debug {
 // (for example, we want to add partial application) we should revisit
 // this and make the methods take a `self` parameter.
 pub trait Presort {
-    fn presort_name() -> Symbol;
-    fn reserved_primitives() -> Vec<Symbol>;
+    fn presort_name() -> &'static str;
+    fn reserved_primitives() -> Vec<&'static str>;
     fn make_sort(
         typeinfo: &mut TypeInfo,
-        name: Symbol,
+        name: String,
         args: &[Expr],
     ) -> Result<ArcSort, TypeError>;
 }
 
-pub type MkSort = fn(&mut TypeInfo, Symbol, &[Expr]) -> Result<ArcSort, TypeError>;
+pub type MkSort = fn(&mut TypeInfo, String, &[Expr]) -> Result<ArcSort, TypeError>;
 
 #[derive(Debug)]
 pub struct EqSort {
-    pub name: Symbol,
+    pub name: String,
 }
 
 impl Sort for EqSort {
-    fn name(&self) -> Symbol {
-        self.name
+    fn name(&self) -> &str {
+        &self.name
     }
 
     fn column_ty(&self, _backend: &egglog_bridge::EGraph) -> ColumnTy {

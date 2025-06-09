@@ -25,7 +25,7 @@ impl Container for MultiSetContainer {
 
 #[derive(Clone, Debug)]
 pub struct MultiSetSort {
-    name: Symbol,
+    name: String,
     element: ArcSort,
 }
 
@@ -36,32 +36,32 @@ impl MultiSetSort {
 }
 
 impl Presort for MultiSetSort {
-    fn presort_name() -> Symbol {
-        "MultiSet".into()
+    fn presort_name() -> &'static str {
+        "MultiSet"
     }
 
-    fn reserved_primitives() -> Vec<Symbol> {
+    fn reserved_primitives() -> Vec<&'static str> {
         vec![
-            "multiset-of".into(),
-            "multiset-insert".into(),
-            "multiset-contains".into(),
-            "multiset-not-contains".into(),
-            "multiset-remove".into(),
-            "multiset-length".into(),
-            "multiset-sum".into(),
-            "unstable-multiset-map".into(),
+            "multiset-of",
+            "multiset-insert",
+            "multiset-contains",
+            "multiset-not-contains",
+            "multiset-remove",
+            "multiset-length",
+            "multiset-sum",
+            "unstable-multiset-map",
         ]
     }
 
     fn make_sort(
         typeinfo: &mut TypeInfo,
-        name: Symbol,
+        name: String,
         args: &[Expr],
     ) -> Result<ArcSort, TypeError> {
         if let [Expr::Var(span, e)] = args {
             let e = typeinfo
                 .get_sort_by_name(e)
-                .ok_or(TypeError::UndefinedSort(*e, span.clone()))?;
+                .ok_or(TypeError::UndefinedSort(e.clone(), span.clone()))?;
 
             if e.is_eq_container_sort() {
                 return Err(TypeError::DisallowedSort(
@@ -85,8 +85,8 @@ impl Presort for MultiSetSort {
 impl ContainerSort for MultiSetSort {
     type Container = MultiSetContainer;
 
-    fn name(&self) -> Symbol {
-        self.name
+    fn name(&self) -> &str {
+        &self.name
     }
 
     fn inner_sorts(&self) -> Vec<ArcSort> {
@@ -160,14 +160,14 @@ impl ContainerSort for MultiSetSort {
 
 #[derive(Clone)]
 struct Map {
-    name: Symbol,
+    name: String,
     multiset: ArcSort,
     fn_: Arc<FunctionSort>,
 }
 
 impl Primitive for Map {
-    fn name(&self) -> Symbol {
-        self.name
+    fn name(&self) -> &str {
+        &self.name
     }
 
     fn get_type_constraints(&self, span: &Span) -> Box<dyn TypeConstraint> {

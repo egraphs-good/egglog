@@ -46,7 +46,7 @@ impl Container for MapContainer {
 /// - `map-length`
 #[derive(Clone, Debug)]
 pub struct MapSort {
-    name: Symbol,
+    name: String,
     key: ArcSort,
     value: ArcSort,
 }
@@ -62,34 +62,34 @@ impl MapSort {
 }
 
 impl Presort for MapSort {
-    fn presort_name() -> Symbol {
-        "Map".into()
+    fn presort_name() -> &'static str {
+        "Map"
     }
 
-    fn reserved_primitives() -> Vec<Symbol> {
+    fn reserved_primitives() -> Vec<&'static str> {
         vec![
-            "map-empty".into(),
-            "map-insert".into(),
-            "map-get".into(),
-            "map-not-contains".into(),
-            "map-contains".into(),
-            "map-remove".into(),
-            "map-length".into(),
+            "map-empty",
+            "map-insert",
+            "map-get",
+            "map-not-contains",
+            "map-contains",
+            "map-remove",
+            "map-length",
         ]
     }
 
     fn make_sort(
         typeinfo: &mut TypeInfo,
-        name: Symbol,
+        name: String,
         args: &[Expr],
     ) -> Result<ArcSort, TypeError> {
         if let [Expr::Var(k_span, k), Expr::Var(v_span, v)] = args {
             let k = typeinfo
                 .get_sort_by_name(k)
-                .ok_or(TypeError::UndefinedSort(*k, k_span.clone()))?;
+                .ok_or(TypeError::UndefinedSort(k.clone(), k_span.clone()))?;
             let v = typeinfo
                 .get_sort_by_name(v)
-                .ok_or(TypeError::UndefinedSort(*v, v_span.clone()))?;
+                .ok_or(TypeError::UndefinedSort(v.clone(), v_span.clone()))?;
 
             // TODO: specialize the error message
             if k.is_eq_container_sort() {
@@ -122,8 +122,8 @@ impl Presort for MapSort {
 impl ContainerSort for MapSort {
     type Container = MapContainer;
 
-    fn name(&self) -> Symbol {
-        self.name
+    fn name(&self) -> &str {
+        &self.name
     }
 
     fn inner_sorts(&self) -> Vec<ArcSort> {
@@ -177,6 +177,6 @@ impl ContainerSort for MapSort {
     }
 
     fn serialized_name(&self, _: Value) -> &str {
-        self.name().into()
+        self.name()
     }
 }

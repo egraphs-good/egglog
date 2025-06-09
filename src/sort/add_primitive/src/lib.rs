@@ -199,8 +199,8 @@ pub fn add_primitive(input: TokenStream) -> TokenStream {
         #prim_def
 
         impl Primitive for Prim {
-            fn name(&self) -> Symbol {
-                #name.into()
+            fn name(&self) -> &str {
+                #name
             }
 
             fn get_type_constraints(&self, span: &Span) -> Box<dyn TypeConstraint> {

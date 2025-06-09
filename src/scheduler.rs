@@ -20,7 +20,7 @@ pub trait Scheduler: dyn_clone::DynClone + Send + Sync {
     ///
     /// This is only called when the runner is otherwise saturated.
     /// Default implementation just returns `true`.
-    fn can_stop(&mut self, rules: &[Symbol], ruleset: Symbol) -> bool {
+    fn can_stop(&mut self, rules: &[&str], ruleset: &str) -> bool {
         let _ = (rules, ruleset);
         true
     }
@@ -29,7 +29,7 @@ pub trait Scheduler: dyn_clone::DynClone + Send + Sync {
     ///
     /// Return `true` if the scheduler's next run of the rule should feed
     /// `filter_matches` with a new iteration of matches.
-    fn filter_matches(&mut self, rule: Symbol, ruleset: Symbol, matches: &mut Matches) -> bool;
+    fn filter_matches(&mut self, rule: &str, ruleset: &str, matches: &mut Matches) -> bool;
 }
 
 dyn_clone::clone_trait_object!(Scheduler);
@@ -52,7 +52,7 @@ pub struct Match<'a> {
 
 impl Match<'_> {
     /// Get the value corresponding a variable in this match.
-    pub fn get_value(&self, var: Symbol) -> Value {
+    pub fn get_value(&self, var: &str) -> Value {
         let idx = self.vars.iter().position(|v| v.name == var).unwrap();
         self.values[idx]
     }
@@ -166,22 +166,22 @@ impl EGraph {
     pub fn step_rules_with_scheduler(
         &mut self,
         scheduler_id: SchedulerId,
-        ruleset: Symbol,
+        ruleset: &str,
     ) -> RunReport {
         fn collect_rules<'a>(
-            ruleset: Symbol,
-            rulesets: &'a IndexMap<Symbol, Ruleset>,
-            ids: &mut Vec<(Symbol, &'a ResolvedCoreRule)>,
+            ruleset: &str,
+            rulesets: &'a IndexMap<String, Ruleset>,
+            ids: &mut Vec<(String, &'a ResolvedCoreRule)>,
         ) {
-            match &rulesets[&ruleset] {
+            match &rulesets[ruleset] {
                 Ruleset::Rules(rules) => {
                     for (rule_name, (core_rule, _)) in rules.iter() {
-                        ids.push((*rule_name, core_rule));
+                        ids.push((rule_name.clone(), core_rule));
                     }
                 }
                 Ruleset::Combined(sub_rulesets) => {
                     for sub_ruleset in sub_rulesets {
-                        collect_rules(*sub_ruleset, rulesets, ids);
+                        collect_rules(sub_ruleset, rulesets, ids);
                     }
                 }
             }
@@ -197,8 +197,8 @@ impl EGraph {
         rules.iter().for_each(|(id, rule)| {
             record
                 .rule_info
-                .entry(*id)
-                .or_insert_with(|| SchedulerRuleInfo::new(self, rule, id.as_str()));
+                .entry((*id).to_owned())
+                .or_insert_with(|| SchedulerRuleInfo::new(self, rule, id));
         });
 
         // Step 2: run all the queries for one iteration
@@ -228,7 +228,7 @@ impl EGraph {
                 rule_info.should_seek =
                     record
                         .scheduler
-                        .filter_matches(*rule_id, ruleset, &mut matches);
+                        .filter_matches(rule_id, ruleset, &mut matches);
                 let table_action = TableAction::new(&self.backend, rule_info.decided);
                 *rule_info.matches.lock().unwrap() = matches.instantiate(state, table_action);
             }
@@ -246,10 +246,10 @@ impl EGraph {
         let action_iter_report = self.backend.run_rules(&action_rules).unwrap();
 
         // Step 5: combine the reports
-        let per_ruleset = |x| [(ruleset, x)].into_iter().collect();
+        let per_ruleset = |x| [(ruleset.to_owned(), x)].into_iter().collect();
         let mut report = RunReport::default();
         report.updated = action_iter_report.changed || {
-            let rule_ids = rules.iter().map(|(id, _)| *id).collect::<Vec<_>>();
+            let rule_ids = rules.iter().map(|(id, _)| id.as_str()).collect::<Vec<_>>();
             !record.scheduler.can_stop(&rule_ids, ruleset)
         };
 
@@ -289,7 +289,7 @@ impl EGraph {
 #[derive(Clone)]
 pub(crate) struct SchedulerRecord {
     scheduler: Box<dyn Scheduler>,
-    rule_info: HashMap<Symbol, SchedulerRuleInfo>,
+    rule_info: HashMap<String, SchedulerRuleInfo>,
 }
 
 /// To enable scheduling without modifying the backend,
@@ -416,12 +416,7 @@ mod test {
     }
 
     impl Scheduler for FirstNScheduler {
-        fn filter_matches(
-            &mut self,
-            _rule: Symbol,
-            _ruleset: Symbol,
-            matches: &mut Matches,
-        ) -> bool {
+        fn filter_matches(&mut self, _rule: &str, _ruleset: &str, matches: &mut Matches) -> bool {
             if matches.match_size() <= self.n {
                 matches.choose_all();
             } else {
@@ -449,20 +444,18 @@ mod test {
         (rule ((R x)) ((S x)) :ruleset test :name "test-rule")
         "#;
         egraph.parse_and_run_program(None, input).unwrap();
-        let r_id = Symbol::from("R");
-        assert_eq!(egraph.get_size(&r_id), 101);
-        let s_id = Symbol::from("S");
+        assert_eq!(egraph.get_size("R"), 101);
         let mut iter = 0;
         loop {
-            let report = egraph.step_rules_with_scheduler(scheduler_id, "test".into());
-            let table_size = egraph.get_size(&s_id);
+            let report = egraph.step_rules_with_scheduler(scheduler_id, "test");
+            let table_size = egraph.get_size("S");
             iter += 1;
             assert_eq!(table_size, std::cmp::min(iter * 10, 101));
 
             let expected_matches = if iter <= 10 { 10 } else { 12 - iter };
             assert_eq!(
                 report.num_matches_per_rule.iter().collect::<Vec<_>>(),
-                vec![(&Symbol::from("test-rule"), &expected_matches)]
+                [(&"test-rule".to_owned(), &expected_matches)]
             );
 
             // Because of semi-naive, the exact rules that are run are more than just `test-rule`
@@ -472,14 +465,14 @@ mod test {
                 .all(|k| k.as_str().starts_with("test-rule")));
             assert_eq!(
                 report.merge_time_per_ruleset.keys().collect::<Vec<_>>(),
-                vec![&Symbol::from("test")]
+                ["test"]
             );
             assert_eq!(
                 report
                     .search_and_apply_time_per_ruleset
                     .keys()
                     .collect::<Vec<_>>(),
-                vec![&Symbol::from("test")]
+                ["test"]
             );
 
             if !report.updated {

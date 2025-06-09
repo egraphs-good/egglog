@@ -57,7 +57,7 @@ fn resolved_var_to_call(var: &ResolvedVar) -> ResolvedCall {
         "resolved_var_to_call called on non-global var"
     );
     ResolvedCall::Func(FuncType {
-        name: var.name,
+        name: var.name.clone(),
         subtype: FunctionSubtype::Custom,
         input: vec![],
         output: var.sort.clone(),
@@ -93,11 +93,11 @@ impl GlobalRemover<'_> {
                     let ty = expr.output_type();
 
                     let func_decl = ResolvedFunctionDecl {
-                        name: name.name,
+                        name: name.name.clone(),
                         subtype: FunctionSubtype::Custom,
                         schema: Schema {
                             input: vec![],
-                            output: ty.name(),
+                            output: ty.name().to_owned(),
                         },
                         merge: None,
                         cost: None,
