@@ -28,30 +28,21 @@ pub mod util;
 // both this crate and other crates by referring to `::egglog`.
 extern crate self as egglog;
 pub use add_primitive::add_primitive;
+use scheduler::SchedulerRecord;
 
-use crate::constraint::Problem;
-use crate::core::{AtomTerm, ResolvedAtomTerm, ResolvedCall};
-pub use crate::prelude::*;
-use crate::scheduler::SchedulerRecord;
-use crate::typechecking::TypeError;
 use ast::*;
 #[cfg(feature = "bin")]
 pub use cli::bin::*;
-use constraint::{Constraint, SimpleTypeConstraint, TypeConstraint};
+use constraint::{Constraint, Problem, SimpleTypeConstraint, TypeConstraint};
+use core::{AtomTerm, ResolvedAtomTerm, ResolvedCall};
 use core_relations::{make_external_func, ExternalFunctionId};
 pub use core_relations::{ExecutionState, Value};
 use egglog_bridge::{ColumnTy, IterationReport, QueryEntry};
 use extract::{Extractor, TreeAdditiveCostModel};
+use indexmap::map::Entry;
+use prelude::*;
 pub use serialize::{SerializeConfig, SerializedNode};
 use sort::*;
-pub use termdag::{Term, TermDag, TermId};
-use typechecking::TypeInfo;
-use util::*;
-
-use indexmap::map::Entry;
-use thiserror::Error;
-use web_time::Duration;
-
 use std::fmt::{Debug, Display, Formatter};
 use std::fs::File;
 use std::hash::Hash;
@@ -60,6 +51,12 @@ use std::iter::once;
 use std::path::PathBuf;
 use std::str::FromStr;
 use std::sync::Arc;
+pub use termdag::{Term, TermDag, TermId};
+use thiserror::Error;
+pub use typechecking::TypeError;
+use typechecking::TypeInfo;
+use util::*;
+use web_time::Duration;
 
 pub type ArcSort = Arc<dyn Sort>;
 

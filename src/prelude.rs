@@ -369,7 +369,7 @@ impl<F: Fn(&mut RustRuleContext, &[Value]) -> Option<()>> Primitive for RustRule
 ///
 ///         let y = ctx.rust_to_value::<i64>(x + 2);
 ///         let f2 = ctx.rust_to_value::<i64>(f0 + f1);
-///         ctx.insert("fib", vec![y, f2].into_iter());
+///         ctx.insert("fib", [y, f2].into_iter());
 ///
 ///         Some(())
 ///     },
@@ -930,7 +930,7 @@ mod tests {
 
                 let y = ctx.rust_to_value::<i64>(x + 2);
                 let f2 = ctx.rust_to_value::<i64>(f0 + f1);
-                ctx.insert("fib", vec![y, f2].into_iter());
+                ctx.insert("fib", [y, f2].into_iter());
 
                 Some(())
             },
