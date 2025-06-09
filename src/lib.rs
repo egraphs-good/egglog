@@ -31,7 +31,7 @@ mod value;
 // both this crate and other crates by referring to `::egglog`.
 extern crate self as egglog;
 pub use add_primitive::add_primitive;
-
+pub use core_relations;
 use crate::constraint::Problem;
 use crate::core::{AtomTerm, ResolvedCall};
 use crate::typechecking::TypeError;

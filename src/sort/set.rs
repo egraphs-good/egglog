@@ -3,7 +3,7 @@ use std::collections::BTreeSet;
 
 #[derive(Clone, Debug, PartialEq, Eq, Hash)]
 pub struct SetContainer<V> {
-    do_rebuild: bool,
+    pub do_rebuild: bool,
     pub data: BTreeSet<V>,
 }
 

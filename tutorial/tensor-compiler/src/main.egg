@@ -1,0 +1,37 @@
+;; Add-Mul semiring rules
+(rewrite (Mul A B) (Mul B A))
+(rewrite (Add A B) (Add B A))
+(birewrite (Mul (Mul A B) C) (Mul A (Mul B C)))
+(birewrite (Add (Add A B) C) (Add A (Add B C)))
+(birewrite (Mul A (Add B C)) (Add (Mul A B) (Mul A C)))
+
+;; Agg comm
+(rewrite (Agg i (Agg j A)) (Agg j (Agg i A)))
+;; Agg distrib over Add
+(birewrite (Agg i (Add A B)) (Add (Agg i A) (Agg i B)))
+;; Agg comm with Mul when independent
+(rewrite (Mul A (Agg i B)) (Agg i (Mul A B)))
+(rewrite  (Agg i (Mul A B)) (Mul A (Agg i B))
+  :when ((set-not-contains (FV A) i)))
+
+;; Elim Agg when independent
+(rewrite (Agg i A) (Mul (Lit n) A)
+  :when ((= n (extent-of i))
+         (set-not-contains (FV A) i)))
+
+;; Free variable analysis
+(rule ((= e (Tensor t js)))
+      ((set (FV e) (string-vec->set js))))
+(rule ((= e (Mul a b))
+       (= fv-a (FV a))
+       (= fv-b (FV b)))
+      ((set (FV e) (set-union fv-a fv-b))))
+(rule ((= e (Add a b))
+       (= fv-a (FV a))
+       (= fv-b (FV b)))
+      ((set (FV e) (set-union fv-a fv-b))))
+(rule ((= e (Agg i a))
+       (= fv-a (FV a)))
+      ((set (FV e) (set-remove fv-a i))))
+(rule ((= e (Lit n)))
+      ((set (FV e) (set-empty))))

@@ -1,0 +1,19 @@
+
+(sort StringSet (Set String))
+(sort StringVec (Vec String))
+
+(datatype TensorName
+  (T String))
+
+(datatype Expr
+  (Tensor TensorName StringVec)
+  (Mul Expr Expr)
+  (Add Expr Expr)
+  (Agg String Expr)
+  (Lit BigRat))
+
+;; A smaller set of FV may be discovered when some variables
+;; are cancelled out by rewrites
+(function FV (Expr) StringSet :merge (set-intersect old new))
+
+(function extent-of (String) BigRat :no-merge)
