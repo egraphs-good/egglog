@@ -1279,39 +1279,45 @@ impl EGraph {
         for line in contents.lines() {
             let mut row: Vec<Value> = Vec::with_capacity(row_schema.len());
 
-            for (sort, raw) in row_schema.iter().zip(line.split('\t').map(|s| s.trim())) {
-                let val = match sort.name().as_str() {
-                    "i64" => {
-                        if let Ok(i) = raw.parse::<i64>() {
-                            self.backend.primitives().get(i)
-                        } else {
-                            return Err(Error::InputFileFormatError(file));
+            let mut it = line.split('\t').map(|s| s.trim());
+
+            for sort in row_schema.iter() {
+                if let Some(raw) = it.next() {
+                    let val = match sort.name().as_str() {
+                        "i64" => {
+                            if let Ok(i) = raw.parse::<i64>() {
+                                self.backend.primitives().get(i)
+                            } else {
+                                return Err(Error::InputFileFormatError(file));
+                            }
                         }
-                    }
-                    "f64" => {
-                        if let Ok(f) = raw.parse::<f64>() {
-                            self.backend
-                                .primitives()
-                                .get::<F>(core_relations::Boxed::new(f.into()))
-                        } else {
-                            return Err(Error::InputFileFormatError(file));
+                        "f64" => {
+                            if let Ok(f) = raw.parse::<f64>() {
+                                self.backend
+                                    .primitives()
+                                    .get::<F>(core_relations::Boxed::new(f.into()))
+                            } else {
+                                return Err(Error::InputFileFormatError(file));
+                            }
                         }
-                    }
-                    "String" => self
-                        .backend
-                        .primitives()
-                        .get::<S>(SymbolWrapper::new(raw.to_string().into())),
-                    "Unit" => unit_val,
-                    _ => panic!("Unreachable"),
-                };
-                row.push(val);
+                        "String" => self
+                            .backend
+                            .primitives()
+                            .get::<S>(SymbolWrapper::new(raw.to_string().into())),
+                        "Unit" => unit_val,
+                        _ => panic!("Unreachable"),
+                    };
+                    row.push(val);
+                } else {
+                    break;
+                }
             }
 
             if row.is_empty() {
                 continue;
             }
 
-            if row.len() != row_schema.len() {
+            if row.len() != row_schema.len() || it.next().is_some() {
                 return Err(Error::InputFileFormatError(file));
             }
 
