@@ -1329,7 +1329,7 @@ impl EGraph {
                     table_action.insert(es, row.to_vec());
                 }
                 Some(unit_val)
-            }));g
+            }));
 
         let mut translator = BackendRule::new(
             self.backend.new_rule("input_file", false),
