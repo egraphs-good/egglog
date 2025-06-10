@@ -1,4 +1,4 @@
-;; Datalog in egglog
+;; # Datalog in egglog
 
 ;; Datalog is a relational language for deductive reasoning. In the last lesson, we write our first 
 ;; equality saturation program in egglog, but you can also write Datalog rules in egglog.

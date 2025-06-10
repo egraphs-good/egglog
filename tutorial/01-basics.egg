@@ -1,4 +1,4 @@
-;; # First Equality Saturation example in egglog
+;; # Equality Saturation in egglog
 
 ;; In this tutorial, we will build an optimizer for a subset of linear algebra.
 ;; We will start by optimizing simple integer arithmetic expressions.
