@@ -326,9 +326,7 @@ impl EGraph {
             .get_table(table_id)
             .new_buffer()
             .stage_insert(&extended_row);
-        self.db.merge_all();
-        self.inc_ts();
-        self.rebuild().unwrap();
+        self.flush_updates();
         self.get_canon(res)
     }
 
@@ -442,9 +440,7 @@ impl EGraph {
         }
         // Flush the buffers.
         mem::drop(bufs);
-        self.db.merge_all();
-        self.inc_ts();
-        self.rebuild().unwrap();
+        self.flush_updates();
     }
 
     pub fn approx_table_size(&self, table: FunctionId) -> usize {
@@ -975,6 +971,24 @@ impl EGraph {
         rb.rebuild_row(table, &vars, &canon, subsume_var);
         rb.build()
     }
+
+    /// Gives the user a handle to the underlying ExecutionState. Useful for staging updates
+    /// to the database.
+    ///
+    /// The staged updates are not immediately reflected in the EGraph, so you may want to
+    /// manually flush the updates using [`EGraph::flush_updates`].
+    pub fn with_execution_state<R>(&self, f: impl FnOnce(&mut ExecutionState<'_>) -> R) -> R {
+        self.db.with_execution_state(f)
+    }
+
+    /// Flush the pending update buffers to the EGraph.
+    /// Returns `true` if the database is updated.
+    pub fn flush_updates(&mut self) -> bool {
+        let updated = self.db.merge_all();
+        self.inc_ts();
+        self.rebuild().unwrap();
+        updated
+    }
 }
 
 #[derive(Clone)]
@@ -1268,12 +1282,25 @@ impl ResolvedMergeFn {
 /// This is an intern-able struct that holds all the data needed
 /// to do table operations with an [`ExecutionState`], assuming
 /// that the [`FunctionId`] for the table is known ahead of time.
-#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
+#[derive(Debug, PartialEq, Eq, Hash)]
 pub struct TableAction {
     table: TableId,
     table_math: SchemaMath,
     default: Option<MergeVal>,
     timestamp: CounterId,
+    scratch: Vec<Value>,
+}
+
+impl Clone for TableAction {
+    fn clone(&self) -> Self {
+        Self {
+            table: self.table.clone(),
+            table_math: self.table_math.clone(),
+            default: self.default.clone(),
+            timestamp: self.timestamp.clone(),
+            scratch: Vec::new(),
+        }
+    }
 }
 
 impl TableAction {
@@ -1296,6 +1323,7 @@ impl TableAction {
                 DefaultVal::Const(val) => Some(MergeVal::Constant(*val)),
             },
             timestamp: egraph.timestamp_counter,
+            scratch: Vec::new(),
         }
     }
 
@@ -1337,10 +1365,12 @@ impl TableAction {
     }
 
     /// Insert a row into this table.
-    pub fn insert(&self, state: &mut ExecutionState, mut row: Vec<Value>) {
+    pub fn insert(&mut self, state: &mut ExecutionState, row: impl Iterator<Item = Value>) {
         let ts = Value::from_usize(state.read_counter(self.timestamp));
+        self.scratch.clear();
+        self.scratch.extend(row);
         self.table_math.write_table_row(
-            &mut row,
+            &mut self.scratch,
             RowVals {
                 timestamp: ts,
                 proof: None,
@@ -1348,7 +1378,7 @@ impl TableAction {
                 ret_val: None,
             },
         );
-        state.stage_insert(self.table, &row);
+        state.stage_insert(self.table, &self.scratch);
     }
 
     /// Delete a row from this table.
