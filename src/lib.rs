@@ -1329,23 +1329,24 @@ impl EGraph {
 
         let num_facts = parsed_contents.len();
 
-        let table_action = egglog_bridge::TableAction::new(&self.backend, func.backend_id);
+        let mut table_action = egglog_bridge::TableAction::new(&self.backend, func.backend_id);
 
-        let use_insert = function_type.subtype != FunctionSubtype::Constructor;
-
-        let write_into_db = |es, _| {
-            for row in parsed_contents.iter() {
-                if use_insert {
-                    table_action.insert(es, row.to_vec());
-                } else {
+        if function_type.subtype != FunctionSubtype::Constructor {
+            self.backend.with_execution_state(|es| {
+                for row in parsed_contents.iter() {
+                    table_action.insert(es, row.iter().copied());
+                }
+                Some(unit_val)
+            });
+        } else {
+            self.backend.with_execution_state(|es| {
+                for row in parsed_contents.iter() {
                     table_action.lookup(es, row);
                 }
-            }
-            Some(unit_val)
-        };
+                Some(unit_val)
+            });
+        }
 
-
-        self.backend.with_execution_state(write_into_db);
         self.backend.flush_updates();
 
         log::info!("Read {num_facts} facts into {func_name} from '{file}'.");
