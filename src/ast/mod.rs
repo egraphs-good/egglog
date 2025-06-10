@@ -4,7 +4,7 @@ mod expr;
 mod parse;
 pub mod remove_globals;
 
-use crate::core::{GenericAtom, GenericAtomTerm, HeadOrEq, Query, ResolvedCall};
+use crate::core::{GenericAtom, GenericAtomTerm, HeadOrEq, Query, ResolvedCall, ResolvedCoreRule};
 use crate::*;
 pub use expr::*;
 pub use parse::*;
@@ -14,7 +14,7 @@ pub use symbol_table::GlobalSymbol as Symbol;
 /// The egglog internal representation of already compiled rules
 pub(crate) enum Ruleset {
     /// Represents a ruleset with a set of rules.
-    Rules(IndexMap<Symbol, egglog_bridge::RuleId>),
+    Rules(IndexMap<Symbol, (ResolvedCoreRule, egglog_bridge::RuleId)>),
     /// A combined ruleset may contain other rulesets.
     Combined(Vec<Symbol>),
 }
