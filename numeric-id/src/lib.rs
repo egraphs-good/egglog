@@ -225,6 +225,18 @@ pub struct IdVec<K, V> {
     _marker: std::marker::PhantomData<K>,
 }
 
+impl<K, V> IdVec<K, V> {
+    pub fn clear(&mut self) {
+        self.data.clear();
+    }
+    pub fn len(&self) -> usize {
+        self.data.len()
+    }
+    pub fn capacity(&self) -> usize {
+        self.data.capacity()
+    }
+}
+
 impl<K, V> Default for IdVec<K, V> {
     fn default() -> IdVec<K, V> {
         IdVec {

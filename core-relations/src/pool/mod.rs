@@ -12,17 +12,17 @@ use std::{
 
 use fixedbitset::FixedBitSet;
 use hashbrown::HashTable;
-use numeric_id::DenseIdMap;
+use numeric_id::{DenseIdMap, IdVec};
 
 use crate::{
     action::{Instr, PredictedVals},
     common::{HashMap, HashSet, IndexMap, IndexSet, ShardId, Value},
     free_join::execute::FrameUpdate,
-    hash_index::{BufferedSubset, TableEntry},
+    hash_index::{BufferedSubset, ColumnIndex, TableEntry},
     offsets::SortedOffsetVector,
     table::TableEntry as SwTableEntry,
     table_spec::Constraint,
-    RowId,
+    ColumnId, RowId,
 };
 
 #[cfg(test)]
@@ -146,6 +146,18 @@ impl Clear for FixedBitSet {
     }
     fn bytes(&self) -> usize {
         self.len() / 8
+    }
+}
+
+impl<K, V> Clear for IdVec<K, V> {
+    fn clear(&mut self) {
+        self.clear()
+    }
+    fn reuse(&self) -> bool {
+        self.capacity() > 0
+    }
+    fn bytes(&self) -> usize {
+        self.capacity() * mem::size_of::<V>()
     }
 }
 
@@ -425,6 +437,7 @@ pool_set! {
         predicted_vals: PredictedVals [ 1 << 20 ],
         shard_hist: DenseIdMap<ShardId, usize> [ 1 << 20 ],
         instr_indexes: Vec<u32> [ 1 << 20 ],
+        cached_subsets: IdVec<ColumnId, std::sync::OnceLock<std::sync::Arc<ColumnIndex>>> [ 4 << 20 ],
     }
 }
 
