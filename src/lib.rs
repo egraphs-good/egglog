@@ -1331,39 +1331,22 @@ impl EGraph {
 
         let table_action = egglog_bridge::TableAction::new(&self.backend, func.backend_id);
 
-        let unit_id = self.backend.primitives().get_ty::<()>();
         let use_insert = function_type.subtype != FunctionSubtype::Constructor;
 
-        let ext_id = self
-            .backend
-            .register_external_func(make_external_func(move |es, _| {
-                for row in parsed_contents.iter() {
-                    if use_insert {
-                        table_action.insert(es, row.to_vec());
-                    } else {
-                        table_action.lookup(es, row);
-                    }
+        let write_into_db = |es, _| {
+            for row in parsed_contents.iter() {
+                if use_insert {
+                    table_action.insert(es, row.to_vec());
+                } else {
+                    table_action.lookup(es, row);
                 }
-                Some(unit_val)
-            }));
+            }
+            Some(unit_val)
+        };
 
-        let mut translator = BackendRule::new(
-            self.backend.new_rule("input_file", false),
-            &self.functions,
-            &self.type_info,
-        );
 
-        translator.rb.call_external_func(
-            ext_id,
-            &[],
-            egglog_bridge::ColumnTy::Primitive(unit_id),
-            || "this function will never panic".to_string(),
-        );
-
-        let id = translator.build();
-        let _ = self.backend.run_rules(&[id]).unwrap();
-        self.backend.free_rule(id);
-        self.backend.free_external_func(ext_id);
+        self.backend.with_execution_state(write_into_db);
+        self.backend.flush_updates();
 
         log::info!("Read {num_facts} facts into {func_name} from '{file}'.");
         Ok(())
