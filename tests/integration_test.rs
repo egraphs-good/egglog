@@ -21,7 +21,7 @@ fn test_simple_extract1() {
     let ExtractReport::Best { cost, .. } = report else {
         panic!();
     };
-    assert_eq!(cost, 3);
+    assert_eq!(cost, 3.);
 }
 
 #[test]
@@ -57,7 +57,7 @@ fn test_simple_extract2() {
     let ExtractReport::Best { cost, .. } = report else {
         panic!();
     };
-    assert_eq!(cost, 4);
+    assert_eq!(cost, 4.);
 }
 
 #[test]
@@ -91,7 +91,7 @@ fn test_simple_extract3() {
     let ExtractReport::Best { cost, .. } = report else {
         panic!();
     };
-    assert_eq!(cost, 2);
+    assert_eq!(cost, 2.);
 }
 
 #[test]
@@ -149,7 +149,7 @@ fn test_simple_extract5() {
     let ExtractReport::Best { cost, .. } = report else {
         panic!();
     };
-    assert_eq!(cost, 0);
+    assert_eq!(cost, 0.);
 }
 
 #[test]
@@ -176,7 +176,7 @@ fn test_simple_extract6() {
     let ExtractReport::Best { cost, .. } = report else {
         panic!();
     };
-    assert_eq!(cost, 0);
+    assert_eq!(cost, 0.);
 }
 
 #[test]
@@ -224,7 +224,7 @@ fn test_simple_extract7() {
     let ExtractReport::Best { cost, .. } = report else {
         panic!();
     };
-    assert_eq!(cost, 2);
+    assert_eq!(cost, 2.);
 }
 
 #[test]
@@ -252,7 +252,7 @@ fn test_simple_extract8() {
     let ExtractReport::Best { cost, .. } = report else {
         panic!();
     };
-    assert_eq!(cost, 10);
+    assert_eq!(cost, 10.);
 }
 
 #[test]
@@ -273,7 +273,7 @@ fn test_simple_extract9() {
             (constructor atob (NodeA) NodeB)
             (constructor btoc (NodeB) NodeC)
 
-            (constructor bar () Foo :cost 9223372036854775807)
+            (constructor bar () Foo :cost inf)
             (constructor barbar (Foo Foo) Foo :cost 2)
 
             (constructor groundedA (Foo) NodeA)
@@ -296,7 +296,7 @@ fn test_simple_extract9() {
     let ExtractReport::Best { cost, .. } = report else {
         panic!();
     };
-    assert_eq!(cost, usize::MAX);
+    assert_eq!(cost, f64::INFINITY);
 
     egraph
         .parse_and_run_program(
@@ -311,7 +311,7 @@ fn test_simple_extract9() {
     let ExtractReport::Best { cost, .. } = report else {
         panic!();
     };
-    assert_eq!(cost, usize::MAX);
+    assert_eq!(cost, f64::INFINITY);
 
     egraph
         .parse_and_run_program(
@@ -326,7 +326,7 @@ fn test_simple_extract9() {
     let ExtractReport::Best { cost, .. } = report else {
         panic!();
     };
-    assert_eq!(cost, usize::MAX);
+    assert_eq!(cost, f64::INFINITY);
 }
 
 #[test]

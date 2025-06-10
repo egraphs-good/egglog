@@ -174,6 +174,20 @@ impl Sexp {
         )
     }
 
+    pub fn expect_cost(&self, e: &'static str) -> Result<extract::DefaultCost, ParseError> {
+        if let Sexp::Literal(Literal::Int(x), _) = self {
+            if *x >= 0 {
+                return Ok(extract::DefaultCost::new(*x as f64).unwrap());
+            }
+        }
+        if let Sexp::Literal(Literal::Float(x), _) = self {
+            if x.is_sign_positive() && !x.is_nan() {
+                return Ok(extract::DefaultCost::new(x.into_inner()).unwrap());
+            }
+        }
+        error!(self.span(), "expected {e} to be a positive literal")
+    }
+
     pub fn expect_string(&self, e: &'static str) -> Result<String, ParseError> {
         if let Sexp::Literal(Literal::String(x), _) = self {
             return Ok(x.to_string());
@@ -394,7 +408,7 @@ impl Parser {
                     match self.parse_options(rest)?.as_slice() {
                         [] => {}
                         [(":unextractable", [])] => unextractable = true,
-                        [(":cost", [c])] => cost = Some(c.expect_uint("cost")?),
+                        [(":cost", [c])] => cost = Some(c.expect_cost("cost")?),
                         _ => return error!(span, "could not parse constructor options"),
                     }
 
@@ -851,7 +865,7 @@ impl Parser {
 
         let (types, cost) = match tail {
             [types @ .., Sexp::Atom(o, _), c] if *o == ":cost".into() => {
-                (types, Some(c.expect_uint("cost")?))
+                (types, Some(c.expect_cost("cost")?))
             }
             types => (types, None),
         };

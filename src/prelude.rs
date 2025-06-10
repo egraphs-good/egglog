@@ -569,9 +569,10 @@ pub fn add_constructor(
     egraph: &mut EGraph,
     name: &str,
     schema: Schema,
-    cost: Option<usize>,
+    cost: Option<f64>,
     unextractable: bool,
 ) -> Result<Vec<String>, Error> {
+    let cost = cost.map(|c| NotNan::new(c).unwrap());
     egraph.run_program(vec![Command::Constructor {
         span: span!(),
         name: name.into(),
@@ -606,7 +607,7 @@ macro_rules! datatype {
                 input: vec![$(stringify!($args).into()),*],
                 output: stringify!($sort).into(),
             },
-            [$($cost)*].first().copied(),
+            [$(($cost as f64))*].first().copied(),
             false,
         )?;)*
     };

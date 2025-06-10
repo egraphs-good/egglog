@@ -384,7 +384,7 @@ where
         span: Span,
         name: Symbol,
         schema: Schema,
-        cost: Option<usize>,
+        cost: Option<DefaultCost>,
         unextractable: bool,
     },
 
@@ -861,7 +861,7 @@ where
     pub subtype: FunctionSubtype,
     pub schema: Schema,
     pub merge: Option<GenericExpr<Head, Leaf>>,
-    pub cost: Option<usize>,
+    pub cost: Option<extract::DefaultCost>,
     pub unextractable: bool,
     /// Globals are desugared to functions, with this flag set to true.
     /// This is used by visualization to handle globals differently.
@@ -874,7 +874,7 @@ pub struct Variant {
     pub span: Span,
     pub name: Symbol,
     pub types: Vec<Symbol>,
-    pub cost: Option<usize>,
+    pub cost: Option<DefaultCost>,
 }
 
 impl Display for Variant {
@@ -931,7 +931,7 @@ impl FunctionDecl {
         span: Span,
         name: Symbol,
         schema: Schema,
-        cost: Option<usize>,
+        cost: Option<DefaultCost>,
         unextractable: bool,
     ) -> Self {
         Self {

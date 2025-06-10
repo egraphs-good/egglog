@@ -38,7 +38,9 @@ pub use core_relations::{ExecutionState, Value};
 use egglog_bridge::{ColumnTy, IterationReport, QueryEntry};
 use extract::{Extractor, TreeAdditiveCostModel};
 use indexmap::map::Entry;
+use num::Zero;
 use numeric_id::DenseIdMap;
+use ordered_float::NotNan;
 use prelude::*;
 use scheduler::{SchedulerId, SchedulerRecord};
 pub use serialize::{SerializeConfig, SerializedNode};
@@ -57,6 +59,8 @@ pub use typechecking::TypeError;
 use typechecking::TypeInfo;
 use util::*;
 use web_time::Duration;
+
+use crate::extract::DefaultCost;
 
 pub type ArcSort = Arc<dyn Sort>;
 
@@ -589,7 +593,9 @@ impl EGraph {
                 for (value, sort) in row.vals.iter().zip(&func.schema.input) {
                     let (_, term) = extractor
                         .extract_best_with_sort(self, &mut termdag, *value, sort.clone())
-                        .unwrap_or_else(|| (0, termdag.var("Unextractable".into())));
+                        .unwrap_or_else(|| {
+                            (DefaultCost::zero(), termdag.var("Unextractable".into()))
+                        });
                     children.push(term);
                 }
                 inputs.push(termdag.app(sym, children));
@@ -598,7 +604,9 @@ impl EGraph {
                     let sort = &func.schema.output;
                     let (_, term) = extractor
                         .extract_best_with_sort(self, &mut termdag, value, sort.clone())
-                        .unwrap_or_else(|| (0, termdag.var("Unextractable".into())));
+                        .unwrap_or_else(|| {
+                            (DefaultCost::zero(), termdag.var("Unextractable".into()))
+                        });
                     output.as_mut().unwrap().push(term);
                 }
                 true

@@ -1,4 +1,4 @@
-use num::traits::{CheckedAdd, CheckedDiv, CheckedMul, CheckedSub, One, Signed, ToPrimitive, Zero};
+use num::traits::{CheckedAdd, CheckedDiv, CheckedMul, CheckedSub, One, Signed, ToPrimitive};
 use num::{BigInt, BigRational};
 pub use ordered_float::OrderedFloat;
 use std::any::TypeId;

@@ -168,7 +168,10 @@ impl EGraph {
                 egraph_serialize::Node {
                     op: func.decl.name.to_string(),
                     eclass: class_id.clone(),
-                    cost: NotNan::new(func.decl.cost.unwrap_or(1) as f64).unwrap(),
+                    cost: func
+                        .decl
+                        .cost
+                        .unwrap_or(<DefaultCost as extract::Cost>::one()),
                     children,
                     subsumed,
                 },
