@@ -6,7 +6,7 @@ use std::fmt::Debug;
 use std::ops::{Shl, Shr};
 use std::{any::Any, sync::Arc};
 
-pub use core_relations::{Container, Containers, ExecutionState, Primitives, Rebuilder};
+pub use core_relations::{Container, Containers, ExecutionState, Primitives, Rebuilder, Boxed};
 pub use egglog_bridge::ColumnTy;
 
 use crate::ast::Literal;
