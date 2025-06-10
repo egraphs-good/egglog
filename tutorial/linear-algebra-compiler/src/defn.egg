@@ -10,9 +10,6 @@
     (MMul Matrix Matrix)
     (Transpose Matrix))
 
-(function nrows (Matrix) i64 :no-merge)
-(function ncols (Matrix) i64 :no-merge)
-
 ;; Commutativity
 (rewrite (SAdd x y) (SAdd y x))
 (rewrite (SMul x y) (SMul y x))
@@ -40,3 +37,44 @@
 (rewrite (Transpose (Transpose A)) A)
 (birewrite (Transpose (MMul A B)) (MMul (Transpose B) (Transpose A)))
 (birewrite (Transpose (MAdd A B)) (MAdd (Transpose A) (Transpose B)))
+
+;; Analysis for dimensions of matrices
+(function nrows (Matrix) i64 :no-merge)
+(function ncols (Matrix) i64 :no-merge)
+
+(rule (
+    (= e (Var _ i j))
+) (
+    (set (nrows e) i)
+    (set (ncols e) j)
+))
+(rule (
+    (= e (Scale A x))
+    (= i (nrows A)) (= j (ncols A))
+) (
+    (set (nrows e) i)
+    (set (ncols e) j)
+))
+(rule (
+    (= e (MAdd A B))
+    (= i (nrows A)) (= j (ncols A))
+    (= i (nrows B)) (= j (ncols B))
+) (
+    (set (nrows e) i)
+    (set (ncols e) j)
+))
+(rule (
+    (= e (MMul A B))
+    (= i (nrows A)) (= k (ncols A))
+    (= k (nrows B)) (= j (ncols B))
+) (
+    (set (nrows e) i)
+    (set (ncols e) j)
+))
+(rule (
+    (= e (Transpose A))
+    (= i (nrows A)) (= j (ncols A))
+) (
+    (set (nrows e) j)
+    (set (ncols e) i)
+))
