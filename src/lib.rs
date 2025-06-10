@@ -17,6 +17,7 @@ pub mod constraint;
 mod core;
 pub mod extract;
 pub mod prelude;
+pub mod scheduler;
 mod serialize;
 pub mod sort;
 mod termdag;
@@ -27,6 +28,7 @@ pub mod util;
 // both this crate and other crates by referring to `::egglog`.
 extern crate self as egglog;
 pub use add_primitive::add_primitive;
+use scheduler::SchedulerRecord;
 
 use ast::*;
 #[cfg(feature = "bin")]
@@ -37,17 +39,10 @@ use core_relations::{make_external_func, ExternalFunctionId};
 pub use core_relations::{ExecutionState, Value};
 use egglog_bridge::{ColumnTy, IterationReport, QueryEntry};
 use extract::{Extractor, TreeAdditiveCostModel};
+use indexmap::map::Entry;
 use prelude::*;
 pub use serialize::{SerializeConfig, SerializedNode};
 use sort::*;
-pub use termdag::{Term, TermDag, TermId};
-use typechecking::{TypeError, TypeInfo};
-use util::*;
-
-use indexmap::map::Entry;
-use thiserror::Error;
-use web_time::Duration;
-
 use std::fmt::{Debug, Display, Formatter};
 use std::fs::File;
 use std::hash::Hash;
@@ -56,6 +51,12 @@ use std::iter::once;
 use std::path::PathBuf;
 use std::str::FromStr;
 use std::sync::Arc;
+pub use termdag::{Term, TermDag, TermId};
+use thiserror::Error;
+pub use typechecking::TypeError;
+use typechecking::TypeInfo;
+use util::*;
+use web_time::Duration;
 
 pub type ArcSort = Arc<dyn Sort>;
 
@@ -257,7 +258,6 @@ pub struct EGraph {
     functions: IndexMap<Symbol, Function>,
     rulesets: IndexMap<Symbol, Ruleset>,
     interactive_mode: bool,
-    timestamp: u32,
     pub run_mode: RunMode,
     pub fact_directory: Option<PathBuf>,
     pub seminaive: bool,
@@ -269,6 +269,7 @@ pub struct EGraph {
     overall_run_report: RunReport,
     /// Messages to be printed to the user. If this is `None`, then we are ignoring messages.
     msgs: Option<Vec<String>>,
+    schedulers: Vec<SchedulerRecord>,
 }
 
 #[derive(Clone)]
@@ -313,7 +314,6 @@ impl Default for EGraph {
             pushed_egraph: Default::default(),
             functions: Default::default(),
             rulesets: Default::default(),
-            timestamp: 0,
             run_mode: RunMode::Normal,
             interactive_mode: false,
             fact_directory: None,
@@ -323,6 +323,7 @@ impl Default for EGraph {
             overall_run_report: Default::default(),
             msgs: Some(vec![]),
             type_info: Default::default(),
+            schedulers: vec![],
         };
 
         add_leaf_sort(&mut eg, UnitSort, span!()).unwrap();
@@ -730,7 +731,6 @@ impl EGraph {
         report.union(&subreport);
 
         log::debug!("database size: {}", self.num_tuples());
-        self.timestamp += 1;
 
         report
     }
@@ -743,7 +743,7 @@ impl EGraph {
         ) {
             match &rulesets[&ruleset] {
                 Ruleset::Rules(rules) => {
-                    for id in rules.values() {
+                    for (_, id) in rules.values() {
                         ids.push(*id);
                     }
                 }
@@ -796,7 +796,7 @@ impl EGraph {
     ) -> Result<Symbol, Error> {
         let core_rule =
             rule.to_canonicalized_core_rule(&self.type_info, &mut self.parser.symbol_gen)?;
-        let (query, actions) = (core_rule.body, core_rule.head);
+        let (query, actions) = (&core_rule.body, &core_rule.head);
 
         let rule_id = {
             let mut translator = BackendRule::new(
@@ -804,8 +804,8 @@ impl EGraph {
                 &self.functions,
                 &self.type_info,
             );
-            translator.query(&query, false);
-            translator.actions(&actions)?;
+            translator.query(query, false);
+            translator.actions(actions)?;
             translator.build()
         };
 
@@ -816,7 +816,7 @@ impl EGraph {
                         indexmap::map::Entry::Occupied(_) => {
                             panic!("Rule '{name}' was already present")
                         }
-                        indexmap::map::Entry::Vacant(e) => e.insert(rule_id),
+                        indexmap::map::Entry::Vacant(e) => e.insert((core_rule, rule_id)),
                     };
                     Ok(name)
                 }
@@ -1421,6 +1421,10 @@ impl EGraph {
         } else {
             vec![]
         }
+    }
+
+    pub fn get_size(&self, function_id: egglog_bridge::FunctionId) -> usize {
+        self.backend.table_size(function_id)
     }
 }
 
