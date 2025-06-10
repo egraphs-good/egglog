@@ -2,7 +2,36 @@
 
 ## [Unreleased] - ReleaseDate
 
-## [0.4.0] - 2024-1-TODO
+## [0.5.0] - 2025-6-10
+
+This is the last major release before we switch to a database-first, highly parallel new backend.
+
+Improvements
+
+- Make `EGraph` thread-safe (#517)
+- Support for egglog-python (#522)
+- Throws type errors when unioning non-EqSort values (#561)
+- Improvements to tests (#529)
+- Improvements to error messages (#555)
+- Makes union-find struct externally accessible (for container implementation) (#560)
+- Disallow shadowing and interpret underscores as wildcards (#565)
+- Faster `(push)` implementation
+
+Bug fixes
+
+- Fix value generations when `subsume`-ing a tuple in a relation (#569)
+- Fixes to the new parser (#559)
+- Rebuild after running commands instead of before (#573)
+
+Benchmarks, serialization, and web demo
+
+- Improvements to serialization (#520)
+- Added eggcc benchmarks (#527)
+- Fixes web demo escaping (#564, #566)
+- Moves webdemo into a separate repository (#591)
+- Fixes to Codspeed (#572)
+
+## [0.4.0] - 2025-1-20
 
 Semantic change (BREAKING)
 
@@ -130,6 +159,7 @@ As of yet, the rust interface is not documented or well supported. We reccomend 
 [0.2.0]: https://github.com/egraphs-good/egglog/tree/v0.2.0
 [0.3.0]: https://github.com/egraphs-good/egglog/tree/v0.3.0
 [0.4.0]: https://github.com/egraphs-good/egglog/tree/v0.4.0
+[0.5.0]: https://github.com/egraphs-good/egglog/tree/v0.5.0
 
 
 See release-instructions.md for more information on how to do a release.
