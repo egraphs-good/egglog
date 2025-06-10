@@ -1,0 +1,17 @@
+(datatype Scalar
+    (Num i64)
+    (SAdd Scalar Scalar)
+    (SMul Scalar Scalar))
+
+(datatype Matrix
+    (Var String i64 i64)
+    (MScale Matrix Scalar)
+    (MAdd Matrix Matrix)
+    (MMul Matrix Matrix)
+    (Transpose Matrix))
+
+(function nrows (Matrix) i64 :no-merge)
+(function ncols (Matrix) i64 :no-merge)
+
+
+
