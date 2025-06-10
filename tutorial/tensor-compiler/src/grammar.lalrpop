@@ -1,0 +1,7 @@
+grammar;
+
+match {
+    r"\s*" => { }, // skip whitespace
+    r";[^\n\r]*[\n\r]*" => { }, // skip ; comments
+    _
+}

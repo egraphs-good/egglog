@@ -4,6 +4,10 @@ version = "0.1.0"
 edition = "2021"
 
 [dependencies]
+lalrpop-util = "0.22.2"
 egglog = { path = "../../" }
+
+[build-dependencies]
+lalrpop = "0.22.2"
 
 [workspace]
