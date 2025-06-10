@@ -1294,10 +1294,10 @@ pub struct TableAction {
 impl Clone for TableAction {
     fn clone(&self) -> Self {
         Self {
-            table: self.table.clone(),
-            table_math: self.table_math.clone(),
-            default: self.default.clone(),
-            timestamp: self.timestamp.clone(),
+            table: self.table,
+            table_math: self.table_math,
+            default: self.default,
+            timestamp: self.timestamp,
             scratch: Vec::new(),
         }
     }
@@ -1387,12 +1387,17 @@ impl TableAction {
     }
 
     /// Subsume a row in this table.
-    pub fn subsume(&self, state: &mut ExecutionState, mut key: Vec<Value>) {
-        let ret_val = self.lookup(state, &key).expect("subsume lookup failed");
-
+    pub fn subsume(&mut self, state: &mut ExecutionState, key: impl Iterator<Item = Value>) {
         let ts = Value::from_usize(state.read_counter(self.timestamp));
+        self.scratch.clear();
+        self.scratch.extend(key);
+
+        let ret_val = self
+            .lookup(state, &self.scratch)
+            .expect("subsume lookup failed");
+
         self.table_math.write_table_row(
-            &mut key,
+            &mut self.scratch,
             RowVals {
                 timestamp: ts,
                 proof: None,
@@ -1400,7 +1405,7 @@ impl TableAction {
                 ret_val: Some(ret_val),
             },
         );
-        state.stage_insert(self.table, &key);
+        state.stage_insert(self.table, &self.scratch);
     }
 }
 
