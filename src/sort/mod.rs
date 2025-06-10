@@ -6,11 +6,10 @@ use std::fmt::Debug;
 use std::ops::{Shl, Shr};
 use std::{any::Any, sync::Arc};
 
-pub use core_relations::{Container, Containers, ExecutionState, Primitives, Rebuilder, Boxed};
+pub use core_relations::{Boxed, Container, Containers, ExecutionState, Primitives, Rebuilder};
 pub use egglog_bridge::ColumnTy;
 
 use crate::ast::Literal;
-use crate::extract::Cost;
 use crate::*;
 
 pub type Z = core_relations::Boxed<BigInt>;
@@ -101,21 +100,6 @@ pub trait Sort: Any + Send + Sync + Debug {
 
     fn register_primitives(self: Arc<Self>, eg: &mut EGraph) {
         let _ = eg;
-    }
-
-    /// Default cost for containers when the cost model does not specify the cost
-    fn default_container_cost(
-        &self,
-        _containers: &Containers,
-        _value: Value,
-        element_costs: &[Cost],
-    ) -> Cost {
-        element_costs.iter().fold(0, |s, c| s.saturating_add(*c))
-    }
-
-    /// Default cost for leaf primitives when the cost model does not specify the cost
-    fn default_leaf_cost(&self, _primitives: &Primitives, _value: Value) -> Cost {
-        1
     }
 
     /// Reconstruct a container value in a TermDag
