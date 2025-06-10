@@ -34,7 +34,9 @@ pub trait CostModel<C: SaturatingAdd + Zero + One> {
         let _egraph = egraph;
         let _sort = sort;
         let _value = value;
-        element_costs.iter().fold(C::zero(), |s, c| s.saturating_add(c))
+        element_costs
+            .iter()
+            .fold(C::zero(), |s, c| s.saturating_add(c))
     }
 
     /// Compute the cost of a primitive, non-container, value
@@ -54,8 +56,12 @@ pub type DefaultCost = usize;
 pub struct TreeAdditiveCostModel {}
 
 impl CostModel<DefaultCost> for TreeAdditiveCostModel {
-
-    fn fold(&self, _head: Symbol, children_cost: &[DefaultCost], head_cost: DefaultCost) -> DefaultCost {
+    fn fold(
+        &self,
+        _head: Symbol,
+        children_cost: &[DefaultCost],
+        head_cost: DefaultCost,
+    ) -> DefaultCost {
         children_cost
             .iter()
             .fold(head_cost, |s, c| s.saturating_add(*c))
