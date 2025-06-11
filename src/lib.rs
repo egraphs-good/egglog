@@ -35,7 +35,9 @@ use constraint::{Constraint, Problem, SimpleTypeConstraint, TypeConstraint};
 use core::{AtomTerm, ResolvedAtomTerm, ResolvedCall};
 use core_relations::{make_external_func, ExternalFunctionId};
 pub use core_relations::{ExecutionState, Value};
+pub use egglog_bridge::FunctionRow;
 use egglog_bridge::{ColumnTy, IterationReport, QueryEntry};
+use extract::{CostModel, DefaultCost};
 use extract::{Extractor, TreeAdditiveCostModel};
 use indexmap::map::Entry;
 use numeric_id::DenseIdMap;
@@ -283,12 +285,38 @@ pub trait UserDefinedCommand: Send + Sync {
     fn update(&self, egraph: &mut EGraph, args: &[Expr]) -> Result<(), Error>;
 }
 
+/// A function in the e-graph.
+///
+/// This contains the schema information of the function and
+/// the backend id of the function in the e-graph.
 #[derive(Clone)]
 pub struct Function {
     decl: ResolvedFunctionDecl,
-    pub schema: ResolvedSchema,
-    pub can_subsume: bool,
+    schema: ResolvedSchema,
+    can_subsume: bool,
     backend_id: egglog_bridge::FunctionId,
+}
+
+impl Function {
+    /// Get the name of the function.
+    pub fn name(&self) -> Symbol {
+        self.decl.name
+    }
+
+    /// Get the schema of the function.
+    pub fn schema(&self) -> &ResolvedSchema {
+        &self.schema
+    }
+
+    /// Whether the function can subsume other functions.
+    pub fn can_subsume(&self) -> bool {
+        self.can_subsume
+    }
+
+    /// Get the corresponding [`FunctionId`] of the function in the backend.
+    pub fn function_id(&self) -> egglog_bridge::FunctionId {
+        self.backend_id
+    }
 }
 
 #[derive(Clone, Debug)]
@@ -719,25 +747,40 @@ impl EGraph {
         }
     }
 
+    /// Extract a value to a [`TermDag`] and [`Term`] in the [`TermDag`] using the default cost model.
+    pub fn extract_value(
+        &self,
+        sort: &ArcSort,
+        value: Value,
+    ) -> Result<(TermDag, Term, DefaultCost), Error> {
+        self.extract_value_with_cost_model(sort, value, TreeAdditiveCostModel::default())
+    }
+
     /// Extract a value to a [`TermDag`] and [`Term`] in the [`TermDag`].
     /// Note that the `TermDag` may contain a superset of the nodes in the `Term`.
     /// See also `extract_value_to_string` for convenience.
-    pub fn extract_value(&self, sort: &ArcSort, value: Value) -> Result<(TermDag, Term), Error> {
-        let extractor = Extractor::compute_costs_from_rootsorts(
-            Some(vec![sort.clone()]),
-            self,
-            TreeAdditiveCostModel::default(),
-        );
+    pub fn extract_value_with_cost_model<CM: CostModel<DefaultCost> + 'static>(
+        &self,
+        sort: &ArcSort,
+        value: Value,
+        cost_model: CM,
+    ) -> Result<(TermDag, Term, DefaultCost), Error> {
+        let extractor =
+            Extractor::compute_costs_from_rootsorts(Some(vec![sort.clone()]), self, cost_model);
         let mut termdag = TermDag::default();
-        let (_, term) = extractor.extract_best(self, &mut termdag, value).unwrap();
-        Ok((termdag, term))
+        let (cost, term) = extractor.extract_best(self, &mut termdag, value).unwrap();
+        Ok((termdag, term, cost))
     }
 
     /// Extract a value to a string for printing.
     /// See also `extract_value` for more control.
-    pub fn extract_value_to_string(&self, sort: &ArcSort, value: Value) -> Result<String, Error> {
-        let (termdag, term) = self.extract_value(sort, value)?;
-        Ok(termdag.to_string(&term))
+    pub fn extract_value_to_string(
+        &self,
+        sort: &ArcSort,
+        value: Value,
+    ) -> Result<(String, DefaultCost), Error> {
+        let (termdag, term, cost) = self.extract_value(sort, value)?;
+        Ok((termdag.to_string(&term), cost))
     }
 
     fn run_rules(&mut self, span: &Span, config: &ResolvedRunConfig) -> RunReport {
@@ -1443,7 +1486,13 @@ impl EGraph {
         self.backend.primitives().get::<T>(x)
     }
 
-    pub(crate) fn print_msg(&mut self, msg: String) {
+    /// Print a message to egglog's message buffer. Used by user-defined
+    /// commands to print messages to the user.
+    ///
+    /// The message buffer is flushed every time a command
+    /// is run. Compared to `println!`, this allows users to
+    /// capture printed messages without redirecting stdout.
+    pub fn print_msg(&mut self, msg: String) {
         if let Some(ref mut msgs) = self.msgs {
             msgs.push(msg);
         }
@@ -1460,6 +1509,11 @@ impl EGraph {
 
     pub fn get_size(&self, function_id: egglog_bridge::FunctionId) -> usize {
         self.backend.table_size(function_id)
+    }
+
+    pub fn lookup_function(&self, name: &Symbol, key: &[Value]) -> Option<Value> {
+        let func = self.functions.get(name).unwrap().backend_id;
+        self.backend.lookup_id(func, key)
     }
 }
 

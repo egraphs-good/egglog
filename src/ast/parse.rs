@@ -821,7 +821,10 @@ impl Parser {
         })
     }
 
-    fn rec_datatype(&mut self, sexp: &Sexp) -> Result<(Span, Symbol, Subdatatypes), ParseError> {
+    pub fn rec_datatype(
+        &mut self,
+        sexp: &Sexp,
+    ) -> Result<(Span, Symbol, Subdatatypes), ParseError> {
         let (head, tail, span) = sexp.expect_call("datatype")?;
 
         Ok(match head.into() {
