@@ -186,6 +186,12 @@ impl TermDag {
 
         String::from_utf8(result).unwrap()
     }
+
+    pub fn parse(&mut self, str: &str) -> Result<Term, ParseError> {
+        // Ok to create new parser here, since parsing expressions doesn't use symbol gen
+        let mut parser = Parser::default();
+        Ok(self.expr_to_term(&parser.get_expr_from_string(None, str)?))
+    }
 }
 
 #[cfg(test)]
