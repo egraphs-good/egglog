@@ -1,2 +1,2 @@
-(include "tests/path.egg")
+(include "tests/web-demo/path.egg")
 (check (path 1 3))
