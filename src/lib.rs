@@ -919,7 +919,7 @@ impl EGraph {
     pub fn eval_expr(&mut self, expr: &Expr) -> Result<(ArcSort, Value), Error> {
         let span = expr.span();
         let command = Command::Action(Action::Expr(span.clone(), expr.clone()));
-        let resolved_commands = self.process_command(command)?;
+        let resolved_commands = self.process_command(command, false)?;
         assert_eq!(resolved_commands.len(), 1);
         let resolved_command = resolved_commands.into_iter().next().unwrap();
         let resolved_expr = match resolved_command {
@@ -1391,15 +1391,17 @@ impl EGraph {
         Ok(())
     }
 
-    fn process_command(&mut self, command: Command) -> Result<Vec<ResolvedNCommand>, Error> {
+    fn process_command(&mut self, command: Command, show_egglog_only: bool) -> Result<Vec<ResolvedNCommand>, Error> {
         let program = desugar::desugar_program(vec![command], &mut self.parser, self.seminaive)?;
 
-        let program = self.typecheck_program(&program)?;
+        let mut program = self.typecheck_program(&program)?;
 
-        let program = remove_globals::remove_globals(program, &mut self.parser.symbol_gen);
+        if !show_egglog_only {
+            program = remove_globals::remove_globals(program, &mut self.parser.symbol_gen);
 
-        for command in &program {
-            self.names.check_shadowing(command)?;
+            for command in &program {
+                self.names.check_shadowing(command)?;
+            }
         }
 
         Ok(program)
@@ -1408,11 +1410,12 @@ impl EGraph {
     /// Run a program, represented as an AST.
     /// Return a list of messages.
     pub fn run_program(&mut self, program: Vec<Command>) -> Result<Vec<String>, Error> {
+        let show_egglog_only = self.run_mode.show_egglog();
         for command in program {
             // Important to process each command individually
             // because push and pop create new scopes
-            for processed in self.process_command(command)? {
-                if self.run_mode.show_egglog() {
+            for processed in self.process_command(command, show_egglog_only)? {
+                if show_egglog_only {
                     // In show_egglog mode, we still need to run scope-related commands (Push/Pop) to make
                     // the program well-scoped.
                     match &processed {
@@ -1422,19 +1425,19 @@ impl EGraph {
                         _ => {}
                     };
                     self.print_msg(processed.to_command().to_string());
-                    continue;
+                } else {
+
+                    let result = self.run_command(processed);
+
+                    if self.is_interactive_mode() {
+                        self.print_msg(match result {
+                            Ok(()) => "(done)".into(),
+                            Err(_) => "(error)".into(),
+                        });
+                    }
+
+                    result?
                 }
-
-                let result = self.run_command(processed);
-
-                if self.is_interactive_mode() {
-                    self.print_msg(match result {
-                        Ok(()) => "(done)".into(),
-                        Err(_) => "(error)".into(),
-                    });
-                }
-
-                result?
             }
         }
         log::logger().flush();
@@ -1544,14 +1547,28 @@ impl EGraph {
         }
     }
 
+    /// Get the size of a function in the e-graph.
+    /// 
+    /// `panics` if the function does not exist.
     pub fn get_size(&self, func: &Symbol) -> usize {
         let function_id = self.functions.get(func).unwrap().backend_id;
         self.backend.table_size(function_id)
     }
 
+    /// Lookup a tuple in afunction in the e-graph.
+    /// 
+    /// Returns `None` if the tuple does not exist.
+    /// `panics` if the function does not exist.
     pub fn lookup_function(&self, name: &Symbol, key: &[Value]) -> Option<Value> {
         let func = self.functions.get(name).unwrap().backend_id;
         self.backend.lookup_id(func, key)
+    }
+
+    /// Get a function by name.
+    /// 
+    /// Returns `None` if the function does not exist.
+    pub fn get_function(&self, name: &Symbol) -> Option<&Function> {
+        self.functions.get(name)
     }
 }
 
