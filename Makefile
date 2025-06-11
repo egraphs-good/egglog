@@ -37,32 +37,3 @@ json: $(patsubst %.egg,%.json,$(filter-out $(wildcard tests/repro-*.egg),$(wildc
 
 rm-graphs:
 	rm -f tests/*.dot tests/*.svg
-
-# TODO: remove before merging
-collect-todos:
-	@ cargo nextest run -r --no-fail-fast -- --skip math_microbenchmark 2>&1 >/dev/null \
-	| grep "not yet implemented:" \
-	| sort | uniq -c | sort -n
-	@ cargo nextest run -r --no-fail-fast -- --skip math_microbenchmark 2>&1 >/dev/null \
-	| grep "     Summary" \
-
-# TODO: remove before merging
-collect-wins:
-	@ cargo nextest run -r --no-fail-fast -- --skip math_microbenchmark 2>&1 >/dev/null \
-	| grep "PASS " \
-	| grep ":files" \
-	| grep -v "fail-typecheck" \
-	| grep -v "resugar" \
-	| sed 's/^.*egglog::files //' \
-	| sort | uniq -c | sort -n
-	@ cargo nextest run -r --no-fail-fast -- --skip math_microbenchmark 2>&1 >/dev/null \
-	| grep "     Summary" \
-
-# TODO: remove before merging
-collect-fails:
-	@ cargo nextest run -r --no-fail-fast -- --skip math_microbenchmark 2>&1 >/dev/null \
-	| grep "test panicked:" \
-	| grep -v "not yet implemented:" \
-	| sort | uniq -c | sort -n
-	@ cargo nextest run -r --no-fail-fast -- --skip math_microbenchmark 2>&1 >/dev/null \
-	| grep "     Summary" \

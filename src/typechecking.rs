@@ -663,7 +663,7 @@ pub enum TypeError {
     FunctionTypeMismatch(ArcSort, Vec<ArcSort>, ArcSort, Vec<ArcSort>),
     #[error("{1}\nPresort {0} not found.")]
     PresortNotFound(Symbol, Span),
-    #[error("{}\nFailed to infer a type for: {0}", .0.span())]
+    #[error("{}\nFailed to infer a type for: {}", .0.span(), .0)]
     InferenceFailure(Expr),
     #[error("{1}\nVariable {0} was already defined")]
     AlreadyDefined(Symbol, Span),
@@ -673,7 +673,7 @@ pub enum TypeError {
     LookupInRuleDisallowed(Symbol, Span),
     #[error("All alternative definitions considered failed\n{}", .0.iter().map(|e| format!("  {e}\n")).collect::<Vec<_>>().join(""))]
     AllAlternativeFailed(Vec<TypeError>),
-    #[error("{1}\nCannot union values of sort {}", .0.name())]
+    #[error("{}\nCannot union values of sort {}", .1, .0.name())]
     NonEqsortUnion(ArcSort, Span),
 }
 
