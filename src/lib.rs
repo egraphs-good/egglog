@@ -37,8 +37,7 @@ use core_relations::{make_external_func, ExternalFunctionId};
 pub use core_relations::{ExecutionState, Value};
 pub use egglog_bridge::FunctionRow;
 use egglog_bridge::{ColumnTy, IterationReport, QueryEntry};
-use extract::{CostModel, DefaultCost};
-use extract::{Extractor, TreeAdditiveCostModel};
+use extract::{CostModel, DefaultCost, Extractor, TreeAdditiveCostModel};
 use indexmap::map::Entry;
 use numeric_id::DenseIdMap;
 use prelude::*;
@@ -308,14 +307,9 @@ impl Function {
         &self.schema
     }
 
-    /// Whether the function can subsume other functions.
+    /// Whether this function supports subsumption.
     pub fn can_subsume(&self) -> bool {
         self.can_subsume
-    }
-
-    /// Get the corresponding [`FunctionId`] of the function in the backend.
-    pub fn function_id(&self) -> egglog_bridge::FunctionId {
-        self.backend_id
     }
 }
 
@@ -748,6 +742,7 @@ impl EGraph {
     }
 
     /// Extract a value to a [`TermDag`] and [`Term`] in the [`TermDag`] using the default cost model.
+    /// See also [`extract_value_with_cost_model`] for more control.
     pub fn extract_value(
         &self,
         sort: &ArcSort,
@@ -758,7 +753,7 @@ impl EGraph {
 
     /// Extract a value to a [`TermDag`] and [`Term`] in the [`TermDag`].
     /// Note that the `TermDag` may contain a superset of the nodes in the `Term`.
-    /// See also `extract_value_to_string` for convenience.
+    /// See also [`extract_value_to_string`] for convenience.
     pub fn extract_value_with_cost_model<CM: CostModel<DefaultCost> + 'static>(
         &self,
         sort: &ArcSort,
@@ -773,7 +768,7 @@ impl EGraph {
     }
 
     /// Extract a value to a string for printing.
-    /// See also `extract_value` for more control.
+    /// See also [`extract_value`] for more control.
     pub fn extract_value_to_string(
         &self,
         sort: &ArcSort,
@@ -1507,7 +1502,8 @@ impl EGraph {
         }
     }
 
-    pub fn get_size(&self, function_id: egglog_bridge::FunctionId) -> usize {
+    pub fn get_size(&self, func: &Symbol) -> usize {
+        let function_id = self.functions.get(func).unwrap().backend_id;
         self.backend.table_size(function_id)
     }
 
