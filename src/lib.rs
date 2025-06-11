@@ -166,38 +166,36 @@ pub enum ExtractReport {
 }
 
 impl RunReport {
-    fn union_times(times: &mut HashMap<String, Duration>, other_times: &HashMap<String, Duration>) {
+    fn union_times(times: &mut HashMap<String, Duration>, other_times: HashMap<String, Duration>) {
         for (k, v) in other_times {
-            let entry = times.entry(k.clone()).or_default();
-            *entry += *v;
+            *times.entry(k).or_default() += v;
         }
     }
 
-    fn union_counts(counts: &mut HashMap<String, usize>, other_counts: &HashMap<String, usize>) {
+    fn union_counts(counts: &mut HashMap<String, usize>, other_counts: HashMap<String, usize>) {
         for (k, v) in other_counts {
-            let entry = counts.entry(k.clone()).or_default();
-            *entry += *v;
+            *counts.entry(k).or_default() += v;
         }
     }
 
-    pub fn union(&mut self, other: &Self) {
+    pub fn union(&mut self, other: Self) {
         self.updated |= other.updated;
         RunReport::union_times(
             &mut self.search_and_apply_time_per_rule,
-            &other.search_and_apply_time_per_rule,
+            other.search_and_apply_time_per_rule,
         );
-        RunReport::union_counts(&mut self.num_matches_per_rule, &other.num_matches_per_rule);
+        RunReport::union_counts(&mut self.num_matches_per_rule, other.num_matches_per_rule);
         RunReport::union_times(
             &mut self.search_and_apply_time_per_ruleset,
-            &other.search_and_apply_time_per_ruleset,
+            other.search_and_apply_time_per_ruleset,
         );
         RunReport::union_times(
             &mut self.merge_time_per_ruleset,
-            &other.merge_time_per_ruleset,
+            other.merge_time_per_ruleset,
         );
         RunReport::union_times(
             &mut self.rebuild_time_per_ruleset,
-            &other.rebuild_time_per_ruleset,
+            other.rebuild_time_per_ruleset,
         );
     }
 }
@@ -712,8 +710,9 @@ impl EGraph {
                 let mut report = RunReport::default();
                 for _i in 0..*limit {
                     let rec = self.run_schedule(sched);
-                    report.union(&rec);
-                    if !rec.updated {
+                    let updated = rec.updated;
+                    report.union(rec);
+                    if !updated {
                         break;
                     }
                 }
@@ -723,8 +722,9 @@ impl EGraph {
                 let mut report = RunReport::default();
                 loop {
                     let rec = self.run_schedule(sched);
-                    report.union(&rec);
-                    if !rec.updated {
+                    let updated = rec.updated;
+                    report.union(rec);
+                    if !updated {
                         break;
                     }
                 }
@@ -733,7 +733,7 @@ impl EGraph {
             ResolvedSchedule::Sequence(_span, scheds) => {
                 let mut report = RunReport::default();
                 for sched in scheds {
-                    report.union(&self.run_schedule(sched));
+                    report.union(self.run_schedule(sched));
                 }
                 report
             }
@@ -793,7 +793,7 @@ impl EGraph {
         }
 
         let subreport = self.step_rules(ruleset);
-        report.union(&subreport);
+        report.union(subreport);
 
         log::debug!("database size: {}", self.num_tuples());
 
@@ -1097,7 +1097,7 @@ impl EGraph {
                 let report = self.run_schedule(&sched);
                 log::info!("Ran schedule {}.", sched);
                 log::info!("Report: {}", report);
-                self.overall_run_report.union(&report);
+                self.overall_run_report.union(report.clone());
                 self.recent_run_report = Some(report);
             }
             ResolvedNCommand::PrintOverallStatistics => {
