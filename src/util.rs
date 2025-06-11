@@ -29,16 +29,9 @@ pub(crate) type HEntry<'a, A, B> = Entry<'a, A, B>;
 pub type IndexMap<K, V> = indexmap::IndexMap<K, V, BuildHasher>;
 pub type IndexSet<K> = indexmap::IndexSet<K, BuildHasher>;
 
-pub(crate) fn concat_vecs<T>(to: &mut Vec<T>, mut from: Vec<T>) {
-    if to.len() < from.len() {
-        std::mem::swap(to, &mut from)
-    }
-    to.extend(from);
-}
-
 pub(crate) struct ListDisplay<'a, TS>(pub TS, pub &'a str);
 
-impl<'a, TS> Display for ListDisplay<'a, TS>
+impl<TS> Display for ListDisplay<'_, TS>
 where
     TS: Clone + IntoIterator,
     TS::Item: Display,
@@ -50,26 +43,6 @@ where
                 f.write_str(self.1)?;
             }
             Display::fmt(&item, f)?;
-            did_something = true;
-        }
-        Ok(())
-    }
-}
-
-pub(crate) struct ListDebug<'a, TS>(pub TS, pub &'a str);
-
-impl<'a, TS> Debug for ListDebug<'a, TS>
-where
-    TS: Clone + IntoIterator,
-    TS::Item: Debug,
-{
-    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        let mut did_something = false;
-        for item in self.0.clone().into_iter() {
-            if did_something {
-                f.write_str(self.1)?;
-            }
-            Debug::fmt(&item, f)?;
             did_something = true;
         }
         Ok(())

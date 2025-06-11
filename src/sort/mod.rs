@@ -1,8 +1,21 @@
-#[macro_use]
-mod macros;
-use lazy_static::lazy_static;
+use num::traits::{CheckedAdd, CheckedDiv, CheckedMul, CheckedSub, One, Signed, ToPrimitive, Zero};
+use num::{BigInt, BigRational};
+pub use ordered_float::OrderedFloat;
+use std::any::TypeId;
 use std::fmt::Debug;
+use std::ops::{Shl, Shr};
 use std::{any::Any, sync::Arc};
+
+pub use core_relations::{Boxed, Container, Containers, ExecutionState, Primitives, Rebuilder};
+pub use egglog_bridge::ColumnTy;
+
+use crate::ast::Literal;
+use crate::*;
+
+pub type Z = core_relations::Boxed<BigInt>;
+pub type Q = core_relations::Boxed<BigRational>;
+pub type F = core_relations::Boxed<OrderedFloat<f64>>;
+pub type S = SymbolWrapper;
 
 mod bigint;
 pub use bigint::*;
@@ -29,12 +42,23 @@ pub use r#fn::*;
 mod multiset;
 pub use multiset::*;
 
-use crate::constraint::AllEqualTypeConstraint;
-use crate::extract::{Cost, Extractor};
-use crate::*;
-
 pub trait Sort: Any + Send + Sync + Debug {
     fn name(&self) -> Symbol;
+
+    fn column_ty(&self, backend: &egglog_bridge::EGraph) -> ColumnTy;
+
+    /// return the inner sorts if a container sort
+    /// remember that containers can contain containers
+    /// and this only unfolds one level
+    fn inner_sorts(&self) -> Vec<ArcSort> {
+        if self.is_container_sort() {
+            todo!("inner_sorts: {}", self.name());
+        } else {
+            panic!("inner_sort called on non-container sort: {}", self.name());
+        }
+    }
+
+    fn register_type(&self, backend: &mut egglog_bridge::EGraph);
 
     fn as_arc_any(self: Arc<Self>) -> Arc<dyn Any + Send + Sync + 'static>;
 
@@ -53,58 +77,58 @@ pub trait Sort: Any + Send + Sync + Debug {
         false
     }
 
-    // Only eq_container_sort need to implement this method,
-    // which returns a list of ids to be tracked.
-    fn foreach_tracked_values<'a>(
-        &'a self,
-        value: &'a Value,
-        mut f: Box<dyn FnMut(ArcSort, Value) + 'a>,
-    ) {
-        for (sort, value) in self.inner_values(value) {
-            if sort.is_eq_sort() {
-                f(sort, value)
-            }
-        }
-    }
-
-    // Sort-wise canonicalization. Return true if value is modified.
-    // Only EqSort or containers of EqSort should override.
-    fn canonicalize(&self, value: &mut Value, unionfind: &UnionFind) -> bool {
-        #[cfg(debug_assertions)]
-        debug_assert_eq!(self.name(), value.tag);
-
-        #[cfg(not(debug_assertions))]
-        let _ = value;
-        let _ = unionfind;
-        false
-    }
-
     /// Return the serialized name of the sort
     ///
     /// Only used for container sorts, which cannot be serialized with make_expr so need an explicit name
-    fn serialized_name(&self, _value: &Value) -> Symbol {
+    fn serialized_name(&self, _value: Value) -> Symbol {
         self.name()
     }
 
     /// Return the inner values and sorts.
-    /// Only eq_container_sort need to implement this method,
-    fn inner_values(&self, value: &Value) -> Vec<(ArcSort, Value)> {
+    /// Only container sort need to implement this method,
+    fn inner_values(&self, containers: &Containers, value: Value) -> Vec<(ArcSort, Value)> {
+        debug_assert!(!self.is_container_sort());
         let _ = value;
+        let _ = containers;
         vec![]
     }
 
-    fn register_primitives(self: Arc<Self>, info: &mut TypeInfo) {
-        let _ = info;
+    /// Return the type id of values that this sort represents.
+    ///
+    /// Every non-EqSort sort should return Some(TypeId).
+    fn value_type(&self) -> Option<TypeId>;
+
+    fn register_primitives(self: Arc<Self>, eg: &mut EGraph) {
+        let _ = eg;
     }
 
-    /// Extracting a term (with smallest cost) out of a primitive value
-    fn extract_term(
+    /// Reconstruct a container value in a TermDag
+    fn reconstruct_termdag_container(
         &self,
-        egraph: &EGraph,
+        containers: &Containers,
         value: Value,
-        _extractor: &Extractor,
-        _termdag: &mut TermDag,
-    ) -> Option<(Cost, Term)>;
+        termdag: &mut TermDag,
+        element_terms: Vec<Term>,
+    ) -> Term {
+        let _containers = containers;
+        let _value = value;
+        let _termdag = termdag;
+        let _element_terms = element_terms;
+        todo!("reconstruct_termdag_container: {}", self.name());
+    }
+
+    /// Reconstruct a leaf primitive value in a TermDag
+    fn reconstruct_termdag_leaf(
+        &self,
+        primitives: &Primitives,
+        value: Value,
+        termdag: &mut TermDag,
+    ) -> Term {
+        let _primitives = primitives;
+        let _value = value;
+        let _termdag = termdag;
+        todo!("reconstruct_termdag_leaf: {}", self.name());
+    }
 }
 
 // Note: this trait is currently intended to be implemented on the
@@ -121,6 +145,8 @@ pub trait Presort {
     ) -> Result<ArcSort, TypeError>;
 }
 
+pub type MkSort = fn(&mut TypeInfo, Symbol, &[Expr]) -> Result<ArcSort, TypeError>;
+
 #[derive(Debug)]
 pub struct EqSort {
     pub name: Symbol,
@@ -131,6 +157,12 @@ impl Sort for EqSort {
         self.name
     }
 
+    fn column_ty(&self, _backend: &egglog_bridge::EGraph) -> ColumnTy {
+        ColumnTy::Id
+    }
+
+    fn register_type(&self, _backend: &mut egglog_bridge::EGraph) {}
+
     fn as_arc_any(self: Arc<Self>) -> Arc<dyn Any + Send + Sync + 'static> {
         self
     }
@@ -139,86 +171,17 @@ impl Sort for EqSort {
         true
     }
 
-    fn canonicalize(&self, value: &mut Value, unionfind: &UnionFind) -> bool {
-        #[cfg(debug_assertions)]
-        debug_assert_eq!(self.name(), value.tag);
-
-        let bits = unionfind.find(value.bits);
-        if bits != value.bits {
-            value.bits = bits;
-            true
-        } else {
-            false
-        }
-    }
-
-    fn extract_term(
-        &self,
-        _egraph: &EGraph,
-        _value: Value,
-        _extractor: &Extractor,
-        _termdag: &mut TermDag,
-    ) -> Option<(Cost, Term)> {
-        unimplemented!("No extract_term for EqSort {}", self.name)
-    }
-}
-
-pub trait FromSort: Sized {
-    type Sort: Sort;
-    fn load(sort: &Self::Sort, value: &Value) -> Self;
-}
-
-pub trait IntoSort: Sized {
-    type Sort: Sort;
-    fn store(self, sort: &Self::Sort) -> Option<Value>;
-}
-
-impl<T: IntoSort> IntoSort for Option<T> {
-    type Sort = T::Sort;
-
-    fn store(self, sort: &Self::Sort) -> Option<Value> {
-        self?.store(sort)
-    }
-}
-
-pub type PreSort =
-    fn(typeinfo: &mut TypeInfo, name: Symbol, params: &[Expr]) -> Result<ArcSort, TypeError>;
-
-pub(crate) struct ValueEq;
-
-impl PrimitiveLike for ValueEq {
-    fn name(&self) -> Symbol {
-        "value-eq".into()
-    }
-
-    fn get_type_constraints(&self, span: &Span) -> Box<dyn TypeConstraint> {
-        AllEqualTypeConstraint::new(self.name(), span.clone())
-            .with_exact_length(3)
-            .with_output_sort(Arc::new(UnitSort))
-            .into_box()
-    }
-
-    fn apply(
-        &self,
-        values: &[Value],
-        _sorts: (&[ArcSort], &ArcSort),
-        _egraph: Option<&mut EGraph>,
-    ) -> Option<Value> {
-        assert_eq!(values.len(), 2);
-        if values[0] == values[1] {
-            Some(Value::unit())
-        } else {
-            None
-        }
+    fn value_type(&self) -> Option<TypeId> {
+        None
     }
 }
 
 pub fn literal_sort(lit: &Literal) -> ArcSort {
     match lit {
-        Literal::Int(_) => Arc::new(I64Sort) as ArcSort,
-        Literal::Float(_) => Arc::new(F64Sort) as ArcSort,
-        Literal::String(_) => Arc::new(StringSort) as ArcSort,
-        Literal::Bool(_) => Arc::new(BoolSort) as ArcSort,
-        Literal::Unit => Arc::new(UnitSort) as ArcSort,
+        Literal::Int(_) => I64Sort.to_arcsort(),
+        Literal::Float(_) => F64Sort.to_arcsort(),
+        Literal::String(_) => StringSort.to_arcsort(),
+        Literal::Bool(_) => BoolSort.to_arcsort(),
+        Literal::Unit => UnitSort.to_arcsort(),
     }
 }

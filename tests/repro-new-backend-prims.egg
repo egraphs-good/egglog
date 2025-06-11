@@ -1,0 +1,11 @@
+(function predicate (i64) bool :merge (or old new))
+
+(set (predicate 1) false)
+
+(check (= false (predicate 1)))
+
+(set (predicate 2) false)
+
+(set (predicate 1) true)
+
+(fail (check (= false (predicate x)) (predicate (+ x 1))))

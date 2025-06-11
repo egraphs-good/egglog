@@ -75,8 +75,8 @@
 
 (run 3)
 
-(query-extract (lower-bound x1))
-(query-extract (upper-bound x1))
+(extract (lower-bound x1))
+(extract (upper-bound x1))
 (check (= one (Div x1 x1)))
 
 (pop)
@@ -88,8 +88,8 @@
 
 (run 3)
 
-(query-extract (lower-bound x1))
-(query-extract (upper-bound x1))
+(extract (lower-bound x1))
+(extract (upper-bound x1))
 
 (function true-value (Math) f64 :no-merge)
 
@@ -101,7 +101,7 @@
             (to-f64 lbe))))
 
 (run 1)
-(query-extract (true-value x1))
+(extract (true-value x1))
 
 (function best-error (Math) f64 :merge new)
 
@@ -133,12 +133,12 @@
 ;; set a default
 (set (best-error target) (to-f64 (bigrat (bigint 10000) (bigint 1))))
 ;; error is bad, constant folding hasn't fired enough
-(query-extract (best-error target))
+(extract (best-error target))
 
 (run 1)
 
 ;; error is good, constant folding has fired enough
-(query-extract (best-error target))
+(extract (best-error target))
 
 
 (pop)

@@ -13,8 +13,8 @@
 use std::hash::Hasher;
 use std::ops::AddAssign;
 
-use crate::{typechecking::FuncType, HashMap, *};
-use typechecking::TypeError;
+use crate::*;
+use typechecking::{FuncType, PrimitiveWithId, TypeError};
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub(crate) enum HeadOrEq<Head> {
@@ -38,7 +38,7 @@ impl<Head> HeadOrEq<Head> {
 
 #[derive(Debug, Clone)]
 pub(crate) struct SpecializedPrimitive {
-    pub(crate) primitive: Primitive,
+    pub(crate) primitive: PrimitiveWithId,
     pub(crate) input: Vec<ArcSort>,
     pub(crate) output: ArcSort,
 }
@@ -74,7 +74,7 @@ impl ResolvedCall {
         types: &[ArcSort],
         typeinfo: &TypeInfo,
     ) -> Option<ResolvedCall> {
-        if let Some(ty) = typeinfo.func_types.get(head) {
+        if let Some(ty) = typeinfo.get_func_type(head) {
             // As long as input types match, a result is returned.
             let expected = ty.input.iter().map(|s| s.name());
             let actual = types.iter().map(|s| s.name());
@@ -87,7 +87,7 @@ impl ResolvedCall {
 
     pub fn from_resolution(head: &Symbol, types: &[ArcSort], typeinfo: &TypeInfo) -> ResolvedCall {
         let mut resolved_call = Vec::with_capacity(1);
-        if let Some(ty) = typeinfo.func_types.get(head) {
+        if let Some(ty) = typeinfo.get_func_type(head) {
             let expected = ty.input.iter().chain(once(&ty.output)).map(|s| s.name());
             let actual = types.iter().map(|s| s.name());
             if expected.eq(actual) {
@@ -95,7 +95,7 @@ impl ResolvedCall {
             }
         }
 
-        if let Some(primitives) = typeinfo.primitives.get(head) {
+        if let Some(primitives) = typeinfo.get_prims(head) {
             for primitive in primitives {
                 if primitive.accept(types, typeinfo) {
                     let (out, inp) = types.split_last().unwrap();
@@ -334,7 +334,7 @@ impl std::fmt::Display for Query<ResolvedCall, Symbol> {
                 writeln!(
                     f,
                     "({} {})",
-                    filter.head.primitive.name(),
+                    filter.head.primitive.0.name(),
                     ListDisplay(&filter.args, " ")
                 )?;
             }
@@ -371,7 +371,6 @@ impl<Leaf: Clone> Query<ResolvedCall, Leaf> {
 pub enum GenericCoreAction<Head, Leaf> {
     Let(Span, Leaf, Head, Vec<GenericAtomTerm<Leaf>>),
     LetAtomTerm(Span, Leaf, GenericAtomTerm<Leaf>),
-    Extract(Span, GenericAtomTerm<Leaf>, GenericAtomTerm<Leaf>),
     Set(
         Span,
         Head,
@@ -397,7 +396,7 @@ impl<Head, Leaf> Default for GenericCoreActions<Head, Leaf> {
 
 impl<Head, Leaf> GenericCoreActions<Head, Leaf>
 where
-    Leaf: Clone,
+    Leaf: Clone + Eq + Hash,
 {
     pub(crate) fn subst(&mut self, subst: &HashMap<Leaf, GenericAtomTerm<Leaf>>) {
         let actions = subst.iter().map(|(symbol, atom_term)| {
@@ -413,6 +412,53 @@ where
 
     fn new(actions: Vec<GenericCoreAction<Head, Leaf>>) -> GenericCoreActions<Head, Leaf> {
         Self(actions)
+    }
+
+    pub(crate) fn get_free_vars(&self) -> HashSet<Leaf> {
+        let at_free_var = |at: &GenericAtomTerm<Leaf>| match at {
+            GenericAtomTerm::Var(_, v) => Some(v.clone()),
+            GenericAtomTerm::Literal(..) => None,
+            GenericAtomTerm::Global(..) => None,
+        };
+
+        let add_from_atom = |free_vars: &mut HashSet<Leaf>, at: &GenericAtomTerm<Leaf>| {
+            if let Some(v) = at_free_var(at) {
+                free_vars.insert(v);
+            }
+        };
+
+        let add_from_atoms = |free_vars: &mut HashSet<Leaf>, ats: &[GenericAtomTerm<Leaf>]| {
+            ats.iter().flat_map(&at_free_var).for_each(|v| {
+                free_vars.insert(v);
+            });
+        };
+
+        let mut free_vars = HashSet::default();
+        for action in self.0.iter().rev() {
+            match action {
+                GenericCoreAction::Let(_span, v, _, ats) => {
+                    add_from_atoms(&mut free_vars, ats);
+                    free_vars.swap_remove(v);
+                }
+                GenericCoreAction::LetAtomTerm(_span, v, at) => {
+                    add_from_atom(&mut free_vars, at);
+                    free_vars.swap_remove(v);
+                }
+                GenericCoreAction::Set(_span, _, ats, at) => {
+                    add_from_atoms(&mut free_vars, ats);
+                    add_from_atom(&mut free_vars, at);
+                }
+                GenericCoreAction::Change(_span, _change, _, ats) => {
+                    add_from_atoms(&mut free_vars, ats);
+                }
+                GenericCoreAction::Union(_span, at, at1) => {
+                    add_from_atom(&mut free_vars, at);
+                    add_from_atom(&mut free_vars, at1);
+                }
+                GenericCoreAction::Panic(_span, _) => {}
+            }
+        }
+        free_vars
     }
 }
 
@@ -524,20 +570,6 @@ where
                     mapped_actions
                         .0
                         .push(GenericAction::Union(span.clone(), mapped_e1, mapped_e2));
-                }
-                GenericAction::Extract(span, e, n) => {
-                    let (actions, mapped_e) = e.to_core_actions(typeinfo, binding, fresh_gen)?;
-                    norm_actions.extend(actions.0);
-                    let (actions, mapped_n) = n.to_core_actions(typeinfo, binding, fresh_gen)?;
-                    norm_actions.extend(actions.0);
-                    norm_actions.push(GenericCoreAction::Extract(
-                        span.clone(),
-                        mapped_e.get_corresponding_var_or_lit(typeinfo),
-                        mapped_n.get_corresponding_var_or_lit(typeinfo),
-                    ));
-                    mapped_actions
-                        .0
-                        .push(GenericAction::Extract(span.clone(), mapped_e, mapped_n));
                 }
                 GenericAction::Panic(span, string) => {
                     norm_actions.push(GenericCoreAction::Panic(span.clone(), string.clone()));
@@ -833,12 +865,12 @@ impl ResolvedRule {
         typeinfo: &TypeInfo,
         fresh_gen: &mut SymbolGen,
     ) -> Result<ResolvedCoreRule, TypeError> {
-        let value_eq = &typeinfo.primitives.get(&Symbol::from("value-eq")).unwrap()[0];
+        let value_eq = &typeinfo.get_prims(&Symbol::from("value-eq")).unwrap()[0];
         self.to_canonicalized_core_rule_impl(typeinfo, fresh_gen, |at1, at2| {
             ResolvedCall::Primitive(SpecializedPrimitive {
                 primitive: value_eq.clone(),
                 input: vec![at1.output(), at2.output()],
-                output: Arc::new(UnitSort),
+                output: UnitSort.to_arcsort(),
             })
         })
     }

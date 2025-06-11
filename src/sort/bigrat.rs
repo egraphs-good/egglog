@@ -1,17 +1,4 @@
-use num::traits::{CheckedAdd, CheckedDiv, CheckedMul, CheckedSub, One, Signed, ToPrimitive, Zero};
-use num::{rational::BigRational, BigInt};
-use std::sync::Mutex;
-
-type Z = BigInt;
-type Q = BigRational;
-use crate::{ast::Literal, util::IndexSet};
-
 use super::*;
-
-lazy_static! {
-    static ref BIG_RAT_SORT_NAME: Symbol = "BigRat".into();
-    static ref RATS: Mutex<IndexSet<Q>> = Default::default();
-}
 
 /// Rational numbers supporting these primitives:
 /// - Arithmetic: `+`, `-`, `*`, `/`, `neg`, `abs`
@@ -23,38 +10,34 @@ lazy_static! {
 #[derive(Debug)]
 pub struct BigRatSort;
 
-impl Sort for BigRatSort {
-    fn name(&self) -> Symbol {
-        *BIG_RAT_SORT_NAME
-    }
+impl LeafSort for BigRatSort {
+    type Leaf = Q;
 
-    fn as_arc_any(self: Arc<Self>) -> Arc<dyn Any + Send + Sync + 'static> {
-        self
+    fn name(&self) -> &str {
+        "BigRat"
     }
 
     #[rustfmt::skip]
-    fn register_primitives(self: Arc<Self>, eg: &mut TypeInfo) {
-        type Opt<T=()> = Option<T>;
+    fn register_primitives(&self, eg: &mut EGraph) {
+        add_primitive!(eg, "+" = |a: Q, b: Q| -?> Q { a.checked_add(&b).map(Q::new) });
+        add_primitive!(eg, "-" = |a: Q, b: Q| -?> Q { a.checked_sub(&b).map(Q::new) });
+        add_primitive!(eg, "*" = |a: Q, b: Q| -?> Q { a.checked_mul(&b).map(Q::new) });
+        add_primitive!(eg, "/" = |a: Q, b: Q| -?> Q { a.checked_div(&b).map(Q::new) });
 
-        add_primitives!(eg, "+" = |a: Q, b: Q| -> Opt<Q> { a.checked_add(&b) });
-        add_primitives!(eg, "-" = |a: Q, b: Q| -> Opt<Q> { a.checked_sub(&b) });
-        add_primitives!(eg, "*" = |a: Q, b: Q| -> Opt<Q> { a.checked_mul(&b) });
-        add_primitives!(eg, "/" = |a: Q, b: Q| -> Opt<Q> { a.checked_div(&b) });
+        add_primitive!(eg, "min" = |a: Q, b: Q| -> Q { a.min(b) });
+        add_primitive!(eg, "max" = |a: Q, b: Q| -> Q { a.max(b) });
+        add_primitive!(eg, "neg" = |a: Q| -> Q { Q::new(-a.0) });
+        add_primitive!(eg, "abs" = |a: Q| -> Q { Q::new(a.0.abs()) });
+        add_primitive!(eg, "floor" = |a: Q| -> Q { Q::new(a.0.floor()) });
+        add_primitive!(eg, "ceil" = |a: Q| -> Q { Q::new(a.0.ceil()) });
+        add_primitive!(eg, "round" = |a: Q| -> Q { Q::new(a.round()) });
 
-        add_primitives!(eg, "min" = |a: Q, b: Q| -> Q { a.min(b) });
-        add_primitives!(eg, "max" = |a: Q, b: Q| -> Q { a.max(b) });
-        add_primitives!(eg, "neg" = |a: Q| -> Q { -a });
-        add_primitives!(eg, "abs" = |a: Q| -> Q { a.abs() });
-        add_primitives!(eg, "floor" = |a: Q| -> Q { a.floor() });
-        add_primitives!(eg, "ceil" = |a: Q| -> Q { a.ceil() });
-        add_primitives!(eg, "round" = |a: Q| -> Q { a.round() });
+        add_primitive!(eg, "bigrat" = |a: Z, b: Z| -> Q { Q::new(BigRational::new(a.0, b.0)) });
+        add_primitive!(eg, "numer" = |a: Q| -> Z { Z::new(a.numer().clone()) });
+        add_primitive!(eg, "denom" = |a: Q| -> Z { Z::new(a.denom().clone()) });
+        add_primitive!(eg, "to-f64" = |a: Q| -> F { F::new(OrderedFloat(a.to_f64().unwrap())) });
 
-        add_primitives!(eg, "bigrat" = |a: Z, b: Z| -> Q { Q::new(a, b) });
-        add_primitives!(eg, "numer" = |a: Q| -> Z { a.numer().clone() });
-        add_primitives!(eg, "denom" = |a: Q| -> Z { a.denom().clone() });
-        add_primitives!(eg, "to-f64" = |a: Q| -> f64 { a.to_f64().unwrap() });
-
-        add_primitives!(eg, "pow" = |a: Q, b: Q| -> Option<Q> {
+        add_primitive!(eg, "pow" = |a: Q, b: Q| -?> Q {
             if !b.is_integer() {
                 // fractional powers are forbidden.
                 // reject this even for the zero case
@@ -64,10 +47,10 @@ impl Sort for BigRatSort {
                 // so that multiplicative inverse is always safe
                 if b.is_zero() {
                     // 0^0 = 1 by common convention
-                    Some(Q::one())
+                    Some(BigRational::one().into())
                 } else if b.is_positive() {
                     // 0^n = 0 where (n > 0)
-                    Some(Q::zero())
+                    Some(BigRational::zero().into())
                 } else {
                     // 0^n => (1/0)^(abs n) where (n < 0)
                     None
@@ -75,7 +58,7 @@ impl Sort for BigRatSort {
             } else {
                 let is_neg_pow = b.is_negative();
                 let (adj_base, adj_exp) = if is_neg_pow {
-                    (a.recip(), b.abs())
+                    (Q::new(a.recip()), Q::new(b.abs()))
                 } else {
                     (a, b)
                 };
@@ -84,23 +67,23 @@ impl Sort for BigRatSort {
                 let adj_exp_int = adj_exp.to_i64()?;
                 let adj_exp_usize = usize::try_from(adj_exp_int).ok()?;
 
-                num::traits::checked_pow(adj_base, adj_exp_usize)
+                num::traits::checked_pow(adj_base.into_inner(), adj_exp_usize).map(Q::new)
             }
         });
-        add_primitives!(eg, "log" = |a: Q| -> Option<Q> {
+        add_primitive!(eg, "log" = |a: Q| -?> Q {
             if a.is_one() {
-                Some(Q::zero())
+                Some(Q::new(BigRational::zero()))
             } else {
-                todo!()
+                todo!("log of bigrat")
             }
         });
-        add_primitives!(eg, "sqrt" = |a: Q| -> Option<Q> {
+        add_primitive!(eg, "sqrt" = |a: Q| -?> Q {
             if a.numer().is_positive() && a.denom().is_positive() {
                 let s1 = a.numer().sqrt();
                 let s2 = a.denom().sqrt();
                 let is_perfect = &(s1.clone() * s1.clone()) == a.numer() && &(s2.clone() * s2.clone()) == a.denom();
                 if is_perfect {
-                    Some(Q::new(s1, s2))
+                    Some(Q::new(BigRational::new(s1, s2)))
                 } else {
                     None
                 }
@@ -108,63 +91,36 @@ impl Sort for BigRatSort {
                 None
             }
         });
-        add_primitives!(eg, "cbrt" = |a: Q| -> Option<Q> {
+        add_primitive!(eg, "cbrt" = |a: Q| -?> Q {
             if a.is_one() {
-                Some(Q::one())
+                Some(Q::new(BigRational::one()))
             } else {
-                todo!()
+                todo!("cbrt of bigrat")
             }
         });
 
-        add_primitives!(eg, "<" = |a: Q, b: Q| -> Opt { if a < b {Some(())} else {None} });
-        add_primitives!(eg, ">" = |a: Q, b: Q| -> Opt { if a > b {Some(())} else {None} });
-        add_primitives!(eg, "<=" = |a: Q, b: Q| -> Opt { if a <= b {Some(())} else {None} });
-        add_primitives!(eg, ">=" = |a: Q, b: Q| -> Opt { if a >= b {Some(())} else {None} });
-   }
+        add_primitive!(eg, "<" = |a: Q, b: Q| -?> () { if a < b {Some(())} else {None} });
+        add_primitive!(eg, ">" = |a: Q, b: Q| -?> () { if a > b {Some(())} else {None} });
+        add_primitive!(eg, "<=" = |a: Q, b: Q| -?> () { if a <= b {Some(())} else {None} });
+        add_primitive!(eg, ">=" = |a: Q, b: Q| -?> () { if a >= b {Some(())} else {None} });
+    }
 
-    fn extract_term(
+    fn reconstruct_termdag(
         &self,
-        _egraph: &EGraph,
+        primitives: &Primitives,
         value: Value,
-        _extractor: &Extractor,
         termdag: &mut TermDag,
-    ) -> Option<(Cost, Term)> {
-        #[cfg(debug_assertions)]
-        debug_assert_eq!(value.tag, self.name());
-
-        let rat = Q::load(self, &value);
+    ) -> Term {
+        let rat = primitives.unwrap::<Q>(value);
         let numer = rat.numer();
         let denom = rat.denom();
 
         let numer_as_string = termdag.lit(Literal::String(numer.to_string().into()));
         let denom_as_string = termdag.lit(Literal::String(denom.to_string().into()));
 
-        let numer_term = termdag.app("from-string".into(), vec![numer_as_string]);
-        let denom_term = termdag.app("from-string".into(), vec![denom_as_string]);
+        let numer_term = termdag.app("from_string".into(), vec![numer_as_string]);
+        let denom_term = termdag.app("from_string".into(), vec![denom_as_string]);
 
-        Some((
-            1,
-            termdag.app("bigrat".into(), vec![numer_term, denom_term]),
-        ))
-    }
-}
-
-impl FromSort for Q {
-    type Sort = BigRatSort;
-    fn load(_sort: &Self::Sort, value: &Value) -> Self {
-        let i = value.bits as usize;
-        RATS.lock().unwrap().get_index(i).unwrap().clone()
-    }
-}
-
-impl IntoSort for Q {
-    type Sort = BigRatSort;
-    fn store(self, _sort: &Self::Sort) -> Option<Value> {
-        let (i, _) = RATS.lock().unwrap().insert_full(self);
-        Some(Value {
-            #[cfg(debug_assertions)]
-            tag: BigRatSort.name(),
-            bits: i as u64,
-        })
+        termdag.app("bigrat".into(), vec![numer_term, denom_term])
     }
 }

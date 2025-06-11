@@ -44,8 +44,8 @@ macro_rules! span {
 impl Span {
     pub fn string(&self) -> &str {
         match self {
-            Span::Panic => panic!("Span::Panic in Span::String"),
-            Span::Rust(_) => todo!(),
+            Span::Panic => panic!("Span::Panic in Span::string"),
+            Span::Rust(_) => panic!("Span::Rust cannot track end position"),
             Span::Egglog(span) => &span.file.contents[span.i..span.j],
         }
     }
@@ -254,6 +254,7 @@ pub struct Parser {
     commands: HashMap<Symbol, Arc<dyn Macro<Vec<Command>>>>,
     actions: HashMap<Symbol, Arc<dyn Macro<Vec<Action>>>>,
     exprs: HashMap<Symbol, Arc<dyn Macro<Expr>>>,
+    user_defined: HashSet<Symbol>,
     pub symbol_gen: SymbolGen,
 }
 
@@ -263,6 +264,7 @@ impl Default for Parser {
             commands: Default::default(),
             actions: Default::default(),
             exprs: Default::default(),
+            user_defined: Default::default(),
             symbol_gen: SymbolGen::new("$".to_string()),
         }
     }
@@ -274,7 +276,7 @@ impl Parser {
         filename: Option<String>,
         input: &str,
     ) -> Result<Vec<Command>, ParseError> {
-        let sexps = all_sexps(Context::new(filename, input))?;
+        let sexps = all_sexps(SexpParser::new(filename, input))?;
         let nested: Vec<Vec<_>> = map_fallible(&sexps, self, Self::parse_command)?;
         Ok(nested.into_iter().flatten().collect())
     }
@@ -285,7 +287,7 @@ impl Parser {
         filename: Option<String>,
         input: &str,
     ) -> Result<Expr, ParseError> {
-        let sexp = sexp(&mut Context::new(filename, input))?;
+        let sexp = sexp(&mut SexpParser::new(filename, input))?;
         self.parse_expr(&sexp)
     }
 
@@ -301,11 +303,28 @@ impl Parser {
         self.exprs.insert(ma.name(), ma);
     }
 
+    pub(crate) fn add_user_defined(&mut self, name: Symbol) -> Result<(), Error> {
+        if self.actions.contains_key(&name)
+            || self.exprs.contains_key(&name)
+            || self.commands.contains_key(&name)
+        {
+            return Err(Error::CommandAlreadyExists(name, span!()));
+        }
+        self.user_defined.insert(name);
+        Ok(())
+    }
+
     pub fn parse_command(&mut self, sexp: &Sexp) -> Result<Vec<Command>, ParseError> {
         let (head, tail, span) = sexp.expect_call("command")?;
 
         if let Some(macr0) = self.commands.get(&head).cloned() {
             return macr0.parse(tail, span, self);
+        }
+
+        // This prevents user-defined commands from being parsed as built-in commands.
+        if self.user_defined.contains(&head) {
+            let args = map_fallible(tail, self, Self::parse_expr)?;
+            return Ok(vec![Command::UserDefined(span, head, args)]);
         }
 
         Ok(match head.into() {
@@ -555,28 +574,18 @@ impl Parser {
                 span,
                 map_fallible(tail, self, Self::schedule)?,
             ))],
-            "simplify" => match tail {
-                [s, e] => vec![Command::Simplify {
+            "extract" => match tail {
+                [e] => vec![Command::Extract(
+                    span.clone(),
+                    self.parse_expr(e)?,
+                    Expr::Lit(span, Literal::Int(0)),
+                )],
+                [e, v] => vec![Command::Extract(
                     span,
-                    schedule: self.schedule(s)?,
-                    expr: self.parse_expr(e)?,
-                }],
-                _ => return error!(span, "usage: (simplify <schedule> <expr>)"),
-            },
-            "query-extract" => match tail {
-                [rest @ .., e] => {
-                    let variants = match self.parse_options(rest)?.as_slice() {
-                        [] => 0,
-                        [(":variants", [v])] => v.expect_uint("number of variants")?,
-                        _ => return error!(span, "could not parse query-extract options"),
-                    };
-                    vec![Command::QueryExtract {
-                        span,
-                        expr: self.parse_expr(e)?,
-                        variants,
-                    }]
-                }
-                _ => return error!(span, "usage: (query-extract <:variants <uint>>? <expr>)"),
+                    self.parse_expr(e)?,
+                    self.parse_expr(v)?,
+                )],
+                _ => return error!(span, "usage: (extract <expr> <number of variants>?)"),
             },
             "check" => vec![Command::Check(
                 span,
@@ -766,19 +775,6 @@ impl Parser {
                 [message] => vec![Action::Panic(span, message.expect_string("error message")?)],
                 _ => return error!(span, "usage: (panic <string>)"),
             },
-            "extract" => match tail {
-                [e] => vec![Action::Extract(
-                    span.clone(),
-                    self.parse_expr(e)?,
-                    Expr::Lit(span, Literal::Int(0)),
-                )],
-                [e, v] => vec![Action::Extract(
-                    span,
-                    self.parse_expr(e)?,
-                    self.parse_expr(v)?,
-                )],
-                _ => return error!(span, "usage: (extract <expr> <number of variants>?)"),
-            },
             _ => vec![Action::Expr(span, self.parse_expr(sexp)?)],
         })
     }
@@ -825,7 +821,10 @@ impl Parser {
         })
     }
 
-    fn rec_datatype(&mut self, sexp: &Sexp) -> Result<(Span, Symbol, Subdatatypes), ParseError> {
+    pub fn rec_datatype(
+        &mut self,
+        sexp: &Sexp,
+    ) -> Result<(Span, Symbol, Subdatatypes), ParseError> {
         let (head, tail, span) = sexp.expect_call("datatype")?;
 
         Ok(match head.into() {
@@ -915,14 +914,14 @@ impl Parser {
 }
 
 #[derive(Clone, Debug)]
-pub(crate) struct Context {
+pub(crate) struct SexpParser {
     source: Arc<SrcFile>,
     index: usize,
 }
 
-impl Context {
-    pub(crate) fn new(name: Option<String>, contents: &str) -> Context {
-        Context {
+impl SexpParser {
+    pub(crate) fn new(name: Option<String>, contents: &str) -> SexpParser {
+        SexpParser {
             source: Arc::new(SrcFile {
                 name,
                 contents: contents.to_string(),
@@ -1041,7 +1040,7 @@ enum Token {
     Other,
 }
 
-fn sexp(ctx: &mut Context) -> Result<Sexp, ParseError> {
+fn sexp(ctx: &mut SexpParser) -> Result<Sexp, ParseError> {
     let mut stack: Vec<(EgglogSpan, Vec<Sexp>)> = vec![];
 
     loop {
@@ -1097,7 +1096,7 @@ fn sexp(ctx: &mut Context) -> Result<Sexp, ParseError> {
     }
 }
 
-pub(crate) fn all_sexps(mut ctx: Context) -> Result<Vec<Sexp>, ParseError> {
+pub(crate) fn all_sexps(mut ctx: SexpParser) -> Result<Vec<Sexp>, ParseError> {
     let mut sexps = Vec::new();
     ctx.advance_past_whitespace();
     while !ctx.is_at_end() {

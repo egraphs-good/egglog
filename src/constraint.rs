@@ -372,18 +372,17 @@ impl Assignment<AtomTerm, ArcSort> {
         match &expr {
             GenericExpr::Lit(span, literal) => ResolvedExpr::Lit(span.clone(), literal.clone()),
             GenericExpr::Var(span, var) => {
-                let global_ty = typeinfo.lookup_global(var);
-                let ty = global_ty
-                    .clone()
+                let global_sort = typeinfo.get_global_sort(var);
+                let ty = global_sort
                     // Span is ignored when looking up atom_terms
-                    .or_else(|| self.get(&AtomTerm::Var(Span::Panic, *var)).cloned())
+                    .or_else(|| self.get(&AtomTerm::Var(Span::Panic, *var)))
                     .expect("All variables should be assigned before annotation");
                 ResolvedExpr::Var(
                     span.clone(),
                     ResolvedVar {
                         name: *var,
                         sort: ty.clone(),
-                        is_global_ref: global_ty.is_some(),
+                        is_global_ref: global_sort.is_some(),
                     },
                 )
             }
@@ -529,11 +528,6 @@ impl Assignment<AtomTerm, ArcSort> {
 
                 Ok(ResolvedAction::Union(span.clone(), lhs, rhs))
             }
-            GenericAction::Extract(span, lhs, rhs) => Ok(ResolvedAction::Extract(
-                span.clone(),
-                self.annotate_expr(lhs, typeinfo),
-                self.annotate_expr(rhs, typeinfo),
-            )),
             GenericAction::Panic(span, msg) => Ok(ResolvedAction::Panic(span.clone(), msg.clone())),
             GenericAction::Expr(span, expr) => Ok(ResolvedAction::Expr(
                 span.clone(),
@@ -693,17 +687,6 @@ impl CoreAction {
             )
             .chain(once(constraint::eq(lhs.clone(), rhs.clone())))
             .collect()),
-            CoreAction::Extract(_ann, e, n) => {
-                // e can be anything
-                Ok(
-                    get_literal_and_global_constraints(&[e.clone(), n.clone()], typeinfo)
-                        .chain(once(constraint::assign(
-                            n.clone(),
-                            std::sync::Arc::new(I64Sort) as ArcSort,
-                        )))
-                        .collect(),
-                )
-            }
             CoreAction::Panic(_ann, _) => Ok(vec![]),
             CoreAction::LetAtomTerm(span, v, at) => {
                 Ok(get_literal_and_global_constraints(&[at.clone()], typeinfo)
@@ -758,7 +741,7 @@ fn get_atom_application_constraints(
     let mut xor_constraints: Vec<Vec<Box<dyn Constraint<AtomTerm, ArcSort>>>> = vec![];
 
     // function atom constraints
-    if let Some(typ) = type_info.func_types.get(head) {
+    if let Some(typ) = type_info.get_func_type(head) {
         let mut constraints = vec![];
         // arity mismatch
         if typ.input.len() + 1 != args.len() {
@@ -787,9 +770,9 @@ fn get_atom_application_constraints(
     }
 
     // primitive atom constraints
-    if let Some(primitives) = type_info.primitives.get(head) {
+    if let Some(primitives) = type_info.get_prims(head) {
         for p in primitives {
-            let constraints = p.get_type_constraints(span).get(args, type_info);
+            let constraints = p.0.get_type_constraints(span).get(args, type_info);
             xor_constraints.push(constraints);
         }
     }
@@ -818,7 +801,7 @@ fn get_literal_and_global_constraints<'a>(
                 Some(constraint::assign(arg.clone(), typ) as Box<dyn Constraint<AtomTerm, ArcSort>>)
             }
             AtomTerm::Global(_, v) => {
-                if let Some(typ) = type_info.lookup_global(v) {
+                if let Some(typ) = type_info.get_global_sort(v) {
                     Some(constraint::assign(arg.clone(), typ.clone()))
                 } else {
                     panic!("All global variables should be bound before type checking")

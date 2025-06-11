@@ -1,0 +1,8 @@
+(function f (BigInt) BigInt :merge (from-string (to-string (+ (* new old) new))))
+
+(set (f (bigint 1)) (bigint 1))
+(set (f (bigint 1)) (bigint 2))
+(set (f (bigint 1)) (bigint 3))
+(check (= (f (bigint 1)) (bigint 15)))
+
+

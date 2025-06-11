@@ -85,7 +85,7 @@ fn remove_globals_action(action: ResolvedAction) -> ResolvedAction {
     action.visit_exprs(&mut replace_global_vars)
 }
 
-impl<'a> GlobalRemover<'a> {
+impl GlobalRemover<'_> {
     fn remove_globals_cmd(&mut self, cmd: ResolvedNCommand) -> Vec<ResolvedNCommand> {
         match cmd {
             GenericNCommand::CoreAction(action) => match action {
@@ -183,7 +183,7 @@ impl<'a> GlobalRemover<'a> {
                     rule: new_rule,
                 }]
             }
-            //Handle the corner case where a global command is wrap in (fail )
+            // Handle the corner case where a global command is wrap in (fail )
             GenericNCommand::Fail(span, cmd) => {
                 let mut removed = self.remove_globals_cmd(*cmd);
                 let last = removed.pop().unwrap();

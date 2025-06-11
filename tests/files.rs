@@ -83,6 +83,9 @@ impl Run {
         struct Wrapper<'a>(&'a Run);
         impl std::fmt::Display for Wrapper<'_> {
             fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+                if self.0.path.parent().unwrap().ends_with("fail-typecheck") {
+                    write!(f, "fail-typecheck/")?;
+                }
                 let stem = self.0.path.file_stem().unwrap();
                 let stem_str = stem.to_string_lossy().replace(['.', '-', ' '], "_");
                 write!(f, "{stem_str}")?;

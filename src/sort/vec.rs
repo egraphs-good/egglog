@@ -1,25 +1,33 @@
-use std::sync::Mutex;
-
-use crate::constraint::AllEqualTypeConstraint;
-
 use super::*;
 
-type ValueVec = Vec<Value>;
+#[derive(Clone, Debug, PartialEq, Eq, Hash)]
+pub struct VecContainer {
+    do_rebuild: bool,
+    pub data: Vec<Value>,
+}
 
-#[derive(Debug)]
+impl Container for VecContainer {
+    fn rebuild_contents(&mut self, rebuilder: &dyn Rebuilder) -> bool {
+        if self.do_rebuild {
+            rebuilder.rebuild_slice(&mut self.data)
+        } else {
+            false
+        }
+    }
+    fn iter(&self) -> impl Iterator<Item = Value> + '_ {
+        self.data.iter().copied()
+    }
+}
+
+#[derive(Clone, Debug)]
 pub struct VecSort {
     name: Symbol,
     element: ArcSort,
-    vecs: Mutex<IndexSet<ValueVec>>,
 }
 
 impl VecSort {
     pub fn element(&self) -> ArcSort {
         self.element.clone()
-    }
-
-    pub fn element_name(&self) -> Symbol {
-        self.element.name()
     }
 }
 
@@ -51,549 +59,95 @@ impl Presort for VecSort {
     ) -> Result<ArcSort, TypeError> {
         if let [Expr::Var(span, e)] = args {
             let e = typeinfo
-                .sorts
-                .get(e)
+                .get_sort_by_name(e)
                 .ok_or(TypeError::UndefinedSort(*e, span.clone()))?;
 
             if e.is_eq_container_sort() {
                 return Err(TypeError::DisallowedSort(
                     name,
-                    "Sets nested with other EqSort containers are not allowed".into(),
+                    "Vec nested with other EqSort containers are not allowed".into(),
                     span.clone(),
                 ));
             }
 
-            Ok(Arc::new(Self {
+            let out = Self {
                 name,
                 element: e.clone(),
-                vecs: Default::default(),
-            }))
+            };
+            Ok(out.to_arcsort())
         } else {
             panic!("Vec sort must have sort as argument. Got {:?}", args)
         }
     }
 }
 
-impl Sort for VecSort {
+impl ContainerSort for VecSort {
+    type Container = VecContainer;
+
     fn name(&self) -> Symbol {
         self.name
     }
 
-    fn as_arc_any(self: Arc<Self>) -> Arc<dyn Any + Send + Sync + 'static> {
-        self
-    }
-
-    fn is_container_sort(&self) -> bool {
-        true
+    fn inner_sorts(&self) -> Vec<ArcSort> {
+        vec![self.element.clone()]
     }
 
     fn is_eq_container_sort(&self) -> bool {
         self.element.is_eq_sort()
     }
 
-    fn inner_values(&self, value: &Value) -> Vec<(ArcSort, Value)> {
-        // TODO: Potential duplication of code
-        let vecs = self.vecs.lock().unwrap();
-        let vec = vecs.get_index(value.bits as usize).unwrap();
-        let mut result = Vec::new();
-        for e in vec.iter() {
-            result.push((self.element.clone(), *e));
-        }
-        result
-    }
-
-    fn canonicalize(&self, value: &mut Value, unionfind: &UnionFind) -> bool {
-        let vecs = self.vecs.lock().unwrap();
-        let vec = vecs.get_index(value.bits as usize).unwrap();
-        let mut changed = false;
-        let new_vec: ValueVec = vec
+    fn inner_values(&self, containers: &Containers, value: Value) -> Vec<(ArcSort, Value)> {
+        let val = containers.get_val::<VecContainer>(value).unwrap().clone();
+        val.data
             .iter()
-            .map(|e| {
-                let mut e = *e;
-                changed |= self.element.canonicalize(&mut e, unionfind);
-                e
-            })
-            .collect();
-        drop(vecs);
-        *value = new_vec.store(self).unwrap();
-        changed
+            .map(|e| (self.element.clone(), *e))
+            .collect()
     }
 
-    fn register_primitives(self: Arc<Self>, typeinfo: &mut TypeInfo) {
-        typeinfo.add_primitive(VecRebuild {
-            name: "rebuild".into(),
-            vec: self.clone(),
-        });
-        typeinfo.add_primitive(VecOf {
-            name: "vec-of".into(),
-            vec: self.clone(),
-        });
-        typeinfo.add_primitive(Append {
-            name: "vec-append".into(),
-            vec: self.clone(),
-        });
-        typeinfo.add_primitive(Ctor {
-            name: "vec-empty".into(),
-            vec: self.clone(),
-        });
-        typeinfo.add_primitive(Push {
-            name: "vec-push".into(),
-            vec: self.clone(),
-        });
-        typeinfo.add_primitive(Pop {
-            name: "vec-pop".into(),
-            vec: self.clone(),
-        });
-        typeinfo.add_primitive(NotContains {
-            name: "vec-not-contains".into(),
-            vec: self.clone(),
-        });
-        typeinfo.add_primitive(Contains {
-            name: "vec-contains".into(),
-            vec: self.clone(),
-        });
-        typeinfo.add_primitive(Length {
-            name: "vec-length".into(),
-            vec: self.clone(),
-        });
-        typeinfo.add_primitive(Get {
-            name: "vec-get".into(),
-            vec: self.clone(),
-        });
-        typeinfo.add_primitive(Set {
-            name: "vec-set".into(),
-            vec: self.clone(),
-        });
-        typeinfo.add_primitive(Remove {
-            name: "vec-remove".into(),
-            vec: self,
-        })
+    fn register_primitives(&self, eg: &mut EGraph) {
+        let arc = self.clone().to_arcsort();
+
+        add_primitive!(eg, "vec-empty"  = {self.clone(): VecSort} |                                | -> @VecContainer (arc) { VecContainer {
+            do_rebuild: self.ctx.element.is_eq_sort(),
+            data: Vec::new()
+        } });
+        add_primitive!(eg, "vec-of"     = {self.clone(): VecSort} [xs: # (self.element())          ] -> @VecContainer (arc) { VecContainer {
+            do_rebuild: self.ctx.element.is_eq_sort(),
+            data: xs                     .collect()
+        } });
+        add_primitive!(eg, "vec-append" = {self.clone(): VecSort} [xs: @VecContainer (arc)] -> @VecContainer (arc) { VecContainer {
+            do_rebuild: self.ctx.element.is_eq_sort(),
+            data: xs.flat_map(|x| x.data).collect()
+        } });
+
+        add_primitive!(eg, "vec-push" = |mut xs: @VecContainer (arc), x: # (self.element())| -> @VecContainer (arc) {{ xs.data.push(x); xs }});
+        add_primitive!(eg, "vec-pop"  = |mut xs: @VecContainer (arc)                       | -> @VecContainer (arc) {{ xs.data.pop();   xs }});
+
+        add_primitive!(eg, "vec-length"       = |xs: @VecContainer (arc)| -> i64 { xs.data.len() as i64 });
+        add_primitive!(eg, "vec-contains"     = |xs: @VecContainer (arc), x: # (self.element())| -?> () { ( xs.data.contains(&x)).then_some(()) });
+        add_primitive!(eg, "vec-not-contains" = |xs: @VecContainer (arc), x: # (self.element())| -?> () { (!xs.data.contains(&x)).then_some(()) });
+
+        add_primitive!(eg, "vec-get"    = |    xs: @VecContainer (arc), i: i64                       | -?> # (self.element()) { xs.data.get(i as usize).copied() });
+        add_primitive!(eg, "vec-set"    = |mut xs: @VecContainer (arc), i: i64, x: # (self.element())| -> @VecContainer (arc) {{ xs.data[i as usize] = x;    xs }});
+        add_primitive!(eg, "vec-remove" = |mut xs: @VecContainer (arc), i: i64                       | -> @VecContainer (arc) {{ xs.data.remove(i as usize); xs }});
     }
 
-    fn extract_term(
+    fn reconstruct_termdag(
         &self,
-        _egraph: &EGraph,
-        value: Value,
-        extractor: &Extractor,
+        _containers: &Containers,
+        _value: Value,
         termdag: &mut TermDag,
-    ) -> Option<(Cost, Term)> {
-        let vec: Vec<Value> = ValueVec::load(self, &value);
-        let mut cost = 0usize;
-
-        if vec.is_empty() {
-            Some((cost, termdag.app("vec-empty".into(), vec![])))
+        element_terms: Vec<Term>,
+    ) -> Term {
+        if element_terms.is_empty() {
+            termdag.app("vec-empty".into(), vec![])
         } else {
-            let elems = vec
-                .into_iter()
-                .map(|e| {
-                    let (extra_cost, term) = extractor.find_best(e, termdag, &self.element)?;
-                    cost = cost.saturating_add(extra_cost);
-                    Some(term)
-                })
-                .collect::<Option<Vec<_>>>()?;
-
-            Some((cost, termdag.app("vec-of".into(), elems)))
+            termdag.app("vec-of".into(), element_terms)
         }
     }
 
-    fn serialized_name(&self, _value: &Value) -> Symbol {
-        "vec-of".into()
-    }
-}
-
-impl IntoSort for ValueVec {
-    type Sort = VecSort;
-    fn store(self, sort: &Self::Sort) -> Option<Value> {
-        let mut vecs = sort.vecs.lock().unwrap();
-        let (i, _) = vecs.insert_full(self);
-        Some(Value {
-            #[cfg(debug_assertions)]
-            tag: sort.name,
-            bits: i as u64,
-        })
-    }
-}
-
-impl FromSort for ValueVec {
-    type Sort = VecSort;
-    fn load(sort: &Self::Sort, value: &Value) -> Self {
-        let vecs = sort.vecs.lock().unwrap();
-        vecs.get_index(value.bits as usize).unwrap().clone()
-    }
-}
-
-struct VecRebuild {
-    name: Symbol,
-    vec: Arc<VecSort>,
-}
-
-impl PrimitiveLike for VecRebuild {
-    fn name(&self) -> Symbol {
-        self.name
-    }
-
-    fn get_type_constraints(&self, span: &Span) -> Box<dyn TypeConstraint> {
-        SimpleTypeConstraint::new(
-            self.name(),
-            vec![self.vec.clone(), self.vec.clone()],
-            span.clone(),
-        )
-        .into_box()
-    }
-
-    fn apply(
-        &self,
-        values: &[Value],
-        _sorts: (&[ArcSort], &ArcSort),
-        egraph: Option<&mut EGraph>,
-    ) -> Option<Value> {
-        let egraph = egraph.unwrap();
-        let vec = ValueVec::load(&self.vec, &values[0]);
-        let new_vec: ValueVec = vec
-            .iter()
-            .map(|e| egraph.find(&self.vec.element, *e))
-            .collect();
-        drop(vec);
-        Some(new_vec.store(&self.vec).unwrap())
-    }
-}
-struct VecOf {
-    name: Symbol,
-    vec: Arc<VecSort>,
-}
-
-impl PrimitiveLike for VecOf {
-    fn name(&self) -> Symbol {
-        self.name
-    }
-
-    fn get_type_constraints(&self, span: &Span) -> Box<dyn TypeConstraint> {
-        AllEqualTypeConstraint::new(self.name(), span.clone())
-            .with_all_arguments_sort(self.vec.element())
-            .with_output_sort(self.vec.clone())
-            .into_box()
-    }
-
-    fn apply(
-        &self,
-        values: &[Value],
-        _sorts: (&[ArcSort], &ArcSort),
-        _egraph: Option<&mut EGraph>,
-    ) -> Option<Value> {
-        let vec = ValueVec::from_iter(values.iter().copied());
-        vec.store(&self.vec)
-    }
-}
-
-struct Append {
-    name: Symbol,
-    vec: Arc<VecSort>,
-}
-
-impl PrimitiveLike for Append {
-    fn name(&self) -> Symbol {
-        self.name
-    }
-
-    fn get_type_constraints(&self, span: &Span) -> Box<dyn TypeConstraint> {
-        AllEqualTypeConstraint::new(self.name(), span.clone())
-            .with_all_arguments_sort(self.vec.clone())
-            .into_box()
-    }
-
-    fn apply(
-        &self,
-        values: &[Value],
-        _sorts: (&[ArcSort], &ArcSort),
-        _egraph: Option<&mut EGraph>,
-    ) -> Option<Value> {
-        let vec = ValueVec::from_iter(values.iter().flat_map(|v| ValueVec::load(&self.vec, v)));
-        vec.store(&self.vec)
-    }
-}
-
-struct Ctor {
-    name: Symbol,
-    vec: Arc<VecSort>,
-}
-
-impl PrimitiveLike for Ctor {
-    fn name(&self) -> Symbol {
-        self.name
-    }
-
-    fn get_type_constraints(&self, span: &Span) -> Box<dyn TypeConstraint> {
-        SimpleTypeConstraint::new(self.name(), vec![self.vec.clone()], span.clone()).into_box()
-    }
-
-    fn apply(
-        &self,
-        values: &[Value],
-        _sorts: (&[ArcSort], &ArcSort),
-        _egraph: Option<&mut EGraph>,
-    ) -> Option<Value> {
-        assert!(values.is_empty());
-        ValueVec::default().store(&self.vec)
-    }
-}
-
-struct Push {
-    name: Symbol,
-    vec: Arc<VecSort>,
-}
-
-impl PrimitiveLike for Push {
-    fn name(&self) -> Symbol {
-        self.name
-    }
-
-    fn get_type_constraints(&self, span: &Span) -> Box<dyn TypeConstraint> {
-        SimpleTypeConstraint::new(
-            self.name(),
-            vec![self.vec.clone(), self.vec.element(), self.vec.clone()],
-            span.clone(),
-        )
-        .into_box()
-    }
-
-    fn apply(
-        &self,
-        values: &[Value],
-        _sorts: (&[ArcSort], &ArcSort),
-        _egraph: Option<&mut EGraph>,
-    ) -> Option<Value> {
-        let mut vec = ValueVec::load(&self.vec, &values[0]);
-        vec.push(values[1]);
-        vec.store(&self.vec)
-    }
-}
-
-struct Pop {
-    name: Symbol,
-    vec: Arc<VecSort>,
-}
-
-impl PrimitiveLike for Pop {
-    fn name(&self) -> Symbol {
-        self.name
-    }
-
-    fn get_type_constraints(&self, span: &Span) -> Box<dyn TypeConstraint> {
-        SimpleTypeConstraint::new(
-            self.name(),
-            vec![self.vec.clone(), self.vec.clone()],
-            span.clone(),
-        )
-        .into_box()
-    }
-
-    fn apply(
-        &self,
-        values: &[Value],
-        _sorts: (&[ArcSort], &ArcSort),
-        _egraph: Option<&mut EGraph>,
-    ) -> Option<Value> {
-        let mut vec = ValueVec::load(&self.vec, &values[0]);
-        vec.pop();
-        vec.store(&self.vec)
-    }
-}
-
-struct NotContains {
-    name: Symbol,
-    vec: Arc<VecSort>,
-}
-
-impl PrimitiveLike for NotContains {
-    fn name(&self) -> Symbol {
-        self.name
-    }
-
-    fn get_type_constraints(&self, span: &Span) -> Box<dyn TypeConstraint> {
-        SimpleTypeConstraint::new(
-            self.name(),
-            vec![self.vec.clone(), self.vec.element(), Arc::new(UnitSort)],
-            span.clone(),
-        )
-        .into_box()
-    }
-
-    fn apply(
-        &self,
-        values: &[Value],
-        _sorts: (&[ArcSort], &ArcSort),
-        _egraph: Option<&mut EGraph>,
-    ) -> Option<Value> {
-        let vec = ValueVec::load(&self.vec, &values[0]);
-        if vec.contains(&values[1]) {
-            None
-        } else {
-            Some(Value::unit())
-        }
-    }
-}
-
-struct Contains {
-    name: Symbol,
-    vec: Arc<VecSort>,
-}
-
-impl PrimitiveLike for Contains {
-    fn name(&self) -> Symbol {
-        self.name
-    }
-
-    fn get_type_constraints(&self, span: &Span) -> Box<dyn TypeConstraint> {
-        SimpleTypeConstraint::new(
-            self.name(),
-            vec![self.vec.clone(), self.vec.element(), Arc::new(UnitSort)],
-            span.clone(),
-        )
-        .into_box()
-    }
-
-    fn apply(
-        &self,
-        values: &[Value],
-        _sorts: (&[ArcSort], &ArcSort),
-        _egraph: Option<&mut EGraph>,
-    ) -> Option<Value> {
-        let vec = ValueVec::load(&self.vec, &values[0]);
-        if vec.contains(&values[1]) {
-            Some(Value::unit())
-        } else {
-            None
-        }
-    }
-}
-
-struct Length {
-    name: Symbol,
-    vec: Arc<VecSort>,
-}
-
-impl PrimitiveLike for Length {
-    fn name(&self) -> Symbol {
-        self.name
-    }
-
-    fn get_type_constraints(&self, span: &Span) -> Box<dyn TypeConstraint> {
-        SimpleTypeConstraint::new(
-            self.name(),
-            vec![self.vec.clone(), Arc::new(I64Sort)],
-            span.clone(),
-        )
-        .into_box()
-    }
-
-    fn apply(
-        &self,
-        values: &[Value],
-        _sorts: (&[ArcSort], &ArcSort),
-        _egraph: Option<&mut EGraph>,
-    ) -> Option<Value> {
-        let vec = ValueVec::load(&self.vec, &values[0]);
-        Some(Value::from(vec.len() as i64))
-    }
-}
-
-struct Get {
-    name: Symbol,
-    vec: Arc<VecSort>,
-}
-
-impl PrimitiveLike for Get {
-    fn name(&self) -> Symbol {
-        self.name
-    }
-
-    fn get_type_constraints(&self, span: &Span) -> Box<dyn TypeConstraint> {
-        SimpleTypeConstraint::new(
-            self.name(),
-            vec![self.vec.clone(), Arc::new(I64Sort), self.vec.element()],
-            span.clone(),
-        )
-        .into_box()
-    }
-
-    fn apply(
-        &self,
-        values: &[Value],
-        _sorts: (&[ArcSort], &ArcSort),
-        _egraph: Option<&mut EGraph>,
-    ) -> Option<Value> {
-        let vec = ValueVec::load(&self.vec, &values[0]);
-        let index = i64::load(&I64Sort, &values[1]);
-        vec.get(index as usize).copied()
-    }
-}
-
-struct Set {
-    name: Symbol,
-    vec: Arc<VecSort>,
-}
-
-impl PrimitiveLike for Set {
-    fn name(&self) -> Symbol {
-        self.name
-    }
-
-    fn get_type_constraints(&self, span: &Span) -> Box<dyn TypeConstraint> {
-        SimpleTypeConstraint::new(
-            self.name(),
-            vec![
-                self.vec.clone(),
-                Arc::new(I64Sort),
-                self.vec.element.clone(),
-                self.vec.clone(),
-            ],
-            span.clone(),
-        )
-        .into_box()
-    }
-
-    fn apply(
-        &self,
-        values: &[Value],
-        _sorts: (&[ArcSort], &ArcSort),
-        _egraph: Option<&mut EGraph>,
-    ) -> Option<Value> {
-        let mut vec = ValueVec::load(&self.vec, &values[0]);
-        let index = i64::load(&I64Sort, &values[1]);
-        vec[index as usize] = values[2];
-        vec.store(&self.vec)
-    }
-}
-
-struct Remove {
-    name: Symbol,
-    vec: Arc<VecSort>,
-}
-
-impl PrimitiveLike for Remove {
-    fn name(&self) -> Symbol {
-        self.name
-    }
-
-    fn get_type_constraints(&self, span: &Span) -> Box<dyn TypeConstraint> {
-        SimpleTypeConstraint::new(
-            self.name(),
-            vec![self.vec.clone(), Arc::new(I64Sort), self.vec.clone()],
-            span.clone(),
-        )
-        .into_box()
-    }
-
-    fn apply(
-        &self,
-        values: &[Value],
-        _sorts: (&[ArcSort], &ArcSort),
-        _egraph: Option<&mut EGraph>,
-    ) -> Option<Value> {
-        let mut vec = ValueVec::load(&self.vec, &values[0]);
-        let i = i64::load(&I64Sort, &values[1]);
-        vec.remove(i.try_into().unwrap());
-        vec.store(&self.vec)
+    fn serialized_name(&self, _value: Value) -> &str {
+        "vec-of"
     }
 }
 

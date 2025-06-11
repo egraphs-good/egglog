@@ -1,0 +1,9 @@
+(datatype Base (X))
+(datatype Tree (Leaf Base) (C1 Tree) (C2 Tree Tree))
+
+(function f (i64) Tree :merge (C2 (C1 old) (C2 old new)))
+
+(set (f 0) (Leaf (X)))
+(check (= (f 0) (Leaf (X))))
+(set (f 0) (C1 (Leaf (X))))
+(check (= (f 0) (C2 (C1 (Leaf (X))) (C2 (Leaf (X)) (C1 (Leaf (X)))))))
