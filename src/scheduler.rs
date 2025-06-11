@@ -449,13 +449,13 @@ mod test {
         (rule ((R x)) ((S x)) :ruleset test :name "test-rule")
         "#;
         egraph.parse_and_run_program(None, input).unwrap();
-        let r_id = egraph.functions.get(&Symbol::from("R")).unwrap().backend_id;
-        assert_eq!(egraph.get_size(r_id), 101);
-        let s_id = egraph.functions.get(&Symbol::from("S")).unwrap().backend_id;
+        let r_id = Symbol::from("R");
+        assert_eq!(egraph.get_size(&r_id), 101);
+        let s_id = Symbol::from("S");
         let mut iter = 0;
         loop {
             let report = egraph.step_rules_with_scheduler(scheduler_id, "test".into());
-            let table_size = egraph.get_size(s_id);
+            let table_size = egraph.get_size(&s_id);
             iter += 1;
             assert_eq!(table_size, std::cmp::min(iter * 10, 101));
 
