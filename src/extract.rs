@@ -4,6 +4,7 @@ use crate::util::HashMap;
 use crate::{ArcSort, EGraph, Error, Function, HEntry, Id, Value};
 
 pub type Cost = usize;
+pub(crate) type CostMap = HashMap<Id, (Cost, Term)>;
 
 #[derive(Debug)]
 pub(crate) struct Node<'a> {
@@ -13,7 +14,7 @@ pub(crate) struct Node<'a> {
 }
 
 pub struct Extractor<'a> {
-    pub costs: HashMap<Id, (Cost, Term)>,
+    pub costs: CostMap,
     ctors: Vec<Symbol>,
     egraph: &'a EGraph,
 }
@@ -37,78 +38,67 @@ impl EGraph {
     /// let (_, extracted) = egraph.extract(value, &mut termdag, &sort).unwrap();
     /// assert_eq!(termdag.to_string(&extracted), "(Add 1 1)");
     /// ```
-    pub fn extract(
-        &self,
-        value: Value,
-        termdag: &mut TermDag,
-        arcsort: &ArcSort,
-    ) -> Result<(Cost, Term), Error> {
-        let extractor = Extractor::new(self, termdag);
-        extractor.find_best(value, termdag, arcsort).ok_or_else(|| {
-            log::error!("No cost for {:?}", value);
-            for func in self.functions.values() {
-                for (inputs, output) in func.nodes.iter(false) {
-                    if output.value == value {
-                        log::error!("Found unextractable function: {:?}", func.decl.name);
-                        log::error!("Inputs: {:?}", inputs);
+    pub fn extract(&mut self, value: Value, arcsort: &ArcSort) -> Result<(Cost, Term), Error> {
+        let mut cost_map = None;
+        let mut termdag = std::mem::take(&mut self.termdag);
+        if self.cost_cache.is_some() {
+            let cost_map_ts = std::mem::take(&mut self.cost_cache).unwrap();
+            if cost_map_ts.0 == self.timestamp {
+                cost_map = Some(cost_map_ts.1);
+            }
+        }
+        let extractor = Extractor::new(self, &mut termdag, cost_map);
+        let result = extractor
+            .find_best(value, &mut termdag, arcsort)
+            .ok_or_else(|| {
+                log::error!("No cost for {:?}", value);
+                for func in self.functions.values() {
+                    for (inputs, output) in func.nodes.iter(false) {
+                        if output.value == value {
+                            log::error!("Found unextractable function: {:?}", func.decl.name);
+                            log::error!("Inputs: {:?}", inputs);
 
-                        assert_eq!(inputs.len(), func.schema.input.len());
-                        log::error!(
-                            "{:?}",
-                            inputs
-                                .iter()
-                                .zip(&func.schema.input)
-                                .map(|(input, sort)| extractor
-                                    .costs
-                                    .get(&extractor.egraph.find(sort, *input).bits))
-                                .collect::<Vec<_>>()
-                        );
+                            assert_eq!(inputs.len(), func.schema.input.len());
+                            log::error!(
+                                "{:?}",
+                                inputs
+                                    .iter()
+                                    .zip(&func.schema.input)
+                                    .map(|(input, sort)| extractor
+                                        .costs
+                                        .get(&extractor.egraph.find(sort, *input).bits))
+                                    .collect::<Vec<_>>()
+                            );
+                        }
                     }
                 }
-            }
-            Error::ExtractError(value)
-        })
+                Error::ExtractError(value)
+            });
+        self.cost_cache = Some((self.timestamp, extractor.cost_map()));
+        self.termdag = termdag;
+        result
     }
 
-    pub fn extract_variants(
-        &mut self,
-        sort: &ArcSort,
-        value: Value,
-        limit: usize,
-        termdag: &mut TermDag,
-    ) -> Vec<Term> {
-        let output_sort = sort.name();
-        let output_value = self.find(sort, value);
-        let ext = &Extractor::new(self, termdag);
-        ext.ctors
-            .iter()
-            .flat_map(|&sym| {
-                let func = &self.functions[&sym];
-                if !func.schema.output.is_eq_sort() {
-                    return vec![];
-                }
-                assert!(func.schema.output.is_eq_sort());
-
-                func.nodes
-                    .iter(false)
-                    .filter(|&(_, output)| {
-                        func.schema.output.name() == output_sort && output.value == output_value
-                    })
-                    .map(|(inputs, _output)| {
-                        let node = Node { sym, func, inputs };
-                        ext.expr_from_node(&node, termdag).expect(
-                            "extract_variants should be called after extractor initialization",
-                        )
-                    })
-                    .collect()
-            })
-            .take(limit)
-            .collect()
+    /// Extracts up to `limit` terms for a given `value`.
+    pub fn extract_variants(&mut self, sort: &ArcSort, value: Value, limit: usize) -> Vec<Term> {
+        let mut cost_map = None;
+        let mut termdag = std::mem::take(&mut self.termdag);
+        if self.cost_cache.is_some() {
+            let cost_map_ts = std::mem::take(&mut self.cost_cache).unwrap();
+            if cost_map_ts.0 == self.timestamp {
+                cost_map = Some(cost_map_ts.1);
+            }
+        }
+        let extractor = Extractor::new(self, &mut termdag, cost_map);
+        let result = extractor.find_variants(value, &mut termdag, sort, limit);
+        self.cost_cache = Some((self.timestamp, extractor.cost_map()));
+        self.termdag = termdag;
+        result
     }
 }
 
 impl<'a> Extractor<'a> {
-    pub fn new(egraph: &'a EGraph, termdag: &mut TermDag) -> Self {
+    pub fn new(egraph: &'a EGraph, termdag: &mut TermDag, cost_map: Option<CostMap>) -> Self {
         let mut extractor = Extractor {
             costs: HashMap::default(),
             egraph,
@@ -125,7 +115,11 @@ impl<'a> Extractor<'a> {
         );
 
         log::debug!("Extracting from ctors: {:?}", extractor.ctors);
-        extractor.find_costs(termdag);
+        if let Some(cost_map) = cost_map {
+            extractor.costs = cost_map;
+        } else {
+            extractor.find_costs(termdag);
+        }
         extractor
     }
 
@@ -157,6 +151,46 @@ impl<'a> Extractor<'a> {
             let (cost, node) = sort.extract_term(self.egraph, value, self, termdag)?;
             Some((cost, node))
         }
+    }
+
+    /// Extracts up to `limit` terms for a given `value`.
+    pub fn find_variants(
+        &self,
+        value: Value,
+        termdag: &mut TermDag,
+        sort: &ArcSort,
+        limit: usize,
+    ) -> Vec<Term> {
+        let output_sort = sort.name();
+        let output_value = self.egraph.find(sort, value);
+        let terms = self
+            .ctors
+            .iter()
+            .flat_map(|&sym| {
+                let func = &self.egraph.functions[&sym];
+                if !func.schema.output.is_eq_sort() {
+                    return vec![];
+                }
+                assert!(func.schema.output.is_eq_sort());
+
+                func.nodes
+                    .iter(false)
+                    .filter(|&(_, output)| {
+                        func.schema.output.name() == output_sort && output.value == output_value
+                    })
+                    .map(|(inputs, _output)| {
+                        let node = Node { sym, func, inputs };
+                        self.expr_from_node(&node, termdag).expect(
+                            "extract_variants should be called after extractor initialization",
+                        )
+                    })
+                    .collect()
+            })
+            .take(limit)
+            .collect::<Vec<Term>>();
+
+        // TODO: what happens if `terms` is empty?
+        terms
     }
 
     fn node_total_cost(
@@ -208,5 +242,9 @@ impl<'a> Extractor<'a> {
                 }
             }
         }
+    }
+
+    pub fn cost_map(self) -> CostMap {
+        self.costs
     }
 }
