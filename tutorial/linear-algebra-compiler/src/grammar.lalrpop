@@ -1,0 +1,39 @@
+use std::str::FromStr;
+use crate::parse_matrix_type;
+use crate::{Binding, Expr, Type};
+grammar;
+
+pub Binding: Binding = {
+    <v:Var> "=" <e:Expr> => Binding::Bind { var: v, expr: e }, 
+    <v:Var> <t:Type> => Binding::Declare { var: v, ty: t },
+};
+
+Type: Type = {
+    RType => Type::Scalar,
+    r":\s*\[R\s*;[0-9]+x[0-9]+\s\]"  => parse_matrix_type(<>),
+};
+
+RType: () = r":\s*R" => ();
+
+Expr: Expr = {
+    #[precedence(level="0")] // Highest precedence
+    Term,
+    #[precedence(level="1")] #[assoc(side="left")]
+    <l:Expr> "*" <r:Expr> => Expr::Mul(Box::new(l), Box::new(r)),
+    <l:Expr> "/" <r:Expr> => Expr::Div(Box::new(l), Box::new(r)),
+    #[precedence(level="2")] #[assoc(side="left")]
+    <l:Expr> "+" <r:Expr> => Expr::Add(Box::new(l), Box::new(r)),
+    <l:Expr> "-" <r:Expr> => Expr::Sub(Box::new(l), Box::new(r)),
+};
+
+Term: Expr = {
+    Num,
+    Var => Expr::Var(<>),
+    "(" <Expr> ")",
+};
+
+Num: Expr = {
+    r"[0-9]+" => Expr::Num(i64::from_str(<>).unwrap()),
+};
+
+Var: String = <r"[A-Za-z][A-Za-z0-9]+"> => <>.to_string();
