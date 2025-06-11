@@ -612,9 +612,9 @@ impl TypeInfo {
         binding: &IndexMap<&str, (Span, ArcSort)>,
     ) -> Result<ResolvedAction, TypeError> {
         self.typecheck_actions(symbol_gen, &Actions::singleton(action.clone()), binding)
-            .map(|mut v| {
+            .map(|v| {
                 assert_eq!(v.len(), 1);
-                v.0.pop().unwrap()
+                v.0.into_iter().next().unwrap()
             })
     }
 
