@@ -268,7 +268,7 @@ impl RustRuleContext<'_, '_> {
     /// For more information, see `egglog_bridge::TableAction::subsume`.
     pub fn subsume(&mut self, table: &str, key: &[Value]) {
         self.get_table_action(table)
-            .subsume(self.exec_state, key.to_vec())
+            .subsume(self.exec_state, key.iter().copied())
     }
 
     /// Panic.
