@@ -634,12 +634,12 @@ impl Problem<AtomTerm, ArcSort> {
 
     pub(crate) fn assign_local_var_type(
         &mut self,
-        var: String,
+        var: &str,
         span: Span,
         sort: ArcSort,
     ) -> Result<(), TypeError> {
-        self.add_binding(AtomTerm::Var(span.clone(), var.clone()), sort);
-        self.range.insert(AtomTerm::Var(span, var));
+        self.add_binding(AtomTerm::Var(span.clone(), var.to_owned()), sort);
+        self.range.insert(AtomTerm::Var(span, var.to_owned()));
         Ok(())
     }
 }
