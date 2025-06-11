@@ -1,15 +1,27 @@
+;; # E-class analysis
 
+;; In this lesson, we learn how to combine the power of equality saturation and Datalog.
+;; We will show how we can define program analyses using Datalog-style deductive reasoning,
+;; how EqSat-style rewrite rules can make the program analyses more accurate, and how 
+;; accurate program analyses can enable more powerful rewrites.
+;;
+;; Our first example will continue with the `path` example in lesson 2.
+;; In this case, there is a path from `e1` to `e2` if `e1` is less than or equal to `e2`.
 (datatype Expr
-  (Num i64)
-  (Var String)
-  (Add Expr Expr)
-  (Mul Expr Expr))
+    ; in this example we use big 🐀 to represent numbers
+    ; you can find a list of primitive types in the standard library in `src/sort`
+    (Num BigRat)
+    (Var String)
+    (Add Expr Expr)
+    (Mul Expr Expr))
 
-; the less-than-or-equal relation
-; between two expressions
+;; We define a less-than-or-equal-to relation between two expressions.
+;; `(leq a b)` means that `a <= b` for all possible values of variables.
 (relation leq (Expr Expr))
 
-; transitivity rule of less-than-or-equal
+;; Now, we define rules to infer `leq` facts, Datalog-style.
+
+;; Transitivity of `leq`:
 (rule (
     (leq e1 e2)
     (leq e2 e3)
@@ -17,7 +29,9 @@
     (leq e1 e3)
 ))
 
-; leq for numbers
+;; We can define a few axioms for deciding when one expression is less than or equal to another.
+
+;; Base case for `leq` for `Num`:
 (rule (
     (= e1 (Num n1))
     (= e2 (Num n2))
@@ -26,14 +40,14 @@
     (leq e1 e2)
 ))
 
-; leq for variables
+;; Base case for `leq` for `Var`:
 (rule (
     (= v (Var x))
 ) (
     (leq v v)
 ))
 
-; leq for additions
+;; Recursive case for `leq` for `Add`:
 (rule (
     (= e1 (Add e1a e1b))
     (= e2 (Add e2a e2b))
@@ -43,13 +57,19 @@
     (leq e1 e2))
 )
 
-;; These rules by themselves are weak. For example, they cannot deduce x + 1 <= 2 + x.
+;; Note that we have not defined any rules for multiplication. This would require a more complex
+;; analysis on the positivity of the expressions, which we will cover later.
+;;
+;; On the other hand, these rules by themselves are pretty weak. For example, they cannot deduce `x + 1 <= 2 + x`.
 ;; But EqSat-style axiomatic rules make these rules more powerful:
 
 (birewrite (Add x (Add y z)) (Add (Add x y) z))
-(rewrite (Add x y) (Add y x))
+(rewrite (Mul x y) (Mul y x))
+(rewrite (Mul x (Add y z)) (Add (Mul x y) (Mul x z)))
 (rewrite (Add x (Num 0)) x)
+(rewrite (Mul x (Num 1)) x)
 (rewrite (Add (Num a) (Num b)) (Num (+ a b)))
+(rewrite (Mul (Num a) (Num b)) (Num (* a b)))
 
 ;; To check our rules
 
@@ -58,3 +78,76 @@
 
 (run-schedule (saturate (run)))
 (check (leq e1 e2)) ; should pass
+
+;; A useful special case of the leq analysis is if an expression is upper bounded 
+;; or lower bounded by certain numbers, i.e., interval analysis:
+(function upper-bound (Expr) i64 :merge (min old new))
+(function lower-bound (Expr) i64 :merge (max old new))
+
+;; Instead of the binary relation `leq`, we are always interested in the tightest upper bound
+;; and lower bounds, so we can define them as upper bound and lower bound as functions from
+;; expressions to a unique integer.
+
+(rule (
+    (leq e (Num n))
+) (
+    (set (upper-bound e) n)
+))
+
+(rule (
+    (leq (Num n) e)
+) (
+    (set (lower-bound e) n)
+))
+
+;; We can infer the upper/lower bounds of an expression using these of the children expressions
+
+(rule (
+    (= e (Add e1 e2))
+    (= (upper-bound e1) u1)
+    (= (upper-bound e2) u2)
+) (
+    (set (upper-bound e) (+ u1 u2))
+))
+
+(rule (
+    (= e (Add e1 e2))
+    (= (lower-bound e1) l1)
+    (= (lower-bound e2) l2)
+) (
+    (set (lower-bound e) (+ l1 l2))
+))
+
+;; ... and the giant rule for multiplication:
+(rule ((= e (Mul e1 e2))
+       (= le1 (lower-bound e1))
+       (= le2 (lower-bound e2))
+       (= ue1 (upper-bound e1))
+       (= ue2 (upper-bound e2))
+      )
+      ((set (lower-bound e)
+            (min (* le1 le2)
+                 (min (* le1 ue2)
+                 (min (* ue1 le2)
+                      (* ue1 ue2)))))
+       (set (upper-bound e)
+            (min (* le1 le2)
+                 (min (* le1 ue2)
+                 (min (* ue1 le2)
+                      (* ue1 ue2)))))))
+
+;; The interval analysis is not only useful for numerical tools like [Herbie](https://herbie.uwplse.org/),
+;; but it can also guard certain certain optimization rules, making EqSat-based rewriting more powerful!
+;;
+;; For example, we are interested in non-zero expressions
+(relation non-zero (Expr))
+(rule ((< (upper-bound e) 0)) ((non-zero e)))
+(rule ((> (lower-bound e) 0)) ((non-zero e)))
+(rewrite (Div x x)
+         (Num 1)
+    :when ((non-zero x)))
+(rewrite (Mul x (Div (Const 1) x)) 
+         (Num 1) 
+    :when ((non-zero x)))
+
+;; TODO: tests

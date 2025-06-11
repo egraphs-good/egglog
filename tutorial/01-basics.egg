@@ -1,76 +1,78 @@
-;; # First Equality Saturation example in egglog
+;; # Equality Saturation in egglog
 
-;; Our simple DSL has numbers, variables, and two operations: addition and multiplication.
+;; In this tutorial, we will build an optimizer for a subset of linear algebra using egglog.
+;; We will start by optimizing simple integer arithmetic expressions.
+;; Our initial DSL supports constants, variables, addition, and multiplication.
 (datatype Expr
   (Num i64)
   (Var String)
   (Add Expr Expr)
   (Mul Expr Expr))
 
-;; Egglog supports the following primitives
-;;
-;; - f64, i64, bool, Unit, BigInt, BigRat, String
-;;
-;; You can find a list of supported primitives in `src/sort`. 
-;; Some of the sorts are in this folder are actually containers, which we will cover later.
-;; TODO: what about types egglog-experimental?
-
 ;; Now, let's define some simple expressions.
-;;
-;; `expr1 = 2 * (x + 3)`
-(let expr1 (Mul (Num 2) (Add (Var "x") (Num 3))))
-;; `expr2 = 6 + 2 * x`
-(let expr2 (Add (Num 6) (Mul (Num 2) (Var "x"))))
-;; If you are running the program in the web demo. At this point, you should see an e-graph
-;; with two expressions, each corresponding to the two expressions we defined above.
 
-;; To see the expressions we just defined, we can use the `extract` command. You can think of
-;; `extract` as the `print` command in other programming languages. 
-(extract expr1)
-(extract expr2)
-;; In fact, you can use extract to print primitive values as well.
+; `expr1 = 2 * (x + 3)`
+(let expr1 (Mul (Num 2) (Add (Var "x") (Num 3))))
+; `expr2 = 6 + 2 * x`
+(let expr2 (Add (Num 6) (Mul (Num 2) (Var "x"))))
+;; If you are running the program in the web demo, in the bottom right corner 
+;; of the web demo, you should see an e-graph with two expressions,
+;; each corresponding to the two expressions we defined above.
+
+;; We can use the `extract` command to print the results of expressions in `egglog`..
 (extract "Hello, world!")
 (extract 42)
-;; But it does more than that. We will see the power of `extract` once we dive into 
-;; program optimization.
+(extract expr1)
+(extract expr2)
+;; The `extract` command does more than printing. We will see the power of `extract` 
+;; once we get into program optimization.
 
-;; Let us define some axiomatic rules over our small DSL.
+;; We can use the `check` commands to check properties of our e-graph.
+(check (= expr1 (Mul x y)))
+;; This checks if `expr1` is equivalent to some expression `(Mul x y)`, where `x` and `y` are
+;; variables that can be mapped to any expression in the e-graph.
+
+;; Uncomment this check and make sure you understand why it fails.
+;;
+;;     ; (check (= expr1 (Add x y)))
+
+;; Let us define some rewrite rules over our small DSL.
 (rewrite (Add x y) (Add y x))
 ;; This rule asserts that addition is commutative. More concretely, this rules says, if the e-graph
 ;; contains expressions of the form `(Add x y)`, then the e-graph should also contain the
 ;; expression `(Add y x)`, and they should be equivalent.
 ;; 
 ;; There are two subtleties to rules in egglog
-;; 1. That a rule is defined does not mean it is run. The following check would fail at this point
+;;
+;; 1. Defining a rule is different from running it. The following check would fail at this point
 ;;    because the commutativity rule has not been run.
-;; ```
-;;      (check (= expr1 (Mul (Add (Var "x") (Num 3)))))
-;; ```
-;; 2. Rules are not instantiated for every possible term; it is only instantiated for terms that are
-;;    in the e-graph. For instance, even if we have run the commutativity rule above (using 
-;;    `(run 1)`), the following check would still fail because the e-graph does not contain 
-;;    the term `(Add (Num -2) (Num 2))` (
-;;    or `(Add (Num 2) (Num -2))`).
-;; ```
-;;      (check (= (Add (Num -2) (Num 2)) (Add (Num 2) (Num -2))))
-;; ```
+;;
+;;      ```
+;;     (check (= expr1 (Mul (Num 2) (Add (Num 3) (Var "x")))))
+;;      ```
+;;
+;; 2. Rules are not instantiated for every possible term; they are only instantiated for terms that are
+;;    in the e-graph. For instance, even if we run the commutativity rule above, the following check would 
+;;    still fail because the e-graph does not contain  the term `(Add (Num -2) (Num 2))` (or `(Add (Num 2) (Num -2))`).
+;;
+;;     ```
+;;     (check (= (Add (Num -2) (Num 2)) (Add (Num 2) (Num -2))))
+;;     ```
 
 ;; Similarly, we can define some other rules.
 (rewrite (Add x (Add y z)) (Add (Add x y) z))
+(rewrite (Mul x (Mul y z)) (Mul (Mul x y) z))
+(rewrite (Add x y) (Add y x))
 (rewrite (Mul x y) (Mul y x))
-(rewrite (Mul x (Add y z)) (Add (Mul x y) (Mul x z)))
-(rewrite (Add x (Num 0)) x)
-(rewrite (Mul x (Num 1)) x)
 
-;; egglog also defines a set of built-in functions over the primitive types, such as `+`, `-`,
-;; `*`, `/`. Egglog uses a constraint-based type inference algorithm, so the same operator can be
-;; overloaded with different types.
+;; `egglog` also defines a set of built-in functions over the primitive types, such as `+` and `*`.
+;; `egglog` supports operator overloading, so the same operator can be used with different types.
 (extract (+ 1 2))
 (extract (+ "1" "2"))
 (extract (+ 1.0 2.0))
 
-;; With primitives, we can define rewrite rules that talks about the semantics of operators.
-;; The following rule shows constant folding over addition and multiplication.
+;; With primitives, we can define rewrite rules that talk about the semantics of operators.
+;; The following rules show constant folding over addition and multiplication.
 (rewrite (Add (Num a) (Num b))
          (Num (+ a b)))
 (rewrite (Mul (Num a) (Num b))
@@ -79,20 +81,20 @@
 ;; While we have defined several rules, the e-graph has not changed since we inserted the two
 ;; expressions. To run rules we have defined so far, we can use the `run` command.
 (run 10)
-;; This says run our rules for 10 iterations. More precisely, egglog runs the following pseudo code:
-;; ```
-;; G = currentEgraph()
-;; for i in 1..10:
-;;   for each rule r:
-;;     ms = r.find_matches(G)
-;;     for m in ms:
-;;       G = G.apply_rule(r, m)
-;;     G = rebuild(G)
-;; ```
-;; In other words, egglog always run rules in batched mode. We always computes the matches over a
-;; snapshot over the e-graph before making any updates to the e-graph. This is in contrast to an 
-;; evaluation model where rules are immediately applied and the matches are obtained on demand
-;; over a changing e-graph.
+;; This tells `egglog` to run our rules for 10 iterations. More precisely, egglog runs the following pseudo code:
+;;
+;; 
+;;     G = currentEgraph()
+;;     for i in 1..10:
+;;       for each rule r:
+;;         ms = r.find_matches(G)
+;;         for m in ms:
+;;           G = G.apply_rule(r, m)
+;;         G = rebuild(G)
+;; 
+;; In other words, `egglog` computes all the matches for one iteration before making any
+;; updates to the e-graph. This is in contrast to an evaluation model where rules are immediately
+;; applied and the matches are obtained on demand over a changing e-graph.
 
 ;; If you are using the web demo, after running the rules, you should see the e-graph has grown
 ;; a little bit, and that `(Mul (Num 2) (Add (Var "x") (Num 3)))` and `(Add (Num 6) (Mul (Num 2) 
@@ -103,7 +105,7 @@
 ;;
 ;; 1. Define the distributivity rule for multiplication over addition. Find two expressions that 
 ;;    can be proven equivalent using this rule.
-;; 2. Write a rule that asserts x + 0 = x. Run egglog over the rules we have above and this rule.
+;; 2. Write a rule that asserts `x + 0 = x` and `x * 1` = x. Run egglog over the rules we have above and this rule.
 ;;    Try to increase the number of iterations. What happens? Why?
 ;; 3. Egglog has the `birewrite` keyword, which is similar to `rewrite`, but it allows rewriting
 ;;    in both directions. Make the associativity rule above a birewrite rule. Looking at the rules
