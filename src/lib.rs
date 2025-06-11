@@ -1391,7 +1391,11 @@ impl EGraph {
         Ok(())
     }
 
-    fn process_command(&mut self, command: Command, show_egglog_only: bool) -> Result<Vec<ResolvedNCommand>, Error> {
+    fn process_command(
+        &mut self,
+        command: Command,
+        show_egglog_only: bool,
+    ) -> Result<Vec<ResolvedNCommand>, Error> {
         let program = desugar::desugar_program(vec![command], &mut self.parser, self.seminaive)?;
 
         let mut program = self.typecheck_program(&program)?;
@@ -1426,7 +1430,6 @@ impl EGraph {
                     };
                     self.print_msg(processed.to_command().to_string());
                 } else {
-
                     let result = self.run_command(processed);
 
                     if self.is_interactive_mode() {
@@ -1548,7 +1551,7 @@ impl EGraph {
     }
 
     /// Get the size of a function in the e-graph.
-    /// 
+    ///
     /// `panics` if the function does not exist.
     pub fn get_size(&self, func: &Symbol) -> usize {
         let function_id = self.functions.get(func).unwrap().backend_id;
@@ -1556,7 +1559,7 @@ impl EGraph {
     }
 
     /// Lookup a tuple in afunction in the e-graph.
-    /// 
+    ///
     /// Returns `None` if the tuple does not exist.
     /// `panics` if the function does not exist.
     pub fn lookup_function(&self, name: &Symbol, key: &[Value]) -> Option<Value> {
@@ -1565,7 +1568,7 @@ impl EGraph {
     }
 
     /// Get a function by name.
-    /// 
+    ///
     /// Returns `None` if the function does not exist.
     pub fn get_function(&self, name: &Symbol) -> Option<&Function> {
         self.functions.get(name)
