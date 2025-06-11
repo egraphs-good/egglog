@@ -1725,7 +1725,7 @@ impl<'a> BackendRule<'a> {
                         self.rb.set(f, &args)
                     }
                 },
-                core::GenericCoreAction::Change(_, change, f, args) => match f {
+                core::GenericCoreAction::Change(span, change, f, args) => match f {
                     ResolvedCall::Primitive(..) => panic!("runtime primitive change!"),
                     ResolvedCall::Func(f) => {
                         let name = f.name;
@@ -1735,7 +1735,9 @@ impl<'a> BackendRule<'a> {
                         match change {
                             Change::Delete => self.rb.remove(f, &args),
                             Change::Subsume if can_subsume => self.rb.subsume(f, &args),
-                            Change::Subsume => return Err(Error::SubsumeMergeError(name)),
+                            Change::Subsume => {
+                                return Err(Error::SubsumeMergeError(name, span.clone()))
+                            }
                         }
                     }
                 },
@@ -1775,10 +1777,6 @@ fn literal_to_value(egraph: &egglog_bridge::EGraph, l: &Literal) -> Value {
     }
 }
 
-// Currently, only the following errors can thrown without location information:
-// * PrimitiveError
-// * MergeError
-// * SubsumeMergeError
 #[derive(Debug, Error)]
 pub enum Error {
     #[error(transparent)]
@@ -1803,8 +1801,8 @@ pub enum Error {
     ExpectFail(Span),
     #[error("{2}\nIO error: {0}: {1}")]
     IoError(PathBuf, std::io::Error, Span),
-    #[error("Cannot subsume function with merge: {0}")]
-    SubsumeMergeError(Symbol),
+    #[error("{1}\nCannot subsume function with merge: {0}")]
+    SubsumeMergeError(Symbol, Span),
     #[error("extraction failure: {:?}", .0)]
     ExtractError(String),
     #[error("{1}\n{2}\nShadowing is not allowed, but found {0}")]
