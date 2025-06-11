@@ -1789,7 +1789,7 @@ pub enum Error {
     TypeError(#[from] TypeError),
     #[error("Errors:\n{}", ListDisplay(.0, "\n"))]
     TypeErrors(Vec<TypeError>),
-    #[error("{1}\nCheck failed: \n{}", ListDisplay(.0, "\n"))]
+    #[error("{}\nCheck failed: \n{}", .1, ListDisplay(.0, "\n"))]
     CheckError(Vec<Fact>, Span),
     #[error("{1}\nNo such ruleset: {0}")]
     NoSuchRuleset(Symbol, Span),
