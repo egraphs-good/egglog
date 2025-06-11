@@ -1,6 +1,3 @@
-use num::traits::SaturatingAdd;
-use num::{One, Zero};
-
 use crate::ast::Symbol;
 use crate::termdag::{Term, TermDag};
 use crate::util::{HashMap, HashSet};
@@ -15,7 +12,7 @@ use std::collections::VecDeque;
 /// As long as there is no negative cost cycle,
 /// the default extractor is guaranteed to terminate in computing the costs.
 /// However, the user needs to be careful to guarantee acyclicity in the extracted terms.
-pub trait CostModel<C: SaturatingAdd + Zero + One> {
+pub trait CostModel<C: Cost> {
     /// Compute the total cost of a term given the cost of the root enode and its immediate children's total costs
     fn fold(&self, head: Symbol, children_cost: &[C], head_cost: C) -> C;
 
@@ -36,7 +33,7 @@ pub trait CostModel<C: SaturatingAdd + Zero + One> {
         let _value = value;
         element_costs
             .iter()
-            .fold(C::zero(), |s, c| s.saturating_add(c))
+            .fold(C::identity(), |s, c| s.combine(c))
     }
 
     /// Compute the cost of a primitive, non-container, value
@@ -45,11 +42,58 @@ pub trait CostModel<C: SaturatingAdd + Zero + One> {
         let _egraph = egraph;
         let _sort = sort;
         let _value = value;
-        C::one()
+        C::unit()
     }
 }
 
-/// The default cost type is usize
+/// Requirements for a type to be usable as a cost by a [`CostModel`].
+pub trait Cost {
+    /// An identity element, usually zero.
+    fn identity() -> Self;
+
+    /// The default cost for a node with no children, usually one.
+    fn unit() -> Self;
+
+    /// A binary operation to combine costs, usually addition.
+    /// This operation must NOT overflow or panic when given large values!
+    fn combine(self, other: &Self) -> Self;
+}
+
+macro_rules! cost_impl_int {
+    ($($cost:ty),*) => {$(
+        impl Cost for $cost {
+            fn identity() -> Self { 0 }
+            fn unit()     -> Self { 1 }
+            fn combine(self, other: &Self) -> Self {
+                self.saturating_add(*other)
+            }
+        }
+    )*};
+}
+cost_impl_int!(u8, u16, u32, u64, u128, usize);
+cost_impl_int!(i8, i16, i32, i64, i128, isize);
+
+macro_rules! cost_impl_num {
+    ($($cost:ty),*) => {$(
+        impl Cost for $cost {
+            fn identity() -> Self {
+                use num::Zero;
+                Self::zero()
+            }
+            fn unit() -> Self {
+                use num::One;
+                Self::one()
+            }
+            fn combine(self, other: &Self) -> Self {
+                self + other
+            }
+        }
+    )*};
+}
+cost_impl_num!(num::BigInt, num::BigRational);
+use ordered_float::OrderedFloat;
+cost_impl_num!(f32, f64, OrderedFloat<f32>, OrderedFloat<f64>);
+
 pub type DefaultCost = usize;
 
 #[derive(Default, Clone)]
@@ -62,9 +106,7 @@ impl CostModel<DefaultCost> for TreeAdditiveCostModel {
         children_cost: &[DefaultCost],
         head_cost: DefaultCost,
     ) -> DefaultCost {
-        children_cost
-            .iter()
-            .fold(head_cost, |s, c| s.saturating_add(*c))
+        children_cost.iter().fold(head_cost, |s, c| s.combine(c))
     }
 
     fn enode_cost(
@@ -73,21 +115,21 @@ impl CostModel<DefaultCost> for TreeAdditiveCostModel {
         func: &Function,
         _row: &egglog_bridge::FunctionRow,
     ) -> DefaultCost {
-        func.decl.cost.unwrap_or(1)
+        func.decl.cost.unwrap_or(DefaultCost::unit())
     }
 }
 
-pub struct Extractor<Cost: SaturatingAdd + Zero + One + Ord + Eq + Copy + Debug> {
+pub struct Extractor<C: Cost + Ord + Eq + Copy + Debug> {
     rootsorts: Vec<ArcSort>,
     funcs: Vec<Symbol>,
-    cost_model: Box<dyn CostModel<Cost>>,
-    costs: HashMap<Symbol, HashMap<Value, Cost>>,
+    cost_model: Box<dyn CostModel<C>>,
+    costs: HashMap<Symbol, HashMap<Value, C>>,
     topo_rnk_cnt: usize,
     topo_rnk: HashMap<Symbol, HashMap<Value, usize>>,
     parent_edge: HashMap<Symbol, HashMap<Value, (Symbol, Vec<Value>)>>,
 }
 
-impl<Cost: SaturatingAdd + Zero + One + Ord + Eq + Copy + Debug> Extractor<Cost> {
+impl<C: Cost + Ord + Eq + Copy + Debug> Extractor<C> {
     /// Bulk of the computation happens at initialization time.
     /// The later extractions only reuses saved results.
     /// This means a new extractor must be created if the egraph changes.
@@ -96,7 +138,7 @@ impl<Cost: SaturatingAdd + Zero + One + Ord + Eq + Copy + Debug> Extractor<Cost>
     pub fn compute_costs_from_rootsorts(
         rootsorts: Option<Vec<ArcSort>>,
         egraph: &EGraph,
-        cost_model: impl CostModel<Cost> + 'static,
+        cost_model: impl CostModel<C> + 'static,
     ) -> Self {
         // We filter out tables unreachable from the root sorts
         let extract_all_sorts = rootsorts.is_none();
@@ -161,7 +203,7 @@ impl<Cost: SaturatingAdd + Zero + One + Ord + Eq + Copy + Debug> Extractor<Cost>
         }
 
         // Initialize the tables to have the reachable entries
-        let mut costs: HashMap<Symbol, HashMap<Value, Cost>> = Default::default();
+        let mut costs: HashMap<Symbol, HashMap<Value, C>> = Default::default();
         let mut topo_rnk: HashMap<Symbol, HashMap<Value, usize>> = Default::default();
         let mut parent_edge: HashMap<Symbol, HashMap<Value, (Symbol, Vec<Value>)>> =
             Default::default();
@@ -194,10 +236,10 @@ impl<Cost: SaturatingAdd + Zero + One + Ord + Eq + Copy + Debug> Extractor<Cost>
     /// Compute the cost of a single enode
     /// Recurse if container
     /// Returns None if contains an undefined eqsort term (potentially after unfolding)
-    fn compute_cost_node(&self, egraph: &EGraph, value: Value, sort: &ArcSort) -> Option<Cost> {
+    fn compute_cost_node(&self, egraph: &EGraph, value: Value, sort: &ArcSort) -> Option<C> {
         if sort.is_container_sort() {
             let elements = sort.inner_values(egraph.backend.containers(), value);
-            let mut ch_costs: Vec<Cost> = Vec::new();
+            let mut ch_costs: Vec<C> = Vec::new();
             for ch in elements.iter() {
                 if let Some(c) = self.compute_cost_node(egraph, ch.1, &ch.0) {
                     ch_costs.push(c);
@@ -231,8 +273,8 @@ impl<Cost: SaturatingAdd + Zero + One + Ord + Eq + Copy + Debug> Extractor<Cost>
         egraph: &EGraph,
         row: &egglog_bridge::FunctionRow,
         func: &Function,
-    ) -> Option<Cost> {
-        let mut ch_costs: Vec<Cost> = Vec::new();
+    ) -> Option<C> {
+        let mut ch_costs: Vec<C> = Vec::new();
         let sorts = &func.schema.input;
         //log::debug!("compute_cost_hyperedge head {} sorts {:?}", head, sorts);
         // Relying on .zip to truncate the values
@@ -459,7 +501,7 @@ impl<Cost: SaturatingAdd + Zero + One + Ord + Eq + Copy + Debug> Extractor<Cost>
         termdag: &mut TermDag,
         value: Value,
         sort: ArcSort,
-    ) -> Option<(Cost, Term)> {
+    ) -> Option<(C, Term)> {
         match self.compute_cost_node(egraph, value, &sort) {
             Some(best_cost) => {
                 log::debug!("Best cost for the extract root: {:?}", best_cost);
@@ -481,7 +523,7 @@ impl<Cost: SaturatingAdd + Zero + One + Ord + Eq + Copy + Debug> Extractor<Cost>
         egraph: &EGraph,
         termdag: &mut TermDag,
         value: Value,
-    ) -> Option<(Cost, Term)> {
+    ) -> Option<(C, Term)> {
         assert!(
             self.rootsorts.len() == 1,
             "extract_best requires a single rootsort"
@@ -502,11 +544,11 @@ impl<Cost: SaturatingAdd + Zero + One + Ord + Eq + Copy + Debug> Extractor<Cost>
         value: Value,
         nvariants: usize,
         sort: ArcSort,
-    ) -> Vec<(Cost, Term)> {
+    ) -> Vec<(C, Term)> {
         debug_assert!(self.rootsorts.iter().any(|s| { s.name() == sort.name() }));
 
         if sort.is_eq_sort() {
-            let mut root_variants: Vec<(Cost, Symbol, Vec<Value>)> = Vec::new();
+            let mut root_variants: Vec<(C, Symbol, Vec<Value>)> = Vec::new();
 
             let mut root_funcs: Vec<Symbol> = Vec::new();
 
@@ -541,7 +583,7 @@ impl<Cost: SaturatingAdd + Zero + One + Ord + Eq + Copy + Debug> Extractor<Cost>
                 egraph.backend.for_each(func.backend_id, find_root_variants);
             }
 
-            let mut res: Vec<(Cost, Term)> = Vec::new();
+            let mut res: Vec<(C, Term)> = Vec::new();
             root_variants.sort();
             root_variants.truncate(nvariants);
             for (cost, func_name, hyperedge) in root_variants {
@@ -572,7 +614,7 @@ impl<Cost: SaturatingAdd + Zero + One + Ord + Eq + Copy + Debug> Extractor<Cost>
         termdag: &mut TermDag,
         value: Value,
         nvariants: usize,
-    ) -> Vec<(Cost, Term)> {
+    ) -> Vec<(C, Term)> {
         assert!(
             self.rootsorts.len() == 1,
             "extract_variants requires a single rootsort"
