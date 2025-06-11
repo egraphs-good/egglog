@@ -631,9 +631,7 @@ where
         out_actions: &mut Vec<GenericCoreAction<Head, Leaf>>,
     ) -> Result<MappedExpr<Head, Leaf>, TypeError> {
         match self {
-            GenericExpr::Lit(span, lit) => {
-                Ok(GenericExpr::Lit(span.clone(), lit.clone()))
-            }
+            GenericExpr::Lit(span, lit) => Ok(GenericExpr::Lit(span.clone(), lit.clone())),
             GenericExpr::Var(span, v) => {
                 let sym = v.to_string();
                 if binding.contains(v) || typeinfo.is_global(&sym) {
