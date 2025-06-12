@@ -34,7 +34,7 @@ use crate::{
 #[cfg(test)]
 mod tests;
 
-define_id!(pub ContainerId, u32, "an identifier for containers");
+define_id!(pub ContainerValueId, u32, "an identifier for containers");
 
 pub trait MergeFn:
     Fn(&mut ExecutionState, Value, Value) -> Value + dyn_clone::DynClone + Send + Sync
@@ -46,25 +46,25 @@ impl<T: Fn(&mut ExecutionState, Value, Value) -> Value + Clone + Send + Sync> Me
 dyn_clone::clone_trait_object!(MergeFn);
 
 #[derive(Clone, Default)]
-pub struct Containers {
+pub struct ContainerValues {
     subset_tracker: SubsetTracker,
-    container_ids: InternTable<TypeId, ContainerId>,
-    data: DenseIdMap<ContainerId, Box<dyn DynamicContainerEnv + Send + Sync>>,
+    container_ids: InternTable<TypeId, ContainerValueId>,
+    data: DenseIdMap<ContainerValueId, Box<dyn DynamicContainerEnv + Send + Sync>>,
 }
 
-impl Containers {
+impl ContainerValues {
     pub fn new() -> Self {
         Default::default()
     }
 
-    fn get<C: Container>(&self) -> Option<&ContainerEnv<C>> {
+    fn get<C: ContainerValue>(&self) -> Option<&ContainerEnv<C>> {
         let id = self.container_ids.intern(&TypeId::of::<C>());
         let res = self.data.get(id)?.as_any();
         Some(res.downcast_ref::<ContainerEnv<C>>().unwrap())
     }
 
     /// Iterate over the containers of the given type.
-    pub fn for_each<C: Container>(&self, mut f: impl FnMut(&C, Value)) {
+    pub fn for_each<C: ContainerValue>(&self, mut f: impl FnMut(&C, Value)) {
         let Some(env) = self.get::<C>() else {
             return;
         };
@@ -78,11 +78,11 @@ impl Containers {
     ///
     /// The return type of this function may contain lock guards. Attempts to modify the contents
     /// of the containers database may deadlock if the given guard has not been dropped.
-    pub fn get_val<C: Container>(&self, val: Value) -> Option<impl Deref<Target = C> + '_> {
+    pub fn get_val<C: ContainerValue>(&self, val: Value) -> Option<impl Deref<Target = C> + '_> {
         self.get::<C>()?.get_container(val)
     }
 
-    pub fn register_val<C: Container>(
+    pub fn register_val<C: ContainerValue>(
         &self,
         container: C,
         exec_state: &mut ExecutionState,
@@ -140,11 +140,11 @@ impl Containers {
     ///
     /// Container types need a meaans of generating fresh ids (`id_counter`) along with a means of
     /// merging conflicting ids (`merge_fn`).
-    pub fn register_type<C: Container>(
+    pub fn register_type<C: ContainerValue>(
         &mut self,
         id_counter: CounterId,
         merge_fn: impl MergeFn + 'static,
-    ) -> ContainerId {
+    ) -> ContainerValueId {
         let id = self.container_ids.intern(&TypeId::of::<C>());
         self.data.get_or_insert(id, || {
             Box::new(ContainerEnv::<C>::new(Box::new(merge_fn), id_counter))
@@ -158,7 +158,7 @@ impl Containers {
 /// Containers behave a lot like base values, but they include extra trait methods to support
 /// rebuilding of container contents and merging containers that become equal after a rebuild pass
 /// has taken place.
-pub trait Container: Hash + Eq + Clone + Send + Sync + 'static {
+pub trait ContainerValue: Hash + Eq + Clone + Send + Sync + 'static {
     /// Rebuild an additional container in place according the the given [`Rebuilder`].
     ///
     /// If this method returns `false` then the container must not have been modified (i.e. it must
@@ -188,7 +188,7 @@ pub trait DynamicContainerEnv: Any + dyn_clone::DynClone + Send + Sync {
 // Implements `Clone` for `Box<dyn DynamicContainerEnv>`.
 dyn_clone::clone_trait_object!(DynamicContainerEnv);
 
-fn hash_container(container: &impl Container) -> u64 {
+fn hash_container(container: &impl ContainerValue) -> u64 {
     let mut hasher = FxHasher::default();
     container.hash(&mut hasher);
     hasher.finish()
@@ -204,7 +204,7 @@ struct ContainerEnv<C: Eq + Hash> {
     val_index: DashMap<Value, IndexSet<Value>>,
 }
 
-impl<C: Container> DynamicContainerEnv for ContainerEnv<C> {
+impl<C: ContainerValue> DynamicContainerEnv for ContainerEnv<C> {
     fn as_any(&self) -> &dyn Any {
         self
     }
@@ -235,7 +235,7 @@ impl<C: Container> DynamicContainerEnv for ContainerEnv<C> {
     }
 }
 
-impl<C: Container> ContainerEnv<C> {
+impl<C: ContainerValue> ContainerEnv<C> {
     pub fn new(merge_fn: Box<dyn MergeFn>, counter: CounterId) -> Self {
         Self {
             merge_fn,

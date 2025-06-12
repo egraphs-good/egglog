@@ -9,7 +9,7 @@ use std::{
     thread,
 };
 
-use core_relations::{make_external_func, Container, ExternalFunctionId, Rebuilder, Value};
+use core_relations::{make_external_func, ContainerValue, ExternalFunctionId, Rebuilder, Value};
 use log::debug;
 use num_rational::Rational64;
 use numeric_id::NumericId;
@@ -500,7 +500,7 @@ fn math_test(mut egraph: EGraph, can_subsume: bool) {
 
 #[derive(Clone, Debug, Hash, Eq, PartialEq)]
 struct VecContainer(Vec<Value>);
-impl Container for VecContainer {
+impl ContainerValue for VecContainer {
     fn rebuild_contents(&mut self, rebuilder: &dyn Rebuilder) -> bool {
         rebuilder.rebuild_slice(&mut self.0)
     }
@@ -515,11 +515,14 @@ fn register_vec_push(egraph: &mut EGraph) -> ExternalFunctionId {
         let [vec_id, val] = vals else {
             panic!("[vec-push] expected 2 values, got {vals:?}")
         };
-        let mut vec: VecContainer = state.containers().get_val::<VecContainer>(*vec_id)?.clone();
+        let mut vec: VecContainer = state
+            .container_values()
+            .get_val::<VecContainer>(*vec_id)?
+            .clone();
         vec.0.push(*val);
         // Vectors are immutable. May as well not use O(n) auxiliary space.
         vec.0.shrink_to_fit();
-        Some(state.clone().containers().register_val(vec, state))
+        Some(state.clone().container_values().register_val(vec, state))
     });
     egraph.register_external_func(external_func)
 }
@@ -531,7 +534,7 @@ fn register_vec_last(egraph: &mut EGraph) -> ExternalFunctionId {
             panic!("[vec-last] expected 1 value, got {vals:?}")
         };
         state
-            .containers()
+            .container_values()
             .get_val::<VecContainer>(*vec_id)?
             .0
             .last()
@@ -543,7 +546,7 @@ fn register_vec_last(egraph: &mut EGraph) -> ExternalFunctionId {
 fn dump_vecs(egraph: &EGraph) -> Vec<Vec<Value>> {
     let mut res = Vec::new();
     egraph
-        .containers()
+        .container_values()
         .for_each::<VecContainer>(|vec, _| res.push(vec.0.clone()));
     res
 }
@@ -625,8 +628,8 @@ fn container_test() {
         .collect::<Vec<_>>();
     egraph.add_values(num_rows);
 
-    let empty_vec = egraph.get_container_val(VecContainer(vec![]));
-    let vec1 = egraph.get_container_val(VecContainer(vec![ids[1]]));
+    let empty_vec = egraph.get_container_value(VecContainer(vec![]));
+    let vec1 = egraph.get_container_value(VecContainer(vec![ids[1]]));
 
     let empty_vec_id = egraph.fresh_id();
     let vec1_id = egraph.fresh_id();

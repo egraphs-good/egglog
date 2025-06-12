@@ -24,7 +24,7 @@ mod tests;
 pub use action::{ExecutionState, MergeVal, QueryEntry, WriteVal};
 pub use base_values::{BaseValue, BaseValueId, BaseValuePrinter, BaseValues, Boxed};
 pub use common::Value;
-pub use containers::{Container, ContainerId, Containers};
+pub use containers::{ContainerValue, ContainerValueId, ContainerValues};
 pub use free_join::{
     make_external_func, plan::PlanStrategy, AtomId, CounterId, Database, ExternalFunction,
     ExternalFunctionId, RuleReport, RuleSetReport, TableId, Variable,

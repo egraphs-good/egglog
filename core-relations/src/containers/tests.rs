@@ -10,7 +10,7 @@ use numeric_id::NumericId;
 
 use crate::{Database, Rebuilder, Value};
 
-use super::{Container, ContainerEnv};
+use super::{ContainerEnv, ContainerValue};
 
 #[derive(Hash, PartialEq, Eq, Clone, Debug)]
 struct VecContainer(Vec<Value>);
@@ -19,7 +19,7 @@ fn cont<const N: usize>(values: [usize; N]) -> VecContainer {
     VecContainer(values.iter().map(|&v| Value::from_usize(v)).collect())
 }
 
-impl Container for VecContainer {
+impl ContainerValue for VecContainer {
     fn rebuild_contents(&mut self, rebuilder: &dyn Rebuilder) -> bool {
         rebuilder.rebuild_slice(&mut self.0)
     }

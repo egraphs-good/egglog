@@ -13,7 +13,7 @@ use crate::{
     free_join::{CounterId, Counters, ExternalFunctions, TableId, TableInfo, Variable},
     pool::{with_pool_set, Clear, PoolSet, Pooled},
     table_spec::{ColumnId, MutationBuffer},
-    BaseValues, Containers, ExternalFunctionId, WrappedTable,
+    BaseValues, ContainerValues, ExternalFunctionId, WrappedTable,
 };
 
 use self::mask::{Mask, MaskIter, ValueSource};
@@ -200,7 +200,7 @@ pub(crate) struct DbView<'a> {
     pub(crate) counters: &'a Counters,
     pub(crate) external_funcs: &'a ExternalFunctions,
     pub(crate) bases: &'a BaseValues,
-    pub(crate) containers: &'a Containers,
+    pub(crate) containers: &'a ContainerValues,
 }
 
 /// A handle on a database that may be in the process of running a rule.
@@ -312,7 +312,7 @@ impl<'a> ExecutionState<'a> {
         self.db.bases
     }
 
-    pub fn containers(&self) -> &Containers {
+    pub fn container_values(&self) -> &ContainerValues {
         self.db.containers
     }
 

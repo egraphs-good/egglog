@@ -18,10 +18,10 @@ use std::{
 };
 
 use core_relations::{
-    BaseValue, BaseValueId, BaseValues, ColumnId, Constraint, Container, Containers, CounterId,
-    Database, DisplacedTable, DisplacedTableWithProvenance, ExecutionState, ExternalFunction,
-    ExternalFunctionId, MergeVal, Offset, PlanStrategy, RuleSetReport, SortedWritesTable, TableId,
-    TaggedRowBuffer, Value, WrappedTable,
+    BaseValue, BaseValueId, BaseValues, ColumnId, Constraint, ContainerValue, ContainerValues,
+    CounterId, Database, DisplacedTable, DisplacedTableWithProvenance, ExecutionState,
+    ExternalFunction, ExternalFunctionId, MergeVal, Offset, PlanStrategy, RuleSetReport,
+    SortedWritesTable, TableId, TaggedRowBuffer, Value, WrappedTable,
 };
 use hashbrown::HashMap;
 use indexmap::{map::Entry, IndexMap, IndexSet};
@@ -165,33 +165,33 @@ impl EGraph {
     }
 
     /// Get a mutable reference to the underlying table of containers for this
-    /// EGraph.
-    pub fn containers_mut(&mut self) -> &mut Containers {
-        self.db.containers_mut()
+    /// `EGraph`.
+    pub fn container_values_mut(&mut self) -> &mut ContainerValues {
+        self.db.container_values_mut()
     }
 
-    /// Get a reference to the underlying table of containers for this EGraph.
-    pub fn containers(&self) -> &Containers {
-        self.db.containers()
+    /// Get a reference to the underlying table of containers for this `EGraph`.
+    pub fn container_values(&self) -> &ContainerValues {
+        self.db.container_values()
     }
 
     /// Intern the given container value into the EGraph.
-    pub fn get_container_val<C: Container>(&mut self, val: C) -> Value {
+    pub fn get_container_value<C: ContainerValue>(&mut self, val: C) -> Value {
         self.register_container_ty::<C>();
         self.db
-            .with_execution_state(|state| state.clone().containers().register_val(val, state))
+            .with_execution_state(|state| state.clone().container_values().register_val(val, state))
     }
 
-    /// Register the given [`Container`] type with this EGraph.
+    /// Register the given [`ContainerValue`] type with this EGraph.
     ///
     /// The given container will use the EGraph's union-find to manage rebuilding and the merging
     /// of containers with a common id.
-    pub fn register_container_ty<C: Container>(&mut self) {
+    pub fn register_container_ty<C: ContainerValue>(&mut self) {
         let uf_table = self.uf_table;
         let ts_counter = self.timestamp_counter;
-        self.db
-            .containers_mut()
-            .register_type::<C>(self.id_counter, move |state, old, new| {
+        self.db.container_values_mut().register_type::<C>(
+            self.id_counter,
+            move |state, old, new| {
                 if old != new {
                     let next_ts = Value::from_usize(state.read_counter(ts_counter));
                     state.stage_insert(uf_table, &[old, new, next_ts]);
@@ -199,7 +199,8 @@ impl EGraph {
                 } else {
                     old
                 }
-            });
+            },
+        );
     }
 
     /// Get a reference to the underlying table of base values for this `EGraph`.

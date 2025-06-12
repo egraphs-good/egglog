@@ -28,7 +28,7 @@ use crate::{
     table_spec::{
         ColumnId, Constraint, MutationBuffer, Table, TableSpec, WrappedTable, WrappedTableRef,
     },
-    BaseValues, Containers, PoolSet, QueryEntry, TupleIndex, Value,
+    BaseValues, ContainerValues, PoolSet, QueryEntry, TupleIndex, Value,
 };
 
 use self::plan::Plan;
@@ -294,7 +294,7 @@ pub struct Database {
     // because we keep an array per id in the UF.
     pub(crate) counters: Counters,
     pub(crate) external_functions: ExternalFunctions,
-    containers: Containers,
+    container_values: ContainerValues,
     // Tracks the relative dependencies between tables during merge operations.
     deps: DependencyGraph,
     base_values: BaseValues,
@@ -340,19 +340,19 @@ impl Database {
         &mut self.base_values
     }
 
-    pub fn containers(&self) -> &Containers {
-        &self.containers
+    pub fn container_values(&self) -> &ContainerValues {
+        &self.container_values
     }
 
-    pub fn containers_mut(&mut self) -> &mut Containers {
-        &mut self.containers
+    pub fn container_values_mut(&mut self) -> &mut ContainerValues {
+        &mut self.container_values
     }
 
     pub fn rebuild_containers(&mut self, table_id: TableId) -> bool {
-        let mut containers = mem::take(&mut self.containers);
+        let mut containers = mem::take(&mut self.container_values);
         let table = &self.tables[table_id].table;
         let res = self.with_execution_state(|state| containers.rebuild_all(table_id, table, state));
-        self.containers = containers;
+        self.container_values = containers;
         res
     }
 
@@ -415,7 +415,7 @@ impl Database {
             counters: &self.counters,
             external_funcs: &self.external_functions,
             bases: &self.base_values,
-            containers: &self.containers,
+            containers: &self.container_values,
         }
     }
 
