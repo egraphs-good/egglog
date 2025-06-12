@@ -259,22 +259,16 @@ fn desugar_birewrite(
         rhs: rewrite.lhs.clone(),
         conditions: rewrite.conditions.clone(),
     };
-    desugar_rewrite(
-        ruleset.clone(),
-        format!("{}=>", name),
-        rewrite,
-        false,
-        parser,
-    )
-    .into_iter()
-    .chain(desugar_rewrite(
-        ruleset,
-        format!("{}<=", name),
-        rw2,
-        false,
-        parser,
-    ))
-    .collect()
+    desugar_rewrite(ruleset.clone(), format!("{name}=>"), rewrite, false, parser)
+        .into_iter()
+        .chain(desugar_rewrite(
+            ruleset,
+            format!("{name}<="),
+            rw2,
+            false,
+            parser,
+        ))
+        .collect()
 }
 
 pub fn rule_name<Head, Leaf>(command: &GenericCommand<Head, Leaf>) -> String
