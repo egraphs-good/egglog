@@ -1,0 +1,126 @@
+;; # Extraction and Cost
+
+;; In the previous sessions, we have seen examples of defining and analyzing syntatic terms in egglog.
+;; After running the rewrite rules, the internal egraph of egglog may contain a myriad of terms.
+;; We often want to pick out one or a handful of terms for further processing.
+;; Extraction is the process of picking out individual terms out of the many terms represented by an egraph.
+;; Extraction works closely with a cost model, which controls which term(s) should be chosen.
+;; Let's first see a simple example of setting costs with the ':cost' attribute.
+
+(push)
+
+;; Here we have the same Expr language but annotated with ':cost' attributes.
+
+(datatype Expr
+  (Num i64)
+  (Var String)
+  (Add Expr Expr :cost 2)
+  (Mul Expr Expr :cost 10)
+)
+
+;; The default cost of a datatype constructor is 1.
+;; Intuitively, the additional ':cost' attributes mark the multiplication operation as more expensive than addition.
+
+;; Let's look at how cost is computed for a concrete term in the default tree cost model.
+;; expr = x * 2 + 1
+
+(let expr (Add (Mul (Var "x") (Num 2)) (Num 1)))
+
+;; This term has a total cost of 18 because 
+;;
+;;     (Add               \\ cost = 2  (from Add) + 14 (from left operand) + 2 (from right operand) = 18
+;;         (Mul           \\ cost = 10 (from Mul) + 2  (from left operand) + 2 (from right operand) = 14
+;;             (Var "x")  \\ cost = 1  (from Var) + 1  (from "x") = 2
+;;             (Num 2)    \\ cost = 1  (from Num) + 1  (from 2)   = 2
+;;         )
+;;         (Num 1)        \\ cost = 1  (from Num) + 1  (from 1)   = 2
+;;     )
+;;
+
+;; We can use the 'extract' command to extract the lowest cost variant of the term
+;; But it just gives the version we just defined for now
+
+(extract expr)
+
+;; Let's introduces more variants with rewrites
+
+(rewrite (Mul x (Num 2)) (Add x x))
+
+(run 1)
+
+(extract expr)
+
+;; It now extracts the lower cost variant that correspondes to x + x + 1, which is equivalent to the original term.
+;; If there are multiple variants of the same lowest cost, 'extract' break ties arbitrarily.
+
+(pop)
+
+;; ## Setting custom cost for enodes
+
+;; The ':cost' attribute sets an uniform additional cost to each appearance of corresponding constructor.
+;; However, this is not expressive enough to cover the case where additional cost of an operation is not a fixed constant.
+;; We can use the (set-cost) feature provided by egglog-experimental to get more fine-grained control of individual enode's cost.
+
+;; To show how this feature works, we define a toy language of matrices.
+
+;; with-custom-cost enables this feature for the constructors defined inside
+
+(with-custom-cost 
+    (datatype Matrix
+        ; A matrix constant with fixed size
+        ; For simplicity, we use ':cost' to give them a default cost of 0
+        (MCst i64 i64 :cost 0)
+        ; Matrix multiplication
+        (MMul Matrix Matrix)
+    )
+)
+
+;; We also define two analyses for the number of rows and columns
+
+(function row (Matrix) i64 :no-merge)
+(function col (Matrix) i64 :no-merge)
+
+(rule (
+    (= x (MCst r c))
+) (
+    (set (row x) r)
+    (set (col x) c)
+))
+
+(rule (
+    (= x (MMul y z))
+    (= r (row y))
+    (= (col y) (row z))
+    (= c (col z))
+) (
+    (set (row x) r)
+    (set (col x) c)
+))
+
+;; Now we define the cost of matrix multiplication as a product of the dimensions
+
+(rule (
+    (MMul y z)
+    (= r (row y))
+    (= m (col y))
+    (= c (col z))
+) (
+    (set-cost (MMul y z) (* r (* m c)))
+))
+
+;; Let's optimize matrix multiplication with this cost model
+
+(birewrite (MMul x (MMul y z)) (MMul (MMul x y) z))
+
+(let Mexpr (MMul (MMul (MCst 64 8) (MCst 8 256)) (MCst 256 2)))
+
+(run 5)
+
+;; egglog extracts the equivalent variant with lower cost
+;; (MMul (MCst 64 8) (MMul (MCst 8 256) (MCst 256 2)))
+
+(extract Mexpr)
+
+;; For users who want to tweak the cost model even further,
+;; egglog provides the CostModel<C> Rust trait.
+;; The 'set-cost' feature demonstrated here is implemented using this trait under the hood.
