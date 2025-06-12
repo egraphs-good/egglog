@@ -166,3 +166,21 @@
 
 ;; Because it takes one iteration of `optimizations` to simplify `x-times-zero` to `zero`, and this is
 ;; required to determine that `nonzero-expr` is actually `nonzero`.
+
+;; However, sometimes just having an iteration number does not give you enough control.
+;; As we can see from the `(print-size)`s above, adding one iteration can increase the size of the
+;; e-graph hyper-exponentially. To address this, we have added two additional scheduling operations:
+;; `(let-scheduler)` and `(run-with)`. These operations allow you to run partial iterations, by using
+;; custom schedulers such as `back-off`. The `back-off` scheduler tries to make matching "fairer" by
+;; slowing down rules with many matches.
+(pop 1)
+(push 1)
+(run-schedule
+    (let-scheduler bo (back-off))
+    (repeat 25
+        (seq
+            (run-with bo analysis)
+            (run-with bo optimizations)
+         )
+    )
+)
