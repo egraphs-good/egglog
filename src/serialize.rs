@@ -38,7 +38,7 @@ pub enum SerializedNode {
     /// A user defined function call.
     Function {
         /// The name of the function.
-        name: Symbol,
+        name: String,
         /// The offset of the index in the table.
         /// This can be resolved to the output and input values with table.get_index(offset, true).
         offset: usize,
@@ -116,7 +116,7 @@ impl EGraph {
                         self.to_node_id(
                             None,
                             SerializedNode::Function {
-                                name: *name,
+                                name: name.clone(),
                                 offset: tuples.len(),
                             },
                         ),

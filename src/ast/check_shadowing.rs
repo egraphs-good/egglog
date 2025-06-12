@@ -1,10 +1,10 @@
 use crate::*;
 
 #[derive(Clone, Debug, Default)]
-pub(crate) struct Names(HashMap<Symbol, Span>);
+pub(crate) struct Names(HashMap<String, Span>);
 
 impl Names {
-    fn check(&mut self, name: Symbol, new: Span) -> Result<(), Error> {
+    fn check(&mut self, name: String, new: Span) -> Result<(), Error> {
         if let Some(old) = self.0.get(&name) {
             Err(Error::Shadowing(name, old.clone(), new))
         } else {
@@ -20,11 +20,11 @@ impl Names {
     /// changing the `EGraph` will be wrong.
     pub(crate) fn check_shadowing(&mut self, command: &ResolvedNCommand) -> Result<(), Error> {
         match command {
-            ResolvedNCommand::Sort(span, name, _args) => self.check(*name, span.clone()),
-            ResolvedNCommand::Function(decl) => self.check(decl.name, decl.span.clone()),
-            ResolvedNCommand::AddRuleset(span, name) => self.check(*name, span.clone()),
+            ResolvedNCommand::Sort(span, name, _args) => self.check(name.clone(), span.clone()),
+            ResolvedNCommand::Function(decl) => self.check(decl.name.clone(), decl.span.clone()),
+            ResolvedNCommand::AddRuleset(span, name) => self.check(name.clone(), span.clone()),
             ResolvedNCommand::UnstableCombinedRuleset(span, name, _args) => {
-                self.check(*name, span.clone())
+                self.check(name.clone(), span.clone())
             }
             ResolvedNCommand::NormRule { rule, .. } => {
                 let mut inner = self.clone();
@@ -65,7 +65,7 @@ impl Names {
                 ResolvedExpr::Lit(..) => {}
                 ResolvedExpr::Var(span, name) => {
                     if !inner.0.contains_key(&name.name) {
-                        inner.0.insert(name.name, span.clone());
+                        inner.0.insert(name.name.clone(), span.clone());
                     }
                 }
                 ResolvedExpr::Call(_span, _func, args) => {
@@ -95,7 +95,7 @@ impl Names {
 
     fn check_shadowing_action(&mut self, action: &ResolvedAction) -> Result<(), Error> {
         if let ResolvedAction::Let(span, name, _args) = action {
-            self.check(name.name, span.clone())
+            self.check(name.name.clone(), span.clone())
         } else {
             Ok(())
         }

@@ -13,7 +13,7 @@
 use super::*;
 
 #[derive(Clone, Debug, PartialEq, Eq, Hash)]
-pub struct FunctionContainer(ResolvedFunctionId, Vec<(bool, Value)>, Symbol);
+pub struct FunctionContainer(ResolvedFunctionId, Vec<(bool, Value)>, String);
 
 impl Container for FunctionContainer {
     fn rebuild_contents(&mut self, rebuilder: &dyn Rebuilder) -> bool {
@@ -34,14 +34,14 @@ impl Container for FunctionContainer {
 
 #[derive(Debug)]
 pub struct FunctionSort {
-    name: Symbol,
+    name: String,
     inputs: Vec<ArcSort>,
     output: ArcSort,
 }
 
 impl FunctionSort {
-    pub fn name(&self) -> Symbol {
-        self.name
+    pub fn name(&self) -> &str {
+        &self.name
     }
 
     pub fn inputs(&self) -> &[ArcSort] {
@@ -54,23 +54,23 @@ impl FunctionSort {
 }
 
 impl Presort for FunctionSort {
-    fn presort_name() -> Symbol {
-        "UnstableFn".into()
+    fn presort_name() -> &'static str {
+        "UnstableFn"
     }
 
-    fn reserved_primitives() -> Vec<Symbol> {
-        vec!["unstable-fn".into(), "unstable-app".into()]
+    fn reserved_primitives() -> Vec<&'static str> {
+        vec!["unstable-fn", "unstable-app"]
     }
 
     fn make_sort(
         typeinfo: &mut TypeInfo,
-        name: Symbol,
+        name: String,
         args: &[Expr],
     ) -> Result<ArcSort, TypeError> {
         if let [inputs, Expr::Var(span, output)] = args {
             let output_sort = typeinfo
                 .get_sort_by_name(output)
-                .ok_or(TypeError::UndefinedSort(*output, span.clone()))?;
+                .ok_or(TypeError::UndefinedSort(output.clone(), span.clone()))?;
 
             let input_sorts = match inputs {
                 Expr::Call(_, first, rest_args) => {
@@ -85,7 +85,7 @@ impl Presort for FunctionSort {
                         .map(|arg| {
                             typeinfo
                                 .get_sort_by_name(arg)
-                                .ok_or(TypeError::UndefinedSort(*arg, span.clone()))
+                                .ok_or(TypeError::UndefinedSort(arg.clone(), span.clone()))
                                 .cloned()
                         })
                         .collect::<Result<Vec<_>, _>>()?
@@ -107,8 +107,8 @@ impl Presort for FunctionSort {
 }
 
 impl Sort for FunctionSort {
-    fn name(&self) -> Symbol {
-        self.name
+    fn name(&self) -> &str {
+        &self.name
     }
 
     fn column_ty(&self, _backend: &egglog_bridge::EGraph) -> ColumnTy {
@@ -132,11 +132,11 @@ impl Sort for FunctionSort {
         self.inputs.iter().any(|s| s.is_eq_sort())
     }
 
-    fn serialized_name(&self, _value: Value) -> Symbol {
+    fn serialized_name(&self, _value: Value) -> &str {
         // TODO: The old implementation looks up the function name contained in the function structure.
         // In the new backend, this requires a handle to the new backend to get the container value.
         // We can change the interface of `serialized_name` to take an `EGraph` in a follow-up PR.
-        "unstable-fn".into()
+        "unstable-fn"
     }
 
     fn inner_sorts(&self) -> Vec<ArcSort> {
@@ -170,16 +170,16 @@ impl Sort for FunctionSort {
         termdag: &mut TermDag,
         mut element_terms: Vec<Term>,
     ) -> Term {
-        let name = containers.get_val::<FunctionContainer>(value).unwrap().2;
-        let head = termdag.lit(Literal::String(name));
+        let name = &containers.get_val::<FunctionContainer>(value).unwrap().2;
+        let head = termdag.lit(Literal::String(name.clone()));
         element_terms.insert(0, head);
-        termdag.app("unstable-fn".into(), element_terms)
+        termdag.app("unstable-fn".to_owned(), element_terms)
     }
 }
 
 /// Takes a string and any number of partially applied args of any sort and returns a function
 struct FunctionCTorTypeConstraint {
-    name: Symbol,
+    name: String,
     function: Arc<FunctionSort>,
     span: Span,
 }
@@ -196,7 +196,7 @@ impl TypeConstraint for FunctionCTorTypeConstraint {
                 constraint::ImpossibleConstraint::ArityMismatch {
                     atom: core::Atom {
                         span: self.span.clone(),
-                        head: self.name,
+                        head: self.name.clone(),
                         args: arguments.to_vec(),
                     },
                     expected: 2,
@@ -220,7 +220,7 @@ impl TypeConstraint for FunctionCTorTypeConstraint {
                         constraint::ImpossibleConstraint::ArityMismatch {
                             atom: core::Atom {
                                 span: self.span.clone(),
-                                head: self.name,
+                                head: self.name.clone(),
                                 args: arguments.to_vec(),
                             },
                             expected: self.function.inputs.len() + func_type.input.len() + 1,
@@ -277,18 +277,18 @@ impl TypeConstraint for FunctionCTorTypeConstraint {
 // (unstable-fn "name" [<arg1>, <arg2>, ...])
 #[derive(Clone)]
 struct Ctor {
-    name: Symbol,
+    name: String,
     function: Arc<FunctionSort>,
 }
 
 impl Primitive for Ctor {
-    fn name(&self) -> Symbol {
-        self.name
+    fn name(&self) -> &str {
+        &self.name
     }
 
     fn get_type_constraints(&self, span: &Span) -> Box<dyn TypeConstraint> {
         Box::new(FunctionCTorTypeConstraint {
-            name: self.name,
+            name: self.name.clone(),
             function: self.function.clone(),
             span: span.clone(),
         })
@@ -311,7 +311,7 @@ impl Primitive for Ctor {
 pub struct ResolvedFunction {
     pub id: ResolvedFunctionId,
     pub do_rebuild: Vec<bool>,
-    pub name: Symbol,
+    pub name: String,
 }
 
 impl core_relations::Primitive for ResolvedFunction {}
@@ -325,13 +325,13 @@ pub enum ResolvedFunctionId {
 // (unstable-app <function> [<arg1>, <arg2>, ...])
 #[derive(Clone)]
 struct Apply {
-    name: Symbol,
+    name: String,
     function: Arc<FunctionSort>,
 }
 
 impl Primitive for Apply {
-    fn name(&self) -> Symbol {
-        self.name
+    fn name(&self) -> &str {
+        &self.name
     }
 
     fn get_type_constraints(&self, span: &Span) -> Box<dyn TypeConstraint> {

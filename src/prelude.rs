@@ -10,7 +10,7 @@ use crate::*;
 use std::any::{Any, TypeId};
 
 // Re-exports in `prelude` for convenience.
-pub use egglog::ast::{Action, Fact, Facts, GenericActions, Symbol};
+pub use egglog::ast::{Action, Fact, Facts, GenericActions};
 pub use egglog::sort::{BigIntSort, BigRatSort, BoolSort, F64Sort, I64Sort, StringSort, UnitSort};
 pub use egglog::{action, actions, datatype, expr, fact, facts, sort, vars};
 pub use egglog::{span, EGraph};
@@ -19,7 +19,7 @@ pub mod exprs {
     use super::*;
 
     pub fn var(name: &str) -> Expr {
-        Expr::Var(span!(), name.into())
+        Expr::Var(span!(), name.to_owned())
     }
 
     pub fn int(value: i64) -> Expr {
@@ -27,13 +27,13 @@ pub mod exprs {
     }
 
     pub fn call(f: &str, xs: Vec<Expr>) -> Expr {
-        Expr::Call(span!(), f.into(), xs)
+        Expr::Call(span!(), f.to_owned(), xs)
     }
 }
 
 /// Create a new ruleset.
 pub fn add_ruleset(egraph: &mut EGraph, ruleset: &str) -> Result<Vec<String>, Error> {
-    egraph.run_program(vec![Command::AddRuleset(span!(), ruleset.into())])
+    egraph.run_program(vec![Command::AddRuleset(span!(), ruleset.to_owned())])
 }
 
 /// Run one iteration of a ruleset.
@@ -41,7 +41,7 @@ pub fn run_ruleset(egraph: &mut EGraph, ruleset: &str) -> Result<Vec<String>, Er
     egraph.run_program(vec![Command::RunSchedule(Schedule::Run(
         span!(),
         RunConfig {
-            ruleset: ruleset.into(),
+            ruleset: ruleset.to_owned(),
             until: None,
         },
     ))])
@@ -104,16 +104,16 @@ macro_rules! facts {
 #[macro_export]
 macro_rules! action {
     ((let $name:ident $value:tt)) => {
-        Action::Let(span!(), Symbol::from(stringify!($name)), expr!($value))
+        Action::Let(span!(), String::from(stringify!($name)), expr!($value))
     };
     ((set ($f:ident $($x:tt)*) $value:tt)) => {
-        Action::Set(span!(), Symbol::from(stringify!($f)), vec![$(expr!($x)),*], expr!($value))
+        Action::Set(span!(), String::from(stringify!($f)), vec![$(expr!($x)),*], expr!($value))
     };
     ((delete ($f:ident $($x:tt)*))) => {
-        Action::Change(span!(), Change::Delete, Symbol::from(stringify!($f)), vec![$(expr!($x)),*])
+        Action::Change(span!(), Change::Delete, String::from(stringify!($f)), vec![$(expr!($x)),*])
     };
     ((subsume ($f:ident $($x:tt)*))) => {
-        Action::Change(span!(), Change::Subsume, Symbol::from(stringify!($f)), vec![$(expr!($x)),*])
+        Action::Change(span!(), Change::Subsume, String::from(stringify!($f)), vec![$(expr!($x)),*])
     };
     ((union $x:tt $y:tt)) => {
         Action::Union(span!(), expr!($x), expr!($y))
@@ -200,7 +200,7 @@ macro_rules! actions {
 pub fn rule(
     egraph: &mut EGraph,
     ruleset: &str,
-    facts: Facts<Symbol, Symbol>,
+    facts: Facts<String, String>,
     actions: Actions,
 ) -> Result<Vec<String>, Error> {
     let rule = Rule {
@@ -210,8 +210,8 @@ pub fn rule(
     };
 
     egraph.run_program(vec![Command::Rule {
-        name: format!("{rule:?}").into(),
-        ruleset: ruleset.into(),
+        name: format!("{rule:?}"),
+        ruleset: ruleset.to_owned(),
         rule,
     }])
 }
@@ -221,7 +221,7 @@ pub fn rule(
 pub struct RustRuleContext<'a, 'b> {
     exec_state: &'a mut ExecutionState<'b>,
     union_action: egglog_bridge::UnionAction,
-    table_actions: HashMap<Symbol, egglog_bridge::TableAction>,
+    table_actions: HashMap<String, egglog_bridge::TableAction>,
     panic_id: ExternalFunctionId,
 }
 
@@ -237,7 +237,7 @@ impl RustRuleContext<'_, '_> {
     }
 
     fn get_table_action(&self, table: &str) -> egglog_bridge::TableAction {
-        self.table_actions[&Symbol::from(table)].clone()
+        self.table_actions[table].clone()
     }
 
     /// Do a table lookup. This is potentially a mutable operation!
@@ -283,17 +283,17 @@ impl RustRuleContext<'_, '_> {
 
 #[derive(Clone)]
 struct RustRuleRhs<F: Fn(&mut RustRuleContext, &[Value]) -> Option<()>> {
-    name: Symbol,
+    name: String,
     inputs: Vec<ArcSort>,
     union_action: egglog_bridge::UnionAction,
-    table_actions: HashMap<Symbol, egglog_bridge::TableAction>,
+    table_actions: HashMap<String, egglog_bridge::TableAction>,
     panic_id: ExternalFunctionId,
     func: F,
 }
 
 impl<F: Fn(&mut RustRuleContext, &[Value]) -> Option<()>> Primitive for RustRuleRhs<F> {
-    fn name(&self) -> Symbol {
-        self.name
+    fn name(&self) -> &str {
+        &self.name
     }
 
     fn get_type_constraints(&self, span: &Span) -> Box<dyn TypeConstraint> {
@@ -398,13 +398,13 @@ pub fn rust_rule(
     egraph: &mut EGraph,
     ruleset: &str,
     vars: &[(&str, ArcSort)],
-    facts: Facts<Symbol, Symbol>,
+    facts: Facts<String, String>,
     func: impl Fn(&mut RustRuleContext, &[Value]) -> Option<()> + Clone + Send + Sync + 'static,
 ) -> Result<Vec<String>, Error> {
-    let prim_name = egraph.parser.symbol_gen.fresh(&"rust_rule_prim".into());
+    let prim_name = egraph.parser.symbol_gen.fresh("rust_rule_prim");
     let panic_id = egraph.backend.new_panic(format!("{prim_name}_panic"));
     egraph.add_primitive(RustRuleRhs {
-        name: prim_name,
+        name: prim_name.clone(),
         inputs: vars.iter().map(|(_, s)| s.clone()).collect(),
         union_action: egglog_bridge::UnionAction::new(&egraph.backend),
         table_actions: egraph
@@ -412,7 +412,7 @@ pub fn rust_rule(
             .iter()
             .map(|(k, v)| {
                 (
-                    *k,
+                    k.clone(),
                     egglog_bridge::TableAction::new(&egraph.backend, v.backend_id),
                 )
             })
@@ -426,7 +426,7 @@ pub fn rust_rule(
         head: GenericActions(vec![GenericAction::Expr(
             span!(),
             exprs::call(
-                prim_name.into(),
+                &prim_name,
                 vars.iter().map(|(v, _)| exprs::var(v)).collect(),
             ),
         )]),
@@ -434,8 +434,8 @@ pub fn rust_rule(
     };
 
     egraph.run_program(vec![Command::Rule {
-        name: format!("{rule:?}").into(),
-        ruleset: ruleset.into(),
+        name: format!("{rule:?}"),
+        ruleset: ruleset.to_owned(),
         rule,
     }])
 }
@@ -503,7 +503,7 @@ impl QueryResult {
 pub fn query(
     egraph: &mut EGraph,
     vars: &[(&str, ArcSort)],
-    facts: Facts<Symbol, Symbol>,
+    facts: Facts<String, String>,
 ) -> Result<QueryResult, Error> {
     use std::sync::{Arc, Mutex};
 
@@ -514,13 +514,10 @@ pub fn query(
     }));
     let results_weak = Arc::downgrade(&results);
 
-    let ruleset = egraph
-        .parser
-        .symbol_gen
-        .fresh(&Symbol::from("query_ruleset"));
-    add_ruleset(egraph, ruleset.into())?;
+    let ruleset = egraph.parser.symbol_gen.fresh("query_ruleset");
+    add_ruleset(egraph, &ruleset)?;
 
-    rust_rule(egraph, ruleset.into(), vars, facts, move |_, values| {
+    rust_rule(egraph, &ruleset, vars, facts, move |_, values| {
         let arc = results_weak.upgrade().unwrap();
         let mut results = arc.lock().unwrap();
         results.rows += 1;
@@ -528,7 +525,7 @@ pub fn query(
         Some(())
     })?;
 
-    run_ruleset(egraph, ruleset.into())?;
+    run_ruleset(egraph, &ruleset)?;
 
     let ruleset = egraph.rulesets.swap_remove(&ruleset).unwrap();
 
@@ -547,7 +544,7 @@ pub fn query(
 
 /// Declare a new sort.
 pub fn add_sort(egraph: &mut EGraph, name: &str) -> Result<Vec<String>, Error> {
-    egraph.run_program(vec![Command::Sort(span!(), name.into(), None)])
+    egraph.run_program(vec![Command::Sort(span!(), name.to_owned(), None)])
 }
 
 /// Declare a new function table.
@@ -555,11 +552,11 @@ pub fn add_function(
     egraph: &mut EGraph,
     name: &str,
     schema: Schema,
-    merge: Option<GenericExpr<Symbol, Symbol>>,
+    merge: Option<GenericExpr<String, String>>,
 ) -> Result<Vec<String>, Error> {
     egraph.run_program(vec![Command::Function {
         span: span!(),
-        name: name.into(),
+        name: name.to_owned(),
         schema,
         merge,
     }])
@@ -575,7 +572,7 @@ pub fn add_constructor(
 ) -> Result<Vec<String>, Error> {
     egraph.run_program(vec![Command::Constructor {
         span: span!(),
-        name: name.into(),
+        name: name.to_owned(),
         schema,
         cost,
         unextractable,
@@ -586,11 +583,11 @@ pub fn add_constructor(
 pub fn add_relation(
     egraph: &mut EGraph,
     name: &str,
-    inputs: Vec<Symbol>,
+    inputs: Vec<String>,
 ) -> Result<Vec<String>, Error> {
     egraph.run_program(vec![Command::Relation {
         span: span!(),
-        name: name.into(),
+        name: name.to_owned(),
         inputs,
     }])
 }
@@ -604,8 +601,8 @@ macro_rules! datatype {
             $egraph,
             stringify!($name),
             Schema {
-                input: vec![$(stringify!($args).into()),*],
-                output: stringify!($sort).into(),
+                input: vec![$(stringify!($args).to_owned()),*],
+                output: stringify!($sort).to_owned(),
             },
             [$($cost)*].first().copied(),
             false,
@@ -637,8 +634,8 @@ pub trait LeafSort: Any + Send + Sync + Debug {
 struct LeafSortImpl<T: LeafSort>(T);
 
 impl<T: LeafSort> Sort for LeafSortImpl<T> {
-    fn name(&self) -> Symbol {
-        self.0.name().into()
+    fn name(&self) -> &str {
+        self.0.name()
     }
 
     fn column_ty(&self, backend: &egglog_bridge::EGraph) -> ColumnTy {
@@ -680,7 +677,7 @@ impl<T: LeafSort> Sort for LeafSortImpl<T> {
 /// of the methods. Do not override `to_arcsort`.
 pub trait ContainerSort: Any + Send + Sync + Debug {
     type Container: core_relations::Container;
-    fn name(&self) -> Symbol;
+    fn name(&self) -> &str;
     fn is_eq_container_sort(&self) -> bool;
     fn inner_sorts(&self) -> Vec<ArcSort>;
     fn inner_values(&self, _: &Containers, _: Value) -> Vec<(ArcSort, Value)>;
@@ -700,7 +697,7 @@ pub trait ContainerSort: Any + Send + Sync + Debug {
 struct ContainerSortImpl<T: ContainerSort>(T);
 
 impl<T: ContainerSort> Sort for ContainerSortImpl<T> {
-    fn name(&self) -> Symbol {
+    fn name(&self) -> &str {
         self.0.name()
     }
 
@@ -736,8 +733,8 @@ impl<T: ContainerSort> Sort for ContainerSortImpl<T> {
         self.0.is_eq_container_sort()
     }
 
-    fn serialized_name(&self, value: Value) -> Symbol {
-        self.0.serialized_name(value).into()
+    fn serialized_name(&self, value: Value) -> &str {
+        self.0.serialized_name(value)
     }
 
     fn register_primitives(self: Arc<Self>, eg: &mut EGraph) {

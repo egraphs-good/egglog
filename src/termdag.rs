@@ -11,8 +11,8 @@ pub type TermId = usize;
 #[derive(Clone, PartialEq, Eq, Hash, Debug)]
 pub enum Term {
     Lit(Literal),
-    Var(Symbol),
-    App(Symbol, Vec<TermId>),
+    Var(String),
+    App(String, Vec<TermId>),
 }
 
 /// A hashconsing arena for [`Term`]s.
@@ -59,7 +59,7 @@ impl TermDag {
     /// and insert into the DAG if it is not already present.
     ///
     /// Panics if any of the children are not already in the DAG.
-    pub fn app(&mut self, sym: Symbol, children: Vec<Term>) -> Term {
+    pub fn app(&mut self, sym: String, children: Vec<Term>) -> Term {
         let node = Term::App(sym, children.iter().map(|c| self.lookup(c)).collect());
 
         self.add_node(&node);
@@ -79,7 +79,7 @@ impl TermDag {
 
     /// Make and return a [`Term::Var`] with the given symbol, and insert into
     /// the DAG if it is not already present.
-    pub fn var(&mut self, sym: Symbol) -> Term {
+    pub fn var(&mut self, sym: String) -> Term {
         let node = Term::Var(sym);
 
         self.add_node(&node);
@@ -98,10 +98,10 @@ impl TermDag {
     /// This involves inserting every subexpression into this DAG. Because
     /// TermDags are hashconsed, the resulting term is guaranteed to maximally
     /// share subterms.
-    pub fn expr_to_term(&mut self, expr: &GenericExpr<Symbol, Symbol>) -> Term {
+    pub fn expr_to_term(&mut self, expr: &GenericExpr<String, String>) -> Term {
         let res = match expr {
             GenericExpr::Lit(_, lit) => Term::Lit(lit.clone()),
-            GenericExpr::Var(_, v) => Term::Var(*v),
+            GenericExpr::Var(_, v) => Term::Var(v.to_owned()),
             GenericExpr::Call(_, op, args) => {
                 let args = args
                     .iter()
@@ -110,7 +110,7 @@ impl TermDag {
                         self.lookup(&term)
                     })
                     .collect();
-                Term::App(*op, args)
+                Term::App(op.clone(), args)
             }
         };
         self.add_node(&res);
@@ -123,13 +123,13 @@ impl TermDag {
     pub fn term_to_expr(&self, term: &Term, span: Span) -> Expr {
         match term {
             Term::Lit(lit) => Expr::Lit(span, lit.clone()),
-            Term::Var(v) => Expr::Var(span, *v),
+            Term::Var(v) => Expr::Var(span, v.clone()),
             Term::App(op, args) => {
                 let args: Vec<_> = args
                     .iter()
                     .map(|a| self.term_to_expr(self.get(*a), span.clone()))
                     .collect();
-                Expr::Call(span, *op, args)
+                Expr::Call(span, op.clone(), args)
             }
         }
     }
@@ -237,7 +237,7 @@ mod tests {
                 let span = span!();
                 assert_eq!(
                     td.term_to_expr(td.get(*x), span.clone()),
-                    crate::ast::GenericExpr::Var(span, Symbol::new("x"))
+                    crate::ast::GenericExpr::Var(span, "x".to_owned())
                 )
             }
             (head, _) => panic!("unexpected head {}, in {}:{}:{}", head, file!(), line!(), column!())

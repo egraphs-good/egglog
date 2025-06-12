@@ -43,7 +43,7 @@ impl LeafSort for BigIntSort {
         add_primitive!(eg, "min" = |a: Z, b: Z| -> Z { a.min(b) });
         add_primitive!(eg, "max" = |a: Z, b: Z| -> Z { a.max(b) });
 
-        add_primitive!(eg, "to-string" = |a: Z| -> S { S::new(a.to_string().into()) });
+        add_primitive!(eg, "to-string" = |a: Z| -> S { S::new(a.to_string()) });
         add_primitive!(eg, "from-string" = |a: S| -?> Z {
             a.as_str().parse::<BigInt>().ok().map(Z::new)
         });
@@ -57,7 +57,7 @@ impl LeafSort for BigIntSort {
     ) -> Term {
         let bigint = primitives.unwrap::<Z>(value);
 
-        let as_string = termdag.lit(Literal::String(bigint.0.to_string().into()));
-        termdag.app("from-string".into(), vec![as_string])
+        let as_string = termdag.lit(Literal::String(bigint.0.to_string()));
+        termdag.app("from-string".to_owned(), vec![as_string])
     }
 }

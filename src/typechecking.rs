@@ -4,7 +4,7 @@ use core_relations::ExternalFunction;
 
 #[derive(Clone, Debug)]
 pub struct FuncType {
-    pub name: Symbol,
+    pub name: String,
     pub subtype: FunctionSubtype,
     pub input: Vec<ArcSort>,
     pub output: ArcSort,
@@ -46,13 +46,13 @@ impl Debug for PrimitiveWithId {
 /// Stores resolved typechecking information.
 #[derive(Clone, Default)]
 pub struct TypeInfo {
-    mksorts: HashMap<Symbol, MkSort>,
+    mksorts: HashMap<String, MkSort>,
     // TODO(yz): I want to get rid of this as now we have user-defined primitives and constraint based type checking
-    reserved_primitives: HashSet<Symbol>,
-    sorts: HashMap<Symbol, Arc<dyn Sort>>,
-    primitives: HashMap<Symbol, Vec<PrimitiveWithId>>,
-    func_types: HashMap<Symbol, FuncType>,
-    global_sorts: HashMap<Symbol, ArcSort>,
+    reserved_primitives: HashSet<&'static str>,
+    sorts: HashMap<String, Arc<dyn Sort>>,
+    primitives: HashMap<String, Vec<PrimitiveWithId>>,
+    func_types: HashMap<String, FuncType>,
+    global_sorts: HashMap<String, ArcSort>,
 }
 
 // These methods need to be on the `EGraph` in order to
@@ -64,8 +64,8 @@ impl EGraph {
 
     pub fn declare_sort(
         &mut self,
-        name: impl Into<Symbol>,
-        presort_and_args: &Option<(Symbol, Vec<Expr>)>,
+        name: impl Into<String>,
+        presort_and_args: &Option<(String, Vec<Expr>)>,
         span: Span,
     ) -> Result<(), TypeError> {
         let name = name.into();
@@ -79,7 +79,7 @@ impl EGraph {
                 if let Some(mksort) = self.type_info.mksorts.get(presort) {
                     mksort(&mut self.type_info, name, args)?
                 } else {
-                    return Err(TypeError::PresortNotFound(*presort, span));
+                    return Err(TypeError::PresortNotFound(presort.clone(), span));
                 }
             }
         };
@@ -92,8 +92,8 @@ impl EGraph {
         sort.register_type(&mut self.backend);
 
         let name = sort.name();
-        match self.type_info.sorts.entry(name) {
-            HEntry::Occupied(_) => Err(TypeError::SortAlreadyBound(name, span)),
+        match self.type_info.sorts.entry(name.to_owned()) {
+            HEntry::Occupied(_) => Err(TypeError::SortAlreadyBound(name.to_owned(), span)),
             HEntry::Vacant(e) => {
                 e.insert(sort.clone());
                 sort.register_primitives(self);
@@ -123,7 +123,7 @@ impl EGraph {
         let ext = self.backend.register_external_func(Wrapper(x));
         self.type_info
             .primitives
-            .entry(prim.name())
+            .entry(prim.name().to_owned())
             .or_default()
             .push(PrimitiveWithId(prim, ext));
     }
@@ -152,14 +152,14 @@ impl EGraph {
                 name,
             } => ResolvedNCommand::NormRule {
                 rule: self.type_info.typecheck_rule(symbol_gen, rule)?,
-                ruleset: *ruleset,
-                name: *name,
+                ruleset: ruleset.clone(),
+                name: name.clone(),
             },
             NCommand::Sort(span, sort, presort_and_args) => {
                 // Note this is bad since typechecking should be pure and idempotent
                 // Otherwise typechecking the same program twice will fail
-                self.declare_sort(*sort, presort_and_args, span.clone())?;
-                ResolvedNCommand::Sort(span.clone(), *sort, presort_and_args.clone())
+                self.declare_sort(sort.clone(), presort_and_args, span.clone())?;
+                ResolvedNCommand::Sort(span.clone(), sort.clone(), presort_and_args.clone())
             }
             NCommand::CoreAction(Action::Let(span, var, expr)) => {
                 let expr = self
@@ -168,9 +168,9 @@ impl EGraph {
                 let output_type = expr.output_type();
                 self.type_info
                     .global_sorts
-                    .insert(*var, output_type.clone());
+                    .insert(var.clone(), output_type.clone());
                 let var = ResolvedVar {
-                    name: *var,
+                    name: var.clone(),
                     sort: output_type,
                     // not a global reference, but a global binding
                     is_global_ref: false,
@@ -189,7 +189,7 @@ impl EGraph {
                 let res_variants =
                     self.type_info
                         .typecheck_expr(symbol_gen, variants, &Default::default())?;
-                if res_variants.output_type().name() != I64Sort.name().into() {
+                if res_variants.output_type().name() != I64Sort.name() {
                     return Err(TypeError::Mismatch {
                         expr: variants.clone(),
                         expected: I64Sort.to_arcsort(),
@@ -215,21 +215,28 @@ impl EGraph {
                 let value =
                     self.type_info
                         .typecheck_expr(symbol_gen, value, &Default::default())?;
-                ResolvedNCommand::SetOption { name: *name, value }
+                ResolvedNCommand::SetOption {
+                    name: name.clone(),
+                    value,
+                }
             }
             NCommand::AddRuleset(span, ruleset) => {
-                ResolvedNCommand::AddRuleset(span.clone(), *ruleset)
+                ResolvedNCommand::AddRuleset(span.clone(), ruleset.clone())
             }
             NCommand::UnstableCombinedRuleset(span, name, sub_rulesets) => {
-                ResolvedNCommand::UnstableCombinedRuleset(span.clone(), *name, sub_rulesets.clone())
+                ResolvedNCommand::UnstableCombinedRuleset(
+                    span.clone(),
+                    name.clone(),
+                    sub_rulesets.clone(),
+                )
             }
             NCommand::PrintOverallStatistics => ResolvedNCommand::PrintOverallStatistics,
             NCommand::PrintTable(span, table, size) => {
-                ResolvedNCommand::PrintTable(span.clone(), *table, *size)
+                ResolvedNCommand::PrintTable(span.clone(), table.clone(), *size)
             }
             NCommand::PrintSize(span, n) => {
                 // Should probably also resolve the function symbol here
-                ResolvedNCommand::PrintSize(span.clone(), *n)
+                ResolvedNCommand::PrintSize(span.clone(), n.clone())
             }
             NCommand::Output { span, file, exprs } => {
                 let exprs = exprs
@@ -247,11 +254,11 @@ impl EGraph {
             }
             NCommand::Input { span, name, file } => ResolvedNCommand::Input {
                 span: span.clone(),
-                name: *name,
+                name: name.clone(),
                 file: file.clone(),
             },
             NCommand::UserDefined(span, name, exprs) => {
-                ResolvedNCommand::UserDefined(span.clone(), *name, exprs.clone())
+                ResolvedNCommand::UserDefined(span.clone(), name.clone(), exprs.clone())
             }
         };
         Ok(command)
@@ -262,8 +269,8 @@ impl TypeInfo {
     /// Adds a sort constructor to the typechecker's known set of types.
     pub fn add_presort<S: Presort>(&mut self, span: Span) -> Result<(), TypeError> {
         let name = S::presort_name();
-        match self.mksorts.entry(name) {
-            HEntry::Occupied(_) => Err(TypeError::SortAlreadyBound(name, span)),
+        match self.mksorts.entry(name.to_owned()) {
+            HEntry::Occupied(_) => Err(TypeError::SortAlreadyBound(name.to_owned(), span)),
             HEntry::Vacant(e) => {
                 e.insert(S::make_sort);
                 self.reserved_primitives.extend(S::reserved_primitives());
@@ -334,7 +341,7 @@ impl TypeInfo {
                 if let Some(sort) = self.sorts.get(name) {
                     Ok(sort.clone())
                 } else {
-                    Err(TypeError::UndefinedSort(*name, func.span.clone()))
+                    Err(TypeError::UndefinedSort(name.clone(), func.span.clone()))
                 }
             })
             .collect::<Result<Vec<_>, _>>()?;
@@ -342,13 +349,13 @@ impl TypeInfo {
             Ok(sort.clone())
         } else {
             Err(TypeError::UndefinedSort(
-                func.schema.output,
+                func.schema.output.clone(),
                 func.span.clone(),
             ))
         }?;
 
         Ok(FuncType {
-            name: func.name,
+            name: func.name.clone(),
             subtype: func.subtype,
             input,
             output: output.clone(),
@@ -361,18 +368,21 @@ impl TypeInfo {
         fdecl: &FunctionDecl,
     ) -> Result<ResolvedFunctionDecl, TypeError> {
         if self.sorts.contains_key(&fdecl.name) {
-            return Err(TypeError::SortAlreadyBound(fdecl.name, fdecl.span.clone()));
+            return Err(TypeError::SortAlreadyBound(
+                fdecl.name.clone(),
+                fdecl.span.clone(),
+            ));
         }
-        if self.is_primitive(fdecl.name) {
+        if self.is_primitive(&fdecl.name) {
             return Err(TypeError::PrimitiveAlreadyBound(
-                fdecl.name,
+                fdecl.name.clone(),
                 fdecl.span.clone(),
             ));
         }
         let ftype = self.function_to_functype(fdecl)?;
-        if self.func_types.insert(fdecl.name, ftype).is_some() {
+        if self.func_types.insert(fdecl.name.clone(), ftype).is_some() {
             return Err(TypeError::FunctionAlreadyBound(
-                fdecl.name,
+                fdecl.name.clone(),
                 fdecl.span.clone(),
             ));
         }
@@ -380,15 +390,15 @@ impl TypeInfo {
         let output_type = self.sorts.get(&fdecl.schema.output).unwrap();
         if fdecl.subtype == FunctionSubtype::Constructor && !output_type.is_eq_sort() {
             return Err(TypeError::ConstructorOutputNotSort(
-                fdecl.name,
+                fdecl.name.clone(),
                 fdecl.span.clone(),
             ));
         }
-        bound_vars.insert("old".into(), (fdecl.span.clone(), output_type.clone()));
-        bound_vars.insert("new".into(), (fdecl.span.clone(), output_type.clone()));
+        bound_vars.insert("old", (fdecl.span.clone(), output_type.clone()));
+        bound_vars.insert("new", (fdecl.span.clone(), output_type.clone()));
 
         Ok(ResolvedFunctionDecl {
-            name: fdecl.name,
+            name: fdecl.name.clone(),
             subtype: fdecl.subtype,
             schema: fdecl.schema.clone(),
             merge: match &fdecl.merge {
@@ -432,7 +442,7 @@ impl TypeInfo {
                 ResolvedSchedule::Run(
                     span.clone(),
                     ResolvedRunConfig {
-                        ruleset: *ruleset,
+                        ruleset: ruleset.clone(),
                         until,
                     },
                 )
@@ -493,7 +503,7 @@ impl TypeInfo {
                             && t.subtype != FunctionSubtype::Relation
                         {
                             Err(TypeError::LookupInRuleDisallowed(
-                                head.to_symbol(),
+                                head.to_string(),
                                 span.clone(),
                             ))
                         } else {
@@ -557,9 +567,10 @@ impl TypeInfo {
         &self,
         symbol_gen: &mut SymbolGen,
         actions: &Actions,
-        binding: &IndexMap<Symbol, (Span, ArcSort)>,
+        binding: &IndexMap<&str, (Span, ArcSort)>,
     ) -> Result<ResolvedActions, TypeError> {
-        let mut binding_set = binding.keys().cloned().collect::<IndexSet<_>>();
+        let mut binding_set: IndexSet<String> =
+            binding.keys().copied().map(str::to_string).collect();
         let (actions, mapped_action) =
             actions.to_core_actions(self, &mut binding_set, symbol_gen)?;
         let mut problem = Problem::default();
@@ -569,7 +580,7 @@ impl TypeInfo {
 
         // add bindings from the context
         for (var, (span, sort)) in binding {
-            problem.assign_local_var_type(*var, span.clone(), sort.clone())?;
+            problem.assign_local_var_type(var, span.clone(), sort.clone())?;
         }
 
         let assignment = problem
@@ -584,7 +595,7 @@ impl TypeInfo {
         &self,
         symbol_gen: &mut SymbolGen,
         expr: &Expr,
-        binding: &IndexMap<Symbol, (Span, ArcSort)>,
+        binding: &IndexMap<&str, (Span, ArcSort)>,
     ) -> Result<ResolvedExpr, TypeError> {
         let action = Action::Expr(expr.span(), expr.clone());
         let typechecked_action = self.typecheck_action(symbol_gen, &action, binding)?;
@@ -598,37 +609,37 @@ impl TypeInfo {
         &self,
         symbol_gen: &mut SymbolGen,
         action: &Action,
-        binding: &IndexMap<Symbol, (Span, ArcSort)>,
+        binding: &IndexMap<&str, (Span, ArcSort)>,
     ) -> Result<ResolvedAction, TypeError> {
         self.typecheck_actions(symbol_gen, &Actions::singleton(action.clone()), binding)
-            .map(|mut v| {
+            .map(|v| {
                 assert_eq!(v.len(), 1);
-                v.0.pop().unwrap()
+                v.0.into_iter().next().unwrap()
             })
     }
 
-    pub fn get_sort_by_name(&self, sym: &Symbol) -> Option<&ArcSort> {
+    pub fn get_sort_by_name(&self, sym: &str) -> Option<&ArcSort> {
         self.sorts.get(sym)
     }
 
-    pub fn get_prims(&self, sym: &Symbol) -> Option<&[PrimitiveWithId]> {
+    pub fn get_prims(&self, sym: &str) -> Option<&[PrimitiveWithId]> {
         self.primitives.get(sym).map(Vec::as_slice)
     }
 
-    pub fn is_primitive(&self, sym: Symbol) -> bool {
-        self.primitives.contains_key(&sym) || self.reserved_primitives.contains(&sym)
+    pub fn is_primitive(&self, sym: &str) -> bool {
+        self.primitives.contains_key(sym) || self.reserved_primitives.contains(sym)
     }
 
-    pub fn get_func_type(&self, sym: &Symbol) -> Option<&FuncType> {
+    pub fn get_func_type(&self, sym: &str) -> Option<&FuncType> {
         self.func_types.get(sym)
     }
 
-    pub fn get_global_sort(&self, sym: &Symbol) -> Option<&ArcSort> {
+    pub fn get_global_sort(&self, sym: &str) -> Option<&ArcSort> {
         self.global_sorts.get(sym)
     }
 
-    pub fn is_global(&self, sym: Symbol) -> bool {
-        self.global_sorts.contains_key(&sym)
+    pub fn is_global(&self, sym: &str) -> bool {
+        self.global_sorts.contains_key(sym)
     }
 }
 
@@ -646,31 +657,31 @@ pub enum TypeError {
         actual: ArcSort,
     },
     #[error("{1}\nUnbound symbol {0}")]
-    Unbound(Symbol, Span),
+    Unbound(String, Span),
     #[error("{1}\nUndefined sort {0}")]
-    UndefinedSort(Symbol, Span),
+    UndefinedSort(String, Span),
     #[error("{2}\nSort {0} definition is disallowed: {1}")]
-    DisallowedSort(Symbol, String, Span),
+    DisallowedSort(String, String, Span),
     #[error("{1}\nUnbound function {0}")]
-    UnboundFunction(Symbol, Span),
+    UnboundFunction(String, Span),
     #[error("{1}\nFunction already bound {0}")]
-    FunctionAlreadyBound(Symbol, Span),
+    FunctionAlreadyBound(String, Span),
     #[error("{1}\nSort {0} already declared.")]
-    SortAlreadyBound(Symbol, Span),
+    SortAlreadyBound(String, Span),
     #[error("{1}\nPrimitive {0} already declared.")]
-    PrimitiveAlreadyBound(Symbol, Span),
+    PrimitiveAlreadyBound(String, Span),
     #[error("Function type mismatch: expected {} => {}, actual {} => {}", .1.iter().map(|s| s.name().to_string()).collect::<Vec<_>>().join(", "), .0.name(), .3.iter().map(|s| s.name().to_string()).collect::<Vec<_>>().join(", "), .2.name())]
     FunctionTypeMismatch(ArcSort, Vec<ArcSort>, ArcSort, Vec<ArcSort>),
     #[error("{1}\nPresort {0} not found.")]
-    PresortNotFound(Symbol, Span),
+    PresortNotFound(String, Span),
     #[error("{}\nFailed to infer a type for: {}", .0.span(), .0)]
     InferenceFailure(Expr),
     #[error("{1}\nVariable {0} was already defined")]
-    AlreadyDefined(Symbol, Span),
+    AlreadyDefined(String, Span),
     #[error("{1}\nThe output type of constructor function {0} must be sort")]
-    ConstructorOutputNotSort(Symbol, Span),
+    ConstructorOutputNotSort(String, Span),
     #[error("{1}\nValue lookup of non-constructor function {0} in rule is disallowed.")]
-    LookupInRuleDisallowed(Symbol, Span),
+    LookupInRuleDisallowed(String, Span),
     #[error("All alternative definitions considered failed\n{}", .0.iter().map(|e| format!("  {e}\n")).collect::<Vec<_>>().join(""))]
     AllAlternativeFailed(Vec<TypeError>),
     #[error("{}\nCannot union values of sort {}", .1, .0.name())]

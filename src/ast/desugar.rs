@@ -25,6 +25,7 @@ pub(crate) fn desugar_command(
     parser: &mut Parser,
     seminaive_transform: bool,
 ) -> Result<Vec<NCommand>, Error> {
+    let rule_name = rule_name(&command);
     let res = match command {
         Command::SetOption { name, value } => {
             vec![NCommand::SetOption { name, value }]
@@ -63,7 +64,7 @@ pub(crate) fn desugar_command(
             let mut res = vec![];
             for datatype in datatypes.iter() {
                 let span = datatype.0.clone();
-                let name = datatype.1;
+                let name = datatype.1.clone();
                 if let Subdatatypes::Variants(..) = datatype.2 {
                     res.push(NCommand::Sort(span, name, None));
                 }
@@ -92,7 +93,7 @@ pub(crate) fn desugar_command(
                         variant.name,
                         Schema {
                             input: variant.types,
-                            output: datatype,
+                            output: datatype.clone(),
                         },
                         variant.cost,
                         false,
@@ -102,11 +103,11 @@ pub(crate) fn desugar_command(
 
             res
         }
-        Command::Rewrite(ruleset, ref rewrite, subsume) => {
-            desugar_rewrite(ruleset, rule_name(&command), rewrite, subsume, parser)
+        Command::Rewrite(ruleset, rewrite, subsume) => {
+            desugar_rewrite(ruleset, rule_name, rewrite, subsume, parser)
         }
-        Command::BiRewrite(ruleset, ref rewrite) => {
-            desugar_birewrite(ruleset, rule_name(&command), rewrite, parser)
+        Command::BiRewrite(ruleset, rewrite) => {
+            desugar_birewrite(ruleset, rule_name, rewrite, parser)
         }
         Command::Include(span, file) => {
             let s = std::fs::read_to_string(&file)
@@ -120,19 +121,17 @@ pub(crate) fn desugar_command(
         Command::Rule {
             ruleset,
             mut name,
-            ref rule,
+            rule,
         } => {
-            if name == "".into() {
-                name = rule_name(&command);
+            if name.is_empty() {
+                name = rule_name;
             }
 
-            let result = vec![NCommand::NormRule {
+            vec![NCommand::NormRule {
                 ruleset,
                 name,
-                rule: rule.clone(),
-            }];
-
-            result
+                rule,
+            }]
         }
         Command::Sort(span, sort, option) => vec![NCommand::Sort(span, sort, option)],
         Command::AddRuleset(span, name) => vec![NCommand::AddRuleset(span, name)],
@@ -179,8 +178,8 @@ pub(crate) fn desugar_command(
     Ok(res)
 }
 
-fn desugar_datatype(span: Span, name: Symbol, variants: Vec<Variant>) -> Vec<NCommand> {
-    vec![NCommand::Sort(span.clone(), name, None)]
+fn desugar_datatype(span: Span, name: String, variants: Vec<Variant>) -> Vec<NCommand> {
+    vec![NCommand::Sort(span.clone(), name.clone(), None)]
         .into_iter()
         .chain(variants.into_iter().map(|variant| {
             NCommand::Function(FunctionDecl::constructor(
@@ -188,7 +187,7 @@ fn desugar_datatype(span: Span, name: Symbol, variants: Vec<Variant>) -> Vec<NCo
                 variant.name,
                 Schema {
                     input: variant.types,
-                    output: name,
+                    output: name.clone(),
                 },
                 variant.cost,
                 false,
@@ -198,17 +197,17 @@ fn desugar_datatype(span: Span, name: Symbol, variants: Vec<Variant>) -> Vec<NCo
 }
 
 fn desugar_rewrite(
-    ruleset: Symbol,
-    name: Symbol,
-    rewrite: &Rewrite,
+    ruleset: String,
+    name: String,
+    rewrite: Rewrite,
     subsume: bool,
     parser: &mut Parser,
 ) -> Vec<NCommand> {
     let span = rewrite.span.clone();
-    let var = parser.symbol_gen.fresh(&"rewrite_var__".into());
+    let var = parser.symbol_gen.fresh("rewrite_var__");
     let mut head = Actions::singleton(Action::Union(
         span.clone(),
-        Expr::Var(span.clone(), var),
+        Expr::Var(span.clone(), var.clone()),
         rewrite.rhs.clone(),
     ));
     if subsume {
@@ -217,7 +216,7 @@ fn desugar_rewrite(
                 head.0.push(Action::Change(
                     span.clone(),
                     Change::Subsume,
-                    *f,
+                    f.clone(),
                     args.to_vec(),
                 ));
             }
@@ -248,9 +247,9 @@ fn desugar_rewrite(
 }
 
 fn desugar_birewrite(
-    ruleset: Symbol,
-    name: Symbol,
-    rewrite: &Rewrite,
+    ruleset: String,
+    name: String,
+    rewrite: Rewrite,
     parser: &mut Parser,
 ) -> Vec<NCommand> {
     let span = rewrite.span.clone();
@@ -260,28 +259,22 @@ fn desugar_birewrite(
         rhs: rewrite.lhs.clone(),
         conditions: rewrite.conditions.clone(),
     };
-    desugar_rewrite(
-        ruleset,
-        format!("{}=>", name).into(),
-        rewrite,
-        false,
-        parser,
-    )
-    .into_iter()
-    .chain(desugar_rewrite(
-        ruleset,
-        format!("{}<=", name).into(),
-        &rw2,
-        false,
-        parser,
-    ))
-    .collect()
+    desugar_rewrite(ruleset.clone(), format!("{name}=>"), rewrite, false, parser)
+        .into_iter()
+        .chain(desugar_rewrite(
+            ruleset,
+            format!("{name}<="),
+            rw2,
+            false,
+            parser,
+        ))
+        .collect()
 }
 
-pub fn rule_name<Head, Leaf>(command: &GenericCommand<Head, Leaf>) -> Symbol
+pub fn rule_name<Head, Leaf>(command: &GenericCommand<Head, Leaf>) -> String
 where
     Head: Clone + Display,
     Leaf: Clone + PartialEq + Eq + Hash + Display,
 {
-    command.to_string().replace('\"', "'").into()
+    command.to_string().replace('\"', "'")
 }

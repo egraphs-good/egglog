@@ -72,43 +72,38 @@ impl SymbolGen {
 }
 
 /// This trait lets us statically dispatch between `fresh` methods for generic structs.
-pub trait FreshGen<Head, Leaf> {
+pub trait FreshGen<Head: ?Sized, Leaf> {
     fn fresh(&mut self, name_hint: &Head) -> Leaf;
 }
 
-impl FreshGen<Symbol, Symbol> for SymbolGen {
-    fn fresh(&mut self, name_hint: &Symbol) -> Symbol {
+impl FreshGen<str, String> for SymbolGen {
+    fn fresh(&mut self, name_hint: &str) -> String {
         let s = format!("{}{}{}", self.reserved_string, name_hint, self.gen);
         self.gen += 1;
-        Symbol::from(s)
+        s
+    }
+}
+
+impl FreshGen<String, String> for SymbolGen {
+    fn fresh(&mut self, name_hint: &String) -> String {
+        self.fresh(name_hint.as_str())
     }
 }
 
 impl FreshGen<ResolvedCall, ResolvedVar> for SymbolGen {
     fn fresh(&mut self, name_hint: &ResolvedCall) -> ResolvedVar {
-        let s = format!("{}{}{}", self.reserved_string, name_hint, self.gen);
+        let name = format!("{}{}{}", self.reserved_string, name_hint, self.gen);
         self.gen += 1;
         let sort = match name_hint {
             ResolvedCall::Func(f) => f.output.clone(),
             ResolvedCall::Primitive(SpecializedPrimitive { output, .. }) => output.clone(),
         };
         ResolvedVar {
-            name: s.into(),
+            name,
             sort,
             // fresh variables are never global references, since globals
             // are desugared away by `remove_globals`
             is_global_ref: false,
         }
-    }
-}
-
-// This is a convenient for `for<'a> impl Into<Symbol> for &'a T`
-pub(crate) trait SymbolLike {
-    fn to_symbol(&self) -> Symbol;
-}
-
-impl SymbolLike for Symbol {
-    fn to_symbol(&self) -> Symbol {
-        *self
     }
 }

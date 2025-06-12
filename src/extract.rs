@@ -1,4 +1,3 @@
-use crate::ast::Symbol;
 use crate::termdag::{Term, TermDag};
 use crate::util::{HashMap, HashSet};
 use crate::*;
@@ -14,7 +13,7 @@ use std::collections::VecDeque;
 /// However, the user needs to be careful to guarantee acyclicity in the extracted terms.
 pub trait CostModel<C: Cost> {
     /// Compute the total cost of a term given the cost of the root enode and its immediate children's total costs
-    fn fold(&self, head: Symbol, children_cost: &[C], head_cost: C) -> C;
+    fn fold(&self, head: &str, children_cost: &[C], head_cost: C) -> C;
 
     /// Compute the cost of just a enode by itself, without taking its children into account
     fn enode_cost(&self, egraph: &EGraph, func: &Function, row: &egglog_bridge::FunctionRow) -> C;
@@ -102,7 +101,7 @@ pub struct TreeAdditiveCostModel {}
 impl CostModel<DefaultCost> for TreeAdditiveCostModel {
     fn fold(
         &self,
-        _head: Symbol,
+        _head: &str,
         children_cost: &[DefaultCost],
         head_cost: DefaultCost,
     ) -> DefaultCost {
@@ -121,12 +120,12 @@ impl CostModel<DefaultCost> for TreeAdditiveCostModel {
 
 pub struct Extractor<C: Cost + Ord + Eq + Copy + Debug> {
     rootsorts: Vec<ArcSort>,
-    funcs: Vec<Symbol>,
+    funcs: Vec<String>,
     cost_model: Box<dyn CostModel<C>>,
-    costs: HashMap<Symbol, HashMap<Value, C>>,
+    costs: HashMap<String, HashMap<Value, C>>,
     topo_rnk_cnt: usize,
-    topo_rnk: HashMap<Symbol, HashMap<Value, usize>>,
-    parent_edge: HashMap<Symbol, HashMap<Value, (Symbol, Vec<Value>)>>,
+    topo_rnk: HashMap<String, HashMap<Value, usize>>,
+    parent_edge: HashMap<String, HashMap<Value, (String, Vec<Value>)>>,
 }
 
 impl<C: Cost + Ord + Eq + Copy + Debug> Extractor<C> {
@@ -146,15 +145,15 @@ impl<C: Cost + Ord + Eq + Copy + Debug> Extractor<C> {
         let mut rootsorts = rootsorts.unwrap_or_default();
 
         // Built a reverse index from output sort to function head symbols
-        let mut rev_index: HashMap<Symbol, Vec<Symbol>> = Default::default();
+        let mut rev_index: HashMap<String, Vec<String>> = Default::default();
         for func in egraph.functions.iter() {
             if !func.1.decl.unextractable {
-                let func_name = *func.0;
+                let func_name = func.0.clone();
                 let output_sort_name = func.1.schema.output.name();
-                if let Some(v) = rev_index.get_mut(&output_sort_name) {
+                if let Some(v) = rev_index.get_mut(output_sort_name) {
                     v.push(func_name);
                 } else {
-                    rev_index.insert(output_sort_name, vec![func_name]);
+                    rev_index.insert(output_sort_name.to_owned(), vec![func_name]);
                     if extract_all_sorts {
                         rootsorts.push(func.1.schema.output.clone());
                     }
@@ -164,38 +163,38 @@ impl<C: Cost + Ord + Eq + Copy + Debug> Extractor<C> {
 
         // Do a BFS to find reachable tables
         let mut q: VecDeque<ArcSort> = VecDeque::new();
-        let mut seen: HashSet<Symbol> = Default::default();
+        let mut seen: HashSet<String> = Default::default();
         for rootsort in rootsorts.iter() {
             q.push_back(rootsort.clone());
-            seen.insert(rootsort.name());
+            seen.insert(rootsort.name().to_owned());
         }
 
-        let mut funcs_set: HashSet<Symbol> = Default::default();
-        let mut funcs: Vec<Symbol> = Vec::new();
+        let mut funcs_set: HashSet<String> = Default::default();
+        let mut funcs: Vec<String> = Vec::new();
         while !q.is_empty() {
             let sort = q.pop_front().unwrap();
             if sort.is_container_sort() {
                 let inner_sorts = sort.inner_sorts();
                 for s in inner_sorts {
-                    if !seen.contains(&s.name()) {
+                    if !seen.contains(s.name()) {
                         q.push_back(s.clone());
-                        seen.insert(s.name());
+                        seen.insert(s.name().to_owned());
                     }
                 }
             } else if sort.is_eq_sort() {
-                if let Some(head_symbols) = rev_index.get(&sort.name()) {
+                if let Some(head_symbols) = rev_index.get(sort.name()) {
                     for h in head_symbols {
                         if !funcs_set.contains(h) {
                             let func = egraph.functions.get(h).unwrap();
                             for ch in &func.schema.input {
                                 let ch_name = ch.name();
-                                if !seen.contains(&ch_name) {
+                                if !seen.contains(ch_name) {
                                     q.push_back(ch.clone());
-                                    seen.insert(ch_name);
+                                    seen.insert(ch_name.to_owned());
                                 }
                             }
-                            funcs_set.insert(*h);
-                            funcs.push(*h);
+                            funcs_set.insert(h.clone());
+                            funcs.push(h.clone());
                         }
                     }
                 }
@@ -203,18 +202,18 @@ impl<C: Cost + Ord + Eq + Copy + Debug> Extractor<C> {
         }
 
         // Initialize the tables to have the reachable entries
-        let mut costs: HashMap<Symbol, HashMap<Value, C>> = Default::default();
-        let mut topo_rnk: HashMap<Symbol, HashMap<Value, usize>> = Default::default();
-        let mut parent_edge: HashMap<Symbol, HashMap<Value, (Symbol, Vec<Value>)>> =
+        let mut costs: HashMap<String, HashMap<Value, C>> = Default::default();
+        let mut topo_rnk: HashMap<String, HashMap<Value, usize>> = Default::default();
+        let mut parent_edge: HashMap<String, HashMap<Value, (String, Vec<Value>)>> =
             Default::default();
 
         for func_name in funcs.iter() {
             let func = egraph.functions.get(func_name).unwrap();
-            if !costs.contains_key(&func.schema.output.name()) {
+            if !costs.contains_key(func.schema.output.name()) {
                 debug_assert!(func.schema.output.is_eq_sort());
-                costs.insert(func.schema.output.name(), Default::default());
-                topo_rnk.insert(func.schema.output.name(), Default::default());
-                parent_edge.insert(func.schema.output.name(), Default::default());
+                costs.insert(func.schema.output.name().to_owned(), Default::default());
+                topo_rnk.insert(func.schema.output.name().to_owned(), Default::default());
+                parent_edge.insert(func.schema.output.name().to_owned(), Default::default());
             }
         }
 
@@ -254,10 +253,10 @@ impl<C: Cost + Ord + Eq + Copy + Debug> Extractor<C> {
         } else if sort.is_eq_sort() {
             if self
                 .costs
-                .get(&sort.name())
+                .get(sort.name())
                 .is_some_and(|t| t.get(&value).is_some())
             {
-                Some(*self.costs.get(&sort.name()).unwrap().get(&value).unwrap())
+                Some(*self.costs.get(sort.name()).unwrap().get(&value).unwrap())
             } else {
                 None
             }
@@ -286,7 +285,7 @@ impl<C: Cost + Ord + Eq + Copy + Debug> Extractor<C> {
             }
         }
         Some(self.cost_model.fold(
-            func.decl.name,
+            &func.decl.name,
             &ch_costs,
             self.cost_model.enode_cost(egraph, func, row),
         ))
@@ -300,7 +299,7 @@ impl<C: Cost + Ord + Eq + Copy + Debug> Extractor<C> {
                     usize::max(ret, self.compute_topo_rnk_node(egraph, *value, sort))
                 })
         } else if sort.is_eq_sort() {
-            if let Some(t) = self.topo_rnk.get(&sort.name()) {
+            if let Some(t) = self.topo_rnk.get(sort.name()) {
                 *t.get(&value).unwrap_or(&usize::MAX)
             } else {
                 usize::MAX
@@ -355,7 +354,7 @@ impl<C: Cost + Ord + Eq + Copy + Debug> Extractor<C> {
                         if let Some(new_cost) = self.compute_cost_hyperedge(egraph, &row, func) {
                             match self
                                 .costs
-                                .get_mut(&target_sort.name())
+                                .get_mut(target_sort.name())
                                 .unwrap()
                                 .entry(*target)
                             {
@@ -378,7 +377,7 @@ impl<C: Cost + Ord + Eq + Copy + Debug> Extractor<C> {
                             ensure_fixpoint = false;
                             self.topo_rnk_cnt += 1;
                             self.topo_rnk
-                                .get_mut(&target_sort.name())
+                                .get_mut(target_sort.name())
                                 .unwrap()
                                 .insert(*target, self.topo_rnk_cnt);
                         }
@@ -397,14 +396,13 @@ impl<C: Cost + Ord + Eq + Copy + Debug> Extractor<C> {
             let save_best_parent_edge = |row: egglog_bridge::FunctionRow| {
                 if !row.subsumed {
                     let target = row.vals.last().unwrap();
-                    if let Some(best_cost) =
-                        self.costs.get(&target_sort.name()).unwrap().get(target)
+                    if let Some(best_cost) = self.costs.get(target_sort.name()).unwrap().get(target)
                     {
                         if Some(*best_cost) == self.compute_cost_hyperedge(egraph, &row, func) {
                             // one of the possible best parent edges
                             let target_topo_rnk = *self
                                 .topo_rnk
-                                .get(&target_sort.name())
+                                .get(target_sort.name())
                                 .unwrap()
                                 .get(target)
                                 .unwrap();
@@ -413,11 +411,11 @@ impl<C: Cost + Ord + Eq + Copy + Debug> Extractor<C> {
                                 // one of the parent edges that avoids cycles
                                 if let HEntry::Vacant(e) = self
                                     .parent_edge
-                                    .get_mut(&target_sort.name())
+                                    .get_mut(target_sort.name())
                                     .unwrap()
                                     .entry(*target)
                                 {
-                                    e.insert((func.decl.name, row.vals.to_vec()));
+                                    e.insert((func.decl.name.clone(), row.vals.to_vec()));
                                 }
                             }
                         }
@@ -448,9 +446,9 @@ impl<C: Cost + Ord + Eq + Copy + Debug> Extractor<C> {
         termdag: &mut TermDag,
         value: Value,
         sort: &ArcSort,
-        cache: &mut HashMap<(Value, Symbol), Term>,
+        cache: &mut HashMap<(Value, String), Term>,
     ) -> Term {
-        let key = (value, sort.name());
+        let key = (value, sort.name().to_owned());
         if let Some(term) = cache.get(&key) {
             return term.clone();
         }
@@ -472,7 +470,7 @@ impl<C: Cost + Ord + Eq + Copy + Debug> Extractor<C> {
         } else if sort.is_eq_sort() {
             let (func_name, hyperedge) = self
                 .parent_edge
-                .get(&sort.name())
+                .get(sort.name())
                 .unwrap()
                 .get(&value)
                 .unwrap();
@@ -483,7 +481,7 @@ impl<C: Cost + Ord + Eq + Copy + Debug> Extractor<C> {
                     self.reconstruct_termdag_node_helper(egraph, termdag, *value, sort, cache),
                 );
             }
-            termdag.app(*func_name, ch_terms)
+            termdag.app(func_name.clone(), ch_terms)
         } else {
             // Primitive
             sort.reconstruct_termdag_leaf(egraph.backend.primitives(), value, termdag)
@@ -548,9 +546,9 @@ impl<C: Cost + Ord + Eq + Copy + Debug> Extractor<C> {
         debug_assert!(self.rootsorts.iter().any(|s| { s.name() == sort.name() }));
 
         if sort.is_eq_sort() {
-            let mut root_variants: Vec<(C, Symbol, Vec<Value>)> = Vec::new();
+            let mut root_variants: Vec<(C, String, Vec<Value>)> = Vec::new();
 
-            let mut root_funcs: Vec<Symbol> = Vec::new();
+            let mut root_funcs: Vec<String> = Vec::new();
 
             for func_name in self.funcs.iter() {
                 // Need an eq on sorts
@@ -563,7 +561,7 @@ impl<C: Cost + Ord + Eq + Copy + Debug> Extractor<C> {
                         .output
                         .name()
                 {
-                    root_funcs.push(*func_name);
+                    root_funcs.push(func_name.clone());
                 }
             }
 
@@ -575,7 +573,7 @@ impl<C: Cost + Ord + Eq + Copy + Debug> Extractor<C> {
                         let target = row.vals.last().unwrap();
                         if *target == value {
                             let cost = self.compute_cost_hyperedge(egraph, &row, func).unwrap();
-                            root_variants.push((cost, *func_name, row.vals.to_vec()));
+                            root_variants.push((cost, func_name.clone(), row.vals.to_vec()));
                         }
                     }
                 };

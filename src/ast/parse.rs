@@ -149,7 +149,7 @@ pub enum Sexp {
     // Will never contain `Literal::Unit`, as this
     // will be parsed as an empty `Sexp::List`.
     Literal(Literal, Span),
-    Atom(Symbol, Span),
+    Atom(String, Span),
     List(Vec<Sexp>, Span),
 }
 
@@ -181,9 +181,9 @@ impl Sexp {
         error!(self.span(), "expected {e} to be a string literal")
     }
 
-    pub fn expect_atom(&self, e: &'static str) -> Result<Symbol, ParseError> {
+    pub fn expect_atom(&self, e: &'static str) -> Result<String, ParseError> {
         if let Sexp::Atom(symbol, _) = self {
-            return Ok(*symbol);
+            return Ok(symbol.clone());
         }
         error!(self.span(), "expected {e}")
     }
@@ -195,10 +195,10 @@ impl Sexp {
         error!(self.span(), "expected {e}")
     }
 
-    pub fn expect_call(&self, e: &'static str) -> Result<(Symbol, &[Sexp], Span), ParseError> {
+    pub fn expect_call(&self, e: &'static str) -> Result<(String, &[Sexp], Span), ParseError> {
         if let Sexp::List(sexps, span) = self {
             if let [Sexp::Atom(func, _), args @ ..] = sexps.as_slice() {
-                return Ok((*func, args, span.clone()));
+                return Ok((func.clone(), args, span.clone()));
             }
         }
         error!(self.span(), "expected {e}")
@@ -218,12 +218,12 @@ fn map_fallible<T>(
 }
 
 pub trait Macro<T>: Send + Sync {
-    fn name(&self) -> Symbol;
+    fn name(&self) -> &str;
     fn parse(&self, args: &[Sexp], span: Span, parser: &mut Parser) -> Result<T, ParseError>;
 }
 
 pub struct SimpleMacro<T, F: Fn(&[Sexp], Span, &mut Parser) -> Result<T, ParseError> + Send + Sync>(
-    Symbol,
+    String,
     F,
 );
 
@@ -232,7 +232,7 @@ where
     F: Fn(&[Sexp], Span, &mut Parser) -> Result<T, ParseError> + Send + Sync,
 {
     pub fn new(head: &str, f: F) -> Self {
-        Self(head.into(), f)
+        Self(head.to_owned(), f)
     }
 }
 
@@ -240,8 +240,8 @@ impl<T, F> Macro<T> for SimpleMacro<T, F>
 where
     F: Fn(&[Sexp], Span, &mut Parser) -> Result<T, ParseError> + Send + Sync,
 {
-    fn name(&self) -> Symbol {
-        self.0
+    fn name(&self) -> &str {
+        &self.0
     }
 
     fn parse(&self, args: &[Sexp], span: Span, parser: &mut Parser) -> Result<T, ParseError> {
@@ -251,10 +251,10 @@ where
 
 #[derive(Clone)]
 pub struct Parser {
-    commands: HashMap<Symbol, Arc<dyn Macro<Vec<Command>>>>,
-    actions: HashMap<Symbol, Arc<dyn Macro<Vec<Action>>>>,
-    exprs: HashMap<Symbol, Arc<dyn Macro<Expr>>>,
-    user_defined: HashSet<Symbol>,
+    commands: HashMap<String, Arc<dyn Macro<Vec<Command>>>>,
+    actions: HashMap<String, Arc<dyn Macro<Vec<Action>>>>,
+    exprs: HashMap<String, Arc<dyn Macro<Expr>>>,
+    user_defined: HashSet<String>,
     pub symbol_gen: SymbolGen,
 }
 
@@ -292,18 +292,18 @@ impl Parser {
     }
 
     pub fn add_command_macro(&mut self, ma: Arc<dyn Macro<Vec<Command>>>) {
-        self.commands.insert(ma.name(), ma);
+        self.commands.insert(ma.name().to_owned(), ma);
     }
 
     pub fn add_action_macro(&mut self, ma: Arc<dyn Macro<Vec<Action>>>) {
-        self.actions.insert(ma.name(), ma);
+        self.actions.insert(ma.name().to_owned(), ma);
     }
 
     pub fn add_expr_macro(&mut self, ma: Arc<dyn Macro<Expr>>) {
-        self.exprs.insert(ma.name(), ma);
+        self.exprs.insert(ma.name().to_owned(), ma);
     }
 
-    pub(crate) fn add_user_defined(&mut self, name: Symbol) -> Result<(), Error> {
+    pub(crate) fn add_user_defined(&mut self, name: String) -> Result<(), Error> {
         if self.actions.contains_key(&name)
             || self.exprs.contains_key(&name)
             || self.commands.contains_key(&name)
@@ -327,7 +327,7 @@ impl Parser {
             return Ok(vec![Command::UserDefined(span, head, args)]);
         }
 
-        Ok(match head.into() {
+        Ok(match head.as_str() {
             "set-option" => match tail {
                 [name, value] => vec![Command::SetOption {
                     name: name.expect_atom("option name")?,
@@ -450,12 +450,12 @@ impl Parser {
                         map_fallible(rhs.expect_list("rule actions")?, self, Self::parse_action)?;
                     let head = GenericActions(head.into_iter().flatten().collect());
 
-                    let mut ruleset = "".into();
-                    let mut name = "".into();
+                    let mut ruleset = String::new();
+                    let mut name = String::new();
                     for option in self.parse_options(rest)? {
                         match option {
                             (":ruleset", [r]) => ruleset = r.expect_atom("ruleset name")?,
-                            (":name", [s]) => name = s.expect_string("rule name")?.into(),
+                            (":name", [s]) => name = s.expect_string("rule name")?,
                             _ => return error!(span, "could not parse rule option"),
                         }
                     }
@@ -473,7 +473,7 @@ impl Parser {
                     let lhs = self.parse_expr(lhs)?;
                     let rhs = self.parse_expr(rhs)?;
 
-                    let mut ruleset = "".into();
+                    let mut ruleset = String::new();
                     let mut conditions = Vec::new();
                     let mut subsume = false;
                     for option in self.parse_options(rest)? {
@@ -509,7 +509,7 @@ impl Parser {
                     let lhs = self.parse_expr(lhs)?;
                     let rhs = self.parse_expr(rhs)?;
 
-                    let mut ruleset = "".into();
+                    let mut ruleset = String::new();
                     let mut conditions = Vec::new();
                     for option in self.parse_options(rest)? {
                         match option {
@@ -552,7 +552,7 @@ impl Parser {
                     )
                 } else {
                     (
-                        "".into(),
+                        String::new(),
                         tail[0].expect_uint("number of iterations")?,
                         &tail[1..],
                     )
@@ -669,7 +669,7 @@ impl Parser {
             return Ok(Schedule::Run(
                 span.clone(),
                 RunConfig {
-                    ruleset: *ruleset,
+                    ruleset: ruleset.clone(),
                     until: None,
                 },
             ));
@@ -677,7 +677,7 @@ impl Parser {
 
         let (head, tail, span) = sexp.expect_call("schedule")?;
 
-        Ok(match head.into() {
+        Ok(match head.as_str() {
             "saturate" => Schedule::Saturate(
                 span.clone(),
                 Box::new(Schedule::Sequence(
@@ -700,14 +700,14 @@ impl Parser {
             "run" => {
                 let has_ruleset = match tail.first() {
                     None => false,
-                    Some(Sexp::Atom(o, _)) if *o == ":until".into() => false,
+                    Some(Sexp::Atom(o, _)) if *o == ":until" => false,
                     _ => true,
                 };
 
                 let (ruleset, rest) = if has_ruleset {
                     (tail[0].expect_atom("ruleset name")?, &tail[1..])
                 } else {
-                    ("".into(), tail)
+                    (String::new(), tail)
                 };
 
                 let until = match self.parse_options(rest)?.as_slice() {
@@ -729,7 +729,7 @@ impl Parser {
             return func.parse(tail, span, self);
         }
 
-        Ok(match head.into() {
+        Ok(match head.as_str() {
             "let" => match tail {
                 [name, value] => vec![Action::Let(
                     span,
@@ -782,7 +782,7 @@ impl Parser {
     pub fn parse_fact(&mut self, sexp: &Sexp) -> Result<Fact, ParseError> {
         let (head, tail, span) = sexp.expect_call("fact")?;
 
-        Ok(match head.into() {
+        Ok(match head.as_str() {
             "=" => match tail {
                 [e1, e2] => Fact::Eq(span, self.parse_expr(e1)?, self.parse_expr(e2)?),
                 _ => return error!(span, "usage: (= <expr> <expr>)"),
@@ -796,10 +796,10 @@ impl Parser {
             Sexp::Literal(literal, span) => Expr::Lit(span.clone(), literal.clone()),
             Sexp::Atom(symbol, span) => Expr::Var(
                 span.clone(),
-                if *symbol == "_".into() {
+                if *symbol == "_" {
                     self.symbol_gen.fresh(symbol)
                 } else {
-                    *symbol
+                    symbol.clone()
                 },
             ),
             Sexp::List(list, span) => match list.as_slice() {
@@ -824,10 +824,10 @@ impl Parser {
     pub fn rec_datatype(
         &mut self,
         sexp: &Sexp,
-    ) -> Result<(Span, Symbol, Subdatatypes), ParseError> {
+    ) -> Result<(Span, String, Subdatatypes), ParseError> {
         let (head, tail, span) = sexp.expect_call("datatype")?;
 
-        Ok(match head.into() {
+        Ok(match head.as_str() {
             "sort" => match tail {
                 [name, call] => {
                     let name = name.expect_atom("sort name")?;
@@ -853,7 +853,7 @@ impl Parser {
         let (name, tail, span) = sexp.expect_call("datatype variant")?;
 
         let (types, cost) = match tail {
-            [types @ .., Sexp::Atom(o, _), c] if *o == ":cost".into() => {
+            [types @ .., Sexp::Atom(o, _), c] if *o == ":cost" => {
                 (types, Some(c.expect_uint("cost")?))
             }
             types => (types, None),
@@ -875,8 +875,7 @@ impl Parser {
         sexps: &'a [Sexp],
     ) -> Result<Vec<(&'a str, &'a [Sexp])>, ParseError> {
         fn option_name(sexp: &Sexp) -> Option<&str> {
-            if let Ok(symbol) = sexp.expect_atom("") {
-                let s: &str = symbol.into();
+            if let Sexp::Atom(s, _) = sexp {
                 if let Some(':') = s.chars().next() {
                     return Some(s);
                 }
@@ -1007,7 +1006,7 @@ impl SexpParser {
                 }
                 self.advance_char();
 
-                Token::String(string.into())
+                Token::String(string)
             }
             _ => {
                 loop {
@@ -1036,7 +1035,7 @@ fn s(span: EgglogSpan) -> Span {
 enum Token {
     Open,
     Close,
-    String(Symbol),
+    String(String),
     Other,
 }
 
