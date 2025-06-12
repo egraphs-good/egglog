@@ -8,7 +8,7 @@
 
 (datatype Matrix
     (MVar String i64 i64)
-    (Scale Matrix Scalar)
+    (Scale Scalar Matrix)
     (MAdd Matrix Matrix)
     (MMul Matrix Matrix)
     (Transpose Matrix))
@@ -21,15 +21,15 @@
 ;; Associativity
 (birewrite (SAdd (SAdd x y) z) (SAdd x (SAdd y z)))
 (birewrite (SMul (SMul x y) z) (SMul x (SMul y z)))
-(birewrite (Scale (Scale A x) y) (Scale A (SMul x y)))
+(birewrite (Scale y (Scale x A)) (Scale (SMul x y) A))
 (birewrite (MAdd (MAdd A B) C) (MAdd A (MAdd B C)))
 (birewrite (MMul (MMul A B) C) (MMul A (MMul B C)))
 
 ;; Distributivity
 (birewrite (SMul x (SAdd y z)) (SAdd (SMul x y) (SMul x z)))
 (birewrite (MMul A (MAdd B C)) (MAdd (MMul A B) (MMul A C)))
-(birewrite (Scale (MAdd A B) x) (MAdd (Scale A x) (Scale B x)))
-(birewrite (Scale A (SAdd x y)) (MAdd (Scale A x) (Scale A y)))
+(birewrite (Scale x (MAdd A B)) (MAdd (Scale x A) (Scale x B)))
+(birewrite (Scale (SAdd x y) A) (MAdd (Scale x A) (Scale y A)))
 
 ;; Identity
 (rewrite (SAdd x (Num 0)) x)
@@ -52,7 +52,7 @@
     (set (ncols e) j)
 ))
 (rule (
-    (= e (Scale A x))
+    (= e (Scale x A))
     (= i (nrows A)) (= j (ncols A))
 ) (
     (set (nrows e) i)
