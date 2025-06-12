@@ -2,6 +2,7 @@
 #[cfg(test)]
 pub(crate) mod table_shortcuts;
 pub(crate) mod action;
+pub(crate) mod base_values;
 pub(crate) mod common;
 pub(crate) mod containers;
 pub(crate) mod dependency_graph;
@@ -10,7 +11,6 @@ pub(crate) mod hash_index;
 pub(crate) mod offsets;
 pub(crate) mod parallel_heuristics;
 pub(crate) mod pool;
-pub(crate) mod primitives;
 pub(crate) mod query;
 pub(crate) mod row_buffer;
 pub(crate) mod table;
@@ -22,6 +22,7 @@ pub(crate) mod uf;
 mod tests;
 
 pub use action::{ExecutionState, MergeVal, QueryEntry, WriteVal};
+pub use base_values::{BaseValue, BaseValueId, BaseValuePrinter, BaseValues, Boxed};
 pub use common::Value;
 pub use containers::{Container, ContainerId, Containers};
 pub use free_join::{
@@ -31,7 +32,6 @@ pub use free_join::{
 pub use hash_index::TupleIndex;
 pub use offsets::{OffsetRange, RowId, Subset, SubsetRef};
 pub use pool::{Pool, PoolSet, Pooled};
-pub use primitives::{BaseValue, BaseValueId, BaseValuePrinter, BaseValues, Boxed};
 pub use query::{
     CachedPlan, QueryBuilder, QueryError, RuleBuilder, RuleId, RuleSet, RuleSetBuilder,
 };
