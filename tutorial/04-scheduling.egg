@@ -1,0 +1,59 @@
+;; # Scheduling
+
+;; In this lesson, we will learn how to use `run-schedule` to improve
+;; the performance of egglog. We start by using the same language as
+;; the previous lesson.
+
+(datatype Expr
+    (Num BigRat)
+    (Var String)
+    (Add Expr Expr)
+    (Mul Expr Expr)
+    (Div Expr Expr))
+
+(let zero (bigrat (bigint 0) (bigint 1)))
+(let one (bigrat (bigint 1) (bigint 1)))
+(let two (bigrat (bigint 2) (bigint 1)))
+
+(relation leq (Expr Expr))
+(rule ((leq e1 e2) (leq e2 e3)) ((leq e1 e3)))
+(rule ((= e1 (Num n1)) (= e2 (Num n2)) (<= n1 n2)) ((leq e1 e2)))
+(rule ((= v (Var x))) ((leq v v)))
+(rule ((= e1 (Add e1a e1b)) (= e2 (Add e2a e2b)) (leq e1a e2a) (leq e1b e2b))
+      ((leq e1 e2)))
+
+(birewrite (Add x (Add y z)) (Add (Add x y) z))
+(birewrite (Mul x (Mul y z)) (Mul (Mul x y) z))
+(rewrite (Add x y) (Add y x))
+(rewrite (Mul x y) (Mul y x))
+(rewrite (Mul x (Add y z)) (Add (Mul x y) (Mul x z)))
+(rewrite (Add x (Num zero)) x)
+(rewrite (Mul x (Num one)) x)
+(rewrite (Add (Num a) (Num b)) (Num (+ a b)))
+(rewrite (Mul (Num a) (Num b)) (Num (* a b)))
+
+(function upper-bound (Expr) BigRat :merge (min old new))
+(function lower-bound (Expr) BigRat :merge (max old new))
+
+(rule ((leq e (Num n))) ((set (upper-bound e) n)))
+(rule ((leq (Num n) e)) ((set (lower-bound e) n)))
+(rule ((= e (Add e1 e2)) (= (upper-bound e1) u1) (= (upper-bound e2) u2))
+      ((set (upper-bound e) (+ u1 u2))))
+(rule ((= e (Add e1 e2)) (= (lower-bound e1) l1) (= (lower-bound e2) l2))
+      ((set (lower-bound e) (+ l1 l2))))
+
+(rule ((= e (Mul e1 e2))
+       (= le1 (lower-bound e1)) (= le2 (lower-bound e2))
+       (= ue1 (upper-bound e1)) (= ue2 (upper-bound e2)))
+      ((set (lower-bound e)
+            (min (* le1 le2) (min (* le1 ue2) (min (* ue1 le2) (* ue1 ue2)))))
+       (set (upper-bound e)
+            (min (* le1 le2) (min (* le1 ue2) (min (* ue1 le2) (* ue1 ue2)))))))
+
+(relation non-zero (Expr))
+(rule ((< (upper-bound e) zero)) ((non-zero e)))
+(rule ((> (lower-bound e) zero)) ((non-zero e)))
+(rewrite (Div x x)         (Num one) :when ((non-zero x)))
+(rewrite (Mul x (Div y x)) y         :when ((non-zero x)))
+
+(print-size)
