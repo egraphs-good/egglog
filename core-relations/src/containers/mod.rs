@@ -1,12 +1,12 @@
 //! Support for containers
 //!
-//! Containers behave a lot like primitives in egglog. They are implemented differently because
+//! Containers behave a lot like base values. They are implemented differently because
 //! their ids share a space with other Ids in the egraph and as a result, their ids need to be
 //! sparse.
 //!
 //! This is a relatively "eagler" implementation of containers, reflecting egglog's current
 //! semantics. One could imagine a variant of containers in which they behave more like egglog
-//! functions than primitives.
+//! functions than base values.
 
 use std::{
     any::{Any, TypeId},
@@ -155,7 +155,7 @@ impl Containers {
 
 /// A trait implemented by container types.
 ///
-/// Containers behave a lot like primitives, but they include extra trait methods to support
+/// Containers behave a lot like base values, but they include extra trait methods to support
 /// rebuilding of container contents and merging containers that become equal after a rebuild pass
 /// has taken place.
 pub trait Container: Hash + Eq + Clone + Send + Sync + 'static {

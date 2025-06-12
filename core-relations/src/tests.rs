@@ -34,13 +34,13 @@ fn basic_query() {
         ..
     } = basic_math_egraph();
 
-    db.primitives_mut().register_type::<i64>();
+    db.base_values_mut().register_type::<i64>();
     let add_int = db.add_external_function(make_external_func(|exec_state, args| {
         let [x, y] = args else { panic!() };
-        let x: i64 = exec_state.prims().unwrap(*x);
-        let y: i64 = exec_state.prims().unwrap(*y);
+        let x: i64 = exec_state.base_values().unwrap(*x);
+        let y: i64 = exec_state.base_values().unwrap(*y);
         let z: i64 = x + y;
-        Some(exec_state.prims().get(z))
+        Some(exec_state.base_values().get(z))
     }));
 
     // Add the numbers 1 through 10 to the num table at timestamp 0.
@@ -49,7 +49,7 @@ fn basic_query() {
         let mut num_buf = db.get_table(num).new_buffer();
         for i in 0..10 {
             let id = db.inc_counter(id_counter);
-            let i = db.primitives().get::<i64>(i as i64);
+            let i = db.base_values().get::<i64>(i as i64);
             ids.push(i);
             num_buf.stage_insert(&[i, Value::from_usize(id), Value::new(0)]);
         }
@@ -118,7 +118,7 @@ fn basic_query() {
     let mut res = Vec::from_iter(
         items
             .iter()
-            .map(|(_, row)| db.primitives().unwrap::<i64>(row[0])),
+            .map(|(_, row)| db.base_values().unwrap::<i64>(row[0])),
     );
     res.sort();
     assert_eq!(res, Vec::from_iter((0..10).chain([13, 17].into_iter())));
@@ -420,10 +420,10 @@ fn ac_test(strat: PlanStrategy) {
 
     // Add the numbers 1 through 10 to the num table at timestamp 0.
     let mut ids = Vec::new();
-    db.primitives_mut().register_type::<i64>();
+    db.base_values_mut().register_type::<i64>();
     for i in 0..N {
         let id = db.inc_counter(id_counter);
-        let i = db.primitives().get::<i64>(i as i64);
+        let i = db.base_values().get::<i64>(i as i64);
         ids.push(i);
         db.get_table(num)
             .new_buffer()

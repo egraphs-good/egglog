@@ -11,7 +11,7 @@
 use std::{fmt, sync::Arc};
 
 use crate::{
-    rule::Variable, term_proof_dag::PrimitiveConstant, ColumnTy, ExternalFunctionId, FunctionId,
+    rule::Variable, term_proof_dag::BaseValueConstant, ColumnTy, ExternalFunctionId, FunctionId,
 };
 
 /// A syntactic representation of a rule.
@@ -42,15 +42,15 @@ pub enum Entry<T> {
     /// Placeholders generally represent either a variable or a term substituted
     /// for that variable.
     Placeholder(T),
-    /// A constant for some primitive sort.
-    Const(PrimitiveConstant),
+    /// A constant for some base value type.
+    Const(BaseValueConstant),
 }
 
 #[derive(Clone)]
 pub enum Statement<T> {
     /// A low-level assert-eq statement in the right-hand side of a rule. Egglog
     /// itself does not have this, but it is used to implement some egglog
-    /// functionality (such as binding primitive variables on the LHS of a
+    /// functionality (such as binding base value variables on the LHS of a
     /// rule).
     AssertEq(Entry<T>, Entry<T>),
 
@@ -70,7 +70,7 @@ impl<T: fmt::Debug> fmt::Debug for Entry<T> {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         match self {
             Entry::Placeholder(p) => write!(f, "{p:?}"),
-            Entry::Const(primitive_constant) => write!(f, "{primitive_constant:?}"),
+            Entry::Const(constant) => write!(f, "{constant:?}"),
         }
     }
 }

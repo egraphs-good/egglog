@@ -24,12 +24,11 @@ use crate::{
     offsets::Subset,
     parallel_heuristics::parallelize_db_level_op,
     pool::{with_pool_set, Pool, Pooled},
-    primitives::Primitives,
     query::{Query, RuleSetBuilder},
     table_spec::{
         ColumnId, Constraint, MutationBuffer, Table, TableSpec, WrappedTable, WrappedTableRef,
     },
-    Containers, PoolSet, QueryEntry, TupleIndex, Value,
+    BaseValues, Containers, PoolSet, QueryEntry, TupleIndex, Value,
 };
 
 use self::plan::Plan;
@@ -298,7 +297,7 @@ pub struct Database {
     containers: Containers,
     // Tracks the relative dependencies between tables during merge operations.
     deps: DependencyGraph,
-    primitives: Primitives,
+    base_values: BaseValues,
     /// A rough estimate of the total size of the database.
     ///
     /// This is primarily used to determine whether or not to attempt to do some operations in
@@ -333,12 +332,12 @@ impl Database {
         self.external_functions.take(id);
     }
 
-    pub fn primitives(&self) -> &Primitives {
-        &self.primitives
+    pub fn base_values(&self) -> &BaseValues {
+        &self.base_values
     }
 
-    pub fn primitives_mut(&mut self) -> &mut Primitives {
-        &mut self.primitives
+    pub fn base_values_mut(&mut self) -> &mut BaseValues {
+        &mut self.base_values
     }
 
     pub fn containers(&self) -> &Containers {
@@ -415,7 +414,7 @@ impl Database {
             table_info: &self.tables,
             counters: &self.counters,
             external_funcs: &self.external_functions,
-            prims: &self.primitives,
+            bases: &self.base_values,
             containers: &self.containers,
         }
     }

@@ -1,5 +1,5 @@
 use anyhow::Context;
-use core_relations::{PrimitiveId, PrimitivePrinter, Value};
+use core_relations::{BaseValueId, BaseValuePrinter, Value};
 use thiserror::Error;
 
 use std::{
@@ -20,14 +20,14 @@ use crate::{
 
 #[derive(Debug)]
 pub enum TermValue<Prf> {
-    Prim(PrimitiveConstant),
+    Base(BaseValueConstant),
     SubTerm(Rc<Prf>),
 }
 
 impl<Prf> TermValue<Prf> {
     fn get_subterm(&self) -> Option<&Prf> {
         match self {
-            TermValue::Prim(_) => None,
+            TermValue::Base(_) => None,
             TermValue::SubTerm(subterm) => Some(subterm),
         }
     }
@@ -36,7 +36,7 @@ impl<Prf> TermValue<Prf> {
 impl<Prf> Clone for TermValue<Prf> {
     fn clone(&self) -> Self {
         match self {
-            TermValue::Prim(p) => TermValue::Prim(p.clone()),
+            TermValue::Base(p) => TermValue::Base(p.clone()),
             TermValue::SubTerm(p) => TermValue::SubTerm(p.clone()),
         }
     }
@@ -189,7 +189,7 @@ impl Printer {
                 let old_term = self.get_term_id(old_term.as_ref(), writer)?;
                 let eq_subproofs = DisplayList(
                     try_collect(pairwise_eq.iter().map(|t| match t {
-                        TermValue::Prim(s) => Ok(format!("{s}")),
+                        TermValue::Base(s) => Ok(format!("{s}")),
                         TermValue::SubTerm(subterm) => self.get_eq_id(subterm.as_ref(), writer),
                     }))?,
                     " ",
@@ -204,7 +204,7 @@ impl Printer {
             } => {
                 let term = DisplayList(
                     try_collect(row.iter().map(|t| match t {
-                        TermValue::Prim(s) => Ok(format!("{s}")),
+                        TermValue::Base(s) => Ok(format!("{s}")),
                         TermValue::SubTerm(subterm) => self.get_term_id(subterm.as_ref(), writer),
                     }))?,
                     " ",
@@ -238,7 +238,7 @@ impl Printer {
                 );
                 let row = DisplayList(
                     try_collect(row.iter().map(|t| match t {
-                        TermValue::Prim(s) => Ok(format!("{s}")),
+                        TermValue::Base(s) => Ok(format!("{s}")),
                         TermValue::SubTerm(subterm) => self.get_term_id(subterm.as_ref(), writer),
                     }))?,
                     " ",
@@ -354,7 +354,7 @@ impl TermEnv {
                 ..
             } => {
                 let new_subterms = Vec::from_iter(pairwise_eq.iter().map(|t| match t {
-                    TermValue::Prim(p) => Rc::new(Term::Prim(p.clone())),
+                    TermValue::Base(p) => Rc::new(Term::Base(p.clone())),
                     TermValue::SubTerm(eq) => self.get_term(eq.rhs.clone()),
                 }));
                 Term::Expr {
@@ -371,7 +371,7 @@ impl TermEnv {
                 subterms: row
                     .iter()
                     .map(|t| match t {
-                        TermValue::Prim(p) => Rc::new(Term::Prim(p.clone())),
+                        TermValue::Base(p) => Rc::new(Term::Base(p.clone())),
                         TermValue::SubTerm(rc) => self.get_term(rc.clone()),
                     })
                     .collect(),
@@ -384,7 +384,7 @@ impl TermEnv {
                 subterms: row
                     .iter()
                     .map(|t| match t {
-                        TermValue::Prim(p) => Rc::new(Term::Prim(p.clone())),
+                        TermValue::Base(p) => Rc::new(Term::Base(p.clone())),
                         TermValue::SubTerm(rc) => self.get_term(rc.clone()),
                     })
                     .collect(),
@@ -397,7 +397,7 @@ impl TermEnv {
 
     fn get_term_from_val(&mut self, tv: &TermValue<TermProof>) -> Rc<Term> {
         match tv {
-            TermValue::Prim(p) => Rc::new(Term::Prim(p.clone())),
+            TermValue::Base(p) => Rc::new(Term::Base(p.clone())),
             TermValue::SubTerm(rc) => self.get_term(rc.clone()),
         }
     }
@@ -424,19 +424,19 @@ impl TermEnv {
     }
 }
 
-/// A primitive constant in a term.
+/// A base value constant in a term.
 #[derive(Clone, Eq, PartialEq, Debug, PartialOrd, Ord)]
-pub struct PrimitiveConstant {
-    /// The type of primitive.
-    pub(crate) ty: PrimitiveId,
-    /// The underlying (interned) value of the primitive, to be looked up in the
-    /// primitives associated with an egraph.
+pub struct BaseValueConstant {
+    /// The type of the base value.
+    pub(crate) ty: BaseValueId,
+    /// The underlying (interned) value of the base value, to be looked up in the
+    /// `BaseValues` associated with an egraph.
     pub(crate) interned: Value,
-    /// The string representation of the primitive.
+    /// The string representation of the base value.
     pub(crate) rendered: Arc<str>,
 }
 
-impl fmt::Display for PrimitiveConstant {
+impl fmt::Display for BaseValueConstant {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         write!(f, "{}", self.rendered)
     }
@@ -451,7 +451,7 @@ impl fmt::Display for PrimitiveConstant {
 // short-circuit. When there is a lot of sharing between two terms, checking
 // equality should be pretty quick.
 pub enum Term {
-    Prim(PrimitiveConstant),
+    Base(BaseValueConstant),
     Expr {
         func_id: FunctionId,
         func: Arc<str>,
@@ -462,7 +462,7 @@ pub enum Term {
 impl fmt::Display for Term {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         match self {
-            Term::Prim(c) => write!(f, "{c}"),
+            Term::Base(c) => write!(f, "{c}"),
             Term::Expr { func, subterms, .. } => {
                 write!(f, "({func}")?;
                 for subterm in subterms {
@@ -860,7 +860,7 @@ impl Substitution<'_> {
         entry: &SyntaxEntry<Variable>,
     ) -> Result<()> {
         match (term.as_ref(), entry) {
-            (Term::Prim(p1), SyntaxEntry::Const(p2)) => {
+            (Term::Base(p1), SyntaxEntry::Const(p2)) => {
                 if p1 != p2 {
                     return Err(ProofCheckError::MismatchedConstants {
                         p1: p1.rendered.as_ref().into(),
@@ -923,7 +923,7 @@ impl Substitution<'_> {
     fn construct_term_from_entry(&mut self, entry: &SyntaxEntry<Variable>) -> Result<Rc<Term>> {
         match entry {
             SyntaxEntry::Placeholder(v) => self.lookup_var(*v),
-            SyntaxEntry::Const(c) => Ok(Rc::new(Term::Prim(c.clone()))),
+            SyntaxEntry::Const(c) => Ok(Rc::new(Term::Base(c.clone()))),
         }
     }
 
@@ -934,18 +934,18 @@ impl Substitution<'_> {
     ) -> Result<Rc<Term>> {
         let result: Rc<Term> = match rule {
             TermFragment::Prim(func, args, ty) => {
-                let ColumnTy::Primitive(ty) = *ty else {
-                    panic!("expected primitive type, found {ty:?}");
+                let ColumnTy::Base(ty) = *ty else {
+                    panic!("expected base value type, found {ty:?}");
                 };
                 // This is the hardest case but still fairly straight-forwad: we
-                // need to extract primitives from `args`, then apply `func` to
+                // need to extract base values from `args`, then apply `func` to
                 // them.
                 let args = args
                     .iter()
                     .map(|p| {
                         let term = self.construct_term_from_entry(p)?;
-                        let Term::Prim(pc) = term.as_ref() else {
-                            return Err(ProofCheckError::NonPrimitiveArg {
+                        let Term::Base(pc) = term.as_ref() else {
+                            return Err(ProofCheckError::NonBaseValueArg {
                                 arg: format!("{term}"),
                             }
                             .into());
@@ -966,13 +966,13 @@ impl Substitution<'_> {
 
                 let rendered = format!(
                     "{:?}",
-                    PrimitivePrinter {
-                        prim: self.egraph.db.primitives_mut(),
+                    BaseValuePrinter {
+                        base: self.egraph.db.base_values_mut(),
                         ty,
                         val: result,
                     }
                 );
-                Rc::new(Term::Prim(PrimitiveConstant {
+                Rc::new(Term::Base(BaseValueConstant {
                     ty,
                     interned: result,
                     rendered: rendered.into(),
@@ -1043,8 +1043,8 @@ pub(crate) enum ProofCheckError {
     #[error("Expected terms {lhs} and {rhs} to be equal")]
     AssertEqFailure { lhs: String, rhs: String },
 
-    #[error("Non-primitive argument to primitive function {arg}")]
-    NonPrimitiveArg { arg: String },
+    #[error("Non-base-value argument to primitive function {arg}")]
+    NonBaseValueArg { arg: String },
 
     #[error("Failed to construct term {term}")]
     TermNotConstructed { term: String },
@@ -1080,7 +1080,7 @@ impl PartialOrd for Term {
             return true;
         }
         match (self, other) {
-            (Term::Prim(p1), Term::Prim(p2)) => p1 <= p2,
+            (Term::Base(p1), Term::Base(p2)) => p1 <= p2,
             (
                 Term::Expr {
                     func_id: f1,
@@ -1093,8 +1093,8 @@ impl PartialOrd for Term {
                     ..
                 },
             ) => (f1, s1) <= (f2, s2),
-            (Term::Prim(_), Term::Expr { .. }) => true,
-            (Term::Expr { .. }, Term::Prim(_)) => false,
+            (Term::Base(_), Term::Expr { .. }) => true,
+            (Term::Expr { .. }, Term::Base(_)) => false,
         }
     }
 
@@ -1109,7 +1109,7 @@ impl Ord for Term {
             return std::cmp::Ordering::Equal;
         }
         match (self, other) {
-            (Term::Prim(p1), Term::Prim(p2)) => p1.cmp(p2),
+            (Term::Base(p1), Term::Base(p2)) => p1.cmp(p2),
             (
                 Term::Expr {
                     func_id: f1,
@@ -1122,8 +1122,8 @@ impl Ord for Term {
                     ..
                 },
             ) => (f1, s1).cmp(&(f2, s2)),
-            (Term::Prim(_), Term::Expr { .. }) => std::cmp::Ordering::Less,
-            (Term::Expr { .. }, Term::Prim(_)) => std::cmp::Ordering::Greater,
+            (Term::Base(_), Term::Expr { .. }) => std::cmp::Ordering::Less,
+            (Term::Expr { .. }, Term::Base(_)) => std::cmp::Ordering::Greater,
         }
     }
 }

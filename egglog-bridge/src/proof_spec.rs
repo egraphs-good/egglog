@@ -1,7 +1,7 @@
 use std::{iter, rc::Rc, sync::Arc};
 
 use core_relations::{
-    ColumnId, DisplacedTableWithProvenance, ExternalFunctionId, PrimitivePrinter,
+    BaseValuePrinter, ColumnId, DisplacedTableWithProvenance, ExternalFunctionId,
     ProofReason as UfProofReason, ProofStep, RuleBuilder, Value,
 };
 use hashbrown::{HashMap, HashSet};
@@ -10,7 +10,7 @@ use numeric_id::{define_id, NumericId};
 use crate::{
     rule::{Bindings, DstVar, Variable},
     syntax::{Binding, RuleRepresentation, TermFragment},
-    term_proof_dag::{EqProof, EqReason, PrimitiveConstant, RuleTarget, TermProof, TermValue},
+    term_proof_dag::{BaseValueConstant, EqProof, EqReason, RuleTarget, TermProof, TermValue},
     ColumnTy, EGraph, FunctionId, GetFirstMatch, QueryEntry, Result, RuleId, SideChannel,
 };
 
@@ -605,7 +605,7 @@ impl EGraph {
                 .zip(schema[0..schema.len() - 1].iter()),
             |slf, state, (old, new)| slf.explain_terms_equal_inner(*old, *new, state),
             |(old, new)| {
-                assert_eq!(*old, *new, "primitive values must be equal");
+                assert_eq!(*old, *new, "base values must be equal");
                 *old
             },
             state,
@@ -761,15 +761,15 @@ impl EGraph {
         term_with_schema
             .map(|(child, ty)| match ty {
                 ColumnTy::Id => TermValue::SubTerm(f(self, state, child)),
-                ColumnTy::Primitive(p) => {
+                ColumnTy::Base(p) => {
                     let interned = to_value(child);
-                    TermValue::Prim(PrimitiveConstant {
+                    TermValue::Base(BaseValueConstant {
                         ty: *p,
                         interned,
                         rendered: format!(
                             "{:?}",
-                            PrimitivePrinter {
-                                prim: self.db.primitives(),
+                            BaseValuePrinter {
+                                base: self.db.base_values(),
                                 ty: *p,
                                 val: interned,
                             }

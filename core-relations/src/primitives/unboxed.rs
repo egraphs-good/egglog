@@ -7,11 +7,11 @@ use numeric_id::NumericId;
 
 use crate::Value;
 
-use super::Primitive;
+use super::BaseValue;
 
-macro_rules! impl_small_primitive {
+macro_rules! impl_small_base_value {
     ($ty:ty) => {
-        impl Primitive for $ty {
+        impl BaseValue for $ty {
             const MAY_UNBOX: bool = true;
             fn try_unbox(val: Value) -> Option<Self> {
                 Some(val.rep() as $ty)
@@ -22,14 +22,14 @@ macro_rules! impl_small_primitive {
         }
     };
     ($ty:ty, $($rest:ty),+) => {
-        impl_small_primitive!($ty);
-        impl_small_primitive!($($rest),+);
+        impl_small_base_value!($ty);
+        impl_small_base_value!($($rest),+);
     };
 }
 
-impl_small_primitive!(u8, u16, u32, i8, i16, i32);
+impl_small_base_value!(u8, u16, u32, i8, i16, i32);
 
-impl Primitive for bool {
+impl BaseValue for bool {
     const MAY_UNBOX: bool = true;
     fn try_unbox(val: Value) -> Option<Self> {
         Some(val.rep() != 0)
@@ -39,7 +39,7 @@ impl Primitive for bool {
     }
 }
 
-impl Primitive for () {
+impl BaseValue for () {
     const MAY_UNBOX: bool = true;
     fn try_unbox(_val: Value) -> Option<Self> {
         Some(())
@@ -52,9 +52,9 @@ impl Primitive for () {
 const VAL_BITS: u32 = std::mem::size_of::<Value>() as u32 * 8;
 const VAL_MASK: u32 = 1 << (VAL_BITS - 1);
 
-macro_rules! impl_medium_primitive {
+macro_rules! impl_medium_base_value {
     ($ty:ty) => {
-        impl Primitive for $ty {
+        impl BaseValue for $ty {
             const MAY_UNBOX: bool = true;
             fn try_box(&self) -> Option<Value> {
                 if *self & (VAL_MASK-1) as $ty == *self {
@@ -78,9 +78,9 @@ macro_rules! impl_medium_primitive {
     };
 
     ($ty:ty, $($rest:ty),+) => {
-        impl_medium_primitive!($ty);
-        impl_medium_primitive!($($rest),+);
+        impl_medium_base_value!($ty);
+        impl_medium_base_value!($($rest),+);
     };
 }
 
-impl_medium_primitive!(u64, i64, usize, isize);
+impl_medium_base_value!(u64, i64, usize, isize);

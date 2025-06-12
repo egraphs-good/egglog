@@ -1,4 +1,4 @@
-//! Mechanisms for declaring primitive types and functions on them.
+//! Mechanisms for declaring base value types and functions on them.
 
 use std::{
     any::{Any, TypeId},
@@ -14,18 +14,18 @@ use crate::common::{HashMap, InternTable, Value};
 mod tests;
 mod unboxed;
 
-define_id!(pub PrimitiveId, u32, "an identifier for primitive types");
+define_id!(pub BaseValueId, u32, "an identifier for base value types");
 
-/// A simple primitive type that can be interned in a database.
+/// A simple base value type that can be interned in a database.
 ///
 /// Most callers can simply implement this trait on their desired type, with no overrides needed.
 /// For types that are particularly small, users can override the `try_box` and `try_unbox`
-/// methods and set `MAY_UNBOX` to `true` to allow the primitive to be stored directly in a
+/// methods and set `MAY_UNBOX` to `true` to allow the Rust value to be stored inline in a
 /// `Value`.
 ///
-/// Regardless, all primitive types should be registered in a [`Primitives`] instance using the
-/// [`Primitives::register_type`] method before they can be used in the database.
-pub trait Primitive: Clone + Hash + Eq + Any + Debug + Send + Sync {
+/// Regardless, all base value types should be registered in a [`BaseValues`] instance using the
+/// [`BaseValues::register_type`] method before they can be used in the database.
+pub trait BaseValue: Clone + Hash + Eq + Any + Debug + Send + Sync {
     const MAY_UNBOX: bool = false;
     fn intern(&self, table: &InternTable<Self, Value>) -> Value {
         table.intern(self)
@@ -41,56 +41,56 @@ pub trait Primitive: Clone + Hash + Eq + Any + Debug + Send + Sync {
     }
 }
 
-impl Primitive for String {}
-impl Primitive for &'static str {}
-impl Primitive for num::Rational64 {}
+impl BaseValue for String {}
+impl BaseValue for &'static str {}
+impl BaseValue for num::Rational64 {}
 
-/// A wrapper used to print a primitive value.
+/// A wrapper used to print a base value.
 ///
-/// The given primitive must be registered with the `Primitives` instance,
+/// The given base value must be registered with the `BaseValues` instance,
 /// otherwise attempting to call the [`Debug`] implementation will panic.
-pub struct PrimitivePrinter<'a> {
-    pub prim: &'a Primitives,
-    pub ty: PrimitiveId,
+pub struct BaseValuePrinter<'a> {
+    pub base: &'a BaseValues,
+    pub ty: BaseValueId,
     pub val: Value,
 }
 
-impl Debug for PrimitivePrinter<'_> {
+impl Debug for BaseValuePrinter<'_> {
     fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
-        self.prim.tables[self.ty].print_value(self.val, f)
+        self.base.tables[self.ty].print_value(self.val, f)
     }
 }
 
-/// A registry for primitive values and functions on them.
+/// A registry for base value types and functions on them.
 #[derive(Clone, Default)]
-pub struct Primitives {
-    type_ids: HashMap<TypeId, PrimitiveId>,
-    tables: DenseIdMap<PrimitiveId, Box<dyn DynamicInternTable>>,
+pub struct BaseValues {
+    type_ids: HashMap<TypeId, BaseValueId>,
+    tables: DenseIdMap<BaseValueId, Box<dyn DynamicInternTable>>,
 }
 
-impl Primitives {
-    /// Register the given type `P` as a primitive type in this registry.
-    pub fn register_type<P: Primitive>(&mut self) -> PrimitiveId {
+impl BaseValues {
+    /// Register the given type `P` as a base value type in this registry.
+    pub fn register_type<P: BaseValue>(&mut self) -> BaseValueId {
         let type_id = TypeId::of::<P>();
-        let next_primitive_id = PrimitiveId::from_usize(self.type_ids.len());
-        let id = *self.type_ids.entry(type_id).or_insert(next_primitive_id);
+        let next_id = BaseValueId::from_usize(self.type_ids.len());
+        let id = *self.type_ids.entry(type_id).or_insert(next_id);
         self.tables
-            .get_or_insert(id, || Box::<PrimitiveInternTable<P>>::default());
+            .get_or_insert(id, || Box::<BaseInternTable<P>>::default());
         id
     }
 
-    /// Get the [`PrimitiveId`] for the given primitive type `P`.
-    pub fn get_ty<P: Primitive>(&self) -> PrimitiveId {
+    /// Get the [`BaseValueId`] for the given base value type `P`.
+    pub fn get_ty<P: BaseValue>(&self) -> BaseValueId {
         self.type_ids[&TypeId::of::<P>()]
     }
 
-    /// Get the [`PrimitiveId`] for the given primitive type id.
-    pub fn get_ty_by_id(&self, id: TypeId) -> PrimitiveId {
+    /// Get the [`BaseValueId`] for the given base value type id.
+    pub fn get_ty_by_id(&self, id: TypeId) -> BaseValueId {
         self.type_ids[&id]
     }
 
-    /// Get a [`Value`] representing the given primitive `p`.
-    pub fn get<P: Primitive>(&self, p: P) -> Value {
+    /// Get a [`Value`] representing the given base value `p`.
+    pub fn get<P: BaseValue>(&self, p: P) -> Value {
         if P::MAY_UNBOX {
             if let Some(v) = p.try_box() {
                 return v;
@@ -99,12 +99,13 @@ impl Primitives {
         let id = self.get_ty::<P>();
         let table = self.tables[id]
             .as_any()
-            .downcast_ref::<PrimitiveInternTable<P>>()
+            .downcast_ref::<BaseInternTable<P>>()
             .unwrap();
         table.intern(p)
     }
 
-    pub fn unwrap<P: Primitive>(&self, v: Value) -> P {
+    /// Get the base value of type `P` corresponding to the given [`Value`].
+    pub fn unwrap<P: BaseValue>(&self, v: Value) -> P {
         if P::MAY_UNBOX {
             if let Some(p) = P::try_unbox(v) {
                 return p;
@@ -116,7 +117,7 @@ impl Primitives {
             .get(id)
             .expect("types must be registered before unwrapping")
             .as_any()
-            .downcast_ref::<PrimitiveInternTable<P>>()
+            .downcast_ref::<BaseInternTable<P>>()
             .unwrap();
         table.get(v)
     }
@@ -131,11 +132,11 @@ trait DynamicInternTable: Any + dyn_clone::DynClone + Send + Sync {
 dyn_clone::clone_trait_object!(DynamicInternTable);
 
 #[derive(Clone)]
-struct PrimitiveInternTable<P> {
+struct BaseInternTable<P> {
     table: InternTable<P, Value>,
 }
 
-impl<P> Default for PrimitiveInternTable<P> {
+impl<P> Default for BaseInternTable<P> {
     fn default() -> Self {
         Self {
             table: InternTable::default(),
@@ -143,7 +144,7 @@ impl<P> Default for PrimitiveInternTable<P> {
     }
 }
 
-impl<P: Primitive> DynamicInternTable for PrimitiveInternTable<P> {
+impl<P: BaseValue> DynamicInternTable for BaseInternTable<P> {
     fn as_any(&self) -> &dyn Any {
         self
     }
@@ -156,11 +157,11 @@ impl<P: Primitive> DynamicInternTable for PrimitiveInternTable<P> {
 
 const VAL_OFFSET: u32 = 1 << (std::mem::size_of::<Value>() as u32 * 8 - 1);
 
-impl<P: Primitive> PrimitiveInternTable<P> {
+impl<P: BaseValue> BaseInternTable<P> {
     pub fn intern(&self, p: P) -> Value {
         if P::MAY_UNBOX {
             p.try_box().unwrap_or_else(|| {
-                // If the primitive type is too large to fit in a Value, we intern it and return
+                // If the base value type is too large to fit in a Value, we intern it and return
                 // the corresponding Value with its top bit set. We use add to ensure we overflow
                 // if the number of interned values is too large.
                 Value::new(
@@ -186,10 +187,10 @@ impl<P: Primitive> PrimitiveInternTable<P> {
     }
 }
 
-/// A newtype wrapper used to implement the [`Primitive`] trait on types not
+/// A newtype wrapper used to implement the [`BaseValue`] trait on types not
 /// defined in this crate.
 ///
-/// This type is just a helper: users can also implement the [`Primitive`] trait directly on their
+/// This type is just a helper: users can also implement the [`BaseValue`] trait directly on their
 /// types if the type is defined in the crate in which the implementation is defined, or if they
 /// need custom logic for boxing or unboxing the type.
 #[derive(Debug, Copy, Clone, PartialEq, Eq, PartialOrd, Ord, Hash)]
@@ -205,7 +206,7 @@ impl<T> Boxed<T> {
     }
 }
 
-impl<T: Hash + Eq + Debug + Clone + Send + Sync + 'static> Primitive for Boxed<T> {}
+impl<T: Hash + Eq + Debug + Clone + Send + Sync + 'static> BaseValue for Boxed<T> {}
 
 impl<T> std::ops::Deref for Boxed<T> {
     type Target = T;

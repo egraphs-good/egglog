@@ -30,8 +30,8 @@ fn main() {
         const N: usize = 12;
 
         let mut egraph = EGraph::default();
-        let rational_ty = egraph.primitives_mut().register_type::<Rational64>();
-        let string_ty = egraph.primitives_mut().register_type::<&'static str>();
+        let rational_ty = egraph.base_values_mut().register_type::<Rational64>();
+        let string_ty = egraph.base_values_mut().register_type::<&'static str>();
         // tables
         let diff = egraph.add_table(FunctionConfig {
             schema: vec![ColumnTy::Id, ColumnTy::Id, ColumnTy::Id],
@@ -120,7 +120,7 @@ fn main() {
         });
 
         let rat = egraph.add_table(FunctionConfig {
-            schema: vec![ColumnTy::Primitive(rational_ty), ColumnTy::Id],
+            schema: vec![ColumnTy::Base(rational_ty), ColumnTy::Id],
             default: DefaultVal::FreshId,
             merge: MergeFn::UnionId,
             name: "rat".into(),
@@ -128,17 +128,17 @@ fn main() {
         });
 
         let var = egraph.add_table(FunctionConfig {
-            schema: vec![ColumnTy::Primitive(string_ty), ColumnTy::Id],
+            schema: vec![ColumnTy::Base(string_ty), ColumnTy::Id],
             default: DefaultVal::FreshId,
             merge: MergeFn::UnionId,
             name: "var".into(),
             can_subsume: false,
         });
 
-        let zero = egraph.primitive_constant(Rational64::new(0, 1));
-        let one = egraph.primitive_constant(Rational64::new(1, 1));
-        let neg1 = egraph.primitive_constant(Rational64::new(-1, 1));
-        let two = egraph.primitive_constant(Rational64::new(2, 1));
+        let zero = egraph.base_value_constant(Rational64::new(0, 1));
+        let one = egraph.base_value_constant(Rational64::new(1, 1));
+        let neg1 = egraph.base_value_constant(Rational64::new(-1, 1));
+        let two = egraph.base_value_constant(Rational64::new(2, 1));
         let rules = [
             define_rule! {
                 [egraph] ((-> (add x y) id)) => ((set (add y x) id))
@@ -217,13 +217,13 @@ fn main() {
             },
         ];
         {
-            let one = egraph.primitives().get(Rational64::new(1, 1));
-            let two = egraph.primitives().get(Rational64::new(2, 1));
-            let three = egraph.primitives().get(Rational64::new(3, 1));
-            let seven = egraph.primitives().get(Rational64::new(7, 1));
-            let x_str = egraph.primitives_mut().get::<&'static str>("x");
-            let y_str = egraph.primitives_mut().get::<&'static str>("y");
-            let five_str = egraph.primitives_mut().get::<&'static str>("five");
+            let one = egraph.base_values().get(Rational64::new(1, 1));
+            let two = egraph.base_values().get(Rational64::new(2, 1));
+            let three = egraph.base_values().get(Rational64::new(3, 1));
+            let seven = egraph.base_values().get(Rational64::new(7, 1));
+            let x_str = egraph.base_values_mut().get::<&'static str>("x");
+            let y_str = egraph.base_values_mut().get::<&'static str>("y");
+            let five_str = egraph.base_values_mut().get::<&'static str>("five");
             add_expressions! {
                 [egraph]
 

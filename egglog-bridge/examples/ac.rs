@@ -27,9 +27,9 @@ fn main() {
     for _ in 0..2 {
         let start = web_time::Instant::now();
         let mut egraph = EGraph::default();
-        let int_prim = egraph.primitives_mut().register_type::<i64>();
+        let int_base = egraph.base_values_mut().register_type::<i64>();
         let num_table = egraph.add_table(FunctionConfig {
-            schema: vec![ColumnTy::Primitive(int_prim), ColumnTy::Id],
+            schema: vec![ColumnTy::Base(int_base), ColumnTy::Id],
             default: DefaultVal::FreshId,
             merge: MergeFn::UnionId,
             name: "num".into(),
@@ -59,11 +59,11 @@ fn main() {
         // Fill the database.
         let mut ids = Vec::new();
         //  Add 0 .. N to the database.
-        egraph.primitives_mut().register_type::<i64>();
+        egraph.base_values_mut().register_type::<i64>();
         let num_rows = (0..N)
             .map(|i| {
                 let id = egraph.fresh_id();
-                let i = egraph.primitives().get(i as i64);
+                let i = egraph.base_values().get(i as i64);
                 ids.push(id);
                 (num_table, vec![i, id])
             })

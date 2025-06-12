@@ -13,7 +13,7 @@ use crate::{
     free_join::{CounterId, Counters, ExternalFunctions, TableId, TableInfo, Variable},
     pool::{with_pool_set, Clear, PoolSet, Pooled},
     table_spec::{ColumnId, MutationBuffer},
-    Containers, ExternalFunctionId, Primitives, WrappedTable,
+    BaseValues, Containers, ExternalFunctionId, WrappedTable,
 };
 
 use self::mask::{Mask, MaskIter, ValueSource};
@@ -199,7 +199,7 @@ pub(crate) struct DbView<'a> {
     pub(crate) table_info: &'a DenseIdMap<TableId, TableInfo>,
     pub(crate) counters: &'a Counters,
     pub(crate) external_funcs: &'a ExternalFunctions,
-    pub(crate) prims: &'a Primitives,
+    pub(crate) bases: &'a BaseValues,
     pub(crate) containers: &'a Containers,
 }
 
@@ -308,8 +308,8 @@ impl<'a> ExecutionState<'a> {
         &self.db.table_info[table].table
     }
 
-    pub fn prims(&self) -> &Primitives {
-        self.db.prims
+    pub fn base_values(&self) -> &BaseValues {
+        self.db.bases
     }
 
     pub fn containers(&self) -> &Containers {

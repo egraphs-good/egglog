@@ -14,9 +14,8 @@ use crate::{
         Variable,
     },
     pool::{with_pool_set, Pooled},
-    primitives::PrimitiveId,
     table_spec::{ColumnId, Constraint},
-    CounterId, ExternalFunctionId, PoolSet,
+    BaseValueId, CounterId, ExternalFunctionId, PoolSet,
 };
 
 define_id!(pub RuleId, u32, "An identifier for a rule in a rule set");
@@ -328,11 +327,11 @@ pub enum QueryError {
         got: usize,
     },
 
-    #[error("counter used in primitive column {column_id:?} of table {table:?}, which is declared as a primitive")]
-    CounterUsedInPrimitiveColumn {
+    #[error("counter used in column {column_id:?} of table {table:?}, which is declared as a base value")]
+    CounterUsedInBaseColumn {
         table: TableId,
         column_id: ColumnId,
-        prim: PrimitiveId,
+        base: BaseValueId,
     },
 
     #[error("attempt to compare two groups of values, one of length {l}, another of length {r}")]

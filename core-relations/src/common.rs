@@ -21,7 +21,7 @@ pub(crate) type DashMap<K, V> = dashmap::DashMap<K, V, BuildHasherDefault<FxHash
 /// An intern table mapping a key to some numeric id type.
 ///
 /// This is primarily used to manage the [`Value`]s associated with a a
-/// primtiive value.
+/// base value.
 #[derive(Clone)]
 pub struct InternTable<K, V> {
     vals: Arc<ConcurrentVec<K>>,

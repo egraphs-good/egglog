@@ -18,10 +18,10 @@ use std::{
 };
 
 use core_relations::{
-    ColumnId, Constraint, Container, Containers, CounterId, Database, DisplacedTable,
-    DisplacedTableWithProvenance, ExecutionState, ExternalFunction, ExternalFunctionId, MergeVal,
-    Offset, PlanStrategy, Primitive, PrimitiveId, Primitives, RuleSetReport, SortedWritesTable,
-    TableId, TaggedRowBuffer, Value, WrappedTable,
+    BaseValue, BaseValueId, BaseValues, ColumnId, Constraint, Container, Containers, CounterId,
+    Database, DisplacedTable, DisplacedTableWithProvenance, ExecutionState, ExternalFunction,
+    ExternalFunctionId, MergeVal, Offset, PlanStrategy, RuleSetReport, SortedWritesTable, TableId,
+    TaggedRowBuffer, Value, WrappedTable,
 };
 use hashbrown::HashMap;
 use indexmap::{map::Entry, IndexMap, IndexSet};
@@ -49,7 +49,7 @@ use thiserror::Error;
 #[derive(Debug, Copy, Clone, Eq, PartialEq)]
 pub enum ColumnTy {
     Id,
-    Primitive(PrimitiveId),
+    Base(BaseValueId),
 }
 
 define_id!(pub RuleId, u32, "An egglog-style rule");
@@ -158,10 +158,10 @@ impl EGraph {
         self.db.inc_counter(self.timestamp_counter);
     }
 
-    /// Get a mutable reference to the underlying table of primitives for this
-    /// EGraph.
-    pub fn primitives_mut(&mut self) -> &mut Primitives {
-        self.db.primitives_mut()
+    /// Get a mutable reference to the underlying table of base values for this
+    /// `EGraph`.
+    pub fn base_values_mut(&mut self) -> &mut BaseValues {
+        self.db.base_values_mut()
     }
 
     /// Get a mutable reference to the underlying table of containers for this
@@ -202,19 +202,19 @@ impl EGraph {
             });
     }
 
-    /// Get a reference to the underlying table of primitives for this EGraph.
-    pub fn primitives(&self) -> &Primitives {
-        self.db.primitives()
+    /// Get a reference to the underlying table of base values for this `EGraph`.
+    pub fn base_values(&self) -> &BaseValues {
+        self.db.base_values()
     }
 
-    /// Create a [`QueryEntry`] for a primitive value.
-    pub fn primitive_constant<T>(&self, x: T) -> QueryEntry
+    /// Create a [`QueryEntry`] for a base value.
+    pub fn base_value_constant<T>(&self, x: T) -> QueryEntry
     where
-        T: Primitive,
+        T: BaseValue,
     {
         QueryEntry::Const {
-            val: self.primitives().get(x),
-            ty: ColumnTy::Primitive(self.primitives().get_ty::<T>()),
+            val: self.base_values().get(x),
+            ty: ColumnTy::Base(self.base_values().get_ty::<T>()),
         }
     }
 
@@ -884,7 +884,7 @@ impl EGraph {
                 ColumnTy::Id => {
                     Some(self.incremental_rebuild_rule(table, schema, ColumnId::from_usize(i)))
                 }
-                ColumnTy::Primitive(_) => None,
+                ColumnTy::Base(_) => None,
             })
             .collect()
     }

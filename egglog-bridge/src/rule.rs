@@ -8,7 +8,7 @@ use std::{cmp::Ordering, sync::Arc};
 
 use anyhow::Context;
 use core_relations::{
-    ColumnId, Constraint, CounterId, ExternalFunctionId, PlanStrategy, PrimitivePrinter,
+    BaseValuePrinter, ColumnId, Constraint, CounterId, ExternalFunctionId, PlanStrategy,
     QueryBuilder, RuleBuilder as CoreRuleBuilder, RuleSetBuilder, TableId, Value, WriteVal,
 };
 use hashbrown::HashSet;
@@ -18,7 +18,7 @@ use smallvec::SmallVec;
 use thiserror::Error;
 
 use crate::syntax::{Binding, Entry, Statement, TermFragment};
-use crate::term_proof_dag::PrimitiveConstant;
+use crate::term_proof_dag::BaseValueConstant;
 use crate::{
     proof_spec::{ProofBuilder, RebuildVars},
     ColumnTy, DefaultVal, EGraph, FunctionId, Result, RuleId, RuleInfo, Timestamp,
@@ -53,7 +53,7 @@ pub enum QueryEntry {
     Const {
         val: Value,
         // Constants can have a type plumbed through, particularly if they
-        // correspond to a primitive constant in egglog.
+        // correspond to a base value constant in egglog.
         ty: ColumnTy,
     },
 }
@@ -72,20 +72,20 @@ impl QueryEntry {
         Some(match self {
             QueryEntry::Var { id, .. } => Entry::Placeholder(*id),
             QueryEntry::Const { val, ty } => {
-                let ColumnTy::Primitive(ty) = *ty else {
-                    panic!("expected primitive type, found {ty:?}");
+                let ColumnTy::Base(ty) = *ty else {
+                    panic!("expected base value type, found {ty:?}");
                 };
                 let interned = *val;
 
-                Entry::Const(PrimitiveConstant {
+                Entry::Const(BaseValueConstant {
                     interned,
                     ty,
                     rendered: format!(
                         "{:?}",
-                        PrimitivePrinter {
+                        BaseValuePrinter {
                             val: interned,
                             ty,
-                            prim: eg.db.primitives(),
+                            base: eg.db.base_values(),
                         }
                     )
                     .into(),
@@ -511,7 +511,7 @@ impl RuleBuilder<'_> {
                     syntax: lhs_term,
                 });
             }
-            Entry::Const(primitive_constant) => {
+            Entry::Const(constant) => {
                 let anon = self.new_var(ret_ty);
                 self.proof_builder.syntax.rhs_bindings.push(Binding {
                     var: anon,
@@ -522,7 +522,7 @@ impl RuleBuilder<'_> {
                     .statements
                     .push(Statement::AssertEq(
                         Entry::Placeholder(anon),
-                        Entry::Const(primitive_constant),
+                        Entry::Const(constant),
                     ));
             }
         }
