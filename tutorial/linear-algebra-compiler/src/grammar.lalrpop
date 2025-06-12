@@ -1,9 +1,9 @@
 use std::str::FromStr;
 use crate::ast::parse_matrix_type;
-use crate::ast::{Binding, Expr, Type};
+use crate::ast::{Bindings, Binding, Expr, Type};
 grammar;
 
-pub Bindings: Vec<Binding> = { (Binding)* => <> }
+pub Bindings: Bindings = { (Binding)* => Bindings(<>) }
 Binding: Binding = {
     <v:Var> "=" <e:Expr> ";" => Binding::Bind { var: v, expr: e }, 
     <v:Var> <t:Type> ";" => Binding::Declare { var: v, ty: t },

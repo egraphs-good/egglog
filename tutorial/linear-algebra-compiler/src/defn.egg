@@ -1,10 +1,13 @@
 (datatype Scalar
     (Num i64)
+    (SVar String)
     (SAdd Scalar Scalar)
-    (SMul Scalar Scalar))
+    (SMul Scalar Scalar)
+    (SSub Scalar Scalar)
+    (SDiv Scalar Scalar))
 
 (datatype Matrix
-    (Var String i64 i64)
+    (MVar String i64 i64)
     (Scale Matrix Scalar)
     (MAdd Matrix Matrix)
     (MMul Matrix Matrix)
@@ -43,7 +46,7 @@
 (function ncols (Matrix) i64 :no-merge)
 
 (rule (
-    (= e (Var _ i j))
+    (= e (MVar _ i j))
 ) (
     (set (nrows e) i)
     (set (ncols e) j)
