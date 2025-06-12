@@ -5,13 +5,76 @@
 
 (datatype Matrix
     (Var String i64 i64)
-    (MScale Matrix Scalar)
+    (Scale Matrix Scalar)
     (MAdd Matrix Matrix)
     (MMul Matrix Matrix)
     (Transpose Matrix))
 
+;; Commutativity
+(rewrite (SAdd x y) (SAdd y x))
+(rewrite (SMul x y) (SMul y x))
+(rewrite (MAdd A B) (MAdd B A))
+
+;; Associativity
+(birewrite (SAdd (SAdd x y) z) (SAdd x (SAdd y z)))
+(birewrite (SMul (SMul x y) z) (SMul x (SMul y z)))
+(birewrite (Scale (Scale A x) y) (Scale A (SMul x y)))
+(birewrite (MAdd (MAdd A B) C) (MAdd A (MAdd B C)))
+(birewrite (MMul (MMul A B) C) (MMul A (MMul B C)))
+
+;; Distributivity
+(birewrite (SMul x (SAdd y z)) (SAdd (SMul x y) (SMul x z)))
+(birewrite (MMul A (MAdd B C)) (MAdd (MMul A B) (MMul A C)))
+(birewrite (Scale (MAdd A B) x) (MAdd (Scale A x) (Scale B x)))
+(birewrite (Scale A (SAdd x y)) (MAdd (Scale A x) (Scale A y)))
+
+;; Identity
+(rewrite (SAdd x (Num 0)) x)
+(rewrite (SMul x (Num 1)) x)
+(rewrite (SMul x (Num 0)) (Num 0))
+
+;; Transpose
+(rewrite (Transpose (Transpose A)) A)
+(birewrite (Transpose (MMul A B)) (MMul (Transpose B) (Transpose A)))
+(birewrite (Transpose (MAdd A B)) (MAdd (Transpose A) (Transpose B)))
+
+;; Analysis for dimensions of matrices
 (function nrows (Matrix) i64 :no-merge)
 (function ncols (Matrix) i64 :no-merge)
 
-
-
+(rule (
+    (= e (Var _ i j))
+) (
+    (set (nrows e) i)
+    (set (ncols e) j)
+))
+(rule (
+    (= e (Scale A x))
+    (= i (nrows A)) (= j (ncols A))
+) (
+    (set (nrows e) i)
+    (set (ncols e) j)
+))
+(rule (
+    (= e (MAdd A B))
+    (= i (nrows A)) (= j (ncols A))
+    (= i (nrows B)) (= j (ncols B))
+) (
+    (set (nrows e) i)
+    (set (ncols e) j)
+))
+(rule (
+    (= e (MMul A B))
+    (= i (nrows A)) (= k (ncols A))
+    (= k (nrows B)) (= j (ncols B))
+) (
+    (set (nrows e) i)
+    (set (ncols e) j)
+))
+(rule (
+    (= e (Transpose A))
+    (= i (nrows A)) (= j (ncols A))
+) (
+    (set (nrows e) j)
+    (set (ncols e) i)
+))

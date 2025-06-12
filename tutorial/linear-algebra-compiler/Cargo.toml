@@ -8,6 +8,7 @@ lalrpop-util = { version = "0.22.2", features = [
     "lexer",
 ] }
 egglog = { path = "../../" }
+regex = "1.11.1"
 
 [build-dependencies]
 lalrpop = "0.22.2"
