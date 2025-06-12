@@ -416,6 +416,16 @@ dependencies = [
 ]
 
 [[package]]
+name = "egglog-experimental"
+version = "0.1.0"
+dependencies = [
+ "egglog",
+ "lazy_static",
+ "log",
+ "num",
+]
+
+[[package]]
 name = "egraph-serialize"
 version = "0.2.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -747,7 +757,7 @@ checksum = "d750af042f7ef4f724306de029d18836c26c1765a54a6a3f094cbd23a7267ffa"
 name = "linear-algebra-compiler"
 version = "0.1.0"
 dependencies = [
- "egglog",
+ "egglog-experimental",
  "lalrpop",
  "lalrpop-util",
  "regex",

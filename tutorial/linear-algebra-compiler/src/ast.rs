@@ -21,43 +21,53 @@ pub fn parse_matrix_type(input: &str) -> Type {
     Type::Matrix { nrows, ncols }
 }
 
-#[derive(Debug, PartialEq, Eq)]
-pub struct Bindings(Vec<Binding>);
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct Bindings {
+    bindings: Vec<Binding>,
+    declares: Vec<Declare>,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct CoreBindings {
+    pub bindings: Vec<CoreBinding>,
+    pub declares: Vec<Declare>,
+}
 
 impl Bindings {
-    pub fn lower(&self) -> Result<Vec<CoreBinding>, TypeError> {
+    pub fn lower(&self) -> Result<CoreBindings, TypeError> {
         let mut core_bindings = vec![];
         let mut env = vec![];
-        for binding in &self.0 {
-            match binding {
-                Binding::Bind { var, expr } => {
-                    let (expr, ty) = expr.lower(&env)?;
-                    core_bindings.push(CoreBinding::Bind {
-                        var: var.clone(),
-                        expr,
-                    });
-                    env.push((var.clone(), ty));
-                }
-                Binding::Declare { var, ty } => {
-                    core_bindings.push(CoreBinding::Declare {
-                        var: var.clone(),
-                        ty: *ty,
-                    });
-                    env.push((var.clone(), *ty));
-                }
-            }
+        for decl in self.declares.iter() {
+            env.push((decl.var.clone(), decl.ty));
         }
-        Ok(core_bindings)
+        for binding in &self.bindings {
+            let (expr, ty) = binding.expr.lower(&env)?;
+            core_bindings.push(CoreBinding {
+                var: binding.var.clone(),
+                expr,
+            });
+            env.push((binding.var.clone(), ty));
+        }
+        Ok(CoreBindings {
+            bindings: core_bindings,
+            declares: self.declares.clone(),
+        })
     }
 }
 
-#[derive(Debug, PartialEq, Eq)]
-pub enum Binding {
-    Bind { var: String, expr: Expr },
-    Declare { var: String, ty: Type },
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct Binding {
+    pub var: String,
+    pub expr: Expr,
 }
 
-#[derive(Debug, PartialEq, Eq)]
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct Declare {
+    pub var: String,
+    pub ty: Type,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
 pub enum Expr {
     Var(String),
     Num(i64),
@@ -73,19 +83,19 @@ pub enum Type {
     Matrix { nrows: usize, ncols: usize },
 }
 
-#[derive(Debug, PartialEq, Eq)]
-pub enum CoreBinding {
-    Bind { var: String, expr: CoreExpr },
-    Declare { var: String, ty: Type },
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct CoreBinding {
+    pub var: String,
+    pub expr: CoreExpr,
 }
 
-#[derive(Debug, PartialEq, Eq)]
+#[derive(Debug, Clone, PartialEq, Eq)]
 pub enum CoreExpr {
     SVar(String),
     MVar {
         name: String,
-        nrows: usize,
-        ncols: usize,
+        // nrows: usize,
+        // ncols: usize,
     },
     Num(i64),
     SAdd(Box<CoreExpr>, Box<CoreExpr>),
@@ -97,7 +107,7 @@ pub enum CoreExpr {
     SDiv(Box<CoreExpr>, Box<CoreExpr>),
 }
 
-#[derive(Debug)]
+#[derive(Debug, Clone, PartialEq, Eq)]
 #[allow(dead_code)]
 pub enum TypeError {
     ExpectedScalar,
@@ -119,8 +129,8 @@ impl Expr {
                     Some((_, Type::Matrix { nrows, ncols })) => Ok((
                         CoreExpr::MVar {
                             name: name.clone(),
-                            nrows: *nrows,
-                            ncols: *ncols,
+                            // nrows: *nrows,
+                            // ncols: *ncols,
                         },
                         Type::Matrix {
                             nrows: *nrows,
@@ -231,40 +241,44 @@ impl Expr {
 
 #[test]
 fn test_parser() {
-    use Binding::*;
     use Expr::*;
     use Type::*;
     let bindings = grammar::BindingsParser::new().parse("x: R; y: R; A: [R; 2x2];");
     assert_eq!(
-        bindings.unwrap().0,
-        vec![
-            Binding::Declare {
-                var: "x".to_string(),
-                ty: Type::Scalar
-            },
-            Binding::Declare {
-                var: "y".to_string(),
-                ty: Type::Scalar
-            },
-            Binding::Declare {
-                var: "A".to_string(),
-                ty: Type::Matrix { nrows: 2, ncols: 2 }
-            },
-        ]
+        bindings.unwrap(),
+        Bindings {
+            declares: vec![
+                Declare {
+                    var: "x".to_string(),
+                    ty: Type::Scalar
+                },
+                Declare {
+                    var: "y".to_string(),
+                    ty: Type::Scalar
+                },
+                Declare {
+                    var: "A".to_string(),
+                    ty: Type::Matrix { nrows: 2, ncols: 2 }
+                },
+            ],
+            bindings: vec![],
+        }
     );
     let bindings = grammar::BindingsParser::new().parse("x: R; y: R; A = x*y*A;");
     assert_eq!(
-        bindings.unwrap().0,
-        vec![
-            Binding::Declare {
-                var: "x".to_string(),
-                ty: Type::Scalar
-            },
-            Binding::Declare {
-                var: "y".to_string(),
-                ty: Type::Scalar
-            },
-            Binding::Bind {
+        bindings.unwrap(),
+        Bindings {
+            declares: vec![
+                Declare {
+                    var: "x".to_string(),
+                    ty: Type::Scalar
+                },
+                Declare {
+                    var: "y".to_string(),
+                    ty: Type::Scalar
+                }
+            ],
+            bindings: vec![Binding {
                 var: "A".to_string(),
                 expr: Expr::Mul(
                     Box::new(Expr::Mul(
@@ -273,23 +287,25 @@ fn test_parser() {
                     )),
                     Box::new(Expr::Var("A".to_string()))
                 )
-            },
-        ]
+            }],
+        }
     );
     let bindings = grammar::BindingsParser::new().parse("x: R; y: R; A = (1+1+x*y)*A;");
 
     assert_eq!(
-        bindings.unwrap().0,
-        vec![
-            Declare {
-                var: "x".to_string(),
-                ty: Scalar,
-            },
-            Declare {
-                var: "y".to_string(),
-                ty: Scalar,
-            },
-            Bind {
+        bindings.unwrap(),
+        Bindings {
+            declares: vec![
+                Declare {
+                    var: "x".to_string(),
+                    ty: Scalar,
+                },
+                Declare {
+                    var: "y".to_string(),
+                    ty: Scalar,
+                },
+            ],
+            bindings: vec![Binding {
                 var: "A".to_string(),
                 expr: Mul(
                     Add(
@@ -299,8 +315,8 @@ fn test_parser() {
                     .into(),
                     Var("A".to_string()).into(),
                 ),
-            },
-        ]
+            },],
+        }
     );
 }
 

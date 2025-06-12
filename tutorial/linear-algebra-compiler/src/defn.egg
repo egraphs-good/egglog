@@ -6,12 +6,16 @@
     (SSub Scalar Scalar)
     (SDiv Scalar Scalar))
 
-(datatype Matrix
-    (MVar String i64 i64)
-    (Scale Scalar Matrix)
-    (MAdd Matrix Matrix)
-    (MMul Matrix Matrix)
-    (Transpose Matrix))
+(with-custom-cost
+    (datatype Matrix
+        (MVar String)
+        (Scale Scalar Matrix)
+        (MAdd Matrix Matrix)
+        (MMul Matrix Matrix)
+        (Transpose Matrix))
+)
+
+(relation MatrixDim (String i64 i64))
 
 ;; Commutativity
 (rewrite (SAdd x y) (SAdd y x))
@@ -45,12 +49,10 @@
 (function nrows (Matrix) i64 :no-merge)
 (function ncols (Matrix) i64 :no-merge)
 
-(rule (
-    (= e (MVar _ i j))
-) (
-    (set (nrows e) i)
-    (set (ncols e) j)
-))
+
+(rule ((MatrixDim m i j))
+      ((set (nrows (MVar m)) i)
+       (set (ncols (MVar m)) j)))
 (rule (
     (= e (Scale x A))
     (= i (nrows A)) (= j (ncols A))
@@ -81,3 +83,13 @@
     (set (nrows e) j)
     (set (ncols e) i)
 ))
+
+
+
+(rule ((= e (Scale a A))
+       (= n (nrows A))
+       (= m (ncols A))
+) (
+    (set-cost (Scale a A) (* n m))
+))
+

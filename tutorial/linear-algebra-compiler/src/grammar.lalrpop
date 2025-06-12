@@ -1,12 +1,15 @@
 use std::str::FromStr;
 use crate::ast::parse_matrix_type;
-use crate::ast::{Bindings, Binding, Expr, Type};
+use crate::ast::{Bindings, Binding, Declare, Expr, Type};
 grammar;
 
-pub Bindings: Bindings = { (Binding)* => Bindings(<>) }
+pub Bindings: Bindings = { 
+    <declares: (Declare)*> <bindings: (Binding)*> => Bindings { declares, bindings } }
 Binding: Binding = {
-    <v:Var> "=" <e:Expr> ";" => Binding::Bind { var: v, expr: e }, 
-    <v:Var> <t:Type> ";" => Binding::Declare { var: v, ty: t },
+    <v:Var> "=" <e:Expr> ";" => Binding{ var: v, expr: e }, 
+}
+Declare: Declare = {
+    <v:Var> <t:Type> ";" => Declare { var: v, ty: t },
 };
 
 Type: Type = {
