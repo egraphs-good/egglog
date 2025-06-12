@@ -73,6 +73,7 @@
 
 ;; Now consider the following program, which consists of a long sequence of additions _inside_
 ;; a cancelling division.
+(push 1)
 (let addition-chain (Add (Var "a") (Add (Var "b") (Add (Var "c") (Add (Var "d") (Add (Var "e") (Var "f")))))))
 (let nonzero-expr (Add (Num one) (Add (Num one) (Add (Num one) (Add (Num one) (Num two))))))
 (let expr (Mul nonzero-expr (Div addition-chain nonzero-expr)))
@@ -96,6 +97,9 @@
 
 ;; (Our check passes!)
 (check (= expr addition-chain))
+;; Print the size of the e-graph and the best expression reached for later.
+(print-size)
+(extract expr)
 
 ;; While the above program is effective at optimizing that specific program, it would fail if
 ;; we had a program where we had to interleave the optimizations and analyses. There is a common
@@ -118,3 +122,47 @@
          )
     )
 )
+
+;; Here we can see how much larger the e-graph is with just one more iteration.
+(print-size)
+;; And here we can see that the extra iteration doesn't make a difference for `expr` specifically.
+(extract expr)
+
+;; However, if we had started with a slightly different program to optimize...
+(pop 2)
+(push 1)
+(let addition-chain (Add (Var "a") (Add (Var "b") (Add (Var "c") (Add (Var "d") (Add (Var "e") (Var "f")))))))
+(let x-times-zero (Mul (Var "x") (Num zero)))
+(let nonzero-expr (Add (Num one) (Add (Num one) (Add (Num one) (Add (Num one) x-times-zero)))))
+(let expr (Mul nonzero-expr (Div addition-chain nonzero-expr)))
+
+;; (And we also need this missing rule.)
+(rewrite (Mul x (Num zero)) (Num zero) :ruleset optimizations)
+
+;; Then, only running with `repeat 1`...
+(push 1)
+(run-schedule
+    (repeat 1
+        (seq
+            (saturate (run analysis))
+            (run optimizations)
+         )
+    )
+)
+(extract expr)
+(pop 1)
+
+;; is worse than `repeat 2`...
+(push 1)
+(run-schedule
+    (repeat 2
+        (seq
+            (saturate (run analysis))
+            (run optimizations)
+         )
+    )
+)
+(extract expr)
+
+;; Because it takes one iteration of `optimizations` to simplify `x-times-zero` to `zero`, and this is
+;; required to determine that `nonzero-expr` is actually `nonzero`.
