@@ -34,7 +34,7 @@ pub use cli::bin::*;
 use constraint::{Constraint, Problem, SimpleTypeConstraint, TypeConstraint};
 use core::{AtomTerm, ResolvedAtomTerm, ResolvedCall};
 use core_relations::{make_external_func, ExternalFunctionId};
-pub use core_relations::{ExecutionState, Value};
+pub use core_relations::{BaseValue, ContainerValue, ExecutionState, Value};
 pub use egglog_bridge::FunctionRow;
 use egglog_bridge::{ColumnTy, IterationReport, QueryEntry};
 use extract::{CostModel, DefaultCost, Extractor, TreeAdditiveCostModel};
@@ -537,7 +537,7 @@ impl EGraph {
             default: match decl.subtype {
                 FunctionSubtype::Constructor => DefaultVal::FreshId,
                 FunctionSubtype::Custom => DefaultVal::Fail,
-                FunctionSubtype::Relation => DefaultVal::Const(self.backend.primitives().get(())),
+                FunctionSubtype::Relation => DefaultVal::Const(self.backend.base_values().get(())),
             },
             merge: match decl.subtype {
                 FunctionSubtype::Constructor => MergeFn::UnionId,
@@ -931,8 +931,8 @@ impl EGraph {
     }
 
     fn eval_resolved_expr(&mut self, span: Span, expr: &ResolvedExpr) -> Result<Value, Error> {
-        let unit_id = self.backend.primitives().get_ty::<()>();
-        let unit_val = self.backend.primitives().get(());
+        let unit_id = self.backend.base_values().get_ty::<()>();
+        let unit_val = self.backend.base_values().get(());
 
         let result: egglog_bridge::SideChannel<Value> = Default::default();
         let result_ref = result.clone();
@@ -973,7 +973,7 @@ impl EGraph {
         translator.rb.call_external_func(
             ext_id,
             &[arg],
-            egglog_bridge::ColumnTy::Primitive(unit_id),
+            egglog_bridge::ColumnTy::Base(unit_id),
             || "this function will never panic".to_string(),
         );
 
@@ -1121,7 +1121,7 @@ impl EGraph {
 
                 let x = self.eval_resolved_expr(span.clone(), &expr)?;
                 let n = self.eval_resolved_expr(span, &variants)?;
-                let n: i64 = self.backend.primitives().unwrap(n);
+                let n: i64 = self.backend.base_values().unwrap(n);
 
                 let mut termdag = TermDag::default();
 
@@ -1309,7 +1309,7 @@ impl EGraph {
 
         log::debug!("{:?}", row_schema);
 
-        let unit_val = self.backend.primitives().get(());
+        let unit_val = self.backend.base_values().get(());
 
         for line in contents.lines() {
             let mut it = line.split('\t').map(|s| s.trim());
@@ -1321,7 +1321,7 @@ impl EGraph {
                     let val = match sort.name() {
                         "i64" => {
                             if let Ok(i) = raw.parse::<i64>() {
-                                self.backend.primitives().get(i)
+                                self.backend.base_values().get(i)
                             } else {
                                 return Err(Error::InputFileFormatError(file));
                             }
@@ -1329,13 +1329,13 @@ impl EGraph {
                         "f64" => {
                             if let Ok(f) = raw.parse::<f64>() {
                                 self.backend
-                                    .primitives()
+                                    .base_values()
                                     .get::<F>(core_relations::Boxed::new(f.into()))
                             } else {
                                 return Err(Error::InputFileFormatError(file));
                             }
                         }
-                        "String" => self.backend.primitives().get::<S>(raw.to_string().into()),
+                        "String" => self.backend.base_values().get::<S>(raw.to_string().into()),
                         "Unit" => unit_val,
                         _ => panic!("Unreachable"),
                     };
@@ -1513,13 +1513,13 @@ impl EGraph {
     }
 
     /// Convert from an egglog value to a Rust type.
-    pub fn value_to_rust<T: core_relations::Primitive>(&self, x: Value) -> T {
-        self.backend.primitives().unwrap::<T>(x)
+    pub fn value_to_base<T: BaseValue>(&self, x: Value) -> T {
+        self.backend.base_values().unwrap::<T>(x)
     }
 
     /// Convert from a Rust type to an egglog value.
-    pub fn rust_to_value<T: core_relations::Primitive>(&self, x: T) -> Value {
-        self.backend.primitives().get::<T>(x)
+    pub fn base_to_value<T: BaseValue>(&self, x: T) -> Value {
+        self.backend.base_values().get::<T>(x)
     }
 
     /// Print a message to egglog's message buffer. Used by user-defined
@@ -1654,7 +1654,7 @@ impl<'a> BackendRule<'a> {
                 .map(|s| s.is_eq_sort() || s.is_eq_container_sort())
                 .collect();
 
-            qe_args[0] = self.rb.egraph().primitive_constant(ResolvedFunction {
+            qe_args[0] = self.rb.egraph().base_value_constant(ResolvedFunction {
                 id,
                 do_rebuild,
                 name: name.clone(),
@@ -1768,21 +1768,21 @@ impl<'a> BackendRule<'a> {
 
 fn literal_to_entry(egraph: &egglog_bridge::EGraph, l: &Literal) -> QueryEntry {
     match l {
-        Literal::Int(x) => egraph.primitive_constant::<i64>(*x),
-        Literal::Float(x) => egraph.primitive_constant::<sort::F>(x.into()),
-        Literal::String(x) => egraph.primitive_constant::<sort::S>(sort::S::new(x.clone())),
-        Literal::Bool(x) => egraph.primitive_constant::<bool>(*x),
-        Literal::Unit => egraph.primitive_constant::<()>(()),
+        Literal::Int(x) => egraph.base_value_constant::<i64>(*x),
+        Literal::Float(x) => egraph.base_value_constant::<sort::F>(x.into()),
+        Literal::String(x) => egraph.base_value_constant::<sort::S>(sort::S::new(x.clone())),
+        Literal::Bool(x) => egraph.base_value_constant::<bool>(*x),
+        Literal::Unit => egraph.base_value_constant::<()>(()),
     }
 }
 
 fn literal_to_value(egraph: &egglog_bridge::EGraph, l: &Literal) -> Value {
     match l {
-        Literal::Int(x) => egraph.primitives().get::<i64>(*x),
-        Literal::Float(x) => egraph.primitives().get::<sort::F>(x.into()),
-        Literal::String(x) => egraph.primitives().get::<sort::S>(sort::S::new(x.clone())),
-        Literal::Bool(x) => egraph.primitives().get::<bool>(*x),
-        Literal::Unit => egraph.primitives().get::<()>(()),
+        Literal::Int(x) => egraph.base_values().get::<i64>(*x),
+        Literal::Float(x) => egraph.base_values().get::<sort::F>(x.into()),
+        Literal::String(x) => egraph.base_values().get::<sort::S>(sort::S::new(x.clone())),
+        Literal::Bool(x) => egraph.base_values().get::<bool>(*x),
+        Literal::Unit => egraph.base_values().get::<()>(()),
     }
 }
 
@@ -1853,20 +1853,20 @@ mod tests {
         fn apply(&self, exec_state: &mut ExecutionState<'_>, args: &[Value]) -> Option<Value> {
             let mut sum = 0;
             let vec1 = exec_state
-                .containers()
+                .container_values()
                 .get_val::<VecContainer>(args[0])
                 .unwrap();
             let vec2 = exec_state
-                .containers()
+                .container_values()
                 .get_val::<VecContainer>(args[1])
                 .unwrap();
             assert_eq!(vec1.data.len(), vec2.data.len());
             for (a, b) in vec1.data.iter().zip(vec2.data.iter()) {
-                let a = exec_state.prims().unwrap::<i64>(*a);
-                let b = exec_state.prims().unwrap::<i64>(*b);
+                let a = exec_state.base_values().unwrap::<i64>(*a);
+                let b = exec_state.base_values().unwrap::<i64>(*b);
                 sum += a * b;
             }
-            Some(exec_state.prims().get::<i64>(sum))
+            Some(exec_state.base_values().get::<i64>(sum))
         }
     }
 

@@ -8,7 +8,7 @@ pub struct MapContainer {
     pub data: BTreeMap<Value, Value>,
 }
 
-impl Container for MapContainer {
+impl ContainerValue for MapContainer {
     fn rebuild_contents(&mut self, rebuilder: &dyn Rebuilder) -> bool {
         let mut changed = false;
         if self.do_rebuild_keys {
@@ -134,8 +134,15 @@ impl ContainerSort for MapSort {
         self.key.is_eq_sort() || self.value.is_eq_sort()
     }
 
-    fn inner_values(&self, containers: &Containers, value: Value) -> Vec<(ArcSort, Value)> {
-        let val = containers.get_val::<MapContainer>(value).unwrap().clone();
+    fn inner_values(
+        &self,
+        container_values: &ContainerValues,
+        value: Value,
+    ) -> Vec<(ArcSort, Value)> {
+        let val = container_values
+            .get_val::<MapContainer>(value)
+            .unwrap()
+            .clone();
         val.data
             .iter()
             .flat_map(|(k, v)| [(self.key.clone(), *k), (self.value.clone(), *v)])
@@ -162,7 +169,7 @@ impl ContainerSort for MapSort {
 
     fn reconstruct_termdag(
         &self,
-        _containers: &Containers,
+        _container_values: &ContainerValues,
         _value: Value,
         termdag: &mut TermDag,
         element_terms: Vec<Term>,

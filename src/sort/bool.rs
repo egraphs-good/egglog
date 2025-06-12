@@ -3,8 +3,8 @@ use super::*;
 #[derive(Debug)]
 pub struct BoolSort;
 
-impl LeafSort for BoolSort {
-    type Leaf = bool;
+impl BaseSort for BoolSort {
+    type Base = bool;
 
     fn name(&self) -> &str {
         "bool"
@@ -21,11 +21,11 @@ impl LeafSort for BoolSort {
 
     fn reconstruct_termdag(
         &self,
-        primitives: &Primitives,
+        base_values: &BaseValues,
         value: Value,
         termdag: &mut TermDag,
     ) -> Term {
-        let b = primitives.unwrap::<bool>(value);
+        let b = base_values.unwrap::<bool>(value);
 
         termdag.lit(Literal::Bool(b))
     }

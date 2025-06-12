@@ -237,7 +237,7 @@ impl<C: Cost + Ord + Eq + Copy + Debug> Extractor<C> {
     /// Returns None if contains an undefined eqsort term (potentially after unfolding)
     fn compute_cost_node(&self, egraph: &EGraph, value: Value, sort: &ArcSort) -> Option<C> {
         if sort.is_container_sort() {
-            let elements = sort.inner_values(egraph.backend.containers(), value);
+            let elements = sort.inner_values(egraph.backend.container_values(), value);
             let mut ch_costs: Vec<C> = Vec::new();
             for ch in elements.iter() {
                 if let Some(c) = self.compute_cost_node(egraph, ch.1, &ch.0) {
@@ -293,7 +293,7 @@ impl<C: Cost + Ord + Eq + Copy + Debug> Extractor<C> {
 
     fn compute_topo_rnk_node(&self, egraph: &EGraph, value: Value, sort: &ArcSort) -> usize {
         if sort.is_container_sort() {
-            sort.inner_values(egraph.backend.containers(), value)
+            sort.inner_values(egraph.backend.container_values(), value)
                 .iter()
                 .fold(0, |ret, (sort, value)| {
                     usize::max(ret, self.compute_topo_rnk_node(egraph, *value, sort))
@@ -454,7 +454,7 @@ impl<C: Cost + Ord + Eq + Copy + Debug> Extractor<C> {
         }
 
         let term = if sort.is_container_sort() {
-            let elements = sort.inner_values(egraph.backend.containers(), value);
+            let elements = sort.inner_values(egraph.backend.container_values(), value);
             let mut ch_terms: Vec<Term> = Vec::new();
             for ch in elements.iter() {
                 ch_terms.push(
@@ -462,7 +462,7 @@ impl<C: Cost + Ord + Eq + Copy + Debug> Extractor<C> {
                 );
             }
             sort.reconstruct_termdag_container(
-                egraph.backend.containers(),
+                egraph.backend.container_values(),
                 value,
                 termdag,
                 ch_terms,
@@ -483,8 +483,8 @@ impl<C: Cost + Ord + Eq + Copy + Debug> Extractor<C> {
             }
             termdag.app(func_name.clone(), ch_terms)
         } else {
-            // Primitive
-            sort.reconstruct_termdag_leaf(egraph.backend.primitives(), value, termdag)
+            // Base value case
+            sort.reconstruct_termdag_base(egraph.backend.base_values(), value, termdag)
         };
 
         cache.insert(key, term.clone());

@@ -7,7 +7,7 @@ pub struct SetContainer {
     pub data: BTreeSet<Value>,
 }
 
-impl Container for SetContainer {
+impl ContainerValue for SetContainer {
     fn rebuild_contents(&mut self, rebuilder: &dyn Rebuilder) -> bool {
         if self.do_rebuild {
             let mut xs: Vec<_> = self.data.iter().copied().collect();
@@ -100,8 +100,15 @@ impl ContainerSort for SetSort {
         self.element.is_eq_sort()
     }
 
-    fn inner_values(&self, containers: &Containers, value: Value) -> Vec<(ArcSort, Value)> {
-        let val = containers.get_val::<SetContainer>(value).unwrap().clone();
+    fn inner_values(
+        &self,
+        container_values: &ContainerValues,
+        value: Value,
+    ) -> Vec<(ArcSort, Value)> {
+        let val = container_values
+            .get_val::<SetContainer>(value)
+            .unwrap()
+            .clone();
         val.data
             .iter()
             .map(|e| (self.element.clone(), *e))
@@ -135,7 +142,7 @@ impl ContainerSort for SetSort {
 
     fn reconstruct_termdag(
         &self,
-        _containers: &Containers,
+        _container_values: &ContainerValues,
         _value: Value,
         termdag: &mut TermDag,
         element_terms: Vec<Term>,

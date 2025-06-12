@@ -17,8 +17,8 @@ use super::*;
 #[derive(Debug)]
 pub struct I64Sort;
 
-impl LeafSort for I64Sort {
-    type Leaf = i64;
+impl BaseSort for I64Sort {
+    type Base = i64;
 
     fn name(&self) -> &str {
         "i64"
@@ -66,11 +66,11 @@ impl LeafSort for I64Sort {
 
     fn reconstruct_termdag(
         &self,
-        primitives: &Primitives,
+        base_values: &BaseValues,
         value: Value,
         termdag: &mut TermDag,
     ) -> Term {
-        let i = primitives.unwrap::<i64>(value);
+        let i = base_values.unwrap::<i64>(value);
 
         termdag.lit(Literal::Int(i))
     }

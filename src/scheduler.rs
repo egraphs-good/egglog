@@ -108,7 +108,7 @@ impl Matches {
         mut table_action: TableAction,
     ) -> Vec<Value> {
         let tuple_len = self.tuple_len();
-        let unit = state.prims().get(());
+        let unit = state.base_values().get(());
 
         if self.all_chosen {
             for row in self.matches.chunks(tuple_len) {
@@ -327,16 +327,16 @@ impl CollectMatches {
 impl ExternalFunction for CollectMatches {
     fn invoke(&self, state: &mut core_relations::ExecutionState, args: &[Value]) -> Option<Value> {
         self.matches.lock().unwrap().extend(args.iter().copied());
-        Some(state.prims().get(()))
+        Some(state.base_values().get(()))
     }
 }
 
 impl SchedulerRuleInfo {
     fn new(egraph: &mut EGraph, rule: &ResolvedCoreRule, name: &str) -> SchedulerRuleInfo {
         let free_vars = rule.head.get_free_vars().into_iter().collect::<Vec<_>>();
-        let unit_type = egraph.backend.primitives().get_ty::<()>();
-        let unit = egraph.backend.primitives().get(());
-        let unit_entry = egraph.backend.primitive_constant(());
+        let unit_type = egraph.backend.base_values().get_ty::<()>();
+        let unit = egraph.backend.base_values().get(());
+        let unit_entry = egraph.backend.base_value_constant(());
 
         let matches = Arc::new(Mutex::new(Vec::new()));
         let collect_matches = egraph
@@ -345,7 +345,7 @@ impl SchedulerRuleInfo {
         let schema = free_vars
             .iter()
             .map(|v| v.sort.column_ty(&egraph.backend))
-            .chain(std::iter::once(ColumnTy::Primitive(unit_type)))
+            .chain(std::iter::once(ColumnTy::Base(unit_type)))
             .collect();
         let decided = egraph.backend.add_table(FunctionConfig {
             schema,
@@ -369,7 +369,7 @@ impl SchedulerRuleInfo {
         let _var = qrule_builder.rb.call_external_func(
             collect_matches,
             &entries,
-            ColumnTy::Primitive(unit_type),
+            ColumnTy::Base(unit_type),
             || "collect_matches".to_string(),
         );
         let qrule_id = qrule_builder.build();

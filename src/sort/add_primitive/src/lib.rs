@@ -138,8 +138,8 @@ pub fn add_primitive(input: TokenStream) -> TokenStream {
 
         // Cast the arguments to the desired type.
         let cast1 = |x, t: &syn::Type, is_container| match is_container {
-            false => quote!(exec_state.prims().unwrap::<#t>(*#x)),
-            true => quote!(exec_state.containers().get_val::<#t>(*#x).unwrap().clone()),
+            false => quote!(exec_state.base_values().unwrap::<#t>(*#x)),
+            true => quote!(exec_state.container_values().get_val::<#t>(*#x).unwrap().clone()),
         };
         let cast = if is_varargs {
             let Arg { x, t, is_mutable } = &args[0];
@@ -174,9 +174,9 @@ pub fn add_primitive(input: TokenStream) -> TokenStream {
             Some((t, is_container)) => (
                 t,
                 match is_container {
-                    false => quote!(exec_state.prims().get::<#t>(#y)),
+                    false => quote!(exec_state.base_values().get::<#t>(#y)),
                     true => quote!(
-                        exec_state.clone().containers().register_val::<#t>(#y, exec_state)
+                        exec_state.clone().container_values().register_val::<#t>(#y, exec_state)
                     ),
                 },
             ),

@@ -1,5 +1,5 @@
 use crate::{util::HashMap, *};
-use core_relations::PrimitivePrinter;
+use core_relations::BaseValuePrinter;
 use ordered_float::NotNan;
 use std::collections::VecDeque;
 
@@ -292,7 +292,7 @@ impl EGraph {
             {
                 // Children will be empty unless this is a container sort
                 let children: Vec<egraph_serialize::NodeId> = sort
-                    .inner_values(self.backend.containers(), value)
+                    .inner_values(self.backend.container_values(), value)
                     .into_iter()
                     .map(|(s, v)| {
                         self.serialize_value(serializer, &s, v, &self.value_to_class_id(&s, v))
@@ -304,10 +304,10 @@ impl EGraph {
                 } else {
                     let primitive_id = self
                         .backend
-                        .primitives()
+                        .base_values()
                         .get_ty_by_id(sort.value_type().unwrap());
-                    let formatted_val = PrimitivePrinter {
-                        prim: self.backend.primitives(),
+                    let formatted_val = BaseValuePrinter {
+                        base: self.backend.base_values(),
                         ty: primitive_id,
                         val: value,
                     };
