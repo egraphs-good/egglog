@@ -172,7 +172,8 @@
 ;; e-graph hyper-exponentially. To address this, we have added two additional scheduling operations:
 ;; `(let-scheduler)` and `(run-with)`. These operations allow you to run partial iterations, by using
 ;; custom schedulers such as `back-off`. The `back-off` scheduler tries to make matching "fairer" by
-;; slowing down rules with many matches.
+;; slowing down rules with many matches. Here, we can see that we can run 25 "iterations"
+;; without timing out. (If you change the `run-with bo`s to `run`s the worker thread will hang.)
 (pop 1)
 (push 1)
 (run-schedule
