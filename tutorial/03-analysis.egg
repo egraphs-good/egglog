@@ -143,9 +143,9 @@
                  (min (* ue1 le2)
                       (* ue1 ue2)))))
        (set (upper-bound e)
-            (min (* le1 le2)
-                 (min (* le1 ue2)
-                 (min (* ue1 le2)
+            (max (* le1 le2)
+                 (max (* le1 ue2)
+                 (max (* ue1 le2)
                       (* ue1 ue2)))))))
 
 ;; The interval analysis is not only useful for numerical tools like [Herbie](https://herbie.uwplse.org/),
