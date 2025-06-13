@@ -244,9 +244,7 @@ mod inner {
 
         /// Return an iterator over all elements in the multiset.
         pub fn iter(&self) -> impl Iterator<Item = &T> {
-            self.0
-                .iter()
-                .flat_map(|(k, v)| std::iter::repeat(k).take(*v))
+            self.0.iter().flat_map(|(k, v)| std::iter::repeat_n(k, *v))
         }
 
         /// Return an arbitrary element from the multiset.

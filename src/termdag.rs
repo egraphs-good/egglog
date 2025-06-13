@@ -1,5 +1,5 @@
 use crate::*;
-use std::io::Write;
+use std::fmt::Write;
 
 pub type TermId = usize;
 
@@ -138,9 +138,7 @@ impl TermDag {
     ///
     /// Panics if the term or any of its subterms are not in the DAG.
     pub fn to_string(&self, term: &Term) -> String {
-        // Vec is used here instead of String as String doesn't have it's
-        // extend_from_within method stabilized.
-        let mut result = vec![];
+        let mut result = String::new();
         // subranges of the `result` string containing already stringified subterms
         let mut ranges = HashMap::<TermId, (usize, usize)>::default();
         let id = self.lookup(term);
@@ -149,7 +147,7 @@ impl TermDag {
         let mut stack = vec![(id, false, None)];
         while let Some((id, space_before, mut start_index)) = stack.pop() {
             if space_before {
-                result.push(b' ');
+                result.push(' ');
             }
 
             if let Some((start, end)) = ranges.get(&id) {
@@ -160,7 +158,7 @@ impl TermDag {
             match self.nodes[id].clone() {
                 Term::App(name, children) => {
                     if start_index.is_some() {
-                        result.push(b')');
+                        result.push(')');
                     } else {
                         stack.push((id, false, Some(result.len())));
                         write!(&mut result, "({}", name).unwrap();
@@ -184,7 +182,7 @@ impl TermDag {
             }
         }
 
-        String::from_utf8(result).unwrap()
+        result
     }
 }
 
