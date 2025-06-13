@@ -1,0 +1,187 @@
+;; # Scheduling
+
+;; In this lesson, we will learn how to use `run-schedule` to improve the performance of egglog.
+;; We start by using the same language as the previous lesson.
+
+(datatype Expr
+    (Num BigRat)
+    (Var String)
+    (Add Expr Expr)
+    (Mul Expr Expr)
+    (Div Expr Expr))
+
+(let zero (bigrat (bigint 0) (bigint 1)))
+(let one (bigrat (bigint 1) (bigint 1)))
+(let two (bigrat (bigint 2) (bigint 1)))
+
+;; However, we now modify the rules from Section 3 to use rulesets.
+;; A ruleset is exactly what it sounds like; a set of rules.
+;; We can declare rulesets using the `ruleset` command.
+(ruleset optimizations)
+(ruleset analysis)
+
+;; We can add rules to rulesets using the `:ruleset` annotation on `rule`s, `rewrite`s, and `birewrite`s.
+;; Leaving off `:ruleset` causes the rule to be added to the default ruleset, which is what we've shown so far.
+;; We can run rulesets using `(run ruleset iters)`.
+;; The `leq` rules are purely analysis rules, because they don't add any new `Expr` nodes to the e-graph.
+(relation leq (Expr Expr))
+(rule ((leq e1 e2) (leq e2 e3)) ((leq e1 e3)) :ruleset analysis)
+(rule ((= e1 (Num n1)) (= e2 (Num n2)) (<= n1 n2)) ((leq e1 e2)) :ruleset analysis)
+(rule ((= v (Var x))) ((leq v v)) :ruleset analysis)
+(rule ((= e1 (Add e1a e1b)) (= e2 (Add e2a e2b)) (leq e1a e2a) (leq e1b e2b))
+      ((leq e1 e2))
+      :ruleset analysis)
+
+;; In contrast, these axiomatic rules are doing optimizations.
+(birewrite (Add x (Add y z)) (Add (Add x y) z) :ruleset optimizations)
+(birewrite (Mul x (Mul y z)) (Mul (Mul x y) z) :ruleset optimizations)
+(rewrite (Add x y) (Add y x) :ruleset optimizations)
+(rewrite (Mul x y) (Mul y x) :ruleset optimizations)
+(rewrite (Mul x (Add y z)) (Add (Mul x y) (Mul x z)) :ruleset optimizations)
+(rewrite (Add x (Num zero)) x :ruleset optimizations)
+(rewrite (Mul x (Num one)) x :ruleset optimizations)
+(rewrite (Add (Num a) (Num b)) (Num (+ a b)) :ruleset optimizations)
+(rewrite (Mul (Num a) (Num b)) (Num (* a b)) :ruleset optimizations)
+
+;; Here we add the rest of the rules from the last section, but tagged with the appropriate rulesets.
+(function upper-bound (Expr) BigRat :merge (min old new))
+(function lower-bound (Expr) BigRat :merge (max old new))
+(rule ((leq e (Num n))) ((set (upper-bound e) n)) :ruleset analysis)
+(rule ((leq (Num n) e)) ((set (lower-bound e) n)) :ruleset analysis)
+(rule ((= e (Add e1 e2)) (= (upper-bound e1) u1) (= (upper-bound e2) u2))
+      ((set (upper-bound e) (+ u1 u2)))
+      :ruleset analysis)
+(rule ((= e (Add e1 e2)) (= (lower-bound e1) l1) (= (lower-bound e2) l2))
+      ((set (lower-bound e) (+ l1 l2)))
+      :ruleset analysis)
+
+(rule ((= e (Mul e1 e2))
+       (= le1 (lower-bound e1)) (= le2 (lower-bound e2))
+       (= ue1 (upper-bound e1)) (= ue2 (upper-bound e2)))
+      ((set (lower-bound e)
+            (min (* le1 le2) (min (* le1 ue2) (min (* ue1 le2) (* ue1 ue2)))))
+       (set (upper-bound e)
+            (max (* le1 le2) (max (* le1 ue2) (max (* ue1 le2) (* ue1 ue2))))))
+      :ruleset analysis)
+
+(relation non-zero (Expr))
+(rule ((< (upper-bound e) zero)) ((non-zero e)) :ruleset analysis)
+(rule ((> (lower-bound e) zero)) ((non-zero e)) :ruleset analysis)
+;; Finally, we have the rules that depend on analyses but actually do optimization.
+(rewrite (Div x x)         (Num one) :when ((non-zero x)) :ruleset optimizations)
+(rewrite (Mul x (Div y x)) y         :when ((non-zero x)) :ruleset optimizations)
+
+;; Now consider the following program, which consists of a long sequence of additions _inside_
+;; a cancelling division.
+(push 1)
+(let addition-chain (Add (Var "a") (Add (Var "b") (Add (Var "c") (Add (Var "d") (Add (Var "e") (Var "f")))))))
+(let nonzero-expr (Add (Num one) (Add (Num one) (Add (Num one) (Add (Num one) (Num two))))))
+(let expr (Mul nonzero-expr (Div addition-chain nonzero-expr)))
+
+;; (The check that we eventually want to pass.)
+(fail (check (= expr addition-chain)))
+
+;; If we try to run both rulesets directly, egglog will spend lots of effort reassociating and
+;; commuting the terms in the `addition-chain`, even though the optimization that we actually
+;; want to run (cancelling division) only takes one iteration. However, that optimization requires
+;; knowing a fact that takes multiple iterations to compute (propagating lower- and upper-bounds
+;; through `nonzero-expr`). Thus, we can build a more efficient schedule for this specific program.
+(push 1)
+
+;; Start by saturating the analysis rules, fully propagating the `non-zero` information _without_
+;; adding any nodes to the e-graph.
+(run-schedule (saturate (run analysis)))
+
+;; Then, just run one iteration of the `optimizations` ruleset.
+(run optimizations 1)
+
+;; (Our check passes!)
+(check (= expr addition-chain))
+;; Print the size of the e-graph and the best expression reached for later.
+(print-size)
+(extract expr)
+
+;; While the above program is effective at optimizing that specific program, it would fail if
+;; we had a program where we had to interleave the optimizations and analyses. There is a common
+;; pattern of schedules which we use to fix this, which use all four of the variants in our scheduling
+;; langauge: `repeat`, `seq`, `saturate`, and `run`. (Note that `run` is both a scheduling
+;; operation and a top-level command, and that it takes different arguments when used in the
+;; different positions.)
+(pop 1)
+(push 1)
+
+;; The idea behind this schedule is to always saturate analyses before running optimizations.
+;; We then wrap that schedule in a `repeat` block to give us control over how long to run egglog.
+;; Using `repeat 1` gives us the same schedule as before, but now we can increase the iteration
+;; count if we want better results and have the time/space budget for it.
+(run-schedule
+    (repeat 2
+        (seq
+            (saturate (run analysis))
+            (run optimizations)
+         )
+    )
+)
+
+;; Here we can see how much larger the e-graph is with just one more iteration.
+(print-size)
+;; And here we can see that the extra iteration doesn't make a difference for `expr` specifically.
+(extract expr)
+
+;; However, if we had started with a slightly different program to optimize...
+(pop 2)
+(push 1)
+(let addition-chain (Add (Var "a") (Add (Var "b") (Add (Var "c") (Add (Var "d") (Add (Var "e") (Var "f")))))))
+(let x-times-zero (Mul (Var "x") (Num zero)))
+(let nonzero-expr (Add (Num one) (Add (Num one) (Add (Num one) (Add (Num one) x-times-zero)))))
+(let expr (Mul nonzero-expr (Div addition-chain nonzero-expr)))
+
+;; (And we also need this missing rule.)
+(rewrite (Mul x (Num zero)) (Num zero) :ruleset optimizations)
+
+;; Then, only running with `repeat 1`...
+(push 1)
+(run-schedule
+    (repeat 1
+        (seq
+            (saturate (run analysis))
+            (run optimizations)
+         )
+    )
+)
+(extract expr)
+(pop 1)
+
+;; is worse than `repeat 2`...
+(push 1)
+(run-schedule
+    (repeat 2
+        (seq
+            (saturate (run analysis))
+            (run optimizations)
+         )
+    )
+)
+(extract expr)
+
+;; Because it takes one iteration of `optimizations` to simplify `x-times-zero` to `zero`, and this is
+;; required to determine that `nonzero-expr` is actually `nonzero`.
+
+;; However, sometimes just having an iteration number does not give you enough control.
+;; As we can see from the `(print-size)`s above, adding one iteration can increase the size of the
+;; e-graph hyper-exponentially. To address this, we have added two additional scheduling operations:
+;; `(let-scheduler)` and `(run-with)`. These operations allow you to run partial iterations, by using
+;; custom schedulers such as `back-off`. The `back-off` scheduler tries to make matching "fairer" by
+;; slowing down rules with many matches. Here, we can see that we can run 25 "iterations"
+;; without timing out. (If you change the `run-with bo`s to `run`s the worker thread will hang.)
+(pop 1)
+(push 1)
+(run-schedule
+    (let-scheduler bo (back-off))
+    (repeat 25
+        (seq
+            (run-with bo analysis)
+            (run-with bo optimizations)
+         )
+    )
+)

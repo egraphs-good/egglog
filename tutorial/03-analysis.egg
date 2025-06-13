@@ -143,9 +143,9 @@
                  (min (* ue1 le2)
                       (* ue1 ue2)))))
        (set (upper-bound e)
-            (min (* le1 le2)
-                 (min (* le1 ue2)
-                 (min (* ue1 le2)
+            (max (* le1 le2)
+                 (max (* le1 ue2)
+                 (max (* ue1 le2)
                       (* ue1 ue2)))))))
 
 ;; The interval analysis is not only useful for numerical tools like [Herbie](https://herbie.uwplse.org/),
@@ -155,11 +155,28 @@
 (relation non-zero (Expr))
 (rule ((< (upper-bound e) zero)) ((non-zero e)))
 (rule ((> (lower-bound e) zero)) ((non-zero e)))
-(rewrite (Div x x)
-         (Num one)
-    :when ((non-zero x)))
-(rewrite (Mul x (Div (Const one) x)) 
-         (Num one) 
-    :when ((non-zero x)))
+(rewrite (Div x x)         (Num one) :when ((non-zero x)))
+(rewrite (Mul x (Div y x)) y         :when ((non-zero x)))
 
-;; TODO: tests
+;; This non-zero analysis lets us optimize expressions that contain division safely.
+(let e3 (Mul (Num two) (Div (Var "x") (Add (Num one) (Div (Num two) (Num two))))))
+(let e4 (Var "x"))
+(fail (check (= e3 e4)))
+(run-schedule (saturate (run)))
+(check (= e3 e4))
+
+;; ### Debugging tips!
+
+;; `print-size` is used to print the size of a table. If the table name is omitted, it prints the size of every table.
+;; This is useful for debugging performance, by seeing how the table sizes evolve as the iteration count increases.
+(print-size leq)
+(print-size)
+
+;; `print-function` extracts every instance of a constructor, function, or relation in the e-graph.
+;; It takes the maximum number of instances to extract as a second argument, so as not to spend time
+;; printing millions of rows. `print-function` is particularly useful when debugging small e-graphs.
+(print-function leq 15)
+
+;; `extract` can also take a second argument, which causes it to extract that many different "variants" of the
+;; first argument. This is useful when trying to figure out why one e-class is failing to be unioned with another.
+(extract e3 3)
