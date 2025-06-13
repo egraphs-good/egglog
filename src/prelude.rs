@@ -26,6 +26,22 @@ pub mod exprs {
         Expr::Lit(span!(), Literal::Int(value))
     }
 
+    pub fn float(value: f64) -> Expr {
+        Expr::Lit(span!(), Literal::Float(value.into()))
+    }
+
+    pub fn string(value: &str) -> Expr {
+        Expr::Lit(span!(), Literal::String(value.to_owned()))
+    }
+
+    pub fn unit() -> Expr {
+        Expr::Lit(span!(), Literal::Unit)
+    }
+
+    pub fn bool(value: bool) -> Expr {
+        Expr::Lit(span!(), Literal::Bool(value))
+    }
+
     pub fn call(f: &str, xs: Vec<Expr>) -> Expr {
         Expr::Call(span!(), f.to_owned(), xs)
     }
