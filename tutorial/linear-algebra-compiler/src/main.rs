@@ -1,9 +1,13 @@
 use std::collections::HashMap;
 
-use egglog_experimental::{
-    ast::Literal, extract::{CostModel, TreeAdditiveCostModel}, new_experimental_egraph, prelude::{exprs::call, *}, Term, TermDag
-};
 use egglog_experimental as egglog;
+use egglog_experimental::{
+    ast::Literal,
+    extract::{CostModel, TreeAdditiveCostModel},
+    new_experimental_egraph,
+    prelude::{exprs::call, *},
+    Term, TermDag,
+};
 
 mod ast;
 
@@ -167,14 +171,11 @@ pub fn termdag_to_bindings(
 
     let mut bindings: HashMap<String, ast::CoreExpr> = HashMap::new();
     process_term(termdag, term, &mut bindings, "e");
-    let bindings = bindings.into_iter().map(|(name, expr)| ast::CoreBinding {
-        var: name,
-        expr,
-    }).collect();
-    ast::CoreBindings {
-        bindings,
-        declares,
-    }
+    let bindings = bindings
+        .into_iter()
+        .map(|(name, expr)| ast::CoreBinding { var: name, expr })
+        .collect();
+    ast::CoreBindings { bindings, declares }
 }
 
 pub struct AstDepthCostModel;
