@@ -4,7 +4,13 @@
 ;; After running the rewrite rules, the e-graph may contain a myriad of terms.
 ;; We often want to pick out one or a handful of terms for further processing.
 ;; Extraction is the process of picking out individual terms out of the many terms represented by an e-graph.
-;; Extraction works closely with a cost model, which controls which term(s) should be chosen.
+;; We have seen `extract` command in the previous sessions, which allows us to extract the optimal term from the e-graph.
+;;
+;; Optimality needs to be defined with regard to some cost model.
+;; A cost model is a function that assigns a cost to each term in the e-graph.
+;; By default, `extract` uses AST size as its cost model and picks the term with the smallest cost.
+;;
+;; In this session, we will show several ways of customizing the cost model in egglog.
 ;; Let's first see a simple example of setting costs with the `:cost` attribute.
 
 (push)
@@ -115,12 +121,14 @@
 
 (run 5)
 
-;; egglog extracts the equivalent variant with lower cost
-;; (MMul (MConst 64 8) (MMul (MConst 8 256) (MConst 256 2)))
+;; Thanks to our cost model, egglog is able to extract the equivalent program with lowest cost using the dimension information we provided: 
 
+; (MMul (MConst 64 8) (MMul (MConst 8 256) (MConst 256 2)))
 (extract Mexpr)
 
-;; For users who want to tweak the cost model even further,
-;; egglog provides the CostModel<C> Rust trait.
-;; The `set-cost` feature demonstrated here is implemented using this trait under the hood,
-;; which we are going to cover next.
+;; For advanced users who want to further customize the cost model, it is possible to use define your own cost model in Rust
+;; using the interface egglog provides.
+;; Indeed, the `set-cost` feature demonstrated here is implemented outside of the core egglog codebase and
+;;  uses the extensible cost model interface.
+;;
+;; We will show how to implement a simple cost model in Rust later.
