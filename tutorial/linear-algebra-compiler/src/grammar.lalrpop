@@ -4,10 +4,11 @@ use crate::ast::{Bindings, Binding, Declare, Expr, Type};
 grammar;
 
 pub Bindings: Bindings = { 
-    <declares: (Declare)*> <bindings: (Binding)*> => Bindings { declares, bindings } }
+    <declares: (Declare)*> <bindings: (Binding)*> => Bindings { declares, bindings } 
+};
 Binding: Binding = {
     <v:Var> "=" <e:Expr> ";" => Binding{ var: v, expr: e }, 
-}
+};
 Declare: Declare = {
     <v:Var> <t:Type> ";" => Declare { var: v, ty: t },
 };
@@ -46,6 +47,5 @@ Var: String = <r"[A-Za-z][A-Za-z0-9]*"> => <>.to_string();
 
 match {
     r"\s*" => { }, // skip whitespace
-    // r";[^\n\r]*[\n\r]*" => { }, // skip ; comments
     _
 }

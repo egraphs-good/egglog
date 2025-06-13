@@ -211,3 +211,16 @@ impl CostModel<C> for AstDepthCostModel {
         1
     }
 }
+
+impl Scheduler for FirstNScheduler {
+    fn filter_matches(&mut self, _rule: &str, _ruleset: &str, matches: &mut Matches) -> bool {
+        if matches.match_size() <= self.n {
+            matches.choose_all();
+        } else {
+            for i in 0..self.n {
+                matches.choose(i);
+            }
+        }
+        matches.match_size() < self.n * 2
+    }
+}
