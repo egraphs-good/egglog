@@ -6,7 +6,7 @@ pub struct VecContainer {
     pub data: Vec<Value>,
 }
 
-impl Container for VecContainer {
+impl ContainerValue for VecContainer {
     fn rebuild_contents(&mut self, rebuilder: &dyn Rebuilder) -> bool {
         if self.do_rebuild {
             rebuilder.rebuild_slice(&mut self.data)
@@ -96,8 +96,15 @@ impl ContainerSort for VecSort {
         self.element.is_eq_sort()
     }
 
-    fn inner_values(&self, containers: &Containers, value: Value) -> Vec<(ArcSort, Value)> {
-        let val = containers.get_val::<VecContainer>(value).unwrap().clone();
+    fn inner_values(
+        &self,
+        container_values: &ContainerValues,
+        value: Value,
+    ) -> Vec<(ArcSort, Value)> {
+        let val = container_values
+            .get_val::<VecContainer>(value)
+            .unwrap()
+            .clone();
         val.data
             .iter()
             .map(|e| (self.element.clone(), *e))
@@ -134,7 +141,7 @@ impl ContainerSort for VecSort {
 
     fn reconstruct_termdag(
         &self,
-        _containers: &Containers,
+        _container_values: &ContainerValues,
         _value: Value,
         termdag: &mut TermDag,
         element_terms: Vec<Term>,

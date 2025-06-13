@@ -15,7 +15,7 @@ use super::*;
 #[derive(Clone, Debug, PartialEq, Eq, Hash)]
 pub struct FunctionContainer(ResolvedFunctionId, Vec<(bool, Value)>, String);
 
-impl Container for FunctionContainer {
+impl ContainerValue for FunctionContainer {
     fn rebuild_contents(&mut self, rebuilder: &dyn Rebuilder) -> bool {
         let mut changed = false;
         for (do_rebuild, old) in &mut self.1 {
@@ -117,7 +117,9 @@ impl Sort for FunctionSort {
 
     fn register_type(&self, backend: &mut egglog_bridge::EGraph) {
         backend.register_container_ty::<FunctionContainer>();
-        backend.primitives_mut().register_type::<ResolvedFunction>();
+        backend
+            .base_values_mut()
+            .register_type::<ResolvedFunction>();
     }
 
     fn as_arc_any(self: Arc<Self>) -> Arc<dyn Any + Send + Sync + 'static> {
@@ -143,8 +145,14 @@ impl Sort for FunctionSort {
         self.inputs.clone()
     }
 
-    fn inner_values(&self, containers: &Containers, value: Value) -> Vec<(ArcSort, Value)> {
-        let val = containers.get_val::<FunctionContainer>(value).unwrap();
+    fn inner_values(
+        &self,
+        container_values: &ContainerValues,
+        value: Value,
+    ) -> Vec<(ArcSort, Value)> {
+        let val = container_values
+            .get_val::<FunctionContainer>(value)
+            .unwrap();
         self.inputs.iter().cloned().zip(val.iter()).collect()
     }
 
@@ -165,12 +173,15 @@ impl Sort for FunctionSort {
 
     fn reconstruct_termdag_container(
         &self,
-        containers: &Containers,
+        container_values: &ContainerValues,
         value: Value,
         termdag: &mut TermDag,
         mut element_terms: Vec<Term>,
     ) -> Term {
-        let name = &containers.get_val::<FunctionContainer>(value).unwrap().2;
+        let name = &container_values
+            .get_val::<FunctionContainer>(value)
+            .unwrap()
+            .2;
         let head = termdag.lit(Literal::String(name.clone()));
         element_terms.insert(0, head);
         termdag.app("unstable-fn".to_owned(), element_terms)
@@ -300,10 +311,15 @@ impl Primitive for Ctor {
             id,
             do_rebuild,
             name,
-        } = exec_state.prims().unwrap(*rf);
+        } = exec_state.base_values().unwrap(*rf);
         let args = do_rebuild.iter().zip(args).map(|(b, x)| (*b, *x)).collect();
         let y = FunctionContainer(id, args, name);
-        Some(exec_state.clone().containers().register_val(y, exec_state))
+        Some(
+            exec_state
+                .clone()
+                .container_values()
+                .register_val(y, exec_state),
+        )
     }
 }
 
@@ -314,7 +330,7 @@ pub struct ResolvedFunction {
     pub name: String,
 }
 
-impl core_relations::Primitive for ResolvedFunction {}
+impl BaseValue for ResolvedFunction {}
 
 #[derive(Clone, Debug, PartialEq, Eq, Hash)]
 pub enum ResolvedFunctionId {
@@ -344,7 +360,7 @@ impl Primitive for Apply {
     fn apply(&self, exec_state: &mut ExecutionState, args: &[Value]) -> Option<Value> {
         let (fc, args) = args.split_first().unwrap();
         let fc = exec_state
-            .containers()
+            .container_values()
             .get_val::<FunctionContainer>(*fc)
             .unwrap()
             .clone();

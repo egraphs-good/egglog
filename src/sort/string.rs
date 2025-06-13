@@ -3,8 +3,8 @@ use super::*;
 #[derive(Debug)]
 pub struct StringSort;
 
-impl LeafSort for StringSort {
-    type Leaf = S;
+impl BaseSort for StringSort {
+    type Base = S;
 
     fn name(&self) -> &str {
         "String"
@@ -24,11 +24,11 @@ impl LeafSort for StringSort {
 
     fn reconstruct_termdag(
         &self,
-        primitives: &Primitives,
+        base_values: &BaseValues,
         value: Value,
         termdag: &mut TermDag,
     ) -> Term {
-        let s = primitives.unwrap::<S>(value);
+        let s = base_values.unwrap::<S>(value);
 
         termdag.lit(Literal::String(s.0))
     }

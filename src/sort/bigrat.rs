@@ -10,8 +10,8 @@ use super::*;
 #[derive(Debug)]
 pub struct BigRatSort;
 
-impl LeafSort for BigRatSort {
-    type Leaf = Q;
+impl BaseSort for BigRatSort {
+    type Base = Q;
 
     fn name(&self) -> &str {
         "BigRat"
@@ -107,11 +107,11 @@ impl LeafSort for BigRatSort {
 
     fn reconstruct_termdag(
         &self,
-        primitives: &Primitives,
+        base_values: &BaseValues,
         value: Value,
         termdag: &mut TermDag,
     ) -> Term {
-        let rat = primitives.unwrap::<Q>(value);
+        let rat = base_values.unwrap::<Q>(value);
         let numer = rat.numer();
         let denom = rat.denom();
 

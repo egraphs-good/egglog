@@ -3,8 +3,8 @@ use super::*;
 #[derive(Debug)]
 pub struct BigIntSort;
 
-impl LeafSort for BigIntSort {
-    type Leaf = Z;
+impl BaseSort for BigIntSort {
+    type Base = Z;
 
     fn name(&self) -> &str {
         "BigInt"
@@ -51,11 +51,11 @@ impl LeafSort for BigIntSort {
 
     fn reconstruct_termdag(
         &self,
-        primitives: &Primitives,
+        base_values: &BaseValues,
         value: Value,
         termdag: &mut TermDag,
     ) -> Term {
-        let bigint = primitives.unwrap::<Z>(value);
+        let bigint = base_values.unwrap::<Z>(value);
 
         let as_string = termdag.lit(Literal::String(bigint.0.to_string()));
         termdag.app("from-string".to_owned(), vec![as_string])

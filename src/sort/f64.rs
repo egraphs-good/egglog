@@ -7,8 +7,8 @@ use super::*;
 #[derive(Debug)]
 pub struct F64Sort;
 
-impl LeafSort for F64Sort {
-    type Leaf = F;
+impl BaseSort for F64Sort {
+    type Base = F;
 
     fn name(&self) -> &str {
         "f64"
@@ -45,11 +45,11 @@ impl LeafSort for F64Sort {
 
     fn reconstruct_termdag(
         &self,
-        primitives: &Primitives,
+        base_values: &BaseValues,
         value: Value,
         termdag: &mut TermDag,
     ) -> Term {
-        let f = primitives.unwrap::<F>(value);
+        let f = base_values.unwrap::<F>(value);
 
         termdag.lit(Literal::Float(f.0))
     }

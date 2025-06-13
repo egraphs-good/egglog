@@ -191,7 +191,7 @@ macro_rules! actions {
 ///     facts![(= (fib (unquote exprs::int(big_number))) f)],
 /// )?;
 ///
-/// let y = egraph.rust_to_value::<i64>(6765);
+/// let y = egraph.base_to_value::<i64>(6765);
 /// let results: Vec<_> = results.iter().collect();
 /// assert_eq!(results, [[y]]);
 ///
@@ -227,13 +227,13 @@ pub struct RustRuleContext<'a, 'b> {
 
 impl RustRuleContext<'_, '_> {
     /// Convert from an egglog value to a Rust type.
-    pub fn value_to_rust<T: core_relations::Primitive>(&self, x: Value) -> T {
-        self.exec_state.prims().unwrap::<T>(x)
+    pub fn value_to_base<T: BaseValue>(&self, x: Value) -> T {
+        self.exec_state.base_values().unwrap::<T>(x)
     }
 
     /// Convert from a Rust type to an egglog value.
-    pub fn rust_to_value<T: core_relations::Primitive>(&self, x: T) -> Value {
-        self.exec_state.prims().get::<T>(x)
+    pub fn base_to_value<T: BaseValue>(&self, x: T) -> Value {
+        self.exec_state.base_values().get::<T>(x)
     }
 
     fn get_table_action(&self, table: &str) -> egglog_bridge::TableAction {
@@ -314,7 +314,7 @@ impl<F: Fn(&mut RustRuleContext, &[Value]) -> Option<()>> Primitive for RustRule
             panic_id: self.panic_id,
         };
         (self.func)(&mut context, values)?;
-        Some(exec_state.prims().get(()))
+        Some(exec_state.base_values().get(()))
     }
 }
 
@@ -364,12 +364,12 @@ impl<F: Fn(&mut RustRuleContext, &[Value]) -> Option<()>> Primitive for RustRule
 ///     ],
 ///     move |ctx, values| {
 ///         let [x, f0, f1] = values else { unreachable!() };
-///         let x = ctx.value_to_rust::<i64>(*x);
-///         let f0 = ctx.value_to_rust::<i64>(*f0);
-///         let f1 = ctx.value_to_rust::<i64>(*f1);
+///         let x = ctx.value_to_base::<i64>(*x);
+///         let f0 = ctx.value_to_base::<i64>(*f0);
+///         let f1 = ctx.value_to_base::<i64>(*f1);
 ///
-///         let y = ctx.rust_to_value::<i64>(x + 2);
-///         let f2 = ctx.rust_to_value::<i64>(f0 + f1);
+///         let y = ctx.base_to_value::<i64>(x + 2);
+///         let f2 = ctx.base_to_value::<i64>(f0 + f1);
 ///         ctx.insert("fib", [y, f2].into_iter());
 ///
 ///         Some(())
@@ -388,7 +388,7 @@ impl<F: Fn(&mut RustRuleContext, &[Value]) -> Option<()>> Primitive for RustRule
 ///     facts![(= (fib (unquote exprs::int(big_number))) f)],
 /// )?;
 ///
-/// let y = egraph.rust_to_value::<i64>(6765);
+/// let y = egraph.base_to_value::<i64>(6765);
 /// let results: Vec<_> = results.iter().collect();
 /// assert_eq!(results, [[y]]);
 ///
@@ -493,8 +493,8 @@ impl QueryResult {
 ///     ],
 /// )?;
 ///
-/// let x = egraph.rust_to_value::<i64>(7);
-/// let y = egraph.rust_to_value::<i64>(13);
+/// let x = egraph.base_to_value::<i64>(7);
+/// let y = egraph.base_to_value::<i64>(13);
 /// let results: Vec<_> = results.iter().collect();
 /// assert_eq!(results, [[x, y]]);
 ///
@@ -616,38 +616,38 @@ macro_rules! datatype {
 /// `ContainerSort. Use `add_leaf_sort` to register leaf
 /// sorts with the `EGraph`. See `Sort` for documentation
 /// of the methods. Do not override `to_arcsort`.
-pub trait LeafSort: Any + Send + Sync + Debug {
-    type Leaf: core_relations::Primitive;
+pub trait BaseSort: Any + Send + Sync + Debug {
+    type Base: BaseValue;
     fn name(&self) -> &str;
     fn register_primitives(&self, _eg: &mut EGraph) {}
-    fn reconstruct_termdag(&self, _: &Primitives, _: Value, _: &mut TermDag) -> Term;
+    fn reconstruct_termdag(&self, _: &BaseValues, _: Value, _: &mut TermDag) -> Term;
 
     fn to_arcsort(self) -> ArcSort
     where
         Self: Sized,
     {
-        Arc::new(LeafSortImpl(self))
+        Arc::new(BaseSortImpl(self))
     }
 }
 
 #[derive(Debug)]
-struct LeafSortImpl<T: LeafSort>(T);
+struct BaseSortImpl<T: BaseSort>(T);
 
-impl<T: LeafSort> Sort for LeafSortImpl<T> {
+impl<T: BaseSort> Sort for BaseSortImpl<T> {
     fn name(&self) -> &str {
         self.0.name()
     }
 
     fn column_ty(&self, backend: &egglog_bridge::EGraph) -> ColumnTy {
-        ColumnTy::Primitive(backend.primitives().get_ty::<T::Leaf>())
+        ColumnTy::Base(backend.base_values().get_ty::<T::Base>())
     }
 
     fn register_type(&self, backend: &mut egglog_bridge::EGraph) {
-        backend.primitives_mut().register_type::<T::Leaf>();
+        backend.base_values_mut().register_type::<T::Base>();
     }
 
     fn value_type(&self) -> Option<TypeId> {
-        Some(TypeId::of::<T::Leaf>())
+        Some(TypeId::of::<T::Base>())
     }
 
     fn as_arc_any(self: Arc<Self>) -> Arc<dyn Any + Send + Sync + 'static> {
@@ -658,14 +658,14 @@ impl<T: LeafSort> Sort for LeafSortImpl<T> {
         self.0.register_primitives(eg)
     }
 
-    /// Reconstruct a leaf primitive value in a TermDag
-    fn reconstruct_termdag_leaf(
+    /// Reconstruct a leaf base value in a TermDag
+    fn reconstruct_termdag_base(
         &self,
-        primitives: &Primitives,
+        base_values: &BaseValues,
         value: Value,
         termdag: &mut TermDag,
     ) -> Term {
-        self.0.reconstruct_termdag(primitives, value, termdag)
+        self.0.reconstruct_termdag(base_values, value, termdag)
     }
 }
 
@@ -676,13 +676,19 @@ impl<T: LeafSort> Sort for LeafSortImpl<T> {
 /// sorts with the `EGraph`. See `Sort` for documentation
 /// of the methods. Do not override `to_arcsort`.
 pub trait ContainerSort: Any + Send + Sync + Debug {
-    type Container: core_relations::Container;
+    type Container: ContainerValue;
     fn name(&self) -> &str;
     fn is_eq_container_sort(&self) -> bool;
     fn inner_sorts(&self) -> Vec<ArcSort>;
-    fn inner_values(&self, _: &Containers, _: Value) -> Vec<(ArcSort, Value)>;
+    fn inner_values(&self, _: &ContainerValues, _: Value) -> Vec<(ArcSort, Value)>;
     fn register_primitives(&self, _eg: &mut EGraph) {}
-    fn reconstruct_termdag(&self, _: &Containers, _: Value, _: &mut TermDag, _: Vec<Term>) -> Term;
+    fn reconstruct_termdag(
+        &self,
+        _: &ContainerValues,
+        _: Value,
+        _: &mut TermDag,
+        _: Vec<Term>,
+    ) -> Term;
     fn serialized_name(&self, _: Value) -> &str;
 
     fn to_arcsort(self) -> ArcSort
@@ -721,8 +727,12 @@ impl<T: ContainerSort> Sort for ContainerSortImpl<T> {
         self.0.inner_sorts()
     }
 
-    fn inner_values(&self, containers: &Containers, value: Value) -> Vec<(ArcSort, Value)> {
-        self.0.inner_values(containers, value)
+    fn inner_values(
+        &self,
+        container_values: &ContainerValues,
+        value: Value,
+    ) -> Vec<(ArcSort, Value)> {
+        self.0.inner_values(container_values, value)
     }
 
     fn is_container_sort(&self) -> bool {
@@ -743,22 +753,22 @@ impl<T: ContainerSort> Sort for ContainerSortImpl<T> {
 
     fn reconstruct_termdag_container(
         &self,
-        containers: &Containers,
+        container_values: &ContainerValues,
         value: Value,
         termdag: &mut TermDag,
         element_terms: Vec<Term>,
     ) -> Term {
         self.0
-            .reconstruct_termdag(containers, value, termdag, element_terms)
+            .reconstruct_termdag(container_values, value, termdag, element_terms)
     }
 }
 
 pub fn add_leaf_sort(
     egraph: &mut EGraph,
-    leaf_sort: impl LeafSort,
+    leaf_sort: impl BaseSort,
     span: Span,
 ) -> Result<(), TypeError> {
-    egraph.add_sort(LeafSortImpl(leaf_sort), span)
+    egraph.add_sort(BaseSortImpl(leaf_sort), span)
 }
 
 pub fn add_container_sort(
@@ -806,8 +816,8 @@ mod tests {
             ],
         )?;
 
-        let x = egraph.backend.primitives().get::<i64>(7);
-        let y = egraph.backend.primitives().get::<i64>(13);
+        let x = egraph.backend.base_values().get::<i64>(7);
+        let y = egraph.backend.base_values().get::<i64>(13);
         assert_eq!(results.data, [x, y]);
 
         Ok(())
@@ -856,7 +866,7 @@ mod tests {
             facts![(= (fib (unquote exprs::int(big_number))) f)],
         )?;
 
-        let y = egraph.backend.primitives().get::<i64>(6765);
+        let y = egraph.backend.base_values().get::<i64>(6765);
         assert_eq!(results.data, [y]);
 
         Ok(())
@@ -922,12 +932,12 @@ mod tests {
             ],
             move |ctx, values| {
                 let [x, f0, f1] = values else { unreachable!() };
-                let x = ctx.value_to_rust::<i64>(*x);
-                let f0 = ctx.value_to_rust::<i64>(*f0);
-                let f1 = ctx.value_to_rust::<i64>(*f1);
+                let x = ctx.value_to_base::<i64>(*x);
+                let f0 = ctx.value_to_base::<i64>(*f0);
+                let f1 = ctx.value_to_base::<i64>(*f1);
 
-                let y = ctx.rust_to_value::<i64>(x + 2);
-                let f2 = ctx.rust_to_value::<i64>(f0 + f1);
+                let y = ctx.base_to_value::<i64>(x + 2);
+                let f2 = ctx.base_to_value::<i64>(f0 + f1);
                 ctx.insert("fib", [y, f2].into_iter());
 
                 Some(())
@@ -946,7 +956,7 @@ mod tests {
             facts![(= (fib (unquote exprs::int(big_number))) f)],
         )?;
 
-        let y = egraph.backend.primitives().get::<i64>(6765);
+        let y = egraph.backend.base_values().get::<i64>(6765);
         assert_eq!(results.data, [y]);
 
         Ok(())

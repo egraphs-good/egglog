@@ -6,7 +6,9 @@ use std::fmt::Debug;
 use std::ops::{Shl, Shr};
 use std::{any::Any, sync::Arc};
 
-pub use core_relations::{Boxed, Container, Containers, ExecutionState, Primitives, Rebuilder};
+pub use core_relations::{
+    BaseValues, Boxed, ContainerValue, ContainerValues, ExecutionState, Rebuilder,
+};
 pub use egglog_bridge::ColumnTy;
 
 use crate::ast::Literal;
@@ -86,10 +88,14 @@ pub trait Sort: Any + Send + Sync + Debug {
 
     /// Return the inner values and sorts.
     /// Only container sort need to implement this method,
-    fn inner_values(&self, containers: &Containers, value: Value) -> Vec<(ArcSort, Value)> {
+    fn inner_values(
+        &self,
+        container_values: &ContainerValues,
+        value: Value,
+    ) -> Vec<(ArcSort, Value)> {
         debug_assert!(!self.is_container_sort());
         let _ = value;
-        let _ = containers;
+        let _ = container_values;
         vec![]
     }
 
@@ -105,12 +111,12 @@ pub trait Sort: Any + Send + Sync + Debug {
     /// Reconstruct a container value in a TermDag
     fn reconstruct_termdag_container(
         &self,
-        containers: &Containers,
+        container_values: &ContainerValues,
         value: Value,
         termdag: &mut TermDag,
         element_terms: Vec<Term>,
     ) -> Term {
-        let _containers = containers;
+        let _container_values = container_values;
         let _value = value;
         let _termdag = termdag;
         let _element_terms = element_terms;
@@ -118,13 +124,13 @@ pub trait Sort: Any + Send + Sync + Debug {
     }
 
     /// Reconstruct a leaf primitive value in a TermDag
-    fn reconstruct_termdag_leaf(
+    fn reconstruct_termdag_base(
         &self,
-        primitives: &Primitives,
+        base_values: &BaseValues,
         value: Value,
         termdag: &mut TermDag,
     ) -> Term {
-        let _primitives = primitives;
+        let _base_values = base_values;
         let _value = value;
         let _termdag = termdag;
         todo!("reconstruct_termdag_leaf: {}", self.name());

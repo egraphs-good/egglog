@@ -3,8 +3,8 @@ use super::*;
 #[derive(Debug)]
 pub struct UnitSort;
 
-impl LeafSort for UnitSort {
-    type Leaf = ();
+impl BaseSort for UnitSort {
+    type Base = ();
 
     fn name(&self) -> &str {
         "Unit"
@@ -12,7 +12,7 @@ impl LeafSort for UnitSort {
 
     fn reconstruct_termdag(
         &self,
-        _primitives: &Primitives,
+        _base_values: &BaseValues,
         _value: Value,
         termdag: &mut TermDag,
     ) -> Term {

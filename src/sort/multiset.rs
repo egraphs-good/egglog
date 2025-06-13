@@ -7,7 +7,7 @@ pub struct MultiSetContainer {
     pub data: MultiSet<Value>,
 }
 
-impl Container for MultiSetContainer {
+impl ContainerValue for MultiSetContainer {
     fn rebuild_contents(&mut self, rebuilder: &dyn Rebuilder) -> bool {
         if self.do_rebuild {
             let mut xs: Vec<_> = self.data.iter().copied().collect();
@@ -97,8 +97,12 @@ impl ContainerSort for MultiSetSort {
         self.element.is_eq_sort()
     }
 
-    fn inner_values(&self, containers: &Containers, value: Value) -> Vec<(ArcSort, Value)> {
-        let val = containers
+    fn inner_values(
+        &self,
+        container_values: &ContainerValues,
+        value: Value,
+    ) -> Vec<(ArcSort, Value)> {
+        let val = container_values
             .get_val::<MultiSetContainer>(value)
             .unwrap()
             .clone();
@@ -145,7 +149,7 @@ impl ContainerSort for MultiSetSort {
 
     fn reconstruct_termdag(
         &self,
-        _containers: &Containers,
+        _container_values: &ContainerValues,
         _value: Value,
         termdag: &mut TermDag,
         element_terms: Vec<Term>,
@@ -185,12 +189,12 @@ impl Primitive for Map {
 
     fn apply(&self, exec_state: &mut ExecutionState, args: &[Value]) -> Option<Value> {
         let fc = exec_state
-            .containers()
+            .container_values()
             .get_val::<FunctionContainer>(args[0])
             .unwrap()
             .clone();
         let multiset = exec_state
-            .containers()
+            .container_values()
             .get_val::<MultiSetContainer>(args[1])
             .unwrap()
             .clone();
@@ -205,7 +209,7 @@ impl Primitive for Map {
         Some(
             exec_state
                 .clone()
-                .containers()
+                .container_values()
                 .register_val(multiset, exec_state),
         )
     }
