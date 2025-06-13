@@ -159,9 +159,9 @@ pub fn termdag_to_bindings(
                     };
                     ast::CoreExpr::Num(*value)
                 }
-                _ => todo!(),
+                _ => unreachable!(),
             },
-            _ => todo!(),
+            _ => unreachable!(),
         };
         bindings.insert(name.to_string(), expr);
     }

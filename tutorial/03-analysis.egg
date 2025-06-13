@@ -165,7 +165,7 @@
 (run-schedule (saturate (run)))
 (check (= e3 e4))
 
-;; ### Debugging tips!
+;; **Debugging tips!**
 
 ;; `print-size` is used to print the size of a table. If the table name is omitted, it prints the size of every table.
 ;; This is useful for debugging performance, by seeing how the table sizes evolve as the iteration count increases.

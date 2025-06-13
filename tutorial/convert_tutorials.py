@@ -77,6 +77,10 @@ def highlight_egglog_syntax(code: str) -> str:
     # Define egglog keywords and their CSS classes
     keywords = "|".join(
         [
+            "run-with",
+            "let-scheduler",
+            "print-size",
+            "print-function",
             "rewrite",
             "rule",
             "run-schedule",
@@ -95,6 +99,13 @@ def highlight_egglog_syntax(code: str) -> str:
             "pop",
             "query",
             "birewrite",
+            "seq",
+            "repeat",
+            "print-size"
+            "saturate",
+            "fail",
+            "ruleset",
+            "when"
         ]
     )
     pattern = r"\b(" + keywords + r")\b"
@@ -169,7 +180,7 @@ def generate_navigation(current_file: Path, all_files: List[Path]) -> str:
     return f"""
     <nav class="tutorial-nav">
         <div class="nav-container">
-            <h1>Egglog Tutorials</h1>
+            <h1>Tutorial for egglog</h1>
             <div class="nav-links">
                 {' | '.join(nav_items)}
             </div>
@@ -189,7 +200,7 @@ def generate_html_page(file_path: Path, all_files: List[Path]) -> str:
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <title>{title} - Egglog Tutorial</title>
+    <title>{title} - egglog tutorial</title>
     <style>
         body {{
             font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif;
@@ -279,7 +290,7 @@ def generate_html_page(file_path: Path, all_files: List[Path]) -> str:
             line-height: 1.4;
         }}
         
-        /* Egglog syntax highlighting */
+        /* egglog syntax highlighting */
         .keyword {{ color: #e74c3c; font-weight: bold; }}
 
         
@@ -317,7 +328,7 @@ def generate_html_page(file_path: Path, all_files: List[Path]) -> str:
     </main>
     
     <footer>
-        <p>Generated from <code>{file_path.name}</code> | <a href="https://github.com/egraphs-good/egglog" target="_blank">Egglog Project</a></p>
+        <p>Generated from <code>{file_path.name}</code> | <a href="https://github.com/egraphs-good/egglog" target="_blank">The egglog project</a></p>
     </footer>
 </body>
 </html>"""
