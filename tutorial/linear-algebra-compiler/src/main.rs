@@ -25,7 +25,7 @@ fn to_egglog_expr(expr: &ast::CoreExpr) -> egglog::ast::Expr {
                 egglog::ast::Literal::String(name.clone()),
             )],
         ),
-        ast::CoreExpr::MVar { name } => call(
+        ast::CoreExpr::MVar(name) => call(
             "MVar",
             vec![egglog::ast::Expr::Lit(
                 span!(),
@@ -133,14 +133,11 @@ pub fn termdag_to_bindings(
                     let rvar = format!("v{}", args[1]);
                     process_term(termdag, right, bindings, &rvar);
                     let (lchild, rchild) = if op.as_str() == "Scale" {
-                        (ast::CoreExpr::SVar(lvar), ast::CoreExpr::SVar(rvar))
+                        (ast::CoreExpr::SVar(lvar), ast::CoreExpr::MVar(rvar))
                     } else if op.as_str().starts_with("S") {
                         (ast::CoreExpr::SVar(lvar), ast::CoreExpr::SVar(rvar))
                     } else {
-                        (
-                            ast::CoreExpr::MVar { name: lvar },
-                            ast::CoreExpr::MVar { name: rvar },
-                        )
+                        (ast::CoreExpr::MVar(lvar), ast::CoreExpr::MVar(rvar))
                     };
                     string_to_binary_constructor(&op, lchild, rchild)
                 }
@@ -150,7 +147,7 @@ pub fn termdag_to_bindings(
                         unreachable!()
                     };
                     if op.as_str() == "MVar" {
-                        ast::CoreExpr::MVar { name: name.clone() }
+                        ast::CoreExpr::MVar(name.clone())
                     } else {
                         ast::CoreExpr::SVar(name.clone())
                     }

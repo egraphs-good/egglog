@@ -92,11 +92,7 @@ pub struct CoreBinding {
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum CoreExpr {
     SVar(String),
-    MVar {
-        name: String,
-        // nrows: usize,
-        // ncols: usize,
-    },
+    MVar(String),
     Num(i64),
     SAdd(Box<CoreExpr>, Box<CoreExpr>),
     SMul(Box<CoreExpr>, Box<CoreExpr>),
@@ -127,11 +123,7 @@ impl Expr {
                 match env.iter().find(|(var, _)| var == name) {
                     Some((_, Type::Scalar)) => Ok((CoreExpr::SVar(name.clone()), Type::Scalar)),
                     Some((_, Type::Matrix { nrows, ncols })) => Ok((
-                        CoreExpr::MVar {
-                            name: name.clone(),
-                            // nrows: *nrows,
-                            // ncols: *ncols,
-                        },
+                        CoreExpr::MVar(name.clone()),
                         Type::Matrix {
                             nrows: *nrows,
                             ncols: *ncols,
