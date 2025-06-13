@@ -26,9 +26,7 @@
 ;; `(leq a b)` means that `a <= b` for all possible values of variables.
 (relation leq (Expr Expr))
 
-;; Now, we define rules to infer `leq` facts, Datalog-style.
-
-;; Transitivity of `leq`:
+;; We define rules to deduce the `leq` relation. We start with transitivity of `leq`:
 (rule (
     (leq e1 e2)
     (leq e2 e3)
@@ -82,10 +80,8 @@
 
 ;; To check our rules
 
-; (let e1 (Add (Var "y") (Add (Num two) (Var "x"))))
-; (let e2 (Add (Add (Add (Var "x") (Var "y")) (Num one)) (Num two)))
-(let e1 (Add (Var "y") (Add (Num two) (Var "x"))))
-(let e2 (Add (Add (Var "x") (Var "y")) (Num two)))
+(let expr1 (Add (Var "y") (Add (Num two) (Var "x"))))
+(let expr2 (Add (Add (Add (Var "x") (Var "y")) (Num one)) (Num two)))
 
 (fail (check (leq e1 e2)))
 (run-schedule (saturate (run)))
@@ -96,9 +92,10 @@
 (function upper-bound (Expr) BigRat :merge (min old new))
 (function lower-bound (Expr) BigRat :merge (max old new))
 
-;; Instead of the binary relation `leq`, we are always interested in the tightest upper bound
-;; and lower bounds, so we can define them as upper bound and lower bound as functions from
-;; expressions to a unique integer.
+;; In the above functions, unlike `leq`,we define upper bound and lower bound as functions from
+;; expressions to a unique number.
+;; This is because we are always interested in the tightest upper bound
+;; and lower bounds, so 
 
 (rule (
     (leq e (Num n))
@@ -112,7 +109,8 @@
     (set (lower-bound e) n)
 ))
 
-;; We can infer the upper/lower bounds of an expression using these of the children expressions
+;; We can define more specific rules for obtaining the upper and lower bounds of an expression
+;; based on the upper and lower bounds of its children.
 
 (rule (
     (= e (Add e1 e2))
@@ -131,25 +129,34 @@
 ))
 
 ;; ... and the giant rule for multiplication:
-(rule ((= e (Mul e1 e2))
-       (= le1 (lower-bound e1))
-       (= le2 (lower-bound e2))
-       (= ue1 (upper-bound e1))
-       (= ue2 (upper-bound e2))
-      )
-      ((set (lower-bound e)
-            (min (* le1 le2)
-                 (min (* le1 ue2)
-                 (min (* ue1 le2)
-                      (* ue1 ue2)))))
-       (set (upper-bound e)
-            (max (* le1 le2)
-                 (max (* le1 ue2)
-                 (max (* ue1 le2)
-                      (* ue1 ue2)))))))
+(rule (
+    (= e (Mul e1 e2))
+    (= le1 (lower-bound e1))
+    (= le2 (lower-bound e2))
+    (= ue1 (upper-bound e1))
+    (= ue2 (upper-bound e2))
+) (
+    (set (lower-bound e)
+         (min (* le1 le2)
+              (min (* le1 ue2)
+              (min (* ue1 le2)
+                   (* ue1 ue2)))))
+    (set (upper-bound e)
+         (max (* le1 le2)
+              (max (* le1 ue2)
+              (max (* ue1 le2)
+                   (* ue1 ue2)))))))
+
+;; Similarly,
+
+(rule (
+    (= e (Mul x x))
+) (
+    (set (lower-bound e) zero)
+))
 
 ;; The interval analysis is not only useful for numerical tools like [Herbie](https://herbie.uwplse.org/),
-;; but it can also guard certain certain optimization rules, making EqSat-based rewriting more powerful!
+;; but it can also guard certain optimization rules, making EqSat-based rewriting more powerful!
 ;;
 ;; For example, we are interested in non-zero expressions
 (relation non-zero (Expr))
@@ -159,11 +166,19 @@
 (rewrite (Mul x (Div y x)) y         :when ((non-zero x)))
 
 ;; This non-zero analysis lets us optimize expressions that contain division safely.
-(let e3 (Mul (Num two) (Div (Var "x") (Add (Num one) (Div (Num two) (Num two))))))
-(let e4 (Var "x"))
-(fail (check (= e3 e4)))
+
+; 2 * (x / (1 + 2 / 2)) is equivalent to x
+(let expr3 (Mul (Num two) (Div (Var "x") (Add (Num one) (Div (Num two) (Num two))))))
+(let expr4 (Var "x"))
+(fail (check (= expr3 expr4)))
 (run-schedule (saturate (run)))
-(check (= e3 e4))
+(check (= expr3 expr4))
+
+; (x + 1)^2 + 2
+(let expr5 (Add (Mul (Add (Var "x") (Num one)) (Add (Var "x") (Num one))) (Num two)))
+(let expr6 (Div expr5 expr5))
+(run-schedule (saturate (run)))
+(check (= expr6 (Num one)))
 
 ;; **Debugging tips!**
 
@@ -179,4 +194,4 @@
 
 ;; `extract` can also take a second argument, which causes it to extract that many different "variants" of the
 ;; first argument. This is useful when trying to figure out why one e-class is failing to be unioned with another.
-(extract e3 3)
+(extract expr3 3)

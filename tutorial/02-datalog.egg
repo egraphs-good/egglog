@@ -1,7 +1,7 @@
 ;; # Datalog
 
 ;; Datalog is a relational language for deductive reasoning. In the last lesson, we write our first 
-;; equality saturation program in egglog, but you can also write Datalog rules in egglog.
+;; equality saturation program in egglog, but you can also write rules for deductive reasoning a la Datalog.
 ;; In this lesson, we will write several classic Datalog programs in egglog. One of the benifits
 ;; of egglog being a language for program optimization is that it can talk about terms natively,
 ;; so in egglog we get Datalog with terms for free.
@@ -13,7 +13,8 @@
 (push)
 
 ;; Let's first define relations edge and path.
-;; `(edge a b)` edges are directed edges from `a` to `b`,
+;; We use `(edge a b)` to mean the tuple (a, b) is in the `edge` relation.
+;; `(edge a b)` means there are directed edges from `a` to `b`,
 ;; and we will use it to compute the `path` relation,
 ;; where `(path a b)` means there is a (directed) path from `a` to `b`.
 (relation edge (i64 i64))
@@ -23,8 +24,8 @@
 (edge 1 2)
 (edge 2 3)
 (edge 3 4)
-;; This is similar to definitions using `(let ..)`,
-;; where the fact is immediately added to the database.
+;; Fact definitions are similar to definitions using `(let ..)` definitions in the last lesson,
+;; in that facts are immediately added to relations.
 
 ;; Now let's tell egglog how to derive the `path` relation.
 ;;
@@ -51,23 +52,22 @@
 (rule ((path a b) (edge b c))
       ((path a c)))
 
-;; One thing that may be confusing to people who are familiar with Datalog is that
-;; defining a rule does not mean running a rule. In Datalog, a rule is run to a fixpoint,
-;; but in egglog, the user still needs to run the program.
+;; Again, defining a rule does not mean running it in egglog, which may be a surprise to those familiar with Datalog.
+;; The user still needs to run the program.
 ;; For instance, the following check would fail at this point.
 (fail (check (path 1 4)))
 
-;; Let's run our rules for 10 iterations.
+;; But it passes after we run our rules for 10 iterations.
 (run 10)
-(check (path 1 4)) ; the check passes
+(check (path 1 4)) ; this succeeds
 
-;; In many cases, especially for Datalog programs, we do not know the number of iterations
-;; needed to reach a fixpoint. Egglog provides the `saturate` scheduling primitive to run the rules until fixpoint.
+;; For many deductive rules, we do not know the number of iterations
+;; needed to reach a fixpoint. The egglog language provides the `saturate` scheduling primitive to run the rules until fixpoint.
 (run-schedule (saturate (run)))
 ;; We will cover more details about schedules later in the tutorial.
 
 
-;; Exercises:
+;; **Exercises:**
 ;; 
 ;; Consider the variant of our last rule:
 ;; ```
@@ -77,7 +77,7 @@
 ;; Does this rule compute the same relation as the original rule? How does this rule 
 ;; compare to the original rule? Hint: it's slow, why?
 
-(pop)
+(pop) ;; resets egglog
 (push)
 ;; Our last example determines whether there is a path from one node to another,
 ;; but we don't know the details about the path.
@@ -93,6 +93,7 @@
 ;; In the case of relation, this is easy: `Unit` only has one value, so the two values must be identical.
 ;; But in general, that would be a violation of functional dependency, the property that `a = b` implies `f(a) = f(b)`.
 ;; Egglog allows us to specify how to reconcile two values that are mapped from the same tuple using _merge expressions_.
+;;
 ;; For instance, for `path`, the merge expression is `(min old new)`; `old` and `new` are two special values in an expression
 ;; that denotes the current output of the tuple and the output of the new, to-be-inserted value.
 ;; The merge expression for `path` says that, when there are two paths from `a` to `b` with lengths `old` and `new`,
@@ -112,7 +113,7 @@
 
 ;; Let us define the reflexive rule and transitive rule for the `path` function.
 ;; In this rule, we use the `set` action to set the output value of the `path` function.
-;; Moreover, on the query side, we use `=` to bind the output value of a function.
+;; On the query side, we use `=` to bind the output value of a function.
 (rule ((= (edge x y) len))
       ((set (path x y) len)))
 (rule ((= (path x y) xy) 
@@ -132,14 +133,14 @@
 
 ;; We start by defining a new, union-able sort.
 (sort Node)
-;; We can then define a new constructor table for our sort.
+;; We can then define a new constructor for our sort.
 (constructor mk (i64) Node)
 ;; Note: We could have equivalently written
 ;; ```
 ;; (datatype Node
 ;;     (mk i64))
 ;; ```
-;; Internally, these become exactly the same thing!
+;; `datatype` is a syntactic sugar for `sort`s and `constructor`s.
 
 (relation edge (Node Node))
 (relation path (Node Node))
@@ -175,10 +176,10 @@
 (rule ((path x y)
        (path y x))
       ((union x y)))
-;; Now, we can tell if `a` and `b` are in the same connected component by checking
-;; `(check (= (mk a) (mk b)))`.
-;; In other words, this rule says that if there is a path from `x` to `y` and from `y` to `x`, then 
+;; This rule says that if there is a path from `x` to `y` and from `y` to `x`, then 
 ;; `x` and `y` are equivalent.
+;; This rule allows us to tell if `a` and `b` are in the same connected component by checking
+;; `(check (= (mk a) (mk b)))`.
 
 (run-schedule (saturate (run)))
 (check (= (mk 1) (mk 2))
@@ -192,7 +193,16 @@
 ;;    every AC operators (e.g., Add, Mul, ...). One way to save us from this repetitive work
 ;;    is to parameterize over the operators.
 ;;    Rewrite this program so that instead of `Mul` and `Add`, `Expr` has a `Bop` operator
-;;    that takes an operator kind and two operands.
+;;    that takes an operator kind and two operands, i.e., 
+;;
+;;     ```
+;;     (datatype BopKind (Add) (Mul) ..)
+;;     (datatype Expr ..
+;;         (Bop (BopKind Expr Expr))
+;;     ```
+;;    
+;;    By parametrizing over `Bop`, we can define a single associativity and a single commutativity rule
+;;    for all AC operators.
 ;; 2. One of the rewrite rules that we cannot make a `birewrite` in lesson 1 is the rule
 ;;    `(rewrite (Add x (Num 0)) x)`. This is because it is not clear what `x` is bound to 
 ;;    in the inverse rule, `(rewrite x (Add x (Num 0)))`. Therefore, defining this rule in egglog
@@ -210,6 +220,25 @@
 ;;     condition: `(rewrite x (Add x (Num 0)) :when ((universe x)))`, and similarly the birewrite
 ;;     rule `(birewrite (Add x (Num 0)) x :when ((universe x)))`, which introduces a bit of 
 ;;     overhead for the forward direction, but is more concise.
-
+;;
+;; **Everything is a function**
+;;
+;; We have talked about relations being a special case of functions, but in fact, `constructor`s like `Add` and `Mul`
+;; are also function tables under the hood!
+;; For instance, the `Add` constructor
+;;
+;; ```
+;; (constructor Add (Expr Expr) Expr)
+;; ```
+;;
+;; is a function with two `Expr` inputs and one `Expr` output. Its merge expression is simply to union the two output values.
+;; This corresponds to functional dependency: If `x1 = x2`, and `y1 =y2`, then it follows that
+;; `(Add x1 y1)` and `(Add x2 y2)` are equivalent.
+;; In other words, functions, functional dependencies, and merge expressions are the fundamental unifying concepts in our framework.
+;; This allows us to implement egglog as a database system and using advanced database techniques.
+;;
+;; There is one last caveat about constructors though: Different from `function` but similar to `relation`, constructor have default values, so expressions
+;; like `(let e1 (Num 2))` succeeds even when `(Num 2)` is not already in the e-graph, in which case it creates a new id for the output.
+;; In contrast, since `relation` are functions with output domain `Unit`, its default value is the only value of type `Unit`.
 
 
