@@ -27,12 +27,6 @@ pub struct Bindings {
     declares: Vec<Declare>,
 }
 
-#[derive(Debug, Clone, PartialEq, Eq)]
-pub struct CoreBindings {
-    pub bindings: Vec<CoreBinding>,
-    pub declares: Vec<Declare>,
-}
-
 impl Bindings {
     pub fn lower(&self) -> Result<CoreBindings, TypeError> {
         let mut core_bindings = vec![];
@@ -75,102 +69,6 @@ pub enum Expr {
     Sub(Box<Expr>, Box<Expr>),
     Mul(Box<Expr>, Box<Expr>),
     Div(Box<Expr>, Box<Expr>),
-}
-
-#[derive(Debug, PartialEq, Eq, Clone, Copy)]
-pub enum Type {
-    Scalar,
-    Matrix { nrows: usize, ncols: usize },
-}
-
-impl Type {
-    pub fn to_string(&self) -> String {
-        match self {
-            Type::Scalar => "R".to_string(),
-            Type::Matrix { nrows, ncols } => format!("[R; {nrows}x{ncols}]"),
-        }
-    }
-}
-
-#[derive(Debug, Clone, PartialEq, Eq)]
-pub struct CoreBinding {
-    pub var: String,
-    pub expr: CoreExpr,
-}
-
-impl CoreBindings {
-    pub fn to_string(&self) -> String {
-        let mut output = String::new();
-        for decl in self.declares.iter() {
-            let var = &decl.var;
-            let ty = decl.ty.to_string();
-            output.push_str(&format!("{var}: {ty}\n"));
-        }
-
-        for bind in self.bindings.iter() {
-            let var = &bind.var;
-            let expr = &bind.expr.to_string();
-            output.push_str(&format!("{var} = {expr}\n"));
-        }
-        output
-    }
-}
-
-#[derive(Debug, Clone, PartialEq, Eq)]
-pub enum CoreExpr {
-    SVar(String),
-    MVar(String),
-    Num(i64),
-    SAdd(Box<CoreExpr>, Box<CoreExpr>),
-    SMul(Box<CoreExpr>, Box<CoreExpr>),
-    MAdd(Box<CoreExpr>, Box<CoreExpr>),
-    MMul(Box<CoreExpr>, Box<CoreExpr>),
-    Scale(Box<CoreExpr>, Box<CoreExpr>),
-    SSub(Box<CoreExpr>, Box<CoreExpr>),
-    SDiv(Box<CoreExpr>, Box<CoreExpr>),
-}
-
-impl CoreExpr {
-    pub fn to_string(&self) -> String {
-        match self {
-            CoreExpr::SVar(v) => v.to_string(),
-            CoreExpr::MVar(v) => v.to_string(),
-            CoreExpr::Num(n) => n.to_string(),
-            CoreExpr::SAdd(left, right) => {
-                format!("({} + {})", left.to_string(), right.to_string())
-            }
-            CoreExpr::SMul(left, right) => {
-                format!("({} * {})", left.to_string(), right.to_string())
-            }
-            CoreExpr::MAdd(left, right) => {
-                format!("({} + {})", left.to_string(), right.to_string())
-            }
-            CoreExpr::MMul(left, right) => {
-                format!("({} * {})", left.to_string(), right.to_string())
-            }
-            CoreExpr::Scale(left, right) => {
-                format!("({} * {})", left.to_string(), right.to_string())
-            }
-            CoreExpr::SSub(left, right) => {
-                format!("({} - {})", left.to_string(), right.to_string())
-            }
-            CoreExpr::SDiv(left, right) => {
-                format!("({} / {})", left.to_string(), right.to_string())
-            }
-        }
-    }
-}
-
-#[derive(Debug, Clone, PartialEq, Eq)]
-#[allow(dead_code)]
-pub enum TypeError {
-    ExpectedScalar,
-    MatrixDimensionMismatch {
-        op: &'static str,
-        left: (usize, usize),
-        right: (usize, usize),
-    },
-    UndeclaredVariable(String),
 }
 
 impl Expr {
@@ -287,6 +185,108 @@ impl Expr {
             }
         }
     }
+}
+
+#[derive(Debug, PartialEq, Eq, Clone, Copy)]
+pub enum Type {
+    Scalar,
+    Matrix { nrows: usize, ncols: usize },
+}
+
+impl Type {
+    pub fn to_string(&self) -> String {
+        match self {
+            Type::Scalar => "R".to_string(),
+            Type::Matrix { nrows, ncols } => format!("[R; {nrows}x{ncols}]"),
+        }
+    }
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct CoreBindings {
+    pub bindings: Vec<CoreBinding>,
+    pub declares: Vec<Declare>,
+}
+
+impl CoreBindings {
+    pub fn to_string(&self) -> String {
+        let mut output = String::new();
+        for decl in self.declares.iter() {
+            let var = &decl.var;
+            let ty = decl.ty.to_string();
+            output.push_str(&format!("{var}: {ty}\n"));
+        }
+
+        for bind in self.bindings.iter() {
+            let var = &bind.var;
+            let expr = &bind.expr.to_string();
+            output.push_str(&format!("{var} = {expr}\n"));
+        }
+        output
+    }
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct CoreBinding {
+    pub var: String,
+    pub expr: CoreExpr,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum CoreExpr {
+    SVar(String),
+    MVar(String),
+    Num(i64),
+    SAdd(Box<CoreExpr>, Box<CoreExpr>),
+    SMul(Box<CoreExpr>, Box<CoreExpr>),
+    MAdd(Box<CoreExpr>, Box<CoreExpr>),
+    MMul(Box<CoreExpr>, Box<CoreExpr>),
+    Scale(Box<CoreExpr>, Box<CoreExpr>),
+    SSub(Box<CoreExpr>, Box<CoreExpr>),
+    SDiv(Box<CoreExpr>, Box<CoreExpr>),
+}
+
+impl CoreExpr {
+    pub fn to_string(&self) -> String {
+        match self {
+            CoreExpr::SVar(v) => v.to_string(),
+            CoreExpr::MVar(v) => v.to_string(),
+            CoreExpr::Num(n) => n.to_string(),
+            CoreExpr::SAdd(left, right) => {
+                format!("({} + {})", left.to_string(), right.to_string())
+            }
+            CoreExpr::SMul(left, right) => {
+                format!("({} * {})", left.to_string(), right.to_string())
+            }
+            CoreExpr::MAdd(left, right) => {
+                format!("({} + {})", left.to_string(), right.to_string())
+            }
+            CoreExpr::MMul(left, right) => {
+                format!("({} * {})", left.to_string(), right.to_string())
+            }
+            CoreExpr::Scale(left, right) => {
+                format!("({} * {})", left.to_string(), right.to_string())
+            }
+            CoreExpr::SSub(left, right) => {
+                format!("({} - {})", left.to_string(), right.to_string())
+            }
+            CoreExpr::SDiv(left, right) => {
+                format!("({} / {})", left.to_string(), right.to_string())
+            }
+        }
+    }
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+#[allow(dead_code)]
+pub enum TypeError {
+    ExpectedScalar,
+    MatrixDimensionMismatch {
+        op: &'static str,
+        left: (usize, usize),
+        right: (usize, usize),
+    },
+    UndeclaredVariable(String),
 }
 
 #[test]

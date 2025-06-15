@@ -24,21 +24,6 @@ fn program() -> &'static str {
 fn to_egglog_expr(expr: &ast::CoreExpr) -> egglog::ast::Expr {
     match expr {
         ast::CoreExpr::SVar(name) | ast::CoreExpr::MVar(name) => var(name),
-        // ast::CoreExpr::SVar(name) => call(
-        //     "SVar",
-        //     // TODO: string in Rust API
-        //     vec![egglog::ast::Expr::Lit(
-        //         span!(),
-        //         egglog::ast::Literal::String(name.clone()),
-        //     )],
-        // ),
-        // ast::CoreExpr::MVar(name) => call(
-        //     "MVar",
-        //     vec![egglog::ast::Expr::Lit(
-        //         span!(),
-        //         egglog::ast::Literal::String(name.clone()),
-        //     )],
-        // ),
         ast::CoreExpr::Num(value) => call("Num", vec![exprs::int(*value)]),
         ast::CoreExpr::SAdd(left, right)
         | ast::CoreExpr::SMul(left, right)
