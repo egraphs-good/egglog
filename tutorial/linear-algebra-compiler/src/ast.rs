@@ -83,10 +83,37 @@ pub enum Type {
     Matrix { nrows: usize, ncols: usize },
 }
 
+impl Type {
+    pub fn to_string(&self) -> String {
+        match self {
+            Type::Scalar => "R".to_string(),
+            Type::Matrix { nrows, ncols } => format!("[R; {nrows}x{ncols}]"),
+        }
+    }
+}
+
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct CoreBinding {
     pub var: String,
     pub expr: CoreExpr,
+}
+
+impl CoreBindings {
+    pub fn to_string(&self) -> String {
+        let mut output = String::new();
+        for decl in self.declares.iter() {
+            let var = &decl.var;
+            let ty = decl.ty.to_string();
+            output.push_str(&format!("{var}: {ty}\n"));
+        }
+
+        for bind in self.bindings.iter() {
+            let var = &bind.var;
+            let expr = &bind.expr.to_string();
+            output.push_str(&format!("{var} = {expr}\n"));
+        }
+        output
+    }
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -101,6 +128,37 @@ pub enum CoreExpr {
     Scale(Box<CoreExpr>, Box<CoreExpr>),
     SSub(Box<CoreExpr>, Box<CoreExpr>),
     SDiv(Box<CoreExpr>, Box<CoreExpr>),
+}
+
+impl CoreExpr {
+    pub fn to_string(&self) -> String {
+        match self {
+            CoreExpr::SVar(v) => v.to_string(),
+            CoreExpr::MVar(v) => v.to_string(),
+            CoreExpr::Num(n) => n.to_string(),
+            CoreExpr::SAdd(left, right) => {
+                format!("({} + {})", left.to_string(), right.to_string())
+            }
+            CoreExpr::SMul(left, right) => {
+                format!("({} * {})", left.to_string(), right.to_string())
+            }
+            CoreExpr::MAdd(left, right) => {
+                format!("({} + {})", left.to_string(), right.to_string())
+            }
+            CoreExpr::MMul(left, right) => {
+                format!("({} * {})", left.to_string(), right.to_string())
+            }
+            CoreExpr::Scale(left, right) => {
+                format!("({} * {})", left.to_string(), right.to_string())
+            }
+            CoreExpr::SSub(left, right) => {
+                format!("({} - {})", left.to_string(), right.to_string())
+            }
+            CoreExpr::SDiv(left, right) => {
+                format!("({} / {})", left.to_string(), right.to_string())
+            }
+        }
+    }
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -175,25 +233,25 @@ impl Expr {
                         Ok((CoreExpr::SMul(Box::new(l.0), Box::new(r.0)), Type::Scalar))
                     }
                     (
-                        Type::Matrix { nrows, ncols },
+                        Type::Matrix { nrows: n, ncols: k1 },
                         Type::Matrix {
-                            nrows: r2,
-                            ncols: c2,
+                            nrows: k2,
+                            ncols: m,
                         },
                     ) => {
-                        if nrows == r2 && ncols == c2 {
+                        if k1 == k2 {
                             Ok((
                                 CoreExpr::MMul(Box::new(l.0), Box::new(r.0)),
                                 Type::Matrix {
-                                    nrows: *nrows,
-                                    ncols: *ncols,
+                                    nrows: *n,
+                                    ncols: *m,
                                 },
                             ))
                         } else {
                             Err(TypeError::MatrixDimensionMismatch {
                                 op: "mul",
-                                left: (*nrows, *ncols),
-                                right: (*r2, *c2),
+                                left: (*n, *k1),
+                                right: (*k2, *m),
                             })
                         }
                     }

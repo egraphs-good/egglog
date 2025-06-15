@@ -1,13 +1,19 @@
-use std::collections::HashMap;
+use std::io::Read;
 
-use egglog_experimental as egglog;
+use egglog_experimental::ast::Command;
+use egglog_experimental::scheduler::Matches;
+use egglog_experimental::util::IndexMap;
+use egglog_experimental::{self as egglog, add_scheduler_builder, CustomCostModel};
 use egglog_experimental::{
     ast::Literal,
-    extract::{CostModel, TreeAdditiveCostModel},
+    extract::{CostModel},
     new_experimental_egraph,
-    prelude::{exprs::call, *},
+    prelude::{exprs::*, *},
+    scheduler::Scheduler,
     Term, TermDag,
 };
+
+use crate::ast::{Type};
 
 mod ast;
 
@@ -17,21 +23,22 @@ fn program() -> &'static str {
 
 fn to_egglog_expr(expr: &ast::CoreExpr) -> egglog::ast::Expr {
     match expr {
-        ast::CoreExpr::SVar(name) => call(
-            "SVar",
-            // TODO: string in Rust API
-            vec![egglog::ast::Expr::Lit(
-                span!(),
-                egglog::ast::Literal::String(name.clone()),
-            )],
-        ),
-        ast::CoreExpr::MVar(name) => call(
-            "MVar",
-            vec![egglog::ast::Expr::Lit(
-                span!(),
-                egglog::ast::Literal::String(name.clone()),
-            )],
-        ),
+        ast::CoreExpr::SVar(name) | ast::CoreExpr::MVar(name) => var(name),
+        // ast::CoreExpr::SVar(name) => call(
+        //     "SVar",
+        //     // TODO: string in Rust API
+        //     vec![egglog::ast::Expr::Lit(
+        //         span!(),
+        //         egglog::ast::Literal::String(name.clone()),
+        //     )],
+        // ),
+        // ast::CoreExpr::MVar(name) => call(
+        //     "MVar",
+        //     vec![egglog::ast::Expr::Lit(
+        //         span!(),
+        //         egglog::ast::Literal::String(name.clone()),
+        //     )],
+        // ),
         ast::CoreExpr::Num(value) => call("Num", vec![exprs::int(*value)]),
         ast::CoreExpr::SAdd(left, right)
         | ast::CoreExpr::SMul(left, right)
@@ -48,12 +55,8 @@ fn to_egglog_expr(expr: &ast::CoreExpr) -> egglog::ast::Expr {
     }
 }
 
-// TODO: transpose
 fn constructor_to_string(constructor: &ast::CoreExpr) -> &str {
     match constructor {
-        ast::CoreExpr::SVar(_) => "SVar",
-        ast::CoreExpr::MVar { .. } => "MVar",
-        ast::CoreExpr::Num(_) => "Num",
         ast::CoreExpr::SAdd(..) => "SAdd",
         ast::CoreExpr::SMul(..) => "SMul",
         ast::CoreExpr::MAdd(..) => "MAdd",
@@ -61,6 +64,7 @@ fn constructor_to_string(constructor: &ast::CoreExpr) -> &str {
         ast::CoreExpr::Scale(..) => "Scale",
         ast::CoreExpr::SSub(..) => "SSub",
         ast::CoreExpr::SDiv(..) => "SDiv",
+        _ => unreachable!("binary constructor expected"),
     }
 }
 
@@ -82,8 +86,16 @@ fn string_to_binary_constructor(
 }
 
 fn main() {
+    let mut egraph = new_experimental_egraph();
+    egraph
+        .parse_and_run_program(Some("defn.egg".to_string()), program())
+        .unwrap();
+
+    let mut program = String::new();
+    std::io::stdin().read_to_string(&mut program).unwrap();
+
     let bindings = ast::grammar::BindingsParser::new()
-        .parse("x: R; y: R; A: [R; 2x2]; B = (x + y) * A;")
+        .parse(&program)
         .expect("parsing bindings");
     let core_bindings = match bindings.lower() {
         Ok(bindings) => bindings,
@@ -93,20 +105,48 @@ fn main() {
         }
     };
 
-    let mut egraph = new_experimental_egraph();
-    egraph
-        .parse_and_run_program(Some("defn.egg".to_string()), program())
-        .unwrap();
-    let expr = &core_bindings.bindings[0].expr;
-    dbg!(to_egglog_expr(expr).to_string());
-    let (sort, value) = egraph.eval_expr(&to_egglog_expr(expr)).unwrap();
-    let (termdag, term, cost) = egraph.extract_value(&sort, value).unwrap();
+    for decl in core_bindings.declares.iter() {
+        let m = &decl.var;
+        if let Type::Matrix { nrows, ncols } = decl.ty {
+            let program = format!(
+                "(MatrixDim \"{m}\" {nrows} {ncols})
+                (let {m} (MVar \"{m}\"))"
+            );
+            egraph.parse_and_run_program(None, &program).unwrap();
+        } else {
+            let program = format!("(let {m} (SVar \"{m}\"))");
+            egraph.parse_and_run_program(None, &program).unwrap();
+        }
+    }
+
+    for bind in core_bindings.bindings.iter() {
+        let var = &bind.var;
+        let expr = &bind.expr;
+        let expr = to_egglog_expr(expr);
+        let action = Action::Let(span!(), var.to_string(), expr);
+
+        egraph.run_program(vec![Command::Action(action)]).unwrap();
+    }
+
+    add_scheduler_builder("first-n".into(), Box::new(new_first_n_scheduler));
+    let schedule = "
+    (run-schedule 
+      (let-scheduler first-100 (first-n 100))
+      (repeat 100 (run-with first-100 optimization))
+      (saturate (run cost-analysis))
+    )
+    ";
+    // egraph.parse_and_run_program(None, "(run 20)").unwrap();
+    egraph.parse_and_run_program(None, schedule.into()).unwrap();
+
+    let output = core_bindings.bindings.last().unwrap();
+    let (sort, value) = egraph.eval_expr(&var(&output.var)).unwrap();
     let (termdag, term, cost) = egraph
-        .extract_value_with_cost_model(&sort, value, TreeAdditiveCostModel {})
+        .extract_value_with_cost_model(&sort, value, CustomCostModel)
         .unwrap();
+    eprintln!("Cost after optimization: {cost}");
     let bindings = termdag_to_bindings(core_bindings.declares, &termdag, &term);
-    dbg!(bindings);
-    eprintln!("{}", termdag.to_string(&term));
+    println!("{}", bindings.to_string());
 }
 
 pub fn termdag_to_bindings(
@@ -117,21 +157,19 @@ pub fn termdag_to_bindings(
     fn process_term(
         termdag: &TermDag,
         term: &Term,
-        bindings: &mut HashMap<String, ast::CoreExpr>,
-        name: &str,
-    ) {
-        if bindings.contains_key(name) {
-            return;
+        bindings: &mut IndexMap<String, ast::CoreExpr>,
+        name: String,
+    ) -> String {
+        if bindings.contains_key(&name) {
+            return name;
         }
-        let expr = match term {
+        match term {
             Term::App(op, args) => match op.as_str() {
                 "SAdd" | "SMul" | "SSub" | "SDiv" | "Scale" | "MAdd" | "MMul" => {
-                    let lvar = format!("v{}", args[0]);
                     let left = termdag.get(args[0]);
-                    process_term(termdag, left, bindings, &lvar);
+                    let lvar = process_term(termdag, left, bindings, format!("v{}", args[0]));
                     let right = termdag.get(args[1]);
-                    let rvar = format!("v{}", args[1]);
-                    process_term(termdag, right, bindings, &rvar);
+                    let rvar = process_term(termdag, right, bindings, format!("v{}", args[1]));
                     let (lchild, rchild) = if op.as_str() == "Scale" {
                         (ast::CoreExpr::SVar(lvar), ast::CoreExpr::MVar(rvar))
                     } else if op.as_str().starts_with("S") {
@@ -139,35 +177,35 @@ pub fn termdag_to_bindings(
                     } else {
                         (ast::CoreExpr::MVar(lvar), ast::CoreExpr::MVar(rvar))
                     };
-                    string_to_binary_constructor(&op, lchild, rchild)
+                    let expr = string_to_binary_constructor(&op, lchild, rchild);
+
+                    bindings.insert(name.to_string(), expr);
+                    return name;
                 }
                 "MVar" | "SVar" => {
                     let arg = termdag.get(args[0]);
                     let Term::Lit(Literal::String(name)) = arg else {
                         unreachable!()
                     };
-                    if op.as_str() == "MVar" {
-                        ast::CoreExpr::MVar(name.clone())
-                    } else {
-                        ast::CoreExpr::SVar(name.clone())
-                    }
+                    return name.to_string();
                 }
                 "Num" => {
                     let arg = termdag.get(args[0]);
                     let Term::Lit(Literal::Int(value)) = arg else {
                         unreachable!()
                     };
-                    ast::CoreExpr::Num(*value)
+                    let expr = ast::CoreExpr::Num(*value);
+                    bindings.insert(name.to_string(), expr);
+                    return name;
                 }
                 _ => unreachable!(),
             },
             _ => unreachable!(),
         };
-        bindings.insert(name.to_string(), expr);
     }
 
-    let mut bindings: HashMap<String, ast::CoreExpr> = HashMap::new();
-    process_term(termdag, term, &mut bindings, "e");
+    let mut bindings: IndexMap<String, ast::CoreExpr> = Default::default();
+    process_term(termdag, term, &mut bindings, "e".into());
     let bindings = bindings
         .into_iter()
         .map(|(name, expr)| ast::CoreBinding { var: name, expr })
@@ -212,6 +250,11 @@ impl CostModel<C> for AstDepthCostModel {
     }
 }
 
+#[derive(Clone)]
+struct FirstNScheduler {
+    n: usize,
+}
+
 impl Scheduler for FirstNScheduler {
     fn filter_matches(&mut self, _rule: &str, _ruleset: &str, matches: &mut Matches) -> bool {
         if matches.match_size() <= self.n {
@@ -223,4 +266,14 @@ impl Scheduler for FirstNScheduler {
         }
         matches.match_size() < self.n * 2
     }
+}
+
+pub fn new_first_n_scheduler(_egraph: &EGraph, exprs: &[egglog::ast::Expr]) -> Box<dyn Scheduler> {
+    assert!(exprs.len() == 1);
+    let egglog::ast::Expr::Lit(_, Literal::Int(n))  = exprs[0] else {
+        panic!("wrong arguments to first n scheduler");
+    };
+    Box::new(FirstNScheduler {
+        n: n as usize
+    })
 }

@@ -5,6 +5,7 @@ version = 4
 [[package]]
 name = "add_primitive"
 version = "0.1.0"
+source = "git+https://github.com/egraphs-good/egglog.git?rev=24ea499#24ea499f7301cdec8198a381b5428589deb8b231"
 dependencies = [
  "quote",
  "syn 2.0.102",
@@ -211,7 +212,7 @@ checksum = "b05b61dc5112cbb17e4b6cd61790d9845d13888356391624cbe7e41efeac1e75"
 [[package]]
 name = "concurrency"
 version = "0.1.0"
-source = "git+https://github.com/egraphs-good/egglog-backend.git?rev=e1c938d#e1c938d223ea6c423c9ff455c7a26130ff5ee736"
+source = "git+https://github.com/egraphs-good/egglog-backend.git?rev=a0b98d3#a0b98d355601bff4d6c13cf4420a875a14b484e8"
 dependencies = [
  "arc-swap",
  "rayon",
@@ -220,7 +221,7 @@ dependencies = [
 [[package]]
 name = "core-relations"
 version = "0.1.0"
-source = "git+https://github.com/egraphs-good/egglog-backend.git?rev=e1c938d#e1c938d223ea6c423c9ff455c7a26130ff5ee736"
+source = "git+https://github.com/egraphs-good/egglog-backend.git?rev=a0b98d3#a0b98d355601bff4d6c13cf4420a875a14b484e8"
 dependencies = [
  "anyhow",
  "bumpalo",
@@ -233,12 +234,13 @@ dependencies = [
  "indexmap",
  "lazy_static",
  "log",
+ "num",
  "numeric-id",
  "once_cell",
  "petgraph 0.6.5",
  "rand",
  "rayon",
- "rustc-hash 2.1.1",
+ "rustc-hash",
  "smallvec",
  "thiserror 2.0.12",
  "union-find",
@@ -367,34 +369,34 @@ checksum = "1c7a8fb8a9fbf66c1f703fe16184d10ca0ee9d23be5b4436400408ba54a95005"
 
 [[package]]
 name = "egglog"
-version = "0.4.0"
+version = "0.5.0"
+source = "git+https://github.com/egraphs-good/egglog.git?rev=24ea499#24ea499f7301cdec8198a381b5428589deb8b231"
 dependencies = [
  "add_primitive",
  "chrono",
  "clap",
  "core-relations",
+ "dyn-clone",
  "egglog-bridge",
  "egraph-serialize",
  "env_logger",
  "hashbrown 0.15.4",
  "im-rc",
  "indexmap",
- "instant",
  "lazy_static",
  "log",
  "num",
  "numeric-id",
  "ordered-float",
- "rustc-hash 1.1.0",
- "smallvec",
- "symbol_table",
- "thiserror 1.0.69",
+ "rustc-hash",
+ "thiserror 2.0.12",
+ "web-time",
 ]
 
 [[package]]
 name = "egglog-bridge"
 version = "0.1.0"
-source = "git+https://github.com/egraphs-good/egglog-backend.git?rev=e1c938d#e1c938d223ea6c423c9ff455c7a26130ff5ee736"
+source = "git+https://github.com/egraphs-good/egglog-backend.git?rev=a0b98d3#a0b98d355601bff4d6c13cf4420a875a14b484e8"
 dependencies = [
  "anyhow",
  "core-relations",
@@ -404,6 +406,7 @@ dependencies = [
  "log",
  "num-rational",
  "numeric-id",
+ "once_cell",
  "petgraph 0.6.5",
  "rayon",
  "smallvec",
@@ -418,6 +421,7 @@ version = "0.1.0"
 dependencies = [
  "egglog",
  "lazy_static",
+ "log",
  "num",
 ]
 
@@ -451,16 +455,26 @@ dependencies = [
 ]
 
 [[package]]
-name = "env_logger"
-version = "0.10.2"
+name = "env_filter"
+version = "0.1.3"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "4cd405aab171cb85d6735e5c8d9db038c17d3ca007a4d2c25f337935c3d90580"
+checksum = "186e05a59d4c50738528153b83b0b0194d3a29507dfec16eccd4b342903397d0"
 dependencies = [
- "humantime",
- "is-terminal",
  "log",
  "regex",
- "termcolor",
+]
+
+[[package]]
+name = "env_logger"
+version = "0.11.8"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "13c863f0904021b108aa8b2f55046443e6b1ebde8fd4a15c399893aae4fa069f"
+dependencies = [
+ "anstream",
+ "anstyle",
+ "env_filter",
+ "jiff",
+ "log",
 ]
 
 [[package]]
@@ -576,12 +590,6 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "2304e00983f87ffb38b55b444b5e3b60a884b5d30c0fca7d82fe33449bbe55ea"
 
 [[package]]
-name = "hermit-abi"
-version = "0.5.2"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "fc0fef456e4baa96da950455cd02c081ca953b141298e41db3fc7e36b1da849c"
-
-[[package]]
 name = "home"
 version = "0.5.11"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -589,12 +597,6 @@ checksum = "589533453244b0995c858700322199b2becb13b627df2851f64a2775d024abcf"
 dependencies = [
  "windows-sys",
 ]
-
-[[package]]
-name = "humantime"
-version = "2.2.0"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "9b112acc8b3adf4b107a8ec20977da0273a8c386765a3ec0229bd500a1443f9f"
 
 [[package]]
 name = "im-rc"
@@ -622,15 +624,6 @@ dependencies = [
 ]
 
 [[package]]
-name = "instant"
-version = "0.1.13"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "e0242819d153cba4b4b05a5a8f2a7e9bbf97b6055b2a002b395c96b5ff3c0222"
-dependencies = [
- "cfg-if",
-]
-
-[[package]]
 name = "into-attr"
 version = "0.1.1"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -653,17 +646,6 @@ dependencies = [
 ]
 
 [[package]]
-name = "is-terminal"
-version = "0.4.16"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "e04d7f318608d35d4b61ddd75cbdaee86b023ebe2bd5a66ee0915f0bf93095a9"
-dependencies = [
- "hermit-abi",
- "libc",
- "windows-sys",
-]
-
-[[package]]
 name = "is_terminal_polyfill"
 version = "1.70.1"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -683,6 +665,30 @@ name = "itoa"
 version = "1.0.15"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "4a5f13b858c8d314ee3e8f639011f7ccefe71f97f96e50151fb991f267928e2c"
+
+[[package]]
+name = "jiff"
+version = "0.2.15"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "be1f93b8b1eb69c77f24bbb0afdf66f54b632ee39af40ca21c4365a1d7347e49"
+dependencies = [
+ "jiff-static",
+ "log",
+ "portable-atomic",
+ "portable-atomic-util",
+ "serde",
+]
+
+[[package]]
+name = "jiff-static"
+version = "0.2.15"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "03343451ff899767262ec32146f6d559dd759fdadf42ff0e227c7c48f72594b4"
+dependencies = [
+ "proc-macro2",
+ "quote",
+ "syn 2.0.102",
+]
 
 [[package]]
 name = "js-sys"
@@ -867,7 +873,7 @@ dependencies = [
 [[package]]
 name = "numeric-id"
 version = "0.1.0"
-source = "git+https://github.com/egraphs-good/egglog-backend.git?rev=e1c938d#e1c938d223ea6c423c9ff455c7a26130ff5ee736"
+source = "git+https://github.com/egraphs-good/egglog-backend.git?rev=a0b98d3#a0b98d355601bff4d6c13cf4420a875a14b484e8"
 dependencies = [
  "lazy_static",
  "rayon",
@@ -998,6 +1004,21 @@ name = "pico-args"
 version = "0.5.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "5be167a7af36ee22fe3115051bc51f6e6c7054c9348e28deb4f49bd6f705a315"
+
+[[package]]
+name = "portable-atomic"
+version = "1.11.1"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "f84267b20a16ea918e43c6a88433c2d54fa145c92a811b5b047ccbe153674483"
+
+[[package]]
+name = "portable-atomic-util"
+version = "0.2.4"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "d8a2f0d8d040d7848a709caf78912debcc3f33ee4b3cac47d73d1e1069e83507"
+dependencies = [
+ "portable-atomic",
+]
 
 [[package]]
 name = "ppv-lite86"
@@ -1136,12 +1157,6 @@ name = "regex-syntax"
 version = "0.8.5"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "2b15c43186be67a4fd63bee50d0303afffcef381492ebe2c5d87f324e1b8815c"
-
-[[package]]
-name = "rustc-hash"
-version = "1.1.0"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "08d43f7aa6b08d49f382cde6a7982047c3426db949b1424bc4b7ec9ae12c6ce2"
 
 [[package]]
 name = "rustc-hash"
@@ -1284,17 +1299,6 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "7da8b5736845d9f2fcb837ea5d9e2628564b3b043a70948a3f0b778838c5fb4f"
 
 [[package]]
-name = "symbol_table"
-version = "0.4.0"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "f19bffd69fb182e684d14e3c71d04c0ef33d1641ac0b9e81c712c734e83703bc"
-dependencies = [
- "crossbeam-utils",
- "foldhash",
- "hashbrown 0.15.4",
-]
-
-[[package]]
 name = "syn"
 version = "1.0.109"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -1337,15 +1341,6 @@ checksum = "8a984c8d058c627faaf5e8e2ed493fa3c51771889196de1016cf9c1c6e90d750"
 dependencies = [
  "home",
  "windows-sys",
-]
-
-[[package]]
-name = "termcolor"
-version = "1.4.1"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "06794f8f6c5c898b3275aebefa6b8a1cb24cd2c6c79397ab15774837a0bc5755"
-dependencies = [
- "winapi-util",
 ]
 
 [[package]]
@@ -1415,7 +1410,7 @@ checksum = "ebc1c04c71510c7f702b52b7c350734c9ff1295c464a03335b00bb84fc54f853"
 [[package]]
 name = "union-find"
 version = "0.1.0"
-source = "git+https://github.com/egraphs-good/egglog-backend.git?rev=e1c938d#e1c938d223ea6c423c9ff455c7a26130ff5ee736"
+source = "git+https://github.com/egraphs-good/egglog-backend.git?rev=a0b98d3#a0b98d355601bff4d6c13cf4420a875a14b484e8"
 dependencies = [
  "concurrency",
  "crossbeam",
