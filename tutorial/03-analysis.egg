@@ -211,11 +211,13 @@
 ;;     ```
 ;;     (extract (set-of "1" "1"))
 ;;     ```
+;;
 ;;    We will need a function to store the results of our free variable analysis. We have to use set intersection
 ;;    for the merge function, because of rewrites like `x / x => 1`.
 ;;     ```
 ;;     (function FreeVars (Expr) FreeVarSet :merge (set-intersect old new))
 ;;     ```
+;;
 ;;    Finally, we will need you to write the rules for the free variable analysis. You should have one rule for
 ;;    every variant of `Expr`. Here's an example rule for `Add`:
 ;;     ```
