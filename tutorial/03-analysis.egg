@@ -198,10 +198,10 @@
 
 ;; **Exercises:**
 ;;
-;; 1. One analysis that is frequently useful is free variable sets. However, sometimes it is tedious and/or
-;;    slow to construct "sets" using functions. egglog provides _containers_ to solve this problem. A container
+;; 1. One analysis that is frequently useful is free variable sets. While it is possible to simulate "sets" using
+;;    only functions, egglog provides _containers_ to make this less tedious and more efficient. A container
 ;;    is essentially a value that can store other values; some examples are `Set`, `Map`, and `Vec`.
-;;    However, before we can construct a container, we have to tell `egglog` what sort to to use inside
+;;    However, before we can construct a container, we have to tell `egglog` what sort to use inside
 ;;    the container. This is done with an overload of the `sort` command.
 ;;    ```
 ;;    (sort FreeVarSet (Set String))
@@ -217,7 +217,7 @@
 ;;    (function FreeVars (Expr) FreeVarSet :merge (set-intersect old new))
 ;;    ```
 ;;    Finally, we will need you to write the rules for the free variable analysis. You should have one rule for
-;;    every variant of `Expr`. We'll give you the `Add` rule for free:
+;;    every variant of `Expr`. Here's an example rule for `Add`:
 ;;    ```
 ;;    (rule (
 ;;        (= e (Add a b))
