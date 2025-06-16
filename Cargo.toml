@@ -57,6 +57,15 @@ thiserror = "2.0"
 web-time = "1.1"
 dyn-clone = "1.0.17"
 
+# Wrapper
+proc_macros = {path= "./proc_macros"}
+derive_more = { version = "2.0.1", features = ["deref_mut", "deref", "into_iterator"] }
+smallvec = "1.15.1"
+symbol_table = { version = "0.4.0", features = ["global"] }
+inventory = "0.3.20"
+dashmap = "6.1.0"
+
+
 # Backend
 # TODO: move egglog-backend repo into core egglog repo
 core-relations = { git = "https://github.com/egraphs-good/egglog-backend.git", rev = "a0b98d3" }
