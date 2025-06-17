@@ -23,6 +23,7 @@ pub mod sort;
 mod termdag;
 mod typechecking;
 pub mod util;
+pub mod wrap;
 
 // This is used to allow the `add_primitive` macro to work in
 // both this crate and other crates by referring to `::egglog`.
@@ -41,6 +42,7 @@ use extract::{CostModel, DefaultCost, Extractor, TreeAdditiveCostModel};
 use indexmap::map::Entry;
 use numeric_id::DenseIdMap;
 use prelude::*;
+pub use proc_macros::*;
 use scheduler::{SchedulerId, SchedulerRecord};
 pub use serialize::{SerializeConfig, SerializedNode};
 use sort::*;
