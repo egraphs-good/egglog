@@ -57,7 +57,7 @@ pub fn egglog_func(attr: TokenStream, item: TokenStream) -> TokenStream {
 
             let inventory_path = inventory_path();
             let _merge_option: proc_macro2::TokenStream = "no-merge".to_token_stream();
-            let merge_option: proc_macro2::TokenStream = "merge new".to_token_stream();
+            let _merge_option: proc_macro2::TokenStream = "merge new".to_token_stream();
             quote! {
                 #[allow(unused)]
                 pub struct #name_node<T>{_p:std::marker::PhantomData<T>}
@@ -154,7 +154,7 @@ pub fn egglog_ty(_attr: TokenStream, item: TokenStream) -> TokenStream {
 
     let type_def_expanded = match &input.data {
         Data::Enum(data_enum) => {
-            let variants_egglog_string = data_enum
+            let _variants_egglog_string = data_enum
                 .variants
                 .iter()
                 .map(|variant| {
@@ -441,7 +441,6 @@ pub fn egglog_ty(_attr: TokenStream, item: TokenStream) -> TokenStream {
             let to_egglog_match_arms = data_enum.variants.iter().map(|variant| {
                 let variant_fields = variant_to_field_ident(variant).collect::<Vec<_>>();
                 let variant_name = &variant.ident;
-                let s = " {:.3}".repeat(variant_fields.len());
                 quote! {#name_inner::#variant_name {#( #variant_fields ),*  } => {
                     Command::Action(GenericAction::Let(span!(), self.cur_sym().to_string(), 
                         GenericExpr::Call(span!(),
