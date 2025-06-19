@@ -37,18 +37,20 @@ impl Tx for TxMinimal {
     fn send(&self, transmitted: TxCommand) {
         log::debug!("{:?}", transmitted);
         let mut egraph = self.egraph.lock().unwrap();
-        match transmitted{
+        match transmitted {
             TxCommand::StringCommand { command } => {
                 egraph.parse_and_run_program(None, &command).unwrap();
-            },
+            }
             TxCommand::NativeCommand { command } => {
                 egraph.run_program(vec![command]).unwrap();
-            },
+            }
         }
     }
 
     fn on_new(&self, node: &(impl EgglogNode + 'static)) {
-        self.send(TxCommand::NativeCommand { command: node.to_egglog() });
+        self.send(TxCommand::NativeCommand {
+            command: node.to_egglog(),
+        });
     }
 
     fn on_set(&self, _node: &mut (impl EgglogNode + 'static)) {

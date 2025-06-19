@@ -1,5 +1,5 @@
-use crate:: ast::Command ;
 use super::*;
+use crate::ast::Command;
 use dashmap::DashMap;
 use egglog::{
     util::{IndexMap, IndexSet},
@@ -332,13 +332,13 @@ impl VersionCtl for TxRxVT {
 impl Tx for TxRxVT {
     fn send(&self, transmitted: TxCommand) {
         let mut egraph = self.egraph.lock().unwrap();
-        match transmitted{
+        match transmitted {
             TxCommand::StringCommand { command } => {
                 egraph.parse_and_run_program(None, &command).unwrap();
-            },
+            }
             TxCommand::NativeCommand { command } => {
                 egraph.run_program(vec![command]).unwrap();
-            },
+            }
         }
     }
 
@@ -402,7 +402,7 @@ impl TxCommit for TxRxVT {
         }
         // send egglog string to egraph
         backup_staged_new_syms.into_iter().for_each(|sym| {
-            self.send(TxCommand::NativeCommand{
+            self.send(TxCommand::NativeCommand {
                 command: self.map.get(&sym).unwrap().egglog.to_egglog(),
             })
         });

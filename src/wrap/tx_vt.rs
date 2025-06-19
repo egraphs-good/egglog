@@ -338,12 +338,14 @@ impl Tx for TxVT {
             TxCommand::StringCommand { command } => {
                 log::info!("tx {}", command);
                 let mut egraph = self.egraph.lock().unwrap();
-                egraph.parse_and_run_program(None, command.as_str()).unwrap();
+                egraph
+                    .parse_and_run_program(None, command.as_str())
+                    .unwrap();
             }
-            TxCommand::NativeCommand { command} => {
+            TxCommand::NativeCommand { command } => {
                 let mut egraph = self.egraph.lock().unwrap();
                 egraph.run_program(vec![command]).unwrap();
-            },
+            }
         }
     }
 

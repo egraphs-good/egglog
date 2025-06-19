@@ -193,10 +193,12 @@ impl Tx for TxNoVT {
                 {
                     log::info!("{}", command);
                     let mut egraph = self.egraph.lock().unwrap();
-                    egraph.parse_and_run_program(None, command.as_str()).unwrap();
+                    egraph
+                        .parse_and_run_program(None, command.as_str())
+                        .unwrap();
                 };
             }
-            TxCommand::NativeCommand { command} => {
+            TxCommand::NativeCommand { command } => {
                 let mut egraph = self.egraph.lock().unwrap();
                 egraph.run_program(vec![command]).unwrap();
             }

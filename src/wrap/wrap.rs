@@ -262,7 +262,7 @@ impl<T> Sym<T> {
     pub fn as_str(&self) -> &'static str {
         self.inner.as_str()
     }
-    pub fn to_string(&self) ->String{
+    pub fn to_string(&self) -> String {
         self.inner.as_str().to_string()
     }
 }
@@ -541,33 +541,49 @@ where
 }
 
 pub fn collect_type_defs() -> Vec<Command> {
-    let mut commands  = vec![];
+    let mut commands = vec![];
     // let g:&Sym str ="in".into();
-    // let a = 
+    // let a =
     // Command::Action
     // (GenericAction::Let(span!(), g.to_string(), GenericExpr::Call(span!(),"vec-of", vec![ 2.to_var()] ).to_owned_str()));
     // split decls to avoid undefined sort
-    let mut types = Vec::<(Span,String,Subdatatypes)>::new();
+    let mut types = Vec::<(Span, String, Subdatatypes)>::new();
     for decl in inventory::iter::<Decl> {
         match decl {
-            Decl::EgglogBaseTy { name, cons} => {
-                types.push((span!(),name.to_string(), Subdatatypes::Variants(
-                    cons.iter().map(|x| 
-                        Variant { span: span!(), name: x.cons_name.to_string(), types: x.input.iter().map(|y|y.to_string()).collect(), cost: x.cost }
-                    ).collect()
-                )));
+            Decl::EgglogBaseTy { name, cons } => {
+                types.push((
+                    span!(),
+                    name.to_string(),
+                    Subdatatypes::Variants(
+                        cons.iter()
+                            .map(|x| Variant {
+                                span: span!(),
+                                name: x.cons_name.to_string(),
+                                types: x.input.iter().map(|y| y.to_string()).collect(),
+                                cost: x.cost,
+                            })
+                            .collect(),
+                    ),
+                ));
             }
             Decl::EgglogVecTy { name, ele_ty } => {
                 let ele_ty = ele_ty.to_owned();
                 let ele = crate::var!(ele_ty);
-                types.push((span!(),name.to_string(), Subdatatypes::NewSort("Vec".to_string(), vec![ele])));
+                types.push((
+                    span!(),
+                    name.to_string(),
+                    Subdatatypes::NewSort("Vec".to_string(), vec![ele]),
+                ));
             }
             _ => {
                 // do nothing
             }
         }
     }
-    commands.push(Command::Datatypes { span: span!(),datatypes: types  });
+    commands.push(Command::Datatypes {
+        span: span!(),
+        datatypes: types,
+    });
     for decl in inventory::iter::<Decl> {
         match decl {
             Decl::EgglogFuncTy {
@@ -694,51 +710,52 @@ impl EgglogTy for String {
     const TY_NAME_LOWER: &'static str = "string";
 }
 
-pub trait ToVar{
+pub trait ToVar {
     fn to_var(&self) -> GenericExpr<&'static str, &'static str>;
 }
-impl ToVar for i64{
+impl ToVar for i64 {
     fn to_var(&self) -> GenericExpr<&'static str, &'static str> {
         GenericExpr::Lit(span!(), crate::ast::Literal::Int(*self))
     }
 }
-impl ToVar for f64{
+impl ToVar for f64 {
     fn to_var(&self) -> GenericExpr<&'static str, &'static str> {
-        GenericExpr::Lit(span!(), crate::ast::Literal::Float(ordered_float::OrderedFloat::<f64>(*self)))
+        GenericExpr::Lit(
+            span!(),
+            crate::ast::Literal::Float(ordered_float::OrderedFloat::<f64>(*self)),
+        )
     }
 }
-impl ToVar for String{
+impl ToVar for String {
     fn to_var(&self) -> GenericExpr<&'static str, &'static str> {
         GenericExpr::Lit(span!(), crate::ast::Literal::String(self.to_owned()))
     }
 }
-impl ToVar for bool{
+impl ToVar for bool {
     fn to_var(&self) -> GenericExpr<&'static str, &'static str> {
         GenericExpr::Lit(span!(), crate::ast::Literal::Bool(*self))
     }
 }
-impl<T> ToVar for Sym<T>{
+impl<T> ToVar for Sym<T> {
     fn to_var(&self) -> GenericExpr<&'static str, &'static str> {
-        GenericExpr::Var(span!(),self.inner.into() )
+        GenericExpr::Var(span!(), self.inner.into())
     }
 }
 
-pub trait ToOwnedStr{
-    fn to_owned_str(&self) ->GenericExpr<String, String> ;
+pub trait ToOwnedStr {
+    fn to_owned_str(&self) -> GenericExpr<String, String>;
 }
 
-impl ToOwnedStr for GenericExpr<&'static str, &'static str>{
+impl ToOwnedStr for GenericExpr<&'static str, &'static str> {
     fn to_owned_str(&self) -> GenericExpr<String, String> {
-        match self{
-            GenericExpr::Lit(span, literal) => {
-                GenericExpr::Lit(span.clone(), literal.clone()) 
-            },
-            GenericExpr::Var(span, v) => {
-                GenericExpr::Var(span.clone(), v.to_string()) 
-            },
-            GenericExpr::Call(span, h, generic_exprs) => {
-                GenericExpr::Call(span.clone(), h.to_string(),generic_exprs.iter().map(|x|x.to_owned_str()).collect()) 
-            },
+        match self {
+            GenericExpr::Lit(span, literal) => GenericExpr::Lit(span.clone(), literal.clone()),
+            GenericExpr::Var(span, v) => GenericExpr::Var(span.clone(), v.to_string()),
+            GenericExpr::Call(span, h, generic_exprs) => GenericExpr::Call(
+                span.clone(),
+                h.to_string(),
+                generic_exprs.iter().map(|x| x.to_owned_str()).collect(),
+            ),
         }
     }
 }
