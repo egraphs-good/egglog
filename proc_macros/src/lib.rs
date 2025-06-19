@@ -366,7 +366,7 @@ pub fn egglog_ty(_attr: TokenStream, item: TokenStream) -> TokenStream {
                             pub fn new(#field_name:Vec<&#field_node_ty>) -> #name_node<T,()>{
                                 let #field_name = #field_name.into_iter().map(|r| r.as_ref().sym).collect();
                                 use std::panic::Location;
-                                let node = Node{ ty: #name_inner{v:#field_name}, span:Location::caller(),sym: #name_counter.next_sym(),_p: PhantomData, _s: PhantomData};
+                                let node = Node{ ty: #name_inner{v:#field_name}, span:Some(Location::caller()),sym: #name_counter.next_sym(),_p: PhantomData, _s: PhantomData};
                                 let node = #name_node {node};
                                 T::on_new(&node);
                                 node
@@ -520,7 +520,7 @@ pub fn egglog_ty(_attr: TokenStream, item: TokenStream) -> TokenStream {
                     pub fn #new_fn_name(#(#ref_node_list),*) -> #name_node<T,#variant_name>{
                         let ty = #name_inner::#variant_name {#(#field_idents),*  };
                         use std::panic::Location;
-                        let node = Node { ty, sym: #name_counter.next_sym(),span:Location::caller(), _p:PhantomData, _s:PhantomData::<#variant_name>};
+                        let node = Node { ty, sym: #name_counter.next_sym(),span:Some(Location::caller()), _p:PhantomData, _s:PhantomData::<#variant_name>};
                         let node = #name_node {node};
                         T::on_new(&node);
                         node

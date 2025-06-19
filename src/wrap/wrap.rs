@@ -232,7 +232,7 @@ where
     S: EgglogEnumVariantTy,
 {
     pub ty: I,
-    pub span: &'static Location<'static>,
+    pub span: Option<&'static Location<'static>>,
     pub sym: Sym<T>,
     pub _p: PhantomData<R>,
     pub _s: PhantomData<S>,
@@ -772,5 +772,18 @@ impl From<&'static Location<'static>> for Span {
             line: value.line(),
             column: value.column(),
         }))
+    }
+}
+
+impl From<Option<&'static Location<'static>>> for Span {
+    fn from(value: Option<&'static Location<'static>>) -> Self {
+        match value{
+            Some(value) => {
+                value.into()
+            },
+            None => {
+                Span::Panic
+            },
+        }
     }
 }
