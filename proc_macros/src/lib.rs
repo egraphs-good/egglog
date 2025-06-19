@@ -552,6 +552,7 @@ pub fn egglog_ty(_attr: TokenStream, item: TokenStream) -> TokenStream {
                         quote! {
                             /// set fn of node, firstly update the sym version and specified field and then informs rx what happen on this node
                             /// rx's behavior depends on whether version control is enabled
+                            #[track_caller]
                             pub fn #set_fn_name(&mut self,#ref_node) -> &mut Self{
                                 let ___sym = #assign_node_field;
                                 if let #name_inner::#variant_name{ #(#field_idents),*} = &mut self.node.ty{

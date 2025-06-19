@@ -24,9 +24,13 @@ pub enum TxCommand {
 
 pub trait Tx: 'static {
     /// receive is guaranteed to not be called in proc macro
+    #[track_caller]
     fn send(&self, sended: TxCommand);
+    #[track_caller]
     fn on_new(&self, node: &(impl EgglogNode + 'static));
+    #[track_caller]
     fn on_set(&self, node: &mut (impl EgglogNode + 'static));
+    #[track_caller]
     fn on_func_set<'a, F: EgglogFunc>(
         &self,
         input: <F::Input as EgglogFuncInputs>::Ref<'a>,
@@ -34,10 +38,12 @@ pub trait Tx: 'static {
     );
 }
 pub trait Rx: 'static {
+    #[track_caller]
     fn on_func_get<'a, 'b, F: EgglogFunc>(
         &self,
         input: <F::Input as EgglogFuncInputs>::Ref<'a>,
     ) -> <F::Output as EgglogFuncOutput>::Ref<'b>;
+    #[track_caller]
     fn on_funcs_get<'a, 'b, F: EgglogFunc>(
         &self,
         max_size: Option<usize>,
@@ -45,19 +51,24 @@ pub trait Rx: 'static {
         <F::Input as EgglogFuncInputs>::Ref<'b>,
         <F::Output as EgglogFuncOutput>::Ref<'b>,
     )>;
+    #[track_caller]
     fn on_pull(&self, node: &(impl EgglogNode + 'static));
 }
 
 pub trait SingletonGetter: 'static {
     type RetTy;
+    #[track_caller]
     fn sgl() -> &'static Self::RetTy;
 }
 
 pub trait TxSgl: 'static + Sized + SingletonGetter {
     // delegate all functions from Tx
     fn receive(received: TxCommand);
+    #[track_caller]
     fn on_new(node: &(impl EgglogNode + 'static));
+    #[track_caller]
     fn on_set(node: &mut (impl EgglogNode + 'static));
+    #[track_caller]
     fn on_func_set<'a, F: EgglogFunc>(
         input: <F::Input as EgglogFuncInputs>::Ref<'a>,
         output: <F::Output as EgglogFuncOutput>::Ref<'a>,
@@ -65,15 +76,18 @@ pub trait TxSgl: 'static + Sized + SingletonGetter {
 }
 pub trait RxSgl: 'static + Sized + SingletonGetter {
     // delegate all functions from Rx
+    #[track_caller]
     fn on_func_get<'a, 'b, F: EgglogFunc>(
         input: <F::Input as EgglogFuncInputs>::Ref<'a>,
     ) -> <F::Output as EgglogFuncOutput>::Ref<'b>;
+    #[track_caller]
     fn on_funcs_get<'a, 'b, F: EgglogFunc>(
         max_size: Option<usize>,
     ) -> Vec<(
         <F::Input as EgglogFuncInputs>::Ref<'b>,
         <F::Output as EgglogFuncOutput>::Ref<'b>,
     )>;
+    #[track_caller]
     fn on_pull(node: &(impl EgglogNode + 'static));
 }
 
@@ -425,12 +439,16 @@ impl Syms {
 /// Tx::commit(&self, node);
 /// ```
 pub trait TxCommit {
+    #[track_caller]
     fn on_commit<T: EgglogNode>(&self, node: &T);
+    #[track_caller]
     fn on_stage<T: EgglogNode + ?Sized>(&self, node: &T);
 }
 
 pub trait TxCommitSgl {
+    #[track_caller]
     fn on_commit<T: EgglogNode>(node: &T);
+    #[track_caller]
     fn on_stage<T: EgglogNode>(node: &T);
 }
 
@@ -458,7 +476,9 @@ where
 ///     .commit();
 /// ```
 pub trait Commit {
+    #[track_caller]
     fn commit(&self);
+    #[track_caller]
     fn stage(&self);
 }
 
@@ -777,13 +797,9 @@ impl From<&'static Location<'static>> for Span {
 
 impl From<Option<&'static Location<'static>>> for Span {
     fn from(value: Option<&'static Location<'static>>) -> Self {
-        match value{
-            Some(value) => {
-                value.into()
-            },
-            None => {
-                Span::Panic
-            },
+        match value {
+            Some(value) => value.into(),
+            None => Span::Panic,
         }
     }
 }
