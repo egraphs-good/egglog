@@ -1,13 +1,20 @@
 use derive_more::{Deref, DerefMut, IntoIterator};
 use smallvec::SmallVec;
-use std::{borrow::Borrow, fmt, hash::Hash, marker::PhantomData, panic::Location, sync::{atomic::AtomicU32, Arc}};
+use std::{
+    borrow::Borrow,
+    fmt,
+    hash::Hash,
+    marker::PhantomData,
+    panic::Location,
+    sync::{atomic::AtomicU32, Arc},
+};
 use symbol_table::GlobalSymbol;
 
 use crate::{
     ast::{Command, GenericAction, GenericExpr, RustSpan, Schema, Span, Subdatatypes, Variant},
     span,
 };
-pub type EgglogAction = GenericAction<String,String>;
+pub type EgglogAction = GenericAction<String, String>;
 
 #[derive(Debug)]
 pub enum TxCommand {
@@ -225,6 +232,7 @@ where
     S: EgglogEnumVariantTy,
 {
     pub ty: I,
+    pub span: &'static Location<'static>,
     pub sym: Sym<T>,
     pub _p: PhantomData<R>,
     pub _s: PhantomData<S>,
@@ -757,8 +765,12 @@ impl ToOwnedStr for GenericExpr<&'static str, &'static str> {
     }
 }
 
-impl From<&'static Location<'static>> for Span{
+impl From<&'static Location<'static>> for Span {
     fn from(value: &'static Location) -> Self {
-        Span::Rust(Arc::new(RustSpan{ file: value.file(), line: value.line(), column: value.column() }))
+        Span::Rust(Arc::new(RustSpan {
+            file: value.file(),
+            line: value.line(),
+            column: value.column(),
+        }))
     }
 }

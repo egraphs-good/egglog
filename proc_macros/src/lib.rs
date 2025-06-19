@@ -278,7 +278,7 @@ pub fn egglog_ty(_attr: TokenStream, item: TokenStream) -> TokenStream {
                         }
                         fn to_egglog(&self) -> EgglogAction{
                             GenericAction::Let(span!(), self.cur_sym().to_string(), 
-                                GenericExpr::Call(span!(),"vec-of", self.node.ty.v.iter().map(|x| x.to_var()).collect()).to_owned_str()
+                                GenericExpr::Call(self.span.into(),"vec-of", self.node.ty.v.iter().map(|x| x.to_var()).collect()).to_owned_str()
                             )
                         }
                     }
@@ -292,7 +292,7 @@ pub fn egglog_ty(_attr: TokenStream, item: TokenStream) -> TokenStream {
                         }
                         fn to_egglog(&self) -> EgglogAction{
                             GenericAction::Let(span!(), self.cur_sym().to_string(), 
-                                GenericExpr::Call(span!(),"vec-of", self.node.ty.v.iter().map(|x| x.to_var()).collect()).to_owned_str()
+                                GenericExpr::Call(self.span.into(), "vec-of", self.node.ty.v.iter().map(|x| x.to_var()).collect()).to_owned_str()
                             )
                         }
                     }
@@ -362,9 +362,11 @@ pub fn egglog_ty(_attr: TokenStream, item: TokenStream) -> TokenStream {
                         use std::marker::PhantomData;
                         static #name_counter: TyCounter<#name_egglogty_impl> = TyCounter::new();
                         impl<T:TxSgl> #name_node<T,()> {
+                            #[track_caller]
                             pub fn new(#field_name:Vec<&#field_node_ty>) -> #name_node<T,()>{
                                 let #field_name = #field_name.into_iter().map(|r| r.as_ref().sym).collect();
-                                let node = Node{ ty: #name_inner{v:#field_name}, sym: #name_counter.next_sym(),_p: PhantomData, _s: PhantomData};
+                                use std::panic::Location;
+                                let node = Node{ ty: #name_inner{v:#field_name}, span:Location::caller(),sym: #name_counter.next_sym(),_p: PhantomData, _s: PhantomData};
                                 let node = #name_node {node};
                                 T::on_new(&node);
                                 node
@@ -401,7 +403,7 @@ pub fn egglog_ty(_attr: TokenStream, item: TokenStream) -> TokenStream {
                         }
                         impl<T:SingletonGetter,V:EgglogEnumVariantTy > Clone for #name_node<T,V> {
                             fn clone(&self) -> Self {
-                                Self { node: Node { ty: self.node.ty.clone(), sym: self.node.sym.clone(), _p: PhantomData, _s: PhantomData }  }
+                                Self { node: Node { ty: self.node.ty.clone(),span: self.span ,sym: self.node.sym.clone(), _p: PhantomData, _s: PhantomData }  }
                             }
                         }
                         #to_egglog_impl
@@ -514,9 +516,11 @@ pub fn egglog_ty(_attr: TokenStream, item: TokenStream) -> TokenStream {
                 let new_fn_name = format_ident!("new_{}",variant_name.to_string().to_snake_case());
 
                 quote! {
+                    #[track_caller]
                     pub fn #new_fn_name(#(#ref_node_list),*) -> #name_node<T,#variant_name>{
                         let ty = #name_inner::#variant_name {#(#field_idents),*  };
-                        let node = Node { ty, sym: #name_counter.next_sym(), _p:PhantomData, _s:PhantomData::<#variant_name>};
+                        use std::panic::Location;
+                        let node = Node { ty, sym: #name_counter.next_sym(),span:Location::caller(), _p:PhantomData, _s:PhantomData::<#variant_name>};
                         let node = #name_node {node};
                         T::on_new(&node);
                         node
@@ -733,7 +737,7 @@ pub fn egglog_ty(_attr: TokenStream, item: TokenStream) -> TokenStream {
 
                     impl<T:SingletonGetter,V:EgglogEnumVariantTy > Clone for #name_node<T,V> {
                         fn clone(&self) -> Self {
-                            Self { node: Node { ty: self.ty.clone(), sym: self.sym.clone(), _p: PhantomData, _s: PhantomData }  }
+                            Self { node: Node { ty: self.ty.clone(),span: self.span , sym: self.sym.clone(), _p: PhantomData, _s: PhantomData }  }
                         }
                     }
 
