@@ -1,10 +1,10 @@
 use derive_more::{Deref, DerefMut, IntoIterator};
 use smallvec::SmallVec;
-use std::{borrow::Borrow, fmt, hash::Hash, marker::PhantomData, sync::atomic::AtomicU32};
+use std::{borrow::Borrow, fmt, hash::Hash, marker::PhantomData, panic::Location, sync::{atomic::AtomicU32, Arc}};
 use symbol_table::GlobalSymbol;
 
 use crate::{
-    ast::{Command, GenericAction, GenericExpr, Schema, Span, Subdatatypes, Variant},
+    ast::{Command, GenericAction, GenericExpr, RustSpan, Schema, Span, Subdatatypes, Variant},
     span,
 };
 pub type EgglogAction = GenericAction<String,String>;
@@ -543,10 +543,6 @@ where
 
 pub fn collect_type_defs() -> Vec<Command> {
     let mut commands = vec![];
-    // let g:&Sym str ="in".into();
-    // let a =
-    // Command::Action
-    // (GenericAction::Let(span!(), g.to_string(), GenericExpr::Call(span!(),"vec-of", vec![ 2.to_var()] ).to_owned_str()));
     // split decls to avoid undefined sort
     let mut types = Vec::<(Span, String, Subdatatypes)>::new();
     for decl in inventory::iter::<Decl> {
@@ -758,5 +754,11 @@ impl ToOwnedStr for GenericExpr<&'static str, &'static str> {
                 generic_exprs.iter().map(|x| x.to_owned_str()).collect(),
             ),
         }
+    }
+}
+
+impl From<&'static Location<'static>> for Span{
+    fn from(value: &'static Location) -> Self {
+        Span::Rust(Arc::new(RustSpan{ file: value.file(), line: value.line(), column: value.column() }))
     }
 }
