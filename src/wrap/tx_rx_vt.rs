@@ -1,11 +1,19 @@
 use super::*;
-use crate::ast::Command;
+use crate::{
+    ast::{Command, GenericActions, GenericRule, GenericRunConfig, GenericSchedule},
+    span,
+};
 use dashmap::DashMap;
 use egglog::{
     util::{IndexMap, IndexSet},
     EGraph, SerializeConfig,
 };
-use std::{collections::HashMap, path::PathBuf, sync::Mutex};
+use std::{
+    cell::OnceCell,
+    collections::HashMap,
+    path::PathBuf,
+    sync::{atomic::AtomicU32, Mutex, OnceLock},
+};
 
 #[derive(Default)]
 pub struct TxRxVT {
@@ -155,6 +163,38 @@ impl TxRxVT {
     }
     pub fn new() -> Self {
         Self::new_with_type_defs(collect_type_defs())
+    }
+    pub fn pack_actions(actions: Vec<EgglogAction>) -> Vec<Command> {
+        let mut v = vec![];
+        for egglog_action in actions{
+            v.push(Command::Action(egglog_action))
+        }
+        v
+        // static COUNTER: OnceLock<AtomicU32> = OnceLock::new();
+        // let counter = COUNTER.get_or_init(|| AtomicU32::new(0));
+        // let rule_set_name = format!(
+        //     "anonymous_rule_set_{}",
+        //     counter.fetch_add(1, std::sync::atomic::Ordering::SeqCst)
+        // );
+        // let new_rule_set = Command::AddRuleset(span!(), rule_set_name.clone());
+        // let rule = GenericRule {
+        //     span: span!(),
+        //     head: GenericActions::new(actions),
+        //     body: vec![],
+        // };
+        // let action_rule_set = Command::Rule {
+        //     name: format!(""),
+        //     ruleset: rule_set_name.clone(),
+        //     rule,
+        // };
+        // let run = Command::RunSchedule(GenericSchedule::Run(
+        //     span!(),
+        //     GenericRunConfig {
+        //         ruleset: rule_set_name.clone(),
+        //         until: None,
+        //     },
+        // ));
+        // vec![new_rule_set, action_rule_set, run]
     }
     fn add_node(&self, mut node: WorkAreaNode, auto_latest: bool) {
         let sym = node.cur_sym();
@@ -337,6 +377,7 @@ impl Tx for TxRxVT {
                 egraph.parse_and_run_program(None, &command).unwrap();
             }
             TxCommand::NativeCommand { command } => {
+                println!("{}", command.to_string());
                 egraph.run_program(vec![command]).unwrap();
             }
         }
@@ -353,6 +394,7 @@ impl Tx for TxRxVT {
         // do nothing, this operation has been delayed to commit
     }
 
+    #[track_caller]
     fn on_func_set<'a, F: EgglogFunc>(
         &self,
         input: <F::Input as EgglogFuncInputs>::Ref<'a>,
@@ -401,11 +443,14 @@ impl TxCommit for TxRxVT {
             backup_staged_new_syms.insert(new);
         }
         // send egglog string to egraph
-        backup_staged_new_syms.into_iter().for_each(|sym| {
-            self.send(TxCommand::NativeCommand {
-                command: Command::Action(self.map.get(&sym).unwrap().egglog.to_egglog())
-            })
-        });
+        let actions = backup_staged_new_syms
+            .into_iter()
+            .map(|sym| self.map.get(&sym).unwrap().egglog.to_egglog())
+            .collect::<Vec<_>>();
+        let commands = Self::pack_actions(actions);
+        for command in commands {
+            self.send(TxCommand::NativeCommand { command });
+        }
 
         let all_staged = IndexSet::from_iter(self.staged_set_map.iter().map(|a| *a.key()));
         // // check any absent node
@@ -436,13 +481,14 @@ impl TxCommit for TxRxVT {
         log::debug!("created {:#?}", created);
 
         log::debug!("nodes to topo:{:?}", created);
-        self.topo_sort(&created, TopoDirection::Up)
+        let actions = self
+            .topo_sort(&created, TopoDirection::Up)
             .into_iter()
-            .for_each(|sym| {
-                self.send(TxCommand::NativeCommand {
-                    command: Command::Action(self.map.get(&sym).unwrap().egglog.to_egglog()),
-                })
-            });
+            .map(|sym| self.map.get(&sym).unwrap().egglog.to_egglog())
+            .collect::<Vec<_>>();
+        for command in Self::pack_actions(actions) {
+            self.send(TxCommand::NativeCommand { command })
+        }
     }
 
     fn on_stage<T: EgglogNode + ?Sized>(&self, node: &T) {
