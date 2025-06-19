@@ -276,10 +276,10 @@ pub fn egglog_ty(_attr: TokenStream, item: TokenStream) -> TokenStream {
                         fn to_egglog_string(&self) -> String{
                             format!("(let {} (vec-of {}))",self.node.sym,self.node.ty.v.iter_mut().fold("".to_owned(), |s,item| s+ item.as_str()+" " ))
                         }
-                        fn to_egglog(&self) -> Command{
-                            Command::Action(GenericAction::Let(span!(), self.cur_sym().to_string(), 
+                        fn to_egglog(&self) -> EgglogAction{
+                            GenericAction::Let(span!(), self.cur_sym().to_string(), 
                                 GenericExpr::Call(span!(),"vec-of", self.node.ty.v.iter().map(|x| x.to_var()).collect()).to_owned_str()
-                            ))
+                            )
                         }
                     }
                 }
@@ -290,10 +290,10 @@ pub fn egglog_ty(_attr: TokenStream, item: TokenStream) -> TokenStream {
                         fn to_egglog_string(&self) -> String{
                             format!("(let {} (vec-of {}))",self.cur_sym(),self.node.ty.v.iter().fold("".to_owned(), |s,item| s+ item.as_str()+" " ))
                         }
-                        fn to_egglog(&self) -> Command{
-                            Command::Action(GenericAction::Let(span!(), self.cur_sym().to_string(), 
+                        fn to_egglog(&self) -> EgglogAction{
+                            GenericAction::Let(span!(), self.cur_sym().to_string(), 
                                 GenericExpr::Call(span!(),"vec-of", self.node.ty.v.iter().map(|x| x.to_var()).collect()).to_owned_str()
-                            ))
+                            )
                         }
                     }
                     impl<T:TxSgl + VersionCtlSgl, V:EgglogEnumVariantTy> LocateVersion for #name_node<T,V>
@@ -442,11 +442,11 @@ pub fn egglog_ty(_attr: TokenStream, item: TokenStream) -> TokenStream {
                 let variant_fields = variant_to_field_ident(variant).collect::<Vec<_>>();
                 let variant_name = &variant.ident;
                 quote! {#name_inner::#variant_name {#( #variant_fields ),*  } => {
-                    Command::Action(GenericAction::Let(span!(), self.cur_sym().to_string(), 
+                    GenericAction::Let(span!(), self.cur_sym().to_string(), 
                         GenericExpr::Call(span!(),
                             stringify!(#variant_name),
                             vec![#(#variant_fields.to_var()),*]).to_owned_str()
-                    ))
+                    )
                 }}
             });
             let locate_latest_match_arms = data_enum.variants.iter().map(|variant| {
@@ -698,7 +698,7 @@ pub fn egglog_ty(_attr: TokenStream, item: TokenStream) -> TokenStream {
                                 #(#to_egglog_string_match_arms),*
                             }
                         }
-                        fn to_egglog(&self) -> Command{
+                        fn to_egglog(&self) -> Action{
                             match &self.node.ty{
                                 #(#to_egglog_match_arms),*
                             }

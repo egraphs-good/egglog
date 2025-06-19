@@ -403,7 +403,7 @@ impl TxCommit for TxRxVT {
         // send egglog string to egraph
         backup_staged_new_syms.into_iter().for_each(|sym| {
             self.send(TxCommand::NativeCommand {
-                command: self.map.get(&sym).unwrap().egglog.to_egglog(),
+                command: Command::Action(self.map.get(&sym).unwrap().egglog.to_egglog())
             })
         });
 
@@ -440,7 +440,7 @@ impl TxCommit for TxRxVT {
             .into_iter()
             .for_each(|sym| {
                 self.send(TxCommand::NativeCommand {
-                    command: self.map.get(&sym).unwrap().egglog.to_egglog(),
+                    command: Command::Action(self.map.get(&sym).unwrap().egglog.to_egglog()),
                 })
             });
     }

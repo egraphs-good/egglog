@@ -49,7 +49,7 @@ impl Tx for TxMinimal {
 
     fn on_new(&self, node: &(impl EgglogNode + 'static)) {
         self.send(TxCommand::NativeCommand {
-            command: node.to_egglog(),
+            command: Command::Action(node.to_egglog()),
         });
     }
 

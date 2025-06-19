@@ -105,7 +105,7 @@ impl TxNoVT {
     }
     fn add_node(&self, node: &(impl EgglogNode + 'static)) {
         self.send(TxCommand::NativeCommand {
-            command: node.to_egglog(),
+            command: Command::Action(node.to_egglog())
         });
         let mut node = WorkAreaNode::new(node.clone_dyn());
         let sym = node.cur_sym();

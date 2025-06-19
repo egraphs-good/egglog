@@ -4,9 +4,10 @@ use std::{borrow::Borrow, fmt, hash::Hash, marker::PhantomData, sync::atomic::At
 use symbol_table::GlobalSymbol;
 
 use crate::{
-    ast::{Command, GenericExpr, Schema, Span, Subdatatypes, Variant},
+    ast::{Command, GenericAction, GenericExpr, Schema, Span, Subdatatypes, Variant},
     span,
 };
+pub type EgglogAction = GenericAction<String,String>;
 
 #[derive(Debug)]
 pub enum TxCommand {
@@ -185,7 +186,7 @@ impl<T> Sym<T> {
 /// trait of basic functions to interact with egglog
 pub trait ToEgglog {
     fn to_egglog_string(&self) -> String;
-    fn to_egglog(&self) -> Command;
+    fn to_egglog(&self) -> EgglogAction;
 }
 
 /// version control triat
