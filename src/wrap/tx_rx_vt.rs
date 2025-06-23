@@ -1,28 +1,26 @@
 use super::*;
-use crate::{
-    ast::{Command, GenericActions, GenericRule, GenericRunConfig, GenericSchedule},
-    span,
-};
+use crate::{ast::Command, Function};
+use core_relations::Value;
 use dashmap::DashMap;
 use egglog::{
     util::{IndexMap, IndexSet},
     EGraph, SerializeConfig,
 };
-use std::{
-    cell::OnceCell,
-    collections::HashMap,
-    path::PathBuf,
-    sync::{atomic::AtomicU32, Mutex, OnceLock},
+use petgraph::{
+    dot::{Config, Dot},
+    prelude::{StableDiGraph, StableGraph},
+    EdgeType,
 };
+use std::{collections::HashMap, fs::File, io::Write, path::PathBuf, sync::Mutex};
 
-#[derive(Default)]
 pub struct TxRxVT {
-    egraph: Mutex<EGraph>,
-    map: DashMap<Sym, WorkAreaNode>,
+    pub egraph: Mutex<EGraph>,
+    pub map: DashMap<Sym, WorkAreaNode>,
     /// used to store newly staged node among committed nodes (Not only the currently latest node but also nodes of old versions)
-    staged_set_map: DashMap<Sym, Box<dyn EgglogNode>>,
-    staged_new_map: Mutex<IndexMap<Sym, Box<dyn EgglogNode>>>,
+    pub staged_set_map: DashMap<Sym, Box<dyn EgglogNode>>,
+    pub staged_new_map: Mutex<IndexMap<Sym, Box<dyn EgglogNode>>>,
     checkpoints: Mutex<Vec<CommitCheckPoint>>,
+    registry: EgglogTypeRegistry,
 }
 
 #[allow(unused)]
@@ -33,16 +31,12 @@ pub struct CommitCheckPoint {
     staged_new_nodes: Vec<Sym>,
 }
 
-pub enum TopoDirection {
-    Up,
-    Down,
-}
 /// Tx with version ctl feature
 impl TxRxVT {
-    pub fn to_dot(&self, file_name: PathBuf) {
+    pub fn egraph_to_dot(&self, file_name: PathBuf) {
         let egraph = self.egraph.lock().unwrap();
         let serialized = egraph.serialize(SerializeConfig::default());
-        let dot_path = file_name.with_extension("dot");
+        let dot_path = file_name;
         serialized
             .to_dot_file(dot_path.clone())
             .unwrap_or_else(|_| panic!("Failed to write dot file to {dot_path:?}"));
@@ -150,23 +144,25 @@ impl TxRxVT {
             }
         })
     }
-    pub fn new_with_type_defs(type_defs: Vec<Command>) -> Self {
+    pub fn new() -> Self {
         Self {
             egraph: Mutex::new({
                 let mut e = EGraph::default();
-                log::info!("{:?}", type_defs);
+                let type_defs = EgglogTypeRegistry::collect_type_defs();
+                log::trace!("{:?}", type_defs);
                 e.run_program(type_defs).unwrap();
                 e
             }),
-            ..Self::default()
+            registry: EgglogTypeRegistry::new_with_inventory(),
+            map: DashMap::new(),
+            staged_set_map: DashMap::new(),
+            staged_new_map: Mutex::new(IndexMap::default()),
+            checkpoints: Mutex::new(vec![]),
         }
-    }
-    pub fn new() -> Self {
-        Self::new_with_type_defs(collect_type_defs())
     }
     pub fn pack_actions(actions: Vec<EgglogAction>) -> Vec<Command> {
         let mut v = vec![];
-        for egglog_action in actions{
+        for egglog_action in actions {
             v.push(Command::Action(egglog_action))
         }
         v
@@ -212,10 +208,12 @@ impl TxRxVT {
                 .push(sym);
             *node = *latest;
         }
-        self.map.insert(node.cur_sym(), node);
+        log::debug!("map insert {:?}", node.egglog);
+        if let Some(node) = self.map.insert(node.cur_sym(), node) {
+            panic!("repeat insertion of node {:?}", node);
+        }
     }
-
-    /// update all ancestors recursively in guest and send updated term by egglog string repr to host
+    /// update all ancestors recursively in guest and send updated term by egglog native command to host
     /// when you update the node
     /// return all WorkAreaNodes created
     fn update_nodes(
@@ -223,11 +221,15 @@ impl TxRxVT {
         root: Sym,
         staged_latest_syms_and_staged_nodes: Vec<(Sym, Box<dyn EgglogNode>)>,
     ) -> IndexSet<Sym> {
+        if staged_latest_syms_and_staged_nodes.len() == 0 {
+            return IndexSet::default();
+        }
+
+        log::debug!("update_nodes:{:#?}", self.map);
         // collect all ancestors that need copy
         let mut ancestors = IndexSet::default();
         for (latest_sym, _) in &staged_latest_syms_and_staged_nodes {
             log::debug!("collect ancestors of {:?}", latest_sym);
-            // self.collect_latest_ancestors(*latest_sym, &mut latest_ancestors);
             self.collect_ancestors(*latest_sym, &mut ancestors);
         }
         let mut root_ancestors = IndexSet::default();
@@ -261,16 +263,22 @@ impl TxRxVT {
         for ancestor in ancestors {
             let mut latest_node = self.map.get_mut(&self.locate_latest(ancestor)).unwrap();
             let latest_sym = latest_node.cur_sym();
-            let next_sym = latest_node.next_sym();
             let mut next_latest_node = latest_node.clone();
-            // set prev, chain next latest version to latest version
-            next_latest_node.prev = Some(latest_sym);
+            let next_sym = next_latest_node.roll_sym();
+
             // set next, chain latest version to next latest version
             latest_node.next = Some(next_sym);
             drop(latest_node);
+
+            // set prev, chain next latest version to latest version
+            next_latest_node.prev = Some(latest_sym);
+
             next_syms.insert(next_sym);
             if !staged_latest_sym_map.contains_key(&ancestor) {
-                self.map.insert(next_sym, next_latest_node);
+                log::debug!("map insert {},{:?}", next_sym, next_latest_node);
+                if let Some(node) = self.map.insert(next_sym, next_latest_node) {
+                    panic!("repeat insertion of node {:?}", node);
+                }
             } else {
                 let mut staged_node = staged_latest_sym_map.get(&ancestor).unwrap().clone_dyn();
                 *staged_node.cur_sym_mut() = next_sym;
@@ -279,9 +287,14 @@ impl TxRxVT {
                 // set prev, chain next latest version to latest version
                 staged_node.prev = Some(latest_sym);
                 staged_node.preds = self.map.get(&ancestor).unwrap().preds.clone();
-                self.map.insert(next_sym, staged_node);
+
+                log::debug!("map insert {},{:?}", next_sym, staged_node);
+                if let Some(node) = self.map.insert(next_sym, staged_node) {
+                    panic!("repeat insertion of node {:?}", node);
+                }
             }
         }
+        log::debug!("mid update_nodes:{:#?}", self.map);
 
         // update all preds
         let mut succ_preds_map = HashMap::new();
@@ -315,9 +328,57 @@ impl TxRxVT {
                 }
             }
         }
-        log::debug!("{:#?}", self.map);
-
+        log::debug!("after update_nodes:{:#?}", self.map);
         next_syms
+    }
+    /// transform WorkAreaGraph into dot file
+    pub fn wag_to_dot(&self, name: String) {
+        pub fn generate_dot_by_graph<N: std::fmt::Debug, E: std::fmt::Debug, Ty: EdgeType>(
+            g: &StableGraph<N, E, Ty>,
+            name: String,
+            graph_config: &[Config],
+        ) {
+            let dot_name = name.clone();
+            let mut f = File::create(dot_name.clone()).unwrap();
+            let dot_string = format!("{:?}", Dot::with_config(&g, &graph_config));
+            f.write_all(dot_string.as_bytes()).expect("写入失败");
+        }
+        let g = self.build_petgraph();
+        generate_dot_by_graph(&g, name, &[]);
+    }
+    pub fn build_petgraph(&self) -> StableDiGraph<WorkAreaNode, ()> {
+        // 1. 收集所有节点
+        let v = self
+            .map
+            .iter()
+            .map(|x| x.value().clone())
+            .collect::<Vec<_>>();
+        let mut g = StableDiGraph::new();
+        let mut idxs = Vec::new();
+        // 2. 建立 WorkAreaNode 的 cur_sym 到 petgraph::NodeIndex 的映射
+        use std::collections::HashMap;
+        let mut sym2idx = HashMap::new();
+        log::debug!("map:{:?}", self.map);
+        for node in &v {
+            let idx = g.add_node(node.clone());
+            idxs.push(idx);
+            sym2idx.insert(node.egglog.cur_sym(), idx);
+            log::debug!("sym2idx insert {}", node.egglog.cur_sym());
+        }
+        // 3. 添加边（succs）
+        for node in &v {
+            let from = node.egglog.cur_sym();
+            let from_idx = sym2idx[&from];
+            log::debug!("succs of {} is {:?}", from, node.egglog.succs());
+            for to in node.egglog.succs() {
+                if let Some(&to_idx) = sym2idx.get(&to) {
+                    g.add_edge(from_idx, to_idx, ());
+                } else {
+                    panic!("{} not found in wag", to)
+                }
+            }
+        }
+        g
     }
 }
 
@@ -374,10 +435,11 @@ impl Tx for TxRxVT {
         let mut egraph = self.egraph.lock().unwrap();
         match transmitted {
             TxCommand::StringCommand { command } => {
+                log::info!("{}", command);
                 egraph.parse_and_run_program(None, &command).unwrap();
             }
             TxCommand::NativeCommand { command } => {
-                println!("{}", command.to_string());
+                log::info!("{}", command.to_string());
                 egraph.run_program(vec![command]).unwrap();
             }
         }
@@ -412,14 +474,22 @@ impl Tx for TxRxVT {
             ),
         });
     }
+
+    fn on_union(&self, node1: &(impl EgglogNode + 'static), node2: &(impl EgglogNode + 'static)) {
+        self.send(TxCommand::StringCommand {
+            command: format!("(union {} {})", node1.cur_sym(), node2.cur_sym()),
+        });
+    }
 }
 
 impl TxCommit for TxRxVT {
     /// commit behavior:
     /// 1. commit all descendants (if you also call set fn on subnodes they will also be committed)
     /// 2. commit basing the latest version of the working graph (working graph record all versions)
-    /// 3. if TxCommit is implemented you can change egraph by `commit` rather than `set`. It's lazy.
+    /// 3. if TxCommit is implemented you can change egraph by `commit` rather than `set`. It's lazy because it uses a buffer to store all `staged set`.
+    /// 4. if you didn't stage `set` on nodes, it will do nothing on commited node only flush all staged_new_node buffer
     fn on_commit<T: EgglogNode>(&self, commit_root: &T) {
+        log::debug!("on_commit {:?}", commit_root.to_egglog_string());
         let check_point = CommitCheckPoint {
             committed_node_root: commit_root.cur_sym(),
             staged_set_nodes: self.staged_set_map.iter().map(|a| *a.key()).collect(),
@@ -432,6 +502,8 @@ impl TxCommit for TxRxVT {
                 .collect(),
         };
         log::debug!("{:?}", check_point);
+        log::debug!("staged_set_map:{:?}", self.staged_set_map);
+        log::debug!("staged_new_map:{:?}", self.staged_new_map.lock().unwrap());
         self.checkpoints.lock().unwrap().push(check_point);
 
         // process new nodes
@@ -478,9 +550,9 @@ impl TxCommit for TxRxVT {
                 .map(|x| self.staged_set_map.remove(*x).unwrap().1),
         );
         let created = self.update_nodes(commit_root.cur_sym(), iter_impl.collect());
-        log::debug!("created {:#?}", created);
+        log::trace!("created {:#?}", created);
 
-        log::debug!("nodes to topo:{:?}", created);
+        log::trace!("nodes to topo:{:?}", created);
         let actions = self
             .topo_sort(&created, TopoDirection::Up)
             .into_iter()
@@ -500,9 +572,26 @@ impl TxCommit for TxRxVT {
 impl Rx for TxRxVT {
     fn on_func_get<'a, 'b, F: EgglogFunc>(
         &self,
-        _input: <F::Input as EgglogFuncInputs>::Ref<'a>,
-    ) -> <F::Output as EgglogFuncOutput>::Ref<'b> {
-        todo!()
+        input: <F::Input as EgglogFuncInputs>::Ref<'a>,
+    ) -> F::Output {
+        let input_nodes = input.as_nodes();
+        let output = {
+            let egraph = &self.egraph.lock().unwrap();
+            input_nodes.iter().for_each(|x| {
+                println!(
+                    "input:({},{:?})",
+                    x.cur_sym(),
+                    get_value(egraph, x.cur_sym().into())
+                )
+            });
+            let output = get_value(egraph, F::FUNC_NAME);
+            output
+        };
+        let sym = self.on_pull_value::<F::OutputTy>(output);
+        let node = &self.map.get(&sym).unwrap().egglog;
+        let output: &F::Output =
+            unsafe { &*(node.as_ref() as *const dyn EgglogNode as *const F::Output) };
+        output.clone()
     }
 
     fn on_funcs_get<'a, 'b, F: EgglogFunc>(
@@ -514,8 +603,54 @@ impl Rx for TxRxVT {
     )> {
         todo!()
     }
+    fn on_pull_value<T: EgglogTy>(&self, value: Value) -> Sym {
+        log::debug!("pulling value {:?}", value);
+        let egraph = self.egraph.lock().unwrap();
+        let sort = egraph.get_sort_by_name(T::TY_NAME).unwrap();
+        let mut term2sym = HashMap::new();
+        let (term_dag, start_term, cost) = egraph.extract_value(sort, value).unwrap();
 
-    fn on_pull(&self, _node: &(impl EgglogNode + 'static)) {
-        todo!()
+        let root_idx = term_dag.lookup(&start_term);
+        let mut ret_sym = None;
+
+        let topo = topo_sort(&term_dag);
+        for &i in &topo {
+            let new_fn = self
+                .registry
+                .get_fn(i, &term_dag)
+                .unwrap_or_else(|| panic!("didn't found fn of term {:?}", term_dag.get(i)));
+            let boxed_node = new_fn(i, &term_dag, &mut term2sym);
+            if i == root_idx {
+                ret_sym = Some(boxed_node.cur_sym())
+            }
+            self.add_node(WorkAreaNode::new(boxed_node), false);
+        }
+        log::debug!(
+            "term:{:?}, term_dag:{:?}, cost:{}",
+            start_term,
+            term_dag,
+            cost
+        );
+        ret_sym.unwrap()
+    }
+    fn on_pull_sym<T: EgglogTy>(&self, sym: Sym) -> Sym {
+        let value = get_value(&self.egraph.lock().unwrap(), sym.into());
+        self.on_pull_value::<T>(value)
+    }
+}
+fn get_function(egraph: &EGraph, name: &str) -> Function {
+    egraph.functions.get(name).unwrap().clone()
+}
+fn get_value(egraph: &EGraph, name: &str) -> Value {
+    log::trace!("get_value_of_func {}", name);
+    let mut out = None;
+    let id = get_function(egraph, name).backend_id;
+    egraph.backend.for_each(id, |row| out = Some(row.vals[0]));
+    out.unwrap_or_else(|| panic!("do not have any output"))
+}
+
+impl std::fmt::Debug for Box<dyn EgglogNode> {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        write!(f, "{},{}", self.cur_sym(), self.to_egglog_string())
     }
 }

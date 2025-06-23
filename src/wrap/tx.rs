@@ -6,9 +6,10 @@ use egglog::{util::IndexSet, EGraph, SerializeConfig};
 use std::{path::PathBuf, sync::Mutex};
 
 pub struct TxNoVT {
-    egraph: Mutex<EGraph>,
+    pub egraph: Mutex<EGraph>,
     map: DashMap<Sym, WorkAreaNode>,
     latest_map: DashMap<Sym, Sym>,
+    registry: EgglogTypeRegistry,
 }
 
 /// Tx without version ctl feature
@@ -23,10 +24,11 @@ impl TxNoVT {
             }),
             map: DashMap::default(),
             latest_map: DashMap::default(),
+            registry: EgglogTypeRegistry::new_with_inventory(),
         }
     }
     pub fn new() -> Self {
-        Self::new_with_type_defs(collect_type_defs())
+        Self::new_with_type_defs(EgglogTypeRegistry::collect_type_defs())
     }
     pub fn to_dot(&self, file_name: PathBuf) {
         let egraph = self.egraph.lock().unwrap();
@@ -117,7 +119,6 @@ impl TxNoVT {
                 .preds
                 .push(sym);
         }
-        // println!("{:?}",self.map);
         self.map.insert(node.cur_sym(), node);
     }
 
@@ -126,7 +127,7 @@ impl TxNoVT {
     /// for non version control mode, update_symnode will update &mut old sym to latest
     fn update_symnode(&self, node: &mut (impl EgglogNode + 'static)) {
         let latest_sym = self.map_latest(node.cur_sym());
-        *node.cur_sym_mut() = node.next_sym();
+        *node.cur_sym_mut() = node.roll_sym();
         let mut updated_symnode = WorkAreaNode::new(node.clone_dyn());
         let mut index_set = IndexSet::default();
 
@@ -141,7 +142,7 @@ impl TxNoVT {
         // insert copied ancestors
         for &old_sym in index_set.iter() {
             let (_, mut sym_node) = self.map.remove(&old_sym).unwrap();
-            let new_sym = sym_node.next_sym();
+            let new_sym = sym_node.roll_sym();
             self.latest_map.insert(old_sym, new_sym);
 
             next_syms.push(new_sym);
@@ -228,6 +229,12 @@ impl Tx for TxNoVT {
                 input_syms.map(|x| x.as_str()).collect::<String>(),
                 output
             ),
+        });
+    }
+
+    fn on_union(&self, node1: &(impl EgglogNode + 'static), node2: &(impl EgglogNode + 'static)) {
+        self.send(TxCommand::StringCommand {
+            command: format!("(union {} {})", node1.cur_sym(), node2.cur_sym()),
         });
     }
 }

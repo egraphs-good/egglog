@@ -157,7 +157,7 @@ impl TxVT {
         }
     }
     pub fn new() -> Self {
-        Self::new_with_type_defs(collect_type_defs())
+        Self::new_with_type_defs(EgglogTypeRegistry::collect_type_defs())
     }
     fn add_node(&self, mut node: WorkAreaNode, auto_latest: bool) {
         let sym = node.cur_sym();
@@ -224,8 +224,8 @@ impl TxVT {
         for ancestor in ancestors {
             let mut latest_node = self.map.get_mut(&self.locate_latest(ancestor)).unwrap();
             let latest_sym = latest_node.cur_sym();
-            let next_sym = latest_node.next_sym();
             let mut next_latest_node = latest_node.clone();
+            let next_sym = next_latest_node.roll_sym();
             // set prev, chain next latest version to latest version
             next_latest_node.prev = Some(latest_sym);
             // set next, chain latest version to next latest version
@@ -375,6 +375,11 @@ impl Tx for TxVT {
                 input_syms.map(|x| x.as_str()).collect::<String>(),
                 output
             ),
+        });
+    }
+    fn on_union(&self, node1: &(impl EgglogNode + 'static), node2: &(impl EgglogNode + 'static)) {
+        self.send(TxCommand::StringCommand {
+            command: format!("(union {} {})", node1.cur_sym(), node2.cur_sym()),
         });
     }
 }

@@ -18,7 +18,7 @@ impl TxMinimal {
         }
     }
     pub fn new() -> Self {
-        Self::new_with_type_defs(collect_type_defs())
+        Self::new_with_type_defs(EgglogTypeRegistry::collect_type_defs())
     }
     pub fn to_dot(&self, file_name: PathBuf) {
         let egraph = self.egraph.lock().unwrap();
@@ -72,6 +72,12 @@ impl Tx for TxMinimal {
                 input_syms.map(|x| x.as_str()).collect::<String>(),
                 output
             ),
+        });
+    }
+
+    fn on_union(&self, node1: &(impl EgglogNode + 'static), node2: &(impl EgglogNode + 'static)) {
+        self.send(TxCommand::StringCommand {
+            command: format!("(union {} {})", node1.cur_sym(), node2.cur_sym()),
         });
     }
 

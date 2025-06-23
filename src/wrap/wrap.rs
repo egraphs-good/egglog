@@ -1,20 +1,31 @@
+use core_relations::Value;
 use derive_more::{Deref, DerefMut, IntoIterator};
+use ordered_float::OrderedFloat;
 use smallvec::SmallVec;
 use std::{
+    any::Any,
     borrow::Borrow,
+    collections::HashMap,
+    convert::Infallible,
     fmt,
     hash::Hash,
     marker::PhantomData,
     panic::Location,
     sync::{atomic::AtomicU32, Arc},
+    usize,
 };
 use symbol_table::GlobalSymbol;
 
 use crate::{
-    ast::{Command, GenericAction, GenericExpr, RustSpan, Schema, Span, Subdatatypes, Variant},
+    ast::{
+        Command, GenericAction, GenericExpr, Literal, RustSpan, Schema, Span, Subdatatypes, Variant,
+    },
     span,
+    wrap::tx_rx_vt::TxRxVT,
+    Term, TermDag, TermId,
 };
 pub type EgglogAction = GenericAction<String, String>;
+pub type TermToNode = fn(TermId, &TermDag, &mut HashMap<TermId, Sym>) -> Box<dyn EgglogNode>;
 
 #[derive(Debug)]
 pub enum TxCommand {
@@ -36,13 +47,15 @@ pub trait Tx: 'static {
         input: <F::Input as EgglogFuncInputs>::Ref<'a>,
         output: <F::Output as EgglogFuncOutput>::Ref<'a>,
     );
+    #[track_caller]
+    fn on_union(&self, node1: &(impl EgglogNode + 'static), node2: &(impl EgglogNode + 'static));
 }
 pub trait Rx: 'static {
     #[track_caller]
-    fn on_func_get<'a, 'b, F: EgglogFunc>(
+    fn on_func_get<'a, F: EgglogFunc>(
         &self,
         input: <F::Input as EgglogFuncInputs>::Ref<'a>,
-    ) -> <F::Output as EgglogFuncOutput>::Ref<'b>;
+    ) -> F::Output;
     #[track_caller]
     fn on_funcs_get<'a, 'b, F: EgglogFunc>(
         &self,
@@ -52,7 +65,14 @@ pub trait Rx: 'static {
         <F::Output as EgglogFuncOutput>::Ref<'b>,
     )>;
     #[track_caller]
-    fn on_pull(&self, node: &(impl EgglogNode + 'static));
+    fn on_pull<T: EgglogTy>(&self, node: &(impl EgglogNode + 'static)) {
+        self.on_pull_sym::<T>(node.cur_sym());
+    }
+
+    #[track_caller]
+    fn on_pull_sym<T: EgglogTy>(&self, sym: Sym) -> Sym;
+    #[track_caller]
+    fn on_pull_value<T: EgglogTy>(&self, value: Value) -> Sym;
 }
 
 pub trait SingletonGetter: 'static {
@@ -73,13 +93,14 @@ pub trait TxSgl: 'static + Sized + SingletonGetter {
         input: <F::Input as EgglogFuncInputs>::Ref<'a>,
         output: <F::Output as EgglogFuncOutput>::Ref<'a>,
     );
+    fn on_union(node1: &(impl EgglogNode + 'static), node2: &(impl EgglogNode + 'static));
 }
 pub trait RxSgl: 'static + Sized + SingletonGetter {
     // delegate all functions from Rx
     #[track_caller]
     fn on_func_get<'a, 'b, F: EgglogFunc>(
         input: <F::Input as EgglogFuncInputs>::Ref<'a>,
-    ) -> <F::Output as EgglogFuncOutput>::Ref<'b>;
+    ) -> F::Output;
     #[track_caller]
     fn on_funcs_get<'a, 'b, F: EgglogFunc>(
         max_size: Option<usize>,
@@ -88,7 +109,7 @@ pub trait RxSgl: 'static + Sized + SingletonGetter {
         <F::Output as EgglogFuncOutput>::Ref<'b>,
     )>;
     #[track_caller]
-    fn on_pull(node: &(impl EgglogNode + 'static));
+    fn on_pull<T: EgglogTy>(node: &(impl EgglogNode + 'static));
 }
 
 impl<T: Tx + 'static, S: SingletonGetter<RetTy = T> + 'static> TxSgl for S {
@@ -108,11 +129,15 @@ impl<T: Tx + 'static, S: SingletonGetter<RetTy = T> + 'static> TxSgl for S {
     ) {
         Self::sgl().on_func_set::<F>(input, output);
     }
+
+    fn on_union(node1: &(impl EgglogNode + 'static), node2: &(impl EgglogNode + 'static)) {
+        Self::sgl().on_union(node1, node2);
+    }
 }
 impl<R: Rx + 'static, S: SingletonGetter<RetTy = R> + 'static> RxSgl for S {
     fn on_func_get<'a, 'b, F: EgglogFunc>(
         input: <F::Input as EgglogFuncInputs>::Ref<'a>,
-    ) -> <F::Output as EgglogFuncOutput>::Ref<'b> {
+    ) -> F::Output {
         Self::sgl().on_func_get::<F>(input)
     }
 
@@ -124,8 +149,8 @@ impl<R: Rx + 'static, S: SingletonGetter<RetTy = R> + 'static> RxSgl for S {
     )> {
         Self::sgl().on_funcs_get::<F>(max_size)
     }
-    fn on_pull(node: &(impl EgglogNode + 'static)) {
-        Self::sgl().on_pull(node)
+    fn on_pull<T: EgglogTy>(node: &(impl EgglogNode + 'static)) {
+        Self::sgl().on_pull::<T>(node)
     }
 }
 
@@ -187,6 +212,7 @@ pub struct TyConstructor {
     pub output: &'static str,
     pub cost: Option<usize>,
     pub unextractable: bool,
+    pub term_to_node: TermToNode,
 }
 
 impl<T> Sym<T> {
@@ -201,6 +227,11 @@ impl<T> Sym<T> {
     pub fn erase_mut(&mut self) -> &mut Sym<()> {
         // safety note: type erasure
         unsafe { &mut *(self as *mut Sym<T> as *mut Sym) }
+    }
+}
+impl Sym {
+    pub fn typed<T: EgglogTy>(self) -> Sym<T> {
+        unsafe { *(&self as *const Sym as *const Sym<T>) }
     }
 }
 
@@ -218,11 +249,11 @@ pub trait LocateVersion {
     fn locate_prev(&mut self);
 }
 /// trait of node behavior
-pub trait EgglogNode: ToEgglog {
+pub trait EgglogNode: ToEgglog + Any {
     fn succs_mut(&mut self) -> Vec<&mut Sym>;
     fn succs(&self) -> Vec<Sym>;
     /// set new sym and return the new sym
-    fn next_sym(&mut self) -> Sym;
+    fn roll_sym(&mut self) -> Sym;
     // return current sym
     fn cur_sym(&self) -> Sym;
     fn cur_sym_mut(&mut self) -> &mut Sym;
@@ -289,7 +320,7 @@ impl<T> Sym<T> {
         self.inner.as_str().to_string()
     }
 }
-impl<T: std::clone::Clone> Copy for Sym<T> {}
+impl<T> Copy for Sym<T> {}
 impl<T> Clone for Sym<T> {
     fn clone(&self) -> Self {
         Self {
@@ -370,12 +401,7 @@ impl Clone for WorkAreaNode {
 }
 impl fmt::Debug for WorkAreaNode {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        f.debug_struct("WorkAreaNode")
-            .field("preds", &self.preds)
-            .field("prev", &self.prev)
-            .field("sym", &self.egglog.cur_sym())
-            .field("succs", &self.egglog.succs())
-            .finish()
+        write!(f, "{} {}", self.cur_sym(), self.egglog.to_egglog_string())
     }
 }
 impl WorkAreaNode {
@@ -428,6 +454,11 @@ impl Syms {
         Syms {
             inner: SmallVec::new(),
         }
+    }
+}
+impl From<Vec<Sym>> for Syms {
+    fn from(value: Vec<Sym>) -> Self {
+        value.into_iter().collect()
     }
 }
 
@@ -522,32 +553,41 @@ pub trait EgglogFuncInputsRef {
 }
 
 /// Trait for output types that can be used in egglog functions
-pub trait EgglogFuncOutput: 'static {
+pub trait EgglogFuncOutput: 'static + Clone {
     type Ref<'a>: EgglogFuncOutputRef;
     fn as_node(&self) -> &dyn EgglogNode;
+    fn clone_downcast(&self) -> Self;
 }
 impl<T> EgglogFuncOutput for T
 where
-    T: EgglogNode + 'static,
+    T: EgglogNode + 'static + Sized + Clone,
 {
     type Ref<'a> = &'a dyn AsRef<T>;
     fn as_node(&self) -> &dyn EgglogNode {
         self
     }
+    fn clone_downcast(&self) -> T {
+        self.clone()
+    }
 }
 impl<T: EgglogFuncOutput + EgglogNode + 'static> EgglogFuncOutputRef for &dyn AsRef<T> {
-    type DeRef<'a> = T;
+    type DeRef = T;
     fn as_node(&self) -> &dyn EgglogNode {
+        self.as_ref()
+    }
+    fn deref(&self) -> &Self::DeRef {
         self.as_ref()
     }
 }
 pub trait EgglogFuncOutputRef {
-    type DeRef<'a>: EgglogFuncOutput;
+    type DeRef: EgglogFuncOutput;
     fn as_node(&self) -> &dyn EgglogNode;
+    fn deref(&self) -> &Self::DeRef;
 }
 pub trait EgglogFunc {
     type Input: EgglogFuncInputs;
     type Output: EgglogFuncOutput;
+    type OutputTy: EgglogTy;
     const FUNC_NAME: &'static str;
 }
 impl<T> EgglogFuncInput for T
@@ -567,69 +607,6 @@ where
     fn as_node(&self) -> &dyn EgglogNode {
         self.as_ref()
     }
-}
-
-pub fn collect_type_defs() -> Vec<Command> {
-    let mut commands = vec![];
-    // split decls to avoid undefined sort
-    let mut types = Vec::<(Span, String, Subdatatypes)>::new();
-    for decl in inventory::iter::<Decl> {
-        match decl {
-            Decl::EgglogBaseTy { name, cons } => {
-                types.push((
-                    span!(),
-                    name.to_string(),
-                    Subdatatypes::Variants(
-                        cons.iter()
-                            .map(|x| Variant {
-                                span: span!(),
-                                name: x.cons_name.to_string(),
-                                types: x.input.iter().map(|y| y.to_string()).collect(),
-                                cost: x.cost,
-                            })
-                            .collect(),
-                    ),
-                ));
-            }
-            Decl::EgglogVecTy { name, ele_ty } => {
-                let ele_ty = ele_ty.to_owned();
-                let ele = crate::var!(ele_ty);
-                types.push((
-                    span!(),
-                    name.to_string(),
-                    Subdatatypes::NewSort("Vec".to_string(), vec![ele]),
-                ));
-            }
-            _ => {
-                // do nothing
-            }
-        }
-    }
-    commands.push(Command::Datatypes {
-        span: span!(),
-        datatypes: types,
-    });
-    for decl in inventory::iter::<Decl> {
-        match decl {
-            Decl::EgglogFuncTy {
-                name,
-                input,
-                output,
-            } => {
-                commands.push(Command::Function {
-                    span: span!(),
-                    name: name.to_string(),
-                    schema: Schema {
-                        input: input.iter().map(<&str>::to_string).collect(),
-                        output: output.to_string(),
-                    },
-                    merge: Some(GenericExpr::Var(span!(), "new".to_owned())),
-                });
-            }
-            _ => {}
-        }
-    }
-    commands
 }
 
 macro_rules! impl_input_for_tuples {
@@ -700,7 +677,7 @@ impl_for_tuples!(T0, T1, T2, T3, T4, T5, T6);
 impl_for_tuples!(T0, T1, T2, T3, T4, T5, T6, T7);
 impl_for_tuples!(T0, T1, T2, T3, T4, T5, T6, T7, T8);
 
-pub trait EgglogVecTy: EgglogTy {
+pub trait EgglogContainerTy: EgglogTy {
     type EleTy: EgglogTy;
 }
 pub trait EgglogBaseTy: EgglogTy {
@@ -715,9 +692,11 @@ pub enum Decl {
         name: &'static str,
         cons: &'static TyConstructors,
     },
-    EgglogVecTy {
+    EgglogContainerTy {
         name: &'static str,
-        ele_ty: &'static str,
+        ele_ty_name: &'static str,
+        def_operator: &'static str,
+        term_to_node: TermToNode,
     },
     EgglogFuncTy {
         name: &'static str,
@@ -801,5 +780,226 @@ impl From<Option<&'static Location<'static>>> for Span {
             Some(value) => value.into(),
             None => Span::Panic,
         }
+    }
+}
+
+pub trait FromTerm {
+    fn term_to_node(
+        term: TermId,
+        dag: &TermDag,
+        term2sym: &mut HashMap<TermId, Sym>,
+    ) -> Box<dyn EgglogNode>;
+}
+
+/// used for type erased marker
+impl SingletonGetter for () {
+    type RetTy = TxRxVT;
+    fn sgl() -> &'static Self::RetTy {
+        panic!("illegal singleton getter")
+    }
+}
+
+impl TryFrom<Literal> for f64 {
+    type Error = Infallible;
+
+    fn try_from(value: Literal) -> Result<Self, Self::Error> {
+        <OrderedFloat<f64> as TryFrom<Literal>>::try_from(value).map(|x| x.try_into().unwrap())
+    }
+}
+
+pub fn topo_sort(term_dag: &TermDag) -> Vec<usize> {
+    // init in degrees and out degrees
+    let mut parents = Vec::new();
+    let mut outs = Vec::new();
+    parents.resize(term_dag.size(), Vec::new());
+    outs.resize(term_dag.size(), 0);
+    for (i, out_degree) in outs.iter_mut().enumerate() {
+        let term = term_dag.get(i);
+        *out_degree = match term {
+            crate::Term::Lit(_) => usize::MAX,
+            crate::Term::Var(_) => panic!(),
+            crate::Term::App(_, items) => items.iter().map(|x| parents[*x].push(i)).count(),
+        }
+    }
+    let mut rst = Vec::new();
+    let mut wait_for_release = Vec::new();
+    // start node should not have any out edges in subgraph
+    for (idx, _value) in outs.iter().enumerate() {
+        if usize::MAX == outs[idx] || 0 == outs[idx] {
+            wait_for_release.push(idx);
+        }
+    }
+    log::debug!("wait for release {:?}", wait_for_release);
+    log::debug!("parents {:?}", parents);
+    log::debug!("outs {:?}", outs);
+    while !wait_for_release.is_empty() {
+        let popped = wait_for_release.pop().unwrap();
+        for &parent in &parents[popped] {
+            outs[parent] -= 1;
+            if outs[parent] == 0 {
+                log::debug!(" {} found to be 0", parent);
+                wait_for_release.push(parent);
+            }
+        }
+        if outs[popped] != usize::MAX {
+            rst.push(popped);
+        }
+    }
+    log::debug!("topo sort:{:?}", rst);
+    rst
+}
+pub enum TopoDirection {
+    Up,
+    Down,
+}
+
+pub struct EgglogTypeRegistry {
+    enum_node_fns_map: HashMap<&'static str, TermToNode>,
+    variant2type_map: HashMap<&'static str, &'static str>,
+    container_node_fns_map: HashMap<(&'static str, &'static str), TermToNode>,
+}
+impl EgglogTypeRegistry {
+    pub fn new_with_inventory() -> Self {
+        let (enum_node_fns_map, variant2type_map) = Self::collect_enum_fns();
+        let container_node_fns_map = Self::collect_container_fns();
+        log::debug!("container node:{:?}", container_node_fns_map);
+        Self {
+            enum_node_fns_map,
+            container_node_fns_map,
+            variant2type_map,
+        }
+    }
+    pub fn collect_enum_fns() -> (
+        HashMap<&'static str, TermToNode>,
+        HashMap<&'static str, &'static str>,
+    ) {
+        let mut fns_map = HashMap::new();
+        let mut variant2type_map = HashMap::new();
+        inventory::iter::<Decl>
+            .into_iter()
+            .for_each(|decl| match decl {
+                Decl::EgglogBaseTy { name, cons } => cons.iter().for_each(|con| {
+                    fns_map.insert(con.cons_name, con.term_to_node);
+                    variant2type_map.insert(con.cons_name, *name);
+                }),
+                _ => {}
+            });
+        (fns_map, variant2type_map)
+    }
+    pub fn collect_container_fns() -> HashMap<(&'static str, &'static str), TermToNode> {
+        let mut map = HashMap::new();
+        inventory::iter::<Decl>
+            .into_iter()
+            .for_each(|decl| match *decl {
+                Decl::EgglogContainerTy {
+                    name: _,
+                    ele_ty_name,
+                    def_operator,
+                    term_to_node,
+                } => {
+                    map.insert((ele_ty_name, def_operator), term_to_node);
+                }
+                _ => {}
+            });
+        map
+    }
+    pub fn get_type_from_variant() {}
+    pub fn collect_type_defs() -> Vec<Command> {
+        let mut commands = vec![];
+        // split decls to avoid undefined sort
+        let mut types = Vec::<(Span, String, Subdatatypes)>::new();
+        for decl in inventory::iter::<Decl> {
+            match decl {
+                Decl::EgglogBaseTy { name, cons } => {
+                    types.push((
+                        span!(),
+                        name.to_string(),
+                        Subdatatypes::Variants(
+                            cons.iter()
+                                .map(|x| Variant {
+                                    span: span!(),
+                                    name: x.cons_name.to_string(),
+                                    types: x.input.iter().map(|y| y.to_string()).collect(),
+                                    cost: x.cost,
+                                })
+                                .collect(),
+                        ),
+                    ));
+                }
+                Decl::EgglogContainerTy {
+                    name,
+                    ele_ty_name,
+                    def_operator:_,
+                    term_to_node:_,
+                } => {
+                    let ele_ty = ele_ty_name.to_owned();
+                    let ele = crate::var!(ele_ty);
+                    types.push((
+                        span!(),
+                        name.to_string(),
+                        Subdatatypes::NewSort("Vec".to_string(), vec![ele]),
+                    ));
+                }
+                _ => {
+                    // do nothing
+                }
+            }
+        }
+        commands.push(Command::Datatypes {
+            span: span!(),
+            datatypes: types,
+        });
+        for decl in inventory::iter::<Decl> {
+            match decl {
+                Decl::EgglogFuncTy {
+                    name,
+                    input,
+                    output,
+                } => {
+                    commands.push(Command::Function {
+                        span: span!(),
+                        name: name.to_string(),
+                        schema: Schema {
+                            input: input.iter().map(<&str>::to_string).collect(),
+                            output: output.to_string(),
+                        },
+                        merge: Some(GenericExpr::Var(span!(), "new".to_owned())),
+                    });
+                }
+                _ => {}
+            }
+        }
+        commands
+    }
+    pub fn get_fn(&self, term_id: TermId, term_dag: &TermDag) -> Option<TermToNode> {
+        match term_dag.get(term_id) {
+            Term::Lit(_) => None,
+            Term::Var(_) => None,
+            Term::App(name, items) => self.enum_node_fns_map.get(name.as_str()).or_else(|| {
+                self.container_node_fns_map.get(&(
+                    match term_dag.get(*items.get(0).unwrap()) {
+                        Term::Lit(literal) => match literal {
+                            Literal::Int(_) => "i64",
+                            Literal::Float(_) => "f64",
+                            Literal::String(_) => "string",
+                            Literal::Bool(_) => "bool",
+                            Literal::Unit => {
+                                panic!()
+                            }
+                        },
+                        Term::Var(_) => {
+                            panic!()
+                        }
+                        Term::App(succ_variant, _) => {
+                            log::trace!("sub_name {}", succ_variant);
+                            let ty = self.variant2type_map.get(succ_variant.as_str()).unwrap();
+                            ty
+                        }
+                    },
+                    name.as_str(),
+                ))
+            }),
+        }
+        .cloned()
     }
 }

@@ -28,6 +28,7 @@ pub fn egglog_func(attr: TokenStream, item: TokenStream) -> TokenStream {
     };
 
     let output = args.output;
+    let output_ty = format_ident!("{}Ty",output);
     let struct_def_expanded = match &input.data {
         Data::Struct(data_struct) => {
             let name_node = format_ident!("{}", name);
@@ -48,12 +49,6 @@ pub fn egglog_func(attr: TokenStream, item: TokenStream) -> TokenStream {
                     quote!(#generic:AsRef<#ty>)
                 })
                 .collect::<Vec<_>>();
-            // let generics = data_struct
-            //     .fields
-            //     .iter()
-            //     .enumerate()
-            //     .map(|(count, _field)| format_ident!("T{}", count))
-            //     .collect::<Vec<_>>();
 
             let inventory_path = inventory_path();
             let _merge_option: proc_macro2::TokenStream = "no-merge".to_token_stream();
@@ -66,6 +61,7 @@ pub fn egglog_func(attr: TokenStream, item: TokenStream) -> TokenStream {
                     impl<T:SingletonGetter> egglog::wrap::EgglogFunc for #name_node<T>{
                         type Output=#output<T,()>;
                         type Input=(#(#input_types<T,()>,)*);
+                        type OutputTy=#output_ty;
                         const FUNC_NAME:&'static str = stringify!(#name_node);
                     }
                     impl<'a, T:TxSgl> #name_node<T> where T:TxSgl{
@@ -169,11 +165,13 @@ pub fn egglog_ty(_attr: TokenStream, item: TokenStream) -> TokenStream {
                 .map(|variant| {
                     let tys = variant_to_tys(&variant);
                     let variant_name = &variant.ident;
+                    let new_from_term_dyn_fn_name = format_ident!("new_{}_from_term_dyn",variant_name.to_string().to_snake_case());
                     quote! {  TyConstructor {  
                         cons_name: stringify!(#variant_name),
                         input:&[ #(stringify!(#tys)),* ] , 
                         output:stringify!(#name),
                         cost :None,
+                        term_to_node: #name::<(),()>::#new_from_term_dyn_fn_name,
                         unextractable :false,
                     } }
                 })
@@ -190,7 +188,10 @@ pub fn egglog_ty(_attr: TokenStream, item: TokenStream) -> TokenStream {
                     ]);
                 }
                 #inventory_path::submit!{
-                    Decl::EgglogBaseTy { name: #name_egglogty_impl::TY_NAME, cons: &#name_egglogty_impl::CONSTRUCTORS }
+                    Decl::EgglogBaseTy { 
+                        name: #name_egglogty_impl::TY_NAME,
+                        cons: &#name_egglogty_impl::CONSTRUCTORS 
+                    }
                 }
 
             };
@@ -211,11 +212,16 @@ pub fn egglog_ty(_attr: TokenStream, item: TokenStream) -> TokenStream {
                         const TY_NAME:&'static str = stringify!(#name);
                         const TY_NAME_LOWER:&'static str = stringify!(#name_lowercase);
                     }
-                    impl #egglog_path::wrap::EgglogVecTy for #name_egglogty_impl {
+                    impl #egglog_path::wrap::EgglogContainerTy for #name_egglogty_impl {
                         type EleTy = #first_generic_ty;
                     } 
                     #inventory_path::submit!{
-                        Decl::EgglogVecTy { name: #name_egglogty_impl::TY_NAME,ele_ty: <<#name_egglogty_impl as EgglogVecTy>::EleTy as EgglogTy>::TY_NAME }
+                        Decl::EgglogContainerTy { 
+                            name: #name_egglogty_impl::TY_NAME,
+                            ele_ty_name: <<#name_egglogty_impl as EgglogContainerTy>::EleTy as EgglogTy>::TY_NAME,
+                            def_operator:"vec-of", 
+                            term_to_node: #name::<(),()>::new_from_term_dyn
+                        }
                     }
                 };
                 vec_expanded
@@ -240,7 +246,7 @@ pub fn egglog_ty(_attr: TokenStream, item: TokenStream) -> TokenStream {
             let field_name = &f.ident.as_ref().unwrap();
             let first_generic = get_first_generic(&f.ty);
             // let field_sym_ty = get_sym_type(first_generic);
-            let (field_node_ty, is_basic_ty) =
+            let (field_node, is_basic_ty) =
                 match first_generic.to_token_stream().to_string().as_str() {
                     x if PANIC_TY_LIST.contains(&x) => {
                         panic!("{} not supported", x)
@@ -277,8 +283,8 @@ pub fn egglog_ty(_attr: TokenStream, item: TokenStream) -> TokenStream {
                             format!("(let {} (vec-of {}))",self.node.sym,self.node.ty.v.iter_mut().fold("".to_owned(), |s,item| s+ item.as_str()+" " ))
                         }
                         fn to_egglog(&self) -> EgglogAction{
-                            GenericAction::Let(span!(), self.cur_sym().to_string(), 
-                                GenericExpr::Call(self.span.into(),"vec-of", self.node.ty.v.iter().map(|x| x.to_var()).collect()).to_owned_str()
+                            #egglog_path::ast::GenericAction::Let(span!(), self.cur_sym().to_string(), 
+                                #egglog_path::ast::GenericExpr::Call(self.span.into(),"vec-of", self.node.ty.v.iter().map(|x| x.to_var()).collect()).to_owned_str()
                             )
                         }
                     }
@@ -291,8 +297,8 @@ pub fn egglog_ty(_attr: TokenStream, item: TokenStream) -> TokenStream {
                             format!("(let {} (vec-of {}))",self.cur_sym(),self.node.ty.v.iter().fold("".to_owned(), |s,item| s+ item.as_str()+" " ))
                         }
                         fn to_egglog(&self) -> EgglogAction{
-                            GenericAction::Let(span!(), self.cur_sym().to_string(), 
-                                GenericExpr::Call(self.span.into(), "vec-of", self.node.ty.v.iter().map(|x| x.to_var()).collect()).to_owned_str()
+                            #egglog_path::ast::GenericAction::Let(span!(), self.cur_sym().to_string(), 
+                                #egglog_path::ast::GenericExpr::Call(self.span.into(), "vec-of", self.node.ty.v.iter().map(|x| x.to_var()).collect()).to_owned_str()
                             )
                         }
                     }
@@ -314,6 +320,19 @@ pub fn egglog_ty(_attr: TokenStream, item: TokenStream) -> TokenStream {
                     }
                 }
             };
+            let field_assignment  = if is_basic_ty {
+                    quote! {
+                        children.map(|x| match term_dag.get(x) {
+                            Term::Lit(lit) => lit.clone().try_into().expect("literal type mismatch"),
+                            Term::Var(v) => panic!(),
+                            Term::App(app,v) => panic!(),
+                        }).collect()
+                    }
+                } else {
+                    quote! {
+                        children.iter().map(|x| term2sym.get(x).unwrap().typed()).collect()
+                    }
+                } ;
             let field_ty = match first_generic.to_token_stream().to_string().as_str() {
                 x if PANIC_TY_LIST.contains(&x) => {
                     panic!("{} not supported", x)
@@ -357,19 +376,45 @@ pub fn egglog_ty(_attr: TokenStream, item: TokenStream) -> TokenStream {
                     const _:() = {
                         use #egglog_path::wrap::*;
                         use #egglog_path::prelude::*;
-                        use #egglog_path::ast::*;
+                        use #egglog_path::*;
                         impl NodeInner<#name_egglogty_impl> for #name_inner{}
                         use std::marker::PhantomData;
                         static #name_counter: TyCounter<#name_egglogty_impl> = TyCounter::new();
                         impl<T:TxSgl> #name_node<T,()> {
                             #[track_caller]
-                            pub fn new(#field_name:Vec<&#field_node_ty>) -> #name_node<T,()>{
+                            pub fn new(#field_name:Vec<&#field_node>) -> #name_node<T,()>{
                                 let #field_name = #field_name.into_iter().map(|r| r.as_ref().sym).collect();
                                 use std::panic::Location;
                                 let node = Node{ ty: #name_inner{v:#field_name}, span:Some(Location::caller()),sym: #name_counter.next_sym(),_p: PhantomData, _s: PhantomData};
                                 let node = #name_node {node};
                                 T::on_new(&node);
                                 node
+                            }
+                            // /// with no side-effect (will not send command to EGraph or change node in WorkAreaGraph)
+                            // #[track_caller]
+                            // pub fn _new(#field_name:Vec<&#field_node>) -> #name_node<T,()>{
+                            //     let ty = #name_inner{ v: #field_name.into() };
+                            //     use std::panic::Location;
+                            //     let node = Node { ty, sym: #name_counter.next_sym(),span:Some(Location::caller()), _p:PhantomData, _s:PhantomData::<()>};
+                            //     let node = #name_node {node};
+                            //     node
+                            // }
+                            #[track_caller]
+                            pub fn new_from_term(term_id:TermId, term_dag: &TermDag, term2sym:&mut std::collections::HashMap<TermId, Sym>) -> #name_node<T,()>{
+                                let children = match term_dag.get(term_id){
+                                    Term::App(app,v) => v,
+                                    _=> panic!()
+                                };
+                                let ty = #name_inner{v:#field_assignment };
+                                use std::panic::Location;
+                                let node = Node { ty, sym: #name_counter.next_sym(),span:Some(Location::caller()), _p:PhantomData, _s:PhantomData::<()>};
+                                let node = #name_node {node};
+                                term2sym.insert(term_id, node.cur_sym());
+                                node
+                            }
+                            #[track_caller]
+                            pub fn new_from_term_dyn(term_id:TermId, term_dag: &TermDag, term2sym:&mut std::collections::HashMap<TermId, Sym>) -> Box<dyn EgglogNode>{
+                                Box::new(Self::new_from_term(term_id, term_dag, term2sym))
                             }
                         }
                         impl<T:SingletonGetter> EgglogNode for #name_node<T,()> {
@@ -379,7 +424,7 @@ pub fn egglog_ty(_attr: TokenStream, item: TokenStream) -> TokenStream {
                             fn succs(&self) -> Vec<Sym>{
                                 self.node.ty.v.iter().map(|s| s.erase()).collect()
                             }
-                            fn next_sym(&mut self) -> Sym{
+                            fn roll_sym(&mut self) -> Sym{
                                 let next_sym = #name_counter.next_sym();
                                 self.node.sym = next_sym;
                                 next_sym.erase()
@@ -432,7 +477,7 @@ pub fn egglog_ty(_attr: TokenStream, item: TokenStream) -> TokenStream {
                 .collect::<Vec<_>>();
 
             let to_egglog_string_match_arms = data_enum.variants.iter().map(|variant| {
-                let variant_idents = variant_to_field_ident(variant).collect::<Vec<_>>();
+                let variant_idents = variant_to_field_ident(variant);
                 let variant_name = &variant.ident;
                 let s = " {:.3}".repeat(variant_idents.len());
                 let format_str = format!("(let {{}} ({} {}))", variant_name, s);
@@ -440,12 +485,30 @@ pub fn egglog_ty(_attr: TokenStream, item: TokenStream) -> TokenStream {
                     format!(#format_str ,self.node.sym, #(#variant_idents),*)
                 }}
             });
+            let succs_match_arms = data_enum.variants.iter().map(|variant| {
+                let variant_idents = variant_to_field_ident(variant);
+                let variant_name = &variant.ident;
+                let vec_needed_syms:Vec<_> =
+                    variant_to_field_list_without_prefixed_ident_filter_out_basic_ty(variant);
+                quote! {#name_inner::#variant_name {#( #variant_idents ),*  } => {
+                    vec![#(#vec_needed_syms.erase()),*]
+                }}
+            });
+            let succs_mut_match_arms = data_enum.variants.iter().map(|variant| {
+                let variant_idents = variant_to_field_ident(variant);
+                let variant_name = &variant.ident;
+                let vec_needed_syms:Vec<_> =
+                    variant_to_field_list_without_prefixed_ident_filter_out_basic_ty(variant);
+                quote! {#name_inner::#variant_name {#( #variant_idents ),*  } => {
+                    vec![#(#vec_needed_syms.erase_mut()),*]
+                }}
+            });
             let to_egglog_match_arms = data_enum.variants.iter().map(|variant| {
-                let variant_fields = variant_to_field_ident(variant).collect::<Vec<_>>();
+                let variant_fields = variant_to_field_ident(variant);
                 let variant_name = &variant.ident;
                 quote! {#name_inner::#variant_name {#( #variant_fields ),*  } => {
-                    GenericAction::Let(span!(), self.cur_sym().to_string(), 
-                        GenericExpr::Call(span!(),
+                    #egglog_path::ast::GenericAction::Let(span!(), self.cur_sym().to_string(), 
+                        #egglog_path::ast::GenericExpr::Call(span!(),
                             stringify!(#variant_name),
                             vec![#(#variant_fields.to_var()),*]).to_owned_str()
                     )
@@ -453,13 +516,13 @@ pub fn egglog_ty(_attr: TokenStream, item: TokenStream) -> TokenStream {
             });
             let locate_latest_match_arms = data_enum.variants.iter().map(|variant| {
                 let variant_idents = variant_to_field_ident(variant);
-                let mapped_variant_idents = variant_to_mapped_ident_list(
+                let mapped_variant_idents = variant_to_mapped_ident_type_list(
                     variant,
-                    |_| {
-                        quote! {}
+                    |_,_| {
+                        Some(quote! {})
                     },
-                    |x| {
-                        quote! { T::set_latest(#x.erase_mut());}
+                    |x,_| {
+                        Some(quote! { T::set_latest(#x.erase_mut());})
                     },
                 );
                 let variant_name = &variant.ident;
@@ -473,13 +536,13 @@ pub fn egglog_ty(_attr: TokenStream, item: TokenStream) -> TokenStream {
 
             let locate_next_match_arms = data_enum.variants.iter().map(|variant| {
                 let variant_idents = variant_to_field_ident(variant);
-                let mapped_variant_idents = variant_to_mapped_ident_list(
+                let mapped_variant_idents = variant_to_mapped_ident_type_list(
                     variant,
-                    |_| {
-                        quote! {}
+                    |_,_| {
+                        Some(quote! {})
                     },
-                    |x| {
-                        quote! {T::set_next(#x.erase_mut());}
+                    |x,_| {
+                        Some(quote! {T::set_next(#x.erase_mut());})
                     },
                 );
                 let variant_name = &variant.ident;
@@ -492,13 +555,13 @@ pub fn egglog_ty(_attr: TokenStream, item: TokenStream) -> TokenStream {
             });
             let locate_prev_match_arms = data_enum.variants.iter().map(|variant| {
                 let variant_idents = variant_to_field_ident(variant);
-                let mapped_variant_idents = variant_to_mapped_ident_list(
+                let mapped_variant_idents = variant_to_mapped_ident_type_list(
                     variant,
-                    |_| {
-                        quote! {}
+                    |_,_| {
+                        Some(quote! {})
                     },
-                    |x| {
-                        quote! {T::set_prev(#x.erase_mut());}
+                    |x,_| {
+                        Some(quote! {T::set_prev(#x.erase_mut());})
                     },
                 );
                 let variant_name = &variant.ident;
@@ -510,20 +573,69 @@ pub fn egglog_ty(_attr: TokenStream, item: TokenStream) -> TokenStream {
                 }
             });
             let fns = data_enum.variants.iter().map(|variant|{
-                let ref_node_list = variant_to_ref_node_list(&variant,&name);
-                let field_idents = variants_to_assign_node_field_list(&variant);
+                let ref_node_list = variant_to_ref_node_list(&variant);
+                let _new_fn_args= variant_to_sym_list(&variant);
+                let field_idents_assign = variant_to_assign_node_field_list(&variant);
+                let _new_fn_field_idents_assign = variant_to_typed_assign_node_field_list(&variant);
+                let field_idents = variant_to_field_ident(&variant);
                 let variant_name = &variant.ident;
                 let new_fn_name = format_ident!("new_{}",variant_name.to_string().to_snake_case());
+                let _new_fn_name = format_ident!("_new_{}",variant_name.to_string().to_snake_case());
+                let new_from_term_fn_name = format_ident!("new_{}_from_term",variant_name.to_string().to_snake_case());
+                let new_from_term_dyn_fn_name = format_ident!("new_{}_from_term_dyn",variant_name.to_string().to_snake_case());
+                let field_ty = variant_to_tys(&variant);
+                let field_assignments: Vec<_> = field_idents.into_iter().zip(field_ty.iter()).enumerate().map(|(i, (ident, ty))| {
+                    if is_basic_ty(ty) {
+                        quote! {
+                            #ident: match term_dag.get(children[#i]) {
+                                Term::Lit(lit) => lit.clone().try_into().expect("literal type mismatch"),
+                                Term::Var(v) => panic!(),
+                                Term::App(app,v) => panic!(),
+                            }
+                        }
+                    } else {
+                        quote! {
+                            #ident: term2sym[&children[#i]].typed()
+                        }
+                    }
+                }).collect();
 
                 quote! {
                     #[track_caller]
                     pub fn #new_fn_name(#(#ref_node_list),*) -> #name_node<T,#variant_name>{
-                        let ty = #name_inner::#variant_name {#(#field_idents),*  };
+                        let ty = #name_inner::#variant_name {#(#field_idents_assign),*  };
                         use std::panic::Location;
                         let node = Node { ty, sym: #name_counter.next_sym(),span:Some(Location::caller()), _p:PhantomData, _s:PhantomData::<#variant_name>};
                         let node = #name_node {node};
                         T::on_new(&node);
                         node
+                    }
+                    /// with no side-effect (will not send command to EGraph or change node in WorkAreaGraph)
+                    #[track_caller]
+                    pub fn #_new_fn_name(#(#_new_fn_args),*) -> #name_node<T,#variant_name>{
+                        let ty = #name_inner::#variant_name {#(#_new_fn_field_idents_assign),*  };
+                        use std::panic::Location;
+                        let node = Node { ty, sym: #name_counter.next_sym(),span:Some(Location::caller()), _p:PhantomData, _s:PhantomData::<#variant_name>};
+                        let node = #name_node {node};
+                        node
+                    }
+                    /// you should guarantee all the dep nodes has been init and store as (TermId, Sym) in term2sym
+                    #[track_caller]
+                    pub fn #new_from_term_fn_name(term_id:TermId, term_dag: &TermDag, term2sym:&mut std::collections::HashMap<TermId, Sym>) -> #name_node<T,#variant_name>{
+                        let children = match term_dag.get(term_id){
+                            Term::App(app,v) => v,
+                            _=> panic!()
+                        };
+                        let ty = #name_inner::#variant_name {#(#field_assignments),*  };
+                        use std::panic::Location;
+                        let node = Node { ty, sym: #name_counter.next_sym(),span:Some(Location::caller()), _p:PhantomData, _s:PhantomData};
+                        let node = #name_node {node};
+                        term2sym.insert(term_id, node.cur_sym());
+                        node
+                    }
+                    #[track_caller]
+                    pub fn #new_from_term_dyn_fn_name(term_id:TermId, term_dag: &TermDag, term2sym:&mut std::collections::HashMap<TermId, Sym>) -> Box<dyn EgglogNode>{
+                        Box::new(Self::#new_from_term_fn_name(term_id, term_dag, term2sym))
                     }
                 }
             });
@@ -540,15 +652,15 @@ pub fn egglog_ty(_attr: TokenStream, item: TokenStream) -> TokenStream {
             });
 
             let set_fns = data_enum.variants.iter().map(|variant|{
-                let ref_node_list = variant_to_ref_node_list(&variant,&name);
-                let assign_node_field_list = variants_to_assign_node_field_list_without_prefixed_ident(&variant);
-                let field_idents = variant_to_field_ident(variant).collect::<Vec<_>>();
+                let ref_node_list = variant_to_ref_node_list(&variant);
+                let assign_node_field_list = variant_to_assign_node_field_list_without_prefixed_ident(&variant);
+                let field_idents = variant_to_field_ident(variant);
                 let variant_name = &variant.ident;
 
                 let set_fns = assign_node_field_list.iter().zip(ref_node_list.iter().zip(field_idents.iter()
                     )).map(
                     |(assign_node_field,(ref_node,field_ident))|{
-                        let set_fn_name = format_ident!("set_{}",field_ident);
+                        let set_fn_name = format_ident!("set_{}",field_ident.to_string());
                         quote! {
                             /// set fn of node, firstly update the sym version and specified field and then informs rx what happen on this node
                             /// rx's behavior depends on whether version control is enabled
@@ -568,7 +680,7 @@ pub fn egglog_ty(_attr: TokenStream, item: TokenStream) -> TokenStream {
                 let get_sym_fns = sym_list.iter().zip(field_idents.iter()
                     ).map(
                     |(sym,field_ident)|{
-                        let get_fn_name = format_ident!("{}_sym",field_ident);
+                        let get_fn_name = format_ident!("{}_sym",field_ident.to_string());
                         quote! {
                             pub fn #get_fn_name(&self) -> #sym{
                                 if let #name_inner::#variant_name{ #(#field_idents),*} = &self.node.ty{
@@ -583,7 +695,7 @@ pub fn egglog_ty(_attr: TokenStream, item: TokenStream) -> TokenStream {
                 let get_mut_sym_fns = sym_list.iter().zip(field_idents.iter()
                     ).map(
                     |(sym,field_ident)|{
-                        let get_fn_name = format_ident!("{}_sym_mut",field_ident);
+                        let get_fn_name = format_ident!("{}_sym_mut",field_ident.to_string());
                         quote! {
                             pub fn #get_fn_name(&mut self) -> &mut #sym{
                                 if let #name_inner::#variant_name{ #(#field_idents),*} = &mut self.node.ty{
@@ -597,9 +709,7 @@ pub fn egglog_ty(_attr: TokenStream, item: TokenStream) -> TokenStream {
                 );
 
                 let vec_needed_syms:Vec<_> =
-                    variant_to_field_list_without_prefixed_ident_filter_out_basic_ty(variant)
-                    .into_iter()
-                    .map(|x| format_ident!("{}",x.to_string())).collect();
+                    variant_to_field_list_without_prefixed_ident_filter_out_basic_ty(variant);
 
                 quote! {
                     #[allow(unused_variables)]
@@ -629,7 +739,7 @@ pub fn egglog_ty(_attr: TokenStream, item: TokenStream) -> TokenStream {
                                 panic!()
                             }
                         }
-                        fn next_sym(&mut self) -> Sym{
+                        fn roll_sym(&mut self) -> Sym{
                             let next_sym = #name_counter.next_sym();
                             self.node.sym = next_sym;
                             next_sym.erase()
@@ -666,22 +776,32 @@ pub fn egglog_ty(_attr: TokenStream, item: TokenStream) -> TokenStream {
                 }
                 #[allow(unused_variables)]
                 const _:() = {
+                    use #egglog_path::*;
                     use std::marker::PhantomData;
                     use #egglog_path::wrap::*;
                     use #egglog_path::prelude::*;
-                    use #egglog_path::ast::*;
+                    use #egglog_path::ast::{GenericAction, GenericExpr};
                     #(#enum_variant_tys_def)*
                     impl<T:TxSgl> #name_node<T,()> {
                         #(#fns)*
                     }
+                    impl<T:RxSgl, S: EgglogEnumVariantTy> #name_node<T,S> where Self:EgglogNode {
+                        pub fn pull(&self){
+                            T::on_pull::<#name_egglogty_impl>(self)
+                        }
+                    }
                     impl<T:SingletonGetter> EgglogNode for #name_node<T,()> {
                         fn succs_mut(&mut self) -> Vec<&mut Sym>{
-                            vec![]
+                            match &mut self.node.ty{
+                                #(#succs_mut_match_arms),*
+                            }
                         }
                         fn succs(&self) -> Vec<Sym>{
-                            vec![]
+                            match &self.node.ty{
+                                #(#succs_match_arms),*
+                            }
                         }
-                        fn next_sym(&mut self) -> Sym{
+                        fn roll_sym(&mut self) -> Sym{
                             let next_sym = #name_counter.next_sym();
                             self.node.sym = next_sym;
                             next_sym.erase()
