@@ -79,8 +79,8 @@ fn main() {
     };
     // Saturate
     while egraph.run_rules(&[add_comm, add_assoc]).unwrap().changed {}
-    let canon_left = egraph.get_canon_in_uf(left_root);
-    let canon_right = egraph.get_canon_in_uf(right_root);
+    let canon_left = egraph.get_canon_repr(left_root, ColumnTy::Id);
+    let canon_right = egraph.get_canon_repr(right_root, ColumnTy::Id);
     assert_eq!(canon_left, canon_right);
 
     // Don't drop the egraph since we are about to exit. Egglog does this too.

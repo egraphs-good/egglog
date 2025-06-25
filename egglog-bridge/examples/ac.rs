@@ -101,8 +101,8 @@ fn main() {
                 break;
             }
         }
-        let canon_left = egraph.get_canon_in_uf(left_root);
-        let canon_right = egraph.get_canon_in_uf(right_root);
+        let canon_left = egraph.get_canon_repr(left_root, ColumnTy::Id);
+        let canon_right = egraph.get_canon_repr(right_root, ColumnTy::Id);
         assert_eq!(canon_left, canon_right);
         println!("Time elapsed: {:?}", start.elapsed());
         // NB: We don't include dropping the egraph in the time. egglog main doesn't drop the
