@@ -90,8 +90,8 @@ fn ac_test(tracing: bool, can_subsume: bool) {
     };
     // Saturate
     while egraph.run_rules(&[add_comm, add_assoc]).unwrap().changed {}
-    let canon_left = egraph.get_canon(left_root);
-    let canon_right = egraph.get_canon(right_root);
+    let canon_left = egraph.get_canon_in_uf(left_root);
+    let canon_right = egraph.get_canon_in_uf(right_root);
     assert_eq!(canon_left, canon_right, "failed to reassociate!");
     if tracing {
         let mut row = Vec::new();
@@ -201,8 +201,8 @@ fn ac_fail() {
     };
     // Saturate
     while egraph.run_rules(&[add_comm, add_assoc]).unwrap().changed {}
-    let canon_left = egraph.get_canon(left_root);
-    let canon_right = egraph.get_canon(right_root);
+    let canon_left = egraph.get_canon_in_uf(left_root);
+    let canon_right = egraph.get_canon_in_uf(right_root);
     assert_ne!(canon_left, canon_right);
 }
 
@@ -717,7 +717,7 @@ fn container_test() {
 
     assert_unordered_eq(
         dump_vecs(&egraph),
-        vec![vec![], vec![egraph.get_canon(ids[1])]],
+        vec![vec![], vec![egraph.get_canon_in_uf(ids[1])]],
     );
 
     assert!(egraph.run_rules(&[vec_expand]).unwrap().changed);
@@ -740,7 +740,7 @@ fn container_test() {
     }
     assert!(saturated, "failed to saturate after 20 iterations");
 
-    let one_id = egraph.get_canon(ids[1]);
+    let one_id = egraph.get_canon_in_uf(ids[1]);
     assert_unordered_eq(
         dump_vecs(&egraph),
         vec![

@@ -238,10 +238,17 @@ impl EGraph {
     /// Look up the canonical value for `val` in the union-find.
     ///
     /// If the value has never been inserted into the union-find, `val` is returned.
-    pub fn get_canon(&self, val: Value) -> Value {
+    fn get_canon_in_uf(&self, val: Value) -> Value {
         let table = self.db.get_table(self.uf_table);
         let row = table.get_row(&[val]);
         row.map(|row| row.vals[1]).unwrap_or(val)
+    }
+
+    pub fn get_canon_repr(&self, val: Value, ty: ColumnTy) -> Value {
+        match  ty {
+            ColumnTy::Id => self.get_canon_in_uf(val),
+            ColumnTy::Base(_) => val,
+        }
     }
 
     fn term_table(&mut self, table: TableId) -> TableId {
@@ -328,7 +335,7 @@ impl EGraph {
             .new_buffer()
             .stage_insert(&extended_row);
         self.flush_updates();
-        self.get_canon(res)
+        self.get_canon_in_uf(res)
     }
 
     /// Get an id corresponding to the given term, inserting the value into the
@@ -477,7 +484,7 @@ impl EGraph {
         if !self.tracing {
             return Err(ProofReconstructionError::TracingNotEnabled.into());
         }
-        if self.get_canon(id1) != self.get_canon(id2) {
+        if self.get_canon_in_uf(id1) != self.get_canon_in_uf(id2) {
             // These terms aren't equal. Reconstruct the relevant terms so as to
             // get a nicer error message on the way out.
             let p1 = self.explain_term_inner(id1, &mut Default::default());
