@@ -59,9 +59,9 @@ dyn-clone = "1.0.17"
 
 # Backend
 # TODO: move egglog-backend repo into core egglog repo
-core-relations = { git = "https://github.com/egraphs-good/egglog-backend.git", rev = "a0b98d3" }
-egglog-bridge = { git = "https://github.com/egraphs-good/egglog-backend.git", rev = "a0b98d3" }
-numeric-id = { git = "https://github.com/egraphs-good/egglog-backend.git", rev = "a0b98d3" }
+core-relations = { git = "https://github.com/egraphs-good/egglog-backend.git", rev = "c4686e1" }
+egglog-bridge = { git = "https://github.com/egraphs-good/egglog-backend.git", rev = "c4686e1" }
+numeric-id = { git = "https://github.com/egraphs-good/egglog-backend.git", rev = "c4686e1" }
 
 [build-dependencies]
 chrono = { version = "0.4", default-features = false, features = ["now"], optional = true }
