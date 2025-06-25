@@ -675,6 +675,29 @@ fn test_value_to_classid() {
 }
 
 #[test]
+fn test_serialize_617() {
+    let program = "
+        (sort Node)
+        (constructor mk (i64) Node)
+        (constructor mkb (i64) Node)
+        (rewrite (mkb x) (mk x))
+
+        (mkb 1) (mkb 3) (mkb 5) (mkb 6)
+
+        (union (mk 1) (mk 3))
+        (union (mk 3) (mk 5))
+
+        (run-schedule (saturate (run)))";
+
+    let mut egraph = EGraph::default();
+    egraph.parse_and_run_program(None, program).unwrap();
+
+    let serialized = egraph.serialize(SerializeConfig::default());
+    assert_eq!(serialized.class_data.len(), 6);
+    assert_eq!(serialized.nodes.len(), 12);
+}
+
+#[test]
 fn test_serialize_subsume_status() {
     let mut egraph = EGraph::default();
 
