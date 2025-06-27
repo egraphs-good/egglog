@@ -244,8 +244,12 @@ impl EGraph {
         row.map(|row| row.vals[1]).unwrap_or(val)
     }
 
+    /// Get the canonical representation for `val` based on type.
+    ///
+    /// For [`ColumnTy::Id`], it looks up the union find; otherwise,
+    /// it returns the value itself.
     pub fn get_canon_repr(&self, val: Value, ty: ColumnTy) -> Value {
-        match  ty {
+        match ty {
             ColumnTy::Id => self.get_canon_in_uf(val),
             ColumnTy::Base(_) => val,
         }
