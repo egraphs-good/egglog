@@ -118,8 +118,8 @@ impl BaseSort for BigRatSort {
         let numer_as_string = termdag.lit(Literal::String(numer.to_string()));
         let denom_as_string = termdag.lit(Literal::String(denom.to_string()));
 
-        let numer_term = termdag.app("from_string".to_owned(), vec![numer_as_string]);
-        let denom_term = termdag.app("from_string".to_owned(), vec![denom_as_string]);
+        let numer_term = termdag.app("from-string".to_owned(), vec![numer_as_string]);
+        let denom_term = termdag.app("from-string".to_owned(), vec![denom_as_string]);
 
         termdag.app("bigrat".to_owned(), vec![numer_term, denom_term])
     }
