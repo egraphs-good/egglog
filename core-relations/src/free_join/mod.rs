@@ -35,6 +35,7 @@ use self::plan::Plan;
 use crate::action::{ExecutionState, PredictedVals};
 
 pub(crate) mod execute;
+pub(crate) mod frame_update;
 pub(crate) mod plan;
 
 define_id!(
@@ -102,6 +103,7 @@ pub(crate) struct VarInfo {
     /// Whether or not this variable shows up in the "actions" portion of a
     /// rule.
     pub(crate) used_in_rhs: bool,
+    pub(crate) defined_in_rhs: bool,
 }
 
 pub(crate) type HashIndex = Arc<ResettableOnceLock<Index<TupleIndex>>>;
@@ -192,15 +194,12 @@ pub(crate) trait ExternalFunctionExt: ExternalFunction {
         let pool: Pool<Vec<Value>> = with_pool_set(|ps| ps.get_pool().clone());
         let mut out = pool.get();
         out.reserve(mask.len());
-        mask.iter_dynamic(
-            pool,
-            args.iter().map(|v| match v {
-                QueryEntry::Var(v) => ValueSource::Slice(&bindings[*v]),
-                QueryEntry::Const(c) => ValueSource::Const(*c),
-            }),
-        )
-        .fill_vec(&mut out, Value::stale, |_, args| self.invoke(state, &args));
-        bindings.insert(out_var, out);
+        for_each_binding_with_mask!(mask, args, bindings, |iter| {
+            iter.fill_vec(&mut out, Value::stale, |_, args| {
+                self.invoke(state, args.as_slice())
+            });
+        });
+        bindings.insert(out_var, &out);
     }
 
     /// A variant of [`ExternalFunctionExt::invoke_batch`] that overwrites the output variable,
@@ -217,19 +216,11 @@ pub(crate) trait ExternalFunctionExt: ExternalFunction {
         args: &[QueryEntry],
         out_var: Variable,
     ) {
-        let pool: Pool<Vec<Value>> = with_pool_set(|ps| ps.get_pool().clone());
-        let mut out = bindings
-            .take(out_var)
-            .expect("output variable must be bound");
-        mask.iter_dynamic(
-            pool,
-            args.iter().map(|v| match v {
-                QueryEntry::Var(v) => ValueSource::Slice(&bindings[*v]),
-                QueryEntry::Const(c) => ValueSource::Const(*c),
-            }),
-        )
-        .assign_vec_and_retain(&mut out, |_, args| self.invoke(state, &args));
-        bindings.insert(out_var, out);
+        let mut out = bindings.take(out_var).expect("out_var must be bound");
+        for_each_binding_with_mask!(mask, args, bindings, |iter| {
+            iter.assign_vec_and_retain(&mut out.vals, |_, args| self.invoke(state, &args))
+        });
+        bindings.replace(out);
     }
 }
 
@@ -315,7 +306,7 @@ impl Database {
     }
 
     /// Initialize a new rulse set to run against this database.
-    pub fn new_rule_set(&mut self) -> RuleSetBuilder {
+    pub fn new_rule_set(&mut self) -> RuleSetBuilder<'_> {
         RuleSetBuilder::new(self)
     }
 
@@ -409,7 +400,7 @@ impl Database {
         f(&mut state)
     }
 
-    pub(crate) fn read_only_view(&self) -> DbView {
+    pub(crate) fn read_only_view(&self) -> DbView<'_> {
         DbView {
             table_info: &self.tables,
             counters: &self.counters,

@@ -11,20 +11,6 @@ static GLOBAL: MiMalloc = MiMalloc;
 #[allow(clippy::disallowed_macros)]
 fn main() {
     env_logger::init();
-    #[cfg(feature = "serial_examples")]
-    {
-        rayon::ThreadPoolBuilder::new()
-            .num_threads(1)
-            .build_global()
-            .unwrap();
-    }
-    #[cfg(not(feature = "serial_examples"))]
-    {
-        rayon::ThreadPoolBuilder::new()
-            .num_threads(16)
-            .build_global()
-            .unwrap();
-    }
     for _ in 0..2 {
         let start = Instant::now();
         const N: usize = 12;

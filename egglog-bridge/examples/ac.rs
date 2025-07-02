@@ -9,20 +9,6 @@ static GLOBAL: MiMalloc = MiMalloc;
 fn main() {
     const N: usize = 13;
     env_logger::init();
-    #[cfg(feature = "serial_examples")]
-    {
-        rayon::ThreadPoolBuilder::new()
-            .num_threads(1)
-            .build_global()
-            .unwrap();
-    }
-    #[cfg(not(feature = "serial_examples"))]
-    {
-        rayon::ThreadPoolBuilder::new()
-            .num_threads(16)
-            .build_global()
-            .unwrap();
-    }
 
     for _ in 0..2 {
         let start = web_time::Instant::now();

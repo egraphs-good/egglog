@@ -72,7 +72,7 @@ fn fill_vec() {
 
     // The vector itself should have i32::MAX in for the odd indexes.
     for (i, x) in out.iter().copied().enumerate() {
-        if i % 2 == 0 {
+        if i.is_multiple_of(2) {
             assert_eq!(x, i as i32);
         } else {
             assert_eq!(x, i32::MAX);

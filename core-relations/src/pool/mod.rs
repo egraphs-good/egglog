@@ -17,7 +17,6 @@ use numeric_id::{DenseIdMap, IdVec};
 use crate::{
     action::{Instr, PredictedVals},
     common::{HashMap, HashSet, IndexMap, IndexSet, ShardId, Value},
-    free_join::execute::FrameUpdate,
     hash_index::{BufferedSubset, ColumnIndex, TableEntry},
     offsets::SortedOffsetVector,
     table::TableEntry as SwTableEntry,
@@ -430,8 +429,6 @@ pool_set! {
         constraints: Vec<Constraint> [ 1 << 20 ],
         bitsets: FixedBitSet [ 1 << 20 ],
         instrs: Vec<Instr> [ 1 << 20 ],
-        frame_updates: FrameUpdate [ 1 << 25 ],
-        frame_update_vecs: Vec<Pooled<FrameUpdate>> [ 1 << 20 ],
         tuple_indexes: HashTable<TableEntry<BufferedSubset>> [ 1 << 20 ],
         staged_outputs: HashTable<SwTableEntry> [ 1 << 25 ],
         predicted_vals: PredictedVals [ 1 << 20 ],

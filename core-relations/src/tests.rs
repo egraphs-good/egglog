@@ -964,7 +964,7 @@ fn lookup_with_fallback_partial_success() {
     };
     let assert_even = db.add_external_function(make_external_func(|_, args| {
         let [x] = args else { panic!() };
-        if x.rep() % 2 == 0 {
+        if x.rep().is_multiple_of(2) {
             Some(*x)
         } else {
             None
@@ -1048,7 +1048,7 @@ fn call_external_with_fallback() {
     db.merge_all();
     let assert_even = db.add_external_function(make_external_func(|_, args| {
         let [x] = args else { panic!() };
-        if x.rep() % 2 == 0 {
+        if x.rep().is_multiple_of(2) {
             Some(*x)
         } else {
             None

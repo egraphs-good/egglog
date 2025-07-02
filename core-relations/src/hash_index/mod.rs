@@ -149,7 +149,7 @@ pub(crate) trait IndexBase {
     /// Remove any existing entries in the index.
     fn clear(&mut self);
     /// Get the subset corresponding to this key, if there is one.
-    fn get_subset(&self, key: &Self::Key) -> Option<SubsetRef>;
+    fn get_subset(&self, key: &Self::Key) -> Option<SubsetRef<'_>>;
     /// Add the given key and row id to the table.
     fn add_row(&mut self, key: &Self::WriteKey, row: RowId);
     /// Merge the contents of the [`TaggedRowBuffer`] into the table.

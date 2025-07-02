@@ -56,7 +56,7 @@ impl<T: Send + Sync> ReadLock<T> for ReadOptimizedLock<T> {
     fn new(data: T) -> Self {
         ReadOptimizedLock::new(data)
     }
-    fn read(&self) -> MutexReader<T> {
+    fn read(&self) -> MutexReader<'_, T> {
         self.read()
     }
 }

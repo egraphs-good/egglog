@@ -77,39 +77,6 @@ impl AtomicInt for AtomicUsize {
     }
 }
 
-impl<T: AtomicInt> AtomicInt for Padded<T> {
-    type Underlying = T::Underlying;
-
-    fn from_usize(value: usize) -> Self {
-        Padded(T::from_usize(value))
-    }
-    fn as_usize(value: T::Underlying) -> usize {
-        T::as_usize(value)
-    }
-
-    fn load(&self) -> T::Underlying {
-        self.0.load()
-    }
-    fn store(&self, value: T::Underlying) {
-        self.0.store(value)
-    }
-    fn cas(
-        &self,
-        current: T::Underlying,
-        new: T::Underlying,
-    ) -> Result<T::Underlying, T::Underlying> {
-        self.0.cas(current, new)
-    }
-}
-
-/// Pad a given atomic integer type out to a full cache line, avoiding false
-/// sharing.
-///
-/// We aren't currently using this because it doesn't appear to help.
-#[repr(align(64))]
-#[derive(Default)]
-pub(crate) struct Padded<T>(T);
-
 /*
 
 We could do the following, but we don't have good reason to believe it is

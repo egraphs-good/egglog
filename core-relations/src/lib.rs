@@ -1,6 +1,7 @@
 #[macro_use]
 #[cfg(test)]
 pub(crate) mod table_shortcuts;
+#[macro_use]
 pub(crate) mod action;
 pub(crate) mod base_values;
 pub(crate) mod common;

@@ -160,7 +160,7 @@ fn basic_parallel_vec_write() {
             let v = v.clone();
             thread::spawn(move || {
                 let dst = v.write_contents((0..PER_THREAD).map(|j| i * PER_THREAD + j + 100));
-                assert!(dst % 10 == 0);
+                assert!(dst.is_multiple_of(10));
                 finish.wait();
             })
         })

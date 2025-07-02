@@ -3,6 +3,7 @@
 use std::{iter::once, sync::Arc};
 
 use numeric_id::{define_id, DenseIdMap, IdVec, NumericId};
+use smallvec::SmallVec;
 use thiserror::Error;
 
 use crate::{
@@ -24,7 +25,13 @@ define_id!(pub RuleId, u32, "An identifier for a rule in a rule set");
 pub struct CachedPlan {
     plan: Plan,
     desc: String,
-    actions: Arc<Pooled<Vec<Instr>>>,
+    actions: ActionInfo,
+}
+
+#[derive(Debug, Clone)]
+pub(crate) struct ActionInfo {
+    pub(crate) used_vars: SmallVec<[Variable; 4]>,
+    pub(crate) instrs: Arc<Pooled<Vec<Instr>>>,
 }
 
 /// A set of rules to run against a [`Database`].
@@ -40,7 +47,7 @@ pub struct RuleSet {
     /// later on, most of the core logic would still work but the accounting logic could get more
     /// complex.
     pub(crate) plans: IdVec<RuleId, (Plan, String /* description */, ActionId)>,
-    pub(crate) actions: DenseIdMap<ActionId, Arc<Pooled<Vec<Instr>>>>,
+    pub(crate) actions: DenseIdMap<ActionId, ActionInfo>,
 }
 
 impl RuleSet {
@@ -192,6 +199,7 @@ impl<'outer, 'a> QueryBuilder<'outer, 'a> {
         self.query.var_info.push(VarInfo {
             occurrences: Default::default(),
             used_in_rhs: false,
+            defined_in_rhs: false,
         })
     }
 
@@ -200,6 +208,13 @@ impl<'outer, 'a> QueryBuilder<'outer, 'a> {
             if let QueryEntry::Var(v) = entry {
                 self.query.var_info[*v].used_in_rhs = true;
             }
+        }
+    }
+
+    fn mark_defined(&mut self, entry: &QueryEntry) {
+        // TODO: use some of this information in query planning, e.g. dedup at match time.
+        if let QueryEntry::Var(v) = entry {
+            self.query.var_info[*v].defined_in_rhs = true;
         }
     }
 
@@ -370,7 +385,18 @@ impl RuleBuilder<'_, '_> {
     }
     pub fn build_with_description(mut self, desc: impl Into<String>) -> RuleId {
         // Generate an id for our actions and slot them in.
-        let action_id = self.qb.rsb.rule_set.actions.push(Arc::new(self.qb.instrs));
+        let used_vars =
+            SmallVec::from_iter(self.qb.query.var_info.iter().filter_map(|(v, info)| {
+                if info.used_in_rhs && !info.defined_in_rhs {
+                    Some(v)
+                } else {
+                    None
+                }
+            }));
+        let action_id = self.qb.rsb.rule_set.actions.push(ActionInfo {
+            instrs: Arc::new(self.qb.instrs),
+            used_vars,
+        });
         self.qb.query.action = action_id;
         // Plan the query
         let plan = self.qb.rsb.db.plan_query(self.qb.query);
@@ -386,6 +412,7 @@ impl RuleBuilder<'_, '_> {
     pub fn read_counter(&mut self, counter: CounterId) -> Variable {
         let dst = self.qb.new_var();
         self.qb.instrs.push(Instr::ReadCounter { counter, dst });
+        self.qb.mark_defined(&dst.into());
         dst
     }
 
@@ -425,6 +452,7 @@ impl RuleBuilder<'_, '_> {
                 WriteVal::QueryEntry(qe) => Some(qe),
                 WriteVal::IncCounter(_) | WriteVal::CurrentVal(_) => None,
             }));
+        self.qb.mark_defined(&res.into());
         Ok(res)
     }
 
@@ -459,6 +487,7 @@ impl RuleBuilder<'_, '_> {
         });
         self.qb.mark_used(args);
         self.qb.mark_used(&[default]);
+        self.qb.mark_defined(&res.into());
         Ok(res)
     }
 
@@ -490,6 +519,7 @@ impl RuleBuilder<'_, '_> {
             dst_var: res,
         });
         self.qb.mark_used(args);
+        self.qb.mark_defined(&res.into());
         Ok(res)
     }
 
@@ -569,6 +599,7 @@ impl RuleBuilder<'_, '_> {
             dst: res,
         });
         self.qb.mark_used(args);
+        self.qb.mark_defined(&res.into());
         Ok(res)
     }
 
@@ -602,6 +633,7 @@ impl RuleBuilder<'_, '_> {
         });
         self.qb.mark_used(key);
         self.qb.mark_used(func_args);
+        self.qb.mark_defined(&res.into());
         Ok(res)
     }
 
@@ -622,6 +654,7 @@ impl RuleBuilder<'_, '_> {
         });
         self.qb.mark_used(args1);
         self.qb.mark_used(args2);
+        self.qb.mark_defined(&res.into());
         Ok(res)
     }
 

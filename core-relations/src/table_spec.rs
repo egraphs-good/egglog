@@ -6,7 +6,6 @@
 
 use std::{
     any::Any,
-    iter,
     marker::PhantomData,
     ops::{Deref, DerefMut},
 };
@@ -458,43 +457,12 @@ impl<T: Table> TableWrapper for WrapperImpl<T> {
     ) {
         let table = table.as_any().downcast_ref::<T>().unwrap();
         let mut out = with_pool_set(PoolSet::get::<Vec<Value>>);
-        match args {
-            [QueryEntry::Var(v)] => {
-                mask.iter(&bindings[*v])
-                    .fill_vec(&mut out, Value::stale, |_, arg| {
-                        table.get_row_column(&[*arg], col)
-                    });
-            }
-            [QueryEntry::Var(v1), QueryEntry::Var(v2)] => {
-                mask.iter(&bindings[*v1]).zip(&bindings[*v2]).fill_vec(
-                    &mut out,
-                    Value::stale,
-                    |_, (a1, a2)| table.get_row_column(&[*a1, *a2], col),
-                );
-            }
-            [QueryEntry::Var(v1), QueryEntry::Var(v2), QueryEntry::Var(v3)] => {
-                mask.iter(&bindings[*v1])
-                    .zip(&bindings[*v2])
-                    .zip(&bindings[*v3])
-                    .fill_vec(&mut out, Value::stale, |_, ((a1, a2), a3)| {
-                        table.get_row_column(&[*a1, *a2, *a3], col)
-                    });
-            }
-            args => {
-                let pool = with_pool_set(|ps| ps.get_pool().clone());
-                mask.iter_dynamic(
-                    pool,
-                    args.iter().map(|v| match v {
-                        QueryEntry::Var(v) => ValueSource::Slice(&bindings[*v]),
-                        QueryEntry::Const(c) => ValueSource::Const(*c),
-                    }),
-                )
-                .fill_vec(&mut out, Value::stale, |_, args| {
-                    table.get_row_column(&args, col)
-                });
-            }
-        };
-        bindings.insert(out_var, out);
+        for_each_binding_with_mask!(mask, args, bindings, |iter| {
+            iter.fill_vec(&mut out, Value::stale, |_, args| {
+                table.get_row_column(args.as_slice(), col)
+            })
+        });
+        bindings.insert(out_var, &out);
     }
 
     fn lookup_with_default_vectorized(
@@ -509,52 +477,29 @@ impl<T: Table> TableWrapper for WrapperImpl<T> {
     ) {
         let table = table.as_any().downcast_ref::<T>().unwrap();
         let mut out = with_pool_set(|ps| ps.get::<Vec<Value>>());
-        match (args, default) {
-            ([QueryEntry::Var(v)], QueryEntry::Var(default)) => mask
-                .iter(&bindings[*v])
-                .zip(&bindings[default])
-                .fill_vec(&mut out, Value::stale, |_, (v, default)| {
-                    Some(table.get_row_column(&[*v], col).unwrap_or(*default))
-                }),
-            ([QueryEntry::Var(v1), QueryEntry::Var(v2)], QueryEntry::Var(default)) => mask
-                .iter(&bindings[*v1])
-                .zip(&bindings[*v2])
-                .zip(&bindings[default])
-                .fill_vec(&mut out, Value::stale, |_, ((a1, a2), default)| {
-                    Some(table.get_row_column(&[*a1, *a2], col).unwrap_or(*default))
-                }),
-            (
-                [QueryEntry::Var(v1), QueryEntry::Var(v2), QueryEntry::Var(v3)],
-                QueryEntry::Var(default),
-            ) => mask
-                .iter(&bindings[*v1])
-                .zip(&bindings[*v2])
-                .zip(&bindings[*v3])
-                .zip(&bindings[default])
-                .fill_vec(&mut out, Value::stale, |_, (((a1, a2), a3), default)| {
+        for_each_binding_with_mask!(mask, args, bindings, |iter| {
+            match default {
+                QueryEntry::Var(default) => iter.zip(&bindings[default]).fill_vec(
+                    &mut out,
+                    Value::stale,
+                    |_, (args, default)| {
+                        Some(
+                            table
+                                .get_row_column(args.as_slice(), col)
+                                .unwrap_or(*default),
+                        )
+                    },
+                ),
+                QueryEntry::Const(default) => iter.fill_vec(&mut out, Value::stale, |_, args| {
                     Some(
                         table
-                            .get_row_column(&[*a1, *a2, *a3], col)
-                            .unwrap_or(*default),
+                            .get_row_column(args.as_slice(), col)
+                            .unwrap_or(default),
                     )
                 }),
-            (args, default) => {
-                let pool = with_pool_set(|ps| ps.get_pool().clone());
-                mask.iter_dynamic(
-                    pool,
-                    iter::once(&default).chain(args.iter()).map(|v| match v {
-                        QueryEntry::Var(v) => ValueSource::Slice(&bindings[*v]),
-                        QueryEntry::Const(c) => ValueSource::Const(*c),
-                    }),
-                )
-                .fill_vec(&mut out, Value::stale, |_, vals| {
-                    let default = vals[0];
-                    let key = &vals[1..];
-                    Some(table.get_row_column(key, col).unwrap_or(default))
-                })
             }
-        };
-        bindings.insert(out_var, out);
+        });
+        bindings.insert(out_var, &out);
     }
 }
 
@@ -585,7 +530,7 @@ impl WrappedTable {
         }
     }
 
-    pub(crate) fn as_ref(&self) -> WrappedTableRef {
+    pub(crate) fn as_ref(&self) -> WrappedTableRef<'_> {
         WrappedTableRef {
             inner: &*self.inner,
             wrapper: &*self.wrapper,

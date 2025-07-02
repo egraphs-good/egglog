@@ -114,7 +114,7 @@ impl<T> ReadOptimizedLock<T> {
     /// Create a `Reader` object that grants read access to the data.
     ///
     /// This method will block for any ongoing writes to complete.
-    pub fn read(&self) -> MutexReader<T> {
+    pub fn read(&self) -> MutexReader<'_, T> {
         loop {
             let guard = self.token.load();
             match guard.as_ref() {
@@ -139,7 +139,7 @@ impl<T> ReadOptimizedLock<T> {
         }
     }
 
-    pub fn lock(&self) -> MutexWriter<T> {
+    pub fn lock(&self) -> MutexWriter<'_, T> {
         loop {
             let guard = self.token.load();
             match guard.as_ref() {

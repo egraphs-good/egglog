@@ -413,7 +413,7 @@ pub(crate) struct ParallelRowBufWriter {
 }
 
 impl ParallelRowBufWriter {
-    pub(crate) fn read_handle(&self) -> ReadHandle<impl Deref<Target = [Cell<Value>]> + '_> {
+    pub(crate) fn read_handle(&self) -> ReadHandle<'_, impl Deref<Target = [Cell<Value>]> + '_> {
         ReadHandle {
             buf: &self.buf,
             data: self.vec.as_ref().unwrap().read_access(),

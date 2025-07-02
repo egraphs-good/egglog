@@ -11,13 +11,14 @@ use smallvec::SmallVec;
 use crate::{
     common::{DashMap, Value},
     free_join::{CounterId, Counters, ExternalFunctions, TableId, TableInfo, Variable},
-    pool::{with_pool_set, Clear, PoolSet, Pooled},
+    pool::{with_pool_set, Clear, Pooled},
     table_spec::{ColumnId, MutationBuffer},
     BaseValues, ContainerValues, ExternalFunctionId, WrappedTable,
 };
 
 use self::mask::{Mask, MaskIter, ValueSource};
 
+#[macro_use]
 pub(crate) mod mask;
 
 #[cfg(test)]
@@ -95,64 +96,178 @@ impl From<Value> for MergeVal {
 ///
 /// The intent of bindings is to store a sequence of mappings from [`Variable`] to [`Value`], in a
 /// struct-of-arrays style that is better laid out for processing bindings in batches.
-#[derive(Debug, Default)]
+#[derive(Debug)]
 pub(crate) struct Bindings {
-    // INVARIANT: self.vars.iter().map(|(_, v)| v.len() == self.matches)
     matches: usize,
-    vars: DenseIdMap<Variable, Pooled<Vec<Value>>>,
+    /// The maximum number of calls to `push` that we can receive before we clear the
+    /// [`Bindings`].
+    // This is used to preallocate chunks of the flat `data` vector.
+    max_batch_size: usize,
+    data: Pooled<Vec<Value>>,
+    /// Points into `data`. data[vars[var].. vars[var]+matches]` contains the values for `data`.
+    var_offsets: DenseIdMap<Variable, usize>,
 }
 
 impl std::ops::Index<Variable> for Bindings {
-    type Output = Pooled<Vec<Value>>;
-    fn index(&self, var: Variable) -> &Pooled<Vec<Value>> {
-        &self.vars[var]
+    type Output = [Value];
+    fn index(&self, var: Variable) -> &[Value] {
+        self.get(var).unwrap()
     }
 }
 
 impl Bindings {
+    pub(crate) fn new(max_batch_size: usize) -> Self {
+        Bindings {
+            matches: 0,
+            max_batch_size,
+            data: Default::default(),
+            var_offsets: DenseIdMap::new(),
+        }
+    }
     fn assert_invariant(&self) {
         #[cfg(debug_assertions)]
         {
-            for (_, v) in self.vars.iter() {
-                assert_eq!(v.len(), self.matches);
+            assert!(self.matches <= self.max_batch_size);
+            for (var, start) in self.var_offsets.iter() {
+                assert!(
+                    start + self.matches <= self.data.len(),
+                    "Variable {:?} starts at {}, but data only has {} elements",
+                    var,
+                    start,
+                    self.data.len()
+                );
             }
         }
     }
 
     pub(crate) fn clear(&mut self) {
         self.matches = 0;
-        self.vars.clear();
+        self.var_offsets.clear();
+        self.data.clear();
         self.assert_invariant();
     }
 
-    fn get(&self, var: Variable) -> Option<&Pooled<Vec<Value>>> {
-        self.vars.get(var)
+    fn get(&self, var: Variable) -> Option<&[Value]> {
+        let start = self.var_offsets.get(var)?;
+        Some(&self.data[*start..*start + self.matches])
     }
 
-    pub(crate) fn insert(&mut self, var: Variable, vals: Pooled<Vec<Value>>) {
-        if self.vars.n_ids() == 0 {
+    fn add_mapping(&mut self, var: Variable, vals: &[Value]) {
+        let start = self.data.len();
+        self.data.extend_from_slice(vals);
+        // We have a flat representation of the data, meaning that writing more than
+        // `max_batch_size` values to `var` could overwrite values for a different variable, which
+        // would produce some mysterious results that are hard to debug.
+        debug_assert!(vals.len() <= self.max_batch_size);
+        if vals.len() < self.max_batch_size {
+            let target_len = self.data.len() + self.max_batch_size - vals.len();
+            self.data.resize(target_len, Value::stale());
+        }
+        self.var_offsets.insert(var, start);
+    }
+
+    pub(crate) fn insert(&mut self, var: Variable, vals: &[Value]) {
+        if self.var_offsets.n_ids() == 0 {
             self.matches = vals.len();
         } else {
             assert_eq!(self.matches, vals.len());
         }
-        self.vars.insert(var, vals);
+        self.add_mapping(var, vals);
         self.assert_invariant();
     }
 
-    pub(crate) fn push(&mut self, map: &DenseIdMap<Variable, Value>) {
-        self.matches += 1;
-        with_pool_set(|ps| {
-            for (var, val) in map.iter() {
-                let vals = self.vars.get_or_insert(var, || ps.get());
-                vals.push(*val);
+    /// Push a new set of bindings for the given variables.
+    ///
+    /// # Safety:
+    /// This method assumes that all calls to `push`:
+    /// * Have a mapping for every member of `used_vars`.
+    /// * Are passed the same `used_vars`.
+    ///
+    /// It is unsafe to avoid bounds-checking. This method is called extremely frequently and the
+    /// overhead of boundschecking is noticeable.
+    pub(crate) unsafe fn push(
+        &mut self,
+        map: &DenseIdMap<Variable, Value>,
+        used_vars: &[Variable],
+    ) {
+        if self.matches != 0 {
+            assert!(self.matches < self.max_batch_size);
+            #[cfg(debug_assertions)]
+            {
+                for var in used_vars {
+                    assert!(
+                        self.var_offsets.get(*var).is_some(),
+                        "Variable {:?} not found in bindings {:?}",
+                        var,
+                        self.var_offsets
+                    );
+                }
             }
-        });
+            for var in used_vars {
+                let var = var.index();
+                // Safe version: this degrades some benchmarks by ~6%
+                // let start = self.var_offsets.raw()[var].unwrap();
+                // self.data[start + self.matches] = map.raw()[var].unwrap();
+                unsafe {
+                    let start = self.var_offsets.raw().get_unchecked(var).unwrap_unchecked();
+                    *self.data.get_unchecked_mut(start + self.matches) =
+                        map.raw().get_unchecked(var).unwrap_unchecked();
+                }
+            }
+        } else {
+            for (var, val) in map.iter() {
+                self.add_mapping(var, &[*val]);
+            }
+        }
+
+        self.matches += 1;
         self.assert_invariant();
     }
 
-    pub(crate) fn take(&mut self, var: Variable) -> Option<Pooled<Vec<Value>>> {
-        self.vars.take(var)
+    /// A method that removes the bindings for the given variable and allows for its values to be
+    /// used independently from the [`Bindings`] struct. This is helpful when an operation needs to
+    /// mutably borrow the values for one value while reading the values for another.
+    ///
+    /// To add the values back, use [`Bindings::replace`].
+    pub(crate) fn take(&mut self, var: Variable) -> Option<ExtractedBinding> {
+        let mut vals: Pooled<Vec<Value>> = with_pool_set(|ps| ps.get());
+        vals.extend_from_slice(self.get(var)?);
+        let start = self.var_offsets.take(var)?;
+        Some(ExtractedBinding {
+            var,
+            offset: start,
+            vals,
+        })
     }
+
+    /// Replace a binding extracted with [`Bindings::take`].
+    ///
+    /// # Panics
+    /// This method will panic if the length of the values in `bdg` does not match the current
+    /// number of matches in `Bindings`. It may panic if `bdg` was extracted from a different
+    /// [`Bindings`] than the one it is being replaced in.
+    pub(crate) fn replace(&mut self, bdg: ExtractedBinding) {
+        // Replace the binding with the new values.
+        let ExtractedBinding {
+            var,
+            offset,
+            mut vals,
+        } = bdg;
+        assert_eq!(vals.len(), self.matches);
+        self.data
+            .splice(offset..offset + self.matches, vals.drain(..));
+        self.var_offsets.insert(var, offset);
+    }
+}
+
+/// A binding that has been extracted from a [`Bindings`] struct via the [`Bindings::take`] method.
+///
+/// This allows for a variable's contents to be read while the [`Bindings`] struct has been
+/// borrowed mutably. The contents will not be readable until [`Bindings::replace`] is called.
+pub(crate) struct ExtractedBinding {
+    var: Variable,
+    offset: usize,
+    pub(crate) vals: Pooled<Vec<Value>>,
 }
 
 #[derive(Default)]
@@ -361,27 +476,21 @@ impl<'a> ExecutionState<'a> {
 
 impl ExecutionState<'_> {
     pub(crate) fn run_instrs(&mut self, instrs: &[Instr], bindings: &mut Bindings) {
-        if bindings.vars.next_id().rep() == 0 {
+        if bindings.var_offsets.next_id().rep() == 0 {
             // If we have no variables, we want to run the rules once.
             bindings.matches = 1;
         }
-        with_pool_set(|ps| {
-            let mut mask = Mask::new(0..bindings.matches, ps);
-            for instr in instrs {
-                if mask.is_empty() {
-                    break;
-                }
-                self.run_instr(&mut mask, instr, bindings, ps);
+
+        // Vectorized execution for larger batch sizes
+        let mut mask = with_pool_set(|ps| Mask::new(0..bindings.matches, ps));
+        for instr in instrs {
+            if mask.is_empty() {
+                break;
             }
-        })
+            self.run_instr(&mut mask, instr, bindings);
+        }
     }
-    fn run_instr(
-        &mut self,
-        mask: &mut Mask,
-        inst: &Instr,
-        bindings: &mut Bindings,
-        pool_set: &PoolSet,
-    ) {
+    fn run_instr(&mut self, mask: &mut Mask, inst: &Instr, bindings: &mut Bindings) {
         fn assert_impl(
             bindings: &mut Bindings,
             mask: &mut Mask,
@@ -407,34 +516,6 @@ impl ExecutionState<'_> {
             }
         }
 
-        // Helper macro for taking a slice of QueryEntries and creating a call
-        // to `iter_dynamic` on `mask`.
-        //
-        // `iter_dynamic` takes a dynamically-determined number of "value
-        // sources" (either a slice or a constant) and then does a masked
-        // iteration on the "transpose" of these sources (row-wise).
-        macro_rules! iter_entries {
-            ($pool:expr, $entries:expr) => {
-                iter_entries!(mask, $pool, $entries)
-            };
-            ($mask:expr, $pool:expr, $entries:expr) => {
-                $mask.iter_dynamic(
-                    $pool,
-                    $entries.iter().map(|v| match v {
-                        QueryEntry::Var(v) => {
-                            debug_assert!(
-                                bindings.get(*v).is_some(),
-                                "variable {:?} not found in bindings {:?}",
-                                v,
-                                bindings
-                            );
-                            ValueSource::Slice(&bindings[*v])
-                        }
-                        QueryEntry::Const(c) => ValueSource::Const(*c),
-                    }),
-                )
-            };
-        }
         match inst {
             Instr::LookupOrInsertDefault {
                 table: table_id,
@@ -443,7 +524,7 @@ impl ExecutionState<'_> {
                 dst_col,
                 dst_var,
             } => {
-                let pool = pool_set.get_pool::<Vec<Value>>().clone();
+                let pool = with_pool_set(|ps| ps.get_pool::<Vec<Value>>().clone());
                 self.buffers.get_or_insert(*table_id, || {
                     self.db.table_info[*table_id].table.new_buffer()
                 });
@@ -457,47 +538,56 @@ impl ExecutionState<'_> {
                     return;
                 }
                 let mut out = bindings.take(*dst_var).unwrap();
-                iter_entries!(mask_copy, pool, args).assign_vec(&mut out, |offset, key| {
-                    // First, check if the entry is already in the table:
-                    // if let Some(row) = table.get_row_column(&key, *dst_col) {
-                    //     return row;
-                    // }
-                    // If not, insert the default value.
-                    //
-                    // We avoid doing this more than once by using the
-                    // `predicted` map.
-                    let prediction_key = (*table_id, SmallVec::<[Value; 3]>::from_slice(&key));
-                    let buffers = &mut self.buffers;
-                    // Bind some mutable references because the closure passed
-                    // to or_insert_with is `move`.
-                    let ctrs = &self.db.counters;
-                    let bindings = &bindings;
-                    let row = self
-                        .predicted
-                        .data
-                        .entry(prediction_key)
-                        .or_insert_with(move || {
-                            let mut row = key;
-                            // Extend the key with the default values.
-                            row.reserve(default.len());
-                            for val in default {
-                                let val = match val {
-                                    WriteVal::QueryEntry(QueryEntry::Const(c)) => *c,
-                                    WriteVal::QueryEntry(QueryEntry::Var(v)) => {
-                                        bindings[*v][offset]
+                for_each_binding_with_mask!(mask_copy, args.as_slice(), bindings, |iter| {
+                    iter.assign_vec(&mut out.vals, |offset, key| {
+                        // First, check if the entry is already in the table:
+                        // if let Some(row) = table.get_row_column(&key, *dst_col) {
+                        //     return row;
+                        // }
+                        // If not, insert the default value.
+                        //
+                        // We avoid doing this more than once by using the
+                        // `predicted` map.
+                        let prediction_key = (
+                            *table_id,
+                            SmallVec::<[Value; 3]>::from_slice(key.as_slice()),
+                        );
+                        let buffers = &mut self.buffers;
+                        // Bind some mutable references because the closure passed
+                        // to or_insert_with is `move`.
+                        let ctrs = &self.db.counters;
+                        let bindings = &bindings;
+                        let pool = pool.clone();
+                        let row =
+                            self.predicted
+                                .data
+                                .entry(prediction_key)
+                                .or_insert_with(move || {
+                                    let mut row = pool.get();
+                                    row.extend_from_slice(key.as_slice());
+                                    // Extend the key with the default values.
+                                    row.reserve(default.len());
+                                    for val in default {
+                                        let val = match val {
+                                            WriteVal::QueryEntry(QueryEntry::Const(c)) => *c,
+                                            WriteVal::QueryEntry(QueryEntry::Var(v)) => {
+                                                bindings[*v][offset]
+                                            }
+                                            WriteVal::IncCounter(ctr) => {
+                                                Value::from_usize(ctrs.inc(*ctr))
+                                            }
+                                            WriteVal::CurrentVal(ix) => row[*ix],
+                                        };
+                                        row.push(val)
                                     }
-                                    WriteVal::IncCounter(ctr) => Value::from_usize(ctrs.inc(*ctr)),
-                                    WriteVal::CurrentVal(ix) => row[*ix],
-                                };
-                                row.push(val)
-                            }
-                            // Insert it into the table.
-                            buffers.get_mut(*table_id).unwrap().stage_insert(&row);
-                            row
-                        });
-                    row[dst_col.index()]
+                                    // Insert it into the table.
+                                    buffers.get_mut(*table_id).unwrap().stage_insert(&row);
+                                    row
+                                });
+                        row[dst_col.index()]
+                    });
                 });
-                bindings.insert(*dst_var, out);
+                bindings.replace(out);
             }
             Instr::LookupWithDefault {
                 table,
@@ -558,44 +648,49 @@ impl ExecutionState<'_> {
                 *mask = lookup_result;
             }
             Instr::Insert { table, vals } => {
-                let pool = pool_set.get_pool::<Vec<Value>>().clone();
-                iter_entries!(pool, vals).for_each(|vals| {
-                    self.stage_insert(*table, &vals);
-                })
+                for_each_binding_with_mask!(mask, vals.as_slice(), bindings, |iter| {
+                    iter.for_each(|vals| {
+                        self.stage_insert(*table, vals.as_slice());
+                    })
+                });
             }
-            Instr::InsertIfEq { table, l, r, vals } => {
-                let pool = pool_set.get_pool::<Vec<Value>>().clone();
-                match (l, r) {
-                    (QueryEntry::Var(v1), QueryEntry::Var(v2)) => iter_entries!(pool, vals)
-                        .zip(&bindings[*v1])
-                        .zip(&bindings[*v2])
-                        .for_each(|((vals, v1), v2)| {
-                            if v1 == v2 {
-                                self.stage_insert(*table, &vals);
-                            }
-                        }),
-                    (QueryEntry::Var(v), QueryEntry::Const(c))
-                    | (QueryEntry::Const(c), QueryEntry::Var(v)) => iter_entries!(pool, vals)
-                        .zip(&bindings[*v])
-                        .for_each(|(vals, cond)| {
+            Instr::InsertIfEq { table, l, r, vals } => match (l, r) {
+                (QueryEntry::Var(v1), QueryEntry::Var(v2)) => {
+                    for_each_binding_with_mask!(mask, vals.as_slice(), bindings, |iter| {
+                        iter.zip(&bindings[*v1])
+                            .zip(&bindings[*v2])
+                            .for_each(|((vals, v1), v2)| {
+                                if v1 == v2 {
+                                    self.stage_insert(*table, &vals);
+                                }
+                            })
+                    })
+                }
+                (QueryEntry::Var(v), QueryEntry::Const(c))
+                | (QueryEntry::Const(c), QueryEntry::Var(v)) => {
+                    for_each_binding_with_mask!(mask, vals.as_slice(), bindings, |iter| {
+                        iter.zip(&bindings[*v]).for_each(|(vals, cond)| {
                             if cond == c {
                                 self.stage_insert(*table, &vals);
                             }
-                        }),
-                    (QueryEntry::Const(c1), QueryEntry::Const(c2)) => {
-                        if c1 == c2 {
-                            iter_entries!(pool, vals).for_each(|vals| {
+                        })
+                    })
+                }
+                (QueryEntry::Const(c1), QueryEntry::Const(c2)) => {
+                    if c1 == c2 {
+                        for_each_binding_with_mask!(mask, vals.as_slice(), bindings, |iter| iter
+                            .for_each(|vals| {
                                 self.stage_insert(*table, &vals);
-                            })
-                        }
+                            }))
                     }
                 }
-            }
+            },
             Instr::Remove { table, args } => {
-                let pool = pool_set.get_pool::<Vec<Value>>().clone();
-                iter_entries!(pool, args).for_each(|args| {
-                    self.stage_remove(*table, &args);
-                })
+                for_each_binding_with_mask!(mask, args.as_slice(), bindings, |iter| {
+                    iter.for_each(|args| {
+                        self.stage_remove(*table, args.as_slice());
+                    })
+                });
             }
             Instr::External { func, args, dst } => {
                 self.db.external_funcs[*func].invoke_batch(self, mask, bindings, args, *dst);
@@ -633,21 +728,22 @@ impl ExecutionState<'_> {
                 *mask = f1_result;
             }
             Instr::AssertAnyNe { ops, divider } => {
-                let pool = pool_set.get_pool::<Vec<Value>>().clone();
-                iter_entries!(pool, ops).retain(|vals| {
-                    vals[0..*divider]
-                        .iter()
-                        .zip(&vals[*divider..])
-                        .any(|(l, r)| l != r)
+                for_each_binding_with_mask!(mask, ops.as_slice(), bindings, |iter| {
+                    iter.retain(|vals| {
+                        vals[0..*divider]
+                            .iter()
+                            .zip(&vals[*divider..])
+                            .any(|(l, r)| l != r)
+                    })
                 })
             }
             Instr::AssertEq(l, r) => assert_impl(bindings, mask, l, r, |l, r| l == r),
             Instr::AssertNe(l, r) => assert_impl(bindings, mask, l, r, |l, r| l != r),
             Instr::ReadCounter { counter, dst } => {
-                let mut vals = pool_set.get::<Vec<Value>>();
+                let mut vals = with_pool_set(|ps| ps.get::<Vec<Value>>());
                 let ctr_val = Value::from_usize(self.read_counter(*counter));
                 vals.resize(bindings.matches, ctr_val);
-                bindings.insert(*dst, vals);
+                bindings.insert(*dst, &vals);
             }
         }
     }

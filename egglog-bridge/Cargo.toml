@@ -20,9 +20,6 @@ rayon = "1.10.0"
 dyn-clone = "1.0.17"
 once_cell = "1.21.3"
 
-[features]
-serial_examples = []
-
 [dev-dependencies]
 env_logger = "0.11"
 mimalloc = "0.1"

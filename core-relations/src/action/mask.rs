@@ -63,6 +63,13 @@ impl Mask {
         self.data.union_with(&other.data);
     }
 
+    pub(crate) fn empty_iter(&mut self) -> MaskIterUnit<'_> {
+        MaskIterUnit {
+            counter: 0,
+            mask: &mut self.data,
+        }
+    }
+
     /// Iterate over the offsets in the slice that correspond to set offsets in
     /// the `Mask`.
     pub(crate) fn iter<'slice, T>(
@@ -108,6 +115,13 @@ pub(crate) trait MaskIter {
     fn inc_counter(&mut self) -> usize;
     fn get_at(&mut self, idx: usize) -> IterResult<Self::Item>;
     fn remove(&mut self, idx: usize);
+
+    fn map<R, F: FnMut(Self::Item) -> R>(self, f: F) -> MapIter<Self, F>
+    where
+        Self: Sized,
+    {
+        MapIter { base: self, f }
+    }
 
     /// Iterate over the contents of the iterator: if the function `f` returns
     /// false, the corresponding item is removed from the mask.
@@ -217,7 +231,7 @@ pub(crate) trait MaskIter {
         })
     }
 
-    fn zip<T>(self, slice: &[T]) -> ZipIter<Self, T>
+    fn zip<T>(self, slice: &[T]) -> ZipIter<'_, Self, T>
     where
         Self: Sized,
     {
@@ -239,11 +253,13 @@ where
     Vec<T>: InPoolSet<PoolSet>,
 {
     type Item = Pooled<Vec<T>>;
+
     fn inc_counter(&mut self) -> usize {
         let res = self.counter;
         self.counter += 1;
         res
     }
+
     fn get_at(&mut self, idx: usize) -> IterResult<Self::Item> {
         if self.mask.contains(idx) {
             let mut result = self.pool.get();
@@ -259,6 +275,36 @@ where
             IterResult::Done
         }
     }
+
+    fn remove(&mut self, idx: usize) {
+        self.mask.set(idx, false);
+    }
+}
+
+pub(crate) struct MaskIterUnit<'mask> {
+    counter: usize,
+    mask: &'mask mut FixedBitSet,
+}
+
+impl<'mask> MaskIter for MaskIterUnit<'mask> {
+    type Item = ();
+
+    fn inc_counter(&mut self) -> usize {
+        let res = self.counter;
+        self.counter += 1;
+        res
+    }
+
+    fn get_at(&mut self, idx: usize) -> IterResult<()> {
+        if self.mask.contains(idx) {
+            IterResult::Item(())
+        } else if idx < self.mask.len() {
+            IterResult::Skip
+        } else {
+            IterResult::Done
+        }
+    }
+
     fn remove(&mut self, idx: usize) {
         self.mask.set(idx, false);
     }
@@ -272,11 +318,13 @@ pub(crate) struct MaskIterBase<'slice, 'mask, T> {
 
 impl<'slice, T> MaskIter for MaskIterBase<'slice, '_, T> {
     type Item = &'slice T;
+
     fn inc_counter(&mut self) -> usize {
         let res = self.counter;
         self.counter += 1;
         res
     }
+
     fn get_at(&mut self, idx: usize) -> IterResult<&'slice T> {
         if self.mask.contains(idx) {
             IterResult::Item(&self.slice[idx])
@@ -286,6 +334,7 @@ impl<'slice, T> MaskIter for MaskIterBase<'slice, '_, T> {
             IterResult::Done
         }
     }
+
     fn remove(&mut self, idx: usize) {
         self.mask.set(idx, false);
     }
@@ -297,9 +346,11 @@ pub(crate) struct ZipIter<'slice, Base, T> {
 
 impl<'slice, Base: MaskIter, T> MaskIter for ZipIter<'slice, Base, T> {
     type Item = (Base::Item, &'slice T);
+
     fn inc_counter(&mut self) -> usize {
         self.base.inc_counter()
     }
+
     fn get_at(&mut self, idx: usize) -> IterResult<Self::Item> {
         match self.base.get_at(idx) {
             IterResult::Item(base) => IterResult::Item((base, &self.slice[idx])),
@@ -313,7 +364,160 @@ impl<'slice, Base: MaskIter, T> MaskIter for ZipIter<'slice, Base, T> {
     }
 }
 
+pub(crate) struct MapIter<Base, F> {
+    base: Base,
+    f: F,
+}
+
+impl<Base: MaskIter, R, F: FnMut(Base::Item) -> R> MaskIter for MapIter<Base, F> {
+    type Item = R;
+
+    fn inc_counter(&mut self) -> usize {
+        self.base.inc_counter()
+    }
+
+    fn get_at(&mut self, idx: usize) -> IterResult<Self::Item> {
+        match self.base.get_at(idx) {
+            IterResult::Item(item) => IterResult::Item((self.f)(item)),
+            IterResult::Skip => IterResult::Skip,
+            IterResult::Done => IterResult::Done,
+        }
+    }
+
+    fn remove(&mut self, idx: usize) {
+        self.base.remove(idx);
+    }
+}
+
 pub(crate) enum ValueSource<'a, T> {
     Const(T),
     Slice(&'a [T]),
+}
+
+/// This is a macro for processing a slice of values pointing into a [`crate::action::Bindings`].
+///
+/// The out-of-the-box way to do this is to use [`Mask::iter_dynamic`], but that method is both
+/// difficult to call and requires materializing a vector for each iteration. This macro
+/// special-cases small slices of arguments and uses custom iterator invocations for those,
+/// avoiding any heap allocations for them.
+macro_rules! for_each_binding_with_mask {
+    ($mask:expr, $args:expr, $bindings:expr, |$iter:ident| $body:expr) => {{
+        match $args {
+            [] => {
+                let $iter = $mask.empty_iter().map(|()| {
+                    let arr: [crate::Value; 0] = [];
+                    arr
+                });
+                $body
+            }
+            [crate::QueryEntry::Var(v)] => {
+                let $iter = $mask.iter(&$bindings[*v]).map(|v| {
+                    let arr: [crate::Value; 1] = [*v];
+                    arr
+                });
+                $body
+            }
+            [crate::QueryEntry::Const(c)] => {
+                let $iter = $mask.empty_iter().map(|()| {
+                    let arr: [crate::Value; 1] = [*c];
+                    arr
+                });
+                $body
+            }
+            [crate::QueryEntry::Var(v1), crate::QueryEntry::Var(v2)] => {
+                let $iter = $mask
+                    .iter(&$bindings[*v1])
+                    .zip(&$bindings[*v2])
+                    .map(|(v1, v2)| {
+                        let arr: [crate::Value; 2] = [*v1, *v2];
+                        arr
+                    });
+                $body
+            }
+            [crate::QueryEntry::Var(v), crate::QueryEntry::Const(c)] => {
+                let $iter = $mask.iter(&$bindings[*v]).map(|v| {
+                    let arr: [crate::Value; 2] = [*v, *c];
+                    arr
+                });
+                $body
+            }
+            [crate::QueryEntry::Const(c), crate::QueryEntry::Var(v)] => {
+                let $iter = $mask.iter(&$bindings[*v]).map(|v| {
+                    let arr: [crate::Value; 2] = [*c, *v];
+                    arr
+                });
+                $body
+            }
+            [crate::QueryEntry::Const(c1), crate::QueryEntry::Const(c2)] => {
+                let $iter = $mask.empty_iter().map(|()| {
+                    let arr: [crate::Value; 2] = [*c1, *c2];
+                    arr
+                });
+                $body
+            }
+            [crate::QueryEntry::Var(v1), crate::QueryEntry::Var(v2), crate::QueryEntry::Var(v3)] => {
+                let $iter = $mask
+                    .iter(&$bindings[*v1])
+                    .zip(&$bindings[*v2])
+                    .zip(&$bindings[*v3])
+                    .map(|((v1, v2), v3)| {
+                        let arr: [crate::Value; 3] = [*v1, *v2, *v3];
+                        arr
+                    });
+                $body
+            }
+            [crate::QueryEntry::Const(c), crate::QueryEntry::Var(v2), crate::QueryEntry::Var(v3)] => {
+                let $iter = $mask
+                    .iter(&$bindings[*v2])
+                    .zip(&$bindings[*v3])
+                    .map(|(v2, v3)| {
+                        let arr: [crate::Value; 3] = [*c, *v2, *v3];
+                        arr
+                    });
+                $body
+            }
+            [crate::QueryEntry::Var(v1), crate::QueryEntry::Const(c), crate::QueryEntry::Var(v3)] => {
+                let $iter = $mask
+                    .iter(&$bindings[*v1])
+                    .zip(&$bindings[*v3])
+                    .map(|(v1,  v3)| {
+                        let arr: [crate::Value; 3] = [*v1, *c, *v3];
+                        arr
+                    });
+                $body
+            }
+            [crate::QueryEntry::Var(v1), crate::QueryEntry::Var(v2), crate::QueryEntry::Const(c)] => {
+                let $iter = $mask
+                    .iter(&$bindings[*v1])
+                    .zip(&$bindings[*v2])
+                    .map(|(v1, v2)| {
+                        let arr: [crate::Value; 3] = [*v1, *v2, *c];
+                        arr
+                    });
+                $body
+            }
+            [crate::QueryEntry::Var(v1), crate::QueryEntry::Var(v2), crate::QueryEntry::Var(v3), crate::QueryEntry::Var(v4)] => {
+                let $iter = $mask
+                    .iter(&$bindings[*v1])
+                    .zip(&$bindings[*v2])
+                    .zip(&$bindings[*v3])
+                    .zip(&$bindings[*v4])
+                    .map(|(((v1, v2), v3), v4)| {
+                        let arr: [crate::Value; 4] = [*v1, *v2, *v3, *v4];
+                        arr
+                    });
+                $body
+            }
+            _ => {
+                let $iter = $mask.iter_dynamic(
+                    crate::pool::with_pool_set(crate::pool::PoolSet::get_pool),
+                    $args.iter().map(|v| match v {
+                        crate::QueryEntry::Var(v) => ValueSource::Slice(&$bindings[*v]),
+                        crate::QueryEntry::Const(c) => ValueSource::Const(*c),
+                    }),
+                );
+                $body
+            }
+        }
+    }};
 }

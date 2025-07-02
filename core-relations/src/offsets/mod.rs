@@ -336,7 +336,7 @@ impl Subset {
         matches!(self, Subset::Dense(_))
     }
 
-    pub fn as_ref(&self) -> SubsetRef {
+    pub fn as_ref(&self) -> SubsetRef<'_> {
         match self {
             Subset::Dense(r) => SubsetRef::Dense(*r),
             Subset::Sparse(s) => SubsetRef::Sparse(s.slice()),

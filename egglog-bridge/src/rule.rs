@@ -158,7 +158,7 @@ pub struct RuleBuilder<'a> {
 impl EGraph {
     /// Add a rewrite rule for this [`EGraph`] using a [`RuleBuilder`].
     /// If you aren't sure, use `egraph.new_rule("", true)`.
-    pub fn new_rule(&mut self, desc: &str, seminaive: bool) -> RuleBuilder {
+    pub fn new_rule(&mut self, desc: &str, seminaive: bool) -> RuleBuilder<'_> {
         let uf_table = self.uf_table;
         let id_counter = self.id_counter;
         let ts_counter = self.timestamp_counter;
