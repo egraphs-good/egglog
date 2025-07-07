@@ -82,8 +82,8 @@ pub trait Sort: Any + Send + Sync + Debug {
     /// Return the serialized name of the sort
     ///
     /// Only used for container sorts, which cannot be serialized with make_expr so need an explicit name
-    fn serialized_name(&self, _value: Value) -> &str {
-        self.name()
+    fn serialized_name(&self, _container_values: &ContainerValues, _value: Value) -> String {
+        self.name().to_owned()
     }
 
     /// Return the inner values and sorts.
