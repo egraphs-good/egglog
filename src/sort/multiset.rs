@@ -157,8 +157,8 @@ impl ContainerSort for MultiSetSort {
         termdag.app("multiset-of".into(), element_terms)
     }
 
-    fn serialized_name(&self, _value: Value) -> &str {
-        "multiset-of"
+    fn serialized_name(&self, _container_values: &ContainerValues, _: Value) -> String {
+        "multiset-of".to_owned()
     }
 }
 

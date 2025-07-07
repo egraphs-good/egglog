@@ -150,7 +150,7 @@ impl ContainerSort for SetSort {
         termdag.app("set-of".into(), element_terms)
     }
 
-    fn serialized_name(&self, _value: Value) -> &str {
-        "set-of"
+    fn serialized_name(&self, _container_values: &ContainerValues, _: Value) -> String {
+        "set-of".to_owned()
     }
 }

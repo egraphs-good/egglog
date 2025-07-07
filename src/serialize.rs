@@ -187,7 +187,9 @@ impl EGraph {
     /// Gets the serialized class ID for a value.
     pub fn value_to_class_id(&self, sort: &ArcSort, value: Value) -> egraph_serialize::ClassId {
         // Canonicalize the value first so that we always use the canonical e-class ID
-        let value = self.backend.get_canon_repr(value, sort.column_ty(&self.backend));
+        let value = self
+            .backend
+            .get_canon_repr(value, sort.column_ty(&self.backend));
         assert!(
             !sort.name().to_string().contains('-'),
             "Tag cannot contain '-' when serializing"
@@ -290,9 +292,10 @@ impl EGraph {
             let node_id = self.to_node_id(Some(sort), SerializedNode::Primitive(value));
             // Add node for value
             {
+                let container_values = self.backend.container_values();
                 // Children will be empty unless this is a container sort
                 let children: Vec<egraph_serialize::NodeId> = sort
-                    .inner_values(self.backend.container_values(), value)
+                    .inner_values(container_values, value)
                     .into_iter()
                     .map(|(s, v)| {
                         self.serialize_value(serializer, &s, v, &self.value_to_class_id(&s, v))
@@ -300,7 +303,7 @@ impl EGraph {
                     .collect();
                 // If this is a container sort, use the name, otherwise use the value
                 let op = if sort.is_container_sort() {
-                    sort.serialized_name(value).to_string()
+                    sort.serialized_name(container_values, value)
                 } else {
                     let primitive_id = self
                         .backend

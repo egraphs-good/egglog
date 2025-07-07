@@ -705,7 +705,7 @@ pub trait ContainerSort: Any + Send + Sync + Debug {
         _: &mut TermDag,
         _: Vec<Term>,
     ) -> Term;
-    fn serialized_name(&self, _: Value) -> &str;
+    fn serialized_name(&self, container_values: &ContainerValues, value: Value) -> String;
 
     fn to_arcsort(self) -> ArcSort
     where
@@ -759,8 +759,8 @@ impl<T: ContainerSort> Sort for ContainerSortImpl<T> {
         self.0.is_eq_container_sort()
     }
 
-    fn serialized_name(&self, value: Value) -> &str {
-        self.0.serialized_name(value)
+    fn serialized_name(&self, container_values: &ContainerValues, value: Value) -> String {
+        self.0.serialized_name(container_values, value)
     }
 
     fn register_primitives(self: Arc<Self>, eg: &mut EGraph) {
