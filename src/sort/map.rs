@@ -183,7 +183,7 @@ impl ContainerSort for MapSort {
         term
     }
 
-    fn serialized_name(&self, _: Value) -> &str {
-        self.name()
+    fn serialized_name(&self, _container_values: &ContainerValues, _: Value) -> String {
+        self.name().to_owned()
     }
 }

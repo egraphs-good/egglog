@@ -134,11 +134,11 @@ impl Sort for FunctionSort {
         self.inputs.iter().any(|s| s.is_eq_sort())
     }
 
-    fn serialized_name(&self, _value: Value) -> &str {
-        // TODO: The old implementation looks up the function name contained in the function structure.
-        // In the new backend, this requires a handle to the new backend to get the container value.
-        // We can change the interface of `serialized_name` to take an `EGraph` in a follow-up PR.
-        "unstable-fn"
+    fn serialized_name(&self, container_values: &ContainerValues, value: Value) -> String {
+        let val = container_values
+            .get_val::<FunctionContainer>(value)
+            .unwrap();
+        val.2.clone()
     }
 
     fn inner_sorts(&self) -> Vec<ArcSort> {
