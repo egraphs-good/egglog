@@ -1,4 +1,7 @@
-use crate::pool::PoolSet;
+use crate::{
+    action::mask::{IterResult, ValueSource},
+    pool::{with_pool_set, PoolSet},
+};
 
 use super::mask::{Mask, MaskIter};
 
@@ -26,6 +29,29 @@ fn mask_iter_zip() {
         Vec::from_iter(offs1.iter().copied().zip(offs2.iter().copied())),
         res
     );
+}
+
+#[test]
+fn mask_iter_dyn() {
+    let ps = PoolSet::default();
+    let mut mask = Mask::new(0..3, &ps);
+    let mut iter_dyn = mask.iter_dynamic(
+        with_pool_set(|x| x.get_pool()),
+        vec![
+            ValueSource::Const(1),
+            ValueSource::Slice(&[1, 3, 5]),
+            ValueSource::Const(1),
+            ValueSource::Slice(&[2, 4, 6]),
+        ]
+        .into_iter(),
+    );
+    match iter_dyn.get_at(2) {
+        IterResult::Item(item) => {
+            let v = item.as_slice();
+            assert_eq!(v, [1, 5, 1, 6])
+        }
+        _ => unreachable!(),
+    }
 }
 
 #[test]

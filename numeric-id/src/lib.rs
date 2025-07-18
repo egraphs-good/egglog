@@ -486,9 +486,11 @@ macro_rules! define_id {
                     "overflowing id type {} (represented as {}) with index {}", stringify!($name), stringify!($repr), index);
                 $name::new(index as $repr)
             }
+            /// return the inner representation of id as usize
             fn index(self) -> usize {
                 self.rep as usize
             }
+            /// return the inner representation of id.
             fn rep(self) -> $repr {
                 self.rep
             }

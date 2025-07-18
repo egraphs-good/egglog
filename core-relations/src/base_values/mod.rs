@@ -19,9 +19,9 @@ define_id!(pub BaseValueId, u32, "an identifier for base value types");
 /// A simple data type that can be interned in a database.
 ///
 /// Most callers can simply implement this trait on their desired type, with no overrides needed.
-/// For types that are particularly small, users can override the `try_box` and `try_unbox`
-/// methods and set `MAY_UNBOX` to `true` to allow the Rust value to be stored in-place in a
-/// `Value`.
+/// For types that are particularly small, users can override [`BaseValue::try_box`] and [`BaseValue::try_unbox`]
+/// methods and set [`BaseValue::MAY_UNBOX`] to `true` to allow the Rust value to be stored in-place in a
+/// [`Value`].
 ///
 /// Regardless, all base value types should be registered in a [`BaseValues`] instance using the
 /// [`BaseValues::register_type`] method before they can be used in the database.
@@ -47,7 +47,7 @@ impl BaseValue for num::Rational64 {}
 
 /// A wrapper used to print a base value.
 ///
-/// The given base value type must be registered with the `BaseValues` instance,
+/// The given base value type must be registered with the [`BaseValues`] instance,
 /// otherwise attempting to call the [`Debug`] implementation will panic.
 pub struct BaseValuePrinter<'a> {
     pub base: &'a BaseValues,

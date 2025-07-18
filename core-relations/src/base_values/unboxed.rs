@@ -9,6 +9,7 @@ use crate::Value;
 
 use super::BaseValue;
 
+/// for small base types we register them as u32 in implementation.
 macro_rules! impl_small_base_value {
     ($ty:ty) => {
         impl BaseValue for $ty {
@@ -31,9 +32,19 @@ impl_small_base_value!(u8, u16, u32, i8, i16, i32);
 
 impl BaseValue for bool {
     const MAY_UNBOX: bool = true;
+    /// see [`bool::try_box`]
     fn try_unbox(val: Value) -> Option<Self> {
         Some(val.rep() != 0)
     }
+    /// To optimize storage, we map [`Value`] 1 to true and 0 to false in the implementation.
+    /// By the way, `subsumed` column in one [`crate::Row`] is a bool type.
+    /// ```rust
+    /// use core_relations::BaseValue;
+    /// let true_value = true.try_box().unwrap();
+    /// let false_value = false.try_box().unwrap();
+    /// assert_eq!(bool::try_unbox(true_value).unwrap(), true);
+    /// assert_eq!(bool::try_unbox(false_value).unwrap(), false);
+    /// ```
     fn try_box(&self) -> Option<Value> {
         Some(Value::new(if *self { 1 } else { 0 }))
     }
@@ -41,6 +52,13 @@ impl BaseValue for bool {
 
 impl BaseValue for () {
     const MAY_UNBOX: bool = true;
+    /// To optimize storage, we map [`Value`] 0 to unit type.
+    ///
+    /// ```rust
+    /// use core_relations::BaseValue;
+    /// let unit_value = ().try_box().unwrap();
+    /// assert_eq!(<()>::try_unbox(unit_value).unwrap(), ());
+    /// ```
     fn try_unbox(_val: Value) -> Option<Self> {
         Some(())
     }

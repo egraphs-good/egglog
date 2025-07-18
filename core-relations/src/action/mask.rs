@@ -83,6 +83,7 @@ impl Mask {
         }
     }
 
+    /// See [`MaskIterDynamicSource::get_at`]
     pub(crate) fn iter_dynamic<'a, T>(
         &'a mut self,
         pool: Pool<Vec<T>>,
@@ -239,6 +240,16 @@ pub(crate) trait MaskIter {
     }
 }
 
+/// Helpful when you want to select one slice of all possible slices and memorize
+/// whether they have been accessed.
+///
+/// Given inner structure like:
+/// ```text
+///                 | 1 |                  | 2 |     
+/// Const 1 , Slice | 3 | , Const 3, Slice | 4 |     
+///                 | 5 |                  | 6 |         
+/// ```
+/// this structure represent 3 possible slices and you can select one with [`MaskIterDynamicSource::get_at`]
 pub(crate) struct MaskIterDynamicSource<'slice, 'mask, T> {
     counter: usize,
     data: SmallVec<[ValueSource<'slice, T>; 4]>,
@@ -259,7 +270,14 @@ where
         self.counter += 1;
         res
     }
-
+    /// Given inner structure like:
+    /// ```text
+    ///                 | 1 |                  | 2 |     
+    /// Const 1 , Slice | 3 | , Const 3, Slice | 4 |     
+    ///                 | 5 |                  | 6 |         
+    /// ```
+    /// and idx 2,
+    /// [`MaskIterDynamicSource::get_at`] returns `[1,5,3,6]`
     fn get_at(&mut self, idx: usize) -> IterResult<Self::Item> {
         if self.mask.contains(idx) {
             let mut result = self.pool.get();
