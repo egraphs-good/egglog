@@ -1,4 +1,4 @@
-use egglog::*;
+use egglog::{extract::DefaultCost, *};
 
 #[test]
 fn test_simple_extract1() {
@@ -295,7 +295,7 @@ fn test_simple_extract9() {
     let ExtractReport::Best { cost, .. } = report else {
         panic!();
     };
-    assert_eq!(cost, usize::MAX);
+    assert_eq!(cost, DefaultCost::MAX);
 
     egraph
         .parse_and_run_program(
@@ -310,7 +310,7 @@ fn test_simple_extract9() {
     let ExtractReport::Best { cost, .. } = report else {
         panic!();
     };
-    assert_eq!(cost, usize::MAX);
+    assert_eq!(cost, DefaultCost::MAX);
 
     egraph
         .parse_and_run_program(
@@ -325,7 +325,7 @@ fn test_simple_extract9() {
     let ExtractReport::Best { cost, .. } = report else {
         panic!();
     };
-    assert_eq!(cost, usize::MAX);
+    assert_eq!(cost, DefaultCost::MAX);
 }
 
 #[test]

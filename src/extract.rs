@@ -93,7 +93,7 @@ cost_impl_num!(num::BigInt, num::BigRational);
 use ordered_float::OrderedFloat;
 cost_impl_num!(f32, f64, OrderedFloat<f32>, OrderedFloat<f64>);
 
-pub type DefaultCost = usize;
+pub type DefaultCost = u64;
 
 #[derive(Default, Clone)]
 pub struct TreeAdditiveCostModel {}

@@ -162,10 +162,12 @@ impl Sexp {
         }
     }
 
-    pub fn expect_uint(&self, e: &'static str) -> Result<usize, ParseError> {
+    pub fn expect_uint<UInt: TryFrom<u64>>(&self, e: &'static str) -> Result<UInt, ParseError> {
         if let Sexp::Literal(Literal::Int(x), _) = self {
             if *x >= 0 {
-                return Ok(*x as usize);
+                if let Ok(v) = (*x as u64).try_into() {
+                    return Ok(v);
+                }
             }
         }
         error!(
@@ -542,7 +544,7 @@ impl Parser {
                     return error!(span, "usage: (run <ruleset>? <uint> <:until (<fact>*)>?)");
                 }
 
-                let has_ruleset = tail.len() >= 2 && tail[1].expect_uint("").is_ok();
+                let has_ruleset = tail.len() >= 2 && tail[1].expect_uint::<u32>("").is_ok();
 
                 let (ruleset, limit, rest) = if has_ruleset {
                     (
