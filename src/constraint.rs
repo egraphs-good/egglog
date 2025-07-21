@@ -1,5 +1,8 @@
 use crate::{
-    core::{Atom, CoreAction, CoreRule, GenericCoreActions, Query, StringOrEq},
+    core::{
+        Atom, CoreAction, CoreRule, GenericCoreActions, GenericCoreRule, HeadOrEq, Query,
+        StringOrEq,
+    },
     *,
 };
 use std::cmp;
@@ -23,15 +26,17 @@ pub enum ImpossibleConstraint {
     },
 }
 
-pub trait Constraint<Var, Value> {
+pub trait Constraint<Var, Value>: dyn_clone::DynClone {
     fn update(
-        &self,
+        &mut self,
         assignment: &mut Assignment<Var, Value>,
         key: fn(&Value) -> &str,
     ) -> Result<bool, ConstraintError<Var, Value>>;
 
     fn pretty(&self) -> String;
 }
+
+dyn_clone::clone_trait_object!(<Var, Value> Constraint<Var, Value>);
 
 pub fn eq<Var, Value>(x: Var, y: Var) -> Box<dyn Constraint<Var, Value>>
 where
@@ -73,6 +78,79 @@ where
     Box::new(Impossible { constraint })
 }
 
+pub fn implies<Var, Value>(
+    name: String,
+    watch_vars: Vec<Var>,
+    constraint: DelayedConstraintFn<Var, Value>,
+) -> Box<dyn Constraint<Var, Value>>
+where
+    Var: cmp::Eq + PartialEq + Hash + Clone + Debug + 'static,
+    Value: Clone + Debug + 'static,
+{
+    Box::new(Implies {
+        name,
+        watch_vars,
+        constraint: DelayedConstraint::Delayed(constraint),
+    })
+}
+
+pub type DelayedConstraintFn<Var, Value> =
+    Arc<dyn Fn(&[&Value]) -> Box<dyn Constraint<Var, Value>>>;
+
+#[derive(Clone)]
+enum DelayedConstraint<Var, Value> {
+    Delayed(DelayedConstraintFn<Var, Value>),
+    Constraint(Box<dyn Constraint<Var, Value>>),
+}
+
+#[derive(Clone)]
+struct Implies<Var, Value> {
+    name: String,
+    watch_vars: Vec<Var>,
+    constraint: DelayedConstraint<Var, Value>,
+}
+
+impl<Var, Value> Constraint<Var, Value> for Implies<Var, Value>
+where
+    Var: cmp::Eq + PartialEq + Hash + Clone + Debug,
+    Value: Clone + Debug,
+{
+    fn update(
+        &mut self,
+        assignment: &mut Assignment<Var, Value>,
+        key: fn(&Value) -> &str,
+    ) -> Result<bool, ConstraintError<Var, Value>> {
+        let mut updated = false;
+        if let DelayedConstraint::Delayed(delayed) = &self.constraint {
+            let watch_vals: Option<Vec<&Value>> =
+                self.watch_vars.iter().map(|v| assignment.get(v)).collect();
+            let Some(watch_vals) = watch_vals else {
+                return Ok(false);
+            };
+            let constraint = delayed(&watch_vals);
+            self.constraint = DelayedConstraint::Constraint(constraint);
+            updated = true;
+        };
+
+        let DelayedConstraint::Constraint(constraint) = &mut self.constraint else {
+            unreachable!("update");
+        };
+        updated |= constraint.update(assignment, key)?;
+        Ok(updated)
+    }
+
+    fn pretty(&self) -> String {
+        let vars: String = self
+            .watch_vars
+            .iter()
+            .map(|v| format!("{:?}", v))
+            .collect::<Vec<_>>()
+            .join(", ");
+        format!("{} => {}({})", vars, self.name, vars)
+    }
+}
+
+#[derive(Clone)]
 struct Eq<Var>(Var, Var);
 
 impl<Var, Value> Constraint<Var, Value> for Eq<Var>
@@ -81,7 +159,7 @@ where
     Value: Clone + Debug,
 {
     fn update(
-        &self,
+        &mut self,
         assignment: &mut Assignment<Var, Value>,
         key: fn(&Value) -> &str,
     ) -> Result<bool, ConstraintError<Var, Value>> {
@@ -114,6 +192,7 @@ where
     }
 }
 
+#[derive(Clone)]
 struct Assign<Var, Value>(Var, Value);
 
 impl<Var, Value> Constraint<Var, Value> for Assign<Var, Value>
@@ -122,7 +201,7 @@ where
     Value: Clone + Debug,
 {
     fn update(
-        &self,
+        &mut self,
         assignment: &mut Assignment<Var, Value>,
         key: fn(&Value) -> &str,
     ) -> Result<bool, ConstraintError<Var, Value>> {
@@ -150,6 +229,7 @@ where
     }
 }
 
+#[derive(Clone)]
 struct And<Var, Value>(Vec<Box<dyn Constraint<Var, Value>>>);
 
 impl<Var, Value> Constraint<Var, Value> for And<Var, Value>
@@ -158,13 +238,13 @@ where
     Value: Clone + Debug,
 {
     fn update(
-        &self,
+        &mut self,
         assignment: &mut Assignment<Var, Value>,
         key: fn(&Value) -> &str,
     ) -> Result<bool, ConstraintError<Var, Value>> {
         let orig_assignment = assignment.clone();
         let mut updated = false;
-        for c in self.0.iter() {
+        for c in self.0.iter_mut() {
             match c.update(assignment, key) {
                 Ok(upd) => updated |= upd,
                 Err(error) => {
@@ -190,6 +270,7 @@ where
     }
 }
 
+#[derive(Clone)]
 struct Xor<Var, Value>(Vec<Box<dyn Constraint<Var, Value>>>);
 
 impl<Var, Value> Constraint<Var, Value> for Xor<Var, Value>
@@ -198,16 +279,20 @@ where
     Value: Clone + Debug,
 {
     fn update(
-        &self,
+        &mut self,
         assignment: &mut Assignment<Var, Value>,
         key: fn(&Value) -> &str,
     ) -> Result<bool, ConstraintError<Var, Value>> {
         let mut success_count = 0;
         let orig_assignment = assignment.clone();
+        let orig_cs = self.0.clone();
         let mut result_assignment = assignment.clone();
         let mut assignment_updated = false;
         let mut errors = vec![];
-        for c in self.0.iter() {
+        let mut result_constraint = None;
+
+        let cs = std::mem::take(&mut self.0);
+        for mut c in cs {
             let result = c.update(assignment, key);
             match result {
                 Ok(updated) => {
@@ -216,6 +301,7 @@ where
                         break;
                     }
 
+                    result_constraint = Some(c);
                     if updated {
                         swap(&mut result_assignment, assignment);
                     }
@@ -224,19 +310,29 @@ where
                 Err(error) => errors.push(error),
             }
         }
+
+        // Success roughly means "the constraint is compatiable with the current assignment".
+        //
         // If update is successful for only one sub constraint, then we have nailed down the only true constraint.
         // If update is successful for more than one constraint, then Xor succeeds with no updates.
         // If update fails for every constraint, then Xor fails
         match success_count.cmp(&1) {
             std::cmp::Ordering::Equal => {
+                // Prune all other constraints. This is sound since the constraints are monotonic.
+                self.0 = vec![result_constraint.unwrap()];
                 *assignment = result_assignment;
                 Ok(assignment_updated)
             }
             std::cmp::Ordering::Greater => {
+                self.0 = orig_cs;
                 *assignment = orig_assignment;
                 Ok(false)
             }
-            std::cmp::Ordering::Less => Err(ConstraintError::NoConstraintSatisfied(errors)),
+            std::cmp::Ordering::Less => {
+                self.0 = orig_cs;
+                *assignment = orig_assignment;
+                Err(ConstraintError::NoConstraintSatisfied(errors))
+            }
         }
     }
 
@@ -252,16 +348,18 @@ where
     }
 }
 
+#[derive(Clone)]
 struct Impossible {
     constraint: ImpossibleConstraint,
 }
+
 impl<Var, Value> Constraint<Var, Value> for Impossible
 where
     Var: cmp::Eq + PartialEq + Hash + Clone + Debug,
     Value: Clone + Debug,
 {
     fn update(
-        &self,
+        &mut self,
         _assignment: &mut Assignment<Var, Value>,
         _key: fn(&Value) -> &str,
     ) -> Result<bool, ConstraintError<Var, Value>> {
@@ -275,6 +373,7 @@ where
     }
 }
 
+#[derive(Debug)]
 pub enum ConstraintError<Var, Value> {
     InconsistentConstraint(Var, Value, Value),
     UnconstrainedVar(Var),
@@ -337,7 +436,7 @@ impl Debug for Problem<AtomTerm, ArcSort> {
     }
 }
 
-impl Default for Problem<AtomTerm, ArcSort> {
+impl<Var, Value> Default for Problem<Var, Value> {
     fn default() -> Self {
         Self {
             constraints: vec![],
@@ -556,14 +655,14 @@ where
     Value: Clone + Debug + 'static,
 {
     pub(crate) fn solve(
-        &self,
+        mut self,
         key: fn(&Value) -> &str,
     ) -> Result<Assignment<Var, Value>, ConstraintError<Var, Value>> {
         let mut assignment = Assignment(HashMap::default());
         let mut changed = true;
         while changed {
             changed = false;
-            for constraint in self.constraints.iter() {
+            for constraint in self.constraints.iter_mut() {
                 changed |= constraint.update(&mut assignment, key)?;
             }
         }
@@ -960,4 +1059,69 @@ impl TypeConstraint for AllEqualTypeConstraint {
         }
         constraints
     }
+}
+
+pub(crate) fn grounded_check(
+    rule: &GenericCoreRule<HeadOrEq<ResolvedCall>, ResolvedCall, ResolvedVar>,
+) -> Result<(), TypeError> {
+    use crate::core::ResolvedAtomTerm;
+    let body = &rule.body;
+
+    let range = rule
+        .body
+        .get_vars()
+        .into_iter()
+        .map(|v| ResolvedAtomTerm::Var(rule.span.clone(), v))
+        .collect();
+    let mut problem: Problem<ResolvedAtomTerm, ()> = Problem {
+        constraints: vec![],
+        range,
+    };
+
+    for atom in body.atoms.iter() {
+        let mut add_global_and_literal = false;
+        match &atom.head {
+            HeadOrEq::Head(ResolvedCall::Func(_)) => {
+                for arg in atom.args.iter() {
+                    problem.constraints.push(assign(arg.clone(), ()));
+                }
+            }
+            HeadOrEq::Head(ResolvedCall::Primitive(_)) => {
+                let (out, inp) = atom.args.split_last().unwrap();
+                let out = out.clone();
+                problem.constraints.push(implies(
+                    format!("grounded_{:?}", out),
+                    inp.to_vec(),
+                    Arc::new(move |_| assign(out.clone(), ())),
+                ));
+                add_global_and_literal = true;
+            }
+            HeadOrEq::Eq => {
+                assert_eq!(atom.args.len(), 2);
+                problem
+                    .constraints
+                    .push(eq(atom.args[0].clone(), atom.args[1].clone()));
+                add_global_and_literal = true;
+            }
+        }
+        if add_global_and_literal {
+            for arg in atom.args.iter() {
+                match arg {
+                    ResolvedAtomTerm::Global(..) | ResolvedAtomTerm::Literal(..) => {
+                        problem.constraints.push(assign(arg.clone(), ()));
+                    }
+                    ResolvedAtomTerm::Var(..) => {}
+                }
+            }
+        }
+    }
+
+    let _assignment = problem.solve(|_| "grounded").map_err(|err| match err {
+        ConstraintError::UnconstrainedVar(ResolvedAtomTerm::Var(span, v)) => {
+            TypeError::Ungrounded(v.to_string(), span)
+        }
+        _ => panic!("unexpected constraint error in groundedness check"),
+    })?;
+
+    Ok(())
 }

@@ -1,0 +1,5 @@
+(sort S)
+(constructor S0 () S)
+(constructor S1 (S) S)
+(birewrite (S1 x) x)
+(run 10)

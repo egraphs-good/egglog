@@ -13,7 +13,7 @@
 use std::hash::Hasher;
 use std::ops::AddAssign;
 
-use crate::*;
+use crate::{constraint::grounded_check, *};
 use typechecking::{FuncType, PrimitiveWithId, TypeError};
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -809,16 +809,6 @@ where
             head,
         })
     }
-
-    fn to_canonicalized_core_rule_impl(
-        &self,
-        typeinfo: &TypeInfo,
-        fresh_gen: &mut impl FreshGen<Head, Leaf>,
-        value_eq: impl Fn(&GenericAtomTerm<Leaf>, &GenericAtomTerm<Leaf>) -> Head,
-    ) -> Result<GenericCoreRule<Head, Head, Leaf>, TypeError> {
-        let rule = self.to_core_rule(typeinfo, fresh_gen)?;
-        Ok(rule.canonicalize(value_eq))
-    }
 }
 
 impl ResolvedRule {
@@ -828,12 +818,23 @@ impl ResolvedRule {
         fresh_gen: &mut SymbolGen,
     ) -> Result<ResolvedCoreRule, TypeError> {
         let value_eq = &typeinfo.get_prims("value-eq").unwrap()[0];
-        self.to_canonicalized_core_rule_impl(typeinfo, fresh_gen, |at1, at2| {
+        let value_eq = |at1: &ResolvedAtomTerm, at2: &ResolvedAtomTerm| {
             ResolvedCall::Primitive(SpecializedPrimitive {
                 primitive: value_eq.clone(),
                 input: vec![at1.output(), at2.output()],
                 output: UnitSort.to_arcsort(),
             })
-        })
+        };
+
+        let rule = self.to_core_rule(typeinfo, fresh_gen)?;
+
+        // The groundedness check happens before canonicalization, because canonicalization
+        // may turn ungrounded variables in a query to unbounded variables in actions (e.g.,
+        // `(rule ((= x y)) ((R x y)))`) but unboundedness is only checked during type checking.
+        grounded_check(&rule)?;
+
+        let rule = rule.canonicalize(value_eq);
+
+        Ok(rule)
     }
 }

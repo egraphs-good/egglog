@@ -1,0 +1,12 @@
+(sort StringVec (Vec String))
+
+(datatype E (F StringVec StringVec))
+
+(relation R (String))
+(rule
+ ((= e1 (F (vec-of "a" "b") (vec-of a b))))
+ ((R a)
+  (R b)))
+
+(F (vec-of "a" "b") (vec-of "a" "b"))
+(run 1)
