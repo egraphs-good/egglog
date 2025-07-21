@@ -266,7 +266,7 @@ impl FromStr for RunMode {
 /// use egglog::*;
 ///
 /// let mut egraph = EGraph::default();
-/// egraph.parse_and_run_program("(datatype Math (Num i64) (Add Math Math))").unwrap();
+/// egraph.parse_and_run_program(None, "(datatype Math (Num i64) (Add Math Math))").unwrap();
 /// ```
 #[derive(Clone)]
 pub struct EGraph {
