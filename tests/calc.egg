@@ -1,3 +1,4 @@
+; 定义datatype
 (datatype G)
 (constructor IConst () G)
 (let I (IConst))
