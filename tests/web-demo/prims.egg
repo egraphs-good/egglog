@@ -3,6 +3,14 @@
 
 ; Weighted edge (vertex 1 * vertex 2 * weight)
 (datatype edge (Edge i64 i64 i64))
+;                    ------- ---
+；                    input output
+;                        其中output会由DefaultValue控制它的生成
+; insert lookup predicted的区别：
+;   insert和lookup分开，前者负责插入新的fact或数据项，会触发推理；后者只是查询
+;   loolup通常用于查询某个关系、函数、集合的当前状态（如某个fact是否存在，某个函数的值是多少）
+;   egglog的推理引擎，lookup的结果并不会直接插入到fact数据库中，而是作为预测值predicted被暂时地使用
+;   当满足条件/触发规则后，predicted才会通过 insert 变为fact
 (relation edge-exists (edge))
 
 (relation mytrue ())
