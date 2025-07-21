@@ -96,7 +96,7 @@ cost_impl_num!(num::BigInt, num::BigRational);
 use ordered_float::OrderedFloat;
 cost_impl_num!(f32, f64, OrderedFloat<f32>, OrderedFloat<f64>);
 
-pub type DefaultCost = usize;
+pub type DefaultCost = u64;
 
 /// A cost model that computes the cost by summing the cost of each node.
 #[derive(Default, Clone)]

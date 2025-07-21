@@ -590,7 +590,7 @@ pub fn add_constructor(
     egraph: &mut EGraph,
     name: &str,
     schema: Schema,
-    cost: Option<usize>,
+    cost: Option<DefaultCost>,
     unextractable: bool,
 ) -> Result<Vec<String>, Error> {
     egraph.run_program(vec![Command::Constructor {
