@@ -37,7 +37,8 @@ impl BaseValue for bool {
         Some(val.rep() != 0)
     }
     /// To optimize storage, we map [`Value`] 1 to true and 0 to false in the implementation.
-    /// By the way, `subsumed` column in one [`crate::Row`] is a bool type.
+    /// As an example, the `subsumed` column of a table has type bool.
+    ///
     /// ```rust
     /// use core_relations::BaseValue;
     /// let true_value = true.try_box().unwrap();
