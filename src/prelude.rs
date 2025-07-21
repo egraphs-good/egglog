@@ -18,30 +18,37 @@ pub use egglog::{span, EGraph};
 pub mod exprs {
     use super::*;
 
+    /// Creates a variable expression.
     pub fn var(name: &str) -> Expr {
         Expr::Var(span!(), name.to_owned())
     }
 
+    /// Creates an integer literal expression.
     pub fn int(value: i64) -> Expr {
         Expr::Lit(span!(), Literal::Int(value))
     }
 
+    /// Creates a float literal expression.
     pub fn float(value: f64) -> Expr {
         Expr::Lit(span!(), Literal::Float(value.into()))
     }
 
+    /// Creates a string literal expression.
     pub fn string(value: &str) -> Expr {
         Expr::Lit(span!(), Literal::String(value.to_owned()))
     }
 
+    /// Creates a unit literal expression.
     pub fn unit() -> Expr {
         Expr::Lit(span!(), Literal::Unit)
     }
 
+    /// Creates a boolean literal expression.
     pub fn bool(value: bool) -> Expr {
         Expr::Lit(span!(), Literal::Bool(value))
     }
 
+    /// Creates a function call expression.
     pub fn call(f: &str, xs: Vec<Expr>) -> Expr {
         Expr::Call(span!(), f.to_owned(), xs)
     }
@@ -629,7 +636,7 @@ macro_rules! datatype {
 /// A "default" implementation of [`Sort`] for simple types
 /// which just want to put some data in the e-graph. If you
 /// implement this trait, do not implement `Sort` or
-/// `ContainerSort. Use `add_leaf_sort` to register leaf
+/// `ContainerSort. Use `add_base_sort` to register leaf
 /// sorts with the `EGraph`. See `Sort` for documentation
 /// of the methods. Do not override `to_arcsort`.
 pub trait BaseSort: Any + Send + Sync + Debug {
@@ -779,12 +786,13 @@ impl<T: ContainerSort> Sort for ContainerSortImpl<T> {
     }
 }
 
-pub fn add_leaf_sort(
+/// Add a [`BaseSort`] to the e-graph
+pub fn add_base_sort(
     egraph: &mut EGraph,
-    leaf_sort: impl BaseSort,
+    base_sort: impl BaseSort,
     span: Span,
 ) -> Result<(), TypeError> {
-    egraph.add_sort(BaseSortImpl(leaf_sort), span)
+    egraph.add_sort(BaseSortImpl(base_sort), span)
 }
 
 pub fn add_container_sort(

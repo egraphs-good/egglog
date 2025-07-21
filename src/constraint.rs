@@ -23,16 +23,22 @@ pub enum ImpossibleConstraint {
     },
 }
 
+/// A constraint that can be applied to variable assignments during solving.
 pub trait Constraint<Var, Value> {
+    /// Updates the assignment based on this constraint.
+    ///
+    /// Returns `true` if the assignment was modified, `false` otherwise.
     fn update(
         &self,
         assignment: &mut Assignment<Var, Value>,
         key: fn(&Value) -> &str,
     ) -> Result<bool, ConstraintError<Var, Value>>;
 
+    /// Returns a human-readable representation of this constraint.
     fn pretty(&self) -> String;
 }
 
+/// Creates an equality constraint between two variables.
 pub fn eq<Var, Value>(x: Var, y: Var) -> Box<dyn Constraint<Var, Value>>
 where
     Var: cmp::Eq + PartialEq + Hash + Clone + Debug + 'static,
@@ -41,6 +47,7 @@ where
     Box::new(Eq(x, y))
 }
 
+/// Creates an assignment constraint that binds a variable to a value.
 pub fn assign<Var, Value>(x: Var, v: Value) -> Box<dyn Constraint<Var, Value>>
 where
     Var: cmp::Eq + PartialEq + Hash + Clone + Debug + 'static,
@@ -49,6 +56,7 @@ where
     Box::new(Assign(x, v))
 }
 
+/// Creates a conjunction constraint that requires all sub-constraints to hold.
 pub fn and<Var, Value>(cs: Vec<Box<dyn Constraint<Var, Value>>>) -> Box<dyn Constraint<Var, Value>>
 where
     Var: cmp::Eq + PartialEq + Hash + Clone + Debug + 'static,
@@ -57,6 +65,7 @@ where
     Box::new(And(cs))
 }
 
+/// Creates an exclusive-or constraint where exactly one sub-constraint must hold.
 pub fn xor<Var, Value>(cs: Vec<Box<dyn Constraint<Var, Value>>>) -> Box<dyn Constraint<Var, Value>>
 where
     Var: cmp::Eq + PartialEq + Hash + Clone + Debug + 'static,
@@ -65,6 +74,7 @@ where
     Box::new(Xor(cs))
 }
 
+/// Creates a constraint that always fails with the given impossible constraint.
 pub fn impossible<Var, Value>(constraint: ImpossibleConstraint) -> Box<dyn Constraint<Var, Value>>
 where
     Var: cmp::Eq + PartialEq + Hash + Clone + Debug + 'static,
