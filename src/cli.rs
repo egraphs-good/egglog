@@ -1,9 +1,6 @@
 use crate::*;
 use std::io::{self, BufRead, BufReader, Read, Write};
 
-#[global_allocator]
-static GLOBAL: mimalloc::MiMalloc = mimalloc::MiMalloc;
-
 #[cfg(feature = "bin")]
 pub mod bin {
     use super::*;
