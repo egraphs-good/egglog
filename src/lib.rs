@@ -61,11 +61,20 @@ use web_time::Duration;
 
 pub type ArcSort = Arc<dyn Sort>;
 
+/// A trait for implementing custom primitive operations in egglog.
+///
+/// Primitives are built-in functions that can be called in both rule queries and actions.
 pub trait Primitive {
+    /// Returns the name of this primitive operation.
     fn name(&self) -> &str;
+
     /// Constructs a type constraint for the primitive that uses the span information
     /// for error localization.
     fn get_type_constraints(&self, span: &Span) -> Box<dyn TypeConstraint>;
+
+    /// Applies the primitive operation to the given arguments.
+    ///
+    /// Returns `Some(value)` if the operation succeeds, or `None` if it fails.
     fn apply(&self, exec_state: &mut ExecutionState, args: &[Value]) -> Option<Value>;
 }
 
@@ -178,6 +187,7 @@ impl RunReport {
         }
     }
 
+    /// Merge two reports.
     pub fn union(&mut self, other: Self) {
         self.updated |= other.updated;
         RunReport::union_times(
@@ -245,6 +255,19 @@ impl FromStr for RunMode {
     }
 }
 
+/// The main interface for an e-graph in egglog.
+///
+/// An [`EGraph`] maintains a collection of equivalence classes of terms and provides
+/// operations for adding facts, running rules, and extracting optimal terms.
+///
+/// # Examples
+///
+/// ```
+/// use egglog::*;
+///
+/// let mut egraph = EGraph::default();
+/// egraph.parse_and_run_program(None, "(datatype Math (Num i64) (Add Math Math))").unwrap();
+/// ```
 #[derive(Clone)]
 pub struct EGraph {
     backend: egglog_bridge::EGraph,
@@ -317,6 +340,7 @@ pub struct ResolvedSchema {
 }
 
 impl ResolvedSchema {
+    /// Get the type at position `index`, counting the `output` sort as at position `input.len()`.
     pub fn get_by_pos(&self, index: usize) -> Option<&ArcSort> {
         if self.input.len() == index {
             Some(&self.output)
@@ -357,13 +381,13 @@ impl Default for EGraph {
             commands: Default::default(),
         };
 
-        add_leaf_sort(&mut eg, UnitSort, span!()).unwrap();
-        add_leaf_sort(&mut eg, StringSort, span!()).unwrap();
-        add_leaf_sort(&mut eg, BoolSort, span!()).unwrap();
-        add_leaf_sort(&mut eg, I64Sort, span!()).unwrap();
-        add_leaf_sort(&mut eg, F64Sort, span!()).unwrap();
-        add_leaf_sort(&mut eg, BigIntSort, span!()).unwrap();
-        add_leaf_sort(&mut eg, BigRatSort, span!()).unwrap();
+        add_base_sort(&mut eg, UnitSort, span!()).unwrap();
+        add_base_sort(&mut eg, StringSort, span!()).unwrap();
+        add_base_sort(&mut eg, BoolSort, span!()).unwrap();
+        add_base_sort(&mut eg, I64Sort, span!()).unwrap();
+        add_base_sort(&mut eg, F64Sort, span!()).unwrap();
+        add_base_sort(&mut eg, BigIntSort, span!()).unwrap();
+        add_base_sort(&mut eg, BigRatSort, span!()).unwrap();
         eg.type_info.add_presort::<MapSort>(span!()).unwrap();
         eg.type_info.add_presort::<SetSort>(span!()).unwrap();
         eg.type_info.add_presort::<VecSort>(span!()).unwrap();
@@ -395,6 +419,7 @@ impl Default for EGraph {
 pub struct NotFoundError(String);
 
 impl EGraph {
+    /// Add a user-defined command to the e-graph
     pub fn add_command(
         &mut self,
         name: String,
@@ -411,10 +436,17 @@ impl EGraph {
         Ok(())
     }
 
+    /// Test if the e-graph operates in interactive mode.
+    ///
+    /// In interactive mode, `(done)` will be printed after every successful command.
+    /// Otherwise, `(error)` will be printed.
     pub fn is_interactive_mode(&self) -> bool {
         self.interactive_mode
     }
 
+    /// Push a snapshot of the e-graph into the stack.
+    ///
+    /// See [`EGraph::pop`].
     pub fn push(&mut self) {
         let prev_prev: Option<Box<Self>> = self.pushed_egraph.take();
         let mut prev = self.clone();
@@ -631,8 +663,20 @@ impl EGraph {
         Ok((inputs, output, termdag))
     }
 
-    pub fn print_function(&mut self, sym: &str, n: usize) -> Result<(), Error> {
-        log::info!("Printing up to {n} tuples of table {sym}: ");
+    /// Print up to `n` the tuples in a given function.
+    /// Print all tuples if `n` is not provided.
+    pub fn print_function(&mut self, sym: &str, n: Option<usize>) -> Result<(), Error> {
+        let n = match n {
+            Some(n) => {
+                log::info!("Printing up to {n} tuples of function {sym}: ");
+                n
+            }
+            None => {
+                log::info!("Printing all tuples of function {sym}: ");
+                usize::MAX
+            }
+        };
+
         let (terms, outputs, termdag) = self.function_to_dag(sym, n, true)?;
         let f = self
             .functions
@@ -666,6 +710,8 @@ impl EGraph {
         Ok(())
     }
 
+    /// Print the size of a function. If no function name is provided,
+    /// print the size of all functions in "name: len" pairs.
     pub fn print_size(&mut self, sym: Option<&str>) -> Result<(), Error> {
         if let Some(sym) = sym {
             let f = self
@@ -800,6 +846,10 @@ impl EGraph {
         report
     }
 
+    /// Runs a ruleset for an iteration.
+    ///
+    /// This applies every match it finds (under semi-naive).
+    /// See [`EGraph::step_rules_with_scheduler`] for more fine-grained control.
     pub fn step_rules(&mut self, ruleset: &str) -> RunReport {
         fn collect_rule_ids(
             ruleset: &str,
@@ -915,6 +965,7 @@ impl EGraph {
         }
     }
 
+    /// Evaluates an expression, returns the sort of the expression and the evaluation result.
     pub fn eval_expr(&mut self, expr: &Expr) -> Result<(ArcSort, Value), Error> {
         let span = expr.span();
         let command = Command::Action(Action::Expr(span.clone(), expr.clone()));
@@ -1195,7 +1246,7 @@ impl EGraph {
                 log::info!("Popped {n} levels.")
             }
             ResolvedNCommand::PrintTable(span, f, n) => {
-                self.print_function(&f, n).map_err(|e| match e {
+                self.print_function(&f, Some(n)).map_err(|e| match e {
                     Error::TypeError(TypeError::UnboundFunction(f, _)) => {
                         Error::TypeError(TypeError::UnboundFunction(f, span.clone()))
                     }
@@ -1458,6 +1509,8 @@ impl EGraph {
         self.run_program(parsed)
     }
 
+    /// Get the number of tuples in the database.
+    ///
     pub fn num_tuples(&self) -> usize {
         self.functions
             .values()

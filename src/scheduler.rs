@@ -158,11 +158,12 @@ impl EGraph {
         })
     }
 
+    /// Removes a scheduler
     pub fn remove_scheduler(&mut self, scheduler_id: SchedulerId) -> Option<Box<dyn Scheduler>> {
         self.schedulers.take(scheduler_id).map(|r| r.scheduler)
     }
 
-    /// Get the scheduler by its id.
+    /// Runs a ruleset for one iteration using the given ruleset
     pub fn step_rules_with_scheduler(
         &mut self,
         scheduler_id: SchedulerId,

@@ -23,16 +23,22 @@ pub enum ImpossibleConstraint {
     },
 }
 
+/// A constraint that can be applied to variable assignments during solving.
 pub trait Constraint<Var, Value> {
+    /// Updates the assignment based on this constraint.
+    ///
+    /// Returns `true` if the assignment was modified, `false` otherwise.
     fn update(
         &self,
         assignment: &mut Assignment<Var, Value>,
         key: fn(&Value) -> &str,
     ) -> Result<bool, ConstraintError<Var, Value>>;
 
+    /// Returns a human-readable representation of this constraint.
     fn pretty(&self) -> String;
 }
 
+/// Creates an equality constraint between two variables.
 pub fn eq<Var, Value>(x: Var, y: Var) -> Box<dyn Constraint<Var, Value>>
 where
     Var: cmp::Eq + PartialEq + Hash + Clone + Debug + 'static,
@@ -41,6 +47,7 @@ where
     Box::new(Eq(x, y))
 }
 
+/// Creates an assignment constraint that binds a variable to a value.
 pub fn assign<Var, Value>(x: Var, v: Value) -> Box<dyn Constraint<Var, Value>>
 where
     Var: cmp::Eq + PartialEq + Hash + Clone + Debug + 'static,
@@ -49,6 +56,7 @@ where
     Box::new(Assign(x, v))
 }
 
+/// Creates a conjunction constraint that requires all sub-constraints to hold.
 pub fn and<Var, Value>(cs: Vec<Box<dyn Constraint<Var, Value>>>) -> Box<dyn Constraint<Var, Value>>
 where
     Var: cmp::Eq + PartialEq + Hash + Clone + Debug + 'static,
@@ -57,6 +65,7 @@ where
     Box::new(And(cs))
 }
 
+/// Creates an exclusive-or constraint where exactly one sub-constraint must hold.
 pub fn xor<Var, Value>(cs: Vec<Box<dyn Constraint<Var, Value>>>) -> Box<dyn Constraint<Var, Value>>
 where
     Var: cmp::Eq + PartialEq + Hash + Clone + Debug + 'static,
@@ -65,6 +74,7 @@ where
     Box::new(Xor(cs))
 }
 
+/// Creates a constraint that always fails with the given impossible constraint.
 pub fn impossible<Var, Value>(constraint: ImpossibleConstraint) -> Box<dyn Constraint<Var, Value>>
 where
     Var: cmp::Eq + PartialEq + Hash + Clone + Debug + 'static,
@@ -283,6 +293,7 @@ pub enum ConstraintError<Var, Value> {
 }
 
 impl ConstraintError<AtomTerm, ArcSort> {
+    /// Converts a [`ConstraintError`] produced by type checking into a type error.
     pub fn to_type_error(&self) -> TypeError {
         match &self {
             ConstraintError::InconsistentConstraint(x, v1, v2) => TypeError::Mismatch {
@@ -316,6 +327,7 @@ impl ConstraintError<AtomTerm, ArcSort> {
     }
 }
 
+/// Represents a constraint-solving problem
 pub struct Problem<Var, Value> {
     pub constraints: Vec<Box<dyn Constraint<Var, Value>>>,
     pub range: HashSet<Var>,
@@ -354,10 +366,12 @@ where
     Var: Hash + cmp::Eq + PartialEq + Clone,
     Value: Clone,
 {
+    /// Insert into the assignment.
     pub fn insert(&mut self, var: Var, value: Value) -> Option<Value> {
         self.0.insert(var, value)
     }
 
+    /// Get the value from the assignment.
     pub fn get(&self, var: &Var) -> Option<&Value> {
         self.0.get(var)
     }
@@ -592,7 +606,7 @@ impl Problem<AtomTerm, ArcSort> {
         Ok(())
     }
 
-    pub fn add_actions(
+    pub(crate) fn add_actions(
         &mut self,
         actions: &GenericCoreActions<String, String>,
         typeinfo: &TypeInfo,
@@ -701,7 +715,7 @@ impl CoreAction {
 }
 
 impl Atom<StringOrEq> {
-    pub fn get_constraints(
+    pub(crate) fn get_constraints(
         &self,
         type_info: &TypeInfo,
     ) -> Result<Vec<Box<dyn Constraint<AtomTerm, ArcSort>>>, TypeError> {
@@ -827,11 +841,13 @@ pub struct SimpleTypeConstraint {
 }
 
 impl SimpleTypeConstraint {
+    /// Constructs a `SimpleTypeConstraint`
     pub fn new(name: &str, sorts: Vec<ArcSort>, span: Span) -> SimpleTypeConstraint {
         let name = name.to_owned();
         SimpleTypeConstraint { name, sorts, span }
     }
 
+    /// Converts self to a boxed type constraint.
     pub fn into_box(self) -> Box<dyn TypeConstraint> {
         Box::new(self)
     }
@@ -865,7 +881,7 @@ impl TypeConstraint for SimpleTypeConstraint {
     }
 }
 
-/// This constraint requires all types to be equivalent to each other
+/// This constraint requires all types to be equivalent to each other.
 pub struct AllEqualTypeConstraint {
     name: String,
     sort: Option<ArcSort>,
@@ -875,6 +891,7 @@ pub struct AllEqualTypeConstraint {
 }
 
 impl AllEqualTypeConstraint {
+    /// Creates the `AllEqualTypeConstraint`.
     pub fn new(name: &str, span: Span) -> AllEqualTypeConstraint {
         AllEqualTypeConstraint {
             name: name.to_owned(),
@@ -885,6 +902,7 @@ impl AllEqualTypeConstraint {
         }
     }
 
+    /// Converts self into a boxed type constraint.
     pub fn into_box(self) -> Box<dyn TypeConstraint> {
         Box::new(self)
     }

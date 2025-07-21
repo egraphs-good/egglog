@@ -44,9 +44,12 @@ pub use r#fn::*;
 mod multiset;
 pub use multiset::*;
 
+/// A sort (type) in the e-graph that defines values in egglog. Sorts are user-extensible (e.g., [`prelude::BaseSort`]).
 pub trait Sort: Any + Send + Sync + Debug {
+    /// Returns the name of this sort.
     fn name(&self) -> &str;
 
+    /// Returns the backend-specific column type. See [`ColumnTy`].
     fn column_ty(&self, backend: &egglog_bridge::EGraph) -> ColumnTy;
 
     /// return the inner sorts if a container sort
