@@ -1,6 +1,9 @@
 use crate::*;
 use std::io::{self, BufRead, BufReader, Read, Write};
 
+#[global_allocator]
+static GLOBAL: mimalloc::MiMalloc = mimalloc::MiMalloc;
+
 #[cfg(feature = "bin")]
 pub mod bin {
     use super::*;
@@ -49,6 +52,10 @@ pub mod bin {
 
     #[allow(clippy::disallowed_macros)]
     pub fn cli(mut egraph: EGraph) {
+        rayon::ThreadPoolBuilder::new()
+            .num_threads(1)
+            .build_global()
+            .unwrap();
         env_logger::Builder::new()
             .filter_level(log::LevelFilter::Info)
             .format_timestamp(None)
