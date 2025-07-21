@@ -902,6 +902,7 @@ mod tests {
             ruleset,
             facts![
                 (fib 5)
+                (fib x)
                 (= f1 (fib (+ x 1)))
                 (= 3 (unquote exprs::int(1 + 2)))
             ],
