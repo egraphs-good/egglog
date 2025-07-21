@@ -636,7 +636,7 @@ macro_rules! datatype {
 /// A "default" implementation of [`Sort`] for simple types
 /// which just want to put some data in the e-graph. If you
 /// implement this trait, do not implement `Sort` or
-/// `ContainerSort. Use `add_base_sort` to register leaf
+/// `ContainerSort. Use `add_base_sort` to register base
 /// sorts with the `EGraph`. See `Sort` for documentation
 /// of the methods. Do not override `to_arcsort`.
 pub trait BaseSort: Any + Send + Sync + Debug {

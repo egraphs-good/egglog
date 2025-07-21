@@ -58,10 +58,16 @@ pub struct TypeInfo {
 // These methods need to be on the `EGraph` in order to
 // register sorts and primitives with the backend.
 impl EGraph {
+    /// Add a user-defined sort to the e-graph.
+    ///
+    /// Also look at [`prelude::add_base_sort`] for a convenience method for adding user-defined sorts
     pub fn add_sort<S: Sort + 'static>(&mut self, sort: S, span: Span) -> Result<(), TypeError> {
         self.add_arcsort(Arc::new(sort), span)
     }
 
+    /// Declare a sort. This corresponds to the `sort` keyword in egglog.
+    /// It can either declares a new [`EqSort`] if `presort_and_args` is not provided,
+    /// or an instantiation of a presort (e.g., containers like `Vec`).
     pub fn declare_sort(
         &mut self,
         name: impl Into<String>,
@@ -87,7 +93,7 @@ impl EGraph {
         self.add_arcsort(sort, span)
     }
 
-    /// Add a user-defined sort
+    /// Add a user-defined sort to the e-graph.
     pub fn add_arcsort(&mut self, sort: ArcSort, span: Span) -> Result<(), TypeError> {
         sort.register_type(&mut self.backend);
 

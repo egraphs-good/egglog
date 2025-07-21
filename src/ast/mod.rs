@@ -908,6 +908,7 @@ impl Schema {
 }
 
 impl FunctionDecl {
+    /// Constructs a `function`
     pub fn function(
         span: Span,
         name: String,
@@ -926,6 +927,7 @@ impl FunctionDecl {
         }
     }
 
+    /// Constructs a `constructor`
     pub fn constructor(
         span: Span,
         name: String,
@@ -945,6 +947,7 @@ impl FunctionDecl {
         }
     }
 
+    /// Constructs a `relation`
     pub fn relation(span: Span, name: String, input: Vec<String>) -> Self {
         Self {
             name,

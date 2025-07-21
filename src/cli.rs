@@ -47,6 +47,10 @@ pub mod bin {
         no_messages: bool,
     }
 
+    /// Start a command-line interface for the E-graph.
+    ///
+    /// This is what vanilla egglog uses, and custom egglog builds (i.e., "egglog batteries included")
+    /// should also call this function.
     #[allow(clippy::disallowed_macros)]
     pub fn cli(mut egraph: EGraph) {
         env_logger::Builder::new()
@@ -144,10 +148,12 @@ pub mod bin {
 }
 
 impl EGraph {
+    /// Start a Read-Eval-Print Loop with standard I/O.
     pub fn repl(&mut self) -> io::Result<()> {
         self.repl_with(io::stdin(), io::stdout())
     }
 
+    /// Start a Read-Eval-Print Loop with the given input and output channel.
     pub fn repl_with<R, W>(&mut self, input: R, mut output: W) -> io::Result<()>
     where
         R: Read,
