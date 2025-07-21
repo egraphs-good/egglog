@@ -658,7 +658,7 @@ pub enum TypeError {
     },
     #[error("{1}\nUnbound symbol {0}")]
     Unbound(String, Span),
-    #[error("{1}\nUngrounded symbol {0}")]
+    #[error("{1}\nVariable {0} is ungrounded")]
     Ungrounded(String, Span),
     #[error("{1}\nUndefined sort {0}")]
     UndefinedSort(String, Span),
