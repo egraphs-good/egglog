@@ -116,6 +116,30 @@ impl Display for ResolvedCall {
     }
 }
 
+/// A trait encapsulating the ability to query a [`TypeInfo`] to determine
+/// whether or not a symbol is bound as a function in the current egglog program.
+///
+/// Currently, we only use this trait to determine whether a symbol is a
+/// [`FunctionSubtype::Constructor`].
+pub trait IsFunc {
+    fn is_constructor(&self, type_info: &TypeInfo) -> bool;
+}
+
+impl IsFunc for ResolvedCall {
+    fn is_constructor(&self, type_info: &TypeInfo) -> bool {
+        match self {
+            ResolvedCall::Func(func) => type_info.is_constructor(&func.name),
+            ResolvedCall::Primitive(_) => false,
+        }
+    }
+}
+
+impl IsFunc for String {
+    fn is_constructor(&self, type_info: &TypeInfo) -> bool {
+        type_info.is_constructor(self)
+    }
+}
+
 #[derive(Debug, Clone)]
 pub enum GenericAtomTerm<Leaf> {
     Var(Span, Leaf),
@@ -456,7 +480,7 @@ where
 #[allow(clippy::type_complexity)]
 impl<Head, Leaf> GenericActions<Head, Leaf>
 where
-    Head: Clone + Display,
+    Head: Clone + Display + IsFunc,
     Leaf: Clone + PartialEq + Eq + Display + Hash,
 {
     pub(crate) fn to_core_actions<FG: FreshGen<Head, Leaf>>(
@@ -542,18 +566,75 @@ where
                     ));
                 }
                 GenericAction::Union(span, e1, e2) => {
-                    let mapped_e1 =
-                        e1.to_core_actions(typeinfo, binding, fresh_gen, &mut norm_actions)?;
-                    let mapped_e2 =
-                        e2.to_core_actions(typeinfo, binding, fresh_gen, &mut norm_actions)?;
-                    norm_actions.push(GenericCoreAction::Union(
-                        span.clone(),
-                        mapped_e1.get_corresponding_var_or_lit(typeinfo),
-                        mapped_e2.get_corresponding_var_or_lit(typeinfo),
-                    ));
-                    mapped_actions
-                        .0
-                        .push(GenericAction::Union(span.clone(), mapped_e1, mapped_e2));
+                    match (e1, e2) {
+                        (var @ GenericExpr::Var(..), GenericExpr::Call(_, f, args))
+                        | (GenericExpr::Call(_, f, args), var @ GenericExpr::Var(..))
+                            if f.is_constructor(typeinfo) =>
+                        {
+                            // This is a rewrite. Rewrites from a constructor or
+                            // function to an id are much faster when we perform a
+                            // `set` directly.
+                            let head = f;
+                            let expr = var;
+
+                            let mut mapped_args = vec![];
+                            for arg in args {
+                                let mapped_arg = arg.to_core_actions(
+                                    typeinfo,
+                                    binding,
+                                    fresh_gen,
+                                    &mut norm_actions,
+                                )?;
+                                mapped_args.push(mapped_arg);
+                            }
+                            let mapped_expr = expr.to_core_actions(
+                                typeinfo,
+                                binding,
+                                fresh_gen,
+                                &mut norm_actions,
+                            )?;
+                            norm_actions.push(GenericCoreAction::Set(
+                                span.clone(),
+                                head.clone(),
+                                mapped_args
+                                    .iter()
+                                    .map(|e| e.get_corresponding_var_or_lit(typeinfo))
+                                    .collect(),
+                                mapped_expr.get_corresponding_var_or_lit(typeinfo),
+                            ));
+                            let v = fresh_gen.fresh(head);
+                            mapped_actions.0.push(GenericAction::Set(
+                                span.clone(),
+                                CorrespondingVar::new(head.clone(), v),
+                                mapped_args,
+                                mapped_expr,
+                            ));
+                        }
+                        _ => {
+                            let mapped_e1 = e1.to_core_actions(
+                                typeinfo,
+                                binding,
+                                fresh_gen,
+                                &mut norm_actions,
+                            )?;
+                            let mapped_e2 = e2.to_core_actions(
+                                typeinfo,
+                                binding,
+                                fresh_gen,
+                                &mut norm_actions,
+                            )?;
+                            norm_actions.push(GenericCoreAction::Union(
+                                span.clone(),
+                                mapped_e1.get_corresponding_var_or_lit(typeinfo),
+                                mapped_e2.get_corresponding_var_or_lit(typeinfo),
+                            ));
+                            mapped_actions.0.push(GenericAction::Union(
+                                span.clone(),
+                                mapped_e1,
+                                mapped_e2,
+                            ));
+                        }
+                    };
                 }
                 GenericAction::Panic(span, string) => {
                     norm_actions.push(GenericCoreAction::Panic(span.clone(), string.clone()));
@@ -786,7 +867,7 @@ where
 
 impl<Head, Leaf> GenericRule<Head, Leaf>
 where
-    Head: Clone + Display,
+    Head: Clone + Display + IsFunc,
     Leaf: Clone + PartialEq + Eq + Display + Hash + Debug,
 {
     pub(crate) fn to_core_rule(

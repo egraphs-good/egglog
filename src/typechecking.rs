@@ -640,6 +640,12 @@ impl TypeInfo {
         self.func_types.get(sym)
     }
 
+    pub(crate) fn is_constructor(&self, sym: &str) -> bool {
+        self.func_types
+            .get(sym)
+            .is_some_and(|f| f.subtype == FunctionSubtype::Constructor)
+    }
+
     pub fn get_global_sort(&self, sym: &str) -> Option<&ArcSort> {
         self.global_sorts.get(sym)
     }
