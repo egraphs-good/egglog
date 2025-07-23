@@ -118,22 +118,25 @@ impl Display for ResolvedCall {
 
 /// A trait encapsulating the ability to query a [`TypeInfo`] to determine
 /// whether or not a symbol is bound as a function in the current egglog program.
+///
+/// Currently, we only use this trait to determine whether a symbol is a
+/// [`FunctionSubtype::Constructor`].
 pub trait IsFunc {
-    fn is_func(&self, type_info: &TypeInfo) -> bool;
+    fn is_constructor(&self, type_info: &TypeInfo) -> bool;
 }
 
 impl IsFunc for ResolvedCall {
-    fn is_func(&self, type_info: &TypeInfo) -> bool {
+    fn is_constructor(&self, type_info: &TypeInfo) -> bool {
         match self {
-            ResolvedCall::Func(func) => type_info.get_func_type(&func.name).is_some(),
+            ResolvedCall::Func(func) => type_info.is_constructor(&func.name),
             ResolvedCall::Primitive(_) => false,
         }
     }
 }
 
 impl IsFunc for String {
-    fn is_func(&self, type_info: &TypeInfo) -> bool {
-        type_info.get_func_type(self).is_some()
+    fn is_constructor(&self, type_info: &TypeInfo) -> bool {
+        type_info.is_constructor(self)
     }
 }
 
@@ -564,14 +567,15 @@ where
                 }
                 GenericAction::Union(span, e1, e2) => {
                     match (e1, e2) {
-                        (GenericExpr::Var(..), GenericExpr::Call(_, f, args))
-                            if f.is_func(typeinfo) =>
+                        (var @ GenericExpr::Var(..), GenericExpr::Call(_, f, args))
+                        | (GenericExpr::Call(_, f, args), var @ GenericExpr::Var(..))
+                            if f.is_constructor(typeinfo) =>
                         {
                             // This is a rewrite. Rewrites from a constructor or
                             // function to an id are much faster when we perform a
                             // `set` directly.
                             let head = f;
-                            let expr = e1;
+                            let expr = var;
 
                             let mut mapped_args = vec![];
                             for arg in args {
