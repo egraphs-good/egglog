@@ -56,6 +56,8 @@ rustc-hash = "2.1"
 thiserror = "2.0"
 web-time = "1.1"
 dyn-clone = "1.0.17"
+rayon = "1.10.0"
+mimalloc = "0.1.46"
 
 # Backend
 # TODO: move egglog-backend repo into core egglog repo
@@ -70,8 +72,6 @@ chrono = { version = "0.4", default-features = false, features = ["now"], option
 codspeed-criterion-compat = "2.7.2"
 glob = "0.3.1"
 libtest-mimic = "0.8"
-mimalloc = "0.1.46"
-rayon = "1.10.0"
 
 [profile.release]
 incremental = true
