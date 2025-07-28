@@ -5,7 +5,7 @@ use crate::{
     },
     *,
 };
-use std::cmp;
+use std::{cmp, rc::Rc};
 // Use immutable hashmap for performance
 // cloning assignments is common and O(1) with immutable hashmap
 use im_rc::HashMap;
@@ -95,7 +95,7 @@ where
 }
 
 pub type DelayedConstraintFn<Var, Value> =
-    Arc<dyn Fn(&[&Value]) -> Box<dyn Constraint<Var, Value>>>;
+    Rc<dyn Fn(&[&Value]) -> Box<dyn Constraint<Var, Value>>>;
 
 #[derive(Clone)]
 enum DelayedConstraint<Var, Value> {
@@ -311,7 +311,7 @@ where
             }
         }
 
-        // Success roughly means "the constraint is compatiable with the current assignment".
+        // Success roughly means "the constraint is compatible with the current assignment".
         //
         // If update is successful for only one sub constraint, then we have nailed down the only true constraint.
         // If update is successful for more than one constraint, then Xor succeeds with no updates.
@@ -1092,7 +1092,7 @@ pub(crate) fn grounded_check(
                 problem.constraints.push(implies(
                     format!("grounded_{:?}", out),
                     inp.to_vec(),
-                    Arc::new(move |_| assign(out.clone(), ())),
+                    Rc::new(move |_| assign(out.clone(), ())),
                 ));
                 add_global_and_literal = true;
             }
@@ -1120,7 +1120,7 @@ pub(crate) fn grounded_check(
         ConstraintError::UnconstrainedVar(ResolvedAtomTerm::Var(span, v)) => {
             TypeError::Ungrounded(v.to_string(), span)
         }
-        _ => panic!("unexpected constraint error in groundedness check"),
+        _ => panic!("unexpected constraint error in groundedness check {:?}", err),
     })?;
 
     Ok(())
