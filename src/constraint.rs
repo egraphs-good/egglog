@@ -11,6 +11,8 @@ use std::{cmp, rc::Rc};
 use im_rc::HashMap;
 use std::{fmt::Debug, iter::once, mem::swap};
 
+/// Represents constraints that are logically impossible to satisfy.
+/// These are used to signal type errors during constraint solving.
 #[derive(Clone, Debug)]
 pub enum ImpossibleConstraint {
     ArityMismatch {
@@ -26,18 +28,30 @@ pub enum ImpossibleConstraint {
     },
 }
 
+/// A constraint that can be applied to variable assignments.
+/// Constraints are used in type inference to represent relationships between variables and values.
 pub trait Constraint<Var, Value>: dyn_clone::DynClone {
+    /// Updates the assignment based on this constraint.
+    /// Returns Ok(true) if the assignment was modified, Ok(false) if no changes were made,
+    /// or Err if the constraint cannot be satisfied.
+    ///
+    /// `update` is allowed to modify the constraint itself, e.g. to convert a delayed constraint into an immediate one.
+    /// The `key` function gets a string representation of the value for display.
     fn update(
         &mut self,
         assignment: &mut Assignment<Var, Value>,
         key: fn(&Value) -> &str,
     ) -> Result<bool, ConstraintError<Var, Value>>;
 
+    /// Returns a human-readable string representation of this constraint.
     fn pretty(&self) -> String;
 }
 
 dyn_clone::clone_trait_object!(<Var, Value> Constraint<Var, Value>);
 
+/// Creates an equality constraint between two variables.
+/// If one of the variable has a known value, the constraint propagates value to the other variable.
+/// If both variables have known but different values, the constraint fails.
 pub fn eq<Var, Value>(x: Var, y: Var) -> Box<dyn Constraint<Var, Value>>
 where
     Var: cmp::Eq + PartialEq + Hash + Clone + Debug + 'static,
@@ -46,6 +60,8 @@ where
     Box::new(Eq(x, y))
 }
 
+/// Creates an assignment constraint that binds a variable to a specific value.
+/// The constraint fails if the variable is already assigned to a different value.
 pub fn assign<Var, Value>(x: Var, v: Value) -> Box<dyn Constraint<Var, Value>>
 where
     Var: cmp::Eq + PartialEq + Hash + Clone + Debug + 'static,
@@ -54,6 +70,7 @@ where
     Box::new(Assign(x, v))
 }
 
+/// Creates a conjunction constraint that requires all sub-constraints to be satisfied.
 pub fn and<Var, Value>(cs: Vec<Box<dyn Constraint<Var, Value>>>) -> Box<dyn Constraint<Var, Value>>
 where
     Var: cmp::Eq + PartialEq + Hash + Clone + Debug + 'static,
@@ -62,6 +79,9 @@ where
     Box::new(And(cs))
 }
 
+/// Creates an exclusive-or constraint that requires exactly one sub-constraint to be satisfied.
+/// The constraint proceeds if exactly one sub-constraint can be satisfied and all others lead to failure.
+/// The constraint fails if zero sub-constraints can be satisfied.
 pub fn xor<Var, Value>(cs: Vec<Box<dyn Constraint<Var, Value>>>) -> Box<dyn Constraint<Var, Value>>
 where
     Var: cmp::Eq + PartialEq + Hash + Clone + Debug + 'static,
@@ -70,6 +90,8 @@ where
     Box::new(Xor(cs))
 }
 
+/// Creates a constraint that always fails with the given impossible constraint.
+/// This is used to signal type errors during constraint solving.
 pub fn impossible<Var, Value>(constraint: ImpossibleConstraint) -> Box<dyn Constraint<Var, Value>>
 where
     Var: cmp::Eq + PartialEq + Hash + Clone + Debug + 'static,
@@ -78,6 +100,8 @@ where
     Box::new(Impossible { constraint })
 }
 
+/// Creates an implication constraint that activates when all watch variables are assigned.
+/// The constraint function is called with the values of the watch variables to generate the actual constraint.
 pub fn implies<Var, Value>(
     name: String,
     watch_vars: Vec<Var>,
@@ -94,8 +118,7 @@ where
     })
 }
 
-pub type DelayedConstraintFn<Var, Value> =
-    Rc<dyn Fn(&[&Value]) -> Box<dyn Constraint<Var, Value>>>;
+pub type DelayedConstraintFn<Var, Value> = Rc<dyn Fn(&[&Value]) -> Box<dyn Constraint<Var, Value>>>;
 
 #[derive(Clone)]
 enum DelayedConstraint<Var, Value> {
@@ -373,11 +396,17 @@ where
     }
 }
 
+/// Errors that can occur during constraint solving.
+/// These represent various ways that constraint satisfaction can fail.
 #[derive(Debug)]
 pub enum ConstraintError<Var, Value> {
+    /// A variable was assigned two different, incompatible values
     InconsistentConstraint(Var, Value, Value),
+    /// A variable in the constraint range was not assigned any value
     UnconstrainedVar(Var),
+    /// None of the alternative constraints in an XOR constraint could be satisfied
     NoConstraintSatisfied(Vec<ConstraintError<Var, Value>>),
+    /// An impossible constraint was encountered during solving
     ImpossibleCaseIdentified(ImpossibleConstraint),
 }
 
@@ -415,8 +444,12 @@ impl ConstraintError<AtomTerm, ArcSort> {
     }
 }
 
+/// A constraint satisfaction problem consisting of constraints and a range of variables to solve for.
+/// The problem is considered solved when *all* variables in the range are assigned.
 pub struct Problem<Var, Value> {
+    /// The list of constraints that must be satisfied
     pub constraints: Vec<Box<dyn Constraint<Var, Value>>>,
+    /// The set of variables that must be assigned a value for the problem to be considered solved
     pub range: HashSet<Var>,
 }
 
@@ -445,6 +478,9 @@ impl<Var, Value> Default for Problem<Var, Value> {
     }
 }
 
+/// A mapping from variables to their assigned values.
+/// This is the result of constraint solving.
+/// Uses an immutable HashMap for efficient cloning during constraint solving.
 #[derive(Clone)]
 pub struct Assignment<Var, Value>(pub HashMap<Var, Value>);
 
@@ -910,7 +946,11 @@ fn get_literal_and_global_constraints<'a>(
     })
 }
 
+/// A trait for generating type constraints from atom applications.
+/// This is used to create constraints that ensure proper typing of function/primitive applications.
 pub trait TypeConstraint {
+    /// Generates constraints for the given arguments based on this type constraint.
+    /// The constraints ensure that the arguments have compatible types.
     fn get(
         &self,
         arguments: &[AtomTerm],
@@ -918,7 +958,8 @@ pub trait TypeConstraint {
     ) -> Vec<Box<dyn Constraint<AtomTerm, ArcSort>>>;
 }
 
-/// Construct a set of `Assign` constraints that fully constrain the type of arguments
+/// A type constraint that assigns specific sorts to each argument position.
+/// Constructs a set of `Assign` constraints that fully constrain the type of arguments.
 pub struct SimpleTypeConstraint {
     name: String,
     sorts: Vec<ArcSort>,
@@ -964,7 +1005,10 @@ impl TypeConstraint for SimpleTypeConstraint {
     }
 }
 
-/// This constraint requires all types to be equivalent to each other
+/// A type constraint that requires all or some arguments to have the same type.
+///
+/// See the `with_all_arguments_sort`, `with_exact_length`, and `with_output_sort` methods
+/// for configuring the constraint.
 pub struct AllEqualTypeConstraint {
     name: String,
     sort: Option<ArcSort>,
@@ -1061,6 +1105,9 @@ impl TypeConstraint for AllEqualTypeConstraint {
     }
 }
 
+/// Checks that all variables in a rule's body are properly grounded.
+/// A variable is grounded if it appears in a function call or is equal to a grounded variable.
+/// This pass happens after type resolution and lowering to core rules, but before canonicalization.
 pub(crate) fn grounded_check(
     rule: &GenericCoreRule<HeadOrEq<ResolvedCall>, ResolvedCall, ResolvedVar>,
 ) -> Result<(), TypeError> {
@@ -1120,7 +1167,10 @@ pub(crate) fn grounded_check(
         ConstraintError::UnconstrainedVar(ResolvedAtomTerm::Var(span, v)) => {
             TypeError::Ungrounded(v.to_string(), span)
         }
-        _ => panic!("unexpected constraint error in groundedness check {:?}", err),
+        _ => panic!(
+            "unexpected constraint error in groundedness check {:?}",
+            err
+        ),
     })?;
 
     Ok(())
