@@ -144,6 +144,7 @@ where
         key: fn(&Value) -> &str,
     ) -> Result<bool, ConstraintError<Var, Value>> {
         let mut updated = false;
+        // If the constraint is delayed, either make it immediate or return.
         if let DelayedConstraint::Delayed(delayed) = &self.constraint {
             let watch_vals: Option<Vec<&Value>> =
                 self.watch_vars.iter().map(|v| assignment.get(v)).collect();
@@ -155,6 +156,7 @@ where
             updated = true;
         };
 
+        // The constraint must be immediate now.
         let DelayedConstraint::Constraint(constraint) = &mut self.constraint else {
             unreachable!("update");
         };
