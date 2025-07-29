@@ -47,7 +47,7 @@ use sort::*;
 use std::fmt::{Debug, Display, Formatter};
 use std::fs::File;
 use std::hash::Hash;
-use std::io::Read;
+use std::io::{stdin, stdout, Read};
 use std::iter::once;
 use std::path::PathBuf;
 use std::str::FromStr;
@@ -1245,8 +1245,13 @@ impl EGraph {
                 }
                 log::info!("Popped {n} levels.")
             }
-            ResolvedNCommand::PrintTable(span, f, n) => {
-                self.print_function(&f, Some(n)).map_err(|e| match e {
+            ResolvedNCommand::PrintTable(span, f, n, file) => {
+                use std::io::Write;
+                let file = file.map(|file| {
+                    std::fs::File::open(&file)
+                        .map_err(|e| Error::IoError(file.into(), e, span.clone()))
+                }).transpose()?;
+                self.print_function(&f, n, output).map_err(|e| match e {
                     Error::TypeError(TypeError::UnboundFunction(f, _)) => {
                         Error::TypeError(TypeError::UnboundFunction(f, span.clone()))
                     }
