@@ -726,6 +726,11 @@ impl EGraph {
                                 s.push_str(&child);
                             }
                         }
+
+                        if !out_is_unit {
+                            s.push(',');
+                            s.push_str(&termdag.to_string(output));
+                        }
                     }
                     _ => panic!("Expect function_to_dag to return a list of apps."),
                 }
