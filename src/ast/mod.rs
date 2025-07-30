@@ -294,7 +294,8 @@ pub enum Subdatatypes {
     NewSort(String, Vec<Expr>),
 }
 
-/// The mode of printing a function. The default mode prints the function in a user-friendly way and the interface may be unstable.
+/// The mode of printing a function. The default mode prints the function in a user-friendly way and 
+/// has an unreliable interface.
 /// The CSV mode prints the function in the CSV format.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 pub enum PrintFunctionMode {
