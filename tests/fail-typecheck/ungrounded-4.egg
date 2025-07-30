@@ -1,0 +1,11 @@
+(sort StringVec (Vec String))
+
+(datatype E (F StringVec StringVec))
+
+(rule
+ ((= e1 (F (vec-of "a" "b") (vec-of a b)))
+  (= e2 (F (vec-of "a" "b") (vec-of a b)))
+  (= e3 (F (vec-of "a" "b") (vec-of a c)))
+  (= e4 (F (vec-of "a" "b") (vec-of b c))))
+ ((F (vec-of "a" "b" "c") (vec-of a b c))
+  (F (vec-of "a" "b" "c") (vec-of a b c))))

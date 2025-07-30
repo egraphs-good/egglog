@@ -670,6 +670,8 @@ pub enum TypeError {
     },
     #[error("{1}\nUnbound symbol {0}")]
     Unbound(String, Span),
+    #[error("{1}\nVariable {0} is ungrounded")]
+    Ungrounded(String, Span),
     #[error("{1}\nUndefined sort {0}")]
     UndefinedSort(String, Span),
     #[error("{2}\nSort {0} definition is disallowed: {1}")]
