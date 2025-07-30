@@ -63,7 +63,13 @@ where
     RunSchedule(GenericSchedule<Head, Leaf>),
     PrintOverallStatistics,
     Check(Span, Vec<GenericFact<Head, Leaf>>),
-    PrintTable(Span, String, Option<usize>, Option<String>),
+    PrintFunction(
+        Span,
+        String,
+        Option<usize>,
+        Option<String>,
+        PrintFunctionMode,
+    ),
     PrintSize(Span, Option<String>),
     Output {
         span: Span,
@@ -139,8 +145,8 @@ where
             GenericNCommand::Check(span, facts) => {
                 GenericCommand::Check(span.clone(), facts.clone())
             }
-            GenericNCommand::PrintTable(span, name, n, file) => {
-                GenericCommand::PrintFunction(span.clone(), name.clone(), *n, file.clone())
+            GenericNCommand::PrintFunction(span, name, n, file, mode) => {
+                GenericCommand::PrintFunction(span.clone(), name.clone(), *n, file.clone(), *mode)
             }
             GenericNCommand::PrintSize(span, name) => {
                 GenericCommand::PrintSize(span.clone(), name.clone())
@@ -204,8 +210,8 @@ where
                 span,
                 facts.into_iter().map(|fact| fact.visit_exprs(f)).collect(),
             ),
-            GenericNCommand::PrintTable(span, name, n, file) => {
-                GenericNCommand::PrintTable(span, name, n, file)
+            GenericNCommand::PrintFunction(span, name, n, file, mode) => {
+                GenericNCommand::PrintFunction(span, name, n, file, mode)
             }
             GenericNCommand::PrintSize(span, name) => GenericNCommand::PrintSize(span, name),
             GenericNCommand::Output { span, file, exprs } => GenericNCommand::Output {
@@ -286,6 +292,14 @@ pub type Subsume = bool;
 pub enum Subdatatypes {
     Variants(Vec<Variant>),
     NewSort(String, Vec<Expr>),
+}
+
+/// The mode of printing a function. The default mode prints the function in a user-friendly way and the interface may be unstable.
+/// The CSV mode prints the function in the CSV format.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
+pub enum PrintFunctionMode {
+    Default,
+    CSV,
 }
 
 /// A [`Command`] is the top-level construct in egglog.
@@ -615,22 +629,28 @@ where
     Check(Span, Vec<GenericFact<Head, Leaf>>),
     /// Print out rows of a given function, extracting each of the elements of the function.
     /// Example:
-    /// 
+    ///
     /// ```text
     /// (print-function Add 20)
     /// ```
     /// prints the first 20 rows of the `Add` function.
-    /// 
+    ///
     /// ```text
     /// (print-function Add)
     /// ```
     /// prints all rows of the `Add` function.
-    /// 
+    ///
     /// ```text
     /// (print-function Add :file "add.csv")
     /// ```
     /// prints all rows of the `Add` function to a CSV file.
-    PrintFunction(Span, String, Option<usize>, Option<String>),
+    PrintFunction(
+        Span,
+        String,
+        Option<usize>,
+        Option<String>,
+        PrintFunctionMode,
+    ),
     /// Print out the number of rows in a function or all functions.
     PrintSize(Span, Option<String>),
     /// Input a CSV file directly into a function.
@@ -743,13 +763,17 @@ where
             }
             GenericCommand::Push(n) => write!(f, "(push {n})"),
             GenericCommand::Pop(_span, n) => write!(f, "(pop {n})"),
-            GenericCommand::PrintFunction(_span, name, n, file) => {
-                write!(f, "(print-function {name}");
+            GenericCommand::PrintFunction(_span, name, n, file, mode) => {
+                write!(f, "(print-function {name}")?;
                 if let Some(n) = n {
-                    write!(f, " {n}");
+                    write!(f, " {n}")?;
                 }
                 if let Some(file) = file {
-                    write!(f, " :file {file}");
+                    write!(f, " :file {file}")?;
+                }
+                match mode {
+                    PrintFunctionMode::Default => {}
+                    PrintFunctionMode::CSV => write!(f, " :mode csv")?,
                 }
                 write!(f, ")")
             }

@@ -47,7 +47,7 @@ use sort::*;
 use std::fmt::{Debug, Display, Formatter};
 use std::fs::File;
 use std::hash::Hash;
-use std::io::{stdin, stdout, Read};
+use std::io::{Read, Write};
 use std::iter::once;
 use std::path::PathBuf;
 use std::str::FromStr;
@@ -665,7 +665,13 @@ impl EGraph {
 
     /// Print up to `n` the tuples in a given function.
     /// Print all tuples if `n` is not provided.
-    pub fn print_function(&mut self, sym: &str, n: Option<usize>) -> Result<(), Error> {
+    pub fn print_function(
+        &mut self,
+        sym: &str,
+        n: Option<usize>,
+        file: Option<File>,
+        mode: PrintFunctionMode,
+    ) -> Result<(), Error> {
         let n = match n {
             Some(n) => {
                 log::info!("Printing up to {n} tuples of function {sym}: ");
@@ -677,6 +683,12 @@ impl EGraph {
             }
         };
 
+        let is_csv = mode == PrintFunctionMode::CSV;
+
+        if is_csv {
+            log::info!("Tuples are not printed to logging in CSV mode");
+        }
+
         let (terms, outputs, termdag) = self.function_to_dag(sym, n, true)?;
         let f = self
             .functions
@@ -687,26 +699,64 @@ impl EGraph {
 
         let mut buf = String::new();
         let s = &mut buf;
-        s.push_str("(\n");
-        if terms.is_empty() {
-            log::info!("   (none)");
+        if !is_csv {
+            s.push_str("(\n");
+            if terms.is_empty() {
+                log::info!("   (none)");
+            }
         }
+
         for (term, output) in terms.iter().zip(&outputs.unwrap()) {
-            let tuple_str = format!(
-                "   {}{}",
-                termdag.to_string(term),
-                if !out_is_unit {
-                    format!(" -> {}", termdag.to_string(output))
-                } else {
-                    "".into()
-                },
-            );
-            log::info!("{}", tuple_str);
-            s.push_str(&tuple_str);
+            if is_csv {
+                match term {
+                    Term::App(name, children) => {
+                        debug_assert!(name == sym);
+                        s.push_str(name);
+                        for child in children
+                            .iter()
+                            .map(|child| termdag.to_string(termdag.get(*child)))
+                        {
+                            s.push(',');
+                            if child.contains(',') || child.contains('\n') || child.contains('"') {
+                                // escape commas and newlines in CSV
+                                s.push('"');
+                                s.push_str(&child.replace('"', "\"\""));
+                                s.push('"');
+                            } else {
+                                s.push_str(&child);
+                            }
+                        }
+                    }
+                    _ => panic!("Expect function_to_dag to return a list of apps."),
+                }
+            } else {
+                let tuple_str = format!(
+                    "   {}{}",
+                    termdag.to_string(term),
+                    if !out_is_unit {
+                        format!(" -> {}", termdag.to_string(output))
+                    } else {
+                        "".into()
+                    },
+                );
+                log::info!("{}", tuple_str);
+                s.push_str(&tuple_str);
+            }
             s.push('\n');
         }
-        s.push_str(")\n");
-        self.print_msg(buf);
+
+        if !is_csv {
+            s.push_str(")\n");
+        }
+        match file {
+            Some(mut file) => {
+                file.write_all(buf.as_bytes())
+                    .expect("Failed to write to file");
+            }
+            None => {
+                self.print_msg(buf);
+            }
+        }
         Ok(())
     }
 
@@ -1245,19 +1295,21 @@ impl EGraph {
                 }
                 log::info!("Popped {n} levels.")
             }
-            ResolvedNCommand::PrintTable(span, f, n, file) => {
-                use std::io::Write;
-                let file = file.map(|file| {
-                    std::fs::File::open(&file)
-                        .map_err(|e| Error::IoError(file.into(), e, span.clone()))
-                }).transpose()?;
-                self.print_function(&f, n, output).map_err(|e| match e {
-                    Error::TypeError(TypeError::UnboundFunction(f, _)) => {
-                        Error::TypeError(TypeError::UnboundFunction(f, span.clone()))
-                    }
-                    // This case is currently impossible
-                    _ => e,
-                })?;
+            ResolvedNCommand::PrintFunction(span, f, n, file, mode) => {
+                let file = file
+                    .map(|file| {
+                        std::fs::File::create(&file)
+                            .map_err(|e| Error::IoError(file.into(), e, span.clone()))
+                    })
+                    .transpose()?;
+                self.print_function(&f, n, file, mode)
+                    .map_err(|e| match e {
+                        Error::TypeError(TypeError::UnboundFunction(f, _)) => {
+                            Error::TypeError(TypeError::UnboundFunction(f, span.clone()))
+                        }
+                        // This case is currently impossible
+                        _ => e,
+                    })?;
             }
             ResolvedNCommand::PrintSize(span, f) => {
                 self.print_size(f.as_deref()).map_err(|e| match e {
