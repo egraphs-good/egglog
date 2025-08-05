@@ -70,6 +70,10 @@ pub mod bin {
             .num_threads(args.threads)
             .build_global()
             .unwrap();
+        log::debug!(
+            "Initialized thread pool with {} threads",
+            rayon::current_num_threads()
+        );
         egraph.fact_directory.clone_from(&args.fact_directory);
         egraph.seminaive = !args.naive;
         egraph.run_mode = args.show;
