@@ -25,7 +25,11 @@ jobs:
     - uses: Swatinem/rust-cache@v2
     - run: make nits
   benchmark:
-    runs-on: ubuntu-latest
+    runs-on: ${{ matrix.runner }}
+    strategy:
+      matrix:
+        # Run on codspeed for walltime and ubuntu for instrumenentation
+        runner: [ codspeed-macro, ubuntu-latest ]
     steps:
       - run: echo "CARGO_INCREMENTAL=0" >> "$GITHUB_ENV"
       - uses: actions/checkout@v4
