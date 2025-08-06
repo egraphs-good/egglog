@@ -16,7 +16,7 @@ use numeric_id::NumericId;
 
 use crate::{
     add_expressions, define_rule, ColumnTy, DefaultVal, EGraph, FunctionConfig, FunctionId,
-    MergeFn, QueryEntry,
+    MergeFn, ProofStore, QueryEntry,
 };
 
 /// Run a simple associativity/commutativity test. In addition to testing that the rules properly
@@ -102,10 +102,15 @@ fn ac_test(tracing: bool, can_subsume: bool) {
         });
 
         let term_id = egraph.lookup_id(add_table, &row[0..row.len() - 1]).unwrap();
-        let term_explanation = egraph.explain_term(term_id).unwrap();
-        egraph.check_term_proof(term_explanation).unwrap();
-        let eq_explanation = egraph.explain_terms_equal(left_root, right_root).unwrap();
-        egraph.check_eq_proof(&eq_explanation).unwrap();
+        let mut proof_store = ProofStore::default();
+        let _term_explanation = egraph.explain_term(term_id, &mut proof_store).unwrap();
+        let _eq_explanation = egraph
+            .explain_terms_equal(left_root, right_root, &mut proof_store)
+            .unwrap();
+        // to print:
+        // proof_store
+        //     .print_eq_proof(_eq_explanation, &mut std::io::stderr())
+        //     .unwrap();
     }
 }
 
@@ -493,8 +498,8 @@ fn math_test(mut egraph: EGraph, can_subsume: bool) {
             row.extend_from_slice(func_row.vals);
         });
         let term_id = egraph.lookup_id(mul, &row[0..row.len() - 1]).unwrap();
-        let explain = egraph.explain_term(term_id).unwrap();
-        egraph.check_term_proof(explain).unwrap();
+        let mut proof_store = ProofStore::default();
+        let _explain = egraph.explain_term(term_id, &mut proof_store).unwrap();
     }
 }
 

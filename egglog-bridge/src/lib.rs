@@ -13,7 +13,6 @@ use std::{
     hash::Hash,
     iter, mem,
     ops::{Index, IndexMut},
-    rc::Rc,
     sync::{Arc, Mutex},
 };
 
@@ -26,27 +25,26 @@ use core_relations::{
 use hashbrown::HashMap;
 use indexmap::{map::Entry, IndexMap, IndexSet};
 use log::info;
-use numeric_id::{define_id, DenseIdMap, DenseIdMapWithReuse, NumericId};
+use numeric_id::{define_id, DenseIdMap, DenseIdMapWithReuse, IdVec, NumericId};
 use once_cell::sync::Lazy;
+pub use proof_format::{EqProofId, ProofStore, TermProofId};
 use proof_spec::{ProofReason, ProofReconstructionState, ReasonSpecId};
 use smallvec::SmallVec;
 use web_time::{Duration, Instant};
 
 pub mod macros;
+pub mod proof_format;
 pub(crate) mod proof_spec;
 pub(crate) mod rule;
 pub(crate) mod syntax;
-pub(crate) mod term_proof_dag;
 #[cfg(test)]
 mod tests;
 
 pub use rule::{Function, QueryEntry, RuleBuilder};
-use syntax::RuleRepresentation;
-use term_proof_dag::TermEnv;
-pub use term_proof_dag::{EqProof, TermProof};
+pub use syntax::{SourceExpr, SourceSyntax, TopLevelLhsExpr};
 use thiserror::Error;
 
-#[derive(Debug, Copy, Clone, Eq, PartialEq)]
+#[derive(Debug, Copy, Clone, Eq, PartialEq, Hash)]
 pub enum ColumnTy {
     Id,
     Base(BaseValueId),
@@ -78,7 +76,8 @@ pub struct EGraph {
     /// also serve as a debugging tool in the case that the number of panic messages grows without
     /// bound.
     panic_funcs: HashMap<String, ExternalFunctionId>,
-    proof_specs: DenseIdMap<ReasonSpecId, Arc<ProofReason>>,
+    proof_specs: IdVec<ReasonSpecId, Arc<ProofReason>>,
+    cong_spec: ReasonSpecId,
     /// Side tables used to store proof information. We initialize these lazily
     /// as a proof object with a given number of parameters is added.
     reason_tables: IndexMap<usize /* arity */, TableId>,
@@ -132,6 +131,8 @@ impl EGraph {
         let ts_counter = db.add_counter();
         // Start the timestamp counter at 1.
         db.inc_counter(ts_counter);
+        let mut proof_specs = IdVec::default();
+        let cong_spec = proof_specs.push(Arc::new(ProofReason::CongRow));
 
         Self {
             db,
@@ -143,7 +144,8 @@ impl EGraph {
             funcs: Default::default(),
             panic_message: Default::default(),
             panic_funcs: Default::default(),
-            proof_specs: Default::default(),
+            proof_specs,
+            cong_spec,
             reason_tables: Default::default(),
             term_tables: Default::default(),
             tracing,
@@ -471,11 +473,12 @@ impl EGraph {
     /// # Panics
     /// This method may panic if `key` does not match the arity of the function,
     /// or is otherwise malformed.
-    pub fn explain_term(&mut self, id: Value) -> Result<Rc<TermProof>> {
+    pub fn explain_term(&mut self, id: Value, store: &mut ProofStore) -> Result<TermProofId> {
         if !self.tracing {
             return Err(ProofReconstructionError::TracingNotEnabled.into());
         }
-        Ok(self.explain_term_inner(id, &mut ProofReconstructionState::default()))
+        let mut state = ProofReconstructionState::new(store);
+        Ok(self.explain_term_inner(id, &mut state))
     }
 
     /// Generate a proof explaining why the term corresponding to `id1`
@@ -484,25 +487,32 @@ impl EGraph {
     /// # Errors
     /// This method will return an error if tracing is not enabled, if the row
     /// is not in the database, or if the terms themselves are not equal.
-    pub fn explain_terms_equal(&mut self, id1: Value, id2: Value) -> Result<Rc<EqProof>> {
+    pub fn explain_terms_equal(
+        &mut self,
+        id1: Value,
+        id2: Value,
+        store: &mut ProofStore,
+    ) -> Result<EqProofId> {
         if !self.tracing {
             return Err(ProofReconstructionError::TracingNotEnabled.into());
         }
+        let mut state = ProofReconstructionState::new(store);
         if self.get_canon_in_uf(id1) != self.get_canon_in_uf(id2) {
             // These terms aren't equal. Reconstruct the relevant terms so as to
             // get a nicer error message on the way out.
-            let p1 = self.explain_term_inner(id1, &mut Default::default());
-            let p2 = self.explain_term_inner(id2, &mut Default::default());
-            let mut env = TermEnv::default();
+            let mut buf = Vec::<u8>::new();
+            let term_id_1 = self.reconstruct_term(id1, ColumnTy::Id, &mut state);
+            let term_id_2 = self.reconstruct_term(id2, ColumnTy::Id, &mut state);
+            store.termdag.print_term(term_id_1, &mut buf).unwrap();
+            let term1 = String::from_utf8(buf).unwrap();
+            let mut buf = Vec::<u8>::new();
+            store.termdag.print_term(term_id_2, &mut buf).unwrap();
+            let term2 = String::from_utf8(buf).unwrap();
             return Err(
-                ProofReconstructionError::EqualityExplanationOfUnequalTerms {
-                    term1: format!("{}", env.get_term(p1)),
-                    term2: format!("{}", env.get_term(p2)),
-                }
-                .into(),
+                ProofReconstructionError::EqualityExplanationOfUnequalTerms { term1, term2 }.into(),
             );
         }
-        Ok(self.explain_terms_equal_inner(id1, id2, &mut Default::default()))
+        Ok(self.explain_terms_equal_inner(id1, id2, &mut state))
     }
 
     /// Read the contents of the given function.
@@ -947,7 +957,7 @@ impl EGraph {
 
         // Remove the old row and insert the new one.
         rb.rebuild_row(table, &vars, &canon, subsume_var);
-        rb.build()
+        rb.build_internal(None)
     }
 
     fn nonincremental_rebuild(&mut self, table: FunctionId, schema: &[ColumnTy]) -> RuleId {
@@ -981,7 +991,7 @@ impl EGraph {
         }
         rb.check_for_update(&lhs, &rhs).unwrap();
         rb.rebuild_row(table, &vars, &canon, subsume_var);
-        rb.build()
+        rb.build_internal(None) // skip the syntax check
     }
 
     /// Gives the user a handle to the underlying ExecutionState. Useful for staging updates
@@ -1007,7 +1017,6 @@ impl EGraph {
 struct RuleInfo {
     last_run_at: Timestamp,
     query: rule::Query,
-    syntax: RuleRepresentation,
     cached_plan: Option<CachedPlanInfo>,
     desc: Arc<str>,
 }

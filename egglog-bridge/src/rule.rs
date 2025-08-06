@@ -8,8 +8,8 @@ use std::{cmp::Ordering, sync::Arc};
 
 use anyhow::Context;
 use core_relations::{
-    BaseValuePrinter, ColumnId, Constraint, CounterId, ExternalFunctionId, PlanStrategy,
-    QueryBuilder, RuleBuilder as CoreRuleBuilder, RuleSetBuilder, TableId, Value, WriteVal,
+    ColumnId, Constraint, CounterId, ExternalFunctionId, PlanStrategy, QueryBuilder,
+    RuleBuilder as CoreRuleBuilder, RuleSetBuilder, TableId, Value, WriteVal,
 };
 use hashbrown::HashSet;
 use log::debug;
@@ -17,8 +17,7 @@ use numeric_id::{define_id, DenseIdMap, NumericId};
 use smallvec::SmallVec;
 use thiserror::Error;
 
-use crate::syntax::{Binding, Entry, Statement, TermFragment};
-use crate::term_proof_dag::BaseValueConstant;
+use crate::syntax::SourceSyntax;
 use crate::{
     proof_spec::{ProofBuilder, RebuildVars},
     ColumnTy, DefaultVal, EGraph, FunctionId, Result, RuleId, RuleInfo, Timestamp,
@@ -26,6 +25,7 @@ use crate::{
 use crate::{CachedPlanInfo, RowVals, SchemaMath, NOT_SUBSUMED, SUBSUMED};
 
 define_id!(pub Variable, u32, "A variable in an egglog query");
+define_id!(pub AtomId, u32, "an atom in an egglog query");
 pub(crate) type DstVar = core_relations::QueryEntry;
 
 #[derive(Debug, Error)]
@@ -44,7 +44,7 @@ struct VarInfo {
     term_var: Variable,
 }
 
-#[derive(Clone, Debug)]
+#[derive(Clone, Debug, PartialEq, Eq, Hash)]
 pub enum QueryEntry {
     Var {
         id: Variable,
@@ -66,32 +66,6 @@ impl QueryEntry {
             QueryEntry::Var { id, .. } => *id,
             QueryEntry::Const { .. } => panic!("expected variable, found constant"),
         }
-    }
-
-    pub(crate) fn to_syntax(&self, eg: &EGraph) -> Option<Entry<Variable>> {
-        Some(match self {
-            QueryEntry::Var { id, .. } => Entry::Placeholder(*id),
-            QueryEntry::Const { val, ty } => {
-                let ColumnTy::Base(ty) = *ty else {
-                    panic!("expected base value type, found {ty:?}");
-                };
-                let interned = *val;
-
-                Entry::Const(BaseValueConstant {
-                    interned,
-                    ty,
-                    rendered: format!(
-                        "{:?}",
-                        BaseValuePrinter {
-                            val: interned,
-                            ty,
-                            base: eg.db.base_values(),
-                        }
-                    )
-                    .into(),
-                })
-            }
-        })
     }
 }
 
@@ -135,6 +109,8 @@ pub(crate) struct Query {
     /// The current proofs that are in scope.
     atom_proofs: Vec<Variable>,
     atoms: Vec<(TableId, Vec<QueryEntry>, SchemaMath)>,
+    /// An optional callback to wire up proof-related metadata before running the RHS of a rule.
+    build_reason: Option<BuildRuleCallback>,
     /// The builders for queries in this module essentially wrap the lower-level
     /// builders from the `core_relations` crate. A single egglog rule can turn
     /// into N core-relations rules. The code is structured by constructing a
@@ -174,6 +150,7 @@ impl EGraph {
                 tracing,
                 rule_id,
                 seminaive,
+                build_reason: None,
                 sole_focus: None,
                 atom_proofs: Default::default(),
                 vars: Default::default(),
@@ -298,19 +275,42 @@ impl RuleBuilder<'_> {
     }
 
     /// Register the given rule with the egraph.
-    pub fn build(mut self) -> RuleId {
+    pub fn build(self) -> RuleId {
+        assert!(
+            !self.egraph.tracing,
+            "proofs are enabled: use `build_with_syntax` instead"
+        );
+        self.build_internal(None)
+    }
+
+    pub fn build_with_syntax(self, syntax: SourceSyntax) -> RuleId {
+        self.build_internal(Some(syntax))
+    }
+
+    pub(crate) fn build_internal(mut self, syntax: Option<SourceSyntax>) -> RuleId {
         if self.query.atoms.len() == 1 {
             self.query.plan_strategy = PlanStrategy::MinCover;
+        }
+        if let Some(syntax) = &syntax {
+            if self.egraph.tracing {
+                let cb = self
+                    .proof_builder
+                    .create_reason(syntax.clone(), self.egraph);
+                self.query.build_reason = Some(Box::new(move |bndgs, rb| {
+                    let reason = cb(bndgs, rb)?;
+                    bndgs.lhs_reason = Some(reason.into());
+                    Ok(())
+                }));
+            }
         }
         let res = self.query.rule_id;
         let info = RuleInfo {
             last_run_at: Timestamp::new(0),
             query: self.query,
-            syntax: self.proof_builder.syntax,
             cached_plan: None,
             desc: self.proof_builder.rule_description,
         };
-        debug!("created rule {res:?} / {}:\n{:?}", info.desc, info.syntax);
+        debug!("created rule {res:?} / {}", info.desc);
         self.egraph.rules.insert(res, info);
         res
     }
@@ -350,7 +350,7 @@ impl RuleBuilder<'_> {
         func: Option<FunctionId>,
         subsume_entry: Option<QueryEntry>,
         entries: &[QueryEntry],
-    ) {
+    ) -> AtomId {
         let mut atom = entries.to_vec();
         let schema_math = if let Some(func) = func {
             let info = &self.egraph.funcs[func];
@@ -383,28 +383,11 @@ impl RuleBuilder<'_> {
                 ret_val: None,
             },
         );
+        let res = AtomId::from_usize(self.query.atoms.len());
         if self.egraph.tracing {
             let proof_var = atom[schema_math.proof_id_col()].var();
-            self.proof_builder.add_lhs(entries, proof_var);
+            self.proof_builder.term_vars.insert(res, proof_var.into());
             self.query.atom_proofs.push(proof_var);
-            if let Some(func) = func {
-                // If we have a function, record its syntax as a LHS term.
-                let term = Arc::new(TermFragment::App(
-                    func,
-                    entries[0..schema_math.num_keys()]
-                        .iter()
-                        .map(|x| {
-                            x.to_syntax(self.egraph)
-                                .expect("should have all needed type information")
-                        })
-                        .collect(),
-                ));
-                let bound = entries.last().unwrap().var();
-                self.proof_builder.syntax.lhs_bindings.push(Binding {
-                    var: bound,
-                    syntax: term,
-                });
-            }
             if let Some(QueryEntry::Var { id, .. }) = entries.last() {
                 if table != self.egraph.uf_table {
                     // Don't overwrite "term_var" for uf_table; it stores
@@ -414,6 +397,7 @@ impl RuleBuilder<'_> {
             }
         }
         self.query.atoms.push((table, atom, schema_math));
+        res
     }
 
     pub fn call_external_func(
@@ -425,10 +409,6 @@ impl RuleBuilder<'_> {
     ) -> Variable {
         let args = args.to_vec();
         let res = self.new_var(ret_ty);
-        if self.egraph.tracing {
-            self.proof_builder
-                .register_prim(func, &args, res, ret_ty, self.egraph);
-        }
         // External functions that fail on the RHS of a rule should cause a panic.
         let panic_fn = self.egraph.new_panic_lazy(panic_msg);
         self.query.add_rule.push(Box::new(move |inner, rb| {
@@ -448,7 +428,7 @@ impl RuleBuilder<'_> {
         func: FunctionId,
         entries: &[QueryEntry],
         is_subsumed: Option<bool>,
-    ) -> Result<()> {
+    ) -> Result<AtomId> {
         let info = &self.egraph.funcs[func];
         let schema = &info.schema;
         if schema.len() != entries.len() {
@@ -465,7 +445,7 @@ impl RuleBuilder<'_> {
                 self.assert_has_ty(entry, *ty)
                     .with_context(|| format!("query_table: mismatch between {entry:?} and {ty:?}"))
             })?;
-        self.add_atom_with_timestamp_and_func(
+        Ok(self.add_atom_with_timestamp_and_func(
             info.table,
             Some(func),
             is_subsumed.map(|b| QueryEntry::Const {
@@ -476,8 +456,7 @@ impl RuleBuilder<'_> {
                 ty: ColumnTy::Id,
             }),
             entries,
-        );
-        Ok(())
+        ))
     }
 
     /// Add the given primitive atom to query. As elsewhere in the crate, the last
@@ -486,46 +465,10 @@ impl RuleBuilder<'_> {
         &mut self,
         func: ExternalFunctionId,
         entries: &[QueryEntry],
-        ret_ty: ColumnTy,
+        // NB: not clear if we still need this now that proof checker is in a separate crate.
+        _ret_ty: ColumnTy,
     ) -> Result<()> {
-        // Primitives on the LHS side of a rule turn into a call to a
-        // primitive, along with an assertion that the result equals the
-        // return value.
         let entries = entries.to_vec();
-        let lhs_term = Arc::new(TermFragment::Prim(
-            func,
-            entries[..entries.len() - 1]
-                .iter()
-                .map(|x| {
-                    x.to_syntax(self.egraph)
-                        .expect("all variables should have type information")
-                })
-                .collect(),
-            ret_ty,
-        ));
-        let rhs_term = entries.last().unwrap().to_syntax(self.egraph).unwrap();
-        match rhs_term {
-            Entry::Placeholder(var) => {
-                self.proof_builder.syntax.rhs_bindings.push(Binding {
-                    var,
-                    syntax: lhs_term,
-                });
-            }
-            Entry::Const(constant) => {
-                let anon = self.new_var(ret_ty);
-                self.proof_builder.syntax.rhs_bindings.push(Binding {
-                    var: anon,
-                    syntax: lhs_term,
-                });
-                self.proof_builder
-                    .syntax
-                    .statements
-                    .push(Statement::AssertEq(
-                        Entry::Placeholder(anon),
-                        Entry::Const(constant),
-                    ));
-            }
-        }
         self.query.add_rule.push(Box::new(move |inner, rb| {
             let mut dst_vars = inner.convert_all(&entries);
             let expected = dst_vars.pop().expect("must specify a return value");
@@ -658,16 +601,11 @@ impl RuleBuilder<'_> {
                     let term_var = self.new_var(ColumnTy::Id);
                     self.query.vars[res].term_var = term_var;
                     let ts_var = self.new_var(ColumnTy::Id);
-                    let reason_var = self.new_var(ColumnTy::Id);
                     let mut insert_entries = entries.to_vec();
                     insert_entries.push(res.into());
-                    let add_proof = self.proof_builder.new_row(
-                        func,
-                        insert_entries,
-                        term_var,
-                        reason_var,
-                        self.egraph,
-                    );
+                    let add_proof =
+                        self.proof_builder
+                            .new_row(func, insert_entries, term_var, self.egraph);
                     Box::new(move |inner, rb| {
                         let write_vals = get_write_vals(inner);
                         let dst_vars = inner.convert_all(&entries);
@@ -726,7 +664,6 @@ impl RuleBuilder<'_> {
                 let panic_func = self.egraph.new_panic_lazy(panic_msg);
                 if self.egraph.tracing {
                     let term_var = self.new_var(ColumnTy::Id);
-                    self.proof_builder.add_lhs(&entries, term_var);
                     Box::new(move |inner, rb| {
                         let dst_vars = inner.convert_all(&entries);
                         let var = rb.lookup_with_fallback(
@@ -790,14 +727,6 @@ impl RuleBuilder<'_> {
     /// Merge the two values in the union-find.
     pub fn union(&mut self, mut l: QueryEntry, mut r: QueryEntry) {
         let cb: BuildRuleCallback = if self.query.tracing {
-            // We should really have the proof builder module handle this, but
-            // we rewrite `l` and `r` below, but `syntax_env` reflects regular
-            // vars not term-level vars, sadly.
-            self.proof_builder.syntax.statements.push(Statement::Union(
-                l.to_syntax(self.egraph).unwrap(),
-                r.to_syntax(self.egraph).unwrap(),
-            ));
-
             // Union proofs should reflect term-level variables rather than the
             // current leader of the e-class.
             for entry in [&mut l, &mut r] {
@@ -805,15 +734,10 @@ impl RuleBuilder<'_> {
                     *id = self.query.vars[*id].term_var;
                 }
             }
-            let reason_var = self.new_var(ColumnTy::Id);
-            let add_proof = self
-                .proof_builder
-                .union(l.clone(), r.clone(), reason_var, self.egraph);
             Box::new(move |inner, rb| {
                 let l = inner.convert(&l);
                 let r = inner.convert(&r);
-                add_proof(inner, rb)?;
-                let proof = inner.mapping[reason_var];
+                let proof = inner.lhs_reason.expect("reason must be set");
                 rb.insert(inner.uf_table, &[l, r, inner.next_ts(), proof])
                     .context("union")
             })
@@ -999,10 +923,6 @@ impl RuleBuilder<'_> {
         let panic = self.egraph.new_panic(message.clone());
         let ret_ty = ColumnTy::Id;
         let res = self.new_var(ret_ty);
-        if self.egraph.tracing {
-            self.proof_builder
-                .register_prim(panic, &[], res, ret_ty, self.egraph);
-        }
         self.query.add_rule.push(Box::new(move |inner, rb| {
             let var = rb.call_external(panic, &[])?;
             inner.mapping.insert(res, var.into());
@@ -1021,6 +941,7 @@ impl Query {
         let mut inner = Bindings {
             uf_table: self.uf_table,
             next_ts: None,
+            lhs_reason: None,
             mapping: Default::default(),
             grounded: Default::default(),
         };
@@ -1038,6 +959,10 @@ impl Query {
     ) -> Result<core_relations::RuleId> {
         let mut rb = qb.build();
         inner.next_ts = Some(rb.read_counter(self.ts_counter).into());
+        // Set up proof state if it's configured.
+        if let Some(build_reason) = &self.build_reason {
+            build_reason(&mut inner, &mut rb)?;
+        }
         self.add_rule
             .iter()
             .try_for_each(|f| f(&mut inner, &mut rb))?;
@@ -1136,6 +1061,9 @@ impl Query {
 pub(crate) struct Bindings {
     uf_table: TableId,
     next_ts: Option<DstVar>,
+    /// If proofs are enabled, this variable contains the "reason id" for any union or insertion
+    /// that happens on the RHS of a rule.
+    pub(crate) lhs_reason: Option<DstVar>,
     pub(crate) mapping: DenseIdMap<Variable, DstVar>,
     grounded: HashSet<Variable>,
 }

@@ -45,7 +45,7 @@ impl NumericId for usize {
 ///
 /// This mapping is _dense_: it stores a flat array indexed by `K::index()`,
 /// with no hashing. For sparse mappings, use a HashMap.
-#[derive(Clone)]
+#[derive(Clone, PartialEq, Eq, Hash)]
 pub struct DenseIdMap<K, V> {
     data: Vec<Option<V>>,
     _marker: PhantomData<K>,
@@ -116,6 +116,11 @@ impl<K: NumericId, V> DenseIdMap<K, V> {
         let res = self.next_id();
         self.data.push(Some(val));
         res
+    }
+
+    /// Test whether `key` is set in this map.
+    pub fn contains_key(&self, key: K) -> bool {
+        self.data.get(key.index()).is_some_and(Option::is_some)
     }
 
     /// Get the current mapping for `key` in the table.
@@ -224,6 +229,7 @@ impl<K: NumericId, V: Default> DenseIdMap<K, V> {
     }
 }
 
+#[derive(Debug)]
 pub struct IdVec<K, V> {
     data: Vec<V>,
     _marker: std::marker::PhantomData<K>,

@@ -446,31 +446,73 @@ impl<'a> ExecutionState<'a> {
         key: &[Value],
         vals: impl ExactSizeIterator<Item = MergeVal>,
     ) -> Pooled<Vec<Value>> {
+        if let Some(row) = self.db.table_info[table].table.get_row(key) {
+            return row.vals;
+        }
+        Pooled::cloned(
+            self.predicted
+                .get_val(table, key, || {
+                    Self::construct_new_row(
+                        &self.db,
+                        &mut self.buffers,
+                        &mut self.changed,
+                        table,
+                        key,
+                        vals,
+                    )
+                })
+                .deref(),
+        )
+    }
+
+    fn construct_new_row(
+        db: &DbView,
+        buffers: &mut DenseIdMap<TableId, Box<dyn MutationBuffer>>,
+        changed: &mut bool,
+        table: TableId,
+        key: &[Value],
+        vals: impl ExactSizeIterator<Item = MergeVal>,
+    ) -> Pooled<Vec<Value>> {
         with_pool_set(|ps| {
-            if let Some(row) = self.db.table_info[table].table.get_row(key) {
-                return row.vals;
+            let mut new = ps.get::<Vec<Value>>();
+            new.reserve(key.len() + vals.len());
+            new.extend_from_slice(key);
+            for val in vals {
+                new.push(match val {
+                    MergeVal::Counter(ctr) => Value::from_usize(db.counters.inc(ctr)),
+                    MergeVal::Constant(c) => c,
+                })
             }
-            Pooled::cloned(
-                self.predicted
-                    .get_val(table, key, || -> Pooled<Vec<Value>> {
-                        let mut new = ps.get::<Vec<Value>>();
-                        new.reserve(key.len() + vals.len());
-                        new.extend_from_slice(key);
-                        for val in vals {
-                            new.push(match val {
-                                MergeVal::Counter(ctr) => Value::from_usize(self.inc_counter(ctr)),
-                                MergeVal::Constant(c) => c,
-                            })
-                        }
-                        self.buffers
-                            .get_or_insert(table, || self.db.table_info[table].table.new_buffer())
-                            .stage_insert(&new);
-                        self.changed = true;
-                        new
-                    })
-                    .deref(),
-            )
+            buffers
+                .get_or_insert(table, || db.table_info[table].table.new_buffer())
+                .stage_insert(&new);
+            *changed = true;
+            new
         })
+    }
+
+    /// A variant of [`ExecutionState::predict_val`] that avoids materializing the full row, and
+    /// instead only returns the value in the given column.
+    pub fn predict_col(
+        &mut self,
+        table: TableId,
+        key: &[Value],
+        vals: impl ExactSizeIterator<Item = MergeVal>,
+        col: ColumnId,
+    ) -> Value {
+        if let Some(val) = self.db.table_info[table].table.get_row_column(key, col) {
+            return val;
+        }
+        self.predicted.get_val(table, key, || {
+            Self::construct_new_row(
+                &self.db,
+                &mut self.buffers,
+                &mut self.changed,
+                table,
+                key,
+                vals,
+            )
+        })[col.index()]
     }
 }
 
