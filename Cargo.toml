@@ -38,7 +38,6 @@ bin = [
 ]
 serde = ["egraph-serialize/serde"]
 graphviz = ["egraph-serialize/graphviz"]
-nondeterministic = []
 
 [dependencies]
 add_primitive = { path = "src/sort/add_primitive" }

@@ -7,25 +7,9 @@ use crate::core::SpecializedPrimitive;
 use crate::*;
 
 pub(crate) type BuildHasher = std::hash::BuildHasherDefault<rustc_hash::FxHasher>;
-
-/// Use an index map by default everywhere.
-/// We could fix the seed, but symbol generation is not determinisic so
-/// this doesn't fix the problem.
-#[cfg(not(feature = "nondeterministic"))]
-pub(crate) type HashMap<K, V> = indexmap::IndexMap<K, V, BuildHasher>;
-#[cfg(feature = "nondeterministic")]
 pub(crate) type HashMap<K, V> = hashbrown::HashMap<K, V, BuildHasher>;
-
-#[cfg(not(feature = "nondeterministic"))]
-pub(crate) type HashSet<K> = indexmap::IndexSet<K, BuildHasher>;
-#[cfg(feature = "nondeterministic")]
 pub(crate) type HashSet<K> = hashbrown::HashSet<K, BuildHasher>;
-
-#[cfg(feature = "nondeterministic")]
-pub(crate) type HEntry<'a, A, B, D> = hashbrown::hash_map::Entry<'a, A, B, D>;
-#[cfg(not(feature = "nondeterministic"))]
-pub(crate) type HEntry<'a, A, B> = Entry<'a, A, B>;
-
+pub(crate) type HEntry<'a, A, B> = hashbrown::hash_map::Entry<'a, A, B, BuildHasher>;
 pub type IndexMap<K, V> = indexmap::IndexMap<K, V, BuildHasher>;
 pub type IndexSet<K> = indexmap::IndexSet<K, BuildHasher>;
 
