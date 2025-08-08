@@ -237,8 +237,14 @@ impl EGraph {
                 )
             }
             NCommand::PrintOverallStatistics => ResolvedNCommand::PrintOverallStatistics,
-            NCommand::PrintTable(span, table, size) => {
-                ResolvedNCommand::PrintTable(span.clone(), table.clone(), *size)
+            NCommand::PrintFunction(span, table, size, file, mode) => {
+                ResolvedNCommand::PrintFunction(
+                    span.clone(),
+                    table.clone(),
+                    *size,
+                    file.clone(),
+                    *mode,
+                )
             }
             NCommand::PrintSize(span, n) => {
                 // Should probably also resolve the function symbol here

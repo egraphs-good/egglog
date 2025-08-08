@@ -47,7 +47,7 @@ impl Names {
             ResolvedNCommand::Extract(..) => Ok(()),
             ResolvedNCommand::RunSchedule(..) => Ok(()),
             ResolvedNCommand::PrintOverallStatistics => Ok(()),
-            ResolvedNCommand::PrintTable(..) => Ok(()),
+            ResolvedNCommand::PrintFunction(..) => Ok(()),
             ResolvedNCommand::PrintSize(..) => Ok(()),
             ResolvedNCommand::Input { .. } => Ok(()),
             ResolvedNCommand::Output { .. } => Ok(()),

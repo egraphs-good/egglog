@@ -608,15 +608,46 @@ impl Parser {
                 _ => return error!(span, "usage: (print-stats)"),
             },
             "print-function" => match tail {
-                [name, rows] => vec![Command::PrintFunction(
+                [name] => vec![Command::PrintFunction(
                     span,
                     name.expect_atom("table name")?,
-                    rows.expect_uint("number of rows to print")?,
+                    None,
+                    None,
+                    PrintFunctionMode::Default,
                 )],
+                [name, rest @ ..] => {
+                    let rows: Option<usize> = rest[0].expect_uint("number of rows").ok();
+                    let rest = if rows.is_some() { &rest[1..] } else { rest };
+
+                    let mut file = None;
+                    let mut mode = PrintFunctionMode::Default;
+                    for opt in self.parse_options(rest)? {
+                        match opt {
+                            (":file", [file_name]) => {
+                                file = Some(file_name.expect_string("file name")?);
+                            }
+                            (":mode", [Sexp::Atom(mode_str, _)]) => {
+                                mode = match mode_str.as_str() {
+                                    "default" => PrintFunctionMode::Default,
+                                    "csv" => PrintFunctionMode::CSV,
+                                    _ => return error!(span, "Unknown print-function mode. Supported modes are `default` and `csv`."),
+                                };
+                            }
+                            _ => return error!(span, "Unknown option to print-function. Supported options are `:mode csv|default` and `:file \"<filename>\"`."),
+                        }
+                    }
+                    vec![Command::PrintFunction(
+                        span,
+                        name.expect_atom("table name")?,
+                        rows,
+                        file,
+                        mode,
+                    )]
+                }
                 _ => {
                     return error!(
                         span,
-                        "usage: (print-function <table name> <number of rows>)"
+                        "usage: (print-function <table name> <number of rows>? <option>*)"
                     )
                 }
             },
