@@ -453,11 +453,11 @@ where
             match action {
                 GenericCoreAction::Let(_span, v, _, ats) => {
                     add_from_atoms(&mut free_vars, ats);
-                    free_vars.swap_remove(v);
+                    free_vars.remove(v);
                 }
                 GenericCoreAction::LetAtomTerm(_span, v, at) => {
                     add_from_atom(&mut free_vars, at);
-                    free_vars.swap_remove(v);
+                    free_vars.remove(v);
                 }
                 GenericCoreAction::Set(_span, _, ats, at) => {
                     add_from_atoms(&mut free_vars, ats);
