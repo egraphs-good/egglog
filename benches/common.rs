@@ -16,7 +16,7 @@ pub fn run_example(filename: &str, program: &str, no_messages: bool) {
         .parse_and_run_program(Some(filename.to_owned()), program)
         .unwrap();
     // test performance of serialization as well
-    let _ = egraph.serialize(egglog::SerializeConfig::default());
+    let (_ser, _trimmed) = egraph.serialize(egglog::SerializeConfig::default());
 }
 
 pub fn benchmark_files_in_glob(c: &mut Criterion, glob: &str) {

@@ -51,7 +51,7 @@ impl Run {
                         log::info!("  {}", msg);
                     }
                     // Test graphviz dot generation
-                    let mut serialized = egraph.serialize(SerializeConfig {
+                    let (mut serialized, _trimmed_msg) = egraph.serialize(SerializeConfig {
                         max_functions: Some(40),
                         max_calls_per_function: Some(40),
                         ..Default::default()
