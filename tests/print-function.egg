@@ -2,6 +2,7 @@
 (R 1 2)
 (R 2 3)
 (R 3 4)
+(R 5 6)
 
 (print-function R)
 (print-function R 3)
@@ -15,6 +16,7 @@
 (set (G (F 1) "1") 1)
 (set (G (F 2) "2") 2)
 (set (G (F 3) "3") 3)
+(set (G (F 4) "4") 4)
 
 (print-function G)
 (print-function G 3)
