@@ -770,7 +770,7 @@ where
                     write!(f, " {n}")?;
                 }
                 if let Some(file) = file {
-                    write!(f, " :file {file}")?;
+                    write!(f, " :file {file:?}")?;
                 }
                 match mode {
                     PrintFunctionMode::Default => {}
