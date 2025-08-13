@@ -102,7 +102,7 @@ impl EGraph {
         let mut functions_kept = 0usize;
         for (name, function) in self.functions.iter().filter(|(_, f)| !f.decl.ignore_viz) {
             if functions_kept >= max_functions {
-                msg.push_str(&format!("Max {} unique functions reached\n", functions_kept));
+                msg.push_str(&format!("Max {} unique functions\n", functions_kept));
                 break;
             }
             let mut rows = 0;
