@@ -110,11 +110,14 @@ pub mod bin {
                 }
 
                 if args.to_json || args.to_dot || args.to_svg {
-                    let mut serialized = egraph.serialize(SerializeConfig {
+                    let (mut serialized, trimmed_msg) = egraph.serialize(SerializeConfig {
                         max_functions: Some(args.max_functions),
                         max_calls_per_function: Some(args.max_calls_per_function),
                         ..SerializeConfig::default()
                     });
+                    if let Some(msg) = trimmed_msg.as_ref() {
+                        log::warn!("{msg}");
+                    }
                     if args.serialize_split_primitive_outputs {
                         serialized.split_classes(|id, _| egraph.from_node_id(id).is_primitive())
                     }
