@@ -6,17 +6,18 @@
     <img alt="Main Branch Documentation" src="https://img.shields.io/badge/docs-main-blue"></a>
 <a href="https://codspeed.io/egraphs-good/egglog">
     <img src="https://img.shields.io/endpoint?url=https://codspeed.io/badge.json" alt="CodSpeed Badge"/></a>
-[![Zulip](https://img.shields.io/badge/zulip-join%20chat-blue)](https://egraphs.zulipchat.com/#narrow/stream/375765-egglog)
+<a href="https://egraphs.zulipchat.com/#narrow/stream/375765-egglog">
+    <img src="https://img.shields.io/badge/zulip-join%20chat-blue" alt="Zulip Chat"/></a>
 
 This is the repo for the core of the `egglog` engine, which combines the power of equality saturation and Datalog.
 
-Try out `egglog` in your web browser: [demo](https://egraphs-good.github.io/egglog/)!
+For getting started, try out the [egglog tutorial](https://github.com/egraphs-good/egglog-tutorial)!
 
-We strongly recommend trying out our [egglog tutorial](https://github.com/egraphs-good/egglog-tutorial) for getting started!
+You can [try out egglog in your web browser](https://egraphs-good.github.io/egglog/).
 
-For a "battery-included" experience, please visit [egglog-experimental](https://github.com/egraphs-good/egglog-experimental). It provides more features through plugins to the core.
+For a "battery-included" experience, we recommend [egglog-experimental](https://github.com/egraphs-good/egglog-experimental). It provides more features through additional `egglog` plugins.
 
-If you use Egglog, please use [this citation](./CITATION.bib).
+If you use `egglog`, please use [this citation](./CITATION.bib).
 
 ---
 
