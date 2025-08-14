@@ -3,6 +3,8 @@ use std::io::{self, BufRead, BufReader, Read, Write};
 
 #[cfg(feature = "bin")]
 pub mod bin {
+    use crate::output_handler::{DesugarOutputHandler, NoOpOutputHandler, PrintlnOutputHandler};
+
     use super::*;
     use clap::Parser;
     use std::path::PathBuf;
@@ -76,9 +78,13 @@ pub mod bin {
         );
         egraph.fact_directory.clone_from(&args.fact_directory);
         egraph.seminaive = !args.naive;
-        egraph.run_mode = args.show;
+        if args.show == RunMode::ShowDesugaredEgglog {
+            egraph.output_handler = Box::new(DesugarOutputHandler::default())
+        } else {
+            egraph.output_handler = Box::new(PrintlnOutputHandler::default())
+        }
         if args.no_messages {
-            egraph.disable_messages();
+            egraph.output_handler = Box::new(NoOpOutputHandler::default())
         }
 
         if args.inputs.is_empty() {
@@ -98,11 +104,7 @@ pub mod bin {
                 });
 
                 match egraph.parse_and_run_program(Some(input.to_str().unwrap().into()), &program) {
-                    Ok(msgs) => {
-                        for msg in msgs {
-                            println!("{msg}");
-                        }
-                    }
+                    Ok(_msgs) => {}
                     Err(err) => {
                         log::error!("{err}");
                         std::process::exit(1)
@@ -210,6 +212,46 @@ where
         Err(err) => log::error!("{err}"),
     }
     Ok(())
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Hash, Copy)]
+pub enum RunMode {
+    Normal,
+    ShowDesugaredEgglog,
+    // TODO: supporting them needs to refactor the way NCommand is organized.
+    // There is no version of NCommand where CoreRule is used in place of Rule.
+    // As a result, we cannot just call to_lower_rule and get a NCommand with lowered CoreRule in it
+    // and print it out.
+    // A refactoring that allows NCommand to contain CoreRule can make this possible.
+    // ShowCore,
+    // ShowResugaredCore,
+}
+
+impl Display for RunMode {
+    fn fmt(&self, f: &mut Formatter<'_>) -> std::fmt::Result {
+        // A little bit unintuitive but RunMode is specified as command-line
+        // argument with flag `--show`, so `--show none` means a normal run.
+        match self {
+            RunMode::Normal => write!(f, "none"),
+            RunMode::ShowDesugaredEgglog => write!(f, "desugared-egglog"),
+            // RunMode::ShowCore => write!(f, "core"),
+            // RunMode::ShowResugaredCore => write!(f, "resugared-core"),
+        }
+    }
+}
+
+impl FromStr for RunMode {
+    type Err = String;
+
+    fn from_str(s: &str) -> Result<Self, Self::Err> {
+        match s {
+            "none" => Ok(RunMode::Normal),
+            "desugared-egglog" => Ok(RunMode::ShowDesugaredEgglog),
+            // "core" => Ok(RunMode::ShowCore),
+            // "resugared-core" => Ok(RunMode::ShowResugaredCore),
+            _ => Err(format!("Unknown run mode: {s}")),
+        }
+    }
 }
 
 #[cfg(test)]

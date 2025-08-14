@@ -16,6 +16,7 @@ mod cli;
 pub mod constraint;
 mod core;
 pub mod extract;
+pub mod output_handler;
 pub mod prelude;
 pub mod scheduler;
 mod serialize;
@@ -39,6 +40,7 @@ pub use egglog_bridge::FunctionRow;
 use egglog_bridge::{ColumnTy, IterationReport, QueryEntry};
 use extract::{CostModel, DefaultCost, Extractor, TreeAdditiveCostModel};
 use indexmap::map::Entry;
+use log::{log_enabled, Level};
 use numeric_id::DenseIdMap;
 use prelude::*;
 use scheduler::{SchedulerId, SchedulerRecord};
@@ -58,6 +60,8 @@ pub use typechecking::TypeError;
 use typechecking::TypeInfo;
 use util::*;
 use web_time::Duration;
+
+use crate::output_handler::{print_function_string, CollectedOutputHandler, OutputHandler};
 
 pub type ArcSort = Arc<dyn Sort>;
 
@@ -210,51 +214,6 @@ impl RunReport {
     }
 }
 
-#[derive(Debug, Clone, PartialEq, Eq, Hash, Copy)]
-pub enum RunMode {
-    Normal,
-    ShowDesugaredEgglog,
-    // TODO: supporting them needs to refactor the way NCommand is organized.
-    // There is no version of NCommand where CoreRule is used in place of Rule.
-    // As a result, we cannot just call to_lower_rule and get a NCommand with lowered CoreRule in it
-    // and print it out.
-    // A refactoring that allows NCommand to contain CoreRule can make this possible.
-    // ShowCore,
-    // ShowResugaredCore,
-}
-impl RunMode {
-    fn show_egglog(&self) -> bool {
-        matches!(self, RunMode::ShowDesugaredEgglog)
-    }
-}
-
-impl Display for RunMode {
-    fn fmt(&self, f: &mut Formatter<'_>) -> std::fmt::Result {
-        // A little bit unintuitive but RunMode is specified as command-line
-        // argument with flag `--show`, so `--show none` means a normal run.
-        match self {
-            RunMode::Normal => write!(f, "none"),
-            RunMode::ShowDesugaredEgglog => write!(f, "desugared-egglog"),
-            // RunMode::ShowCore => write!(f, "core"),
-            // RunMode::ShowResugaredCore => write!(f, "resugared-core"),
-        }
-    }
-}
-
-impl FromStr for RunMode {
-    type Err = String;
-
-    fn from_str(s: &str) -> Result<Self, Self::Err> {
-        match s {
-            "none" => Ok(RunMode::Normal),
-            "desugared-egglog" => Ok(RunMode::ShowDesugaredEgglog),
-            // "core" => Ok(RunMode::ShowCore),
-            // "resugared-core" => Ok(RunMode::ShowResugaredCore),
-            _ => Err(format!("Unknown run mode: {s}")),
-        }
-    }
-}
-
 /// The main interface for an e-graph in egglog.
 ///
 /// An [`EGraph`] maintains a collection of equivalence classes of terms and provides
@@ -278,20 +237,14 @@ pub struct EGraph {
     pushed_egraph: Option<Box<Self>>,
     functions: IndexMap<String, Function>,
     rulesets: IndexMap<String, Ruleset>,
-    interactive_mode: bool,
-    pub run_mode: RunMode,
     pub fact_directory: Option<PathBuf>,
     pub seminaive: bool,
     type_info: TypeInfo,
-    extract_report: Option<ExtractReport>,
-    /// The run report for the most recent run of a schedule.
-    recent_run_report: Option<RunReport>,
     /// The run report unioned over all runs so far.
     overall_run_report: RunReport,
-    /// Messages to be printed to the user. If this is `None`, then we are ignoring messages.
-    msgs: Option<Vec<String>>,
     schedulers: DenseIdMap<SchedulerId, SchedulerRecord>,
     commands: IndexMap<String, Arc<dyn UserDefinedCommand>>,
+    pub output_handler: Box<dyn OutputHandler>,
 }
 
 /// A user-defined command allows users to inject custom command that can be called
@@ -368,17 +321,13 @@ impl Default for EGraph {
             pushed_egraph: Default::default(),
             functions: Default::default(),
             rulesets: Default::default(),
-            run_mode: RunMode::Normal,
-            interactive_mode: false,
             fact_directory: None,
             seminaive: true,
-            extract_report: None,
-            recent_run_report: None,
             overall_run_report: Default::default(),
-            msgs: Some(vec![]),
             type_info: Default::default(),
             schedulers: Default::default(),
             commands: Default::default(),
+            output_handler: Box::new(CollectedOutputHandler::default()),
         };
 
         add_base_sort(&mut eg, UnitSort, span!()).unwrap();
@@ -436,14 +385,6 @@ impl EGraph {
         Ok(())
     }
 
-    /// Test if the e-graph operates in interactive mode.
-    ///
-    /// In interactive mode, `(done)` will be printed after every successful command.
-    /// Otherwise, `(error)` will be printed.
-    pub fn is_interactive_mode(&self) -> bool {
-        self.interactive_mode
-    }
-
     /// Push a snapshot of the e-graph into the stack.
     ///
     /// See [`EGraph::pop`].
@@ -454,23 +395,6 @@ impl EGraph {
         self.pushed_egraph = Some(Box::new(prev));
     }
 
-    /// Disable saving messages to be printed to the user and remove any saved messages.
-    ///
-    /// When messages are disabled the vec of messages returned by evaluating commands will always be empty.
-    pub fn disable_messages(&mut self) {
-        self.msgs = None;
-    }
-
-    /// Enable saving messages to be printed to the user.
-    pub fn enable_messages(&mut self) {
-        self.msgs = Some(vec![]);
-    }
-
-    /// Whether messages are enabled.
-    pub fn messages_enabled(&self) -> bool {
-        self.msgs.is_some()
-    }
-
     /// Pop the current egraph off the stack, replacing
     /// it with the previously pushed egraph.
     /// It preserves the run report and messages from the popped
@@ -479,19 +403,12 @@ impl EGraph {
         match self.pushed_egraph.take() {
             Some(e) => {
                 // Copy the reports and messages from the popped egraph
-                let extract_report = self.extract_report.clone();
-                let recent_run_report = self.recent_run_report.clone();
+                let output_handler = self.output_handler.clone();
                 let overall_run_report = self.overall_run_report.clone();
-                let messages = self.msgs.clone();
 
                 *self = *e;
-                self.extract_report = extract_report.or(self.extract_report.clone());
-                // We union the run reports, meaning
-                // that statistics are shared across
-                // push/pop
-                self.recent_run_report = recent_run_report.or(self.recent_run_report.clone());
+                self.output_handler = output_handler;
                 self.overall_run_report = overall_run_report;
-                self.msgs = messages;
                 Ok(())
             }
             None => Err(Error::Pop(span!())),
@@ -674,20 +591,16 @@ impl EGraph {
     ) -> Result<(), Error> {
         let n = match n {
             Some(n) => {
-                log::info!("Printing up to {n} tuples of function {sym}: ");
+                log::info!("Printing up to {n} tuples of function {sym}");
                 n
             }
             None => {
-                log::info!("Printing all tuples of function {sym}: ");
+                log::info!("Printing all tuples of function {sym}");
                 usize::MAX
             }
         };
 
         let is_csv = mode == PrintFunctionMode::CSV;
-
-        if is_csv {
-            log::info!("Tuples are not printed to logging in CSV mode");
-        }
 
         let (terms, outputs, termdag) = self.function_to_dag(sym, n, true)?;
         let f = self
@@ -695,71 +608,62 @@ impl EGraph {
             .get(sym)
             // function_to_dag should have checked this
             .unwrap();
-        let out_is_unit = f.schema.output.name() == UnitSort.name();
 
-        let mut buf = String::new();
-        let s = &mut buf;
-        if !is_csv {
-            s.push_str("(\n");
-            if terms.is_empty() {
-                log::info!("   (none)");
-            }
-        }
-
-        for (term, output) in terms.iter().zip(&outputs.unwrap()) {
-            if is_csv {
-                match term {
-                    Term::App(name, children) => {
-                        debug_assert!(name == sym);
-                        s.push_str(name);
-                        for child in children
-                            .iter()
-                            .map(|child| termdag.to_string(termdag.get(*child)))
-                        {
-                            s.push(',');
-                            if child.contains(',') || child.contains('\n') || child.contains('"') {
-                                // escape commas and newlines in CSV
-                                s.push('"');
-                                s.push_str(&child.replace('"', "\"\""));
-                                s.push('"');
-                            } else {
-                                s.push_str(&child);
-                            }
-                        }
-
-                        if !out_is_unit {
-                            s.push(',');
-                            s.push_str(&termdag.to_string(output));
-                        }
-                    }
-                    _ => panic!("Expect function_to_dag to return a list of apps."),
-                }
-            } else {
-                let tuple_str = format!(
-                    "   {}{}",
-                    termdag.to_string(term),
-                    if !out_is_unit {
-                        format!(" -> {}", termdag.to_string(output))
-                    } else {
-                        "".into()
-                    },
-                );
-                log::info!("{}", tuple_str);
-                s.push_str(&tuple_str);
-            }
-            s.push('\n');
-        }
-
-        if !is_csv {
-            s.push_str(")\n");
-        }
+        let terms_and_outputs: Vec<_> = terms.into_iter().zip(outputs.unwrap()).collect();
         match file {
             Some(mut file) => {
-                file.write_all(buf.as_bytes())
-                    .expect("Failed to write to file");
+                let lines = if is_csv {
+                    log::info!("Printing to CSV");
+                    let out_is_unit = f.schema.output.name() == UnitSort.name();
+                    let mut buf = String::new();
+                    let s = &mut buf;
+
+                    for (term, output) in terms_and_outputs {
+                        match term {
+                            Term::App(name, children) => {
+                                debug_assert!(name == sym);
+                                s.push_str(&name);
+                                for child in children
+                                    .iter()
+                                    .map(|child| termdag.to_string(termdag.get(*child)))
+                                {
+                                    s.push(',');
+                                    if child.contains(',')
+                                        || child.contains('\n')
+                                        || child.contains('"')
+                                    {
+                                        // escape commas and newlines in CSV
+                                        s.push('"');
+                                        s.push_str(&child.replace('"', "\"\""));
+                                        s.push('"');
+                                    } else {
+                                        s.push_str(&child);
+                                    }
+                                }
+
+                                if !out_is_unit {
+                                    s.push(',');
+                                    s.push_str(&termdag.to_string(&output));
+                                }
+                            }
+                            _ => panic!("Expect function_to_dag to return a list of apps."),
+                        }
+                    }
+                    s.push('\n');
+                    buf
+                } else {
+                    print_function_string(f, termdag, terms_and_outputs)
+                };
+
+                file.write_all(lines.as_bytes())
+                    .expect("Error writing to file")
             }
             None => {
-                self.print_msg(buf);
+                if is_csv {
+                    panic!("Cannot print a function to CSV if a filename is not provided")
+                }
+                self.output_handler
+                    .handle_print_function(f, termdag, terms_and_outputs)?;
             }
         }
         Ok(())
@@ -775,8 +679,8 @@ impl EGraph {
                 .ok_or(TypeError::UnboundFunction(sym.to_owned(), span!()))?;
             let size = self.backend.table_size(f.backend_id);
             log::info!("Function {} has size {}", sym, size);
-            self.print_msg(size.to_string());
-            Ok(())
+            self.output_handler
+                .handle_print_function_size(&sym.to_string(), size)
         } else {
             // Print size of all functions
             let mut lens = self
@@ -787,19 +691,12 @@ impl EGraph {
 
             // Function name's alphabetical order
             lens.sort_by_key(|(name, _)| name.as_str());
-
-            for (sym, len) in &lens {
-                log::info!("Function {} has size {}", sym, len);
+            if log_enabled!(Level::Info) {
+                for (sym, len) in &lens {
+                    log::info!("Function {} has size {}", sym, len);
+                }
             }
-
-            self.print_msg(
-                lens.into_iter()
-                    .map(|(name, len)| format!("{}: {}", name, len))
-                    .collect::<Vec<_>>()
-                    .join("\n"),
-            );
-
-            Ok(())
+            self.output_handler.handle_print_all_functions_size(lens)
         }
     }
 
@@ -885,10 +782,12 @@ impl EGraph {
 
         if let Some(facts) = until {
             if self.check_facts(span, facts).is_ok() {
-                log::info!(
-                    "Breaking early because of facts:\n {}!",
-                    ListDisplay(facts, "\n")
-                );
+                if log_enabled!(Level::Info) {
+                    log::info!(
+                        "Breaking early because of facts:\n {}!",
+                        ListDisplay(facts, "\n")
+                    );
+                }
                 return report;
             }
         }
@@ -896,7 +795,9 @@ impl EGraph {
         let subreport = self.step_rules(ruleset);
         report.union(subreport);
 
-        log::debug!("database size: {}", self.num_tuples());
+        if log_enabled!(Level::Debug) {
+            log::debug!("database size: {}", self.num_tuples());
+        }
 
         report
     }
@@ -1024,7 +925,7 @@ impl EGraph {
     pub fn eval_expr(&mut self, expr: &Expr) -> Result<(ArcSort, Value), Error> {
         let span = expr.span();
         let command = Command::Action(Action::Expr(span.clone(), expr.clone()));
-        let resolved_commands = self.process_command(command, false)?;
+        let resolved_commands = self.process_command(command)?;
         assert_eq!(resolved_commands.len(), 1);
         let resolved_command = resolved_commands.into_iter().next().unwrap();
         let resolved_expr = match resolved_command {
@@ -1113,7 +1014,7 @@ impl EGraph {
         match name {
             "interactive_mode" => {
                 if let ResolvedExpr::Lit(_ann, Literal::Int(i)) = value {
-                    self.interactive_mode = i != 0;
+                    self.output_handler.set_interactive_mode(i != 0);
                 } else {
                     panic!("interactive_mode must be an integer");
                 }
@@ -1204,14 +1105,19 @@ impl EGraph {
             }
             ResolvedNCommand::RunSchedule(sched) => {
                 let report = self.run_schedule(&sched);
-                log::info!("Ran schedule {}.", sched);
-                log::info!("Report: {}", report);
+                if log_enabled!(Level::Info) {
+                    log::info!("Ran schedule {}.", sched);
+                    log::info!("Report: {}", report);
+                }
                 self.overall_run_report.union(report.clone());
-                self.recent_run_report = Some(report);
+                self.output_handler.handle_run_schedule(report)?;
             }
             ResolvedNCommand::PrintOverallStatistics => {
-                log::info!("Overall statistics:\n{}", self.overall_run_report);
-                self.print_msg(format!("Overall statistics:\n{}", self.overall_run_report));
+                if log_enabled!(Level::Info) {
+                    log::info!("Overall statistics:\n{}", self.overall_run_report);
+                }
+                self.output_handler
+                    .handle_overall_statistics(&self.overall_run_report)?;
             }
             ResolvedNCommand::Check(span, facts) => {
                 self.check_facts(&span, &facts)?;
@@ -1242,21 +1148,16 @@ impl EGraph {
                 if n == 0 {
                     if let Some((cost, term)) = extractor.extract_best(self, &mut termdag, x) {
                         // dont turn termdag into a string if we have messages disabled for performance reasons
-                        if self.messages_enabled() {
-                            let extracted = termdag.to_string(&term);
-                            log::info!("extracted with cost {cost}: {extracted}");
-                            self.print_msg(extracted);
+                        if log_enabled!(Level::Info) {
+                            let str = termdag.to_string(&term);
+                            log::info!("extracted with cost {cost}: {str}");
                         }
-                        self.extract_report = Some(ExtractReport::Best {
-                            termdag,
-                            cost,
-                            term,
-                        });
+                        self.output_handler.handle_extract_best(termdag, cost, term)
                     } else {
-                        return Err(Error::ExtractError(
+                        Err(Error::ExtractError(
                             "Unable to find any valid extraction (likely due to subsume or delete)"
                                 .to_string(),
-                        ));
+                        ))
                     }
                 } else {
                     if n < 0 {
@@ -1267,22 +1168,13 @@ impl EGraph {
                         .iter()
                         .map(|e| e.1.clone())
                         .collect();
-                    // Same as above, avoid turning termdag into a string if we have messages disabled for performance
-                    if self.messages_enabled() {
-                        log::info!("extracted variants:");
-                        let mut msg = String::default();
-                        msg += "(\n";
-                        assert!(!terms.is_empty());
-                        for expr in &terms {
-                            let str = termdag.to_string(expr);
-                            log::info!("   {str}");
-                            msg += &format!("   {str}\n");
-                        }
-                        msg += ")";
-                        self.print_msg(msg);
+                    if log_enabled!(Level::Info) {
+                        let n = terms.len();
+                        let expr_str = expr.to_string();
+                        log::info!("extracted {n} variants for {expr_str}");
                     }
-                    self.extract_report = Some(ExtractReport::Variants { termdag, terms });
-                }
+                    self.output_handler.handle_extract_variants(termdag, terms)
+                }?;
             }
             ResolvedNCommand::Push(n) => {
                 (0..n).for_each(|_| self.push());
@@ -1500,18 +1392,13 @@ impl EGraph {
         Ok(())
     }
 
-    fn process_command(
-        &mut self,
-        command: Command,
-        show_egglog_only: bool,
-    ) -> Result<Vec<ResolvedNCommand>, Error> {
+    fn process_command(&mut self, command: Command) -> Result<Vec<ResolvedNCommand>, Error> {
         let program = desugar::desugar_program(vec![command], &mut self.parser, self.seminaive)?;
 
         let mut program = self.typecheck_program(&program)?;
 
-        if !show_egglog_only {
+        if self.output_handler.remove_globals() {
             program = remove_globals::remove_globals(program, &mut self.parser.symbol_gen);
-
             for command in &program {
                 self.names.check_shadowing(command)?;
             }
@@ -1523,38 +1410,20 @@ impl EGraph {
     /// Run a program, represented as an AST.
     /// Return a list of messages.
     pub fn run_program(&mut self, program: Vec<Command>) -> Result<Vec<String>, Error> {
-        let show_egglog_only = self.run_mode.show_egglog();
         for command in program {
             // Important to process each command individually
             // because push and pop create new scopes
-            for processed in self.process_command(command, show_egglog_only)? {
-                if show_egglog_only {
-                    // In show_egglog mode, we still need to run scope-related commands (Push/Pop) to make
-                    // the program well-scoped.
-                    match &processed {
-                        ResolvedNCommand::Push(..) | ResolvedNCommand::Pop(..) => {
-                            self.run_command(processed.clone())?;
-                        }
-                        _ => {}
-                    };
-                    self.print_msg(processed.to_command().to_string());
-                } else {
+            for processed in self.process_command(command)? {
+                if self.output_handler.handle_resolved_command(&processed)? {
                     let result = self.run_command(processed);
-
-                    if self.is_interactive_mode() {
-                        self.print_msg(match result {
-                            Ok(()) => "(done)".into(),
-                            Err(_) => "(error)".into(),
-                        });
-                    }
-
-                    result?
+                    self.output_handler
+                        .handle_command_resultult(result.clone())?;
+                    result?;
                 }
             }
         }
-        log::logger().flush();
 
-        Ok(self.flush_msgs())
+        Ok(self.output_handler.return_output()?)
     }
 
     /// Takes a source program `input`, parses it, runs it, and returns a list of messages.
@@ -1615,16 +1484,6 @@ impl EGraph {
         self.type_info.get_sort_by_name(sym)
     }
 
-    /// Gets the last extract report and returns it, if the last command saved it.
-    pub fn get_extract_report(&self) -> &Option<ExtractReport> {
-        &self.extract_report
-    }
-
-    /// Gets the last run report and returns it, if the last command saved it.
-    pub fn get_run_report(&self) -> &Option<RunReport> {
-        &self.recent_run_report
-    }
-
     /// Gets the overall run report and returns it.
     pub fn get_overall_run_report(&self) -> &RunReport {
         &self.overall_run_report
@@ -1638,27 +1497,6 @@ impl EGraph {
     /// Convert from a Rust type to an egglog value.
     pub fn base_to_value<T: BaseValue>(&self, x: T) -> Value {
         self.backend.base_values().get::<T>(x)
-    }
-
-    /// Print a message to egglog's message buffer. Used by user-defined
-    /// commands to print messages to the user.
-    ///
-    /// The message buffer is flushed every time a command
-    /// is run. Compared to `println!`, this allows users to
-    /// capture printed messages without redirecting stdout.
-    pub fn print_msg(&mut self, msg: String) {
-        if let Some(ref mut msgs) = self.msgs {
-            msgs.push(msg);
-        }
-    }
-
-    fn flush_msgs(&mut self) -> Vec<String> {
-        if let Some(ref mut msgs) = self.msgs {
-            msgs.dedup_by(|a, b| a.is_empty() && b.is_empty());
-            std::mem::take(msgs)
-        } else {
-            vec![]
-        }
     }
 
     /// Get the size of a function in the e-graph.
