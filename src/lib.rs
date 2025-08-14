@@ -1024,7 +1024,7 @@ impl EGraph {
     pub fn eval_expr(&mut self, expr: &Expr) -> Result<(ArcSort, Value), Error> {
         let span = expr.span();
         let command = Command::Action(Action::Expr(span.clone(), expr.clone()));
-        let resolved_commands = self.process_command(command, false)?;
+        let resolved_commands = self.process_command(command)?;
         assert_eq!(resolved_commands.len(), 1);
         let resolved_command = resolved_commands.into_iter().next().unwrap();
         let resolved_expr = match resolved_command {
@@ -1500,21 +1500,15 @@ impl EGraph {
         Ok(())
     }
 
-    fn process_command(
-        &mut self,
-        command: Command,
-        show_egglog_only: bool,
-    ) -> Result<Vec<ResolvedNCommand>, Error> {
+    fn process_command(&mut self, command: Command) -> Result<Vec<ResolvedNCommand>, Error> {
         let program = desugar::desugar_program(vec![command], &mut self.parser, self.seminaive)?;
 
         let mut program = self.typecheck_program(&program)?;
 
-        if !show_egglog_only {
-            program = remove_globals::remove_globals(program, &mut self.parser.symbol_gen);
+        program = remove_globals::remove_globals(program, &mut self.parser.symbol_gen);
 
-            for command in &program {
-                self.names.check_shadowing(command)?;
-            }
+        for command in &program {
+            self.names.check_shadowing(command)?;
         }
 
         Ok(program)
@@ -1527,7 +1521,7 @@ impl EGraph {
         for command in program {
             // Important to process each command individually
             // because push and pop create new scopes
-            for processed in self.process_command(command, show_egglog_only)? {
+            for processed in self.process_command(command)? {
                 if show_egglog_only {
                     // In show_egglog mode, we still need to run scope-related commands (Push/Pop) to make
                     // the program well-scoped.
