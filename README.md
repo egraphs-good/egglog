@@ -13,7 +13,7 @@ This is the repo for the core of the `egglog` engine, which combines the power o
 
 For getting started, try out the [egglog tutorial](https://github.com/egraphs-good/egglog-tutorial)!
 
-You can [try out egglog in your web browser](https://egraphs-good.github.io/egglog/).
+You can [run egglog in your web browser](https://egraphs-good.github.io/egglog/).
 
 For a "battery-included" experience, we recommend [egglog-experimental](https://github.com/egraphs-good/egglog-experimental). It provides more features through additional `egglog` plugins.
 
