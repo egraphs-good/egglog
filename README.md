@@ -13,11 +13,11 @@ This is the repo for the core of the `egglog` engine, which combines the power o
 
 For getting started, try out the [egglog tutorial](https://github.com/egraphs-good/egglog-tutorial)!
 
-You can [run egglog in your web browser](https://egraphs-good.github.io/egglog/).
+You also can [run egglog in your web browser](https://egraphs-good.github.io/egglog/) or check out [the documentation](https://egraphs-good.github.io/egglog/docs/egglog).
 
 For a "battery-included" experience, we recommend [egglog-experimental](https://github.com/egraphs-good/egglog-experimental). It provides more features through additional `egglog` plugins.
 
-If you use `egglog`, please use [this citation](./CITATION.bib).
+If you want to cite `egglog`, please use [this citation](./CITATION.bib).
 
 ---
 
@@ -25,8 +25,9 @@ The following instructions are for using/developing the core directly.
 
 ## Prerequisites & compilation
 
+Install [Cargo](https://doc.rust-lang.org/cargo/getting-started/installation.html).
+
 ```
-apt-get install make cargo
 cargo install --path=root_directory_of_cloned_repo
 ```
 
@@ -41,11 +42,12 @@ cargo run --release
 The standard mode processes an input file:
 
 ```
-cargo run --release [-f fact-directory] [-naive] [--to-json] [--to-dot] [--to-svg] <files.egg>
+cargo run --release [-f fact-directory] [--to-dot] [--to-svg] [-j --threads <THREADS>] <files.egg>
 ```
 
 * The `--to-dot` command will save a graphviz dot file at the end of the program, replacing the `.egg` extension with `.dot`.
 * The `--to-svg`, which requires [Graphviz to be installed](https://graphviz.org/download/), will save a graphviz svg file at the end of the program, replacing the `.egg` extension with `.svg`.
+* The `-j` option specifies the number of threads to use for parallel execution. The default value is `1`, which runs everything in a single thread. Passing `0` will use the maximum inferred parallelism available on the current system.
 
 One can also use `egglog` as a Rust library by adding the following to your `Cargo.toml`:
 
@@ -54,7 +56,7 @@ One can also use `egglog` as a Rust library by adding the following to your `Car
 egglog = "1.0.0"
 ```
 
-See also the [Python binding](https://github.com/egraphs-good/egglog-python).
+See also the [Python binding](https://github.com/egraphs-good/egglog-python) using `egglog` in Python.
 
 ## Developement
 
