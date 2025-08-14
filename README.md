@@ -1,4 +1,4 @@
-# egglog
+# egglog: The Next-Generation Equality Saturation Engine
 
 <a href="https://egraphs-good.github.io/egglog/">
     <img alt="Web Demo" src="https://img.shields.io/badge/-web demo-blue"></a>
@@ -6,56 +6,77 @@
     <img alt="Main Branch Documentation" src="https://img.shields.io/badge/docs-main-blue"></a>
 <a href="https://codspeed.io/egraphs-good/egglog">
     <img src="https://img.shields.io/endpoint?url=https://codspeed.io/badge.json" alt="CodSpeed Badge"/></a>
+[![Zulip](https://img.shields.io/badge/zulip-join%20chat-blue)](https://egraphs.zulipchat.com/#narrow/stream/375765-egglog)
 
-This is the repo for the `egglog` tool accompanying the paper
-  "Better Together: Unifying Datalog and Equality Saturation"
-  ([ACM DL](https://dl.acm.org/doi/10.1145/3591239), [arXiv](https://arxiv.org/abs/2304.04332)).
+This is the repo for the core of the `egglog` engine, which combines the power of equality saturation and Datalog.
 
-If you use this work, please use [this citation](./CITATION.bib).
+Try out `egglog` in your web browser: [demo](https://egraphs-good.github.io/egglog/)!
 
-See also the Python binding, which provides a bit more documentation:
-https://egglog-python.readthedocs.io/
+We strongly recommend trying out our [egglog tutorial](https://github.com/egraphs-good/egglog-tutorial) for getting started!
 
-## Chat
+For a "battery-included" experience, please visit [egglog-experimental](https://github.com/egraphs-good/egglog-experimental). It provides more features through plugins to the core.
 
-There is a Zulip chat about egglog here:
-https://egraphs.zulipchat.com/#narrow/stream/375765-egglog
+If you use Egglog, please use [this citation](./CITATION.bib).
+
+---
+
+The following instructions are for using/developing the core directly.
 
 ## Prerequisites & compilation
 
 ```
 apt-get install make cargo
-cargo install cargo-nextest
-make all
+cargo install --path=root_directory_of_cloned_repo
 ```
-
 
 ## Usage
 
-```
-cargo run [-f fact-path] [-naive] [--to-json] [--to-dot] [--to-svg] <files.egg>
-```
-
-or just
+The core can used in REPL mode with:
 
 ```
-cargo run
+cargo run --release
 ```
 
-for the REPL.
+The standard mode processes an input file:
+
+```
+cargo run --release [-f fact-directory] [-naive] [--to-json] [--to-dot] [--to-svg] <files.egg>
+```
 
 * The `--to-dot` command will save a graphviz dot file at the end of the program, replacing the `.egg` extension with `.dot`.
 * The `--to-svg`, which requires [Graphviz to be installed](https://graphviz.org/download/), will save a graphviz svg file at the end of the program, replacing the `.egg` extension with `.svg`.
 
+One can also use `egglog` as a Rust library by adding the following to your `Cargo.toml`:
+
+```
+[dependencies]
+egglog = "1.0.0"
+```
+
+See also the [Python binding](https://github.com/egraphs-good/egglog-python).
+
+## Developement
+
+To view documentation in a browser, run `cargo doc --open`.
+
+Run `cargo test` to run the core `egglog` tests.
+
+<!---
 
 ## Community extensions
 
-* [@hatoo](https://github.com/hatoo) maintains an [egglog-language extension](https://marketplace.visualstudio.com/items?itemName=hatookov.egglog-language) in VS Code (just search for "egglog" in VS Code).
-* [@segeljakt](https://github.com/segeljakt) maintains a [Neovim plugin](https://github.com/segeljakt/tree-sitter-egg) for egglog using tree-sitter.
+Move to experimental readme
 
-## Development
+* [@hatoo](https://github.com/hatoo) maintains an [egglog-language extension](https://marketplace.visualstudio.com/items?itemName=hatookov.egglog-language) in VS Code (just search for "egglog" in VS Code). (Outdated)
+* [@segeljakt](https://github.com/segeljakt) maintains a [Neovim plugin](https://github.com/segeljakt/tree-sitter-egg) for egglog using tree-sitter. (Outdated)
 
-To run the tests use `make test`.
+--->
+
+## Benchmarks
+
+TODO: @Saul
+
+<!---
 
 ## Benchmarks
 
@@ -89,7 +110,5 @@ samply record ./target/profiling/egglog tests/extract-vec-bench.egg
 env RUST_LOG=error samply record ./target/profiling/egglog --dont-print-messages tests/extract-vec-bench.egg
 ```
 
-# Documentation
-
-To view documentation, run `cargo doc --open`.
+--->
 
