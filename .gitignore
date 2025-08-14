@@ -5,6 +5,9 @@ node_modules
 dist/
 pkg/
 
+# so long as this is library-only
+Cargo.lock
+
 # perf stuff
 flamegraph.svg
 perf.data*
