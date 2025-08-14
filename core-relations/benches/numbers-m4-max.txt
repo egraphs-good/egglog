@@ -1,0 +1,36 @@
+Timer precision: 41 ns
+writes                                     fastest       │ slowest       │ median        │ mean          │ samples │ iters
+├─ parallel_insert                                       │               │               │               │         │
+│  ├─ 1                                    170.3 ms      │ 225.1 ms      │ 173.5 ms      │ 176.2 ms      │ 25      │ 25
+│  │                                       24.61 Mitem/s │ 18.63 Mitem/s │ 24.17 Mitem/s │ 23.8 Mitem/s  │         │
+│  ├─ 2                                    161.7 ms      │ 188.8 ms      │ 164 ms        │ 166.1 ms      │ 25      │ 25
+│  │                                       25.92 Mitem/s │ 22.21 Mitem/s │ 25.56 Mitem/s │ 25.24 Mitem/s │         │
+│  ├─ 4                                    87.09 ms      │ 107.2 ms      │ 90.22 ms      │ 92.25 ms      │ 25      │ 25
+│  │                                       48.16 Mitem/s │ 39.11 Mitem/s │ 46.48 Mitem/s │ 45.46 Mitem/s │         │
+│  ├─ 8                                    39.93 ms      │ 52.42 ms      │ 47.82 ms      │ 47.22 ms      │ 25      │ 25
+│  │                                       105 Mitem/s   │ 80 Mitem/s    │ 87.69 Mitem/s │ 88.82 Mitem/s │         │
+│  ╰─ 16                                   28.6 ms       │ 38.87 ms      │ 31.3 ms       │ 32.58 ms      │ 25      │ 25
+│                                          146.6 Mitem/s │ 107.8 Mitem/s │ 133.9 Mitem/s │ 128.7 Mitem/s │         │
+├─ parallel_insert_merge2                                │               │               │               │         │
+│  ├─ 1                                    172.4 ms      │ 211.5 ms      │ 176.3 ms      │ 178.1 ms      │ 25      │ 25
+│  │                                       24.32 Mitem/s │ 19.82 Mitem/s │ 23.78 Mitem/s │ 23.54 Mitem/s │         │
+│  ├─ 2                                    180.8 ms      │ 192.5 ms      │ 182.7 ms      │ 183.2 ms      │ 25      │ 25
+│  │                                       23.18 Mitem/s │ 21.77 Mitem/s │ 22.95 Mitem/s │ 22.89 Mitem/s │         │
+│  ├─ 4                                    99.84 ms      │ 111.2 ms      │ 104.6 ms      │ 105.1 ms      │ 25      │ 25
+│  │                                       42.01 Mitem/s │ 37.69 Mitem/s │ 40.06 Mitem/s │ 39.89 Mitem/s │         │
+│  ├─ 8                                    50.41 ms      │ 58.35 ms      │ 54.69 ms      │ 54.34 ms      │ 25      │ 25
+│  │                                       83.2 Mitem/s  │ 71.87 Mitem/s │ 76.68 Mitem/s │ 77.17 Mitem/s │         │
+│  ╰─ 16                                   33.94 ms      │ 38.08 ms      │ 36.45 ms      │ 36.11 ms      │ 25      │ 25
+│                                          123.5 Mitem/s │ 110.1 Mitem/s │ 115 Mitem/s   │ 116.1 Mitem/s │         │
+╰─ parallel_insert_remove_with_collisions                │               │               │               │         │
+   ├─ 1                                    33.34 ms      │ 48.93 ms      │ 34.4 ms       │ 34.66 ms      │ 100     │ 100
+   │                                       31.44 Mitem/s │ 21.42 Mitem/s │ 30.47 Mitem/s │ 30.24 Mitem/s │         │
+   ├─ 2                                    29.26 ms      │ 35.84 ms      │ 29.98 ms      │ 30.11 ms      │ 100     │ 100
+   │                                       35.83 Mitem/s │ 29.25 Mitem/s │ 34.97 Mitem/s │ 34.82 Mitem/s │         │
+   ├─ 4                                    15.91 ms      │ 19.67 ms      │ 16.38 ms      │ 16.65 ms      │ 100     │ 100
+   │                                       65.86 Mitem/s │ 53.3 Mitem/s  │ 63.97 Mitem/s │ 62.94 Mitem/s │         │
+   ├─ 8                                    8.102 ms      │ 20.87 ms      │ 9.304 ms      │ 9.382 ms      │ 100     │ 100
+   │                                       129.4 Mitem/s │ 50.23 Mitem/s │ 112.6 Mitem/s │ 111.7 Mitem/s │         │
+   ╰─ 16                                   5.927 ms      │ 8.111 ms      │ 6.277 ms      │ 6.332 ms      │ 100     │ 100
+                                           176.9 Mitem/s │ 129.2 Mitem/s │ 167 Mitem/s   │ 165.5 Mitem/s │         │
+

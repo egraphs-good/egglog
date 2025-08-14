@@ -1,0 +1,18 @@
+[package]
+name = "union-find"
+version = "0.1.0"
+edition = "2021"
+
+[dependencies]
+numeric-id = { path = "../numeric-id" }
+crossbeam = "0.8.4"
+concurrency = { path = "../concurrency" }
+
+[dev-dependencies]
+divan = "0.1.15"
+rand = "0.8.4"
+rayon = "1.10"
+
+[[bench]]
+name = "union-find"
+harness = false

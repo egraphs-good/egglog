@@ -1,0 +1,35 @@
+Timer precision: 41 ns
+writes                                     fastest       │ slowest       │ median        │ mean          │ samples │ iters
+├─ parallel_insert                                       │               │               │               │         │
+│  ├─ 1                                    60.03 ms      │ 89.34 ms      │ 63.24 ms      │ 63.29 ms      │ 100     │ 100
+│  │                                       17.46 Mitem/s │ 11.73 Mitem/s │ 16.58 Mitem/s │ 16.56 Mitem/s │         │
+│  ├─ 2                                    44.63 ms      │ 59.98 ms      │ 45.67 ms      │ 46.33 ms      │ 100     │ 100
+│  │                                       23.49 Mitem/s │ 17.48 Mitem/s │ 22.95 Mitem/s │ 22.62 Mitem/s │         │
+│  ├─ 4                                    23.13 ms      │ 29.7 ms       │ 24.2 ms       │ 24.26 ms      │ 100     │ 100
+│  │                                       45.31 Mitem/s │ 35.3 Mitem/s  │ 43.32 Mitem/s │ 43.21 Mitem/s │         │
+│  ├─ 8                                    13.08 ms      │ 16.75 ms      │ 13.67 ms      │ 13.86 ms      │ 100     │ 100
+│  │                                       80.1 Mitem/s  │ 62.56 Mitem/s │ 76.65 Mitem/s │ 75.64 Mitem/s │         │
+│  ╰─ 16                                   7.747 ms      │ 10.48 ms      │ 8.961 ms      │ 9.017 ms      │ 100     │ 100
+│                                          135.3 Mitem/s │ 99.96 Mitem/s │ 117 Mitem/s   │ 116.2 Mitem/s │         │
+├─ parallel_insert_merge2                                │               │               │               │         │
+│  ├─ 1                                    256.8 ms      │ 322.1 ms      │ 262.1 ms      │ 265.3 ms      │ 50      │ 50
+│  │                                       16.33 Mitem/s │ 13.02 Mitem/s │ 16 Mitem/s    │ 15.8 Mitem/s  │         │
+│  ├─ 2                                    211.4 ms      │ 248.1 ms      │ 213.1 ms      │ 215.4 ms      │ 50      │ 50
+│  │                                       19.84 Mitem/s │ 16.9 Mitem/s  │ 19.67 Mitem/s │ 19.46 Mitem/s │         │
+│  ├─ 4                                    111.6 ms      │ 129.9 ms      │ 115 ms        │ 115.5 ms      │ 50      │ 50
+│  │                                       37.57 Mitem/s │ 32.27 Mitem/s │ 36.45 Mitem/s │ 36.28 Mitem/s │         │
+│  ├─ 8                                    63.82 ms      │ 72.84 ms      │ 65.18 ms      │ 65.53 ms      │ 50      │ 50
+│  │                                       65.71 Mitem/s │ 57.58 Mitem/s │ 64.34 Mitem/s │ 63.99 Mitem/s │         │
+│  ╰─ 16                                   37.87 ms      │ 46.97 ms      │ 41.35 ms      │ 41.32 ms      │ 50      │ 50
+│                                          110.7 Mitem/s │ 89.29 Mitem/s │ 101.4 Mitem/s │ 101.4 Mitem/s │         │
+╰─ parallel_insert_remove_with_collisions                │               │               │               │         │
+   ├─ 1                                    51.01 ms      │ 79.25 ms      │ 51.71 ms      │ 52.35 ms      │ 100     │ 100
+   │                                       20.55 Mitem/s │ 13.23 Mitem/s │ 20.27 Mitem/s │ 20.02 Mitem/s │         │
+   ├─ 2                                    35.29 ms      │ 51 ms         │ 35.87 ms      │ 36.31 ms      │ 100     │ 100
+   │                                       29.71 Mitem/s │ 20.55 Mitem/s │ 29.23 Mitem/s │ 28.87 Mitem/s │         │
+   ├─ 4                                    18.79 ms      │ 27.84 ms      │ 19.86 ms      │ 20.25 ms      │ 100     │ 100
+   │                                       55.78 Mitem/s │ 37.66 Mitem/s │ 52.77 Mitem/s │ 51.77 Mitem/s │         │
+   ├─ 8                                    11.43 ms      │ 16.51 ms      │ 11.99 ms      │ 12.16 ms      │ 100     │ 100
+   │                                       91.69 Mitem/s │ 63.48 Mitem/s │ 87.39 Mitem/s │ 86.19 Mitem/s │         │
+   ╰─ 16                                   7.083 ms      │ 10.63 ms      │ 7.943 ms      │ 8.045 ms      │ 100     │ 100
+                                           148 Mitem/s   │ 98.57 Mitem/s │ 132 Mitem/s   │ 130.3 Mitem/s │         │

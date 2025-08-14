@@ -1,0 +1,734 @@
+# Numbers from an M1 Ultra CPU.
+# Caveate: All cores had the same work distribution (except for new rayon
+# numbers), but there was no effort to pin to all P cores for this benchmark.
+
+# Numbers with "expected" memory orderings.
+Timer precision: 41 ns
+union_find                                                           fastest       │ slowest       │ median        │ mean          │ samples │ iters
+├─ local                                                                           │               │               │               │         │
+│  ├─ concurrent_1threads                                                          │               │               │               │         │
+│  │  ├─ Arc<std::sync::mutex::Mutex<union_find::UnionFind<usize>>>                │               │               │               │         │
+│  │  │  ├─ 1000                                                     30.33 µs      │ 63.24 µs      │ 32.49 µs      │ 34.14 µs      │ 50      │ 50
+│  │  │  │                                                           66.46 Mitem/s │ 31.81 Mitem/s │ 61.9 Mitem/s  │ 58.98 Mitem/s │         │
+│  │  │  ├─ 100000                                                   1.81 ms       │ 2.352 ms      │ 1.928 ms      │ 1.946 ms      │ 50      │ 50
+│  │  │  │                                                           111.2 Mitem/s │ 85.69 Mitem/s │ 104.4 Mitem/s │ 103.5 Mitem/s │         │
+│  │  │  ├─ 1000000                                                  18.37 ms      │ 20 ms         │ 19.02 ms      │ 19.09 ms      │ 50      │ 50
+│  │  │  │                                                           109.6 Mitem/s │ 100.7 Mitem/s │ 105.9 Mitem/s │ 105.5 Mitem/s │         │
+│  │  │  ╰─ 4000000                                                  74.18 ms      │ 77.1 ms       │ 75.79 ms      │ 75.72 ms      │ 50      │ 50
+│  │  │                                                              108.6 Mitem/s │ 104.5 Mitem/s │ 106.3 Mitem/s │ 106.4 Mitem/s │         │
+│  │  ╰─ UnionFind<usize>                                                          │               │               │               │         │
+│  │     ├─ 1000                                                     30.74 µs      │ 689.6 µs      │ 43.66 µs      │ 96.84 µs      │ 50      │ 50
+│  │     │                                                           65.52 Mitem/s │ 2.923 Mitem/s │ 46.19 Mitem/s │ 20.81 Mitem/s │         │
+│  │     ├─ 100000                                                   1.634 ms      │ 2.592 ms      │ 1.746 ms      │ 1.859 ms      │ 50      │ 50
+│  │     │                                                           123.2 Mitem/s │ 77.69 Mitem/s │ 115.3 Mitem/s │ 108.3 Mitem/s │         │
+│  │     ├─ 1000000                                                  16.35 ms      │ 18.16 ms      │ 16.86 ms      │ 16.84 ms      │ 50      │ 50
+│  │     │                                                           123.1 Mitem/s │ 110.9 Mitem/s │ 119.5 Mitem/s │ 119.5 Mitem/s │         │
+│  │     ╰─ 4000000                                                  65.48 ms      │ 68.3 ms       │ 67.01 ms      │ 66.98 ms      │ 50      │ 50
+│  │                                                                 123 Mitem/s   │ 118 Mitem/s   │ 120.2 Mitem/s │ 120.3 Mitem/s │         │
+│  ├─ concurrent_2threads                                                          │               │               │               │         │
+│  │  ├─ Arc<std::sync::mutex::Mutex<union_find::UnionFind<usize>>>                │               │               │               │         │
+│  │  │  ├─ 1000                                                     33.45 µs      │ 146.3 µs      │ 44.33 µs      │ 51.59 µs      │ 50      │ 50
+│  │  │  │                                                           60.31 Mitem/s │ 13.74 Mitem/s │ 45.33 Mitem/s │ 39.03 Mitem/s │         │
+│  │  │  ├─ 100000                                                   3.007 ms      │ 4.647 ms      │ 3.618 ms      │ 3.672 ms      │ 50      │ 50
+│  │  │  │                                                           66.98 Mitem/s │ 43.34 Mitem/s │ 55.68 Mitem/s │ 54.87 Mitem/s │         │
+│  │  │  ├─ 1000000                                                  26.04 ms      │ 41.93 ms      │ 34.06 ms      │ 34.5 ms       │ 50      │ 50
+│  │  │  │                                                           77.36 Mitem/s │ 48.05 Mitem/s │ 59.14 Mitem/s │ 58.39 Mitem/s │         │
+│  │  │  ╰─ 4000000                                                  124.3 ms      │ 145.1 ms      │ 137 ms        │ 136.5 ms      │ 50      │ 50
+│  │  │                                                              64.8 Mitem/s  │ 55.52 Mitem/s │ 58.8 Mitem/s  │ 59.03 Mitem/s │         │
+│  │  ╰─ UnionFind<usize>                                                          │               │               │               │         │
+│  │     ├─ 1000                                                     28.24 µs      │ 138.6 µs      │ 50.77 µs      │ 54.04 µs      │ 50      │ 50
+│  │     │                                                           71.08 Mitem/s │ 14.53 Mitem/s │ 39.68 Mitem/s │ 37.26 Mitem/s │         │
+│  │     ├─ 100000                                                   944.5 µs      │ 1.637 ms      │ 1.049 ms      │ 1.099 ms      │ 50      │ 50
+│  │     │                                                           213.2 Mitem/s │ 123 Mitem/s   │ 192 Mitem/s   │ 183.3 Mitem/s │         │
+│  │     ├─ 1000000                                                  8.831 ms      │ 11.61 ms      │ 9.702 ms      │ 9.796 ms      │ 50      │ 50
+│  │     │                                                           228.1 Mitem/s │ 173.5 Mitem/s │ 207.6 Mitem/s │ 205.6 Mitem/s │         │
+│  │     ╰─ 4000000                                                  37.61 ms      │ 45 ms         │ 42.94 ms      │ 42.51 ms      │ 50      │ 50
+│  │                                                                 214.3 Mitem/s │ 179 Mitem/s   │ 187.6 Mitem/s │ 189.5 Mitem/s │         │
+│  ├─ concurrent_4threads                                                          │               │               │               │         │
+│  │  ├─ Arc<std::sync::mutex::Mutex<union_find::UnionFind<usize>>>                │               │               │               │         │
+│  │  │  ├─ 1000                                                     41.62 µs      │ 152.4 µs      │ 83.45 µs      │ 86.15 µs      │ 50      │ 50
+│  │  │  │                                                           48.33 Mitem/s │ 13.24 Mitem/s │ 24.13 Mitem/s │ 23.37 Mitem/s │         │
+│  │  │  ├─ 100000                                                   4.241 ms      │ 12.11 ms      │ 6.283 ms      │ 6.732 ms      │ 50      │ 50
+│  │  │  │                                                           47.5 Mitem/s  │ 16.62 Mitem/s │ 32.06 Mitem/s │ 29.93 Mitem/s │         │
+│  │  │  ├─ 1000000                                                  48.04 ms      │ 117.3 ms      │ 61.92 ms      │ 72.12 ms      │ 50      │ 50
+│  │  │  │                                                           41.93 Mitem/s │ 17.17 Mitem/s │ 32.53 Mitem/s │ 27.93 Mitem/s │         │
+│  │  │  ╰─ 4000000                                                  238.9 ms      │ 451.1 ms      │ 250.6 ms      │ 295 ms        │ 50      │ 50
+│  │  │                                                              33.73 Mitem/s │ 17.86 Mitem/s │ 32.16 Mitem/s │ 27.31 Mitem/s │         │
+│  │  ╰─ UnionFind<usize>                                                          │               │               │               │         │
+│  │     ├─ 1000                                                     31.58 µs      │ 133.9 µs      │ 53.24 µs      │ 59.79 µs      │ 50      │ 50
+│  │     │                                                           63.83 Mitem/s │ 14.95 Mitem/s │ 37.85 Mitem/s │ 33.66 Mitem/s │         │
+│  │     ├─ 100000                                                   666.5 µs      │ 1.5 ms        │ 824.6 µs      │ 894.6 µs      │ 50      │ 50
+│  │     │                                                           302.2 Mitem/s │ 134.3 Mitem/s │ 244.3 Mitem/s │ 225.2 Mitem/s │         │
+│  │     ├─ 1000000                                                  5.54 ms       │ 9.359 ms      │ 6.627 ms      │ 6.642 ms      │ 50      │ 50
+│  │     │                                                           363.6 Mitem/s │ 215.2 Mitem/s │ 304 Mitem/s   │ 303.3 Mitem/s │         │
+│  │     ╰─ 4000000                                                  25.36 ms      │ 30.43 ms      │ 28.08 ms      │ 28.03 ms      │ 50      │ 50
+│  │                                                                 317.7 Mitem/s │ 264.8 Mitem/s │ 287 Mitem/s   │ 287.5 Mitem/s │         │
+│  ├─ concurrent_8threads                                                          │               │               │               │         │
+│  │  ├─ Arc<std::sync::mutex::Mutex<union_find::UnionFind<usize>>>                │               │               │               │         │
+│  │  │  ├─ 1000                                                     84.99 µs      │ 242.3 µs      │ 117.6 µs      │ 126.7 µs      │ 50      │ 50
+│  │  │  │                                                           23.62 Mitem/s │ 8.319 Mitem/s │ 17.1 Mitem/s  │ 15.87 Mitem/s │         │
+│  │  │  ├─ 100000                                                   3.513 ms      │ 6.425 ms      │ 5.308 ms      │ 5.326 ms      │ 50      │ 50
+│  │  │  │                                                           57.33 Mitem/s │ 31.36 Mitem/s │ 37.95 Mitem/s │ 37.83 Mitem/s │         │
+│  │  │  ├─ 1000000                                                  41.08 ms      │ 55.72 ms      │ 50.82 ms      │ 50.34 ms      │ 50      │ 50
+│  │  │  │                                                           49.05 Mitem/s │ 36.16 Mitem/s │ 39.65 Mitem/s │ 40.01 Mitem/s │         │
+│  │  │  ╰─ 4000000                                                  179.2 ms      │ 251.8 ms      │ 206.3 ms      │ 205.8 ms      │ 50      │ 50
+│  │  │                                                              44.97 Mitem/s │ 32 Mitem/s    │ 39.05 Mitem/s │ 39.14 Mitem/s │         │
+│  │  ╰─ UnionFind<usize>                                                          │               │               │               │         │
+│  │     ├─ 1000                                                     70.99 µs      │ 325.2 µs      │ 116.6 µs      │ 133.5 µs      │ 50      │ 50
+│  │     │                                                           28.39 Mitem/s │ 6.198 Mitem/s │ 17.2 Mitem/s  │ 15.05 Mitem/s │         │
+│  │     ├─ 100000                                                   552.4 µs      │ 1.878 ms      │ 925 µs        │ 1.101 ms      │ 50      │ 50
+│  │     │                                                           364.7 Mitem/s │ 107.2 Mitem/s │ 217.8 Mitem/s │ 183 Mitem/s   │         │
+│  │     ├─ 1000000                                                  5.19 ms       │ 8.798 ms      │ 6.303 ms      │ 6.328 ms      │ 50      │ 50
+│  │     │                                                           388.1 Mitem/s │ 229 Mitem/s   │ 319.6 Mitem/s │ 318.4 Mitem/s │         │
+│  │     ╰─ 4000000                                                  21.02 ms      │ 24.9 ms       │ 23.56 ms      │ 23.5 ms       │ 50      │ 50
+│  │                                                                 383.3 Mitem/s │ 323.6 Mitem/s │ 342 Mitem/s   │ 342.9 Mitem/s │         │
+│  ├─ concurrent_16threads                                                         │               │               │               │         │
+│  │  ├─ Arc<std::sync::mutex::Mutex<union_find::UnionFind<usize>>>                │               │               │               │         │
+│  │  │  ├─ 1000                                                     166.3 µs      │ 398.5 µs      │ 213.1 µs      │ 230 µs        │ 50      │ 50
+│  │  │  │                                                           12.02 Mitem/s │ 5.057 Mitem/s │ 9.382 Mitem/s │ 8.718 Mitem/s │         │
+│  │  │  ├─ 100000                                                   4.373 ms      │ 6.396 ms      │ 5.129 ms      │ 5.221 ms      │ 50      │ 50
+│  │  │  │                                                           46.08 Mitem/s │ 31.49 Mitem/s │ 39.27 Mitem/s │ 38.59 Mitem/s │         │
+│  │  │  ├─ 1000000                                                  38.31 ms      │ 46.36 ms      │ 43.55 ms      │ 43.41 ms      │ 50      │ 50
+│  │  │  │                                                           52.58 Mitem/s │ 43.46 Mitem/s │ 46.26 Mitem/s │ 46.41 Mitem/s │         │
+│  │  │  ╰─ 4000000                                                  156.3 ms      │ 204.9 ms      │ 171.9 ms      │ 172.7 ms      │ 50      │ 50
+│  │  │                                                              51.55 Mitem/s │ 39.33 Mitem/s │ 46.87 Mitem/s │ 46.65 Mitem/s │         │
+│  │  ╰─ UnionFind<usize>                                                          │               │               │               │         │
+│  │     ├─ 1000                                                     223.1 µs      │ 381.9 µs      │ 282.7 µs      │ 287.9 µs      │ 50      │ 50
+│  │     │                                                           9.033 Mitem/s │ 5.277 Mitem/s │ 7.074 Mitem/s │ 6.965 Mitem/s │         │
+│  │     ├─ 100000                                                   498.2 µs      │ 2.627 ms      │ 733.6 µs      │ 974.8 µs      │ 50      │ 50
+│  │     │                                                           404.3 Mitem/s │ 76.69 Mitem/s │ 274.6 Mitem/s │ 206.6 Mitem/s │         │
+│  │     ├─ 1000000                                                  4.242 ms      │ 6.048 ms      │ 4.881 ms      │ 4.971 ms      │ 50      │ 50
+│  │     │                                                           475 Mitem/s   │ 333.1 Mitem/s │ 412.7 Mitem/s │ 405.3 Mitem/s │         │
+│  │     ╰─ 4000000                                                  14.94 ms      │ 16.06 ms      │ 15.5 ms       │ 15.51 ms      │ 50      │ 50
+│  │                                                                 539.3 Mitem/s │ 501.7 Mitem/s │ 519.7 Mitem/s │ 519.5 Mitem/s │         │
+│  ╰─ serial                                                                       │               │               │               │         │
+│     ├─ 1000                                                        3.499 µs      │ 67.08 µs      │ 33.79 µs      │ 28.35 µs      │ 50      │ 50
+│     │                                                              574 Mitem/s   │ 30.06 Mitem/s │ 59.66 Mitem/s │ 71.06 Mitem/s │         │
+│     ├─ 100000                                                      423.9 µs      │ 1.512 ms      │ 597.8 µs      │ 752.9 µs      │ 50      │ 50
+│     │                                                              475.3 Mitem/s │ 133.1 Mitem/s │ 337 Mitem/s   │ 267.6 Mitem/s │         │
+│     ├─ 1000000                                                     4.677 ms      │ 6.014 ms      │ 5.253 ms      │ 5.273 ms      │ 50      │ 50
+│     │                                                              430.8 Mitem/s │ 335 Mitem/s   │ 383.5 Mitem/s │ 382 Mitem/s   │         │
+│     ╰─ 4000000                                                     18.86 ms      │ 20.58 ms      │ 19.66 ms      │ 19.63 ms      │ 50      │ 50
+│                                                                    427.1 Mitem/s │ 391.5 Mitem/s │ 409.9 Mitem/s │ 410.4 Mitem/s │         │
+╰─ random                                                                          │               │               │               │         │
+   ├─ concurrent_1threads                                                          │               │               │               │         │
+   │  ├─ Arc<std::sync::mutex::Mutex<union_find::UnionFind<usize>>>                │               │               │               │         │
+   │  │  ├─ 1000                                                     33.62 µs      │ 1.442 ms      │ 52.95 µs      │ 144.4 µs      │ 50      │ 50
+   │  │  │                                                           60.22 Mitem/s │ 1.406 Mitem/s │ 38.12 Mitem/s │ 14 Mitem/s    │         │
+   │  │  ├─ 100000                                                   2.057 ms      │ 3.895 ms      │ 2.736 ms      │ 2.83 ms       │ 50      │ 50
+   │  │  │                                                           98.41 Mitem/s │ 51.99 Mitem/s │ 73.98 Mitem/s │ 71.54 Mitem/s │         │
+   │  │  ├─ 1000000                                                  34.54 ms      │ 47.42 ms      │ 36.86 ms      │ 38.31 ms      │ 50      │ 50
+   │  │  │                                                           58.61 Mitem/s │ 42.7 Mitem/s  │ 54.92 Mitem/s │ 52.84 Mitem/s │         │
+   │  │  ╰─ 4000000                                                  203.9 ms      │ 308 ms        │ 245.1 ms      │ 245.3 ms      │ 50      │ 50
+   │  │                                                              39.71 Mitem/s │ 26.29 Mitem/s │ 33.03 Mitem/s │ 33.01 Mitem/s │         │
+   │  ╰─ UnionFind<usize>                                                          │               │               │               │         │
+   │     ├─ 1000                                                     29.87 µs      │ 1.211 ms      │ 35.64 µs      │ 152.4 µs      │ 50      │ 50
+   │     │                                                           67.91 Mitem/s │ 1.662 Mitem/s │ 56.86 Mitem/s │ 13.27 Mitem/s │         │
+   │     ├─ 100000                                                   1.693 ms      │ 3.367 ms      │ 1.809 ms      │ 1.996 ms      │ 50      │ 50
+   │     │                                                           119.5 Mitem/s │ 60.12 Mitem/s │ 111.9 Mitem/s │ 101.4 Mitem/s │         │
+   │     ├─ 1000000                                                  39.53 ms      │ 56.52 ms      │ 41.41 ms      │ 43.45 ms      │ 50      │ 50
+   │     │                                                           51.21 Mitem/s │ 35.83 Mitem/s │ 48.89 Mitem/s │ 46.59 Mitem/s │         │
+   │     ╰─ 4000000                                                  270.9 ms      │ 330.5 ms      │ 309.5 ms      │ 305.1 ms      │ 50      │ 50
+   │                                                                 29.89 Mitem/s │ 24.5 Mitem/s  │ 26.17 Mitem/s │ 26.54 Mitem/s │         │
+   ├─ concurrent_2threads                                                          │               │               │               │         │
+   │  ├─ Arc<std::sync::mutex::Mutex<union_find::UnionFind<usize>>>                │               │               │               │         │
+   │  │  ├─ 1000                                                     37.49 µs      │ 81.29 µs      │ 41.68 µs      │ 45.24 µs      │ 50      │ 50
+   │  │  │                                                           53.97 Mitem/s │ 24.99 Mitem/s │ 48.62 Mitem/s │ 44.7 Mitem/s  │         │
+   │  │  ├─ 100000                                                   3.479 ms      │ 5.475 ms      │ 4.492 ms      │ 4.484 ms      │ 50      │ 50
+   │  │  │                                                           58.19 Mitem/s │ 36.99 Mitem/s │ 45.07 Mitem/s │ 45.15 Mitem/s │         │
+   │  │  ├─ 1000000                                                  53.34 ms      │ 70.03 ms      │ 57.58 ms      │ 58.91 ms      │ 50      │ 50
+   │  │  │                                                           37.95 Mitem/s │ 28.91 Mitem/s │ 35.16 Mitem/s │ 34.37 Mitem/s │         │
+   │  │  ╰─ 4000000                                                  316.4 ms      │ 386.5 ms      │ 327.9 ms      │ 332 ms        │ 50      │ 50
+   │  │                                                              25.59 Mitem/s │ 20.95 Mitem/s │ 24.69 Mitem/s │ 24.39 Mitem/s │         │
+   │  ╰─ UnionFind<usize>                                                          │               │               │               │         │
+   │     ├─ 1000                                                     28.79 µs      │ 69.45 µs      │ 40.89 µs      │ 43.8 µs       │ 50      │ 50
+   │     │                                                           70.02 Mitem/s │ 29.25 Mitem/s │ 49.44 Mitem/s │ 46.22 Mitem/s │         │
+   │     ├─ 100000                                                   1.012 ms      │ 2.054 ms      │ 1.096 ms      │ 1.272 ms      │ 50      │ 50
+   │     │                                                           199.9 Mitem/s │ 98.53 Mitem/s │ 184.6 Mitem/s │ 159 Mitem/s   │         │
+   │     ├─ 1000000                                                  22.73 ms      │ 33.56 ms      │ 25.38 ms      │ 25.96 ms      │ 50      │ 50
+   │     │                                                           89.07 Mitem/s │ 60.33 Mitem/s │ 79.78 Mitem/s │ 77.99 Mitem/s │         │
+   │     ╰─ 4000000                                                  165.3 ms      │ 185.8 ms      │ 169.4 ms      │ 170.2 ms      │ 50      │ 50
+   │                                                                 48.98 Mitem/s │ 43.58 Mitem/s │ 47.8 Mitem/s  │ 47.58 Mitem/s │         │
+   ├─ concurrent_4threads                                                          │               │               │               │         │
+   │  ├─ Arc<std::sync::mutex::Mutex<union_find::UnionFind<usize>>>                │               │               │               │         │
+   │  │  ├─ 1000                                                     46.7 µs       │ 182.5 µs      │ 94.12 µs      │ 93.87 µs      │ 50      │ 50
+   │  │  │                                                           43.16 Mitem/s │ 11.04 Mitem/s │ 21.43 Mitem/s │ 21.54 Mitem/s │         │
+   │  │  ├─ 100000                                                   6.08 ms       │ 19.48 ms      │ 16.56 ms      │ 13.38 ms      │ 50      │ 50
+   │  │  │                                                           33.3 Mitem/s  │ 10.38 Mitem/s │ 12.22 Mitem/s │ 15.12 Mitem/s │         │
+   │  │  ├─ 1000000                                                  95.76 ms      │ 212.1 ms      │ 103.3 ms      │ 110.3 ms      │ 50      │ 50
+   │  │  │                                                           21.14 Mitem/s │ 9.544 Mitem/s │ 19.58 Mitem/s │ 18.34 Mitem/s │         │
+   │  │  ╰─ 4000000                                                  576.3 ms      │ 746.1 ms      │ 607.3 ms      │ 623.1 ms      │ 50      │ 50
+   │  │                                                              14.05 Mitem/s │ 10.85 Mitem/s │ 13.33 Mitem/s │ 12.99 Mitem/s │         │
+   │  ╰─ UnionFind<usize>                                                          │               │               │               │         │
+   │     ├─ 1000                                                     51.79 µs      │ 941.8 µs      │ 61.25 µs      │ 89.44 µs      │ 50      │ 50
+   │     │                                                           39 Mitem/s    │ 2.144 Mitem/s │ 33.11 Mitem/s │ 22.62 Mitem/s │         │
+   │     ├─ 100000                                                   960.1 µs      │ 2.123 ms      │ 1.341 ms      │ 1.413 ms      │ 50      │ 50
+   │     │                                                           210.8 Mitem/s │ 95.36 Mitem/s │ 150.9 Mitem/s │ 143.2 Mitem/s │         │
+   │     ├─ 1000000                                                  10.72 ms      │ 18.87 ms      │ 13.59 ms      │ 13.79 ms      │ 50      │ 50
+   │     │                                                           188.8 Mitem/s │ 107.2 Mitem/s │ 148.9 Mitem/s │ 146.7 Mitem/s │         │
+   │     ╰─ 4000000                                                  85.04 ms      │ 97.25 ms      │ 89.07 ms      │ 89.35 ms      │ 50      │ 50
+   │                                                                 95.24 Mitem/s │ 83.28 Mitem/s │ 90.94 Mitem/s │ 90.64 Mitem/s │         │
+   ├─ concurrent_8threads                                                          │               │               │               │         │
+   │  ├─ Arc<std::sync::mutex::Mutex<union_find::UnionFind<usize>>>                │               │               │               │         │
+   │  │  ├─ 1000                                                     75.99 µs      │ 224.4 µs      │ 147 µs        │ 148.2 µs      │ 50      │ 50
+   │  │  │                                                           26.63 Mitem/s │ 9.017 Mitem/s │ 13.76 Mitem/s │ 13.63 Mitem/s │         │
+   │  │  ├─ 100000                                                   7.496 ms      │ 17.57 ms      │ 13.5 ms       │ 13.25 ms      │ 50      │ 50
+   │  │  │                                                           27 Mitem/s    │ 11.52 Mitem/s │ 14.99 Mitem/s │ 15.27 Mitem/s │         │
+   │  │  ├─ 1000000                                                  119.2 ms      │ 166.4 ms      │ 145.4 ms      │ 143.9 ms      │ 50      │ 50
+   │  │  │                                                           16.97 Mitem/s │ 12.16 Mitem/s │ 13.92 Mitem/s │ 14.06 Mitem/s │         │
+   │  │  ╰─ 4000000                                                  476.8 ms      │ 713.3 ms      │ 625.4 ms      │ 624.7 ms      │ 50      │ 50
+   │  │                                                              16.98 Mitem/s │ 11.35 Mitem/s │ 12.95 Mitem/s │ 12.96 Mitem/s │         │
+   │  ╰─ UnionFind<usize>                                                          │               │               │               │         │
+   │     ├─ 1000                                                     68.79 µs      │ 198.9 µs      │ 95.6 µs       │ 98.79 µs      │ 50      │ 50
+   │     │                                                           29.53 Mitem/s │ 10.21 Mitem/s │ 21.08 Mitem/s │ 20.45 Mitem/s │         │
+   │     ├─ 100000                                                   567.6 µs      │ 2.136 ms      │ 1.172 ms      │ 1.22 ms       │ 50      │ 50
+   │     │                                                           356.7 Mitem/s │ 94.77 Mitem/s │ 172.6 Mitem/s │ 165.9 Mitem/s │         │
+   │     ├─ 1000000                                                  8.951 ms      │ 11.3 ms       │ 9.767 ms      │ 9.82 ms       │ 50      │ 50
+   │     │                                                           226.2 Mitem/s │ 179.1 Mitem/s │ 207.3 Mitem/s │ 206.1 Mitem/s │         │
+   │     ╰─ 4000000                                                  52.26 ms      │ 58.01 ms      │ 54.32 ms      │ 54.5 ms       │ 50      │ 50
+   │                                                                 154.9 Mitem/s │ 139.6 Mitem/s │ 149 Mitem/s   │ 148.6 Mitem/s │         │
+   ├─ concurrent_16threads                                                         │               │               │               │         │
+   │  ├─ Arc<std::sync::mutex::Mutex<union_find::UnionFind<usize>>>                │               │               │               │         │
+   │  │  ├─ 1000                                                     204.9 µs      │ 576.5 µs      │ 270.2 µs      │ 276 µs        │ 50      │ 50
+   │  │  │                                                           9.836 Mitem/s │ 3.496 Mitem/s │ 7.458 Mitem/s │ 7.305 Mitem/s │         │
+   │  │  ├─ 100000                                                   12.32 ms      │ 18.26 ms      │ 15.47 ms      │ 15.28 ms      │ 50      │ 50
+   │  │  │                                                           16.43 Mitem/s │ 11.08 Mitem/s │ 13.08 Mitem/s │ 13.24 Mitem/s │         │
+   │  │  ├─ 1000000                                                  116.8 ms      │ 162.4 ms      │ 144.6 ms      │ 144.8 ms      │ 50      │ 50
+   │  │  │                                                           17.32 Mitem/s │ 12.46 Mitem/s │ 13.99 Mitem/s │ 13.98 Mitem/s │         │
+   │  │  ╰─ 4000000                                                  503.7 ms      │ 631.2 ms      │ 564.7 ms      │ 567.3 ms      │ 50      │ 50
+   │  │                                                              16.08 Mitem/s │ 12.83 Mitem/s │ 14.34 Mitem/s │ 14.27 Mitem/s │         │
+   │  ╰─ UnionFind<usize>                                                          │               │               │               │         │
+   │     ├─ 1000                                                     154.2 µs      │ 1.103 ms      │ 265.3 µs      │ 281.3 µs      │ 50      │ 50
+   │     │                                                           13.06 Mitem/s │ 1.827 Mitem/s │ 7.597 Mitem/s │ 7.162 Mitem/s │         │
+   │     ├─ 100000                                                   568.1 µs      │ 1.79 ms       │ 815 µs        │ 980.5 µs      │ 50      │ 50
+   │     │                                                           356.3 Mitem/s │ 113.1 Mitem/s │ 248.4 Mitem/s │ 206.5 Mitem/s │         │
+   │     ├─ 1000000                                                  5.849 ms      │ 9.445 ms      │ 6.687 ms      │ 7.063 ms      │ 50      │ 50
+   │     │                                                           346.2 Mitem/s │ 214.3 Mitem/s │ 302.8 Mitem/s │ 286.7 Mitem/s │         │
+   │     ╰─ 4000000                                                  32.52 ms      │ 37.62 ms      │ 33.19 ms      │ 33.54 ms      │ 50      │ 50
+   │                                                                 249 Mitem/s   │ 215.2 Mitem/s │ 244 Mitem/s   │ 241.4 Mitem/s │         │
+   ╰─ serial                                                                       │               │               │               │         │
+      ├─ 1000                                                        5.249 µs      │ 7.207 µs      │ 5.457 µs      │ 5.524 µs      │ 50      │ 50
+      │                                                              385.9 Mitem/s │ 281.5 Mitem/s │ 370.3 Mitem/s │ 366.3 Mitem/s │         │
+      ├─ 100000                                                      815.7 µs      │ 1.882 ms      │ 1.12 ms       │ 1.137 ms      │ 50      │ 50
+      │                                                              248.2 Mitem/s │ 107.6 Mitem/s │ 180.6 Mitem/s │ 178 Mitem/s   │         │
+      ├─ 1000000                                                     9.943 ms      │ 12.1 ms       │ 10.8 ms       │ 10.88 ms      │ 50      │ 50
+      │                                                              203.6 Mitem/s │ 167.2 Mitem/s │ 187.4 Mitem/s │ 186 Mitem/s   │         │
+      ╰─ 4000000                                                     59.9 ms       │ 62.44 ms      │ 61.06 ms      │ 61.03 ms      │ 50      │ 50
+                                                                     135.2 Mitem/s │ 129.7 Mitem/s │ 132.6 Mitem/s │ 132.7 Mitem/s │         │
+(Newer) rayon-based numbers, with work stealing.
+Timer precision: 41 ns
+union_find              fastest       │ slowest       │ median        │ mean          │ samples │ iters
+╰─ rayon_work_stealing                │               │               │               │         │
+   ├─ local                           │               │               │               │         │
+   │  ├─ 1000           24.29 µs      │ 383.6 µs      │ 27.93 µs      │ 38.21 µs      │ 50      │ 50
+   │  │                 83.15 Mitem/s │ 5.27 Mitem/s  │ 72.19 Mitem/s │ 52.74 Mitem/s │         │
+   │  ├─ 100000         392 µs        │ 1.162 ms      │ 731.1 µs      │ 744.4 µs      │ 50      │ 50
+   │  │                 513.9 Mitem/s │ 173.3 Mitem/s │ 275.6 Mitem/s │ 270.6 Mitem/s │         │
+   │  ├─ 1000000        3.289 ms      │ 5.138 ms      │ 4.257 ms      │ 4.186 ms      │ 50      │ 50
+   │  │                 612.6 Mitem/s │ 392.1 Mitem/s │ 473.3 Mitem/s │ 481.3 Mitem/s │         │
+   │  ╰─ 4000000        13.11 ms      │ 18.13 ms      │ 15.53 ms      │ 15.49 ms      │ 50      │ 50
+   │                    614.3 Mitem/s │ 444.4 Mitem/s │ 518.9 Mitem/s │ 520.1 Mitem/s │         │
+   ╰─ random                          │               │               │               │         │
+      ├─ 1000           23.24 µs      │ 1.054 ms      │ 25.81 µs      │ 54.94 µs      │ 50      │ 50
+      │                 87.14 Mitem/s │ 1.919 Mitem/s │ 78.29 Mitem/s │ 36.83 Mitem/s │         │
+      ├─ 100000         591.4 µs      │ 1.787 ms      │ 814 µs        │ 890 µs        │ 50      │ 50
+      │                 342.4 Mitem/s │ 113.2 Mitem/s │ 248.6 Mitem/s │ 227.5 Mitem/s │         │
+      ├─ 1000000        3.552 ms      │ 7.022 ms      │ 5.563 ms      │ 5.372 ms      │ 50      │ 50
+      │                 570 Mitem/s   │ 288.3 Mitem/s │ 363.9 Mitem/s │ 376.9 Mitem/s │         │
+      ╰─ 4000000        26.08 ms      │ 31.56 ms      │ 28.45 ms      │ 28.44 ms      │ 50      │ 50
+                        310.5 Mitem/s │ 256.6 Mitem/s │ 284.6 Mitem/s │ 284.7 Mitem/s │         │
+
+Numbers with relaxed everywhere:
+union_find                                                           fastest       │ slowest       │ median        │ mean          │ samples │ iters
+├─ local                                                                           │               │               │               │         │
+│  ├─ concurrent_1threads                                                          │               │               │               │         │
+│  │  ├─ Arc<std::sync::mutex::Mutex<union_find::UnionFind<usize>>>                │               │               │               │         │
+│  │  │  ├─ 1000                                                     30.99 µs      │ 64.58 µs      │ 33.91 µs      │ 35.24 µs      │ 50      │ 50
+│  │  │  │                                                           64.96 Mitem/s │ 31.18 Mitem/s │ 59.29 Mitem/s │ 57.14 Mitem/s │         │
+│  │  │  ├─ 100000                                                   1.807 ms      │ 2.026 ms      │ 1.843 ms      │ 1.844 ms      │ 50      │ 50
+│  │  │  │                                                           111.4 Mitem/s │ 99.41 Mitem/s │ 109.3 Mitem/s │ 109.2 Mitem/s │         │
+│  │  │  ├─ 1000000                                                  17.59 ms      │ 19.37 ms      │ 18.4 ms       │ 18.41 ms      │ 50      │ 50
+│  │  │  │                                                           114.5 Mitem/s │ 104 Mitem/s   │ 109.4 Mitem/s │ 109.4 Mitem/s │         │
+│  │  │  ╰─ 4000000                                                  71.96 ms      │ 76.67 ms      │ 72.54 ms      │ 72.71 ms      │ 50      │ 50
+│  │  │                                                              111.9 Mitem/s │ 105.1 Mitem/s │ 111.1 Mitem/s │ 110.8 Mitem/s │         │
+│  │  ╰─ UnionFind<usize>                                                          │               │               │               │         │
+│  │     ├─ 1000                                                     32.74 µs      │ 571.5 µs      │ 43.77 µs      │ 94.86 µs      │ 50      │ 50
+│  │     │                                                           61.74 Mitem/s │ 3.521 Mitem/s │ 45.92 Mitem/s │ 21.23 Mitem/s │         │
+│  │     ├─ 100000                                                   1.59 ms       │ 1.725 ms      │ 1.613 ms      │ 1.626 ms      │ 50      │ 50
+│  │     │                                                           126.6 Mitem/s │ 116.8 Mitem/s │ 124.8 Mitem/s │ 123.8 Mitem/s │         │
+│  │     ├─ 1000000                                                  16.09 ms      │ 18.25 ms      │ 16.16 ms      │ 16.23 ms      │ 50      │ 50
+│  │     │                                                           125.1 Mitem/s │ 110.3 Mitem/s │ 124.6 Mitem/s │ 124 Mitem/s   │         │
+│  │     ╰─ 4000000                                                  63.73 ms      │ 66.27 ms      │ 64.5 ms       │ 64.64 ms      │ 50      │ 50
+│  │                                                                 126.4 Mitem/s │ 121.6 Mitem/s │ 124.9 Mitem/s │ 124.6 Mitem/s │         │
+│  ├─ concurrent_2threads                                                          │               │               │               │         │
+│  │  ├─ Arc<std::sync::mutex::Mutex<union_find::UnionFind<usize>>>                │               │               │               │         │
+│  │  │  ├─ 1000                                                     35.2 µs       │ 125.7 µs      │ 44.14 µs      │ 46.45 µs      │ 50      │ 50
+│  │  │  │                                                           57.43 Mitem/s │ 16.05 Mitem/s │ 45.59 Mitem/s │ 43.34 Mitem/s │         │
+│  │  │  ├─ 100000                                                   3.027 ms      │ 4.549 ms      │ 3.822 ms      │ 3.792 ms      │ 50      │ 50
+│  │  │  │                                                           66.55 Mitem/s │ 44.28 Mitem/s │ 52.72 Mitem/s │ 53.12 Mitem/s │         │
+│  │  │  ├─ 1000000                                                  26.66 ms      │ 44.79 ms      │ 40.71 ms      │ 38.32 ms      │ 50      │ 50
+│  │  │  │                                                           75.56 Mitem/s │ 44.98 Mitem/s │ 49.49 Mitem/s │ 52.57 Mitem/s │         │
+│  │  │  ╰─ 4000000                                                  106.1 ms      │ 178.2 ms      │ 140 ms        │ 142.9 ms      │ 50      │ 50
+│  │  │                                                              75.92 Mitem/s │ 45.22 Mitem/s │ 57.55 Mitem/s │ 56.37 Mitem/s │         │
+│  │  ╰─ UnionFind<usize>                                                          │               │               │               │         │
+│  │     ├─ 1000                                                     27.12 µs      │ 121.2 µs      │ 47.85 µs      │ 48.35 µs      │ 50      │ 50
+│  │     │                                                           74.17 Mitem/s │ 16.58 Mitem/s │ 42.12 Mitem/s │ 41.64 Mitem/s │         │
+│  │     ├─ 100000                                                   888.8 µs      │ 1.54 ms       │ 986.6 µs      │ 1.016 ms      │ 50      │ 50
+│  │     │                                                           226.7 Mitem/s │ 130.7 Mitem/s │ 204.1 Mitem/s │ 198.3 Mitem/s │         │
+│  │     ├─ 1000000                                                  8.804 ms      │ 11.18 ms      │ 8.899 ms      │ 9.036 ms      │ 50      │ 50
+│  │     │                                                           228.8 Mitem/s │ 180.2 Mitem/s │ 226.4 Mitem/s │ 222.9 Mitem/s │         │
+│  │     ╰─ 4000000                                                  36.09 ms      │ 40.31 ms      │ 36.32 ms      │ 36.66 ms      │ 50      │ 50
+│  │                                                                 223.2 Mitem/s │ 199.9 Mitem/s │ 221.8 Mitem/s │ 219.8 Mitem/s │         │
+│  ├─ concurrent_4threads                                                          │               │               │               │         │
+│  │  ├─ Arc<std::sync::mutex::Mutex<union_find::UnionFind<usize>>>                │               │               │               │         │
+│  │  │  ├─ 1000                                                     47.37 µs      │ 142.7 µs      │ 85.08 µs      │ 89.04 µs      │ 50      │ 50
+│  │  │  │                                                           42.38 Mitem/s │ 14.09 Mitem/s │ 23.62 Mitem/s │ 22.6 Mitem/s  │         │
+│  │  │  ├─ 100000                                                   5.141 ms      │ 12.72 ms      │ 5.98 ms       │ 6.727 ms      │ 50      │ 50
+│  │  │  │                                                           39.18 Mitem/s │ 15.83 Mitem/s │ 33.68 Mitem/s │ 29.94 Mitem/s │         │
+│  │  │  ├─ 1000000                                                  57.66 ms      │ 77.09 ms      │ 59.37 ms      │ 59.86 ms      │ 50      │ 50
+│  │  │  │                                                           34.94 Mitem/s │ 26.13 Mitem/s │ 33.93 Mitem/s │ 33.66 Mitem/s │         │
+│  │  │  ╰─ 4000000                                                  236.8 ms      │ 633.9 ms      │ 247.3 ms      │ 281.9 ms      │ 50      │ 50
+│  │  │                                                              34.03 Mitem/s │ 12.71 Mitem/s │ 32.59 Mitem/s │ 28.58 Mitem/s │         │
+│  │  ╰─ UnionFind<usize>                                                          │               │               │               │         │
+│  │     ├─ 1000                                                     29.87 µs      │ 148.1 µs      │ 54.41 µs      │ 60.49 µs      │ 50      │ 50
+│  │     │                                                           67.21 Mitem/s │ 13.61 Mitem/s │ 37.04 Mitem/s │ 33.27 Mitem/s │         │
+│  │     ├─ 100000                                                   597.5 µs      │ 1.414 ms      │ 832.1 µs      │ 849 µs        │ 50      │ 50
+│  │     │                                                           337.2 Mitem/s │ 142.5 Mitem/s │ 242.1 Mitem/s │ 237.3 Mitem/s │         │
+│  │     ├─ 1000000                                                  5.157 ms      │ 7.629 ms      │ 6.496 ms      │ 6.501 ms      │ 50      │ 50
+│  │     │                                                           390.6 Mitem/s │ 264.1 Mitem/s │ 310.1 Mitem/s │ 309.9 Mitem/s │         │
+│  │     ╰─ 4000000                                                  22.91 ms      │ 29.16 ms      │ 23.32 ms      │ 23.8 ms       │ 50      │ 50
+│  │                                                                 351.6 Mitem/s │ 276.3 Mitem/s │ 345.5 Mitem/s │ 338.5 Mitem/s │         │
+│  ├─ concurrent_8threads                                                          │               │               │               │         │
+│  │  ├─ Arc<std::sync::mutex::Mutex<union_find::UnionFind<usize>>>                │               │               │               │         │
+│  │  │  ├─ 1000                                                     81.16 µs      │ 219.6 µs      │ 127.6 µs      │ 131.6 µs      │ 50      │ 50
+│  │  │  │                                                           24.73 Mitem/s │ 9.177 Mitem/s │ 15.76 Mitem/s │ 15.27 Mitem/s │         │
+│  │  │  ├─ 100000                                                   4.265 ms      │ 6.711 ms      │ 5.555 ms      │ 5.511 ms      │ 50      │ 50
+│  │  │  │                                                           47.22 Mitem/s │ 30.01 Mitem/s │ 36.27 Mitem/s │ 36.56 Mitem/s │         │
+│  │  │  ├─ 1000000                                                  41.09 ms      │ 61.3 ms       │ 52.61 ms      │ 51.73 ms      │ 50      │ 50
+│  │  │  │                                                           49.03 Mitem/s │ 32.86 Mitem/s │ 38.3 Mitem/s  │ 38.95 Mitem/s │         │
+│  │  │  ╰─ 4000000                                                  180.9 ms      │ 227.9 ms      │ 216.6 ms      │ 212.6 ms      │ 50      │ 50
+│  │  │                                                              44.55 Mitem/s │ 35.36 Mitem/s │ 37.21 Mitem/s │ 37.9 Mitem/s  │         │
+│  │  ╰─ UnionFind<usize>                                                          │               │               │               │         │
+│  │     ├─ 1000                                                     60.91 µs      │ 222.7 µs      │ 107.9 µs      │ 117.3 µs      │ 50      │ 50
+│  │     │                                                           33.09 Mitem/s │ 9.014 Mitem/s │ 18.64 Mitem/s │ 17.13 Mitem/s │         │
+│  │     ├─ 100000                                                   588.2 µs      │ 1.809 ms      │ 785.1 µs      │ 878 µs        │ 50      │ 50
+│  │     │                                                           342.5 Mitem/s │ 111.3 Mitem/s │ 256.6 Mitem/s │ 229.4 Mitem/s │         │
+│  │     ├─ 1000000                                                  5.497 ms      │ 6.924 ms      │ 5.931 ms      │ 5.932 ms      │ 50      │ 50
+│  │     │                                                           366.5 Mitem/s │ 290.9 Mitem/s │ 339.6 Mitem/s │ 339.6 Mitem/s │         │
+│  │     ╰─ 4000000                                                  19.12 ms      │ 25.96 ms      │ 23.81 ms      │ 23.32 ms      │ 50      │ 50
+│  │                                                                 421.5 Mitem/s │ 310.3 Mitem/s │ 338.4 Mitem/s │ 345.5 Mitem/s │         │
+│  ├─ concurrent_16threads                                                         │               │               │               │         │
+│  │  ├─ Arc<std::sync::mutex::Mutex<union_find::UnionFind<usize>>>                │               │               │               │         │
+│  │  │  ├─ 1000                                                     151.2 µs      │ 361.6 µs      │ 210.8 µs      │ 221.8 µs      │ 50      │ 50
+│  │  │  │                                                           13.22 Mitem/s │ 5.53 Mitem/s  │ 9.524 Mitem/s │ 9.043 Mitem/s │         │
+│  │  │  ├─ 100000                                                   4.194 ms      │ 7.165 ms      │ 4.983 ms      │ 5.072 ms      │ 50      │ 50
+│  │  │  │                                                           48.02 Mitem/s │ 28.11 Mitem/s │ 40.43 Mitem/s │ 39.72 Mitem/s │         │
+│  │  │  ├─ 1000000                                                  37.83 ms      │ 48.95 ms      │ 43.14 ms      │ 42.59 ms      │ 50      │ 50
+│  │  │  │                                                           53.25 Mitem/s │ 41.15 Mitem/s │ 46.7 Mitem/s  │ 47.3 Mitem/s  │         │
+│  │  │  ╰─ 4000000                                                  148.2 ms      │ 201.8 ms      │ 164.8 ms      │ 167.4 ms      │ 50      │ 50
+│  │  │                                                              54.37 Mitem/s │ 39.93 Mitem/s │ 48.9 Mitem/s  │ 48.12 Mitem/s │         │
+│  │  ╰─ UnionFind<usize>                                                          │               │               │               │         │
+│  │     ├─ 1000                                                     196.6 µs      │ 398.9 µs      │ 263.4 µs      │ 269.8 µs      │ 50      │ 50
+│  │     │                                                           10.17 Mitem/s │ 5.012 Mitem/s │ 7.59 Mitem/s  │ 7.426 Mitem/s │         │
+│  │     ├─ 100000                                                   526 µs        │ 2.345 ms      │ 739.1 µs      │ 971.1 µs      │ 50      │ 50
+│  │     │                                                           382.9 Mitem/s │ 85.9 Mitem/s  │ 272.6 Mitem/s │ 207.4 Mitem/s │         │
+│  │     ├─ 1000000                                                  4.361 ms      │ 6.444 ms      │ 4.849 ms      │ 4.955 ms      │ 50      │ 50
+│  │     │                                                           461.9 Mitem/s │ 312.6 Mitem/s │ 415.4 Mitem/s │ 406.6 Mitem/s │         │
+│  │     ╰─ 4000000                                                  13.99 ms      │ 17.27 ms      │ 15.03 ms      │ 15.09 ms      │ 50      │ 50
+│  │                                                                 575.9 Mitem/s │ 466.4 Mitem/s │ 536.1 Mitem/s │ 533.9 Mitem/s │         │
+│  ╰─ serial                                                                       │               │               │               │         │
+│     ├─ 1000                                                        3.728 µs      │ 401.2 µs      │ 4.27 µs       │ 38.05 µs      │ 50      │ 100
+│     │                                                              539.8 Mitem/s │ 5.014 Mitem/s │ 471.8 Mitem/s │ 52.94 Mitem/s │         │
+│     ├─ 100000                                                      429.8 µs      │ 2.285 ms      │ 441.5 µs      │ 481.2 µs      │ 50      │ 50
+│     │                                                              468.7 Mitem/s │ 88.17 Mitem/s │ 456.3 Mitem/s │ 418.6 Mitem/s │         │
+│     ├─ 1000000                                                     4.783 ms      │ 5.081 ms      │ 4.89 ms       │ 4.898 ms      │ 50      │ 50
+│     │                                                              421.2 Mitem/s │ 396.4 Mitem/s │ 412 Mitem/s   │ 411.3 Mitem/s │         │
+│     ╰─ 4000000                                                     19.15 ms      │ 20.02 ms      │ 19.68 ms      │ 19.65 ms      │ 50      │ 50
+│                                                                    420.7 Mitem/s │ 402.5 Mitem/s │ 409.5 Mitem/s │ 410.1 Mitem/s │         │
+╰─ random                                                                          │               │               │               │         │
+   ├─ concurrent_1threads                                                          │               │               │               │         │
+   │  ├─ Arc<std::sync::mutex::Mutex<union_find::UnionFind<usize>>>                │               │               │               │         │
+   │  │  ├─ 1000                                                     30.12 µs      │ 1.179 ms      │ 36.2 µs       │ 86.95 µs      │ 50      │ 50
+   │  │  │                                                           67.22 Mitem/s │ 1.719 Mitem/s │ 56.01 Mitem/s │ 23.28 Mitem/s │         │
+   │  │  ├─ 100000                                                   2.096 ms      │ 4.106 ms      │ 2.226 ms      │ 2.341 ms      │ 50      │ 50
+   │  │  │                                                           96.58 Mitem/s │ 49.32 Mitem/s │ 90.97 Mitem/s │ 86.47 Mitem/s │         │
+   │  │  ├─ 1000000                                                  33.19 ms      │ 37.88 ms      │ 33.92 ms      │ 34.31 ms      │ 50      │ 50
+   │  │  │                                                           61.01 Mitem/s │ 53.44 Mitem/s │ 59.68 Mitem/s │ 59 Mitem/s    │         │
+   │  │  ╰─ 4000000                                                  192.7 ms      │ 199.7 ms      │ 194.3 ms      │ 194.6 ms      │ 50      │ 50
+   │  │                                                              42.01 Mitem/s │ 40.54 Mitem/s │ 41.68 Mitem/s │ 41.6 Mitem/s  │         │
+   │  ╰─ UnionFind<usize>                                                          │               │               │               │         │
+   │     ├─ 1000                                                     29.74 µs      │ 300.4 µs      │ 38.74 µs      │ 71.53 µs      │ 50      │ 50
+   │     │                                                           68.03 Mitem/s │ 6.736 Mitem/s │ 52.38 Mitem/s │ 28.29 Mitem/s │         │
+   │     ├─ 100000                                                   1.621 ms      │ 2.463 ms      │ 1.672 ms      │ 1.711 ms      │ 50      │ 50
+   │     │                                                           124.8 Mitem/s │ 82.21 Mitem/s │ 121 Mitem/s   │ 118.3 Mitem/s │         │
+   │     ├─ 1000000                                                  32.84 ms      │ 38.39 ms      │ 33.47 ms      │ 33.7 ms       │ 50      │ 50
+   │     │                                                           61.66 Mitem/s │ 52.74 Mitem/s │ 60.49 Mitem/s │ 60.08 Mitem/s │         │
+   │     ╰─ 4000000                                                  212.9 ms      │ 244 ms        │ 215 ms        │ 217.1 ms      │ 50      │ 50
+   │                                                                 38.03 Mitem/s │ 33.18 Mitem/s │ 37.67 Mitem/s │ 37.31 Mitem/s │         │
+   ├─ concurrent_2threads                                                          │               │               │               │         │
+   │  ├─ Arc<std::sync::mutex::Mutex<union_find::UnionFind<usize>>>                │               │               │               │         │
+   │  │  ├─ 1000                                                     34.04 µs      │ 113.9 µs      │ 42.12 µs      │ 47.4 µs       │ 50      │ 50
+   │  │  │                                                           59.63 Mitem/s │ 17.71 Mitem/s │ 47.97 Mitem/s │ 42.67 Mitem/s │         │
+   │  │  ├─ 100000                                                   3.552 ms      │ 6.541 ms      │ 4.202 ms      │ 4.28 ms       │ 50      │ 50
+   │  │  │                                                           57.01 Mitem/s │ 30.95 Mitem/s │ 48.19 Mitem/s │ 47.3 Mitem/s  │         │
+   │  │  ├─ 1000000                                                  56.07 ms      │ 63.67 ms      │ 59.85 ms      │ 60.36 ms      │ 50      │ 50
+   │  │  │                                                           36.1 Mitem/s  │ 31.79 Mitem/s │ 33.82 Mitem/s │ 33.54 Mitem/s │         │
+   │  │  ╰─ 4000000                                                  318.9 ms      │ 385.2 ms      │ 360.8 ms      │ 356 ms        │ 50      │ 50
+   │  │                                                              25.39 Mitem/s │ 21.02 Mitem/s │ 22.44 Mitem/s │ 22.74 Mitem/s │         │
+   │  ╰─ UnionFind<usize>                                                          │               │               │               │         │
+   │     ├─ 1000                                                     33.04 µs      │ 109.7 µs      │ 50.66 µs      │ 52.18 µs      │ 50      │ 50
+   │     │                                                           61.25 Mitem/s │ 18.48 Mitem/s │ 39.96 Mitem/s │ 38.8 Mitem/s  │         │
+   │     ├─ 100000                                                   925.1 µs      │ 2.02 ms       │ 1.067 ms      │ 1.111 ms      │ 50      │ 50
+   │     │                                                           218.8 Mitem/s │ 100.2 Mitem/s │ 189.6 Mitem/s │ 182.2 Mitem/s │         │
+   │     ├─ 1000000                                                  17.64 ms      │ 24.57 ms      │ 18.59 ms      │ 18.9 ms       │ 50      │ 50
+   │     │                                                           114.7 Mitem/s │ 82.4 Mitem/s  │ 108.8 Mitem/s │ 107 Mitem/s   │         │
+   │     ╰─ 4000000                                                  116.4 ms      │ 134.3 ms      │ 118.8 ms      │ 120.4 ms      │ 50      │ 50
+   │                                                                 69.53 Mitem/s │ 60.29 Mitem/s │ 68.12 Mitem/s │ 67.24 Mitem/s │         │
+   ├─ concurrent_4threads                                                          │               │               │               │         │
+   │  ├─ Arc<std::sync::mutex::Mutex<union_find::UnionFind<usize>>>                │               │               │               │         │
+   │  │  ├─ 1000                                                     49.16 µs      │ 332.7 µs      │ 96.33 µs      │ 107.6 µs      │ 50      │ 50
+   │  │  │                                                           41.08 Mitem/s │ 6.095 Mitem/s │ 21.03 Mitem/s │ 18.79 Mitem/s │         │
+   │  │  ├─ 100000                                                   5.546 ms      │ 10.07 ms      │ 6.684 ms      │ 6.957 ms      │ 50      │ 50
+   │  │  │                                                           36.51 Mitem/s │ 20.1 Mitem/s  │ 30.29 Mitem/s │ 29.1 Mitem/s  │         │
+   │  │  ├─ 1000000                                                  85.76 ms      │ 121 ms        │ 90.66 ms      │ 91.85 ms      │ 50      │ 50
+   │  │  │                                                           23.61 Mitem/s │ 16.73 Mitem/s │ 22.33 Mitem/s │ 22.04 Mitem/s │         │
+   │  │  ╰─ 4000000                                                  555.5 ms      │ 697.7 ms      │ 577.5 ms      │ 586.3 ms      │ 50      │ 50
+   │  │                                                              14.57 Mitem/s │ 11.6 Mitem/s  │ 14.02 Mitem/s │ 13.81 Mitem/s │         │
+   │  ╰─ UnionFind<usize>                                                          │               │               │               │         │
+   │     ├─ 1000                                                     30.2 µs       │ 195.4 µs      │ 49.27 µs      │ 55.55 µs      │ 50      │ 50
+   │     │                                                           66.87 Mitem/s │ 10.37 Mitem/s │ 41.12 Mitem/s │ 36.41 Mitem/s │         │
+   │     ├─ 100000                                                   874.5 µs      │ 1.941 ms      │ 1.006 ms      │ 1.086 ms      │ 50      │ 50
+   │     │                                                           231.5 Mitem/s │ 104.3 Mitem/s │ 201.1 Mitem/s │ 186.4 Mitem/s │         │
+   │     ├─ 1000000                                                  11.85 ms      │ 14.8 ms       │ 12.13 ms      │ 12.22 ms      │ 50      │ 50
+   │     │                                                           170.8 Mitem/s │ 136.7 Mitem/s │ 166.8 Mitem/s │ 165.5 Mitem/s │         │
+   │     ╰─ 4000000                                                  67.14 ms      │ 77.33 ms      │ 69.37 ms      │ 69.93 ms      │ 50      │ 50
+   │                                                                 120.6 Mitem/s │ 104.7 Mitem/s │ 116.7 Mitem/s │ 115.8 Mitem/s │         │
+   ├─ concurrent_8threads                                                          │               │               │               │         │
+   │  ├─ Arc<std::sync::mutex::Mutex<union_find::UnionFind<usize>>>                │               │               │               │         │
+   │  │  ├─ 1000                                                     95.16 µs      │ 214.6 µs      │ 150.3 µs      │ 152.2 µs      │ 50      │ 50
+   │  │  │                                                           21.26 Mitem/s │ 9.428 Mitem/s │ 13.4 Mitem/s  │ 13.26 Mitem/s │         │
+   │  │  ├─ 100000                                                   6.293 ms      │ 17.27 ms      │ 12.19 ms      │ 11.89 ms      │ 50      │ 50
+   │  │  │                                                           32.16 Mitem/s │ 11.72 Mitem/s │ 16.6 Mitem/s  │ 17.02 Mitem/s │         │
+   │  │  ├─ 1000000                                                  90.27 ms      │ 143.8 ms      │ 114.9 ms      │ 114.3 ms      │ 50      │ 50
+   │  │  │                                                           22.42 Mitem/s │ 14.08 Mitem/s │ 17.62 Mitem/s │ 17.7 Mitem/s  │         │
+   │  │  ╰─ 4000000                                                  476.2 ms      │ 580.1 ms      │ 523.3 ms      │ 524.5 ms      │ 50      │ 50
+   │  │                                                              17 Mitem/s    │ 13.96 Mitem/s │ 15.47 Mitem/s │ 15.44 Mitem/s │         │
+   │  ╰─ UnionFind<usize>                                                          │               │               │               │         │
+   │     ├─ 1000                                                     68.45 µs      │ 269.7 µs      │ 95.97 µs      │ 112.7 µs      │ 50      │ 50
+   │     │                                                           29.56 Mitem/s │ 7.531 Mitem/s │ 21.08 Mitem/s │ 17.91 Mitem/s │         │
+   │     ├─ 100000                                                   724.1 µs      │ 2.067 ms      │ 1.26 ms       │ 1.284 ms      │ 50      │ 50
+   │     │                                                           279.6 Mitem/s │ 97.9 Mitem/s  │ 160.6 Mitem/s │ 157.6 Mitem/s │         │
+   │     ├─ 1000000                                                  8.385 ms      │ 10.02 ms      │ 8.916 ms      │ 9.009 ms      │ 50      │ 50
+   │     │                                                           241.4 Mitem/s │ 201.9 Mitem/s │ 227 Mitem/s   │ 224.7 Mitem/s │         │
+   │     ╰─ 4000000                                                  40.47 ms      │ 52.3 ms       │ 47.73 ms      │ 47.77 ms      │ 50      │ 50
+   │                                                                 200.1 Mitem/s │ 154.8 Mitem/s │ 169.7 Mitem/s │ 169.5 Mitem/s │         │
+   ├─ concurrent_16threads                                                         │               │               │               │         │
+   │  ├─ Arc<std::sync::mutex::Mutex<union_find::UnionFind<usize>>>                │               │               │               │         │
+   │  │  ├─ 1000                                                     165.7 µs      │ 795.7 µs      │ 233.9 µs      │ 253.2 µs      │ 50      │ 50
+   │  │  │                                                           12.16 Mitem/s │ 2.533 Mitem/s │ 8.618 Mitem/s │ 7.963 Mitem/s │         │
+   │  │  ├─ 100000                                                   11.99 ms      │ 17.89 ms      │ 14.86 ms      │ 15.1 ms       │ 50      │ 50
+   │  │  │                                                           16.87 Mitem/s │ 11.31 Mitem/s │ 13.62 Mitem/s │ 13.4 Mitem/s  │         │
+   │  │  ├─ 1000000                                                  123 ms        │ 157.1 ms      │ 137.9 ms      │ 138.4 ms      │ 50      │ 50
+   │  │  │                                                           16.45 Mitem/s │ 12.88 Mitem/s │ 14.67 Mitem/s │ 14.63 Mitem/s │         │
+   │  │  ╰─ 4000000                                                  523.5 ms      │ 639.2 ms      │ 567.3 ms      │ 573.3 ms      │ 50      │ 50
+   │  │                                                              15.47 Mitem/s │ 12.66 Mitem/s │ 14.27 Mitem/s │ 14.12 Mitem/s │         │
+   │  ╰─ UnionFind<usize>                                                          │               │               │               │         │
+   │     ├─ 1000                                                     216.9 µs      │ 396.3 µs      │ 278.6 µs      │ 280.8 µs      │ 50      │ 50
+   │     │                                                           9.29 Mitem/s  │ 5.086 Mitem/s │ 7.234 Mitem/s │ 7.178 Mitem/s │         │
+   │     ├─ 100000                                                   562.3 µs      │ 2.614 ms      │ 1.028 ms      │ 1.143 ms      │ 50      │ 50
+   │     │                                                           360.1 Mitem/s │ 77.44 Mitem/s │ 196.9 Mitem/s │ 177 Mitem/s   │         │
+   │     ├─ 1000000                                                  5.438 ms      │ 8.496 ms      │ 6.14 ms       │ 6.374 ms      │ 50      │ 50
+   │     │                                                           372.3 Mitem/s │ 238.3 Mitem/s │ 329.7 Mitem/s │ 317.6 Mitem/s │         │
+   │     ╰─ 4000000                                                  28.1 ms       │ 35.71 ms      │ 28.42 ms      │ 28.91 ms      │ 50      │ 50
+   │                                                                 288.2 Mitem/s │ 226.7 Mitem/s │ 284.9 Mitem/s │ 280.1 Mitem/s │         │
+   ╰─ serial                                                                       │               │               │               │         │
+      ├─ 1000                                                        5.041 µs      │ 145.5 µs      │ 5.457 µs      │ 8.24 µs       │ 50      │ 50
+      │                                                              401 Mitem/s   │ 13.84 Mitem/s │ 370.8 Mitem/s │ 245.6 Mitem/s │         │
+      ├─ 100000                                                      635.6 µs      │ 1.824 ms      │ 907.2 µs      │ 964.4 µs      │ 50      │ 50
+      │                                                              318.5 Mitem/s │ 110.9 Mitem/s │ 223.1 Mitem/s │ 209.9 Mitem/s │         │
+      ├─ 1000000                                                     10.23 ms      │ 13.13 ms      │ 10.67 ms      │ 10.84 ms      │ 50      │ 50
+      │                                                              197.7 Mitem/s │ 154.1 Mitem/s │ 189.7 Mitem/s │ 186.7 Mitem/s │         │
+      ╰─ 4000000                                                     59.23 ms      │ 65.25 ms      │ 60.36 ms      │ 60.81 ms      │ 50      │ 50
+                                                                     136.7 Mitem/s │ 124.1 Mitem/s │ 134.1 Mitem/s │ 133.1 Mitem/s │         │
+And rayon:
+Timer precision: 41 ns
+union_find              fastest       │ slowest       │ median        │ mean          │ samples │ iters
+╰─ rayon_work_stealing                │               │               │               │         │
+   ├─ local                           │               │               │               │         │
+   │  ├─ 1000           25.12 µs      │ 495.5 µs      │ 27.91 µs      │ 39.52 µs      │ 50      │ 50
+   │  │                 80.12 Mitem/s │ 4.061 Mitem/s │ 72.25 Mitem/s │ 50.97 Mitem/s │         │
+   │  ├─ 100000         599 µs        │ 1.488 ms      │ 753.2 µs      │ 779.9 µs      │ 50      │ 50
+   │  │                 336.3 Mitem/s │ 135.4 Mitem/s │ 267.4 Mitem/s │ 258.3 Mitem/s │         │
+   │  ├─ 1000000        2.471 ms      │ 4.63 ms       │ 4.185 ms      │ 4.082 ms      │ 50      │ 50
+   │  │                 815.3 Mitem/s │ 435.2 Mitem/s │ 481.4 Mitem/s │ 493.5 Mitem/s │         │
+   │  ╰─ 4000000        11.28 ms      │ 17.93 ms      │ 15.63 ms      │ 15.34 ms      │ 50      │ 50
+   │                    713.9 Mitem/s │ 449.3 Mitem/s │ 515.5 Mitem/s │ 525.1 Mitem/s │         │
+   ╰─ random                          │               │               │               │         │
+      ├─ 1000           22.79 µs      │ 1.089 ms      │ 27.12 µs      │ 53.22 µs      │ 50      │ 50
+      │                 88.71 Mitem/s │ 1.861 Mitem/s │ 74.47 Mitem/s │ 38.02 Mitem/s │         │
+      ├─ 100000         551.7 µs      │ 1.804 ms      │ 840 µs        │ 892.3 µs      │ 50      │ 50
+      │                 366.9 Mitem/s │ 112.1 Mitem/s │ 240.9 Mitem/s │ 226.9 Mitem/s │         │
+      ├─ 1000000        3.866 ms      │ 6.619 ms      │ 4.988 ms      │ 4.962 ms      │ 50      │ 50
+      │                 523.7 Mitem/s │ 305.8 Mitem/s │ 405.8 Mitem/s │ 408 Mitem/s   │         │
+      ╰─ 4000000        22.49 ms      │ 33.98 ms      │ 26.42 ms      │ 26.33 ms      │ 50      │ 50
+                        360.1 Mitem/s │ 238.3 Mitem/s │ 306.5 Mitem/s │ 307.5 Mitem/s │         │
+
+Relaxed ordering, with padding added to UnionFind<usize> storage (each element
+gets its own cache line).
+
+Timer precision: 41 ns
+union_find                                                           fastest       │ slowest       │ median        │ mean          │ samples │ iters
+├─ local                                                                           │               │               │               │         │
+│  ├─ concurrent_1threads                                                          │               │               │               │         │
+│  │  ├─ Arc<std::sync::mutex::Mutex<union_find::UnionFind<usize>>>                │               │               │               │         │
+│  │  │  ├─ 1000                                                     30.87 µs      │ 63.08 µs      │ 33.16 µs      │ 33.97 µs      │ 50      │ 50
+│  │  │  │                                                           65.39 Mitem/s │ 31.89 Mitem/s │ 60.51 Mitem/s │ 59.28 Mitem/s │         │
+│  │  │  ├─ 100000                                                   1.809 ms      │ 2.109 ms      │ 1.884 ms      │ 1.894 ms      │ 50      │ 50
+│  │  │  │                                                           111.3 Mitem/s │ 95.52 Mitem/s │ 106.9 Mitem/s │ 106.3 Mitem/s │         │
+│  │  │  ├─ 1000000                                                  18.31 ms      │ 19.8 ms       │ 18.84 ms      │ 18.86 ms      │ 50      │ 50
+│  │  │  │                                                           110 Mitem/s   │ 101.7 Mitem/s │ 106.9 Mitem/s │ 106.8 Mitem/s │         │
+│  │  │  ╰─ 4000000                                                  72.61 ms      │ 84.45 ms      │ 75.6 ms       │ 75.74 ms      │ 50      │ 50
+│  │  │                                                              110.9 Mitem/s │ 95.43 Mitem/s │ 106.6 Mitem/s │ 106.4 Mitem/s │         │
+│  │  ╰─ UnionFind<usize>                                                          │               │               │               │         │
+│  │     ├─ 1000                                                     31.99 µs      │ 594.3 µs      │ 42.68 µs      │ 71.31 µs      │ 50      │ 50
+│  │     │                                                           63.12 Mitem/s │ 3.391 Mitem/s │ 47.15 Mitem/s │ 28.25 Mitem/s │         │
+│  │     ├─ 100000                                                   1.693 ms      │ 1.986 ms      │ 1.857 ms      │ 1.845 ms      │ 50      │ 50
+│  │     │                                                           118.9 Mitem/s │ 101.4 Mitem/s │ 108.4 Mitem/s │ 109.1 Mitem/s │         │
+│  │     ├─ 1000000                                                  18.01 ms      │ 21.22 ms      │ 18.43 ms      │ 18.49 ms      │ 50      │ 50
+│  │     │                                                           111.8 Mitem/s │ 94.95 Mitem/s │ 109.3 Mitem/s │ 108.9 Mitem/s │         │
+│  │     ╰─ 4000000                                                  71.01 ms      │ 84.53 ms      │ 73.52 ms      │ 73.58 ms      │ 50      │ 50
+│  │                                                                 113.4 Mitem/s │ 95.34 Mitem/s │ 109.6 Mitem/s │ 109.5 Mitem/s │         │
+│  ├─ concurrent_2threads                                                          │               │               │               │         │
+│  │  ├─ Arc<std::sync::mutex::Mutex<union_find::UnionFind<usize>>>                │               │               │               │         │
+│  │  │  ├─ 1000                                                     35.33 µs      │ 116.1 µs      │ 47.74 µs      │ 49.56 µs      │ 50      │ 50
+│  │  │  │                                                           57.11 Mitem/s │ 17.35 Mitem/s │ 42.19 Mitem/s │ 40.61 Mitem/s │         │
+│  │  │  ├─ 100000                                                   2.73 ms       │ 4.349 ms      │ 3.468 ms      │ 3.566 ms      │ 50      │ 50
+│  │  │  │                                                           73.81 Mitem/s │ 46.33 Mitem/s │ 58.09 Mitem/s │ 56.49 Mitem/s │         │
+│  │  │  ├─ 1000000                                                  28.08 ms      │ 41.68 ms      │ 34.12 ms      │ 34.75 ms      │ 50      │ 50
+│  │  │  │                                                           71.73 Mitem/s │ 48.33 Mitem/s │ 59.05 Mitem/s │ 57.98 Mitem/s │         │
+│  │  │  ╰─ 4000000                                                  117.2 ms      │ 173.5 ms      │ 139.1 ms      │ 140.7 ms      │ 50      │ 50
+│  │  │                                                              68.71 Mitem/s │ 46.43 Mitem/s │ 57.92 Mitem/s │ 57.27 Mitem/s │         │
+│  │  ╰─ UnionFind<usize>                                                          │               │               │               │         │
+│  │     ├─ 1000                                                     26.54 µs      │ 151.5 µs      │ 44.51 µs      │ 52.95 µs      │ 50      │ 50
+│  │     │                                                           75.95 Mitem/s │ 13.31 Mitem/s │ 45.32 Mitem/s │ 38.04 Mitem/s │         │
+│  │     ├─ 100000                                                   1.01 ms       │ 1.615 ms      │ 1.231 ms      │ 1.27 ms       │ 50      │ 50
+│  │     │                                                           199.4 Mitem/s │ 124.7 Mitem/s │ 163.6 Mitem/s │ 158.5 Mitem/s │         │
+│  │     ├─ 1000000                                                  10.21 ms      │ 12.99 ms      │ 10.58 ms      │ 10.79 ms      │ 50      │ 50
+│  │     │                                                           197.2 Mitem/s │ 155 Mitem/s   │ 190.3 Mitem/s │ 186.6 Mitem/s │         │
+│  │     ╰─ 4000000                                                  39.98 ms      │ 47.79 ms      │ 43.37 ms      │ 43.51 ms      │ 50      │ 50
+│  │                                                                 201.5 Mitem/s │ 168.6 Mitem/s │ 185.8 Mitem/s │ 185.2 Mitem/s │         │
+│  ├─ concurrent_4threads                                                          │               │               │               │         │
+│  │  ├─ Arc<std::sync::mutex::Mutex<union_find::UnionFind<usize>>>                │               │               │               │         │
+│  │  │  ├─ 1000                                                     53.12 µs      │ 161.5 µs      │ 90.35 µs      │ 91.48 µs      │ 50      │ 50
+│  │  │  │                                                           37.79 Mitem/s │ 12.45 Mitem/s │ 22.26 Mitem/s │ 22 Mitem/s    │         │
+│  │  │  ├─ 100000                                                   5.633 ms      │ 12.59 ms      │ 6.477 ms      │ 7.067 ms      │ 50      │ 50
+│  │  │  │                                                           35.75 Mitem/s │ 15.99 Mitem/s │ 31.1 Mitem/s  │ 28.5 Mitem/s  │         │
+│  │  │  ├─ 1000000                                                  57.77 ms      │ 75.36 ms      │ 60.55 ms      │ 61.79 ms      │ 50      │ 50
+│  │  │  │                                                           34.88 Mitem/s │ 26.73 Mitem/s │ 33.27 Mitem/s │ 32.6 Mitem/s  │         │
+│  │  │  ╰─ 4000000                                                  246.7 ms      │ 486.5 ms      │ 253.1 ms      │ 268.9 ms      │ 50      │ 50
+│  │  │                                                              32.67 Mitem/s │ 16.56 Mitem/s │ 31.83 Mitem/s │ 29.97 Mitem/s │         │
+│  │  ╰─ UnionFind<usize>                                                          │               │               │               │         │
+│  │     ├─ 1000                                                     31.41 µs      │ 233.1 µs      │ 54.27 µs      │ 66.95 µs      │ 50      │ 50
+│  │     │                                                           64.04 Mitem/s │ 8.611 Mitem/s │ 37.03 Mitem/s │ 30.05 Mitem/s │         │
+│  │     ├─ 100000                                                   755.1 µs      │ 1.191 ms      │ 890.1 µs      │ 905.4 µs      │ 50      │ 50
+│  │     │                                                           266.7 Mitem/s │ 169.1 Mitem/s │ 226.4 Mitem/s │ 222.5 Mitem/s │         │
+│  │     ├─ 1000000                                                  7.019 ms      │ 11.41 ms      │ 7.279 ms      │ 7.363 ms      │ 50      │ 50
+│  │     │                                                           287 Mitem/s   │ 176.5 Mitem/s │ 276.7 Mitem/s │ 273.6 Mitem/s │         │
+│  │     ╰─ 4000000                                                  24.75 ms      │ 33.66 ms      │ 26.75 ms      │ 26.93 ms      │ 50      │ 50
+│  │                                                                 325.5 Mitem/s │ 239.3 Mitem/s │ 301.2 Mitem/s │ 299.2 Mitem/s │         │
+│  ├─ concurrent_8threads                                                          │               │               │               │         │
+│  │  ├─ Arc<std::sync::mutex::Mutex<union_find::UnionFind<usize>>>                │               │               │               │         │
+│  │  │  ├─ 1000                                                     87.24 µs      │ 285.9 µs      │ 125.2 µs      │ 131.4 µs      │ 50      │ 50
+│  │  │  │                                                           23.01 Mitem/s │ 7.048 Mitem/s │ 16.06 Mitem/s │ 15.29 Mitem/s │         │
+│  │  │  ├─ 100000                                                   4.316 ms      │ 5.924 ms      │ 5.273 ms      │ 5.206 ms      │ 50      │ 50
+│  │  │  │                                                           46.66 Mitem/s │ 33.99 Mitem/s │ 38.2 Mitem/s  │ 38.69 Mitem/s │         │
+│  │  │  ├─ 1000000                                                  44.23 ms      │ 54.9 ms       │ 51.69 ms      │ 50.49 ms      │ 50      │ 50
+│  │  │  │                                                           45.55 Mitem/s │ 36.7 Mitem/s  │ 38.97 Mitem/s │ 39.9 Mitem/s  │         │
+│  │  │  ╰─ 4000000                                                  170.9 ms      │ 224.5 ms      │ 207.1 ms      │ 202 ms        │ 50      │ 50
+│  │  │                                                              47.14 Mitem/s │ 35.88 Mitem/s │ 38.89 Mitem/s │ 39.88 Mitem/s │         │
+│  │  ╰─ UnionFind<usize>                                                          │               │               │               │         │
+│  │     ├─ 1000                                                     77.37 µs      │ 282.2 µs      │ 109.9 µs      │ 131.7 µs      │ 50      │ 50
+│  │     │                                                           26.05 Mitem/s │ 7.142 Mitem/s │ 18.26 Mitem/s │ 15.25 Mitem/s │         │
+│  │     ├─ 100000                                                   640.5 µs      │ 2.047 ms      │ 854.9 µs      │ 1.019 ms      │ 50      │ 50
+│  │     │                                                           314.5 Mitem/s │ 98.43 Mitem/s │ 235.6 Mitem/s │ 197.6 Mitem/s │         │
+│  │     ├─ 1000000                                                  5.824 ms      │ 7.585 ms      │ 6.722 ms      │ 6.703 ms      │ 50      │ 50
+│  │     │                                                           345.9 Mitem/s │ 265.6 Mitem/s │ 299.7 Mitem/s │ 300.5 Mitem/s │         │
+│  │     ╰─ 4000000                                                  19.2 ms       │ 22.09 ms      │ 20.8 ms       │ 20.85 ms      │ 50      │ 50
+│  │                                                                 419.7 Mitem/s │ 364.7 Mitem/s │ 387.4 Mitem/s │ 386.5 Mitem/s │         │
+│  ├─ concurrent_16threads                                                         │               │               │               │         │
+│  │  ├─ Arc<std::sync::mutex::Mutex<union_find::UnionFind<usize>>>                │               │               │               │         │
+│  │  │  ├─ 1000                                                     173.5 µs      │ 348.8 µs      │ 224.2 µs      │ 238.3 µs      │ 50      │ 50
+│  │  │  │                                                           11.52 Mitem/s │ 5.733 Mitem/s │ 8.955 Mitem/s │ 8.415 Mitem/s │         │
+│  │  │  ├─ 100000                                                   4.328 ms      │ 7.158 ms      │ 4.941 ms      │ 5.098 ms      │ 50      │ 50
+│  │  │  │                                                           46.55 Mitem/s │ 28.14 Mitem/s │ 40.77 Mitem/s │ 39.51 Mitem/s │         │
+│  │  │  ├─ 1000000                                                  37.64 ms      │ 47.21 ms      │ 42.41 ms      │ 42.21 ms      │ 50      │ 50
+│  │  │  │                                                           53.52 Mitem/s │ 42.67 Mitem/s │ 47.5 Mitem/s  │ 47.73 Mitem/s │         │
+│  │  │  ╰─ 4000000                                                  148.1 ms      │ 210.8 ms      │ 172.1 ms      │ 172.1 ms      │ 50      │ 50
+│  │  │                                                              54.42 Mitem/s │ 38.23 Mitem/s │ 46.81 Mitem/s │ 46.82 Mitem/s │         │
+│  │  ╰─ UnionFind<usize>                                                          │               │               │               │         │
+│  │     ├─ 1000                                                     188.2 µs      │ 490.9 µs      │ 282.4 µs      │ 292.1 µs      │ 50      │ 50
+│  │     │                                                           10.62 Mitem/s │ 4.073 Mitem/s │ 7.109 Mitem/s │ 6.87 Mitem/s  │         │
+│  │     ├─ 100000                                                   572.4 µs      │ 1.923 ms      │ 739.6 µs      │ 865.2 µs      │ 50      │ 50
+│  │     │                                                           352.1 Mitem/s │ 104.7 Mitem/s │ 272.4 Mitem/s │ 232.8 Mitem/s │         │
+│  │     ├─ 1000000                                                  4.254 ms      │ 7.094 ms      │ 5.516 ms      │ 5.598 ms      │ 50      │ 50
+│  │     │                                                           473.6 Mitem/s │ 284 Mitem/s   │ 365.2 Mitem/s │ 359.8 Mitem/s │         │
+│  │     ╰─ 4000000                                                  14.8 ms       │ 17.77 ms      │ 15.62 ms      │ 15.63 ms      │ 50      │ 50
+│  │                                                                 544.5 Mitem/s │ 453.4 Mitem/s │ 515.8 Mitem/s │ 515.4 Mitem/s │         │
+│  ╰─ serial                                                                       │               │               │               │         │
+│     ├─ 1000                                                        3.457 µs      │ 21.83 µs      │ 4.249 µs      │ 11.02 µs      │ 50      │ 50
+│     │                                                              582.2 Mitem/s │ 92.24 Mitem/s │ 474.2 Mitem/s │ 182.6 Mitem/s │         │
+│     ├─ 100000                                                      526.1 µs      │ 1.444 ms      │ 635.3 µs      │ 712.2 µs      │ 50      │ 50
+│     │                                                              382.9 Mitem/s │ 139.5 Mitem/s │ 317 Mitem/s   │ 282.9 Mitem/s │         │
+│     ├─ 1000000                                                     4.886 ms      │ 6.115 ms      │ 5.575 ms      │ 5.503 ms      │ 50      │ 50
+│     │                                                              412.3 Mitem/s │ 329.5 Mitem/s │ 361.4 Mitem/s │ 366.1 Mitem/s │         │
+│     ╰─ 4000000                                                     19.41 ms      │ 20.64 ms      │ 20.28 ms      │ 20.2 ms       │ 50      │ 50
+│                                                                    415.1 Mitem/s │ 390.5 Mitem/s │ 397.2 Mitem/s │ 398.9 Mitem/s │         │
+╰─ random                                                                          │               │               │               │         │
+   ├─ concurrent_1threads                                                          │               │               │               │         │
+   │  ├─ Arc<std::sync::mutex::Mutex<union_find::UnionFind<usize>>>                │               │               │               │         │
+   │  │  ├─ 1000                                                     31.49 µs      │ 859.2 µs      │ 36.83 µs      │ 90.77 µs      │ 50      │ 50
+   │  │  │                                                           64 Mitem/s    │ 2.354 Mitem/s │ 54.89 Mitem/s │ 22.29 Mitem/s │         │
+   │  │  ├─ 100000                                                   2.192 ms      │ 3.746 ms      │ 2.33 ms       │ 2.412 ms      │ 50      │ 50
+   │  │  │                                                           92.37 Mitem/s │ 54.05 Mitem/s │ 86.92 Mitem/s │ 83.94 Mitem/s │         │
+   │  │  ├─ 1000000                                                  33.84 ms      │ 37.81 ms      │ 34.76 ms      │ 34.95 ms      │ 50      │ 50
+   │  │  │                                                           59.81 Mitem/s │ 53.55 Mitem/s │ 58.24 Mitem/s │ 57.93 Mitem/s │         │
+   │  │  ╰─ 4000000                                                  196.8 ms      │ 266.1 ms      │ 200.5 ms      │ 205.5 ms      │ 50      │ 50
+   │  │                                                              41.14 Mitem/s │ 30.43 Mitem/s │ 40.39 Mitem/s │ 39.41 Mitem/s │         │
+   │  ╰─ UnionFind<usize>                                                          │               │               │               │         │
+   │     ├─ 1000                                                     31.04 µs      │ 89.87 µs      │ 48.41 µs      │ 51.69 µs      │ 50      │ 50
+   │     │                                                           64.97 Mitem/s │ 22.59 Mitem/s │ 41.8 Mitem/s  │ 39.19 Mitem/s │         │
+   │     ├─ 100000                                                   2.799 ms      │ 4.655 ms      │ 3.214 ms      │ 3.305 ms      │ 50      │ 50
+   │     │                                                           72.3 Mitem/s  │ 43.5 Mitem/s  │ 62.98 Mitem/s │ 61.25 Mitem/s │         │
+   │     ├─ 1000000                                                  68.85 ms      │ 80.66 ms      │ 70.76 ms      │ 71.39 ms      │ 50      │ 50
+   │     │                                                           29.4 Mitem/s  │ 25.1 Mitem/s  │ 28.61 Mitem/s │ 28.36 Mitem/s │         │
+   │     ╰─ 4000000                                                  392.5 ms      │ 481.2 ms      │ 417.1 ms      │ 422.5 ms      │ 50      │ 50
+   │                                                                 20.63 Mitem/s │ 16.83 Mitem/s │ 19.41 Mitem/s │ 19.16 Mitem/s │         │
+   ├─ concurrent_2threads                                                          │               │               │               │         │
+   │  ├─ Arc<std::sync::mutex::Mutex<union_find::UnionFind<usize>>>                │               │               │               │         │
+   │  │  ├─ 1000                                                     35.24 µs      │ 73.16 µs      │ 43.14 µs      │ 47.59 µs      │ 50      │ 50
+   │  │  │                                                           57.47 Mitem/s │ 27.63 Mitem/s │ 46.88 Mitem/s │ 42.54 Mitem/s │         │
+   │  │  ├─ 100000                                                   3.842 ms      │ 5.557 ms      │ 4.545 ms      │ 4.551 ms      │ 50      │ 50
+   │  │  │                                                           52.68 Mitem/s │ 36.46 Mitem/s │ 44.54 Mitem/s │ 44.48 Mitem/s │         │
+   │  │  ├─ 1000000                                                  57.37 ms      │ 73.43 ms      │ 61.12 ms      │ 62.15 ms      │ 50      │ 50
+   │  │  │                                                           35.29 Mitem/s │ 27.57 Mitem/s │ 33.13 Mitem/s │ 32.57 Mitem/s │         │
+   │  │  ╰─ 4000000                                                  297.2 ms      │ 367.9 ms      │ 357 ms        │ 349.3 ms      │ 50      │ 50
+   │  │                                                              27.24 Mitem/s │ 22.01 Mitem/s │ 22.68 Mitem/s │ 23.18 Mitem/s │         │
+   │  ╰─ UnionFind<usize>                                                          │               │               │               │         │
+   │     ├─ 1000                                                     27.66 µs      │ 3.847 ms      │ 43.66 µs      │ 164.2 µs      │ 50      │ 50
+   │     │                                                           72.94 Mitem/s │ 526.5 Kitem/s │ 46.23 Mitem/s │ 12.31 Mitem/s │         │
+   │     ├─ 100000                                                   1.54 ms       │ 2.947 ms      │ 1.842 ms      │ 1.951 ms      │ 50      │ 50
+   │     │                                                           131.4 Mitem/s │ 68.7 Mitem/s  │ 109.9 Mitem/s │ 103.7 Mitem/s │         │
+   │     ├─ 1000000                                                  36.77 ms      │ 41.74 ms      │ 37.78 ms      │ 38.04 ms      │ 50      │ 50
+   │     │                                                           55.05 Mitem/s │ 48.5 Mitem/s  │ 53.59 Mitem/s │ 53.22 Mitem/s │         │
+   │     ╰─ 4000000                                                  206.2 ms      │ 219.1 ms      │ 209.3 ms      │ 209.7 ms      │ 50      │ 50
+   │                                                                 39.28 Mitem/s │ 36.95 Mitem/s │ 38.7 Mitem/s  │ 38.6 Mitem/s  │         │
+   ├─ concurrent_4threads                                                          │               │               │               │         │
+   │  ├─ Arc<std::sync::mutex::Mutex<union_find::UnionFind<usize>>>                │               │               │               │         │
+   │  │  ├─ 1000                                                     47.08 µs      │ 176.7 µs      │ 100 µs        │ 100.4 µs      │ 50      │ 50
+   │  │  │                                                           42.98 Mitem/s │ 11.38 Mitem/s │ 20.25 Mitem/s │ 20.12 Mitem/s │         │
+   │  │  ├─ 100000                                                   5.906 ms      │ 11.11 ms      │ 7.072 ms      │ 7.43 ms       │ 50      │ 50
+   │  │  │                                                           34.29 Mitem/s │ 18.21 Mitem/s │ 28.63 Mitem/s │ 27.25 Mitem/s │         │
+   │  │  ├─ 1000000                                                  87.73 ms      │ 178.5 ms      │ 94.04 ms      │ 102.5 ms      │ 50      │ 50
+   │  │  │                                                           23.08 Mitem/s │ 11.34 Mitem/s │ 21.53 Mitem/s │ 19.74 Mitem/s │         │
+   │  │  ╰─ 4000000                                                  551.8 ms      │ 788.4 ms      │ 587.1 ms      │ 604.6 ms      │ 50      │ 50
+   │  │                                                              14.67 Mitem/s │ 10.27 Mitem/s │ 13.79 Mitem/s │ 13.39 Mitem/s │         │
+   │  ╰─ UnionFind<usize>                                                          │               │               │               │         │
+   │     ├─ 1000                                                     32.49 µs      │ 403.9 µs      │ 55.45 µs      │ 69.61 µs      │ 50      │ 50
+   │     │                                                           62.4 Mitem/s  │ 5.009 Mitem/s │ 36.49 Mitem/s │ 29.04 Mitem/s │         │
+   │     ├─ 100000                                                   1.303 ms      │ 2.386 ms      │ 1.475 ms      │ 1.547 ms      │ 50      │ 50
+   │     │                                                           155.4 Mitem/s │ 84.86 Mitem/s │ 137.2 Mitem/s │ 130.8 Mitem/s │         │
+   │     ├─ 1000000                                                  21.15 ms      │ 22.78 ms      │ 21.62 ms      │ 21.69 ms      │ 50      │ 50
+   │     │                                                           95.69 Mitem/s │ 88.88 Mitem/s │ 93.63 Mitem/s │ 93.33 Mitem/s │         │
+   │     ╰─ 4000000                                                  110.6 ms      │ 119.1 ms      │ 116.6 ms      │ 116.3 ms      │ 50      │ 50
+   │                                                                 73.17 Mitem/s │ 67.98 Mitem/s │ 69.45 Mitem/s │ 69.61 Mitem/s │         │
+   ├─ concurrent_8threads                                                          │               │               │               │         │
+   │  ├─ Arc<std::sync::mutex::Mutex<union_find::UnionFind<usize>>>                │               │               │               │         │
+   │  │  ├─ 1000                                                     98.49 µs      │ 263.9 µs      │ 150.2 µs      │ 153.9 µs      │ 50      │ 50
+   │  │  │                                                           20.54 Mitem/s │ 7.696 Mitem/s │ 13.44 Mitem/s │ 13.12 Mitem/s │         │
+   │  │  ├─ 100000                                                   5.859 ms      │ 17.04 ms      │ 12.62 ms      │ 12.49 ms      │ 50      │ 50
+   │  │  │                                                           34.55 Mitem/s │ 11.88 Mitem/s │ 16.04 Mitem/s │ 16.2 Mitem/s  │         │
+   │  │  ├─ 1000000                                                  114.9 ms      │ 147.6 ms      │ 126.8 ms      │ 127.9 ms      │ 50      │ 50
+   │  │  │                                                           17.62 Mitem/s │ 13.71 Mitem/s │ 15.95 Mitem/s │ 15.82 Mitem/s │         │
+   │  │  ╰─ 4000000                                                  478.1 ms      │ 672.2 ms      │ 546.8 ms      │ 556.6 ms      │ 50      │ 50
+   │  │                                                              16.94 Mitem/s │ 12.04 Mitem/s │ 14.81 Mitem/s │ 14.55 Mitem/s │         │
+   │  ╰─ UnionFind<usize>                                                          │               │               │               │         │
+   │     ├─ 1000                                                     78.16 µs      │ 829.9 µs      │ 109.9 µs      │ 168.1 µs      │ 50      │ 50
+   │     │                                                           25.79 Mitem/s │ 2.438 Mitem/s │ 18.41 Mitem/s │ 12.02 Mitem/s │         │
+   │     ├─ 100000                                                   1.015 ms      │ 2.514 ms      │ 1.157 ms      │ 1.284 ms      │ 50      │ 50
+   │     │                                                           199.3 Mitem/s │ 80.51 Mitem/s │ 174.9 Mitem/s │ 157.6 Mitem/s │         │
+   │     ├─ 1000000                                                  12.95 ms      │ 14.96 ms      │ 13.97 ms      │ 13.98 ms      │ 50      │ 50
+   │     │                                                           156.2 Mitem/s │ 135.3 Mitem/s │ 144.9 Mitem/s │ 144.8 Mitem/s │         │
+   │     ╰─ 4000000                                                  60.33 ms      │ 65.33 ms      │ 61.1 ms       │ 61.34 ms      │ 50      │ 50
+   │                                                                 134.2 Mitem/s │ 123.9 Mitem/s │ 132.5 Mitem/s │ 132 Mitem/s   │         │
+   ├─ concurrent_16threads                                                         │               │               │               │         │
+   │  ├─ Arc<std::sync::mutex::Mutex<union_find::UnionFind<usize>>>                │               │               │               │         │
+   │  │  ├─ 1000                                                     186.5 µs      │ 465.6 µs      │ 246.9 µs      │ 256.7 µs      │ 50      │ 50
+   │  │  │                                                           10.72 Mitem/s │ 4.329 Mitem/s │ 8.164 Mitem/s │ 7.851 Mitem/s │         │
+   │  │  ├─ 100000                                                   10.67 ms      │ 18.09 ms      │ 15.02 ms      │ 14.83 ms      │ 50      │ 50
+   │  │  │                                                           18.97 Mitem/s │ 11.19 Mitem/s │ 13.48 Mitem/s │ 13.65 Mitem/s │         │
+   │  │  ├─ 1000000                                                  118.3 ms      │ 168.1 ms      │ 144.9 ms      │ 144.8 ms      │ 50      │ 50
+   │  │  │                                                           17.1 Mitem/s  │ 12.04 Mitem/s │ 13.97 Mitem/s │ 13.97 Mitem/s │         │
+   │  │  ╰─ 4000000                                                  509.1 ms      │ 629 ms        │ 554.2 ms      │ 551.5 ms      │ 50      │ 50
+   │  │                                                              15.9 Mitem/s  │ 12.87 Mitem/s │ 14.61 Mitem/s │ 14.68 Mitem/s │         │
+   │  ╰─ UnionFind<usize>                                                          │               │               │               │         │
+   │     ├─ 1000                                                     182.5 µs      │ 1.652 ms      │ 288.7 µs      │ 348.2 µs      │ 50      │ 50
+   │     │                                                           11.04 Mitem/s │ 1.22 Mitem/s  │ 6.982 Mitem/s │ 5.788 Mitem/s │         │
+   │     ├─ 100000                                                   837.2 µs      │ 2.642 ms      │ 1.161 ms      │ 1.308 ms      │ 50      │ 50
+   │     │                                                           241.9 Mitem/s │ 76.6 Mitem/s  │ 174.2 Mitem/s │ 154.7 Mitem/s │         │
+   │     ├─ 1000000                                                  8.209 ms      │ 10.42 ms      │ 9.241 ms      │ 9.251 ms      │ 50      │ 50
+   │     │                                                           246.6 Mitem/s │ 194.1 Mitem/s │ 219.1 Mitem/s │ 218.8 Mitem/s │         │
+   │     ╰─ 4000000                                                  34.59 ms      │ 44.56 ms      │ 35.46 ms      │ 36.25 ms      │ 50      │ 50
+   │                                                                 234.1 Mitem/s │ 181.7 Mitem/s │ 228.3 Mitem/s │ 223.4 Mitem/s │         │
+   ╰─ serial                                                                       │               │               │               │         │
+      ├─ 1000                                                        5.124 µs      │ 1.058 ms      │ 5.436 µs      │ 26.81 µs      │ 50      │ 50
+      │                                                              395.5 Mitem/s │ 1.915 Mitem/s │ 373 Mitem/s   │ 75.47 Mitem/s │         │
+      ├─ 100000                                                      685.7 µs      │ 1.452 ms      │ 848.3 µs      │ 902.2 µs      │ 50      │ 50
+      │                                                              295.3 Mitem/s │ 139.3 Mitem/s │ 238.6 Mitem/s │ 224.4 Mitem/s │         │
+      ├─ 1000000                                                     10.46 ms      │ 11.97 ms      │ 11.09 ms      │ 11.07 ms      │ 50      │ 50
+      │                                                              193.5 Mitem/s │ 169 Mitem/s   │ 182.4 Mitem/s │ 182.8 Mitem/s │         │
+      ╰─ 4000000                                                     59.69 ms      │ 63.1 ms       │ 61.34 ms      │ 61.36 ms      │ 50      │ 50
+                                                                     135.6 Mitem/s │ 128.3 Mitem/s │ 132 Mitem/s   │ 131.9 Mitem/s │         │
+
+# New numbers for the "parallel find" benchmark which does naive finds behind a
+# shared lock and compares them to path compression using wait-free.
+#
+# These numbers are from an M4 Max with 16 cores. The benchmark uses a UF with
+# a million elements, randomly shuffled. The parallel numbers use rayon.
+# Different numeric values correspond to the batch size: one batch is what is
+# passed to rayon::spawn and corresponds to acquiring a single read lock.
+
+Timer precision: 41 ns
+union_find                                                                  fastest       │ slowest       │ median        │ mean          │ samples │ iters
+╰─ find_only                                                                              │               │               │               │         │
+   ├─ best_serial                                                           4.979 ms      │ 5.571 ms      │ 5.114 ms      │ 5.144 ms      │ 50      │ 50
+   │                                                                        401.6 Mitem/s │ 358.9 Mitem/s │ 391 Mitem/s   │ 388.7 Mitem/s │         │
+   ╰─ parallel_naive                                                                      │               │               │               │         │
+      ├─ Arc<concurrency::ReadOptimizedLock<union_find::UnionFind<usize>>>                │               │               │               │         │
+      │  ├─ 32                                                              22.45 ms      │ 25.13 ms      │ 24.28 ms      │ 24.19 ms      │ 50      │ 50
+      │  │                                                                  89.06 Mitem/s │ 79.56 Mitem/s │ 82.34 Mitem/s │ 82.65 Mitem/s │         │
+      │  ├─ 128                                                             5.395 ms      │ 6.484 ms      │ 6.161 ms      │ 6.1 ms        │ 50      │ 50
+      │  │                                                                  370.6 Mitem/s │ 308.4 Mitem/s │ 324.5 Mitem/s │ 327.8 Mitem/s │         │
+      │  ├─ 256                                                             2.026 ms      │ 3.348 ms      │ 3.168 ms      │ 3.089 ms      │ 50      │ 50
+      │  │                                                                  987 Mitem/s   │ 597.2 Mitem/s │ 631.1 Mitem/s │ 647.4 Mitem/s │         │
+      │  ╰─ 1024                                                            920.8 µs      │ 1.665 ms      │ 1.197 ms      │ 1.219 ms      │ 50      │ 50
+      │                                                                     2.171 Gitem/s │ 1.2 Gitem/s   │ 1.67 Gitem/s  │ 1.64 Gitem/s  │         │
+      ├─ Arc<std::sync::rwlock::RwLock<union_find::UnionFind<usize>>>                     │               │               │               │         │
+      │  ├─ 32                                                              42.13 ms      │ 46.39 ms      │ 44.63 ms      │ 44.48 ms      │ 50      │ 50
+      │  │                                                                  47.46 Mitem/s │ 43.1 Mitem/s  │ 44.8 Mitem/s  │ 44.95 Mitem/s │         │
+      │  ├─ 128                                                             11.38 ms      │ 12.78 ms      │ 12.12 ms      │ 12.1 ms       │ 50      │ 50
+      │  │                                                                  175.6 Mitem/s │ 156.3 Mitem/s │ 164.9 Mitem/s │ 165.2 Mitem/s │         │
+      │  ├─ 256                                                             5.165 ms      │ 5.952 ms      │ 5.533 ms      │ 5.567 ms      │ 50      │ 50
+      │  │                                                                  387.1 Mitem/s │ 335.9 Mitem/s │ 361.4 Mitem/s │ 359.2 Mitem/s │         │
+      │  ╰─ 1024                                                            1.413 ms      │ 1.742 ms      │ 1.568 ms      │ 1.587 ms      │ 50      │ 50
+      │                                                                     1.415 Gitem/s │ 1.147 Gitem/s │ 1.275 Gitem/s │ 1.259 Gitem/s │         │
+      ╰─ UnionFind<usize>                                                                 │               │               │               │         │
+         ├─ 32                                                              21.59 ms      │ 23.44 ms      │ 23.02 ms      │ 22.97 ms      │ 50      │ 50
+         │                                                                  92.61 Mitem/s │ 85.29 Mitem/s │ 86.84 Mitem/s │ 87.07 Mitem/s │         │
+         ├─ 128                                                             3.821 ms      │ 4.82 ms       │ 4.415 ms      │ 4.364 ms      │ 50      │ 50
+         │                                                                  523.3 Mitem/s │ 414.8 Mitem/s │ 452.9 Mitem/s │ 458.2 Mitem/s │         │
+         ├─ 256                                                             2.696 ms      │ 4.025 ms      │ 3.805 ms      │ 3.703 ms      │ 50      │ 50
+         │                                                                  741.5 Mitem/s │ 496.8 Mitem/s │ 525.5 Mitem/s │ 540 Mitem/s   │         │
+         ╰─ 1024                                                            3.05 ms       │ 3.734 ms      │ 3.571 ms      │ 3.491 ms      │ 50      │ 50
+                                                                            655.6 Mitem/s │ 535.5 Mitem/s │ 560 Mitem/s   │ 572.7 Mitem/s │         │
+
+
