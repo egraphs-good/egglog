@@ -56,7 +56,7 @@ One can also use `egglog` as a Rust library by adding the following to your `Car
 egglog = "1.0.0"
 ```
 
-See also the [Python binding](https://github.com/egraphs-good/egglog-python) using `egglog` in Python.
+See also the [Python binding](https://github.com/egraphs-good/egglog-python) for using `egglog` in Python.
 
 ## Developement
 
