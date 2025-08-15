@@ -75,31 +75,22 @@ Move to experimental readme
 
 --->
 
-## Benchmarks
-
-TODO: @Saul
-
-<!---
 
 ## Benchmarks
+All PRs use [`codspeed`](https://codspeed.io/) to evaluate the performance of a
+change against a suite of micro-benchmarks. You should see a "performance
+report" from codspeed a few minutes after posting a PR for review. Generally
+speaking, PRs should only improve performance or leave it unchanged, though
+exceptions are possible when warranted.
 
-We run all of our "examples" [as benchmarks in codspeed](https://codspeed.io/egraphs-good/egglog). These are in CI
-for every commit in main and for all PRs. It will run the examples with extra instrumentation added so that it can
-capture a single trace of the CPU interactions ([src](https://docs.codspeed.io/features/understanding-the-metrics/)):
-
-> CodSpeed instruments your benchmarks to measure the performance of your code. A benchmark will be run only once and the CPU behavior will be simulated. This ensures that the measurement is as accurate as possible, taking into account not only the instructions executed but also the cache and memory access patterns. The simulation gives us an equivalent of the CPU cycles that includes cache and memory access.
-
-Since many of the shorter running benchmarks have unstable timings due to non deterministic performance ([like in the memory allocator](https://github.com/oxc-project/backlog/issues/89)),
-we ["ignore"](https://docs.codspeed.io/features/ignoring-benchmarks/) them in codspeed. That way, we still
-capture their performance, but their timings don't show up in our reports by default.
-
-We use 50ms as our cutoff currently, any benchmarks shorter than that are ignored. This number was selected to try to ignore
-any benchmarks with have changes > 1% when they haven't been modified. Note that all the ignoring is done manually,
-so if you add another example that's short, an admin on the codspeed project will need to manually ignore it.
-
-## Profiling
-
-One way to profile egglog is to use [samply](https://github.com/mstange/samply/). Here's how you can use it:
+To debug performance issues, we recommend looking at the codspeed profiles, or
+running your own using
+[samply](https://github.com/mstange/samply),
+[flamegraph-rs](https://github.com/flamegraph-rs/flamegraph),
+[cargo-instruments](https://github.com/cmyr/cargo-instruments) (on MacOS) or
+`perf` (on Linux). All codspeed benchmarks correspond to named `.egg` files,
+usually in the `tests/` directory. For example, to debug an issue with
+`extract-vec-bench`, you can run the following commands:
 
 ```bash
 # install samply
@@ -113,5 +104,37 @@ samply record ./target/profiling/egglog tests/extract-vec-bench.egg
 env RUST_LOG=error samply record ./target/profiling/egglog --dont-print-messages tests/extract-vec-bench.egg
 ```
 
---->
+**Pay Attention to Parallelism** egglog has support to run programs in parallel
+via the `-j` flag. This support is relatively new and most users just run
+egglog single-threaded; the codspeed benchmarks only evaluate single-threaded
+performance. However, please take care not to pessimize parallel performance
+where possible (e.g. by adding coarse-grained locks).
+
+### Codspeed specifics
+
+We run all of our "examples" [as benchmarks in codspeed](https://codspeed.io/egraphs-good/egglog).
+These are in CI for every commit in main and for all PRs. It will run the
+examples with extra instrumentation added so that it can capture a single trace
+of the CPU interactions
+([src](https://docs.codspeed.io/features/understanding-the-metrics/)):
+
+> CodSpeed instruments your benchmarks to measure the performance of your code.
+> A benchmark will be run only once and the CPU behavior will be simulated.
+> This ensures that the measurement is as accurate as possible, taking into
+> account not only the instructions executed but also the cache and memory
+> access patterns. The simulation gives us an equivalent of the CPU cycles that
+> includes cache and memory access.
+
+Since many of the shorter running benchmarks have unstable timings due to non
+deterministic performance ([like in the memory
+allocator](https://github.com/oxc-project/backlog/issues/89)), we
+["ignore"](https://docs.codspeed.io/features/ignoring-benchmarks/) them in
+codspeed. That way, we still capture their performance, but their timings don't
+show up in our reports by default.
+
+We use 50ms as our cutoff currently, any benchmarks shorter than that are
+ignored. This number was selected to try to ignore any benchmarks with have
+changes > 1% when they haven't been modified. Note that all the ignoring is
+done manually, so if you add another example that's short, an admin on the
+codspeed project will need to manually ignore it.
 
