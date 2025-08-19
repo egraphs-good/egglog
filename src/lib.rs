@@ -1803,7 +1803,7 @@ impl<'a> BackendRule<'a> {
                         true => None,
                         false => Some(false),
                     };
-                    self.rb.query_table(f, &args, is_subsumed).unwrap()
+                    self.rb.query_table(f, &args, is_subsumed).unwrap();
                 }
                 ResolvedCall::Primitive(p) => {
                     let (p, args, ty) = self.prim(p, &atom.args);
