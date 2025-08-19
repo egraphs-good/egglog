@@ -1,6 +1,6 @@
 [workspace]
 resolver = "3"
-members = ["egglog", "concurrency", "core-relations", "egglog-bridge", "numeric-id", "union-find"] 
+members = ["concurrency", "core-relations", "egglog-bridge", "numeric-id", "union-find"] 
 
 [package]
 edition = "2021"
