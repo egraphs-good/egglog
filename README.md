@@ -28,7 +28,7 @@ The following instructions are for using/developing the core directly.
 Install [Cargo](https://doc.rust-lang.org/cargo/getting-started/installation.html).
 
 ```
-cargo install --path=root_directory_of_cloned_repo
+cargo install --path=EGGLOG_ROOT_DIRECTORY
 ```
 
 ## Usage
