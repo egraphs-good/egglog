@@ -1,0 +1,36 @@
+[package]
+name = "egglog-bridge"
+version = "0.1.0"
+edition = "2021"
+
+[dependencies]
+core-relations = { path = "../core-relations" }
+numeric-id = { path = "../numeric-id" }
+union-find = { path = "../union-find" }
+hashbrown = "0.15"
+smallvec = "1.10"
+thiserror = "1.0"
+anyhow = "1.0"
+num-rational = "0.4"
+log = "0.4"
+indexmap = "2.2"
+petgraph = "0.6"
+web-time = "1.1"
+rayon = "1.10.0"
+dyn-clone = "1.0.17"
+once_cell = "1.21.3"
+
+[dev-dependencies]
+env_logger = "0.11"
+mimalloc = "0.1"
+rand = "0.8.5"
+
+
+[[example]]
+name = "ac"
+
+[[example]]
+name = "math"
+
+[[example]]
+name = "ac_tracing"

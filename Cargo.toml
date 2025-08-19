@@ -1,3 +1,7 @@
+[workspace]
+resolver = "3"
+members = ["egglog", "concurrency", "core-relations", "egglog-bridge", "numeric-id", "union-find"] 
+
 [package]
 edition = "2021"
 name = "egglog"
@@ -57,12 +61,9 @@ web-time = "1.1"
 dyn-clone = "1.0.17"
 rayon = "1.10.0"
 mimalloc = "0.1.46"
-
-# Backend
-# TODO: move egglog-backend repo into core egglog repo
-core-relations = { git = "https://github.com/egraphs-good/egglog-backend.git", rev = "cd51d04" }
-egglog-bridge = { git = "https://github.com/egraphs-good/egglog-backend.git", rev = "cd51d04" }
-numeric-id = { git = "https://github.com/egraphs-good/egglog-backend.git", rev = "cd51d04" }
+core-relations = { path = "core-relations" }
+egglog-bridge = { path = "egglog-bridge" }
+numeric-id = { path = "numeric-id" }
 
 [build-dependencies]
 chrono = { version = "0.4", default-features = false, features = ["now"], optional = true }
