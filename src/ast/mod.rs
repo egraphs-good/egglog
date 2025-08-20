@@ -41,10 +41,6 @@ where
     Head: Clone + Display,
     Leaf: Clone + PartialEq + Eq + Display + Hash,
 {
-    SetOption {
-        name: String,
-        value: GenericExpr<Head, Leaf>,
-    },
     Sort(
         Span,
         String,
@@ -94,10 +90,6 @@ where
 {
     pub fn to_command(&self) -> GenericCommand<Head, Leaf> {
         match self {
-            GenericNCommand::SetOption { name, value } => GenericCommand::SetOption {
-                name: name.clone(),
-                value: value.clone(),
-            },
             GenericNCommand::Sort(span, name, params) => {
                 GenericCommand::Sort(span.clone(), name.clone(), params.clone())
             }
@@ -177,10 +169,6 @@ where
         f: &mut impl FnMut(GenericExpr<Head, Leaf>) -> GenericExpr<Head, Leaf>,
     ) -> Self {
         match self {
-            GenericNCommand::SetOption { name, value } => GenericNCommand::SetOption {
-                name,
-                value: f(value.clone()),
-            },
             GenericNCommand::Sort(span, name, params) => GenericNCommand::Sort(span, name, params),
             GenericNCommand::Function(func) => GenericNCommand::Function(func.visit_exprs(f)),
             GenericNCommand::AddRuleset(span, name) => GenericNCommand::AddRuleset(span, name),
@@ -312,17 +300,6 @@ where
     Head: Clone + Display,
     Leaf: Clone + PartialEq + Eq + Display + Hash,
 {
-    /// Egglog supports several *experimental* options
-    /// that can be set using the `set-option` command.
-    ///
-    /// Options supported include:
-    /// - "interactive_mode" (default: false): when enabled, egglog prints "(done)" after each command, allowing an external
-    ///   tool to know when each command has finished running.
-    SetOption {
-        name: String,
-        value: GenericExpr<Head, Leaf>,
-    },
-
     /// Create a new user-defined sort, which can then
     /// be used in new [`Command::Function`] declarations.
     /// The [`Command::Datatype`] command desugars directly to this command, with one [`Command::Function`]
@@ -687,7 +664,6 @@ where
 {
     fn fmt(&self, f: &mut Formatter) -> std::fmt::Result {
         match self {
-            GenericCommand::SetOption { name, value } => write!(f, "(set-option {name} {value})"),
             GenericCommand::Rewrite(name, rewrite, subsume) => {
                 rewrite.fmt_with_ruleset(f, name, false, *subsume)
             }

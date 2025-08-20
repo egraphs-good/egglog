@@ -23,9 +23,8 @@ impl Run {
             );
         } else {
             let mut egraph = EGraph::default();
-            egraph.run_mode = RunMode::ShowDesugaredEgglog;
             let desugared_str = egraph
-                .parse_and_run_program(self.path.to_str().map(String::from), &program)
+                .resugar_program(self.path.to_str().map(String::from), &program)
                 .unwrap()
                 .join("\n");
 
@@ -44,7 +43,10 @@ impl Run {
                 if self.should_fail() {
                     panic!(
                         "Program should have failed! Instead, logged:\n {}",
-                        msgs.join("\n")
+                        msgs.iter()
+                            .map(|s| s.to_string())
+                            .collect::<Vec<_>>()
+                            .join("\n")
                     );
                 } else {
                     for msg in msgs {

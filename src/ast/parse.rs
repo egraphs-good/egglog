@@ -330,13 +330,6 @@ impl Parser {
         }
 
         Ok(match head.as_str() {
-            "set-option" => match tail {
-                [name, value] => vec![Command::SetOption {
-                    name: name.expect_atom("option name")?,
-                    value: self.parse_expr(value)?,
-                }],
-                _ => return error!(span, "usage: (set-option <name> <value>)"),
-            },
             "sort" => match tail {
                 [name] => vec![Command::Sort(span, name.expect_atom("sort name")?, None)],
                 [name, call] => {

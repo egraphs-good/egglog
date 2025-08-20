@@ -16,7 +16,6 @@ mod cli;
 pub mod constraint;
 mod core;
 pub mod extract;
-pub mod output_handler;
 pub mod prelude;
 pub mod scheduler;
 mod serialize;
@@ -60,8 +59,6 @@ pub use typechecking::TypeError;
 use typechecking::TypeInfo;
 use util::*;
 use web_time::Duration;
-
-use crate::output_handler::{print_function_string, CollectedOutputHandler, OutputHandler};
 
 pub type ArcSort = Arc<dyn Sort>;
 
@@ -164,20 +161,6 @@ impl Display for RunReport {
     }
 }
 
-/// A report of the results of an extract action.
-#[derive(Debug, Clone)]
-pub enum ExtractReport {
-    Best {
-        termdag: TermDag,
-        cost: extract::DefaultCost,
-        term: Term,
-    },
-    Variants {
-        termdag: TermDag,
-        terms: Vec<Term>,
-    },
-}
-
 impl RunReport {
     fn union_times(times: &mut HashMap<String, Duration>, other_times: HashMap<String, Duration>) {
         for (k, v) in other_times {
@@ -213,6 +196,65 @@ impl RunReport {
         );
     }
 }
+/// Output from a command.
+#[derive(Clone, Debug)]
+pub enum CommandOutput {
+    /// The size of a function
+    PrintFunctionSize(usize),
+    /// The name of all functions and their sizes
+    PrintAllFunctionsSize(Vec<(String, usize)>),
+    /// The best function found after extracting
+    ExtractBest(TermDag, DefaultCost, Term),
+    /// The variants of a function found after extracting
+    ExtractVariants(TermDag, Vec<Term>),
+    /// The report from all runs
+    OverallStatistics(RunReport),
+    /// A printed function and all its values
+    PrintFunction(Function, TermDag, Vec<(Term, Term)>),
+    /// The report from a single run
+    RunSchedule(RunReport),
+}
+
+impl std::fmt::Display for CommandOutput {
+    /// Format the command output for display, ending with a newline.
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            CommandOutput::PrintFunctionSize(size) => writeln!(f, "{}", size),
+            CommandOutput::PrintAllFunctionsSize(names_and_sizes) => {
+                for name in names_and_sizes {
+                    writeln!(f, "{}: {}", name.0, name.1)?;
+                }
+                Ok(())
+            }
+            CommandOutput::ExtractBest(termdag, _cost, term) => {
+                writeln!(f, "{}", termdag.to_string(term))
+            }
+            CommandOutput::ExtractVariants(termdag, terms) => {
+                writeln!(f, "(")?;
+                for expr in terms {
+                    writeln!(f, "   {}", termdag.to_string(expr))?;
+                }
+                writeln!(f, ")")
+            }
+            CommandOutput::OverallStatistics(run_report) => {
+                write!(f, "Overall statistics:\n{}", run_report)
+            }
+            CommandOutput::PrintFunction(function, termdag, terms_and_outputs) => {
+                let out_is_unit = function.schema.output.name() == UnitSort.name();
+                writeln!(f, "(")?;
+                for (term, output) in terms_and_outputs.iter() {
+                    write!(f, "   {}", termdag.to_string(term))?;
+                    if !out_is_unit {
+                        write!(f, " -> {}", termdag.to_string(output))?;
+                    }
+                    writeln!(f)?;
+                }
+                writeln!(f, ")")
+            }
+            CommandOutput::RunSchedule(_report) => Ok(()),
+        }
+    }
+}
 
 /// The main interface for an e-graph in egglog.
 ///
@@ -244,7 +286,6 @@ pub struct EGraph {
     overall_run_report: RunReport,
     schedulers: DenseIdMap<SchedulerId, SchedulerRecord>,
     commands: IndexMap<String, Arc<dyn UserDefinedCommand>>,
-    pub output_handler: Box<dyn OutputHandler>,
 }
 
 /// A user-defined command allows users to inject custom command that can be called
@@ -254,7 +295,7 @@ pub struct EGraph {
 /// it has an exclusive access to the e-graph.
 pub trait UserDefinedCommand: Send + Sync {
     /// Run the command with the given arguments.
-    fn update(&self, egraph: &mut EGraph, args: &[Expr]) -> Result<(), Error>;
+    fn update(&self, egraph: &mut EGraph, args: &[Expr]) -> Result<Option<CommandOutput>, Error>;
 }
 
 /// A function in the e-graph.
@@ -327,7 +368,6 @@ impl Default for EGraph {
             type_info: Default::default(),
             schedulers: Default::default(),
             commands: Default::default(),
-            output_handler: Box::new(CollectedOutputHandler::default()),
         };
 
         add_base_sort(&mut eg, UnitSort, span!()).unwrap();
@@ -402,12 +442,9 @@ impl EGraph {
     pub fn pop(&mut self) -> Result<(), Error> {
         match self.pushed_egraph.take() {
             Some(e) => {
-                // Copy the reports and messages from the popped egraph
-                let output_handler = self.output_handler.clone();
+                // Copy the overall report from the popped egraph
                 let overall_run_report = self.overall_run_report.clone();
-
                 *self = *e;
-                self.output_handler = output_handler;
                 self.overall_run_report = overall_run_report;
                 Ok(())
             }
@@ -588,7 +625,7 @@ impl EGraph {
         n: Option<usize>,
         file: Option<File>,
         mode: PrintFunctionMode,
-    ) -> Result<(), Error> {
+    ) -> Result<Option<CommandOutput>, Error> {
         let n = match n {
             Some(n) => {
                 log::info!("Printing up to {n} tuples of function {sym}");
@@ -652,26 +689,29 @@ impl EGraph {
                     s.push('\n');
                     buf
                 } else {
-                    print_function_string(f, termdag, terms_and_outputs)
+                    CommandOutput::PrintFunction(f.clone(), termdag, terms_and_outputs).to_string()
                 };
 
                 file.write_all(lines.as_bytes())
-                    .expect("Error writing to file")
+                    .expect("Error writing to file");
+                Ok(None)
             }
             None => {
                 if is_csv {
                     panic!("Cannot print a function to CSV if a filename is not provided")
-                }
-                self.output_handler
-                    .handle_print_function(f, termdag, terms_and_outputs)?;
+                };
+                Ok(Some(CommandOutput::PrintFunction(
+                    f.clone(),
+                    termdag,
+                    terms_and_outputs,
+                )))
             }
         }
-        Ok(())
     }
 
     /// Print the size of a function. If no function name is provided,
     /// print the size of all functions in "name: len" pairs.
-    pub fn print_size(&mut self, sym: Option<&str>) -> Result<(), Error> {
+    pub fn print_size(&mut self, sym: Option<&str>) -> Result<CommandOutput, Error> {
         if let Some(sym) = sym {
             let f = self
                 .functions
@@ -679,24 +719,23 @@ impl EGraph {
                 .ok_or(TypeError::UnboundFunction(sym.to_owned(), span!()))?;
             let size = self.backend.table_size(f.backend_id);
             log::info!("Function {} has size {}", sym, size);
-            self.output_handler
-                .handle_print_function_size(&sym.to_string(), size)
+            Ok(CommandOutput::PrintFunctionSize(size))
         } else {
             // Print size of all functions
             let mut lens = self
                 .functions
                 .iter()
-                .map(|(sym, f)| (sym, self.backend.table_size(f.backend_id)))
+                .map(|(sym, f)| (sym.clone(), self.backend.table_size(f.backend_id)))
                 .collect::<Vec<_>>();
 
             // Function name's alphabetical order
-            lens.sort_by_key(|(name, _)| name.as_str());
+            lens.sort_by_key(|(name, _)| name.clone());
             if log_enabled!(Level::Info) {
                 for (sym, len) in &lens {
                     log::info!("Function {} has size {}", sym, len);
                 }
             }
-            self.output_handler.handle_print_all_functions_size(lens)
+            Ok(CommandOutput::PrintAllFunctionsSize(lens))
         }
     }
 
@@ -782,12 +821,10 @@ impl EGraph {
 
         if let Some(facts) = until {
             if self.check_facts(span, facts).is_ok() {
-                if log_enabled!(Level::Info) {
-                    log::info!(
-                        "Breaking early because of facts:\n {}!",
-                        ListDisplay(facts, "\n")
-                    );
-                }
+                log::info!(
+                    "Breaking early because of facts:\n {}!",
+                    ListDisplay(facts, "\n")
+                );
                 return report;
             }
         }
@@ -1010,19 +1047,6 @@ impl EGraph {
         };
     }
 
-    fn set_option(&mut self, name: &str, value: ResolvedExpr) {
-        match name {
-            "interactive_mode" => {
-                if let ResolvedExpr::Lit(_ann, Literal::Int(i)) = value {
-                    self.output_handler.set_interactive_mode(i != 0);
-                } else {
-                    panic!("interactive_mode must be an integer");
-                }
-            }
-            _ => panic!("Unknown option '{}'", name),
-        }
-    }
-
     fn check_facts(&mut self, span: &Span, facts: &[ResolvedFact]) -> Result<(), Error> {
         let rule = ast::ResolvedRule {
             span: span.clone(),
@@ -1072,13 +1096,8 @@ impl EGraph {
         }
     }
 
-    fn run_command(&mut self, command: ResolvedNCommand) -> Result<(), Error> {
+    fn run_command(&mut self, command: ResolvedNCommand) -> Result<Option<CommandOutput>, Error> {
         match command {
-            ResolvedNCommand::SetOption { name, value } => {
-                let str = format!("Set option {} to {}", name, value);
-                self.set_option(&name, value);
-                log::info!("{}", str)
-            }
             // Sorts are already declared during typechecking
             ResolvedNCommand::Sort(_span, name, _presort_and_args) => {
                 log::info!("Declared sort {}.", name)
@@ -1105,19 +1124,16 @@ impl EGraph {
             }
             ResolvedNCommand::RunSchedule(sched) => {
                 let report = self.run_schedule(&sched);
-                if log_enabled!(Level::Info) {
-                    log::info!("Ran schedule {}.", sched);
-                    log::info!("Report: {}", report);
-                }
+                log::info!("Ran schedule {}.", sched);
+                log::info!("Report: {}", report);
                 self.overall_run_report.union(report.clone());
-                self.output_handler.handle_run_schedule(report)?;
+                return Ok(Some(CommandOutput::RunSchedule(report)));
             }
             ResolvedNCommand::PrintOverallStatistics => {
-                if log_enabled!(Level::Info) {
-                    log::info!("Overall statistics:\n{}", self.overall_run_report);
-                }
-                self.output_handler
-                    .handle_overall_statistics(&self.overall_run_report)?;
+                log::info!("Overall statistics:\n{}", self.overall_run_report);
+                return Ok(Some(CommandOutput::OverallStatistics(
+                    self.overall_run_report.clone(),
+                )));
             }
             ResolvedNCommand::Check(span, facts) => {
                 self.check_facts(&span, &facts)?;
@@ -1145,14 +1161,13 @@ impl EGraph {
                     self,
                     TreeAdditiveCostModel::default(),
                 );
-                if n == 0 {
+                return if n == 0 {
                     if let Some((cost, term)) = extractor.extract_best(self, &mut termdag, x) {
                         // dont turn termdag into a string if we have messages disabled for performance reasons
                         if log_enabled!(Level::Info) {
-                            let str = termdag.to_string(&term);
-                            log::info!("extracted with cost {cost}: {str}");
+                            log::info!("extracted with cost {cost}: {}", termdag.to_string(&term));
                         }
-                        self.output_handler.handle_extract_best(termdag, cost, term)
+                        Ok(Some(CommandOutput::ExtractBest(termdag, cost, term)))
                     } else {
                         Err(Error::ExtractError(
                             "Unable to find any valid extraction (likely due to subsume or delete)"
@@ -1169,12 +1184,11 @@ impl EGraph {
                         .map(|e| e.1.clone())
                         .collect();
                     if log_enabled!(Level::Info) {
-                        let n = terms.len();
                         let expr_str = expr.to_string();
-                        log::info!("extracted {n} variants for {expr_str}");
+                        log::info!("extracted {} variants for {expr_str}", terms.len());
                     }
-                    self.output_handler.handle_extract_variants(termdag, terms)
-                }?;
+                    Ok(Some(CommandOutput::ExtractVariants(termdag, terms)))
+                };
             }
             ResolvedNCommand::Push(n) => {
                 (0..n).for_each(|_| self.push());
@@ -1199,23 +1213,23 @@ impl EGraph {
                             .map_err(|e| Error::IoError(file.into(), e, span.clone()))
                     })
                     .transpose()?;
-                self.print_function(&f, n, file, mode)
-                    .map_err(|e| match e {
-                        Error::TypeError(TypeError::UnboundFunction(f, _)) => {
-                            Error::TypeError(TypeError::UnboundFunction(f, span.clone()))
-                        }
-                        // This case is currently impossible
-                        _ => e,
-                    })?;
+                return self.print_function(&f, n, file, mode).map_err(|e| match e {
+                    Error::TypeError(TypeError::UnboundFunction(f, _)) => {
+                        Error::TypeError(TypeError::UnboundFunction(f, span.clone()))
+                    }
+                    // This case is currently impossible
+                    _ => e,
+                });
             }
             ResolvedNCommand::PrintSize(span, f) => {
-                self.print_size(f.as_deref()).map_err(|e| match e {
+                let res = self.print_size(f.as_deref()).map_err(|e| match e {
                     Error::TypeError(TypeError::UnboundFunction(f, _)) => {
                         Error::TypeError(TypeError::UnboundFunction(f, span.clone()))
                     }
                     // This case is currently impossible
                     _ => e,
                 })?;
+                return Ok(Some(res));
             }
             ResolvedNCommand::Fail(span, c) => {
                 let result = self.run_command(*c);
@@ -1268,12 +1282,13 @@ impl EGraph {
                 let command = self.commands.swap_remove(&name).unwrap_or_else(|| {
                     panic!("Unrecognized user-defined command: {}", name);
                 });
-                command.update(self, &exprs)?;
+                let res = command.update(self, &exprs);
                 self.commands.insert(name, command);
+                return res;
             }
         };
 
-        Ok(())
+        Ok(None)
     }
 
     fn input_file(&mut self, func_name: &str, file: String) -> Result<(), Error> {
@@ -1393,37 +1408,57 @@ impl EGraph {
     }
 
     fn process_command(&mut self, command: Command) -> Result<Vec<ResolvedNCommand>, Error> {
-        let program = desugar::desugar_program(vec![command], &mut self.parser, self.seminaive)?;
+        let mut program = self.resolve_command(command)?;
 
-        let mut program = self.typecheck_program(&program)?;
-
-        if self.output_handler.remove_globals() {
-            program = remove_globals::remove_globals(program, &mut self.parser.symbol_gen);
-            for command in &program {
-                self.names.check_shadowing(command)?;
-            }
+        program = remove_globals::remove_globals(program, &mut self.parser.symbol_gen);
+        for command in &program {
+            self.names.check_shadowing(command)?;
         }
 
         Ok(program)
     }
 
+    fn resolve_command(&mut self, command: Command) -> Result<Vec<ResolvedNCommand>, Error> {
+        let program = desugar::desugar_program(vec![command], &mut self.parser, self.seminaive)?;
+        Ok(self.typecheck_program(&program)?)
+    }
+
     /// Run a program, represented as an AST.
     /// Return a list of messages.
-    pub fn run_program(&mut self, program: Vec<Command>) -> Result<Vec<String>, Error> {
+    pub fn run_program(&mut self, program: Vec<Command>) -> Result<Vec<CommandOutput>, Error> {
+        let mut outputs = Vec::new();
         for command in program {
             // Important to process each command individually
             // because push and pop create new scopes
             for processed in self.process_command(command)? {
-                if self.output_handler.handle_resolved_command(&processed)? {
-                    let result = self.run_command(processed);
-                    self.output_handler
-                        .handle_command_resultult(result.clone())?;
-                    result?;
+                let result = self.run_command(processed)?;
+                if let Some(output) = result {
+                    outputs.push(output);
                 }
             }
         }
 
-        Ok(self.output_handler.return_output()?)
+        Ok(outputs)
+    }
+
+    pub fn resugar_program(
+        &mut self,
+        filename: Option<String>,
+        input: &str,
+    ) -> Result<Vec<String>, Error> {
+        let parsed = self.parser.get_program_from_string(filename, input)?;
+        let mut outputs = Vec::new();
+        for command in parsed {
+            for processed in self.resolve_command(command)? {
+                // When re-suggaring, we still need to run scope-related commands (Push/Pop) to make
+                // the program well-scoped.
+                if let GenericNCommand::Push(..) | GenericNCommand::Pop(..) = &processed {
+                    self.run_command(processed.clone())?;
+                }
+                outputs.push(processed.to_command().to_string());
+            }
+        }
+        Ok(outputs)
     }
 
     /// Takes a source program `input`, parses it, runs it, and returns a list of messages.
@@ -1435,7 +1470,7 @@ impl EGraph {
         &mut self,
         filename: Option<String>,
         input: &str,
-    ) -> Result<Vec<String>, Error> {
+    ) -> Result<Vec<CommandOutput>, Error> {
         let parsed = self.parser.get_program_from_string(filename, input)?;
         self.run_program(parsed)
     }
@@ -1910,7 +1945,7 @@ mod tests {
         assert_eq!(new_cheap_value, new_cheap_1_value);
         assert!(new_cheap_value != orig_cheap_value || new_cheap_1_value != orig_cheap_1_value);
         // Now verify that if we extract, it still respects the unextractable, even though it's a different values now
-        egraph
+        let outputs = egraph
             .parse_and_run_program(
                 None,
                 r#"
@@ -1918,13 +1953,7 @@ mod tests {
                 "#,
             )
             .unwrap();
-        let report = egraph.get_extract_report().clone().unwrap();
-        let ExtractReport::Best { term, termdag, .. } = report else {
-            panic!();
-        };
-        let span = span!();
-        let expr = termdag.term_to_expr(&term, span.clone());
-        assert_eq!(expr, Expr::Call(span, "exp".to_owned(), vec![]));
+        assert_eq!(outputs[0].to_string(), "(exp)\n");
     }
 
     #[test]
@@ -1962,7 +1991,7 @@ mod tests {
         assert_ne!(new_cheap_value, orig_cheap_value);
 
         // Now verify that if we extract, it still respects the subsumption, even though it's a different values now
-        egraph
+        let res = egraph
             .parse_and_run_program(
                 None,
                 r#"
@@ -1970,12 +1999,6 @@ mod tests {
                 "#,
             )
             .unwrap();
-        let report = egraph.get_extract_report().clone().unwrap();
-        let ExtractReport::Best { term, termdag, .. } = report else {
-            panic!();
-        };
-        let span = span!();
-        let expr = termdag.term_to_expr(&term, span.clone());
-        assert_eq!(expr, Expr::Call(span, "exp".to_owned(), vec![]));
+        assert_eq!(res[0].to_string(), "(exp)\n");
     }
 }

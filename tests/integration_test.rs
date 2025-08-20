@@ -6,7 +6,7 @@ fn test_simple_extract1() {
 
     let mut egraph = EGraph::default();
 
-    let _ = egraph
+    let outputs = egraph
         .parse_and_run_program(
             None,
             r#"
@@ -15,9 +15,7 @@ fn test_simple_extract1() {
              (extract expr)"#,
         )
         .unwrap();
-
-    let report = egraph.get_extract_report().clone().unwrap();
-    let ExtractReport::Best { cost, .. } = report else {
+    let CommandOutput::ExtractBest(_, cost, _) = outputs[0] else {
         panic!();
     };
     assert_eq!(cost, 3);
@@ -29,12 +27,12 @@ fn test_simple_extract2() {
 
     let mut egraph = EGraph::default();
 
-    egraph
+    let outputs = egraph
         .parse_and_run_program(
             None,
             r#"
              (datatype Term
-               (Origin :cost 0) 
+               (Origin :cost 0)
                (BigStep Term :cost 10)
                (SmallStep Term :cost 1)
              )
@@ -51,12 +49,7 @@ fn test_simple_extract2() {
              "#,
         )
         .unwrap();
-
-    let report = egraph.get_extract_report().clone().unwrap();
-    let ExtractReport::Best { cost, .. } = report else {
-        panic!();
-    };
-    assert_eq!(cost, 4);
+    assert!(matches!(outputs[0], CommandOutput::ExtractBest(_, 4, _)));
 }
 
 #[test]
@@ -65,12 +58,12 @@ fn test_simple_extract3() {
 
     let mut egraph = EGraph::default();
 
-    egraph
+    let outputs = egraph
         .parse_and_run_program(
             None,
             r#"
              (datatype Fruit
-               (Apple i64 :cost 1) 
+               (Apple i64 :cost 1)
                (Orange f64 :cost 2)
              )
              (datatype Vegetable
@@ -86,8 +79,7 @@ fn test_simple_extract3() {
         )
         .unwrap();
 
-    let report = egraph.get_extract_report().clone().unwrap();
-    let ExtractReport::Best { cost, .. } = report else {
+    let CommandOutput::ExtractBest(_, cost, _) = outputs[0] else {
         panic!();
     };
     assert_eq!(cost, 2);
@@ -123,13 +115,13 @@ fn test_simple_extract5() {
 
     let mut egraph = EGraph::default();
 
-    egraph
+    let outputs = egraph
         .parse_and_run_program(
             None,
             r#"
-             (datatype Foo 
+             (datatype Foo
                 (Foobar i64)
-             ) 
+             )
              (let foobar (Foobar 42))
              (datatype Bar
                 (Barfoo i64)
@@ -144,8 +136,7 @@ fn test_simple_extract5() {
         )
         .unwrap();
 
-    let report = egraph.get_extract_report().clone().unwrap();
-    let ExtractReport::Best { cost, .. } = report else {
+    let CommandOutput::ExtractBest(_, cost, _) = outputs[0] else {
         panic!();
     };
     assert_eq!(cost, 0);
@@ -157,7 +148,7 @@ fn test_simple_extract6() {
 
     let mut egraph = EGraph::default();
 
-    egraph
+    let outputs = egraph
         .parse_and_run_program(
             None,
             r#"
@@ -171,8 +162,7 @@ fn test_simple_extract6() {
         )
         .unwrap();
 
-    let report = egraph.get_extract_report().clone().unwrap();
-    let ExtractReport::Best { cost, .. } = report else {
+    let CommandOutput::ExtractBest(_, cost, _) = outputs[0] else {
         panic!();
     };
     assert_eq!(cost, 0);
@@ -184,7 +174,7 @@ fn test_simple_extract7() {
 
     let mut egraph = EGraph::default();
 
-    egraph
+    let outputs = egraph
         .parse_and_run_program(
             None,
             r#"
@@ -194,7 +184,7 @@ fn test_simple_extract7() {
             )
             (sort Mapsrt1 (Map i64 Foo))
             (let map1 (map-insert (map-empty) 0 (bar)))
-            
+
             (sort Mapsrt2 (Map bool Foo))
             (let map2 (map-insert (map-empty) false (baz)))
             ;(let map2b (map-insert (map-empty) false (bar)))
@@ -202,7 +192,7 @@ fn test_simple_extract7() {
 
             ;(extract map1)
             ;(extract map2)
-            
+
             ;(function toerr (Mapsrt2) Foo :no-merge)
 
             ;(set (toerr map2) (bar))
@@ -219,8 +209,7 @@ fn test_simple_extract7() {
         )
         .unwrap();
 
-    let report = egraph.get_extract_report().clone().unwrap();
-    let ExtractReport::Best { cost, .. } = report else {
+    let CommandOutput::ExtractBest(_, cost, _) = outputs[0] else {
         panic!();
     };
     assert_eq!(cost, 2);
@@ -232,7 +221,7 @@ fn test_simple_extract8() {
 
     let mut egraph = EGraph::default();
 
-    egraph
+    let outputs = egraph
         .parse_and_run_program(
             None,
             r#"
@@ -247,8 +236,7 @@ fn test_simple_extract8() {
         )
         .unwrap();
 
-    let report = egraph.get_extract_report().clone().unwrap();
-    let ExtractReport::Best { cost, .. } = report else {
+    let CommandOutput::ExtractBest(_, cost, _) = outputs[0] else {
         panic!();
     };
     assert_eq!(cost, 10);
@@ -260,7 +248,7 @@ fn test_simple_extract9() {
 
     let mut egraph = EGraph::default();
 
-    egraph
+    let outputs = egraph
         .parse_and_run_program(
             None,
             r#"
@@ -291,13 +279,12 @@ fn test_simple_extract9() {
         )
         .unwrap();
 
-    let report = egraph.get_extract_report().clone().unwrap();
-    let ExtractReport::Best { cost, .. } = report else {
+    let CommandOutput::ExtractBest(_, cost, _) = outputs[0] else {
         panic!();
     };
     assert_eq!(cost, DefaultCost::MAX);
 
-    egraph
+    let outputs = egraph
         .parse_and_run_program(
             None,
             r#"
@@ -306,13 +293,12 @@ fn test_simple_extract9() {
         )
         .unwrap();
 
-    let report = egraph.get_extract_report().clone().unwrap();
-    let ExtractReport::Best { cost, .. } = report else {
+    let CommandOutput::ExtractBest(_, cost, _) = outputs[0] else {
         panic!();
     };
     assert_eq!(cost, DefaultCost::MAX);
 
-    egraph
+    let outputs = egraph
         .parse_and_run_program(
             None,
             r#"
@@ -321,8 +307,7 @@ fn test_simple_extract9() {
         )
         .unwrap();
 
-    let report = egraph.get_extract_report().clone().unwrap();
-    let ExtractReport::Best { cost, .. } = report else {
+    let CommandOutput::ExtractBest(_, cost, _) = outputs[0] else {
         panic!();
     };
     assert_eq!(cost, DefaultCost::MAX);
@@ -334,12 +319,12 @@ fn test_extract_variants1() {
 
     let mut egraph = EGraph::default();
 
-    egraph
+    let outputs = egraph
         .parse_and_run_program(
             None,
             r#"
              (datatype Term
-               (Origin :cost 0) 
+               (Origin :cost 0)
                (BigStep Term :cost 10)
                (SmallStep Term :cost 1)
              )
@@ -356,12 +341,7 @@ fn test_extract_variants1() {
              "#,
         )
         .unwrap();
-
-    let report = egraph.get_extract_report().clone().unwrap();
-    let ExtractReport::Variants { terms, .. } = report else {
-        panic!();
-    };
-    assert_eq!(terms.len(), 2);
+    assert_eq!(outputs[0].to_string(), "(\n   (SmallStep (SmallStep (SmallStep (SmallStep (Origin)))))\n   (BigStep (Origin))\n)\n");
 }
 
 #[test]
@@ -369,7 +349,7 @@ fn test_subsumed_unextractable_action_extract() {
     // Test when an expression is subsumed, it isn't extracted, even if its the cheapest
     let mut egraph = EGraph::default();
 
-    egraph
+    let outputs = egraph
         .parse_and_run_program(
             None,
             r#"
@@ -383,14 +363,11 @@ fn test_subsumed_unextractable_action_extract() {
         .unwrap();
     // Originally should give back numeric term
     assert!(matches!(
-        egraph.get_extract_report(),
-        Some(ExtractReport::Best {
-            term: Term::App(s, ..),
-            ..
-        }) if s == "cheap"
+        outputs[0],
+        CommandOutput::ExtractBest(_, _, Term::App(ref s, ..)) if s == "cheap"
     ));
     // Then if we make one as subsumed, it should give back the variable term
-    egraph
+    let outputs = egraph
         .parse_and_run_program(
             None,
             r#"
@@ -400,11 +377,8 @@ fn test_subsumed_unextractable_action_extract() {
         )
         .unwrap();
     assert!(matches!(
-        egraph.get_extract_report(),
-        Some(ExtractReport::Best {
-            term: Term::App(s, ..),
-            ..
-        }) if s == "exp"
+        outputs[0],
+        CommandOutput::ExtractBest(_, _, Term::App(ref s, ..)) if s == "exp"
     ));
 }
 
@@ -413,7 +387,7 @@ fn test_subsume_unextractable_insert_and_merge() {
     // Example adapted from https://github.com/egraphs-good/egglog/pull/301#pullrequestreview-1756826062
     let mut egraph = EGraph::default();
 
-    egraph
+    let outputs = egraph
         .parse_and_run_program(
             None,
             r#"
@@ -433,11 +407,8 @@ fn test_subsume_unextractable_insert_and_merge() {
         )
         .unwrap();
     assert!(matches!(
-        egraph.get_extract_report(),
-        Some(ExtractReport::Best {
-            term: Term::App(s, ..),
-            ..
-        }) if s == "exp"
+        outputs[0],
+        CommandOutput::ExtractBest(_, _, Term::App(ref s, ..)) if s == "exp"
     ));
 }
 
@@ -447,7 +418,7 @@ fn test_subsume_unextractable_action_extract_multiple() {
     // extract multiple
     let mut egraph = EGraph::default();
 
-    egraph
+    let outputs1 = egraph
         .parse_and_run_program(
             None,
             "
@@ -459,13 +430,12 @@ fn test_subsume_unextractable_action_extract_multiple() {
         )
         .unwrap();
     // Originally should give back two terms when extracted
-    let report = egraph.get_extract_report();
     assert!(matches!(
-        report,
-        Some(ExtractReport::Variants { terms, .. }) if terms.len() == 2
+        outputs1[0],
+        CommandOutput::ExtractVariants(_, ref terms) if terms.len() == 2
     ));
     // Then if we make one unextractable, it should only give back one term
-    egraph
+    let outputs2 = egraph
         .parse_and_run_program(
             None,
             "
@@ -474,10 +444,9 @@ fn test_subsume_unextractable_action_extract_multiple() {
             ",
         )
         .unwrap();
-    let report = egraph.get_extract_report();
     assert!(matches!(
-        report,
-        Some(ExtractReport::Variants { terms, .. }) if terms.len() == 1
+        outputs2[0],
+        CommandOutput::ExtractVariants(_, ref terms) if terms.len() == 1
     ));
 }
 
@@ -487,7 +456,7 @@ fn test_rewrite_subsumed_unextractable() {
 
     let mut egraph = EGraph::default();
 
-    egraph
+    let outputs = egraph
         .parse_and_run_program(
             None,
             r#"
@@ -502,13 +471,7 @@ fn test_rewrite_subsumed_unextractable() {
         )
         .unwrap();
     // Should give back expenive term, because cheap is unextractable
-    assert!(matches!(
-        egraph.get_extract_report(),
-        Some(ExtractReport::Best {
-            term: Term::App(s, ..),
-            ..
-        }) if s == "exp"
-    ));
+    assert_eq!(outputs[1].to_string(), "(exp)\n");
 }
 
 #[test]
@@ -518,7 +481,7 @@ fn test_rewrite_subsumed() {
     let mut egraph = EGraph::default();
 
     // If we rerite most-exp to another term, that rewrite shouldnt trigger since its been subsumed.
-    egraph
+    let outputs = egraph
         .parse_and_run_program(
             None,
             r#"
@@ -535,13 +498,7 @@ fn test_rewrite_subsumed() {
             "#,
         )
         .unwrap();
-    assert!(matches!(
-        egraph.get_extract_report(),
-        Some(ExtractReport::Best {
-            term: Term::App(s, ..),
-            ..
-        }) if s == "exp"
-    ));
+    assert_eq!(outputs[2].to_string(), "(exp)\n");
 }
 
 #[test]
@@ -550,7 +507,7 @@ fn test_subsume() {
     // We can test this by adding a commutative additon property, and verifying it isn't applied on one of the terms
     // but is on the other
     let mut egraph = EGraph::default();
-    egraph
+    let outputs = egraph
         .parse_and_run_program(
             None,
             r#"
@@ -568,11 +525,11 @@ fn test_subsume() {
         )
         .unwrap();
     assert!(matches!(
-        egraph.get_extract_report(),
-        Some(ExtractReport::Variants { terms, .. }) if terms.len() == 2
+        outputs[1],
+        CommandOutput::ExtractVariants(_, ref terms) if terms.len() == 2
     ));
 
-    egraph
+    let outputs = egraph
         .parse_and_run_program(
             None,
             r#"
@@ -585,8 +542,8 @@ fn test_subsume() {
         )
         .unwrap();
     assert!(matches!(
-        egraph.get_extract_report(),
-        Some(ExtractReport::Variants { terms, .. }) if terms.len() == 1
+        outputs[0],
+        CommandOutput::ExtractVariants(_, ref terms) if terms.len() == 1
     ));
 }
 
@@ -650,7 +607,7 @@ fn test_cant_subsume_merge() {
 fn test_value_to_classid() {
     let mut egraph = EGraph::default();
 
-    egraph
+    let outputs = egraph
         .parse_and_run_program(
             None,
             r#"
@@ -661,8 +618,7 @@ fn test_value_to_classid() {
             "#,
         )
         .unwrap();
-    let report = egraph.get_extract_report().clone().unwrap();
-    let ExtractReport::Best { term, termdag, .. } = report else {
+    let CommandOutput::ExtractBest(termdag, _cost, term) = outputs[0].clone() else {
         panic!();
     };
     let expr = termdag.term_to_expr(&term, span!());
@@ -747,4 +703,36 @@ fn test_shadowing_query() {
 fn test_shadowing_push() {
     let s = "(push) (let x 1) (pop) (let x 1)";
     EGraph::default().parse_and_run_program(None, s).unwrap();
+}
+
+#[test]
+fn test_print_function_size() {
+    let s = "(function f () i64 :no-merge) (set (f) 2) (print-size f)";
+    let outputs = EGraph::default().parse_and_run_program(None, s).unwrap();
+    assert_eq!(outputs[0].to_string(), "1\n");
+}
+
+#[test]
+fn test_print_function() {
+    let s = "(function f () i64 :no-merge) (set (f) 2) (print-function f)";
+    let outputs = EGraph::default().parse_and_run_program(None, s).unwrap();
+    assert_eq!(outputs[0].to_string(), "(\n   (f) -> 2\n)\n");
+}
+
+#[test]
+fn test_print_stats() {
+    let s = "(run 1) (print-stats)";
+    let outputs = EGraph::default().parse_and_run_program(None, s).unwrap();
+    assert_eq!(
+        outputs[1].to_string(),
+        "Overall statistics:\nRuleset : search 0.000s, merge 0.000s, rebuild 0.000s\n"
+    );
+}
+
+#[test]
+fn test_run_report() {
+    let s = "(run 1)";
+    let outputs = EGraph::default().parse_and_run_program(None, s).unwrap();
+    assert_eq!(outputs[0].to_string(), "");
+    assert!(matches!(outputs[0], CommandOutput::RunSchedule(..)));
 }

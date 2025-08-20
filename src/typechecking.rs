@@ -217,15 +217,6 @@ impl EGraph {
             ),
             NCommand::Pop(span, n) => ResolvedNCommand::Pop(span.clone(), *n),
             NCommand::Push(n) => ResolvedNCommand::Push(*n),
-            NCommand::SetOption { name, value } => {
-                let value =
-                    self.type_info
-                        .typecheck_expr(symbol_gen, value, &Default::default())?;
-                ResolvedNCommand::SetOption {
-                    name: name.clone(),
-                    value,
-                }
-            }
             NCommand::AddRuleset(span, ruleset) => {
                 ResolvedNCommand::AddRuleset(span.clone(), ruleset.clone())
             }
