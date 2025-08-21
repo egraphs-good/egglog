@@ -14,7 +14,7 @@ pub fn run_example(filename: &str, program: &str, no_messages: bool) {
         .unwrap();
     if !no_messages {
         for output in outputs {
-            println!("{}", output);
+            print!("{}", output);
         }
     }
     // test performance of serialization as well
