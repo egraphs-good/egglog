@@ -720,6 +720,13 @@ fn test_print_function() {
 }
 
 #[test]
+fn test_print_function_csv() {
+    let s = "(function f () i64 :no-merge) (set (f) 2) (print-function f :mode csv)";
+    let outputs = EGraph::default().parse_and_run_program(None, s).unwrap();
+    assert_eq!(outputs[0].to_string(), "f,2\n");
+}
+
+#[test]
 fn test_print_stats() {
     let s = "(run 1) (print-stats)";
     let outputs = EGraph::default().parse_and_run_program(None, s).unwrap();

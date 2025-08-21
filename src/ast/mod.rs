@@ -291,6 +291,15 @@ pub enum PrintFunctionMode {
     CSV,
 }
 
+impl Display for PrintFunctionMode {
+    fn fmt(&self, f: &mut Formatter<'_>) -> std::fmt::Result {
+        match self {
+            PrintFunctionMode::Default => write!(f, "default"),
+            PrintFunctionMode::CSV => write!(f, "csv"),
+        }
+    }
+}
+
 /// A [`Command`] is the top-level construct in egglog.
 /// It includes defining rules, declaring functions,
 /// adding to tables, and running rules (via a [`Schedule`]).

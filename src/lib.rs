@@ -210,7 +210,7 @@ pub enum CommandOutput {
     /// The report from all runs
     OverallStatistics(RunReport),
     /// A printed function and all its values
-    PrintFunction(Function, TermDag, Vec<(Term, Term)>),
+    PrintFunction(Function, TermDag, Vec<(Term, Term)>, PrintFunctionMode),
     /// The report from a single run
     RunSchedule(RunReport),
 }
@@ -239,17 +239,46 @@ impl std::fmt::Display for CommandOutput {
             CommandOutput::OverallStatistics(run_report) => {
                 write!(f, "Overall statistics:\n{}", run_report)
             }
-            CommandOutput::PrintFunction(function, termdag, terms_and_outputs) => {
+            CommandOutput::PrintFunction(function, termdag, terms_and_outputs, mode) => {
                 let out_is_unit = function.schema.output.name() == UnitSort.name();
-                writeln!(f, "(")?;
-                for (term, output) in terms_and_outputs.iter() {
-                    write!(f, "   {}", termdag.to_string(term))?;
-                    if !out_is_unit {
-                        write!(f, " -> {}", termdag.to_string(output))?;
+                if *mode == PrintFunctionMode::CSV {
+                    for (term, output) in terms_and_outputs {
+                        match term {
+                            Term::App(name, children) => {
+                                write!(f, "{}", name)?;
+                                for child_id in children {
+                                    let child = termdag.to_string(termdag.get(*child_id));
+                                    write!(f, ",")?;
+                                    if child.contains(',')
+                                        || child.contains('\n')
+                                        || child.contains('"')
+                                    {
+                                        // escape commas and newlines in CSV
+                                        write!(f, "\"{}\"", child.replace('"', "\"\""))?;
+                                    } else {
+                                        write!(f, "{}", child)?;
+                                    }
+                                }
+
+                                if !out_is_unit {
+                                    write!(f, ",{}", termdag.to_string(&output))?;
+                                }
+                            }
+                            _ => panic!("Expect function_to_dag to return a list of apps."),
+                        }
                     }
-                    writeln!(f)?;
+                    writeln!(f)
+                } else {
+                    writeln!(f, "(")?;
+                    for (term, output) in terms_and_outputs.iter() {
+                        write!(f, "   {}", termdag.to_string(term))?;
+                        if !out_is_unit {
+                            write!(f, " -> {}", termdag.to_string(output))?;
+                        }
+                        writeln!(f)?;
+                    }
+                    writeln!(f, ")")
                 }
-                writeln!(f, ")")
             }
             CommandOutput::RunSchedule(_report) => Ok(()),
         }
@@ -628,16 +657,14 @@ impl EGraph {
     ) -> Result<Option<CommandOutput>, Error> {
         let n = match n {
             Some(n) => {
-                log::info!("Printing up to {n} tuples of function {sym}");
+                log::info!("Printing up to {n} tuples of function {sym} as {mode}");
                 n
             }
             None => {
-                log::info!("Printing all tuples of function {sym}");
+                log::info!("Printing all tuples of function {sym} as {mode}");
                 usize::MAX
             }
         };
-
-        let is_csv = mode == PrintFunctionMode::CSV;
 
         let (terms, outputs, termdag) = self.function_to_dag(sym, n, true)?;
         let f = self
@@ -645,67 +672,16 @@ impl EGraph {
             .get(sym)
             // function_to_dag should have checked this
             .unwrap();
-
         let terms_and_outputs: Vec<_> = terms.into_iter().zip(outputs.unwrap()).collect();
+        let output = CommandOutput::PrintFunction(f.clone(), termdag, terms_and_outputs, mode);
         match file {
             Some(mut file) => {
-                let lines = if is_csv {
-                    log::info!("Printing to CSV");
-                    let out_is_unit = f.schema.output.name() == UnitSort.name();
-                    let mut buf = String::new();
-                    let s = &mut buf;
-
-                    for (term, output) in terms_and_outputs {
-                        match term {
-                            Term::App(name, children) => {
-                                debug_assert!(name == sym);
-                                s.push_str(&name);
-                                for child in children
-                                    .iter()
-                                    .map(|child| termdag.to_string(termdag.get(*child)))
-                                {
-                                    s.push(',');
-                                    if child.contains(',')
-                                        || child.contains('\n')
-                                        || child.contains('"')
-                                    {
-                                        // escape commas and newlines in CSV
-                                        s.push('"');
-                                        s.push_str(&child.replace('"', "\"\""));
-                                        s.push('"');
-                                    } else {
-                                        s.push_str(&child);
-                                    }
-                                }
-
-                                if !out_is_unit {
-                                    s.push(',');
-                                    s.push_str(&termdag.to_string(&output));
-                                }
-                            }
-                            _ => panic!("Expect function_to_dag to return a list of apps."),
-                        }
-                    }
-                    s.push('\n');
-                    buf
-                } else {
-                    CommandOutput::PrintFunction(f.clone(), termdag, terms_and_outputs).to_string()
-                };
-
-                file.write_all(lines.as_bytes())
+                log::info!("Writing output to file");
+                file.write_all(output.to_string().as_bytes())
                     .expect("Error writing to file");
                 Ok(None)
             }
-            None => {
-                if is_csv {
-                    panic!("Cannot print a function to CSV if a filename is not provided")
-                };
-                Ok(Some(CommandOutput::PrintFunction(
-                    f.clone(),
-                    termdag,
-                    terms_and_outputs,
-                )))
-            }
+            None => Ok(Some(output)),
         }
     }
 
