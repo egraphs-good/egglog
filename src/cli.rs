@@ -249,8 +249,6 @@ pub enum RunMode {
 
 impl Display for RunMode {
     fn fmt(&self, f: &mut Formatter<'_>) -> std::fmt::Result {
-        // A little bit unintuitive but RunMode is specified as command-line
-        // argument with flag `--mode`, so `--mode none` means a normal run.
         match self {
             RunMode::Normal => write!(f, "normal"),
             RunMode::ShowDesugaredEgglog => write!(f, "resugar"),
