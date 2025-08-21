@@ -268,7 +268,7 @@ impl std::fmt::Display for CommandOutput {
                                 }
 
                                 if !out_is_unit {
-                                    write!(f, ",{}", termdag.to_string(&output))?;
+                                    write!(f, ",{}", termdag.to_string(output))?;
                                 }
                             }
                             _ => panic!("Expect function_to_dag to return a list of apps."),
