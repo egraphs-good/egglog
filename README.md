@@ -33,7 +33,7 @@ cargo install --path=EGGLOG_ROOT_DIRECTORY
 
 ## Usage
 
-The core can used in REPL mode with:
+The core can be used in REPL mode with:
 
 ```
 cargo run --release
@@ -58,7 +58,7 @@ egglog = "1.0.0"
 
 See also the [Python binding](https://github.com/egraphs-good/egglog-python) for using `egglog` in Python.
 
-## Developement
+## Development
 
 To view documentation in a browser, run `cargo doc --open`.
 
