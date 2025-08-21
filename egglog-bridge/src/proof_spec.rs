@@ -26,8 +26,8 @@ define_id!(pub(crate) ReasonSpecId, u32, "A unique identifier for the step in a 
 #[derive(Debug)]
 pub(crate) enum ProofReason {
     Rule(RuleData),
-    /// Congrence reasons contain the "old" term id that the new term is equal
-    /// to. Pairwise equalty proofs are rebuilt at proof reconstruction time.
+    /// Congruence reasons contain the "old" term id that the new term is equal
+    /// to. Pairwise equality proofs are rebuilt at proof reconstruction time.
     CongRow,
     /// A row that was created with no added justification (e.g. base values).
     Fiat {

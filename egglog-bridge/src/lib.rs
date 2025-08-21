@@ -112,9 +112,9 @@ pub struct FunctionConfig {
 impl EGraph {
     /// Create a new EGraph with tracing (aka 'proofs') enabled.
     ///
-    /// Execution of queries against a tracing-enabled EGgraph will be slower,
+    /// Execution of queries against a tracing-enabled EGraph will be slower,
     /// but will annotate the egraph with annotations that can explain how rows
-    /// came to appera.
+    /// came to appear.
     pub fn with_tracing() -> EGraph {
         let mut db = Database::new();
         let uf_table = db.add_table(
