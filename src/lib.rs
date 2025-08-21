@@ -196,6 +196,11 @@ impl RunReport {
         );
     }
 }
+
+/// A user-defined command output trait.
+pub trait UserDefinedCommandOutput: Debug + std::fmt::Display + Send + Sync {}
+impl<T> UserDefinedCommandOutput for T where T: Debug + std::fmt::Display + Send + Sync {}
+
 /// Output from a command.
 #[derive(Clone, Debug)]
 pub enum CommandOutput {
@@ -213,6 +218,8 @@ pub enum CommandOutput {
     PrintFunction(Function, TermDag, Vec<(Term, Term)>, PrintFunctionMode),
     /// The report from a single run
     RunSchedule(RunReport),
+    /// A user defined output
+    UserDefined(Arc<dyn UserDefinedCommandOutput>),
 }
 
 impl std::fmt::Display for CommandOutput {
@@ -281,6 +288,9 @@ impl std::fmt::Display for CommandOutput {
                 }
             }
             CommandOutput::RunSchedule(_report) => Ok(()),
+            CommandOutput::UserDefined(output) => {
+                write!(f, "{}", *output)
+            }
         }
     }
 }
