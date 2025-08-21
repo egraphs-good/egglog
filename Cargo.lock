@@ -502,7 +502,7 @@ checksum = "1c7a8fb8a9fbf66c1f703fe16184d10ca0ee9d23be5b4436400408ba54a95005"
 
 [[package]]
 name = "egglog"
-version = "0.5.0"
+version = "1.0.0"
 dependencies = [
  "add_primitive",
  "chrono",
