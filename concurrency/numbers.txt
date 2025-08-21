@@ -1,0 +1,47 @@
+# From an M1 Ultra CPU
+
+Timer precision: 41 ns
+simple_read                     fastest       │ slowest       │ median        │ mean          │ samples │ iters
+├─ read_contention                            │               │               │               │         │
+│  ├─ ReadOptimizedLock<usize>                │               │               │               │         │
+│  │  ├─ t=1                    4.692 ns      │ 568.4 ns      │ 5.522 ns      │ 11.11 ns      │ 100     │ 10000
+│  │  ├─ t=2                    5.102 ns      │ 70.94 ns      │ 12.6 ns       │ 13.55 ns      │ 100     │ 10000
+│  │  ├─ t=4                    5.102 ns      │ 416.7 ns      │ 15.11 ns      │ 21.97 ns      │ 100     │ 10000
+│  │  ├─ t=8                    6.772 ns      │ 325.9 ns      │ 29.89 ns      │ 37.82 ns      │ 104     │ 10400
+│  │  ├─ t=16                   10.94 ns      │ 563 ns        │ 33.86 ns      │ 60.89 ns      │ 112     │ 11200
+│  │  ╰─ t=20                   7.192 ns      │ 456.3 ns      │ 28.02 ns      │ 40.84 ns      │ 100     │ 10000
+│  ╰─ RwLock<usize>                           │               │               │               │         │
+│     ├─ t=1                    13.44 ns      │ 16.36 ns      │ 14.27 ns      │ 14.23 ns      │ 100     │ 10000
+│     ├─ t=2                    13.44 ns      │ 30.94 ns      │ 14.27 ns      │ 15.29 ns      │ 100     │ 10000
+│     ├─ t=4                    13.02 ns      │ 220.9 ns      │ 16.56 ns      │ 62.22 ns      │ 100     │ 10000
+│     ├─ t=8                    13.44 ns      │ 2.499 µs      │ 474.4 ns      │ 643.5 ns      │ 104     │ 10400
+│     ├─ t=16                   14.69 ns      │ 14.29 µs      │ 7.085 µs      │ 7.651 µs      │ 112     │ 11200
+│     ╰─ t=20                   14.69 ns      │ 15.34 µs      │ 8.376 µs      │ 8.025 µs      │ 100     │ 10000
+╰─ read_throughput                            │               │               │               │         │
+   ├─ ReadOptimizedLock<usize>                │               │               │               │         │
+   │  ├─ 1                      5.075 ms      │ 5.415 ms      │ 5.121 ms      │ 5.133 ms      │ 50      │ 50
+   │  │                         197 Mitem/s   │ 184.6 Mitem/s │ 195.2 Mitem/s │ 194.7 Mitem/s │         │
+   │  ├─ 2                      2.964 ms      │ 4.487 ms      │ 2.992 ms      │ 3.122 ms      │ 50      │ 50
+   │  │                         337.3 Mitem/s │ 222.8 Mitem/s │ 334.1 Mitem/s │ 320.2 Mitem/s │         │
+   │  ├─ 4                      1.771 ms      │ 2.705 ms      │ 2.422 ms      │ 2.313 ms      │ 50      │ 50
+   │  │                         564.5 Mitem/s │ 369.6 Mitem/s │ 412.7 Mitem/s │ 432.2 Mitem/s │         │
+   │  ├─ 8                      1.672 ms      │ 2.123 ms      │ 1.974 ms      │ 1.929 ms      │ 50      │ 50
+   │  │                         597.8 Mitem/s │ 470.9 Mitem/s │ 506.4 Mitem/s │ 518.2 Mitem/s │         │
+   │  ├─ 16                     1.046 ms      │ 2.246 ms      │ 1.803 ms      │ 1.762 ms      │ 50      │ 50
+   │  │                         955.4 Mitem/s │ 445 Mitem/s   │ 554.4 Mitem/s │ 567.5 Mitem/s │         │
+   │  ╰─ 20                     962.4 µs      │ 2.053 ms      │ 1.759 ms      │ 1.665 ms      │ 50      │ 50
+   │                            1.038 Gitem/s │ 487 Mitem/s   │ 568.2 Mitem/s │ 600.5 Mitem/s │         │
+   ╰─ RwLock<usize>                           │               │               │               │         │
+      ├─ 1                      13.41 ms      │ 14 ms         │ 13.44 ms      │ 13.49 ms      │ 50      │ 50
+      │                         74.51 Mitem/s │ 71.42 Mitem/s │ 74.35 Mitem/s │ 74.1 Mitem/s  │         │
+      ├─ 2                      33.59 ms      │ 44.16 ms      │ 36.04 ms      │ 35.81 ms      │ 50      │ 50
+      │                         29.76 Mitem/s │ 22.64 Mitem/s │ 27.74 Mitem/s │ 27.92 Mitem/s │         │
+      ├─ 4                      83.75 ms      │ 110.2 ms      │ 90.47 ms      │ 92.34 ms      │ 50      │ 50
+      │                         11.93 Mitem/s │ 9.072 Mitem/s │ 11.05 Mitem/s │ 10.82 Mitem/s │         │
+      ├─ 8                      284.9 ms      │ 375.8 ms      │ 322.9 ms      │ 327.2 ms      │ 50      │ 50
+      │                         3.509 Mitem/s │ 2.66 Mitem/s  │ 3.096 Mitem/s │ 3.055 Mitem/s │         │
+      ├─ 16                     715.5 ms      │ 1.591 s       │ 1.289 s       │ 1.288 s       │ 50      │ 50
+      │                         1.397 Mitem/s │ 628.5 Kitem/s │ 775.4 Kitem/s │ 776.2 Kitem/s │         │
+      ╰─ 20                     903.8 ms      │ 1.163 s       │ 1.049 s       │ 1.036 s       │ 50      │ 50
+                                1.106 Mitem/s │ 859.8 Kitem/s │ 952.9 Kitem/s │ 964.6 Kitem/s │         │
+
