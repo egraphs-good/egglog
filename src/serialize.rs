@@ -14,6 +14,40 @@ pub struct SerializeConfig {
     pub root_eclasses: Vec<(ArcSort, Value)>,
 }
 
+/// Output of serializing an e-graph, including values that were omitted if any.
+pub struct SerializeOutput {
+    /// The serialized e-graph.
+    pub egraph: egraph_serialize::EGraph,
+    /// Functions with more calls than max_calls_per_function, so that not all values are included.
+    pub truncated_functions: Vec<String>,
+    /// Functions that were discarded from the output, because more functions were present than max_functions
+    pub discarded_functions: Vec<String>,
+}
+
+impl SerializeOutput {
+    /// Returns true if the serialization is complete and no functions were truncated or discarded.
+    pub fn is_complete(&self) -> bool {
+        self.truncated_functions.is_empty() && self.discarded_functions.is_empty()
+    }
+    /// Description of what was omitted from the e-graph
+    pub fn omitted_description(&self) -> String {
+        let mut msg = String::new();
+        if !self.discarded_functions.is_empty() {
+            msg.push_str(&format!(
+                "Omitted: {}\n",
+                self.discarded_functions.join(", ")
+            ));
+        }
+        if !self.truncated_functions.is_empty() {
+            msg.push_str(&format!(
+                "Truncated: {}\n",
+                self.truncated_functions.join(", ")
+            ));
+        }
+        msg
+    }
+}
+
 #[allow(dead_code)]
 struct Serializer {
     node_ids: NodeIDs,
@@ -87,8 +121,9 @@ impl EGraph {
     /// - Nodes will have consistant IDs throughout execution of e-graph (used for animating changes in the visualization)
     /// - Edges in the visualization will be well distributed (used for animating changes in the visualization)
     ///   (Note that this will be changed in `<https://github.com/egraphs-good/egglog/pull/158>` so that edges point to exact nodes instead of looking up the e-class)
-    pub fn serialize(&self, config: SerializeConfig) -> (egraph_serialize::EGraph, Option<String>) {
-        let mut msg = String::new();
+    pub fn serialize(&self, config: SerializeConfig) -> SerializeOutput {
+        let mut truncated_functions = Vec::new();
+        let mut discarded_functions = Vec::new();
         let max_calls_per_function = config.max_calls_per_function.unwrap_or(usize::MAX);
         let max_functions = config.max_functions.unwrap_or(usize::MAX);
         let mut all_calls: Vec<(
@@ -102,16 +137,13 @@ impl EGraph {
         let mut functions_kept = 0usize;
         for (name, function) in self.functions.iter().filter(|(_, f)| !f.decl.ignore_viz) {
             if functions_kept >= max_functions {
-                msg.push_str(&format!("Max {} unique functions\n", functions_kept));
-                break;
+                discarded_functions.push(name.clone());
+                continue;
             }
             let mut rows = 0;
             self.backend.for_each_while(function.backend_id, |row| {
                 if rows >= max_calls_per_function {
-                    msg.push_str(&format!(
-                        "Max {} unique nodes for function {}\n",
-                        max_calls_per_function, name
-                    ));
+                    truncated_functions.push(name.clone());
                     return false;
                 }
                 let (out, inps) = row.vals.split_last().unwrap();
@@ -186,9 +218,11 @@ impl EGraph {
             .iter()
             .map(|(sort, v)| self.value_to_class_id(sort, *v))
             .collect();
-
-        let msg = if msg.is_empty() { None } else { Some(msg) };
-        (serializer.result, msg)
+        SerializeOutput {
+            egraph: serializer.result,
+            truncated_functions,
+            discarded_functions,
+        }
     }
 
     /// Gets the serialized class ID for a value.
