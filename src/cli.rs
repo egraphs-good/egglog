@@ -5,6 +5,7 @@ use std::io::{self, BufRead, BufReader, Read, Write};
 pub mod bin {
     use super::*;
     use clap::Parser;
+    use env_logger::Env;
     use std::path::PathBuf;
 
     #[derive(Debug, Parser)]
@@ -58,8 +59,7 @@ pub mod bin {
     /// should also call this function.
     #[allow(clippy::disallowed_macros)]
     pub fn cli(mut egraph: EGraph) {
-        env_logger::Builder::new()
-            .filter_level(log::LevelFilter::Info)
+        env_logger::Builder::from_env(Env::default().default_filter_or("warn"))
             .format_timestamp(None)
             .format_target(false)
             .parse_default_env()
