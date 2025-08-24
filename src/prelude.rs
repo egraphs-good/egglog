@@ -265,7 +265,7 @@ impl RustRuleContext<'_, '_> {
 
     /// Do a table lookup. This is potentially a mutable operation!
     /// For more information, see `egglog_bridge::TableAction::lookup`.
-    pub fn lookup(&mut self, table: &str, key: Vec<Value>) -> Option<Value> {
+    pub fn lookup(&mut self, table: &str, key: &[Value]) -> Option<Value> {
         self.get_table_action(table).lookup(self.exec_state, &key)
     }
 
