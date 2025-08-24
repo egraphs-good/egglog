@@ -34,7 +34,7 @@ fn test_simple_extract2() {
             None,
             r#"
              (datatype Term
-               (Origin :cost 0) 
+               (Origin :cost 0)
                (BigStep Term :cost 10)
                (SmallStep Term :cost 1)
              )
@@ -70,7 +70,7 @@ fn test_simple_extract3() {
             None,
             r#"
              (datatype Fruit
-               (Apple i64 :cost 1) 
+               (Apple i64 :cost 1)
                (Orange f64 :cost 2)
              )
              (datatype Vegetable
@@ -127,9 +127,9 @@ fn test_simple_extract5() {
         .parse_and_run_program(
             None,
             r#"
-             (datatype Foo 
+             (datatype Foo
                 (Foobar i64)
-             ) 
+             )
              (let foobar (Foobar 42))
              (datatype Bar
                 (Barfoo i64)
@@ -194,7 +194,7 @@ fn test_simple_extract7() {
             )
             (sort Mapsrt1 (Map i64 Foo))
             (let map1 (map-insert (map-empty) 0 (bar)))
-            
+
             (sort Mapsrt2 (Map bool Foo))
             (let map2 (map-insert (map-empty) false (baz)))
             ;(let map2b (map-insert (map-empty) false (bar)))
@@ -202,7 +202,7 @@ fn test_simple_extract7() {
 
             ;(extract map1)
             ;(extract map2)
-            
+
             ;(function toerr (Mapsrt2) Foo :no-merge)
 
             ;(set (toerr map2) (bar))
@@ -339,7 +339,7 @@ fn test_extract_variants1() {
             None,
             r#"
              (datatype Term
-               (Origin :cost 0) 
+               (Origin :cost 0)
                (BigStep Term :cost 10)
                (SmallStep Term :cost 1)
              )
@@ -668,9 +668,10 @@ fn test_value_to_classid() {
     let expr = termdag.term_to_expr(&term, span!());
     let (sort, value) = egraph.eval_expr(&expr).unwrap();
 
-    let serialized = egraph.serialize(SerializeConfig::default());
+    let serialize_output = egraph.serialize(SerializeConfig::default());
+    assert!(serialize_output.is_complete());
     let class_id = egraph.value_to_class_id(&sort, value);
-    assert!(serialized.class_data.get(&class_id).is_some());
+    assert!(serialize_output.egraph.class_data.get(&class_id).is_some());
     assert_eq!(value, egraph.class_id_to_value(&class_id));
 }
 
@@ -692,9 +693,10 @@ fn test_serialize_617() {
     let mut egraph = EGraph::default();
     egraph.parse_and_run_program(None, program).unwrap();
 
-    let serialized = egraph.serialize(SerializeConfig::default());
-    assert_eq!(serialized.class_data.len(), 6);
-    assert_eq!(serialized.nodes.len(), 12);
+    let serialize_output = egraph.serialize(SerializeConfig::default());
+    assert!(serialize_output.is_complete());
+    assert_eq!(serialize_output.egraph.class_data.len(), 6);
+    assert_eq!(serialize_output.egraph.nodes.len(), 12);
 }
 
 #[test]
@@ -715,7 +717,8 @@ fn test_serialize_subsume_status() {
         )
         .unwrap();
 
-    let serialized = egraph.serialize(SerializeConfig::default());
+    let serialize_output = egraph.serialize(SerializeConfig::default());
+    assert!(serialize_output.is_complete());
     let a_id = egraph.to_node_id(
         None,
         egglog::SerializedNode::Function {
@@ -730,8 +733,8 @@ fn test_serialize_subsume_status() {
             offset: 0,
         },
     );
-    assert!(serialized.nodes[&a_id].subsumed);
-    assert!(!serialized.nodes[&b_id].subsumed);
+    assert!(serialize_output.egraph.nodes[&a_id].subsumed);
+    assert!(!serialize_output.egraph.nodes[&b_id].subsumed);
 }
 
 #[test]
@@ -747,4 +750,54 @@ fn test_shadowing_query() {
 fn test_shadowing_push() {
     let s = "(push) (let x 1) (pop) (let x 1)";
     EGraph::default().parse_and_run_program(None, s).unwrap();
+}
+
+#[test]
+fn test_serialize_message_max_functions() {
+    let mut egraph = EGraph::default();
+    // Create three zero-arg constructors
+    egraph
+        .parse_and_run_program(
+            None,
+            r#"
+            (datatype A)
+            (constructor a () A)
+            (constructor b () A)
+            (constructor c () A)
+            (a) (b) (c)
+            "#,
+        )
+        .unwrap();
+    let serialize_output = egraph.serialize(SerializeConfig {
+        max_functions: Some(2),
+        max_calls_per_function: None,
+        include_temporary_functions: false,
+        root_eclasses: vec![],
+    });
+    assert!(!serialize_output.is_complete());
+    assert_eq!(serialize_output.omitted_description(), "Omitted: c\n");
+}
+
+#[test]
+fn test_serialize_message_max_calls_per_function() {
+    let mut egraph = EGraph::default();
+    // Single constructor with many distinct calls (different arguments)
+    egraph
+        .parse_and_run_program(
+            None,
+            r#"
+            (datatype N)
+            (constructor mk (i64) N)
+            (mk 0) (mk 1) (mk 2) (mk 3)
+            "#,
+        )
+        .unwrap();
+    let serialize_output = egraph.serialize(SerializeConfig {
+        max_functions: None,
+        max_calls_per_function: Some(2),
+        include_temporary_functions: false,
+        root_eclasses: vec![],
+    });
+    assert!(!serialize_output.is_complete());
+    assert_eq!(serialize_output.omitted_description(), "Truncated: mk\n");
 }
