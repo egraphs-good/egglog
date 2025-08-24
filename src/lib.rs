@@ -1184,7 +1184,7 @@ impl EGraph {
             }
             ResolvedNCommand::Function(fdecl) => {
                 self.declare_function(&fdecl)?;
-                log::info!("Declared function {}.", fdecl.name)
+                log::info!("Declared {} {}.", fdecl.subtype, fdecl.name)
             }
             ResolvedNCommand::AddRuleset(_span, name) => {
                 self.add_ruleset(name.clone());

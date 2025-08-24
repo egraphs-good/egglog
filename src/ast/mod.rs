@@ -883,9 +883,9 @@ pub enum FunctionSubtype {
 impl Display for FunctionSubtype {
     fn fmt(&self, f: &mut Formatter) -> std::fmt::Result {
         match self {
-            FunctionSubtype::Constructor => write!(f, "Constructor"),
-            FunctionSubtype::Relation => write!(f, "Relation"),
-            FunctionSubtype::Custom => write!(f, "CustomFunction"),
+            FunctionSubtype::Constructor => write!(f, "constructor"),
+            FunctionSubtype::Relation => write!(f, "relation"),
+            FunctionSubtype::Custom => write!(f, "function"),
         }
     }
 }
