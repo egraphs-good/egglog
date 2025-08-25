@@ -344,7 +344,7 @@ impl Parser {
                     return error!(
                         span,
                         "usages:\n(sort <name>)\n(sort <name> (<container sort> <argument sort>*))"
-                    )
+                    );
                 }
             },
             "datatype" => match tail {
@@ -370,7 +370,7 @@ impl Parser {
                             return error!(
                                 span,
                                 "functions are required to specify merge behaviour"
-                            )
+                            );
                         }
                         _ => return error!(span, "could not parse function options"),
                     },
@@ -434,7 +434,7 @@ impl Parser {
                     return error!(
                         span,
                         "usage: (unstable-combined-ruleset <name> <child ruleset>*)"
-                    )
+                    );
                 }
             },
             "rule" => match tail {
@@ -623,10 +623,20 @@ impl Parser {
                                 mode = match mode_str.as_str() {
                                     "default" => PrintFunctionMode::Default,
                                     "csv" => PrintFunctionMode::CSV,
-                                    _ => return error!(span, "Unknown print-function mode. Supported modes are `default` and `csv`."),
+                                    _ => {
+                                        return error!(
+                                            span,
+                                            "Unknown print-function mode. Supported modes are `default` and `csv`."
+                                        );
+                                    }
                                 };
                             }
-                            _ => return error!(span, "Unknown option to print-function. Supported options are `:mode csv|default` and `:file \"<filename>\"`."),
+                            _ => {
+                                return error!(
+                                    span,
+                                    "Unknown option to print-function. Supported options are `:mode csv|default` and `:file \"<filename>\"`."
+                                );
+                            }
                         }
                     }
                     vec![Command::PrintFunction(
@@ -641,7 +651,7 @@ impl Parser {
                     return error!(
                         span,
                         "usage: (print-function <table name> <number of rows>? <option>*)"
-                    )
+                    );
                 }
             },
             "print-size" => match tail {
@@ -865,7 +875,7 @@ impl Parser {
                     return error!(
                         span,
                         "usage: (sort <name> (<container sort> <argument sort>*))"
-                    )
+                    );
                 }
             },
             _ => {
@@ -1022,7 +1032,7 @@ impl SexpParser {
                                 (true, '\\') => '\\',
                                 (true, '\"') => '\"',
                                 (true, c) => {
-                                    return error!(s(span), "unrecognized escape character {c}")
+                                    return error!(s(span), "unrecognized escape character {c}");
                                 }
                             });
                             in_escape = false;

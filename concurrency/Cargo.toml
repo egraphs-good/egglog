@@ -1,0 +1,16 @@
+[package]
+name = "concurrency"
+version = "1.0.0"
+edition = "2021"
+
+[dependencies]
+arc-swap = "1.7.1"
+rayon = "1.10"
+
+[dev-dependencies]
+divan = "0.1.15"
+rayon = "1.10"
+
+[[bench]]
+name = "simple_read"
+harness = false

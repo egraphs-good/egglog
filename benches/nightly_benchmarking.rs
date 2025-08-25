@@ -1,5 +1,5 @@
 mod common;
-use codspeed_criterion_compat::{criterion_group, criterion_main, Criterion};
+use codspeed_criterion_compat::{Criterion, criterion_group, criterion_main};
 
 fn criterion_benchmark(c: &mut Criterion) {
     common::benchmark_files_in_glob(c, "egglog-benchmarks/**/*.egg");

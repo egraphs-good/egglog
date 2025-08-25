@@ -18,7 +18,7 @@ pub fn run_example(filename: &str, program: &str, no_messages: bool) {
         }
     }
     // test performance of serialization as well
-    let _ = egraph.serialize(egglog::SerializeConfig::default());
+    egraph.serialize(egglog::SerializeConfig::default());
 }
 
 pub fn benchmark_files_in_glob(c: &mut Criterion, glob: &str) {

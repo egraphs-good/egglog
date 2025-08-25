@@ -1084,7 +1084,7 @@ impl TypeConstraint for AllEqualTypeConstraint {
                         },
                         expected: exact_length,
                     },
-                )]
+                )];
             }
             _ => (),
         }

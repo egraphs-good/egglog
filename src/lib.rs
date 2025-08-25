@@ -33,13 +33,13 @@ use ast::*;
 pub use cli::bin::*;
 use constraint::{Constraint, Problem, SimpleTypeConstraint, TypeConstraint};
 use core::{AtomTerm, ResolvedAtomTerm, ResolvedCall};
-use core_relations::{make_external_func, ExternalFunctionId};
 pub use core_relations::{BaseValue, ContainerValue, ExecutionState, Value};
+use core_relations::{ExternalFunctionId, make_external_func};
 pub use egglog_bridge::FunctionRow;
 use egglog_bridge::{ColumnTy, IterationReport, QueryEntry};
 use extract::{CostModel, DefaultCost, Extractor, TreeAdditiveCostModel};
 use indexmap::map::Entry;
-use log::{log_enabled, Level};
+use log::{Level, log_enabled};
 use numeric_id::DenseIdMap;
 use prelude::*;
 use scheduler::{SchedulerId, SchedulerRecord};
@@ -764,7 +764,7 @@ impl EGraph {
     }
 
     /// Extract a value to a [`TermDag`] and [`Term`] in the [`TermDag`] using the default cost model.
-    /// See also [`extract_value_with_cost_model`] for more control.
+    /// See also [`EGraph::extract_value_with_cost_model`] for more control.
     pub fn extract_value(
         &self,
         sort: &ArcSort,
@@ -775,7 +775,7 @@ impl EGraph {
 
     /// Extract a value to a [`TermDag`] and [`Term`] in the [`TermDag`].
     /// Note that the `TermDag` may contain a superset of the nodes in the `Term`.
-    /// See also [`extract_value_to_string`] for convenience.
+    /// See also [`EGraph::extract_value_to_string`] for convenience.
     pub fn extract_value_with_cost_model<CM: CostModel<DefaultCost> + 'static>(
         &self,
         sort: &ArcSort,
@@ -790,7 +790,7 @@ impl EGraph {
     }
 
     /// Extract a value to a string for printing.
-    /// See also [`extract_value`] for more control.
+    /// See also [`EGraph::extract_value`] for more control.
     pub fn extract_value_to_string(
         &self,
         sort: &ArcSort,
@@ -1090,7 +1090,7 @@ impl EGraph {
             }
             ResolvedNCommand::Function(fdecl) => {
                 self.declare_function(&fdecl)?;
-                log::info!("Declared function {}.", fdecl.name)
+                log::info!("Declared {} {}.", fdecl.subtype, fdecl.name)
             }
             ResolvedNCommand::AddRuleset(_span, name) => {
                 self.add_ruleset(name.clone());
@@ -1662,7 +1662,7 @@ impl<'a> BackendRule<'a> {
                         true => None,
                         false => Some(false),
                     };
-                    self.rb.query_table(f, &args, is_subsumed).unwrap()
+                    self.rb.query_table(f, &args, is_subsumed).unwrap();
                 }
                 ResolvedCall::Primitive(p) => {
                     let (p, args, ty) = self.prim(p, &atom.args);
@@ -1722,7 +1722,7 @@ impl<'a> BackendRule<'a> {
                             Change::Delete => self.rb.remove(f, &args),
                             Change::Subsume if can_subsume => self.rb.subsume(f, &args),
                             Change::Subsume => {
-                                return Err(Error::SubsumeMergeError(name, span.clone()))
+                                return Err(Error::SubsumeMergeError(name, span.clone()));
                             }
                         }
                     }
@@ -1777,7 +1777,9 @@ pub enum Error {
     CheckError(Vec<Fact>, Span),
     #[error("{1}\nNo such ruleset: {0}")]
     NoSuchRuleset(String, Span),
-    #[error("{1}\nAttempted to add a rule to combined ruleset {0}. Combined rulesets may only depend on other rulesets.")]
+    #[error(
+        "{1}\nAttempted to add a rule to combined ruleset {0}. Combined rulesets may only depend on other rulesets."
+    )]
     CombinedRulesetError(String, Span),
     #[error("{0}")]
     BackendError(String),
