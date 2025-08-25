@@ -28,7 +28,8 @@ The following instructions are for using/developing the core directly.
 Install [Cargo](https://doc.rust-lang.org/cargo/getting-started/installation.html).
 
 ```
-cargo install --path=EGGLOG_ROOT_DIRECTORY
+git clone git@github.com:egraphs-good/egglog.git
+cargo install --path=egglog
 ```
 
 ## Usage
@@ -64,19 +65,15 @@ To view documentation in a browser, run `cargo doc --open`.
 
 Run `cargo test` to run the core `egglog` tests.
 
-<!---
-
 ## Community extensions
 
-Move to experimental readme
+The community has maintained egglog extensions for IDEs. However, they are outdated at the time of writing.
 
 * [@hatoo](https://github.com/hatoo) maintains an [egglog-language extension](https://marketplace.visualstudio.com/items?itemName=hatookov.egglog-language) in VS Code (just search for "egglog" in VS Code). (Outdated)
 * [@segeljakt](https://github.com/segeljakt) maintains a [Neovim plugin](https://github.com/segeljakt/tree-sitter-egg) for egglog using tree-sitter. (Outdated)
 
---->
-
-
 ## Benchmarks
+
 All PRs use [`codspeed`](https://codspeed.io/) to evaluate the performance of a
 change against a suite of micro-benchmarks. You should see a "performance
 report" from codspeed a few minutes after posting a PR for review. Generally
@@ -101,14 +98,20 @@ cargo build --profile profiling
 samply record ./target/profiling/egglog tests/extract-vec-bench.egg
 # [optional] run the egglog file without logging or printing messages, which can help reduce the stdout
 # when you are profiling extracting a large expression
-env RUST_LOG=error samply record ./target/profiling/egglog --dont-print-messages tests/extract-vec-bench.egg
+env RUST_LOG=error samply record ./target/profiling/egglog --no-messages tests/extract-vec-bench.egg
 ```
 
-**Pay Attention to Parallelism** egglog has support to run programs in parallel
+## Parallelism
+
+egglog has support to run programs in parallel
 via the `-j` flag. This support is relatively new and most users just run
 egglog single-threaded; the codspeed benchmarks only evaluate single-threaded
 performance. However, please take care not to pessimize parallel performance
 where possible (e.g. by adding coarse-grained locks).
+
+We use rayon's global thread pool for parallelism, and the number of threads used
+is set to `1` by default when egglog's CLI is run. If you use egglog as a library, 
+you can control the level of parallelism by setting rayon's `num_threads`.
 
 ### Codspeed specifics
 
