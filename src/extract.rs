@@ -609,7 +609,9 @@ impl<C: Cost + Ord + Eq + Copy + Debug> Extractor<C> {
 
             res
         } else {
-            log::warn!("extracting multiple variants for containers or primitives is not implemented, returning a single variant.");
+            log::warn!(
+                "extracting multiple variants for containers or primitives is not implemented, returning a single variant."
+            );
             if let Some(res) = self.extract_best_with_sort(egraph, termdag, value, sort) {
                 vec![res]
             } else {

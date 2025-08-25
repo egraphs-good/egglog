@@ -710,7 +710,7 @@ pub enum TypeError {
 
 #[cfg(test)]
 mod test {
-    use crate::{typechecking::TypeError, EGraph, Error};
+    use crate::{EGraph, Error, typechecking::TypeError};
 
     #[test]
     fn test_arity_mismatch() {

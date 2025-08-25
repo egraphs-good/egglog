@@ -3,7 +3,7 @@
 //! ```
 //! use egglog::prelude::*;
 //! ```
-//! See also [`rule`], [`rust_rule`], [`query`], [`LeafSort`],
+//! See also [`rule`], [`rust_rule`], [`query`], [`BaseSort`],
 //! and [`ContainerSort`].
 
 use crate::*;
@@ -12,8 +12,8 @@ use std::any::{Any, TypeId};
 // Re-exports in `prelude` for convenience.
 pub use egglog::ast::{Action, Fact, Facts, GenericActions};
 pub use egglog::sort::{BigIntSort, BigRatSort, BoolSort, F64Sort, I64Sort, StringSort, UnitSort};
+pub use egglog::{EGraph, span};
 pub use egglog::{action, actions, datatype, expr, fact, facts, sort, vars};
-pub use egglog::{span, EGraph};
 
 pub mod exprs {
     use super::*;
@@ -695,7 +695,7 @@ impl<T: BaseSort> Sort for BaseSortImpl<T> {
 /// A "default" implementation of [`Sort`] for types which
 /// just want to store a pure data structure in the e-graph.
 /// If you implement this trait, do not implement `Sort` or
-/// `LeafSort`. Use `add_container_sort` to register container
+/// `BaseSort`. Use `add_container_sort` to register container
 /// sorts with the `EGraph`. See `Sort` for documentation
 /// of the methods. Do not override `to_arcsort`.
 pub trait ContainerSort: Any + Send + Sync + Debug {
