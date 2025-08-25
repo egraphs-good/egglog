@@ -842,7 +842,7 @@ impl EGraph {
     }
 
     /// Extract a value to a [`TermDag`] and [`Term`] in the [`TermDag`] using the default cost model.
-    /// See also [`extract_value_with_cost_model`] for more control.
+    /// See also [`EGraph::extract_value_with_cost_model`] for more control.
     pub fn extract_value(
         &self,
         sort: &ArcSort,
@@ -853,7 +853,7 @@ impl EGraph {
 
     /// Extract a value to a [`TermDag`] and [`Term`] in the [`TermDag`].
     /// Note that the `TermDag` may contain a superset of the nodes in the `Term`.
-    /// See also [`extract_value_to_string`] for convenience.
+    /// See also [`EGraph::extract_value_to_string`] for convenience.
     pub fn extract_value_with_cost_model<CM: CostModel<DefaultCost> + 'static>(
         &self,
         sort: &ArcSort,
@@ -868,7 +868,7 @@ impl EGraph {
     }
 
     /// Extract a value to a string for printing.
-    /// See also [`extract_value`] for more control.
+    /// See also [`EGraph::extract_value`] for more control.
     pub fn extract_value_to_string(
         &self,
         sort: &ArcSort,
