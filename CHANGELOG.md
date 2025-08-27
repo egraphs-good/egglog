@@ -2,6 +2,31 @@
 
 ## [Unreleased] - ReleaseDate
 
+## [1.0.0] - 2025-8-22
+
+This is the first release of egglog that is based on our new database-first, highly parallel backend.
+
+**Abandoned features**
+
+- `extract` is now a command instead of an action, which means calling `extract` within a rule is not allowed.
+  Instead, the user is encouraged to use `print-function`.
+
+Features
+
+- Cost trait (#605)
+- A new set of Rust APIs in `egglog::prelude` (#586)
+- User-defined commands (#597)
+- Scheduler interface for custom scheduling (#587)
+
+Misc. Improvements
+
+- Improves usability of `print-function` (#640)
+- Desugar `rewrite`s to use `set`s when possible (#626)
+- Grounded-ness check for ungrounded variables (#635)
+- Don't panic when extracting nonexistent term (#629) 
+- Documentation improvements (#634)
+- Add parallelism flag and remove nondeterminism flag (#640, #642)
+
 ## [0.5.0] - 2025-6-10
 
 This is the last major release before we switch to a database-first, highly parallel new backend.
@@ -154,12 +179,13 @@ This is egglog's first release! Egglog is ready for use, but is still fairly exp
 As of yet, the rust interface is not documented or well supported. We reccomend using the language interface. Egglog also lacks proofs, a feature that egg has.
 
 
-[Unreleased]: https://github.com/egraphs-good/egglog/compare/v0.2.0...HEAD
+[Unreleased]: https://github.com/egraphs-good/egglog/compare/v1.0.0...HEAD
 [0.1.0]: https://github.com/egraphs-good/egglog/tree/v0.1.0
 [0.2.0]: https://github.com/egraphs-good/egglog/tree/v0.2.0
 [0.3.0]: https://github.com/egraphs-good/egglog/tree/v0.3.0
 [0.4.0]: https://github.com/egraphs-good/egglog/tree/v0.4.0
 [0.5.0]: https://github.com/egraphs-good/egglog/tree/v0.5.0
+[1.0.0]: https://github.com/egraphs-good/egglog/tree/v1.0.0
 
 
 See release-instructions.md for more information on how to do a release.

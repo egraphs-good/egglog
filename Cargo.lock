@@ -4,7 +4,7 @@ version = 4
 
 [[package]]
 name = "add_primitive"
-version = "0.1.0"
+version = "1.0.0"
 dependencies = [
  "quote",
  "syn 2.0.102",
@@ -296,7 +296,7 @@ dependencies = [
 
 [[package]]
 name = "concurrency"
-version = "0.1.0"
+version = "1.0.0"
 dependencies = [
  "arc-swap",
  "divan",
@@ -311,7 +311,7 @@ checksum = "baf0a07a401f374238ab8e2f11a104d2851bf9ce711ec69804834de8af45c7af"
 
 [[package]]
 name = "core-relations"
-version = "0.1.0"
+version = "1.0.0"
 dependencies = [
  "anyhow",
  "bumpalo",
@@ -502,7 +502,7 @@ checksum = "1c7a8fb8a9fbf66c1f703fe16184d10ca0ee9d23be5b4436400408ba54a95005"
 
 [[package]]
 name = "egglog"
-version = "0.5.0"
+version = "1.0.0"
 dependencies = [
  "add_primitive",
  "chrono",
@@ -532,7 +532,7 @@ dependencies = [
 
 [[package]]
 name = "egglog-bridge"
-version = "0.1.0"
+version = "1.0.0"
 dependencies = [
  "anyhow",
  "core-relations",
@@ -996,7 +996,7 @@ dependencies = [
 
 [[package]]
 name = "numeric-id"
-version = "0.1.0"
+version = "1.0.0"
 dependencies = [
  "lazy_static",
  "rayon",
@@ -1513,7 +1513,7 @@ checksum = "5a5f39404a5da50712a4c1eecf25e90dd62b613502b7e925fd4e4d19b5c96512"
 
 [[package]]
 name = "union-find"
-version = "0.1.0"
+version = "1.0.0"
 dependencies = [
  "concurrency",
  "crossbeam",

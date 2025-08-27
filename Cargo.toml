@@ -1,11 +1,11 @@
 [workspace]
 resolver = "3"
-members = ["concurrency", "core-relations", "egglog-bridge", "numeric-id", "union-find"] 
+members = ["concurrency", "core-relations", "egglog-bridge", "numeric-id", "union-find"]
 
 [package]
-edition = "2021"
+edition = "2024"
 name = "egglog"
-version = "0.5.0"
+version = "1.0.0"
 description = "egglog is a language that combines the benefits of equality saturation and datalog. It can be used for analysis, optimization, and synthesis of programs. It is the successor to the popular rust library egg."
 repository = "https://github.com/egraphs-good/egglog"
 keywords = ["e-graphs", "egglog", "datalog", "compiler", "equality"]
@@ -39,6 +39,7 @@ bin = [
   "dep:clap",
   "dep:env_logger",
   "dep:chrono",
+  "dep:mimalloc",
 ]
 serde = ["egraph-serialize/serde"]
 graphviz = ["egraph-serialize/graphviz"]
@@ -60,7 +61,7 @@ thiserror = "2.0"
 web-time = "1.1"
 dyn-clone = "1.0.17"
 rayon = "1.10.0"
-mimalloc = "0.1.46"
+mimalloc =  { version = "0.1.46", optional = true }
 core-relations = { path = "core-relations" }
 egglog-bridge = { path = "egglog-bridge" }
 numeric-id = { path = "numeric-id" }

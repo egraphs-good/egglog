@@ -38,20 +38,20 @@ where
 /// user's symbols because they use $.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct SymbolGen {
-    gen: usize,
+    count: usize,
     reserved_string: String,
 }
 
 impl SymbolGen {
     pub fn new(reserved_string: String) -> Self {
         Self {
-            gen: 0,
+            count: 0,
             reserved_string,
         }
     }
 
     pub fn has_been_used(&self) -> bool {
-        self.gen > 0
+        self.count > 0
     }
 }
 
@@ -62,8 +62,8 @@ pub trait FreshGen<Head: ?Sized, Leaf> {
 
 impl FreshGen<str, String> for SymbolGen {
     fn fresh(&mut self, name_hint: &str) -> String {
-        let s = format!("{}{}{}", self.reserved_string, name_hint, self.gen);
-        self.gen += 1;
+        let s = format!("{}{}{}", self.reserved_string, name_hint, self.count);
+        self.count += 1;
         s
     }
 }
@@ -76,8 +76,8 @@ impl FreshGen<String, String> for SymbolGen {
 
 impl FreshGen<ResolvedCall, ResolvedVar> for SymbolGen {
     fn fresh(&mut self, name_hint: &ResolvedCall) -> ResolvedVar {
-        let name = format!("{}{}{}", self.reserved_string, name_hint, self.gen);
-        self.gen += 1;
+        let name = format!("{}{}{}", self.reserved_string, name_hint, self.count);
+        self.count += 1;
         let sort = match name_hint {
             ResolvedCall::Func(f) => f.output.clone(),
             ResolvedCall::Primitive(SpecializedPrimitive { output, .. }) => output.clone(),
