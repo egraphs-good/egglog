@@ -48,6 +48,7 @@ cargo run --release [-f fact-directory] [--to-dot] [--to-svg] [-j --threads <THR
 
 * The `--to-dot` command will save a graphviz dot file at the end of the program, replacing the `.egg` extension with `.dot`.
 * The `--to-svg`, which requires [Graphviz to be installed](https://graphviz.org/download/), will save a graphviz svg file at the end of the program, replacing the `.egg` extension with `.svg`.
+* Set `RUST_LOG=INFO` to see more logging messages, as we use [env-logger](https://docs.rs/env_logger/latest/env_logger/) defaulting to `warn`.
 * The `-j` option specifies the number of threads to use for parallel execution. The default value is `1`, which runs everything in a single thread. Passing `0` will use the maximum inferred parallelism available on the current system.
 
 One can also use `egglog` as a Rust library by adding the following to your `Cargo.toml`:
