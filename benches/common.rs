@@ -9,12 +9,14 @@ static CONFIGURE_RAYON: Once = Once::new();
 
 pub fn run_example(filename: &str, program: &str, no_messages: bool) {
     let mut egraph = EGraph::default();
-    if no_messages {
-        egraph.disable_messages();
-    }
-    egraph
+    let outputs = egraph
         .parse_and_run_program(Some(filename.to_owned()), program)
         .unwrap();
+    if !no_messages {
+        for output in outputs {
+            print!("{}", output);
+        }
+    }
     // test performance of serialization as well
     egraph.serialize(egglog::SerializeConfig::default());
 }

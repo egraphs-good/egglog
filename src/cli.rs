@@ -3,6 +3,7 @@ use std::io::{self, BufRead, BufReader, Read, Write};
 
 #[cfg(feature = "bin")]
 pub mod bin {
+
     use super::*;
     use clap::Parser;
     use std::path::PathBuf;
@@ -18,7 +19,7 @@ pub mod bin {
         naive: bool,
         /// Prints extra information, which can be useful for debugging
         #[clap(long, default_value_t = RunMode::Normal)]
-        show: RunMode,
+        mode: RunMode,
         /// The file names for the egglog files to run
         inputs: Vec<PathBuf>,
         /// Serializes the egraph for each egglog file as JSON
@@ -42,10 +43,6 @@ pub mod bin {
         /// Number of times to inline leaves
         #[clap(long, default_value = "0")]
         serialize_n_inline_leaves: usize,
-        /// Prevents egglog from printing messages
-        #[clap(long)]
-        no_messages: bool,
-
         #[clap(short = 'j', long, default_value = "1")]
         /// Number of threads to use for parallel execution. Passing `0` will use the maximum
         /// inferred parallelism available on the current system.
@@ -76,14 +73,9 @@ pub mod bin {
         );
         egraph.fact_directory.clone_from(&args.fact_directory);
         egraph.seminaive = !args.naive;
-        egraph.run_mode = args.show;
-        if args.no_messages {
-            egraph.disable_messages();
-        }
-
         if args.inputs.is_empty() {
             log::info!("Welcome to Egglog REPL! (build: {})", env!("FULL_VERSION"));
-            match egraph.repl() {
+            match egraph.repl(args.mode) {
                 Ok(()) => std::process::exit(0),
                 Err(err) => {
                     log::error!("{err}");
@@ -97,16 +89,15 @@ pub mod bin {
                     panic!("Failed to read file {arg}")
                 });
 
-                match egraph.parse_and_run_program(Some(input.to_str().unwrap().into()), &program) {
-                    Ok(msgs) => {
-                        for msg in msgs {
-                            println!("{msg}");
-                        }
-                    }
-                    Err(err) => {
-                        log::error!("{err}");
-                        std::process::exit(1)
-                    }
+                match run_commands(
+                    &mut egraph,
+                    Some(input.to_str().unwrap().into()),
+                    &program,
+                    io::stdout(),
+                    args.mode,
+                ) {
+                    Ok(None) => {}
+                    _ => std::process::exit(1),
                 }
 
                 if args.to_json || args.to_dot || args.to_svg {
@@ -166,12 +157,12 @@ pub mod bin {
 
 impl EGraph {
     /// Start a Read-Eval-Print Loop with standard I/O.
-    pub fn repl(&mut self) -> io::Result<()> {
-        self.repl_with(io::stdin(), io::stdout())
+    pub fn repl(&mut self, mode: RunMode) -> io::Result<()> {
+        self.repl_with(io::stdin(), io::stdout(), mode)
     }
 
     /// Start a Read-Eval-Print Loop with the given input and output channel.
-    pub fn repl_with<R, W>(&mut self, input: R, mut output: W) -> io::Result<()>
+    pub fn repl_with<R, W>(&mut self, input: R, mut output: W, mode: RunMode) -> io::Result<()>
     where
         R: Read,
         W: Write,
@@ -184,13 +175,13 @@ impl EGraph {
             cmd_buffer.push('\n');
             // handles multi-line commands
             if should_eval(&cmd_buffer) {
-                run_command_in_scripting(self, &cmd_buffer, &mut output)?;
+                run_commands(self, None, &cmd_buffer, &mut output, mode)?;
                 cmd_buffer = String::new();
             }
         }
 
         if !cmd_buffer.is_empty() {
-            run_command_in_scripting(self, &cmd_buffer, &mut output)?;
+            run_commands(self, None, &cmd_buffer, &mut output, mode)?;
         }
 
         Ok(())
@@ -201,19 +192,84 @@ fn should_eval(curr_cmd: &str) -> bool {
     all_sexps(SexpParser::new(None, curr_cmd)).is_ok()
 }
 
-fn run_command_in_scripting<W>(egraph: &mut EGraph, command: &str, mut output: W) -> io::Result<()>
+fn run_commands<W>(
+    egraph: &mut EGraph,
+    filename: Option<String>,
+    command: &str,
+    mut output: W,
+    mode: RunMode,
+) -> io::Result<Option<Error>>
 where
     W: Write,
 {
-    match egraph.parse_and_run_program(None, command) {
-        Ok(msgs) => {
-            for msg in msgs {
-                writeln!(output, "{msg}")?;
+    if mode == RunMode::ShowDesugaredEgglog {
+        return Ok(match egraph.resugar_program(filename, command) {
+            Ok(desugared) => {
+                for line in desugared {
+                    writeln!(output, "{line}")?;
+                }
+                None
             }
+            Err(err) => {
+                log::error!("{err}");
+                Some(err)
+            }
+        });
+    };
+
+    Ok(match egraph.parse_and_run_program(filename, command) {
+        Ok(msgs) => {
+            if mode == RunMode::Interactive {
+                writeln!(output, "(done)")?;
+            }
+            if mode != RunMode::NoMessages {
+                for msg in msgs {
+                    write!(output, "{msg}")?;
+                }
+            }
+            None
         }
-        Err(err) => log::error!("{err}"),
+        Err(err) => {
+            log::error!("{err}");
+            if mode == RunMode::Interactive {
+                writeln!(output, "(error)")?;
+            }
+            Some(err)
+        }
+    })
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Hash, Copy)]
+pub enum RunMode {
+    Normal,
+    ShowDesugaredEgglog,
+    Interactive,
+    NoMessages,
+}
+
+impl Display for RunMode {
+    fn fmt(&self, f: &mut Formatter<'_>) -> std::fmt::Result {
+        match self {
+            RunMode::Normal => write!(f, "normal"),
+            RunMode::ShowDesugaredEgglog => write!(f, "resugar"),
+            RunMode::Interactive => write!(f, "interactive"),
+            RunMode::NoMessages => write!(f, "no-messages"),
+        }
     }
-    Ok(())
+}
+
+impl FromStr for RunMode {
+    type Err = String;
+
+    fn from_str(s: &str) -> Result<Self, Self::Err> {
+        match s {
+            "normal" => Ok(RunMode::Normal),
+            "resugar" => Ok(RunMode::ShowDesugaredEgglog),
+            "interactive" => Ok(RunMode::Interactive),
+            "no-messages" => Ok(RunMode::NoMessages),
+            _ => Err(format!("Unknown run mode: {s}")),
+        }
+    }
 }
 
 #[cfg(test)]
@@ -258,25 +314,44 @@ mod tests {
 
         let input = "(extract 1)";
         let mut output = Vec::new();
-        egraph.repl_with(input.as_bytes(), &mut output).unwrap();
+        egraph
+            .repl_with(input.as_bytes(), &mut output, RunMode::Normal)
+            .unwrap();
         assert_eq!(String::from_utf8(output).unwrap(), "1\n");
 
         let input = "\n\n\n";
         let mut output = Vec::new();
-        egraph.repl_with(input.as_bytes(), &mut output).unwrap();
+        egraph
+            .repl_with(input.as_bytes(), &mut output, RunMode::Normal)
+            .unwrap();
         assert_eq!(String::from_utf8(output).unwrap(), "");
 
-        let input = "(set-option interactive_mode 1)";
+        let input = "(extract 1)";
         let mut output = Vec::new();
-        egraph.repl_with(input.as_bytes(), &mut output).unwrap();
-        assert_eq!(String::from_utf8(output).unwrap(), "(done)\n");
+        egraph
+            .repl_with(input.as_bytes(), &mut output, RunMode::Interactive)
+            .unwrap();
+        assert_eq!(String::from_utf8(output).unwrap(), "(done)\n1\n");
 
-        let input = "(set-option interactive_mode 1)\n(extract 1)(extract 2)\n";
+        let input = "xyz";
+        let mut output: Vec<u8> = Vec::new();
+        egraph
+            .repl_with(input.as_bytes(), &mut output, RunMode::Interactive)
+            .unwrap();
+        assert_eq!(String::from_utf8(output).unwrap(), "(error)\n");
+
+        let input = "(extract 1)";
         let mut output = Vec::new();
-        egraph.repl_with(input.as_bytes(), &mut output).unwrap();
-        assert_eq!(
-            String::from_utf8(output).unwrap(),
-            "(done)\n1\n(done)\n2\n(done)\n"
-        );
+        egraph
+            .repl_with(input.as_bytes(), &mut output, RunMode::ShowDesugaredEgglog)
+            .unwrap();
+        assert_eq!(String::from_utf8(output).unwrap(), "(extract 1 0)\n");
+
+        let input = "(extract 1)";
+        let mut output = Vec::new();
+        egraph
+            .repl_with(input.as_bytes(), &mut output, RunMode::NoMessages)
+            .unwrap();
+        assert_eq!(String::from_utf8(output).unwrap(), "");
     }
 }
