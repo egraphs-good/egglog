@@ -43,10 +43,6 @@ pub mod bin {
         /// Number of times to inline leaves
         #[clap(long, default_value = "0")]
         serialize_n_inline_leaves: usize,
-        /// Prevents egglog from printing messages
-        #[clap(long)]
-        no_messages: bool,
-
         #[clap(short = 'j', long, default_value = "1")]
         /// Number of threads to use for parallel execution. Passing `0` will use the maximum
         /// inferred parallelism available on the current system.
