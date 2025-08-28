@@ -714,7 +714,7 @@ impl EGraph {
             #[cfg(test)]
             {
                 use rand::Rng;
-                rand::thread_rng().gen_bool(0.5)
+                rand::rng().random_bool(0.5)
             }
             #[cfg(not(test))]
             {

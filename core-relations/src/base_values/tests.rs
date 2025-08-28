@@ -34,7 +34,7 @@ fn roundtrip_small_integers() {
     }
     // Random u8 samples
     for _ in 0..100 {
-        let val: u8 = rng.gen();
+        let val: u8 = rng.random();
         let boxed = bases.get(val);
         let unboxed = bases.unwrap::<u8>(boxed);
         assert_eq!(val, unboxed);
@@ -49,7 +49,7 @@ fn roundtrip_small_integers() {
     }
     // Random u16 samples
     for _ in 0..100 {
-        let val: u16 = rng.gen();
+        let val: u16 = rng.random();
         let boxed = bases.get(val);
         let unboxed = bases.unwrap::<u16>(boxed);
         assert_eq!(val, unboxed);
@@ -64,7 +64,7 @@ fn roundtrip_small_integers() {
     }
     // Random u32 samples
     for _ in 0..100 {
-        let val: u32 = rng.gen();
+        let val: u32 = rng.random();
         let boxed = bases.get(val);
         let unboxed = bases.unwrap::<u32>(boxed);
         assert_eq!(val, unboxed);
@@ -79,7 +79,7 @@ fn roundtrip_small_integers() {
     }
     // Random i8 samples
     for _ in 0..100 {
-        let val: i8 = rng.gen();
+        let val: i8 = rng.random();
         let boxed = bases.get(val);
         let unboxed = bases.unwrap::<i8>(boxed);
         assert_eq!(val, unboxed);
@@ -94,7 +94,7 @@ fn roundtrip_small_integers() {
     }
     // Random i16 samples
     for _ in 0..100 {
-        let val: i16 = rng.gen();
+        let val: i16 = rng.random();
         let boxed = bases.get(val);
         let unboxed = bases.unwrap::<i16>(boxed);
         assert_eq!(val, unboxed);
@@ -109,7 +109,7 @@ fn roundtrip_small_integers() {
     }
     // Random i32 samples
     for _ in 0..100 {
-        let val: i32 = rng.gen();
+        let val: i32 = rng.random();
         let boxed = bases.get(val);
         let unboxed = bases.unwrap::<i32>(boxed);
         assert_eq!(val, unboxed);
@@ -130,7 +130,7 @@ fn roundtrip_bool() {
     // Random bool samples
     let mut rng = rand::rngs::StdRng::seed_from_u64(42);
     for _ in 0..100 {
-        let val: bool = rng.gen();
+        let val: bool = rng.random();
         let boxed = bases.get(val);
         let unboxed = bases.unwrap::<bool>(boxed);
         assert_eq!(val, unboxed);

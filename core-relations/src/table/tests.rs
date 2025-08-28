@@ -1,5 +1,5 @@
 use numeric_id::NumericId;
-use rand::{thread_rng, Rng};
+use rand::{rng, Rng};
 
 use crate::{
     common::{HashMap, ShardId, Value},
@@ -158,16 +158,16 @@ fn shard_math() {
 
     // If we generate a hundred thousand random rows, we should see more than 100
     // items in each shard.
-    let mut rng = thread_rng();
+    let mut rng = rng();
     let mut hist = HashMap::default();
     (0..100_000)
         .map(|_| {
             hash_code(
                 table.shard_data(),
                 &[
-                    Value::new(rng.gen()),
-                    Value::new(rng.gen()),
-                    Value::new(rng.gen()),
+                    Value::new(rng.random()),
+                    Value::new(rng.random()),
+                    Value::new(rng.random()),
                 ],
                 2,
             )

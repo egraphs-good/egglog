@@ -10,7 +10,7 @@ pub(crate) fn parallelize_db_level_op(_db_size: usize) -> bool {
     #[cfg(test)]
     {
         use rand::Rng;
-        rand::thread_rng().gen_bool(0.5)
+        rand::rng().random_bool(0.5)
     }
     #[cfg(not(test))]
     {
@@ -23,7 +23,7 @@ pub(crate) fn parallelize_index_construction(_items_to_insert: usize) -> bool {
     #[cfg(test)]
     {
         use rand::Rng;
-        rand::thread_rng().gen_bool(0.5)
+        rand::rng().random_bool(0.5)
     }
     #[cfg(not(test))]
     {
@@ -36,7 +36,7 @@ pub(crate) fn parallelize_rebuild(_table_size: usize) -> bool {
     #[cfg(test)]
     {
         use rand::Rng;
-        rand::thread_rng().gen_bool(0.5)
+        rand::rng().random_bool(0.5)
     }
     #[cfg(not(test))]
     {
@@ -49,7 +49,7 @@ pub(crate) fn parallelize_intra_container_op(_num_containers: usize) -> bool {
     #[cfg(test)]
     {
         use rand::Rng;
-        rand::thread_rng().gen_bool(0.5)
+        rand::rng().random_bool(0.5)
     }
     #[cfg(not(test))]
     {
@@ -63,7 +63,7 @@ pub(crate) fn parallelize_inter_container_op(_num_containers: usize) -> bool {
     #[cfg(test)]
     {
         use rand::Rng;
-        rand::thread_rng().gen_bool(0.5)
+        rand::rng().random_bool(0.5)
     }
     #[cfg(not(test))]
     {
@@ -76,7 +76,7 @@ pub(crate) fn parallelize_table_op(_table_size: usize) -> bool {
     #[cfg(test)]
     {
         use rand::Rng;
-        rand::thread_rng().gen_bool(0.5)
+        rand::rng().random_bool(0.5)
     }
     #[cfg(not(test))]
     {

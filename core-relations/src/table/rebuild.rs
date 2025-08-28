@@ -223,8 +223,8 @@ impl SortedWritesTable {
 fn incremental_rebuild(_uf_size: usize, _table_size: usize, _parallel: bool) -> bool {
     #[cfg(debug_assertions)]
     {
-        use rand::{thread_rng, Rng};
-        thread_rng().gen::<bool>()
+        use rand::{rng, Rng};
+        rng().random::<bool>()
     }
     #[cfg(not(debug_assertions))]
     {
