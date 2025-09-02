@@ -262,12 +262,13 @@ impl std::fmt::Display for CommandOutput {
                                 if !out_is_unit {
                                     values.push(termdag.to_string(output));
                                 }
-                                wtr.write_record(&values).unwrap();
+                                wtr.write_record(&values).map_err(|_| std::fmt::Error)?;
                             }
                             _ => panic!("Expect function_to_dag to return a list of apps."),
                         }
                     }
-                    f.write_str(&String::from_utf8(wtr.into_inner().unwrap()).unwrap())
+                    let csv_bytes = wtr.into_inner().map_err(|_| std::fmt::Error)?;
+                    f.write_str(&String::from_utf8(csv_bytes).map_err(|_| std::fmt::Error)?)
                 } else {
                     writeln!(f, "(")?;
                     for (term, output) in terms_and_outputs.iter() {
