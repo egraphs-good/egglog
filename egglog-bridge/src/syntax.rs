@@ -133,7 +133,7 @@ impl ProofBuilder {
         &mut self,
         syntax: SourceSyntax,
         egraph: &mut EGraph,
-    ) -> impl Fn(&mut Bindings, &mut RuleBuilder) -> Result<core_relations::Variable> + Clone {
+    ) -> impl Fn(&mut Bindings, &mut RuleBuilder) -> Result<core_relations::Variable> + Clone + use<> {
         // first, create all the relevant cong metadata
         let mut metadata = DenseIdMap::default();
         for func in syntax.funcs() {

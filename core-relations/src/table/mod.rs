@@ -110,7 +110,7 @@ impl Rows {
 
     /// A variant of `get_row` without bounds-checking on `row`.
     unsafe fn get_row_unchecked(&self, row: RowId) -> Option<&[Value]> {
-        let row = self.data.get_row_unchecked(row);
+        let row = unsafe { self.data.get_row_unchecked(row) };
         if row[0].is_stale() {
             None
         } else {

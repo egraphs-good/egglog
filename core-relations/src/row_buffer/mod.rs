@@ -11,7 +11,7 @@ use smallvec::SmallVec;
 use crate::{
     common::Value,
     offsets::RowId,
-    pool::{with_pool_set, Pooled},
+    pool::{Pooled, with_pool_set},
 };
 
 #[cfg(test)]
@@ -98,7 +98,9 @@ impl RowBuffer {
     /// `count` must be within the capacity of the RowBuffer and the resized buffer must point to
     /// initialized memory. (Analogous to [`Vec::set_len`]).
     pub(crate) unsafe fn set_len(&mut self, count: usize) {
-        self.data.set_len(count * self.n_columns);
+        unsafe {
+            self.data.set_len(count * self.n_columns);
+        }
         self.total_rows = count;
     }
 
@@ -196,10 +198,12 @@ impl RowBuffer {
 
     /// Get the row corresponding to the given RowId without bounds checking.
     pub(crate) unsafe fn get_row_unchecked(&self, row: RowId) -> &[Value] {
-        slice::from_raw_parts(
-            self.data.as_ptr().add(row.index() * self.n_columns) as *const Value,
-            self.n_columns,
-        )
+        unsafe {
+            slice::from_raw_parts(
+                self.data.as_ptr().add(row.index() * self.n_columns) as *const Value,
+                self.n_columns,
+            )
+        }
     }
 
     /// Get a mutable reference to the row corresponding to the given RowId.
@@ -394,9 +398,11 @@ impl TaggedRowBuffer {
 /// This function is safe so long as there are no concurrent writes to the given
 /// row.
 unsafe fn get_row(data: &[Cell<Value>], n_columns: usize, row: RowId) -> &[Value] {
-    mem::transmute::<&[Cell<Value>], &[Value]>(
-        &data[row.index() * n_columns..(row.index() + 1) * n_columns],
-    )
+    unsafe {
+        mem::transmute::<&[Cell<Value>], &[Value]>(
+            &data[row.index() * n_columns..(row.index() + 1) * n_columns],
+        )
+    }
 }
 
 /// A wrapper for a RowBuffer that allows it to be written to in parallel, based
@@ -459,10 +465,12 @@ impl<T: Deref<Target = [Cell<Value>]>> ReadHandle<'_, T> {
     pub(crate) unsafe fn get_row_unchecked(&self, row: RowId) -> &[Value] {
         // SAFETY: ParallelVecWriter guarantees that data within bounds is not
         // being modified concurrently.
-        std::slice::from_raw_parts(
-            self.data.as_ptr().add(row.index() * self.buf.n_columns) as *const Value,
-            self.buf.n_columns,
-        )
+        unsafe {
+            std::slice::from_raw_parts(
+                self.data.as_ptr().add(row.index() * self.buf.n_columns) as *const Value,
+                self.buf.n_columns,
+            )
+        }
     }
 
     /// See the documentation for [`RowBuffer::set_stale_shared`].
@@ -473,7 +481,7 @@ impl<T: Deref<Target = [Cell<Value>]>> ReadHandle<'_, T> {
     pub(crate) unsafe fn set_stale_shared(&self, row: RowId) -> bool {
         let cells: &[Cell<Value>] = &self.data;
         let cell_ptr: *const Cell<Value> = cells.as_ptr();
-        let to_set: &Cell<Value> = &*cell_ptr.add(row.index() * self.buf.n_columns);
+        let to_set: &Cell<Value> = unsafe { &*cell_ptr.add(row.index() * self.buf.n_columns) };
         let was_stale = to_set.get().is_stale();
         to_set.set(Value::stale());
         was_stale

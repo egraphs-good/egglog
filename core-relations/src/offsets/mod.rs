@@ -139,7 +139,9 @@ impl SortedOffsetSlice {
             "slice is not sorted: {slice:?}"
         );
         // SAFETY: SortedOffsetSlice is repr(transparent), so the two layouts are compatible.
-        mem::transmute::<&[RowId], &SortedOffsetSlice>(slice)
+        unsafe {
+            mem::transmute::<&[RowId], &SortedOffsetSlice>(slice)
+        }
     }
     fn len(&self) -> usize {
         self.0.len()

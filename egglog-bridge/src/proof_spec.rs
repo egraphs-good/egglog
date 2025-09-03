@@ -5,16 +5,16 @@ use core_relations::{
     ProofStep, RuleBuilder, Value,
 };
 use hashbrown::{HashMap, HashSet};
-use numeric_id::{define_id, DenseIdMap, NumericId};
+use numeric_id::{DenseIdMap, NumericId, define_id};
 
 use crate::{
+    ColumnTy, EGraph, FunctionId, GetFirstMatch, QueryEntry, Result, RuleId, SideChannel,
+    SourceExpr, TopLevelLhsExpr,
     proof_format::{
         CongProof, EqProof, EqProofId, Premise, ProofStore, Term, TermId, TermProof, TermProofId,
     },
     rule::{AtomId, Bindings, DstVar, Variable},
     syntax::{RuleData, SourceSyntax, SyntaxId},
-    ColumnTy, EGraph, FunctionId, GetFirstMatch, QueryEntry, Result, RuleId, SideChannel,
-    SourceExpr, TopLevelLhsExpr,
 };
 
 define_id!(pub(crate) ReasonSpecId, u32, "A unique identifier for the step in a proof.");
@@ -74,7 +74,7 @@ impl ProofBuilder {
         after: &[QueryEntry],
         vars: RebuildVars,
         db: &mut EGraph,
-    ) -> impl Fn(&mut Bindings, &mut RuleBuilder) -> Result<()> + Clone {
+    ) -> impl Fn(&mut Bindings, &mut RuleBuilder) -> Result<()> + Clone + use<> {
         let reason_spec = ProofReason::CongRow;
         let reason_table = db.reason_table(&reason_spec);
         let reason_spec_id = db.cong_spec;
@@ -117,7 +117,7 @@ impl ProofBuilder {
         entries: Vec<QueryEntry>,
         term_var: Variable,
         db: &mut EGraph,
-    ) -> impl Fn(&mut Bindings, &mut RuleBuilder) -> Result<()> + Clone {
+    ) -> impl Fn(&mut Bindings, &mut RuleBuilder) -> Result<()> + Clone + use<> {
         let func_table = db.funcs[func].table;
         let term_table = db.term_table(func_table);
         let func_val = Value::new(func.rep());
@@ -349,7 +349,9 @@ impl EGraph {
                 .unwrap();
 
             let Some(steps) = uf_table.get_proof(l, r) else {
-                panic!("attempting to explain why two terms ({l:?} and {r:?}) are equal, but they aren't equal");
+                panic!(
+                    "attempting to explain why two terms ({l:?} and {r:?}) are equal, but they aren't equal"
+                );
             };
 
             assert!(!steps.is_empty(), "empty proof for equality");
