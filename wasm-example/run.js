@@ -1,4 +1,4 @@
-import { run } from "./pkg/egglog_webasm_test.js";
+let { run } = require("./pkg/");
 
 if (run() !== 0) {
   throw new Error("run() should return 0");
