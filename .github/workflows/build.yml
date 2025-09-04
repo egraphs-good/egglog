@@ -37,3 +37,14 @@ jobs:
       - uses: CodSpeedHQ/action@v3
         with:
           run: cargo codspeed run
+  wasm:
+    runs-on: ubuntu-latest
+    steps:
+      - run: echo "CARGO_INCREMENTAL=0" >> "$GITHUB_ENV"
+      - uses: actions/checkout@v4
+      - uses: taiki-e/install-action@v2
+        with:
+          tool: wasm-pack
+      - uses: Swatinem/rust-cache@v2
+      - run: make test
+        working-directory: wasm-example

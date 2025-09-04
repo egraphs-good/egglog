@@ -1,0 +1,15 @@
+[package]
+edition = "2024"
+name = "egglog-webasm-test"
+publish = false
+version = "0.0.0"
+
+[lib]
+crate-type = ["cdylib"]
+
+[dependencies]
+wasm-bindgen = "0.2"
+# remove default features so that custom allocator isn't built that's only used for bin
+egglog = { path = "../", default-features = false }
+# enable JS support for random https://docs.rs/getrandom/latest/getrandom/#webassembly-support
+getrandom = { version = "0.2", features = ["js"] }
