@@ -35,6 +35,7 @@ use constraint::{Constraint, Problem, SimpleTypeConstraint, TypeConstraint};
 use core::{AtomTerm, ResolvedAtomTerm, ResolvedCall};
 pub use core_relations::{BaseValue, ContainerValue, ExecutionState, Value};
 use core_relations::{ExternalFunctionId, make_external_func};
+use csv::Writer;
 pub use egglog_bridge::FunctionRow;
 use egglog_bridge::{ColumnTy, IterationReport, QueryEntry};
 use extract::{CostModel, DefaultCost, Extractor, TreeAdditiveCostModel};
@@ -43,12 +44,12 @@ use log::{Level, log_enabled};
 use numeric_id::DenseIdMap;
 use prelude::*;
 use scheduler::{SchedulerId, SchedulerRecord};
-pub use serialize::{SerializeConfig, SerializedNode};
+pub use serialize::{SerializeConfig, SerializeOutput, SerializedNode};
 use sort::*;
 use std::fmt::{Debug, Display, Formatter};
 use std::fs::File;
 use std::hash::Hash;
-use std::io::{Read, Write};
+use std::io::{Read, Write as _};
 use std::iter::once;
 use std::path::PathBuf;
 use std::str::FromStr;
@@ -249,32 +250,25 @@ impl std::fmt::Display for CommandOutput {
             CommandOutput::PrintFunction(function, termdag, terms_and_outputs, mode) => {
                 let out_is_unit = function.schema.output.name() == UnitSort.name();
                 if *mode == PrintFunctionMode::CSV {
+                    let mut wtr = Writer::from_writer(vec![]);
                     for (term, output) in terms_and_outputs {
                         match term {
                             Term::App(name, children) => {
-                                write!(f, "{}", name)?;
+                                let mut values = vec![name.clone()];
                                 for child_id in children {
-                                    let child = termdag.to_string(termdag.get(*child_id));
-                                    write!(f, ",")?;
-                                    if child.contains(',')
-                                        || child.contains('\n')
-                                        || child.contains('"')
-                                    {
-                                        // escape commas and newlines in CSV
-                                        write!(f, "\"{}\"", child.replace('"', "\"\""))?;
-                                    } else {
-                                        write!(f, "{}", child)?;
-                                    }
+                                    values.push(termdag.to_string(termdag.get(*child_id)));
                                 }
 
                                 if !out_is_unit {
-                                    write!(f, ",{}", termdag.to_string(output))?;
+                                    values.push(termdag.to_string(output));
                                 }
+                                wtr.write_record(&values).map_err(|_| std::fmt::Error)?;
                             }
                             _ => panic!("Expect function_to_dag to return a list of apps."),
                         }
                     }
-                    writeln!(f)
+                    let csv_bytes = wtr.into_inner().map_err(|_| std::fmt::Error)?;
+                    f.write_str(&String::from_utf8(csv_bytes).map_err(|_| std::fmt::Error)?)
                 } else {
                     writeln!(f, "(")?;
                     for (term, output) in terms_and_outputs.iter() {
