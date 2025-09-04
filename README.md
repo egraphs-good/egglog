@@ -59,6 +59,8 @@ egglog = "1.0.0"
 
 See also the [Python binding](https://github.com/egraphs-good/egglog-python) for using `egglog` in Python.
 
+Egglog can also be compiled to WebAssembly, see [./wasm-example](./wasm-example) for more information.
+
 ## Development
 
 To view documentation in a browser, run `cargo doc --open`.
