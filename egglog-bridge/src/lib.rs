@@ -33,6 +33,7 @@ use smallvec::SmallVec;
 use web_time::{Duration, Instant};
 
 pub mod macros;
+pub mod proof_checker;
 pub mod proof_format;
 pub(crate) mod proof_spec;
 pub(crate) mod rule;
