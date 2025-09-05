@@ -2,15 +2,6 @@ use crate::{core::ResolvedCall, *};
 use ordered_float::OrderedFloat;
 use std::{fmt::Display, hash::Hasher};
 
-#[derive(Debug, PartialEq, Eq, PartialOrd, Ord, Hash, Clone)]
-pub enum Literal {
-    Int(i64),
-    Float(OrderedFloat<f64>),
-    String(String),
-    Bool(bool),
-    Unit,
-}
-
 macro_rules! impl_from {
     ($ctor:ident($t:ty)) => {
         impl From<Literal> for $t {
@@ -35,25 +26,6 @@ impl_from!(Int(i64));
 impl_from!(Float(OrderedFloat<f64>));
 impl_from!(String(String));
 
-impl Display for Literal {
-    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        match &self {
-            Literal::Int(i) => Display::fmt(i, f),
-            Literal::Float(n) => {
-                // need to display with decimal if there is none
-                let str = n.to_string();
-                if let Ok(_num) = str.parse::<i64>() {
-                    write!(f, "{}.0", str)
-                } else {
-                    write!(f, "{}", str)
-                }
-            }
-            Literal::Bool(b) => Display::fmt(b, f),
-            Literal::String(s) => write!(f, "\"{}\"", s),
-            Literal::Unit => write!(f, "()"),
-        }
-    }
-}
 
 #[derive(Debug, Clone)]
 pub struct ResolvedVar {
@@ -100,20 +72,18 @@ pub(crate) type ResolvedExpr = GenericExpr<ResolvedCall, ResolvedVar>;
 /// A useful operation on `MappedExpr`s is [`MappedExpr::get_corresponding_var_or_lit``].
 pub(crate) type MappedExpr<Head, Leaf> = GenericExpr<CorrespondingVar<Head, Leaf>, Leaf>;
 
-impl ResolvedExpr {
-    pub fn output_type(&self) -> ArcSort {
-        match self {
-            ResolvedExpr::Lit(_, lit) => sort::literal_sort(lit),
-            ResolvedExpr::Var(_, resolved_var) => resolved_var.sort.clone(),
-            ResolvedExpr::Call(_, resolved_call, _) => resolved_call.output().clone(),
-        }
+pub fn output_type(expr: &ResolvedExpr) -> ArcSort {
+    match expr {
+        ResolvedExpr::Lit(_, lit) => sort::literal_sort(lit),
+        ResolvedExpr::Var(_, resolved_var) => resolved_var.sort.clone(),
+        ResolvedExpr::Call(_, resolved_call, _) => resolved_call.output().clone(),
     }
+}
 
-    pub(crate) fn get_global_var(&self) -> Option<ResolvedVar> {
-        match self {
-            ResolvedExpr::Var(_, v) if v.is_global_ref => Some(v.clone()),
-            _ => None,
-        }
+pub(crate) fn get_global_var(expr: &ResolvedExpr) -> Option<ResolvedVar> {
+    match expr {
+        ResolvedExpr::Var(_, v) if v.is_global_ref => Some(v.clone()),
+        _ => None,
     }
 }
 

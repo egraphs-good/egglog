@@ -8,7 +8,7 @@ use crate::{
 use std::{cmp, rc::Rc};
 // Use immutable hashmap for performance
 // cloning assignments is common and O(1) with immutable hashmap
-use egglog_bridge::generic_rule::{
+use egglog_bridge::generic_ast::{
     Change, GenericAction, GenericActions, GenericExpr, GenericFact, GenericRule,
 };
 use egglog_bridge::span::Span;
