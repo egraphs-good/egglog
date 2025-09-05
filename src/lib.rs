@@ -23,6 +23,7 @@ pub mod sort;
 mod termdag;
 mod typechecking;
 pub mod util;
+pub mod proofs;
 
 // This is used to allow the `add_primitive` macro to work in
 // both this crate and other crates by referring to `::egglog`.

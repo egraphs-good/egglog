@@ -1,8 +1,6 @@
-use symbol_table::GlobalSymbol as Symbol;
-
 use crate::{
-    ast::{Command, Expr, Fact, GenericAction, GenericFact, Rule},
     HashMap, HashSet, Term, TermDag,
+    ast::{Command, Expr, Fact, GenericAction, GenericFact, Rule},
 };
 
 type ProofId = usize;
@@ -15,9 +13,9 @@ pub struct ProofStore {
 }
 
 // use a Vec so that we can hash it, sharing sub-proofs
-type Substitution = Vec<(Symbol, Term)>;
+type Substitution = Vec<(String, Term)>;
 
-fn subst_get(subst: &Substitution, sym: Symbol) -> Option<&Term> {
+fn subst_get(subst: &Substitution, sym: String) -> Option<&Term> {
     for ele in subst {
         if ele.0 == sym {
             return Some(&ele.1);
@@ -41,7 +39,7 @@ pub enum ProofTerm {
     /// the body_pfs gives proofs for each of the conditions in the query of the rule
     /// the act_pf gives a location in the action of the proposition
     PRule {
-        rule_name: Symbol,
+        rule_name: String,
         subst: Substitution,
         body_pfs: Vec<ProofId>,
         result: Proposition,
@@ -71,7 +69,7 @@ pub enum ProofTerm {
     PCong {
         pf_args_eq: Vec<ProofId>,
         pf_f_args_ok: ProofId,
-        fun_sym: Symbol,
+        fun_sym: String,
     },
 }
 
@@ -79,7 +77,7 @@ pub enum ProofTerm {
 pub enum ProofCheckError {
     Todo,
     WrongNumBodyProofs,
-    ProofMismatch(Symbol, Fact, Proposition),
+    ProofMismatch(String, Fact, Proposition),
 }
 
 impl ProofStore {
@@ -106,7 +104,7 @@ impl ProofStore {
     fn get_rule_by_name<'a>(
         &self,
         prog: &'a Vec<Command>,
-        name: Symbol,
+        name: String,
     ) -> Result<&'a Rule, ProofCheckError> {
         for command in prog {
             if let Command::Rule {
@@ -126,7 +124,7 @@ impl ProofStore {
     fn check_rule_fires(
         &mut self,
         prog: &Vec<Command>,
-        rule_name: Symbol,
+        rule_name: String,
         subst: &Substitution,
         body_pfs: &[ProofId],
     ) -> Result<(), ProofCheckError> {
@@ -208,7 +206,7 @@ impl ProofStore {
     fn rule_propositions(
         &mut self,
         prog: &Vec<Command>,
-        rule_name: Symbol,
+        rule_name: String,
         subst: &Substitution,
     ) -> Result<HashSet<Proposition>, ProofCheckError> {
         let rule = self.get_rule_by_name(prog, rule_name)?;
@@ -249,21 +247,21 @@ impl ProofStore {
                         children.push(term);
                     }
 
-                    let final_term = self.substitute(generic_expr, &current_subst, &mut HashSet::default())?;
+                    let final_term =
+                        self.substitute(generic_expr, &current_subst, &mut HashSet::default())?;
                     children.push(final_term.clone());
                     let mut res = self.termdag.app(*func, children);
                     propositions.insert(Proposition::TOk(res.clone()));
-                },
+                }
                 GenericAction::Change(_span, change, _, _generic_exprs) => {
                     match change {
                         crate::ast::Change::Delete => {
                             // delete adds an expression to the database,
-                        },
+                        }
                         crate::ast::Change::Subsume => todo!(),
                     }
-                },
+                }
                 GenericAction::Union(_span, _generic_expr, _generic_expr1) => todo!(),
-                GenericAction::Extract(_span, _generic_expr, _generic_expr1) => todo!(),
                 GenericAction::Panic(_span, _) => todo!(),
             }
         }
@@ -386,9 +384,9 @@ impl ProofStore {
 mod tests {
 
     #[cfg(test)]
-    use crate::proofs::proof::{ProofCheckError, ProofStore, ProofTerm, Proposition};
-    #[cfg(test)]
     use crate::TermDag;
+    #[cfg(test)]
+    use crate::proofs::proof::{ProofCheckError, ProofStore, ProofTerm, Proposition};
 
     #[test]
     fn no_precondition() {
