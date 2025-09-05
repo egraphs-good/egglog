@@ -338,9 +338,9 @@ impl Table for SortedWritesTable {
         }
     }
 
-    fn updates_since(&self, gen: Offset) -> Subset {
+    fn updates_since(&self, offset: Offset) -> Subset {
         Subset::Dense(OffsetRange::new(
-            RowId::from_usize(gen.index()),
+            RowId::from_usize(offset.index()),
             self.data.next_row(),
         ))
     }

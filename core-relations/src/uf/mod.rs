@@ -299,9 +299,9 @@ impl Table for DisplacedTable {
         }
     }
 
-    fn updates_since(&self, gen: Offset) -> Subset {
+    fn updates_since(&self, offset: Offset) -> Subset {
         Subset::Dense(OffsetRange::new(
-            RowId::from_usize(gen.index()),
+            RowId::from_usize(offset.index()),
             RowId::from_usize(self.displaced.len()),
         ))
     }
@@ -848,8 +848,8 @@ impl Table for DisplacedTableWithProvenance {
     fn len(&self) -> usize {
         self.base.len()
     }
-    fn updates_since(&self, gen: Offset) -> Subset {
-        self.base.updates_since(gen)
+    fn updates_since(&self, offset: Offset) -> Subset {
+        self.base.updates_since(offset)
     }
     fn version(&self) -> TableVersion {
         self.base.version()

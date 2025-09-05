@@ -207,7 +207,7 @@ pub trait Table: Any + Send + Sync {
     fn version(&self) -> TableVersion;
 
     /// Get the subset of the table that has appeared since the last offset.
-    fn updates_since(&self, gen: Offset) -> Subset;
+    fn updates_since(&self, offset: Offset) -> Subset;
 
     /// Iterate over the given subset of the table, starting at an opaque
     /// `start` token, ending after up to `n` rows, returning the next start

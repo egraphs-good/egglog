@@ -1,17 +1,22 @@
 [package]
 name = "union-find"
-version = "1.0.0"
-edition = "2021"
+version = { workspace = true }
+edition = { workspace = true }
+description = { workspace = true }
+repository = { workspace = true }
+keywords = { workspace = true }
+license = { workspace = true }
+readme = { workspace = true }
 
 [dependencies]
-numeric-id = { path = "../numeric-id" }
-crossbeam = "0.8.4"
-concurrency = { path = "../concurrency" }
+numeric-id = { workspace = true }
+crossbeam = { workspace = true }
+concurrency = { workspace = true }
 
 [dev-dependencies]
-divan = "0.1.15"
-rand = "0.8.4"
-rayon = "1.10"
+divan = { workspace = true }
+rand = { workspace = true }
+rayon = { workspace = true }
 
 [[bench]]
 name = "union-find"
