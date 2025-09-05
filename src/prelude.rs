@@ -7,6 +7,7 @@
 //! and [`ContainerSort`].
 
 use crate::*;
+use egglog_bridge::generic_rule::{GenericAction, GenericActions};
 use std::any::{Any, TypeId};
 
 // Re-exports in `prelude` for convenience.
