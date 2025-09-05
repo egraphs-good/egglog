@@ -7,11 +7,9 @@ pub mod remove_globals;
 use crate::core::{GenericAtom, GenericAtomTerm, HeadOrEq, Query, ResolvedCall, ResolvedCoreRule};
 use crate::*;
 pub use egglog_bridge::generic_rule::GenericRule;
+use egglog_bridge::generic_rule::{Change, GenericAction, GenericExpr, GenericFact};
+use egglog_bridge::span::Span;
 use egglog_bridge::util::ListDisplay;
-use egglog_bridge::{
-    generic_rule::{GenericAction, GenericFact},
-    span::Span,
-};
 pub use expr::*;
 pub use parse::*;
 

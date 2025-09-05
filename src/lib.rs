@@ -37,6 +37,8 @@ use core_relations::{ExternalFunctionId, make_external_func};
 use csv::Writer;
 pub use egglog_add_primitive::add_primitive;
 pub use egglog_bridge::FunctionRow;
+use egglog_bridge::generic_rule::{Change, GenericExpr};
+use egglog_bridge::span::{RustSpan, Span};
 use egglog_bridge::{ColumnTy, IterationReport, QueryEntry};
 use egglog_core_relations as core_relations;
 use egglog_numeric_id as numeric_id;
