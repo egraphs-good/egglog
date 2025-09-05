@@ -7,7 +7,7 @@ pub mod remove_globals;
 use crate::core::{GenericAtom, GenericAtomTerm, HeadOrEq, Query, ResolvedCall, ResolvedCoreRule};
 use crate::*;
 pub use egglog_bridge::generic_rule::GenericRule;
-use egglog_bridge::generic_rule::{Change, GenericAction, GenericExpr, GenericFact};
+use egglog_bridge::generic_rule::{GenericAction, GenericExpr, GenericFact};
 use egglog_bridge::span::Span;
 use egglog_bridge::util::ListDisplay;
 pub use expr::*;
@@ -1072,15 +1072,6 @@ where
             }
         }
         (Query { atoms }, new_body)
-    }
-}
-
-impl<Head: Display, Leaf: Display> Display for GenericFact<Head, Leaf> {
-    fn fmt(&self, f: &mut Formatter) -> std::fmt::Result {
-        match self {
-            GenericFact::Eq(_, e1, e2) => write!(f, "(= {e1} {e2})"),
-            GenericFact::Fact(expr) => write!(f, "{expr}"),
-        }
     }
 }
 

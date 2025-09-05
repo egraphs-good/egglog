@@ -1,8 +1,8 @@
 use std::fmt::{Display, Formatter};
 use std::hash::Hash;
 
-use crate::span::Span;
 use super::util::ListDisplay;
+use crate::span::Span;
 
 #[derive(Clone, Debug, PartialEq, Eq, Hash)]
 pub enum GenericExpr<Head, Leaf> {
@@ -61,8 +61,8 @@ pub enum Change {
 impl<Head: Display, Leaf: Display> Display for GenericFact<Head, Leaf> {
     fn fmt(&self, f: &mut Formatter) -> std::fmt::Result {
         match self {
-            GenericFact::Eq(_, e1, e2) => write!(f, "(= {} {})", e1, e2),
-            GenericFact::Fact(expr) => write!(f, "{}", expr),
+            GenericFact::Eq(_, e1, e2) => write!(f, "(= {e1} {e2})"),
+            GenericFact::Fact(expr) => write!(f, "{expr}"),
         }
     }
 }
@@ -204,15 +204,15 @@ where
     Head: Clone + Display,
     Leaf: Clone + PartialEq + Eq + Display + Hash,
 {
-    pub(crate) fn len(&self) -> usize {
+    pub fn len(&self) -> usize {
         self.0.len()
     }
 
-    pub(crate) fn iter(&self) -> impl Iterator<Item = &GenericAction<Head, Leaf>> {
+    pub fn iter(&self) -> impl Iterator<Item = &GenericAction<Head, Leaf>> {
         self.0.iter()
     }
 
-    pub(crate) fn visit_exprs(
+    pub fn visit_exprs(
         self,
         f: &mut impl FnMut(GenericExpr<Head, Leaf>) -> GenericExpr<Head, Leaf>,
     ) -> Self {
@@ -347,7 +347,7 @@ where
         }
     }
 
-    pub(crate) fn map_exprs<Head2, Leaf2>(
+    pub fn map_exprs<Head2, Leaf2>(
         &self,
         f: &mut impl FnMut(&GenericExpr<Head, Leaf>) -> GenericExpr<Head2, Leaf2>,
     ) -> GenericFact<Head2, Leaf2> {
@@ -357,7 +357,7 @@ where
         }
     }
 
-    pub(crate) fn subst<Leaf2, Head2>(
+    pub fn subst<Leaf2, Head2>(
         &self,
         subst_leaf: &mut impl FnMut(&Span, &Leaf) -> GenericExpr<Head2, Leaf2>,
         subst_head: &mut impl FnMut(&Head) -> Head2,
@@ -371,7 +371,7 @@ where
     Leaf: Clone + PartialEq + Eq + Display + Hash,
     Head: Clone + Display,
 {
-    pub(crate) fn make_unresolved(self) -> GenericFact<String, String> {
+    pub fn make_unresolved(self) -> GenericFact<String, String> {
         self.subst(
             &mut |span, v| GenericExpr::Var(span.clone(), v.to_string()),
             &mut |h| h.to_string(),
