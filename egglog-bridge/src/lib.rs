@@ -1765,3 +1765,4 @@ pub struct IterationReport {
 }
 
 pub use core_relations::RuleReport;
+pub mod generic_rule;

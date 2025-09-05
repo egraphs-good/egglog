@@ -5,9 +5,11 @@ mod parse;
 pub mod remove_globals;
 
 use crate::core::{GenericAtom, GenericAtomTerm, HeadOrEq, Query, ResolvedCall, ResolvedCoreRule};
+use egglog_bridge::generic_rule::GenericRule;
 use crate::*;
 pub use expr::*;
 pub use parse::*;
+pub use egglog_bridge::generic_rule::GenericRule;
 
 #[derive(Clone, Debug)]
 /// The egglog internal representation of already compiled rules
@@ -479,6 +481,7 @@ where
     ///       ((path x z))
     ///       :ruleset myrules2)
     /// (combined-ruleset myrules-combined myrules1 myrules2)
+    /// ```
     UnstableCombinedRuleset(Span, String, Vec<String>),
     /// ```text
     /// (rule <body:List<Fact>> <head:List<Action>>)
@@ -817,7 +820,7 @@ pub(crate) type ResolvedRunConfig = GenericRunConfig<ResolvedCall, ResolvedVar>;
 #[derive(Clone, Debug, PartialEq, Eq, Hash)]
 pub struct GenericRunConfig<Head, Leaf> {
     pub ruleset: String,
-    pub until: Option<Vec<GenericFact<Head, Leaf>>>,
+    pub until: Option<Vec<GenericFact<Head, Leaf>>,
 }
 
 impl<Head, Leaf> GenericRunConfig<Head, Leaf>
@@ -1396,171 +1399,10 @@ where
                 GenericAction::Union(span, lhs, rhs)
             }
             GenericAction::Panic(span, msg) => GenericAction::Panic(span, msg.clone()),
-            GenericAction::Expr(span, e) => {
-                GenericAction::Expr(span, e.subst_leaf(&mut fvar_expr!()))
-            }
+            GenericAction::Expr(span, e) => GenericAction::Expr(span, e.subst_leaf(&mut fvar_expr!()))
         }
     }
 }
 
 pub type Rule = GenericRule<String, String>;
 pub(crate) type ResolvedRule = GenericRule<ResolvedCall, ResolvedVar>;
-
-#[derive(Clone, Debug, PartialEq, Eq, Hash)]
-pub struct GenericRule<Head, Leaf>
-where
-    Head: Clone + Display,
-    Leaf: Clone + PartialEq + Eq + Display + Hash,
-{
-    pub span: Span,
-    pub head: GenericActions<Head, Leaf>,
-    pub body: Vec<GenericFact<Head, Leaf>>,
-}
-
-impl<Head, Leaf> GenericRule<Head, Leaf>
-where
-    Head: Clone + Display,
-    Leaf: Clone + PartialEq + Eq + Display + Hash,
-{
-    pub(crate) fn visit_exprs(
-        self,
-        f: &mut impl FnMut(GenericExpr<Head, Leaf>) -> GenericExpr<Head, Leaf>,
-    ) -> Self {
-        Self {
-            span: self.span,
-            head: self.head.visit_exprs(f),
-            body: self
-                .body
-                .into_iter()
-                .map(|bexpr| bexpr.visit_exprs(f))
-                .collect(),
-        }
-    }
-}
-
-impl<Head, Leaf> GenericRule<Head, Leaf>
-where
-    Head: Clone + Display,
-    Leaf: Clone + PartialEq + Eq + Display + Hash,
-{
-    pub(crate) fn fmt_with_ruleset(
-        &self,
-        f: &mut Formatter,
-        ruleset: &str,
-        name: &str,
-    ) -> std::fmt::Result {
-        let indent = " ".repeat(7);
-        write!(f, "(rule (")?;
-        for (i, fact) in self.body.iter().enumerate() {
-            if i > 0 {
-                write!(f, "{}", indent)?;
-            }
-
-            if i != self.body.len() - 1 {
-                writeln!(f, "{}", fact)?;
-            } else {
-                write!(f, "{}", fact)?;
-            }
-        }
-        write!(f, ")\n      (")?;
-        for (i, action) in self.head.0.iter().enumerate() {
-            if i > 0 {
-                write!(f, "{}", indent)?;
-            }
-            if i != self.head.0.len() - 1 {
-                writeln!(f, "{}", action)?;
-            } else {
-                write!(f, "{}", action)?;
-            }
-        }
-        let ruleset = if !ruleset.is_empty() {
-            format!(":ruleset {}", ruleset)
-        } else {
-            "".into()
-        };
-        let name = if !name.is_empty() {
-            format!(":name \"{}\"", name)
-        } else {
-            "".into()
-        };
-        write!(f, ")\n{} {} {})", indent, ruleset, name)
-    }
-}
-
-pub type Rewrite = GenericRewrite<String, String>;
-
-#[derive(Clone, Debug)]
-pub struct GenericRewrite<Head, Leaf> {
-    pub span: Span,
-    pub lhs: GenericExpr<Head, Leaf>,
-    pub rhs: GenericExpr<Head, Leaf>,
-    pub conditions: Vec<GenericFact<Head, Leaf>>,
-}
-
-impl<Head: Display, Leaf: Display> GenericRewrite<Head, Leaf> {
-    /// Converts the rewrite into an s-expression.
-    pub fn fmt_with_ruleset(
-        &self,
-        f: &mut Formatter,
-        ruleset: &str,
-        is_bidirectional: bool,
-        subsume: bool,
-    ) -> std::fmt::Result {
-        let direction = if is_bidirectional {
-            "birewrite"
-        } else {
-            "rewrite"
-        };
-        write!(f, "({direction} {} {}", self.lhs, self.rhs)?;
-        if subsume {
-            write!(f, " :subsume")?;
-        }
-        if !self.conditions.is_empty() {
-            write!(f, " :when ({})", ListDisplay(&self.conditions, " "))?;
-        }
-        if !ruleset.is_empty() {
-            write!(f, " :ruleset {ruleset}")?;
-        }
-        write!(f, ")")
-    }
-}
-
-impl<Head, Leaf: Clone> MappedExpr<Head, Leaf>
-where
-    Head: Clone + Display,
-    Leaf: Clone + PartialEq + Eq + Display + Hash,
-{
-    pub(crate) fn get_corresponding_var_or_lit(
-        &self,
-        typeinfo: &TypeInfo,
-    ) -> GenericAtomTerm<Leaf> {
-        // Note: need typeinfo to resolve whether a symbol is a global or not
-        // This is error-prone and the complexities can be avoided by treating globals
-        // as nullary functions.
-        match self {
-            GenericExpr::Var(span, v) => {
-                if typeinfo.is_global(&v.to_string()) {
-                    GenericAtomTerm::Global(span.clone(), v.clone())
-                } else {
-                    GenericAtomTerm::Var(span.clone(), v.clone())
-                }
-            }
-            GenericExpr::Lit(span, lit) => GenericAtomTerm::Literal(span.clone(), lit.clone()),
-            GenericExpr::Call(span, head, _) => GenericAtomTerm::Var(span.clone(), head.to.clone()),
-        }
-    }
-}
-
-impl<Head, Leaf> GenericActions<Head, Leaf>
-where
-    Head: Clone + Display,
-    Leaf: Clone + PartialEq + Eq + Display + Hash,
-{
-    pub fn new(actions: Vec<GenericAction<Head, Leaf>>) -> Self {
-        Self(actions)
-    }
-
-    pub fn singleton(action: GenericAction<Head, Leaf>) -> Self {
-        Self(vec![action])
-    }
-}
