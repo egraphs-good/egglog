@@ -1,5 +1,5 @@
-use self::{Database, SortedWritesTable, Table, Value};
-use crate::numeric_id::NumericId;
+use egglog_core_relations::{Database, SortedWritesTable, Table, Value};
+use egglog_numeric_id::NumericId;
 use divan::{Bencher, counter::ItemsCount};
 use rand::{Rng, rng};
 use rayon::{

@@ -160,7 +160,7 @@ fn roundtrip_medium_integers_unboxable() {
         assert_eq!(val, unboxed);
     }
     for _ in 0..100 {
-        let val: u64 = rng.gen_range(0..=2147483647);
+        let val: u64 = rng.random_range(0..=2147483647);
         let boxed = bases.get(val);
         let unboxed = bases.unwrap::<u64>(boxed);
         assert_eq!(val, unboxed);
@@ -173,7 +173,7 @@ fn roundtrip_medium_integers_unboxable() {
         assert_eq!(val, unboxed);
     }
     for _ in 0..100 {
-        let val: i64 = rng.gen_range(0..=2147483647);
+        let val: i64 = rng.random_range(0..=2147483647);
         let boxed = bases.get(val);
         let unboxed = bases.unwrap::<i64>(boxed);
         assert_eq!(val, unboxed);
@@ -186,7 +186,7 @@ fn roundtrip_medium_integers_unboxable() {
         assert_eq!(val, unboxed);
     }
     for _ in 0..100 {
-        let val: usize = rng.gen_range(0..=2147483647);
+        let val: usize = rng.random_range(0..=2147483647);
         let boxed = bases.get(val);
         let unboxed = bases.unwrap::<usize>(boxed);
         assert_eq!(val, unboxed);
@@ -200,7 +200,7 @@ fn roundtrip_medium_integers_unboxable() {
     }
     // Random isize samples (31-bit range)
     for _ in 0..100 {
-        let val: isize = rng.gen_range(0..=2147483647);
+        let val: isize = rng.random_range::<i32, _>(0..=2147483647) as isize;
         let boxed = bases.get(val);
         let unboxed = bases.unwrap::<isize>(boxed);
         assert_eq!(val, unboxed);
@@ -221,7 +221,7 @@ fn roundtrip_medium_integers_interned() {
     }
     // Random u64 samples (large values)
     for _ in 0..100 {
-        let val: u64 = rng.gen_range(2147483648..=u64::MAX);
+        let val: u64 = rng.random_range(2147483648..=u64::MAX);
         let boxed = bases.get(val);
         let unboxed = bases.unwrap::<u64>(boxed);
         assert_eq!(val, unboxed);
@@ -236,13 +236,13 @@ fn roundtrip_medium_integers_interned() {
     }
     // Random i64 samples (values outside 31-bit range)
     for _ in 0..50 {
-        let val: i64 = rng.gen_range(i64::MIN..0);
+        let val: i64 = rng.random_range(i64::MIN..0);
         let boxed = bases.get(val);
         let unboxed = bases.unwrap::<i64>(boxed);
         assert_eq!(val, unboxed);
     }
     for _ in 0..50 {
-        let val: i64 = rng.gen_range(2147483648..=i64::MAX);
+        let val: i64 = rng.random_range(2147483648..=i64::MAX);
         let boxed = bases.get(val);
         let unboxed = bases.unwrap::<i64>(boxed);
         assert_eq!(val, unboxed);
@@ -258,7 +258,7 @@ fn roundtrip_medium_integers_interned() {
         }
         // Random usize samples (large values)
         for _ in 0..100 {
-            let val: usize = rng.gen_range(2147483648..=usize::MAX);
+            let val: usize = rng.random_range(2147483648..=usize::MAX);
             let boxed = bases.get(val);
             let unboxed = bases.unwrap::<usize>(boxed);
             assert_eq!(val, unboxed);
@@ -275,13 +275,13 @@ fn roundtrip_medium_integers_interned() {
         }
         // Random isize samples (values outside 31-bit range)
         for _ in 0..50 {
-            let val: isize = rng.random_range(isize::MIN..0);
+            let val: isize = rng.random_range(isize::MIN as i64..0) as isize;
             let boxed = bases.get(val);
             let unboxed = bases.unwrap::<isize>(boxed);
             assert_eq!(val, unboxed);
         }
         for _ in 0..50 {
-            let val: isize = rng.random_range(2147483648..=isize::MAX);
+            let val: isize = rng.random_range(2147483648..=isize::MAX as i64) as isize;
             let boxed = bases.get(val);
             let unboxed = bases.unwrap::<isize>(boxed);
             assert_eq!(val, unboxed);

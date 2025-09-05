@@ -1,4 +1,4 @@
-use numeric_id::{NumericId, define_id};
+use crate::numeric_id::{NumericId, define_id};
 
 use crate::UnionFind;
 

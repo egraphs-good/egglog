@@ -27,13 +27,13 @@ fn prepare_operations_random(n_items: usize) -> (Vec<Operation>, Vec<Operation>)
     let mut operations = Vec::new();
     for i in 0..(n_items / 4) {
         if rng.random_bool(0.9) {
-            seed_operations.push(Operation::Union(i, rng.gen_range(0..n_items)));
+            seed_operations.push(Operation::Union(i, rng.random_range(0..n_items)));
         } else {
-            operations.push(Operation::Union(i, rng.gen_range(0..n_items)));
+            operations.push(Operation::Union(i, rng.random_range(0..n_items)));
         }
     }
     for _ in 0..(2 * n_items) {
-        operations.push(Operation::Find(rng.gen_range(0..n_items)));
+        operations.push(Operation::Find(rng.random_range(0..n_items)));
     }
     operations.shuffle(&mut rng);
     (seed_operations, operations)
@@ -48,7 +48,7 @@ fn prepare_operations_local(n_items: usize) -> (Vec<Operation>, Vec<Operation>) 
         if rng.random_bool(0.85) {
             continue;
         }
-        let rhs = cmp::min(i + rng.gen_range(0..1000), n_items);
+        let rhs = cmp::min(i + rng.random_range(0..1000), n_items);
         if rng.random_bool(0.9) {
             seed_operations.push(Operation::Union(i, rhs));
         } else {
@@ -56,7 +56,7 @@ fn prepare_operations_local(n_items: usize) -> (Vec<Operation>, Vec<Operation>) 
         }
     }
     for _ in 0..(2 * n_items) {
-        operations.push(Operation::Find(rng.gen_range(0..n_items)));
+        operations.push(Operation::Find(rng.random_range(0..n_items)));
     }
     operations.sort_by_key(|op| match op {
         Operation::Union(a, _) => *a,
@@ -70,13 +70,13 @@ fn find_only_random(n_items: usize) -> (Vec<Operation>, Vec<usize>) {
     let mut seed_operations = Vec::new();
     let mut operations = Vec::new();
     for i in 0..(n_items / 4) {
-        let rhs = rng.gen_range(0..n_items);
+        let rhs = rng.random_range(0..n_items);
         seed_operations.push(Operation::Union(i, rhs));
         seed_operations.push(Operation::Find(i));
         seed_operations.push(Operation::Find(rhs));
     }
     for _ in 0..(2 * n_items) {
-        operations.push(rng.gen_range(0..n_items));
+        operations.push(rng.random_range(0..n_items));
     }
     operations.shuffle(&mut rng);
     (seed_operations, operations)
