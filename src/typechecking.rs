@@ -172,7 +172,7 @@ impl EGraph {
                 let expr = self
                     .type_info
                     .typecheck_expr(symbol_gen, expr, &Default::default())?;
-                let output_type = expr.output_type();
+                let output_type = output_type(&expr);
                 self.type_info
                     .global_sorts
                     .insert(var.clone(), output_type.clone());
@@ -196,11 +196,11 @@ impl EGraph {
                 let res_variants =
                     self.type_info
                         .typecheck_expr(symbol_gen, variants, &Default::default())?;
-                if res_variants.output_type().name() != I64Sort.name() {
+                if output_type(&res_variants).name() != I64Sort.name() {
                     return Err(TypeError::Mismatch {
                         expr: variants.clone(),
                         expected: I64Sort.to_arcsort(),
-                        actual: res_variants.output_type(),
+                        actual: output_type(&res_variants),
                     });
                 }
 
