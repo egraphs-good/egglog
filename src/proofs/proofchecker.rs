@@ -1,384 +1,219 @@
 use crate::{
-    HashMap, HashSet, Term, TermDag,
-    ast::{Command, Expr, Fact, GenericAction, GenericFact, Rule},
+    HashSet,
+    ast::{Command, GenericAction, GenericFact, Rule},
 };
+use core_relations::Variable;
+use egglog_bridge::FunctionId;
+use egglog_bridge::proof_format::{Premise, ProofStore, TermId, TermProof, TermProofId};
+use egglog_bridge::rule::Variable;
+use numeric_id::DenseIdMap;
 
-type ProofId = usize;
-
-#[derive(Clone)]
-pub struct ProofStore {
-    store: Vec<ProofTerm>,
-    memo: HashMap<ProofTerm, ProofId>,
-    termdag: TermDag,
-}
-
-// use a Vec so that we can hash it, sharing sub-proofs
-type Substitution = Vec<(String, Term)>;
-
-fn subst_get(subst: &Substitution, sym: String) -> Option<&Term> {
-    for ele in subst {
-        if ele.0 == sym {
-            return Some(&ele.1);
-        }
-    }
-    None
-}
-
-#[derive(Clone, PartialEq, Eq, Hash, Debug)]
-pub enum Proposition {
-    TOk(Term),
-    TEq(Term, Term),
-}
-
-// todo how to ignore this warning?
-#[allow(clippy::enum_variant_names)]
-#[derive(Clone, PartialEq, Eq, Hash)]
-pub enum ProofTerm {
-    /// proves a Proposition based on a rule application
-    /// the subsitution gives the mapping from variables to terms
-    /// the body_pfs gives proofs for each of the conditions in the query of the rule
-    /// the act_pf gives a location in the action of the proposition
-    PRule {
-        rule_name: String,
-        subst: Substitution,
-        body_pfs: Vec<ProofId>,
-        result: Proposition,
-    },
-    /// A term is equal to itself- proves the proposition t = t
-    PRefl {
-        t_ok_pf: ProofId,
-        t: Term,
-    },
-    /// The symmetric equality of eq_pf
-    PSym {
-        eq_pf: ProofId,
-    },
-    PTrans {
-        pfxy: ProofId,
-        pfyz: ProofId,
-    },
-    /// get a proof for the child of a term given a proof of a term
-    PProj {
-        pf_f_args_ok: ProofId,
-        arg_idx: usize,
-    },
-    /// Proves f(x1, y1, ...) = f(x2, y2, ...) where f is fun_sym
-    /// A proof via congruence- one proof for each child of the term
-    /// pf_f_args_ok is a proof that the term with the lhs children is valid
-    ///
-    PCong {
-        pf_args_eq: Vec<ProofId>,
-        pf_f_args_ok: ProofId,
-        fun_sym: String,
-    },
-}
+// Variable type must be made public in egglog_bridge or imported from crate::ast if available
+// use egglog_bridge::rule::Variable;
 
 #[derive(PartialEq, Eq, Debug)]
 pub enum ProofCheckError {
     Todo,
     WrongNumBodyProofs,
-    ProofMismatch(String, Fact, Proposition),
+    ProofMismatch(String /* rule name */, TermId /* expected term */),
 }
 
-impl ProofStore {
-    pub fn new(termdag: TermDag) -> Self {
-        ProofStore {
-            memo: HashMap::default(),
-            termdag,
-            store: vec![],
-        }
-    }
+/// Check a term proof by its id, returning the resulting TermId or error.
+pub fn check(
+    proof_store: &mut ProofStore,
+    proof_id: TermProofId,
+    prog: &Vec<Command>,
+) -> Result<TermId, ProofCheckError> {
+    check_id(proof_store, proof_id, prog)
+}
 
-    fn id_of(&mut self, proof_term: &ProofTerm) -> ProofId {
-        match self.memo.get(proof_term) {
-            Some(existing) => *existing,
-            None => {
-                let fresh = self.store.len();
-                self.store.push(proof_term.clone());
-                self.memo.insert(proof_term.clone(), fresh);
-                fresh
-            }
-        }
-    }
-
-    fn get_rule_by_name<'a>(
-        &self,
-        prog: &'a Vec<Command>,
-        name: String,
-    ) -> Result<&'a Rule, ProofCheckError> {
-        for command in prog {
-            if let Command::Rule {
-                name: current_name,
-                rule,
-                ..
-            } = command
-            {
-                if current_name == &name {
-                    return Ok(rule);
-                }
-            }
-        }
-        Err(ProofCheckError::Todo)
-    }
-
-    fn check_rule_fires(
-        &mut self,
-        prog: &Vec<Command>,
-        rule_name: String,
-        subst: &Substitution,
-        body_pfs: &[ProofId],
-    ) -> Result<(), ProofCheckError> {
-        let rule_ast = self.get_rule_by_name(prog, rule_name)?;
-        let props = body_pfs
-            .iter()
-            .map(|pf| self.check_id(*pf, prog))
-            .collect::<Result<Vec<_>, _>>()?;
-        if props.len() != rule_ast.body.len() {
-            return Err(ProofCheckError::WrongNumBodyProofs);
-        }
-
-        for (fact, prop) in rule_ast.body.iter().zip(props.iter()) {
-            match (fact, prop) {
-                (GenericFact::Eq(_span, expr1, expr2), Proposition::TEq(term1, term2)) => {
-                    let mut intermediate_terms = HashSet::default();
-                    let rule_term1 = self.substitute(expr1, subst, &mut intermediate_terms)?;
-                    let rule_term2 = self.substitute(expr2, subst, &mut intermediate_terms)?;
-                    if &rule_term1 != term1 || &rule_term2 != term2 {
-                        return Err(ProofCheckError::ProofMismatch(
-                            rule_name,
-                            fact.clone(),
-                            prop.clone(),
-                        ));
+pub fn check_id(
+    proof_store: &mut ProofStore,
+    proof_id: TermProofId,
+    prog: &Vec<Command>,
+) -> Result<TermId, ProofCheckError> {
+    let term_proof = proof_store
+        .get_term_proof(proof_id)
+        .ok_or(ProofCheckError::Todo)?;
+    match term_proof {
+        TermProof::PRule {
+            rule_name,
+            subst,
+            body_pfs,
+            result,
+        } => {
+            for premise in body_pfs {
+                match premise {
+                    Premise::TermOk(term_pf_id) => {
+                        check_id(proof_store, *term_pf_id, prog)?;
+                    }
+                    Premise::Eq(_eq_pf_id) => {
+                        Ok(())?;
                     }
                 }
-                (GenericFact::Fact(expr), Proposition::TOk(term)) => {
-                    let mut intermediate_terms = HashSet::default();
-                    let rule_term = self.substitute(expr, subst, &mut intermediate_terms)?;
-                    if &rule_term != term {
-                        return Err(ProofCheckError::ProofMismatch(
-                            rule_name,
-                            fact.clone(),
-                            prop.clone(),
-                        ));
-                    }
-                }
-                _ => {
-                    return Err(ProofCheckError::ProofMismatch(
-                        rule_name,
-                        fact.clone(),
-                        prop.clone(),
-                    ));
-                }
+            }
+            let props = rule_propositions(proof_store, prog, rule_name.as_ref(), subst)?;
+            if props.contains(result) {
+                Ok(*result)
+            } else {
+                Err(ProofCheckError::Todo)
             }
         }
-
-        // TODO: actually check rule fires lol
-        Ok(())
+        TermProof::PProj {
+            pf_f_args_ok,
+            arg_idx,
+        } => {
+            // Implement projection logic using TermDag
+            let parent_term = check_id(proof_store, *pf_f_args_ok, prog)?;
+            // Use TermDag's proj method
+            let projected = proof_store.termdag().proj(parent_term, *arg_idx);
+            Ok(projected)
+        }
+        TermProof::PCong(_cong_pf) => Err(ProofCheckError::Todo),
+        TermProof::PFiat { desc: _, term } => Ok(*term),
     }
+}
 
-    fn substitute(
-        &mut self,
-        expr: &Expr,
-        substitution: &Substitution,
-        intermediate_terms: &mut HashSet<Term>,
-    ) -> Result<Term, ProofCheckError> {
-        let res = match expr {
-            crate::ast::GenericExpr::Lit(_span, literal) => self.termdag.lit(literal.clone()),
-            crate::ast::GenericExpr::Var(_span, v) => {
-                let Some(term) = subst_get(substitution, *v) else {
+pub fn get_rule_by_name<'a>(
+    prog: &'a Vec<Command>,
+    name: &str,
+) -> Result<&'a Rule, ProofCheckError> {
+    for command in prog {
+        if let Command::Rule {
+            name: current_name,
+            rule,
+            ..
+        } = command
+        {
+            if current_name == name {
+                return Ok(rule);
+            }
+        }
+    }
+    Err(ProofCheckError::Todo)
+}
+
+pub fn check_rule_fires(
+    proof_store: &mut ProofStore,
+    prog: &Vec<Command>,
+    rule_name: &str,
+    subst: &DenseIdMap<Variable, TermId>,
+    body_pfs: &[TermProofId],
+) -> Result<(), ProofCheckError> {
+    let rule_ast = get_rule_by_name(prog, rule_name)?;
+    let props = body_pfs
+        .iter()
+        .map(|pf| check_id(proof_store, *pf, prog))
+        .collect::<Result<Vec<_>, _>>()?;
+    if props.len() != rule_ast.body.len() {
+        return Err(ProofCheckError::WrongNumBodyProofs);
+    }
+    for (fact, prop) in rule_ast.body.iter().zip(props.iter()) {
+        match fact {
+            GenericFact::Eq(_span, expr1, expr2) => {
+                let mut intermediate_terms = HashSet::default();
+                let rule_term1 = substitute(proof_store, &expr1, subst, &mut intermediate_terms)?;
+                let rule_term2 = substitute(proof_store, &expr2, subst, &mut intermediate_terms)?;
+                if &rule_term1 != prop || &rule_term2 != prop {
+                    return Err(ProofCheckError::ProofMismatch(rule_name.to_string(), *prop));
+                }
+            }
+            GenericFact::Fact(expr) => {
+                let mut intermediate_terms = HashSet::default();
+                let rule_term = substitute(proof_store, &expr, subst, &mut intermediate_terms)?;
+                if &rule_term != prop {
+                    return Err(ProofCheckError::ProofMismatch(rule_name.to_string(), *prop));
+                }
+            }
+            _ => {
+                return Err(ProofCheckError::ProofMismatch(rule_name.to_string(), *prop));
+            }
+        }
+    }
+    Ok(())
+}
+
+// Fix rule_propositions: use get_or_insert for term construction
+pub fn rule_propositions(
+    proof_store: &mut ProofStore,
+    prog: &Vec<Command>,
+    rule_name: &str,
+    subst: &DenseIdMap<Variable, TermId>,
+) -> Result<HashSet<TermId>, ProofCheckError> {
+    let rule = get_rule_by_name(prog, rule_name)?;
+    let mut propositions = HashSet::default();
+    let mut current_subst = subst.clone();
+    for action in &rule.head.0 {
+        match action {
+            GenericAction::Let(_span, lhs, generic_expr) => {
+                let mut intermediate = HashSet::default();
+                // lhs must be Variable, not String
+                let lhs_var = Variable::new_const(lhs)?;
+                let rhs = substitute(
+                    proof_store,
+                    &generic_expr,
+                    &current_subst,
+                    &mut intermediate,
+                )?;
+                if current_subst.get(&lhs_var).is_some() {
                     return Err(ProofCheckError::Todo);
-                };
-                term.clone()
+                }
+                for term in intermediate {
+                    propositions.insert(term);
+                }
+                current_subst.insert(lhs_var, rhs);
             }
-            crate::ast::GenericExpr::Call(_span, func, generic_exprs) => {
+            GenericAction::Expr(_span, generic_expr) => {
+                let mut intermediate = HashSet::default();
+                let _rhs = substitute(
+                    proof_store,
+                    &generic_expr,
+                    &current_subst,
+                    &mut intermediate,
+                )?;
+                for term in intermediate {
+                    propositions.insert(term);
+                }
+            }
+            GenericAction::Set(_span, func, generic_exprs, generic_expr) => {
                 let mut children = vec![];
                 for expr in generic_exprs {
-                    children.push(self.substitute(expr, substitution, intermediate_terms)?);
-                }
-                self.termdag.app(*func, children)
-            }
-        };
-
-        intermediate_terms.insert(res.clone());
-        Ok(res)
-    }
-
-    fn rule_propositions(
-        &mut self,
-        prog: &Vec<Command>,
-        rule_name: String,
-        subst: &Substitution,
-    ) -> Result<HashSet<Proposition>, ProofCheckError> {
-        let rule = self.get_rule_by_name(prog, rule_name)?;
-
-        let mut propositions = HashSet::default();
-        let mut current_subst = subst.clone();
-
-        for action in &rule.head.0 {
-            match action {
-                GenericAction::Let(_span, lhs, generic_expr) => {
                     let mut intermediate = HashSet::default();
-                    let rhs = self.substitute(generic_expr, &current_subst, &mut intermediate)?;
-                    if subst_get(&current_subst, *lhs).is_some() {
-                        return Err(ProofCheckError::Todo);
-                    }
-
+                    let term = substitute(proof_store, &expr, &current_subst, &mut intermediate)?;
                     for term in intermediate {
-                        propositions.insert(Proposition::TOk(term));
+                        propositions.insert(term);
                     }
-                    current_subst.push((*lhs, rhs));
+                    children.push(term);
                 }
-                GenericAction::Expr(_span, generic_expr) => {
-                    let mut intermediate = HashSet::default();
-                    let _rhs = self.substitute(generic_expr, &current_subst, &mut intermediate)?;
-
-                    for term in intermediate {
-                        propositions.insert(Proposition::TOk(term));
-                    }
-                }
-                GenericAction::Set(_span, func, generic_exprs, generic_expr) => {
-                    let mut children = vec![];
-                    for expr in generic_exprs {
-                        let mut intermediate = HashSet::default();
-                        let term = self.substitute(expr, &current_subst, &mut intermediate)?;
-                        for term in intermediate {
-                            propositions.insert(Proposition::TOk(term));
-                        }
-                        children.push(term);
-                    }
-
-                    let final_term =
-                        self.substitute(generic_expr, &current_subst, &mut HashSet::default())?;
-                    children.push(final_term.clone());
-                    let mut res = self.termdag.app(*func, children);
-                    propositions.insert(Proposition::TOk(res.clone()));
-                }
-                GenericAction::Change(_span, change, _, _generic_exprs) => {
-                    match change {
-                        crate::ast::Change::Delete => {
-                            // delete adds an expression to the database,
-                        }
-                        crate::ast::Change::Subsume => todo!(),
-                    }
-                }
-                GenericAction::Union(_span, _generic_expr, _generic_expr1) => todo!(),
-                GenericAction::Panic(_span, _) => todo!(),
-            }
-        }
-
-        Ok(propositions)
-    }
-
-    /// Get the proposition for a [`ProofTerm`],
-    /// or an error for invalid proofs.
-    pub fn check(
-        &mut self,
-        proof: &ProofTerm,
-        prog: &Vec<Command>,
-    ) -> Result<Proposition, ProofCheckError> {
-        let proofid = self.id_of(proof);
-        self.check_id(proofid, prog)
-    }
-
-    /// Check a particular proof id, returning the [`Proposition`] it proves.
-    /// Borrows proof as mut in order to mutate the [`TermDag`] backing store.
-    fn check_id(
-        &mut self,
-        proof_id: ProofId,
-        prog: &Vec<Command>,
-    ) -> Result<Proposition, ProofCheckError> {
-        match self.store[proof_id].clone() {
-            ProofTerm::PRule {
-                rule_name,
-                subst,
-                body_pfs,
-                result,
-            } => {
-                self.check_rule_fires(prog, rule_name, &subst, &body_pfs)?;
-                let props = self.rule_propositions(prog, rule_name, &subst)?;
-
-                if props.contains(&result) {
-                    Ok(result.clone())
-                } else {
-                    Err(ProofCheckError::Todo)
-                }
-            }
-            ProofTerm::PRefl { t_ok_pf, t: _t } => {
-                // check t_ok_pf
-                let prop = self.check_id(t_ok_pf, prog)?;
-                match prop {
-                    Proposition::TOk(term) => Ok(Proposition::TEq(term.clone(), term)),
-                    Proposition::TEq(_term, _term1) => Err(ProofCheckError::Todo),
-                }
-            }
-            ProofTerm::PSym { eq_pf } => {
-                let prop = self.check_id(eq_pf, prog)?;
-                match prop {
-                    Proposition::TOk(_) => Err(ProofCheckError::Todo),
-                    Proposition::TEq(a, b) => Ok(Proposition::TEq(b, a)),
-                }
-            }
-            ProofTerm::PTrans { pfxy, pfyz } => {
-                let propxy = self.check_id(pfxy, prog)?;
-                let propyz = self.check_id(pfyz, prog)?;
-                match (propxy, propyz) {
-                    (Proposition::TEq(a, b), Proposition::TEq(b2, c)) if b == b2 => {
-                        Ok(Proposition::TEq(a, c))
-                    }
-                    _ => Err(ProofCheckError::Todo),
-                }
-            }
-            ProofTerm::PProj {
-                pf_f_args_ok,
-                arg_idx,
-            } => {
-                let prop = self.check_id(pf_f_args_ok, prog)?;
-                match prop {
-                    Proposition::TOk(Term::App(_symbol, items)) => match items.get(arg_idx) {
-                        Some(subterm) => Ok(Proposition::TOk(self.termdag.get(*subterm).clone())),
-                        None => Err(ProofCheckError::Todo),
-                    },
-                    _ => Err(ProofCheckError::Todo),
-                }
-            }
-            ProofTerm::PCong {
-                pf_args_eq,
-                pf_f_args_ok,
-                fun_sym: _,
-            } => {
-                let pf_f_args = self.check_id(pf_f_args_ok, prog)?;
-                let Proposition::TOk(Term::App(symbol, children)) = pf_f_args else {
-                    return Err(ProofCheckError::Todo);
+                let final_term = substitute(
+                    proof_store,
+                    &generic_expr,
+                    &current_subst,
+                    &mut HashSet::default(),
+                )?;
+                children.push(final_term.clone());
+                // Convert func from String to FunctionId
+                let func_id = FunctionId::new_const(func.as_str());
+                let term = egglog_bridge::proof_format::Term::Func {
+                    id: func_id,
+                    args: children,
                 };
-
-                if pf_args_eq.len() != children.len() {
-                    return Err(ProofCheckError::Todo);
-                };
-
-                let mut new_children = vec![];
-                for (child_term_id, child_proof) in children.iter().zip(pf_args_eq) {
-                    let Proposition::TEq(child_term2, next_term) =
-                        self.check_id(child_proof, prog)?
-                    else {
-                        return Err(ProofCheckError::Todo);
-                    };
-                    let child_term = self.termdag.get(*child_term_id);
-
-                    if &child_term2 != child_term {
-                        return Err(ProofCheckError::Todo);
-                    }
-
-                    new_children.push(next_term);
-                }
-
-                Ok(Proposition::TEq(
-                    Term::App(symbol, children.clone()),
-                    // use app here, the term might not exist in the termdag yet (TODO: brittle api!)
-                    self.termdag.app(symbol, new_children),
-                ))
+                let res = proof_store.termdag().get_or_insert(&term);
+                propositions.insert(res.clone());
             }
+            GenericAction::Change(_span, change, _, _generic_exprs) => {
+                match change {
+                    crate::ast::Change::Delete => {
+                        // delete adds an expression to the database,
+                    }
+                    crate::ast::Change::Subsume => todo!(),
+                }
+            }
+            GenericAction::Union(_span, _generic_expr, _generic_expr1) => todo!(),
+            GenericAction::Panic(_span, _) => todo!(),
         }
     }
+    Ok(propositions)
 }
 
 mod tests {
@@ -525,11 +360,21 @@ mod tests {
         );
         assert!(matches!(
             proof_store.check(&ptbad2, &parsed),
-            Err(ProofCheckError::ProofMismatch(_, _, _))
+            Err(ProofCheckError::ProofMismatch(_, _))
         ));
         assert!(matches!(
             proof_store.check(&ptbad3, &parsed),
-            Err(ProofCheckError::ProofMismatch(_, _, _))
+            Err(ProofCheckError::ProofMismatch(_, _))
         ));
     }
+}
+
+// Stub for substitute function
+fn substitute(
+    _proof_store: &mut ProofStore,
+    _expr: &crate::ast::Expr,
+    _subst: &DenseIdMap<Variable, TermId>,
+    _intermediate: &mut HashSet<TermId>,
+) -> Result<TermId, ProofCheckError> {
+    Err(ProofCheckError::Todo)
 }

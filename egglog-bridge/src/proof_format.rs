@@ -105,7 +105,7 @@ impl TermDag {
         self.store.get_or_insert(term)
     }
 
-    pub(crate) fn proj(&self, term: TermId, arg_idx: usize) -> TermId {
+    pub fn proj(&self, term: TermId, arg_idx: usize) -> TermId {
         let term = self.store.lookup(term).unwrap();
         match term {
             Term::Func { args, .. } => {
@@ -417,6 +417,16 @@ impl ProofStore {
                 cur
             }
         }
+    }
+
+    /// Public accessor for TermProof by id
+    pub fn get_term_proof(&self, id: TermProofId) -> Option<&TermProof> {
+        self.term_memo.data.get_index(id.index())
+    }
+
+    /// Public accessor for the underlying TermDag
+    pub fn termdag(&self) -> &TermDag {
+        &self.termdag
     }
 }
 
