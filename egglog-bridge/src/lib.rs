@@ -37,6 +37,7 @@ pub mod proof_format;
 pub(crate) mod proof_spec;
 pub(crate) mod rule;
 pub(crate) mod syntax;
+pub mod util;
 #[cfg(test)]
 mod tests;
 
@@ -1766,3 +1767,4 @@ pub struct IterationReport {
 
 pub use core_relations::RuleReport;
 pub mod generic_rule;
+pub mod span;

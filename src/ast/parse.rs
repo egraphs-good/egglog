@@ -2,6 +2,8 @@
 
 use crate::*;
 use ordered_float::OrderedFloat;
+use egglog_bridge::span::{Span, EgglogSpan, RustSpan, SrcFile};
+use egglog_bridge::generic_rule::*;
 
 #[macro_export]
 macro_rules! span {
