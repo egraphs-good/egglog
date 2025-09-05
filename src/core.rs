@@ -14,7 +14,7 @@ use std::hash::Hasher;
 use std::ops::AddAssign;
 
 use crate::{constraint::grounded_check, *};
-use egglog_bridge::generic_rule::{Change, GenericAction, GenericExpr, GenericFact};
+use egglog_bridge::generic_ast::{Change, GenericAction, GenericExpr, GenericFact};
 use egglog_bridge::span::Span;
 use egglog_bridge::util::ListDisplay;
 use typechecking::{FuncType, PrimitiveWithId, TypeError};
@@ -895,30 +895,28 @@ where
     }
 }
 
-impl ResolvedRule {
-    pub(crate) fn to_canonicalized_core_rule(
-        &self,
-        typeinfo: &TypeInfo,
-        fresh_gen: &mut SymbolGen,
-    ) -> Result<ResolvedCoreRule, TypeError> {
-        let value_eq = &typeinfo.get_prims("value-eq").unwrap()[0];
-        let value_eq = |at1: &ResolvedAtomTerm, at2: &ResolvedAtomTerm| {
-            ResolvedCall::Primitive(SpecializedPrimitive {
-                primitive: value_eq.clone(),
-                input: vec![at1.output(), at2.output()],
-                output: UnitSort.to_arcsort(),
-            })
-        };
+pub(crate) fn to_canonicalized_core_rule(
+    resolved_rule: &ResolvedRule,
+    typeinfo: &TypeInfo,
+    fresh_gen: &mut SymbolGen,
+) -> Result<ResolvedCoreRule, TypeError> {
+    let value_eq = &typeinfo.get_prims("value-eq").unwrap()[0];
+    let value_eq = |at1: &ResolvedAtomTerm, at2: &ResolvedAtomTerm| {
+        ResolvedCall::Primitive(SpecializedPrimitive {
+            primitive: value_eq.clone(),
+            input: vec![at1.output(), at2.output()],
+            output: UnitSort.to_arcsort(),
+        })
+    };
 
-        let rule = self.to_core_rule(typeinfo, fresh_gen)?;
+    let rule = resolved_rule.to_core_rule(typeinfo, fresh_gen)?;
 
-        // The groundedness check happens before canonicalization, because canonicalization
-        // may turn ungrounded variables in a query to unbounded variables in actions (e.g.,
-        // `(rule ((= x y)) ((R x y)))`) but unboundedness is only checked during type checking.
-        grounded_check(&rule)?;
+    // The groundedness check happens before canonicalization, because canonicalization
+    // may turn ungrounded variables in a query to unbounded variables in actions (e.g.,
+    // `(rule ((= x y)) ((R x y)))`) but unboundedness is only checked during type checking.
+    grounded_check(&rule)?;
 
-        let rule = rule.canonicalize(value_eq);
+    let rule = rule.canonicalize(value_eq);
 
-        Ok(rule)
-    }
+    Ok(rule)
 }

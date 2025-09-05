@@ -1770,5 +1770,5 @@ pub struct IterationReport {
 }
 
 pub use crate::core_relations::RuleReport;
-pub mod generic_rule;
+pub mod generic_ast;
 pub mod span;

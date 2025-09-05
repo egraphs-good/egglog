@@ -37,7 +37,7 @@ use core_relations::{ExternalFunctionId, make_external_func};
 use csv::Writer;
 pub use egglog_add_primitive::add_primitive;
 pub use egglog_bridge::FunctionRow;
-use egglog_bridge::generic_rule::{Change, GenericExpr};
+use egglog_bridge::generic_ast::{Change, GenericExpr, Literal};
 use egglog_bridge::span::{RustSpan, Span};
 use egglog_bridge::{ColumnTy, IterationReport, QueryEntry};
 use egglog_core_relations as core_relations;
@@ -953,7 +953,7 @@ impl EGraph {
             ResolvedNCommand::CoreAction(ResolvedAction::Expr(_, resolved_expr)) => resolved_expr,
             _ => unreachable!(),
         };
-        let sort = resolved_expr.output_type();
+        let sort = output_type(resolved_expr);
         let value = self.eval_resolved_expr(span, &resolved_expr)?;
         Ok((sort, value))
     }
