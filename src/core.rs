@@ -14,6 +14,7 @@ use std::hash::Hasher;
 use std::ops::AddAssign;
 
 use crate::{constraint::grounded_check, *};
+use egglog_bridge::util::ListDisplay;
 use typechecking::{FuncType, PrimitiveWithId, TypeError};
 
 #[derive(Debug, Clone, PartialEq, Eq)]

@@ -805,7 +805,7 @@ impl EGraph {
             if self.check_facts(span, facts).is_ok() {
                 log::info!(
                     "Breaking early because of facts:\n {}!",
-                    ListDisplay(facts, "\n")
+                    egglog_bridge::util::ListDisplay(facts, "\n")
                 );
                 return report;
             }
@@ -1767,9 +1767,9 @@ pub enum Error {
     NotFoundError(#[from] NotFoundError),
     #[error(transparent)]
     TypeError(#[from] TypeError),
-    #[error("Errors:\n{}", ListDisplay(.0, "\n"))]
+    #[error("Errors:\n{}", egglog_bridge::util::ListDisplay(.0, "\n"))]
     TypeErrors(Vec<TypeError>),
-    #[error("{}\nCheck failed: \n{}", .1, ListDisplay(.0, "\n"))]
+    #[error("{}\nCheck failed: \n{}", .1, egglog_bridge::util::ListDisplay(.0, "\n"))]
     CheckError(Vec<Fact>, Span),
     #[error("{1}\nNo such ruleset: {0}")]
     NoSuchRuleset(String, Span),

@@ -530,6 +530,7 @@ dependencies = [
  "mimalloc",
  "num-rational",
  "once_cell",
+ "ordered-float",
  "petgraph",
  "rand 0.9.2",
  "rayon",
