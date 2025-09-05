@@ -1,12 +1,31 @@
-use egglog_bridge::generic_ast::GenericExpr;
+use crate::{core::ResolvedCall, *};
 use ordered_float::OrderedFloat;
-use std::fmt::{Display, Formatter};
-use std::hash::Hash;
-use std::hash::Hasher;
+use std::{fmt::Display, hash::Hasher};
 
-use crate::ast::CorrespondingVar;
-use crate::core::ResolvedCall;
-use crate::{sort, ArcSort};
+macro_rules! impl_from {
+    ($ctor:ident($t:ty)) => {
+        impl From<Literal> for $t {
+            fn from(literal: Literal) -> Self {
+                match literal {
+                    Literal::$ctor(t) => t,
+                    #[allow(unreachable_patterns)]
+                    _ => panic!("Expected {}, got {literal}", stringify!($ctor)),
+                }
+            }
+        }
+
+        impl From<$t> for Literal {
+            fn from(t: $t) -> Self {
+                Literal::$ctor(t)
+            }
+        }
+    };
+}
+
+impl_from!(Int(i64));
+impl_from!(Float(OrderedFloat<f64>));
+impl_from!(String(String));
+
 
 #[derive(Debug, Clone)]
 pub struct ResolvedVar {
