@@ -37,6 +37,8 @@ pub use core_relations::{BaseValue, ContainerValue, ExecutionState, Value};
 use core_relations::{ExternalFunctionId, make_external_func};
 use csv::Writer;
 pub use egglog_bridge::FunctionRow;
+use egglog_bridge::generic_rule::{Change, GenericExpr};
+use egglog_bridge::span::{RustSpan, Span};
 use egglog_bridge::{ColumnTy, IterationReport, QueryEntry};
 use extract::{CostModel, DefaultCost, Extractor, TreeAdditiveCostModel};
 use indexmap::map::Entry;
