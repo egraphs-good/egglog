@@ -953,7 +953,7 @@ impl EGraph {
             ResolvedNCommand::CoreAction(ResolvedAction::Expr(_, resolved_expr)) => resolved_expr,
             _ => unreachable!(),
         };
-        let sort = output_type(resolved_expr);
+        let sort = output_type(&expr);
         let value = self.eval_resolved_expr(span, &resolved_expr)?;
         Ok((sort, value))
     }
@@ -1250,7 +1250,7 @@ impl EGraph {
                 use std::io::Write;
                 for expr in exprs {
                     let value = self.eval_resolved_expr(span.clone(), &expr)?;
-                    let expr_type = expr.output_type();
+                    let expr_type = output_type(&expr);
 
                     let term = extractor
                         .extract_best_with_sort(self, &mut termdag, value, expr_type)

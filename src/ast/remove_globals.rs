@@ -7,7 +7,7 @@
 
 use crate::*;
 use crate::{core::ResolvedCall, typechecking::FuncType};
-use egglog_bridge::generic_ast::{GenericExpr, GenericFact, GenericAction, Change, GenericRule};
+use egglog_bridge::generic_ast::{Change, GenericAction, GenericExpr, GenericFact, GenericRule};
 use egglog_bridge::span::Span;
 
 struct GlobalRemover<'a> {
@@ -92,7 +92,7 @@ impl GlobalRemover<'_> {
         match cmd {
             GenericNCommand::CoreAction(action) => match action {
                 GenericAction::Let(span, name, expr) => {
-                    let ty = expr.output_type();
+                    let ty = output_type(&expr);
 
                     let func_decl = ResolvedFunctionDecl {
                         name: name.name.clone(),

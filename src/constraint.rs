@@ -621,8 +621,8 @@ impl Assignment<AtomTerm, ArcSort> {
                 let rhs = self.annotate_expr(rhs, typeinfo);
                 let types: Vec<_> = children
                     .iter()
-                    .map(|child| child.output_type())
-                    .chain(once(rhs.output_type()))
+                    .map(|child| output_type(child))
+                    .chain(once(output_type(&rhs)))
                     .collect();
                 let resolved_call = ResolvedCall::from_resolution(head, &types, typeinfo);
                 if !matches!(resolved_call, ResolvedCall::Func(_)) {
@@ -649,7 +649,7 @@ impl Assignment<AtomTerm, ArcSort> {
                     .iter()
                     .map(|child| self.annotate_expr(child, typeinfo))
                     .collect();
-                let types: Vec<_> = children.iter().map(|child| child.output_type()).collect();
+                let types: Vec<_> = children.iter().map(|child| output_type(child)).collect();
                 let resolved_call =
                     ResolvedCall::from_resolution_func_types(head, &types, typeinfo)
                         .ok_or_else(|| TypeError::UnboundFunction(head.clone(), span.clone()))?;
@@ -664,8 +664,8 @@ impl Assignment<AtomTerm, ArcSort> {
                 let lhs = self.annotate_expr(lhs, typeinfo);
                 let rhs = self.annotate_expr(rhs, typeinfo);
 
-                let sort = lhs.output_type();
-                assert_eq!(sort.name(), rhs.output_type().name());
+                let sort = output_type(&lhs);
+                assert_eq!(sort.name(), output_type(&rhs).name());
                 if !sort.is_eq_sort() {
                     return Err(TypeError::NonEqsortUnion(sort, span.clone()));
                 }
