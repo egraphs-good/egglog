@@ -1,0 +1,3 @@
+var srcIndex = new Map(JSON.parse('[["egglog",["",[["ast",[],["check_shadowing.rs","desugar.rs","expr.rs","mod.rs","parse.rs","remove_globals.rs"]],["sort",[],["bigint.rs","bigrat.rs","bool.rs","f64.rs","fn.rs","i64.rs","map.rs","mod.rs","multiset.rs","set.rs","string.rs","unit.rs","vec.rs"]]],["cli.rs","constraint.rs","core.rs","extract.rs","lib.rs","prelude.rs","scheduler.rs","serialize.rs","termdag.rs","typechecking.rs","util.rs"]]]]'));
+createSrcSidebar();
+//{"start":36,"fragment_lengths":[403]}
