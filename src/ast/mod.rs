@@ -4,10 +4,11 @@ mod expr;
 mod parse;
 pub mod remove_globals;
 
-use crate::core::{GenericAtom, GenericAtomTerm, HeadOrEq, Query, ResolvedCall, ResolvedCoreRule};
+use crate::core::{
+    GenericAtom, GenericAtomTerm, HeadOrEq, Query, ResolvedCall, ResolvedCoreRule, to_query,
+};
 use crate::*;
-pub use egglog_bridge::generic_ast::GenericRule;
-use egglog_bridge::generic_ast::{GenericAction, GenericExpr, GenericFact};
+pub use egglog_bridge::generic_ast::{GenericAction, GenericExpr, GenericFact, GenericActions, GenericRule, Literal};
 use egglog_bridge::span::Span;
 use egglog_bridge::util::ListDisplay;
 pub use expr::*;
@@ -1050,9 +1051,9 @@ where
                 GenericFact::Eq(span, e1, e2) => {
                     let mut to_equate = vec![];
                     let mut process = |expr: &GenericExpr<Head, Leaf>| {
-                        let (child_atoms, expr) = expr.to_query(typeinfo, fresh_gen);
+                        let (child_atoms, expr) = to_query(expr, typeinfo, fresh_gen);
                         atoms.extend(child_atoms);
-                        to_equate.push(expr.get_corresponding_var_or_lit(typeinfo));
+                        to_equate.push(get_corresponding_var_or_lit(&expr, typeinfo));
                         expr
                     };
                     let e1 = process(e1);
@@ -1065,7 +1066,7 @@ where
                     new_body.push(GenericFact::Eq(span.clone(), e1, e2));
                 }
                 GenericFact::Fact(expr) => {
-                    let (child_atoms, expr) = expr.to_query(typeinfo, fresh_gen);
+                    let (child_atoms, expr) = to_query(expr, typeinfo, fresh_gen);
                     atoms.extend(child_atoms);
                     new_body.push(GenericFact::Fact(expr));
                 }

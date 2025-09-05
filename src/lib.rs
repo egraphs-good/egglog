@@ -65,6 +65,8 @@ use typechecking::TypeInfo;
 use util::*;
 use web_time::Duration;
 
+use crate::core::{to_canonicalized_core_rule, to_core_actions};
+
 pub type ArcSort = Arc<dyn Sort>;
 
 /// A trait for implementing custom primitive operations in egglog.
@@ -887,7 +889,7 @@ impl EGraph {
         ruleset: String,
     ) -> Result<String, Error> {
         let core_rule =
-            rule.to_canonicalized_core_rule(&self.type_info, &mut self.parser.symbol_gen)?;
+            to_canonicalized_core_rule(&rule, &self.type_info, &mut self.parser.symbol_gen)?;
         let (query, actions) = (&core_rule.body, &core_rule.head);
 
         let rule_id = {
@@ -920,7 +922,7 @@ impl EGraph {
     }
 
     fn eval_actions(&mut self, actions: &ResolvedActions) -> Result<(), Error> {
-        let (actions, _) = actions.to_core_actions(
+        let (actions, _) = to_core_actions(actions,
             &self.type_info,
             &mut Default::default(),
             &mut self.parser.symbol_gen,
@@ -953,7 +955,7 @@ impl EGraph {
             ResolvedNCommand::CoreAction(ResolvedAction::Expr(_, resolved_expr)) => resolved_expr,
             _ => unreachable!(),
         };
-        let sort = output_type(&expr);
+        let sort = output_type(&resolved_expr);
         let value = self.eval_resolved_expr(span, &resolved_expr)?;
         Ok((sort, value))
     }
@@ -980,7 +982,7 @@ impl EGraph {
 
         let result_var = ResolvedVar {
             name: self.parser.symbol_gen.fresh("eval_resolved_expr"),
-            sort: expr.output_type(),
+            sort: output_type(&expr),
             is_global_ref: false,
         };
         let actions = ResolvedActions::singleton(ResolvedAction::Let(
@@ -1038,7 +1040,7 @@ impl EGraph {
             body: facts.to_vec(),
         };
         let core_rule =
-            rule.to_canonicalized_core_rule(&self.type_info, &mut self.parser.symbol_gen)?;
+            to_canonicalized_core_rule(rule, &self.type_info, &mut self.parser.symbol_gen)?;
         let query = core_rule.body;
 
         let ext_sc = egglog_bridge::SideChannel::default();

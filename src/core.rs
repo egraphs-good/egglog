@@ -14,7 +14,7 @@ use std::hash::Hasher;
 use std::ops::AddAssign;
 
 use crate::{constraint::grounded_check, *};
-use egglog_bridge::generic_ast::{Change, GenericAction, GenericActions, GenericExpr, GenericFact};
+use egglog_bridge::generic_ast::{Change, GenericAction, GenericActions, GenericExpr};
 use egglog_bridge::span::Span;
 use egglog_bridge::util::ListDisplay;
 use typechecking::{FuncType, PrimitiveWithId, TypeError};
