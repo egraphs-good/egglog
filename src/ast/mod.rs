@@ -1174,3 +1174,26 @@ impl<Head: Display, Leaf: Display> GenericRewrite<Head, Leaf> {
         Ok(())
     }
 }
+
+pub(crate) fn get_corresponding_var_or_lit<
+    Head: Clone + Display,
+    Leaf: Clone + PartialEq + Eq + Display + Hash,
+>(
+    expr: &MappedExpr<Head, Leaf>,
+    typeinfo: &TypeInfo,
+) -> GenericAtomTerm<Leaf> {
+    // Note: need typeinfo to resolve whether a symbol is a global or not
+    // This is error-prone and the complexities can be avoided by treating globals
+    // as nullary functions.
+    match expr {
+        GenericExpr::Var(span, v) => {
+            if typeinfo.is_global(&v.to_string()) {
+                GenericAtomTerm::Global(span.clone(), v.clone())
+            } else {
+                GenericAtomTerm::Var(span.clone(), v.clone())
+            }
+        }
+        GenericExpr::Lit(span, lit) => GenericAtomTerm::Literal(span.clone(), lit.clone()),
+        GenericExpr::Call(span, head, _) => GenericAtomTerm::Var(span.clone(), head.to.clone()),
+    }
+}

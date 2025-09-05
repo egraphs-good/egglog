@@ -511,7 +511,7 @@ where
                 norm_actions.push(GenericCoreAction::LetAtomTerm(
                     span.clone(),
                     var.clone(),
-                    mapped_expr.get_corresponding_var_or_lit(typeinfo),
+                    get_corresponding_var_or_lit(&mapped_expr, typeinfo),
                 ));
                 mapped_actions
                     .0
@@ -522,19 +522,19 @@ where
                 let mut mapped_args = vec![];
                 for arg in args {
                     let mapped_arg =
-                        arg.to_core_actions(typeinfo, binding, fresh_gen, &mut norm_actions)?;
+                        to_core_actions_expr(arg, typeinfo, binding, fresh_gen, &mut norm_actions)?;
                     mapped_args.push(mapped_arg);
                 }
                 let mapped_expr =
-                    expr.to_core_actions(typeinfo, binding, fresh_gen, &mut norm_actions)?;
+                    to_core_actions_expr(expr, typeinfo, binding, fresh_gen, &mut norm_actions)?;
                 norm_actions.push(GenericCoreAction::Set(
                     span.clone(),
                     head.clone(),
                     mapped_args
                         .iter()
-                        .map(|e| e.get_corresponding_var_or_lit(typeinfo))
+                        .map(|e| get_corresponding_var_or_lit(e, typeinfo))
                         .collect(),
-                    mapped_expr.get_corresponding_var_or_lit(typeinfo),
+                    get_corresponding_var_or_lit(&mapped_expr, typeinfo),
                 ));
                 let v = fresh_gen.fresh(head);
                 mapped_actions.0.push(GenericAction::Set(
@@ -548,7 +548,7 @@ where
                 let mut mapped_args = vec![];
                 for arg in args {
                     let mapped_arg =
-                        arg.to_core_actions(typeinfo, binding, fresh_gen, &mut norm_actions)?;
+                        to_core_actions_expr(arg, typeinfo, binding, fresh_gen, &mut norm_actions)?;
                     mapped_args.push(mapped_arg);
                 }
                 norm_actions.push(GenericCoreAction::Change(
@@ -557,7 +557,7 @@ where
                     head.clone(),
                     mapped_args
                         .iter()
-                        .map(|e| e.get_corresponding_var_or_lit(typeinfo))
+                        .map(|e| get_corresponding_var_or_lit(e, typeinfo))
                         .collect(),
                 ));
                 let v = fresh_gen.fresh(head);
@@ -574,15 +574,12 @@ where
                     | (GenericExpr::Call(_, f, args), var @ GenericExpr::Var(..))
                         if f.is_constructor(typeinfo) =>
                     {
-                        // This is a rewrite. Rewrites from a constructor or
-                        // function to an id are much faster when we perform a
-                        // `set` directly.
                         let head = f;
                         let expr = var;
-
                         let mut mapped_args = vec![];
                         for arg in args {
-                            let mapped_arg = arg.to_core_actions(
+                            let mapped_arg = to_core_actions_expr(
+                                arg,
                                 typeinfo,
                                 binding,
                                 fresh_gen,
@@ -590,16 +587,21 @@ where
                             )?;
                             mapped_args.push(mapped_arg);
                         }
-                        let mapped_expr =
-                            expr.to_core_actions(typeinfo, binding, fresh_gen, &mut norm_actions)?;
+                        let mapped_expr = to_core_actions_expr(
+                            expr,
+                            typeinfo,
+                            binding,
+                            fresh_gen,
+                            &mut norm_actions,
+                        )?;
                         norm_actions.push(GenericCoreAction::Set(
                             span.clone(),
                             head.clone(),
                             mapped_args
                                 .iter()
-                                .map(|e| e.get_corresponding_var_or_lit(typeinfo))
+                                .map(|e| get_corresponding_var_or_lit(e, typeinfo))
                                 .collect(),
-                            mapped_expr.get_corresponding_var_or_lit(typeinfo),
+                            get_corresponding_var_or_lit(&mapped_expr, typeinfo),
                         ));
                         let v = fresh_gen.fresh(head);
                         mapped_actions.0.push(GenericAction::Set(
@@ -610,14 +612,24 @@ where
                         ));
                     }
                     _ => {
-                        let mapped_e1 =
-                            e1.to_core_actions(typeinfo, binding, fresh_gen, &mut norm_actions)?;
-                        let mapped_e2 =
-                            e2.to_core_actions(typeinfo, binding, fresh_gen, &mut norm_actions)?;
+                        let mapped_e1 = to_core_actions_expr(
+                            e1,
+                            typeinfo,
+                            binding,
+                            fresh_gen,
+                            &mut norm_actions,
+                        )?;
+                        let mapped_e2 = to_core_actions_expr(
+                            e2,
+                            typeinfo,
+                            binding,
+                            fresh_gen,
+                            &mut norm_actions,
+                        )?;
                         norm_actions.push(GenericCoreAction::Union(
                             span.clone(),
-                            mapped_e1.get_corresponding_var_or_lit(typeinfo),
-                            mapped_e2.get_corresponding_var_or_lit(typeinfo),
+                            get_corresponding_var_or_lit(&mapped_e1, typeinfo),
+                            get_corresponding_var_or_lit(&mapped_e2, typeinfo),
                         ));
                         mapped_actions.0.push(GenericAction::Union(
                             span.clone(),
@@ -635,7 +647,7 @@ where
             }
             GenericAction::Expr(span, expr) => {
                 let mapped_expr =
-                    expr.to_core_actions(typeinfo, binding, fresh_gen, &mut norm_actions)?;
+                    to_core_actions_expr(expr, typeinfo, binding, fresh_gen, &mut norm_actions)?;
                 mapped_actions
                     .0
                     .push(GenericAction::Expr(span.clone(), mapped_expr));
@@ -669,7 +681,7 @@ where
             let mut child_exprs = vec![];
             for child in children {
                 let (child_atoms, child_expr) = to_query(child, typeinfo, fresh_gen);
-                let child_atomterm = child_expr.get_corresponding_var_or_lit(typeinfo);
+                let child_atomterm = get_corresponding_var_or_lit(&child_expr, typeinfo);
                 new_children.push(child_atomterm);
                 atoms.extend(child_atoms);
                 child_exprs.push(child_expr);
@@ -723,7 +735,7 @@ where
             for arg in args {
                 let mapped_arg =
                     to_core_actions_expr(arg, typeinfo, binding, fresh_gen, out_actions)?;
-                norm_args.push(mapped_arg.get_corresponding_var_or_lit(typeinfo));
+                norm_args.push(get_corresponding_var_or_lit(&mapped_arg, typeinfo));
                 mapped_args.push(mapped_arg);
             }
             let var = fresh_gen.fresh(f);
