@@ -7,12 +7,10 @@ use std::{
     thread,
 };
 
-use egglog_concurrency::Notification;
-use crate::numeric_id::{NumericId, define_id};
-
-use crate::concurrent::UnionFind;
-
 use super::buffer::Buffer;
+use crate::concurrent::UnionFind;
+use crate::numeric_id::{NumericId, define_id};
+use egglog_concurrency::Notification;
 
 #[derive(Clone)]
 struct Dropper<T> {
