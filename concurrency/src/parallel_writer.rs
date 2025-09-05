@@ -34,9 +34,7 @@ impl<T> UnsafeReadAccess<'_, T> {
     /// [`ParallelVecWriter`] was created, or it must be within bounds of a completed write to
     /// [`ParallelVecWriter::write_contents`].
     pub unsafe fn get_unchecked(&self, idx: usize) -> &T {
-        unsafe {
-            &*self.reader.as_ptr().add(idx)
-        }
+        unsafe { &*self.reader.as_ptr().add(idx) }
     }
 
     /// Get a subslice of given index in the vector.

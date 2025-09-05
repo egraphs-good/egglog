@@ -275,13 +275,13 @@ fn roundtrip_medium_integers_interned() {
         }
         // Random isize samples (values outside 31-bit range)
         for _ in 0..50 {
-            let val: isize = rng.gen_range(isize::MIN..0);
+            let val: isize = rng.random_range(isize::MIN..0);
             let boxed = bases.get(val);
             let unboxed = bases.unwrap::<isize>(boxed);
             assert_eq!(val, unboxed);
         }
         for _ in 0..50 {
-            let val: isize = rng.gen_range(2147483648..=isize::MAX);
+            let val: isize = rng.random_range(2147483648..=isize::MAX);
             let boxed = bases.get(val);
             let unboxed = bases.unwrap::<isize>(boxed);
             assert_eq!(val, unboxed);

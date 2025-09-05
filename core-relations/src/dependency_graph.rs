@@ -1,9 +1,9 @@
 //! A simple data-structure for tracking the dependencies of the merge functions
 //! from different tables on one another.
 
-use crate::numeric_id::{define_id, DenseIdMap, NumericId};
+use crate::numeric_id::{DenseIdMap, NumericId, define_id};
 
-use crate::{common::IndexSet, TableId};
+use crate::{TableId, common::IndexSet};
 
 define_id!(
     LevelId,

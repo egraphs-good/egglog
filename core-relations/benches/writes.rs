@@ -1,10 +1,10 @@
 use self::{Database, SortedWritesTable, Table, Value};
-use divan::{counter::ItemsCount, Bencher};
 use crate::numeric_id::NumericId;
-use rand::{rng, Rng};
+use divan::{Bencher, counter::ItemsCount};
+use rand::{Rng, rng};
 use rayon::{
-    iter::{ParallelBridge, ParallelIterator},
     ThreadPoolBuilder,
+    iter::{ParallelBridge, ParallelIterator},
 };
 
 fn main() {
@@ -26,7 +26,7 @@ impl<const KEYS: usize, const COLS: usize> Operation<KEYS, COLS> {
 
 fn random_value(rng: &mut impl Rng) -> Value {
     // We exclude u32::MAX as it's the special "stale" value.
-    Value::new(rng.gen_range(0..u32::MAX))
+    Value::new(rng.random_range(0..u32::MAX))
 }
 
 fn random_row<const C: usize>(rng: &mut impl Rng) -> [Value; C] {
@@ -49,10 +49,10 @@ fn generate_workload<const K: usize, const C: usize>(
             // All removals need to be a collision. We could add a few in here
             // that aren't but it's not realistic because all egglog removals
             // come from a previous read of the table.
-            let key = ops[rng.gen_range(0..ops.len())].key();
+            let key = ops[rng.random_range(0..ops.len())].key();
             ops.push(Operation::Remove(key.try_into().unwrap()));
         } else if rng.random_bool(collision_pct) && !ops.is_empty() {
-            let key = ops[rng.gen_range(0..ops.len())].key();
+            let key = ops[rng.random_range(0..ops.len())].key();
             let mut row = random_row::<C>(&mut rng);
             for (dst, src) in row.iter_mut().zip(key.iter()) {
                 *dst = *src;

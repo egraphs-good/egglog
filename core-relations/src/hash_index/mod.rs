@@ -5,21 +5,21 @@ use std::{
     sync::{Arc, Mutex},
 };
 
+use crate::numeric_id::{IdVec, NumericId, define_id};
 use egglog_concurrency::Notification;
 use hashbrown::HashTable;
-use crate::numeric_id::{define_id, IdVec, NumericId};
 use once_cell::sync::Lazy;
 use rayon::iter::ParallelIterator;
 use rustc_hash::FxHasher;
 
 use crate::{
+    OffsetRange, Subset,
     common::{HashMap, IndexMap, ShardData, ShardId, Value},
     offsets::{RowId, SortedOffsetSlice, SubsetRef},
     parallel_heuristics::parallelize_index_construction,
-    pool::{with_pool_set, Pooled},
+    pool::{Pooled, with_pool_set},
     row_buffer::{RowBuffer, TaggedRowBuffer},
     table_spec::{ColumnId, Generation, Offset, TableVersion, WrappedTableRef},
-    OffsetRange, Subset,
 };
 
 #[cfg(test)]
@@ -736,11 +736,7 @@ impl BufferedSubset {
 
 fn num_shards() -> usize {
     let n_threads = rayon::current_num_threads();
-    if n_threads == 1 {
-        1
-    } else {
-        n_threads * 2
-    }
+    if n_threads == 1 { 1 } else { n_threads * 2 }
 }
 
 /// A thread pool specifically for parallel hash index construction.

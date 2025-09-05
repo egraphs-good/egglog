@@ -6,8 +6,8 @@ use fixedbitset::FixedBitSet;
 use smallvec::SmallVec;
 
 use crate::{
-    pool::{InPoolSet, Pool, Pooled},
     PoolSet,
+    pool::{InPoolSet, Pool, Pooled},
 };
 
 /// A subset of offsets that are still active.
@@ -473,7 +473,11 @@ macro_rules! for_each_binding_with_mask {
                 });
                 $body
             }
-            [crate::QueryEntry::Var(v1), crate::QueryEntry::Var(v2), crate::QueryEntry::Var(v3)] => {
+            [
+                crate::QueryEntry::Var(v1),
+                crate::QueryEntry::Var(v2),
+                crate::QueryEntry::Var(v3),
+            ] => {
                 let $iter = $mask
                     .iter(&$bindings[*v1])
                     .zip(&$bindings[*v2])
@@ -484,7 +488,11 @@ macro_rules! for_each_binding_with_mask {
                     });
                 $body
             }
-            [crate::QueryEntry::Const(c), crate::QueryEntry::Var(v2), crate::QueryEntry::Var(v3)] => {
+            [
+                crate::QueryEntry::Const(c),
+                crate::QueryEntry::Var(v2),
+                crate::QueryEntry::Var(v3),
+            ] => {
                 let $iter = $mask
                     .iter(&$bindings[*v2])
                     .zip(&$bindings[*v3])
@@ -494,17 +502,25 @@ macro_rules! for_each_binding_with_mask {
                     });
                 $body
             }
-            [crate::QueryEntry::Var(v1), crate::QueryEntry::Const(c), crate::QueryEntry::Var(v3)] => {
+            [
+                crate::QueryEntry::Var(v1),
+                crate::QueryEntry::Const(c),
+                crate::QueryEntry::Var(v3),
+            ] => {
                 let $iter = $mask
                     .iter(&$bindings[*v1])
                     .zip(&$bindings[*v3])
-                    .map(|(v1,  v3)| {
+                    .map(|(v1, v3)| {
                         let arr: [crate::Value; 3] = [*v1, *c, *v3];
                         arr
                     });
                 $body
             }
-            [crate::QueryEntry::Var(v1), crate::QueryEntry::Var(v2), crate::QueryEntry::Const(c)] => {
+            [
+                crate::QueryEntry::Var(v1),
+                crate::QueryEntry::Var(v2),
+                crate::QueryEntry::Const(c),
+            ] => {
                 let $iter = $mask
                     .iter(&$bindings[*v1])
                     .zip(&$bindings[*v2])
@@ -514,7 +530,12 @@ macro_rules! for_each_binding_with_mask {
                     });
                 $body
             }
-            [crate::QueryEntry::Var(v1), crate::QueryEntry::Var(v2), crate::QueryEntry::Var(v3), crate::QueryEntry::Var(v4)] => {
+            [
+                crate::QueryEntry::Var(v1),
+                crate::QueryEntry::Var(v2),
+                crate::QueryEntry::Var(v3),
+                crate::QueryEntry::Var(v4),
+            ] => {
                 let $iter = $mask
                     .iter(&$bindings[*v1])
                     .zip(&$bindings[*v2])

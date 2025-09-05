@@ -3,21 +3,23 @@ use std::{
     hash::Hash,
     slice,
     sync::{
-        atomic::{AtomicUsize, Ordering},
         Arc,
+        atomic::{AtomicUsize, Ordering},
     },
     thread,
 };
 
 use crate::core_relations;
-use crate::core_relations::{make_external_func, ContainerValue, ExternalFunctionId, Rebuilder, Value};
+use crate::core_relations::{
+    ContainerValue, ExternalFunctionId, Rebuilder, Value, make_external_func,
+};
+use crate::numeric_id::NumericId;
 use log::debug;
 use num_rational::Rational64;
-use crate::numeric_id::NumericId;
 
 use crate::{
-    add_expressions, define_rule, ColumnTy, DefaultVal, EGraph, FunctionConfig, FunctionId,
-    MergeFn, ProofStore, QueryEntry,
+    ColumnTy, DefaultVal, EGraph, FunctionConfig, FunctionId, MergeFn, ProofStore, QueryEntry,
+    add_expressions, define_rule,
 };
 
 /// Run a simple associativity/commutativity test. In addition to testing that the rules properly

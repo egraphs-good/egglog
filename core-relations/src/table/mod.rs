@@ -10,19 +10,20 @@ use std::{
     hash::Hasher,
     mem,
     sync::{
-        atomic::{AtomicUsize, Ordering},
         Arc, Weak,
+        atomic::{AtomicUsize, Ordering},
     },
 };
 
+use crate::numeric_id::{DenseIdMap, NumericId};
 use crossbeam_queue::SegQueue;
 use hashbrown::HashTable;
-use crate::numeric_id::{DenseIdMap, NumericId};
 use rayon::iter::{IndexedParallelIterator, IntoParallelRefMutIterator, ParallelIterator};
 use rustc_hash::FxHasher;
 use sharded_hash_table::ShardedHashTable;
 
 use crate::{
+    Pooled, TableChange, TableId,
     action::ExecutionState,
     common::{HashMap, ShardData, ShardId, SubsetTracker, Value},
     hash_index::{ColumnIndex, Index},
@@ -34,7 +35,6 @@ use crate::{
         ColumnId, Constraint, Generation, MutationBuffer, Offset, Row, Table, TableSpec,
         TableVersion,
     },
-    Pooled, TableChange, TableId,
 };
 
 mod rebuild;
@@ -101,21 +101,13 @@ impl Rows {
 
     fn get_row(&self, row: RowId) -> Option<&[Value]> {
         let row = self.data.get_row(row);
-        if row[0].is_stale() {
-            None
-        } else {
-            Some(row)
-        }
+        if row[0].is_stale() { None } else { Some(row) }
     }
 
     /// A variant of `get_row` without bounds-checking on `row`.
     unsafe fn get_row_unchecked(&self, row: RowId) -> Option<&[Value]> {
         let row = unsafe { self.data.get_row_unchecked(row) };
-        if row[0].is_stale() {
-            None
-        } else {
-            Some(row)
-        }
+        if row[0].is_stale() { None } else { Some(row) }
     }
 
     fn add_row(&mut self, row: &[Value]) -> RowId {
@@ -693,7 +685,10 @@ impl SortedWritesTable {
                                 let sort_val = query[sort_by.index()];
                                 let new = self.data.add_row(&scratch);
                                 if let Some(largest) = self.offsets.last().map(|(v, _)| *v) {
-                                    assert!(sort_val >= largest, "inserting row that violates sort order ({sort_val:?} vs. {largest:?})");
+                                    assert!(
+                                        sort_val >= largest,
+                                        "inserting row that violates sort order ({sort_val:?} vs. {largest:?})"
+                                    );
                                     if sort_val > largest {
                                         self.offsets.push((sort_val, new));
                                     }
@@ -928,11 +923,10 @@ impl SortedWritesTable {
             .sum::<usize>();
 
         // Register any changes.
-        let changed = pending_adds
+        pending_adds
             .iter()
             .flatten()
-            .any(|(_, _, changed)| *changed);
-        changed
+            .any(|(_, _, changed)| *changed)
     }
 
     fn binary_search_sort_val(&self, val: Value) -> Result<(RowId, RowId), RowId> {
@@ -979,11 +973,7 @@ impl SortedWritesTable {
                 Constraint::GeConst { col, val } => res &= row[col.index()] >= *val,
             }
         }
-        if res {
-            Some(row)
-        } else {
-            None
-        }
+        if res { Some(row) } else { None }
     }
 
     fn maybe_rehash(&mut self) {

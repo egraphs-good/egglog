@@ -3,8 +3,8 @@
 use core::slice;
 use std::{cell::Cell, mem, ops::Deref};
 
-use egglog_concurrency::ParallelVecWriter;
 use crate::numeric_id::NumericId;
+use egglog_concurrency::ParallelVecWriter;
 use rayon::iter::ParallelIterator;
 use smallvec::SmallVec;
 

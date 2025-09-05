@@ -12,7 +12,7 @@
 //! those bindings in recursive calls. When parallelism is enabled, this data-structure allows us
 //! hand over an entire batch of recursive calls to a separate thread to process independently.
 
-use crate::numeric_id::{define_id, DenseIdMap};
+use crate::numeric_id::{DenseIdMap, define_id};
 
 use crate::{Subset, Value};
 

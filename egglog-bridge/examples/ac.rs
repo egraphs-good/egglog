@@ -1,4 +1,4 @@
-use egglog_bridge::{define_rule, ColumnTy, DefaultVal, EGraph, FunctionConfig, MergeFn};
+use egglog_bridge::{ColumnTy, DefaultVal, EGraph, FunctionConfig, MergeFn, define_rule};
 
 use mimalloc::MiMalloc;
 

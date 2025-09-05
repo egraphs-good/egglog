@@ -2,7 +2,7 @@
 
 use std::{
     cmp, iter, mem,
-    sync::{atomic::AtomicUsize, Arc, OnceLock},
+    sync::{Arc, OnceLock, atomic::AtomicUsize},
 };
 
 use crate::numeric_id::{DenseIdMap, IdVec, NumericId};
@@ -10,11 +10,13 @@ use smallvec::SmallVec;
 use web_time::Instant;
 
 use crate::{
+    Constraint, OffsetRange, Pool, SubsetRef,
     action::{Bindings, ExecutionState, PredictedVals},
     common::{DashMap, Value},
     free_join::{
+        RuleReport, RuleSetReport,
         frame_update::{FrameUpdates, UpdateInstr},
-        get_index_from_tableinfo, RuleReport, RuleSetReport,
+        get_index_from_tableinfo,
     },
     hash_index::{ColumnIndex, IndexBase, TupleIndex},
     offsets::{Offsets, SortedOffsetVector, Subset},
@@ -23,13 +25,13 @@ use crate::{
     query::RuleSet,
     row_buffer::TaggedRowBuffer,
     table_spec::{ColumnId, Offset, WrappedTableRef},
-    Constraint, OffsetRange, Pool, SubsetRef,
 };
 
 use super::{
+    ActionId, AtomId, Database, HashColumnIndex, HashIndex, TableInfo, Variable,
     get_column_index_from_tableinfo,
     plan::{JoinHeader, JoinStage, Plan},
-    with_pool_set, ActionId, AtomId, Database, HashColumnIndex, HashIndex, TableInfo, Variable,
+    with_pool_set,
 };
 
 enum DynamicIndex {
@@ -1055,8 +1057,8 @@ impl<'scope> ActionBuffer<'scope> for ScopedActionBuffer<'_, 'scope> {
         mut local: BorrowedLocalState<'local>,
         mut to_exec_state: impl FnMut() -> ExecutionState<'scope> + Send + 'scope,
         work: impl for<'a> FnOnce(BorrowedLocalState<'a>, &mut ScopedActionBuffer<'a, 'scope>)
-            + Send
-            + 'scope,
+        + Send
+        + 'scope,
     ) {
         let rule_set = self.rule_set;
         let match_counter = self.match_counter;

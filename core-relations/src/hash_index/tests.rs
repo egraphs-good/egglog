@@ -1,9 +1,9 @@
 use crate::numeric_id::NumericId;
 
 use crate::{
+    TupleIndex,
     table_shortcuts::{fill_table, v},
     table_spec::{ColumnId, WrappedTable},
-    TupleIndex,
 };
 
 use super::Index;

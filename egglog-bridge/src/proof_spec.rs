@@ -4,8 +4,8 @@ use crate::core_relations::{
     BaseValuePrinter, ColumnId, DisplacedTableWithProvenance, ProofReason as UfProofReason,
     ProofStep, RuleBuilder, Value,
 };
-use hashbrown::{HashMap, HashSet};
 use crate::numeric_id::{DenseIdMap, NumericId, define_id};
+use hashbrown::{HashMap, HashSet};
 
 use crate::{
     ColumnTy, EGraph, FunctionId, GetFirstMatch, QueryEntry, Result, RuleId, SideChannel,

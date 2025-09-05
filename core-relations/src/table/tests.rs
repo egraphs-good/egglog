@@ -1,11 +1,11 @@
 use crate::numeric_id::NumericId;
-use rand::{rng, Rng};
+use rand::{Rng, rng};
 
 use crate::{
     common::{HashMap, ShardId, Value},
     offsets::{RowId, SubsetRef},
     row_buffer::TaggedRowBuffer,
-    table::{hash_code, TableEntry},
+    table::{TableEntry, hash_code},
     table_shortcuts::{fill_table, v},
     table_spec::{ColumnId, Constraint, Offset, Table, WrappedTable},
 };

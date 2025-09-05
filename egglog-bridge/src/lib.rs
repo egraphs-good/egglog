@@ -16,18 +16,18 @@ use std::{
     sync::{Arc, Mutex},
 };
 
-use egglog_core_relations as core_relations;
-use egglog_numeric_id as numeric_id;
 use crate::core_relations::{
     BaseValue, BaseValueId, BaseValues, ColumnId, Constraint, ContainerValue, ContainerValues,
     CounterId, Database, DisplacedTable, DisplacedTableWithProvenance, ExecutionState,
     ExternalFunction, ExternalFunctionId, MergeVal, Offset, PlanStrategy, RuleSetReport,
     SortedWritesTable, TableId, TaggedRowBuffer, Value, WrappedTable,
 };
+use crate::numeric_id::{DenseIdMap, DenseIdMapWithReuse, IdVec, NumericId, define_id};
+use egglog_core_relations as core_relations;
+use egglog_numeric_id as numeric_id;
 use hashbrown::HashMap;
-use indexmap::{map::Entry, IndexMap, IndexSet};
+use indexmap::{IndexMap, IndexSet, map::Entry};
 use log::info;
-use crate::numeric_id::{define_id, DenseIdMap, DenseIdMapWithReuse, IdVec, NumericId};
 use once_cell::sync::Lazy;
 pub use proof_format::{EqProofId, ProofStore, TermProofId};
 use proof_spec::{ProofReason, ProofReconstructionState, ReasonSpecId};
@@ -1590,7 +1590,9 @@ impl ExternalFunction for Panic {
 
 #[derive(Error, Debug)]
 enum ProofReconstructionError {
-    #[error("attempting to explain a row without tracing enabled. Try constructing with `EGraph::with_tracing`")]
+    #[error(
+        "attempting to explain a row without tracing enabled. Try constructing with `EGraph::with_tracing`"
+    )]
     TracingNotEnabled,
     #[error("attempting to construct a proof that {term1} = {term2}, but they are not equal")]
     EqualityExplanationOfUnequalTerms { term1: String, term2: String },

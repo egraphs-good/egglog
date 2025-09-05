@@ -1,6 +1,6 @@
 use std::mem;
 
-use egglog_bridge::{define_rule, ColumnTy, DefaultVal, EGraph, FunctionConfig, MergeFn};
+use egglog_bridge::{ColumnTy, DefaultVal, EGraph, FunctionConfig, MergeFn, define_rule};
 
 fn main() {
     const N: usize = 12;

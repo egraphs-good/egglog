@@ -14,9 +14,9 @@ use std::{
     ops::Deref,
 };
 
+use crate::numeric_id::{DenseIdMap, IdVec, NumericId, define_id};
 use crossbeam_queue::SegQueue;
 use dashmap::SharedValue;
-use crate::numeric_id::{define_id, DenseIdMap, IdVec, NumericId};
 use rayon::{
     iter::{ParallelBridge, ParallelIterator},
     prelude::*,
@@ -24,11 +24,11 @@ use rayon::{
 use rustc_hash::FxHasher;
 
 use crate::{
+    ColumnId, CounterId, ExecutionState, Offset, SubsetRef, TableId, TaggedRowBuffer, Value,
+    WrappedTable,
     common::{DashMap, IndexSet, InternTable, SubsetTracker},
     parallel_heuristics::{parallelize_inter_container_op, parallelize_intra_container_op},
     table_spec::Rebuilder,
-    ColumnId, CounterId, ExecutionState, Offset, SubsetRef, TableId, TaggedRowBuffer, Value,
-    WrappedTable,
 };
 
 #[cfg(test)]

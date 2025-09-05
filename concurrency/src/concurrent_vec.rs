@@ -5,8 +5,8 @@ use std::{
     mem::{self, MaybeUninit},
     ops::Deref,
     sync::{
-        atomic::{AtomicUsize, Ordering},
         Mutex,
+        atomic::{AtomicUsize, Ordering},
     },
 };
 

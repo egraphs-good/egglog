@@ -6,12 +6,13 @@ use std::{
     sync::{Arc, Weak},
 };
 
+use crate::numeric_id::{DenseIdMap, NumericId};
 use crossbeam_queue::SegQueue;
 use indexmap::IndexMap;
-use crate::numeric_id::{DenseIdMap, NumericId};
-use petgraph::{algo::dijkstra, graph::NodeIndex, visit::EdgeRef, Direction, Graph};
+use petgraph::{Direction, Graph, algo::dijkstra, graph::NodeIndex, visit::EdgeRef};
 
 use crate::{
+    TableChange, TaggedRowBuffer,
     action::ExecutionState,
     common::{HashMap, IndexSet, Value},
     offsets::{OffsetRange, RowId, Subset, SubsetRef},
@@ -21,7 +22,6 @@ use crate::{
         ColumnId, Constraint, Generation, MutationBuffer, Offset, Rebuilder, Row, Table, TableSpec,
         TableVersion, WrappedTableRef,
     },
-    TableChange, TaggedRowBuffer,
 };
 
 #[cfg(test)]
@@ -648,7 +648,9 @@ impl DisplacedTableWithProvenance {
                 .chain(r_proofs.as_slice()[..=start].iter().map(|(_, ts)| ts.rep()))
                 .max(),
             (None, None) => {
-                panic!("did not find common id, despite the values being equivalent {l:?} / {r:?}, l_proofs={l_proofs:?}, r_proofs={r_proofs:?}")
+                panic!(
+                    "did not find common id, despite the values being equivalent {l:?} / {r:?}, l_proofs={l_proofs:?}, r_proofs={r_proofs:?}"
+                )
             }
         }
     }

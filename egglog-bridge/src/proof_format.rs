@@ -3,10 +3,10 @@
 use std::{hash::Hash, io, rc::Rc};
 
 use crate::core_relations::Value;
+use crate::numeric_id::{DenseIdMap, NumericId, define_id};
 use indexmap::IndexSet;
-use crate::numeric_id::{define_id, DenseIdMap, NumericId};
 
-use crate::{rule::Variable, FunctionId};
+use crate::{FunctionId, rule::Variable};
 
 define_id!(pub TermProofId, u32, "an id identifying proofs of terms within a [`ProofStore`]");
 define_id!(pub EqProofId, u32, "an id identifying proofs of equality between two terms within a [`ProofStore`]");

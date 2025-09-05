@@ -1,4 +1,4 @@
-use numeric_id::{define_id, NumericId};
+use numeric_id::{NumericId, define_id};
 
 use crate::UnionFind;
 
@@ -32,8 +32,9 @@ fn basic_uf() {
     uf.union(ids1[5], ids2[20]);
 
     let target = uf.find(ids1[0]);
-    assert!(ids1
-        .iter()
-        .chain(ids2.iter())
-        .all(|&id| uf.find(id) == target));
+    assert!(
+        ids1.iter()
+            .chain(ids2.iter())
+            .all(|&id| uf.find(id) == target)
+    );
 }
