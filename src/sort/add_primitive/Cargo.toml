@@ -1,5 +1,5 @@
 [package]
-name = "add_primitive"
+name = "egglog-add-primitive"
 version = { workspace = true }
 edition = { workspace = true }
 description = { workspace = true }

@@ -9,10 +9,11 @@ use std::{
     thread,
 };
 
-use core_relations::{make_external_func, ContainerValue, ExternalFunctionId, Rebuilder, Value};
+use crate::core_relations;
+use crate::core_relations::{make_external_func, ContainerValue, ExternalFunctionId, Rebuilder, Value};
 use log::debug;
 use num_rational::Rational64;
-use numeric_id::NumericId;
+use crate::numeric_id::NumericId;
 
 use crate::{
     add_expressions, define_rule, ColumnTy, DefaultVal, EGraph, FunctionConfig, FunctionId,

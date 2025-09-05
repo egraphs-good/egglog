@@ -3,7 +3,7 @@
 //!
 //! [`InternTable`]: crate::common::InternTable
 
-use numeric_id::NumericId;
+use crate::numeric_id::NumericId;
 
 use crate::Value;
 
@@ -40,7 +40,7 @@ impl BaseValue for bool {
     /// As an example, the `subsumed` column of a table has type bool.
     ///
     /// ```rust
-    /// use core_relations::BaseValue;
+    /// use egglog_core_relations::BaseValue;
     /// let true_value = true.try_box().unwrap();
     /// let false_value = false.try_box().unwrap();
     /// assert_eq!(bool::try_unbox(true_value).unwrap(), true);
@@ -56,7 +56,7 @@ impl BaseValue for () {
     /// To optimize storage, we map [`Value`] 0 to unit type.
     ///
     /// ```rust
-    /// use core_relations::BaseValue;
+    /// use egglog_core_relations::BaseValue;
     /// let unit_value = ().try_box().unwrap();
     /// assert_eq!(<()>::try_unbox(unit_value).unwrap(), ());
     /// ```

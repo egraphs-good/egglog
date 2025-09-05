@@ -1,5 +1,5 @@
 [package]
-name = "numeric-id"
+name = "egglog-numeric-id"
 version = { workspace = true }
 edition = { workspace = true }
 description = { workspace = true }

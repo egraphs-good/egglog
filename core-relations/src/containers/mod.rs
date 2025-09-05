@@ -16,7 +16,7 @@ use std::{
 
 use crossbeam_queue::SegQueue;
 use dashmap::SharedValue;
-use numeric_id::{define_id, DenseIdMap, IdVec, NumericId};
+use crate::numeric_id::{define_id, DenseIdMap, IdVec, NumericId};
 use rayon::{
     iter::{ParallelBridge, ParallelIterator},
     prelude::*,

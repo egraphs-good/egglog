@@ -43,3 +43,6 @@ pub use table_spec::{
     WrappedTable,
 };
 pub use uf::{DisplacedTable, DisplacedTableWithProvenance, ProofReason, ProofStep};
+
+use egglog_numeric_id as numeric_id;
+use egglog_union_find as union_find;

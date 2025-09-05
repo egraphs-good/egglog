@@ -4,7 +4,7 @@ use std::{
     thread,
 };
 
-use concurrency::{Notification, ReadOptimizedLock};
+use egglog_concurrency::{Notification, ReadOptimizedLock};
 use divan::{counter::ItemsCount, Bencher};
 use rand::{seq::SliceRandom, Rng};
 use union_find::{concurrent, UnionFind};

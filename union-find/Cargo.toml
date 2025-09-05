@@ -1,5 +1,5 @@
 [package]
-name = "union-find"
+name = "egglog-union-find"
 version = { workspace = true }
 edition = { workspace = true }
 description = { workspace = true }
@@ -9,9 +9,9 @@ license = { workspace = true }
 readme = { workspace = true }
 
 [dependencies]
-numeric-id = { workspace = true }
+egglog-numeric-id = { workspace = true }
 crossbeam = { workspace = true }
-concurrency = { workspace = true }
+egglog-concurrency = { workspace = true }
 
 [dev-dependencies]
 divan = { workspace = true }

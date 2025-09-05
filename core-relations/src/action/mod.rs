@@ -4,7 +4,7 @@
 //! implementation here is optimized to execute on a batch of rows at a time.
 use std::ops::Deref;
 
-use numeric_id::{DenseIdMap, NumericId};
+use crate::numeric_id::{DenseIdMap, NumericId};
 use rayon::iter::{IntoParallelRefMutIterator, ParallelIterator};
 use smallvec::SmallVec;
 

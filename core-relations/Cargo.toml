@@ -1,5 +1,5 @@
 [package]
-name = "core-relations"
+name = "egglog-core-relations"
 version = { workspace = true }
 edition = { workspace = true }
 description = { workspace = true }
@@ -11,7 +11,9 @@ readme = { workspace = true }
 # See more keys and their definitions at https://doc.rust-lang.org/cargo/reference/manifest.html
 
 [dependencies]
-concurrency = { workspace = true }
+egglog-concurrency = { workspace = true }
+egglog-numeric-id = { workspace = true }
+egglog-union-find = { workspace = true }
 hashbrown = { workspace = true }
 indexmap = { workspace = true }
 rustc-hash = { workspace = true }
@@ -21,8 +23,6 @@ bumpalo = { workspace = true }
 thiserror = { workspace = true }
 anyhow = { workspace = true }
 lazy_static = { workspace = true }
-numeric-id = { workspace = true }
-union-find = { workspace = true }
 log = { workspace = true }
 petgraph = { workspace = true }
 crossbeam-queue = { workspace = true }

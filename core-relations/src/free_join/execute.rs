@@ -5,7 +5,7 @@ use std::{
     sync::{atomic::AtomicUsize, Arc, OnceLock},
 };
 
-use numeric_id::{DenseIdMap, IdVec, NumericId};
+use crate::numeric_id::{DenseIdMap, IdVec, NumericId};
 use smallvec::SmallVec;
 use web_time::Instant;
 

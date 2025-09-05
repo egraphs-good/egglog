@@ -7,7 +7,7 @@ use std::{
     thread,
 };
 
-use concurrency::Notification;
+use egglog_concurrency::Notification;
 use numeric_id::{define_id, NumericId};
 
 use crate::concurrent::UnionFind;

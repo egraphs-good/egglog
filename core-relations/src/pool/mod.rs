@@ -12,7 +12,7 @@ use std::{
 
 use fixedbitset::FixedBitSet;
 use hashbrown::HashTable;
-use numeric_id::{DenseIdMap, IdVec};
+use crate::numeric_id::{DenseIdMap, IdVec};
 
 use crate::{
     action::{Instr, PredictedVals},

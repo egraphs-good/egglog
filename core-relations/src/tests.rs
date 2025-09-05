@@ -4,7 +4,7 @@ use std::{
     sync::{Arc, Mutex},
 };
 
-use numeric_id::NumericId;
+use crate::numeric_id::NumericId;
 
 use crate::{
     action::WriteVal,

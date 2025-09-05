@@ -3,7 +3,7 @@
 use std::{cmp, mem};
 
 use crossbeam_queue::SegQueue;
-use numeric_id::{IdVec, NumericId};
+use crate::numeric_id::{IdVec, NumericId};
 use rayon::prelude::*;
 
 use crate::{

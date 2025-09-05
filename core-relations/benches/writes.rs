@@ -1,6 +1,6 @@
-use core_relations::{Database, SortedWritesTable, Table, Value};
+use self::{Database, SortedWritesTable, Table, Value};
 use divan::{counter::ItemsCount, Bencher};
-use numeric_id::NumericId;
+use crate::numeric_id::NumericId;
 use rand::{rng, Rng};
 use rayon::{
     iter::{ParallelBridge, ParallelIterator},

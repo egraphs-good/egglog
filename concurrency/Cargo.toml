@@ -1,5 +1,5 @@
 [package]
-name = "concurrency"
+name = "egglog-concurrency"
 version = { workspace = true }
 edition = { workspace = true }
 description = { workspace = true }

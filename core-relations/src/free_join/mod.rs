@@ -7,8 +7,8 @@ use std::{
     },
 };
 
-use concurrency::ResettableOnceLock;
-use numeric_id::{define_id, DenseIdMap, DenseIdMapWithReuse, NumericId};
+use egglog_concurrency::ResettableOnceLock;
+use crate::numeric_id::{define_id, DenseIdMap, DenseIdMapWithReuse, NumericId};
 use rayon::prelude::*;
 use smallvec::SmallVec;
 use web_time::Duration;

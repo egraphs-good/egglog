@@ -6,18 +6,19 @@
 //! language in this crate. The proofs machinery then reconstructs proofs according to this syntax.
 use std::{iter, sync::Arc};
 
-use crate::{EGraph, ProofReason, QueryEntry, ReasonSpecId, Result, SchemaMath, NOT_SUBSUMED};
-use core_relations::{
-    make_external_func, ColumnId, CounterId, ExecutionState, ExternalFunctionId, MergeVal,
-    RuleBuilder, TableId, Value, WriteVal,
+use crate::core_relations;
+use crate::core_relations::{
+    ColumnId, CounterId, ExecutionState, ExternalFunctionId, MergeVal, RuleBuilder, TableId, Value,
+    WriteVal, make_external_func,
 };
-use numeric_id::{define_id, DenseIdMap, IdVec, NumericId};
+use crate::numeric_id::{DenseIdMap, IdVec, NumericId, define_id};
+use crate::{EGraph, NOT_SUBSUMED, ProofReason, QueryEntry, ReasonSpecId, Result, SchemaMath};
 use smallvec::SmallVec;
 
 use crate::{
+    ColumnTy, FunctionId, RuleId,
     proof_spec::ProofBuilder,
     rule::{AtomId, Bindings, Variable},
-    ColumnTy, FunctionId, RuleId,
 };
 
 define_id!(pub SyntaxId, u32, "an offset into a Syntax DAG.");
@@ -133,7 +134,8 @@ impl ProofBuilder {
         &mut self,
         syntax: SourceSyntax,
         egraph: &mut EGraph,
-    ) -> impl Fn(&mut Bindings, &mut RuleBuilder) -> Result<core_relations::Variable> + Clone + use<> {
+    ) -> impl Fn(&mut Bindings, &mut RuleBuilder) -> Result<core_relations::Variable> + Clone + use<>
+    {
         // first, create all the relevant cong metadata
         let mut metadata = DenseIdMap::default();
         for func in syntax.funcs() {

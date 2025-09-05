@@ -1,6 +1,6 @@
 use std::{cmp, fmt, mem};
 
-use numeric_id::{define_id, NumericId};
+use crate::numeric_id::{define_id, NumericId};
 
 use crate::{
     pool::{with_pool_set, Clear, Pooled},

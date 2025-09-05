@@ -17,7 +17,7 @@ use std::{
 
 use crossbeam_queue::SegQueue;
 use hashbrown::HashTable;
-use numeric_id::{DenseIdMap, NumericId};
+use crate::numeric_id::{DenseIdMap, NumericId};
 use rayon::iter::{IndexedParallelIterator, IntoParallelRefMutIterator, ParallelIterator};
 use rustc_hash::FxHasher;
 use sharded_hash_table::ShardedHashTable;

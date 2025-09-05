@@ -68,12 +68,12 @@ divan = "0.1.15"
 ######################
 # member crates
 ######################
-core-relations = { path = "core-relations" }
+egglog-core-relations = { path = "core-relations" }
 egglog-bridge = { path = "egglog-bridge" }
-concurrency = { path = "concurrency" }
-numeric-id = { path = "numeric-id" }
-union-find = { path = "union-find" }
-add_primitive = { path = "src/sort/add_primitive" }
+egglog-concurrency = { path = "concurrency" }
+egglog-numeric-id = { path = "numeric-id" }
+egglog-union-find = { path = "union-find" }
+egglog-add-primitive = { path = "src/sort/add_primitive" }
 
 [package]
 name = "egglog"
@@ -129,11 +129,11 @@ web-time = { workspace = true }
 dyn-clone = { workspace = true }
 rayon = { workspace = true }
 mimalloc = { workspace = true, optional = true }
-core-relations = { workspace = true }
-egglog-bridge = { workspace = true }
-numeric-id = { workspace = true }
-add_primitive = { workspace = true }
 csv = { workspace = true }
+egglog-core-relations = { workspace = true }
+egglog-bridge = { workspace = true }
+egglog-numeric-id = { workspace = true }
+egglog-add-primitive = { workspace = true }
 
 [build-dependencies]
 chrono = { workspace = true, features = ["now"], optional = true }

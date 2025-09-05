@@ -2,7 +2,7 @@
 
 use std::{iter::once, sync::Arc};
 
-use numeric_id::{define_id, DenseIdMap, IdVec, NumericId};
+use crate::numeric_id::{define_id, DenseIdMap, IdVec, NumericId};
 use smallvec::SmallVec;
 use thiserror::Error;
 

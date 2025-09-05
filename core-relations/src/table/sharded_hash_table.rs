@@ -1,7 +1,7 @@
 //! Basic utilities around sharding a hashbrown `HashTable`.
 
 use hashbrown::HashTable;
-use numeric_id::NumericId;
+use crate::numeric_id::NumericId;
 
 use crate::common::{ShardData, ShardId};
 

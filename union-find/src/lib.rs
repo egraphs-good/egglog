@@ -10,6 +10,7 @@
 //! heuristic introduced to reduce the number of ids perturbed during congruence
 //! closure. There's likely more to do in this area but for now it seems to work
 //! well enough. It doesn't hurt that it's also simpler to implement.
+use egglog_numeric_id as numeric_id;
 use numeric_id::NumericId;
 use std::cmp;
 

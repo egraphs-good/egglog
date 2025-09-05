@@ -1,11 +1,11 @@
 use std::{iter, rc::Rc, sync::Arc};
 
-use core_relations::{
+use crate::core_relations::{
     BaseValuePrinter, ColumnId, DisplacedTableWithProvenance, ProofReason as UfProofReason,
     ProofStep, RuleBuilder, Value,
 };
 use hashbrown::{HashMap, HashSet};
-use numeric_id::{DenseIdMap, NumericId, define_id};
+use crate::numeric_id::{DenseIdMap, NumericId, define_id};
 
 use crate::{
     ColumnTy, EGraph, FunctionId, GetFirstMatch, QueryEntry, Result, RuleId, SideChannel,

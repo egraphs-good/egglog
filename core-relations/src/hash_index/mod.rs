@@ -5,9 +5,9 @@ use std::{
     sync::{Arc, Mutex},
 };
 
-use concurrency::Notification;
+use egglog_concurrency::Notification;
 use hashbrown::HashTable;
-use numeric_id::{define_id, IdVec, NumericId};
+use crate::numeric_id::{define_id, IdVec, NumericId};
 use once_cell::sync::Lazy;
 use rayon::iter::ParallelIterator;
 use rustc_hash::FxHasher;

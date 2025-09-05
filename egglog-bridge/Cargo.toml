@@ -9,9 +9,9 @@ license = { workspace = true }
 readme = { workspace = true }
 
 [dependencies]
-core-relations = { workspace = true }
-numeric-id = { workspace = true }
-union-find = { workspace = true }
+egglog-core-relations = { workspace = true }
+egglog-numeric-id = { workspace = true }
+egglog-union-find = { workspace = true }
 hashbrown = { workspace = true }
 smallvec = { workspace = true }
 thiserror = { workspace = true }

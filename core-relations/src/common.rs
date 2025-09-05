@@ -5,9 +5,9 @@ use std::{
     sync::{Arc, Mutex},
 };
 
-use concurrency::ConcurrentVec;
+use egglog_concurrency::ConcurrentVec;
 use hashbrown::HashTable;
-use numeric_id::{define_id, DenseIdMap, IdVec, NumericId};
+use crate::numeric_id::{define_id, DenseIdMap, IdVec, NumericId};
 use rustc_hash::FxHasher;
 
 use crate::{pool::Clear, Subset, TableId, TableVersion, WrappedTable};

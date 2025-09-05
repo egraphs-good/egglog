@@ -1,4 +1,4 @@
-use numeric_id::NumericId;
+use crate::numeric_id::NumericId;
 
 use crate::{
     table_shortcuts::{fill_table, v},

@@ -3,7 +3,7 @@
 //! See the `uf` module for more details on the implementation.
 
 use atomic_int::AtomicInt;
-use numeric_id::NumericId;
+use crate::numeric_id::NumericId;
 
 pub(crate) mod atomic_int;
 pub(crate) mod buffer;

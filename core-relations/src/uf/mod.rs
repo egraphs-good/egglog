@@ -8,7 +8,7 @@ use std::{
 
 use crossbeam_queue::SegQueue;
 use indexmap::IndexMap;
-use numeric_id::{DenseIdMap, NumericId};
+use crate::numeric_id::{DenseIdMap, NumericId};
 use petgraph::{algo::dijkstra, graph::NodeIndex, visit::EdgeRef, Direction, Graph};
 
 use crate::{
@@ -27,7 +27,7 @@ use crate::{
 #[cfg(test)]
 mod tests;
 
-type UnionFind = union_find::UnionFind<Value>;
+type UnionFind = crate::union_find::UnionFind<Value>;
 
 /// A special table backed by a union-find used to efficiently implement
 /// egglog-style canonicaliztion.

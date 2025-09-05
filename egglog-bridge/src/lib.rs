@@ -16,7 +16,9 @@ use std::{
     sync::{Arc, Mutex},
 };
 
-use core_relations::{
+use egglog_core_relations as core_relations;
+use egglog_numeric_id as numeric_id;
+use crate::core_relations::{
     BaseValue, BaseValueId, BaseValues, ColumnId, Constraint, ContainerValue, ContainerValues,
     CounterId, Database, DisplacedTable, DisplacedTableWithProvenance, ExecutionState,
     ExternalFunction, ExternalFunctionId, MergeVal, Offset, PlanStrategy, RuleSetReport,
@@ -25,7 +27,7 @@ use core_relations::{
 use hashbrown::HashMap;
 use indexmap::{map::Entry, IndexMap, IndexSet};
 use log::info;
-use numeric_id::{define_id, DenseIdMap, DenseIdMapWithReuse, IdVec, NumericId};
+use crate::numeric_id::{define_id, DenseIdMap, DenseIdMapWithReuse, IdVec, NumericId};
 use once_cell::sync::Lazy;
 pub use proof_format::{EqProofId, ProofStore, TermProofId};
 use proof_spec::{ProofReason, ProofReconstructionState, ReasonSpecId};
@@ -1764,4 +1766,4 @@ pub struct IterationReport {
     pub rebuild_time: Duration,
 }
 
-pub use core_relations::RuleReport;
+pub use crate::core_relations::RuleReport;
