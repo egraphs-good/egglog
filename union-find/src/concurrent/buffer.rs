@@ -13,7 +13,7 @@
 
 use std::mem;
 
-use concurrency::ReadOptimizedLock;
+use egglog_concurrency::ReadOptimizedLock;
 
 use super::atomic_int::AtomicInt;
 

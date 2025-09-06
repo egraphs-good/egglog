@@ -1,6 +1,6 @@
-use numeric_id::NumericId;
+use crate::numeric_id::NumericId;
 
-use crate::{common::HashSet, pool::with_pool_set, OffsetRange, Subset};
+use crate::{OffsetRange, Subset, common::HashSet, pool::with_pool_set};
 
 use super::{Offsets, RowId, SortedOffsetVector};
 
@@ -91,10 +91,11 @@ fn intersect() {
 #[test]
 fn iter_bounded() {
     let mut s1 = Subset::empty();
-    assert!(s1
-        .as_ref()
-        .iter_bounded(0, 100, |_| panic!("this should never be called"))
-        .is_none());
+    assert!(
+        s1.as_ref()
+            .iter_bounded(0, 100, |_| panic!("this should never be called"))
+            .is_none()
+    );
     let mut s2 = Subset::empty();
     for i in 0..100 {
         s1.add_row_sorted(RowId::new(i));

@@ -1,6 +1,6 @@
 use crate::{
     action::mask::{IterResult, ValueSource},
-    pool::{with_pool_set, PoolSet},
+    pool::{PoolSet, with_pool_set},
 };
 
 use super::mask::{Mask, MaskIter};
@@ -79,11 +79,7 @@ fn fill_vec() {
         || i32::MAX,
         |row, x| {
             assert_eq!(row, *x as usize);
-            if *x % 2 == 0 {
-                Some(*x)
-            } else {
-                None
-            }
+            if *x % 2 == 0 { Some(*x) } else { None }
         },
     );
     // We should filter the mas for the entries for which we returned 'None'

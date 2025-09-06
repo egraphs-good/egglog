@@ -27,8 +27,8 @@ pub use base_values::{BaseValue, BaseValueId, BaseValuePrinter, BaseValues, Boxe
 pub use common::Value;
 pub use containers::{ContainerValue, ContainerValueId, ContainerValues};
 pub use free_join::{
-    make_external_func, plan::PlanStrategy, AtomId, CounterId, Database, ExternalFunction,
-    ExternalFunctionId, RuleReport, RuleSetReport, TableId, Variable,
+    AtomId, CounterId, Database, ExternalFunction, ExternalFunctionId, RuleReport, RuleSetReport,
+    TableId, Variable, make_external_func, plan::PlanStrategy,
 };
 pub use hash_index::TupleIndex;
 pub use offsets::{OffsetRange, RowId, Subset, SubsetRef};
@@ -43,3 +43,6 @@ pub use table_spec::{
     WrappedTable,
 };
 pub use uf::{DisplacedTable, DisplacedTableWithProvenance, ProofReason, ProofStep};
+
+use egglog_numeric_id as numeric_id;
+use egglog_union_find as union_find;

@@ -2,17 +2,17 @@
 
 use std::{cmp, mem};
 
+use crate::numeric_id::{IdVec, NumericId};
 use crossbeam_queue::SegQueue;
-use numeric_id::{IdVec, NumericId};
 use rayon::prelude::*;
 
 use crate::{
+    ColumnId, ExecutionState, Offset, RowId, Subset, Table, TableId, TaggedRowBuffer, Value,
+    WrappedTable,
     common::ShardId,
     hash_index::{ColumnIndex, Index},
     parallel_heuristics::parallelize_rebuild,
     table_spec::{Rebuilder, WrappedTableRef},
-    ColumnId, ExecutionState, Offset, RowId, Subset, Table, TableId, TaggedRowBuffer, Value,
-    WrappedTable,
 };
 
 use super::SortedWritesTable;
@@ -223,8 +223,8 @@ impl SortedWritesTable {
 fn incremental_rebuild(_uf_size: usize, _table_size: usize, _parallel: bool) -> bool {
     #[cfg(debug_assertions)]
     {
-        use rand::{thread_rng, Rng};
-        thread_rng().gen::<bool>()
+        use rand::{Rng, rng};
+        rng().random::<bool>()
     }
     #[cfg(not(debug_assertions))]
     {

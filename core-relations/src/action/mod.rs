@@ -4,16 +4,16 @@
 //! implementation here is optimized to execute on a batch of rows at a time.
 use std::ops::Deref;
 
-use numeric_id::{DenseIdMap, NumericId};
+use crate::numeric_id::{DenseIdMap, NumericId};
 use rayon::iter::{IntoParallelRefMutIterator, ParallelIterator};
 use smallvec::SmallVec;
 
 use crate::{
+    BaseValues, ContainerValues, ExternalFunctionId, WrappedTable,
     common::{DashMap, Value},
     free_join::{CounterId, Counters, ExternalFunctions, TableId, TableInfo, Variable},
-    pool::{with_pool_set, Clear, Pooled},
+    pool::{Clear, Pooled, with_pool_set},
     table_spec::{ColumnId, MutationBuffer},
-    BaseValues, ContainerValues, ExternalFunctionId, WrappedTable,
 };
 
 use self::mask::{Mask, MaskIter, ValueSource};

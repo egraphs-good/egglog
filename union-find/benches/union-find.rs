@@ -4,10 +4,10 @@ use std::{
     thread,
 };
 
-use concurrency::{Notification, ReadOptimizedLock};
-use divan::{counter::ItemsCount, Bencher};
-use rand::{seq::SliceRandom, Rng};
-use union_find::{concurrent, UnionFind};
+use divan::{Bencher, counter::ItemsCount};
+use egglog_concurrency::{Notification, ReadOptimizedLock};
+use egglog_union_find::{UnionFind, concurrent};
+use rand::{Rng, seq::SliceRandom};
 
 fn main() {
     divan::main()
@@ -22,41 +22,41 @@ enum Operation {
 const LENGTHS: [usize; 4] = [1000, 100000, 1000000, 4000000];
 
 fn prepare_operations_random(n_items: usize) -> (Vec<Operation>, Vec<Operation>) {
-    let mut rng = rand::thread_rng();
+    let mut rng = rand::rng();
     let mut seed_operations = Vec::new();
     let mut operations = Vec::new();
     for i in 0..(n_items / 4) {
-        if rng.gen_bool(0.9) {
-            seed_operations.push(Operation::Union(i, rng.gen_range(0..n_items)));
+        if rng.random_bool(0.9) {
+            seed_operations.push(Operation::Union(i, rng.random_range(0..n_items)));
         } else {
-            operations.push(Operation::Union(i, rng.gen_range(0..n_items)));
+            operations.push(Operation::Union(i, rng.random_range(0..n_items)));
         }
     }
     for _ in 0..(2 * n_items) {
-        operations.push(Operation::Find(rng.gen_range(0..n_items)));
+        operations.push(Operation::Find(rng.random_range(0..n_items)));
     }
     operations.shuffle(&mut rng);
     (seed_operations, operations)
 }
 
 fn prepare_operations_local(n_items: usize) -> (Vec<Operation>, Vec<Operation>) {
-    let mut rng = rand::thread_rng();
+    let mut rng = rand::rng();
     let mut seed_operations = Vec::new();
     let mut operations = Vec::new();
     for i in 0..n_items {
         // Only create unions for 15% of the items.
-        if rng.gen_bool(0.85) {
+        if rng.random_bool(0.85) {
             continue;
         }
-        let rhs = cmp::min(i + rng.gen_range(0..1000), n_items);
-        if rng.gen_bool(0.9) {
+        let rhs = cmp::min(i + rng.random_range(0..1000), n_items);
+        if rng.random_bool(0.9) {
             seed_operations.push(Operation::Union(i, rhs));
         } else {
             operations.push(Operation::Union(i, rhs));
         }
     }
     for _ in 0..(2 * n_items) {
-        operations.push(Operation::Find(rng.gen_range(0..n_items)));
+        operations.push(Operation::Find(rng.random_range(0..n_items)));
     }
     operations.sort_by_key(|op| match op {
         Operation::Union(a, _) => *a,
@@ -66,17 +66,17 @@ fn prepare_operations_local(n_items: usize) -> (Vec<Operation>, Vec<Operation>) 
 }
 
 fn find_only_random(n_items: usize) -> (Vec<Operation>, Vec<usize>) {
-    let mut rng = rand::thread_rng();
+    let mut rng = rand::rng();
     let mut seed_operations = Vec::new();
     let mut operations = Vec::new();
     for i in 0..(n_items / 4) {
-        let rhs = rng.gen_range(0..n_items);
+        let rhs = rng.random_range(0..n_items);
         seed_operations.push(Operation::Union(i, rhs));
         seed_operations.push(Operation::Find(i));
         seed_operations.push(Operation::Find(rhs));
     }
     for _ in 0..(2 * n_items) {
-        operations.push(rng.gen_range(0..n_items));
+        operations.push(rng.random_range(0..n_items));
     }
     operations.shuffle(&mut rng);
     (seed_operations, operations)

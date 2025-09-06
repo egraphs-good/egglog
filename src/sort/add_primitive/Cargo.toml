@@ -1,11 +1,16 @@
 [package]
-name = "add_primitive"
-version = "1.0.0"
-edition = "2021"
+name = "egglog-add-primitive"
+version = { workspace = true }
+edition = { workspace = true }
+description = { workspace = true }
+repository = { workspace = true }
+keywords = { workspace = true }
+license = { workspace = true }
+readme = { workspace = true }
 
 [lib]
 proc-macro = true
 
 [dependencies]
-quote = "1.0"
-syn = "2.0"
+quote = { workspace = true }
+syn = { workspace = true }
