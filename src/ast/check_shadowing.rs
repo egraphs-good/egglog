@@ -43,7 +43,6 @@ impl Names {
                 let mut inner = self.clone();
                 inner.check_shadowing(command)
             }
-            ResolvedNCommand::SetOption { .. } => Ok(()),
             ResolvedNCommand::Extract(..) => Ok(()),
             ResolvedNCommand::RunSchedule(..) => Ok(()),
             ResolvedNCommand::PrintOverallStatistics => Ok(()),

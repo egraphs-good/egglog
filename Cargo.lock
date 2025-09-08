@@ -4,7 +4,7 @@ version = 4
 
 [[package]]
 name = "add_primitive"
-version = "0.1.0"
+version = "1.0.0"
 dependencies = [
  "quote",
  "syn 2.0.102",
@@ -296,7 +296,7 @@ dependencies = [
 
 [[package]]
 name = "concurrency"
-version = "0.1.0"
+version = "1.0.0"
 dependencies = [
  "arc-swap",
  "divan",
@@ -311,7 +311,7 @@ checksum = "baf0a07a401f374238ab8e2f11a104d2851bf9ce711ec69804834de8af45c7af"
 
 [[package]]
 name = "core-relations"
-version = "0.1.0"
+version = "1.0.0"
 dependencies = [
  "anyhow",
  "bumpalo",
@@ -431,6 +431,27 @@ dependencies = [
 ]
 
 [[package]]
+name = "csv"
+version = "1.3.1"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "acdc4883a9c96732e4733212c01447ebd805833b7275a73ca3ee080fd77afdaf"
+dependencies = [
+ "csv-core",
+ "itoa",
+ "ryu",
+ "serde",
+]
+
+[[package]]
+name = "csv-core"
+version = "0.1.12"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "7d02f3b0da4c6504f86e9cd789d8dbafab48c2321be74e9987593de5a894d93d"
+dependencies = [
+ "memchr",
+]
+
+[[package]]
 name = "dashmap"
 version = "6.1.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -502,13 +523,14 @@ checksum = "1c7a8fb8a9fbf66c1f703fe16184d10ca0ee9d23be5b4436400408ba54a95005"
 
 [[package]]
 name = "egglog"
-version = "0.5.0"
+version = "1.0.0"
 dependencies = [
  "add_primitive",
  "chrono",
  "clap",
  "codspeed-criterion-compat",
  "core-relations",
+ "csv",
  "dyn-clone",
  "egglog-bridge",
  "egraph-serialize",
@@ -532,7 +554,7 @@ dependencies = [
 
 [[package]]
 name = "egglog-bridge"
-version = "0.1.0"
+version = "1.0.0"
 dependencies = [
  "anyhow",
  "core-relations",
@@ -552,6 +574,15 @@ dependencies = [
  "thiserror 1.0.69",
  "union-find",
  "web-time",
+]
+
+[[package]]
+name = "egglog-wasm-example"
+version = "0.0.0"
+dependencies = [
+ "egglog",
+ "getrandom 0.2.16",
+ "wasm-bindgen",
 ]
 
 [[package]]
@@ -660,8 +691,10 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "335ff9f135e4384c8150d6f27c6daed433577f86b4750418338c01a1a2528592"
 dependencies = [
  "cfg-if",
+ "js-sys",
  "libc",
  "wasi 0.11.1+wasi-snapshot-preview1",
+ "wasm-bindgen",
 ]
 
 [[package]]
@@ -996,7 +1029,7 @@ dependencies = [
 
 [[package]]
 name = "numeric-id"
-version = "0.1.0"
+version = "1.0.0"
 dependencies = [
  "lazy_static",
  "rayon",
@@ -1513,7 +1546,7 @@ checksum = "5a5f39404a5da50712a4c1eecf25e90dd62b613502b7e925fd4e4d19b5c96512"
 
 [[package]]
 name = "union-find"
-version = "0.1.0"
+version = "1.0.0"
 dependencies = [
  "concurrency",
  "crossbeam",

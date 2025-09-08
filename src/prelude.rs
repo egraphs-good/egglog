@@ -3,7 +3,7 @@
 //! ```
 //! use egglog::prelude::*;
 //! ```
-//! See also [`rule`], [`rust_rule`], [`query`], [`LeafSort`],
+//! See also [`rule`], [`rust_rule`], [`query`], [`BaseSort`],
 //! and [`ContainerSort`].
 
 use crate::*;
@@ -12,8 +12,8 @@ use std::any::{Any, TypeId};
 // Re-exports in `prelude` for convenience.
 pub use egglog::ast::{Action, Fact, Facts, GenericActions};
 pub use egglog::sort::{BigIntSort, BigRatSort, BoolSort, F64Sort, I64Sort, StringSort, UnitSort};
+pub use egglog::{EGraph, span};
 pub use egglog::{action, actions, datatype, expr, fact, facts, sort, vars};
-pub use egglog::{span, EGraph};
 
 pub mod exprs {
     use super::*;
@@ -55,12 +55,12 @@ pub mod exprs {
 }
 
 /// Create a new ruleset.
-pub fn add_ruleset(egraph: &mut EGraph, ruleset: &str) -> Result<Vec<String>, Error> {
+pub fn add_ruleset(egraph: &mut EGraph, ruleset: &str) -> Result<Vec<CommandOutput>, Error> {
     egraph.run_program(vec![Command::AddRuleset(span!(), ruleset.to_owned())])
 }
 
 /// Run one iteration of a ruleset.
-pub fn run_ruleset(egraph: &mut EGraph, ruleset: &str) -> Result<Vec<String>, Error> {
+pub fn run_ruleset(egraph: &mut EGraph, ruleset: &str) -> Result<Vec<CommandOutput>, Error> {
     egraph.run_program(vec![Command::RunSchedule(Schedule::Run(
         span!(),
         RunConfig {
@@ -225,7 +225,7 @@ pub fn rule(
     ruleset: &str,
     facts: Facts<String, String>,
     actions: Actions,
-) -> Result<Vec<String>, Error> {
+) -> Result<Vec<CommandOutput>, Error> {
     let rule = Rule {
         span: span!(),
         head: actions,
@@ -265,8 +265,8 @@ impl RustRuleContext<'_, '_> {
 
     /// Do a table lookup. This is potentially a mutable operation!
     /// For more information, see `egglog_bridge::TableAction::lookup`.
-    pub fn lookup(&mut self, table: &str, key: Vec<Value>) -> Option<Value> {
-        self.get_table_action(table).lookup(self.exec_state, &key)
+    pub fn lookup(&mut self, table: &str, key: &[Value]) -> Option<Value> {
+        self.get_table_action(table).lookup(self.exec_state, key)
     }
 
     /// Union two values in the e-graph.
@@ -423,7 +423,7 @@ pub fn rust_rule(
     vars: &[(&str, ArcSort)],
     facts: Facts<String, String>,
     func: impl Fn(&mut RustRuleContext, &[Value]) -> Option<()> + Clone + Send + Sync + 'static,
-) -> Result<Vec<String>, Error> {
+) -> Result<Vec<CommandOutput>, Error> {
     let prim_name = egraph.parser.symbol_gen.fresh("rust_rule_prim");
     let panic_id = egraph.backend.new_panic(format!("{prim_name}_panic"));
     egraph.add_primitive(RustRuleRhs {
@@ -566,7 +566,7 @@ pub fn query(
 }
 
 /// Declare a new sort.
-pub fn add_sort(egraph: &mut EGraph, name: &str) -> Result<Vec<String>, Error> {
+pub fn add_sort(egraph: &mut EGraph, name: &str) -> Result<Vec<CommandOutput>, Error> {
     egraph.run_program(vec![Command::Sort(span!(), name.to_owned(), None)])
 }
 
@@ -576,7 +576,7 @@ pub fn add_function(
     name: &str,
     schema: Schema,
     merge: Option<GenericExpr<String, String>>,
-) -> Result<Vec<String>, Error> {
+) -> Result<Vec<CommandOutput>, Error> {
     egraph.run_program(vec![Command::Function {
         span: span!(),
         name: name.to_owned(),
@@ -592,7 +592,7 @@ pub fn add_constructor(
     schema: Schema,
     cost: Option<DefaultCost>,
     unextractable: bool,
-) -> Result<Vec<String>, Error> {
+) -> Result<Vec<CommandOutput>, Error> {
     egraph.run_program(vec![Command::Constructor {
         span: span!(),
         name: name.to_owned(),
@@ -607,7 +607,7 @@ pub fn add_relation(
     egraph: &mut EGraph,
     name: &str,
     inputs: Vec<String>,
-) -> Result<Vec<String>, Error> {
+) -> Result<Vec<CommandOutput>, Error> {
     egraph.run_program(vec![Command::Relation {
         span: span!(),
         name: name.to_owned(),
@@ -695,7 +695,7 @@ impl<T: BaseSort> Sort for BaseSortImpl<T> {
 /// A "default" implementation of [`Sort`] for types which
 /// just want to store a pure data structure in the e-graph.
 /// If you implement this trait, do not implement `Sort` or
-/// `LeafSort`. Use `add_container_sort` to register container
+/// `BaseSort`. Use `add_container_sort` to register container
 /// sorts with the `EGraph`. See `Sort` for documentation
 /// of the methods. Do not override `to_arcsort`.
 pub trait ContainerSort: Any + Send + Sync + Debug {

@@ -27,9 +27,6 @@ pub(crate) fn desugar_command(
 ) -> Result<Vec<NCommand>, Error> {
     let rule_name = rule_name(&command);
     let res = match command {
-        Command::SetOption { name, value } => {
-            vec![NCommand::SetOption { name, value }]
-        }
         Command::Function {
             span,
             name,

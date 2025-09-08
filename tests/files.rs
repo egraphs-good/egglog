@@ -23,9 +23,8 @@ impl Run {
             );
         } else {
             let mut egraph = EGraph::default();
-            egraph.run_mode = RunMode::ShowDesugaredEgglog;
             let desugared_str = egraph
-                .parse_and_run_program(self.path.to_str().map(String::from), &program)
+                .resugar_program(self.path.to_str().map(String::from), &program)
                 .unwrap()
                 .join("\n");
 
@@ -44,18 +43,23 @@ impl Run {
                 if self.should_fail() {
                     panic!(
                         "Program should have failed! Instead, logged:\n {}",
-                        msgs.join("\n")
+                        msgs.iter()
+                            .map(|s| s.to_string())
+                            .collect::<Vec<_>>()
+                            .join("\n")
                     );
                 } else {
                     for msg in msgs {
                         log::info!("  {}", msg);
                     }
                     // Test graphviz dot generation
-                    let mut serialized = egraph.serialize(SerializeConfig {
-                        max_functions: Some(40),
-                        max_calls_per_function: Some(40),
-                        ..Default::default()
-                    });
+                    let mut serialized = egraph
+                        .serialize(SerializeConfig {
+                            max_functions: Some(40),
+                            max_calls_per_function: Some(40),
+                            ..Default::default()
+                        })
+                        .egraph;
                     serialized.to_dot();
                     // Also try splitting and inlining
                     serialized.split_classes(|id, _| egraph.from_node_id(id).is_primitive());
