@@ -145,7 +145,7 @@ impl ProofBuilder {
             syntax: syntax.clone(),
         }));
         let reason_table = egraph.reason_table(&reason_spec);
-        let reason_id = egraph.proof_specs.push(reason_spec);
+        let reason_spec_id = egraph.proof_specs.push(reason_spec);
         let reason_counter = egraph.reason_counter;
         let atom_mapping = self.term_vars.clone();
         move |bndgs, rb| {
@@ -170,7 +170,7 @@ impl ProofBuilder {
             // Once those terms are all guaranteed to be in the e-graph, we only need to write down
             // the base substitution of variables into a reason table.
             let mut row = SmallVec::<[core_relations::QueryEntry; 8]>::new();
-            row.push(Value::new(reason_id.rep()).into());
+            row.push(Value::new(reason_spec_id.rep()).into());
             for (var, _) in &syntax.vars {
                 row.push(bndgs.mapping[*var]);
             }
