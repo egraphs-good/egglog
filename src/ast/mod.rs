@@ -8,7 +8,9 @@ use crate::core::{
     GenericAtom, GenericAtomTerm, HeadOrEq, Query, ResolvedCall, ResolvedCoreRule, to_query,
 };
 use crate::*;
-pub use egglog_bridge::generic_ast::{GenericAction, GenericExpr, GenericFact, GenericActions, GenericRule, Literal};
+pub use egglog_bridge::generic_ast::{
+    GenericAction, GenericActions, GenericExpr, GenericFact, GenericRule, Literal,
+};
 use egglog_bridge::span::Span;
 use egglog_bridge::util::ListDisplay;
 pub use expr::*;
@@ -1136,6 +1138,7 @@ pub struct GenericRewrite<Head, Leaf> {
     pub conditions: Vec<GenericFact<Head, Leaf>>,
 }
 
+// TODO name isn't used here? ai messed up?
 impl<Head: Display, Leaf: Display> GenericRewrite<Head, Leaf> {
     pub fn fmt_with_ruleset(
         &self,
