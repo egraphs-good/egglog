@@ -922,7 +922,8 @@ impl EGraph {
     }
 
     fn eval_actions(&mut self, actions: &ResolvedActions) -> Result<(), Error> {
-        let (actions, _) = to_core_actions(actions,
+        let (actions, _) = to_core_actions(
+            actions,
             &self.type_info,
             &mut Default::default(),
             &mut self.parser.symbol_gen,
@@ -990,13 +991,13 @@ impl EGraph {
             result_var.clone(),
             expr.clone(),
         ));
-        let actions = actions
-            .to_core_actions(
-                &self.type_info,
-                &mut Default::default(),
-                &mut self.parser.symbol_gen,
-            )?
-            .0;
+        let actions = to_core_actions(
+            &actions,
+            &self.type_info,
+            &mut Default::default(),
+            &mut self.parser.symbol_gen,
+        )?
+        .0;
         translator.actions(&actions)?;
 
         let arg = translator.entry(&ResolvedAtomTerm::Var(span.clone(), result_var));
@@ -1040,7 +1041,7 @@ impl EGraph {
             body: facts.to_vec(),
         };
         let core_rule =
-            to_canonicalized_core_rule(rule, &self.type_info, &mut self.parser.symbol_gen)?;
+            to_canonicalized_core_rule(&rule, &self.type_info, &mut self.parser.symbol_gen)?;
         let query = core_rule.body;
 
         let ext_sc = egglog_bridge::SideChannel::default();
@@ -1134,7 +1135,7 @@ impl EGraph {
                 }
             },
             ResolvedNCommand::Extract(span, expr, variants) => {
-                let sort = expr.output_type();
+                let sort = output_type(&expr);
 
                 let x = self.eval_resolved_expr(span.clone(), &expr)?;
                 let n = self.eval_resolved_expr(span, &variants)?;

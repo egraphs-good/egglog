@@ -183,6 +183,10 @@ where
         self.0.len()
     }
 
+    pub fn is_empty(&self) -> bool {
+        self.0.is_empty()
+    }
+
     pub fn iter(&self) -> impl Iterator<Item = &GenericAction<Head, Leaf>> {
         self.0.iter()
     }
@@ -192,6 +196,14 @@ where
         f: &mut impl FnMut(GenericExpr<Head, Leaf>) -> GenericExpr<Head, Leaf>,
     ) -> Self {
         Self(self.0.into_iter().map(|a| a.visit_exprs(f)).collect())
+    }
+
+    pub fn new(actions: Vec<GenericAction<Head, Leaf>>) -> Self {
+        Self(actions)
+    }
+
+    pub fn singleton(action: GenericAction<Head, Leaf>) -> Self {
+        Self(vec![action])
     }
 }
 
