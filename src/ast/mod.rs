@@ -1138,44 +1138,31 @@ pub struct GenericRewrite<Head, Leaf> {
     pub conditions: Vec<GenericFact<Head, Leaf>>,
 }
 
-// TODO name isn't used here? ai messed up?
 impl<Head: Display, Leaf: Display> GenericRewrite<Head, Leaf> {
+    /// Converts the rewrite into an s-expression.
     pub fn fmt_with_ruleset(
         &self,
         f: &mut Formatter,
-        name: &str,
-        is_bi: bool,
+        ruleset: &str,
+        is_bidirectional: bool,
         subsume: bool,
     ) -> std::fmt::Result {
-        let indent = " ".repeat(7);
-        if is_bi {
-            writeln!(f, "(rule ((= lhs {}))", self.lhs)?;
-            writeln!(
-                f,
-                "      ((union lhs {}){}){})",
-                self.rhs,
-                if subsume { " (subsume lhs)" } else { "" },
-                indent
-            )?;
-            writeln!(f, "(rule ((= lhs {}))", self.rhs)?;
-            writeln!(
-                f,
-                "      ((union lhs {}){}){})",
-                self.lhs,
-                if subsume { " (subsume lhs)" } else { "" },
-                indent
-            )?;
+        let direction = if is_bidirectional {
+            "birewrite"
         } else {
-            writeln!(f, "(rule ((= lhs {}))", self.lhs)?;
-            writeln!(
-                f,
-                "      ((union lhs {}){}){})",
-                self.rhs,
-                if subsume { " (subsume lhs)" } else { "" },
-                indent
-            )?;
+            "rewrite"
+        };
+        write!(f, "({direction} {} {}", self.lhs, self.rhs)?;
+        if subsume {
+            write!(f, " :subsume")?;
         }
-        Ok(())
+        if !self.conditions.is_empty() {
+            write!(f, " :when ({})", ListDisplay(&self.conditions, " "))?;
+        }
+        if !ruleset.is_empty() {
+            write!(f, " :ruleset {ruleset}")?;
+        }
+        write!(f, ")")
     }
 }
 
