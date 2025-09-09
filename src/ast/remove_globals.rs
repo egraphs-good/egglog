@@ -71,7 +71,7 @@ fn resolved_var_to_call(var: &ResolvedVar) -> ResolvedCall {
 /// and use it as an argument to `subst` instead of `visit_expr`,
 /// but we have not implemented `subst` for command.
 fn replace_global_vars(expr: ResolvedExpr) -> ResolvedExpr {
-    match expr.get_global_var() {
+    match get_global_var(&expr) {
         Some(resolved_var) => {
             GenericExpr::Call(expr.span(), resolved_var_to_call(&resolved_var), vec![])
         }
@@ -134,7 +134,7 @@ impl GlobalRemover<'_> {
                 // in the query.
                 let mut globals = HashMap::default();
                 rule.head.clone().visit_exprs(&mut |expr| {
-                    if let Some(resolved_var) = expr.get_global_var() {
+                    if let Some(resolved_var) = get_global_var(&expr) {
                         let new_name = self.fresh.fresh(&resolved_var.name);
                         globals.insert(
                             resolved_var.clone(),
@@ -172,7 +172,7 @@ impl GlobalRemover<'_> {
                         .collect(),
                     // replace references to globals with the newly bound names
                     head: rule.head.clone().visit_exprs(&mut |expr| {
-                        if let Some(resolved_var) = expr.get_global_var() {
+                        if let Some(resolved_var) = get_global_var(&expr) {
                             globals.get(&resolved_var).unwrap().clone()
                         } else {
                             expr
