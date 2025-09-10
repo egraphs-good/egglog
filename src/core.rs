@@ -480,8 +480,6 @@ where
     }
 }
 
-// Formerly: impl<Head, Leaf> GenericActions<Head, Leaf>
-// Now: free function
 #[allow(clippy::type_complexity)]
 pub(crate) fn to_core_actions<Head, Leaf, FG>(
     actions: &GenericActions<Head, Leaf>,
@@ -657,8 +655,6 @@ where
     Ok((GenericCoreActions::new(norm_actions), mapped_actions))
 }
 
-// Formerly: impl<Head, Leaf> GenericExpr<Head, Leaf>
-// Now: free functions
 pub(crate) fn to_query<Head, Leaf>(
     expr: &GenericExpr<Head, Leaf>,
     typeinfo: &TypeInfo,
@@ -869,7 +865,6 @@ where
     }
 }
 
-// Update usage in to_canonicalized_core_rule to use the free function to_core_rule
 pub(crate) fn to_canonicalized_core_rule(
     resolved_rule: &ResolvedRule,
     typeinfo: &TypeInfo,
@@ -896,8 +891,6 @@ pub(crate) fn to_canonicalized_core_rule(
     Ok(rule)
 }
 
-// Formerly: impl<Head, Leaf> GenericRule<Head, Leaf>
-// Now: free function
 pub(crate) fn to_core_rule<Head, Leaf>(
     rule: &GenericRule<Head, Leaf>,
     typeinfo: &TypeInfo,
