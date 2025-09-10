@@ -154,6 +154,7 @@ pub mod bin {
     }
 }
 
+#[cfg(feature = "bin")]
 impl EGraph {
     /// Start a Read-Eval-Print Loop with standard I/O.
     pub fn repl(&mut self, mode: RunMode) -> io::Result<()> {
@@ -203,6 +204,7 @@ impl EGraph {
     }
 }
 
+#[cfg(feature = "bin")]
 fn welcome_prompt() -> String {
     format!("Welcome to Egglog REPL! (build: {})", env!("FULL_VERSION"))
 }
