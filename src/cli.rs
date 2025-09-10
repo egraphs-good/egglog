@@ -1,160 +1,152 @@
 use crate::*;
 use std::io::{self, BufRead, BufReader, IsTerminal, Read, Write};
 
-#[cfg(feature = "bin")]
-pub mod bin {
+use clap::Parser;
+use env_logger::Env;
+use std::path::PathBuf;
 
-    use super::*;
-    use clap::Parser;
-    use env_logger::Env;
-    use std::path::PathBuf;
+#[derive(Debug, Parser)]
+#[command(version = env!("FULL_VERSION"), about = env!("CARGO_PKG_DESCRIPTION"))]
+struct Args {
+    /// Directory for files when using `input` and `output` commands
+    #[clap(short = 'F', long)]
+    fact_directory: Option<PathBuf>,
+    /// Turns off the seminaive optimization
+    #[clap(long)]
+    naive: bool,
+    /// Prints extra information, which can be useful for debugging
+    #[clap(long, default_value_t = RunMode::Normal)]
+    mode: RunMode,
+    /// The file names for the egglog files to run
+    inputs: Vec<PathBuf>,
+    /// Serializes the egraph for each egglog file as JSON
+    #[clap(long)]
+    to_json: bool,
+    /// Serializes the egraph for each egglog file as a dot file
+    #[clap(long)]
+    to_dot: bool,
+    /// Serializes the egraph for each egglog file as an SVG
+    #[clap(long)]
+    to_svg: bool,
+    /// Splits the serialized egraph into primitives and non-primitives
+    #[clap(long)]
+    serialize_split_primitive_outputs: bool,
+    /// Maximum number of function nodes to render in dot/svg output
+    #[clap(long, default_value = "40")]
+    max_functions: usize,
+    /// Maximum number of calls per function to render in dot/svg output
+    #[clap(long, default_value = "40")]
+    max_calls_per_function: usize,
+    /// Number of times to inline leaves
+    #[clap(long, default_value = "0")]
+    serialize_n_inline_leaves: usize,
+    #[clap(short = 'j', long, default_value = "1")]
+    /// Number of threads to use for parallel execution. Passing `0` will use the maximum
+    /// inferred parallelism available on the current system.
+    threads: usize,
+}
 
-    #[derive(Debug, Parser)]
-    #[command(version = env!("FULL_VERSION"), about = env!("CARGO_PKG_DESCRIPTION"))]
-    struct Args {
-        /// Directory for files when using `input` and `output` commands
-        #[clap(short = 'F', long)]
-        fact_directory: Option<PathBuf>,
-        /// Turns off the seminaive optimization
-        #[clap(long)]
-        naive: bool,
-        /// Prints extra information, which can be useful for debugging
-        #[clap(long, default_value_t = RunMode::Normal)]
-        mode: RunMode,
-        /// The file names for the egglog files to run
-        inputs: Vec<PathBuf>,
-        /// Serializes the egraph for each egglog file as JSON
-        #[clap(long)]
-        to_json: bool,
-        /// Serializes the egraph for each egglog file as a dot file
-        #[clap(long)]
-        to_dot: bool,
-        /// Serializes the egraph for each egglog file as an SVG
-        #[clap(long)]
-        to_svg: bool,
-        /// Splits the serialized egraph into primitives and non-primitives
-        #[clap(long)]
-        serialize_split_primitive_outputs: bool,
-        /// Maximum number of function nodes to render in dot/svg output
-        #[clap(long, default_value = "40")]
-        max_functions: usize,
-        /// Maximum number of calls per function to render in dot/svg output
-        #[clap(long, default_value = "40")]
-        max_calls_per_function: usize,
-        /// Number of times to inline leaves
-        #[clap(long, default_value = "0")]
-        serialize_n_inline_leaves: usize,
-        #[clap(short = 'j', long, default_value = "1")]
-        /// Number of threads to use for parallel execution. Passing `0` will use the maximum
-        /// inferred parallelism available on the current system.
-        threads: usize,
-    }
+/// Start a command-line interface for the E-graph.
+///
+/// This is what vanilla egglog uses, and custom egglog builds (i.e., "egglog batteries included")
+/// should also call this function.
+#[allow(clippy::disallowed_macros)]
+pub fn cli(mut egraph: EGraph) {
+    env_logger::Builder::from_env(Env::default().default_filter_or("warn"))
+        .format_timestamp(None)
+        .format_target(false)
+        .parse_default_env()
+        .init();
 
-    /// Start a command-line interface for the E-graph.
-    ///
-    /// This is what vanilla egglog uses, and custom egglog builds (i.e., "egglog batteries included")
-    /// should also call this function.
-    #[allow(clippy::disallowed_macros)]
-    pub fn cli(mut egraph: EGraph) {
-        env_logger::Builder::from_env(Env::default().default_filter_or("warn"))
-            .format_timestamp(None)
-            .format_target(false)
-            .parse_default_env()
-            .init();
-
-        let args = Args::parse();
-        rayon::ThreadPoolBuilder::new()
-            .num_threads(args.threads)
-            .build_global()
-            .unwrap();
-        log::debug!(
-            "Initialized thread pool with {} threads",
-            rayon::current_num_threads()
-        );
-        egraph.fact_directory.clone_from(&args.fact_directory);
-        egraph.seminaive = !args.naive;
-        if args.inputs.is_empty() {
-            match egraph.repl(args.mode) {
-                Ok(()) => std::process::exit(0),
-                Err(err) => {
-                    log::error!("{err}");
-                    std::process::exit(1)
-                }
+    let args = Args::parse();
+    rayon::ThreadPoolBuilder::new()
+        .num_threads(args.threads)
+        .build_global()
+        .unwrap();
+    log::debug!(
+        "Initialized thread pool with {} threads",
+        rayon::current_num_threads()
+    );
+    egraph.fact_directory.clone_from(&args.fact_directory);
+    egraph.seminaive = !args.naive;
+    if args.inputs.is_empty() {
+        match egraph.repl(args.mode) {
+            Ok(()) => std::process::exit(0),
+            Err(err) => {
+                log::error!("{err}");
+                std::process::exit(1)
             }
-        } else {
-            for input in &args.inputs {
-                let program = std::fs::read_to_string(input).unwrap_or_else(|_| {
-                    let arg = input.to_string_lossy();
-                    panic!("Failed to read file {arg}")
-                });
+        }
+    } else {
+        for input in &args.inputs {
+            let program = std::fs::read_to_string(input).unwrap_or_else(|_| {
+                let arg = input.to_string_lossy();
+                panic!("Failed to read file {arg}")
+            });
 
-                match run_commands(
-                    &mut egraph,
-                    Some(input.to_str().unwrap().into()),
-                    &program,
-                    io::stdout(),
-                    args.mode,
-                ) {
-                    Ok(None) => {}
-                    _ => std::process::exit(1),
+            match run_commands(
+                &mut egraph,
+                Some(input.to_str().unwrap().into()),
+                &program,
+                io::stdout(),
+                args.mode,
+            ) {
+                Ok(None) => {}
+                _ => std::process::exit(1),
+            }
+
+            if args.to_json || args.to_dot || args.to_svg {
+                let serialized_output = egraph.serialize(SerializeConfig {
+                    max_functions: Some(args.max_functions),
+                    max_calls_per_function: Some(args.max_calls_per_function),
+                    ..SerializeConfig::default()
+                });
+                if serialized_output.is_complete() {
+                    log::warn!("{}", serialized_output.omitted_description());
+                }
+                let mut serialized = serialized_output.egraph;
+                if args.serialize_split_primitive_outputs {
+                    serialized.split_classes(|id, _| egraph.from_node_id(id).is_primitive())
+                }
+                for _ in 0..args.serialize_n_inline_leaves {
+                    serialized.inline_leaves();
                 }
 
-                if args.to_json || args.to_dot || args.to_svg {
-                    let serialized_output = egraph.serialize(SerializeConfig {
-                        max_functions: Some(args.max_functions),
-                        max_calls_per_function: Some(args.max_calls_per_function),
-                        ..SerializeConfig::default()
-                    });
-                    if serialized_output.is_complete() {
-                        log::warn!("{}", serialized_output.omitted_description());
-                    }
-                    let mut serialized = serialized_output.egraph;
-                    if args.serialize_split_primitive_outputs {
-                        serialized.split_classes(|id, _| egraph.from_node_id(id).is_primitive())
-                    }
-                    for _ in 0..args.serialize_n_inline_leaves {
-                        serialized.inline_leaves();
-                    }
-
-                    // if we are splitting primitive outputs, add `-split` to the end of the file name
-                    let serialize_filename = if args.serialize_split_primitive_outputs {
-                        input.with_file_name(format!(
-                            "{}-split",
-                            input.file_stem().unwrap().to_str().unwrap()
-                        ))
-                    } else {
-                        input.clone()
-                    };
-                    if args.to_dot {
-                        let dot_path = serialize_filename.with_extension("dot");
-                        serialized
-                            .to_dot_file(dot_path.clone())
-                            .unwrap_or_else(|_| panic!("Failed to write dot file to {dot_path:?}"));
-                    }
-                    if args.to_svg {
-                        let svg_path = serialize_filename.with_extension("svg");
-                        serialized.to_svg_file(svg_path.clone()).unwrap_or_else( |_|
-                            panic!("Failed to write svg file to {svg_path:?}. Make sure you have the `dot` executable installed")
-                        );
-                    }
-                    if args.to_json {
-                        let json_path = serialize_filename.with_extension("json");
-                        serialized
-                            .to_json_file(json_path.clone())
-                            .unwrap_or_else(|_| {
-                                panic!("Failed to write json file to {json_path:?}")
-                            });
-                    }
+                // if we are splitting primitive outputs, add `-split` to the end of the file name
+                let serialize_filename = if args.serialize_split_primitive_outputs {
+                    input.with_file_name(format!(
+                        "{}-split",
+                        input.file_stem().unwrap().to_str().unwrap()
+                    ))
+                } else {
+                    input.clone()
+                };
+                if args.to_dot {
+                    let dot_path = serialize_filename.with_extension("dot");
+                    serialized
+                        .to_dot_file(dot_path.clone())
+                        .unwrap_or_else(|_| panic!("Failed to write dot file to {dot_path:?}"));
+                }
+                if args.to_svg {
+                    let svg_path = serialize_filename.with_extension("svg");
+                    serialized.to_svg_file(svg_path.clone()).unwrap_or_else( |_|
+                        panic!("Failed to write svg file to {svg_path:?}. Make sure you have the `dot` executable installed")
+                    );
+                }
+                if args.to_json {
+                    let json_path = serialize_filename.with_extension("json");
+                    serialized
+                        .to_json_file(json_path.clone())
+                        .unwrap_or_else(|_| panic!("Failed to write json file to {json_path:?}"));
                 }
             }
         }
-
-        // no need to drop the egraph if we are going to exit
-        std::mem::forget(egraph)
     }
+
+    // no need to drop the egraph if we are going to exit
+    std::mem::forget(egraph)
 }
 
-#[cfg(feature = "bin")]
 impl EGraph {
     /// Start a Read-Eval-Print Loop with standard I/O.
     pub fn repl(&mut self, mode: RunMode) -> io::Result<()> {
@@ -204,7 +196,6 @@ impl EGraph {
     }
 }
 
-#[cfg(feature = "bin")]
 fn welcome_prompt() -> String {
     format!("Welcome to Egglog REPL! (build: {})", env!("FULL_VERSION"))
 }
