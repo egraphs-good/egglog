@@ -7,8 +7,7 @@
 
 use crate::*;
 use crate::{core::ResolvedCall, typechecking::FuncType};
-use egglog_bridge::generic_ast::{Change, GenericAction, GenericExpr, GenericFact, GenericRule};
-use egglog_bridge::span::Span;
+use egglog_bridge::generic_ast::{GenericAction, GenericExpr, GenericFact, GenericRule};
 
 struct GlobalRemover<'a> {
     fresh: &'a mut SymbolGen,

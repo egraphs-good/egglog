@@ -8,9 +8,7 @@ use crate::{
 use std::{cmp, rc::Rc};
 // Use immutable hashmap for performance
 // cloning assignments is common and O(1) with immutable hashmap
-use egglog_bridge::generic_ast::{
-    Change, GenericAction, GenericActions, GenericExpr, GenericFact, GenericRule,
-};
+use egglog_bridge::generic_ast::{GenericAction, GenericActions, GenericExpr, GenericFact};
 use egglog_bridge::span::Span;
 use im_rc::HashMap;
 use std::{fmt::Debug, iter::once, mem::swap};
@@ -545,7 +543,7 @@ impl Assignment<AtomTerm, ArcSort> {
                     .collect();
                 let types: Vec<_> = args
                     .iter()
-                    .map(|arg| arg.output_type())
+                    .map(|arg| output_type(arg))
                     .chain(once(
                         self.get(&AtomTerm::Var(span.clone(), corresponding_var.clone()))
                             .unwrap()

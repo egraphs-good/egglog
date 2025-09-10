@@ -1,5 +1,4 @@
 use egglog_bridge::generic_ast::GenericExpr;
-use ordered_float::OrderedFloat;
 use std::fmt::{Display, Formatter};
 use std::hash::Hash;
 use std::hash::Hasher;
@@ -53,7 +52,7 @@ pub(crate) type ResolvedExpr = GenericExpr<ResolvedCall, ResolvedVar>;
 /// A useful operation on `MappedExpr`s is [`MappedExpr::get_corresponding_var_or_lit``].
 pub(crate) type MappedExpr<Head, Leaf> = GenericExpr<CorrespondingVar<Head, Leaf>, Leaf>;
 
-pub fn output_type(expr: &ResolvedExpr) -> ArcSort {
+pub(crate) fn output_type(expr: &ResolvedExpr) -> ArcSort {
     match expr {
         ResolvedExpr::Lit(_, lit) => sort::literal_sort(lit),
         ResolvedExpr::Var(_, resolved_var) => resolved_var.sort.clone(),

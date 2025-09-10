@@ -38,7 +38,7 @@ use csv::Writer;
 pub use egglog_add_primitive::add_primitive;
 pub use egglog_bridge::FunctionRow;
 use egglog_bridge::generic_ast::{Change, GenericExpr, Literal};
-use egglog_bridge::span::{RustSpan, Span};
+use egglog_bridge::span::Span;
 use egglog_bridge::{ColumnTy, IterationReport, QueryEntry};
 use egglog_core_relations as core_relations;
 use egglog_numeric_id as numeric_id;
@@ -983,7 +983,7 @@ impl EGraph {
 
         let result_var = ResolvedVar {
             name: self.parser.symbol_gen.fresh("eval_resolved_expr"),
-            sort: output_type(&expr),
+            sort: output_type(expr),
             is_global_ref: false,
         };
         let actions = ResolvedActions::singleton(ResolvedAction::Let(

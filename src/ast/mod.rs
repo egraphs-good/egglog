@@ -1130,6 +1130,8 @@ pub(crate) type MappedActions<Head, Leaf> = GenericActions<CorrespondingVar<Head
 pub type Rule = GenericRule<String, String>;
 pub(crate) type ResolvedRule = GenericRule<ResolvedCall, ResolvedVar>;
 
+pub type Rewrite = GenericRewrite<String, String>;
+
 #[derive(Clone, Debug)]
 pub struct GenericRewrite<Head, Leaf> {
     pub span: Span,

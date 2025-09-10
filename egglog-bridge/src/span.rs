@@ -1,5 +1,3 @@
-use ordered_float::OrderedFloat;
-use std::collections::HashMap;
 use std::fmt::{self, Debug, Display};
 use std::sync::Arc;
 
