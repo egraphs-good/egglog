@@ -34,8 +34,6 @@ use proof_spec::{ProofReason, ProofReconstructionState, ReasonSpecId};
 use smallvec::SmallVec;
 use web_time::{Duration, Instant};
 
-use ordered_float::OrderedFloat;
-
 pub mod macros;
 pub mod proof_format;
 pub(crate) mod proof_spec;
