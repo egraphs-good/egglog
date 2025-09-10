@@ -1,5 +1,5 @@
 use crate::*;
-use std::io::{self, BufRead, BufReader, Read, Write};
+use std::io::{self, BufRead, BufReader, IsTerminal, Read, Write};
 
 #[cfg(feature = "bin")]
 pub mod bin {
@@ -74,7 +74,6 @@ pub mod bin {
         egraph.fact_directory.clone_from(&args.fact_directory);
         egraph.seminaive = !args.naive;
         if args.inputs.is_empty() {
-            log::info!("Welcome to Egglog REPL! (build: {})", env!("FULL_VERSION"));
             match egraph.repl(args.mode) {
                 Ok(()) => std::process::exit(0),
                 Err(err) => {
@@ -158,15 +157,27 @@ pub mod bin {
 impl EGraph {
     /// Start a Read-Eval-Print Loop with standard I/O.
     pub fn repl(&mut self, mode: RunMode) -> io::Result<()> {
-        self.repl_with(io::stdin(), io::stdout(), mode)
+        self.repl_with(io::stdin(), io::stdout(), mode, io::stdin().is_terminal())
     }
 
     /// Start a Read-Eval-Print Loop with the given input and output channel.
-    pub fn repl_with<R, W>(&mut self, input: R, mut output: W, mode: RunMode) -> io::Result<()>
+    pub fn repl_with<R, W>(
+        &mut self,
+        input: R,
+        mut output: W,
+        mode: RunMode,
+        is_terminal: bool,
+    ) -> io::Result<()>
     where
         R: Read,
         W: Write,
     {
+        // https://doc.rust-lang.org/beta/std/io/trait.IsTerminal.html#examples
+        if is_terminal {
+            output.write_all(welcome_prompt().as_bytes())?;
+            output.write_all(b"\n> ")?;
+            output.flush()?;
+        }
         let mut cmd_buffer = String::new();
 
         for line in BufReader::new(input).lines() {
@@ -177,6 +188,10 @@ impl EGraph {
             if should_eval(&cmd_buffer) {
                 run_commands(self, None, &cmd_buffer, &mut output, mode)?;
                 cmd_buffer = String::new();
+                if is_terminal {
+                    output.write_all(b"> ")?;
+                    output.flush()?;
+                }
             }
         }
 
@@ -186,6 +201,10 @@ impl EGraph {
 
         Ok(())
     }
+}
+
+fn welcome_prompt() -> String {
+    format!("Welcome to Egglog REPL! (build: {})", env!("FULL_VERSION"))
 }
 
 fn should_eval(curr_cmd: &str) -> bool {
@@ -315,43 +334,58 @@ mod tests {
         let input = "(extract 1)";
         let mut output = Vec::new();
         egraph
-            .repl_with(input.as_bytes(), &mut output, RunMode::Normal)
+            .repl_with(input.as_bytes(), &mut output, RunMode::Normal, false)
             .unwrap();
         assert_eq!(String::from_utf8(output).unwrap(), "1\n");
 
         let input = "\n\n\n";
         let mut output = Vec::new();
         egraph
-            .repl_with(input.as_bytes(), &mut output, RunMode::Normal)
+            .repl_with(input.as_bytes(), &mut output, RunMode::Normal, false)
             .unwrap();
         assert_eq!(String::from_utf8(output).unwrap(), "");
 
         let input = "(extract 1)";
         let mut output = Vec::new();
         egraph
-            .repl_with(input.as_bytes(), &mut output, RunMode::Interactive)
+            .repl_with(input.as_bytes(), &mut output, RunMode::Interactive, false)
             .unwrap();
         assert_eq!(String::from_utf8(output).unwrap(), "(done)\n1\n");
 
         let input = "xyz";
         let mut output: Vec<u8> = Vec::new();
         egraph
-            .repl_with(input.as_bytes(), &mut output, RunMode::Interactive)
+            .repl_with(input.as_bytes(), &mut output, RunMode::Interactive, false)
             .unwrap();
         assert_eq!(String::from_utf8(output).unwrap(), "(error)\n");
 
         let input = "(extract 1)";
         let mut output = Vec::new();
         egraph
-            .repl_with(input.as_bytes(), &mut output, RunMode::ShowDesugaredEgglog)
+            .repl_with(
+                input.as_bytes(),
+                &mut output,
+                RunMode::ShowDesugaredEgglog,
+                false,
+            )
             .unwrap();
         assert_eq!(String::from_utf8(output).unwrap(), "(extract 1 0)\n");
 
         let input = "(extract 1)";
         let mut output = Vec::new();
         egraph
-            .repl_with(input.as_bytes(), &mut output, RunMode::NoMessages)
+            .repl_with(input.as_bytes(), &mut output, RunMode::NoMessages, false)
             .unwrap();
         assert_eq!(String::from_utf8(output).unwrap(), "");
+
+        let input = "(extract 1)";
+        let mut output = Vec::new();
+        egraph
+            .repl_with(input.as_bytes(), &mut output, RunMode::Normal, true)
+            .unwrap();
+        assert_eq!(
+            String::from_utf8(output).unwrap(),
+            format!("{}\n> 1\n> ", welcome_prompt())
+        );
     }
 }
