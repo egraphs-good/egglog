@@ -1,4 +1,7 @@
-use crate::core::SpecializedPrimitive;
+use crate::{
+    ast::ResolvedVar,
+    core::{ResolvedCall, SpecializedPrimitive},
+};
 
 pub(crate) type BuildHasher = std::hash::BuildHasherDefault<rustc_hash::FxHasher>;
 pub(crate) type HashMap<K, V> = hashbrown::HashMap<K, V, BuildHasher>;
