@@ -1,8 +1,4 @@
-#![allow(unused)]
-
 use crate::core::SpecializedPrimitive;
-#[allow(unused_imports)]
-use crate::*;
 
 pub(crate) type BuildHasher = std::hash::BuildHasherDefault<rustc_hash::FxHasher>;
 pub(crate) type HashMap<K, V> = hashbrown::HashMap<K, V, BuildHasher>;
