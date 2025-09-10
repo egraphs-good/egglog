@@ -10,20 +10,20 @@ use std::{
     ops::{Deref, DerefMut},
 };
 
-use numeric_id::{define_id, DenseIdMap, NumericId};
+use crate::numeric_id::{DenseIdMap, NumericId, define_id};
 use smallvec::SmallVec;
 
 use crate::{
+    QueryEntry, TableId, Variable,
     action::{
-        mask::{Mask, MaskIter, ValueSource},
         Bindings, ExecutionState,
+        mask::{Mask, MaskIter, ValueSource},
     },
     common::Value,
     hash_index::{ColumnIndex, IndexBase, TupleIndex},
     offsets::{RowId, Subset, SubsetRef},
-    pool::{with_pool_set, PoolSet, Pooled},
+    pool::{PoolSet, Pooled, with_pool_set},
     row_buffer::{RowBuffer, TaggedRowBuffer},
-    QueryEntry, TableId, Variable,
 };
 
 define_id!(pub ColumnId, u32, "a particular column in a table");
@@ -207,7 +207,7 @@ pub trait Table: Any + Send + Sync {
     fn version(&self) -> TableVersion;
 
     /// Get the subset of the table that has appeared since the last offset.
-    fn updates_since(&self, gen: Offset) -> Subset;
+    fn updates_since(&self, offset: Offset) -> Subset;
 
     /// Iterate over the given subset of the table, starting at an opaque
     /// `start` token, ending after up to `n` rows, returning the next start
@@ -648,9 +648,10 @@ pub(crate) trait TableWrapper: Send + Sync {
     fn scan(&self, table: &dyn Table, subset: SubsetRef) -> TaggedRowBuffer {
         let arity = table.spec().arity();
         let mut buf = TaggedRowBuffer::new(arity);
-        assert!(self
-            .scan_bounded(table, subset, Offset::new(0), usize::MAX, &mut buf)
-            .is_none());
+        assert!(
+            self.scan_bounded(table, subset, Offset::new(0), usize::MAX, &mut buf)
+                .is_none()
+        );
         buf
     }
 

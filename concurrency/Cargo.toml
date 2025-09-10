@@ -1,15 +1,20 @@
 [package]
-name = "concurrency"
-version = "1.0.0"
-edition = "2021"
+name = "egglog-concurrency"
+version = { workspace = true }
+edition = { workspace = true }
+description = { workspace = true }
+repository = { workspace = true }
+keywords = { workspace = true }
+license = { workspace = true }
+readme = { workspace = true }
 
 [dependencies]
-arc-swap = "1.7.1"
-rayon = "1.10"
+arc-swap = { workspace = true}
+rayon = { workspace = true}
 
 [dev-dependencies]
-divan = "0.1.15"
-rayon = "1.10"
+divan = { workspace = true}
+rayon = { workspace = true}
 
 [[bench]]
 name = "simple_read"

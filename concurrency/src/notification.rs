@@ -3,8 +3,8 @@
 
 use std::{
     sync::{
-        atomic::{AtomicBool, Ordering},
         Condvar, Mutex,
+        atomic::{AtomicBool, Ordering},
     },
     time::Duration,
 };

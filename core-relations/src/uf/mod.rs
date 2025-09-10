@@ -6,12 +6,13 @@ use std::{
     sync::{Arc, Weak},
 };
 
+use crate::numeric_id::{DenseIdMap, NumericId};
 use crossbeam_queue::SegQueue;
 use indexmap::IndexMap;
-use numeric_id::{DenseIdMap, NumericId};
-use petgraph::{algo::dijkstra, graph::NodeIndex, visit::EdgeRef, Direction, Graph};
+use petgraph::{Direction, Graph, algo::dijkstra, graph::NodeIndex, visit::EdgeRef};
 
 use crate::{
+    TableChange, TaggedRowBuffer,
     action::ExecutionState,
     common::{HashMap, IndexSet, Value},
     offsets::{OffsetRange, RowId, Subset, SubsetRef},
@@ -21,13 +22,12 @@ use crate::{
         ColumnId, Constraint, Generation, MutationBuffer, Offset, Rebuilder, Row, Table, TableSpec,
         TableVersion, WrappedTableRef,
     },
-    TableChange, TaggedRowBuffer,
 };
 
 #[cfg(test)]
 mod tests;
 
-type UnionFind = union_find::UnionFind<Value>;
+type UnionFind = crate::union_find::UnionFind<Value>;
 
 /// A special table backed by a union-find used to efficiently implement
 /// egglog-style canonicaliztion.
@@ -299,9 +299,9 @@ impl Table for DisplacedTable {
         }
     }
 
-    fn updates_since(&self, gen: Offset) -> Subset {
+    fn updates_since(&self, offset: Offset) -> Subset {
         Subset::Dense(OffsetRange::new(
-            RowId::from_usize(gen.index()),
+            RowId::from_usize(offset.index()),
             RowId::from_usize(self.displaced.len()),
         ))
     }
@@ -648,7 +648,9 @@ impl DisplacedTableWithProvenance {
                 .chain(r_proofs.as_slice()[..=start].iter().map(|(_, ts)| ts.rep()))
                 .max(),
             (None, None) => {
-                panic!("did not find common id, despite the values being equivalent {l:?} / {r:?}, l_proofs={l_proofs:?}, r_proofs={r_proofs:?}")
+                panic!(
+                    "did not find common id, despite the values being equivalent {l:?} / {r:?}, l_proofs={l_proofs:?}, r_proofs={r_proofs:?}"
+                )
             }
         }
     }
@@ -848,8 +850,8 @@ impl Table for DisplacedTableWithProvenance {
     fn len(&self) -> usize {
         self.base.len()
     }
-    fn updates_since(&self, gen: Offset) -> Subset {
-        self.base.updates_since(gen)
+    fn updates_since(&self, offset: Offset) -> Subset {
+        self.base.updates_since(offset)
     }
     fn version(&self) -> TableVersion {
         self.base.version()

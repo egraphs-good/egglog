@@ -2,7 +2,7 @@ use proc_macro::{Span, TokenStream};
 use quote::quote;
 use syn::parse::{Parse, ParseStream, Result};
 use syn::punctuated::Punctuated;
-use syn::{braced, bracketed, parenthesized, parse_macro_input, Expr, Ident, LitStr, Token};
+use syn::{Expr, Ident, LitStr, Token, braced, bracketed, parenthesized, parse_macro_input};
 
 /// This macro lets the user declare custom egglog primitives.
 /// It supports a few special features:

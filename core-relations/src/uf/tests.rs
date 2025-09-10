@@ -1,10 +1,10 @@
-use numeric_id::NumericId;
+use crate::numeric_id::NumericId;
 
 use crate::{
+    DisplacedTableWithProvenance, ProofStep,
     common::Value,
     table_spec::{ColumnId, Constraint, Table},
     uf::ProofReason,
-    DisplacedTableWithProvenance, ProofStep,
 };
 
 use super::DisplacedTable;

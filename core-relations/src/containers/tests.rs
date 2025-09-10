@@ -5,8 +5,8 @@
 
 use std::sync::Arc;
 
-use concurrency::Notification;
-use numeric_id::NumericId;
+use crate::numeric_id::NumericId;
+use egglog_concurrency::Notification;
 
 use crate::{Database, Rebuilder, Value};
 

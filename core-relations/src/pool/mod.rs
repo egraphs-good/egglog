@@ -10,18 +10,18 @@ use std::{
     rc::Rc,
 };
 
+use crate::numeric_id::{DenseIdMap, IdVec};
 use fixedbitset::FixedBitSet;
 use hashbrown::HashTable;
-use numeric_id::{DenseIdMap, IdVec};
 
 use crate::{
+    ColumnId, RowId,
     action::{Instr, PredictedVals},
     common::{HashMap, HashSet, IndexMap, IndexSet, ShardId, Value},
     hash_index::{BufferedSubset, ColumnIndex, TableEntry},
     offsets::SortedOffsetVector,
     table::TableEntry as SwTableEntry,
     table_spec::Constraint,
-    ColumnId, RowId,
 };
 
 #[cfg(test)]

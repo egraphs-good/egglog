@@ -6,23 +6,24 @@
 
 use std::{cmp::Ordering, sync::Arc};
 
-use anyhow::Context;
-use core_relations::{
+use crate::core_relations;
+use crate::core_relations::{
     ColumnId, Constraint, CounterId, ExternalFunctionId, PlanStrategy, QueryBuilder,
     RuleBuilder as CoreRuleBuilder, RuleSetBuilder, TableId, Value, WriteVal,
 };
+use crate::numeric_id::{DenseIdMap, NumericId, define_id};
+use anyhow::Context;
 use hashbrown::HashSet;
 use log::debug;
-use numeric_id::{define_id, DenseIdMap, NumericId};
 use smallvec::SmallVec;
 use thiserror::Error;
 
 use crate::syntax::SourceSyntax;
+use crate::{CachedPlanInfo, NOT_SUBSUMED, RowVals, SUBSUMED, SchemaMath};
 use crate::{
-    proof_spec::{ProofBuilder, RebuildVars},
     ColumnTy, DefaultVal, EGraph, FunctionId, Result, RuleId, RuleInfo, Timestamp,
+    proof_spec::{ProofBuilder, RebuildVars},
 };
-use crate::{CachedPlanInfo, RowVals, SchemaMath, NOT_SUBSUMED, SUBSUMED};
 
 define_id!(pub Variable, u32, "A variable in an egglog query");
 define_id!(pub AtomId, u32, "an atom in an egglog query");

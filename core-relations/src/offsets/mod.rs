@@ -1,10 +1,10 @@
 use std::{cmp, fmt, mem};
 
-use numeric_id::{define_id, NumericId};
+use crate::numeric_id::{NumericId, define_id};
 
 use crate::{
-    pool::{with_pool_set, Clear, Pooled},
     Pool,
+    pool::{Clear, Pooled, with_pool_set},
 };
 
 define_id!(pub RowId, u32, "a numeric offset into a table");
@@ -139,7 +139,7 @@ impl SortedOffsetSlice {
             "slice is not sorted: {slice:?}"
         );
         // SAFETY: SortedOffsetSlice is repr(transparent), so the two layouts are compatible.
-        mem::transmute::<&[RowId], &SortedOffsetSlice>(slice)
+        unsafe { mem::transmute::<&[RowId], &SortedOffsetSlice>(slice) }
     }
     fn len(&self) -> usize {
         self.0.len()

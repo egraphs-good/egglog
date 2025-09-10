@@ -1,18 +1,16 @@
 use std::{
     mem,
     sync::{
-        atomic::{AtomicUsize, Ordering},
         Arc,
+        atomic::{AtomicUsize, Ordering},
     },
     thread,
 };
 
-use concurrency::Notification;
-use numeric_id::{define_id, NumericId};
-
-use crate::concurrent::UnionFind;
-
 use super::buffer::Buffer;
+use crate::concurrent::UnionFind;
+use crate::numeric_id::{NumericId, define_id};
+use egglog_concurrency::Notification;
 
 #[derive(Clone)]
 struct Dropper<T> {
@@ -112,19 +110,21 @@ fn uf_single_theaded() {
         });
     }
 
-    assert!(ids1
-        .windows(2)
-        .all(|w| uf.find(w[0]) == uf.find(w[1]) && uf.same_set(w[0], w[1])));
+    assert!(
+        ids1.windows(2)
+            .all(|w| uf.find(w[0]) == uf.find(w[1]) && uf.same_set(w[0], w[1]))
+    );
     assert!(ids2.windows(2).all(|w| uf.find(w[0]) == uf.find(w[1])));
     assert_ne!(uf.find(ids1[0]), uf.find(ids2[0]));
 
     uf.union(ids1[5], ids2[20]);
 
     let target = uf.find(ids1[0]);
-    assert!(ids1
-        .iter()
-        .chain(ids2.iter())
-        .all(|&id| uf.find(id) == target));
+    assert!(
+        ids1.iter()
+            .chain(ids2.iter())
+            .all(|&id| uf.find(id) == target)
+    );
 }
 
 #[test]
@@ -158,9 +158,10 @@ fn uf_multi_threaded() {
     n1.notify();
     threads_1.into_iter().for_each(|t| t.join().unwrap());
 
-    assert!(ids1
-        .windows(2)
-        .all(|w| uf.find(w[0]) == uf.find(w[1]) && uf.same_set(w[0], w[1])));
+    assert!(
+        ids1.windows(2)
+            .all(|w| uf.find(w[0]) == uf.find(w[1]) && uf.same_set(w[0], w[1]))
+    );
     assert!(ids2.windows(2).all(|w| uf.find(w[0]) == uf.find(w[1])));
     assert_ne!(uf.find(ids1[0]), uf.find(ids2[0]));
     let threads_2 = (0..100)
@@ -177,8 +178,9 @@ fn uf_multi_threaded() {
     threads_2.into_iter().for_each(|t| t.join().unwrap());
 
     let target = uf.find(ids1[0]);
-    assert!(ids1
-        .iter()
-        .chain(ids2.iter())
-        .all(|&id| uf.find(id) == target));
+    assert!(
+        ids1.iter()
+            .chain(ids2.iter())
+            .all(|&id| uf.find(id) == target)
+    );
 }

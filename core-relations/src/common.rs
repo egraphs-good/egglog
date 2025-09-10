@@ -5,12 +5,12 @@ use std::{
     sync::{Arc, Mutex},
 };
 
-use concurrency::ConcurrentVec;
+use crate::numeric_id::{DenseIdMap, IdVec, NumericId, define_id};
+use egglog_concurrency::ConcurrentVec;
 use hashbrown::HashTable;
-use numeric_id::{define_id, DenseIdMap, IdVec, NumericId};
 use rustc_hash::FxHasher;
 
-use crate::{pool::Clear, Subset, TableId, TableVersion, WrappedTable};
+use crate::{Subset, TableId, TableVersion, WrappedTable, pool::Clear};
 
 pub(crate) type HashMap<K, V> = hashbrown::HashMap<K, V, BuildHasherDefault<FxHasher>>;
 pub(crate) type HashSet<T> = hashbrown::HashSet<T, BuildHasherDefault<FxHasher>>;

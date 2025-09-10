@@ -2,21 +2,21 @@
 
 use std::{iter::once, sync::Arc};
 
-use numeric_id::{define_id, DenseIdMap, IdVec, NumericId};
+use crate::numeric_id::{DenseIdMap, IdVec, NumericId, define_id};
 use smallvec::SmallVec;
 use thiserror::Error;
 
 use crate::{
+    BaseValueId, CounterId, ExternalFunctionId, PoolSet,
     action::{Instr, QueryEntry, WriteVal},
     common::HashMap,
     free_join::{
-        plan::{JoinHeader, JoinStages, Plan, PlanStrategy},
         ActionId, AtomId, Database, ProcessedConstraints, SubAtom, TableId, TableInfo, VarInfo,
         Variable,
+        plan::{JoinHeader, JoinStages, Plan, PlanStrategy},
     },
-    pool::{with_pool_set, Pooled},
+    pool::{Pooled, with_pool_set},
     table_spec::{ColumnId, Constraint},
-    BaseValueId, CounterId, ExternalFunctionId, PoolSet,
 };
 
 define_id!(pub RuleId, u32, "An identifier for a rule in a rule set");
@@ -342,7 +342,9 @@ pub enum QueryError {
         got: usize,
     },
 
-    #[error("counter used in column {column_id:?} of table {table:?}, which is declared as a base value")]
+    #[error(
+        "counter used in column {column_id:?} of table {table:?}, which is declared as a base value"
+    )]
     CounterUsedInBaseColumn {
         table: TableId,
         column_id: ColumnId,
@@ -362,7 +364,9 @@ pub enum QueryError {
     #[error("expected {expected:?} columns in schema but got {got:?}")]
     InvalidSchema { expected: usize, got: usize },
 
-    #[error("constraint {constraint:?} on table {table:?} references column {column:?}, but the table has arity {arity:?}")]
+    #[error(
+        "constraint {constraint:?} on table {table:?} references column {column:?}, but the table has arity {arity:?}"
+    )]
     InvalidConstraint {
         constraint: Constraint,
         column: usize,

@@ -1,6 +1,6 @@
 //! Utilities helpful in unit tests for manipulating tables.
 
-use numeric_id::NumericId;
+use crate::numeric_id::NumericId;
 
 use crate::{
     common::Value,

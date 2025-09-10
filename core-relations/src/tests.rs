@@ -4,9 +4,10 @@ use std::{
     sync::{Arc, Mutex},
 };
 
-use numeric_id::NumericId;
+use crate::numeric_id::NumericId;
 
 use crate::{
+    PlanStrategy,
     action::WriteVal,
     common::Value,
     free_join::{CounterId, Database, TableId},
@@ -16,7 +17,6 @@ use crate::{
     table_shortcuts::v,
     table_spec::{ColumnId, Constraint},
     uf::DisplacedTable,
-    PlanStrategy,
 };
 
 /// On MacOs the system allocator is vulenrable to contention, causing tests to execute quite
@@ -1057,11 +1057,7 @@ fn call_external_with_fallback() {
 
     let inc = db.add_external_function(make_external_func(|_, args| {
         let [x] = args else { panic!() };
-        if x.rep() == 5 {
-            None
-        } else {
-            Some(x.inc())
-        }
+        if x.rep() == 5 { None } else { Some(x.inc()) }
     }));
 
     let mut rsb = RuleSetBuilder::new(&mut db);

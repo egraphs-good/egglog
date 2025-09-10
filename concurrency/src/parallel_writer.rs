@@ -34,7 +34,7 @@ impl<T> UnsafeReadAccess<'_, T> {
     /// [`ParallelVecWriter`] was created, or it must be within bounds of a completed write to
     /// [`ParallelVecWriter::write_contents`].
     pub unsafe fn get_unchecked(&self, idx: usize) -> &T {
-        &*self.reader.as_ptr().add(idx)
+        unsafe { &*self.reader.as_ptr().add(idx) }
     }
 
     /// Get a subslice of given index in the vector.
@@ -44,8 +44,10 @@ impl<T> UnsafeReadAccess<'_, T> {
     /// [`ParallelVecWriter`] was created, or they must be within bounds of a completed write to
     /// [`ParallelVecWriter::write_contents`].
     pub unsafe fn get_unchecked_slice(&self, slice: Range<usize>) -> &[T] {
-        let start: *const T = self.reader.as_ptr().add(slice.start);
-        std::slice::from_raw_parts(start, slice.end - slice.start)
+        unsafe {
+            let start: *const T = self.reader.as_ptr().add(slice.start);
+            std::slice::from_raw_parts(start, slice.end - slice.start)
+        }
     }
 }
 
@@ -163,11 +165,13 @@ impl<T> ParallelVecWriter<T> {
         let expected = items.len();
         let reader = self.data.read();
         debug_assert!(reader.capacity() >= start + items.len());
-        let mut mut_ptr = (reader.as_ptr() as *mut T).add(start);
-        for item in items {
-            written += 1;
-            std::ptr::write(mut_ptr, item);
-            mut_ptr = mut_ptr.offset(1);
+        unsafe {
+            let mut mut_ptr = (reader.as_ptr() as *mut T).add(start);
+            for item in items {
+                written += 1;
+                std::ptr::write(mut_ptr, item);
+                mut_ptr = mut_ptr.offset(1);
+            }
         }
         assert_eq!(
             written, expected,

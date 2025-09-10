@@ -6,7 +6,7 @@ use std::{
     hash::Hash,
 };
 
-use numeric_id::{define_id, DenseIdMap, NumericId};
+use crate::numeric_id::{DenseIdMap, NumericId, define_id};
 
 use crate::common::{HashMap, InternTable, Value};
 

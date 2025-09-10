@@ -1,8 +1,8 @@
 use std::{collections::BTreeMap, iter, mem, sync::Arc};
 
+use crate::numeric_id::{DenseIdMap, NumericId};
 use fixedbitset::FixedBitSet;
-use numeric_id::{DenseIdMap, NumericId};
-use smallvec::{smallvec, SmallVec};
+use smallvec::{SmallVec, smallvec};
 
 use crate::{
     common::{HashMap, HashSet, IndexSet},

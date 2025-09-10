@@ -27,7 +27,6 @@ pub mod util;
 // This is used to allow the `add_primitive` macro to work in
 // both this crate and other crates by referring to `::egglog`.
 extern crate self as egglog;
-pub use add_primitive::add_primitive;
 use ast::*;
 #[cfg(feature = "bin")]
 pub use cli::bin::*;
@@ -36,8 +35,11 @@ use core::{AtomTerm, ResolvedAtomTerm, ResolvedCall};
 pub use core_relations::{BaseValue, ContainerValue, ExecutionState, Value};
 use core_relations::{ExternalFunctionId, make_external_func};
 use csv::Writer;
+pub use egglog_add_primitive::add_primitive;
 pub use egglog_bridge::FunctionRow;
 use egglog_bridge::{ColumnTy, IterationReport, QueryEntry};
+use egglog_core_relations as core_relations;
+use egglog_numeric_id as numeric_id;
 use extract::{CostModel, DefaultCost, Extractor, TreeAdditiveCostModel};
 use indexmap::map::Entry;
 use log::{Level, log_enabled};

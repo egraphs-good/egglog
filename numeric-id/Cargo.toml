@@ -1,11 +1,16 @@
 [package]
-name = "numeric-id"
-version = "1.0.0"
-edition = "2021"
+name = "egglog-numeric-id"
+version = { workspace = true }
+edition = { workspace = true }
+description = { workspace = true }
+repository = { workspace = true }
+keywords = { workspace = true }
+license = { workspace = true }
+readme = { workspace = true }
 
 [dependencies]
-lazy_static = { version = "1.4" }
-rayon = "1.10.0"
+lazy_static = { workspace = true }
+rayon = { workspace = true }
 
 [features]
 default = []
