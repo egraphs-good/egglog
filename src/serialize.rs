@@ -135,7 +135,7 @@ impl EGraph {
             egraph_serialize::NodeId,
         )> = Vec::new();
         let mut functions_kept = 0usize;
-        for (name, function) in self.functions.iter().filter(|(_, f)| !f.decl.ignore_viz) {
+        for (name, function) in self.functions.iter() {
             if functions_kept >= max_functions {
                 discarded_functions.push(name.clone());
                 continue;

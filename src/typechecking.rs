@@ -410,7 +410,6 @@ impl TypeInfo {
             },
             cost: fdecl.cost,
             unextractable: fdecl.unextractable,
-            ignore_viz: fdecl.ignore_viz,
             span: fdecl.span.clone(),
         })
     }

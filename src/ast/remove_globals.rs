@@ -102,7 +102,6 @@ impl GlobalRemover<'_> {
                         merge: None,
                         cost: None,
                         unextractable: true,
-                        ignore_viz: true,
                         span: span.clone(),
                     };
                     let resolved_call = ResolvedCall::Func(FuncType {
