@@ -124,11 +124,7 @@ where
             GenericNCommand::UnstableCombinedRuleset(span, name, others) => {
                 GenericCommand::UnstableCombinedRuleset(span.clone(), name.clone(), others.clone())
             }
-            GenericNCommand::NormRule {
-                rule,
-            } => GenericCommand::Rule {
-                rule: rule.clone(),
-            },
+            GenericNCommand::NormRule { rule } => GenericCommand::Rule { rule: rule.clone() },
             GenericNCommand::RunSchedule(schedule) => GenericCommand::RunSchedule(schedule.clone()),
             GenericNCommand::PrintOverallStatistics => GenericCommand::PrintOverallStatistics,
             GenericNCommand::CoreAction(action) => GenericCommand::Action(action.clone()),
@@ -176,9 +172,7 @@ where
             GenericNCommand::UnstableCombinedRuleset(span, name, rulesets) => {
                 GenericNCommand::UnstableCombinedRuleset(span, name, rulesets)
             }
-            GenericNCommand::NormRule {
-                rule,
-            } => GenericNCommand::NormRule {
+            GenericNCommand::NormRule { rule } => GenericNCommand::NormRule {
                 rule: rule.visit_exprs(f),
             },
             GenericNCommand::RunSchedule(schedule) => {
@@ -731,9 +725,7 @@ where
                     ListDisplay(others, " ")
                 )
             }
-            GenericCommand::Rule {
-                rule,
-            } => rule.fmt(f),
+            GenericCommand::Rule { rule } => rule.fmt(f),
             GenericCommand::RunSchedule(sched) => write!(f, "(run-schedule {sched})"),
             GenericCommand::PrintOverallStatistics => write!(f, "(print-stats)"),
             GenericCommand::Check(_ann, facts) => {
