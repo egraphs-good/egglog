@@ -936,7 +936,9 @@ where
             span: _,
             head,
             body,
-        } = self;
+            name: _,
+            ruleset: _,
+        } = rule;
 
         let (body, _correspondence) = Facts(body.clone()).to_query(typeinfo, fresh_gen);
         let mut binding = body.get_vars();

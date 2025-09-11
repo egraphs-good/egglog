@@ -226,17 +226,17 @@ pub fn rule(
     facts: Facts<String, String>,
     actions: Actions,
 ) -> Result<Vec<CommandOutput>, Error> {
-    let rule = Rule {
+    let mut rule = Rule {
         span: span!(),
         head: actions,
         body: facts.0,
+        name: "".into(),
+        ruleset: ruleset.into(),
     };
 
-    egraph.run_program(vec![Command::Rule {
-        name: format!("{rule:?}"),
-        ruleset: ruleset.to_owned(),
-        rule,
-    }])
+    rule.name = format!("{rule:?}");
+
+    egraph.run_program(vec![Command::Rule { rule }])
 }
 
 /// A wrapper around an `ExecutionState` for rules that are written in Rust.
@@ -454,13 +454,11 @@ pub fn rust_rule(
             ),
         )]),
         body: facts.0,
+        name: "".into(),
+        ruleset: ruleset.into(),
     };
 
-    egraph.run_program(vec![Command::Rule {
-        name: format!("{rule:?}"),
-        ruleset: ruleset.to_owned(),
-        rule,
-    }])
+    egraph.run_program(vec![Command::Rule { rule }])
 }
 
 /// The result of a query.

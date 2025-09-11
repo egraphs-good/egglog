@@ -89,6 +89,10 @@ where
     pub span: Span,
     pub head: GenericActions<Head, Leaf>,
     pub body: Vec<GenericFact<Head, Leaf>>,
+    /// A globally unique name for this rule in the EGraph.
+    pub name: String,
+    /// The ruleset this rule belongs to. Defaults to `""`.
+    pub ruleset: String,
 }
 
 /// Change a function entry.
