@@ -36,9 +36,10 @@ pub use core_relations::{BaseValue, ContainerValue, ExecutionState, Value};
 use core_relations::{ExternalFunctionId, make_external_func};
 use csv::Writer;
 pub use egglog_add_primitive::add_primitive;
+use egglog_ast::generic_ast::{Change, GenericExpr, Literal};
+use egglog_ast::span::Span;
+use egglog_ast::util::ListDisplay;
 pub use egglog_bridge::FunctionRow;
-use egglog_bridge::generic_ast::{Change, GenericExpr, Literal};
-use egglog_bridge::span::Span;
 use egglog_bridge::{ColumnTy, IterationReport, QueryEntry};
 use egglog_core_relations as core_relations;
 use egglog_numeric_id as numeric_id;
@@ -809,7 +810,7 @@ impl EGraph {
             if self.check_facts(span, facts).is_ok() {
                 log::info!(
                     "Breaking early because of facts:\n {}!",
-                    egglog_bridge::util::ListDisplay(facts, "\n")
+                    ListDisplay(facts, "\n")
                 );
                 return report;
             }
@@ -1772,9 +1773,9 @@ pub enum Error {
     NotFoundError(#[from] NotFoundError),
     #[error(transparent)]
     TypeError(#[from] TypeError),
-    #[error("Errors:\n{}", egglog_bridge::util::ListDisplay(.0, "\n"))]
+    #[error("Errors:\n{}", ListDisplay(.0, "\n"))]
     TypeErrors(Vec<TypeError>),
-    #[error("{}\nCheck failed: \n{}", .1, egglog_bridge::util::ListDisplay(.0, "\n"))]
+    #[error("{}\nCheck failed: \n{}", .1, ListDisplay(.0, "\n"))]
     CheckError(Vec<Fact>, Span),
     #[error("{1}\nNo such ruleset: {0}")]
     NoSuchRuleset(String, Span),

@@ -8,11 +8,11 @@ use crate::core::{
     GenericAtom, GenericAtomTerm, HeadOrEq, Query, ResolvedCall, ResolvedCoreRule, to_query,
 };
 use crate::*;
-pub use egglog_bridge::generic_ast::{
+pub use egglog_ast::generic_ast::{
     GenericAction, GenericActions, GenericExpr, GenericFact, GenericRule, Literal,
 };
-use egglog_bridge::span::Span;
-use egglog_bridge::util::ListDisplay;
+use egglog_ast::span::Span;
+use egglog_ast::util::ListDisplay;
 pub use expr::*;
 pub use parse::*;
 

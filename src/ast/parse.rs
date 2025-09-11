@@ -1,14 +1,14 @@
 //! Parse a string into egglog.
 
 use crate::*;
-use egglog_bridge::generic_ast::*;
-use egglog_bridge::span::{EgglogSpan, Span, SrcFile};
+use egglog_ast::generic_ast::*;
+use egglog_ast::span::{EgglogSpan, Span, SrcFile};
 use ordered_float::OrderedFloat;
 
 #[macro_export]
 macro_rules! span {
     () => {
-        egglog_bridge::span::Span::Rust(std::sync::Arc::new(egglog_bridge::span::RustSpan {
+        egglog_ast::span::Span::Rust(std::sync::Arc::new(egglog_ast::span::RustSpan {
             file: file!(),
             line: line!(),
             column: column!(),

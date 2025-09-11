@@ -41,7 +41,6 @@ pub(crate) mod rule;
 pub(crate) mod syntax;
 #[cfg(test)]
 mod tests;
-pub mod util;
 
 pub use rule::{Function, QueryEntry, RuleBuilder};
 pub use syntax::{SourceExpr, SourceSyntax, TopLevelLhsExpr};
@@ -1770,6 +1769,3 @@ pub struct IterationReport {
 }
 
 pub use crate::core_relations::RuleReport;
-pub mod generic_ast;
-pub mod generic_ast_helpers;
-pub mod span;

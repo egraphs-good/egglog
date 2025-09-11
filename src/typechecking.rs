@@ -1,7 +1,7 @@
 use crate::{core::CoreRule, *};
 use ast::Rule;
 use core_relations::ExternalFunction;
-use egglog_bridge::generic_ast::GenericAction;
+use egglog_ast::generic_ast::GenericAction;
 
 #[derive(Clone, Debug)]
 pub struct FuncType {

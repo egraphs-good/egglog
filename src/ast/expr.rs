@@ -1,4 +1,4 @@
-use egglog_bridge::generic_ast::GenericExpr;
+use egglog_ast::generic_ast::GenericExpr;
 use std::fmt::{Display, Formatter};
 use std::hash::Hash;
 use std::hash::Hasher;
