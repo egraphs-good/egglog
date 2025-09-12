@@ -528,6 +528,7 @@ version = "1.0.0"
 dependencies = [
  "anyhow",
  "dyn-clone",
+ "egglog-ast",
  "egglog-core-relations",
  "egglog-numeric-id",
  "egglog-union-find",
