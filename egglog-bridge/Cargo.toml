@@ -13,6 +13,7 @@ egglog-core-relations = { workspace = true }
 egglog-numeric-id = { workspace = true }
 egglog-union-find = { workspace = true }
 egglog-reports = { workspace = true }
+egglog-ast = { workspace = true }
 hashbrown = { workspace = true }
 smallvec = { workspace = true }
 thiserror = { workspace = true }
