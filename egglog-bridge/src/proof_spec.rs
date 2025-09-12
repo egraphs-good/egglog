@@ -97,13 +97,13 @@ impl ProofBuilder {
                 entries.push(inner.convert(entry));
             }
             // Now get the new term value, inserting it if the term is new.
-            let term_result = rb.lookup_or_insert(
+            let term_id = rb.lookup_or_insert(
                 term_table,
                 &entries,
                 &[term_counter.into(), reason_id.into()],
                 ColumnId::from_usize(entries.len()),
             )?;
-            inner.mapping.insert(vars.new_term, term_result.into());
+            inner.mapping.insert(vars.new_term, term_id.into());
             inner.mapping.insert(vars.reason, reason_id.into());
             Ok(())
         }
