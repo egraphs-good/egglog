@@ -1038,7 +1038,6 @@ impl EGraph {
             span: span.clone(),
             head: ResolvedActions::default(),
             body: facts.to_vec(),
-            // TODO need fresh names?
             name: fresh_name.clone(),
             ruleset: fresh_ruleset.clone(),
         };
