@@ -141,8 +141,8 @@ impl ProofBuilder {
 pub(crate) struct ProofReconstructionState<'a> {
     in_progress: HashSet<Value>,
     store: &'a mut ProofStore,
-    term_memo: HashMap<Value, TermId>,
-    term_prf_memo: HashMap<Value, TermProofId>,
+    term_memo: HashMap<(Value, ColumnTy), TermId>,
+    term_prf_memo: HashMap<(Value, ColumnTy), TermProofId>,
     eq_memo: HashMap<(Value, Value), EqProofId>,
 }
 
@@ -237,7 +237,7 @@ impl EGraph {
         term_id: Value,
         state: &mut ProofReconstructionState,
     ) -> TermProofId {
-        if let Some(prev) = state.term_prf_memo.get(&term_id) {
+        if let Some(prev) = state.term_prf_memo.get(&(term_id, ColumnTy::Id)) {
             return *prev;
         }
         assert!(
@@ -275,7 +275,7 @@ impl EGraph {
         };
 
         state.in_progress.remove(&term_id);
-        state.term_prf_memo.insert(term_id, res);
+        state.term_prf_memo.insert((term_id, ColumnTy::Id), res);
         res
     }
 
@@ -285,7 +285,7 @@ impl EGraph {
         ty: ColumnTy,
         state: &mut ProofReconstructionState,
     ) -> TermId {
-        if let Some(cached) = state.term_memo.get(&term_id) {
+        if let Some(cached) = state.term_memo.get(&(term_id, ty)) {
             return *cached;
         }
         let res = match ty {
@@ -323,7 +323,7 @@ impl EGraph {
             }
         };
 
-        state.term_memo.insert(term_id, res);
+        state.term_memo.insert((term_id, ty), res);
         res
     }
 
