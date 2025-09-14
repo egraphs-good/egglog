@@ -12,6 +12,7 @@
 //! We plan to have a text tutorial here soon, PRs welcome!
 //!
 pub mod ast;
+#[cfg(feature = "bin")]
 mod cli;
 pub mod constraint;
 mod core;
@@ -29,7 +30,7 @@ pub mod util;
 extern crate self as egglog;
 use ast::*;
 #[cfg(feature = "bin")]
-pub use cli::bin::*;
+pub use cli::*;
 use constraint::{Constraint, Problem, SimpleTypeConstraint, TypeConstraint};
 use core::{AtomTerm, ResolvedAtomTerm, ResolvedCall};
 pub use core_relations::{BaseValue, ContainerValue, ExecutionState, Value};
