@@ -528,7 +528,7 @@ where
                     norm_actions.push(GenericCoreAction::LetAtomTerm(
                         span.clone(),
                         var.clone(),
-                        get_corresponding_var_or_lit(&mapped_expr, typeinfo),
+                        mapped_expr.get_corresponding_var_or_lit(typeinfo),
                     ));
                     mapped_actions.0.push(GenericAction::Let(
                         span.clone(),
@@ -551,9 +551,9 @@ where
                         head.clone(),
                         mapped_args
                             .iter()
-                            .map(|e| get_corresponding_var_or_lit(e, typeinfo))
+                            .map(|e| e.get_corresponding_var_or_lit(typeinfo))
                             .collect(),
-                        get_corresponding_var_or_lit(&mapped_expr, typeinfo),
+                        mapped_expr.get_corresponding_var_or_lit(typeinfo),
                     ));
                     let v = fresh_gen.fresh(head);
                     mapped_actions.0.push(GenericAction::Set(
@@ -576,7 +576,7 @@ where
                         head.clone(),
                         mapped_args
                             .iter()
-                            .map(|e| get_corresponding_var_or_lit(e, typeinfo))
+                            .map(|e| e.get_corresponding_var_or_lit(typeinfo))
                             .collect(),
                     ));
                     let v = fresh_gen.fresh(head);
@@ -616,9 +616,9 @@ where
                                 head.clone(),
                                 mapped_args
                                     .iter()
-                                    .map(|e| get_corresponding_var_or_lit(e, typeinfo))
+                                    .map(|e| e.get_corresponding_var_or_lit(typeinfo))
                                     .collect(),
-                                get_corresponding_var_or_lit(&mapped_expr, typeinfo),
+                                mapped_expr.get_corresponding_var_or_lit(typeinfo),
                             ));
                             let v = fresh_gen.fresh(head);
                             mapped_actions.0.push(GenericAction::Set(
@@ -643,8 +643,8 @@ where
                             )?;
                             norm_actions.push(GenericCoreAction::Union(
                                 span.clone(),
-                                get_corresponding_var_or_lit(&mapped_e1, typeinfo),
-                                get_corresponding_var_or_lit(&mapped_e2, typeinfo),
+                                mapped_e1.get_corresponding_var_or_lit(typeinfo),
+                                mapped_e2.get_corresponding_var_or_lit(typeinfo),
                             ));
                             mapped_actions.0.push(GenericAction::Union(
                                 span.clone(),
@@ -723,7 +723,7 @@ where
                 let mut child_exprs = vec![];
                 for child in children {
                     let (child_atoms, child_expr) = child.to_query(typeinfo, fresh_gen);
-                    let child_atomterm = get_corresponding_var_or_lit(&child_expr, typeinfo);
+                    let child_atomterm = child_expr.get_corresponding_var_or_lit(typeinfo);
                     new_children.push(child_atomterm);
                     atoms.extend(child_atoms);
                     child_exprs.push(child_expr);
@@ -772,7 +772,7 @@ where
                 for arg in args {
                     let mapped_arg =
                         arg.to_core_actions(typeinfo, binding, fresh_gen, out_actions)?;
-                    norm_args.push(get_corresponding_var_or_lit(&mapped_arg, typeinfo));
+                    norm_args.push(mapped_arg.get_corresponding_var_or_lit(typeinfo));
                     mapped_args.push(mapped_arg);
                 }
                 let var = fresh_gen.fresh(f);

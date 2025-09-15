@@ -1055,7 +1055,7 @@ where
                     let mut process = |expr: &GenericExpr<Head, Leaf>| {
                         let (child_atoms, expr) = expr.to_query(typeinfo, fresh_gen);
                         atoms.extend(child_atoms);
-                        to_equate.push(get_corresponding_var_or_lit(&expr, typeinfo));
+                        to_equate.push(expr.get_corresponding_var_or_lit(typeinfo));
                         expr
                     };
                     let e1 = process(e1);
@@ -1168,25 +1168,33 @@ impl<Head: Display, Leaf: Display> GenericRewrite<Head, Leaf> {
     }
 }
 
-pub(crate) fn get_corresponding_var_or_lit<
+pub(crate) trait MappedExprExt<Head, Leaf>
+where
     Head: Clone + Display,
     Leaf: Clone + PartialEq + Eq + Display + Hash,
->(
-    expr: &MappedExpr<Head, Leaf>,
-    typeinfo: &TypeInfo,
-) -> GenericAtomTerm<Leaf> {
-    // Note: need typeinfo to resolve whether a symbol is a global or not
-    // This is error-prone and the complexities can be avoided by treating globals
-    // as nullary functions.
-    match expr {
-        GenericExpr::Var(span, v) => {
-            if typeinfo.is_global(&v.to_string()) {
-                GenericAtomTerm::Global(span.clone(), v.clone())
-            } else {
-                GenericAtomTerm::Var(span.clone(), v.clone())
+{
+    fn get_corresponding_var_or_lit(&self, typeinfo: &TypeInfo) -> GenericAtomTerm<Leaf>;
+}
+
+impl<Head, Leaf> MappedExprExt<Head, Leaf> for MappedExpr<Head, Leaf>
+where
+    Head: Clone + Display,
+    Leaf: Clone + PartialEq + Eq + Display + Hash,
+{
+    fn get_corresponding_var_or_lit(&self, typeinfo: &TypeInfo) -> GenericAtomTerm<Leaf> {
+        // Note: need typeinfo to resolve whether a symbol is a global or not
+        // This is error-prone and the complexities can be avoided by treating globals
+        // as nullary functions.
+        match self {
+            GenericExpr::Var(span, v) => {
+                if typeinfo.is_global(&v.to_string()) {
+                    GenericAtomTerm::Global(span.clone(), v.clone())
+                } else {
+                    GenericAtomTerm::Var(span.clone(), v.clone())
+                }
             }
+            GenericExpr::Lit(span, lit) => GenericAtomTerm::Literal(span.clone(), lit.clone()),
+            GenericExpr::Call(span, head, _) => GenericAtomTerm::Var(span.clone(), head.to.clone()),
         }
-        GenericExpr::Lit(span, lit) => GenericAtomTerm::Literal(span.clone(), lit.clone()),
-        GenericExpr::Call(span, head, _) => GenericAtomTerm::Var(span.clone(), head.to.clone()),
     }
 }

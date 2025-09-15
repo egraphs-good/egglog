@@ -49,7 +49,7 @@ pub(crate) type ResolvedExpr = GenericExpr<ResolvedCall, ResolvedVar>;
 /// A [`MappedExpr`] arises naturally when you want a mapping between an expression
 /// and its flattened form. It records this mapping by annotating each `Head`
 /// with a `Leaf`, which it maps to in the flattened form.
-/// A useful operation on `MappedExpr`s is [`MappedExpr::get_corresponding_var_or_lit``].
+/// A useful operation on `MappedExpr`s is [`MappedExprExt::get_corresponding_var_or_lit``].
 pub(crate) type MappedExpr<Head, Leaf> = GenericExpr<CorrespondingVar<Head, Leaf>, Leaf>;
 
 pub(crate) trait ResolvedExprExt {
