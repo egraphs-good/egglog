@@ -5,7 +5,7 @@ use std::collections::VecDeque;
 
 /// An interface for custom cost model.
 ///
-/// To use it with the default extractor, the cost type must also satisify `Ord + Eq + Clone + Debug`.
+/// To use it with the default extractor, the cost type must also satisfy `Ord + Eq + Clone + Debug`.
 /// Additionally, the cost model should guarantee that a term has a no-smaller cost
 /// than its subterms to avoid cycles in the extracted terms for common case usages.
 /// For more niche usages, a term can have a cost less than its subterms.
