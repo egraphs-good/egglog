@@ -1,4 +1,7 @@
-use crate::{core::{CoreRule, GenericActionsExt}, *};
+use crate::{
+    core::{CoreRule, GenericActionsExt},
+    *,
+};
 use ast::Rule;
 use core_relations::ExternalFunction;
 use egglog_ast::generic_ast::GenericAction;
