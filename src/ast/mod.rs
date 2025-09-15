@@ -5,7 +5,7 @@ mod parse;
 pub mod remove_globals;
 
 use crate::core::{
-    GenericAtom, GenericAtomTerm, HeadOrEq, Query, ResolvedCall, ResolvedCoreRule, to_query,
+    GenericAtom, GenericAtomTerm, GenericExprExt, HeadOrEq, Query, ResolvedCall, ResolvedCoreRule,
 };
 use crate::*;
 pub use egglog_ast::generic_ast::{
@@ -1053,7 +1053,7 @@ where
                 GenericFact::Eq(span, e1, e2) => {
                     let mut to_equate = vec![];
                     let mut process = |expr: &GenericExpr<Head, Leaf>| {
-                        let (child_atoms, expr) = to_query(expr, typeinfo, fresh_gen);
+                        let (child_atoms, expr) = expr.to_query(typeinfo, fresh_gen);
                         atoms.extend(child_atoms);
                         to_equate.push(get_corresponding_var_or_lit(&expr, typeinfo));
                         expr
@@ -1068,7 +1068,7 @@ where
                     new_body.push(GenericFact::Eq(span.clone(), e1, e2));
                 }
                 GenericFact::Fact(expr) => {
-                    let (child_atoms, expr) = to_query(expr, typeinfo, fresh_gen);
+                    let (child_atoms, expr) = expr.to_query(typeinfo, fresh_gen);
                     atoms.extend(child_atoms);
                     new_body.push(GenericFact::Fact(expr));
                 }

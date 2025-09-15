@@ -1,4 +1,4 @@
-use crate::{core::CoreRule, *};
+use crate::{core::{CoreRule, GenericActionsExt}, *};
 use ast::Rule;
 use core_relations::ExternalFunction;
 use egglog_ast::generic_ast::GenericAction;
@@ -172,7 +172,7 @@ impl EGraph {
                 let expr = self
                     .type_info
                     .typecheck_expr(symbol_gen, expr, &Default::default())?;
-                let output_type = output_type(&expr);
+                let output_type = expr.output_type();
                 self.type_info
                     .global_sorts
                     .insert(var.clone(), output_type.clone());
@@ -196,11 +196,11 @@ impl EGraph {
                 let res_variants =
                     self.type_info
                         .typecheck_expr(symbol_gen, variants, &Default::default())?;
-                if output_type(&res_variants).name() != I64Sort.name() {
+                if res_variants.output_type().name() != I64Sort.name() {
                     return Err(TypeError::Mismatch {
                         expr: variants.clone(),
                         expected: I64Sort.to_arcsort(),
-                        actual: output_type(&res_variants),
+                        actual: res_variants.output_type(),
                     });
                 }
 
@@ -468,7 +468,7 @@ impl TypeInfo {
         constraints.extend(query.get_constraints(self)?);
 
         let mut binding = query.get_vars();
-        let (actions, mapped_action) = to_core_actions(head, self, &mut binding, symbol_gen)?;
+        let (actions, mapped_action) = head.to_core_actions(self, &mut binding, symbol_gen)?;
 
         let mut problem = Problem::default();
         problem.add_rule(
@@ -576,7 +576,7 @@ impl TypeInfo {
         let mut binding_set: IndexSet<String> =
             binding.keys().copied().map(str::to_string).collect();
         let (actions, mapped_action) =
-            to_core_actions(actions, self, &mut binding_set, symbol_gen)?;
+            actions.to_core_actions(self, &mut binding_set, symbol_gen)?;
         let mut problem = Problem::default();
 
         // add actions to problem

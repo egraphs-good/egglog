@@ -52,18 +52,25 @@ pub(crate) type ResolvedExpr = GenericExpr<ResolvedCall, ResolvedVar>;
 /// A useful operation on `MappedExpr`s is [`MappedExpr::get_corresponding_var_or_lit``].
 pub(crate) type MappedExpr<Head, Leaf> = GenericExpr<CorrespondingVar<Head, Leaf>, Leaf>;
 
-pub(crate) fn output_type(expr: &ResolvedExpr) -> ArcSort {
-    match expr {
-        ResolvedExpr::Lit(_, lit) => sort::literal_sort(lit),
-        ResolvedExpr::Var(_, resolved_var) => resolved_var.sort.clone(),
-        ResolvedExpr::Call(_, resolved_call, _) => resolved_call.output().clone(),
-    }
+pub(crate) trait ResolvedExprExt {
+    fn output_type(&self) -> ArcSort;
+    fn get_global_var(&self) -> Option<ResolvedVar>;
 }
 
-pub(crate) fn get_global_var(expr: &ResolvedExpr) -> Option<ResolvedVar> {
-    match expr {
-        ResolvedExpr::Var(_, v) if v.is_global_ref => Some(v.clone()),
-        _ => None,
+impl ResolvedExprExt for ResolvedExpr {
+    fn output_type(&self) -> ArcSort {
+        match self {
+            ResolvedExpr::Lit(_, lit) => sort::literal_sort(lit),
+            ResolvedExpr::Var(_, resolved_var) => resolved_var.sort.clone(),
+            ResolvedExpr::Call(_, resolved_call, _) => resolved_call.output().clone(),
+        }
+    }
+
+    fn get_global_var(&self) -> Option<ResolvedVar> {
+        match self {
+            ResolvedExpr::Var(_, v) if v.is_global_ref => Some(v.clone()),
+            _ => None,
+        }
     }
 }
 

@@ -66,7 +66,7 @@ use typechecking::TypeInfo;
 use util::*;
 use web_time::Duration;
 
-use crate::core::{to_canonicalized_core_rule, to_core_actions};
+use crate::core::{GenericActionsExt, ResolvedRuleExt};
 
 pub type ArcSort = Arc<dyn Sort>;
 
@@ -890,7 +890,7 @@ impl EGraph {
         ruleset: String,
     ) -> Result<String, Error> {
         let core_rule =
-            to_canonicalized_core_rule(&rule, &self.type_info, &mut self.parser.symbol_gen)?;
+            rule.to_canonicalized_core_rule(&self.type_info, &mut self.parser.symbol_gen)?;
         let (query, actions) = (&core_rule.body, &core_rule.head);
 
         let rule_id = {
@@ -923,8 +923,7 @@ impl EGraph {
     }
 
     fn eval_actions(&mut self, actions: &ResolvedActions) -> Result<(), Error> {
-        let (actions, _) = to_core_actions(
-            actions,
+        let (actions, _) = actions.to_core_actions(
             &self.type_info,
             &mut Default::default(),
             &mut self.parser.symbol_gen,
@@ -957,7 +956,7 @@ impl EGraph {
             ResolvedNCommand::CoreAction(ResolvedAction::Expr(_, resolved_expr)) => resolved_expr,
             _ => unreachable!(),
         };
-        let sort = output_type(&resolved_expr);
+        let sort = resolved_expr.output_type();
         let value = self.eval_resolved_expr(span, &resolved_expr)?;
         Ok((sort, value))
     }
@@ -984,7 +983,7 @@ impl EGraph {
 
         let result_var = ResolvedVar {
             name: self.parser.symbol_gen.fresh("eval_resolved_expr"),
-            sort: output_type(expr),
+            sort: expr.output_type(),
             is_global_ref: false,
         };
         let actions = ResolvedActions::singleton(ResolvedAction::Let(
@@ -992,13 +991,13 @@ impl EGraph {
             result_var.clone(),
             expr.clone(),
         ));
-        let actions = to_core_actions(
-            &actions,
-            &self.type_info,
-            &mut Default::default(),
-            &mut self.parser.symbol_gen,
-        )?
-        .0;
+        let actions = actions
+            .to_core_actions(
+                &self.type_info,
+                &mut Default::default(),
+                &mut self.parser.symbol_gen,
+            )?
+            .0;
         translator.actions(&actions)?;
 
         let arg = translator.entry(&ResolvedAtomTerm::Var(span.clone(), result_var));
@@ -1042,7 +1041,7 @@ impl EGraph {
             body: facts.to_vec(),
         };
         let core_rule =
-            to_canonicalized_core_rule(&rule, &self.type_info, &mut self.parser.symbol_gen)?;
+            rule.to_canonicalized_core_rule(&self.type_info, &mut self.parser.symbol_gen)?;
         let query = core_rule.body;
 
         let ext_sc = egglog_bridge::SideChannel::default();
@@ -1136,7 +1135,7 @@ impl EGraph {
                 }
             },
             ResolvedNCommand::Extract(span, expr, variants) => {
-                let sort = output_type(&expr);
+                let sort = expr.output_type();
 
                 let x = self.eval_resolved_expr(span.clone(), &expr)?;
                 let n = self.eval_resolved_expr(span, &variants)?;
@@ -1254,7 +1253,7 @@ impl EGraph {
                 use std::io::Write;
                 for expr in exprs {
                     let value = self.eval_resolved_expr(span.clone(), &expr)?;
-                    let expr_type = output_type(&expr);
+                    let expr_type = expr.output_type();
 
                     let term = extractor
                         .extract_best_with_sort(self, &mut termdag, value, expr_type)
