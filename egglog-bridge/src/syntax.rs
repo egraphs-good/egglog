@@ -13,6 +13,7 @@ use crate::core_relations::{
 };
 use crate::numeric_id::{DenseIdMap, IdVec, NumericId, define_id};
 use crate::{EGraph, NOT_SUBSUMED, ProofReason, QueryEntry, ReasonSpecId, Result, SchemaMath};
+use egglog_ast::generic_ast::GenericExpr;
 use smallvec::SmallVec;
 
 use crate::{
@@ -30,6 +31,42 @@ pub enum TopLevelLhsExpr {
     /// Asserts the equality of two expressions matching the given [`SourceExpr`]s.
     Eq(SyntaxId, SyntaxId),
 }
+
+/// A call to an external function or a call to an egglog-level constructor.
+pub enum ResolvedBackendCall {
+    PrimitiveCall {
+        /// This external function call must be present in the destination query, and bound to this
+        /// variable
+        var: Variable,
+        ty: ColumnTy,
+        func: ExternalFunctionId,
+    },
+    Constructor {
+        /// The egglog function being bound.
+        func: FunctionId,
+        /// The atom in the _destination_ query (i.e. at the egglog-bridge level) to which this
+        /// call corresponds.
+        atom: AtomId,
+    },
+}
+
+/// A variable in the backend with its associated type information.
+struct ResolvedBackendVar {
+    /// The id of the variable in the backend.
+    pub id: Variable,
+    /// The type of the variable.
+    pub ty: ColumnTy,
+}
+
+/// Like a `ResolvedExpr` in the egglog crate, but with
+/// backend type information and variables instead of frontend ones.
+/// Each of these represents (parenthesized) line of a source query.
+/// TODO rename after ripping out SourceSyntax
+type SourceExprNew = GenericExpr<ResolvedBackendCall, ResolvedBackendVar>;
+
+/// A full egglog query represented as a sequence of lines,
+/// each of which is a [`SourceExprNew`].
+type SourceQuery = Vec<SourceExprNew>;
 
 /// Representative source syntax for _one line_ of an egglog query, namely, the left-hand-side of
 /// an egglog rule.
