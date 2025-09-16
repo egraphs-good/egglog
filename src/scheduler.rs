@@ -82,7 +82,7 @@ impl Matches {
     }
 
     /// Get `idx`-th match.
-    pub fn get_match(&self, idx: usize) -> Match {
+    pub fn get_match(&self, idx: usize) -> Match<'_> {
         Match {
             values: &self.matches[idx * self.tuple_len()..(idx + 1) * self.tuple_len()],
             vars: &self.vars,
