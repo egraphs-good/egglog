@@ -4,8 +4,15 @@ mod expr;
 mod parse;
 pub mod remove_globals;
 
-use crate::core::{GenericAtom, GenericAtomTerm, HeadOrEq, Query, ResolvedCall, ResolvedCoreRule};
+use crate::core::{
+    GenericAtom, GenericAtomTerm, GenericExprExt, HeadOrEq, Query, ResolvedCall, ResolvedCoreRule,
+};
 use crate::*;
+pub use egglog_ast::generic_ast::{
+    Change, GenericAction, GenericActions, GenericExpr, GenericFact, GenericRule, Literal,
+};
+use egglog_ast::span::Span;
+use egglog_ast::util::ListDisplay;
 pub use expr::*;
 pub use parse::*;
 
@@ -479,6 +486,7 @@ where
     ///       ((path x z))
     ///       :ruleset myrules2)
     /// (combined-ruleset myrules-combined myrules1 myrules2)
+    /// ```
     UnstableCombinedRuleset(Span, String, Vec<String>),
     /// ```text
     /// (rule <body:List<Fact>> <head:List<Action>>)
@@ -1018,22 +1026,6 @@ pub type Fact = GenericFact<String, String>;
 pub(crate) type ResolvedFact = GenericFact<ResolvedCall, ResolvedVar>;
 pub(crate) type MappedFact<Head, Leaf> = GenericFact<CorrespondingVar<Head, Leaf>, Leaf>;
 
-/// Facts are the left-hand side of a [`Command::Rule`].
-/// They represent a part of a database query.
-/// Facts can be expressions or equality constraints between expressions.
-///
-/// Note that primitives such as  `!=` are partial.
-/// When two things are equal, it returns nothing and the query does not match.
-/// For example, the following egglog code runs:
-/// ```text
-/// (fail (check (!= 1 1)))
-/// ```
-#[derive(Clone, Debug, PartialEq, Eq, Hash)]
-pub enum GenericFact<Head, Leaf> {
-    Eq(Span, GenericExpr<Head, Leaf>, GenericExpr<Head, Leaf>),
-    Fact(GenericExpr<Head, Leaf>),
-}
-
 pub struct Facts<Head, Leaf>(pub Vec<GenericFact<Head, Leaf>>);
 
 impl<Head, Leaf> Facts<Head, Leaf>
@@ -1086,64 +1078,6 @@ where
     }
 }
 
-impl<Head: Display, Leaf: Display> Display for GenericFact<Head, Leaf> {
-    fn fmt(&self, f: &mut Formatter) -> std::fmt::Result {
-        match self {
-            GenericFact::Eq(_, e1, e2) => write!(f, "(= {e1} {e2})"),
-            GenericFact::Fact(expr) => write!(f, "{expr}"),
-        }
-    }
-}
-
-impl<Head, Leaf> GenericFact<Head, Leaf>
-where
-    Head: Clone + Display,
-    Leaf: Clone + PartialEq + Eq + Display + Hash,
-{
-    pub(crate) fn visit_exprs(
-        self,
-        f: &mut impl FnMut(GenericExpr<Head, Leaf>) -> GenericExpr<Head, Leaf>,
-    ) -> GenericFact<Head, Leaf> {
-        match self {
-            GenericFact::Eq(span, e1, e2) => {
-                GenericFact::Eq(span, e1.visit_exprs(f), e2.visit_exprs(f))
-            }
-            GenericFact::Fact(expr) => GenericFact::Fact(expr.visit_exprs(f)),
-        }
-    }
-
-    pub(crate) fn map_exprs<Head2, Leaf2>(
-        &self,
-        f: &mut impl FnMut(&GenericExpr<Head, Leaf>) -> GenericExpr<Head2, Leaf2>,
-    ) -> GenericFact<Head2, Leaf2> {
-        match self {
-            GenericFact::Eq(span, e1, e2) => GenericFact::Eq(span.clone(), f(e1), f(e2)),
-            GenericFact::Fact(expr) => GenericFact::Fact(f(expr)),
-        }
-    }
-
-    pub(crate) fn subst<Leaf2, Head2>(
-        &self,
-        subst_leaf: &mut impl FnMut(&Span, &Leaf) -> GenericExpr<Head2, Leaf2>,
-        subst_head: &mut impl FnMut(&Head) -> Head2,
-    ) -> GenericFact<Head2, Leaf2> {
-        self.map_exprs(&mut |e| e.subst(subst_leaf, subst_head))
-    }
-}
-
-impl<Head, Leaf> GenericFact<Head, Leaf>
-where
-    Leaf: Clone + PartialEq + Eq + Display + Hash,
-    Head: Clone + Display,
-{
-    pub(crate) fn make_unresolved(self) -> GenericFact<String, String> {
-        self.subst(
-            &mut |span, v| GenericExpr::Var(span.clone(), v.to_string()),
-            &mut |h| h.to_string(),
-        )
-    }
-}
-
 #[derive(Clone, Debug, PartialEq, Eq, Hash)]
 pub struct CorrespondingVar<Head, Leaf>
 where
@@ -1173,319 +1107,16 @@ where
         write!(f, "{} -> {}", self.head, self.to)
     }
 }
-
-/// Change a function entry.
-#[derive(Clone, Debug, Copy, PartialEq, Eq, Hash)]
-pub enum Change {
-    /// `delete` this entry from a function.
-    /// Be wary! Only delete entries that are guaranteed to be not useful.
-    Delete,
-    /// `subsume` this entry so that it cannot be queried or extracted, but still can be checked.
-    /// Note that this is currently forbidden for functions with custom merges.
-    Subsume,
-}
-
 pub type Action = GenericAction<String, String>;
 pub(crate) type MappedAction = GenericAction<CorrespondingVar<String, String>, String>;
 pub(crate) type ResolvedAction = GenericAction<ResolvedCall, ResolvedVar>;
 
-#[derive(Clone, Debug, PartialEq, Eq, Hash)]
-pub enum GenericAction<Head, Leaf>
-where
-    Head: Clone + Display,
-    Leaf: Clone + PartialEq + Eq + Display + Hash,
-{
-    /// Bind a variable to a particular datatype or primitive.
-    /// At the top level (in a [`Command::Action`]), this defines a global variable.
-    /// In a [`Command::Rule`], this defines a local variable in the actions.
-    Let(Span, Leaf, GenericExpr<Head, Leaf>),
-    /// `set` a function to a particular result.
-    /// `set` should not be used on datatypes-
-    /// instead, use `union`.
-    Set(
-        Span,
-        Head,
-        Vec<GenericExpr<Head, Leaf>>,
-        GenericExpr<Head, Leaf>,
-    ),
-    /// Delete or subsume (mark as hidden from future rewrites and unextractable) an entry from a function.
-    Change(Span, Change, Head, Vec<GenericExpr<Head, Leaf>>),
-    /// `union` two datatypes, making them equal
-    /// in the implicit, global equality relation
-    /// of egglog.
-    /// All rules match modulo this equality relation.
-    ///
-    /// Example:
-    /// ```text
-    /// (datatype Math (Num i64))
-    /// (union (Num 1) (Num 2)); Define that Num 1 and Num 2 are equivalent
-    /// (extract (Num 1)); Extracts Num 1
-    /// (extract (Num 2)); Extracts Num 1
-    /// ```
-    Union(Span, GenericExpr<Head, Leaf>, GenericExpr<Head, Leaf>),
-    Panic(Span, String),
-    Expr(Span, GenericExpr<Head, Leaf>),
-    // If(Expr, Action, Action),
-}
-
-#[derive(Clone, Debug, PartialEq, Eq, Hash)]
-
-pub struct GenericActions<Head: Clone + Display, Leaf: Clone + PartialEq + Eq + Display + Hash>(
-    pub Vec<GenericAction<Head, Leaf>>,
-);
 pub type Actions = GenericActions<String, String>;
 pub(crate) type ResolvedActions = GenericActions<ResolvedCall, ResolvedVar>;
 pub(crate) type MappedActions<Head, Leaf> = GenericActions<CorrespondingVar<Head, Leaf>, Leaf>;
 
-impl<Head, Leaf> Default for GenericActions<Head, Leaf>
-where
-    Head: Clone + Display,
-    Leaf: Clone + PartialEq + Eq + Display + Hash,
-{
-    fn default() -> Self {
-        Self(vec![])
-    }
-}
-
-impl<Head, Leaf> GenericActions<Head, Leaf>
-where
-    Head: Clone + Display,
-    Leaf: Clone + PartialEq + Eq + Display + Hash,
-{
-    pub(crate) fn len(&self) -> usize {
-        self.0.len()
-    }
-
-    pub(crate) fn iter(&self) -> impl Iterator<Item = &GenericAction<Head, Leaf>> {
-        self.0.iter()
-    }
-
-    pub(crate) fn visit_exprs(
-        self,
-        f: &mut impl FnMut(GenericExpr<Head, Leaf>) -> GenericExpr<Head, Leaf>,
-    ) -> Self {
-        Self(self.0.into_iter().map(|a| a.visit_exprs(f)).collect())
-    }
-}
-
-impl<Head, Leaf> Display for GenericAction<Head, Leaf>
-where
-    Head: Clone + Display,
-    Leaf: Clone + PartialEq + Eq + Display + Hash,
-{
-    fn fmt(&self, f: &mut Formatter) -> std::fmt::Result {
-        match self {
-            GenericAction::Let(_ann, lhs, rhs) => write!(f, "(let {lhs} {rhs})"),
-            GenericAction::Set(_ann, lhs, args, rhs) => {
-                write!(f, "(set ({lhs} {}) {rhs})", ListDisplay(args, " "))
-            }
-            GenericAction::Union(_ann, lhs, rhs) => write!(f, "(union {lhs} {rhs})"),
-            GenericAction::Change(_ann, change, lhs, args) => {
-                let change = match change {
-                    Change::Delete => "delete",
-                    Change::Subsume => "subsume",
-                };
-                write!(f, "({change} ({lhs} {}))", ListDisplay(args, " "))
-            }
-            GenericAction::Panic(_ann, msg) => write!(f, "(panic {msg:?})"),
-            GenericAction::Expr(_ann, e) => write!(f, "{e}"),
-        }
-    }
-}
-
-impl<Head, Leaf> GenericAction<Head, Leaf>
-where
-    Head: Clone + Display,
-    Leaf: Clone + Eq + Display + Hash,
-{
-    // Applys `f` to all expressions in the action.
-    pub fn map_exprs(
-        &self,
-        f: &mut impl FnMut(&GenericExpr<Head, Leaf>) -> GenericExpr<Head, Leaf>,
-    ) -> Self {
-        match self {
-            GenericAction::Let(span, lhs, rhs) => {
-                GenericAction::Let(span.clone(), lhs.clone(), f(rhs))
-            }
-            GenericAction::Set(span, lhs, args, rhs) => {
-                let right = f(rhs);
-                GenericAction::Set(
-                    span.clone(),
-                    lhs.clone(),
-                    args.iter().map(f).collect(),
-                    right,
-                )
-            }
-            GenericAction::Change(span, change, lhs, args) => GenericAction::Change(
-                span.clone(),
-                *change,
-                lhs.clone(),
-                args.iter().map(f).collect(),
-            ),
-            GenericAction::Union(span, lhs, rhs) => {
-                GenericAction::Union(span.clone(), f(lhs), f(rhs))
-            }
-            GenericAction::Panic(span, msg) => GenericAction::Panic(span.clone(), msg.clone()),
-            GenericAction::Expr(span, e) => GenericAction::Expr(span.clone(), f(e)),
-        }
-    }
-
-    /// Applys `f` to all sub-expressions (including `self`)
-    /// bottom-up, collecting the results.
-    pub fn visit_exprs(
-        self,
-        f: &mut impl FnMut(GenericExpr<Head, Leaf>) -> GenericExpr<Head, Leaf>,
-    ) -> Self {
-        match self {
-            GenericAction::Let(span, lhs, rhs) => {
-                GenericAction::Let(span, lhs.clone(), rhs.visit_exprs(f))
-            }
-            // TODO should we refactor `Set` so that we can map over Expr::Call(lhs, args)?
-            // This seems more natural to oflatt
-            // Currently, visit_exprs does not apply f to the first argument of Set.
-            GenericAction::Set(span, lhs, args, rhs) => {
-                let args = args.into_iter().map(|e| e.visit_exprs(f)).collect();
-                GenericAction::Set(span, lhs.clone(), args, rhs.visit_exprs(f))
-            }
-            GenericAction::Change(span, change, lhs, args) => {
-                let args = args.into_iter().map(|e| e.visit_exprs(f)).collect();
-                GenericAction::Change(span, change, lhs.clone(), args)
-            }
-            GenericAction::Union(span, lhs, rhs) => {
-                GenericAction::Union(span, lhs.visit_exprs(f), rhs.visit_exprs(f))
-            }
-            GenericAction::Panic(span, msg) => GenericAction::Panic(span, msg.clone()),
-            GenericAction::Expr(span, e) => GenericAction::Expr(span, e.visit_exprs(f)),
-        }
-    }
-
-    pub fn subst(&self, subst: &mut impl FnMut(&Span, &Leaf) -> GenericExpr<Head, Leaf>) -> Self {
-        self.map_exprs(&mut |e| e.subst_leaf(subst))
-    }
-
-    pub fn map_def_use(self, fvar: &mut impl FnMut(Leaf, bool) -> Leaf) -> Self {
-        macro_rules! fvar_expr {
-            () => {
-                |span, s: _| GenericExpr::Var(span.clone(), fvar(s.clone(), false))
-            };
-        }
-        match self {
-            GenericAction::Let(span, lhs, rhs) => {
-                let lhs = fvar(lhs, true);
-                let rhs = rhs.subst_leaf(&mut fvar_expr!());
-                GenericAction::Let(span, lhs, rhs)
-            }
-            GenericAction::Set(span, lhs, args, rhs) => {
-                let args = args
-                    .into_iter()
-                    .map(|e| e.subst_leaf(&mut fvar_expr!()))
-                    .collect();
-                let rhs = rhs.subst_leaf(&mut fvar_expr!());
-                GenericAction::Set(span, lhs.clone(), args, rhs)
-            }
-            GenericAction::Change(span, change, lhs, args) => {
-                let args = args
-                    .into_iter()
-                    .map(|e| e.subst_leaf(&mut fvar_expr!()))
-                    .collect();
-                GenericAction::Change(span, change, lhs.clone(), args)
-            }
-            GenericAction::Union(span, lhs, rhs) => {
-                let lhs = lhs.subst_leaf(&mut fvar_expr!());
-                let rhs = rhs.subst_leaf(&mut fvar_expr!());
-                GenericAction::Union(span, lhs, rhs)
-            }
-            GenericAction::Panic(span, msg) => GenericAction::Panic(span, msg.clone()),
-            GenericAction::Expr(span, e) => {
-                GenericAction::Expr(span, e.subst_leaf(&mut fvar_expr!()))
-            }
-        }
-    }
-}
-
 pub type Rule = GenericRule<String, String>;
 pub(crate) type ResolvedRule = GenericRule<ResolvedCall, ResolvedVar>;
-
-#[derive(Clone, Debug, PartialEq, Eq, Hash)]
-pub struct GenericRule<Head, Leaf>
-where
-    Head: Clone + Display,
-    Leaf: Clone + PartialEq + Eq + Display + Hash,
-{
-    pub span: Span,
-    pub head: GenericActions<Head, Leaf>,
-    pub body: Vec<GenericFact<Head, Leaf>>,
-}
-
-impl<Head, Leaf> GenericRule<Head, Leaf>
-where
-    Head: Clone + Display,
-    Leaf: Clone + PartialEq + Eq + Display + Hash,
-{
-    pub(crate) fn visit_exprs(
-        self,
-        f: &mut impl FnMut(GenericExpr<Head, Leaf>) -> GenericExpr<Head, Leaf>,
-    ) -> Self {
-        Self {
-            span: self.span,
-            head: self.head.visit_exprs(f),
-            body: self
-                .body
-                .into_iter()
-                .map(|bexpr| bexpr.visit_exprs(f))
-                .collect(),
-        }
-    }
-}
-
-impl<Head, Leaf> GenericRule<Head, Leaf>
-where
-    Head: Clone + Display,
-    Leaf: Clone + PartialEq + Eq + Display + Hash,
-{
-    pub(crate) fn fmt_with_ruleset(
-        &self,
-        f: &mut Formatter,
-        ruleset: &str,
-        name: &str,
-    ) -> std::fmt::Result {
-        let indent = " ".repeat(7);
-        write!(f, "(rule (")?;
-        for (i, fact) in self.body.iter().enumerate() {
-            if i > 0 {
-                write!(f, "{}", indent)?;
-            }
-
-            if i != self.body.len() - 1 {
-                writeln!(f, "{}", fact)?;
-            } else {
-                write!(f, "{}", fact)?;
-            }
-        }
-        write!(f, ")\n      (")?;
-        for (i, action) in self.head.0.iter().enumerate() {
-            if i > 0 {
-                write!(f, "{}", indent)?;
-            }
-            if i != self.head.0.len() - 1 {
-                writeln!(f, "{}", action)?;
-            } else {
-                write!(f, "{}", action)?;
-            }
-        }
-        let ruleset = if !ruleset.is_empty() {
-            format!(":ruleset {}", ruleset)
-        } else {
-            "".into()
-        };
-        let name = if !name.is_empty() {
-            format!(":name \"{}\"", name)
-        } else {
-            "".into()
-        };
-        write!(f, ")\n{} {} {})", indent, ruleset, name)
-    }
-}
 
 pub type Rewrite = GenericRewrite<String, String>;
 
@@ -1525,15 +1156,20 @@ impl<Head: Display, Leaf: Display> GenericRewrite<Head, Leaf> {
     }
 }
 
-impl<Head, Leaf: Clone> MappedExpr<Head, Leaf>
+pub(crate) trait MappedExprExt<Head, Leaf>
 where
     Head: Clone + Display,
     Leaf: Clone + PartialEq + Eq + Display + Hash,
 {
-    pub(crate) fn get_corresponding_var_or_lit(
-        &self,
-        typeinfo: &TypeInfo,
-    ) -> GenericAtomTerm<Leaf> {
+    fn get_corresponding_var_or_lit(&self, typeinfo: &TypeInfo) -> GenericAtomTerm<Leaf>;
+}
+
+impl<Head, Leaf> MappedExprExt<Head, Leaf> for MappedExpr<Head, Leaf>
+where
+    Head: Clone + Display,
+    Leaf: Clone + PartialEq + Eq + Display + Hash,
+{
+    fn get_corresponding_var_or_lit(&self, typeinfo: &TypeInfo) -> GenericAtomTerm<Leaf> {
         // Note: need typeinfo to resolve whether a symbol is a global or not
         // This is error-prone and the complexities can be avoided by treating globals
         // as nullary functions.
@@ -1548,19 +1184,5 @@ where
             GenericExpr::Lit(span, lit) => GenericAtomTerm::Literal(span.clone(), lit.clone()),
             GenericExpr::Call(span, head, _) => GenericAtomTerm::Var(span.clone(), head.to.clone()),
         }
-    }
-}
-
-impl<Head, Leaf> GenericActions<Head, Leaf>
-where
-    Head: Clone + Display,
-    Leaf: Clone + PartialEq + Eq + Display + Hash,
-{
-    pub fn new(actions: Vec<GenericAction<Head, Leaf>>) -> Self {
-        Self(actions)
-    }
-
-    pub fn singleton(action: GenericAction<Head, Leaf>) -> Self {
-        Self(vec![action])
     }
 }

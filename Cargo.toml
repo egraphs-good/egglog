@@ -3,6 +3,7 @@ resolver = "3"
 members = [
   "concurrency", 
   "core-relations",
+  "egglog-ast",
   "egglog-bridge",
   "numeric-id",
   "union-find",
@@ -70,6 +71,7 @@ divan = "0.1.15"
 # member crates
 ######################
 egglog-core-relations = { path = "core-relations" }
+egglog-ast = { path = "egglog-ast" }
 egglog-bridge = { path = "egglog-bridge" }
 egglog-concurrency = { path = "concurrency" }
 egglog-numeric-id = { path = "numeric-id" }
@@ -138,6 +140,7 @@ rayon = { workspace = true }
 mimalloc = { workspace = true, optional = true }
 csv = { workspace = true }
 egglog-core-relations = { workspace = true }
+egglog-ast = { workspace = true }
 egglog-bridge = { workspace = true }
 egglog-numeric-id = { workspace = true }
 egglog-add-primitive = { workspace = true }

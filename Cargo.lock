@@ -485,6 +485,7 @@ dependencies = [
  "csv",
  "dyn-clone",
  "egglog-add-primitive",
+ "egglog-ast",
  "egglog-bridge",
  "egglog-core-relations",
  "egglog-numeric-id",
@@ -515,6 +516,13 @@ dependencies = [
 ]
 
 [[package]]
+name = "egglog-ast"
+version = "1.0.0"
+dependencies = [
+ "ordered-float",
+]
+
+[[package]]
 name = "egglog-bridge"
 version = "1.0.0"
 dependencies = [
@@ -530,6 +538,7 @@ dependencies = [
  "mimalloc",
  "num-rational",
  "once_cell",
+ "ordered-float",
  "petgraph",
  "rand 0.9.2",
  "rayon",

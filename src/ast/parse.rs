@@ -1,128 +1,19 @@
 //! Parse a string into egglog.
 
 use crate::*;
+use egglog_ast::generic_ast::*;
+use egglog_ast::span::{EgglogSpan, Span, SrcFile};
 use ordered_float::OrderedFloat;
-
-/// A [`Span`] contains the file name and a pair of offsets representing the start and the end.
-#[derive(Clone, PartialEq, Eq, Hash)]
-pub enum Span {
-    /// Panics if a span is needed. Prefer `Span::Rust` (see `span!`)
-    /// unless this behaviour is explicitly desired.
-    Panic,
-    /// A span from a `.egg` file.
-    /// Constructed by `parse_program` and `parse_expr`.
-    Egglog(Arc<EgglogSpan>),
-    /// A span from a `.rs` file. Constructed by the `span!` macro.
-    Rust(Arc<RustSpan>),
-}
-
-#[derive(Debug, Clone, PartialEq, Eq, Hash)]
-pub struct EgglogSpan {
-    pub file: Arc<SrcFile>,
-    pub i: usize,
-    pub j: usize,
-}
-
-#[derive(Debug, Clone, PartialEq, Eq, Hash)]
-pub struct RustSpan {
-    pub file: &'static str,
-    pub line: u32,
-    pub column: u32,
-}
 
 #[macro_export]
 macro_rules! span {
     () => {
-        $crate::ast::Span::Rust(std::sync::Arc::new($crate::ast::RustSpan {
+        egglog_ast::span::Span::Rust(std::sync::Arc::new(egglog_ast::span::RustSpan {
             file: file!(),
             line: line!(),
             column: column!(),
         }))
     };
-}
-
-impl Span {
-    pub fn string(&self) -> &str {
-        match self {
-            Span::Panic => panic!("Span::Panic in Span::string"),
-            Span::Rust(_) => panic!("Span::Rust cannot track end position"),
-            Span::Egglog(span) => &span.file.contents[span.i..span.j],
-        }
-    }
-}
-
-#[derive(Debug, PartialEq, Eq, Hash, Clone)]
-pub struct SrcFile {
-    pub name: Option<String>,
-    pub contents: String,
-}
-
-struct Location {
-    line: usize,
-    col: usize,
-}
-
-impl SrcFile {
-    fn get_location(&self, offset: usize) -> Location {
-        let mut line = 1;
-        let mut col = 1;
-        for (i, c) in self.contents.char_indices() {
-            if i == offset {
-                break;
-            }
-            if c == '\n' {
-                line += 1;
-                col = 1;
-            } else {
-                col += 1;
-            }
-        }
-        Location { line, col }
-    }
-}
-
-// we do this slightly un-idiomatic thing because `unwrap` and `expect`
-// would print the entire source program without this
-impl Debug for Span {
-    fn fmt(&self, f: &mut std::fmt::Formatter) -> std::fmt::Result {
-        write!(f, "{}", self)
-    }
-}
-
-impl Display for Span {
-    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        match self {
-            Span::Panic => panic!("Span::Panic in impl Display"),
-            Span::Rust(span) => write!(f, "At {}:{} of {}", span.line, span.column, span.file),
-            Span::Egglog(span) => {
-                let start = span.file.get_location(span.i);
-                let end = span
-                    .file
-                    .get_location((span.j.saturating_sub(1)).max(span.i));
-                let quote = self.string();
-                match (&span.file.name, start.line == end.line) {
-                    (Some(filename), true) => write!(
-                        f,
-                        "In {}:{}-{} of {filename}: {quote}",
-                        start.line, start.col, end.col
-                    ),
-                    (Some(filename), false) => write!(
-                        f,
-                        "In {}:{}-{}:{} of {filename}: {quote}",
-                        start.line, start.col, end.line, end.col
-                    ),
-                    (None, false) => write!(
-                        f,
-                        "In {}:{}-{}:{}: {quote}",
-                        start.line, start.col, end.line, end.col
-                    ),
-                    (None, true) => {
-                        write!(f, "In {}:{}-{}: {quote}", start.line, start.col, end.col)
-                    }
-                }
-            }
-        }
-    }
 }
 
 // We do an unidiomatic thing here by using a struct instead of an enum.

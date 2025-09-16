@@ -14,6 +14,9 @@ use std::hash::Hasher;
 use std::ops::AddAssign;
 
 use crate::{constraint::grounded_check, *};
+use egglog_ast::generic_ast::{Change, GenericAction, GenericActions, GenericExpr};
+use egglog_ast::span::Span;
+use egglog_ast::util::ListDisplay;
 use typechecking::{FuncType, PrimitiveWithId, TypeError};
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -477,18 +480,37 @@ where
     }
 }
 
-#[allow(clippy::type_complexity)]
-impl<Head, Leaf> GenericActions<Head, Leaf>
-where
-    Head: Clone + Display + IsFunc,
-    Leaf: Clone + PartialEq + Eq + Display + Hash,
-{
-    pub(crate) fn to_core_actions<FG: FreshGen<Head, Leaf>>(
+pub(crate) trait GenericActionsExt<Head, Leaf> {
+    #[allow(clippy::type_complexity)]
+    fn to_core_actions<FG>(
         &self,
         typeinfo: &TypeInfo,
         binding: &mut IndexSet<Leaf>,
         fresh_gen: &mut FG,
-    ) -> Result<(GenericCoreActions<Head, Leaf>, MappedActions<Head, Leaf>), TypeError> {
+    ) -> Result<(GenericCoreActions<Head, Leaf>, MappedActions<Head, Leaf>), TypeError>
+    where
+        Head: Clone + Display + IsFunc,
+        Leaf: Clone + PartialEq + Eq + Display + Hash,
+        FG: FreshGen<Head, Leaf>;
+}
+
+impl<Head, Leaf> GenericActionsExt<Head, Leaf> for GenericActions<Head, Leaf>
+where
+    Head: Clone + Display + IsFunc,
+    Leaf: Clone + PartialEq + Eq + Display + Hash,
+{
+    #[allow(clippy::type_complexity)]
+    fn to_core_actions<FG>(
+        &self,
+        typeinfo: &TypeInfo,
+        binding: &mut IndexSet<Leaf>,
+        fresh_gen: &mut FG,
+    ) -> Result<(GenericCoreActions<Head, Leaf>, MappedActions<Head, Leaf>), TypeError>
+    where
+        Head: Clone + Display + IsFunc,
+        Leaf: Clone + PartialEq + Eq + Display + Hash,
+        FG: FreshGen<Head, Leaf>,
+    {
         let mut norm_actions = vec![];
         let mut mapped_actions: MappedActions<Head, Leaf> = GenericActions(vec![]);
 
@@ -571,12 +593,8 @@ where
                         | (GenericExpr::Call(_, f, args), var @ GenericExpr::Var(..))
                             if f.is_constructor(typeinfo) =>
                         {
-                            // This is a rewrite. Rewrites from a constructor or
-                            // function to an id are much faster when we perform a
-                            // `set` directly.
                             let head = f;
                             let expr = var;
-
                             let mut mapped_args = vec![];
                             for arg in args {
                                 let mapped_arg = arg.to_core_actions(
@@ -655,19 +673,46 @@ where
     }
 }
 
-impl<Head, Leaf> GenericExpr<Head, Leaf>
+pub(crate) trait GenericExprExt<Head, Leaf>
 where
     Head: Clone + Display,
     Leaf: Clone + PartialEq + Eq + Display + Hash,
 {
-    pub(crate) fn to_query(
+    fn to_query(
         &self,
         typeinfo: &TypeInfo,
         fresh_gen: &mut impl FreshGen<Head, Leaf>,
     ) -> (
         Vec<GenericAtom<HeadOrEq<Head>, Leaf>>,
         MappedExpr<Head, Leaf>,
-    ) {
+    );
+
+    fn to_core_actions<FG: FreshGen<Head, Leaf>>(
+        &self,
+        typeinfo: &TypeInfo,
+        binding: &mut IndexSet<Leaf>,
+        fresh_gen: &mut FG,
+        out_actions: &mut Vec<GenericCoreAction<Head, Leaf>>,
+    ) -> Result<MappedExpr<Head, Leaf>, TypeError>;
+}
+
+impl<Head, Leaf> GenericExprExt<Head, Leaf> for GenericExpr<Head, Leaf>
+where
+    Head: Clone + Display,
+    Leaf: Clone + PartialEq + Eq + Display + Hash,
+{
+    fn to_query(
+        &self,
+        typeinfo: &TypeInfo,
+        fresh_gen: &mut impl FreshGen<Head, Leaf>,
+    ) -> (
+        Vec<GenericAtom<HeadOrEq<Head>, Leaf>>,
+        MappedExpr<Head, Leaf>,
+    )
+    where
+        Head: Clone + Display,
+        Leaf: Clone + PartialEq + Eq + Display + Hash,
+    {
         match self {
             GenericExpr::Lit(span, lit) => (vec![], GenericExpr::Lit(span.clone(), lit.clone())),
             GenericExpr::Var(span, v) => (vec![], GenericExpr::Var(span.clone(), v.clone())),
@@ -704,7 +749,7 @@ where
         }
     }
 
-    pub(crate) fn to_core_actions<FG: FreshGen<Head, Leaf>>(
+    fn to_core_actions<FG: FreshGen<Head, Leaf>>(
         &self,
         typeinfo: &TypeInfo,
         binding: &mut IndexSet<Leaf>,
@@ -730,17 +775,14 @@ where
                     norm_args.push(mapped_arg.get_corresponding_var_or_lit(typeinfo));
                     mapped_args.push(mapped_arg);
                 }
-
                 let var = fresh_gen.fresh(f);
                 binding.insert(var.clone());
-
                 out_actions.push(GenericCoreAction::Let(
                     span.clone(),
                     var.clone(),
                     f.clone(),
                     norm_args,
                 ));
-
                 Ok(GenericExpr::Call(
                     span.clone(),
                     CorrespondingVar::new(f.clone(), var),
@@ -865,16 +907,31 @@ where
     }
 }
 
-impl<Head, Leaf> GenericRule<Head, Leaf>
+pub(crate) trait GenericRuleExt<Head, Leaf> {
+    fn to_core_rule(
+        &self,
+        typeinfo: &TypeInfo,
+        fresh_gen: &mut impl FreshGen<Head, Leaf>,
+    ) -> Result<GenericCoreRule<HeadOrEq<Head>, Head, Leaf>, TypeError>
+    where
+        Head: Clone + Display + IsFunc,
+        Leaf: Clone + PartialEq + Eq + Display + Hash + Debug;
+}
+
+impl<Head, Leaf> GenericRuleExt<Head, Leaf> for GenericRule<Head, Leaf>
 where
     Head: Clone + Display + IsFunc,
     Leaf: Clone + PartialEq + Eq + Display + Hash + Debug,
 {
-    pub(crate) fn to_core_rule(
+    fn to_core_rule(
         &self,
         typeinfo: &TypeInfo,
         fresh_gen: &mut impl FreshGen<Head, Leaf>,
-    ) -> Result<GenericCoreRule<HeadOrEq<Head>, Head, Leaf>, TypeError> {
+    ) -> Result<GenericCoreRule<HeadOrEq<Head>, Head, Leaf>, TypeError>
+    where
+        Head: Clone + Display + IsFunc,
+        Leaf: Clone + PartialEq + Eq + Display + Hash + Debug,
+    {
         let GenericRule {
             span: _,
             head,
@@ -892,8 +949,16 @@ where
     }
 }
 
-impl ResolvedRule {
-    pub(crate) fn to_canonicalized_core_rule(
+pub(crate) trait ResolvedRuleExt {
+    fn to_canonicalized_core_rule(
+        &self,
+        typeinfo: &TypeInfo,
+        fresh_gen: &mut SymbolGen,
+    ) -> Result<ResolvedCoreRule, TypeError>;
+}
+
+impl ResolvedRuleExt for ResolvedRule {
+    fn to_canonicalized_core_rule(
         &self,
         typeinfo: &TypeInfo,
         fresh_gen: &mut SymbolGen,

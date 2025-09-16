@@ -12,7 +12,6 @@ pub use core_relations::{
 };
 pub use egglog_bridge::ColumnTy;
 
-use crate::ast::Literal;
 use crate::*;
 
 pub type Z = core_relations::Boxed<BigInt>;

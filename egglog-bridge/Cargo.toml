@@ -24,6 +24,7 @@ web-time = { workspace = true }
 rayon = { workspace = true }
 dyn-clone = { workspace = true }
 once_cell = { workspace = true }
+ordered-float = { workspace = true }
 
 [dev-dependencies]
 env_logger = { workspace = true }
