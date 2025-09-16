@@ -9,7 +9,7 @@ use crate::core::{
 };
 use crate::*;
 pub use egglog_ast::generic_ast::{
-    GenericAction, GenericActions, GenericExpr, GenericFact, GenericRule, Literal,
+    Change, GenericAction, GenericActions, GenericExpr, GenericFact, GenericRule, Literal,
 };
 use egglog_ast::span::Span;
 use egglog_ast::util::ListDisplay;
@@ -1107,18 +1107,6 @@ where
         write!(f, "{} -> {}", self.head, self.to)
     }
 }
-
-/// Change a function entry.
-#[derive(Clone, Debug, Copy, PartialEq, Eq, Hash)]
-pub enum Change {
-    /// `delete` this entry from a function.
-    /// Be wary! Only delete entries that are guaranteed to be not useful.
-    Delete,
-    /// `subsume` this entry so that it cannot be queried or extracted, but still can be checked.
-    /// Note that this is currently forbidden for functions with custom merges.
-    Subsume,
-}
-
 pub type Action = GenericAction<String, String>;
 pub(crate) type MappedAction = GenericAction<CorrespondingVar<String, String>, String>;
 pub(crate) type ResolvedAction = GenericAction<ResolvedCall, ResolvedVar>;
