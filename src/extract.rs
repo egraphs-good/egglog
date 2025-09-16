@@ -5,7 +5,7 @@ use std::collections::VecDeque;
 
 /// An interface for custom cost model.
 ///
-/// To use it with the default extractor, the cost type must also satisify `Ord + Eq + Copy + Debug`.
+/// To use it with the default extractor, the cost type must also satisfy `Ord + Eq + Clone + Debug`.
 /// Additionally, the cost model should guarantee that a term has a no-smaller cost
 /// than its subterms to avoid cycles in the extracted terms for common case usages.
 /// For more niche usages, a term can have a cost less than its subterms.
@@ -123,7 +123,7 @@ impl CostModel<DefaultCost> for TreeAdditiveCostModel {
 }
 
 /// The default, Bellman-Ford like extractor. This extractor is optimal for [`CostModel`].
-pub struct Extractor<C: Cost + Ord + Eq + Copy + Debug> {
+pub struct Extractor<C: Cost + Ord + Eq + Clone + Debug> {
     rootsorts: Vec<ArcSort>,
     funcs: Vec<String>,
     cost_model: Box<dyn CostModel<C>>,
@@ -133,7 +133,7 @@ pub struct Extractor<C: Cost + Ord + Eq + Copy + Debug> {
     parent_edge: HashMap<String, HashMap<Value, (String, Vec<Value>)>>,
 }
 
-impl<C: Cost + Ord + Eq + Copy + Debug> Extractor<C> {
+impl<C: Cost + Ord + Eq + Clone + Debug> Extractor<C> {
     /// Bulk of the computation happens at initialization time.
     /// The later extractions only reuses saved results.
     /// This means a new extractor must be created if the egraph changes.
@@ -262,7 +262,14 @@ impl<C: Cost + Ord + Eq + Copy + Debug> Extractor<C> {
                 .get(sort.name())
                 .is_some_and(|t| t.get(&value).is_some())
             {
-                Some(*self.costs.get(sort.name()).unwrap().get(&value).unwrap())
+                Some(
+                    self.costs
+                        .get(sort.name())
+                        .unwrap()
+                        .get(&value)
+                        .unwrap()
+                        .clone(),
+                )
             } else {
                 None
             }
@@ -404,7 +411,9 @@ impl<C: Cost + Ord + Eq + Copy + Debug> Extractor<C> {
                     let target = row.vals.last().unwrap();
                     if let Some(best_cost) = self.costs.get(target_sort.name()).unwrap().get(target)
                     {
-                        if Some(*best_cost) == self.compute_cost_hyperedge(egraph, &row, func) {
+                        if Some(best_cost.clone())
+                            == self.compute_cost_hyperedge(egraph, &row, func)
+                        {
                             // one of the possible best parent edges
                             let target_topo_rnk = *self
                                 .topo_rnk
