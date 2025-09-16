@@ -176,7 +176,7 @@ pub fn add_primitive(input: TokenStream) -> TokenStream {
                 match is_container {
                     false => quote!(exec_state.base_values().get::<#t>(#y)),
                     true => quote!(
-                        exec_state.clone().container_values().register_val::<#t>(#y, exec_state)
+                        exec_state.container_values().register_val::<#t>(#y, exec_state)
                     ),
                 },
             ),
