@@ -57,8 +57,6 @@ where
     AddRuleset(Span, String),
     UnstableCombinedRuleset(Span, String, Vec<String>),
     NormRule {
-        name: String,
-        ruleset: String,
         rule: GenericRule<Head, Leaf>,
     },
     CoreAction(GenericAction<Head, Leaf>),
@@ -126,15 +124,7 @@ where
             GenericNCommand::UnstableCombinedRuleset(span, name, others) => {
                 GenericCommand::UnstableCombinedRuleset(span.clone(), name.clone(), others.clone())
             }
-            GenericNCommand::NormRule {
-                name,
-                ruleset,
-                rule,
-            } => GenericCommand::Rule {
-                name: name.clone(),
-                ruleset: ruleset.clone(),
-                rule: rule.clone(),
-            },
+            GenericNCommand::NormRule { rule } => GenericCommand::Rule { rule: rule.clone() },
             GenericNCommand::RunSchedule(schedule) => GenericCommand::RunSchedule(schedule.clone()),
             GenericNCommand::PrintOverallStatistics => GenericCommand::PrintOverallStatistics,
             GenericNCommand::CoreAction(action) => GenericCommand::Action(action.clone()),
@@ -182,13 +172,7 @@ where
             GenericNCommand::UnstableCombinedRuleset(span, name, rulesets) => {
                 GenericNCommand::UnstableCombinedRuleset(span, name, rulesets)
             }
-            GenericNCommand::NormRule {
-                name,
-                ruleset,
-                rule,
-            } => GenericNCommand::NormRule {
-                name,
-                ruleset,
+            GenericNCommand::NormRule { rule } => GenericNCommand::NormRule {
                 rule: rule.visit_exprs(f),
             },
             GenericNCommand::RunSchedule(schedule) => {
@@ -508,11 +492,7 @@ where
     /// (rule ((path x y) (edge y z))
     ///       ((path x z)))
     /// ```
-    Rule {
-        name: String,
-        ruleset: String,
-        rule: GenericRule<Head, Leaf>,
-    },
+    Rule { rule: GenericRule<Head, Leaf> },
     /// `rewrite` is syntactic sugar for a specific form of `rule`
     /// which simply unions the left and right hand sides.
     ///
@@ -745,11 +725,7 @@ where
                     ListDisplay(others, " ")
                 )
             }
-            GenericCommand::Rule {
-                ruleset,
-                name,
-                rule,
-            } => rule.fmt_with_ruleset(f, ruleset, name),
+            GenericCommand::Rule { rule } => rule.fmt(f),
             GenericCommand::RunSchedule(sched) => write!(f, "(run-schedule {sched})"),
             GenericCommand::PrintOverallStatistics => write!(f, "(print-stats)"),
             GenericCommand::Check(_ann, facts) => {

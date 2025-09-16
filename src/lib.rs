@@ -884,19 +884,14 @@ impl EGraph {
         }
     }
 
-    fn add_rule_with_name(
-        &mut self,
-        name: String,
-        rule: ast::ResolvedRule,
-        ruleset: String,
-    ) -> Result<String, Error> {
+    fn add_rule(&mut self, rule: ast::ResolvedRule) -> Result<String, Error> {
         let core_rule =
             rule.to_canonicalized_core_rule(&self.type_info, &mut self.parser.symbol_gen)?;
         let (query, actions) = (&core_rule.body, &core_rule.head);
 
         let rule_id = {
             let mut translator = BackendRule::new(
-                self.backend.new_rule(&name, self.seminaive),
+                self.backend.new_rule(&rule.name, self.seminaive),
                 &self.functions,
                 &self.type_info,
             );
@@ -905,21 +900,22 @@ impl EGraph {
             translator.build()
         };
 
-        if let Some(rules) = self.rulesets.get_mut(&ruleset) {
+        if let Some(rules) = self.rulesets.get_mut(&rule.ruleset) {
             match rules {
                 Ruleset::Rules(rules) => {
-                    match rules.entry(name.clone()) {
+                    match rules.entry(rule.name.clone()) {
                         indexmap::map::Entry::Occupied(_) => {
+                            let name = rule.name;
                             panic!("Rule '{name}' was already present")
                         }
                         indexmap::map::Entry::Vacant(e) => e.insert((core_rule, rule_id)),
                     };
-                    Ok(name)
+                    Ok(rule.name)
                 }
-                Ruleset::Combined(_) => Err(Error::CombinedRulesetError(ruleset, rule.span)),
+                Ruleset::Combined(_) => Err(Error::CombinedRulesetError(rule.ruleset, rule.span)),
             }
         } else {
-            Err(Error::NoSuchRuleset(ruleset, rule.span))
+            Err(Error::NoSuchRuleset(rule.ruleset, rule.span))
         }
     }
 
@@ -1036,10 +1032,14 @@ impl EGraph {
     }
 
     fn check_facts(&mut self, span: &Span, facts: &[ResolvedFact]) -> Result<(), Error> {
+        let fresh_name = self.parser.symbol_gen.fresh("check_facts");
+        let fresh_ruleset = self.parser.symbol_gen.fresh("check_facts_ruleset");
         let rule = ast::ResolvedRule {
             span: span.clone(),
             head: ResolvedActions::default(),
             body: facts.to_vec(),
+            name: fresh_name.clone(),
+            ruleset: fresh_ruleset.clone(),
         };
         let core_rule =
             rule.to_canonicalized_core_rule(&self.type_info, &mut self.parser.symbol_gen)?;
@@ -1102,12 +1102,9 @@ impl EGraph {
                 self.add_combined_ruleset(name.clone(), others);
                 log::info!("Declared ruleset {name}.");
             }
-            ResolvedNCommand::NormRule {
-                ruleset,
-                rule,
-                name,
-            } => {
-                self.add_rule_with_name(name.clone(), rule, ruleset)?;
+            ResolvedNCommand::NormRule { rule } => {
+                let name = rule.name.clone();
+                self.add_rule(rule)?;
                 log::info!("Declared rule {name}.")
             }
             ResolvedNCommand::RunSchedule(sched) => {

@@ -124,11 +124,7 @@ impl GlobalRemover<'_> {
                 }
                 _ => vec![GenericNCommand::CoreAction(remove_globals_action(action))],
             },
-            GenericNCommand::NormRule {
-                name,
-                ruleset,
-                rule,
-            } => {
+            GenericNCommand::NormRule { rule } => {
                 // A map from the global variables in actions to their new names
                 // in the query.
                 let mut globals = HashMap::default();
@@ -177,12 +173,10 @@ impl GlobalRemover<'_> {
                             expr
                         }
                     }),
+                    name: rule.name.clone(),
+                    ruleset: rule.ruleset.clone(),
                 };
-                vec![GenericNCommand::NormRule {
-                    name,
-                    ruleset,
-                    rule: new_rule,
-                }]
+                vec![GenericNCommand::NormRule { rule: new_rule }]
             }
             // Handle the corner case where a global command is wrap in (fail )
             GenericNCommand::Fail(span, cmd) => {

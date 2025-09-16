@@ -156,14 +156,8 @@ impl EGraph {
             NCommand::Function(fdecl) => {
                 ResolvedNCommand::Function(self.type_info.typecheck_function(symbol_gen, fdecl)?)
             }
-            NCommand::NormRule {
-                rule,
-                ruleset,
-                name,
-            } => ResolvedNCommand::NormRule {
+            NCommand::NormRule { rule } => ResolvedNCommand::NormRule {
                 rule: self.type_info.typecheck_rule(symbol_gen, rule)?,
-                ruleset: ruleset.clone(),
-                name: name.clone(),
             },
             NCommand::Sort(span, sort, presort_and_args) => {
                 // Note this is bad since typechecking should be pure and idempotent
@@ -464,7 +458,13 @@ impl TypeInfo {
         symbol_gen: &mut SymbolGen,
         rule: &Rule,
     ) -> Result<ResolvedRule, TypeError> {
-        let Rule { span, head, body } = rule;
+        let Rule {
+            span,
+            head,
+            body,
+            name,
+            ruleset,
+        } = rule;
         let mut constraints = vec![];
 
         let (query, mapped_query) = Facts(body.clone()).to_query(self, symbol_gen);
@@ -497,6 +497,8 @@ impl TypeInfo {
             span: span.clone(),
             body,
             head: actions,
+            name: name.clone(),
+            ruleset: ruleset.clone(),
         })
     }
 

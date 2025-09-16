@@ -347,9 +347,13 @@ impl Parser {
                     }
 
                     vec![Command::Rule {
-                        ruleset,
-                        name,
-                        rule: Rule { span, head, body },
+                        rule: Rule {
+                            span,
+                            head,
+                            body,
+                            name,
+                            ruleset,
+                        },
                     }]
                 }
                 _ => return error!(span, "usage: (rule (<fact>*) (<action>*) <option>*)"),
