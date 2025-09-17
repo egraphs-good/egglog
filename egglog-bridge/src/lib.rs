@@ -43,6 +43,7 @@ pub mod proof_format;
 pub(crate) mod proof_spec;
 pub(crate) mod rule;
 pub mod syntax;
+pub mod termdag;
 #[cfg(test)]
 mod tests;
 

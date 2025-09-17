@@ -1,4 +1,4 @@
-use crate::termdag::{Term, TermDag};
+use crate::{Term, TermDag};
 use crate::util::{HashMap, HashSet};
 use crate::*;
 use std::collections::VecDeque;
