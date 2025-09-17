@@ -4,7 +4,7 @@ use egglog_ast::{
 };
 
 use crate::*;
-use std::fmt::Write;
+use std::{fmt::Write, io};
 
 pub type TermId = usize;
 
@@ -37,6 +37,80 @@ macro_rules! match_term_app {
             }
             _ => panic!("not an app")
         }
+    }
+}
+
+#[derive(Clone, Debug)]
+pub struct PrettyPrintConfig {
+    pub line_width: usize,
+    pub indent_size: usize,
+}
+
+impl Default for PrettyPrintConfig {
+    fn default() -> Self {
+        Self {
+            line_width: 512,
+            indent_size: 4,
+        }
+    }
+}
+
+pub(crate) struct PrettyPrinter<'w, W: io::Write> {
+    writer: &'w mut W,
+    config: &'w PrettyPrintConfig,
+    current_indent: usize,
+    current_line_pos: usize,
+}
+
+impl<'w, W: io::Write> PrettyPrinter<'w, W> {
+    pub(crate) fn new(writer: &'w mut W, config: &'w PrettyPrintConfig) -> Self {
+        Self {
+            writer,
+            config,
+            current_indent: 0,
+            current_line_pos: 0,
+        }
+    }
+
+    pub(crate) fn write_str(&mut self, s: &str) -> io::Result<()> {
+        write!(self.writer, "{s}")?;
+        self.current_line_pos += s.len();
+        Ok(())
+    }
+
+    pub(crate) fn newline(&mut self) -> io::Result<()> {
+        writeln!(self.writer)?;
+        self.current_line_pos = 0;
+        self.write_indent()?;
+        Ok(())
+    }
+
+    pub(crate) fn write_indent(&mut self) -> io::Result<()> {
+        for _ in 0..self.current_indent {
+            write!(self.writer, " ")?;
+        }
+        self.current_line_pos = self.current_indent;
+        Ok(())
+    }
+
+    pub(crate) fn increase_indent(&mut self) {
+        self.current_indent += self.config.indent_size;
+    }
+
+    pub(crate) fn decrease_indent(&mut self) {
+        self.current_indent = self.current_indent.saturating_sub(self.config.indent_size);
+    }
+
+    pub(crate) fn should_break(&self, additional_chars: usize) -> bool {
+        self.current_line_pos + additional_chars > self.config.line_width
+    }
+
+    pub(crate) fn write_with_break(&mut self, s: &str) -> io::Result<()> {
+        if self.should_break(s.len()) && self.current_line_pos > self.current_indent {
+            self.newline()?;
+            self.write_indent()?;
+        }
+        self.write_str(s)
     }
 }
 
@@ -188,5 +262,62 @@ impl TermDag {
         }
 
         result
+    }
+
+    pub fn to_string_pretty(&self, term: &Term) -> String {
+        // use print_term_pretty
+        todo!()
+    }
+
+    /// Print the term with pretty-printing configuration.
+    pub fn print_term_pretty(
+        &self,
+        term: &Term,
+        config: &PrettyPrintConfig,
+        writer: &mut impl io::Write,
+    ) -> io::Result<()> {
+        let mut printer = PrettyPrinter::new(writer, config);
+        self.print_term_with_printer(term, &mut printer)
+    }
+
+    fn print_term_with_printer<W: io::Write>(
+        &self,
+        term: &Term,
+        printer: &mut PrettyPrinter<W>,
+    ) -> io::Result<()> {
+        match term {
+            Term::Lit(lit) => {
+                printer.write_str(&format!("{lit}"))?;
+            }
+            Term::Var(v) => {
+                printer.write_str(v)?;
+            }
+            Term::App(head, args) => {
+                printer.write_str(&format!("({head}"))?;
+                if !args.is_empty() {
+                    printer.increase_indent();
+                    for arg in args.iter() {
+                        printer.write_with_break(" ")?;
+                        self.print_term_with_printer(self.get(*arg), printer)?;
+                    }
+                    printer.decrease_indent();
+                }
+                printer.write_str(")")?;
+            }
+        }
+        Ok(())
+    }
+
+    pub(crate) fn proj(&self, term: &Term, arg_idx: usize) -> Option<&Term> {
+        match term {
+            Term::App(_hd, args) => {
+                if arg_idx < args.len() {
+                    Some(self.get(args[arg_idx]))
+                } else {
+                    None
+                }
+            }
+            _ => None,
+        }
     }
 }

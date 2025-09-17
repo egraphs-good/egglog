@@ -4,6 +4,7 @@ use std::{hash::Hash, io, rc::Rc};
 
 use crate::core_relations::Value;
 use crate::numeric_id::{DenseIdMap, NumericId, define_id};
+use crate::termdag::{PrettyPrintConfig, PrettyPrinter};
 use indexmap::IndexSet;
 
 use crate::{FunctionId, rule::Variable};
@@ -103,20 +104,6 @@ impl TermDag {
     /// The [`TermId`]s in this term should point into this same [`TermDag`].
     pub fn get_or_insert(&mut self, term: &Term) -> TermId {
         self.store.get_or_insert(term)
-    }
-
-    pub(crate) fn proj(&self, term: TermId, arg_idx: usize) -> TermId {
-        let term = self.store.lookup(term).unwrap();
-        match term {
-            Term::Func { args, .. } => {
-                if arg_idx < args.len() {
-                    args[arg_idx]
-                } else {
-                    panic!("Index out of bounds for function arguments")
-                }
-            }
-            _ => panic!("Cannot project a non-function term"),
-        }
     }
 }
 
@@ -491,78 +478,4 @@ pub enum EqProof {
     /// A proof via congruence- one proof for each child of the term
     /// pf_f_args_ok is a proof that the term with the lhs children is valid
     PCong(CongProof),
-}
-
-#[derive(Clone, Debug)]
-pub struct PrettyPrintConfig {
-    pub line_width: usize,
-    pub indent_size: usize,
-}
-
-impl Default for PrettyPrintConfig {
-    fn default() -> Self {
-        Self {
-            line_width: 512,
-            indent_size: 4,
-        }
-    }
-}
-
-struct PrettyPrinter<'w, W: io::Write> {
-    writer: &'w mut W,
-    config: &'w PrettyPrintConfig,
-    current_indent: usize,
-    current_line_pos: usize,
-}
-
-impl<'w, W: io::Write> PrettyPrinter<'w, W> {
-    fn new(writer: &'w mut W, config: &'w PrettyPrintConfig) -> Self {
-        Self {
-            writer,
-            config,
-            current_indent: 0,
-            current_line_pos: 0,
-        }
-    }
-
-    fn write_str(&mut self, s: &str) -> io::Result<()> {
-        write!(self.writer, "{s}")?;
-        self.current_line_pos += s.len();
-        Ok(())
-    }
-
-    fn newline(&mut self) -> io::Result<()> {
-        writeln!(self.writer)?;
-        self.current_line_pos = 0;
-        self.write_indent()?;
-        Ok(())
-    }
-
-    fn write_indent(&mut self) -> io::Result<()> {
-        for _ in 0..self.current_indent {
-            write!(self.writer, " ")?;
-        }
-        self.current_line_pos = self.current_indent;
-        Ok(())
-    }
-
-    fn increase_indent(&mut self) {
-        self.current_indent += self.config.indent_size;
-    }
-
-    fn decrease_indent(&mut self) {
-        self.current_indent = self.current_indent.saturating_sub(self.config.indent_size);
-    }
-
-    fn should_break(&self, additional_chars: usize) -> bool {
-        self.current_line_pos + additional_chars > self.config.line_width
-    }
-
-    fn write_with_break(&mut self, s: &str) -> io::Result<()> {
-        if self.should_break(s.len()) && self.current_line_pos > self.current_indent {
-            self.newline()?;
-            self.write_indent()?;
-        }
-        self.write_str(s)
-    }
 }
