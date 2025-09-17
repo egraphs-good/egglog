@@ -1075,13 +1075,17 @@ mod tests {
         assert_eq!(format!("{}", e), s);
     }
 
+    use std::path::{Path, PathBuf};
+
     #[test]
-    #[rustfmt::skip]
     fn rust_span_display() {
-        let actual = format!("{}", span!()).replace('\\', "/");
-        assert!(actual.starts_with("At "));
-        assert!(actual.contains(":"));
-        assert!(actual.ends_with("src/ast/parse.rs"));
+        // non-platform specific path construction
+        let expected_path: PathBuf = Path::new("src").join("ast").join("parse.rs");
+
+        assert_eq!(
+            format!("{}", span!()),
+            format!("At {}:27 of {}", line!() - 1, expected_path.display())
+        );
     }
 
     #[test]

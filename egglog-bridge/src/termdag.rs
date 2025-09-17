@@ -266,11 +266,17 @@ impl TermDag {
         result
     }
 
+    /// Pretty-print the given term to a string.
     pub fn to_string_pretty(&self, term: &Term) -> String {
         let mut buf = Vec::new();
         self.print_term_pretty(term, &PrettyPrintConfig::default(), &mut buf)
             .expect("pretty printing term failed");
         String::from_utf8(buf).expect("pretty printer emitted invalid UTF-8")
+    }
+
+    /// Pretty-print the given term to a string by term id.
+    pub fn to_string_pretty_id(&self, term: TermId) -> String {
+        self.to_string_pretty(self.get(term))
     }
 
     /// Print the term with pretty-printing configuration.
@@ -284,7 +290,7 @@ impl TermDag {
         self.print_term_with_printer(term, &mut printer)
     }
 
-    fn print_term_with_printer<W: io::Write>(
+    pub(crate) fn print_term_with_printer<W: io::Write>(
         &self,
         term: &Term,
         printer: &mut PrettyPrinter<W>,
@@ -312,17 +318,19 @@ impl TermDag {
         Ok(())
     }
 
-    #[allow(dead_code)]
-    pub(crate) fn proj(&self, term: &Term, arg_idx: usize) -> Option<&Term> {
+    /// Project a particular argument of a term by index.
+    /// Returns None if the term is not an application or the index is out of bounds.
+    pub fn proj(&self, term: &Term, arg_idx: usize) -> Option<TermId> {
         match term {
             Term::App(_hd, args) => {
-                if arg_idx < args.len() {
-                    Some(self.get(args[arg_idx]))
-                } else {
-                    None
-                }
+                args.get(arg_idx).copied()
             }
             _ => None,
         }
+    }
+
+    /// Project a particular argument of a term by index, given the term's id.
+    pub fn proj_id(&self, term: TermId, arg_idx: usize) -> Option<TermId> {
+        self.proj(self.get(term), arg_idx)
     }
 }
