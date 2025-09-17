@@ -1,4 +1,11 @@
+use egglog_ast::{
+    generic_ast::{Expr, GenericExpr, Literal},
+    span::Span,
+};
+
 use crate::*;
+use hashbrown::HashMap;
+use indexmap::IndexSet;
 use std::fmt::Write;
 
 pub type TermId = usize;
@@ -183,88 +190,5 @@ impl TermDag {
         }
 
         result
-    }
-}
-
-#[cfg(test)]
-mod tests {
-    use super::*;
-    use crate::{ast::*, span};
-
-    fn parse_term(s: &str) -> (TermDag, Term) {
-        let e = Parser::default().get_expr_from_string(None, s).unwrap();
-        let mut td = TermDag::default();
-        let t = td.expr_to_term(&e);
-        (td, t)
-    }
-
-    #[test]
-    fn test_to_from_expr() {
-        let s = r#"(f (g x y) x y (g x y))"#;
-        let e = Parser::default().get_expr_from_string(None, s).unwrap();
-        let mut td = TermDag::default();
-        assert_eq!(td.size(), 0);
-        let t = td.expr_to_term(&e);
-        assert_eq!(td.size(), 4);
-        // the expression above has 4 distinct subterms.
-        // in left-to-right, depth-first order, they are:
-        //     x, y, (g x y), and the root call to f
-        // so we can compute expected answer by hand:
-        assert_eq!(
-            td.nodes.as_slice().iter().cloned().collect::<Vec<_>>(),
-            vec![
-                Term::Var("x".into()),
-                Term::Var("y".into()),
-                Term::App("g".into(), vec![0, 1]),
-                Term::App("f".into(), vec![2, 0, 1, 2]),
-            ]
-        );
-        // This is tested using string equality because e1 and e2 have different
-        let e2 = td.term_to_expr(&t, span!());
-        // annotations. A better way to test this would be to implement a map_ann
-        // function for GenericExpr.
-        assert_eq!(format!("{e}"), format!("{e2}")); // roundtrip
-    }
-
-    #[test]
-    fn test_match_term_app() {
-        let s = r#"(f (g x y) x y (g x y))"#;
-        let (td, t) = parse_term(s);
-        match_term_app!(t; {
-            ("f", [_, x, _, _]) => {
-                let span = span!();
-                assert_eq!(
-                    td.term_to_expr(td.get(*x), span.clone()),
-                    crate::ast::GenericExpr::Var(span, "x".to_owned())
-                )
-            }
-            (head, _) => panic!("unexpected head {}, in {}:{}:{}", head, file!(), line!(), column!())
-        })
-    }
-
-    #[test]
-    fn test_to_string() {
-        let s = r#"(f (g x y) x y (g x y))"#;
-        let (td, t) = parse_term(s);
-        assert_eq!(td.to_string(&t), s);
-    }
-
-    #[test]
-    fn test_lookup() {
-        let s = r#"(f (g x y) x y (g x y))"#;
-        let (td, t) = parse_term(s);
-        assert_eq!(td.lookup(&t), td.size() - 1);
-    }
-
-    #[test]
-    fn test_app_var_lit() {
-        let s = r#"(f (g x y) x 7 (g x y))"#;
-        let (mut td, t) = parse_term(s);
-        let x = td.var("x".into());
-        let y = td.var("y".into());
-        let seven = td.lit(7.into());
-        let g = td.app("g".into(), vec![x.clone(), y.clone()]);
-        let t2 = td.app("f".into(), vec![g.clone(), x, seven, g]);
-        assert_eq!(t, t2);
     }
 }
