@@ -1,20 +1,19 @@
-use std::{iter, rc::Rc, sync::Arc};
+use std::{iter, sync::Arc};
 
 use crate::core_relations::{
-    BaseValuePrinter, ColumnId, DisplacedTableWithProvenance, ProofReason as UfProofReason,
-    ProofStep, RuleBuilder, Value,
+    ColumnId, DisplacedTableWithProvenance, ProofReason as UfProofReason, ProofStep, RuleBuilder,
+    Value,
 };
 use crate::numeric_id::{DenseIdMap, NumericId, define_id};
 use crate::rule::Variable;
+use crate::termdag::TermId;
 use egglog_reports::ReportLevel;
 use hashbrown::{HashMap, HashSet};
 
 use crate::{
     ColumnTy, EGraph, FunctionId, GetFirstMatch, QueryEntry, Result, RuleId, SideChannel,
     SourceExpr, TopLevelLhsExpr,
-    proof_format::{
-        CongProof, EqProof, EqProofId, Premise, ProofStore, Term, TermId, TermProof, TermProofId,
-    },
+    proof_format::{CongProof, EqProof, EqProofId, Premise, ProofStore, TermProof, TermProofId},
     rule::{AtomId, Bindings, DstVar, VariableId},
     syntax::{RuleData, SourceSyntax, SyntaxId},
 };
@@ -306,6 +305,7 @@ impl EGraph {
             ColumnTy::Id => {
                 let term_row = self.get_term_row(key_id);
                 let func = FunctionId::new(term_row[0].rep());
+                let func_name = self.funcs[func].name.to_string();
                 let info = &self.funcs[func];
                 // NB: this clone is needed because `get_term_row` borrows the whole egraph, though it
                 // really only needs mutable access to `db`. This is of course fixable if we wanted to get
@@ -313,27 +313,16 @@ impl EGraph {
                 let schema = info.schema.clone();
                 let mut args = Vec::with_capacity(term_row.len() - 1);
                 for (ty, entry) in schema[0..schema.len() - 1].iter().zip(term_row[1..].iter()) {
-                    args.push(self.reconstruct_term(*entry, *ty, state));
+                    let term = self.reconstruct_term(*entry, *ty, state);
+                    args.push(state.store.termdag.get(term).clone());
                 }
-                state
-                    .store
-                    .termdag
-                    .get_or_insert(&Term::Func { id: func, args })
+                let app = state.store.termdag.app(func_name, args);
+                state.store.termdag.lookup(&app)
             }
             ColumnTy::Base(ty) => {
-                let rendered: Rc<str> = format!(
-                    "{:?}",
-                    BaseValuePrinter {
-                        base: self.db.base_values(),
-                        ty,
-                        val: term_id,
-                    }
-                )
-                .into();
-                state.store.termdag.get_or_insert(&Term::Constant {
-                    id: term_id,
-                    rendered: Some(rendered),
-                })
+                let literal = self.value_to_literal(&term_id, ty);
+                let lit = state.store.termdag.lit(literal);
+                state.store.termdag.lookup(&lit)
             }
         };
 
@@ -430,7 +419,7 @@ impl EGraph {
                         pf_f_args_ok: old_term_proof,
                         arg_idx: i,
                     });
-                    let arg_term = state.store.termdag.proj(old_term, i);
+                    let arg_term = state.store.termdag.proj_id(old_term, i).unwrap();
                     state.store.refl(arg_exists, arg_term)
                 }
             };

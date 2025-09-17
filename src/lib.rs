@@ -1299,7 +1299,8 @@ impl EGraph {
         Ok(outputs)
     }
 
-    pub fn resugar_program(
+    /// Return a program with syntactic sugar removed.
+    pub fn desugar_program(
         &mut self,
         filename: Option<String>,
         input: &str,

@@ -24,7 +24,7 @@ impl Run {
         } else {
             let mut egraph = EGraph::default();
             let desugared_str = egraph
-                .resugar_program(self.path.to_str().map(String::from), &program)
+                .desugar_program(self.path.to_str().map(String::from), &program)
                 .unwrap()
                 .join("\n");
 
