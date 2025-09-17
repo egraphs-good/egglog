@@ -215,7 +215,7 @@ where
     W: Write,
 {
     if mode == RunMode::ShowDesugaredEgglog {
-        return Ok(match egraph.resugar_program(filename, command) {
+        return Ok(match egraph.desugar_program(filename, command) {
             Ok(desugared) => {
                 for line in desugared {
                     writeln!(output, "{line}")?;

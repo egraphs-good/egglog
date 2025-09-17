@@ -548,14 +548,10 @@ impl EGraph {
         if self.get_canon_in_uf(id1) != self.get_canon_in_uf(id2) {
             // These terms aren't equal. Reconstruct the relevant terms so as to
             // get a nicer error message on the way out.
-            let mut buf = Vec::<u8>::new();
             let term_id_1 = self.reconstruct_term(id1, ColumnTy::Id, &mut state);
             let term_id_2 = self.reconstruct_term(id2, ColumnTy::Id, &mut state);
-            store.termdag.print_term(term_id_1, &mut buf).unwrap();
-            let term1 = String::from_utf8(buf).unwrap();
-            let mut buf = Vec::<u8>::new();
-            store.termdag.print_term(term_id_2, &mut buf).unwrap();
-            let term2 = String::from_utf8(buf).unwrap();
+            let term1 = store.termdag.to_string_pretty_id(term_id_1);
+            let term2 = store.termdag.to_string_pretty_id(term_id_2);
             return Err(
                 ProofReconstructionError::EqualityExplanationOfUnequalTerms { term1, term2 }.into(),
             );
