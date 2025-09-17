@@ -1,4 +1,5 @@
-use std::{iter, rc::Rc, sync::Arc};
+use std::rc::Rc;
+use std::{iter, sync::Arc};
 
 use crate::core_relations::{
     ColumnId, DisplacedTableWithProvenance, ProofReason as UfProofReason, ProofStep, RuleBuilder,

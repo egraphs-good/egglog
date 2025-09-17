@@ -2,11 +2,11 @@
 //! Doegens, and Oliver Flatt.
 use std::{hash::Hash, io, rc::Rc, sync::Arc};
 
+use crate::numeric_id::{DenseIdMap, NumericId, define_id};
+use crate::termdag::{PrettyPrintConfig, PrettyPrinter, TermDag, TermId};
 use indexmap::IndexSet;
 
 use crate::ColumnTy;
-use crate::numeric_id::{NumericId, define_id};
-use crate::termdag::{PrettyPrintConfig, PrettyPrinter, TermDag, TermId};
 
 define_id!(pub TermProofId, u32, "an id identifying proofs of terms within a [`ProofStore`]");
 define_id!(pub EqProofId, u32, "an id identifying proofs of equality between two terms within a [`ProofStore`]");
@@ -85,10 +85,12 @@ impl ProofStore {
             new_term,
             func,
         } = cong_pf;
-        printer.write_str(&format!("Cong({func}, "))?;
-        self.print_term(*old_term, printer)?;
+        printer.write_str(&format!("Cong({func:?}, "))?;
+        self.termdag
+            .print_term_with_printer(self.termdag.get(*old_term), printer)?;
         printer.write_str(" => ")?;
-        self.print_term(*new_term, printer)?;
+        self.termdag
+            .print_term_with_printer(self.termdag.get(*new_term), printer)?;
         printer.write_str(" by (")?;
         printer.increase_indent();
         for (i, pf) in pf_args_eq.iter().enumerate() {
