@@ -13,7 +13,7 @@
 use super::*;
 
 #[derive(Clone, Debug, PartialEq, Eq, Hash)]
-pub struct FunctionContainer(ResolvedFunctionId, Vec<(bool, Value)>, String);
+pub struct FunctionContainer(ResolvedFunctionId, pub Vec<(bool, Value)>, pub String);
 
 impl ContainerValue for FunctionContainer {
     fn rebuild_contents(&mut self, rebuilder: &dyn Rebuilder) -> bool {
