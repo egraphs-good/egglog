@@ -146,6 +146,16 @@ impl TermDag {
         node
     }
 
+    /// Like [`TermDag::app`], but expects and returns [`TermId`]s instead of
+    /// [`Term`]s.
+    pub fn app_id(&mut self, sym: String, children: Vec<TermId>) -> TermId {
+        let node = Term::App(sym, children);
+
+        self.add_node(&node);
+
+        self.lookup(&node)
+    }
+
     /// Make and return a [`Term::Lit`] with the given literal, and insert into
     /// the DAG if it is not already present.
     pub fn lit(&mut self, lit: Literal) -> Term {
@@ -154,6 +164,13 @@ impl TermDag {
         self.add_node(&node);
 
         node
+    }
+
+    /// Like [`TermDag::lit`], but returns a [`TermId`] instead of a [`Term`].
+    pub fn lit_id(&mut self, lit: Literal) -> TermId {
+        let node = Term::Lit(lit);
+        self.add_node(&node);
+        self.lookup(&node)
     }
 
     /// Make and return a [`Term::Var`] with the given symbol, and insert into
