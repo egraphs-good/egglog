@@ -1420,11 +1420,11 @@ fn test_simple_rule_proof_format() {
     use std::rc::Rc;
     // Setup EGraph with tracing
     let mut egraph = EGraph::with_tracing();
-    // Register Bool type
+    // Register primitive booleans
     let bool_ty = egraph.base_values_mut().register_type::<bool>();
     let true_val = egraph.base_values_mut().get(true);
     let false_val = egraph.base_values_mut().get(false);
-    // Add table for Bool
+    // Add table wrapper for booleans
     let bool_table = egraph.add_table(FunctionConfig {
         schema: vec![ColumnTy::Base(bool_ty), ColumnTy::Id],
         default: DefaultVal::FreshId,
@@ -1440,19 +1440,19 @@ fn test_simple_rule_proof_format() {
         name: "not".into(),
         can_subsume: false,
     });
-    // Add true/false terms
+    // Add true/false wrapped terms
     let true_id = egraph.add_term(bool_table, &[true_val], "true");
     let false_id = egraph.add_term(bool_table, &[false_val], "false");
     // Add not(true) and not(false)
     let not_true_id = egraph.add_term(not_table, &[true_id], "not_true");
     let truec = egraph.base_value_constant(true);
     let falsec = egraph.base_value_constant(false);
-    // Add rules: not-true: not(true) => false, not-false: not(false) => true
+    // Add rules: not-true: (rewrite (not (bool true)) (bool false))
     let not_true_rule = define_rule! {
-        [egraph] ((-> (not_table {truec.clone()}) id)) => ((set (bool_table {falsec.clone()}) id))
+        [egraph] ((-> (not_table (bool_table {truec.clone()})) id)) => ((set (bool_table {falsec.clone()}) id))
     };
     let not_false_rule = define_rule! {
-        [egraph] ((-> (not_table {falsec}) id)) => ((set (bool_table {truec}) id))
+        [egraph] ((-> (not_table (bool_table {falsec})) id)) => ((set (bool_table {truec}) id))
     };
     // Run rules
     egraph.run_rules(&[not_true_rule, not_false_rule]).unwrap();
@@ -1466,6 +1466,7 @@ fn test_simple_rule_proof_format() {
     let true_term = proof_store.termdag.lit_id(Literal::Bool(true));
     let false_term = proof_store.termdag.lit_id(Literal::Bool(false));
     let not_true_term = proof_store.termdag.app_id("not".into(), vec![true_term]);
+
     let actual_str = String::from_utf8(actual).unwrap();
     // Build expected proof
     let expected_pf = EqProof::PRule {
