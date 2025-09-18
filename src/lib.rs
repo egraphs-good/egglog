@@ -1517,6 +1517,15 @@ impl EGraph {
         self.backend.base_values().get::<T>(x)
     }
 
+    /// Convert from an egglog value to a Rust container type.
+    pub fn value_to_container<T: ContainerValue>(&self, x: Value) -> T {
+        self.backend
+            .container_values()
+            .get_val::<T>(x)
+            .unwrap()
+            .clone()
+    }
+
     /// Get the size of a function in the e-graph.
     ///
     /// `panics` if the function does not exist.
