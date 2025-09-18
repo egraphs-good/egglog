@@ -4,6 +4,7 @@ define_id!(pub(crate) Id, u32, "a unique id");
 
 #[test]
 #[should_panic]
+#[allow(arithmetic_overflow)]
 fn id_out_of_bounds() {
     Id::from_usize(u32::MAX as usize + 5);
 }

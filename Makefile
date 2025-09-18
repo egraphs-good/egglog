@@ -8,9 +8,9 @@ WWW=${PWD}/target/www
 all: test nits docs
 
 test:
-	cargo nextest run --release
+	cargo nextest run --workspace --all-features --release
 	# nextest doesn't run doctests, so do it here
-	cargo test --doc --release
+	cargo test --workspace --all-features --doc --release
 
 nits:
 	@rustup component add clippy

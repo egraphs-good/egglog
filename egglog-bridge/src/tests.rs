@@ -14,6 +14,7 @@ use crate::core_relations::{
     ContainerValue, ExternalFunctionId, Rebuilder, Value, make_external_func,
 };
 use crate::numeric_id::NumericId;
+use egglog_ast::generic_ast::Literal;
 use log::debug;
 use num_rational::Rational64;
 
@@ -1428,6 +1429,7 @@ fn primitive_failure_panics() {
 #[test]
 fn test_simple_rule_proof_format() {
     use crate::proof_format::*;
+    use std::rc::Rc;
     // Setup EGraph with tracing
     let mut egraph = EGraph::with_tracing();
     // Register primitive booleans
@@ -1464,13 +1466,36 @@ fn test_simple_rule_proof_format() {
     let not_false_rule = define_rule! {
         [egraph] ((-> (not_table (bool_table {falsec})) id)) => ((set (bool_table {truec}) id))
     };
+    };
     // Run rules
     egraph.run_rules(&[not_true_rule, not_false_rule]).unwrap();
     // Get proof for not_true = false
     let mut proof_store = ProofStore::default();
-    egraph
+    let eq_pf_id = egraph
         .explain_terms_equal(not_true_id, false_id, &mut proof_store)
         .unwrap();
+    let mut actual = Vec::new();
+    proof_store.print_eq_proof(eq_pf_id, &mut actual).unwrap();
+    let true_term = proof_store.termdag.lit_id(Literal::Bool(true));
+    let false_term = proof_store.termdag.lit_id(Literal::Bool(false));
+    let not_true_term = proof_store.termdag.app_id("not".into(), vec![true_term]);
+    let actual_str = String::from_utf8(actual).unwrap();
+    // Build expected proof
+    let expected_pf = EqProof::PRule {
+        rule_name: Rc::from("not-true"),
+        subst: Default::default(),
+        body_pfs: vec![],
+        result_lhs: not_true_term,
+        result_rhs: false_term,
+    };
+    let expected_id = proof_store.intern_eq(&expected_pf);
+    let mut expected = Vec::new();
+    proof_store
+        .print_eq_proof(expected_id, &mut expected)
+        .unwrap();
+    let expected_str = String::from_utf8(expected).unwrap();
+    // Compare pretty-printed outputs
+    assert_eq!(actual_str, expected_str);
 }
 
 const _: () = {
