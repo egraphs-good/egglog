@@ -210,15 +210,17 @@ impl EGraph {
         }
     }
 
+    /// Assuming that a [`bool`], [`BackendFloat`], [`i64`], [`BackendString`], and [`()`] types are registered,
+    /// converts a [`Value`] and its corresponding type [`BaseValueId`] to a [`Literal`].
     pub fn value_to_literal(&self, v: &Value, ty: BaseValueId) -> Literal {
-        if ty == self.base_values().get_ty::<i64>() {
+        if ty == self.base_values().get_ty::<bool>() {
+            Literal::Bool(self.base_values().unwrap::<bool>(*v))
+        } else if ty == self.base_values().get_ty::<i64>() {
             Literal::Int(self.base_values().unwrap::<i64>(*v))
         } else if ty == self.base_values().get_ty::<BackendFloat>() {
             Literal::Float(self.base_values().unwrap::<BackendFloat>(*v).into_inner())
         } else if ty == self.base_values().get_ty::<BackendString>() {
             Literal::String(self.base_values().unwrap::<BackendString>(*v).into_inner())
-        } else if ty == self.base_values().get_ty::<bool>() {
-            Literal::Bool(self.base_values().unwrap::<bool>(*v))
         } else if ty == self.base_values().get_ty::<()>() {
             Literal::Unit
         } else {

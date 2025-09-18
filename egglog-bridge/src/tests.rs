@@ -1466,7 +1466,6 @@ fn test_simple_rule_proof_format() {
     let not_false_rule = define_rule! {
         [egraph] ((-> (not_table (bool_table {falsec})) id)) => ((set (bool_table {truec}) id))
     };
-    };
     // Run rules
     egraph.run_rules(&[not_true_rule, not_false_rule]).unwrap();
     // Get proof for not_true = false
@@ -1479,6 +1478,7 @@ fn test_simple_rule_proof_format() {
     let true_term = proof_store.termdag.lit_id(Literal::Bool(true));
     let false_term = proof_store.termdag.lit_id(Literal::Bool(false));
     let not_true_term = proof_store.termdag.app_id("not".into(), vec![true_term]);
+
     let actual_str = String::from_utf8(actual).unwrap();
     // Build expected proof
     let expected_pf = EqProof::PRule {
