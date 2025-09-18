@@ -21,6 +21,8 @@ pub enum GenericExpr<Head, Leaf> {
     Lit(Span, Literal),
 }
 
+pub type Expr = GenericExpr<String, String>;
+
 /// Facts are the left-hand side of a [`Command::Rule`].
 /// They represent a part of a database query.
 /// Facts can be expressions or equality constraints between expressions.

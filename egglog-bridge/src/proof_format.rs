@@ -4,13 +4,14 @@ use std::{hash::Hash, io, rc::Rc};
 
 use crate::core_relations::Value;
 use crate::numeric_id::{DenseIdMap, NumericId, define_id};
+use crate::termdag::{PrettyPrintConfig, PrettyPrinter, TermDag, TermId};
 use indexmap::IndexSet;
 
 use crate::{FunctionId, rule::Variable};
 
 define_id!(pub TermProofId, u32, "an id identifying proofs of terms within a [`ProofStore`]");
 define_id!(pub EqProofId, u32, "an id identifying proofs of equality between two terms within a [`ProofStore`]");
-define_id!(pub TermId, u32, "an id identifying terms within a [`TermDag`]");
+define_id!(pub OldTermId, u32, "an id identifying terms within a [`TermDag`]");
 
 #[derive(Clone, Debug)]
 struct HashCons<K, T> {
@@ -44,20 +45,20 @@ impl<K: NumericId, T: Clone + Eq + Hash> HashCons<K, T> {
 }
 
 #[derive(Default, Clone)]
-pub struct TermDag {
-    store: HashCons<TermId, Term>,
+pub struct OldTermDag {
+    store: HashCons<OldTermId, OldTerm>,
 }
 
-impl TermDag {
+impl OldTermDag {
     /// Print the term in a human-readable format to the given writer.
-    pub fn print_term(&self, term: TermId, writer: &mut impl io::Write) -> io::Result<()> {
+    pub fn print_term(&self, term: OldTermId, writer: &mut impl io::Write) -> io::Result<()> {
         self.print_term_pretty(term, &PrettyPrintConfig::default(), writer)
     }
 
     /// Print the term with pretty-printing configuration.
     pub fn print_term_pretty(
         &self,
-        term: TermId,
+        term: OldTermId,
         config: &PrettyPrintConfig,
         writer: &mut impl io::Write,
     ) -> io::Result<()> {
@@ -67,19 +68,19 @@ impl TermDag {
 
     fn print_term_with_printer<W: io::Write>(
         &self,
-        term: TermId,
+        term: OldTermId,
         printer: &mut PrettyPrinter<W>,
     ) -> io::Result<()> {
         let term = self.store.lookup(term).unwrap();
         match term {
-            Term::Constant { id, rendered } => {
+            OldTerm::Constant { id, rendered } => {
                 if let Some(rendered) = rendered {
                     printer.write_str(rendered)?;
                 } else {
                     printer.write_str(&format!("c{}", id.index()))?;
                 }
             }
-            Term::Func { id, args } => {
+            OldTerm::Func { id, args } => {
                 printer.write_str(&format!("({id:?}"))?;
                 if !args.is_empty() {
                     printer.increase_indent();
@@ -101,34 +102,20 @@ impl TermDag {
     /// Add the given [`Term`] to the store, returning its [`TermId`].
     ///
     /// The [`TermId`]s in this term should point into this same [`TermDag`].
-    pub fn get_or_insert(&mut self, term: &Term) -> TermId {
+    pub fn get_or_insert(&mut self, term: &OldTerm) -> OldTermId {
         self.store.get_or_insert(term)
-    }
-
-    pub(crate) fn proj(&self, term: TermId, arg_idx: usize) -> TermId {
-        let term = self.store.lookup(term).unwrap();
-        match term {
-            Term::Func { args, .. } => {
-                if arg_idx < args.len() {
-                    args[arg_idx]
-                } else {
-                    panic!("Index out of bounds for function arguments")
-                }
-            }
-            _ => panic!("Cannot project a non-function term"),
-        }
     }
 }
 
 #[derive(Clone, PartialEq, Eq, Hash, Debug)]
-pub enum Term {
+pub enum OldTerm {
     Constant {
         id: Value,
         rendered: Option<Rc<str>>,
     },
     Func {
         id: FunctionId,
-        args: Vec<TermId>,
+        args: Vec<OldTermId>,
     },
 }
 
@@ -176,9 +163,11 @@ impl ProofStore {
             func,
         } = cong_pf;
         printer.write_str(&format!("Cong({func:?}, "))?;
-        self.termdag.print_term_with_printer(*old_term, printer)?;
+        self.termdag
+            .print_term_with_printer(self.termdag.get(*old_term), printer)?;
         printer.write_str(" => ")?;
-        self.termdag.print_term_with_printer(*new_term, printer)?;
+        self.termdag
+            .print_term_with_printer(self.termdag.get(*new_term), printer)?;
         printer.write_str(" by (")?;
         printer.increase_indent();
         for (i, pf) in pf_args_eq.iter().enumerate() {
@@ -226,7 +215,8 @@ impl ProofStore {
                     }
                     printer.write_with_break(" ")?;
                     printer.write_str(&format!("{var:?} => "))?;
-                    self.termdag.print_term_with_printer(*term, printer)?;
+                    self.termdag
+                        .print_term_with_printer(self.termdag.get(*term), printer)?;
                     printer.newline()?;
                 }
                 printer.newline()?;
@@ -256,9 +246,11 @@ impl ProofStore {
                 printer.write_with_break("], ")?;
                 printer.newline()?;
                 printer.write_with_break(" Result: ")?;
-                self.termdag.print_term_with_printer(*result_lhs, printer)?;
+                self.termdag
+                    .print_term_with_printer(self.termdag.get(*result_lhs), printer)?;
                 printer.write_str(" = ")?;
-                self.termdag.print_term_with_printer(*result_rhs, printer)?;
+                self.termdag
+                    .print_term_with_printer(self.termdag.get(*result_rhs), printer)?;
                 printer.write_str(")")?;
                 printer.decrease_indent();
             }
@@ -266,7 +258,8 @@ impl ProofStore {
                 printer.write_str("PRefl(")?;
                 self.print_term_proof_with_printer(*t_ok_pf, printer)?;
                 printer.write_str(", (term= ")?;
-                self.termdag.print_term_with_printer(*t, printer)?;
+                self.termdag
+                    .print_term_with_printer(self.termdag.get(*t), printer)?;
                 printer.write_str("))")?
             }
             EqProof::PSym { eq_pf } => {
@@ -331,7 +324,8 @@ impl ProofStore {
                     }
                     printer.write_with_break(" ")?;
                     printer.write_str(&format!("{var:?} => "))?;
-                    self.termdag.print_term_with_printer(*term, printer)?;
+                    self.termdag
+                        .print_term_with_printer(self.termdag.get(*term), printer)?;
                     printer.newline()?;
                 }
                 printer.newline()?;
@@ -359,7 +353,8 @@ impl ProofStore {
                 }
                 printer.decrease_indent();
                 printer.write_with_break("], Result: ")?;
-                self.termdag.print_term_with_printer(*result, printer)?;
+                self.termdag
+                    .print_term_with_printer(self.termdag.get(*result), printer)?;
                 printer.write_str(")")
             }
             TermProof::PProj {
@@ -378,7 +373,8 @@ impl ProofStore {
             TermProof::PFiat { desc, term } => {
                 printer.write_str(&format!("PFiat({desc:?}"))?;
                 printer.write_str(", ")?;
-                self.termdag.print_term_with_printer(*term, printer)?;
+                self.termdag
+                    .print_term_with_printer(self.termdag.get(*term), printer)?;
                 printer.write_str(")")
             }
         }
@@ -491,78 +487,4 @@ pub enum EqProof {
     /// A proof via congruence- one proof for each child of the term
     /// pf_f_args_ok is a proof that the term with the lhs children is valid
     PCong(CongProof),
-}
-
-#[derive(Clone, Debug)]
-pub struct PrettyPrintConfig {
-    pub line_width: usize,
-    pub indent_size: usize,
-}
-
-impl Default for PrettyPrintConfig {
-    fn default() -> Self {
-        Self {
-            line_width: 512,
-            indent_size: 4,
-        }
-    }
-}
-
-struct PrettyPrinter<'w, W: io::Write> {
-    writer: &'w mut W,
-    config: &'w PrettyPrintConfig,
-    current_indent: usize,
-    current_line_pos: usize,
-}
-
-impl<'w, W: io::Write> PrettyPrinter<'w, W> {
-    fn new(writer: &'w mut W, config: &'w PrettyPrintConfig) -> Self {
-        Self {
-            writer,
-            config,
-            current_indent: 0,
-            current_line_pos: 0,
-        }
-    }
-
-    fn write_str(&mut self, s: &str) -> io::Result<()> {
-        write!(self.writer, "{s}")?;
-        self.current_line_pos += s.len();
-        Ok(())
-    }
-
-    fn newline(&mut self) -> io::Result<()> {
-        writeln!(self.writer)?;
-        self.current_line_pos = 0;
-        self.write_indent()?;
-        Ok(())
-    }
-
-    fn write_indent(&mut self) -> io::Result<()> {
-        for _ in 0..self.current_indent {
-            write!(self.writer, " ")?;
-        }
-        self.current_line_pos = self.current_indent;
-        Ok(())
-    }
-
-    fn increase_indent(&mut self) {
-        self.current_indent += self.config.indent_size;
-    }
-
-    fn decrease_indent(&mut self) {
-        self.current_indent = self.current_indent.saturating_sub(self.config.indent_size);
-    }
-
-    fn should_break(&self, additional_chars: usize) -> bool {
-        self.current_line_pos + additional_chars > self.config.line_width
-    }
-
-    fn write_with_break(&mut self, s: &str) -> io::Result<()> {
-        if self.should_break(s.len()) && self.current_line_pos > self.current_indent {
-            self.newline()?;
-            self.write_indent()?;
-        }
-        self.write_str(s)
-    }
 }

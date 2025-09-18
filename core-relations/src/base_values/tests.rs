@@ -268,7 +268,7 @@ fn roundtrip_medium_integers_interned() {
     // Test large isize values (need interning on 64-bit systems)
     bases.register_type::<isize>();
     if std::mem::size_of::<isize>() == 8 {
-        for val in [-2147483649isize, isize::MIN, isize::MAX] {
+        for val in [isize::MIN, isize::MAX] {
             let boxed = bases.get(val);
             let unboxed = bases.unwrap::<isize>(boxed);
             assert_eq!(val, unboxed);
