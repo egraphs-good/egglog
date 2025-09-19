@@ -54,6 +54,7 @@ use std::fs::File;
 use std::hash::Hash;
 use std::io::{Read, Write as _};
 use std::iter::once;
+use std::ops::Deref;
 use std::path::PathBuf;
 use std::str::FromStr;
 use std::sync::Arc;
@@ -1518,12 +1519,8 @@ impl EGraph {
     }
 
     /// Convert from an egglog value to a Rust container type.
-    pub fn value_to_container<T: ContainerValue>(&self, x: Value) -> T {
-        self.backend
-            .container_values()
-            .get_val::<T>(x)
-            .unwrap()
-            .clone()
+    pub fn value_to_container<T: ContainerValue>(&self, x: Value) -> impl Deref<Target = T> {
+        self.backend.container_values().get_val::<T>(x).unwrap()
     }
 
     /// Get the size of a function in the e-graph.
