@@ -34,9 +34,10 @@ jobs:
           tool: cargo-codspeed
       - uses: Swatinem/rust-cache@v2
       - run: cargo codspeed build
-      - uses: CodSpeedHQ/action@v3
+      - uses: CodSpeedHQ/action@v4
         with:
           run: cargo codspeed run
+          mode: "instrumentation"
   wasm:
     runs-on: ubuntu-latest
     steps:
