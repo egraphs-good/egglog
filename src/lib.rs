@@ -57,6 +57,7 @@ use std::fs::File;
 use std::hash::Hash;
 use std::io::{Read, Write as _};
 use std::iter::once;
+use std::ops::Deref;
 use std::path::PathBuf;
 use std::str::FromStr;
 use std::sync::Arc;
@@ -1517,6 +1518,19 @@ impl EGraph {
     /// Convert from a Rust type to an egglog value.
     pub fn base_to_value<T: BaseValue>(&self, x: T) -> Value {
         self.backend.base_values().get::<T>(x)
+    }
+
+    /// Convert from an egglog value to a reference of a Rust container type.
+    ///
+    /// Returns `None` if the value cannot be converted to the requested container type.
+    ///
+    /// Warning: The return type of this function may contain lock guards.
+    /// Attempts to modify the contents of the containers database may deadlock if the given guard has not been dropped.
+    pub fn value_to_container<T: ContainerValue>(
+        &self,
+        x: Value,
+    ) -> Option<impl Deref<Target = T>> {
+        self.backend.container_values().get_val::<T>(x)
     }
 
     /// Get the size of a function in the e-graph.
