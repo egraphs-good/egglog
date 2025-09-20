@@ -1518,7 +1518,9 @@ impl EGraph {
         self.backend.base_values().get::<T>(x)
     }
 
-    /// Convert from an egglog value to a Rust container type.
+    /// Convert from an egglog value to a reference of a Rust container type.
+    ///
+    /// Warning: return type contains a read guard, don't leak this guard or will get stuck when `rebuild`
     pub fn value_to_container<T: ContainerValue>(&self, x: Value) -> impl Deref<Target = T> {
         self.backend.container_values().get_val::<T>(x).unwrap()
     }
