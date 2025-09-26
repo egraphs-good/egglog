@@ -1448,6 +1448,7 @@ fn test_simple_rule_proof_format() {
     let false_id = egraph.add_term(bool_table, &[false_val], "false");
     // Add not(true) and not(false)
     let not_true_id = egraph.add_term(not_table, &[true_id], "not_true");
+    // let not_false_id = egraph.add_term(not_table, &[false_id], "not_false");
     let truec = egraph.base_value_constant(true);
     let falsec = egraph.base_value_constant(false);
     // Add rules: not-true: (rewrite (not (bool true)) (bool false))

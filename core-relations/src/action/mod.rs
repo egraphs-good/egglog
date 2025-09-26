@@ -96,7 +96,6 @@ impl From<Value> for MergeVal {
 ///
 /// The intent of bindings is to store a sequence of mappings from [`Variable`] to [`Value`], in a
 /// struct-of-arrays style that is better laid out for processing bindings in batches.
-#[derive(Debug)]
 pub(crate) struct Bindings {
     matches: usize,
     /// The maximum number of calls to `push` that we can receive before we clear the
@@ -106,6 +105,16 @@ pub(crate) struct Bindings {
     data: Pooled<Vec<Value>>,
     /// Points into `data`. data[vars[var].. vars[var]+matches]` contains the values for `data`.
     var_offsets: DenseIdMap<Variable, usize>,
+}
+
+impl std::fmt::Debug for Bindings {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        let mut table = f.debug_map();
+        for (var, start) in self.var_offsets.iter() {
+            table.entry(&var, &&self.data[*start..*start + self.matches]);
+        }
+        table.finish()
+    }
 }
 
 impl std::ops::Index<Variable> for Bindings {
