@@ -6,6 +6,7 @@ use std::{
 };
 
 use crate::numeric_id::{DenseIdMap, IdVec, NumericId};
+use dashmap::mapref::one::RefMut;
 use smallvec::SmallVec;
 use web_time::Instant;
 
@@ -180,13 +181,11 @@ impl Database {
                                 Default::default(),
                             ));
                         }
-                        rule_reports.insert(
-                            desc.clone(),
-                            RuleReport {
-                                search_and_apply_time,
-                                num_matches: 0,
-                            },
-                        );
+                        let mut rule_report: RefMut<'_, String, RuleReport> = rule_reports.entry(desc.clone()).or_default();
+                        *rule_report = rule_report.union(&RuleReport {
+                            search_and_apply_time,
+                            num_matches: 0,
+                        });
                     });
                 }
             });
@@ -210,13 +209,11 @@ impl Database {
                 join_state.run_header(plan, &mut binding_info, &mut action_buf);
                 let search_and_apply_time = search_and_apply_timer.elapsed();
 
-                rule_reports.insert(
-                    desc.clone(),
-                    RuleReport {
-                        search_and_apply_time,
-                        num_matches: 0,
-                    },
-                );
+                let mut rule_report = rule_reports.entry(desc.clone()).or_default();
+                *rule_report = rule_report.union(&RuleReport {
+                    search_and_apply_time,
+                    num_matches: 0,
+                });
             }
             action_buf.flush(&mut ExecutionState::new(
                 &preds,
@@ -227,7 +224,7 @@ impl Database {
         for (_plan, desc, action) in rule_set.plans.values() {
             let mut reservation = rule_reports.get_mut(desc).unwrap();
             let RuleReport { num_matches, .. } = reservation.value_mut();
-            *num_matches = match_counter.read_matches(*action);
+            *num_matches += match_counter.read_matches(*action);
         }
         let search_and_apply_time = search_and_apply_timer.elapsed();
 
