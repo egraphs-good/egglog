@@ -181,7 +181,8 @@ impl Database {
                                 Default::default(),
                             ));
                         }
-                        let mut rule_report: RefMut<'_, String, RuleReport> = rule_reports.entry(desc.clone()).or_default();
+                        let mut rule_report: RefMut<'_, String, RuleReport> =
+                            rule_reports.entry(desc.clone()).or_default();
                         *rule_report = rule_report.union(&RuleReport {
                             search_and_apply_time,
                             num_matches: 0,
@@ -440,6 +441,11 @@ impl<'a> JoinState<'a> {
             cur.subset
                 .intersect(subset.as_ref(), &with_pool_set(|ps| ps.get_pool()));
             binding_info.move_back_node(*atom, cur);
+        }
+        for (_, node) in binding_info.subsets.iter() {
+            if node.subset.is_empty() {
+                return;
+            }
         }
         let mut order = InstrOrder::from_iter(0..plan.stages.instrs.len());
         sort_plan_by_size(&mut order, 0, &plan.stages.instrs, binding_info);
@@ -1125,28 +1131,24 @@ impl MatchCounter {
 }
 
 fn estimate_size(join_stage: &JoinStage, binding_info: &BindingInfo) -> usize {
-    join_stage_order_key(join_stage, binding_info).0
+    match join_stage {
+        JoinStage::Intersect { scans, .. } => scans
+            .iter()
+            .map(|scan| binding_info.subsets[scan.atom].size())
+            .min()
+            .unwrap_or(0),
+        JoinStage::FusedIntersect { cover, .. } => binding_info.subsets[cover.to_index.atom].size(),
+    }
 }
 
-fn join_stage_order_key(join_stage: &JoinStage, binding_info: &BindingInfo) -> (usize, i32) {
-    // Sort increasing by size of scan, decreasing by number of intersections.
+fn num_intersected_rels(join_stage: &JoinStage) -> i32 {
     match join_stage {
-        JoinStage::Intersect { scans, .. } => (
-            scans
-                .iter()
-                .map(|scan| binding_info.subsets[scan.atom].size())
-                .min()
-                .unwrap_or(0),
-            -(scans.len() as i32),
-        ),
-        JoinStage::FusedIntersect {
-            cover,
-            to_intersect,
-            ..
-        } => (
-            binding_info.subsets[cover.to_index.atom].size(),
-            -(to_intersect.len() as i32),
-        ),
+        JoinStage::Intersect { scans, .. } => scans.len() as i32,
+        JoinStage::FusedIntersect { .. } => {
+            // TODO: currently to_intersect is always empty. FusedIntersect in basically
+            // a multi-column scan.
+            1
+        }
     }
 }
 
@@ -1156,8 +1158,56 @@ fn sort_plan_by_size(
     instrs: &[JoinStage],
     binding_info: &mut BindingInfo,
 ) {
-    order.data[start..]
-        .sort_by_key(|index| join_stage_order_key(&instrs[*index as usize], binding_info));
+    let mut times_refined = with_pool_set(|ps| ps.get::<DenseIdMap<AtomId, i64>>());
+    for ins in instrs[..start].iter() {
+        match ins {
+            JoinStage::Intersect { scans, .. } => scans.iter().for_each(|scan| {
+                *times_refined.get_or_default(scan.atom) += 1;
+            }),
+            JoinStage::FusedIntersect { cover, .. } => {
+                *times_refined.get_or_default(cover.to_index.atom) +=
+                    cover.to_index.vars.len() as i64;
+            }
+        }
+    }
+    let key_fn = |join_stage: &JoinStage,
+                  binding_info: &BindingInfo,
+                  times_refined: &DenseIdMap<AtomId, i64>| {
+        let refine = match join_stage {
+            JoinStage::Intersect { scans, .. } => scans
+                .iter()
+                .map(|scan| times_refined.get(scan.atom).copied().unwrap_or_default())
+                .sum::<i64>(),
+            JoinStage::FusedIntersect { cover, .. } => times_refined
+                .get(cover.to_index.atom)
+                .copied()
+                .unwrap_or_default(),
+        };
+        (
+            -refine,
+            -num_intersected_rels(join_stage),
+            estimate_size(join_stage, binding_info),
+        )
+    };
+
+    for i in start..order.len() {
+        for j in i + 1..order.len() {
+            let key_i = key_fn(&instrs[order.get(i)], binding_info, &times_refined);
+            let key_j = key_fn(&instrs[order.get(j)], binding_info, &times_refined);
+            if key_j < key_i {
+                order.data.swap(i, j);
+            }
+        }
+        match &instrs[order.get(i)] {
+            JoinStage::Intersect { scans, .. } => scans.iter().for_each(|scan| {
+                *times_refined.get_or_default(scan.atom) += 1;
+            }),
+            JoinStage::FusedIntersect { cover, .. } => {
+                *times_refined.get_or_default(cover.to_index.atom) +=
+                    cover.to_index.vars.len() as i64;
+            }
+        }
+    }
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
