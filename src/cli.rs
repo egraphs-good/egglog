@@ -95,6 +95,16 @@ pub fn cli(mut egraph: EGraph) {
                 _ => std::process::exit(1),
             }
 
+            println!("START");
+            serde_json::to_writer_pretty(
+                std::io::BufWriter::new(
+                    std::fs::File::create("egraph.json").expect("failed to create file"),
+                ),
+                &egraph,
+            )
+            .expect("failed to write");
+            println!("END");
+
             if args.to_json || args.to_dot || args.to_svg {
                 let serialized_output = egraph.serialize(SerializeConfig {
                     max_functions: Some(args.max_functions),

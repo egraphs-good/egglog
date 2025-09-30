@@ -24,7 +24,7 @@ readme = "README.md"
 clap = "4"
 egraph-serialize = { git = "https://github.com/egraphs-good/egraph-serialize.git", branch = "main", default-features = false }
 env_logger = "0.11"
-hashbrown = "0.16"
+hashbrown = {version = "0.16", features = ["serde"] }
 im-rc = "15.1.0"
 indexmap = "2.2"
 lazy_static = "1.4"
@@ -144,6 +144,9 @@ egglog-ast = { workspace = true }
 egglog-bridge = { workspace = true }
 egglog-numeric-id = { workspace = true }
 egglog-add-primitive = { workspace = true }
+serde = { version = "1.0", features = ["derive"] }
+typetag = "0.2"
+serde_json = "1.0"
 
 [build-dependencies]
 chrono = { workspace = true, features = ["now"], optional = true }

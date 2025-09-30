@@ -50,6 +50,7 @@ use log::{Level, log_enabled};
 use numeric_id::DenseIdMap;
 use prelude::*;
 use scheduler::{SchedulerId, SchedulerRecord};
+use serde::{Deserialize, Serialize};
 pub use serialize::{SerializeConfig, SerializeOutput, SerializedNode};
 use sort::*;
 use std::fmt::{Debug, Display, Formatter};
@@ -311,22 +312,37 @@ impl std::fmt::Display for CommandOutput {
 /// let mut egraph = EGraph::default();
 /// egraph.parse_and_run_program(None, "(datatype Math (Num i64) (Add Math Math))").unwrap();
 /// ```
-#[derive(Clone)]
+#[derive(Clone, Serialize, Deserialize)]
 pub struct EGraph {
+    #[serde(skip)]
     backend: egglog_bridge::EGraph,
+
+    #[serde(skip)]
     pub parser: Parser,
+
+    #[serde(skip)]
     names: check_shadowing::Names,
     /// pushed_egraph forms a linked list of pushed egraphs.
     /// Pop reverts the egraph to the last pushed egraph.
     pushed_egraph: Option<Box<Self>>,
+
+    #[serde(skip)]
     functions: IndexMap<String, Function>,
+
+    #[serde(skip)]
     rulesets: IndexMap<String, Ruleset>,
     pub fact_directory: Option<PathBuf>,
     pub seminaive: bool,
+
+    #[serde(skip)]
     type_info: TypeInfo,
     /// The run report unioned over all runs so far.
+
+    #[serde(skip)]
     overall_run_report: RunReport,
+
     schedulers: DenseIdMap<SchedulerId, SchedulerRecord>,
+
     commands: IndexMap<String, Arc<dyn UserDefinedCommand>>,
 }
 
@@ -335,6 +351,7 @@ pub struct EGraph {
 ///
 /// Compared to an external function, a user-defined command is more powerful because
 /// it has an exclusive access to the e-graph.
+#[typetag::serde]
 pub trait UserDefinedCommand: Send + Sync {
     /// Run the command with the given arguments.
     fn update(&self, egraph: &mut EGraph, args: &[Expr]) -> Result<Option<CommandOutput>, Error>;

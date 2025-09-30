@@ -45,7 +45,7 @@ impl NumericId for usize {
 ///
 /// This mapping is _dense_: it stores a flat array indexed by `K::index()`,
 /// with no hashing. For sparse mappings, use a HashMap.
-#[derive(Clone, PartialEq, Eq, Hash)]
+#[derive(Clone, PartialEq, Eq, Hash, Serialize, Deserialize)]
 pub struct DenseIdMap<K, V> {
     data: Vec<Option<V>>,
     _marker: PhantomData<K>,
@@ -408,6 +408,7 @@ impl<K: NumericId, V> ops::IndexMut<K> for IdVec<K, V> {
 use rayon::iter::{
     IndexedParallelIterator, IntoParallelRefIterator, IntoParallelRefMutIterator, ParallelIterator,
 };
+use serde::{Deserialize, Serialize};
 
 #[macro_export]
 #[doc(hidden)]

@@ -1,0 +1,10 @@
+{
+  "pushed_egraph": null,
+  "fact_directory": null,
+  "seminaive": true,
+  "schedulers": {
+    "data": [],
+    "_marker": null
+  },
+  "commands": {}
+}

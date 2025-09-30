@@ -11,6 +11,9 @@ readme = { workspace = true }
 [dependencies]
 lazy_static = { workspace = true }
 rayon = { workspace = true }
+serde = { version = "1.0", features = ["derive"] }
+typetag = "0.2"
+serde_json = "1.0"
 
 [features]
 default = []
