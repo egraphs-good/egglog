@@ -2,10 +2,11 @@ use std::fmt::Display;
 use std::hash::Hash;
 
 use ordered_float::OrderedFloat;
+use serde::Serialize;
 
 use crate::span::Span;
 
-#[derive(Debug, PartialEq, Eq, PartialOrd, Ord, Hash, Clone)]
+#[derive(Debug, PartialEq, Eq, PartialOrd, Ord, Hash, Clone, Serialize)]
 pub enum Literal {
     Int(i64),
     Float(OrderedFloat<f64>),
@@ -96,7 +97,7 @@ where
 }
 
 /// Change a function entry.
-#[derive(Clone, Debug, Copy, PartialEq, Eq, Hash)]
+#[derive(Clone, Debug, Copy, PartialEq, Eq, Hash, Serialize)]
 pub enum Change {
     /// `delete` this entry from a function.
     /// Be wary! Only delete entries that are guaranteed to be not useful.

@@ -1,5 +1,668 @@
 {
   "pushed_egraph": null,
+  "rulesets": {
+    "": {
+      "Rules": {}
+    },
+    "step-left": {
+      "Rules": {
+        "(rule ((left x)\n       (right x))\n      ((left (+ x 1)))\n        :ruleset step-left )": [
+          {
+            "span": {
+              "Egglog": {
+                "file": {
+                  "name": "tests/web-demo/schedule-demo.egg",
+                  "contents": "; Step with alternating feet, left before right\n(relation left (i64))\n(relation right (i64))\n\n(left 0)\n(right 0)\n\n(ruleset step-left)\n(rule ((left x) (right x))\n      ((left (+ x 1)))\n      :ruleset step-left)\n\n(ruleset step-right)\n(rule ((left x) (right y) (= x (+ y 1)))\n      ((right x))\n      :ruleset step-right)\n\n(run-schedule\n      (repeat 10\n            (saturate step-right)\n            (saturate step-left)))\n\n; We took 10 steps with the left, but the right couldn't go the first round,\n; so we took only 9 steps with the right.\n(check (left 10))\n(check (right 9))\n(fail (check (left 11)))\n(fail (check (right 10)))\n"
+                },
+                "i": 134,
+                "j": 209
+              }
+            },
+            "body": {
+              "atoms": [
+                {
+                  "span": {
+                    "Egglog": {
+                      "file": {
+                        "name": "tests/web-demo/schedule-demo.egg",
+                        "contents": "; Step with alternating feet, left before right\n(relation left (i64))\n(relation right (i64))\n\n(left 0)\n(right 0)\n\n(ruleset step-left)\n(rule ((left x) (right x))\n      ((left (+ x 1)))\n      :ruleset step-left)\n\n(ruleset step-right)\n(rule ((left x) (right y) (= x (+ y 1)))\n      ((right x))\n      :ruleset step-right)\n\n(run-schedule\n      (repeat 10\n            (saturate step-right)\n            (saturate step-left)))\n\n; We took 10 steps with the left, but the right couldn't go the first round,\n; so we took only 9 steps with the right.\n(check (left 10))\n(check (right 9))\n(fail (check (left 11)))\n(fail (check (right 10)))\n"
+                      },
+                      "i": 141,
+                      "j": 149
+                    }
+                  },
+                  "head": {
+                    "Func": {
+                      "name": "left",
+                      "subtype": "Relation",
+                      "input": [
+                        {
+                          "BaseSortImpl": null
+                        }
+                      ],
+                      "output": {
+                        "BaseSortImpl": null
+                      }
+                    }
+                  },
+                  "args": [
+                    {
+                      "Var": [
+                        {
+                          "Egglog": {
+                            "file": {
+                              "name": "tests/web-demo/schedule-demo.egg",
+                              "contents": "; Step with alternating feet, left before right\n(relation left (i64))\n(relation right (i64))\n\n(left 0)\n(right 0)\n\n(ruleset step-left)\n(rule ((left x) (right x))\n      ((left (+ x 1)))\n      :ruleset step-left)\n\n(ruleset step-right)\n(rule ((left x) (right y) (= x (+ y 1)))\n      ((right x))\n      :ruleset step-right)\n\n(run-schedule\n      (repeat 10\n            (saturate step-right)\n            (saturate step-left)))\n\n; We took 10 steps with the left, but the right couldn't go the first round,\n; so we took only 9 steps with the right.\n(check (left 10))\n(check (right 9))\n(fail (check (left 11)))\n(fail (check (right 10)))\n"
+                            },
+                            "i": 147,
+                            "j": 148
+                          }
+                        },
+                        {
+                          "name": "x",
+                          "sort": {
+                            "BaseSortImpl": null
+                          },
+                          "is_global_ref": false
+                        }
+                      ]
+                    },
+                    {
+                      "Var": [
+                        {
+                          "Egglog": {
+                            "file": {
+                              "name": "tests/web-demo/schedule-demo.egg",
+                              "contents": "; Step with alternating feet, left before right\n(relation left (i64))\n(relation right (i64))\n\n(left 0)\n(right 0)\n\n(ruleset step-left)\n(rule ((left x) (right x))\n      ((left (+ x 1)))\n      :ruleset step-left)\n\n(ruleset step-right)\n(rule ((left x) (right y) (= x (+ y 1)))\n      ((right x))\n      :ruleset step-right)\n\n(run-schedule\n      (repeat 10\n            (saturate step-right)\n            (saturate step-left)))\n\n; We took 10 steps with the left, but the right couldn't go the first round,\n; so we took only 9 steps with the right.\n(check (left 10))\n(check (right 9))\n(fail (check (left 11)))\n(fail (check (right 10)))\n"
+                            },
+                            "i": 141,
+                            "j": 149
+                          }
+                        },
+                        {
+                          "name": "$left8",
+                          "sort": {
+                            "BaseSortImpl": null
+                          },
+                          "is_global_ref": false
+                        }
+                      ]
+                    }
+                  ]
+                },
+                {
+                  "span": {
+                    "Egglog": {
+                      "file": {
+                        "name": "tests/web-demo/schedule-demo.egg",
+                        "contents": "; Step with alternating feet, left before right\n(relation left (i64))\n(relation right (i64))\n\n(left 0)\n(right 0)\n\n(ruleset step-left)\n(rule ((left x) (right x))\n      ((left (+ x 1)))\n      :ruleset step-left)\n\n(ruleset step-right)\n(rule ((left x) (right y) (= x (+ y 1)))\n      ((right x))\n      :ruleset step-right)\n\n(run-schedule\n      (repeat 10\n            (saturate step-right)\n            (saturate step-left)))\n\n; We took 10 steps with the left, but the right couldn't go the first round,\n; so we took only 9 steps with the right.\n(check (left 10))\n(check (right 9))\n(fail (check (left 11)))\n(fail (check (right 10)))\n"
+                      },
+                      "i": 150,
+                      "j": 159
+                    }
+                  },
+                  "head": {
+                    "Func": {
+                      "name": "right",
+                      "subtype": "Relation",
+                      "input": [
+                        {
+                          "BaseSortImpl": null
+                        }
+                      ],
+                      "output": {
+                        "BaseSortImpl": null
+                      }
+                    }
+                  },
+                  "args": [
+                    {
+                      "Var": [
+                        {
+                          "Egglog": {
+                            "file": {
+                              "name": "tests/web-demo/schedule-demo.egg",
+                              "contents": "; Step with alternating feet, left before right\n(relation left (i64))\n(relation right (i64))\n\n(left 0)\n(right 0)\n\n(ruleset step-left)\n(rule ((left x) (right x))\n      ((left (+ x 1)))\n      :ruleset step-left)\n\n(ruleset step-right)\n(rule ((left x) (right y) (= x (+ y 1)))\n      ((right x))\n      :ruleset step-right)\n\n(run-schedule\n      (repeat 10\n            (saturate step-right)\n            (saturate step-left)))\n\n; We took 10 steps with the left, but the right couldn't go the first round,\n; so we took only 9 steps with the right.\n(check (left 10))\n(check (right 9))\n(fail (check (left 11)))\n(fail (check (right 10)))\n"
+                            },
+                            "i": 157,
+                            "j": 158
+                          }
+                        },
+                        {
+                          "name": "x",
+                          "sort": {
+                            "BaseSortImpl": null
+                          },
+                          "is_global_ref": false
+                        }
+                      ]
+                    },
+                    {
+                      "Var": [
+                        {
+                          "Egglog": {
+                            "file": {
+                              "name": "tests/web-demo/schedule-demo.egg",
+                              "contents": "; Step with alternating feet, left before right\n(relation left (i64))\n(relation right (i64))\n\n(left 0)\n(right 0)\n\n(ruleset step-left)\n(rule ((left x) (right x))\n      ((left (+ x 1)))\n      :ruleset step-left)\n\n(ruleset step-right)\n(rule ((left x) (right y) (= x (+ y 1)))\n      ((right x))\n      :ruleset step-right)\n\n(run-schedule\n      (repeat 10\n            (saturate step-right)\n            (saturate step-left)))\n\n; We took 10 steps with the left, but the right couldn't go the first round,\n; so we took only 9 steps with the right.\n(check (left 10))\n(check (right 9))\n(fail (check (left 11)))\n(fail (check (right 10)))\n"
+                            },
+                            "i": 150,
+                            "j": 159
+                          }
+                        },
+                        {
+                          "name": "$right9",
+                          "sort": {
+                            "BaseSortImpl": null
+                          },
+                          "is_global_ref": false
+                        }
+                      ]
+                    }
+                  ]
+                }
+              ]
+            },
+            "head": [
+              {
+                "Let": [
+                  {
+                    "Egglog": {
+                      "file": {
+                        "name": "tests/web-demo/schedule-demo.egg",
+                        "contents": "; Step with alternating feet, left before right\n(relation left (i64))\n(relation right (i64))\n\n(left 0)\n(right 0)\n\n(ruleset step-left)\n(rule ((left x) (right x))\n      ((left (+ x 1)))\n      :ruleset step-left)\n\n(ruleset step-right)\n(rule ((left x) (right y) (= x (+ y 1)))\n      ((right x))\n      :ruleset step-right)\n\n(run-schedule\n      (repeat 10\n            (saturate step-right)\n            (saturate step-left)))\n\n; We took 10 steps with the left, but the right couldn't go the first round,\n; so we took only 9 steps with the right.\n(check (left 10))\n(check (right 9))\n(fail (check (left 11)))\n(fail (check (right 10)))\n"
+                      },
+                      "i": 174,
+                      "j": 181
+                    }
+                  },
+                  {
+                    "name": "$+10",
+                    "sort": {
+                      "BaseSortImpl": null
+                    },
+                    "is_global_ref": false
+                  },
+                  {
+                    "Primitive": {
+                      "primitive": {
+                        "id": 7
+                      },
+                      "input": [
+                        {
+                          "BaseSortImpl": null
+                        },
+                        {
+                          "BaseSortImpl": null
+                        }
+                      ],
+                      "output": {
+                        "BaseSortImpl": null
+                      }
+                    }
+                  },
+                  [
+                    {
+                      "Var": [
+                        {
+                          "Egglog": {
+                            "file": {
+                              "name": "tests/web-demo/schedule-demo.egg",
+                              "contents": "; Step with alternating feet, left before right\n(relation left (i64))\n(relation right (i64))\n\n(left 0)\n(right 0)\n\n(ruleset step-left)\n(rule ((left x) (right x))\n      ((left (+ x 1)))\n      :ruleset step-left)\n\n(ruleset step-right)\n(rule ((left x) (right y) (= x (+ y 1)))\n      ((right x))\n      :ruleset step-right)\n\n(run-schedule\n      (repeat 10\n            (saturate step-right)\n            (saturate step-left)))\n\n; We took 10 steps with the left, but the right couldn't go the first round,\n; so we took only 9 steps with the right.\n(check (left 10))\n(check (right 9))\n(fail (check (left 11)))\n(fail (check (right 10)))\n"
+                            },
+                            "i": 177,
+                            "j": 178
+                          }
+                        },
+                        {
+                          "name": "x",
+                          "sort": {
+                            "BaseSortImpl": null
+                          },
+                          "is_global_ref": false
+                        }
+                      ]
+                    },
+                    {
+                      "Literal": [
+                        {
+                          "Egglog": {
+                            "file": {
+                              "name": "tests/web-demo/schedule-demo.egg",
+                              "contents": "; Step with alternating feet, left before right\n(relation left (i64))\n(relation right (i64))\n\n(left 0)\n(right 0)\n\n(ruleset step-left)\n(rule ((left x) (right x))\n      ((left (+ x 1)))\n      :ruleset step-left)\n\n(ruleset step-right)\n(rule ((left x) (right y) (= x (+ y 1)))\n      ((right x))\n      :ruleset step-right)\n\n(run-schedule\n      (repeat 10\n            (saturate step-right)\n            (saturate step-left)))\n\n; We took 10 steps with the left, but the right couldn't go the first round,\n; so we took only 9 steps with the right.\n(check (left 10))\n(check (right 9))\n(fail (check (left 11)))\n(fail (check (right 10)))\n"
+                            },
+                            "i": 179,
+                            "j": 180
+                          }
+                        },
+                        {
+                          "Int": 1
+                        }
+                      ]
+                    }
+                  ]
+                ]
+              },
+              {
+                "Let": [
+                  {
+                    "Egglog": {
+                      "file": {
+                        "name": "tests/web-demo/schedule-demo.egg",
+                        "contents": "; Step with alternating feet, left before right\n(relation left (i64))\n(relation right (i64))\n\n(left 0)\n(right 0)\n\n(ruleset step-left)\n(rule ((left x) (right x))\n      ((left (+ x 1)))\n      :ruleset step-left)\n\n(ruleset step-right)\n(rule ((left x) (right y) (= x (+ y 1)))\n      ((right x))\n      :ruleset step-right)\n\n(run-schedule\n      (repeat 10\n            (saturate step-right)\n            (saturate step-left)))\n\n; We took 10 steps with the left, but the right couldn't go the first round,\n; so we took only 9 steps with the right.\n(check (left 10))\n(check (right 9))\n(fail (check (left 11)))\n(fail (check (right 10)))\n"
+                      },
+                      "i": 168,
+                      "j": 182
+                    }
+                  },
+                  {
+                    "name": "$left11",
+                    "sort": {
+                      "BaseSortImpl": null
+                    },
+                    "is_global_ref": false
+                  },
+                  {
+                    "Func": {
+                      "name": "left",
+                      "subtype": "Relation",
+                      "input": [
+                        {
+                          "BaseSortImpl": null
+                        }
+                      ],
+                      "output": {
+                        "BaseSortImpl": null
+                      }
+                    }
+                  },
+                  [
+                    {
+                      "Var": [
+                        {
+                          "Egglog": {
+                            "file": {
+                              "name": "tests/web-demo/schedule-demo.egg",
+                              "contents": "; Step with alternating feet, left before right\n(relation left (i64))\n(relation right (i64))\n\n(left 0)\n(right 0)\n\n(ruleset step-left)\n(rule ((left x) (right x))\n      ((left (+ x 1)))\n      :ruleset step-left)\n\n(ruleset step-right)\n(rule ((left x) (right y) (= x (+ y 1)))\n      ((right x))\n      :ruleset step-right)\n\n(run-schedule\n      (repeat 10\n            (saturate step-right)\n            (saturate step-left)))\n\n; We took 10 steps with the left, but the right couldn't go the first round,\n; so we took only 9 steps with the right.\n(check (left 10))\n(check (right 9))\n(fail (check (left 11)))\n(fail (check (right 10)))\n"
+                            },
+                            "i": 174,
+                            "j": 181
+                          }
+                        },
+                        {
+                          "name": "$+10",
+                          "sort": {
+                            "BaseSortImpl": null
+                          },
+                          "is_global_ref": false
+                        }
+                      ]
+                    }
+                  ]
+                ]
+              }
+            ]
+          },
+          2
+        ]
+      }
+    },
+    "step-right": {
+      "Rules": {
+        "(rule ((left x)\n       (right y)\n       (= x (+ y 1)))\n      ((right x))\n        :ruleset step-right )": [
+          {
+            "span": {
+              "Egglog": {
+                "file": {
+                  "name": "tests/web-demo/schedule-demo.egg",
+                  "contents": "; Step with alternating feet, left before right\n(relation left (i64))\n(relation right (i64))\n\n(left 0)\n(right 0)\n\n(ruleset step-left)\n(rule ((left x) (right x))\n      ((left (+ x 1)))\n      :ruleset step-left)\n\n(ruleset step-right)\n(rule ((left x) (right y) (= x (+ y 1)))\n      ((right x))\n      :ruleset step-right)\n\n(run-schedule\n      (repeat 10\n            (saturate step-right)\n            (saturate step-left)))\n\n; We took 10 steps with the left, but the right couldn't go the first round,\n; so we took only 9 steps with the right.\n(check (left 10))\n(check (right 9))\n(fail (check (left 11)))\n(fail (check (right 10)))\n"
+                },
+                "i": 232,
+                "j": 317
+              }
+            },
+            "body": {
+              "atoms": [
+                {
+                  "span": {
+                    "Egglog": {
+                      "file": {
+                        "name": "tests/web-demo/schedule-demo.egg",
+                        "contents": "; Step with alternating feet, left before right\n(relation left (i64))\n(relation right (i64))\n\n(left 0)\n(right 0)\n\n(ruleset step-left)\n(rule ((left x) (right x))\n      ((left (+ x 1)))\n      :ruleset step-left)\n\n(ruleset step-right)\n(rule ((left x) (right y) (= x (+ y 1)))\n      ((right x))\n      :ruleset step-right)\n\n(run-schedule\n      (repeat 10\n            (saturate step-right)\n            (saturate step-left)))\n\n; We took 10 steps with the left, but the right couldn't go the first round,\n; so we took only 9 steps with the right.\n(check (left 10))\n(check (right 9))\n(fail (check (left 11)))\n(fail (check (right 10)))\n"
+                      },
+                      "i": 239,
+                      "j": 247
+                    }
+                  },
+                  "head": {
+                    "Func": {
+                      "name": "left",
+                      "subtype": "Relation",
+                      "input": [
+                        {
+                          "BaseSortImpl": null
+                        }
+                      ],
+                      "output": {
+                        "BaseSortImpl": null
+                      }
+                    }
+                  },
+                  "args": [
+                    {
+                      "Var": [
+                        {
+                          "Egglog": {
+                            "file": {
+                              "name": "tests/web-demo/schedule-demo.egg",
+                              "contents": "; Step with alternating feet, left before right\n(relation left (i64))\n(relation right (i64))\n\n(left 0)\n(right 0)\n\n(ruleset step-left)\n(rule ((left x) (right x))\n      ((left (+ x 1)))\n      :ruleset step-left)\n\n(ruleset step-right)\n(rule ((left x) (right y) (= x (+ y 1)))\n      ((right x))\n      :ruleset step-right)\n\n(run-schedule\n      (repeat 10\n            (saturate step-right)\n            (saturate step-left)))\n\n; We took 10 steps with the left, but the right couldn't go the first round,\n; so we took only 9 steps with the right.\n(check (left 10))\n(check (right 9))\n(fail (check (left 11)))\n(fail (check (right 10)))\n"
+                            },
+                            "i": 263,
+                            "j": 270
+                          }
+                        },
+                        {
+                          "name": "$+18",
+                          "sort": {
+                            "BaseSortImpl": null
+                          },
+                          "is_global_ref": false
+                        }
+                      ]
+                    },
+                    {
+                      "Var": [
+                        {
+                          "Egglog": {
+                            "file": {
+                              "name": "tests/web-demo/schedule-demo.egg",
+                              "contents": "; Step with alternating feet, left before right\n(relation left (i64))\n(relation right (i64))\n\n(left 0)\n(right 0)\n\n(ruleset step-left)\n(rule ((left x) (right x))\n      ((left (+ x 1)))\n      :ruleset step-left)\n\n(ruleset step-right)\n(rule ((left x) (right y) (= x (+ y 1)))\n      ((right x))\n      :ruleset step-right)\n\n(run-schedule\n      (repeat 10\n            (saturate step-right)\n            (saturate step-left)))\n\n; We took 10 steps with the left, but the right couldn't go the first round,\n; so we took only 9 steps with the right.\n(check (left 10))\n(check (right 9))\n(fail (check (left 11)))\n(fail (check (right 10)))\n"
+                            },
+                            "i": 239,
+                            "j": 247
+                          }
+                        },
+                        {
+                          "name": "$left16",
+                          "sort": {
+                            "BaseSortImpl": null
+                          },
+                          "is_global_ref": false
+                        }
+                      ]
+                    }
+                  ]
+                },
+                {
+                  "span": {
+                    "Egglog": {
+                      "file": {
+                        "name": "tests/web-demo/schedule-demo.egg",
+                        "contents": "; Step with alternating feet, left before right\n(relation left (i64))\n(relation right (i64))\n\n(left 0)\n(right 0)\n\n(ruleset step-left)\n(rule ((left x) (right x))\n      ((left (+ x 1)))\n      :ruleset step-left)\n\n(ruleset step-right)\n(rule ((left x) (right y) (= x (+ y 1)))\n      ((right x))\n      :ruleset step-right)\n\n(run-schedule\n      (repeat 10\n            (saturate step-right)\n            (saturate step-left)))\n\n; We took 10 steps with the left, but the right couldn't go the first round,\n; so we took only 9 steps with the right.\n(check (left 10))\n(check (right 9))\n(fail (check (left 11)))\n(fail (check (right 10)))\n"
+                      },
+                      "i": 248,
+                      "j": 257
+                    }
+                  },
+                  "head": {
+                    "Func": {
+                      "name": "right",
+                      "subtype": "Relation",
+                      "input": [
+                        {
+                          "BaseSortImpl": null
+                        }
+                      ],
+                      "output": {
+                        "BaseSortImpl": null
+                      }
+                    }
+                  },
+                  "args": [
+                    {
+                      "Var": [
+                        {
+                          "Egglog": {
+                            "file": {
+                              "name": "tests/web-demo/schedule-demo.egg",
+                              "contents": "; Step with alternating feet, left before right\n(relation left (i64))\n(relation right (i64))\n\n(left 0)\n(right 0)\n\n(ruleset step-left)\n(rule ((left x) (right x))\n      ((left (+ x 1)))\n      :ruleset step-left)\n\n(ruleset step-right)\n(rule ((left x) (right y) (= x (+ y 1)))\n      ((right x))\n      :ruleset step-right)\n\n(run-schedule\n      (repeat 10\n            (saturate step-right)\n            (saturate step-left)))\n\n; We took 10 steps with the left, but the right couldn't go the first round,\n; so we took only 9 steps with the right.\n(check (left 10))\n(check (right 9))\n(fail (check (left 11)))\n(fail (check (right 10)))\n"
+                            },
+                            "i": 255,
+                            "j": 256
+                          }
+                        },
+                        {
+                          "name": "y",
+                          "sort": {
+                            "BaseSortImpl": null
+                          },
+                          "is_global_ref": false
+                        }
+                      ]
+                    },
+                    {
+                      "Var": [
+                        {
+                          "Egglog": {
+                            "file": {
+                              "name": "tests/web-demo/schedule-demo.egg",
+                              "contents": "; Step with alternating feet, left before right\n(relation left (i64))\n(relation right (i64))\n\n(left 0)\n(right 0)\n\n(ruleset step-left)\n(rule ((left x) (right x))\n      ((left (+ x 1)))\n      :ruleset step-left)\n\n(ruleset step-right)\n(rule ((left x) (right y) (= x (+ y 1)))\n      ((right x))\n      :ruleset step-right)\n\n(run-schedule\n      (repeat 10\n            (saturate step-right)\n            (saturate step-left)))\n\n; We took 10 steps with the left, but the right couldn't go the first round,\n; so we took only 9 steps with the right.\n(check (left 10))\n(check (right 9))\n(fail (check (left 11)))\n(fail (check (right 10)))\n"
+                            },
+                            "i": 248,
+                            "j": 257
+                          }
+                        },
+                        {
+                          "name": "$right17",
+                          "sort": {
+                            "BaseSortImpl": null
+                          },
+                          "is_global_ref": false
+                        }
+                      ]
+                    }
+                  ]
+                },
+                {
+                  "span": {
+                    "Egglog": {
+                      "file": {
+                        "name": "tests/web-demo/schedule-demo.egg",
+                        "contents": "; Step with alternating feet, left before right\n(relation left (i64))\n(relation right (i64))\n\n(left 0)\n(right 0)\n\n(ruleset step-left)\n(rule ((left x) (right x))\n      ((left (+ x 1)))\n      :ruleset step-left)\n\n(ruleset step-right)\n(rule ((left x) (right y) (= x (+ y 1)))\n      ((right x))\n      :ruleset step-right)\n\n(run-schedule\n      (repeat 10\n            (saturate step-right)\n            (saturate step-left)))\n\n; We took 10 steps with the left, but the right couldn't go the first round,\n; so we took only 9 steps with the right.\n(check (left 10))\n(check (right 9))\n(fail (check (left 11)))\n(fail (check (right 10)))\n"
+                      },
+                      "i": 263,
+                      "j": 270
+                    }
+                  },
+                  "head": {
+                    "Primitive": {
+                      "primitive": {
+                        "id": 7
+                      },
+                      "input": [
+                        {
+                          "BaseSortImpl": null
+                        },
+                        {
+                          "BaseSortImpl": null
+                        }
+                      ],
+                      "output": {
+                        "BaseSortImpl": null
+                      }
+                    }
+                  },
+                  "args": [
+                    {
+                      "Var": [
+                        {
+                          "Egglog": {
+                            "file": {
+                              "name": "tests/web-demo/schedule-demo.egg",
+                              "contents": "; Step with alternating feet, left before right\n(relation left (i64))\n(relation right (i64))\n\n(left 0)\n(right 0)\n\n(ruleset step-left)\n(rule ((left x) (right x))\n      ((left (+ x 1)))\n      :ruleset step-left)\n\n(ruleset step-right)\n(rule ((left x) (right y) (= x (+ y 1)))\n      ((right x))\n      :ruleset step-right)\n\n(run-schedule\n      (repeat 10\n            (saturate step-right)\n            (saturate step-left)))\n\n; We took 10 steps with the left, but the right couldn't go the first round,\n; so we took only 9 steps with the right.\n(check (left 10))\n(check (right 9))\n(fail (check (left 11)))\n(fail (check (right 10)))\n"
+                            },
+                            "i": 266,
+                            "j": 267
+                          }
+                        },
+                        {
+                          "name": "y",
+                          "sort": {
+                            "BaseSortImpl": null
+                          },
+                          "is_global_ref": false
+                        }
+                      ]
+                    },
+                    {
+                      "Literal": [
+                        {
+                          "Egglog": {
+                            "file": {
+                              "name": "tests/web-demo/schedule-demo.egg",
+                              "contents": "; Step with alternating feet, left before right\n(relation left (i64))\n(relation right (i64))\n\n(left 0)\n(right 0)\n\n(ruleset step-left)\n(rule ((left x) (right x))\n      ((left (+ x 1)))\n      :ruleset step-left)\n\n(ruleset step-right)\n(rule ((left x) (right y) (= x (+ y 1)))\n      ((right x))\n      :ruleset step-right)\n\n(run-schedule\n      (repeat 10\n            (saturate step-right)\n            (saturate step-left)))\n\n; We took 10 steps with the left, but the right couldn't go the first round,\n; so we took only 9 steps with the right.\n(check (left 10))\n(check (right 9))\n(fail (check (left 11)))\n(fail (check (right 10)))\n"
+                            },
+                            "i": 268,
+                            "j": 269
+                          }
+                        },
+                        {
+                          "Int": 1
+                        }
+                      ]
+                    },
+                    {
+                      "Var": [
+                        {
+                          "Egglog": {
+                            "file": {
+                              "name": "tests/web-demo/schedule-demo.egg",
+                              "contents": "; Step with alternating feet, left before right\n(relation left (i64))\n(relation right (i64))\n\n(left 0)\n(right 0)\n\n(ruleset step-left)\n(rule ((left x) (right x))\n      ((left (+ x 1)))\n      :ruleset step-left)\n\n(ruleset step-right)\n(rule ((left x) (right y) (= x (+ y 1)))\n      ((right x))\n      :ruleset step-right)\n\n(run-schedule\n      (repeat 10\n            (saturate step-right)\n            (saturate step-left)))\n\n; We took 10 steps with the left, but the right couldn't go the first round,\n; so we took only 9 steps with the right.\n(check (left 10))\n(check (right 9))\n(fail (check (left 11)))\n(fail (check (right 10)))\n"
+                            },
+                            "i": 263,
+                            "j": 270
+                          }
+                        },
+                        {
+                          "name": "$+18",
+                          "sort": {
+                            "BaseSortImpl": null
+                          },
+                          "is_global_ref": false
+                        }
+                      ]
+                    }
+                  ]
+                }
+              ]
+            },
+            "head": [
+              {
+                "LetAtomTerm": [
+                  {
+                    "Egglog": {
+                      "file": {
+                        "name": "tests/web-demo/schedule-demo.egg",
+                        "contents": "; Step with alternating feet, left before right\n(relation left (i64))\n(relation right (i64))\n\n(left 0)\n(right 0)\n\n(ruleset step-left)\n(rule ((left x) (right x))\n      ((left (+ x 1)))\n      :ruleset step-left)\n\n(ruleset step-right)\n(rule ((left x) (right y) (= x (+ y 1)))\n      ((right x))\n      :ruleset step-right)\n\n(run-schedule\n      (repeat 10\n            (saturate step-right)\n            (saturate step-left)))\n\n; We took 10 steps with the left, but the right couldn't go the first round,\n; so we took only 9 steps with the right.\n(check (left 10))\n(check (right 9))\n(fail (check (left 11)))\n(fail (check (right 10)))\n"
+                      },
+                      "i": 263,
+                      "j": 270
+                    }
+                  },
+                  {
+                    "name": "x",
+                    "sort": {
+                      "BaseSortImpl": null
+                    },
+                    "is_global_ref": false
+                  },
+                  {
+                    "Var": [
+                      {
+                        "Egglog": {
+                          "file": {
+                            "name": "tests/web-demo/schedule-demo.egg",
+                            "contents": "; Step with alternating feet, left before right\n(relation left (i64))\n(relation right (i64))\n\n(left 0)\n(right 0)\n\n(ruleset step-left)\n(rule ((left x) (right x))\n      ((left (+ x 1)))\n      :ruleset step-left)\n\n(ruleset step-right)\n(rule ((left x) (right y) (= x (+ y 1)))\n      ((right x))\n      :ruleset step-right)\n\n(run-schedule\n      (repeat 10\n            (saturate step-right)\n            (saturate step-left)))\n\n; We took 10 steps with the left, but the right couldn't go the first round,\n; so we took only 9 steps with the right.\n(check (left 10))\n(check (right 9))\n(fail (check (left 11)))\n(fail (check (right 10)))\n"
+                          },
+                          "i": 263,
+                          "j": 270
+                        }
+                      },
+                      {
+                        "name": "$+18",
+                        "sort": {
+                          "BaseSortImpl": null
+                        },
+                        "is_global_ref": false
+                      }
+                    ]
+                  }
+                ]
+              },
+              {
+                "Let": [
+                  {
+                    "Egglog": {
+                      "file": {
+                        "name": "tests/web-demo/schedule-demo.egg",
+                        "contents": "; Step with alternating feet, left before right\n(relation left (i64))\n(relation right (i64))\n\n(left 0)\n(right 0)\n\n(ruleset step-left)\n(rule ((left x) (right x))\n      ((left (+ x 1)))\n      :ruleset step-left)\n\n(ruleset step-right)\n(rule ((left x) (right y) (= x (+ y 1)))\n      ((right x))\n      :ruleset step-right)\n\n(run-schedule\n      (repeat 10\n            (saturate step-right)\n            (saturate step-left)))\n\n; We took 10 steps with the left, but the right couldn't go the first round,\n; so we took only 9 steps with the right.\n(check (left 10))\n(check (right 9))\n(fail (check (left 11)))\n(fail (check (right 10)))\n"
+                      },
+                      "i": 280,
+                      "j": 289
+                    }
+                  },
+                  {
+                    "name": "$right19",
+                    "sort": {
+                      "BaseSortImpl": null
+                    },
+                    "is_global_ref": false
+                  },
+                  {
+                    "Func": {
+                      "name": "right",
+                      "subtype": "Relation",
+                      "input": [
+                        {
+                          "BaseSortImpl": null
+                        }
+                      ],
+                      "output": {
+                        "BaseSortImpl": null
+                      }
+                    }
+                  },
+                  [
+                    {
+                      "Var": [
+                        {
+                          "Egglog": {
+                            "file": {
+                              "name": "tests/web-demo/schedule-demo.egg",
+                              "contents": "; Step with alternating feet, left before right\n(relation left (i64))\n(relation right (i64))\n\n(left 0)\n(right 0)\n\n(ruleset step-left)\n(rule ((left x) (right x))\n      ((left (+ x 1)))\n      :ruleset step-left)\n\n(ruleset step-right)\n(rule ((left x) (right y) (= x (+ y 1)))\n      ((right x))\n      :ruleset step-right)\n\n(run-schedule\n      (repeat 10\n            (saturate step-right)\n            (saturate step-left)))\n\n; We took 10 steps with the left, but the right couldn't go the first round,\n; so we took only 9 steps with the right.\n(check (left 10))\n(check (right 9))\n(fail (check (left 11)))\n(fail (check (right 10)))\n"
+                            },
+                            "i": 287,
+                            "j": 288
+                          }
+                        },
+                        {
+                          "name": "x",
+                          "sort": {
+                            "BaseSortImpl": null
+                          },
+                          "is_global_ref": false
+                        }
+                      ]
+                    }
+                  ]
+                ]
+              }
+            ]
+          },
+          3
+        ]
+      }
+    }
+  },
   "fact_directory": null,
   "seminaive": true,
   "type_info": {
@@ -59,11 +722,11 @@
     "search_and_apply_time_per_rule": {
       "(rule ((left x)\n       (right x))\n      ((left (+ x 1)))\n        :ruleset step-left )": {
         "secs": 0,
-        "nanos": 5083
+        "nanos": 62250
       },
       "(rule ((left x)\n       (right y)\n       (= x (+ y 1)))\n      ((right x))\n        :ruleset step-right )": {
         "secs": 0,
-        "nanos": 27999
+        "nanos": 89666
       }
     },
     "num_matches_per_rule": {
@@ -73,31 +736,31 @@
     "search_and_apply_time_per_ruleset": {
       "step-right": {
         "secs": 0,
-        "nanos": 68913
+        "nanos": 278332
       },
       "step-left": {
         "secs": 0,
-        "nanos": 22793
+        "nanos": 200209
       }
     },
     "merge_time_per_ruleset": {
       "step-right": {
         "secs": 0,
-        "nanos": 14666
+        "nanos": 81918
       },
       "step-left": {
         "secs": 0,
-        "nanos": 15415
+        "nanos": 89587
       }
     },
     "rebuild_time_per_ruleset": {
       "step-right": {
         "secs": 0,
-        "nanos": 20209
+        "nanos": 117376
       },
       "step-left": {
         "secs": 0,
-        "nanos": 22917
+        "nanos": 137417
       }
     }
   },

@@ -14,8 +14,12 @@ pub struct FuncType {
     pub output: ArcSort,
 }
 
-#[derive(Clone)]
-pub struct PrimitiveWithId(pub Arc<dyn Primitive + Send + Sync>, pub ExternalFunctionId);
+#[derive(Clone, Serialize)]
+pub struct PrimitiveWithId {
+    #[serde(skip)]
+    pub prim: Arc<dyn Primitive + Send + Sync>,
+    pub id: ExternalFunctionId,
+}
 
 impl PrimitiveWithId {
     /// Takes the full signature of a primitive (both input and output types).
@@ -29,7 +33,7 @@ impl PrimitiveWithId {
             constraints.push(constraint::assign(lit.clone(), ty.clone()))
         }
         constraints.extend(
-            self.0
+            self.prim
                 .get_type_constraints(&Span::Panic)
                 .get(&lits, typeinfo),
         );
@@ -43,7 +47,7 @@ impl PrimitiveWithId {
 
 impl Debug for PrimitiveWithId {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        write!(f, "Prim({})", self.0.name())
+        write!(f, "Prim({})", self.prim.name())
     }
 }
 
@@ -138,7 +142,7 @@ impl EGraph {
             .primitives
             .entry(prim.name().to_owned())
             .or_default()
-            .push(PrimitiveWithId(prim, ext));
+            .push(PrimitiveWithId { prim, id: ext });
     }
 
     pub(crate) fn typecheck_program(

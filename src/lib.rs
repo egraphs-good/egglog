@@ -329,7 +329,6 @@ pub struct EGraph {
     #[serde(skip)]
     functions: IndexMap<String, Function>,
 
-    #[serde(skip)]
     rulesets: IndexMap<String, Ruleset>,
     pub fact_directory: Option<PathBuf>,
     pub seminaive: bool,
@@ -539,7 +538,7 @@ impl EGraph {
                     .map(|arg| self.translate_expr_to_mergefn(arg))
                     .collect::<Result<Vec<_>, _>>()?;
                 Ok(egglog_bridge::MergeFn::Primitive(
-                    p.primitive.1,
+                    p.primitive.id,
                     translated_args,
                 ))
             }
@@ -1619,7 +1618,7 @@ impl<'a> BackendRule<'a> {
     ) -> (ExternalFunctionId, Vec<QueryEntry>, ColumnTy) {
         let mut qe_args = self.args(args);
 
-        if prim.primitive.0.name() == "unstable-fn" {
+        if prim.primitive.prim.name() == "unstable-fn" {
             let core::ResolvedAtomTerm::Literal(_, Literal::String(ref name)) = args[0] else {
                 panic!("expected string literal after `unstable-fn`")
             };
@@ -1647,7 +1646,7 @@ impl<'a> BackendRule<'a> {
                         })
                 });
                 assert!(ps.len() == 1, "options for {name}: {ps:?}");
-                ResolvedFunctionId::Prim(ps.into_iter().next().unwrap().1)
+                ResolvedFunctionId::Prim(ps.into_iter().next().unwrap().id)
             } else {
                 panic!("no callable for {name}");
             };
@@ -1666,7 +1665,7 @@ impl<'a> BackendRule<'a> {
         }
 
         (
-            prim.primitive.1,
+            prim.primitive.id,
             qe_args,
             prim.output.column_ty(self.rb.egraph()),
         )
@@ -1715,7 +1714,7 @@ impl<'a> BackendRule<'a> {
                             })
                         }
                         ResolvedCall::Primitive(p) => {
-                            let name = p.primitive.0.name().to_owned();
+                            let name = p.primitive.prim.name().to_owned();
                             let (p, args, ty) = self.prim(p, args);
                             let span = span.clone();
                             self.rb.call_external_func(p, &args, ty, move || {

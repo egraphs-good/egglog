@@ -16,7 +16,7 @@ use egglog_ast::util::ListDisplay;
 pub use expr::*;
 pub use parse::*;
 
-#[derive(Clone, Debug)]
+#[derive(Clone, Debug, Serialize)]
 /// The egglog internal representation of already compiled rules
 pub(crate) enum Ruleset {
     /// Represents a ruleset with a set of rules.
