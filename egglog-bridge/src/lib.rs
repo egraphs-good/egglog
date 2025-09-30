@@ -112,14 +112,17 @@ impl<'de> Deserialize<'de> for FunctionId {
 }
 
 /// The state associated with an egglog program.
-#[derive(Clone)]
+#[derive(Clone, Serialize)]
 pub struct EGraph {
+    #[serde(skip)]
     db: Database,
     uf_table: TableId,
     id_counter: CounterId,
     reason_counter: CounterId,
     timestamp_counter: CounterId,
+    #[serde(skip)]
     rules: DenseIdMapWithReuse<RuleId, RuleInfo>,
+    #[serde(skip)]
     funcs: DenseIdMap<FunctionId, FunctionInfo>,
     panic_message: SideChannel<String>,
     /// This is a cache of all the different panic messages that we may use while executing rules
@@ -128,11 +131,15 @@ pub struct EGraph {
     /// also serve as a debugging tool in the case that the number of panic messages grows without
     /// bound.
     panic_funcs: HashMap<String, ExternalFunctionId>,
+    #[serde(skip)]
     proof_specs: IdVec<ReasonSpecId, Arc<ProofReason>>,
+    #[serde(skip)]
     cong_spec: ReasonSpecId,
     /// Side tables used to store proof information. We initialize these lazily
     /// as a proof object with a given number of parameters is added.
+    #[serde(skip)]
     reason_tables: IndexMap<usize /* arity */, TableId>,
+    #[serde(skip)]
     term_tables: IndexMap<usize /* arity */, TableId>,
     tracing: bool,
 }

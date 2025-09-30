@@ -314,7 +314,6 @@ impl std::fmt::Display for CommandOutput {
 /// ```
 #[derive(Clone, Serialize)]
 pub struct EGraph {
-    #[serde(skip)]
     backend: egglog_bridge::EGraph,
 
     #[serde(skip)]
