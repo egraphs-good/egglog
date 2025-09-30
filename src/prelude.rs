@@ -637,7 +637,7 @@ macro_rules! datatype {
 /// `ContainerSort. Use `add_base_sort` to register base
 /// sorts with the `EGraph`. See `Sort` for documentation
 /// of the methods. Do not override `to_arcsort`.
-pub trait BaseSort: Any + Send + Sync + Debug {
+pub trait BaseSort: Any + Send + Sync + Debug + Serialize {
     type Base: BaseValue;
     fn name(&self) -> &str;
     fn register_primitives(&self, _eg: &mut EGraph) {}
@@ -651,9 +651,10 @@ pub trait BaseSort: Any + Send + Sync + Debug {
     }
 }
 
-#[derive(Debug)]
+#[derive(Debug, Serialize)]
 struct BaseSortImpl<T: BaseSort>(T);
 
+#[typetag::serialize]
 impl<T: BaseSort> Sort for BaseSortImpl<T> {
     fn name(&self) -> &str {
         self.0.name()
@@ -696,7 +697,7 @@ impl<T: BaseSort> Sort for BaseSortImpl<T> {
 /// `BaseSort`. Use `add_container_sort` to register container
 /// sorts with the `EGraph`. See `Sort` for documentation
 /// of the methods. Do not override `to_arcsort`.
-pub trait ContainerSort: Any + Send + Sync + Debug {
+pub trait ContainerSort: Any + Send + Sync + Debug + Serialize {
     type Container: ContainerValue;
     fn name(&self) -> &str;
     fn is_eq_container_sort(&self) -> bool;
@@ -720,9 +721,10 @@ pub trait ContainerSort: Any + Send + Sync + Debug {
     }
 }
 
-#[derive(Debug)]
+#[derive(Debug, Serialize)]
 struct ContainerSortImpl<T: ContainerSort>(T);
 
+#[typetag::serialize]
 impl<T: ContainerSort> Sort for ContainerSortImpl<T> {
     fn name(&self) -> &str {
         self.0.name()

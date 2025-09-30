@@ -95,7 +95,7 @@ pub trait Primitive {
 /// the database was updated.
 /// Calling `union` on two run reports adds the timing
 /// information together.
-#[derive(Debug, Clone, Default)]
+#[derive(Debug, Clone, Default, Serialize)]
 pub struct RunReport {
     /// If any changes were made to the database.
     pub updated: bool,
@@ -312,7 +312,7 @@ impl std::fmt::Display for CommandOutput {
 /// let mut egraph = EGraph::default();
 /// egraph.parse_and_run_program(None, "(datatype Math (Num i64) (Add Math Math))").unwrap();
 /// ```
-#[derive(Clone, Serialize, Deserialize)]
+#[derive(Clone, Serialize)]
 pub struct EGraph {
     #[serde(skip)]
     backend: egglog_bridge::EGraph,
@@ -334,11 +334,8 @@ pub struct EGraph {
     pub fact_directory: Option<PathBuf>,
     pub seminaive: bool,
 
-    #[serde(skip)]
     type_info: TypeInfo,
     /// The run report unioned over all runs so far.
-
-    #[serde(skip)]
     overall_run_report: RunReport,
 
     schedulers: DenseIdMap<SchedulerId, SchedulerRecord>,

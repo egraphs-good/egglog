@@ -6,7 +6,7 @@ use ast::Rule;
 use core_relations::ExternalFunction;
 use egglog_ast::generic_ast::GenericAction;
 
-#[derive(Clone, Debug)]
+#[derive(Clone, Debug, Serialize)]
 pub struct FuncType {
     pub name: String,
     pub subtype: FunctionSubtype,
@@ -48,12 +48,15 @@ impl Debug for PrimitiveWithId {
 }
 
 /// Stores resolved typechecking information.
-#[derive(Clone, Default)]
+#[derive(Clone, Default, Serialize)]
 pub struct TypeInfo {
+    #[serde(skip)]
     mksorts: HashMap<String, MkSort>,
     // TODO(yz): I want to get rid of this as now we have user-defined primitives and constraint based type checking
+    #[serde(skip)]
     reserved_primitives: HashSet<&'static str>,
     sorts: HashMap<String, Arc<dyn Sort>>,
+    #[serde(skip)]
     primitives: HashMap<String, Vec<PrimitiveWithId>>,
     func_types: HashMap<String, FuncType>,
     global_sorts: HashMap<String, ArcSort>,

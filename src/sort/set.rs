@@ -23,7 +23,7 @@ impl ContainerValue for SetContainer {
     }
 }
 
-#[derive(Clone, Debug)]
+#[derive(Clone, Debug, Serialize)]
 pub struct SetSort {
     name: String,
     element: ArcSort,

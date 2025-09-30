@@ -842,7 +842,7 @@ where
 pub type FunctionDecl = GenericFunctionDecl<String, String>;
 pub(crate) type ResolvedFunctionDecl = GenericFunctionDecl<ResolvedCall, ResolvedVar>;
 
-#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash, Serialize)]
 pub enum FunctionSubtype {
     Constructor,
     Relation,

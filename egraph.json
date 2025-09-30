@@ -2,6 +2,105 @@
   "pushed_egraph": null,
   "fact_directory": null,
   "seminaive": true,
+  "type_info": {
+    "sorts": {
+      "Unit": {
+        "BaseSortImpl": null
+      },
+      "String": {
+        "BaseSortImpl": null
+      },
+      "bool": {
+        "BaseSortImpl": null
+      },
+      "i64": {
+        "BaseSortImpl": null
+      },
+      "f64": {
+        "BaseSortImpl": null
+      },
+      "BigRat": {
+        "BaseSortImpl": null
+      },
+      "BigInt": {
+        "BaseSortImpl": null
+      }
+    },
+    "func_types": {
+      "right": {
+        "name": "right",
+        "subtype": "Relation",
+        "input": [
+          {
+            "BaseSortImpl": null
+          }
+        ],
+        "output": {
+          "BaseSortImpl": null
+        }
+      },
+      "left": {
+        "name": "left",
+        "subtype": "Relation",
+        "input": [
+          {
+            "BaseSortImpl": null
+          }
+        ],
+        "output": {
+          "BaseSortImpl": null
+        }
+      }
+    },
+    "global_sorts": {}
+  },
+  "overall_run_report": {
+    "updated": true,
+    "search_and_apply_time_per_rule": {
+      "(rule ((left x)\n       (right x))\n      ((left (+ x 1)))\n        :ruleset step-left )": {
+        "secs": 0,
+        "nanos": 5083
+      },
+      "(rule ((left x)\n       (right y)\n       (= x (+ y 1)))\n      ((right x))\n        :ruleset step-right )": {
+        "secs": 0,
+        "nanos": 27999
+      }
+    },
+    "num_matches_per_rule": {
+      "(rule ((left x)\n       (right x))\n      ((left (+ x 1)))\n        :ruleset step-left )": 10,
+      "(rule ((left x)\n       (right y)\n       (= x (+ y 1)))\n      ((right x))\n        :ruleset step-right )": 55
+    },
+    "search_and_apply_time_per_ruleset": {
+      "step-right": {
+        "secs": 0,
+        "nanos": 68913
+      },
+      "step-left": {
+        "secs": 0,
+        "nanos": 22793
+      }
+    },
+    "merge_time_per_ruleset": {
+      "step-right": {
+        "secs": 0,
+        "nanos": 14666
+      },
+      "step-left": {
+        "secs": 0,
+        "nanos": 15415
+      }
+    },
+    "rebuild_time_per_ruleset": {
+      "step-right": {
+        "secs": 0,
+        "nanos": 20209
+      },
+      "step-left": {
+        "secs": 0,
+        "nanos": 22917
+      }
+    }
+  },
   "schedulers": {
     "data": [],
     "_marker": null

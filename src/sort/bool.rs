@@ -1,6 +1,6 @@
 use super::*;
 
-#[derive(Debug)]
+#[derive(Debug, Serialize)]
 pub struct BoolSort;
 
 impl BaseSort for BoolSort {

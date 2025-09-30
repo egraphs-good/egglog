@@ -4,7 +4,7 @@ use super::*;
 /// - Arithmetic: `+`, `-`, `*`, `/`, `%`, `^`, `neg`, `abs`
 /// - Comparisons: `<`, `>`, `<=`, `>=`
 /// - Other: `min`, `max`, `to-i64`, `to-string`
-#[derive(Debug)]
+#[derive(Debug, Serialize)]
 pub struct F64Sort;
 
 impl BaseSort for F64Sort {

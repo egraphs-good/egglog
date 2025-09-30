@@ -32,7 +32,7 @@ impl ContainerValue for FunctionContainer {
     }
 }
 
-#[derive(Debug)]
+#[derive(Debug, Serialize)]
 pub struct FunctionSort {
     name: String,
     inputs: Vec<ArcSort>,
@@ -106,6 +106,7 @@ impl Presort for FunctionSort {
     }
 }
 
+#[typetag::serialize]
 impl Sort for FunctionSort {
     fn name(&self) -> &str {
         &self.name

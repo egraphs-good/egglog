@@ -45,6 +45,7 @@ mod multiset;
 pub use multiset::*;
 
 /// A sort (type) in the e-graph that defines values in egglog. Sorts are user-extensible (e.g., [`prelude::BaseSort`]).
+#[typetag::serialize]
 pub trait Sort: Any + Send + Sync + Debug {
     /// Returns the name of this sort.
     fn name(&self) -> &str;
@@ -156,11 +157,12 @@ pub trait Presort {
 
 pub type MkSort = fn(&mut TypeInfo, String, &[Expr]) -> Result<ArcSort, TypeError>;
 
-#[derive(Debug)]
+#[derive(Debug, Serialize)]
 pub struct EqSort {
     pub name: String,
 }
 
+#[typetag::serialize]
 impl Sort for EqSort {
     fn name(&self) -> &str {
         &self.name
