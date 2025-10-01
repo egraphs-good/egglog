@@ -1,6 +1,8 @@
 //! A simple data-structure for tracking the dependencies of the merge functions
 //! from different tables on one another.
 
+use serde::Serialize;
+
 use crate::numeric_id::{DenseIdMap, NumericId, define_id};
 
 use crate::{TableId, common::IndexSet};
@@ -11,7 +13,7 @@ define_id!(
     "an identifier for a level in the dependency graph"
 );
 
-#[derive(Clone, Default)]
+#[derive(Clone, Default, Serialize)]
 pub(crate) struct DependencyGraph {
     levels: DenseIdMap<LevelId, IndexSet<TableId>>,
     to_level: DenseIdMap<TableId, LevelId>,

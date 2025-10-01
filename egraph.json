@@ -1,5 +1,102 @@
 {
   "backend": {
+    "db": {
+      "tables": {
+        "data": [
+          {
+            "spec": {
+              "n_keys": 1,
+              "n_vals": 2,
+              "uncacheable_columns": {
+                "data": [
+                  null,
+                  true
+                ],
+                "_marker": null
+              },
+              "allows_delete": false
+            }
+          },
+          {
+            "spec": {
+              "n_keys": 1,
+              "n_vals": 3,
+              "uncacheable_columns": {
+                "data": [],
+                "_marker": null
+              },
+              "allows_delete": true
+            }
+          },
+          {
+            "spec": {
+              "n_keys": 1,
+              "n_vals": 3,
+              "uncacheable_columns": {
+                "data": [],
+                "_marker": null
+              },
+              "allows_delete": true
+            }
+          }
+        ],
+        "_marker": null
+      },
+      "counters": {
+        "data": [
+          0,
+          0,
+          22
+        ],
+        "_marker": null
+      },
+      "container_values": {
+        "container_ids": {
+          "shards_log2": 4
+        }
+      },
+      "deps": {
+        "levels": {
+          "data": [
+            [
+              {
+                "rep": 0
+              },
+              {
+                "rep": 1
+              },
+              {
+                "rep": 2
+              }
+            ]
+          ],
+          "_marker": null
+        },
+        "to_level": {
+          "data": [
+            {
+              "rep": 0
+            },
+            {
+              "rep": 0
+            },
+            {
+              "rep": 0
+            }
+          ],
+          "_marker": null
+        },
+        "write_deps": {
+          "data": [
+            [],
+            [],
+            []
+          ],
+          "_marker": null
+        }
+      },
+      "total_size_estimate": 21
+    },
     "uf_table": {
       "rep": 0
     },
@@ -1578,11 +1675,11 @@
     "search_and_apply_time_per_rule": {
       "(rule ((left x)\n       (right x))\n      ((left (+ x 1)))\n        :ruleset step-left )": {
         "secs": 0,
-        "nanos": 17710
+        "nanos": 14457
       },
       "(rule ((left x)\n       (right y)\n       (= x (+ y 1)))\n      ((right x))\n        :ruleset step-right )": {
         "secs": 0,
-        "nanos": 73165
+        "nanos": 55962
       }
     },
     "num_matches_per_rule": {
@@ -1592,31 +1689,31 @@
     "search_and_apply_time_per_ruleset": {
       "step-right": {
         "secs": 0,
-        "nanos": 183335
+        "nanos": 188835
       },
       "step-left": {
         "secs": 0,
-        "nanos": 101210
+        "nanos": 88081
       }
     },
     "merge_time_per_ruleset": {
       "step-right": {
         "secs": 0,
-        "nanos": 46918
+        "nanos": 40665
       },
       "step-left": {
         "secs": 0,
-        "nanos": 49376
+        "nanos": 43539
       }
     },
     "rebuild_time_per_ruleset": {
       "step-right": {
         "secs": 0,
-        "nanos": 68583
+        "nanos": 57709
       },
       "step-left": {
         "secs": 0,
-        "nanos": 77916
+        "nanos": 64917
       }
     }
   },

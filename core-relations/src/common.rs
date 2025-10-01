@@ -9,6 +9,7 @@ use crate::numeric_id::{DenseIdMap, IdVec, NumericId, define_id};
 use egglog_concurrency::ConcurrentVec;
 use hashbrown::HashTable;
 use rustc_hash::FxHasher;
+use serde::Serialize;
 
 use crate::{Subset, TableId, TableVersion, WrappedTable, pool::Clear};
 
@@ -22,9 +23,11 @@ pub(crate) type DashMap<K, V> = dashmap::DashMap<K, V, BuildHasherDefault<FxHash
 ///
 /// This is primarily used to manage the [`Value`]s associated with a a
 /// base value.
-#[derive(Clone)]
+#[derive(Clone, Serialize)]
 pub struct InternTable<K, V> {
+    #[serde(skip)]
     vals: Arc<ConcurrentVec<K>>,
+    #[serde(skip)]
     data: Vec<Arc<Mutex<HashTable<V>>>>,
     shards_log2: u32,
 }

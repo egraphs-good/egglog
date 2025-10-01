@@ -66,7 +66,6 @@ impl Timestamp {
 /// The state associated with an egglog program.
 #[derive(Clone, Serialize)]
 pub struct EGraph {
-    #[serde(skip)]
     db: Database,
     uf_table: TableId,
     id_counter: CounterId,

@@ -11,6 +11,7 @@ use std::{
 };
 
 use crate::numeric_id::{DenseIdMap, NumericId, define_id};
+use serde::Serialize;
 use smallvec::SmallVec;
 
 use crate::{
@@ -50,7 +51,7 @@ pub struct TableVersion {
     // NB: we may want to make `Offset` and `RowId` the same.
 }
 
-#[derive(Clone)]
+#[derive(Clone, Serialize)]
 pub struct TableSpec {
     /// The number of key columns for the table.
     pub n_keys: usize,
