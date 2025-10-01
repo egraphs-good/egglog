@@ -14,7 +14,7 @@ use crate::{ast::ResolvedVar, core::GenericAtomTerm, core::ResolvedCoreRule, uti
 ///
 /// The matches that are not chosen in this iteration will be delayed
 /// to the next iteration.
-#[typetag::serde]
+#[typetag::serialize]
 pub trait Scheduler: dyn_clone::DynClone + Send + Sync {
     /// Whether or not the rules can be considered as saturated (i.e.,
     /// `run_report.updated == false`).
@@ -288,7 +288,7 @@ impl EGraph {
     }
 }
 
-#[derive(Clone, Serialize, Deserialize)]
+#[derive(Clone, Serialize)]
 pub(crate) struct SchedulerRecord {
     scheduler: Box<dyn Scheduler>,
 
@@ -299,7 +299,7 @@ pub(crate) struct SchedulerRecord {
 /// we split a rule (rule query action) into a worklist relation
 /// two rules (rule query (worklist vars false)) and
 /// (rule (worklist vars false) (action ... (delete (worklist vars false))))
-#[derive(Clone, Serialize, Deserialize)]
+#[derive(Clone, Serialize)]
 struct SchedulerRuleInfo {
     #[serde(skip)]
     matches: Arc<Mutex<Vec<Value>>>,
@@ -415,12 +415,12 @@ impl SchedulerRuleInfo {
 mod test {
     use super::*;
 
-    #[derive(Clone, Serialize, Deserialize)]
+    #[derive(Clone, Serialize)]
     struct FirstNScheduler {
         n: usize,
     }
 
-    #[typetag::serde]
+    #[typetag::serialize]
     impl Scheduler for FirstNScheduler {
         fn filter_matches(&mut self, _rule: &str, _ruleset: &str, matches: &mut Matches) -> bool {
             if matches.match_size() <= self.n {

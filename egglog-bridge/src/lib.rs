@@ -31,7 +31,7 @@ use log::info;
 use once_cell::sync::Lazy;
 pub use proof_format::{EqProofId, ProofStore, TermProofId};
 use proof_spec::{ProofReason, ProofReconstructionState, ReasonSpecId};
-use serde::{Deserialize, Deserializer, Serialize, Serializer};
+use serde::Serialize;
 use smallvec::SmallVec;
 use web_time::{Duration, Instant};
 
@@ -60,54 +60,6 @@ define_id!(pub(crate) Timestamp, u32, "An abstract timestamp used to track execu
 impl Timestamp {
     fn to_value(self) -> Value {
         Value::new(self.rep())
-    }
-}
-
-impl Serialize for RuleId {
-    fn serialize<S>(
-        &self,
-        serializer: S,
-    ) -> std::result::Result<<S as Serializer>::Ok, <S as Serializer>::Error>
-    where
-        S: Serializer,
-    {
-        serializer.serialize_u32(self.rep)
-    }
-}
-
-impl<'de> Deserialize<'de> for RuleId {
-    fn deserialize<D>(
-        deserializer: D,
-    ) -> std::result::Result<RuleId, <D as Deserializer<'de>>::Error>
-    where
-        D: Deserializer<'de>,
-    {
-        let value = u32::deserialize(deserializer)?;
-        Ok(RuleId { rep: value })
-    }
-}
-
-impl Serialize for FunctionId {
-    fn serialize<S>(
-        &self,
-        serializer: S,
-    ) -> std::result::Result<<S as Serializer>::Ok, <S as Serializer>::Error>
-    where
-        S: Serializer,
-    {
-        serializer.serialize_u32(self.rep)
-    }
-}
-
-impl<'de> Deserialize<'de> for FunctionId {
-    fn deserialize<D>(
-        deserializer: D,
-    ) -> std::result::Result<FunctionId, <D as Deserializer<'de>>::Error>
-    where
-        D: Deserializer<'de>,
-    {
-        let value = u32::deserialize(deserializer)?;
-        Ok(FunctionId { rep: value })
     }
 }
 

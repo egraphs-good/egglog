@@ -50,7 +50,7 @@ use log::{Level, log_enabled};
 use numeric_id::DenseIdMap;
 use prelude::*;
 use scheduler::{SchedulerId, SchedulerRecord};
-use serde::{Deserialize, Serialize};
+use serde::Serialize;
 pub use serialize::{SerializeConfig, SerializeOutput, SerializedNode};
 use sort::*;
 use std::fmt::{Debug, Display, Formatter};

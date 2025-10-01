@@ -33,7 +33,6 @@ use crate::{
 
 use self::plan::Plan;
 use crate::action::{ExecutionState, PredictedVals};
-use serde::{Serialize, Serializer};
 
 pub(crate) mod execute;
 pub(crate) mod frame_update;
@@ -54,17 +53,6 @@ impl Variable {
 
 define_id!(pub TableId, u32, "a table in the database");
 
-impl Serialize for TableId {
-    fn serialize<S>(
-        &self,
-        serializer: S,
-    ) -> std::result::Result<<S as Serializer>::Ok, <S as Serializer>::Error>
-    where
-        S: Serializer,
-    {
-        serializer.serialize_u32(self.rep)
-    }
-}
 define_id!(pub(crate) ActionId, u32, "an identifier picking out the RHS of a rule");
 
 #[derive(Debug)]
@@ -158,27 +146,6 @@ impl Clone for TableInfo {
 
 define_id!(pub CounterId, u32, "A counter accessible to actions, useful for generating unique Ids.");
 define_id!(pub ExternalFunctionId, u32, "A user-defined operation that can be invoked from a query");
-
-impl Serialize for CounterId {
-    fn serialize<S>(
-        &self,
-        serializer: S,
-    ) -> std::result::Result<<S as Serializer>::Ok, <S as Serializer>::Error>
-    where
-        S: Serializer,
-    {
-        serializer.serialize_u32(self.rep)
-    }
-}
-
-impl Serialize for ExternalFunctionId {
-    fn serialize<S>(&self, serializer: S) -> Result<S::Ok, S::Error>
-    where
-        S: Serializer,
-    {
-        serializer.serialize_u32(self.rep)
-    }
-}
 
 /// External functions allow external callers to manipulate database state in
 /// near-arbitrary ways.
