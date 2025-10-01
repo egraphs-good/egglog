@@ -964,8 +964,9 @@ impl<'a, 'outer: 'a> ActionBuffer<'a> for InPlaceActionBuffer<'outer> {
         }
         if action_state.len >= VAR_BATCH_SIZE {
             let mut state = to_exec_state();
-            state.run_instrs(&action_info.instrs, &mut action_state.bindings);
+            let succeeded = state.run_instrs(&action_info.instrs, &mut action_state.bindings);
             action_state.bindings.clear();
+            self.match_counter.inc_matches(action, succeeded);
             action_state.len = 0;
         }
     }
@@ -1103,14 +1104,13 @@ fn flush_action_states(
 ) {
     for (action, ActionState { bindings, len, .. }) in actions.iter_mut() {
         if *len > 0 {
-            exec_state.run_instrs(&rule_set.actions[action].instrs, bindings);
+            let succeeded = exec_state.run_instrs(&rule_set.actions[action].instrs, bindings);
             bindings.clear();
-            match_counter.inc_matches(action, *len);
+            match_counter.inc_matches(action, succeeded);
             *len = 0;
         }
     }
 }
-
 struct MatchCounter {
     matches: IdVec<ActionId, AtomicUsize>,
 }
