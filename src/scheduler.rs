@@ -301,13 +301,11 @@ pub(crate) struct SchedulerRecord {
 /// (rule (worklist vars false) (action ... (delete (worklist vars false))))
 #[derive(Clone, Serialize)]
 struct SchedulerRuleInfo {
-    #[serde(skip)]
     matches: Arc<Mutex<Vec<Value>>>,
     should_seek: bool,
     decided: FunctionId,
     query_rule: RuleId,
     action_rule: RuleId,
-    #[serde(skip)]
     free_vars: Vec<ResolvedVar>,
 }
 

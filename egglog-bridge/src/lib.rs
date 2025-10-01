@@ -72,7 +72,6 @@ pub struct EGraph {
     id_counter: CounterId,
     reason_counter: CounterId,
     timestamp_counter: CounterId,
-    #[serde(skip)]
     rules: DenseIdMapWithReuse<RuleId, RuleInfo>,
     funcs: DenseIdMap<FunctionId, FunctionInfo>,
     panic_message: SideChannel<String>,
@@ -1019,7 +1018,7 @@ impl EGraph {
     }
 }
 
-#[derive(Clone)]
+#[derive(Clone, Serialize)]
 struct RuleInfo {
     last_run_at: Timestamp,
     query: rule::Query,
@@ -1027,7 +1026,7 @@ struct RuleInfo {
     desc: Arc<str>,
 }
 
-#[derive(Clone)]
+#[derive(Clone, Serialize)]
 struct CachedPlanInfo {
     plan: Arc<core_relations::CachedPlan>,
     /// A mapping from index into a [`rule::Query`]'s atoms to the atoms in the underlying cached
@@ -1628,7 +1627,7 @@ fn combine_subsumed(v1: Value, v2: Value) -> Value {
 ///
 /// Where there are `n+1` key columns and columns marked with a question mark are optional,
 /// depending on the egraph and table-level configuration.
-#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash, Serialize)]
 struct SchemaMath {
     /// Whether or not proofs are enabled.
     tracing: bool,

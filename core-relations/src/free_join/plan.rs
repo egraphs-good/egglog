@@ -2,6 +2,7 @@ use std::{collections::BTreeMap, iter, mem, sync::Arc};
 
 use crate::numeric_id::{DenseIdMap, NumericId};
 use fixedbitset::FixedBitSet;
+use serde::Serialize;
 use smallvec::{SmallVec, smallvec};
 
 use crate::{
@@ -157,7 +158,7 @@ type VarSet = FixedBitSet;
 type AtomSet = FixedBitSet;
 
 /// The algorithm used to produce a join plan.
-#[derive(Default, Copy, Clone)]
+#[derive(Default, Copy, Clone, Serialize)]
 pub enum PlanStrategy {
     /// Free Join: Iteratively pick the smallest atom as the cover for the next
     /// stage, until all subatoms have been visited.

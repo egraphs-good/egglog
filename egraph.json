@@ -12,6 +12,627 @@
     "timestamp_counter": {
       "rep": 2
     },
+    "rules": {
+      "data": {
+        "data": [
+          {
+            "last_run_at": {
+              "rep": 0
+            },
+            "query": {
+              "uf_table": {
+                "rep": 0
+              },
+              "id_counter": {
+                "rep": 0
+              },
+              "ts_counter": {
+                "rep": 2
+              },
+              "tracing": false,
+              "rule_id": {
+                "rep": 0
+              },
+              "vars": {
+                "data": [
+                  {
+                    "ty": {
+                      "Base": {
+                        "rep": 3
+                      }
+                    },
+                    "term_var": {
+                      "rep": 0
+                    }
+                  },
+                  {
+                    "ty": {
+                      "Base": {
+                        "rep": 0
+                      }
+                    },
+                    "term_var": {
+                      "rep": 1
+                    }
+                  },
+                  {
+                    "ty": "Id",
+                    "term_var": {
+                      "rep": 2
+                    }
+                  },
+                  {
+                    "ty": "Id",
+                    "term_var": {
+                      "rep": 3
+                    }
+                  }
+                ],
+                "_marker": null
+              },
+              "atom_proofs": [],
+              "atoms": [
+                [
+                  {
+                    "rep": 1
+                  },
+                  [
+                    {
+                      "Var": {
+                        "id": {
+                          "rep": 0
+                        },
+                        "name": null
+                      }
+                    },
+                    {
+                      "Var": {
+                        "id": {
+                          "rep": 1
+                        },
+                        "name": null
+                      }
+                    },
+                    {
+                      "Var": {
+                        "id": {
+                          "rep": 3
+                        },
+                        "name": null
+                      }
+                    },
+                    {
+                      "Var": {
+                        "id": {
+                          "rep": 2
+                        },
+                        "name": null
+                      }
+                    }
+                  ],
+                  {
+                    "tracing": false,
+                    "subsume": true,
+                    "func_cols": 2
+                  }
+                ]
+              ],
+              "sole_focus": null,
+              "seminaive": false,
+              "plan_strategy": "MinCover"
+            },
+            "cached_plan": null,
+            "desc": "nonincremental rebuild FunctionId(0)"
+          },
+          {
+            "last_run_at": {
+              "rep": 0
+            },
+            "query": {
+              "uf_table": {
+                "rep": 0
+              },
+              "id_counter": {
+                "rep": 0
+              },
+              "ts_counter": {
+                "rep": 2
+              },
+              "tracing": false,
+              "rule_id": {
+                "rep": 1
+              },
+              "vars": {
+                "data": [
+                  {
+                    "ty": {
+                      "Base": {
+                        "rep": 3
+                      }
+                    },
+                    "term_var": {
+                      "rep": 0
+                    }
+                  },
+                  {
+                    "ty": {
+                      "Base": {
+                        "rep": 0
+                      }
+                    },
+                    "term_var": {
+                      "rep": 1
+                    }
+                  },
+                  {
+                    "ty": "Id",
+                    "term_var": {
+                      "rep": 2
+                    }
+                  },
+                  {
+                    "ty": "Id",
+                    "term_var": {
+                      "rep": 3
+                    }
+                  }
+                ],
+                "_marker": null
+              },
+              "atom_proofs": [],
+              "atoms": [
+                [
+                  {
+                    "rep": 2
+                  },
+                  [
+                    {
+                      "Var": {
+                        "id": {
+                          "rep": 0
+                        },
+                        "name": null
+                      }
+                    },
+                    {
+                      "Var": {
+                        "id": {
+                          "rep": 1
+                        },
+                        "name": null
+                      }
+                    },
+                    {
+                      "Var": {
+                        "id": {
+                          "rep": 3
+                        },
+                        "name": null
+                      }
+                    },
+                    {
+                      "Var": {
+                        "id": {
+                          "rep": 2
+                        },
+                        "name": null
+                      }
+                    }
+                  ],
+                  {
+                    "tracing": false,
+                    "subsume": true,
+                    "func_cols": 2
+                  }
+                ]
+              ],
+              "sole_focus": null,
+              "seminaive": false,
+              "plan_strategy": "MinCover"
+            },
+            "cached_plan": null,
+            "desc": "nonincremental rebuild FunctionId(1)"
+          },
+          {
+            "last_run_at": {
+              "rep": 22
+            },
+            "query": {
+              "uf_table": {
+                "rep": 0
+              },
+              "id_counter": {
+                "rep": 0
+              },
+              "ts_counter": {
+                "rep": 2
+              },
+              "tracing": false,
+              "rule_id": {
+                "rep": 2
+              },
+              "vars": {
+                "data": [
+                  {
+                    "ty": {
+                      "Base": {
+                        "rep": 3
+                      }
+                    },
+                    "term_var": {
+                      "rep": 0
+                    }
+                  },
+                  {
+                    "ty": {
+                      "Base": {
+                        "rep": 0
+                      }
+                    },
+                    "term_var": {
+                      "rep": 1
+                    }
+                  },
+                  {
+                    "ty": "Id",
+                    "term_var": {
+                      "rep": 2
+                    }
+                  },
+                  {
+                    "ty": {
+                      "Base": {
+                        "rep": 0
+                      }
+                    },
+                    "term_var": {
+                      "rep": 3
+                    }
+                  },
+                  {
+                    "ty": "Id",
+                    "term_var": {
+                      "rep": 4
+                    }
+                  },
+                  {
+                    "ty": {
+                      "Base": {
+                        "rep": 3
+                      }
+                    },
+                    "term_var": {
+                      "rep": 5
+                    }
+                  },
+                  {
+                    "ty": {
+                      "Base": {
+                        "rep": 0
+                      }
+                    },
+                    "term_var": {
+                      "rep": 6
+                    }
+                  }
+                ],
+                "_marker": null
+              },
+              "atom_proofs": [],
+              "atoms": [
+                [
+                  {
+                    "rep": 1
+                  },
+                  [
+                    {
+                      "Var": {
+                        "id": {
+                          "rep": 0
+                        },
+                        "name": "x"
+                      }
+                    },
+                    {
+                      "Var": {
+                        "id": {
+                          "rep": 1
+                        },
+                        "name": "$left8"
+                      }
+                    },
+                    {
+                      "Var": {
+                        "id": {
+                          "rep": 2
+                        },
+                        "name": null
+                      }
+                    },
+                    {
+                      "Const": {
+                        "val": {
+                          "rep": 0
+                        },
+                        "ty": "Id"
+                      }
+                    }
+                  ],
+                  {
+                    "tracing": false,
+                    "subsume": true,
+                    "func_cols": 2
+                  }
+                ],
+                [
+                  {
+                    "rep": 2
+                  },
+                  [
+                    {
+                      "Var": {
+                        "id": {
+                          "rep": 0
+                        },
+                        "name": "x"
+                      }
+                    },
+                    {
+                      "Var": {
+                        "id": {
+                          "rep": 3
+                        },
+                        "name": "$right9"
+                      }
+                    },
+                    {
+                      "Var": {
+                        "id": {
+                          "rep": 4
+                        },
+                        "name": null
+                      }
+                    },
+                    {
+                      "Const": {
+                        "val": {
+                          "rep": 0
+                        },
+                        "ty": "Id"
+                      }
+                    }
+                  ],
+                  {
+                    "tracing": false,
+                    "subsume": true,
+                    "func_cols": 2
+                  }
+                ]
+              ],
+              "sole_focus": null,
+              "seminaive": true,
+              "plan_strategy": "Gj"
+            },
+            "cached_plan": {
+              "plan": {
+                "desc": "(rule ((left x)\n       (right x))\n      ((left (+ x 1)))\n        :ruleset step-left )"
+              },
+              "atom_mapping": [
+                {
+                  "rep": 0
+                },
+                {
+                  "rep": 1
+                }
+              ]
+            },
+            "desc": "(rule ((left x)\n       (right x))\n      ((left (+ x 1)))\n        :ruleset step-left )"
+          },
+          {
+            "last_run_at": {
+              "rep": 21
+            },
+            "query": {
+              "uf_table": {
+                "rep": 0
+              },
+              "id_counter": {
+                "rep": 0
+              },
+              "ts_counter": {
+                "rep": 2
+              },
+              "tracing": false,
+              "rule_id": {
+                "rep": 3
+              },
+              "vars": {
+                "data": [
+                  {
+                    "ty": {
+                      "Base": {
+                        "rep": 3
+                      }
+                    },
+                    "term_var": {
+                      "rep": 0
+                    }
+                  },
+                  {
+                    "ty": {
+                      "Base": {
+                        "rep": 0
+                      }
+                    },
+                    "term_var": {
+                      "rep": 1
+                    }
+                  },
+                  {
+                    "ty": "Id",
+                    "term_var": {
+                      "rep": 2
+                    }
+                  },
+                  {
+                    "ty": {
+                      "Base": {
+                        "rep": 3
+                      }
+                    },
+                    "term_var": {
+                      "rep": 3
+                    }
+                  },
+                  {
+                    "ty": {
+                      "Base": {
+                        "rep": 0
+                      }
+                    },
+                    "term_var": {
+                      "rep": 4
+                    }
+                  },
+                  {
+                    "ty": "Id",
+                    "term_var": {
+                      "rep": 5
+                    }
+                  },
+                  {
+                    "ty": {
+                      "Base": {
+                        "rep": 0
+                      }
+                    },
+                    "term_var": {
+                      "rep": 6
+                    }
+                  }
+                ],
+                "_marker": null
+              },
+              "atom_proofs": [],
+              "atoms": [
+                [
+                  {
+                    "rep": 1
+                  },
+                  [
+                    {
+                      "Var": {
+                        "id": {
+                          "rep": 0
+                        },
+                        "name": "$+18"
+                      }
+                    },
+                    {
+                      "Var": {
+                        "id": {
+                          "rep": 1
+                        },
+                        "name": "$left16"
+                      }
+                    },
+                    {
+                      "Var": {
+                        "id": {
+                          "rep": 2
+                        },
+                        "name": null
+                      }
+                    },
+                    {
+                      "Const": {
+                        "val": {
+                          "rep": 0
+                        },
+                        "ty": "Id"
+                      }
+                    }
+                  ],
+                  {
+                    "tracing": false,
+                    "subsume": true,
+                    "func_cols": 2
+                  }
+                ],
+                [
+                  {
+                    "rep": 2
+                  },
+                  [
+                    {
+                      "Var": {
+                        "id": {
+                          "rep": 3
+                        },
+                        "name": "y"
+                      }
+                    },
+                    {
+                      "Var": {
+                        "id": {
+                          "rep": 4
+                        },
+                        "name": "$right17"
+                      }
+                    },
+                    {
+                      "Var": {
+                        "id": {
+                          "rep": 5
+                        },
+                        "name": null
+                      }
+                    },
+                    {
+                      "Const": {
+                        "val": {
+                          "rep": 0
+                        },
+                        "ty": "Id"
+                      }
+                    }
+                  ],
+                  {
+                    "tracing": false,
+                    "subsume": true,
+                    "func_cols": 2
+                  }
+                ]
+              ],
+              "sole_focus": null,
+              "seminaive": true,
+              "plan_strategy": "Gj"
+            },
+            "cached_plan": {
+              "plan": {
+                "desc": "(rule ((left x)\n       (right y)\n       (= x (+ y 1)))\n      ((right x))\n        :ruleset step-right )"
+              },
+              "atom_mapping": [
+                {
+                  "rep": 0
+                },
+                {
+                  "rep": 1
+                }
+              ]
+            },
+            "desc": "(rule ((left x)\n       (right y)\n       (= x (+ y 1)))\n      ((right x))\n        :ruleset step-right )"
+          },
+          null
+        ],
+        "_marker": null
+      },
+      "free": [
+        {
+          "rep": 4
+        }
+      ]
+    },
     "funcs": {
       "data": [
         {
@@ -75,11 +696,11 @@
     },
     "panic_message": null,
     "panic_funcs": {
-      "Illegal merge attempted for function left": {
-        "rep": 102
-      },
       "Illegal merge attempted for function right": {
         "rep": 103
+      },
+      "Illegal merge attempted for function left": {
+        "rep": 102
       }
     },
     "proof_specs": {
@@ -957,11 +1578,11 @@
     "search_and_apply_time_per_rule": {
       "(rule ((left x)\n       (right x))\n      ((left (+ x 1)))\n        :ruleset step-left )": {
         "secs": 0,
-        "nanos": 17957
+        "nanos": 17710
       },
       "(rule ((left x)\n       (right y)\n       (= x (+ y 1)))\n      ((right x))\n        :ruleset step-right )": {
         "secs": 0,
-        "nanos": 53376
+        "nanos": 73165
       }
     },
     "num_matches_per_rule": {
@@ -971,31 +1592,31 @@
     "search_and_apply_time_per_ruleset": {
       "step-right": {
         "secs": 0,
-        "nanos": 185666
+        "nanos": 183335
       },
       "step-left": {
         "secs": 0,
-        "nanos": 100999
+        "nanos": 101210
       }
     },
     "merge_time_per_ruleset": {
       "step-right": {
         "secs": 0,
-        "nanos": 53209
+        "nanos": 46918
       },
       "step-left": {
         "secs": 0,
-        "nanos": 56419
+        "nanos": 49376
       }
     },
     "rebuild_time_per_ruleset": {
       "step-right": {
         "secs": 0,
-        "nanos": 78834
+        "nanos": 68583
       },
       "step-left": {
         "secs": 0,
-        "nanos": 89083
+        "nanos": 77916
       }
     }
   },

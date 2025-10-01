@@ -266,7 +266,7 @@ impl<K, V: Clone> Clone for IdVec<K, V> {
 }
 
 /// Like a [`DenseIdMap`], but supports freeing (and reusing) slots.
-#[derive(Clone)]
+#[derive(Clone, Serialize)]
 pub struct DenseIdMapWithReuse<K, V> {
     data: DenseIdMap<K, V>,
     free: Vec<K>,
