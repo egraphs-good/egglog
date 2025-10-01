@@ -48,7 +48,6 @@ dyn_clone::clone_trait_object!(MergeFn);
 
 #[derive(Clone, Default, Serialize)]
 pub struct ContainerValues {
-    #[serde(skip)]
     subset_tracker: SubsetTracker,
     container_ids: InternTable<TypeId, ContainerValueId>,
     #[serde(skip)]

@@ -51,6 +51,21 @@
         "_marker": null
       },
       "container_values": {
+        "subset_tracker": {
+          "last_rebuilt_at": {
+            "data": [
+              {
+                "major": {
+                  "rep": 0
+                },
+                "minor": {
+                  "rep": 0
+                }
+              }
+            ],
+            "_marker": null
+          }
+        },
         "container_ids": {
           "shards_log2": 4
         }
@@ -793,11 +808,11 @@
     },
     "panic_message": null,
     "panic_funcs": {
-      "Illegal merge attempted for function right": {
-        "rep": 103
-      },
       "Illegal merge attempted for function left": {
         "rep": 102
+      },
+      "Illegal merge attempted for function right": {
+        "rep": 103
       }
     },
     "proof_specs": {
@@ -1675,11 +1690,11 @@
     "search_and_apply_time_per_rule": {
       "(rule ((left x)\n       (right x))\n      ((left (+ x 1)))\n        :ruleset step-left )": {
         "secs": 0,
-        "nanos": 14457
+        "nanos": 14749
       },
       "(rule ((left x)\n       (right y)\n       (= x (+ y 1)))\n      ((right x))\n        :ruleset step-right )": {
         "secs": 0,
-        "nanos": 55962
+        "nanos": 56876
       }
     },
     "num_matches_per_rule": {
@@ -1689,31 +1704,31 @@
     "search_and_apply_time_per_ruleset": {
       "step-right": {
         "secs": 0,
-        "nanos": 188835
+        "nanos": 149961
       },
       "step-left": {
         "secs": 0,
-        "nanos": 88081
+        "nanos": 82290
       }
     },
     "merge_time_per_ruleset": {
       "step-right": {
         "secs": 0,
-        "nanos": 40665
+        "nanos": 41541
       },
       "step-left": {
         "secs": 0,
-        "nanos": 43539
+        "nanos": 43625
       }
     },
     "rebuild_time_per_ruleset": {
       "step-right": {
         "secs": 0,
-        "nanos": 57709
+        "nanos": 61376
       },
       "step-left": {
         "secs": 0,
-        "nanos": 64917
+        "nanos": 69709
       }
     }
   },

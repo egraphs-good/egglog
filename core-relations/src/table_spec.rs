@@ -40,7 +40,7 @@ define_id!(
 );
 
 /// The version of a table.
-#[derive(Clone, Debug, PartialEq, Eq)]
+#[derive(Clone, Debug, PartialEq, Eq, Serialize)]
 pub struct TableVersion {
     /// New major generations invalidate all existing RowIds for a table.
     pub major: Generation,

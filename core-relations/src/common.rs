@@ -187,7 +187,7 @@ impl ShardData {
 
 /// A simple helper struct used when handling incremental rebuilds that tracks the subsets of set
 /// of tables that have been passed to the tracker.
-#[derive(Clone, Default)]
+#[derive(Clone, Default, Serialize)]
 pub(crate) struct SubsetTracker {
     last_rebuilt_at: DenseIdMap<TableId, TableVersion>,
 }
