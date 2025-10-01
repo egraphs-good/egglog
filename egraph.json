@@ -12,6 +12,67 @@
     "timestamp_counter": {
       "rep": 2
     },
+    "funcs": {
+      "data": [
+        {
+          "table": {
+            "rep": 1
+          },
+          "schema": [
+            {
+              "Base": {
+                "rep": 3
+              }
+            },
+            {
+              "Base": {
+                "rep": 0
+              }
+            }
+          ],
+          "incremental_rebuild_rules": [],
+          "nonincremental_rebuild_rule": {
+            "rep": 0
+          },
+          "default_val": {
+            "Const": {
+              "rep": 0
+            }
+          },
+          "can_subsume": true,
+          "name": "left"
+        },
+        {
+          "table": {
+            "rep": 2
+          },
+          "schema": [
+            {
+              "Base": {
+                "rep": 3
+              }
+            },
+            {
+              "Base": {
+                "rep": 0
+              }
+            }
+          ],
+          "incremental_rebuild_rules": [],
+          "nonincremental_rebuild_rule": {
+            "rep": 1
+          },
+          "default_val": {
+            "Const": {
+              "rep": 0
+            }
+          },
+          "can_subsume": true,
+          "name": "right"
+        }
+      ],
+      "_marker": null
+    },
     "panic_message": null,
     "panic_funcs": {
       "Illegal merge attempted for function right": {
@@ -765,11 +826,11 @@
     "search_and_apply_time_per_rule": {
       "(rule ((left x)\n       (right x))\n      ((left (+ x 1)))\n        :ruleset step-left )": {
         "secs": 0,
-        "nanos": 14959
+        "nanos": 14957
       },
       "(rule ((left x)\n       (right y)\n       (= x (+ y 1)))\n      ((right x))\n        :ruleset step-right )": {
         "secs": 0,
-        "nanos": 47794
+        "nanos": 43833
       }
     },
     "num_matches_per_rule": {
@@ -779,31 +840,31 @@
     "search_and_apply_time_per_ruleset": {
       "step-right": {
         "secs": 0,
-        "nanos": 153918
+        "nanos": 135746
       },
       "step-left": {
         "secs": 0,
-        "nanos": 94709
+        "nanos": 81378
       }
     },
     "merge_time_per_ruleset": {
       "step-right": {
         "secs": 0,
-        "nanos": 41960
+        "nanos": 46042
       },
       "step-left": {
         "secs": 0,
-        "nanos": 44460
+        "nanos": 44832
       }
     },
     "rebuild_time_per_ruleset": {
       "step-right": {
         "secs": 0,
-        "nanos": 61541
+        "nanos": 61416
       },
       "step-left": {
         "secs": 0,
-        "nanos": 69416
+        "nanos": 73166
       }
     }
   },

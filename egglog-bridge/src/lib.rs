@@ -74,7 +74,6 @@ pub struct EGraph {
     timestamp_counter: CounterId,
     #[serde(skip)]
     rules: DenseIdMapWithReuse<RuleId, RuleInfo>,
-    #[serde(skip)]
     funcs: DenseIdMap<FunctionId, FunctionInfo>,
     panic_message: SideChannel<String>,
     /// This is a cache of all the different panic messages that we may use while executing rules
@@ -1036,7 +1035,7 @@ struct CachedPlanInfo {
     atom_mapping: Vec<core_relations::AtomId>,
 }
 
-#[derive(Clone)]
+#[derive(Clone, Serialize)]
 struct FunctionInfo {
     table: TableId,
     schema: Vec<ColumnTy>,
@@ -1054,7 +1053,7 @@ impl FunctionInfo {
 }
 
 /// How defaults are computed for the given function.
-#[derive(Copy, Clone)]
+#[derive(Copy, Clone, Serialize)]
 pub enum DefaultVal {
     /// Generate a fresh UF id.
     FreshId,
