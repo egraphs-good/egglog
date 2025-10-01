@@ -1,4 +1,19 @@
 {
+  "backend": {
+    "uf_table": 0,
+    "id_counter": 0,
+    "reason_counter": 1,
+    "timestamp_counter": 2,
+    "panic_message": null,
+    "panic_funcs": {
+      "Illegal merge attempted for function left": 102,
+      "Illegal merge attempted for function right": 103
+    },
+    "cong_spec": 0,
+    "reason_tables": {},
+    "term_tables": {},
+    "tracing": false
+  },
   "pushed_egraph": null,
   "rulesets": {
     "": {
@@ -722,11 +737,11 @@
     "search_and_apply_time_per_rule": {
       "(rule ((left x)\n       (right x))\n      ((left (+ x 1)))\n        :ruleset step-left )": {
         "secs": 0,
-        "nanos": 62250
+        "nanos": 19418
       },
       "(rule ((left x)\n       (right y)\n       (= x (+ y 1)))\n      ((right x))\n        :ruleset step-right )": {
         "secs": 0,
-        "nanos": 89666
+        "nanos": 55333
       }
     },
     "num_matches_per_rule": {
@@ -736,31 +751,31 @@
     "search_and_apply_time_per_ruleset": {
       "step-right": {
         "secs": 0,
-        "nanos": 278332
+        "nanos": 206751
       },
       "step-left": {
         "secs": 0,
-        "nanos": 200209
+        "nanos": 105040
       }
     },
     "merge_time_per_ruleset": {
       "step-right": {
         "secs": 0,
-        "nanos": 81918
+        "nanos": 54541
       },
       "step-left": {
         "secs": 0,
-        "nanos": 89587
+        "nanos": 59710
       }
     },
     "rebuild_time_per_ruleset": {
       "step-right": {
         "secs": 0,
-        "nanos": 117376
+        "nanos": 79168
       },
       "step-left": {
         "secs": 0,
-        "nanos": 137417
+        "nanos": 88791
       }
     }
   },

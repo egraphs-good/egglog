@@ -6,6 +6,7 @@ use crate::core_relations::{
 };
 use crate::numeric_id::{DenseIdMap, NumericId, define_id};
 use hashbrown::{HashMap, HashSet};
+use serde::{Serialize, Serializer};
 
 use crate::{
     ColumnTy, EGraph, FunctionId, GetFirstMatch, QueryEntry, Result, RuleId, SideChannel,
@@ -18,6 +19,18 @@ use crate::{
 };
 
 define_id!(pub(crate) ReasonSpecId, u32, "A unique identifier for the step in a proof.");
+
+impl Serialize for ReasonSpecId {
+    fn serialize<S>(
+        &self,
+        serializer: S,
+    ) -> std::result::Result<<S as Serializer>::Ok, <S as Serializer>::Error>
+    where
+        S: Serializer,
+    {
+        serializer.serialize_u32(self.rep)
+    }
+}
 
 /// Reasons provide extra provenance information accompanying a term being
 /// instantiated, or marked as equal to another term. All reasons are pointed

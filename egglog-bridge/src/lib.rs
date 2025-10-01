@@ -133,13 +133,10 @@ pub struct EGraph {
     panic_funcs: HashMap<String, ExternalFunctionId>,
     #[serde(skip)]
     proof_specs: IdVec<ReasonSpecId, Arc<ProofReason>>,
-    #[serde(skip)]
     cong_spec: ReasonSpecId,
     /// Side tables used to store proof information. We initialize these lazily
     /// as a proof object with a given number of parameters is added.
-    #[serde(skip)]
     reason_tables: IndexMap<usize /* arity */, TableId>,
-    #[serde(skip)]
     term_tables: IndexMap<usize /* arity */, TableId>,
     tracing: bool,
 }
