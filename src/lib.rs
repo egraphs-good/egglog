@@ -316,10 +316,8 @@ impl std::fmt::Display for CommandOutput {
 pub struct EGraph {
     backend: egglog_bridge::EGraph,
 
-    #[serde(skip)]
     pub parser: Parser,
 
-    #[serde(skip)]
     names: check_shadowing::Names,
     /// pushed_egraph forms a linked list of pushed egraphs.
     /// Pop reverts the egraph to the last pushed egraph.

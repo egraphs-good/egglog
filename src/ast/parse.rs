@@ -142,10 +142,13 @@ where
     }
 }
 
-#[derive(Clone)]
+#[derive(Clone, Serialize)]
 pub struct Parser {
+    #[serde(skip)]
     commands: HashMap<String, Arc<dyn Macro<Vec<Command>>>>,
+    #[serde(skip)]
     actions: HashMap<String, Arc<dyn Macro<Vec<Action>>>>,
+    #[serde(skip)]
     exprs: HashMap<String, Arc<dyn Macro<Expr>>>,
     user_defined: HashSet<String>,
     pub symbol_gen: SymbolGen,
