@@ -15,7 +15,7 @@ pub enum Literal {
     Unit,
 }
 
-#[derive(Clone, Debug, PartialEq, Eq, Hash)]
+#[derive(Clone, Debug, PartialEq, Eq, Hash, Serialize)]
 pub enum GenericExpr<Head, Leaf> {
     Var(Span, Leaf),
     Call(Span, Head, Vec<GenericExpr<Head, Leaf>>),

@@ -96,6 +96,88 @@
     "tracing": false
   },
   "pushed_egraph": null,
+  "functions": {
+    "left": {
+      "decl": {
+        "name": "left",
+        "subtype": "Relation",
+        "schema": {
+          "input": [
+            "i64"
+          ],
+          "output": "Unit"
+        },
+        "merge": null,
+        "cost": null,
+        "unextractable": true,
+        "ignore_viz": false,
+        "span": {
+          "Egglog": {
+            "file": {
+              "name": "tests/web-demo/schedule-demo.egg",
+              "contents": "; Step with alternating feet, left before right\n(relation left (i64))\n(relation right (i64))\n\n(left 0)\n(right 0)\n\n(ruleset step-left)\n(rule ((left x) (right x))\n      ((left (+ x 1)))\n      :ruleset step-left)\n\n(ruleset step-right)\n(rule ((left x) (right y) (= x (+ y 1)))\n      ((right x))\n      :ruleset step-right)\n\n(run-schedule\n      (repeat 10\n            (saturate step-right)\n            (saturate step-left)))\n\n; We took 10 steps with the left, but the right couldn't go the first round,\n; so we took only 9 steps with the right.\n(check (left 10))\n(check (right 9))\n(fail (check (left 11)))\n(fail (check (right 10)))\n"
+            },
+            "i": 48,
+            "j": 69
+          }
+        }
+      },
+      "schema": {
+        "input": [
+          {
+            "BaseSortImpl": null
+          }
+        ],
+        "output": {
+          "BaseSortImpl": null
+        }
+      },
+      "can_subsume": true,
+      "backend_id": {
+        "rep": 0
+      }
+    },
+    "right": {
+      "decl": {
+        "name": "right",
+        "subtype": "Relation",
+        "schema": {
+          "input": [
+            "i64"
+          ],
+          "output": "Unit"
+        },
+        "merge": null,
+        "cost": null,
+        "unextractable": true,
+        "ignore_viz": false,
+        "span": {
+          "Egglog": {
+            "file": {
+              "name": "tests/web-demo/schedule-demo.egg",
+              "contents": "; Step with alternating feet, left before right\n(relation left (i64))\n(relation right (i64))\n\n(left 0)\n(right 0)\n\n(ruleset step-left)\n(rule ((left x) (right x))\n      ((left (+ x 1)))\n      :ruleset step-left)\n\n(ruleset step-right)\n(rule ((left x) (right y) (= x (+ y 1)))\n      ((right x))\n      :ruleset step-right)\n\n(run-schedule\n      (repeat 10\n            (saturate step-right)\n            (saturate step-left)))\n\n; We took 10 steps with the left, but the right couldn't go the first round,\n; so we took only 9 steps with the right.\n(check (left 10))\n(check (right 9))\n(fail (check (left 11)))\n(fail (check (right 10)))\n"
+            },
+            "i": 70,
+            "j": 92
+          }
+        }
+      },
+      "schema": {
+        "input": [
+          {
+            "BaseSortImpl": null
+          }
+        ],
+        "output": {
+          "BaseSortImpl": null
+        }
+      },
+      "can_subsume": true,
+      "backend_id": {
+        "rep": 1
+      }
+    }
+  },
   "rulesets": {
     "": {
       "Rules": {}
@@ -826,11 +908,11 @@
     "search_and_apply_time_per_rule": {
       "(rule ((left x)\n       (right x))\n      ((left (+ x 1)))\n        :ruleset step-left )": {
         "secs": 0,
-        "nanos": 14957
+        "nanos": 18415
       },
       "(rule ((left x)\n       (right y)\n       (= x (+ y 1)))\n      ((right x))\n        :ruleset step-right )": {
         "secs": 0,
-        "nanos": 43833
+        "nanos": 52750
       }
     },
     "num_matches_per_rule": {
@@ -840,31 +922,31 @@
     "search_and_apply_time_per_ruleset": {
       "step-right": {
         "secs": 0,
-        "nanos": 135746
+        "nanos": 166830
       },
       "step-left": {
         "secs": 0,
-        "nanos": 81378
+        "nanos": 80915
       }
     },
     "merge_time_per_ruleset": {
       "step-right": {
         "secs": 0,
-        "nanos": 46042
+        "nanos": 53000
       },
       "step-left": {
         "secs": 0,
-        "nanos": 44832
+        "nanos": 55876
       }
     },
     "rebuild_time_per_ruleset": {
       "step-right": {
         "secs": 0,
-        "nanos": 61416
+        "nanos": 78457
       },
       "step-left": {
         "secs": 0,
-        "nanos": 73166
+        "nanos": 88416
       }
     }
   },

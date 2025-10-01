@@ -861,7 +861,7 @@ impl Display for FunctionSubtype {
 
 /// Represents the declaration of a function
 /// directly parsed from source syntax.
-#[derive(Clone, Debug, PartialEq, Eq, Hash)]
+#[derive(Clone, Debug, PartialEq, Eq, Hash, Serialize)]
 pub struct GenericFunctionDecl<Head, Leaf>
 where
     Head: Clone + Display,
@@ -900,7 +900,7 @@ impl Display for Variant {
     }
 }
 
-#[derive(Clone, Debug, PartialEq, Eq, Hash)]
+#[derive(Clone, Debug, PartialEq, Eq, Hash, Serialize)]
 pub struct Schema {
     pub input: Vec<String>,
     pub output: String,

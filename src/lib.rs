@@ -325,7 +325,6 @@ pub struct EGraph {
     /// Pop reverts the egraph to the last pushed egraph.
     pushed_egraph: Option<Box<Self>>,
 
-    #[serde(skip)]
     functions: IndexMap<String, Function>,
 
     rulesets: IndexMap<String, Ruleset>,
@@ -356,7 +355,7 @@ pub trait UserDefinedCommand: Send + Sync {
 ///
 /// This contains the schema information of the function and
 /// the backend id of the function in the e-graph.
-#[derive(Clone)]
+#[derive(Clone, Serialize)]
 pub struct Function {
     decl: ResolvedFunctionDecl,
     schema: ResolvedSchema,
@@ -381,7 +380,7 @@ impl Function {
     }
 }
 
-#[derive(Clone, Debug)]
+#[derive(Clone, Debug, Serialize)]
 pub struct ResolvedSchema {
     pub input: Vec<ArcSort>,
     pub output: ArcSort,
