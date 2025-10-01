@@ -229,7 +229,7 @@ impl<K: NumericId, V: Default> DenseIdMap<K, V> {
     }
 }
 
-#[derive(Debug)]
+#[derive(Debug, Serialize)]
 pub struct IdVec<K, V> {
     data: Vec<V>,
     _marker: std::marker::PhantomData<K>,

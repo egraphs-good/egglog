@@ -47,7 +47,7 @@ pub use rule::{Function, QueryEntry, RuleBuilder};
 pub use syntax::{SourceExpr, SourceSyntax, TopLevelLhsExpr};
 use thiserror::Error;
 
-#[derive(Debug, Copy, Clone, Eq, PartialEq, Hash)]
+#[derive(Debug, Copy, Clone, Eq, PartialEq, Hash, Serialize)]
 pub enum ColumnTy {
     Id,
     Base(BaseValueId),
@@ -83,7 +83,6 @@ pub struct EGraph {
     /// also serve as a debugging tool in the case that the number of panic messages grows without
     /// bound.
     panic_funcs: HashMap<String, ExternalFunctionId>,
-    #[serde(skip)]
     proof_specs: IdVec<ReasonSpecId, Arc<ProofReason>>,
     cong_spec: ReasonSpecId,
     /// Side tables used to store proof information. We initialize these lazily
