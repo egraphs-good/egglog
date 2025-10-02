@@ -60,7 +60,6 @@ pub struct TypeInfo {
     #[serde(skip)]
     reserved_primitives: HashSet<&'static str>,
     sorts: HashMap<String, Arc<dyn Sort>>,
-    #[serde(skip)]
     primitives: HashMap<String, Vec<PrimitiveWithId>>,
     func_types: HashMap<String, FuncType>,
     global_sorts: HashMap<String, ArcSort>,
