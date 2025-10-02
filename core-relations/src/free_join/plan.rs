@@ -31,7 +31,7 @@ pub(crate) struct SingleScanSpec {
 
 /// Join headers evaluate constraints on a single atom; they prune the search space before the rest
 /// of the join plan is executed.
-#[derive(Debug, Serialize)]
+#[derive(Debug, Serialize, Deserialize)]
 pub(crate) struct JoinHeader {
     pub atom: AtomId,
     /// We currently aren't using these at all. The plan is to use this to
@@ -47,15 +47,6 @@ pub(crate) struct JoinHeader {
     /// large).
     #[serde(skip)]
     pub subset: Subset,
-}
-
-impl<'de> Deserialize<'de> for JoinHeader {
-    fn deserialize<D>(_deserializer: D) -> Result<Self, D::Error>
-    where
-        D: serde::Deserializer<'de>,
-    {
-        todo!()
-    }
 }
 
 impl Clone for JoinHeader {

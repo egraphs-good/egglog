@@ -297,6 +297,15 @@ pub enum Subset {
     Sparse(Pooled<SortedOffsetVector>),
 }
 
+impl Default for Subset {
+    fn default() -> Self {
+        Self::Dense(OffsetRange {
+            start: RowId { rep: 0 },
+            end: RowId { rep: 0 },
+        }) // todo: This is a bogus default value
+    }
+}
+
 impl Offsets for Subset {
     fn bounds(&self) -> Option<(RowId, RowId)> {
         match self {
