@@ -114,7 +114,6 @@ pub(crate) type HashColumnIndex = Arc<ResettableOnceLock<Index<ColumnIndex>>>;
 #[derive(Serialize)]
 pub struct TableInfo {
     pub(crate) spec: TableSpec,
-    #[serde(skip)]
     pub(crate) table: WrappedTable,
     #[serde(skip)]
     pub(crate) indexes: DashMap<SmallVec<[ColumnId; 4]>, HashIndex>,
@@ -295,7 +294,6 @@ pub struct Database {
     container_values: ContainerValues,
     // Tracks the relative dependencies between tables during merge operations.
     deps: DependencyGraph,
-    #[serde(skip)]
     base_values: BaseValues,
     /// A rough estimate of the total size of the database.
     ///

@@ -6,6 +6,8 @@ use std::{
     hash::Hash,
 };
 
+use serde::Serialize;
+
 use crate::numeric_id::{DenseIdMap, NumericId, define_id};
 
 use crate::common::{HashMap, InternTable, Value};
@@ -62,9 +64,11 @@ impl Debug for BaseValuePrinter<'_> {
 }
 
 /// A registry for base value types and functions on them.
-#[derive(Clone, Default)]
+#[derive(Clone, Default, Serialize)]
 pub struct BaseValues {
+    #[serde(skip)]
     type_ids: HashMap<TypeId, BaseValueId>,
+    #[serde(skip)]
     tables: DenseIdMap<BaseValueId, Box<dyn DynamicInternTable>>,
 }
 

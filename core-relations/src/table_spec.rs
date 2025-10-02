@@ -511,8 +511,11 @@ impl<T: Table> TableWrapper for WrapperImpl<T> {
 /// object-safe extension methods to call methods that require `Self: Sized`.
 /// The implementations here downcast manually to the type used when
 /// constructing the WrappedTable.
+#[derive(Serialize)]
 pub struct WrappedTable {
+    #[serde(skip)]
     inner: Box<dyn Table>,
+    #[serde(skip)]
     wrapper: Box<dyn TableWrapper>,
 }
 

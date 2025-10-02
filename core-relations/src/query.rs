@@ -25,16 +25,16 @@ define_id!(pub RuleId, u32, "An identifier for a rule in a rule set");
 /// A cached plan for a given rule.
 #[derive(Serialize)]
 pub struct CachedPlan {
-    #[serde(skip)]
     plan: Plan,
     desc: String,
-    #[serde(skip)]
     actions: ActionInfo,
 }
 
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, Serialize)]
 pub(crate) struct ActionInfo {
+    #[serde(skip)]
     pub(crate) used_vars: SmallVec<[Variable; 4]>,
+    #[serde(skip)]
     pub(crate) instrs: Arc<Pooled<Vec<Instr>>>,
 }
 
