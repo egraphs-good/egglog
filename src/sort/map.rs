@@ -44,7 +44,7 @@ impl ContainerValue for MapContainer {
 /// - `map-not-contains`
 /// - `map-remove`
 /// - `map-length`
-#[derive(Clone, Debug, Serialize)]
+#[derive(Clone, Debug, Serialize, Deserialize)]
 pub struct MapSort {
     name: String,
     key: ArcSort,

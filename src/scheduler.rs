@@ -288,7 +288,7 @@ impl EGraph {
     }
 }
 
-#[derive(Clone, Serialize)]
+#[derive(Clone, Serialize, Deserialize)]
 pub(crate) struct SchedulerRecord {
     scheduler: Box<dyn Scheduler>,
 
@@ -299,7 +299,7 @@ pub(crate) struct SchedulerRecord {
 /// we split a rule (rule query action) into a worklist relation
 /// two rules (rule query (worklist vars false)) and
 /// (rule (worklist vars false) (action ... (delete (worklist vars false))))
-#[derive(Clone, Serialize)]
+#[derive(Clone, Serialize, Deserialize)]
 struct SchedulerRuleInfo {
     matches: Arc<Mutex<Vec<Value>>>,
     should_seek: bool,
@@ -413,7 +413,7 @@ impl SchedulerRuleInfo {
 mod test {
     use super::*;
 
-    #[derive(Clone, Serialize)]
+    #[derive(Clone, Serialize, Deserialize)]
     struct FirstNScheduler {
         n: usize,
     }

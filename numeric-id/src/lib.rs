@@ -229,7 +229,7 @@ impl<K: NumericId, V: Default> DenseIdMap<K, V> {
     }
 }
 
-#[derive(Debug, Serialize)]
+#[derive(Debug, Serialize, Deserialize)]
 pub struct IdVec<K, V> {
     data: Vec<V>,
     _marker: std::marker::PhantomData<K>,
@@ -266,7 +266,7 @@ impl<K, V: Clone> Clone for IdVec<K, V> {
 }
 
 /// Like a [`DenseIdMap`], but supports freeing (and reusing) slots.
-#[derive(Clone, Serialize)]
+#[derive(Clone, Serialize, Deserialize)]
 pub struct DenseIdMapWithReuse<K, V> {
     data: DenseIdMap<K, V>,
     free: Vec<K>,
@@ -434,7 +434,7 @@ macro_rules! atomic_of {
 macro_rules! define_id {
     ($v:vis $name:ident, $repr:tt) => { define_id!($v, $name, $repr, ""); };
     ($v:vis $name:ident, $repr:tt, $doc:tt) => {
-        #[derive(Copy, Clone, serde::Serialize)]
+        #[derive(Copy, Clone, serde::Serialize, serde::Deserialize)]
         #[doc = $doc]
         $v struct $name {
             rep: $repr,

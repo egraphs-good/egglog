@@ -22,7 +22,7 @@ use rayon::{
     prelude::*,
 };
 use rustc_hash::FxHasher;
-use serde::Serialize;
+use serde::{Deserialize, Serialize};
 
 use crate::{
     ColumnId, CounterId, ExecutionState, Offset, SubsetRef, TableId, TaggedRowBuffer, Value,
@@ -46,7 +46,7 @@ impl<T: Fn(&mut ExecutionState, Value, Value) -> Value + Clone + Send + Sync> Me
 // Implements `Clone` for `Box<dyn MergeFn>`.
 dyn_clone::clone_trait_object!(MergeFn);
 
-#[derive(Clone, Default, Serialize)]
+#[derive(Clone, Default, Serialize, Deserialize)] // todo: Default
 pub struct ContainerValues {
     subset_tracker: SubsetTracker,
     container_ids: InternTable<TypeId, ContainerValueId>,

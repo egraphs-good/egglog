@@ -6,7 +6,7 @@ use ast::Rule;
 use core_relations::ExternalFunction;
 use egglog_ast::generic_ast::GenericAction;
 
-#[derive(Clone, Debug, Serialize)]
+#[derive(Clone, Debug, Serialize, Deserialize)]
 pub struct FuncType {
     pub name: String,
     pub subtype: FunctionSubtype,
@@ -14,7 +14,7 @@ pub struct FuncType {
     pub output: ArcSort,
 }
 
-#[derive(Clone, Serialize)]
+#[derive(Clone, Serialize, Deserialize)]
 pub struct PrimitiveWithId {
     #[serde(skip)]
     pub prim: Arc<dyn Primitive + Send + Sync>,
@@ -52,7 +52,7 @@ impl Debug for PrimitiveWithId {
 }
 
 /// Stores resolved typechecking information.
-#[derive(Clone, Default, Serialize)]
+#[derive(Clone, Default, Serialize, Deserialize)]
 pub struct TypeInfo {
     #[serde(skip)]
     mksorts: HashMap<String, MkSort>,

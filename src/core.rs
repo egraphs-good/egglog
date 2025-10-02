@@ -39,14 +39,14 @@ impl<Head> HeadOrEq<Head> {
     }
 }
 
-#[derive(Debug, Clone, Serialize)]
+#[derive(Debug, Clone, Serialize, Deserialize)]
 pub(crate) struct SpecializedPrimitive {
     pub(crate) primitive: PrimitiveWithId,
     pub(crate) input: Vec<ArcSort>,
     pub(crate) output: ArcSort,
 }
 
-#[derive(Debug, Clone, Serialize)]
+#[derive(Debug, Clone, Serialize, Deserialize)]
 pub(crate) enum ResolvedCall {
     Func(FuncType),
     Primitive(SpecializedPrimitive),
@@ -143,7 +143,7 @@ impl IsFunc for String {
     }
 }
 
-#[derive(Debug, Clone, Serialize)]
+#[derive(Debug, Clone, Serialize, Deserialize)]
 pub enum GenericAtomTerm<Leaf> {
     Var(Span, Leaf),
     Literal(Span, Literal),
@@ -223,7 +223,7 @@ impl std::fmt::Display for AtomTerm {
     }
 }
 
-#[derive(Debug, Clone, PartialEq, Eq, Hash, Serialize)]
+#[derive(Debug, Clone, PartialEq, Eq, Hash, Serialize, Deserialize)]
 pub struct GenericAtom<Head, Leaf> {
     pub span: Span,
     pub head: Head,
@@ -279,7 +279,7 @@ impl Atom<String> {
     }
 }
 
-#[derive(Debug, Clone, Serialize)]
+#[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct Query<Head, Leaf> {
     pub atoms: Vec<GenericAtom<Head, Leaf>>,
 }
@@ -385,7 +385,7 @@ impl<Leaf: Clone> Query<ResolvedCall, Leaf> {
     }
 }
 
-#[derive(Clone, Debug, PartialEq, Eq, Hash, Serialize)]
+#[derive(Clone, Debug, PartialEq, Eq, Hash, Serialize, Deserialize)]
 pub enum GenericCoreAction<Head, Leaf> {
     Let(Span, Leaf, Head, Vec<GenericAtomTerm<Leaf>>),
     LetAtomTerm(Span, Leaf, GenericAtomTerm<Leaf>),
@@ -402,7 +402,7 @@ pub enum GenericCoreAction<Head, Leaf> {
 
 pub type CoreAction = GenericCoreAction<String, String>;
 
-#[derive(Clone, Debug, PartialEq, Eq, Hash, Serialize)]
+#[derive(Clone, Debug, PartialEq, Eq, Hash, Serialize, Deserialize)]
 pub struct GenericCoreActions<Head, Leaf>(pub(crate) Vec<GenericCoreAction<Head, Leaf>>);
 pub(crate) type ResolvedCoreActions = GenericCoreActions<ResolvedCall, ResolvedVar>;
 
@@ -800,7 +800,7 @@ where
 /// `body` can contain `Eq` atoms, which denotes equality constraints, so the `Head`
 /// for `body` needs to be a `HeadOrEq<Head>`, while `head` does not have equality
 /// constraints.
-#[derive(Debug, Clone, Serialize)]
+#[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct GenericCoreRule<HeadQ, HeadA, Leaf> {
     pub span: Span,
     pub body: Query<HeadQ, Leaf>,

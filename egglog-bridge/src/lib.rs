@@ -31,7 +31,7 @@ use log::info;
 use once_cell::sync::Lazy;
 pub use proof_format::{EqProofId, ProofStore, TermProofId};
 use proof_spec::{ProofReason, ProofReconstructionState, ReasonSpecId};
-use serde::Serialize;
+use serde::{Deserialize, Serialize};
 use smallvec::SmallVec;
 use web_time::{Duration, Instant};
 
@@ -47,7 +47,7 @@ pub use rule::{Function, QueryEntry, RuleBuilder};
 pub use syntax::{SourceExpr, SourceSyntax, TopLevelLhsExpr};
 use thiserror::Error;
 
-#[derive(Debug, Copy, Clone, Eq, PartialEq, Hash, Serialize)]
+#[derive(Debug, Copy, Clone, Eq, PartialEq, Hash, Serialize, Deserialize)]
 pub enum ColumnTy {
     Id,
     Base(BaseValueId),
@@ -64,7 +64,7 @@ impl Timestamp {
 }
 
 /// The state associated with an egglog program.
-#[derive(Clone, Serialize)]
+#[derive(Clone, Serialize, Deserialize)]
 pub struct EGraph {
     db: Database,
     uf_table: TableId,
@@ -1017,7 +1017,7 @@ impl EGraph {
     }
 }
 
-#[derive(Clone, Serialize)]
+#[derive(Clone, Serialize, Deserialize)]
 struct RuleInfo {
     last_run_at: Timestamp,
     query: rule::Query,
@@ -1025,7 +1025,7 @@ struct RuleInfo {
     desc: Arc<str>,
 }
 
-#[derive(Clone, Serialize)]
+#[derive(Clone, Serialize, Deserialize)]
 struct CachedPlanInfo {
     plan: Arc<core_relations::CachedPlan>,
     /// A mapping from index into a [`rule::Query`]'s atoms to the atoms in the underlying cached
@@ -1033,7 +1033,7 @@ struct CachedPlanInfo {
     atom_mapping: Vec<core_relations::AtomId>,
 }
 
-#[derive(Clone, Serialize)]
+#[derive(Clone, Serialize, Deserialize)]
 struct FunctionInfo {
     table: TableId,
     schema: Vec<ColumnTy>,
@@ -1051,7 +1051,7 @@ impl FunctionInfo {
 }
 
 /// How defaults are computed for the given function.
-#[derive(Copy, Clone, Serialize)]
+#[derive(Copy, Clone, Serialize, Deserialize)]
 pub enum DefaultVal {
     /// Generate a fresh UF id.
     FreshId,
@@ -1626,7 +1626,7 @@ fn combine_subsumed(v1: Value, v2: Value) -> Value {
 ///
 /// Where there are `n+1` key columns and columns marked with a question mark are optional,
 /// depending on the egraph and table-level configuration.
-#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash, Serialize)]
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash, Serialize, Deserialize)]
 struct SchemaMath {
     /// Whether or not proofs are enabled.
     tracing: bool,

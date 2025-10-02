@@ -50,7 +50,7 @@ use log::{Level, log_enabled};
 use numeric_id::DenseIdMap;
 use prelude::*;
 use scheduler::{SchedulerId, SchedulerRecord};
-use serde::Serialize;
+use serde::{Deserialize, Serialize};
 pub use serialize::{SerializeConfig, SerializeOutput, SerializedNode};
 use sort::*;
 use std::fmt::{Debug, Display, Formatter};
@@ -95,7 +95,7 @@ pub trait Primitive {
 /// the database was updated.
 /// Calling `union` on two run reports adds the timing
 /// information together.
-#[derive(Debug, Clone, Default, Serialize)]
+#[derive(Debug, Clone, Default, Serialize, Deserialize)]
 pub struct RunReport {
     /// If any changes were made to the database.
     pub updated: bool,
@@ -312,7 +312,7 @@ impl std::fmt::Display for CommandOutput {
 /// let mut egraph = EGraph::default();
 /// egraph.parse_and_run_program(None, "(datatype Math (Num i64) (Add Math Math))").unwrap();
 /// ```
-#[derive(Clone, Serialize)]
+#[derive(Clone, Serialize, Deserialize)]
 pub struct EGraph {
     backend: egglog_bridge::EGraph,
 
@@ -353,7 +353,7 @@ pub trait UserDefinedCommand: Send + Sync {
 ///
 /// This contains the schema information of the function and
 /// the backend id of the function in the e-graph.
-#[derive(Clone, Serialize)]
+#[derive(Clone, Serialize, Deserialize)]
 pub struct Function {
     decl: ResolvedFunctionDecl,
     schema: ResolvedSchema,
@@ -378,7 +378,7 @@ impl Function {
     }
 }
 
-#[derive(Clone, Debug, Serialize)]
+#[derive(Clone, Debug, Serialize, Deserialize)]
 pub struct ResolvedSchema {
     pub input: Vec<ArcSort>,
     pub output: ArcSort,

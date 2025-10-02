@@ -1,5 +1,5 @@
 use egglog_ast::generic_ast::GenericExpr;
-use serde::Serialize;
+use serde::{Deserialize, Serialize};
 use std::fmt::{Display, Formatter};
 use std::hash::Hash;
 use std::hash::Hasher;
@@ -8,7 +8,7 @@ use crate::ast::CorrespondingVar;
 use crate::core::ResolvedCall;
 use crate::{ArcSort, sort};
 
-#[derive(Debug, Clone, Serialize)]
+#[derive(Debug, Clone, Serialize, Deserializes)]
 pub struct ResolvedVar {
     pub name: String,
     pub sort: ArcSort,

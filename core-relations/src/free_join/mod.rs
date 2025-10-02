@@ -10,7 +10,7 @@ use std::{
 use crate::numeric_id::{DenseIdMap, DenseIdMapWithReuse, NumericId, define_id};
 use egglog_concurrency::ResettableOnceLock;
 use rayon::prelude::*;
-use serde::Serialize;
+use serde::{Deserialize, Serialize};
 use smallvec::SmallVec;
 use web_time::Duration;
 
@@ -111,7 +111,7 @@ pub(crate) struct VarInfo {
 pub(crate) type HashIndex = Arc<ResettableOnceLock<Index<TupleIndex>>>;
 pub(crate) type HashColumnIndex = Arc<ResettableOnceLock<Index<ColumnIndex>>>;
 
-#[derive(Serialize)]
+#[derive(Serialize, Deserialize)]
 pub struct TableInfo {
     pub(crate) spec: TableSpec,
     pub(crate) table: WrappedTable,
@@ -237,7 +237,7 @@ dyn_clone::clone_trait_object!(ExternalFunctionExt);
 pub(crate) type ExternalFunctions =
     DenseIdMapWithReuse<ExternalFunctionId, Box<dyn ExternalFunctionExt>>;
 
-#[derive(Default, Serialize)]
+#[derive(Default, Serialize, Deserialize)]
 pub(crate) struct Counters(DenseIdMap<CounterId, AtomicUsize>);
 
 impl Clone for Counters {
@@ -279,7 +279,7 @@ pub struct RuleReport {
 /// A collection of tables and indexes over them.
 ///
 /// A database also owns the memory pools used by its tables.
-#[derive(Clone, Default, Serialize)]
+#[derive(Clone, Default, Serialize, Deserialize)]
 pub struct Database {
     // NB: some fields are pub(crate) to allow some internal modules to avoid
     // borrowing the whole table.

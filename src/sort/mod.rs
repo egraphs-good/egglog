@@ -157,7 +157,7 @@ pub trait Presort {
 
 pub type MkSort = fn(&mut TypeInfo, String, &[Expr]) -> Result<ArcSort, TypeError>;
 
-#[derive(Debug, Serialize)]
+#[derive(Debug, Serialize, Deserialize)]
 pub struct EqSort {
     pub name: String,
 }

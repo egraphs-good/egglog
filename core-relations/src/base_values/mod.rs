@@ -6,7 +6,7 @@ use std::{
     hash::Hash,
 };
 
-use serde::Serialize;
+use serde::{Deserialize, Serialize};
 
 use crate::numeric_id::{DenseIdMap, NumericId, define_id};
 
@@ -64,7 +64,7 @@ impl Debug for BaseValuePrinter<'_> {
 }
 
 /// A registry for base value types and functions on them.
-#[derive(Clone, Default, Serialize)]
+#[derive(Clone, Default, Serialize, Deserialize)]
 pub struct BaseValues {
     #[serde(skip)]
     type_ids: HashMap<TypeId, BaseValueId>,

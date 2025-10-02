@@ -1,6 +1,6 @@
 use crate::*;
 
-#[derive(Clone, Debug, Default, Serialize)]
+#[derive(Clone, Debug, Default, Serialize, Deserialize)]
 pub(crate) struct Names(HashMap<String, Span>);
 
 impl Names {

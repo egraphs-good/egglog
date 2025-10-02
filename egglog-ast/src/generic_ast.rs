@@ -2,11 +2,11 @@ use std::fmt::Display;
 use std::hash::Hash;
 
 use ordered_float::OrderedFloat;
-use serde::Serialize;
+use serde::{Deserialize, Serialize};
 
 use crate::span::Span;
 
-#[derive(Debug, PartialEq, Eq, PartialOrd, Ord, Hash, Clone, Serialize)]
+#[derive(Debug, PartialEq, Eq, PartialOrd, Ord, Hash, Clone, Serialize, Deserialize)]
 pub enum Literal {
     Int(i64),
     Float(OrderedFloat<f64>),
@@ -15,7 +15,7 @@ pub enum Literal {
     Unit,
 }
 
-#[derive(Clone, Debug, PartialEq, Eq, Hash, Serialize)]
+#[derive(Clone, Debug, PartialEq, Eq, Hash, Serialize, Deserialize)]
 pub enum GenericExpr<Head, Leaf> {
     Var(Span, Leaf),
     Call(Span, Head, Vec<GenericExpr<Head, Leaf>>),
@@ -97,7 +97,7 @@ where
 }
 
 /// Change a function entry.
-#[derive(Clone, Debug, Copy, PartialEq, Eq, Hash, Serialize)]
+#[derive(Clone, Debug, Copy, PartialEq, Eq, Hash, Serialize, Deserialize)]
 pub enum Change {
     /// `delete` this entry from a function.
     /// Be wary! Only delete entries that are guaranteed to be not useful.

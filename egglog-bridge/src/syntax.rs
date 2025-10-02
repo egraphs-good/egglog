@@ -13,7 +13,7 @@ use crate::core_relations::{
 };
 use crate::numeric_id::{DenseIdMap, IdVec, NumericId, define_id};
 use crate::{EGraph, NOT_SUBSUMED, ProofReason, QueryEntry, ReasonSpecId, Result, SchemaMath};
-use serde::Serialize;
+use serde::{Deserialize, Serialize};
 use smallvec::SmallVec;
 
 use crate::{
@@ -24,7 +24,7 @@ use crate::{
 
 define_id!(pub SyntaxId, u32, "an offset into a Syntax DAG.");
 
-#[derive(Debug, Clone, Serialize)]
+#[derive(Debug, Clone, Serialize, Deserialize)]
 pub enum TopLevelLhsExpr {
     /// Simply requires the presence of a term matching the given [`SourceExpr`].
     Exists(SyntaxId),
@@ -34,7 +34,7 @@ pub enum TopLevelLhsExpr {
 
 /// Representative source syntax for _one line_ of an egglog query, namely, the left-hand-side of
 /// an egglog rule.
-#[derive(Debug, Clone, Serialize)]
+#[derive(Debug, Clone, Serialize, Deserialize)]
 pub enum SourceExpr {
     /// A constant.
     Const { ty: ColumnTy, val: Value },
@@ -67,7 +67,7 @@ pub enum SourceExpr {
 
 /// A data-structure representing an egglog query. Essentially, multiple [`SourceExpr`]s, one per
 /// line, along with a backing store accounting for subterms indexed by [`SyntaxId].
-#[derive(Debug, Clone, Default, Serialize)]
+#[derive(Debug, Clone, Default, Serialize, Deserialize)]
 pub struct SourceSyntax {
     pub(crate) backing: IdVec<SyntaxId, SourceExpr>,
     pub(crate) vars: Vec<(Variable, ColumnTy)>,
@@ -106,7 +106,7 @@ impl SourceSyntax {
 
 /// The data associated with a proof of a given term whose premises are given by a
 /// [`SourceSyntax`].
-#[derive(Debug, Serialize)]
+#[derive(Debug, Serialize, Deserialize)]
 pub(crate) struct RuleData {
     pub(crate) rule_id: RuleId,
     pub(crate) syntax: SourceSyntax,

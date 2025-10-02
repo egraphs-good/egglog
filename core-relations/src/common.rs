@@ -9,7 +9,7 @@ use crate::numeric_id::{DenseIdMap, IdVec, NumericId, define_id};
 use egglog_concurrency::ConcurrentVec;
 use hashbrown::HashTable;
 use rustc_hash::FxHasher;
-use serde::Serialize;
+use serde::{Deserialize, Serialize};
 
 use crate::{Subset, TableId, TableVersion, WrappedTable, pool::Clear};
 
@@ -23,7 +23,7 @@ pub(crate) type DashMap<K, V> = dashmap::DashMap<K, V, BuildHasherDefault<FxHash
 ///
 /// This is primarily used to manage the [`Value`]s associated with a a
 /// base value.
-#[derive(Clone, Serialize)]
+#[derive(Clone, Serialize, Deserialize)]
 pub struct InternTable<K, V> {
     #[serde(skip)]
     vals: Arc<ConcurrentVec<K>>,
@@ -187,7 +187,7 @@ impl ShardData {
 
 /// A simple helper struct used when handling incremental rebuilds that tracks the subsets of set
 /// of tables that have been passed to the tracker.
-#[derive(Clone, Default, Serialize)]
+#[derive(Clone, Default, Serialize, Deserialize)]
 pub(crate) struct SubsetTracker {
     last_rebuilt_at: DenseIdMap<TableId, TableVersion>,
 }

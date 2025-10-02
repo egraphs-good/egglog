@@ -3,7 +3,7 @@
 use std::{iter::once, sync::Arc};
 
 use crate::numeric_id::{DenseIdMap, IdVec, NumericId, define_id};
-use serde::Serialize;
+use serde::{Deserialize, Serialize};
 use smallvec::SmallVec;
 use thiserror::Error;
 
@@ -23,14 +23,14 @@ use crate::{
 define_id!(pub RuleId, u32, "An identifier for a rule in a rule set");
 
 /// A cached plan for a given rule.
-#[derive(Serialize)]
+#[derive(Serialize, Deserialize)]
 pub struct CachedPlan {
     plan: Plan,
     desc: String,
     actions: ActionInfo,
 }
 
-#[derive(Debug, Clone, Serialize)]
+#[derive(Debug, Clone, Serialize, Deserialize)]
 pub(crate) struct ActionInfo {
     #[serde(skip)]
     pub(crate) used_vars: SmallVec<[Variable; 4]>,

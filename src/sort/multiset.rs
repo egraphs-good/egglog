@@ -23,7 +23,7 @@ impl ContainerValue for MultiSetContainer {
     }
 }
 
-#[derive(Clone, Debug, Serialize)]
+#[derive(Clone, Debug, Serialize, Deserialize)]
 pub struct MultiSetSort {
     name: String,
     element: ArcSort,

@@ -6,7 +6,7 @@ use crate::core_relations::{
 };
 use crate::numeric_id::{DenseIdMap, NumericId, define_id};
 use hashbrown::{HashMap, HashSet};
-use serde::Serialize;
+use serde::{Deserialize, Serialize};
 
 use crate::{
     ColumnTy, EGraph, FunctionId, GetFirstMatch, QueryEntry, Result, RuleId, SideChannel,
@@ -24,7 +24,7 @@ define_id!(pub(crate) ReasonSpecId, u32, "A unique identifier for the step in a 
 /// instantiated, or marked as equal to another term. All reasons are pointed
 /// to by a row in a terms table.
 ///
-#[derive(Debug, Serialize)]
+#[derive(Debug, Serialize, Deserialize)]
 pub(crate) enum ProofReason {
     Rule(RuleData),
     /// Congruence reasons contain the "old" term id that the new term is equal

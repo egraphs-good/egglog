@@ -15,7 +15,7 @@ use crate::numeric_id::{DenseIdMap, NumericId, define_id};
 use anyhow::Context;
 use hashbrown::HashSet;
 use log::debug;
-use serde::Serialize;
+use serde::{Deserialize, Serialize};
 use smallvec::SmallVec;
 use thiserror::Error;
 
@@ -38,7 +38,7 @@ enum RuleBuilderError {
     ArityMismatch { expected: usize, got: usize },
 }
 
-#[derive(Clone, Serialize)]
+#[derive(Clone, Serialize, Deserialize)]
 struct VarInfo {
     ty: ColumnTy,
     /// If there is a "term-level" variant of this variable bound elsewhere, it
@@ -46,7 +46,7 @@ struct VarInfo {
     term_var: Variable,
 }
 
-#[derive(Clone, Debug, PartialEq, Eq, Hash, Serialize)]
+#[derive(Clone, Debug, PartialEq, Eq, Hash, Serialize, Deserialize)]
 pub enum QueryEntry {
     Var {
         id: Variable,
@@ -100,7 +100,7 @@ impl<T: Fn(&mut Bindings, &mut CoreRuleBuilder) -> Result<()> + Clone + Send> Br
 dyn_clone::clone_trait_object!(Brc);
 type BuildRuleCallback = Box<dyn Brc>;
 
-#[derive(Clone, Serialize)]
+#[derive(Clone, Serialize, Deserialize)]
 pub(crate) struct Query {
     uf_table: TableId,
     id_counter: CounterId,

@@ -142,7 +142,7 @@ where
     }
 }
 
-#[derive(Clone, Serialize)]
+#[derive(Clone, Serialize, Deserialize)]
 pub struct Parser {
     #[serde(skip)]
     commands: HashMap<String, Arc<dyn Macro<Vec<Command>>>>,

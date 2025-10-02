@@ -32,7 +32,7 @@ impl ContainerValue for FunctionContainer {
     }
 }
 
-#[derive(Debug, Serialize)]
+#[derive(Debug, Serialize, Deserialize)]
 pub struct FunctionSort {
     name: String,
     inputs: Vec<ArcSort>,

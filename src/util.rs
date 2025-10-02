@@ -1,4 +1,4 @@
-use serde::Serialize;
+use serde::{Deserialize, Serialize};
 
 use crate::{
     ast::ResolvedVar,
@@ -15,7 +15,7 @@ pub type IndexSet<K> = indexmap::IndexSet<K, BuildHasher>;
 /// Generates fresh symbols for internal use during typechecking and flattening.
 /// These are guaranteed not to collide with the
 /// user's symbols because they use $.
-#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct SymbolGen {
     count: usize,
     reserved_string: String,

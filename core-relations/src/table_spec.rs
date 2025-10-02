@@ -11,7 +11,7 @@ use std::{
 };
 
 use crate::numeric_id::{DenseIdMap, NumericId, define_id};
-use serde::Serialize;
+use serde::{Deserialize, Serialize};
 use smallvec::SmallVec;
 
 use crate::{
@@ -40,7 +40,7 @@ define_id!(
 );
 
 /// The version of a table.
-#[derive(Clone, Debug, PartialEq, Eq, Serialize)]
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
 pub struct TableVersion {
     /// New major generations invalidate all existing RowIds for a table.
     pub major: Generation,
@@ -51,7 +51,7 @@ pub struct TableVersion {
     // NB: we may want to make `Offset` and `RowId` the same.
 }
 
-#[derive(Clone, Serialize)]
+#[derive(Clone, Serialize, Deserialize)]
 pub struct TableSpec {
     /// The number of key columns for the table.
     pub n_keys: usize,
@@ -511,7 +511,7 @@ impl<T: Table> TableWrapper for WrapperImpl<T> {
 /// object-safe extension methods to call methods that require `Self: Sized`.
 /// The implementations here downcast manually to the type used when
 /// constructing the WrappedTable.
-#[derive(Serialize)]
+#[derive(Serialize, Deserialize)] // TODO(ajpal) default
 pub struct WrappedTable {
     #[serde(skip)]
     inner: Box<dyn Table>,
