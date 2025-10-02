@@ -6,7 +6,7 @@ use ast::Rule;
 use core_relations::ExternalFunction;
 use egglog_ast::generic_ast::GenericAction;
 
-#[derive(Clone, Debug, Serialize, Deserialize)]
+#[derive(Clone, Debug, Serialize)]
 pub struct FuncType {
     pub name: String,
     pub subtype: FunctionSubtype,
@@ -14,11 +14,29 @@ pub struct FuncType {
     pub output: ArcSort,
 }
 
-#[derive(Clone, Serialize, Deserialize)]
+impl<'de> Deserialize<'de> for FuncType {
+    fn deserialize<D>(_deserializer: D) -> Result<Self, D::Error>
+    where
+        D: serde::Deserializer<'de>,
+    {
+        todo!()
+    }
+}
+
+#[derive(Clone, Serialize)]
 pub struct PrimitiveWithId {
     #[serde(skip)]
     pub prim: Arc<dyn Primitive + Send + Sync>,
     pub id: ExternalFunctionId,
+}
+
+impl<'de> Deserialize<'de> for PrimitiveWithId {
+    fn deserialize<D>(_deserializer: D) -> Result<Self, D::Error>
+    where
+        D: serde::Deserializer<'de>,
+    {
+        todo!()
+    }
 }
 
 impl PrimitiveWithId {
@@ -52,7 +70,7 @@ impl Debug for PrimitiveWithId {
 }
 
 /// Stores resolved typechecking information.
-#[derive(Clone, Default, Serialize, Deserialize)]
+#[derive(Clone, Default, Serialize)]
 pub struct TypeInfo {
     #[serde(skip)]
     mksorts: HashMap<String, MkSort>,
@@ -63,6 +81,15 @@ pub struct TypeInfo {
     primitives: HashMap<String, Vec<PrimitiveWithId>>,
     func_types: HashMap<String, FuncType>,
     global_sorts: HashMap<String, ArcSort>,
+}
+
+impl<'de> Deserialize<'de> for TypeInfo {
+    fn deserialize<D>(_deserializer: D) -> Result<Self, D::Error>
+    where
+        D: serde::Deserializer<'de>,
+    {
+        todo!()
+    }
 }
 
 // These methods need to be on the `EGraph` in order to

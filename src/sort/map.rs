@@ -44,11 +44,20 @@ impl ContainerValue for MapContainer {
 /// - `map-not-contains`
 /// - `map-remove`
 /// - `map-length`
-#[derive(Clone, Debug, Serialize, Deserialize)]
+#[derive(Clone, Debug, Serialize)]
 pub struct MapSort {
     name: String,
     key: ArcSort,
     value: ArcSort,
+}
+
+impl<'de> Deserialize<'de> for MapSort {
+    fn deserialize<D>(_deserializer: D) -> Result<Self, D::Error>
+    where
+        D: serde::Deserializer<'de>,
+    {
+        todo!()
+    }
 }
 
 impl MapSort {

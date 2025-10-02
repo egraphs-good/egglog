@@ -23,10 +23,19 @@ impl ContainerValue for SetContainer {
     }
 }
 
-#[derive(Clone, Debug, Serialize, Deserialize)]
+#[derive(Clone, Debug, Serialize)]
 pub struct SetSort {
     name: String,
     element: ArcSort,
+}
+
+impl<'de> Deserialize<'de> for SetSort {
+    fn deserialize<D>(_deserializer: D) -> Result<Self, D::Error>
+    where
+        D: serde::Deserializer<'de>,
+    {
+        todo!()
+    }
 }
 
 impl SetSort {

@@ -3,11 +3,20 @@ use std::sync::Arc;
 
 use serde::{Deserialize, Serialize};
 
-#[derive(Clone, PartialEq, Eq, Hash, Serialize, Deserialize)]
+#[derive(Clone, PartialEq, Eq, Hash, Serialize)]
 pub enum Span {
     Panic,
     Egglog(Arc<EgglogSpan>),
     Rust(Arc<RustSpan>),
+}
+
+impl<'de> Deserialize<'de> for Span {
+    fn deserialize<D>(_deserializer: D) -> Result<Self, D::Error>
+    where
+        D: serde::Deserializer<'de>,
+    {
+        todo!()
+    }
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Hash, Serialize, Deserialize)]

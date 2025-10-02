@@ -511,12 +511,21 @@ impl<T: Table> TableWrapper for WrapperImpl<T> {
 /// object-safe extension methods to call methods that require `Self: Sized`.
 /// The implementations here downcast manually to the type used when
 /// constructing the WrappedTable.
-#[derive(Serialize, Deserialize)] // TODO(ajpal) default
+#[derive(Serialize)] // TODO(ajpal) default
 pub struct WrappedTable {
     #[serde(skip)]
     inner: Box<dyn Table>,
     #[serde(skip)]
     wrapper: Box<dyn TableWrapper>,
+}
+
+impl<'de> Deserialize<'de> for WrappedTable {
+    fn deserialize<D>(_deserializer: D) -> Result<Self, D::Error>
+    where
+        D: serde::Deserializer<'de>,
+    {
+        todo!()
+    }
 }
 
 impl WrappedTable {

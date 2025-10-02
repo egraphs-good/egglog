@@ -19,10 +19,19 @@ impl ContainerValue for VecContainer {
     }
 }
 
-#[derive(Clone, Debug, Serialize, Deserialize)]
+#[derive(Clone, Debug, Serialize)]
 pub struct VecSort {
     name: String,
     element: ArcSort,
+}
+
+impl<'de> Deserialize<'de> for VecSort {
+    fn deserialize<D>(_deserializer: D) -> Result<Self, D::Error>
+    where
+        D: serde::Deserializer<'de>,
+    {
+        todo!()
+    }
 }
 
 impl VecSort {

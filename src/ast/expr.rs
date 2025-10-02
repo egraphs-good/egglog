@@ -8,7 +8,7 @@ use crate::ast::CorrespondingVar;
 use crate::core::ResolvedCall;
 use crate::{ArcSort, sort};
 
-#[derive(Debug, Clone, Serialize, Deserializes)]
+#[derive(Debug, Clone, Serialize)]
 pub struct ResolvedVar {
     pub name: String,
     pub sort: ArcSort,
@@ -20,6 +20,15 @@ pub struct ResolvedVar {
     /// into consideration.
     /// Overall, the definition of equality between two ResolvedVars is dicey.
     pub is_global_ref: bool,
+}
+
+impl<'de> Deserialize<'de> for ResolvedVar {
+    fn deserialize<D>(_deserializer: D) -> Result<Self, D::Error>
+    where
+        D: serde::Deserializer<'de>,
+    {
+        todo!()
+    }
 }
 
 impl PartialEq for ResolvedVar {

@@ -288,11 +288,20 @@ impl EGraph {
     }
 }
 
-#[derive(Clone, Serialize, Deserialize)]
+#[derive(Clone, Serialize)]
 pub(crate) struct SchedulerRecord {
     scheduler: Box<dyn Scheduler>,
 
     rule_info: HashMap<String, SchedulerRuleInfo>,
+}
+
+impl<'de> Deserialize<'de> for SchedulerRecord {
+    fn deserialize<D>(_deserializer: D) -> Result<Self, D::Error>
+    where
+        D: serde::Deserializer<'de>,
+    {
+        todo!()
+    }
 }
 
 /// To enable scheduling without modifying the backend,
