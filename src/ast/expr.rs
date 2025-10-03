@@ -1,3 +1,4 @@
+use super::arc_sort_serde;
 use egglog_ast::generic_ast::GenericExpr;
 use serde::{Deserialize, Serialize};
 use std::fmt::{Display, Formatter};
@@ -8,9 +9,10 @@ use crate::ast::CorrespondingVar;
 use crate::core::ResolvedCall;
 use crate::{ArcSort, sort};
 
-#[derive(Debug, Clone, Serialize)]
+#[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct ResolvedVar {
     pub name: String,
+    #[serde(with = "arc_sort_serde")]
     pub sort: ArcSort,
     /// Is this a reference to a global variable?
     /// After the `remove_globals` pass, this should be `false`.
@@ -20,15 +22,6 @@ pub struct ResolvedVar {
     /// into consideration.
     /// Overall, the definition of equality between two ResolvedVars is dicey.
     pub is_global_ref: bool,
-}
-
-impl<'de> Deserialize<'de> for ResolvedVar {
-    fn deserialize<D>(_deserializer: D) -> Result<Self, D::Error>
-    where
-        D: serde::Deserializer<'de>,
-    {
-        todo!()
-    }
 }
 
 impl PartialEq for ResolvedVar {

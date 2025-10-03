@@ -32,20 +32,13 @@ impl ContainerValue for FunctionContainer {
     }
 }
 
-#[derive(Debug, Serialize)]
+#[derive(Debug, Serialize, Deserialize)]
 pub struct FunctionSort {
     name: String,
+    #[serde(with = "arc_sort_vec_serde")]
     inputs: Vec<ArcSort>,
+    #[serde(with = "arc_sort_serde")]
     output: ArcSort,
-}
-
-impl<'de> Deserialize<'de> for FunctionSort {
-    fn deserialize<D>(_deserializer: D) -> Result<Self, D::Error>
-    where
-        D: serde::Deserializer<'de>,
-    {
-        todo!()
-    }
 }
 
 impl FunctionSort {

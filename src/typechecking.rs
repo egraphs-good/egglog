@@ -6,21 +6,14 @@ use ast::Rule;
 use core_relations::ExternalFunction;
 use egglog_ast::generic_ast::GenericAction;
 
-#[derive(Clone, Debug, Serialize)]
+#[derive(Clone, Debug, Serialize, Deserialize)]
 pub struct FuncType {
     pub name: String,
     pub subtype: FunctionSubtype,
+    #[serde(with = "arc_sort_vec_serde")]
     pub input: Vec<ArcSort>,
+    #[serde(with = "arc_sort_serde")]
     pub output: ArcSort,
-}
-
-impl<'de> Deserialize<'de> for FuncType {
-    fn deserialize<D>(_deserializer: D) -> Result<Self, D::Error>
-    where
-        D: serde::Deserializer<'de>,
-    {
-        todo!()
-    }
 }
 
 #[derive(Clone, Serialize)]

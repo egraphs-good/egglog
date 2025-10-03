@@ -39,20 +39,13 @@ impl<Head> HeadOrEq<Head> {
     }
 }
 
-#[derive(Debug, Clone, Serialize)]
+#[derive(Debug, Clone, Serialize, Deserialize)]
 pub(crate) struct SpecializedPrimitive {
     pub(crate) primitive: PrimitiveWithId,
+    #[serde(with = "arc_sort_vec_serde")]
     pub(crate) input: Vec<ArcSort>,
+    #[serde(with = "arc_sort_serde")]
     pub(crate) output: ArcSort,
-}
-
-impl<'de> Deserialize<'de> for SpecializedPrimitive {
-    fn deserialize<D>(_deserializer: D) -> Result<Self, D::Error>
-    where
-        D: serde::Deserializer<'de>,
-    {
-        todo!()
-    }
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
