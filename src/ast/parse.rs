@@ -9,7 +9,7 @@ use ordered_float::OrderedFloat;
 macro_rules! span {
     () => {
         egglog_ast::span::Span::Rust(std::sync::Arc::new(egglog_ast::span::RustSpan {
-            file: file!(),
+            file: file!().to_string(),
             line: line!(),
             column: column!(),
         }))
