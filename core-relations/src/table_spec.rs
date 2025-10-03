@@ -10,7 +10,10 @@ use std::{
     ops::{Deref, DerefMut},
 };
 
-use crate::numeric_id::{DenseIdMap, NumericId, define_id};
+use crate::{
+    DisplacedTable,
+    numeric_id::{DenseIdMap, NumericId, define_id},
+};
 use serde::{Deserialize, Serialize};
 use smallvec::SmallVec;
 
@@ -354,6 +357,7 @@ pub trait MutationBuffer: Any + Send + Sync {
     fn fresh_handle(&self) -> Box<dyn MutationBuffer>;
 }
 
+#[derive(Default)]
 struct WrapperImpl<T>(PhantomData<T>);
 
 pub(crate) fn wrapper<T: Table>() -> Box<dyn TableWrapper> {
@@ -524,7 +528,10 @@ impl<'de> Deserialize<'de> for WrappedTable {
     where
         D: serde::Deserializer<'de>,
     {
-        todo!()
+        Ok(Self {
+            inner: Box::new(DisplacedTable::default()),
+            wrapper: Box::new(WrapperImpl::<DisplacedTable>::default()),
+        }) // todo: This is a bogus default value
     }
 }
 
