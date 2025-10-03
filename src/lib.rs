@@ -81,7 +81,9 @@ impl<'de> Deserialize<'de> for SerializableSort {
     where
         D: serde::Deserializer<'de>,
     {
-        todo!()
+        Ok(SerializableSort(Arc::new(EqSort {
+            name: "dummy".to_string(),
+        }))) // todo: This is a bogus default value
     }
 }
 
@@ -102,6 +104,22 @@ mod arc_sort_serde {
     {
         let wrapper = SerializableSort::deserialize(d)?;
         Ok(wrapper.0)
+    }
+}
+
+mod arc_sort_map_serde {
+    use super::*;
+    use hashbrown::HashMap;
+    use serde::{Deserialize, Deserializer};
+
+    pub fn deserialize<'de, D>(d: D) -> Result<HashMap<String, ArcSort>, D::Error>
+    where
+        D: Deserializer<'de>,
+    {
+        let wrapper_map: HashMap<String, SerializableSort> = HashMap::deserialize(d)?;
+        let map: HashMap<String, ArcSort> =
+            wrapper_map.into_iter().map(|(k, v)| (k, v.0)).collect();
+        Ok(map)
     }
 }
 

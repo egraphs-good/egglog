@@ -5,6 +5,7 @@ use crate::{
 use ast::Rule;
 use core_relations::ExternalFunction;
 use egglog_ast::generic_ast::GenericAction;
+use hashbrown::HashMap;
 
 #[derive(Clone, Debug, Serialize, Deserialize)]
 pub struct FuncType {
@@ -95,11 +96,33 @@ pub struct TypeInfo {
 }
 
 impl<'de> Deserialize<'de> for TypeInfo {
-    fn deserialize<D>(_deserializer: D) -> Result<Self, D::Error>
+    fn deserialize<D>(deserializer: D) -> Result<Self, D::Error>
     where
         D: serde::Deserializer<'de>,
     {
-        todo!()
+        #[derive(Deserialize)]
+        struct TypeInfoDe {
+            #[serde(with = "arc_sort_map_serde")]
+            sorts: HashMap<String, ArcSort>,
+
+            primitives: HashMap<String, Vec<PrimitiveWithId>>,
+
+            func_types: HashMap<String, FuncType>,
+
+            #[serde(with = "arc_sort_map_serde")]
+            global_sorts: HashMap<String, ArcSort>,
+        }
+
+        let helper = TypeInfoDe::deserialize(deserializer)?;
+
+        Ok(TypeInfo {
+            mksorts: Default::default(),
+            reserved_primitives: Default::default(),
+            sorts: helper.sorts,
+            primitives: helper.primitives,
+            func_types: helper.func_types,
+            global_sorts: helper.global_sorts,
+        }) // TODO: this is a bogus default value
     }
 }
 
@@ -147,8 +170,10 @@ impl EGraph {
 
         let name = sort.name();
         match self.type_info.sorts.entry(name.to_owned()) {
-            HEntry::Occupied(_) => Err(TypeError::SortAlreadyBound(name.to_owned(), span)),
-            HEntry::Vacant(e) => {
+            hashbrown::hash_map::Entry::Occupied(_) => {
+                Err(TypeError::SortAlreadyBound(name.to_owned(), span))
+            }
+            hashbrown::hash_map::Entry::Vacant(e) => {
                 e.insert(sort.clone());
                 sort.register_primitives(self);
                 Ok(())
@@ -315,8 +340,10 @@ impl TypeInfo {
     pub fn add_presort<S: Presort>(&mut self, span: Span) -> Result<(), TypeError> {
         let name = S::presort_name();
         match self.mksorts.entry(name.to_owned()) {
-            HEntry::Occupied(_) => Err(TypeError::SortAlreadyBound(name.to_owned(), span)),
-            HEntry::Vacant(e) => {
+            hashbrown::hash_map::Entry::Occupied(_) => {
+                Err(TypeError::SortAlreadyBound(name.to_owned(), span))
+            }
+            hashbrown::hash_map::Entry::Vacant(e) => {
                 e.insert(S::make_sort);
                 self.reserved_primitives.extend(S::reserved_primitives());
                 Ok(())
