@@ -24,11 +24,29 @@ pub struct PrimitiveWithId {
 }
 
 impl<'de> Deserialize<'de> for PrimitiveWithId {
-    fn deserialize<D>(_deserializer: D) -> Result<Self, D::Error>
+    fn deserialize<D>(deserializer: D) -> Result<Self, D::Error>
     where
         D: serde::Deserializer<'de>,
     {
-        todo!()
+        #[derive(Debug)]
+        pub struct DummyPrimitive;
+        impl Primitive for DummyPrimitive {
+            fn name(&self) -> &str {
+                "dummy"
+            }
+
+            fn get_type_constraints(&self, _span: &Span) -> Box<dyn TypeConstraint> {
+                Box::new(SimpleTypeConstraint::new("dummy", vec![], span!()))
+            }
+
+            fn apply(&self, _exec_state: &mut ExecutionState, _args: &[Value]) -> Option<Value> {
+                None
+            }
+        }
+
+        let id = ExternalFunctionId::deserialize(deserializer)?;
+        let prim = Arc::new(DummyPrimitive);
+        Ok(Self { prim, id }) // todo: this is a bogus default value
     }
 }
 
