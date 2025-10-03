@@ -14,7 +14,7 @@ use crate::{ast::ResolvedVar, core::GenericAtomTerm, core::ResolvedCoreRule, uti
 ///
 /// The matches that are not chosen in this iteration will be delayed
 /// to the next iteration.
-#[typetag::serialize]
+#[typetag::serde]
 pub trait Scheduler: dyn_clone::DynClone + Send + Sync {
     /// Whether or not the rules can be considered as saturated (i.e.,
     /// `run_report.updated == false`).
@@ -288,20 +288,11 @@ impl EGraph {
     }
 }
 
-#[derive(Clone, Serialize)]
+#[derive(Clone, Serialize, Deserialize)]
 pub(crate) struct SchedulerRecord {
     scheduler: Box<dyn Scheduler>,
 
     rule_info: HashMap<String, SchedulerRuleInfo>,
-}
-
-impl<'de> Deserialize<'de> for SchedulerRecord {
-    fn deserialize<D>(_deserializer: D) -> Result<Self, D::Error>
-    where
-        D: serde::Deserializer<'de>,
-    {
-        todo!()
-    }
 }
 
 /// To enable scheduling without modifying the backend,
@@ -427,7 +418,7 @@ mod test {
         n: usize,
     }
 
-    #[typetag::serialize]
+    #[typetag::serde]
     impl Scheduler for FirstNScheduler {
         fn filter_matches(&mut self, _rule: &str, _ruleset: &str, matches: &mut Matches) -> bool {
             if matches.match_size() <= self.n {
