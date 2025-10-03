@@ -23,13 +23,34 @@ pub(crate) type DashMap<K, V> = dashmap::DashMap<K, V, BuildHasherDefault<FxHash
 ///
 /// This is primarily used to manage the [`Value`]s associated with a a
 /// base value.
-#[derive(Clone, Serialize, Deserialize)]
+#[derive(Clone, Serialize)]
 pub struct InternTable<K, V> {
     #[serde(skip)]
     vals: Arc<ConcurrentVec<K>>,
     #[serde(skip)]
     data: Vec<Arc<Mutex<HashTable<V>>>>,
     shards_log2: u32,
+}
+
+impl<'de, K, V> Deserialize<'de> for InternTable<K, V> {
+    fn deserialize<D>(deserializer: D) -> Result<Self, D::Error>
+    where
+        D: serde::Deserializer<'de>,
+    {
+        #[derive(Deserialize)]
+        struct InternTableRepr {
+            shards_log2: u32,
+        }
+
+        let repr = InternTableRepr::deserialize(deserializer)?;
+
+        Ok(InternTable {
+            // todo: this is a bogus default value
+            vals: Arc::new(ConcurrentVec::new()),
+            data: Vec::new(),
+            shards_log2: repr.shards_log2,
+        })
+    }
 }
 
 impl<K, V> Default for InternTable<K, V> {

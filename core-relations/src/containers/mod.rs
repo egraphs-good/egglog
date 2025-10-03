@@ -46,21 +46,12 @@ impl<T: Fn(&mut ExecutionState, Value, Value) -> Value + Clone + Send + Sync> Me
 // Implements `Clone` for `Box<dyn MergeFn>`.
 dyn_clone::clone_trait_object!(MergeFn);
 
-#[derive(Clone, Default, Serialize)]
+#[derive(Clone, Default, Serialize, Deserialize)]
 pub struct ContainerValues {
     subset_tracker: SubsetTracker,
     container_ids: InternTable<TypeId, ContainerValueId>,
     #[serde(skip)]
     data: DenseIdMap<ContainerValueId, Box<dyn DynamicContainerEnv + Send + Sync>>,
-}
-
-impl<'de> Deserialize<'de> for ContainerValues {
-    fn deserialize<D>(_deserializer: D) -> Result<Self, D::Error>
-    where
-        D: serde::Deserializer<'de>,
-    {
-        todo!()
-    }
 }
 
 impl ContainerValues {
