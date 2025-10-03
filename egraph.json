@@ -15,7 +15,8 @@
                 "_marker": null
               },
               "allows_delete": false
-            }
+            },
+            "table": {}
           },
           {
             "spec": {
@@ -26,7 +27,8 @@
                 "_marker": null
               },
               "allows_delete": true
-            }
+            },
+            "table": {}
           },
           {
             "spec": {
@@ -37,7 +39,8 @@
                 "_marker": null
               },
               "allows_delete": true
-            }
+            },
+            "table": {}
           }
         ],
         "_marker": null
@@ -110,6 +113,7 @@
           "_marker": null
         }
       },
+      "base_values": {},
       "total_size_estimate": 21
     },
     "uf_table": {
@@ -527,7 +531,27 @@
             },
             "cached_plan": {
               "plan": {
-                "desc": "(rule ((left x)\n       (right x))\n      ((left (+ x 1)))\n        :ruleset step-left )"
+                "plan": {
+                  "stages": {
+                    "header": [
+                      {
+                        "atom": {
+                          "rep": 0
+                        }
+                      },
+                      {
+                        "atom": {
+                          "rep": 1
+                        }
+                      }
+                    ],
+                    "actions": {
+                      "rep": 0
+                    }
+                  }
+                },
+                "desc": "(rule ((left x)\n       (right x))\n      ((left (+ x 1)))\n        :ruleset step-left )",
+                "actions": {}
               },
               "atom_mapping": [
                 {
@@ -722,7 +746,27 @@
             },
             "cached_plan": {
               "plan": {
-                "desc": "(rule ((left x)\n       (right y)\n       (= x (+ y 1)))\n      ((right x))\n        :ruleset step-right )"
+                "plan": {
+                  "stages": {
+                    "header": [
+                      {
+                        "atom": {
+                          "rep": 0
+                        }
+                      },
+                      {
+                        "atom": {
+                          "rep": 1
+                        }
+                      }
+                    ],
+                    "actions": {
+                      "rep": 0
+                    }
+                  }
+                },
+                "desc": "(rule ((left x)\n       (right y)\n       (= x (+ y 1)))\n      ((right x))\n        :ruleset step-right )",
+                "actions": {}
               },
               "atom_mapping": [
                 {
@@ -808,11 +852,11 @@
     },
     "panic_message": null,
     "panic_funcs": {
-      "Illegal merge attempted for function right": {
-        "rep": 103
-      },
       "Illegal merge attempted for function left": {
         "rep": 102
+      },
+      "Illegal merge attempted for function right": {
+        "rep": 103
       }
     },
     "proof_specs": {
@@ -1635,7 +1679,7 @@
   "seminaive": true,
   "type_info": {
     "sorts": {
-      "Unit": {
+      "f64": {
         "BaseSortImpl": null
       },
       "String": {
@@ -1647,13 +1691,13 @@
       "i64": {
         "BaseSortImpl": null
       },
-      "f64": {
+      "BigInt": {
         "BaseSortImpl": null
       },
       "BigRat": {
         "BaseSortImpl": null
       },
-      "BigInt": {
+      "Unit": {
         "BaseSortImpl": null
       }
     },
@@ -1662,49 +1706,6 @@
         {
           "id": {
             "rep": 6
-          }
-        }
-      ],
-      "and": [
-        {
-          "id": {
-            "rep": 3
-          }
-        }
-      ],
-      "<=": [
-        {
-          "id": {
-            "rep": 21
-          }
-        },
-        {
-          "id": {
-            "rep": 41
-          }
-        },
-        {
-          "id": {
-            "rep": 64
-          }
-        },
-        {
-          "id": {
-            "rep": 96
-          }
-        }
-      ],
-      "bigrat": [
-        {
-          "id": {
-            "rep": 86
-          }
-        }
-      ],
-      "denom": [
-        {
-          "id": {
-            "rep": 88
           }
         }
       ],
@@ -1720,95 +1721,6 @@
           }
         }
       ],
-      "cbrt": [
-        {
-          "id": {
-            "rep": 93
-          }
-        }
-      ],
-      "<<": [
-        {
-          "id": {
-            "rep": 15
-          }
-        },
-        {
-          "id": {
-            "rep": 58
-          }
-        }
-      ],
-      "bool-<=": [
-        {
-          "id": {
-            "rep": 26
-          }
-        },
-        {
-          "id": {
-            "rep": 69
-          }
-        }
-      ],
-      "*": [
-        {
-          "id": {
-            "rep": 9
-          }
-        },
-        {
-          "id": {
-            "rep": 34
-          }
-        },
-        {
-          "id": {
-            "rep": 52
-          }
-        },
-        {
-          "id": {
-            "rep": 77
-          }
-        }
-      ],
-      "xor": [
-        {
-          "id": {
-            "rep": 5
-          }
-        }
-      ],
-      "log": [
-        {
-          "id": {
-            "rep": 91
-          }
-        }
-      ],
-      "<": [
-        {
-          "id": {
-            "rep": 19
-          }
-        },
-        {
-          "id": {
-            "rep": 39
-          }
-        },
-        {
-          "id": {
-            "rep": 62
-          }
-        },
-        {
-          "id": {
-            "rep": 94
-          }
-        }
-      ],
       "bool->": [
         {
           "id": {
@@ -1821,58 +1733,39 @@
           }
         }
       ],
-      "sqrt": [
+      "to-string": [
         {
           "id": {
-            "rep": 92
-          }
-        }
-      ],
-      "numer": [
-        {
-          "id": {
-            "rep": 87
-          }
-        }
-      ],
-      "not": [
-        {
-          "id": {
-            "rep": 2
-          }
-        }
-      ],
-      "-": [
-        {
-          "id": {
-            "rep": 8
+            "rep": 30
           }
         },
         {
           "id": {
-            "rep": 33
+            "rep": 48
           }
         },
         {
           "id": {
-            "rep": 51
-          }
-        },
-        {
-          "id": {
-            "rep": 76
+            "rep": 73
           }
         }
       ],
-      "bool->=": [
+      "abs": [
         {
           "id": {
-            "rep": 27
+            "rep": 45
           }
         },
         {
           "id": {
-            "rep": 70
+            "rep": 82
+          }
+        }
+      ],
+      "log2": [
+        {
+          "id": {
+            "rep": 18
           }
         }
       ],
@@ -1883,29 +1776,25 @@
           }
         }
       ],
-      "or": [
+      ">=": [
         {
           "id": {
-            "rep": 4
-          }
-        }
-      ],
-      "bits": [
-        {
-          "id": {
-            "rep": 61
-          }
-        }
-      ],
-      "neg": [
-        {
-          "id": {
-            "rep": 38
+            "rep": 22
           }
         },
         {
           "id": {
-            "rep": 81
+            "rep": 42
+          }
+        },
+        {
+          "id": {
+            "rep": 65
+          }
+        },
+        {
+          "id": {
+            "rep": 97
           }
         }
       ],
@@ -1953,44 +1842,25 @@
           }
         }
       ],
-      ">=": [
+      "<=": [
         {
           "id": {
-            "rep": 22
+            "rep": 21
           }
         },
         {
           "id": {
-            "rep": 42
+            "rep": 41
           }
         },
         {
           "id": {
-            "rep": 65
+            "rep": 64
           }
         },
         {
           "id": {
-            "rep": 97
-          }
-        }
-      ],
-      "bool-<": [
-        {
-          "id": {
-            "rep": 24
-          }
-        },
-        {
-          "id": {
-            "rep": 67
-          }
-        }
-      ],
-      "floor": [
-        {
-          "id": {
-            "rep": 83
+            "rep": 96
           }
         }
       ],
@@ -2001,81 +1871,6 @@
           }
         }
       ],
-      "min": [
-        {
-          "id": {
-            "rep": 28
-          }
-        },
-        {
-          "id": {
-            "rep": 43
-          }
-        },
-        {
-          "id": {
-            "rep": 71
-          }
-        },
-        {
-          "id": {
-            "rep": 79
-          }
-        }
-      ],
-      "max": [
-        {
-          "id": {
-            "rep": 29
-          }
-        },
-        {
-          "id": {
-            "rep": 44
-          }
-        },
-        {
-          "id": {
-            "rep": 72
-          }
-        },
-        {
-          "id": {
-            "rep": 80
-          }
-        }
-      ],
-      "!=": [
-        {
-          "id": {
-            "rep": 98
-          }
-        }
-      ],
-      "bool-=": [
-        {
-          "id": {
-            "rep": 23
-          }
-        },
-        {
-          "id": {
-            "rep": 66
-          }
-        }
-      ],
-      "&": [
-        {
-          "id": {
-            "rep": 12
-          }
-        },
-        {
-          "id": {
-            "rep": 55
-          }
-        }
-      ],
       "to-i64": [
         {
           "id": {
@@ -2083,42 +1878,24 @@
           }
         }
       ],
-      "to-string": [
+      "bigrat": [
         {
           "id": {
-            "rep": 30
-          }
-        },
-        {
-          "id": {
-            "rep": 48
-          }
-        },
-        {
-          "id": {
-            "rep": 73
+            "rep": 86
           }
         }
       ],
-      ">": [
+      "from-string": [
         {
           "id": {
-            "rep": 20
+            "rep": 74
           }
-        },
+        }
+      ],
+      "numer": [
         {
           "id": {
-            "rep": 40
-          }
-        },
-        {
-          "id": {
-            "rep": 63
-          }
-        },
-        {
-          "id": {
-            "rep": 95
+            "rep": 87
           }
         }
       ],
@@ -2129,24 +1906,43 @@
           }
         }
       ],
-      "log2": [
+      "pow": [
         {
           "id": {
-            "rep": 18
+            "rep": 90
           }
         }
       ],
-      "not-Z": [
+      "floor": [
         {
           "id": {
-            "rep": 60
+            "rep": 83
           }
         }
       ],
-      "ordering-min": [
+      "sqrt": [
         {
           "id": {
-            "rep": 100
+            "rep": 92
+          }
+        }
+      ],
+      "<<": [
+        {
+          "id": {
+            "rep": 15
+          }
+        },
+        {
+          "id": {
+            "rep": 58
+          }
+        }
+      ],
+      "value-eq": [
+        {
+          "id": {
+            "rep": 99
           }
         }
       ],
@@ -2172,6 +1968,95 @@
           }
         }
       ],
+      "to-f64": [
+        {
+          "id": {
+            "rep": 46
+          }
+        },
+        {
+          "id": {
+            "rep": 89
+          }
+        }
+      ],
+      "ordering-max": [
+        {
+          "id": {
+            "rep": 101
+          }
+        }
+      ],
+      ">": [
+        {
+          "id": {
+            "rep": 20
+          }
+        },
+        {
+          "id": {
+            "rep": 40
+          }
+        },
+        {
+          "id": {
+            "rep": 63
+          }
+        },
+        {
+          "id": {
+            "rep": 95
+          }
+        }
+      ],
+      "max": [
+        {
+          "id": {
+            "rep": 29
+          }
+        },
+        {
+          "id": {
+            "rep": 44
+          }
+        },
+        {
+          "id": {
+            "rep": 72
+          }
+        },
+        {
+          "id": {
+            "rep": 80
+          }
+        }
+      ],
+      "not-i64": [
+        {
+          "id": {
+            "rep": 17
+          }
+        }
+      ],
+      "bool-=": [
+        {
+          "id": {
+            "rep": 23
+          }
+        },
+        {
+          "id": {
+            "rep": 66
+          }
+        }
+      ],
+      "count-matches": [
+        {
+          "id": {
+            "rep": 31
+          }
+        }
+      ],
       "^": [
         {
           "id": {
@@ -2189,48 +2074,10 @@
           }
         }
       ],
-      "not-i64": [
+      "log": [
         {
           "id": {
-            "rep": 17
-          }
-        }
-      ],
-      "count-matches": [
-        {
-          "id": {
-            "rep": 31
-          }
-        }
-      ],
-      "to-f64": [
-        {
-          "id": {
-            "rep": 46
-          }
-        },
-        {
-          "id": {
-            "rep": 89
-          }
-        }
-      ],
-      "from-string": [
-        {
-          "id": {
-            "rep": 74
-          }
-        }
-      ],
-      "abs": [
-        {
-          "id": {
-            "rep": 45
-          }
-        },
-        {
-          "id": {
-            "rep": 82
+            "rep": 91
           }
         }
       ],
@@ -2241,24 +2088,202 @@
           }
         }
       ],
-      "pow": [
+      "ordering-min": [
         {
           "id": {
-            "rep": 90
+            "rep": 100
           }
         }
       ],
-      "value-eq": [
+      "bool-<": [
         {
           "id": {
-            "rep": 99
+            "rep": 24
+          }
+        },
+        {
+          "id": {
+            "rep": 67
           }
         }
       ],
-      "ordering-max": [
+      "min": [
         {
           "id": {
-            "rep": 101
+            "rep": 28
+          }
+        },
+        {
+          "id": {
+            "rep": 43
+          }
+        },
+        {
+          "id": {
+            "rep": 71
+          }
+        },
+        {
+          "id": {
+            "rep": 79
+          }
+        }
+      ],
+      "neg": [
+        {
+          "id": {
+            "rep": 38
+          }
+        },
+        {
+          "id": {
+            "rep": 81
+          }
+        }
+      ],
+      "denom": [
+        {
+          "id": {
+            "rep": 88
+          }
+        }
+      ],
+      "<": [
+        {
+          "id": {
+            "rep": 19
+          }
+        },
+        {
+          "id": {
+            "rep": 39
+          }
+        },
+        {
+          "id": {
+            "rep": 62
+          }
+        },
+        {
+          "id": {
+            "rep": 94
+          }
+        }
+      ],
+      "bool->=": [
+        {
+          "id": {
+            "rep": 27
+          }
+        },
+        {
+          "id": {
+            "rep": 70
+          }
+        }
+      ],
+      "not-Z": [
+        {
+          "id": {
+            "rep": 60
+          }
+        }
+      ],
+      "bits": [
+        {
+          "id": {
+            "rep": 61
+          }
+        }
+      ],
+      "and": [
+        {
+          "id": {
+            "rep": 3
+          }
+        }
+      ],
+      "*": [
+        {
+          "id": {
+            "rep": 9
+          }
+        },
+        {
+          "id": {
+            "rep": 34
+          }
+        },
+        {
+          "id": {
+            "rep": 52
+          }
+        },
+        {
+          "id": {
+            "rep": 77
+          }
+        }
+      ],
+      "-": [
+        {
+          "id": {
+            "rep": 8
+          }
+        },
+        {
+          "id": {
+            "rep": 33
+          }
+        },
+        {
+          "id": {
+            "rep": 51
+          }
+        },
+        {
+          "id": {
+            "rep": 76
+          }
+        }
+      ],
+      "!=": [
+        {
+          "id": {
+            "rep": 98
+          }
+        }
+      ],
+      "cbrt": [
+        {
+          "id": {
+            "rep": 93
+          }
+        }
+      ],
+      "xor": [
+        {
+          "id": {
+            "rep": 5
+          }
+        }
+      ],
+      "not": [
+        {
+          "id": {
+            "rep": 2
+          }
+        }
+      ],
+      "&": [
+        {
+          "id": {
+            "rep": 12
+          }
+        },
+        {
+          "id": {
+            "rep": 55
           }
         }
       ],
@@ -2271,6 +2296,25 @@
         {
           "id": {
             "rep": 59
+          }
+        }
+      ],
+      "bool-<=": [
+        {
+          "id": {
+            "rep": 26
+          }
+        },
+        {
+          "id": {
+            "rep": 69
+          }
+        }
+      ],
+      "or": [
+        {
+          "id": {
+            "rep": 4
           }
         }
       ]
@@ -2308,11 +2352,11 @@
     "search_and_apply_time_per_rule": {
       "(rule ((left x)\n       (right x))\n      ((left (+ x 1)))\n        :ruleset step-left )": {
         "secs": 0,
-        "nanos": 18584
+        "nanos": 18502
       },
       "(rule ((left x)\n       (right y)\n       (= x (+ y 1)))\n      ((right x))\n        :ruleset step-right )": {
         "secs": 0,
-        "nanos": 70959
+        "nanos": 60208
       }
     },
     "num_matches_per_rule": {
@@ -2322,31 +2366,31 @@
     "search_and_apply_time_per_ruleset": {
       "step-right": {
         "secs": 0,
-        "nanos": 189831
+        "nanos": 178581
       },
       "step-left": {
         "secs": 0,
-        "nanos": 100001
+        "nanos": 83002
       }
     },
     "merge_time_per_ruleset": {
       "step-right": {
         "secs": 0,
-        "nanos": 54166
+        "nanos": 53541
       },
       "step-left": {
         "secs": 0,
-        "nanos": 55583
+        "nanos": 55919
       }
     },
     "rebuild_time_per_ruleset": {
       "step-right": {
         "secs": 0,
-        "nanos": 78750
+        "nanos": 79041
       },
       "step-left": {
         "secs": 0,
-        "nanos": 89458
+        "nanos": 89042
       }
     }
   },
