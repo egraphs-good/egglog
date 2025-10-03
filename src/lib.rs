@@ -73,6 +73,59 @@ use crate::core::{GenericActionsExt, ResolvedRuleExt};
 
 pub type ArcSort = Arc<dyn Sort>;
 
+#[derive(Clone, Serialize)]
+pub struct SerializableSort(pub ArcSort);
+
+impl<'de> Deserialize<'de> for SerializableSort {
+    fn deserialize<D>(_deserializer: D) -> Result<Self, D::Error>
+    where
+        D: serde::Deserializer<'de>,
+    {
+        todo!()
+    }
+}
+
+mod arc_sort_serde {
+    use super::*;
+    use serde::{Deserialize, Deserializer, Serialize, Serializer};
+
+    pub fn serialize<S>(value: &ArcSort, s: S) -> Result<S::Ok, S::Error>
+    where
+        S: Serializer,
+    {
+        SerializableSort(value.clone()).serialize(s)
+    }
+
+    pub fn deserialize<'de, D>(d: D) -> Result<ArcSort, D::Error>
+    where
+        D: Deserializer<'de>,
+    {
+        let wrapper = SerializableSort::deserialize(d)?;
+        Ok(wrapper.0)
+    }
+}
+
+mod arc_sort_vec_serde {
+    use super::*;
+    use serde::{Deserializer, Serializer};
+
+    pub fn serialize<S>(value: &Vec<ArcSort>, s: S) -> Result<S::Ok, S::Error>
+    where
+        S: Serializer,
+    {
+        let serializable: Vec<_> = value.iter().cloned().map(SerializableSort).collect();
+        serializable.serialize(s)
+    }
+
+    pub fn deserialize<'de, D>(d: D) -> Result<Vec<ArcSort>, D::Error>
+    where
+        D: Deserializer<'de>,
+    {
+        let wrappers: Vec<SerializableSort> = Vec::deserialize(d)?;
+        Ok(wrappers.into_iter().map(|w| w.0).collect())
+    }
+}
+
 /// A trait for implementing custom primitive operations in egglog.
 ///
 /// Primitives are built-in functions that can be called in both rule queries and actions.
@@ -378,19 +431,12 @@ impl Function {
     }
 }
 
-#[derive(Clone, Debug, Serialize)]
+#[derive(Clone, Debug, Serialize, Deserialize)]
 pub struct ResolvedSchema {
+    #[serde(with = "arc_sort_vec_serde")]
     pub input: Vec<ArcSort>,
+    #[serde(with = "arc_sort_serde")]
     pub output: ArcSort,
-}
-
-impl<'de> Deserialize<'de> for ResolvedSchema {
-    fn deserialize<D>(_deserializer: D) -> Result<Self, D::Error>
-    where
-        D: serde::Deserializer<'de>,
-    {
-        todo!()
-    }
 }
 
 impl ResolvedSchema {
