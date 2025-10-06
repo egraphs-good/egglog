@@ -5,6 +5,7 @@ use crate::core_relations::{
     ProofStep, RuleBuilder, Value,
 };
 use crate::numeric_id::{DenseIdMap, NumericId, define_id};
+use crate::rule::Variable;
 use hashbrown::{HashMap, HashSet};
 
 use crate::{
@@ -13,7 +14,7 @@ use crate::{
     proof_format::{
         CongProof, EqProof, EqProofId, Premise, ProofStore, Term, TermId, TermProof, TermProofId,
     },
-    rule::{AtomId, Bindings, DstVar, Variable},
+    rule::{AtomId, Bindings, DstVar, VariableId},
     syntax::{RuleData, SourceSyntax, SyntaxId},
 };
 
@@ -83,7 +84,7 @@ impl ProofBuilder {
         let term_counter = db.id_counter;
         let after = after.to_vec();
         move |inner, rb| {
-            let old_term = inner.mapping[vars.before_term];
+            let old_term = inner.mapping[vars.before_term.id];
             let reason_id = rb.lookup_or_insert(
                 reason_table,
                 &[Value::new(reason_spec_id.rep()).into(), old_term],
@@ -102,8 +103,8 @@ impl ProofBuilder {
                 &[term_counter.into(), reason_id.into()],
                 ColumnId::from_usize(entries.len()),
             )?;
-            inner.mapping.insert(vars.new_term, term_id.into());
-            inner.mapping.insert(vars.reason, reason_id.into());
+            inner.mapping.insert(vars.new_term.id, term_id.into());
+            inner.mapping.insert(vars.reason.id, reason_id.into());
             Ok(())
         }
     }
@@ -114,7 +115,7 @@ impl ProofBuilder {
         &mut self,
         func: FunctionId,
         entries: Vec<QueryEntry>,
-        term_var: Variable,
+        term_var: VariableId,
         db: &mut EGraph,
     ) -> impl Fn(&mut Bindings, &mut RuleBuilder) -> Result<()> + Clone + use<> {
         let func_table = db.funcs[func].table;
@@ -168,7 +169,7 @@ impl EGraph {
         &mut self,
         node: SyntaxId,
         syntax: &SourceSyntax,
-        subst: &DenseIdMap<Variable, Value>,
+        subst: &DenseIdMap<VariableId, Value>,
         memo: &mut DenseIdMap<SyntaxId, Value>,
     ) -> Value {
         if let Some(prev) = memo.get(node).copied() {
@@ -212,10 +213,10 @@ impl EGraph {
         RuleData { syntax, .. }: &RuleData,
         vars: &[Value],
         state: &mut ProofReconstructionState,
-    ) -> (DenseIdMap<Variable, TermId>, Vec<Premise>) {
+    ) -> (DenseIdMap<VariableId, TermId>, Vec<Premise>) {
         // First, reconstruct terms for all the relevant variables.
-        let mut subst_term = DenseIdMap::<Variable, TermId>::new();
-        let mut subst_val = DenseIdMap::<Variable, Value>::new();
+        let mut subst_term = DenseIdMap::<VariableId, TermId>::new();
+        let mut subst_val = DenseIdMap::<VariableId, Value>::new();
         for ((var, ty), term_id) in syntax.vars.iter().zip(vars) {
             subst_val.insert(*var, *term_id);
             let term = self.reconstruct_term(*term_id, *ty, state);

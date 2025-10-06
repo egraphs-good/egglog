@@ -103,6 +103,7 @@ pub(crate) struct VarInfo {
     /// rule.
     pub(crate) used_in_rhs: bool,
     pub(crate) defined_in_rhs: bool,
+    pub(crate) name: Option<Arc<str>>,
 }
 
 pub(crate) type HashIndex = Arc<ResettableOnceLock<Index<TupleIndex>>>;

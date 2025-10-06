@@ -25,9 +25,24 @@ use crate::{
     proof_spec::{ProofBuilder, RebuildVars},
 };
 
-define_id!(pub Variable, u32, "A variable in an egglog query");
+define_id!(pub VariableId, u32, "A variable in an egglog query");
 define_id!(pub AtomId, u32, "an atom in an egglog query");
 pub(crate) type DstVar = core_relations::QueryEntry;
+
+impl VariableId {
+    fn to_var(self) -> Variable {
+        Variable {
+            id: self,
+            name: None,
+        }
+    }
+}
+
+#[derive(Clone, Debug, PartialEq, Eq, Hash)]
+pub struct Variable {
+    pub id: VariableId,
+    pub name: Option<Box<str>>,
+}
 
 #[derive(Debug, Error)]
 enum RuleBuilderError {
@@ -40,6 +55,7 @@ enum RuleBuilderError {
 #[derive(Clone)]
 struct VarInfo {
     ty: ColumnTy,
+    name: Option<Box<str>>,
     /// If there is a "term-level" variant of this variable bound elsewhere, it
     /// is stored here. Otherwise, this points back to the variable itself.
     term_var: Variable,
@@ -47,10 +63,7 @@ struct VarInfo {
 
 #[derive(Clone, Debug, PartialEq, Eq, Hash)]
 pub enum QueryEntry {
-    Var {
-        id: Variable,
-        name: Option<Box<str>>,
-    },
+    Var(Variable),
     Const {
         val: Value,
         // Constants can have a type plumbed through, particularly if they
@@ -64,15 +77,15 @@ impl QueryEntry {
     /// variable.
     pub(crate) fn var(&self) -> Variable {
         match self {
-            QueryEntry::Var { id, .. } => *id,
+            QueryEntry::Var(v) => v.clone(),
             QueryEntry::Const { .. } => panic!("expected variable, found constant"),
         }
     }
 }
 
 impl From<Variable> for QueryEntry {
-    fn from(id: Variable) -> Self {
-        QueryEntry::Var { id, name: None }
+    fn from(var: Variable) -> Self {
+        QueryEntry::Var(var)
     }
 }
 
@@ -109,7 +122,7 @@ pub(crate) struct Query {
     ts_counter: CounterId,
     tracing: bool,
     rule_id: RuleId,
-    vars: DenseIdMap<Variable, VarInfo>,
+    vars: DenseIdMap<VariableId, VarInfo>,
     /// The current proofs that are in scope.
     atom_proofs: Vec<Variable>,
     atoms: Vec<(TableId, Vec<QueryEntry>, SchemaMath)>,
@@ -198,7 +211,7 @@ impl RuleBuilder<'_> {
         self.add_callback(move |inner, rb| {
             let entry = inner.convert(&entry);
             let res_inner = rb.lookup_with_default(uf_table, &[entry], entry, ColumnId::new(1))?;
-            inner.mapping.insert(res, res_inner.into());
+            inner.mapping.insert(res.id, res_inner.into());
             Ok(())
         });
         Ok(res)
@@ -243,7 +256,10 @@ impl RuleBuilder<'_> {
         r: &QueryEntry,
     ) -> std::result::Result<(), RuleBuilderError> {
         match (l, r) {
-            (QueryEntry::Var { id: v1, .. }, QueryEntry::Var { id: v2, .. }) => {
+            (
+                QueryEntry::Var(Variable { id: v1, .. }),
+                QueryEntry::Var(Variable { id: v2, .. }),
+            ) => {
                 let ty1 = self.query.vars[*v1].ty;
                 let ty2 = self.query.vars[*v2].ty;
                 if ty1 != ty2 {
@@ -266,7 +282,7 @@ impl RuleBuilder<'_> {
         entry: &QueryEntry,
         ty: ColumnTy,
     ) -> std::result::Result<(), RuleBuilderError> {
-        if let QueryEntry::Var { id: v, .. } = entry {
+        if let QueryEntry::Var(Variable { id: v, .. }) = entry {
             let var_ty = self.query.vars[*v].ty;
             if var_ty != ty {
                 return Err(RuleBuilderError::TypeMismatch {
@@ -326,7 +342,16 @@ impl RuleBuilder<'_> {
     /// Bind a new variable of the given type in the query.
     pub fn new_var(&mut self, ty: ColumnTy) -> Variable {
         let res = self.query.vars.next_id();
-        self.query.vars.push(VarInfo { ty, term_var: res })
+        let var = Variable {
+            id: res,
+            name: None,
+        };
+        self.query.vars.push(VarInfo {
+            ty,
+            name: None,
+            term_var: var.clone(),
+        });
+        var
     }
 
     /// Bind a new variable of the given type in the query.
@@ -334,11 +359,17 @@ impl RuleBuilder<'_> {
     /// This method attaches the given name to the [`QueryEntry`], which can
     /// make debugging easier.
     pub fn new_var_named(&mut self, ty: ColumnTy, name: &str) -> QueryEntry {
-        let id = self.new_var(ty);
-        QueryEntry::Var {
+        let id = self.query.vars.next_id();
+        let var = Variable {
             id,
             name: Some(name.into()),
-        }
+        };
+        self.query.vars.push(VarInfo {
+            ty,
+            name: Some(name.into()),
+            term_var: var.clone(),
+        });
+        QueryEntry::Var(var)
     }
 
     /// A low-level way to add an atom to a query.
@@ -390,15 +421,17 @@ impl RuleBuilder<'_> {
         let res = AtomId::from_usize(self.query.atoms.len());
         if self.egraph.tracing {
             let proof_var = atom[schema_math.proof_id_col()].var();
-            self.proof_builder.term_vars.insert(res, proof_var.into());
-            self.query.atom_proofs.push(proof_var);
-            if let Some(QueryEntry::Var { id, .. }) = entries.last() {
+            self.proof_builder
+                .term_vars
+                .insert(res, proof_var.clone().into());
+            if let Some(QueryEntry::Var(Variable { id, .. })) = entries.last() {
                 if table != self.egraph.uf_table {
                     // Don't overwrite "term_var" for uf_table; it stores
                     // reasons inline / doesn't have terms.
-                    self.query.vars[*id].term_var = proof_var;
+                    self.query.vars[*id].term_var = proof_var.clone();
                 }
             }
+            self.query.atom_proofs.push(proof_var);
         }
         self.query.atoms.push((table, atom, schema_math));
         res
@@ -418,7 +451,7 @@ impl RuleBuilder<'_> {
         self.query.add_rule.push(Box::new(move |inner, rb| {
             let args = inner.convert_all(&args);
             let var = rb.call_external_with_fallback(func, &args, panic_fn, &[])?;
-            inner.mapping.insert(res, var.into());
+            inner.mapping.insert(res.id, var.into());
             Ok(())
         }));
         res
@@ -478,7 +511,7 @@ impl RuleBuilder<'_> {
             let expected = dst_vars.pop().expect("must specify a return value");
             let var = rb.call_external(func, &dst_vars)?;
             match entries.last().unwrap() {
-                QueryEntry::Var { id, .. } if !inner.grounded.contains(id) => {
+                QueryEntry::Var(Variable { id, .. }) if !inner.grounded.contains(id) => {
                     inner.mapping.insert(*id, var.into());
                     inner.grounded.insert(*id);
                 }
@@ -513,6 +546,8 @@ impl RuleBuilder<'_> {
         assert_eq!(entries.len() + 1, info.schema.len());
         let entries = entries.to_vec();
         let table = info.table;
+
+        let ret: QueryEntry = ret.into();
         self.add_callback(move |inner, rb| {
             // Then, add a tuple subsuming the entry, but only if the entry isn't already subsumed.
             // Look up the current subsume value.
@@ -537,7 +572,7 @@ impl RuleBuilder<'_> {
                     timestamp: inner.next_ts(),
                     proof: cur_proof_val,
                     subsume: Some(SUBSUMED.into()),
-                    ret_val: Some(inner.convert(&ret.into())),
+                    ret_val: Some(inner.convert(&ret)),
                 },
             );
             rb.insert_if_eq(
@@ -559,10 +594,15 @@ impl RuleBuilder<'_> {
     ) -> Variable {
         let entries = entries.to_vec();
         let info = &self.egraph.funcs[func];
-        let res = self.query.vars.push(VarInfo {
-            ty: info.ret_ty(),
-            term_var: self.query.vars.next_id(),
-        });
+        let res = self
+            .query
+            .vars
+            .push(VarInfo {
+                ty: info.ret_ty(),
+                name: None,
+                term_var: self.query.vars.next_id().to_var(),
+            })
+            .to_var();
         let table = info.table;
         let id_counter = self.query.id_counter;
         let schema_math = SchemaMath {
@@ -603,13 +643,13 @@ impl RuleBuilder<'_> {
 
                 if self.egraph.tracing {
                     let term_var = self.new_var(ColumnTy::Id);
-                    self.query.vars[res].term_var = term_var;
+                    self.query.vars[res.id].term_var = term_var.clone();
                     let ts_var = self.new_var(ColumnTy::Id);
                     let mut insert_entries = entries.to_vec();
-                    insert_entries.push(res.into());
+                    insert_entries.push(res.clone().into());
                     let add_proof =
                         self.proof_builder
-                            .new_row(func, insert_entries, term_var, self.egraph);
+                            .new_row(func, insert_entries, term_var.id, self.egraph);
                     Box::new(move |inner, rb| {
                         let write_vals = get_write_vals(inner);
                         let dst_vars = inner.convert_all(&entries);
@@ -639,9 +679,9 @@ impl RuleBuilder<'_> {
                             &write_vals,
                             ColumnId::from_usize(schema_math.proof_id_col()),
                         )?;
-                        inner.mapping.insert(term_var, term.into());
-                        inner.mapping.insert(res, var.into());
-                        inner.mapping.insert(ts_var, ts.into());
+                        inner.mapping.insert(term_var.id, term.into());
+                        inner.mapping.insert(res.id, var.into());
+                        inner.mapping.insert(ts_var.id, ts.into());
                         rb.assert_eq(var.into(), term.into());
                         // The following bookeeping is only needed
                         // if the value is new. That only happens if
@@ -659,7 +699,7 @@ impl RuleBuilder<'_> {
                             &write_vals,
                             ColumnId::from_usize(schema_math.ret_val_col()),
                         )?;
-                        inner.mapping.insert(res, var.into());
+                        inner.mapping.insert(res.id, var.into());
                         Ok(())
                     })
                 }
@@ -682,8 +722,8 @@ impl RuleBuilder<'_> {
                             &dst_vars,
                             ColumnId::from_usize(schema_math.proof_id_col()),
                         )?;
-                        inner.mapping.insert(res, var.into());
-                        inner.mapping.insert(term_var, term.into());
+                        inner.mapping.insert(res.id, var.into());
+                        inner.mapping.insert(term_var.id, term.into());
                         Ok(())
                     })
                 } else {
@@ -696,7 +736,7 @@ impl RuleBuilder<'_> {
                             panic_func,
                             &[],
                         )?;
-                        inner.mapping.insert(res, var.into());
+                        inner.mapping.insert(res.id, var.into());
                         Ok(())
                     })
                 }
@@ -734,8 +774,8 @@ impl RuleBuilder<'_> {
             // Union proofs should reflect term-level variables rather than the
             // current leader of the e-class.
             for entry in [&mut l, &mut r] {
-                if let QueryEntry::Var { id, .. } = entry {
-                    *id = self.query.vars[*id].term_var;
+                if let QueryEntry::Var(v) = entry {
+                    *v = self.query.vars[v.id].term_var.clone();
                 }
             }
             Box::new(move |inner, rb| {
@@ -777,14 +817,7 @@ impl RuleBuilder<'_> {
         self.remove(func, &before[..before.len() - 1]);
         if !self.egraph.tracing {
             if let Some(subsume_var) = subsume_var {
-                self.set_with_subsume(
-                    func,
-                    after,
-                    QueryEntry::Var {
-                        id: subsume_var,
-                        name: None,
-                    },
-                );
+                self.set_with_subsume(func, after, QueryEntry::Var(subsume_var));
             } else {
                 self.set(func, after);
             }
@@ -794,13 +827,18 @@ impl RuleBuilder<'_> {
         let term_var = self.new_var(ColumnTy::Id);
         let reason_var = self.new_var(ColumnTy::Id);
         let before_id = before.last().unwrap().var();
-        let before_term = self.query.vars[before_id].term_var;
-        debug_assert_ne!(before_term, before_id);
+        let before_term = &self.query.vars[before_id.id].term_var;
+
+        let before_term_id = before_term.id;
+        let term_var_id = term_var.id;
+        let reason_var_id = reason_var.id;
+
+        debug_assert_ne!(before_term, &before_id);
         let add_proof = self.proof_builder.rebuild_proof(
             func,
             after,
             RebuildVars {
-                before_term,
+                before_term: before_term.clone(),
                 new_term: term_var,
                 reason: reason_var,
             },
@@ -814,6 +852,7 @@ impl RuleBuilder<'_> {
             subsume: info.can_subsume,
             func_cols: info.schema.len(),
         };
+
         self.query.add_rule.push(Box::new(move |inner, rb| {
             add_proof(inner, rb)?;
             let mut dst_vars = inner.convert_all(&after);
@@ -821,8 +860,8 @@ impl RuleBuilder<'_> {
                 &mut dst_vars,
                 RowVals {
                     timestamp: inner.next_ts(),
-                    proof: Some(inner.mapping[term_var]),
-                    subsume: subsume_var.map(|v| inner.mapping[v]),
+                    proof: Some(inner.mapping[term_var_id]),
+                    subsume: subsume_var.clone().map(|v| inner.mapping[v.id]),
                     ret_val: None, // already filled in,
                 },
             );
@@ -831,10 +870,10 @@ impl RuleBuilder<'_> {
             rb.insert(
                 uf_table,
                 &[
-                    inner.mapping[before_term],
-                    inner.mapping[term_var],
+                    inner.mapping[before_term_id],
+                    inner.mapping[term_var_id],
                     inner.next_ts(),
-                    inner.mapping[reason_var],
+                    inner.mapping[reason_var_id],
                 ],
             )
             .context("rebuild_row_uf")?;
@@ -872,6 +911,7 @@ impl RuleBuilder<'_> {
             let res = self.lookup(func, &entries[0..entries.len() - 1], || {
                 "lookup failed during proof-enabled set; this is an internal proofs bug".to_string()
             });
+            let res_entry = res.clone().into();
             self.union(res.into(), entries.last().unwrap().clone());
             if schema_math.subsume {
                 // Set the original row but with the passed-in subsumption value.
@@ -888,7 +928,7 @@ impl RuleBuilder<'_> {
                             timestamp: inner.next_ts(),
                             proof: Some(proof_var.into()),
                             subsume: Some(inner.convert(&subsume_entry)),
-                            ret_val: Some(inner.convert(&res.into())),
+                            ret_val: Some(inner.convert(&res_entry)),
                         },
                     );
                     rb.insert(table, &dst_vars).context("set")
@@ -929,7 +969,7 @@ impl RuleBuilder<'_> {
         let res = self.new_var(ret_ty);
         self.query.add_rule.push(Box::new(move |inner, rb| {
             let var = rb.call_external(panic, &[])?;
-            inner.mapping.insert(res, var.into());
+            inner.mapping.insert(res.id, var.into());
             Ok(())
         }));
     }
@@ -949,8 +989,12 @@ impl Query {
             mapping: Default::default(),
             grounded: Default::default(),
         };
-        for (var, _) in self.vars.iter() {
-            inner.mapping.insert(var, DstVar::Var(qb.new_var()));
+        for (var, info) in self.vars.iter() {
+            let new_var = match info.name.as_ref() {
+                Some(name) => qb.new_var_named(name),
+                None => qb.new_var(),
+            };
+            inner.mapping.insert(var, DstVar::Var(new_var));
         }
         (qb, inner)
     }
@@ -1068,8 +1112,8 @@ pub(crate) struct Bindings {
     /// If proofs are enabled, this variable contains the "reason id" for any union or insertion
     /// that happens on the RHS of a rule.
     pub(crate) lhs_reason: Option<DstVar>,
-    pub(crate) mapping: DenseIdMap<Variable, DstVar>,
-    grounded: HashSet<Variable>,
+    pub(crate) mapping: DenseIdMap<VariableId, DstVar>,
+    grounded: HashSet<VariableId>,
 }
 
 impl Bindings {
@@ -1079,7 +1123,7 @@ impl Bindings {
     }
     pub(crate) fn convert(&self, entry: &QueryEntry) -> DstVar {
         match entry {
-            QueryEntry::Var { id: v, .. } => self.mapping[*v],
+            QueryEntry::Var(Variable { id: v, .. }) => self.mapping[*v],
             QueryEntry::Const { val, .. } => DstVar::Const(*val),
         }
     }
@@ -1096,7 +1140,7 @@ fn add_atom(
     inner: &mut Bindings,
 ) -> Result<core_relations::AtomId> {
     for entry in entries {
-        if let QueryEntry::Var { id, .. } = entry {
+        if let QueryEntry::Var(Variable { id, .. }) = entry {
             inner.grounded.insert(*id);
         }
     }

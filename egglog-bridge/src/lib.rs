@@ -1025,19 +1025,19 @@ impl EGraph {
         for ty in schema {
             vars.push(rb.new_var(*ty).into());
         }
-        let canon_val = rb.new_var(ColumnTy::Id);
+        let canon_val: QueryEntry = rb.new_var(ColumnTy::Id).into();
         let subsume_var = subsume.then(|| rb.new_var(ColumnTy::Id));
         rb.add_atom_with_timestamp_and_func(
             table_id,
             Some(table),
-            subsume_var.map(QueryEntry::from),
+            subsume_var.clone().map(QueryEntry::from),
             &vars,
         );
         rb.add_atom_with_timestamp_and_func(
             uf_table,
             None,
             None,
-            &[vars[col.index()].clone(), canon_val.into()],
+            &[vars[col.index()].clone(), canon_val.clone()],
         );
         rb.set_focus(1); // Set the uf atom as the sole focus.
 
@@ -1045,7 +1045,7 @@ impl EGraph {
         let mut canon = Vec::<QueryEntry>::with_capacity(schema.len());
         for (i, (var, ty)) in vars.iter().zip(schema.iter()).enumerate() {
             canon.push(if i == col.index() {
-                canon_val.into()
+                canon_val.clone()
             } else if let ColumnTy::Id = ty {
                 rb.lookup_uf(var.clone()).unwrap().into()
             } else {
@@ -1071,7 +1071,7 @@ impl EGraph {
         rb.add_atom_with_timestamp_and_func(
             table_id,
             Some(table),
-            subsume_var.map(QueryEntry::from),
+            subsume_var.clone().map(QueryEntry::from),
             &vars,
         );
         let mut lhs = SmallVec::<[QueryEntry; 4]>::new();
