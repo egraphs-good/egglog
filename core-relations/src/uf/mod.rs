@@ -54,11 +54,18 @@ type UnionFind = crate::union_find::UnionFind<Value>;
 /// decisions are made internally, so there may not literally be a row added
 /// with this value.
 pub struct DisplacedTable {
-    uf: UnionFind,
-    displaced: Vec<(Value, Value)>,
+    uf: UnionFind, // should be canonicalized by serialization time
+    // serializable as an array of integers
+    // the only IDs are leaders (because it's been canonicalized)
+    // k columns, k-1 are args, kth is the ID
+    // enode is the row index
+    // on deserialize: need to recompute this from `displaced`
+    displaced: Vec<(Value, Value)>, // this is "the table" everything else can be recomputed from this
+    // can even recanonicalize on serialization to get rid of dead things
     changed: bool,
     lookup_table: HashMap<Value, RowId>,
-    buffered_writes: Arc<SegQueue<RowBuffer>>,
+    buffered_writes: Arc<SegQueue<RowBuffer>>, // should be empty by the time we serialize
+                                               // deserialize can just make an empty one
 }
 
 struct Canonicalizer<'a> {

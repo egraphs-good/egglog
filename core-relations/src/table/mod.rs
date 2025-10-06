@@ -135,7 +135,7 @@ pub type MergeFn =
 
 pub struct SortedWritesTable {
     generation: Generation,
-    data: Rows,
+    data: Rows, // this has gotta be "the table"
     hash: ShardedHashTable<TableEntry>,
 
     n_keys: usize,
