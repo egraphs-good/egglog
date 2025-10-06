@@ -108,7 +108,7 @@ pub fn cli(mut egraph: EGraph) {
             let reader = BufReader::new(file);
             let egraph: EGraph =
                 serde_json::from_reader(reader).expect("failed to deserialize egraph");
-            serde_json::to_writer(
+            serde_json::to_writer_pretty(
                 std::io::BufWriter::new(
                     std::fs::File::create("reserialized_egraph.json")
                         .expect("failed to create reserialized_egraph.json"),

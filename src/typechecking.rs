@@ -29,25 +29,34 @@ impl<'de> Deserialize<'de> for PrimitiveWithId {
     where
         D: serde::Deserializer<'de>,
     {
+        // Define a helper matching the JSON structure
+        #[derive(Deserialize)]
+        struct Helper {
+            id: ExternalFunctionId,
+        }
+
+        // Deserialize into the helper first
+        let helper = Helper::deserialize(deserializer)?;
+
+        // Make a dummy primitive (as before)
         #[derive(Debug)]
-        pub struct DummyPrimitive;
+        struct DummyPrimitive;
         impl Primitive for DummyPrimitive {
             fn name(&self) -> &str {
                 "dummy"
             }
-
             fn get_type_constraints(&self, _span: &Span) -> Box<dyn TypeConstraint> {
                 Box::new(SimpleTypeConstraint::new("dummy", vec![], span!()))
             }
-
             fn apply(&self, _exec_state: &mut ExecutionState, _args: &[Value]) -> Option<Value> {
                 None
             }
         }
 
-        let id = ExternalFunctionId::deserialize(deserializer)?;
-        let prim = Arc::new(DummyPrimitive);
-        Ok(Self { prim, id }) // todo: this is a bogus default value
+        Ok(Self {
+            prim: Arc::new(DummyPrimitive),
+            id: helper.id,
+        })
     }
 }
 
