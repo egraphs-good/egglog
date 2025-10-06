@@ -6,6 +6,7 @@ use std::{
 };
 
 use crate::numeric_id::{DenseIdMap, IdVec, NumericId};
+use egglog_reports::{RuleReport, RuleSetReport};
 use dashmap::mapref::one::RefMut;
 use smallvec::SmallVec;
 use web_time::Instant;
@@ -15,7 +16,6 @@ use crate::{
     action::{Bindings, ExecutionState},
     common::{DashMap, Value},
     free_join::{
-        RuleReport, RuleSetReport,
         frame_update::{FrameUpdates, UpdateInstr},
         get_index_from_tableinfo,
     },

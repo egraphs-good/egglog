@@ -75,6 +75,7 @@ egglog-concurrency = { path = "concurrency", version = "1.0.0" }
 egglog-numeric-id = { path = "numeric-id", version = "1.0.0" }
 egglog-union-find = { path = "union-find", version = "1.0.0" }
 egglog-add-primitive = { path = "src/sort/add_primitive", version = "1.0.0" }
+egglog-reports = { path = "egglog-reports", version = "1.0.0" }
 egglog = { path = ".", default-features = false, version = "1.0.0" }
 
 ######################
@@ -146,6 +147,7 @@ egglog-ast = { workspace = true }
 egglog-bridge = { workspace = true }
 egglog-numeric-id = { workspace = true }
 egglog-add-primitive = { workspace = true }
+egglog-reports = { workspace = true }
 
 [build-dependencies]
 chrono = { workspace = true, features = ["now"], optional = true }

@@ -20,12 +20,13 @@ use std::{
 use crate::core_relations::{
     BaseValue, BaseValueId, BaseValues, ColumnId, Constraint, ContainerValue, ContainerValues,
     CounterId, Database, DisplacedTable, DisplacedTableWithProvenance, ExecutionState,
-    ExternalFunction, ExternalFunctionId, MergeVal, Offset, PlanStrategy, RuleSetReport,
+    ExternalFunction, ExternalFunctionId, MergeVal, Offset, PlanStrategy,
     SortedWritesTable, TableId, TaggedRowBuffer, Value, WrappedTable,
 };
 use crate::numeric_id::{DenseIdMap, DenseIdMapWithReuse, IdVec, NumericId, define_id};
 use egglog_core_relations as core_relations;
 use egglog_numeric_id as numeric_id;
+use egglog_reports::{IterationReport, RuleSetReport};
 use hashbrown::HashMap;
 use indexmap::{IndexMap, IndexSet, map::Entry};
 use log::info;
@@ -1857,17 +1858,3 @@ impl<T, A: smallvec::Array<Item = T>> HasResizeWith<T> for SmallVec<A> {
         self.resize_with(new_size, f);
     }
 }
-
-/// Running rules produces a report of the results.
-/// This includes rough timing information and whether
-/// the database was changed.
-#[derive(Debug, Default)]
-pub struct IterationReport {
-    pub changed: bool,
-    pub rule_reports: HashMap<String, RuleReport>,
-    pub search_and_apply_time: Duration,
-    pub merge_time: Duration,
-    pub rebuild_time: Duration,
-}
-
-pub use crate::core_relations::RuleReport;
