@@ -200,6 +200,16 @@ impl<'outer, 'a> QueryBuilder<'outer, 'a> {
             occurrences: Default::default(),
             used_in_rhs: false,
             defined_in_rhs: false,
+            name: None,
+        })
+    }
+
+    pub fn new_var_named(&mut self, name: &str) -> Variable {
+        self.query.var_info.push(VarInfo {
+            occurrences: Default::default(),
+            used_in_rhs: false,
+            defined_in_rhs: false,
+            name: Some(name.into()),
         })
     }
 

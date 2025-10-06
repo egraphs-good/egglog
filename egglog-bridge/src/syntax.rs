@@ -18,7 +18,7 @@ use smallvec::SmallVec;
 use crate::{
     ColumnTy, FunctionId, RuleId,
     proof_spec::ProofBuilder,
-    rule::{AtomId, Bindings, Variable},
+    rule::{AtomId, Bindings, VariableId},
 };
 
 define_id!(pub SyntaxId, u32, "an offset into a Syntax DAG.");
@@ -39,7 +39,7 @@ pub enum SourceExpr {
     Const { ty: ColumnTy, val: Value },
     /// A single variable.
     Var {
-        id: Variable,
+        id: VariableId,
         ty: ColumnTy,
         name: String,
     },
@@ -47,7 +47,7 @@ pub enum SourceExpr {
     ExternalCall {
         /// This external function call must be present in the destination query, and bound to this
         /// variable
-        var: Variable,
+        var: VariableId,
         ty: ColumnTy,
         func: ExternalFunctionId,
         args: Vec<SyntaxId>,
@@ -69,7 +69,7 @@ pub enum SourceExpr {
 #[derive(Debug, Clone, Default)]
 pub struct SourceSyntax {
     pub(crate) backing: IdVec<SyntaxId, SourceExpr>,
-    pub(crate) vars: Vec<(Variable, ColumnTy)>,
+    pub(crate) vars: Vec<(VariableId, ColumnTy)>,
     pub(crate) roots: Vec<TopLevelLhsExpr>,
 }
 

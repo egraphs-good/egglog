@@ -78,14 +78,14 @@ fn basic_query() {
     // Num(b, y, t3),
     // =>
     // Num(+ a b, z, 1)
-    let x = add_query.new_var();
-    let y = add_query.new_var();
-    let z = add_query.new_var();
-    let t1 = add_query.new_var();
-    let t2 = add_query.new_var();
-    let t3 = add_query.new_var();
-    let a = add_query.new_var();
-    let b = add_query.new_var();
+    let x = add_query.new_var_named("x");
+    let y = add_query.new_var_named("y");
+    let z = add_query.new_var_named("z");
+    let t1 = add_query.new_var_named("t1");
+    let t2 = add_query.new_var_named("t2");
+    let t3 = add_query.new_var_named("t3");
+    let a = add_query.new_var_named("a");
+    let b = add_query.new_var_named("b");
 
     add_query
         .add_atom(add, &[x.into(), y.into(), z.into(), t1.into()], &[])
@@ -168,9 +168,9 @@ fn line_graph_1_test(strat: PlanStrategy) {
     let mut query = rsb.new_rule();
     query.set_plan_strategy(strat);
     // edge(x, y), edge(y, z) => edge(x, z)
-    let x = query.new_var();
-    let y = query.new_var();
-    let z = query.new_var();
+    let x = query.new_var_named("x");
+    let y = query.new_var_named("y");
+    let z = query.new_var_named("z");
     query.add_atom(edges, &[x.into(), y.into()], &[]).unwrap();
     query.add_atom(edges, &[y.into(), z.into()], &[]).unwrap();
     let mut rule = query.build();
@@ -240,9 +240,9 @@ fn line_graph_2_test(strat: PlanStrategy) {
     let mut query = rsb.new_rule();
     query.set_plan_strategy(strat);
     // edge(x, y), edge(y, z) => edge(x, z) :where y > 1
-    let x = query.new_var();
-    let y = query.new_var();
-    let z = query.new_var();
+    let x = query.new_var_named("x");
+    let y = query.new_var_named("y");
+    let z = query.new_var_named("z");
     query
         .add_atom(
             edges,
@@ -312,13 +312,13 @@ fn minimal_ac() {
     // Add(x, y, <res>, cur)
     // Add(<res>, z, i2, cur)
 
-    let x = add_assoc.new_var();
-    let y = add_assoc.new_var();
-    let z = add_assoc.new_var();
-    let i1 = add_assoc.new_var();
-    let i2 = add_assoc.new_var();
-    let t1 = add_assoc.new_var();
-    let t2 = add_assoc.new_var();
+    let x = add_assoc.new_var_named("x");
+    let y = add_assoc.new_var_named("y");
+    let z = add_assoc.new_var_named("z");
+    let i1 = add_assoc.new_var_named("i1");
+    let i2 = add_assoc.new_var_named("i2");
+    let t1 = add_assoc.new_var_named("t1");
+    let t2 = add_assoc.new_var_named("t2");
     add_assoc
         .add_atom(
             add,
@@ -483,13 +483,13 @@ fn ac_test(strat: PlanStrategy) {
             // Add(x, y, <res>, cur)
             // Add(<res>, z, i2, cur)
 
-            let x = add_assoc.new_var();
-            let y = add_assoc.new_var();
-            let z = add_assoc.new_var();
-            let i1 = add_assoc.new_var();
-            let i2 = add_assoc.new_var();
-            let t1 = add_assoc.new_var();
-            let t2 = add_assoc.new_var();
+            let x = add_assoc.new_var_named("x");
+            let y = add_assoc.new_var_named("y");
+            let z = add_assoc.new_var_named("z");
+            let i1 = add_assoc.new_var_named("i1");
+            let i2 = add_assoc.new_var_named("i2");
+            let t1 = add_assoc.new_var_named("t1");
+            let t2 = add_assoc.new_var_named("t2");
             add_assoc
                 .add_atom(
                     add,
@@ -545,10 +545,10 @@ fn ac_test(strat: PlanStrategy) {
 
         let mut add_comm = rsb.new_rule();
         add_comm.set_plan_strategy(strat);
-        let x = add_comm.new_var();
-        let y = add_comm.new_var();
-        let z = add_comm.new_var();
-        let t1 = add_comm.new_var();
+        let x = add_comm.new_var_named("x");
+        let y = add_comm.new_var_named("y");
+        let z = add_comm.new_var_named("z");
+        let t1 = add_comm.new_var_named("t1");
         // Just look for the current timestamp
         add_comm
             .add_atom(
@@ -592,9 +592,9 @@ fn ac_test(strat: PlanStrategy) {
                 // nonincremental:
                 //  num(x, id, t1) =>
                 //  num(x, id', t1) where id' is canonical
-                let x = num_rebuild.new_var();
-                let id = num_rebuild.new_var();
-                let t1 = num_rebuild.new_var();
+                let x = num_rebuild.new_var_named("x");
+                let id = num_rebuild.new_var_named("id");
+                let t1 = num_rebuild.new_var_named("t1");
                 num_rebuild
                     .add_atom(num, &[x.into(), id.into(), t1.into()], &[])
                     .unwrap();
@@ -608,11 +608,11 @@ fn ac_test(strat: PlanStrategy) {
                     .unwrap();
                 rules.build();
             } else {
-                let x = num_rebuild.new_var();
-                let id = num_rebuild.new_var();
-                let t1 = num_rebuild.new_var();
-                let id_new = num_rebuild.new_var();
-                let t2 = num_rebuild.new_var();
+                let x = num_rebuild.new_var_named("x");
+                let id = num_rebuild.new_var_named("id");
+                let t1 = num_rebuild.new_var_named("t1");
+                let id_new = num_rebuild.new_var_named("id_new");
+                let t2 = num_rebuild.new_var_named("t2");
                 num_rebuild
                     .add_atom(num, &[x.into(), id.into(), t1.into()], &[])
                     .unwrap();
@@ -646,12 +646,12 @@ fn ac_test(strat: PlanStrategy) {
         if incremental_rebuild(uf_size, add_size) {
             let mut add_rebuild_id = rsb.new_rule();
             add_rebuild_id.set_plan_strategy(strat);
-            let x = add_rebuild_id.new_var();
-            let y = add_rebuild_id.new_var();
-            let id = add_rebuild_id.new_var();
-            let t1 = add_rebuild_id.new_var();
-            let id_new = add_rebuild_id.new_var();
-            let t2 = add_rebuild_id.new_var();
+            let x = add_rebuild_id.new_var_named("x");
+            let y = add_rebuild_id.new_var_named("y");
+            let id = add_rebuild_id.new_var_named("id");
+            let t1 = add_rebuild_id.new_var_named("t1");
+            let id_new = add_rebuild_id.new_var_named("id_new");
+            let t2 = add_rebuild_id.new_var_named("t2");
             add_rebuild_id
                 .add_atom(add, &[x.into(), y.into(), id.into(), t1.into()], &[])
                 .unwrap();
@@ -686,12 +686,12 @@ fn ac_test(strat: PlanStrategy) {
             num_rebuild(&mut rsb, cur_ts, next_ts);
             let mut add_rebuild_l = rsb.new_rule();
             add_rebuild_l.set_plan_strategy(strat);
-            let x = add_rebuild_l.new_var();
-            let y = add_rebuild_l.new_var();
-            let id = add_rebuild_l.new_var();
-            let t1 = add_rebuild_l.new_var();
-            let x_new = add_rebuild_l.new_var();
-            let t2 = add_rebuild_l.new_var();
+            let x = add_rebuild_l.new_var_named("x");
+            let y = add_rebuild_l.new_var_named("y");
+            let id = add_rebuild_l.new_var_named("id");
+            let t1 = add_rebuild_l.new_var_named("t1");
+            let x_new = add_rebuild_l.new_var_named("x_new");
+            let t2 = add_rebuild_l.new_var_named("t2");
             add_rebuild_l
                 .add_atom(add, &[x.into(), y.into(), id.into(), t1.into()], &[])
                 .unwrap();
@@ -727,12 +727,12 @@ fn ac_test(strat: PlanStrategy) {
             num_rebuild(&mut rsb, cur_ts, next_ts);
             let mut add_rebuild_r = rsb.new_rule();
             add_rebuild_r.set_plan_strategy(strat);
-            let x = add_rebuild_r.new_var();
-            let y = add_rebuild_r.new_var();
-            let id = add_rebuild_r.new_var();
-            let t1 = add_rebuild_r.new_var();
-            let y_new = add_rebuild_r.new_var();
-            let t2 = add_rebuild_r.new_var();
+            let x = add_rebuild_r.new_var_named("x");
+            let y = add_rebuild_r.new_var_named("y");
+            let id = add_rebuild_r.new_var_named("id");
+            let t1 = add_rebuild_r.new_var_named("t1");
+            let y_new = add_rebuild_r.new_var_named("y_new");
+            let t2 = add_rebuild_r.new_var_named("t2");
             add_rebuild_r
                 .add_atom(add, &[x.into(), y.into(), id.into(), t1.into()], &[])
                 .unwrap();
@@ -774,10 +774,10 @@ fn ac_test(strat: PlanStrategy) {
             //   insert add(x', y', id', cur)
             let mut rebuild = rsb.new_rule();
             rebuild.set_plan_strategy(strat);
-            let x = rebuild.new_var();
-            let y = rebuild.new_var();
-            let id = rebuild.new_var();
-            let t1 = rebuild.new_var();
+            let x = rebuild.new_var_named("x");
+            let y = rebuild.new_var_named("y");
+            let id = rebuild.new_var_named("id");
+            let t1 = rebuild.new_var_named("t1");
             rebuild
                 .add_atom(add, &[x.into(), y.into(), id.into(), t1.into()], &[])
                 .unwrap();
@@ -973,8 +973,8 @@ fn lookup_with_fallback_partial_success() {
 
     let mut rsb = RuleSetBuilder::new(&mut db);
     let mut query = rsb.new_rule();
-    let x = query.new_var();
-    let y = query.new_var();
+    let x = query.new_var_named("x");
+    let y = query.new_var_named("y");
     query.add_atom(g, &[x.into(), y.into()], &[]).unwrap();
     let mut rb = query.build();
     let res = rb
@@ -1062,8 +1062,8 @@ fn call_external_with_fallback() {
 
     let mut rsb = RuleSetBuilder::new(&mut db);
     let mut query = rsb.new_rule();
-    let x = query.new_var();
-    let y = query.new_var();
+    let x = query.new_var_named("x");
+    let y = query.new_var_named("y");
     query.add_atom(f, &[x.into(), y.into()], &[]).unwrap();
     let mut rb = query.build();
     let res = rb

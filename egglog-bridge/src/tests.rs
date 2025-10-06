@@ -649,77 +649,81 @@ fn container_test() {
 
     let vec_expand = {
         let mut rb = egraph.new_rule("", true);
-        let vec = rb.new_var(ColumnTy::Id);
-        let vec_id = rb.new_var(ColumnTy::Id);
-        let last = rb.new_var(ColumnTy::Id);
-        rb.query_table(vec_table, &[vec.into(), vec_id.into()], Some(false))
+        let vec: QueryEntry = rb.new_var(ColumnTy::Id).into();
+        let vec_id: QueryEntry = rb.new_var(ColumnTy::Id).into();
+        let last: QueryEntry = rb.new_var(ColumnTy::Id).into();
+        rb.query_table(vec_table, &[vec.clone(), vec_id], Some(false))
             .unwrap();
-        rb.query_prim(vec_last, &[vec.into(), last.into()], ColumnTy::Id)
+        rb.query_prim(vec_last, &[vec.clone(), last.clone()], ColumnTy::Id)
             .unwrap();
-        let add_last_0 = rb.lookup(
-            add_table,
-            &[
-                last.into(),
-                QueryEntry::Const {
-                    val: ids[0],
-                    ty: ColumnTy::Base(int_base),
-                },
-            ],
-            || "add_last_0".to_string(),
-        );
-        let add_0_last = rb.lookup(
-            add_table,
-            &[
-                QueryEntry::Const {
-                    val: ids[0],
-                    ty: ColumnTy::Base(int_base),
-                },
-                last.into(),
-            ],
-            || "add_0_last".to_string(),
-        );
-        let new_vec_1 = rb.call_external_func(
-            vec_push,
-            &[vec.into(), add_last_0.into()],
-            ColumnTy::Id,
-            || "".to_string(),
-        );
-        let new_vec_2 = rb.call_external_func(
-            vec_push,
-            &[vec.into(), add_0_last.into()],
-            ColumnTy::Id,
-            || "".to_string(),
-        );
-        rb.lookup(vec_table, &[new_vec_1.into()], String::new);
-        rb.lookup(vec_table, &[new_vec_2.into()], String::new);
+        let add_last_0 = rb
+            .lookup(
+                add_table,
+                &[
+                    last.clone(),
+                    QueryEntry::Const {
+                        val: ids[0],
+                        ty: ColumnTy::Base(int_base),
+                    },
+                ],
+                || "add_last_0".to_string(),
+            )
+            .into();
+        let add_0_last = rb
+            .lookup(
+                add_table,
+                &[
+                    QueryEntry::Const {
+                        val: ids[0],
+                        ty: ColumnTy::Base(int_base),
+                    },
+                    last,
+                ],
+                || "add_0_last".to_string(),
+            )
+            .into();
+        let new_vec_1 = rb
+            .call_external_func(vec_push, &[vec.clone(), add_last_0], ColumnTy::Id, || {
+                "".to_string()
+            })
+            .into();
+        let new_vec_2 = rb
+            .call_external_func(vec_push, &[vec, add_0_last], ColumnTy::Id, || {
+                "".to_string()
+            })
+            .into();
+        rb.lookup(vec_table, &[new_vec_1], String::new);
+        rb.lookup(vec_table, &[new_vec_2], String::new);
         rb.build()
     };
 
     let eval_add = {
         let mut rb = egraph.new_rule("", true);
-        let lhs_raw = rb.new_var(ColumnTy::Base(int_base));
-        let lhs_id = rb.new_var(ColumnTy::Id);
-        let rhs_raw = rb.new_var(ColumnTy::Base(int_base));
-        let rhs_id = rb.new_var(ColumnTy::Id);
-        let add_id = rb.new_var(ColumnTy::Id);
-        rb.query_table(num_table, &[lhs_raw.into(), lhs_id.into()], Some(false))
+        let lhs_raw: QueryEntry = rb.new_var(ColumnTy::Base(int_base)).into();
+        let lhs_id: QueryEntry = rb.new_var(ColumnTy::Id).into();
+        let rhs_raw: QueryEntry = rb.new_var(ColumnTy::Base(int_base)).into();
+        let rhs_id: QueryEntry = rb.new_var(ColumnTy::Id).into();
+        let add_id: QueryEntry = rb.new_var(ColumnTy::Id).into();
+        rb.query_table(num_table, &[lhs_raw.clone(), lhs_id.clone()], Some(false))
             .unwrap();
-        rb.query_table(num_table, &[rhs_raw.into(), rhs_id.into()], Some(false))
+        rb.query_table(num_table, &[rhs_raw.clone(), rhs_id.clone()], Some(false))
             .unwrap();
         rb.query_table(
             add_table,
-            &[lhs_id.into(), rhs_id.into(), add_id.into()],
+            &[lhs_id.clone(), rhs_id.clone(), add_id.clone()],
             Some(false),
         )
         .unwrap();
-        let evaled = rb.call_external_func(
-            int_add,
-            &[lhs_raw.into(), rhs_raw.into()],
-            ColumnTy::Base(int_base),
-            || "".to_string(),
-        );
-        let boxed = rb.lookup(num_table, &[evaled.into()], String::new);
-        rb.union(add_id.into(), boxed.into());
+        let evaled: QueryEntry = rb
+            .call_external_func(
+                int_add,
+                &[lhs_raw.clone(), rhs_raw.clone()],
+                ColumnTy::Base(int_base),
+                || "".to_string(),
+            )
+            .into();
+        let boxed: QueryEntry = rb.lookup(num_table, &[evaled.clone()], String::new).into();
+        rb.union(add_id.clone(), boxed.clone());
         rb.build()
     };
 
@@ -1120,17 +1124,17 @@ fn constrain_prims_simple() {
 
     let copy_to_g = {
         let mut rb = egraph.new_rule("copy_to_g", true);
-        let val = rb.new_var(ColumnTy::Base(int_base));
-        let id = rb.new_var(ColumnTy::Id);
-        rb.query_table(f_table, &[val.into(), id.into()], Some(false))
+        let val: QueryEntry = rb.new_var(ColumnTy::Base(int_base)).into();
+        let id: QueryEntry = rb.new_var(ColumnTy::Id).into();
+        rb.query_table(f_table, &[val.clone(), id.clone()], Some(false))
             .unwrap();
         rb.query_prim(
             is_even,
-            &[val.into(), value_true.clone()],
+            &[val.clone(), value_true.clone()],
             ColumnTy::Base(bool_base),
         )
         .unwrap();
-        rb.set(g_table, &[val.into(), id.into()]);
+        rb.set(g_table, &[val, id]);
         rb.build()
     };
     let get_entries = |egraph: &EGraph, table: FunctionId| {
@@ -1210,16 +1214,24 @@ fn constrain_prims_abstract() {
 
     let copy_to_g = {
         let mut rb = egraph.new_rule("copy_to_g", true);
-        let val = rb.new_var(ColumnTy::Base(int_base));
-        let id = rb.new_var(ColumnTy::Id);
-        let negval = rb.new_var(ColumnTy::Base(int_base));
-        rb.query_table(f_table, &[val.into(), id.into()], Some(false))
+        let val: QueryEntry = rb.new_var(ColumnTy::Base(int_base)).into();
+        let id: QueryEntry = rb.new_var(ColumnTy::Id).into();
+        let negval: QueryEntry = rb.new_var(ColumnTy::Base(int_base)).into();
+        rb.query_table(f_table, &[val.clone(), id.clone()], Some(false))
             .unwrap();
-        rb.query_prim(neg, &[val.into(), negval.into()], ColumnTy::Base(int_base))
-            .unwrap();
-        rb.query_prim(abs, &[val.into(), negval.into()], ColumnTy::Base(int_base))
-            .unwrap();
-        rb.set(g_table, &[val.into(), id.into()]);
+        rb.query_prim(
+            neg,
+            &[val.clone(), negval.clone()],
+            ColumnTy::Base(int_base),
+        )
+        .unwrap();
+        rb.query_prim(
+            abs,
+            &[val.clone(), negval.clone()],
+            ColumnTy::Base(int_base),
+        )
+        .unwrap();
+        rb.set(g_table, &[val.clone(), id.clone()]);
         rb.build()
     };
     let get_entries = |egraph: &EGraph, table: FunctionId| {
@@ -1286,11 +1298,11 @@ fn basic_subsumption() {
 
     let copy_to_g = {
         let mut rb = egraph.new_rule("copy_to_g", true);
-        let val = rb.new_var(ColumnTy::Base(int_base));
-        let id = rb.new_var(ColumnTy::Id);
-        rb.query_table(f_table, &[val.into(), id.into()], Some(false))
+        let val: QueryEntry = rb.new_var(ColumnTy::Base(int_base)).into();
+        let id: QueryEntry = rb.new_var(ColumnTy::Id).into();
+        rb.query_table(f_table, &[val.clone(), id.clone()], Some(false))
             .unwrap();
-        rb.set(g_table, &[val.into(), id.into()]);
+        rb.set(g_table, &[val, id]);
         rb.build()
     };
     let get_entries = |egraph: &EGraph, table: FunctionId| {
