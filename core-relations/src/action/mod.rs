@@ -531,7 +531,7 @@ impl ExecutionState<'_> {
             }
             self.run_instr(&mut mask, instr, bindings);
         }
-        return mask.count_ones();
+        mask.count_ones()
     }
     fn run_instr(&mut self, mask: &mut Mask, inst: &Instr, bindings: &mut Bindings) {
         fn assert_impl(

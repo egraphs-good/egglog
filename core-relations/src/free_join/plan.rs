@@ -50,7 +50,10 @@ impl std::fmt::Debug for JoinHeader {
         f.debug_struct("JoinHeader")
             .field("atom", &self.atom)
             .field("constraints", &self.constraints)
-            .field("subset", &format_args!("Subset(size={})", self.subset.size()))
+            .field(
+                "subset",
+                &format_args!("Subset(size={})", self.subset.size()),
+            )
             .finish()
     }
 }
