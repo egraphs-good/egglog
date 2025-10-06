@@ -16,9 +16,9 @@ pub struct Plan {
     // TODO
 }
 
-#[derive(Debug)]
+#[derive(Debug, Default)]
 pub struct RuleReport {
-    pub plan: Plan,
+    // pub plan: Plan,
     pub search_and_apply_time: Duration,
     // TODO: succeeding matches
     pub num_matches: usize,
@@ -27,7 +27,7 @@ pub struct RuleReport {
 #[derive(Debug, Default)]
 pub struct RuleSetReport {
     pub changed: bool,
-    pub rule_reports: DashMap<String, Vec<RuleReport>>,
+    pub rule_reports: DashMap<String, RuleReport>,
     pub search_and_apply_time: Duration,
     pub merge_time: Duration,
 }
@@ -44,7 +44,7 @@ pub struct IterationReport {
 impl RuleReport {
     pub fn union(&self, other: &RuleReport) -> RuleReport {
         RuleReport {
-            plan: Default::default(),
+            // plan: Default::default(),
             search_and_apply_time: self.search_and_apply_time + other.search_and_apply_time,
             num_matches: self.num_matches + other.num_matches,
         }
