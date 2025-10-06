@@ -651,8 +651,8 @@ pub trait BaseSort: Any + Send + Sync + Debug + Serialize {
     }
 }
 
-#[derive(Debug, Serialize, Deserialize)]
-struct BaseSortImpl<T: BaseSort>(T);
+#[derive(Debug, Serialize, Deserialize, Default)]
+pub struct BaseSortImpl<T: BaseSort>(T);
 
 #[typetag::serialize]
 impl<T: BaseSort> Sort for BaseSortImpl<T> {

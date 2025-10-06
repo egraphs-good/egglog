@@ -77,16 +77,47 @@ pub type ArcSort = Arc<dyn Sort>;
 pub struct SerializableSort(pub ArcSort);
 
 impl<'de> Deserialize<'de> for SerializableSort {
-    fn deserialize<D>(_deserializer: D) -> Result<Self, D::Error>
+    fn deserialize<D>(deserializer: D) -> Result<Self, D::Error>
     where
         D: serde::Deserializer<'de>,
     {
-        Ok(SerializableSort(Arc::new(EqSort {
-            name: "dummy".to_string(),
-        }))) // todo: This is a bogus default value
+        use serde::de::{self, MapAccess, Visitor};
+        use std::fmt;
+
+        struct SortVisitor;
+
+        impl<'de> Visitor<'de> for SortVisitor {
+            type Value = SerializableSort;
+
+            fn expecting(&self, f: &mut fmt::Formatter) -> fmt::Result {
+                f.write_str("a map with a sort name like { \"BaseSortImpl\": null }")
+            }
+
+            fn visit_map<M>(self, mut map: M) -> Result<Self::Value, M::Error>
+            where
+                M: MapAccess<'de>,
+            {
+                if let Some((key, _)) = map.next_entry::<String, Option<()>>()? {
+                    match key.as_str() {
+                        // todo: this is a bogus default value
+                        "BaseSortImpl" => {
+                            Ok(SerializableSort(Arc::new(EqSort { name: "eq".into() })))
+                        }
+                        "EqSort" => Ok(SerializableSort(Arc::new(EqSort { name: "eq".into() }))),
+                        other => Err(de::Error::unknown_variant(
+                            other,
+                            &["BaseSortImpl", "EqSort"],
+                        )),
+                    }
+                } else {
+                    Err(de::Error::custom("expected a map with one sort key"))
+                }
+            }
+        }
+
+        deserializer.deserialize_map(SortVisitor)
     }
 }
-
 mod arc_sort_serde {
     use super::*;
     use serde::{Deserialize, Deserializer, Serialize, Serializer};

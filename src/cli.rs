@@ -98,11 +98,24 @@ pub fn cli(mut egraph: EGraph) {
             println!("START");
             serde_json::to_writer_pretty(
                 std::io::BufWriter::new(
-                    std::fs::File::create("egraph.json").expect("failed to create file"),
+                    std::fs::File::create("egraph.json").expect("failed to create egraph.json"),
                 ),
                 &egraph,
             )
-            .expect("failed to write");
+            .expect("failed to write egraph.json");
+
+            let file = File::open("egraph.json").expect("failed to open egraph.json");
+            let reader = BufReader::new(file);
+            let egraph: EGraph =
+                serde_json::from_reader(reader).expect("failed to deserialize egraph");
+            serde_json::to_writer(
+                std::io::BufWriter::new(
+                    std::fs::File::create("reserialized_egraph.json")
+                        .expect("failed to create reserialized_egraph.json"),
+                ),
+                &egraph,
+            )
+            .expect("failed to write reserialized_egraph.json");
             println!("END");
 
             if args.to_json || args.to_dot || args.to_svg {
