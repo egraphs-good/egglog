@@ -485,6 +485,7 @@ dependencies = [
  "egglog-bridge",
  "egglog-core-relations",
  "egglog-numeric-id",
+ "egglog-reports",
  "egraph-serialize",
  "env_logger",
  "glob",
@@ -526,6 +527,7 @@ dependencies = [
  "dyn-clone",
  "egglog-core-relations",
  "egglog-numeric-id",
+ "egglog-reports",
  "egglog-union-find",
  "env_logger",
  "hashbrown 0.16.0",
@@ -564,6 +566,7 @@ dependencies = [
  "dyn-clone",
  "egglog-concurrency",
  "egglog-numeric-id",
+ "egglog-reports",
  "egglog-union-find",
  "fixedbitset",
  "hashbrown 0.16.0",
@@ -588,6 +591,17 @@ version = "1.0.0"
 dependencies = [
  "lazy_static",
  "rayon",
+]
+
+[[package]]
+name = "egglog-reports"
+version = "1.0.0"
+dependencies = [
+ "dashmap",
+ "hashbrown 0.16.0",
+ "indexmap",
+ "rustc-hash",
+ "web-time",
 ]
 
 [[package]]

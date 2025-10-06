@@ -6,6 +6,7 @@ use core_relations::{ExecutionState, ExternalFunction, Value};
 use egglog_bridge::{
     ColumnTy, DefaultVal, FunctionConfig, FunctionId, MergeFn, RuleId, TableAction,
 };
+use egglog_reports::RunReport;
 use numeric_id::define_id;
 
 use crate::{ast::ResolvedVar, core::GenericAtomTerm, core::ResolvedCoreRule, util::IndexMap, *};

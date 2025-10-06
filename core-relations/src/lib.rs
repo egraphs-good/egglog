@@ -27,7 +27,7 @@ pub use base_values::{BaseValue, BaseValueId, BaseValuePrinter, BaseValues, Boxe
 pub use common::Value;
 pub use containers::{ContainerValue, ContainerValueId, ContainerValues};
 pub use free_join::{
-    AtomId, CounterId, Database, ExternalFunction, ExternalFunctionId, RuleReport, RuleSetReport,
+    AtomId, CounterId, Database, ExternalFunction, ExternalFunctionId,
     TableId, Variable, make_external_func, plan::PlanStrategy,
 };
 pub use hash_index::TupleIndex;

@@ -1,0 +1,16 @@
+[package]
+name = "egglog-reports"
+version = { workspace = true }
+edition = { workspace = true }
+description = { workspace = true }
+repository = { workspace = true }
+keywords = { workspace = true }
+license = { workspace = true }
+readme = { workspace = true }
+
+[dependencies]
+hashbrown = { workspace = true }
+indexmap = { workspace = true }
+dashmap = { workspace = true }
+rustc-hash = { workspace = true }
+web-time = { workspace = true }

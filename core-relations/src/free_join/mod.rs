@@ -11,7 +11,6 @@ use crate::numeric_id::{DenseIdMap, DenseIdMapWithReuse, NumericId, define_id};
 use egglog_concurrency::ResettableOnceLock;
 use rayon::prelude::*;
 use smallvec::SmallVec;
-use web_time::Duration;
 
 use crate::{
     BaseValues, ContainerValues, PoolSet, QueryEntry, TupleIndex, Value,
@@ -254,29 +253,6 @@ impl Counters {
         // We synchronize with `read_counter` but not with other increments.
         // NB: we may want to experiment with Ordering::Relaxed here.
         self.0[ctr].fetch_add(1, Ordering::Release)
-    }
-}
-
-#[derive(Debug, Default)]
-pub struct RuleSetReport {
-    pub changed: bool,
-    pub rule_reports: DashMap<String, RuleReport>,
-    pub search_and_apply_time: Duration,
-    pub merge_time: Duration,
-}
-
-#[derive(Debug, Default)]
-pub struct RuleReport {
-    pub search_and_apply_time: Duration,
-    pub num_matches: usize,
-}
-
-impl RuleReport {
-    pub fn union(&self, other: &RuleReport) -> RuleReport {
-        RuleReport {
-            search_and_apply_time: self.search_and_apply_time + other.search_and_apply_time,
-            num_matches: self.num_matches + other.num_matches,
-        }
     }
 }
 

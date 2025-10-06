@@ -77,6 +77,7 @@ egglog-numeric-id = { path = "numeric-id" }
 egglog-union-find = { path = "union-find" }
 egglog-add-primitive = { path = "src/sort/add_primitive" }
 egglog = { path = ".", default-features = false }
+egglog-reports = { path = "egglog-reports" }
 
 ######################
 # wasm
@@ -143,6 +144,7 @@ egglog-ast = { workspace = true }
 egglog-bridge = { workspace = true }
 egglog-numeric-id = { workspace = true }
 egglog-add-primitive = { workspace = true }
+egglog-reports = { workspace = true }
 
 [build-dependencies]
 chrono = { workspace = true, features = ["now"], optional = true }
