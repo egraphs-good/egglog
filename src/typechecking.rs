@@ -29,16 +29,13 @@ impl<'de> Deserialize<'de> for PrimitiveWithId {
     where
         D: serde::Deserializer<'de>,
     {
-        // Define a helper matching the JSON structure
         #[derive(Deserialize)]
-        struct Helper {
+        struct Partial {
             id: ExternalFunctionId,
         }
 
-        // Deserialize into the helper first
-        let helper = Helper::deserialize(deserializer)?;
+        let helper = Partial::deserialize(deserializer)?;
 
-        // Make a dummy primitive (as before)
         #[derive(Debug)]
         struct DummyPrimitive;
         impl Primitive for DummyPrimitive {
@@ -110,7 +107,7 @@ impl<'de> Deserialize<'de> for TypeInfo {
         D: serde::Deserializer<'de>,
     {
         #[derive(Deserialize)]
-        struct TypeInfoDe {
+        struct Partial {
             #[serde(with = "arc_sort_map_serde")]
             sorts: HashMap<String, ArcSort>,
 
@@ -122,7 +119,7 @@ impl<'de> Deserialize<'de> for TypeInfo {
             global_sorts: HashMap<String, ArcSort>,
         }
 
-        let helper = TypeInfoDe::deserialize(deserializer)?;
+        let helper = Partial::deserialize(deserializer)?;
 
         Ok(TypeInfo {
             mksorts: Default::default(),

@@ -35,13 +35,13 @@ impl<'de> Deserialize<'de> for RowBuffer {
         D: Deserializer<'de>,
     {
         #[derive(Deserialize)]
-        struct RowBufferHelper {
+        struct Partial {
             n_columns: usize,
             total_rows: usize,
             data: Vec<Cell<Value>>,
         }
 
-        let helper = RowBufferHelper::deserialize(deserializer)?;
+        let helper = Partial::deserialize(deserializer)?;
 
         Ok(RowBuffer {
             n_columns: helper.n_columns,

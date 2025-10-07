@@ -174,12 +174,12 @@ impl<'de> Deserialize<'de> for ColumnIndexShard {
         D: serde::Deserializer<'de>,
     {
         #[derive(Deserialize)]
-        struct ColumnIndexShardHelper {
+        struct Partial {
             table: IndexMap<Value, BufferedSubset>,
             subsets: SubsetBuffer,
         }
 
-        let helper = ColumnIndexShardHelper::deserialize(deserializer)?;
+        let helper = Partial::deserialize(deserializer)?;
         Ok(ColumnIndexShard {
             table: Pooled::new(helper.table),
             subsets: helper.subsets,
@@ -604,11 +604,11 @@ impl<'de> Deserialize<'de> for SubsetBuffer {
         D: serde::Deserializer<'de>,
     {
         #[derive(Deserialize)]
-        struct SubsetBufferHelper {
+        struct Partial {
             buf: Vec<RowId>,
             free_list: FreeList,
         }
-        let helper = SubsetBufferHelper::deserialize(deserializer)?;
+        let helper = Partial::deserialize(deserializer)?;
         let buf = Pooled::new(helper.buf);
         Ok(SubsetBuffer {
             buf,

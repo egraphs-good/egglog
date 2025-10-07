@@ -38,11 +38,11 @@ impl<'de, K, V> Deserialize<'de> for InternTable<K, V> {
         D: serde::Deserializer<'de>,
     {
         #[derive(Deserialize)]
-        struct InternTableRepr {
+        struct Partial {
             shards_log2: u32,
         }
 
-        let repr = InternTableRepr::deserialize(deserializer)?;
+        let repr = Partial::deserialize(deserializer)?;
 
         Ok(InternTable {
             // todo: this is a bogus default value

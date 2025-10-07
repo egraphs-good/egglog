@@ -13,7 +13,6 @@ use std::{
 use crate::numeric_id::{DenseIdMap, IdVec};
 use fixedbitset::FixedBitSet;
 use hashbrown::HashTable;
-use serde::Serialize;
 
 use crate::{
     ColumnId, RowId,

@@ -2,6 +2,7 @@
 
 use crate::numeric_id::NumericId;
 use hashbrown::HashTable;
+use serde::{Deserialize, Serialize, ser::SerializeStruct};
 
 use crate::common::{ShardData, ShardId};
 
@@ -9,6 +10,44 @@ use crate::common::{ShardData, ShardId};
 pub(crate) struct ShardedHashTable<T> {
     shard_data: ShardData,
     shards: Vec<HashTable<T>>,
+}
+
+impl<T: Serialize + Clone> Serialize for ShardedHashTable<T> {
+    fn serialize<S>(&self, serializer: S) -> Result<S::Ok, S::Error>
+    where
+        S: serde::Serializer,
+    {
+        // Turn shards into Vec<Vec<T>> for serialization
+        let serialized_shards: Vec<Vec<T>> = self
+            .shards
+            .iter()
+            .map(|shard| shard.iter().cloned().collect())
+            .collect();
+
+        let mut state = serializer.serialize_struct("ShardedHashTable", 2)?;
+        state.serialize_field("shard_data", &self.shard_data)?;
+        state.serialize_field("shards", &serialized_shards)?;
+        state.end()
+    }
+}
+
+impl<'de, T: Deserialize<'de>> Deserialize<'de> for ShardedHashTable<T> {
+    fn deserialize<D>(deserializer: D) -> Result<Self, D::Error>
+    where
+        D: serde::Deserializer<'de>,
+    {
+        #[derive(Deserialize)]
+        struct Partial {
+            shard_data: ShardData,
+        }
+
+        let helper: Partial = Partial::deserialize(deserializer)?;
+        let shards = vec![]; // todo: this is a bogus default value. Need to reconstruct HashTable from Vec<T>
+        Ok(ShardedHashTable {
+            shard_data: helper.shard_data,
+            shards,
+        })
+    }
 }
 
 impl<T> Default for ShardedHashTable<T> {

@@ -51,7 +51,7 @@ mod tests;
 type HashCode = u64;
 
 /// A pointer to a row in the table.
-#[derive(Clone, Debug)]
+#[derive(Clone, Debug, Serialize, Deserialize)]
 pub(crate) struct TableEntry {
     hashcode: HashCode,
     row: RowId,
@@ -134,11 +134,14 @@ impl Rows {
 pub type MergeFn =
     dyn Fn(&mut ExecutionState, &[Value], &[Value], &mut Vec<Value>) -> bool + Send + Sync;
 
+fn default_merge_fn() -> Arc<MergeFn> {
+    Arc::new(|_, _, _, _| true) // todo this is a bogus default value
+}
+
 #[derive(Serialize, Deserialize)]
 pub struct SortedWritesTable {
     generation: Generation,
-    data: Rows, // this has gotta be "the table"
-    #[serde(skip)]
+    data: Rows,
     hash: ShardedHashTable<TableEntry>,
 
     n_keys: usize,
@@ -148,6 +151,7 @@ pub struct SortedWritesTable {
 
     pending_state: Arc<PendingState>,
     #[serde(skip)]
+    #[serde(default = "default_merge_fn")]
     merge: Arc<MergeFn>,
     to_rebuild: Vec<ColumnId>,
     rebuild_index: Index<ColumnIndex>,
@@ -1300,14 +1304,14 @@ impl<'de> Deserialize<'de> for PendingState {
     {
         // Define a helper that matches the serialized structure
         #[derive(Deserialize)]
-        struct PendingStateHelper {
+        struct Partial {
             pending_rows: Vec<(ShardId, Vec<RowBuffer>)>,
             pending_removals: Vec<(ShardId, Vec<ArbitraryRowBuffer>)>,
             total_removals: usize,
             total_rows: usize,
         }
 
-        let helper = PendingStateHelper::deserialize(deserializer)?;
+        let helper = Partial::deserialize(deserializer)?;
 
         // Rebuild DenseIdMap<ShardId, SegQueue<RowBuffer>>
         let mut pending_rows = DenseIdMap::default();
