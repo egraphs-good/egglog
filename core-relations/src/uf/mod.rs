@@ -10,6 +10,7 @@ use crate::numeric_id::{DenseIdMap, NumericId};
 use crossbeam_queue::SegQueue;
 use indexmap::IndexMap;
 use petgraph::{Direction, Graph, algo::dijkstra, graph::NodeIndex, visit::EdgeRef};
+use serde::{Deserialize, Serialize};
 
 use crate::{
     TableChange, TaggedRowBuffer,
@@ -66,6 +67,24 @@ pub struct DisplacedTable {
     lookup_table: HashMap<Value, RowId>,
     buffered_writes: Arc<SegQueue<RowBuffer>>, // should be empty by the time we serialize
                                                // deserialize can just make an empty one
+}
+
+impl<'de> Deserialize<'de> for DisplacedTable {
+    fn deserialize<D>(_deserializer: D) -> Result<Self, D::Error>
+    where
+        D: serde::Deserializer<'de>,
+    {
+        todo!()
+    }
+}
+
+impl Serialize for DisplacedTable {
+    fn serialize<S>(&self, _serializer: S) -> Result<S::Ok, S::Error>
+    where
+        S: serde::Serializer,
+    {
+        todo!()
+    }
 }
 
 struct Canonicalizer<'a> {
@@ -257,6 +276,7 @@ impl MutationBuffer for UfBuffer {
     }
 }
 
+#[typetag::serde]
 impl Table for DisplacedTable {
     fn dyn_clone(&self) -> Box<dyn Table> {
         Box::new(self.clone())
@@ -537,6 +557,24 @@ pub struct DisplacedTableWithProvenance {
     buffered_writes: Arc<SegQueue<RowBuffer>>,
 }
 
+impl<'de> Deserialize<'de> for DisplacedTableWithProvenance {
+    fn deserialize<D>(_deserializer: D) -> Result<Self, D::Error>
+    where
+        D: serde::Deserializer<'de>,
+    {
+        todo!()
+    }
+}
+
+impl Serialize for DisplacedTableWithProvenance {
+    fn serialize<S>(&self, _serializer: S) -> Result<S::Ok, S::Error>
+    where
+        S: serde::Serializer,
+    {
+        todo!()
+    }
+}
+
 #[derive(Copy, Clone, Eq, PartialEq)]
 struct ProofEdge {
     reason: ProofReason,
@@ -763,6 +801,7 @@ impl DisplacedTableWithProvenance {
     }
 }
 
+#[typetag::serde]
 impl Table for DisplacedTableWithProvenance {
     fn refine_one(&self, mut subset: Subset, c: &Constraint) -> Subset {
         subset.retain(|row| self.eval(c, row));

@@ -294,6 +294,7 @@ impl Drop for Buffer {
     }
 }
 
+#[typetag::serde]
 impl Table for SortedWritesTable {
     fn dyn_clone(&self) -> Box<dyn Table> {
         Box::new(self.clone())

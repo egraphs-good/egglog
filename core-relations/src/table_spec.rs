@@ -147,6 +147,7 @@ pub struct Row {
 }
 
 /// An interface for a table.
+#[typetag::serde]
 pub trait Table: Any + Send + Sync {
     /// A variant of clone that returns a boxed trait object; this trait object
     /// must contain all of the data associated with the current table.
