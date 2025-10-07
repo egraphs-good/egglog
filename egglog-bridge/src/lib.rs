@@ -20,8 +20,8 @@ use std::{
 use crate::core_relations::{
     BaseValue, BaseValueId, BaseValues, ColumnId, Constraint, ContainerValue, ContainerValues,
     CounterId, Database, DisplacedTable, DisplacedTableWithProvenance, ExecutionState,
-    ExternalFunction, ExternalFunctionId, MergeVal, Offset, PlanStrategy,
-    SortedWritesTable, TableId, TaggedRowBuffer, Value, WrappedTable,
+    ExternalFunction, ExternalFunctionId, MergeVal, Offset, PlanStrategy, SortedWritesTable,
+    TableId, TaggedRowBuffer, Value, WrappedTable,
 };
 use crate::numeric_id::{DenseIdMap, DenseIdMapWithReuse, IdVec, NumericId, define_id};
 use egglog_core_relations as core_relations;
@@ -138,7 +138,12 @@ pub type Result<T> = std::result::Result<T, anyhow::Error>;
 impl Default for EGraph {
     fn default() -> Self {
         let mut db = Database::new();
-        let uf_table = db.add_table(DisplacedTable::default(), iter::empty(), iter::empty());
+        let uf_table = db.add_table_named(
+            DisplacedTable::default(),
+            "$uf".into(),
+            iter::empty(),
+            iter::empty(),
+        );
         EGraph::create_internal(db, uf_table, false)
     }
 }
@@ -165,8 +170,9 @@ impl EGraph {
     /// came to appear.
     pub fn with_tracing() -> EGraph {
         let mut db = Database::new();
-        let uf_table = db.add_table(
+        let uf_table = db.add_table_named(
             DisplacedTableWithProvenance::default(),
+            "$uf".into(),
             iter::empty(),
             iter::empty(),
         );
@@ -331,7 +337,8 @@ impl EGraph {
     }
 
     fn term_table(&mut self, table: TableId) -> TableId {
-        let spec = self.db.get_table(table).spec();
+        let info = self.db.get_table_info(table);
+        let spec = info.spec();
         match self.term_tables.entry(spec.n_keys) {
             Entry::Occupied(o) => *o.get(),
             Entry::Vacant(v) => {
@@ -752,9 +759,13 @@ impl EGraph {
             to_rebuild,
             merge_fn,
         );
-        let table_id =
-            self.db
-                .add_table(table, read_deps.iter().copied(), write_deps.iter().copied());
+        let name: Arc<str> = name.into();
+        let table_id = self.db.add_table_named(
+            table,
+            name.clone(),
+            read_deps.iter().copied(),
+            write_deps.iter().copied(),
+        );
 
         let res = self.funcs.push(FunctionInfo {
             table: table_id,
@@ -763,7 +774,7 @@ impl EGraph {
             nonincremental_rebuild_rule: RuleId::new(!0),
             default_val: default,
             can_subsume,
-            name: name.into(),
+            name,
         });
         debug_assert_eq!(res, next_func_id);
         let incremental_rebuild_rules = self.incremental_rebuild_rules(res, &schema);
