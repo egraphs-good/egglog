@@ -11,7 +11,7 @@ use std::{
 };
 
 use crate::{
-    DisplacedTable,
+    SortedWritesTable,
     numeric_id::{DenseIdMap, NumericId, define_id},
 };
 use serde::{Deserialize, Serialize};
@@ -43,7 +43,7 @@ define_id!(
 );
 
 /// The version of a table.
-#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize, Default)]
 pub struct TableVersion {
     /// New major generations invalidate all existing RowIds for a table.
     pub major: Generation,
@@ -516,18 +516,16 @@ impl<T: Table> TableWrapper for WrapperImpl<T> {
 /// object-safe extension methods to call methods that require `Self: Sized`.
 /// The implementations here downcast manually to the type used when
 /// constructing the WrappedTable.
+#[derive(Serialize, Deserialize)]
 pub struct WrappedTable {
     inner: Box<dyn Table>,
+    #[serde(skip, default = "default_wrapper")]
     wrapper: Box<dyn TableWrapper>,
 }
 
-impl Default for WrappedTable {
-    fn default() -> Self {
-        Self {
-            inner: Box::new(DisplacedTable::default()),
-            wrapper: Box::new(WrapperImpl::<DisplacedTable>::default()),
-        } // todo: this is a bogus default value
-    }
+fn default_wrapper() -> Box<dyn TableWrapper> {
+    // Replace this with whatever default makes sense for your system
+    Box::new(WrapperImpl::<SortedWritesTable>::default())
 }
 
 impl WrappedTable {

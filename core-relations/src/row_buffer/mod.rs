@@ -23,6 +23,7 @@ mod tests;
 /// allows us to store multiple rows in a single allocation.
 ///
 /// RowBuffer stores data in row-major order.
+#[derive(Default)]
 pub struct RowBuffer {
     n_columns: usize,
     total_rows: usize,

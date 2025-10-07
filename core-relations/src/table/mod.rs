@@ -71,7 +71,7 @@ impl TableEntry {
 ///
 /// This type is a thin wrapper around `RowBuffer`. The big difference is that
 /// it keeps track of how many stale rows are present.
-#[derive(Clone, Serialize, Deserialize)]
+#[derive(Clone, Serialize, Deserialize, Default)]
 struct Rows {
     data: RowBuffer,
     scratch: RowBuffer,
@@ -157,6 +157,25 @@ pub struct SortedWritesTable {
     rebuild_index: Index<ColumnIndex>,
     // Used to manage incremental rebuilds.
     subset_tracker: SubsetTracker,
+}
+
+impl Default for SortedWritesTable {
+    fn default() -> Self {
+        Self {
+            generation: Default::default(),
+            data: Default::default(),
+            hash: Default::default(),
+            n_keys: Default::default(),
+            n_columns: Default::default(),
+            sort_by: Default::default(),
+            offsets: Default::default(),
+            pending_state: Default::default(),
+            merge: default_merge_fn(),
+            to_rebuild: Default::default(),
+            rebuild_index: Default::default(),
+            subset_tracker: Default::default(),
+        }
+    }
 }
 
 impl Clone for SortedWritesTable {
@@ -1245,6 +1264,7 @@ struct PendingStateSerde {
     total_removals: usize,
     total_rows: usize,
 }
+#[derive(Default)]
 struct PendingState {
     pending_rows: DenseIdMap<ShardId, SegQueue<RowBuffer>>,
     pending_removals: DenseIdMap<ShardId, SegQueue<ArbitraryRowBuffer>>,

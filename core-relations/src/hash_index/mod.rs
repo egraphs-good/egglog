@@ -34,7 +34,7 @@ pub(crate) struct TableEntry<T> {
     vals: T,
 }
 
-#[derive(Clone, Serialize, Deserialize)]
+#[derive(Clone, Serialize, Deserialize, Default)]
 pub(crate) struct Index<TI> {
     key: Vec<ColumnId>,
     updated_to: TableVersion,
@@ -208,7 +208,7 @@ impl Clone for ColumnIndexShard {
     }
 }
 
-#[derive(Clone, Serialize, Deserialize)]
+#[derive(Clone, Serialize, Deserialize, Default)]
 pub struct ColumnIndex {
     // A specialized index used when we are indexing on a single column.
     shard_data: ShardData,

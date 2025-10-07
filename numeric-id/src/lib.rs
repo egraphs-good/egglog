@@ -434,7 +434,7 @@ macro_rules! atomic_of {
 macro_rules! define_id {
     ($v:vis $name:ident, $repr:tt) => { define_id!($v, $name, $repr, ""); };
     ($v:vis $name:ident, $repr:tt, $doc:tt) => {
-        #[derive(Copy, Clone, serde::Serialize, serde::Deserialize)]
+        #[derive(Copy, Clone, Default, serde::Serialize, serde::Deserialize)]
         #[doc = $doc]
         $v struct $name {
             rep: $repr,

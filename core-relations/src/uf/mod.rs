@@ -54,7 +54,9 @@ type UnionFind = crate::union_find::UnionFind<Value>;
 /// `ts` is the current timestamp. Note that all tie-breaks and other encoding
 /// decisions are made internally, so there may not literally be a row added
 /// with this value.
+#[derive(Serialize, Deserialize)]
 pub struct DisplacedTable {
+    #[serde(skip)]
     uf: UnionFind, // should be canonicalized by serialization time
     // serializable as an array of integers
     // the only IDs are leaders (because it's been canonicalized)
@@ -65,26 +67,9 @@ pub struct DisplacedTable {
     // can even recanonicalize on serialization to get rid of dead things
     changed: bool,
     lookup_table: HashMap<Value, RowId>,
+    #[serde(skip)]
     buffered_writes: Arc<SegQueue<RowBuffer>>, // should be empty by the time we serialize
                                                // deserialize can just make an empty one
-}
-
-impl<'de> Deserialize<'de> for DisplacedTable {
-    fn deserialize<D>(_deserializer: D) -> Result<Self, D::Error>
-    where
-        D: serde::Deserializer<'de>,
-    {
-        todo!()
-    }
-}
-
-impl Serialize for DisplacedTable {
-    fn serialize<S>(&self, _serializer: S) -> Result<S::Ok, S::Error>
-    where
-        S: serde::Serializer,
-    {
-        todo!()
-    }
 }
 
 struct Canonicalizer<'a> {

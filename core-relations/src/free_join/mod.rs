@@ -114,7 +114,6 @@ pub(crate) type HashColumnIndex = Arc<ResettableOnceLock<Index<ColumnIndex>>>;
 #[derive(Serialize, Deserialize)]
 pub struct TableInfo {
     pub(crate) spec: TableSpec,
-    #[serde(skip)]
     pub(crate) table: WrappedTable,
     #[serde(skip)]
     pub(crate) indexes: DashMap<SmallVec<[ColumnId; 4]>, HashIndex>,
