@@ -182,11 +182,11 @@ pub enum PlanStrategy {
     /// can act as covers so as to minimize the total number of stages in the
     /// plan. This is only an approximate minimum: the problem of finding the
     /// exact minimum ("set cover") is NP-hard.
+    #[default]
     MinCover,
 
     /// Generate a plan for the classic Generic Join algorithm, constraining a
     /// single variable per stage.
-    #[default]
     Gj,
 }
 

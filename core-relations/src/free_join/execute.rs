@@ -158,7 +158,7 @@ impl Database {
         let rule_reports = DashMap::default();
         if parallelize_db_level_op(self.total_size_estimate) {
             rayon::in_place_scope(|scope| {
-                for (plan, desc, _action) in rule_set.plans.values() {
+                for (plan, desc, _symbol_map, _action) in rule_set.plans.values() {
                     scope.spawn(|scope| {
                         let join_state = JoinState::new(self);
                         let mut action_buf =
@@ -197,7 +197,7 @@ impl Database {
                 match_counter: &match_counter,
                 batches: Default::default(),
             };
-            for (plan, desc, _action) in rule_set.plans.values() {
+            for (plan, desc, _symbol_map, _action) in rule_set.plans.values() {
                 let mut binding_info = BindingInfo::default();
                 for (id, info) in plan.atoms.iter() {
                     let table = join_state.db.get_table(info.table);
@@ -219,7 +219,7 @@ impl Database {
                 Default::default(),
             ));
         }
-        for (_plan, desc, action) in rule_set.plans.values() {
+        for (_plan, desc, _symbol_map, action) in rule_set.plans.values() {
             let mut reservation = rule_reports.get_mut(desc).unwrap();
             let RuleReport { num_matches, .. } = reservation.value_mut();
             *num_matches += match_counter.read_matches(*action);
