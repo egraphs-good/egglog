@@ -67,6 +67,15 @@ impl RuleSet {
 }
 
 /// Builder for a [`RuleSet`].
+/// 
+/// There are in general two ways to add rules to a rule set:
+/// 
+/// 1. Use the QueryBuilder and RuleBuilder APIs to construct a rule from scratch.
+/// 2. Use a previously cached plan and add extra constraints to it.
+/// 
+/// The pattern this is used by egglog is as follows: An egglog rule is first compiled to a cached 
+/// plan using builder patterns at declaration time, and each time the rule is run, it is added to
+/// a ruleset using the cached plan and possibly some extra constraints (e.g., timestamp).
 ///
 /// See [`Database::new_rule_set`] for more information.
 pub struct RuleSetBuilder<'outer> {
