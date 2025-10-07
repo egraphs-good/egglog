@@ -161,7 +161,7 @@ define_id!(pub(crate) ShardId, u32, "an identifier pointing to a shard in a shar
 ///
 /// This is a separate type in order to allow other data-structures to pre-shard
 /// data bound for a particular table.
-#[derive(Copy, Clone)]
+#[derive(Copy, Clone, Serialize, Deserialize)]
 pub(crate) struct ShardData {
     log2_shard_count: u32,
 }

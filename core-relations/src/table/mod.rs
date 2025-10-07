@@ -150,7 +150,6 @@ pub struct SortedWritesTable {
     #[serde(skip)]
     merge: Arc<MergeFn>,
     to_rebuild: Vec<ColumnId>,
-    #[serde(skip)]
     rebuild_index: Index<ColumnIndex>,
     // Used to manage incremental rebuilds.
     subset_tracker: SubsetTracker,

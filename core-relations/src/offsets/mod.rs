@@ -1,5 +1,7 @@
 use std::{cmp, fmt, mem};
 
+use serde::{Deserialize, Serialize};
+
 use crate::numeric_id::{NumericId, define_id};
 
 use crate::{
@@ -25,7 +27,7 @@ pub(crate) trait Offsets {
     fn offsets(&self, f: impl FnMut(RowId));
 }
 
-#[derive(PartialEq, Eq, Debug, Clone, Copy, Hash)]
+#[derive(PartialEq, Eq, Debug, Clone, Copy, Hash, Serialize, Deserialize)]
 pub struct OffsetRange {
     pub(crate) start: RowId,
     pub(crate) end: RowId,
