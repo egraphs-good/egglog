@@ -153,8 +153,8 @@ impl ContainerSort for VecSort {
         }
     }
 
-    fn serialized_name(&self, _value: Value) -> &str {
-        "vec-of"
+    fn serialized_name(&self, _container_values: &ContainerValues, _: Value) -> String {
+        "vec-of".to_owned()
     }
 }
 

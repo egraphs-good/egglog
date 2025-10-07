@@ -1,128 +1,19 @@
 //! Parse a string into egglog.
 
 use crate::*;
+use egglog_ast::generic_ast::*;
+use egglog_ast::span::{EgglogSpan, Span, SrcFile};
 use ordered_float::OrderedFloat;
-
-/// A [`Span`] contains the file name and a pair of offsets representing the start and the end.
-#[derive(Clone, PartialEq, Eq, Hash)]
-pub enum Span {
-    /// Panics if a span is needed. Prefer `Span::Rust` (see `span!`)
-    /// unless this behaviour is explicitly desired.
-    Panic,
-    /// A span from a `.egg` file.
-    /// Constructed by `parse_program` and `parse_expr`.
-    Egglog(Arc<EgglogSpan>),
-    /// A span from a `.rs` file. Constructed by the `span!` macro.
-    Rust(Arc<RustSpan>),
-}
-
-#[derive(Debug, Clone, PartialEq, Eq, Hash)]
-pub struct EgglogSpan {
-    pub file: Arc<SrcFile>,
-    pub i: usize,
-    pub j: usize,
-}
-
-#[derive(Debug, Clone, PartialEq, Eq, Hash)]
-pub struct RustSpan {
-    pub file: &'static str,
-    pub line: u32,
-    pub column: u32,
-}
 
 #[macro_export]
 macro_rules! span {
     () => {
-        $crate::ast::Span::Rust(std::sync::Arc::new($crate::ast::RustSpan {
+        egglog_ast::span::Span::Rust(std::sync::Arc::new(egglog_ast::span::RustSpan {
             file: file!(),
             line: line!(),
             column: column!(),
         }))
     };
-}
-
-impl Span {
-    pub fn string(&self) -> &str {
-        match self {
-            Span::Panic => panic!("Span::Panic in Span::string"),
-            Span::Rust(_) => panic!("Span::Rust cannot track end position"),
-            Span::Egglog(span) => &span.file.contents[span.i..span.j],
-        }
-    }
-}
-
-#[derive(Debug, PartialEq, Eq, Hash, Clone)]
-pub struct SrcFile {
-    pub name: Option<String>,
-    pub contents: String,
-}
-
-struct Location {
-    line: usize,
-    col: usize,
-}
-
-impl SrcFile {
-    fn get_location(&self, offset: usize) -> Location {
-        let mut line = 1;
-        let mut col = 1;
-        for (i, c) in self.contents.char_indices() {
-            if i == offset {
-                break;
-            }
-            if c == '\n' {
-                line += 1;
-                col = 1;
-            } else {
-                col += 1;
-            }
-        }
-        Location { line, col }
-    }
-}
-
-// we do this slightly un-idiomatic thing because `unwrap` and `expect`
-// would print the entire source program without this
-impl Debug for Span {
-    fn fmt(&self, f: &mut std::fmt::Formatter) -> std::fmt::Result {
-        write!(f, "{}", self)
-    }
-}
-
-impl Display for Span {
-    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        match self {
-            Span::Panic => panic!("Span::Panic in impl Display"),
-            Span::Rust(span) => write!(f, "At {}:{} of {}", span.line, span.column, span.file),
-            Span::Egglog(span) => {
-                let start = span.file.get_location(span.i);
-                let end = span
-                    .file
-                    .get_location((span.j.saturating_sub(1)).max(span.i));
-                let quote = self.string();
-                match (&span.file.name, start.line == end.line) {
-                    (Some(filename), true) => write!(
-                        f,
-                        "In {}:{}-{} of {filename}: {quote}",
-                        start.line, start.col, end.col
-                    ),
-                    (Some(filename), false) => write!(
-                        f,
-                        "In {}:{}-{}:{} of {filename}: {quote}",
-                        start.line, start.col, end.line, end.col
-                    ),
-                    (None, false) => write!(
-                        f,
-                        "In {}:{}-{}:{}: {quote}",
-                        start.line, start.col, end.line, end.col
-                    ),
-                    (None, true) => {
-                        write!(f, "In {}:{}-{}: {quote}", start.line, start.col, end.col)
-                    }
-                }
-            }
-        }
-    }
 }
 
 // We do an unidiomatic thing here by using a struct instead of an enum.
@@ -162,10 +53,12 @@ impl Sexp {
         }
     }
 
-    pub fn expect_uint(&self, e: &'static str) -> Result<usize, ParseError> {
+    pub fn expect_uint<UInt: TryFrom<u64>>(&self, e: &'static str) -> Result<UInt, ParseError> {
         if let Sexp::Literal(Literal::Int(x), _) = self {
             if *x >= 0 {
-                return Ok(*x as usize);
+                if let Ok(v) = (*x as u64).try_into() {
+                    return Ok(v);
+                }
             }
         }
         error!(
@@ -328,13 +221,6 @@ impl Parser {
         }
 
         Ok(match head.as_str() {
-            "set-option" => match tail {
-                [name, value] => vec![Command::SetOption {
-                    name: name.expect_atom("option name")?,
-                    value: self.parse_expr(value)?,
-                }],
-                _ => return error!(span, "usage: (set-option <name> <value>)"),
-            },
             "sort" => match tail {
                 [name] => vec![Command::Sort(span, name.expect_atom("sort name")?, None)],
                 [name, call] => {
@@ -349,7 +235,7 @@ impl Parser {
                     return error!(
                         span,
                         "usages:\n(sort <name>)\n(sort <name> (<container sort> <argument sort>*))"
-                    )
+                    );
                 }
             },
             "datatype" => match tail {
@@ -375,7 +261,7 @@ impl Parser {
                             return error!(
                                 span,
                                 "functions are required to specify merge behaviour"
-                            )
+                            );
                         }
                         _ => return error!(span, "could not parse function options"),
                     },
@@ -439,7 +325,7 @@ impl Parser {
                     return error!(
                         span,
                         "usage: (unstable-combined-ruleset <name> <child ruleset>*)"
-                    )
+                    );
                 }
             },
             "rule" => match tail {
@@ -461,9 +347,13 @@ impl Parser {
                     }
 
                     vec![Command::Rule {
-                        ruleset,
-                        name,
-                        rule: Rule { span, head, body },
+                        rule: Rule {
+                            span,
+                            head,
+                            body,
+                            name,
+                            ruleset,
+                        },
                     }]
                 }
                 _ => return error!(span, "usage: (rule (<fact>*) (<action>*) <option>*)"),
@@ -542,7 +432,7 @@ impl Parser {
                     return error!(span, "usage: (run <ruleset>? <uint> <:until (<fact>*)>?)");
                 }
 
-                let has_ruleset = tail.len() >= 2 && tail[1].expect_uint("").is_ok();
+                let has_ruleset = tail.len() >= 2 && tail[1].expect_uint::<u32>("").is_ok();
 
                 let (ruleset, limit, rest) = if has_ruleset {
                     (
@@ -606,16 +496,57 @@ impl Parser {
                 _ => return error!(span, "usage: (print-stats)"),
             },
             "print-function" => match tail {
-                [name, rows] => vec![Command::PrintFunction(
+                [name] => vec![Command::PrintFunction(
                     span,
                     name.expect_atom("table name")?,
-                    rows.expect_uint("number of rows to print")?,
+                    None,
+                    None,
+                    PrintFunctionMode::Default,
                 )],
+                [name, rest @ ..] => {
+                    let rows: Option<usize> = rest[0].expect_uint("number of rows").ok();
+                    let rest = if rows.is_some() { &rest[1..] } else { rest };
+
+                    let mut file = None;
+                    let mut mode = PrintFunctionMode::Default;
+                    for opt in self.parse_options(rest)? {
+                        match opt {
+                            (":file", [file_name]) => {
+                                file = Some(file_name.expect_string("file name")?);
+                            }
+                            (":mode", [Sexp::Atom(mode_str, _)]) => {
+                                mode = match mode_str.as_str() {
+                                    "default" => PrintFunctionMode::Default,
+                                    "csv" => PrintFunctionMode::CSV,
+                                    _ => {
+                                        return error!(
+                                            span,
+                                            "Unknown print-function mode. Supported modes are `default` and `csv`."
+                                        );
+                                    }
+                                };
+                            }
+                            _ => {
+                                return error!(
+                                    span,
+                                    "Unknown option to print-function. Supported options are `:mode csv|default` and `:file \"<filename>\"`."
+                                );
+                            }
+                        }
+                    }
+                    vec![Command::PrintFunction(
+                        span,
+                        name.expect_atom("table name")?,
+                        rows,
+                        file,
+                        mode,
+                    )]
+                }
                 _ => {
                     return error!(
                         span,
-                        "usage: (print-function <table name> <number of rows>)"
-                    )
+                        "usage: (print-function <table name> <number of rows>? <option>*)"
+                    );
                 }
             },
             "print-size" => match tail {
@@ -839,7 +770,7 @@ impl Parser {
                     return error!(
                         span,
                         "usage: (sort <name> (<container sort> <argument sort>*))"
-                    )
+                    );
                 }
             },
             _ => {
@@ -996,7 +927,7 @@ impl SexpParser {
                                 (true, '\\') => '\\',
                                 (true, '\"') => '\"',
                                 (true, c) => {
-                                    return error!(s(span), "unrecognized escape character {c}")
+                                    return error!(s(span), "unrecognized escape character {c}");
                                 }
                             });
                             in_escape = false;

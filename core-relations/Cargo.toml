@@ -1,0 +1,47 @@
+[package]
+name = "egglog-core-relations"
+version = { workspace = true }
+edition = { workspace = true }
+description = { workspace = true }
+repository = { workspace = true }
+keywords = { workspace = true }
+license = { workspace = true }
+readme = { workspace = true }
+
+# See more keys and their definitions at https://doc.rust-lang.org/cargo/reference/manifest.html
+
+[dependencies]
+egglog-concurrency = { workspace = true }
+egglog-numeric-id = { workspace = true }
+egglog-union-find = { workspace = true }
+hashbrown = { workspace = true }
+indexmap = { workspace = true }
+rustc-hash = { workspace = true }
+fixedbitset = { workspace = true }
+smallvec = { workspace = true }
+bumpalo = { workspace = true }
+thiserror = { workspace = true }
+anyhow = { workspace = true }
+lazy_static = { workspace = true }
+log = { workspace = true }
+petgraph = { workspace = true }
+crossbeam-queue = { workspace = true }
+dashmap = { workspace = true, features = ["raw-api"] }
+web-time = { workspace = true }
+rayon = { workspace = true }
+rand = { workspace = true }
+dyn-clone = { workspace = true }
+num = { workspace = true }
+once_cell = { workspace = true }
+
+[dev-dependencies]
+divan = { workspace = true }
+mimalloc = { workspace = true }
+
+[[bench]]
+name = "writes"
+harness = false
+
+[features]
+default = []
+debug-val-trace = []

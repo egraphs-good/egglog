@@ -13,7 +13,10 @@
 use std::hash::Hasher;
 use std::ops::AddAssign;
 
-use crate::*;
+use crate::{constraint::grounded_check, *};
+use egglog_ast::generic_ast::{Change, GenericAction, GenericActions, GenericExpr};
+use egglog_ast::span::Span;
+use egglog_ast::util::ListDisplay;
 use typechecking::{FuncType, PrimitiveWithId, TypeError};
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -113,6 +116,30 @@ impl Display for ResolvedCall {
             ResolvedCall::Func(func) => write!(f, "{}", func.name),
             ResolvedCall::Primitive(prim) => write!(f, "{}", prim.primitive.0.name()),
         }
+    }
+}
+
+/// A trait encapsulating the ability to query a [`TypeInfo`] to determine
+/// whether or not a symbol is bound as a function in the current egglog program.
+///
+/// Currently, we only use this trait to determine whether a symbol is a
+/// [`FunctionSubtype::Constructor`].
+pub trait IsFunc {
+    fn is_constructor(&self, type_info: &TypeInfo) -> bool;
+}
+
+impl IsFunc for ResolvedCall {
+    fn is_constructor(&self, type_info: &TypeInfo) -> bool {
+        match self {
+            ResolvedCall::Func(func) => type_info.is_constructor(&func.name),
+            ResolvedCall::Primitive(_) => false,
+        }
+    }
+}
+
+impl IsFunc for String {
+    fn is_constructor(&self, type_info: &TypeInfo) -> bool {
+        type_info.is_constructor(self)
     }
 }
 
@@ -429,11 +456,11 @@ where
             match action {
                 GenericCoreAction::Let(_span, v, _, ats) => {
                     add_from_atoms(&mut free_vars, ats);
-                    free_vars.swap_remove(v);
+                    free_vars.remove(v);
                 }
                 GenericCoreAction::LetAtomTerm(_span, v, at) => {
                     add_from_atom(&mut free_vars, at);
-                    free_vars.swap_remove(v);
+                    free_vars.remove(v);
                 }
                 GenericCoreAction::Set(_span, _, ats, at) => {
                     add_from_atoms(&mut free_vars, ats);
@@ -453,18 +480,37 @@ where
     }
 }
 
-#[allow(clippy::type_complexity)]
-impl<Head, Leaf> GenericActions<Head, Leaf>
-where
-    Head: Clone + Display,
-    Leaf: Clone + PartialEq + Eq + Display + Hash,
-{
-    pub(crate) fn to_core_actions<FG: FreshGen<Head, Leaf>>(
+pub(crate) trait GenericActionsExt<Head, Leaf> {
+    #[allow(clippy::type_complexity)]
+    fn to_core_actions<FG>(
         &self,
         typeinfo: &TypeInfo,
         binding: &mut IndexSet<Leaf>,
         fresh_gen: &mut FG,
-    ) -> Result<(GenericCoreActions<Head, Leaf>, MappedActions<Head, Leaf>), TypeError> {
+    ) -> Result<(GenericCoreActions<Head, Leaf>, MappedActions<Head, Leaf>), TypeError>
+    where
+        Head: Clone + Display + IsFunc,
+        Leaf: Clone + PartialEq + Eq + Display + Hash,
+        FG: FreshGen<Head, Leaf>;
+}
+
+impl<Head, Leaf> GenericActionsExt<Head, Leaf> for GenericActions<Head, Leaf>
+where
+    Head: Clone + Display + IsFunc,
+    Leaf: Clone + PartialEq + Eq + Display + Hash,
+{
+    #[allow(clippy::type_complexity)]
+    fn to_core_actions<FG>(
+        &self,
+        typeinfo: &TypeInfo,
+        binding: &mut IndexSet<Leaf>,
+        fresh_gen: &mut FG,
+    ) -> Result<(GenericCoreActions<Head, Leaf>, MappedActions<Head, Leaf>), TypeError>
+    where
+        Head: Clone + Display + IsFunc,
+        Leaf: Clone + PartialEq + Eq + Display + Hash,
+        FG: FreshGen<Head, Leaf>,
+    {
         let mut norm_actions = vec![];
         let mut mapped_actions: MappedActions<Head, Leaf> = GenericActions(vec![]);
 
@@ -542,18 +588,71 @@ where
                     ));
                 }
                 GenericAction::Union(span, e1, e2) => {
-                    let mapped_e1 =
-                        e1.to_core_actions(typeinfo, binding, fresh_gen, &mut norm_actions)?;
-                    let mapped_e2 =
-                        e2.to_core_actions(typeinfo, binding, fresh_gen, &mut norm_actions)?;
-                    norm_actions.push(GenericCoreAction::Union(
-                        span.clone(),
-                        mapped_e1.get_corresponding_var_or_lit(typeinfo),
-                        mapped_e2.get_corresponding_var_or_lit(typeinfo),
-                    ));
-                    mapped_actions
-                        .0
-                        .push(GenericAction::Union(span.clone(), mapped_e1, mapped_e2));
+                    match (e1, e2) {
+                        (var @ GenericExpr::Var(..), GenericExpr::Call(_, f, args))
+                        | (GenericExpr::Call(_, f, args), var @ GenericExpr::Var(..))
+                            if f.is_constructor(typeinfo) =>
+                        {
+                            let head = f;
+                            let expr = var;
+                            let mut mapped_args = vec![];
+                            for arg in args {
+                                let mapped_arg = arg.to_core_actions(
+                                    typeinfo,
+                                    binding,
+                                    fresh_gen,
+                                    &mut norm_actions,
+                                )?;
+                                mapped_args.push(mapped_arg);
+                            }
+                            let mapped_expr = expr.to_core_actions(
+                                typeinfo,
+                                binding,
+                                fresh_gen,
+                                &mut norm_actions,
+                            )?;
+                            norm_actions.push(GenericCoreAction::Set(
+                                span.clone(),
+                                head.clone(),
+                                mapped_args
+                                    .iter()
+                                    .map(|e| e.get_corresponding_var_or_lit(typeinfo))
+                                    .collect(),
+                                mapped_expr.get_corresponding_var_or_lit(typeinfo),
+                            ));
+                            let v = fresh_gen.fresh(head);
+                            mapped_actions.0.push(GenericAction::Set(
+                                span.clone(),
+                                CorrespondingVar::new(head.clone(), v),
+                                mapped_args,
+                                mapped_expr,
+                            ));
+                        }
+                        _ => {
+                            let mapped_e1 = e1.to_core_actions(
+                                typeinfo,
+                                binding,
+                                fresh_gen,
+                                &mut norm_actions,
+                            )?;
+                            let mapped_e2 = e2.to_core_actions(
+                                typeinfo,
+                                binding,
+                                fresh_gen,
+                                &mut norm_actions,
+                            )?;
+                            norm_actions.push(GenericCoreAction::Union(
+                                span.clone(),
+                                mapped_e1.get_corresponding_var_or_lit(typeinfo),
+                                mapped_e2.get_corresponding_var_or_lit(typeinfo),
+                            ));
+                            mapped_actions.0.push(GenericAction::Union(
+                                span.clone(),
+                                mapped_e1,
+                                mapped_e2,
+                            ));
+                        }
+                    };
                 }
                 GenericAction::Panic(span, string) => {
                     norm_actions.push(GenericCoreAction::Panic(span.clone(), string.clone()));
@@ -574,19 +673,46 @@ where
     }
 }
 
-impl<Head, Leaf> GenericExpr<Head, Leaf>
+pub(crate) trait GenericExprExt<Head, Leaf>
 where
     Head: Clone + Display,
     Leaf: Clone + PartialEq + Eq + Display + Hash,
 {
-    pub(crate) fn to_query(
+    fn to_query(
         &self,
         typeinfo: &TypeInfo,
         fresh_gen: &mut impl FreshGen<Head, Leaf>,
     ) -> (
         Vec<GenericAtom<HeadOrEq<Head>, Leaf>>,
         MappedExpr<Head, Leaf>,
-    ) {
+    );
+
+    fn to_core_actions<FG: FreshGen<Head, Leaf>>(
+        &self,
+        typeinfo: &TypeInfo,
+        binding: &mut IndexSet<Leaf>,
+        fresh_gen: &mut FG,
+        out_actions: &mut Vec<GenericCoreAction<Head, Leaf>>,
+    ) -> Result<MappedExpr<Head, Leaf>, TypeError>;
+}
+
+impl<Head, Leaf> GenericExprExt<Head, Leaf> for GenericExpr<Head, Leaf>
+where
+    Head: Clone + Display,
+    Leaf: Clone + PartialEq + Eq + Display + Hash,
+{
+    fn to_query(
+        &self,
+        typeinfo: &TypeInfo,
+        fresh_gen: &mut impl FreshGen<Head, Leaf>,
+    ) -> (
+        Vec<GenericAtom<HeadOrEq<Head>, Leaf>>,
+        MappedExpr<Head, Leaf>,
+    )
+    where
+        Head: Clone + Display,
+        Leaf: Clone + PartialEq + Eq + Display + Hash,
+    {
         match self {
             GenericExpr::Lit(span, lit) => (vec![], GenericExpr::Lit(span.clone(), lit.clone())),
             GenericExpr::Var(span, v) => (vec![], GenericExpr::Var(span.clone(), v.clone())),
@@ -623,7 +749,7 @@ where
         }
     }
 
-    pub(crate) fn to_core_actions<FG: FreshGen<Head, Leaf>>(
+    fn to_core_actions<FG: FreshGen<Head, Leaf>>(
         &self,
         typeinfo: &TypeInfo,
         binding: &mut IndexSet<Leaf>,
@@ -649,17 +775,14 @@ where
                     norm_args.push(mapped_arg.get_corresponding_var_or_lit(typeinfo));
                     mapped_args.push(mapped_arg);
                 }
-
                 let var = fresh_gen.fresh(f);
                 binding.insert(var.clone());
-
                 out_actions.push(GenericCoreAction::Let(
                     span.clone(),
                     var.clone(),
                     f.clone(),
                     norm_args,
                 ));
-
                 Ok(GenericExpr::Call(
                     span.clone(),
                     CorrespondingVar::new(f.clone(), var),
@@ -784,56 +907,76 @@ where
     }
 }
 
-impl<Head, Leaf> GenericRule<Head, Leaf>
-where
-    Head: Clone + Display,
-    Leaf: Clone + PartialEq + Eq + Display + Hash + Debug,
-{
-    pub(crate) fn to_core_rule(
+pub(crate) trait GenericRuleExt<Head, Leaf> {
+    fn to_core_rule(
         &self,
         typeinfo: &TypeInfo,
         fresh_gen: &mut impl FreshGen<Head, Leaf>,
-    ) -> Result<GenericCoreRule<HeadOrEq<Head>, Head, Leaf>, TypeError> {
-        let GenericRule {
-            span: _,
-            head,
-            body,
-        } = self;
+    ) -> Result<GenericCoreRule<HeadOrEq<Head>, Head, Leaf>, TypeError>
+    where
+        Head: Clone + Display + IsFunc,
+        Leaf: Clone + PartialEq + Eq + Display + Hash + Debug;
+}
 
-        let (body, _correspondence) = Facts(body.clone()).to_query(typeinfo, fresh_gen);
+impl<Head, Leaf> GenericRuleExt<Head, Leaf> for GenericRule<Head, Leaf>
+where
+    Head: Clone + Display + IsFunc,
+    Leaf: Clone + PartialEq + Eq + Display + Hash + Debug,
+{
+    fn to_core_rule(
+        &self,
+        typeinfo: &TypeInfo,
+        fresh_gen: &mut impl FreshGen<Head, Leaf>,
+    ) -> Result<GenericCoreRule<HeadOrEq<Head>, Head, Leaf>, TypeError>
+    where
+        Head: Clone + Display + IsFunc,
+        Leaf: Clone + PartialEq + Eq + Display + Hash + Debug,
+    {
+        let (body, _correspondence) = Facts(self.body.clone()).to_query(typeinfo, fresh_gen);
         let mut binding = body.get_vars();
-        let (head, _correspondence) = head.to_core_actions(typeinfo, &mut binding, fresh_gen)?;
+        let (head, _correspondence) =
+            self.head
+                .to_core_actions(typeinfo, &mut binding, fresh_gen)?;
         Ok(GenericCoreRule {
             span: self.span.clone(),
             body,
             head,
         })
     }
-
-    fn to_canonicalized_core_rule_impl(
-        &self,
-        typeinfo: &TypeInfo,
-        fresh_gen: &mut impl FreshGen<Head, Leaf>,
-        value_eq: impl Fn(&GenericAtomTerm<Leaf>, &GenericAtomTerm<Leaf>) -> Head,
-    ) -> Result<GenericCoreRule<Head, Head, Leaf>, TypeError> {
-        let rule = self.to_core_rule(typeinfo, fresh_gen)?;
-        Ok(rule.canonicalize(value_eq))
-    }
 }
 
-impl ResolvedRule {
-    pub(crate) fn to_canonicalized_core_rule(
+pub(crate) trait ResolvedRuleExt {
+    fn to_canonicalized_core_rule(
+        &self,
+        typeinfo: &TypeInfo,
+        fresh_gen: &mut SymbolGen,
+    ) -> Result<ResolvedCoreRule, TypeError>;
+}
+
+impl ResolvedRuleExt for ResolvedRule {
+    fn to_canonicalized_core_rule(
         &self,
         typeinfo: &TypeInfo,
         fresh_gen: &mut SymbolGen,
     ) -> Result<ResolvedCoreRule, TypeError> {
         let value_eq = &typeinfo.get_prims("value-eq").unwrap()[0];
-        self.to_canonicalized_core_rule_impl(typeinfo, fresh_gen, |at1, at2| {
+        let value_eq = |at1: &ResolvedAtomTerm, at2: &ResolvedAtomTerm| {
             ResolvedCall::Primitive(SpecializedPrimitive {
                 primitive: value_eq.clone(),
                 input: vec![at1.output(), at2.output()],
                 output: UnitSort.to_arcsort(),
             })
-        })
+        };
+
+        let rule = self.to_core_rule(typeinfo, fresh_gen)?;
+
+        // The groundedness check happens before canonicalization, because canonicalization
+        // may turn ungrounded variables in a query to unbounded variables in actions (e.g.,
+        // `(rule ((= x y)) ((R x y)))`) but unboundedness is only checked during type checking.
+        grounded_check(&rule)?;
+
+        let rule = rule.canonicalize(value_eq);
+
+        Ok(rule)
     }
 }

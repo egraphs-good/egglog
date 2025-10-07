@@ -1,0 +1,21 @@
+[package]
+name = "egglog-concurrency"
+version = { workspace = true }
+edition = { workspace = true }
+description = { workspace = true }
+repository = { workspace = true }
+keywords = { workspace = true }
+license = { workspace = true }
+readme = { workspace = true }
+
+[dependencies]
+arc-swap = { workspace = true}
+rayon = { workspace = true}
+
+[dev-dependencies]
+divan = { workspace = true}
+rayon = { workspace = true}
+
+[[bench]]
+name = "simple_read"
+harness = false

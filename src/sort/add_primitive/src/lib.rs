@@ -2,7 +2,7 @@ use proc_macro::{Span, TokenStream};
 use quote::quote;
 use syn::parse::{Parse, ParseStream, Result};
 use syn::punctuated::Punctuated;
-use syn::{braced, bracketed, parenthesized, parse_macro_input, Expr, Ident, LitStr, Token};
+use syn::{Expr, Ident, LitStr, Token, braced, bracketed, parenthesized, parse_macro_input};
 
 /// This macro lets the user declare custom egglog primitives.
 /// It supports a few special features:
@@ -176,7 +176,7 @@ pub fn add_primitive(input: TokenStream) -> TokenStream {
                 match is_container {
                     false => quote!(exec_state.base_values().get::<#t>(#y)),
                     true => quote!(
-                        exec_state.clone().container_values().register_val::<#t>(#y, exec_state)
+                        exec_state.container_values().register_val::<#t>(#y, exec_state)
                     ),
                 },
             ),

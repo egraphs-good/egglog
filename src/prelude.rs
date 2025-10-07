@@ -3,7 +3,7 @@
 //! ```
 //! use egglog::prelude::*;
 //! ```
-//! See also [`rule`], [`rust_rule`], [`query`], [`LeafSort`],
+//! See also [`rule`], [`rust_rule`], [`query`], [`BaseSort`],
 //! and [`ContainerSort`].
 
 use crate::*;
@@ -12,48 +12,55 @@ use std::any::{Any, TypeId};
 // Re-exports in `prelude` for convenience.
 pub use egglog::ast::{Action, Fact, Facts, GenericActions};
 pub use egglog::sort::{BigIntSort, BigRatSort, BoolSort, F64Sort, I64Sort, StringSort, UnitSort};
+pub use egglog::{EGraph, span};
 pub use egglog::{action, actions, datatype, expr, fact, facts, sort, vars};
-pub use egglog::{span, EGraph};
 
 pub mod exprs {
     use super::*;
 
+    /// Creates a variable expression.
     pub fn var(name: &str) -> Expr {
         Expr::Var(span!(), name.to_owned())
     }
 
+    /// Creates an integer literal expression.
     pub fn int(value: i64) -> Expr {
         Expr::Lit(span!(), Literal::Int(value))
     }
 
+    /// Creates a float literal expression.
     pub fn float(value: f64) -> Expr {
         Expr::Lit(span!(), Literal::Float(value.into()))
     }
 
+    /// Creates a string literal expression.
     pub fn string(value: &str) -> Expr {
         Expr::Lit(span!(), Literal::String(value.to_owned()))
     }
 
+    /// Creates a unit literal expression.
     pub fn unit() -> Expr {
         Expr::Lit(span!(), Literal::Unit)
     }
 
+    /// Creates a boolean literal expression.
     pub fn bool(value: bool) -> Expr {
         Expr::Lit(span!(), Literal::Bool(value))
     }
 
+    /// Creates a function call expression.
     pub fn call(f: &str, xs: Vec<Expr>) -> Expr {
         Expr::Call(span!(), f.to_owned(), xs)
     }
 }
 
 /// Create a new ruleset.
-pub fn add_ruleset(egraph: &mut EGraph, ruleset: &str) -> Result<Vec<String>, Error> {
+pub fn add_ruleset(egraph: &mut EGraph, ruleset: &str) -> Result<Vec<CommandOutput>, Error> {
     egraph.run_program(vec![Command::AddRuleset(span!(), ruleset.to_owned())])
 }
 
 /// Run one iteration of a ruleset.
-pub fn run_ruleset(egraph: &mut EGraph, ruleset: &str) -> Result<Vec<String>, Error> {
+pub fn run_ruleset(egraph: &mut EGraph, ruleset: &str) -> Result<Vec<CommandOutput>, Error> {
     egraph.run_program(vec![Command::RunSchedule(Schedule::Run(
         span!(),
         RunConfig {
@@ -218,18 +225,18 @@ pub fn rule(
     ruleset: &str,
     facts: Facts<String, String>,
     actions: Actions,
-) -> Result<Vec<String>, Error> {
-    let rule = Rule {
+) -> Result<Vec<CommandOutput>, Error> {
+    let mut rule = Rule {
         span: span!(),
         head: actions,
         body: facts.0,
+        name: "".into(),
+        ruleset: ruleset.into(),
     };
 
-    egraph.run_program(vec![Command::Rule {
-        name: format!("{rule:?}"),
-        ruleset: ruleset.to_owned(),
-        rule,
-    }])
+    rule.name = format!("{rule:?}");
+
+    egraph.run_program(vec![Command::Rule { rule }])
 }
 
 /// A wrapper around an `ExecutionState` for rules that are written in Rust.
@@ -258,8 +265,8 @@ impl RustRuleContext<'_, '_> {
 
     /// Do a table lookup. This is potentially a mutable operation!
     /// For more information, see `egglog_bridge::TableAction::lookup`.
-    pub fn lookup(&mut self, table: &str, key: Vec<Value>) -> Option<Value> {
-        self.get_table_action(table).lookup(self.exec_state, &key)
+    pub fn lookup(&mut self, table: &str, key: &[Value]) -> Option<Value> {
+        self.get_table_action(table).lookup(self.exec_state, key)
     }
 
     /// Union two values in the e-graph.
@@ -416,7 +423,7 @@ pub fn rust_rule(
     vars: &[(&str, ArcSort)],
     facts: Facts<String, String>,
     func: impl Fn(&mut RustRuleContext, &[Value]) -> Option<()> + Clone + Send + Sync + 'static,
-) -> Result<Vec<String>, Error> {
+) -> Result<Vec<CommandOutput>, Error> {
     let prim_name = egraph.parser.symbol_gen.fresh("rust_rule_prim");
     let panic_id = egraph.backend.new_panic(format!("{prim_name}_panic"));
     egraph.add_primitive(RustRuleRhs {
@@ -447,13 +454,11 @@ pub fn rust_rule(
             ),
         )]),
         body: facts.0,
+        name: "".into(),
+        ruleset: ruleset.into(),
     };
 
-    egraph.run_program(vec![Command::Rule {
-        name: format!("{rule:?}"),
-        ruleset: ruleset.to_owned(),
-        rule,
-    }])
+    egraph.run_program(vec![Command::Rule { rule }])
 }
 
 /// The result of a query.
@@ -559,7 +564,7 @@ pub fn query(
 }
 
 /// Declare a new sort.
-pub fn add_sort(egraph: &mut EGraph, name: &str) -> Result<Vec<String>, Error> {
+pub fn add_sort(egraph: &mut EGraph, name: &str) -> Result<Vec<CommandOutput>, Error> {
     egraph.run_program(vec![Command::Sort(span!(), name.to_owned(), None)])
 }
 
@@ -569,7 +574,7 @@ pub fn add_function(
     name: &str,
     schema: Schema,
     merge: Option<GenericExpr<String, String>>,
-) -> Result<Vec<String>, Error> {
+) -> Result<Vec<CommandOutput>, Error> {
     egraph.run_program(vec![Command::Function {
         span: span!(),
         name: name.to_owned(),
@@ -583,9 +588,9 @@ pub fn add_constructor(
     egraph: &mut EGraph,
     name: &str,
     schema: Schema,
-    cost: Option<usize>,
+    cost: Option<DefaultCost>,
     unextractable: bool,
-) -> Result<Vec<String>, Error> {
+) -> Result<Vec<CommandOutput>, Error> {
     egraph.run_program(vec![Command::Constructor {
         span: span!(),
         name: name.to_owned(),
@@ -600,7 +605,7 @@ pub fn add_relation(
     egraph: &mut EGraph,
     name: &str,
     inputs: Vec<String>,
-) -> Result<Vec<String>, Error> {
+) -> Result<Vec<CommandOutput>, Error> {
     egraph.run_program(vec![Command::Relation {
         span: span!(),
         name: name.to_owned(),
@@ -629,7 +634,7 @@ macro_rules! datatype {
 /// A "default" implementation of [`Sort`] for simple types
 /// which just want to put some data in the e-graph. If you
 /// implement this trait, do not implement `Sort` or
-/// `ContainerSort. Use `add_leaf_sort` to register leaf
+/// `ContainerSort. Use `add_base_sort` to register base
 /// sorts with the `EGraph`. See `Sort` for documentation
 /// of the methods. Do not override `to_arcsort`.
 pub trait BaseSort: Any + Send + Sync + Debug {
@@ -688,7 +693,7 @@ impl<T: BaseSort> Sort for BaseSortImpl<T> {
 /// A "default" implementation of [`Sort`] for types which
 /// just want to store a pure data structure in the e-graph.
 /// If you implement this trait, do not implement `Sort` or
-/// `LeafSort`. Use `add_container_sort` to register container
+/// `BaseSort`. Use `add_container_sort` to register container
 /// sorts with the `EGraph`. See `Sort` for documentation
 /// of the methods. Do not override `to_arcsort`.
 pub trait ContainerSort: Any + Send + Sync + Debug {
@@ -705,7 +710,7 @@ pub trait ContainerSort: Any + Send + Sync + Debug {
         _: &mut TermDag,
         _: Vec<Term>,
     ) -> Term;
-    fn serialized_name(&self, _: Value) -> &str;
+    fn serialized_name(&self, container_values: &ContainerValues, value: Value) -> String;
 
     fn to_arcsort(self) -> ArcSort
     where
@@ -759,8 +764,8 @@ impl<T: ContainerSort> Sort for ContainerSortImpl<T> {
         self.0.is_eq_container_sort()
     }
 
-    fn serialized_name(&self, value: Value) -> &str {
-        self.0.serialized_name(value)
+    fn serialized_name(&self, container_values: &ContainerValues, value: Value) -> String {
+        self.0.serialized_name(container_values, value)
     }
 
     fn register_primitives(self: Arc<Self>, eg: &mut EGraph) {
@@ -779,12 +784,13 @@ impl<T: ContainerSort> Sort for ContainerSortImpl<T> {
     }
 }
 
-pub fn add_leaf_sort(
+/// Add a [`BaseSort`] to the e-graph
+pub fn add_base_sort(
     egraph: &mut EGraph,
-    leaf_sort: impl BaseSort,
+    base_sort: impl BaseSort,
     span: Span,
 ) -> Result<(), TypeError> {
-    egraph.add_sort(BaseSortImpl(leaf_sort), span)
+    egraph.add_sort(BaseSortImpl(base_sort), span)
 }
 
 pub fn add_container_sort(
@@ -902,6 +908,7 @@ mod tests {
             ruleset,
             facts![
                 (fib 5)
+                (fib x)
                 (= f1 (fib (+ x 1)))
                 (= 3 (unquote exprs::int(1 + 2)))
             ],

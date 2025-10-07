@@ -1,0 +1,17 @@
+[package]
+name = "egglog-wasm-example"
+publish = false
+version = "0.0.0"
+edition = { workspace = true }
+license = { workspace = true }
+repository = { workspace = true }
+
+[lib]
+crate-type = ["cdylib"]
+
+[dependencies]
+wasm-bindgen = { workspace = true }
+# remove default features so that custom allocator isn't built that's only used for bin
+egglog = { workspace = true, default-features = false }
+# enable JS support for random https://docs.rs/getrandom/latest/getrandom/#webassembly-support
+getrandom = { workspace = true, features = ["wasm_js"] }

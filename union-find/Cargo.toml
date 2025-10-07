@@ -1,0 +1,23 @@
+[package]
+name = "egglog-union-find"
+version = { workspace = true }
+edition = { workspace = true }
+description = { workspace = true }
+repository = { workspace = true }
+keywords = { workspace = true }
+license = { workspace = true }
+readme = { workspace = true }
+
+[dependencies]
+egglog-numeric-id = { workspace = true }
+crossbeam = { workspace = true }
+egglog-concurrency = { workspace = true }
+
+[dev-dependencies]
+divan = { workspace = true }
+rand = { workspace = true }
+rayon = { workspace = true }
+
+[[bench]]
+name = "union-find"
+harness = false

@@ -1,0 +1,42 @@
+[package]
+name = "egglog-bridge"
+version = { workspace = true }
+edition = { workspace = true }
+description = { workspace = true }
+repository = { workspace = true }
+keywords = { workspace = true }
+license = { workspace = true }
+readme = { workspace = true }
+
+[dependencies]
+egglog-core-relations = { workspace = true }
+egglog-numeric-id = { workspace = true }
+egglog-union-find = { workspace = true }
+hashbrown = { workspace = true }
+smallvec = { workspace = true }
+thiserror = { workspace = true }
+anyhow = { workspace = true }
+num-rational = { workspace = true }
+log = { workspace = true }
+indexmap = { workspace = true }
+petgraph = { workspace = true }
+web-time = { workspace = true }
+rayon = { workspace = true }
+dyn-clone = { workspace = true }
+once_cell = { workspace = true }
+ordered-float = { workspace = true }
+
+[dev-dependencies]
+env_logger = { workspace = true }
+mimalloc = { workspace = true }
+rand = { workspace = true }
+
+
+[[example]]
+name = "ac"
+
+[[example]]
+name = "math"
+
+[[example]]
+name = "ac_tracing"

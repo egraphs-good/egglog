@@ -1,6 +1,10 @@
-use crate::{core::CoreRule, *};
+use crate::{
+    core::{CoreRule, GenericActionsExt},
+    *,
+};
 use ast::Rule;
 use core_relations::ExternalFunction;
+use egglog_ast::generic_ast::GenericAction;
 
 #[derive(Clone, Debug)]
 pub struct FuncType {
@@ -58,10 +62,16 @@ pub struct TypeInfo {
 // These methods need to be on the `EGraph` in order to
 // register sorts and primitives with the backend.
 impl EGraph {
+    /// Add a user-defined sort to the e-graph.
+    ///
+    /// Also look at [`prelude::add_base_sort`] for a convenience method for adding user-defined sorts
     pub fn add_sort<S: Sort + 'static>(&mut self, sort: S, span: Span) -> Result<(), TypeError> {
         self.add_arcsort(Arc::new(sort), span)
     }
 
+    /// Declare a sort. This corresponds to the `sort` keyword in egglog.
+    /// It can either declares a new [`EqSort`] if `presort_and_args` is not provided,
+    /// or an instantiation of a presort (e.g., containers like `Vec`).
     pub fn declare_sort(
         &mut self,
         name: impl Into<String>,
@@ -87,7 +97,7 @@ impl EGraph {
         self.add_arcsort(sort, span)
     }
 
-    /// Add a user-defined sort
+    /// Add a user-defined sort to the e-graph.
     pub fn add_arcsort(&mut self, sort: ArcSort, span: Span) -> Result<(), TypeError> {
         sort.register_type(&mut self.backend);
 
@@ -146,14 +156,8 @@ impl EGraph {
             NCommand::Function(fdecl) => {
                 ResolvedNCommand::Function(self.type_info.typecheck_function(symbol_gen, fdecl)?)
             }
-            NCommand::NormRule {
-                rule,
-                ruleset,
-                name,
-            } => ResolvedNCommand::NormRule {
+            NCommand::NormRule { rule } => ResolvedNCommand::NormRule {
                 rule: self.type_info.typecheck_rule(symbol_gen, rule)?,
-                ruleset: ruleset.clone(),
-                name: name.clone(),
             },
             NCommand::Sort(span, sort, presort_and_args) => {
                 // Note this is bad since typechecking should be pure and idempotent
@@ -211,15 +215,6 @@ impl EGraph {
             ),
             NCommand::Pop(span, n) => ResolvedNCommand::Pop(span.clone(), *n),
             NCommand::Push(n) => ResolvedNCommand::Push(*n),
-            NCommand::SetOption { name, value } => {
-                let value =
-                    self.type_info
-                        .typecheck_expr(symbol_gen, value, &Default::default())?;
-                ResolvedNCommand::SetOption {
-                    name: name.clone(),
-                    value,
-                }
-            }
             NCommand::AddRuleset(span, ruleset) => {
                 ResolvedNCommand::AddRuleset(span.clone(), ruleset.clone())
             }
@@ -231,8 +226,14 @@ impl EGraph {
                 )
             }
             NCommand::PrintOverallStatistics => ResolvedNCommand::PrintOverallStatistics,
-            NCommand::PrintTable(span, table, size) => {
-                ResolvedNCommand::PrintTable(span.clone(), table.clone(), *size)
+            NCommand::PrintFunction(span, table, size, file, mode) => {
+                ResolvedNCommand::PrintFunction(
+                    span.clone(),
+                    table.clone(),
+                    *size,
+                    file.clone(),
+                    *mode,
+                )
             }
             NCommand::PrintSize(span, n) => {
                 // Should probably also resolve the function symbol here
@@ -457,7 +458,13 @@ impl TypeInfo {
         symbol_gen: &mut SymbolGen,
         rule: &Rule,
     ) -> Result<ResolvedRule, TypeError> {
-        let Rule { span, head, body } = rule;
+        let Rule {
+            span,
+            head,
+            body,
+            name,
+            ruleset,
+        } = rule;
         let mut constraints = vec![];
 
         let (query, mapped_query) = Facts(body.clone()).to_query(self, symbol_gen);
@@ -490,6 +497,8 @@ impl TypeInfo {
             span: span.clone(),
             body,
             head: actions,
+            name: name.clone(),
+            ruleset: ruleset.clone(),
         })
     }
 
@@ -634,6 +643,12 @@ impl TypeInfo {
         self.func_types.get(sym)
     }
 
+    pub(crate) fn is_constructor(&self, sym: &str) -> bool {
+        self.func_types
+            .get(sym)
+            .is_some_and(|f| f.subtype == FunctionSubtype::Constructor)
+    }
+
     pub fn get_global_sort(&self, sym: &str) -> Option<&ArcSort> {
         self.global_sorts.get(sym)
     }
@@ -658,6 +673,8 @@ pub enum TypeError {
     },
     #[error("{1}\nUnbound symbol {0}")]
     Unbound(String, Span),
+    #[error("{1}\nVariable {0} is ungrounded")]
+    Ungrounded(String, Span),
     #[error("{1}\nUndefined sort {0}")]
     UndefinedSort(String, Span),
     #[error("{2}\nSort {0} definition is disallowed: {1}")]
@@ -690,7 +707,7 @@ pub enum TypeError {
 
 #[cfg(test)]
 mod test {
-    use crate::{typechecking::TypeError, EGraph, Error};
+    use crate::{EGraph, Error, typechecking::TypeError};
 
     #[test]
     fn test_arity_mismatch() {

@@ -3,24 +3,26 @@ use crate::util::{HashMap, HashSet};
 use crate::*;
 use std::collections::VecDeque;
 
-/// An interface for custom cost model
-/// To use it with the default extractor, the cost type must also satisify Ord + Eq + Copy + Debug
-/// Additionally, the model should guarantee a term has a no-smaller cost
+/// An interface for custom cost model.
+///
+/// To use it with the default extractor, the cost type must also satisfy `Ord + Eq + Clone + Debug`.
+/// Additionally, the cost model should guarantee that a term has a no-smaller cost
 /// than its subterms to avoid cycles in the extracted terms for common case usages.
 /// For more niche usages, a term can have a cost less than its subterms.
 /// As long as there is no negative cost cycle,
 /// the default extractor is guaranteed to terminate in computing the costs.
 /// However, the user needs to be careful to guarantee acyclicity in the extracted terms.
 pub trait CostModel<C: Cost> {
-    /// Compute the total cost of a term given the cost of the root enode and its immediate children's total costs
+    /// The total cost of a term given the cost of the root e-node and its immediate children's total costs.
     fn fold(&self, head: &str, children_cost: &[C], head_cost: C) -> C;
 
-    /// Compute the cost of just a enode by itself, without taking its children into account
+    /// The cost of an enode (without the cost of children)
     fn enode_cost(&self, egraph: &EGraph, func: &Function, row: &egglog_bridge::FunctionRow) -> C;
 
-    /// Compute the cost of a container value given the costs of its elements
+    /// The cost of a container value given the costs of its elements.
+    ///
     /// The default cost for containers is just the sum of all the elements inside
-    fn container_primitive(
+    fn container_cost(
         &self,
         egraph: &EGraph,
         sort: &ArcSort,
@@ -35,9 +37,10 @@ pub trait CostModel<C: Cost> {
             .fold(C::identity(), |s, c| s.combine(c))
     }
 
-    /// Compute the cost of a primitive, non-container, value
-    /// The default cost for leaf primitives is the constant one
-    fn leaf_primitive(&self, egraph: &EGraph, sort: &ArcSort, value: Value) -> C {
+    /// Compute the cost of a (non-container) primitive value.
+    ///
+    /// The default cost for base values is the constant one
+    fn base_value_cost(&self, egraph: &EGraph, sort: &ArcSort, value: Value) -> C {
         let _egraph = egraph;
         let _sort = sort;
         let _value = value;
@@ -93,8 +96,9 @@ cost_impl_num!(num::BigInt, num::BigRational);
 use ordered_float::OrderedFloat;
 cost_impl_num!(f32, f64, OrderedFloat<f32>, OrderedFloat<f64>);
 
-pub type DefaultCost = usize;
+pub type DefaultCost = u64;
 
+/// A cost model that computes the cost by summing the cost of each node.
 #[derive(Default, Clone)]
 pub struct TreeAdditiveCostModel {}
 
@@ -118,7 +122,8 @@ impl CostModel<DefaultCost> for TreeAdditiveCostModel {
     }
 }
 
-pub struct Extractor<C: Cost + Ord + Eq + Copy + Debug> {
+/// The default, Bellman-Ford like extractor. This extractor is optimal for [`CostModel`].
+pub struct Extractor<C: Cost + Ord + Eq + Clone + Debug> {
     rootsorts: Vec<ArcSort>,
     funcs: Vec<String>,
     cost_model: Box<dyn CostModel<C>>,
@@ -128,12 +133,13 @@ pub struct Extractor<C: Cost + Ord + Eq + Copy + Debug> {
     parent_edge: HashMap<String, HashMap<Value, (String, Vec<Value>)>>,
 }
 
-impl<C: Cost + Ord + Eq + Copy + Debug> Extractor<C> {
+impl<C: Cost + Ord + Eq + Clone + Debug> Extractor<C> {
     /// Bulk of the computation happens at initialization time.
     /// The later extractions only reuses saved results.
     /// This means a new extractor must be created if the egraph changes.
     /// Holding a reference to the egraph would enforce this but prevents the extractor being reused.
-    /// For convenience, if the rootsorts is None, it defaults to extract all extractable rootsorts.
+    ///
+    /// For convenience, if the rootsorts is `None`, it defaults to extract all extractable rootsorts.
     pub fn compute_costs_from_rootsorts(
         rootsorts: Option<Vec<ArcSort>>,
         egraph: &EGraph,
@@ -248,7 +254,7 @@ impl<C: Cost + Ord + Eq + Copy + Debug> Extractor<C> {
             }
             Some(
                 self.cost_model
-                    .container_primitive(egraph, sort, value, &ch_costs),
+                    .container_cost(egraph, sort, value, &ch_costs),
             )
         } else if sort.is_eq_sort() {
             if self
@@ -256,17 +262,24 @@ impl<C: Cost + Ord + Eq + Copy + Debug> Extractor<C> {
                 .get(sort.name())
                 .is_some_and(|t| t.get(&value).is_some())
             {
-                Some(*self.costs.get(sort.name()).unwrap().get(&value).unwrap())
+                Some(
+                    self.costs
+                        .get(sort.name())
+                        .unwrap()
+                        .get(&value)
+                        .unwrap()
+                        .clone(),
+                )
             } else {
                 None
             }
         } else {
             // Primitive
-            Some(self.cost_model.leaf_primitive(egraph, sort, value))
+            Some(self.cost_model.base_value_cost(egraph, sort, value))
         }
     }
 
-    /// A row in a [constructor] table is an hyperedge from the set of input terms to the constructed output term.
+    /// A row in a constructor table is a hyperedge from the set of input terms to the constructed output term.
     fn compute_cost_hyperedge(
         &self,
         egraph: &EGraph,
@@ -398,7 +411,9 @@ impl<C: Cost + Ord + Eq + Copy + Debug> Extractor<C> {
                     let target = row.vals.last().unwrap();
                     if let Some(best_cost) = self.costs.get(target_sort.name()).unwrap().get(target)
                     {
-                        if Some(*best_cost) == self.compute_cost_hyperedge(egraph, &row, func) {
+                        if Some(best_cost.clone())
+                            == self.compute_cost_hyperedge(egraph, &row, func)
+                        {
                             // one of the possible best parent edges
                             let target_topo_rnk = *self
                                 .topo_rnk
@@ -491,8 +506,10 @@ impl<C: Cost + Ord + Eq + Copy + Debug> Extractor<C> {
         term
     }
 
-    /// This expects the sort to be already computed
-    /// can be one of the rootsorts, or reachable from rootsorts, or primitives, or containers of computed sorts
+    /// Extract the best term of a value from a given sort.
+    ///
+    /// This function expects the sort to be already computed,
+    /// which can be one of the rootsorts, or reachable from rootsorts, or primitives, or containers of computed sorts.
     pub fn extract_best_with_sort(
         &self,
         egraph: &EGraph,
@@ -515,7 +532,9 @@ impl<C: Cost + Ord + Eq + Copy + Debug> Extractor<C> {
         }
     }
 
-    /// This expects the value to be of the single sort the extractor has been initialized with
+    /// A convenience method for extraction.
+    ///
+    /// This expects the value to be of the unique sort the extractor has been initialized with
     pub fn extract_best(
         &self,
         egraph: &EGraph,
@@ -534,7 +553,10 @@ impl<C: Cost + Ord + Eq + Copy + Debug> Extractor<C> {
         )
     }
 
-    /// This extract variants by selecting nvairants enodes with the lowest cost from the root eclass.
+    /// Extract variants of an e-class.
+    ///
+    /// The variants are selected by first picking `nvairants` e-nodes with the lowest cost from the e-class
+    /// and then extracting a term from each e-node.
     pub fn extract_variants_with_sort(
         &self,
         egraph: &EGraph,
@@ -596,7 +618,9 @@ impl<C: Cost + Ord + Eq + Copy + Debug> Extractor<C> {
 
             res
         } else {
-            log::warn!("extracting multiple variants for containers or primitives is not implemented, returning a single variant.");
+            log::warn!(
+                "extracting multiple variants for containers or primitives is not implemented, returning a single variant."
+            );
             if let Some(res) = self.extract_best_with_sort(egraph, termdag, value, sort) {
                 vec![res]
             } else {
@@ -605,7 +629,9 @@ impl<C: Cost + Ord + Eq + Copy + Debug> Extractor<C> {
         }
     }
 
-    /// This expects the value to be of the single sort the extractor has been initialized with
+    /// A convenience method for extracting variants of a value.
+    ///
+    /// This expects the value to be of the unique sort the extractor has been initialized with.
     pub fn extract_variants(
         &self,
         egraph: &EGraph,

@@ -6,12 +6,12 @@ use std::fmt::Debug;
 use std::ops::{Shl, Shr};
 use std::{any::Any, sync::Arc};
 
+use crate::core_relations;
 pub use core_relations::{
     BaseValues, Boxed, ContainerValue, ContainerValues, ExecutionState, Rebuilder,
 };
 pub use egglog_bridge::ColumnTy;
 
-use crate::ast::Literal;
 use crate::*;
 
 pub type Z = core_relations::Boxed<BigInt>;
@@ -44,9 +44,12 @@ pub use r#fn::*;
 mod multiset;
 pub use multiset::*;
 
+/// A sort (type) in the e-graph that defines values in egglog. Sorts are user-extensible (e.g., [`prelude::BaseSort`]).
 pub trait Sort: Any + Send + Sync + Debug {
+    /// Returns the name of this sort.
     fn name(&self) -> &str;
 
+    /// Returns the backend-specific column type. See [`ColumnTy`].
     fn column_ty(&self, backend: &egglog_bridge::EGraph) -> ColumnTy;
 
     /// return the inner sorts if a container sort
@@ -82,8 +85,8 @@ pub trait Sort: Any + Send + Sync + Debug {
     /// Return the serialized name of the sort
     ///
     /// Only used for container sorts, which cannot be serialized with make_expr so need an explicit name
-    fn serialized_name(&self, _value: Value) -> &str {
-        self.name()
+    fn serialized_name(&self, _container_values: &ContainerValues, _value: Value) -> String {
+        self.name().to_owned()
     }
 
     /// Return the inner values and sorts.

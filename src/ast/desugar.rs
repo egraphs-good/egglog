@@ -27,9 +27,6 @@ pub(crate) fn desugar_command(
 ) -> Result<Vec<NCommand>, Error> {
     let rule_name = rule_name(&command);
     let res = match command {
-        Command::SetOption { name, value } => {
-            vec![NCommand::SetOption { name, value }]
-        }
         Command::Function {
             span,
             name,
@@ -118,20 +115,12 @@ pub(crate) fn desugar_command(
                 seminaive_transform,
             );
         }
-        Command::Rule {
-            ruleset,
-            mut name,
-            rule,
-        } => {
-            if name.is_empty() {
-                name = rule_name;
+        Command::Rule { mut rule } => {
+            if rule.name.is_empty() {
+                // format rule and use it as the name
+                rule.name = rule_name;
             }
-
-            vec![NCommand::NormRule {
-                ruleset,
-                name,
-                rule,
-            }]
+            vec![NCommand::NormRule { rule }]
         }
         Command::Sort(span, sort, option) => vec![NCommand::Sort(span, sort, option)],
         Command::AddRuleset(span, name) => vec![NCommand::AddRuleset(span, name)],
@@ -147,8 +136,8 @@ pub(crate) fn desugar_command(
         }
         Command::Extract(span, expr, variants) => vec![NCommand::Extract(span, expr, variants)],
         Command::Check(span, facts) => vec![NCommand::Check(span, facts)],
-        Command::PrintFunction(span, symbol, size) => {
-            vec![NCommand::PrintTable(span, symbol, size)]
+        Command::PrintFunction(span, symbol, size, file, mode) => {
+            vec![NCommand::PrintFunction(span, symbol, size, file, mode)]
         }
         Command::PrintSize(span, symbol) => vec![NCommand::PrintSize(span, symbol)],
         Command::Output { span, file, exprs } => {
@@ -229,8 +218,6 @@ fn desugar_rewrite(
     // this way, the union rule can only be fired once,
     // which helps proofs not add too much info
     vec![NCommand::NormRule {
-        ruleset,
-        name,
         rule: Rule {
             span: span.clone(),
             body: [Fact::Eq(
@@ -242,6 +229,8 @@ fn desugar_rewrite(
             .chain(rewrite.conditions.clone())
             .collect(),
             head,
+            ruleset,
+            name,
         },
     }]
 }
