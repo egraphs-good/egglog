@@ -32,8 +32,6 @@ pub fn benchmark_files_in_glob(c: &mut Criterion, glob: &str) {
         let name = path.file_stem().unwrap().to_string_lossy().to_string();
         let filename = path.to_string_lossy().to_string();
         let program = std::fs::read_to_string(&filename).unwrap();
-        c.bench_function(&name, |b| {
-            b.iter(|| run_example(&filename, &program))
-        });
+        c.bench_function(&name, |b| b.iter(|| run_example(&filename, &program)));
     }
 }
