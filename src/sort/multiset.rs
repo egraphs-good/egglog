@@ -25,9 +25,9 @@ impl ContainerValue for MultiSetContainer {
 
 #[derive(Clone, Debug, Serialize, Deserialize)]
 pub struct MultiSetSort {
-    name: String,
+    pub(crate) name: String,
     #[serde(with = "arc_sort_serde")]
-    element: ArcSort,
+    pub(crate) element: ArcSort,
 }
 
 impl MultiSetSort {

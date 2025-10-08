@@ -25,9 +25,9 @@ impl ContainerValue for SetContainer {
 
 #[derive(Clone, Debug, Serialize, Deserialize)]
 pub struct SetSort {
-    name: String,
+    pub name: String,
     #[serde(with = "arc_sort_serde")]
-    element: ArcSort,
+    pub element: ArcSort,
 }
 
 impl SetSort {

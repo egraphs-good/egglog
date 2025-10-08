@@ -95,9 +95,11 @@ pub struct TypeInfo {
     // TODO(yz): I want to get rid of this as now we have user-defined primitives and constraint based type checking
     #[serde(skip)]
     reserved_primitives: HashSet<&'static str>,
-    sorts: HashMap<String, Arc<dyn Sort>>,
+    #[serde(with = "arc_sort_map_serde")]
+    sorts: HashMap<String, ArcSort>,
     primitives: HashMap<String, Vec<PrimitiveWithId>>,
     func_types: HashMap<String, FuncType>,
+    #[serde(with = "arc_sort_map_serde")]
     global_sorts: HashMap<String, ArcSort>,
 }
 

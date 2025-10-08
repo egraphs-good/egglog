@@ -21,9 +21,9 @@ impl ContainerValue for VecContainer {
 
 #[derive(Clone, Debug, Serialize, Deserialize)]
 pub struct VecSort {
-    name: String,
+    pub name: String,
     #[serde(with = "arc_sort_serde")]
-    element: ArcSort,
+    pub element: ArcSort,
 }
 
 impl VecSort {

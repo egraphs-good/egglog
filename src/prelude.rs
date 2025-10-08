@@ -654,7 +654,6 @@ pub trait BaseSort: Any + Send + Sync + Debug + Serialize {
 #[derive(Debug, Serialize, Deserialize, Default)]
 pub struct BaseSortImpl<T: BaseSort>(T);
 
-#[typetag::serialize]
 impl<T: BaseSort> Sort for BaseSortImpl<T> {
     fn name(&self) -> &str {
         self.0.name()
@@ -722,9 +721,8 @@ pub trait ContainerSort: Any + Send + Sync + Debug + Serialize {
 }
 
 #[derive(Debug, Serialize, Deserialize)]
-struct ContainerSortImpl<T: ContainerSort>(T);
+pub struct ContainerSortImpl<T: ContainerSort>(pub(crate) T);
 
-#[typetag::serialize]
 impl<T: ContainerSort> Sort for ContainerSortImpl<T> {
     fn name(&self) -> &str {
         self.0.name()

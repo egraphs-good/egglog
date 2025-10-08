@@ -50,9 +50,11 @@ use log::{Level, log_enabled};
 use numeric_id::DenseIdMap;
 use prelude::*;
 use scheduler::{SchedulerId, SchedulerRecord};
+use serde::ser::SerializeStruct;
 use serde::{Deserialize, Serialize};
 pub use serialize::{SerializeConfig, SerializeOutput, SerializedNode};
 use sort::*;
+use std::any::Any;
 use std::fmt::{Debug, Display, Formatter};
 use std::fs::File;
 use std::hash::Hash;
@@ -73,7 +75,87 @@ use crate::core::{GenericActionsExt, ResolvedRuleExt};
 
 pub type ArcSort = Arc<dyn Sort>;
 
-#[derive(Clone, Serialize)]
+impl dyn Sort {
+    fn as_any(&self) -> &dyn Any {
+        self
+    }
+}
+
+pub mod arc_sort_serde {
+    use serde::{Deserializer, Serializer};
+
+    use super::*;
+
+    pub fn serialize<S>(sort: &ArcSort, serializer: S) -> Result<S::Ok, S::Error>
+    where
+        S: Serializer,
+    {
+        SerializableSort(sort.clone()).serialize(serializer)
+    }
+
+    pub fn deserialize<'de, D>(deserializer: D) -> Result<ArcSort, D::Error>
+    where
+        D: Deserializer<'de>,
+    {
+        let SerializableSort(sort) = SerializableSort::deserialize(deserializer)?;
+        Ok(sort)
+    }
+}
+
+pub mod arc_sort_vec_serde {
+    use serde::{Deserializer, Serializer};
+
+    use super::*;
+
+    pub fn serialize<S>(v: &Vec<ArcSort>, serializer: S) -> Result<S::Ok, S::Error>
+    where
+        S: Serializer,
+    {
+        let serializable: Vec<SerializableSort> = v.iter().cloned().map(SerializableSort).collect();
+        serializable.serialize(serializer)
+    }
+
+    pub fn deserialize<'de, D>(deserializer: D) -> Result<Vec<ArcSort>, D::Error>
+    where
+        D: Deserializer<'de>,
+    {
+        let v: Vec<SerializableSort> = Vec::deserialize(deserializer)?;
+        let v: Vec<ArcSort> = v.into_iter().map(|SerializableSort(s)| s).collect();
+        Ok(v)
+    }
+}
+
+pub mod arc_sort_map_serde {
+    use hashbrown::HashMap;
+    use serde::{Deserializer, Serializer};
+
+    use super::*;
+
+    pub fn serialize<S>(m: &HashMap<String, ArcSort>, serializer: S) -> Result<S::Ok, S::Error>
+    where
+        S: Serializer,
+    {
+        let serializable: HashMap<String, SerializableSort> = m
+            .into_iter()
+            .map(|(k, v)| (k.clone(), SerializableSort(v.clone())))
+            .collect();
+        serializable.serialize(serializer)
+    }
+
+    pub fn deserialize<'de, D>(deserializer: D) -> Result<HashMap<String, ArcSort>, D::Error>
+    where
+        D: Deserializer<'de>,
+    {
+        let m: HashMap<String, SerializableSort> = HashMap::deserialize(deserializer)?;
+        let m: HashMap<String, ArcSort> = m
+            .into_iter()
+            .map(|(k, SerializableSort(v))| (k, v))
+            .collect();
+        Ok(m)
+    }
+}
+
+#[derive(Clone)]
 pub struct SerializableSort(pub ArcSort);
 
 impl<'de> Deserialize<'de> for SerializableSort {
@@ -81,97 +163,157 @@ impl<'de> Deserialize<'de> for SerializableSort {
     where
         D: serde::Deserializer<'de>,
     {
-        use serde::de::{self, MapAccess, Visitor};
-        use std::fmt;
-
-        struct SortVisitor;
-
-        impl<'de> Visitor<'de> for SortVisitor {
-            type Value = SerializableSort;
-
-            fn expecting(&self, f: &mut fmt::Formatter) -> fmt::Result {
-                f.write_str("a map with a sort name like { \"BaseSortImpl\": null }")
-            }
-
-            fn visit_map<M>(self, mut map: M) -> Result<Self::Value, M::Error>
-            where
-                M: MapAccess<'de>,
-            {
-                if let Some((key, _)) = map.next_entry::<String, Option<()>>()? {
-                    match key.as_str() {
-                        // todo: this is a bogus default value
-                        "BaseSortImpl" => {
-                            Ok(SerializableSort(Arc::new(EqSort { name: "eq".into() })))
-                        }
-                        "EqSort" => Ok(SerializableSort(Arc::new(EqSort { name: "eq".into() }))),
-                        other => Err(de::Error::unknown_variant(
-                            other,
-                            &["BaseSortImpl", "EqSort"],
-                        )),
-                    }
-                } else {
-                    Err(de::Error::custom("expected a map with one sort key"))
-                }
-            }
+        #[derive(Deserialize)]
+        #[serde(tag = "type", content = "data")]
+        enum SortRepr {
+            FunctionSort(FunctionSort),
+            EqSort(EqSort),
+            BaseSort(String),
+            MapSort {
+                name: String,
+                #[serde(with = "arc_sort_serde")]
+                key: ArcSort,
+                #[serde(with = "arc_sort_serde")]
+                value: ArcSort,
+            },
+            MultiSetSort {
+                name: String,
+                #[serde(with = "arc_sort_serde")]
+                element: ArcSort,
+            },
+            SetSort {
+                name: String,
+                #[serde(with = "arc_sort_serde")]
+                element: ArcSort,
+            },
+            VecSort {
+                name: String,
+                #[serde(with = "arc_sort_serde")]
+                element: ArcSort,
+            },
         }
-
-        deserializer.deserialize_map(SortVisitor)
-    }
-}
-mod arc_sort_serde {
-    use super::*;
-    use serde::{Deserialize, Deserializer, Serialize, Serializer};
-
-    pub fn serialize<S>(value: &ArcSort, s: S) -> Result<S::Ok, S::Error>
-    where
-        S: Serializer,
-    {
-        SerializableSort(value.clone()).serialize(s)
-    }
-
-    pub fn deserialize<'de, D>(d: D) -> Result<ArcSort, D::Error>
-    where
-        D: Deserializer<'de>,
-    {
-        let wrapper = SerializableSort::deserialize(d)?;
-        Ok(wrapper.0)
-    }
-}
-
-mod arc_sort_map_serde {
-    use super::*;
-    use hashbrown::HashMap;
-    use serde::{Deserialize, Deserializer};
-
-    pub fn deserialize<'de, D>(d: D) -> Result<HashMap<String, ArcSort>, D::Error>
-    where
-        D: Deserializer<'de>,
-    {
-        let wrapper_map: HashMap<String, SerializableSort> = HashMap::deserialize(d)?;
-        let map: HashMap<String, ArcSort> =
-            wrapper_map.into_iter().map(|(k, v)| (k, v.0)).collect();
-        Ok(map)
+        let repr = SortRepr::deserialize(deserializer)?;
+        let arc: ArcSort = match repr {
+            SortRepr::FunctionSort(function_sort) => Arc::new(function_sort),
+            SortRepr::EqSort(eq_sort) => Arc::new(eq_sort),
+            SortRepr::BaseSort(name) => match name.as_str() {
+                "BigIntSort" => BigIntSort.to_arcsort(),
+                "BigRatSort" => BigRatSort.to_arcsort(),
+                "BoolSort" => BoolSort.to_arcsort(),
+                "F64Sort" => F64Sort.to_arcsort(),
+                "I64Sort" => I64Sort.to_arcsort(),
+                "StringSort" => StringSort.to_arcsort(),
+                "UnitSort" => UnitSort.to_arcsort(),
+                _ => {
+                    return Err(serde::de::Error::custom(format!(
+                        "Unknown BaseSort {}",
+                        name
+                    )));
+                }
+            },
+            SortRepr::MapSort { name, key, value } => (MapSort { name, key, value }).to_arcsort(),
+            SortRepr::MultiSetSort { name, element } => {
+                (MultiSetSort { name, element }).to_arcsort()
+            }
+            SortRepr::SetSort { name, element } => (SetSort { name, element }).to_arcsort(),
+            SortRepr::VecSort { name, element } => (VecSort { name, element }).to_arcsort(),
+        };
+        Ok(SerializableSort(arc))
     }
 }
 
-mod arc_sort_vec_serde {
-    use super::*;
-    use serde::{Deserializer, Serializer};
-
-    pub fn serialize<S>(value: &Vec<ArcSort>, s: S) -> Result<S::Ok, S::Error>
+impl Serialize for SerializableSort {
+    fn serialize<S>(&self, serializer: S) -> Result<S::Ok, S::Error>
     where
-        S: Serializer,
+        S: serde::Serializer,
     {
-        let serializable: Vec<_> = value.iter().cloned().map(SerializableSort).collect();
-        serializable.serialize(s)
-    }
+        let sort = &self.0;
 
-    pub fn deserialize<'de, D>(d: D) -> Result<Vec<ArcSort>, D::Error>
-    where
-        D: Deserializer<'de>,
-    {
-        let wrappers: Vec<SerializableSort> = Vec::deserialize(d)?;
-        Ok(wrappers.into_iter().map(|w| w.0).collect())
+        // Figure out which kind of sort we have
+        if let Some(sort) = sort.as_any().downcast_ref::<EqSort>() {
+            let mut s = serializer.serialize_struct("SerializableSort", 2)?;
+            s.serialize_field("type", "EqSort")?;
+            s.serialize_field("data", sort)?;
+            s.end()
+        } else if let Some(sort) = sort.as_any().downcast_ref::<FunctionSort>() {
+            let mut s = serializer.serialize_struct("SerializableSort", 2)?;
+            s.serialize_field("type", "FunctionSort")?;
+            s.serialize_field("data", sort)?;
+            s.end()
+        } else if let Some(_) = sort.as_any().downcast_ref::<BaseSortImpl<BigIntSort>>() {
+            let mut s = serializer.serialize_struct("SerializableSort", 2)?;
+            s.serialize_field("type", "BaseSort")?;
+            s.serialize_field("data", "BigIntSort")?;
+            s.end()
+        } else if let Some(_) = sort.as_any().downcast_ref::<BaseSortImpl<BigRatSort>>() {
+            let mut s = serializer.serialize_struct("SerializableSort", 2)?;
+            s.serialize_field("type", "BaseSort")?;
+            s.serialize_field("data", "BigRatSort")?;
+            s.end()
+        } else if let Some(_) = sort.as_any().downcast_ref::<BaseSortImpl<BoolSort>>() {
+            let mut s = serializer.serialize_struct("SerializableSort", 2)?;
+            s.serialize_field("type", "BaseSort")?;
+            s.serialize_field("data", "BoolSort")?;
+            s.end()
+        } else if let Some(_) = sort.as_any().downcast_ref::<BaseSortImpl<F64Sort>>() {
+            let mut s = serializer.serialize_struct("SerializableSort", 2)?;
+            s.serialize_field("type", "BaseSort")?;
+            s.serialize_field("data", "F64Sort")?;
+            s.end()
+        } else if let Some(_) = sort.as_any().downcast_ref::<BaseSortImpl<I64Sort>>() {
+            let mut s = serializer.serialize_struct("SerializableSort", 2)?;
+            s.serialize_field("type", "BaseSort")?;
+            s.serialize_field("data", "I64Sort")?;
+            s.end()
+        } else if let Some(_) = sort.as_any().downcast_ref::<BaseSortImpl<StringSort>>() {
+            let mut s = serializer.serialize_struct("SerializableSort", 2)?;
+            s.serialize_field("type", "BaseSort")?;
+            s.serialize_field("data", "StringSort")?;
+            s.end()
+        } else if let Some(_) = sort.as_any().downcast_ref::<BaseSortImpl<UnitSort>>() {
+            let mut s = serializer.serialize_struct("SerializableSort", 2)?;
+            s.serialize_field("type", "BaseSort")?;
+            s.serialize_field("data", "UnitSort")?;
+            s.end()
+        } else if let Some(sort) = sort.as_any().downcast_ref::<ContainerSortImpl<MapSort>>() {
+            let inner = &sort.0;
+
+            let mut s = serializer.serialize_struct("SerializableSort", 3)?;
+            s.serialize_field("type", "MapSort")?;
+            s.serialize_field("name", &inner.name)?;
+            s.serialize_field("key", &SerializableSort(inner.key.clone()))?;
+            s.serialize_field("value", &SerializableSort(inner.value.clone()))?;
+            s.end()
+        } else if let Some(sort) = sort
+            .as_any()
+            .downcast_ref::<ContainerSortImpl<MultiSetSort>>()
+        {
+            let inner = &sort.0;
+
+            let mut s = serializer.serialize_struct("SerializableSort", 3)?;
+            s.serialize_field("type", "MultiSetSort")?;
+            s.serialize_field("name", &inner.name)?;
+            s.serialize_field("element", &SerializableSort(inner.element.clone()))?;
+            s.end()
+        } else if let Some(sort) = sort.as_any().downcast_ref::<ContainerSortImpl<SetSort>>() {
+            let inner = &sort.0;
+
+            let mut s = serializer.serialize_struct("SerializableSort", 3)?;
+            s.serialize_field("type", "SetSort")?;
+            s.serialize_field("name", &inner.name)?;
+            s.serialize_field("element", &SerializableSort(inner.element.clone()))?;
+            s.end()
+        } else if let Some(sort) = sort.as_any().downcast_ref::<ContainerSortImpl<VecSort>>() {
+            let inner = &sort.0;
+
+            let mut s = serializer.serialize_struct("SerializableSort", 3)?;
+            s.serialize_field("type", "VecSort")?;
+            s.serialize_field("name", &inner.name)?;
+            s.serialize_field("element", &SerializableSort(inner.element.clone()))?;
+            s.end()
+        } else {
+            Err(serde::ser::Error::custom("Unknown sort implementation"))
+        }
     }
 }
 
