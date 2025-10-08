@@ -7,16 +7,11 @@ static GLOBAL: mimalloc::MiMalloc = mimalloc::MiMalloc;
 
 static CONFIGURE_RAYON: Once = Once::new();
 
-pub fn run_example(filename: &str, program: &str, no_messages: bool) {
+pub fn run_example(filename: &str, program: &str) {
     let mut egraph = EGraph::default();
-    let outputs = egraph
+    egraph
         .parse_and_run_program(Some(filename.to_owned()), program)
         .unwrap();
-    if !no_messages {
-        for output in outputs {
-            print!("{}", output);
-        }
-    }
     // test performance of serialization as well
     egraph.serialize(egglog::SerializeConfig::default());
 }
@@ -37,9 +32,8 @@ pub fn benchmark_files_in_glob(c: &mut Criterion, glob: &str) {
         let name = path.file_stem().unwrap().to_string_lossy().to_string();
         let filename = path.to_string_lossy().to_string();
         let program = std::fs::read_to_string(&filename).unwrap();
-        let no_messages = path_string.contains("no-messages");
         c.bench_function(&name, |b| {
-            b.iter(|| run_example(&filename, &program, no_messages))
+            b.iter(|| run_example(&filename, &program))
         });
     }
 }
