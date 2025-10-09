@@ -157,7 +157,7 @@ impl EGraph {
                         .push(name.clone());
                 } else {
                     all_calls.push((
-                        &function,
+                        function,
                         inps.to_vec(),
                         *out,
                         row.subsumed,
@@ -381,6 +381,7 @@ impl EGraph {
             };
             node_id
         };
+        #[allow(clippy::disallowed_types)]
         let mut extra = std::collections::HashMap::default();
         if let Some(labels) = serializer.labels.get(class_id) {
             if !labels.is_empty() {
