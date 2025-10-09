@@ -89,7 +89,7 @@ version = { workspace = true }
 edition = { workspace = true }
 
 [[bench]]
-name = "example_benchmarks"
+name = "ci_benchmarking"
 harness = false
 
 [[bench]]

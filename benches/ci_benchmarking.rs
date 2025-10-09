@@ -2,7 +2,7 @@
 
 mod common;
 
-#[divan::bench(name = "", args = common::bench_cases("tests/**/*.egg"), sample_count = 10)]
+#[divan::bench(args = common::bench_cases("tests/**/*.egg"), sample_count = 10)]
 fn run_example_cases(case: &common::BenchCase) {
     common::bench_case(case);
 }
