@@ -408,7 +408,7 @@ impl TypeInfo {
             },
             cost: fdecl.cost,
             unextractable: fdecl.unextractable,
-            ignore_viz: fdecl.ignore_viz,
+            let_binding: fdecl.let_binding,
             span: fdecl.span.clone(),
         })
     }

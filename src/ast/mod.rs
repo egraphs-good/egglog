@@ -875,7 +875,7 @@ where
     pub unextractable: bool,
     /// Globals are desugared to functions, with this flag set to true.
     /// This is used by visualization to handle globals differently.
-    pub ignore_viz: bool,
+    pub let_binding: bool,
     pub span: Span,
 }
 
@@ -933,7 +933,7 @@ impl FunctionDecl {
             merge,
             cost: None,
             unextractable: true,
-            ignore_viz: false,
+            let_binding: false,
             span,
         }
     }
@@ -953,7 +953,7 @@ impl FunctionDecl {
             merge: None,
             cost,
             unextractable,
-            ignore_viz: false,
+            let_binding: false,
             span,
         }
     }
@@ -970,7 +970,7 @@ impl FunctionDecl {
             merge: None,
             cost: None,
             unextractable: true,
-            ignore_viz: false,
+            let_binding: false,
             span,
         }
     }
@@ -992,7 +992,7 @@ where
             merge: self.merge.map(|expr| expr.visit_exprs(f)),
             cost: self.cost,
             unextractable: self.unextractable,
-            ignore_viz: self.ignore_viz,
+            let_binding: self.let_binding,
             span: self.span,
         }
     }
