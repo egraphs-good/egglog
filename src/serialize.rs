@@ -161,7 +161,7 @@ impl EGraph {
                         inps.to_vec(),
                         *out,
                         row.subsumed,
-                        self.value_to_class_id(&function.schema.output, *out),
+                        class_id,
                         self.to_node_id(
                             None,
                             SerializedNode::Function {
