@@ -325,7 +325,7 @@ impl Primitive for Ctor {
     }
 }
 
-#[derive(Clone, Debug, PartialEq, Eq, Hash)]
+#[derive(Clone, Debug, PartialEq, Eq, Hash, Serialize)]
 pub struct ResolvedFunction {
     pub id: ResolvedFunctionId,
     pub do_rebuild: Vec<bool>,
@@ -334,7 +334,7 @@ pub struct ResolvedFunction {
 
 impl BaseValue for ResolvedFunction {}
 
-#[derive(Clone, Debug, PartialEq, Eq, Hash)]
+#[derive(Clone, Debug, PartialEq, Eq, Hash, Serialize)]
 pub enum ResolvedFunctionId {
     Lookup(egglog_bridge::TableAction),
     Prim(ExternalFunctionId),

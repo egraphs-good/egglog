@@ -2,15 +2,17 @@
 
 use std::{
     any::{Any, TypeId},
-    fmt::{self, Debug},
+    fmt::{self, Debug, Display},
     hash::Hash,
 };
 
+use erased_serde as erased;
+use hashbrown::HashMap;
 use serde::{Deserialize, Serialize};
 
 use crate::numeric_id::{DenseIdMap, NumericId, define_id};
 
-use crate::common::{HashMap, InternTable, Value};
+use crate::common::{InternTable, Value};
 
 #[cfg(test)]
 mod tests;
@@ -27,7 +29,7 @@ define_id!(pub BaseValueId, u32, "an identifier for base value types");
 ///
 /// Regardless, all base value types should be registered in a [`BaseValues`] instance using the
 /// [`BaseValues::register_type`] method before they can be used in the database.
-pub trait BaseValue: Clone + Hash + Eq + Any + Debug + Send + Sync {
+pub trait BaseValue: Clone + Hash + Eq + Any + Debug + Send + Sync + Serialize {
     const MAY_UNBOX: bool = false;
     fn intern(&self, table: &InternTable<Self, Value>) -> Value {
         table.intern(self)
@@ -64,12 +66,34 @@ impl Debug for BaseValuePrinter<'_> {
 }
 
 /// A registry for base value types and functions on them.
-#[derive(Clone, Default, Serialize, Deserialize)]
+#[derive(Clone, Default)]
 pub struct BaseValues {
-    #[serde(skip)]
     type_ids: HashMap<TypeId, BaseValueId>,
-    #[serde(skip)]
     tables: DenseIdMap<BaseValueId, Box<dyn DynamicInternTable>>,
+}
+
+impl<'de> Deserialize<'de> for BaseValues {
+    fn deserialize<D>(deserializer: D) -> Result<Self, D::Error>
+    where
+        D: serde::Deserializer<'de>,
+    {
+        todo!()
+    }
+}
+
+impl Serialize for BaseValues {
+    fn serialize<S>(&self, serializer: S) -> Result<S::Ok, S::Error>
+    where
+        S: serde::Serializer,
+    {
+        todo!()
+    }
+}
+
+impl Display for BaseValues {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        write!(f, "BaseValues {{ types: {} }}", self.type_ids.len())
+    }
 }
 
 impl BaseValues {
@@ -85,6 +109,7 @@ impl BaseValues {
 
     /// Get the [`BaseValueId`] for the given base value type `P`.
     pub fn get_ty<P: BaseValue>(&self) -> BaseValueId {
+        println!("{}", self);
         self.type_ids[&TypeId::of::<P>()]
     }
 
@@ -130,17 +155,18 @@ impl BaseValues {
 trait DynamicInternTable: Any + dyn_clone::DynClone + Send + Sync {
     fn as_any(&self) -> &dyn Any;
     fn print_value(&self, val: Value, f: &mut fmt::Formatter) -> fmt::Result;
+    fn serialize_dyn(&self, serializer: &mut dyn erased::Serializer) -> Result<(), erased::Error>;
 }
 
 // Implements `Clone` for `Box<dyn DynamicInternTable>`.
 dyn_clone::clone_trait_object!(DynamicInternTable);
 
-#[derive(Clone)]
-struct BaseInternTable<P> {
+#[derive(Clone, Serialize, Deserialize)]
+struct BaseInternTable<P: BaseValue> {
     table: InternTable<P, Value>,
 }
 
-impl<P> Default for BaseInternTable<P> {
+impl<P: BaseValue> Default for BaseInternTable<P> {
     fn default() -> Self {
         Self {
             table: InternTable::default(),
@@ -148,7 +174,10 @@ impl<P> Default for BaseInternTable<P> {
     }
 }
 
-impl<P: BaseValue> DynamicInternTable for BaseInternTable<P> {
+impl<P> DynamicInternTable for BaseInternTable<P>
+where
+    P: BaseValue + Serialize + 'static,
+{
     fn as_any(&self) -> &dyn Any {
         self
     }
@@ -156,6 +185,13 @@ impl<P: BaseValue> DynamicInternTable for BaseInternTable<P> {
     fn print_value(&self, val: Value, f: &mut fmt::Formatter) -> fmt::Result {
         let p = self.get(val);
         write!(f, "{p:?}")
+    }
+
+    fn serialize_dyn(
+        &self,
+        serializer: &mut dyn erased_serde::Serializer,
+    ) -> Result<(), erased_serde::Error> {
+        erased_serde::Serialize::erased_serialize(self, serializer)
     }
 }
 
@@ -197,7 +233,7 @@ impl<P: BaseValue> BaseInternTable<P> {
 /// This type is just a helper: users can also implement the [`BaseValue`] trait directly on their
 /// types if the type is defined in the crate in which the implementation is defined, or if they
 /// need custom logic for boxing or unboxing the type.
-#[derive(Copy, Clone, PartialEq, Eq, PartialOrd, Ord, Hash)]
+#[derive(Copy, Clone, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize)]
 pub struct Boxed<T>(pub T);
 
 impl<T> Boxed<T> {
@@ -216,7 +252,7 @@ impl<T: Debug> Debug for Boxed<T> {
     }
 }
 
-impl<T: Hash + Eq + Debug + Clone + Send + Sync + 'static> BaseValue for Boxed<T> {}
+impl<T: Hash + Eq + Debug + Clone + Send + Sync + Serialize + 'static> BaseValue for Boxed<T> {}
 
 impl<T> std::ops::Deref for Boxed<T> {
     type Target = T;

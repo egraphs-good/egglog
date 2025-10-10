@@ -66,6 +66,7 @@ pub struct DisplacedTable {
     displaced: Vec<(Value, Value)>, // this is "the table" everything else can be recomputed from this
     // can even recanonicalize on serialization to get rid of dead things
     changed: bool,
+    #[serde(skip)]
     lookup_table: HashMap<Value, RowId>,
     #[serde(skip)]
     buffered_writes: Arc<SegQueue<RowBuffer>>, // should be empty by the time we serialize
