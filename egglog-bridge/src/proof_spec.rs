@@ -190,10 +190,18 @@ impl EGraph {
                     row_key.push(self.get_syntax_val(*arg, syntax, subst, memo));
                 }
                 let term_table = self.term_table(self.funcs[*func].table);
-                self.db
+                let Some(val) = self
+                    .db
                     .get_table(term_table)
-                    .get_row_column(&row_key, ColumnId::from_usize(args.len()))
-                    .expect("failed to find term for function call")
+                    .get_row_column(&row_key, ColumnId::from_usize(args.len() + 1))
+                else {
+                    panic!(
+                        "failed to find term for function call ({func:?} {:?}), memo={:?}, arg={node:?}",
+                        &row_key[1..],
+                        memo
+                    )
+                };
+                val
             }
         };
         memo.insert(node, res);
