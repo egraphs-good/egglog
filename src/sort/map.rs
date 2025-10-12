@@ -12,24 +12,39 @@ impl ContainerValue for MapContainer {
     fn rebuild_contents(&mut self, rebuilder: &dyn Rebuilder) -> bool {
         let mut changed = false;
         if self.do_rebuild_keys || self.do_rebuild_vals {
-            let mut entries = Vec::with_capacity(self.data.size());
+            let mut to_remove_keys = Vec::new();
+            let mut to_set_items = Vec::new();
             for (old_k, old_v) in self.data.iter() {
                 let mut new_key = *old_k;
                 let mut new_val = *old_v;
+                let mut key_changed = false;
                 if self.do_rebuild_keys {
                     let rebuilt_key = rebuilder.rebuild_val(*old_k);
-                    changed |= rebuilt_key != *old_k;
+                    key_changed = rebuilt_key != *old_k;
+                    changed |= key_changed;
                     new_key = rebuilt_key;
+                    if key_changed {
+                        to_remove_keys.push(*old_k);
+                    }
                 }
+                let mut val_changed = false;
                 if self.do_rebuild_vals {
                     let rebuilt_val = rebuilder.rebuild_val(*old_v);
-                    changed |= rebuilt_val != *old_v;
+                    val_changed = rebuilt_val != *old_v;
+                    changed |= val_changed;
                     new_val = rebuilt_val;
                 }
-                entries.push((new_key, new_val));
+                if key_changed || val_changed {
+                    to_set_items.push((new_key, new_val));
+                }
             }
             if changed {
-                self.data = entries.into_iter().collect::<RedBlackTreeMapSync<_, _>>();
+                for k in to_remove_keys {
+                    self.data.remove_mut(&k);
+                }
+                for (k, v) in to_set_items {
+                    self.data.insert_mut(k, v);
+                }
             }
         }
         changed
@@ -162,22 +177,8 @@ impl ContainerSort for MapSort {
         } });
 
         add_primitive!(eg, "map-get"    = |    xs: @MapContainer (arc), x: # (self.key())                     | -?> # (self.value()) { xs.data.get(&x).copied() });
-        add_primitive!(eg, "map-insert" = |xs: @MapContainer (arc), x: # (self.key()), y: # (self.value())| -> @MapContainer (arc) {{
-            let MapContainer { do_rebuild_keys, do_rebuild_vals, data } = xs;
-            MapContainer {
-                do_rebuild_keys,
-                do_rebuild_vals,
-                data: data.insert(x, y),
-            }
-        }});
-        add_primitive!(eg, "map-remove" = |xs: @MapContainer (arc), x: # (self.key())                     | -> @MapContainer (arc) {{
-            let MapContainer { do_rebuild_keys, do_rebuild_vals, data } = xs;
-            MapContainer {
-                do_rebuild_keys,
-                do_rebuild_vals,
-                data: data.remove(&x),
-            }
-        }});
+        add_primitive!(eg, "map-insert" = |mut xs: @MapContainer (arc), x: # (self.key()), y: # (self.value())| -> @MapContainer (arc) {{ xs.data.insert_mut(x, y); xs }});
+        add_primitive!(eg, "map-remove" = |mut xs: @MapContainer (arc), x: # (self.key())                     | -> @MapContainer (arc) {{ xs.data.remove_mut(&x);   xs }});
 
         add_primitive!(eg, "map-length"       = |xs: @MapContainer (arc)| -> i64 { xs.data.size() as i64 });
         add_primitive!(eg, "map-contains"     = |xs: @MapContainer (arc), x: # (self.key())| -?> () { ( xs.data.contains_key(&x)).then_some(()) });

@@ -10,10 +10,24 @@ pub struct SetContainer {
 impl ContainerValue for SetContainer {
     fn rebuild_contents(&mut self, rebuilder: &dyn Rebuilder) -> bool {
         if self.do_rebuild {
-            let mut xs: Vec<_> = self.data.iter().copied().collect();
-            let changed = rebuilder.rebuild_slice(&mut xs);
+            let mut changed = false;
+            let mut to_remove = Vec::new();
+            let mut to_add = Vec::new();
+            for v in self.data.iter() {
+                let rebuilt = rebuilder.rebuild_val(*v);
+                if rebuilt != *v {
+                    changed |= true;
+                    to_remove.push(*v);
+                    to_add.push(rebuilt);
+                }
+            }
             if changed {
-                self.data = xs.into_iter().collect::<RedBlackTreeSetSync<_>>();
+                for v in to_remove {
+                    self.data.remove_mut(&v);
+                }
+                for v in to_add {
+                    self.data.insert_mut(v);
+                }
             }
             changed
         } else {
@@ -130,53 +144,36 @@ impl ContainerSort for SetSort {
         } });
 
         add_primitive!(eg, "set-get" = |xs: @SetContainer (arc), i: i64| -?> # (self.element()) { xs.data.iter().nth(i as usize).copied() });
-        add_primitive!(eg, "set-insert" = |xs: @SetContainer (arc), x: # (self.element())| -> @SetContainer (arc) {{
-            let SetContainer { do_rebuild, data } = xs;
-            SetContainer {
-                do_rebuild,
-                data: data.insert(x),
-            }
-        }});
-        add_primitive!(eg, "set-remove" = |xs: @SetContainer (arc), x: # (self.element())| -> @SetContainer (arc) {{
-            let SetContainer { do_rebuild, data } = xs;
-            SetContainer {
-                do_rebuild,
-                data: data.remove(&x),
-            }
-        }});
+        add_primitive!(eg, "set-insert" = |mut xs: @SetContainer (arc), x: # (self.element())| -> @SetContainer (arc) {{ xs.data.insert_mut(x); xs }});
+        add_primitive!(eg, "set-remove" = |mut xs: @SetContainer (arc), x: # (self.element())| -> @SetContainer (arc) {{ xs.data.remove_mut(&x); xs }});
 
         add_primitive!(eg, "set-length"       = |xs: @SetContainer (arc)| -> i64 { xs.data.size() as i64 });
         add_primitive!(eg, "set-contains"     = |xs: @SetContainer (arc), x: # (self.element())| -?> () { ( xs.data.contains(&x)).then_some(()) });
         add_primitive!(eg, "set-not-contains" = |xs: @SetContainer (arc), x: # (self.element())| -?> () { (!xs.data.contains(&x)).then_some(()) });
 
-        add_primitive!(eg, "set-union"      = |xs: @SetContainer (arc), ys: @SetContainer (arc)| -> @SetContainer (arc) {{
-            let SetContainer { do_rebuild, data } = xs;
-            let ys_data = ys.data;
-            let mut data = data;
-            for value in ys_data.iter().copied() {
-                data = data.insert(value);
+        add_primitive!(eg, "set-union"     = |mut xs: @SetContainer (arc), ys: @SetContainer (arc)| -> @SetContainer (arc) {{
+            for value in ys.data.iter().copied() {
+                xs.data.insert_mut(value);
             }
-            SetContainer { do_rebuild, data }
+            xs
         }});
-        add_primitive!(eg, "set-diff"       = |xs: @SetContainer (arc), ys: @SetContainer (arc)| -> @SetContainer (arc) {{
-            let SetContainer { do_rebuild, data } = xs;
-            let ys_data = ys.data;
-            let mut data = data;
-            for value in ys_data.iter().copied() {
-                data = data.remove(&value);
+        add_primitive!(eg, "set-diff"      = |mut xs: @SetContainer (arc), ys: @SetContainer (arc)| -> @SetContainer (arc) {{
+            for value in ys.data.iter() {
+                xs.data.remove_mut(value);
             }
-            SetContainer { do_rebuild, data }
+            xs
         }});
-        add_primitive!(eg, "set-intersect"  = |xs: @SetContainer (arc), ys: @SetContainer (arc)| -> @SetContainer (arc) {{
-            let SetContainer { do_rebuild, data } = xs;
-            let ys_data = ys.data;
-            let mut result = RedBlackTreeSetSync::new_sync();
-            for value in data.iter().copied() {
-                if ys_data.contains(&value) {
-                    result = result.insert(value);
+        add_primitive!(eg, "set-intersect" = |mut xs: @SetContainer (arc), ys: @SetContainer (arc)| -> @SetContainer (arc) {{
+            let mut to_remove = Vec::new();
+            for value in xs.data.iter().copied() {
+                if !ys.data.contains(&value) {
+                    to_remove.push(value);
                 }
             }
-            SetContainer { do_rebuild, data: result }
+            for value in to_remove {
+                xs.data.remove_mut(&value);
+            }
+            xs
         }});
     }
 
