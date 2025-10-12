@@ -12,6 +12,7 @@ use std::{
     any::{Any, TypeId},
     hash::{Hash, Hasher},
     ops::Deref,
+    sync::{Arc, Mutex},
 };
 
 use crate::numeric_id::{DenseIdMap, IdVec, NumericId, define_id};
@@ -201,7 +202,120 @@ struct ContainerEnv<C: Eq + Hash> {
     to_id: DashMap<C, Value>,
     to_container: DashMap<Value, (usize /* hash code */, usize /* map */)>,
     /// Map from a Value to the set of ids of containers that contain that value.
+    val_index: LazyMapOfIndexSet,
+}
+#[derive(Clone)]
+struct LazyMapOfIndexSet {
     val_index: DashMap<Value, IndexSet<Value>>,
+    // keys and value to insert
+    // if user want to insert same value for all keys in IndexSet<Value>, LazyMap will put them
+    // in pending_insert and do the insertion for single key and remove this key in pending_insert when user want to read LazyMap
+    pending_insert: Arc<Mutex<Vec<(IndexSet<Value>, Value)>>>,
+}
+
+use dashmap::mapref::one::{Ref, RefMut};
+#[allow(dead_code)]
+impl LazyMapOfIndexSet {
+    /// Creates a new, empty `LazyMapOfIndexSet`.
+    pub fn new() -> Self {
+        Self {
+            val_index: DashMap::default(),
+            pending_insert: Default::default(),
+        }
+    }
+
+    /// Returns the number of elements in the map.
+    pub fn len(&self) -> usize {
+        self.val_index.len()
+    }
+
+    /// Returns `true` if the map contains no elements.
+    pub fn is_empty(&self) -> bool {
+        self.val_index.is_empty()
+    }
+
+    /// Returns the number of elements the map can hold without reallocating.
+    pub fn capacity(&self) -> usize {
+        self.val_index.capacity()
+    }
+
+    /// Inserts a key-value pair into the map.
+    /// If the map did not have this key present, `None` is returned.
+    /// If the map did have this key present, the value is updated, and the old value is returned.
+    pub fn insert(&mut self, key: Value, value: IndexSet<Value>) -> Option<IndexSet<Value>> {
+        self.flush_pending_inserts_for_key(&key);
+        self.val_index.insert(key, value)
+    }
+
+    /// Removes a key from the map, returning the value at the key if the key was previously in the map.
+    pub fn remove(&mut self, key: &Value) -> Option<IndexSet<Value>> {
+        self.flush_pending_inserts_for_key(key);
+        self.val_index.remove(key).map(|(_, v)| v)
+    }
+
+    /// Removes a key from the map, returning the stored key and value if the key was previously in the map.
+    pub fn remove_entry(&mut self, key: &Value) -> Option<(Value, IndexSet<Value>)> {
+        self.flush_pending_inserts_for_key(key);
+        self.val_index.remove(key)
+    }
+
+    /// Gets the given key's corresponding entry in the map for in-place manipulation.
+    pub fn entry(&self, key: Value) -> dashmap::Entry<'_, Value, IndexSet<Value>> {
+        self.flush_pending_inserts_for_key(&key);
+        self.val_index.entry(key)
+    }
+
+    /// Returns a reference to the value corresponding to the key.
+    pub fn get(&mut self, key: &Value) -> Option<Ref<'_, Value, IndexSet<Value>>> {
+        self.flush_pending_inserts_for_key(key);
+        self.val_index.get(key)
+    }
+
+    /// Returns a mutable reference to the value corresponding to the key.
+    pub fn get_mut(&mut self, key: &Value) -> Option<RefMut<'_, Value, IndexSet<Value>>> {
+        self.flush_pending_inserts_for_key(key);
+        self.val_index.get_mut(key)
+    }
+
+    /// Returns `true` if the map contains a value for the specified key.
+    pub fn contains_key(&self, key: &Value) -> bool {
+        self.val_index.contains_key(key)
+    }
+
+    /// Lazily inserts a value for all keys in the given index set.
+    /// The actual insertion will be performed when the map is next accessed.
+    pub fn lazy_insert_for_all_keys(&self, keys: IndexSet<Value>, value: Value) {
+        self.pending_insert.lock().unwrap().push((keys, value));
+    }
+
+    /// Flushes all pending lazy insertions to the underlying map.
+    fn flush_pending_inserts_for_key(&self, key: &Value) {
+        let mut pending_insert = self.pending_insert.lock().unwrap();
+        if !pending_insert.is_empty() {
+            for (keys, value) in pending_insert.iter_mut() {
+                if keys.contains(key) {
+                    self.val_index.entry(*key).or_default().insert(*value);
+                }
+                keys.swap_remove(key);
+            }
+        }
+    }
+    fn flush_pending_inserts(&self) {
+        let mut pending_insert = self.pending_insert.lock().unwrap();
+        if !pending_insert.is_empty() {
+            for (keys, value) in pending_insert.drain(..) {
+                for key in keys {
+                    self.val_index.entry(key).or_default().insert(value);
+                }
+            }
+        }
+    }
+}
+
+impl Default for LazyMapOfIndexSet {
+    fn default() -> Self {
+        Self::new()
+    }
 }
 
 impl<C: ContainerValue> DynamicContainerEnv for ContainerEnv<C> {
@@ -242,7 +356,7 @@ impl<C: ContainerValue> ContainerEnv<C> {
             counter,
             to_id: DashMap::default(),
             to_container: DashMap::default(),
-            val_index: DashMap::default(),
+            val_index: Default::default(),
         }
     }
 
@@ -274,9 +388,8 @@ impl<C: ContainerValue> ContainerEnv<C> {
             dashmap::Entry::Vacant(vac) => {
                 // Common case: insert the mapping in to_id and update the index.
                 vac.insert(value);
-                for val in container.iter() {
-                    self.val_index.entry(val).or_default().insert(value);
-                }
+                self.val_index
+                    .lazy_insert_for_all_keys(container.iter().collect(), value);
                 value
             }
             dashmap::Entry::Occupied(occ) => {
