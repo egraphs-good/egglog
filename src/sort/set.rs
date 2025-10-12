@@ -1,10 +1,10 @@
 use super::*;
-use std::collections::BTreeSet;
+use rpds::RedBlackTreeSetSync;
 
 #[derive(Clone, Debug, PartialEq, Eq, Hash)]
 pub struct SetContainer {
     do_rebuild: bool,
-    pub data: BTreeSet<Value>,
+    pub data: RedBlackTreeSetSync<Value>,
 }
 
 impl ContainerValue for SetContainer {
@@ -12,7 +12,9 @@ impl ContainerValue for SetContainer {
         if self.do_rebuild {
             let mut xs: Vec<_> = self.data.iter().copied().collect();
             let changed = rebuilder.rebuild_slice(&mut xs);
-            self.data = xs.into_iter().collect();
+            if changed {
+                self.data = xs.into_iter().collect::<RedBlackTreeSetSync<_>>();
+            }
             changed
         } else {
             false
@@ -120,24 +122,62 @@ impl ContainerSort for SetSort {
 
         add_primitive!(eg, "set-empty" = {self.clone(): SetSort} |                      | -> @SetContainer (arc) { SetContainer {
             do_rebuild: self.ctx.element.is_eq_sort(),
-            data: BTreeSet::new()
+            data: RedBlackTreeSetSync::new_sync()
         } });
         add_primitive!(eg, "set-of"    = {self.clone(): SetSort} [xs: # (self.element())] -> @SetContainer (arc) { SetContainer {
             do_rebuild: self.ctx.element.is_eq_sort(),
-            data: xs.collect()
+            data: xs.collect::<RedBlackTreeSetSync<_>>()
         } });
 
         add_primitive!(eg, "set-get" = |xs: @SetContainer (arc), i: i64| -?> # (self.element()) { xs.data.iter().nth(i as usize).copied() });
-        add_primitive!(eg, "set-insert" = |mut xs: @SetContainer (arc), x: # (self.element())| -> @SetContainer (arc) {{ xs.data.insert( x); xs }});
-        add_primitive!(eg, "set-remove" = |mut xs: @SetContainer (arc), x: # (self.element())| -> @SetContainer (arc) {{ xs.data.remove(&x); xs }});
+        add_primitive!(eg, "set-insert" = |xs: @SetContainer (arc), x: # (self.element())| -> @SetContainer (arc) {{
+            let SetContainer { do_rebuild, data } = xs;
+            SetContainer {
+                do_rebuild,
+                data: data.insert(x),
+            }
+        }});
+        add_primitive!(eg, "set-remove" = |xs: @SetContainer (arc), x: # (self.element())| -> @SetContainer (arc) {{
+            let SetContainer { do_rebuild, data } = xs;
+            SetContainer {
+                do_rebuild,
+                data: data.remove(&x),
+            }
+        }});
 
-        add_primitive!(eg, "set-length"       = |xs: @SetContainer (arc)| -> i64 { xs.data.len() as i64 });
+        add_primitive!(eg, "set-length"       = |xs: @SetContainer (arc)| -> i64 { xs.data.size() as i64 });
         add_primitive!(eg, "set-contains"     = |xs: @SetContainer (arc), x: # (self.element())| -?> () { ( xs.data.contains(&x)).then_some(()) });
         add_primitive!(eg, "set-not-contains" = |xs: @SetContainer (arc), x: # (self.element())| -?> () { (!xs.data.contains(&x)).then_some(()) });
 
-        add_primitive!(eg, "set-union"      = |mut xs: @SetContainer (arc), ys: @SetContainer (arc)| -> @SetContainer (arc) {{ xs.data.extend(ys.data);                  xs }});
-        add_primitive!(eg, "set-diff"       = |mut xs: @SetContainer (arc), ys: @SetContainer (arc)| -> @SetContainer (arc) {{ xs.data.retain(|k| !ys.data.contains(k)); xs }});
-        add_primitive!(eg, "set-intersect"  = |mut xs: @SetContainer (arc), ys: @SetContainer (arc)| -> @SetContainer (arc) {{ xs.data.retain(|k|  ys.data.contains(k)); xs }});
+        add_primitive!(eg, "set-union"      = |xs: @SetContainer (arc), ys: @SetContainer (arc)| -> @SetContainer (arc) {{
+            let SetContainer { do_rebuild, data } = xs;
+            let ys_data = ys.data;
+            let mut data = data;
+            for value in ys_data.iter().copied() {
+                data = data.insert(value);
+            }
+            SetContainer { do_rebuild, data }
+        }});
+        add_primitive!(eg, "set-diff"       = |xs: @SetContainer (arc), ys: @SetContainer (arc)| -> @SetContainer (arc) {{
+            let SetContainer { do_rebuild, data } = xs;
+            let ys_data = ys.data;
+            let mut data = data;
+            for value in ys_data.iter().copied() {
+                data = data.remove(&value);
+            }
+            SetContainer { do_rebuild, data }
+        }});
+        add_primitive!(eg, "set-intersect"  = |xs: @SetContainer (arc), ys: @SetContainer (arc)| -> @SetContainer (arc) {{
+            let SetContainer { do_rebuild, data } = xs;
+            let ys_data = ys.data;
+            let mut result = RedBlackTreeSetSync::new_sync();
+            for value in data.iter().copied() {
+                if ys_data.contains(&value) {
+                    result = result.insert(value);
+                }
+            }
+            SetContainer { do_rebuild, data: result }
+        }});
     }
 
     fn reconstruct_termdag(

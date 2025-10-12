@@ -1,32 +1,35 @@
 use super::*;
-use std::collections::BTreeMap;
+use rpds::RedBlackTreeMapSync;
 
 #[derive(Clone, Debug, PartialEq, Eq, Hash)]
 pub struct MapContainer {
     do_rebuild_keys: bool,
     do_rebuild_vals: bool,
-    pub data: BTreeMap<Value, Value>,
+    pub data: RedBlackTreeMapSync<Value, Value>,
 }
 
 impl ContainerValue for MapContainer {
     fn rebuild_contents(&mut self, rebuilder: &dyn Rebuilder) -> bool {
         let mut changed = false;
-        if self.do_rebuild_keys {
-            self.data = self
-                .data
-                .iter()
-                .map(|(old, v)| {
-                    let new = rebuilder.rebuild_val(*old);
-                    changed |= *old != new;
-                    (new, *v)
-                })
-                .collect();
-        }
-        if self.do_rebuild_vals {
-            for old in self.data.values_mut() {
-                let new = rebuilder.rebuild_val(*old);
-                changed |= *old != new;
-                *old = new;
+        if self.do_rebuild_keys || self.do_rebuild_vals {
+            let mut entries = Vec::with_capacity(self.data.size());
+            for (old_k, old_v) in self.data.iter() {
+                let mut new_key = *old_k;
+                let mut new_val = *old_v;
+                if self.do_rebuild_keys {
+                    let rebuilt_key = rebuilder.rebuild_val(*old_k);
+                    changed |= rebuilt_key != *old_k;
+                    new_key = rebuilt_key;
+                }
+                if self.do_rebuild_vals {
+                    let rebuilt_val = rebuilder.rebuild_val(*old_v);
+                    changed |= rebuilt_val != *old_v;
+                    new_val = rebuilt_val;
+                }
+                entries.push((new_key, new_val));
+            }
+            if changed {
+                self.data = entries.into_iter().collect::<RedBlackTreeMapSync<_, _>>();
             }
         }
         changed
@@ -155,14 +158,28 @@ impl ContainerSort for MapSort {
         add_primitive!(eg, "map-empty" = {self.clone(): MapSort} || -> @MapContainer (arc) { MapContainer {
             do_rebuild_keys: self.ctx.key.is_eq_sort(),
             do_rebuild_vals: self.ctx.value.is_eq_sort(),
-            data: BTreeMap::new()
+            data: RedBlackTreeMapSync::new_sync()
         } });
 
         add_primitive!(eg, "map-get"    = |    xs: @MapContainer (arc), x: # (self.key())                     | -?> # (self.value()) { xs.data.get(&x).copied() });
-        add_primitive!(eg, "map-insert" = |mut xs: @MapContainer (arc), x: # (self.key()), y: # (self.value())| -> @MapContainer (arc) {{ xs.data.insert(x, y); xs }});
-        add_primitive!(eg, "map-remove" = |mut xs: @MapContainer (arc), x: # (self.key())                     | -> @MapContainer (arc) {{ xs.data.remove(&x);   xs }});
+        add_primitive!(eg, "map-insert" = |xs: @MapContainer (arc), x: # (self.key()), y: # (self.value())| -> @MapContainer (arc) {{
+            let MapContainer { do_rebuild_keys, do_rebuild_vals, data } = xs;
+            MapContainer {
+                do_rebuild_keys,
+                do_rebuild_vals,
+                data: data.insert(x, y),
+            }
+        }});
+        add_primitive!(eg, "map-remove" = |xs: @MapContainer (arc), x: # (self.key())                     | -> @MapContainer (arc) {{
+            let MapContainer { do_rebuild_keys, do_rebuild_vals, data } = xs;
+            MapContainer {
+                do_rebuild_keys,
+                do_rebuild_vals,
+                data: data.remove(&x),
+            }
+        }});
 
-        add_primitive!(eg, "map-length"       = |xs: @MapContainer (arc)| -> i64 { xs.data.len() as i64 });
+        add_primitive!(eg, "map-length"       = |xs: @MapContainer (arc)| -> i64 { xs.data.size() as i64 });
         add_primitive!(eg, "map-contains"     = |xs: @MapContainer (arc), x: # (self.key())| -?> () { ( xs.data.contains_key(&x)).then_some(()) });
         add_primitive!(eg, "map-not-contains" = |xs: @MapContainer (arc), x: # (self.key())| -?> () { (!xs.data.contains_key(&x)).then_some(()) });
     }

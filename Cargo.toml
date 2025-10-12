@@ -52,6 +52,7 @@ rand = "0.9"
 getrandom = "0.3"
 once_cell = "1.21"
 num-rational = "0.4"
+rpds = "1.1"
 csv = "1.3"
 
 ######################
@@ -139,6 +140,7 @@ dyn-clone = { workspace = true }
 rayon = { workspace = true }
 mimalloc = { workspace = true, optional = true }
 csv = { workspace = true }
+rpds = { workspace = true }
 egglog-core-relations = { workspace = true }
 egglog-ast = { workspace = true }
 egglog-bridge = { workspace = true }
