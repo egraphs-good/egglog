@@ -168,7 +168,7 @@ impl EGraph {
         &mut self,
         scheduler_id: SchedulerId,
         ruleset: &str,
-    ) -> RunReport {
+    ) -> Result<RunReport, Error> {
         fn collect_rules<'a>(
             ruleset: &str,
             rulesets: &'a IndexMap<String, Ruleset>,
@@ -216,7 +216,10 @@ impl EGraph {
             })
             .collect::<Vec<_>>();
 
-        let query_iter_report = self.backend.run_rules(&query_rules).unwrap();
+        let query_iter_report = self
+            .backend
+            .run_rules(&query_rules)
+            .map_err(|e| Error::BackendError(e.to_string()))?;
 
         // Step 3: let the scheduler decide which matches need to be kept
         self.backend.with_execution_state(|state| {
@@ -244,7 +247,10 @@ impl EGraph {
                 rule_info.action_rule
             })
             .collect::<Vec<_>>();
-        let action_iter_report = self.backend.run_rules(&action_rules).unwrap();
+        let action_iter_report = self
+            .backend
+            .run_rules(&action_rules)
+            .map_err(|e| Error::BackendError(e.to_string()))?;
 
         // Step 5: combine the reports
         let per_ruleset = |x| [(ruleset.to_owned(), x)].into_iter().collect();
@@ -283,7 +289,7 @@ impl EGraph {
         self.rulesets = rulesets;
         self.schedulers = schedulers;
 
-        report
+        Ok(report)
     }
 }
 
@@ -448,7 +454,9 @@ mod test {
         assert_eq!(egraph.get_size("R"), 101);
         let mut iter = 0;
         loop {
-            let report = egraph.step_rules_with_scheduler(scheduler_id, "test");
+            let report = egraph
+                .step_rules_with_scheduler(scheduler_id, "test")
+                .unwrap();
             let table_size = egraph.get_size("S");
             iter += 1;
             assert_eq!(table_size, std::cmp::min(iter * 10, 101));
