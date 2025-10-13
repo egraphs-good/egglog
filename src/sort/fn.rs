@@ -332,7 +332,11 @@ pub struct ResolvedFunction {
     pub name: String,
 }
 
-impl BaseValue for ResolvedFunction {}
+impl BaseValue for ResolvedFunction {
+    fn type_id_string() -> &'static str {
+        "ResolvedFn"
+    }
+}
 
 #[derive(Clone, Debug, PartialEq, Eq, Hash, Serialize)]
 pub enum ResolvedFunctionId {
