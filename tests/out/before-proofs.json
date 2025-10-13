@@ -1,0 +1,231 @@
+[
+  {
+    "program_text": "(datatype Math\n    (Add Math Math)\n    (Sub Math Math)\n    (Const i64)\n    (Var String))\n\n(rewrite (Add a b) (Add (Add a b) (Const 0)))\n\n(rewrite (Add a b) (Add b a))\n\n\n(rewrite (Add a (Add b c))\n      (Add (Add a b) c))\n\n(let two 2)\n(let start1 (Add (Var \"x\") (Const two)))\n;; add original proofs\n\n(run 3)\n\n\n(check (!= (Var \"x\") (Const two)))\n(check (= (Add (Var \"x\") (Const two))\n          (Add (Const two) (Var \"x\"))))\n\n(let zero (Const 0))\n(let addx2 (Add (Var \"x\") (Const two)))\n(let addx20 (Add addx2 zero))\n(let addzerofront (Add (Add zero (Var \"x\")) (Const two)))\n\n(check (= addx2\n          addx20))\n",
+    "evts": [
+      {
+        "sexp_idx": 0,
+        "evt": "start",
+        "time": {
+          "secs": 0,
+          "nanos": 1831360
+        }
+      },
+      {
+        "sexp_idx": 0,
+        "evt": "end",
+        "time": {
+          "secs": 0,
+          "nanos": 2125090
+        }
+      },
+      {
+        "sexp_idx": 1,
+        "evt": "start",
+        "time": {
+          "secs": 0,
+          "nanos": 2125336
+        }
+      },
+      {
+        "sexp_idx": 1,
+        "evt": "end",
+        "time": {
+          "secs": 0,
+          "nanos": 2358570
+        }
+      },
+      {
+        "sexp_idx": 2,
+        "evt": "start",
+        "time": {
+          "secs": 0,
+          "nanos": 2358790
+        }
+      },
+      {
+        "sexp_idx": 2,
+        "evt": "end",
+        "time": {
+          "secs": 0,
+          "nanos": 2475856
+        }
+      },
+      {
+        "sexp_idx": 3,
+        "evt": "start",
+        "time": {
+          "secs": 0,
+          "nanos": 2476074
+        }
+      },
+      {
+        "sexp_idx": 3,
+        "evt": "end",
+        "time": {
+          "secs": 0,
+          "nanos": 2617935
+        }
+      },
+      {
+        "sexp_idx": 4,
+        "evt": "start",
+        "time": {
+          "secs": 0,
+          "nanos": 2618112
+        }
+      },
+      {
+        "sexp_idx": 4,
+        "evt": "end",
+        "time": {
+          "secs": 0,
+          "nanos": 3173575
+        }
+      },
+      {
+        "sexp_idx": 5,
+        "evt": "start",
+        "time": {
+          "secs": 0,
+          "nanos": 3173826
+        }
+      },
+      {
+        "sexp_idx": 5,
+        "evt": "end",
+        "time": {
+          "secs": 0,
+          "nanos": 4183496
+        }
+      },
+      {
+        "sexp_idx": 6,
+        "evt": "start",
+        "time": {
+          "secs": 0,
+          "nanos": 4183758
+        }
+      },
+      {
+        "sexp_idx": 6,
+        "evt": "end",
+        "time": {
+          "secs": 0,
+          "nanos": 7012212
+        }
+      },
+      {
+        "sexp_idx": 7,
+        "evt": "start",
+        "time": {
+          "secs": 0,
+          "nanos": 7012943
+        }
+      },
+      {
+        "sexp_idx": 7,
+        "evt": "end",
+        "time": {
+          "secs": 0,
+          "nanos": 7929899
+        }
+      },
+      {
+        "sexp_idx": 8,
+        "evt": "start",
+        "time": {
+          "secs": 0,
+          "nanos": 7930141
+        }
+      },
+      {
+        "sexp_idx": 8,
+        "evt": "end",
+        "time": {
+          "secs": 0,
+          "nanos": 8800412
+        }
+      },
+      {
+        "sexp_idx": 9,
+        "evt": "start",
+        "time": {
+          "secs": 0,
+          "nanos": 8800666
+        }
+      },
+      {
+        "sexp_idx": 9,
+        "evt": "end",
+        "time": {
+          "secs": 0,
+          "nanos": 9820269
+        }
+      },
+      {
+        "sexp_idx": 10,
+        "evt": "start",
+        "time": {
+          "secs": 0,
+          "nanos": 9820559
+        }
+      },
+      {
+        "sexp_idx": 10,
+        "evt": "end",
+        "time": {
+          "secs": 0,
+          "nanos": 10927590
+        }
+      },
+      {
+        "sexp_idx": 11,
+        "evt": "start",
+        "time": {
+          "secs": 0,
+          "nanos": 10927978
+        }
+      },
+      {
+        "sexp_idx": 11,
+        "evt": "end",
+        "time": {
+          "secs": 0,
+          "nanos": 12029166
+        }
+      },
+      {
+        "sexp_idx": 12,
+        "evt": "start",
+        "time": {
+          "secs": 0,
+          "nanos": 12029427
+        }
+      },
+      {
+        "sexp_idx": 12,
+        "evt": "end",
+        "time": {
+          "secs": 0,
+          "nanos": 13361538
+        }
+      },
+      {
+        "sexp_idx": 13,
+        "evt": "start",
+        "time": {
+          "secs": 0,
+          "nanos": 13361863
+        }
+      },
+      {
+        "sexp_idx": 13,
+        "evt": "end",
+        "time": {
+          "secs": 0,
+          "nanos": 14022044
+        }
+      }
+    ]
+  }
+]
