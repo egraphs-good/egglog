@@ -33,10 +33,9 @@ rand = { workspace = true }
 dyn-clone = { workspace = true }
 num = { workspace = true }
 once_cell = { workspace = true }
-serde = { version = "1.0", features = ["derive"] }
-typetag = "0.2"
-serde_json = "1.0"
-erased-serde = "0.4.8"
+serde = { workspace = true }
+typetag = { workspace = true }
+serde_json = { workspace = true }
 ordered-float = { workspace = true }
 num-bigint = { workspace = true }
 

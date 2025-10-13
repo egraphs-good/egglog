@@ -592,6 +592,9 @@ dependencies = [
  "arc-swap",
  "divan",
  "rayon",
+ "serde",
+ "serde_json",
+ "typetag",
 ]
 
 [[package]]
@@ -607,7 +610,6 @@ dependencies = [
  "egglog-concurrency",
  "egglog-numeric-id",
  "egglog-union-find",
- "erased-serde",
  "fixedbitset",
  "hashbrown 0.16.0",
  "indexmap",
