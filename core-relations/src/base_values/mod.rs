@@ -149,7 +149,6 @@ impl BaseValues {
 
     /// Get the [`BaseValueId`] for the given base value type `P`.
     pub fn get_ty<P: BaseValue>(&self) -> BaseValueId {
-        println!("{}", self);
         self.type_ids[&TypeId::of::<P>()]
     }
 
