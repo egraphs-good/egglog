@@ -1490,6 +1490,13 @@ impl EGraph {
         self.type_info.get_sorts_by(f)
     }
 
+    pub fn get_arcsort<T: 'static>(&self) -> ArcSort {
+        use std::any::TypeId;
+        self.get_arcsort_by(|s| {
+            s.value_type() == Some(TypeId::of::<T>())
+        })
+    }
+
     /// Returns a sort based on the predicate.
     pub fn get_arcsort_by(&self, f: impl Fn(&ArcSort) -> bool) -> ArcSort {
         self.type_info.get_arcsort_by(f)

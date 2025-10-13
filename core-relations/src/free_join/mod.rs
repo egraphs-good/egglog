@@ -157,12 +157,14 @@ pub trait ExternalFunction: dyn_clone::DynClone + Send + Sync {
     fn invoke(&self, state: &mut ExecutionState, args: &[Value]) -> Option<Value>;
 }
 
+dyn_clone::clone_trait_object!(ExternalFunction);
+
 /// Automatically generate an `ExternalFunction` implementation from a function.
 pub fn make_external_func<
-    F: Fn(&mut ExecutionState, &[Value]) -> Option<Value> + Clone + Send + Sync,
+    F: Fn(&mut ExecutionState, &[Value]) -> Option<Value> + Clone + Send + Sync + 'static,
 >(
     f: F,
-) -> impl ExternalFunction {
+) -> Box<dyn ExternalFunction> {
     #[derive(Clone)]
     struct Wrapped<F>(F);
     impl<F> ExternalFunction for Wrapped<F>
@@ -173,18 +175,18 @@ pub fn make_external_func<
             (self.0)(state, args)
         }
     }
-    Wrapped(f)
+    Box::new(Wrapped(f))
 }
 
-pub(crate) trait ExternalFunctionExt: ExternalFunction {
+// pub(crate) trait ExternalFunctionExt: ExternalFunction {
     /// A vectorized variant of `invoke` to avoid repeated dynamic dispatch.
     ///
     /// Implementors should not override this manually (in fact, they shouldn't
     /// even be able to; some types are private); the default implementation
     /// delegates core logic to `invoke`.
     #[doc(hidden)]
-    fn invoke_batch(
-        &self,
+    pub(crate) fn invoke_batch(
+        ext_func: &dyn ExternalFunction,
         state: &mut ExecutionState,
         mask: &mut Mask,
         bindings: &mut Bindings,
@@ -196,7 +198,7 @@ pub(crate) trait ExternalFunctionExt: ExternalFunction {
         out.reserve(mask.len());
         for_each_binding_with_mask!(mask, args, bindings, |iter| {
             iter.fill_vec(&mut out, Value::stale, |_, args| {
-                self.invoke(state, args.as_slice())
+                ext_func.invoke(state, args.as_slice())
             });
         });
         bindings.insert(out_var, &out);
@@ -208,8 +210,8 @@ pub(crate) trait ExternalFunctionExt: ExternalFunction {
     /// *Panics* This method will panic if `out_var` doesn't already have an appropriately-sized
     /// vector bound in `bindings`.
     #[doc(hidden)]
-    fn invoke_batch_assign(
-        &self,
+    pub(crate) fn invoke_batch_assign(
+        ext_func: Box<dyn ExternalFunction>,
         state: &mut ExecutionState,
         mask: &mut Mask,
         bindings: &mut Bindings,
@@ -218,19 +220,19 @@ pub(crate) trait ExternalFunctionExt: ExternalFunction {
     ) {
         let mut out = bindings.take(out_var).expect("out_var must be bound");
         for_each_binding_with_mask!(mask, args, bindings, |iter| {
-            iter.assign_vec_and_retain(&mut out.vals, |_, args| self.invoke(state, &args))
+            iter.assign_vec_and_retain(&mut out.vals, |_, args| ext_func.invoke(state, &args))
         });
         bindings.replace(out);
     }
-}
+// }
 
-impl<T: ExternalFunction> ExternalFunctionExt for T {}
+// impl<T: ExternalFunction> ExternalFunctionExt for T {}
 
-// Implements `Clone` for `Box<dyn ExternalFunctionExt>`.
-dyn_clone::clone_trait_object!(ExternalFunctionExt);
+// // Implements `Clone` for `Box<dyn ExternalFunctionExt>`.
+// dyn_clone::clone_trait_object!(ExternalFunctionExt);
 
 pub(crate) type ExternalFunctions =
-    DenseIdMapWithReuse<ExternalFunctionId, Box<dyn ExternalFunctionExt>>;
+    DenseIdMapWithReuse<ExternalFunctionId, Box<dyn ExternalFunction>>;
 
 #[derive(Default)]
 pub(crate) struct Counters(DenseIdMap<CounterId, AtomicUsize>);
@@ -313,9 +315,10 @@ impl Database {
     /// Add a new external function to the database.
     pub fn add_external_function(
         &mut self,
-        f: impl ExternalFunction + 'static,
+        f: Box< dyn ExternalFunction + 'static>,
     ) -> ExternalFunctionId {
-        self.external_functions.push(Box::new(f))
+        // self.external_functions.push(Box::new(f))
+        self.external_functions.push(f)
     }
 
     /// Free an existing external function. Make sure not to use `id` afterwards.

@@ -4,6 +4,7 @@ use crate::{
 };
 use ast::Rule;
 use core_relations::ExternalFunction;
+use dyn_clone::DynClone;
 use egglog_ast::generic_ast::GenericAction;
 
 #[derive(Clone, Debug)]
@@ -119,7 +120,7 @@ impl EGraph {
     {
         // We need to use a wrapper because of the orphan rule.
         // If we just try to implement `ExternalFunction` directly on
-        // all `PrimitiveLike`s then it would be possible for a
+        // all `Primitive`s then it would be possible for a
         // downstream crate to create a conflict.
         #[derive(Clone)]
         struct Wrapper<T>(T);
@@ -128,9 +129,20 @@ impl EGraph {
                 self.0.apply(exec_state, args)
             }
         }
+        // trait WrapperTrait : DynClone + Primitive + Send + Sync {}
+        // impl<T: DynClone + Primitive + Send + Sync> WrapperTrait for T {}
+        // dyn_clone::clone_trait_object!(WrapperTrait);
+        // #[derive(Clone)]
+        // struct Wrapper(Box<dyn WrapperTrait>);
+        // impl ExternalFunction for Wrapper {
+        //     fn invoke(&self, exec_state: &mut ExecutionState, args: &[Value]) -> Option<Value> {
+        //         self.0.apply(exec_state, args)
+        //     }
+        // }
 
         let prim = Arc::new(x.clone());
-        let ext = self.backend.register_external_func(Wrapper(x));
+        // let ext = self.backend.register_external_func(Wrapper(x));
+        let ext = self.backend.register_external_func(Box::new(Wrapper(x)));
         self.type_info
             .primitives
             .entry(prim.name().to_owned())

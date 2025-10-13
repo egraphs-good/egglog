@@ -225,7 +225,7 @@ impl EGraph {
 
     pub fn register_external_func(
         &mut self,
-        func: impl ExternalFunction + 'static,
+        func: Box<dyn ExternalFunction + 'static>,
     ) -> ExternalFunctionId {
         self.db.add_external_function(func)
     }
@@ -1561,7 +1561,8 @@ impl EGraph {
             .entry(message.to_string())
             .or_insert_with(|| {
                 let panic = Panic(message, self.panic_message.clone());
-                self.db.add_external_function(panic)
+                // self.db.add_external_function(panic)
+                self.db.add_external_function(Box::new(panic))
             })
     }
 
@@ -1571,7 +1572,8 @@ impl EGraph {
     ) -> ExternalFunctionId {
         let lazy = Lazy::new(message);
         let panic = LazyPanic(Arc::new(lazy), self.panic_message.clone());
-        self.db.add_external_function(panic)
+        // self.db.add_external_function(panic)
+        self.db.add_external_function(Box::new(panic))
     }
 }
 

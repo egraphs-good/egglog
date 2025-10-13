@@ -677,13 +677,15 @@ impl ExecutionState<'_> {
                 }
 
                 // Call the given external function on all entries where the lookup failed.
-                self.db.external_funcs[*func].invoke_batch_assign(
-                    self,
-                    &mut to_call_func,
-                    bindings,
-                    func_args,
-                    *dst_var,
-                );
+                use crate::free_join::invoke_batch;
+                invoke_batch(self.db.external_funcs[*func].as_ref(), self, &mut to_call_func, bindings, func_args, *dst_var);
+                // self.db.external_funcs[*func].invoke_batch_assign(
+                //     self,
+                //     &mut to_call_func,
+                //     bindings,
+                //     func_args,
+                //     *dst_var,
+                // );
                 // The new mask should be the lanes where the lookup succeeded or where `func`
                 // succeeded.
                 lookup_result.union(&to_call_func);
@@ -735,7 +737,9 @@ impl ExecutionState<'_> {
                 });
             }
             Instr::External { func, args, dst } => {
-                self.db.external_funcs[*func].invoke_batch(self, mask, bindings, args, *dst);
+                use crate::free_join::invoke_batch;
+                invoke_batch(self.db.external_funcs[*func].as_ref(), self, mask, bindings, args, *dst);
+                // self.db.external_funcs[*func].invoke_batch(self, mask, bindings, args, *dst);
             }
             Instr::ExternalWithFallback {
                 f1,
@@ -745,26 +749,29 @@ impl ExecutionState<'_> {
                 dst,
             } => {
                 let mut f1_result = mask.clone();
-                self.db.external_funcs[*f1].invoke_batch(
-                    self,
-                    &mut f1_result,
-                    bindings,
-                    args1,
-                    *dst,
-                );
+                use crate::free_join::invoke_batch;
+                invoke_batch(self.db.external_funcs[*f1].as_ref(), self, &mut f1_result, bindings, args1, *dst);
+                // self.db.external_funcs[*f1].invoke_batch(
+                //     self,
+                //     &mut f1_result,
+                //     bindings,
+                //     args1,
+                //     *dst,
+                // );
                 let mut to_call_f2 = f1_result.clone();
                 to_call_f2.symmetric_difference(mask);
                 if to_call_f2.is_empty() {
                     return;
                 }
                 // Call the given external function on all entries where the first call failed.
-                self.db.external_funcs[*f2].invoke_batch_assign(
-                    self,
-                    &mut to_call_f2,
-                    bindings,
-                    args2,
-                    *dst,
-                );
+                invoke_batch(self.db.external_funcs[*f2].as_ref(), self, &mut to_call_f2, bindings, args2, *dst);
+                // self.db.external_funcs[*f2].invoke_batch_assign(
+                //     self,
+                //     &mut to_call_f2,
+                //     bindings,
+                //     args2,
+                //     *dst,
+                // );
                 // The new mask should be the lanes where either `f1` or `f2` succeeded.
                 f1_result.union(&to_call_f2);
                 *mask = f1_result;

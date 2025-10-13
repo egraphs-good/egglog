@@ -64,7 +64,7 @@ pub fn add_primitive(input: TokenStream) -> TokenStream {
         .filter_map(|(x, t)| {
             t.field
                 .as_ref()
-                .map(|(d, u)| (quote!(#x: #d), quote!(#x: #u.clone())))
+                .map(|(d, u)| (quote!(#x: #d), quote!(#x: #u)))
         })
         .chain(match context.0 {
             Some((e, t)) => vec![(quote!(ctx: #t), quote!(ctx: #e))],
@@ -358,12 +358,15 @@ impl Parse for Type {
         let field = if input.peek(syn::token::Paren) {
             let inner;
             parenthesized!(inner in input);
-            let field_use = inner.parse()?;
+            let field_use: Expr = inner.parse()?;
+            let field_use = Expr::Verbatim(quote! {
+                #field_use.clone()
+            });
 
             Some((field_def, field_use))
         } else if let Some((t, _)) = &cast {
             let field_use = Expr::Verbatim(quote! {
-                eg.get_arcsort_by(|s| s.value_type() == Some(TypeId::of::<#t>()))
+                eg.get_arcsort::<#t>()
             });
 
             Some((field_def, field_use))

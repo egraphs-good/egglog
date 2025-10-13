@@ -342,7 +342,7 @@ impl SchedulerRuleInfo {
         let matches = Arc::new(Mutex::new(Vec::new()));
         let collect_matches = egraph
             .backend
-            .register_external_func(CollectMatches::new(matches.clone()));
+            .register_external_func(Box::new(CollectMatches::new(matches.clone())));
         let schema = free_vars
             .iter()
             .map(|v| v.sort.column_ty(&egraph.backend))
