@@ -832,6 +832,8 @@ impl EGraph {
     ///
     /// This applies every match it finds (under semi-naive).
     /// See [`EGraph::step_rules_with_scheduler`] for more fine-grained control.
+    ///
+    /// This will return an error if an egglog primitive returns None in an action.
     pub fn step_rules(&mut self, ruleset: &str) -> Result<RunReport, Error> {
         fn collect_rule_ids(
             ruleset: &str,
