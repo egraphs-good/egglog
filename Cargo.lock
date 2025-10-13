@@ -532,6 +532,8 @@ dependencies = [
  "ordered-float",
  "rayon",
  "rustc-hash",
+ "serde",
+ "serde_json",
  "thiserror",
  "web-time",
 ]
