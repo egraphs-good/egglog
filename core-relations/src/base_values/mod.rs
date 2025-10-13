@@ -7,6 +7,7 @@ use std::{
 };
 
 use hashbrown::HashMap;
+use num::{BigInt, Rational64, rational::Ratio};
 use serde::{Deserialize, Serialize, de, ser::SerializeStruct};
 use serde_json::json;
 
@@ -44,22 +45,22 @@ pub trait BaseValue: Clone + Hash + Eq + Any + Debug + Send + Sync + Serialize {
         None
     }
 
-    fn type_id_string() -> &'static str;
+    fn type_id_string() -> String;
 }
 
 impl BaseValue for String {
-    fn type_id_string() -> &'static str {
-        "String"
+    fn type_id_string() -> String {
+        "String".into()
     }
 }
 impl BaseValue for &'static str {
-    fn type_id_string() -> &'static str {
-        "StaticStr"
+    fn type_id_string() -> String {
+        "StaticStr".into()
     }
 }
 impl BaseValue for num::Rational64 {
-    fn type_id_string() -> &'static str {
-        "Rational64"
+    fn type_id_string() -> String {
+        "Rational64".into()
     }
 }
 
@@ -86,20 +87,6 @@ pub struct BaseValues {
     tables: DenseIdMap<BaseValueId, Box<dyn DynamicInternTable>>,
 }
 
-fn deserialize_dyn(
-    value: serde_json::Value,
-) -> Result<Box<dyn DynamicInternTable>, Box<dyn std::error::Error>> {
-    let erased: BaseInternTableErased = serde_json::from_value(value)?;
-
-    match erased.base_value_type.as_str() {
-        "Unit" => {
-            let table: InternTable<(), Value> = serde_json::from_value(erased.table)?;
-            Ok(Box::new(BaseInternTable { table }))
-        }
-        _ => Err(format!("Unknown BaseValue type: {}", erased.base_value_type).into()),
-    }
-}
-
 impl<'de> Deserialize<'de> for BaseValues {
     fn deserialize<D>(deserializer: D) -> Result<Self, D::Error>
     where
@@ -113,15 +100,15 @@ impl<'de> Deserialize<'de> for BaseValues {
         let partial = Partial::deserialize(deserializer)?;
 
         let mut tables = DenseIdMap::default();
+        let mut type_ids = HashMap::new();
         for (id, value) in partial.tables {
             let table = deserialize_dyn(value).map_err(de::Error::custom)?;
+            let type_id = table.get_type_id();
+            type_ids.insert(type_id, id);
             tables.insert(id, table);
         }
 
-        Ok(BaseValues {
-            type_ids: HashMap::new(),
-            tables,
-        })
+        Ok(BaseValues { type_ids, tables })
     }
 }
 
@@ -209,6 +196,7 @@ trait DynamicInternTable: Any + dyn_clone::DynClone + Send + Sync {
     fn as_any(&self) -> &dyn Any;
     fn print_value(&self, val: Value, f: &mut fmt::Formatter) -> fmt::Result;
     fn serialize_dyn(&self) -> Result<serde_json::Value, Box<dyn std::error::Error>>;
+    fn get_type_id(&self) -> TypeId;
 }
 
 // Implements `Clone` for `Box<dyn DynamicInternTable>`.
@@ -251,13 +239,17 @@ where
         let base_value_type = self.get_type_id_string();
         Ok(json! ({ "table": v, "base_value_type": base_value_type}))
     }
+
+    fn get_type_id(&self) -> TypeId {
+        TypeId::of::<P>()
+    }
 }
 
 const VAL_OFFSET: u32 = 1 << (std::mem::size_of::<Value>() as u32 * 8 - 1);
 
 impl<P: BaseValue> BaseInternTable<P> {
     pub fn get_type_id_string(&self) -> String {
-        P::type_id_string().to_string()
+        P::type_id_string()
     }
 
     pub fn intern(&self, p: P) -> Value {
@@ -315,8 +307,8 @@ impl<T: Debug> Debug for Boxed<T> {
 }
 
 impl<T: Hash + Eq + Debug + Clone + Send + Sync + Serialize + 'static> BaseValue for Boxed<T> {
-    fn type_id_string() -> &'static str {
-        "Boxed<T>"
+    fn type_id_string() -> String {
+        format!("Boxed<{}>", std::any::type_name::<T>())
     }
 }
 
@@ -415,5 +407,96 @@ impl<T: std::ops::BitXor<Output = T>> std::ops::BitXor for Boxed<T> {
 
     fn bitxor(self, other: Self) -> Self::Output {
         Boxed(self.0 ^ other.0)
+    }
+}
+
+fn deserialize_dyn(
+    value: serde_json::Value,
+) -> Result<Box<dyn DynamicInternTable>, Box<dyn std::error::Error>> {
+    let erased: BaseInternTableErased = serde_json::from_value(value)?;
+
+    match erased.base_value_type.as_str() {
+        "Unit" => {
+            let table: InternTable<(), Value> = serde_json::from_value(erased.table)?;
+            Ok(Box::new(BaseInternTable { table }))
+        }
+        "Bool" => {
+            let table: InternTable<bool, Value> = serde_json::from_value(erased.table)?;
+            Ok(Box::new(BaseInternTable { table }))
+        }
+        "String" => {
+            let table: InternTable<String, Value> = serde_json::from_value(erased.table)?;
+            Ok(Box::new(BaseInternTable { table }))
+        }
+        "StaticStr" => {
+            let table: InternTable<&'static str, Value> = serde_json::from_value(erased.table)?;
+            Ok(Box::new(BaseInternTable { table }))
+        }
+        "Rational64" => {
+            let table: InternTable<Rational64, Value> = serde_json::from_value(erased.table)?;
+            Ok(Box::new(BaseInternTable { table }))
+        }
+        "u8" => {
+            let table: InternTable<u8, Value> = serde_json::from_value(erased.table)?;
+            Ok(Box::new(BaseInternTable { table }))
+        }
+        "u16" => {
+            let table: InternTable<u16, Value> = serde_json::from_value(erased.table)?;
+            Ok(Box::new(BaseInternTable { table }))
+        }
+        "u32" => {
+            let table: InternTable<u32, Value> = serde_json::from_value(erased.table)?;
+            Ok(Box::new(BaseInternTable { table }))
+        }
+        "u64" => {
+            let table: InternTable<u64, Value> = serde_json::from_value(erased.table)?;
+            Ok(Box::new(BaseInternTable { table }))
+        }
+        "usize" => {
+            let table: InternTable<usize, Value> = serde_json::from_value(erased.table)?;
+            Ok(Box::new(BaseInternTable { table }))
+        }
+        "i8" => {
+            let table: InternTable<i8, Value> = serde_json::from_value(erased.table)?;
+            Ok(Box::new(BaseInternTable { table }))
+        }
+        "i16" => {
+            let table: InternTable<i16, Value> = serde_json::from_value(erased.table)?;
+            Ok(Box::new(BaseInternTable { table }))
+        }
+        "i32" => {
+            let table: InternTable<i32, Value> = serde_json::from_value(erased.table)?;
+            Ok(Box::new(BaseInternTable { table }))
+        }
+        "i64" => {
+            let table: InternTable<i64, Value> = serde_json::from_value(erased.table)?;
+            Ok(Box::new(BaseInternTable { table }))
+        }
+        "isize" => {
+            let table: InternTable<isize, Value> = serde_json::from_value(erased.table)?;
+            Ok(Box::new(BaseInternTable { table }))
+        }
+
+        "Boxed<alloc::string::String>" => {
+            let table: InternTable<Boxed<String>, Value> = serde_json::from_value(erased.table)?;
+            Ok(Box::new(BaseInternTable { table }))
+        }
+        "Boxed<ordered_float::OrderedFloat<f64>>" => {
+            let table: InternTable<Boxed<ordered_float::OrderedFloat<f64>>, Value> =
+                serde_json::from_value(erased.table)?;
+            Ok(Box::new(BaseInternTable { table }))
+        }
+        "Boxed<num_bigint::bigint::BigInt>" => {
+            let table: InternTable<Boxed<BigInt>, Value> = serde_json::from_value(erased.table)?;
+            Ok(Box::new(BaseInternTable { table }))
+        }
+
+        "Boxed<num_rational::Ratio<num_bigint::bigint::BigInt>>" => {
+            let table: InternTable<Boxed<Ratio<BigInt>>, Value> =
+                serde_json::from_value(erased.table)?;
+            Ok(Box::new(BaseInternTable { table }))
+        }
+
+        _ => Err(format!("Unknown BaseValue type: {}", erased.base_value_type).into()),
     }
 }

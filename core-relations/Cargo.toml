@@ -37,6 +37,8 @@ serde = { version = "1.0", features = ["derive"] }
 typetag = "0.2"
 serde_json = "1.0"
 erased-serde = "0.4.8"
+ordered-float = { workspace = true }
+num-bigint = { workspace = true }
 
 
 [dev-dependencies]

@@ -333,8 +333,8 @@ pub struct ResolvedFunction {
 }
 
 impl BaseValue for ResolvedFunction {
-    fn type_id_string() -> &'static str {
-        "ResolvedFn"
+    fn type_id_string() -> String {
+        "ResolvedFn".into()
     }
 }
 
