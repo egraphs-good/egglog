@@ -256,8 +256,9 @@ impl EGraph {
         let mut query_report = RunReport::singleton(ruleset, query_iter_report);
         let mut action_report = RunReport::singleton(ruleset, action_iter_report);
 
-        // queries don't count as updates
+        // query matches don't count
         query_report.updated = false;
+        query_report.num_matches_per_rule.clear();
         // if the scheduler says it shouldn't stop, then it's considered updated (unsaturated)
         action_report.updated = action_report.updated || {
             let rule_ids = rules.iter().map(|(id, _)| id.as_str()).collect::<Vec<_>>();

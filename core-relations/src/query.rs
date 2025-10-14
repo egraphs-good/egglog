@@ -22,6 +22,7 @@ use crate::{
 define_id!(pub RuleId, u32, "An identifier for a rule in a rule set");
 
 /// Resolves variables and atoms in a rule to their string names.
+#[allow(dead_code)]
 #[derive(Debug, Clone)]
 pub struct SymbolMap {
     pub atoms: HashMap<AtomId, Arc<str>>,
@@ -76,13 +77,13 @@ impl RuleSet {
 }
 
 /// Builder for a [`RuleSet`].
-/// 
+///
 /// There are in general two ways to add rules to a rule set:
-/// 
+///
 /// 1. Use the QueryBuilder and RuleBuilder APIs to construct a rule from scratch.
 /// 2. Use a previously cached plan and add extra constraints to it.
-/// 
-/// The pattern this is used by egglog is as follows: An egglog rule is first compiled to a cached 
+///
+/// The pattern this is used by egglog is as follows: An egglog rule is first compiled to a cached
 /// plan using builder patterns at declaration time, and each time the rule is run, it is added to
 /// a ruleset using the cached plan and possibly some extra constraints (e.g., timestamp).
 ///
@@ -180,9 +181,12 @@ impl<'outer> RuleSetBuilder<'outer> {
             });
         }
 
-        self.rule_set
-            .plans
-            .push((plan, cached.desc.clone(), cached.symbol_map.clone(), action_id))
+        self.rule_set.plans.push((
+            plan,
+            cached.desc.clone(),
+            cached.symbol_map.clone(),
+            action_id,
+        ))
     }
 
     /// Build the ruleset.
@@ -412,10 +416,7 @@ pub struct RuleBuilder<'outer, 'a> {
 
 impl RuleBuilder<'_, '_> {
     fn table_info(&self, table: TableId) -> &TableInfo {
-        self.qb
-            .rsb
-            .db
-            .get_table_info(table)
+        self.qb.rsb.db.get_table_info(table)
     }
 
     /// Build the finished query.
@@ -423,7 +424,7 @@ impl RuleBuilder<'_, '_> {
         self.build_with_description("")
     }
 
-    fn build_symbol_map(&self) -> SymbolMap{
+    fn build_symbol_map(&self) -> SymbolMap {
         let var_info = &self.qb.query.var_info;
         SymbolMap {
             atoms: self
@@ -447,14 +448,13 @@ impl RuleBuilder<'_, '_> {
         let var_info = &self.qb.query.var_info;
         let symbol_map = self.build_symbol_map();
         // Generate an id for our actions and slot them in.
-        let used_vars =
-            SmallVec::from_iter(var_info.iter().filter_map(|(v, info)| {
-                if info.used_in_rhs && !info.defined_in_rhs {
-                    Some(v)
-                } else {
-                    None
-                }
-            }));
+        let used_vars = SmallVec::from_iter(var_info.iter().filter_map(|(v, info)| {
+            if info.used_in_rhs && !info.defined_in_rhs {
+                Some(v)
+            } else {
+                None
+            }
+        }));
         let action_id = self.qb.rsb.rule_set.actions.push(ActionInfo {
             instrs: Arc::new(self.qb.instrs),
             used_vars,
@@ -491,7 +491,7 @@ impl RuleBuilder<'_, '_> {
         default_vals: &[WriteVal],
         dst_col: ColumnId,
     ) -> Result<Variable, QueryError> {
-        let table_info =self.table_info(table);
+        let table_info = self.table_info(table);
         self.validate_keys(table, table_info, args)?;
         self.validate_vals(table, table_info, default_vals.iter())?;
         let res = self.qb.new_var();
@@ -525,7 +525,7 @@ impl RuleBuilder<'_, '_> {
         default: QueryEntry,
         dst_col: ColumnId,
     ) -> Result<Variable, QueryError> {
-        let table_info =self.table_info(table);
+        let table_info = self.table_info(table);
         self.validate_keys(table, table_info, args)?;
         let res = self.qb.new_var();
         self.qb.instrs.push(Instr::LookupWithDefault {
@@ -553,7 +553,7 @@ impl RuleBuilder<'_, '_> {
         args: &[QueryEntry],
         dst_col: ColumnId,
     ) -> Result<Variable, QueryError> {
-        let table_info =self.table_info(table);
+        let table_info = self.table_info(table);
         self.validate_keys(table, table_info, args)?;
         let res = self.qb.new_var();
         self.qb.instrs.push(Instr::Lookup {
@@ -569,7 +569,7 @@ impl RuleBuilder<'_, '_> {
 
     /// Insert the specified values into the given table.
     pub fn insert(&mut self, table: TableId, vals: &[QueryEntry]) -> Result<(), QueryError> {
-        let table_info =self.table_info(table);
+        let table_info = self.table_info(table);
         self.validate_row(table, table_info, vals)?;
         self.qb.instrs.push(Instr::Insert {
             table,
@@ -587,7 +587,7 @@ impl RuleBuilder<'_, '_> {
         r: QueryEntry,
         vals: &[QueryEntry],
     ) -> Result<(), QueryError> {
-        let table_info =self.table_info(table);
+        let table_info = self.table_info(table);
         self.validate_row(table, table_info, vals)?;
         self.qb.instrs.push(Instr::InsertIfEq {
             table,
@@ -602,7 +602,7 @@ impl RuleBuilder<'_, '_> {
 
     /// Remove the specified entry from the given table, if it is there.
     pub fn remove(&mut self, table: TableId, args: &[QueryEntry]) -> Result<(), QueryError> {
-        let table_info =self.table_info(table);
+        let table_info = self.table_info(table);
         self.validate_keys(table, table_info, args)?;
         self.qb.instrs.push(Instr::Remove {
             table,
@@ -640,7 +640,7 @@ impl RuleBuilder<'_, '_> {
         func: ExternalFunctionId,
         func_args: &[QueryEntry],
     ) -> Result<Variable, QueryError> {
-        let table_info =self.table_info(table);
+        let table_info = self.table_info(table);
         self.validate_keys(table, table_info, key)?;
         let res = self.qb.new_var();
         self.qb.instrs.push(Instr::LookupWithFallback {

@@ -109,11 +109,7 @@ fn basic_query() {
     let report = db.run_rule_set(&rule_set, ReportLevel::SizeOnly);
 
     assert!(report.changed, "{report:?}");
-    assert_eq!(
-        report.num_matches("add"),
-        5,
-        "{report:?}"
-    );
+    assert_eq!(report.num_matches("add"), 5, "{report:?}");
     let num_table = db.get_table(num);
     let all_num = num_table.all();
     let items = num_table.scan(all_num.as_ref());

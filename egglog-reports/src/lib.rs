@@ -11,7 +11,6 @@ pub(crate) type HashMap<K, V> = hashbrown::HashMap<K, V, BuildHasherDefault<FxHa
 pub(crate) type IndexSet<T> = indexmap::IndexSet<T, BuildHasherDefault<FxHasher>>;
 // pub(crate) type IndexMap<K, V> = indexmap::IndexMap<K, V, BuildHasherDefault<FxHasher>>;
 
-
 #[derive(Default, Serialize, Deserialize, Debug, Clone, Copy)]
 pub enum ReportLevel {
     #[default]
@@ -216,9 +215,9 @@ impl RunReport {
             *report
                 .search_and_apply_time_per_rule
                 .entry(rule.clone())
-                .or_default() += iteration.rule_set_report.rule_search_and_apply_time(&rule);
+                .or_default() += iteration.rule_set_report.rule_search_and_apply_time(rule);
             *report.num_matches_per_rule.entry(rule.clone()).or_default() +=
-                iteration.rule_set_report.rule_num_matches(&rule);
+                iteration.rule_set_report.rule_num_matches(rule);
         }
 
         let per_ruleset = |x| [(ruleset.to_owned(), x)].into_iter().collect();
@@ -226,6 +225,7 @@ impl RunReport {
         report.search_and_apply_time_per_ruleset = per_ruleset(iteration.search_and_apply_time());
         report.merge_time_per_ruleset = per_ruleset(iteration.search_and_apply_time());
         report.rebuild_time_per_ruleset = per_ruleset(iteration.search_and_apply_time());
+        report.updated = iteration.changed();
 
         report
     }
