@@ -131,8 +131,8 @@ pub(crate) fn desugar_command(
         Command::RunSchedule(sched) => {
             vec![NCommand::RunSchedule(sched.clone())]
         }
-        Command::PrintOverallStatistics => {
-            vec![NCommand::PrintOverallStatistics]
+        Command::PrintOverallStatistics(span, file) => {
+            vec![NCommand::PrintOverallStatistics(span, file.clone())]
         }
         Command::Extract(span, expr, variants) => vec![NCommand::Extract(span, expr, variants)],
         Command::Check(span, facts) => vec![NCommand::Check(span, facts)],

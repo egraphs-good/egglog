@@ -596,6 +596,7 @@ dependencies = [
 name = "egglog-reports"
 version = "1.0.0"
 dependencies = [
+ "clap",
  "hashbrown 0.16.0",
  "indexmap",
  "rustc-hash",
