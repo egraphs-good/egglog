@@ -217,6 +217,7 @@ enum InsertOrRemove {
     Remove(Value),
 }
 
+const LAZY_BOUND: usize = 30;
 use dashmap::mapref::one::{Ref, RefMut};
 #[allow(dead_code)]
 impl LazyMapOfIndexSet {
@@ -288,19 +289,34 @@ impl LazyMapOfIndexSet {
 
     /// Lazily inserts a value for all keys in the given index set.
     /// The actual insertion will be performed when the map is next accessed.
-    pub fn lazy_insert_for_all_keys(&self, keys: IndexSet<Value>, value: Value) {
-        self.pending_operations
-            .lock()
-            .unwrap()
-            .push((keys, InsertOrRemove::Insert(value)));
+    pub fn insert_for_all_keys(&self, keys: IndexSet<Value>, value: Value) {
+        println!("insert keys_len: {}", keys.len());
+        if keys.len() < LAZY_BOUND {
+            for key in keys {
+                self.val_index.entry(key).or_default().insert(value);
+            }
+        } else {
+            self.pending_operations
+                .lock()
+                .unwrap()
+                .push((keys, InsertOrRemove::Insert(value)));
+        }
     }
 
     /// Lazily removes a value for all keys in the given index set.
-    pub fn lazy_remove_for_all_keys(&self, keys: IndexSet<Value>, value: Value) {
-        self.pending_operations
-            .lock()
-            .unwrap()
-            .push((keys, InsertOrRemove::Remove(value)));
+    pub fn remove_for_all_keys(&self, keys: IndexSet<Value>, value: Value) {
+        if keys.len() < LAZY_BOUND {
+            for key in keys {
+                if let Some(mut index) = self.val_index.get_mut(&key) {
+                    index.swap_remove(&value);
+                }
+            }
+        } else {
+            self.pending_operations
+                .lock()
+                .unwrap()
+                .push((keys, InsertOrRemove::Remove(value)));
+        }
     }
 
     /// Flushes all pending lazy insertions to the underlying map.
@@ -403,7 +419,7 @@ impl<C: ContainerValue> ContainerEnv<C> {
                 // Common case: insert the mapping in to_id and update the index.
                 vac.insert(value);
                 self.val_index
-                    .lazy_insert_for_all_keys(container.iter().collect(), value);
+                    .insert_for_all_keys(container.iter().collect(), value);
                 value
             }
             dashmap::Entry::Occupied(occ) => {
@@ -430,15 +446,15 @@ impl<C: ContainerValue> ContainerEnv<C> {
                     self.to_container.insert(result, (hc as usize, target_map));
                     *occ.get_mut() = result;
                     self.val_index
-                        .lazy_remove_for_all_keys(occ.key().iter().collect(), old_val);
+                        .remove_for_all_keys(occ.key().iter().collect(), old_val);
                     self.val_index
-                        .lazy_insert_for_all_keys(occ.key().iter().collect(), result);
+                        .insert_for_all_keys(occ.key().iter().collect(), result);
                 }
             }
             dashmap::Entry::Vacant(vacant_entry) => {
                 self.to_container.insert(value, (hc as usize, target_map));
                 self.val_index
-                    .lazy_insert_for_all_keys(vacant_entry.key().iter().collect(), value);
+                    .insert_for_all_keys(vacant_entry.key().iter().collect(), value);
                 vacant_entry.insert(value);
             }
         }
@@ -626,15 +642,15 @@ impl<C: ContainerValue> ContainerEnv<C> {
                                 self.to_container.insert(result, (hc as usize, target_map));
                                 *val_slot.get_mut() = result;
                                 self.val_index
-                                    .lazy_remove_for_all_keys(container.iter().collect(), old_val);
+                                    .remove_for_all_keys(container.iter().collect(), old_val);
                                 self.val_index
-                                    .lazy_insert_for_all_keys(container.iter().collect(), result);
+                                    .insert_for_all_keys(container.iter().collect(), result);
                             }
                         }
                         Err(slot) => {
                             self.to_container.insert(val, (hc as usize, target_map));
                             self.val_index
-                                .lazy_insert_for_all_keys(container.iter().collect(), val);
+                                .insert_for_all_keys(container.iter().collect(), val);
 
                             // SAFETY: We just got this slot from `find_or_find_insert_slot`
                             // and we have not mutated the map at all since then.
