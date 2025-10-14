@@ -25,7 +25,7 @@ use crate::core_relations::{
 use crate::numeric_id::{DenseIdMap, DenseIdMapWithReuse, IdVec, NumericId, define_id};
 use egglog_core_relations as core_relations;
 use egglog_numeric_id as numeric_id;
-use egglog_reports::{IterationReport, RuleSetReport};
+use egglog_reports::{IterationReport, ReportLevel, RuleSetReport};
 use hashbrown::HashMap;
 use indexmap::{IndexMap, IndexSet, map::Entry};
 use log::info;
@@ -86,6 +86,7 @@ pub struct EGraph {
     reason_tables: IndexMap<usize /* arity */, TableId>,
     term_tables: IndexMap<usize /* arity */, TableId>,
     tracing: bool,
+    report_level: ReportLevel,
 }
 
 pub type Result<T> = std::result::Result<T, anyhow::Error>;
@@ -157,6 +158,7 @@ impl EGraph {
             cong_spec,
             reason_tables: Default::default(),
             term_tables: Default::default(),
+            report_level: Default::default(),
             tracing,
         }
     }
@@ -704,19 +706,17 @@ impl EGraph {
     pub fn run_rules(&mut self, rules: &[RuleId]) -> Result<IterationReport> {
         let ts = self.next_ts();
 
-        let rule_set_report = run_rules_impl(&mut self.db, &mut self.rules, rules, ts)?;
+        let rule_set_report =
+            run_rules_impl(&mut self.db, &mut self.rules, rules, ts, self.report_level)?;
         if let Some(message) = self.panic_message.lock().unwrap().take() {
             return Err(PanicError(message).into());
         }
 
         let mut iteration_report = IterationReport {
-            changed: rule_set_report.changed,
-            rule_reports: rule_set_report.rule_reports.into_iter().collect(),
-            search_and_apply_time: rule_set_report.search_and_apply_time,
-            merge_time: rule_set_report.merge_time,
+            rule_set_report,
             rebuild_time: Duration::ZERO,
         };
-        if !iteration_report.changed {
+        if !iteration_report.changed() {
             return Ok(iteration_report);
         }
 
@@ -822,8 +822,14 @@ impl EGraph {
                         // This is to avoid recanonicalizing the same row multiple
                         // times.
                         for rule in &info.incremental_rebuild_rules {
-                            changed |= run_rules_impl(&mut self.db, &mut self.rules, &[*rule], ts)?
-                                .changed;
+                            changed |= run_rules_impl(
+                                &mut self.db,
+                                &mut self.rules,
+                                &[*rule],
+                                ts,
+                                self.report_level,
+                            )?
+                            .changed;
                         }
                         // Reset the rule we did not run. These two should be equivalent.
                         self.rules[info.nonincremental_rebuild_rule].last_run_at = ts;
@@ -836,6 +842,7 @@ impl EGraph {
                             &mut self.rules,
                             &[info.nonincremental_rebuild_rule],
                             ts,
+                            self.report_level,
                         )?
                         .changed;
                         for rule in &info.incremental_rebuild_rules {
@@ -903,7 +910,14 @@ impl EGraph {
                     self.rules[*rule].last_run_at = ts;
                 }
             }
-            changed |= run_rules_impl(&mut self.db, &mut self.rules, &scratch, ts)?.changed;
+            changed |= run_rules_impl(
+                &mut self.db,
+                &mut self.rules,
+                &scratch,
+                ts,
+                self.report_level,
+            )?
+            .changed;
             scratch.clear();
             let ts = self.next_ts();
             for (i, funcs) in state.incremental.iter() {
@@ -912,7 +926,14 @@ impl EGraph {
                     scratch.push(info.incremental_rebuild_rules[i]);
                     self.rules[info.nonincremental_rebuild_rule].last_run_at = ts;
                 }
-                changed |= run_rules_impl(&mut self.db, &mut self.rules, &scratch, ts)?.changed;
+                changed |= run_rules_impl(
+                    &mut self.db,
+                    &mut self.rules,
+                    &scratch,
+                    ts,
+                    self.report_level,
+                )?
+                .changed;
                 scratch.clear();
             }
         }
@@ -1482,6 +1503,7 @@ fn run_rules_impl(
     rule_info: &mut DenseIdMapWithReuse<RuleId, RuleInfo>,
     rules: &[RuleId],
     next_ts: Timestamp,
+    report_level: ReportLevel,
 ) -> Result<RuleSetReport> {
     for rule in rules {
         let info = &mut rule_info[*rule];
@@ -1498,7 +1520,7 @@ fn run_rules_impl(
         info.last_run_at = next_ts;
     }
     let ruleset = rsb.build();
-    Ok(db.run_rule_set(&ruleset))
+    Ok(db.run_rule_set(&ruleset, report_level))
 }
 
 // These markers are just used to make it easy to distinguish time spent in

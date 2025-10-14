@@ -1,6 +1,6 @@
 use std::{collections::BTreeMap, iter, mem, sync::Arc};
 
-use crate::numeric_id::{DenseIdMap, NumericId};
+use crate::{numeric_id::{DenseIdMap, NumericId}, query::SymbolMap};
 use fixedbitset::FixedBitSet;
 use smallvec::{SmallVec, smallvec};
 
@@ -70,13 +70,20 @@ impl Clone for JoinHeader {
 
 #[derive(Debug, Clone)]
 pub(crate) enum JoinStage {
+    /// `Intersect` takes a variable and intersects a set of atoms
+    /// on that variable.
+    /// This corresponds to the classic generic join algorithm.
     Intersect {
         var: Variable,
         scans: SmallVec<[SingleScanSpec; 3]>,
     },
+    /// `FusedIntersect` takes a "cover" (sub)atom and use it to probe other (sub)atoms.
+    /// This corresponds to the free join algorithm, or when to_intersect.len() == 1 and cover is
+    /// the entire atom, a hash join.
     FusedIntersect {
         cover: ScanSpec,
         bind: SmallVec<[(ColumnId, Variable); 2]>,
+        // to_intersect.1 is the index into the cover atom.
         to_intersect: Vec<(ScanSpec, SmallVec<[ColumnId; 2]>)>,
     },
 }
@@ -156,6 +163,11 @@ impl JoinStage {
 pub(crate) struct Plan {
     pub atoms: Arc<DenseIdMap<AtomId, Atom>>,
     pub stages: JoinStages,
+}
+impl Plan {
+    pub(crate) fn to_report(&self, _symbol_map: &SymbolMap) -> egglog_reports::Plan {
+        todo!()
+    }
 }
 
 #[derive(Debug, Clone)]

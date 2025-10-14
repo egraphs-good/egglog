@@ -1,4 +1,5 @@
 use rustc_hash::FxHasher;
+use serde::{Deserialize, Serialize};
 use std::{
     fmt::{Display, Formatter},
     hash::BuildHasherDefault,
@@ -9,47 +10,111 @@ pub(crate) type HashMap<K, V> = hashbrown::HashMap<K, V, BuildHasherDefault<FxHa
 // pub(crate) type HashSet<T> = hashbrown::HashSet<T, BuildHasherDefault<FxHasher>>;
 pub(crate) type IndexSet<T> = indexmap::IndexSet<T, BuildHasherDefault<FxHasher>>;
 // pub(crate) type IndexMap<K, V> = indexmap::IndexMap<K, V, BuildHasherDefault<FxHasher>>;
-pub(crate) type DashMap<K, V> = dashmap::DashMap<K, V, BuildHasherDefault<FxHasher>>;
 
-#[derive(Debug, Default)]
-pub struct Plan {
-    // TODO
+
+#[derive(Default, Serialize, Deserialize, Debug, Clone, Copy)]
+pub enum ReportLevel {
+    #[default]
+    SizeOnly,
+    WithPlan,
+    StageInfo,
 }
 
-#[derive(Debug, Default)]
+#[derive(Serialize, Deserialize, Clone, Debug)]
+pub struct SingleScan(String, (String, i64));
+#[derive(Serialize, Deserialize, Clone, Debug)]
+pub struct Scan(String, Vec<(String, i64)>);
+
+#[derive(Serialize, Deserialize, Clone, Debug)]
+pub enum Stage {
+    Intersect {
+        scans: Vec<SingleScan>,
+    },
+    FusedIntersect {
+        cover: Scan,             // build side
+        to_intersect: Vec<Scan>, // probe sides
+    },
+}
+
+#[derive(Serialize, Clone, Deserialize, Debug)]
+pub struct StageStats {
+    pub num_candidates: usize,
+    pub num_succeeded: usize,
+}
+
+#[derive(Serialize, Clone, Debug, Default)]
+pub struct Plan {
+    stages: Vec<(
+        Stage,
+        Option<StageStats>,
+        // indices of next stages
+        Vec<usize>,
+    )>,
+}
+
+#[derive(Debug, Clone, Default)]
 pub struct RuleReport {
-    // pub plan: Plan,
+    pub plan: Option<Plan>,
     pub search_and_apply_time: Duration,
     // TODO: succeeding matches
     pub num_matches: usize,
 }
 
-#[derive(Debug, Default)]
+#[derive(Debug, Clone, Default)]
 pub struct RuleSetReport {
     pub changed: bool,
-    pub rule_reports: DashMap<String, RuleReport>,
+    pub rule_reports: HashMap<String, Vec<RuleReport>>,
     pub search_and_apply_time: Duration,
     pub merge_time: Duration,
 }
 
-#[derive(Debug, Default)]
+impl RuleSetReport {
+    pub fn num_matches(&self, rule: &str) -> usize {
+        self.rule_reports
+            .get(rule)
+            .map(|r| r.iter().map(|r| r.num_matches).sum())
+            .unwrap_or(0)
+    }
+
+    pub fn rule_num_matches(&self, rule: &str) -> usize {
+        self.rule_reports
+            .get(rule)
+            .map(|r| r.iter().map(|r| r.num_matches).sum())
+            .unwrap_or(0)
+    }
+
+    pub fn rule_search_and_apply_time(&self, rule: &str) -> Duration {
+        self.rule_reports
+            .get(rule)
+            .map(|r| r.iter().map(|r| r.search_and_apply_time).sum())
+            .unwrap_or(Duration::ZERO)
+    }
+}
+
+#[derive(Debug, Clone, Default)]
 pub struct IterationReport {
-    pub changed: bool,
-    pub rule_reports: HashMap<String, RuleReport>,
-    pub search_and_apply_time: Duration,
-    pub merge_time: Duration,
+    pub rule_set_report: RuleSetReport,
     pub rebuild_time: Duration,
 }
 
-impl RuleReport {
-    pub fn union(&self, other: &RuleReport) -> RuleReport {
-        RuleReport {
-            // plan: Default::default(),
-            search_and_apply_time: self.search_and_apply_time + other.search_and_apply_time,
-            num_matches: self.num_matches + other.num_matches,
-        }
+impl IterationReport {
+    pub fn changed(&self) -> bool {
+        self.rule_set_report.changed
+    }
+
+    pub fn search_and_apply_time(&self) -> Duration {
+        self.rule_set_report.search_and_apply_time
+    }
+
+    pub fn rule_reports(&self) -> &HashMap<String, Vec<RuleReport>> {
+        &self.rule_set_report.rule_reports
+    }
+
+    pub fn rules(&self) -> impl Iterator<Item = &String> {
+        self.rule_set_report.rule_reports.keys()
     }
 }
+
 /// Running a schedule produces a report of the results.
 /// This includes rough timing information and whether
 /// the database was updated.
@@ -57,6 +122,7 @@ impl RuleReport {
 /// information together.
 #[derive(Debug, Clone, Default)]
 pub struct RunReport {
+    pub iterations: Vec<IterationReport>,
     /// If any changes were made to the database.
     pub updated: bool,
     pub search_and_apply_time_per_rule: HashMap<String, Duration>,
@@ -64,20 +130,6 @@ pub struct RunReport {
     pub search_and_apply_time_per_ruleset: HashMap<String, Duration>,
     pub merge_time_per_ruleset: HashMap<String, Duration>,
     pub rebuild_time_per_ruleset: HashMap<String, Duration>,
-}
-
-impl RunReport {
-    /// add a ... and a maximum size to the name
-    /// for printing, since they may be the rule itself
-    fn truncate_rule_name(mut s: String) -> String {
-        // replace newlines in s with a space
-        s = s.replace('\n', " ");
-        if s.len() > 80 {
-            s.truncate(80);
-            s.push_str("...");
-        }
-        s
-    }
 }
 
 impl Display for RunReport {
@@ -133,6 +185,18 @@ impl Display for RunReport {
 }
 
 impl RunReport {
+    /// add a ... and a maximum size to the name
+    /// for printing, since they may be the rule itself
+    fn truncate_rule_name(mut s: String) -> String {
+        // replace newlines in s with a space
+        s = s.replace('\n', " ");
+        if s.len() > 80 {
+            s.truncate(80);
+            s.push_str("...");
+        }
+        s
+    }
+
     fn union_times(times: &mut HashMap<String, Duration>, other_times: HashMap<String, Duration>) {
         for (k, v) in other_times {
             *times.entry(k).or_default() += v;
@@ -145,8 +209,35 @@ impl RunReport {
         }
     }
 
+    pub fn singleton(ruleset: &str, iteration: IterationReport) -> Self {
+        let mut report = RunReport::default();
+
+        for rule in iteration.rules() {
+            *report
+                .search_and_apply_time_per_rule
+                .entry(rule.clone())
+                .or_default() += iteration.rule_set_report.rule_search_and_apply_time(&rule);
+            *report.num_matches_per_rule.entry(rule.clone()).or_default() +=
+                iteration.rule_set_report.rule_num_matches(&rule);
+        }
+
+        let per_ruleset = |x| [(ruleset.to_owned(), x)].into_iter().collect();
+
+        report.search_and_apply_time_per_ruleset = per_ruleset(iteration.search_and_apply_time());
+        report.merge_time_per_ruleset = per_ruleset(iteration.search_and_apply_time());
+        report.rebuild_time_per_ruleset = per_ruleset(iteration.search_and_apply_time());
+
+        report
+    }
+
+    pub fn add_iteration(&mut self, ruleset: &str, iteration: IterationReport) {
+        // slightly inefficient due to added allocations, but this isn't on a hot path anyway
+        self.union(RunReport::singleton(ruleset, iteration.clone()));
+    }
+
     /// Merge two reports.
     pub fn union(&mut self, other: Self) {
+        self.iterations.extend(other.iterations);
         self.updated |= other.updated;
         RunReport::union_times(
             &mut self.search_and_apply_time_per_rule,

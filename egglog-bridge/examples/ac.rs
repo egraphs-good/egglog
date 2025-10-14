@@ -40,7 +40,7 @@ fn main() {
         };
 
         // Running these rules on an empty database should change nothing.
-        assert!(!egraph.run_rules(&[add_comm, add_assoc]).unwrap().changed);
+        assert!(!egraph.run_rules(&[add_comm, add_assoc]).unwrap().changed());
 
         // Fill the database.
         let mut ids = Vec::new();
@@ -81,7 +81,7 @@ fn main() {
         // Saturate
         for i in 0.. {
             let iter_start = web_time::Instant::now();
-            let keep_going = egraph.run_rules(&[add_comm, add_assoc]).unwrap().changed;
+            let keep_going = egraph.run_rules(&[add_comm, add_assoc]).unwrap().changed();
             println!("Finished iteration {i} after {:?}", iter_start.elapsed());
             if !keep_going {
                 break;
