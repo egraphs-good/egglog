@@ -63,9 +63,8 @@ chrono = { version = "0.4", default-features = false }
 # dev dependencies
 ######################
 glob = "0.3.1"
-codspeed-criterion-compat = "3.0.5"
+divan = { package = "codspeed-divan-compat", version = "4.0.3" }
 libtest-mimic = "0.8"
-divan = "0.1.15"
 
 ######################
 # member crates
@@ -90,7 +89,7 @@ version = { workspace = true }
 edition = { workspace = true }
 
 [[bench]]
-name = "example_benchmarks"
+name = "ci_benchmarking"
 harness = false
 
 [[bench]]
@@ -149,7 +148,7 @@ egglog-add-primitive = { workspace = true }
 chrono = { workspace = true, features = ["now"], optional = true }
 
 [dev-dependencies]
-codspeed-criterion-compat = { workspace = true }
+divan = { workspace = true }
 glob = { workspace = true }
 libtest-mimic = { workspace = true }
 
