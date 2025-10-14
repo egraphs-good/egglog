@@ -62,7 +62,7 @@ where
     CoreAction(GenericAction<Head, Leaf>),
     Extract(Span, GenericExpr<Head, Leaf>, GenericExpr<Head, Leaf>),
     RunSchedule(GenericSchedule<Head, Leaf>),
-    PrintOverallStatistics,
+    PrintOverallStatistics(Span, Option<String>),
     Check(Span, Vec<GenericFact<Head, Leaf>>),
     PrintFunction(
         Span,
@@ -126,7 +126,9 @@ where
             }
             GenericNCommand::NormRule { rule } => GenericCommand::Rule { rule: rule.clone() },
             GenericNCommand::RunSchedule(schedule) => GenericCommand::RunSchedule(schedule.clone()),
-            GenericNCommand::PrintOverallStatistics => GenericCommand::PrintOverallStatistics,
+            GenericNCommand::PrintOverallStatistics(span, file) => {
+                GenericCommand::PrintOverallStatistics(span.clone(), file.clone())
+            }
             GenericNCommand::CoreAction(action) => GenericCommand::Action(action.clone()),
             GenericNCommand::Extract(span, expr, variants) => {
                 GenericCommand::Extract(span.clone(), expr.clone(), variants.clone())
@@ -178,7 +180,9 @@ where
             GenericNCommand::RunSchedule(schedule) => {
                 GenericNCommand::RunSchedule(schedule.visit_exprs(f))
             }
-            GenericNCommand::PrintOverallStatistics => GenericNCommand::PrintOverallStatistics,
+            GenericNCommand::PrintOverallStatistics(span, file) => {
+                GenericNCommand::PrintOverallStatistics(span, file)
+            }
             GenericNCommand::CoreAction(action) => {
                 GenericNCommand::CoreAction(action.visit_exprs(f))
             }
@@ -580,7 +584,7 @@ where
     RunSchedule(GenericSchedule<Head, Leaf>),
     /// Print runtime statistics about rules
     /// and rulesets so far.
-    PrintOverallStatistics,
+    PrintOverallStatistics(Span, Option<String>),
     /// The `check` command checks that the given facts
     /// match at least once in the current database.
     /// The list of facts is matched in the same way a [`Command::Rule`] is matched.
@@ -727,7 +731,10 @@ where
             }
             GenericCommand::Rule { rule } => rule.fmt(f),
             GenericCommand::RunSchedule(sched) => write!(f, "(run-schedule {sched})"),
-            GenericCommand::PrintOverallStatistics => write!(f, "(print-stats)"),
+            GenericCommand::PrintOverallStatistics(_span, file) => match file {
+                Some(file) => write!(f, "(print-stats :file {file})"),
+                None => write!(f, "(print-stats)"),
+            },
             GenericCommand::Check(_ann, facts) => {
                 write!(f, "(check {})", ListDisplay(facts, "\n"))
             }

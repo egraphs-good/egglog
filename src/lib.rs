@@ -977,12 +977,26 @@ impl EGraph {
                 self.overall_run_report.union(report.clone());
                 return Ok(Some(CommandOutput::RunSchedule(report)));
             }
-            ResolvedNCommand::PrintOverallStatistics => {
-                log::info!("Overall statistics:\n{}", self.overall_run_report);
-                return Ok(Some(CommandOutput::OverallStatistics(
-                    self.overall_run_report.clone(),
-                )));
-            }
+            ResolvedNCommand::PrintOverallStatistics(span, file) => match file {
+                None => {
+                    log::info!("Printed overall statistics");
+                    return Ok(Some(CommandOutput::OverallStatistics(
+                        self.overall_run_report.clone(),
+                    )));
+                }
+                Some(path) => {
+                    let mut file = std::fs::File::create(&path)
+                        .map_err(|e| Error::IoError(path.clone().into(), e, span.clone()))?;
+                    log::info!("Printed overall statistics to json file {}", path);
+
+                    file.write_all(
+                        serde_json::to_string(&self.overall_run_report)
+                            .expect("error serializing to json")
+                            .as_bytes(),
+                    )
+                    .expect("Error writing to file");
+                }
+            },
             ResolvedNCommand::Check(span, facts) => {
                 self.check_facts(&span, &facts)?;
                 log::info!("Checked fact {:?}.", facts);

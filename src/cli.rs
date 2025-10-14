@@ -44,6 +44,9 @@ struct Args {
     /// Number of threads to use for parallel execution. Passing `0` will use the maximum
     /// inferred parallelism available on the current system.
     threads: usize,
+    #[arg(value_enum)]
+    #[clap(long, default_value_t = ReportLevel::SizeOnly)]
+    report_level: ReportLevel,
 }
 
 /// Start a command-line interface for the E-graph.
@@ -69,6 +72,7 @@ pub fn cli(mut egraph: EGraph) {
     );
     egraph.fact_directory.clone_from(&args.fact_directory);
     egraph.seminaive = !args.naive;
+    egraph.set_report_level(args.report_level);
     if args.inputs.is_empty() {
         match egraph.repl(args.mode) {
             Ok(()) => std::process::exit(0),

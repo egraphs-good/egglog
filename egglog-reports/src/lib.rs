@@ -1,3 +1,4 @@
+use clap::ValueEnum;
 use rustc_hash::FxHasher;
 use serde::Serialize;
 use std::{
@@ -11,7 +12,7 @@ pub(crate) type HashMap<K, V> = hashbrown::HashMap<K, V, BuildHasherDefault<FxHa
 pub(crate) type IndexSet<T> = indexmap::IndexSet<T, BuildHasherDefault<FxHasher>>;
 // pub(crate) type IndexMap<K, V> = indexmap::IndexMap<K, V, BuildHasherDefault<FxHasher>>;
 
-#[derive(Default, Serialize, Debug, Clone, Copy)]
+#[derive(ValueEnum, Default, Serialize, Debug, Clone, Copy)]
 pub enum ReportLevel {
     #[default]
     SizeOnly,
