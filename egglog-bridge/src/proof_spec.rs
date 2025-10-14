@@ -6,6 +6,7 @@ use crate::core_relations::{
 };
 use crate::numeric_id::{DenseIdMap, NumericId, define_id};
 use crate::rule::Variable;
+use egglog_reports::ReportLevel;
 use hashbrown::{HashMap, HashSet};
 
 use crate::{
@@ -505,7 +506,7 @@ impl EGraph {
                 rb.build();
                 let rs = rsb.build();
                 atom.clear();
-                self.db.run_rule_set(&rs);
+                self.db.run_rule_set(&rs, ReportLevel::SizeOnly);
             }
             self.db.free_external_function(gfm_id);
 
@@ -542,7 +543,7 @@ impl EGraph {
                 rb.build();
                 let rs = rsb.build();
                 atom.clear();
-                self.db.run_rule_set(&rs);
+                self.db.run_rule_set(&rs, ReportLevel::SizeOnly);
             }
             self.db.free_external_function(gfm_id);
 

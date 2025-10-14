@@ -44,7 +44,7 @@ pub use egglog_bridge::FunctionRow;
 use egglog_bridge::{ColumnTy, QueryEntry};
 use egglog_core_relations as core_relations;
 use egglog_numeric_id as numeric_id;
-use egglog_reports::{IterationReport, RunReport};
+use egglog_reports::RunReport;
 use extract::{CostModel, DefaultCost, Extractor, TreeAdditiveCostModel};
 use indexmap::map::Entry;
 use log::{Level, log_enabled};
@@ -738,38 +738,13 @@ impl EGraph {
 
         let mut rule_ids = Vec::new();
         collect_rule_ids(ruleset, &self.rulesets, &mut rule_ids);
+
         let iteration_report = self
             .backend
             .run_rules(&rule_ids)
             .map_err(|e| Error::BackendError(e.to_string()))?;
-        let IterationReport {
-            changed: updated,
-            rule_reports,
-            search_and_apply_time,
-            merge_time,
-            rebuild_time,
-        } = iteration_report;
 
-        let (search_and_apply_time_per_rule, num_matches_per_rule) = rule_reports
-            .into_iter()
-            .map(|(rule, report)| {
-                (
-                    (rule.as_str().into(), report.search_and_apply_time),
-                    (rule.as_str().into(), report.num_matches),
-                )
-            })
-            .unzip();
-
-        let per_ruleset = |x| [(ruleset.to_owned(), x)].into_iter().collect();
-
-        Ok(RunReport {
-            updated,
-            search_and_apply_time_per_rule,
-            num_matches_per_rule,
-            search_and_apply_time_per_ruleset: per_ruleset(search_and_apply_time),
-            merge_time_per_ruleset: per_ruleset(merge_time),
-            rebuild_time_per_ruleset: per_ruleset(rebuild_time),
-        })
+        RunReport::singleton(ruleset, iteration_report)
     }
 
     fn add_rule(&mut self, rule: ast::ResolvedRule) -> Result<String, Error> {

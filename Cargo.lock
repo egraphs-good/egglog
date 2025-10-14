@@ -560,6 +560,7 @@ dependencies = [
  "anyhow",
  "bumpalo",
  "codspeed-divan-compat",
+ "crossbeam",
  "crossbeam-queue",
  "dashmap",
  "dyn-clone",
@@ -594,10 +595,11 @@ dependencies = [
 name = "egglog-reports"
 version = "1.0.0"
 dependencies = [
- "dashmap",
  "hashbrown 0.16.0",
  "indexmap",
  "rustc-hash",
+ "serde",
+ "serde_json",
  "web-time",
 ]
 

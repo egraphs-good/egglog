@@ -25,6 +25,7 @@ thiserror = { workspace = true }
 anyhow = { workspace = true }
 log = { workspace = true }
 petgraph = { workspace = true }
+crossbeam = { workspace = true }
 crossbeam-queue = { workspace = true }
 dashmap = { workspace = true, features = ["raw-api"] }
 web-time = { workspace = true }

@@ -1,6 +1,5 @@
 use std::sync::Arc;
 use std::sync::Mutex;
-use std::time::Duration;
 
 use core_relations::{ExecutionState, ExternalFunction, Value};
 use egglog_bridge::{
@@ -254,43 +253,23 @@ impl EGraph {
             .map_err(|e| Error::BackendError(e.to_string()))?;
 
         // Step 5: combine the reports
-        let per_ruleset = |x| [(ruleset.to_owned(), x)].into_iter().collect();
-        let mut report = RunReport::default();
-        report.updated = action_iter_report.changed || {
+        let mut query_report = RunReport::singleton(ruleset, query_iter_report);
+        let mut action_report = RunReport::singleton(ruleset, action_iter_report);
+
+        // queries don't count as updates
+        query_report.updated = false;
+        // if the scheduler says it shouldn't stop, then it's considered updated (unsaturated)
+        action_report.updated = action_report.updated || {
             let rule_ids = rules.iter().map(|(id, _)| id.as_str()).collect::<Vec<_>>();
             !record.scheduler.can_stop(&rule_ids, ruleset)
         };
 
-        report.search_and_apply_time_per_ruleset = per_ruleset(
-            query_iter_report.search_and_apply_time + action_iter_report.search_and_apply_time,
-        );
-        report.merge_time_per_ruleset =
-            per_ruleset(query_iter_report.merge_time + action_iter_report.merge_time);
-        report.rebuild_time_per_ruleset =
-            per_ruleset(query_iter_report.rebuild_time + action_iter_report.rebuild_time);
-
-        report.search_and_apply_time_per_rule = {
-            let mut map = HashMap::default();
-            for (rule, report) in query_iter_report.rule_reports.iter() {
-                *map.entry(rule.as_str().into())
-                    .or_insert_with(|| Duration::from_nanos(0)) += report.search_and_apply_time;
-            }
-            for (rule, report) in action_iter_report.rule_reports.iter() {
-                *map.entry(rule.as_str().into())
-                    .or_insert_with(|| Duration::from_nanos(0)) += report.search_and_apply_time;
-            }
-            map
-        };
-        report.num_matches_per_rule = action_iter_report
-            .rule_reports
-            .iter()
-            .map(|(rule, report)| (rule.as_str().into(), report.num_matches))
-            .collect();
+        query_report.union(action_report);
 
         self.rulesets = rulesets;
         self.schedulers = schedulers;
 
-        Ok(report)
+        Ok(query_report)
     }
 }
 
