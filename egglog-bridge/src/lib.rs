@@ -1141,6 +1141,10 @@ impl EGraph {
         self.rebuild().unwrap();
         updated
     }
+
+    pub fn set_report_level(&mut self, level: ReportLevel) {
+        self.report_level = level;
+    }
 }
 
 #[derive(Clone)]

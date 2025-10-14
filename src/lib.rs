@@ -44,7 +44,7 @@ pub use egglog_bridge::FunctionRow;
 use egglog_bridge::{ColumnTy, QueryEntry};
 use egglog_core_relations as core_relations;
 use egglog_numeric_id as numeric_id;
-use egglog_reports::RunReport;
+use egglog_reports::{ReportLevel, RunReport};
 use extract::{CostModel, DefaultCost, Extractor, TreeAdditiveCostModel};
 use indexmap::map::Entry;
 use log::{Level, log_enabled};
@@ -1424,6 +1424,10 @@ impl EGraph {
     /// Returns `None` if the function does not exist.
     pub fn get_function(&self, name: &str) -> Option<&Function> {
         self.functions.get(name)
+    }
+
+    pub fn set_report_level(&mut self, level: ReportLevel) {
+        self.backend.set_report_level(level);
     }
 
     /// A basic method for dumping the state of the database to `log::info!`.

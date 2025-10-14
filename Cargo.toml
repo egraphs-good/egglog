@@ -150,6 +150,7 @@ egglog-bridge = { workspace = true }
 egglog-numeric-id = { workspace = true }
 egglog-add-primitive = { workspace = true }
 egglog-reports = { workspace = true }
+serde_json = { workspace = true }
 
 [build-dependencies]
 chrono = { workspace = true, features = ["now"], optional = true }
