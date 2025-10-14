@@ -47,6 +47,8 @@ struct Args {
     #[arg(value_enum)]
     #[clap(long, default_value_t = ReportLevel::SizeOnly)]
     report_level: ReportLevel,
+    #[clap(long)]
+    save_report: Option<PathBuf>,
 }
 
 /// Start a command-line interface for the E-graph.
@@ -145,6 +147,17 @@ pub fn cli(mut egraph: EGraph) {
                 }
             }
         }
+    }
+
+    if let Some(report_path) = args.save_report {
+        let report = egraph.get_overall_run_report();
+        serde_json::to_writer(
+            std::fs::File::create(&report_path)
+                .unwrap_or_else(|_| panic!("Failed to create report file at {report_path:?}")),
+            &report,
+        )
+        .expect("Failed to serialize report");
+        log::info!("Saved report to {report_path:?}");
     }
 
     // no need to drop the egraph if we are going to exit
