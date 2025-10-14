@@ -22,7 +22,6 @@ define_id!(pub(crate) ReasonSpecId, u32, "A unique identifier for the step in a 
 /// Reasons provide extra provenance information accompanying a term being
 /// instantiated, or marked as equal to another term. All reasons are pointed
 /// to by a row in a terms table.
-///
 #[derive(Debug)]
 pub(crate) enum ProofReason {
     Rule(RuleData),
@@ -245,6 +244,7 @@ impl EGraph {
         term_id: Value,
         state: &mut ProofReconstructionState,
     ) -> TermProofId {
+        let term_id = self.canonicalize_term_id(term_id);
         if let Some(prev) = state.term_prf_memo.get(&(term_id, ColumnTy::Id)) {
             return *prev;
         }
@@ -293,19 +293,22 @@ impl EGraph {
         ty: ColumnTy,
         state: &mut ProofReconstructionState,
     ) -> TermId {
-        if let Some(cached) = state.term_memo.get(&(term_id, ty)) {
+        let key_id = match ty {
+            ColumnTy::Id => self.canonicalize_term_id(term_id),
+            ColumnTy::Base(_) => term_id,
+        };
+        if let Some(cached) = state.term_memo.get(&(key_id, ty)) {
             return *cached;
         }
         let res = match ty {
             ColumnTy::Id => {
-                let term_row = self.get_term_row(term_id);
+                let term_row = self.get_term_row(key_id);
                 let func = FunctionId::new(term_row[0].rep());
                 let info = &self.funcs[func];
                 // NB: this clone is needed because `get_term_row` borrows the whole egraph, though it
                 // really only needs mutable access to `db`. This is of course fixable if we wanted to get
                 // rid of the clone.
                 let schema = info.schema.clone();
-                // XXX: This is the part that breaks with proofs + local predicted vals.
                 let mut args = Vec::with_capacity(term_row.len() - 1);
                 for (ty, entry) in schema[0..schema.len() - 1].iter().zip(term_row[1..].iter()) {
                     args.push(self.reconstruct_term(*entry, *ty, state));
@@ -332,7 +335,7 @@ impl EGraph {
             }
         };
 
-        state.term_memo.insert((term_id, ty), res);
+        state.term_memo.insert((key_id, ty), res);
         res
     }
 
@@ -342,6 +345,8 @@ impl EGraph {
         r: Value,
         state: &mut ProofReconstructionState,
     ) -> EqProofId {
+        let l = self.canonicalize_term_id(l);
+        let r = self.canonicalize_term_id(r);
         if let Some(prev) = state.eq_memo.get(&(l, r)) {
             return *prev;
         }
@@ -473,6 +478,7 @@ impl EGraph {
     }
 
     fn get_term_row(&mut self, term_id: Value) -> Vec<Value> {
+        let term_id = self.canonicalize_term_id(term_id);
         let mut atom = Vec::<DstVar>::new();
         let mut cur = 0;
         loop {
