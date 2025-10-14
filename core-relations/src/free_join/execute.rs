@@ -11,7 +11,7 @@ use web_time::Instant;
 
 use crate::{
     Constraint, OffsetRange, Pool, SubsetRef,
-    action::{Bindings, ExecutionState, PredictedVals},
+    action::{Bindings, ExecutionState},
     common::{DashMap, Value},
     free_join::{
         RuleReport, RuleSetReport,
@@ -151,7 +151,6 @@ impl Database {
         if rule_set.plans.is_empty() {
             return RuleSetReport::default();
         }
-        let preds = with_pool_set(|ps| ps.get::<PredictedVals>());
         let match_counter = MatchCounter::new(rule_set.actions.n_ids());
 
         let search_and_apply_timer = Instant::now();
@@ -160,7 +159,7 @@ impl Database {
             rayon::in_place_scope(|scope| {
                 for (plan, desc, _action) in rule_set.plans.values() {
                     scope.spawn(|scope| {
-                        let join_state = JoinState::new(self, &preds);
+                        let join_state = JoinState::new(self);
                         let mut action_buf =
                             ScopedActionBuffer::new(scope, rule_set, &match_counter);
                         let mut binding_info = BindingInfo::default();
@@ -175,7 +174,6 @@ impl Database {
 
                         if action_buf.needs_flush {
                             action_buf.flush(&mut ExecutionState::new(
-                                &preds,
                                 self.read_only_view(),
                                 Default::default(),
                             ));
@@ -191,7 +189,7 @@ impl Database {
                 }
             });
         } else {
-            let join_state = JoinState::new(self, &preds);
+            let join_state = JoinState::new(self);
             // Just run all of the plans in order with a single in-place action
             // buffer.
             let mut action_buf = InPlaceActionBuffer {
@@ -219,7 +217,6 @@ impl Database {
                 );
             }
             action_buf.flush(&mut ExecutionState::new(
-                &preds,
                 self.read_only_view(),
                 Default::default(),
             ));
@@ -262,7 +259,6 @@ impl Default for ActionState {
 
 struct JoinState<'a> {
     db: &'a Database,
-    preds: &'a PredictedVals,
 }
 
 type ColumnIndexes = IdVec<ColumnId, OnceLock<Arc<ColumnIndex>>>;
@@ -349,8 +345,8 @@ impl BindingInfo {
 }
 
 impl<'a> JoinState<'a> {
-    fn new(db: &'a Database, preds: &'a PredictedVals) -> Self {
-        Self { db, preds }
+    fn new(db: &'a Database) -> Self {
+        Self { db }
     }
 
     fn get_index(
@@ -469,7 +465,7 @@ impl<'a> JoinState<'a> {
     {
         if cur >= instr_order.len() {
             action_buf.push_bindings(plan.stages.actions, &binding_info.bindings, || {
-                ExecutionState::new(self.preds, self.db.read_only_view(), Default::default())
+                ExecutionState::new(self.db.read_only_view(), Default::default())
             });
             return;
         }
@@ -504,7 +500,6 @@ impl<'a> JoinState<'a> {
         }
         macro_rules! drain_updates_parallel {
             ($updates:expr) => {{
-                let predicted = self.preds;
                 let db = self.db;
                 action_buf.recur(
                     BorrowedLocalState {
@@ -512,7 +507,7 @@ impl<'a> JoinState<'a> {
                         instr_order,
                         updates: &mut $updates,
                     },
-                    move || ExecutionState::new(predicted, db.read_only_view(), Default::default()),
+                    move || ExecutionState::new(db.read_only_view(), Default::default()),
                     move |BorrowedLocalState {
                               binding_info,
                               instr_order,
@@ -527,11 +522,7 @@ impl<'a> JoinState<'a> {
                                 binding_info.insert_subset(atom, subset);
                             }
                             UpdateInstr::EndFrame => {
-                                JoinState {
-                                    db,
-                                    preds: predicted,
-                                }
-                                .run_plan(
+                                JoinState { db }.run_plan(
                                     plan,
                                     instr_order,
                                     cur + 1,

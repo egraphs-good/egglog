@@ -305,6 +305,7 @@ impl EGraph {
                 // really only needs mutable access to `db`. This is of course fixable if we wanted to get
                 // rid of the clone.
                 let schema = info.schema.clone();
+                // XXX: This is the part that breaks with proofs + local predicted vals.
                 let mut args = Vec::with_capacity(term_row.len() - 1);
                 for (ty, entry) in schema[0..schema.len() - 1].iter().zip(term_row[1..].iter()) {
                     args.push(self.reconstruct_term(*entry, *ty, state));

@@ -9,6 +9,7 @@
 //! joins, union-finds, etc.
 
 use std::{
+    cmp,
     fmt::Debug,
     hash::Hash,
     iter, mem,
@@ -264,12 +265,23 @@ impl EGraph {
         match self.term_tables.entry(spec.n_keys) {
             Entry::Occupied(o) => *o.get(),
             Entry::Vacant(v) => {
+                let term_index = spec.n_keys + 1;
                 let table = SortedWritesTable::new(
                     spec.n_keys + 1,     // added entry for the tableid
                     spec.n_keys + 1 + 2, // one value for the term id, one for the reason,
                     None,
                     vec![], // no rebuilding needed for term table
-                    Box::new(|_, _, _, _| false),
+                    Box::new(move |_, old, new, out| {
+                        // We want to pick the minimum term value.
+                        let l_term_id = old[term_index];
+                        let r_term_id = new[term_index];
+                        if r_term_id < l_term_id {
+                            out.extend(new);
+                            true
+                        } else {
+                            false
+                        }
+                    }),
                 );
                 let table_id = self.db.add_table(table, iter::empty(), iter::empty());
                 *v.insert(table_id)
@@ -1140,6 +1152,13 @@ impl MergeFn {
                 changed |= cur != out;
                 out
             });
+            let mut proof = None;
+            if schema_math.tracing {
+                let old_term = cur[schema_math.proof_id_col()];
+                let new_term = new[schema_math.proof_id_col()];
+                proof = Some(cmp::min(old_term, new_term));
+                changed |= new_term < old_term;
+            }
 
             if changed {
                 out.extend_from_slice(new);
@@ -1147,7 +1166,7 @@ impl MergeFn {
                     out,
                     RowVals {
                         timestamp,
-                        proof: None,
+                        proof,
                         subsume,
                         ret_val: Some(ret_val),
                     },
