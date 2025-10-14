@@ -30,11 +30,11 @@ jobs:
       matrix:
         runner: [codspeed-macro, ubuntu-latest]
         benchmark:
+          - math-microbenchmark
           - cykjson
           - eggcc-extraction
           - extract-vec-bench
           - herbie
-          - math-microbenchmark
           - python_array_optimize
           - repro-665-set-union
           - stresstest_large_expr
