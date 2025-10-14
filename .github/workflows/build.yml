@@ -28,8 +28,17 @@ jobs:
     runs-on: ${{ matrix.runner }}
     strategy:
       matrix:
-        runner: [ codspeed-macro, ubuntu-latest ]
-        benchmark: [ cykjson, eggcc-extraction, extract-vec-bench, herbie, math-microbenchmark, repro-665-set-union, stresstest_large_expr, typeinfer  ]
+        runner: [codspeed-macro, ubuntu-latest]
+        benchmark:
+          - cykjson
+          - eggcc-extraction
+          - extract-vec-bench
+          - herbie
+          - math-microbenchmark
+          - python_array_optimize
+          - repro-665-set-union
+          - stresstest_large_expr
+          - typeinfer
     steps:
       - run: echo "CARGO_INCREMENTAL=0" >> "$GITHUB_ENV"
       - uses: actions/checkout@v4
