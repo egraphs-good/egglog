@@ -22,6 +22,36 @@ fn test_simple_extract1() {
 }
 
 #[test]
+fn primitive_error_in_extract_returns_error() {
+    let _ = env_logger::builder().is_test(true).try_init();
+
+    let mut egraph = EGraph::default();
+    // Evaluating this primitive should surface a user-facing error instead of
+    // panicking when the primitive fails.
+    let err = egraph
+        .parse_and_run_program(None, "(extract (<< 1 10000))")
+        .unwrap_err();
+    assert!(err.to_string().contains("call of primitive << failed"));
+}
+
+#[test]
+fn primitive_error_in_run_schedule_returns_error() {
+    let _ = env_logger::builder().is_test(true).try_init();
+
+    let mut egraph = EGraph::default();
+    let program = r#"
+        (ruleset problematic)
+        (rule ()
+              ((let tmp (<< 1 10000)))
+              :ruleset problematic)
+        (run-schedule (run problematic))
+    "#;
+
+    let err = egraph.parse_and_run_program(None, program).unwrap_err();
+    assert!(err.to_string().contains("call of primitive << failed"));
+}
+
+#[test]
 fn test_simple_extract2() {
     let _ = env_logger::builder().is_test(true).try_init();
 
