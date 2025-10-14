@@ -1,10 +1,11 @@
 <!DOCTYPE html>
 <html lang="en">
+
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <title>Rule Engine Profiler</title>
-    <script src="https://cdnjs.cloudflare.com/ajax/libs/Chart.js/3.9.1/chart.min.js"></script>
+    <title>egglog profiler</title>
+    <script src="https://cdn.jsdelivr.net/npm/chart.js@4.5.1"></script>
     <style>
         * {
             margin: 0;
@@ -34,7 +35,7 @@
             background: white;
             padding: 30px;
             border-radius: 8px;
-            box-shadow: 0 2px 8px rgba(0,0,0,0.1);
+            box-shadow: 0 2px 8px rgba(0, 0, 0, 0.1);
             margin-bottom: 30px;
             text-align: center;
         }
@@ -62,7 +63,7 @@
             background: white;
             padding: 25px;
             border-radius: 8px;
-            box-shadow: 0 2px 8px rgba(0,0,0,0.1);
+            box-shadow: 0 2px 8px rgba(0, 0, 0, 0.1);
             margin-bottom: 30px;
         }
 
@@ -218,10 +219,11 @@
         }
     </style>
 </head>
+
 <body>
     <div class="container">
         <h1>egglog profiler</h1>
-        
+
         <div class="upload-section">
             <h2>Upload Profile JSON</h2>
             <br>
@@ -239,6 +241,9 @@
 
             <div class="section">
                 <h2>1. Time Breakdown Per Iteration</h2>
+                <div style="margin-bottom: 10px;">
+                    <label><input type="checkbox" id="sortIterations" checked> Sort by most time spent</label>
+                </div>
                 <div class="chart-container">
                     <canvas id="iterationChart"></canvas>
                 </div>
@@ -247,6 +252,9 @@
             <div class="section">
                 <h2>2. Rule Time Breakdown by Iteration</h2>
                 <div class="iteration-selector" id="iterationSelector"></div>
+                <div style="margin-bottom: 10px;">
+                    <label><input type="checkbox" id="hideRuleNames" checked> Hide rule names on x-axis</label>
+                </div>
                 <div class="chart-container">
                     <canvas id="ruleChart"></canvas>
                 </div>
@@ -260,11 +268,12 @@
     </div>
 
     <script>
-    let profileData = null;
-    let iterationChart = null;
-    let ruleChart = null;
-    let selectedIteration = 0;
-    let selectedRule = null;
+        let profileData = null;
+        let iterationChart = null;
+        let ruleChart = null;
+        let selectedIteration = 0;
+        let selectedRule = null;
+        let showAllIterations = false;
 
         document.getElementById('fileInput').addEventListener('change', handleFileUpload);
 
@@ -275,7 +284,7 @@
             document.getElementById('fileName').textContent = `Loading ${file.name}...`;
 
             const reader = new FileReader();
-            reader.onload = function(e) {
+            reader.onload = function (e) {
                 try {
                     profileData = JSON.parse(e.target.result);
                     document.getElementById('fileName').textContent = `Loaded: ${file.name}`;
@@ -312,12 +321,16 @@
             createIterationSelector();
             createRuleChart(selectedIteration);
             createQueryPlans();
+            document.getElementById('sortIterations').addEventListener('change', createIterationChart);
+            document.getElementById('hideRuleNames').addEventListener('change', function () {
+                createRuleChart(selectedIteration);
+            });
         }
 
         function createSummaryStats() {
             const statsDiv = document.getElementById('summaryStats');
             const totalIterations = profileData.iterations.length;
-            
+
             let totalTime = 0;
             profileData.iterations.forEach(iter => {
                 totalTime += durationToMs(iter.rule_set_report.search_and_apply_time);
@@ -335,7 +348,7 @@
                 </div>
                 <div class="stat-card">
                     <div class="stat-label">Total Time</div>
-                    <div class="stat-value">${formatDuration({secs: Math.floor(totalTime/1000), nanos: (totalTime%1000)*1000000})}</div>
+                    <div class="stat-value">${formatDuration({ secs: Math.floor(totalTime / 1000), nanos: (totalTime % 1000) * 1000000 })}</div>
                 </div>
                 <div class="stat-card">
                     <div class="stat-label">Total Rules</div>
@@ -350,17 +363,26 @@
 
         function createIterationChart() {
             const ctx = document.getElementById('iterationChart').getContext('2d');
-            
-            const labels = profileData.iterations.map((_, i) => `Iteration ${i + 1}`);
-            const searchApplyData = profileData.iterations.map(iter => 
-                durationToMs(iter.rule_set_report.search_and_apply_time)
-            );
-            const mergeData = profileData.iterations.map(iter => 
-                durationToMs(iter.rule_set_report.merge_time)
-            );
-            const rebuildData = profileData.iterations.map(iter => 
-                durationToMs(iter.rebuild_time)
-            );
+            const sortByTime = document.getElementById('sortIterations').checked;
+            let iterations = profileData.iterations.map((iter, i) => {
+                const searchApply = durationToMs(iter.rule_set_report.search_and_apply_time);
+                const merge = durationToMs(iter.rule_set_report.merge_time);
+                const rebuild = durationToMs(iter.rebuild_time);
+                return {
+                    label: `Iteration ${i + 1}`,
+                    searchApply,
+                    merge,
+                    rebuild,
+                    total: searchApply + merge + rebuild
+                };
+            });
+            if (sortByTime) {
+                iterations.sort((a, b) => b.total - a.total);
+            }
+            const labels = iterations.map(it => it.label);
+            const searchApplyData = iterations.map(it => it.searchApply);
+            const mergeData = iterations.map(it => it.merge);
+            const rebuildData = iterations.map(it => it.rebuild);
 
             if (iterationChart) {
                 iterationChart.destroy();
@@ -372,11 +394,6 @@
                     labels: labels,
                     datasets: [
                         {
-                            label: 'Search & Apply',
-                            data: searchApplyData,
-                            backgroundColor: '#3498db',
-                        },
-                        {
                             label: 'Merge',
                             data: mergeData,
                             backgroundColor: '#2ecc71',
@@ -385,6 +402,11 @@
                             label: 'Rebuild',
                             data: rebuildData,
                             backgroundColor: '#e74c3c',
+                        },
+                        {
+                            label: 'Search & Apply',
+                            data: searchApplyData,
+                            backgroundColor: '#3498db',
                         }
                     ]
                 },
@@ -406,7 +428,7 @@
                     plugins: {
                         tooltip: {
                             callbacks: {
-                                label: function(context) {
+                                label: function (context) {
                                     return `${context.dataset.label}: ${context.parsed.y.toFixed(2)}ms`;
                                 }
                             }
@@ -419,20 +441,50 @@
         function createIterationSelector() {
             const selector = document.getElementById('iterationSelector');
             selector.innerHTML = '<strong>Select Iteration:</strong>';
-            profileData.iterations.forEach((_, index) => {
+            const sortByTime = document.getElementById('sortIterations').checked;
+            let iterations = profileData.iterations.map((iter, i) => {
+                const searchApply = durationToMs(iter.rule_set_report.search_and_apply_time);
+                const merge = durationToMs(iter.rule_set_report.merge_time);
+                const rebuild = durationToMs(iter.rebuild_time);
+                return {
+                    label: `Iteration ${i + 1}`,
+                    index: i,
+                    total: searchApply + merge + rebuild
+                };
+            });
+            if (sortByTime) {
+                iterations.sort((a, b) => b.total - a.total);
+            }
+            let displayIterations = iterations;
+            if (!showAllIterations && iterations.length > 50) {
+                displayIterations = iterations.slice(0, 50);
+            }
+            displayIterations.forEach((it) => {
                 const btn = document.createElement('button');
-                btn.className = 'iteration-btn' + (index === selectedIteration ? ' active' : '');
-                btn.textContent = `Iteration ${index + 1}`;
+                btn.className = 'iteration-btn' + (it.index === selectedIteration ? ' active' : '');
+                btn.textContent = it.label;
                 btn.onclick = () => {
-                    selectedIteration = index;
+                    selectedIteration = it.index;
                     selectedRule = null;
                     document.querySelectorAll('.iteration-btn').forEach(b => b.classList.remove('active'));
                     btn.classList.add('active');
-                    createRuleChart(index);
+                    createRuleChart(it.index);
                     createQueryPlans();
                 };
                 selector.appendChild(btn);
             });
+            if (iterations.length > 50) {
+                const toggleBtn = document.createElement('button');
+                toggleBtn.className = 'iteration-btn';
+                toggleBtn.style.background = '#eee';
+                toggleBtn.style.color = '#333';
+                toggleBtn.textContent = showAllIterations ? 'Show top 50 only' : `Show all (${iterations.length}) iterations`;
+                toggleBtn.onclick = () => {
+                    showAllIterations = !showAllIterations;
+                    createIterationSelector();
+                };
+                selector.appendChild(toggleBtn);
+            }
         }
 
         // Removed rule selector UI per new requirements
@@ -452,31 +504,37 @@
             // Only top 50
             ruleTimes = ruleTimes.slice(0, 50);
 
-            const ruleNames = ruleTimes.map(rt => rt.rule);
-            const searchApplyData = ruleTimes.map(rt => rt.totalTime);
-
+            // Merge and rebuild times
             const mergeTime = durationToMs(iteration.rule_set_report.merge_time);
             const rebuildTime = durationToMs(iteration.rebuild_time);
+
+            // Compose labels and data arrays
+            const showRuleNames = !document.getElementById('hideRuleNames').checked ? true : false;
+            const ruleNames = ruleTimes.map(rt => rt.rule);
+            const labels = ['Merge', 'Rebuild', ...ruleNames.map(rn => showRuleNames ? rn : '')];
+            const data = [mergeTime, rebuildTime, ...ruleTimes.map(rt => rt.totalTime)];
+
+            // Highlight color for selected rule
+            const highlightColor = '#f39c12';
+            const defaultColor = '#3498db';
+            const mergeColor = '#2ecc71';
+            const rebuildColor = '#e74c3c';
+            const backgroundColors = [mergeColor, rebuildColor, ...ruleNames.map(rule =>
+                selectedRule === rule ? highlightColor : defaultColor
+            )];
 
             if (ruleChart) {
                 ruleChart.destroy();
             }
 
-            // Highlight color for selected rule
-            const highlightColor = '#f39c12';
-            const defaultColor = '#3498db';
-            const backgroundColors = ruleNames.map(rule =>
-                selectedRule === rule ? highlightColor : defaultColor
-            );
-
             ruleChart = new Chart(ctx, {
                 type: 'bar',
                 data: {
-                    labels: ruleNames,
+                    labels: labels,
                     datasets: [
                         {
-                            label: 'Search & Apply',
-                            data: searchApplyData,
+                            label: 'Time',
+                            data: data,
                             backgroundColor: backgroundColors,
                         }
                     ]
@@ -485,6 +543,12 @@
                     responsive: true,
                     maintainAspectRatio: false,
                     scales: {
+                        x: {
+                            title: {
+                                display: true,
+                                text: showRuleNames ? 'Rule' : ''
+                            }
+                        },
                         y: {
                             title: {
                                 display: true,
@@ -495,23 +559,38 @@
                     plugins: {
                         tooltip: {
                             callbacks: {
-                                afterBody: function(context) {
+                                afterBody: function (context) {
                                     if (context[0].dataIndex === 0) {
                                         return [
-                                            `\nIteration totals:`,
-                                            `Merge: ${mergeTime.toFixed(2)}ms`,
+                                            `\nMerge: ${mergeTime.toFixed(2)}ms`,
                                             `Rebuild: ${rebuildTime.toFixed(2)}ms`
                                         ];
                                     }
                                     return [];
                                 }
                             }
+                        },
+                        legend: {
+                            display: true,
+                            events: [],
+                            labels: {
+                                generateLabels: function () {
+                                    return [
+                                        { text: 'Merge', fillStyle: mergeColor },
+                                        { text: 'Rebuild', fillStyle: rebuildColor },
+                                        { text: 'Rule', fillStyle: defaultColor },
+                                        { text: 'Selected Rule', fillStyle: highlightColor }
+                                    ];
+                                }
+                            }
                         }
                     },
-                    onClick: function(evt, elements) {
+                    onClick: function (evt, elements) {
                         if (elements.length > 0) {
                             const idx = elements[0].index;
-                            const clickedRule = ruleNames[idx];
+                            // Only allow selection for rule bars (not merge/rebuild)
+                            if (idx < 2) return;
+                            const clickedRule = ruleNames[idx - 2];
                             if (selectedRule === clickedRule) {
                                 selectedRule = null;
                             } else {
@@ -583,7 +662,7 @@
             plan.stages.forEach(([stage, stats, nextStages], index) => {
                 html += `<div class="stage">`;
                 html += `<div class="stage-header">Stage ${index}</div>`;
-                
+
                 if (stage.Intersect) {
                     html += `<span class="stage-type">Intersect</span>`;
                     stage.Intersect.scans.forEach(scan => {
@@ -597,7 +676,7 @@
                     coverScans.forEach(([col, val]) => {
                         html += `<div class="scan-info" style="margin-left: 20px;">  ${col} = ${val}</div>`;
                     });
-                    
+
                     html += `<div class="scan-info" style="margin-top: 10px;"><strong>Intersect (Probe):</strong></div>`;
                     stage.FusedIntersect.to_intersect.forEach(([table, scans]) => {
                         html += `<div class="scan-info" style="margin-left: 20px;">${table}</div>`;
@@ -626,4 +705,5 @@
         }
     </script>
 </body>
+
 </html>
