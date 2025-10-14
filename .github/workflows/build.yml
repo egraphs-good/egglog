@@ -25,7 +25,10 @@ jobs:
     - uses: Swatinem/rust-cache@v2
     - run: make nits
   benchmark:
-    runs-on: ubuntu-latest
+    runs-on: ${{ matrix.runner }}
+    strategy:
+      matrix:
+        runner: [ codspeed-macro, ubuntu-latest ]
     steps:
       - run: echo "CARGO_INCREMENTAL=0" >> "$GITHUB_ENV"
       - uses: actions/checkout@v4
@@ -37,7 +40,7 @@ jobs:
       - uses: CodSpeedHQ/action@v4
         with:
           run: cargo codspeed run
-          mode: "instrumentation"
+          mode: ${{ matrix.runner == 'ubuntu-latest' && 'instrumentation' || 'walltime' }}
   wasm:
     runs-on: ubuntu-latest
     steps:

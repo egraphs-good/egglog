@@ -1,3 +1,4 @@
+;; benchmark for many set unions
 ;; https://github.com/egraphs-good/egglog/issues/665
 (sort IntSet (Set i64))
 (relation R (i64))
@@ -5,7 +6,7 @@
 
 (R 0)
 (rule
-    ((R i) (< i 5000))
+    ((R i) (< i 2000))
     ((R (+ i 1))
      (set (f) (set-of i))))
 
