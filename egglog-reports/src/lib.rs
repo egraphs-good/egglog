@@ -1,5 +1,5 @@
 use rustc_hash::FxHasher;
-use serde::{Deserialize, Serialize};
+use serde::Serialize;
 use std::{
     fmt::{Display, Formatter},
     hash::BuildHasherDefault,
@@ -11,7 +11,7 @@ pub(crate) type HashMap<K, V> = hashbrown::HashMap<K, V, BuildHasherDefault<FxHa
 pub(crate) type IndexSet<T> = indexmap::IndexSet<T, BuildHasherDefault<FxHasher>>;
 // pub(crate) type IndexMap<K, V> = indexmap::IndexMap<K, V, BuildHasherDefault<FxHasher>>;
 
-#[derive(Default, Serialize, Deserialize, Debug, Clone, Copy)]
+#[derive(Default, Serialize, Debug, Clone, Copy)]
 pub enum ReportLevel {
     #[default]
     SizeOnly,
@@ -19,12 +19,12 @@ pub enum ReportLevel {
     StageInfo,
 }
 
-#[derive(Serialize, Deserialize, Clone, Debug)]
-pub struct SingleScan(String, (String, i64));
-#[derive(Serialize, Deserialize, Clone, Debug)]
-pub struct Scan(String, Vec<(String, i64)>);
+#[derive(Serialize, Clone, Debug)]
+pub struct SingleScan(pub String, pub (String, i64));
+#[derive(Serialize, Clone, Debug)]
+pub struct Scan(pub String, pub Vec<(String, i64)>);
 
-#[derive(Serialize, Deserialize, Clone, Debug)]
+#[derive(Serialize, Clone, Debug)]
 pub enum Stage {
     Intersect {
         scans: Vec<SingleScan>,
@@ -35,7 +35,7 @@ pub enum Stage {
     },
 }
 
-#[derive(Serialize, Clone, Deserialize, Debug)]
+#[derive(Serialize, Clone, Debug)]
 pub struct StageStats {
     pub num_candidates: usize,
     pub num_succeeded: usize,
@@ -43,7 +43,7 @@ pub struct StageStats {
 
 #[derive(Serialize, Clone, Debug, Default)]
 pub struct Plan {
-    stages: Vec<(
+    pub stages: Vec<(
         Stage,
         Option<StageStats>,
         // indices of next stages
@@ -51,7 +51,7 @@ pub struct Plan {
     )>,
 }
 
-#[derive(Debug, Clone, Default)]
+#[derive(Debug, Serialize, Clone, Default)]
 pub struct RuleReport {
     pub plan: Option<Plan>,
     pub search_and_apply_time: Duration,
@@ -59,7 +59,7 @@ pub struct RuleReport {
     pub num_matches: usize,
 }
 
-#[derive(Debug, Clone, Default)]
+#[derive(Debug, Serialize, Clone, Default)]
 pub struct RuleSetReport {
     pub changed: bool,
     pub rule_reports: HashMap<String, Vec<RuleReport>>,
@@ -90,7 +90,7 @@ impl RuleSetReport {
     }
 }
 
-#[derive(Debug, Clone, Default)]
+#[derive(Debug, Serialize, Clone, Default)]
 pub struct IterationReport {
     pub rule_set_report: RuleSetReport,
     pub rebuild_time: Duration,
@@ -119,7 +119,7 @@ impl IterationReport {
 /// the database was updated.
 /// Calling `union` on two run reports adds the timing
 /// information together.
-#[derive(Debug, Clone, Default)]
+#[derive(Debug, Serialize, Clone, Default)]
 pub struct RunReport {
     pub iterations: Vec<IterationReport>,
     /// If any changes were made to the database.
@@ -226,6 +226,7 @@ impl RunReport {
         report.merge_time_per_ruleset = per_ruleset(iteration.search_and_apply_time());
         report.rebuild_time_per_ruleset = per_ruleset(iteration.search_and_apply_time());
         report.updated = iteration.changed();
+        report.iterations.push(iteration);
 
         report
     }

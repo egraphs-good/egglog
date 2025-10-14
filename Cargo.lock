@@ -500,6 +500,7 @@ dependencies = [
  "ordered-float",
  "rayon",
  "rustc-hash",
+ "serde_json",
  "thiserror",
  "web-time",
 ]
@@ -791,6 +792,7 @@ dependencies = [
  "allocator-api2",
  "equivalent",
  "foldhash 0.2.0",
+ "serde",
 ]
 
 [[package]]

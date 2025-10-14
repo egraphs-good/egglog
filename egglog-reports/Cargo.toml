@@ -9,7 +9,7 @@ license = { workspace = true }
 readme = { workspace = true }
 
 [dependencies]
-hashbrown = { workspace = true }
+hashbrown = { workspace = true, features = ["serde"] }
 indexmap = { workspace = true }
 rustc-hash = { workspace = true }
 web-time = { workspace = true }

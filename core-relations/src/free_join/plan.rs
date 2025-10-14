@@ -168,8 +168,85 @@ pub(crate) struct Plan {
     pub stages: JoinStages,
 }
 impl Plan {
-    pub(crate) fn to_report(&self, _symbol_map: &SymbolMap) -> egglog_reports::Plan {
-        todo!()
+    pub(crate) fn to_report(&self, symbol_map: &SymbolMap) -> egglog_reports::Plan {
+        use egglog_reports::{
+            Plan as ReportPlan, Scan as ReportScan, SingleScan as ReportSingleScan,
+            Stage as ReportStage,
+        };
+        let get_var = |var: Variable| {
+            symbol_map
+                .vars
+                .get(&var)
+                .map(|s| s.to_string())
+                .unwrap_or_else(|| format!("$x{:?}", var))
+        };
+        let get_atom = |atom: AtomId| {
+            symbol_map
+                .atoms
+                .get(&atom)
+                .map(|s| s.to_string())
+                .unwrap_or_else(|| format!("$R{:?}", atom))
+        };
+        let mut stages = Vec::new();
+        for (i, stage) in self.stages.instrs.iter().enumerate() {
+            let report_stage = match stage {
+                JoinStage::Intersect { var, scans } => {
+                    let var_name = get_var(*var);
+                    let report_scans = scans
+                        .iter()
+                        .map(|scan| {
+                            let atom_name = get_atom(scan.atom);
+                            ReportSingleScan(
+                                atom_name,
+                                (var_name.clone(), scan.column.index() as i64),
+                            )
+                        })
+                        .collect();
+                    ReportStage::Intersect {
+                        scans: report_scans,
+                    }
+                }
+                JoinStage::FusedIntersect {
+                    cover,
+                    bind: _,
+                    to_intersect,
+                } => {
+                    let cover_atom_name = get_atom(cover.to_index.atom);
+                    let cover_cols: Vec<(String, i64)> = cover
+                        .to_index
+                        .vars
+                        .iter()
+                        .map(|col| {
+                            let var_name =
+                                get_var(self.atoms[cover.to_index.atom].column_to_var[*col]);
+                            (var_name, col.index() as i64)
+                        })
+                        .collect();
+                    let report_cover = ReportScan(cover_atom_name, cover_cols);
+                    let report_to_intersect = to_intersect
+                        .iter()
+                        .map(|(scan, key_spec)| {
+                            let atom_name = get_atom(scan.to_index.atom);
+                            let cols: Vec<(String, i64)> = key_spec
+                                .iter()
+                                .map(|col| {
+                                    let var_name =
+                                        get_var(self.atoms[scan.to_index.atom].column_to_var[*col]);
+                                    (var_name, col.index() as i64)
+                                })
+                                .collect();
+                            ReportScan(atom_name, cols)
+                        })
+                        .collect();
+                    ReportStage::FusedIntersect {
+                        cover: report_cover,
+                        to_intersect: report_to_intersect,
+                    }
+                }
+            };
+            stages.push((report_stage, None, vec![i + 1]));
+        }
+        ReportPlan { stages }
     }
 }
 
