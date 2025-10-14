@@ -989,12 +989,8 @@ impl EGraph {
                         .map_err(|e| Error::IoError(path.clone().into(), e, span.clone()))?;
                     log::info!("Printed overall statistics to json file {}", path);
 
-                    file.write_all(
-                        serde_json::to_string(&self.overall_run_report)
-                            .expect("error serializing to json")
-                            .as_bytes(),
-                    )
-                    .expect("Error writing to file");
+                    serde_json::to_writer(&mut file, &self.overall_run_report)
+                        .expect("error serializing to json");
                 }
             },
             ResolvedNCommand::Check(span, facts) => {
