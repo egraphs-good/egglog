@@ -1,7 +1,9 @@
 use hashbrown::HashMap;
 
 use crate::{
-    rule::{Variable, VariableId}, syntax::SyntaxId, ColumnTy, FunctionId, QueryEntry, RuleBuilder, SourceExpr, SourceSyntax
+    ColumnTy, FunctionId, QueryEntry, RuleBuilder, SourceExpr, SourceSyntax,
+    rule::{Variable, VariableId},
+    syntax::SyntaxId,
 };
 
 #[macro_export]

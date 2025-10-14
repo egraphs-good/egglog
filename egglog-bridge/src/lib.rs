@@ -914,7 +914,7 @@ impl EGraph {
                                 &mut self.rules,
                                 &[*rule],
                                 ts,
-                                self.report_level,
+                                ReportLevel::SizeOnly,
                             )?
                             .changed;
                         }
@@ -929,7 +929,7 @@ impl EGraph {
                             &mut self.rules,
                             &[info.nonincremental_rebuild_rule],
                             ts,
-                            self.report_level,
+                            ReportLevel::SizeOnly,
                         )?
                         .changed;
                         for rule in &info.incremental_rebuild_rules {
@@ -1002,7 +1002,7 @@ impl EGraph {
                 &mut self.rules,
                 &scratch,
                 ts,
-                self.report_level,
+                ReportLevel::SizeOnly,
             )?
             .changed;
             scratch.clear();
@@ -1018,7 +1018,7 @@ impl EGraph {
                     &mut self.rules,
                     &scratch,
                     ts,
-                    self.report_level,
+                    ReportLevel::SizeOnly,
                 )?
                 .changed;
                 scratch.clear();

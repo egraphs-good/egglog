@@ -2,10 +2,13 @@
 
 use std::{
     cmp, iter, mem,
-    sync::{atomic::AtomicUsize, Arc, OnceLock}, usize,
+    sync::{Arc, OnceLock, atomic::AtomicUsize},
 };
 
-use crate::{common::HashMap, numeric_id::{DenseIdMap, IdVec, NumericId}};
+use crate::{
+    common::HashMap,
+    numeric_id::{DenseIdMap, IdVec, NumericId},
+};
 use crossbeam::utils::CachePadded;
 use dashmap::mapref::one::RefMut;
 use egglog_reports::{ReportLevel, RuleReport, RuleSetReport};
@@ -164,7 +167,9 @@ impl Database {
                     // TODO: add stats
                     let report_plan = match report_level {
                         ReportLevel::SizeOnly => None,
-                        ReportLevel::WithPlan | ReportLevel::StageInfo => Some(plan.to_report(&symbol_map)),
+                        ReportLevel::WithPlan | ReportLevel::StageInfo => {
+                            Some(plan.to_report(symbol_map))
+                        }
                     };
                     scope.spawn(|scope| {
                         let join_state = JoinState::new(self);
@@ -191,7 +196,7 @@ impl Database {
                         rule_report.value_mut().push(RuleReport {
                             plan: report_plan,
                             search_and_apply_time,
-                            num_matches: 0,
+                            num_matches: usize::MAX,
                         });
                     });
                 }
@@ -210,7 +215,9 @@ impl Database {
             for (plan, desc, symbol_map, _action) in rule_set.plans.values() {
                 let report_plan = match report_level {
                     ReportLevel::SizeOnly => None,
-                    ReportLevel::WithPlan | ReportLevel::StageInfo => Some(plan.to_report(symbol_map)),
+                    ReportLevel::WithPlan | ReportLevel::StageInfo => {
+                        Some(plan.to_report(symbol_map))
+                    }
                 };
                 let mut binding_info = BindingInfo::default();
                 for (id, info) in plan.atoms.iter() {
@@ -236,7 +243,10 @@ impl Database {
         }
         for (_plan, desc, _symbol_map, action) in rule_set.plans.values() {
             let reports = rule_reports.get_mut(desc).unwrap();
-            let i = reports.iter().position(|r| r.num_matches == usize::MAX).unwrap();
+            let i = reports
+                .iter()
+                .position(|r| r.num_matches == usize::MAX)
+                .unwrap();
             reports[i].num_matches = match_counter.read_matches(*action);
         }
         let search_and_apply_time = search_and_apply_timer.elapsed();
