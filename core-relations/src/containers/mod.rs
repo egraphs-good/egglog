@@ -290,7 +290,6 @@ impl LazyMapOfIndexSet {
     /// Lazily inserts a value for all keys in the given index set.
     /// The actual insertion will be performed when the map is next accessed.
     pub fn insert_for_all_keys(&self, keys: IndexSet<Value>, value: Value) {
-        println!("insert keys_len: {}", keys.len());
         if keys.len() < LAZY_BOUND {
             for key in keys {
                 self.val_index.entry(key).or_default().insert(value);
