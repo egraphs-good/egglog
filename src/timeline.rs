@@ -80,7 +80,26 @@ fn main() {
         });
     }
 
-    if input.ends_with("/") {
+    if input.ends_with(".egg") {
+        let input_path = PathBuf::from(input);
+        if !input_path.exists() {
+            eprintln!("File not found: {}", input);
+            std::process::exit(1);
+        }
+
+        let output_path = output_dir.join(format!(
+            "{}.json",
+            input_path.file_stem().unwrap().to_string_lossy()
+        ));
+
+        match run_egglog_file_with_timeline_output(&input_path, &output_path) {
+            Ok(_) => println!("Output written to {}", output_path.display()),
+            Err(e) => {
+                eprintln!("Error: {}", e);
+                std::process::exit(1);
+            }
+        }
+    } else {
         let input_path = PathBuf::from(input);
         if !input_path.is_dir() {
             eprintln!("Directory not found: {}", input);
@@ -114,27 +133,5 @@ fn main() {
                 std::process::exit(1);
             }
         }
-    } else if input.ends_with(".egg") {
-        let input_path = PathBuf::from(input);
-        if !input_path.exists() {
-            eprintln!("File not found: {}", input);
-            std::process::exit(1);
-        }
-
-        let output_path = output_dir.join(format!(
-            "{}.json",
-            input_path.file_stem().unwrap().to_string_lossy()
-        ));
-
-        match run_egglog_file_with_timeline_output(&input_path, &output_path) {
-            Ok(_) => println!("Output written to {}", output_path.display()),
-            Err(e) => {
-                eprintln!("Error: {}", e);
-                std::process::exit(1);
-            }
-        }
-    } else {
-        eprintln!("Invalid argument: {}", input);
-        std::process::exit(1);
     }
 }
