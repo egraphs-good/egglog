@@ -1,4 +1,4 @@
-use clap::ValueEnum;
+use clap::clap_derive::ValueEnum;
 use rustc_hash::FxHasher;
 use serde::Serialize;
 use std::{
