@@ -517,6 +517,7 @@ impl<'a> ExecutionState<'a> {
 }
 
 impl ExecutionState<'_> {
+    /// Returns the number of matches that make it to the end of the instructions
     pub(crate) fn run_instrs(&mut self, instrs: &[Instr], bindings: &mut Bindings) -> usize {
         if bindings.var_offsets.next_id().rep() == 0 {
             // If we have no variables, we want to run the rules once.

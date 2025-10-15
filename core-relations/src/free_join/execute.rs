@@ -1144,11 +1144,7 @@ fn estimate_size(join_stage: &JoinStage, binding_info: &BindingInfo) -> usize {
 fn num_intersected_rels(join_stage: &JoinStage) -> i32 {
     match join_stage {
         JoinStage::Intersect { scans, .. } => scans.len() as i32,
-        JoinStage::FusedIntersect { .. } => {
-            // TODO: currently to_intersect is always empty. FusedIntersect in basically
-            // a multi-column scan.
-            1
-        }
+        JoinStage::FusedIntersect { to_intersect, .. } => to_intersect.len() as i32 + 1,
     }
 }
 
@@ -1158,7 +1154,10 @@ fn sort_plan_by_size(
     instrs: &[JoinStage],
     binding_info: &mut BindingInfo,
 ) {
+    // How many times an atom has been intersected/joined
     let mut times_refined = with_pool_set(|ps| ps.get::<DenseIdMap<AtomId, i64>>());
+
+    // Count how many times each atom has been refined so far.
     for ins in instrs[..start].iter() {
         match ins {
             JoinStage::Intersect { scans, .. } => scans.iter().for_each(|scan| {
@@ -1170,6 +1169,12 @@ fn sort_plan_by_size(
             }
         }
     }
+
+    // We prioritize variables by
+    //
+    //   (1) how many times an atom with this variable has been refined,
+    //   (2) then by how many relations joins on this variable
+    //   (3) then by the cardinality of the variable to be enumerated
     let key_fn = |join_stage: &JoinStage,
                   binding_info: &BindingInfo,
                   times_refined: &DenseIdMap<AtomId, i64>| {
@@ -1198,6 +1203,7 @@ fn sort_plan_by_size(
                 order.data.swap(i, j);
             }
         }
+        // Update the counts after a new instruction is selected.
         match &instrs[order.get(i)] {
             JoinStage::Intersect { scans, .. } => scans.iter().for_each(|scan| {
                 *times_refined.get_or_default(scan.atom) += 1;
