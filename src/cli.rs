@@ -10,6 +10,7 @@ use clap::Parser;
 use env_logger::Env;
 use serde_json::json;
 use std::path::PathBuf;
+use walkdir::WalkDir;
 
 #[derive(Debug, Parser)]
 #[command(version = env!("FULL_VERSION"), about = env!("CARGO_PKG_DESCRIPTION"))]
@@ -102,11 +103,13 @@ pub fn poach_all() {
             panic!("Input file is not an .egg file");
         }
     } else if input_path.is_dir() {
-        fs::read_dir(input_path)
-            .expect("failed to read input dir")
+        WalkDir::new(input_path)
+            .into_iter()
             .filter_map(|entry| entry.ok())
-            .map(|entry| entry.path())
-            .filter(|path| path.extension().and_then(|s| s.to_str()) == Some("egg"))
+            .filter(|entry| !entry.path().to_string_lossy().contains("fail"))
+            .filter(|entry| entry.file_type().is_file())
+            .filter(|entry| entry.path().extension().and_then(|s| s.to_str()) == Some("egg"))
+            .map(|entry| entry.path().to_path_buf())
             .collect()
     } else {
         panic!("Input path is neither file nor directory: {:?}", input_path);

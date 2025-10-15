@@ -538,6 +538,7 @@ dependencies = [
  "serde_json_diff",
  "thiserror",
  "typetag",
+ "walkdir",
  "web-time",
 ]
 

@@ -65,6 +65,8 @@ impl ContainerValues {
     fn get<C: ContainerValue>(&self) -> Option<&ContainerEnv<C>> {
         let id = self
             .container_ids
+            // We are using type names as unique identifiers despite explicitly being told not to do this by the type_name docs
+            // this is bad and we should not do anything like this in the real version, but this is a prototype (TM) so they can't stop us.
             .intern(&SerializableTypeId(type_name::<C>().to_string()));
         let res = self.data.get(id)?.as_any();
         Some(res.downcast_ref::<ContainerEnv<C>>().unwrap())
@@ -154,6 +156,8 @@ impl ContainerValues {
     ) -> ContainerValueId {
         let id = self
             .container_ids
+            // We are using type names as unique identifiers despite explicitly being told not to do this by the type_name docs
+            // this is bad and we should not do anything like this in the real version, but this is a prototype (TM) so they can't stop us.
             .intern(&SerializableTypeId(type_name::<C>().to_string()));
         self.data.get_or_insert(id, || {
             Box::new(ContainerEnv::<C>::new(Box::new(merge_fn), id_counter))
