@@ -885,6 +885,7 @@ pub struct Variant {
     pub name: String,
     pub types: Vec<String>,
     pub cost: Option<DefaultCost>,
+    pub unextractable: bool,
 }
 
 impl Display for Variant {
