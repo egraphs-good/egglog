@@ -1,15 +1,30 @@
 use super::*;
+use rpds::VectorSync;
 
 #[derive(Clone, Debug, PartialEq, Eq, Hash)]
 pub struct VecContainer {
     do_rebuild: bool,
-    pub data: Vec<Value>,
+    pub data: VectorSync<Value>,
 }
 
 impl ContainerValue for VecContainer {
     fn rebuild_contents(&mut self, rebuilder: &dyn Rebuilder) -> bool {
         if self.do_rebuild {
-            rebuilder.rebuild_slice(&mut self.data)
+            let mut changed = false;
+            let mut updates = Vec::new();
+            for (i, v) in self.data.iter().enumerate() {
+                let rebuilt = rebuilder.rebuild_val(*v);
+                if rebuilt != *v {
+                    changed |= true;
+                    updates.push((i, rebuilt));
+                }
+            }
+            if changed {
+                for (i, v) in updates {
+                    self.data.set_mut(i, v);
+                }
+            }
+            changed
         } else {
             false
         }
@@ -116,27 +131,57 @@ impl ContainerSort for VecSort {
 
         add_primitive!(eg, "vec-empty"  = {self.clone(): VecSort} |                                | -> @VecContainer (arc) { VecContainer {
             do_rebuild: self.ctx.element.is_eq_sort(),
-            data: Vec::new()
+            data: VectorSync::new_sync()
         } });
         add_primitive!(eg, "vec-of"     = {self.clone(): VecSort} [xs: # (self.element())          ] -> @VecContainer (arc) { VecContainer {
             do_rebuild: self.ctx.element.is_eq_sort(),
-            data: xs                     .collect()
+            data: {
+                let mut data = VectorSync::new_sync();
+                for x in xs {
+                    data.push_back_mut(x);
+                }
+                data
+            }
         } });
         add_primitive!(eg, "vec-append" = {self.clone(): VecSort} [xs: @VecContainer (arc)] -> @VecContainer (arc) { VecContainer {
             do_rebuild: self.ctx.element.is_eq_sort(),
-            data: xs.flat_map(|x| x.data).collect()
+            data: {
+                let mut data = VectorSync::new_sync();
+                for vec in xs {
+                    for value in vec.data.iter().copied() {
+                        data.push_back_mut(value);
+                    }
+                }
+                data
+            }
         } });
 
-        add_primitive!(eg, "vec-push" = |mut xs: @VecContainer (arc), x: # (self.element())| -> @VecContainer (arc) {{ xs.data.push(x); xs }});
-        add_primitive!(eg, "vec-pop"  = |mut xs: @VecContainer (arc)                       | -> @VecContainer (arc) {{ xs.data.pop();   xs }});
+        add_primitive!(eg, "vec-push" = |mut xs: @VecContainer (arc), x: # (self.element())| -> @VecContainer (arc) {{ xs.data.push_back_mut(x); xs }});
+        add_primitive!(eg, "vec-pop"  = |mut xs: @VecContainer (arc)                       | -> @VecContainer (arc) {{ xs.data.drop_last_mut(); xs }});
 
         add_primitive!(eg, "vec-length"       = |xs: @VecContainer (arc)| -> i64 { xs.data.len() as i64 });
-        add_primitive!(eg, "vec-contains"     = |xs: @VecContainer (arc), x: # (self.element())| -?> () { ( xs.data.contains(&x)).then_some(()) });
-        add_primitive!(eg, "vec-not-contains" = |xs: @VecContainer (arc), x: # (self.element())| -?> () { (!xs.data.contains(&x)).then_some(()) });
+        add_primitive!(eg, "vec-contains"     = |xs: @VecContainer (arc), x: # (self.element())| -?> () { ( xs.data.iter().any(|v| *v == x)).then_some(()) });
+        add_primitive!(eg, "vec-not-contains" = |xs: @VecContainer (arc), x: # (self.element())| -?> () { (!xs.data.iter().any(|v| *v == x)).then_some(()) });
 
         add_primitive!(eg, "vec-get"    = |    xs: @VecContainer (arc), i: i64                       | -?> # (self.element()) { xs.data.get(i as usize).copied() });
-        add_primitive!(eg, "vec-set"    = |mut xs: @VecContainer (arc), i: i64, x: # (self.element())| -> @VecContainer (arc) {{ xs.data[i as usize] = x;    xs }});
-        add_primitive!(eg, "vec-remove" = |mut xs: @VecContainer (arc), i: i64                       | -> @VecContainer (arc) {{ xs.data.remove(i as usize); xs }});
+        add_primitive!(eg, "vec-set"    = |mut xs: @VecContainer (arc), i: i64, x: # (self.element())| -> @VecContainer (arc) {{
+            let updated = xs.data.set_mut(i as usize, x);
+            debug_assert!(updated, "vec-set index out of bounds");
+            xs
+        }});
+        add_primitive!(eg, "vec-remove" = |mut xs: @VecContainer (arc), i: i64                       | -> @VecContainer (arc) {{
+            let idx = i as usize;
+            let len = xs.data.len();
+            if idx < len {
+                for pos in idx..(len - 1) {
+                    let next = xs.data.get(pos + 1).copied().expect("index must exist");
+                    let updated = xs.data.set_mut(pos, next);
+                    debug_assert!(updated, "vec-remove shift failed");
+                }
+                xs.data.drop_last_mut();
+            }
+            xs
+        }});
     }
 
     fn reconstruct_termdag(
