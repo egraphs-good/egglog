@@ -2,6 +2,7 @@ use crate::*;
 use std::{
     fs,
     io::{self, BufRead, BufReader, IsTerminal, Read, Write},
+    path::Path,
 };
 
 use clap::Parser;
@@ -47,6 +48,93 @@ struct Args {
     /// Number of threads to use for parallel execution. Passing `0` will use the maximum
     /// inferred parallelism available on the current system.
     threads: usize,
+}
+
+fn serialize_egraph(egraph: &EGraph, path: &Path) {
+    let file = fs::File::create(path).expect("failed to create file");
+    serde_json::to_writer_pretty(file, egraph).expect("failed to serialize");
+}
+
+fn deserialize_egraph(path: &Path) -> EGraph {
+    let file = fs::File::open(path).expect("failed to open");
+    serde_json::from_reader(BufReader::new(file)).expect("failed to deserialize")
+}
+
+pub fn poach_all() {
+    let args = Args::parse();
+    env_logger::Builder::from_env(Env::default().default_filter_or("warn"))
+        .format_timestamp(None)
+        .format_target(false)
+        .parse_default_env()
+        .init();
+
+    rayon::ThreadPoolBuilder::new()
+        .num_threads(args.threads)
+        .build_global()
+        .unwrap();
+    log::debug!(
+        "Initialized thread pool with {} threads",
+        rayon::current_num_threads()
+    );
+
+    assert!(args.inputs.len() == 1);
+    let dir = &args.inputs[0];
+
+    let out_dir = dir.join("out");
+    fs::create_dir_all(&out_dir).expect("failed to create out dir");
+
+    for entry in fs::read_dir(dir).expect("fail") {
+        let entry = entry.expect("fail");
+        let path = entry.path();
+        if path.extension().and_then(|s| s.to_str()) != Some("egg") {
+            continue;
+        }
+
+        let file_out_dir = out_dir.join(path.file_stem().unwrap().to_str().unwrap());
+        fs::create_dir_all(&file_out_dir).expect("fail");
+
+        poach_one(&path, &file_out_dir, &args);
+    }
+}
+
+fn poach_one(path: &PathBuf, out_dir: &PathBuf, args: &Args) {
+    let mut egraph = EGraph::default();
+
+    egraph.fact_directory.clone_from(&args.fact_directory);
+    egraph.seminaive = !args.naive;
+
+    let program = std::fs::read_to_string(path).expect("failed to open");
+    match run_commands(
+        &mut egraph,
+        Some(path.to_str().unwrap().into()),
+        &program,
+        io::stdout(),
+        args.mode,
+    ) {
+        Ok(None) => {}
+        _ => std::process::exit(1),
+    }
+
+    let s1 = out_dir.join("serialize1.json");
+    let s2 = out_dir.join("serialize2.json");
+    let s3 = out_dir.join("serialize3.json");
+    serialize_egraph(&egraph, &s1);
+
+    let e2 = deserialize_egraph(&s1);
+    serialize_egraph(&e2, &s2);
+
+    let e3 = deserialize_egraph(&s2);
+    serialize_egraph(&e3, &s3);
+
+    let e2_json: serde_json::Value =
+        serde_json::from_str(&fs::read_to_string(&s2).expect("couldn't open serialize2.json"))
+            .expect("couldn't parse serialize2 as json");
+    let e3_json: serde_json::Value =
+        serde_json::from_str(&fs::read_to_string(&s3).expect("couldn't open serialize3.json"))
+            .expect("couldn't parse serialize3 as json");
+
+    let diff = serde_json_diff::values(e2_json, e3_json);
+    assert!(diff.is_none());
 }
 
 /// Start a command-line interface for the E-graph.
