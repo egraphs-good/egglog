@@ -614,7 +614,7 @@ dependencies = [
 [[package]]
 name = "egraph-serialize"
 version = "0.2.0"
-source = "git+https://github.com/egraphs-good/egraph-serialize.git?branch=main#0581da5d6ab6711beaffd1cb6dda5fd32a92d454"
+source = "git+https://github.com/egraphs-good/egraph-serialize.git?branch=saulshanabrook-patch-1#21ee5c043eec11451018c251c06557dbfd0800bf"
 dependencies = [
  "graphviz-rust",
  "indexmap",
