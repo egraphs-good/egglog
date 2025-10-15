@@ -495,10 +495,15 @@ impl Parser {
             "print-stats" => match tail {
                 [] => vec![Command::PrintOverallStatistics(span, None)],
                 [Sexp::Atom(o, _), file] if o == ":file" => vec![Command::PrintOverallStatistics(
+                    span,
+                    Some(file.expect_string("file name")?),
+                )],
+                _ => {
+                    return error!(
                         span,
-                        Some(file.expect_string("file name")?),
-                    )],
-                _ => return error!(span, "usages: (print-stats)\n(print-stats :file \"<filename>\")"),
+                        "usages: (print-stats)\n(print-stats :file \"<filename>\")"
+                    );
+                }
             },
             "print-function" => match tail {
                 [name] => vec![Command::PrintFunction(
