@@ -7,7 +7,6 @@ use std::{
 
 use crate::numeric_id::{DenseIdMap, IdVec, NumericId, define_id};
 use egglog_concurrency::ConcurrentVec;
-use hashbrown::HashTable;
 use rustc_hash::FxHasher;
 use serde::{Deserialize, Serialize};
 
@@ -23,42 +22,44 @@ pub(crate) type DashMap<K, V> = dashmap::DashMap<K, V, BuildHasherDefault<FxHash
 ///
 /// This is primarily used to manage the [`Value`]s associated with a a
 /// base value.
-#[derive(Clone, Serialize)]
-pub struct InternTable<K, V> {
-    #[serde(skip)]
+#[derive(Clone, Serialize, Deserialize)]
+pub struct InternTable<K, V>
+where
+    K: Eq + Hash + Serialize,
+    V: Serialize,
+{
     vals: Arc<ConcurrentVec<K>>,
-    #[serde(skip)]
-    data: Vec<Arc<Mutex<HashTable<V>>>>,
+    data: Vec<Arc<Mutex<HashMap<K, V>>>>, // TODO: Changed from HashTable to make serialization easier, should change back
     shards_log2: u32,
 }
 
-impl<'de, K, V> Deserialize<'de> for InternTable<K, V> {
-    fn deserialize<D>(deserializer: D) -> Result<Self, D::Error>
-    where
-        D: serde::Deserializer<'de>,
-    {
-        #[derive(Deserialize)]
-        struct Partial {
-            shards_log2: u32,
-        }
+// impl<'de, K: Eq + Hash + Serialize, V: Serialize> Deserialize<'de> for InternTable<K, V> {
+//     fn deserialize<D>(deserializer: D) -> Result<Self, D::Error>
+//     where
+//         D: serde::Deserializer<'de>,
+//     {
+//         #[derive(Deserialize)]
+//         struct Partial {
+//             shards_log2: u32,
+//         }
 
-        let repr = Partial::deserialize(deserializer)?;
+//         let repr = Partial::deserialize(deserializer)?;
 
-        Ok(InternTable {
-            // todo: this is a bogus default value
-            vals: Arc::new(ConcurrentVec::new()),
-            data: Vec::new(),
-            shards_log2: repr.shards_log2,
-        })
-    }
-}
+//         Ok(InternTable {
+//             // todo: this is a bogus default value
+//             vals: Arc::new(ConcurrentVec::new()),
+//             data: Vec::new(),
+//             shards_log2: repr.shards_log2,
+//         })
+//     }
+// }
 
-impl<K, V> Default for InternTable<K, V> {
+impl<K: Eq + Hash + Serialize, V: Serialize> Default for InternTable<K, V> {
     fn default() -> Self {
         Self::with_shards(4)
     }
 }
-impl<K, V> InternTable<K, V> {
+impl<K: Eq + Hash + Serialize, V: Serialize> InternTable<K, V> {
     /// Create a new intern table with the given number of shards.
     ///
     /// The number of shards is passed as its base-2 log: we rely on the number
@@ -74,24 +75,32 @@ impl<K, V> InternTable<K, V> {
     }
 }
 
-impl<K: Eq + Hash + Clone, V: NumericId> InternTable<K, V> {
+impl<K: Eq + Hash + Clone + Serialize, V: NumericId + Serialize> InternTable<K, V> {
     pub fn intern(&self, k: &K) -> V {
         let hash = hash_value(k);
         // Use the top bits of the hash to pick the shard. Hashbrown uses the
         // bottom bits.
         let shard = ((hash >> (64 - self.shards_log2)) & ((1 << self.shards_log2) - 1)) as usize;
         let mut table = self.data[shard].lock().unwrap();
-        let read_guard = self.vals.read();
-        if let Some(v) = table.find(hash, |v| k == &read_guard[v.index()]) {
-            *v
+        if let Some(v) = table.get(k) {
+            v.clone()
         } else {
-            mem::drop(read_guard);
-            let res = V::from_usize(self.vals.push(k.clone()));
-            let read_guard = self.vals.read();
-            *table
-                .insert_unique(hash, res, |v| hash_value(&read_guard[v.index()]))
-                .get()
+            let index = self.vals.push(k.clone());
+            let v = V::from_usize(index);
+            table.insert(k.clone(), v.clone());
+            v
         }
+
+        // if let Some(v) = table.find(hash, |v| k == &read_guard[v.index()]) {
+        //     *v
+        // } else {
+        //     mem::drop(read_guard);
+        //     let res = V::from_usize(self.vals.push(k.clone()));
+        //     let read_guard = self.vals.read();
+        //     *table
+        //         .insert_unique(hash, res, |v| hash_value(&read_guard[v.index()]))
+        //         .get()
+        // }
     }
 
     pub fn get(&self, v: V) -> impl Deref<Target = K> + '_ {

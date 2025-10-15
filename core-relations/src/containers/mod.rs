@@ -46,10 +46,31 @@ impl<T: Fn(&mut ExecutionState, Value, Value) -> Value + Clone + Send + Sync> Me
 // Implements `Clone` for `Box<dyn MergeFn>`.
 dyn_clone::clone_trait_object!(MergeFn);
 
+#[derive(Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash)]
+struct SerializableTypeId(TypeId);
+
+impl<'de> Deserialize<'de> for SerializableTypeId {
+    fn deserialize<D>(_deserializer: D) -> Result<Self, D::Error>
+    where
+        D: serde::Deserializer<'de>,
+    {
+        todo!()
+    }
+}
+
+impl Serialize for SerializableTypeId {
+    fn serialize<S>(&self, _serializer: S) -> Result<S::Ok, S::Error>
+    where
+        S: serde::Serializer,
+    {
+        todo!()
+    }
+}
+
 #[derive(Clone, Default, Serialize, Deserialize)]
 pub struct ContainerValues {
     subset_tracker: SubsetTracker,
-    container_ids: InternTable<TypeId, ContainerValueId>,
+    container_ids: InternTable<SerializableTypeId, ContainerValueId>,
     #[serde(skip)]
     data: DenseIdMap<ContainerValueId, Box<dyn DynamicContainerEnv + Send + Sync>>,
 }
@@ -60,7 +81,9 @@ impl ContainerValues {
     }
 
     fn get<C: ContainerValue>(&self) -> Option<&ContainerEnv<C>> {
-        let id = self.container_ids.intern(&TypeId::of::<C>());
+        let id = self
+            .container_ids
+            .intern(&SerializableTypeId(TypeId::of::<C>()));
         let res = self.data.get(id)?.as_any();
         Some(res.downcast_ref::<ContainerEnv<C>>().unwrap())
     }
@@ -147,7 +170,9 @@ impl ContainerValues {
         id_counter: CounterId,
         merge_fn: impl MergeFn + 'static,
     ) -> ContainerValueId {
-        let id = self.container_ids.intern(&TypeId::of::<C>());
+        let id = self
+            .container_ids
+            .intern(&SerializableTypeId(TypeId::of::<C>()));
         self.data.get_or_insert(id, || {
             Box::new(ContainerEnv::<C>::new(Box::new(merge_fn), id_counter))
         });

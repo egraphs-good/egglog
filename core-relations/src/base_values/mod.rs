@@ -286,7 +286,7 @@ impl<P: BaseValue> BaseInternTable<P> {
 /// This type is just a helper: users can also implement the [`BaseValue`] trait directly on their
 /// types if the type is defined in the crate in which the implementation is defined, or if they
 /// need custom logic for boxing or unboxing the type.
-#[derive(Copy, Clone, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize)]
+#[derive(Copy, Clone, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize, Deserialize)]
 pub struct Boxed<T>(pub T);
 
 impl<T> Boxed<T> {
@@ -428,8 +428,9 @@ fn deserialize_dyn(
             Ok(Box::new(BaseInternTable { table }))
         }
         "StaticStr" => {
-            let table: InternTable<&'static str, Value> = serde_json::from_value(erased.table)?;
-            Ok(Box::new(BaseInternTable { table }))
+            panic!("can't deserialize static strings")
+            // let table: InternTable<&'static str, Value> = serde_json::from_value(erased.table)?;
+            // Ok(Box::new(BaseInternTable { table }))
         }
         "Rational64" => {
             let table: InternTable<Rational64, Value> = serde_json::from_value(erased.table)?;
