@@ -744,7 +744,7 @@ impl EGraph {
             .run_rules(&rule_ids)
             .map_err(|e| Error::BackendError(e.to_string()))?;
 
-        RunReport::singleton(ruleset, iteration_report)
+        Ok(RunReport::singleton(ruleset, iteration_report))
     }
 
     fn add_rule(&mut self, rule: ast::ResolvedRule) -> Result<String, Error> {
