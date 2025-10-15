@@ -110,8 +110,8 @@ path = "src/main.rs"
 required-features = ["bin"]
 
 [[bin]]
-name = "poach_testing"
-path = "src/poach_testing.rs"
+name = "timeline"
+path = "src/timeline.rs"
 
 [features]
 default = ["bin"]
