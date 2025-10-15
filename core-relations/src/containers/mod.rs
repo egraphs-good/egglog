@@ -9,7 +9,7 @@
 //! functions than base values.
 
 use std::{
-    any::{Any, TypeId},
+    any::{Any, type_name},
     hash::{Hash, Hasher},
     ops::Deref,
 };
@@ -46,26 +46,8 @@ impl<T: Fn(&mut ExecutionState, Value, Value) -> Value + Clone + Send + Sync> Me
 // Implements `Clone` for `Box<dyn MergeFn>`.
 dyn_clone::clone_trait_object!(MergeFn);
 
-#[derive(Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash)]
-struct SerializableTypeId(TypeId);
-
-impl<'de> Deserialize<'de> for SerializableTypeId {
-    fn deserialize<D>(_deserializer: D) -> Result<Self, D::Error>
-    where
-        D: serde::Deserializer<'de>,
-    {
-        todo!()
-    }
-}
-
-impl Serialize for SerializableTypeId {
-    fn serialize<S>(&self, _serializer: S) -> Result<S::Ok, S::Error>
-    where
-        S: serde::Serializer,
-    {
-        todo!()
-    }
-}
+#[derive(Clone, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize, Deserialize)]
+struct SerializableTypeId(String);
 
 #[derive(Clone, Default, Serialize, Deserialize)]
 pub struct ContainerValues {
@@ -83,7 +65,7 @@ impl ContainerValues {
     fn get<C: ContainerValue>(&self) -> Option<&ContainerEnv<C>> {
         let id = self
             .container_ids
-            .intern(&SerializableTypeId(TypeId::of::<C>()));
+            .intern(&SerializableTypeId(type_name::<C>().to_string()));
         let res = self.data.get(id)?.as_any();
         Some(res.downcast_ref::<ContainerEnv<C>>().unwrap())
     }
@@ -172,7 +154,7 @@ impl ContainerValues {
     ) -> ContainerValueId {
         let id = self
             .container_ids
-            .intern(&SerializableTypeId(TypeId::of::<C>()));
+            .intern(&SerializableTypeId(type_name::<C>().to_string()));
         self.data.get_or_insert(id, || {
             Box::new(ContainerEnv::<C>::new(Box::new(merge_fn), id_counter))
         });
