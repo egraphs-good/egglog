@@ -1,5 +1,8 @@
 use crate::*;
-use std::io::{self, BufRead, BufReader, IsTerminal, Read, Write};
+use std::{
+    fs,
+    io::{self, BufRead, BufReader, IsTerminal, Read, Write},
+};
 
 use clap::Parser;
 use env_logger::Env;
@@ -96,26 +99,56 @@ pub fn cli(mut egraph: EGraph) {
             }
 
             println!("START");
+            // Serialize egraph
             serde_json::to_writer_pretty(
                 std::io::BufWriter::new(
-                    std::fs::File::create("egraph.json").expect("failed to create egraph.json"),
+                    std::fs::File::create("serialize1.json")
+                        .expect("failed to create serialize1.json"),
                 ),
                 &egraph,
             )
-            .expect("failed to write egraph.json");
+            .expect("failed to write serialize1.json");
 
-            let file = File::open("egraph.json").expect("failed to open egraph.json");
+            // Read back to EGraph and serialize again (won't be the same as first serialized egraph)
+            let file = File::open("serialize1.json").expect("failed to open serialize1.json");
             let reader = BufReader::new(file);
             let egraph: EGraph =
-                serde_json::from_reader(reader).expect("failed to deserialize egraph");
+                serde_json::from_reader(reader).expect("failed to deserialize serialize1");
             serde_json::to_writer_pretty(
                 std::io::BufWriter::new(
-                    std::fs::File::create("reserialized_egraph.json")
-                        .expect("failed to create reserialized_egraph.json"),
+                    std::fs::File::create("serialize2.json")
+                        .expect("failed to create serialize2.json"),
                 ),
                 &egraph,
             )
-            .expect("failed to write reserialized_egraph.json");
+            .expect("failed to write serialize2.json");
+
+            // Assert that subsequent round trips are idempotent
+            let file = File::open("serialize2.json").expect("failed to open serialize2.json");
+            let reader = BufReader::new(file);
+            let egraph: EGraph =
+                serde_json::from_reader(reader).expect("failed to deserialize serialize2");
+            serde_json::to_writer_pretty(
+                std::io::BufWriter::new(
+                    std::fs::File::create("serialize3.json")
+                        .expect("failed to create serialize3.json"),
+                ),
+                &egraph,
+            )
+            .expect("failed to write serialize3.json");
+
+            let serialize2: serde_json::Value = serde_json::from_str(
+                &fs::read_to_string("serialize2.json").expect("couldn't open serialize2.json"),
+            )
+            .expect("couldn't parse serialize2 as json");
+            let serialize3: serde_json::Value = serde_json::from_str(
+                &fs::read_to_string("serialize3.json").expect("couldn't open serialize3.json"),
+            )
+            .expect("couldn't parse serialize3 as json");
+
+            let diff = serde_json_diff::values(serialize2, serialize3);
+            assert!(diff.is_none());
+
             println!("END");
 
             if args.to_json || args.to_dot || args.to_svg {

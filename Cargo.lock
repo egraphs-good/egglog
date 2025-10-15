@@ -534,6 +534,7 @@ dependencies = [
  "rustc-hash",
  "serde",
  "serde_json",
+ "serde_json_diff",
  "thiserror",
  "typetag",
  "web-time",
@@ -1532,6 +1533,16 @@ dependencies = [
  "ryu",
  "serde",
  "serde_core",
+]
+
+[[package]]
+name = "serde_json_diff"
+version = "0.2.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "eac615f2de9556d78ec9d5924abae441d1764f833fbd6db24bb56d2b6b5200ed"
+dependencies = [
+ "serde",
+ "serde_json",
 ]
 
 [[package]]

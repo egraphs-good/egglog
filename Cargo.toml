@@ -151,6 +151,7 @@ egglog-add-primitive = { workspace = true }
 serde = { version = "1.0", features = ["derive"] }
 typetag = "0.2"
 serde_json = "1.0"
+serde_json_diff = "0.2.0"
 
 [build-dependencies]
 chrono = { workspace = true, features = ["now"], optional = true }
