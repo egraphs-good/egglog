@@ -21,7 +21,6 @@ pub mod prelude;
 pub mod scheduler;
 mod serialize;
 pub mod sort;
-mod termdag;
 mod typechecking;
 pub mod util;
 
@@ -41,6 +40,8 @@ use egglog_ast::generic_ast::{Change, GenericExpr, Literal};
 use egglog_ast::span::Span;
 use egglog_ast::util::ListDisplay;
 pub use egglog_bridge::FunctionRow;
+pub use egglog_bridge::match_term_app;
+pub use egglog_bridge::termdag::{Term, TermDag, TermId};
 use egglog_bridge::{ColumnTy, IterationReport, QueryEntry};
 use egglog_core_relations as core_relations;
 use egglog_numeric_id as numeric_id;
@@ -61,7 +62,6 @@ use std::ops::Deref;
 use std::path::PathBuf;
 use std::str::FromStr;
 use std::sync::Arc;
-pub use termdag::{Term, TermDag, TermId};
 use thiserror::Error;
 pub use typechecking::TypeError;
 use typechecking::TypeInfo;
@@ -500,7 +500,7 @@ impl EGraph {
     ) -> Result<egglog_bridge::MergeFn, Error> {
         match expr {
             GenericExpr::Lit(_, literal) => {
-                let val = literal_to_value(&self.backend, literal);
+                let val = self.backend.literal_to_value(literal);
                 Ok(egglog_bridge::MergeFn::Const(val))
             }
             GenericExpr::Var(span, resolved_var) => match resolved_var.name.as_str() {
@@ -1432,7 +1432,8 @@ impl EGraph {
         Ok(outputs)
     }
 
-    pub fn resugar_program(
+    /// Return a program with syntactic sugar removed.
+    pub fn desugar_program(
         &mut self,
         filename: Option<String>,
         input: &str,
@@ -1591,7 +1592,7 @@ impl<'a> BackendRule<'a> {
                 core::GenericAtomTerm::Var(_, v) => self
                     .rb
                     .new_var_named(v.sort.column_ty(self.rb.egraph()), &v.name),
-                core::GenericAtomTerm::Literal(_, l) => literal_to_entry(self.rb.egraph(), l),
+                core::GenericAtomTerm::Literal(_, l) => self.rb.egraph().literal_to_entry(l),
                 core::GenericAtomTerm::Global(..) => {
                     panic!("Globals should have been desugared")
                 }
@@ -1758,26 +1759,6 @@ impl<'a> BackendRule<'a> {
 
     fn build(self) -> egglog_bridge::RuleId {
         self.rb.build()
-    }
-}
-
-fn literal_to_entry(egraph: &egglog_bridge::EGraph, l: &Literal) -> QueryEntry {
-    match l {
-        Literal::Int(x) => egraph.base_value_constant::<i64>(*x),
-        Literal::Float(x) => egraph.base_value_constant::<sort::F>(x.into()),
-        Literal::String(x) => egraph.base_value_constant::<sort::S>(sort::S::new(x.clone())),
-        Literal::Bool(x) => egraph.base_value_constant::<bool>(*x),
-        Literal::Unit => egraph.base_value_constant::<()>(()),
-    }
-}
-
-fn literal_to_value(egraph: &egglog_bridge::EGraph, l: &Literal) -> Value {
-    match l {
-        Literal::Int(x) => egraph.base_values().get::<i64>(*x),
-        Literal::Float(x) => egraph.base_values().get::<sort::F>(x.into()),
-        Literal::String(x) => egraph.base_values().get::<sort::S>(sort::S::new(x.clone())),
-        Literal::Bool(x) => egraph.base_values().get::<bool>(*x),
-        Literal::Unit => egraph.base_values().get::<()>(()),
     }
 }
 
