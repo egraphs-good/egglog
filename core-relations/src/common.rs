@@ -1,5 +1,4 @@
 use std::{
-    fmt::Debug,
     hash::{BuildHasherDefault, Hash, Hasher},
     mem,
     ops::Deref,
@@ -9,8 +8,8 @@ use std::{
 use crate::numeric_id::{DenseIdMap, IdVec, NumericId, define_id};
 use egglog_concurrency::ConcurrentVec;
 use rustc_hash::FxHasher;
-use serde::{Deserialize, Serialize, ser::SerializeStruct};
-use serde_json::to_value;
+use serde::{Deserialize, Deserializer, Serialize, ser::SerializeStruct};
+use serde_json::{from_value, to_value};
 
 use crate::{Subset, TableId, TableVersion, WrappedTable, pool::Clear};
 
@@ -27,65 +26,99 @@ pub(crate) type DashMap<K, V> = dashmap::DashMap<K, V, BuildHasherDefault<FxHash
 #[derive(Clone)]
 pub struct InternTable<K, V>
 where
-    K: Eq + Hash + Debug,
-    V: Serialize,
+    K: Eq + Hash + Serialize + for<'a> Deserialize<'a>,
+    V: Serialize + for<'a> Deserialize<'a>,
 {
     vals: Arc<ConcurrentVec<K>>,
-    data: Vec<Arc<Mutex<HashMap<K, V>>>>, // TODO: Changed from HashTable to make serialization easier, should change back
+    data: Vec<Arc<Mutex<hashbrown::HashMap<K, V>>>>, // TODO: Changed from HashTable to make serialization easier, should change back
     shards_log2: u32,
 }
 
 impl<K: Serialize, V: Serialize> Serialize for InternTable<K, V>
 where
-    K: Eq + Hash + Debug,
-    V: Serialize,
+    K: Eq + Hash + Serialize + for<'a> Deserialize<'a>,
+    V: Serialize + for<'a> Deserialize<'a>,
 {
     fn serialize<S>(&self, serializer: S) -> Result<S::Ok, S::Error>
     where
         S: serde::Serializer,
     {
         let mut s = serializer.serialize_struct("InternTable", 3)?;
-
         s.serialize_field("vals", &self.vals)?;
 
-        let mut serializable_shards: Vec<hashbrown::HashMap<String, _>> =
-            Vec::with_capacity(self.data.len());
+        let mut serializable_data: Vec<Vec<(serde_json::Value, serde_json::Value)>> = Vec::new();
         for shard in &self.data {
             let shard = shard
                 .lock()
                 .map_err(|_| serde::ser::Error::custom("mutex poisoned"))?;
-
-            let mut converted = hashbrown::HashMap::with_capacity(shard.len());
+            let mut inner = Vec::new();
             for (k, v) in shard.iter() {
-                converted.insert(
-                    format!("{:?}", k),
+                inner.push((
+                    to_value(k).map_err(serde::ser::Error::custom)?,
                     to_value(v).map_err(serde::ser::Error::custom)?,
-                );
+                ));
             }
-
-            serializable_shards.push(converted);
+            serializable_data.push(inner)
         }
 
+        s.serialize_field("data", &serializable_data)?;
         s.serialize_field("shards_log2", &self.shards_log2)?;
         s.end()
     }
 }
 
-impl<'de, K: Eq + Hash + Debug, V: Serialize> Deserialize<'de> for InternTable<K, V> {
-    fn deserialize<D>(_deserializer: D) -> Result<Self, D::Error>
+impl<'de, K, V> Deserialize<'de> for InternTable<K, V>
+where
+    K: Eq + Hash + Serialize + for<'a> Deserialize<'a>,
+    V: Serialize + for<'a> Deserialize<'a>,
+{
+    fn deserialize<D>(deserializer: D) -> Result<Self, D::Error>
     where
-        D: serde::Deserializer<'de>,
+        D: Deserializer<'de>,
     {
-        todo!()
+        // Helper struct matching the serialized shape
+        #[derive(Deserialize)]
+        struct Partial<K> {
+            vals: Arc<ConcurrentVec<K>>,
+            data: Vec<Vec<(serde_json::Value, serde_json::Value)>>,
+            shards_log2: u32,
+        }
+
+        let helper = Partial::deserialize(deserializer)?;
+
+        // Convert each shard from Vec<(Value, Value)> back into HashMap<K, V>
+        let data: Vec<Arc<Mutex<hashbrown::HashMap<K, V>>>> = helper
+            .data
+            .into_iter()
+            .map(|shard_vec| {
+                let mut map = hashbrown::HashMap::new();
+                for (k_val, v_val) in shard_vec {
+                    let k: K = from_value(k_val).unwrap();
+                    let v: V = from_value(v_val).unwrap();
+                    map.insert(k, v);
+                }
+                Arc::new(Mutex::new(map))
+            })
+            .collect();
+
+        Ok(InternTable {
+            vals: helper.vals,
+            data,
+            shards_log2: helper.shards_log2,
+        })
     }
 }
 
-impl<K: Eq + Hash + Debug, V: Serialize> Default for InternTable<K, V> {
+impl<K: Eq + Hash + Serialize + for<'a> Deserialize<'a>, V: Serialize + for<'a> Deserialize<'a>>
+    Default for InternTable<K, V>
+{
     fn default() -> Self {
         Self::with_shards(4)
     }
 }
-impl<K: Eq + Hash + Debug, V: Serialize> InternTable<K, V> {
+impl<K: Eq + Hash + Serialize + for<'a> Deserialize<'a>, V: Serialize + for<'a> Deserialize<'a>>
+    InternTable<K, V>
+{
     /// Create a new intern table with the given number of shards.
     ///
     /// The number of shards is passed as its base-2 log: we rely on the number
@@ -101,7 +134,11 @@ impl<K: Eq + Hash + Debug, V: Serialize> InternTable<K, V> {
     }
 }
 
-impl<K: Eq + Hash + Clone + Debug, V: NumericId + Serialize> InternTable<K, V> {
+impl<
+    K: Eq + Hash + Clone + Serialize + for<'a> Deserialize<'a>,
+    V: NumericId + Serialize + for<'a> Deserialize<'a>,
+> InternTable<K, V>
+{
     pub fn intern(&self, k: &K) -> V {
         let hash = hash_value(k);
         // Use the top bits of the hash to pick the shard. Hashbrown uses the

@@ -30,7 +30,10 @@ define_id!(pub BaseValueId, u32, "an identifier for base value types");
 ///
 /// Regardless, all base value types should be registered in a [`BaseValues`] instance using the
 /// [`BaseValues::register_type`] method before they can be used in the database.
-pub trait BaseValue: Clone + Hash + Eq + Any + Debug + Send + Sync + Serialize {
+pub trait BaseValue:
+// deserialize needed here for InternTable::deserialize
+    Clone + Hash + Eq + Any + Debug + Send + Sync + Serialize + for<'de> Deserialize<'de>
+{
     const MAY_UNBOX: bool = false;
     fn intern(&self, table: &InternTable<Self, Value>) -> Value {
         table.intern(self)
@@ -53,11 +56,7 @@ impl BaseValue for String {
         "String".into()
     }
 }
-impl BaseValue for &'static str {
-    fn type_id_string() -> String {
-        "StaticStr".into()
-    }
-}
+
 impl BaseValue for num::Rational64 {
     fn type_id_string() -> String {
         "Rational64".into()
@@ -207,7 +206,7 @@ struct BaseInternTableErased {
     base_value_type: String,
 }
 
-#[derive(Clone, Serialize, Deserialize)]
+#[derive(Clone, Serialize)]
 struct BaseInternTable<P: BaseValue> {
     table: InternTable<P, Value>,
 }
@@ -305,7 +304,9 @@ impl<T: Debug> Debug for Boxed<T> {
     }
 }
 
-impl<T: Hash + Eq + Debug + Clone + Send + Sync + Serialize + 'static> BaseValue for Boxed<T> {
+impl<T: Hash + Eq + Debug + Clone + Send + Sync + Serialize + for<'de> Deserialize<'de> + 'static>
+    BaseValue for Boxed<T>
+{
     fn type_id_string() -> String {
         format!("Boxed<{}>", std::any::type_name::<T>())
     }

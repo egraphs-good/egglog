@@ -6,7 +6,7 @@ use std::ops::Deref;
 
 use crate::numeric_id::{DenseIdMap, NumericId};
 use rayon::iter::{IntoParallelRefMutIterator, ParallelIterator};
-use serde::Serialize;
+use serde::{Deserialize, Serialize};
 use smallvec::SmallVec;
 
 use crate::{
@@ -73,7 +73,7 @@ impl From<CounterId> for WriteVal {
 }
 
 /// A value that can be written to the database during a merge action.
-#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash, Serialize)]
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash, Serialize, Deserialize)]
 pub enum MergeVal {
     /// A fresh value from the given counter.
     Counter(CounterId),
