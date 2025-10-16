@@ -28,7 +28,17 @@ jobs:
     runs-on: ${{ matrix.runner }}
     strategy:
       matrix:
-        runner: [ codspeed-macro, ubuntu-latest ]
+        runner: [codspeed-macro, ubuntu-latest]
+        benchmark:
+          - math-microbenchmark
+          - cykjson
+          - eggcc-extraction
+          - extract-vec-bench
+          - herbie
+          - python_array_optimize
+          - repro-665-set-union
+          - stresstest_large_expr
+          - typeinfer
     steps:
       - run: echo "CARGO_INCREMENTAL=0" >> "$GITHUB_ENV"
       - uses: actions/checkout@v4
@@ -39,7 +49,7 @@ jobs:
       - run: cargo codspeed build
       - uses: CodSpeedHQ/action@v4
         with:
-          run: cargo codspeed run
+          run: cargo codspeed run ${{ matrix.benchmark }}
           mode: ${{ matrix.runner == 'ubuntu-latest' && 'instrumentation' || 'walltime' }}
   wasm:
     runs-on: ubuntu-latest
