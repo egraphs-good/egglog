@@ -783,11 +783,12 @@ impl Parser {
     pub fn variant(&mut self, sexp: &Sexp) -> Result<Variant, ParseError> {
         let (name, tail, span) = sexp.expect_call("datatype variant")?;
 
-        let (types, cost) = match tail {
+        let (types, cost, unextractable) = match tail {
+            [types @ .., Sexp::Atom(o, _)] if *o == ":unextractable" => (types, None, true),
             [types @ .., Sexp::Atom(o, _), c] if *o == ":cost" => {
-                (types, Some(c.expect_uint("cost")?))
+                (types, Some(c.expect_uint("cost")?), false)
             }
-            types => (types, None),
+            types => (types, None, false),
         };
 
         Ok(Variant {
@@ -797,6 +798,7 @@ impl Parser {
                 sexp.expect_atom("variant argument type")
             })?,
             cost,
+            unextractable,
         })
     }
 
