@@ -172,7 +172,13 @@ fn poach_one(path: &PathBuf, out_dir: &PathBuf, args: &Args) -> Result<()> {
             .context("couldn't parse serialize3 as json")?;
 
     match serde_json_diff::values(e2_json, e3_json) {
-        Some(_) => anyhow::bail!("diff for {}", path.display()),
+        Some(diff) => {
+            let file = fs::File::create(out_dir.join("diff.json"))
+                .with_context(|| format!("failed to create diff file for {}", path.display()))?;
+            serde_json::to_writer_pretty(file, &diff)
+                .with_context(|| format!("failed to serialize diff to {}", path.display()))?;
+            anyhow::bail!("diff for {}", path.display())
+        }
         None => Ok(()),
     }
 }
