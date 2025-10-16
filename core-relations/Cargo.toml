@@ -14,6 +14,7 @@ readme = { workspace = true }
 egglog-concurrency = { workspace = true }
 egglog-numeric-id = { workspace = true }
 egglog-union-find = { workspace = true }
+egglog-reports = { workspace = true }
 hashbrown = { workspace = true }
 indexmap = { workspace = true }
 rustc-hash = { workspace = true }
@@ -25,6 +26,7 @@ anyhow = { workspace = true }
 lazy_static = { workspace = true }
 log = { workspace = true }
 petgraph = { workspace = true }
+crossbeam = { workspace = true }
 crossbeam-queue = { workspace = true }
 dashmap = { workspace = true, features = ["raw-api"] }
 web-time = { workspace = true }

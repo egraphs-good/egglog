@@ -19,12 +19,13 @@ use std::{
 use crate::core_relations::{
     BaseValue, BaseValueId, BaseValues, ColumnId, Constraint, ContainerValue, ContainerValues,
     CounterId, Database, DisplacedTable, DisplacedTableWithProvenance, ExecutionState,
-    ExternalFunction, ExternalFunctionId, MergeVal, Offset, PlanStrategy, RuleSetReport,
-    SortedWritesTable, TableId, TaggedRowBuffer, Value, WrappedTable,
+    ExternalFunction, ExternalFunctionId, MergeVal, Offset, PlanStrategy, SortedWritesTable,
+    TableId, TaggedRowBuffer, Value, WrappedTable,
 };
 use crate::numeric_id::{DenseIdMap, DenseIdMapWithReuse, IdVec, NumericId, define_id};
 use egglog_core_relations as core_relations;
 use egglog_numeric_id as numeric_id;
+use egglog_reports::{IterationReport, ReportLevel, RuleSetReport};
 use hashbrown::HashMap;
 use indexmap::{IndexMap, IndexSet, map::Entry};
 use log::info;
@@ -85,6 +86,7 @@ pub struct EGraph {
     reason_tables: IndexMap<usize /* arity */, TableId>,
     term_tables: IndexMap<usize /* arity */, TableId>,
     tracing: bool,
+    report_level: ReportLevel,
 }
 
 pub type Result<T> = std::result::Result<T, anyhow::Error>;
@@ -92,7 +94,12 @@ pub type Result<T> = std::result::Result<T, anyhow::Error>;
 impl Default for EGraph {
     fn default() -> Self {
         let mut db = Database::new();
-        let uf_table = db.add_table(DisplacedTable::default(), iter::empty(), iter::empty());
+        let uf_table = db.add_table_named(
+            DisplacedTable::default(),
+            "$uf".into(),
+            iter::empty(),
+            iter::empty(),
+        );
         EGraph::create_internal(db, uf_table, false)
     }
 }
@@ -119,8 +126,9 @@ impl EGraph {
     /// came to appear.
     pub fn with_tracing() -> EGraph {
         let mut db = Database::new();
-        let uf_table = db.add_table(
+        let uf_table = db.add_table_named(
             DisplacedTableWithProvenance::default(),
+            "$uf".into(),
             iter::empty(),
             iter::empty(),
         );
@@ -150,6 +158,7 @@ impl EGraph {
             cong_spec,
             reason_tables: Default::default(),
             term_tables: Default::default(),
+            report_level: Default::default(),
             tracing,
         }
     }
@@ -260,7 +269,8 @@ impl EGraph {
     }
 
     fn term_table(&mut self, table: TableId) -> TableId {
-        let spec = self.db.get_table(table).spec();
+        let info = self.db.get_table_info(table);
+        let spec = info.spec();
         match self.term_tables.entry(spec.n_keys) {
             Entry::Occupied(o) => *o.get(),
             Entry::Vacant(v) => {
@@ -271,7 +281,15 @@ impl EGraph {
                     vec![], // no rebuilding needed for term table
                     Box::new(|_, _, _, _| false),
                 );
-                let table_id = self.db.add_table(table, iter::empty(), iter::empty());
+                let table_id = match info.name() {
+                    Some(name) => self.db.add_table_named(
+                        table,
+                        format!("$term{}", name).into(),
+                        iter::empty(),
+                        iter::empty(),
+                    ),
+                    None => self.db.add_table(table, iter::empty(), iter::empty()),
+                };
                 *v.insert(table_id)
             }
         }
@@ -656,9 +674,13 @@ impl EGraph {
             to_rebuild,
             merge_fn,
         );
-        let table_id =
-            self.db
-                .add_table(table, read_deps.iter().copied(), write_deps.iter().copied());
+        let name: Arc<str> = name.into();
+        let table_id = self.db.add_table_named(
+            table,
+            name.clone(),
+            read_deps.iter().copied(),
+            write_deps.iter().copied(),
+        );
 
         let res = self.funcs.push(FunctionInfo {
             table: table_id,
@@ -667,7 +689,7 @@ impl EGraph {
             nonincremental_rebuild_rule: RuleId::new(!0),
             default_val: default,
             can_subsume,
-            name: name.into(),
+            name,
         });
         debug_assert_eq!(res, next_func_id);
         let incremental_rebuild_rules = self.incremental_rebuild_rules(res, &schema);
@@ -684,19 +706,17 @@ impl EGraph {
     pub fn run_rules(&mut self, rules: &[RuleId]) -> Result<IterationReport> {
         let ts = self.next_ts();
 
-        let rule_set_report = run_rules_impl(&mut self.db, &mut self.rules, rules, ts)?;
+        let rule_set_report =
+            run_rules_impl(&mut self.db, &mut self.rules, rules, ts, self.report_level)?;
         if let Some(message) = self.panic_message.lock().unwrap().take() {
             return Err(PanicError(message).into());
         }
 
         let mut iteration_report = IterationReport {
-            changed: rule_set_report.changed,
-            rule_reports: rule_set_report.rule_reports.into_iter().collect(),
-            search_and_apply_time: rule_set_report.search_and_apply_time,
-            merge_time: rule_set_report.merge_time,
+            rule_set_report,
             rebuild_time: Duration::ZERO,
         };
-        if !iteration_report.changed {
+        if !iteration_report.changed() {
             return Ok(iteration_report);
         }
 
@@ -802,8 +822,14 @@ impl EGraph {
                         // This is to avoid recanonicalizing the same row multiple
                         // times.
                         for rule in &info.incremental_rebuild_rules {
-                            changed |= run_rules_impl(&mut self.db, &mut self.rules, &[*rule], ts)?
-                                .changed;
+                            changed |= run_rules_impl(
+                                &mut self.db,
+                                &mut self.rules,
+                                &[*rule],
+                                ts,
+                                ReportLevel::SizeOnly,
+                            )?
+                            .changed;
                         }
                         // Reset the rule we did not run. These two should be equivalent.
                         self.rules[info.nonincremental_rebuild_rule].last_run_at = ts;
@@ -816,6 +842,7 @@ impl EGraph {
                             &mut self.rules,
                             &[info.nonincremental_rebuild_rule],
                             ts,
+                            ReportLevel::SizeOnly,
                         )?
                         .changed;
                         for rule in &info.incremental_rebuild_rules {
@@ -883,7 +910,14 @@ impl EGraph {
                     self.rules[*rule].last_run_at = ts;
                 }
             }
-            changed |= run_rules_impl(&mut self.db, &mut self.rules, &scratch, ts)?.changed;
+            changed |= run_rules_impl(
+                &mut self.db,
+                &mut self.rules,
+                &scratch,
+                ts,
+                ReportLevel::SizeOnly,
+            )?
+            .changed;
             scratch.clear();
             let ts = self.next_ts();
             for (i, funcs) in state.incremental.iter() {
@@ -892,7 +926,14 @@ impl EGraph {
                     scratch.push(info.incremental_rebuild_rules[i]);
                     self.rules[info.nonincremental_rebuild_rule].last_run_at = ts;
                 }
-                changed |= run_rules_impl(&mut self.db, &mut self.rules, &scratch, ts)?.changed;
+                changed |= run_rules_impl(
+                    &mut self.db,
+                    &mut self.rules,
+                    &scratch,
+                    ts,
+                    ReportLevel::SizeOnly,
+                )?
+                .changed;
                 scratch.clear();
             }
         }
@@ -929,19 +970,19 @@ impl EGraph {
         for ty in schema {
             vars.push(rb.new_var(*ty).into());
         }
-        let canon_val = rb.new_var(ColumnTy::Id);
+        let canon_val: QueryEntry = rb.new_var(ColumnTy::Id).into();
         let subsume_var = subsume.then(|| rb.new_var(ColumnTy::Id));
         rb.add_atom_with_timestamp_and_func(
             table_id,
             Some(table),
-            subsume_var.map(QueryEntry::from),
+            subsume_var.clone().map(QueryEntry::from),
             &vars,
         );
         rb.add_atom_with_timestamp_and_func(
             uf_table,
             None,
             None,
-            &[vars[col.index()].clone(), canon_val.into()],
+            &[vars[col.index()].clone(), canon_val.clone()],
         );
         rb.set_focus(1); // Set the uf atom as the sole focus.
 
@@ -949,7 +990,7 @@ impl EGraph {
         let mut canon = Vec::<QueryEntry>::with_capacity(schema.len());
         for (i, (var, ty)) in vars.iter().zip(schema.iter()).enumerate() {
             canon.push(if i == col.index() {
-                canon_val.into()
+                canon_val.clone()
             } else if let ColumnTy::Id = ty {
                 rb.lookup_uf(var.clone()).unwrap().into()
             } else {
@@ -975,7 +1016,7 @@ impl EGraph {
         rb.add_atom_with_timestamp_and_func(
             table_id,
             Some(table),
-            subsume_var.map(QueryEntry::from),
+            subsume_var.clone().map(QueryEntry::from),
             &vars,
         );
         let mut lhs = SmallVec::<[QueryEntry; 4]>::new();
@@ -1012,6 +1053,10 @@ impl EGraph {
         self.inc_ts();
         self.rebuild().unwrap();
         updated
+    }
+
+    pub fn set_report_level(&mut self, level: ReportLevel) {
+        self.report_level = level;
     }
 }
 
@@ -1462,6 +1507,7 @@ fn run_rules_impl(
     rule_info: &mut DenseIdMapWithReuse<RuleId, RuleInfo>,
     rules: &[RuleId],
     next_ts: Timestamp,
+    report_level: ReportLevel,
 ) -> Result<RuleSetReport> {
     for rule in rules {
         let info = &mut rule_info[*rule];
@@ -1478,7 +1524,7 @@ fn run_rules_impl(
         info.last_run_at = next_ts;
     }
     let ruleset = rsb.build();
-    Ok(db.run_rule_set(&ruleset))
+    Ok(db.run_rule_set(&ruleset, report_level))
 }
 
 // These markers are just used to make it easy to distinguish time spent in
@@ -1755,17 +1801,3 @@ impl<T, A: smallvec::Array<Item = T>> HasResizeWith<T> for SmallVec<A> {
         self.resize_with(new_size, f);
     }
 }
-
-/// Running rules produces a report of the results.
-/// This includes rough timing information and whether
-/// the database was changed.
-#[derive(Debug, Default)]
-pub struct IterationReport {
-    pub changed: bool,
-    pub rule_reports: HashMap<String, RuleReport>,
-    pub search_and_apply_time: Duration,
-    pub merge_time: Duration,
-    pub rebuild_time: Duration,
-}
-
-pub use crate::core_relations::RuleReport;
