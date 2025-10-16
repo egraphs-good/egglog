@@ -52,6 +52,7 @@ use prelude::*;
 use scheduler::{SchedulerId, SchedulerRecord};
 use serde::ser::SerializeStruct;
 use serde::{Deserialize, Serialize};
+use serde_json::json;
 pub use serialize::{SerializeConfig, SerializeOutput, SerializedNode};
 use sort::*;
 use std::any::Any;
@@ -229,60 +230,57 @@ impl Serialize for SerializableSort {
     {
         let sort = &self.0;
 
+        let mut s = serializer.serialize_struct("SerializableSort", 2)?;
+
         // Figure out which kind of sort we have
         if let Some(sort) = sort.as_any().downcast_ref::<EqSort>() {
-            let mut s = serializer.serialize_struct("SerializableSort", 2)?;
             s.serialize_field("type", "EqSort")?;
             s.serialize_field("data", sort)?;
             s.end()
         } else if let Some(sort) = sort.as_any().downcast_ref::<FunctionSort>() {
-            let mut s = serializer.serialize_struct("SerializableSort", 2)?;
             s.serialize_field("type", "FunctionSort")?;
             s.serialize_field("data", sort)?;
             s.end()
         } else if let Some(_) = sort.as_any().downcast_ref::<BaseSortImpl<BigIntSort>>() {
-            let mut s = serializer.serialize_struct("SerializableSort", 2)?;
             s.serialize_field("type", "BaseSort")?;
             s.serialize_field("data", "BigIntSort")?;
             s.end()
         } else if let Some(_) = sort.as_any().downcast_ref::<BaseSortImpl<BigRatSort>>() {
-            let mut s = serializer.serialize_struct("SerializableSort", 2)?;
             s.serialize_field("type", "BaseSort")?;
             s.serialize_field("data", "BigRatSort")?;
             s.end()
         } else if let Some(_) = sort.as_any().downcast_ref::<BaseSortImpl<BoolSort>>() {
-            let mut s = serializer.serialize_struct("SerializableSort", 2)?;
             s.serialize_field("type", "BaseSort")?;
             s.serialize_field("data", "BoolSort")?;
             s.end()
         } else if let Some(_) = sort.as_any().downcast_ref::<BaseSortImpl<F64Sort>>() {
-            let mut s = serializer.serialize_struct("SerializableSort", 2)?;
             s.serialize_field("type", "BaseSort")?;
             s.serialize_field("data", "F64Sort")?;
             s.end()
         } else if let Some(_) = sort.as_any().downcast_ref::<BaseSortImpl<I64Sort>>() {
-            let mut s = serializer.serialize_struct("SerializableSort", 2)?;
             s.serialize_field("type", "BaseSort")?;
             s.serialize_field("data", "I64Sort")?;
             s.end()
         } else if let Some(_) = sort.as_any().downcast_ref::<BaseSortImpl<StringSort>>() {
-            let mut s = serializer.serialize_struct("SerializableSort", 2)?;
             s.serialize_field("type", "BaseSort")?;
             s.serialize_field("data", "StringSort")?;
             s.end()
         } else if let Some(_) = sort.as_any().downcast_ref::<BaseSortImpl<UnitSort>>() {
-            let mut s = serializer.serialize_struct("SerializableSort", 2)?;
             s.serialize_field("type", "BaseSort")?;
             s.serialize_field("data", "UnitSort")?;
             s.end()
         } else if let Some(sort) = sort.as_any().downcast_ref::<ContainerSortImpl<MapSort>>() {
             let inner = &sort.0;
 
-            let mut s = serializer.serialize_struct("SerializableSort", 3)?;
             s.serialize_field("type", "MapSort")?;
-            s.serialize_field("name", &inner.name)?;
-            s.serialize_field("key", &SerializableSort(inner.key.clone()))?;
-            s.serialize_field("value", &SerializableSort(inner.value.clone()))?;
+            s.serialize_field(
+                "data",
+                &json!({
+                    "name": &inner.name,
+                    "key": &SerializableSort(inner.key.clone()),
+                    "value": &SerializableSort(inner.value.clone())
+                }),
+            )?;
             s.end()
         } else if let Some(sort) = sort
             .as_any()
@@ -290,26 +288,38 @@ impl Serialize for SerializableSort {
         {
             let inner = &sort.0;
 
-            let mut s = serializer.serialize_struct("SerializableSort", 3)?;
             s.serialize_field("type", "MultiSetSort")?;
-            s.serialize_field("name", &inner.name)?;
-            s.serialize_field("element", &SerializableSort(inner.element.clone()))?;
+            s.serialize_field(
+                "data",
+                &json!({
+                    "name": &inner.name,
+                    "element": &SerializableSort(inner.element.clone())
+                }),
+            )?;
             s.end()
         } else if let Some(sort) = sort.as_any().downcast_ref::<ContainerSortImpl<SetSort>>() {
             let inner = &sort.0;
 
-            let mut s = serializer.serialize_struct("SerializableSort", 3)?;
             s.serialize_field("type", "SetSort")?;
-            s.serialize_field("name", &inner.name)?;
-            s.serialize_field("element", &SerializableSort(inner.element.clone()))?;
+            s.serialize_field(
+                "data",
+                &json!({
+                    "name": &inner.name,
+                    "element": &SerializableSort(inner.element.clone())
+                }),
+            )?;
             s.end()
         } else if let Some(sort) = sort.as_any().downcast_ref::<ContainerSortImpl<VecSort>>() {
             let inner = &sort.0;
 
-            let mut s = serializer.serialize_struct("SerializableSort", 3)?;
             s.serialize_field("type", "VecSort")?;
-            s.serialize_field("name", &inner.name)?;
-            s.serialize_field("element", &SerializableSort(inner.element.clone()))?;
+            s.serialize_field(
+                "data",
+                &json!({
+                    "name": &inner.name,
+                    "element": &SerializableSort(inner.element.clone())
+                }),
+            )?;
             s.end()
         } else {
             Err(serde::ser::Error::custom("Unknown sort implementation"))

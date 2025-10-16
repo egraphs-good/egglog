@@ -127,7 +127,10 @@ pub fn poach_all() {
         let name = format!("{}", path.display());
         match poach_one(&path, &file_out_dir, &args) {
             Ok(()) => successes.push(name),
-            Err(_) => failures.push(name),
+            Err(e) => {
+                println!("{:?}", e);
+                failures.push(name)
+            }
         }
     }
     let v = json!({"success": successes, "fail": failures});
