@@ -58,6 +58,10 @@ where
                     to_value(v).map_err(serde::ser::Error::custom)?,
                 ));
             }
+
+            // Sort by the serialized key to guarantee deterministic order
+            inner.sort_by(|(k1, _), (k2, _)| k1.to_string().cmp(&k2.to_string()));
+
             serializable_data.push(inner)
         }
 
