@@ -434,10 +434,32 @@ macro_rules! atomic_of {
 macro_rules! define_id {
     ($v:vis $name:ident, $repr:tt) => { define_id!($v, $name, $repr, ""); };
     ($v:vis $name:ident, $repr:tt, $doc:tt) => {
-        #[derive(Copy, Clone, Default, serde::Serialize, serde::Deserialize)]
+
+        #[derive(Copy, Clone, Default)]
         #[doc = $doc]
         $v struct $name {
             rep: $repr,
+        }
+
+        impl serde::Serialize for $name {
+            fn serialize<S>(&self, serializer: S) -> std::result::Result<S::Ok, S::Error>
+            where S: serde::Serializer {
+                serializer.serialize_str(&format!("{}:{}", stringify!($name), self.rep))
+            }
+        }
+
+        impl<'de> serde::Deserialize<'de> for $name {
+            fn deserialize<D>(deserializer : D) -> std::result::Result<Self, D::Error>
+            where D: serde::Deserializer<'de>
+            {
+                let s = String::deserialize(deserializer)?;
+                let prefix = concat!(stringify!($name), ":");
+                if let Some(inner) = s.strip_prefix(prefix) {
+                    inner.parse::<$repr>().map($name::new_const).map_err(|_| serde::de::Error::custom(format!("invalid value {}", s)))
+                } else {
+                    Err(serde::de::Error::custom(format!("Invalid format. Expected {}:<number>, got {}", stringify!($name), s)))
+                }
+            }
         }
 
         impl PartialEq for $name {
