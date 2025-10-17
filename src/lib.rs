@@ -1561,6 +1561,13 @@ impl EGraph {
     pub fn get_function(&self, name: &str) -> Option<&Function> {
         self.functions.get(name)
     }
+
+    /// A basic method for dumping the state of the database to `log::info!`.
+    ///
+    /// For large tables, this is unlikely to give particularly useful output.
+    pub fn dump_debug_info(&self) {
+        self.backend.dump_debug_info();
+    }
 }
 
 struct BackendRule<'a> {
