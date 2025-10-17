@@ -126,10 +126,10 @@ pub fn poach_all() {
         println!("[{}/{}] Processing {}", i, entries.len(), path.display());
         let name = format!("{}", path.display());
         match poach_one(&path, &file_out_dir, &args) {
-            Ok(()) => successes.push(name),
+            Ok(n) => successes.push(format!("{} ({})", name, n)),
             Err(e) => {
                 println!("{:?}", e);
-                failures.push(name)
+                failures.push(format!("{} [{}]", name, e))
             }
         }
     }
@@ -138,7 +138,7 @@ pub fn poach_all() {
         .expect("fail");
 }
 
-fn poach_one(path: &PathBuf, out_dir: &PathBuf, args: &Args) -> Result<()> {
+fn poach_one(path: &PathBuf, out_dir: &PathBuf, args: &Args) -> Result<usize> {
     let mut egraph = EGraph::default();
 
     egraph.fact_directory.clone_from(&args.fact_directory);
@@ -170,6 +170,9 @@ fn poach_one(path: &PathBuf, out_dir: &PathBuf, args: &Args) -> Result<()> {
     let e2_json: serde_json::Value =
         serde_json::from_str(&fs::read_to_string(&s2).context("couldn't open serialize2.json")?)
             .context("couldn't parse serialize2 as json")?;
+
+    let e3_contents = fs::read_to_string(&s3).context("couldn't open serialize3.json")?;
+    let e3_len = e3_contents.len();
     let e3_json: serde_json::Value =
         serde_json::from_str(&fs::read_to_string(&s3).context("couldn't open serialize3.json")?)
             .context("couldn't parse serialize3 as json")?;
@@ -182,7 +185,7 @@ fn poach_one(path: &PathBuf, out_dir: &PathBuf, args: &Args) -> Result<()> {
                 .with_context(|| format!("failed to serialize diff to {}", path.display()))?;
             anyhow::bail!("diff for {}", path.display())
         }
-        None => Ok(()),
+        None => Ok(e3_len),
     }
 }
 
