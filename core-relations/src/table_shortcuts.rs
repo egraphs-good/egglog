@@ -13,9 +13,8 @@ use crate::{
 macro_rules! empty_execution_state {
     ($es:ident) => {
         let mut __db = $crate::free_join::Database::default();
-        let __pv = $crate::action::PredictedVals::default();
         let mut $es =
-            $crate::action::ExecutionState::new(&__pv, __db.read_only_view(), Default::default());
+            $crate::action::ExecutionState::new(__db.read_only_view(), Default::default());
     };
 }
 
