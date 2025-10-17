@@ -1568,6 +1568,14 @@ impl EGraph {
     pub fn dump_debug_info(&self) {
         self.backend.dump_debug_info();
     }
+
+    /// Get the canonical representation for `val` based on type.
+    ///
+    /// For [`ColumnTy::Id`], it looks up the union find; otherwise,
+    /// it returns the value itself.
+    pub fn get_canon_repr(&self, val: Value, ty: ColumnTy) -> Value {
+        self.backend.get_canon_repr(val, ty)
+    }
 }
 
 struct BackendRule<'a> {
