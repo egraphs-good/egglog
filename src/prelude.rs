@@ -14,6 +14,7 @@ pub use egglog::ast::{Action, Fact, Facts, GenericActions};
 pub use egglog::sort::{BigIntSort, BigRatSort, BoolSort, F64Sort, I64Sort, StringSort, UnitSort};
 pub use egglog::{EGraph, span};
 pub use egglog::{action, actions, datatype, expr, fact, facts, sort, vars};
+pub use egglog_ast::span::{RustSpan, Span};
 
 pub mod exprs {
     use super::*;
