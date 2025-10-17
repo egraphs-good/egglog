@@ -254,9 +254,28 @@ impl RustRuleContext<'_, '_> {
         self.exec_state.base_values().unwrap::<T>(x)
     }
 
+    /// Convert from an egglog value to reference of Rust container type.
+    /// requires mutable access to execution state
+    ///
+    /// # warnning
+    /// return type contains a read guard, don't leak this guard or will get stuck when `rebuild`
+    pub fn value_to_container<T: ContainerValue>(
+        &mut self,
+        x: Value,
+    ) -> Option<impl Deref<Target = T>> {
+        self.exec_state.container_values().get_val::<T>(x)
+    }
+
     /// Convert from a Rust type to an egglog value.
     pub fn base_to_value<T: BaseValue>(&self, x: T) -> Value {
         self.exec_state.base_values().get::<T>(x)
+    }
+
+    /// Convert from a Rust container type to an egglog value.
+    pub fn container_to_value<T: ContainerValue>(&mut self, x: T) -> Value {
+        self.exec_state
+            .container_values()
+            .register_val::<T>(x, self.exec_state)
     }
 
     fn get_table_action(&self, table: &str) -> egglog_bridge::TableAction {
@@ -420,6 +439,7 @@ impl<F: Fn(&mut RustRuleContext, &[Value]) -> Option<()>> Primitive for RustRule
 pub fn rust_rule(
     egraph: &mut EGraph,
     ruleset: &str,
+    rule_name: &str,
     vars: &[(&str, ArcSort)],
     facts: Facts<String, String>,
     func: impl Fn(&mut RustRuleContext, &[Value]) -> Option<()> + Clone + Send + Sync + 'static,
@@ -454,7 +474,7 @@ pub fn rust_rule(
             ),
         )]),
         body: facts.0,
-        name: "".into(),
+        name: egraph.parser.symbol_gen.fresh(rule_name),
         ruleset: ruleset.into(),
     };
 
@@ -538,7 +558,7 @@ pub fn query(
     let ruleset = egraph.parser.symbol_gen.fresh("query_ruleset");
     add_ruleset(egraph, &ruleset)?;
 
-    rust_rule(egraph, &ruleset, vars, facts, move |_, values| {
+    rust_rule(egraph, &ruleset, "query", vars, facts, move |_, values| {
         let arc = results_weak.upgrade().unwrap();
         let mut results = arc.lock().unwrap();
         results.rows += 1;
@@ -947,6 +967,7 @@ mod tests {
         // add the rule from `build_test_database` to the egraph
         rust_rule(
             &mut egraph,
+            "demo_rule",
             ruleset,
             vars![x: i64, f0: i64, f1: i64],
             facts![
