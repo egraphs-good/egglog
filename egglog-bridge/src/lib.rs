@@ -98,9 +98,10 @@ pub struct EGraph {
     /// uses of `(add y z)` will still see `id` within the same rule.
     ///
     /// This cache is _local_: so different threads can potentially see different values for `id`.
-    /// This is fine as all provisional values for `id` will get unioned together and the database
-    /// will be consistent after congruence closure runs. This same logic, however, does not hold
-    /// true for proofs.
+    /// In other words, each thread will have its unique id for the new row being added. This is
+    /// fine as all provisional values for `id` will get unioned together and the database will be
+    /// consistent after congruence closure runs. This same logic, however, does not hold true for
+    /// proofs.
     ///
     /// When proofs mint a new `id` for a row it is used both as the canonical e-class id in the main
     /// e-graph and also the *term* id for that specific row. Term ids are used to reconstruct
@@ -118,9 +119,9 @@ pub struct EGraph {
     /// > (add x 0) => term: id1, canon: id0
     /// > (add 0 x) => term: id2, canon: id0
     ///
-    /// So in other words, while canonical ids change over time and need not be unique to a term,
-    /// term ids are specific to the specific shape of the (head of the) term when it was first
-    /// instantiated. This is a problem for local caching, because it means that we can have
+    /// In other words, while canonical ids change over time and need not be unique to a term, term
+    /// ids are unique to the specific shape of the (head of the) term when it was first
+    /// instantiated. This is a problem for local caching because it means that we can have
     /// multiple term values for the same row. How do we pick the real one?
     ///
     /// We have a separate union-find. Duplicate insertions into the term table cause `union`s on
@@ -345,6 +346,9 @@ impl EGraph {
                         // We want to pick the minimum term value.
                         let l_term_id = old[term_index];
                         let r_term_id = new[term_index];
+                        // NB: we should only need this merge function when we are executing
+                        // rules in parallel. We could consider a simpler merge function if
+                        // parallelism is disabled.
                         if r_term_id < l_term_id {
                             EGraph::record_term_consistency(
                                 state,
