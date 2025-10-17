@@ -1821,12 +1821,10 @@ pub enum Error {
 
 #[cfg(test)]
 mod tests {
-    use lazy_static::lazy_static;
-    use std::sync::Mutex;
-
     use crate::constraint::SimpleTypeConstraint;
     use crate::sort::*;
     use crate::*;
+    use std::sync::Mutex;
 
     #[derive(Clone)]
     struct InnerProduct {
@@ -1893,9 +1891,18 @@ mod tests {
             .unwrap();
     }
 
-    // Test that `EGraph` is `Send` and `Sync`
-    lazy_static! {
-        pub static ref RT: Mutex<EGraph> = Mutex::new(EGraph::default());
+    // Test that an `EGraph` is `Send` and a `Mutex` of an `EGraph` is `Sync`
+    #[test]
+    fn test_egraph_send_sync() {
+        fn is_send<T: Send>(_t: &T) -> bool {
+            true
+        }
+        fn is_sync<T: Sync>(_t: &T) -> bool {
+            true
+        }
+        let egraph = EGraph::default();
+        let rt = Mutex::new(egraph.clone());
+        assert!(is_send(&egraph) && is_sync(&rt)); // note: is_sync(&egraph) fails.
     }
 
     fn get_function(egraph: &EGraph, name: &str) -> Function {
