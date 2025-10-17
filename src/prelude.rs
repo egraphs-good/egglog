@@ -398,6 +398,7 @@ impl<F: Fn(&mut RustRuleContext, &[Value]) -> Option<()>> Primitive for RustRule
 /// // add the rule from `build_test_database` to the egraph
 /// rust_rule(
 ///     &mut egraph,
+///     "fib_rule",
 ///     ruleset,
 ///     vars![x: i64, f0: i64, f1: i64],
 ///     facts![
@@ -438,8 +439,8 @@ impl<F: Fn(&mut RustRuleContext, &[Value]) -> Option<()>> Primitive for RustRule
 /// ```
 pub fn rust_rule(
     egraph: &mut EGraph,
-    ruleset: &str,
     rule_name: &str,
+    ruleset: &str,
     vars: &[(&str, ArcSort)],
     facts: Facts<String, String>,
     func: impl Fn(&mut RustRuleContext, &[Value]) -> Option<()> + Clone + Send + Sync + 'static,
@@ -558,7 +559,7 @@ pub fn query(
     let ruleset = egraph.parser.symbol_gen.fresh("query_ruleset");
     add_ruleset(egraph, &ruleset)?;
 
-    rust_rule(egraph, &ruleset, "query", vars, facts, move |_, values| {
+    rust_rule(egraph, "query", &ruleset, vars, facts, move |_, values| {
         let arc = results_weak.upgrade().unwrap();
         let mut results = arc.lock().unwrap();
         results.rows += 1;
