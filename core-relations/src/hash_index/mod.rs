@@ -11,7 +11,10 @@ use hashbrown::HashTable;
 use once_cell::sync::Lazy;
 use rayon::iter::ParallelIterator;
 use rustc_hash::FxHasher;
-use serde::{Deserialize, Serialize, ser::SerializeStruct};
+use serde::{
+    Deserialize, Serialize, Serializer,
+    ser::{SerializeMap, SerializeStruct},
+};
 
 use crate::{
     OffsetRange, Subset,
@@ -175,13 +178,21 @@ impl<'de> Deserialize<'de> for ColumnIndexShard {
     {
         #[derive(Deserialize)]
         struct Partial {
-            table: IndexMap<Value, BufferedSubset>,
+            table: IndexMap<String, BufferedSubset>,
             subsets: SubsetBuffer,
         }
 
         let helper = Partial::deserialize(deserializer)?;
+
+        // convert String back to Value
+        let mut table = IndexMap::with_capacity_and_hasher(helper.table.len(), Default::default());
+        for (k, v) in helper.table {
+            let parsed = Value::new(k.parse().expect(&format!("invalid Value {}", k)));
+            table.insert(parsed, v);
+        }
+
         Ok(ColumnIndexShard {
-            table: Pooled::new(helper.table),
+            table: Pooled::new(table),
             subsets: helper.subsets,
         })
     }
@@ -193,7 +204,26 @@ impl Serialize for ColumnIndexShard {
         S: serde::Serializer,
     {
         let mut s = serializer.serialize_struct("ColumnIndexShard", 2)?;
-        s.serialize_field("table", &*self.table)?;
+
+        struct TableHelper<'a> {
+            table: &'a IndexMap<Value, BufferedSubset>,
+        }
+
+        impl<'a> Serialize for TableHelper<'a> {
+            fn serialize<S>(&self, serializer: S) -> Result<S::Ok, S::Error>
+            where
+                S: Serializer,
+            {
+                let mut map = serializer.serialize_map(Some(self.table.len()))?;
+                for (k, v) in self.table.iter() {
+                    // convert Value to u32 to String for use as JSON keys
+                    map.serialize_entry(&k.rep().to_string(), v)?;
+                }
+                map.end()
+            }
+        }
+
+        s.serialize_field("table", &TableHelper { table: &self.table })?;
         s.serialize_field("subsets", &self.subsets)?;
         s.end()
     }
