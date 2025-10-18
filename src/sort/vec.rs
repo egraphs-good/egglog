@@ -2,7 +2,7 @@ use super::*;
 
 #[derive(Clone, Debug, PartialEq, Eq, Hash)]
 pub struct VecContainer {
-    do_rebuild: bool,
+    pub do_rebuild: bool,
     pub data: Vec<Value>,
 }
 

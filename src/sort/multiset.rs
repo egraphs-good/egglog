@@ -3,7 +3,7 @@ use inner::MultiSet;
 
 #[derive(Clone, Debug, PartialEq, Eq, Hash)]
 pub struct MultiSetContainer {
-    do_rebuild: bool,
+    pub do_rebuild: bool,
     pub data: MultiSet<Value>,
 }
 

@@ -1,4 +1,5 @@
 use egglog::{extract::DefaultCost, *};
+use egglog_ast::span::{RustSpan, Span};
 
 #[test]
 fn test_simple_extract1() {
