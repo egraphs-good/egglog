@@ -11,18 +11,15 @@ jobs:
     steps:
       - run: echo "CARGO_INCREMENTAL=0" >> "$GITHUB_ENV"
       - uses: actions/checkout@v4
+      - uses: taiki-e/install-action@v2
+        with:
+          tool: cargo-codspeed
       - run: |
           git clone https://github.com/egraphs-good/egglog-benchmarks.git
           cd egglog-benchmarks
           git checkout 4e9061a2c3cf19cc070261e0f486e49439c20c22
       - uses: Swatinem/rust-cache@v2
-      - run: |
-          mkdir ./timeline/benchmarks
-          mkdir ./timeline/annotated
-          cargo run --bin timeline -- ./egglog-benchmarks/eggccsubmission/ ./timeline/benchmarks/
-          python3 ./timeline/transform.py ./timeline/benchmarks/ ./timeline/annotated/
-          echo "ARTIFACT_DIRNAME=nightly-timeline-$(date +%Y-%m-%d)" >> $GITHUB_ENV
-      - uses: actions/upload-artifact@v4
+      - run: cargo codspeed build nightly_benchmarking -m walltime
+      - uses: CodSpeedHQ/action@v3
         with:
-          name: $ARTIFACT_DIRNAME
-          path: ./timeline/annotated/
+          run: cargo codspeed run nightly_benchmarking -m walltime
