@@ -255,10 +255,8 @@ impl RustRuleContext<'_, '_> {
     }
 
     /// Convert from an egglog value to reference of Rust container type.
-    /// requires mutable access to execution state
     ///
-    /// # warnning
-    /// return type contains a read guard, don't leak this guard or will get stuck when `rebuild`
+    /// See [`EGraph::value_to_container`].
     pub fn value_to_container<T: ContainerValue>(
         &mut self,
         x: Value,
