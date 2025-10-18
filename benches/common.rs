@@ -1,5 +1,5 @@
 use egglog::EGraph;
-use std::{sync::Once, fmt};
+use std::{fmt, sync::Once};
 
 #[global_allocator]
 static GLOBAL: mimalloc::MiMalloc = mimalloc::MiMalloc;
