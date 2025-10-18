@@ -491,7 +491,6 @@ dependencies = [
  "hashbrown 0.16.0",
  "im-rc",
  "indexmap",
- "lazy_static",
  "libtest-mimic",
  "log",
  "mimalloc",
@@ -568,7 +567,6 @@ dependencies = [
  "fixedbitset",
  "hashbrown 0.16.0",
  "indexmap",
- "lazy_static",
  "log",
  "mimalloc",
  "num",
@@ -586,7 +584,6 @@ dependencies = [
 name = "egglog-numeric-id"
 version = "1.0.0"
 dependencies = [
- "lazy_static",
  "rayon",
 ]
 

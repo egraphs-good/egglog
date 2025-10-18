@@ -22,7 +22,6 @@ smallvec = { workspace = true }
 bumpalo = { workspace = true }
 thiserror = { workspace = true }
 anyhow = { workspace = true }
-lazy_static = { workspace = true }
 log = { workspace = true }
 petgraph = { workspace = true }
 crossbeam-queue = { workspace = true }
