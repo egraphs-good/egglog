@@ -1824,7 +1824,6 @@ mod tests {
     use crate::constraint::SimpleTypeConstraint;
     use crate::sort::*;
     use crate::*;
-    use std::sync::Mutex;
 
     #[derive(Clone)]
     struct InnerProduct {
@@ -1891,7 +1890,7 @@ mod tests {
             .unwrap();
     }
 
-    // Test that an `EGraph` is `Send` and a `Mutex` of an `EGraph` is `Sync`
+    // Test that an `EGraph` is `Send` & `Sync`
     #[test]
     fn test_egraph_send_sync() {
         fn is_send<T: Send>(_t: &T) -> bool {
@@ -1901,8 +1900,7 @@ mod tests {
             true
         }
         let egraph = EGraph::default();
-        let rt = Mutex::new(egraph.clone());
-        assert!(is_send(&egraph) && is_sync(&rt)); // note: is_sync(&egraph) fails.
+        assert!(is_send(&egraph) && is_sync(&egraph));
     }
 
     fn get_function(egraph: &EGraph, name: &str) -> Function {
