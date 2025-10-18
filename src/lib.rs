@@ -1570,7 +1570,7 @@ impl EGraph {
     }
 
     /// Get the canonical representation for `val` based on type.
-    pub fn get_canonical_value(&self, val: Value, sort: ArcSort) -> Value {
+    pub fn get_canonical_value(&self, val: Value, sort: &ArcSort) -> Value {
         self.backend
             .get_canon_repr(val, sort.column_ty(&self.backend))
     }
