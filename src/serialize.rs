@@ -52,7 +52,7 @@ impl SerializeOutput {
 struct Serializer {
     node_ids: NodeIDs,
     result: egraph_serialize::EGraph,
-    labels: HashMap<egraph_serialize::ClassId, Vec<String>>,
+    let_bindings: HashMap<egraph_serialize::ClassId, Vec<String>>,
 }
 
 /// Default is used for exporting JSON and will output all nodes.
@@ -136,7 +136,7 @@ impl EGraph {
             egraph_serialize::NodeId,
         )> = Vec::new();
         let mut functions_kept = 0usize;
-        let mut labels = HashMap::default();
+        let mut let_bindings = HashMap::default();
         for (name, function) in self.functions.iter() {
             if functions_kept >= max_functions {
                 discarded_functions.push(name.clone());
@@ -151,7 +151,7 @@ impl EGraph {
                 let (out, inps) = row.vals.split_last().unwrap();
                 let class_id = self.value_to_class_id(&function.schema.output, *out);
                 if function.decl.let_binding {
-                    labels
+                    let_bindings
                         .entry(class_id.clone())
                         .or_insert_with(Vec::new)
                         .push(name.clone());
@@ -198,7 +198,7 @@ impl EGraph {
         let mut serializer = Serializer {
             node_ids,
             result: egraph_serialize::EGraph::default(),
-            labels,
+            let_bindings,
         };
 
         for (func, input, output, subsumed, class_id, node_id) in all_calls {
@@ -383,9 +383,9 @@ impl EGraph {
         };
         #[allow(clippy::disallowed_types)]
         let mut extra = std::collections::HashMap::default();
-        if let Some(labels) = serializer.labels.get(class_id) {
-            if !labels.is_empty() {
-                extra.insert("".to_string(), labels.join(", "));
+        if let Some(let_bindings) = serializer.let_bindings.get(class_id) {
+            if !let_bindings.is_empty() {
+                extra.insert("let".to_string(), let_bindings.join(", "));
             }
         }
         serializer.result.class_data.insert(
