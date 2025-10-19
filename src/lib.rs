@@ -50,6 +50,7 @@ use log::{Level, log_enabled};
 use numeric_id::DenseIdMap;
 use prelude::*;
 use scheduler::{SchedulerId, SchedulerRecord};
+use serde::Serialize;
 pub use serialize::{SerializeConfig, SerializeOutput, SerializedNode};
 use sort::*;
 use std::fmt::{Debug, Display, Formatter};
@@ -1090,7 +1091,10 @@ impl EGraph {
         }
     }
 
-    fn run_command(&mut self, command: ResolvedNCommand) -> Result<Option<CommandOutput>, Error> {
+    pub(crate) fn run_command(
+        &mut self,
+        command: ResolvedNCommand,
+    ) -> Result<Option<CommandOutput>, Error> {
         match command {
             // Sorts are already declared during typechecking
             ResolvedNCommand::Sort(_span, name, _presort_and_args) => {
@@ -1398,7 +1402,10 @@ impl EGraph {
         Ok(())
     }
 
-    fn process_command(&mut self, command: Command) -> Result<Vec<ResolvedNCommand>, Error> {
+    pub(crate) fn process_command(
+        &mut self,
+        command: Command,
+    ) -> Result<Vec<ResolvedNCommand>, Error> {
         let mut program = self.resolve_command(command)?;
 
         program = remove_globals::remove_globals(program, &mut self.parser.symbol_gen);
@@ -2033,3 +2040,95 @@ mod tests {
         assert_eq!(res[0].to_string(), "(exp)\n");
     }
 }
+
+/***** TESTING AREA FOR TIMED EGRAPH *****/
+
+static START: &'static str = "start";
+static END: &'static str = "end";
+
+#[derive(Serialize)]
+pub struct EgraphEvent {
+    sexp_idx: i32,
+    evt: &'static str,
+    time: Duration,
+}
+
+#[derive(Serialize)]
+pub struct ProgramTimeline {
+    program_text: String,
+    evts: Vec<EgraphEvent>,
+}
+
+pub struct TimedEgraph {
+    egraph: EGraph,
+    timeline: Vec<ProgramTimeline>,
+    timer: std::time::Instant,
+}
+
+impl TimedEgraph {
+    /// Create a new TimedEgraph with a default EGraph
+    pub fn new() -> Self {
+        Self {
+            egraph: EGraph::default(),
+            timeline: Vec::new(),
+            timer: std::time::Instant::now(),
+        }
+    }
+
+    pub fn parse_and_run_program(
+        &mut self,
+        filename: Option<String>,
+        input: &str,
+    ) -> Result<Vec<CommandOutput>, Error> {
+        let mut program_timeline = ProgramTimeline {
+            program_text: input.to_string(),
+            evts: vec![],
+        };
+        let parsed = self
+            .egraph
+            .parser
+            .get_program_from_string(filename, input)?;
+        let output = self.run_program(parsed, &mut program_timeline);
+        self.timeline.push(program_timeline);
+        output
+    }
+
+    pub fn serialized_timeline(&self) -> Result<String, serde_json::Error> {
+        serde_json::to_string(&self.timeline)
+    }
+
+    fn run_program(
+        &mut self,
+        program: Vec<Command>,
+        program_timeline: &mut ProgramTimeline,
+    ) -> Result<Vec<CommandOutput>, Error> {
+        let mut outputs = Vec::new();
+        let mut i: i32 = 0;
+        for command in program {
+            program_timeline.evts.push(EgraphEvent {
+                sexp_idx: i,
+                evt: START,
+                time: self.timer.elapsed(),
+            });
+
+            for processed in self.egraph.process_command(command)? {
+                let result = self.egraph.run_command(processed)?;
+                if let Some(output) = result {
+                    outputs.push(output);
+                }
+            }
+
+            program_timeline.evts.push(EgraphEvent {
+                sexp_idx: i,
+                evt: END,
+                time: self.timer.elapsed(),
+            });
+
+            i = i + 1;
+        }
+
+        Ok(outputs)
+    }
+}
+
+/***** TESTING AREA FOR TIMED EGRAPH *****/
