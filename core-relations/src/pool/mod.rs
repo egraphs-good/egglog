@@ -10,7 +10,10 @@ use std::{
     rc::Rc,
 };
 
-use crate::numeric_id::{DenseIdMap, IdVec};
+use crate::{
+    AtomId,
+    numeric_id::{DenseIdMap, IdVec},
+};
 use fixedbitset::FixedBitSet;
 use hashbrown::HashTable;
 
@@ -435,6 +438,7 @@ pool_set! {
         shard_hist: DenseIdMap<ShardId, usize> [ 1 << 20 ],
         instr_indexes: Vec<u32> [ 1 << 20 ],
         cached_subsets: IdVec<ColumnId, std::sync::OnceLock<std::sync::Arc<ColumnIndex>>> [ 4 << 20 ],
+        intersected_on: DenseIdMap<AtomId, i64> [ 1 << 20 ],
     }
 }
 

@@ -179,7 +179,7 @@ fn desugar_datatype(span: Span, name: String, variants: Vec<Variant>) -> Vec<NCo
                     output: name.clone(),
                 },
                 variant.cost,
-                false,
+                variant.unextractable,
             ))
         }))
         .collect()

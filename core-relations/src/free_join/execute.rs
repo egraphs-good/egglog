@@ -6,6 +6,7 @@ use std::{
 };
 
 use crate::numeric_id::{DenseIdMap, IdVec, NumericId};
+use dashmap::mapref::one::RefMut;
 use smallvec::SmallVec;
 use web_time::Instant;
 
@@ -180,13 +181,12 @@ impl Database {
                                 Default::default(),
                             ));
                         }
-                        rule_reports.insert(
-                            desc.clone(),
-                            RuleReport {
-                                search_and_apply_time,
-                                num_matches: 0,
-                            },
-                        );
+                        let mut rule_report: RefMut<'_, String, RuleReport> =
+                            rule_reports.entry(desc.clone()).or_default();
+                        *rule_report = rule_report.union(&RuleReport {
+                            search_and_apply_time,
+                            num_matches: 0,
+                        });
                     });
                 }
             });
@@ -210,13 +210,11 @@ impl Database {
                 join_state.run_header(plan, &mut binding_info, &mut action_buf);
                 let search_and_apply_time = search_and_apply_timer.elapsed();
 
-                rule_reports.insert(
-                    desc.clone(),
-                    RuleReport {
-                        search_and_apply_time,
-                        num_matches: 0,
-                    },
-                );
+                let mut rule_report = rule_reports.entry(desc.clone()).or_default();
+                *rule_report = rule_report.union(&RuleReport {
+                    search_and_apply_time,
+                    num_matches: 0,
+                });
             }
             action_buf.flush(&mut ExecutionState::new(
                 &preds,
@@ -227,7 +225,7 @@ impl Database {
         for (_plan, desc, action) in rule_set.plans.values() {
             let mut reservation = rule_reports.get_mut(desc).unwrap();
             let RuleReport { num_matches, .. } = reservation.value_mut();
-            *num_matches = match_counter.read_matches(*action);
+            *num_matches += match_counter.read_matches(*action);
         }
         let search_and_apply_time = search_and_apply_timer.elapsed();
 
@@ -443,6 +441,11 @@ impl<'a> JoinState<'a> {
             cur.subset
                 .intersect(subset.as_ref(), &with_pool_set(|ps| ps.get_pool()));
             binding_info.move_back_node(*atom, cur);
+        }
+        for (_, node) in binding_info.subsets.iter() {
+            if node.subset.is_empty() {
+                return;
+            }
         }
         let mut order = InstrOrder::from_iter(0..plan.stages.instrs.len());
         sort_plan_by_size(&mut order, 0, &plan.stages.instrs, binding_info);
@@ -961,8 +964,9 @@ impl<'a, 'outer: 'a> ActionBuffer<'a> for InPlaceActionBuffer<'outer> {
         }
         if action_state.len >= VAR_BATCH_SIZE {
             let mut state = to_exec_state();
-            state.run_instrs(&action_info.instrs, &mut action_state.bindings);
+            let succeeded = state.run_instrs(&action_info.instrs, &mut action_state.bindings);
             action_state.bindings.clear();
+            self.match_counter.inc_matches(action, succeeded);
             action_state.len = 0;
         }
     }
@@ -1100,14 +1104,13 @@ fn flush_action_states(
 ) {
     for (action, ActionState { bindings, len, .. }) in actions.iter_mut() {
         if *len > 0 {
-            exec_state.run_instrs(&rule_set.actions[action].instrs, bindings);
+            let succeeded = exec_state.run_instrs(&rule_set.actions[action].instrs, bindings);
             bindings.clear();
-            match_counter.inc_matches(action, *len);
+            match_counter.inc_matches(action, succeeded);
             *len = 0;
         }
     }
 }
-
 struct MatchCounter {
     matches: IdVec<ActionId, AtomicUsize>,
 }
@@ -1128,28 +1131,20 @@ impl MatchCounter {
 }
 
 fn estimate_size(join_stage: &JoinStage, binding_info: &BindingInfo) -> usize {
-    join_stage_order_key(join_stage, binding_info).0
+    match join_stage {
+        JoinStage::Intersect { scans, .. } => scans
+            .iter()
+            .map(|scan| binding_info.subsets[scan.atom].size())
+            .min()
+            .unwrap_or(0),
+        JoinStage::FusedIntersect { cover, .. } => binding_info.subsets[cover.to_index.atom].size(),
+    }
 }
 
-fn join_stage_order_key(join_stage: &JoinStage, binding_info: &BindingInfo) -> (usize, i32) {
-    // Sort increasing by size of scan, decreasing by number of intersections.
+fn num_intersected_rels(join_stage: &JoinStage) -> i32 {
     match join_stage {
-        JoinStage::Intersect { scans, .. } => (
-            scans
-                .iter()
-                .map(|scan| binding_info.subsets[scan.atom].size())
-                .min()
-                .unwrap_or(0),
-            -(scans.len() as i32),
-        ),
-        JoinStage::FusedIntersect {
-            cover,
-            to_intersect,
-            ..
-        } => (
-            binding_info.subsets[cover.to_index.atom].size(),
-            -(to_intersect.len() as i32),
-        ),
+        JoinStage::Intersect { scans, .. } => scans.len() as i32,
+        JoinStage::FusedIntersect { to_intersect, .. } => to_intersect.len() as i32 + 1,
     }
 }
 
@@ -1159,8 +1154,66 @@ fn sort_plan_by_size(
     instrs: &[JoinStage],
     binding_info: &mut BindingInfo,
 ) {
-    order.data[start..]
-        .sort_by_key(|index| join_stage_order_key(&instrs[*index as usize], binding_info));
+    // How many times an atom has been intersected/joined
+    let mut times_refined = with_pool_set(|ps| ps.get::<DenseIdMap<AtomId, i64>>());
+
+    // Count how many times each atom has been refined so far.
+    for ins in instrs[..start].iter() {
+        match ins {
+            JoinStage::Intersect { scans, .. } => scans.iter().for_each(|scan| {
+                *times_refined.get_or_default(scan.atom) += 1;
+            }),
+            JoinStage::FusedIntersect { cover, .. } => {
+                *times_refined.get_or_default(cover.to_index.atom) +=
+                    cover.to_index.vars.len() as i64;
+            }
+        }
+    }
+
+    // We prioritize variables by
+    //
+    //   (1) how many times an atom with this variable has been refined,
+    //   (2) then by how many relations joins on this variable
+    //   (3) then by the cardinality of the variable to be enumerated
+    let key_fn = |join_stage: &JoinStage,
+                  binding_info: &BindingInfo,
+                  times_refined: &DenseIdMap<AtomId, i64>| {
+        let refine = match join_stage {
+            JoinStage::Intersect { scans, .. } => scans
+                .iter()
+                .map(|scan| times_refined.get(scan.atom).copied().unwrap_or_default())
+                .sum::<i64>(),
+            JoinStage::FusedIntersect { cover, .. } => times_refined
+                .get(cover.to_index.atom)
+                .copied()
+                .unwrap_or_default(),
+        };
+        (
+            -refine,
+            -num_intersected_rels(join_stage),
+            estimate_size(join_stage, binding_info),
+        )
+    };
+
+    for i in start..order.len() {
+        for j in i + 1..order.len() {
+            let key_i = key_fn(&instrs[order.get(i)], binding_info, &times_refined);
+            let key_j = key_fn(&instrs[order.get(j)], binding_info, &times_refined);
+            if key_j < key_i {
+                order.data.swap(i, j);
+            }
+        }
+        // Update the counts after a new instruction is selected.
+        match &instrs[order.get(i)] {
+            JoinStage::Intersect { scans, .. } => scans.iter().for_each(|scan| {
+                *times_refined.get_or_default(scan.atom) += 1;
+            }),
+            JoinStage::FusedIntersect { cover, .. } => {
+                *times_refined.get_or_default(cover.to_index.atom) +=
+                    cover.to_index.vars.len() as i64;
+            }
+        }
+    }
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
