@@ -3,7 +3,7 @@
 
 echo "Beginning egglog nightly script"
 
-set -e
+set -e -x
 
 # determine physical directory of this script
 src="${BASH_SOURCE[0]}"
@@ -35,5 +35,8 @@ pushd $TOP_DIR
 cargo run --bin timeline -- "$TOP_DIR/tests" "$NIGHTLY_DIR/data"
 
 # Annotate with time and command info
-python3 timeline/transform.py "$NIGHTLY_DIR/data" "$NIGHTLY_DIR/output"
+python3 timeline/transform.py "$NIGHTLY_DIR/data" "$NIGHTLY_DIR/output/data"
+popd
 
+# Update HTML index page.
+cp "$RESOURCE_DIR"/* "$NIGHTLY_DIR/output"
