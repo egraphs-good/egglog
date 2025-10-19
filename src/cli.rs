@@ -297,7 +297,7 @@ pub fn cli(mut egraph: EGraph) {
                     max_calls_per_function: Some(args.max_calls_per_function),
                     ..SerializeConfig::default()
                 });
-                if serialized_output.is_complete() {
+                if !serialized_output.is_complete() {
                     log::warn!("{}", serialized_output.omitted_description());
                 }
                 let mut serialized = serialized_output.egraph;

@@ -22,12 +22,11 @@ readme = "README.md"
 
 [workspace.dependencies]
 clap = "4"
-egraph-serialize = { git = "https://github.com/egraphs-good/egraph-serialize.git", branch = "main", default-features = false }
+egraph-serialize = { version = "0.3.0", default-features = false }
 env_logger = "0.11"
 hashbrown = {version = "0.16", features = ["serde"] }
 im-rc = "15.1.0"
 indexmap = "2.2"
-lazy_static = "1.4"
 log = "0.4"
 num = "0.4.3"
 ordered-float = "5.0"
@@ -67,21 +66,20 @@ chrono = { version = "0.4", default-features = false }
 # dev dependencies
 ######################
 glob = "0.3.1"
-codspeed-criterion-compat = "3.0.5"
+divan = { package = "codspeed-divan-compat", version = "4.0.3" }
 libtest-mimic = "0.8"
-divan = "0.1.15"
 
 ######################
 # member crates
 ######################
-egglog-core-relations = { path = "core-relations" }
-egglog-ast = { path = "egglog-ast" }
-egglog-bridge = { path = "egglog-bridge" }
-egglog-concurrency = { path = "concurrency" }
-egglog-numeric-id = { path = "numeric-id" }
-egglog-union-find = { path = "union-find" }
-egglog-add-primitive = { path = "src/sort/add_primitive" }
-egglog = { path = ".", default-features = false }
+egglog-core-relations = { path = "core-relations", version = "1.0.0" }
+egglog-ast = { path = "egglog-ast", version = "1.0.0" }
+egglog-bridge = { path = "egglog-bridge", version = "1.0.0" }
+egglog-concurrency = { path = "concurrency", version = "1.0.0" }
+egglog-numeric-id = { path = "numeric-id", version = "1.0.0" }
+egglog-union-find = { path = "union-find", version = "1.0.0" }
+egglog-add-primitive = { path = "src/sort/add_primitive", version = "1.0.0" }
+egglog = { path = ".", default-features = false, version = "1.0.0" }
 
 ######################
 # wasm
@@ -92,9 +90,14 @@ wasm-bindgen = "0.2"
 name = "egglog"
 version = { workspace = true }
 edition = { workspace = true }
+description = { workspace = true }
+repository = { workspace = true }
+keywords = { workspace = true }
+license = { workspace = true }
+readme = { workspace = true }
 
 [[bench]]
-name = "example_benchmarks"
+name = "ci_benchmarking"
 harness = false
 
 [[bench]]
@@ -110,6 +113,10 @@ required-features = ["bin"]
 name = "egglog"
 path = "src/main.rs"
 required-features = ["bin"]
+
+[[bin]]
+name = "timeline"
+path = "src/timeline.rs"
 
 [features]
 default = ["bin"]
@@ -132,7 +139,6 @@ env_logger = { workspace = true, optional = true }
 hashbrown = { workspace = true }
 im-rc = { workspace = true }
 indexmap = { workspace = true }
-lazy_static = { workspace = true }
 log = { workspace = true }
 num = { workspace = true }
 ordered-float = { workspace = true }
@@ -159,7 +165,7 @@ walkdir = "2.5.0"
 chrono = { workspace = true, features = ["now"], optional = true }
 
 [dev-dependencies]
-codspeed-criterion-compat = { workspace = true }
+divan = { workspace = true }
 glob = { workspace = true }
 libtest-mimic = { workspace = true }
 

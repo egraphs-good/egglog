@@ -518,7 +518,8 @@ impl<'a> ExecutionState<'a> {
 }
 
 impl ExecutionState<'_> {
-    pub(crate) fn run_instrs(&mut self, instrs: &[Instr], bindings: &mut Bindings) {
+    /// Returns the number of matches that make it to the end of the instructions
+    pub(crate) fn run_instrs(&mut self, instrs: &[Instr], bindings: &mut Bindings) -> usize {
         if bindings.var_offsets.next_id().rep() == 0 {
             // If we have no variables, we want to run the rules once.
             bindings.matches = 1;
@@ -528,10 +529,11 @@ impl ExecutionState<'_> {
         let mut mask = with_pool_set(|ps| Mask::new(0..bindings.matches, ps));
         for instr in instrs {
             if mask.is_empty() {
-                break;
+                return 0;
             }
             self.run_instr(&mut mask, instr, bindings);
         }
+        mask.count_ones()
     }
     fn run_instr(&mut self, mask: &mut Mask, inst: &Instr, bindings: &mut Bindings) {
         fn assert_impl(

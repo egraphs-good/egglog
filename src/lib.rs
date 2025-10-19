@@ -994,39 +994,39 @@ impl EGraph {
     }
 
     // returns whether the egraph was updated
-    fn run_schedule(&mut self, sched: &ResolvedSchedule) -> RunReport {
+    fn run_schedule(&mut self, sched: &ResolvedSchedule) -> Result<RunReport, Error> {
         match sched {
             ResolvedSchedule::Run(span, config) => self.run_rules(span, config),
             ResolvedSchedule::Repeat(_span, limit, sched) => {
                 let mut report = RunReport::default();
                 for _i in 0..*limit {
-                    let rec = self.run_schedule(sched);
+                    let rec = self.run_schedule(sched)?;
                     let updated = rec.updated;
                     report.union(rec);
                     if !updated {
                         break;
                     }
                 }
-                report
+                Ok(report)
             }
             ResolvedSchedule::Saturate(_span, sched) => {
                 let mut report = RunReport::default();
                 loop {
-                    let rec = self.run_schedule(sched);
+                    let rec = self.run_schedule(sched)?;
                     let updated = rec.updated;
                     report.union(rec);
                     if !updated {
                         break;
                     }
                 }
-                report
+                Ok(report)
             }
             ResolvedSchedule::Sequence(_span, scheds) => {
                 let mut report = RunReport::default();
                 for sched in scheds {
-                    report.union(self.run_schedule(sched));
+                    report.union(self.run_schedule(sched)?);
                 }
-                report
+                Ok(report)
             }
         }
     }
@@ -1068,7 +1068,7 @@ impl EGraph {
         Ok((termdag.to_string(&term), cost))
     }
 
-    fn run_rules(&mut self, span: &Span, config: &ResolvedRunConfig) -> RunReport {
+    fn run_rules(&mut self, span: &Span, config: &ResolvedRunConfig) -> Result<RunReport, Error> {
         let mut report: RunReport = Default::default();
 
         let GenericRunConfig { ruleset, until } = config;
@@ -1079,25 +1079,27 @@ impl EGraph {
                     "Breaking early because of facts:\n {}!",
                     ListDisplay(facts, "\n")
                 );
-                return report;
+                return Ok(report);
             }
         }
 
-        let subreport = self.step_rules(ruleset);
+        let subreport = self.step_rules(ruleset)?;
         report.union(subreport);
 
         if log_enabled!(Level::Debug) {
             log::debug!("database size: {}", self.num_tuples());
         }
 
-        report
+        Ok(report)
     }
 
     /// Runs a ruleset for an iteration.
     ///
     /// This applies every match it finds (under semi-naive).
     /// See [`EGraph::step_rules_with_scheduler`] for more fine-grained control.
-    pub fn step_rules(&mut self, ruleset: &str) -> RunReport {
+    ///
+    /// This will return an error if an egglog primitive returns None in an action.
+    pub fn step_rules(&mut self, ruleset: &str) -> Result<RunReport, Error> {
         fn collect_rule_ids(
             ruleset: &str,
             rulesets: &IndexMap<String, Ruleset>,
@@ -1119,7 +1121,10 @@ impl EGraph {
 
         let mut rule_ids = Vec::new();
         collect_rule_ids(ruleset, &self.rulesets, &mut rule_ids);
-        let iteration_report = self.backend.run_rules(&rule_ids).unwrap();
+        let iteration_report = self
+            .backend
+            .run_rules(&rule_ids)
+            .map_err(|e| Error::BackendError(e.to_string()))?;
         let IterationReport {
             changed: updated,
             rule_reports,
@@ -1140,14 +1145,14 @@ impl EGraph {
 
         let per_ruleset = |x| [(ruleset.to_owned(), x)].into_iter().collect();
 
-        RunReport {
+        Ok(RunReport {
             updated,
             search_and_apply_time_per_rule,
             num_matches_per_rule,
             search_and_apply_time_per_ruleset: per_ruleset(search_and_apply_time),
             merge_time_per_ruleset: per_ruleset(merge_time),
             rebuild_time_per_ruleset: per_ruleset(rebuild_time),
-        }
+        })
     }
 
     fn add_rule(&mut self, rule: ast::ResolvedRule) -> Result<String, Error> {
@@ -1350,7 +1355,10 @@ impl EGraph {
         }
     }
 
-    fn run_command(&mut self, command: ResolvedNCommand) -> Result<Option<CommandOutput>, Error> {
+    pub(crate) fn run_command(
+        &mut self,
+        command: ResolvedNCommand,
+    ) -> Result<Option<CommandOutput>, Error> {
         match command {
             // Sorts are already declared during typechecking
             ResolvedNCommand::Sort(_span, name, _presort_and_args) => {
@@ -1374,7 +1382,7 @@ impl EGraph {
                 log::info!("Declared rule {name}.")
             }
             ResolvedNCommand::RunSchedule(sched) => {
-                let report = self.run_schedule(&sched);
+                let report = self.run_schedule(&sched)?;
                 log::info!("Ran schedule {}.", sched);
                 log::info!("Report: {}", report);
                 self.overall_run_report.union(report.clone());
@@ -1658,7 +1666,10 @@ impl EGraph {
         Ok(())
     }
 
-    fn process_command(&mut self, command: Command) -> Result<Vec<ResolvedNCommand>, Error> {
+    pub(crate) fn process_command(
+        &mut self,
+        command: Command,
+    ) -> Result<Vec<ResolvedNCommand>, Error> {
         let mut program = self.resolve_command(command)?;
 
         program = remove_globals::remove_globals(program, &mut self.parser.symbol_gen);
@@ -1798,6 +1809,13 @@ impl EGraph {
         self.backend.container_values().get_val::<T>(x)
     }
 
+    /// Convert from a Rust container type to an egglog value.
+    pub fn container_to_value<T: ContainerValue>(&mut self, x: T) -> Value {
+        self.backend.with_execution_state(|state| {
+            self.backend.container_values().register_val::<T>(x, state)
+        })
+    }
+
     /// Get the size of a function in the e-graph.
     ///
     /// `panics` if the function does not exist.
@@ -1820,6 +1838,19 @@ impl EGraph {
     /// Returns `None` if the function does not exist.
     pub fn get_function(&self, name: &str) -> Option<&Function> {
         self.functions.get(name)
+    }
+
+    /// A basic method for dumping the state of the database to `log::info!`.
+    ///
+    /// For large tables, this is unlikely to give particularly useful output.
+    pub fn dump_debug_info(&self) {
+        self.backend.dump_debug_info();
+    }
+
+    /// Get the canonical representation for `val` based on type.
+    pub fn get_canonical_value(&self, val: Value, sort: &ArcSort) -> Value {
+        self.backend
+            .get_canon_repr(val, sort.column_ty(&self.backend))
     }
 }
 
@@ -2081,9 +2112,6 @@ pub enum Error {
 
 #[cfg(test)]
 mod tests {
-    use lazy_static::lazy_static;
-    use std::sync::Mutex;
-
     use crate::constraint::SimpleTypeConstraint;
     use crate::sort::*;
     use crate::*;
@@ -2153,9 +2181,17 @@ mod tests {
             .unwrap();
     }
 
-    // Test that `EGraph` is `Send` and `Sync`
-    lazy_static! {
-        pub static ref RT: Mutex<EGraph> = Mutex::new(EGraph::default());
+    // Test that an `EGraph` is `Send` & `Sync`
+    #[test]
+    fn test_egraph_send_sync() {
+        fn is_send<T: Send>(_t: &T) -> bool {
+            true
+        }
+        fn is_sync<T: Sync>(_t: &T) -> bool {
+            true
+        }
+        let egraph = EGraph::default();
+        assert!(is_send(&egraph) && is_sync(&egraph));
     }
 
     fn get_function(egraph: &EGraph, name: &str) -> Function {
@@ -2268,3 +2304,95 @@ mod tests {
         assert_eq!(res[0].to_string(), "(exp)\n");
     }
 }
+
+/***** TESTING AREA FOR TIMED EGRAPH *****/
+
+static START: &'static str = "start";
+static END: &'static str = "end";
+
+#[derive(Serialize)]
+pub struct EgraphEvent {
+    sexp_idx: i32,
+    evt: &'static str,
+    time: Duration,
+}
+
+#[derive(Serialize)]
+pub struct ProgramTimeline {
+    program_text: String,
+    evts: Vec<EgraphEvent>,
+}
+
+pub struct TimedEgraph {
+    egraph: EGraph,
+    timeline: Vec<ProgramTimeline>,
+    timer: std::time::Instant,
+}
+
+impl TimedEgraph {
+    /// Create a new TimedEgraph with a default EGraph
+    pub fn new() -> Self {
+        Self {
+            egraph: EGraph::default(),
+            timeline: Vec::new(),
+            timer: std::time::Instant::now(),
+        }
+    }
+
+    pub fn parse_and_run_program(
+        &mut self,
+        filename: Option<String>,
+        input: &str,
+    ) -> Result<Vec<CommandOutput>, Error> {
+        let mut program_timeline = ProgramTimeline {
+            program_text: input.to_string(),
+            evts: vec![],
+        };
+        let parsed = self
+            .egraph
+            .parser
+            .get_program_from_string(filename, input)?;
+        let output = self.run_program(parsed, &mut program_timeline);
+        self.timeline.push(program_timeline);
+        output
+    }
+
+    pub fn serialized_timeline(&self) -> Result<String, serde_json::Error> {
+        serde_json::to_string(&self.timeline)
+    }
+
+    fn run_program(
+        &mut self,
+        program: Vec<Command>,
+        program_timeline: &mut ProgramTimeline,
+    ) -> Result<Vec<CommandOutput>, Error> {
+        let mut outputs = Vec::new();
+        let mut i: i32 = 0;
+        for command in program {
+            program_timeline.evts.push(EgraphEvent {
+                sexp_idx: i,
+                evt: START,
+                time: self.timer.elapsed(),
+            });
+
+            for processed in self.egraph.process_command(command)? {
+                let result = self.egraph.run_command(processed)?;
+                if let Some(output) = result {
+                    outputs.push(output);
+                }
+            }
+
+            program_timeline.evts.push(EgraphEvent {
+                sexp_idx: i,
+                evt: END,
+                time: self.timer.elapsed(),
+            });
+
+            i = i + 1;
+        }
+
+        Ok(outputs)
+    }
+}
+
+/***** TESTING AREA FOR TIMED EGRAPH *****/
