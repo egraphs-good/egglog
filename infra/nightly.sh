@@ -36,6 +36,9 @@ cargo run --bin timeline -- "$TOP_DIR/tests" "$NIGHTLY_DIR/data"
 
 # Annotate with time and command info
 python3 timeline/transform.py "$NIGHTLY_DIR/data" "$NIGHTLY_DIR/output/data"
+
+# Plot run and extract time
+python3 timeline/plot_run_vs_extract.py "$NIGHTLY_DIR/output/data" "Egglog Benches"
 popd
 
 # Update HTML index page.
