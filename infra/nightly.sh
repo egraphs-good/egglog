@@ -32,17 +32,17 @@ mkdir -p "$NIGHTLY_DIR/data" "$NIGHTLY_DIR/output"
 
 # Run egglog files
 pushd $TOP_DIR
-cargo run --bin timeline -- "$TOP_DIR/tests" "$NIGHTLY_DIR/data"
+cargo run --bin timeline -- "$RESOURCE_DIR/test-files" "$NIGHTLY_DIR/data"
 
 # Annotate with time and command info
 python3 timeline/transform.py "$NIGHTLY_DIR/data" "$NIGHTLY_DIR/output/data"
 
 # Plot run and extract time
-python3 timeline/plot_run_vs_extract.py "$NIGHTLY_DIR/output/data" "Egglog Benches"
+python3 timeline/plot_run_vs_extract.py "$NIGHTLY_DIR/output/data" "Herbie: Hamming Benches"
 popd
 
 # Update HTML index page.
-cp "$RESOURCE_DIR"/* "$NIGHTLY_DIR/output"
+cp "$RESOURCE_DIR/web"/* "$NIGHTLY_DIR/output"
 
 # This is the uploading part, copied directly from Herbie's nightly script.
 DIR="$NIGHTLY_DIR/output"
