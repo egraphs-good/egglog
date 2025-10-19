@@ -374,6 +374,7 @@ impl EGraph {
             class_id.clone(),
             egraph_serialize::ClassData {
                 typ: Some(sort.name().to_string()),
+                extra: Default::default(),
             },
         );
         node_id
