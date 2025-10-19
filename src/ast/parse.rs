@@ -8,7 +8,7 @@ use ordered_float::OrderedFloat;
 #[macro_export]
 macro_rules! span {
     () => {
-        Span::Rust(std::sync::Arc::new(RustSpan {
+        egglog_ast::span::Span::Rust(std::sync::Arc::new(egglog_ast::span::RustSpan {
             file: file!().to_string(),
             line: line!(),
             column: column!(),
@@ -204,7 +204,6 @@ impl Parser {
             || self.exprs.contains_key(&name)
             || self.commands.contains_key(&name)
         {
-            use egglog_ast::span::{RustSpan, Span};
             return Err(Error::CommandAlreadyExists(name, span!()));
         }
         self.user_defined.insert(name);
