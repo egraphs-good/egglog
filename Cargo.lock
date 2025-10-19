@@ -610,8 +610,9 @@ dependencies = [
 
 [[package]]
 name = "egraph-serialize"
-version = "0.2.0"
-source = "git+https://github.com/egraphs-good/egraph-serialize.git?branch=main#0581da5d6ab6711beaffd1cb6dda5fd32a92d454"
+version = "0.3.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "0977732fb537ace6f8c15ce160ebdda78b6502b4866d3b904e4fe752e2be4702"
 dependencies = [
  "graphviz-rust",
  "indexmap",

@@ -26,6 +26,9 @@ Misc. Improvements
 - Don't panic when extracting nonexistent term (#629) 
 - Documentation improvements (#634)
 - Add parallelism flag and remove nondeterminism flag (#640, #642)
+- Emit prompt and debug info when running from REPL (#672)
+- Add support for the :unextractable flag for datatype variants (#712)
+- Move egglog ast into its own crates (#670)
 
 ## [0.5.0] - 2025-6-10
 
