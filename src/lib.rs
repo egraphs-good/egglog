@@ -730,39 +730,39 @@ impl EGraph {
     }
 
     // returns whether the egraph was updated
-    fn run_schedule(&mut self, sched: &ResolvedSchedule) -> RunReport {
+    fn run_schedule(&mut self, sched: &ResolvedSchedule) -> Result<RunReport, Error> {
         match sched {
             ResolvedSchedule::Run(span, config) => self.run_rules(span, config),
             ResolvedSchedule::Repeat(_span, limit, sched) => {
                 let mut report = RunReport::default();
                 for _i in 0..*limit {
-                    let rec = self.run_schedule(sched);
+                    let rec = self.run_schedule(sched)?;
                     let updated = rec.updated;
                     report.union(rec);
                     if !updated {
                         break;
                     }
                 }
-                report
+                Ok(report)
             }
             ResolvedSchedule::Saturate(_span, sched) => {
                 let mut report = RunReport::default();
                 loop {
-                    let rec = self.run_schedule(sched);
+                    let rec = self.run_schedule(sched)?;
                     let updated = rec.updated;
                     report.union(rec);
                     if !updated {
                         break;
                     }
                 }
-                report
+                Ok(report)
             }
             ResolvedSchedule::Sequence(_span, scheds) => {
                 let mut report = RunReport::default();
                 for sched in scheds {
-                    report.union(self.run_schedule(sched));
+                    report.union(self.run_schedule(sched)?);
                 }
-                report
+                Ok(report)
             }
         }
     }
@@ -804,7 +804,7 @@ impl EGraph {
         Ok((termdag.to_string(&term), cost))
     }
 
-    fn run_rules(&mut self, span: &Span, config: &ResolvedRunConfig) -> RunReport {
+    fn run_rules(&mut self, span: &Span, config: &ResolvedRunConfig) -> Result<RunReport, Error> {
         let mut report: RunReport = Default::default();
 
         let GenericRunConfig { ruleset, until } = config;
@@ -815,25 +815,27 @@ impl EGraph {
                     "Breaking early because of facts:\n {}!",
                     ListDisplay(facts, "\n")
                 );
-                return report;
+                return Ok(report);
             }
         }
 
-        let subreport = self.step_rules(ruleset);
+        let subreport = self.step_rules(ruleset)?;
         report.union(subreport);
 
         if log_enabled!(Level::Debug) {
             log::debug!("database size: {}", self.num_tuples());
         }
 
-        report
+        Ok(report)
     }
 
     /// Runs a ruleset for an iteration.
     ///
     /// This applies every match it finds (under semi-naive).
     /// See [`EGraph::step_rules_with_scheduler`] for more fine-grained control.
-    pub fn step_rules(&mut self, ruleset: &str) -> RunReport {
+    ///
+    /// This will return an error if an egglog primitive returns None in an action.
+    pub fn step_rules(&mut self, ruleset: &str) -> Result<RunReport, Error> {
         fn collect_rule_ids(
             ruleset: &str,
             rulesets: &IndexMap<String, Ruleset>,
@@ -855,7 +857,10 @@ impl EGraph {
 
         let mut rule_ids = Vec::new();
         collect_rule_ids(ruleset, &self.rulesets, &mut rule_ids);
-        let iteration_report = self.backend.run_rules(&rule_ids).unwrap();
+        let iteration_report = self
+            .backend
+            .run_rules(&rule_ids)
+            .map_err(|e| Error::BackendError(e.to_string()))?;
         let IterationReport {
             changed: updated,
             rule_reports,
@@ -876,14 +881,14 @@ impl EGraph {
 
         let per_ruleset = |x| [(ruleset.to_owned(), x)].into_iter().collect();
 
-        RunReport {
+        Ok(RunReport {
             updated,
             search_and_apply_time_per_rule,
             num_matches_per_rule,
             search_and_apply_time_per_ruleset: per_ruleset(search_and_apply_time),
             merge_time_per_ruleset: per_ruleset(merge_time),
             rebuild_time_per_ruleset: per_ruleset(rebuild_time),
-        }
+        })
     }
 
     fn add_rule(&mut self, rule: ast::ResolvedRule) -> Result<String, Error> {
@@ -1113,7 +1118,7 @@ impl EGraph {
                 log::info!("Declared rule {name}.")
             }
             ResolvedNCommand::RunSchedule(sched) => {
-                let report = self.run_schedule(&sched);
+                let report = self.run_schedule(&sched)?;
                 log::info!("Ran schedule {}.", sched);
                 log::info!("Report: {}", report);
                 self.overall_run_report.union(report.clone());
@@ -1540,6 +1545,13 @@ impl EGraph {
         self.backend.container_values().get_val::<T>(x)
     }
 
+    /// Convert from a Rust container type to an egglog value.
+    pub fn container_to_value<T: ContainerValue>(&mut self, x: T) -> Value {
+        self.backend.with_execution_state(|state| {
+            self.backend.container_values().register_val::<T>(x, state)
+        })
+    }
+
     /// Get the size of a function in the e-graph.
     ///
     /// `panics` if the function does not exist.
@@ -1562,6 +1574,19 @@ impl EGraph {
     /// Returns `None` if the function does not exist.
     pub fn get_function(&self, name: &str) -> Option<&Function> {
         self.functions.get(name)
+    }
+
+    /// A basic method for dumping the state of the database to `log::info!`.
+    ///
+    /// For large tables, this is unlikely to give particularly useful output.
+    pub fn dump_debug_info(&self) {
+        self.backend.dump_debug_info();
+    }
+
+    /// Get the canonical representation for `val` based on type.
+    pub fn get_canonical_value(&self, val: Value, sort: &ArcSort) -> Value {
+        self.backend
+            .get_canon_repr(val, sort.column_ty(&self.backend))
     }
 }
 
@@ -1823,9 +1848,6 @@ pub enum Error {
 
 #[cfg(test)]
 mod tests {
-    use lazy_static::lazy_static;
-    use std::sync::Mutex;
-
     use crate::constraint::SimpleTypeConstraint;
     use crate::sort::*;
     use crate::*;
@@ -1895,9 +1917,17 @@ mod tests {
             .unwrap();
     }
 
-    // Test that `EGraph` is `Send` and `Sync`
-    lazy_static! {
-        pub static ref RT: Mutex<EGraph> = Mutex::new(EGraph::default());
+    // Test that an `EGraph` is `Send` & `Sync`
+    #[test]
+    fn test_egraph_send_sync() {
+        fn is_send<T: Send>(_t: &T) -> bool {
+            true
+        }
+        fn is_sync<T: Sync>(_t: &T) -> bool {
+            true
+        }
+        let egraph = EGraph::default();
+        assert!(is_send(&egraph) && is_sync(&egraph));
     }
 
     fn get_function(egraph: &EGraph, name: &str) -> Function {

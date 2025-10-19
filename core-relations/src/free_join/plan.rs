@@ -30,7 +30,6 @@ pub(crate) struct SingleScanSpec {
 
 /// Join headers evaluate constraints on a single atom; they prune the search space before the rest
 /// of the join plan is executed.
-#[derive(Debug)]
 pub(crate) struct JoinHeader {
     pub atom: AtomId,
     /// We currently aren't using these at all. The plan is to use this to
@@ -44,6 +43,19 @@ pub(crate) struct JoinHeader {
     /// discover common plan nodes from different queries (subsets can be
     /// large).
     pub subset: Subset,
+}
+
+impl std::fmt::Debug for JoinHeader {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("JoinHeader")
+            .field("atom", &self.atom)
+            .field("constraints", &self.constraints)
+            .field(
+                "subset",
+                &format_args!("Subset(size={})", self.subset.size()),
+            )
+            .finish()
+    }
 }
 
 impl Clone for JoinHeader {
