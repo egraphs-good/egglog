@@ -3,7 +3,7 @@ use rpds::RedBlackTreeSetSync;
 
 #[derive(Clone, Debug, PartialEq, Eq, Hash)]
 pub struct SetContainer {
-    do_rebuild: bool,
+    pub do_rebuild: bool,
     pub data: RedBlackTreeSetSync<Value>,
 }
 

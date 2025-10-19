@@ -11,7 +11,7 @@ use crate::*;
 pub use egglog_ast::generic_ast::{
     Change, GenericAction, GenericActions, GenericExpr, GenericFact, GenericRule, Literal,
 };
-use egglog_ast::span::Span;
+pub use egglog_ast::span::{RustSpan, Span};
 use egglog_ast::util::ListDisplay;
 pub use expr::*;
 pub use parse::*;
@@ -885,6 +885,7 @@ pub struct Variant {
     pub name: String,
     pub types: Vec<String>,
     pub cost: Option<DefaultCost>,
+    pub unextractable: bool,
 }
 
 impl Display for Variant {

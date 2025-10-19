@@ -1,5 +1,5 @@
 use egglog::EGraph;
-use std::sync::Once;
+use std::{fmt, sync::Once};
 
 #[global_allocator]
 static GLOBAL: mimalloc::MiMalloc = mimalloc::MiMalloc;
@@ -22,9 +22,9 @@ pub struct BenchCase {
     pub program: String,
 }
 
-impl ToString for BenchCase {
-    fn to_string(&self) -> String {
-        self.name.clone()
+impl fmt::Display for BenchCase {
+    fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
+        f.write_str(&self.name)
     }
 }
 

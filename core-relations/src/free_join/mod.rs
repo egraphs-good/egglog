@@ -265,10 +265,19 @@ pub struct RuleSetReport {
     pub merge_time: Duration,
 }
 
-#[derive(Debug)]
+#[derive(Debug, Default)]
 pub struct RuleReport {
     pub search_and_apply_time: Duration,
     pub num_matches: usize,
+}
+
+impl RuleReport {
+    pub fn union(&self, other: &RuleReport) -> RuleReport {
+        RuleReport {
+            search_and_apply_time: self.search_and_apply_time + other.search_and_apply_time,
+            num_matches: self.num_matches + other.num_matches,
+        }
+    }
 }
 
 /// A collection of tables and indexes over them.

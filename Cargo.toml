@@ -27,7 +27,6 @@ env_logger = "0.11"
 hashbrown = "0.16"
 im-rc = "15.1.0"
 indexmap = "2.2"
-lazy_static = "1.4"
 log = "0.4"
 num = "0.4.3"
 ordered-float = "5.0"
@@ -128,7 +127,6 @@ env_logger = { workspace = true, optional = true }
 hashbrown = { workspace = true }
 im-rc = { workspace = true }
 indexmap = { workspace = true }
-lazy_static = { workspace = true }
 log = { workspace = true }
 num = { workspace = true }
 ordered-float = { workspace = true }

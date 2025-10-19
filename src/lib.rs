@@ -1538,6 +1538,13 @@ impl EGraph {
         self.backend.container_values().get_val::<T>(x)
     }
 
+    /// Convert from a Rust container type to an egglog value.
+    pub fn container_to_value<T: ContainerValue>(&mut self, x: T) -> Value {
+        self.backend.with_execution_state(|state| {
+            self.backend.container_values().register_val::<T>(x, state)
+        })
+    }
+
     /// Get the size of a function in the e-graph.
     ///
     /// `panics` if the function does not exist.
@@ -1560,6 +1567,19 @@ impl EGraph {
     /// Returns `None` if the function does not exist.
     pub fn get_function(&self, name: &str) -> Option<&Function> {
         self.functions.get(name)
+    }
+
+    /// A basic method for dumping the state of the database to `log::info!`.
+    ///
+    /// For large tables, this is unlikely to give particularly useful output.
+    pub fn dump_debug_info(&self) {
+        self.backend.dump_debug_info();
+    }
+
+    /// Get the canonical representation for `val` based on type.
+    pub fn get_canonical_value(&self, val: Value, sort: &ArcSort) -> Value {
+        self.backend
+            .get_canon_repr(val, sort.column_ty(&self.backend))
     }
 }
 
@@ -1821,9 +1841,6 @@ pub enum Error {
 
 #[cfg(test)]
 mod tests {
-    use lazy_static::lazy_static;
-    use std::sync::Mutex;
-
     use crate::constraint::SimpleTypeConstraint;
     use crate::sort::*;
     use crate::*;
@@ -1893,9 +1910,17 @@ mod tests {
             .unwrap();
     }
 
-    // Test that `EGraph` is `Send` and `Sync`
-    lazy_static! {
-        pub static ref RT: Mutex<EGraph> = Mutex::new(EGraph::default());
+    // Test that an `EGraph` is `Send` & `Sync`
+    #[test]
+    fn test_egraph_send_sync() {
+        fn is_send<T: Send>(_t: &T) -> bool {
+            true
+        }
+        fn is_sync<T: Sync>(_t: &T) -> bool {
+            true
+        }
+        let egraph = EGraph::default();
+        assert!(is_send(&egraph) && is_sync(&egraph));
     }
 
     fn get_function(egraph: &EGraph, name: &str) -> Function {

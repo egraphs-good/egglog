@@ -8,7 +8,7 @@ use ordered_float::OrderedFloat;
 #[macro_export]
 macro_rules! span {
     () => {
-        egglog_ast::span::Span::Rust(std::sync::Arc::new(egglog_ast::span::RustSpan {
+        Span::Rust(std::sync::Arc::new(RustSpan {
             file: file!(),
             line: line!(),
             column: column!(),
@@ -201,6 +201,7 @@ impl Parser {
             || self.exprs.contains_key(&name)
             || self.commands.contains_key(&name)
         {
+            use egglog_ast::span::{RustSpan, Span};
             return Err(Error::CommandAlreadyExists(name, span!()));
         }
         self.user_defined.insert(name);
@@ -783,11 +784,12 @@ impl Parser {
     pub fn variant(&mut self, sexp: &Sexp) -> Result<Variant, ParseError> {
         let (name, tail, span) = sexp.expect_call("datatype variant")?;
 
-        let (types, cost) = match tail {
+        let (types, cost, unextractable) = match tail {
+            [types @ .., Sexp::Atom(o, _)] if *o == ":unextractable" => (types, None, true),
             [types @ .., Sexp::Atom(o, _), c] if *o == ":cost" => {
-                (types, Some(c.expect_uint("cost")?))
+                (types, Some(c.expect_uint("cost")?), false)
             }
-            types => (types, None),
+            types => (types, None, false),
         };
 
         Ok(Variant {
@@ -797,6 +799,7 @@ impl Parser {
                 sexp.expect_atom("variant argument type")
             })?,
             cost,
+            unextractable,
         })
     }
 
