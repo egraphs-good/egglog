@@ -20,3 +20,6 @@ _scratch.egg
 # racket
 scripts/compiled
 tests/*.json
+
+# Generated nightly files
+/nightly
