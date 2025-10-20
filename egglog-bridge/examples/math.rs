@@ -9,11 +9,12 @@ use web_time::Instant;
 static GLOBAL: MiMalloc = MiMalloc;
 
 #[allow(clippy::disallowed_macros)]
+#[allow(clippy::too_many_lines)]
 fn main() {
+    const N: usize = 12;
     env_logger::init();
     for _ in 0..2 {
         let start = Instant::now();
-        const N: usize = 12;
 
         let mut egraph = EGraph::default();
         let rational_ty = egraph.base_values_mut().register_type::<Rational64>();
@@ -121,10 +122,10 @@ fn main() {
             can_subsume: false,
         });
 
-        let zero = egraph.base_value_constant(Rational64::new(0, 1));
-        let one = egraph.base_value_constant(Rational64::new(1, 1));
-        let neg1 = egraph.base_value_constant(Rational64::new(-1, 1));
-        let two = egraph.base_value_constant(Rational64::new(2, 1));
+        let zero = egraph.base_value_constant(&Rational64::new(0, 1));
+        let one = egraph.base_value_constant(&Rational64::new(1, 1));
+        let neg1 = egraph.base_value_constant(&Rational64::new(-1, 1));
+        let two = egraph.base_value_constant(&Rational64::new(2, 1));
         let rules = [
             define_rule! {
                 [egraph] ((-> (add x y) id)) => ((set (add y x) id))
@@ -203,13 +204,13 @@ fn main() {
             },
         ];
         {
-            let one = egraph.base_values().get(Rational64::new(1, 1));
-            let two = egraph.base_values().get(Rational64::new(2, 1));
-            let three = egraph.base_values().get(Rational64::new(3, 1));
-            let seven = egraph.base_values().get(Rational64::new(7, 1));
-            let x_str = egraph.base_values_mut().get::<&'static str>("x");
-            let y_str = egraph.base_values_mut().get::<&'static str>("y");
-            let five_str = egraph.base_values_mut().get::<&'static str>("five");
+            let one = egraph.base_values().get(&Rational64::new(1, 1));
+            let two = egraph.base_values().get(&Rational64::new(2, 1));
+            let three = egraph.base_values().get(&Rational64::new(3, 1));
+            let seven = egraph.base_values().get(&Rational64::new(7, 1));
+            let x_str = egraph.base_values_mut().get(&"x");
+            let y_str = egraph.base_values_mut().get(&"y");
+            let five_str = egraph.base_values_mut().get(&"five");
             add_expressions! {
                 [egraph]
 

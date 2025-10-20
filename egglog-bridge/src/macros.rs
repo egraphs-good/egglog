@@ -178,7 +178,7 @@ macro_rules! define_rule {
         let mut builder = $egraph.new_rule(stringify!(($($lhs)* => $($rhs)*)), true);
         $crate::parse_lhs!(ebuilder, builder, [ $($lhs)* ]);
         $crate::parse_rhs_command!(ebuilder, builder, [ $($rhs)* ]);
-        builder.build_with_syntax(ebuilder.syntax)
+        builder.build_with_syntax(&ebuilder.syntax)
     }};
 }
 
@@ -276,10 +276,12 @@ impl ExpressionBuilder {
         var
     }
 
+    #[must_use]
     pub fn infer_return_type(&self, func: FunctionId, rb: &RuleBuilder) -> ColumnTy {
         rb.egraph().funcs[func].ret_ty()
     }
 
+    #[must_use]
     pub fn infer_type(&self, func: FunctionId, col: usize, rb: &RuleBuilder) -> ColumnTy {
         rb.egraph().funcs[func].schema[col]
     }

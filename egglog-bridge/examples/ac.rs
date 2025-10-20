@@ -6,6 +6,7 @@ use mimalloc::MiMalloc;
 static GLOBAL: MiMalloc = MiMalloc;
 
 #[allow(clippy::disallowed_macros)]
+#[allow(clippy::cast_possible_wrap)]
 fn main() {
     const N: usize = 13;
     env_logger::init();
@@ -49,7 +50,7 @@ fn main() {
         let num_rows = (0..N)
             .map(|i| {
                 let id = egraph.fresh_id();
-                let i = egraph.base_values().get(i as i64);
+                let i = egraph.base_values().get(&(i as i64));
                 ids.push(id);
                 (num_table, vec![i, id])
             })
@@ -69,7 +70,7 @@ fn main() {
             }
             let left_root = to_add.last().unwrap().1[2];
             prev = *ids.last().unwrap();
-            for num in ids[0..(N - 1)].iter() {
+            for num in &ids[0..(N - 1)] {
                 let id = egraph.fresh_id();
                 to_add.push((add_table, vec![prev, *num, id]));
                 prev = id;

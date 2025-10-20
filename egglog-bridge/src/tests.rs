@@ -29,6 +29,7 @@ use crate::{
 /// The `can_subsume` argument is only used to enable subsumption on the underlying tables created
 /// during this test, and exercise the different column handling caused by enabling subsumption.
 /// Subsumption itself is not used.
+#[allow(clippy::cast_possible_wrap)]
 fn ac_test(tracing: bool, can_subsume: bool) {
     const N: usize = 5;
     let mut egraph = if tracing {
@@ -69,7 +70,7 @@ fn ac_test(tracing: bool, can_subsume: bool) {
     let mut ids = Vec::new();
     //  Add 0 .. N to the database.
     for i in 0..N {
-        let i = egraph.base_values_mut().get(i as i64);
+        let i = egraph.base_values_mut().get(&(i as i64));
         ids.push(egraph.add_term(num_table, &[i], "base number"));
     }
 
@@ -84,7 +85,7 @@ fn ac_test(tracing: bool, can_subsume: bool) {
         }
         let left_root = prev;
         let mut prev = *ids.last().unwrap();
-        for num in ids[0..(N - 1)].iter() {
+        for num in &ids[0..(N - 1)] {
             let id = egraph.add_term(add_table, &[prev, *num], "add_right");
             prev = id;
         }
@@ -138,12 +139,13 @@ fn ac_subsume() {
 }
 
 #[test]
+#[allow(clippy::cast_possible_wrap)]
 fn ac_fail() {
     const N: usize = 5;
     let mut egraph = EGraph::default();
     egraph.base_values_mut().register_type::<i64>();
     let int_base = egraph.base_values_mut().get_ty::<i64>();
-    let one = egraph.base_value_constant(1i64);
+    let one = egraph.base_value_constant(&1i64);
     let num_table = egraph.add_table(FunctionConfig {
         schema: vec![ColumnTy::Base(int_base), ColumnTy::Id],
         default: DefaultVal::FreshId,
@@ -178,7 +180,7 @@ fn ac_fail() {
     let num_rows = (0..N)
         .map(|i| {
             let id = egraph.fresh_id();
-            let i = egraph.base_values_mut().get(i as i64);
+            let i = egraph.base_values_mut().get(&(i as i64));
             ids.push(id);
             (num_table, vec![i, id])
         })
@@ -198,7 +200,7 @@ fn ac_fail() {
         }
         let left_root = to_add.last().unwrap().1[2];
         prev = *ids.last().unwrap();
-        for num in ids[0..(N - 1)].iter() {
+        for num in &ids[0..(N - 1)] {
             let id = egraph.fresh_id();
             to_add.push((add_table, vec![prev, *num, id]));
             prev = id;
@@ -217,24 +219,25 @@ fn ac_fail() {
 #[test]
 fn math() {
     let handles =
-        Vec::from_iter((0..2).map(|_| thread::spawn(|| math_test(EGraph::default(), false))));
+        (0..2).map(|_| thread::spawn(|| math_test(EGraph::default(), false))).collect::<Vec<_>>();
     handles.into_iter().for_each(|h| h.join().unwrap());
 }
 
 #[test]
 fn math_subsume() {
-    let handles =
-        Vec::from_iter((0..2).map(|_| thread::spawn(|| math_test(EGraph::default(), true))));
+    let handles = (0..2)
+        .map(|_| thread::spawn(|| math_test(EGraph::default(), true)))
+        .collect::<Vec<_>>();
     handles.into_iter().for_each(|h| h.join().unwrap());
 }
 
 #[test]
 fn math_tracing() {
-    math_test(EGraph::with_tracing(), false)
+    math_test(EGraph::with_tracing(), false);
 }
 #[test]
 fn math_tracing_subsume() {
-    math_test(EGraph::with_tracing(), true)
+    math_test(EGraph::with_tracing(), true);
 }
 
 /// Run a more complex benchmark from the egg and egglog test suite. The core of this test is to
@@ -244,6 +247,7 @@ fn math_tracing_subsume() {
 /// As in `ac_test` the `can_subsume` argument is only used to enable subsumption on the underlying
 /// tables created during this test, and exercise the different column handling caused by enabling
 /// subsumption. Subsumption itself is not used.
+#[allow(clippy::too_many_lines)]
 fn math_test(mut egraph: EGraph, can_subsume: bool) {
     const N: usize = 8;
     let rational_ty = egraph.base_values_mut().register_type::<Rational64>();
@@ -342,10 +346,10 @@ fn math_test(mut egraph: EGraph, can_subsume: bool) {
         can_subsume,
     });
 
-    let zero = egraph.base_value_constant(Rational64::new(0, 1));
-    let one = egraph.base_value_constant(Rational64::new(1, 1));
-    let neg1 = egraph.base_value_constant(Rational64::new(-1, 1));
-    let two = egraph.base_value_constant(Rational64::new(2, 1));
+    let zero = egraph.base_value_constant(&Rational64::new(0, 1));
+    let one = egraph.base_value_constant(&Rational64::new(1, 1));
+    let neg1 = egraph.base_value_constant(&Rational64::new(-1, 1));
+    let two = egraph.base_value_constant(&Rational64::new(2, 1));
     let rules = [
         define_rule! {
             [egraph] ((-> (add x y) id)) => ((set (add y x) id))
@@ -425,13 +429,13 @@ fn math_test(mut egraph: EGraph, can_subsume: bool) {
     ];
 
     {
-        let one = egraph.base_values_mut().get(Rational64::new(1, 1));
-        let two = egraph.base_values_mut().get(Rational64::new(2, 1));
-        let three = egraph.base_values_mut().get(Rational64::new(3, 1));
-        let seven = egraph.base_values_mut().get(Rational64::new(7, 1));
-        let x_str = egraph.base_values_mut().get::<&'static str>("x");
-        let y_str = egraph.base_values_mut().get::<&'static str>("y");
-        let five_str = egraph.base_values_mut().get::<&'static str>("five");
+        let one = egraph.base_values_mut().get(&Rational64::new(1, 1));
+        let two = egraph.base_values_mut().get(&Rational64::new(2, 1));
+        let three = egraph.base_values_mut().get(&Rational64::new(3, 1));
+        let seven = egraph.base_values_mut().get(&Rational64::new(7, 1));
+        let x_str = egraph.base_values_mut().get::<&'static str>(&"x");
+        let y_str = egraph.base_values_mut().get::<&'static str>(&"y");
+        let five_str = egraph.base_values_mut().get::<&'static str>(&"five");
         add_expressions! {
             [egraph]
 
@@ -530,7 +534,7 @@ fn register_vec_push(egraph: &mut EGraph) -> ExternalFunctionId {
         vec.0.push(*val);
         // Vectors are immutable. May as well not use O(n) auxiliary space.
         vec.0.shrink_to_fit();
-        Some(state.clone().container_values().register_val(vec, state))
+        Some(state.clone().container_values().register_val(&vec, state))
     });
     egraph.register_external_func(external_func)
 }
@@ -546,7 +550,7 @@ fn register_vec_last(egraph: &mut EGraph) -> ExternalFunctionId {
             .get_val::<VecContainer>(*vec_id)?
             .0
             .last()
-            .cloned()
+            .copied()
     });
     egraph.register_external_func(external_func)
 }
@@ -565,6 +569,8 @@ fn assert_unordered_eq<T: Ord + std::fmt::Debug>(mut a: Vec<T>, mut b: Vec<T>) {
     assert_eq!(a, b);
 }
 
+#[allow(clippy::similar_names)]
+#[allow(clippy::too_many_lines)]
 fn container_test() {
     // Test for containers:
     // * Basic math setup: (num i64), (add math math), (Vec (vec math))
@@ -619,7 +625,7 @@ fn container_test() {
         let x: i64 = exec_state.base_values().unwrap(*x);
         let y: i64 = exec_state.base_values().unwrap(*y);
         let z: i64 = x + y;
-        Some(exec_state.base_values().get(z))
+        Some(exec_state.base_values().get(&z))
     }));
     let vec_last = register_vec_last(&mut egraph);
     let vec_push = register_vec_push(&mut egraph);
@@ -629,15 +635,15 @@ fn container_test() {
     let num_rows = (0..=1)
         .map(|i| {
             let id = egraph.fresh_id();
-            let i = egraph.base_values_mut().get(i as i64);
+            let i = egraph.base_values_mut().get(&i64::from(i));
             ids.push(id);
             (num_table, vec![i, id])
         })
         .collect::<Vec<_>>();
     egraph.add_values(num_rows);
 
-    let empty_vec = egraph.get_container_value(VecContainer(vec![]));
-    let vec1 = egraph.get_container_value(VecContainer(vec![ids[1]]));
+    let empty_vec = egraph.get_container_value(&VecContainer(vec![]));
+    let vec1 = egraph.get_container_value(&VecContainer(vec![ids[1]]));
 
     let empty_vec_id = egraph.fresh_id();
     let vec1_id = egraph.fresh_id();
@@ -682,13 +688,13 @@ fn container_test() {
             vec_push,
             &[vec.into(), add_last_0.into()],
             ColumnTy::Id,
-            || "".to_string(),
+            String::new,
         );
         let new_vec_2 = rb.call_external_func(
             vec_push,
             &[vec.into(), add_0_last.into()],
             ColumnTy::Id,
-            || "".to_string(),
+            String::new,
         );
         rb.lookup(vec_table, &[new_vec_1.into()], String::new);
         rb.lookup(vec_table, &[new_vec_2.into()], String::new);
@@ -716,7 +722,7 @@ fn container_test() {
             int_add,
             &[lhs_raw.into(), rhs_raw.into()],
             ColumnTy::Base(int_base),
-            || "".to_string(),
+            String::new,
         );
         let boxed = rb.lookup(num_table, &[evaled.into()], String::new);
         rb.union(add_id.into(), boxed.into());
@@ -765,7 +771,7 @@ fn container_test() {
 fn basic_container() {
     // Run the test 8 times to get a decent sample of incremental/nonincremental, parallel/serial.
     for _ in 0..8 {
-        container_test()
+        container_test();
     }
 }
 
@@ -773,8 +779,8 @@ fn basic_container() {
 fn rhs_only_rule() {
     let mut egraph = EGraph::default();
     let int_base = egraph.base_values_mut().register_type::<i64>();
-    let zero = egraph.base_values_mut().get(0i64);
-    let one = egraph.base_values_mut().get(1i64);
+    let zero = egraph.base_values_mut().get(&0i64);
+    let one = egraph.base_values_mut().get(&1i64);
     let num_table = egraph.add_table(FunctionConfig {
         schema: vec![ColumnTy::Base(int_base), ColumnTy::Id],
         default: DefaultVal::FreshId,
@@ -783,8 +789,8 @@ fn rhs_only_rule() {
         can_subsume: false,
     });
     let add_data = {
-        let zero = egraph.base_value_constant(0i64);
-        let one = egraph.base_value_constant(1i64);
+        let zero = egraph.base_value_constant(&0i64);
+        let one = egraph.base_value_constant(&1i64);
         let mut rb = egraph.new_rule("", true);
         let _zero_id = rb.lookup(num_table, &[zero], String::new);
         let _one_id = rb.lookup(num_table, &[one], String::new);
@@ -818,7 +824,7 @@ fn rhs_only_rule_only_runs_once() {
     }));
     let inc_counter_rule = {
         let mut rb = egraph.new_rule("", true);
-        rb.call_external_func(inc_counter_func, &[], ColumnTy::Id, || "".to_string());
+        rb.call_external_func(inc_counter_func, &[], ColumnTy::Id, String::new);
         rb.build()
     };
 
@@ -841,7 +847,7 @@ fn mergefn_arithmetic() {
             };
             let a_val = state.base_values().unwrap::<i64>(*a);
             let b_val = state.base_values().unwrap::<i64>(*b);
-            let res = state.base_values().get::<i64>(a_val * b_val);
+            let res = state.base_values().get::<i64>(&(a_val * b_val));
             Some(res)
         },
     ));
@@ -853,12 +859,12 @@ fn mergefn_arithmetic() {
             };
             let a_val = state.base_values().unwrap::<i64>(*a);
             let b_val = state.base_values().unwrap::<i64>(*b);
-            let res = state.base_values().get::<i64>(a_val + b_val);
+            let res = state.base_values().get::<i64>(&(a_val + b_val));
             Some(res)
         },
     ));
 
-    let value_1 = egraph.base_values_mut().get(1i64);
+    let value_1 = egraph.base_values_mut().get(&1i64);
 
     // Create a function with merge function (+ 1 (* old new))
     // This uses nested MergeFn::Primitive with external functions to build the complex merge function
@@ -876,13 +882,13 @@ fn mergefn_arithmetic() {
         can_subsume: false,
     });
 
-    let value_0 = egraph.base_value_constant(0i64);
-    let value_1 = egraph.base_value_constant(1i64);
-    let value_2 = egraph.base_value_constant(2i64);
-    let value_3 = egraph.base_value_constant(3i64);
-    let value_4 = egraph.base_value_constant(4i64);
-    let value_5 = egraph.base_value_constant(5i64);
-    let value_6 = egraph.base_value_constant(6i64);
+    let value_0 = egraph.base_value_constant(&0i64);
+    let value_1 = egraph.base_value_constant(&1i64);
+    let value_2 = egraph.base_value_constant(&2i64);
+    let value_3 = egraph.base_value_constant(&3i64);
+    let value_4 = egraph.base_value_constant(&4i64);
+    let value_5 = egraph.base_value_constant(&5i64);
+    let value_6 = egraph.base_value_constant(&6i64);
 
     // First rule writes (f 1 0) (f 2 1)
     let rule1 = {
@@ -902,7 +908,7 @@ fn mergefn_arithmetic() {
             egraph.base_values().unwrap::<i64>(func_row.vals[1]),
         ));
     });
-    contents.sort();
+    contents.sort_unstable();
     assert_eq!(contents, vec![(1, 0), (2, 1)]);
 
     // Second rule writes (f 1 5) (f 2 6)
@@ -925,7 +931,7 @@ fn mergefn_arithmetic() {
             egraph.base_values().unwrap::<i64>(func_row.vals[1]),
         ));
     });
-    contents.sort();
+    contents.sort_unstable();
     assert_eq!(contents, vec![(1, 1), (2, 7)]);
 
     // Third rule writes (f 1 3) (f 2 4)
@@ -948,11 +954,12 @@ fn mergefn_arithmetic() {
             egraph.base_values().unwrap::<i64>(func_row.vals[1]),
         ));
     });
-    contents.sort();
+    contents.sort_unstable();
     assert_eq!(contents, vec![(1, 4), (2, 29)]);
 }
 
 #[test]
+#[allow(clippy::similar_names)]
 fn mergefn_nested_function() {
     let mut egraph = EGraph::default();
     let int_base = egraph.base_values_mut().register_type::<i64>();
@@ -982,8 +989,8 @@ fn mergefn_nested_function() {
         can_subsume: true,
     });
 
-    let value_1 = egraph.base_value_constant(1i64);
-    let value_2 = egraph.base_value_constant(2i64);
+    let value_1 = egraph.base_value_constant(&1i64);
+    let value_2 = egraph.base_value_constant(&2i64);
 
     // Create an rhs-only rule that writes f values with fresh IDs
     // We'll run this rule multiple times and observe how the merge function works
@@ -1102,14 +1109,14 @@ fn constrain_prims_simple() {
             };
             let a_val = state.base_values().unwrap::<i64>(*a);
             let result: bool = a_val % 2 == 0;
-            Some(state.base_values().get(result))
+            Some(state.base_values().get(&result))
         },
     ));
 
-    let value_1 = egraph.base_value_constant(1i64);
-    let value_2 = egraph.base_value_constant(2i64);
-    let value_3 = egraph.base_value_constant(3i64);
-    let value_true = egraph.base_value_constant(true);
+    let value_1 = egraph.base_value_constant(&1i64);
+    let value_2 = egraph.base_value_constant(&2i64);
+    let value_3 = egraph.base_value_constant(&3i64);
+    let value_true = egraph.base_value_constant(&true);
     let write_f = {
         let mut rb = egraph.new_rule("write_f", true);
         rb.lookup(f_table, &[value_1], String::new);
@@ -1154,10 +1161,11 @@ fn constrain_prims_simple() {
     egraph.run_rules(&[copy_to_g]).unwrap();
     let g = get_entries(&egraph, g_table);
     assert_eq!(g.len(), 1);
-    assert_eq!(g[0], f[1])
+    assert_eq!(g[0], f[1]);
 }
 
 #[test]
+#[allow(clippy::similar_names)]
 fn constrain_prims_abstract() {
     // Take two functions, f and g. Fill f with (f -1) (f 0) (f 1), then filter for numbers where
     // (neg x) = (abs x) when adding to 'g'. This adds only -1 and 0 to g
@@ -1184,7 +1192,7 @@ fn constrain_prims_abstract() {
                 return None;
             };
             let a_val = state.base_values().unwrap::<i64>(*a);
-            Some(state.base_values().get(-a_val))
+            Some(state.base_values().get(&-a_val))
         },
     ));
     let abs = egraph.register_external_func(core_relations::make_external_func(
@@ -1193,13 +1201,13 @@ fn constrain_prims_abstract() {
                 return None;
             };
             let a_val = state.base_values().unwrap::<i64>(*a);
-            Some(state.base_values().get(a_val.abs()))
+            Some(state.base_values().get(&a_val.abs()))
         },
     ));
 
-    let value_n1 = egraph.base_value_constant(-1i64);
-    let value_0 = egraph.base_value_constant(0i64);
-    let value_1 = egraph.base_value_constant(1i64);
+    let value_n1 = egraph.base_value_constant(&-1i64);
+    let value_0 = egraph.base_value_constant(&0i64);
+    let value_1 = egraph.base_value_constant(&1i64);
     let write_f = {
         let mut rb = egraph.new_rule("write_f", true);
         rb.lookup(f_table, &[value_n1], String::new);
@@ -1243,7 +1251,7 @@ fn constrain_prims_abstract() {
     egraph.run_rules(&[copy_to_g]).unwrap();
     let g = get_entries(&egraph, g_table);
     assert_eq!(g.len(), 2);
-    assert_eq!(g, f[0..2])
+    assert_eq!(g, f[0..2]);
 }
 
 #[test]
@@ -1267,9 +1275,9 @@ fn basic_subsumption() {
         can_subsume: false,
     });
 
-    let value_1 = egraph.base_value_constant(1i64);
-    let value_2 = egraph.base_value_constant(2i64);
-    let value_3 = egraph.base_value_constant(3i64);
+    let value_1 = egraph.base_value_constant(&1i64);
+    let value_2 = egraph.base_value_constant(&2i64);
+    let value_3 = egraph.base_value_constant(&3i64);
     let write_f = {
         let mut rb = egraph.new_rule("write_f", true);
         rb.lookup(f_table, slice::from_ref(&value_1), String::new);
@@ -1325,7 +1333,7 @@ fn basic_subsumption() {
     egraph.run_rules(&[copy_to_g]).unwrap();
     let g = get_entries(&egraph, g_table);
     assert_eq!((g.0.len(), g.1), (1, 0));
-    assert_eq!(g.0[0], f.0[0])
+    assert_eq!(g.0[0], f.0[0]);
 }
 
 #[test]
@@ -1376,8 +1384,8 @@ fn primitive_failure_panics() {
     let _int_base = egraph.base_values_mut().register_type::<i64>();
     let unit_base = egraph.base_values_mut().register_type::<()>();
 
-    let value_1 = egraph.base_value_constant(1i64);
-    let value_2 = egraph.base_value_constant(2i64);
+    let value_1 = egraph.base_value_constant(&1i64);
+    let value_2 = egraph.base_value_constant(&2i64);
 
     let assert_odd = egraph.register_external_func(core_relations::make_external_func(
         |state, vals| -> Option<Value> {
@@ -1386,7 +1394,7 @@ fn primitive_failure_panics() {
             };
             let a_val = state.base_values().unwrap::<i64>(*a);
             if a_val % 2 == 1 {
-                Some(state.base_values().get(()))
+                Some(state.base_values().get(&()))
             } else {
                 None
             }
@@ -1399,13 +1407,13 @@ fn primitive_failure_panics() {
             assert_odd,
             slice::from_ref(&value_1),
             ColumnTy::Base(unit_base),
-            || "".to_string(),
+            String::new,
         );
         rb.call_external_func(
             assert_odd,
             slice::from_ref(&value_2),
             ColumnTy::Base(unit_base),
-            || "".to_string(),
+            String::new,
         );
         rb.build()
     };
@@ -1415,5 +1423,5 @@ fn primitive_failure_panics() {
 
 const _: () = {
     const fn assert_send<T: Send>() {}
-    assert_send::<EGraph>()
+    assert_send::<EGraph>();
 };

@@ -13,7 +13,7 @@ use std::{
     hash::Hash,
     iter, mem,
     ops::{Index, IndexMut},
-    sync::{Arc, Mutex},
+    sync::{Arc, LazyLock, Mutex},
 };
 
 use crate::core_relations::{
@@ -28,7 +28,6 @@ use egglog_numeric_id as numeric_id;
 use hashbrown::HashMap;
 use indexmap::{IndexMap, IndexSet, map::Entry};
 use log::info;
-use once_cell::sync::Lazy;
 pub use proof_format::{EqProofId, ProofStore, TermProofId};
 use proof_spec::{ProofReason, ProofReconstructionState, ReasonSpecId};
 use smallvec::SmallVec;
@@ -73,7 +72,7 @@ pub struct EGraph {
     funcs: DenseIdMap<FunctionId, FunctionInfo>,
     panic_message: SideChannel<String>,
     /// This is a cache of all the different panic messages that we may use while executing rules
-    /// against the EGraph. Oftentimes, these messages are generated dynamically: keeping this map
+    /// against the `EGraph`. Oftentimes, these messages are generated dynamically: keeping this map
     /// around allows us to cache external function ids with repeat panic messages and they can
     /// also serve as a debugging tool in the case that the number of panic messages grows without
     /// bound.
@@ -112,11 +111,12 @@ pub struct FunctionConfig {
 }
 
 impl EGraph {
-    /// Create a new EGraph with tracing (aka 'proofs') enabled.
+    /// Create a new `EGraph` with tracing (aka 'proofs') enabled.
     ///
-    /// Execution of queries against a tracing-enabled EGraph will be slower,
+    /// Execution of queries against a tracing-enabled `EGraph` will be slower,
     /// but will annotate the egraph with annotations that can explain how rows
     /// came to appear.
+    #[must_use]
     pub fn with_tracing() -> EGraph {
         let mut db = Database::new();
         let uf_table = db.add_table(
@@ -132,7 +132,7 @@ impl EGraph {
         let trace_counter = db.add_counter();
         let ts_counter = db.add_counter();
         // Start the timestamp counter at 1.
-        db.inc_counter(ts_counter);
+        let _ = db.inc_counter(ts_counter);
         let mut proof_specs = IdVec::default();
         let cong_spec = proof_specs.push(Arc::new(ProofReason::CongRow));
 
@@ -142,14 +142,14 @@ impl EGraph {
             id_counter,
             reason_counter: trace_counter,
             timestamp_counter: ts_counter,
-            rules: Default::default(),
-            funcs: Default::default(),
-            panic_message: Default::default(),
-            panic_funcs: Default::default(),
+            rules: DenseIdMapWithReuse::default(),
+            funcs: DenseIdMap::default(),
+            panic_message: Arc::default(),
+            panic_funcs: HashMap::default(),
             proof_specs,
             cong_spec,
-            reason_tables: Default::default(),
-            term_tables: Default::default(),
+            reason_tables: IndexMap::default(),
+            term_tables: IndexMap::default(),
             tracing,
         }
     }
@@ -159,7 +159,7 @@ impl EGraph {
     }
 
     fn inc_ts(&mut self) {
-        self.db.inc_counter(self.timestamp_counter);
+        let _ = self.db.inc_counter(self.timestamp_counter);
     }
 
     /// Get a mutable reference to the underlying table of base values for this
@@ -175,20 +175,21 @@ impl EGraph {
     }
 
     /// Get a reference to the underlying table of containers for this `EGraph`.
+    #[must_use]
     pub fn container_values(&self) -> &ContainerValues {
         self.db.container_values()
     }
 
-    /// Intern the given container value into the EGraph.
-    pub fn get_container_value<C: ContainerValue>(&mut self, val: C) -> Value {
+    /// Intern the given container value into the `EGraph`.
+    pub fn get_container_value<C: ContainerValue>(&mut self, val: &C) -> Value {
         self.register_container_ty::<C>();
         self.db
             .with_execution_state(|state| state.clone().container_values().register_val(val, state))
     }
 
-    /// Register the given [`ContainerValue`] type with this EGraph.
+    /// Register the given [`ContainerValue`] type with this `EGraph`.
     ///
-    /// The given container will use the EGraph's union-find to manage rebuilding and the merging
+    /// The given container will use the `EGraph`'s union-find to manage rebuilding and the merging
     /// of containers with a common id.
     pub fn register_container_ty<C: ContainerValue>(&mut self) {
         let uf_table = self.uf_table;
@@ -196,24 +197,25 @@ impl EGraph {
         self.db.container_values_mut().register_type::<C>(
             self.id_counter,
             move |state, old, new| {
-                if old != new {
+                if old == new {
+                    old
+                } else {
                     let next_ts = Value::from_usize(state.read_counter(ts_counter));
                     state.stage_insert(uf_table, &[old, new, next_ts]);
                     std::cmp::min(old, new)
-                } else {
-                    old
                 }
             },
         );
     }
 
     /// Get a reference to the underlying table of base values for this `EGraph`.
+    #[must_use]
     pub fn base_values(&self) -> &BaseValues {
         self.db.base_values()
     }
 
     /// Create a [`QueryEntry`] for a base value.
-    pub fn base_value_constant<T>(&self, x: T) -> QueryEntry
+    pub fn base_value_constant<T>(&self, x: &T) -> QueryEntry
     where
         T: BaseValue,
     {
@@ -231,7 +233,7 @@ impl EGraph {
     }
 
     pub fn free_external_func(&mut self, func: ExternalFunctionId) {
-        self.db.free_external_function(func)
+        self.db.free_external_function(func);
     }
 
     /// Generate a fresh id.
@@ -245,13 +247,14 @@ impl EGraph {
     fn get_canon_in_uf(&self, val: Value) -> Value {
         let table = self.db.get_table(self.uf_table);
         let row = table.get_row(&[val]);
-        row.map(|row| row.vals[1]).unwrap_or(val)
+        row.map_or(val, |row| row.vals[1])
     }
 
     /// Get the canonical representation for `val` based on type.
     ///
     /// For [`ColumnTy::Id`], it looks up the union find; otherwise,
     /// it returns the value itself.
+    #[must_use]
     pub fn get_canon_repr(&self, val: Value, ty: ColumnTy) -> Value {
         match ty {
             ColumnTy::Id => self.get_canon_in_uf(val),
@@ -301,10 +304,10 @@ impl EGraph {
     /// This method panics if the values do not match the arity of the function.
     ///
     /// NB: this is not an efficient interface for bulk loading. We should add
-    /// one that allows us to pass through a series of RowBuffers before
+    /// one that allows us to pass through a series of `RowBuffers` before
     /// incrementing the timestamp.
     pub fn add_values(&mut self, values: impl IntoIterator<Item = (FunctionId, Vec<Value>)>) {
-        self.add_values_with_desc("", values)
+        self.add_values_with_desc("", values);
     }
 
     /// A term-oriented means of adding data to the database: hand back a "term
@@ -374,6 +377,7 @@ impl EGraph {
 
     /// Lookup the id associated with a function `func` and the given arguments
     /// (`key`).
+    #[must_use]
     pub fn lookup_id(&self, func: FunctionId, key: &[Value]) -> Option<Value> {
         let info = &self.funcs[func];
         let schema_math = SchemaMath {
@@ -407,7 +411,7 @@ impl EGraph {
     /// This method panics if the values do not match the arity of the function.
     ///
     /// NB: this is not an efficient interface for bulk loading. We should add
-    /// one that allows us to pass through a series of RowBuffers before
+    /// one that allows us to pass through a series of `RowBuffers` before
     /// incrementing the timestamp.
     pub fn add_values_with_desc(
         &mut self,
@@ -417,7 +421,7 @@ impl EGraph {
         let mut extended_row = Vec::<Value>::new();
         let reason_id = self.tracing.then(|| self.get_fiat_reason(desc));
         let mut bufs = DenseIdMap::default();
-        for (func, row) in values.into_iter() {
+        for (func, row) in values {
             let table_info = &self.funcs[func];
             let schema_math = SchemaMath {
                 tracing: self.tracing,
@@ -459,10 +463,12 @@ impl EGraph {
         self.flush_updates();
     }
 
+    #[must_use]
     pub fn approx_table_size(&self, table: FunctionId) -> usize {
         self.db.estimate_size(self.funcs[table].table, None)
     }
 
+    #[must_use]
     pub fn table_size(&self, table: FunctionId) -> usize {
         self.db.get_table(self.funcs[table].table).len()
     }
@@ -489,6 +495,9 @@ impl EGraph {
     /// # Errors
     /// This method will return an error if tracing is not enabled, if the row
     /// is not in the database, or if the terms themselves are not equal.
+    ///
+    /// # Panics
+    /// If printing fails.
     pub fn explain_terms_equal(
         &mut self,
         id1: Value,
@@ -579,7 +588,7 @@ impl EGraph {
                     "View Table {name} / {id:?} / {table:?}: {row:?}",
                     name = info.name,
                     table = info.table
-                )
+                );
             });
         }
 
@@ -589,7 +598,7 @@ impl EGraph {
             self.scan_table(table, |row| {
                 let name = &self.funcs[FunctionId::new(row[0].rep())].name;
                 let row = &row[1..];
-                info!("Term Table {table_id:?}: {name}, {row:?}")
+                info!("Term Table {table_id:?}: {name}, {row:?}");
             });
         }
 
@@ -599,12 +608,13 @@ impl EGraph {
             self.scan_table(table, |row| {
                 let spec = self.proof_specs[ReasonSpecId::new(row[0].rep())].as_ref();
                 let row = &row[1..];
-                info!("Reason Table {table_id:?}: {spec:?}, {row:?}")
+                info!("Reason Table {table_id:?}: {spec:?}, {row:?}");
             });
         }
     }
 
     /// A helper for scanning the entries in a table.
+    #[allow(clippy::unused_self)]
     fn scan_table(&self, table: &WrappedTable, mut f: impl FnMut(&[Value])) {
         const BATCH_SIZE: usize = 128;
         let all = table.all();
@@ -618,7 +628,10 @@ impl EGraph {
         out.non_stale().for_each(|(_, row)| f(row));
     }
 
-    /// Register a function in this EGraph.
+    /// Register a function in this `EGraph`.
+    ///
+    /// # Panics
+    /// If the schema is empty.
     pub fn add_table(&mut self, config: FunctionConfig) -> FunctionId {
         let FunctionConfig {
             schema,
@@ -663,7 +676,7 @@ impl EGraph {
         let res = self.funcs.push(FunctionInfo {
             table: table_id,
             schema: schema.clone(),
-            incremental_rebuild_rules: Default::default(),
+            incremental_rebuild_rules: Vec::default(),
             nonincremental_rebuild_rule: RuleId::new(!0),
             default_val: default,
             can_subsume,
@@ -681,6 +694,12 @@ impl EGraph {
     /// Run the given rules, returning whether the database changed.
     ///
     /// If the given rules are malformed, this method can return an error.
+    ///
+    /// # Errors
+    /// If the given rules are malformed.
+    ///
+    /// # Panics
+    /// If locking the panic message fails.
     pub fn run_rules(&mut self, rules: &[RuleId]) -> Result<IterationReport> {
         let ts = self.next_ts();
 
@@ -835,7 +854,6 @@ impl EGraph {
     /// slow processing down in a single-threaded setting, so it is only used
     /// when the number of active threads is greater than 1.
     fn rebuild_parallel(&mut self) -> Result<()> {
-        let start = Instant::now();
         #[derive(Default)]
         struct RebuildState {
             nonincremental: Vec<FunctionId>,
@@ -849,6 +867,7 @@ impl EGraph {
             }
         }
 
+        let start = Instant::now();
         let mut changed = true;
         let mut state = RebuildState::default();
         let mut scratch = Vec::new();
@@ -954,7 +973,7 @@ impl EGraph {
                 rb.lookup_uf(var.clone()).unwrap().into()
             } else {
                 var.clone()
-            })
+            });
         }
 
         // Remove the old row and insert the new one.
@@ -989,24 +1008,27 @@ impl EGraph {
                 canon_var
             } else {
                 var.clone()
-            })
+            });
         }
         rb.check_for_update(&lhs, &rhs).unwrap();
         rb.rebuild_row(table, &vars, &canon, subsume_var);
         rb.build_internal(None) // skip the syntax check
     }
 
-    /// Gives the user a handle to the underlying ExecutionState. Useful for staging updates
+    /// Gives the user a handle to the underlying `ExecutionState`. Useful for staging updates
     /// to the database.
     ///
-    /// The staged updates are not immediately reflected in the EGraph, so you may want to
+    /// The staged updates are not immediately reflected in the `EGraph`, so you may want to
     /// manually flush the updates using [`EGraph::flush_updates`].
     pub fn with_execution_state<R>(&self, f: impl FnOnce(&mut ExecutionState<'_>) -> R) -> R {
         self.db.with_execution_state(f)
     }
 
-    /// Flush the pending update buffers to the EGraph.
+    /// Flush the pending update buffers to the `EGraph`.
     /// Returns `true` if the database is updated.
+    ///
+    /// # Panics
+    /// If rebuilding is unsuccessful.
     pub fn flush_updates(&mut self) -> bool {
         let updated = self.db.merge_all();
         self.inc_ts();
@@ -1065,7 +1087,7 @@ pub enum MergeFn {
     AssertEq,
     /// Use congruence to resolve FD conflicts.
     UnionId,
-    /// The output of a merge is determined by applying the given ExternalFunction to the result
+    /// The output of a merge is determined by applying the given `ExternalFunction` to the result
     /// of the argument merge functions.
     Primitive(ExternalFunctionId, Vec<MergeFn>),
     /// The output of a merge is determined by looking up the value for the given function and the
@@ -1088,7 +1110,7 @@ impl MergeFn {
         read_deps: &mut IndexSet<TableId>,
         write_deps: &mut IndexSet<TableId>,
     ) {
-        use MergeFn::*;
+        use MergeFn::{AssertEq, Const, Function, New, Old, Primitive, UnionId};
         match self {
             Primitive(_, args) => {
                 args.iter()
@@ -1272,14 +1294,11 @@ impl ResolvedMergeFn {
                     .map(|arg| arg.run(state, cur, new, ts))
                     .collect::<Vec<_>>();
 
-                match state.call_external_func(*prim, &args) {
-                    Some(result) => result,
-                    None => {
-                        let res = state.call_external_func(*panic, &[]);
-                        assert_eq!(res, None);
-                        cur
-                    }
-                }
+                state.call_external_func(*prim, &args).unwrap_or_else(|| {
+                    let res = state.call_external_func(*panic, &[]);
+                    assert_eq!(res, None);
+                    cur
+                })
             }
             ResolvedMergeFn::Function { func, args, panic } => {
                 // see github.com/egraphs-good/egglog/pull/287
@@ -1329,6 +1348,10 @@ impl Clone for TableAction {
 impl TableAction {
     /// Create a new `TableAction` to be used later.
     /// This requires access to the `egglog_bridge::EGraph`.
+    ///
+    /// # Panics
+    /// If tracing is enabled.
+    #[must_use]
     pub fn new(egraph: &EGraph, func: FunctionId) -> TableAction {
         assert!(!egraph.tracing, "proofs not supported yet");
 
@@ -1410,6 +1433,9 @@ impl TableAction {
     }
 
     /// Subsume a row in this table.
+    ///
+    /// # Panics
+    /// If the lookup required for subsuming fails.
     pub fn subsume(&mut self, state: &mut ExecutionState, key: impl Iterator<Item = Value>) {
         let ts = Value::from_usize(state.read_counter(self.timestamp));
         self.scratch.clear();
@@ -1442,6 +1468,10 @@ pub struct UnionAction {
 impl UnionAction {
     /// Create a new `UnionAction` to be used later.
     /// This requires access to the `egglog_bridge::EGraph`.
+    ///
+    /// # Panics
+    /// If tracing is enabled.
+    #[must_use]
     pub fn new(egraph: &EGraph) -> UnionAction {
         assert!(!egraph.tracing, "proofs not supported yet");
         UnionAction {
@@ -1474,7 +1504,7 @@ fn run_rules_impl(
         let info = &mut rule_info[*rule];
         let cached_plan = info.cached_plan.as_ref().unwrap();
         info.query
-            .add_rules_from_cached(&mut rsb, info.last_run_at, cached_plan)?;
+            .add_rules_from_cached(&mut rsb, info.last_run_at, cached_plan);
         info.last_run_at = next_ts;
     }
     let ruleset = rsb.build();
@@ -1527,14 +1557,14 @@ impl ExternalFunction for GetFirstMatch {
 /// The downside of this, and why we do not use it everywhere, is that there's no natural "key"
 /// that we can use to cache duplicate panic messages. We would need a more complex API to support
 /// both and fully replace our use of `Panic`.
-struct LazyPanic<F>(Arc<Lazy<String, F>>, SideChannel<String>);
+struct LazyPanic<F>(Arc<LazyLock<String, F>>, SideChannel<String>);
 
 impl<F: FnOnce() -> String + Send> ExternalFunction for LazyPanic<F> {
     fn invoke(&self, _: &mut core_relations::ExecutionState, args: &[Value]) -> Option<Value> {
         assert!(args.is_empty());
         let mut guard = self.1.lock().unwrap();
         if guard.is_none() {
-            *guard = Some(Lazy::force(&self.0).clone());
+            *guard = Some(LazyLock::force(&self.0).clone());
         }
         None
     }
@@ -1569,7 +1599,7 @@ impl EGraph {
         &mut self,
         message: impl FnOnce() -> String + Send + 'static,
     ) -> ExternalFunctionId {
-        let lazy = Lazy::new(message);
+        let lazy = LazyLock::new(message);
         let panic = LazyPanic(Arc::new(lazy), self.panic_message.clone());
         self.db.add_external_function(panic)
     }
@@ -1696,7 +1726,7 @@ impl SchemaMath {
     }
 
     fn table_columns(&self) -> usize {
-        self.func_cols + 1 /* timestamp */ + if self.tracing { 1 } else { 0 } + if self.subsume { 1 } else { 0 }
+        self.func_cols + 1 /* timestamp */ + usize::from(self.tracing) + usize::from(self.subsume)
     }
 
     #[track_caller]

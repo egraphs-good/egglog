@@ -156,11 +156,11 @@ impl EGraph {
                 seminaive,
                 build_reason: None,
                 sole_focus: None,
-                atom_proofs: Default::default(),
-                vars: Default::default(),
-                atoms: Default::default(),
-                add_rule: Default::default(),
-                plan_strategy: Default::default(),
+                atom_proofs: Vec::default(),
+                vars: DenseIdMap::default(),
+                atoms: Vec::default(),
+                add_rule: Vec::default(),
+                plan_strategy: PlanStrategy::default(),
             },
         }
     }
@@ -177,6 +177,7 @@ impl RuleBuilder<'_> {
     }
 
     /// Access the underlying egraph within the builder.
+    #[must_use]
     pub fn egraph(&self) -> &EGraph {
         self.egraph
     }
@@ -209,13 +210,16 @@ impl RuleBuilder<'_> {
     ///
     /// Note, calling this with invalid arguments (e.g. different lengths for
     /// `lhs` and `rhs`) can cause errors at rule runtime.
+    ///
+    /// # Errors
+    /// Calling this with invalid arguments can cause errors.
     pub(crate) fn check_for_update(
         &mut self,
         lhs: &[QueryEntry],
         rhs: &[QueryEntry],
     ) -> Result<()> {
-        let lhs = SmallVec::<[QueryEntry; 4]>::from_iter(lhs.iter().cloned());
-        let rhs = SmallVec::<[QueryEntry; 4]>::from_iter(rhs.iter().cloned());
+        let lhs = lhs.iter().cloned().collect::<SmallVec<[QueryEntry; 4]>>();
+        let rhs = rhs.iter().cloned().collect::<SmallVec<[QueryEntry; 4]>>();
         if lhs.len() != rhs.len() {
             return Err(RuleBuilderError::ArityMismatch {
                 expected: lhs.len(),
@@ -254,9 +258,10 @@ impl RuleBuilder<'_> {
                 }
             }
             // constants can be untyped
-            (QueryEntry::Const { .. }, QueryEntry::Const { .. })
-            | (QueryEntry::Var { .. }, QueryEntry::Const { .. })
-            | (QueryEntry::Const { .. }, QueryEntry::Var { .. }) => {}
+            (
+                QueryEntry::Const { .. } | QueryEntry::Var { .. },
+                QueryEntry::Const { .. } | QueryEntry::Var { .. },
+            ) => {}
         }
         Ok(())
     }
@@ -279,6 +284,10 @@ impl RuleBuilder<'_> {
     }
 
     /// Register the given rule with the egraph.
+    ///
+    /// # Panics
+    /// If tracing is enabled.
+    #[must_use]
     pub fn build(self) -> RuleId {
         assert!(
             !self.egraph.tracing,
@@ -287,15 +296,16 @@ impl RuleBuilder<'_> {
         self.build_internal(None)
     }
 
-    pub fn build_with_syntax(self, syntax: SourceSyntax) -> RuleId {
+    #[must_use]
+    pub fn build_with_syntax(self, syntax: &SourceSyntax) -> RuleId {
         self.build_internal(Some(syntax))
     }
 
-    pub(crate) fn build_internal(mut self, syntax: Option<SourceSyntax>) -> RuleId {
+    pub(crate) fn build_internal(mut self, syntax: Option<&SourceSyntax>) -> RuleId {
         if self.query.atoms.len() == 1 {
             self.query.plan_strategy = PlanStrategy::MinCover;
         }
-        if let Some(syntax) = &syntax {
+        if let Some(syntax) = syntax {
             if self.egraph.tracing {
                 let cb = self
                     .proof_builder
@@ -427,6 +437,9 @@ impl RuleBuilder<'_> {
     /// Add the given table atom to query. As elsewhere in the crate, the last
     /// argument is the "return value" of the function. Can also optionally
     /// check the subsumption bit.
+    ///
+    /// # Errors
+    /// If schema and entries have different lengths, or if type assertion fails.
     pub fn query_table(
         &mut self,
         func: FunctionId,
@@ -453,10 +466,7 @@ impl RuleBuilder<'_> {
             info.table,
             Some(func),
             is_subsumed.map(|b| QueryEntry::Const {
-                val: match b {
-                    true => SUBSUMED,
-                    false => NOT_SUBSUMED,
-                },
+                val: if b { SUBSUMED } else { NOT_SUBSUMED },
                 ty: ColumnTy::Id,
             }),
             entries,
@@ -465,6 +475,12 @@ impl RuleBuilder<'_> {
 
     /// Add the given primitive atom to query. As elsewhere in the crate, the last
     /// argument is the "return value" of the function.
+    ///
+    /// # Errors
+    /// If calling the internal callback fails.
+    ///
+    /// # Panics
+    /// If internal invariants aren't upheld.
     pub fn query_prim(
         &mut self,
         func: ExternalFunctionId,
@@ -492,6 +508,9 @@ impl RuleBuilder<'_> {
     /// Subsume the given entry in `func`.
     ///
     /// `entries` should match the number of keys to the function.
+    ///
+    /// # Panics
+    /// If internal invariants aren't upheld.
     pub fn subsume(&mut self, func: FunctionId, entries: &[QueryEntry]) {
         // First, insert a subsumed value if the tuple is new.
         let ret = self.lookup_with_subsumed(
@@ -550,6 +569,7 @@ impl RuleBuilder<'_> {
         });
     }
 
+    #[allow(clippy::too_many_lines)]
     pub(crate) fn lookup_with_subsumed(
         &mut self,
         func: FunctionId,
@@ -581,7 +601,7 @@ impl RuleBuilder<'_> {
                         // for the value.
                         WriteVal::CurrentVal(schema_math.ret_val_col()),
                     ),
-                    _ => unreachable!(),
+                    DefaultVal::Fail => unreachable!(),
                 };
                 let get_write_vals = move |inner: &mut Bindings| {
                     let mut write_vals = SmallVec::<[WriteVal; 4]>::new();
@@ -593,7 +613,7 @@ impl RuleBuilder<'_> {
                         } else if schema_math.tracing && i == schema_math.proof_id_col() {
                             write_vals.push(wv_ref);
                         } else if schema_math.subsume && i == schema_math.subsume_col() {
-                            write_vals.push(inner.convert(&subsumed).into())
+                            write_vals.push(inner.convert(&subsumed).into());
                         } else {
                             unreachable!()
                         }
@@ -605,7 +625,7 @@ impl RuleBuilder<'_> {
                     let term_var = self.new_var(ColumnTy::Id);
                     self.query.vars[res].term_var = term_var;
                     let ts_var = self.new_var(ColumnTy::Id);
-                    let mut insert_entries = entries.to_vec();
+                    let mut insert_entries = entries.clone();
                     insert_entries.push(res.into());
                     let add_proof =
                         self.proof_builder
@@ -729,6 +749,9 @@ impl RuleBuilder<'_> {
     }
 
     /// Merge the two values in the union-find.
+    ///
+    /// # Panics
+    /// If a `lhs_reason` isn't set internally.
     pub fn union(&mut self, mut l: QueryEntry, mut r: QueryEntry) {
         let cb: BuildRuleCallback = if self.query.tracing {
             // Union proofs should reflect term-level variables rather than the
@@ -806,7 +829,7 @@ impl RuleBuilder<'_> {
             },
             self.egraph,
         );
-        let after = SmallVec::<[_; 4]>::from_iter(after.iter().cloned());
+        let after = after.iter().cloned().collect::<SmallVec<[_; 4]>>();
         let uf_table = self.query.uf_table;
         let info = &self.egraph.funcs[func];
         let schema_math = SchemaMath {
@@ -908,7 +931,7 @@ impl RuleBuilder<'_> {
                 );
                 rb.insert(table, &dst_vars).context("set")
             }));
-        };
+        }
     }
 
     /// Remove the value of a function from the database.
@@ -923,8 +946,8 @@ impl RuleBuilder<'_> {
     }
 
     /// Panic with a given message.
-    pub fn panic(&mut self, message: String) {
-        let panic = self.egraph.new_panic(message.clone());
+    pub fn panic(&mut self, message: &str) {
+        let panic = self.egraph.new_panic(message.to_string());
         let ret_ty = ColumnTy::Id;
         let res = self.new_var(ret_ty);
         self.query.add_rule.push(Box::new(move |inner, rb| {
@@ -946,8 +969,8 @@ impl Query {
             uf_table: self.uf_table,
             next_ts: None,
             lhs_reason: None,
-            mapping: Default::default(),
-            grounded: Default::default(),
+            mapping: DenseIdMap::default(),
+            grounded: HashSet::default(),
         };
         for (var, _) in self.vars.iter() {
             inner.mapping.insert(var, DstVar::Var(qb.new_var()));
@@ -1001,18 +1024,17 @@ impl Query {
         rsb: &mut RuleSetBuilder,
         mid_ts: Timestamp,
         cached_plan: &CachedPlanInfo,
-    ) -> Result<()> {
+    ) {
         // For N atoms, we create N queries for seminaive evaluation. We can reuse the cached plan
         // directly.
         if !self.seminaive || (self.atoms.is_empty() && mid_ts == Timestamp::new(0)) {
-            rsb.add_rule_from_cached_plan(&cached_plan.plan, &[]);
-            return Ok(());
+            let _ = rsb.add_rule_from_cached_plan(&cached_plan.plan, &[]);
         }
         if let Some(focus_atom) = self.sole_focus {
             // There is a single "focus" atom that we will constrain to look at new values.
             let (_, _, schema_info) = &self.atoms[focus_atom];
             let ts_col = ColumnId::from_usize(schema_info.ts_col());
-            rsb.add_rule_from_cached_plan(
+            let _ = rsb.add_rule_from_cached_plan(
                 &cached_plan.plan,
                 &[(
                     cached_plan.atom_mapping[focus_atom],
@@ -1022,7 +1044,6 @@ impl Query {
                     },
                 )],
             );
-            return Ok(());
         }
         // Use the cached plan atoms.len() times with different constraints on each atom.
         let mut constraints: Vec<(core_relations::AtomId, Constraint)> =
@@ -1051,12 +1072,11 @@ impl Query {
                         },
                     )),
                     Ordering::Greater => {}
-                };
+                }
             }
-            rsb.add_rule_from_cached_plan(&cached_plan.plan, &constraints);
+            let _ = rsb.add_rule_from_cached_plan(&cached_plan.plan, &constraints);
             constraints.clear();
         }
-        Ok(())
     }
 }
 

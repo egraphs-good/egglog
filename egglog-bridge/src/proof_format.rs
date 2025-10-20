@@ -50,11 +50,17 @@ pub struct TermDag {
 
 impl TermDag {
     /// Print the term in a human-readable format to the given writer.
+    ///
+    /// # Errors
+    /// If printing fails.
     pub fn print_term(&self, term: TermId, writer: &mut impl io::Write) -> io::Result<()> {
         self.print_term_pretty(term, &PrettyPrintConfig::default(), writer)
     }
 
     /// Print the term with pretty-printing configuration.
+    ///
+    /// # Errors
+    /// If printing fails.
     pub fn print_term_pretty(
         &self,
         term: TermId,
@@ -115,7 +121,7 @@ impl TermDag {
                     panic!("Index out of bounds for function arguments")
                 }
             }
-            _ => panic!("Cannot project a non-function term"),
+            Term::Constant { .. } => panic!("Cannot project a non-function term"),
         }
     }
 }
@@ -142,6 +148,9 @@ pub struct ProofStore {
 
 impl ProofStore {
     /// Print a term proof with pretty-printing configuration.
+    ///
+    /// # Errors
+    /// If printing fails.
     pub fn print_term_proof_pretty(
         &self,
         term_pf: TermProofId,
@@ -153,6 +162,9 @@ impl ProofStore {
     }
 
     /// Print an equality proof with pretty-printing configuration.
+    ///
+    /// # Errors
+    /// If printing fails.
     pub fn print_eq_proof_pretty(
         &self,
         eq_pf: EqProofId,
@@ -199,6 +211,9 @@ impl ProofStore {
     }
 
     /// Print the equality proof in a human-readable format to the given writer.
+    ///
+    /// # Errors
+    /// If printing fails.
     pub fn print_eq_proof(&self, eq_pf: EqProofId, writer: &mut impl io::Write) -> io::Result<()> {
         self.print_eq_proof_pretty(eq_pf, &PrettyPrintConfig::default(), writer)
     }
@@ -267,12 +282,12 @@ impl ProofStore {
                 self.print_term_proof_with_printer(*t_ok_pf, printer)?;
                 printer.write_str(", (term= ")?;
                 self.termdag.print_term_with_printer(*t, printer)?;
-                printer.write_str("))")?
+                printer.write_str("))")?;
             }
             EqProof::PSym { eq_pf } => {
                 printer.write_str("PSym(")?;
                 self.print_eq_proof_with_printer(*eq_pf, printer)?;
-                printer.write_str(")")?
+                printer.write_str(")")?;
             }
             EqProof::PTrans { pfxy, pfyz } => {
                 printer.write_str("PTrans(")?;
@@ -289,18 +304,21 @@ impl ProofStore {
                 printer.decrease_indent();
                 printer.decrease_indent();
                 printer.newline()?;
-                printer.write_str(")")?
+                printer.write_str(")")?;
             }
             EqProof::PCong(cong_pf) => {
                 printer.write_str("PCong[Equality](")?;
                 self.print_cong_with_printer(cong_pf, printer)?;
-                printer.write_str(")")?
+                printer.write_str(")")?;
             }
         }
         printer.newline()
     }
 
     /// Print the term proof in a human-readable format to the given writer.
+    ///
+    /// # Errors
+    /// If printing fails.
     pub fn print_term_proof(
         &self,
         term_pf: TermProofId,
@@ -405,6 +423,7 @@ impl ProofStore {
         self.intern_eq(&EqProof::PTrans { pfxy, pfyz })
     }
 
+    #[allow(clippy::similar_names)]
     pub(crate) fn sequence_proofs(&mut self, pfs: &[EqProofId]) -> EqProofId {
         match pfs {
             [] => panic!("Cannot sequence an empty list of proofs"),
@@ -440,8 +459,8 @@ pub struct CongProof {
 pub enum TermProof {
     /// proves a Proposition based on a rule application
     /// the subsitution gives the mapping from variables to terms
-    /// the body_pfs gives proofs for each of the conditions in the query of the rule
-    /// the act_pf gives a location in the action of the proposition
+    /// the `body_pfs` gives proofs for each of the conditions in the query of the rule
+    /// the `act_pf` gives a location in the action of the proposition
     PRule {
         rule_name: Rc<str>,
         subst: DenseIdMap<Variable, TermId>,
@@ -465,8 +484,8 @@ pub enum TermProof {
 pub enum EqProof {
     /// proves a Proposition based on a rule application
     /// the subsitution gives the mapping from variables to terms
-    /// the body_pfs gives proofs for each of the conditions in the query of the rule
-    /// the act_pf gives a location in the action of the proposition
+    /// the `body_pfs` gives proofs for each of the conditions in the query of the rule
+    /// the `act_pf` gives a location in the action of the proposition
     PRule {
         rule_name: Rc<str>,
         subst: DenseIdMap<Variable, TermId>,
@@ -479,7 +498,7 @@ pub enum EqProof {
         t_ok_pf: TermProofId,
         t: TermId,
     },
-    /// The symmetric equality of eq_pf
+    /// The symmetric equality of `eq_pf`
     PSym {
         eq_pf: EqProofId,
     },
@@ -487,9 +506,9 @@ pub enum EqProof {
         pfxy: EqProofId,
         pfyz: EqProofId,
     },
-    /// Proves f(x1, y1, ...) = f(x2, y2, ...) where f is fun_sym
+    /// Proves f(x1, y1, ...) = f(x2, y2, ...) where f is `fun_sym`
     /// A proof via congruence- one proof for each child of the term
-    /// pf_f_args_ok is a proof that the term with the lhs children is valid
+    /// `pf_f_args_ok` is a proof that the term with the lhs children is valid
     PCong(CongProof),
 }
 

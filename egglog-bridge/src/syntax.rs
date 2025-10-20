@@ -65,7 +65,7 @@ pub enum SourceExpr {
 }
 
 /// A data-structure representing an egglog query. Essentially, multiple [`SourceExpr`]s, one per
-/// line, along with a backing store accounting for subterms indexed by [`SyntaxId].
+/// line, along with a backing store accounting for subterms indexed by [`SyntaxId`].
 #[derive(Debug, Clone, Default)]
 pub struct SourceSyntax {
     pub(crate) backing: IdVec<SyntaxId, SourceExpr>,
@@ -83,7 +83,7 @@ impl SourceSyntax {
             SourceExpr::Const { .. } | SourceExpr::FunctionCall { .. } => {}
             SourceExpr::Var { id, ty, .. } => self.vars.push((*id, *ty)),
             SourceExpr::ExternalCall { var, ty, .. } => self.vars.push((*var, *ty)),
-        };
+        }
         self.backing.push(expr)
     }
 
@@ -154,7 +154,7 @@ impl ProofBuilder {
             // Now, insert all needed reconstructed terms.
             let mut state = TermReconstructionState {
                 syntax: &syntax,
-                syntax_mapping: Default::default(),
+                syntax_mapping: DenseIdMap::default(),
                 metadata: metadata.clone(),
                 atom_mapping: atom_mapping.clone(),
             };
@@ -185,6 +185,7 @@ impl ProofBuilder {
         }
     }
 
+    #[allow(clippy::unused_self)]
     fn build_cong_metadata(&self, func: FunctionId, egraph: &mut EGraph) -> FunctionCongMetadata {
         let func_info = &egraph.funcs[func];
         let func_underlying = func_info.table;
@@ -205,7 +206,7 @@ impl ProofBuilder {
             reason_spec_id: egraph.cong_spec,
         };
         let build_term = egraph.register_external_func(make_external_func(move |es, vals| {
-            cong_term(&cong_args, es, vals)
+            Some(cong_term(&cong_args, es, vals))
         }));
         FunctionCongMetadata {
             table: func_underlying,
@@ -279,7 +280,7 @@ impl TermReconstructionState<'_> {
     }
 }
 
-/// Metadata from the EGraph that we copy into an [`core_relations::ExternalFunction`] closure that
+/// Metadata from the `EGraph` that we copy into an [`core_relations::ExternalFunction`] closure that
 /// recreates terms justified by congruence.
 #[derive(Clone)]
 struct CongArgs {
@@ -303,7 +304,7 @@ struct CongArgs {
     reason_spec_id: ReasonSpecId,
 }
 
-fn cong_term(args: &CongArgs, es: &mut ExecutionState, vals: &[Value]) -> Option<Value> {
+fn cong_term(args: &CongArgs, es: &mut ExecutionState, vals: &[Value]) -> Value {
     let old_term = vals[0];
     let new_term = &vals[1..];
     let reason = es.predict_col(
@@ -335,5 +336,5 @@ fn cong_term(args: &CongArgs, es: &mut ExecutionState, vals: &[Value]) -> Option
     term_row[args.schema_math.proof_id_col()] = term_val;
     term_row[args.schema_math.ts_col()] = ts;
     es.stage_insert(args.func_underlying, &term_row);
-    Some(term_val)
+    term_val
 }

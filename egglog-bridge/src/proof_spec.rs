@@ -52,6 +52,7 @@ pub(crate) struct ProofBuilder {
     pub(crate) term_vars: DenseIdMap<AtomId, QueryEntry>,
 }
 
+#[derive(Clone, Copy)]
 pub(crate) struct RebuildVars {
     pub(crate) new_term: Variable,
     pub(crate) reason: Variable,
@@ -63,11 +64,12 @@ impl ProofBuilder {
         ProofBuilder {
             rule_id,
             rule_description: description.into(),
-            term_vars: Default::default(),
+            term_vars: DenseIdMap::default(),
         }
     }
 
     /// Generate a proof for a newly rebuilt row.
+    #[allow(clippy::unused_self)]
     pub(crate) fn rebuild_proof(
         &mut self,
         func: FunctionId,
@@ -111,6 +113,7 @@ impl ProofBuilder {
 
     /// Generate a callback that will add a row to the term database, as well as
     /// a reason for that term existing.
+    #[allow(clippy::unused_self)]
     pub(crate) fn new_row(
         &mut self,
         func: FunctionId,
@@ -164,7 +167,7 @@ impl<'a> ProofReconstructionState<'a> {
 
 impl EGraph {
     /// Given the base `subst`, reconstruct the hierarchy of term ids for a given piece of
-    /// SourceSyntax.
+    /// `SourceSyntax`.
     fn get_syntax_val(
         &mut self,
         node: SyntaxId,
@@ -478,7 +481,7 @@ impl EGraph {
             {
                 let mut rsb = self.db.new_rule_set();
                 let mut qb = rsb.new_rule();
-                for _ in 0..*keys + 1 {
+                for _ in 0..=(*keys) {
                     atom.push(qb.new_var().into());
                 }
                 atom.push(term_id.into());
@@ -486,7 +489,7 @@ impl EGraph {
                 qb.add_atom(*table, &atom, iter::empty()).unwrap();
                 let mut rb = qb.build();
                 rb.call_external(gfm_id, &atom).unwrap();
-                rb.build();
+                let _ = rb.build();
                 let rs = rsb.build();
                 atom.clear();
                 self.db.run_rule_set(&rs);
@@ -523,7 +526,7 @@ impl EGraph {
                 qb.add_atom(*table, &atom, iter::empty()).unwrap();
                 let mut rb = qb.build();
                 rb.call_external(gfm_id, &atom).unwrap();
-                rb.build();
+                let _ = rb.build();
                 let rs = rsb.build();
                 atom.clear();
                 self.db.run_rule_set(&rs);
