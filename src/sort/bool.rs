@@ -1,4 +1,6 @@
-use super::*;
+use super::{
+    BaseSort, BaseValues, Debug, EGraph, Literal, Term, TermDag, Value, add_primitive, bool,
+};
 
 #[derive(Debug)]
 pub struct BoolSort;
@@ -6,7 +8,7 @@ pub struct BoolSort;
 impl BaseSort for BoolSort {
     type Base = bool;
 
-    fn name(&self) -> &str {
+    fn name(&self) -> &'static str {
         "bool"
     }
 

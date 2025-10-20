@@ -37,6 +37,7 @@ dyn_clone::clone_trait_object!(Scheduler);
 /// A collection of matches produced by a rule.
 /// The user can choose which matches to be fired.
 pub struct Matches {
+    #[allow(clippy::struct_field_names)]
     matches: Vec<Value>,
     chosen: Vec<usize>,
     vars: Vec<ResolvedVar>,
@@ -52,6 +53,10 @@ pub struct Match<'a> {
 
 impl Match<'_> {
     /// Get the value corresponding a variable in this match.
+    ///
+    /// # Panics
+    /// If the `var` isn't in this match.
+    #[must_use]
     pub fn get_value(&self, var: &str) -> Value {
         let idx = self.vars.iter().position(|v| v.name == var).unwrap();
         self.values[idx]
@@ -72,16 +77,19 @@ impl Matches {
     }
 
     /// The number of matches in total.
+    #[must_use]
     pub fn match_size(&self) -> usize {
         self.matches.len() / self.vars.len()
     }
 
     /// The length of a tuple.
+    #[must_use]
     pub fn tuple_len(&self) -> usize {
         self.vars.len()
     }
 
     /// Get `idx`-th match.
+    #[must_use]
     pub fn get_match(&self, idx: usize) -> Match<'_> {
         Match {
             values: &self.matches[idx * self.tuple_len()..(idx + 1) * self.tuple_len()],
@@ -108,17 +116,17 @@ impl Matches {
         mut table_action: TableAction,
     ) -> Vec<Value> {
         let tuple_len = self.tuple_len();
-        let unit = state.base_values().get(());
+        let unit = state.base_values().get(&());
 
         if self.all_chosen {
             for row in self.matches.chunks(tuple_len) {
-                table_action.insert(state, row.iter().cloned().chain(std::iter::once(unit)));
+                table_action.insert(state, row.iter().copied().chain(std::iter::once(unit)));
             }
             vec![]
         } else {
-            for idx in self.chosen.iter() {
+            for idx in &self.chosen {
                 let row = &self.matches[idx * tuple_len..(idx + 1) * tuple_len];
-                table_action.insert(state, row.iter().cloned().chain(std::iter::once(unit)));
+                table_action.insert(state, row.iter().copied().chain(std::iter::once(unit)));
             }
 
             // swap remove the chosen matches
@@ -154,7 +162,7 @@ impl EGraph {
     pub fn add_scheduler(&mut self, scheduler: Box<dyn Scheduler>) -> SchedulerId {
         self.schedulers.push(SchedulerRecord {
             scheduler,
-            rule_info: Default::default(),
+            rule_info: HashMap::default(),
         })
     }
 
@@ -164,6 +172,13 @@ impl EGraph {
     }
 
     /// Runs a ruleset for one iteration using the given ruleset
+    ///
+    /// # Errors
+    /// If running rules errors.
+    ///
+    /// # Panics
+    /// If internal invariants aren't upheld.
+    #[allow(clippy::too_many_lines)]
     pub fn step_rules_with_scheduler(
         &mut self,
         scheduler_id: SchedulerId,
@@ -176,7 +191,7 @@ impl EGraph {
         ) {
             match &rulesets[ruleset] {
                 Ruleset::Rules(rules) => {
-                    for (rule_name, (core_rule, _)) in rules.iter() {
+                    for (rule_name, (core_rule, _)) in rules {
                         ids.push((rule_name.clone(), core_rule));
                     }
                 }
@@ -195,12 +210,12 @@ impl EGraph {
 
         // Step 1: build all the query/action rules and worklist if have not already
         let record = &mut schedulers[scheduler_id];
-        rules.iter().for_each(|(id, rule)| {
+        for (id, rule) in &rules {
             record
                 .rule_info
-                .entry((*id).to_owned())
+                .entry((*id).clone())
                 .or_insert_with(|| SchedulerRuleInfo::new(self, rule, id));
-        });
+        }
 
         // Step 2: run all the queries for one iteration
         let query_rules = rules
@@ -223,7 +238,7 @@ impl EGraph {
 
         // Step 3: let the scheduler decide which matches need to be kept
         self.backend.with_execution_state(|state| {
-            for (rule_id, _rule) in rules.iter() {
+            for (rule_id, _rule) in &rules {
                 let rule_info = record.rule_info.get_mut(rule_id).unwrap();
 
                 let matches: Vec<Value> =
@@ -270,11 +285,11 @@ impl EGraph {
 
         report.search_and_apply_time_per_rule = {
             let mut map = HashMap::default();
-            for (rule, report) in query_iter_report.rule_reports.iter() {
+            for (rule, report) in &query_iter_report.rule_reports {
                 *map.entry(rule.as_str().into())
                     .or_insert_with(|| Duration::from_nanos(0)) += report.search_and_apply_time;
             }
-            for (rule, report) in action_iter_report.rule_reports.iter() {
+            for (rule, report) in &action_iter_report.rule_reports {
                 *map.entry(rule.as_str().into())
                     .or_insert_with(|| Duration::from_nanos(0)) += report.search_and_apply_time;
             }
@@ -334,7 +349,7 @@ impl CollectMatches {
 impl ExternalFunction for CollectMatches {
     fn invoke(&self, state: &mut core_relations::ExecutionState, args: &[Value]) -> Option<Value> {
         self.matches.lock().unwrap().extend(args.iter().copied());
-        Some(state.base_values().get(()))
+        Some(state.base_values().get(&()))
     }
 }
 
@@ -342,8 +357,8 @@ impl SchedulerRuleInfo {
     fn new(egraph: &mut EGraph, rule: &ResolvedCoreRule, name: &str) -> SchedulerRuleInfo {
         let free_vars = rule.head.get_free_vars().into_iter().collect::<Vec<_>>();
         let unit_type = egraph.backend.base_values().get_ty::<()>();
-        let unit = egraph.backend.base_values().get(());
-        let unit_entry = egraph.backend.base_value_constant(());
+        let unit = egraph.backend.base_values().get(&());
+        let unit_entry = egraph.backend.base_value_constant(&());
 
         let matches = Arc::new(Mutex::new(Vec::new()));
         let collect_matches = egraph

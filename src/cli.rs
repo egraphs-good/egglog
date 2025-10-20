@@ -7,6 +7,7 @@ use std::path::PathBuf;
 
 #[derive(Debug, Parser)]
 #[command(version = env!("FULL_VERSION"), about = env!("CARGO_PKG_DESCRIPTION"))]
+#[allow(clippy::struct_excessive_bools)]
 struct Args {
     /// Directory for files when using `input` and `output` commands
     #[clap(short = 'F', long)]
@@ -50,6 +51,9 @@ struct Args {
 ///
 /// This is what vanilla egglog uses, and custom egglog builds (i.e., "egglog batteries included")
 /// should also call this function.
+///
+/// # Panics
+/// If something goes wrong.
 #[allow(clippy::disallowed_macros)]
 pub fn cli(mut egraph: EGraph) {
     env_logger::Builder::from_env(Env::default().default_filter_or("warn"))
@@ -96,7 +100,7 @@ pub fn cli(mut egraph: EGraph) {
             }
 
             if args.to_json || args.to_dot || args.to_svg {
-                let serialized_output = egraph.serialize(SerializeConfig {
+                let serialized_output = egraph.serialize(&SerializeConfig {
                     max_functions: Some(args.max_functions),
                     max_calls_per_function: Some(args.max_calls_per_function),
                     ..SerializeConfig::default()
@@ -106,7 +110,7 @@ pub fn cli(mut egraph: EGraph) {
                 }
                 let mut serialized = serialized_output.egraph;
                 if args.serialize_split_primitive_outputs {
-                    serialized.split_classes(|id, _| egraph.from_node_id(id).is_primitive())
+                    serialized.split_classes(|id, _| egraph.from_node_id(id).is_primitive());
                 }
                 for _ in 0..args.serialize_n_inline_leaves {
                     serialized.inline_leaves();
@@ -125,35 +129,44 @@ pub fn cli(mut egraph: EGraph) {
                     let dot_path = serialize_filename.with_extension("dot");
                     serialized
                         .to_dot_file(dot_path.clone())
-                        .unwrap_or_else(|_| panic!("Failed to write dot file to {dot_path:?}"));
+                        .unwrap_or_else(|_| {
+                            panic!("Failed to write dot file to {}", dot_path.display())
+                        });
                 }
                 if args.to_svg {
                     let svg_path = serialize_filename.with_extension("svg");
                     serialized.to_svg_file(svg_path.clone()).unwrap_or_else( |_|
-                        panic!("Failed to write svg file to {svg_path:?}. Make sure you have the `dot` executable installed")
+                        panic!("Failed to write svg file to {}. Make sure you have the `dot` executable installed", svg_path.display())
                     );
                 }
                 if args.to_json {
                     let json_path = serialize_filename.with_extension("json");
                     serialized
                         .to_json_file(json_path.clone())
-                        .unwrap_or_else(|_| panic!("Failed to write json file to {json_path:?}"));
+                        .unwrap_or_else(|_| {
+                            panic!("Failed to write json file to {}", json_path.display())
+                        });
                 }
             }
         }
     }
 
     // no need to drop the egraph if we are going to exit
-    std::mem::forget(egraph)
+    std::mem::forget(egraph);
 }
 
 impl EGraph {
     /// Start a Read-Eval-Print Loop with standard I/O.
+    /// # Errors
+    /// If I/O fails.
     pub fn repl(&mut self, mode: RunMode) -> io::Result<()> {
         self.repl_with(io::stdin(), io::stdout(), mode, io::stdin().is_terminal())
     }
 
     /// Start a Read-Eval-Print Loop with the given input and output channel.
+    ///
+    /// # Errors
+    /// If I/O fails.
     pub fn repl_with<R, W>(
         &mut self,
         input: R,
@@ -227,7 +240,7 @@ where
                 Some(err)
             }
         });
-    };
+    }
 
     Ok(match egraph.parse_and_run_program(filename, command) {
         Ok(msgs) => {

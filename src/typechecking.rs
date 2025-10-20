@@ -20,13 +20,14 @@ pub struct PrimitiveWithId(pub Arc<dyn Primitive + Send + Sync>, pub ExternalFun
 impl PrimitiveWithId {
     /// Takes the full signature of a primitive (both input and output types).
     /// Returns whether the primitive is compatible with this signature.
+    #[allow(clippy::cast_possible_wrap)]
     pub fn accept(&self, tys: &[Arc<dyn Sort>], typeinfo: &TypeInfo) -> bool {
         let mut constraints = vec![];
         let lits: Vec<_> = (0..tys.len())
             .map(|i| AtomTerm::Literal(Span::Panic, Literal::Int(i as i64)))
             .collect();
         for (lit, ty) in lits.iter().zip(tys.iter()) {
-            constraints.push(constraint::assign(lit.clone(), ty.clone()))
+            constraints.push(constraint::assign(lit.clone(), ty.clone()));
         }
         constraints.extend(
             self.0
@@ -65,6 +66,9 @@ impl EGraph {
     /// Add a user-defined sort to the e-graph.
     ///
     /// Also look at [`prelude::add_base_sort`] for a convenience method for adding user-defined sorts
+    ///
+    /// # Errors
+    /// If the name is already bound.
     pub fn add_sort<S: Sort + 'static>(&mut self, sort: S, span: Span) -> Result<(), TypeError> {
         self.add_arcsort(Arc::new(sort), span)
     }
@@ -72,6 +76,9 @@ impl EGraph {
     /// Declare a sort. This corresponds to the `sort` keyword in egglog.
     /// It can either declares a new [`EqSort`] if `presort_and_args` is not provided,
     /// or an instantiation of a presort (e.g., containers like `Vec`).
+    ///
+    /// # Errors
+    /// If a presort isn't found, or if applying it fails.
     pub fn declare_sort(
         &mut self,
         name: impl Into<String>,
@@ -98,6 +105,9 @@ impl EGraph {
     }
 
     /// Add a user-defined sort to the e-graph.
+    ///
+    /// # Errors
+    /// If the name is already bound.
     pub fn add_arcsort(&mut self, sort: ArcSort, span: Span) -> Result<(), TypeError> {
         sort.register_type(&mut self.backend);
 
@@ -149,6 +159,7 @@ impl EGraph {
         Ok(result)
     }
 
+    #[allow(clippy::too_many_lines)]
     fn typecheck_command(&mut self, command: &NCommand) -> Result<ResolvedNCommand, TypeError> {
         let symbol_gen = &mut self.parser.symbol_gen;
 
@@ -168,7 +179,7 @@ impl EGraph {
             NCommand::CoreAction(Action::Let(span, var, expr)) => {
                 let expr = self
                     .type_info
-                    .typecheck_expr(symbol_gen, expr, &Default::default())?;
+                    .typecheck_expr(symbol_gen, expr, &IndexMap::default())?;
                 let output_type = expr.output_type();
                 self.type_info
                     .global_sorts
@@ -183,16 +194,16 @@ impl EGraph {
             }
             NCommand::CoreAction(action) => ResolvedNCommand::CoreAction(
                 self.type_info
-                    .typecheck_action(symbol_gen, action, &Default::default())?,
+                    .typecheck_action(symbol_gen, action, &IndexMap::default())?,
             ),
             NCommand::Extract(span, expr, variants) => {
                 let res_expr =
                     self.type_info
-                        .typecheck_expr(symbol_gen, expr, &Default::default())?;
+                        .typecheck_expr(symbol_gen, expr, &IndexMap::default())?;
 
                 let res_variants =
                     self.type_info
-                        .typecheck_expr(symbol_gen, variants, &Default::default())?;
+                        .typecheck_expr(symbol_gen, variants, &IndexMap::default())?;
                 if res_variants.output_type().name() != I64Sort.name() {
                     return Err(TypeError::Mismatch {
                         expr: variants.clone(),
@@ -244,7 +255,7 @@ impl EGraph {
                     .iter()
                     .map(|expr| {
                         self.type_info
-                            .typecheck_expr(symbol_gen, expr, &Default::default())
+                            .typecheck_expr(symbol_gen, expr, &IndexMap::default())
                     })
                     .collect::<Result<Vec<_>, _>>()?;
                 ResolvedNCommand::Output {
@@ -521,8 +532,8 @@ impl TypeInfo {
                     }
                     ResolvedCall::Primitive(_) => Ok(()),
                 }?;
-                for arg in args.iter() {
-                    Self::check_lookup_expr(arg)?
+                for arg in args {
+                    Self::check_lookup_expr(arg)?;
                 }
                 Ok(())
             }
@@ -535,8 +546,8 @@ impl TypeInfo {
             match action {
                 GenericAction::Let(_, _, rhs) => Self::check_lookup_expr(rhs),
                 GenericAction::Set(_, _, args, rhs) => {
-                    for arg in args.iter() {
-                        Self::check_lookup_expr(arg)?
+                    for arg in args {
+                        Self::check_lookup_expr(arg)?;
                     }
                     Self::check_lookup_expr(rhs)
                 }
@@ -545,14 +556,14 @@ impl TypeInfo {
                     Self::check_lookup_expr(rhs)
                 }
                 GenericAction::Change(_, _, _, args) => {
-                    for arg in args.iter() {
-                        Self::check_lookup_expr(arg)?
+                    for arg in args {
+                        Self::check_lookup_expr(arg)?;
                     }
                     Ok(())
                 }
                 GenericAction::Panic(..) => Ok(()),
                 GenericAction::Expr(_, expr) => Self::check_lookup_expr(expr),
-            }?
+            }?;
         }
         Ok(())
     }
@@ -589,7 +600,7 @@ impl TypeInfo {
 
         // add bindings from the context
         for (var, (span, sort)) in binding {
-            problem.assign_local_var_type(var, span.clone(), sort.clone())?;
+            problem.assign_local_var_type(var, span.clone(), sort.clone());
         }
 
         let assignment = problem
@@ -699,7 +710,7 @@ pub enum TypeError {
     ConstructorOutputNotSort(String, Span),
     #[error("{1}\nValue lookup of non-constructor function {0} in rule is disallowed.")]
     LookupInRuleDisallowed(String, Span),
-    #[error("All alternative definitions considered failed\n{}", .0.iter().map(|e| format!("  {e}\n")).collect::<Vec<_>>().join(""))]
+    #[error("All alternative definitions considered failed\n{}", .0.iter().fold(String::new(), |s, e| format!("{s}  {e}\n")))]
     AllAlternativeFailed(Vec<TypeError>),
     #[error("{}\nCannot union values of sort {}", .1, .0.name())]
     NonEqsortUnion(ArcSort, Span),
@@ -725,7 +736,7 @@ mod test {
             })) => {
                 assert_eq!(e.span().string(), "(f a b c)");
             }
-            _ => panic!("Expected arity mismatch, got: {:?}", res),
+            _ => panic!("Expected arity mismatch, got: {res:?}"),
         }
     }
 }

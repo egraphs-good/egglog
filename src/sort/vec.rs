@@ -1,4 +1,7 @@
-use super::*;
+use super::{
+    ArcSort, ContainerSort, ContainerValue, ContainerValues, Debug, EGraph, Expr, Hash, Presort,
+    Rebuilder, Term, TermDag, TypeError, TypeInfo, Value, add_primitive, bool, i64,
+};
 
 #[derive(Clone, Debug, PartialEq, Eq, Hash)]
 pub struct VecContainer {
@@ -26,6 +29,7 @@ pub struct VecSort {
 }
 
 impl VecSort {
+    #[must_use]
     pub fn element(&self) -> ArcSort {
         self.element.clone()
     }
@@ -76,7 +80,7 @@ impl Presort for VecSort {
             };
             Ok(out.to_arcsort())
         } else {
-            panic!("Vec sort must have sort as argument. Got {:?}", args)
+            panic!("Vec sort must have sort as argument. Got {args:?}")
         }
     }
 }
@@ -111,6 +115,8 @@ impl ContainerSort for VecSort {
             .collect()
     }
 
+    #[allow(clippy::cast_possible_truncation)]
+    #[allow(clippy::cast_sign_loss)]
     fn register_primitives(&self, eg: &mut EGraph) {
         let arc = self.clone().to_arcsort();
 
@@ -147,9 +153,9 @@ impl ContainerSort for VecSort {
         element_terms: Vec<Term>,
     ) -> Term {
         if element_terms.is_empty() {
-            termdag.app("vec-empty".into(), vec![])
+            termdag.app("vec-empty".into(), &[])
         } else {
-            termdag.app("vec-of".into(), element_terms)
+            termdag.app("vec-of".into(), &element_terms)
         }
     }
 
@@ -168,13 +174,13 @@ mod tests {
         let outputs = egraph
             .parse_and_run_program(
                 None,
-                r#"
+                r"
             (sort IVec (Vec i64))
             (let v0 (vec-empty))
             (let v1 (vec-of 1 2 3 4))
             (extract v0)
             (extract v1)
-            "#,
+            ",
             )
             .unwrap();
 
@@ -183,10 +189,10 @@ mod tests {
             .parse_and_run_program(
                 None,
                 &format!(
-                    r#"
+                    r"
                 (check (= v0 {}))
                 (check (= v1 {}))
-                "#,
+                ",
                     outputs[0], outputs[1],
                 ),
             )

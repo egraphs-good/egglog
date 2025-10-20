@@ -1,4 +1,6 @@
-use super::*;
+use super::{
+    BaseSort, BaseValues, Debug, EGraph, Literal, Term, TermDag, Value, add_primitive, bool,
+};
 
 /// Signed 64-bit integers supporting these primitives:
 /// - Arithmetic: `+`, `-`, `*`, `/`, `%`
@@ -20,7 +22,7 @@ pub struct I64Sort;
 impl BaseSort for I64Sort {
     type Base = i64;
 
-    fn name(&self) -> &str {
+    fn name(&self) -> &'static str {
         "i64"
     }
 

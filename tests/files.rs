@@ -1,6 +1,6 @@
 use std::path::PathBuf;
 
-use egglog::*;
+use egglog::{EGraph, SerializeConfig};
 use libtest_mimic::Trial;
 
 #[derive(Clone)]
@@ -13,15 +13,9 @@ impl Run {
     fn run(&self) {
         let _ = env_logger::builder().is_test(true).try_init();
         let program = std::fs::read_to_string(&self.path)
-            .unwrap_or_else(|err| panic!("Couldn't read {:?}: {:?}", self.path, err));
+            .unwrap_or_else(|err| panic!("Couldn't read {}: {err:?}", self.path.display()));
 
-        if !self.resugar {
-            self.test_program(
-                self.path.to_str().map(String::from),
-                &program,
-                "Top level error",
-            );
-        } else {
+        if self.resugar {
             let mut egraph = EGraph::default();
             let desugared_str = egraph
                 .resugar_program(self.path.to_str().map(String::from), &program)
@@ -32,6 +26,12 @@ impl Run {
                 None,
                 &desugared_str,
                 "ERROR after parse, to_string, and parse again.",
+            );
+        } else {
+            self.test_program(
+                self.path.to_str().map(String::from),
+                &program,
+                "Top level error",
             );
         }
     }
@@ -44,17 +44,17 @@ impl Run {
                     panic!(
                         "Program should have failed! Instead, logged:\n {}",
                         msgs.iter()
-                            .map(|s| s.to_string())
+                            .map(std::string::ToString::to_string)
                             .collect::<Vec<_>>()
                             .join("\n")
                     );
                 } else {
                     for msg in msgs {
-                        log::info!("  {}", msg);
+                        log::info!("  {msg}");
                     }
                     // Test graphviz dot generation
                     let mut serialized = egraph
-                        .serialize(SerializeConfig {
+                        .serialize(&SerializeConfig {
                             max_functions: Some(40),
                             max_calls_per_function: Some(40),
                             ..Default::default()
@@ -67,12 +67,8 @@ impl Run {
                     serialized.to_dot();
                 }
             }
-            Err(err) => {
-                if !self.should_fail() {
-                    panic!("{}: {err}", message)
-                }
-            }
-        };
+            Err(err) => assert!(self.should_fail(), "{message}: {err}"),
+        }
     }
 
     fn into_trial(self) -> Trial {

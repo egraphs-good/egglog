@@ -1,7 +1,7 @@
 use crate::{util::HashMap, *};
 use core_relations::BaseValuePrinter;
 use ordered_float::NotNan;
-use std::collections::VecDeque;
+use std::{collections::VecDeque, fmt::Write};
 
 pub struct SerializeConfig {
     // Maximumum number of functions to include in the serialized graph, any after this will be discarded
@@ -18,9 +18,9 @@ pub struct SerializeConfig {
 pub struct SerializeOutput {
     /// The serialized e-graph.
     pub egraph: egraph_serialize::EGraph,
-    /// Functions with more calls than max_calls_per_function, so that not all values are included.
+    /// Functions with more calls than `max_calls_per_function`, so that not all values are included.
     pub truncated_functions: Vec<String>,
-    /// Functions that were discarded from the output, because more functions were present than max_functions
+    /// Functions that were discarded from the output, because more functions were present than `max_functions`
     pub discarded_functions: Vec<String>,
 }
 
@@ -33,16 +33,10 @@ impl SerializeOutput {
     pub fn omitted_description(&self) -> String {
         let mut msg = String::new();
         if !self.discarded_functions.is_empty() {
-            msg.push_str(&format!(
-                "Omitted: {}\n",
-                self.discarded_functions.join(", ")
-            ));
+            let _ = writeln!(msg, "Omitted: {}", self.discarded_functions.join(", "));
         }
         if !self.truncated_functions.is_empty() {
-            msg.push_str(&format!(
-                "Truncated: {}\n",
-                self.truncated_functions.join(", ")
-            ));
+            let _ = writeln!(msg, "Truncated: {}", self.truncated_functions.join(", "));
         }
         msg
     }
@@ -74,7 +68,7 @@ pub enum SerializedNode {
         /// The name of the function.
         name: String,
         /// The offset of the index in the table.
-        /// This can be resolved to the output and input values with table.get_index(offset, true).
+        /// This can be resolved to the output and input values with `table.get_index(offset, true)`.
         offset: usize,
     },
     /// A primitive value.
@@ -87,6 +81,7 @@ pub enum SerializedNode {
 
 impl SerializedNode {
     /// Returns true if the node is a primitive value.
+    #[must_use]
     pub fn is_primitive(&self) -> bool {
         match self {
             SerializedNode::Primitive(_) => true,
@@ -121,7 +116,11 @@ impl EGraph {
     /// - Nodes will have consistant IDs throughout execution of e-graph (used for animating changes in the visualization)
     /// - Edges in the visualization will be well distributed (used for animating changes in the visualization)
     ///   (Note that this will be changed in `<https://github.com/egraphs-good/egglog/pull/158>` so that edges point to exact nodes instead of looking up the e-class)
-    pub fn serialize(&self, config: SerializeConfig) -> SerializeOutput {
+    ///
+    /// # Panics
+    /// If internal invariants are violated.
+    #[must_use]
+    pub fn serialize(&self, config: &SerializeConfig) -> SerializeOutput {
         let mut truncated_functions = Vec::new();
         let mut discarded_functions = Vec::new();
         let max_calls_per_function = config.max_calls_per_function.unwrap_or(usize::MAX);
@@ -206,6 +205,7 @@ impl EGraph {
                 egraph_serialize::Node {
                     op: func.decl.name.to_string(),
                     eclass: class_id.clone(),
+                    #[allow(clippy::cast_precision_loss)]
                     cost: NotNan::new(func.decl.cost.unwrap_or(1) as f64).unwrap(),
                     children,
                     subsumed,
@@ -226,7 +226,11 @@ impl EGraph {
     }
 
     /// Gets the serialized class ID for a value.
+    ///
+    /// # Panics
+    /// If the name of the `sort` contains a hyphen.
     pub fn value_to_class_id(&self, sort: &ArcSort, value: Value) -> egraph_serialize::ClassId {
+        use numeric_id::NumericId;
         // Canonicalize the value first so that we always use the canonical e-class ID
         let value = self
             .backend
@@ -235,11 +239,14 @@ impl EGraph {
             !sort.name().to_string().contains('-'),
             "Tag cannot contain '-' when serializing"
         );
-        use numeric_id::NumericId;
         format!("{}-{}", sort.name(), value.rep()).into()
     }
 
     /// Gets the value for a serialized class ID.
+    ///
+    /// # Panics
+    /// If the `eclass_id` isn't formatted as expected.
+    #[must_use]
     pub fn class_id_to_value(&self, eclass_id: &egraph_serialize::ClassId) -> Value {
         let s = eclass_id.to_string();
         let (_tag, bits) = s.split_once('-').unwrap();
@@ -247,6 +254,10 @@ impl EGraph {
     }
 
     /// Gets the serialized node ID for the primitive, omitted, or function value.
+    ///
+    /// # Panics
+    /// If `sort` is not `None` but `node` is a function.
+    #[must_use]
     pub fn to_node_id(
         &self,
         sort: Option<&ArcSort>,
@@ -255,7 +266,7 @@ impl EGraph {
         match node {
             SerializedNode::Function { name, offset } => {
                 assert!(sort.is_none());
-                format!("function-{}-{}", offset, name).into()
+                format!("function-{offset}-{name}").into()
             }
             SerializedNode::Primitive(value) => {
                 format!("primitive-{}", self.value_to_class_id(sort.unwrap(), value)).into()
@@ -268,6 +279,10 @@ impl EGraph {
     }
 
     /// Gets the serialized node for the node ID.
+    ///
+    /// # Panics
+    /// If the `node_id` isn't formatted as expected.
+    #[must_use]
     pub fn from_node_id(&self, node_id: &egraph_serialize::NodeId) -> SerializedNode {
         let node_id = node_id.to_string();
         let (tag, rest) = node_id.split_once('-').unwrap();
@@ -292,7 +307,7 @@ impl EGraph {
                 let node_id: egraph_serialize::NodeId = rest.into();
                 SerializedNode::Split(Box::new(self.from_node_id(&node_id)))
             }
-            _ => std::panic::panic_any(format!("Unknown node ID: {}-{}", tag, rest)),
+            _ => std::panic::panic_any(format!("Unknown node ID: {tag}-{rest}")),
         }
     }
 
@@ -355,7 +370,7 @@ impl EGraph {
                         ty: primitive_id,
                         val: value,
                     };
-                    format!("{:?}", formatted_val)
+                    format!("{formatted_val:?}")
                 };
                 serializer.result.nodes.insert(
                     node_id.clone(),
@@ -374,6 +389,7 @@ impl EGraph {
             class_id.clone(),
             egraph_serialize::ClassData {
                 typ: Some(sort.name().to_string()),
+                #[allow(clippy::default_trait_access)]
                 extra: Default::default(),
             },
         );

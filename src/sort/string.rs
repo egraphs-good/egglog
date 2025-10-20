@@ -1,4 +1,4 @@
-use super::*;
+use super::{BaseSort, BaseValues, Debug, EGraph, Literal, S, Term, TermDag, Value, add_primitive};
 
 #[derive(Debug)]
 pub struct StringSort;
@@ -6,7 +6,7 @@ pub struct StringSort;
 impl BaseSort for StringSort {
     type Base = S;
 
-    fn name(&self) -> &str {
+    fn name(&self) -> &'static str {
         "String"
     }
 

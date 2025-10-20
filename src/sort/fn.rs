@@ -10,7 +10,12 @@
 //! The value is stored similar to the `vec` sort, as an index into a set, where each item in
 //! the set is a `(Symbol, Vec<Value>)` pairs. The Symbol is the function name, and the `Vec<Value>` is
 //! the list of partially applied arguments.
-use super::*;
+use super::{
+    Any, Arc, ArcSort, AtomTerm, BaseSort, BaseValue, ColumnTy, Constraint, ContainerValue,
+    ContainerValues, Debug, EGraph, ExecutionState, Expr, ExternalFunctionId, Hash, Literal,
+    Presort, Primitive, Rebuilder, SimpleTypeConstraint, Sort, Span, StringSort, Term, TermDag,
+    TypeConstraint, TypeError, TypeId, TypeInfo, Value, bool, constraint, core, once,
+};
 
 #[derive(Clone, Debug, PartialEq, Eq, Hash)]
 pub struct FunctionContainer(ResolvedFunctionId, pub Vec<(bool, Value)>, pub String);
@@ -40,14 +45,17 @@ pub struct FunctionSort {
 }
 
 impl FunctionSort {
+    #[must_use]
     pub fn name(&self) -> &str {
         &self.name
     }
 
+    #[must_use]
     pub fn inputs(&self) -> &[ArcSort] {
         &self.inputs
     }
 
+    #[must_use]
     pub fn output(&self) -> ArcSort {
         self.output.clone()
     }
@@ -184,7 +192,7 @@ impl Sort for FunctionSort {
             .2;
         let head = termdag.lit(Literal::String(name.clone()));
         element_terms.insert(0, head);
-        termdag.app("unstable-fn".to_owned(), element_terms)
+        termdag.app("unstable-fn".to_owned(), &element_terms)
     }
 }
 
@@ -318,7 +326,7 @@ impl Primitive for Ctor {
             exec_state
                 .clone()
                 .container_values()
-                .register_val(y, exec_state),
+                .register_val(&y, exec_state),
         )
     }
 }

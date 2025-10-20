@@ -1,7 +1,7 @@
 //! Parse a string into egglog.
 
 use crate::*;
-use egglog_ast::generic_ast::*;
+use egglog_ast::generic_ast::{Change, GenericActions, Literal};
 use egglog_ast::span::{EgglogSpan, Span, SrcFile};
 use ordered_float::OrderedFloat;
 
@@ -45,14 +45,16 @@ pub enum Sexp {
 }
 
 impl Sexp {
+    #[must_use]
     pub fn span(&self) -> Span {
         match self {
-            Sexp::Literal(_, span) => span.clone(),
-            Sexp::Atom(_, span) => span.clone(),
-            Sexp::List(_, span) => span.clone(),
+            Sexp::Literal(_, span) | Sexp::Atom(_, span) | Sexp::List(_, span) => span.clone(),
         }
     }
 
+    /// # Errors
+    /// If a unit is not supplied.
+    #[allow(clippy::cast_sign_loss)]
     pub fn expect_uint<UInt: TryFrom<u64>>(&self, e: &'static str) -> Result<UInt, ParseError> {
         if let Sexp::Literal(Literal::Int(x), _) = self {
             if *x >= 0 {
@@ -67,6 +69,8 @@ impl Sexp {
         )
     }
 
+    /// # Errors
+    /// If a string is not supplied.
     pub fn expect_string(&self, e: &'static str) -> Result<String, ParseError> {
         if let Sexp::Literal(Literal::String(x), _) = self {
             return Ok(x.to_string());
@@ -74,6 +78,8 @@ impl Sexp {
         error!(self.span(), "expected {e} to be a string literal")
     }
 
+    /// # Errors
+    /// If an atom is not supplied.
     pub fn expect_atom(&self, e: &'static str) -> Result<String, ParseError> {
         if let Sexp::Atom(symbol, _) = self {
             return Ok(symbol.clone());
@@ -81,6 +87,8 @@ impl Sexp {
         error!(self.span(), "expected {e}")
     }
 
+    /// # Errors
+    /// If a list is not supplied.
     pub fn expect_list(&self, e: &'static str) -> Result<&[Sexp], ParseError> {
         if let Sexp::List(sexps, _) = self {
             return Ok(sexps);
@@ -88,6 +96,8 @@ impl Sexp {
         error!(self.span(), "expected {e}")
     }
 
+    /// # Errors
+    /// If a call is not supplied.
     pub fn expect_call(&self, e: &'static str) -> Result<(String, &[Sexp], Span), ParseError> {
         if let Sexp::List(sexps, span) = self {
             if let [Sexp::Atom(func, _), args @ ..] = sexps.as_slice() {
@@ -112,6 +122,8 @@ fn map_fallible<T>(
 
 pub trait Macro<T>: Send + Sync {
     fn name(&self) -> &str;
+    /// # Errors
+    /// If parsing fails.
     fn parse(&self, args: &[Sexp], span: Span, parser: &mut Parser) -> Result<T, ParseError>;
 }
 
@@ -154,16 +166,18 @@ pub struct Parser {
 impl Default for Parser {
     fn default() -> Self {
         Self {
-            commands: Default::default(),
-            actions: Default::default(),
-            exprs: Default::default(),
-            user_defined: Default::default(),
+            commands: HashMap::default(),
+            actions: HashMap::default(),
+            exprs: HashMap::default(),
+            user_defined: HashSet::default(),
             symbol_gen: SymbolGen::new("$".to_string()),
         }
     }
 }
 
 impl Parser {
+    /// # Errors
+    /// If parsing fails.
     pub fn get_program_from_string(
         &mut self,
         filename: Option<String>,
@@ -174,7 +188,10 @@ impl Parser {
         Ok(nested.into_iter().flatten().collect())
     }
 
-    // currently only used for testing, but no reason it couldn't be used elsewhere later
+    /// currently only used for testing, but no reason it couldn't be used elsewhere later
+    ///
+    /// # Errors
+    /// If parsing fails.
     pub fn get_expr_from_string(
         &mut self,
         filename: Option<String>,
@@ -208,6 +225,9 @@ impl Parser {
         Ok(())
     }
 
+    #[allow(clippy::too_many_lines)]
+    /// # Errors
+    /// If the S expression is ill-formed.
     pub fn parse_command(&mut self, sexp: &Sexp) -> Result<Vec<Command>, ParseError> {
         let (head, tail, span) = sexp.expect_call("command")?;
 
@@ -251,31 +271,32 @@ impl Parser {
                 span,
                 datatypes: map_fallible(tail, self, Self::rec_datatype)?,
             }],
-            "function" => match tail {
-                [name, inputs, output, rest @ ..] => vec![Command::Function {
-                    name: name.expect_atom("function name")?,
-                    schema: self.parse_schema(inputs, output)?,
-                    merge: match self.parse_options(rest)?.as_slice() {
-                        [(":no-merge", [])] => None,
-                        [(":merge", [e])] => Some(self.parse_expr(e)?),
-                        [] => {
-                            return error!(
-                                span,
-                                "functions are required to specify merge behaviour"
-                            );
-                        }
-                        _ => return error!(span, "could not parse function options"),
-                    },
-                    span,
-                }],
-                _ => {
+            "function" => {
+                if let [name, inputs, output, rest @ ..] = tail {
+                    vec![Command::Function {
+                        name: name.expect_atom("function name")?,
+                        schema: self.parse_schema(inputs, output)?,
+                        merge: match self.parse_options(rest)?.as_slice() {
+                            [(":no-merge", [])] => None,
+                            [(":merge", [e])] => Some(self.parse_expr(e)?),
+                            [] => {
+                                return error!(
+                                    span,
+                                    "functions are required to specify merge behaviour"
+                                );
+                            }
+                            _ => return error!(span, "could not parse function options"),
+                        },
+                        span,
+                    }]
+                } else {
                     let a = "(function <name> (<input sort>*) <output sort> :merge <expr>)";
                     let b = "(function <name> (<input sort>*) <output sort> :no-merge)";
                     return error!(span, "usages:\n{a}\n{b}");
                 }
-            },
-            "constructor" => match tail {
-                [name, inputs, output, rest @ ..] => {
+            }
+            "constructor" => {
+                if let [name, inputs, output, rest @ ..] = tail {
                     let mut cost = None;
                     let mut unextractable = false;
                     match self.parse_options(rest)?.as_slice() {
@@ -292,14 +313,13 @@ impl Parser {
                         cost,
                         unextractable,
                     }]
-                }
-                _ => {
+                } else {
                     let a = "(constructor <name> (<input sort>*) <output sort>)";
                     let b = "(constructor <name> (<input sort>*) <output sort> :cost <cost>)";
                     let c = "(constructor <name> (<input sort>*) <output sort> :unextractable)";
                     return error!(span, "usages:\n{a}\n{b}\n{c}");
                 }
-            },
+            }
             "relation" => match tail {
                 [name, inputs] => vec![Command::Relation {
                     span,
@@ -376,7 +396,7 @@ impl Parser {
                                     w.expect_list("rewrite conditions")?,
                                     self,
                                     Self::parse_fact,
-                                )?
+                                )?;
                             }
                             _ => return error!(span, "could not parse rewrite options"),
                         }
@@ -410,7 +430,7 @@ impl Parser {
                                     w.expect_list("rewrite conditions")?,
                                     self,
                                     Self::parse_fact,
-                                )?
+                                )?;
                             }
                             _ => return error!(span, "could not parse birewrite options"),
                         }
@@ -596,6 +616,8 @@ impl Parser {
         })
     }
 
+    /// # Errors
+    /// If the S expression is ill-formed.
     pub fn schedule(&mut self, sexp: &Sexp) -> Result<Schedule, ParseError> {
         if let Sexp::Atom(ruleset, span) = sexp {
             return Ok(Schedule::Run(
@@ -654,6 +676,8 @@ impl Parser {
         })
     }
 
+    /// # Errors
+    /// If the S expression is ill-formed.
     pub fn parse_action(&mut self, sexp: &Sexp) -> Result<Vec<Action>, ParseError> {
         let (head, tail, span) = sexp.expect_call("action")?;
 
@@ -711,6 +735,8 @@ impl Parser {
         })
     }
 
+    /// # Errors
+    /// If the S expression is ill-formed.
     pub fn parse_fact(&mut self, sexp: &Sexp) -> Result<Fact, ParseError> {
         let (head, tail, span) = sexp.expect_call("fact")?;
 
@@ -723,6 +749,8 @@ impl Parser {
         })
     }
 
+    /// # Errors
+    /// If the S expression is ill-formed.
     pub fn parse_expr(&mut self, sexp: &Sexp) -> Result<Expr, ParseError> {
         Ok(match sexp {
             Sexp::Literal(literal, span) => Expr::Lit(span.clone(), literal.clone()),
@@ -734,9 +762,10 @@ impl Parser {
                     symbol.clone()
                 },
             ),
-            Sexp::List(list, span) => match list.as_slice() {
-                [] => Expr::Lit(span.clone(), Literal::Unit),
-                _ => {
+            Sexp::List(list, span) => {
+                if list.is_empty() {
+                    Expr::Lit(span.clone(), Literal::Unit)
+                } else {
                     let (head, tail, span) = sexp.expect_call("call expression")?;
 
                     if let Some(func) = self.exprs.get(&head).cloned() {
@@ -749,18 +778,20 @@ impl Parser {
                         map_fallible(tail, self, Self::parse_expr)?,
                     )
                 }
-            },
+            }
         })
     }
 
+    /// # Errors
+    /// If the S expression is ill-formed.
     pub fn rec_datatype(
         &mut self,
         sexp: &Sexp,
     ) -> Result<(Span, String, Subdatatypes), ParseError> {
         let (head, tail, span) = sexp.expect_call("datatype")?;
 
-        Ok(match head.as_str() {
-            "sort" => match tail {
+        Ok(if head.as_str() == "sort" {
+            match tail {
                 [name, call] => {
                     let name = name.expect_atom("sort name")?;
                     let (func, args, _) = call.expect_call("container sort declaration")?;
@@ -773,14 +804,15 @@ impl Parser {
                         "usage: (sort <name> (<container sort> <argument sort>*))"
                     );
                 }
-            },
-            _ => {
-                let variants = map_fallible(tail, self, Self::variant)?;
-                (span, head, Subdatatypes::Variants(variants))
             }
+        } else {
+            let variants = map_fallible(tail, self, Self::variant)?;
+            (span, head, Subdatatypes::Variants(variants))
         })
     }
 
+    /// # Errors
+    /// If the S expression is ill-formed.
     pub fn variant(&mut self, sexp: &Sexp) -> Result<Variant, ParseError> {
         let (name, tail, span) = sexp.expect_call("datatype variant")?;
 
@@ -803,7 +835,10 @@ impl Parser {
         })
     }
 
-    // helper for parsing a list of options
+    /// helper for parsing a list of options
+    ///
+    /// # Errors
+    /// If something goes wrong.
     pub fn parse_options<'a>(
         &self,
         sexps: &'a [Sexp],
@@ -834,6 +869,8 @@ impl Parser {
         Ok(out)
     }
 
+    /// # Errors
+    /// If the S expressions are ill-formed.
     pub fn parse_schema(&self, input: &Sexp, output: &Sexp) -> Result<Schema, ParseError> {
         Ok(Schema {
             input: input
@@ -881,12 +918,10 @@ impl SexpParser {
         let mut in_comment = false;
         loop {
             match self.current_char() {
-                None => break,
                 Some(';') => in_comment = true,
                 Some('\n') => in_comment = false,
-                Some(c) if c.is_whitespace() => {}
-                Some(_) if in_comment => {}
-                Some(_) => break,
+                Some(c) if c.is_whitespace() || in_comment => {}
+                Some(_) | None => break,
             }
             self.advance_char();
         }
@@ -946,8 +981,7 @@ impl SexpParser {
                 loop {
                     match self.current_char() {
                         Some(c) if c.is_whitespace() => break,
-                        Some(';' | '(' | ')') => break,
-                        None => break,
+                        Some(';' | '(' | ')') | None => break,
                         Some(_) => self.advance_char(),
                     }
                 }
@@ -1023,9 +1057,8 @@ fn sexp(ctx: &mut SexpParser) -> Result<Sexp, ParseError> {
 
         if stack.is_empty() {
             return Ok(sexp);
-        } else {
-            stack.last_mut().unwrap().1.push(sexp);
         }
+        stack.last_mut().unwrap().1.push(sexp);
     }
 }
 
@@ -1047,7 +1080,7 @@ mod tests {
     fn test_parser_display_roundtrip() {
         let s = r#"(f (g a 3) 4.0 (H "hello"))"#;
         let e = Parser::default().get_expr_from_string(None, s).unwrap();
-        assert_eq!(format!("{}", e), s);
+        assert_eq!(e.to_string(), s);
     }
 
     #[test]
@@ -1070,6 +1103,6 @@ mod tests {
         let s = r#"(f (qqqq a 3) 4.0 (H "hello"))"#;
         let t = r#"(f (xxxx a 3) 4.0 (H "hello"))"#;
         let e = parser.get_expr_from_string(None, s).unwrap();
-        assert_eq!(format!("{}", e), t);
+        assert_eq!(e.to_string(), t);
     }
 }

@@ -28,7 +28,15 @@ pub mod util;
 // This is used to allow the `add_primitive` macro to work in
 // both this crate and other crates by referring to `::egglog`.
 extern crate self as egglog;
-use ast::*;
+use ast::{
+    Action, Actions, Command, CorrespondingVar, Expr, Fact, Facts, FunctionDecl, FunctionSubtype,
+    GenericAction, GenericCommand, GenericNCommand, GenericRule, GenericRunConfig, MappedAction,
+    MappedActions, MappedExpr, MappedExprExt, NCommand, ParseError, Parser, PrintFunctionMode,
+    ResolvedAction, ResolvedActions, ResolvedExpr, ResolvedExprExt, ResolvedFact,
+    ResolvedFunctionDecl, ResolvedNCommand, ResolvedRule, ResolvedRunConfig, ResolvedSchedule,
+    ResolvedVar, Rewrite, Rule, Ruleset, RunConfig, RustSpan, Schedule, Schema, SexpParser,
+    Subdatatypes, Variant, all_sexps, check_shadowing, desugar, remove_globals,
+};
 #[cfg(feature = "bin")]
 pub use cli::*;
 use constraint::{Constraint, Problem, SimpleTypeConstraint, TypeConstraint};
@@ -51,7 +59,12 @@ use numeric_id::DenseIdMap;
 use prelude::*;
 use scheduler::{SchedulerId, SchedulerRecord};
 pub use serialize::{SerializeConfig, SerializeOutput, SerializedNode};
-use sort::*;
+use sort::{
+    BaseValues, BigIntSort, BigRatSort, BoolSort, ContainerValues, EqSort, F, F64Sort,
+    FunctionSort, I64Sort, MapContainer, MapSort, MkSort, MultiSetContainer, MultiSetSort,
+    OrderedFloat, Presort, Q, ResolvedFunction, ResolvedFunctionId, S, SetContainer, SetSort, Sort,
+    StringSort, UnitSort, VecContainer, VecSort, Z, literal_sort,
+};
 use std::fmt::{Debug, Display, Formatter};
 use std::fs::File;
 use std::hash::Hash;
@@ -65,7 +78,7 @@ pub use termdag::{Term, TermDag, TermId};
 use thiserror::Error;
 pub use typechecking::TypeError;
 use typechecking::TypeInfo;
-use util::*;
+use util::{FreshGen, HEntry, HashMap, HashSet, IndexMap, IndexSet, SymbolGen};
 use web_time::Duration;
 
 use crate::core::{GenericActionsExt, ResolvedRuleExt};
@@ -146,19 +159,19 @@ impl Display for RunReport {
             let search_and_apply_time = self
                 .search_and_apply_time_per_ruleset
                 .get(ruleset)
-                .cloned()
+                .copied()
                 .unwrap_or(Duration::ZERO)
                 .as_secs_f64();
             let merge_time = self
                 .merge_time_per_ruleset
                 .get(ruleset)
-                .cloned()
+                .copied()
                 .unwrap_or(Duration::ZERO)
                 .as_secs_f64();
             let rebuild_time = self
                 .rebuild_time_per_ruleset
                 .get(ruleset)
-                .cloned()
+                .copied()
                 .unwrap_or(Duration::ZERO)
                 .as_secs_f64();
             writeln!(
@@ -236,7 +249,7 @@ impl std::fmt::Display for CommandOutput {
     /// Format the command output for display, ending with a newline.
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         match self {
-            CommandOutput::PrintFunctionSize(size) => writeln!(f, "{}", size),
+            CommandOutput::PrintFunctionSize(size) => writeln!(f, "{size}"),
             CommandOutput::PrintAllFunctionsSize(names_and_sizes) => {
                 for name in names_and_sizes {
                     writeln!(f, "{}: {}", name.0, name.1)?;
@@ -254,7 +267,7 @@ impl std::fmt::Display for CommandOutput {
                 writeln!(f, ")")
             }
             CommandOutput::OverallStatistics(run_report) => {
-                write!(f, "Overall statistics:\n{}", run_report)
+                write!(f, "Overall statistics:\n{run_report}")
             }
             CommandOutput::PrintFunction(function, termdag, terms_and_outputs, mode) => {
                 let out_is_unit = function.schema.output.name() == UnitSort.name();
@@ -280,7 +293,7 @@ impl std::fmt::Display for CommandOutput {
                     f.write_str(&String::from_utf8(csv_bytes).map_err(|_| std::fmt::Error)?)
                 } else {
                     writeln!(f, "(")?;
-                    for (term, output) in terms_and_outputs.iter() {
+                    for (term, output) in terms_and_outputs {
                         write!(f, "   {}", termdag.to_string(term))?;
                         if !out_is_unit {
                             write!(f, " -> {}", termdag.to_string(output))?;
@@ -316,7 +329,7 @@ pub struct EGraph {
     backend: egglog_bridge::EGraph,
     pub parser: Parser,
     names: check_shadowing::Names,
-    /// pushed_egraph forms a linked list of pushed egraphs.
+    /// `pushed_egraph` forms a linked list of pushed egraphs.
     /// Pop reverts the egraph to the last pushed egraph.
     pushed_egraph: Option<Box<Self>>,
     functions: IndexMap<String, Function>,
@@ -337,6 +350,9 @@ pub struct EGraph {
 /// it has an exclusive access to the e-graph.
 pub trait UserDefinedCommand: Send + Sync {
     /// Run the command with the given arguments.
+    ///
+    /// # Errors
+    /// If the command errors.
     fn update(&self, egraph: &mut EGraph, args: &[Expr]) -> Result<Option<CommandOutput>, Error>;
 }
 
@@ -354,16 +370,19 @@ pub struct Function {
 
 impl Function {
     /// Get the name of the function.
+    #[must_use]
     pub fn name(&self) -> &str {
         &self.decl.name
     }
 
     /// Get the schema of the function.
+    #[must_use]
     pub fn schema(&self) -> &ResolvedSchema {
         &self.schema
     }
 
     /// Whether this function supports subsumption.
+    #[must_use]
     pub fn can_subsume(&self) -> bool {
         self.can_subsume
     }
@@ -377,6 +396,7 @@ pub struct ResolvedSchema {
 
 impl ResolvedSchema {
     /// Get the type at position `index`, counting the `output` sort as at position `input.len()`.
+    #[must_use]
     pub fn get_by_pos(&self, index: usize) -> Option<&ArcSort> {
         if self.input.len() == index {
             Some(&self.output)
@@ -386,6 +406,7 @@ impl ResolvedSchema {
     }
 }
 
+#[allow(clippy::missing_fields_in_debug)]
 impl Debug for Function {
     fn fmt(&self, f: &mut Formatter<'_>) -> std::fmt::Result {
         f.debug_struct("Function")
@@ -398,18 +419,18 @@ impl Debug for Function {
 impl Default for EGraph {
     fn default() -> Self {
         let mut eg = Self {
-            backend: Default::default(),
-            parser: Default::default(),
-            names: Default::default(),
-            pushed_egraph: Default::default(),
-            functions: Default::default(),
-            rulesets: Default::default(),
+            backend: egglog_bridge::EGraph::default(),
+            parser: Parser::default(),
+            names: check_shadowing::Names::default(),
+            pushed_egraph: None,
+            functions: IndexMap::default(),
+            rulesets: IndexMap::default(),
             fact_directory: None,
             seminaive: true,
-            overall_run_report: Default::default(),
-            type_info: Default::default(),
-            schedulers: Default::default(),
-            commands: Default::default(),
+            overall_run_report: RunReport::default(),
+            type_info: TypeInfo::default(),
+            schedulers: DenseIdMap::default(),
+            commands: IndexMap::default(),
         };
 
         add_base_sort(&mut eg, UnitSort, span!()).unwrap();
@@ -439,7 +460,7 @@ impl Default for EGraph {
         });
 
         eg.rulesets
-            .insert("".into(), Ruleset::Rules(Default::default()));
+            .insert(String::new(), Ruleset::Rules(IndexMap::default()));
 
         eg
     }
@@ -451,6 +472,9 @@ pub struct NotFoundError(String);
 
 impl EGraph {
     /// Add a user-defined command to the e-graph
+    ///
+    ///# Errors
+    /// If the name is already in use.
     pub fn add_command(
         &mut self,
         name: String,
@@ -481,6 +505,9 @@ impl EGraph {
     /// it with the previously pushed egraph.
     /// It preserves the run report and messages from the popped
     /// egraph.
+    ///
+    /// # Errors
+    /// If there's nothing to pop.
     pub fn pop(&mut self) -> Result<(), Error> {
         match self.pushed_egraph.take() {
             Some(e) => {
@@ -533,6 +560,7 @@ impl EGraph {
     }
 
     fn declare_function(&mut self, decl: &ResolvedFunctionDecl) -> Result<(), Error> {
+        use egglog_bridge::{DefaultVal, MergeFn};
         let get_sort = |name: &String| match self.type_info.get_sort_by_name(name) {
             Some(sort) => Ok(sort.clone()),
             None => Err(Error::TypeError(TypeError::UndefinedSort(
@@ -550,12 +578,10 @@ impl EGraph {
         let output = get_sort(&decl.schema.output)?;
 
         let can_subsume = match decl.subtype {
-            FunctionSubtype::Constructor => true,
-            FunctionSubtype::Relation => true,
+            FunctionSubtype::Constructor | FunctionSubtype::Relation => true,
             FunctionSubtype::Custom => false,
         };
 
-        use egglog_bridge::{DefaultVal, MergeFn};
         let backend_id = self.backend.add_table(egglog_bridge::FunctionConfig {
             schema: input
                 .iter()
@@ -565,7 +591,7 @@ impl EGraph {
             default: match decl.subtype {
                 FunctionSubtype::Constructor => DefaultVal::FreshId,
                 FunctionSubtype::Custom => DefaultVal::Fail,
-                FunctionSubtype::Relation => DefaultVal::Const(self.backend.base_values().get(())),
+                FunctionSubtype::Relation => DefaultVal::Const(self.backend.base_values().get(&())),
             },
             merge: match decl.subtype {
                 FunctionSubtype::Constructor => MergeFn::UnionId,
@@ -587,12 +613,11 @@ impl EGraph {
         };
 
         let old = self.functions.insert(decl.name.clone(), function);
-        if old.is_some() {
-            panic!(
-                "Typechecking should have caught function already bound: {}",
-                decl.name
-            );
-        }
+        assert!(
+            old.is_none(),
+            "Typechecking should have caught function already bound: {}",
+            decl.name
+        );
 
         Ok(())
     }
@@ -601,6 +626,12 @@ impl EGraph {
     /// The `include_output` parameter controls whether the output column is always extracted
     /// For functions, the output column is usually useful
     /// For constructors and relations, the output column can be ignored
+    ///
+    /// # Errors
+    /// If looking up the symbol fails.
+    ///
+    /// # Panics
+    /// If there's no output.
     pub fn function_to_dag(
         &self,
         sym: &str,
@@ -635,16 +666,16 @@ impl EGraph {
                 let mut children: Vec<Term> = Vec::new();
                 for (value, sort) in row.vals.iter().zip(&func.schema.input) {
                     let (_, term) = extractor
-                        .extract_best_with_sort(self, &mut termdag, *value, sort.clone())
+                        .extract_best_with_sort(self, &mut termdag, *value, sort)
                         .unwrap_or_else(|| (0, termdag.var("Unextractable".into())));
                     children.push(term);
                 }
-                inputs.push(termdag.app(sym.to_owned(), children));
+                inputs.push(termdag.app(sym.to_owned(), &children));
                 if include_output {
                     let value = row.vals[func.schema.input.len()];
                     let sort = &func.schema.output;
                     let (_, term) = extractor
-                        .extract_best_with_sort(self, &mut termdag, value, sort.clone())
+                        .extract_best_with_sort(self, &mut termdag, value, sort)
                         .unwrap_or_else(|| (0, termdag.var("Unextractable".into())));
                     output.as_mut().unwrap().push(term);
                 }
@@ -661,6 +692,12 @@ impl EGraph {
 
     /// Print up to `n` the tuples in a given function.
     /// Print all tuples if `n` is not provided.
+    ///
+    /// # Errors
+    /// If constructing the dag fails.
+    ///
+    /// # Panics
+    /// If there are no outputs.
     pub fn print_function(
         &mut self,
         sym: &str,
@@ -668,15 +705,12 @@ impl EGraph {
         file: Option<File>,
         mode: PrintFunctionMode,
     ) -> Result<Option<CommandOutput>, Error> {
-        let n = match n {
-            Some(n) => {
-                log::info!("Printing up to {n} tuples of function {sym} as {mode}");
-                n
-            }
-            None => {
-                log::info!("Printing all tuples of function {sym} as {mode}");
-                usize::MAX
-            }
+        let n = if let Some(n) = n {
+            log::info!("Printing up to {n} tuples of function {sym} as {mode}");
+            n
+        } else {
+            log::info!("Printing all tuples of function {sym} as {mode}");
+            usize::MAX
         };
 
         let (terms, outputs, termdag) = self.function_to_dag(sym, n, true)?;
@@ -700,6 +734,9 @@ impl EGraph {
 
     /// Print the size of a function. If no function name is provided,
     /// print the size of all functions in "name: len" pairs.
+    ///
+    /// # Errors
+    /// If looking up the symbol fails.
     pub fn print_size(&mut self, sym: Option<&str>) -> Result<CommandOutput, Error> {
         if let Some(sym) = sym {
             let f = self
@@ -707,7 +744,7 @@ impl EGraph {
                 .get(sym)
                 .ok_or(TypeError::UnboundFunction(sym.to_owned(), span!()))?;
             let size = self.backend.table_size(f.backend_id);
-            log::info!("Function {} has size {}", sym, size);
+            log::info!("Function {sym} has size {size}");
             Ok(CommandOutput::PrintFunctionSize(size))
         } else {
             // Print size of all functions
@@ -721,7 +758,7 @@ impl EGraph {
             lens.sort_by_key(|(name, _)| name.clone());
             if log_enabled!(Level::Info) {
                 for (sym, len) in &lens {
-                    log::info!("Function {} has size {}", sym, len);
+                    log::info!("Function {sym} has size {len}");
                 }
             }
             Ok(CommandOutput::PrintAllFunctionsSize(lens))
@@ -768,6 +805,9 @@ impl EGraph {
 
     /// Extract a value to a [`TermDag`] and [`Term`] in the [`TermDag`] using the default cost model.
     /// See also [`EGraph::extract_value_with_cost_model`] for more control.
+    ///
+    /// # Errors
+    /// If extraction fails.
     pub fn extract_value(
         &self,
         sort: &ArcSort,
@@ -779,6 +819,12 @@ impl EGraph {
     /// Extract a value to a [`TermDag`] and [`Term`] in the [`TermDag`].
     /// Note that the `TermDag` may contain a superset of the nodes in the `Term`.
     /// See also [`EGraph::extract_value_to_string`] for convenience.
+    ///
+    /// # Errors
+    /// None.
+    ///
+    /// # Panics
+    /// If the extractor can't extract the best (cost, term) pair.
     pub fn extract_value_with_cost_model<CM: CostModel<DefaultCost> + 'static>(
         &self,
         sort: &ArcSort,
@@ -794,6 +840,9 @@ impl EGraph {
 
     /// Extract a value to a string for printing.
     /// See also [`EGraph::extract_value`] for more control.
+    ///
+    /// # Errors
+    /// If extracting a value fails.
     pub fn extract_value_to_string(
         &self,
         sort: &ArcSort,
@@ -804,7 +853,7 @@ impl EGraph {
     }
 
     fn run_rules(&mut self, span: &Span, config: &ResolvedRunConfig) -> Result<RunReport, Error> {
-        let mut report: RunReport = Default::default();
+        let mut report = RunReport::default();
 
         let GenericRunConfig { ruleset, until } = config;
 
@@ -833,7 +882,11 @@ impl EGraph {
     /// This applies every match it finds (under semi-naive).
     /// See [`EGraph::step_rules_with_scheduler`] for more fine-grained control.
     ///
-    /// This will return an error if an egglog primitive returns None in an action.
+    /// This will return an error if an egglog primitive returns `None` in an action.
+    ///
+    /// # Errors
+    ///
+    /// If an egglog primitive returns `None` in an action.
     pub fn step_rules(&mut self, ruleset: &str) -> Result<RunReport, Error> {
         fn collect_rule_ids(
             ruleset: &str,
@@ -928,7 +981,7 @@ impl EGraph {
     fn eval_actions(&mut self, actions: &ResolvedActions) -> Result<(), Error> {
         let (actions, _) = actions.to_core_actions(
             &self.type_info,
-            &mut Default::default(),
+            &mut IndexSet::default(),
             &mut self.parser.symbol_gen,
         )?;
 
@@ -949,26 +1002,32 @@ impl EGraph {
     }
 
     /// Evaluates an expression, returns the sort of the expression and the evaluation result.
+    ///
+    /// # Errors
+    /// If processing commands fails.
+    ///
+    /// # Panics
+    /// If there's more than one resolved command.
     pub fn eval_expr(&mut self, expr: &Expr) -> Result<(ArcSort, Value), Error> {
         let span = expr.span();
         let command = Command::Action(Action::Expr(span.clone(), expr.clone()));
         let resolved_commands = self.process_command(command)?;
         assert_eq!(resolved_commands.len(), 1);
         let resolved_command = resolved_commands.into_iter().next().unwrap();
-        let resolved_expr = match resolved_command {
-            ResolvedNCommand::CoreAction(ResolvedAction::Expr(_, resolved_expr)) => resolved_expr,
-            _ => unreachable!(),
+        let ResolvedNCommand::CoreAction(ResolvedAction::Expr(_, resolved_expr)) = resolved_command
+        else {
+            unreachable!()
         };
         let sort = resolved_expr.output_type();
-        let value = self.eval_resolved_expr(span, &resolved_expr)?;
+        let value = self.eval_resolved_expr(&span, &resolved_expr)?;
         Ok((sort, value))
     }
 
-    fn eval_resolved_expr(&mut self, span: Span, expr: &ResolvedExpr) -> Result<Value, Error> {
+    fn eval_resolved_expr(&mut self, span: &Span, expr: &ResolvedExpr) -> Result<Value, Error> {
         let unit_id = self.backend.base_values().get_ty::<()>();
-        let unit_val = self.backend.base_values().get(());
+        let unit_val = self.backend.base_values().get(&());
 
-        let result: egglog_bridge::SideChannel<Value> = Default::default();
+        let result: egglog_bridge::SideChannel<Value> = Arc::default();
         let result_ref = result.clone();
         let ext_id = self
             .backend
@@ -997,7 +1056,7 @@ impl EGraph {
         let actions = actions
             .to_core_actions(
                 &self.type_info,
-                &mut Default::default(),
+                &mut IndexSet::default(),
                 &mut self.parser.symbol_gen,
             )?
             .0;
@@ -1016,24 +1075,24 @@ impl EGraph {
         self.backend.free_rule(id);
         self.backend.free_external_func(ext_id);
         let _ = rule_result.map_err(|e| {
-            Error::BackendError(format!("Failed to evaluate expression '{}': {}", expr, e))
+            Error::BackendError(format!("Failed to evaluate expression '{expr}': {e}"))
         })?;
 
         let result = result.lock().unwrap().unwrap();
         Ok(result)
     }
 
-    fn add_combined_ruleset(&mut self, name: String, rulesets: Vec<String>) {
-        match self.rulesets.entry(name.clone()) {
+    fn add_combined_ruleset(&mut self, name: &str, rulesets: Vec<String>) {
+        match self.rulesets.entry(name.to_string()) {
             Entry::Occupied(_) => panic!("Ruleset '{name}' was already present"),
             Entry::Vacant(e) => e.insert(Ruleset::Combined(rulesets)),
         };
     }
 
-    fn add_ruleset(&mut self, name: String) {
-        match self.rulesets.entry(name.clone()) {
+    fn add_ruleset(&mut self, name: &str) {
+        match self.rulesets.entry(name.to_string()) {
             Entry::Occupied(_) => panic!("Ruleset '{name}' was already present"),
-            Entry::Vacant(e) => e.insert(Ruleset::Rules(Default::default())),
+            Entry::Vacant(e) => e.insert(Ruleset::Rules(IndexMap::default())),
         };
     }
 
@@ -1080,43 +1139,45 @@ impl EGraph {
         let ext_sc_val = ext_sc.lock().unwrap().take();
         let matched = matches!(ext_sc_val, Some(()));
 
-        if !matched {
+        if matched {
+            Ok(())
+        } else {
             Err(Error::CheckError(
                 facts.iter().map(|f| f.clone().make_unresolved()).collect(),
                 span.clone(),
             ))
-        } else {
-            Ok(())
         }
     }
 
+    #[allow(clippy::too_many_lines)]
     fn run_command(&mut self, command: ResolvedNCommand) -> Result<Option<CommandOutput>, Error> {
+        use std::io::Write;
         match command {
             // Sorts are already declared during typechecking
             ResolvedNCommand::Sort(_span, name, _presort_and_args) => {
-                log::info!("Declared sort {}.", name)
+                log::info!("Declared sort {name}.");
             }
             ResolvedNCommand::Function(fdecl) => {
                 self.declare_function(&fdecl)?;
-                log::info!("Declared {} {}.", fdecl.subtype, fdecl.name)
+                log::info!("Declared {} {}.", fdecl.subtype, fdecl.name);
             }
             ResolvedNCommand::AddRuleset(_span, name) => {
-                self.add_ruleset(name.clone());
+                self.add_ruleset(&name);
                 log::info!("Declared ruleset {name}.");
             }
             ResolvedNCommand::UnstableCombinedRuleset(_span, name, others) => {
-                self.add_combined_ruleset(name.clone(), others);
+                self.add_combined_ruleset(&name, others);
                 log::info!("Declared ruleset {name}.");
             }
             ResolvedNCommand::NormRule { rule } => {
                 let name = rule.name.clone();
                 self.add_rule(rule)?;
-                log::info!("Declared rule {name}.")
+                log::info!("Declared rule {name}.");
             }
             ResolvedNCommand::RunSchedule(sched) => {
                 let report = self.run_schedule(&sched)?;
-                log::info!("Ran schedule {}.", sched);
-                log::info!("Report: {}", report);
+                log::info!("Ran schedule {sched}.");
+                log::info!("Report: {report}");
                 self.overall_run_report.union(report.clone());
                 return Ok(Some(CommandOutput::RunSchedule(report)));
             }
@@ -1128,7 +1189,7 @@ impl EGraph {
             }
             ResolvedNCommand::Check(span, facts) => {
                 self.check_facts(&span, &facts)?;
-                log::info!("Checked fact {:?}.", facts);
+                log::info!("Checked fact {facts:?}.");
             }
             ResolvedNCommand::CoreAction(action) => match &action {
                 ResolvedAction::Let(_, name, contents) => {
@@ -1141,8 +1202,8 @@ impl EGraph {
             ResolvedNCommand::Extract(span, expr, variants) => {
                 let sort = expr.output_type();
 
-                let x = self.eval_resolved_expr(span.clone(), &expr)?;
-                let n = self.eval_resolved_expr(span, &variants)?;
+                let x = self.eval_resolved_expr(&span, &expr)?;
+                let n = self.eval_resolved_expr(&span, &variants)?;
                 let n: i64 = self.backend.base_values().unwrap(n);
 
                 let mut termdag = TermDag::default();
@@ -1166,9 +1227,9 @@ impl EGraph {
                         ))
                     }
                 } else {
-                    if n < 0 {
-                        panic!("Cannot extract negative number of variants");
-                    }
+                    assert!(n >= 0, "Cannot extract negative number of variants");
+                    #[allow(clippy::cast_possible_truncation)]
+                    #[allow(clippy::cast_sign_loss)]
                     let terms: Vec<Term> = extractor
                         .extract_variants(self, &mut termdag, x, n as usize)
                         .iter()
@@ -1183,7 +1244,7 @@ impl EGraph {
             }
             ResolvedNCommand::Push(n) => {
                 (0..n).for_each(|_| self.push());
-                log::info!("Pushed {n} levels.")
+                log::info!("Pushed {n} levels.");
             }
             ResolvedNCommand::Pop(span, n) => {
                 for _ in 0..n {
@@ -1195,7 +1256,7 @@ impl EGraph {
                         }
                     })?;
                 }
-                log::info!("Popped {n} levels.")
+                log::info!("Popped {n} levels.");
             }
             ResolvedNCommand::PrintFunction(span, f, n, file, mode) => {
                 let file = file
@@ -1252,32 +1313,31 @@ impl EGraph {
                     self,
                     TreeAdditiveCostModel::default(),
                 );
-                let mut termdag: TermDag = Default::default();
+                let mut termdag = TermDag::default();
 
-                use std::io::Write;
                 for expr in exprs {
-                    let value = self.eval_resolved_expr(span.clone(), &expr)?;
+                    let value = self.eval_resolved_expr(&span, &expr)?;
                     let expr_type = expr.output_type();
 
                     let term = extractor
-                        .extract_best_with_sort(self, &mut termdag, value, expr_type)
+                        .extract_best_with_sort(self, &mut termdag, value, &expr_type)
                         .unwrap()
                         .1;
                     writeln!(f, "{}", termdag.to_string(&term))
                         .map_err(|e| Error::IoError(filename.clone(), e, span.clone()))?;
                 }
 
-                log::info!("Output to '{filename:?}'.")
+                log::info!("Output to '{}'.", filename.display());
             }
             ResolvedNCommand::UserDefined(_span, name, exprs) => {
                 let command = self.commands.swap_remove(&name).unwrap_or_else(|| {
-                    panic!("Unrecognized user-defined command: {}", name);
+                    panic!("Unrecognized user-defined command: {name}");
                 });
                 let res = command.update(self, &exprs);
                 self.commands.insert(name, command);
                 return res;
             }
-        };
+        }
 
         Ok(None)
     }
@@ -1286,7 +1346,7 @@ impl EGraph {
         let function_type = self
             .type_info
             .get_func_type(func_name)
-            .unwrap_or_else(|| panic!("Unrecognized function name {}", func_name));
+            .unwrap_or_else(|| panic!("Unrecognized function name {func_name}"));
         let func = self.functions.get_mut(func_name).unwrap();
 
         let mut filename = self.fact_directory.clone().unwrap_or_default();
@@ -1297,18 +1357,18 @@ impl EGraph {
         for t in &func.schema.input {
             match t.name() {
                 "i64" | "f64" | "String" => {}
-                s => panic!("Unsupported type {} for input", s),
+                s => panic!("Unsupported type {s} for input"),
             }
         }
 
         if function_type.subtype != FunctionSubtype::Constructor {
             match func.schema.output.name() {
                 "i64" | "String" | "Unit" => {}
-                s => panic!("Unsupported type {} for input", s),
+                s => panic!("Unsupported type {s} for input"),
             }
         }
 
-        log::info!("Opening file '{:?}'...", filename);
+        log::info!("Opening file '{}'...", filename.display());
         let mut f = File::open(filename).unwrap();
         let mut contents = String::new();
         f.read_to_string(&mut contents).unwrap();
@@ -1321,21 +1381,21 @@ impl EGraph {
             row_schema.push(func.schema.output.clone());
         }
 
-        log::debug!("{:?}", row_schema);
+        log::debug!("{row_schema:?}");
 
-        let unit_val = self.backend.base_values().get(());
+        let unit_val = self.backend.base_values().get(&());
 
         for line in contents.lines() {
-            let mut it = line.split('\t').map(|s| s.trim());
+            let mut it = line.split('\t').map(str::trim);
 
             let mut row: Vec<Value> = Vec::with_capacity(row_schema.len());
 
-            for sort in row_schema.iter() {
+            for sort in &row_schema {
                 if let Some(raw) = it.next() {
                     let val = match sort.name() {
                         "i64" => {
                             if let Ok(i) = raw.parse::<i64>() {
-                                self.backend.base_values().get(i)
+                                self.backend.base_values().get(&i)
                             } else {
                                 return Err(Error::InputFileFormatError(file));
                             }
@@ -1344,12 +1404,12 @@ impl EGraph {
                             if let Ok(f) = raw.parse::<f64>() {
                                 self.backend
                                     .base_values()
-                                    .get::<F>(core_relations::Boxed::new(f.into()))
+                                    .get::<F>(&core_relations::Boxed::new(f.into()))
                             } else {
                                 return Err(Error::InputFileFormatError(file));
                             }
                         }
-                        "String" => self.backend.base_values().get::<S>(raw.to_string().into()),
+                        "String" => self.backend.base_values().get::<S>(&raw.to_string().into()),
                         "Unit" => unit_val,
                         _ => panic!("Unreachable"),
                     };
@@ -1376,17 +1436,17 @@ impl EGraph {
 
         let mut table_action = egglog_bridge::TableAction::new(&self.backend, func.backend_id);
 
-        if function_type.subtype != FunctionSubtype::Constructor {
+        if function_type.subtype == FunctionSubtype::Constructor {
             self.backend.with_execution_state(|es| {
-                for row in parsed_contents.iter() {
-                    table_action.insert(es, row.iter().copied());
+                for row in &parsed_contents {
+                    table_action.lookup(es, row);
                 }
                 Some(unit_val)
             });
         } else {
             self.backend.with_execution_state(|es| {
-                for row in parsed_contents.iter() {
-                    table_action.lookup(es, row);
+                for row in &parsed_contents {
+                    table_action.insert(es, row.iter().copied());
                 }
                 Some(unit_val)
             });
@@ -1416,6 +1476,9 @@ impl EGraph {
 
     /// Run a program, represented as an AST.
     /// Return a list of messages.
+    ///
+    /// # Errors
+    /// If processing or running a command fails.
     pub fn run_program(&mut self, program: Vec<Command>) -> Result<Vec<CommandOutput>, Error> {
         let mut outputs = Vec::new();
         for command in program {
@@ -1432,6 +1495,8 @@ impl EGraph {
         Ok(outputs)
     }
 
+    /// # Errors
+    /// If parsing, resolving, or running fail.
     pub fn resugar_program(
         &mut self,
         filename: Option<String>,
@@ -1457,6 +1522,9 @@ impl EGraph {
     /// `filename` is an optional argument to indicate the source of
     /// the program for error reporting. If `filename` is `None`,
     /// a default name will be used.
+    ///
+    /// # Errors
+    /// If parsing or running fail.
     pub fn parse_and_run_program(
         &mut self,
         filename: Option<String>,
@@ -1467,7 +1535,7 @@ impl EGraph {
     }
 
     /// Get the number of tuples in the database.
-    ///
+    #[must_use]
     pub fn num_tuples(&self) -> usize {
         self.functions
             .values()
@@ -1476,6 +1544,7 @@ impl EGraph {
     }
 
     /// Returns a sort based on the type.
+    #[must_use]
     pub fn get_sort<S: Sort>(&self) -> Arc<S> {
         self.type_info.get_sort()
     }
@@ -1486,6 +1555,7 @@ impl EGraph {
     }
 
     /// Returns all sorts based on the type.
+    #[must_use]
     pub fn get_sorts<S: Sort>(&self) -> Vec<Arc<S>> {
         self.type_info.get_sorts()
     }
@@ -1506,22 +1576,25 @@ impl EGraph {
     }
 
     /// Returns the sort with the given name if it exists.
+    #[must_use]
     pub fn get_sort_by_name(&self, sym: &str) -> Option<&ArcSort> {
         self.type_info.get_sort_by_name(sym)
     }
 
     /// Gets the overall run report and returns it.
+    #[must_use]
     pub fn get_overall_run_report(&self) -> &RunReport {
         &self.overall_run_report
     }
 
     /// Convert from an egglog value to a Rust type.
+    #[must_use]
     pub fn value_to_base<T: BaseValue>(&self, x: Value) -> T {
         self.backend.base_values().unwrap::<T>(x)
     }
 
     /// Convert from a Rust type to an egglog value.
-    pub fn base_to_value<T: BaseValue>(&self, x: T) -> Value {
+    pub fn base_to_value<T: BaseValue>(&self, x: &T) -> Value {
         self.backend.base_values().get::<T>(x)
     }
 
@@ -1531,6 +1604,7 @@ impl EGraph {
     ///
     /// Warning: The return type of this function may contain lock guards.
     /// Attempts to modify the contents of the containers database may deadlock if the given guard has not been dropped.
+    #[must_use]
     pub fn value_to_container<T: ContainerValue>(
         &self,
         x: Value,
@@ -1539,7 +1613,7 @@ impl EGraph {
     }
 
     /// Convert from a Rust container type to an egglog value.
-    pub fn container_to_value<T: ContainerValue>(&mut self, x: T) -> Value {
+    pub fn container_to_value<T: ContainerValue>(&mut self, x: &T) -> Value {
         self.backend.with_execution_state(|state| {
             self.backend.container_values().register_val::<T>(x, state)
         })
@@ -1548,6 +1622,10 @@ impl EGraph {
     /// Get the size of a function in the e-graph.
     ///
     /// `panics` if the function does not exist.
+    ///
+    /// # Panics
+    /// If the function does not exist.
+    #[must_use]
     pub fn get_size(&self, func: &str) -> usize {
         let function_id = self.functions.get(func).unwrap().backend_id;
         self.backend.table_size(function_id)
@@ -1557,6 +1635,10 @@ impl EGraph {
     ///
     /// Returns `None` if the tuple does not exist.
     /// `panics` if the function does not exist.
+    ///
+    /// # Panics
+    /// If the function does not exist.
+    #[must_use]
     pub fn lookup_function(&self, name: &str, key: &[Value]) -> Option<Value> {
         let func = self.functions.get(name).unwrap().backend_id;
         self.backend.lookup_id(func, key)
@@ -1565,6 +1647,7 @@ impl EGraph {
     /// Get a function by name.
     ///
     /// Returns `None` if the function does not exist.
+    #[must_use]
     pub fn get_function(&self, name: &str) -> Option<&Function> {
         self.functions.get(name)
     }
@@ -1600,7 +1683,7 @@ impl<'a> BackendRule<'a> {
             rb,
             functions,
             type_info,
-            entries: Default::default(),
+            entries: HashMap::default(),
         }
     }
 
@@ -1669,7 +1752,7 @@ impl<'a> BackendRule<'a> {
                 .map(|s| s.is_eq_sort() || s.is_eq_container_sort())
                 .collect();
 
-            qe_args[0] = self.rb.egraph().base_value_constant(ResolvedFunction {
+            qe_args[0] = self.rb.egraph().base_value_constant(&ResolvedFunction {
                 id,
                 do_rebuild,
                 name: name.clone(),
@@ -1696,15 +1779,12 @@ impl<'a> BackendRule<'a> {
                 ResolvedCall::Func(f) => {
                     let f = self.func(f);
                     let args = self.args(&atom.args);
-                    let is_subsumed = match include_subsumed {
-                        true => None,
-                        false => Some(false),
-                    };
+                    let is_subsumed = if include_subsumed { None } else { Some(false) };
                     self.rb.query_table(f, &args, is_subsumed).unwrap();
                 }
                 ResolvedCall::Primitive(p) => {
                     let (p, args, ty) = self.prim(p, &atom.args);
-                    self.rb.query_prim(p, &args, ty).unwrap()
+                    self.rb.query_prim(p, &args, ty).unwrap();
                 }
             }
         }
@@ -1746,7 +1826,7 @@ impl<'a> BackendRule<'a> {
                     ResolvedCall::Func(f) => {
                         let f = self.func(f);
                         let args = self.args(xs.iter().chain([y]));
-                        self.rb.set(f, &args)
+                        self.rb.set(f, &args);
                     }
                 },
                 core::GenericCoreAction::Change(span, change, f, args) => match f {
@@ -1768,9 +1848,9 @@ impl<'a> BackendRule<'a> {
                 core::GenericCoreAction::Union(_, x, y) => {
                     let x = self.entry(x);
                     let y = self.entry(y);
-                    self.rb.union(x, y)
+                    self.rb.union(x, y);
                 }
-                core::GenericCoreAction::Panic(_, message) => self.rb.panic(message.clone()),
+                core::GenericCoreAction::Panic(_, message) => self.rb.panic(message),
             }
         }
         Ok(())
@@ -1783,21 +1863,23 @@ impl<'a> BackendRule<'a> {
 
 fn literal_to_entry(egraph: &egglog_bridge::EGraph, l: &Literal) -> QueryEntry {
     match l {
-        Literal::Int(x) => egraph.base_value_constant::<i64>(*x),
-        Literal::Float(x) => egraph.base_value_constant::<sort::F>(x.into()),
-        Literal::String(x) => egraph.base_value_constant::<sort::S>(sort::S::new(x.clone())),
-        Literal::Bool(x) => egraph.base_value_constant::<bool>(*x),
-        Literal::Unit => egraph.base_value_constant::<()>(()),
+        Literal::Int(x) => egraph.base_value_constant::<i64>(x),
+        Literal::Float(x) => egraph.base_value_constant::<sort::F>(&x.into()),
+        Literal::String(x) => egraph.base_value_constant::<sort::S>(&sort::S::new(x.clone())),
+        Literal::Bool(x) => egraph.base_value_constant::<bool>(x),
+        Literal::Unit => egraph.base_value_constant::<()>(&()),
     }
 }
 
 fn literal_to_value(egraph: &egglog_bridge::EGraph, l: &Literal) -> Value {
     match l {
-        Literal::Int(x) => egraph.base_values().get::<i64>(*x),
-        Literal::Float(x) => egraph.base_values().get::<sort::F>(x.into()),
-        Literal::String(x) => egraph.base_values().get::<sort::S>(sort::S::new(x.clone())),
-        Literal::Bool(x) => egraph.base_values().get::<bool>(*x),
-        Literal::Unit => egraph.base_values().get::<()>(()),
+        Literal::Int(x) => egraph.base_values().get::<i64>(x),
+        Literal::Float(x) => egraph.base_values().get::<sort::F>(&x.into()),
+        Literal::String(x) => egraph
+            .base_values()
+            .get::<sort::S>(&sort::S::new(x.clone())),
+        Literal::Bool(x) => egraph.base_values().get::<bool>(x),
+        Literal::Unit => egraph.base_values().get::<()>(&()),
     }
 }
 
@@ -1851,7 +1933,7 @@ mod tests {
     }
 
     impl Primitive for InnerProduct {
-        fn name(&self) -> &str {
+        fn name(&self) -> &'static str {
             "inner-product"
         }
 
@@ -1880,7 +1962,7 @@ mod tests {
                 let b = exec_state.base_values().unwrap::<i64>(*b);
                 sum += a * b;
             }
-            Some(exec_state.base_values().get::<i64>(sum))
+            Some(exec_state.base_values().get(&sum))
         }
     }
 
@@ -1942,7 +2024,7 @@ mod tests {
         egraph
             .parse_and_run_program(
                 None,
-                r#"
+                r"
                 (datatype Math)
                 (constructor container (Math) Math)
                 (constructor exp () Math :cost 100)
@@ -1955,7 +2037,7 @@ mod tests {
                 (cheap)
                 (cheap-1)
                 (subsume (container (cheap)))
-                "#,
+                ",
             ).unwrap();
         // At this point (cheap) and (cheap-1) should have different values, because they aren't unioned
         let orig_cheap_value = get_value(&egraph, "cheap");
@@ -1965,9 +2047,9 @@ mod tests {
         egraph
             .parse_and_run_program(
                 None,
-                r#"
+                r"
                 (union (cheap-1) (cheap))
-                "#,
+                ",
             )
             .unwrap();
         // And verify that their values are now the same and different from the original (cheap) value.
@@ -1979,9 +2061,9 @@ mod tests {
         let outputs = egraph
             .parse_and_run_program(
                 None,
-                r#"
+                r"
                 (extract res)
-                "#,
+                ",
             )
             .unwrap();
         assert_eq!(outputs[0].to_string(), "(exp)\n");
@@ -1995,7 +2077,7 @@ mod tests {
         egraph
             .parse_and_run_program(
                 None,
-                r#"
+                r"
                 (datatype Math)
                 (constructor container (Math) Math)
                 (constructor exp () Math :cost 100)
@@ -2003,7 +2085,7 @@ mod tests {
                 (exp)
                 (let x (cheap))
                 (subsume (cheap))
-                "#,
+                ",
             )
             .unwrap();
 
@@ -2012,9 +2094,9 @@ mod tests {
         egraph
             .parse_and_run_program(
                 None,
-                r#"
+                r"
                 (union (exp) x)
-                "#,
+                ",
             )
             .unwrap();
         // And verify that the cheap value is now different
@@ -2025,9 +2107,9 @@ mod tests {
         let res = egraph
             .parse_and_run_program(
                 None,
-                r#"
+                r"
                 (extract x)
-                "#,
+                ",
             )
             .unwrap();
         assert_eq!(res[0].to_string(), "(exp)\n");

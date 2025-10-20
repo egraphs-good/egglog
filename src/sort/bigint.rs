@@ -1,4 +1,7 @@
-use super::*;
+use super::{
+    BaseSort, BaseValues, BigInt, Debug, EGraph, Literal, Shl, Shr, Term, TermDag, Value, Z,
+    add_primitive, bool, i64,
+};
 
 #[derive(Debug)]
 pub struct BigIntSort;
@@ -6,7 +9,7 @@ pub struct BigIntSort;
 impl BaseSort for BigIntSort {
     type Base = Z;
 
-    fn name(&self) -> &str {
+    fn name(&self) -> &'static str {
         "BigInt"
     }
 
@@ -58,6 +61,6 @@ impl BaseSort for BigIntSort {
         let bigint = base_values.unwrap::<Z>(value);
 
         let as_string = termdag.lit(Literal::String(bigint.0.to_string()));
-        termdag.app("from-string".to_owned(), vec![as_string])
+        termdag.app("from-string".to_owned(), &[as_string])
     }
 }

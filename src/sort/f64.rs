@@ -1,4 +1,7 @@
-use super::*;
+use super::{
+    BaseSort, BaseValues, Debug, EGraph, F, Literal, Signed, Term, TermDag, Value, add_primitive,
+    i64,
+};
 
 /// 64-bit floating point numbers supporting these primitives:
 /// - Arithmetic: `+`, `-`, `*`, `/`, `%`, `^`, `neg`, `abs`
@@ -10,13 +13,16 @@ pub struct F64Sort;
 impl BaseSort for F64Sort {
     type Base = F;
 
-    fn name(&self) -> &str {
+    fn name(&self) -> &'static str {
         "f64"
     }
 
     #[rustfmt::skip]
     // We need the closure for division and mod operations, as they can panic.
     // cf https://github.com/rust-lang/rust-clippy/issues/9422
+    #[allow(clippy::cast_possible_truncation)]
+    #[allow(clippy::cast_precision_loss)]
+    #[allow(clippy::cast_sign_loss)]
     #[allow(clippy::unnecessary_lazy_evaluations)]
     fn register_primitives(&self, eg: &mut EGraph) {
         add_primitive!(eg, "+" = |a: F, b: F| -> F { a + b });

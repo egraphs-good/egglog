@@ -16,50 +16,63 @@ pub use egglog::{EGraph, span};
 pub use egglog::{action, actions, datatype, expr, fact, facts, sort, vars};
 
 pub mod exprs {
-    use super::*;
+    use super::{Expr, Literal, RustSpan, Span, span};
 
     /// Creates a variable expression.
+    #[must_use]
     pub fn var(name: &str) -> Expr {
         Expr::Var(span!(), name.to_owned())
     }
 
     /// Creates an integer literal expression.
+    #[must_use]
     pub fn int(value: i64) -> Expr {
         Expr::Lit(span!(), Literal::Int(value))
     }
 
     /// Creates a float literal expression.
+    #[must_use]
     pub fn float(value: f64) -> Expr {
         Expr::Lit(span!(), Literal::Float(value.into()))
     }
 
     /// Creates a string literal expression.
+    #[must_use]
     pub fn string(value: &str) -> Expr {
         Expr::Lit(span!(), Literal::String(value.to_owned()))
     }
 
     /// Creates a unit literal expression.
+    #[must_use]
     pub fn unit() -> Expr {
         Expr::Lit(span!(), Literal::Unit)
     }
 
     /// Creates a boolean literal expression.
+    #[must_use]
     pub fn bool(value: bool) -> Expr {
         Expr::Lit(span!(), Literal::Bool(value))
     }
 
     /// Creates a function call expression.
+    #[must_use]
     pub fn call(f: &str, xs: Vec<Expr>) -> Expr {
         Expr::Call(span!(), f.to_owned(), xs)
     }
 }
 
 /// Create a new ruleset.
+///
+/// # Errors
+/// If running the program fails.
 pub fn add_ruleset(egraph: &mut EGraph, ruleset: &str) -> Result<Vec<CommandOutput>, Error> {
     egraph.run_program(vec![Command::AddRuleset(span!(), ruleset.to_owned())])
 }
 
 /// Run one iteration of a ruleset.
+///
+/// # Errors
+/// If running the program fails.
 pub fn run_ruleset(egraph: &mut EGraph, ruleset: &str) -> Result<Vec<CommandOutput>, Error> {
     egraph.run_program(vec![Command::RunSchedule(Schedule::Run(
         span!(),
@@ -220,6 +233,9 @@ macro_rules! actions {
 ///
 /// # Ok::<(), egglog::Error>(())
 /// ```
+///
+/// # Errors
+/// If running the program fails.
 pub fn rule(
     egraph: &mut EGraph,
     ruleset: &str,
@@ -230,7 +246,7 @@ pub fn rule(
         span: span!(),
         head: actions,
         body: facts.0,
-        name: "".into(),
+        name: String::new(),
         ruleset: ruleset.into(),
     };
 
@@ -250,6 +266,7 @@ pub struct RustRuleContext<'a, 'b> {
 
 impl RustRuleContext<'_, '_> {
     /// Convert from an egglog value to a Rust type.
+    #[must_use]
     pub fn value_to_base<T: BaseValue>(&self, x: Value) -> T {
         self.exec_state.base_values().unwrap::<T>(x)
     }
@@ -265,12 +282,12 @@ impl RustRuleContext<'_, '_> {
     }
 
     /// Convert from a Rust type to an egglog value.
-    pub fn base_to_value<T: BaseValue>(&self, x: T) -> Value {
+    pub fn base_to_value<T: BaseValue>(&self, x: &T) -> Value {
         self.exec_state.base_values().get::<T>(x)
     }
 
     /// Convert from a Rust container type to an egglog value.
-    pub fn container_to_value<T: ContainerValue>(&mut self, x: T) -> Value {
+    pub fn container_to_value<T: ContainerValue>(&mut self, x: &T) -> Value {
         self.exec_state
             .container_values()
             .register_val::<T>(x, self.exec_state)
@@ -289,26 +306,26 @@ impl RustRuleContext<'_, '_> {
     /// Union two values in the e-graph.
     /// For more information, see `egglog_bridge::UnionAction::union`.
     pub fn union(&mut self, x: Value, y: Value) {
-        self.union_action.union(self.exec_state, x, y)
+        self.union_action.union(self.exec_state, x, y);
     }
 
     /// Insert a row into a table.
     /// For more information, see `egglog_bridge::TableAction::insert`.
     pub fn insert(&mut self, table: &str, row: impl Iterator<Item = Value>) {
-        self.get_table_action(table).insert(self.exec_state, row)
+        self.get_table_action(table).insert(self.exec_state, row);
     }
 
     /// Remove a row from a table.
     /// For more information, see `egglog_bridge::TableAction::remove`.
     pub fn remove(&mut self, table: &str, key: &[Value]) {
-        self.get_table_action(table).remove(self.exec_state, key)
+        self.get_table_action(table).remove(self.exec_state, key);
     }
 
     /// Subsume a row in a table.
     /// For more information, see `egglog_bridge::TableAction::subsume`.
     pub fn subsume(&mut self, table: &str, key: &[Value]) {
         self.get_table_action(table)
-            .subsume(self.exec_state, key.iter().copied())
+            .subsume(self.exec_state, key.iter().copied());
     }
 
     /// Panic.
@@ -354,7 +371,7 @@ impl<F: Fn(&mut RustRuleContext, &[Value]) -> Option<()>> Primitive for RustRule
             panic_id: self.panic_id,
         };
         (self.func)(&mut context, values)?;
-        Some(exec_state.base_values().get(()))
+        Some(exec_state.base_values().get(&()))
     }
 }
 
@@ -435,6 +452,9 @@ impl<F: Fn(&mut RustRuleContext, &[Value]) -> Option<()>> Primitive for RustRule
 ///
 /// # Ok::<(), egglog::Error>(())
 /// ```
+///
+/// # Errors
+/// If running the program fails.
 pub fn rust_rule(
     egraph: &mut EGraph,
     rule_name: &str,
@@ -491,6 +511,9 @@ impl QueryResult {
     /// Get an iterator over the query results,
     /// where each match is a `&[Value]` in the same order
     /// as the `vars` that were passed to `query`.
+    ///
+    /// # Panics
+    /// If internal invariants are unmet.
     pub fn iter(&self) -> impl Iterator<Item = &[Value]> {
         assert!(self.cols > 0, "no vars; use `any_matches` instead");
         assert!(self.data.len() % self.cols == 0);
@@ -498,6 +521,7 @@ impl QueryResult {
     }
 
     /// Check if any matches were returned at all.
+    #[must_use]
     pub fn any_matches(&self) -> bool {
         self.rows > 0
     }
@@ -540,6 +564,12 @@ impl QueryResult {
 ///
 /// # Ok::<(), egglog::Error>(())
 /// ```
+///
+/// # Errors
+/// If running the program fails.
+///
+/// # Panics
+/// If internal invariants are unmet.
 pub fn query(
     egraph: &mut EGraph,
     vars: &[(&str, ArcSort)],
@@ -583,11 +613,17 @@ pub fn query(
 }
 
 /// Declare a new sort.
+///
+/// # Errors
+/// If running the program fails.
 pub fn add_sort(egraph: &mut EGraph, name: &str) -> Result<Vec<CommandOutput>, Error> {
     egraph.run_program(vec![Command::Sort(span!(), name.to_owned(), None)])
 }
 
 /// Declare a new function table.
+///
+/// # Errors
+/// If running the program fails.
 pub fn add_function(
     egraph: &mut EGraph,
     name: &str,
@@ -603,6 +639,9 @@ pub fn add_function(
 }
 
 /// Declare a new constructor table.
+///
+/// # Errors
+/// If running the program fails.
 pub fn add_constructor(
     egraph: &mut EGraph,
     name: &str,
@@ -620,6 +659,9 @@ pub fn add_constructor(
 }
 
 /// Declare a new relation table.
+///
+/// # Errors
+/// If running the program fails.
 pub fn add_relation(
     egraph: &mut EGraph,
     name: &str,
@@ -653,7 +695,7 @@ macro_rules! datatype {
 /// A "default" implementation of [`Sort`] for simple types
 /// which just want to put some data in the e-graph. If you
 /// implement this trait, do not implement `Sort` or
-/// `ContainerSort. Use `add_base_sort` to register base
+/// `ContainerSort`. Use `add_base_sort` to register base
 /// sorts with the `EGraph`. See `Sort` for documentation
 /// of the methods. Do not override `to_arcsort`.
 pub trait BaseSort: Any + Send + Sync + Debug {
@@ -695,10 +737,10 @@ impl<T: BaseSort> Sort for BaseSortImpl<T> {
     }
 
     fn register_primitives(self: Arc<Self>, eg: &mut EGraph) {
-        self.0.register_primitives(eg)
+        self.0.register_primitives(eg);
     }
 
-    /// Reconstruct a leaf base value in a TermDag
+    /// Reconstruct a leaf base value in a `TermDag`
     fn reconstruct_termdag_base(
         &self,
         base_values: &BaseValues,
@@ -804,6 +846,8 @@ impl<T: ContainerSort> Sort for ContainerSortImpl<T> {
 }
 
 /// Add a [`BaseSort`] to the e-graph
+/// # Errors
+/// If adding errors.
 pub fn add_base_sort(
     egraph: &mut EGraph,
     base_sort: impl BaseSort,
@@ -812,6 +856,8 @@ pub fn add_base_sort(
     egraph.add_sort(BaseSortImpl(base_sort), span)
 }
 
+/// # Errors
+/// If adding errors.
 pub fn add_container_sort(
     egraph: &mut EGraph,
     container_sort: impl ContainerSort,
@@ -857,8 +903,8 @@ mod tests {
             ],
         )?;
 
-        let x = egraph.backend.base_values().get::<i64>(7);
-        let y = egraph.backend.base_values().get::<i64>(13);
+        let x = egraph.backend.base_values().get(&7);
+        let y = egraph.backend.base_values().get(&13);
         assert_eq!(results.data, [x, y]);
 
         Ok(())
@@ -907,7 +953,7 @@ mod tests {
             facts![(= (fib (unquote exprs::int(big_number))) f)],
         )?;
 
-        let y = egraph.backend.base_values().get::<i64>(6765);
+        let y = egraph.backend.base_values().get(&6765);
         assert_eq!(results.data, [y]);
 
         Ok(())
@@ -979,8 +1025,8 @@ mod tests {
                 let f0 = ctx.value_to_base::<i64>(*f0);
                 let f1 = ctx.value_to_base::<i64>(*f1);
 
-                let y = ctx.base_to_value::<i64>(x + 2);
-                let f2 = ctx.base_to_value::<i64>(f0 + f1);
+                let y = ctx.base_to_value(&(x + 2));
+                let f2 = ctx.base_to_value(&(f0 + f1));
                 ctx.insert("fib", [y, f2].into_iter());
 
                 Some(())
@@ -999,7 +1045,7 @@ mod tests {
             facts![(= (fib (unquote exprs::int(big_number))) f)],
         )?;
 
-        let y = egraph.backend.base_values().get::<i64>(6765);
+        let y = egraph.backend.base_values().get(&6765);
         assert_eq!(results.data, [y]);
 
         Ok(())

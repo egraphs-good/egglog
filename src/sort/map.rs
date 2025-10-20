@@ -1,4 +1,7 @@
-use super::*;
+use super::{
+    ArcSort, ContainerSort, ContainerValue, ContainerValues, Debug, EGraph, Expr, Hash, Presort,
+    Rebuilder, Term, TermDag, TypeError, TypeInfo, Value, add_primitive, bool, i64,
+};
 use std::collections::BTreeMap;
 
 #[derive(Clone, Debug, PartialEq, Eq, Hash)]
@@ -52,10 +55,12 @@ pub struct MapSort {
 }
 
 impl MapSort {
+    #[must_use]
     pub fn key(&self) -> ArcSort {
         self.key.clone()
     }
 
+    #[must_use]
     pub fn value(&self) -> ArcSort {
         self.value.clone()
     }
@@ -149,6 +154,8 @@ impl ContainerSort for MapSort {
             .collect()
     }
 
+    #[allow(clippy::cast_possible_truncation)]
+    #[allow(clippy::cast_sign_loss)]
     fn register_primitives(&self, eg: &mut EGraph) {
         let arc = self.clone().to_arcsort();
 
@@ -174,10 +181,10 @@ impl ContainerSort for MapSort {
         termdag: &mut TermDag,
         element_terms: Vec<Term>,
     ) -> Term {
-        let mut term = termdag.app("map-empty".into(), vec![]);
+        let mut term = termdag.app("map-empty".into(), &[]);
 
         for x in element_terms.chunks(2) {
-            term = termdag.app("map-insert".into(), vec![term, x[0].clone(), x[1].clone()])
+            term = termdag.app("map-insert".into(), &[term, x[0].clone(), x[1].clone()]);
         }
 
         term

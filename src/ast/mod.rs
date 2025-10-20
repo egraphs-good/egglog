@@ -39,9 +39,9 @@ pub(crate) type ResolvedNCommand = GenericNCommand<ResolvedCall, ResolvedVar>;
 /// [`GenericNCommand`] is a generalization of [`NCommand`], like how [`GenericCommand`]
 /// is a generalization of [`Command`], allowing annotations over `Head` and `Leaf`.
 ///
-/// TODO: The name "NCommand" used to denote normalized command, but this
+/// TODO: The name "`NCommand`" used to denote normalized command, but this
 /// meaning is obsolete. A future PR should rename this type to something
-/// like "DCommand".
+/// like "`DCommand`".
 #[derive(Debug, Clone, Eq, PartialEq, Hash)]
 pub enum GenericNCommand<Head, Leaf>
 where
@@ -161,6 +161,7 @@ where
         }
     }
 
+    #[must_use]
     pub fn visit_exprs(
         self,
         f: &mut impl FnMut(GenericExpr<Head, Leaf>) -> GenericExpr<Head, Leaf>,
@@ -418,7 +419,7 @@ where
     /// (function LowerBound (Math) i64 :merge (max old new))
     /// ```
     ///
-    /// Specifically, a custom function can also have an EqSort output type:
+    /// Specifically, a custom function can also have an `EqSort` output type:
     ///
     /// ```text
     /// (function Add (i64 i64) Math)
@@ -427,7 +428,7 @@ where
     /// All functions can be `set`
     /// with [`Action::Set`].
     ///
-    /// Output of a function, if being the EqSort type, can be unioned with [`Action::Union`]
+    /// Output of a function, if being the `EqSort` type, can be unioned with [`Action::Union`]
     /// with another datatype of the same `sort`.
     ///
     Function {
@@ -659,6 +660,7 @@ where
     Head: Clone + Display,
     Leaf: Clone + PartialEq + Eq + Display + Hash,
 {
+    #[allow(clippy::too_many_lines)]
     fn fmt(&self, f: &mut Formatter) -> std::fmt::Result {
         match self {
             GenericCommand::Rewrite(name, rewrite, subsume) => {
@@ -809,6 +811,7 @@ where
     Head: Clone + Display,
     Leaf: Clone + PartialEq + Eq + Display + Hash,
 {
+    #[must_use]
     pub fn visit_exprs(
         self,
         f: &mut impl FnMut(GenericExpr<Head, Leaf>) -> GenericExpr<Head, Leaf>,
@@ -914,6 +917,7 @@ impl Display for Schema {
 }
 
 impl Schema {
+    #[must_use]
     pub fn new(input: Vec<String>, output: String) -> Self {
         Self { input, output }
     }
@@ -921,6 +925,7 @@ impl Schema {
 
 impl FunctionDecl {
     /// Constructs a `function`
+    #[must_use]
     pub fn function(
         span: Span,
         name: String,
@@ -940,6 +945,7 @@ impl FunctionDecl {
     }
 
     /// Constructs a `constructor`
+    #[must_use]
     pub fn constructor(
         span: Span,
         name: String,
@@ -960,6 +966,7 @@ impl FunctionDecl {
     }
 
     /// Constructs a `relation`
+    #[must_use]
     pub fn relation(span: Span, name: String, input: Vec<String>) -> Self {
         Self {
             name,
@@ -982,6 +989,7 @@ where
     Head: Clone + Display,
     Leaf: Clone + PartialEq + Eq + Display + Hash,
 {
+    #[must_use]
     pub fn visit_exprs(
         self,
         f: &mut impl FnMut(GenericExpr<Head, Leaf>) -> GenericExpr<Head, Leaf>,
@@ -1025,7 +1033,7 @@ where
         let mut atoms = vec![];
         let mut new_body = vec![];
 
-        for fact in self.0.iter() {
+        for fact in &self.0 {
             match fact {
                 GenericFact::Eq(span, e1, e2) => {
                     let mut to_equate = vec![];
@@ -1107,6 +1115,9 @@ pub struct GenericRewrite<Head, Leaf> {
 
 impl<Head: Display, Leaf: Display> GenericRewrite<Head, Leaf> {
     /// Converts the rewrite into an s-expression.
+    ///
+    /// # Errors
+    /// If I/O fails.
     pub fn fmt_with_ruleset(
         &self,
         f: &mut Formatter,

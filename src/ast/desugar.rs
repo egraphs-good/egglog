@@ -1,5 +1,8 @@
 use super::{Rewrite, Rule};
-use crate::*;
+use crate::{
+    Action, Actions, Change, Command, Display, Error, Expr, Fact, FreshGen, FunctionDecl,
+    GenericCommand, Hash, NCommand, Parser, Schema, Span, Subdatatypes, Variant,
+};
 
 /// Desugars a list of commands into the normalized form.
 /// Gets rid of a bunch of syntactic sugar, but also
@@ -20,6 +23,7 @@ pub(crate) fn desugar_program(
 /// Desugars a single command into the normalized form.
 /// Gets rid of a bunch of syntactic sugar, but also
 /// makes rules into a SSA-like format (see [`NormFact`]).
+#[allow(clippy::too_many_lines)]
 pub(crate) fn desugar_command(
     command: Command,
     parser: &mut Parser,
@@ -55,11 +59,11 @@ pub(crate) fn desugar_command(
             span,
             name,
             variants,
-        } => desugar_datatype(span, name, variants),
+        } => desugar_datatype(&span, &name, variants),
         Command::Datatypes { span: _, datatypes } => {
             // first declare all the datatypes as sorts, then add all explicit sorts which could refer to the datatypes, and finally add all the variants as functions
             let mut res = vec![];
-            for datatype in datatypes.iter() {
+            for datatype in &datatypes {
                 let span = datatype.0.clone();
                 let name = datatype.1.clone();
                 if let Subdatatypes::Variants(..) = datatype.2 {
@@ -101,10 +105,10 @@ pub(crate) fn desugar_command(
             res
         }
         Command::Rewrite(ruleset, rewrite, subsume) => {
-            desugar_rewrite(ruleset, rule_name, rewrite, subsume, parser)
+            desugar_rewrite(ruleset, rule_name, &rewrite, subsume, parser)
         }
         Command::BiRewrite(ruleset, rewrite) => {
-            desugar_birewrite(ruleset, rule_name, rewrite, parser)
+            desugar_birewrite(ruleset, &rule_name, &rewrite, parser)
         }
         Command::Include(span, file) => {
             let s = std::fs::read_to_string(&file)
@@ -167,8 +171,8 @@ pub(crate) fn desugar_command(
     Ok(res)
 }
 
-fn desugar_datatype(span: Span, name: String, variants: Vec<Variant>) -> Vec<NCommand> {
-    vec![NCommand::Sort(span.clone(), name.clone(), None)]
+fn desugar_datatype(span: &Span, name: &str, variants: Vec<Variant>) -> Vec<NCommand> {
+    vec![NCommand::Sort(span.clone(), name.to_string(), None)]
         .into_iter()
         .chain(variants.into_iter().map(|variant| {
             NCommand::Function(FunctionDecl::constructor(
@@ -176,7 +180,7 @@ fn desugar_datatype(span: Span, name: String, variants: Vec<Variant>) -> Vec<NCo
                 variant.name,
                 Schema {
                     input: variant.types,
-                    output: name.clone(),
+                    output: name.to_string(),
                 },
                 variant.cost,
                 variant.unextractable,
@@ -188,7 +192,7 @@ fn desugar_datatype(span: Span, name: String, variants: Vec<Variant>) -> Vec<NCo
 fn desugar_rewrite(
     ruleset: String,
     name: String,
-    rewrite: Rewrite,
+    rewrite: &Rewrite,
     subsume: bool,
     parser: &mut Parser,
 ) -> Vec<NCommand> {
@@ -206,7 +210,7 @@ fn desugar_rewrite(
                     span.clone(),
                     Change::Subsume,
                     f.clone(),
-                    args.to_vec(),
+                    args.clone(),
                 ));
             }
             _ => {
@@ -237,8 +241,8 @@ fn desugar_rewrite(
 
 fn desugar_birewrite(
     ruleset: String,
-    name: String,
-    rewrite: Rewrite,
+    name: &str,
+    rewrite: &Rewrite,
     parser: &mut Parser,
 ) -> Vec<NCommand> {
     let span = rewrite.span.clone();
@@ -253,7 +257,7 @@ fn desugar_birewrite(
         .chain(desugar_rewrite(
             ruleset,
             format!("{name}<="),
-            rw2,
+            &rw2,
             false,
             parser,
         ))

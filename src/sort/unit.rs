@@ -1,4 +1,4 @@
-use super::*;
+use super::{BaseSort, BaseValues, Debug, Literal, Term, TermDag, Value};
 
 #[derive(Debug)]
 pub struct UnitSort;
@@ -6,7 +6,7 @@ pub struct UnitSort;
 impl BaseSort for UnitSort {
     type Base = ();
 
-    fn name(&self) -> &str {
+    fn name(&self) -> &'static str {
         "Unit"
     }
 

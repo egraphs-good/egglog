@@ -31,7 +31,13 @@ use syn::{Expr, Ident, LitStr, Token, braced, bracketed, parenthesized, parse_ma
 ///   will let you access the expression `x` of type `T` from inside
 ///   the body as `self.ctx`. `T` must be the real Rust type of `x`.
 ///   `T` must be `Clone` and `'static`.
+///
+/// # Panics
+/// There is an overly conservative type check, as `syn::Type` is not `PartialEq`. There's an
+/// outstanding `TODO` for adding a new type constraint that supports all possible combinations of
+/// features that this macro supports.
 #[proc_macro]
+#[allow(clippy::too_many_lines)]
 pub fn add_primitive(input: TokenStream) -> TokenStream {
     // If you're trying to read this code, you should read the big
     // `quote!` block at the bottom of this function first. Trying
@@ -106,7 +112,7 @@ pub fn add_primitive(input: TokenStream) -> TokenStream {
                     has_type(t),
                     has_type(&arg.t),
                     "AllEqualTypeConstraint doesn't support multiple argument types"
-                )
+                );
             }
 
             let new = quote!(AllEqualTypeConstraint::new(self.name(), span.clone()));
@@ -137,9 +143,12 @@ pub fn add_primitive(input: TokenStream) -> TokenStream {
         };
 
         // Cast the arguments to the desired type.
-        let cast1 = |x, t: &syn::Type, is_container| match is_container {
-            false => quote!(exec_state.base_values().unwrap::<#t>(*#x)),
-            true => quote!(exec_state.container_values().get_val::<#t>(*#x).unwrap().clone()),
+        let cast1 = |x, t: &syn::Type, is_container| {
+            if is_container {
+                quote!(exec_state.container_values().get_val::<#t>(*#x).unwrap().clone())
+            } else {
+                quote!(exec_state.base_values().unwrap::<#t>(*#x))
+            }
         };
         let cast = if is_varargs {
             let Arg { x, t, is_mutable } = &args[0];
@@ -174,9 +183,9 @@ pub fn add_primitive(input: TokenStream) -> TokenStream {
             Some((t, is_container)) => (
                 t,
                 match is_container {
-                    false => quote!(exec_state.base_values().get::<#t>(#y)),
+                    false => quote!(exec_state.base_values().get::<#t>(&#y)),
                     true => quote!(
-                        exec_state.container_values().register_val::<#t>(#y, exec_state)
+                        exec_state.container_values().register_val::<#t>(&#y, exec_state)
                     ),
                 },
             ),

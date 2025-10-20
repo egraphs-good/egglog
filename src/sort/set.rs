@@ -1,4 +1,7 @@
-use super::*;
+use super::{
+    ArcSort, ContainerSort, ContainerValue, ContainerValues, Debug, EGraph, Expr, Hash, Presort,
+    Rebuilder, Term, TermDag, TypeError, TypeInfo, Value, add_primitive, bool, i64,
+};
 use std::collections::BTreeSet;
 
 #[derive(Clone, Debug, PartialEq, Eq, Hash)]
@@ -30,6 +33,7 @@ pub struct SetSort {
 }
 
 impl SetSort {
+    #[must_use]
     pub fn element(&self) -> ArcSort {
         self.element.clone()
     }
@@ -115,6 +119,8 @@ impl ContainerSort for SetSort {
             .collect()
     }
 
+    #[allow(clippy::cast_possible_truncation)]
+    #[allow(clippy::cast_sign_loss)]
     fn register_primitives(&self, eg: &mut EGraph) {
         let arc = self.clone().to_arcsort();
 
@@ -147,7 +153,7 @@ impl ContainerSort for SetSort {
         termdag: &mut TermDag,
         element_terms: Vec<Term>,
     ) -> Term {
-        termdag.app("set-of".into(), element_terms)
+        termdag.app("set-of".into(), &element_terms)
     }
 
     fn serialized_name(&self, _container_values: &ContainerValues, _: Value) -> String {

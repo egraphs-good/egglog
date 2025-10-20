@@ -20,6 +20,7 @@ pub struct SymbolGen {
 }
 
 impl SymbolGen {
+    #[must_use]
     pub fn new(reserved_string: String) -> Self {
         Self {
             count: 0,
@@ -27,6 +28,7 @@ impl SymbolGen {
         }
     }
 
+    #[must_use]
     pub fn has_been_used(&self) -> bool {
         self.count > 0
     }

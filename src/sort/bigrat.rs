@@ -1,4 +1,7 @@
-use super::*;
+use super::{
+    BaseSort, BaseValues, BigRational, CheckedAdd, CheckedDiv, CheckedMul, CheckedSub, Debug,
+    EGraph, Literal, One, Q, Signed, Term, TermDag, ToPrimitive, Value, Zero, add_primitive,
+};
 
 /// Rational numbers supporting these primitives:
 /// - Arithmetic: `+`, `-`, `*`, `/`, `neg`, `abs`
@@ -13,7 +16,7 @@ pub struct BigRatSort;
 impl BaseSort for BigRatSort {
     type Base = Q;
 
-    fn name(&self) -> &str {
+    fn name(&self) -> &'static str {
         "BigRat"
     }
 
@@ -118,9 +121,9 @@ impl BaseSort for BigRatSort {
         let numer_as_string = termdag.lit(Literal::String(numer.to_string()));
         let denom_as_string = termdag.lit(Literal::String(denom.to_string()));
 
-        let numer_term = termdag.app("from-string".to_owned(), vec![numer_as_string]);
-        let denom_term = termdag.app("from-string".to_owned(), vec![denom_as_string]);
+        let numer_term = termdag.app("from-string".to_owned(), &[numer_as_string]);
+        let denom_term = termdag.app("from-string".to_owned(), &[denom_as_string]);
 
-        termdag.app("bigrat".to_owned(), vec![numer_term, denom_term])
+        termdag.app("bigrat".to_owned(), &[numer_term, denom_term])
     }
 }

@@ -5,8 +5,11 @@
 //! When a globally-bound primitive value is used in the actions of a rule,
 //! we add a new variable to the query bound to the primitive value.
 
-use crate::*;
-use crate::{core::ResolvedCall, typechecking::FuncType};
+use crate::{
+    FreshGen, FunctionSubtype, GenericNCommand, HashMap, ResolvedAction, ResolvedExpr,
+    ResolvedExprExt, ResolvedFact, ResolvedFunctionDecl, ResolvedNCommand, ResolvedVar, Schema,
+    SymbolGen, core::ResolvedCall, typechecking::FuncType,
+};
 use egglog_ast::generic_ast::{GenericAction, GenericExpr, GenericFact, GenericRule};
 
 struct GlobalRemover<'a> {
@@ -65,8 +68,8 @@ fn resolved_var_to_call(var: &ResolvedVar) -> ResolvedCall {
     })
 }
 
-/// TODO (yz) it would be better to implement replace_global_var
-/// as a function from ResolvedVar to ResolvedExpr
+/// TODO (yz) it would be better to implement `replace_global_var`
+/// as a function from `ResolvedVar` to `ResolvedExpr`
 /// and use it as an argument to `subst` instead of `visit_expr`,
 /// but we have not implemented `subst` for command.
 fn replace_global_vars(expr: ResolvedExpr) -> ResolvedExpr {
@@ -128,7 +131,7 @@ impl GlobalRemover<'_> {
                 // A map from the global variables in actions to their new names
                 // in the query.
                 let mut globals = HashMap::default();
-                rule.head.clone().visit_exprs(&mut |expr| {
+                let _ = rule.head.clone().visit_exprs(&mut |expr| {
                     if let Some(resolved_var) = expr.get_global_var() {
                         let new_name = self.fresh.fresh(&resolved_var.name);
                         globals.insert(

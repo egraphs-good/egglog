@@ -10,10 +10,10 @@ fn test_simple_extract1() {
     let outputs = egraph
         .parse_and_run_program(
             None,
-            r#"
+            r"
              (datatype Op (Add i64 i64))
              (let expr (Add 1 1))
-             (extract expr)"#,
+             (extract expr)",
         )
         .unwrap();
     let CommandOutput::ExtractBest(_, cost, _) = outputs[0] else {
@@ -40,13 +40,13 @@ fn primitive_error_in_run_schedule_returns_error() {
     let _ = env_logger::builder().is_test(true).try_init();
 
     let mut egraph = EGraph::default();
-    let program = r#"
+    let program = r"
         (ruleset problematic)
         (rule ()
               ((let tmp (<< 1 10000)))
               :ruleset problematic)
         (run-schedule (run problematic))
-    "#;
+    ";
 
     let err = egraph.parse_and_run_program(None, program).unwrap_err();
     assert!(err.to_string().contains("call of primitive << failed"));
@@ -61,7 +61,7 @@ fn test_simple_extract2() {
     let outputs = egraph
         .parse_and_run_program(
             None,
-            r#"
+            r"
              (datatype Term
                (Origin :cost 0)
                (BigStep Term :cost 10)
@@ -77,7 +77,7 @@ fn test_simple_extract2() {
              (let tssss (SmallStep tsss))
              (union tssss tb)
              (extract tb)
-             "#,
+             ",
         )
         .unwrap();
     assert!(matches!(outputs[0], CommandOutput::ExtractBest(_, 4, _)));
@@ -92,7 +92,7 @@ fn test_simple_extract3() {
     let outputs = egraph
         .parse_and_run_program(
             None,
-            r#"
+            r"
              (datatype Fruit
                (Apple i64 :cost 1)
                (Orange f64 :cost 2)
@@ -106,7 +106,7 @@ fn test_simple_extract3() {
              (let b (Broccoli true))
              (let c (Carrot a))
              (extract a)
-             "#,
+             ",
         )
         .unwrap();
 
@@ -125,7 +125,7 @@ fn test_simple_extract4() {
     egraph
         .parse_and_run_program(
             None,
-            r#"
+            r"
         (datatype Foo
             (Foobar)
         )
@@ -135,7 +135,7 @@ fn test_simple_extract4() {
         )
         (let x (Barbar (Foobar)))
         (extract x)
-        "#,
+        ",
         )
         .unwrap_err();
 }
@@ -149,7 +149,7 @@ fn test_simple_extract5() {
     let outputs = egraph
         .parse_and_run_program(
             None,
-            r#"
+            r"
              (datatype Foo
                 (Foobar i64)
              )
@@ -163,7 +163,7 @@ fn test_simple_extract5() {
              (function Quaz () QuaMap :no-merge)
              (set (Quaz) (map-empty))
              (extract (Quaz))
-             "#,
+             ",
         )
         .unwrap();
 
@@ -182,14 +182,14 @@ fn test_simple_extract6() {
     let outputs = egraph
         .parse_and_run_program(
             None,
-            r#"
+            r"
              (datatype False)
              (sort QuaVec (Vec i64))
              (sort QuaMap (Map QuaVec False))
              (function Quaz () QuaMap :no-merge)
              (set (Quaz) (map-empty))
              (extract (Quaz))
-             "#,
+             ",
         )
         .unwrap();
 
@@ -208,7 +208,7 @@ fn test_simple_extract7() {
     let outputs = egraph
         .parse_and_run_program(
             None,
-            r#"
+            r"
             (datatype Foo
                 (bar)
                 (baz)
@@ -236,7 +236,7 @@ fn test_simple_extract7() {
 
             ;(extract (toerr map2))
 
-             "#,
+             ",
         )
         .unwrap();
 
@@ -255,7 +255,7 @@ fn test_simple_extract8() {
     let outputs = egraph
         .parse_and_run_program(
             None,
-            r#"
+            r"
             (datatype Foo
                 (bar :cost 10)
             )
@@ -263,7 +263,7 @@ fn test_simple_extract8() {
             (set (func) (bar))
 
             (extract (bar))
-            "#,
+            ",
         )
         .unwrap();
 
@@ -282,7 +282,7 @@ fn test_simple_extract9() {
     let outputs = egraph
         .parse_and_run_program(
             None,
-            r#"
+            r"
             (datatype Foo)
             (datatype NodeA)
             (datatype NodeB)
@@ -306,7 +306,7 @@ fn test_simple_extract9() {
             (union c c2)
 
             (extract a)
-            "#,
+            ",
         )
         .unwrap();
 
@@ -318,9 +318,9 @@ fn test_simple_extract9() {
     let outputs = egraph
         .parse_and_run_program(
             None,
-            r#"
+            r"
             (extract b)
-            "#,
+            ",
         )
         .unwrap();
 
@@ -332,9 +332,9 @@ fn test_simple_extract9() {
     let outputs = egraph
         .parse_and_run_program(
             None,
-            r#"
+            r"
             (extract c)
-            "#,
+            ",
         )
         .unwrap();
 
@@ -353,7 +353,7 @@ fn test_extract_variants1() {
     let outputs = egraph
         .parse_and_run_program(
             None,
-            r#"
+            r"
              (datatype Term
                (Origin :cost 0)
                (BigStep Term :cost 10)
@@ -369,7 +369,7 @@ fn test_extract_variants1() {
              (let tssss (SmallStep tsss))
              (union tssss tb)
              (extract tb 3)
-             "#,
+             ",
         )
         .unwrap();
     assert_eq!(
@@ -386,13 +386,13 @@ fn test_subsumed_unextractable_action_extract() {
     let outputs = egraph
         .parse_and_run_program(
             None,
-            r#"
+            r"
             (datatype Math)
             (constructor exp () Math :cost 100)
             (constructor cheap () Math :cost 1)
             (union (exp) (cheap))
             (extract (exp))
-            "#,
+            ",
         )
         .unwrap();
     // Originally should give back numeric term
@@ -404,10 +404,10 @@ fn test_subsumed_unextractable_action_extract() {
     let outputs = egraph
         .parse_and_run_program(
             None,
-            r#"
+            r"
             (subsume (cheap))
             (extract (exp))
-            "#,
+            ",
         )
         .unwrap();
     assert!(matches!(
@@ -424,7 +424,7 @@ fn test_subsume_unextractable_insert_and_merge() {
     let outputs = egraph
         .parse_and_run_program(
             None,
-            r#"
+            r"
             (datatype Expr
                 (f Expr)
                 (Num i64))
@@ -437,7 +437,7 @@ fn test_subsume_unextractable_insert_and_merge() {
               (union (Num 2) (Num 1))
               (union (f (Num 2)) (exp))
               (extract (f (Num 2)))
-            "#,
+            ",
         )
         .unwrap();
     assert!(matches!(
@@ -493,7 +493,7 @@ fn test_rewrite_subsumed_unextractable() {
     let outputs = egraph
         .parse_and_run_program(
             None,
-            r#"
+            r"
             (datatype Math)
             (constructor exp () Math :cost 100)
             (constructor cheap () Math :cost 1)
@@ -501,7 +501,7 @@ fn test_rewrite_subsumed_unextractable() {
             (cheap)
             (run 1)
             (extract (cheap))
-            "#,
+            ",
         )
         .unwrap();
     // Should give back expenive term, because cheap is unextractable
@@ -518,7 +518,7 @@ fn test_rewrite_subsumed() {
     let outputs = egraph
         .parse_and_run_program(
             None,
-            r#"
+            r"
             (datatype Math)
             (constructor exp () Math :cost 100)
             (constructor most-exp () Math :cost 1000)
@@ -529,7 +529,7 @@ fn test_rewrite_subsumed() {
             (rewrite (most-exp) (cheap))
             (run 1)
             (extract (most-exp))
-            "#,
+            ",
         )
         .unwrap();
     assert_eq!(outputs[2].to_string(), "(exp)\n");
@@ -544,7 +544,7 @@ fn test_subsume() {
     let outputs = egraph
         .parse_and_run_program(
             None,
-            r#"
+            r"
         (datatype Math
           (Add Math Math)
           (Num i64))
@@ -555,7 +555,7 @@ fn test_subsume() {
         (subsume (Add (Num 1) (Num 2)))
         (run 1)
         (extract y 10)
-        "#,
+        ",
         )
         .unwrap();
     assert!(matches!(
@@ -566,13 +566,13 @@ fn test_subsume() {
     let outputs = egraph
         .parse_and_run_program(
             None,
-            r#"
+            r"
         ;; add something equal to x that can be extracted:
         (constructor otherConst () Math)
         (let other (otherConst))
         (union x other)
         (extract x 10)
-        "#,
+        ",
         )
         .unwrap();
     assert!(matches!(
@@ -589,11 +589,11 @@ fn test_subsume_custom() {
     let mut egraph = EGraph::default();
     let res = egraph.parse_and_run_program(
         None,
-        r#"
+        r"
         (function one () i64 :no-merge)
         (set (one) 1)
         (subsume (one))
-        "#,
+        ",
     );
     assert!(res.is_err());
 }
@@ -603,7 +603,7 @@ fn test_subsume_ok() {
     let mut egraph = EGraph::default();
     let res = egraph.parse_and_run_program(
         None,
-        r#"
+        r"
         (sort E)
         (constructor one () E)
         (constructor two () E)
@@ -616,7 +616,7 @@ fn test_subsume_ok() {
         (R 1)
         (subsume (R 1))
         (subsume (R 2))
-        "#,
+        ",
     );
     assert!(res.is_ok());
 }
@@ -628,11 +628,11 @@ fn test_cant_subsume_merge() {
     let mut egraph = EGraph::default();
     let res = egraph.parse_and_run_program(
         None,
-        r#"
+        r"
         (constructor one () i64 :merge old)
         (set (one) 1)
         (subsume (one))
-        "#,
+        ",
     );
     assert!(res.is_err());
 }
@@ -644,12 +644,12 @@ fn test_value_to_classid() {
     let outputs = egraph
         .parse_and_run_program(
             None,
-            r#"
+            r"
             (datatype Math)
             (constructor exp () Math )
             (exp)
             (extract (exp))
-            "#,
+            ",
         )
         .unwrap();
     let CommandOutput::ExtractBest(termdag, _cost, term) = outputs[0].clone() else {
@@ -658,7 +658,7 @@ fn test_value_to_classid() {
     let expr = termdag.term_to_expr(&term, span!());
     let (sort, value) = egraph.eval_expr(&expr).unwrap();
 
-    let serialize_output = egraph.serialize(SerializeConfig::default());
+    let serialize_output = egraph.serialize(&SerializeConfig::default());
     assert!(serialize_output.is_complete());
     let class_id = egraph.value_to_class_id(&sort, value);
     assert!(serialize_output.egraph.class_data.get(&class_id).is_some());
@@ -683,7 +683,7 @@ fn test_serialize_617() {
     let mut egraph = EGraph::default();
     egraph.parse_and_run_program(None, program).unwrap();
 
-    let serialize_output = egraph.serialize(SerializeConfig::default());
+    let serialize_output = egraph.serialize(&SerializeConfig::default());
     assert!(serialize_output.is_complete());
     assert_eq!(serialize_output.egraph.class_data.len(), 6);
     assert_eq!(serialize_output.egraph.nodes.len(), 12);
@@ -696,18 +696,18 @@ fn test_serialize_subsume_status() {
     egraph
         .parse_and_run_program(
             None,
-            r#"
+            r"
             (datatype Math)
             (constructor a () Math )
             (constructor b () Math )
             (a)
             (b)
             (subsume (a))
-            "#,
+            ",
         )
         .unwrap();
 
-    let serialize_output = egraph.serialize(SerializeConfig::default());
+    let serialize_output = egraph.serialize(&SerializeConfig::default());
     assert!(serialize_output.is_complete());
     let a_id = egraph.to_node_id(
         None,
@@ -788,16 +788,16 @@ fn test_serialize_message_max_functions() {
     egraph
         .parse_and_run_program(
             None,
-            r#"
+            r"
             (datatype A)
             (constructor a () A)
             (constructor b () A)
             (constructor c () A)
             (a) (b) (c)
-            "#,
+            ",
         )
         .unwrap();
-    let serialize_output = egraph.serialize(SerializeConfig {
+    let serialize_output = egraph.serialize(&SerializeConfig {
         max_functions: Some(2),
         max_calls_per_function: None,
         include_temporary_functions: false,
@@ -814,14 +814,14 @@ fn test_serialize_message_max_calls_per_function() {
     egraph
         .parse_and_run_program(
             None,
-            r#"
+            r"
             (datatype N)
             (constructor mk (i64) N)
             (mk 0) (mk 1) (mk 2) (mk 3)
-            "#,
+            ",
         )
         .unwrap();
-    let serialize_output = egraph.serialize(SerializeConfig {
+    let serialize_output = egraph.serialize(&SerializeConfig {
         max_functions: None,
         max_calls_per_function: Some(2),
         include_temporary_functions: false,

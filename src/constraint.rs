@@ -1,9 +1,11 @@
 use crate::{
+    ArcSort, AtomTerm, CorrespondingVar, FreshGen, Hash, HashSet, MappedAction, ResolvedAction,
+    ResolvedActions, ResolvedCall, ResolvedExpr, ResolvedExprExt, ResolvedFact, ResolvedVar,
+    SymbolGen, TypeError, TypeInfo, constraint,
     core::{
         Atom, CoreAction, CoreRule, GenericCoreActions, GenericCoreRule, HeadOrEq, Query,
         StringOrEq,
     },
-    *,
 };
 use std::{cmp, rc::Rc};
 // Use immutable hashmap for performance
@@ -39,6 +41,9 @@ pub trait Constraint<Var, Value>: dyn_clone::DynClone {
     ///
     /// `update` is allowed to modify the constraint itself, e.g. to convert a delayed constraint into an immediate one.
     /// The `key` function gets a string representation of the value for display.
+    ///
+    /// # Errors
+    /// If the constraint cannot be satisfied.
     fn update(
         &mut self,
         assignment: &mut Assignment<Var, Value>,
@@ -73,6 +78,7 @@ where
 }
 
 /// Creates a conjunction constraint that requires all sub-constraints to be satisfied.
+#[must_use]
 pub fn and<Var, Value>(cs: Vec<Box<dyn Constraint<Var, Value>>>) -> Box<dyn Constraint<Var, Value>>
 where
     Var: cmp::Eq + PartialEq + Hash + Clone + Debug + 'static,
@@ -84,6 +90,7 @@ where
 /// Creates an exclusive-or constraint that requires exactly one sub-constraint to be satisfied.
 /// The constraint proceeds if exactly one sub-constraint can be satisfied and all others lead to failure.
 /// The constraint fails if zero sub-constraints can be satisfied.
+#[must_use]
 pub fn xor<Var, Value>(cs: Vec<Box<dyn Constraint<Var, Value>>>) -> Box<dyn Constraint<Var, Value>>
 where
     Var: cmp::Eq + PartialEq + Hash + Clone + Debug + 'static,
@@ -94,6 +101,7 @@ where
 
 /// Creates a constraint that always fails with the given impossible constraint.
 /// This is used to signal type errors during constraint solving.
+#[must_use]
 pub fn impossible<Var, Value>(constraint: ImpossibleConstraint) -> Box<dyn Constraint<Var, Value>>
 where
     Var: cmp::Eq + PartialEq + Hash + Clone + Debug + 'static,
@@ -156,7 +164,7 @@ where
             let constraint = delayed(&watch_vals);
             self.constraint = DelayedConstraint::Constraint(constraint);
             updated = true;
-        };
+        }
 
         // The constraint must be immediate now.
         let DelayedConstraint::Constraint(constraint) = &mut self.constraint else {
@@ -170,10 +178,10 @@ where
         let vars: String = self
             .watch_vars
             .iter()
-            .map(|v| format!("{:?}", v))
+            .map(|v| format!("{v:?}"))
             .collect::<Vec<_>>()
             .join(", ");
-        format!("{} => {}({})", vars, self.name, vars)
+        format!("{vars} => {}({vars})", self.name)
     }
 }
 
@@ -271,7 +279,7 @@ where
     ) -> Result<bool, ConstraintError<Var, Value>> {
         let orig_assignment = assignment.clone();
         let mut updated = false;
-        for c in self.0.iter_mut() {
+        for c in &mut self.0 {
             match c.update(assignment, key) {
                 Ok(upd) => updated |= upd,
                 Err(error) => {
@@ -416,6 +424,7 @@ pub enum ConstraintError<Var, Value> {
 
 impl ConstraintError<AtomTerm, ArcSort> {
     /// Converts a [`ConstraintError`] produced by type checking into a type error.
+    #[must_use]
     pub fn to_type_error(&self) -> TypeError {
         match &self {
             ConstraintError::InconsistentConstraint(x, v1, v2) => TypeError::Mismatch {
@@ -425,6 +434,7 @@ impl ConstraintError<AtomTerm, ArcSort> {
             },
             ConstraintError::UnconstrainedVar(v) => TypeError::InferenceFailure(v.to_expr()),
             ConstraintError::NoConstraintSatisfied(constraints) => TypeError::AllAlternativeFailed(
+                #[allow(clippy::redundant_closure_for_method_calls)]
                 constraints.iter().map(|c| c.to_type_error()).collect(),
             ),
             ConstraintError::ImpossibleCaseIdentified(ImpossibleConstraint::ArityMismatch {
@@ -485,7 +495,7 @@ impl<Var, Value> Default for Problem<Var, Value> {
 
 /// A mapping from variables to their assigned values.
 /// This is the result of constraint solving.
-/// Uses an immutable HashMap for efficient cloning during constraint solving.
+/// Uses an immutable `HashMap` for efficient cloning during constraint solving.
 #[derive(Clone)]
 pub struct Assignment<Var, Value>(pub HashMap<Var, Value>);
 
@@ -541,6 +551,7 @@ impl Assignment<AtomTerm, ArcSort> {
                     .iter()
                     .map(|arg| self.annotate_expr(arg, typeinfo))
                     .collect();
+                #[allow(clippy::redundant_closure_for_method_calls)]
                 let types: Vec<_> = args
                     .iter()
                     .map(|arg| arg.output_type())
@@ -617,6 +628,7 @@ impl Assignment<AtomTerm, ArcSort> {
                     .map(|child| self.annotate_expr(child, typeinfo))
                     .collect();
                 let rhs = self.annotate_expr(rhs, typeinfo);
+                #[allow(clippy::redundant_closure_for_method_calls)]
                 let types: Vec<_> = children
                     .iter()
                     .map(|child| child.output_type())
@@ -647,6 +659,7 @@ impl Assignment<AtomTerm, ArcSort> {
                     .iter()
                     .map(|child| self.annotate_expr(child, typeinfo))
                     .collect();
+                #[allow(clippy::redundant_closure_for_method_calls)]
                 let types: Vec<_> = children.iter().map(|child| child.output_type()).collect();
                 let resolved_call =
                     ResolvedCall::from_resolution_func_types(head, &types, typeinfo)
@@ -705,12 +718,12 @@ where
         let mut changed = true;
         while changed {
             changed = false;
-            for constraint in self.constraints.iter_mut() {
+            for constraint in &mut self.constraints {
                 changed |= constraint.update(&mut assignment, key)?;
             }
         }
 
-        for v in self.range.iter() {
+        for v in &self.range {
             if !assignment.0.contains_key(v) {
                 return Err(ConstraintError::UnconstrainedVar(v.clone()));
             }
@@ -740,7 +753,7 @@ impl Problem<AtomTerm, ArcSort> {
         typeinfo: &TypeInfo,
         symbol_gen: &mut SymbolGen,
     ) -> Result<(), TypeError> {
-        for action in actions.0.iter() {
+        for action in &actions.0 {
             self.constraints
                 .extend(action.get_constraints(typeinfo, symbol_gen)?);
 
@@ -774,15 +787,9 @@ impl Problem<AtomTerm, ArcSort> {
         Ok(())
     }
 
-    pub(crate) fn assign_local_var_type(
-        &mut self,
-        var: &str,
-        span: Span,
-        sort: ArcSort,
-    ) -> Result<(), TypeError> {
+    pub(crate) fn assign_local_var_type(&mut self, var: &str, span: Span, sort: ArcSort) {
         self.add_binding(AtomTerm::Var(span.clone(), var.to_owned()), sort);
         self.range.insert(AtomTerm::Var(span, var.to_owned()));
-        Ok(())
     }
 }
 
@@ -886,7 +893,17 @@ fn get_atom_application_constraints(
     if let Some(typ) = type_info.get_func_type(head) {
         let mut constraints = vec![];
         // arity mismatch
-        if typ.input.len() + 1 != args.len() {
+        if typ.input.len() + 1 == args.len() {
+            for (arg_typ, arg) in typ
+                .input
+                .iter()
+                .cloned()
+                .chain(once(typ.output.clone()))
+                .zip(args.iter().cloned())
+            {
+                constraints.push(constraint::assign(arg, arg_typ));
+            }
+        } else {
             constraints.push(constraint::impossible(
                 ImpossibleConstraint::ArityMismatch {
                     atom: Atom {
@@ -897,16 +914,6 @@ fn get_atom_application_constraints(
                     expected: typ.input.len() + 1,
                 },
             ));
-        } else {
-            for (arg_typ, arg) in typ
-                .input
-                .iter()
-                .cloned()
-                .chain(once(typ.output.clone()))
-                .zip(args.iter().cloned())
-            {
-                constraints.push(constraint::assign(arg, arg_typ));
-            }
         }
         xor_constraints.push(constraints);
     }
@@ -975,12 +982,14 @@ pub struct SimpleTypeConstraint {
 
 impl SimpleTypeConstraint {
     /// Constructs a `SimpleTypeConstraint`
+    #[must_use]
     pub fn new(name: &str, sorts: Vec<ArcSort>, span: Span) -> SimpleTypeConstraint {
         let name = name.to_owned();
         SimpleTypeConstraint { name, sorts, span }
     }
 
     /// Converts self to a boxed type constraint.
+    #[must_use]
     pub fn into_box(self) -> Box<dyn TypeConstraint> {
         Box::new(self)
     }
@@ -992,7 +1001,14 @@ impl TypeConstraint for SimpleTypeConstraint {
         arguments: &[AtomTerm],
         _typeinfo: &TypeInfo,
     ) -> Vec<Box<dyn Constraint<AtomTerm, ArcSort>>> {
-        if arguments.len() != self.sorts.len() {
+        if arguments.len() == self.sorts.len() {
+            arguments
+                .iter()
+                .cloned()
+                .zip(self.sorts.iter().cloned())
+                .map(|(arg, sort)| constraint::assign(arg, sort))
+                .collect()
+        } else {
             vec![constraint::impossible(
                 ImpossibleConstraint::ArityMismatch {
                     atom: Atom {
@@ -1003,13 +1019,6 @@ impl TypeConstraint for SimpleTypeConstraint {
                     expected: self.sorts.len(),
                 },
             )]
-        } else {
-            arguments
-                .iter()
-                .cloned()
-                .zip(self.sorts.iter().cloned())
-                .map(|(arg, sort)| constraint::assign(arg, sort))
-                .collect()
         }
     }
 }
@@ -1028,6 +1037,7 @@ pub struct AllEqualTypeConstraint {
 
 impl AllEqualTypeConstraint {
     /// Creates the `AllEqualTypeConstraint`.
+    #[must_use]
     pub fn new(name: &str, span: Span) -> AllEqualTypeConstraint {
         AllEqualTypeConstraint {
             name: name.to_owned(),
@@ -1039,6 +1049,7 @@ impl AllEqualTypeConstraint {
     }
 
     /// Converts self into a boxed type constraint.
+    #[must_use]
     pub fn into_box(self) -> Box<dyn TypeConstraint> {
         Box::new(self)
     }
@@ -1046,6 +1057,7 @@ impl AllEqualTypeConstraint {
     /// Requires all arguments to have the given sort.
     /// If `with_output_sort` is not specified, this requirement
     /// also applies to the output argument.
+    #[must_use]
     pub fn with_all_arguments_sort(mut self, sort: ArcSort) -> Self {
         self.sort = Some(sort);
         self
@@ -1053,12 +1065,14 @@ impl AllEqualTypeConstraint {
 
     /// Requires the length of arguments to be `exact_length`.
     /// Note this includes both input arguments and output argument.
+    #[must_use]
     pub fn with_exact_length(mut self, exact_length: usize) -> Self {
         self.exact_length = Some(exact_length);
         self
     }
 
     /// Requires the output argument to have the given sort.
+    #[must_use]
     pub fn with_output_sort(mut self, output_sort: ArcSort) -> Self {
         self.output = Some(output_sort);
         self
@@ -1071,9 +1085,10 @@ impl TypeConstraint for AllEqualTypeConstraint {
         mut arguments: &[AtomTerm],
         _typeinfo: &TypeInfo,
     ) -> Vec<Box<dyn Constraint<AtomTerm, ArcSort>>> {
-        if arguments.is_empty() {
-            panic!("all arguments should have length > 0")
-        }
+        assert!(
+            !arguments.is_empty(),
+            "all arguments should have length > 0"
+        );
 
         match self.exact_length {
             Some(exact_length) if exact_length != arguments.len() => {
@@ -1104,7 +1119,7 @@ impl TypeConstraint for AllEqualTypeConstraint {
                     .iter()
                     .cloned()
                     .map(|arg| constraint::assign(arg, sort.clone())),
-            )
+            );
         } else if let Some((first, rest)) = arguments.split_first() {
             constraints.extend(
                 rest.iter()
@@ -1136,11 +1151,11 @@ pub(crate) fn grounded_check(
         range,
     };
 
-    for atom in body.atoms.iter() {
+    for atom in &body.atoms {
         let mut add_global_and_literal = false;
         match &atom.head {
             HeadOrEq::Head(ResolvedCall::Func(_)) => {
-                for arg in atom.args.iter() {
+                for arg in &atom.args {
                     problem.constraints.push(assign(arg.clone(), ()));
                 }
             }
@@ -1148,7 +1163,7 @@ pub(crate) fn grounded_check(
                 let (out, inp) = atom.args.split_last().unwrap();
                 let out = out.clone();
                 problem.constraints.push(implies(
-                    format!("grounded_{:?}", out),
+                    format!("grounded_{out:?}"),
                     inp.to_vec(),
                     Rc::new(move |_| assign(out.clone(), ())),
                 ));
@@ -1163,7 +1178,7 @@ pub(crate) fn grounded_check(
             }
         }
         if add_global_and_literal {
-            for arg in atom.args.iter() {
+            for arg in &atom.args {
                 match arg {
                     ResolvedAtomTerm::Global(..) | ResolvedAtomTerm::Literal(..) => {
                         problem.constraints.push(assign(arg.clone(), ()));
@@ -1174,14 +1189,11 @@ pub(crate) fn grounded_check(
         }
     }
 
-    let _assignment = problem.solve(|_| "grounded").map_err(|err| match err {
+    let _assignment = problem.solve(|()| "grounded").map_err(|err| match err {
         ConstraintError::UnconstrainedVar(ResolvedAtomTerm::Var(span, v)) => {
             TypeError::Ungrounded(v.to_string(), span)
         }
-        _ => panic!(
-            "unexpected constraint error in groundedness check {:?}",
-            err
-        ),
+        _ => panic!("unexpected constraint error in groundedness check {err:?}"),
     })?;
 
     Ok(())

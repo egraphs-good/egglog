@@ -84,7 +84,7 @@ pub trait Sort: Any + Send + Sync + Debug {
 
     /// Return the serialized name of the sort
     ///
-    /// Only used for container sorts, which cannot be serialized with make_expr so need an explicit name
+    /// Only used for container sorts, which cannot be serialized with `make_expr` so need an explicit name
     fn serialized_name(&self, _container_values: &ContainerValues, _value: Value) -> String {
         self.name().to_owned()
     }
@@ -104,38 +104,31 @@ pub trait Sort: Any + Send + Sync + Debug {
 
     /// Return the type id of values that this sort represents.
     ///
-    /// Every non-EqSort sort should return Some(TypeId).
+    /// Every non-EqSort sort should return `Some(TypeId)`.
     fn value_type(&self) -> Option<TypeId>;
 
     fn register_primitives(self: Arc<Self>, eg: &mut EGraph) {
         let _ = eg;
     }
 
-    /// Reconstruct a container value in a TermDag
+    /// Reconstruct a container value in a `TermDag`
     fn reconstruct_termdag_container(
         &self,
-        container_values: &ContainerValues,
-        value: Value,
-        termdag: &mut TermDag,
-        element_terms: Vec<Term>,
+        _container_values: &ContainerValues,
+        _value: Value,
+        _termdag: &mut TermDag,
+        _element_terms: Vec<Term>,
     ) -> Term {
-        let _container_values = container_values;
-        let _value = value;
-        let _termdag = termdag;
-        let _element_terms = element_terms;
         todo!("reconstruct_termdag_container: {}", self.name());
     }
 
-    /// Reconstruct a leaf primitive value in a TermDag
+    /// Reconstruct a leaf primitive value in a `TermDag`
     fn reconstruct_termdag_base(
         &self,
-        base_values: &BaseValues,
-        value: Value,
-        termdag: &mut TermDag,
+        _base_values: &BaseValues,
+        _value: Value,
+        _termdag: &mut TermDag,
     ) -> Term {
-        let _base_values = base_values;
-        let _value = value;
-        let _termdag = termdag;
         todo!("reconstruct_termdag_leaf: {}", self.name());
     }
 }
@@ -147,6 +140,8 @@ pub trait Sort: Any + Send + Sync + Debug {
 pub trait Presort {
     fn presort_name() -> &'static str;
     fn reserved_primitives() -> Vec<&'static str>;
+    /// # Errors
+    /// If attempting to construct the sort leads to an error.
     fn make_sort(
         typeinfo: &mut TypeInfo,
         name: String,
@@ -185,6 +180,7 @@ impl Sort for EqSort {
     }
 }
 
+#[must_use]
 pub fn literal_sort(lit: &Literal) -> ArcSort {
     match lit {
         Literal::Int(_) => I64Sort.to_arcsort(),

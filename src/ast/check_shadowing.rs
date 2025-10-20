@@ -1,4 +1,6 @@
-use crate::*;
+use crate::{
+    Debug, Error, HashMap, ResolvedAction, ResolvedExpr, ResolvedFact, ResolvedNCommand, Span,
+};
 
 #[derive(Clone, Debug, Default)]
 pub(crate) struct Names(HashMap<String, Span>);
@@ -43,16 +45,7 @@ impl Names {
                 let mut inner = self.clone();
                 inner.check_shadowing(command)
             }
-            ResolvedNCommand::Extract(..) => Ok(()),
-            ResolvedNCommand::RunSchedule(..) => Ok(()),
-            ResolvedNCommand::PrintOverallStatistics => Ok(()),
-            ResolvedNCommand::PrintFunction(..) => Ok(()),
-            ResolvedNCommand::PrintSize(..) => Ok(()),
-            ResolvedNCommand::Input { .. } => Ok(()),
-            ResolvedNCommand::Output { .. } => Ok(()),
-            ResolvedNCommand::Push(..) => Ok(()),
-            ResolvedNCommand::Pop(..) => Ok(()),
-            ResolvedNCommand::UserDefined(..) => Ok(()),
+            _ => Ok(()),
         }
     }
 
@@ -68,9 +61,9 @@ impl Names {
                     }
                 }
                 ResolvedExpr::Call(_span, _func, args) => {
-                    args.iter().for_each(|e| get_expr_names(e, inner))
+                    args.iter().for_each(|e| get_expr_names(e, inner));
                 }
-            };
+            }
         }
 
         let mut inner = Names::default();

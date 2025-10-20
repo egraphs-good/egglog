@@ -1,4 +1,9 @@
-use super::*;
+use super::{
+    Arc, ArcSort, ContainerSort, ContainerValue, ContainerValues, Debug, EGraph,
+    ExecutionState, Expr, FunctionContainer, FunctionSort, Hash, Presort, Primitive, Rebuilder,
+    SimpleTypeConstraint, Span, Term, TermDag, TypeConstraint, TypeError, TypeInfo, Value,
+    add_primitive, bool, i64,
+};
 use inner::MultiSet;
 
 #[derive(Clone, Debug, PartialEq, Eq, Hash)]
@@ -30,6 +35,7 @@ pub struct MultiSetSort {
 }
 
 impl MultiSetSort {
+    #[must_use]
     pub fn element(&self) -> ArcSort {
         self.element.clone()
     }
@@ -154,7 +160,7 @@ impl ContainerSort for MultiSetSort {
         termdag: &mut TermDag,
         element_terms: Vec<Term>,
     ) -> Term {
-        termdag.app("multiset-of".into(), element_terms)
+        termdag.app("multiset-of".into(), &element_terms)
     }
 
     fn serialized_name(&self, _container_values: &ContainerValues, _: Value) -> String {
@@ -210,7 +216,7 @@ impl Primitive for Map {
             exec_state
                 .clone()
                 .container_values()
-                .register_val(multiset, exec_state),
+                .register_val(&multiset, exec_state),
         )
     }
 }

@@ -17,7 +17,7 @@ pub struct ResolvedVar {
     /// NB: we distinguish between a global reference and a global binding.
     /// The current implementation of `Eq` and `Hash` does not take this field
     /// into consideration.
-    /// Overall, the definition of equality between two ResolvedVars is dicey.
+    /// Overall, the definition of equality between two `ResolvedVar`s is dicey.
     pub is_global_ref: bool,
 }
 
@@ -49,7 +49,7 @@ pub(crate) type ResolvedExpr = GenericExpr<ResolvedCall, ResolvedVar>;
 /// A [`MappedExpr`] arises naturally when you want a mapping between an expression
 /// and its flattened form. It records this mapping by annotating each `Head`
 /// with a `Leaf`, which it maps to in the flattened form.
-/// A useful operation on `MappedExpr`s is [`MappedExprExt::get_corresponding_var_or_lit``].
+/// A useful operation on `MappedExpr`s is [`MappedExprExt::get_corresponding_var_or_lit`].
 pub(crate) type MappedExpr<Head, Leaf> = GenericExpr<CorrespondingVar<Head, Leaf>, Leaf>;
 
 pub(crate) trait ResolvedExprExt {

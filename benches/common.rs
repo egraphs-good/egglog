@@ -6,13 +6,14 @@ static GLOBAL: mimalloc::MiMalloc = mimalloc::MiMalloc;
 
 static CONFIGURE_RAYON: Once = Once::new();
 
+#[allow(clippy::missing_panics_doc)]
 pub fn run_example(filename: &str, program: &str) {
     let mut egraph = EGraph::default();
     egraph
         .parse_and_run_program(Some(filename.to_owned()), program)
         .unwrap();
     // test performance of serialization as well
-    egraph.serialize(egglog::SerializeConfig::default());
+    let _ = egraph.serialize(&egglog::SerializeConfig::default());
 }
 
 #[derive(Clone)]
@@ -28,6 +29,7 @@ impl fmt::Display for BenchCase {
     }
 }
 
+#[allow(clippy::missing_panics_doc)]
 pub fn bench_cases(glob: &str) -> Vec<BenchCase> {
     configure_rayon_once();
 

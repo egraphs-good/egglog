@@ -1,6 +1,6 @@
 use crate::termdag::{Term, TermDag};
 use crate::util::{HashMap, HashSet};
-use crate::*;
+use crate::{ArcSort, Debug, EGraph, Function, HEntry, Value};
 use std::collections::VecDeque;
 
 /// An interface for custom cost model.
@@ -24,26 +24,18 @@ pub trait CostModel<C: Cost> {
     /// The default cost for containers is just the sum of all the elements inside
     fn container_cost(
         &self,
-        egraph: &EGraph,
-        sort: &ArcSort,
-        value: Value,
+        _egraph: &EGraph,
+        _sort: &ArcSort,
+        _value: Value,
         element_costs: &[C],
     ) -> C {
-        let _egraph = egraph;
-        let _sort = sort;
-        let _value = value;
-        element_costs
-            .iter()
-            .fold(C::identity(), |s, c| s.combine(c))
+        element_costs.iter().fold(C::identity(), Cost::combine)
     }
 
     /// Compute the cost of a (non-container) primitive value.
     ///
     /// The default cost for base values is the constant one
-    fn base_value_cost(&self, egraph: &EGraph, sort: &ArcSort, value: Value) -> C {
-        let _egraph = egraph;
-        let _sort = sort;
-        let _value = value;
+    fn base_value_cost(&self, _egraph: &EGraph, _sort: &ArcSort, _value: Value) -> C {
         C::unit()
     }
 }
@@ -58,6 +50,7 @@ pub trait Cost {
 
     /// A binary operation to combine costs, usually addition.
     /// This operation must NOT overflow or panic when given large values!
+    #[must_use]
     fn combine(self, other: &Self) -> Self;
 }
 
@@ -109,7 +102,7 @@ impl CostModel<DefaultCost> for TreeAdditiveCostModel {
         children_cost: &[DefaultCost],
         head_cost: DefaultCost,
     ) -> DefaultCost {
-        children_cost.iter().fold(head_cost, |s, c| s.combine(c))
+        children_cost.iter().fold(head_cost, Cost::combine)
     }
 
     fn enode_cost(
@@ -140,6 +133,9 @@ impl<C: Cost + Ord + Eq + Clone + Debug> Extractor<C> {
     /// Holding a reference to the egraph would enforce this but prevents the extractor being reused.
     ///
     /// For convenience, if the rootsorts is `None`, it defaults to extract all extractable rootsorts.
+    ///
+    /// # Panics
+    /// If internal invariants are unmet.
     pub fn compute_costs_from_rootsorts(
         rootsorts: Option<Vec<ArcSort>>,
         egraph: &EGraph,
@@ -151,8 +147,8 @@ impl<C: Cost + Ord + Eq + Clone + Debug> Extractor<C> {
         let mut rootsorts = rootsorts.unwrap_or_default();
 
         // Built a reverse index from output sort to function head symbols
-        let mut rev_index: HashMap<String, Vec<String>> = Default::default();
-        for func in egraph.functions.iter() {
+        let mut rev_index: HashMap<String, Vec<String>> = HashMap::default();
+        for func in &egraph.functions {
             if !func.1.decl.unextractable {
                 let func_name = func.0.clone();
                 let output_sort_name = func.1.schema.output.name();
@@ -168,15 +164,15 @@ impl<C: Cost + Ord + Eq + Clone + Debug> Extractor<C> {
         }
 
         // Do a BFS to find reachable tables
-        let mut q: VecDeque<ArcSort> = VecDeque::new();
-        let mut seen: HashSet<String> = Default::default();
-        for rootsort in rootsorts.iter() {
+        let mut q = VecDeque::new();
+        let mut seen = HashSet::default();
+        for rootsort in &rootsorts {
             q.push_back(rootsort.clone());
             seen.insert(rootsort.name().to_owned());
         }
 
-        let mut funcs_set: HashSet<String> = Default::default();
-        let mut funcs: Vec<String> = Vec::new();
+        let mut funcs_set = HashSet::default();
+        let mut funcs = Vec::new();
         while !q.is_empty() {
             let sort = q.pop_front().unwrap();
             if sort.is_container_sort() {
@@ -208,18 +204,18 @@ impl<C: Cost + Ord + Eq + Clone + Debug> Extractor<C> {
         }
 
         // Initialize the tables to have the reachable entries
-        let mut costs: HashMap<String, HashMap<Value, C>> = Default::default();
-        let mut topo_rnk: HashMap<String, HashMap<Value, usize>> = Default::default();
+        let mut costs: HashMap<String, HashMap<Value, C>> = HashMap::default();
+        let mut topo_rnk: HashMap<String, HashMap<Value, usize>> = HashMap::default();
         let mut parent_edge: HashMap<String, HashMap<Value, (String, Vec<Value>)>> =
-            Default::default();
+            HashMap::default();
 
-        for func_name in funcs.iter() {
+        for func_name in &funcs {
             let func = egraph.functions.get(func_name).unwrap();
             if !costs.contains_key(func.schema.output.name()) {
                 debug_assert!(func.schema.output.is_eq_sort());
-                costs.insert(func.schema.output.name().to_owned(), Default::default());
-                topo_rnk.insert(func.schema.output.name().to_owned(), Default::default());
-                parent_edge.insert(func.schema.output.name().to_owned(), Default::default());
+                costs.insert(func.schema.output.name().to_owned(), HashMap::default());
+                topo_rnk.insert(func.schema.output.name().to_owned(), HashMap::default());
+                parent_edge.insert(func.schema.output.name().to_owned(), HashMap::default());
             }
         }
 
@@ -245,7 +241,7 @@ impl<C: Cost + Ord + Eq + Clone + Debug> Extractor<C> {
         if sort.is_container_sort() {
             let elements = sort.inner_values(egraph.backend.container_values(), value);
             let mut ch_costs: Vec<C> = Vec::new();
-            for ch in elements.iter() {
+            for ch in &elements {
                 if let Some(c) = self.compute_cost_node(egraph, ch.1, &ch.0) {
                     ch_costs.push(c);
                 } else {
@@ -355,12 +351,12 @@ impl<C: Cost + Ord + Eq + Clone + Debug> Extractor<C> {
         while !ensure_fixpoint {
             ensure_fixpoint = true;
 
-            for func_name in funcs.iter() {
+            for func_name in &funcs {
                 let func = egraph.functions.get(func_name).unwrap();
                 let target_sort = func.schema.output.clone();
 
                 let relax_hyperedge = |row: egglog_bridge::FunctionRow| {
-                    log::debug!("Relaxing a new hyperedge: {:?}", row);
+                    log::debug!("Relaxing a new hyperedge: {row:?}");
                     if !row.subsumed {
                         let target = row.vals.last().unwrap();
                         let mut updated = false;
@@ -402,7 +398,7 @@ impl<C: Cost + Ord + Eq + Clone + Debug> Extractor<C> {
         }
 
         // Save the edges for reconstruction
-        for func_name in funcs.iter() {
+        for func_name in &funcs {
             let func = egraph.functions.get(func_name).unwrap();
             let target_sort = func.schema.output.clone();
 
@@ -452,7 +448,7 @@ impl<C: Cost + Ord + Eq + Clone + Debug> Extractor<C> {
         value: Value,
         sort: &ArcSort,
     ) -> Term {
-        self.reconstruct_termdag_node_helper(egraph, termdag, value, sort, &mut Default::default())
+        self.reconstruct_termdag_node_helper(egraph, termdag, value, sort, &mut HashMap::default())
     }
 
     fn reconstruct_termdag_node_helper(
@@ -471,7 +467,7 @@ impl<C: Cost + Ord + Eq + Clone + Debug> Extractor<C> {
         let term = if sort.is_container_sort() {
             let elements = sort.inner_values(egraph.backend.container_values(), value);
             let mut ch_terms: Vec<Term> = Vec::new();
-            for ch in elements.iter() {
+            for ch in &elements {
                 ch_terms.push(
                     self.reconstruct_termdag_node_helper(egraph, termdag, ch.1, &ch.0, cache),
                 );
@@ -496,7 +492,7 @@ impl<C: Cost + Ord + Eq + Clone + Debug> Extractor<C> {
                     self.reconstruct_termdag_node_helper(egraph, termdag, *value, sort, cache),
                 );
             }
-            termdag.app(func_name.clone(), ch_terms)
+            termdag.app(func_name.clone(), &ch_terms)
         } else {
             // Base value case
             sort.reconstruct_termdag_base(egraph.backend.base_values(), value, termdag)
@@ -515,26 +511,26 @@ impl<C: Cost + Ord + Eq + Clone + Debug> Extractor<C> {
         egraph: &EGraph,
         termdag: &mut TermDag,
         value: Value,
-        sort: ArcSort,
+        sort: &ArcSort,
     ) -> Option<(C, Term)> {
-        match self.compute_cost_node(egraph, value, &sort) {
-            Some(best_cost) => {
-                log::debug!("Best cost for the extract root: {:?}", best_cost);
+        if let Some(best_cost) = self.compute_cost_node(egraph, value, sort) {
+            log::debug!("Best cost for the extract root: {best_cost:?}");
 
-                let term = self.reconstruct_termdag_node(egraph, termdag, value, &sort);
+            let term = self.reconstruct_termdag_node(egraph, termdag, value, sort);
 
-                Some((best_cost, term))
-            }
-            None => {
-                log::error!("Unextractable root {:?} with sort {:?}", value, sort,);
-                None
-            }
+            Some((best_cost, term))
+        } else {
+            log::error!("Unextractable root {value:?} with sort {sort:?}");
+            None
         }
     }
 
     /// A convenience method for extraction.
     ///
     /// This expects the value to be of the unique sort the extractor has been initialized with
+    ///
+    /// # Panics
+    /// If there's more than one rootsort.
     pub fn extract_best(
         &self,
         egraph: &EGraph,
@@ -549,21 +545,24 @@ impl<C: Cost + Ord + Eq + Clone + Debug> Extractor<C> {
             egraph,
             termdag,
             value,
-            self.rootsorts.first().unwrap().clone(),
+            &self.rootsorts.first().unwrap().clone(),
         )
     }
 
     /// Extract variants of an e-class.
     ///
-    /// The variants are selected by first picking `nvairants` e-nodes with the lowest cost from the e-class
+    /// The variants are selected by first picking `nvariants` e-nodes with the lowest cost from the e-class
     /// and then extracting a term from each e-node.
+    ///
+    /// # Panics
+    /// If internal invariants aren't upheld.
     pub fn extract_variants_with_sort(
         &self,
         egraph: &EGraph,
         termdag: &mut TermDag,
         value: Value,
         nvariants: usize,
-        sort: ArcSort,
+        sort: &ArcSort,
     ) -> Vec<(C, Term)> {
         debug_assert!(self.rootsorts.iter().any(|s| { s.name() == sort.name() }));
 
@@ -572,7 +571,7 @@ impl<C: Cost + Ord + Eq + Clone + Debug> Extractor<C> {
 
             let mut root_funcs: Vec<String> = Vec::new();
 
-            for func_name in self.funcs.iter() {
+            for func_name in &self.funcs {
                 // Need an eq on sorts
                 if sort.name()
                     == egraph
@@ -587,7 +586,7 @@ impl<C: Cost + Ord + Eq + Clone + Debug> Extractor<C> {
                 }
             }
 
-            for func_name in root_funcs.iter() {
+            for func_name in &root_funcs {
                 let func = egraph.functions.get(func_name).unwrap();
 
                 let find_root_variants = |row: egglog_bridge::FunctionRow| {
@@ -613,7 +612,7 @@ impl<C: Cost + Ord + Eq + Clone + Debug> Extractor<C> {
                 for (value, sort) in hyperedge.iter().zip(ch_sorts.iter()) {
                     ch_terms.push(self.reconstruct_termdag_node(egraph, termdag, *value, sort));
                 }
-                res.push((cost, termdag.app(func_name, ch_terms)));
+                res.push((cost, termdag.app(func_name, &ch_terms)));
             }
 
             res
@@ -632,6 +631,9 @@ impl<C: Cost + Ord + Eq + Clone + Debug> Extractor<C> {
     /// A convenience method for extracting variants of a value.
     ///
     /// This expects the value to be of the unique sort the extractor has been initialized with.
+    ///
+    /// # Panics
+    /// If there is more than one rootsort.
     pub fn extract_variants(
         &self,
         egraph: &EGraph,
@@ -648,7 +650,7 @@ impl<C: Cost + Ord + Eq + Clone + Debug> Extractor<C> {
             termdag,
             value,
             nvariants,
-            self.rootsorts.first().unwrap().clone(),
+            self.rootsorts.first().unwrap(),
         )
     }
 }

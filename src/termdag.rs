@@ -6,7 +6,7 @@ pub type TermId = usize;
 #[allow(rustdoc::private_intra_doc_links)]
 /// Like [`Expr`]s but with sharing and deduplication.
 ///
-/// Terms refer to their children indirectly via opaque [TermId]s (internally
+/// Terms refer to their children indirectly via opaque [`TermId`]s (internally
 /// these are just `usize`s) that map into an ambient [`TermDag`].
 #[derive(Clone, PartialEq, Eq, Hash, Debug)]
 pub enum Term {
@@ -37,20 +37,25 @@ macro_rules! match_term_app {
 
 impl TermDag {
     /// Returns the number of nodes in this DAG.
+    #[must_use]
     pub fn size(&self) -> usize {
         self.nodes.len()
     }
 
     /// Convert the given term to its id.
     ///
-    /// Panics if the term does not already exist in this [TermDag].
+    /// # Panics
+    /// If the term does not already exist in this [`TermDag`].
+    #[must_use]
     pub fn lookup(&self, node: &Term) -> TermId {
         self.nodes.get_index_of(node).unwrap()
     }
 
     /// Convert the given id to the corresponding term.
     ///
-    /// Panics if the id is not valid.
+    /// # Panics
+    /// If the id is not valid.
+    #[must_use]
     pub fn get(&self, id: TermId) -> &Term {
         self.nodes.get_index(id).unwrap()
     }
@@ -58,8 +63,9 @@ impl TermDag {
     /// Make and return a [`Term::App`] with the given head symbol and children,
     /// and insert into the DAG if it is not already present.
     ///
-    /// Panics if any of the children are not already in the DAG.
-    pub fn app(&mut self, sym: String, children: Vec<Term>) -> Term {
+    /// # Panics
+    /// If any of the children are not already in the DAG.
+    pub fn app(&mut self, sym: String, children: &[Term]) -> Term {
         let node = Term::App(sym, children.iter().map(|c| self.lookup(c)).collect());
 
         self.add_node(&node);
@@ -96,7 +102,7 @@ impl TermDag {
     /// Recursively converts the given expression to a term.
     ///
     /// This involves inserting every subexpression into this DAG. Because
-    /// TermDags are hashconsed, the resulting term is guaranteed to maximally
+    /// `TermDag`s are hashconsed, the resulting term is guaranteed to maximally
     /// share subterms.
     pub fn expr_to_term(&mut self, expr: &GenericExpr<String, String>) -> Term {
         let res = match expr {
@@ -120,6 +126,7 @@ impl TermDag {
     /// Recursively converts the given term to an expression.
     ///
     /// Panics if the term contains subterms that are not in the DAG.
+    #[must_use]
     pub fn term_to_expr(&self, term: &Term, span: Span) -> Expr {
         match term {
             Term::Lit(lit) => Expr::Lit(span, lit.clone()),
@@ -137,6 +144,7 @@ impl TermDag {
     /// Converts the given term to a string.
     ///
     /// Panics if the term or any of its subterms are not in the DAG.
+    #[must_use]
     pub fn to_string(&self, term: &Term) -> String {
         let mut result = String::new();
         // subranges of the `result` string containing already stringified subterms
@@ -161,7 +169,7 @@ impl TermDag {
                         result.push(')');
                     } else {
                         stack.push((id, false, Some(result.len())));
-                        write!(&mut result, "({}", name).unwrap();
+                        write!(&mut result, "({name}").unwrap();
                         for c in children.iter().rev() {
                             stack.push((*c, true, None));
                         }
@@ -200,7 +208,7 @@ mod tests {
 
     #[test]
     fn test_to_from_expr() {
-        let s = r#"(f (g x y) x y (g x y))"#;
+        let s = r"(f (g x y) x y (g x y))";
         let e = Parser::default().get_expr_from_string(None, s).unwrap();
         let mut td = TermDag::default();
         assert_eq!(td.size(), 0);
@@ -228,7 +236,7 @@ mod tests {
 
     #[test]
     fn test_match_term_app() {
-        let s = r#"(f (g x y) x y (g x y))"#;
+        let s = r"(f (g x y) x y (g x y))";
         let (td, t) = parse_term(s);
         match_term_app!(t; {
             ("f", [_, x, _, _]) => {
@@ -236,35 +244,36 @@ mod tests {
                 assert_eq!(
                     td.term_to_expr(td.get(*x), span.clone()),
                     crate::ast::GenericExpr::Var(span, "x".to_owned())
-                )
+                );
             }
-            (head, _) => panic!("unexpected head {}, in {}:{}:{}", head, file!(), line!(), column!())
-        })
+            (head, _) => panic!("unexpected head {head}, in {}:{}:{}", file!(), line!(), column!())
+        });
     }
 
     #[test]
     fn test_to_string() {
-        let s = r#"(f (g x y) x y (g x y))"#;
+        let s = r"(f (g x y) x y (g x y))";
         let (td, t) = parse_term(s);
         assert_eq!(td.to_string(&t), s);
     }
 
     #[test]
     fn test_lookup() {
-        let s = r#"(f (g x y) x y (g x y))"#;
+        let s = r"(f (g x y) x y (g x y))";
         let (td, t) = parse_term(s);
         assert_eq!(td.lookup(&t), td.size() - 1);
     }
 
     #[test]
+    #[allow(clippy::many_single_char_names)]
     fn test_app_var_lit() {
-        let s = r#"(f (g x y) x 7 (g x y))"#;
+        let s = r"(f (g x y) x 7 (g x y))";
         let (mut td, t) = parse_term(s);
         let x = td.var("x".into());
         let y = td.var("y".into());
         let seven = td.lit(7.into());
-        let g = td.app("g".into(), vec![x.clone(), y.clone()]);
-        let t2 = td.app("f".into(), vec![g.clone(), x, seven, g]);
+        let g = td.app("g".into(), &[x.clone(), y.clone()]);
+        let t2 = td.app("f".into(), &[g.clone(), x, seven, g]);
         assert_eq!(t, t2);
     }
 }
