@@ -33,8 +33,8 @@ use ast::*;
 pub use cli::*;
 use constraint::{Constraint, Problem, SimpleTypeConstraint, TypeConstraint};
 use core::{AtomTerm, ResolvedAtomTerm, ResolvedCall};
+use core_relations::{make_external_func, ExternalFunctionId};
 pub use core_relations::{BaseValue, ContainerValue, ExecutionState, Value};
-use core_relations::{ExternalFunctionId, make_external_func};
 use csv::Writer;
 pub use egglog_add_primitive::add_primitive;
 use egglog_ast::generic_ast::{Change, GenericExpr, Literal};
@@ -46,7 +46,7 @@ use egglog_core_relations as core_relations;
 use egglog_numeric_id as numeric_id;
 use extract::{CostModel, DefaultCost, Extractor, TreeAdditiveCostModel};
 use indexmap::map::Entry;
-use log::{Level, log_enabled};
+use log::{log_enabled, Level};
 use numeric_id::DenseIdMap;
 use prelude::*;
 use scheduler::{SchedulerId, SchedulerRecord};
@@ -1805,7 +1805,7 @@ impl EGraph {
     pub fn value_to_container<T: ContainerValue>(
         &self,
         x: Value,
-    ) -> Option<impl Deref<Target = T>> {
+    ) -> Option<impl Deref<Target = T> + use<'_, T>> {
         self.backend.container_values().get_val::<T>(x)
     }
 

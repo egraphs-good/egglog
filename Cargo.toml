@@ -13,7 +13,7 @@ members = [
 
 [workspace.package]
 version = "1.0.0"
-edition = "2024"
+edition = "2021"
 description = "egglog is a language that combines the benefits of equality saturation and datalog. It can be used for analysis, optimization, and synthesis of programs. It is the successor to the popular rust library egg."
 repository = "https://github.com/egraphs-good/egglog"
 keywords = ["e-graphs", "egglog", "datalog", "compiler", "equality"]

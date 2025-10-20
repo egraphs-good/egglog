@@ -12,8 +12,8 @@ use std::any::{Any, TypeId};
 // Re-exports in `prelude` for convenience.
 pub use egglog::ast::{Action, Fact, Facts, GenericActions, RustSpan, Span};
 pub use egglog::sort::{BigIntSort, BigRatSort, BoolSort, F64Sort, I64Sort, StringSort, UnitSort};
-pub use egglog::{EGraph, span};
 pub use egglog::{action, actions, datatype, expr, fact, facts, sort, vars};
+pub use egglog::{span, EGraph};
 
 pub mod exprs {
     use super::*;
@@ -260,7 +260,7 @@ impl RustRuleContext<'_, '_> {
     pub fn value_to_container<T: ContainerValue>(
         &mut self,
         x: Value,
-    ) -> Option<impl Deref<Target = T>> {
+    ) -> Option<impl Deref<Target = T> + use<'_, T>> {
         self.exec_state.container_values().get_val::<T>(x)
     }
 
