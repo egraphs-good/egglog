@@ -131,7 +131,7 @@ fn basic_parallel_vec_push() {
         .into_iter()
         .flat_map(|x| x.join().unwrap())
         .collect::<Vec<usize>>();
-    results.sort();
+    results.sort_unstable();
     assert_eq!(results.len(), N_THREADS * PER_THREAD);
     assert_eq!(
         results,
@@ -140,7 +140,7 @@ fn basic_parallel_vec_push() {
     let slice = v.read();
     assert_eq!(slice.len(), N_THREADS * PER_THREAD);
     let mut sorted = slice.to_vec();
-    sorted.sort();
+    sorted.sort_unstable();
     assert_eq!(
         results,
         (0..(N_THREADS * PER_THREAD)).collect::<Vec<usize>>()
@@ -173,7 +173,7 @@ fn basic_parallel_vec_write() {
     finish.notify();
     threads.into_iter().for_each(|x| x.join().unwrap());
     let mut v = Arc::try_unwrap(v).ok().unwrap().finish();
-    v.sort();
+    v.sort_unstable();
     assert_eq!(v, (0..200).collect::<Vec<usize>>());
 }
 

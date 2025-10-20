@@ -13,7 +13,7 @@ use crate::{MutexReader, ReadOptimizedLock};
 /// While the writes happen, reads to the vector can proceed without being
 /// blocked by writes (except during a vector resize). The final vector can be
 /// extracted using the `finish` method. Elements written to the vector behind a
-/// ParallelVecWriter will not be dropped unless `finish` is called.
+/// `ParallelVecWriter` will not be dropped unless `finish` is called.
 pub struct ParallelVecWriter<T> {
     data: ReadOptimizedLock<Vec<T>>,
     end_len: AtomicUsize,
@@ -33,6 +33,7 @@ impl<T> UnsafeReadAccess<'_, T> {
     /// `idx` must be either less than the length of the vector when the underlying
     /// [`ParallelVecWriter`] was created, or it must be within bounds of a completed write to
     /// [`ParallelVecWriter::write_contents`].
+    #[must_use]
     pub unsafe fn get_unchecked(&self, idx: usize) -> &T {
         unsafe { &*self.reader.as_ptr().add(idx) }
     }
@@ -43,6 +44,7 @@ impl<T> UnsafeReadAccess<'_, T> {
     /// `slice`'s contents must be either within the vector when the underlying
     /// [`ParallelVecWriter`] was created, or they must be within bounds of a completed write to
     /// [`ParallelVecWriter::write_contents`].
+    #[must_use]
     pub unsafe fn get_unchecked_slice(&self, slice: Range<usize>) -> &[T] {
         unsafe {
             let start: *const T = self.reader.as_ptr().add(slice.start);
@@ -52,6 +54,7 @@ impl<T> UnsafeReadAccess<'_, T> {
 }
 
 impl<T> ParallelVecWriter<T> {
+    #[must_use]
     pub fn new(data: Vec<T>) -> Self {
         let start_len = data.len();
         let end_len = AtomicUsize::new(start_len);
@@ -62,7 +65,7 @@ impl<T> ParallelVecWriter<T> {
     }
 
     /// Get read access to the portion of the vector that was present before the
-    /// ParallelVecWriter was created. Unlike the `with_` methods, callers
+    /// `ParallelVecWriter` was created. Unlike the `with_` methods, callers
     /// should be careful about keeping the object returned from this method
     /// around for too long.
     pub fn read_access(&self) -> impl Deref<Target = [T]> + '_ {
@@ -96,7 +99,7 @@ impl<T> ParallelVecWriter<T> {
     ///
     /// # Panics
     /// This method panics if `idx` is greater than or equal to the length of
-    /// the vector when the ParallelVecWriter was created.
+    /// the vector when the `ParallelVecWriter` was created.
     pub fn with_index<R>(&self, idx: usize, f: impl FnOnce(&T) -> R) -> R {
         f(&self.read_access()[idx])
     }
@@ -105,7 +108,7 @@ impl<T> ParallelVecWriter<T> {
     ///
     /// # Panics
     /// This method panics if `slice.end` is greater than or equal to the length
-    /// of the vector when the ParallelVecWriter was created.
+    /// of the vector when the `ParallelVecWriter` was created.
     pub fn with_slice<R>(&self, slice: Range<usize>, f: impl FnOnce(&[T]) -> R) -> R {
         f(&self.read_access()[slice])
     }
@@ -166,7 +169,7 @@ impl<T> ParallelVecWriter<T> {
         let reader = self.data.read();
         debug_assert!(reader.capacity() >= start + items.len());
         unsafe {
-            let mut mut_ptr = (reader.as_ptr() as *mut T).add(start);
+            let mut mut_ptr = (reader.as_ptr().cast_mut()).add(start);
             for item in items {
                 written += 1;
                 std::ptr::write(mut_ptr, item);

@@ -4,7 +4,7 @@ use divan::{Bencher, counter::ItemsCount};
 use egglog_concurrency::{MutexReader, ReadOptimizedLock};
 
 fn main() {
-    divan::main()
+    divan::main();
 }
 #[divan::bench(threads = [1, 2, 4, 8, 16, 20], types = [ReadOptimizedLock<usize>, RwLock<usize>], sample_size = 100)]
 fn read_contention<T: ReadLock<usize>>(bencher: Bencher) {
@@ -25,8 +25,8 @@ fn read_throughput<const N: usize, T: ReadLock<usize>>(bencher: Bencher) {
         .unwrap();
     bencher
         .with_inputs(|| ())
-        .input_counter(|_| ItemsCount::new(TOTAL_ITEMS))
-        .bench_values(|_| {
+        .input_counter(|()| ItemsCount::new(TOTAL_ITEMS))
+        .bench_values(|()| {
             let lock = T::new(0);
             pool.scope(|scope| {
                 for _ in 0..N_BATCHES {
@@ -36,7 +36,7 @@ fn read_throughput<const N: usize, T: ReadLock<usize>>(bencher: Bencher) {
                         }
                     });
                 }
-            })
+            });
         });
 }
 

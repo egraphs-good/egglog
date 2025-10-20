@@ -32,8 +32,7 @@ impl BitSet {
         let reader = self.data.read();
         reader
             .get(cell)
-            .map(|x| x.load(Ordering::Acquire) & (1 << bit) != 0)
-            .unwrap_or(false)
+            .is_some_and(|x| x.load(Ordering::Acquire) & (1 << bit) != 0)
     }
 
     /// Set the bit at index `i` to `val`. If the bitset has not been

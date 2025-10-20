@@ -51,11 +51,13 @@ impl<T> Drop for ConcurrentVec<T> {
 
 impl<T> ConcurrentVec<T> {
     /// Create a new `AsyncVec` with the default capacity (128).
+    #[must_use]
     pub fn new() -> Self {
         Self::with_capacity(128)
     }
 
     /// Create a new `AsyncVec` with the given starting capacity.
+    #[must_use]
     pub fn with_capacity(capacity: usize) -> Self {
         let capacity = capacity.next_power_of_two();
         Self {
@@ -66,6 +68,9 @@ impl<T> ConcurrentVec<T> {
     }
     /// Push `item` onto the vector. Other calls to `push` may have to complete
     /// in order for this item to be visible.
+    ///
+    /// # Panics
+    /// If the write lock is unable to be acquired, e.g. if it's already held in this thread.
     pub fn push(&self, item: T) -> usize {
         let _guard = self.write_lock.lock().unwrap();
         let index = self.head.load(Ordering::Acquire);
@@ -110,15 +115,9 @@ impl<T> Deref for ReadHandle<'_, T> {
     type Target = [T];
 
     fn deref(&self) -> &[T] {
-        // SAFETY: all elements up to `prefix` are valid, and MaybeUninit<T> has
-        // a compatible layout with T so long as T is properly initialized.
-        //
-        // NB: transmuting an UnsafeCell<T> to <T> may not be safe long-term,
-        // even though this code passes miri.
+        // SAFETY: all elements up to `valid_prefix` are valid.
         unsafe {
-            mem::transmute::<&[MaybeUninit<SyncUnsafeCell<T>>], &[T]>(
-                &self.reader[0..self.valid_prefix],
-            )
+            &*(&raw const self.reader[0..self.valid_prefix] as *const [T])
         }
     }
 }

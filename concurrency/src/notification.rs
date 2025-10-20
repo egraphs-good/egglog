@@ -39,11 +39,14 @@ impl Drop for Notification {
 
 impl Notification {
     /// Create a fresh notification.
+    #[must_use]
     pub fn new() -> Self {
         Self::default()
     }
 
     /// Block until `notify` is called.
+    /// # Panics
+    /// If the mutex or condvar can't be acquired.
     pub fn wait(&self) {
         if self.has_been_notified() {
             return;
@@ -54,6 +57,8 @@ impl Notification {
         }
     }
 
+    /// # Panics
+    /// If the mutex or condvar can't be acquired.
     pub fn wait_with_timeout(&self, timeout: Duration) -> bool {
         if self.has_been_notified() {
             return true;
@@ -71,6 +76,9 @@ impl Notification {
 
     /// Notify all threads waiting on this notification, and unblock any future
     /// threads who may wait.
+    ///
+    /// # Panics
+    /// If the mutex or condvar can't be acquired.
     pub fn notify(&self) {
         let _guard = self.mutex.lock().unwrap();
         self.has_been_notified.store(true, Ordering::Release);

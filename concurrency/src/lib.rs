@@ -27,12 +27,12 @@ use std::{
 };
 
 /// A mutex lock optimized for low-contention read access.
-/// The RwLock type in the standard library allows multiple readers to make
+/// The `RwLock` type in the standard library allows multiple readers to make
 /// progress concurrently, but scalability is limited if these read-only
 /// critical sections are small because acquiring a read-side lock still
 /// requires a read-modify-write atomic operation.
 ///
-/// This crate uses RCU techniques from the ArcSwap crate to avoid expensive
+/// This crate uses RCU techniques from the `ArcSwap` crate to avoid expensive
 /// atomic operations when acquiring a shared lock. The downside is that
 /// acquiring a write lock is a good deal more expensive. The intent here is to
 /// use it for parallel egglog where write-side critical sections are fairly
@@ -133,7 +133,6 @@ impl<T> ReadOptimizedLock<T> {
                     let n = n.clone();
                     mem::drop(guard);
                     n.wait();
-                    continue;
                 }
             }
         }
@@ -154,7 +153,7 @@ impl<T> ReadOptimizedLock<T> {
                     }
                     mem::drop((guard, prev));
                     // Do an RCU to trigger an underlying "wait for readers" operation.
-                    self.token.rcu(|x| x.clone());
+                    self.token.rcu(std::clone::Clone::clone);
                     // NB: this wait not be necessary... it isn't clear to me if
                     // this is documented behavior of the crate.
                     readers_done.wait();
