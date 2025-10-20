@@ -4,7 +4,9 @@ use std::hash::Hash;
 use ordered_float::OrderedFloat;
 
 use super::util::ListDisplay;
-use crate::generic_ast::*;
+use crate::generic_ast::{
+    Change, GenericAction, GenericActions, GenericExpr, GenericFact, GenericRule, Literal,
+};
 use crate::span::Span;
 
 // Macro to implement From conversions for Literal types
@@ -38,37 +40,37 @@ where
         write!(f, "(rule (")?;
         for (i, fact) in self.body.iter().enumerate() {
             if i > 0 {
-                write!(f, "{}", indent)?;
+                write!(f, "{indent}")?;
             }
 
-            if i != self.body.len() - 1 {
-                writeln!(f, "{}", fact)?;
+            if i == self.body.len() - 1 {
+                write!(f, "{fact}")?;
             } else {
-                write!(f, "{}", fact)?;
+                writeln!(f, "{fact}")?;
             }
         }
         write!(f, ")\n      (")?;
         for (i, action) in self.head.0.iter().enumerate() {
             if i > 0 {
-                write!(f, "{}", indent)?;
+                write!(f, "{indent}")?;
             }
-            if i != self.head.0.len() - 1 {
-                writeln!(f, "{}", action)?;
+            if i == self.head.0.len() - 1 {
+                write!(f, "{action}")?;
             } else {
-                write!(f, "{}", action)?;
+                writeln!(f, "{action}")?;
             }
         }
-        let ruleset = if !self.ruleset.is_empty() {
+        let ruleset = if self.ruleset.is_empty() {
+            String::new()
+        } else {
             format!(":ruleset {}", self.ruleset)
-        } else {
-            "".into()
         };
-        let name = if !self.name.is_empty() {
+        let name = if self.name.is_empty() {
+            String::new()
+        } else {
             format!(":name \"{}\"", self.name)
-        } else {
-            "".into()
         };
-        write!(f, ")\n{} {} {})", indent, ruleset, name)
+        write!(f, ")\n{indent} {ruleset} {name})")
     }
 }
 
@@ -94,18 +96,16 @@ where
 {
     fn fmt(&self, f: &mut Formatter) -> std::fmt::Result {
         match self {
-            GenericAction::Let(_, lhs, rhs) => write!(f, "(let {} {})", lhs, rhs),
+            GenericAction::Let(_, lhs, rhs) => write!(f, "(let {lhs} {rhs})"),
             GenericAction::Set(_, lhs, args, rhs) => write!(
                 f,
-                "(set ({} {}) {})",
-                lhs,
+                "(set ({lhs} {}) {rhs})",
                 args.iter()
-                    .map(|a| format!("{}", a))
+                    .map(|a| format!("{a}"))
                     .collect::<Vec<_>>()
                     .join(" "),
-                rhs
             ),
-            GenericAction::Union(_, lhs, rhs) => write!(f, "(union {} {})", lhs, rhs),
+            GenericAction::Union(_, lhs, rhs) => write!(f, "(union {lhs} {rhs})"),
             GenericAction::Change(_, change, lhs, args) => {
                 let change_str = match change {
                     Change::Delete => "delete",
@@ -113,17 +113,15 @@ where
                 };
                 write!(
                     f,
-                    "({} ({} {}))",
-                    change_str,
-                    lhs,
+                    "({change_str} ({lhs} {}))",
                     args.iter()
-                        .map(|a| format!("{}", a))
+                        .map(|a| format!("{a}"))
                         .collect::<Vec<_>>()
                         .join(" ")
                 )
             }
-            GenericAction::Panic(_, msg) => write!(f, "(panic \"{}\")", msg),
-            GenericAction::Expr(_, e) => write!(f, "{}", e),
+            GenericAction::Panic(_, msg) => write!(f, "(panic \"{msg}\")"),
+            GenericAction::Expr(_, e) => write!(f, "{e}"),
         }
     }
 }
@@ -159,6 +157,7 @@ where
     Head: Clone + Display,
     Leaf: Clone + PartialEq + Eq + Display + Hash,
 {
+    #[must_use]
     pub fn visit_exprs(
         self,
         f: &mut impl FnMut(GenericExpr<Head, Leaf>) -> GenericExpr<Head, Leaf>,
@@ -182,10 +181,12 @@ where
     Head: Clone + Display,
     Leaf: Clone + PartialEq + Eq + Display + Hash,
 {
+    #[must_use]
     pub fn len(&self) -> usize {
         self.0.len()
     }
 
+    #[must_use]
     pub fn is_empty(&self) -> bool {
         self.0.is_empty()
     }
@@ -194,6 +195,7 @@ where
         self.0.iter()
     }
 
+    #[must_use]
     pub fn visit_exprs(
         self,
         f: &mut impl FnMut(GenericExpr<Head, Leaf>) -> GenericExpr<Head, Leaf>,
@@ -201,10 +203,12 @@ where
         Self(self.0.into_iter().map(|a| a.visit_exprs(f)).collect())
     }
 
+    #[must_use]
     pub fn new(actions: Vec<GenericAction<Head, Leaf>>) -> Self {
         Self(actions)
     }
 
+    #[must_use]
     pub fn singleton(action: GenericAction<Head, Leaf>) -> Self {
         Self(vec![action])
     }
@@ -216,6 +220,7 @@ where
     Leaf: Clone + Eq + Display + Hash,
 {
     // Applys `f` to all expressions in the action.
+    #[must_use]
     pub fn map_exprs(
         &self,
         f: &mut impl FnMut(&GenericExpr<Head, Leaf>) -> GenericExpr<Head, Leaf>,
@@ -249,6 +254,7 @@ where
 
     /// Applys `f` to all sub-expressions (including `self`)
     /// bottom-up, collecting the results.
+    #[must_use]
     pub fn visit_exprs(
         self,
         f: &mut impl FnMut(GenericExpr<Head, Leaf>) -> GenericExpr<Head, Leaf>,
@@ -276,10 +282,12 @@ where
         }
     }
 
+    #[must_use]
     pub fn subst(&self, subst: &mut impl FnMut(&Span, &Leaf) -> GenericExpr<Head, Leaf>) -> Self {
         self.map_exprs(&mut |e| e.subst_leaf(subst))
     }
 
+    #[must_use]
     pub fn map_def_use(self, fvar: &mut impl FnMut(Leaf, bool) -> Leaf) -> Self {
         macro_rules! fvar_expr {
             () => {
@@ -325,6 +333,7 @@ where
     Head: Clone + Display,
     Leaf: Clone + PartialEq + Eq + Display + Hash,
 {
+    #[must_use]
     pub fn visit_exprs(
         self,
         f: &mut impl FnMut(GenericExpr<Head, Leaf>) -> GenericExpr<Head, Leaf>,
@@ -372,9 +381,9 @@ where
 impl<Head: Clone + Display, Leaf: Hash + Clone + Display + Eq> GenericExpr<Head, Leaf> {
     pub fn span(&self) -> Span {
         match self {
-            GenericExpr::Lit(span, _) => span.clone(),
-            GenericExpr::Var(span, _) => span.clone(),
-            GenericExpr::Call(span, _, _) => span.clone(),
+            GenericExpr::Lit(span, _)
+            | GenericExpr::Var(span, _)
+            | GenericExpr::Call(span, _, _) => span.clone(),
         }
     }
 
@@ -417,10 +426,10 @@ impl<Head: Clone + Display, Leaf: Hash + Clone + Display + Eq> GenericExpr<Head,
 
     /// Applys `f` to all sub-expressions (including `self`)
     /// bottom-up, collecting the results.
+    #[must_use]
     pub fn visit_exprs(self, f: &mut impl FnMut(Self) -> Self) -> Self {
         match self {
-            GenericExpr::Lit(..) => f(self),
-            GenericExpr::Var(..) => f(self),
+            GenericExpr::Lit(..) | GenericExpr::Var(..) => f(self),
             GenericExpr::Call(span, op, children) => {
                 let children = children.into_iter().map(|c| c.visit_exprs(f)).collect();
                 f(GenericExpr::Call(span, op.clone(), children))
@@ -458,7 +467,9 @@ impl<Head: Clone + Display, Leaf: Hash + Clone + Display + Eq> GenericExpr<Head,
         let iterator: Box<dyn Iterator<Item = Leaf>> = match self {
             GenericExpr::Lit(_ann, _l) => Box::new(std::iter::empty()),
             GenericExpr::Var(_ann, v) => Box::new(std::iter::once(v.clone())),
-            GenericExpr::Call(_ann, _head, exprs) => Box::new(exprs.iter().flat_map(|e| e.vars())),
+            GenericExpr::Call(_ann, _head, exprs) => {
+                Box::new(exprs.iter().flat_map(super::generic_ast::GenericExpr::vars))
+            }
         };
         iterator
     }
@@ -472,13 +483,13 @@ impl Display for Literal {
                 // need to display with decimal if there is none
                 let str = n.to_string();
                 if let Ok(_num) = str.parse::<i64>() {
-                    write!(f, "{}.0", str)
+                    write!(f, "{str}.0")
                 } else {
-                    write!(f, "{}", str)
+                    write!(f, "{str}")
                 }
             }
             Literal::Bool(b) => Display::fmt(b, f),
-            Literal::String(s) => write!(f, "\"{}\"", s),
+            Literal::String(s) => write!(f, "\"{s}\""),
             Literal::Unit => write!(f, "()"),
         }
     }

@@ -9,7 +9,7 @@ where
 {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         let mut did_something = false;
-        for item in self.0.clone().into_iter() {
+        for item in self.0.clone() {
             if did_something {
                 f.write_str(self.1)?;
             }

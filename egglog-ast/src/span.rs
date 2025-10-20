@@ -29,6 +29,7 @@ pub struct SrcFile {
 }
 
 impl SrcFile {
+    #[must_use]
     pub fn get_location(&self, offset: usize) -> (usize, usize) {
         let mut line = 1;
         let mut col = 1;
@@ -48,6 +49,9 @@ impl SrcFile {
 }
 
 impl Span {
+    /// # Panics
+    /// If passed a `Span::Panic` or `Span::Rust`.
+    #[must_use]
     pub fn string(&self) -> &str {
         match self {
             Span::Panic => panic!("Span::Panic in Span::string"),
@@ -59,7 +63,7 @@ impl Span {
 
 impl Debug for Span {
     fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
-        write!(f, "{}", self)
+        write!(f, "{self}")
     }
 }
 
@@ -77,21 +81,18 @@ impl Display for Span {
                 match (&span.file.name, start_line == end_line) {
                     (Some(filename), true) => write!(
                         f,
-                        "In {}:{}-{} of {filename}: {quote}",
-                        start_line, start_col, end_col
+                        "In {start_line}:{start_col}-{end_col} of {filename}: {quote}",
                     ),
                     (Some(filename), false) => write!(
                         f,
-                        "In {}:{}-{}:{} of {filename}: {quote}",
-                        start_line, start_col, end_line, end_col
+                        "In {start_line}:{start_col}-{end_line}:{end_col} of {filename}: {quote}",
                     ),
                     (None, false) => write!(
                         f,
-                        "In {}:{}-{}:{}: {quote}",
-                        start_line, start_col, end_line, end_col
+                        "In {start_line}:{start_col}-{end_line}:{end_col}: {quote}",
                     ),
                     (None, true) => {
-                        write!(f, "In {}:{}-{}: {quote}", start_line, start_col, end_col)
+                        write!(f, "In {start_line}:{start_col}-{end_col}: {quote}")
                     }
                 }
             }
