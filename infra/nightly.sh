@@ -32,7 +32,7 @@ mkdir -p "$NIGHTLY_DIR/data" "$NIGHTLY_DIR/output"
 
 # Run egglog files
 pushd $TOP_DIR
-cargo run --bin timeline -- "$RESOURCE_DIR/test-files" "$NIGHTLY_DIR/data"
+cargo +1.87.0 run --release --bin timeline -- "$RESOURCE_DIR/test-files" "$NIGHTLY_DIR/data"
 
 # Annotate with time and command info
 python3 timeline/transform.py "$NIGHTLY_DIR/data" "$NIGHTLY_DIR/output/data"
@@ -42,7 +42,7 @@ python3 timeline/plot_run_vs_extract.py "$NIGHTLY_DIR/output/data" "Herbie: Hamm
 popd
 
 pushd $TOP_DIR
-cargo run --release --bin egglog -- tests/
+cargo +1.87.0 run --release --bin egglog -- tests/
 # Put the json data in a JS object for consumption by frontend
 (echo "var data = "; cat "$NIGHTLY_DIR/data/summary.json") > "$NIGHTLY_DIR/data/summary.js"
 popd
