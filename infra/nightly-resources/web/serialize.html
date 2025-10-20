@@ -3,14 +3,24 @@
 <html>
 
 <head>
-  <script src="index.js"></script>
+  <script src="serialize.js"></script>
   <script src="data/summary.js"></script>
 </head>
 
 <title>Poach</title>
 
-<body onload="load()">
+<body onload="load_serialize()">
   <h1>Serialization</h1>
+  <p>
+    For each egglog test, round trip to JSON twice.
+    The first round trip is not expected to be idempotent, but the second one is.
+  </p>
+
+  <h2>Fail</h2>
+  <ul id="fail"></ul>
+
+  <h2>Success</h2>
+  <ul id="success"></ul>
   
 </body>
 
