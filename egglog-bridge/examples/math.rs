@@ -17,7 +17,7 @@ fn main() {
 
         let mut egraph = EGraph::default();
         let rational_ty = egraph.base_values_mut().register_type::<Rational64>();
-        let string_ty = egraph.base_values_mut().register_type::<&'static str>();
+        let string_ty = egraph.base_values_mut().register_type::<String>();
         // tables
         let diff = egraph.add_table(FunctionConfig {
             schema: vec![ColumnTy::Id, ColumnTy::Id, ColumnTy::Id],
@@ -207,9 +207,9 @@ fn main() {
             let two = egraph.base_values().get(Rational64::new(2, 1));
             let three = egraph.base_values().get(Rational64::new(3, 1));
             let seven = egraph.base_values().get(Rational64::new(7, 1));
-            let x_str = egraph.base_values_mut().get::<&'static str>("x");
-            let y_str = egraph.base_values_mut().get::<&'static str>("y");
-            let five_str = egraph.base_values_mut().get::<&'static str>("five");
+            let x_str = egraph.base_values_mut().get::<String>("x".to_string());
+            let y_str = egraph.base_values_mut().get::<String>("y".to_string());
+            let five_str = egraph.base_values_mut().get::<String>("five".to_string());
             add_expressions! {
                 [egraph]
 

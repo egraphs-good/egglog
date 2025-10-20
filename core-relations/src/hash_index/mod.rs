@@ -11,6 +11,10 @@ use hashbrown::HashTable;
 use once_cell::sync::Lazy;
 use rayon::iter::ParallelIterator;
 use rustc_hash::FxHasher;
+use serde::{
+    Deserialize, Serialize, Serializer,
+    ser::{SerializeMap, SerializeStruct},
+};
 
 use crate::{
     OffsetRange, Subset,
@@ -33,7 +37,7 @@ pub(crate) struct TableEntry<T> {
     vals: T,
 }
 
-#[derive(Clone)]
+#[derive(Clone, Serialize, Deserialize, Default)]
 pub(crate) struct Index<TI> {
     key: Vec<ColumnId>,
     updated_to: TableVersion,
@@ -167,6 +171,64 @@ struct ColumnIndexShard {
     subsets: SubsetBuffer,
 }
 
+impl<'de> Deserialize<'de> for ColumnIndexShard {
+    fn deserialize<D>(deserializer: D) -> Result<Self, D::Error>
+    where
+        D: serde::Deserializer<'de>,
+    {
+        #[derive(Deserialize)]
+        struct Partial {
+            table: IndexMap<String, BufferedSubset>,
+            subsets: SubsetBuffer,
+        }
+
+        let helper = Partial::deserialize(deserializer)?;
+
+        // convert String back to Value
+        let mut table = IndexMap::with_capacity_and_hasher(helper.table.len(), Default::default());
+        for (k, v) in helper.table {
+            let parsed = Value::new(k.parse().expect(&format!("invalid Value {}", k)));
+            table.insert(parsed, v);
+        }
+
+        Ok(ColumnIndexShard {
+            table: Pooled::new(table),
+            subsets: helper.subsets,
+        })
+    }
+}
+
+impl Serialize for ColumnIndexShard {
+    fn serialize<S>(&self, serializer: S) -> Result<S::Ok, S::Error>
+    where
+        S: serde::Serializer,
+    {
+        let mut s = serializer.serialize_struct("ColumnIndexShard", 2)?;
+
+        struct TableHelper<'a> {
+            table: &'a IndexMap<Value, BufferedSubset>,
+        }
+
+        impl<'a> Serialize for TableHelper<'a> {
+            fn serialize<S>(&self, serializer: S) -> Result<S::Ok, S::Error>
+            where
+                S: Serializer,
+            {
+                let mut map = serializer.serialize_map(Some(self.table.len()))?;
+                for (k, v) in self.table.iter() {
+                    // convert Value to u32 to String for use as JSON keys
+                    map.serialize_entry(&k.rep().to_string(), v)?;
+                }
+                map.end()
+            }
+        }
+
+        s.serialize_field("table", &TableHelper { table: &self.table })?;
+        s.serialize_field("subsets", &self.subsets)?;
+        s.end()
+    }
+}
+
 impl Clone for ColumnIndexShard {
     fn clone(&self) -> Self {
         ColumnIndexShard {
@@ -176,7 +238,7 @@ impl Clone for ColumnIndexShard {
     }
 }
 
-#[derive(Clone)]
+#[derive(Clone, Serialize, Deserialize, Default)]
 pub struct ColumnIndex {
     // A specialized index used when we are indexing on a single column.
     shard_data: ShardData,
@@ -566,6 +628,37 @@ struct SubsetBuffer {
     free_list: FreeList,
 }
 
+impl<'de> Deserialize<'de> for SubsetBuffer {
+    fn deserialize<D>(deserializer: D) -> Result<Self, D::Error>
+    where
+        D: serde::Deserializer<'de>,
+    {
+        #[derive(Deserialize)]
+        struct Partial {
+            buf: Vec<RowId>,
+            free_list: FreeList,
+        }
+        let helper = Partial::deserialize(deserializer)?;
+        let buf = Pooled::new(helper.buf);
+        Ok(SubsetBuffer {
+            buf,
+            free_list: helper.free_list,
+        })
+    }
+}
+
+impl Serialize for SubsetBuffer {
+    fn serialize<S>(&self, serializer: S) -> Result<S::Ok, S::Error>
+    where
+        S: serde::Serializer,
+    {
+        let mut s = serializer.serialize_struct("SubsetBuffer", 2)?;
+        s.serialize_field("buf", &*self.buf)?;
+        s.serialize_field("free_list", &self.free_list)?;
+        s.end()
+    }
+}
+
 impl Clone for SubsetBuffer {
     fn clone(&self) -> Self {
         SubsetBuffer {
@@ -672,7 +765,7 @@ impl SubsetBuffer {
 /// Business logic in this module probably shouldn't call clone explicitly. The implicit uses of
 /// clone (by other generated `Clone` implementations) are fine because they clone the
 /// `SubsetBuffer` that the `BufferedVec` points to at the same time that the vector is cloned.
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, Serialize, Deserialize)]
 pub(crate) struct BufferedVec(BufferIndex, BufferIndex);
 
 impl Default for BufferedVec {
@@ -690,7 +783,7 @@ impl BufferedVec {
     }
 }
 
-#[derive(Clone)]
+#[derive(Clone, Serialize, Deserialize)]
 pub(crate) enum BufferedSubset {
     Dense(OffsetRange),
     Sparse(BufferedVec),
@@ -757,7 +850,7 @@ static THREAD_POOL: Lazy<rayon::ThreadPool> = Lazy::new(|| {
 ///
 /// This free list works as a map from power-of-two size classes to a vector of offsets that point
 /// to the beginning of an unused vector.
-#[derive(Default, Clone)]
+#[derive(Default, Clone, Serialize, Deserialize)]
 pub(super) struct FreeList {
     data: HashMap<usize, Vec<BufferIndex>>,
 }

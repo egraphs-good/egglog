@@ -9,7 +9,7 @@
 //! functions than base values.
 
 use std::{
-    any::{Any, TypeId},
+    any::{Any, type_name},
     hash::{Hash, Hasher},
     ops::Deref,
 };
@@ -22,6 +22,7 @@ use rayon::{
     prelude::*,
 };
 use rustc_hash::FxHasher;
+use serde::{Deserialize, Serialize};
 
 use crate::{
     ColumnId, CounterId, ExecutionState, Offset, SubsetRef, TableId, TaggedRowBuffer, Value,
@@ -45,10 +46,14 @@ impl<T: Fn(&mut ExecutionState, Value, Value) -> Value + Clone + Send + Sync> Me
 // Implements `Clone` for `Box<dyn MergeFn>`.
 dyn_clone::clone_trait_object!(MergeFn);
 
-#[derive(Clone, Default)]
+#[derive(Clone, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize, Deserialize, Debug)]
+struct SerializableTypeId(String);
+
+#[derive(Clone, Default, Serialize, Deserialize)]
 pub struct ContainerValues {
     subset_tracker: SubsetTracker,
-    container_ids: InternTable<TypeId, ContainerValueId>,
+    container_ids: InternTable<SerializableTypeId, ContainerValueId>,
+    #[serde(skip)]
     data: DenseIdMap<ContainerValueId, Box<dyn DynamicContainerEnv + Send + Sync>>,
 }
 
@@ -58,7 +63,11 @@ impl ContainerValues {
     }
 
     fn get<C: ContainerValue>(&self) -> Option<&ContainerEnv<C>> {
-        let id = self.container_ids.intern(&TypeId::of::<C>());
+        let id = self
+            .container_ids
+            // We are using type names as unique identifiers despite explicitly being told not to do this by the type_name docs
+            // this is bad and we should not do anything like this in the real version, but this is a prototype (TM) so they can't stop us.
+            .intern(&SerializableTypeId(type_name::<C>().to_string()));
         let res = self.data.get(id)?.as_any();
         Some(res.downcast_ref::<ContainerEnv<C>>().unwrap())
     }
@@ -145,7 +154,11 @@ impl ContainerValues {
         id_counter: CounterId,
         merge_fn: impl MergeFn + 'static,
     ) -> ContainerValueId {
-        let id = self.container_ids.intern(&TypeId::of::<C>());
+        let id = self
+            .container_ids
+            // We are using type names as unique identifiers despite explicitly being told not to do this by the type_name docs
+            // this is bad and we should not do anything like this in the real version, but this is a prototype (TM) so they can't stop us.
+            .intern(&SerializableTypeId(type_name::<C>().to_string()));
         self.data.get_or_insert(id, || {
             Box::new(ContainerEnv::<C>::new(Box::new(merge_fn), id_counter))
         });

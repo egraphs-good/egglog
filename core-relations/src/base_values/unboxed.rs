@@ -20,6 +20,7 @@ macro_rules! impl_small_base_value {
             fn try_box(&self) -> Option<Value> {
                 Some(Value::new(*self as u32))
             }
+            fn type_id_string() -> String { stringify!($ty).into() }
         }
     };
     ($ty:ty, $($rest:ty),+) => {
@@ -49,6 +50,10 @@ impl BaseValue for bool {
     fn try_box(&self) -> Option<Value> {
         Some(Value::new(if *self { 1 } else { 0 }))
     }
+
+    fn type_id_string() -> String {
+        "Bool".into()
+    }
 }
 
 impl BaseValue for () {
@@ -65,6 +70,10 @@ impl BaseValue for () {
     }
     fn try_box(&self) -> Option<Value> {
         Some(Value::new(0))
+    }
+
+    fn type_id_string() -> String {
+        "Unit".into()
     }
 }
 
@@ -93,6 +102,8 @@ macro_rules! impl_medium_base_value {
                     None
                 }
             }
+
+            fn type_id_string() -> String { stringify!($ty).into() }
         }
     };
 

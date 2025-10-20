@@ -6,6 +6,7 @@ use std::{cell::Cell, mem, ops::Deref};
 use crate::numeric_id::NumericId;
 use egglog_concurrency::ParallelVecWriter;
 use rayon::iter::ParallelIterator;
+use serde::{Deserialize, Deserializer, Serialize, ser::SerializeStruct};
 use smallvec::SmallVec;
 
 use crate::{
@@ -22,10 +23,46 @@ mod tests;
 /// allows us to store multiple rows in a single allocation.
 ///
 /// RowBuffer stores data in row-major order.
+#[derive(Default)]
 pub struct RowBuffer {
     n_columns: usize,
     total_rows: usize,
     data: Pooled<Vec<Cell<Value>>>,
+}
+
+impl<'de> Deserialize<'de> for RowBuffer {
+    fn deserialize<D>(deserializer: D) -> Result<Self, D::Error>
+    where
+        D: Deserializer<'de>,
+    {
+        #[derive(Deserialize)]
+        struct Partial {
+            n_columns: usize,
+            total_rows: usize,
+            data: Vec<Cell<Value>>,
+        }
+
+        let helper = Partial::deserialize(deserializer)?;
+
+        Ok(RowBuffer {
+            n_columns: helper.n_columns,
+            total_rows: helper.total_rows,
+            data: Pooled::new(helper.data),
+        })
+    }
+}
+
+impl Serialize for RowBuffer {
+    fn serialize<S>(&self, serializer: S) -> Result<S::Ok, S::Error>
+    where
+        S: serde::Serializer,
+    {
+        let mut state = serializer.serialize_struct("RowBuffer", 3)?;
+        state.serialize_field("n_columns", &self.n_columns)?;
+        state.serialize_field("total_rows", &self.total_rows)?;
+        state.serialize_field("data", &*self.data)?;
+        state.end()
+    }
 }
 
 // Safety constraints for RowBuffer.

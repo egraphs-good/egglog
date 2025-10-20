@@ -2,6 +2,7 @@ use std::{collections::BTreeMap, iter, mem, sync::Arc};
 
 use crate::numeric_id::{DenseIdMap, NumericId};
 use fixedbitset::FixedBitSet;
+use serde::{Deserialize, Serialize};
 use smallvec::{SmallVec, smallvec};
 
 use crate::{
@@ -30,11 +31,13 @@ pub(crate) struct SingleScanSpec {
 
 /// Join headers evaluate constraints on a single atom; they prune the search space before the rest
 /// of the join plan is executed.
+#[derive(Serialize, Deserialize)]
 pub(crate) struct JoinHeader {
     pub atom: AtomId,
     /// We currently aren't using these at all. The plan is to use this to
     /// dedup plan stages later (it also helps for debugging).
     #[allow(unused)]
+    #[serde(skip)]
     pub constraints: Pooled<Vec<Constraint>>,
     /// A pre-computed table subset that we can use to filter the table,
     /// given these constaints.
@@ -42,6 +45,7 @@ pub(crate) struct JoinHeader {
     /// Why use the constraints at all? Because we want to use them to
     /// discover common plan nodes from different queries (subsets can be
     /// large).
+    #[serde(skip)]
     pub subset: Subset,
 }
 
@@ -152,15 +156,17 @@ impl JoinStage {
     }
 }
 
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, Serialize, Deserialize)]
 pub(crate) struct Plan {
+    #[serde(skip)]
     pub atoms: Arc<DenseIdMap<AtomId, Atom>>,
     pub stages: JoinStages,
 }
 
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, Serialize, Deserialize)]
 pub(crate) struct JoinStages {
     pub header: Vec<JoinHeader>,
+    #[serde(skip)]
     pub instrs: Arc<Vec<JoinStage>>,
     pub actions: ActionId,
 }
@@ -169,7 +175,7 @@ type VarSet = FixedBitSet;
 type AtomSet = FixedBitSet;
 
 /// The algorithm used to produce a join plan.
-#[derive(Default, Copy, Clone)]
+#[derive(Default, Copy, Clone, Serialize, Deserialize)]
 pub enum PlanStrategy {
     /// Free Join: Iteratively pick the smallest atom as the cover for the next
     /// stage, until all subatoms have been visited.

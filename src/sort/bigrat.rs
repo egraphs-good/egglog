@@ -7,7 +7,7 @@ use super::*;
 /// - Con/Destruction: `bigrat`, `numer`, `denom`
 /// - Comparisons: `<`, `>`, `<=`, `>=`
 /// - Other: `min`, `max`, `to-f64`
-#[derive(Debug)]
+#[derive(Debug, Serialize, Deserialize)]
 pub struct BigRatSort;
 
 impl BaseSort for BigRatSort {

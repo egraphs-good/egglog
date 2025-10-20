@@ -10,6 +10,11 @@ readme = { workspace = true }
 
 [dependencies]
 rayon = { workspace = true }
+serde = { workspace = true }
+typetag = { workspace = true }
+serde_json = { workspace = true }
+num-bigint = { version = "0.4", features = ["serde"] }
+num-rational = {version = "0.4", features = ["serde"]}
 
 [features]
 default = []

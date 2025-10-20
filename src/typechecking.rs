@@ -5,17 +5,57 @@ use crate::{
 use ast::Rule;
 use core_relations::ExternalFunction;
 use egglog_ast::generic_ast::GenericAction;
+use hashbrown::HashMap;
 
-#[derive(Clone, Debug)]
+#[derive(Clone, Debug, Serialize, Deserialize)]
 pub struct FuncType {
     pub name: String,
     pub subtype: FunctionSubtype,
+    #[serde(with = "arc_sort_vec_serde")]
     pub input: Vec<ArcSort>,
+    #[serde(with = "arc_sort_serde")]
     pub output: ArcSort,
 }
 
-#[derive(Clone)]
-pub struct PrimitiveWithId(pub Arc<dyn Primitive + Send + Sync>, pub ExternalFunctionId);
+#[derive(Clone, Serialize)]
+pub struct PrimitiveWithId {
+    #[serde(skip)]
+    pub prim: Arc<dyn Primitive + Send + Sync>,
+    pub id: ExternalFunctionId,
+}
+
+impl<'de> Deserialize<'de> for PrimitiveWithId {
+    fn deserialize<D>(deserializer: D) -> Result<Self, D::Error>
+    where
+        D: serde::Deserializer<'de>,
+    {
+        #[derive(Deserialize)]
+        struct Partial {
+            id: ExternalFunctionId,
+        }
+
+        let helper = Partial::deserialize(deserializer)?;
+
+        #[derive(Debug)]
+        struct DummyPrimitive;
+        impl Primitive for DummyPrimitive {
+            fn name(&self) -> &str {
+                "dummy"
+            }
+            fn get_type_constraints(&self, _span: &Span) -> Box<dyn TypeConstraint> {
+                Box::new(SimpleTypeConstraint::new("dummy", vec![], span!()))
+            }
+            fn apply(&self, _exec_state: &mut ExecutionState, _args: &[Value]) -> Option<Value> {
+                None
+            }
+        }
+
+        Ok(Self {
+            prim: Arc::new(DummyPrimitive),
+            id: helper.id,
+        })
+    }
+}
 
 impl PrimitiveWithId {
     /// Takes the full signature of a primitive (both input and output types).
@@ -29,7 +69,7 @@ impl PrimitiveWithId {
             constraints.push(constraint::assign(lit.clone(), ty.clone()))
         }
         constraints.extend(
-            self.0
+            self.prim
                 .get_type_constraints(&Span::Panic)
                 .get(&lits, typeinfo),
         );
@@ -43,20 +83,55 @@ impl PrimitiveWithId {
 
 impl Debug for PrimitiveWithId {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        write!(f, "Prim({})", self.0.name())
+        write!(f, "Prim({})", self.prim.name())
     }
 }
 
 /// Stores resolved typechecking information.
-#[derive(Clone, Default)]
+#[derive(Clone, Default, Serialize)]
 pub struct TypeInfo {
+    #[serde(skip)]
     mksorts: HashMap<String, MkSort>,
     // TODO(yz): I want to get rid of this as now we have user-defined primitives and constraint based type checking
+    #[serde(skip)]
     reserved_primitives: HashSet<&'static str>,
-    sorts: HashMap<String, Arc<dyn Sort>>,
+    #[serde(with = "arc_sort_map_serde")]
+    sorts: HashMap<String, ArcSort>,
     primitives: HashMap<String, Vec<PrimitiveWithId>>,
     func_types: HashMap<String, FuncType>,
+    #[serde(with = "arc_sort_map_serde")]
     global_sorts: HashMap<String, ArcSort>,
+}
+
+impl<'de> Deserialize<'de> for TypeInfo {
+    fn deserialize<D>(deserializer: D) -> Result<Self, D::Error>
+    where
+        D: serde::Deserializer<'de>,
+    {
+        #[derive(Deserialize)]
+        struct Partial {
+            #[serde(with = "arc_sort_map_serde")]
+            sorts: HashMap<String, ArcSort>,
+
+            primitives: HashMap<String, Vec<PrimitiveWithId>>,
+
+            func_types: HashMap<String, FuncType>,
+
+            #[serde(with = "arc_sort_map_serde")]
+            global_sorts: HashMap<String, ArcSort>,
+        }
+
+        let helper = Partial::deserialize(deserializer)?;
+
+        Ok(TypeInfo {
+            mksorts: Default::default(),
+            reserved_primitives: Default::default(),
+            sorts: helper.sorts,
+            primitives: helper.primitives,
+            func_types: helper.func_types,
+            global_sorts: helper.global_sorts,
+        }) // TODO: this is a bogus default value
+    }
 }
 
 // These methods need to be on the `EGraph` in order to
@@ -103,8 +178,10 @@ impl EGraph {
 
         let name = sort.name();
         match self.type_info.sorts.entry(name.to_owned()) {
-            HEntry::Occupied(_) => Err(TypeError::SortAlreadyBound(name.to_owned(), span)),
-            HEntry::Vacant(e) => {
+            hashbrown::hash_map::Entry::Occupied(_) => {
+                Err(TypeError::SortAlreadyBound(name.to_owned(), span))
+            }
+            hashbrown::hash_map::Entry::Vacant(e) => {
                 e.insert(sort.clone());
                 sort.register_primitives(self);
                 Ok(())
@@ -135,7 +212,7 @@ impl EGraph {
             .primitives
             .entry(prim.name().to_owned())
             .or_default()
-            .push(PrimitiveWithId(prim, ext));
+            .push(PrimitiveWithId { prim, id: ext });
     }
 
     pub(crate) fn typecheck_program(
@@ -271,8 +348,10 @@ impl TypeInfo {
     pub fn add_presort<S: Presort>(&mut self, span: Span) -> Result<(), TypeError> {
         let name = S::presort_name();
         match self.mksorts.entry(name.to_owned()) {
-            HEntry::Occupied(_) => Err(TypeError::SortAlreadyBound(name.to_owned(), span)),
-            HEntry::Vacant(e) => {
+            hashbrown::hash_map::Entry::Occupied(_) => {
+                Err(TypeError::SortAlreadyBound(name.to_owned(), span))
+            }
+            hashbrown::hash_map::Entry::Vacant(e) => {
                 e.insert(S::make_sort);
                 self.reserved_primitives.extend(S::reserved_primitives());
                 Ok(())

@@ -45,7 +45,7 @@ impl NumericId for usize {
 ///
 /// This mapping is _dense_: it stores a flat array indexed by `K::index()`,
 /// with no hashing. For sparse mappings, use a HashMap.
-#[derive(Clone, PartialEq, Eq, Hash)]
+#[derive(Clone, PartialEq, Eq, Hash, Serialize, Deserialize)]
 pub struct DenseIdMap<K, V> {
     data: Vec<Option<V>>,
     _marker: PhantomData<K>,
@@ -229,7 +229,7 @@ impl<K: NumericId, V: Default> DenseIdMap<K, V> {
     }
 }
 
-#[derive(Debug)]
+#[derive(Debug, Serialize, Deserialize)]
 pub struct IdVec<K, V> {
     data: Vec<V>,
     _marker: std::marker::PhantomData<K>,
@@ -266,7 +266,7 @@ impl<K, V: Clone> Clone for IdVec<K, V> {
 }
 
 /// Like a [`DenseIdMap`], but supports freeing (and reusing) slots.
-#[derive(Clone)]
+#[derive(Clone, Serialize, Deserialize)]
 pub struct DenseIdMapWithReuse<K, V> {
     data: DenseIdMap<K, V>,
     free: Vec<K>,
@@ -408,6 +408,7 @@ impl<K: NumericId, V> ops::IndexMut<K> for IdVec<K, V> {
 use rayon::iter::{
     IndexedParallelIterator, IntoParallelRefIterator, IntoParallelRefMutIterator, ParallelIterator,
 };
+use serde::{Deserialize, Serialize};
 
 #[macro_export]
 #[doc(hidden)]
@@ -433,10 +434,32 @@ macro_rules! atomic_of {
 macro_rules! define_id {
     ($v:vis $name:ident, $repr:tt) => { define_id!($v, $name, $repr, ""); };
     ($v:vis $name:ident, $repr:tt, $doc:tt) => {
-        #[derive(Copy, Clone)]
+
+        #[derive(Copy, Clone, Default)]
         #[doc = $doc]
         $v struct $name {
             rep: $repr,
+        }
+
+        impl serde::Serialize for $name {
+            fn serialize<S>(&self, serializer: S) -> std::result::Result<S::Ok, S::Error>
+            where S: serde::Serializer {
+                serializer.serialize_str(&format!("{}:{}", stringify!($name), self.rep))
+            }
+        }
+
+        impl<'de> serde::Deserialize<'de> for $name {
+            fn deserialize<D>(deserializer : D) -> std::result::Result<Self, D::Error>
+            where D: serde::Deserializer<'de>
+            {
+                let s = String::deserialize(deserializer)?;
+                let prefix = concat!(stringify!($name), ":");
+                if let Some(inner) = s.strip_prefix(prefix) {
+                    inner.parse::<$repr>().map($name::new_const).map_err(|_| serde::de::Error::custom(format!("invalid value {}", s)))
+                } else {
+                    Err(serde::de::Error::custom(format!("Invalid format. Expected {}:<number>, got {}", stringify!($name), s)))
+                }
+            }
         }
 
         impl PartialEq for $name {

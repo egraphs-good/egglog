@@ -10,7 +10,11 @@ use std::{
     ops::{Deref, DerefMut},
 };
 
-use crate::numeric_id::{DenseIdMap, NumericId, define_id};
+use crate::{
+    SortedWritesTable,
+    numeric_id::{DenseIdMap, NumericId, define_id},
+};
+use serde::{Deserialize, Serialize};
 use smallvec::SmallVec;
 
 use crate::{
@@ -39,7 +43,7 @@ define_id!(
 );
 
 /// The version of a table.
-#[derive(Clone, Debug, PartialEq, Eq)]
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize, Default)]
 pub struct TableVersion {
     /// New major generations invalidate all existing RowIds for a table.
     pub major: Generation,
@@ -50,7 +54,7 @@ pub struct TableVersion {
     // NB: we may want to make `Offset` and `RowId` the same.
 }
 
-#[derive(Clone)]
+#[derive(Clone, Serialize, Deserialize)]
 pub struct TableSpec {
     /// The number of key columns for the table.
     pub n_keys: usize,
@@ -143,6 +147,7 @@ pub struct Row {
 }
 
 /// An interface for a table.
+#[typetag::serde]
 pub trait Table: Any + Send + Sync {
     /// A variant of clone that returns a boxed trait object; this trait object
     /// must contain all of the data associated with the current table.
@@ -353,6 +358,7 @@ pub trait MutationBuffer: Any + Send + Sync {
     fn fresh_handle(&self) -> Box<dyn MutationBuffer>;
 }
 
+#[derive(Default)]
 struct WrapperImpl<T>(PhantomData<T>);
 
 pub(crate) fn wrapper<T: Table>() -> Box<dyn TableWrapper> {
@@ -510,9 +516,16 @@ impl<T: Table> TableWrapper for WrapperImpl<T> {
 /// object-safe extension methods to call methods that require `Self: Sized`.
 /// The implementations here downcast manually to the type used when
 /// constructing the WrappedTable.
+#[derive(Serialize, Deserialize)]
 pub struct WrappedTable {
     inner: Box<dyn Table>,
+    #[serde(skip, default = "default_wrapper")]
     wrapper: Box<dyn TableWrapper>,
+}
+
+fn default_wrapper() -> Box<dyn TableWrapper> {
+    // Replace this with whatever default makes sense for your system
+    Box::new(WrapperImpl::<SortedWritesTable>::default())
 }
 
 impl WrappedTable {

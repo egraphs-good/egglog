@@ -19,10 +19,11 @@ impl ContainerValue for VecContainer {
     }
 }
 
-#[derive(Clone, Debug)]
+#[derive(Clone, Debug, Serialize, Deserialize)]
 pub struct VecSort {
-    name: String,
-    element: ArcSort,
+    pub name: String,
+    #[serde(with = "arc_sort_serde")]
+    pub element: ArcSort,
 }
 
 impl VecSort {

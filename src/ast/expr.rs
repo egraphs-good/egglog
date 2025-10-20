@@ -1,4 +1,6 @@
+use super::arc_sort_serde;
 use egglog_ast::generic_ast::GenericExpr;
+use serde::{Deserialize, Serialize};
 use std::fmt::{Display, Formatter};
 use std::hash::Hash;
 use std::hash::Hasher;
@@ -7,9 +9,10 @@ use crate::ast::CorrespondingVar;
 use crate::core::ResolvedCall;
 use crate::{ArcSort, sort};
 
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct ResolvedVar {
     pub name: String,
+    #[serde(with = "arc_sort_serde")]
     pub sort: ArcSort,
     /// Is this a reference to a global variable?
     /// After the `remove_globals` pass, this should be `false`.

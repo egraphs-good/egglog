@@ -32,6 +32,12 @@ rand = { workspace = true }
 dyn-clone = { workspace = true }
 num = { workspace = true }
 once_cell = { workspace = true }
+serde = { workspace = true }
+typetag = { workspace = true }
+serde_json = { workspace = true }
+ordered-float = { workspace = true }
+num-bigint = { workspace = true }
+
 
 [dev-dependencies]
 divan = { workspace = true }

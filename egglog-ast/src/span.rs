@@ -1,28 +1,30 @@
 use std::fmt::{self, Debug, Display};
 use std::sync::Arc;
 
-#[derive(Clone, PartialEq, Eq, Hash)]
+use serde::{Deserialize, Serialize};
+
+#[derive(Clone, PartialEq, Eq, Hash, Serialize, Deserialize)]
 pub enum Span {
     Panic,
     Egglog(Arc<EgglogSpan>),
     Rust(Arc<RustSpan>),
 }
 
-#[derive(Debug, Clone, PartialEq, Eq, Hash)]
+#[derive(Debug, Clone, PartialEq, Eq, Hash, Serialize, Deserialize)]
 pub struct EgglogSpan {
     pub file: Arc<SrcFile>,
     pub i: usize,
     pub j: usize,
 }
 
-#[derive(Debug, Clone, PartialEq, Eq, Hash)]
+#[derive(Debug, Clone, PartialEq, Eq, Hash, Serialize, Deserialize)]
 pub struct RustSpan {
-    pub file: &'static str,
+    pub file: String,
     pub line: u32,
     pub column: u32,
 }
 
-#[derive(Debug, PartialEq, Eq, Hash, Clone)]
+#[derive(Debug, PartialEq, Eq, Hash, Clone, Serialize, Deserialize)]
 pub struct SrcFile {
     pub name: Option<String>,
     pub contents: String,
