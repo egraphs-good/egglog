@@ -5,6 +5,9 @@ echo "Beginning egglog nightly script"
 
 set -e -x
 
+export PATH=~/.cargo/bin:$PATH
+rustup update
+
 # determine physical directory of this script
 src="${BASH_SOURCE[0]}"
 while [ -L "$src" ]; do
