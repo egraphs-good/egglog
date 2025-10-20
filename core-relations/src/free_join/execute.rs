@@ -245,8 +245,14 @@ impl Database {
             let reports = rule_reports.get_mut(desc).unwrap();
             let i = reports
                 .iter()
+                // HACK: Since the order of visiting queries is fixed and # matches need to be obtained
+                // seperately from rule execution, we first set all # matches to be usize::MAX and then fill
+                // them in one by one.
                 .position(|r| r.num_matches == usize::MAX)
                 .unwrap();
+            // NB: This requires each action ID correspond to only one query.
+            // If an action is used by multiple queries, then we can't tell how many matches are
+            // caused by individual queries.
             reports[i].num_matches = match_counter.read_matches(*action);
         }
         let search_and_apply_time = search_and_apply_timer.elapsed();
