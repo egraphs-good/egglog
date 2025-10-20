@@ -109,25 +109,21 @@ impl<T: AtomicInt> ConcurrentUnionFind<T> {
             |buf| {
                 let mut l = l;
                 let mut r = r;
-                loop {
-                    l = Self::find_impl(buf, l);
-                    r = Self::find_impl(buf, r);
-                    if l != r {
-                        // We do "union by min": common in egraphs due to the
-                        // hypothesis that smaller ids will be
-                        // better-represented in the egraph, and hence
-                        // perturbing the maximum id is likely to result in less
-                        // work for rebuilding.
-                        let parent = cmp::min(l, r);
-                        let child = cmp::max(l, r);
-                        match buf[T::as_usize(child)].cas(child, parent) {
-                            Ok(_) => return (parent, child),
-                            Err(_) => continue,
-                        }
-                    } else {
-                        return (l, l);
+                l = Self::find_impl(buf, l);
+                r = Self::find_impl(buf, r);
+                if l != r {
+                    // We do "union by min": common in egraphs due to the
+                    // hypothesis that smaller ids will be
+                    // better-represented in the egraph, and hence
+                    // perturbing the maximum id is likely to result in less
+                    // work for rebuilding.
+                    let parent = cmp::min(l, r);
+                    let child = cmp::max(l, r);
+                    if buf[T::as_usize(child)].cas(child, parent).is_ok() {
+                        return (parent, child);
                     }
                 }
+                (l, l)
             },
             T::from_usize,
         )

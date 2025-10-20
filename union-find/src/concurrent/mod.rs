@@ -40,7 +40,7 @@ where
 {
     fn default() -> Self {
         Self {
-            inner: Default::default(),
+            inner: uf::ConcurrentUnionFind::default(),
         }
     }
 }
@@ -58,6 +58,7 @@ where
 
     /// Create a deep copy of the union-find datastructure: subsequent unions on
     /// the returned copy will not affect the original.
+    #[must_use]
     pub fn deep_copy(&self) -> Self {
         Self {
             inner: self.inner.deep_copy(),
@@ -65,6 +66,7 @@ where
     }
 
     /// Initialize a union-find with `capacity` elements pointing to themselves.
+    #[must_use]
     pub fn with_capacity(capacity: usize) -> Self {
         Self {
             inner: uf::ConcurrentUnionFind::with_capacity(capacity),

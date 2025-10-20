@@ -57,13 +57,13 @@ impl<Value: NumericId> UnionFind<Value> {
         self.reserve(b);
         let a = self.find(a);
         let b = self.find(b);
-        if a != b {
+        if a == b {
+            (a, a)
+        } else {
             let parent = cmp::min(a, b);
             let child = cmp::max(a, b);
             self.parents[child.index()] = parent;
             (parent, child)
-        } else {
-            (a, a)
         }
     }
 

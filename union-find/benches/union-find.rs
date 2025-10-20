@@ -10,7 +10,7 @@ use egglog_union_find::{UnionFind, concurrent};
 use rand::{Rng, seq::SliceRandom};
 
 fn main() {
-    divan::main()
+    divan::main();
 }
 
 #[derive(Copy, Clone)]
@@ -19,7 +19,7 @@ enum Operation {
     Find(usize),
 }
 
-const LENGTHS: [usize; 4] = [1000, 100000, 1000000, 4000000];
+const LENGTHS: [usize; 4] = [1000, 100_000, 1_000_000, 4_000_000];
 
 fn prepare_operations_random(n_items: usize) -> (Vec<Operation>, Vec<Operation>) {
     let mut rng = rand::rng();
@@ -59,8 +59,7 @@ fn prepare_operations_local(n_items: usize) -> (Vec<Operation>, Vec<Operation>) 
         operations.push(Operation::Find(rng.random_range(0..n_items)));
     }
     operations.sort_by_key(|op| match op {
-        Operation::Union(a, _) => *a,
-        Operation::Find(a) => *a,
+        Operation::Union(a, _) | Operation::Find(a) => *a,
     });
     (seed_operations, operations)
 }
@@ -84,7 +83,10 @@ fn find_only_random(n_items: usize) -> (Vec<Operation>, Vec<usize>) {
 
 #[divan::bench_group(sample_count = 50)]
 mod find_only {
-    use super::*;
+    use super::{
+        Arc, Bencher, ConcurrentUf, ItemsCount, Operation, ReadOptimizedLock, RwLock, UnionFind,
+        concurrent, find_only_random,
+    };
 
     const N_ITEMS: usize = 1_000_000;
 
@@ -96,7 +98,7 @@ mod find_only {
             concurrent::UnionFind<usize>
         ])]
     fn parallel_naive<const N: usize, UF: ConcurrentUf>(bench: Bencher) {
-        naive_find::<UF>(bench, N, find_only_random)
+        naive_find::<UF>(bench, N, find_only_random);
     }
 
     fn naive_find<UF: ConcurrentUf>(
@@ -122,7 +124,7 @@ mod find_only {
                         });
                     }
                 });
-            })
+            });
     }
 
     #[divan::bench]
@@ -150,13 +152,16 @@ mod find_only {
                 for op in ops {
                     uf.find(op);
                 }
-            })
+            });
     }
 }
 
 #[divan::bench_group(sample_count = 50)]
 mod rayon_work_stealing {
-    use super::*;
+    use super::{
+        Bencher, ItemsCount, LENGTHS, Operation, concurrent, prepare_operations_local,
+        prepare_operations_random,
+    };
 
     #[divan::bench(consts = LENGTHS)]
     fn random<const N: usize>(bench: Bencher) {
@@ -191,7 +196,7 @@ mod rayon_work_stealing {
                 let ops_size = operations.len();
                 let chunked_ops = operations
                     .chunks(chunk_size)
-                    .map(|chunk| chunk.to_vec())
+                    .map(<[Operation]>::to_vec)
                     .collect::<Vec<_>>();
                 (uf, chunked_ops, ops_size)
             })
@@ -220,7 +225,10 @@ mod rayon_work_stealing {
 
 #[divan::bench_group(sample_count = 50)]
 mod local {
-    use super::*;
+    use super::{
+        Arc, Bencher, ConcurrentUf, LENGTHS, Mutex, UnionFind, concurrent,
+        prepare_operations_local, uf_parallel, uf_serial,
+    };
 
     #[divan::bench(consts = LENGTHS)]
     fn serial<const N: usize>(bench: Bencher) {
@@ -255,7 +263,10 @@ mod local {
 
 #[divan::bench_group(sample_count = 50)]
 mod random {
-    use super::*;
+    use super::{
+        Arc, Bencher, ConcurrentUf, LENGTHS, Mutex, UnionFind, concurrent,
+        prepare_operations_random, uf_parallel, uf_serial,
+    };
 
     #[divan::bench(consts = LENGTHS)]
     fn serial<const N: usize>(bench: Bencher) {

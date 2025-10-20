@@ -43,6 +43,7 @@ impl AtomicInt for AtomicU64 {
     fn from_usize(value: usize) -> Self {
         AtomicU64::new(value as u64)
     }
+    #[allow(clippy::cast_possible_truncation)]
     fn as_usize(value: u64) -> usize {
         value as usize
     }
