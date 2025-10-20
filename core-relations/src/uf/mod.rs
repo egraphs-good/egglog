@@ -86,7 +86,7 @@ impl Rebuilder for Canonicalizer<'_> {
         }
         assert!(end.index() <= buf.len());
         let mut cur = start;
-        let mut scratch = with_pool_set(|ps| ps.get::<Vec<Value>>());
+        let mut scratch = with_pool_set(super::pool::PoolSet::get::<Vec<Value>>);
         // SAFETY: `cur` is always in-bounds, guaranteed by the above assertion.
         // Special-case small columns: this gives us a modest speedup on rebuilding-heavy
         // workloads.
@@ -168,8 +168,8 @@ impl Rebuilder for Canonicalizer<'_> {
         out: &mut TaggedRowBuffer,
         _exec_state: &mut ExecutionState,
     ) {
-        let _next = other.scan_bounded(subset, Offset::new(0), usize::MAX, out);
-        debug_assert!(_next.is_none());
+        let next = other.scan_bounded(subset, Offset::new(0), usize::MAX, out);
+        debug_assert!(next.is_none());
         for i in 0..u32::try_from(out.len()).expect("row buffer sizes should fit in a u32") {
             let i = RowId::new(i);
             let (_id, row) = out.get_row_mut(i);
@@ -215,7 +215,7 @@ impl Clone for DisplacedTable {
             displaced: self.displaced.clone(),
             changed: self.changed,
             lookup_table: self.lookup_table.clone(),
-            buffered_writes: Default::default(),
+            buffered_writes: Arc::default(),
         }
     }
 }
@@ -414,7 +414,7 @@ impl Table for DisplacedTable {
     fn get_row(&self, key: &[Value]) -> Option<Row> {
         assert_eq!(key.len(), 1, "attempt to lookup a row with the wrong key");
         let row_id = *self.lookup_table.get(&key[0])?;
-        let mut vals = with_pool_set(|ps| ps.get::<Vec<Value>>());
+        let mut vals = with_pool_set(super::pool::PoolSet::get::<Vec<Value>>);
         vals.extend_from_slice(self.expand(row_id).as_slice());
         Some(Row { id: row_id, vals })
     }
@@ -453,6 +453,7 @@ impl Table for DisplacedTable {
 }
 
 impl DisplacedTable {
+    #[must_use]
     pub fn underlying_uf(&self) -> &UnionFind {
         &self.uf
     }
@@ -661,6 +662,10 @@ impl DisplacedTableWithProvenance {
     /// The path in the graph is restricted to the timestamps at or before `l`
     /// and `r` first became equal. This is to avoid cycles during proof
     /// reconstruction.
+    ///
+    /// # Panics
+    /// Shouldn't; we only unwrap nodes that are known to be in the graph.
+    #[must_use]
     pub fn get_proof(&self, l: Value, r: Value) -> Option<Vec<ProofStep>> {
         let ts = self.timestamp_when_equal(l, r)?;
         let start = self.node_map[&l];
@@ -842,7 +847,7 @@ impl Table for DisplacedTableWithProvenance {
         self
     }
     fn clear(&mut self) {
-        self.base.clear()
+        self.base.clear();
     }
     fn all(&self) -> Subset {
         self.base.all()

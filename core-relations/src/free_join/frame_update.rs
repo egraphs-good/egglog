@@ -53,6 +53,7 @@ impl FrameUpdates {
     }
 
     /// Bind `var` to `val` in the current frame.
+    #[allow(clippy::similar_names)]
     pub(super) fn push_binding(&mut self, var: Variable, val: Value) {
         self.updates.push(UpdateCell::PushBinding(var, val));
     }
@@ -86,12 +87,9 @@ impl FrameUpdates {
         self.updates.clear();
     }
 
+    #[allow(clippy::similar_names)]
     pub(super) fn drain(&mut self, f: impl FnMut(UpdateInstr)) {
-        let start = if matches!(self.updates.first(), Some(UpdateCell::EndFrame)) {
-            1 // Skip the first EndFrame
-        } else {
-            0
-        };
+        let start = usize::from(matches!(self.updates.first(), Some(UpdateCell::EndFrame)));
         self.updates
             .drain(start..)
             .map(|cell| match cell {

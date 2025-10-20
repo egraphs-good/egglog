@@ -14,9 +14,14 @@ macro_rules! impl_small_base_value {
     ($ty:ty) => {
         impl BaseValue for $ty {
             const MAY_UNBOX: bool = true;
+            #[allow(clippy::cast_possible_truncation)]
+            #[allow(clippy::cast_possible_wrap)]
+            #[allow(clippy::cast_sign_loss)]
             fn try_unbox(val: Value) -> Option<Self> {
                 Some(val.rep() as $ty)
             }
+            #[allow(clippy::cast_lossless)]
+            #[allow(clippy::cast_sign_loss)]
             fn try_box(&self) -> Option<Value> {
                 Some(Value::new(*self as u32))
             }
@@ -47,7 +52,7 @@ impl BaseValue for bool {
     /// assert_eq!(bool::try_unbox(false_value).unwrap(), false);
     /// ```
     fn try_box(&self) -> Option<Value> {
-        Some(Value::new(if *self { 1 } else { 0 }))
+        Some(Value::new(u32::from(*self)))
     }
 }
 
@@ -68,6 +73,7 @@ impl BaseValue for () {
     }
 }
 
+#[allow(clippy::cast_possible_truncation)]
 const VAL_BITS: u32 = std::mem::size_of::<Value>() as u32 * 8;
 const VAL_MASK: u32 = 1 << (VAL_BITS - 1);
 
@@ -75,6 +81,10 @@ macro_rules! impl_medium_base_value {
     ($ty:ty) => {
         impl BaseValue for $ty {
             const MAY_UNBOX: bool = true;
+            #[allow(clippy::cast_lossless)]
+            #[allow(clippy::cast_possible_truncation)]
+            #[allow(clippy::cast_possible_wrap)]
+            #[allow(clippy::cast_sign_loss)]
             fn try_box(&self) -> Option<Value> {
                 if *self & (VAL_MASK-1) as $ty == *self {
                     // If the top bit is clear, we can box it directly.
@@ -84,6 +94,8 @@ macro_rules! impl_medium_base_value {
                     None
                 }
             }
+            #[allow(clippy::cast_lossless)]
+            #[allow(clippy::cast_possible_wrap)]
             fn try_unbox(val: Value) -> Option<Self> {
                 let top_bit_clear = val.rep() & VAL_MASK == 0;
                 if top_bit_clear {

@@ -42,7 +42,7 @@ pub struct RuleSet {
     /// The contents of the queries (i.e. the LHS of the rules) for each rule in the set, along
     /// with a description of the rule.
     ///
-    /// The action here is used to map between rule descriptions and ActionIds. The current
+    /// The action here is used to map between rule descriptions and `ActionId`s. The current
     /// accounting logic assumes that rules and actions stand in a bijection. If we relaxed that
     /// later on, most of the core logic would still work but the accounting logic could get more
     /// complex.
@@ -51,6 +51,9 @@ pub struct RuleSet {
 }
 
 impl RuleSet {
+    /// # Panics
+    /// If the `rule_id` doesn't exist in `plans`.
+    #[must_use]
     pub fn build_cached_plan(&self, rule_id: RuleId) -> CachedPlan {
         let (plan, desc, action_id) = self.plans.get(rule_id).expect("rule must exist");
         let actions = self
@@ -75,9 +78,10 @@ pub struct RuleSetBuilder<'outer> {
 }
 
 impl<'outer> RuleSetBuilder<'outer> {
+    #[must_use]
     pub fn new(db: &'outer mut Database) -> Self {
         Self {
-            rule_set: Default::default(),
+            rule_set: RuleSet::default(),
             db,
         }
     }
@@ -86,6 +90,7 @@ impl<'outer> RuleSetBuilder<'outer> {
     /// constraint.
     ///
     /// This is a wrapper around the [`Database::estimate_size`] method.
+    #[must_use]
     pub fn estimate_size(&self, table: TableId, c: Option<Constraint>) -> usize {
         self.db.estimate_size(table, c)
     }
@@ -97,15 +102,19 @@ impl<'outer> RuleSetBuilder<'outer> {
             rsb: self,
             instrs,
             query: Query {
-                var_info: Default::default(),
-                atoms: Default::default(),
+                var_info: DenseIdMap::default(),
+                atoms: DenseIdMap::default(),
                 // start with an invalid ActionId
                 action: ActionId::new(u32::MAX),
-                plan_strategy: Default::default(),
+                plan_strategy: PlanStrategy::default(),
             },
         }
     }
 
+    /// # Panics
+    /// If atoms aren't where they should be, or if asked for cached plans for constraints without
+    /// fast pushdown.
+    #[must_use]
     pub fn add_rule_from_cached_plan(
         &mut self,
         cached: &CachedPlan,
@@ -116,7 +125,7 @@ impl<'outer> RuleSetBuilder<'outer> {
         let mut plan = Plan {
             atoms: cached.plan.atoms.clone(),
             stages: JoinStages {
-                header: Default::default(),
+                header: Vec::default(),
                 instrs: cached.plan.stages.instrs.clone(),
                 actions: action_id,
             },
@@ -129,11 +138,10 @@ impl<'outer> RuleSetBuilder<'outer> {
             let processed = self
                 .db
                 .process_constraints(table, std::slice::from_ref(constraint));
-            if !processed.slow.is_empty() {
-                panic!(
-                    "Cached plans only support constraints with a fast pushdown. Got: {constraint:?} for table {table:?}",
-                );
-            }
+            assert!(
+                processed.slow.is_empty(),
+                "Cached plans only support constraints with a fast pushdown. Got: {constraint:?} for table {table:?}",
+            );
             plan.stages.header.push(JoinHeader {
                 atom: *atom_id,
                 constraints: processed.fast,
@@ -150,11 +158,10 @@ impl<'outer> RuleSetBuilder<'outer> {
             let atom_info = plan.atoms.get(*atom).expect("atom must exist in plan");
             let table = atom_info.table;
             let processed = self.db.process_constraints(table, constraints);
-            if !processed.slow.is_empty() {
-                panic!(
-                    "Cached plans only support constraints with a fast pushdown. Got: {constraints:?} for table {table:?}",
-                );
-            }
+            assert!(
+                processed.slow.is_empty(),
+                "Cached plans only support constraints with a fast pushdown. Got: {constraints:?} for table {table:?}",
+            );
             plan.stages.header.push(JoinHeader {
                 atom: *atom,
                 constraints: processed.fast,
@@ -168,6 +175,7 @@ impl<'outer> RuleSetBuilder<'outer> {
     }
 
     /// Build the ruleset.
+    #[must_use]
     pub fn build(self) -> RuleSet {
         self.rule_set
     }
@@ -185,6 +193,7 @@ pub struct QueryBuilder<'outer, 'a> {
 
 impl<'outer, 'a> QueryBuilder<'outer, 'a> {
     /// Finish the query and start building the right-hand side of the rule.
+    #[must_use]
     pub fn build(self) -> RuleBuilder<'outer, 'a> {
         RuleBuilder { qb: self }
     }
@@ -197,7 +206,7 @@ impl<'outer, 'a> QueryBuilder<'outer, 'a> {
     /// Create a new variable of the given type.
     pub fn new_var(&mut self) -> Variable {
         self.query.var_info.push(VarInfo {
-            occurrences: Default::default(),
+            occurrences: Vec::default(),
             used_in_rhs: false,
             defined_in_rhs: false,
         })
@@ -211,10 +220,10 @@ impl<'outer, 'a> QueryBuilder<'outer, 'a> {
         }
     }
 
-    fn mark_defined(&mut self, entry: &QueryEntry) {
+    fn mark_defined(&mut self, entry: QueryEntry) {
         // TODO: use some of this information in query planning, e.g. dedup at match time.
         if let QueryEntry::Var(v) = entry {
-            self.query.var_info[*v].defined_in_rhs = true;
+            self.query.var_info[v].defined_in_rhs = true;
         }
     }
 
@@ -226,6 +235,9 @@ impl<'outer, 'a> QueryBuilder<'outer, 'a> {
     ///
     /// The returned `AtomId` can be used to refer to this atom when adding constraints in
     /// [`RuleSetBuilder::rule_from_cached_plan`].
+    ///
+    /// # Errors
+    /// None.
     ///
     /// # Panics
     /// Like most methods that take a [`TableId`], this method will panic if the
@@ -270,23 +282,23 @@ impl<'outer, 'a> QueryBuilder<'outer, 'a> {
                 got: vars.len(),
             });
         }
-        let cs = Vec::from_iter(
-            cs.into_iter()
-                .cloned()
-                .chain(vars.iter().enumerate().filter_map(|(i, qe)| match qe {
-                    QueryEntry::Var(_) => None,
-                    QueryEntry::Const(c) => Some(Constraint::EqConst {
-                        col: ColumnId::from_usize(i),
-                        val: *c,
-                    }),
-                })),
-        );
-        cs.iter().try_fold((), |_, c| check_constraint(c))?;
+        let cs = cs
+            .into_iter()
+            .cloned()
+            .chain(vars.iter().enumerate().filter_map(|(i, qe)| match qe {
+                QueryEntry::Var(_) => None,
+                QueryEntry::Const(c) => Some(Constraint::EqConst {
+                    col: ColumnId::from_usize(i),
+                    val: *c,
+                }),
+            }))
+            .collect::<Vec<_>>();
+        cs.iter().try_fold((), |(), c| check_constraint(c))?;
         let processed = self.rsb.db.process_constraints(table_id, &cs);
         let mut atom = Atom {
             table: table_id,
-            var_to_column: Default::default(),
-            column_to_var: Default::default(),
+            var_to_column: HashMap::default(),
+            column_to_var: DenseIdMap::default(),
             constraints: processed,
         };
         let next_atom = AtomId::from_usize(self.query.atoms.n_ids());
@@ -306,8 +318,8 @@ impl<'outer, 'a> QueryBuilder<'outer, 'a> {
                 atom.constraints.slow.push(Constraint::Eq {
                     l_col: col,
                     r_col: prev,
-                })
-            };
+                });
+            }
             atom.column_to_var.insert(col, var);
             subatoms
                 .entry(var)
@@ -384,26 +396,32 @@ pub struct RuleBuilder<'outer, 'a> {
 
 impl RuleBuilder<'_, '_> {
     /// Build the finished query.
+    #[must_use]
     pub fn build(self) -> RuleId {
         self.build_with_description("")
     }
     pub fn build_with_description(mut self, desc: impl Into<String>) -> RuleId {
         // Generate an id for our actions and slot them in.
-        let used_vars =
-            SmallVec::from_iter(self.qb.query.var_info.iter().filter_map(|(v, info)| {
+        let used_vars = self
+            .qb
+            .query
+            .var_info
+            .iter()
+            .filter_map(|(v, info)| {
                 if info.used_in_rhs && !info.defined_in_rhs {
                     Some(v)
                 } else {
                     None
                 }
-            }));
+            })
+            .collect::<SmallVec<_>>();
         let action_id = self.qb.rsb.rule_set.actions.push(ActionInfo {
             instrs: Arc::new(self.qb.instrs),
             used_vars,
         });
         self.qb.query.action = action_id;
         // Plan the query
-        let plan = self.qb.rsb.db.plan_query(self.qb.query);
+        let plan = self.qb.rsb.db.plan_query(&self.qb.query);
         // Add it to the ruleset.
         self.qb
             .rsb
@@ -416,7 +434,7 @@ impl RuleBuilder<'_, '_> {
     pub fn read_counter(&mut self, counter: CounterId) -> Variable {
         let dst = self.qb.new_var();
         self.qb.instrs.push(Instr::ReadCounter { counter, dst });
-        self.qb.mark_defined(&dst.into());
+        self.qb.mark_defined(dst.into());
         dst
     }
 
@@ -426,6 +444,12 @@ impl RuleBuilder<'_, '_> {
     ///
     /// If the key does not currently have a mapping in the table, the values
     /// specified by `default_vals` will be inserted.
+    ///
+    /// # Errors
+    /// None.
+    ///
+    /// # Panics
+    /// If the table has yet to be declared in the current database.
     pub fn lookup_or_insert(
         &mut self,
         table: TableId,
@@ -456,7 +480,7 @@ impl RuleBuilder<'_, '_> {
                 WriteVal::QueryEntry(qe) => Some(qe),
                 WriteVal::IncCounter(_) | WriteVal::CurrentVal(_) => None,
             }));
-        self.qb.mark_defined(&res.into());
+        self.qb.mark_defined(res.into());
         Ok(res)
     }
 
@@ -466,6 +490,12 @@ impl RuleBuilder<'_, '_> {
     ///
     /// If the key does not currently have a mapping in the table, the variable
     /// takes the value of `default`.
+    ///
+    /// # Errors
+    /// None.
+    ///
+    /// # Panics
+    /// If the table has yet to be declared in the current database.
     pub fn lookup_with_default(
         &mut self,
         table: TableId,
@@ -491,7 +521,7 @@ impl RuleBuilder<'_, '_> {
         });
         self.qb.mark_used(args);
         self.qb.mark_used(&[default]);
-        self.qb.mark_defined(&res.into());
+        self.qb.mark_defined(res.into());
         Ok(res)
     }
 
@@ -501,6 +531,12 @@ impl RuleBuilder<'_, '_> {
     ///
     /// If the key does not currently have a mapping in the table, execution of
     /// the rule is halted.
+    ///
+    /// # Errors
+    /// None.
+    ///
+    /// # Panics
+    /// If the table has yet to be declared in the current database.
     pub fn lookup(
         &mut self,
         table: TableId,
@@ -523,11 +559,17 @@ impl RuleBuilder<'_, '_> {
             dst_var: res,
         });
         self.qb.mark_used(args);
-        self.qb.mark_defined(&res.into());
+        self.qb.mark_defined(res.into());
         Ok(res)
     }
 
     /// Insert the specified values into the given table.
+    ///
+    /// # Errors
+    /// None.
+    ///
+    /// # Panics
+    /// If the table has yet to be declared in the current database.
     pub fn insert(&mut self, table: TableId, vals: &[QueryEntry]) -> Result<(), QueryError> {
         let table_info = self
             .qb
@@ -546,6 +588,12 @@ impl RuleBuilder<'_, '_> {
     }
 
     /// Insert the specified values into the given table if `l` and `r` are equal.
+    ///
+    /// # Errors
+    /// None.
+    ///
+    /// # Panics
+    /// If the table has yet to be declared in the current database.
     pub fn insert_if_eq(
         &mut self,
         table: TableId,
@@ -573,6 +621,12 @@ impl RuleBuilder<'_, '_> {
     }
 
     /// Remove the specified entry from the given table, if it is there.
+    ///
+    /// # Errors
+    /// None.
+    ///
+    /// # Panics
+    /// If the table has yet to be declared in the current database.
     pub fn remove(&mut self, table: TableId, args: &[QueryEntry]) -> Result<(), QueryError> {
         let table_info = self
             .qb
@@ -591,6 +645,9 @@ impl RuleBuilder<'_, '_> {
     }
 
     /// Apply the given external function to the specified arguments.
+    ///
+    /// # Errors
+    /// None.
     pub fn call_external(
         &mut self,
         func: ExternalFunctionId,
@@ -603,13 +660,19 @@ impl RuleBuilder<'_, '_> {
             dst: res,
         });
         self.qb.mark_used(args);
-        self.qb.mark_defined(&res.into());
+        self.qb.mark_defined(res.into());
         Ok(res)
     }
 
     /// Look up the given key in the given table. If the lookup fails, then call the given external
     /// function with the given arguments. Bind the result to the returned variable. If the
     /// external function returns None (and the lookup fails) then the execution of the rule halts.
+    ///
+    /// # Errors
+    /// None.
+    ///
+    /// # Panics
+    /// If the table has yet to be declared in the current database.
     pub fn lookup_with_fallback(
         &mut self,
         table: TableId,
@@ -637,10 +700,12 @@ impl RuleBuilder<'_, '_> {
         });
         self.qb.mark_used(key);
         self.qb.mark_used(func_args);
-        self.qb.mark_defined(&res.into());
+        self.qb.mark_defined(res.into());
         Ok(res)
     }
 
+    /// # Errors
+    /// None.
     pub fn call_external_with_fallback(
         &mut self,
         f1: ExternalFunctionId,
@@ -658,7 +723,7 @@ impl RuleBuilder<'_, '_> {
         });
         self.qb.mark_used(args1);
         self.qb.mark_used(args2);
-        self.qb.mark_defined(&res.into());
+        self.qb.mark_defined(res.into());
         Ok(res)
     }
 
@@ -669,6 +734,9 @@ impl RuleBuilder<'_, '_> {
     }
 
     /// Continue execution iff the two arguments are not equal.
+    ///
+    /// # Errors
+    /// None.
     pub fn assert_ne(&mut self, l: QueryEntry, r: QueryEntry) -> Result<(), QueryError> {
         self.qb.instrs.push(Instr::AssertNe(l, r));
         self.qb.mark_used(&[l, r]);
@@ -678,6 +746,9 @@ impl RuleBuilder<'_, '_> {
     /// Continue execution iff there is some `i` such that `l[i] != r[i]`.
     ///
     /// This is useful when doing egglog-style rebuilding.
+    ///
+    /// # Errors
+    /// If the two sets of entries have different lengths.
     pub fn assert_any_ne(&mut self, l: &[QueryEntry], r: &[QueryEntry]) -> Result<(), QueryError> {
         if l.len() != r.len() {
             return Err(QueryError::MultiComparisonMismatch {
@@ -698,40 +769,43 @@ impl RuleBuilder<'_, '_> {
         Ok(())
     }
 
+    #[allow(clippy::unused_self)]
     fn validate_row(
         &self,
         table: TableId,
         info: &TableInfo,
         vals: &[QueryEntry],
     ) -> Result<(), QueryError> {
-        if vals.len() != info.spec.arity() {
+        if vals.len() == info.spec.arity() {
+            Ok(())
+        } else {
             Err(QueryError::TableArityMismatch {
                 table,
                 expected: info.spec.arity(),
                 got: vals.len(),
             })
-        } else {
-            Ok(())
         }
     }
 
+    #[allow(clippy::unused_self)]
     fn validate_keys(
         &self,
         table: TableId,
         info: &TableInfo,
         keys: &[QueryEntry],
     ) -> Result<(), QueryError> {
-        if keys.len() != info.spec.n_keys {
+        if keys.len() == info.spec.n_keys {
+            Ok(())
+        } else {
             Err(QueryError::KeyArityMismatch {
                 table,
                 expected: info.spec.n_keys,
                 got: keys.len(),
             })
-        } else {
-            Ok(())
         }
     }
 
+    #[allow(clippy::unused_self)]
     fn validate_vals<'b>(
         &self,
         table: TableId,

@@ -87,7 +87,7 @@ impl JoinStage {
     /// This operation is very conservative right now, it only fuses multiple
     /// scans that do no filtering whatsoever.
     fn fuse(&mut self, other: &JoinStage) -> bool {
-        use JoinStage::*;
+        use JoinStage::{FusedIntersect, Intersect};
         match (self, other) {
             (
                 FusedIntersect {
@@ -143,7 +143,7 @@ impl JoinStage {
                         constraints: mem::take(&mut scans1[0].cs),
                     },
                     bind: smallvec![(col1, var1), (col2, *var2)],
-                    to_intersect: Default::default(),
+                    to_intersect: Vec::default(),
                 };
                 true
             }
@@ -178,7 +178,7 @@ pub enum PlanStrategy {
     /// Free Join: Pick an approximate minimal set of covers, then order those
     /// covers in increasing order of size.
     ///
-    /// This is similar to PureSize but we first limit the potential atoms that
+    /// This is similar to `PureSize` but we first limit the potential atoms that
     /// can act as covers so as to minimize the total number of stages in the
     /// plan. This is only an approximate minimum: the problem of finding the
     /// exact minimum ("set cover") is NP-hard.
@@ -190,7 +190,7 @@ pub enum PlanStrategy {
     Gj,
 }
 
-pub(crate) fn plan_query(query: Query) -> Plan {
+pub(crate) fn plan_query(query: &Query) -> Plan {
     Planner::new(&query.var_info, &query.atoms).plan(query.plan_strategy, query.action)
 }
 
@@ -206,9 +206,9 @@ struct Planner<'a> {
     scratch_subatom: HashMap<AtomId, SmallVec<[ColumnId; 2]>>,
 }
 
-/// StageInfo is an intermediate stage used to describe the ordering of
+/// `StageInfo` is an intermediate stage used to describe the ordering of
 /// operations. One of these contains enough information to "expand" it to a
-/// JoinStage, but it still contains variable information.
+/// `JoinStage`, but it still contains variable information.
 ///
 /// This separation makes it easier for us to iterate with different planning
 /// algorithms while sharing the same "backend" that generates a concrete plan.
@@ -231,7 +231,7 @@ impl<'a> Planner<'a> {
             atoms,
             used: VarSet::with_capacity(vars.n_ids()),
             constrained: AtomSet::with_capacity(atoms.n_ids()),
-            scratch_subatom: Default::default(),
+            scratch_subatom: HashMap::default(),
         }
     }
 
@@ -262,14 +262,15 @@ impl<'a> Planner<'a> {
                 }
             }
             PlanStrategy::Gj => unreachable!(),
-        };
+        }
         size_info.sort_by_key(|(_, size)| *size);
         let mut atoms = size_info.iter().map(|(atom, _)| *atom);
         while let Some(info) = self.get_next_freejoin_stage(&mut atoms) {
-            stages.push(self.compile_stage(info))
+            stages.push(self.compile_stage(info));
         }
     }
 
+    #[allow(clippy::cast_possible_wrap)]
     fn plan_gj(
         &mut self,
         remaining_constraints: &DenseIdMap<AtomId, (usize, &Pooled<Vec<Constraint>>)>,
@@ -317,7 +318,7 @@ impl<'a> Planner<'a> {
             let mut info = StageInfo {
                 cover: occ,
                 vars: smallvec![var],
-                filters: Default::default(),
+                filters: Vec::default(),
             };
             for occ in &self.vars[var].occurrences[1..] {
                 info.filters
@@ -339,7 +340,7 @@ impl<'a> Planner<'a> {
         self.used.clear();
         self.constrained.clear();
         let mut remaining_constraints: DenseIdMap<AtomId, (usize, &Pooled<Vec<Constraint>>)> =
-            Default::default();
+            DenseIdMap::default();
         // First, plan all the constants:
         for (atom, atom_info) in self.atoms.iter() {
             remaining_constraints.insert(
@@ -396,7 +397,7 @@ impl<'a> Planner<'a> {
                 self.used.insert(var.index());
                 vars.push(*var);
                 cover.vars.push(ix);
-                for subatom in self.vars[*var].occurrences.iter() {
+                for subatom in &self.vars[*var].occurrences {
                     if subatom.atom == atom {
                         continue;
                     }
@@ -448,22 +449,21 @@ impl<'a> Planner<'a> {
                     .all(|(_, x)| x.len() == 1 && x[0] == ColumnId::new(0)),
                 "filters={filters:?}"
             );
-            let scans = SmallVec::<[SingleScanSpec; 3]>::from_iter(
-                iter::once(&cover)
-                    .chain(filters.iter().map(|(x, _)| x))
-                    .map(|subatom| {
-                        let atom = subatom.atom;
-                        SingleScanSpec {
-                            atom,
-                            column: subatom.vars[0],
-                            cs: if !self.constrained.put(atom.index()) {
-                                self.atoms[atom].constraints.slow.clone()
-                            } else {
-                                Default::default()
-                            },
-                        }
-                    }),
-            );
+            let scans = iter::once(&cover)
+                .chain(filters.iter().map(|(x, _)| x))
+                .map(|subatom| {
+                    let atom = subatom.atom;
+                    SingleScanSpec {
+                        atom,
+                        column: subatom.vars[0],
+                        cs: if self.constrained.put(atom.index()) {
+                            Vec::default()
+                        } else {
+                            self.atoms[atom].constraints.slow.clone()
+                        },
+                    }
+                })
+                .collect::<SmallVec<_>>();
             return JoinStage::Intersect {
                 var: vars[0],
                 scans,
@@ -472,10 +472,10 @@ impl<'a> Planner<'a> {
         let atom = cover.atom;
         let cover = ScanSpec {
             to_index: cover,
-            constraints: if !self.constrained.put(atom.index()) {
-                self.atoms[atom].constraints.slow.clone()
+            constraints: if self.constrained.put(atom.index()) {
+                Vec::default()
             } else {
-                Default::default()
+                self.atoms[atom].constraints.slow.clone()
             },
         };
         let mut bind = SmallVec::new();
@@ -489,10 +489,10 @@ impl<'a> Planner<'a> {
             let atom = subatom.atom;
             let scan = ScanSpec {
                 to_index: subatom,
-                constraints: if !self.constrained.put(atom.index()) {
-                    self.atoms[atom].constraints.slow.clone()
+                constraints: if self.constrained.put(atom.index()) {
+                    Vec::default()
                 } else {
-                    Default::default()
+                    self.atoms[atom].constraints.slow.clone()
                 },
             };
             to_intersect.push((scan, key_spec));

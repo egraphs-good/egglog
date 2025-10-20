@@ -46,6 +46,7 @@ define_id!(
 define_id!(pub Variable, u32, "a variable in a query");
 
 impl Variable {
+    #[must_use]
     pub fn placeholder() -> Variable {
         Variable::new(!0)
     }
@@ -92,7 +93,7 @@ impl SubAtom {
     pub(crate) fn new(atom: AtomId) -> SubAtom {
         SubAtom {
             atom,
-            vars: Default::default(),
+            vars: SmallVec::default(),
         }
     }
 }
@@ -218,7 +219,7 @@ pub(crate) trait ExternalFunctionExt: ExternalFunction {
     ) {
         let mut out = bindings.take(out_var).expect("out_var must be bound");
         for_each_binding_with_mask!(mask, args, bindings, |iter| {
-            iter.assign_vec_and_retain(&mut out.vals, |_, args| self.invoke(state, &args))
+            iter.assign_vec_and_retain(&mut out.vals, |_, args| self.invoke(state, &args));
         });
         bindings.replace(out);
     }
@@ -240,7 +241,7 @@ impl Clone for Counters {
         let mut map = DenseIdMap::new();
         for (k, v) in self.0.iter() {
             // NB: we may want to experiment with Ordering::Relaxed here.
-            map.insert(k, AtomicUsize::new(v.load(Ordering::SeqCst)))
+            map.insert(k, AtomicUsize::new(v.load(Ordering::SeqCst)));
         }
         Counters(map)
     }
@@ -272,6 +273,7 @@ pub struct RuleReport {
 }
 
 impl RuleReport {
+    #[must_use]
     pub fn union(&self, other: &RuleReport) -> RuleReport {
         RuleReport {
             search_and_apply_time: self.search_and_apply_time + other.search_and_apply_time,
@@ -310,6 +312,7 @@ impl Database {
     ///
     /// Queries are executed using the current rayon thread pool, which defaults to the global
     /// thread pool.
+    #[must_use]
     pub fn new() -> Database {
         Database::default()
     }
@@ -332,6 +335,7 @@ impl Database {
         self.external_functions.take(id);
     }
 
+    #[must_use]
     pub fn base_values(&self) -> &BaseValues {
         &self.base_values
     }
@@ -340,6 +344,7 @@ impl Database {
         &mut self.base_values
     }
 
+    #[must_use]
     pub fn container_values(&self) -> &ContainerValues {
         &self.container_values
     }
@@ -362,6 +367,9 @@ impl Database {
     /// values in a table like [`crate::SortedWritesTable`] where values in a certain column need
     /// to be inserted in sorted order; the `next_ts` argument to this method is passed to
     /// `apply_rebuild` for this purpose.
+    ///
+    /// # Panics
+    /// If the `func_id` isn't a declared table.
     pub fn apply_rebuild(
         &mut self,
         func_id: TableId,
@@ -380,7 +388,11 @@ impl Database {
                     func_id,
                     &func.table,
                     next_ts,
-                    &mut ExecutionState::new(&predicted, self.read_only_view(), Default::default()),
+                    &mut ExecutionState::new(
+                        &predicted,
+                        self.read_only_view(),
+                        DenseIdMap::default(),
+                    ),
                 );
             });
             for (id, info) in tables {
@@ -393,7 +405,11 @@ impl Database {
                     func_id,
                     &func.table,
                     next_ts,
-                    &mut ExecutionState::new(&predicted, self.read_only_view(), Default::default()),
+                    &mut ExecutionState::new(
+                        &predicted,
+                        self.read_only_view(),
+                        DenseIdMap::default(),
+                    ),
                 );
                 self.tables.insert(*id, info);
             }
@@ -404,8 +420,9 @@ impl Database {
 
     /// Run `f` with access to an `ExecutionState` mapped to this database.
     pub fn with_execution_state<R>(&self, f: impl FnOnce(&mut ExecutionState) -> R) -> R {
-        let predicted = with_pool_set(|ps| ps.get::<PredictedVals>());
-        let mut state = ExecutionState::new(&predicted, self.read_only_view(), Default::default());
+        let predicted = with_pool_set(super::pool::PoolSet::get::<PredictedVals>);
+        let mut state =
+            ExecutionState::new(&predicted, self.read_only_view(), DenseIdMap::default());
         f(&mut state)
     }
 
@@ -421,6 +438,10 @@ impl Database {
 
     /// Estimate the size of the table. If a constraint is provided, return an
     /// estimate of the size of the subset of the table matching the constraint.
+    ///
+    /// # Panics
+    /// If the id isn't declared in the current database.
+    #[must_use]
     pub fn estimate_size(&self, table: TableId, c: Option<Constraint>) -> usize {
         let table_info = self
             .tables
@@ -448,11 +469,13 @@ impl Database {
     }
 
     /// Increment the given counter and return its previous value.
+    #[must_use]
     pub fn inc_counter(&self, counter: CounterId) -> usize {
         self.counters.inc(counter)
     }
 
     /// Get the current value of the given counter.
+    #[must_use]
     pub fn read_counter(&self, counter: CounterId) -> usize {
         self.counters.read(counter)
     }
@@ -463,12 +486,15 @@ impl Database {
     /// Exposed for testing purposes.
     ///
     /// Useful for out-of-band insertions into the database.
+    ///
+    /// # Panics
+    /// Shouldn't, despite some internal `unwrap()`s.
     pub fn merge_all(&mut self) -> bool {
         let mut ever_changed = false;
         let do_parallel = parallelize_db_level_op(self.total_size_estimate);
         loop {
             let mut changed = false;
-            let predicted = with_pool_set(|ps| ps.get::<PredictedVals>());
+            let predicted = with_pool_set(super::pool::PoolSet::get::<PredictedVals>);
             let mut tables_merging = DenseIdMap::<
                 TableId,
                 (
@@ -547,12 +573,12 @@ impl Database {
     /// surprises here.
     pub fn merge_table(&mut self, table: TableId) {
         let mut info = self.tables.unwrap_val(table);
-        let predicted = with_pool_set(|ps| ps.get::<PredictedVals>());
+        let predicted = with_pool_set(super::pool::PoolSet::get::<PredictedVals>);
         self.total_size_estimate = self.total_size_estimate.wrapping_sub(info.table.len());
         let _table_changed = info.table.merge(&mut ExecutionState::new(
             &predicted,
             self.read_only_view(),
-            Default::default(),
+            DenseIdMap::default(),
         ));
         self.total_size_estimate = self.total_size_estimate.wrapping_add(info.table.len());
         self.tables.insert(table, info);
@@ -562,6 +588,7 @@ impl Database {
     ///
     /// This can be useful for "knot tying", when tables need to reference their
     /// own id.
+    #[must_use]
     pub fn next_table_id(&self) -> TableId {
         self.tables.next_id()
     }
@@ -581,8 +608,8 @@ impl Database {
         let res = self.tables.push(TableInfo {
             spec,
             table,
-            indexes: Default::default(),
-            column_indexes: Default::default(),
+            indexes: DashMap::default(),
+            column_indexes: DashMap::default(),
         });
         self.deps.add_table(res, read_deps, write_deps);
         res
@@ -591,6 +618,10 @@ impl Database {
     /// Get direct mutable access to the table.
     ///
     /// This method is useful for out-of-band access to databse state.
+    ///
+    /// # Panics
+    /// If the `id` hasn't been declared in this database.
+    #[must_use]
     pub fn get_table(&self, id: TableId) -> &WrappedTable {
         &self
             .tables
@@ -647,6 +678,9 @@ impl Database {
     /// Get direct mutable access to the table.
     ///
     /// This method is useful for out-of-band access to databse state.
+    ///
+    /// # Panics
+    /// If the `id` hasn't been declared in this database.
     pub fn get_table_mut(&mut self, id: TableId) -> &mut dyn Table {
         &mut *self
             .tables
@@ -655,7 +689,8 @@ impl Database {
             .table
     }
 
-    pub(crate) fn plan_query(&mut self, query: Query) -> Plan {
+    #[allow(clippy::unused_self)]
+    pub(crate) fn plan_query(&mut self, query: &Query) -> Plan {
         plan::plan_query(query)
     }
 }

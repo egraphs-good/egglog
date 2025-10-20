@@ -8,7 +8,7 @@ use crate::{
     table_spec::{ColumnId, Table},
 };
 
-/// A very basic macro just used to initialize an ExecutionState for tests that
+/// A very basic macro just used to initialize an `ExecutionState` for tests that
 /// do not actually use one.
 macro_rules! empty_execution_state {
     ($es:ident) => {

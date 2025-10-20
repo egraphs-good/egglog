@@ -2,13 +2,12 @@
 use std::{
     hash::{Hash, Hasher},
     mem,
-    sync::{Arc, Mutex},
+    sync::{Arc, LazyLock, Mutex},
 };
 
 use crate::numeric_id::{IdVec, NumericId, define_id};
 use egglog_concurrency::Notification;
 use hashbrown::HashTable;
-use once_cell::sync::Lazy;
 use rayon::iter::ParallelIterator;
 use rustc_hash::FxHasher;
 
@@ -67,16 +66,16 @@ impl<TI: IndexBase> Index<TI> {
         if cur_version == self.updated_to {
             return;
         }
-        let subset = if cur_version.major != self.updated_to.major {
+        let subset = if cur_version.major == self.updated_to.major {
+            table.updates_since(self.updated_to.minor)
+        } else {
             self.table.clear();
             table.all()
-        } else {
-            table.updates_since(self.updated_to.minor)
         };
         if parallelize_index_construction(subset.size()) {
             self.table.merge_parallel(&self.key, table, subset.as_ref());
         } else {
-            self.refresh_serial(table, subset);
+            self.refresh_serial(table, &subset);
         }
 
         self.updated_to = cur_version;
@@ -86,7 +85,7 @@ impl<TI: IndexBase> Index<TI> {
     ///
     /// The index is guaranteed to be up to date until `merge` is called on the
     /// table again.
-    pub(crate) fn refresh_serial(&mut self, table: WrappedTableRef, subset: Subset) {
+    pub(crate) fn refresh_serial(&mut self, table: WrappedTableRef, subset: &Subset) {
         let mut buf = TaggedRowBuffer::new(self.key.len());
         let mut cur = Offset::new(0);
         loop {
@@ -130,7 +129,7 @@ impl SubsetTable {
     fn new(key_arity: usize) -> SubsetTable {
         SubsetTable {
             keys: RowBuffer::new(key_arity),
-            hash: with_pool_set(|ps| ps.get()),
+            hash: with_pool_set(super::pool::PoolSet::get),
         }
     }
 }
@@ -192,7 +191,7 @@ impl IndexBase for ColumnIndex {
                 match subset {
                     BufferedSubset::Dense(_) => {}
                     BufferedSubset::Sparse(buffered_vec) => {
-                        shard.subsets.return_vec(buffered_vec);
+                        shard.subsets.return_vec(&buffered_vec);
                     }
                 }
             }
@@ -339,7 +338,7 @@ fn run_in_thread_pool_and_block<'a>(pool: &rayon::ThreadPool, f: impl FnMut() + 
         mem::drop(casted_away);
         inner.notify();
     });
-    n.wait()
+    n.wait();
 }
 
 impl ColumnIndex {
@@ -394,7 +393,7 @@ impl IndexBase for TupleIndex {
                 match entry.vals {
                     BufferedSubset::Dense(_) => {}
                     BufferedSubset::Sparse(v) => {
-                        shard.subsets.return_vec(v);
+                        shard.subsets.return_vec(&v);
                     }
                 }
             }
@@ -556,10 +555,10 @@ define_id!(BufferIndex, u32, "an index into a subset buffer");
 /// lifetime.
 ///
 /// This is used as the backing store for subsets stored in indexes. While
-/// definitely saves some allocations, the primary use for SubsetBuffer is to
+/// definitely saves some allocations, the primary use for `SubsetBuffer` is to
 /// make deallocation faster: with a standard [`crate::offsets::Subset`]
 /// structure stored in the index, dropping requires an O(n) traversal of the
-/// index. SubsetBuffer allows deallocation to happen in constant time (given
+/// index. `SubsetBuffer` allows deallocation to happen in constant time (given
 /// our use of memory pools).
 struct SubsetBuffer {
     buf: Pooled<Vec<RowId>>,
@@ -579,7 +578,7 @@ impl Default for SubsetBuffer {
     fn default() -> SubsetBuffer {
         with_pool_set(|ps| SubsetBuffer {
             buf: ps.get(),
-            free_list: Default::default(),
+            free_list: FreeList::default(),
         })
     }
 }
@@ -611,11 +610,11 @@ impl SubsetBuffer {
         BufferedVec(start, cur)
     }
 
-    fn return_vec(&mut self, vec: BufferedVec) {
+    fn return_vec(&mut self, vec: &BufferedVec) {
         self.free_list.get_size_class(vec.len()).push(vec.0);
     }
 
-    fn push_vec(&mut self, vec: BufferedVec, row: RowId) -> BufferedVec {
+    fn push_vec(&mut self, vec: &BufferedVec, row: RowId) -> BufferedVec {
         assert!(
             vec.is_empty() || self.buf[vec.1.index() - 1] <= row,
             "vec={vec:?}, row={row:?}, last_elt={:?}",
@@ -657,7 +656,7 @@ impl SubsetBuffer {
         #[cfg(debug_assertions)]
         {
             use crate::offsets::Offsets;
-            res.offsets(|x| assert_ne!(x.rep(), u32::MAX))
+            res.offsets(|x| assert_ne!(x.rep(), u32::MAX));
         }
         res
     }
@@ -711,10 +710,10 @@ impl BufferedSubset {
                     return;
                 }
                 let mut v = buf.new_vec((range.start.rep()..range.end.rep()).map(RowId::new));
-                v = buf.push_vec(v, row);
+                v = buf.push_vec(&v, row);
                 *self = BufferedSubset::Sparse(v);
             }
-            BufferedSubset::Sparse(vec) => *vec = buf.push_vec(mem::take(vec), row),
+            BufferedSubset::Sparse(vec) => *vec = buf.push_vec(vec, row),
         }
     }
 
@@ -745,8 +744,8 @@ fn num_shards() -> usize {
 /// and we do not want to take a long-running lock in the global thread pool without another
 /// way to get parallelism.
 ///
-/// Earlier solutions using rayon::yield_now() were unreliable.
-static THREAD_POOL: Lazy<rayon::ThreadPool> = Lazy::new(|| {
+/// Earlier solutions using `rayon::yield_now()` were unreliable.
+static THREAD_POOL: LazyLock<rayon::ThreadPool> = LazyLock::new(|| {
     rayon::ThreadPoolBuilder::new()
         .num_threads(rayon::current_num_threads())
         .build()

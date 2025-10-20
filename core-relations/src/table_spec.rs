@@ -41,10 +41,10 @@ define_id!(
 /// The version of a table.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct TableVersion {
-    /// New major generations invalidate all existing RowIds for a table.
+    /// New major generations invalidate all existing `RowIds` for a table.
     pub major: Generation,
     /// New minor generations within a major generation do not invalidate
-    /// existing RowIds, but they may indicate that `all` can return a larger
+    /// existing `RowIds`, but they may indicate that `all` can return a larger
     /// subset than before.
     pub minor: Offset,
     // NB: we may want to make `Offset` and `RowId` the same.
@@ -75,6 +75,7 @@ pub struct TableSpec {
 
 impl TableSpec {
     /// The total number of columns stored by the table.
+    #[must_use]
     pub fn arity(&self) -> usize {
         self.n_keys + self.n_vals
     }
@@ -258,14 +259,14 @@ pub trait Table: Any + Send + Sync {
 
     /// Filter a given subset of the table for the rows matching the single constraint.
     ///
-    /// Implementors must provide at least one of `refine_one` or `refine`.`
+    /// Implementors must provide at least one of `refine_one` or `refine`.
     fn refine_one(&self, subset: Subset, c: &Constraint) -> Subset {
         self.refine(subset, std::slice::from_ref(c))
     }
 
     /// Filter a given subset of the table for the rows matching the given constraints.
     ///
-    /// Implementors must provide at least one of `refine_one` or `refine`.`
+    /// Implementors must provide at least one of `refine_one` or `refine`.
     fn refine(&self, subset: Subset, cs: &[Constraint]) -> Subset {
         cs.iter()
             .fold(subset, |subset, c| self.refine_one(subset, c))
@@ -460,7 +461,7 @@ impl<T: Table> TableWrapper for WrapperImpl<T> {
         for_each_binding_with_mask!(mask, args, bindings, |iter| {
             iter.fill_vec(&mut out, Value::stale, |_, args| {
                 table.get_row_column(args.as_slice(), col)
-            })
+            });
         });
         bindings.insert(out_var, &out);
     }
@@ -476,7 +477,7 @@ impl<T: Table> TableWrapper for WrapperImpl<T> {
         out_var: Variable,
     ) {
         let table = table.as_any().downcast_ref::<T>().unwrap();
-        let mut out = with_pool_set(|ps| ps.get::<Vec<Value>>());
+        let mut out = with_pool_set(super::pool::PoolSet::get::<Vec<Value>>);
         for_each_binding_with_mask!(mask, args, bindings, |iter| {
             match default {
                 QueryEntry::Var(default) => iter.zip(&bindings[default]).fill_vec(
@@ -503,13 +504,13 @@ impl<T: Table> TableWrapper for WrapperImpl<T> {
     }
 }
 
-/// A WrappedTable takes a Table and extends it with a number of helpful,
+/// A `WrappedTable` takes a `Table` and extends it with a number of helpful,
 /// object-safe methods for accessing a table.
 ///
 /// It essentially acts like an extension trait: it is a separate type to allow
 /// object-safe extension methods to call methods that require `Self: Sized`.
 /// The implementations here downcast manually to the type used when
-/// constructing the WrappedTable.
+/// constructing the `WrappedTable`.
 pub struct WrappedTable {
     inner: Box<dyn Table>,
     wrapper: Box<dyn TableWrapper>,
@@ -523,6 +524,7 @@ impl WrappedTable {
     }
 
     /// Clone the contents of the table.
+    #[must_use]
     pub fn dyn_clone(&self) -> Self {
         WrappedTable {
             inner: self.inner.dyn_clone(),
@@ -575,6 +577,7 @@ impl WrappedTable {
     }
 
     /// Return the contents of the subset as a [`TaggedRowBuffer`].
+    #[must_use]
     pub fn scan(&self, subset: SubsetRef) -> TaggedRowBuffer {
         self.as_ref().scan(subset)
     }
@@ -588,7 +591,7 @@ impl WrappedTable {
         out_var: Variable,
     ) {
         self.as_ref()
-            .lookup_row_vectorized(mask, bindings, args, col, out_var)
+            .lookup_row_vectorized(mask, bindings, args, col, out_var);
     }
 
     #[allow(clippy::too_many_arguments)]
@@ -602,7 +605,7 @@ impl WrappedTable {
         out_var: Variable,
     ) {
         self.as_ref()
-            .lookup_with_default_vectorized(mask, bindings, args, col, default, out_var)
+            .lookup_with_default_vectorized(mask, bindings, args, col, default, out_var);
     }
 }
 
@@ -681,7 +684,7 @@ pub(crate) trait TableWrapper: Send + Sync {
 
 /// An extra layer of indirection over a [`WrappedTable`] that does not require that the caller
 /// actually own the table. This is useful when a table implementation needs to construct a
-/// WrappedTable on its own.
+/// `WrappedTable` on its own.
 #[derive(Clone, Copy)]
 pub struct WrappedTableRef<'a> {
     inner: &'a dyn Table,

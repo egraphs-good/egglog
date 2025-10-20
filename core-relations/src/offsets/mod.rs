@@ -37,11 +37,14 @@ impl Offsets for OffsetRange {
     }
 
     fn offsets(&self, f: impl FnMut(RowId)) {
-        RowId::range(self.start, self.end).for_each(f)
+        RowId::range(self.start, self.end).for_each(f);
     }
 }
 
 impl OffsetRange {
+    /// # Panics
+    /// If `start` is greater than `end`.
+    #[must_use]
     pub fn new(start: RowId, end: RowId) -> OffsetRange {
         assert!(
             start <= end,
@@ -49,7 +52,7 @@ impl OffsetRange {
         );
         OffsetRange { start, end }
     }
-    pub(crate) fn size(&self) -> usize {
+    pub(crate) fn size(self) -> usize {
         self.end.index() - self.start.index()
     }
 }
@@ -70,11 +73,11 @@ impl SortedOffsetVector {
     }
 
     pub(crate) unsafe fn push_unchecked(&mut self, offset: RowId) {
-        self.0.push(offset)
+        self.0.push(offset);
     }
 
     pub(crate) fn retain(&mut self, mut f: impl FnMut(RowId) -> bool) {
-        self.0.retain(|off| f(*off))
+        self.0.retain(|off| f(*off));
     }
 
     pub(crate) fn extend_nonoverlapping(&mut self, other: &SortedOffsetSlice) {
@@ -93,7 +96,7 @@ impl SortedOffsetVector {
     }
 
     /// Overwrite the contents of the current vector with those of the offset range.
-    pub(crate) fn fill_from_dense(&mut self, range: &OffsetRange) {
+    pub(crate) fn fill_from_dense(&mut self, range: OffsetRange) {
         self.0.clear();
         self.0
             .extend((range.start.index()..range.end.index()).map(RowId::from_usize));
@@ -102,7 +105,7 @@ impl SortedOffsetVector {
 
 impl Clear for SortedOffsetVector {
     fn clear(&mut self) {
-        self.0.clear()
+        self.0.clear();
     }
     fn reuse(&self) -> bool {
         self.0.capacity() > 0
@@ -118,7 +121,7 @@ impl Offsets for SortedOffsetVector {
     }
 
     fn offsets(&self, f: impl FnMut(RowId)) {
-        self.slice().offsets(f)
+        self.slice().offsets(f);
     }
 }
 
@@ -139,7 +142,7 @@ impl SortedOffsetSlice {
             "slice is not sorted: {slice:?}"
         );
         // SAFETY: SortedOffsetSlice is repr(transparent), so the two layouts are compatible.
-        unsafe { mem::transmute::<&[RowId], &SortedOffsetSlice>(slice) }
+        unsafe { &*(std::ptr::from_ref::<[RowId]>(slice) as *const SortedOffsetSlice) }
     }
     fn len(&self) -> usize {
         self.0.len()
@@ -195,7 +198,7 @@ impl Offsets for SortedOffsetSlice {
     }
 
     fn offsets(&self, f: impl FnMut(RowId)) {
-        self.0.iter().copied().for_each(f)
+        self.0.iter().copied().for_each(f);
     }
 }
 
@@ -208,7 +211,7 @@ impl Offsets for &'_ SortedOffsetSlice {
     }
 
     fn offsets(&self, f: impl FnMut(RowId)) {
-        self.0.iter().copied().for_each(f)
+        self.0.iter().copied().for_each(f);
     }
 }
 
@@ -259,6 +262,7 @@ impl SubsetRef<'_> {
             SubsetRef::Sparse(slc) => slc.inner(),
         }
     }
+    #[allow(clippy::cast_possible_truncation)]
     pub(crate) fn iter_bounded(
         self,
         start: usize,
@@ -271,7 +275,7 @@ impl SubsetRef<'_> {
                 for row in (r.start.index() + start.index())
                     ..cmp::min(r.start.index().saturating_add(end), r.end.index())
                 {
-                    f(RowId::new(row as _));
+                    f(RowId::new(row as u32));
                     cur += 1;
                 }
                 if cur + r.start.index() < r.end.index() {
@@ -325,6 +329,7 @@ impl Clone for Subset {
 
 impl Subset {
     /// The size of the subset.
+    #[must_use]
     pub fn size(&self) -> usize {
         match self {
             Subset::Dense(range) => range.size(),
@@ -336,6 +341,7 @@ impl Subset {
         matches!(self, Subset::Dense(_))
     }
 
+    #[must_use]
     pub fn as_ref(&self) -> SubsetRef<'_> {
         match self {
             Subset::Dense(r) => SubsetRef::Dense(*r),
@@ -358,6 +364,7 @@ impl Subset {
         }
     }
     /// Remove any elements of the current subset not present in `other`.
+    #[allow(clippy::similar_names)]
     pub(crate) fn intersect(&mut self, other: SubsetRef, pool: &Pool<SortedOffsetVector>) {
         match (self, other) {
             (Subset::Dense(cur), SubsetRef::Dense(other)) => {
@@ -399,7 +406,7 @@ impl Subset {
                         other_off = next_off;
                         false
                     }
-                })
+                });
             }
         }
     }
@@ -421,8 +428,8 @@ impl Subset {
                     range.end = row.inc();
                     return;
                 }
-                let mut vec = with_pool_set(|pool_set| pool_set.get::<SortedOffsetVector>());
-                vec.fill_from_dense(range);
+                let mut vec = with_pool_set(super::pool::PoolSet::get::<SortedOffsetVector>);
+                vec.fill_from_dense(*range);
                 vec.push(row);
                 *self = Subset::Sparse(vec);
             }

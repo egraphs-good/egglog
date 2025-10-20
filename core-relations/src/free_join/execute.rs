@@ -103,7 +103,7 @@ impl Prober {
                 let mut res = v.to_owned(&self.pool);
                 res.intersect(self.node.subset.as_ref(), &self.pool);
                 if !res.is_empty() {
-                    f(k, res.as_ref())
+                    f(k, res.as_ref());
                 }
             }),
             DynamicIndex::Cached {
@@ -118,7 +118,7 @@ impl Prober {
                     let mut res = v.to_owned(&self.pool);
                     res.intersect(self.node.subset.as_ref(), &self.pool);
                     if !res.is_empty() {
-                        f(&[*k], res.as_ref())
+                        f(&[*k], res.as_ref());
                     }
                 });
             }
@@ -148,11 +148,13 @@ impl Prober {
 }
 
 impl Database {
+    /// # Panics
+    /// None, despite some internal `unwrap()`s.
     pub fn run_rule_set(&mut self, rule_set: &RuleSet) -> RuleSetReport {
         if rule_set.plans.is_empty() {
             return RuleSetReport::default();
         }
-        let preds = with_pool_set(|ps| ps.get::<PredictedVals>());
+        let preds = with_pool_set(super::super::pool::PoolSet::get::<PredictedVals>);
         let match_counter = MatchCounter::new(rule_set.actions.n_ids());
 
         let search_and_apply_timer = Instant::now();
@@ -178,7 +180,7 @@ impl Database {
                             action_buf.flush(&mut ExecutionState::new(
                                 &preds,
                                 self.read_only_view(),
-                                Default::default(),
+                                DenseIdMap::default(),
                             ));
                         }
                         let mut rule_report: RefMut<'_, String, RuleReport> =
@@ -197,7 +199,7 @@ impl Database {
             let mut action_buf = InPlaceActionBuffer {
                 rule_set,
                 match_counter: &match_counter,
-                batches: Default::default(),
+                batches: DenseIdMap::default(),
             };
             for (plan, desc, _action) in rule_set.plans.values() {
                 let mut binding_info = BindingInfo::default();
@@ -219,7 +221,7 @@ impl Database {
             action_buf.flush(&mut ExecutionState::new(
                 &preds,
                 self.read_only_view(),
-                Default::default(),
+                DenseIdMap::default(),
             ));
         }
         for (_plan, desc, action) in rule_set.plans.values() {
@@ -286,7 +288,7 @@ impl TrieNode {
     fn get_cached_index(&self, col: ColumnId, info: &TableInfo) -> Arc<ColumnIndex> {
         self.cached_subsets.get_or_init(|| {
             // Pre-size the vector so we do not need to borrow it mutably to initialize the index.
-            let mut vec: Pooled<ColumnIndexes> = with_pool_set(|ps| ps.get());
+            let mut vec: Pooled<ColumnIndexes> = with_pool_set(super::super::pool::PoolSet::get);
             vec.resize_with(info.spec.arity(), OnceLock::new);
             Arc::new(vec)
         })[col]
@@ -322,7 +324,7 @@ impl BindingInfo {
     fn insert_subset(&mut self, atom: AtomId, subset: Subset) {
         let node = TrieNode {
             subset,
-            cached_subsets: Default::default(),
+            cached_subsets: OnceLock::default(),
         };
         self.subsets.insert(atom, node);
     }
@@ -358,7 +360,7 @@ impl<'a> JoinState<'a> {
         binding_info: &mut BindingInfo,
         cols: impl Iterator<Item = ColumnId>,
     ) -> Prober {
-        let cols = SmallVec::<[ColumnId; 4]>::from_iter(cols);
+        let cols = cols.collect::<SmallVec<[ColumnId; 4]>>();
         let trie_node = binding_info.subsets.unwrap_val(atom);
         let subset = &trie_node.subset;
 
@@ -382,15 +384,15 @@ impl<'a> JoinState<'a> {
                 // heuristic: if the subset we are scanning is somewhat
                 // large _or_ it is most of the table, or we already have a cached
                 // index for it, then return it.
-                if cols.len() != 1 {
-                    DynamicIndex::Cached {
-                        intersect_outer,
-                        table: get_index_from_tableinfo(info, &cols).clone(),
-                    }
-                } else {
+                if cols.len() == 1 {
                     DynamicIndex::CachedColumn {
                         intersect_outer,
                         table: get_column_index_from_tableinfo(info, cols[0]).clone(),
+                    }
+                } else {
+                    DynamicIndex::Cached {
+                        intersect_outer,
+                        table: get_index_from_tableinfo(info, &cols).clone(),
                     }
                 }
             } else if cols.len() != 1 {
@@ -438,8 +440,10 @@ impl<'a> JoinState<'a> {
             }
             let mut cur = binding_info.unwrap_val(*atom);
             debug_assert!(cur.cached_subsets.get().is_none());
-            cur.subset
-                .intersect(subset.as_ref(), &with_pool_set(|ps| ps.get_pool()));
+            cur.subset.intersect(
+                subset.as_ref(),
+                &with_pool_set(super::super::pool::PoolSet::get_pool),
+            );
             binding_info.move_back_node(*atom, cur);
         }
         for (_, node) in binding_info.subsets.iter() {
@@ -460,6 +464,7 @@ impl<'a> JoinState<'a> {
     /// index used to detect if we are at the "top" of a plan rather than the "bottom", and is
     /// currently used as a heuristic to determine if we should increase parallelism more than the
     /// default.
+    #[allow(clippy::too_many_lines)]
     fn run_plan<'buf, BUF: ActionBuffer<'buf>>(
         &self,
         plan: &'a Plan,
@@ -470,9 +475,18 @@ impl<'a> JoinState<'a> {
     ) where
         'a: 'buf,
     {
+        fn refine_subset(
+            sub: Subset,
+            constraints: &[Constraint],
+            table: &WrappedTableRef,
+        ) -> Subset {
+            let sub = table.refine_live(sub);
+            table.refine(sub, constraints)
+        }
+
         if cur >= instr_order.len() {
             action_buf.push_bindings(plan.stages.actions, &binding_info.bindings, || {
-                ExecutionState::new(self.preds, self.db.read_only_view(), Default::default())
+                ExecutionState::new(self.preds, self.db.read_only_view(), DenseIdMap::default())
             });
             return;
         }
@@ -549,15 +563,6 @@ impl<'a> JoinState<'a> {
             }};
         }
 
-        fn refine_subset(
-            sub: Subset,
-            constraints: &[Constraint],
-            table: &WrappedTableRef,
-        ) -> Subset {
-            let sub = table.refine_live(sub);
-            table.refine(sub, constraints)
-        }
-
         match &plan.stages.instrs[instr_order.get(cur)] {
             JoinStage::Intersect { var, scans } => match scans.as_slice() {
                 [] => {}
@@ -581,7 +586,7 @@ impl<'a> JoinState<'a> {
                             if updates.frames() >= chunk_size {
                                 drain_updates!(updates);
                             }
-                        })
+                        });
                     });
                     drain_updates!(updates);
                     binding_info.move_back(a.atom, prober);
@@ -606,7 +611,7 @@ impl<'a> JoinState<'a> {
                             if updates.frames() >= chunk_size {
                                 drain_updates!(updates);
                             }
-                        })
+                        });
                     });
                     drain_updates!(updates);
                     binding_info.move_back(a.atom, prober);
@@ -701,7 +706,7 @@ impl<'a> JoinState<'a> {
                                             updates.rollback();
                                             return;
                                         }
-                                        updates.refine_atom(scan.atom, sub)
+                                        updates.refine_atom(scan.atom, sub);
                                     } else {
                                         updates.rollback();
                                         // Empty intersection.
@@ -719,7 +724,7 @@ impl<'a> JoinState<'a> {
                                 if updates.frames() >= chunk_size {
                                     drain_updates_parallel!(updates);
                                 }
-                            })
+                            });
                         });
                         drain_updates!(updates);
                     }
@@ -737,7 +742,10 @@ impl<'a> JoinState<'a> {
                 if binding_info.has_empty_subset(cover_atom) {
                     return;
                 }
-                let proj = SmallVec::<[ColumnId; 4]>::from_iter(bind.iter().map(|(col, _)| *col));
+                let proj = bind
+                    .iter()
+                    .map(|(col, _)| *col)
+                    .collect::<SmallVec<[ColumnId; 4]>>();
                 let cover_node = binding_info.unwrap_val(cover_atom);
                 let cover_subset = cover_node.subset.as_ref();
                 let mut cur = Offset::new(0);
@@ -803,7 +811,10 @@ impl<'a> JoinState<'a> {
                         )
                     })
                     .collect::<SmallVec<[(usize, AtomId, Prober); 4]>>();
-                let proj = SmallVec::<[ColumnId; 4]>::from_iter(bind.iter().map(|(col, _)| *col));
+                let proj = bind
+                    .iter()
+                    .map(|(col, _)| *col)
+                    .collect::<SmallVec<[ColumnId; 4]>>();
                 let cover_node = binding_info.unwrap_val(cover_atom);
                 let cover_subset = cover_node.subset.as_ref();
                 let mut cur = Offset::new(0);
@@ -986,7 +997,7 @@ impl<'a, 'outer: 'a> ActionBuffer<'a> for InPlaceActionBuffer<'outer> {
         _to_exec_state: impl FnMut() -> ExecutionState<'a> + Send + 'a,
         work: impl for<'b> FnOnce(BorrowedLocalState<'b>, &mut Self) + Send + 'a,
     ) {
-        work(local, self)
+        work(local, self);
     }
 }
 
@@ -1008,7 +1019,7 @@ impl<'inner, 'scope> ScopedActionBuffer<'inner, 'scope> {
         Self {
             scope,
             rule_set,
-            batches: Default::default(),
+            batches: DenseIdMap::default(),
             match_counter,
             needs_flush: false,
         }
@@ -1073,7 +1084,7 @@ impl<'scope> ActionBuffer<'scope> for ScopedActionBuffer<'_, 'scope> {
                 rule_set,
                 match_counter,
                 needs_flush: false,
-                batches: Default::default(),
+                batches: DenseIdMap::default(),
             };
             work(inner.borrow_mut(), &mut buf);
             if buf.needs_flush {
@@ -1087,10 +1098,10 @@ impl<'scope> ActionBuffer<'scope> for ScopedActionBuffer<'_, 'scope> {
         });
     }
 
-    fn morsel_size(&mut self, _level: usize, _total: usize) -> usize {
+    fn morsel_size(&mut self, level: usize, total: usize) -> usize {
         // Lower morsel size to increase parallelism.
-        match _level {
-            0 if _total > 2 => 32,
+        match level {
+            0 if total > 2 => 32,
             _ => 256,
         }
     }
@@ -1141,6 +1152,8 @@ fn estimate_size(join_stage: &JoinStage, binding_info: &BindingInfo) -> usize {
     }
 }
 
+#[allow(clippy::cast_possible_truncation)]
+#[allow(clippy::cast_possible_wrap)]
 fn num_intersected_rels(join_stage: &JoinStage) -> i32 {
     match join_stage {
         JoinStage::Intersect { scans, .. } => scans.len() as i32,
@@ -1148,6 +1161,7 @@ fn num_intersected_rels(join_stage: &JoinStage) -> i32 {
     }
 }
 
+#[allow(clippy::cast_possible_wrap)]
 fn sort_plan_by_size(
     order: &mut InstrOrder,
     start: usize,
@@ -1155,10 +1169,11 @@ fn sort_plan_by_size(
     binding_info: &mut BindingInfo,
 ) {
     // How many times an atom has been intersected/joined
-    let mut times_refined = with_pool_set(|ps| ps.get::<DenseIdMap<AtomId, i64>>());
+    let mut times_refined =
+        with_pool_set(super::super::pool::PoolSet::get::<DenseIdMap<AtomId, i64>>);
 
     // Count how many times each atom has been refined so far.
-    for ins in instrs[..start].iter() {
+    for ins in &instrs[..start] {
         match ins {
             JoinStage::Intersect { scans, .. } => scans.iter().for_each(|scan| {
                 *times_refined.get_or_default(scan.atom) += 1;
@@ -1266,7 +1281,7 @@ struct LocalState {
 }
 
 impl LocalState {
-    fn borrow_mut<'a>(&'a mut self) -> BorrowedLocalState<'a> {
+    fn borrow_mut(&mut self) -> BorrowedLocalState<'_> {
         BorrowedLocalState {
             instr_order: &mut self.instr_order,
             binding_info: &mut self.binding_info,

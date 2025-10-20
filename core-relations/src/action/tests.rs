@@ -8,7 +8,7 @@ use super::mask::{Mask, MaskIter};
 #[test]
 fn mask_iter() {
     let ps = PoolSet::default();
-    let offs = Vec::from_iter(0..100);
+    let offs = (0..100).collect::<Vec<_>>();
     let mut mask = Mask::new(0..100, &ps);
     let mut res = Vec::new();
     mask.iter(&offs).for_each(|x| res.push(*x));
@@ -18,15 +18,15 @@ fn mask_iter() {
 #[test]
 fn mask_iter_zip() {
     let ps = PoolSet::default();
-    let offs1 = Vec::from_iter(0..100);
-    let offs2 = Vec::from_iter(100..200);
+    let offs1 = (0..100).collect::<Vec<_>>();
+    let offs2 = (100..200).collect::<Vec<_>>();
     let mut mask = Mask::new(0..100, &ps);
     let mut res = Vec::new();
     mask.iter(&offs1)
         .zip(&offs2)
         .for_each(|(x, y)| res.push((*x, *y)));
     assert_eq!(
-        Vec::from_iter(offs1.iter().copied().zip(offs2.iter().copied())),
+        (offs1.iter().copied().zip(offs2.iter().copied())).collect::<Vec<_>>(),
         res
     );
 }
@@ -36,7 +36,7 @@ fn mask_iter_dyn() {
     let ps = PoolSet::default();
     let mut mask = Mask::new(0..3, &ps);
     let mut iter_dyn = mask.iter_dynamic(
-        with_pool_set(|x| x.get_pool()),
+        with_pool_set(super::super::pool::PoolSet::get_pool),
         vec![
             ValueSource::Const(1),
             ValueSource::Slice(&[1, 3, 5]),
@@ -48,7 +48,7 @@ fn mask_iter_dyn() {
     match iter_dyn.get_at(2) {
         IterResult::Item(item) => {
             let v = item.as_slice();
-            assert_eq!(v, [1, 5, 1, 6])
+            assert_eq!(v, [1, 5, 1, 6]);
         }
         _ => unreachable!(),
     }
@@ -57,21 +57,27 @@ fn mask_iter_dyn() {
 #[test]
 fn retain() {
     let ps = PoolSet::default();
-    let offs = Vec::from_iter(0..100);
+    let offs = (0..100).collect::<Vec<_>>();
     let mut mask = Mask::new(0..100, &ps);
     mask.iter(&offs).retain(|x| *x % 2 == 0);
     let mut got = Vec::new();
     mask.iter(&offs).for_each(|x| got.push(*x));
     assert_eq!(
-        Vec::from_iter(offs.iter().copied().filter(|x| *x % 2 == 0)),
+        offs.iter()
+            .copied()
+            .filter(|x| *x % 2 == 0)
+            .collect::<Vec<_>>(),
         got
     );
 }
 
 #[test]
+#[allow(clippy::cast_possible_truncation)]
+#[allow(clippy::cast_possible_wrap)]
+#[allow(clippy::cast_sign_loss)]
 fn fill_vec() {
     let ps = PoolSet::default();
-    let offs = Vec::from_iter(0..100);
+    let offs = (0..100).collect::<Vec<_>>();
     let mut mask = Mask::new(0..100, &ps);
     let mut out = Vec::new();
     mask.iter(&offs).fill_vec(
@@ -86,7 +92,10 @@ fn fill_vec() {
     let mut got = Vec::new();
     mask.iter(&offs).for_each(|x| got.push(*x));
     assert_eq!(
-        Vec::from_iter(offs.iter().copied().filter(|x| *x % 2 == 0)),
+        offs.iter()
+            .copied()
+            .filter(|x| *x % 2 == 0)
+            .collect::<Vec<_>>(),
         got
     );
 

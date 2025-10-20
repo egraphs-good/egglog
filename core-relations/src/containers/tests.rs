@@ -56,7 +56,10 @@ fn racing_inserts() {
         })
         .collect::<Vec<_>>();
     start.notify();
-    let results = Vec::from_iter(threads.into_iter().map(|t| t.join().unwrap()));
+    let results = threads
+        .into_iter()
+        .map(|t| t.join().unwrap())
+        .collect::<Vec<_>>();
 
     for result in &results {
         assert_eq!(

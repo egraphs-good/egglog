@@ -55,6 +55,7 @@ impl<K: Eq + Hash + Clone, V: NumericId> InternTable<K, V> {
         let hash = hash_value(k);
         // Use the top bits of the hash to pick the shard. Hashbrown uses the
         // bottom bits.
+        #[allow(clippy::cast_possible_truncation)]
         let shard = ((hash >> (64 - self.shards_log2)) & ((1 << self.shards_log2) - 1)) as usize;
         let mut table = self.data[shard].lock().unwrap();
         let read_guard = self.vals.read();
@@ -113,7 +114,7 @@ impl Value {
     }
 
     /// Whether or not the given value is stale. See [`Value::set_stale`].
-    pub(crate) fn is_stale(&self) -> bool {
+    pub(crate) fn is_stale(self) -> bool {
         self.rep == u32::MAX
     }
 }
@@ -148,15 +149,16 @@ impl ShardData {
             log2_shard_count: n_shards.next_power_of_two().trailing_zeros(),
         }
     }
-    pub(crate) fn n_shards(&self) -> usize {
+    pub(crate) fn n_shards(self) -> usize {
         1 << self.log2_shard_count
     }
-    pub(crate) fn shard_id(&self, hash: u64) -> ShardId {
+    pub(crate) fn shard_id(self, hash: u64) -> ShardId {
         let high_bits = (hash.wrapping_shr(64 - (self.log2_shard_count + 7)))
             & ((1 << self.log2_shard_count) - 1);
+        #[allow(clippy::cast_possible_truncation)]
         ShardId::from_usize(high_bits as usize)
     }
-    pub(crate) fn get_shard<'a, K: ?Sized, V>(&self, val: &K, table: &'a IdVec<ShardId, V>) -> &'a V
+    pub(crate) fn get_shard<'a, K: ?Sized, V>(self, val: &K, table: &'a IdVec<ShardId, V>) -> &'a V
     where
         for<'b> &'b K: Hash,
     {
@@ -168,11 +170,7 @@ impl ShardData {
         &table[self.shard_id(hc)]
     }
 
-    pub(crate) fn get_shard_mut<'a, V>(
-        &self,
-        val: impl Hash,
-        table: &'a mut IdVec<ShardId, V>,
-    ) -> &'a mut V {
+    pub(crate) fn get_shard_mut<V>(self, val: impl Hash, table: &mut IdVec<ShardId, V>) -> &mut V {
         let hc = {
             let mut hasher = FxHasher::default();
             val.hash(&mut hasher);

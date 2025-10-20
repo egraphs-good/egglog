@@ -19,12 +19,13 @@ use crate::{
     uf::DisplacedTable,
 };
 
-/// On MacOs the system allocator is vulenrable to contention, causing tests to execute quite
+/// On `MacOs` the system allocator is vulenrable to contention, causing tests to execute quite
 /// slowly without mimalloc.
 #[global_allocator]
 static GLOBAL: mimalloc::MiMalloc = mimalloc::MiMalloc;
 
 #[test]
+#[allow(clippy::many_single_char_names)]
 fn basic_query() {
     let MathEgraph {
         num,
@@ -40,7 +41,7 @@ fn basic_query() {
         let x: i64 = exec_state.base_values().unwrap(*x);
         let y: i64 = exec_state.base_values().unwrap(*y);
         let z: i64 = x + y;
-        Some(exec_state.base_values().get(z))
+        Some(exec_state.base_values().get(&z))
     }));
 
     // Add the numbers 1 through 10 to the num table at timestamp 0.
@@ -49,7 +50,7 @@ fn basic_query() {
         let mut num_buf = db.get_table(num).new_buffer();
         for i in 0..10 {
             let id = db.inc_counter(id_counter);
-            let i = db.base_values().get::<i64>(i as i64);
+            let i = db.base_values().get::<i64>(&i64::from(i));
             ids.push(i);
             num_buf.stage_insert(&[i, Value::from_usize(id), Value::new(0)]);
         }
@@ -115,13 +116,12 @@ fn basic_query() {
     let num_table = db.get_table(num);
     let all_num = num_table.all();
     let items = num_table.scan(all_num.as_ref());
-    let mut res = Vec::from_iter(
-        items
-            .iter()
-            .map(|(_, row)| db.base_values().unwrap::<i64>(row[0])),
-    );
-    res.sort();
-    assert_eq!(res, Vec::from_iter((0..10).chain([13, 17].into_iter())));
+    let mut res = items
+        .iter()
+        .map(|(_, row)| db.base_values().unwrap::<i64>(row[0]))
+        .collect::<Vec<_>>();
+    res.sort_unstable();
+    assert_eq!(res, (0..10).chain([13, 17].into_iter()).collect::<Vec<_>>());
 }
 
 #[test]
@@ -147,15 +147,15 @@ fn line_graph_1_test(strat: PlanStrategy) {
         None,
         vec![],
         Box::new(move |_, a, b, _| {
-            if a != b {
-                panic!("merge not supported")
-            } else {
+            if a == b {
                 false
+            } else {
+                panic!("merge not supported")
             }
         }),
     );
     let edges = db.add_table(edge_impl, iter::empty(), iter::empty());
-    let nodes = Vec::from_iter((0..10).map(Value::new));
+    let nodes = (0..10).map(Value::new).collect::<Vec<_>>();
     {
         let mut edge_buf = db.get_table(edges).new_buffer();
         for edge in nodes.windows(2) {
@@ -175,23 +175,22 @@ fn line_graph_1_test(strat: PlanStrategy) {
     query.add_atom(edges, &[y.into(), z.into()], &[]).unwrap();
     let mut rule = query.build();
     rule.insert(edges, &[x.into(), z.into()]).unwrap();
-    rule.build();
+    let _ = rule.build();
     let rule_set = rsb.build();
 
     assert!(db.run_rule_set(&rule_set).changed);
 
-    let mut expected = Vec::from_iter(
-        nodes
-            .windows(2)
-            .map(|x| vec![x[0], x[1]])
-            .chain(nodes.windows(3).map(|x| vec![x[0], x[2]])),
-    );
+    let mut expected = nodes
+        .windows(2)
+        .map(|x| vec![x[0], x[1]])
+        .chain(nodes.windows(3).map(|x| vec![x[0], x[2]]))
+        .collect::<Vec<_>>();
     expected.sort();
 
     let edges_table = db.get_table(edges);
     let all = edges_table.all();
     let vals = edges_table.scan(all.as_ref());
-    let mut got = Vec::from_iter(vals.iter().map(|(_, row)| row.to_vec()));
+    let mut got = vals.iter().map(|(_, row)| row.to_vec()).collect::<Vec<_>>();
     got.sort();
     assert_eq!(expected, got);
 }
@@ -219,15 +218,15 @@ fn line_graph_2_test(strat: PlanStrategy) {
         None,
         vec![],
         Box::new(move |_, a, b, _| {
-            if a != b {
-                panic!("merge not supported")
-            } else {
+            if a == b {
                 false
+            } else {
+                panic!("merge not supported")
             }
         }),
     );
     let edges = db.add_table(edge_impl, iter::empty(), iter::empty());
-    let nodes = Vec::from_iter((0..10).map(Value::new));
+    let nodes = (0..10).map(Value::new).collect::<Vec<_>>();
     {
         let mut edge_buf = db.get_table_mut(edges).new_buffer();
         for edge in nodes.windows(2) {
@@ -256,25 +255,27 @@ fn line_graph_2_test(strat: PlanStrategy) {
     query.add_atom(edges, &[y.into(), z.into()], &[]).unwrap();
     let mut rule = query.build();
     rule.insert(edges, &[x.into(), z.into()]).unwrap();
-    rule.build();
+    let _ = rule.build();
     let rule_set = rsb.build();
 
     assert!(db.run_rule_set(&rule_set).changed);
 
-    let mut expected = Vec::from_iter(
-        nodes.windows(2).map(|x| vec![x[0], x[1]]).chain(
+    let mut expected = nodes
+        .windows(2)
+        .map(|x| vec![x[0], x[1]])
+        .chain(
             nodes
                 .windows(3)
                 .filter(|x| x[1] > Value::new(1))
                 .map(|x| vec![x[0], x[2]]),
-        ),
-    );
+        )
+        .collect::<Vec<_>>();
     expected.sort();
 
     let edges_table = db.get_table(edges);
     let all = edges_table.all();
     let vals = edges_table.scan(all.as_ref());
-    let mut got = Vec::from_iter(vals.iter().map(|(_, row)| row.to_vec()));
+    let mut got = vals.iter().map(|(_, row)| row.to_vec()).collect::<Vec<_>>();
     got.sort();
     assert_eq!(expected, got);
 }
@@ -366,14 +367,17 @@ fn minimal_ac() {
     rules
         .insert(add, &[res.into(), z.into(), i2.into(), v(2).into()])
         .unwrap();
-    rules.build();
+    let _ = rules.build();
     let rule_set = rsb.build();
 
     db.run_rule_set(&rule_set);
     let add_table = db.get_table(add);
     let all_add = add_table.all();
     let items = add_table.scan(all_add.as_ref());
-    let mut res = Vec::from_iter(items.iter().map(|(_, row)| row.to_vec()));
+    let mut res = items
+        .iter()
+        .map(|(_, row)| row.to_vec())
+        .collect::<Vec<_>>();
     res.sort();
     let expected = vec![
         vec![v(0), v(0), v(1), v(0)],
@@ -401,6 +405,8 @@ fn ac_fj_puresize() {
     ac_test(PlanStrategy::PureSize);
 }
 
+#[allow(clippy::cast_possible_wrap)]
+#[allow(clippy::too_many_lines)]
 fn ac_test(strat: PlanStrategy) {
     // This test is very involved. It reimplements major egglog features on top
     // of this library:
@@ -423,7 +429,7 @@ fn ac_test(strat: PlanStrategy) {
     db.base_values_mut().register_type::<i64>();
     for i in 0..N {
         let id = db.inc_counter(id_counter);
-        let i = db.base_values().get::<i64>(i as i64);
+        let i = db.base_values().get::<i64>(&(i as i64));
         ids.push(i);
         db.get_table(num)
             .new_buffer()
@@ -537,7 +543,7 @@ fn ac_test(strat: PlanStrategy) {
             rules
                 .insert(add, &[res.into(), z.into(), i2.into(), next_ts.into()])
                 .unwrap();
-            rules.build();
+            let _ = rules.build();
         }
 
         // Add(x, y, z, t1),
@@ -565,7 +571,7 @@ fn ac_test(strat: PlanStrategy) {
         rules
             .insert(add, &[y.into(), x.into(), z.into(), next_ts.into()])
             .unwrap();
-        rules.build();
+        let _ = rules.build();
         let rule_set = rsb.build();
         db.run_rule_set(&rule_set)
     };
@@ -606,7 +612,7 @@ fn ac_test(strat: PlanStrategy) {
                 rules
                     .insert(num, &[x.into(), id_canon.into(), next_ts.into()])
                     .unwrap();
-                rules.build();
+                let _ = rules.build();
             } else {
                 let x = num_rebuild.new_var();
                 let id = num_rebuild.new_var();
@@ -630,7 +636,7 @@ fn ac_test(strat: PlanStrategy) {
                 rules
                     .insert(num, &[x.into(), id_new.into(), next_ts.into()])
                     .unwrap();
-                rules.build();
+                let _ = rules.build();
             }
         };
         num_rebuild(&mut rsb, cur_ts, next_ts);
@@ -679,7 +685,7 @@ fn ac_test(strat: PlanStrategy) {
                     &[x_new.into(), y_new.into(), id_new.into(), next_ts.into()],
                 )
                 .unwrap();
-            rules.build();
+            let _ = rules.build();
             let rs = rsb.build();
             changed |= db.run_rule_set(&rs).changed;
             let mut rsb = db.new_rule_set();
@@ -719,7 +725,7 @@ fn ac_test(strat: PlanStrategy) {
                     &[x_new.into(), y_new.into(), id_new.into(), next_ts.into()],
                 )
                 .unwrap();
-            rules.build();
+            let _ = rules.build();
 
             let rs = rsb.build();
             changed |= db.run_rule_set(&rs).changed;
@@ -760,7 +766,7 @@ fn ac_test(strat: PlanStrategy) {
                     &[x_new.into(), y_new.into(), id_new.into(), next_ts.into()],
                 )
                 .unwrap();
-            rules.build();
+            let _ = rules.build();
             let rs = rsb.build();
             changed |= db.run_rule_set(&rs).changed;
         } else {
@@ -809,7 +815,7 @@ fn ac_test(strat: PlanStrategy) {
                     ],
                 )
                 .unwrap();
-            rules.build();
+            let _ = rules.build();
             let rs = rsb.build();
             changed |= db.run_rule_set(&rs).changed;
         }
@@ -835,12 +841,10 @@ fn ac_test(strat: PlanStrategy) {
     let uf_table = db.get_table(uf);
     let l_canon = uf_table
         .get_row(&[left_root])
-        .map(|row| row.vals[1])
-        .unwrap_or(left_root);
+        .map_or(left_root, |row| row.vals[1]);
     let r_canon = uf_table
         .get_row(&[right_root])
-        .map(|row| row.vals[1])
-        .unwrap_or(right_root);
+        .map_or(right_root, |row| row.vals[1]);
     assert_eq!(l_canon, r_canon);
 }
 
@@ -861,13 +865,13 @@ fn basic_math_egraph() -> MathEgraph {
         Some(ColumnId::new(2)),
         vec![],
         Box::new(move |state, a, b, res| {
-            if a[1] != b[1] {
+            if a[1] == b[1] {
+                false
+            } else {
                 // Mark the two ids as equal. Picking b[1] as the 'presumed winner'
                 state.stage_insert(uf, &[a[1], b[1], b[2]]);
                 res.extend_from_slice(b);
                 true
-            } else {
-                false
             }
         }),
     );
@@ -881,13 +885,13 @@ fn basic_math_egraph() -> MathEgraph {
         vec![],
         Box::new(move |state, a, b, res| {
             // Capture a backtrace as a string
-            if a[2] != b[2] {
+            if a[2] == b[2] {
+                false
+            } else {
                 // Mark the two ids as equal. Picking b[2] as the 'presumed winner'
                 state.stage_insert(uf, &[a[2], b[2], b[3]]);
                 res.extend_from_slice(b);
                 true
-            } else {
-                false
             }
         }),
     );
@@ -908,6 +912,7 @@ fn incremental_rebuild(uf_size: usize, table_size: usize) -> bool {
 }
 
 #[test]
+#[allow(clippy::many_single_char_names)]
 fn lookup_with_fallback_partial_success() {
     // Insert (f 1) (f 2), (g 1) (g 3) (g 4).
     // Run a query that iterates over g, binding x to 1, 3, 4.
@@ -923,10 +928,10 @@ fn lookup_with_fallback_partial_success() {
                     None,
                     vec![],
                     Box::new(move |_, a, b, _| {
-                        if a[0] != b[0] {
-                            panic!("merge not supported")
-                        } else {
+                        if a[0] == b[0] {
                             false
+                        } else {
+                            panic!("merge not supported")
                         }
                     }),
                 ),
@@ -982,7 +987,7 @@ fn lookup_with_fallback_partial_success() {
         .unwrap();
     rb.call_external(log_vals, &[x.into()]).unwrap();
     rb.insert(h, &[res.into(), y.into()]).unwrap();
-    rb.build();
+    let _ = rb.build();
     let rs = rsb.build();
     assert!(db.run_rule_set(&rs).changed);
 
@@ -1022,10 +1027,10 @@ fn call_external_with_fallback() {
                     None,
                     vec![],
                     Box::new(move |_, a, b, _| {
-                        if a[0] != b[0] {
-                            panic!("merge not supported")
-                        } else {
+                        if a[0] == b[0] {
                             false
+                        } else {
+                            panic!("merge not supported")
                         }
                     }),
                 ),
@@ -1070,7 +1075,7 @@ fn call_external_with_fallback() {
         .call_external_with_fallback(assert_even, &[x.into()], inc, &[x.into()])
         .unwrap();
     rb.insert(h, &[res.into(), y.into()]).unwrap();
-    rb.build();
+    let _ = rb.build();
     let rs = rsb.build();
     assert!(db.run_rule_set(&rs).changed);
 

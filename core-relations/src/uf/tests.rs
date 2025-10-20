@@ -27,7 +27,7 @@ fn displaced() {
     let mut updates = Vec::new();
     d.scan_generic(all.as_ref(), |_, row| {
         assert_eq!(row[2], v(0));
-        updates.push((row[0], row[1]))
+        updates.push((row[0], row[1]));
     });
     assert_eq!(updates.len(), 2);
     assert_ne!(updates[0], updates[1]);
@@ -41,7 +41,7 @@ fn displaced() {
     let mut rows = Vec::new();
     d.scan_generic(eq_fst.as_ref(), |_, row| {
         assert_eq!(row.len(), 3);
-        rows.push((row[0], row[1], row[2]))
+        rows.push((row[0], row[1], row[2]));
     });
     assert_eq!(rows, vec![(updates[0].0, updates[0].1, v(0))]);
 
@@ -68,7 +68,7 @@ fn displaced_proof() {
     let mut updates = Vec::new();
     d.scan_generic(all.as_ref(), |_, row| {
         assert_eq!(row[2], v(0));
-        updates.push((row[0], row[1]))
+        updates.push((row[0], row[1]));
     });
     assert_eq!(updates.len(), 2);
     assert_ne!(updates[0], updates[1]);
@@ -96,5 +96,5 @@ fn displaced_proof() {
                 reason: ProofReason::Forward(p2),
             },
         ]
-    )
+    );
 }

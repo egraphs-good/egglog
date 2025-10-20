@@ -58,7 +58,7 @@ impl SortedWritesTable {
                     table,
                     &*rebuilder,
                     hint_col,
-                    to_scan,
+                    &to_scan,
                     next_ts,
                     exec_state,
                 );
@@ -75,7 +75,7 @@ impl SortedWritesTable {
         table: &WrappedTable,
         rebuilder: &dyn Rebuilder,
         search_col: ColumnId,
-        to_scan: Subset,
+        to_scan: &Subset,
         next_ts: Value,
         exec_state: &mut ExecutionState,
     ) {

@@ -21,7 +21,7 @@ mod tests;
 /// it its own data-structure. The advantage of this abstraction is that it
 /// allows us to store multiple rows in a single allocation.
 ///
-/// RowBuffer stores data in row-major order.
+/// `RowBuffer` stores data in row-major order.
 pub struct RowBuffer {
     n_columns: usize,
     total_rows: usize,
@@ -53,7 +53,7 @@ impl Clone for RowBuffer {
 }
 
 impl RowBuffer {
-    /// Create a new RowBuffer with the given arity.
+    /// Create a new `RowBuffer` with the given arity.
     pub(crate) fn new(n_columns: usize) -> RowBuffer {
         assert_ne!(
             n_columns, 0,
@@ -62,7 +62,7 @@ impl RowBuffer {
         RowBuffer {
             n_columns,
             total_rows: 0,
-            data: with_pool_set(|ps| ps.get()),
+            data: with_pool_set(super::pool::PoolSet::get),
         }
     }
 
@@ -72,7 +72,7 @@ impl RowBuffer {
             buf: RowBuffer {
                 n_columns: self.n_columns,
                 total_rows: self.total_rows,
-                data: Default::default(),
+                data: Pooled::default(),
             },
             vec: Some(ParallelVecWriter::new(Pooled::into_inner(data))),
         }
@@ -89,13 +89,13 @@ impl RowBuffer {
     }
 
     pub(crate) fn raw_rows(&self) -> *const Value {
-        self.data.as_ptr() as *const Value
+        self.data.as_ptr().cast::<Value>()
     }
 
-    /// Blindly set the length of the RowBuffer to the given number of rows.
+    /// Blindly set the length of the `RowBuffer` to the given number of rows.
     ///
     /// # Safety
-    /// `count` must be within the capacity of the RowBuffer and the resized buffer must point to
+    /// `count` must be within the capacity of the `RowBuffer` and the resized buffer must point to
     /// initialized memory. (Analogous to [`Vec::set_len`]).
     pub(crate) unsafe fn set_len(&mut self, count: usize) {
         unsafe {
@@ -117,7 +117,7 @@ impl RowBuffer {
             // a mutable reference (`set_stale`, `get_row_mut`), or in the
             // unsafe `set_stale_shared` method whose safety requirements imply
             // that no call will overlap with borrowing such a row.
-            .map(|row| unsafe { mem::transmute::<&[Cell<Value>], &[Value]>(row) })
+            .map(|row| unsafe { &*(std::ptr::from_ref::<[Cell<Value>]>(row) as *const [Value]) })
     }
 
     pub(crate) fn non_stale_mut(&mut self) -> impl Iterator<Item = &mut [Value]> {
@@ -132,10 +132,11 @@ impl RowBuffer {
             // a mutable reference (`set_stale`, `get_row_mut`), or in the
             // unsafe `set_stale_shared` method whose safety requirements imply
             // that no call will overlap with borrowing such a row.
-            .map(|row| unsafe { mem::transmute::<&mut [Cell<Value>], &mut [Value]>(row) })
+            .map(|row| unsafe { &mut *(std::ptr::from_mut::<[Cell<Value>]>(row) as *mut [Value]) })
     }
 
     /// A parallel version of [`RowBuffer::iter`].
+    #[allow(clippy::transmute_ptr_to_ptr)]
     pub(crate) fn parallel_iter(&self) -> impl ParallelIterator<Item = &[Value]> {
         use rayon::prelude::*;
         // SAFETY: This kind of transmutation is safe so long as no one
@@ -154,7 +155,7 @@ impl RowBuffer {
         self.data
             .chunks(self.n_columns)
             // SAFETY: see comment in `non_stale`.
-            .map(|row| unsafe { mem::transmute::<&[Cell<Value>], &[Value]>(row) })
+            .map(|row| unsafe { &*(std::ptr::from_ref::<[Cell<Value>]>(row) as *const [Value]) })
     }
 
     /// Clear the contents of the buffer.
@@ -187,7 +188,7 @@ impl RowBuffer {
         was_stale
     }
 
-    /// Get the row corresponding to the given RowId.
+    /// Get the row corresponding to the given `RowId`.
     ///
     /// # Panics
     /// This method panics if `row` is out of bounds.
@@ -196,26 +197,29 @@ impl RowBuffer {
         unsafe { get_row(&self.data, self.n_columns, row) }
     }
 
-    /// Get the row corresponding to the given RowId without bounds checking.
+    /// Get the row corresponding to the given `RowId` without bounds checking.
     pub(crate) unsafe fn get_row_unchecked(&self, row: RowId) -> &[Value] {
         unsafe {
             slice::from_raw_parts(
-                self.data.as_ptr().add(row.index() * self.n_columns) as *const Value,
+                self.data
+                    .as_ptr()
+                    .add(row.index() * self.n_columns)
+                    .cast::<Value>(),
                 self.n_columns,
             )
         }
     }
 
-    /// Get a mutable reference to the row corresponding to the given RowId.
+    /// Get a mutable reference to the row corresponding to the given `RowId`.
     ///
     /// # Panics
     /// This method panics if `row` is out of bounds.
     pub(crate) fn get_row_mut(&mut self, row: RowId) -> &mut [Value] {
         // SAFETY: see the comment in `non_stale`.
         unsafe {
-            mem::transmute::<&mut [Cell<Value>], &mut [Value]>(
-                &mut self.data[row.index() * self.n_columns..(row.index() + 1) * self.n_columns],
-            )
+            &mut *(&raw mut self.data
+                [row.index() * self.n_columns..(row.index() + 1) * self.n_columns]
+                as *mut [Value])
         }
     }
 
@@ -231,11 +235,11 @@ impl RowBuffer {
         res
     }
 
-    /// Insert a row into a buffer, returning the RowId for this row.
+    /// Insert a row into a buffer, returning the `RowId` for this row.
     ///
     /// # Panics
     /// This method panics if the length of `row` does not match the arity of
-    /// the RowBuffer.
+    /// the `RowBuffer`.
     pub(crate) fn add_row(&mut self, row: &[Value]) -> RowId {
         assert_eq!(
             row.len(),
@@ -252,7 +256,7 @@ impl RowBuffer {
     }
 
     /// Remove any stale entries in the buffer. This invalidates existing
-    /// RowIds. This method calls `remap` with the old and new RowIds for all
+    /// `RowId`s. This method calls `remap` with the old and new `RowId`s for all
     /// non-stale rows.
     pub(crate) fn remove_stale(&mut self, mut remap: impl FnMut(&[Value], RowId, RowId)) {
         let mut within_row = 0;
@@ -294,6 +298,7 @@ pub struct TaggedRowBuffer {
 
 impl TaggedRowBuffer {
     /// Create a new buffer with the given arity.
+    #[must_use]
     pub fn new(n_columns: usize) -> TaggedRowBuffer {
         TaggedRowBuffer {
             inner: RowBuffer::new(n_columns + 1),
@@ -302,15 +307,17 @@ impl TaggedRowBuffer {
 
     /// Clear the contents of the buffer.
     pub fn clear(&mut self) {
-        self.inner.clear()
+        self.inner.clear();
     }
 
     /// Whether the buffer is empty.
+    #[must_use]
     pub fn is_empty(&self) -> bool {
         self.inner.len() == 0
     }
 
     /// The number of rows in the buffer.
+    #[must_use]
     pub fn len(&self) -> usize {
         self.inner.len()
     }
@@ -319,8 +326,11 @@ impl TaggedRowBuffer {
         self.inner.n_columns - 1
     }
 
-    /// Add the given row and RowId to the buffer, returning the RowId (in
+    /// Add the given row and `RowId` to the buffer, returning the `RowId` (in
     /// `self`) for the new row.
+    ///
+    /// # Panics
+    /// If we attempt to add a row with mismatched arity to the table.
     pub fn add_row(&mut self, row_id: RowId, row: &[Value]) -> RowId {
         // Variant of `RowBuffer::add_row` that also stores the given `RowId` inline.
         //
@@ -343,6 +353,7 @@ impl TaggedRowBuffer {
 
     /// Get the row (and the id it was associated with at insertion time) at the
     /// offset associated with `row`.
+    #[must_use]
     pub fn get_row(&self, row: RowId) -> (RowId, &[Value]) {
         self.unwrap_row(self.inner.get_row(row))
     }
@@ -361,6 +372,7 @@ impl TaggedRowBuffer {
     }
 
     /// Iterate over the contents of the buffer in parallel.
+    #[must_use]
     pub fn par_iter(&self) -> impl ParallelIterator<Item = (RowId, &[Value])> {
         self.inner.parallel_iter().map(|row| self.unwrap_row(row))
     }
@@ -399,13 +411,12 @@ impl TaggedRowBuffer {
 /// row.
 unsafe fn get_row(data: &[Cell<Value>], n_columns: usize, row: RowId) -> &[Value] {
     unsafe {
-        mem::transmute::<&[Cell<Value>], &[Value]>(
-            &data[row.index() * n_columns..(row.index() + 1) * n_columns],
-        )
+        &*(&raw const data[row.index() * n_columns..(row.index() + 1) * n_columns]
+            as *const [Value])
     }
 }
 
-/// A wrapper for a RowBuffer that allows it to be written to in parallel, based
+/// A wrapper for a `RowBuffer` that allows it to be written to in parallel, based
 /// on [`ParallelVecWriter`].
 ///
 /// This is a type that is used to speed up parallel `merge` operations on
@@ -455,7 +466,7 @@ pub(crate) struct ReadHandle<'a, T> {
 }
 
 impl<T: Deref<Target = [Cell<Value>]>> ReadHandle<'_, T> {
-    /// Get the row corresponding to the given RowId without bounds checking.
+    /// Get the row corresponding to the given `RowId` without bounds checking.
     ///
     /// # Safety
     /// The caller must ensure that either `row` is within bounds of the buffer at the creation of
@@ -463,11 +474,14 @@ impl<T: Deref<Target = [Cell<Value>]>> ReadHandle<'_, T> {
     ///
     /// Furthermore, no calls to `set_stale_shared` may overlap with this call.
     pub(crate) unsafe fn get_row_unchecked(&self, row: RowId) -> &[Value] {
-        // SAFETY: ParallelVecWriter guarantees that data within bounds is not
+        // SAFETY: `ParallelVecWriter` guarantees that data within bounds is not
         // being modified concurrently.
         unsafe {
             std::slice::from_raw_parts(
-                self.data.as_ptr().add(row.index() * self.buf.n_columns) as *const Value,
+                self.data
+                    .as_ptr()
+                    .add(row.index() * self.buf.n_columns)
+                    .cast::<Value>(),
                 self.buf.n_columns,
             )
         }

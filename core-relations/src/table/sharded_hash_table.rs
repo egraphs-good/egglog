@@ -24,7 +24,7 @@ impl<T> Default for ShardedHashTable<T> {
 
 impl<T> ShardedHashTable<T> {
     pub(crate) fn clear(&mut self) {
-        self.shards.iter_mut().for_each(|s| s.clear());
+        self.shards.iter_mut().for_each(hashbrown::HashTable::clear);
     }
     pub(crate) fn with_shards(shards: usize) -> Self {
         let shard_data = ShardData::new(shards);

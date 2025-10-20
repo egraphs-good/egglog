@@ -4,7 +4,7 @@ use super::{Clear, InPoolSet, Pool, PoolSet};
 
 #[test]
 fn pooled_does_not_drop() {
-    let start = DROP_COUNT.with(|k| k.get());
+    let start = DROP_COUNT.with(DropCount::get);
     {
         // NB: the pools in these tests are really just guiding the types at
         // this point. The objects themselves now end up in the thread-local
@@ -24,7 +24,7 @@ fn pooled_does_not_drop() {
 
 #[test]
 fn refcount() {
-    let start = DROP_COUNT.with(|k| k.get());
+    let start = DROP_COUNT.with(DropCount::get);
     let pool = Pool::<Rc<Dropper>>::default();
     let mut d1 = pool.get();
     Rc::get_mut(&mut d1).unwrap().set_reuse();
@@ -53,8 +53,8 @@ impl InPoolSet<PoolSet> for Rc<Dropper> {
 // a pool.
 thread_local! {
     static DROP_COUNT: DropCount = DropCount(Rc::new(RefCell::new(0)));
-    static DROP_POOL: RefCell<Pool<Dropper>> = Default::default();
-    static DROP_RC_POOL: RefCell<Pool<Rc<Dropper>>> = Default::default();
+    static DROP_POOL: RefCell<Pool<Dropper>> = RefCell::default();
+    static DROP_RC_POOL: RefCell<Pool<Rc<Dropper>>> = RefCell::default();
 }
 
 struct Dropper {
@@ -80,7 +80,7 @@ impl Default for Dropper {
 impl Clear for Dropper {
     fn clear(&mut self) {
         self.cleared = true;
-        self.reuse = false
+        self.reuse = false;
     }
     fn reuse(&self) -> bool {
         self.reuse
@@ -92,7 +92,7 @@ impl Clear for Dropper {
 
 impl Drop for Dropper {
     fn drop(&mut self) {
-        DROP_COUNT.with(|c| c.inc());
+        DROP_COUNT.with(DropCount::inc);
     }
 }
 

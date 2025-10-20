@@ -74,7 +74,7 @@ impl TableEntry {
 struct Rows {
     data: RowBuffer,
     scratch: RowBuffer,
-    stale_rows: usize,
+    stale: usize,
 }
 
 impl Rows {
@@ -83,19 +83,19 @@ impl Rows {
         Rows {
             data,
             scratch: RowBuffer::new(arity),
-            stale_rows: 0,
+            stale: 0,
         }
     }
     fn clear(&mut self) {
         self.data.clear();
-        self.stale_rows = 0;
+        self.stale = 0;
     }
     fn next_row(&self) -> RowId {
         RowId::from_usize(self.data.len())
     }
     fn set_stale(&mut self, row: RowId) {
         if !self.data.set_stale(row) {
-            self.stale_rows += 1;
+            self.stale += 1;
         }
     }
 
@@ -112,14 +112,14 @@ impl Rows {
 
     fn add_row(&mut self, row: &[Value]) -> RowId {
         if row[0].is_stale() {
-            self.stale_rows += 1;
+            self.stale += 1;
         }
         self.data.add_row(row)
     }
 
     fn remove_stale(&mut self, remap: impl FnMut(&[Value], RowId, RowId)) {
         self.data.remove_stale(remap);
-        self.stale_rows = 0;
+        self.stale = 0;
     }
 }
 
@@ -165,7 +165,7 @@ impl Clone for SortedWritesTable {
             merge: self.merge.clone(),
             to_rebuild: self.to_rebuild.clone(),
             rebuild_index: Index::new(self.to_rebuild.clone(), ColumnIndex::new()),
-            subset_tracker: Default::default(),
+            subset_tracker: SubsetTracker::default(),
         }
     }
 }
@@ -248,8 +248,8 @@ impl MutationBuffer for Buffer {
     }
     fn fresh_handle(&self) -> Box<dyn MutationBuffer> {
         Box::new(Buffer {
-            pending_rows: Default::default(),
-            pending_removals: Default::default(),
+            pending_rows: DenseIdMap::default(),
+            pending_removals: DenseIdMap::default(),
             state: self.state.clone(),
             n_cols: self.n_cols,
             n_keys: self.n_keys,
@@ -308,7 +308,7 @@ impl Table for SortedWritesTable {
         TableSpec {
             n_keys: self.n_keys,
             n_vals: self.n_columns - self.n_keys,
-            uncacheable_columns: Default::default(),
+            uncacheable_columns: DenseIdMap::default(),
             allows_delete: true,
         }
     }
@@ -342,7 +342,7 @@ impl Table for SortedWritesTable {
     }
 
     fn len(&self) -> usize {
-        self.data.data.len() - self.data.stale_rows
+        self.data.data.len() - self.data.stale
     }
 
     fn scan_generic(&self, subset: SubsetRef, mut f: impl FnMut(RowId, &[Value]))
@@ -363,9 +363,9 @@ impl Table for SortedWritesTable {
         // than the length of the table.
         subset.offsets(|row| unsafe {
             if let Some(vals) = self.data.get_row_unchecked(row) {
-                f(row, vals)
+                f(row, vals);
             }
-        })
+        });
     }
 
     fn scan_generic_bounded(
@@ -492,14 +492,14 @@ impl Table for SortedWritesTable {
         let removed = self.do_delete();
         let added = self.do_insert(exec_state);
         self.maybe_rehash();
-        TableChange { removed, added }
+        TableChange { added, removed }
     }
 
     fn get_row(&self, key: &[Value]) -> Option<Row> {
         let id = get_entry(key, self.n_keys, &self.hash, |row| {
             &self.data.get_row(row).unwrap()[0..self.n_keys] == key
         })?;
-        let mut vals = with_pool_set(|ps| ps.get::<Vec<Value>>());
+        let mut vals = with_pool_set(super::pool::PoolSet::get::<Vec<Value>>);
         vals.extend_from_slice(self.data.get_row(id).unwrap());
         Some(Row { id, vals })
     }
@@ -524,6 +524,7 @@ impl SortedWritesTable {
     /// should be used.
     ///
     /// Merge functions can access the database via [`ExecutionState`].
+    #[must_use]
     pub fn new(
         n_keys: usize,
         n_columns: usize,
@@ -541,12 +542,12 @@ impl SortedWritesTable {
             n_keys,
             n_columns,
             sort_by,
-            offsets: Default::default(),
+            offsets: Vec::default(),
             pending_state: Arc::new(PendingState::new(shard_data)),
             merge: merge_fn.into(),
             to_rebuild,
             rebuild_index,
-            subset_tracker: Default::default(),
+            subset_tracker: SubsetTracker::default(),
         }
     }
 
@@ -586,7 +587,7 @@ impl SortedWritesTable {
                             // (guaranteed by the assertion above), and we
                             // launch at most one thread per shard.
                             marked_stale +=
-                                unsafe { !self.data.data.set_stale_shared(ent.row) } as usize;
+                                usize::from(unsafe { !self.data.data.set_stale_shared(ent.row) });
                         }
                     });
                 }
@@ -594,7 +595,7 @@ impl SortedWritesTable {
             })
             .sum();
         // Update the stale count with the total marked stale.
-        self.data.stale_rows += stale_delta;
+        self.data.stale += stale_delta;
         stale_delta > 0
     }
     fn serial_delete(&mut self) -> bool {
@@ -620,7 +621,7 @@ impl SortedWritesTable {
                             self.data.set_stale(ent.row);
                             changed = true;
                         }
-                    })
+                    });
                 }
             });
         changed
@@ -643,25 +644,26 @@ impl SortedWritesTable {
             if let Some(col) = self.sort_by {
                 self.parallel_insert(
                     exec_state,
-                    SortChecker {
+                    &SortChecker {
                         col,
                         current: None,
                         baseline: self.offsets.last().map(|(v, _)| *v),
                     },
                 )
             } else {
-                self.parallel_insert(exec_state, ())
+                self.parallel_insert(exec_state, &())
             }
         } else {
             self.serial_insert(exec_state)
         }
     }
 
+    #[allow(clippy::too_many_lines)]
     fn serial_insert(&mut self, exec_state: &mut ExecutionState) -> bool {
         let mut changed = false;
         let n_keys = self.n_keys;
-        let mut scratch = with_pool_set(|ps| ps.get::<Vec<Value>>());
-        for (_outer_shard, queue) in self.pending_state.pending_rows.iter() {
+        let mut scratch = with_pool_set(super::pool::PoolSet::get::<Vec<Value>>);
+        for (outer_shard, queue) in self.pending_state.pending_rows.iter() {
             if let Some(sort_by) = self.sort_by {
                 while let Some(buf) = queue.pop() {
                     for query in buf.non_stale() {
@@ -716,7 +718,7 @@ impl SortedWritesTable {
                                 self.offsets.push((sort_val, new));
                             }
                             let (shard, hc) = hash_code(self.hash.shard_data(), query, self.n_keys);
-                            debug_assert_eq!(shard, _outer_shard);
+                            debug_assert_eq!(shard, outer_shard);
                             self.hash.mut_shards()[shard.index()].insert_unique(
                                 hc as _,
                                 TableEntry {
@@ -757,7 +759,7 @@ impl SortedWritesTable {
                             // New value: update invariants.
                             let new = self.data.add_row(query);
                             let (shard, hc) = hash_code(self.hash.shard_data(), query, self.n_keys);
-                            debug_assert_eq!(shard, _outer_shard);
+                            debug_assert_eq!(shard, outer_shard);
                             self.hash.mut_shards()[shard.index()].insert_unique(
                                 hc as _,
                                 TableEntry {
@@ -770,15 +772,16 @@ impl SortedWritesTable {
                         }
                     }
                 }
-            };
+            }
         }
         changed
     }
 
+    #[allow(clippy::too_many_lines)]
     fn parallel_insert<C: OrderingChecker>(
         &mut self,
         exec_state: &ExecutionState,
-        checker: C,
+        checker: &C,
     ) -> bool {
         const BATCH_SIZE: usize = 1 << 18;
         // Parallel insert uses one giant parallel foreach. We have updates
@@ -799,7 +802,7 @@ impl SortedWritesTable {
                 let shard_id = ShardId::from_usize(shard_id);
                 let mut checker = checker.clone();
                 let mut exec_state = exec_state.clone();
-                let mut scratch = with_pool_set(|ps| ps.get::<Vec<Value>>());
+                let mut scratch = with_pool_set(super::pool::PoolSet::get::<Vec<Value>>);
                 let queue = &self.pending_state.pending_rows[shard_id];
                 let mut marked_stale = 0usize;
                 let mut staged = StagedOutputs::new(n_keys, n_cols, BATCH_SIZE);
@@ -916,7 +919,7 @@ impl SortedWritesTable {
         checker.update_offsets(next_offset, &mut self.offsets);
 
         // Update the staleness counters.
-        self.data.stale_rows += pending_adds
+        self.data.stale += pending_adds
             .iter()
             .flatten()
             .map(|(_, stale, _)| *stale)
@@ -946,14 +949,12 @@ impl SortedWritesTable {
                 self.offsets[got].1,
                 self.offsets
                     .get(got + 1)
-                    .map(|(_, r)| *r)
-                    .unwrap_or(self.data.next_row()),
+                    .map_or(self.data.next_row(), |(_, r)| *r),
             )),
             Err(next) => Err(self
                 .offsets
                 .get(next)
-                .map(|(_, id)| *id)
-                .unwrap_or(self.data.next_row())),
+                .map_or(self.data.next_row(), |(_, id)| *id)),
         }
     }
     fn eval(&self, cs: &[Constraint], row: RowId) -> bool {
@@ -977,7 +978,7 @@ impl SortedWritesTable {
     }
 
     fn maybe_rehash(&mut self) {
-        if self.data.stale_rows <= cmp::max(16, self.data.data.len() / 2) {
+        if self.data.stale <= cmp::max(16, self.data.data.len() / 2) {
             return;
         }
 
@@ -987,8 +988,23 @@ impl SortedWritesTable {
             self.rehash();
         }
     }
+    #[allow(clippy::too_many_lines)]
     fn parallel_rehash(&mut self) {
         use rayon::prelude::*;
+        struct TimestampStats {
+            value: Value,
+            count: usize,
+            histogram: Pooled<DenseIdMap<ShardId, usize>>,
+        }
+        impl Default for TimestampStats {
+            fn default() -> TimestampStats {
+                TimestampStats {
+                    value: Value::stale(),
+                    count: 0,
+                    histogram: with_pool_set(super::pool::PoolSet::get),
+                }
+            }
+        }
         // Parallel rehashes go "hash-first" rather than "rows-first".
         //
         // We iterate over each shard and then write out new contents to a fresh row, in parallel.
@@ -1004,20 +1020,6 @@ impl SortedWritesTable {
         };
         self.generation = self.generation.inc();
         assert!(!self.offsets.is_empty());
-        struct TimestampStats {
-            value: Value,
-            count: usize,
-            histogram: Pooled<DenseIdMap<ShardId, usize>>,
-        }
-        impl Default for TimestampStats {
-            fn default() -> TimestampStats {
-                TimestampStats {
-                    value: Value::stale(),
-                    count: 0,
-                    histogram: with_pool_set(|ps| ps.get()),
-                }
-            }
-        }
         let mut results = Vec::<TimestampStats>::with_capacity(self.offsets.len());
         results.resize_with(self.offsets.len() - 1, Default::default);
         // Use a macro rather than a lambda to avoid borrow issues.
@@ -1042,7 +1044,7 @@ impl SortedWritesTable {
                 }
             }};
         }
-        let mut last: TimestampStats = Default::default();
+        let mut last = TimestampStats::default();
         rayon::join(
             || {
                 // This closure handles computing all timestamps but the last one.
@@ -1055,7 +1057,7 @@ impl SortedWritesTable {
                             unreachable!()
                         };
                         *res = compute_hist!(*start_val, *start_row, *end_row);
-                    })
+                    });
             },
             || {
                 // And here we handle the final one.
@@ -1072,7 +1074,7 @@ impl SortedWritesTable {
         // for rayon at the moment.
         let mut prev_count = 0;
         self.offsets.clear();
-        for stats in results.iter_mut() {
+        for stats in &mut results {
             if stats.count == 0 {
                 continue;
             }
@@ -1087,7 +1089,7 @@ impl SortedWritesTable {
                 inner += tmp;
             }
             prev_count += stats.count;
-            debug_assert_eq!(inner, prev_count)
+            debug_assert_eq!(inner, prev_count);
         }
 
         // Now the part with some unsafe code.
@@ -1132,9 +1134,9 @@ impl SortedWritesTable {
                     unsafe {
                         std::ptr::copy_nonoverlapping(
                             row.as_ptr(),
-                            scratch_ptr.add(next.index() * self.n_columns) as *mut Value,
+                            scratch_ptr.add(next.index() * self.n_columns).cast_mut(),
                             self.n_columns,
-                        )
+                        );
                     }
                     *row_id = next;
                     progress.insert(val, next.inc());
@@ -1143,8 +1145,9 @@ impl SortedWritesTable {
         // SAFETY: see above longer comment.
         unsafe { self.data.scratch.set_len(prev_count) };
         mem::swap(&mut self.data.data, &mut self.data.scratch);
-        self.data.stale_rows = 0;
+        self.data.stale = 0;
     }
+    #[allow(clippy::too_many_lines)]
     fn rehash_impl(
         sort_by: Option<ColumnId>,
         n_keys: usize,
@@ -1166,13 +1169,13 @@ impl SortedWritesTable {
                 } else {
                     offsets.push((sort_col, new));
                 }
-            })
+            });
         } else {
             rows.remove_stale(|row, old, new| {
                 let stale_entry = get_entry_mut(row, n_keys, hash, |x| x == old)
                     .expect("non-stale entry not mapped in hash");
                 *stale_entry = new;
-            })
+            });
         }
     }
 
@@ -1184,7 +1187,7 @@ impl SortedWritesTable {
             &mut self.data,
             &mut self.offsets,
             &mut self.hash,
-        )
+        );
     }
 }
 
@@ -1269,8 +1272,6 @@ impl PendingState {
     /// We also, however, use it in the clone impl (which should only be called when pending state
     /// is empty).
     fn deep_copy(&self) -> PendingState {
-        let mut pending_rows = DenseIdMap::new();
-        let mut pending_removals = DenseIdMap::new();
         fn drain_queue<T>(queue: &SegQueue<T>) -> Vec<T> {
             let mut res = Vec::new();
             while let Some(x) = queue.pop() {
@@ -1278,6 +1279,8 @@ impl PendingState {
             }
             res
         }
+        let mut pending_rows = DenseIdMap::new();
+        let mut pending_removals = DenseIdMap::new();
         for (shard, queue) in self.pending_rows.iter() {
             let contents = drain_queue(queue);
             let new_queue = SegQueue::default();
@@ -1310,7 +1313,7 @@ impl PendingState {
 /// A trait that encapsulates the logic of potentially checking that written
 /// columns appear in sorted order.
 ///
-/// For rows that are sorted by a column, an OrderingChecker asserts that all
+/// For rows that are sorted by a column, an `OrderingChecker` asserts that all
 /// new rows have the same value in that column, and that the column is greater
 /// than or equal to the column value coming in. For rows not sorted, these
 /// checks become no-ops.
@@ -1369,11 +1372,10 @@ impl OrderingChecker for SortChecker {
         for checker in checkers {
             assert_eq!(checker.baseline, start.baseline);
             match (&mut expected, checker.current) {
-                (None, None) => {}
+                (None | Some(_), None) => {}
                 (cur @ None, Some(x)) => {
                     *cur = Some(x);
                 }
-                (Some(_), None) => {}
                 (Some(x), Some(y)) => {
                     assert_eq!(
                         *x, y,
@@ -1402,8 +1404,8 @@ impl OrderingChecker for SortChecker {
     }
 }
 
-/// A type similar to a SortedWritesTable used to buffer outputs. The main thing
-/// that StagedOutputs handles is running the merge function for a table on
+/// A type similar to a `SortedWritesTable` used to buffer outputs. The main thing
+/// that `StagedOutputs` handles is running the merge function for a table on
 /// multiple updates to the same key that show up in the same round of
 /// insertions.
 struct StagedOutputs {
@@ -1446,10 +1448,10 @@ impl StagedOutputs {
         row: &[Value],
         mut merge_fn: impl FnMut(&[Value], &[Value], &mut Vec<Value>) -> bool,
     ) {
+        use hashbrown::hash_table::Entry;
         if row[0].is_stale() {
             return;
         }
-        use hashbrown::hash_table::Entry;
         let (_, hc) = hash_code(self.shard_data, row, self.n_keys);
         let entry = self.hash.entry(
             hc,
@@ -1481,7 +1483,7 @@ impl StagedOutputs {
     }
 
     /// Write the contents of the staged outputs to the given writer, returning
-    /// the initial RowId of the new output.
+    /// the initial `RowId` of the new output.
     fn write_output(&self, output: &ParallelRowBufWriter) -> RowId {
         let n_rows = self.rows.len() - self.n_stale;
         let n_vals = n_rows * self.rows.arity();

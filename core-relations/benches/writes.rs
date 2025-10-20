@@ -8,7 +8,7 @@ use rayon::{
 };
 
 fn main() {
-    divan::main()
+    divan::main();
 }
 
 enum Operation<const KEYS: usize, const COLS: usize> {
@@ -31,7 +31,7 @@ fn random_value(rng: &mut impl Rng) -> Value {
 
 fn random_row<const C: usize>(rng: &mut impl Rng) -> [Value; C] {
     let mut row = [Value::new(0); C];
-    for v in row.iter_mut() {
+    for v in &mut row {
         *v = random_value(rng);
     }
     row
@@ -70,10 +70,10 @@ fn parallel_insert<const N: usize>(bench: Bencher) {
     const WORKLOAD_SIZE: usize = 4 << 20;
     bench_workload(
         bench,
-        generate_workload::<3, 5>(WORKLOAD_SIZE, 1.0, 0.05),
+        &generate_workload::<3, 5>(WORKLOAD_SIZE, 1.0, 0.05),
         1,
         N,
-    )
+    );
 }
 
 #[divan::bench(consts = [1, 2, 4, 8, 16], sample_count=25)]
@@ -81,10 +81,10 @@ fn parallel_insert_merge2<const N: usize>(bench: Bencher) {
     const WORKLOAD_SIZE: usize = 4 << 20;
     bench_workload(
         bench,
-        generate_workload::<3, 5>(WORKLOAD_SIZE, 1.0, 0.05),
+        &generate_workload::<3, 5>(WORKLOAD_SIZE, 1.0, 0.05),
         2,
         N,
-    )
+    );
 }
 
 #[divan::bench(consts = [1, 2, 4, 8, 16])]
@@ -92,15 +92,15 @@ fn parallel_insert_remove_with_collisions<const N: usize>(bench: Bencher) {
     const WORKLOAD_SIZE: usize = 1 << 20;
     bench_workload(
         bench,
-        generate_workload::<3, 5>(WORKLOAD_SIZE, 0.75, 0.15),
+        &generate_workload::<3, 5>(WORKLOAD_SIZE, 0.75, 0.15),
         1,
         N,
-    )
+    );
 }
 
 fn bench_workload<const K: usize, const C: usize>(
     bench: Bencher,
-    workload: Vec<Operation<K, C>>,
+    workload: &[Operation<K, C>],
     n_merges: usize,
     threads: usize,
 ) {
@@ -142,6 +142,6 @@ fn bench_workload<const K: usize, const C: usize>(
                     });
                     db.with_execution_state(|es| table.merge(es));
                 }
-            })
-        })
+            });
+        });
 }

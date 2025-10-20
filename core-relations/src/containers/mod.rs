@@ -53,8 +53,9 @@ pub struct ContainerValues {
 }
 
 impl ContainerValues {
+    #[must_use]
     pub fn new() -> Self {
-        Default::default()
+        Self::default()
     }
 
     fn get<C: ContainerValue>(&self) -> Option<&ContainerEnv<C>> {
@@ -68,7 +69,7 @@ impl ContainerValues {
         let Some(env) = self.get::<C>() else {
             return;
         };
-        for ent in env.to_id.iter() {
+        for ent in &env.to_id {
             f(ent.key(), *ent.value());
         }
     }
@@ -78,19 +79,22 @@ impl ContainerValues {
     ///
     /// The return type of this function may contain lock guards. Attempts to modify the contents
     /// of the containers database may deadlock if the given guard has not been dropped.
+    #[must_use]
     pub fn get_val<C: ContainerValue>(&self, val: Value) -> Option<impl Deref<Target = C> + '_> {
         self.get::<C>()?.get_container(val)
     }
 
+    /// # Panics
+    /// If we fail to register the container's type before registering a value.
     pub fn register_val<C: ContainerValue>(
         &self,
-        container: C,
+        container: &C,
         exec_state: &mut ExecutionState,
     ) -> Value {
         let env = self
             .get::<C>()
             .expect("must register container type before registering a value");
-        env.get_or_insert(&container, exec_state)
+        env.get_or_insert(container, exec_state)
     }
 
     /// Apply the given rebuild to the contents of each container.
@@ -246,6 +250,7 @@ impl<C: ContainerValue> ContainerEnv<C> {
         }
     }
 
+    #[allow(clippy::cast_possible_truncation)]
     fn get_or_insert(&self, container: &C, exec_state: &mut ExecutionState) -> Value {
         if let Some(value) = self.to_id.get(container) {
             return *value;
@@ -291,6 +296,7 @@ impl<C: ContainerValue> ContainerEnv<C> {
         }
     }
 
+    #[allow(clippy::cast_possible_truncation)]
     fn insert_owned(&self, container: C, value: Value, exec_state: &mut ExecutionState) {
         let hc = hash_container(&container);
         let target_map = self.to_id.determine_map(&container);
@@ -413,6 +419,7 @@ impl<C: ContainerValue> ContainerEnv<C> {
         changed
     }
 
+    #[allow(clippy::cast_possible_truncation)]
     fn apply_rebuild_nonincremental_parallel(
         &mut self,
         rebuilder: &dyn Rebuilder,
@@ -525,13 +532,6 @@ impl<C: ContainerValue> ContainerEnv<C> {
     }
 
     fn get_container(&self, value: Value) -> Option<impl Deref<Target = C> + '_> {
-        let (hc, target_map) = *self.to_container.get(&value)?;
-        let shard = &self.to_id.shards()[target_map];
-        let read_guard = shard.read();
-        let val_ptr: *const (C, _) = shard
-            .read()
-            .find(hc as u64, |(_, v)| *v.get() == value)?
-            .as_ptr();
         struct ValueDeref<'a, T, Guard> {
             _guard: Guard,
             data: &'a T,
@@ -544,6 +544,13 @@ impl<C: ContainerValue> ContainerEnv<C> {
                 self.data
             }
         }
+        let (hc, target_map) = *self.to_container.get(&value)?;
+        let shard = &self.to_id.shards()[target_map];
+        let read_guard = shard.read();
+        let val_ptr: *const (C, _) = shard
+            .read()
+            .find(hc as u64, |(_, v)| *v.get() == value)?
+            .as_ptr();
 
         Some(ValueDeref {
             _guard: read_guard,

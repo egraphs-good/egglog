@@ -46,7 +46,7 @@ pub trait Clear: Default {
 
 impl<T> Clear for Vec<T> {
     fn clear(&mut self) {
-        self.clear()
+        self.clear();
     }
     fn reuse(&self) -> bool {
         self.capacity() > 256
@@ -58,7 +58,7 @@ impl<T> Clear for Vec<T> {
 
 impl<T: Clear> Clear for Rc<T> {
     fn clear(&mut self) {
-        Rc::get_mut(self).unwrap().clear()
+        Rc::get_mut(self).unwrap().clear();
     }
     fn reuse(&self) -> bool {
         Rc::strong_count(self) == 1 && Rc::weak_count(self) == 0
@@ -81,7 +81,7 @@ where
 
 impl<T> Clear for HashSet<T> {
     fn clear(&mut self) {
-        self.clear()
+        self.clear();
     }
     fn reuse(&self) -> bool {
         self.capacity() > 0
@@ -93,7 +93,7 @@ impl<T> Clear for HashSet<T> {
 
 impl<T> Clear for HashTable<T> {
     fn clear(&mut self) {
-        self.clear()
+        self.clear();
     }
     fn reuse(&self) -> bool {
         self.capacity() > 0
@@ -105,7 +105,7 @@ impl<T> Clear for HashTable<T> {
 
 impl<K, V> Clear for HashMap<K, V> {
     fn clear(&mut self) {
-        self.clear()
+        self.clear();
     }
     fn reuse(&self) -> bool {
         self.capacity() > 0
@@ -117,7 +117,7 @@ impl<K, V> Clear for HashMap<K, V> {
 
 impl<K, V> Clear for IndexMap<K, V> {
     fn clear(&mut self) {
-        self.clear()
+        self.clear();
     }
     fn reuse(&self) -> bool {
         self.capacity() > 0
@@ -129,7 +129,7 @@ impl<K, V> Clear for IndexMap<K, V> {
 
 impl<T> Clear for IndexSet<T> {
     fn clear(&mut self) {
-        self.clear()
+        self.clear();
     }
     fn reuse(&self) -> bool {
         self.capacity() > 0
@@ -141,7 +141,7 @@ impl<T> Clear for IndexSet<T> {
 
 impl Clear for FixedBitSet {
     fn clear(&mut self) {
-        self.clone_from(&Default::default());
+        self.clone_from(&Self::default());
     }
     fn reuse(&self) -> bool {
         !self.is_empty()
@@ -153,7 +153,7 @@ impl Clear for FixedBitSet {
 
 impl<K, V> Clear for IdVec<K, V> {
     fn clear(&mut self) {
-        self.clear()
+        self.clear();
     }
     fn reuse(&self) -> bool {
         self.capacity() > 0
@@ -257,7 +257,7 @@ pub struct Pooled<T: Clear + InPoolSet<PoolSet>> {
 
 impl<T: Clear + InPoolSet<PoolSet>> Default for Pooled<T> {
     fn default() -> Self {
-        with_pool_set(|ps| ps.get::<T>())
+        with_pool_set(PoolSet::get::<T>)
     }
 }
 
@@ -278,7 +278,7 @@ impl<T: Clear + InPoolSet<PoolSet> + Eq> Eq for Pooled<T> {}
 
 impl<T: Clear + Hash + InPoolSet<PoolSet>> Hash for Pooled<T> {
     fn hash<H: Hasher>(&self, state: &mut H) {
-        self.data.hash(state)
+        self.data.hash(state);
     }
 }
 
@@ -296,7 +296,7 @@ impl<T: Clear + InPoolSet<PoolSet> + 'static> Pooled<T> {
         if this.data.reuse() {
             return;
         }
-        let pool = with_pool_set(|ps| ps.get_pool::<T>());
+        let pool = with_pool_set(PoolSet::get_pool::<T>);
         let mut other = pool.data.borrow_mut().pop();
         if !other.reuse() {
             return;
@@ -322,7 +322,7 @@ impl<T: Clear + InPoolSet<PoolSet> + 'static> Pooled<T> {
 
 impl<T: Clear + Clone + InPoolSet<PoolSet>> Pooled<T> {
     pub(crate) fn cloned(this: &Pooled<T>) -> Pooled<T> {
-        let mut res = with_pool_set(|ps| ps.get::<T>());
+        let mut res = with_pool_set(PoolSet::get::<T>);
         res.clone_from(this);
         res
     }
@@ -342,8 +342,8 @@ impl<T: Clear + InPoolSet<PoolSet>> Drop for Pooled<T> {
         // SAFETY: ownership of `self.data` is transferred to the pool
         with_pool_set(|ps| {
             T::with_pool(ps, |pool| {
-                pool.data.borrow_mut().push(unsafe { ptr::read(t) })
-            })
+                pool.data.borrow_mut().push(unsafe { ptr::read(t) });
+            });
         });
     }
 }
@@ -390,10 +390,12 @@ macro_rules! pool_set {
         }
 
         impl $name {
+            #[must_use]
             $vis fn get_pool<T: InPoolSet<Self>>(&self) -> Pool<T> {
                 T::with_pool(self, Pool::clone)
             }
 
+            #[must_use]
             $vis fn get<T: InPoolSet<Self> + Default>(&self) -> Pooled<T> {
                 self.get_pool().get()
             }
@@ -456,5 +458,5 @@ thread_local! {
     ///
     /// For large egraphs, this be a big runtime win. The main egglog binary
     /// avoids dropping the egraph for the same reason.
-    static POOL_SET: ManuallyDrop<PoolSet> = Default::default();
+    static POOL_SET: ManuallyDrop<PoolSet> = ManuallyDrop::default();
 }

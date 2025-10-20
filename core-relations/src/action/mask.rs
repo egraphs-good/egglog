@@ -72,6 +72,7 @@ impl Mask {
 
     /// Iterate over the offsets in the slice that correspond to set offsets in
     /// the `Mask`.
+    #[allow(clippy::iter_not_returning_iterator)]
     pub(crate) fn iter<'slice, T>(
         &'slice mut self,
         slice: &'slice [T],
@@ -91,7 +92,7 @@ impl Mask {
     ) -> MaskIterDynamicSource<'a, 'a, T> {
         MaskIterDynamicSource {
             counter: 0,
-            data: SmallVec::from_iter(sources),
+            data: sources.collect::<SmallVec<_>>(),
             pool,
             mask: &mut self.data,
         }
@@ -174,12 +175,11 @@ pub(crate) trait MaskIter {
                 }
                 IterResult::Done => break,
             };
-            match f(cur, next) {
-                Some(next) => out.push(next),
-                None => {
-                    out.push(default());
-                    self.remove(cur);
-                }
+            if let Some(next) = f(cur, next) {
+                out.push(next);
+            } else {
+                out.push(default());
+                self.remove(cur);
             }
         }
     }
@@ -233,7 +233,7 @@ pub(crate) trait MaskIter {
         self.retain(|item| {
             f(item);
             true
-        })
+        });
     }
 
     fn zip<T>(self, slice: &[T]) -> ZipIter<'_, Self, T>
@@ -308,7 +308,7 @@ pub(crate) struct MaskIterUnit<'mask> {
     mask: &'mask mut FixedBitSet,
 }
 
-impl<'mask> MaskIter for MaskIterUnit<'mask> {
+impl MaskIter for MaskIterUnit<'_> {
     type Item = ();
 
     fn inc_counter(&mut self) -> usize {

@@ -151,6 +151,7 @@ fn insert_scan_sorted() {
 }
 
 #[test]
+#[allow(clippy::cast_sign_loss)]
 fn shard_math() {
     let mut table = ShardedHashTable::<TableEntry>::with_shards(14);
     // Should be rounded up to 16.

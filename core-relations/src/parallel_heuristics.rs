@@ -6,6 +6,7 @@
 /// These are operations that work on a per-table or per-rule level where the size of the workload
 /// is hard to gauge ahead of time. In this case, we gate parallel execution based on the number of
 /// threads available and whether the total size of the database exceeds a certain threshold.
+#[allow(clippy::used_underscore_binding)]
 pub(crate) fn parallelize_db_level_op(_db_size: usize) -> bool {
     #[cfg(test)]
     {
@@ -19,6 +20,7 @@ pub(crate) fn parallelize_db_level_op(_db_size: usize) -> bool {
 }
 
 /// Whether or not to use a parallel algorithm to construct a hash index.
+#[allow(clippy::used_underscore_binding)]
 pub(crate) fn parallelize_index_construction(_items_to_insert: usize) -> bool {
     #[cfg(test)]
     {
@@ -32,6 +34,7 @@ pub(crate) fn parallelize_index_construction(_items_to_insert: usize) -> bool {
 }
 
 /// Whtether or not to use a parallel algorithm to rebuild a [`crate::table::SortedWritesTable`].
+#[allow(clippy::used_underscore_binding)]
 pub(crate) fn parallelize_rebuild(_table_size: usize) -> bool {
     #[cfg(test)]
     {
@@ -45,6 +48,7 @@ pub(crate) fn parallelize_rebuild(_table_size: usize) -> bool {
 }
 
 /// Whether or not to perform an operation for a given container memo table.
+#[allow(clippy::used_underscore_binding)]
 pub(crate) fn parallelize_intra_container_op(_num_containers: usize) -> bool {
     #[cfg(test)]
     {
@@ -59,6 +63,7 @@ pub(crate) fn parallelize_intra_container_op(_num_containers: usize) -> bool {
 
 /// Whether or not to perform an operation in parallel across a set of different container memo
 /// tables.
+#[allow(clippy::used_underscore_binding)]
 pub(crate) fn parallelize_inter_container_op(_num_containers: usize) -> bool {
     #[cfg(test)]
     {
@@ -72,6 +77,7 @@ pub(crate) fn parallelize_inter_container_op(_num_containers: usize) -> bool {
 }
 
 #[track_caller]
+#[allow(clippy::used_underscore_binding)]
 pub(crate) fn parallelize_table_op(_table_size: usize) -> bool {
     #[cfg(test)]
     {

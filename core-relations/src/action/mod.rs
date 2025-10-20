@@ -26,7 +26,7 @@ mod tests;
 
 /// A representation of a value within a query or rule.
 ///
-/// A QueryEntry is either a variable bound in a join, or an untyped constant.
+/// A `QueryEntry` is either a variable bound in a join, or an untyped constant.
 #[derive(Copy, Clone, Debug)]
 pub enum QueryEntry {
     Var(Variable),
@@ -104,7 +104,7 @@ pub(crate) struct Bindings {
     // This is used to preallocate chunks of the flat `data` vector.
     max_batch_size: usize,
     data: Pooled<Vec<Value>>,
-    /// Points into `data`. data[vars[var].. vars[var]+matches]` contains the values for `data`.
+    /// Points into `data`. `data[vars[var].. vars[var]+matches]` contains the values for `data`.
     var_offsets: DenseIdMap<Variable, usize>,
 }
 
@@ -120,7 +120,7 @@ impl Bindings {
         Bindings {
             matches: 0,
             max_batch_size,
-            data: Default::default(),
+            data: Pooled::default(),
             var_offsets: DenseIdMap::new(),
         }
     }
@@ -230,7 +230,7 @@ impl Bindings {
     ///
     /// To add the values back, use [`Bindings::replace`].
     pub(crate) fn take(&mut self, var: Variable) -> Option<ExtractedBinding> {
-        let mut vals: Pooled<Vec<Value>> = with_pool_set(|ps| ps.get());
+        let mut vals: Pooled<Vec<Value>> = with_pool_set(super::pool::PoolSet::get);
         vals.extend_from_slice(self.get(var)?);
         let start = self.var_offsets.take(var)?;
         Some(ExtractedBinding {
@@ -287,7 +287,7 @@ impl Clear for PredictedVals {
                 .par_iter_mut()
                 .for_each(|shard| shard.get_mut().clear());
         }
-        self.data.clear()
+        self.data.clear();
     }
     fn bytes(&self) -> usize {
         self.data.capacity()
@@ -320,7 +320,7 @@ pub(crate) struct DbView<'a> {
 
 /// A handle on a database that may be in the process of running a rule.
 ///
-/// An ExecutionState grants immutable access to the (much of) the database, and also provides a
+/// An `ExecutionState` grants immutable access to the (much of) the database, and also provides a
 /// limited API to mutate database contents.
 ///
 /// A few important notes:
@@ -331,23 +331,23 @@ pub(crate) struct DbView<'a> {
 /// operations, only a table's read-side dependencies are available for reading (sim. for writing).
 /// This allows tables that do not need access to one another to be merged in parallel.
 ///
-/// When executing a rule, ExecutionState has access to all tables.
+/// When executing a rule, `ExecutionState` has access to all tables.
 ///
 /// ## Limited Mutability
 /// Callers can only stage insertsions and deletions to tables. These changes are not applied until
 /// the next call to `merge` on the underlying table.
 ///
 /// ## Predicted Values
-/// ExecutionStates provide a means of synchronizing the results of a pending write across
+/// `ExecutionState`s provide a means of synchronizing the results of a pending write across
 /// different executions of a rule. This is particularly important in the case where the result of
 /// an operation (such as "lookup or insert new id" operatiosn) is a fresh id. A common
-/// ExecutionState ensures that future lookups will see the same id (even across calls to
+/// `ExecutionState` ensures that future lookups will see the same id (even across calls to
 /// [`ExecutionState::clone`]).
 pub struct ExecutionState<'a> {
     pub(crate) predicted: &'a PredictedVals,
     pub(crate) db: DbView<'a>,
     pub(crate) buffers: DenseIdMap<TableId, Box<dyn MutationBuffer>>,
-    /// Whether any mutations have been staged via this ExecutionState.
+    /// Whether any mutations have been staged via this `ExecutionState`.
     pub(crate) changed: bool,
 }
 
@@ -409,24 +409,29 @@ impl<'a> ExecutionState<'a> {
         self.db.external_funcs[func].invoke(self, args)
     }
 
+    #[must_use]
     pub fn inc_counter(&self, ctr: CounterId) -> usize {
         self.db.counters.inc(ctr)
     }
 
+    #[must_use]
     pub fn read_counter(&self, ctr: CounterId) -> usize {
         self.db.counters.read(ctr)
     }
 
     /// Get an immutable reference to the table with id `table`.
     /// Dangerous: Reading from a table during action execution may break the semi-naive evaluation
+    #[must_use]
     pub fn get_table(&self, table: TableId) -> &'a WrappedTable {
         &self.db.table_info[table].table
     }
 
+    #[must_use]
     pub fn base_values(&self) -> &BaseValues {
         self.db.bases
     }
 
+    #[must_use]
     pub fn container_values(&self) -> &'a ContainerValues {
         self.db.containers
     }
@@ -449,20 +454,16 @@ impl<'a> ExecutionState<'a> {
         if let Some(row) = self.db.table_info[table].table.get_row(key) {
             return row.vals;
         }
-        Pooled::cloned(
-            self.predicted
-                .get_val(table, key, || {
-                    Self::construct_new_row(
-                        &self.db,
-                        &mut self.buffers,
-                        &mut self.changed,
-                        table,
-                        key,
-                        vals,
-                    )
-                })
-                .deref(),
-        )
+        Pooled::cloned(&*self.predicted.get_val(table, key, || {
+            Self::construct_new_row(
+                &self.db,
+                &mut self.buffers,
+                &mut self.changed,
+                table,
+                key,
+                vals,
+            )
+        }))
     }
 
     fn construct_new_row(
@@ -481,7 +482,7 @@ impl<'a> ExecutionState<'a> {
                 new.push(match val {
                     MergeVal::Counter(ctr) => Value::from_usize(db.counters.inc(ctr)),
                     MergeVal::Constant(c) => c,
-                })
+                });
             }
             buffers
                 .get_or_insert(table, || db.table_info[table].table.new_buffer())
@@ -534,26 +535,27 @@ impl ExecutionState<'_> {
         }
         mask.count_ones()
     }
+    #[allow(clippy::too_many_lines)]
     fn run_instr(&mut self, mask: &mut Mask, inst: &Instr, bindings: &mut Bindings) {
         fn assert_impl(
             bindings: &mut Bindings,
             mask: &mut Mask,
-            l: &QueryEntry,
-            r: &QueryEntry,
+            l: QueryEntry,
+            r: QueryEntry,
             op: impl Fn(Value, Value) -> bool,
         ) {
             match (l, r) {
                 (QueryEntry::Var(v1), QueryEntry::Var(v2)) => {
-                    mask.iter(&bindings[*v1])
-                        .zip(&bindings[*v2])
+                    mask.iter(&bindings[v1])
+                        .zip(&bindings[v2])
                         .retain(|(v1, v2)| op(*v1, *v2));
                 }
                 (QueryEntry::Var(v), QueryEntry::Const(c))
                 | (QueryEntry::Const(c), QueryEntry::Var(v)) => {
-                    mask.iter(&bindings[*v]).retain(|v| op(*v, *c));
+                    mask.iter(&bindings[v]).retain(|v| op(*v, c));
                 }
                 (QueryEntry::Const(c1), QueryEntry::Const(c2)) => {
-                    if !op(*c1, *c2) {
+                    if !op(c1, c2) {
                         mask.clear();
                     }
                 }
@@ -622,7 +624,7 @@ impl ExecutionState<'_> {
                                             }
                                             WriteVal::CurrentVal(ix) => row[*ix],
                                         };
-                                        row.push(val)
+                                        row.push(val);
                                     }
                                     // Insert it into the table.
                                     buffers.get_mut(*table_id).unwrap().stage_insert(&row);
@@ -695,20 +697,20 @@ impl ExecutionState<'_> {
                 for_each_binding_with_mask!(mask, vals.as_slice(), bindings, |iter| {
                     iter.for_each(|vals| {
                         self.stage_insert(*table, vals.as_slice());
-                    })
+                    });
                 });
             }
             Instr::InsertIfEq { table, l, r, vals } => match (l, r) {
                 (QueryEntry::Var(v1), QueryEntry::Var(v2)) => {
                     for_each_binding_with_mask!(mask, vals.as_slice(), bindings, |iter| {
-                        iter.zip(&bindings[*v1])
-                            .zip(&bindings[*v2])
-                            .for_each(|((vals, v1), v2)| {
+                        iter.zip(&bindings[*v1]).zip(&bindings[*v2]).for_each(
+                            |((vals, v1), v2)| {
                                 if v1 == v2 {
                                     self.stage_insert(*table, &vals);
                                 }
-                            })
-                    })
+                            },
+                        );
+                    });
                 }
                 (QueryEntry::Var(v), QueryEntry::Const(c))
                 | (QueryEntry::Const(c), QueryEntry::Var(v)) => {
@@ -717,15 +719,15 @@ impl ExecutionState<'_> {
                             if cond == c {
                                 self.stage_insert(*table, &vals);
                             }
-                        })
-                    })
+                        });
+                    });
                 }
                 (QueryEntry::Const(c1), QueryEntry::Const(c2)) => {
                     if c1 == c2 {
                         for_each_binding_with_mask!(mask, vals.as_slice(), bindings, |iter| iter
                             .for_each(|vals| {
                                 self.stage_insert(*table, &vals);
-                            }))
+                            }));
                     }
                 }
             },
@@ -733,7 +735,7 @@ impl ExecutionState<'_> {
                 for_each_binding_with_mask!(mask, args.as_slice(), bindings, |iter| {
                     iter.for_each(|args| {
                         self.stage_remove(*table, args.as_slice());
-                    })
+                    });
                 });
             }
             Instr::External { func, args, dst } => {
@@ -778,13 +780,13 @@ impl ExecutionState<'_> {
                             .iter()
                             .zip(&vals[*divider..])
                             .any(|(l, r)| l != r)
-                    })
-                })
+                    });
+                });
             }
-            Instr::AssertEq(l, r) => assert_impl(bindings, mask, l, r, |l, r| l == r),
-            Instr::AssertNe(l, r) => assert_impl(bindings, mask, l, r, |l, r| l != r),
+            Instr::AssertEq(l, r) => assert_impl(bindings, mask, *l, *r, |l, r| l == r),
+            Instr::AssertNe(l, r) => assert_impl(bindings, mask, *l, *r, |l, r| l != r),
             Instr::ReadCounter { counter, dst } => {
-                let mut vals = with_pool_set(|ps| ps.get::<Vec<Value>>());
+                let mut vals = with_pool_set(super::pool::PoolSet::get::<Vec<Value>>);
                 let ctr_val = Value::from_usize(self.read_counter(*counter));
                 vals.resize(bindings.matches, ctr_val);
                 bindings.insert(*dst, &vals);

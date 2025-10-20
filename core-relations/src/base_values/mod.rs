@@ -36,6 +36,7 @@ pub trait BaseValue: Clone + Hash + Eq + Any + Debug + Send + Sync {
     fn try_box(&self) -> Option<Value> {
         None
     }
+    #[must_use]
     fn try_unbox(_val: Value) -> Option<Self> {
         None
     }
@@ -80,17 +81,22 @@ impl BaseValues {
     }
 
     /// Get the [`BaseValueId`] for the given base value type `P`.
+    #[must_use]
     pub fn get_ty<P: BaseValue>(&self) -> BaseValueId {
         self.type_ids[&TypeId::of::<P>()]
     }
 
     /// Get the [`BaseValueId`] for the given base value type id.
+    #[must_use]
     pub fn get_ty_by_id(&self, id: TypeId) -> BaseValueId {
         self.type_ids[&id]
     }
 
     /// Get a [`Value`] representing the given base value `p`.
-    pub fn get<P: BaseValue>(&self, p: P) -> Value {
+    ///
+    /// # Panics
+    /// Shouldn't, despite an internal `unwrap()`.
+    pub fn get<P: BaseValue>(&self, p: &P) -> Value {
         if P::MAY_UNBOX {
             if let Some(v) = p.try_box() {
                 return v;
@@ -105,6 +111,10 @@ impl BaseValues {
     }
 
     /// Get the base value of type `P` corresponding to the given [`Value`].
+    ///
+    /// # Panics
+    /// if types aren't registered first.
+    #[must_use]
     pub fn unwrap<P: BaseValue>(&self, v: Value) -> P {
         if P::MAY_UNBOX {
             if let Some(p) = P::try_unbox(v) {
@@ -155,10 +165,11 @@ impl<P: BaseValue> DynamicInternTable for BaseInternTable<P> {
     }
 }
 
+#[allow(clippy::cast_possible_truncation)]
 const VAL_OFFSET: u32 = 1 << (std::mem::size_of::<Value>() as u32 * 8 - 1);
 
 impl<P: BaseValue> BaseInternTable<P> {
-    pub fn intern(&self, p: P) -> Value {
+    pub fn intern(&self, p: &P) -> Value {
         if P::MAY_UNBOX {
             p.try_box().unwrap_or_else(|| {
                 // If the base value type is too large to fit in a Value, we intern it and return
@@ -166,14 +177,14 @@ impl<P: BaseValue> BaseInternTable<P> {
                 // if the number of interned values is too large.
                 Value::new(
                     self.table
-                        .intern(&p)
+                        .intern(p)
                         .rep()
                         .checked_add(VAL_OFFSET)
                         .expect("interned value overflowed"),
                 )
             })
         } else {
-            self.table.intern(&p)
+            self.table.intern(p)
         }
     }
 
