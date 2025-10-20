@@ -17,6 +17,7 @@ pub trait NumericId: Copy + Clone + PartialEq + Eq + PartialOrd + Ord + Hash + S
     fn from_usize(index: usize) -> Self;
     fn index(self) -> usize;
     fn rep(self) -> Self::Rep;
+    #[must_use]
     fn inc(self) -> Self {
         Self::from_usize(self.index() + 1)
     }
@@ -44,7 +45,7 @@ impl NumericId for usize {
 /// A mapping from a [`NumericId`] to some value.
 ///
 /// This mapping is _dense_: it stores a flat array indexed by `K::index()`,
-/// with no hashing. For sparse mappings, use a HashMap.
+/// with no hashing. For sparse mappings, use a `HashMap`.
 #[derive(Clone, PartialEq, Eq, Hash)]
 pub struct DenseIdMap<K, V> {
     data: Vec<Option<V>>,
@@ -72,6 +73,7 @@ impl<K, V> Default for DenseIdMap<K, V> {
 
 impl<K: NumericId, V> DenseIdMap<K, V> {
     /// Create an empty map with space for `n` entries pre-allocated.
+    #[must_use]
     pub fn with_capacity(n: usize) -> Self {
         let mut res = Self::new();
         res.reserve_space(K::from_usize(n));
@@ -79,6 +81,7 @@ impl<K: NumericId, V> DenseIdMap<K, V> {
     }
 
     /// Create an empty map.
+    #[must_use]
     pub fn new() -> Self {
         Self::default()
     }
@@ -89,12 +92,14 @@ impl<K: NumericId, V> DenseIdMap<K, V> {
     }
 
     /// Get the current capacity for the table.
+    #[must_use]
     pub fn capacity(&self) -> usize {
         self.data.capacity()
     }
 
     /// Get the number of ids currently indexed by the table (including "null"
     /// entries). This is a less useful version of "length" in other containers.
+    #[must_use]
     pub fn n_ids(&self) -> usize {
         self.data.len()
     }
@@ -106,6 +111,7 @@ impl<K: NumericId, V> DenseIdMap<K, V> {
     }
 
     /// Get the key that would be returned by the next call to [`DenseIdMap::push`].
+    #[must_use]
     pub fn next_id(&self) -> K {
         K::from_usize(self.data.len())
     }
@@ -144,6 +150,10 @@ impl<K: NumericId, V> DenseIdMap<K, V> {
     }
 
     /// Extract the value mapped to by `key` from the table, if it is present.
+    ///
+    /// # Panics
+    /// This method panics if `key` is not in the table.
+    #[must_use]
     pub fn take(&mut self, key: K) -> Option<V> {
         self.reserve_space(key);
         self.data.get_mut(key.index()).unwrap().take()
@@ -156,6 +166,7 @@ impl<K: NumericId, V> DenseIdMap<K, V> {
         self.data[key.index()].get_or_insert_with(f)
     }
 
+    #[must_use]
     pub fn raw(&self) -> &[Option<V>] {
         &self.data
     }
@@ -193,6 +204,7 @@ impl<K: NumericId, V> DenseIdMap<K, V> {
 
 impl<K: NumericId, V: Send + Sync> DenseIdMap<K, V> {
     /// Get a parallel iterator over the entries in the table.
+    #[must_use]
     pub fn par_iter(&self) -> impl ParallelIterator<Item = (K, &V)> {
         self.data
             .par_iter()
@@ -239,9 +251,11 @@ impl<K, V> IdVec<K, V> {
     pub fn clear(&mut self) {
         self.data.clear();
     }
+    #[must_use]
     pub fn len(&self) -> usize {
         self.data.len()
     }
+    #[must_use]
     pub fn capacity(&self) -> usize {
         self.data.capacity()
     }
@@ -250,7 +264,7 @@ impl<K, V> IdVec<K, V> {
 impl<K, V> Default for IdVec<K, V> {
     fn default() -> IdVec<K, V> {
         IdVec {
-            data: Default::default(),
+            data: Vec::default(),
             _marker: std::marker::PhantomData,
         }
     }
@@ -275,8 +289,8 @@ pub struct DenseIdMapWithReuse<K, V> {
 impl<K, V> Default for DenseIdMapWithReuse<K, V> {
     fn default() -> Self {
         Self {
-            data: Default::default(),
-            free: Default::default(),
+            data: DenseIdMap::default(),
+            free: Vec::default(),
         }
     }
 }
@@ -284,13 +298,12 @@ impl<K, V> Default for DenseIdMapWithReuse<K, V> {
 impl<K: NumericId, V> DenseIdMapWithReuse<K, V> {
     /// Reserve a slot in the map for use later with [`DenseIdMapWithReuse::insert`].
     pub fn reserve_slot(&mut self) -> K {
-        match self.free.pop() {
-            Some(res) => res,
-            None => {
-                let res = self.data.next_id();
-                self.data.reserve_space(res);
-                res
-            }
+        if let Some(res) = self.free.pop() {
+            res
+        } else {
+            let res = self.data.next_id();
+            self.data.reserve_space(res);
+            res
         }
     }
 
@@ -299,7 +312,7 @@ impl<K: NumericId, V> DenseIdMapWithReuse<K, V> {
     /// the key to build the value, in which case you can
     /// use [`DenseIdMapWithReuse::reserve_slot`] to get the key for this method.
     pub fn insert(&mut self, key: K, value: V) {
-        self.data.insert(key, value)
+        self.data.insert(key, value);
     }
 
     /// Add the given value to the table.
@@ -333,6 +346,7 @@ impl<K: NumericId, V> std::ops::IndexMut<K> for DenseIdMapWithReuse<K, V> {
 }
 
 impl<K: NumericId, V> IdVec<K, V> {
+    #[must_use]
     pub fn with_capacity(cap: usize) -> IdVec<K, V> {
         IdVec {
             data: Vec::with_capacity(cap),
@@ -347,9 +361,10 @@ impl<K: NumericId, V> IdVec<K, V> {
     }
 
     pub fn resize_with(&mut self, size: usize, init: impl FnMut() -> V) {
-        self.data.resize_with(size, init)
+        self.data.resize_with(size, init);
     }
 
+    #[must_use]
     pub fn is_empty(&self) -> bool {
         self.data.is_empty()
     }
@@ -487,6 +502,8 @@ macro_rules! define_id {
             fn new(id: $repr) -> Self {
                 Self::new_const(id)
             }
+            #[allow(clippy::cast_possible_truncation)]
+            #[allow(clippy::checked_conversions)]
             fn from_usize(index: usize) -> Self {
                 assert!(<$repr>::MAX as usize >= index,
                     "overflowing id type {} (represented as {}) with index {}", stringify!($name), stringify!($repr), index);
