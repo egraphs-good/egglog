@@ -159,9 +159,11 @@ impl Database {
         let match_counter = MatchCounter::new(rule_set.actions.n_ids());
 
         let search_and_apply_timer = Instant::now();
-        let mut rule_reports: HashMap<String, Vec<RuleReport>>;
+        // let mut rule_reports: HashMap<String, Vec<RuleReport>>;
+        let mut rule_reports: HashMap<Arc<str>, Vec<RuleReport>>;
         if parallelize_db_level_op(self.total_size_estimate) {
-            let dash_rule_reports: DashMap<String, Vec<RuleReport>> = DashMap::default();
+            // let dash_rule_reports: DashMap<String, Vec<RuleReport>> = DashMap::default();
+            let dash_rule_reports: DashMap<Arc<str>, Vec<RuleReport>> = DashMap::default();
             rayon::in_place_scope(|scope| {
                 for (plan, desc, symbol_map, _action) in rule_set.plans.values() {
                     // TODO: add stats
@@ -191,7 +193,7 @@ impl Database {
                                 Default::default(),
                             ));
                         }
-                        let mut rule_report: RefMut<'_, String, Vec<RuleReport>> =
+                        let mut rule_report: RefMut<'_, Arc<str>, Vec<RuleReport>> =
                             dash_rule_reports.entry(desc.clone()).or_default();
                         rule_report.value_mut().push(RuleReport {
                             plan: report_plan,
@@ -229,6 +231,7 @@ impl Database {
                 join_state.run_header_and_plan(plan, &mut binding_info, &mut action_buf);
                 let search_and_apply_time = search_and_apply_timer.elapsed();
 
+                // TODO: unnecessary cloning in many cases
                 let rule_report = rule_reports.entry(desc.clone()).or_default();
                 rule_report.push(RuleReport {
                     plan: report_plan,

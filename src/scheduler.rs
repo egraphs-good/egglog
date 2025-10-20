@@ -445,7 +445,7 @@ mod test {
             let expected_matches = if iter <= 10 { 10 } else { 12 - iter };
             assert_eq!(
                 report.num_matches_per_rule.iter().collect::<Vec<_>>(),
-                [(&"test-rule".to_owned(), &expected_matches)]
+                [(&"test-rule".into(), &expected_matches)]
             );
 
             // Because of semi-naive, the exact rules that are run are more than just `test-rule`
@@ -453,18 +453,18 @@ mod test {
                 report
                     .search_and_apply_time_per_rule
                     .keys()
-                    .all(|k| k.as_str().starts_with("test-rule"))
+                    .all(|k| k.starts_with("test-rule"))
             );
             assert_eq!(
                 report.merge_time_per_ruleset.keys().collect::<Vec<_>>(),
-                ["test"]
+                [&"test".into()]
             );
             assert_eq!(
                 report
                     .search_and_apply_time_per_ruleset
                     .keys()
                     .collect::<Vec<_>>(),
-                ["test"]
+                [&"test".into()]
             );
 
             if !report.updated {

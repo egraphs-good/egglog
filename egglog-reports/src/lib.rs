@@ -4,6 +4,7 @@ use serde::Serialize;
 use std::{
     fmt::{Display, Formatter},
     hash::BuildHasherDefault,
+    sync::Arc,
 };
 use web_time::Duration;
 
@@ -64,7 +65,7 @@ pub struct RuleReport {
 #[derive(Debug, Serialize, Clone, Default)]
 pub struct RuleSetReport {
     pub changed: bool,
-    pub rule_reports: HashMap<String, Vec<RuleReport>>,
+    pub rule_reports: HashMap<Arc<str>, Vec<RuleReport>>,
     pub search_and_apply_time: Duration,
     pub merge_time: Duration,
 }
@@ -100,12 +101,12 @@ impl IterationReport {
         self.rule_set_report.search_and_apply_time
     }
 
-    pub fn rule_reports(&self) -> &HashMap<String, Vec<RuleReport>> {
+    pub fn rule_reports(&self) -> &HashMap<Arc<str>, Vec<RuleReport>> {
         &self.rule_set_report.rule_reports
     }
 
-    pub fn rules(&self) -> impl Iterator<Item = &String> {
-        self.rule_set_report.rule_reports.keys()
+    pub fn rules(&self) -> impl Iterator<Item = &str> {
+        self.rule_set_report.rule_reports.keys().map(|k| k.as_ref())
     }
 }
 
@@ -119,11 +120,11 @@ pub struct RunReport {
     pub iterations: Vec<IterationReport>,
     /// If any changes were made to the database.
     pub updated: bool,
-    pub search_and_apply_time_per_rule: HashMap<String, Duration>,
-    pub num_matches_per_rule: HashMap<String, usize>,
-    pub search_and_apply_time_per_ruleset: HashMap<String, Duration>,
-    pub merge_time_per_ruleset: HashMap<String, Duration>,
-    pub rebuild_time_per_ruleset: HashMap<String, Duration>,
+    pub search_and_apply_time_per_rule: HashMap<Arc<str>, Duration>,
+    pub num_matches_per_rule: HashMap<Arc<str>, usize>,
+    pub search_and_apply_time_per_ruleset: HashMap<Arc<str>, Duration>,
+    pub merge_time_per_ruleset: HashMap<Arc<str>, Duration>,
+    pub rebuild_time_per_ruleset: HashMap<Arc<str>, Duration>,
 }
 
 impl Display for RunReport {
@@ -132,7 +133,7 @@ impl Display for RunReport {
         rule_times_vec.sort_by_key(|(_, time)| **time);
 
         for (rule, time) in rule_times_vec {
-            let name = Self::truncate_rule_name(rule.clone());
+            let name = Self::truncate_rule_name(rule.to_string());
             let time = time.as_secs_f64();
             let num_matches = self.num_matches_per_rule.get(rule).copied().unwrap_or(0);
             writeln!(
@@ -191,13 +192,16 @@ impl RunReport {
         s
     }
 
-    fn union_times(times: &mut HashMap<String, Duration>, other_times: HashMap<String, Duration>) {
+    fn union_times(
+        times: &mut HashMap<Arc<str>, Duration>,
+        other_times: HashMap<Arc<str>, Duration>,
+    ) {
         for (k, v) in other_times {
             *times.entry(k).or_default() += v;
         }
     }
 
-    fn union_counts(counts: &mut HashMap<String, usize>, other_counts: HashMap<String, usize>) {
+    fn union_counts(counts: &mut HashMap<Arc<str>, usize>, other_counts: HashMap<Arc<str>, usize>) {
         for (k, v) in other_counts {
             *counts.entry(k).or_default() += v;
         }
@@ -209,13 +213,14 @@ impl RunReport {
         for rule in iteration.rules() {
             *report
                 .search_and_apply_time_per_rule
-                .entry(rule.clone())
+                .entry(rule.into())
                 .or_default() += iteration.rule_set_report.rule_search_and_apply_time(rule);
-            *report.num_matches_per_rule.entry(rule.clone()).or_default() +=
+            *report.num_matches_per_rule.entry(rule.into()).or_default() +=
                 iteration.rule_set_report.num_matches(rule);
         }
 
-        let per_ruleset = |x| [(ruleset.to_owned(), x)].into_iter().collect();
+        let ruleset: Arc<str> = ruleset.into();
+        let per_ruleset = |x| [(ruleset.clone(), x)].into_iter().collect();
 
         report.search_and_apply_time_per_ruleset = per_ruleset(iteration.search_and_apply_time());
         report.merge_time_per_ruleset = per_ruleset(iteration.rule_set_report.merge_time);

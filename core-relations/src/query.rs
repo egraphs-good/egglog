@@ -32,7 +32,7 @@ pub struct SymbolMap {
 /// A cached plan for a given rule.
 pub struct CachedPlan {
     plan: Plan,
-    desc: String,
+    desc: Arc<str>,
     symbol_map: SymbolMap,
     actions: ActionInfo,
 }
@@ -55,7 +55,7 @@ pub struct RuleSet {
     /// accounting logic assumes that rules and actions stand in a bijection. If we relaxed that
     /// later on, most of the core logic would still work but the accounting logic could get more
     /// complex.
-    pub(crate) plans: IdVec<RuleId, (Plan, String /* description */, SymbolMap, ActionId)>,
+    pub(crate) plans: IdVec<RuleId, (Plan, Arc<str> /* description */, SymbolMap, ActionId)>,
     pub(crate) actions: DenseIdMap<ActionId, ActionInfo>,
 }
 
@@ -462,6 +462,7 @@ impl RuleBuilder<'_, '_> {
         self.qb.query.action = action_id;
         // Plan the query
         let plan = self.qb.rsb.db.plan_query(self.qb.query);
+        let desc: String = desc.into();
         // Add it to the ruleset.
         self.qb
             .rsb
