@@ -1,4 +1,4 @@
-.PHONY: all test nits docs graphs rm-graphs
+.PHONY: all test nits docs graphs rm-graphs nightly
 
 RUST_SRC=$(shell find . -type f -wholename '*/src/*.rs' -or -name 'Cargo.toml')
 TESTS=$(shell find tests/ -type f -name '*.egg' -not -name '*repro-*')
@@ -37,3 +37,6 @@ json: $(patsubst %.egg,%.json,$(filter-out $(wildcard tests/repro-*.egg),$(wildc
 
 rm-graphs:
 	rm -f tests/*.dot tests/*.svg
+
+nightly:
+	bash infra/nightly.sh
