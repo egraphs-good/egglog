@@ -506,7 +506,7 @@ impl EGraph {
                 rb.build();
                 let rs = rsb.build();
                 atom.clear();
-                self.db.run_rule_set(&rs, ReportLevel::SizeOnly);
+                self.db.run_rule_set(&rs, ReportLevel::TimeOnly);
             }
             self.db.free_external_function(gfm_id);
 
@@ -543,7 +543,7 @@ impl EGraph {
                 rb.build();
                 let rs = rsb.build();
                 atom.clear();
-                self.db.run_rule_set(&rs, ReportLevel::SizeOnly);
+                self.db.run_rule_set(&rs, ReportLevel::TimeOnly);
             }
             self.db.free_external_function(gfm_id);
 

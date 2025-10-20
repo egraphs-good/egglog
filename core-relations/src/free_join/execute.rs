@@ -166,7 +166,7 @@ impl Database {
                 for (plan, desc, symbol_map, _action) in rule_set.plans.values() {
                     // TODO: add stats
                     let report_plan = match report_level {
-                        ReportLevel::SizeOnly => None,
+                        ReportLevel::TimeOnly => None,
                         ReportLevel::WithPlan | ReportLevel::StageInfo => {
                             Some(plan.to_report(symbol_map))
                         }
@@ -214,7 +214,7 @@ impl Database {
             };
             for (plan, desc, symbol_map, _action) in rule_set.plans.values() {
                 let report_plan = match report_level {
-                    ReportLevel::SizeOnly => None,
+                    ReportLevel::TimeOnly => None,
                     ReportLevel::WithPlan | ReportLevel::StageInfo => {
                         Some(plan.to_report(symbol_map))
                     }

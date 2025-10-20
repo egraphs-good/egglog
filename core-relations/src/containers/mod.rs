@@ -136,7 +136,7 @@ impl ContainerValues {
         }
     }
 
-    /// Add a new container type to the given [`Containers`] instance.
+    /// Add a new container type to the given [`ContainerValue`] instance.
     ///
     /// Container types need a meaans of generating fresh ids (`id_counter`) along with a means of
     /// merging conflicting ids (`merge_fn`).

@@ -45,7 +45,7 @@ struct Args {
     /// inferred parallelism available on the current system.
     threads: usize,
     #[arg(value_enum)]
-    #[clap(long, default_value_t = ReportLevel::SizeOnly)]
+    #[clap(long, default_value_t = ReportLevel::TimeOnly)]
     report_level: ReportLevel,
     #[clap(long)]
     save_report: Option<PathBuf>,

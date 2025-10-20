@@ -8,15 +8,16 @@ use std::{
 use web_time::Duration;
 
 pub(crate) type HashMap<K, V> = hashbrown::HashMap<K, V, BuildHasherDefault<FxHasher>>;
-// pub(crate) type HashSet<T> = hashbrown::HashSet<T, BuildHasherDefault<FxHasher>>;
 pub(crate) type IndexSet<T> = indexmap::IndexSet<T, BuildHasherDefault<FxHasher>>;
-// pub(crate) type IndexMap<K, V> = indexmap::IndexMap<K, V, BuildHasherDefault<FxHasher>>;
 
 #[derive(ValueEnum, Default, Serialize, Debug, Clone, Copy)]
 pub enum ReportLevel {
+    /// Report only the time taken in each search/apply, merge, rebuild phase.
     #[default]
-    SizeOnly,
+    TimeOnly,
+    /// Report [`ReportLevel::TimeOnly`] and query plan for each rule
     WithPlan,
+    /// Report [`ReportLevel::WithPlan`] and the detailed statistics at each stage of the query plan.
     StageInfo,
 }
 
@@ -70,13 +71,6 @@ pub struct RuleSetReport {
 
 impl RuleSetReport {
     pub fn num_matches(&self, rule: &str) -> usize {
-        self.rule_reports
-            .get(rule)
-            .map(|r| r.iter().map(|r| r.num_matches).sum())
-            .unwrap_or(0)
-    }
-
-    pub fn rule_num_matches(&self, rule: &str) -> usize {
         self.rule_reports
             .get(rule)
             .map(|r| r.iter().map(|r| r.num_matches).sum())
@@ -218,14 +212,14 @@ impl RunReport {
                 .entry(rule.clone())
                 .or_default() += iteration.rule_set_report.rule_search_and_apply_time(rule);
             *report.num_matches_per_rule.entry(rule.clone()).or_default() +=
-                iteration.rule_set_report.rule_num_matches(rule);
+                iteration.rule_set_report.num_matches(rule);
         }
 
         let per_ruleset = |x| [(ruleset.to_owned(), x)].into_iter().collect();
 
         report.search_and_apply_time_per_ruleset = per_ruleset(iteration.search_and_apply_time());
-        report.merge_time_per_ruleset = per_ruleset(iteration.search_and_apply_time());
-        report.rebuild_time_per_ruleset = per_ruleset(iteration.search_and_apply_time());
+        report.merge_time_per_ruleset = per_ruleset(iteration.rule_set_report.merge_time);
+        report.rebuild_time_per_ruleset = per_ruleset(iteration.rebuild_time);
         report.updated = iteration.changed();
         report.iterations.push(iteration);
 

@@ -257,7 +257,7 @@ impl<'outer, 'a> QueryBuilder<'outer, 'a> {
     /// nevertheless is not recommended.
     ///
     /// The returned `AtomId` can be used to refer to this atom when adding constraints in
-    /// [`RuleSetBuilder::rule_from_cached_plan`].
+    /// [`RuleSetBuilder::add_rule_from_cached_plan`].
     ///
     /// # Panics
     /// Like most methods that take a [`TableId`], this method will panic if the

@@ -17,6 +17,7 @@ nits:
 	cargo clippy --tests -- -D warnings
 	@rustup component add rustfmt
 	cargo fmt --check
+	cargo doc --workspace
 
 docs:
 	mkdir -p ${WWW}/

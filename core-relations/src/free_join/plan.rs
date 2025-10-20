@@ -244,7 +244,12 @@ impl Plan {
                     }
                 }
             };
-            stages.push((report_stage, None, vec![i + 1]));
+            let next = if i == self.stages.instrs.len() - 1 {
+                vec![]
+            } else {
+                vec![i + 1]
+            };
+            stages.push((report_stage, None, next));
         }
         ReportPlan { stages }
     }

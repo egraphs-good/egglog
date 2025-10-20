@@ -40,7 +40,7 @@ pub mod macros;
 pub mod proof_format;
 pub(crate) mod proof_spec;
 pub(crate) mod rule;
-pub(crate) mod syntax;
+pub mod syntax;
 #[cfg(test)]
 mod tests;
 
@@ -914,7 +914,7 @@ impl EGraph {
                                 &mut self.rules,
                                 &[*rule],
                                 ts,
-                                ReportLevel::SizeOnly,
+                                ReportLevel::TimeOnly,
                             )?
                             .changed;
                         }
@@ -929,7 +929,7 @@ impl EGraph {
                             &mut self.rules,
                             &[info.nonincremental_rebuild_rule],
                             ts,
-                            ReportLevel::SizeOnly,
+                            ReportLevel::TimeOnly,
                         )?
                         .changed;
                         for rule in &info.incremental_rebuild_rules {
@@ -1002,7 +1002,7 @@ impl EGraph {
                 &mut self.rules,
                 &scratch,
                 ts,
-                ReportLevel::SizeOnly,
+                ReportLevel::TimeOnly,
             )?
             .changed;
             scratch.clear();
@@ -1018,7 +1018,7 @@ impl EGraph {
                     &mut self.rules,
                     &scratch,
                     ts,
-                    ReportLevel::SizeOnly,
+                    ReportLevel::TimeOnly,
                 )?
                 .changed;
                 scratch.clear();
@@ -1491,7 +1491,7 @@ impl TableAction {
 
     /// A "table lookup" is not a read-only operation. It will insert a row when
     /// the [`DefaultVal`] for the table is not [`DefaultVal::Fail`] and
-    /// the `args` in [`Lookup::run`] are not already present in the table.
+    /// the `key` is not already present in the table.
     pub fn lookup(&self, state: &mut ExecutionState, key: &[Value]) -> Option<Value> {
         match self.default {
             Some(default) => {

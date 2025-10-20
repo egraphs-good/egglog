@@ -65,7 +65,7 @@ pub enum SourceExpr {
 }
 
 /// A data-structure representing an egglog query. Essentially, multiple [`SourceExpr`]s, one per
-/// line, along with a backing store accounting for subterms indexed by [`SyntaxId].
+/// line, along with a backing store accounting for subterms indexed by [`SyntaxId`].
 #[derive(Debug, Clone, Default)]
 pub struct SourceSyntax {
     pub(crate) backing: IdVec<SyntaxId, SourceExpr>,
