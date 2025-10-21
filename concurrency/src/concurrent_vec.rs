@@ -116,9 +116,7 @@ impl<T> Deref for ReadHandle<'_, T> {
 
     fn deref(&self) -> &[T] {
         // SAFETY: all elements up to `valid_prefix` are valid.
-        unsafe {
-            &*(&raw const self.reader[0..self.valid_prefix] as *const [T])
-        }
+        unsafe { &*(&raw const self.reader[0..self.valid_prefix] as *const [T]) }
     }
 }
 

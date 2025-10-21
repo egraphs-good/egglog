@@ -218,8 +218,9 @@ fn ac_fail() {
 
 #[test]
 fn math() {
-    let handles =
-        (0..2).map(|_| thread::spawn(|| math_test(EGraph::default(), false))).collect::<Vec<_>>();
+    let handles = (0..2)
+        .map(|_| thread::spawn(|| math_test(EGraph::default(), false)))
+        .collect::<Vec<_>>();
     handles.into_iter().for_each(|h| h.join().unwrap());
 }
 

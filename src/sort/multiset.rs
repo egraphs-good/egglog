@@ -1,6 +1,6 @@
 use super::{
-    Arc, ArcSort, ContainerSort, ContainerValue, ContainerValues, Debug, EGraph,
-    ExecutionState, Expr, FunctionContainer, FunctionSort, Hash, Presort, Primitive, Rebuilder,
+    Arc, ArcSort, ContainerSort, ContainerValue, ContainerValues, Debug, EGraph, ExecutionState,
+    Expr, FunctionContainer, FunctionSort, Hash, Presort, Primitive, Rebuilder,
     SimpleTypeConstraint, Span, Term, TermDag, TypeConstraint, TypeError, TypeInfo, Value,
     add_primitive, bool, i64,
 };
