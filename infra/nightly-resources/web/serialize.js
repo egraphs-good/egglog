@@ -1,6 +1,6 @@
 // Top-level load function for the serialize page.
 function load_serialize() {
-  fetch("/data/summary.json")
+  fetch("data/summary.json")
     .then((response) => response.json())
     .then(display);
 }

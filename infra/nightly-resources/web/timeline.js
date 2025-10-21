@@ -3,7 +3,7 @@ const ACT_CMDS = ["extract"];
 
 // Top-level load function for the timeline page.
 function load_timeline() {
-  fetch("/data/list.json")
+  fetch("data/list.json")
     .then((response) => response.json())
     .then(buildGlobalData);
 }
