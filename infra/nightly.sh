@@ -46,8 +46,7 @@ popd
 
 pushd $TOP_DIR
 cargo run --release --bin egglog -- tests/
-# Put the json data in a JS object for consumption by frontend
-(echo "var data = "; cat "$TOP_DIR/summary.json") > "$NIGHTLY_DIR/output/data/summary.js"
+cp "$TOP_DIR/summary.json" "$NIGHTLY_DIR/output/data/summary.json"
 popd
 
 

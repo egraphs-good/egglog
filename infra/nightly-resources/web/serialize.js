@@ -1,5 +1,11 @@
 // Top-level load function for the serialize page.
 function load_serialize() {
+  fetch("/data/summary.json")
+    .then((response) => response.json())
+    .then(display);
+}
+
+function display(data) {
   const success_container = document.getElementById("success");
   data.success.forEach((s) => {
     const elt = document.createElement("li");

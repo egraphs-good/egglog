@@ -3,13 +3,15 @@
 <html>
 
 <head>
-  <script src="index.js"></script>
+  <script src="timeline.js"></script>
+  <script src="https://cdnjs.cloudflare.com/ajax/libs/Chart.js/2.8.0/Chart.bundle.min.js"></script>
 </head>
 
 <title>Poach</title>
 
-<body onload="load()">
+<body onload="load_timeline()">
   <h2>Plots</h2>
+  <canvas class="content" id="chart"></canvas>
   <img src="data/total_run_total_extract.png"/>
   <h2>Raw</h2>
   <p>
