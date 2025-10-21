@@ -53,14 +53,7 @@ popd
 # Update HTML index page.
 cp "$RESOURCE_DIR/web"/* "$NIGHTLY_DIR/output"
 
-# This is the uploading part, copied directly from Herbie's nightly script.
-DIR="$NIGHTLY_DIR/output"
-B=$(git rev-parse --abbrev-ref HEAD)
-C=$(git rev-parse HEAD | sed 's/\(..........\).*/\1/')
-RDIR="$(date +%s):$(hostname):$B:$C"
-
-# Upload the artifact!
-nightly-results publish --name "$RDIR" "$DIR"
+# No more uploading using nightly-results, that happens automatically by the nightly runner now.
 
 # For local dev
 # cd "$NIGHTLY_DIR/output" && python3 -m http.server 8002
