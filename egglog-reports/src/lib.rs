@@ -117,7 +117,9 @@ impl IterationReport {
 /// information together.
 #[derive(Debug, Serialize, Clone, Default)]
 pub struct RunReport {
-    pub iterations: Vec<IterationReport>,
+    // Since `IterationReport`s are immutable, we can reference count them to avoid
+    // expensive cloning when e-graphs are cloned.
+    pub iterations: Vec<Arc<IterationReport>>,
     /// If any changes were made to the database.
     pub updated: bool,
     pub search_and_apply_time_per_rule: HashMap<Arc<str>, Duration>,
@@ -226,14 +228,13 @@ impl RunReport {
         report.merge_time_per_ruleset = per_ruleset(iteration.rule_set_report.merge_time);
         report.rebuild_time_per_ruleset = per_ruleset(iteration.rebuild_time);
         report.updated = iteration.changed();
-        report.iterations.push(iteration);
+        report.iterations.push(Arc::new(iteration));
 
         report
     }
 
     pub fn add_iteration(&mut self, ruleset: &str, iteration: IterationReport) {
-        // slightly inefficient due to added allocations, but this isn't on a hot path anyway
-        self.union(RunReport::singleton(ruleset, iteration.clone()));
+        self.union(RunReport::singleton(ruleset, iteration));
     }
 
     /// Merge two reports.
