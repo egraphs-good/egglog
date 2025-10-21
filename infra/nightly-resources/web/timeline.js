@@ -11,7 +11,7 @@ function load_timeline() {
 function buildGlobalData(names) {
   const allData = {};
   const promises = names.map((name) =>
-    fetch(name)
+    fetch(`data/${name}`)
       .then((r) => r.json())
       .then((d) => (allData[name] = d[0]))
   );

@@ -139,18 +139,20 @@ def main(input_dir, output_dir):
     """
     os.makedirs(output_dir, exist_ok=True)
 
-    for filename in os.listdir(input_dir):
-        if filename.endswith('.json'):
-            input_file_path = os.path.join(input_dir, filename)
-            output_file_path = os.path.join(output_dir, filename)
+    files = [f for f in os.listdir(input_dir) if f.endswith(".json")]
+    save_json(os.path.join(output_dir, "list.json"), files)
 
-            data = load_json(input_file_path)
+    for filename in files:
+        input_file_path = os.path.join(input_dir, filename)
+        output_file_path = os.path.join(output_dir, filename)
 
-            data = merge_start_end_events(data)
-            data = add_sexp_strs(data)
-            data = add_egglog_cmds(data)
+        data = load_json(input_file_path)
 
-            save_json(output_file_path, data)
+        data = merge_start_end_events(data)
+        data = add_sexp_strs(data)
+        data = add_egglog_cmds(data)
+
+        save_json(output_file_path, data)
 
 if __name__ == "__main__":
     import argparse
