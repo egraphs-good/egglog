@@ -113,7 +113,7 @@ impl BaseValues {
     /// Get the base value of type `P` corresponding to the given [`Value`].
     ///
     /// # Panics
-    /// if types aren't registered first.
+    /// If types aren't registered first.
     #[must_use]
     pub fn unwrap<P: BaseValue>(&self, v: Value) -> P {
         if P::MAY_UNBOX {
