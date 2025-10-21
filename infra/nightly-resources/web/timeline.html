@@ -11,6 +11,20 @@
 
 <body onload="load_timeline()">
   <h2>Plots</h2>
+  <form onchange="plot()">
+    <label>
+      <input type="radio" name="mode" value="total" checked>
+      Total
+    </label>
+    <label>
+      <input type="radio" name="mode" value="average">
+      Average
+    </label>
+    <label>
+      <input type="radio" name="mode" value="max">
+      Max
+    </label>
+  </form>
   <canvas class="content" id="chart"></canvas>
   <img src="data/total_run_total_extract.png"/>
   <h2>Raw</h2>
