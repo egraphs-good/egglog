@@ -13,6 +13,8 @@ pub fn run_example(filename: &str, program: &str) {
         .unwrap();
     // test performance of serialization as well
     egraph.serialize(egglog::SerializeConfig::default());
+    // We don't destruct the e-graph in CLI mode.
+    std::mem::forget(egraph);
 }
 
 #[derive(Clone)]
