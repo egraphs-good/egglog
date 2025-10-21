@@ -105,8 +105,8 @@ impl IterationReport {
         &self.rule_set_report.rule_reports
     }
 
-    pub fn rules(&self) -> impl Iterator<Item = &str> {
-        self.rule_set_report.rule_reports.keys().map(|k| k.as_ref())
+    pub fn rules(&self) -> impl Iterator<Item = &Arc<str>> {
+        self.rule_set_report.rule_reports.keys()
     }
 }
 
@@ -215,9 +215,9 @@ impl RunReport {
         for rule in iteration.rules() {
             *report
                 .search_and_apply_time_per_rule
-                .entry(rule.into())
+                .entry(rule.clone())
                 .or_default() += iteration.rule_set_report.rule_search_and_apply_time(rule);
-            *report.num_matches_per_rule.entry(rule.into()).or_default() +=
+            *report.num_matches_per_rule.entry(rule.clone()).or_default() +=
                 iteration.rule_set_report.num_matches(rule);
         }
 
