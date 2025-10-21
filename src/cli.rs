@@ -150,7 +150,7 @@ fn poach_one(path: &PathBuf, out_dir: &PathBuf, args: &Args) -> Result<usize> {
         Some(path.to_str().unwrap().into()),
         &program,
         io::stdout(),
-        args.mode,
+        RunMode::NoMessages, // silence output to keep logs small
     ) {
         Ok(None) => {}
         _ => anyhow::bail!("[{}]run_commands failed", path.display()),
