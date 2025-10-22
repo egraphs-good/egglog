@@ -31,9 +31,7 @@ function buildGlobalData(names) {
       };
       const entries = allData[filename].evts;
       entries.forEach((entry) => {
-        // compute event duration in ms from recorded seconds and nanoseconds
-        // @Noah- should we just record ms directly?
-        const ms = toMs(entry.total_time);
+        const ms = entry.total_ms;
         const cmd = entry.cmd;
 
         // group commands by type (run, extract, other)
@@ -50,10 +48,6 @@ function buildGlobalData(names) {
 
     plot();
   });
-}
-
-function toMs(duration) {
-  return duration.secs * 1e3 + duration.nanos / 1e6;
 }
 
 function aggregate(times, mode) {

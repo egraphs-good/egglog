@@ -29,7 +29,7 @@ def sum_command_runtimes(directory_path):
 
 			file_times = [filename, 0.0, 0.0, 0.0, 0, 0, 0]
 			for entry in data[0]["evts"]:
-				entry_ms = entry["total_time"]["secs"] * 1e3 + entry["total_time"]["nanos"] / 1e6
+				entry_ms = entry["total_ms"]
 				command = entry["cmd"]
 				if command in RUN_CMDS:
 					file_times[1] += entry_ms
