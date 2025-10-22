@@ -1,0 +1,316 @@
+{
+  "nodes": {
+    "primitive-Unit-0": {
+      "op": "()",
+      "children": [],
+      "eclass": "Unit-0",
+      "cost": 1.0,
+      "subsumed": false
+    },
+    "primitive-i64-0": {
+      "op": "0",
+      "children": [],
+      "eclass": "i64-0",
+      "cost": 1.0,
+      "subsumed": false
+    },
+    "function-0-left": {
+      "op": "left",
+      "children": [
+        "primitive-i64-0"
+      ],
+      "eclass": "Unit-0",
+      "cost": 1.0,
+      "subsumed": false
+    },
+    "primitive-i64-1": {
+      "op": "1",
+      "children": [],
+      "eclass": "i64-1",
+      "cost": 1.0,
+      "subsumed": false
+    },
+    "function-1-left": {
+      "op": "left",
+      "children": [
+        "primitive-i64-1"
+      ],
+      "eclass": "Unit-0",
+      "cost": 1.0,
+      "subsumed": false
+    },
+    "primitive-i64-2": {
+      "op": "2",
+      "children": [],
+      "eclass": "i64-2",
+      "cost": 1.0,
+      "subsumed": false
+    },
+    "function-2-left": {
+      "op": "left",
+      "children": [
+        "primitive-i64-2"
+      ],
+      "eclass": "Unit-0",
+      "cost": 1.0,
+      "subsumed": false
+    },
+    "primitive-i64-3": {
+      "op": "3",
+      "children": [],
+      "eclass": "i64-3",
+      "cost": 1.0,
+      "subsumed": false
+    },
+    "function-3-left": {
+      "op": "left",
+      "children": [
+        "primitive-i64-3"
+      ],
+      "eclass": "Unit-0",
+      "cost": 1.0,
+      "subsumed": false
+    },
+    "primitive-i64-4": {
+      "op": "4",
+      "children": [],
+      "eclass": "i64-4",
+      "cost": 1.0,
+      "subsumed": false
+    },
+    "function-4-left": {
+      "op": "left",
+      "children": [
+        "primitive-i64-4"
+      ],
+      "eclass": "Unit-0",
+      "cost": 1.0,
+      "subsumed": false
+    },
+    "primitive-i64-5": {
+      "op": "5",
+      "children": [],
+      "eclass": "i64-5",
+      "cost": 1.0,
+      "subsumed": false
+    },
+    "function-5-left": {
+      "op": "left",
+      "children": [
+        "primitive-i64-5"
+      ],
+      "eclass": "Unit-0",
+      "cost": 1.0,
+      "subsumed": false
+    },
+    "primitive-i64-6": {
+      "op": "6",
+      "children": [],
+      "eclass": "i64-6",
+      "cost": 1.0,
+      "subsumed": false
+    },
+    "function-6-left": {
+      "op": "left",
+      "children": [
+        "primitive-i64-6"
+      ],
+      "eclass": "Unit-0",
+      "cost": 1.0,
+      "subsumed": false
+    },
+    "primitive-i64-7": {
+      "op": "7",
+      "children": [],
+      "eclass": "i64-7",
+      "cost": 1.0,
+      "subsumed": false
+    },
+    "function-7-left": {
+      "op": "left",
+      "children": [
+        "primitive-i64-7"
+      ],
+      "eclass": "Unit-0",
+      "cost": 1.0,
+      "subsumed": false
+    },
+    "primitive-i64-8": {
+      "op": "8",
+      "children": [],
+      "eclass": "i64-8",
+      "cost": 1.0,
+      "subsumed": false
+    },
+    "function-8-left": {
+      "op": "left",
+      "children": [
+        "primitive-i64-8"
+      ],
+      "eclass": "Unit-0",
+      "cost": 1.0,
+      "subsumed": false
+    },
+    "primitive-i64-9": {
+      "op": "9",
+      "children": [],
+      "eclass": "i64-9",
+      "cost": 1.0,
+      "subsumed": false
+    },
+    "function-9-left": {
+      "op": "left",
+      "children": [
+        "primitive-i64-9"
+      ],
+      "eclass": "Unit-0",
+      "cost": 1.0,
+      "subsumed": false
+    },
+    "primitive-i64-10": {
+      "op": "10",
+      "children": [],
+      "eclass": "i64-10",
+      "cost": 1.0,
+      "subsumed": false
+    },
+    "function-10-left": {
+      "op": "left",
+      "children": [
+        "primitive-i64-10"
+      ],
+      "eclass": "Unit-0",
+      "cost": 1.0,
+      "subsumed": false
+    },
+    "function-0-right": {
+      "op": "right",
+      "children": [
+        "primitive-i64-0"
+      ],
+      "eclass": "Unit-0",
+      "cost": 1.0,
+      "subsumed": false
+    },
+    "function-1-right": {
+      "op": "right",
+      "children": [
+        "primitive-i64-1"
+      ],
+      "eclass": "Unit-0",
+      "cost": 1.0,
+      "subsumed": false
+    },
+    "function-2-right": {
+      "op": "right",
+      "children": [
+        "primitive-i64-2"
+      ],
+      "eclass": "Unit-0",
+      "cost": 1.0,
+      "subsumed": false
+    },
+    "function-3-right": {
+      "op": "right",
+      "children": [
+        "primitive-i64-3"
+      ],
+      "eclass": "Unit-0",
+      "cost": 1.0,
+      "subsumed": false
+    },
+    "function-4-right": {
+      "op": "right",
+      "children": [
+        "primitive-i64-4"
+      ],
+      "eclass": "Unit-0",
+      "cost": 1.0,
+      "subsumed": false
+    },
+    "function-5-right": {
+      "op": "right",
+      "children": [
+        "primitive-i64-5"
+      ],
+      "eclass": "Unit-0",
+      "cost": 1.0,
+      "subsumed": false
+    },
+    "function-6-right": {
+      "op": "right",
+      "children": [
+        "primitive-i64-6"
+      ],
+      "eclass": "Unit-0",
+      "cost": 1.0,
+      "subsumed": false
+    },
+    "function-7-right": {
+      "op": "right",
+      "children": [
+        "primitive-i64-7"
+      ],
+      "eclass": "Unit-0",
+      "cost": 1.0,
+      "subsumed": false
+    },
+    "function-8-right": {
+      "op": "right",
+      "children": [
+        "primitive-i64-8"
+      ],
+      "eclass": "Unit-0",
+      "cost": 1.0,
+      "subsumed": false
+    },
+    "function-9-right": {
+      "op": "right",
+      "children": [
+        "primitive-i64-9"
+      ],
+      "eclass": "Unit-0",
+      "cost": 1.0,
+      "subsumed": false
+    }
+  },
+  "root_eclasses": [],
+  "class_data": {
+    "Unit-0": {
+      "type": "Unit"
+    },
+    "i64-0": {
+      "type": "i64"
+    },
+    "i64-1": {
+      "type": "i64"
+    },
+    "i64-2": {
+      "type": "i64"
+    },
+    "i64-3": {
+      "type": "i64"
+    },
+    "i64-4": {
+      "type": "i64"
+    },
+    "i64-5": {
+      "type": "i64"
+    },
+    "i64-6": {
+      "type": "i64"
+    },
+    "i64-7": {
+      "type": "i64"
+    },
+    "i64-8": {
+      "type": "i64"
+    },
+    "i64-9": {
+      "type": "i64"
+    },
+    "i64-10": {
+      "type": "i64"
+    }
+  }
+}

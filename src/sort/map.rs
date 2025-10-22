@@ -44,11 +44,13 @@ impl ContainerValue for MapContainer {
 /// - `map-not-contains`
 /// - `map-remove`
 /// - `map-length`
-#[derive(Clone, Debug)]
+#[derive(Clone, Debug, Serialize, Deserialize)]
 pub struct MapSort {
-    name: String,
-    key: ArcSort,
-    value: ArcSort,
+    pub name: String,
+    #[serde(with = "arc_sort_serde")]
+    pub key: ArcSort,
+    #[serde(with = "arc_sort_serde")]
+    pub value: ArcSort,
 }
 
 impl MapSort {

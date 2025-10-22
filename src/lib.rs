@@ -33,8 +33,8 @@ use ast::*;
 pub use cli::*;
 use constraint::{Constraint, Problem, SimpleTypeConstraint, TypeConstraint};
 use core::{AtomTerm, ResolvedAtomTerm, ResolvedCall};
+use core_relations::{make_external_func, ExternalFunctionId};
 pub use core_relations::{BaseValue, ContainerValue, ExecutionState, Value};
-use core_relations::{ExternalFunctionId, make_external_func};
 use csv::Writer;
 pub use egglog_add_primitive::add_primitive;
 use egglog_ast::generic_ast::{Change, GenericExpr, Literal};
@@ -46,13 +46,16 @@ use egglog_core_relations as core_relations;
 use egglog_numeric_id as numeric_id;
 use extract::{CostModel, DefaultCost, Extractor, TreeAdditiveCostModel};
 use indexmap::map::Entry;
-use log::{Level, log_enabled};
+use log::{log_enabled, Level};
 use numeric_id::DenseIdMap;
 use prelude::*;
 use scheduler::{SchedulerId, SchedulerRecord};
-use serde::Serialize;
+use serde::ser::SerializeStruct;
+use serde::{Deserialize, Serialize};
+use serde_json::json;
 pub use serialize::{SerializeConfig, SerializeOutput, SerializedNode};
 use sort::*;
+use std::any::Any;
 use std::fmt::{Debug, Display, Formatter};
 use std::fs::File;
 use std::hash::Hash;
@@ -72,6 +75,257 @@ use web_time::Duration;
 use crate::core::{GenericActionsExt, ResolvedRuleExt};
 
 pub type ArcSort = Arc<dyn Sort>;
+
+impl dyn Sort {
+    fn as_any(&self) -> &dyn Any {
+        self
+    }
+}
+
+pub mod arc_sort_serde {
+    use serde::{Deserializer, Serializer};
+
+    use super::*;
+
+    pub fn serialize<S>(sort: &ArcSort, serializer: S) -> Result<S::Ok, S::Error>
+    where
+        S: Serializer,
+    {
+        SerializableSort(sort.clone()).serialize(serializer)
+    }
+
+    pub fn deserialize<'de, D>(deserializer: D) -> Result<ArcSort, D::Error>
+    where
+        D: Deserializer<'de>,
+    {
+        let SerializableSort(sort) = SerializableSort::deserialize(deserializer)?;
+        Ok(sort)
+    }
+}
+
+pub mod arc_sort_vec_serde {
+    use serde::{Deserializer, Serializer};
+
+    use super::*;
+
+    pub fn serialize<S>(v: &Vec<ArcSort>, serializer: S) -> Result<S::Ok, S::Error>
+    where
+        S: Serializer,
+    {
+        let serializable: Vec<SerializableSort> = v.iter().cloned().map(SerializableSort).collect();
+        serializable.serialize(serializer)
+    }
+
+    pub fn deserialize<'de, D>(deserializer: D) -> Result<Vec<ArcSort>, D::Error>
+    where
+        D: Deserializer<'de>,
+    {
+        let v: Vec<SerializableSort> = Vec::deserialize(deserializer)?;
+        let v: Vec<ArcSort> = v.into_iter().map(|SerializableSort(s)| s).collect();
+        Ok(v)
+    }
+}
+
+pub mod arc_sort_map_serde {
+    use hashbrown::HashMap;
+    use serde::{Deserializer, Serializer};
+
+    use super::*;
+
+    pub fn serialize<S>(m: &HashMap<String, ArcSort>, serializer: S) -> Result<S::Ok, S::Error>
+    where
+        S: Serializer,
+    {
+        let serializable: HashMap<String, SerializableSort> = m
+            .into_iter()
+            .map(|(k, v)| (k.clone(), SerializableSort(v.clone())))
+            .collect();
+        serializable.serialize(serializer)
+    }
+
+    pub fn deserialize<'de, D>(deserializer: D) -> Result<HashMap<String, ArcSort>, D::Error>
+    where
+        D: Deserializer<'de>,
+    {
+        let m: HashMap<String, SerializableSort> = HashMap::deserialize(deserializer)?;
+        let m: HashMap<String, ArcSort> = m
+            .into_iter()
+            .map(|(k, SerializableSort(v))| (k, v))
+            .collect();
+        Ok(m)
+    }
+}
+
+#[derive(Clone)]
+pub struct SerializableSort(pub ArcSort);
+
+impl<'de> Deserialize<'de> for SerializableSort {
+    fn deserialize<D>(deserializer: D) -> Result<Self, D::Error>
+    where
+        D: serde::Deserializer<'de>,
+    {
+        #[derive(Deserialize)]
+        #[serde(tag = "type", content = "data")]
+        enum SortRepr {
+            FunctionSort(FunctionSort),
+            EqSort(EqSort),
+            BaseSort(String),
+            MapSort {
+                name: String,
+                #[serde(with = "arc_sort_serde")]
+                key: ArcSort,
+                #[serde(with = "arc_sort_serde")]
+                value: ArcSort,
+            },
+            MultiSetSort {
+                name: String,
+                #[serde(with = "arc_sort_serde")]
+                element: ArcSort,
+            },
+            SetSort {
+                name: String,
+                #[serde(with = "arc_sort_serde")]
+                element: ArcSort,
+            },
+            VecSort {
+                name: String,
+                #[serde(with = "arc_sort_serde")]
+                element: ArcSort,
+            },
+        }
+        let repr = SortRepr::deserialize(deserializer)?;
+        let arc: ArcSort = match repr {
+            SortRepr::FunctionSort(function_sort) => Arc::new(function_sort),
+            SortRepr::EqSort(eq_sort) => Arc::new(eq_sort),
+            SortRepr::BaseSort(name) => match name.as_str() {
+                "BigIntSort" => BigIntSort.to_arcsort(),
+                "BigRatSort" => BigRatSort.to_arcsort(),
+                "BoolSort" => BoolSort.to_arcsort(),
+                "F64Sort" => F64Sort.to_arcsort(),
+                "I64Sort" => I64Sort.to_arcsort(),
+                "StringSort" => StringSort.to_arcsort(),
+                "UnitSort" => UnitSort.to_arcsort(),
+                _ => {
+                    return Err(serde::de::Error::custom(format!(
+                        "Unknown BaseSort {}",
+                        name
+                    )));
+                }
+            },
+            SortRepr::MapSort { name, key, value } => (MapSort { name, key, value }).to_arcsort(),
+            SortRepr::MultiSetSort { name, element } => {
+                (MultiSetSort { name, element }).to_arcsort()
+            }
+            SortRepr::SetSort { name, element } => (SetSort { name, element }).to_arcsort(),
+            SortRepr::VecSort { name, element } => (VecSort { name, element }).to_arcsort(),
+        };
+        Ok(SerializableSort(arc))
+    }
+}
+
+impl Serialize for SerializableSort {
+    fn serialize<S>(&self, serializer: S) -> Result<S::Ok, S::Error>
+    where
+        S: serde::Serializer,
+    {
+        let sort = &self.0;
+
+        let mut s = serializer.serialize_struct("SerializableSort", 2)?;
+
+        // Figure out which kind of sort we have
+        if let Some(sort) = sort.as_any().downcast_ref::<EqSort>() {
+            s.serialize_field("type", "EqSort")?;
+            s.serialize_field("data", sort)?;
+            s.end()
+        } else if let Some(sort) = sort.as_any().downcast_ref::<FunctionSort>() {
+            s.serialize_field("type", "FunctionSort")?;
+            s.serialize_field("data", sort)?;
+            s.end()
+        } else if let Some(_) = sort.as_any().downcast_ref::<BaseSortImpl<BigIntSort>>() {
+            s.serialize_field("type", "BaseSort")?;
+            s.serialize_field("data", "BigIntSort")?;
+            s.end()
+        } else if let Some(_) = sort.as_any().downcast_ref::<BaseSortImpl<BigRatSort>>() {
+            s.serialize_field("type", "BaseSort")?;
+            s.serialize_field("data", "BigRatSort")?;
+            s.end()
+        } else if let Some(_) = sort.as_any().downcast_ref::<BaseSortImpl<BoolSort>>() {
+            s.serialize_field("type", "BaseSort")?;
+            s.serialize_field("data", "BoolSort")?;
+            s.end()
+        } else if let Some(_) = sort.as_any().downcast_ref::<BaseSortImpl<F64Sort>>() {
+            s.serialize_field("type", "BaseSort")?;
+            s.serialize_field("data", "F64Sort")?;
+            s.end()
+        } else if let Some(_) = sort.as_any().downcast_ref::<BaseSortImpl<I64Sort>>() {
+            s.serialize_field("type", "BaseSort")?;
+            s.serialize_field("data", "I64Sort")?;
+            s.end()
+        } else if let Some(_) = sort.as_any().downcast_ref::<BaseSortImpl<StringSort>>() {
+            s.serialize_field("type", "BaseSort")?;
+            s.serialize_field("data", "StringSort")?;
+            s.end()
+        } else if let Some(_) = sort.as_any().downcast_ref::<BaseSortImpl<UnitSort>>() {
+            s.serialize_field("type", "BaseSort")?;
+            s.serialize_field("data", "UnitSort")?;
+            s.end()
+        } else if let Some(sort) = sort.as_any().downcast_ref::<ContainerSortImpl<MapSort>>() {
+            let inner = &sort.0;
+
+            s.serialize_field("type", "MapSort")?;
+            s.serialize_field(
+                "data",
+                &json!({
+                    "name": &inner.name,
+                    "key": &SerializableSort(inner.key.clone()),
+                    "value": &SerializableSort(inner.value.clone())
+                }),
+            )?;
+            s.end()
+        } else if let Some(sort) = sort
+            .as_any()
+            .downcast_ref::<ContainerSortImpl<MultiSetSort>>()
+        {
+            let inner = &sort.0;
+
+            s.serialize_field("type", "MultiSetSort")?;
+            s.serialize_field(
+                "data",
+                &json!({
+                    "name": &inner.name,
+                    "element": &SerializableSort(inner.element.clone())
+                }),
+            )?;
+            s.end()
+        } else if let Some(sort) = sort.as_any().downcast_ref::<ContainerSortImpl<SetSort>>() {
+            let inner = &sort.0;
+
+            s.serialize_field("type", "SetSort")?;
+            s.serialize_field(
+                "data",
+                &json!({
+                    "name": &inner.name,
+                    "element": &SerializableSort(inner.element.clone())
+                }),
+            )?;
+            s.end()
+        } else if let Some(sort) = sort.as_any().downcast_ref::<ContainerSortImpl<VecSort>>() {
+            let inner = &sort.0;
+
+            s.serialize_field("type", "VecSort")?;
+            s.serialize_field(
+                "data",
+                &json!({
+                    "name": &inner.name,
+                    "element": &SerializableSort(inner.element.clone())
+                }),
+            )?;
+            s.end()
+        } else {
+            Err(serde::ser::Error::custom("Unknown sort implementation"))
+        }
+    }
+}
 
 /// A trait for implementing custom primitive operations in egglog.
 ///
@@ -95,7 +349,7 @@ pub trait Primitive {
 /// the database was updated.
 /// Calling `union` on two run reports adds the timing
 /// information together.
-#[derive(Debug, Clone, Default)]
+#[derive(Debug, Clone, Default, Serialize, Deserialize)]
 pub struct RunReport {
     /// If any changes were made to the database.
     pub updated: bool,
@@ -312,22 +566,29 @@ impl std::fmt::Display for CommandOutput {
 /// let mut egraph = EGraph::default();
 /// egraph.parse_and_run_program(None, "(datatype Math (Num i64) (Add Math Math))").unwrap();
 /// ```
-#[derive(Clone)]
+#[derive(Clone, Serialize, Deserialize)]
 pub struct EGraph {
     backend: egglog_bridge::EGraph,
+
     pub parser: Parser,
+
     names: check_shadowing::Names,
     /// pushed_egraph forms a linked list of pushed egraphs.
     /// Pop reverts the egraph to the last pushed egraph.
     pushed_egraph: Option<Box<Self>>,
+
     functions: IndexMap<String, Function>,
+
     rulesets: IndexMap<String, Ruleset>,
     pub fact_directory: Option<PathBuf>,
     pub seminaive: bool,
+
     type_info: TypeInfo,
     /// The run report unioned over all runs so far.
     overall_run_report: RunReport,
+
     schedulers: DenseIdMap<SchedulerId, SchedulerRecord>,
+
     commands: IndexMap<String, Arc<dyn UserDefinedCommand>>,
 }
 
@@ -336,6 +597,7 @@ pub struct EGraph {
 ///
 /// Compared to an external function, a user-defined command is more powerful because
 /// it has an exclusive access to the e-graph.
+#[typetag::serde]
 pub trait UserDefinedCommand: Send + Sync {
     /// Run the command with the given arguments.
     fn update(&self, egraph: &mut EGraph, args: &[Expr]) -> Result<Option<CommandOutput>, Error>;
@@ -345,7 +607,7 @@ pub trait UserDefinedCommand: Send + Sync {
 ///
 /// This contains the schema information of the function and
 /// the backend id of the function in the e-graph.
-#[derive(Clone)]
+#[derive(Clone, Serialize, Deserialize)]
 pub struct Function {
     decl: ResolvedFunctionDecl,
     schema: ResolvedSchema,
@@ -370,9 +632,11 @@ impl Function {
     }
 }
 
-#[derive(Clone, Debug)]
+#[derive(Clone, Debug, Serialize, Deserialize)]
 pub struct ResolvedSchema {
+    #[serde(with = "arc_sort_vec_serde")]
     pub input: Vec<ArcSort>,
+    #[serde(with = "arc_sort_serde")]
     pub output: ArcSort,
 }
 
@@ -526,7 +790,7 @@ impl EGraph {
                     .map(|arg| self.translate_expr_to_mergefn(arg))
                     .collect::<Result<Vec<_>, _>>()?;
                 Ok(egglog_bridge::MergeFn::Primitive(
-                    p.primitive.1,
+                    p.primitive.id,
                     translated_args,
                 ))
             }
@@ -730,39 +994,39 @@ impl EGraph {
     }
 
     // returns whether the egraph was updated
-    fn run_schedule(&mut self, sched: &ResolvedSchedule) -> RunReport {
+    fn run_schedule(&mut self, sched: &ResolvedSchedule) -> Result<RunReport, Error> {
         match sched {
             ResolvedSchedule::Run(span, config) => self.run_rules(span, config),
             ResolvedSchedule::Repeat(_span, limit, sched) => {
                 let mut report = RunReport::default();
                 for _i in 0..*limit {
-                    let rec = self.run_schedule(sched);
+                    let rec = self.run_schedule(sched)?;
                     let updated = rec.updated;
                     report.union(rec);
                     if !updated {
                         break;
                     }
                 }
-                report
+                Ok(report)
             }
             ResolvedSchedule::Saturate(_span, sched) => {
                 let mut report = RunReport::default();
                 loop {
-                    let rec = self.run_schedule(sched);
+                    let rec = self.run_schedule(sched)?;
                     let updated = rec.updated;
                     report.union(rec);
                     if !updated {
                         break;
                     }
                 }
-                report
+                Ok(report)
             }
             ResolvedSchedule::Sequence(_span, scheds) => {
                 let mut report = RunReport::default();
                 for sched in scheds {
-                    report.union(self.run_schedule(sched));
+                    report.union(self.run_schedule(sched)?);
                 }
-                report
+                Ok(report)
             }
         }
     }
@@ -804,7 +1068,7 @@ impl EGraph {
         Ok((termdag.to_string(&term), cost))
     }
 
-    fn run_rules(&mut self, span: &Span, config: &ResolvedRunConfig) -> RunReport {
+    fn run_rules(&mut self, span: &Span, config: &ResolvedRunConfig) -> Result<RunReport, Error> {
         let mut report: RunReport = Default::default();
 
         let GenericRunConfig { ruleset, until } = config;
@@ -815,25 +1079,27 @@ impl EGraph {
                     "Breaking early because of facts:\n {}!",
                     ListDisplay(facts, "\n")
                 );
-                return report;
+                return Ok(report);
             }
         }
 
-        let subreport = self.step_rules(ruleset);
+        let subreport = self.step_rules(ruleset)?;
         report.union(subreport);
 
         if log_enabled!(Level::Debug) {
             log::debug!("database size: {}", self.num_tuples());
         }
 
-        report
+        Ok(report)
     }
 
     /// Runs a ruleset for an iteration.
     ///
     /// This applies every match it finds (under semi-naive).
     /// See [`EGraph::step_rules_with_scheduler`] for more fine-grained control.
-    pub fn step_rules(&mut self, ruleset: &str) -> RunReport {
+    ///
+    /// This will return an error if an egglog primitive returns None in an action.
+    pub fn step_rules(&mut self, ruleset: &str) -> Result<RunReport, Error> {
         fn collect_rule_ids(
             ruleset: &str,
             rulesets: &IndexMap<String, Ruleset>,
@@ -855,7 +1121,10 @@ impl EGraph {
 
         let mut rule_ids = Vec::new();
         collect_rule_ids(ruleset, &self.rulesets, &mut rule_ids);
-        let iteration_report = self.backend.run_rules(&rule_ids).unwrap();
+        let iteration_report = self
+            .backend
+            .run_rules(&rule_ids)
+            .map_err(|e| Error::BackendError(e.to_string()))?;
         let IterationReport {
             changed: updated,
             rule_reports,
@@ -876,14 +1145,14 @@ impl EGraph {
 
         let per_ruleset = |x| [(ruleset.to_owned(), x)].into_iter().collect();
 
-        RunReport {
+        Ok(RunReport {
             updated,
             search_and_apply_time_per_rule,
             num_matches_per_rule,
             search_and_apply_time_per_ruleset: per_ruleset(search_and_apply_time),
             merge_time_per_ruleset: per_ruleset(merge_time),
             rebuild_time_per_ruleset: per_ruleset(rebuild_time),
-        }
+        })
     }
 
     fn add_rule(&mut self, rule: ast::ResolvedRule) -> Result<String, Error> {
@@ -1113,7 +1382,7 @@ impl EGraph {
                 log::info!("Declared rule {name}.")
             }
             ResolvedNCommand::RunSchedule(sched) => {
-                let report = self.run_schedule(&sched);
+                let report = self.run_schedule(&sched)?;
                 log::info!("Ran schedule {}.", sched);
                 log::info!("Report: {}", report);
                 self.overall_run_report.union(report.clone());
@@ -1536,8 +1805,15 @@ impl EGraph {
     pub fn value_to_container<T: ContainerValue>(
         &self,
         x: Value,
-    ) -> Option<impl Deref<Target = T>> {
+    ) -> Option<impl Deref<Target = T> + use<'_, T>> {
         self.backend.container_values().get_val::<T>(x)
+    }
+
+    /// Convert from a Rust container type to an egglog value.
+    pub fn container_to_value<T: ContainerValue>(&mut self, x: T) -> Value {
+        self.backend.with_execution_state(|state| {
+            self.backend.container_values().register_val::<T>(x, state)
+        })
     }
 
     /// Get the size of a function in the e-graph.
@@ -1562,6 +1838,19 @@ impl EGraph {
     /// Returns `None` if the function does not exist.
     pub fn get_function(&self, name: &str) -> Option<&Function> {
         self.functions.get(name)
+    }
+
+    /// A basic method for dumping the state of the database to `log::info!`.
+    ///
+    /// For large tables, this is unlikely to give particularly useful output.
+    pub fn dump_debug_info(&self) {
+        self.backend.dump_debug_info();
+    }
+
+    /// Get the canonical representation for `val` based on type.
+    pub fn get_canonical_value(&self, val: Value, sort: &ArcSort) -> Value {
+        self.backend
+            .get_canon_repr(val, sort.column_ty(&self.backend))
     }
 }
 
@@ -1612,7 +1901,7 @@ impl<'a> BackendRule<'a> {
     ) -> (ExternalFunctionId, Vec<QueryEntry>, ColumnTy) {
         let mut qe_args = self.args(args);
 
-        if prim.primitive.0.name() == "unstable-fn" {
+        if prim.primitive.prim.name() == "unstable-fn" {
             let core::ResolvedAtomTerm::Literal(_, Literal::String(ref name)) = args[0] else {
                 panic!("expected string literal after `unstable-fn`")
             };
@@ -1640,7 +1929,7 @@ impl<'a> BackendRule<'a> {
                         })
                 });
                 assert!(ps.len() == 1, "options for {name}: {ps:?}");
-                ResolvedFunctionId::Prim(ps.into_iter().next().unwrap().1)
+                ResolvedFunctionId::Prim(ps.into_iter().next().unwrap().id)
             } else {
                 panic!("no callable for {name}");
             };
@@ -1659,7 +1948,7 @@ impl<'a> BackendRule<'a> {
         }
 
         (
-            prim.primitive.1,
+            prim.primitive.id,
             qe_args,
             prim.output.column_ty(self.rb.egraph()),
         )
@@ -1708,7 +1997,7 @@ impl<'a> BackendRule<'a> {
                             })
                         }
                         ResolvedCall::Primitive(p) => {
-                            let name = p.primitive.0.name().to_owned();
+                            let name = p.primitive.prim.name().to_owned();
                             let (p, args, ty) = self.prim(p, args);
                             let span = span.clone();
                             self.rb.call_external_func(p, &args, ty, move || {
@@ -1823,9 +2112,6 @@ pub enum Error {
 
 #[cfg(test)]
 mod tests {
-    use lazy_static::lazy_static;
-    use std::sync::Mutex;
-
     use crate::constraint::SimpleTypeConstraint;
     use crate::sort::*;
     use crate::*;
@@ -1895,9 +2181,17 @@ mod tests {
             .unwrap();
     }
 
-    // Test that `EGraph` is `Send` and `Sync`
-    lazy_static! {
-        pub static ref RT: Mutex<EGraph> = Mutex::new(EGraph::default());
+    // Test that an `EGraph` is `Send` & `Sync`
+    #[test]
+    fn test_egraph_send_sync() {
+        fn is_send<T: Send>(_t: &T) -> bool {
+            true
+        }
+        fn is_sync<T: Sync>(_t: &T) -> bool {
+            true
+        }
+        let egraph = EGraph::default();
+        assert!(is_send(&egraph) && is_sync(&egraph));
     }
 
     fn get_function(egraph: &EGraph, name: &str) -> Function {

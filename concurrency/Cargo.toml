@@ -11,6 +11,9 @@ readme = { workspace = true }
 [dependencies]
 arc-swap = { workspace = true}
 rayon = { workspace = true}
+serde = { workspace = true }
+typetag = { workspace = true }
+serde_json = { workspace = true }
 
 [dev-dependencies]
 divan = { workspace = true}

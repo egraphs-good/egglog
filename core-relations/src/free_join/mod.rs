@@ -10,6 +10,7 @@ use std::{
 use crate::numeric_id::{DenseIdMap, DenseIdMapWithReuse, NumericId, define_id};
 use egglog_concurrency::ResettableOnceLock;
 use rayon::prelude::*;
+use serde::{Deserialize, Serialize};
 use smallvec::SmallVec;
 use web_time::Duration;
 
@@ -52,6 +53,7 @@ impl Variable {
 }
 
 define_id!(pub TableId, u32, "a table in the database");
+
 define_id!(pub(crate) ActionId, u32, "an identifier picking out the RHS of a rule");
 
 #[derive(Debug)]
@@ -109,10 +111,13 @@ pub(crate) struct VarInfo {
 pub(crate) type HashIndex = Arc<ResettableOnceLock<Index<TupleIndex>>>;
 pub(crate) type HashColumnIndex = Arc<ResettableOnceLock<Index<ColumnIndex>>>;
 
+#[derive(Serialize, Deserialize)]
 pub struct TableInfo {
     pub(crate) spec: TableSpec,
     pub(crate) table: WrappedTable,
+    #[serde(skip)]
     pub(crate) indexes: DashMap<SmallVec<[ColumnId; 4]>, HashIndex>,
+    #[serde(skip)]
     pub(crate) column_indexes: DashMap<ColumnId, HashColumnIndex>,
 }
 
@@ -232,7 +237,7 @@ dyn_clone::clone_trait_object!(ExternalFunctionExt);
 pub(crate) type ExternalFunctions =
     DenseIdMapWithReuse<ExternalFunctionId, Box<dyn ExternalFunctionExt>>;
 
-#[derive(Default)]
+#[derive(Default, Serialize, Deserialize)]
 pub(crate) struct Counters(DenseIdMap<CounterId, AtomicUsize>);
 
 impl Clone for Counters {
@@ -265,16 +270,25 @@ pub struct RuleSetReport {
     pub merge_time: Duration,
 }
 
-#[derive(Debug)]
+#[derive(Debug, Default)]
 pub struct RuleReport {
     pub search_and_apply_time: Duration,
     pub num_matches: usize,
 }
 
+impl RuleReport {
+    pub fn union(&self, other: &RuleReport) -> RuleReport {
+        RuleReport {
+            search_and_apply_time: self.search_and_apply_time + other.search_and_apply_time,
+            num_matches: self.num_matches + other.num_matches,
+        }
+    }
+}
+
 /// A collection of tables and indexes over them.
 ///
 /// A database also owns the memory pools used by its tables.
-#[derive(Clone, Default)]
+#[derive(Clone, Default, Serialize, Deserialize)]
 pub struct Database {
     // NB: some fields are pub(crate) to allow some internal modules to avoid
     // borrowing the whole table.
@@ -284,6 +298,7 @@ pub struct Database {
     // and incrementing locally. Note that the batch size shouldn't be too big
     // because we keep an array per id in the UF.
     pub(crate) counters: Counters,
+    #[serde(skip)]
     pub(crate) external_functions: ExternalFunctions,
     container_values: ContainerValues,
     // Tracks the relative dependencies between tables during merge operations.

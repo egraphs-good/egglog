@@ -2,7 +2,7 @@ use super::*;
 
 #[derive(Clone, Debug, PartialEq, Eq, Hash)]
 pub struct VecContainer {
-    do_rebuild: bool,
+    pub do_rebuild: bool,
     pub data: Vec<Value>,
 }
 
@@ -19,10 +19,11 @@ impl ContainerValue for VecContainer {
     }
 }
 
-#[derive(Clone, Debug)]
+#[derive(Clone, Debug, Serialize, Deserialize)]
 pub struct VecSort {
-    name: String,
-    element: ArcSort,
+    pub name: String,
+    #[serde(with = "arc_sort_serde")]
+    pub element: ArcSort,
 }
 
 impl VecSort {

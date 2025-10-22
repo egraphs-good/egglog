@@ -3,7 +3,7 @@ use inner::MultiSet;
 
 #[derive(Clone, Debug, PartialEq, Eq, Hash)]
 pub struct MultiSetContainer {
-    do_rebuild: bool,
+    pub do_rebuild: bool,
     pub data: MultiSet<Value>,
 }
 
@@ -23,10 +23,11 @@ impl ContainerValue for MultiSetContainer {
     }
 }
 
-#[derive(Clone, Debug)]
+#[derive(Clone, Debug, Serialize, Deserialize)]
 pub struct MultiSetSort {
-    name: String,
-    element: ArcSort,
+    pub(crate) name: String,
+    #[serde(with = "arc_sort_serde")]
+    pub(crate) element: ArcSort,
 }
 
 impl MultiSetSort {

@@ -5,6 +5,9 @@ echo "Beginning egglog nightly script"
 
 set -e -x
 
+export PATH=~/.cargo/bin:$PATH
+rustup update
+
 # determine physical directory of this script
 src="${BASH_SOURCE[0]}"
 while [ -L "$src" ]; do
@@ -41,14 +44,16 @@ python3 timeline/transform.py "$NIGHTLY_DIR/data" "$NIGHTLY_DIR/output/data"
 python3 timeline/plot_run_vs_extract.py "$NIGHTLY_DIR/output/data" "Herbie: Hamming Benches"
 popd
 
+pushd $TOP_DIR
+cargo run --release --bin egglog -- tests/
+cp "$TOP_DIR/summary.json" "$NIGHTLY_DIR/output/data/summary.json"
+popd
+
+
 # Update HTML index page.
 cp "$RESOURCE_DIR/web"/* "$NIGHTLY_DIR/output"
 
-# This is the uploading part, copied directly from Herbie's nightly script.
-DIR="$NIGHTLY_DIR/output"
-B=$(git rev-parse --abbrev-ref HEAD)
-C=$(git rev-parse HEAD | sed 's/\(..........\).*/\1/')
-RDIR="$(date +%s):$(hostname):$B:$C"
+# No more uploading using nightly-results, that happens automatically by the nightly runner now.
 
-# Upload the artifact!
-nightly-results publish --name "$RDIR" "$DIR"
+# For local dev
+# cd "$NIGHTLY_DIR/output" && python3 -m http.server 8002

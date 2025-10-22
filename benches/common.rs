@@ -1,45 +1,65 @@
-use codspeed_criterion_compat::Criterion;
 use egglog::EGraph;
-use std::sync::Once;
+use std::{fmt, sync::Once};
 
 #[global_allocator]
 static GLOBAL: mimalloc::MiMalloc = mimalloc::MiMalloc;
 
 static CONFIGURE_RAYON: Once = Once::new();
 
-pub fn run_example(filename: &str, program: &str, no_messages: bool) {
+pub fn run_example(filename: &str, program: &str) {
     let mut egraph = EGraph::default();
-    let outputs = egraph
+    egraph
         .parse_and_run_program(Some(filename.to_owned()), program)
         .unwrap();
-    if !no_messages {
-        for output in outputs {
-            print!("{}", output);
-        }
-    }
     // test performance of serialization as well
     egraph.serialize(egglog::SerializeConfig::default());
 }
 
-pub fn benchmark_files_in_glob(c: &mut Criterion, glob: &str) {
+#[derive(Clone)]
+pub struct BenchCase {
+    pub name: String,
+    pub filename: String,
+    pub program: String,
+}
+
+impl fmt::Display for BenchCase {
+    fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
+        f.write_str(&self.name)
+    }
+}
+
+pub fn bench_cases(glob: &str) -> Vec<BenchCase> {
+    configure_rayon_once();
+
+    glob::glob(glob)
+        .unwrap()
+        .filter_map(Result::ok)
+        .filter(|path| !path.to_string_lossy().contains("fail-typecheck"))
+        .map(|path| {
+            let filename = path.to_string_lossy().to_string();
+            let program = std::fs::read_to_string(&filename).unwrap();
+            let name = path.file_stem().unwrap().to_string_lossy().to_string();
+
+            BenchCase {
+                name,
+                filename,
+                program,
+            }
+        })
+        .collect()
+}
+
+pub fn bench_case(case: &BenchCase) {
+    configure_rayon_once();
+
+    run_example(&case.filename, &case.program);
+}
+
+fn configure_rayon_once() {
     CONFIGURE_RAYON.call_once(|| {
         rayon::ThreadPoolBuilder::new()
             .num_threads(1)
             .build_global()
             .unwrap();
     });
-    for entry in glob::glob(glob).unwrap() {
-        let path = entry.unwrap().clone();
-        let path_string = path.to_string_lossy().to_string();
-        if path_string.contains("fail-typecheck") {
-            continue;
-        }
-        let name = path.file_stem().unwrap().to_string_lossy().to_string();
-        let filename = path.to_string_lossy().to_string();
-        let program = std::fs::read_to_string(&filename).unwrap();
-        let no_messages = path_string.contains("no-messages");
-        c.bench_function(&name, |b| {
-            b.iter(|| run_example(&filename, &program, no_messages))
-        });
-    }
 }

@@ -12,6 +12,9 @@ readme = { workspace = true }
 
 [dependencies]
 ordered-float = { workspace = true }
+serde = { workspace = true }
+typetag = { workspace = true }
+serde_json = { workspace = true }
 
 
 [features]

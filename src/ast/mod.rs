@@ -11,12 +11,12 @@ use crate::*;
 pub use egglog_ast::generic_ast::{
     Change, GenericAction, GenericActions, GenericExpr, GenericFact, GenericRule, Literal,
 };
-use egglog_ast::span::Span;
+pub use egglog_ast::span::{RustSpan, Span};
 use egglog_ast::util::ListDisplay;
 pub use expr::*;
 pub use parse::*;
 
-#[derive(Clone, Debug)]
+#[derive(Clone, Debug, Serialize, Deserialize)]
 /// The egglog internal representation of already compiled rules
 pub(crate) enum Ruleset {
     /// Represents a ruleset with a set of rules.
@@ -842,7 +842,7 @@ where
 pub type FunctionDecl = GenericFunctionDecl<String, String>;
 pub(crate) type ResolvedFunctionDecl = GenericFunctionDecl<ResolvedCall, ResolvedVar>;
 
-#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash, Serialize, Deserialize)]
 pub enum FunctionSubtype {
     Constructor,
     Relation,
@@ -861,7 +861,7 @@ impl Display for FunctionSubtype {
 
 /// Represents the declaration of a function
 /// directly parsed from source syntax.
-#[derive(Clone, Debug, PartialEq, Eq, Hash)]
+#[derive(Clone, Debug, PartialEq, Eq, Hash, Serialize, Deserialize)]
 pub struct GenericFunctionDecl<Head, Leaf>
 where
     Head: Clone + Display,
@@ -885,6 +885,7 @@ pub struct Variant {
     pub name: String,
     pub types: Vec<String>,
     pub cost: Option<DefaultCost>,
+    pub unextractable: bool,
 }
 
 impl Display for Variant {
@@ -900,7 +901,7 @@ impl Display for Variant {
     }
 }
 
-#[derive(Clone, Debug, PartialEq, Eq, Hash)]
+#[derive(Clone, Debug, PartialEq, Eq, Hash, Serialize, Deserialize)]
 pub struct Schema {
     pub input: Vec<String>,
     pub output: String,

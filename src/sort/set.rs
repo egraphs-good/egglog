@@ -3,7 +3,7 @@ use std::collections::BTreeSet;
 
 #[derive(Clone, Debug, PartialEq, Eq, Hash)]
 pub struct SetContainer {
-    do_rebuild: bool,
+    pub do_rebuild: bool,
     pub data: BTreeSet<Value>,
 }
 
@@ -23,10 +23,11 @@ impl ContainerValue for SetContainer {
     }
 }
 
-#[derive(Clone, Debug)]
+#[derive(Clone, Debug, Serialize, Deserialize)]
 pub struct SetSort {
-    name: String,
-    element: ArcSort,
+    pub name: String,
+    #[serde(with = "arc_sort_serde")]
+    pub element: ArcSort,
 }
 
 impl SetSort {

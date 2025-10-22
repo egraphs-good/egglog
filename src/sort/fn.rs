@@ -32,10 +32,12 @@ impl ContainerValue for FunctionContainer {
     }
 }
 
-#[derive(Debug)]
+#[derive(Debug, Serialize, Deserialize)]
 pub struct FunctionSort {
     name: String,
+    #[serde(with = "arc_sort_vec_serde")]
     inputs: Vec<ArcSort>,
+    #[serde(with = "arc_sort_serde")]
     output: ArcSort,
 }
 
@@ -323,16 +325,20 @@ impl Primitive for Ctor {
     }
 }
 
-#[derive(Clone, Debug, PartialEq, Eq, Hash)]
+#[derive(Clone, Debug, PartialEq, Eq, Hash, Serialize, Deserialize)]
 pub struct ResolvedFunction {
     pub id: ResolvedFunctionId,
     pub do_rebuild: Vec<bool>,
     pub name: String,
 }
 
-impl BaseValue for ResolvedFunction {}
+impl BaseValue for ResolvedFunction {
+    fn type_id_string() -> String {
+        "ResolvedFn".into()
+    }
+}
 
-#[derive(Clone, Debug, PartialEq, Eq, Hash)]
+#[derive(Clone, Debug, PartialEq, Eq, Hash, Serialize, Deserialize)]
 pub enum ResolvedFunctionId {
     Lookup(egglog_bridge::TableAction),
     Prim(ExternalFunctionId),

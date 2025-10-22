@@ -9,7 +9,7 @@ use ordered_float::OrderedFloat;
 macro_rules! span {
     () => {
         egglog_ast::span::Span::Rust(std::sync::Arc::new(egglog_ast::span::RustSpan {
-            file: file!(),
+            file: file!().to_string(),
             line: line!(),
             column: column!(),
         }))
@@ -142,10 +142,13 @@ where
     }
 }
 
-#[derive(Clone)]
+#[derive(Clone, Serialize, Deserialize)]
 pub struct Parser {
+    #[serde(skip)]
     commands: HashMap<String, Arc<dyn Macro<Vec<Command>>>>,
+    #[serde(skip)]
     actions: HashMap<String, Arc<dyn Macro<Vec<Action>>>>,
+    #[serde(skip)]
     exprs: HashMap<String, Arc<dyn Macro<Expr>>>,
     user_defined: HashSet<String>,
     pub symbol_gen: SymbolGen,
@@ -783,11 +786,12 @@ impl Parser {
     pub fn variant(&mut self, sexp: &Sexp) -> Result<Variant, ParseError> {
         let (name, tail, span) = sexp.expect_call("datatype variant")?;
 
-        let (types, cost) = match tail {
+        let (types, cost, unextractable) = match tail {
+            [types @ .., Sexp::Atom(o, _)] if *o == ":unextractable" => (types, None, true),
             [types @ .., Sexp::Atom(o, _), c] if *o == ":cost" => {
-                (types, Some(c.expect_uint("cost")?))
+                (types, Some(c.expect_uint("cost")?), false)
             }
-            types => (types, None),
+            types => (types, None, false),
         };
 
         Ok(Variant {
@@ -797,6 +801,7 @@ impl Parser {
                 sexp.expect_atom("variant argument type")
             })?,
             cost,
+            unextractable,
         })
     }
 

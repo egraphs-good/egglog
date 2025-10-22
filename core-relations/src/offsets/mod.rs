@@ -1,5 +1,7 @@
 use std::{cmp, fmt, mem};
 
+use serde::{Deserialize, Serialize};
+
 use crate::numeric_id::{NumericId, define_id};
 
 use crate::{
@@ -25,7 +27,7 @@ pub(crate) trait Offsets {
     fn offsets(&self, f: impl FnMut(RowId));
 }
 
-#[derive(PartialEq, Eq, Debug, Clone, Copy, Hash)]
+#[derive(PartialEq, Eq, Debug, Clone, Copy, Hash, Serialize, Deserialize)]
 pub struct OffsetRange {
     pub(crate) start: RowId,
     pub(crate) end: RowId,
@@ -295,6 +297,15 @@ impl SubsetRef<'_> {
 pub enum Subset {
     Dense(OffsetRange),
     Sparse(Pooled<SortedOffsetVector>),
+}
+
+impl Default for Subset {
+    fn default() -> Self {
+        Self::Dense(OffsetRange {
+            start: RowId { rep: 0 },
+            end: RowId { rep: 0 },
+        }) // todo: This is a bogus default value
+    }
 }
 
 impl Offsets for Subset {

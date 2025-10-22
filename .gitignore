@@ -21,5 +21,6 @@ _scratch.egg
 scripts/compiled
 tests/*.json
 
-# Generated nightly files
+# poach
+out/
 /nightly

@@ -14,7 +14,7 @@ use super::*;
 /// ```
 /// On the other hand, boolean comparisons will always match, and so
 /// make sense to use inside expressions.
-#[derive(Debug)]
+#[derive(Debug, Serialize, Deserialize)]
 pub struct I64Sort;
 
 impl BaseSort for I64Sort {

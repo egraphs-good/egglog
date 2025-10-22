@@ -16,31 +16,32 @@ def sum_command_runtimes(directory_path):
 	"""
 	totals = []
 
-	for filename in os.listdir(directory_path):
-		if filename.endswith(".json"):
-			file_path = os.path.join(directory_path, filename)
-			with open(file_path, "r") as file:
-				try:
-					data = json.load(file)
-				except json.JSONDecodeError:
-					print(f"Could not decode JSON in file {filename}")
-					continue
+	files = [f for f in os.listdir(directory_path) if f.endswith(".json") and f != "list.json"]
 
-				file_times = [filename, 0.0, 0.0, 0.0, 0, 0, 0]
-				for entry in data[0]["evts"]:
-					entry_ms = entry["total_time"]["secs"] * 1e3 + entry["total_time"]["nanos"] / 1e6
-					command = entry["cmd"]
-					if command in RUN_CMDS:
-						file_times[1] += entry_ms
-						file_times[4] += 1
-					elif command in EXTRACT_CMDS:
-						file_times[2] += entry_ms
-						file_times[5] += 1
-					else:
-						file_times[3] += entry_ms
-						file_times[6] += 1
+	for filename in files:
+		file_path = os.path.join(directory_path, filename)
+		with open(file_path, "r") as file:
+			try:
+				data = json.load(file)
+			except json.JSONDecodeError:
+				print(f"Could not decode JSON in file {filename}")
+				continue
 
-				totals += [file_times]
+			file_times = [filename, 0.0, 0.0, 0.0, 0, 0, 0]
+			for entry in data[0]["evts"]:
+				entry_ms = entry["total_time"]["secs"] * 1e3 + entry["total_time"]["nanos"] / 1e6
+				command = entry["cmd"]
+				if command in RUN_CMDS:
+					file_times[1] += entry_ms
+					file_times[4] += 1
+				elif command in EXTRACT_CMDS:
+					file_times[2] += entry_ms
+					file_times[5] += 1
+				else:
+					file_times[3] += entry_ms
+					file_times[6] += 1
+
+			totals += [file_times]
 
 	return totals
 

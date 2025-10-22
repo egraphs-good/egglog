@@ -1,9 +1,16 @@
 use crate::*;
-use std::io::{self, BufRead, BufReader, IsTerminal, Read, Write};
+use std::{
+    fs,
+    io::{self, BufRead, BufReader, IsTerminal, Read, Write},
+    path::Path,
+};
 
+use anyhow::{Context, Result};
 use clap::Parser;
 use env_logger::Env;
+use serde_json::json;
 use std::path::PathBuf;
+use walkdir::WalkDir;
 
 #[derive(Debug, Parser)]
 #[command(version = env!("FULL_VERSION"), about = env!("CARGO_PKG_DESCRIPTION"))]
@@ -44,6 +51,142 @@ struct Args {
     /// Number of threads to use for parallel execution. Passing `0` will use the maximum
     /// inferred parallelism available on the current system.
     threads: usize,
+}
+
+fn serialize_egraph(egraph: &EGraph, path: &Path) -> Result<()> {
+    let file = fs::File::create(path)
+        .with_context(|| format!("failed to create file {}", path.display()))?;
+    serde_json::to_writer_pretty(file, egraph)
+        .with_context(|| format!("failed to serialize egraph to {}", path.display()))?;
+    Ok(())
+}
+
+fn deserialize_egraph(path: &Path) -> Result<EGraph> {
+    let file =
+        fs::File::open(path).with_context(|| format!("failed to open file {}", path.display()))?;
+    let reader = BufReader::new(file);
+    let egraph = serde_json::from_reader(reader)
+        .with_context(|| format!("failed to deserialize egraph from {}", path.display()))?;
+    Ok(egraph)
+}
+
+pub fn poach_all() {
+    let args = Args::parse();
+    env_logger::Builder::from_env(Env::default().default_filter_or("warn"))
+        .format_timestamp(None)
+        .format_target(false)
+        .parse_default_env()
+        .init();
+
+    rayon::ThreadPoolBuilder::new()
+        .num_threads(args.threads)
+        .build_global()
+        .unwrap();
+    log::debug!(
+        "Initialized thread pool with {} threads",
+        rayon::current_num_threads()
+    );
+
+    assert!(args.inputs.len() == 1);
+    let input_path = &args.inputs[0];
+
+    let out_dir = PathBuf::from("out");
+    fs::create_dir_all(&out_dir).expect("failed to create out dir");
+
+    let mut successes = Vec::new();
+    let mut failures = Vec::new();
+
+    let entries: Vec<PathBuf> = if input_path.is_file() {
+        if input_path.extension().and_then(|s| s.to_str()) == Some("egg") {
+            vec![input_path.clone()]
+        } else {
+            panic!("Input file is not an .egg file");
+        }
+    } else if input_path.is_dir() {
+        WalkDir::new(input_path)
+            .into_iter()
+            .filter_map(|entry| entry.ok())
+            .filter(|entry| !entry.path().to_string_lossy().contains("fail"))
+            .filter(|entry| entry.file_type().is_file())
+            .filter(|entry| entry.path().extension().and_then(|s| s.to_str()) == Some("egg"))
+            .map(|entry| entry.path().to_path_buf())
+            .collect()
+    } else {
+        panic!("Input path is neither file nor directory: {:?}", input_path);
+    };
+
+    for (i, path) in entries.iter().enumerate() {
+        if path.extension().and_then(|s| s.to_str()) != Some("egg") {
+            continue;
+        }
+
+        let file_out_dir = out_dir.join(path.file_stem().unwrap().to_str().unwrap());
+        fs::create_dir_all(&file_out_dir).expect("fail");
+
+        println!("[{}/{}] Processing {}", i, entries.len(), path.display());
+        let name = format!("{}", path.display());
+        match poach_one(&path, &file_out_dir, &args) {
+            Ok(n) => successes.push(format!("{} ({})", name, n)),
+            Err(e) => {
+                println!("{:?}", e);
+                failures.push(format!("{} [{}]", name, e))
+            }
+        }
+    }
+    let v = json!({"success": successes, "fail": failures});
+    serde_json::to_writer_pretty(fs::File::create("summary.json").expect("fail"), &v)
+        .expect("fail");
+}
+
+fn poach_one(path: &PathBuf, out_dir: &PathBuf, args: &Args) -> Result<usize> {
+    let mut egraph = EGraph::default();
+
+    egraph.fact_directory.clone_from(&args.fact_directory);
+    egraph.seminaive = !args.naive;
+
+    let program = std::fs::read_to_string(path).expect("failed to open");
+    match run_commands(
+        &mut egraph,
+        Some(path.to_str().unwrap().into()),
+        &program,
+        io::stdout(),
+        RunMode::NoMessages, // silence output to keep logs small
+    ) {
+        Ok(None) => {}
+        _ => anyhow::bail!("[{}]run_commands failed", path.display()),
+    }
+
+    let s1 = out_dir.join("serialize1.json");
+    let s2 = out_dir.join("serialize2.json");
+    let s3 = out_dir.join("serialize3.json");
+    serialize_egraph(&egraph, &s1).context("failed to write s1.json")?;
+
+    let e2 = deserialize_egraph(&s1).context("failed to read s1.json")?;
+    serialize_egraph(&e2, &s2).context("failed to write s2.json")?;
+
+    let e3 = deserialize_egraph(&s2).context("failed to read s3.json")?;
+    serialize_egraph(&e3, &s3).context("failed to write s3.json")?;
+
+    let e2_json: serde_json::Value =
+        serde_json::from_str(&fs::read_to_string(&s2).context("couldn't open serialize2.json")?)
+            .context("couldn't parse serialize2 as json")?;
+
+    let e3_contents = fs::read_to_string(&s3).context("couldn't open serialize3.json")?;
+    let e3_len = e3_contents.len();
+    let e3_json: serde_json::Value =
+        serde_json::from_str(&fs::read_to_string(&s3).context("couldn't open serialize3.json")?)
+            .context("couldn't parse serialize3 as json")?;
+
+    match serde_json_diff::values(e2_json, e3_json) {
+        Some(diff) => {
+            let file = fs::File::create(out_dir.join("diff.json"))
+                .with_context(|| format!("failed to create diff file for {}", path.display()))?;
+            serde_json::to_writer_pretty(file, &diff)
+                .with_context(|| format!("failed to serialize diff to {}", path.display()))?;
+            anyhow::bail!("diff for {}", path.display())
+        }
+        None => Ok(e3_len),
+    }
 }
 
 /// Start a command-line interface for the E-graph.
@@ -94,6 +237,59 @@ pub fn cli(mut egraph: EGraph) {
                 Ok(None) => {}
                 _ => std::process::exit(1),
             }
+
+            println!("START");
+            // Serialize egraph
+            serde_json::to_writer_pretty(
+                std::io::BufWriter::new(
+                    std::fs::File::create("serialize1.json")
+                        .expect("failed to create serialize1.json"),
+                ),
+                &egraph,
+            )
+            .expect("failed to write serialize1.json");
+
+            // Read back to EGraph and serialize again (won't be the same as first serialized egraph)
+            let file = File::open("serialize1.json").expect("failed to open serialize1.json");
+            let reader = BufReader::new(file);
+            let egraph: EGraph =
+                serde_json::from_reader(reader).expect("failed to deserialize serialize1");
+            serde_json::to_writer_pretty(
+                std::io::BufWriter::new(
+                    std::fs::File::create("serialize2.json")
+                        .expect("failed to create serialize2.json"),
+                ),
+                &egraph,
+            )
+            .expect("failed to write serialize2.json");
+
+            // Assert that subsequent round trips are idempotent
+            let file = File::open("serialize2.json").expect("failed to open serialize2.json");
+            let reader = BufReader::new(file);
+            let egraph: EGraph =
+                serde_json::from_reader(reader).expect("failed to deserialize serialize2");
+            serde_json::to_writer_pretty(
+                std::io::BufWriter::new(
+                    std::fs::File::create("serialize3.json")
+                        .expect("failed to create serialize3.json"),
+                ),
+                &egraph,
+            )
+            .expect("failed to write serialize3.json");
+
+            let serialize2: serde_json::Value = serde_json::from_str(
+                &fs::read_to_string("serialize2.json").expect("couldn't open serialize2.json"),
+            )
+            .expect("couldn't parse serialize2 as json");
+            let serialize3: serde_json::Value = serde_json::from_str(
+                &fs::read_to_string("serialize3.json").expect("couldn't open serialize3.json"),
+            )
+            .expect("couldn't parse serialize3 as json");
+
+            let diff = serde_json_diff::values(serialize2, serialize3);
+            assert!(diff.is_none());
+
+            println!("END");
 
             if args.to_json || args.to_dot || args.to_svg {
                 let serialized_output = egraph.serialize(SerializeConfig {
