@@ -22,7 +22,6 @@ define_id!(pub(crate) ReasonSpecId, u32, "A unique identifier for the step in a 
 /// Reasons provide extra provenance information accompanying a term being
 /// instantiated, or marked as equal to another term. All reasons are pointed
 /// to by a row in a terms table.
-///
 #[derive(Debug)]
 pub(crate) enum ProofReason {
     Rule(RuleData),
@@ -190,10 +189,18 @@ impl EGraph {
                     row_key.push(self.get_syntax_val(*arg, syntax, subst, memo));
                 }
                 let term_table = self.term_table(self.funcs[*func].table);
-                self.db
+                let Some(val) = self
+                    .db
                     .get_table(term_table)
-                    .get_row_column(&row_key, ColumnId::from_usize(args.len()))
-                    .expect("failed to find term for function call")
+                    .get_row_column(&row_key, ColumnId::from_usize(args.len() + 1))
+                else {
+                    panic!(
+                        "failed to find term for function call ({func:?} {:?}), memo={:?}, arg={node:?}",
+                        &row_key[1..],
+                        memo
+                    )
+                };
+                val
             }
         };
         memo.insert(node, res);
@@ -237,6 +244,7 @@ impl EGraph {
         term_id: Value,
         state: &mut ProofReconstructionState,
     ) -> TermProofId {
+        let term_id = self.canonicalize_term_id(term_id);
         if let Some(prev) = state.term_prf_memo.get(&(term_id, ColumnTy::Id)) {
             return *prev;
         }
@@ -285,12 +293,16 @@ impl EGraph {
         ty: ColumnTy,
         state: &mut ProofReconstructionState,
     ) -> TermId {
-        if let Some(cached) = state.term_memo.get(&(term_id, ty)) {
+        let key_id = match ty {
+            ColumnTy::Id => self.canonicalize_term_id(term_id),
+            ColumnTy::Base(_) => term_id,
+        };
+        if let Some(cached) = state.term_memo.get(&(key_id, ty)) {
             return *cached;
         }
         let res = match ty {
             ColumnTy::Id => {
-                let term_row = self.get_term_row(term_id);
+                let term_row = self.get_term_row(key_id);
                 let func = FunctionId::new(term_row[0].rep());
                 let info = &self.funcs[func];
                 // NB: this clone is needed because `get_term_row` borrows the whole egraph, though it
@@ -323,7 +335,7 @@ impl EGraph {
             }
         };
 
-        state.term_memo.insert((term_id, ty), res);
+        state.term_memo.insert((key_id, ty), res);
         res
     }
 
@@ -333,6 +345,8 @@ impl EGraph {
         r: Value,
         state: &mut ProofReconstructionState,
     ) -> EqProofId {
+        let l = self.canonicalize_term_id(l);
+        let r = self.canonicalize_term_id(r);
         if let Some(prev) = state.eq_memo.get(&(l, r)) {
             return *prev;
         }
@@ -464,6 +478,7 @@ impl EGraph {
     }
 
     fn get_term_row(&mut self, term_id: Value) -> Vec<Value> {
+        let term_id = self.canonicalize_term_id(term_id);
         let mut atom = Vec::<DstVar>::new();
         let mut cur = 0;
         loop {

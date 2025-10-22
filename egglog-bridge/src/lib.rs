@@ -9,6 +9,7 @@
 //! joins, union-finds, etc.
 
 use std::{
+    cmp,
     fmt::Debug,
     hash::Hash,
     iter, mem,
@@ -84,6 +85,50 @@ pub struct EGraph {
     /// as a proof object with a given number of parameters is added.
     reason_tables: IndexMap<usize /* arity */, TableId>,
     term_tables: IndexMap<usize /* arity */, TableId>,
+    /// Union-find table that records the stable term id for each provisional term id.
+    ///
+    /// This table is only used when proofs are enabled. `core-relations` has a concept of a
+    /// "predicted value" to handle lookups for rows on tables that haven't been created yet. For
+    /// example, in the associativity rewrite:
+    ///
+    /// > (rewrite (add (add x y) z) (add x (add y z)))
+    ///
+    /// The RHS of the rule will check if `(add y z)` is present in the database, and if it isn't
+    /// it will create a new id and insert `(add y z) => id`. This `id` is cached so subsequent
+    /// uses of `(add y z)` will still see `id` within the same rule.
+    ///
+    /// This cache is _local_: so different threads can potentially see different values for `id`.
+    /// In other words, each thread will have its unique id for the new row being added. This is
+    /// fine as all provisional values for `id` will get unioned together and the database will be
+    /// consistent after congruence closure runs. This same logic, however, does not hold true for
+    /// proofs.
+    ///
+    /// When proofs mint a new `id` for a row it is used both as the canonical e-class id in the main
+    /// e-graph and also the *term* id for that specific row. Term ids are used to reconstruct
+    /// proofs and never change. e-class ids can change depending on the result of a UF `union`
+    /// operation. For example, consider these three terms:
+    ///
+    /// > x => term: id0, canon: id0
+    /// > (add x 0) => term: id1, canon: id1
+    /// > (add 0 x) => term: id2, canon: id2
+    ///
+    /// If we have rules like `(add x 0) => x` and `(add x y) => (add y x)` then our e-graph
+    /// may look like this:
+    ///
+    /// > x => term: id0, canon: id0
+    /// > (add x 0) => term: id1, canon: id0
+    /// > (add 0 x) => term: id2, canon: id0
+    ///
+    /// In other words, while canonical ids change over time and need not be unique to a term, term
+    /// ids are unique to the specific shape of the (head of the) term when it was first
+    /// instantiated. This is a problem for local caching because it means that we can have
+    /// multiple term values for the same row. How do we pick the real one?
+    ///
+    /// We have a separate union-find. Duplicate insertions into the term table cause `union`s on
+    /// this union-find, and future lookups of this table canonicalize ids with respect to this
+    /// union-find. In this way, it's a subset of the full union-find in the `uf_table` row, only
+    /// used to resolved temporary inconsistencies in cached term values.
+    term_consistency_table: TableId,
     tracing: bool,
 }
 
@@ -135,6 +180,8 @@ impl EGraph {
         db.inc_counter(ts_counter);
         let mut proof_specs = IdVec::default();
         let cong_spec = proof_specs.push(Arc::new(ProofReason::CongRow));
+        let term_consistency_table =
+            db.add_table(DisplacedTable::default(), iter::empty(), iter::empty());
 
         Self {
             db,
@@ -150,6 +197,7 @@ impl EGraph {
             cong_spec,
             reason_tables: Default::default(),
             term_tables: Default::default(),
+            term_consistency_table,
             tracing,
         }
     }
@@ -259,19 +307,66 @@ impl EGraph {
         }
     }
 
+    fn record_term_consistency(
+        state: &mut ExecutionState,
+        table: TableId,
+        ts_counter: CounterId,
+        from: Value,
+        to: Value,
+    ) {
+        if from == to {
+            return;
+        }
+        let ts = Value::from_usize(state.read_counter(ts_counter));
+        state.stage_insert(table, &[from, to, ts]);
+    }
+
+    fn canonicalize_term_id(&mut self, term_id: Value) -> Value {
+        let table = self.db.get_table(self.term_consistency_table);
+        table
+            .get_row(&[term_id])
+            .map(|row| row.vals[1])
+            .unwrap_or(term_id)
+    }
+
     fn term_table(&mut self, table: TableId) -> TableId {
         let spec = self.db.get_table(table).spec();
         match self.term_tables.entry(spec.n_keys) {
             Entry::Occupied(o) => *o.get(),
             Entry::Vacant(v) => {
+                let term_index = spec.n_keys + 1;
+                let term_consistency_table = self.term_consistency_table;
+                let ts_counter = self.timestamp_counter;
                 let table = SortedWritesTable::new(
                     spec.n_keys + 1,     // added entry for the tableid
                     spec.n_keys + 1 + 2, // one value for the term id, one for the reason,
                     None,
                     vec![], // no rebuilding needed for term table
-                    Box::new(|_, _, _, _| false),
+                    Box::new(move |state, old, new, out| {
+                        // We want to pick the minimum term value.
+                        let l_term_id = old[term_index];
+                        let r_term_id = new[term_index];
+                        // NB: we should only need this merge function when we are executing
+                        // rules in parallel. We could consider a simpler merge function if
+                        // parallelism is disabled.
+                        if r_term_id < l_term_id {
+                            EGraph::record_term_consistency(
+                                state,
+                                term_consistency_table,
+                                ts_counter,
+                                l_term_id,
+                                r_term_id,
+                            );
+                            out.extend(new);
+                            true
+                        } else {
+                            false
+                        }
+                    }),
                 );
-                let table_id = self.db.add_table(table, iter::empty(), iter::empty());
+                let table_id =
+                    self.db
+                        .add_table(table, iter::empty(), iter::once(term_consistency_table));
                 *v.insert(table_id)
             }
         }
@@ -1140,6 +1235,13 @@ impl MergeFn {
                 changed |= cur != out;
                 out
             });
+            let mut proof = None;
+            if schema_math.tracing {
+                let old_term = cur[schema_math.proof_id_col()];
+                let new_term = new[schema_math.proof_id_col()];
+                proof = Some(cmp::min(old_term, new_term));
+                changed |= new_term < old_term;
+            }
 
             if changed {
                 out.extend_from_slice(new);
@@ -1147,7 +1249,7 @@ impl MergeFn {
                     out,
                     RowVals {
                         timestamp,
-                        proof: None,
+                        proof,
                         subsume,
                         ret_val: Some(ret_val),
                     },
