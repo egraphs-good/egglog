@@ -1,4 +1,5 @@
 var AGGREGATED_DATA = {};
+var CHART = null;
 // Top-level load function for the timeline page.
 function load_timeline() {
   // list.json contains a list of all the json files (one for each egg benchmark)
@@ -73,6 +74,10 @@ function aggregate(times, mode) {
 }
 
 function plot() {
+  if (CHART !== null) {
+    CHART.destroy();
+  }
+
   const ctx = document.getElementById("chart").getContext("2d");
 
   const mode = document.querySelector('input[name="mode"]:checked').value;
@@ -81,7 +86,7 @@ function plot() {
     return { x: aggregate(entry.runs, mode), y: aggregate(entry.exts, mode) };
   });
 
-  new Chart(ctx, {
+  CHART = new Chart(ctx, {
     type: "scatter",
     data: {
       datasets: [
