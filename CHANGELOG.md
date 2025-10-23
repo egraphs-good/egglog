@@ -2,6 +2,9 @@
 
 ## [Unreleased] - ReleaseDate
 
+- Export let bindings in the serialized format so they are visualized (#701)
+  - Breaking change: renames `ignore_viz` to `let_binding` in `GenericFunctionDecl`.
+
 ## [1.0.0] - 2025-8-22
 
 This is the first release of egglog that is based on our new database-first, highly parallel backend.
