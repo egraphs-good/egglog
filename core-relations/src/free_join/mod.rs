@@ -32,7 +32,7 @@ use crate::{
 };
 
 use self::plan::Plan;
-use crate::action::{ExecutionState, PredictedVals};
+use crate::action::ExecutionState;
 
 pub(crate) mod execute;
 pub(crate) mod frame_update;
@@ -369,7 +369,6 @@ impl Database {
         next_ts: Value,
     ) -> bool {
         let func = self.tables.take(func_id).unwrap();
-        let predicted = PredictedVals::default();
         if parallelize_db_level_op(self.total_size_estimate) {
             let mut tables = Vec::with_capacity(to_rebuild.len());
             for id in to_rebuild {
@@ -380,7 +379,7 @@ impl Database {
                     func_id,
                     &func.table,
                     next_ts,
-                    &mut ExecutionState::new(&predicted, self.read_only_view(), Default::default()),
+                    &mut ExecutionState::new(self.read_only_view(), Default::default()),
                 );
             });
             for (id, info) in tables {
@@ -393,7 +392,7 @@ impl Database {
                     func_id,
                     &func.table,
                     next_ts,
-                    &mut ExecutionState::new(&predicted, self.read_only_view(), Default::default()),
+                    &mut ExecutionState::new(self.read_only_view(), Default::default()),
                 );
                 self.tables.insert(*id, info);
             }
@@ -404,8 +403,7 @@ impl Database {
 
     /// Run `f` with access to an `ExecutionState` mapped to this database.
     pub fn with_execution_state<R>(&self, f: impl FnOnce(&mut ExecutionState) -> R) -> R {
-        let predicted = with_pool_set(|ps| ps.get::<PredictedVals>());
-        let mut state = ExecutionState::new(&predicted, self.read_only_view(), Default::default());
+        let mut state = ExecutionState::new(self.read_only_view(), Default::default());
         f(&mut state)
     }
 
@@ -468,7 +466,6 @@ impl Database {
         let do_parallel = parallelize_db_level_op(self.total_size_estimate);
         loop {
             let mut changed = false;
-            let predicted = with_pool_set(|ps| ps.get::<PredictedVals>());
             let mut tables_merging = DenseIdMap::<
                 TableId,
                 (
@@ -500,7 +497,7 @@ impl Database {
                     tables_merging
                         .par_iter_mut()
                         .map(|(_, (info, buffers))| {
-                            let mut es = ExecutionState::new(&predicted, db, mem::take(buffers));
+                            let mut es = ExecutionState::new(db, mem::take(buffers));
                             info.as_mut().unwrap().table.merge(&mut es).added || es.changed
                         })
                         .max()
@@ -509,7 +506,7 @@ impl Database {
                     tables_merging
                         .iter_mut()
                         .map(|(_, (info, buffers))| {
-                            let mut es = ExecutionState::new(&predicted, db, mem::take(buffers));
+                            let mut es = ExecutionState::new(db, mem::take(buffers));
                             info.as_mut().unwrap().table.merge(&mut es).added || es.changed
                         })
                         .max()
@@ -547,10 +544,8 @@ impl Database {
     /// surprises here.
     pub fn merge_table(&mut self, table: TableId) {
         let mut info = self.tables.unwrap_val(table);
-        let predicted = with_pool_set(|ps| ps.get::<PredictedVals>());
         self.total_size_estimate = self.total_size_estimate.wrapping_sub(info.table.len());
         let _table_changed = info.table.merge(&mut ExecutionState::new(
-            &predicted,
             self.read_only_view(),
             Default::default(),
         ));

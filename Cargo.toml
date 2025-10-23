@@ -22,7 +22,7 @@ readme = "README.md"
 
 [workspace.dependencies]
 clap = "4"
-egraph-serialize = "0.3"
+egraph-serialize = { version = "0.3.0", default-features = false }
 env_logger = "0.11"
 hashbrown = "0.16"
 im-rc = "15.1.0"
@@ -68,14 +68,14 @@ libtest-mimic = "0.8"
 ######################
 # member crates
 ######################
-egglog-core-relations = { path = "core-relations" }
-egglog-ast = { path = "egglog-ast" }
-egglog-bridge = { path = "egglog-bridge" }
-egglog-concurrency = { path = "concurrency" }
-egglog-numeric-id = { path = "numeric-id" }
-egglog-union-find = { path = "union-find" }
-egglog-add-primitive = { path = "src/sort/add_primitive" }
-egglog = { path = ".", default-features = false }
+egglog-core-relations = { path = "core-relations", version = "1.0.0" }
+egglog-ast = { path = "egglog-ast", version = "1.0.0" }
+egglog-bridge = { path = "egglog-bridge", version = "1.0.0" }
+egglog-concurrency = { path = "concurrency", version = "1.0.0" }
+egglog-numeric-id = { path = "numeric-id", version = "1.0.0" }
+egglog-union-find = { path = "union-find", version = "1.0.0" }
+egglog-add-primitive = { path = "src/sort/add_primitive", version = "1.0.0" }
+egglog = { path = ".", default-features = false, version = "1.0.0" }
 
 ######################
 # wasm
@@ -86,6 +86,11 @@ wasm-bindgen = "0.2"
 name = "egglog"
 version = { workspace = true }
 edition = { workspace = true }
+description = { workspace = true }
+repository = { workspace = true }
+keywords = { workspace = true }
+license = { workspace = true }
+readme = { workspace = true }
 
 [[bench]]
 name = "ci_benchmarking"

@@ -4,13 +4,15 @@
 //! implementation here is optimized to execute on a batch of rows at a time.
 use std::ops::Deref;
 
-use crate::numeric_id::{DenseIdMap, NumericId};
-use rayon::iter::{IntoParallelRefMutIterator, ParallelIterator};
+use crate::{
+    common::HashMap,
+    numeric_id::{DenseIdMap, NumericId},
+};
 use smallvec::SmallVec;
 
 use crate::{
     BaseValues, ContainerValues, ExternalFunctionId, WrappedTable,
-    common::{DashMap, Value},
+    common::Value,
     free_join::{CounterId, Counters, ExternalFunctions, TableId, TableInfo, Variable},
     pool::{Clear, Pooled, with_pool_set},
     table_spec::{ColumnId, MutationBuffer},
@@ -96,7 +98,6 @@ impl From<Value> for MergeVal {
 ///
 /// The intent of bindings is to store a sequence of mappings from [`Variable`] to [`Value`], in a
 /// struct-of-arrays style that is better laid out for processing bindings in batches.
-#[derive(Debug)]
 pub(crate) struct Bindings {
     matches: usize,
     /// The maximum number of calls to `push` that we can receive before we clear the
@@ -112,6 +113,16 @@ impl std::ops::Index<Variable> for Bindings {
     type Output = [Value];
     fn index(&self, var: Variable) -> &[Value] {
         self.get(var).unwrap()
+    }
+}
+
+impl std::fmt::Debug for Bindings {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        let mut table = f.debug_map();
+        for (var, start) in self.var_offsets.iter() {
+            table.entry(&var, &&self.data[*start..*start + self.matches]);
+        }
+        table.finish()
     }
 }
 
@@ -273,7 +284,7 @@ pub(crate) struct ExtractedBinding {
 #[derive(Default)]
 pub(crate) struct PredictedVals {
     #[allow(clippy::type_complexity)]
-    data: DashMap<(TableId, SmallVec<[Value; 3]>), Pooled<Vec<Value>>>,
+    data: HashMap<(TableId, SmallVec<[Value; 3]>), Pooled<Vec<Value>>>,
 }
 
 impl Clear for PredictedVals {
@@ -281,12 +292,6 @@ impl Clear for PredictedVals {
         self.data.capacity() > 0
     }
     fn clear(&mut self) {
-        if self.data.len() > 500 && rayon::current_num_threads() > 1 {
-            self.data
-                .shards_mut()
-                .par_iter_mut()
-                .for_each(|shard| shard.get_mut().clear());
-        }
         self.data.clear()
     }
     fn bytes(&self) -> usize {
@@ -298,7 +303,7 @@ impl Clear for PredictedVals {
 
 impl PredictedVals {
     pub(crate) fn get_val(
-        &self,
+        &mut self,
         table: TableId,
         key: &[Value],
         default: impl FnOnce() -> Pooled<Vec<Value>>,
@@ -344,7 +349,7 @@ pub(crate) struct DbView<'a> {
 /// ExecutionState ensures that future lookups will see the same id (even across calls to
 /// [`ExecutionState::clone`]).
 pub struct ExecutionState<'a> {
-    pub(crate) predicted: &'a PredictedVals,
+    pub(crate) predicted: PredictedVals,
     pub(crate) db: DbView<'a>,
     pub(crate) buffers: DenseIdMap<TableId, Box<dyn MutationBuffer>>,
     /// Whether any mutations have been staged via this ExecutionState.
@@ -354,7 +359,7 @@ pub struct ExecutionState<'a> {
 impl Clone for ExecutionState<'_> {
     fn clone(&self) -> Self {
         let mut res = ExecutionState {
-            predicted: self.predicted,
+            predicted: Default::default(),
             db: self.db,
             buffers: DenseIdMap::new(),
             changed: false,
@@ -368,12 +373,11 @@ impl Clone for ExecutionState<'_> {
 
 impl<'a> ExecutionState<'a> {
     pub(crate) fn new(
-        predicted: &'a PredictedVals,
         db: DbView<'a>,
         buffers: DenseIdMap<TableId, Box<dyn MutationBuffer>>,
     ) -> Self {
         ExecutionState {
-            predicted,
+            predicted: Default::default(),
             db,
             buffers,
             changed: false,

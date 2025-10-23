@@ -1413,6 +1413,54 @@ fn primitive_failure_panics() {
     egraph.run_rules(&[assert_odd_rule]).err().unwrap();
 }
 
+#[test]
+fn test_simple_rule_proof_format() {
+    use crate::proof_format::*;
+    // Setup EGraph with tracing
+    let mut egraph = EGraph::with_tracing();
+    // Register primitive booleans
+    let bool_ty = egraph.base_values_mut().register_type::<bool>();
+    let true_val = egraph.base_values_mut().get(true);
+    let false_val = egraph.base_values_mut().get(false);
+    // Add table wrapper for booleans
+    let bool_table = egraph.add_table(FunctionConfig {
+        schema: vec![ColumnTy::Base(bool_ty), ColumnTy::Id],
+        default: DefaultVal::FreshId,
+        merge: MergeFn::UnionId,
+        name: "bool".into(),
+        can_subsume: false,
+    });
+    // Add table for not function
+    let not_table = egraph.add_table(FunctionConfig {
+        schema: vec![ColumnTy::Id, ColumnTy::Id],
+        default: DefaultVal::FreshId,
+        merge: MergeFn::UnionId,
+        name: "not".into(),
+        can_subsume: false,
+    });
+    // Add true/false wrapped terms
+    let true_id = egraph.add_term(bool_table, &[true_val], "true");
+    let false_id = egraph.add_term(bool_table, &[false_val], "false");
+    // Add not(true) and not(false)
+    let not_true_id = egraph.add_term(not_table, &[true_id], "not_true");
+    let truec = egraph.base_value_constant(true);
+    let falsec = egraph.base_value_constant(false);
+    // Add rules: not-true: (rewrite (not (bool true)) (bool false))
+    let not_true_rule = define_rule! {
+        [egraph] ((-> (not_table (bool_table {truec.clone()})) id)) => ((set (bool_table {falsec.clone()}) id))
+    };
+    let not_false_rule = define_rule! {
+        [egraph] ((-> (not_table (bool_table {falsec})) id)) => ((set (bool_table {truec}) id))
+    };
+    // Run rules
+    egraph.run_rules(&[not_true_rule, not_false_rule]).unwrap();
+    // Get proof for not_true = false
+    let mut proof_store = ProofStore::default();
+    egraph
+        .explain_terms_equal(not_true_id, false_id, &mut proof_store)
+        .unwrap();
+}
+
 const _: () = {
     const fn assert_send<T: Send>() {}
     assert_send::<EGraph>()
