@@ -52,6 +52,7 @@ impl SerializeOutput {
 struct Serializer {
     node_ids: NodeIDs,
     result: egraph_serialize::EGraph,
+    let_bindings: HashMap<egraph_serialize::ClassId, Vec<String>>,
 }
 
 /// Default is used for exporting JSON and will output all nodes.
@@ -135,7 +136,8 @@ impl EGraph {
             egraph_serialize::NodeId,
         )> = Vec::new();
         let mut functions_kept = 0usize;
-        for (name, function) in self.functions.iter().filter(|(_, f)| !f.decl.ignore_viz) {
+        let mut let_bindings = HashMap::default();
+        for (name, function) in self.functions.iter() {
             if functions_kept >= max_functions {
                 discarded_functions.push(name.clone());
                 continue;
@@ -147,21 +149,29 @@ impl EGraph {
                     return false;
                 }
                 let (out, inps) = row.vals.split_last().unwrap();
-                all_calls.push((
-                    function,
-                    inps.to_vec(),
-                    *out,
-                    row.subsumed,
-                    self.value_to_class_id(&function.schema.output, *out),
-                    self.to_node_id(
-                        None,
-                        SerializedNode::Function {
-                            name: name.clone(),
-                            offset: rows,
-                        },
-                    ),
-                ));
-                rows += 1;
+                let class_id = self.value_to_class_id(&function.schema.output, *out);
+                if function.decl.let_binding {
+                    let_bindings
+                        .entry(class_id.clone())
+                        .or_insert_with(Vec::new)
+                        .push(name.clone());
+                } else {
+                    all_calls.push((
+                        function,
+                        inps.to_vec(),
+                        *out,
+                        row.subsumed,
+                        class_id,
+                        self.to_node_id(
+                            None,
+                            SerializedNode::Function {
+                                name: name.clone(),
+                                offset: rows,
+                            },
+                        ),
+                    ));
+                    rows += 1;
+                }
                 true
             });
             if rows != 0 {
@@ -188,6 +198,7 @@ impl EGraph {
         let mut serializer = Serializer {
             node_ids,
             result: egraph_serialize::EGraph::default(),
+            let_bindings,
         };
 
         for (func, input, output, subsumed, class_id, node_id) in all_calls {
@@ -296,7 +307,7 @@ impl EGraph {
         }
     }
 
-    /// Serialize the value and return the eclass and node ID
+    /// Serialize the value and return the node ID
     /// If this is a primitive value, we will add the node to the data, but if it is an eclass, we will not
     /// When this is called on the output of a node, we only use the e-class to know which e-class its a part of
     /// When this is called on an input of a node, we only use the node ID to know which node to point to.
@@ -370,11 +381,18 @@ impl EGraph {
             };
             node_id
         };
+        #[allow(clippy::disallowed_types)]
+        let mut extra = std::collections::HashMap::default();
+        if let Some(let_bindings) = serializer.let_bindings.get(class_id) {
+            if !let_bindings.is_empty() {
+                extra.insert("let".to_string(), let_bindings.join(", "));
+            }
+        }
         serializer.result.class_data.insert(
             class_id.clone(),
             egraph_serialize::ClassData {
                 typ: Some(sort.name().to_string()),
-                extra: Default::default(),
+                extra,
             },
         );
         node_id
