@@ -1,0 +1,116 @@
+(datatype Fill
+  (LinearGradient)
+  (RadialGradient)
+  (Color f64 f64 f64 f64))
+
+(datatype BlendMode
+  (SrcOver)
+  (DstIn)
+  (Src)
+  ;; No specific rewrites for these blend modes
+  (Plus)
+  (Multiply)
+  (Overlay)
+  (SoftLight))
+
+(datatype Style
+  (Solid)
+  (Stroke))
+
+(datatype Filter
+  (IdFilter)
+  (LumaFilter))
+
+(datatype SkPaint
+  (Paint Fill BlendMode Style Filter i64))
+
+(datatype Geometry
+  (Full)
+  (Path i64)
+  (Rect f64 f64 f64 f64)
+  (RRect f64 f64 f64 f64 f64 f64 f64 f64)
+  (Oval f64 f64 f64 f64)
+  (TextBlob f64 f64 f64 f64 f64 f64)
+  (ImageRect f64 f64 f64 f64)
+  (Intersect Geometry Geometry)
+  (Difference Geometry Geometry))
+
+(datatype Transform
+  (Matrix f64 f64 f64 f64 f64 f64 f64 f64 f64 f64 f64 f64 f64 f64 f64 f64))
+
+(sort Layer)
+(constructor Empty () Layer)
+(constructor Clip (Layer Geometry Transform) Layer :unextractable)
+(constructor SaveLayer (Layer Layer SkPaint) Layer :cost 100)
+(constructor Draw (Layer Geometry SkPaint Geometry Transform) Layer)
+
+;;----------------
+;; Rewrites Below
+;;----------------
+(ruleset opt)
+(ruleset simp)
+;; REWRITE 1
+(rewrite (SaveLayer l (Empty) (Paint (Color 1.0 r g b) (SrcOver) style (IdFilter) i))
+         l
+         :ruleset opt)
+
+;; REWRITE 2
+(rewrite (SaveLayer (Empty) (Draw (Empty) g (Paint f bm st ftr i2) c t) (Paint (Color 1.0 r1 g1 b1) (SrcOver) st2 (IdFilter) i1))
+         (Draw (Empty) g (Paint f bm st ftr i2) c t)
+         :ruleset opt)
+
+;; REWRITE 3
+(rewrite (SaveLayer l1
+                    (Draw l2 g (Paint (Color a2 r2 g2 b2) (SrcOver) f2  ftr i2) c t)
+                    (Paint (Color 1.0 r1 g1 b1) (SrcOver) f1 (IdFilter) i1))
+         (Draw (SaveLayer l1 l2 (Paint (Color 1.0 r1 g1 b1) (SrcOver) f1 (IdFilter) i1))
+               g
+               (Paint (Color a2 r2 g2 b2) (SrcOver) f2 ftr i2) c t)
+         :ruleset opt)
+
+;; REWRITE 4
+(rewrite (Draw (Empty) e (Paint (Color 0.0 r g b) (Src) f (IdFilter) i) c t)
+         (Empty)
+         :ruleset simp)
+
+;; new rewrite
+(rewrite (SaveLayer bottom
+                    (Draw (Empty) (Rect w x y z) (Paint (Color 1.0 r2 g2 b2) (SrcOver) (Solid) (IdFilter) i2) c2 t)
+                    (Paint (Color 1.0 r3 g3 b3) (DstIn) st2 (IdFilter) i3))
+         (Clip bottom (Intersect (Rect w x y z) c2) t)
+         :ruleset opt)
+
+(rewrite (SaveLayer bottom
+                    (Draw (Empty) (RRect a b c d w x y z) (Paint (Color 1.0 r2 g2 b2) (SrcOver) (Solid) (IdFilter) i2) c2 t)
+                    (Paint (Color 1.0 r3 g3 b3) (DstIn) st2 (IdFilter) i3))
+         (Clip bottom (Intersect (RRect a b c d w x y z) c2) t)
+         :ruleset opt)
+
+(rewrite (SaveLayer bottom
+                    (Draw (Empty) (Path nm) (Paint (Color 1.0 r2 g2 b2) (SrcOver) (Solid) (IdFilter) i2) c2 t)
+                    (Paint (Color 1.0 r3 g3 b3) (DstIn) st2 (IdFilter) i3))
+         (Clip bottom (Intersect (Path nm) c2) t)
+         :ruleset opt)
+
+;; Clip rewrites
+(rewrite (Clip (Draw bottom geo paint clip1 transform) clip2 transform)
+         (Draw (Clip bottom clip2 transform) geo paint (Intersect clip1 clip2) transform)
+         :ruleset opt)
+
+(rewrite (Clip (Empty) clip transform)
+         (Empty)
+         :ruleset opt)
+
+;; Luminance masks
+(rewrite (SaveLayer (Empty)
+                    (Draw (Empty) shape (Paint (Color 1.0 1.0 1.0 1.0) (SrcOver) style (IdFilter) i1) clip transform)
+                    (Paint (Color 1.0 r g b) (SrcOver) nostyle (LumaFilter) i2))
+         (Draw (Empty) shape (Paint (Color 1.0 0.0 0.0 0.0) (SrcOver) style (IdFilter) i1) clip transform)
+         :ruleset opt)
+
+(let test (Draw (Draw (Draw (Draw (Draw (Draw (Draw (Draw (SaveLayer (Draw (Draw (Draw (Draw (Draw (Draw (Draw (Draw (Draw (Draw (Draw (Draw (Draw (Draw (Draw (Draw (Draw (Draw (Draw (Draw (Draw (Draw (Draw (Draw (Draw (Draw (Draw (Draw (Draw (Draw (Draw (Draw (Draw (Draw (Draw (Empty) (Full) (Paint (Color 0.0 0.0 0.0 0.0) (Src) (Solid) (IdFilter) 0) (Full) (Matrix 1.0 0.0 0.0 0.0 0.0 1.0 0.0 0.0 0.0 0.0 1.0 0.0 0.0 0.0 0.0 1.0)) (TextBlob 12.0 414.0 -5.018 -16.458 29.016 4.849) (Paint (Color 1.0 0.11372549019607843 0.2235294117647059 0.5803921568627451) (SrcOver) (Solid) (IdFilter) 3) (Full) (Matrix 1.0 0.0 0.0 -7.0 0.0 1.0 0.0 -402.0 0.0 0.0 1.0 0.0 0.0 0.0 0.0 1.0)) (TextBlob 38.0 414.0 -5.018 -16.458 42.016 4.849) (Paint (Color 1.0 0.11372549019607843 0.2235294117647059 0.5803921568627451) (SrcOver) (Solid) (IdFilter) 4) (Full) (Matrix 1.0 0.0 0.0 -7.0 0.0 1.0 0.0 -402.0 0.0 0.0 1.0 0.0 0.0 0.0 0.0 1.0)) (TextBlob 96.0938 439.0 -5.018 -16.458 24.557 4.849) (Paint (Color 1.0 0.0392156862745098 0.4235294117647059 1.0) (SrcOver) (Solid) (IdFilter) 5) (Full) (Matrix 1.0 0.0 0.0 -7.0 0.0 1.0 0.0 -402.0 0.0 0.0 1.0 0.0 0.0 0.0 0.0 1.0)) (TextBlob 113.234 439.0 -3.86 -12.66 12.32 3.73) (Paint (Color 1.0 0.0392156862745098 0.4235294117647059 1.0) (SrcOver) (Solid) (IdFilter) 6) (Full) (Matrix 1.0 0.0 0.0 -7.0 0.0 1.0 0.0 -402.0 0.0 0.0 1.0 0.0 0.0 0.0 0.0 1.0)) (TextBlob 127.234 439.0 -5.018 -16.458 16.016 4.849) (Paint (Color 1.0 0.0 0.0 0.0) (SrcOver) (Solid) (IdFilter) 7) (Full) (Matrix 1.0 0.0 0.0 -7.0 0.0 1.0 0.0 -402.0 0.0 0.0 1.0 0.0 0.0 0.0 0.0 1.0)) (TextBlob 135.781 439.0 -3.86 -12.66 12.32 3.73) (Paint (Color 1.0 0.0 0.0 0.0) (SrcOver) (Solid) (IdFilter) 8) (Full) (Matrix 1.0 0.0 0.0 -7.0 0.0 1.0 0.0 -402.0 0.0 0.0 1.0 0.0 0.0 0.0 0.0 1.0)) (ImageRect 0.0 0.0 150.0 80.0) (Paint (Color 1.0 0.0 0.0 0.0) (SrcOver) (Solid) (IdFilter) 11) (Full) (Matrix 0.34 0.0 0.0 5.0 0.0 0.3375 0.0 19.0 0.0 0.0 1.0 0.0 0.0 0.0 0.0 1.0)) (TextBlob 64.0 439.0 -5.018 -16.458 24.557 4.849) (Paint (Color 1.0 0.9215686274509803 0.0 0.07450980392156863) (SrcOver) (Solid) (IdFilter) 13) (Full) (Matrix 1.0 0.0 0.0 -7.0 0.0 1.0 0.0 -402.0 0.0 0.0 1.0 0.0 0.0 0.0 0.0 1.0)) (TextBlob 81.0938 439.0 -3.86 -12.66 12.32 3.73) (Paint (Color 1.0 0.9215686274509803 0.0 0.07450980392156863) (SrcOver) (Solid) (IdFilter) 14) (Full) (Matrix 1.0 0.0 0.0 -7.0 0.0 1.0 0.0 -402.0 0.0 0.0 1.0 0.0 0.0 0.0 0.0 1.0)) (Rect 93.0 430.0 94.0 439.0) (Paint (Color 1.0 0.807843137254902 0.8549019607843137 0.9529411764705882) (SrcOver) (Solid) (IdFilter) 15) (Full) (Matrix 1.0 0.0 0.0 -7.0 0.0 1.0 0.0 -402.0 0.0 0.0 1.0 0.0 0.0 0.0 0.0 1.0)) (TextBlob 181.0 414.0 -5.018 -16.458 29.016 4.849) (Paint (Color 1.0 0.11372549019607843 0.2235294117647059 0.5803921568627451) (SrcOver) (Solid) (IdFilter) 16) (Full) (Matrix 1.0 0.0 0.0 -7.0 0.0 1.0 0.0 -402.0 0.0 0.0 1.0 0.0 0.0 0.0 0.0 1.0)) (TextBlob 207.0 414.0 -5.018 -16.458 42.016 4.849) (Paint (Color 1.0 0.11372549019607843 0.2235294117647059 0.5803921568627451) (SrcOver) (Solid) (IdFilter) 17) (Full) (Matrix 1.0 0.0 0.0 -7.0 0.0 1.0 0.0 -402.0 0.0 0.0 1.0 0.0 0.0 0.0 0.0 1.0)) (TextBlob 265.094 439.0 -5.018 -16.458 24.557 4.849) (Paint (Color 1.0 0.0392156862745098 0.4235294117647059 1.0) (SrcOver) (Solid) (IdFilter) 18) (Full) (Matrix 1.0 0.0 0.0 -7.0 0.0 1.0 0.0 -402.0 0.0 0.0 1.0 0.0 0.0 0.0 0.0 1.0)) (TextBlob 282.188 439.0 -3.86 -12.66 12.32 3.73) (Paint (Color 1.0 0.0392156862745098 0.4235294117647059 1.0) (SrcOver) (Solid) (IdFilter) 19) (Full) (Matrix 1.0 0.0 0.0 -7.0 0.0 1.0 0.0 -402.0 0.0 0.0 1.0 0.0 0.0 0.0 0.0 1.0)) (TextBlob 296.188 439.0 -5.018 -16.458 24.557 4.849) (Paint (Color 1.0 0.0 0.0 0.0) (SrcOver) (Solid) (IdFilter) 20) (Full) (Matrix 1.0 0.0 0.0 -7.0 0.0 1.0 0.0 -402.0 0.0 0.0 1.0 0.0 0.0 0.0 0.0 1.0)) (TextBlob 313.281 439.0 -3.86 -12.66 12.32 3.73) (Paint (Color 1.0 0.0 0.0 0.0) (SrcOver) (Solid) (IdFilter) 21) (Full) (Matrix 1.0 0.0 0.0 -7.0 0.0 1.0 0.0 -402.0 0.0 0.0 1.0 0.0 0.0 0.0 0.0 1.0)) (ImageRect 0.0 0.0 150.0 80.0) (Paint (Color 1.0 0.0 0.0 0.0) (SrcOver) (Solid) (IdFilter) 24) (Full) (Matrix 0.34 0.0 0.0 174.0 0.0 0.3375 0.0 19.0 0.0 0.0 1.0 0.0 0.0 0.0 0.0 1.0)) (TextBlob 233.0 439.0 -5.018 -16.458 24.557 4.849) (Paint (Color 1.0 0.9215686274509803 0.0 0.07450980392156863) (SrcOver) (Solid) (IdFilter) 26) (Full) (Matrix 1.0 0.0 0.0 -7.0 0.0 1.0 0.0 -402.0 0.0 0.0 1.0 0.0 0.0 0.0 0.0 1.0)) (TextBlob 250.094 439.0 -3.86 -12.66 12.32 3.73) (Paint (Color 1.0 0.9215686274509803 0.0 0.07450980392156863) (SrcOver) (Solid) (IdFilter) 27) (Full) (Matrix 1.0 0.0 0.0 -7.0 0.0 1.0 0.0 -402.0 0.0 0.0 1.0 0.0 0.0 0.0 0.0 1.0)) (Rect 262.0 430.0 263.0 439.0) (Paint (Color 1.0 0.807843137254902 0.8549019607843137 0.9529411764705882) (SrcOver) (Solid) (IdFilter) 28) (Full) (Matrix 1.0 0.0 0.0 -7.0 0.0 1.0 0.0 -402.0 0.0 0.0 1.0 0.0 0.0 0.0 0.0 1.0)) (Rect 175.0 403.0 176.0 448.0) (Paint (Color 1.0 0.807843137254902 0.8549019607843137 0.9529411764705882) (SrcOver) (Solid) (IdFilter) 29) (Full) (Matrix 1.0 0.0 0.0 -7.0 0.0 1.0 0.0 -402.0 0.0 0.0 1.0 0.0 0.0 0.0 0.0 1.0)) (TextBlob 40.0 498.0 -5.018 -16.458 55.016 4.849) (Paint (Color 1.0 0.0 0.0 0.0) (SrcOver) (Solid) (IdFilter) 30) (Full) (Matrix 1.0 0.0 0.0 -7.0 0.0 1.0 0.0 -402.0 0.0 0.0 1.0 0.0 0.0 0.0 0.0 1.0)) (TextBlob 97.0 497.0 -5.018 -16.458 198.016 4.849) (Paint (Color 1.0 0.11372549019607843 0.2235294117647059 0.5803921568627451) (SrcOver) (Solid) (IdFilter) 31) (Full) (Matrix 1.0 0.0 0.0 -7.0 0.0 1.0 0.0 -402.0 0.0 0.0 1.0 0.0 0.0 0.0 0.0 1.0)) (Rect 7.0 475.0 343.0 476.0) (Paint (Color 1.0 0.807843137254902 0.8549019607843137 0.9529411764705882) (SrcOver) (Solid) (IdFilter) 32) (Full) (Matrix 1.0 0.0 0.0 -7.0 0.0 1.0 0.0 -402.0 0.0 0.0 1.0 0.0 0.0 0.0 0.0 1.0)) (Path 40) (Paint (Color 1.0 0.8823529411764706 0.8823529411764706 0.8823529411764706) (SrcOver) (Solid) (IdFilter) 40) (Intersect (Intersect (Full) (Rect 12.0 483.0 33.0 501.0)) (Rect 0.0 0.0 21.0 18.0)) (Matrix 1.0 0.0 0.0 5.525 0.0 1.0 0.0 81.1 0.0 0.0 1.0 0.0 0.0 0.0 0.0 1.0)) (Path 41) (Paint (Color 1.0 0.4 0.6352941176470588 0.8705882352941177) (SrcOver) (Solid) (IdFilter) 41) (Intersect (Intersect (Full) (Rect 12.0 483.0 33.0 501.0)) (Rect 0.0 0.0 21.0 18.0)) (Matrix 1.0 0.0 0.0 5.525 0.0 1.0 0.0 81.1 0.0 0.0 1.0 0.0 0.0 0.0 0.0 1.0)) (Path 42) (Paint (Color 1.0 1.0 0.9686274509803922 0.8) (SrcOver) (Solid) (IdFilter) 42) (Intersect (Intersect (Full) (Rect 12.0 483.0 33.0 501.0)) (Rect 0.0 0.0 21.0 18.0)) (Matrix 1.0 0.0 0.0 5.525 0.0 1.0 0.0 81.1 0.0 0.0 1.0 0.0 0.0 0.0 0.0 1.0)) (Path 43) (Paint (Color 1.0 0.7647058823529411 0.7647058823529411 0.7647058823529411) (SrcOver) (Solid) (IdFilter) 43) (Intersect (Intersect (Full) (Rect 12.0 483.0 33.0 501.0)) (Rect 0.0 0.0 21.0 18.0)) (Matrix 1.0 0.0 0.0 5.525 0.0 1.0 0.0 81.1 0.0 0.0 1.0 0.0 0.0 0.0 0.0 1.0)) (Path 44) (Paint (Color 1.0 0.4 0.6352941176470588 0.8705882352941177) (SrcOver) (Solid) (IdFilter) 44) (Intersect (Intersect (Full) (Rect 12.0 483.0 33.0 501.0)) (Rect 0.0 0.0 21.0 18.0)) (Matrix 1.0 0.0 0.0 5.525 0.0 1.0 0.0 81.1 0.0 0.0 1.0 0.0 0.0 0.0 0.0 1.0)) (Path 45) (Paint (Color 1.0 1.0 0.8431372549019608 0.0) (SrcOver) (Solid) (IdFilter) 45) (Intersect (Intersect (Full) (Rect 12.0 483.0 33.0 501.0)) (Rect 0.0 0.0 21.0 18.0)) (Matrix 1.0 0.0 0.0 5.525 0.0 1.0 0.0 81.1 0.0 0.0 1.0 0.0 0.0 0.0 0.0 1.0)) (Path 46) (Paint (Color 1.0 0.49019607843137253 0.803921568627451 0.0) (SrcOver) (Solid) (IdFilter) 46) (Intersect (Intersect (Full) (Rect 12.0 483.0 33.0 501.0)) (Rect 0.0 0.0 21.0 18.0)) (Matrix 1.0 0.0 0.0 5.525 0.0 1.0 0.0 81.1 0.0 0.0 1.0 0.0 0.0 0.0 0.0 1.0)) (TextBlob 40.0 533.0 -5.018 -16.458 55.016 4.849) (Paint (Color 1.0 0.0 0.0 0.0) (SrcOver) (Solid) (IdFilter) 50) (Full) (Matrix 1.0 0.0 0.0 -7.0 0.0 1.0 0.0 -402.0 0.0 0.0 1.0 0.0 0.0 0.0 0.0 1.0)) (TextBlob 97.0 532.0 -5.018 -16.458 226.811 4.849) (Paint (Color 1.0 0.11372549019607843 0.2235294117647059 0.5803921568627451) (SrcOver) (Solid) (IdFilter) 51) (Full) (Matrix 1.0 0.0 0.0 -7.0 0.0 1.0 0.0 -402.0 0.0 0.0 1.0 0.0 0.0 0.0 0.0 1.0)) (Rect 7.0 510.0 343.0 511.0) (Paint (Color 1.0 0.807843137254902 0.8549019607843137 0.9529411764705882) (SrcOver) (Solid) (IdFilter) 52) (Full) (Matrix 1.0 0.0 0.0 -7.0 0.0 1.0 0.0 -402.0 0.0 0.0 1.0 0.0 0.0 0.0 0.0 1.0)) (SaveLayer (Draw (Draw (Draw (Draw (Draw (Draw (Draw (Empty) (Path 63) (Paint (Color 1.0 0.6274509803921569 0.6274509803921569 0.6274509803921569) (SrcOver) (Solid) (IdFilter) 63) (Intersect (Intersect (Intersect (Full) (Rect 12.0 517.0 33.0 538.0)) (Rect 0.0 0.0 21.0 21.0)) (Rect 0.0 0.0 21.0 21.0)) (Matrix 0.2625 0.0 0.0 7.625 0.0 0.2625 0.0 116.3125 0.0 0.0 1.0 0.0 0.0 0.0 0.0 1.0)) (Path 64) (Paint (Color 1.0 0.6274509803921569 0.6274509803921569 0.6274509803921569) (SrcOver) (Solid) (IdFilter) 64) (Intersect (Intersect (Intersect (Full) (Rect 12.0 517.0 33.0 538.0)) (Rect 0.0 0.0 21.0 21.0)) (Rect 0.0 0.0 21.0 21.0)) (Matrix 0.2625 0.0 0.0 7.625 0.0 0.2625 0.0 116.3125 0.0 0.0 1.0 0.0 0.0 0.0 0.0 1.0)) (Path 65) (Paint (Color 1.0 0.7647058823529411 0.7647058823529411 0.7647058823529411) (SrcOver) (Solid) (IdFilter) 65) (Intersect (Intersect (Intersect (Full) (Rect 12.0 517.0 33.0 538.0)) (Rect 0.0 0.0 21.0 21.0)) (Rect 0.0 0.0 21.0 21.0)) (Matrix 0.2625 0.0 0.0 7.625 0.0 0.2625 0.0 116.3125 0.0 0.0 1.0 0.0 0.0 0.0 0.0 1.0)) (Path 66) (Paint (Color 1.0 0.32941176470588235 0.32941176470588235 0.32941176470588235) (SrcOver) (Solid) (IdFilter) 66) (Intersect (Intersect (Intersect (Full) (Rect 12.0 517.0 33.0 538.0)) (Rect 0.0 0.0 21.0 21.0)) (Rect 0.0 0.0 21.0 21.0)) (Matrix 0.2625 0.0 0.0 7.625 0.0 0.2625 0.0 116.3125 0.0 0.0 1.0 0.0 0.0 0.0 0.0 1.0)) (Path 67) (Paint (Color 1.0 0.3843137254901961 0.6784313725490196 0.0) (SrcOver) (Solid) (IdFilter) 67) (Intersect (Intersect (Intersect (Full) (Rect 12.0 517.0 33.0 538.0)) (Rect 0.0 0.0 21.0 21.0)) (Rect 0.0 0.0 21.0 21.0)) (Matrix 0.2625 0.0 0.0 7.625 0.0 0.2625 0.0 116.3125 0.0 0.0 1.0 0.0 0.0 0.0 0.0 1.0)) (Path 68) (Paint (Color 1.0 0.23529411764705882 0.23529411764705882 0.23529411764705882) (SrcOver) (Solid) (IdFilter) 68) (Intersect (Intersect (Intersect (Full) (Rect 12.0 517.0 33.0 538.0)) (Rect 0.0 0.0 21.0 21.0)) (Rect 0.0 0.0 21.0 21.0)) (Matrix 0.2625 0.0 0.0 7.625 0.0 0.2625 0.0 116.3125 0.0 0.0 1.0 0.0 0.0 0.0 0.0 1.0)) (Path 69) (Paint (Color 1.0 0.23529411764705882 0.23529411764705882 0.23529411764705882) (SrcOver) (Solid) (IdFilter) 69) (Intersect (Intersect (Intersect (Full) (Rect 12.0 517.0 33.0 538.0)) (Rect 0.0 0.0 21.0 21.0)) (Rect 0.0 0.0 21.0 21.0)) (Matrix 0.2625 0.0 0.0 7.625 0.0 0.2625 0.0 116.3125 0.0 0.0 1.0 0.0 0.0 0.0 0.0 1.0)) (Draw (Empty) (Path 71) (Paint (Color 1.0 0.8 0.8 0.8) (SrcOver) (Solid) (IdFilter) 71) (Intersect (Intersect (Intersect (Full) (Rect 12.0 517.0 33.0 538.0)) (Rect 0.0 0.0 21.0 21.0)) (Rect 0.0 0.0 21.0 21.0)) (Matrix 0.2625 0.0 0.0 7.625 0.0 0.2625 0.0 116.3125 0.0 0.0 1.0 0.0 0.0 0.0 0.0 1.0)) (Paint (Color 1.0 0.0 0.0 0.0) (Multiply) (Solid) (IdFilter) 70)) (Paint (Color 1.0 0.0 0.0 0.0) (SrcOver) (Solid) (IdFilter) 58)) (Rect 7.0 545.0 343.0 546.0) (Paint (Color 1.0 0.807843137254902 0.8549019607843137 0.9529411764705882) (SrcOver) (Solid) (IdFilter) 78) (Full) (Matrix 1.0 0.0 0.0 -7.0 0.0 1.0 0.0 -402.0 0.0 0.0 1.0 0.0 0.0 0.0 0.0 1.0)) (TextBlob 40.0 567.0 -5.018 -16.458 55.016 4.849) (Paint (Color 1.0 0.0 0.0 0.0) (SrcOver) (Solid) (IdFilter) 79) (Full) (Matrix 1.0 0.0 0.0 -7.0 0.0 1.0 0.0 -402.0 0.0 0.0 1.0 0.0 0.0 0.0 0.0 1.0)) (TextBlob 97.0 567.0 -5.018 -16.458 94.016 4.849) (Paint (Color 1.0 0.11372549019607843 0.2235294117647059 0.5803921568627451) (SrcOver) (Solid) (IdFilter) 80) (Full) (Matrix 1.0 0.0 0.0 -7.0 0.0 1.0 0.0 -402.0 0.0 0.0 1.0 0.0 0.0 0.0 0.0 1.0)) (Path 86) (Paint (Color 1.0 0.7686274509803922 0.5803921568627451 0.054901960784313725) (SrcOver) (Solid) (IdFilter) 86) (Intersect (Intersect (Full) (Rect 14.0 554.0 32.0 572.0)) (Rect 0.0 0.0 18.0 18.0)) (Matrix 1.0 0.0 0.0 7.0 0.0 1.0 0.0 152.0 0.0 0.0 1.0 0.0 0.0 0.0 0.0 1.0)) (Path 87) (Paint (Color 1.0 1.0 0.6823529411764706 0.0) (SrcOver) (Solid) (IdFilter) 87) (Intersect (Intersect (Full) (Rect 14.0 554.0 32.0 572.0)) (Rect 0.0 0.0 18.0 18.0)) (Matrix 1.0 0.0 0.0 7.0 0.0 1.0 0.0 152.0 0.0 0.0 1.0 0.0 0.0 0.0 0.0 1.0)) (Path 88) (Paint (Color 1.0 0.996078431372549 0.803921568627451 0.18823529411764706) (SrcOver) (Solid) (IdFilter) 88) (Intersect (Intersect (Full) (Rect 14.0 554.0 32.0 572.0)) (Rect 0.0 0.0 18.0 18.0)) (Matrix 1.0 0.0 0.0 7.0 0.0 1.0 0.0 152.0 0.0 0.0 1.0 0.0 0.0 0.0 0.0 1.0)) (Rect 25.0 551.0 34.0 560.0) (Paint (Color 1.0 0.9686274509803922 0.36470588235294116 0.3686274509803922) (SrcOver) (Solid) (IdFilter) 93) (Intersect (Full) (RRect 26.0 552.0 33.0 559.0 3.5 3.5 3.5 3.5)) (Matrix 1.0 0.0 0.0 -7.0 0.0 1.0 0.0 -402.0 0.0 0.0 1.0 0.0 0.0 0.0 0.0 1.0)) (RRect 25.5 551.5 33.5 559.5 4.0 4.0 4.0 4.0) (Paint (Color 1.0 1.0 1.0 1.0) (SrcOver) (Stroke) (IdFilter) 95) (Full) (Matrix 1.0 0.0 0.0 -7.0 0.0 1.0 0.0 -402.0 0.0 0.0 1.0 0.0 0.0 0.0 0.0 1.0)))
+(run-schedule
+ ;; (repeat 1 (run simp))
+ (saturate (run opt)))
+
+(extract test)

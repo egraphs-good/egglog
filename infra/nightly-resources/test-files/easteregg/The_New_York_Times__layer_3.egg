@@ -1,0 +1,116 @@
+(datatype Fill
+  (LinearGradient)
+  (RadialGradient)
+  (Color f64 f64 f64 f64))
+
+(datatype BlendMode
+  (SrcOver)
+  (DstIn)
+  (Src)
+  ;; No specific rewrites for these blend modes
+  (Plus)
+  (Multiply)
+  (Overlay)
+  (SoftLight))
+
+(datatype Style
+  (Solid)
+  (Stroke))
+
+(datatype Filter
+  (IdFilter)
+  (LumaFilter))
+
+(datatype SkPaint
+  (Paint Fill BlendMode Style Filter i64))
+
+(datatype Geometry
+  (Full)
+  (Path i64)
+  (Rect f64 f64 f64 f64)
+  (RRect f64 f64 f64 f64 f64 f64 f64 f64)
+  (Oval f64 f64 f64 f64)
+  (TextBlob f64 f64 f64 f64 f64 f64)
+  (ImageRect f64 f64 f64 f64)
+  (Intersect Geometry Geometry)
+  (Difference Geometry Geometry))
+
+(datatype Transform
+  (Matrix f64 f64 f64 f64 f64 f64 f64 f64 f64 f64 f64 f64 f64 f64 f64 f64))
+
+(sort Layer)
+(constructor Empty () Layer)
+(constructor Clip (Layer Geometry Transform) Layer :unextractable)
+(constructor SaveLayer (Layer Layer SkPaint) Layer :cost 100)
+(constructor Draw (Layer Geometry SkPaint Geometry Transform) Layer)
+
+;;----------------
+;; Rewrites Below
+;;----------------
+(ruleset opt)
+(ruleset simp)
+;; REWRITE 1
+(rewrite (SaveLayer l (Empty) (Paint (Color 1.0 r g b) (SrcOver) style (IdFilter) i))
+         l
+         :ruleset opt)
+
+;; REWRITE 2
+(rewrite (SaveLayer (Empty) (Draw (Empty) g (Paint f bm st ftr i2) c t) (Paint (Color 1.0 r1 g1 b1) (SrcOver) st2 (IdFilter) i1))
+         (Draw (Empty) g (Paint f bm st ftr i2) c t)
+         :ruleset opt)
+
+;; REWRITE 3
+(rewrite (SaveLayer l1
+                    (Draw l2 g (Paint (Color a2 r2 g2 b2) (SrcOver) f2  ftr i2) c t)
+                    (Paint (Color 1.0 r1 g1 b1) (SrcOver) f1 (IdFilter) i1))
+         (Draw (SaveLayer l1 l2 (Paint (Color 1.0 r1 g1 b1) (SrcOver) f1 (IdFilter) i1))
+               g
+               (Paint (Color a2 r2 g2 b2) (SrcOver) f2 ftr i2) c t)
+         :ruleset opt)
+
+;; REWRITE 4
+(rewrite (Draw (Empty) e (Paint (Color 0.0 r g b) (Src) f (IdFilter) i) c t)
+         (Empty)
+         :ruleset simp)
+
+;; new rewrite
+(rewrite (SaveLayer bottom
+                    (Draw (Empty) (Rect w x y z) (Paint (Color 1.0 r2 g2 b2) (SrcOver) (Solid) (IdFilter) i2) c2 t)
+                    (Paint (Color 1.0 r3 g3 b3) (DstIn) st2 (IdFilter) i3))
+         (Clip bottom (Intersect (Rect w x y z) c2) t)
+         :ruleset opt)
+
+(rewrite (SaveLayer bottom
+                    (Draw (Empty) (RRect a b c d w x y z) (Paint (Color 1.0 r2 g2 b2) (SrcOver) (Solid) (IdFilter) i2) c2 t)
+                    (Paint (Color 1.0 r3 g3 b3) (DstIn) st2 (IdFilter) i3))
+         (Clip bottom (Intersect (RRect a b c d w x y z) c2) t)
+         :ruleset opt)
+
+(rewrite (SaveLayer bottom
+                    (Draw (Empty) (Path nm) (Paint (Color 1.0 r2 g2 b2) (SrcOver) (Solid) (IdFilter) i2) c2 t)
+                    (Paint (Color 1.0 r3 g3 b3) (DstIn) st2 (IdFilter) i3))
+         (Clip bottom (Intersect (Path nm) c2) t)
+         :ruleset opt)
+
+;; Clip rewrites
+(rewrite (Clip (Draw bottom geo paint clip1 transform) clip2 transform)
+         (Draw (Clip bottom clip2 transform) geo paint (Intersect clip1 clip2) transform)
+         :ruleset opt)
+
+(rewrite (Clip (Empty) clip transform)
+         (Empty)
+         :ruleset opt)
+
+;; Luminance masks
+(rewrite (SaveLayer (Empty)
+                    (Draw (Empty) shape (Paint (Color 1.0 1.0 1.0 1.0) (SrcOver) style (IdFilter) i1) clip transform)
+                    (Paint (Color 1.0 r g b) (SrcOver) nostyle (LumaFilter) i2))
+         (Draw (Empty) shape (Paint (Color 1.0 0.0 0.0 0.0) (SrcOver) style (IdFilter) i1) clip transform)
+         :ruleset opt)
+
+(let test (SaveLayer (SaveLayer (Draw (Draw (Empty) (Full) (Paint (Color 0.0 0.0 0.0 0.0) (Src) (Solid) (IdFilter) 0) (Full) (Matrix 1.0 0.0 0.0 0.0 0.0 1.0 0.0 0.0 0.0 0.0 1.0 0.0 0.0 0.0 0.0 1.0)) (TextBlob 741.5 3685.0 -3.04688 -13.96 124.651 2.74658) (Paint (Color 1.0 0.07058823529411765 0.07058823529411765 0.07058823529411765) (SrcOver) (Solid) (IdFilter) 3) (Full) (Matrix 1.0 0.0 0.0 -348.0 0.0 1.0 0.0 -3658.0 0.0 0.0 1.0 0.0 0.0 0.0 0.0 1.0)) (SaveLayer (SaveLayer (Empty) (SaveLayer (SaveLayer (Empty) (SaveLayer (Draw (Draw (Empty) (Oval 2.25 2.25 20.75 20.75) (Paint (Color 1.0 0.0 0.0 0.0) (SrcOver) (Solid) (IdFilter) 16) (Intersect (Intersect (Intersect (Full) (Rect -4.0 0.0 84.0 23.0)) (Rect 0.0 0.0 88.0 23.0)) (Rect 0.0 0.0 23.0 23.0)) (Matrix 1.0 0.0 0.0 6.0 0.0 1.0 0.0 300.0 0.0 0.0 1.0 0.0 0.0 0.0 0.0 1.0)) (Oval 2.25 2.25 20.75 20.75) (Paint (Color 1.0 0.0 0.0 0.0) (SrcOver) (Stroke) (IdFilter) 17) (Intersect (Intersect (Intersect (Full) (Rect -4.0 0.0 84.0 23.0)) (Rect 0.0 0.0 88.0 23.0)) (Rect 0.0 0.0 23.0 23.0)) (Matrix 1.0 0.0 0.0 6.0 0.0 1.0 0.0 300.0 0.0 0.0 1.0 0.0 0.0 0.0 0.0 1.0)) (SaveLayer (Empty) (Draw (Draw (Draw (Empty) (Rect 0.0 0.0 88.0 23.0) (Paint (Color 1.0 1.0 1.0 1.0) (SrcOver) (Solid) (IdFilter) 26) (Intersect (Intersect (Intersect (Intersect (Full) (Rect -4.0 0.0 84.0 23.0)) (Rect 0.0 0.0 88.0 23.0)) (Rect 0.0 0.0 23.0 23.0)) (Rect 0.4 0.4 22.6 22.6)) (Matrix 1.0 0.0 0.0 6.0 0.0 1.0 0.0 300.0 0.0 0.0 1.0 0.0 0.0 0.0 0.0 1.0)) (Path 27) (Paint (Color 1.0 0.0 0.0 0.0) (SrcOver) (Solid) (IdFilter) 27) (Intersect (Intersect (Intersect (Intersect (Full) (Rect -4.0 0.0 84.0 23.0)) (Rect 0.0 0.0 88.0 23.0)) (Rect 0.0 0.0 23.0 23.0)) (Rect 0.4 0.4 22.6 22.6)) (Matrix 1.0 0.0 0.0 6.0 0.0 1.0 0.0 300.0 0.0 0.0 1.0 0.0 0.0 0.0 0.0 1.0)) (Path 28) (Paint (Color 1.0 0.0 0.0 0.0) (SrcOver) (Solid) (IdFilter) 28) (Intersect (Intersect (Intersect (Intersect (Full) (Rect -4.0 0.0 84.0 23.0)) (Rect 0.0 0.0 88.0 23.0)) (Rect 0.0 0.0 23.0 23.0)) (Rect 0.4 0.4 22.6 22.6)) (Matrix 1.0 0.0 0.0 6.0 0.0 1.0 0.0 300.0 0.0 0.0 1.0 0.0 0.0 0.0 0.0 1.0)) (Paint (Color 1.0 0.0 0.0 0.0) (SrcOver) (Solid) (LumaFilter) 24)) (Paint (Color 1.0 0.0 0.0 0.0) (DstIn) (Solid) (IdFilter) 19)) (Paint (Color 1.0 0.0 0.0 0.0) (SrcOver) (Solid) (IdFilter) 13)) (SaveLayer (Draw (Draw (Empty) (Path 37) (Paint (Color 1.0 0.0 0.0 0.0) (SrcOver) (Solid) (IdFilter) 37) (Intersect (Intersect (Intersect (Full) (Rect -4.0 0.0 84.0 23.0)) (Rect 0.0 0.0 88.0 23.0)) (Rect 18.0 -1.0 92.0 25.0)) (Matrix 1.0 0.0 0.0 6.0 0.0 1.0 0.0 300.0 0.0 0.0 1.0 0.0 0.0 0.0 0.0 1.0)) (Path 38) (Paint (Color 1.0 0.0 0.0 0.0) (SrcOver) (Stroke) (IdFilter) 38) (Intersect (Intersect (Intersect (Full) (Rect -4.0 0.0 84.0 23.0)) (Rect 0.0 0.0 88.0 23.0)) (Rect 18.0 -1.0 92.0 25.0)) (Matrix 1.0 0.0 0.0 6.0 0.0 1.0 0.0 300.0 0.0 0.0 1.0 0.0 0.0 0.0 0.0 1.0)) (SaveLayer (Empty) (Draw (Draw (Draw (Empty) (Rect 0.0 0.0 88.0 23.0) (Paint (Color 1.0 1.0 1.0 1.0) (SrcOver) (Solid) (IdFilter) 47) (Intersect (Intersect (Intersect (Intersect (Full) (Rect -4.0 0.0 84.0 23.0)) (Rect 0.0 0.0 88.0 23.0)) (Rect 18.0 -1.0 92.0 25.0)) (Rect 18.9455 3.6 91.5995 20.4)) (Matrix 1.0 0.0 0.0 6.0 0.0 1.0 0.0 300.0 0.0 0.0 1.0 0.0 0.0 0.0 0.0 1.0)) (Path 48) (Paint (Color 1.0 0.0 0.0 0.0) (SrcOver) (Solid) (IdFilter) 48) (Intersect (Intersect (Intersect (Intersect (Full) (Rect -4.0 0.0 84.0 23.0)) (Rect 0.0 0.0 88.0 23.0)) (Rect 18.0 -1.0 92.0 25.0)) (Rect 18.9455 3.6 91.5995 20.4)) (Matrix 1.0 0.0 0.0 6.0 0.0 1.0 0.0 300.0 0.0 0.0 1.0 0.0 0.0 0.0 0.0 1.0)) (Path 49) (Paint (Color 1.0 0.0 0.0 0.0) (SrcOver) (Solid) (IdFilter) 49) (Intersect (Intersect (Intersect (Intersect (Full) (Rect -4.0 0.0 84.0 23.0)) (Rect 0.0 0.0 88.0 23.0)) (Rect 18.0 -1.0 92.0 25.0)) (Rect 18.9455 3.6 91.5995 20.4)) (Matrix 1.0 0.0 0.0 6.0 0.0 1.0 0.0 300.0 0.0 0.0 1.0 0.0 0.0 0.0 0.0 1.0)) (Paint (Color 1.0 0.0 0.0 0.0) (SrcOver) (Solid) (LumaFilter) 45)) (Paint (Color 1.0 0.0 0.0 0.0) (DstIn) (Solid) (IdFilter) 40)) (Paint (Color 1.0 0.0 0.0 0.0) (SrcOver) (Solid) (IdFilter) 34)) (Paint (Color 0.30196078431372547 0.0 0.0 0.0) (SrcOver) (Solid) (IdFilter) 12)) (Draw (Draw (Empty) (Path 57) (Paint (Color 1.0 1.0 1.0 1.0) (SrcOver) (Solid) (IdFilter) 57) (Intersect (Intersect (Full) (Rect -4.0 0.0 84.0 23.0)) (Rect 0.0 0.0 88.0 23.0)) (Matrix 1.0 0.0 0.0 6.0 0.0 1.0 0.0 300.0 0.0 0.0 1.0 0.0 0.0 0.0 0.0 1.0)) (Path 58) (Paint (Color 1.0 1.0 1.0 1.0) (SrcOver) (Solid) (IdFilter) 58) (Intersect (Intersect (Full) (Rect -4.0 0.0 84.0 23.0)) (Rect 0.0 0.0 88.0 23.0)) (Matrix 1.0 0.0 0.0 6.0 0.0 1.0 0.0 300.0 0.0 0.0 1.0 0.0 0.0 0.0 0.0 1.0)) (Paint (Color 0.9019607843137255 0.0 0.0 0.0) (SrcOver) (Solid) (IdFilter) 56)) (Paint (Color 0.5019607843137255 0.0 0.0 0.0) (SrcOver) (Solid) (IdFilter) 6)) (SaveLayer (Empty) (Draw (Draw (Empty) (Rect 0.0 0.0 24.0 24.0) (Paint (Color 0.4980392156862745 1.0 1.0 1.0) (SrcOver) (Solid) (IdFilter) 70) (Intersect (Full) (RRect 0.0 0.0 24.0 24.0 12.0 12.0 12.0 12.0)) (Matrix 1.0 0.0 0.0 488.0 0.0 1.0 0.0 295.0 0.0 0.0 1.0 0.0 0.0 0.0 0.0 1.0)) (Path 78) (Paint (Color 1.0 0.0 0.0 0.0) (SrcOver) (Solid) (IdFilter) 78) (Intersect (Intersect (Intersect (Full) (RRect 0.0 0.0 24.0 24.0 12.0 12.0 12.0 12.0)) (Rect 0.0 0.0 24.0 24.0)) (Rect 0.0 0.0 24.0 24.0)) (Matrix 1.2 0.0 0.0 488.0 0.0 1.2 0.0 295.0 0.0 0.0 1.0 0.0 0.0 0.0 0.0 1.0)) (Paint (Color 1.0 0.0 0.0 0.0) (SrcOver) (Solid) (IdFilter) 69)) (Paint (Color 0.6509803921568628 0.0 0.0 0.0) (SrcOver) (Solid) (IdFilter) 66)))
+(run-schedule
+ ;; (repeat 1 (run simp))
+ (saturate (run opt)))
+
+(extract test)
