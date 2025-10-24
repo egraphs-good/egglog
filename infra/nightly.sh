@@ -33,21 +33,30 @@ rm -rf $NIGHTLY_DIR
 # Prepare output directories
 mkdir -p "$NIGHTLY_DIR/data" "$NIGHTLY_DIR/output"
 
-# Run egglog files
 pushd $TOP_DIR
-cargo run --bin timeline -- "$RESOURCE_DIR/test-files" "$NIGHTLY_DIR/data"
 
-# Annotate with time and command info
-python3 timeline/transform.py "$NIGHTLY_DIR/data" "$NIGHTLY_DIR/output/data"
+for DIRPATH in infra/nightly-resources/test-files/*; do
+  if [ -d $DIRPATH ]; then
+    DIRNAME=$(basename $DIRPATH)
+
+    mkdir "$NIGHTLY_DIR/data/$DIRNAME"
+
+    # Run egglog files
+    cargo run --bin timeline -- "$RESOURCE_DIR/test-files/$DIRNAME" "$NIGHTLY_DIR/data/$DIRNAME"
+
+    # Annotate with time and command info
+    python3 timeline/transform.py "$NIGHTLY_DIR/data/$DIRNAME" "$NIGHTLY_DIR/output/data/$DIRNAME"
+  fi
+done
 
 # Plot run and extract time
-python3 timeline/plot_run_vs_extract.py "$NIGHTLY_DIR/output/data" "Herbie: Hamming Benches"
+python3 timeline/plot_run_vs_extract.py "$NIGHTLY_DIR/output/data/herbie-hamming" "Herbie: Hamming Benches"
 popd
 
-pushd $TOP_DIR
-cargo run --release --bin egglog -- tests/
-cp "$TOP_DIR/summary.json" "$NIGHTLY_DIR/output/data/summary.json"
-popd
+# pushd $TOP_DIR
+# cargo run --release --bin egglog -- tests/
+# cp "$TOP_DIR/summary.json" "$NIGHTLY_DIR/output/data/summary.json"
+# popd
 
 
 # Update HTML index page.
@@ -56,4 +65,4 @@ cp "$RESOURCE_DIR/web"/* "$NIGHTLY_DIR/output"
 # No more uploading using nightly-results, that happens automatically by the nightly runner now.
 
 # For local dev
-# cd "$NIGHTLY_DIR/output" && python3 -m http.server 8002
+cd "$NIGHTLY_DIR/output" && python3 -m http.server 8002

@@ -3,7 +3,7 @@ var CHART = null;
 // Top-level load function for the timeline page.
 function load_timeline() {
   // list.json contains a list of all the json files (one for each egg benchmark)
-  fetch("data/list.json")
+  fetch("data/herbie-hamming/list.json")
     .then((response) => response.json())
     .then(buildGlobalData);
 }
@@ -13,7 +13,7 @@ function buildGlobalData(names) {
   const allData = {};
 
   const promises = names.map((name) =>
-    fetch(`data/${name}`)
+    fetch(`data/herbie-hamming/${name}`)
       .then((r) => r.json())
       // @Noah -- why does each data file contain a singleton list?
       // Would there ever be multiple elements? If not, should we make it just the object, not a list?
