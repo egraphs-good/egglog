@@ -1,7 +1,8 @@
 use hashbrown::HashMap;
 
 use crate::{
-    ColumnTy, FunctionId, QueryEntry, RuleBuilder, SourceExpr, SourceSyntax, rule::Variable,
+    ColumnTy, FunctionId, QueryEntry, RuleBuilder, SourceExpr, SourceSyntax,
+    rule::{Variable, VariableId},
     syntax::SyntaxId,
 };
 
@@ -214,16 +215,16 @@ pub struct ExpressionBuilder {
 }
 
 impl ExpressionBuilder {
-    pub fn bind_var(&mut self, name: &'static str, var: Variable) {
+    pub fn bind_var(&mut self, name: &'static str, var: VariableId) {
         if self.vars.contains_key(name) {
             return;
         }
         self.vars.insert(
             name,
-            QueryEntry::Var {
+            QueryEntry::Var(Variable {
                 id: var,
                 name: Some(name.into()),
-            },
+            }),
         );
     }
     pub fn bind_or_lookup_var(
@@ -240,7 +241,7 @@ impl ExpressionBuilder {
         self.syntax_mapping.insert(
             var.clone(),
             self.syntax.add_expr(SourceExpr::Var {
-                id: var.var(),
+                id: var.var().id,
                 ty,
                 name: name.into(),
             }),
@@ -268,7 +269,7 @@ impl ExpressionBuilder {
         self.syntax_mapping.insert(
             var.clone(),
             self.syntax.add_expr(SourceExpr::Var {
-                id: var.var(),
+                id: var.var().id,
                 ty,
                 name: name.into(),
             }),

@@ -6,7 +6,7 @@ use crate::core_relations::Value;
 use crate::numeric_id::{DenseIdMap, NumericId, define_id};
 use indexmap::IndexSet;
 
-use crate::{FunctionId, rule::Variable};
+use crate::{FunctionId, rule::VariableId};
 
 define_id!(pub TermProofId, u32, "an id identifying proofs of terms within a [`ProofStore`]");
 define_id!(pub EqProofId, u32, "an id identifying proofs of equality between two terms within a [`ProofStore`]");
@@ -444,7 +444,7 @@ pub enum TermProof {
     /// the act_pf gives a location in the action of the proposition
     PRule {
         rule_name: Rc<str>,
-        subst: DenseIdMap<Variable, TermId>,
+        subst: DenseIdMap<VariableId, TermId>,
         body_pfs: Vec<Premise>,
         result: TermId,
     },
@@ -469,7 +469,7 @@ pub enum EqProof {
     /// the act_pf gives a location in the action of the proposition
     PRule {
         rule_name: Rc<str>,
-        subst: DenseIdMap<Variable, TermId>,
+        subst: DenseIdMap<VariableId, TermId>,
         body_pfs: Vec<Premise>,
         result_lhs: TermId,
         result_rhs: TermId,

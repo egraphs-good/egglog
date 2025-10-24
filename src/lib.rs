@@ -41,9 +41,10 @@ use egglog_ast::generic_ast::{Change, GenericExpr, Literal};
 use egglog_ast::span::Span;
 use egglog_ast::util::ListDisplay;
 pub use egglog_bridge::FunctionRow;
-use egglog_bridge::{ColumnTy, IterationReport, QueryEntry};
+use egglog_bridge::{ColumnTy, QueryEntry};
 use egglog_core_relations as core_relations;
 use egglog_numeric_id as numeric_id;
+use egglog_reports::{ReportLevel, RunReport};
 use extract::{CostModel, DefaultCost, Extractor, TreeAdditiveCostModel};
 use indexmap::map::Entry;
 use log::{Level, log_enabled};
@@ -66,7 +67,6 @@ use thiserror::Error;
 pub use typechecking::TypeError;
 use typechecking::TypeInfo;
 use util::*;
-use web_time::Duration;
 
 use crate::core::{GenericActionsExt, ResolvedRuleExt};
 
@@ -87,124 +87,6 @@ pub trait Primitive {
     ///
     /// Returns `Some(value)` if the operation succeeds, or `None` if it fails.
     fn apply(&self, exec_state: &mut ExecutionState, args: &[Value]) -> Option<Value>;
-}
-
-/// Running a schedule produces a report of the results.
-/// This includes rough timing information and whether
-/// the database was updated.
-/// Calling `union` on two run reports adds the timing
-/// information together.
-#[derive(Debug, Clone, Default)]
-pub struct RunReport {
-    /// If any changes were made to the database.
-    pub updated: bool,
-    pub search_and_apply_time_per_rule: HashMap<String, Duration>,
-    pub num_matches_per_rule: HashMap<String, usize>,
-    pub search_and_apply_time_per_ruleset: HashMap<String, Duration>,
-    pub merge_time_per_ruleset: HashMap<String, Duration>,
-    pub rebuild_time_per_ruleset: HashMap<String, Duration>,
-}
-
-impl RunReport {
-    /// add a ... and a maximum size to the name
-    /// for printing, since they may be the rule itself
-    fn truncate_rule_name(mut s: String) -> String {
-        // replace newlines in s with a space
-        s = s.replace('\n', " ");
-        if s.len() > 80 {
-            s.truncate(80);
-            s.push_str("...");
-        }
-        s
-    }
-}
-
-impl Display for RunReport {
-    fn fmt(&self, f: &mut Formatter<'_>) -> std::fmt::Result {
-        let mut rule_times_vec: Vec<_> = self.search_and_apply_time_per_rule.iter().collect();
-        rule_times_vec.sort_by_key(|(_, time)| **time);
-
-        for (rule, time) in rule_times_vec {
-            let name = Self::truncate_rule_name(rule.clone());
-            let time = time.as_secs_f64();
-            let num_matches = self.num_matches_per_rule.get(rule).copied().unwrap_or(0);
-            writeln!(
-                f,
-                "Rule {name}: search and apply {time:.3}s, num matches {num_matches}",
-            )?;
-        }
-
-        let rulesets = self
-            .search_and_apply_time_per_ruleset
-            .keys()
-            .chain(self.merge_time_per_ruleset.keys())
-            .chain(self.rebuild_time_per_ruleset.keys())
-            .collect::<IndexSet<_>>();
-
-        for ruleset in rulesets {
-            // print out the search and apply time for rule
-            let search_and_apply_time = self
-                .search_and_apply_time_per_ruleset
-                .get(ruleset)
-                .cloned()
-                .unwrap_or(Duration::ZERO)
-                .as_secs_f64();
-            let merge_time = self
-                .merge_time_per_ruleset
-                .get(ruleset)
-                .cloned()
-                .unwrap_or(Duration::ZERO)
-                .as_secs_f64();
-            let rebuild_time = self
-                .rebuild_time_per_ruleset
-                .get(ruleset)
-                .cloned()
-                .unwrap_or(Duration::ZERO)
-                .as_secs_f64();
-            writeln!(
-                f,
-                "Ruleset {ruleset}: search {search_and_apply_time:.3}s, merge {merge_time:.3}s, rebuild {rebuild_time:.3}s",
-            )?;
-        }
-
-        Ok(())
-    }
-}
-
-impl RunReport {
-    fn union_times(times: &mut HashMap<String, Duration>, other_times: HashMap<String, Duration>) {
-        for (k, v) in other_times {
-            *times.entry(k).or_default() += v;
-        }
-    }
-
-    fn union_counts(counts: &mut HashMap<String, usize>, other_counts: HashMap<String, usize>) {
-        for (k, v) in other_counts {
-            *counts.entry(k).or_default() += v;
-        }
-    }
-
-    /// Merge two reports.
-    pub fn union(&mut self, other: Self) {
-        self.updated |= other.updated;
-        RunReport::union_times(
-            &mut self.search_and_apply_time_per_rule,
-            other.search_and_apply_time_per_rule,
-        );
-        RunReport::union_counts(&mut self.num_matches_per_rule, other.num_matches_per_rule);
-        RunReport::union_times(
-            &mut self.search_and_apply_time_per_ruleset,
-            other.search_and_apply_time_per_ruleset,
-        );
-        RunReport::union_times(
-            &mut self.merge_time_per_ruleset,
-            other.merge_time_per_ruleset,
-        );
-        RunReport::union_times(
-            &mut self.rebuild_time_per_ruleset,
-            other.rebuild_time_per_ruleset,
-        );
-    }
 }
 
 /// A user-defined command output trait.
@@ -856,38 +738,13 @@ impl EGraph {
 
         let mut rule_ids = Vec::new();
         collect_rule_ids(ruleset, &self.rulesets, &mut rule_ids);
+
         let iteration_report = self
             .backend
             .run_rules(&rule_ids)
             .map_err(|e| Error::BackendError(e.to_string()))?;
-        let IterationReport {
-            changed: updated,
-            rule_reports,
-            search_and_apply_time,
-            merge_time,
-            rebuild_time,
-        } = iteration_report;
 
-        let (search_and_apply_time_per_rule, num_matches_per_rule) = rule_reports
-            .into_iter()
-            .map(|(rule, report)| {
-                (
-                    (rule.as_str().into(), report.search_and_apply_time),
-                    (rule.as_str().into(), report.num_matches),
-                )
-            })
-            .unzip();
-
-        let per_ruleset = |x| [(ruleset.to_owned(), x)].into_iter().collect();
-
-        Ok(RunReport {
-            updated,
-            search_and_apply_time_per_rule,
-            num_matches_per_rule,
-            search_and_apply_time_per_ruleset: per_ruleset(search_and_apply_time),
-            merge_time_per_ruleset: per_ruleset(merge_time),
-            rebuild_time_per_ruleset: per_ruleset(rebuild_time),
-        })
+        Ok(RunReport::singleton(ruleset, iteration_report))
     }
 
     fn add_rule(&mut self, rule: ast::ResolvedRule) -> Result<String, Error> {
@@ -1120,12 +977,22 @@ impl EGraph {
                 self.overall_run_report.union(report.clone());
                 return Ok(Some(CommandOutput::RunSchedule(report)));
             }
-            ResolvedNCommand::PrintOverallStatistics => {
-                log::info!("Overall statistics:\n{}", self.overall_run_report);
-                return Ok(Some(CommandOutput::OverallStatistics(
-                    self.overall_run_report.clone(),
-                )));
-            }
+            ResolvedNCommand::PrintOverallStatistics(span, file) => match file {
+                None => {
+                    log::info!("Printed overall statistics");
+                    return Ok(Some(CommandOutput::OverallStatistics(
+                        self.overall_run_report.clone(),
+                    )));
+                }
+                Some(path) => {
+                    let mut file = std::fs::File::create(&path)
+                        .map_err(|e| Error::IoError(path.clone().into(), e, span.clone()))?;
+                    log::info!("Printed overall statistics to json file {}", path);
+
+                    serde_json::to_writer(&mut file, &self.overall_run_report)
+                        .expect("error serializing to json");
+                }
+            },
             ResolvedNCommand::Check(span, facts) => {
                 self.check_facts(&span, &facts)?;
                 log::info!("Checked fact {:?}.", facts);
@@ -1567,6 +1434,10 @@ impl EGraph {
     /// Returns `None` if the function does not exist.
     pub fn get_function(&self, name: &str) -> Option<&Function> {
         self.functions.get(name)
+    }
+
+    pub fn set_report_level(&mut self, level: ReportLevel) {
+        self.backend.set_report_level(level);
     }
 
     /// A basic method for dumping the state of the database to `log::info!`.

@@ -4,6 +4,8 @@ use std::{
     sync::{Arc, Mutex},
 };
 
+use egglog_reports::ReportLevel;
+
 use crate::numeric_id::NumericId;
 
 use crate::{
@@ -78,14 +80,14 @@ fn basic_query() {
     // Num(b, y, t3),
     // =>
     // Num(+ a b, z, 1)
-    let x = add_query.new_var();
-    let y = add_query.new_var();
-    let z = add_query.new_var();
-    let t1 = add_query.new_var();
-    let t2 = add_query.new_var();
-    let t3 = add_query.new_var();
-    let a = add_query.new_var();
-    let b = add_query.new_var();
+    let x = add_query.new_var_named("x");
+    let y = add_query.new_var_named("y");
+    let z = add_query.new_var_named("z");
+    let t1 = add_query.new_var_named("t1");
+    let t2 = add_query.new_var_named("t2");
+    let t3 = add_query.new_var_named("t3");
+    let a = add_query.new_var_named("a");
+    let b = add_query.new_var_named("b");
 
     add_query
         .add_atom(add, &[x.into(), y.into(), z.into(), t1.into()], &[])
@@ -104,14 +106,10 @@ fn basic_query() {
     rules.build_with_description("add");
     let rule_set = rsb.build();
 
-    let report = db.run_rule_set(&rule_set);
+    let report = db.run_rule_set(&rule_set, ReportLevel::TimeOnly);
 
     assert!(report.changed, "{report:?}");
-    assert_eq!(
-        report.rule_reports.get("add").unwrap().num_matches,
-        5,
-        "{report:?}"
-    );
+    assert_eq!(report.num_matches("add"), 5, "{report:?}");
     let num_table = db.get_table(num);
     let all_num = num_table.all();
     let items = num_table.scan(all_num.as_ref());
@@ -168,9 +166,9 @@ fn line_graph_1_test(strat: PlanStrategy) {
     let mut query = rsb.new_rule();
     query.set_plan_strategy(strat);
     // edge(x, y), edge(y, z) => edge(x, z)
-    let x = query.new_var();
-    let y = query.new_var();
-    let z = query.new_var();
+    let x = query.new_var_named("x");
+    let y = query.new_var_named("y");
+    let z = query.new_var_named("z");
     query.add_atom(edges, &[x.into(), y.into()], &[]).unwrap();
     query.add_atom(edges, &[y.into(), z.into()], &[]).unwrap();
     let mut rule = query.build();
@@ -178,7 +176,7 @@ fn line_graph_1_test(strat: PlanStrategy) {
     rule.build();
     let rule_set = rsb.build();
 
-    assert!(db.run_rule_set(&rule_set).changed);
+    assert!(db.run_rule_set(&rule_set, ReportLevel::TimeOnly).changed);
 
     let mut expected = Vec::from_iter(
         nodes
@@ -240,9 +238,9 @@ fn line_graph_2_test(strat: PlanStrategy) {
     let mut query = rsb.new_rule();
     query.set_plan_strategy(strat);
     // edge(x, y), edge(y, z) => edge(x, z) :where y > 1
-    let x = query.new_var();
-    let y = query.new_var();
-    let z = query.new_var();
+    let x = query.new_var_named("x");
+    let y = query.new_var_named("y");
+    let z = query.new_var_named("z");
     query
         .add_atom(
             edges,
@@ -259,7 +257,7 @@ fn line_graph_2_test(strat: PlanStrategy) {
     rule.build();
     let rule_set = rsb.build();
 
-    assert!(db.run_rule_set(&rule_set).changed);
+    assert!(db.run_rule_set(&rule_set, ReportLevel::TimeOnly).changed);
 
     let mut expected = Vec::from_iter(
         nodes.windows(2).map(|x| vec![x[0], x[1]]).chain(
@@ -312,13 +310,13 @@ fn minimal_ac() {
     // Add(x, y, <res>, cur)
     // Add(<res>, z, i2, cur)
 
-    let x = add_assoc.new_var();
-    let y = add_assoc.new_var();
-    let z = add_assoc.new_var();
-    let i1 = add_assoc.new_var();
-    let i2 = add_assoc.new_var();
-    let t1 = add_assoc.new_var();
-    let t2 = add_assoc.new_var();
+    let x = add_assoc.new_var_named("x");
+    let y = add_assoc.new_var_named("y");
+    let z = add_assoc.new_var_named("z");
+    let i1 = add_assoc.new_var_named("i1");
+    let i2 = add_assoc.new_var_named("i2");
+    let t1 = add_assoc.new_var_named("t1");
+    let t2 = add_assoc.new_var_named("t2");
     add_assoc
         .add_atom(
             add,
@@ -369,7 +367,7 @@ fn minimal_ac() {
     rules.build();
     let rule_set = rsb.build();
 
-    db.run_rule_set(&rule_set);
+    db.run_rule_set(&rule_set, ReportLevel::TimeOnly);
     let add_table = db.get_table(add);
     let all_add = add_table.all();
     let items = add_table.scan(all_add.as_ref());
@@ -483,13 +481,13 @@ fn ac_test(strat: PlanStrategy) {
             // Add(x, y, <res>, cur)
             // Add(<res>, z, i2, cur)
 
-            let x = add_assoc.new_var();
-            let y = add_assoc.new_var();
-            let z = add_assoc.new_var();
-            let i1 = add_assoc.new_var();
-            let i2 = add_assoc.new_var();
-            let t1 = add_assoc.new_var();
-            let t2 = add_assoc.new_var();
+            let x = add_assoc.new_var_named("x");
+            let y = add_assoc.new_var_named("y");
+            let z = add_assoc.new_var_named("z");
+            let i1 = add_assoc.new_var_named("i1");
+            let i2 = add_assoc.new_var_named("i2");
+            let t1 = add_assoc.new_var_named("t1");
+            let t2 = add_assoc.new_var_named("t2");
             add_assoc
                 .add_atom(
                     add,
@@ -545,10 +543,10 @@ fn ac_test(strat: PlanStrategy) {
 
         let mut add_comm = rsb.new_rule();
         add_comm.set_plan_strategy(strat);
-        let x = add_comm.new_var();
-        let y = add_comm.new_var();
-        let z = add_comm.new_var();
-        let t1 = add_comm.new_var();
+        let x = add_comm.new_var_named("x");
+        let y = add_comm.new_var_named("y");
+        let z = add_comm.new_var_named("z");
+        let t1 = add_comm.new_var_named("t1");
         // Just look for the current timestamp
         add_comm
             .add_atom(
@@ -567,7 +565,7 @@ fn ac_test(strat: PlanStrategy) {
             .unwrap();
         rules.build();
         let rule_set = rsb.build();
-        db.run_rule_set(&rule_set)
+        db.run_rule_set(&rule_set, ReportLevel::TimeOnly)
     };
 
     let rebuild = |db: &mut Database, cur_ts: Value| -> (Value, bool) {
@@ -592,9 +590,9 @@ fn ac_test(strat: PlanStrategy) {
                 // nonincremental:
                 //  num(x, id, t1) =>
                 //  num(x, id', t1) where id' is canonical
-                let x = num_rebuild.new_var();
-                let id = num_rebuild.new_var();
-                let t1 = num_rebuild.new_var();
+                let x = num_rebuild.new_var_named("x");
+                let id = num_rebuild.new_var_named("id");
+                let t1 = num_rebuild.new_var_named("t1");
                 num_rebuild
                     .add_atom(num, &[x.into(), id.into(), t1.into()], &[])
                     .unwrap();
@@ -608,11 +606,11 @@ fn ac_test(strat: PlanStrategy) {
                     .unwrap();
                 rules.build();
             } else {
-                let x = num_rebuild.new_var();
-                let id = num_rebuild.new_var();
-                let t1 = num_rebuild.new_var();
-                let id_new = num_rebuild.new_var();
-                let t2 = num_rebuild.new_var();
+                let x = num_rebuild.new_var_named("x");
+                let id = num_rebuild.new_var_named("id");
+                let t1 = num_rebuild.new_var_named("t1");
+                let id_new = num_rebuild.new_var_named("id_new");
+                let t2 = num_rebuild.new_var_named("t2");
                 num_rebuild
                     .add_atom(num, &[x.into(), id.into(), t1.into()], &[])
                     .unwrap();
@@ -646,12 +644,12 @@ fn ac_test(strat: PlanStrategy) {
         if incremental_rebuild(uf_size, add_size) {
             let mut add_rebuild_id = rsb.new_rule();
             add_rebuild_id.set_plan_strategy(strat);
-            let x = add_rebuild_id.new_var();
-            let y = add_rebuild_id.new_var();
-            let id = add_rebuild_id.new_var();
-            let t1 = add_rebuild_id.new_var();
-            let id_new = add_rebuild_id.new_var();
-            let t2 = add_rebuild_id.new_var();
+            let x = add_rebuild_id.new_var_named("x");
+            let y = add_rebuild_id.new_var_named("y");
+            let id = add_rebuild_id.new_var_named("id");
+            let t1 = add_rebuild_id.new_var_named("t1");
+            let id_new = add_rebuild_id.new_var_named("id_new");
+            let t2 = add_rebuild_id.new_var_named("t2");
             add_rebuild_id
                 .add_atom(add, &[x.into(), y.into(), id.into(), t1.into()], &[])
                 .unwrap();
@@ -681,17 +679,17 @@ fn ac_test(strat: PlanStrategy) {
                 .unwrap();
             rules.build();
             let rs = rsb.build();
-            changed |= db.run_rule_set(&rs).changed;
+            changed |= db.run_rule_set(&rs, ReportLevel::TimeOnly).changed;
             let mut rsb = db.new_rule_set();
             num_rebuild(&mut rsb, cur_ts, next_ts);
             let mut add_rebuild_l = rsb.new_rule();
             add_rebuild_l.set_plan_strategy(strat);
-            let x = add_rebuild_l.new_var();
-            let y = add_rebuild_l.new_var();
-            let id = add_rebuild_l.new_var();
-            let t1 = add_rebuild_l.new_var();
-            let x_new = add_rebuild_l.new_var();
-            let t2 = add_rebuild_l.new_var();
+            let x = add_rebuild_l.new_var_named("x");
+            let y = add_rebuild_l.new_var_named("y");
+            let id = add_rebuild_l.new_var_named("id");
+            let t1 = add_rebuild_l.new_var_named("t1");
+            let x_new = add_rebuild_l.new_var_named("x_new");
+            let t2 = add_rebuild_l.new_var_named("t2");
             add_rebuild_l
                 .add_atom(add, &[x.into(), y.into(), id.into(), t1.into()], &[])
                 .unwrap();
@@ -722,17 +720,17 @@ fn ac_test(strat: PlanStrategy) {
             rules.build();
 
             let rs = rsb.build();
-            changed |= db.run_rule_set(&rs).changed;
+            changed |= db.run_rule_set(&rs, ReportLevel::TimeOnly).changed;
             let mut rsb = db.new_rule_set();
             num_rebuild(&mut rsb, cur_ts, next_ts);
             let mut add_rebuild_r = rsb.new_rule();
             add_rebuild_r.set_plan_strategy(strat);
-            let x = add_rebuild_r.new_var();
-            let y = add_rebuild_r.new_var();
-            let id = add_rebuild_r.new_var();
-            let t1 = add_rebuild_r.new_var();
-            let y_new = add_rebuild_r.new_var();
-            let t2 = add_rebuild_r.new_var();
+            let x = add_rebuild_r.new_var_named("x");
+            let y = add_rebuild_r.new_var_named("y");
+            let id = add_rebuild_r.new_var_named("id");
+            let t1 = add_rebuild_r.new_var_named("t1");
+            let y_new = add_rebuild_r.new_var_named("y_new");
+            let t2 = add_rebuild_r.new_var_named("t2");
             add_rebuild_r
                 .add_atom(add, &[x.into(), y.into(), id.into(), t1.into()], &[])
                 .unwrap();
@@ -762,7 +760,7 @@ fn ac_test(strat: PlanStrategy) {
                 .unwrap();
             rules.build();
             let rs = rsb.build();
-            changed |= db.run_rule_set(&rs).changed;
+            changed |= db.run_rule_set(&rs, ReportLevel::TimeOnly).changed;
         } else {
             // nonincremental. Just run one rule and recanonicalize everything.
             // add(x, y, id, t1) =>
@@ -774,10 +772,10 @@ fn ac_test(strat: PlanStrategy) {
             //   insert add(x', y', id', cur)
             let mut rebuild = rsb.new_rule();
             rebuild.set_plan_strategy(strat);
-            let x = rebuild.new_var();
-            let y = rebuild.new_var();
-            let id = rebuild.new_var();
-            let t1 = rebuild.new_var();
+            let x = rebuild.new_var_named("x");
+            let y = rebuild.new_var_named("y");
+            let id = rebuild.new_var_named("id");
+            let t1 = rebuild.new_var_named("t1");
             rebuild
                 .add_atom(add, &[x.into(), y.into(), id.into(), t1.into()], &[])
                 .unwrap();
@@ -811,7 +809,7 @@ fn ac_test(strat: PlanStrategy) {
                 .unwrap();
             rules.build();
             let rs = rsb.build();
-            changed |= db.run_rule_set(&rs).changed;
+            changed |= db.run_rule_set(&rs, ReportLevel::TimeOnly).changed;
         }
         (next_ts, changed)
     };
@@ -973,8 +971,8 @@ fn lookup_with_fallback_partial_success() {
 
     let mut rsb = RuleSetBuilder::new(&mut db);
     let mut query = rsb.new_rule();
-    let x = query.new_var();
-    let y = query.new_var();
+    let x = query.new_var_named("x");
+    let y = query.new_var_named("y");
     query.add_atom(g, &[x.into(), y.into()], &[]).unwrap();
     let mut rb = query.build();
     let res = rb
@@ -984,7 +982,7 @@ fn lookup_with_fallback_partial_success() {
     rb.insert(h, &[res.into(), y.into()]).unwrap();
     rb.build();
     let rs = rsb.build();
-    assert!(db.run_rule_set(&rs).changed);
+    assert!(db.run_rule_set(&rs, ReportLevel::TimeOnly).changed);
 
     let h = db.get_table(h);
     let all = h.all();
@@ -1062,8 +1060,8 @@ fn call_external_with_fallback() {
 
     let mut rsb = RuleSetBuilder::new(&mut db);
     let mut query = rsb.new_rule();
-    let x = query.new_var();
-    let y = query.new_var();
+    let x = query.new_var_named("x");
+    let y = query.new_var_named("y");
     query.add_atom(f, &[x.into(), y.into()], &[]).unwrap();
     let mut rb = query.build();
     let res = rb
@@ -1072,7 +1070,7 @@ fn call_external_with_fallback() {
     rb.insert(h, &[res.into(), y.into()]).unwrap();
     rb.build();
     let rs = rsb.build();
-    assert!(db.run_rule_set(&rs).changed);
+    assert!(db.run_rule_set(&rs, ReportLevel::TimeOnly).changed);
 
     let h = db.get_table(h);
     let all = h.all();

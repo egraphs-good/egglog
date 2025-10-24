@@ -225,7 +225,9 @@ impl EGraph {
                     sub_rulesets.clone(),
                 )
             }
-            NCommand::PrintOverallStatistics => ResolvedNCommand::PrintOverallStatistics,
+            NCommand::PrintOverallStatistics(span, file) => {
+                ResolvedNCommand::PrintOverallStatistics(span.clone(), file.clone())
+            }
             NCommand::PrintFunction(span, table, size, file, mode) => {
                 ResolvedNCommand::PrintFunction(
                     span.clone(),

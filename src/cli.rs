@@ -44,6 +44,11 @@ struct Args {
     /// Number of threads to use for parallel execution. Passing `0` will use the maximum
     /// inferred parallelism available on the current system.
     threads: usize,
+    #[arg(value_enum)]
+    #[clap(long, default_value_t = ReportLevel::TimeOnly)]
+    report_level: ReportLevel,
+    #[clap(long)]
+    save_report: Option<PathBuf>,
 }
 
 /// Start a command-line interface for the E-graph.
@@ -69,6 +74,7 @@ pub fn cli(mut egraph: EGraph) {
     );
     egraph.fact_directory.clone_from(&args.fact_directory);
     egraph.seminaive = !args.naive;
+    egraph.set_report_level(args.report_level);
     if args.inputs.is_empty() {
         match egraph.repl(args.mode) {
             Ok(()) => std::process::exit(0),
@@ -141,6 +147,17 @@ pub fn cli(mut egraph: EGraph) {
                 }
             }
         }
+    }
+
+    if let Some(report_path) = args.save_report {
+        let report = egraph.get_overall_run_report();
+        serde_json::to_writer(
+            std::fs::File::create(&report_path)
+                .unwrap_or_else(|_| panic!("Failed to create report file at {report_path:?}")),
+            &report,
+        )
+        .expect("Failed to serialize report");
+        log::info!("Saved report to {report_path:?}");
     }
 
     // no need to drop the egraph if we are going to exit

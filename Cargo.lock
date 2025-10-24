@@ -485,6 +485,7 @@ dependencies = [
  "egglog-bridge",
  "egglog-core-relations",
  "egglog-numeric-id",
+ "egglog-reports",
  "egraph-serialize",
  "env_logger",
  "glob",
@@ -498,6 +499,7 @@ dependencies = [
  "ordered-float",
  "rayon",
  "rustc-hash",
+ "serde_json",
  "thiserror",
  "web-time",
 ]
@@ -525,6 +527,7 @@ dependencies = [
  "dyn-clone",
  "egglog-core-relations",
  "egglog-numeric-id",
+ "egglog-reports",
  "egglog-union-find",
  "env_logger",
  "hashbrown 0.16.0",
@@ -558,11 +561,13 @@ dependencies = [
  "anyhow",
  "bumpalo",
  "codspeed-divan-compat",
+ "crossbeam",
  "crossbeam-queue",
  "dashmap",
  "dyn-clone",
  "egglog-concurrency",
  "egglog-numeric-id",
+ "egglog-reports",
  "egglog-union-find",
  "fixedbitset",
  "hashbrown 0.16.0",
@@ -585,6 +590,19 @@ name = "egglog-numeric-id"
 version = "1.0.0"
 dependencies = [
  "rayon",
+]
+
+[[package]]
+name = "egglog-reports"
+version = "1.0.0"
+dependencies = [
+ "clap",
+ "hashbrown 0.16.0",
+ "indexmap",
+ "rustc-hash",
+ "serde",
+ "serde_json",
+ "web-time",
 ]
 
 [[package]]
@@ -773,6 +791,7 @@ dependencies = [
  "allocator-api2",
  "equivalent",
  "foldhash 0.2.0",
+ "serde",
 ]
 
 [[package]]

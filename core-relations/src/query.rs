@@ -21,10 +21,19 @@ use crate::{
 
 define_id!(pub RuleId, u32, "An identifier for a rule in a rule set");
 
+/// Resolves variables and atoms in a rule to their string names.
+#[allow(dead_code)]
+#[derive(Debug, Clone)]
+pub struct SymbolMap {
+    pub atoms: HashMap<AtomId, Arc<str>>,
+    pub vars: HashMap<Variable, Arc<str>>,
+}
+
 /// A cached plan for a given rule.
 pub struct CachedPlan {
     plan: Plan,
-    desc: String,
+    desc: Arc<str>,
+    symbol_map: SymbolMap,
     actions: ActionInfo,
 }
 
@@ -46,13 +55,13 @@ pub struct RuleSet {
     /// accounting logic assumes that rules and actions stand in a bijection. If we relaxed that
     /// later on, most of the core logic would still work but the accounting logic could get more
     /// complex.
-    pub(crate) plans: IdVec<RuleId, (Plan, String /* description */, ActionId)>,
+    pub(crate) plans: IdVec<RuleId, (Plan, Arc<str> /* description */, SymbolMap, ActionId)>,
     pub(crate) actions: DenseIdMap<ActionId, ActionInfo>,
 }
 
 impl RuleSet {
     pub fn build_cached_plan(&self, rule_id: RuleId) -> CachedPlan {
-        let (plan, desc, action_id) = self.plans.get(rule_id).expect("rule must exist");
+        let (plan, desc, symbol_map, action_id) = self.plans.get(rule_id).expect("rule must exist");
         let actions = self
             .actions
             .get(*action_id)
@@ -61,12 +70,22 @@ impl RuleSet {
         CachedPlan {
             plan: plan.clone(),
             desc: desc.clone(),
+            symbol_map: symbol_map.clone(),
             actions,
         }
     }
 }
 
 /// Builder for a [`RuleSet`].
+///
+/// There are in general two ways to add rules to a rule set:
+///
+/// 1. Use the QueryBuilder and RuleBuilder APIs to construct a rule from scratch.
+/// 2. Use a previously cached plan and add extra constraints to it.
+///
+/// The pattern this is used by egglog is as follows: An egglog rule is first compiled to a cached
+/// plan using builder patterns at declaration time, and each time the rule is run, it is added to
+/// a ruleset using the cached plan and possibly some extra constraints (e.g., timestamp).
 ///
 /// See [`Database::new_rule_set`] for more information.
 pub struct RuleSetBuilder<'outer> {
@@ -162,9 +181,12 @@ impl<'outer> RuleSetBuilder<'outer> {
             });
         }
 
-        self.rule_set
-            .plans
-            .push((plan, cached.desc.clone(), action_id))
+        self.rule_set.plans.push((
+            plan,
+            cached.desc.clone(),
+            cached.symbol_map.clone(),
+            action_id,
+        ))
     }
 
     /// Build the ruleset.
@@ -200,6 +222,16 @@ impl<'outer, 'a> QueryBuilder<'outer, 'a> {
             occurrences: Default::default(),
             used_in_rhs: false,
             defined_in_rhs: false,
+            name: None,
+        })
+    }
+
+    pub fn new_var_named(&mut self, name: &str) -> Variable {
+        self.query.var_info.push(VarInfo {
+            occurrences: Default::default(),
+            used_in_rhs: false,
+            defined_in_rhs: false,
+            name: Some(name.into()),
         })
     }
 
@@ -225,7 +257,7 @@ impl<'outer, 'a> QueryBuilder<'outer, 'a> {
     /// nevertheless is not recommended.
     ///
     /// The returned `AtomId` can be used to refer to this atom when adding constraints in
-    /// [`RuleSetBuilder::rule_from_cached_plan`].
+    /// [`RuleSetBuilder::add_rule_from_cached_plan`].
     ///
     /// # Panics
     /// Like most methods that take a [`TableId`], this method will panic if the
@@ -383,20 +415,46 @@ pub struct RuleBuilder<'outer, 'a> {
 }
 
 impl RuleBuilder<'_, '_> {
+    fn table_info(&self, table: TableId) -> &TableInfo {
+        self.qb.rsb.db.get_table_info(table)
+    }
+
     /// Build the finished query.
     pub fn build(self) -> RuleId {
         self.build_with_description("")
     }
+
+    fn build_symbol_map(&self) -> SymbolMap {
+        let var_info = &self.qb.query.var_info;
+        SymbolMap {
+            atoms: self
+                .qb
+                .query
+                .atoms
+                .iter()
+                .filter_map(|(id, atom)| {
+                    let name = self.table_info(atom.table).name.clone();
+                    name.map(|name| (id, name))
+                })
+                .collect(),
+            vars: var_info
+                .iter()
+                .filter_map(|(id, info)| info.name.as_ref().map(|name| (id, name.clone())))
+                .collect(),
+        }
+    }
+
     pub fn build_with_description(mut self, desc: impl Into<String>) -> RuleId {
+        let var_info = &self.qb.query.var_info;
+        let symbol_map = self.build_symbol_map();
         // Generate an id for our actions and slot them in.
-        let used_vars =
-            SmallVec::from_iter(self.qb.query.var_info.iter().filter_map(|(v, info)| {
-                if info.used_in_rhs && !info.defined_in_rhs {
-                    Some(v)
-                } else {
-                    None
-                }
-            }));
+        let used_vars = SmallVec::from_iter(var_info.iter().filter_map(|(v, info)| {
+            if info.used_in_rhs && !info.defined_in_rhs {
+                Some(v)
+            } else {
+                None
+            }
+        }));
         let action_id = self.qb.rsb.rule_set.actions.push(ActionInfo {
             instrs: Arc::new(self.qb.instrs),
             used_vars,
@@ -404,12 +462,13 @@ impl RuleBuilder<'_, '_> {
         self.qb.query.action = action_id;
         // Plan the query
         let plan = self.qb.rsb.db.plan_query(self.qb.query);
+        let desc: String = desc.into();
         // Add it to the ruleset.
         self.qb
             .rsb
             .rule_set
             .plans
-            .push((plan, desc.into(), action_id))
+            .push((plan, desc.into(), symbol_map, action_id))
     }
 
     /// Return a variable containing the result of reading the specified counter.
@@ -433,13 +492,7 @@ impl RuleBuilder<'_, '_> {
         default_vals: &[WriteVal],
         dst_col: ColumnId,
     ) -> Result<Variable, QueryError> {
-        let table_info = self
-            .qb
-            .rsb
-            .db
-            .tables
-            .get(table)
-            .expect("table must be declared in the current database");
+        let table_info = self.table_info(table);
         self.validate_keys(table, table_info, args)?;
         self.validate_vals(table, table_info, default_vals.iter())?;
         let res = self.qb.new_var();
@@ -473,13 +526,7 @@ impl RuleBuilder<'_, '_> {
         default: QueryEntry,
         dst_col: ColumnId,
     ) -> Result<Variable, QueryError> {
-        let table_info = self
-            .qb
-            .rsb
-            .db
-            .tables
-            .get(table)
-            .expect("table must be declared in the current database");
+        let table_info = self.table_info(table);
         self.validate_keys(table, table_info, args)?;
         let res = self.qb.new_var();
         self.qb.instrs.push(Instr::LookupWithDefault {
@@ -507,13 +554,7 @@ impl RuleBuilder<'_, '_> {
         args: &[QueryEntry],
         dst_col: ColumnId,
     ) -> Result<Variable, QueryError> {
-        let table_info = self
-            .qb
-            .rsb
-            .db
-            .tables
-            .get(table)
-            .expect("table must be declared in the current database");
+        let table_info = self.table_info(table);
         self.validate_keys(table, table_info, args)?;
         let res = self.qb.new_var();
         self.qb.instrs.push(Instr::Lookup {
@@ -529,13 +570,7 @@ impl RuleBuilder<'_, '_> {
 
     /// Insert the specified values into the given table.
     pub fn insert(&mut self, table: TableId, vals: &[QueryEntry]) -> Result<(), QueryError> {
-        let table_info = self
-            .qb
-            .rsb
-            .db
-            .tables
-            .get(table)
-            .expect("table must be declared in the current database");
+        let table_info = self.table_info(table);
         self.validate_row(table, table_info, vals)?;
         self.qb.instrs.push(Instr::Insert {
             table,
@@ -553,13 +588,7 @@ impl RuleBuilder<'_, '_> {
         r: QueryEntry,
         vals: &[QueryEntry],
     ) -> Result<(), QueryError> {
-        let table_info = self
-            .qb
-            .rsb
-            .db
-            .tables
-            .get(table)
-            .expect("table must be declared in the current database");
+        let table_info = self.table_info(table);
         self.validate_row(table, table_info, vals)?;
         self.qb.instrs.push(Instr::InsertIfEq {
             table,
@@ -574,13 +603,7 @@ impl RuleBuilder<'_, '_> {
 
     /// Remove the specified entry from the given table, if it is there.
     pub fn remove(&mut self, table: TableId, args: &[QueryEntry]) -> Result<(), QueryError> {
-        let table_info = self
-            .qb
-            .rsb
-            .db
-            .tables
-            .get(table)
-            .expect("table must be declared in the current database");
+        let table_info = self.table_info(table);
         self.validate_keys(table, table_info, args)?;
         self.qb.instrs.push(Instr::Remove {
             table,
@@ -618,13 +641,7 @@ impl RuleBuilder<'_, '_> {
         func: ExternalFunctionId,
         func_args: &[QueryEntry],
     ) -> Result<Variable, QueryError> {
-        let table_info = self
-            .qb
-            .rsb
-            .db
-            .tables
-            .get(table)
-            .expect("table must be declared in the current database");
+        let table_info = self.table_info(table);
         self.validate_keys(table, table_info, key)?;
         let res = self.qb.new_var();
         self.qb.instrs.push(Instr::LookupWithFallback {

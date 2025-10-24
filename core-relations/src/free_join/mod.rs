@@ -11,7 +11,6 @@ use crate::numeric_id::{DenseIdMap, DenseIdMapWithReuse, NumericId, define_id};
 use egglog_concurrency::ResettableOnceLock;
 use rayon::prelude::*;
 use smallvec::SmallVec;
-use web_time::Duration;
 
 use crate::{
     BaseValues, ContainerValues, PoolSet, QueryEntry, TupleIndex, Value,
@@ -104,16 +103,32 @@ pub(crate) struct VarInfo {
     /// rule.
     pub(crate) used_in_rhs: bool,
     pub(crate) defined_in_rhs: bool,
+    pub(crate) name: Option<Arc<str>>,
 }
 
 pub(crate) type HashIndex = Arc<ResettableOnceLock<Index<TupleIndex>>>;
 pub(crate) type HashColumnIndex = Arc<ResettableOnceLock<Index<ColumnIndex>>>;
 
 pub struct TableInfo {
+    pub(crate) name: Option<Arc<str>>,
     pub(crate) spec: TableSpec,
     pub(crate) table: WrappedTable,
     pub(crate) indexes: DashMap<SmallVec<[ColumnId; 4]>, HashIndex>,
     pub(crate) column_indexes: DashMap<ColumnId, HashColumnIndex>,
+}
+
+impl TableInfo {
+    pub fn table(&self) -> &WrappedTable {
+        &self.table
+    }
+
+    pub fn name(&self) -> Option<&str> {
+        self.name.as_deref()
+    }
+
+    pub fn spec(&self) -> &TableSpec {
+        &self.spec
+    }
 }
 
 impl Clone for TableInfo {
@@ -135,6 +150,7 @@ impl Clone for TableInfo {
                 .collect()
         }
         TableInfo {
+            name: self.name.clone(),
             spec: self.spec.clone(),
             table: self.table.dyn_clone(),
             indexes: deep_clone_map(&self.indexes, self.table.as_ref()),
@@ -254,29 +270,6 @@ impl Counters {
         // We synchronize with `read_counter` but not with other increments.
         // NB: we may want to experiment with Ordering::Relaxed here.
         self.0[ctr].fetch_add(1, Ordering::Release)
-    }
-}
-
-#[derive(Debug, Default)]
-pub struct RuleSetReport {
-    pub changed: bool,
-    pub rule_reports: DashMap<String, RuleReport>,
-    pub search_and_apply_time: Duration,
-    pub merge_time: Duration,
-}
-
-#[derive(Debug, Default)]
-pub struct RuleReport {
-    pub search_and_apply_time: Duration,
-    pub num_matches: usize,
-}
-
-impl RuleReport {
-    pub fn union(&self, other: &RuleReport) -> RuleReport {
-        RuleReport {
-            search_and_apply_time: self.search_and_apply_time + other.search_and_apply_time,
-            num_matches: self.num_matches + other.num_matches,
-        }
     }
 }
 
@@ -571,9 +564,30 @@ impl Database {
         read_deps: impl IntoIterator<Item = TableId>,
         write_deps: impl IntoIterator<Item = TableId>,
     ) -> TableId {
+        self.add_table_impl(table, None, read_deps, write_deps)
+    }
+
+    pub fn add_table_named<T: Table + Sized + 'static>(
+        &mut self,
+        table: T,
+        name: Arc<str>,
+        read_deps: impl IntoIterator<Item = TableId>,
+        write_deps: impl IntoIterator<Item = TableId>,
+    ) -> TableId {
+        self.add_table_impl(table, Some(name), read_deps, write_deps)
+    }
+
+    fn add_table_impl<T: Table + Sized + 'static>(
+        &mut self,
+        table: T,
+        name: Option<Arc<str>>,
+        read_deps: impl IntoIterator<Item = TableId>,
+        write_deps: impl IntoIterator<Item = TableId>,
+    ) -> TableId {
         let spec = table.spec();
         let table = WrappedTable::new(table);
         let res = self.tables.push(TableInfo {
+            name,
             spec,
             table,
             indexes: Default::default(),
@@ -592,6 +606,12 @@ impl Database {
             .get(id)
             .expect("must access a table that has been declared in this database")
             .table
+    }
+
+    pub fn get_table_info(&self, id: TableId) -> &TableInfo {
+        self.tables
+            .get(id)
+            .expect("must access a table that has been declared in this database")
     }
 
     pub(crate) fn process_constraints(
