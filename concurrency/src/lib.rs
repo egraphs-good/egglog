@@ -43,6 +43,15 @@ pub struct ReadOptimizedLock<T> {
     data: UnsafeCell<T>,
 }
 
+impl<T: Default> Default for ReadOptimizedLock<T> {
+    fn default() -> Self {
+        Self {
+            token: ArcSwap::from_pointee(ReadToken::ReadOk(TriggerWhenDone::default())),
+            data: Default::default(),
+        }
+    }
+}
+
 /// A handle granting read access to the data guarded by a [`ReadOptimizedLock`].
 pub struct MutexReader<'lock, T> {
     data: &'lock T,
