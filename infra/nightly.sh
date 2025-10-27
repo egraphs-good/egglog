@@ -51,10 +51,10 @@ done
 
 popd
 
-# pushd $TOP_DIR
-# cargo run --release --bin egglog -- tests/
-# cp "$TOP_DIR/summary.json" "$NIGHTLY_DIR/output/data/summary.json"
-# popd
+pushd $TOP_DIR
+cargo run --release --bin egglog -- tests/
+cp "$TOP_DIR/summary.json" "$NIGHTLY_DIR/output/data/summary.json"
+popd
 
 
 # Update HTML index page.
