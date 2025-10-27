@@ -49,8 +49,6 @@ for DIRPATH in infra/nightly-resources/test-files/*; do
   fi
 done
 
-# Plot run and extract time
-python3 timeline/plot_run_vs_extract.py "$NIGHTLY_DIR/output/data/herbie-hamming" "Herbie: Hamming Benches"
 popd
 
 # pushd $TOP_DIR
