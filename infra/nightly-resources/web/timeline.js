@@ -1,30 +1,55 @@
-var AGGREGATED_DATA = {};
 var CHART = null;
+
+var BENCH_SUITES = [
+  {
+    name: "Herbie",
+    dir: "herbie-hamming",
+    color: "blue",
+  },
+  {
+    name: "Easteregg",
+    dir: "easteregg",
+    color: "red",
+  }
+];
+
 // Top-level load function for the timeline page.
 function load_timeline() {
-  // list.json contains a list of all the json files (one for each egg benchmark)
-  fetch("data/herbie-hamming/list.json")
-    .then((response) => response.json())
-    .then(buildGlobalData);
+  const suitePromises = BENCH_SUITES.map((suite) => {
+    return fetch(`data/${suite.dir}/list.json`)
+      .then((response) => response.json())
+      .then((names) => {
+        return getDatapoints(suite.dir, names).then((data) => {
+          return {
+            ...suite,
+            data: data,
+          };
+        });
+      });
+  });
+
+  Promise.all(suitePromises).then((resolvedSuites) => {
+    BENCH_SUITES = resolvedSuites;
+    plot();
+  });
 }
 
-function buildGlobalData(names) {
+function getDatapoints(suite, names) {
   // map from filename to timeline data
   const allData = {};
+  const aggregatedData = {};
 
   const promises = names.map((name) =>
-    fetch(`data/herbie-hamming/${name}`)
+    fetch(`data/${suite}/${name}`)
       .then((r) => r.json())
-      // @Noah -- why does each data file contain a singleton list?
-      // Would there ever be multiple elements? If not, should we make it just the object, not a list?
       .then((d) => (allData[name] = d[0]))
   );
 
-  Promise.all(promises).then(() => {
+  return Promise.all(promises).then(() => {
     const RUN_CMDS = ["run", "run-schedule"];
     const EXT_CMDS = ["extract"];
     Object.keys(allData).forEach((filename) => {
-      times = {
+      const times = {
         runs: [],
         exts: [],
         others: [],
@@ -43,10 +68,9 @@ function buildGlobalData(names) {
           times.others.push(ms);
         }
       });
-      AGGREGATED_DATA[filename] = times;
+      aggregatedData[filename] = times;
     });
-
-    plot();
+    return aggregatedData;
   });
 }
 
@@ -76,21 +100,19 @@ function plot() {
 
   const mode = document.querySelector('input[name="mode"]:checked').value;
 
-  const points = Object.values(AGGREGATED_DATA).map((entry) => {
-    return { x: aggregate(entry.runs, mode), y: aggregate(entry.exts, mode) };
-  });
+  const datasets = BENCH_SUITES.map((suite) => { return {
+    label: suite.name,
+    data: Object.values(suite.data).map((entry) => {
+      return { x: aggregate(entry.runs, mode), y: aggregate(entry.exts, mode) };
+    }),
+    backgroundColor: suite.color,
+    pointRadius: 4,
+  };});
 
   CHART = new Chart(ctx, {
     type: "scatter",
     data: {
-      datasets: [
-        {
-          label: "Herbie",
-          data: points,
-          backgroundColor: "blue",
-          pointRadius: 4,
-        },
-      ],
+      datasets: datasets,
     },
     options: {
       title: {

@@ -65,4 +65,4 @@ cp "$RESOURCE_DIR/web"/* "$NIGHTLY_DIR/output"
 # No more uploading using nightly-results, that happens automatically by the nightly runner now.
 
 # For local dev
-cd "$NIGHTLY_DIR/output" && python3 -m http.server 8002
+# cd "$NIGHTLY_DIR/output" && python3 -m http.server 8002
