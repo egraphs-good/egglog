@@ -211,22 +211,3 @@ impl SubsetTracker {
         res
     }
 }
-
-/// Iterate over the contents of a `DashMap`, using a lower-overhead method than the built-in
-/// iterators available from `DashMap`.
-pub(crate) fn iter_dashmap_bulk<K: Hash + Eq, V>(
-    map: &mut DashMap<K, V>,
-    mut f: impl FnMut(&K, &mut V),
-) {
-    let shards = map.shards_mut();
-    for shard in shards {
-        let mut_shard = shard.get_mut();
-        // SAFETY: this iterator does not outlive `shard`: it is not returned from this function
-        // and `f` cannot store it anywhere as it takes an arbitrary lifetime.
-        for entry in unsafe { mut_shard.iter() } {
-            // SAFETY: we have exclusive access to the whole table.
-            let (k, v) = unsafe { entry.as_mut() };
-            f(k, v.get_mut());
-        }
-    }
-}

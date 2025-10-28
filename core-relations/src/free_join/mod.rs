@@ -7,7 +7,10 @@ use std::{
     },
 };
 
-use crate::numeric_id::{DenseIdMap, DenseIdMapWithReuse, NumericId, define_id};
+use crate::{
+    hash_index::IndexCatalog,
+    numeric_id::{DenseIdMap, DenseIdMapWithReuse, NumericId, define_id},
+};
 use egglog_concurrency::ResettableOnceLock;
 use rayon::prelude::*;
 use smallvec::SmallVec;
@@ -18,7 +21,6 @@ use crate::{
         Bindings, DbView,
         mask::{Mask, MaskIter, ValueSource},
     },
-    common::{DashMap, iter_dashmap_bulk},
     dependency_graph::DependencyGraph,
     hash_index::{ColumnIndex, Index, IndexBase},
     offsets::Subset,
@@ -113,8 +115,8 @@ pub struct TableInfo {
     pub(crate) name: Option<Arc<str>>,
     pub(crate) spec: TableSpec,
     pub(crate) table: WrappedTable,
-    pub(crate) indexes: DashMap<SmallVec<[ColumnId; 4]>, HashIndex>,
-    pub(crate) column_indexes: DashMap<ColumnId, HashColumnIndex>,
+    pub(crate) indexes: IndexCatalog<SmallVec<[ColumnId; 4]>, HashIndex>,
+    pub(crate) column_indexes: IndexCatalog<ColumnId, HashColumnIndex>,
 }
 
 impl TableInfo {
@@ -134,20 +136,18 @@ impl TableInfo {
 impl Clone for TableInfo {
     fn clone(&self) -> Self {
         fn deep_clone_map<K: Clone + std::hash::Hash + Eq, TI: IndexBase + Clone>(
-            map: &DashMap<K, Arc<ResettableOnceLock<Index<TI>>>>,
+            map: &IndexCatalog<K, Arc<ResettableOnceLock<Index<TI>>>>,
             table: WrappedTableRef,
-        ) -> DashMap<K, Arc<ResettableOnceLock<Index<TI>>>> {
-            map.iter()
-                .map(|table_ref| {
-                    let (k, v) = table_ref.pair();
-                    let v: Index<TI> = v
-                        .get_or_update(|index| {
-                            index.refresh(table);
-                        })
-                        .clone();
-                    (k.clone(), Arc::new(ResettableOnceLock::new(v)))
-                })
-                .collect()
+        ) -> IndexCatalog<K, Arc<ResettableOnceLock<Index<TI>>>> {
+            map.map(|table_ref| {
+                let (k, v) = table_ref;
+                let v: Index<TI> = v
+                    .get_or_update(|index| {
+                        index.refresh(table);
+                    })
+                    .clone();
+                (k.clone(), Arc::new(ResettableOnceLock::new(v)))
+            })
         }
         TableInfo {
             name: self.name.clone(),
@@ -517,10 +517,10 @@ impl Database {
         // Reset all indexes to force an update on the next access.
         let mut size_estimate = 0;
         for (_, info) in self.tables.iter_mut() {
-            iter_dashmap_bulk(&mut info.column_indexes, |_, ci| {
-                Arc::get_mut(ci).unwrap().reset();
+            info.column_indexes.update(|_, ti| {
+                Arc::get_mut(ti).unwrap().reset();
             });
-            iter_dashmap_bulk(&mut info.indexes, |_, ti| {
+            info.indexes.update(|_, ti| {
                 Arc::get_mut(ti).unwrap().reset();
             });
             size_estimate += info.table.len();
@@ -590,8 +590,8 @@ impl Database {
             name,
             spec,
             table,
-            indexes: Default::default(),
-            column_indexes: Default::default(),
+            indexes: IndexCatalog::new(),
+            column_indexes: IndexCatalog::new(),
         });
         self.deps.add_table(res, read_deps, write_deps);
         res
@@ -690,16 +690,12 @@ impl Drop for Database {
 /// This is in a separate function to allow us to reuse it while already
 /// borrowing a `TableInfo`.
 fn get_index_from_tableinfo(table_info: &TableInfo, cols: &[ColumnId]) -> HashIndex {
-    let index: Arc<_> = table_info
-        .indexes
-        .entry(cols.into())
-        .or_insert_with(|| {
-            Arc::new(ResettableOnceLock::new(Index::new(
-                cols.to_vec(),
-                TupleIndex::new(cols.len()),
-            )))
-        })
-        .clone();
+    let index: Arc<_> = table_info.indexes.get_or_insert(cols.into(), || {
+        Arc::new(ResettableOnceLock::new(Index::new(
+            cols.to_vec(),
+            TupleIndex::new(cols.len()),
+        )))
+    });
     index.get_or_update(|index| {
         index.refresh(table_info.table.as_ref());
     });
@@ -716,16 +712,12 @@ fn get_index_from_tableinfo(table_info: &TableInfo, cols: &[ColumnId]) -> HashIn
 ///
 /// This is the single-column analog to [`get_index_from_tableinfo`].
 fn get_column_index_from_tableinfo(table_info: &TableInfo, col: ColumnId) -> HashColumnIndex {
-    let index: Arc<_> = table_info
-        .column_indexes
-        .entry(col)
-        .or_insert_with(|| {
-            Arc::new(ResettableOnceLock::new(Index::new(
-                vec![col],
-                ColumnIndex::new(),
-            )))
-        })
-        .clone();
+    let index: Arc<_> = table_info.column_indexes.get_or_insert(col, || {
+        Arc::new(ResettableOnceLock::new(Index::new(
+            vec![col],
+            ColumnIndex::new(),
+        )))
+    });
     index.get_or_update(|index| {
         index.refresh(table_info.table.as_ref());
     });

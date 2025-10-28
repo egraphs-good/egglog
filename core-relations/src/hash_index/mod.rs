@@ -6,7 +6,7 @@ use std::{
 };
 
 use crate::numeric_id::{IdVec, NumericId, define_id};
-use egglog_concurrency::Notification;
+use egglog_concurrency::{Notification, ReadOptimizedLock};
 use hashbrown::HashTable;
 use once_cell::sync::Lazy;
 use rayon::iter::ParallelIterator;
@@ -548,6 +548,59 @@ fn hash_key(key: &[Value]) -> u64 {
     let mut hasher = FxHasher::default();
     key.hash(&mut hasher);
     hasher.finish()
+}
+
+/// A map from access patterns to indices.
+///
+/// Implemented as an read-optimized key-value arrays, which should be faster
+/// than concurrent hashmaps as long as # indices is smaller than say 64.
+///
+/// For simplicity we assume the index can be cloned cheaply, e.g., it's behind an [`Arc`].
+#[derive(Default)]
+pub struct IndexCatalog<K: Clone + std::hash::Hash + Eq, I: Clone> {
+    data: ReadOptimizedLock<Vec<(K, I)>>,
+}
+
+impl<K, I: Clone> IndexCatalog<K, I>
+where
+    K: Clone + std::hash::Hash + Eq,
+{
+    pub fn new() -> Self {
+        IndexCatalog {
+            data: ReadOptimizedLock::new(Vec::new()),
+        }
+    }
+
+    pub fn map(&self, f: impl Fn(&(K, I)) -> (K, I)) -> Self {
+        let vec = self.data.read().iter().map(f).collect();
+        IndexCatalog {
+            data: ReadOptimizedLock::new(vec),
+        }
+    }
+
+    pub fn update(&mut self, f: impl Fn(&K, &mut I)) {
+        for (k, i) in self.data.as_mut_ref() {
+            f(k, i)
+        }
+    }
+
+    pub fn get_or_insert(&self, k: K, init: impl FnOnce() -> I) -> I {
+        let data = self.data.read();
+        let entry = data.iter().find(|(k1, _)| k1 == &k);
+        if let Some(entry) = entry {
+            entry.1.clone()
+        } else {
+            drop(data);
+            let mut data = self.data.lock();
+            if let Some(entry) = data.iter().find(|(k1, _)| k1 == &k) {
+                entry.1.clone()
+            } else {
+                let index = init();
+                data.push((k, index.clone()));
+                index
+            }
+        }
+    }
 }
 
 define_id!(BufferIndex, u32, "an index into a subset buffer");
