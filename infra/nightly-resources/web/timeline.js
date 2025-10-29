@@ -1,6 +1,4 @@
-var CHART = null;
-
-var BENCH_SUITES = [
+const BENCH_SUITES = [
   {
     name: "Herbie",
     dir: "herbie-hamming",
@@ -13,65 +11,57 @@ var BENCH_SUITES = [
   }
 ];
 
-// Top-level load function for the timeline page.
-function load_timeline() {
-  const suitePromises = BENCH_SUITES.map((suite) => {
-    return fetch(`data/${suite.dir}/list.json`)
-      .then((response) => response.json())
-      .then((names) => {
-        return getDatapoints(suite.dir, names).then((data) => {
-          return {
-            ...suite,
-            data: data,
-          };
-        });
-      });
-  });
+let chart = null;
+let loadedData = [];
 
-  Promise.all(suitePromises).then((resolvedSuites) => {
-    BENCH_SUITES = resolvedSuites;
+// Top-level load function for the timeline page.
+function loadTimeline() {
+  Promise.all(BENCH_SUITES.map(
+    (suite) => fetch(`data/${suite.dir}/list.json`)
+      .then((response) => response.json())
+      .then((names) => getDatapoints(suite.dir, names)
+        .then((data) => ({ ...suite, data }))
+      )
+  )).then((results) => {
+    loadedData = results;
     plot();
   });
 }
 
 function getDatapoints(suite, names) {
-  // map from filename to timeline data
-  const allData = {};
-  const aggregatedData = {};
+  const RUN_CMDS = ["run", "run-schedule"];
+  const EXT_CMDS = ["extract"];
 
-  const promises = names.map((name) =>
+  const datapoints = names.map((name) =>
     fetch(`data/${suite}/${name}`)
-      .then((r) => r.json())
-      .then((d) => (allData[name] = d[0]))
+      .then((response) => response.json())
+      .then((data) => data[0].evts)
+      .then((events) => {
+        const times = {
+          runs: [],
+          exts: [],
+          others: [],
+        };
+
+        events.forEach((entry) => {
+          const ms = entry.total_ms;
+          const cmd = entry.cmd;
+
+          // group commands by type (run, extract, other)
+          if (RUN_CMDS.includes(cmd)) {
+            times.runs.push(ms);
+          } else if (EXT_CMDS.includes(cmd)) {
+            times.exts.push(ms);
+          } else {
+            times.others.push(ms);
+          }
+        });
+
+        return times;
+      })
   );
 
-  return Promise.all(promises).then(() => {
-    const RUN_CMDS = ["run", "run-schedule"];
-    const EXT_CMDS = ["extract"];
-    Object.keys(allData).forEach((filename) => {
-      const times = {
-        runs: [],
-        exts: [],
-        others: [],
-      };
-      const entries = allData[filename].evts;
-      entries.forEach((entry) => {
-        const ms = entry.total_ms;
-        const cmd = entry.cmd;
-
-        // group commands by type (run, extract, other)
-        if (RUN_CMDS.includes(cmd)) {
-          times.runs.push(ms);
-        } else if (EXT_CMDS.includes(cmd)) {
-          times.exts.push(ms);
-        } else {
-          times.others.push(ms);
-        }
-      });
-      aggregatedData[filename] = times;
-    });
-    return aggregatedData;
-  });
+  return Promise.all(datapoints);
 }
 
 function aggregate(times, mode) {
@@ -92,28 +82,26 @@ function aggregate(times, mode) {
 }
 
 function plot() {
-  if (CHART !== null) {
-    CHART.destroy();
+  if (chart !== null) {
+    chart.destroy();
   }
 
   const ctx = document.getElementById("chart").getContext("2d");
 
   const mode = document.querySelector('input[name="mode"]:checked').value;
 
-  const datasets = BENCH_SUITES.map((suite) => { return {
+  const datasets = loadedData.map((suite) => ({
     label: suite.name,
     data: Object.values(suite.data).map((entry) => {
       return { x: aggregate(entry.runs, mode), y: aggregate(entry.exts, mode) };
     }),
     backgroundColor: suite.color,
     pointRadius: 4,
-  };});
+  }));
 
-  CHART = new Chart(ctx, {
+  chart = new Chart(ctx, {
     type: "scatter",
-    data: {
-      datasets: datasets,
-    },
+    data: { datasets },
     options: {
       title: {
         display: false,
