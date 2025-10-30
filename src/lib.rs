@@ -221,7 +221,7 @@ pub struct EGraph {
     schedulers: DenseIdMap<SchedulerId, SchedulerRecord>,
     commands: IndexMap<String, Arc<dyn UserDefinedCommand>>,
     global_name_policy: GlobalNamePolicy,
-    warned_missing_global_prefix: HashSet<String>,
+    warned_about_missing_global_prefix: bool,
 }
 
 /// A user-defined command allows users to inject custom command that can be called
@@ -305,7 +305,7 @@ impl Default for EGraph {
             schedulers: Default::default(),
             commands: Default::default(),
             global_name_policy: GlobalNamePolicy::Warn,
-            warned_missing_global_prefix: Default::default(),
+            warned_about_missing_global_prefix: false,
         };
 
         add_base_sort(&mut eg, UnitSort, span!()).unwrap();
@@ -379,9 +379,10 @@ impl EGraph {
         }
         match self.global_name_policy {
             GlobalNamePolicy::Warn => {
-                if self.warned_missing_global_prefix.insert(name.to_owned()) {
-                    log::warn!(
-                        "{}\nGlobal `{}` should start with `{}`. Enable `--strict-mode` to turn this warning into an error.",
+                if !self.warned_about_missing_global_prefix {
+                    self.warned_about_missing_global_prefix = true;
+                    eprintln!(
+                        "{}\nGlobal `{}` should start with `{}`. Enable `--strict-mode` to turn this warning into an error. Suppressing additional warnings of this type.",
                         span,
                         name,
                         GLOBAL_NAME_PREFIX
