@@ -1,16 +1,44 @@
-use crate::*;
+use crate::{util::HashMap, *};
 
 #[derive(Clone, Debug, Default)]
-pub(crate) struct Names(HashMap<String, Span>);
+pub(crate) struct Names {
+    seen: HashMap<String, Span>,
+    global_aliases: HashMap<String, (String, Span)>,
+}
 
 impl Names {
     fn check(&mut self, name: String, new: Span) -> Result<(), Error> {
-        if let Some(old) = self.0.get(&name) {
+        if let Some(old) = self.seen.get(&name) {
             Err(Error::Shadowing(name, old.clone(), new))
         } else {
-            self.0.insert(name, new);
+            self.seen.insert(name, new);
             Ok(())
         }
+    }
+
+    fn track_global_alias(&mut self, name: &str, span: &Span) {
+        if let Some(stripped) = name.strip_prefix(GLOBAL_NAME_PREFIX) {
+            self.global_aliases
+                .insert(stripped.to_owned(), (name.to_owned(), span.clone()));
+        }
+    }
+
+    fn check_pattern_name(&mut self, name: &str, span: &Span) -> Result<(), Error> {
+        let canonical = name
+            .strip_prefix(GLOBAL_NAME_PREFIX)
+            .unwrap_or(name)
+            .to_owned();
+        if let Some((global_name, global_span)) = self.global_aliases.get(&canonical) {
+            return Err(Error::Shadowing(
+                format!(
+                    "pattern variable `{}` conflicts with global `{}`",
+                    name, global_name
+                ),
+                global_span.clone(),
+                span.clone(),
+            ));
+        }
+        self.check(name.to_owned(), span.clone())
     }
 
     /// WARNING: this function does not handle `push` and `pop`.
@@ -21,7 +49,13 @@ impl Names {
     pub(crate) fn check_shadowing(&mut self, command: &ResolvedNCommand) -> Result<(), Error> {
         match command {
             ResolvedNCommand::Sort(span, name, _args) => self.check(name.clone(), span.clone()),
-            ResolvedNCommand::Function(decl) => self.check(decl.name.clone(), decl.span.clone()),
+            ResolvedNCommand::Function(decl) => {
+                self.check(decl.name.clone(), decl.span.clone())?;
+                if decl.let_binding {
+                    self.track_global_alias(&decl.name, &decl.span);
+                }
+                Ok(())
+            }
             ResolvedNCommand::AddRuleset(span, name) => self.check(name.clone(), span.clone()),
             ResolvedNCommand::UnstableCombinedRuleset(span, name, _args) => {
                 self.check(name.clone(), span.clone())
@@ -57,36 +91,32 @@ impl Names {
     }
 
     fn check_shadowing_query(&mut self, query: &[ResolvedFact]) -> Result<(), Error> {
-        // we want to allow names in queries to shadow each other, so we first collect
-        // all of the variable names, and then we check each of those names once
-        fn get_expr_names(expr: &ResolvedExpr, inner: &mut Names) {
+        fn collect_expr_names(expr: &ResolvedExpr, out: &mut HashMap<String, Span>) {
             match expr {
                 ResolvedExpr::Lit(..) => {}
                 ResolvedExpr::Var(span, name) => {
-                    if !inner.0.contains_key(&name.name) {
-                        inner.0.insert(name.name.clone(), span.clone());
-                    }
+                    out.entry(name.name.clone()).or_insert_with(|| span.clone());
                 }
                 ResolvedExpr::Call(_span, _func, args) => {
-                    args.iter().for_each(|e| get_expr_names(e, inner))
+                    args.iter().for_each(|e| collect_expr_names(e, out));
                 }
-            };
+            }
         }
 
-        let mut inner = Names::default();
+        let mut collected = HashMap::default();
 
         for fact in query {
             match fact {
                 ResolvedFact::Eq(_span, e1, e2) => {
-                    get_expr_names(e1, &mut inner);
-                    get_expr_names(e2, &mut inner);
+                    collect_expr_names(e1, &mut collected);
+                    collect_expr_names(e2, &mut collected);
                 }
-                ResolvedFact::Fact(e) => get_expr_names(e, &mut inner),
+                ResolvedFact::Fact(e) => collect_expr_names(e, &mut collected),
             }
         }
 
-        for (name, span) in inner.0 {
-            self.check(name, span.clone())?;
+        for (name, span) in collected {
+            self.check_pattern_name(&name, &span)?;
         }
 
         Ok(())
@@ -94,7 +124,7 @@ impl Names {
 
     fn check_shadowing_action(&mut self, action: &ResolvedAction) -> Result<(), Error> {
         if let ResolvedAction::Let(span, name, _args) = action {
-            self.check(name.name.clone(), span.clone())
+            self.check_pattern_name(&name.name, span)
         } else {
             Ok(())
         }
