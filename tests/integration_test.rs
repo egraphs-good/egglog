@@ -2,6 +2,53 @@ use egglog::{extract::DefaultCost, *};
 use egglog_ast::span::{RustSpan, Span};
 
 #[test]
+fn globals_missing_prefix_warns_by_default() {
+    let _ = env_logger::builder().is_test(true).try_init();
+
+    let mut egraph = EGraph::default();
+    egraph
+        .parse_and_run_program(None, "(let value 41)")
+        .unwrap();
+}
+
+#[test]
+fn globals_missing_prefix_errors_when_opted_in() {
+    let _ = env_logger::builder().is_test(true).try_init();
+
+    let mut egraph = EGraph::default();
+    egraph.set_global_name_policy(GlobalNamePolicy::Error);
+    let err = egraph
+        .parse_and_run_program(None, "(let value 41)")
+        .unwrap_err();
+    match err {
+        Error::TypeError(TypeError::GlobalMissingDollar { ref name, .. }) => {
+            assert_eq!(name, "value");
+        }
+        other => panic!("expected missing dollar error, got {other:?}"),
+    }
+}
+
+#[test]
+fn globals_cannot_be_shadowed_by_pattern_variables() {
+    let _ = env_logger::builder().is_test(true).try_init();
+
+    let mut egraph = EGraph::default();
+    let program = r#"
+        (let $value 41)
+        (rule ((= value $value)) ())
+    "#;
+
+    let err = egraph.parse_and_run_program(None, program).unwrap_err();
+    match err {
+        Error::Shadowing(message, _global_span, _shadow_span) => {
+            assert!(message.contains("pattern variable `value`"));
+            assert!(message.contains("global `$value`"));
+        }
+        other => panic!("expected shadowing error, got {other:?}"),
+    }
+}
+
+#[test]
 fn test_simple_extract1() {
     let _ = env_logger::builder().is_test(true).try_init();
 
