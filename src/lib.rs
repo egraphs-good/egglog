@@ -70,6 +70,16 @@ use util::*;
 
 use crate::core::{GenericActionsExt, ResolvedRuleExt};
 
+pub const GLOBAL_NAME_PREFIX: &str = "$";
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum GlobalNamePolicy {
+    /// Emit a warning when globals omit the `$` prefix.
+    Warn,
+    /// Treat missing `$` prefixes on globals as hard errors.
+    Error,
+}
+
 pub type ArcSort = Arc<dyn Sort>;
 
 /// A trait for implementing custom primitive operations in egglog.
@@ -210,6 +220,8 @@ pub struct EGraph {
     overall_run_report: RunReport,
     schedulers: DenseIdMap<SchedulerId, SchedulerRecord>,
     commands: IndexMap<String, Arc<dyn UserDefinedCommand>>,
+    global_name_policy: GlobalNamePolicy,
+    warned_missing_global_prefix: HashSet<String>,
 }
 
 /// A user-defined command allows users to inject custom command that can be called
@@ -292,6 +304,8 @@ impl Default for EGraph {
             type_info: Default::default(),
             schedulers: Default::default(),
             commands: Default::default(),
+            global_name_policy: GlobalNamePolicy::Warn,
+            warned_missing_global_prefix: Default::default(),
         };
 
         add_base_sort(&mut eg, UnitSort, span!()).unwrap();
@@ -347,6 +361,39 @@ impl EGraph {
         self.commands.insert(name.clone(), command);
         self.parser.add_user_defined(name)?;
         Ok(())
+    }
+
+    /// Configure how egglog handles globals that omit the required `$` prefix.
+    pub fn set_global_name_policy(&mut self, policy: GlobalNamePolicy) {
+        self.global_name_policy = policy;
+    }
+
+    /// Returns the current policy for handling missing `$` prefixes on globals.
+    pub fn global_name_policy(&self) -> GlobalNamePolicy {
+        self.global_name_policy
+    }
+
+    fn ensure_global_name_prefix(&mut self, span: &Span, name: &str) -> Result<(), TypeError> {
+        if name.starts_with(GLOBAL_NAME_PREFIX) {
+            return Ok(());
+        }
+        match self.global_name_policy {
+            GlobalNamePolicy::Warn => {
+                if self.warned_missing_global_prefix.insert(name.to_owned()) {
+                    log::warn!(
+                        "{}\nGlobal `{}` should start with `{}`. Enable `--strict-mode` to turn this warning into an error.",
+                        span,
+                        name,
+                        GLOBAL_NAME_PREFIX
+                    );
+                }
+                Ok(())
+            }
+            GlobalNamePolicy::Error => Err(TypeError::GlobalMissingDollar {
+                name: name.to_owned(),
+                span: span.clone(),
+            }),
+        }
     }
 
     /// Push a snapshot of the e-graph into the stack.

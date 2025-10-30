@@ -38,7 +38,8 @@ impl Hash for ResolvedVar {
 
 impl Display for ResolvedVar {
     fn fmt(&self, f: &mut Formatter<'_>) -> std::fmt::Result {
-        write!(f, "{}", self.name)
+        let display_name = crate::util::sanitize_internal_name(&self.name);
+        write!(f, "{}", display_name)
     }
 }
 

@@ -49,6 +49,9 @@ struct Args {
     report_level: ReportLevel,
     #[clap(long)]
     save_report: Option<PathBuf>,
+    /// Treat missing `$` prefixes on globals as errors instead of warnings
+    #[clap(long = "strict-mode")]
+    strict_mode: bool,
 }
 
 /// Start a command-line interface for the E-graph.
@@ -75,6 +78,9 @@ pub fn cli(mut egraph: EGraph) {
     egraph.fact_directory.clone_from(&args.fact_directory);
     egraph.seminaive = !args.naive;
     egraph.set_report_level(args.report_level);
+    if args.strict_mode {
+        egraph.set_global_name_policy(GlobalNamePolicy::Error);
+    }
     if args.inputs.is_empty() {
         match egraph.repl(args.mode) {
             Ok(()) => std::process::exit(0),

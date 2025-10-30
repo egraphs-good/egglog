@@ -170,6 +170,7 @@ impl EGraph {
                     .type_info
                     .typecheck_expr(symbol_gen, expr, &Default::default())?;
                 let output_type = expr.output_type();
+                self.ensure_global_name_prefix(span, var)?;
                 self.type_info
                     .global_sorts
                     .insert(var.clone(), output_type.clone());
@@ -705,6 +706,11 @@ pub enum TypeError {
     AllAlternativeFailed(Vec<TypeError>),
     #[error("{}\nCannot union values of sort {}", .1, .0.name())]
     NonEqsortUnion(ArcSort, Span),
+    #[error(
+        "{span}\nGlobal `{name}` must start with `{}`.",
+        crate::GLOBAL_NAME_PREFIX
+    )]
+    GlobalMissingDollar { name: String, span: Span },
 }
 
 #[cfg(test)]
