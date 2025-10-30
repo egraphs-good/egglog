@@ -72,14 +72,6 @@ use crate::core::{GenericActionsExt, ResolvedRuleExt};
 
 pub const GLOBAL_NAME_PREFIX: &str = "$";
 
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
-pub enum GlobalNamePolicy {
-    /// Emit a warning when globals omit the `$` prefix.
-    Warn,
-    /// Treat missing `$` prefixes on globals as hard errors.
-    Error,
-}
-
 pub type ArcSort = Arc<dyn Sort>;
 
 /// A trait for implementing custom primitive operations in egglog.
@@ -220,7 +212,7 @@ pub struct EGraph {
     overall_run_report: RunReport,
     schedulers: DenseIdMap<SchedulerId, SchedulerRecord>,
     commands: IndexMap<String, Arc<dyn UserDefinedCommand>>,
-    global_name_policy: GlobalNamePolicy,
+    strict_mode: bool,
     warned_about_missing_global_prefix: bool,
 }
 
@@ -304,7 +296,7 @@ impl Default for EGraph {
             type_info: Default::default(),
             schedulers: Default::default(),
             commands: Default::default(),
-            global_name_policy: GlobalNamePolicy::Warn,
+            strict_mode: false,
             warned_about_missing_global_prefix: false,
         };
 
@@ -363,37 +355,36 @@ impl EGraph {
         Ok(())
     }
 
-    /// Configure how egglog handles globals that omit the required `$` prefix.
-    pub fn set_global_name_policy(&mut self, policy: GlobalNamePolicy) {
-        self.global_name_policy = policy;
+    /// Configure whether globals missing the required `$` prefix are treated as errors.
+    pub fn set_strict_mode(&mut self, strict_mode: bool) {
+        self.strict_mode = strict_mode;
     }
 
-    /// Returns the current policy for handling missing `$` prefixes on globals.
-    pub fn global_name_policy(&self) -> GlobalNamePolicy {
-        self.global_name_policy
+    /// Returns `true` when missing `$` prefixes on globals are treated as errors.
+    pub fn strict_mode(&self) -> bool {
+        self.strict_mode
     }
 
     fn ensure_global_name_prefix(&mut self, span: &Span, name: &str) -> Result<(), TypeError> {
         if name.starts_with(GLOBAL_NAME_PREFIX) {
             return Ok(());
         }
-        match self.global_name_policy {
-            GlobalNamePolicy::Warn => {
-                if !self.warned_about_missing_global_prefix {
-                    self.warned_about_missing_global_prefix = true;
-                    eprintln!(
-                        "{}\nGlobal `{}` should start with `{}`. Enable `--strict-mode` to turn this warning into an error. Suppressing additional warnings of this type.",
-                        span,
-                        name,
-                        GLOBAL_NAME_PREFIX
-                    );
-                }
-                Ok(())
-            }
-            GlobalNamePolicy::Error => Err(TypeError::GlobalMissingDollar {
+        if self.strict_mode {
+            Err(TypeError::GlobalMissingDollar {
                 name: name.to_owned(),
                 span: span.clone(),
-            }),
+            })
+        } else {
+            if !self.warned_about_missing_global_prefix {
+                self.warned_about_missing_global_prefix = true;
+                eprintln!(
+                    "{}\nGlobal `{}` should start with `{}`. Enable `--strict-mode` to turn this warning into an error. Suppressing additional warnings of this type.",
+                    span,
+                    name,
+                    GLOBAL_NAME_PREFIX
+                );
+            }
+            Ok(())
         }
     }
 

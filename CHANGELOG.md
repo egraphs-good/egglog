@@ -2,7 +2,7 @@
 
 ## [Unreleased] - ReleaseDate
 
-- Require globals to use the `$` prefix; missing prefixes now log a warning and can be upgraded to errors with `--strict-mode` or the new `GlobalNamePolicy` setter.
+- Require globals to use the `$` prefix; missing prefixes now log a warning by default and can be upgraded to errors with `--strict-mode` or `EGraph::set_strict_mode`.
 - Export let bindings in the serialized format so they are visualized (#701)
   - Breaking change: renames `ignore_viz` to `let_binding` in `GenericFunctionDecl`.
 
