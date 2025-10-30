@@ -1,3 +1,6 @@
+/**
+ * The benchmark suites to include in the visualization.
+ */
 const BENCH_SUITES = [
   {
     name: "Herbie",
@@ -14,7 +17,9 @@ const BENCH_SUITES = [
 let chart = null;
 let loadedData = [];
 
-// Top-level load function for the timeline page.
+/**
+ * Loads the timeline page.
+ */
 function loadTimeline() {
   Promise.all(BENCH_SUITES.map(
     (suite) => fetch(`data/${suite.dir}/list.json`)
@@ -28,6 +33,14 @@ function loadTimeline() {
   });
 }
 
+/**
+ * Fetches and processes datapoints for a given benchmark suite.
+ *
+ * @param {string} suite - The directory name of the benchmark suite.
+ * @param {Array<string>} names - The list of JSON filenames to fetch data from.
+ * @returns {Promise<Array<Object>>} - A promise that resolves to an array of processed datapoints,
+ *                                    grouped by command type (run, extract, other).
+ */
 function getDatapoints(suite, names) {
   const RUN_CMDS = ["run", "run-schedule"];
   const EXT_CMDS = ["extract"];
@@ -35,6 +48,9 @@ function getDatapoints(suite, names) {
   const datapoints = names.map((name) =>
     fetch(`data/${suite}/${name}`)
       .then((response) => response.json())
+      // Currently, all of our tests run a new egraph for each .egg file.
+      // However, it is possible to run a single egraph on multiple .egg files,
+      // in which case each file will correspond to an entry in the JSON array.
       .then((data) => data[0].evts)
       .then((events) => {
         const times = {
@@ -64,6 +80,13 @@ function getDatapoints(suite, names) {
   return Promise.all(datapoints);
 }
 
+/**
+ * Applies a specified function to an array of times.
+ *
+ * @param {Array<number>} times - An array of time values.
+ * @param {string} mode - The aggregation function: "average", "total", or "max".
+ * @returns {number} - The aggregated value based on the selected mode.
+ */
 function aggregate(times, mode) {
   switch (mode) {
     case "average":
@@ -81,6 +104,9 @@ function aggregate(times, mode) {
   }
 }
 
+/**
+ * Plots the loaded benchmark data on a scatter chart.
+ */
 function plot() {
   if (chart !== null) {
     chart.destroy();
