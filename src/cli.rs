@@ -79,7 +79,7 @@ pub fn cli(mut egraph: EGraph) {
     egraph.seminaive = !args.naive;
     egraph.set_report_level(args.report_level);
     if args.strict_mode {
-        egraph.set_global_name_policy(GlobalNamePolicy::Error);
+        egraph.set_strict_mode(true);
     }
     if args.inputs.is_empty() {
         match egraph.repl(args.mode) {

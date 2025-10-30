@@ -16,7 +16,7 @@ fn globals_missing_prefix_errors_when_opted_in() {
     let _ = env_logger::builder().is_test(true).try_init();
 
     let mut egraph = EGraph::default();
-    egraph.set_global_name_policy(GlobalNamePolicy::Error);
+    egraph.set_strict_mode(true);
     let err = egraph
         .parse_and_run_program(None, "(let value 41)")
         .unwrap_err();
