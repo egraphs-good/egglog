@@ -39,6 +39,50 @@ fn globals_missing_prefix_errors_when_opted_in() {
 }
 
 #[test]
+fn rule_pattern_with_dollar_prefix_warns_when_no_global() {
+    testing_logger::setup();
+
+    let mut egraph = EGraph::default();
+    // Use $x in pattern but no global $x is defined
+    egraph
+        .parse_and_run_program(None, "(rule ((= $x 1)) ())")
+        .unwrap();
+    
+    testing_logger::validate(|captured_logs| {
+        assert!(
+            captured_logs.iter().any(|log| 
+                log.body.contains("Pattern variable `$x`") 
+                && log.body.contains("no global with this name is defined")
+                && log.level == log::Level::Warn
+            ),
+            "Expected a warning about pattern variable with $ prefix but no global"
+        );
+    });
+}
+
+#[test]
+fn rule_action_let_with_dollar_prefix_warns() {
+    testing_logger::setup();
+
+    let mut egraph = EGraph::default();
+    // Use let $y in rule action
+    egraph
+        .parse_and_run_program(None, "(rule () ((let $y 1)))")
+        .unwrap();
+    
+    testing_logger::validate(|captured_logs| {
+        assert!(
+            captured_logs.iter().any(|log| 
+                log.body.contains("Let binding `$y`") 
+                && log.body.contains("should not use `$` prefix")
+                && log.level == log::Level::Warn
+            ),
+            "Expected a warning about let binding in rule action with $ prefix"
+        );
+    });
+}
+
+#[test]
 fn globals_cannot_be_shadowed_by_pattern_variables() {
     let _ = env_logger::builder().is_test(true).try_init();
 

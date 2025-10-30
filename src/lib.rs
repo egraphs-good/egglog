@@ -1311,6 +1311,12 @@ impl EGraph {
         for command in &program {
             self.names.check_shadowing(command)?;
         }
+        
+        // Emit any warnings from shadowing checks
+        for warning in &self.names.warnings {
+            log::warn!("{}\n{}", warning.span, warning.message);
+        }
+        self.names.warnings.clear();
 
         Ok(program)
     }

@@ -1,9 +1,16 @@
 use crate::{util::HashMap, *};
 
+#[derive(Clone, Debug)]
+pub(crate) struct Warning {
+    pub message: String,
+    pub span: Span,
+}
+
 #[derive(Clone, Debug, Default)]
 pub(crate) struct Names {
     seen: HashMap<String, Span>,
     global_aliases: HashMap<String, (String, Span)>,
+    pub(crate) warnings: Vec<Warning>,
 }
 
 impl Names {
@@ -28,6 +35,19 @@ impl Names {
             .strip_prefix(GLOBAL_NAME_PREFIX)
             .unwrap_or(name)
             .to_owned();
+        
+        // Warn if pattern variable uses $ prefix but no global is defined
+        if name.starts_with(GLOBAL_NAME_PREFIX) && !self.global_aliases.contains_key(&canonical) {
+            self.warnings.push(Warning {
+                message: format!(
+                    "Pattern variable `{}` uses `{}` prefix but no global with this name is defined. \
+                     The `{}` prefix in patterns should only be used to reference existing globals.",
+                    name, GLOBAL_NAME_PREFIX, GLOBAL_NAME_PREFIX
+                ),
+                span: span.clone(),
+            });
+        }
+        
         if let Some((global_name, global_span)) = self.global_aliases.get(&canonical) {
             return Err(Error::Shadowing(
                 format!(
@@ -66,16 +86,24 @@ impl Names {
                 for action in rule.head.iter() {
                     inner.check_shadowing_action(action)?;
                 }
+                // Propagate warnings from inner back to self
+                self.warnings.extend(inner.warnings);
                 Ok(())
             }
             ResolvedNCommand::CoreAction(action) => self.check_shadowing_action(action),
             ResolvedNCommand::Check(_span, query) => {
                 let mut inner = self.clone();
-                inner.check_shadowing_query(query)
+                inner.check_shadowing_query(query)?;
+                // Propagate warnings from inner back to self
+                self.warnings.extend(inner.warnings);
+                Ok(())
             }
             ResolvedNCommand::Fail(_span, command) => {
                 let mut inner = self.clone();
-                inner.check_shadowing(command)
+                inner.check_shadowing(command)?;
+                // Propagate warnings from inner back to self
+                self.warnings.extend(inner.warnings);
+                Ok(())
             }
             ResolvedNCommand::Extract(..) => Ok(()),
             ResolvedNCommand::RunSchedule(..) => Ok(()),
@@ -124,6 +152,24 @@ impl Names {
 
     fn check_shadowing_action(&mut self, action: &ResolvedAction) -> Result<(), Error> {
         if let ResolvedAction::Let(span, name, _args) = action {
+            // Warn if let binding in action uses $ prefix
+            if name.name.starts_with(GLOBAL_NAME_PREFIX) {
+                self.warnings.push(Warning {
+                    message: format!(
+                        "Let binding `{}` in rule action should not use `{}` prefix. \
+                         The `{}` prefix is for global let bindings defined outside of rules.",
+                        name.name, GLOBAL_NAME_PREFIX, GLOBAL_NAME_PREFIX
+                    ),
+                    span: span.clone(),
+                });
+                // Don't call check_pattern_name for this case since we already warned
+                // Just check for normal shadowing without the prefix-specific warning
+                let canonical = name.name
+                    .strip_prefix(GLOBAL_NAME_PREFIX)
+                    .unwrap_or(&name.name)
+                    .to_owned();
+                return self.check(canonical, span.clone());
+            }
             self.check_pattern_name(&name.name, span)
         } else {
             Ok(())
