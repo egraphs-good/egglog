@@ -42,7 +42,7 @@ for DIRPATH in infra/nightly-resources/test-files/*; do
     mkdir "$NIGHTLY_DIR/data/$DIRNAME"
 
     # Run egglog files
-    cargo run --bin timeline -- "$RESOURCE_DIR/test-files/$DIRNAME" "$NIGHTLY_DIR/data/$DIRNAME"
+    cargo run --release --bin timeline -- "$RESOURCE_DIR/test-files/$DIRNAME" "$NIGHTLY_DIR/data/$DIRNAME"
 
     # Annotate with time and command info
     python3 timeline/transform.py "$NIGHTLY_DIR/data/$DIRNAME" "$NIGHTLY_DIR/output/data/$DIRNAME"
