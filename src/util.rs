@@ -6,6 +6,9 @@ use std::borrow::Cow;
 
 pub const INTERNAL_SYMBOL_PREFIX: &str = "@";
 
+/// Sanitizes internal names by replacing the `@` prefix with `_` to make them
+/// valid identifiers in generated code or external representations.
+/// If the name doesn't start with `@`, it is returned unchanged.
 pub fn sanitize_internal_name(name: &str) -> Cow<'_, str> {
     if name.starts_with(INTERNAL_SYMBOL_PREFIX) {
         Cow::Owned(format!("_{}", &name[INTERNAL_SYMBOL_PREFIX.len()..]))

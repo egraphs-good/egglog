@@ -3,12 +3,22 @@ use egglog_ast::span::{RustSpan, Span};
 
 #[test]
 fn globals_missing_prefix_warns_by_default() {
-    let _ = env_logger::builder().is_test(true).try_init();
+    testing_logger::setup();
 
     let mut egraph = EGraph::default();
     egraph
         .parse_and_run_program(None, "(let value 41)")
         .unwrap();
+
+    testing_logger::validate(|captured_logs| {
+        assert!(
+            captured_logs
+                .iter()
+                .any(|log| log.body.contains("should start with `$`")
+                    && log.level == log::Level::Warn),
+            "Expected a warning about missing global prefix"
+        );
+    });
 }
 
 #[test]
@@ -21,7 +31,7 @@ fn globals_missing_prefix_errors_when_opted_in() {
         .parse_and_run_program(None, "(let value 41)")
         .unwrap_err();
     match err {
-        Error::TypeError(TypeError::GlobalMissingDollar { ref name, .. }) => {
+        Error::TypeError(TypeError::GlobalMissingPrefix { ref name, .. }) => {
             assert_eq!(name, "value");
         }
         other => panic!("expected missing dollar error, got {other:?}"),

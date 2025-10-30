@@ -370,14 +370,14 @@ impl EGraph {
             return Ok(());
         }
         if self.strict_mode {
-            Err(TypeError::GlobalMissingDollar {
+            Err(TypeError::GlobalMissingPrefix {
                 name: name.to_owned(),
                 span: span.clone(),
             })
         } else {
             if !self.warned_about_missing_global_prefix {
                 self.warned_about_missing_global_prefix = true;
-                eprintln!(
+                log::warn!(
                     "{}\nGlobal `{}` should start with `{}`. Enable `--strict-mode` to turn this warning into an error. Suppressing additional warnings of this type.",
                     span,
                     name,
