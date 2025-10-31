@@ -108,11 +108,39 @@ function aggregate(times, mode) {
  * Plots the loaded benchmark data on a scatter chart.
  */
 function plot() {
-  if (chart !== null) {
-    chart.destroy();
-  }
+  if (chart === null) {
+    const ctx = document.getElementById("chart").getContext("2d");
 
-  const ctx = document.getElementById("chart").getContext("2d");
+    chart = new Chart(ctx, {
+      type: "scatter",
+      data: { datasets: [] },
+      options: {
+        title: {
+          display: false,
+        },
+        scales: {
+          xAxes: [
+            {
+              type: "linear",
+              position: "bottom",
+              scaleLabel: {
+                display: true,
+                labelString: "Run Time (ms)",
+              },
+            },
+          ],
+          yAxes: [
+            {
+              scaleLabel: {
+                display: true,
+                labelString: "Extract Time (ms)",
+              },
+            },
+          ],
+        },
+      },
+    });
+  }
 
   const mode = document.querySelector('input[name="mode"]:checked').value;
 
@@ -125,33 +153,7 @@ function plot() {
     pointRadius: 4,
   }));
 
-  chart = new Chart(ctx, {
-    type: "scatter",
-    data: { datasets },
-    options: {
-      title: {
-        display: false,
-      },
-      scales: {
-        xAxes: [
-          {
-            type: "linear",
-            position: "bottom",
-            scaleLabel: {
-              display: true,
-              labelString: "Run Time (ms)",
-            },
-          },
-        ],
-        yAxes: [
-          {
-            scaleLabel: {
-              display: true,
-              labelString: "Extract Time (ms)",
-            },
-          },
-        ],
-      },
-    },
-  });
+  chart.data.datasets = datasets;
+
+  chart.update();
 }
