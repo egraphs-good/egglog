@@ -24,6 +24,7 @@ use crate::core_relations::{
     TableId, TaggedRowBuffer, Value, WrappedTable,
 };
 use crate::numeric_id::{DenseIdMap, DenseIdMapWithReuse, IdVec, NumericId, define_id};
+use egglog_ast::generic_ast::Literal;
 use egglog_core_relations as core_relations;
 use egglog_numeric_id as numeric_id;
 use egglog_reports::{IterationReport, ReportLevel, RuleSetReport};
@@ -31,6 +32,7 @@ use hashbrown::HashMap;
 use indexmap::{IndexMap, IndexSet, map::Entry};
 use log::info;
 use once_cell::sync::Lazy;
+use ordered_float::OrderedFloat;
 pub use proof_format::{EqProofId, ProofStore, TermProofId};
 use proof_spec::{ProofReason, ProofReconstructionState, ReasonSpecId};
 use smallvec::SmallVec;
@@ -41,6 +43,7 @@ pub mod proof_format;
 pub(crate) mod proof_spec;
 pub(crate) mod rule;
 pub mod syntax;
+pub mod termdag;
 #[cfg(test)]
 mod tests;
 
@@ -163,6 +166,9 @@ pub struct FunctionConfig {
     pub can_subsume: bool,
 }
 
+pub type BackendFloat = core_relations::Boxed<OrderedFloat<f64>>;
+pub type BackendString = core_relations::Boxed<String>;
+
 impl EGraph {
     /// Create a new EGraph with tracing (aka 'proofs') enabled.
     ///
@@ -178,6 +184,48 @@ impl EGraph {
             iter::empty(),
         );
         EGraph::create_internal(db, uf_table, true)
+    }
+
+    pub fn literal_to_value(&self, l: &Literal) -> Value {
+        match l {
+            Literal::Int(x) => self.base_values().get::<i64>(*x),
+            Literal::Float(x) => self.base_values().get::<BackendFloat>(x.into()),
+            Literal::String(x) => self
+                .base_values()
+                .get::<BackendString>(BackendString::new(x.clone())),
+            Literal::Bool(x) => self.base_values().get::<bool>(*x),
+            Literal::Unit => self.base_values().get::<()>(()),
+        }
+    }
+
+    pub fn literal_to_entry(&self, l: &Literal) -> QueryEntry {
+        match l {
+            Literal::Int(x) => self.base_value_constant::<i64>(*x),
+            Literal::Float(x) => self.base_value_constant::<BackendFloat>(x.into()),
+            Literal::String(x) => {
+                self.base_value_constant::<BackendString>(BackendString::new(x.clone()))
+            }
+            Literal::Bool(x) => self.base_value_constant::<bool>(*x),
+            Literal::Unit => self.base_value_constant::<()>(()),
+        }
+    }
+
+    /// Assuming that a [`bool`], [`BackendFloat`], [`i64`], [`BackendString`], and [`()`] types are registered,
+    /// converts a [`Value`] and its corresponding type [`BaseValueId`] to a [`Literal`].
+    pub fn value_to_literal(&self, v: &Value, ty: BaseValueId) -> Literal {
+        if ty == self.base_values().get_ty::<bool>() {
+            Literal::Bool(self.base_values().unwrap::<bool>(*v))
+        } else if ty == self.base_values().get_ty::<i64>() {
+            Literal::Int(self.base_values().unwrap::<i64>(*v))
+        } else if ty == self.base_values().get_ty::<BackendFloat>() {
+            Literal::Float(self.base_values().unwrap::<BackendFloat>(*v).into_inner())
+        } else if ty == self.base_values().get_ty::<BackendString>() {
+            Literal::String(self.base_values().unwrap::<BackendString>(*v).into_inner())
+        } else if ty == self.base_values().get_ty::<()>() {
+            Literal::Unit
+        } else {
+            panic!("Cannot convert value to literal: unknown base type")
+        }
     }
 
     fn create_internal(mut db: Database, uf_table: TableId, tracing: bool) -> EGraph {
@@ -607,14 +655,10 @@ impl EGraph {
         if self.get_canon_in_uf(id1) != self.get_canon_in_uf(id2) {
             // These terms aren't equal. Reconstruct the relevant terms so as to
             // get a nicer error message on the way out.
-            let mut buf = Vec::<u8>::new();
             let term_id_1 = self.reconstruct_term(id1, ColumnTy::Id, &mut state);
             let term_id_2 = self.reconstruct_term(id2, ColumnTy::Id, &mut state);
-            store.termdag.print_term(term_id_1, &mut buf).unwrap();
-            let term1 = String::from_utf8(buf).unwrap();
-            let mut buf = Vec::<u8>::new();
-            store.termdag.print_term(term_id_2, &mut buf).unwrap();
-            let term2 = String::from_utf8(buf).unwrap();
+            let term1 = store.termdag.to_string_pretty_id(term_id_1);
+            let term2 = store.termdag.to_string_pretty_id(term_id_2);
             return Err(
                 ProofReconstructionError::EqualityExplanationOfUnequalTerms { term1, term2 }.into(),
             );

@@ -138,7 +138,11 @@ where
             GenericExpr::Lit(_ann, lit) => write!(f, "{lit}"),
             GenericExpr::Var(_ann, var) => write!(f, "{var}"),
             GenericExpr::Call(_ann, op, children) => {
-                write!(f, "({} {})", op, ListDisplay(children, " "))
+                if children.is_empty() {
+                    write!(f, "({})", op)
+                } else {
+                    write!(f, "({} {})", op, ListDisplay(children, " "))
+                }
             }
         }
     }
