@@ -1,4 +1,4 @@
-use crate::{util::HashMap, *};
+use crate::{util::HashMap, util::HashSet, *};
 use core_relations::BaseValuePrinter;
 use ordered_float::NotNan;
 use std::collections::VecDeque;
@@ -63,7 +63,7 @@ struct Serializer {
     let_bindings: HashMap<egraph_serialize::ClassId, Vec<String>>,
     /// E-classes that appear as outputs of any function (even truncated/discarded ones)
     /// Used to distinguish empty e-classes from omitted ones
-    eclasses_with_outputs: std::collections::HashSet<egraph_serialize::ClassId>,
+    eclasses_with_outputs: HashSet<egraph_serialize::ClassId>,
     /// E-classes that are actually empty (referenced but never outputs of any function)
     empty_eclasses: Vec<String>,
 }
@@ -151,7 +151,7 @@ impl EGraph {
         let mut functions_kept = 0usize;
         let mut let_bindings = HashMap::default();
         // Track all e-classes that appear as outputs of any function (even truncated/discarded ones)
-        let mut eclasses_with_outputs = std::collections::HashSet::new();
+        let mut eclasses_with_outputs = HashSet::default();
         for (name, function) in self.functions.iter() {
             if functions_kept >= max_functions {
                 discarded_functions.push(name.clone());
