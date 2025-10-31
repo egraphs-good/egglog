@@ -60,7 +60,7 @@ function getDatapoints(suite, names) {
         };
 
         events.forEach((entry) => {
-          const ms = entry.total_ms;
+          const ms = entry.total_time_ms;
           const cmd = entry.cmd;
 
           // group commands by type (run, extract, other)

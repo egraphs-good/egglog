@@ -2314,7 +2314,7 @@ static END: &'static str = "end";
 pub struct EgraphEvent {
     sexp_idx: i32,
     evt: &'static str,
-    time: Duration,
+    time_ms: u128,
 }
 
 #[derive(Serialize)]
@@ -2372,7 +2372,7 @@ impl TimedEgraph {
             program_timeline.evts.push(EgraphEvent {
                 sexp_idx: i,
                 evt: START,
-                time: self.timer.elapsed(),
+                time_ms: self.timer.elapsed().as_millis(),
             });
 
             for processed in self.egraph.process_command(command)? {
@@ -2385,7 +2385,7 @@ impl TimedEgraph {
             program_timeline.evts.push(EgraphEvent {
                 sexp_idx: i,
                 evt: END,
-                time: self.timer.elapsed(),
+                time_ms: self.timer.elapsed().as_millis(),
             });
 
             i = i + 1;
