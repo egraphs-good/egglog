@@ -22,12 +22,14 @@ pub struct SerializeOutput {
     pub truncated_functions: Vec<String>,
     /// Functions that were discarded from the output, because more functions were present than max_functions
     pub discarded_functions: Vec<String>,
+    /// E-classes that are empty (deleted or never had nodes)
+    pub empty_eclasses: Vec<String>,
 }
 
 impl SerializeOutput {
     /// Returns true if the serialization is complete and no functions were truncated or discarded.
     pub fn is_complete(&self) -> bool {
-        self.truncated_functions.is_empty() && self.discarded_functions.is_empty()
+        self.truncated_functions.is_empty() && self.discarded_functions.is_empty() && self.empty_eclasses.is_empty()
     }
     /// Description of what was omitted from the e-graph
     pub fn omitted_description(&self) -> String {
@@ -44,6 +46,12 @@ impl SerializeOutput {
                 self.truncated_functions.join(", ")
             ));
         }
+        if !self.empty_eclasses.is_empty() {
+            msg.push_str(&format!(
+                "Empty e-classes: {}\n",
+                self.empty_eclasses.join(", ")
+            ));
+        }
         msg
     }
 }
@@ -53,6 +61,11 @@ struct Serializer {
     node_ids: NodeIDs,
     result: egraph_serialize::EGraph,
     let_bindings: HashMap<egraph_serialize::ClassId, Vec<String>>,
+    /// E-classes that appear as outputs of any function (even truncated/discarded ones)
+    /// Used to distinguish empty e-classes from omitted ones
+    eclasses_with_outputs: std::collections::HashSet<egraph_serialize::ClassId>,
+    /// E-classes that are actually empty (referenced but never outputs of any function)
+    empty_eclasses: Vec<String>,
 }
 
 /// Default is used for exporting JSON and will output all nodes.
@@ -137,19 +150,36 @@ impl EGraph {
         )> = Vec::new();
         let mut functions_kept = 0usize;
         let mut let_bindings = HashMap::default();
+        // Track all e-classes that appear as outputs of any function (even truncated/discarded ones)
+        let mut eclasses_with_outputs = std::collections::HashSet::new();
         for (name, function) in self.functions.iter() {
             if functions_kept >= max_functions {
                 discarded_functions.push(name.clone());
+                // Track outputs of discarded functions
+                self.backend.for_each_while(function.backend_id, |row| {
+                    let (out, _inps) = row.vals.split_last().unwrap();
+                    let class_id = self.value_to_class_id(&function.schema.output, *out);
+                    if function.schema.output.is_eq_sort() {
+                        eclasses_with_outputs.insert(class_id);
+                    }
+                    true
+                });
                 continue;
             }
             let mut rows = 0;
+            let mut truncated_this_function = false;
             self.backend.for_each_while(function.backend_id, |row| {
                 if rows >= max_calls_per_function {
                     truncated_functions.push(name.clone());
+                    truncated_this_function = true;
                     return false;
                 }
                 let (out, inps) = row.vals.split_last().unwrap();
                 let class_id = self.value_to_class_id(&function.schema.output, *out);
+                // Track that this e-class has outputs (even if we're truncating/discarding)
+                if function.schema.output.is_eq_sort() {
+                    eclasses_with_outputs.insert(class_id.clone());
+                }
                 if function.decl.let_binding {
                     let_bindings
                         .entry(class_id.clone())
@@ -174,6 +204,17 @@ impl EGraph {
                 }
                 true
             });
+            // If function was truncated, track all its outputs (including truncated ones)
+            if truncated_this_function {
+                self.backend.for_each_while(function.backend_id, |row| {
+                    let (out, _inps) = row.vals.split_last().unwrap();
+                    let class_id = self.value_to_class_id(&function.schema.output, *out);
+                    if function.schema.output.is_eq_sort() {
+                        eclasses_with_outputs.insert(class_id);
+                    }
+                    true
+                });
+            }
             if rows != 0 {
                 functions_kept += 1;
             }
@@ -199,6 +240,8 @@ impl EGraph {
             node_ids,
             result: egraph_serialize::EGraph::default(),
             let_bindings,
+            eclasses_with_outputs,
+            empty_eclasses: Vec::new(),
         };
 
         for (func, input, output, subsumed, class_id, node_id) in all_calls {
@@ -233,6 +276,7 @@ impl EGraph {
             egraph: serializer.result,
             truncated_functions,
             discarded_functions,
+            empty_eclasses: serializer.empty_eclasses,
         }
     }
 
@@ -323,20 +367,38 @@ impl EGraph {
                 .node_ids
                 .entry(class_id.clone())
                 .or_insert_with(|| {
-                    // If we don't find node IDs for this class, it means that all nodes for it were omitted due to size constraints
-                    // In this case, add a dummy node in this class to represent the missing nodes
-                    let node_id = self.to_node_id(Some(sort), SerializedNode::Dummy(value));
-                    serializer.result.nodes.insert(
-                        node_id.clone(),
-                        egraph_serialize::Node {
-                            op: "[...]".to_string(),
-                            eclass: class_id.clone(),
-                            cost: NotNan::new(f64::INFINITY).unwrap(),
-                            children: vec![],
-                            subsumed: false,
-                        },
-                    );
-                    VecDeque::from(vec![node_id])
+                    // Check if this e-class is empty (never had outputs) or omitted (had outputs but were truncated/discarded)
+                    let is_empty = !serializer.eclasses_with_outputs.contains(class_id);
+                    if is_empty {
+                        // Empty e-class: use empty string as the name
+                        serializer.empty_eclasses.push(class_id.to_string());
+                        let node_id = self.to_node_id(Some(sort), SerializedNode::Dummy(value));
+                        serializer.result.nodes.insert(
+                            node_id.clone(),
+                            egraph_serialize::Node {
+                                op: "".to_string(),
+                                eclass: class_id.clone(),
+                                cost: NotNan::new(f64::INFINITY).unwrap(),
+                                children: vec![],
+                                subsumed: false,
+                            },
+                        );
+                        VecDeque::from(vec![node_id])
+                    } else {
+                        // Omitted due to size constraints: use "[...]" as before
+                        let node_id = self.to_node_id(Some(sort), SerializedNode::Dummy(value));
+                        serializer.result.nodes.insert(
+                            node_id.clone(),
+                            egraph_serialize::Node {
+                                op: "[...]".to_string(),
+                                eclass: class_id.clone(),
+                                cost: NotNan::new(f64::INFINITY).unwrap(),
+                                children: vec![],
+                                subsumed: false,
+                            },
+                        );
+                        VecDeque::from(vec![node_id])
+                    }
                 });
             node_ids.rotate_left(1);
             node_ids.front().unwrap().clone()
