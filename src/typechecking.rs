@@ -710,7 +710,7 @@ pub enum TypeError {
         "{span}\nGlobal `{name}` must start with `{}`.",
         crate::GLOBAL_NAME_PREFIX
     )]
-    GlobalMissingDollar { name: String, span: Span },
+    GlobalMissingPrefix { name: String, span: Span },
 }
 
 #[cfg(test)]

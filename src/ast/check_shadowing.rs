@@ -91,6 +91,8 @@ impl Names {
     }
 
     fn check_shadowing_query(&mut self, query: &[ResolvedFact]) -> Result<(), Error> {
+        // we want to allow names in queries to shadow each other, so we first collect
+        // all of the variable names, and then we check each of those names once
         fn collect_expr_names(expr: &ResolvedExpr, out: &mut HashMap<String, Span>) {
             match expr {
                 ResolvedExpr::Lit(..) => {}
