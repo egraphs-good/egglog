@@ -2,23 +2,119 @@ use egglog::{extract::DefaultCost, *};
 use egglog_ast::span::{RustSpan, Span};
 
 #[test]
-#[should_panic(expected = "Non-global variable `$x` must not start with `$`")]
-fn globals_missing_prefix_panics_for_prefixed_pattern_variable_in_strict_mode() {
+fn globals_missing_prefix_warns_by_default() {
+    testing_logger::setup();
+
     let mut egraph = EGraph::default();
-    egraph.set_strict_mode(true);
     egraph
-        .parse_and_run_program(None, "(rule ((= $x 1)) ())")
+        .parse_and_run_program(None, "(let value 41)")
         .unwrap();
+
+    testing_logger::validate(|logs| {
+        let bodies: Vec<_> = logs.iter().map(|entry| entry.body.clone()).collect();
+        assert!(
+            bodies
+                .iter()
+                .any(|body| body.contains("Global `value` should start with `$`")),
+            "expected warning about missing global prefix, got logs: {:?}",
+            bodies
+        );
+    });
 }
 
 #[test]
-#[should_panic(expected = "Non-global variable `$y` must not start with `$`")]
-fn globals_missing_prefix_panics_for_prefixed_rule_let_in_strict_mode() {
+fn globals_missing_prefix_warns_for_prefixed_pattern_variable_by_default() {
+    testing_logger::setup();
+
     let mut egraph = EGraph::default();
-    egraph.set_strict_mode(true);
+    egraph
+        .parse_and_run_program(None, "(rule ((= $x 1)) ())")
+        .unwrap();
+
+    testing_logger::validate(|logs| {
+        let bodies: Vec<_> = logs.iter().map(|entry| entry.body.clone()).collect();
+        assert!(
+            bodies
+                .iter()
+                .any(|body| body.contains("Global `x` should start with `$`")),
+            "expected warning about missing global prefix, got logs: {:?}",
+            bodies
+        );
+    });
+}
+
+#[test]
+fn globals_missing_prefix_warns_for_prefixed_rule_let_by_default() {
+    testing_logger::setup();
+
+    let mut egraph = EGraph::default();
     egraph
         .parse_and_run_program(None, "(rule () ((let $y 1)))")
         .unwrap();
+
+    testing_logger::validate(|logs| {
+        let bodies: Vec<_> = logs.iter().map(|entry| entry.body.clone()).collect();
+        assert!(
+            bodies
+                .iter()
+                .any(|body| body.contains("Global `y` should start with `$`")),
+            "expected warning about missing global prefix, got logs: {:?}",
+            bodies
+        );
+    });
+}
+
+#[test]
+fn globals_missing_prefix_errors_when_opted_in() {
+    let _ = env_logger::builder().is_test(true).try_init();
+
+    let mut egraph = EGraph::default();
+    egraph.set_strict_mode(true);
+    let err = egraph
+        .parse_and_run_program(None, "(let value 41)")
+        .unwrap_err();
+    match err {
+        Error::TypeError(TypeError::GlobalMissingPrefix { ref name, .. }) => {
+            assert_eq!(name, "value");
+        }
+        other => panic!("expected missing dollar error, got {other:?}"),
+    }
+}
+
+#[test]
+fn globals_missing_prefix_errors_for_prefixed_pattern_variable_when_opted_in() {
+    let _ = env_logger::builder().is_test(true).try_init();
+
+    let mut egraph = EGraph::default();
+    egraph.set_strict_mode(true);
+    let err = egraph
+        .parse_and_run_program(None, "(rule ((= $x 1)) ())")
+        .unwrap_err();
+
+    match err {
+        Error::TypeError(TypeError::NonGlobalPrefixed { ref name, .. }) => {
+            assert_eq!(name, "$x");
+        }
+        other => panic!("expected non-global prefixed variable error, got {other:?}"),
+    }
+}
+
+#[test]
+fn globals_missing_prefix_errors_for_prefixed_rule_let_when_opted_in() {
+    let _ = env_logger::builder().is_test(true).try_init();
+
+    let mut egraph = EGraph::default();
+    egraph.set_strict_mode(true);
+    let err = egraph
+        .parse_and_run_program(None, "(rule () ((let $y 1)))")
+        .unwrap_err();
+
+    match err {
+        Error::TypeError(TypeError::NonGlobalPrefixed { ref name, .. }) => {
+            assert_eq!(name, "$y");
+        }
+        other => panic!("expected non-global prefixed variable error, got {other:?}"),
+    }
 }
 
 #[test]
