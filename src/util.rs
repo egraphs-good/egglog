@@ -10,7 +10,10 @@ pub const INTERNAL_SYMBOL_PREFIX: &str = "@";
 /// This allows us to test parsing of desugared programs.
 pub fn sanitize_internal_name(name: &str) -> Cow<'_, str> {
     if name.starts_with(INTERNAL_SYMBOL_PREFIX) {
-        Cow::Owned(format!("_{}", &name[INTERNAL_SYMBOL_PREFIX.len()..]))
+        Cow::Owned(format!(
+            "_{}",
+            name.strip_prefix(INTERNAL_SYMBOL_PREFIX).unwrap()
+        ))
     } else {
         Cow::Borrowed(name)
     }
