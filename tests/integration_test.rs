@@ -1,18 +1,25 @@
 use egglog::{extract::DefaultCost, *};
 use egglog_ast::span::{RustSpan, Span};
-use std::sync::{
-    atomic::{AtomicUsize, Ordering},
-    Arc, Mutex, OnceLock,
-};
 
 #[test]
 fn globals_missing_prefix_warns_by_default() {
-    let _ = env_logger::builder().is_test(true).try_init();
+    testing_logger::setup();
 
     let mut egraph = EGraph::default();
     egraph
         .parse_and_run_program(None, "(let value 41)")
         .unwrap();
+
+    testing_logger::validate(|logs| {
+        let bodies: Vec<_> = logs.iter().map(|entry| entry.body.clone()).collect();
+        assert!(
+            bodies
+                .iter()
+                .any(|body| body.contains("Global `value` should start with `$`")),
+            "expected warning about missing global prefix, got logs: {:?}",
+            bodies
+        );
+    });
 }
 
 #[test]
