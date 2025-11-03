@@ -6,6 +6,8 @@ use std::borrow::Cow;
 
 pub const INTERNAL_SYMBOL_PREFIX: &str = "@";
 
+/// Gets rid of internal symbol prefixes for printing.
+/// This allows us to test parsing of desugared programs.
 pub fn sanitize_internal_name(name: &str) -> Cow<'_, str> {
     if name.starts_with(INTERNAL_SYMBOL_PREFIX) {
         Cow::Owned(format!("_{}", &name[INTERNAL_SYMBOL_PREFIX.len()..]))

@@ -1,5 +1,9 @@
 use egglog::{extract::DefaultCost, *};
 use egglog_ast::span::{RustSpan, Span};
+use std::sync::{
+    atomic::{AtomicUsize, Ordering},
+    Arc, Mutex, OnceLock,
+};
 
 #[test]
 fn globals_missing_prefix_warns_by_default() {
@@ -21,7 +25,7 @@ fn globals_missing_prefix_errors_when_opted_in() {
         .parse_and_run_program(None, "(let value 41)")
         .unwrap_err();
     match err {
-        Error::TypeError(TypeError::GlobalMissingDollar { ref name, .. }) => {
+        Error::TypeError(TypeError::GlobalMissingPrefix { ref name, .. }) => {
             assert_eq!(name, "value");
         }
         other => panic!("expected missing dollar error, got {other:?}"),
