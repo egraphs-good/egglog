@@ -266,29 +266,48 @@ impl EGraph {
             }
         };
         if let ResolvedNCommand::NormRule { rule } = &command {
-            self.check_for_prefixed_non_globals_in_rule(rule);
+            self.warn_for_prefixed_non_globals_in_rule(rule)?;
         }
         Ok(command)
     }
 
-    fn check_for_prefixed_non_globals_in_var(&mut self, span: &Span, var: &ResolvedVar) {
+    fn warn_for_prefixed_non_globals_in_var(
+        &mut self,
+        span: &Span,
+        var: &ResolvedVar,
+    ) -> Result<(), TypeError> {
         if var.is_global_ref {
-            return;
+            return Ok(());
         }
         if let Some(stripped) = var.name.strip_prefix(crate::GLOBAL_NAME_PREFIX) {
-            self.warn_missing_global_prefix(span, stripped);
+            self.warn_missing_global_prefix(span, stripped)?;
         }
+        Ok(())
     }
 
-    fn check_for_prefixed_non_globals_in_rule(&mut self, rule: &ResolvedRule) {
+    fn warn_for_prefixed_non_globals_in_rule(
+        &mut self,
+        rule: &ResolvedRule,
+    ) -> Result<(), TypeError> {
+        let mut res: Result<(), TypeError> = Ok(());
+
         for fact in &rule.body {
             fact.visit_vars(&mut |span, var| {
-                self.check_for_prefixed_non_globals_in_var(span, var);
+                if res.is_ok() {
+                    res = self.warn_for_prefixed_non_globals_in_var(span, var);
+                }
             });
+            if res.is_err() {
+                return res;
+            }
         }
+
         rule.head.visit_vars(&mut |span, var| {
-            self.check_for_prefixed_non_globals_in_var(span, var);
+            if res.is_ok() {
+                res = self.warn_for_prefixed_non_globals_in_var(span, var);
+            }
         });
+        res
     }
 }
 
@@ -729,6 +748,11 @@ pub enum TypeError {
     AllAlternativeFailed(Vec<TypeError>),
     #[error("{}\nCannot union values of sort {}", .1, .0.name())]
     NonEqsortUnion(ArcSort, Span),
+    #[error(
+        "{span}\nNon-global variable `{name}` must not start with `{}`.",
+        crate::GLOBAL_NAME_PREFIX
+    )]
+    NonGlobalPrefixed { name: String, span: Span },
     #[error(
         "{span}\nGlobal `{name}` must start with `{}`.",
         crate::GLOBAL_NAME_PREFIX

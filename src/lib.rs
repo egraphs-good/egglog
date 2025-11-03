@@ -375,22 +375,24 @@ impl EGraph {
                 span: span.clone(),
             })
         } else {
-            self.warn_missing_global_prefix(span, name);
+            self.warn_missing_global_prefix(span, name)?;
             Ok(())
         }
     }
 
-    fn warn_missing_global_prefix(&mut self, span: &Span, canonical_name: &str) {
+    fn warn_missing_global_prefix(
+        &mut self,
+        span: &Span,
+        canonical_name: &str,
+    ) -> Result<(), TypeError> {
         if self.strict_mode {
-            panic!(
-                "{}\nNon-global variable `{}` must not start with `{}`.",
-                span,
-                format!("{}{}", GLOBAL_NAME_PREFIX, canonical_name),
-                GLOBAL_NAME_PREFIX
-            );
+            return Err(TypeError::NonGlobalPrefixed {
+                name: format!("{}{}", GLOBAL_NAME_PREFIX, canonical_name),
+                span: span.clone(),
+            });
         }
         if self.warned_about_missing_global_prefix {
-            return;
+            return Ok(());
         }
         self.warned_about_missing_global_prefix = true;
         log::warn!(
@@ -399,6 +401,7 @@ impl EGraph {
             canonical_name,
             GLOBAL_NAME_PREFIX
         );
+        Ok(())
     }
 
     /// Push a snapshot of the e-graph into the stack.
