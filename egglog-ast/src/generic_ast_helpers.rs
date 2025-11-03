@@ -194,6 +194,12 @@ where
         self.0.iter()
     }
 
+    pub fn visit_vars(&self, f: &mut impl FnMut(&Span, &Leaf)) {
+        for action in &self.0 {
+            action.visit_vars(f);
+        }
+    }
+
     pub fn visit_exprs(
         self,
         f: &mut impl FnMut(GenericExpr<Head, Leaf>) -> GenericExpr<Head, Leaf>,
@@ -215,6 +221,32 @@ where
     Head: Clone + Display,
     Leaf: Clone + Eq + Display + Hash,
 {
+    pub fn visit_vars(&self, f: &mut impl FnMut(&Span, &Leaf)) {
+        match self {
+            GenericAction::Let(span, lhs, rhs) => {
+                f(span, lhs);
+                rhs.visit_vars(f);
+            }
+            GenericAction::Set(_, _, args, rhs) => {
+                for arg in args {
+                    arg.visit_vars(f);
+                }
+                rhs.visit_vars(f);
+            }
+            GenericAction::Change(_, _, _, args) => {
+                for arg in args {
+                    arg.visit_vars(f);
+                }
+            }
+            GenericAction::Union(_, lhs, rhs) => {
+                lhs.visit_vars(f);
+                rhs.visit_vars(f);
+            }
+            GenericAction::Panic(..) => {}
+            GenericAction::Expr(_, expr) => expr.visit_vars(f),
+        }
+    }
+
     // Applys `f` to all expressions in the action.
     pub fn map_exprs(
         &self,
@@ -325,6 +357,16 @@ where
     Head: Clone + Display,
     Leaf: Clone + PartialEq + Eq + Display + Hash,
 {
+    pub fn visit_vars(&self, f: &mut impl FnMut(&Span, &Leaf)) {
+        match self {
+            GenericFact::Eq(_, lhs, rhs) => {
+                lhs.visit_vars(f);
+                rhs.visit_vars(f);
+            }
+            GenericFact::Fact(expr) => expr.visit_vars(f),
+        }
+    }
+
     pub fn visit_exprs(
         self,
         f: &mut impl FnMut(GenericExpr<Head, Leaf>) -> GenericExpr<Head, Leaf>,
@@ -370,6 +412,18 @@ where
 }
 
 impl<Head: Clone + Display, Leaf: Hash + Clone + Display + Eq> GenericExpr<Head, Leaf> {
+    pub fn visit_vars(&self, f: &mut impl FnMut(&Span, &Leaf)) {
+        match self {
+            GenericExpr::Var(span, var) => f(span, var),
+            GenericExpr::Call(_, _, args) => {
+                for arg in args {
+                    arg.visit_vars(f);
+                }
+            }
+            GenericExpr::Lit(_, _) => {}
+        }
+    }
+
     pub fn span(&self) -> Span {
         match self {
             GenericExpr::Lit(span, _) => span.clone(),

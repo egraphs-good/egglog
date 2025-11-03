@@ -2,7 +2,7 @@ use crate::{
     core::{CoreRule, GenericActionsExt},
     *,
 };
-use ast::Rule;
+use ast::{ResolvedAction, ResolvedExpr, ResolvedFact, ResolvedRule, ResolvedVar, Rule};
 use core_relations::ExternalFunction;
 use egglog_ast::generic_ast::GenericAction;
 
@@ -265,7 +265,30 @@ impl EGraph {
                 ResolvedNCommand::UserDefined(span.clone(), name.clone(), exprs.clone())
             }
         };
+        if let ResolvedNCommand::NormRule { rule } = &command {
+            self.check_for_prefixed_non_globals_in_rule(rule);
+        }
         Ok(command)
+    }
+
+    fn check_for_prefixed_non_globals_in_var(&mut self, span: &Span, var: &ResolvedVar) {
+        if var.is_global_ref {
+            return;
+        }
+        if let Some(stripped) = var.name.strip_prefix(crate::GLOBAL_NAME_PREFIX) {
+            self.warn_missing_global_prefix(span, stripped);
+        }
+    }
+
+    fn check_for_prefixed_non_globals_in_rule(&mut self, rule: &ResolvedRule) {
+        for fact in &rule.body {
+            fact.visit_vars(&mut |span, var| {
+                self.check_for_prefixed_non_globals_in_var(span, var);
+            });
+        }
+        rule.head.visit_vars(&mut |span, var| {
+            self.check_for_prefixed_non_globals_in_var(span, var);
+        });
     }
 }
 

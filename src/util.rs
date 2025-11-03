@@ -9,11 +9,8 @@ pub const INTERNAL_SYMBOL_PREFIX: &str = "@";
 /// Gets rid of internal symbol prefixes for printing.
 /// This allows us to test parsing of desugared programs.
 pub fn sanitize_internal_name(name: &str) -> Cow<'_, str> {
-    if name.starts_with(INTERNAL_SYMBOL_PREFIX) {
-        Cow::Owned(format!(
-            "_{}",
-            name.strip_prefix(INTERNAL_SYMBOL_PREFIX).unwrap()
-        ))
+    if let Some(stripped) = name.strip_prefix(INTERNAL_SYMBOL_PREFIX) {
+        Cow::Owned(format!("_{}", stripped))
     } else {
         Cow::Borrowed(name)
     }

@@ -2,41 +2,23 @@ use egglog::{extract::DefaultCost, *};
 use egglog_ast::span::{RustSpan, Span};
 
 #[test]
-fn globals_missing_prefix_warns_by_default() {
-    testing_logger::setup();
-
+#[should_panic(expected = "Non-global variable `$x` must not start with `$`")]
+fn globals_missing_prefix_panics_for_prefixed_pattern_variable_in_strict_mode() {
     let mut egraph = EGraph::default();
+    egraph.set_strict_mode(true);
     egraph
-        .parse_and_run_program(None, "(let value 41)")
+        .parse_and_run_program(None, "(rule ((= $x 1)) ())")
         .unwrap();
-
-    testing_logger::validate(|logs| {
-        let bodies: Vec<_> = logs.iter().map(|entry| entry.body.clone()).collect();
-        assert!(
-            bodies
-                .iter()
-                .any(|body| body.contains("Global `value` should start with `$`")),
-            "expected warning about missing global prefix, got logs: {:?}",
-            bodies
-        );
-    });
 }
 
 #[test]
-fn globals_missing_prefix_errors_when_opted_in() {
-    let _ = env_logger::builder().is_test(true).try_init();
-
+#[should_panic(expected = "Non-global variable `$y` must not start with `$`")]
+fn globals_missing_prefix_panics_for_prefixed_rule_let_in_strict_mode() {
     let mut egraph = EGraph::default();
     egraph.set_strict_mode(true);
-    let err = egraph
-        .parse_and_run_program(None, "(let value 41)")
-        .unwrap_err();
-    match err {
-        Error::TypeError(TypeError::GlobalMissingPrefix { ref name, .. }) => {
-            assert_eq!(name, "value");
-        }
-        other => panic!("expected missing dollar error, got {other:?}"),
-    }
+    egraph
+        .parse_and_run_program(None, "(rule () ((let $y 1)))")
+        .unwrap();
 }
 
 #[test]
