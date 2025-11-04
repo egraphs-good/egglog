@@ -1,4 +1,4 @@
-use std::{iter, sync::Arc};
+use std::{iter, rc::Rc, sync::Arc};
 
 use crate::core_relations::{
     ColumnId, DisplacedTableWithProvenance, ProofReason as UfProofReason, ProofStep, RuleBuilder,
@@ -261,10 +261,14 @@ impl EGraph {
         let spec = self.proof_specs[ReasonSpecId::new(reason_row[0].rep())].clone();
         let res = match &*spec {
             ProofReason::Rule(data) => {
+                debug_assert_eq!(
+                    self.rules[data.rule_id].desc.as_ref(),
+                    data.rule_name.as_ref()
+                );
                 let (subst, body_pfs) = self.rule_proof(data, &reason_row[1..], state);
                 let result = self.reconstruct_term(term_id, ColumnTy::Id, state);
                 state.store.intern_term(&TermProof::PRule {
-                    rule_name: String::from(&*self.rules[data.rule_id].desc).into(),
+                    rule_name: Rc::<str>::from(data.rule_name.as_ref()),
                     subst,
                     body_pfs,
                     result,
@@ -448,10 +452,14 @@ impl EGraph {
         let spec = self.proof_specs[ReasonSpecId::new(reason_row[0].rep())].clone();
         match &*spec {
             ProofReason::Rule(data) => {
+                debug_assert_eq!(
+                    self.rules[data.rule_id].desc.as_ref(),
+                    data.rule_name.as_ref()
+                );
                 let (subst, body_pfs) = self.rule_proof(data, &reason_row[1..], state);
                 let l_term = self.reconstruct_term(l, ColumnTy::Id, state);
                 let r_term = self.reconstruct_term(r, ColumnTy::Id, state);
-                let rule_name = String::from(&*self.rules[data.rule_id].desc).into();
+                let rule_name = Rc::<str>::from(data.rule_name.as_ref());
                 state.store.intern_eq(&EqProof::PRule {
                     rule_name,
                     subst,
