@@ -248,13 +248,13 @@ where
 
     Ok(match egraph.parse_and_run_program(filename, command) {
         Ok(msgs) => {
-            if mode == RunMode::Interactive {
-                writeln!(output, "(done)")?;
-            }
             if mode != RunMode::NoMessages {
                 for msg in msgs {
                     write!(output, "{msg}")?;
                 }
+            }
+            if mode == RunMode::Interactive {
+                writeln!(output, "(done)")?;
             }
             None
         }
