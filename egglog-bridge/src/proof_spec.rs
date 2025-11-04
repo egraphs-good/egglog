@@ -320,9 +320,12 @@ impl EGraph {
                 state.store.termdag.lookup(&app)
             }
             ColumnTy::Base(ty) => {
-                let literal = self.value_to_literal(&term_id, ty);
-                let lit = state.store.termdag.lit(literal);
-                state.store.termdag.lookup(&lit)
+                let term = if let Some(literal) = self.value_to_literal(&term_id, ty) {
+                    state.store.termdag.lit(literal)
+                } else {
+                    state.store.termdag.unknown_lit()
+                };
+                state.store.termdag.lookup(&term)
             }
         };
 

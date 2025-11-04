@@ -210,22 +210,26 @@ impl EGraph {
         }
     }
 
-    /// Assuming that a [`bool`], [`BackendFloat`], [`i64`], [`BackendString`], and [`()`] types are registered,
-    /// converts a [`Value`] and its corresponding type [`BaseValueId`] to a [`Literal`].
-    pub fn value_to_literal(&self, v: &Value, ty: BaseValueId) -> Literal {
-        if ty == self.base_values().get_ty::<bool>() {
-            Literal::Bool(self.base_values().unwrap::<bool>(*v))
-        } else if ty == self.base_values().get_ty::<i64>() {
-            Literal::Int(self.base_values().unwrap::<i64>(*v))
-        } else if ty == self.base_values().get_ty::<BackendFloat>() {
-            Literal::Float(self.base_values().unwrap::<BackendFloat>(*v).into_inner())
-        } else if ty == self.base_values().get_ty::<BackendString>() {
-            Literal::String(self.base_values().unwrap::<BackendString>(*v).into_inner())
-        } else if ty == self.base_values().get_ty::<()>() {
+    /// Render `v` as a [`Literal`], where possible.
+    ///
+    /// This method returns None when `v` is backed by a type not supported by the [`Literal`]
+    /// enum.
+    pub fn value_to_literal(&self, v: &Value, ty: BaseValueId) -> Option<Literal> {
+        let base_values = self.base_values();
+
+        Some(if let Some(b) = base_values.try_get_as::<bool>(*v, ty) {
+            Literal::Bool(b)
+        } else if let Some(i) = base_values.try_get_as::<i64>(*v, ty) {
+            Literal::Int(i)
+        } else if let Some(f) = base_values.try_get_as::<BackendFloat>(*v, ty) {
+            Literal::Float(f.into_inner())
+        } else if let Some(s) = base_values.try_get_as::<BackendString>(*v, ty) {
+            Literal::String(s.into_inner())
+        } else if base_values.try_get_as::<()>(*v, ty).is_some() {
             Literal::Unit
         } else {
-            panic!("Cannot convert value to literal: unknown base type")
-        }
+            return None;
+        })
     }
 
     fn create_internal(mut db: Database, uf_table: TableId, tracing: bool) -> EGraph {
