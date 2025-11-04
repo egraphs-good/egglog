@@ -18,6 +18,9 @@ pub type TermId = usize;
 #[derive(Clone, PartialEq, Eq, Hash, Debug)]
 pub enum Term {
     Lit(Literal),
+    /// This is a placeholder, used to represent terms that are backed by a base type that we
+    /// cannot model in the source / AST language.
+    UnknownLit,
     Var(String),
     App(String, Vec<TermId>),
 }
@@ -168,6 +171,12 @@ impl TermDag {
         node
     }
 
+    pub fn unknown_lit(&mut self) -> Term {
+        let node = Term::UnknownLit;
+        self.add_node(&node);
+        node
+    }
+
     /// Like [`TermDag::lit`], but returns a [`TermId`] instead of a [`Term`].
     pub fn lit_id(&mut self, lit: Literal) -> TermId {
         let node = Term::Lit(lit);
@@ -217,9 +226,11 @@ impl TermDag {
 
     /// Recursively converts the given term to an expression.
     ///
-    /// Panics if the term contains subterms that are not in the DAG.
+    /// Panics if the term contains subterms that are not in the DAG or cannot be represented by
+    /// the current syntax.
     pub fn term_to_expr(&self, term: &Term, span: Span) -> Expr {
         match term {
+            Term::UnknownLit => panic!("unknown base value"),
             Term::Lit(lit) => Expr::Lit(span, lit.clone()),
             Term::Var(v) => Expr::Var(span, v.clone()),
             Term::App(op, args) => {
@@ -273,6 +284,10 @@ impl TermDag {
                     start_index = Some(result.len());
                     write!(&mut result, "{v}").unwrap();
                 }
+                Term::UnknownLit => {
+                    start_index = Some(result.len());
+                    write!(&mut result, "<unknown-base-val>").unwrap();
+                }
             }
 
             if let Some(start_index) = start_index {
@@ -316,6 +331,9 @@ impl TermDag {
             Term::Lit(lit) => {
                 printer.write_str(&format!("{lit}"))?;
             }
+            Term::UnknownLit => {
+                printer.write_str("(unsupported-base-val)")?;
+            }
             Term::Var(v) => {
                 printer.write_str(v)?;
             }
@@ -339,9 +357,7 @@ impl TermDag {
     /// Returns None if the term is not an application or the index is out of bounds.
     pub fn proj(&self, term: &Term, arg_idx: usize) -> Option<TermId> {
         match term {
-            Term::App(_hd, args) => {
-                args.get(arg_idx).copied()
-            }
+            Term::App(_hd, args) => args.get(arg_idx).copied(),
             _ => None,
         }
     }

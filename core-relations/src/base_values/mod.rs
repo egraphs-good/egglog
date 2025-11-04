@@ -79,6 +79,17 @@ impl BaseValues {
         id
     }
 
+    /// Get the underlying `P` represented by the [`Value`] `v`, assuming it's type `ty` matches
+    /// the [`BaseValueId`] for `P`.
+    ///
+    /// This method does not panic if `P` was never registered as a type in this [`BaseValues`]
+    /// instance.
+    pub fn try_get_as<P: BaseValue>(&self, v: Value, ty: BaseValueId) -> Option<P> {
+        self.type_ids
+            .get(&TypeId::of::<P>())
+            .and_then(|&id| (id == ty).then_some(self.unwrap::<P>(v)))
+    }
+
     /// Get the [`BaseValueId`] for the given base value type `P`.
     pub fn get_ty<P: BaseValue>(&self) -> BaseValueId {
         self.type_ids[&TypeId::of::<P>()]
