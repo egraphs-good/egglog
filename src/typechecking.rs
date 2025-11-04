@@ -297,9 +297,6 @@ impl EGraph {
                     res = self.warn_for_prefixed_non_globals_in_var(span, var);
                 }
             });
-            if res.is_err() {
-                return res;
-            }
         }
 
         rule.head.visit_vars(&mut |span, var| {
