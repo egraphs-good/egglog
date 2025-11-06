@@ -47,7 +47,7 @@ pub mod termdag;
 #[cfg(test)]
 mod tests;
 
-pub use rule::{Function, QueryEntry, RuleBuilder};
+pub use rule::{AtomId, Function, QueryEntry, RuleBuilder, VariableId};
 pub use syntax::{SourceExpr, SourceSyntax, TopLevelLhsExpr};
 use thiserror::Error;
 
@@ -184,6 +184,11 @@ impl EGraph {
             iter::empty(),
         );
         EGraph::create_internal(db, uf_table, true)
+    }
+
+    /// Returns whether this e-graph is collecting provenance data for proofs.
+    pub fn proofs_enabled(&self) -> bool {
+        self.tracing
     }
 
     pub fn literal_to_value(&self, l: &Literal) -> Value {

@@ -13,6 +13,7 @@
 use std::hash::Hasher;
 use std::ops::AddAssign;
 
+use crate::ast::MappedFact;
 use crate::{constraint::grounded_check, *};
 use egglog_ast::generic_ast::{Change, GenericAction, GenericActions, GenericExpr};
 use egglog_ast::span::Span;
@@ -832,6 +833,29 @@ pub struct GenericCoreRule<HeadQ, HeadA, Leaf> {
 pub(crate) type CoreRule = GenericCoreRule<StringOrEq, String, String>;
 pub(crate) type ResolvedCoreRule = GenericCoreRule<ResolvedCall, ResolvedCall, ResolvedVar>;
 
+/// A core rule paired with metadata that records how each original fact maps
+/// onto the flattened query. The `rule` field is the canonicalized core rule
+/// that downstream lowering consumes, while `mapped_facts` preserves the
+/// correspondence to the surface syntax so proof reconstruction can recover the
+/// user-facing facts.
+pub(crate) struct CoreRuleWithFacts<Head, Leaf>
+where
+    Head: Clone + Display,
+    Leaf: Clone + PartialEq + Eq + Display + Hash,
+{
+    /// The canonicalized core rule ready for backend lowering.
+    pub rule: GenericCoreRule<HeadOrEq<Head>, Head, Leaf>,
+    /// Fact annotations that capture how each original AST fact was flattened.
+    /// Used when proofs are enabled to reflect source syntax in the backend.
+    pub mapped_facts: Vec<MappedFact<Head, Leaf>>,
+}
+
+#[derive(Clone)]
+pub(crate) struct CanonicalizedRule {
+    pub rule: ResolvedCoreRule,
+    pub mapped_facts: Vec<MappedFact<ResolvedCall, ResolvedVar>>,
+}
+
 impl<Head1, Head2, Leaf> GenericCoreRule<Head1, Head2, Leaf>
 where
     Head1: Clone,
@@ -934,7 +958,7 @@ pub(crate) trait GenericRuleExt<Head, Leaf> {
         &self,
         typeinfo: &TypeInfo,
         fresh_gen: &mut impl FreshGen<Head, Leaf>,
-    ) -> Result<GenericCoreRule<HeadOrEq<Head>, Head, Leaf>, TypeError>
+    ) -> Result<CoreRuleWithFacts<Head, Leaf>, TypeError>
     where
         Head: Clone + Display + IsFunc,
         Leaf: Clone + PartialEq + Eq + Display + Hash + Debug;
@@ -949,20 +973,23 @@ where
         &self,
         typeinfo: &TypeInfo,
         fresh_gen: &mut impl FreshGen<Head, Leaf>,
-    ) -> Result<GenericCoreRule<HeadOrEq<Head>, Head, Leaf>, TypeError>
+    ) -> Result<CoreRuleWithFacts<Head, Leaf>, TypeError>
     where
         Head: Clone + Display + IsFunc,
         Leaf: Clone + PartialEq + Eq + Display + Hash + Debug,
     {
-        let (body, _correspondence) = Facts(self.body.clone()).to_query(typeinfo, fresh_gen);
+        let (body, correspondence) = Facts(self.body.clone()).to_query(typeinfo, fresh_gen);
         let mut binding = body.get_vars();
         let (head, _correspondence) =
             self.head
                 .to_core_actions(typeinfo, &mut binding, fresh_gen)?;
-        Ok(GenericCoreRule {
-            span: self.span.clone(),
-            body,
-            head,
+        Ok(CoreRuleWithFacts {
+            rule: GenericCoreRule {
+                span: self.span.clone(),
+                body,
+                head,
+            },
+            mapped_facts: correspondence,
         })
     }
 }
@@ -972,7 +999,7 @@ pub(crate) trait ResolvedRuleExt {
         &self,
         typeinfo: &TypeInfo,
         fresh_gen: &mut SymbolGen,
-    ) -> Result<ResolvedCoreRule, TypeError>;
+    ) -> Result<CanonicalizedRule, TypeError>;
 }
 
 impl ResolvedRuleExt for ResolvedRule {
@@ -980,7 +1007,7 @@ impl ResolvedRuleExt for ResolvedRule {
         &self,
         typeinfo: &TypeInfo,
         fresh_gen: &mut SymbolGen,
-    ) -> Result<ResolvedCoreRule, TypeError> {
+    ) -> Result<CanonicalizedRule, TypeError> {
         let value_eq = &typeinfo.get_prims("value-eq").unwrap()[0];
         let value_eq = |at1: &ResolvedAtomTerm, at2: &ResolvedAtomTerm| {
             ResolvedCall::Primitive(SpecializedPrimitive {
@@ -990,7 +1017,7 @@ impl ResolvedRuleExt for ResolvedRule {
             })
         };
 
-        let rule = self.to_core_rule(typeinfo, fresh_gen)?;
+        let CoreRuleWithFacts { rule, mapped_facts } = self.to_core_rule(typeinfo, fresh_gen)?;
 
         // The groundedness check happens before canonicalization, because canonicalization
         // may turn ungrounded variables in a query to unbounded variables in actions (e.g.,
@@ -999,6 +1026,6 @@ impl ResolvedRuleExt for ResolvedRule {
 
         let rule = rule.canonicalize(value_eq);
 
-        Ok(rule)
+        Ok(CanonicalizedRule { rule, mapped_facts })
     }
 }

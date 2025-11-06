@@ -28,6 +28,9 @@ struct Args {
     /// Serializes the egraph for each egglog file as an SVG
     #[clap(long)]
     to_svg: bool,
+    /// Enables proof generation and provenance tracking
+    #[clap(long)]
+    enable_proofs: bool,
     /// Splits the serialized egraph into primitives and non-primitives
     #[clap(long)]
     serialize_split_primitive_outputs: bool,
@@ -67,10 +70,17 @@ pub fn cli(mut egraph: EGraph) {
         .init();
 
     let args = Args::parse();
+    let threads = args.threads;
     rayon::ThreadPoolBuilder::new()
-        .num_threads(args.threads)
+        .num_threads(threads)
         .build_global()
-        .unwrap();
+        .ok();
+    if args.enable_proofs && !egraph.proofs_enabled() {
+        // NB: this clears any previous settings and state from the e-graph. It is not generally
+        // safe to enable proofs mid-stream and given the way `cli` is invoked by main, this is not
+        // a problem.
+        egraph = EGraph::with_proofs();
+    }
     log::debug!(
         "Initialized thread pool with {} threads",
         rayon::current_num_threads()
