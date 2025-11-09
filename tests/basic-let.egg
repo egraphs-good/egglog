@@ -1,0 +1,10 @@
+(datatype Expr 
+  (Num i64 :cost 1)
+  (Add Expr Expr :cost 5))
+
+
+(let e1 (Num 1))
+(let e2 (Add e1 e1))
+
+(check (= e1 e1))
+
