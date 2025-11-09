@@ -1517,11 +1517,34 @@ impl RuleProofState {
                         .add_toplevel_expr(TopLevelLhsExpr::Exists(syntax_id));
                 }
                 GenericFact::Eq(_, lhs, rhs) => {
-                    let lhs_id = builder.expr(lhs, &ctx);
-                    let rhs_id = builder.expr(rhs, &ctx);
-                    builder
-                        .syntax
-                        .add_toplevel_expr(TopLevelLhsExpr::Eq(lhs_id, rhs_id));
+                    let lhs_is_synthesized =
+                        matches!(lhs, GenericExpr::Var(_, v) if ctx.var_entry(v).is_none());
+                    let rhs_is_synthesized =
+                        matches!(rhs, GenericExpr::Var(_, v) if ctx.var_entry(v).is_none());
+                    match (lhs_is_synthesized, rhs_is_synthesized) {
+                        (true, true) => {} // equality only involves synthesized temporaries.
+                        (true, false) => {
+                            let rhs_id = builder.expr(rhs, &ctx);
+                            // Only the non-phantom side needs to appear in the reconstructed syntax.
+                            builder
+                                .syntax
+                                .add_toplevel_expr(TopLevelLhsExpr::Exists(rhs_id));
+                        }
+                        (false, true) => {
+                            let lhs_id = builder.expr(lhs, &ctx);
+                            // Only the non-phantom side needs to appear in the reconstructed syntax.
+                            builder
+                                .syntax
+                                .add_toplevel_expr(TopLevelLhsExpr::Exists(lhs_id));
+                        }
+                        (false, false) => {
+                            let lhs_id = builder.expr(lhs, &ctx);
+                            let rhs_id = builder.expr(rhs, &ctx);
+                            builder
+                                .syntax
+                                .add_toplevel_expr(TopLevelLhsExpr::Eq(lhs_id, rhs_id));
+                        }
+                    }
                 }
             }
         }
@@ -1601,12 +1624,9 @@ impl ProofSyntaxBuilder {
         if let Some(id) = self.var_cache.get(var) {
             return *id;
         }
-        let entry = ctx.var_entry(var).unwrap_or_else(|| {
-            panic!(
-                "resolved var missing from query bindings: {}",
-                var.name
-            )
-        });
+        let entry = ctx
+            .var_entry(var)
+            .unwrap_or_else(|| panic!("resolved var missing from query bindings: {}", var.name));
         let syntax_id = match entry {
             QueryEntry::Var(variable) => {
                 let ty = ctx
