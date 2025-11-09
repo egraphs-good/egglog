@@ -1299,8 +1299,8 @@ impl MergeFn {
         egraph: &mut EGraph,
     ) -> Box<core_relations::MergeFn> {
         assert!(
-            !egraph.tracing || matches!(self, MergeFn::UnionId),
-            "proofs aren't supported for non-union merge functions"
+            !egraph.tracing || matches!(self, MergeFn::UnionId | MergeFn::AssertEq),
+            "proofs aren't supported for merge functions other than UnionId or AssertEq"
         );
 
         let resolved = self.resolve(function_name, egraph);
