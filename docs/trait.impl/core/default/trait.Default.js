@@ -1,0 +1,9 @@
+(function() {
+    var implementors = Object.fromEntries([["egglog",[["impl <a class=\"trait\" href=\"https://doc.rust-lang.org/1.87.0/core/default/trait.Default.html\" title=\"trait core::default::Default\">Default</a> for <a class=\"struct\" href=\"egglog/ast/struct.Parser.html\" title=\"struct egglog::ast::Parser\">Parser</a>"],["impl <a class=\"trait\" href=\"https://doc.rust-lang.org/1.87.0/core/default/trait.Default.html\" title=\"trait core::default::Default\">Default</a> for <a class=\"struct\" href=\"egglog/extract/struct.TreeAdditiveCostModel.html\" title=\"struct egglog::extract::TreeAdditiveCostModel\">TreeAdditiveCostModel</a>"],["impl <a class=\"trait\" href=\"https://doc.rust-lang.org/1.87.0/core/default/trait.Default.html\" title=\"trait core::default::Default\">Default</a> for <a class=\"struct\" href=\"egglog/struct.EGraph.html\" title=\"struct egglog::EGraph\">EGraph</a>"],["impl <a class=\"trait\" href=\"https://doc.rust-lang.org/1.87.0/core/default/trait.Default.html\" title=\"trait core::default::Default\">Default</a> for <a class=\"struct\" href=\"egglog/struct.SerializeConfig.html\" title=\"struct egglog::SerializeConfig\">SerializeConfig</a>"],["impl <a class=\"trait\" href=\"https://doc.rust-lang.org/1.87.0/core/default/trait.Default.html\" title=\"trait core::default::Default\">Default</a> for <a class=\"struct\" href=\"egglog/struct.TermDag.html\" title=\"struct egglog::TermDag\">TermDag</a>"],["impl&lt;Var, Value&gt; <a class=\"trait\" href=\"https://doc.rust-lang.org/1.87.0/core/default/trait.Default.html\" title=\"trait core::default::Default\">Default</a> for <a class=\"struct\" href=\"egglog/constraint/struct.Problem.html\" title=\"struct egglog::constraint::Problem\">Problem</a>&lt;Var, Value&gt;"]]]]);
+    if (window.register_implementors) {
+        window.register_implementors(implementors);
+    } else {
+        window.pending_implementors = implementors;
+    }
+})()
+//{"start":57,"fragment_lengths":[1705]}
