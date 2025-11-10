@@ -248,13 +248,13 @@ where
 
     Ok(match egraph.parse_and_run_program(filename, command) {
         Ok(msgs) => {
-            if mode == RunMode::Interactive {
-                writeln!(output, "(done)")?;
-            }
             if mode != RunMode::NoMessages {
                 for msg in msgs {
                     write!(output, "{msg}")?;
                 }
+            }
+            if mode == RunMode::Interactive {
+                writeln!(output, "(done)")?;
             }
             None
         }
@@ -360,7 +360,7 @@ mod tests {
         egraph
             .repl_with(input.as_bytes(), &mut output, RunMode::Interactive, false)
             .unwrap();
-        assert_eq!(String::from_utf8(output).unwrap(), "(done)\n1\n");
+        assert_eq!(String::from_utf8(output).unwrap(), "1\n(done)\n");
 
         let input = "xyz";
         let mut output: Vec<u8> = Vec::new();
