@@ -1,28 +1,31 @@
 use std::fmt::{self, Debug, Display};
 use std::sync::Arc;
 
-#[derive(Clone, PartialEq, Eq, Hash)]
+use schemars::JsonSchema;
+
+#[derive(Clone, PartialEq, Eq, Hash, JsonSchema)]
+#[schemars(_unstable_ref_variants)]
 pub enum Span {
     Panic,
     Egglog(Arc<EgglogSpan>),
     Rust(Arc<RustSpan>),
 }
 
-#[derive(Debug, Clone, PartialEq, Eq, Hash)]
+#[derive(Debug, Clone, PartialEq, Eq, Hash, JsonSchema)]
 pub struct EgglogSpan {
     pub file: Arc<SrcFile>,
     pub i: usize,
     pub j: usize,
 }
 
-#[derive(Debug, Clone, PartialEq, Eq, Hash)]
+#[derive(Debug, Clone, PartialEq, Eq, Hash, JsonSchema)]
 pub struct RustSpan {
     pub file: &'static str,
     pub line: u32,
     pub column: u32,
 }
 
-#[derive(Debug, PartialEq, Eq, Hash, Clone)]
+#[derive(Debug, PartialEq, Eq, Hash, Clone, JsonSchema)]
 pub struct SrcFile {
     pub name: Option<String>,
     pub contents: String,

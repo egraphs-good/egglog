@@ -2,10 +2,12 @@ use std::fmt::Display;
 use std::hash::Hash;
 
 use ordered_float::OrderedFloat;
+use schemars::JsonSchema;
 
 use crate::span::Span;
 
-#[derive(Debug, PartialEq, Eq, PartialOrd, Ord, Hash, Clone)]
+#[derive(Debug, PartialEq, Eq, PartialOrd, Ord, Hash, Clone, JsonSchema)]
+#[schemars(untagged)]
 pub enum Literal {
     Int(i64),
     Float(OrderedFloat<f64>),
@@ -14,7 +16,8 @@ pub enum Literal {
     Unit,
 }
 
-#[derive(Clone, Debug, PartialEq, Eq, Hash)]
+#[derive(Clone, Debug, PartialEq, Eq, Hash, JsonSchema)]
+#[schemars(_unstable_ref_variants)]
 pub enum GenericExpr<Head, Leaf> {
     Var(Span, Leaf),
     Call(Span, Head, Vec<GenericExpr<Head, Leaf>>),
@@ -31,18 +34,19 @@ pub enum GenericExpr<Head, Leaf> {
 /// ```text
 /// (fail (check (!= 1 1)))
 /// ```
-#[derive(Clone, Debug, PartialEq, Eq, Hash)]
+#[derive(Clone, Debug, PartialEq, Eq, Hash, JsonSchema)]
 pub enum GenericFact<Head, Leaf> {
     Eq(Span, GenericExpr<Head, Leaf>, GenericExpr<Head, Leaf>),
     Fact(GenericExpr<Head, Leaf>),
 }
 
-#[derive(Clone, Debug, PartialEq, Eq, Hash)]
+#[derive(Clone, Debug, PartialEq, Eq, Hash, JsonSchema)]
 pub struct GenericActions<Head: Clone + Display, Leaf: Clone + PartialEq + Eq + Display + Hash>(
     pub Vec<GenericAction<Head, Leaf>>,
 );
 
-#[derive(Clone, Debug, PartialEq, Eq, Hash)]
+#[derive(Clone, Debug, PartialEq, Eq, Hash, JsonSchema)]
+#[schemars(_unstable_ref_variants)]
 pub enum GenericAction<Head, Leaf>
 where
     Head: Clone + Display,
@@ -80,7 +84,7 @@ where
     Expr(Span, GenericExpr<Head, Leaf>),
 }
 
-#[derive(Clone, Debug, PartialEq, Eq, Hash)]
+#[derive(Clone, Debug, PartialEq, Eq, Hash, JsonSchema)]
 pub struct GenericRule<Head, Leaf>
 where
     Head: Clone + Display,
@@ -96,7 +100,8 @@ where
 }
 
 /// Change a function entry.
-#[derive(Clone, Debug, Copy, PartialEq, Eq, Hash)]
+#[derive(Clone, Debug, Copy, PartialEq, Eq, Hash, JsonSchema)]
+#[schemars(untagged)]
 pub enum Change {
     /// `delete` this entry from a function.
     /// Be wary! Only delete entries that are guaranteed to be not useful.

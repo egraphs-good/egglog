@@ -12,7 +12,7 @@ readme = { workspace = true }
 
 [dependencies]
 ordered-float = { workspace = true }
-
+schemars = { workspace = true }
 
 [features]
 default = []

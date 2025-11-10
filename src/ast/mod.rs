@@ -15,6 +15,7 @@ pub use egglog_ast::span::{RustSpan, Span};
 use egglog_ast::util::ListDisplay;
 pub use expr::*;
 pub use parse::*;
+use schemars::JsonSchema;
 
 #[derive(Clone, Debug)]
 /// The egglog internal representation of already compiled rules
@@ -221,7 +222,8 @@ where
 pub type Schedule = GenericSchedule<String, String>;
 pub(crate) type ResolvedSchedule = GenericSchedule<ResolvedCall, ResolvedVar>;
 
-#[derive(Debug, Clone, PartialEq, Eq, Hash)]
+#[derive(Debug, Clone, PartialEq, Eq, Hash, JsonSchema)]
+#[schemars(_unstable_ref_variants)]
 pub enum GenericSchedule<Head, Leaf> {
     Saturate(Span, Box<GenericSchedule<Head, Leaf>>),
     Repeat(Span, usize, Box<GenericSchedule<Head, Leaf>>),
@@ -271,7 +273,8 @@ pub type Command = GenericCommand<String, String>;
 
 pub type Subsume = bool;
 
-#[derive(Debug, Clone, PartialEq, Eq)]
+#[derive(Debug, Clone, PartialEq, Eq, JsonSchema)]
+#[schemars(_unstable_ref_variants)]
 pub enum Subdatatypes {
     Variants(Vec<Variant>),
     NewSort(String, Vec<Expr>),
@@ -280,7 +283,7 @@ pub enum Subdatatypes {
 /// The mode of printing a function. The default mode prints the function in a user-friendly way and
 /// has an unreliable interface.
 /// The CSV mode prints the function in the CSV format.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, JsonSchema)]
 pub enum PrintFunctionMode {
     Default,
     CSV,
@@ -298,7 +301,8 @@ impl Display for PrintFunctionMode {
 /// A [`Command`] is the top-level construct in egglog.
 /// It includes defining rules, declaring functions,
 /// adding to tables, and running rules (via a [`Schedule`]).
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, JsonSchema)]
+#[schemars(_unstable_ref_variants)]
 pub enum GenericCommand<Head, Leaf>
 where
     Head: Clone + Display,
@@ -389,6 +393,7 @@ where
     /// (relation path (i64 i64))
     /// (relation edge (i64 i64))
     /// ```
+    ///
     Relation {
         span: Span,
         name: String,
@@ -805,7 +810,7 @@ impl Display for IdentSort {
 pub type RunConfig = GenericRunConfig<String, String>;
 pub(crate) type ResolvedRunConfig = GenericRunConfig<ResolvedCall, ResolvedVar>;
 
-#[derive(Clone, Debug, PartialEq, Eq, Hash)]
+#[derive(Clone, Debug, PartialEq, Eq, Hash, JsonSchema)]
 pub struct GenericRunConfig<Head, Leaf> {
     pub ruleset: String,
     pub until: Option<Vec<GenericFact<Head, Leaf>>>,
@@ -849,7 +854,7 @@ where
 pub type FunctionDecl = GenericFunctionDecl<String, String>;
 pub(crate) type ResolvedFunctionDecl = GenericFunctionDecl<ResolvedCall, ResolvedVar>;
 
-#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash, JsonSchema)]
 pub enum FunctionSubtype {
     Constructor,
     Relation,
@@ -868,7 +873,7 @@ impl Display for FunctionSubtype {
 
 /// Represents the declaration of a function
 /// directly parsed from source syntax.
-#[derive(Clone, Debug, PartialEq, Eq, Hash)]
+#[derive(Clone, Debug, PartialEq, Eq, Hash, JsonSchema)]
 pub struct GenericFunctionDecl<Head, Leaf>
 where
     Head: Clone + Display,
@@ -886,7 +891,7 @@ where
     pub span: Span,
 }
 
-#[derive(Clone, Debug, PartialEq, Eq, Hash)]
+#[derive(Clone, Debug, PartialEq, Eq, Hash, JsonSchema)]
 pub struct Variant {
     pub span: Span,
     pub name: String,
@@ -908,7 +913,7 @@ impl Display for Variant {
     }
 }
 
-#[derive(Clone, Debug, PartialEq, Eq, Hash)]
+#[derive(Clone, Debug, PartialEq, Eq, Hash, JsonSchema)]
 pub struct Schema {
     pub input: Vec<String>,
     pub output: String,
@@ -1104,7 +1109,7 @@ pub(crate) type ResolvedRule = GenericRule<ResolvedCall, ResolvedVar>;
 
 pub type Rewrite = GenericRewrite<String, String>;
 
-#[derive(Clone, Debug)]
+#[derive(Clone, Debug, JsonSchema)]
 pub struct GenericRewrite<Head, Leaf> {
     pub span: Span,
     pub lhs: GenericExpr<Head, Leaf>,
