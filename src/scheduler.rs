@@ -348,6 +348,7 @@ impl SchedulerRuleInfo {
             egraph.backend.new_rule(name, true),
             &egraph.functions,
             &egraph.type_info,
+            Vec::new(),
         );
         qrule_builder.query(&rule.body, true);
         let entries = free_vars
@@ -367,6 +368,7 @@ impl SchedulerRuleInfo {
             egraph.backend.new_rule(name, false),
             &egraph.functions,
             &egraph.type_info,
+            Vec::new(),
         );
         let mut entries = free_vars
             .iter()

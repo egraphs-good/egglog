@@ -108,6 +108,7 @@ impl SourceSyntax {
 #[derive(Debug)]
 pub(crate) struct RuleData {
     pub(crate) rule_id: RuleId,
+    pub(crate) rule_name: Box<str>,
     pub(crate) syntax: SourceSyntax,
 }
 
@@ -144,6 +145,7 @@ impl ProofBuilder {
 
         let reason_spec = Arc::new(ProofReason::Rule(RuleData {
             rule_id: self.rule_id,
+            rule_name: Box::<str>::from(&*self.rule_description),
             syntax: syntax.clone(),
         }));
         let reason_table = egraph.reason_table(&reason_spec);

@@ -1468,7 +1468,7 @@ fn test_simple_rule_proof_format() {
     egraph.run_rules(&[not_true_rule, not_false_rule]).unwrap();
     // Get proof for not_true = false
     let mut proof_store = ProofStore::default();
-    egraph
+    let _eq_pf_id = egraph
         .explain_terms_equal(not_true_id, false_id, &mut proof_store)
         .unwrap();
 }
