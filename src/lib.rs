@@ -381,17 +381,27 @@ impl EGraph {
         expr: &ResolvedExpr,
     ) -> Result<egglog_bridge::MergeFn, Error> {
         match expr {
-            GenericExpr::Lit(_, literal) => {
+            GenericExpr::Lit {
+                field1: _,
+                field2: literal,
+            } => {
                 let val = literal_to_value(&self.backend, literal);
                 Ok(egglog_bridge::MergeFn::Const(val))
             }
-            GenericExpr::Var(span, resolved_var) => match resolved_var.name.as_str() {
+            GenericExpr::Var {
+                span,
+                name: resolved_var,
+            } => match resolved_var.name.as_str() {
                 "old" => Ok(egglog_bridge::MergeFn::Old),
                 "new" => Ok(egglog_bridge::MergeFn::New),
                 // NB: type-checking should already catch unbound variables here.
                 _ => Err(TypeError::Unbound(resolved_var.name.clone(), span.clone()).into()),
             },
-            GenericExpr::Call(_, ResolvedCall::Func(f), args) => {
+            GenericExpr::Call {
+                field1: _,
+                field2: ResolvedCall::Func(f),
+                field3: args,
+            } => {
                 let translated_args = args
                     .iter()
                     .map(|arg| self.translate_expr_to_mergefn(arg))
@@ -401,7 +411,11 @@ impl EGraph {
                     translated_args,
                 ))
             }
-            GenericExpr::Call(_, ResolvedCall::Primitive(p), args) => {
+            GenericExpr::Call {
+                field1: _,
+                field2: ResolvedCall::Primitive(p),
+                field3: args,
+            } => {
                 let translated_args = args
                     .iter()
                     .map(|arg| self.translate_expr_to_mergefn(arg))
@@ -613,8 +627,15 @@ impl EGraph {
     // returns whether the egraph was updated
     fn run_schedule(&mut self, sched: &ResolvedSchedule) -> Result<RunReport, Error> {
         match sched {
-            ResolvedSchedule::Run(span, config) => self.run_rules(span, config),
-            ResolvedSchedule::Repeat(_span, limit, sched) => {
+            ResolvedSchedule::Run {
+                field1: span,
+                field2: config,
+            } => self.run_rules(span, config),
+            ResolvedSchedule::Repeat {
+                field1: _span,
+                field2: limit,
+                field3: sched,
+            } => {
                 let mut report = RunReport::default();
                 for _i in 0..*limit {
                     let rec = self.run_schedule(sched)?;
@@ -626,7 +647,10 @@ impl EGraph {
                 }
                 Ok(report)
             }
-            ResolvedSchedule::Saturate(_span, sched) => {
+            ResolvedSchedule::Saturate {
+                field1: _span,
+                field2: sched,
+            } => {
                 let mut report = RunReport::default();
                 loop {
                     let rec = self.run_schedule(sched)?;
@@ -638,7 +662,10 @@ impl EGraph {
                 }
                 Ok(report)
             }
-            ResolvedSchedule::Sequence(_span, scheds) => {
+            ResolvedSchedule::Sequence {
+                field1: _span,
+                field2: scheds,
+            } => {
                 let mut report = RunReport::default();
                 for sched in scheds {
                     report.union(self.run_schedule(sched)?);
@@ -808,12 +835,20 @@ impl EGraph {
     /// Evaluates an expression, returns the sort of the expression and the evaluation result.
     pub fn eval_expr(&mut self, expr: &Expr) -> Result<(ArcSort, Value), Error> {
         let span = expr.span();
-        let command = Command::Action(Action::Expr(span.clone(), expr.clone()));
+        let command = Command::Action {
+            field1: Action::Expr {
+                field1: span.clone(),
+                field2: expr.clone(),
+            },
+        };
         let resolved_commands = self.process_command(command)?;
         assert_eq!(resolved_commands.len(), 1);
         let resolved_command = resolved_commands.into_iter().next().unwrap();
         let resolved_expr = match resolved_command {
-            ResolvedNCommand::CoreAction(ResolvedAction::Expr(_, resolved_expr)) => resolved_expr,
+            ResolvedNCommand::CoreAction(ResolvedAction::Expr {
+                field1: _,
+                field2: resolved_expr,
+            }) => resolved_expr,
             _ => unreachable!(),
         };
         let sort = resolved_expr.output_type();
@@ -846,11 +881,11 @@ impl EGraph {
             sort: expr.output_type(),
             is_global_ref: false,
         };
-        let actions = ResolvedActions::singleton(ResolvedAction::Let(
-            span.clone(),
-            result_var.clone(),
-            expr.clone(),
-        ));
+        let actions = ResolvedActions::singleton(ResolvedAction::Let {
+            field1: span.clone(),
+            field2: result_var.clone(),
+            field3: expr.clone(),
+        });
         let actions = actions
             .to_core_actions(
                 &self.type_info,
@@ -998,7 +1033,11 @@ impl EGraph {
                 log::info!("Checked fact {:?}.", facts);
             }
             ResolvedNCommand::CoreAction(action) => match &action {
-                ResolvedAction::Let(_, name, contents) => {
+                ResolvedAction::Let {
+                    field1: _,
+                    field2: name,
+                    field3: contents,
+                } => {
                     panic!("Globals should have been desugared away: {name} = {contents}")
                 }
                 _ => {
@@ -1330,6 +1369,8 @@ impl EGraph {
         input: &str,
     ) -> Result<Vec<CommandOutput>, Error> {
         let parsed = self.parser.get_program_from_string(filename, input)?;
+        serde_json::to_writer_pretty(&mut std::io::stdout(), &parsed)
+            .expect("error serializing to json");
         self.run_program(parsed)
     }
 

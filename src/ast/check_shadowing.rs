@@ -61,15 +61,17 @@ impl Names {
         // all of the variable names, and then we check each of those names once
         fn get_expr_names(expr: &ResolvedExpr, inner: &mut Names) {
             match expr {
-                ResolvedExpr::Lit(..) => {}
-                ResolvedExpr::Var(span, name) => {
+                ResolvedExpr::Lit { .. } => {}
+                ResolvedExpr::Var { span, name } => {
                     if !inner.0.contains_key(&name.name) {
                         inner.0.insert(name.name.clone(), span.clone());
                     }
                 }
-                ResolvedExpr::Call(_span, _func, args) => {
-                    args.iter().for_each(|e| get_expr_names(e, inner))
-                }
+                ResolvedExpr::Call {
+                    field1: _span,
+                    field2: _func,
+                    field3: args,
+                } => args.iter().for_each(|e| get_expr_names(e, inner)),
             };
         }
 
@@ -77,11 +79,15 @@ impl Names {
 
         for fact in query {
             match fact {
-                ResolvedFact::Eq(_span, e1, e2) => {
+                ResolvedFact::Eq {
+                    field1: _span,
+                    field2: e1,
+                    field3: e2,
+                } => {
                     get_expr_names(e1, &mut inner);
                     get_expr_names(e2, &mut inner);
                 }
-                ResolvedFact::Fact(e) => get_expr_names(e, &mut inner),
+                ResolvedFact::Fact { field1: e } => get_expr_names(e, &mut inner),
             }
         }
 
@@ -93,7 +99,12 @@ impl Names {
     }
 
     fn check_shadowing_action(&mut self, action: &ResolvedAction) -> Result<(), Error> {
-        if let ResolvedAction::Let(span, name, _args) = action {
+        if let ResolvedAction::Let {
+            field1: span,
+            field2: name,
+            field3: _args,
+        } = action
+        {
             self.check(name.name.clone(), span.clone())
         } else {
             Ok(())

@@ -80,8 +80,12 @@ impl_from!(String(String));
 impl<Head: Display, Leaf: Display> Display for GenericFact<Head, Leaf> {
     fn fmt(&self, f: &mut Formatter) -> std::fmt::Result {
         match self {
-            GenericFact::Eq(_, e1, e2) => write!(f, "(= {e1} {e2})"),
-            GenericFact::Fact(expr) => write!(f, "{expr}"),
+            GenericFact::Eq {
+                field1: _,
+                field2: e1,
+                field3: e2,
+            } => write!(f, "(= {e1} {e2})"),
+            GenericFact::Fact { field1: expr } => write!(f, "{expr}"),
         }
     }
 }
@@ -94,8 +98,17 @@ where
 {
     fn fmt(&self, f: &mut Formatter) -> std::fmt::Result {
         match self {
-            GenericAction::Let(_, lhs, rhs) => write!(f, "(let {} {})", lhs, rhs),
-            GenericAction::Set(_, lhs, args, rhs) => write!(
+            GenericAction::Let {
+                field1: _,
+                field2: lhs,
+                field3: rhs,
+            } => write!(f, "(let {} {})", lhs, rhs),
+            GenericAction::Set {
+                field1: _,
+                field2: lhs,
+                field3: args,
+                field4: rhs,
+            } => write!(
                 f,
                 "(set ({} {}) {})",
                 lhs,
@@ -105,8 +118,17 @@ where
                     .join(" "),
                 rhs
             ),
-            GenericAction::Union(_, lhs, rhs) => write!(f, "(union {} {})", lhs, rhs),
-            GenericAction::Change(_, change, lhs, args) => {
+            GenericAction::Union {
+                field1: _,
+                field2: lhs,
+                field3: rhs,
+            } => write!(f, "(union {} {})", lhs, rhs),
+            GenericAction::Change {
+                field1: _,
+                field2: change,
+                field3: lhs,
+                field4: args,
+            } => {
                 let change_str = match change {
                     Change::Delete => "delete",
                     Change::Subsume => "subsume",
@@ -122,8 +144,14 @@ where
                         .join(" ")
                 )
             }
-            GenericAction::Panic(_, msg) => write!(f, "(panic \"{}\")", msg),
-            GenericAction::Expr(_, e) => write!(f, "{}", e),
+            GenericAction::Panic {
+                field1: _,
+                field2: msg,
+            } => write!(f, "(panic \"{}\")", msg),
+            GenericAction::Expr {
+                field1: _,
+                field2: e,
+            } => write!(f, "{}", e),
         }
     }
 }
@@ -135,9 +163,19 @@ where
 {
     fn fmt(&self, f: &mut Formatter) -> std::fmt::Result {
         match self {
-            GenericExpr::Lit(_ann, lit) => write!(f, "{lit}"),
-            GenericExpr::Var(_ann, var) => write!(f, "{var}"),
-            GenericExpr::Call(_ann, op, children) => {
+            GenericExpr::Lit {
+                field1: _ann,
+                field2: lit,
+            } => write!(f, "{lit}"),
+            GenericExpr::Var {
+                span: _ann,
+                name: var,
+            } => write!(f, "{var}"),
+            GenericExpr::Call {
+                field1: _ann,
+                field2: op,
+                field3: children,
+            } => {
                 write!(f, "({} {})", op, ListDisplay(children, " "))
             }
         }
@@ -221,29 +259,63 @@ where
         f: &mut impl FnMut(&GenericExpr<Head, Leaf>) -> GenericExpr<Head, Leaf>,
     ) -> Self {
         match self {
-            GenericAction::Let(span, lhs, rhs) => {
-                GenericAction::Let(span.clone(), lhs.clone(), f(rhs))
-            }
-            GenericAction::Set(span, lhs, args, rhs) => {
+            GenericAction::Let {
+                field1: span,
+                field2: lhs,
+                field3: rhs,
+            } => GenericAction::Let {
+                field1: span.clone(),
+                field2: lhs.clone(),
+                field3: f(rhs),
+            },
+            GenericAction::Set {
+                field1: span,
+                field2: lhs,
+                field3: args,
+                field4: rhs,
+            } => {
                 let right = f(rhs);
-                GenericAction::Set(
-                    span.clone(),
-                    lhs.clone(),
-                    args.iter().map(f).collect(),
-                    right,
-                )
+                GenericAction::Set {
+                    field1: span.clone(),
+                    field2: lhs.clone(),
+                    field3: args.iter().map(f).collect(),
+                    field4: right,
+                }
             }
-            GenericAction::Change(span, change, lhs, args) => GenericAction::Change(
-                span.clone(),
-                *change,
-                lhs.clone(),
-                args.iter().map(f).collect(),
-            ),
-            GenericAction::Union(span, lhs, rhs) => {
-                GenericAction::Union(span.clone(), f(lhs), f(rhs))
-            }
-            GenericAction::Panic(span, msg) => GenericAction::Panic(span.clone(), msg.clone()),
-            GenericAction::Expr(span, e) => GenericAction::Expr(span.clone(), f(e)),
+            GenericAction::Change {
+                field1: span,
+                field2: change,
+                field3: lhs,
+                field4: args,
+            } => GenericAction::Change {
+                field1: span.clone(),
+                field2: *change,
+                field3: lhs.clone(),
+                field4: args.iter().map(f).collect(),
+            },
+            GenericAction::Union {
+                field1: span,
+                field2: lhs,
+                field3: rhs,
+            } => GenericAction::Union {
+                field1: span.clone(),
+                field2: f(lhs),
+                field3: f(rhs),
+            },
+            GenericAction::Panic {
+                field1: span,
+                field2: msg,
+            } => GenericAction::Panic {
+                field1: span.clone(),
+                field2: msg.clone(),
+            },
+            GenericAction::Expr {
+                field1: span,
+                field2: e,
+            } => GenericAction::Expr {
+                field1: span.clone(),
+                field2: f(e),
+            },
         }
     }
 
@@ -254,25 +326,69 @@ where
         f: &mut impl FnMut(GenericExpr<Head, Leaf>) -> GenericExpr<Head, Leaf>,
     ) -> Self {
         match self {
-            GenericAction::Let(span, lhs, rhs) => {
-                GenericAction::Let(span, lhs.clone(), rhs.visit_exprs(f))
-            }
+            GenericAction::Let {
+                field1: span,
+                field2: lhs,
+                field3: rhs,
+            } => GenericAction::Let {
+                field1: span,
+                field2: lhs.clone(),
+                field3: rhs.visit_exprs(f),
+            },
             // TODO should we refactor `Set` so that we can map over Expr::Call(lhs, args)?
             // This seems more natural to oflatt
             // Currently, visit_exprs does not apply f to the first argument of Set.
-            GenericAction::Set(span, lhs, args, rhs) => {
+            GenericAction::Set {
+                field1: span,
+                field2: lhs,
+                field3: args,
+                field4: rhs,
+            } => {
                 let args = args.into_iter().map(|e| e.visit_exprs(f)).collect();
-                GenericAction::Set(span, lhs.clone(), args, rhs.visit_exprs(f))
+                GenericAction::Set {
+                    field1: span,
+                    field2: lhs.clone(),
+                    field3: args,
+                    field4: rhs.visit_exprs(f),
+                }
             }
-            GenericAction::Change(span, change, lhs, args) => {
+            GenericAction::Change {
+                field1: span,
+                field2: change,
+                field3: lhs,
+                field4: args,
+            } => {
                 let args = args.into_iter().map(|e| e.visit_exprs(f)).collect();
-                GenericAction::Change(span, change, lhs.clone(), args)
+                GenericAction::Change {
+                    field1: span,
+                    field2: change,
+                    field3: lhs.clone(),
+                    field4: args,
+                }
             }
-            GenericAction::Union(span, lhs, rhs) => {
-                GenericAction::Union(span, lhs.visit_exprs(f), rhs.visit_exprs(f))
-            }
-            GenericAction::Panic(span, msg) => GenericAction::Panic(span, msg.clone()),
-            GenericAction::Expr(span, e) => GenericAction::Expr(span, e.visit_exprs(f)),
+            GenericAction::Union {
+                field1: span,
+                field2: lhs,
+                field3: rhs,
+            } => GenericAction::Union {
+                field1: span,
+                field2: lhs.visit_exprs(f),
+                field3: rhs.visit_exprs(f),
+            },
+            GenericAction::Panic {
+                field1: span,
+                field2: msg,
+            } => GenericAction::Panic {
+                field1: span,
+                field2: msg.clone(),
+            },
+            GenericAction::Expr {
+                field1: span,
+                field2: e,
+            } => GenericAction::Expr {
+                field1: span,
+                field2: e.visit_exprs(f),
+            },
         }
     }
 
@@ -283,39 +399,88 @@ where
     pub fn map_def_use(self, fvar: &mut impl FnMut(Leaf, bool) -> Leaf) -> Self {
         macro_rules! fvar_expr {
             () => {
-                |span, s: _| GenericExpr::Var(span.clone(), fvar(s.clone(), false))
+                |span, s: _| GenericExpr::Var {
+                    span: span.clone(),
+                    name: fvar(s.clone(), false),
+                }
             };
         }
         match self {
-            GenericAction::Let(span, lhs, rhs) => {
+            GenericAction::Let {
+                field1: span,
+                field2: lhs,
+                field3: rhs,
+            } => {
                 let lhs = fvar(lhs, true);
                 let rhs = rhs.subst_leaf(&mut fvar_expr!());
-                GenericAction::Let(span, lhs, rhs)
+                GenericAction::Let {
+                    field1: span,
+                    field2: lhs,
+                    field3: rhs,
+                }
             }
-            GenericAction::Set(span, lhs, args, rhs) => {
+            GenericAction::Set {
+                field1: span,
+                field2: lhs,
+                field3: args,
+                field4: rhs,
+            } => {
                 let args = args
                     .into_iter()
                     .map(|e| e.subst_leaf(&mut fvar_expr!()))
                     .collect();
                 let rhs = rhs.subst_leaf(&mut fvar_expr!());
-                GenericAction::Set(span, lhs.clone(), args, rhs)
+                GenericAction::Set {
+                    field1: span,
+                    field2: lhs.clone(),
+                    field3: args,
+                    field4: rhs,
+                }
             }
-            GenericAction::Change(span, change, lhs, args) => {
+            GenericAction::Change {
+                field1: span,
+                field2: change,
+                field3: lhs,
+                field4: args,
+            } => {
                 let args = args
                     .into_iter()
                     .map(|e| e.subst_leaf(&mut fvar_expr!()))
                     .collect();
-                GenericAction::Change(span, change, lhs.clone(), args)
+                GenericAction::Change {
+                    field1: span,
+                    field2: change,
+                    field3: lhs.clone(),
+                    field4: args,
+                }
             }
-            GenericAction::Union(span, lhs, rhs) => {
+            GenericAction::Union {
+                field1: span,
+                field2: lhs,
+                field3: rhs,
+            } => {
                 let lhs = lhs.subst_leaf(&mut fvar_expr!());
                 let rhs = rhs.subst_leaf(&mut fvar_expr!());
-                GenericAction::Union(span, lhs, rhs)
+                GenericAction::Union {
+                    field1: span,
+                    field2: lhs,
+                    field3: rhs,
+                }
             }
-            GenericAction::Panic(span, msg) => GenericAction::Panic(span, msg.clone()),
-            GenericAction::Expr(span, e) => {
-                GenericAction::Expr(span, e.subst_leaf(&mut fvar_expr!()))
-            }
+            GenericAction::Panic {
+                field1: span,
+                field2: msg,
+            } => GenericAction::Panic {
+                field1: span,
+                field2: msg.clone(),
+            },
+            GenericAction::Expr {
+                field1: span,
+                field2: e,
+            } => GenericAction::Expr {
+                field1: span,
+                field2: e.subst_leaf(&mut fvar_expr!()),
+            },
         }
     }
 }
@@ -330,10 +495,18 @@ where
         f: &mut impl FnMut(GenericExpr<Head, Leaf>) -> GenericExpr<Head, Leaf>,
     ) -> GenericFact<Head, Leaf> {
         match self {
-            GenericFact::Eq(span, e1, e2) => {
-                GenericFact::Eq(span, e1.visit_exprs(f), e2.visit_exprs(f))
-            }
-            GenericFact::Fact(expr) => GenericFact::Fact(expr.visit_exprs(f)),
+            GenericFact::Eq {
+                field1: span,
+                field2: e1,
+                field3: e2,
+            } => GenericFact::Eq {
+                field1: span,
+                field2: e1.visit_exprs(f),
+                field3: e2.visit_exprs(f),
+            },
+            GenericFact::Fact { field1: expr } => GenericFact::Fact {
+                field1: expr.visit_exprs(f),
+            },
         }
     }
 
@@ -342,8 +515,16 @@ where
         f: &mut impl FnMut(&GenericExpr<Head, Leaf>) -> GenericExpr<Head2, Leaf2>,
     ) -> GenericFact<Head2, Leaf2> {
         match self {
-            GenericFact::Eq(span, e1, e2) => GenericFact::Eq(span.clone(), f(e1), f(e2)),
-            GenericFact::Fact(expr) => GenericFact::Fact(f(expr)),
+            GenericFact::Eq {
+                field1: span,
+                field2: e1,
+                field3: e2,
+            } => GenericFact::Eq {
+                field1: span.clone(),
+                field2: f(e1),
+                field3: f(e2),
+            },
+            GenericFact::Fact { field1: expr } => GenericFact::Fact { field1: f(expr) },
         }
     }
 
@@ -363,7 +544,10 @@ where
 {
     pub fn make_unresolved(self) -> GenericFact<String, String> {
         self.subst(
-            &mut |span, v| GenericExpr::Var(span.clone(), v.to_string()),
+            &mut |span, v| GenericExpr::Var {
+                span: span.clone(),
+                name: v.to_string(),
+            },
             &mut |h| h.to_string(),
         )
     }
@@ -372,27 +556,45 @@ where
 impl<Head: Clone + Display, Leaf: Hash + Clone + Display + Eq> GenericExpr<Head, Leaf> {
     pub fn span(&self) -> Span {
         match self {
-            GenericExpr::Lit(span, _) => span.clone(),
-            GenericExpr::Var(span, _) => span.clone(),
-            GenericExpr::Call(span, _, _) => span.clone(),
+            GenericExpr::Lit {
+                field1: span,
+                field2: _,
+            } => span.clone(),
+            GenericExpr::Var { span, name: _ } => span.clone(),
+            GenericExpr::Call {
+                field1: span,
+                field2: _,
+                field3: _,
+            } => span.clone(),
         }
     }
 
     pub fn is_var(&self) -> bool {
-        matches!(self, GenericExpr::Var(_, _))
+        matches!(self, GenericExpr::Var { span: _, name: _ })
     }
 
     pub fn get_var(&self) -> Option<Leaf> {
         match self {
-            GenericExpr::Var(_ann, v) => Some(v.clone()),
+            GenericExpr::Var {
+                span: _ann,
+                name: v,
+            } => Some(v.clone()),
             _ => None,
         }
     }
 
     fn children(&self) -> &[Self] {
         match self {
-            GenericExpr::Var(_, _) | GenericExpr::Lit(_, _) => &[],
-            GenericExpr::Call(_, _, children) => children,
+            GenericExpr::Var { span: _, name: _ }
+            | GenericExpr::Lit {
+                field1: _,
+                field2: _,
+            } => &[],
+            GenericExpr::Call {
+                field1: _,
+                field2: _,
+                field3: children,
+            } => children,
         }
     }
 
@@ -419,11 +621,19 @@ impl<Head: Clone + Display, Leaf: Hash + Clone + Display + Eq> GenericExpr<Head,
     /// bottom-up, collecting the results.
     pub fn visit_exprs(self, f: &mut impl FnMut(Self) -> Self) -> Self {
         match self {
-            GenericExpr::Lit(..) => f(self),
-            GenericExpr::Var(..) => f(self),
-            GenericExpr::Call(span, op, children) => {
+            GenericExpr::Lit { .. } => f(self),
+            GenericExpr::Var { .. } => f(self),
+            GenericExpr::Call {
+                field1: span,
+                field2: op,
+                field3: children,
+            } => {
                 let children = children.into_iter().map(|c| c.visit_exprs(f)).collect();
-                f(GenericExpr::Call(span, op.clone(), children))
+                f(GenericExpr::Call {
+                    field1: span,
+                    field2: op.clone(),
+                    field3: children,
+                })
             }
         }
     }
@@ -435,14 +645,28 @@ impl<Head: Clone + Display, Leaf: Hash + Clone + Display + Eq> GenericExpr<Head,
         subst_head: &mut impl FnMut(&Head) -> Head2,
     ) -> GenericExpr<Head2, Leaf2> {
         match self {
-            GenericExpr::Lit(span, lit) => GenericExpr::Lit(span.clone(), lit.clone()),
-            GenericExpr::Var(span, v) => subst_leaf(span, v),
-            GenericExpr::Call(span, op, children) => {
+            GenericExpr::Lit {
+                field1: span,
+                field2: lit,
+            } => GenericExpr::Lit {
+                field1: span.clone(),
+                field2: lit.clone(),
+            },
+            GenericExpr::Var { span, name: v } => subst_leaf(span, v),
+            GenericExpr::Call {
+                field1: span,
+                field2: op,
+                field3: children,
+            } => {
                 let children = children
                     .iter()
                     .map(|c| c.subst(subst_leaf, subst_head))
                     .collect();
-                GenericExpr::Call(span.clone(), subst_head(op), children)
+                GenericExpr::Call {
+                    field1: span.clone(),
+                    field2: subst_head(op),
+                    field3: children,
+                }
             }
         }
     }
@@ -456,9 +680,19 @@ impl<Head: Clone + Display, Leaf: Hash + Clone + Display + Eq> GenericExpr<Head,
 
     pub fn vars(&self) -> impl Iterator<Item = Leaf> + '_ {
         let iterator: Box<dyn Iterator<Item = Leaf>> = match self {
-            GenericExpr::Lit(_ann, _l) => Box::new(std::iter::empty()),
-            GenericExpr::Var(_ann, v) => Box::new(std::iter::once(v.clone())),
-            GenericExpr::Call(_ann, _head, exprs) => Box::new(exprs.iter().flat_map(|e| e.vars())),
+            GenericExpr::Lit {
+                field1: _ann,
+                field2: _l,
+            } => Box::new(std::iter::empty()),
+            GenericExpr::Var {
+                span: _ann,
+                name: v,
+            } => Box::new(std::iter::once(v.clone())),
+            GenericExpr::Call {
+                field1: _ann,
+                field2: _head,
+                field3: exprs,
+            } => Box::new(exprs.iter().flat_map(|e| e.vars())),
         };
         iterator
     }

@@ -20,54 +20,81 @@ pub mod exprs {
 
     /// Creates a variable expression.
     pub fn var(name: &str) -> Expr {
-        Expr::Var(span!(), name.to_owned())
+        Expr::Var {
+            span: span!(),
+            name: name.to_owned(),
+        }
     }
 
     /// Creates an integer literal expression.
     pub fn int(value: i64) -> Expr {
-        Expr::Lit(span!(), Literal::Int(value))
+        Expr::Lit {
+            field1: span!(),
+            field2: Literal::Int(value),
+        }
     }
 
     /// Creates a float literal expression.
     pub fn float(value: f64) -> Expr {
-        Expr::Lit(span!(), Literal::Float(value.into()))
+        Expr::Lit {
+            field1: span!(),
+            field2: Literal::Float(value.into()),
+        }
     }
 
     /// Creates a string literal expression.
     pub fn string(value: &str) -> Expr {
-        Expr::Lit(span!(), Literal::String(value.to_owned()))
+        Expr::Lit {
+            field1: span!(),
+            field2: Literal::String(value.to_owned()),
+        }
     }
 
     /// Creates a unit literal expression.
     pub fn unit() -> Expr {
-        Expr::Lit(span!(), Literal::Unit)
+        Expr::Lit {
+            field1: span!(),
+            field2: Literal::Unit,
+        }
     }
 
     /// Creates a boolean literal expression.
     pub fn bool(value: bool) -> Expr {
-        Expr::Lit(span!(), Literal::Bool(value))
+        Expr::Lit {
+            field1: span!(),
+            field2: Literal::Bool(value),
+        }
     }
 
     /// Creates a function call expression.
     pub fn call(f: &str, xs: Vec<Expr>) -> Expr {
-        Expr::Call(span!(), f.to_owned(), xs)
+        Expr::Call {
+            field1: span!(),
+            field2: f.to_owned(),
+            field3: xs,
+        }
     }
 }
 
 /// Create a new ruleset.
 pub fn add_ruleset(egraph: &mut EGraph, ruleset: &str) -> Result<Vec<CommandOutput>, Error> {
-    egraph.run_program(vec![Command::AddRuleset(span!(), ruleset.to_owned())])
+    egraph.run_program(vec![Command::AddRuleset {
+        field1: span!(),
+        field2: ruleset.to_owned(),
+    }])
 }
 
 /// Run one iteration of a ruleset.
 pub fn run_ruleset(egraph: &mut EGraph, ruleset: &str) -> Result<Vec<CommandOutput>, Error> {
-    egraph.run_program(vec![Command::RunSchedule(Schedule::Run(
-        span!(),
-        RunConfig {
-            ruleset: ruleset.to_owned(),
-            until: None,
+    egraph.run_program(vec![Command::RunSchedule {
+        field1: Schedule::Run {
+            field1: span!(),
+            field2: RunConfig {
+                ruleset: ruleset.to_owned(),
+                until: None,
+            },
         },
-    ))])
+    }])
 }
 
 #[macro_export]
@@ -236,7 +263,7 @@ pub fn rule(
 
     rule.name = format!("{rule:?}");
 
-    egraph.run_program(vec![Command::Rule { rule }])
+    egraph.run_program(vec![Command::Rule { field1: rule }])
 }
 
 /// A wrapper around an `ExecutionState` for rules that are written in Rust.
@@ -465,19 +492,19 @@ pub fn rust_rule(
 
     let rule = Rule {
         span: span!(),
-        head: GenericActions(vec![GenericAction::Expr(
-            span!(),
-            exprs::call(
+        head: GenericActions(vec![GenericAction::Expr {
+            field1: span!(),
+            field2: exprs::call(
                 &prim_name,
                 vars.iter().map(|(v, _)| exprs::var(v)).collect(),
             ),
-        )]),
+        }]),
         body: facts.0,
         name: egraph.parser.symbol_gen.fresh(rule_name),
         ruleset: ruleset.into(),
     };
 
-    egraph.run_program(vec![Command::Rule { rule }])
+    egraph.run_program(vec![Command::Rule { field1: rule }])
 }
 
 /// The result of a query.
@@ -584,7 +611,11 @@ pub fn query(
 
 /// Declare a new sort.
 pub fn add_sort(egraph: &mut EGraph, name: &str) -> Result<Vec<CommandOutput>, Error> {
-    egraph.run_program(vec![Command::Sort(span!(), name.to_owned(), None)])
+    egraph.run_program(vec![Command::Sort {
+        field1: span!(),
+        field2: name.to_owned(),
+        field3: None,
+    }])
 }
 
 /// Declare a new function table.

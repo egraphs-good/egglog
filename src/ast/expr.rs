@@ -60,15 +60,28 @@ pub(crate) trait ResolvedExprExt {
 impl ResolvedExprExt for ResolvedExpr {
     fn output_type(&self) -> ArcSort {
         match self {
-            ResolvedExpr::Lit(_, lit) => sort::literal_sort(lit),
-            ResolvedExpr::Var(_, resolved_var) => resolved_var.sort.clone(),
-            ResolvedExpr::Call(_, resolved_call, _) => resolved_call.output().clone(),
+            ResolvedExpr::Lit {
+                field1: _,
+                field2: lit,
+            } => sort::literal_sort(lit),
+            ResolvedExpr::Var {
+                span: _,
+                name: resolved_var,
+            } => resolved_var.sort.clone(),
+            ResolvedExpr::Call {
+                field1: _,
+                field2: resolved_call,
+                field3: _,
+            } => resolved_call.output().clone(),
         }
     }
 
     fn get_global_var(&self) -> Option<ResolvedVar> {
         match self {
-            ResolvedExpr::Var(_, v) if v.is_global_ref => Some(v.clone()),
+            ResolvedExpr::Var {
+                span: _,
+                name: v,
+            } if v.is_global_ref => Some(v.clone()),
             _ => None,
         }
     }

@@ -67,15 +67,30 @@ impl Presort for FunctionSort {
         name: String,
         args: &[Expr],
     ) -> Result<ArcSort, TypeError> {
-        if let [inputs, Expr::Var(span, output)] = args {
+        if let [
+            inputs,
+            Expr::Var {
+                span,
+                name: output,
+            },
+        ] = args
+        {
             let output_sort = typeinfo
                 .get_sort_by_name(output)
                 .ok_or(TypeError::UndefinedSort(output.clone(), span.clone()))?;
 
             let input_sorts = match inputs {
-                Expr::Call(_, first, rest_args) => {
+                Expr::Call {
+                    field1: _,
+                    field2: first,
+                    field3: rest_args,
+                } => {
                     let all_args = once(first).chain(rest_args.iter().map(|arg| {
-                        if let Expr::Var(_, arg) = arg {
+                        if let Expr::Var {
+                            span: _,
+                            name: arg,
+                        } = arg
+                        {
                             arg
                         } else {
                             panic!("function sort must be called with list of input sorts");
@@ -91,7 +106,10 @@ impl Presort for FunctionSort {
                         .collect::<Result<Vec<_>, _>>()?
                 }
                 // an empty list of inputs args is parsed as a unit literal
-                Expr::Lit(_, Literal::Unit) => vec![],
+                Expr::Lit {
+                    field1: _,
+                    field2: Literal::Unit,
+                } => vec![],
                 _ => panic!("function sort must be called with list of input sorts"),
             };
 

@@ -62,18 +62,22 @@ pub(crate) fn desugar_command(
             for datatype in datatypes.iter() {
                 let span = datatype.0.clone();
                 let name = datatype.1.clone();
-                if let Subdatatypes::Variants(..) = datatype.2 {
+                if let Subdatatypes::Variants { .. } = datatype.2 {
                     res.push(NCommand::Sort(span, name, None));
                 }
             }
             let (variants_vec, sorts): (Vec<_>, Vec<_>) = datatypes
                 .into_iter()
-                .partition(|datatype| matches!(datatype.2, Subdatatypes::Variants(..)));
+                .partition(|datatype| matches!(datatype.2, Subdatatypes::Variants { .. }));
 
             for sort in sorts {
                 let span = sort.0.clone();
                 let name = sort.1;
-                let Subdatatypes::NewSort(sort, args) = sort.2 else {
+                let Subdatatypes::NewSort {
+                    field1: sort,
+                    field2: args,
+                } = sort.2
+                else {
                     unreachable!()
                 };
                 res.push(NCommand::Sort(span, name, Some((sort, args))));
@@ -81,7 +85,7 @@ pub(crate) fn desugar_command(
 
             for variants in variants_vec {
                 let datatype = variants.1;
-                let Subdatatypes::Variants(variants) = variants.2 else {
+                let Subdatatypes::Variants { field1: variants } = variants.2 else {
                     unreachable!();
                 };
                 for variant in variants {
@@ -100,13 +104,19 @@ pub(crate) fn desugar_command(
 
             res
         }
-        Command::Rewrite(ruleset, rewrite, subsume) => {
-            desugar_rewrite(ruleset, rule_name, rewrite, subsume, parser)
-        }
-        Command::BiRewrite(ruleset, rewrite) => {
-            desugar_birewrite(ruleset, rule_name, rewrite, parser)
-        }
-        Command::Include(span, file) => {
+        Command::Rewrite {
+            field1: ruleset,
+            field2: rewrite,
+            field3: subsume,
+        } => desugar_rewrite(ruleset, rule_name, rewrite, subsume, parser),
+        Command::BiRewrite {
+            field1: ruleset,
+            field2: rewrite,
+        } => desugar_birewrite(ruleset, rule_name, rewrite, parser),
+        Command::Include {
+            field1: span,
+            field2: file,
+        } => {
             let s = std::fs::read_to_string(&file)
                 .unwrap_or_else(|_| panic!("{span} Failed to read file {file}"));
             return desugar_program(
@@ -115,41 +125,74 @@ pub(crate) fn desugar_command(
                 seminaive_transform,
             );
         }
-        Command::Rule { mut rule } => {
+        Command::Rule { field1: mut rule } => {
             if rule.name.is_empty() {
                 // format rule and use it as the name
                 rule.name = rule_name;
             }
             vec![NCommand::NormRule { rule }]
         }
-        Command::Sort(span, sort, option) => vec![NCommand::Sort(span, sort, option)],
-        Command::AddRuleset(span, name) => vec![NCommand::AddRuleset(span, name)],
-        Command::UnstableCombinedRuleset(span, name, subrulesets) => {
+        Command::Sort {
+            field1: span,
+            field2: sort,
+            field3: option,
+        } => vec![NCommand::Sort(span, sort, option)],
+        Command::AddRuleset {
+            field1: span,
+            field2: name,
+        } => vec![NCommand::AddRuleset(span, name)],
+        Command::UnstableCombinedRuleset {
+            field1: span,
+            field2: name,
+            field3: subrulesets,
+        } => {
             vec![NCommand::UnstableCombinedRuleset(span, name, subrulesets)]
         }
-        Command::Action(action) => vec![NCommand::CoreAction(action)],
-        Command::RunSchedule(sched) => {
+        Command::Action { field1: action } => vec![NCommand::CoreAction(action)],
+        Command::RunSchedule { field1: sched } => {
             vec![NCommand::RunSchedule(sched.clone())]
         }
-        Command::PrintOverallStatistics(span, file) => {
+        Command::PrintOverallStatistics {
+            field1: span,
+            field2: file,
+        } => {
             vec![NCommand::PrintOverallStatistics(span, file.clone())]
         }
-        Command::Extract(span, expr, variants) => vec![NCommand::Extract(span, expr, variants)],
-        Command::Check(span, facts) => vec![NCommand::Check(span, facts)],
-        Command::PrintFunction(span, symbol, size, file, mode) => {
+        Command::Extract {
+            field1: span,
+            field2: expr,
+            field3: variants,
+        } => vec![NCommand::Extract(span, expr, variants)],
+        Command::Check { span, facts } => vec![NCommand::Check(span, facts)],
+        Command::PrintFunction {
+            field1: span,
+            field2: symbol,
+            field3: size,
+            field4: file,
+            field5: mode,
+        } => {
             vec![NCommand::PrintFunction(span, symbol, size, file, mode)]
         }
-        Command::PrintSize(span, symbol) => vec![NCommand::PrintSize(span, symbol)],
+        Command::PrintSize {
+            field1: span,
+            field2: symbol,
+        } => vec![NCommand::PrintSize(span, symbol)],
         Command::Output { span, file, exprs } => {
             vec![NCommand::Output { span, file, exprs }]
         }
-        Command::Push(num) => {
+        Command::Push { n: num } => {
             vec![NCommand::Push(num)]
         }
-        Command::Pop(span, num) => {
+        Command::Pop {
+            field1: span,
+            field2: num,
+        } => {
             vec![NCommand::Pop(span, num)]
         }
-        Command::Fail(span, cmd) => {
+        Command::Fail {
+            field1: span,
+            field2: cmd,
+        } => {
             let mut desugared = desugar_command(*cmd, parser, seminaive_transform)?;
 
             let last = desugared.pop().unwrap();
@@ -159,7 +202,11 @@ pub(crate) fn desugar_command(
         Command::Input { span, name, file } => {
             vec![NCommand::Input { span, name, file }]
         }
-        Command::UserDefined(span, name, args) => {
+        Command::UserDefined {
+            field1: span,
+            field2: name,
+            field3: args,
+        } => {
             vec![NCommand::UserDefined(span, name, args)]
         }
     };
@@ -194,20 +241,27 @@ fn desugar_rewrite(
 ) -> Vec<NCommand> {
     let span = rewrite.span.clone();
     let var = parser.symbol_gen.fresh("rewrite_var__");
-    let mut head = Actions::singleton(Action::Union(
-        span.clone(),
-        Expr::Var(span.clone(), var.clone()),
-        rewrite.rhs.clone(),
-    ));
+    let mut head = Actions::singleton(Action::Union {
+        field1: span.clone(),
+        field2: Expr::Var {
+            span: span.clone(),
+            name: var.clone(),
+        },
+        field3: rewrite.rhs.clone(),
+    });
     if subsume {
         match &rewrite.lhs {
-            Expr::Call(_, f, args) => {
-                head.0.push(Action::Change(
-                    span.clone(),
-                    Change::Subsume,
-                    f.clone(),
-                    args.to_vec(),
-                ));
+            Expr::Call {
+                field1: _,
+                field2: f,
+                field3: args,
+            } => {
+                head.0.push(Action::Change {
+                    field1: span.clone(),
+                    field2: Change::Subsume,
+                    field3: f.clone(),
+                    field4: args.to_vec(),
+                });
             }
             _ => {
                 panic!("Subsumed rewrite must have a function call on the lhs");
@@ -220,11 +274,14 @@ fn desugar_rewrite(
     vec![NCommand::NormRule {
         rule: Rule {
             span: span.clone(),
-            body: [Fact::Eq(
-                span.clone(),
-                Expr::Var(span, var),
-                rewrite.lhs.clone(),
-            )]
+            body: [Fact::Eq {
+                field1: span.clone(),
+                field2: Expr::Var {
+                    span: span,
+                    name: var,
+                },
+                field3: rewrite.lhs.clone(),
+            }]
             .into_iter()
             .chain(rewrite.conditions.clone())
             .collect(),
