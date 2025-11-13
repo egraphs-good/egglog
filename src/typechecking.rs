@@ -165,7 +165,11 @@ impl EGraph {
                 self.declare_sort(sort.clone(), presort_and_args, span.clone())?;
                 ResolvedNCommand::Sort(span.clone(), sort.clone(), presort_and_args.clone())
             }
-            NCommand::CoreAction(Action::Let(span, var, expr)) => {
+            NCommand::CoreAction(Action::Let {
+                field1: span,
+                field2: var,
+                field3: expr,
+            }) => {
                 let expr = self
                     .type_info
                     .typecheck_expr(symbol_gen, expr, &Default::default())?;
@@ -179,7 +183,11 @@ impl EGraph {
                     // not a global reference, but a global binding
                     is_global_ref: false,
                 };
-                ResolvedNCommand::CoreAction(ResolvedAction::Let(span.clone(), var, expr))
+                ResolvedNCommand::CoreAction(ResolvedAction::Let {
+                    field1: span.clone(),
+                    field2: var,
+                    field3: expr,
+                })
             }
             NCommand::CoreAction(action) => ResolvedNCommand::CoreAction(
                 self.type_info
@@ -421,34 +429,50 @@ impl TypeInfo {
         schedule: &Schedule,
     ) -> Result<ResolvedSchedule, TypeError> {
         let schedule = match schedule {
-            Schedule::Repeat(span, times, schedule) => ResolvedSchedule::Repeat(
-                span.clone(),
-                *times,
-                Box::new(self.typecheck_schedule(symbol_gen, schedule)?),
-            ),
-            Schedule::Sequence(span, schedules) => {
+            Schedule::Repeat {
+                field1: span,
+                field2: times,
+                field3: schedule,
+            } => ResolvedSchedule::Repeat {
+                field1: span.clone(),
+                field2: *times,
+                field3: Box::new(self.typecheck_schedule(symbol_gen, schedule)?),
+            },
+            Schedule::Sequence {
+                field1: span,
+                field2: schedules,
+            } => {
                 let schedules = schedules
                     .iter()
                     .map(|schedule| self.typecheck_schedule(symbol_gen, schedule))
                     .collect::<Result<Vec<_>, _>>()?;
-                ResolvedSchedule::Sequence(span.clone(), schedules)
+                ResolvedSchedule::Sequence {
+                    field1: span.clone(),
+                    field2: schedules,
+                }
             }
-            Schedule::Saturate(span, schedule) => ResolvedSchedule::Saturate(
-                span.clone(),
-                Box::new(self.typecheck_schedule(symbol_gen, schedule)?),
-            ),
-            Schedule::Run(span, RunConfig { ruleset, until }) => {
+            Schedule::Saturate {
+                field1: span,
+                field2: schedule,
+            } => ResolvedSchedule::Saturate {
+                field1: span.clone(),
+                field2: Box::new(self.typecheck_schedule(symbol_gen, schedule)?),
+            },
+            Schedule::Run {
+                field1: span,
+                field2: RunConfig { ruleset, until },
+            } => {
                 let until = until
                     .as_ref()
                     .map(|facts| self.typecheck_facts(symbol_gen, facts))
                     .transpose()?;
-                ResolvedSchedule::Run(
-                    span.clone(),
-                    ResolvedRunConfig {
+                ResolvedSchedule::Run {
+                    field1: span.clone(),
+                    field2: ResolvedRunConfig {
                         ruleset: ruleset.clone(),
                         until,
                     },
-                )
+                }
             }
         };
 
@@ -506,7 +530,11 @@ impl TypeInfo {
 
     fn check_lookup_expr(expr: &GenericExpr<ResolvedCall, ResolvedVar>) -> Result<(), TypeError> {
         match expr {
-            GenericExpr::Call(span, head, args) => {
+            GenericExpr::Call {
+                field1: span,
+                field2: head,
+                field3: args,
+            } => {
                 match head {
                     ResolvedCall::Func(t) => {
                         // Only allowed to lookup constructor or relation
@@ -535,25 +563,46 @@ impl TypeInfo {
     fn check_lookup_actions(actions: &ResolvedActions) -> Result<(), TypeError> {
         for action in actions.iter() {
             match action {
-                GenericAction::Let(_, _, rhs) => Self::check_lookup_expr(rhs),
-                GenericAction::Set(_, _, args, rhs) => {
+                GenericAction::Let {
+                    field1: _,
+                    field2: _,
+                    field3: rhs,
+                } => Self::check_lookup_expr(rhs),
+                GenericAction::Set {
+                    field1: _,
+                    field2: _,
+                    field3: args,
+                    field4: rhs,
+                } => {
                     for arg in args.iter() {
                         Self::check_lookup_expr(arg)?
                     }
                     Self::check_lookup_expr(rhs)
                 }
-                GenericAction::Union(_, lhs, rhs) => {
+                GenericAction::Union {
+                    field1: _,
+                    field2: lhs,
+                    field3: rhs,
+                } => {
                     Self::check_lookup_expr(lhs)?;
                     Self::check_lookup_expr(rhs)
                 }
-                GenericAction::Change(_, _, _, args) => {
+                GenericAction::Change {
+                    field1: _,
+                    field2: _,
+                    field3: _,
+                    field4: args,
+                } => {
                     for arg in args.iter() {
                         Self::check_lookup_expr(arg)?
                     }
                     Ok(())
                 }
-                GenericAction::Panic(..) => Ok(()),
-                GenericAction::Expr(_, expr) => Self::check_lookup_expr(expr),
+                GenericAction::Panic { .. } => Ok(()),
+                GenericAction::Expr {
+                    field1: _,
+                    field2: expr,
+                } => Self::check_lookup_expr(expr),
             }?
         }
         Ok(())
@@ -608,10 +657,16 @@ impl TypeInfo {
         expr: &Expr,
         binding: &IndexMap<&str, (Span, ArcSort)>,
     ) -> Result<ResolvedExpr, TypeError> {
-        let action = Action::Expr(expr.span(), expr.clone());
+        let action = Action::Expr {
+            field1: expr.span(),
+            field2: expr.clone(),
+        };
         let typechecked_action = self.typecheck_action(symbol_gen, &action, binding)?;
         match typechecked_action {
-            ResolvedAction::Expr(_, expr) => Ok(expr),
+            ResolvedAction::Expr {
+                field1: _,
+                field2: expr,
+            } => Ok(expr),
             _ => unreachable!(),
         }
     }

@@ -512,30 +512,37 @@ impl Assignment<AtomTerm, ArcSort> {
         typeinfo: &TypeInfo,
     ) -> ResolvedExpr {
         match &expr {
-            GenericExpr::Lit(span, literal) => ResolvedExpr::Lit(span.clone(), literal.clone()),
-            GenericExpr::Var(span, var) => {
+            GenericExpr::Lit {
+                field1: span,
+                field2: literal,
+            } => ResolvedExpr::Lit {
+                field1: span.clone(),
+                field2: literal.clone(),
+            },
+            GenericExpr::Var { span, name: var } => {
                 let global_sort = typeinfo.get_global_sort(var);
                 let ty = global_sort
                     // Span is ignored when looking up atom_terms
                     .or_else(|| self.get(&AtomTerm::Var(Span::Panic, var.clone())))
                     .expect("All variables should be assigned before annotation");
-                ResolvedExpr::Var(
-                    span.clone(),
-                    ResolvedVar {
+                ResolvedExpr::Var {
+                    span: span.clone(),
+                    name: ResolvedVar {
                         name: var.clone(),
                         sort: ty.clone(),
                         is_global_ref: global_sort.is_some(),
                     },
-                )
+                }
             }
-            GenericExpr::Call(
-                span,
-                CorrespondingVar {
-                    head,
-                    to: corresponding_var,
-                },
-                args,
-            ) => {
+            GenericExpr::Call {
+                field1: span,
+                field2:
+                    CorrespondingVar {
+                        head,
+                        to: corresponding_var,
+                    },
+                field3: args,
+            } => {
                 // get the resolved call using resolve_rule
                 let args: Vec<_> = args
                     .iter()
@@ -551,7 +558,11 @@ impl Assignment<AtomTerm, ArcSort> {
                     ))
                     .collect();
                 let resolved_call = ResolvedCall::from_resolution(head, &types, typeinfo);
-                GenericExpr::Call(span.clone(), resolved_call, args)
+                GenericExpr::Call {
+                    field1: span.clone(),
+                    field2: resolved_call,
+                    field3: args,
+                }
             }
         }
     }
@@ -562,12 +573,18 @@ impl Assignment<AtomTerm, ArcSort> {
         typeinfo: &TypeInfo,
     ) -> ResolvedFact {
         match facts {
-            GenericFact::Eq(span, e1, e2) => ResolvedFact::Eq(
-                span.clone(),
-                self.annotate_expr(e1, typeinfo),
-                self.annotate_expr(e2, typeinfo),
-            ),
-            GenericFact::Fact(expr) => ResolvedFact::Fact(self.annotate_expr(expr, typeinfo)),
+            GenericFact::Eq {
+                field1: span,
+                field2: e1,
+                field3: e2,
+            } => ResolvedFact::Eq {
+                field1: span.clone(),
+                field2: self.annotate_expr(e1, typeinfo),
+                field3: self.annotate_expr(e2, typeinfo),
+            },
+            GenericFact::Fact { field1: expr } => ResolvedFact::Fact {
+                field1: self.annotate_expr(expr, typeinfo),
+            },
         }
     }
 
@@ -588,30 +605,35 @@ impl Assignment<AtomTerm, ArcSort> {
         typeinfo: &TypeInfo,
     ) -> Result<ResolvedAction, TypeError> {
         match action {
-            GenericAction::Let(span, var, expr) => {
+            GenericAction::Let {
+                field1: span,
+                field2: var,
+                field3: expr,
+            } => {
                 let ty = self
                     .get(&AtomTerm::Var(span.clone(), var.clone()))
                     .expect("All variables should be assigned before annotation");
-                Ok(ResolvedAction::Let(
-                    span.clone(),
-                    ResolvedVar {
+                Ok(ResolvedAction::Let {
+                    field1: span.clone(),
+                    field2: ResolvedVar {
                         name: var.clone(),
                         sort: ty.clone(),
                         is_global_ref: false,
                     },
-                    self.annotate_expr(expr, typeinfo),
-                ))
+                    field3: self.annotate_expr(expr, typeinfo),
+                })
             }
             // Note mapped_var for set is a dummy variable that does not mean anything
-            GenericAction::Set(
-                span,
-                CorrespondingVar {
-                    head,
-                    to: _mapped_var,
-                },
-                children,
-                rhs,
-            ) => {
+            GenericAction::Set {
+                field1: span,
+                field2:
+                    CorrespondingVar {
+                        head,
+                        to: _mapped_var,
+                    },
+                field3: children,
+                field4: rhs,
+            } => {
                 let children: Vec<_> = children
                     .iter()
                     .map(|child| self.annotate_expr(child, typeinfo))
@@ -626,23 +648,24 @@ impl Assignment<AtomTerm, ArcSort> {
                 if !matches!(resolved_call, ResolvedCall::Func(_)) {
                     return Err(TypeError::UnboundFunction(head.clone(), span.clone()));
                 }
-                Ok(ResolvedAction::Set(
-                    span.clone(),
-                    resolved_call,
-                    children,
-                    rhs,
-                ))
+                Ok(ResolvedAction::Set {
+                    field1: span.clone(),
+                    field2: resolved_call,
+                    field3: children,
+                    field4: rhs,
+                })
             }
             // Note mapped_var for delete is a dummy variable that does not mean anything
-            GenericAction::Change(
-                span,
-                change,
-                CorrespondingVar {
-                    head,
-                    to: _mapped_var,
-                },
-                children,
-            ) => {
+            GenericAction::Change {
+                field1: span,
+                field2: change,
+                field3:
+                    CorrespondingVar {
+                        head,
+                        to: _mapped_var,
+                    },
+                field4: children,
+            } => {
                 let children: Vec<_> = children
                     .iter()
                     .map(|child| self.annotate_expr(child, typeinfo))
@@ -651,14 +674,18 @@ impl Assignment<AtomTerm, ArcSort> {
                 let resolved_call =
                     ResolvedCall::from_resolution_func_types(head, &types, typeinfo)
                         .ok_or_else(|| TypeError::UnboundFunction(head.clone(), span.clone()))?;
-                Ok(ResolvedAction::Change(
-                    span.clone(),
-                    *change,
-                    resolved_call,
-                    children.clone(),
-                ))
+                Ok(ResolvedAction::Change {
+                    field1: span.clone(),
+                    field2: *change,
+                    field3: resolved_call,
+                    field4: children.clone(),
+                })
             }
-            GenericAction::Union(span, lhs, rhs) => {
+            GenericAction::Union {
+                field1: span,
+                field2: lhs,
+                field3: rhs,
+            } => {
                 let lhs = self.annotate_expr(lhs, typeinfo);
                 let rhs = self.annotate_expr(rhs, typeinfo);
 
@@ -668,13 +695,26 @@ impl Assignment<AtomTerm, ArcSort> {
                     return Err(TypeError::NonEqsortUnion(sort, span.clone()));
                 }
 
-                Ok(ResolvedAction::Union(span.clone(), lhs, rhs))
+                Ok(ResolvedAction::Union {
+                    field1: span.clone(),
+                    field2: lhs,
+                    field3: rhs,
+                })
             }
-            GenericAction::Panic(span, msg) => Ok(ResolvedAction::Panic(span.clone(), msg.clone())),
-            GenericAction::Expr(span, expr) => Ok(ResolvedAction::Expr(
-                span.clone(),
-                self.annotate_expr(expr, typeinfo),
-            )),
+            GenericAction::Panic {
+                field1: span,
+                field2: msg,
+            } => Ok(ResolvedAction::Panic {
+                field1: span.clone(),
+                field2: msg.clone(),
+            }),
+            GenericAction::Expr {
+                field1: span,
+                field2: expr,
+            } => Ok(ResolvedAction::Expr {
+                field1: span.clone(),
+                field2: self.annotate_expr(expr, typeinfo),
+            }),
         }
     }
 

@@ -1,31 +1,33 @@
+use serde::{Deserialize, Serialize};
 use std::fmt::{self, Debug, Display};
 use std::sync::Arc;
 
 use schemars::JsonSchema;
 
-#[derive(Clone, PartialEq, Eq, Hash, JsonSchema)]
+#[derive(Clone, PartialEq, Eq, Hash, Deserialize, Serialize, JsonSchema)]
+#[serde(tag = "type")]
 #[schemars(_unstable_ref_variants)]
 pub enum Span {
     Panic,
-    Egglog(Arc<EgglogSpan>),
-    Rust(Arc<RustSpan>),
+    Egglog { field1: Arc<EgglogSpan> },
+    Rust { field1: Arc<RustSpan> },
 }
 
-#[derive(Debug, Clone, PartialEq, Eq, Hash, JsonSchema)]
+#[derive(Debug, Clone, PartialEq, Eq, Hash, Deserialize, Serialize, JsonSchema)]
 pub struct EgglogSpan {
     pub file: Arc<SrcFile>,
     pub i: usize,
     pub j: usize,
 }
 
-#[derive(Debug, Clone, PartialEq, Eq, Hash, JsonSchema)]
+#[derive(Debug, Clone, PartialEq, Eq, Hash, Deserialize, Serialize, JsonSchema)]
 pub struct RustSpan {
-    pub file: &'static str,
+    pub file: String,
     pub line: u32,
     pub column: u32,
 }
 
-#[derive(Debug, PartialEq, Eq, Hash, Clone, JsonSchema)]
+#[derive(Debug, PartialEq, Eq, Hash, Clone, Deserialize, Serialize, JsonSchema)]
 pub struct SrcFile {
     pub name: Option<String>,
     pub contents: String,
@@ -54,8 +56,8 @@ impl Span {
     pub fn string(&self) -> &str {
         match self {
             Span::Panic => panic!("Span::Panic in Span::string"),
-            Span::Rust(_) => panic!("Span::Rust cannot track end position"),
-            Span::Egglog(span) => &span.file.contents[span.i..span.j],
+            Span::Rust { field1: _ } => panic!("Span::Rust cannot track end position"),
+            Span::Egglog { field1: span } => &span.file.contents[span.i..span.j],
         }
     }
 }
@@ -70,8 +72,10 @@ impl Display for Span {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         match self {
             Span::Panic => panic!("Span::Panic in impl Display"),
-            Span::Rust(span) => write!(f, "At {}:{} of {}", span.line, span.column, span.file),
-            Span::Egglog(span) => {
+            Span::Rust { field1: span } => {
+                write!(f, "At {}:{} of {}", span.line, span.column, span.file)
+            }
+            Span::Egglog { field1: span } => {
                 let (start_line, start_col) = span.file.get_location(span.i);
                 let (end_line, end_col) = span
                     .file

@@ -16,6 +16,7 @@ use egglog_ast::util::ListDisplay;
 pub use expr::*;
 pub use parse::*;
 use schemars::JsonSchema;
+use serde::{Deserialize, Serialize};
 
 #[derive(Clone, Debug)]
 /// The egglog internal representation of already compiled rules
@@ -96,9 +97,11 @@ where
 {
     pub fn to_command(&self) -> GenericCommand<Head, Leaf> {
         match self {
-            GenericNCommand::Sort(span, name, params) => {
-                GenericCommand::Sort(span.clone(), name.clone(), params.clone())
-            }
+            GenericNCommand::Sort(span, name, params) => GenericCommand::Sort {
+                field1: span.clone(),
+                field2: name.clone(),
+                field3: params.clone(),
+            },
             GenericNCommand::Function(f) => match f.subtype {
                 FunctionSubtype::Constructor => GenericCommand::Constructor {
                     span: f.span.clone(),
@@ -119,48 +122,78 @@ where
                     merge: f.merge.clone(),
                 },
             },
-            GenericNCommand::AddRuleset(span, name) => {
-                GenericCommand::AddRuleset(span.clone(), name.clone())
-            }
+            GenericNCommand::AddRuleset(span, name) => GenericCommand::AddRuleset {
+                field1: span.clone(),
+                field2: name.clone(),
+            },
             GenericNCommand::UnstableCombinedRuleset(span, name, others) => {
-                GenericCommand::UnstableCombinedRuleset(span.clone(), name.clone(), others.clone())
+                GenericCommand::UnstableCombinedRuleset {
+                    field1: span.clone(),
+                    field2: name.clone(),
+                    field3: others.clone(),
+                }
             }
-            GenericNCommand::NormRule { rule } => GenericCommand::Rule { rule: rule.clone() },
-            GenericNCommand::RunSchedule(schedule) => GenericCommand::RunSchedule(schedule.clone()),
+            GenericNCommand::NormRule { rule } => GenericCommand::Rule {
+                field1: rule.clone(),
+            },
+            GenericNCommand::RunSchedule(schedule) => GenericCommand::RunSchedule {
+                field1: schedule.clone(),
+            },
             GenericNCommand::PrintOverallStatistics(span, file) => {
-                GenericCommand::PrintOverallStatistics(span.clone(), file.clone())
+                GenericCommand::PrintOverallStatistics {
+                    field1: span.clone(),
+                    field2: file.clone(),
+                }
             }
-            GenericNCommand::CoreAction(action) => GenericCommand::Action(action.clone()),
-            GenericNCommand::Extract(span, expr, variants) => {
-                GenericCommand::Extract(span.clone(), expr.clone(), variants.clone())
-            }
-            GenericNCommand::Check(span, facts) => {
-                GenericCommand::Check(span.clone(), facts.clone())
-            }
+            GenericNCommand::CoreAction(action) => GenericCommand::Action {
+                field1: action.clone(),
+            },
+            GenericNCommand::Extract(span, expr, variants) => GenericCommand::Extract {
+                field1: span.clone(),
+                field2: expr.clone(),
+                field3: variants.clone(),
+            },
+            GenericNCommand::Check(span, facts) => GenericCommand::Check {
+                span: span.clone(),
+                facts: facts.clone(),
+            },
             GenericNCommand::PrintFunction(span, name, n, file, mode) => {
-                GenericCommand::PrintFunction(span.clone(), name.clone(), *n, file.clone(), *mode)
+                GenericCommand::PrintFunction {
+                    field1: span.clone(),
+                    field2: name.clone(),
+                    field3: *n,
+                    field4: file.clone(),
+                    field5: *mode,
+                }
             }
-            GenericNCommand::PrintSize(span, name) => {
-                GenericCommand::PrintSize(span.clone(), name.clone())
-            }
+            GenericNCommand::PrintSize(span, name) => GenericCommand::PrintSize {
+                field1: span.clone(),
+                field2: name.clone(),
+            },
             GenericNCommand::Output { span, file, exprs } => GenericCommand::Output {
                 span: span.clone(),
                 file: file.to_string(),
                 exprs: exprs.clone(),
             },
-            GenericNCommand::Push(n) => GenericCommand::Push(*n),
-            GenericNCommand::Pop(span, n) => GenericCommand::Pop(span.clone(), *n),
-            GenericNCommand::Fail(span, cmd) => {
-                GenericCommand::Fail(span.clone(), Box::new(cmd.to_command()))
-            }
+            GenericNCommand::Push(n) => GenericCommand::Push { n: *n },
+            GenericNCommand::Pop(span, n) => GenericCommand::Pop {
+                field1: span.clone(),
+                field2: *n,
+            },
+            GenericNCommand::Fail(span, cmd) => GenericCommand::Fail {
+                field1: span.clone(),
+                field2: Box::new(cmd.to_command()),
+            },
             GenericNCommand::Input { span, name, file } => GenericCommand::Input {
                 span: span.clone(),
                 name: name.clone(),
                 file: file.clone(),
             },
-            GenericNCommand::UserDefined(span, name, exprs) => {
-                GenericCommand::UserDefined(span.clone(), name.clone(), exprs.clone())
-            }
+            GenericNCommand::UserDefined(span, name, exprs) => GenericCommand::UserDefined {
+                field1: span.clone(),
+                field2: name.clone(),
+                field3: exprs.clone(),
+            },
         }
     }
 
@@ -222,13 +255,27 @@ where
 pub type Schedule = GenericSchedule<String, String>;
 pub(crate) type ResolvedSchedule = GenericSchedule<ResolvedCall, ResolvedVar>;
 
-#[derive(Debug, Clone, PartialEq, Eq, Hash, JsonSchema)]
+#[derive(Debug, Clone, PartialEq, Eq, Hash, Deserialize, Serialize, JsonSchema)]
+#[serde(tag = "type")]
 #[schemars(_unstable_ref_variants)]
 pub enum GenericSchedule<Head, Leaf> {
-    Saturate(Span, Box<GenericSchedule<Head, Leaf>>),
-    Repeat(Span, usize, Box<GenericSchedule<Head, Leaf>>),
-    Run(Span, GenericRunConfig<Head, Leaf>),
-    Sequence(Span, Vec<GenericSchedule<Head, Leaf>>),
+    Saturate {
+        field1: Span,
+        field2: Box<GenericSchedule<Head, Leaf>>,
+    },
+    Repeat {
+        field1: Span,
+        field2: usize,
+        field3: Box<GenericSchedule<Head, Leaf>>,
+    },
+    Run {
+        field1: Span,
+        field2: GenericRunConfig<Head, Leaf>,
+    },
+    Sequence {
+        field1: Span,
+        field2: Vec<GenericSchedule<Head, Leaf>>,
+    },
 }
 
 impl<Head, Leaf> GenericSchedule<Head, Leaf>
@@ -241,17 +288,36 @@ where
         f: &mut impl FnMut(GenericExpr<Head, Leaf>) -> GenericExpr<Head, Leaf>,
     ) -> Self {
         match self {
-            GenericSchedule::Saturate(span, sched) => {
-                GenericSchedule::Saturate(span, Box::new(sched.visit_exprs(f)))
-            }
-            GenericSchedule::Repeat(span, size, sched) => {
-                GenericSchedule::Repeat(span, size, Box::new(sched.visit_exprs(f)))
-            }
-            GenericSchedule::Run(span, config) => GenericSchedule::Run(span, config.visit_exprs(f)),
-            GenericSchedule::Sequence(span, scheds) => GenericSchedule::Sequence(
-                span,
-                scheds.into_iter().map(|s| s.visit_exprs(f)).collect(),
-            ),
+            GenericSchedule::Saturate {
+                field1: span,
+                field2: sched,
+            } => GenericSchedule::Saturate {
+                field1: span,
+                field2: Box::new(sched.visit_exprs(f)),
+            },
+            GenericSchedule::Repeat {
+                field1: span,
+                field2: size,
+                field3: sched,
+            } => GenericSchedule::Repeat {
+                field1: span,
+                field2: size,
+                field3: Box::new(sched.visit_exprs(f)),
+            },
+            GenericSchedule::Run {
+                field1: span,
+                field2: config,
+            } => GenericSchedule::Run {
+                field1: span,
+                field2: config.visit_exprs(f),
+            },
+            GenericSchedule::Sequence {
+                field1: span,
+                field2: scheds,
+            } => GenericSchedule::Sequence {
+                field1: span,
+                field2: scheds.into_iter().map(|s| s.visit_exprs(f)).collect(),
+            },
         }
     }
 }
@@ -259,10 +325,23 @@ where
 impl<Head: Display, Leaf: Display> Display for GenericSchedule<Head, Leaf> {
     fn fmt(&self, f: &mut Formatter) -> std::fmt::Result {
         match self {
-            GenericSchedule::Saturate(_ann, sched) => write!(f, "(saturate {sched})"),
-            GenericSchedule::Repeat(_ann, size, sched) => write!(f, "(repeat {size} {sched})"),
-            GenericSchedule::Run(_ann, config) => write!(f, "{config}"),
-            GenericSchedule::Sequence(_ann, scheds) => {
+            GenericSchedule::Saturate {
+                field1: _ann,
+                field2: sched,
+            } => write!(f, "(saturate {sched})"),
+            GenericSchedule::Repeat {
+                field1: _ann,
+                field2: size,
+                field3: sched,
+            } => write!(f, "(repeat {size} {sched})"),
+            GenericSchedule::Run {
+                field1: _ann,
+                field2: config,
+            } => write!(f, "{config}"),
+            GenericSchedule::Sequence {
+                field1: _ann,
+                field2: scheds,
+            } => {
                 write!(f, "(seq {})", ListDisplay(scheds, " "))
             }
         }
@@ -273,17 +352,18 @@ pub type Command = GenericCommand<String, String>;
 
 pub type Subsume = bool;
 
-#[derive(Debug, Clone, PartialEq, Eq, JsonSchema)]
+#[derive(Debug, Clone, PartialEq, Eq, Deserialize, Serialize, JsonSchema)]
+#[serde(tag = "type")]
 #[schemars(_unstable_ref_variants)]
 pub enum Subdatatypes {
-    Variants(Vec<Variant>),
-    NewSort(String, Vec<Expr>),
+    Variants { field1: Vec<Variant> },
+    NewSort { field1: String, field2: Vec<Expr> },
 }
 
 /// The mode of printing a function. The default mode prints the function in a user-friendly way and
 /// has an unreliable interface.
 /// The CSV mode prints the function in the CSV format.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, JsonSchema)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Deserialize, Serialize, JsonSchema)]
 pub enum PrintFunctionMode {
     Default,
     CSV,
@@ -301,7 +381,8 @@ impl Display for PrintFunctionMode {
 /// A [`Command`] is the top-level construct in egglog.
 /// It includes defining rules, declaring functions,
 /// adding to tables, and running rules (via a [`Schedule`]).
-#[derive(Debug, Clone, JsonSchema)]
+#[derive(Debug, Clone, Deserialize, Serialize, JsonSchema)]
+#[serde(tag = "type")]
 #[schemars(_unstable_ref_variants)]
 pub enum GenericCommand<Head, Leaf>
 where
@@ -323,7 +404,11 @@ where
     /// ```
     ///
     /// Now `MathVec` can be used as an input or output sort.
-    Sort(Span, String, Option<(String, Vec<Expr>)>),
+    Sort {
+        field1: Span,
+        field2: String,
+        field3: Option<(String, Vec<Expr>)>,
+    },
 
     /// Egglog supports three types of functions
     ///
@@ -461,7 +546,7 @@ where
     ///       :ruleset myrules)
     /// (run myrules 2)
     /// ```
-    AddRuleset(Span, String),
+    AddRuleset { field1: Span, field2: String },
     /// Using the `combined-ruleset` command, construct another ruleset
     /// which runs all the rules in the given rulesets.
     /// This is useful for running multiple rulesets together.
@@ -480,7 +565,11 @@ where
     ///       :ruleset myrules2)
     /// (combined-ruleset myrules-combined myrules1 myrules2)
     /// ```
-    UnstableCombinedRuleset(Span, String, Vec<String>),
+    UnstableCombinedRuleset {
+        field1: Span,
+        field2: String,
+        field3: Vec<String>,
+    },
     /// ```text
     /// (rule <body:List<Fact>> <head:List<Action>>)
     /// ```
@@ -501,7 +590,7 @@ where
     /// (rule ((path x y) (edge y z))
     ///       ((path x z)))
     /// ```
-    Rule { rule: GenericRule<Head, Leaf> },
+    Rule { field1: GenericRule<Head, Leaf> },
     /// `rewrite` is syntactic sugar for a specific form of `rule`
     /// which simply unions the left and right hand sides.
     ///
@@ -541,7 +630,11 @@ where
     ///       ((union lhs (bitshift-left a 1))
     ///        (subsume (Mul a 2))))
     /// ```
-    Rewrite(String, GenericRewrite<Head, Leaf>, Subsume),
+    Rewrite {
+        field1: String,
+        field2: GenericRewrite<Head, Leaf>,
+        field3: Subsume,
+    },
     /// Similar to [`Command::Rewrite`], but
     /// generates two rules, one for each direction.
     ///
@@ -558,20 +651,27 @@ where
     /// (rule ((= lhs (Var x)))
     ///       ((union lhs (Mul (Var x) (Num 0)))))
     /// ```
-    BiRewrite(String, GenericRewrite<Head, Leaf>),
+    BiRewrite {
+        field1: String,
+        field2: GenericRewrite<Head, Leaf>,
+    },
     /// Perform an [`Action`] on the global database
     /// (see documentation for [`Action`] for more details).
     /// Example:
     /// ```text
     /// (let xplusone (Add (Var "x") (Num 1)))
     /// ```
-    Action(GenericAction<Head, Leaf>),
+    Action { field1: GenericAction<Head, Leaf> },
     /// `extract` a datatype from the egraph, choosing
     /// the smallest representative.
     /// By default, each constructor costs 1 to extract
     /// (common subexpressions are not shared in the cost
     /// model).
-    Extract(Span, GenericExpr<Head, Leaf>, GenericExpr<Head, Leaf>),
+    Extract {
+        field1: Span,
+        field2: GenericExpr<Head, Leaf>,
+        field3: GenericExpr<Head, Leaf>,
+    },
     /// Runs a [`Schedule`], which specifies
     /// rulesets and the number of times to run them.
     ///
@@ -586,10 +686,13 @@ where
     /// then runs `my-ruleset-2` four times.
     ///
     /// See [`Schedule`] for more details.
-    RunSchedule(GenericSchedule<Head, Leaf>),
+    RunSchedule { field1: GenericSchedule<Head, Leaf> },
     /// Print runtime statistics about rules
     /// and rulesets so far.
-    PrintOverallStatistics(Span, Option<String>),
+    PrintOverallStatistics {
+        field1: Span,
+        field2: Option<String>,
+    },
     /// The `check` command checks that the given facts
     /// match at least once in the current database.
     /// The list of facts is matched in the same way a [`Command::Rule`] is matched.
@@ -610,7 +713,10 @@ where
     /// [ERROR] Check failed
     /// [INFO ] Command failed as expected.
     /// ```
-    Check(Span, Vec<GenericFact<Head, Leaf>>),
+    Check {
+        span: Span,
+        facts: Vec<GenericFact<Head, Leaf>>,
+    },
     /// Print out rows of a given function, extracting each of the elements of the function.
     /// Example:
     ///
@@ -628,15 +734,18 @@ where
     /// (print-function Add :file "add.csv")
     /// ```
     /// prints all rows of the `Add` function to a CSV file.
-    PrintFunction(
-        Span,
-        String,
-        Option<usize>,
-        Option<String>,
-        PrintFunctionMode,
-    ),
+    PrintFunction {
+        field1: Span,
+        field2: String,
+        field3: Option<usize>,
+        field4: Option<String>,
+        field5: PrintFunctionMode,
+    },
     /// Print out the number of rows in a function or all functions.
-    PrintSize(Span, Option<String>),
+    PrintSize {
+        field1: Span,
+        field2: Option<String>,
+    },
     /// Input a CSV file directly into a function.
     Input {
         span: Span,
@@ -651,16 +760,23 @@ where
     },
     /// `push` the current egraph `n` times so that it is saved.
     /// Later, the current database and rules can be restored using `pop`.
-    Push(usize),
+    Push { n: usize },
     /// `pop` the current egraph, restoring the previous one.
     /// The argument specifies how many egraphs to pop.
-    Pop(Span, usize),
+    Pop { field1: Span, field2: usize },
     /// Assert that a command fails with an error.
-    Fail(Span, Box<GenericCommand<Head, Leaf>>),
+    Fail {
+        field1: Span,
+        field2: Box<GenericCommand<Head, Leaf>>,
+    },
     /// Include another egglog file directly as text and run it.
-    Include(Span, String),
+    Include { field1: Span, field2: String },
     /// User-defined command.
-    UserDefined(Span, String, Vec<Expr>),
+    UserDefined {
+        field1: Span,
+        field2: String,
+        field3: Vec<Expr>,
+    },
 }
 
 impl<Head, Leaf> Display for GenericCommand<Head, Leaf>
@@ -670,23 +786,38 @@ where
 {
     fn fmt(&self, f: &mut Formatter) -> std::fmt::Result {
         match self {
-            GenericCommand::Rewrite(name, rewrite, subsume) => {
-                rewrite.fmt_with_ruleset(f, name, false, *subsume)
-            }
-            GenericCommand::BiRewrite(name, rewrite) => {
-                rewrite.fmt_with_ruleset(f, name, true, false)
-            }
+            GenericCommand::Rewrite {
+                field1: name,
+                field2: rewrite,
+                field3: subsume,
+            } => rewrite.fmt_with_ruleset(f, name, false, *subsume),
+            GenericCommand::BiRewrite {
+                field1: name,
+                field2: rewrite,
+            } => rewrite.fmt_with_ruleset(f, name, true, false),
             GenericCommand::Datatype {
                 span: _,
                 name,
                 variants,
             } => write!(f, "(datatype {name} {})", ListDisplay(variants, " ")),
-            GenericCommand::Action(a) => write!(f, "{a}"),
-            GenericCommand::Extract(_span, expr, variants) => {
+            GenericCommand::Action { field1: a } => write!(f, "{a}"),
+            GenericCommand::Extract {
+                field1: _span,
+                field2: expr,
+                field3: variants,
+            } => {
                 write!(f, "(extract {expr} {variants})")
             }
-            GenericCommand::Sort(_span, name, None) => write!(f, "(sort {name})"),
-            GenericCommand::Sort(_span, name, Some((name2, args))) => {
+            GenericCommand::Sort {
+                field1: _span,
+                field2: name,
+                field3: None,
+            } => write!(f, "(sort {name})"),
+            GenericCommand::Sort {
+                field1: _span,
+                field2: name,
+                field3: Some((name2, args)),
+            } => {
                 write!(f, "(sort {name} ({name2} {}))", ListDisplay(args, " "))
             }
             GenericCommand::Function {
@@ -726,26 +857,45 @@ where
             } => {
                 write!(f, "(relation {name} ({}))", ListDisplay(inputs, " "))
             }
-            GenericCommand::AddRuleset(_span, name) => write!(f, "(ruleset {name})"),
-            GenericCommand::UnstableCombinedRuleset(_span, name, others) => {
+            GenericCommand::AddRuleset {
+                field1: _span,
+                field2: name,
+            } => write!(f, "(ruleset {name})"),
+            GenericCommand::UnstableCombinedRuleset {
+                field1: _span,
+                field2: name,
+                field3: others,
+            } => {
                 write!(
                     f,
                     "(unstable-combined-ruleset {name} {})",
                     ListDisplay(others, " ")
                 )
             }
-            GenericCommand::Rule { rule } => rule.fmt(f),
-            GenericCommand::RunSchedule(sched) => write!(f, "(run-schedule {sched})"),
-            GenericCommand::PrintOverallStatistics(_span, file) => match file {
+            GenericCommand::Rule { field1: rule } => rule.fmt(f),
+            GenericCommand::RunSchedule { field1: sched } => write!(f, "(run-schedule {sched})"),
+            GenericCommand::PrintOverallStatistics {
+                field1: _span,
+                field2: file,
+            } => match file {
                 Some(file) => write!(f, "(print-stats :file {file})"),
                 None => write!(f, "(print-stats)"),
             },
-            GenericCommand::Check(_ann, facts) => {
+            GenericCommand::Check { span: _ann, facts } => {
                 write!(f, "(check {})", ListDisplay(facts, "\n"))
             }
-            GenericCommand::Push(n) => write!(f, "(push {n})"),
-            GenericCommand::Pop(_span, n) => write!(f, "(pop {n})"),
-            GenericCommand::PrintFunction(_span, name, n, file, mode) => {
+            GenericCommand::Push { n } => write!(f, "(push {n})"),
+            GenericCommand::Pop {
+                field1: _span,
+                field2: n,
+            } => write!(f, "(pop {n})"),
+            GenericCommand::PrintFunction {
+                field1: _span,
+                field2: name,
+                field3: n,
+                field4: file,
+                field5: mode,
+            } => {
                 write!(f, "(print-function {name}")?;
                 if let Some(n) = n {
                     write!(f, " {n}")?;
@@ -759,7 +909,10 @@ where
                 }
                 write!(f, ")")
             }
-            GenericCommand::PrintSize(_span, name) => {
+            GenericCommand::PrintSize {
+                field1: _span,
+                field2: name,
+            } => {
                 write!(f, "(print-size {})", ListDisplay(name, " "))
             }
             GenericCommand::Input {
@@ -772,23 +925,36 @@ where
                 file,
                 exprs,
             } => write!(f, "(output {file:?} {})", ListDisplay(exprs, " ")),
-            GenericCommand::Fail(_span, cmd) => write!(f, "(fail {cmd})"),
-            GenericCommand::Include(_span, file) => write!(f, "(include {file:?})"),
+            GenericCommand::Fail {
+                field1: _span,
+                field2: cmd,
+            } => write!(f, "(fail {cmd})"),
+            GenericCommand::Include {
+                field1: _span,
+                field2: file,
+            } => write!(f, "(include {file:?})"),
             GenericCommand::Datatypes { span: _, datatypes } => {
                 let datatypes: Vec<_> = datatypes
                     .iter()
                     .map(|(_, name, variants)| match variants {
-                        Subdatatypes::Variants(variants) => {
+                        Subdatatypes::Variants { field1: variants } => {
                             format!("({name} {})", ListDisplay(variants, " "))
                         }
-                        Subdatatypes::NewSort(head, args) => {
+                        Subdatatypes::NewSort {
+                            field1: head,
+                            field2: args,
+                        } => {
                             format!("(sort {name} ({head} {}))", ListDisplay(args, " "))
                         }
                     })
                     .collect();
                 write!(f, "(datatype* {})", ListDisplay(datatypes, " "))
             }
-            GenericCommand::UserDefined(_span, name, exprs) => {
+            GenericCommand::UserDefined {
+                field1: _span,
+                field2: name,
+                field3: exprs,
+            } => {
                 write!(f, "({name} {})", ListDisplay(exprs, " "))
             }
         }
@@ -810,7 +976,7 @@ impl Display for IdentSort {
 pub type RunConfig = GenericRunConfig<String, String>;
 pub(crate) type ResolvedRunConfig = GenericRunConfig<ResolvedCall, ResolvedVar>;
 
-#[derive(Clone, Debug, PartialEq, Eq, Hash, JsonSchema)]
+#[derive(Clone, Debug, PartialEq, Eq, Hash, Deserialize, Serialize, JsonSchema)]
 pub struct GenericRunConfig<Head, Leaf> {
     pub ruleset: String,
     pub until: Option<Vec<GenericFact<Head, Leaf>>>,
@@ -854,7 +1020,7 @@ where
 pub type FunctionDecl = GenericFunctionDecl<String, String>;
 pub(crate) type ResolvedFunctionDecl = GenericFunctionDecl<ResolvedCall, ResolvedVar>;
 
-#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash, JsonSchema)]
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash, Deserialize, Serialize, JsonSchema)]
 pub enum FunctionSubtype {
     Constructor,
     Relation,
@@ -873,7 +1039,7 @@ impl Display for FunctionSubtype {
 
 /// Represents the declaration of a function
 /// directly parsed from source syntax.
-#[derive(Clone, Debug, PartialEq, Eq, Hash, JsonSchema)]
+#[derive(Clone, Debug, PartialEq, Eq, Hash, Deserialize, Serialize, JsonSchema)]
 pub struct GenericFunctionDecl<Head, Leaf>
 where
     Head: Clone + Display,
@@ -891,7 +1057,7 @@ where
     pub span: Span,
 }
 
-#[derive(Clone, Debug, PartialEq, Eq, Hash, JsonSchema)]
+#[derive(Clone, Debug, PartialEq, Eq, Hash, Deserialize, Serialize, JsonSchema)]
 pub struct Variant {
     pub span: Span,
     pub name: String,
@@ -913,7 +1079,7 @@ impl Display for Variant {
     }
 }
 
-#[derive(Clone, Debug, PartialEq, Eq, Hash, JsonSchema)]
+#[derive(Clone, Debug, PartialEq, Eq, Hash, Deserialize, Serialize, JsonSchema)]
 pub struct Schema {
     pub input: Vec<String>,
     pub output: String,
@@ -1039,7 +1205,11 @@ where
 
         for fact in self.0.iter() {
             match fact {
-                GenericFact::Eq(span, e1, e2) => {
+                GenericFact::Eq {
+                    field1: span,
+                    field2: e1,
+                    field3: e2,
+                } => {
                     let mut to_equate = vec![];
                     let mut process = |expr: &GenericExpr<Head, Leaf>| {
                         let (child_atoms, expr) = expr.to_query(typeinfo, fresh_gen);
@@ -1054,12 +1224,16 @@ where
                         head: HeadOrEq::Eq,
                         args: to_equate,
                     });
-                    new_body.push(GenericFact::Eq(span.clone(), e1, e2));
+                    new_body.push(GenericFact::Eq {
+                        field1: span.clone(),
+                        field2: e1,
+                        field3: e2,
+                    });
                 }
-                GenericFact::Fact(expr) => {
+                GenericFact::Fact { field1: expr } => {
                     let (child_atoms, expr) = expr.to_query(typeinfo, fresh_gen);
                     atoms.extend(child_atoms);
-                    new_body.push(GenericFact::Fact(expr));
+                    new_body.push(GenericFact::Fact { field1: expr });
                 }
             }
         }
@@ -1109,7 +1283,7 @@ pub(crate) type ResolvedRule = GenericRule<ResolvedCall, ResolvedVar>;
 
 pub type Rewrite = GenericRewrite<String, String>;
 
-#[derive(Clone, Debug, JsonSchema)]
+#[derive(Clone, Debug, Deserialize, Serialize, JsonSchema)]
 pub struct GenericRewrite<Head, Leaf> {
     pub span: Span,
     pub lhs: GenericExpr<Head, Leaf>,
@@ -1163,15 +1337,22 @@ where
         // This is error-prone and the complexities can be avoided by treating globals
         // as nullary functions.
         match self {
-            GenericExpr::Var(span, v) => {
+            GenericExpr::Var { span, name: v } => {
                 if typeinfo.is_global(&v.to_string()) {
                     GenericAtomTerm::Global(span.clone(), v.clone())
                 } else {
                     GenericAtomTerm::Var(span.clone(), v.clone())
                 }
             }
-            GenericExpr::Lit(span, lit) => GenericAtomTerm::Literal(span.clone(), lit.clone()),
-            GenericExpr::Call(span, head, _) => GenericAtomTerm::Var(span.clone(), head.to.clone()),
+            GenericExpr::Lit {
+                field1: span,
+                field2: lit,
+            } => GenericAtomTerm::Literal(span.clone(), lit.clone()),
+            GenericExpr::Call {
+                field1: span,
+                field2: head,
+                field3: _,
+            } => GenericAtomTerm::Var(span.clone(), head.to.clone()),
         }
     }
 }

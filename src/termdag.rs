@@ -100,9 +100,16 @@ impl TermDag {
     /// share subterms.
     pub fn expr_to_term(&mut self, expr: &GenericExpr<String, String>) -> Term {
         let res = match expr {
-            GenericExpr::Lit(_, lit) => Term::Lit(lit.clone()),
-            GenericExpr::Var(_, v) => Term::Var(v.to_owned()),
-            GenericExpr::Call(_, op, args) => {
+            GenericExpr::Lit {
+                field1: _,
+                field2: lit,
+            } => Term::Lit(lit.clone()),
+            GenericExpr::Var { span: _, name: v } => Term::Var(v.to_owned()),
+            GenericExpr::Call {
+                field1: _,
+                field2: op,
+                field3: args,
+            } => {
                 let args = args
                     .iter()
                     .map(|a| {
@@ -122,14 +129,24 @@ impl TermDag {
     /// Panics if the term contains subterms that are not in the DAG.
     pub fn term_to_expr(&self, term: &Term, span: Span) -> Expr {
         match term {
-            Term::Lit(lit) => Expr::Lit(span, lit.clone()),
-            Term::Var(v) => Expr::Var(span, v.clone()),
+            Term::Lit(lit) => Expr::Lit {
+                field1: span,
+                field2: lit.clone(),
+            },
+            Term::Var(v) => Expr::Var {
+                span,
+                name: v.clone(),
+            },
             Term::App(op, args) => {
                 let args: Vec<_> = args
                     .iter()
                     .map(|a| self.term_to_expr(self.get(*a), span.clone()))
                     .collect();
-                Expr::Call(span, op.clone(), args)
+                Expr::Call {
+                    field1: span,
+                    field2: op.clone(),
+                    field3: args,
+                }
             }
         }
     }
@@ -235,7 +252,7 @@ mod tests {
                 let span = span!();
                 assert_eq!(
                     td.term_to_expr(td.get(*x), span.clone()),
-                    crate::ast::GenericExpr::Var(span, "x".to_owned())
+                    crate::ast::GenericExpr::Var { span: span, name: "x".to_owned() }
                 )
             }
             (head, _) => panic!("unexpected head {}, in {}:{}:{}", head, file!(), line!(), column!())

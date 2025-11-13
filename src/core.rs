@@ -196,9 +196,18 @@ impl<Leaf> GenericAtomTerm<Leaf> {
 impl<Leaf: Clone> GenericAtomTerm<Leaf> {
     pub fn to_expr<Head>(&self) -> GenericExpr<Head, Leaf> {
         match self {
-            GenericAtomTerm::Var(span, v) => GenericExpr::Var(span.clone(), v.clone()),
-            GenericAtomTerm::Literal(span, l) => GenericExpr::Lit(span.clone(), l.clone()),
-            GenericAtomTerm::Global(span, v) => GenericExpr::Var(span.clone(), v.clone()),
+            GenericAtomTerm::Var(span, v) => GenericExpr::Var {
+                span: span.clone(),
+                name: v.clone(),
+            },
+            GenericAtomTerm::Literal(span, l) => GenericExpr::Lit {
+                field1: span.clone(),
+                field2: l.clone(),
+            },
+            GenericAtomTerm::Global(span, v) => GenericExpr::Var {
+                span: span.clone(),
+                name: v.clone(),
+            },
         }
     }
 }
@@ -268,14 +277,14 @@ where
 impl Atom<String> {
     pub(crate) fn to_expr(&self) -> Expr {
         let n = self.args.len();
-        Expr::Call(
-            self.span.clone(),
-            self.head.clone(),
-            self.args[0..n - 1]
+        Expr::Call {
+            field1: self.span.clone(),
+            field2: self.head.clone(),
+            field3: self.args[0..n - 1]
                 .iter()
                 .map(|arg| arg.to_expr())
                 .collect(),
-        )
+        }
     }
 }
 
@@ -519,7 +528,11 @@ where
         //   Every introduced variable should be unbound before.
         for action in self.0.iter() {
             match action {
-                GenericAction::Let(span, var, expr) => {
+                GenericAction::Let {
+                    field1: span,
+                    field2: var,
+                    field3: expr,
+                } => {
                     if binding.contains(var) {
                         return Err(TypeError::AlreadyDefined(var.to_string(), span.clone()));
                     }
@@ -530,14 +543,19 @@ where
                         var.clone(),
                         mapped_expr.get_corresponding_var_or_lit(typeinfo),
                     ));
-                    mapped_actions.0.push(GenericAction::Let(
-                        span.clone(),
-                        var.clone(),
-                        mapped_expr,
-                    ));
+                    mapped_actions.0.push(GenericAction::Let {
+                        field1: span.clone(),
+                        field2: var.clone(),
+                        field3: mapped_expr,
+                    });
                     binding.insert(var.clone());
                 }
-                GenericAction::Set(span, head, args, expr) => {
+                GenericAction::Set {
+                    field1: span,
+                    field2: head,
+                    field3: args,
+                    field4: expr,
+                } => {
                     let mut mapped_args = vec![];
                     for arg in args {
                         let mapped_arg =
@@ -556,14 +574,19 @@ where
                         mapped_expr.get_corresponding_var_or_lit(typeinfo),
                     ));
                     let v = fresh_gen.fresh(head);
-                    mapped_actions.0.push(GenericAction::Set(
-                        span.clone(),
-                        CorrespondingVar::new(head.clone(), v),
-                        mapped_args,
-                        mapped_expr,
-                    ));
+                    mapped_actions.0.push(GenericAction::Set {
+                        field1: span.clone(),
+                        field2: CorrespondingVar::new(head.clone(), v),
+                        field3: mapped_args,
+                        field4: mapped_expr,
+                    });
                 }
-                GenericAction::Change(span, change, head, args) => {
+                GenericAction::Change {
+                    field1: span,
+                    field2: change,
+                    field3: head,
+                    field4: args,
+                } => {
                     let mut mapped_args = vec![];
                     for arg in args {
                         let mapped_arg =
@@ -580,19 +603,35 @@ where
                             .collect(),
                     ));
                     let v = fresh_gen.fresh(head);
-                    mapped_actions.0.push(GenericAction::Change(
-                        span.clone(),
-                        *change,
-                        CorrespondingVar::new(head.clone(), v),
-                        mapped_args,
-                    ));
+                    mapped_actions.0.push(GenericAction::Change {
+                        field1: span.clone(),
+                        field2: *change,
+                        field3: CorrespondingVar::new(head.clone(), v),
+                        field4: mapped_args,
+                    });
                 }
-                GenericAction::Union(span, e1, e2) => {
+                GenericAction::Union {
+                    field1: span,
+                    field2: e1,
+                    field3: e2,
+                } => {
                     match (e1, e2) {
-                        (var @ GenericExpr::Var(..), GenericExpr::Call(_, f, args))
-                        | (GenericExpr::Call(_, f, args), var @ GenericExpr::Var(..))
-                            if f.is_constructor(typeinfo) =>
-                        {
+                        (
+                            var @ GenericExpr::Var { .. },
+                            GenericExpr::Call {
+                                field1: _,
+                                field2: f,
+                                field3: args,
+                            },
+                        )
+                        | (
+                            GenericExpr::Call {
+                                field1: _,
+                                field2: f,
+                                field3: args,
+                            },
+                            var @ GenericExpr::Var { .. },
+                        ) if f.is_constructor(typeinfo) => {
                             let head = f;
                             let expr = var;
                             let mut mapped_args = vec![];
@@ -621,12 +660,12 @@ where
                                 mapped_expr.get_corresponding_var_or_lit(typeinfo),
                             ));
                             let v = fresh_gen.fresh(head);
-                            mapped_actions.0.push(GenericAction::Set(
-                                span.clone(),
-                                CorrespondingVar::new(head.clone(), v),
-                                mapped_args,
-                                mapped_expr,
-                            ));
+                            mapped_actions.0.push(GenericAction::Set {
+                                field1: span.clone(),
+                                field2: CorrespondingVar::new(head.clone(), v),
+                                field3: mapped_args,
+                                field4: mapped_expr,
+                            });
                         }
                         _ => {
                             let mapped_e1 = e1.to_core_actions(
@@ -646,26 +685,34 @@ where
                                 mapped_e1.get_corresponding_var_or_lit(typeinfo),
                                 mapped_e2.get_corresponding_var_or_lit(typeinfo),
                             ));
-                            mapped_actions.0.push(GenericAction::Union(
-                                span.clone(),
-                                mapped_e1,
-                                mapped_e2,
-                            ));
+                            mapped_actions.0.push(GenericAction::Union {
+                                field1: span.clone(),
+                                field2: mapped_e1,
+                                field3: mapped_e2,
+                            });
                         }
                     };
                 }
-                GenericAction::Panic(span, string) => {
+                GenericAction::Panic {
+                    field1: span,
+                    field2: string,
+                } => {
                     norm_actions.push(GenericCoreAction::Panic(span.clone(), string.clone()));
-                    mapped_actions
-                        .0
-                        .push(GenericAction::Panic(span.clone(), string.clone()));
+                    mapped_actions.0.push(GenericAction::Panic {
+                        field1: span.clone(),
+                        field2: string.clone(),
+                    });
                 }
-                GenericAction::Expr(span, expr) => {
+                GenericAction::Expr {
+                    field1: span,
+                    field2: expr,
+                } => {
                     let mapped_expr =
                         expr.to_core_actions(typeinfo, binding, fresh_gen, &mut norm_actions)?;
-                    mapped_actions
-                        .0
-                        .push(GenericAction::Expr(span.clone(), mapped_expr));
+                    mapped_actions.0.push(GenericAction::Expr {
+                        field1: span.clone(),
+                        field2: mapped_expr,
+                    });
                 }
             }
         }
@@ -714,9 +761,28 @@ where
         Leaf: Clone + PartialEq + Eq + Display + Hash,
     {
         match self {
-            GenericExpr::Lit(span, lit) => (vec![], GenericExpr::Lit(span.clone(), lit.clone())),
-            GenericExpr::Var(span, v) => (vec![], GenericExpr::Var(span.clone(), v.clone())),
-            GenericExpr::Call(span, f, children) => {
+            GenericExpr::Lit {
+                field1: span,
+                field2: lit,
+            } => (
+                vec![],
+                GenericExpr::Lit {
+                    field1: span.clone(),
+                    field2: lit.clone(),
+                },
+            ),
+            GenericExpr::Var { span, name: v } => (
+                vec![],
+                GenericExpr::Var {
+                    span: span.clone(),
+                    name: v.clone(),
+                },
+            ),
+            GenericExpr::Call {
+                field1: span,
+                field2: f,
+                field3: children,
+            } => {
                 let fresh = fresh_gen.fresh(f);
                 let mut new_children = vec![];
                 let mut atoms = vec![];
@@ -739,11 +805,11 @@ where
                 });
                 (
                     atoms,
-                    GenericExpr::Call(
-                        span.clone(),
-                        CorrespondingVar::new(f.clone(), fresh),
-                        child_exprs,
-                    ),
+                    GenericExpr::Call {
+                        field1: span.clone(),
+                        field2: CorrespondingVar::new(f.clone(), fresh),
+                        field3: child_exprs,
+                    },
                 )
             }
         }
@@ -757,16 +823,29 @@ where
         out_actions: &mut Vec<GenericCoreAction<Head, Leaf>>,
     ) -> Result<MappedExpr<Head, Leaf>, TypeError> {
         match self {
-            GenericExpr::Lit(span, lit) => Ok(GenericExpr::Lit(span.clone(), lit.clone())),
-            GenericExpr::Var(span, v) => {
+            GenericExpr::Lit {
+                field1: span,
+                field2: lit,
+            } => Ok(GenericExpr::Lit {
+                field1: span.clone(),
+                field2: lit.clone(),
+            }),
+            GenericExpr::Var { span, name: v } => {
                 let sym = v.to_string();
                 if binding.contains(v) || typeinfo.is_global(&sym) {
-                    Ok(GenericExpr::Var(span.clone(), v.clone()))
+                    Ok(GenericExpr::Var {
+                        span: span.clone(),
+                        name: v.clone(),
+                    })
                 } else {
                     Err(TypeError::Unbound(sym, span.clone()))
                 }
             }
-            GenericExpr::Call(span, f, args) => {
+            GenericExpr::Call {
+                field1: span,
+                field2: f,
+                field3: args,
+            } => {
                 let mut norm_args = vec![];
                 let mut mapped_args = vec![];
                 for arg in args {
@@ -783,11 +862,11 @@ where
                     f.clone(),
                     norm_args,
                 ));
-                Ok(GenericExpr::Call(
-                    span.clone(),
-                    CorrespondingVar::new(f.clone(), var),
-                    mapped_args,
-                ))
+                Ok(GenericExpr::Call {
+                    field1: span.clone(),
+                    field2: CorrespondingVar::new(f.clone(), var),
+                    field3: mapped_args,
+                })
             }
         }
     }

@@ -1,3 +1,4 @@
+use serde::{Deserialize, Serialize};
 use std::fmt::Display;
 use std::hash::Hash;
 
@@ -6,8 +7,10 @@ use schemars::JsonSchema;
 
 use crate::span::Span;
 
-#[derive(Debug, PartialEq, Eq, PartialOrd, Ord, Hash, Clone, JsonSchema)]
-#[schemars(untagged)]
+#[derive(
+    Debug, PartialEq, Eq, PartialOrd, Ord, Hash, Clone, Deserialize, Serialize, JsonSchema,
+)]
+#[serde(untagged)]
 pub enum Literal {
     Int(i64),
     Float(OrderedFloat<f64>),
@@ -16,12 +19,23 @@ pub enum Literal {
     Unit,
 }
 
-#[derive(Clone, Debug, PartialEq, Eq, Hash, JsonSchema)]
+#[derive(Clone, Debug, PartialEq, Eq, Hash, Deserialize, Serialize, JsonSchema)]
+#[serde(tag = "type")]
 #[schemars(_unstable_ref_variants)]
 pub enum GenericExpr<Head, Leaf> {
-    Var(Span, Leaf),
-    Call(Span, Head, Vec<GenericExpr<Head, Leaf>>),
-    Lit(Span, Literal),
+    Var {
+        span: Span,
+        name: Leaf,
+    },
+    Call {
+        field1: Span,
+        field2: Head,
+        field3: Vec<GenericExpr<Head, Leaf>>,
+    },
+    Lit {
+        field1: Span,
+        field2: Literal,
+    },
 }
 
 /// Facts are the left-hand side of a [`Command::Rule`].
@@ -34,18 +48,27 @@ pub enum GenericExpr<Head, Leaf> {
 /// ```text
 /// (fail (check (!= 1 1)))
 /// ```
-#[derive(Clone, Debug, PartialEq, Eq, Hash, JsonSchema)]
+#[derive(Clone, Debug, PartialEq, Eq, Hash, Deserialize, Serialize, JsonSchema)]
+#[serde(tag = "type")]
+#[schemars(_unstable_ref_variants)]
 pub enum GenericFact<Head, Leaf> {
-    Eq(Span, GenericExpr<Head, Leaf>, GenericExpr<Head, Leaf>),
-    Fact(GenericExpr<Head, Leaf>),
+    Eq {
+        field1: Span,
+        field2: GenericExpr<Head, Leaf>,
+        field3: GenericExpr<Head, Leaf>,
+    },
+    Fact {
+        field1: GenericExpr<Head, Leaf>,
+    },
 }
 
-#[derive(Clone, Debug, PartialEq, Eq, Hash, JsonSchema)]
+#[derive(Clone, Debug, PartialEq, Eq, Hash, Deserialize, Serialize, JsonSchema)]
 pub struct GenericActions<Head: Clone + Display, Leaf: Clone + PartialEq + Eq + Display + Hash>(
     pub Vec<GenericAction<Head, Leaf>>,
 );
 
-#[derive(Clone, Debug, PartialEq, Eq, Hash, JsonSchema)]
+#[derive(Clone, Debug, PartialEq, Eq, Hash, Deserialize, Serialize, JsonSchema)]
+#[serde(tag = "type")]
 #[schemars(_unstable_ref_variants)]
 pub enum GenericAction<Head, Leaf>
 where
@@ -55,18 +78,27 @@ where
     /// Bind a variable to a particular datatype or primitive.
     /// At the top level (in a [`Command::Action`]), this defines a global variable.
     /// In a [`Command::Rule`], this defines a local variable in the actions.
-    Let(Span, Leaf, GenericExpr<Head, Leaf>),
+    Let {
+        field1: Span,
+        field2: Leaf,
+        field3: GenericExpr<Head, Leaf>,
+    },
     /// `set` a function to a particular result.
     /// `set` should not be used on datatypes-
     /// instead, use `union`.
-    Set(
-        Span,
-        Head,
-        Vec<GenericExpr<Head, Leaf>>,
-        GenericExpr<Head, Leaf>,
-    ),
+    Set {
+        field1: Span,
+        field2: Head,
+        field3: Vec<GenericExpr<Head, Leaf>>,
+        field4: GenericExpr<Head, Leaf>,
+    },
     /// Delete or subsume (mark as hidden from future rewrites and unextractable) an entry from a function.
-    Change(Span, Change, Head, Vec<GenericExpr<Head, Leaf>>),
+    Change {
+        field1: Span,
+        field2: Change,
+        field3: Head,
+        field4: Vec<GenericExpr<Head, Leaf>>,
+    },
     /// `union` two datatypes, making them equal
     /// in the implicit, global equality relation
     /// of egglog.
@@ -79,12 +111,22 @@ where
     /// (extract (Num 1)); Extracts Num 1
     /// (extract (Num 2)); Extracts Num 1
     /// ```
-    Union(Span, GenericExpr<Head, Leaf>, GenericExpr<Head, Leaf>),
-    Panic(Span, String),
-    Expr(Span, GenericExpr<Head, Leaf>),
+    Union {
+        field1: Span,
+        field2: GenericExpr<Head, Leaf>,
+        field3: GenericExpr<Head, Leaf>,
+    },
+    Panic {
+        field1: Span,
+        field2: String,
+    },
+    Expr {
+        field1: Span,
+        field2: GenericExpr<Head, Leaf>,
+    },
 }
 
-#[derive(Clone, Debug, PartialEq, Eq, Hash, JsonSchema)]
+#[derive(Clone, Debug, PartialEq, Eq, Hash, Deserialize, Serialize, JsonSchema)]
 pub struct GenericRule<Head, Leaf>
 where
     Head: Clone + Display,
@@ -100,7 +142,7 @@ where
 }
 
 /// Change a function entry.
-#[derive(Clone, Debug, Copy, PartialEq, Eq, Hash, JsonSchema)]
+#[derive(Clone, Debug, Copy, PartialEq, Eq, Hash, Deserialize, Serialize, JsonSchema)]
 #[schemars(untagged)]
 pub enum Change {
     /// `delete` this entry from a function.

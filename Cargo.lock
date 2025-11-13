@@ -500,6 +500,7 @@ dependencies = [
  "rayon",
  "rustc-hash",
  "schemars",
+ "serde",
  "serde_json",
  "thiserror",
  "web-time",
@@ -519,6 +520,7 @@ version = "1.0.0"
 dependencies = [
  "ordered-float",
  "schemars",
+ "serde",
 ]
 
 [[package]]
