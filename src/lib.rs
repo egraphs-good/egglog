@@ -1533,7 +1533,7 @@ impl<'a> BackendRule<'a> {
             } else {
                 panic!("no callable for {name}");
             };
-            let do_rebuild = prim.input.iter().skip(1).map(|x| x.clone()).collect();
+            let do_rebuild = prim.input.iter().skip(1).cloned().collect();
 
             qe_args[0] = self.rb.egraph().base_value_constant(ResolvedFunction {
                 id,
