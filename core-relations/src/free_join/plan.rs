@@ -173,19 +173,20 @@ impl Plan {
             Plan as ReportPlan, Scan as ReportScan, SingleScan as ReportSingleScan,
             Stage as ReportStage,
         };
+        const INTERNAL_PREFIX: &str = "@";
         let get_var = |var: Variable| {
             symbol_map
                 .vars
                 .get(&var)
                 .map(|s| s.to_string())
-                .unwrap_or_else(|| format!("$x{:?}", var))
+                .unwrap_or_else(|| format!("{INTERNAL_PREFIX}x{var:?}"))
         };
         let get_atom = |atom: AtomId| {
             symbol_map
                 .atoms
                 .get(&atom)
                 .map(|s| s.to_string())
-                .unwrap_or_else(|| format!("$R{:?}", atom))
+                .unwrap_or_else(|| format!("{INTERNAL_PREFIX}R{atom:?}"))
         };
         let mut stages = Vec::new();
         for (i, stage) in self.stages.instrs.iter().enumerate() {

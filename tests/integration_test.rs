@@ -2,6 +2,142 @@ use egglog::{extract::DefaultCost, *};
 use egglog_ast::span::{RustSpan, Span};
 
 #[test]
+fn globals_missing_prefix_warns_by_default() {
+    testing_logger::setup();
+
+    let mut egraph = EGraph::default();
+    egraph
+        .parse_and_run_program(None, "(let value 41)")
+        .unwrap();
+
+    testing_logger::validate(|logs| {
+        let bodies: Vec<_> = logs.iter().map(|entry| entry.body.clone()).collect();
+        assert!(
+            bodies
+                .iter()
+                .any(|body| body.contains("Global `value` should start with `$`")),
+            "expected warning about missing global prefix, got logs: {:?}",
+            bodies
+        );
+    });
+}
+
+#[test]
+fn globals_missing_prefix_warns_for_prefixed_pattern_variable_by_default() {
+    testing_logger::setup();
+
+    let mut egraph = EGraph::default();
+    egraph
+        .parse_and_run_program(None, "(rule ((= $x 1)) ())")
+        .unwrap();
+
+    testing_logger::validate(|logs| {
+        let bodies: Vec<_> = logs.iter().map(|entry| entry.body.clone()).collect();
+        assert!(
+            bodies
+                .iter()
+                .any(|body| body.contains("Global `x` should start with `$`")),
+            "expected warning about missing global prefix, got logs: {:?}",
+            bodies
+        );
+    });
+}
+
+#[test]
+fn globals_missing_prefix_warns_for_prefixed_rule_let_by_default() {
+    testing_logger::setup();
+
+    let mut egraph = EGraph::default();
+    egraph
+        .parse_and_run_program(None, "(rule () ((let $y 1)))")
+        .unwrap();
+
+    testing_logger::validate(|logs| {
+        let bodies: Vec<_> = logs.iter().map(|entry| entry.body.clone()).collect();
+        assert!(
+            bodies
+                .iter()
+                .any(|body| body.contains("Global `y` should start with `$`")),
+            "expected warning about missing global prefix, got logs: {:?}",
+            bodies
+        );
+    });
+}
+
+#[test]
+fn globals_missing_prefix_errors_when_opted_in() {
+    let _ = env_logger::builder().is_test(true).try_init();
+
+    let mut egraph = EGraph::default();
+    egraph.set_strict_mode(true);
+    let err = egraph
+        .parse_and_run_program(None, "(let value 41)")
+        .unwrap_err();
+    match err {
+        Error::TypeError(TypeError::GlobalMissingPrefix { ref name, .. }) => {
+            assert_eq!(name, "value");
+        }
+        other => panic!("expected missing dollar error, got {other:?}"),
+    }
+}
+
+#[test]
+fn globals_missing_prefix_errors_for_prefixed_pattern_variable_when_opted_in() {
+    let _ = env_logger::builder().is_test(true).try_init();
+
+    let mut egraph = EGraph::default();
+    egraph.set_strict_mode(true);
+    let err = egraph
+        .parse_and_run_program(None, "(rule ((= $x 1)) ())")
+        .unwrap_err();
+
+    match err {
+        Error::TypeError(TypeError::NonGlobalPrefixed { ref name, .. }) => {
+            assert_eq!(name, "$x");
+        }
+        other => panic!("expected non-global prefixed variable error, got {other:?}"),
+    }
+}
+
+#[test]
+fn globals_missing_prefix_errors_for_prefixed_rule_let_when_opted_in() {
+    let _ = env_logger::builder().is_test(true).try_init();
+
+    let mut egraph = EGraph::default();
+    egraph.set_strict_mode(true);
+    let err = egraph
+        .parse_and_run_program(None, "(rule () ((let $y 1)))")
+        .unwrap_err();
+
+    match err {
+        Error::TypeError(TypeError::NonGlobalPrefixed { ref name, .. }) => {
+            assert_eq!(name, "$y");
+        }
+        other => panic!("expected non-global prefixed variable error, got {other:?}"),
+    }
+}
+
+#[test]
+fn globals_cannot_be_shadowed_by_pattern_variables() {
+    let _ = env_logger::builder().is_test(true).try_init();
+
+    let mut egraph = EGraph::default();
+    let program = r#"
+        (let $value 41)
+        (rule ((= value $value)) ())
+    "#;
+
+    let err = egraph.parse_and_run_program(None, program).unwrap_err();
+    match err {
+        Error::Shadowing(message, _global_span, _shadow_span) => {
+            assert!(message.contains("pattern variable `value`"));
+            assert!(message.contains("global `$value`"));
+        }
+        other => panic!("expected shadowing error, got {other:?}"),
+    }
+}
+
+#[test]
 fn test_simple_extract1() {
     let _ = env_logger::builder().is_test(true).try_init();
 

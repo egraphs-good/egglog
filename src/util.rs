@@ -2,6 +2,19 @@ use crate::{
     ast::ResolvedVar,
     core::{ResolvedCall, SpecializedPrimitive},
 };
+use std::borrow::Cow;
+
+pub const INTERNAL_SYMBOL_PREFIX: &str = "@";
+
+/// Gets rid of internal symbol prefixes for printing.
+/// This allows us to test parsing of desugared programs.
+pub fn sanitize_internal_name(name: &str) -> Cow<'_, str> {
+    if let Some(stripped) = name.strip_prefix(INTERNAL_SYMBOL_PREFIX) {
+        Cow::Owned(format!("_{}", stripped))
+    } else {
+        Cow::Borrowed(name)
+    }
+}
 
 pub(crate) type BuildHasher = std::hash::BuildHasherDefault<rustc_hash::FxHasher>;
 pub(crate) type HashMap<K, V> = hashbrown::HashMap<K, V, BuildHasher>;
@@ -12,7 +25,7 @@ pub type IndexSet<K> = indexmap::IndexSet<K, BuildHasher>;
 
 /// Generates fresh symbols for internal use during typechecking and flattening.
 /// These are guaranteed not to collide with the
-/// user's symbols because they use $.
+/// user's symbols because they use a reserved prefix.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct SymbolGen {
     count: usize,
@@ -29,6 +42,14 @@ impl SymbolGen {
 
     pub fn has_been_used(&self) -> bool {
         self.count > 0
+    }
+
+    pub fn reserved_prefix(&self) -> &str {
+        &self.reserved_string
+    }
+
+    pub fn is_reserved(&self, symbol: &str) -> bool {
+        !self.reserved_string.is_empty() && symbol.starts_with(&self.reserved_string)
     }
 }
 

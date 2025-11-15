@@ -70,6 +70,8 @@ use util::*;
 
 use crate::core::{GenericActionsExt, ResolvedRuleExt};
 
+pub const GLOBAL_NAME_PREFIX: &str = "$";
+
 pub type ArcSort = Arc<dyn Sort>;
 
 /// A trait for implementing custom primitive operations in egglog.
@@ -210,6 +212,8 @@ pub struct EGraph {
     overall_run_report: RunReport,
     schedulers: DenseIdMap<SchedulerId, SchedulerRecord>,
     commands: IndexMap<String, Arc<dyn UserDefinedCommand>>,
+    strict_mode: bool,
+    warned_about_missing_global_prefix: bool,
 }
 
 /// A user-defined command allows users to inject custom command that can be called
@@ -292,6 +296,8 @@ impl Default for EGraph {
             type_info: Default::default(),
             schedulers: Default::default(),
             commands: Default::default(),
+            strict_mode: false,
+            warned_about_missing_global_prefix: false,
         };
 
         add_base_sort(&mut eg, UnitSort, span!()).unwrap();
@@ -346,6 +352,55 @@ impl EGraph {
         }
         self.commands.insert(name.clone(), command);
         self.parser.add_user_defined(name)?;
+        Ok(())
+    }
+
+    /// Configure whether globals missing the required `$` prefix are treated as errors.
+    pub fn set_strict_mode(&mut self, strict_mode: bool) {
+        self.strict_mode = strict_mode;
+    }
+
+    /// Returns `true` when missing `$` prefixes on globals are treated as errors.
+    pub fn strict_mode(&self) -> bool {
+        self.strict_mode
+    }
+
+    fn ensure_global_name_prefix(&mut self, span: &Span, name: &str) -> Result<(), TypeError> {
+        if name.starts_with(GLOBAL_NAME_PREFIX) {
+            return Ok(());
+        }
+        if self.strict_mode {
+            Err(TypeError::GlobalMissingPrefix {
+                name: name.to_owned(),
+                span: span.clone(),
+            })
+        } else {
+            self.warn_missing_global_prefix(span, name)?;
+            Ok(())
+        }
+    }
+
+    fn warn_missing_global_prefix(
+        &mut self,
+        span: &Span,
+        canonical_name: &str,
+    ) -> Result<(), TypeError> {
+        if self.strict_mode {
+            return Err(TypeError::NonGlobalPrefixed {
+                name: format!("{}{}", GLOBAL_NAME_PREFIX, canonical_name),
+                span: span.clone(),
+            });
+        }
+        if self.warned_about_missing_global_prefix {
+            return Ok(());
+        }
+        self.warned_about_missing_global_prefix = true;
+        log::warn!(
+            "{}\nGlobal `{}` should start with `{}`. Enable `--strict-mode` to turn this warning into an error. Suppressing additional warnings of this type.",
+            span,
+            canonical_name,
+            GLOBAL_NAME_PREFIX
+        );
         Ok(())
     }
 
