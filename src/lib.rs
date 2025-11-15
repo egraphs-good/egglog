@@ -1533,16 +1533,11 @@ impl<'a> BackendRule<'a> {
             } else {
                 panic!("no callable for {name}");
             };
-            let do_rebuild = prim
-                .input
-                .iter()
-                .skip(1)
-                .map(|s| s.is_eq_sort() || s.is_eq_container_sort())
-                .collect();
+            let do_rebuild = prim.input.iter().skip(1).map(|x| x.clone()).collect();
 
             qe_args[0] = self.rb.egraph().base_value_constant(ResolvedFunction {
                 id,
-                do_rebuild,
+                partial_arcsorts: do_rebuild,
                 name: name.clone(),
             });
         }
