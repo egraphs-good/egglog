@@ -455,6 +455,7 @@ impl RuleBuilder<'_, '_> {
                 None
             }
         }));
+        let desc: String = desc.into();
         let action_id = self.qb.rsb.rule_set.actions.push(ActionInfo {
             instrs: Arc::new(self.qb.instrs),
             used_vars,
@@ -462,7 +463,6 @@ impl RuleBuilder<'_, '_> {
         self.qb.query.action = action_id;
         // Plan the query
         let plan = self.qb.rsb.db.plan_query(self.qb.query);
-        let desc: String = desc.into();
         // Add it to the ruleset.
         self.qb
             .rsb

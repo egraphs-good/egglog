@@ -1498,6 +1498,24 @@ struct RuleProofState {
 }
 
 impl RuleProofState {
+    /// Helper for `finish` that determines whether a mapped expression corresponds to a value that
+    /// ever appeared in the query bindings. Synthesized temporaries (e.g., helpers introduced by
+    /// global removal or rewrite instrumentation) never get bound, so we should omit them from the
+    /// reconstructed syntax.
+    fn expr_is_synthesized<Head>(
+        expr: &MappedExpr<Head, ResolvedVar>,
+        ctx: &ProofContext<'_, '_>,
+    ) -> bool
+    where
+        Head: Clone + Display,
+    {
+        match expr {
+            GenericExpr::Var(_, var) => ctx.var_entry(var).is_none(),
+            GenericExpr::Lit(_, _) => false,
+            GenericExpr::Call(_, head, _) => ctx.var_entry(&head.to).is_none(),
+        }
+    }
+
     fn finish(&mut self, rule: &BackendRule<'_>) -> SourceSyntax {
         if self.mapped_facts.is_empty() {
             return SourceSyntax::default();
@@ -1511,16 +1529,17 @@ impl RuleProofState {
         for fact in &self.mapped_facts {
             match fact {
                 GenericFact::Fact(expr) => {
+                    if Self::expr_is_synthesized(expr, &ctx) {
+                        continue;
+                    }
                     let syntax_id = builder.expr(expr, &ctx);
                     builder
                         .syntax
                         .add_toplevel_expr(TopLevelLhsExpr::Exists(syntax_id));
                 }
                 GenericFact::Eq(_, lhs, rhs) => {
-                    let lhs_is_synthesized =
-                        matches!(lhs, GenericExpr::Var(_, v) if ctx.var_entry(v).is_none());
-                    let rhs_is_synthesized =
-                        matches!(rhs, GenericExpr::Var(_, v) if ctx.var_entry(v).is_none());
+                    let lhs_is_synthesized = Self::expr_is_synthesized(lhs, &ctx);
+                    let rhs_is_synthesized = Self::expr_is_synthesized(rhs, &ctx);
                     match (lhs_is_synthesized, rhs_is_synthesized) {
                         (true, true) => {} // equality only involves synthesized temporaries.
                         (true, false) => {
