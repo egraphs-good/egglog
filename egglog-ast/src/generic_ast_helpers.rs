@@ -222,6 +222,9 @@ where
     Leaf: Clone + Eq + Display + Hash,
 {
     pub fn visit_vars(&self, f: &mut impl FnMut(&Span, &Leaf)) {
+        if let GenericAction::Let(span, lhs, _) = self {
+            f(span, lhs);
+        }
         let mut visit = |expr: GenericExpr<Head, Leaf>| match expr {
             GenericExpr::Var(span, var) => {
                 f(&span, &var);
