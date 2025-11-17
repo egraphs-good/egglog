@@ -112,7 +112,8 @@ pub(crate) struct Bindings {
 impl std::ops::Index<Variable> for Bindings {
     type Output = [Value];
     fn index(&self, var: Variable) -> &[Value] {
-        self.get(var).unwrap()
+        self.get(var)
+            .unwrap_or_else(|| panic!("Bindings missing value for variable {:?}", var))
     }
 }
 
