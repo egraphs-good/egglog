@@ -732,6 +732,11 @@ impl EGraph {
         info!("=== View Tables ===");
         for (id, info) in self.funcs.iter() {
             let table = self.db.get_table(info.table);
+            info!(
+                "View Table {name} / {id:?} / {table:?}",
+                name = info.name,
+                table = info.table
+            );
             self.scan_table(table, |row| {
                 info!(
                     "View Table {name} / {id:?} / {table:?}: {row:?}",
@@ -744,6 +749,7 @@ impl EGraph {
         info!("=== Term Tables ===");
         for (_, table_id) in &self.term_tables {
             let table = self.db.get_table(*table_id);
+            info!("Term Table {table_id:?}");
             self.scan_table(table, |row| {
                 let name = &self.funcs[FunctionId::new(row[0].rep())].name;
                 let row = &row[1..];
@@ -753,6 +759,7 @@ impl EGraph {
 
         info!("=== Reason Tables ===");
         for (_, table_id) in &self.reason_tables {
+            info!("Reason Table {table_id:?}");
             let table = self.db.get_table(*table_id);
             self.scan_table(table, |row| {
                 let spec = self.proof_specs[ReasonSpecId::new(row[0].rep())].as_ref();
