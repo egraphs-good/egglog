@@ -68,6 +68,7 @@ pub use typechecking::TypeError;
 use typechecking::TypeInfo;
 use util::*;
 
+use crate::ast::desugar::desugar_command;
 use crate::core::{GenericActionsExt, ResolvedRuleExt};
 
 pub type ArcSort = Arc<dyn Sort>;
@@ -1277,7 +1278,7 @@ impl EGraph {
     }
 
     fn resolve_command(&mut self, command: Command) -> Result<Vec<ResolvedNCommand>, Error> {
-        let program = desugar::desugar_program(vec![command], &mut self.parser, self.seminaive)?;
+        let program = desugar_command(command, &mut self.parser, &self.type_info, self.seminaive)?;
         Ok(self.typecheck_program(&program)?)
     }
 
