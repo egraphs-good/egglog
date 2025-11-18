@@ -298,6 +298,14 @@ impl Display for PrintFunctionMode {
 /// A [`Command`] is the top-level construct in egglog.
 /// It includes defining rules, declaring functions,
 /// adding to tables, and running rules (via a [`Schedule`]).
+///
+/// # Binding naming convention
+/// Bindings introduced by commands fall into two categories:
+/// - **Global bindings** must start with [`$`](crate::GLOBAL_NAME_PREFIX).
+/// - **Non-global bindings** must *not* start with [`$`](crate::GLOBAL_NAME_PREFIX).
+///
+/// When `--strict-mode` is enabled, violating these conventions is a type error;
+/// otherwise, egglog emits a single warning per program.
 #[derive(Debug, Clone)]
 pub enum GenericCommand<Head, Leaf>
 where

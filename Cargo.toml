@@ -159,6 +159,7 @@ chrono = { workspace = true, features = ["now"], optional = true }
 divan = { workspace = true }
 glob = { workspace = true }
 libtest-mimic = { workspace = true }
+testing_logger = "0.1"
 
 [profile.release]
 incremental = true

@@ -12,21 +12,21 @@
 (rewrite (Add a (Add b c))
       (Add (Add a b) c))
 
-(let two 2)
-(let start1 (Add (Var "x") (Const two)))
+(let $two 2)
+(let $start1 (Add (Var "x") (Const $two)))
 ;; add original proofs
 
 (run 3)
 
 
-(check (!= (Var "x") (Const two)))
-(check (= (Add (Var "x") (Const two))
-          (Add (Const two) (Var "x"))))
+(check (!= (Var "x") (Const $two)))
+(check (= (Add (Var "x") (Const $two))
+          (Add (Const $two) (Var "x"))))
 
-(let zero (Const 0))
-(let addx2 (Add (Var "x") (Const two)))
-(let addx20 (Add addx2 zero))
-(let addzerofront (Add (Add zero (Var "x")) (Const two)))
+(let $zero (Const 0))
+(let $addx2 (Add (Var "x") (Const $two)))
+(let $addx20 (Add $addx2 $zero))
+(let $addzerofront (Add (Add $zero (Var "x")) (Const $two)))
 
-(check (= addx2
-          addx20))
+(check (= $addx2
+          $addx20))

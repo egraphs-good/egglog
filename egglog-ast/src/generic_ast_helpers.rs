@@ -194,6 +194,12 @@ where
         self.0.iter()
     }
 
+    pub fn visit_vars(&self, f: &mut impl FnMut(&Span, &Leaf)) {
+        for action in &self.0 {
+            action.visit_vars(f);
+        }
+    }
+
     pub fn visit_exprs(
         self,
         f: &mut impl FnMut(GenericExpr<Head, Leaf>) -> GenericExpr<Head, Leaf>,
@@ -215,6 +221,20 @@ where
     Head: Clone + Display,
     Leaf: Clone + Eq + Display + Hash,
 {
+    pub fn visit_vars(&self, f: &mut impl FnMut(&Span, &Leaf)) {
+        if let GenericAction::Let(span, lhs, _) = self {
+            f(span, lhs);
+        }
+        let mut visit = |expr: GenericExpr<Head, Leaf>| match expr {
+            GenericExpr::Var(span, var) => {
+                f(&span, &var);
+                GenericExpr::Var(span, var)
+            }
+            other => other,
+        };
+        let _ = self.clone().visit_exprs(&mut visit);
+    }
+
     // Applys `f` to all expressions in the action.
     pub fn map_exprs(
         &self,
@@ -325,6 +345,17 @@ where
     Head: Clone + Display,
     Leaf: Clone + PartialEq + Eq + Display + Hash,
 {
+    pub fn visit_vars(&self, f: &mut impl FnMut(&Span, &Leaf)) {
+        let mut visit = |expr: GenericExpr<Head, Leaf>| match expr {
+            GenericExpr::Var(span, var) => {
+                f(&span, &var);
+                GenericExpr::Var(span, var)
+            }
+            other => other,
+        };
+        let _ = self.clone().visit_exprs(&mut visit);
+    }
+
     pub fn visit_exprs(
         self,
         f: &mut impl FnMut(GenericExpr<Head, Leaf>) -> GenericExpr<Head, Leaf>,
@@ -370,6 +401,17 @@ where
 }
 
 impl<Head: Clone + Display, Leaf: Hash + Clone + Display + Eq> GenericExpr<Head, Leaf> {
+    pub fn visit_vars(&self, f: &mut impl FnMut(&Span, &Leaf)) {
+        let mut visit = |expr: GenericExpr<Head, Leaf>| match expr {
+            GenericExpr::Var(span, var) => {
+                f(&span, &var);
+                GenericExpr::Var(span, var)
+            }
+            other => other,
+        };
+        let _ = self.clone().visit_exprs(&mut visit);
+    }
+
     pub fn span(&self) -> Span {
         match self {
             GenericExpr::Lit(span, _) => span.clone(),
