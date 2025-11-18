@@ -44,7 +44,7 @@ jobs:
       - uses: actions/checkout@v4
       - uses: taiki-e/install-action@v2
         with:
-          tool: cargo-codspeed
+          tool: cargo-codspeed@4.0.1
       - uses: Swatinem/rust-cache@v2
       - run: cargo codspeed build
       - uses: CodSpeedHQ/action@v4
