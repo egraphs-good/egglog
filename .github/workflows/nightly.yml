@@ -13,7 +13,7 @@ jobs:
       - uses: actions/checkout@v4
       - uses: taiki-e/install-action@v2
         with:
-          tool: cargo-codspeed
+          tool: cargo-codspeed@4.0.1
       - run: |
           git clone https://github.com/egraphs-good/egglog-benchmarks.git
           cd egglog-benchmarks
