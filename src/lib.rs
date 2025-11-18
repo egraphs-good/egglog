@@ -1538,20 +1538,25 @@ impl RuleProofState {
                         .add_toplevel_expr(TopLevelLhsExpr::Exists(syntax_id));
                 }
                 GenericFact::Eq(_, lhs, rhs) => {
+                    // Extra code  for respecting $rewrite_var__ desugaring in proofs.
+                    //
+                    // (rewrite X Y) should look like (exists X)
                     let lhs_is_synthesized = Self::expr_is_synthesized(lhs, &ctx);
                     let rhs_is_synthesized = Self::expr_is_synthesized(rhs, &ctx);
                     match (lhs_is_synthesized, rhs_is_synthesized) {
                         (true, true) => {} // equality only involves synthesized temporaries.
                         (true, false) => {
                             let rhs_id = builder.expr(rhs, &ctx);
-                            // Only the non-phantom side needs to appear in the reconstructed syntax.
+                            // Only the non-synthesized side needs to appear in the reconstructed
+                            // syntax.
                             builder
                                 .syntax
                                 .add_toplevel_expr(TopLevelLhsExpr::Exists(rhs_id));
                         }
                         (false, true) => {
                             let lhs_id = builder.expr(lhs, &ctx);
-                            // Only the non-phantom side needs to appear in the reconstructed syntax.
+                            // Only the non-synthesized side needs to appear in the reconstructed
+                            // syntax.
                             builder
                                 .syntax
                                 .add_toplevel_expr(TopLevelLhsExpr::Exists(lhs_id));
