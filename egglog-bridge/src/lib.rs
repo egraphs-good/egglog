@@ -24,6 +24,7 @@ use crate::core_relations::{
     TableId, TaggedRowBuffer, Value, WrappedTable,
 };
 use crate::numeric_id::{DenseIdMap, DenseIdMapWithReuse, IdVec, NumericId, define_id};
+use egglog_ast::generic_ast::Literal;
 use egglog_core_relations as core_relations;
 use egglog_numeric_id as numeric_id;
 use egglog_reports::{IterationReport, ReportLevel, RuleSetReport};
@@ -31,6 +32,7 @@ use hashbrown::HashMap;
 use indexmap::{IndexMap, IndexSet, map::Entry};
 use log::info;
 use once_cell::sync::Lazy;
+use ordered_float::OrderedFloat;
 pub use proof_format::{EqProofId, ProofStore, TermProofId};
 use proof_spec::{ProofReason, ProofReconstructionState, ReasonSpecId};
 use smallvec::SmallVec;
@@ -41,10 +43,11 @@ pub mod proof_format;
 pub(crate) mod proof_spec;
 pub(crate) mod rule;
 pub mod syntax;
+pub mod termdag;
 #[cfg(test)]
 mod tests;
 
-pub use rule::{Function, QueryEntry, RuleBuilder};
+pub use rule::{AtomId, Function, QueryEntry, RuleBuilder, VariableId};
 pub use syntax::{SourceExpr, SourceSyntax, TopLevelLhsExpr};
 use thiserror::Error;
 
@@ -163,6 +166,9 @@ pub struct FunctionConfig {
     pub can_subsume: bool,
 }
 
+pub type BackendFloat = core_relations::Boxed<OrderedFloat<f64>>;
+pub type BackendString = core_relations::Boxed<String>;
+
 impl EGraph {
     /// Create a new EGraph with tracing (aka 'proofs') enabled.
     ///
@@ -178,6 +184,57 @@ impl EGraph {
             iter::empty(),
         );
         EGraph::create_internal(db, uf_table, true)
+    }
+
+    /// Returns whether this e-graph is collecting provenance data for proofs.
+    pub fn proofs_enabled(&self) -> bool {
+        self.tracing
+    }
+
+    pub fn literal_to_value(&self, l: &Literal) -> Value {
+        match l {
+            Literal::Int(x) => self.base_values().get::<i64>(*x),
+            Literal::Float(x) => self.base_values().get::<BackendFloat>(x.into()),
+            Literal::String(x) => self
+                .base_values()
+                .get::<BackendString>(BackendString::new(x.clone())),
+            Literal::Bool(x) => self.base_values().get::<bool>(*x),
+            Literal::Unit => self.base_values().get::<()>(()),
+        }
+    }
+
+    pub fn literal_to_entry(&self, l: &Literal) -> QueryEntry {
+        match l {
+            Literal::Int(x) => self.base_value_constant::<i64>(*x),
+            Literal::Float(x) => self.base_value_constant::<BackendFloat>(x.into()),
+            Literal::String(x) => {
+                self.base_value_constant::<BackendString>(BackendString::new(x.clone()))
+            }
+            Literal::Bool(x) => self.base_value_constant::<bool>(*x),
+            Literal::Unit => self.base_value_constant::<()>(()),
+        }
+    }
+
+    /// Render `v` as a [`Literal`], where possible.
+    ///
+    /// This method returns None when `v` is backed by a type not supported by the [`Literal`]
+    /// enum.
+    pub fn value_to_literal(&self, v: &Value, ty: BaseValueId) -> Option<Literal> {
+        let base_values = self.base_values();
+
+        Some(if let Some(b) = base_values.try_get_as::<bool>(*v, ty) {
+            Literal::Bool(b)
+        } else if let Some(i) = base_values.try_get_as::<i64>(*v, ty) {
+            Literal::Int(i)
+        } else if let Some(f) = base_values.try_get_as::<BackendFloat>(*v, ty) {
+            Literal::Float(f.into_inner())
+        } else if let Some(s) = base_values.try_get_as::<BackendString>(*v, ty) {
+            Literal::String(s.into_inner())
+        } else if base_values.try_get_as::<()>(*v, ty).is_some() {
+            Literal::Unit
+        } else {
+            return None;
+        })
     }
 
     fn create_internal(mut db: Database, uf_table: TableId, tracing: bool) -> EGraph {
@@ -607,14 +664,10 @@ impl EGraph {
         if self.get_canon_in_uf(id1) != self.get_canon_in_uf(id2) {
             // These terms aren't equal. Reconstruct the relevant terms so as to
             // get a nicer error message on the way out.
-            let mut buf = Vec::<u8>::new();
             let term_id_1 = self.reconstruct_term(id1, ColumnTy::Id, &mut state);
             let term_id_2 = self.reconstruct_term(id2, ColumnTy::Id, &mut state);
-            store.termdag.print_term(term_id_1, &mut buf).unwrap();
-            let term1 = String::from_utf8(buf).unwrap();
-            let mut buf = Vec::<u8>::new();
-            store.termdag.print_term(term_id_2, &mut buf).unwrap();
-            let term2 = String::from_utf8(buf).unwrap();
+            let term1 = store.termdag.to_string_pretty_id(term_id_1);
+            let term2 = store.termdag.to_string_pretty_id(term_id_2);
             return Err(
                 ProofReconstructionError::EqualityExplanationOfUnequalTerms { term1, term2 }.into(),
             );
@@ -679,6 +732,11 @@ impl EGraph {
         info!("=== View Tables ===");
         for (id, info) in self.funcs.iter() {
             let table = self.db.get_table(info.table);
+            info!(
+                "View Table {name} / {id:?} / {table:?}",
+                name = info.name,
+                table = info.table
+            );
             self.scan_table(table, |row| {
                 info!(
                     "View Table {name} / {id:?} / {table:?}: {row:?}",
@@ -691,6 +749,7 @@ impl EGraph {
         info!("=== Term Tables ===");
         for (_, table_id) in &self.term_tables {
             let table = self.db.get_table(*table_id);
+            info!("Term Table {table_id:?}");
             self.scan_table(table, |row| {
                 let name = &self.funcs[FunctionId::new(row[0].rep())].name;
                 let row = &row[1..];
@@ -700,6 +759,7 @@ impl EGraph {
 
         info!("=== Reason Tables ===");
         for (_, table_id) in &self.reason_tables {
+            info!("Reason Table {table_id:?}");
             let table = self.db.get_table(*table_id);
             self.scan_table(table, |row| {
                 let spec = self.proof_specs[ReasonSpecId::new(row[0].rep())].as_ref();
@@ -1246,8 +1306,8 @@ impl MergeFn {
         egraph: &mut EGraph,
     ) -> Box<core_relations::MergeFn> {
         assert!(
-            !egraph.tracing || matches!(self, MergeFn::UnionId),
-            "proofs aren't supported for non-union merge functions"
+            !egraph.tracing || matches!(self, MergeFn::UnionId | MergeFn::AssertEq),
+            "proofs aren't supported for merge functions other than UnionId or AssertEq"
         );
 
         let resolved = self.resolve(function_name, egraph);

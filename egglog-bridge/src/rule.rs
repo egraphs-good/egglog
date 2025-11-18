@@ -908,6 +908,63 @@ impl RuleBuilder<'_> {
             func_cols: info.schema.len(),
         };
         if self.egraph.tracing {
+            if matches!(info.default_val, DefaultVal::Fail) {
+                let table = info.table;
+                let entries = entries.clone();
+                let subsume_entry = subsume_entry.clone();
+                let subsume_entry_for_write = subsume_entry.clone();
+                let id_counter = self.query.id_counter;
+                let term_var = self.new_var(ColumnTy::Id);
+                let term_var_id = term_var.id;
+                let add_proof =
+                    self.proof_builder
+                        .new_row(func, entries.clone(), term_var_id, self.egraph);
+                let get_write_vals = move |inner: &mut Bindings, ret_val: DstVar| {
+                    let mut write_vals = SmallVec::<[WriteVal; 4]>::new();
+                    for i in schema_math.num_keys()..schema_math.table_columns() {
+                        if i == schema_math.ts_col() {
+                            write_vals.push(inner.next_ts().into());
+                        } else if i == schema_math.ret_val_col() {
+                            write_vals.push(ret_val.clone().into());
+                        } else if i == schema_math.proof_id_col() {
+                            write_vals.push(WriteVal::IncCounter(id_counter));
+                        } else if schema_math.subsume && i == schema_math.subsume_col() {
+                            write_vals.push(inner.convert(&subsume_entry_for_write).into());
+                        } else {
+                            unreachable!()
+                        }
+                    }
+                    write_vals
+                };
+                self.query.add_rule.push(Box::new(move |inner, rb| {
+                    let mut dst_vars = inner.convert_all(&entries);
+                    let ret_val = dst_vars[schema_math.ret_val_col()].clone();
+                    let write_vals = get_write_vals(inner, ret_val.clone());
+                    let (key_slice, _) = dst_vars.split_at(schema_math.num_keys());
+                    let term = rb
+                        .lookup_or_insert(
+                            table,
+                            key_slice,
+                            &write_vals,
+                            ColumnId::from_usize(schema_math.proof_id_col()),
+                        )
+                        .context("set proof lookup")?;
+                    inner.mapping.insert(term_var_id, term.into());
+                    add_proof(inner, rb)?;
+                    schema_math.write_table_row(
+                        &mut dst_vars,
+                        RowVals {
+                            timestamp: inner.next_ts(),
+                            proof: Some(term.into()),
+                            subsume: schema_math.subsume.then(|| inner.convert(&subsume_entry)),
+                            ret_val: None,
+                        },
+                    );
+                    rb.insert(table, &dst_vars).context("set")
+                }));
+                return;
+            }
+
             let res = self.lookup(func, &entries[0..entries.len() - 1], || {
                 "lookup failed during proof-enabled set; this is an internal proofs bug".to_string()
             });
