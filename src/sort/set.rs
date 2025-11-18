@@ -61,7 +61,13 @@ impl Presort for SetSort {
         name: String,
         args: &[Expr],
     ) -> Result<ArcSort, TypeError> {
-        if let [Expr::Var(span, e)] = args {
+        if let [
+            Expr::Var {
+                span,
+                name: e,
+            },
+        ] = args
+        {
             let e = typeinfo
                 .get_sort_by_name(e)
                 .ok_or(TypeError::UndefinedSort(e.clone(), span.clone()))?;

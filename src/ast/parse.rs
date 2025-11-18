@@ -8,11 +8,13 @@ use ordered_float::OrderedFloat;
 #[macro_export]
 macro_rules! span {
     () => {
-        Span::Rust(std::sync::Arc::new(RustSpan {
-            file: file!(),
-            line: line!(),
-            column: column!(),
-        }))
+        Span::Rust {
+            field1: std::sync::Arc::new(RustSpan {
+                file: file!().to_string(),
+                line: line!(),
+                column: column!(),
+            }),
+        }
     };
 }
 
@@ -218,19 +220,27 @@ impl Parser {
         // This prevents user-defined commands from being parsed as built-in commands.
         if self.user_defined.contains(&head) {
             let args = map_fallible(tail, self, Self::parse_expr)?;
-            return Ok(vec![Command::UserDefined(span, head, args)]);
+            return Ok(vec![Command::UserDefined {
+                field1: span,
+                field2: head,
+                field3: args,
+            }]);
         }
 
         Ok(match head.as_str() {
             "sort" => match tail {
-                [name] => vec![Command::Sort(span, name.expect_atom("sort name")?, None)],
+                [name] => vec![Command::Sort {
+                    field1: span,
+                    field2: name.expect_atom("sort name")?,
+                    field3: None,
+                }],
                 [name, call] => {
                     let (func, args, _) = call.expect_call("container sort declaration")?;
-                    vec![Command::Sort(
-                        span,
-                        name.expect_atom("sort name")?,
-                        Some((func, map_fallible(args, self, Self::parse_expr)?)),
-                    )]
+                    vec![Command::Sort {
+                        field1: span,
+                        field2: name.expect_atom("sort name")?,
+                        field3: Some((func, map_fallible(args, self, Self::parse_expr)?)),
+                    }]
                 }
                 _ => {
                     return error!(
@@ -311,17 +321,20 @@ impl Parser {
                 _ => return error!(span, "usage: (relation <name> (<input sort>*))"),
             },
             "ruleset" => match tail {
-                [name] => vec![Command::AddRuleset(span, name.expect_atom("ruleset name")?)],
+                [name] => vec![Command::AddRuleset {
+                    field1: span,
+                    field2: name.expect_atom("ruleset name")?,
+                }],
                 _ => return error!(span, "usage: (ruleset <name>)"),
             },
             "unstable-combined-ruleset" => match tail {
-                [name, subrulesets @ ..] => vec![Command::UnstableCombinedRuleset(
-                    span,
-                    name.expect_atom("combined ruleset name")?,
-                    map_fallible(subrulesets, self, |_, sexp| {
+                [name, subrulesets @ ..] => vec![Command::UnstableCombinedRuleset {
+                    field1: span,
+                    field2: name.expect_atom("combined ruleset name")?,
+                    field3: map_fallible(subrulesets, self, |_, sexp| {
                         sexp.expect_atom("subruleset name")
                     })?,
-                )],
+                }],
                 _ => {
                     return error!(
                         span,
@@ -348,7 +361,7 @@ impl Parser {
                     }
 
                     vec![Command::Rule {
-                        rule: Rule {
+                        field1: Rule {
                             span,
                             head,
                             body,
@@ -382,16 +395,16 @@ impl Parser {
                         }
                     }
 
-                    vec![Command::Rewrite(
-                        ruleset,
-                        Rewrite {
+                    vec![Command::Rewrite {
+                        field1: ruleset,
+                        field2: Rewrite {
                             span,
                             lhs,
                             rhs,
                             conditions,
                         },
-                        subsume,
-                    )]
+                        field3: subsume,
+                    }]
                 }
                 _ => return error!(span, "usage: (rewrite <expr> <expr> <option>*)"),
             },
@@ -416,15 +429,15 @@ impl Parser {
                         }
                     }
 
-                    vec![Command::BiRewrite(
-                        ruleset,
-                        Rewrite {
+                    vec![Command::BiRewrite {
+                        field1: ruleset,
+                        field2: Rewrite {
                             span,
                             lhs,
                             rhs,
                             conditions,
                         },
-                    )]
+                    }]
                 }
                 _ => return error!(span, "usage: (birewrite <expr> <expr> <option>*)"),
             },
@@ -455,49 +468,70 @@ impl Parser {
                     _ => return error!(span, "could not parse run options"),
                 };
 
-                vec![Command::RunSchedule(Schedule::Repeat(
-                    span.clone(),
-                    limit,
-                    Box::new(Schedule::Run(span, RunConfig { ruleset, until })),
-                ))]
+                vec![Command::RunSchedule {
+                    field1: Schedule::Repeat {
+                        field1: span.clone(),
+                        field2: limit,
+                        field3: Box::new(Schedule::Run {
+                            field1: span,
+                            field2: RunConfig { ruleset, until },
+                        }),
+                    },
+                }]
             }
-            "run-schedule" => vec![Command::RunSchedule(Schedule::Sequence(
-                span,
-                map_fallible(tail, self, Self::schedule)?,
-            ))],
+            "run-schedule" => vec![Command::RunSchedule {
+                field1: Schedule::Sequence {
+                    field1: span,
+                    field2: map_fallible(tail, self, Self::schedule)?,
+                },
+            }],
             "extract" => match tail {
-                [e] => vec![Command::Extract(
-                    span.clone(),
-                    self.parse_expr(e)?,
-                    Expr::Lit(span, Literal::Int(0)),
-                )],
-                [e, v] => vec![Command::Extract(
-                    span,
-                    self.parse_expr(e)?,
-                    self.parse_expr(v)?,
-                )],
+                [e] => vec![Command::Extract {
+                    field1: span.clone(),
+                    field2: self.parse_expr(e)?,
+                    field3: Expr::Lit {
+                        field1: span,
+                        field2: Literal::Int(0),
+                    },
+                }],
+                [e, v] => vec![Command::Extract {
+                    field1: span,
+                    field2: self.parse_expr(e)?,
+                    field3: self.parse_expr(v)?,
+                }],
                 _ => return error!(span, "usage: (extract <expr> <number of variants>?)"),
             },
-            "check" => vec![Command::Check(
-                span,
-                map_fallible(tail, self, Self::parse_fact)?,
-            )],
+            "check" => vec![Command::Check {
+                span: span,
+                facts: map_fallible(tail, self, Self::parse_fact)?,
+            }],
             "push" => match tail {
-                [] => vec![Command::Push(1)],
-                [n] => vec![Command::Push(n.expect_uint("number of times to push")?)],
+                [] => vec![Command::Push { n: 1 }],
+                [n] => vec![Command::Push {
+                    n: n.expect_uint("number of times to push")?,
+                }],
                 _ => return error!(span, "usage: (push <uint>?)"),
             },
             "pop" => match tail {
-                [] => vec![Command::Pop(span, 1)],
-                [n] => vec![Command::Pop(span, n.expect_uint("number of times to pop")?)],
+                [] => vec![Command::Pop {
+                    field1: span,
+                    field2: 1,
+                }],
+                [n] => vec![Command::Pop {
+                    field1: span,
+                    field2: n.expect_uint("number of times to pop")?,
+                }],
                 _ => return error!(span, "usage: (pop <uint>?)"),
             },
             "print-stats" => match tail {
-                [] => vec![Command::PrintOverallStatistics(span, None)],
-                [Sexp::Atom(o, _), file] if o == ":file" => vec![Command::PrintOverallStatistics(
-                    span,
-                    Some(file.expect_string("file name")?),
-                )],
+                [] => vec![Command::PrintOverallStatistics {
+                    field1: span,
+                    field2: None,
+                }],
+                [Sexp::Atom(o, _), file] if o == ":file" => vec![Command::PrintOverallStatistics {
+                    field1: span,
+                    field2: Some(file.expect_string("file name")?),
+                }],
                 _ => {
                     return error!(
                         span,
@@ -506,13 +540,13 @@ impl Parser {
                 }
             },
             "print-function" => match tail {
-                [name] => vec![Command::PrintFunction(
-                    span,
-                    name.expect_atom("table name")?,
-                    None,
-                    None,
-                    PrintFunctionMode::Default,
-                )],
+                [name] => vec![Command::PrintFunction {
+                    field1: span,
+                    field2: name.expect_atom("table name")?,
+                    field3: None,
+                    field4: None,
+                    field5: PrintFunctionMode::Default,
+                }],
                 [name, rest @ ..] => {
                     let rows: Option<usize> = rest[0].expect_uint("number of rows").ok();
                     let rest = if rows.is_some() { &rest[1..] } else { rest };
@@ -544,13 +578,13 @@ impl Parser {
                             }
                         }
                     }
-                    vec![Command::PrintFunction(
-                        span,
-                        name.expect_atom("table name")?,
-                        rows,
-                        file,
-                        mode,
-                    )]
+                    vec![Command::PrintFunction {
+                        field1: span,
+                        field2: name.expect_atom("table name")?,
+                        field3: rows,
+                        field4: file,
+                        field5: mode,
+                    }]
                 }
                 _ => {
                     return error!(
@@ -560,11 +594,14 @@ impl Parser {
                 }
             },
             "print-size" => match tail {
-                [] => vec![Command::PrintSize(span, None)],
-                [name] => vec![Command::PrintSize(
-                    span,
-                    Some(name.expect_atom("table name")?),
-                )],
+                [] => vec![Command::PrintSize {
+                    field1: span,
+                    field2: None,
+                }],
+                [name] => vec![Command::PrintSize {
+                    field1: span,
+                    field2: Some(name.expect_atom("table name")?),
+                }],
                 _ => return error!(span, "usage: (print-size <table name>?)"),
             },
             "input" => match tail {
@@ -584,7 +621,10 @@ impl Parser {
                 _ => return error!(span, "usage: (output <file name> <expr>+)"),
             },
             "include" => match tail {
-                [file] => vec![Command::Include(span, file.expect_string("file name")?)],
+                [file] => vec![Command::Include {
+                    field1: span,
+                    field2: file.expect_string("file name")?,
+                }],
                 _ => return error!(span, "usage: (include <file name>)"),
             },
             "fail" => match tail {
@@ -593,49 +633,55 @@ impl Parser {
                     if cs.len() != 1 {
                         todo!("extend Fail to work with multiple parsed commands")
                     }
-                    vec![Command::Fail(span, Box::new(cs.remove(0)))]
+                    vec![Command::Fail {
+                        field1: span,
+                        field2: Box::new(cs.remove(0)),
+                    }]
                 }
                 _ => return error!(span, "usage: (fail <command>)"),
             },
             _ => self
                 .parse_action(sexp)?
                 .into_iter()
-                .map(Command::Action)
+                .map(|action| Command::Action { field1: action })
                 .collect(),
         })
     }
 
     pub fn schedule(&mut self, sexp: &Sexp) -> Result<Schedule, ParseError> {
         if let Sexp::Atom(ruleset, span) = sexp {
-            return Ok(Schedule::Run(
-                span.clone(),
-                RunConfig {
+            return Ok(Schedule::Run {
+                field1: span.clone(),
+                field2: RunConfig {
                     ruleset: ruleset.clone(),
                     until: None,
                 },
-            ));
+            });
         }
 
         let (head, tail, span) = sexp.expect_call("schedule")?;
 
         Ok(match head.as_str() {
-            "saturate" => Schedule::Saturate(
-                span.clone(),
-                Box::new(Schedule::Sequence(
-                    span,
-                    map_fallible(tail, self, Self::schedule)?,
-                )),
-            ),
-            "seq" => Schedule::Sequence(span, map_fallible(tail, self, Self::schedule)?),
+            "saturate" => Schedule::Saturate {
+                field1: span.clone(),
+                field2: Box::new(Schedule::Sequence {
+                    field1: span,
+                    field2: map_fallible(tail, self, Self::schedule)?,
+                }),
+            },
+            "seq" => Schedule::Sequence {
+                field1: span,
+                field2: map_fallible(tail, self, Self::schedule)?,
+            },
             "repeat" => match tail {
-                [limit, tail @ ..] => Schedule::Repeat(
-                    span.clone(),
-                    limit.expect_uint("number of iterations")?,
-                    Box::new(Schedule::Sequence(
-                        span,
-                        map_fallible(tail, self, Self::schedule)?,
-                    )),
-                ),
+                [limit, tail @ ..] => Schedule::Repeat {
+                    field1: span.clone(),
+                    field2: limit.expect_uint("number of iterations")?,
+                    field3: Box::new(Schedule::Sequence {
+                        field1: span,
+                        field2: map_fallible(tail, self, Self::schedule)?,
+                    }),
+                },
                 _ => return error!(span, "usage: (repeat <number of iterations> <schedule>*)"),
             },
             "run" => {
@@ -657,7 +703,10 @@ impl Parser {
                     _ => return error!(span, "could not parse run options"),
                 };
 
-                Schedule::Run(span, RunConfig { ruleset, until })
+                Schedule::Run {
+                    field1: span,
+                    field2: RunConfig { ruleset, until },
+                }
             }
             _ => return error!(span, "expected either saturate, seq, repeat, or run"),
         })
@@ -672,11 +721,11 @@ impl Parser {
 
         Ok(match head.as_str() {
             "let" => match tail {
-                [name, value] => vec![Action::Let(
-                    span,
-                    name.expect_atom("binding name")?,
-                    self.parse_expr(value)?,
-                )],
+                [name, value] => vec![Action::Let {
+                    field1: span,
+                    field2: name.expect_atom("binding name")?,
+                    field3: self.parse_expr(value)?,
+                }],
                 _ => return error!(span, "usage: (let <name> <expr>)"),
             },
             "set" => match tail {
@@ -684,7 +733,12 @@ impl Parser {
                     let (func, args, _) = call.expect_call("table lookup")?;
                     let args = map_fallible(args, self, Self::parse_expr)?;
                     let value = self.parse_expr(value)?;
-                    vec![Action::Set(span, func, args, value)]
+                    vec![Action::Set {
+                        field1: span,
+                        field2: func,
+                        field3: args,
+                        field4: value,
+                    }]
                 }
                 _ => return error!(span, "usage: (set (<table name> <expr>*) <expr>)"),
             },
@@ -692,7 +746,12 @@ impl Parser {
                 [call] => {
                     let (func, args, _) = call.expect_call("table lookup")?;
                     let args = map_fallible(args, self, Self::parse_expr)?;
-                    vec![Action::Change(span, Change::Delete, func, args)]
+                    vec![Action::Change {
+                        field1: span,
+                        field2: Change::Delete,
+                        field3: func,
+                        field4: args,
+                    }]
                 }
                 _ => return error!(span, "usage: (delete (<table name> <expr>*))"),
             },
@@ -700,23 +759,34 @@ impl Parser {
                 [call] => {
                     let (func, args, _) = call.expect_call("table lookup")?;
                     let args = map_fallible(args, self, Self::parse_expr)?;
-                    vec![Action::Change(span, Change::Subsume, func, args)]
+                    vec![Action::Change {
+                        field1: span,
+                        field2: Change::Subsume,
+                        field3: func,
+                        field4: args,
+                    }]
                 }
                 _ => return error!(span, "usage: (subsume (<table name> <expr>*))"),
             },
             "union" => match tail {
-                [e1, e2] => vec![Action::Union(
-                    span,
-                    self.parse_expr(e1)?,
-                    self.parse_expr(e2)?,
-                )],
+                [e1, e2] => vec![Action::Union {
+                    field1: span,
+                    field2: self.parse_expr(e1)?,
+                    field3: self.parse_expr(e2)?,
+                }],
                 _ => return error!(span, "usage: (union <expr> <expr>)"),
             },
             "panic" => match tail {
-                [message] => vec![Action::Panic(span, message.expect_string("error message")?)],
+                [message] => vec![Action::Panic {
+                    field1: span,
+                    field2: message.expect_string("error message")?,
+                }],
                 _ => return error!(span, "usage: (panic <string>)"),
             },
-            _ => vec![Action::Expr(span, self.parse_expr(sexp)?)],
+            _ => vec![Action::Expr {
+                field1: span,
+                field2: self.parse_expr(sexp)?,
+            }],
         })
     }
 
@@ -725,26 +795,38 @@ impl Parser {
 
         Ok(match head.as_str() {
             "=" => match tail {
-                [e1, e2] => Fact::Eq(span, self.parse_expr(e1)?, self.parse_expr(e2)?),
+                [e1, e2] => Fact::Eq {
+                    field1: span,
+                    field2: self.parse_expr(e1)?,
+                    field3: self.parse_expr(e2)?,
+                },
                 _ => return error!(span, "usage: (= <expr> <expr>)"),
             },
-            _ => Fact::Fact(self.parse_expr(sexp)?),
+            _ => Fact::Fact {
+                field1: self.parse_expr(sexp)?,
+            },
         })
     }
 
     pub fn parse_expr(&mut self, sexp: &Sexp) -> Result<Expr, ParseError> {
         Ok(match sexp {
-            Sexp::Literal(literal, span) => Expr::Lit(span.clone(), literal.clone()),
-            Sexp::Atom(symbol, span) => Expr::Var(
-                span.clone(),
-                if *symbol == "_" {
+            Sexp::Literal(literal, span) => Expr::Lit {
+                field1: span.clone(),
+                field2: literal.clone(),
+            },
+            Sexp::Atom(symbol, span) => Expr::Var {
+                span: span.clone(),
+                name: if *symbol == "_" {
                     self.symbol_gen.fresh(symbol)
                 } else {
                     symbol.clone()
                 },
-            ),
+            },
             Sexp::List(list, span) => match list.as_slice() {
-                [] => Expr::Lit(span.clone(), Literal::Unit),
+                [] => Expr::Lit {
+                    field1: span.clone(),
+                    field2: Literal::Unit,
+                },
                 _ => {
                     let (head, tail, span) = sexp.expect_call("call expression")?;
 
@@ -752,11 +834,11 @@ impl Parser {
                         return func.parse(tail, span, self);
                     }
 
-                    Expr::Call(
-                        span.clone(),
-                        head,
-                        map_fallible(tail, self, Self::parse_expr)?,
-                    )
+                    Expr::Call {
+                        field1: span.clone(),
+                        field2: head,
+                        field3: map_fallible(tail, self, Self::parse_expr)?,
+                    }
                 }
             },
         })
@@ -774,7 +856,14 @@ impl Parser {
                     let name = name.expect_atom("sort name")?;
                     let (func, args, _) = call.expect_call("container sort declaration")?;
                     let args = map_fallible(args, self, Self::parse_expr)?;
-                    (span, name, Subdatatypes::NewSort(func, args))
+                    (
+                        span,
+                        name,
+                        Subdatatypes::NewSort {
+                            field1: func,
+                            field2: args,
+                        },
+                    )
                 }
                 _ => {
                     return error!(
@@ -785,7 +874,7 @@ impl Parser {
             },
             _ => {
                 let variants = map_fallible(tail, self, Self::variant)?;
-                (span, head, Subdatatypes::Variants(variants))
+                (span, head, Subdatatypes::Variants { field1: variants })
             }
         })
     }
@@ -972,7 +1061,9 @@ impl SexpParser {
 }
 
 fn s(span: EgglogSpan) -> Span {
-    Span::Egglog(Arc::new(span))
+    Span::Egglog {
+        field1: Arc::new(span),
+    }
 }
 
 enum Token {
@@ -1070,11 +1161,11 @@ mod tests {
         let mut parser = Parser::default();
         let y = "xxxx";
         parser.add_expr_macro(Arc::new(SimpleMacro::new("qqqq", |tail, span, macros| {
-            Ok(Expr::Call(
-                span,
-                y.into(),
-                map_fallible(tail, macros, Parser::parse_expr)?,
-            ))
+            Ok(Expr::Call {
+                field1: span,
+                field2: y.into(),
+                field3: map_fallible(tail, macros, Parser::parse_expr)?,
+            })
         })));
         let s = r#"(f (qqqq a 3) 4.0 (H "hello"))"#;
         let t = r#"(f (xxxx a 3) 4.0 (H "hello"))"#;

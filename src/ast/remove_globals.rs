@@ -71,9 +71,11 @@ fn resolved_var_to_call(var: &ResolvedVar) -> ResolvedCall {
 /// but we have not implemented `subst` for command.
 fn replace_global_vars(expr: ResolvedExpr) -> ResolvedExpr {
     match expr.get_global_var() {
-        Some(resolved_var) => {
-            GenericExpr::Call(expr.span(), resolved_var_to_call(&resolved_var), vec![])
-        }
+        Some(resolved_var) => GenericExpr::Call {
+            field1: expr.span(),
+            field2: resolved_var_to_call(&resolved_var),
+            field3: vec![],
+        },
         None => expr,
     }
 }
@@ -90,7 +92,11 @@ impl GlobalRemover<'_> {
     fn remove_globals_cmd(&mut self, cmd: ResolvedNCommand) -> Vec<ResolvedNCommand> {
         match cmd {
             GenericNCommand::CoreAction(action) => match action {
-                GenericAction::Let(span, name, expr) => {
+                GenericAction::Let {
+                    field1: span,
+                    field2: name,
+                    field3: expr,
+                } => {
                     let ty = expr.output_type();
 
                     let func_decl = ResolvedFunctionDecl {
@@ -114,12 +120,12 @@ impl GlobalRemover<'_> {
                     });
                     vec![
                         GenericNCommand::Function(func_decl),
-                        GenericNCommand::CoreAction(GenericAction::Set(
-                            span,
-                            resolved_call,
-                            vec![],
-                            remove_globals_expr(expr),
-                        )),
+                        GenericNCommand::CoreAction(GenericAction::Set {
+                            field1: span,
+                            field2: resolved_call,
+                            field3: vec![],
+                            field4: remove_globals_expr(expr),
+                        }),
                     ]
                 }
                 _ => vec![GenericNCommand::CoreAction(remove_globals_action(action))],
@@ -133,26 +139,28 @@ impl GlobalRemover<'_> {
                         let new_name = self.fresh.fresh(&resolved_var.name);
                         globals.insert(
                             resolved_var.clone(),
-                            GenericExpr::Var(
-                                expr.span(),
-                                ResolvedVar {
+                            GenericExpr::Var {
+                                span: expr.span(),
+                                name: ResolvedVar {
                                     name: new_name,
                                     sort: resolved_var.sort.clone(),
                                     is_global_ref: false,
                                 },
-                            ),
+                            },
                         );
                     }
                     expr
                 });
                 let new_facts: Vec<ResolvedFact> = globals
                     .iter()
-                    .map(|(old, new)| {
-                        GenericFact::Eq(
-                            new.span(),
-                            GenericExpr::Call(new.span(), resolved_var_to_call(old), vec![]),
-                            new.clone(),
-                        )
+                    .map(|(old, new)| GenericFact::Eq {
+                        field1: new.span(),
+                        field2: GenericExpr::Call {
+                            field1: new.span(),
+                            field2: resolved_var_to_call(old),
+                            field3: vec![],
+                        },
+                        field3: new.clone(),
                     })
                     .collect();
 
