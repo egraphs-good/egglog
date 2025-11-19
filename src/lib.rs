@@ -3,8 +3,12 @@
 //! applications. It is the successor to the rust library [egg](https://github.com/egraphs-good/egg).
 //! egglog is faster and more general than egg.
 //!
+//! # Tutorial
+//! [Here](https://www.youtube.com/watch?v=N2RDQGRBrSY) is the video tutorial on what egglog is and how to use it.
+//! We plan to have a text tutorial here soon, PRs welcome!
+//!
 //! # Documentation
-//! Documentation for the egglog language can be found here: [`Command`].
+//! Most documentation for the egglog language can be found here: [`Command`].
 //!
 //! ## Syntactic Sugar: `fresh!`
 //! Egglog supports a small amount of surface sugar that desugars into core
@@ -55,9 +59,6 @@
 //!   their derived fresh terms will also unify, closing cycles that encode the
 //!   intended structure.
 //!
-//! # Tutorial
-//! [Here](https://www.youtube.com/watch?v=N2RDQGRBrSY) is the video tutorial on what egglog is and how to use it.
-//! We plan to have a text tutorial here soon, PRs welcome!
 //!
 pub mod ast;
 #[cfg(feature = "bin")]
