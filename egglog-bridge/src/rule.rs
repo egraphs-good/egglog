@@ -922,24 +922,24 @@ impl RuleBuilder<'_> {
                 let get_write_vals = move |inner: &mut Bindings, ret_val: DstVar| {
                     let mut write_vals = SmallVec::<[WriteVal; 4]>::new();
                     for i in schema_math.num_keys()..schema_math.table_columns() {
-                        if i == schema_math.ts_col() {
-                            write_vals.push(inner.next_ts().into());
+                        write_vals.push(if i == schema_math.ts_col() {
+                            inner.next_ts().into()
                         } else if i == schema_math.ret_val_col() {
-                            write_vals.push(ret_val.clone().into());
+                            ret_val.into()
                         } else if i == schema_math.proof_id_col() {
-                            write_vals.push(WriteVal::IncCounter(id_counter));
+                            WriteVal::IncCounter(id_counter)
                         } else if schema_math.subsume && i == schema_math.subsume_col() {
-                            write_vals.push(inner.convert(&subsume_entry_for_write).into());
+                            inner.convert(&subsume_entry_for_write).into()
                         } else {
                             unreachable!()
-                        }
+                        });
                     }
                     write_vals
                 };
                 self.query.add_rule.push(Box::new(move |inner, rb| {
                     let mut dst_vars = inner.convert_all(&entries);
-                    let ret_val = dst_vars[schema_math.ret_val_col()].clone();
-                    let write_vals = get_write_vals(inner, ret_val.clone());
+                    let ret_val = dst_vars[schema_math.ret_val_col()];
+                    let write_vals = get_write_vals(inner, ret_val);
                     let (key_slice, _) = dst_vars.split_at(schema_math.num_keys());
                     let term = rb
                         .lookup_or_insert(
