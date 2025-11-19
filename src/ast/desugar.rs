@@ -1,8 +1,5 @@
 use super::{Rewrite, Rule};
-use crate::ast::{
-    Action, Actions, Expr, Fact, Facts, GenericAction, ResolvedExpr, ResolvedExprExt, ResolvedFact,
-};
-use crate::constraint::Problem;
+use crate::ast::{Action, Actions, Expr, Fact, ResolvedExpr, ResolvedExprExt, ResolvedFact};
 use crate::typechecking::TypeError;
 use crate::util::{IndexMap, IndexSet};
 use crate::*;
@@ -274,8 +271,6 @@ fn desugar_rule(
     Ok(out)
 }
 
-// Typechecking moved into TypeInfo::typecheck_facts
-
 fn collect_query_columns(resolved_facts: &[ResolvedFact]) -> Vec<(Expr, ArcSort)> {
     // Gather all resolved subexpressions in pre-order
     let mut resolved_nodes: Vec<ResolvedExpr> = Vec::new();
@@ -306,82 +301,54 @@ fn collect_fresh_sorts(
     type_info: &TypeInfo,
 ) -> Result<IndexMap<String, ArcSort>, Error> {
     let mut sorts = IndexMap::default();
-    for action in actions.iter() {
-        collect_fresh_sorts_action(action, type_info, &mut sorts)?;
-    }
-    Ok(sorts)
-}
+    let mut error: Option<Error> = None;
 
-fn collect_fresh_sorts_action(
-    action: &GenericAction<String, String>,
-    type_info: &TypeInfo,
-    sorts: &mut IndexMap<String, ArcSort>,
-) -> Result<(), Error> {
-    match action {
-        GenericAction::Let(_, _, expr) => collect_fresh_sorts_expr(expr, type_info, sorts),
-        GenericAction::Set(_, _, args, expr) => {
-            for arg in args.iter() {
-                collect_fresh_sorts_expr(arg, type_info, sorts)?;
+    for action in actions.iter().cloned() {
+        action.visit_exprs(&mut |expr: Expr| {
+            if error.is_some() {
+                return expr;
             }
-            collect_fresh_sorts_expr(expr, type_info, sorts)
-        }
-        GenericAction::Change(_, _, _, args) => {
-            for arg in args.iter() {
-                collect_fresh_sorts_expr(arg, type_info, sorts)?;
-            }
-            Ok(())
-        }
-        GenericAction::Union(_, lhs, rhs) => {
-            collect_fresh_sorts_expr(lhs, type_info, sorts)?;
-            collect_fresh_sorts_expr(rhs, type_info, sorts)
-        }
-        GenericAction::Expr(_, expr) => collect_fresh_sorts_expr(expr, type_info, sorts),
-        GenericAction::Panic(_, _) => Ok(()),
-    }
-}
-
-fn collect_fresh_sorts_expr(
-    expr: &Expr,
-    type_info: &TypeInfo,
-    sorts: &mut IndexMap<String, ArcSort>,
-) -> Result<(), Error> {
-    match expr {
-        Expr::Call(span, head, args) if head == "fresh!" => {
-            if args.len() != 1 {
-                return Err(Error::TypeError(TypeError::Arity {
-                    expr: expr.clone(),
-                    expected: 1,
-                }));
-            }
-            let sort_expr = &args[0];
-            let sort_name = match sort_expr {
-                Expr::Var(_, name) => name,
-                _ => {
-                    let sort_display = sort_expr.to_string();
-                    return Err(Error::TypeError(TypeError::UndefinedSort(
-                        sort_display,
-                        span.clone(),
-                    )));
+            if let Expr::Call(span, head, args) = &expr {
+                if head == "fresh!" {
+                    if args.len() != 1 {
+                        error = Some(Error::TypeError(TypeError::Arity {
+                            expr: expr.clone(),
+                            expected: 1,
+                        }));
+                        return expr;
+                    }
+                    match &args[0] {
+                        Expr::Var(_, sort_name) => match type_info.get_sort_by_name(sort_name) {
+                            Some(sort) => {
+                                sorts
+                                    .entry(sort.name().to_string())
+                                    .or_insert_with(|| sort.clone());
+                            }
+                            None => {
+                                error = Some(Error::TypeError(TypeError::UndefinedSort(
+                                    sort_name.clone(),
+                                    span.clone(),
+                                )));
+                            }
+                        },
+                        other => {
+                            let sort_display = other.to_string();
+                            error = Some(Error::TypeError(TypeError::UndefinedSort(
+                                sort_display,
+                                span.clone(),
+                            )));
+                        }
+                    }
                 }
-            };
-            let sort = type_info
-                .get_sort_by_name(sort_name)
-                .cloned()
-                .ok_or_else(|| {
-                    Error::TypeError(TypeError::UndefinedSort(sort_name.clone(), span.clone()))
-                })?;
-            let name = sort.name().to_string();
-            sorts.entry(name).or_insert(sort);
-            Ok(())
-        }
-        Expr::Call(_, _, args) => {
-            for arg in args.iter() {
-                collect_fresh_sorts_expr(arg, type_info, sorts)?;
             }
-            Ok(())
+            expr
+        });
+        if error.is_some() {
+            break;
         }
-        _ => Ok(()),
     }
+
+    error.map_or(Ok(sorts), Err)
 }
 
 fn rewrite_fresh_expr(
