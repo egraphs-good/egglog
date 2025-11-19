@@ -1,11 +1,8 @@
 use super::{Rewrite, Rule};
-use crate::ast::{
-    Action, Actions, Expr, Fact, Facts, GenericAction, GenericExpr, ResolvedExpr, ResolvedExprExt,
-    ResolvedFact,
-};
+use crate::ast::{Action, Actions, Expr, Fact, Facts, GenericAction, ResolvedExpr, ResolvedExprExt, ResolvedFact};
 use crate::constraint::Problem;
 use crate::typechecking::TypeError;
-use crate::util::IndexMap;
+use crate::util::IndexSet;
 use crate::*;
 use egglog_ast::generic_ast::Literal;
 use egglog_ast::span::Span;
@@ -201,8 +198,8 @@ fn desugar_rule(
     parser: &mut Parser,
     type_info: &TypeInfo,
 ) -> Result<Vec<NCommand>, Error> {
-    let has_fresh = rule.head.0.iter().any(|action| contains_fresh_expr(action));
-    if !has_fresh {
+    // If there are no fresh! uses in the actions, return the rule unchanged.
+    if collect_fresh_sites(&rule.head, type_info)?.is_empty() {
         return Ok(vec![NCommand::NormRule { rule }]);
     }
 
@@ -280,26 +277,6 @@ fn desugar_rule(
     ])
 }
 
-fn contains_fresh_expr(action: &GenericAction<String, String>) -> bool {
-    match action {
-        GenericAction::Let(_, _, expr)
-        | GenericAction::Set(_, _, _, expr)
-        | GenericAction::Union(_, expr, _)
-        | GenericAction::Expr(_, expr) => expr_contains_fresh(expr),
-        GenericAction::Change(_, _, _, exprs) => exprs.iter().any(expr_contains_fresh),
-        GenericAction::Panic(_, _) => false,
-    }
-}
-
-fn expr_contains_fresh(expr: &GenericExpr<String, String>) -> bool {
-    match expr {
-        GenericExpr::Call(_, head, args) => {
-            head == "fresh!" || args.iter().any(expr_contains_fresh)
-        }
-        GenericExpr::Lit(_, _) | GenericExpr::Var(_, _) => false,
-    }
-}
-
 fn typecheck_query_facts(
     parser: &mut Parser,
     type_info: &TypeInfo,
@@ -317,51 +294,28 @@ fn typecheck_query_facts(
 
 fn collect_query_columns(facts: &[Fact], resolved_facts: &[ResolvedFact]) -> Vec<(Expr, ArcSort)> {
     assert_eq!(facts.len(), resolved_facts.len());
-    let mut columns: IndexMap<Expr, ArcSort> = IndexMap::default();
-    for (fact, resolved_fact) in facts.iter().zip(resolved_facts.iter()) {
-        collect_fact_columns(fact, resolved_fact, &mut columns);
-    }
-    // Preserve stable order by sorting on the pretty-printed form, but keep unique entries
-    let mut items: Vec<(Expr, ArcSort)> = columns.into_iter().collect();
-    items.sort_by(|(e1, _), (e2, _)| format!("{}", e1).cmp(&format!("{}", e2)));
-    items
-}
-
-fn collect_fact_columns(
-    fact: &Fact,
-    resolved_fact: &ResolvedFact,
-    columns: &mut IndexMap<Expr, ArcSort>,
-) {
-    match (fact, resolved_fact) {
-        (Fact::Fact(expr), ResolvedFact::Fact(resolved_expr)) => {
-            collect_expr_columns(expr, resolved_expr, columns)
-        }
-        (Fact::Eq(_, lhs, rhs), ResolvedFact::Eq(_, resolved_lhs, resolved_rhs)) => {
-            collect_expr_columns(lhs, resolved_lhs, columns);
-            collect_expr_columns(rhs, resolved_rhs, columns);
-        }
-        _ => panic!("Mismatched fact structure while collecting query columns"),
-    }
-}
-
-fn collect_expr_columns(
-    expr: &Expr,
-    resolved: &ResolvedExpr,
-    columns: &mut IndexMap<Expr, ArcSort>,
-) {
-    if let Expr::Call(_, _, args) = expr {
-        if let ResolvedExpr::Call(_, _, resolved_args) = resolved {
-            assert_eq!(args.len(), resolved_args.len());
-            for (child_expr, child_resolved) in args.iter().zip(resolved_args.iter()) {
-                collect_expr_columns(child_expr, child_resolved, columns);
+    // Gather all resolved subexpressions in pre-order
+    let mut resolved_nodes: Vec<ResolvedExpr> = Vec::new();
+    for resolved_fact in resolved_facts.iter() {
+        match resolved_fact {
+            ResolvedFact::Fact(e) => e.collect_subexprs_preorder(&mut resolved_nodes),
+            ResolvedFact::Eq(_, e1, e2) => {
+                e1.collect_subexprs_preorder(&mut resolved_nodes);
+                e2.collect_subexprs_preorder(&mut resolved_nodes);
             }
-        } else {
-            panic!("Resolved expression did not match original call");
         }
     }
 
-    let sort = resolved.output_type();
-    columns.entry(expr.clone()).or_insert_with(|| sort.clone());
+    // Convert to surface Expr and deduplicate using an IndexSet to preserve order
+    let mut seen_surface: IndexSet<Expr> = IndexSet::default();
+    let mut out: Vec<(Expr, ArcSort)> = Vec::new();
+    for re in resolved_nodes.into_iter() {
+        let e = re.to_surface();
+        if seen_surface.insert(e.clone()) {
+            out.push((e, re.output_type()));
+        }
+    }
+    out
 }
 
 #[derive(Clone)]
@@ -375,7 +329,6 @@ fn collect_fresh_sites(actions: &Actions, type_info: &TypeInfo) -> Result<Vec<Fr
     for action in actions.iter() {
         collect_fresh_sites_action(action, type_info, &mut sites)?;
     }
-    debug_assert!(!sites.is_empty());
     Ok(sites)
 }
 
