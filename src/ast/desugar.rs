@@ -1,5 +1,7 @@
 use super::{Rewrite, Rule};
-use crate::ast::{Action, Actions, Expr, Fact, Facts, GenericAction, ResolvedExpr, ResolvedExprExt, ResolvedFact};
+use crate::ast::{
+    Action, Actions, Expr, Fact, Facts, GenericAction, ResolvedExpr, ResolvedExprExt, ResolvedFact,
+};
 use crate::constraint::Problem;
 use crate::typechecking::TypeError;
 use crate::util::IndexSet;

@@ -84,9 +84,7 @@ impl ResolvedExprExt for ResolvedExpr {
             ResolvedExpr::Call(span, head, children) => {
                 let name = match head {
                     crate::core::ResolvedCall::Func(f) => f.name.clone(),
-                    crate::core::ResolvedCall::Primitive(p) => {
-                        p.primitive.0.name().to_string()
-                    }
+                    crate::core::ResolvedCall::Primitive(p) => p.primitive.0.name().to_string(),
                 };
                 let kids = children.iter().map(|c| c.to_surface()).collect();
                 Expr::Call(span.clone(), name, kids)

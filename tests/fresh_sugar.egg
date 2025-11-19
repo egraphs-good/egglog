@@ -37,3 +37,19 @@
 ; Sanity: trivial check using unit literal
 (check (= () ()))
 
+
+; test with two different sorts in the query
+(datatype Alpha
+  (A1)
+  (A2))
+
+(relation alpha_math (Alpha Math))
+
+(A1)
+(rule ((Let a b)
+       (A1))
+      ((let x (fresh! Alpha))
+       (let y (fresh! Math))
+       (set (alpha_math x y) ())))
+
+(run 1)
