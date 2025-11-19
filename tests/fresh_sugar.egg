@@ -37,6 +37,3 @@
 ; Sanity: trivial check using unit literal
 (check (= () ()))
 
-; Uniqueness sanity: if the sugar generated the same id twice,
-; we could craft a relation witnessing duplicates and assert failure here.
-; Placeholder: ensure test harness supports fail-checks when wired.
