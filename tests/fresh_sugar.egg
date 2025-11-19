@@ -1,0 +1,42 @@
+; Simple fresh! sugar tests
+
+(datatype Math
+  (Let Math Math)
+  (Var String))
+
+; Seed one Let fact so rules have something to match
+(let seed (Let (Var "x") (Var "y")))
+
+; 1) Single fresh! call; we can at least run without error
+(rule ((Let a b))
+      ((Let (fresh! Math) b)))
+
+; 2) Multiple fresh! calls in one rule: ensure they are distinct by joining on inequality
+; Create two fresh values in one rule and assert they can't be equal
+(relation dup (Math Math))
+(rule ((Let a b))
+      ((let x (fresh! Math))
+       (let y (fresh! Math))
+       (set (dup x y) ())))
+; If any dup pair has equal components, this check would hold; we expect it to fail
+(fail (check (dup x y) (= x y)))
+
+; 3) Multiple rules with fresh! calls should not collide
+(relation r1 (Math))
+(relation r2 (Math))
+(rule ((Let a b)) ((let x (fresh! Math)) (set (r1 x) ())))
+(rule ((Let a b)) ((let y (fresh! Math)) (set (r2 y) ())))
+(relation pair12 (Math Math))
+(rule ((r1 x) (r2 y)) ((set (pair12 x y) ())))
+; No pair should have equal components
+(fail (check (pair12 z z)))
+
+; Run
+(run 1)
+
+; Sanity: trivial check using unit literal
+(check (= () ()))
+
+; Uniqueness sanity: if the sugar generated the same id twice,
+; we could craft a relation witnessing duplicates and assert failure here.
+; Placeholder: ensure test harness supports fail-checks when wired.

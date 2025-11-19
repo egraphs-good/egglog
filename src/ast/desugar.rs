@@ -1,5 +1,14 @@
 use super::{Rewrite, Rule};
+use crate::ast::{
+    Action, Actions, Expr, Fact, Facts, GenericAction, GenericExpr, ResolvedExpr, ResolvedExprExt,
+    ResolvedFact,
+};
+use crate::constraint::Problem;
+use crate::typechecking::TypeError;
+use crate::util::IndexMap;
 use crate::*;
+use egglog_ast::generic_ast::Literal;
+use egglog_ast::span::Span;
 
 /// Desugars a program, removing syntactic sugar.
 /// If part of the program has already been desugared,
@@ -122,7 +131,7 @@ pub(crate) fn desugar_command(
                 // format rule and use it as the name
                 rule.name = rule_name;
             }
-            vec![NCommand::NormRule { rule }]
+            desugar_rule(rule, parser, type_info)?
         }
         Command::Sort(span, sort, option) => vec![NCommand::Sort(span, sort, option)],
         Command::AddRuleset(span, name) => vec![NCommand::AddRuleset(span, name)],
@@ -185,6 +194,288 @@ fn desugar_datatype(span: Span, name: String, variants: Vec<Variant>) -> Vec<NCo
             ))
         }))
         .collect()
+}
+
+fn desugar_rule(
+    rule: Rule,
+    parser: &mut Parser,
+    type_info: &TypeInfo,
+) -> Result<Vec<NCommand>, Error> {
+    let has_fresh = rule.head.0.iter().any(|action| contains_fresh_expr(action));
+    if !has_fresh {
+        return Ok(vec![NCommand::NormRule { rule }]);
+    }
+
+    let Rule {
+        span,
+        head,
+        body,
+        name,
+        ruleset,
+    } = rule;
+
+    // Generate a unique constructor name using the parser's symbol generator
+    let fresh_table_name = parser.symbol_gen.fresh("GeneratedFreshTable");
+
+    let resolved_facts = typecheck_query_facts(parser, type_info, &body)?;
+    let column_info = collect_query_columns(&body, &resolved_facts);
+
+    let column_exprs: Vec<Expr> = column_info.iter().map(|(expr, _)| expr.clone()).collect();
+    let mut constructor_inputs: Vec<String> = column_info
+        .iter()
+        .map(|(_, sort)| sort.name().to_string())
+        .collect();
+    constructor_inputs.push("i64".to_string());
+
+    let fresh_sites = collect_fresh_sites(&head, type_info)?;
+
+    let output_sort = fresh_sites[0].return_sort.clone();
+    for site in &fresh_sites[1..] {
+        if site.return_sort.name() != output_sort.name() {
+            return Err(Error::TypeError(TypeError::Mismatch {
+                expr: site.original_expr.clone(),
+                expected: output_sort.clone(),
+                actual: site.return_sort.clone(),
+            }));
+        }
+    }
+
+    let schema = Schema {
+        input: constructor_inputs,
+        output: output_sort.name().to_string(),
+    };
+
+    let constructor_command = NCommand::Function(FunctionDecl::constructor(
+        span.clone(),
+        fresh_table_name.clone(),
+        schema,
+        None,
+        true,
+    ));
+
+    let mut rewrite_counter: i64 = 0;
+    let rewritten_actions: Vec<_> = head
+        .0
+        .into_iter()
+        .map(|action| {
+            action.visit_exprs(&mut |expr| {
+                rewrite_fresh_expr(expr, &fresh_table_name, &column_exprs, &mut rewrite_counter)
+            })
+        })
+        .collect();
+
+    let rewritten_rule = Rule {
+        span,
+        head: Actions::new(rewritten_actions),
+        body,
+        name,
+        ruleset,
+    };
+
+    Ok(vec![
+        constructor_command,
+        NCommand::NormRule {
+            rule: rewritten_rule,
+        },
+    ])
+}
+
+fn contains_fresh_expr(action: &GenericAction<String, String>) -> bool {
+    match action {
+        GenericAction::Let(_, _, expr)
+        | GenericAction::Set(_, _, _, expr)
+        | GenericAction::Union(_, expr, _)
+        | GenericAction::Expr(_, expr) => expr_contains_fresh(expr),
+        GenericAction::Change(_, _, _, exprs) => exprs.iter().any(expr_contains_fresh),
+        GenericAction::Panic(_, _) => false,
+    }
+}
+
+fn expr_contains_fresh(expr: &GenericExpr<String, String>) -> bool {
+    match expr {
+        GenericExpr::Call(_, head, args) => {
+            head == "fresh!" || args.iter().any(expr_contains_fresh)
+        }
+        GenericExpr::Lit(_, _) | GenericExpr::Var(_, _) => false,
+    }
+}
+
+fn typecheck_query_facts(
+    parser: &mut Parser,
+    type_info: &TypeInfo,
+    body: &[Fact],
+) -> Result<Vec<ResolvedFact>, Error> {
+    let mut symbol_gen = parser.symbol_gen.clone();
+    let (query, mapped_facts) = Facts(body.to_vec()).to_query(type_info, &mut symbol_gen);
+    let mut problem = Problem::default();
+    problem.add_query(&query, type_info)?;
+    let assignment = problem
+        .solve(|sort: &ArcSort| sort.name())
+        .map_err(|err| Error::TypeError(err.to_type_error()))?;
+    Ok(assignment.annotate_facts(&mapped_facts, type_info))
+}
+
+fn collect_query_columns(facts: &[Fact], resolved_facts: &[ResolvedFact]) -> Vec<(Expr, ArcSort)> {
+    assert_eq!(facts.len(), resolved_facts.len());
+    let mut columns: IndexMap<Expr, ArcSort> = IndexMap::default();
+    for (fact, resolved_fact) in facts.iter().zip(resolved_facts.iter()) {
+        collect_fact_columns(fact, resolved_fact, &mut columns);
+    }
+    // Preserve stable order by sorting on the pretty-printed form, but keep unique entries
+    let mut items: Vec<(Expr, ArcSort)> = columns.into_iter().collect();
+    items.sort_by(|(e1, _), (e2, _)| format!("{}", e1).cmp(&format!("{}", e2)));
+    items
+}
+
+fn collect_fact_columns(
+    fact: &Fact,
+    resolved_fact: &ResolvedFact,
+    columns: &mut IndexMap<Expr, ArcSort>,
+) {
+    match (fact, resolved_fact) {
+        (Fact::Fact(expr), ResolvedFact::Fact(resolved_expr)) => {
+            collect_expr_columns(expr, resolved_expr, columns)
+        }
+        (Fact::Eq(_, lhs, rhs), ResolvedFact::Eq(_, resolved_lhs, resolved_rhs)) => {
+            collect_expr_columns(lhs, resolved_lhs, columns);
+            collect_expr_columns(rhs, resolved_rhs, columns);
+        }
+        _ => panic!("Mismatched fact structure while collecting query columns"),
+    }
+}
+
+fn collect_expr_columns(
+    expr: &Expr,
+    resolved: &ResolvedExpr,
+    columns: &mut IndexMap<Expr, ArcSort>,
+) {
+    if let Expr::Call(_, _, args) = expr {
+        if let ResolvedExpr::Call(_, _, resolved_args) = resolved {
+            assert_eq!(args.len(), resolved_args.len());
+            for (child_expr, child_resolved) in args.iter().zip(resolved_args.iter()) {
+                collect_expr_columns(child_expr, child_resolved, columns);
+            }
+        } else {
+            panic!("Resolved expression did not match original call");
+        }
+    }
+
+    let sort = resolved.output_type();
+    columns.entry(expr.clone()).or_insert_with(|| sort.clone());
+}
+
+#[derive(Clone)]
+struct FreshSite {
+    original_expr: Expr,
+    return_sort: ArcSort,
+}
+
+fn collect_fresh_sites(actions: &Actions, type_info: &TypeInfo) -> Result<Vec<FreshSite>, Error> {
+    let mut sites = Vec::new();
+    for action in actions.iter() {
+        collect_fresh_sites_action(action, type_info, &mut sites)?;
+    }
+    debug_assert!(!sites.is_empty());
+    Ok(sites)
+}
+
+fn collect_fresh_sites_action(
+    action: &GenericAction<String, String>,
+    type_info: &TypeInfo,
+    sites: &mut Vec<FreshSite>,
+) -> Result<(), Error> {
+    match action {
+        GenericAction::Let(_, _, expr) => collect_fresh_sites_expr(expr, type_info, sites),
+        GenericAction::Set(_, _, args, expr) => {
+            for arg in args.iter() {
+                collect_fresh_sites_expr(arg, type_info, sites)?;
+            }
+            collect_fresh_sites_expr(expr, type_info, sites)
+        }
+        GenericAction::Change(_, _, _, args) => {
+            for arg in args.iter() {
+                collect_fresh_sites_expr(arg, type_info, sites)?;
+            }
+            Ok(())
+        }
+        GenericAction::Union(_, lhs, rhs) => {
+            collect_fresh_sites_expr(lhs, type_info, sites)?;
+            collect_fresh_sites_expr(rhs, type_info, sites)
+        }
+        GenericAction::Expr(_, expr) => collect_fresh_sites_expr(expr, type_info, sites),
+        GenericAction::Panic(_, _) => Ok(()),
+    }
+}
+
+fn collect_fresh_sites_expr(
+    expr: &Expr,
+    type_info: &TypeInfo,
+    sites: &mut Vec<FreshSite>,
+) -> Result<(), Error> {
+    match expr {
+        Expr::Call(span, head, args) if head == "fresh!" => {
+            if args.len() != 1 {
+                return Err(Error::TypeError(TypeError::Arity {
+                    expr: expr.clone(),
+                    expected: 1,
+                }));
+            }
+            let sort_expr = &args[0];
+            let sort_name = match sort_expr {
+                Expr::Var(_, name) => name,
+                _ => {
+                    let sort_display = sort_expr.to_string();
+                    return Err(Error::TypeError(TypeError::UndefinedSort(
+                        sort_display,
+                        span.clone(),
+                    )));
+                }
+            };
+            let sort = type_info
+                .get_sort_by_name(sort_name)
+                .cloned()
+                .ok_or_else(|| {
+                    Error::TypeError(TypeError::UndefinedSort(sort_name.clone(), span.clone()))
+                })?;
+            sites.push(FreshSite {
+                original_expr: expr.clone(),
+                return_sort: sort,
+            });
+            Ok(())
+        }
+        Expr::Call(_, _, args) => {
+            for arg in args.iter() {
+                collect_fresh_sites_expr(arg, type_info, sites)?;
+            }
+            Ok(())
+        }
+        _ => Ok(()),
+    }
+}
+
+fn rewrite_fresh_expr(
+    expr: Expr,
+    table_name: &str,
+    column_exprs: &[Expr],
+    counter: &mut i64,
+) -> Expr {
+    match expr {
+        Expr::Call(span, head, args) => {
+            if head == "fresh!" {
+                let mut call_args = column_exprs.to_vec();
+                call_args.push(Expr::Lit(span.clone(), Literal::Int(*counter)));
+                *counter += 1;
+                Expr::Call(span, table_name.to_string(), call_args)
+            } else {
+                let new_args = args
+                    .into_iter()
+                    .map(|arg| rewrite_fresh_expr(arg, table_name, column_exprs, counter))
+                    .collect();
+                Expr::Call(span, head, new_args)
+            }
+        }
+        _ => expr,
+    }
 }
 
 fn desugar_rewrite(

@@ -4,8 +4,44 @@
 //! egglog is faster and more general than egg.
 //!
 //! # Documentation
-//! Documentation for the egglog language can be found
-//! here: [`Command`]
+//! Documentation for the egglog language can be found here: [`Command`].
+//!
+//! ## Syntactic Sugar: `fresh!`
+//! Egglog supports a small amount of surface sugar that desugars into core
+//! commands before typechecking and execution. One such sugar is `fresh!`, which
+//! generates fresh identifiers of a specified sort in rule actions.
+//!
+//! - Syntax: `(fresh! <Sort>)`
+//! - Where: Allowed only in rule actions (the head), not in queries (the body).
+//! - Purpose: Produce a fresh value of `<Sort>` per match of a rule, optionally
+//!   used inside larger expressions on the action side.
+//!
+//! ### Desugaring
+//! A rule that uses `fresh!` is transformed into a rule that calls a generated
+//! constructor unique to that rule occurrence. Conceptually, for each rule, egglog
+//! introduces a constructor (name generated via the parser's symbol generator):
+//!
+//! ```text
+//! (constructor GeneratedFreshTableN (<cols...> i64) <Sort>)
+//! ```
+//!
+//! where:
+//! - `<cols...>` are the types of all subexpressions appearing in the rule's
+//!   query (LHS). These are obtained by typechecking the query.
+//! - The trailing `i64` is a per-`fresh!`-call unique index within the rule,
+//!   ensuring multiple `fresh!` in the same action are different.
+//! - `<Sort>` is the output sort, as given by the `(fresh! <Sort>)` syntax.
+//!
+//! Each `(fresh! <Sort>)` in the action is replaced by a call to this generated
+//! constructor with all the query subexpressions as arguments followed by a
+//! distinct index (0, 1, ...), yielding a unique fresh value per rewrite.
+//!
+//! Notes:
+//! - The generated constructor's name is unique per rule occurrence (via
+//!   `parser.symbol_gen.fresh("GeneratedFreshTable")`).
+//! - The order of `<cols...>` is not semantically significant; it is stable for
+//!   reproducibility.
+//! - `fresh!` is a surface sugar and does not appear in the core AST.
 //!
 //! # Tutorial
 //! [Here](https://www.youtube.com/watch?v=N2RDQGRBrSY) is the video tutorial on what egglog is and how to use it.
