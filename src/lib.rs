@@ -43,6 +43,18 @@
 //!   reproducibility.
 //! - `fresh!` is a surface sugar and does not appear in the core AST.
 //!
+//! #### Warning and Tips
+//! - Since the generated constructor is a pure function of the query subexpressions
+//!   (plus the per-call index), two different rule matches that later become
+//!   equivalent (e.g., via `union` effects in the e-graph) will produce equal
+//!   arguments to the constructor and therefore equal "fresh" results. In other
+//!   words, "fresh" is only as unique as the tuple of its query arguments for a
+//!   given `fresh!` site.
+//! - This behavior can be useful when you want to intentionally create cycles in
+//!   the e-graph: if a later rewrite makes two matches indistinguishable,
+//!   their derived fresh terms will also unify, closing cycles that encode the
+//!   intended structure.
+//!
 //! # Tutorial
 //! [Here](https://www.youtube.com/watch?v=N2RDQGRBrSY) is the video tutorial on what egglog is and how to use it.
 //! We plan to have a text tutorial here soon, PRs welcome!

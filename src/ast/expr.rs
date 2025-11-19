@@ -56,6 +56,9 @@ pub(crate) type MappedExpr<Head, Leaf> = GenericExpr<CorrespondingVar<Head, Leaf
 pub(crate) trait ResolvedExprExt {
     fn output_type(&self) -> ArcSort;
     fn get_global_var(&self) -> Option<ResolvedVar>;
+    fn to_surface(&self) -> Expr;
+    /// Collect all sub-expressions (including self) in pre-order.
+    fn collect_subexprs_preorder(&self, out: &mut Vec<ResolvedExpr>);
 }
 
 impl ResolvedExprExt for ResolvedExpr {
@@ -71,6 +74,32 @@ impl ResolvedExprExt for ResolvedExpr {
         match self {
             ResolvedExpr::Var(_, v) if v.is_global_ref => Some(v.clone()),
             _ => None,
+        }
+    }
+
+    fn to_surface(&self) -> Expr {
+        match self {
+            ResolvedExpr::Lit(span, lit) => Expr::Lit(span.clone(), lit.clone()),
+            ResolvedExpr::Var(span, v) => Expr::Var(span.clone(), v.name.clone()),
+            ResolvedExpr::Call(span, head, children) => {
+                let name = match head {
+                    crate::core::ResolvedCall::Func(f) => f.name.clone(),
+                    crate::core::ResolvedCall::Primitive(p) => {
+                        p.primitive.0.name().to_string()
+                    }
+                };
+                let kids = children.iter().map(|c| c.to_surface()).collect();
+                Expr::Call(span.clone(), name, kids)
+            }
+        }
+    }
+
+    fn collect_subexprs_preorder(&self, out: &mut Vec<ResolvedExpr>) {
+        out.push(self.clone());
+        if let ResolvedExpr::Call(_, _head, children) = self {
+            for c in children {
+                c.collect_subexprs_preorder(out);
+            }
         }
     }
 }
