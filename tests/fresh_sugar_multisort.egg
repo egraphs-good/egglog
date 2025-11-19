@@ -7,6 +7,7 @@
   (I i64)
   (S String))
 
+
 ; Seed facts so rules have matches
 (let seed_x0 (Let (Var "x") (I 0)))
 (let seed_y0 (Let (Var "y") (I 0)))
@@ -58,9 +59,31 @@
 (rule ((rfoo x) (rbar y)) ((set (extra_pair x y) ())))
 (fail (check (extra_pair z z)))
 
+; 4) Nested fresh! calls involving two sorts, with the nested fresh appearing
+;    inline inside a constructor application. Check that fresh! respects
+;    sort-specific constructor generation without temporary bindings.
+(relation nested_mix (Math Math))
+(rule ((Let (Var "x") (I 0)))
+      ((let outer (fresh! Math))
+       (set (nested_mix outer (Let outer (fresh! Math))) ())))
+; Ensure no tuple stores identical Math values in both slots.
+(fail (check (nested_mix z z)))
+
+; 5) Congruence can later equate fresh results once their query columns unify.
+(relation fresh_tag (Math Math))
+(rule ((Let (Var "x") (I 0)))
+      ((let fx (fresh! Math))
+       (set (fresh_tag fx (Var "x")) ())))
+(rule ((Let (Var "y") (I 0)))
+      ((let fy (fresh! Math))
+       (set (fresh_tag fy (Var "y")) ())))
+; Force the queries for x and y to become congruent, which should merge the fresh values.
+(rule ((Let (Var "x") (I 0)) (Let (Var "y") (I 0)))
+      ((union (Var "x") (Var "y"))
+       (union (Let (Var "x") (I 0)) (Let (Var "y") (I 0)))))
+
 ; Run a small number of steps to materialize the relations
 (run 1)
 
 ; Sanity check
 (check (= () ()))
-
