@@ -216,8 +216,10 @@ fn desugar_rule(
     // Generate a unique constructor name using the parser's symbol generator
     let fresh_table_name = parser.symbol_gen.fresh("GeneratedFreshTable");
 
-    let resolved_facts = typecheck_query_facts(parser, type_info, &body)?;
-    let column_info = collect_query_columns(&body, &resolved_facts);
+    let resolved_facts = type_info
+        .typecheck_facts(&mut parser.symbol_gen, &body)
+        .map_err(Error::TypeError)?;
+    let column_info = collect_query_columns(&resolved_facts);
 
     let column_exprs: Vec<Expr> = column_info.iter().map(|(expr, _)| expr.clone()).collect();
     let mut constructor_inputs: Vec<String> = column_info
@@ -279,23 +281,9 @@ fn desugar_rule(
     ])
 }
 
-fn typecheck_query_facts(
-    parser: &mut Parser,
-    type_info: &TypeInfo,
-    body: &[Fact],
-) -> Result<Vec<ResolvedFact>, Error> {
-    let mut symbol_gen = parser.symbol_gen.clone();
-    let (query, mapped_facts) = Facts(body.to_vec()).to_query(type_info, &mut symbol_gen);
-    let mut problem = Problem::default();
-    problem.add_query(&query, type_info)?;
-    let assignment = problem
-        .solve(|sort: &ArcSort| sort.name())
-        .map_err(|err| Error::TypeError(err.to_type_error()))?;
-    Ok(assignment.annotate_facts(&mapped_facts, type_info))
-}
+// Typechecking moved into TypeInfo::typecheck_facts
 
-fn collect_query_columns(facts: &[Fact], resolved_facts: &[ResolvedFact]) -> Vec<(Expr, ArcSort)> {
-    assert_eq!(facts.len(), resolved_facts.len());
+fn collect_query_columns(resolved_facts: &[ResolvedFact]) -> Vec<(Expr, ArcSort)> {
     // Gather all resolved subexpressions in pre-order
     let mut resolved_nodes: Vec<ResolvedExpr> = Vec::new();
     for resolved_fact in resolved_facts.iter() {
