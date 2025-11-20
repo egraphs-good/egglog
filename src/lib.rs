@@ -41,6 +41,7 @@ use egglog_ast::span::Span;
 use egglog_ast::util::ListDisplay;
 pub use egglog_bridge::FunctionRow;
 pub use egglog_bridge::match_term_app;
+pub use egglog_bridge::proof_format::{EqProofId, ProofStore, TermProofId};
 pub use egglog_bridge::termdag::{Term, TermDag, TermId};
 use egglog_bridge::{ColumnTy, QueryEntry, SourceExpr, SourceSyntax, TopLevelLhsExpr};
 use egglog_core_relations as core_relations;
@@ -1478,6 +1479,23 @@ impl EGraph {
         self.backend
             .get_canon_repr(val, sort.column_ty(&self.backend))
     }
+
+    pub fn explain_term(
+        &mut self,
+        id: Value,
+        store: &mut ProofStore,
+    ) -> egglog_bridge::Result<TermProofId> {
+        self.backend.explain_term(id, store)
+    }
+
+    pub fn explain_terms_equal(
+        &mut self,
+        id1: Value,
+        id2: Value,
+        store: &mut ProofStore,
+    ) -> egglog_bridge::Result<EqProofId> {
+        self.backend.explain_terms_equal(id1, id2, store)
+    }
 }
 
 struct BackendRule<'a> {
@@ -1658,9 +1676,9 @@ impl ProofSyntaxBuilder {
                     .expect("missing column type for variable");
                 let name = variable
                     .name
-                    .as_deref()
-                    .map(str::to_owned)
-                    .unwrap_or_else(|| format!("v{}", variable.id.rep()));
+                    .as_ref()
+                    .map(|n| Arc::<str>::from(n.as_ref()))
+                    .unwrap_or_else(|| Arc::<str>::from(format!("v{}", variable.id.rep())));
                 self.syntax.add_expr(SourceExpr::Var {
                     id: variable.id,
                     ty,
@@ -1738,6 +1756,9 @@ impl ProofSyntaxBuilder {
                         var: variable.id,
                         ty,
                         func: info.func,
+                        name: Arc::<str>::from(
+                            variable.name.as_ref().map(|n| n.as_ref()).unwrap_or(""),
+                        ),
                         args: arg_ids,
                     })
                 } else {
@@ -2215,3 +2236,4 @@ mod tests {
         assert_eq!(res[0].to_string(), "(exp)\n");
     }
 }
+use std::vec::Vec;

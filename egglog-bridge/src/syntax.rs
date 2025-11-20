@@ -12,11 +12,13 @@ use crate::core_relations::{
     WriteVal, make_external_func,
 };
 use crate::numeric_id::{DenseIdMap, IdVec, NumericId, define_id};
-use crate::{EGraph, NOT_SUBSUMED, ProofReason, QueryEntry, ReasonSpecId, Result, SchemaMath};
+use crate::{
+    ColumnTy, EGraph, NOT_SUBSUMED, ProofReason, QueryEntry, ReasonSpecId, Result, SchemaMath,
+};
 use smallvec::SmallVec;
 
 use crate::{
-    ColumnTy, FunctionId, RuleId,
+    FunctionId, RuleId,
     proof_spec::ProofBuilder,
     rule::{AtomId, Bindings, VariableId},
 };
@@ -41,7 +43,7 @@ pub enum SourceExpr {
     Var {
         id: VariableId,
         ty: ColumnTy,
-        name: String,
+        name: Arc<str>,
     },
     /// A call to an external (aka primitive) function.
     ExternalCall {
@@ -50,6 +52,7 @@ pub enum SourceExpr {
         var: VariableId,
         ty: ColumnTy,
         func: ExternalFunctionId,
+        name: Arc<str>,
         args: Vec<SyntaxId>,
     },
     /// A query of an egglog-level function (i.e. a table).
@@ -64,12 +67,19 @@ pub enum SourceExpr {
     },
 }
 
+#[derive(Debug, Clone)]
+pub struct SourceVar {
+    pub id: VariableId,
+    pub ty: ColumnTy,
+    pub name: Arc<str>,
+}
+
 /// A data-structure representing an egglog query. Essentially, multiple [`SourceExpr`]s, one per
 /// line, along with a backing store accounting for subterms indexed by [`SyntaxId`].
 #[derive(Debug, Clone, Default)]
 pub struct SourceSyntax {
     pub(crate) backing: IdVec<SyntaxId, SourceExpr>,
-    pub(crate) vars: Vec<(VariableId, ColumnTy)>,
+    pub(crate) vars: Vec<SourceVar>,
     pub(crate) roots: Vec<TopLevelLhsExpr>,
 }
 
@@ -81,8 +91,16 @@ impl SourceSyntax {
     pub fn add_expr(&mut self, expr: SourceExpr) -> SyntaxId {
         match &expr {
             SourceExpr::Const { .. } | SourceExpr::FunctionCall { .. } => {}
-            SourceExpr::Var { id, ty, .. } => self.vars.push((*id, *ty)),
-            SourceExpr::ExternalCall { var, ty, .. } => self.vars.push((*var, *ty)),
+            SourceExpr::Var { id, ty, name } => self.vars.push(SourceVar {
+                id: *id,
+                ty: *ty,
+                name: Arc::clone(name),
+            }),
+            SourceExpr::ExternalCall { var, ty, name, .. } => self.vars.push(SourceVar {
+                id: *var,
+                ty: *ty,
+                name: Arc::clone(name),
+            }),
         };
         self.backing.push(expr)
     }
@@ -175,8 +193,8 @@ impl ProofBuilder {
             // the base substitution of variables into a reason table.
             let mut row = SmallVec::<[core_relations::QueryEntry; 8]>::new();
             row.push(Value::new(reason_spec_id.rep()).into());
-            for (var, _) in &syntax.vars {
-                row.push(bndgs.mapping[*var]);
+            for SourceVar { id, .. } in &syntax.vars {
+                row.push(bndgs.mapping[*id]);
             }
             Ok(rb.lookup_or_insert(
                 reason_table,
