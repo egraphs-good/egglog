@@ -6,6 +6,7 @@ use crate::{
 use ast::{ResolvedAction, ResolvedExpr, ResolvedFact, ResolvedRule, ResolvedVar, Rule};
 use core_relations::ExternalFunction;
 use egglog_ast::generic_ast::GenericAction;
+use egglog_bridge::termdag::{TermDag, TermId};
 
 #[derive(Clone, Debug)]
 pub struct FuncType {
@@ -16,9 +17,66 @@ pub struct FuncType {
 }
 
 #[derive(Clone)]
-pub struct PrimitiveWithId(pub Arc<dyn Primitive + Send + Sync>, pub ExternalFunctionId);
+pub struct PrimitiveWithId {
+    pub(crate) primitive: Arc<dyn Primitive + Send + Sync>,
+    pub(crate) id: ExternalFunctionId,
+    pub(crate) validator: Option<PrimitiveValidator>,
+    /// Cached output type for this primitive - computed from its type constraints
+    pub(crate) output_type: Option<ArcSort>,
+}
+
+/// Type signature for primitive validators.
+/// Validators take (termdag, lhs_term, rhs_term) and return true if the computation is correct.
+///
+/// **Important for overloaded primitives:**
+/// When a primitive name has multiple overloads (e.g., `+` for i64, f64, BigInt),
+/// each validator MUST check that it applies to the argument types.
+///
+/// Return values:
+/// - `None`: Validator doesn't apply to these argument types (try next overload)
+/// - `Some(true)`: Validator applies and computation is correct
+/// - `Some(false)`: Validator applies but computation is incorrect
+///
+/// Example: A validator for `(+ i64 i64) -> i64` should:
+/// - Return `None` if arguments are not `Literal::Int` or the operation doesn't apply
+/// - Return `Some(computed_value)` with the computed result literal if args are valid
+pub type PrimitiveValidator =
+    Arc<dyn Fn(&TermDag, TermId) -> Option<egglog_ast::generic_ast::Literal> + Send + Sync>;
 
 impl PrimitiveWithId {
+    /// Create a new PrimitiveWithId without a validator
+    pub fn new(primitive: Arc<dyn Primitive + Send + Sync>, id: ExternalFunctionId) -> Self {
+        Self {
+            primitive,
+            id,
+            validator: None,
+            output_type: None,
+        }
+    }
+
+    /// Add a validator to this primitive
+    pub fn with_validator(mut self, validator: PrimitiveValidator) -> Self {
+        self.validator = Some(validator);
+        self
+    }
+
+    /// Set the output type for this primitive.
+    pub fn with_output_type(mut self, output_type: ArcSort) -> Self {
+        self.output_type = Some(output_type);
+        self
+    }
+
+    /// Get the output type for this primitive, if known.
+    pub fn get_output_type(&self) -> Option<ArcSort> {
+        // First check if we have an explicitly set output type
+        if let Some(output_type) = &self.output_type {
+            return Some(output_type.clone());
+        }
+
+        // Otherwise try to get it from the primitive itself
+        self.primitive.output_type()
+    }
+
     /// Takes the full signature of a primitive (both input and output types).
     /// Returns whether the primitive is compatible with this signature.
     pub fn accept(&self, tys: &[Arc<dyn Sort>], typeinfo: &TypeInfo) -> bool {
@@ -30,7 +88,7 @@ impl PrimitiveWithId {
             constraints.push(constraint::assign(lit.clone(), ty.clone()))
         }
         constraints.extend(
-            self.0
+            self.primitive
                 .get_type_constraints(&Span::Panic)
                 .get(&lits, typeinfo),
         );
@@ -44,7 +102,7 @@ impl PrimitiveWithId {
 
 impl Debug for PrimitiveWithId {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        write!(f, "Prim({})", self.0.name())
+        write!(f, "Prim({})", self.primitive.name())
     }
 }
 
@@ -137,7 +195,120 @@ impl EGraph {
             .primitives
             .entry(prim.name().to_owned())
             .or_default()
-            .push(PrimitiveWithId(prim, ext));
+            .push(PrimitiveWithId::new(prim, ext));
+    }
+
+    /// Register a validation function for a primitive.
+    /// This associates the validator with the LAST primitive added with the given name.
+    /// For overloaded primitives, use add_primitive_validator_typed instead to specify
+    /// the exact primitive by its input and output types.
+    /// Validators are used in proof-checking mode to verify primitive computations.
+    pub fn add_primitive_validator(&mut self, name: &str, validator: PrimitiveValidator) {
+        if let Some(primitives) = self.type_info.primitives.get_mut(name) {
+            if let Some(last) = primitives.last_mut() {
+                if last.validator.is_some() {
+                    panic!(
+                        "Duplicate validator for primitive '{}'. A validator is already registered.",
+                        name
+                    );
+                }
+                last.validator = Some(validator);
+            }
+        }
+    }
+
+    /// Register a validator for a specific primitive overload identified by its type signature.
+    /// This is more reliable than add_primitive_validator for overloaded operators.
+    ///
+    /// # Arguments
+    /// * `name` - The primitive name (e.g., "+")
+    /// * `input_types` - The input types for this overload (e.g., ["i64", "i64"])
+    /// * `output_type` - The output type for this overload (e.g., "i64")
+    /// * `validator` - The validator function
+    pub fn add_primitive_validator_typed(
+        &mut self,
+        name: &str,
+        input_types: &[&str],
+        output_type: &str,
+        validator: PrimitiveValidator,
+    ) -> Result<(), TypeError> {
+        // Convert type names to actual sorts first to avoid borrow conflicts
+        let input_sorts: Vec<ArcSort> = input_types
+            .iter()
+            .map(|t| {
+                self.type_info
+                    .sorts
+                    .get(*t)
+                    .ok_or_else(|| TypeError::UndefinedSort(t.to_string(), Span::Panic))
+                    .cloned()
+            })
+            .collect::<Result<Vec<_>, _>>()?;
+
+        let output_sort = self
+            .type_info
+            .sorts
+            .get(output_type)
+            .ok_or_else(|| TypeError::UndefinedSort(output_type.to_string(), Span::Panic))?
+            .clone();
+
+        // Build the full type signature (inputs + output)
+        let mut full_signature: Vec<Arc<dyn Sort>> = input_sorts
+            .iter()
+            .map(|s| s.clone() as Arc<dyn Sort>)
+            .collect();
+        full_signature.push(output_sort.clone());
+
+        // Clone type_info to avoid borrow conflicts
+        let type_info_clone = self.type_info.clone();
+
+        // Get all primitives with this name
+        let primitives = self
+            .type_info
+            .primitives
+            .get_mut(name)
+            .ok_or_else(|| TypeError::Unbound(name.to_string(), Span::Panic))?;
+
+        // Find the primitive that matches this type signature
+        let mut found = false;
+        for prim in primitives.iter_mut() {
+            // Check if this primitive accepts this signature
+            if prim.accept(&full_signature, &type_info_clone) {
+                if prim.validator.is_some() {
+                    let msg = format!(
+                        "Duplicate validator for primitive '{}' with types {:?} -> {}. A validator is already registered.",
+                        name, input_types, output_type
+                    );
+                    return Err(TypeError::Unbound(msg, Span::Panic));
+                }
+                prim.validator = Some(validator.clone());
+                found = true;
+                break;
+            }
+        }
+
+        if !found {
+            return Err(TypeError::Unbound(
+                format!(
+                    "No primitive '{}' found with signature ({}) -> {}",
+                    name,
+                    input_types.join(", "),
+                    output_type
+                ),
+                Span::Panic,
+            ));
+        }
+
+        Ok(())
+    }
+
+    /// Register the output type for a primitive.
+    /// This should be called after add_primitive to specify the output type.
+    pub fn add_primitive_output_type(&mut self, name: &str, output_type: ArcSort) {
+        if let Some(primitives) = self.type_info.primitives.get_mut(name) {
+            if let Some(last) = primitives.last_mut() {
+                last.output_type = Some(output_type);
+            }
+        }
     }
 
     pub(crate) fn typecheck_program(
@@ -207,6 +378,10 @@ impl EGraph {
                 ResolvedNCommand::Extract(span.clone(), res_expr, res_variants)
             }
             NCommand::Check(span, facts) => ResolvedNCommand::Check(
+                span.clone(),
+                self.type_info.typecheck_facts(symbol_gen, facts)?,
+            ),
+            NCommand::ProveQuery(span, facts) => ResolvedNCommand::ProveQuery(
                 span.clone(),
                 self.type_info.typecheck_facts(symbol_gen, facts)?,
             ),

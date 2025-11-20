@@ -26,10 +26,16 @@ pub enum Term {
 }
 
 /// A hashconsing arena for [`Term`]s.
-#[derive(Clone, PartialEq, Eq, Debug, Default)]
+#[derive(Clone, PartialEq, Eq, Debug)]
 pub struct TermDag {
     /// A bidirectional map between deduplicated `Term`s and indices.
     nodes: IndexSet<Term>,
+}
+
+impl Default for TermDag {
+    fn default() -> Self {
+        Self::new()
+    }
 }
 
 #[macro_export]
@@ -120,6 +126,13 @@ impl<'w, W: io::Write> PrettyPrinter<'w, W> {
 }
 
 impl TermDag {
+    /// Create a new empty TermDag without type tracking
+    pub fn new() -> Self {
+        Self {
+            nodes: IndexSet::new(),
+        }
+    }
+
     /// Returns the number of nodes in this DAG.
     pub fn size(&self) -> usize {
         self.nodes.len()
@@ -198,6 +211,14 @@ impl TermDag {
         let node = Term::Var(sym);
         self.add_node(&node);
         self.lookup(&node)
+    }
+
+    /// Get the children of a term by its ID
+    pub fn get_children(&self, id: TermId) -> Vec<TermId> {
+        match self.get(id) {
+            Term::App(_, children) => children.clone(),
+            Term::Lit(_) | Term::Var(_) | Term::UnknownLit => Vec::new(),
+        }
     }
 
     fn add_node(&mut self, node: &Term) {

@@ -22,7 +22,6 @@ use crate::{
 define_id!(pub RuleId, u32, "An identifier for a rule in a rule set");
 
 /// Resolves variables and atoms in a rule to their string names.
-#[allow(dead_code)]
 #[derive(Debug, Clone)]
 pub struct SymbolMap {
     pub atoms: HashMap<AtomId, Arc<str>>,

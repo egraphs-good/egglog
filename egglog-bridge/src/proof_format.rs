@@ -49,6 +49,56 @@ pub struct ProofStore {
 }
 
 impl ProofStore {
+    /// Create a new ProofStore
+    pub fn new() -> Self {
+        Self::default()
+    }
+
+    /// Get a term proof by ID
+    pub fn term_proof(&self, id: TermProofId) -> Option<&TermProof> {
+        self.term_memo.lookup(id)
+    }
+
+    /// Get the termdag
+    pub fn termdag(&self) -> &TermDag {
+        &self.termdag
+    }
+
+    /// Get the termdag mutably
+    pub fn termdag_mut(&mut self) -> &mut TermDag {
+        &mut self.termdag
+    }
+
+    /// Get an equality proof by ID
+    pub fn eq_proof(&self, id: EqProofId) -> Option<&EqProof> {
+        self.eq_memo.lookup(id)
+    }
+
+    /// Get the children of a term by its ID
+    pub fn get_term_children(&self, id: TermId) -> Vec<TermId> {
+        self.termdag.get_children(id)
+    }
+
+    /// Create a literal term in the termdag
+    pub fn make_lit(&mut self, lit: egglog_ast::generic_ast::Literal) -> TermId {
+        self.termdag.lit_id(lit)
+    }
+
+    /// Create an application term in the termdag
+    pub fn make_app(&mut self, func: String, args: Vec<TermId>) -> TermId {
+        self.termdag.app_id(func, args)
+    }
+
+    /// Intern a term proof and get its ID
+    pub fn add_term_proof(&mut self, proof: &TermProof) -> TermProofId {
+        self.intern_term(proof)
+    }
+
+    /// Intern an equality proof and get its ID
+    pub fn add_eq_proof(&mut self, proof: &EqProof) -> EqProofId {
+        self.intern_eq(proof)
+    }
+
     /// Print a term proof with pretty-printing configuration.
     pub fn print_term_proof_pretty(
         &self,
@@ -203,6 +253,13 @@ impl ProofStore {
             EqProof::PCong(cong_pf) => {
                 printer.write_str("PCong[Equality](")?;
                 self.print_cong_with_printer(cong_pf, printer)?;
+                printer.write_str(")")?
+            }
+            EqProof::PFiat { desc, lhs, rhs } => {
+                printer.write_str(&format!("PFiat({desc:?}, "))?;
+                self.print_term(*lhs, printer)?;
+                printer.write_str(" = ")?;
+                self.print_term(*rhs, printer)?;
                 printer.write_str(")")?
             }
         }
@@ -416,4 +473,10 @@ pub enum EqProof {
     /// A proof via congruence- one proof for each child of the term
     /// pf_f_args_ok is a proof that the term with the lhs children is valid
     PCong(CongProof),
+    /// A fiat proof (assumed without further justification)
+    PFiat {
+        desc: Rc<str>,
+        lhs: TermId,
+        rhs: TermId,
+    },
 }

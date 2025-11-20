@@ -48,7 +48,6 @@ impl SerializeOutput {
     }
 }
 
-#[allow(dead_code)]
 struct Serializer {
     node_ids: NodeIDs,
     result: egraph_serialize::EGraph,

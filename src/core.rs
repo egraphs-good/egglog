@@ -124,11 +124,40 @@ impl ResolvedCall {
                 }
             }
         }
-        assert!(
-            resolved_call.len() == 1,
-            "Ambiguous resolution for {:?}",
-            head,
-        );
+
+        if resolved_call.is_empty() {
+            panic!(
+                "No resolution found for '{}' with types: {:?}",
+                head,
+                types.iter().map(|s| s.name()).collect::<Vec<_>>()
+            );
+        }
+
+        if resolved_call.len() > 1 {
+            let mut msg = format!(
+                "Ambiguous resolution for '{}' with types: {:?}\n",
+                head,
+                types.iter().map(|s| s.name()).collect::<Vec<_>>()
+            );
+            msg.push_str("Found multiple matching primitives/functions:\n");
+            for rc in &resolved_call {
+                match rc {
+                    ResolvedCall::Func(f) => {
+                        msg.push_str(&format!("  - Function: {}\n", f.name));
+                    }
+                    ResolvedCall::Primitive(p) => {
+                        msg.push_str(&format!(
+                            "  - Primitive: {} (inputs: {:?}, output: {})\n",
+                            p.primitive.primitive.name(),
+                            p.input.iter().map(|s| s.name()).collect::<Vec<_>>(),
+                            p.output.name()
+                        ));
+                    }
+                }
+            }
+            panic!("{}", msg);
+        }
+
         resolved_call.pop().unwrap()
     }
 }
@@ -406,7 +435,7 @@ impl std::fmt::Display for Query<ResolvedCall, String> {
                 writeln!(
                     f,
                     "({} {})",
-                    filter.head.primitive.0.name(),
+                    filter.head.primitive.primitive.name(),
                     ListDisplay(&filter.args, " ")
                 )?;
             }

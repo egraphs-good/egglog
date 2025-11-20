@@ -1,4 +1,6 @@
 use super::*;
+use egglog_add_primitive::add_literal_prim;
+use egglog_ast::generic_ast::Literal;
 
 /// 64-bit floating point numbers supporting these primitives:
 /// - Arithmetic: `+`, `-`, `*`, `/`, `%`, `^`, `neg`, `abs`
@@ -19,11 +21,11 @@ impl BaseSort for F64Sort {
     // cf https://github.com/rust-lang/rust-clippy/issues/9422
     #[allow(clippy::unnecessary_lazy_evaluations)]
     fn register_primitives(&self, eg: &mut EGraph) {
-        add_primitive!(eg, "+" = |a: F, b: F| -> F { a + b });
-        add_primitive!(eg, "-" = |a: F, b: F| -> F { a - b });
-        add_primitive!(eg, "*" = |a: F, b: F| -> F { a * b });
-        add_primitive!(eg, "/" = |a: F, b: F| -?> F { (*b != 0.0).then(|| a / b) });
-        add_primitive!(eg, "%" = |a: F, b: F| -?> F { (*b != 0.0).then(|| a % b) });
+        add_literal_prim!(eg, "+" = |a: F, b: F| -> F { a + b });
+        add_literal_prim!(eg, "-" = |a: F, b: F| -> F { a - b });
+        add_literal_prim!(eg, "*" = |a: F, b: F| -> F { a * b });
+        add_literal_prim!(eg, "/" = |a: F, b: F| -?> F { (*b != 0.0).then(|| a / b) });
+        add_literal_prim!(eg, "%" = |a: F, b: F| -?> F { (*b != 0.0).then(|| a % b) });
         add_primitive!(eg, "^" = |a: F, b: F| -> F { F::from(OrderedFloat(a.powf(**b))) });
         add_primitive!(eg, "neg" = |a: F| -> F { -a });
 
@@ -32,9 +34,9 @@ impl BaseSort for F64Sort {
         add_primitive!(eg, "<=" = |a: F, b: F| -?> () { (a <= b).then(|| ()) });
         add_primitive!(eg, ">=" = |a: F, b: F| -?> () { (a >= b).then(|| ()) });
 
-        add_primitive!(eg, "min" = |a: F, b: F| -> F { a.min(b) });
-        add_primitive!(eg, "max" = |a: F, b: F| -> F { a.max(b) });
-        add_primitive!(eg, "abs" = |a: F| -> F { F::from(a.abs()) });
+        add_literal_prim!(eg, "min" = |a: F, b: F| -> F { a.min(b) });
+        add_literal_prim!(eg, "max" = |a: F, b: F| -> F { a.max(b) });
+        add_literal_prim!(eg, "abs" = |a: F| -> F { F::from(a.abs()) });
 
         // `to-f64` should be in `i64.rs`, but `F64Sort` wouldn't exist yet
         add_primitive!(eg, "to-f64" = |a: i64| -> F { F::from(OrderedFloat(a as f64)) });

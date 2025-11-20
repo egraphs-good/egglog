@@ -31,9 +31,7 @@ fn test_query_and_explain_match() {
 
     // Query for all Add expressions with a name bound to them
     // This will match both the original expressions and the ones created by the commutative rule
-    let matches = egraph
-        .get_matches(facts![(Fact (= lhs (Add x y)))])
-        .unwrap();
+    let matches = egraph.get_matches(facts![(= lhs (Add x y))]).unwrap();
 
     println!("Found {} matches", matches.len());
     // We get 6 matches because the commutative rule creates both (Add a b) and (Add b a)
@@ -42,9 +40,11 @@ fn test_query_and_explain_match() {
     // Get the first match
     let first_match = &matches[0];
     println!("\nFirst match has {} variables", first_match.len());
-    // Note: We only get x and y, not lhs, because lhs is equal to the pattern (Add x y)
-    // and equality constraints don't create new variables in the match
-    assert_eq!(first_match.len(), 2); // x, y
+    // We now get all variables, including lhs from equality constraints
+    assert_eq!(first_match.len(), 3); // lhs, x, y
+
+    // Check that lhs is now present
+    let _lhs_value = first_match.get("lhs").expect("lhs should be bound");
 
     // Get the values from the match
     let x_value = first_match.get("x").expect("x should be bound");
