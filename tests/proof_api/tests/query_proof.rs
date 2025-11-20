@@ -16,7 +16,7 @@ fn proof_none_when_no_match() {
         .unwrap();
 
     let mut store = ProofStore::default();
-    let proof = egraph.get_proof(facts![(Add x y)], &mut store).unwrap();
+    let proof = egraph.prove_query(facts![(Add x y)], &mut store).unwrap();
 
     assert!(proof.is_none());
 }
@@ -38,7 +38,7 @@ fn proof_for_single_match() {
 
     let mut store = ProofStore::default();
     let proof = egraph
-        .get_proof(facts![(= lhs (Add x y))], &mut store)
+        .prove_query(facts![(= lhs (Add x y))], &mut store)
         .unwrap()
         .expect("expected proof");
 

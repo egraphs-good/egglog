@@ -65,6 +65,7 @@ where
     RunSchedule(GenericSchedule<Head, Leaf>),
     PrintOverallStatistics(Span, Option<String>),
     Check(Span, Vec<GenericFact<Head, Leaf>>),
+    ProveQuery(Span, Vec<GenericFact<Head, Leaf>>),
     PrintFunction(
         Span,
         String,
@@ -137,6 +138,9 @@ where
             GenericNCommand::Check(span, facts) => {
                 GenericCommand::Check(span.clone(), facts.clone())
             }
+            GenericNCommand::ProveQuery(span, facts) => {
+                GenericCommand::ProveQuery(span.clone(), facts.clone())
+            }
             GenericNCommand::PrintFunction(span, name, n, file, mode) => {
                 GenericCommand::PrintFunction(span.clone(), name.clone(), *n, file.clone(), *mode)
             }
@@ -191,6 +195,10 @@ where
                 GenericNCommand::Extract(span, expr.visit_exprs(f), variants.visit_exprs(f))
             }
             GenericNCommand::Check(span, facts) => GenericNCommand::Check(
+                span,
+                facts.into_iter().map(|fact| fact.visit_exprs(f)).collect(),
+            ),
+            GenericNCommand::ProveQuery(span, facts) => GenericNCommand::ProveQuery(
                 span,
                 facts.into_iter().map(|fact| fact.visit_exprs(f)).collect(),
             ),
@@ -607,6 +615,16 @@ where
     /// [INFO ] Command failed as expected.
     /// ```
     Check(Span, Vec<GenericFact<Head, Leaf>>),
+    /// Get a proof for a query.
+    /// The query facts are checked to find matches, and if any match is found,
+    /// a proof is generated and printed for that match.
+    /// Requires proofs to be enabled.
+    ///
+    /// Example:
+    /// ```text
+    /// (prove-query (Add (Num 1) (Num 2)))
+    /// ```
+    ProveQuery(Span, Vec<GenericFact<Head, Leaf>>),
     /// Print out rows of a given function, extracting each of the elements of the function.
     /// Example:
     ///
@@ -738,6 +756,9 @@ where
             },
             GenericCommand::Check(_ann, facts) => {
                 write!(f, "(check {})", ListDisplay(facts, "\n"))
+            }
+            GenericCommand::ProveQuery(_ann, facts) => {
+                write!(f, "(prove-query {})", ListDisplay(facts, "\n"))
             }
             GenericCommand::Push(n) => write!(f, "(push {n})"),
             GenericCommand::Pop(_span, n) => write!(f, "(pop {n})"),
