@@ -280,6 +280,13 @@ impl Debug for Function {
     }
 }
 
+/// Represents a single match of a query, containing values for all query variables.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct QueryMatch {
+    /// Maps variable names to their values in this match
+    pub bindings: IndexMap<String, Value>,
+}
+
 impl EGraph {
     fn new_from_backend(backend: egglog_bridge::EGraph) -> Self {
         let mut eg = Self {
@@ -903,6 +910,112 @@ impl EGraph {
 
         let result = result.lock().unwrap().unwrap();
         Ok(result)
+    }
+
+    /// Returns all matches for the given query as a vector of QueryMatch structs.
+    ///
+    /// Each QueryMatch contains bindings only for user-defined variables in the query.
+    /// Internal variables generated during canonicalization (starting with $) are excluded.
+    ///
+    /// # Example
+    /// ```
+    /// # use egglog::prelude::*;
+    /// # let mut egraph = EGraph::default();
+    /// egraph.parse_and_run_program(None, "
+    ///     (datatype Math (Num i64) (Add Math Math))
+    ///     (Add (Num 1) (Num 2))
+    /// ").unwrap();
+    /// let matches = egraph.get_matches(&[Fact::Fact(expr!((Add x y)))]).unwrap();
+    /// assert_eq!(matches.len(), 1);
+    /// assert!(matches[0].bindings.contains_key("x"));
+    /// assert!(matches[0].bindings.contains_key("y"));
+    /// assert!(matches[0].bindings.len() == 2);
+    /// ```
+    pub fn get_matches(&mut self, facts: &[Fact]) -> Result<Vec<QueryMatch>, Error> {
+        let span = Span::Panic; // Using Panic as a marker span since we're building internal query
+        let fresh_name = self.parser.symbol_gen.fresh("get_matches");
+        let fresh_ruleset = self.parser.symbol_gen.fresh("get_matches_ruleset");
+
+        // Parse and resolve the facts by creating a temporary check command
+        let check_command = Command::Check(span.clone(), facts.to_vec());
+        let resolved_commands = self.process_command(check_command)?;
+        let resolved_facts = match &resolved_commands[0] {
+            ResolvedNCommand::Check(_, facts) => facts.clone(),
+            _ => unreachable!("Check command should resolve to Check"),
+        };
+
+        let rule = ast::ResolvedRule {
+            span: span.clone(),
+            head: ResolvedActions::default(),
+            body: resolved_facts,
+            name: fresh_name.clone(),
+            ruleset: fresh_ruleset.clone(),
+        };
+
+        let canonical_rule =
+            rule.to_canonicalized_core_rule(&self.type_info, &mut self.parser.symbol_gen)?;
+        let query = canonical_rule.rule.body.clone();
+
+        // Collect all variables from the query atoms
+        let mut leaf_var_set = HashSet::default();
+        for atom in &query.atoms {
+            for arg in &atom.args {
+                if let core::ResolvedAtomTerm::Var(_, var) = arg {
+                    // Only include user-defined variables (not internal variables starting with $)
+                    if !var.name.starts_with('$') {
+                        leaf_var_set.insert(var.clone());
+                    }
+                }
+            }
+        }
+        let leaf_vars: Vec<_> = leaf_var_set.into_iter().collect();
+
+        // Create a side channel to collect matches
+        let matches: egglog_bridge::SideChannel<Vec<QueryMatch>> = Default::default();
+        let matches_ref = matches.clone();
+        let leaf_vars_for_closure = leaf_vars.clone();
+
+        // Build the external function that will collect each match
+        let ext_id = self.backend.register_external_func(make_external_func(
+            move |_es, vals: &[Value]| {
+                let mut bindings = IndexMap::default();
+                for (var, val) in leaf_vars_for_closure.iter().zip(vals.iter()) {
+                    bindings.insert(var.name.clone(), *val);
+                }
+                matches_ref
+                    .lock()
+                    .unwrap()
+                    .get_or_insert_with(Vec::new)
+                    .push(QueryMatch { bindings });
+                Some(Value::new_const(0))
+            },
+        ));
+
+        let mut translator = BackendRule::new(
+            self.backend.new_rule("get_matches", false),
+            &self.functions,
+            &self.type_info,
+            canonical_rule.mapped_facts,
+        );
+        translator.query(&query, true);
+
+        // Call the external function with all leaf variables as arguments
+        let var_entries: Vec<_> = leaf_vars
+            .iter()
+            .map(|var| translator.entry(&ResolvedAtomTerm::Var(span.clone(), var.clone())))
+            .collect();
+
+        translator
+            .rb
+            .call_external_func(ext_id, &var_entries, egglog_bridge::ColumnTy::Id, || {
+                "get_matches should not panic".to_string()
+            });
+        let id = translator.build();
+        let _ = self.backend.run_rules(&[id]).unwrap();
+        self.backend.free_rule(id);
+        self.backend.free_external_func(ext_id);
+
+        Ok(matches.lock().unwrap().take().unwrap_or_default())
     }
 
     fn add_combined_ruleset(&mut self, name: String, rulesets: Vec<String>) {
@@ -2236,4 +2349,3 @@ mod tests {
         assert_eq!(res[0].to_string(), "(exp)\n");
     }
 }
-use std::vec::Vec;

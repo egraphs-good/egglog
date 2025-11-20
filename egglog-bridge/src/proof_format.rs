@@ -63,7 +63,6 @@ impl ProofStore {
     }
 
     /// Print an equality proof with pretty-printing configuration.
-
     pub fn print_eq_proof_pretty(
         &self,
         eq_pf: EqProofId,
