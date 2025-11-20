@@ -1,4 +1,5 @@
 use hashbrown::HashMap;
+use std::sync::Arc;
 
 use crate::{
     ColumnTy, FunctionId, QueryEntry, RuleBuilder, SourceExpr, SourceSyntax,
@@ -243,7 +244,7 @@ impl ExpressionBuilder {
             self.syntax.add_expr(SourceExpr::Var {
                 id: var.var().id,
                 ty,
-                name: name.into(),
+                name: Arc::<str>::from(*name),
             }),
         );
 
@@ -271,7 +272,7 @@ impl ExpressionBuilder {
             self.syntax.add_expr(SourceExpr::Var {
                 id: var.var().id,
                 ty,
-                name: name.into(),
+                name: Arc::<str>::from(*name),
             }),
         );
         var
