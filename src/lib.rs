@@ -284,7 +284,29 @@ impl Debug for Function {
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct QueryMatch {
     /// Maps variable names to their values in this match
-    pub bindings: IndexMap<String, Value>,
+    bindings: IndexMap<String, Value>,
+}
+
+impl QueryMatch {
+    /// Get the value bound to a variable name in this match.
+    pub fn get(&self, var_name: &str) -> Option<Value> {
+        self.bindings.get(var_name).copied()
+    }
+
+    /// Get all variable names in this match.
+    pub fn vars(&self) -> impl Iterator<Item = &str> {
+        self.bindings.keys().map(|s| s.as_str())
+    }
+
+    /// Get the number of variables in this match.
+    pub fn len(&self) -> usize {
+        self.bindings.len()
+    }
+
+    /// Check if this match has no variables.
+    pub fn is_empty(&self) -> bool {
+        self.bindings.is_empty()
+    }
 }
 
 impl EGraph {
@@ -927,9 +949,9 @@ impl EGraph {
     /// ").unwrap();
     /// let matches = egraph.get_matches(&[Fact::Fact(expr!((Add x y)))]).unwrap();
     /// assert_eq!(matches.len(), 1);
-    /// assert!(matches[0].bindings.contains_key("x"));
-    /// assert!(matches[0].bindings.contains_key("y"));
-    /// assert!(matches[0].bindings.len() == 2);
+    /// assert!(matches[0].get("x").is_some());
+    /// assert!(matches[0].get("y").is_some());
+    /// assert_eq!(matches[0].len(), 2);
     /// ```
     pub fn get_matches(&mut self, facts: &[Fact]) -> Result<Vec<QueryMatch>, Error> {
         let span = Span::Panic; // Using Panic as a marker span since we're building internal query
@@ -956,8 +978,24 @@ impl EGraph {
             rule.to_canonicalized_core_rule(&self.type_info, &mut self.parser.symbol_gen)?;
         let query = canonical_rule.rule.body.clone();
 
-        // Collect all variables from the query atoms
+        // Collect all variables from the original facts (before canonicalization)
+        // This includes variables from equality constraints like (= lhs (Add x y))
         let mut leaf_var_set = HashSet::default();
+        
+        // First collect from the original resolved facts
+        for fact in &resolved_facts {
+            match fact {
+                GenericFact::Eq(_, e1, e2) => {
+                    Self::collect_vars_from_expr(e1, &mut leaf_var_set);
+                    Self::collect_vars_from_expr(e2, &mut leaf_var_set);
+                }
+                GenericFact::Fact(expr) => {
+                    Self::collect_vars_from_expr(expr, &mut leaf_var_set);
+                }
+            }
+        }
+        
+        // Also collect from the canonicalized query atoms to ensure we have all variables
         for atom in &query.atoms {
             for arg in &atom.args {
                 if let core::ResolvedAtomTerm::Var(_, var) = arg {
@@ -968,6 +1006,7 @@ impl EGraph {
                 }
             }
         }
+        
         let leaf_vars: Vec<_> = leaf_var_set.into_iter().collect();
 
         // Create a side channel to collect matches
@@ -1018,6 +1057,29 @@ impl EGraph {
         Ok(matches.lock().unwrap().take().unwrap_or_default())
     }
 
+    fn add_combined_ruleset(&mut self, name: String, rulesets: Vec<String>) {
+        match self.rulesets.entry(name.clone()) {
+            Entry::Occupied(_) => panic!("Ruleset '{name}' was already present"),
+            Entry::Vacant(e) => e.insert(Ruleset::Combined(rulesets)),
+        };
+    }
+}
+
+fn collect_vars_from_resolved_expr(expr: &ResolvedExpr, vars: &mut HashSet<ResolvedVar>) {
+    match expr {
+        GenericExpr::Var(_, v) if !v.name.starts_with('$') => {
+            vars.insert(v.clone());
+        }
+        GenericExpr::Call(_, _, args) => {
+            for arg in args {
+                collect_vars_from_resolved_expr(arg, vars);
+            }
+        }
+        GenericExpr::Lit(_, _) | GenericExpr::Var(_, _) => {}
+    }
+}
+
+impl EGraph {
     fn add_combined_ruleset(&mut self, name: String, rulesets: Vec<String>) {
         match self.rulesets.entry(name.clone()) {
             Entry::Occupied(_) => panic!("Ruleset '{name}' was already present"),
@@ -1593,6 +1655,43 @@ impl EGraph {
             .get_canon_repr(val, sort.column_ty(&self.backend))
     }
 
+    /// Generate a proof explaining how a term was constructed in the e-graph.
+    ///
+    /// This method requires that the e-graph was created with [`EGraph::with_proofs()`].
+    /// The proof is stored in the provided `ProofStore` and can be printed or inspected.
+    ///
+    /// # Arguments
+    /// * `id` - The value representing the term to explain
+    /// * `store` - A mutable reference to a `ProofStore` where the proof will be stored
+    ///
+    /// # Returns
+    /// A `TermProofId` that can be used to print or traverse the proof.
+    ///
+    /// # Errors
+    /// Returns an error if:
+    /// - Proofs are not enabled (e-graph not created with `with_proofs()`)
+    /// - The proof cannot be reconstructed
+    ///
+    /// # Example
+    /// ```
+    /// # use egglog::prelude::*;
+    /// # use egglog::ProofStore;
+    /// let mut egraph = EGraph::with_proofs();
+    /// egraph.parse_and_run_program(None, "
+    ///     (datatype Math (Num i64) (Add Math Math))
+    ///     (let x (Add (Num 1) (Num 2)))
+    /// ").unwrap();
+    ///
+    /// // Get the value for x
+    /// let (_, x_value) = egraph.eval_expr(&expr!(x)).unwrap();
+    ///
+    /// // Generate a proof explaining how x was constructed
+    /// let mut store = ProofStore::default();
+    /// let proof_id = egraph.explain_term(x_value, &mut store).unwrap();
+    ///
+    /// // Print the proof
+    /// store.print_term_proof(proof_id, &mut std::io::stdout()).unwrap();
+    /// ```
     pub fn explain_term(
         &mut self,
         id: Value,
@@ -1601,6 +1700,49 @@ impl EGraph {
         self.backend.explain_term(id, store)
     }
 
+    /// Generate a proof explaining why two terms are equal in the e-graph.
+    ///
+    /// This method requires that the e-graph was created with [`EGraph::with_proofs()`].
+    /// The proof shows the sequence of rewrites that establish the equality between the two terms.
+    ///
+    /// # Arguments
+    /// * `id1` - The value representing the first term
+    /// * `id2` - The value representing the second term
+    /// * `store` - A mutable reference to a `ProofStore` where the proof will be stored
+    ///
+    /// # Returns
+    /// An `EqProofId` that can be used to print or traverse the equality proof.
+    ///
+    /// # Errors
+    /// Returns an error if:
+    /// - Proofs are not enabled (e-graph not created with `with_proofs()`)
+    /// - The two terms are not actually equal in the e-graph
+    /// - The proof cannot be reconstructed
+    ///
+    /// # Example
+    /// ```
+    /// # use egglog::prelude::*;
+    /// # use egglog::ProofStore;
+    /// let mut egraph = EGraph::with_proofs();
+    /// egraph.parse_and_run_program(None, "
+    ///     (datatype Math (Num i64) (Add Math Math))
+    ///     (rule ((Add x y)) ((union (Add x y) (Add y x))))
+    ///     (let a (Add (Num 1) (Num 2)))
+    ///     (let b (Add (Num 2) (Num 1)))
+    ///     (run 1)
+    /// ").unwrap();
+    ///
+    /// // Get the values for a and b
+    /// let (_, a_value) = egraph.eval_expr(&expr!(a)).unwrap();
+    /// let (_, b_value) = egraph.eval_expr(&expr!(b)).unwrap();
+    ///
+    /// // Generate a proof that a and b are equal
+    /// let mut store = ProofStore::default();
+    /// let proof_id = egraph.explain_terms_equal(a_value, b_value, &mut store).unwrap();
+    ///
+    /// // Print the proof
+    /// store.print_eq_proof(proof_id, &mut std::io::stdout()).unwrap();
+    /// ```
     pub fn explain_terms_equal(
         &mut self,
         id1: Value,

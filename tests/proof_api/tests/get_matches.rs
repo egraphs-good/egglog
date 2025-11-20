@@ -27,14 +27,14 @@ fn test_get_matches_basic() {
     assert_eq!(matches.len(), 3);
     println!("Found {} matches", matches.len());
     for m in &matches {
-        println!("  Match with {} bindings", m.bindings.len());
-        for (k, v) in &m.bindings {
-            println!("    {}: {:?}", k, v);
+        println!("  Match with {} bindings", m.len());
+        for var_name in m.vars() {
+            println!("    {}: {:?}", var_name, m.get(var_name));
         }
         // We expect only x and y (internal variables are filtered out)
-        assert_eq!(m.bindings.len(), 2);
-        assert!(m.bindings.contains_key("x"));
-        assert!(m.bindings.contains_key("y"));
+        assert_eq!(m.len(), 2);
+        assert!(m.get("x").is_some());
+        assert!(m.get("y").is_some());
     }
 }
 
