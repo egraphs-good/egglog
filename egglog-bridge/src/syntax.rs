@@ -68,7 +68,7 @@ pub enum SourceExpr {
 }
 
 #[derive(Debug, Clone)]
-pub struct SourceVar {
+pub(crate) struct SourceVar {
     pub id: VariableId,
     pub ty: ColumnTy,
     pub name: Arc<str>,
