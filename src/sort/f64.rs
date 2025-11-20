@@ -1,4 +1,7 @@
 use super::*;
+use egglog_ast::generic_ast::Literal;
+use egglog_bridge::termdag::{Term, TermDag, TermId};
+use std::sync::Arc;
 
 /// 64-bit floating point numbers supporting these primitives:
 /// - Arithmetic: `+`, `-`, `*`, `/`, `%`, `^`, `neg`, `abs`
@@ -20,10 +23,79 @@ impl BaseSort for F64Sort {
     #[allow(clippy::unnecessary_lazy_evaluations)]
     fn register_primitives(&self, eg: &mut EGraph) {
         add_primitive!(eg, "+" = |a: F, b: F| -> F { a + b });
+        eg.add_primitive_validator("+", Arc::new(|termdag: &TermDag, term_id: TermId| -> Option<Literal> {
+            if let Term::App(_, args) = termdag.get(term_id) {
+                if args.len() == 2 {
+                    if let (Term::Lit(Literal::Float(a)), Term::Lit(Literal::Float(b))) =
+                        (termdag.get(args[0]), termdag.get(args[1]))
+                    {
+                        return Some(Literal::Float(*a + *b));
+                    }
+                }
+            }
+            None
+        }));
+
         add_primitive!(eg, "-" = |a: F, b: F| -> F { a - b });
+        eg.add_primitive_validator("-", Arc::new(|termdag: &TermDag, term_id: TermId| -> Option<Literal> {
+            if let Term::App(_, args) = termdag.get(term_id) {
+                if args.len() == 2 {
+                    if let (Term::Lit(Literal::Float(a)), Term::Lit(Literal::Float(b))) =
+                        (termdag.get(args[0]), termdag.get(args[1]))
+                    {
+                        return Some(Literal::Float(*a - *b));
+                    }
+                }
+            }
+            None
+        }));
+
         add_primitive!(eg, "*" = |a: F, b: F| -> F { a * b });
+        eg.add_primitive_validator("*", Arc::new(|termdag: &TermDag, term_id: TermId| -> Option<Literal> {
+            if let Term::App(_, args) = termdag.get(term_id) {
+                if args.len() == 2 {
+                    if let (Term::Lit(Literal::Float(a)), Term::Lit(Literal::Float(b))) =
+                        (termdag.get(args[0]), termdag.get(args[1]))
+                    {
+                        return Some(Literal::Float(*a * *b));
+                    }
+                }
+            }
+            None
+        }));
+
         add_primitive!(eg, "/" = |a: F, b: F| -?> F { (*b != 0.0).then(|| a / b) });
+        eg.add_primitive_validator("/", Arc::new(|termdag: &TermDag, term_id: TermId| -> Option<Literal> {
+            if let Term::App(_, args) = termdag.get(term_id) {
+                if args.len() == 2 {
+                    if let (Term::Lit(Literal::Float(a)), Term::Lit(Literal::Float(b))) =
+                        (termdag.get(args[0]), termdag.get(args[1]))
+                    {
+                        if **b != 0.0 {
+                            return Some(Literal::Float(*a / *b));
+                        }
+                    }
+                }
+            }
+            None
+        }));
+
         add_primitive!(eg, "%" = |a: F, b: F| -?> F { (*b != 0.0).then(|| a % b) });
+        eg.add_primitive_validator("%", Arc::new(|termdag: &TermDag, term_id: TermId| -> Option<Literal> {
+            if let Term::App(_, args) = termdag.get(term_id) {
+                if args.len() == 2 {
+                    if let (Term::Lit(Literal::Float(a)), Term::Lit(Literal::Float(b))) =
+                        (termdag.get(args[0]), termdag.get(args[1]))
+                    {
+                        if **b != 0.0 {
+                            return Some(Literal::Float(*a % *b));
+                        }
+                    }
+                }
+            }
+            None
+        }));
+
         add_primitive!(eg, "^" = |a: F, b: F| -> F { F::from(OrderedFloat(a.powf(**b))) });
         add_primitive!(eg, "neg" = |a: F| -> F { -a });
 

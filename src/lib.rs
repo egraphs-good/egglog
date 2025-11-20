@@ -18,7 +18,12 @@ pub mod constraint;
 mod core;
 pub mod egraph_operations;
 pub mod extract;
+mod literal_convertible;
 pub mod prelude;
+#[macro_use]
+pub mod proof_checker;
+mod proof_support;
+mod proof_type_inference;
 pub mod scheduler;
 mod serialize;
 pub mod sort;
@@ -89,6 +94,15 @@ pub trait Primitive {
     /// for error localization.
     fn get_type_constraints(&self, span: &Span) -> Box<dyn TypeConstraint>;
 
+    /// Returns the output type of this primitive, if it can be determined statically.
+    /// This is used during type inference to determine the result type of primitive operations.
+    ///
+    /// The default implementation returns None, indicating the output type cannot be
+    /// determined statically. Primitives should override this when possible.
+    fn output_type(&self) -> Option<ArcSort> {
+        None
+    }
+
     /// Applies the primitive operation to the given arguments.
     ///
     /// Returns `Some(value)` if the operation succeeds, or `None` if it fails.
@@ -113,7 +127,7 @@ pub enum CommandOutput {
     /// The report from all runs
     OverallStatistics(RunReport),
     /// A printed function and all its values
-    PrintFunction(Function, TermDag, Vec<(Term, Term)>, PrintFunctionMode),
+    PrintFunction(Box<(Function, TermDag, Vec<(Term, Term)>, PrintFunctionMode)>),
     /// The report from a single run
     RunSchedule(RunReport),
     /// A user defined output
@@ -144,7 +158,8 @@ impl std::fmt::Display for CommandOutput {
             CommandOutput::OverallStatistics(run_report) => {
                 write!(f, "Overall statistics:\n{}", run_report)
             }
-            CommandOutput::PrintFunction(function, termdag, terms_and_outputs, mode) => {
+            CommandOutput::PrintFunction(boxed) => {
+                let (function, termdag, terms_and_outputs, mode) = &**boxed;
                 let out_is_unit = function.schema.output.name() == UnitSort.name();
                 if *mode == PrintFunctionMode::CSV {
                     let mut wtr = Writer::from_writer(vec![]);
@@ -216,6 +231,8 @@ pub struct EGraph {
     overall_run_report: RunReport,
     schedulers: DenseIdMap<SchedulerId, SchedulerRecord>,
     commands: IndexMap<String, Arc<dyn UserDefinedCommand>>,
+    /// When true, validates all proofs during check commands
+    proof_checking_enabled: bool,
 }
 
 /// A user-defined command allows users to inject custom command that can be called
@@ -298,6 +315,7 @@ impl EGraph {
             type_info: Default::default(),
             schedulers: Default::default(),
             commands: Default::default(),
+            proof_checking_enabled: false,
         };
 
         add_base_sort(&mut eg, UnitSort, span!()).unwrap();
@@ -338,6 +356,14 @@ impl EGraph {
     /// tracking.
     pub fn with_proofs() -> Self {
         Self::new_from_backend(egglog_bridge::EGraph::with_tracing())
+    }
+
+    /// Create a new e-graph with proof checking enabled.
+    /// This will validate all proofs during check commands.
+    pub fn with_proof_checking() -> Self {
+        let mut egraph = Self::with_proofs();
+        egraph.proof_checking_enabled = true;
+        egraph
     }
 
     /// Returns `true` if this e-graph was constructed with proofs enabled.
@@ -432,7 +458,7 @@ impl EGraph {
                     .map(|arg| self.translate_expr_to_mergefn(arg))
                     .collect::<Result<Vec<_>, _>>()?;
                 Ok(egglog_bridge::MergeFn::Primitive(
-                    p.primitive.1,
+                    p.primitive.id,
                     translated_args,
                 ))
             }
@@ -593,7 +619,8 @@ impl EGraph {
             // function_to_dag should have checked this
             .unwrap();
         let terms_and_outputs: Vec<_> = terms.into_iter().zip(outputs.unwrap()).collect();
-        let output = CommandOutput::PrintFunction(f.clone(), termdag, terms_and_outputs, mode);
+        let output =
+            CommandOutput::PrintFunction(Box::new((f.clone(), termdag, terms_and_outputs, mode)));
         match file {
             Some(mut file) => {
                 log::info!("Writing output to file");
@@ -977,11 +1004,20 @@ impl EGraph {
                 span.clone(),
             ))
         } else {
+            // If proof checking is enabled, validate the proof for this check
+            if self.proof_checking_enabled {
+                self.validate_check_proof(facts)?;
+            }
             Ok(())
         }
     }
 
     fn run_command(&mut self, command: ResolvedNCommand) -> Result<Option<CommandOutput>, Error> {
+        // Check if this command is compatible with proofs
+        if self.proofs_enabled() {
+            self.check_command_supports_proofs(&command)?;
+        }
+
         match command {
             // Sorts are already declared during typechecking
             ResolvedNCommand::Sort(_span, name, _presort_and_args) => {
@@ -1030,6 +1066,40 @@ impl EGraph {
             ResolvedNCommand::Check(span, facts) => {
                 self.check_facts(&span, &facts)?;
                 log::info!("Checked fact {:?}.", facts);
+            }
+            ResolvedNCommand::ProveQuery(span, facts) => {
+                if !self.proofs_enabled() {
+                    return Err(Error::BackendError(
+                        "prove-query requires proofs to be enabled. Use (set-option enable_proofs true)".
+                            to_string(),
+                    ));
+                }
+                // First check that the facts hold
+                self.check_facts(&span, &facts)?;
+
+                // Convert facts to surface syntax for prove_query
+                let surface_facts = facts
+                    .iter()
+                    .map(|fact| match fact {
+                        ResolvedFact::Fact(expr) => ast::GenericFact::Fact(expr.to_surface()),
+                        ResolvedFact::Eq(span, lhs, rhs) => {
+                            ast::GenericFact::Eq(span.clone(), lhs.to_surface(), rhs.to_surface())
+                        }
+                    })
+                    .collect::<Vec<_>>();
+
+                // Use typed termdag for proof generation
+                let mut store = ProofStore::new_typed();
+                if let Some(proof_id) = self.prove_query(ast::Facts(surface_facts), &mut store)? {
+                    // Print the proof
+                    let mut buf = Vec::new();
+                    store
+                        .print_term_proof(proof_id, &mut buf)
+                        .map_err(|e| Error::BackendError(e.to_string()))?;
+                    log::info!("Proof:\n{}", String::from_utf8_lossy(&buf));
+                } else {
+                    return Err(Error::BackendError("No proof found for query".to_string()));
+                }
             }
             ResolvedNCommand::CoreAction(action) => match &action {
                 ResolvedAction::Let(_, name, contents) => {
@@ -1803,10 +1873,8 @@ impl<'a> BackendRule<'a> {
     ) -> (ExternalFunctionId, Vec<QueryEntry>, ColumnTy) {
         let mut qe_args = self.args(args);
 
-        if prim.primitive.0.name() == "unstable-fn" {
-            let core::CanonicalizedResolvedAtomTerm::Literal(_, Literal::String(ref name)) =
-                args[0]
-            else {
+        if prim.primitive.primitive.name() == "unstable-fn" {
+            let core::ResolvedAtomTerm::Literal(_, Literal::String(ref name)) = args[0] else {
                 panic!("expected string literal after `unstable-fn`")
             };
             let id = if let Some(f) = self.type_info.get_func_type(name) {
@@ -1833,7 +1901,7 @@ impl<'a> BackendRule<'a> {
                         })
                 });
                 assert!(ps.len() == 1, "options for {name}: {ps:?}");
-                ResolvedFunctionId::Prim(ps.into_iter().next().unwrap().1)
+                ResolvedFunctionId::Prim(ps.into_iter().next().unwrap().id)
             } else {
                 panic!("no callable for {name}");
             };
@@ -1852,7 +1920,11 @@ impl<'a> BackendRule<'a> {
         }
         let ty = prim.output.column_ty(self.rb.egraph());
 
-        (prim.primitive.1, qe_args, ty)
+        (
+            prim.primitive.id,
+            qe_args,
+            prim.output.column_ty(self.rb.egraph()),
+        )
     }
 
     fn args<'b>(
@@ -1964,8 +2036,8 @@ impl<'a> BackendRule<'a> {
                             })
                         }
                         ResolvedCall::Primitive(p) => {
-                            let name = p.primitive.0.name().to_owned();
-                            let (p, args, ty) = self.prim(p, &canon_args);
+                            let name = p.primitive.primitive.name().to_owned();
+                            let (p, args, ty) = self.prim(p, args);
                             let span = span.clone();
                             self.rb.call_external_func(p, &args, ty, move || {
                                 format!("{span}: call of primitive {name} failed")
@@ -2072,6 +2144,10 @@ pub enum Error {
     CommandAlreadyExists(String, Span),
     #[error("Incorrect format in file '{0}'.")]
     InputFileFormatError(String),
+    #[error("Proof error: {0}")]
+    ProofError(String),
+    #[error("{1}\nProofs are not supported for this program: {0}")]
+    ProofsNotSupported(String, Span),
 }
 
 #[cfg(test)]

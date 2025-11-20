@@ -482,6 +482,10 @@ impl Parser {
                 span,
                 map_fallible(tail, self, Self::parse_fact)?,
             )],
+            "prove-query" => vec![Command::ProveQuery(
+                span,
+                map_fallible(tail, self, Self::parse_fact)?,
+            )],
             "push" => match tail {
                 [] => vec![Command::Push(1)],
                 [n] => vec![Command::Push(n.expect_uint("number of times to push")?)],
