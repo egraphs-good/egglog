@@ -32,7 +32,8 @@ use ast::*;
 #[cfg(feature = "bin")]
 pub use cli::*;
 use constraint::{Constraint, Problem, SimpleTypeConstraint, TypeConstraint};
-use core::{AtomTerm, ResolvedAtomTerm, ResolvedCall};
+pub use core::{Atom, AtomTerm};
+use core::{ResolvedAtomTerm, ResolvedCall};
 pub use core_relations::{BaseValue, ContainerValue, ExecutionState, Value};
 use core_relations::{ExternalFunctionId, make_external_func};
 use csv::Writer;
@@ -65,7 +66,7 @@ use std::sync::Arc;
 pub use termdag::{Term, TermDag, TermId};
 use thiserror::Error;
 pub use typechecking::TypeError;
-use typechecking::TypeInfo;
+pub use typechecking::TypeInfo;
 use util::*;
 
 use crate::core::{GenericActionsExt, ResolvedRuleExt};
