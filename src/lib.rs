@@ -1600,53 +1600,6 @@ struct RuleProofState {
 }
 
 impl RuleProofState {
-    /// Helper for `finish` that determines whether a mapped expression corresponds to a value that
-    /// ever appeared in the query bindings. Synthesized temporaries (e.g., helpers introduced by
-    /// global removal or rewrite instrumentation) never get bound, so we should omit them from the
-    /// reconstructed syntax.
-    /// Collects all user-defined variables from the mapped facts.
-    /// This includes variables from both equality constraints and regular facts.
-    /// Internal variables (starting with '$') are excluded.
-    fn collect_all_query_vars(&self) -> Vec<ResolvedVar> {
-        let mut var_set = HashSet::default();
-        for fact in &self.mapped_facts {
-            match fact {
-                GenericFact::Eq(_, e1, e2) => {
-                    Self::collect_vars_from_mapped_expr(e1, &mut var_set);
-                    Self::collect_vars_from_mapped_expr(e2, &mut var_set);
-                }
-                GenericFact::Fact(expr) => {
-                    Self::collect_vars_from_mapped_expr(expr, &mut var_set);
-                }
-            }
-        }
-        var_set.into_iter().collect()
-    }
-
-    /// Helper to recursively collect all variables from a mapped expression.
-    fn collect_vars_from_mapped_expr(
-        expr: &MappedExpr<ResolvedCall, ResolvedVar>,
-        var_set: &mut HashSet<ResolvedVar>,
-    ) {
-        match expr {
-            GenericExpr::Var(_, var) => {
-                if !var.name.starts_with('$') {
-                    var_set.insert(var.clone());
-                }
-            }
-            GenericExpr::Lit(_, _) => {}
-            GenericExpr::Call(_, head, children) => {
-                // The 'to' field of CorrespondingVar contains the variable
-                if !head.to.name.starts_with('$') {
-                    var_set.insert(head.to.clone());
-                }
-                for child in children {
-                    Self::collect_vars_from_mapped_expr(child, var_set);
-                }
-            }
-        }
-    }
-
     fn expr_is_synthesized<Head>(
         expr: &MappedExpr<Head, ResolvedVar>,
         ctx: &ProofContext<'_, '_>,

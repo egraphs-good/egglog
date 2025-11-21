@@ -12,8 +12,9 @@ use std::any::{Any, TypeId};
 // Re-exports in `prelude` for convenience.
 pub use egglog::ast::{Action, Fact, Facts, GenericActions, RustSpan, Span};
 pub use egglog::sort::{BigIntSort, BigRatSort, BoolSort, F64Sort, I64Sort, StringSort, UnitSort};
-pub use egglog::{EGraph, QueryMatch, span};
+pub use egglog::{EGraph, span};
 pub use egglog::{action, actions, datatype, expr, fact, facts, sort, vars};
+pub use egglog::egraph_operations::QueryMatch;
 
 pub mod exprs {
     use super::*;
