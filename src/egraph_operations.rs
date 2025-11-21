@@ -51,6 +51,8 @@ impl EGraph {
     /// **Note**: This method requires proofs to be enabled. Create the EGraph with
     /// `EGraph::with_proofs()` to use this feature.
     ///
+    /// TODO this implementation is in-progress.
+    /// 
     /// # Example
     /// ```
     /// # use egglog::prelude::*;
@@ -110,8 +112,6 @@ impl EGraph {
         let matches: egglog_bridge::SideChannel<Vec<QueryMatch>> = Default::default();
         let matches_ref = matches.clone();
 
-        // Collect variables directly from the mapped facts so we preserve the query's source
-        // variable names, including those that only appear in equality constraints (e.g., `lhs`).
         let mut ordered_vars = IndexSet::default();
         for fact in &canonical_rule.mapped_facts {
             match fact {
@@ -126,8 +126,8 @@ impl EGraph {
         }
         let leaf_var_order: Vec<_> = ordered_vars.into_iter().collect();
 
-        // However, we need to filter to only variables that will actually be bound in the query
-        // Create a temporary translator to check which variables exist after canonicalization
+        // TODO due to a bug, not all variables in the query may appear in the translator's
+        // resolved_var_entries?
         let leaf_vars = {
             dbg!(&leaf_var_order);
             let mut translator = BackendRule::new(
@@ -243,4 +243,3 @@ impl EGraph {
         }
     }
 }
-
