@@ -2,7 +2,7 @@ use egglog::prelude::*;
 
 #[test]
 fn test_get_matches_basic() {
-    let mut egraph = EGraph::default();
+    let mut egraph = EGraph::with_proofs();
     egraph
         .parse_and_run_program(
             None,
@@ -40,7 +40,7 @@ fn test_get_matches_basic() {
 
 #[test]
 fn test_get_matches_with_equality() {
-    let mut egraph = EGraph::default();
+    let mut egraph = EGraph::with_proofs();
     egraph
         .parse_and_run_program(
             None,
@@ -72,7 +72,7 @@ fn test_get_matches_with_equality() {
 
 #[test]
 fn test_get_matches_empty_result() {
-    let mut egraph = EGraph::default();
+    let mut egraph = EGraph::with_proofs();
     egraph
         .parse_and_run_program(
             None,
