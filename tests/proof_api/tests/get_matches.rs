@@ -19,9 +19,7 @@ fn test_get_matches_basic() {
         .unwrap();
 
     // Query for all Add expressions
-    let matches = egraph
-        .get_matches(&[Fact::Fact(expr!((Add x y)))])
-        .unwrap();
+    let matches = egraph.get_matches(&[Fact::Fact(expr!((Add x y)))]).unwrap();
 
     // We should have 3 matches
     assert_eq!(matches.len(), 3);
@@ -71,6 +69,34 @@ fn test_get_matches_with_equality() {
 }
 
 #[test]
+fn test_get_matches_lhs_equality() {
+    let mut egraph = EGraph::with_proofs();
+    egraph
+        .parse_and_run_program(
+            None,
+            "
+            (datatype Math
+                (Num i64)
+                (Add Math Math))
+
+            (let lhs (Add (Num 1) (Num 2)))
+            ",
+        )
+        .unwrap();
+
+    let matches = egraph
+        .get_matches(&[Fact::Eq(span!(), expr!(lhs), expr!((Add x y)))])
+        .unwrap();
+
+    assert_eq!(matches.len(), 1);
+    let bindings = &matches[0];
+    assert!(bindings.get("lhs").is_some(), "lhs should be bound");
+    assert!(bindings.get("x").is_some(), "x should be bound");
+    assert!(bindings.get("y").is_some(), "y should be bound");
+    assert_eq!(bindings.len(), 3);
+}
+
+#[test]
 fn test_get_matches_empty_result() {
     let mut egraph = EGraph::with_proofs();
     egraph
@@ -88,9 +114,7 @@ fn test_get_matches_empty_result() {
         .unwrap();
 
     // Query for Add expressions (none exist)
-    let matches = egraph
-        .get_matches(&[Fact::Fact(expr!((Add x y)))])
-        .unwrap();
+    let matches = egraph.get_matches(&[Fact::Fact(expr!((Add x y)))]).unwrap();
 
     // Should have no matches
     assert_eq!(matches.len(), 0);

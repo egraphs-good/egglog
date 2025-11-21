@@ -49,6 +49,7 @@ use egglog_numeric_id as numeric_id;
 use egglog_numeric_id::NumericId;
 use egglog_reports::{ReportLevel, RunReport};
 use extract::{CostModel, DefaultCost, Extractor, TreeAdditiveCostModel};
+use indexmap::IndexSet;
 use indexmap::map::Entry;
 use log::{Level, log_enabled};
 use numeric_id::DenseIdMap;
@@ -938,8 +939,8 @@ impl EGraph {
     ///
     /// Each QueryMatch contains bindings only for user-defined variables in the query.
     /// Internal variables generated during canonicalization (starting with $) are excluded.
-    /// 
-    /// **Note**: This method requires proofs to be enabled. Create the EGraph with 
+    ///
+    /// **Note**: This method requires proofs to be enabled. Create the EGraph with
     /// `EGraph::with_proofs()` to use this feature.
     ///
     /// # Example
@@ -951,12 +952,12 @@ impl EGraph {
     ///     (Add (Num 1) (Num 2))
     ///     (Add (Num 3) (Num 4))
     /// ").unwrap();
-    /// 
+    ///
     /// // Query for all Add expressions
     /// let matches = egraph.get_matches(&[
     ///     Fact::Fact(expr!((Add x y)))
     /// ]).unwrap();
-    /// 
+    ///
     /// // We found 2 matches, each with x and y bound
     /// assert_eq!(matches.len(), 2);
     /// assert!(matches[0].get("x").is_some());
@@ -971,7 +972,7 @@ impl EGraph {
                 "get_matches requires proofs to be enabled. Create the EGraph with EGraph::with_proofs().".to_string(),
             ));
         }
-        
+
         let span = Span::Panic; // Using Panic as a marker span since we're building internal query
         let fresh_name = self.parser.symbol_gen.fresh("get_matches");
         let fresh_ruleset = self.parser.symbol_gen.fresh("get_matches_ruleset");
@@ -994,70 +995,77 @@ impl EGraph {
 
         let canonical_rule =
             rule.to_canonicalized_core_rule(&self.type_info, &mut self.parser.symbol_gen)?;
+        dbg!(&canonical_rule.mapped_facts);
         let query = canonical_rule.rule.body.clone();
 
         // Create a side channel to collect matches
         let matches: egglog_bridge::SideChannel<Vec<QueryMatch>> = Default::default();
         let matches_ref = matches.clone();
-        
-        // Collect all user-defined variables from the resolved facts (before canonicalization)
-        // This gives us the original variable names including those from equality constraints
-        let mut leaf_var_set = HashSet::default();
-        for fact in &resolved_facts {
+
+        // Collect variables directly from the mapped facts so we preserve the query's source
+        // variable names, including those that only appear in equality constraints (e.g., `lhs`).
+        let mut ordered_vars = IndexSet::new();
+        for fact in &canonical_rule.mapped_facts {
             match fact {
-                GenericFact::Eq(_, e1, e2) => {
-                    Self::collect_vars_from_resolved(e1, &mut leaf_var_set);
-                    Self::collect_vars_from_resolved(e2, &mut leaf_var_set);
+                GenericFact::Eq(_, lhs, rhs) => {
+                    Self::collect_vars_from_mapped(lhs, &mut ordered_vars);
+                    Self::collect_vars_from_mapped(rhs, &mut ordered_vars);
                 }
                 GenericFact::Fact(expr) => {
-                    Self::collect_vars_from_resolved(expr, &mut leaf_var_set);
+                    Self::collect_vars_from_mapped(expr, &mut ordered_vars);
                 }
             }
         }
-        let leaf_vars_init: Vec<_> = leaf_var_set.into_iter().collect();
-        
+        let leaf_var_order: Vec<_> = ordered_vars.into_iter().collect();
+
         // However, we need to filter to only variables that will actually be bound in the query
         // Create a temporary translator to check which variables exist after canonicalization
         let leaf_vars = {
-            let mut translator = BackendRule::new(
-                self.backend.new_rule("get_matches_temp", false),
-                &self.functions,
-                &self.type_info,
-                Vec::new(),
-            );
-            translator.query(&query, true);
-            
-            // Filter the resolved variables to only include those that exist in the canonicalized query
-            let vars: Vec<_> = leaf_vars_init
-                .into_iter()
-                .filter(|var| translator.resolved_var_entries.contains_key(var))
-                .collect();
-            
-            // Drop translator which releases the borrow on self.backend
-            let temp_id = translator.build();
-            self.backend.free_rule(temp_id);
-            
+        dbg!(&leaf_var_order);
+        let mut translator = BackendRule::new(
+            self.backend.new_rule("get_matches_temp", false),
+            &self.functions,
+            &self.type_info,
+            canonical_rule.mapped_facts.clone(),
+        );
+        translator.query(&query, true);
+
+        // Filter the resolved variables to only include those that exist in the canonicalized query
+        let vars: Vec<_> = leaf_var_order
+            .into_iter()
+            .filter(|var| translator.resolved_var_entries.contains_key(var))
+            .collect();
+        dbg!(translator
+            .resolved_var_entries
+            .keys()
+            .map(|v| v.name.clone())
+            .collect::<Vec<_>>());
+
+        // Drop translator which releases the borrow on self.backend
+        let temp_id = translator.build();
+        self.backend.free_rule(temp_id);
+
             vars
         };
-        
+
         let leaf_vars_for_closure = leaf_vars.clone();
-        
+
         // Now that translator is dropped, we can register the external function
-        let ext_id = self.backend.register_external_func(make_external_func(
-            move |_es, vals: &[Value]| {
-                let mut bindings = IndexMap::default();
-                for (var, val) in leaf_vars_for_closure.iter().zip(vals.iter()) {
-                    bindings.insert(var.name.clone(), *val);
-                }
-                matches_ref
-                    .lock()
-                    .unwrap()
-                    .get_or_insert_with(Vec::new)
-                    .push(QueryMatch { bindings });
-                Some(Value::new_const(0))
-            },
-        ));
-        
+        let ext_id =
+            self.backend
+                .register_external_func(make_external_func(move |_es, vals: &[Value]| {
+                    let mut bindings = IndexMap::default();
+                    for (var, val) in leaf_vars_for_closure.iter().zip(vals.iter()) {
+                        bindings.insert(var.name.clone(), *val);
+                    }
+                    matches_ref
+                        .lock()
+                        .unwrap()
+                        .get_or_insert_with(Vec::new)
+                        .push(QueryMatch { bindings });
+                    Some(Value::new_const(0))
+                }));
+
         // Second pass: create the actual translator for the real rule
         // Note: We pass empty mapped_facts because we don't need proof reconstruction
         // for the get_matches rule itself - we only needed proofs to extract variable names
@@ -1065,9 +1073,14 @@ impl EGraph {
             self.backend.new_rule("get_matches", false),
             &self.functions,
             &self.type_info,
-            Vec::new(),  // Empty mapped_facts - no proof reconstruction needed
+            canonical_rule.mapped_facts.clone(),
         );
         translator.query(&query, true);
+        dbg!(translator
+            .resolved_var_entries
+            .keys()
+            .map(|v| v.name.clone())
+            .collect::<Vec<_>>());
 
         // Call the external function with all leaf variables as arguments.
         // Note: Some variables from the original query (like those in equality constraints)
@@ -1085,13 +1098,6 @@ impl EGraph {
                 }
             })
             .collect();
-        
-        // Also collect the filtered variables for the closure (since we can't return variables
-        // that weren't actually bound in the query)
-        let bound_vars: Vec<ResolvedVar> = leaf_vars
-            .into_iter()
-            .filter(|var| translator.resolved_var_entries.contains_key(var))
-            .collect();
 
         translator
             .rb
@@ -1105,18 +1111,23 @@ impl EGraph {
 
         Ok(matches.lock().unwrap().take().unwrap_or_default())
     }
-    
-    fn collect_vars_from_resolved(expr: &ResolvedExpr, vars: &mut HashSet<ResolvedVar>) {
+
+    fn collect_vars_from_mapped(
+        expr: &MappedExpr<ResolvedCall, ResolvedVar>,
+        vars: &mut IndexSet<ResolvedVar>,
+    ) {
         match expr {
-            GenericExpr::Var(_, v) if !v.name.starts_with('$') => {
-                vars.insert(v.clone());
-            }
-            GenericExpr::Call(_, _, args) => {
-                for arg in args {
-                    Self::collect_vars_from_resolved(arg, vars);
+            GenericExpr::Var(_, var) => {
+                if !var.name.starts_with('$') {
+                    vars.insert(var.clone());
                 }
             }
-            GenericExpr::Lit(_, _) | GenericExpr::Var(_, _) => {}
+            GenericExpr::Call(_, _, children) => {
+                for child in children {
+                    Self::collect_vars_from_mapped(child, vars);
+                }
+            }
+            GenericExpr::Lit(_, _) => {}
         }
     }
 }
@@ -1817,7 +1828,7 @@ impl RuleProofState {
     /// ever appeared in the query bindings. Synthesized temporaries (e.g., helpers introduced by
     /// global removal or rewrite instrumentation) never get bound, so we should omit them from the
     /// reconstructed syntax.
-    
+
     /// Collects all user-defined variables from the mapped facts.
     /// This includes variables from both equality constraints and regular facts.
     /// Internal variables (starting with '$') are excluded.
@@ -1836,7 +1847,7 @@ impl RuleProofState {
         }
         var_set.into_iter().collect()
     }
-    
+
     /// Helper to recursively collect all variables from a mapped expression.
     fn collect_vars_from_mapped_expr(
         expr: &MappedExpr<ResolvedCall, ResolvedVar>,

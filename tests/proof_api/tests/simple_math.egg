@@ -3,7 +3,7 @@
     (Add Expr Expr))
 
 (rule
-  ((Add x y))
+  ((= lhs (Add x y)))
   ((union (Add x y) (Add y x))))
 
 (Add (Num 2) (Num 3))
