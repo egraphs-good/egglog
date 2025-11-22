@@ -1,3 +1,4 @@
+use crate::ast::expr::ResolvedExpr;
 use crate::{
     core::{
         Atom, CoreAction, CoreRule, GenericCoreActions, GenericCoreRule, HeadOrEq, Query,

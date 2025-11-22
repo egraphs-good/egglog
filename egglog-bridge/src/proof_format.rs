@@ -1,12 +1,12 @@
 //! A proof format for egglog programs, based on the Rocq format and checker from Tia Vu, Ryan
 //! Doegens, and Oliver Flatt.
-use std::{hash::Hash, io, rc::Rc};
+use std::{hash::Hash, io, rc::Rc, sync::Arc};
 
-use crate::numeric_id::{DenseIdMap, NumericId, define_id};
-use crate::termdag::{PrettyPrintConfig, PrettyPrinter, TermDag, TermId};
 use indexmap::IndexSet;
 
-use crate::{FunctionId, rule::VariableId};
+use crate::ColumnTy;
+use crate::numeric_id::{NumericId, define_id};
+use crate::termdag::{PrettyPrintConfig, PrettyPrinter, TermDag, TermId};
 
 define_id!(pub TermProofId, u32, "an id identifying proofs of terms within a [`ProofStore`]");
 define_id!(pub EqProofId, u32, "an id identifying proofs of equality between two terms within a [`ProofStore`]");
@@ -85,12 +85,10 @@ impl ProofStore {
             new_term,
             func,
         } = cong_pf;
-        printer.write_str(&format!("Cong({func:?}, "))?;
-        self.termdag
-            .print_term_with_printer(self.termdag.get(*old_term), printer)?;
+        printer.write_str(&format!("Cong({func}, "))?;
+        self.print_term(*old_term, printer)?;
         printer.write_str(" => ")?;
-        self.termdag
-            .print_term_with_printer(self.termdag.get(*new_term), printer)?;
+        self.print_term(*new_term, printer)?;
         printer.write_str(" by (")?;
         printer.increase_indent();
         for (i, pf) in pf_args_eq.iter().enumerate() {
@@ -132,14 +130,13 @@ impl ProofStore {
                 printer.write_str(&format!("PRule[Equality]({rule_name:?}, Subst {{"))?;
                 printer.increase_indent();
                 printer.newline()?;
-                for (i, (var, term)) in subst.iter().enumerate() {
+                for (i, binding) in subst.iter().enumerate() {
                     if i > 0 {
                         printer.write_str(",")?;
                     }
                     printer.write_with_break(" ")?;
-                    printer.write_str(&format!("{var:?} => "))?;
-                    self.termdag
-                        .print_term_with_printer(self.termdag.get(*term), printer)?;
+                    printer.write_str(&format!("{}: {:?} => ", binding.name, binding.ty))?;
+                    self.print_term(binding.term, printer)?;
                     printer.newline()?;
                 }
                 printer.newline()?;
@@ -169,11 +166,9 @@ impl ProofStore {
                 printer.write_with_break("], ")?;
                 printer.newline()?;
                 printer.write_with_break(" Result: ")?;
-                self.termdag
-                    .print_term_with_printer(self.termdag.get(*result_lhs), printer)?;
+                self.print_term(*result_lhs, printer)?;
                 printer.write_str(" = ")?;
-                self.termdag
-                    .print_term_with_printer(self.termdag.get(*result_rhs), printer)?;
+                self.print_term(*result_rhs, printer)?;
                 printer.write_str(")")?;
                 printer.decrease_indent();
             }
@@ -241,14 +236,13 @@ impl ProofStore {
                 printer.write_str(&format!("PRule[Existence]({rule_name:?}, Subst {{"))?;
                 printer.increase_indent();
                 printer.newline()?;
-                for (i, (var, term)) in subst.iter().enumerate() {
+                for (i, binding) in subst.iter().enumerate() {
                     if i > 0 {
                         printer.write_str(",")?;
                     }
                     printer.write_with_break(" ")?;
-                    printer.write_str(&format!("{var:?} => "))?;
-                    self.termdag
-                        .print_term_with_printer(self.termdag.get(*term), printer)?;
+                    printer.write_str(&format!("{}: {:?} => ", binding.name, binding.ty))?;
+                    self.print_term(binding.term, printer)?;
                     printer.newline()?;
                 }
                 printer.newline()?;
@@ -276,8 +270,7 @@ impl ProofStore {
                 }
                 printer.decrease_indent();
                 printer.write_with_break("], Result: ")?;
-                self.termdag
-                    .print_term_with_printer(self.termdag.get(*result), printer)?;
+                self.print_term(*result, printer)?;
                 printer.write_str(")")
             }
             TermProof::PProj {
@@ -296,12 +289,20 @@ impl ProofStore {
             TermProof::PFiat { desc, term } => {
                 printer.write_str(&format!("PFiat({desc:?}"))?;
                 printer.write_str(", ")?;
-                self.termdag
-                    .print_term_with_printer(self.termdag.get(*term), printer)?;
+                self.print_term(*term, printer)?;
                 printer.write_str(")")
             }
         }
     }
+    fn print_term<W: io::Write>(
+        &self,
+        term: TermId,
+        printer: &mut PrettyPrinter<W>,
+    ) -> io::Result<()> {
+        self.termdag
+            .print_term_with_printer(self.termdag.get(term), printer)
+    }
+
     pub(crate) fn intern_term(&mut self, prf: &TermProof) -> TermProofId {
         self.term_memo.get_or_insert(prf)
     }
@@ -351,7 +352,14 @@ pub struct CongProof {
     pub pf_f_args_ok: TermProofId,
     pub old_term: TermId,
     pub new_term: TermId,
-    pub func: FunctionId,
+    pub func: Arc<str>,
+}
+
+#[derive(Clone, PartialEq, Eq, Hash, Debug)]
+pub struct RuleVarBinding {
+    pub name: Arc<str>,
+    pub ty: ColumnTy,
+    pub term: TermId,
 }
 
 #[allow(clippy::enum_variant_names)]
@@ -363,7 +371,7 @@ pub enum TermProof {
     /// the act_pf gives a location in the action of the proposition
     PRule {
         rule_name: Rc<str>,
-        subst: DenseIdMap<VariableId, TermId>,
+        subst: Vec<RuleVarBinding>,
         body_pfs: Vec<Premise>,
         result: TermId,
     },
@@ -388,7 +396,7 @@ pub enum EqProof {
     /// the act_pf gives a location in the action of the proposition
     PRule {
         rule_name: Rc<str>,
-        subst: DenseIdMap<VariableId, TermId>,
+        subst: Vec<RuleVarBinding>,
         body_pfs: Vec<Premise>,
         result_lhs: TermId,
         result_rhs: TermId,

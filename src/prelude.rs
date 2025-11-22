@@ -11,6 +11,7 @@ use std::any::{Any, TypeId};
 
 // Re-exports in `prelude` for convenience.
 pub use egglog::ast::{Action, Fact, Facts, GenericActions, RustSpan, Span};
+pub use egglog::egraph_operations::QueryMatch;
 pub use egglog::sort::{BigIntSort, BigRatSort, BoolSort, F64Sort, I64Sort, StringSort, UnitSort};
 pub use egglog::{EGraph, span};
 pub use egglog::{action, actions, datatype, expr, fact, facts, sort, vars};
@@ -636,6 +637,7 @@ pub fn add_relation(
 #[macro_export]
 macro_rules! datatype {
     ($egraph:expr, (datatype $sort:ident $(($name:ident $($args:ident)* $(:cost $cost:expr)?))*)) => {
+        use $crate::ast::Schema;
         add_sort($egraph, stringify!($sort))?;
         $(add_constructor(
             $egraph,
