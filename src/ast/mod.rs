@@ -1,10 +1,9 @@
 pub mod check_shadowing;
 pub mod desugar;
-mod expr;
+pub mod expr;
 mod parse;
 pub mod remove_globals;
 
-use crate::ast::expr::ResolvedExpr;
 use crate::core::{
     GenericAtom, GenericAtomTerm, GenericExprExt, HeadOrEq, Query, ResolvedCall, ResolvedCoreRule,
 };

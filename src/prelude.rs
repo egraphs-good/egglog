@@ -637,6 +637,7 @@ pub fn add_relation(
 #[macro_export]
 macro_rules! datatype {
     ($egraph:expr, (datatype $sort:ident $(($name:ident $($args:ident)* $(:cost $cost:expr)?))*)) => {
+        use $crate::ast::Schema;
         add_sort($egraph, stringify!($sort))?;
         $(add_constructor(
             $egraph,

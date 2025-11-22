@@ -6,6 +6,7 @@
 //! we add a new variable to the query bound to the primitive value.
 
 use crate::*;
+use crate::ast::expr::ResolvedExpr;
 use crate::{core::ResolvedCall, typechecking::FuncType};
 use egglog_ast::generic_ast::{GenericAction, GenericExpr, GenericFact, GenericRule};
 

@@ -3,7 +3,7 @@ use egglog_core_relations::Value;
 
 use crate::{
     EGraph, Error,
-    ast::{collect_query_vars, Fact, ResolvedFact, ResolvedVar},
+    ast::{Fact, Facts, ResolvedFact, collect_query_vars},
     util::{FreshGen, IndexMap},
 };
 
@@ -51,9 +51,10 @@ impl EGraph {
     /// ```
     /// # use egglog::prelude::*;
     /// # let mut egraph = EGraph::with_proofs();
-    /// add_sort(&mut egraph, "Math").unwrap();
-    /// add_constructor(&mut egraph, "Num", Schema { input: vec!["i64".into()], output: "Math".into() }, None, false).unwrap();
-    /// add_constructor(&mut egraph, "Add", Schema { input: vec!["Math".into(), "Math".into()], output: "Math".into() }, None, false).unwrap();
+    /// (|| -> Result<(), Box<dyn std::error::Error>> {
+    ///  datatype!(&mut egraph, (datatype Math (Num i64) (Add Math Math)));
+    ///  Ok(())
+    /// })().unwrap();
     ///
     /// // Query for all Add expressions
     /// let matches = egraph.get_matches(facts![(= lhs (Add x y))]).unwrap();
@@ -65,7 +66,7 @@ impl EGraph {
     /// assert!(matches[0].get("lhs").is_some());
     /// assert_eq!(matches[0].len(), 3);
     /// ```
-    pub fn get_matches(&mut self, facts: &[Fact]) -> Result<Vec<QueryMatch>, Error> {
+    pub fn get_matches(&mut self, facts: Facts<String, String>) -> Result<Vec<QueryMatch>, Error> {
         if !self.backend.proofs_enabled() {
             return Err(Error::BackendError(
                 "get_matches requires proofs to be enabled. Create the EGraph with EGraph::with_proofs().".to_string(),
@@ -76,9 +77,9 @@ impl EGraph {
 
         let resolved_facts = self
             .type_info
-            .typecheck_facts(&mut self.parser.symbol_gen, facts)?;
+            .typecheck_facts(&mut self.parser.symbol_gen, &facts.0)?;
         let resolved_fact_refs: Vec<_> = resolved_facts.iter().collect();
-        let query_vars = collect_query_vars(&resolved_fact_refs);
+        let query_vars = collect_query_vars(&resolved_facts);
 
         let bindings = query_vars
             .iter()
@@ -122,23 +123,17 @@ impl EGraph {
             ruleset_name.clone(),
         ));
 
-        let body_facts = facts.to_vec();
+        let body_facts = facts.0.to_vec();
         let action_expr = {
             let args = query_vars
                 .iter()
                 .map(|(var, _)| crate::ast::Expr::Var(span.clone(), var.name.clone()))
                 .collect();
-            crate::ast::Expr::Call(
-                span.clone(),
-                constructor_name.clone(),
-                args,
-            )
+            crate::ast::Expr::Call(span.clone(), constructor_name.clone(), args)
         };
 
-        let rule_actions = crate::ast::GenericActions(vec![crate::ast::Action::Expr(
-            span.clone(),
-            action_expr,
-        )]);
+        let rule_actions =
+            crate::ast::GenericActions(vec![crate::ast::Action::Expr(span.clone(), action_expr)]);
 
         setup_commands.push(crate::ast::Command::Rule {
             rule: crate::ast::GenericRule {
@@ -158,17 +153,16 @@ impl EGraph {
             .expect("constructor should exist");
 
         let mut results = Vec::new();
-        self.backend.for_each(constructor_function.backend_id, |row| {
-            let mut bindings = IndexMap::default();
-            for ((var, _), value) in query_vars.iter().zip(row.vals.iter()) {
-                bindings.insert(var.name.clone(), *value);
-            }
-            results.push(QueryMatch { bindings });
-        });
+        self.backend
+            .for_each(constructor_function.backend_id, |row| {
+                let mut bindings = IndexMap::default();
+                for ((var, _), value) in query_vars.iter().zip(row.vals.iter()) {
+                    bindings.insert(var.name.clone(), *value);
+                }
+                results.push(QueryMatch { bindings });
+            });
 
-        let teardown_program = format!(
-            "(pop 1)\n(pop 1)\n(pop 1)",
-        );
+        let teardown_program = format!("(pop 1)\n(pop 1)\n(pop 1)",);
         self.parse_and_run_program(None, &teardown_program)?;
 
         Ok(results)
