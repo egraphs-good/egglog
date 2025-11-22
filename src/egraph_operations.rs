@@ -1,16 +1,10 @@
-use egglog_ast::{
-    generic_ast::{GenericExpr, GenericFact},
-    span::Span,
-};
-use egglog_core_relations::{Value, make_external_func};
+use egglog_ast::span::Span;
+use egglog_core_relations::Value;
 
 use crate::{
-    BackendRule, EGraph, Error,
-    ast::{
-        Command, Fact, MappedExpr, ResolvedActions, ResolvedNCommand, ResolvedRule, ResolvedVar,
-    },
-    core::{ResolvedAtomTerm, ResolvedCall, ResolvedRuleExt},
-    util::{FreshGen, IndexMap, IndexSet},
+    EGraph, Error,
+    ast::{collect_query_vars, Fact, ResolvedFact, ResolvedVar},
+    util::{FreshGen, IndexMap},
 };
 
 /// Represents a single match of a query, containing values for all query variables.
@@ -72,171 +66,111 @@ impl EGraph {
     /// assert_eq!(matches[0].len(), 3);
     /// ```
     pub fn get_matches(&mut self, facts: &[Fact]) -> Result<Vec<QueryMatch>, Error> {
-        // get_matches requires proofs to be enabled because we need to access the original
-        // query structure (including equality-bound variables) via mapped_facts
         if !self.backend.proofs_enabled() {
             return Err(Error::BackendError(
                 "get_matches requires proofs to be enabled. Create the EGraph with EGraph::with_proofs().".to_string(),
             ));
         }
 
-        let span = Span::Panic; // Using Panic as a marker span since we're building internal query
-        let fresh_name = self.parser.symbol_gen.fresh("get_matches");
-        let fresh_ruleset = self.parser.symbol_gen.fresh("get_matches_ruleset");
+        let span = Span::Panic;
 
-        // Parse and resolve the facts by creating a temporary check command
-        let check_command = Command::Check(span.clone(), facts.to_vec());
-        let resolved_commands = self.process_command(check_command)?;
-        let resolved_facts = match &resolved_commands[0] {
-            ResolvedNCommand::Check(_, facts) => facts.clone(),
-            _ => unreachable!("Check command should resolve to Check"),
-        };
+        let resolved_facts = self
+            .type_info
+            .typecheck_facts(&mut self.parser.symbol_gen, facts)?;
+        let resolved_fact_refs: Vec<_> = resolved_facts.iter().collect();
+        let query_vars = collect_query_vars(&resolved_fact_refs);
 
-        let rule = ResolvedRule {
-            span: span.clone(),
-            head: ResolvedActions::default(),
-            body: resolved_facts.clone(),
-            name: fresh_name.clone(),
-            ruleset: fresh_ruleset.clone(),
-        };
-
-        let canonical_rule =
-            rule.to_canonicalized_core_rule(&self.type_info, &mut self.parser.symbol_gen)?;
-        dbg!(&canonical_rule.mapped_facts);
-        let query = canonical_rule.rule.body.clone();
-
-        // Create a side channel to collect matches
-        let matches: egglog_bridge::SideChannel<Vec<QueryMatch>> = Default::default();
-        let matches_ref = matches.clone();
-
-        let mut ordered_vars = IndexSet::default();
-        for fact in &canonical_rule.mapped_facts {
-            match fact {
-                GenericFact::Eq(_, lhs, rhs) => {
-                    Self::collect_vars_from_mapped(lhs, &mut ordered_vars);
-                    Self::collect_vars_from_mapped(rhs, &mut ordered_vars);
-                }
-                GenericFact::Fact(expr) => {
-                    Self::collect_vars_from_mapped(expr, &mut ordered_vars);
-                }
-            }
-        }
-        let leaf_var_order: Vec<_> = ordered_vars.into_iter().collect();
-
-        // TODO due to a bug, not all variables in the query may appear in the translator's
-        // resolved_var_entries?
-        let leaf_vars = {
-            dbg!(&leaf_var_order);
-            let mut translator = BackendRule::new(
-                self.backend.new_rule("get_matches_temp", false),
-                &self.functions,
-                &self.type_info,
-                canonical_rule.mapped_facts.clone(),
-            );
-            translator.query(&query, true);
-
-            // Filter the resolved variables to only include those that exist in the canonicalized query
-            let vars: Vec<_> = leaf_var_order
-                .into_iter()
-                .filter(|var| translator.resolved_var_entries.contains_key(var))
-                .collect();
-            dbg!(
-                translator
-                    .resolved_var_entries
-                    .keys()
-                    .map(|v| v.name.clone())
-                    .collect::<Vec<_>>()
-            );
-
-            // Drop translator which releases the borrow on self.backend
-            let temp_id = translator.build();
-            self.backend.free_rule(temp_id);
-
-            vars
-        };
-
-        let leaf_vars_for_closure = leaf_vars.clone();
-
-        // Now that translator is dropped, we can register the external function
-        let ext_id =
-            self.backend
-                .register_external_func(make_external_func(move |_es, vals: &[Value]| {
-                    let mut bindings = IndexMap::default();
-                    for (var, val) in leaf_vars_for_closure.iter().zip(vals.iter()) {
-                        bindings.insert(var.name.clone(), *val);
-                    }
-                    matches_ref
-                        .lock()
-                        .unwrap()
-                        .get_or_insert_with(Vec::new)
-                        .push(QueryMatch { bindings });
-                    Some(Value::new_const(0))
-                }));
-
-        // Second pass: create the actual translator for the real rule
-        // Note: We pass empty mapped_facts because we don't need proof reconstruction
-        // for the get_matches rule itself - we only needed proofs to extract variable names
-        let mut translator = BackendRule::new(
-            self.backend.new_rule("get_matches", false),
-            &self.functions,
-            &self.type_info,
-            canonical_rule.mapped_facts.clone(),
-        );
-        translator.query(&query, true);
-        dbg!(
-            translator
-                .resolved_var_entries
-                .keys()
-                .map(|v| v.name.clone())
-                .collect::<Vec<_>>()
-        );
-
-        // Call the external function with all leaf variables as arguments.
-        // Note: Some variables from the original query (like those in equality constraints)
-        // may have been canonicalized away and won't be in the translator's entries.
-        // We filter to only include variables that actually exist in the query.
-        let var_entries: Vec<_> = leaf_vars
+        let bindings = query_vars
             .iter()
-            .filter_map(|var| {
-                let term = ResolvedAtomTerm::Var(span.clone(), var.clone());
-                // Check if this variable actually exists in the translator's entries
-                if translator.resolved_var_entries.contains_key(var) {
-                    Some(translator.entry(&term))
-                } else {
-                    None
-                }
-            })
-            .collect();
+            .map(|(var, sort)| format!("({} {})", var.name, sort.name()))
+            .collect::<Vec<_>>()
+            .join(" ");
 
-        translator
-            .rb
-            .call_external_func(ext_id, &var_entries, egglog_bridge::ColumnTy::Id, || {
-                "get_matches should not panic".to_string()
-            });
-        let id = translator.build();
-        let _ = self.backend.run_rules(&[id]).unwrap();
-        self.backend.free_rule(id);
-        self.backend.free_external_func(ext_id);
+        let constructor_name = self.parser.symbol_gen.fresh("get_matches_ctor");
+        let relation_name = self.parser.symbol_gen.fresh("get_matches_rel");
+        let ruleset_name = self.parser.symbol_gen.fresh("get_matches_ruleset");
+        let rule_name = self.parser.symbol_gen.fresh("get_matches_rule");
 
-        Ok(matches.lock().unwrap().take().unwrap_or_default())
-    }
+        let constructor_schema = {
+            let inputs = query_vars
+                .iter()
+                .map(|(_, sort)| sort.name().to_string())
+                .collect::<Vec<_>>();
+            crate::ast::Schema::new(inputs, String::from("Unit"))
+        };
 
-    fn collect_vars_from_mapped(
-        expr: &MappedExpr<ResolvedCall, ResolvedVar>,
-        vars: &mut IndexSet<ResolvedVar>,
-    ) {
-        match expr {
-            GenericExpr::Var(_, var) => {
-                if !var.name.starts_with('$') {
-                    vars.insert(var.clone());
-                }
+        let mut setup_commands = Vec::new();
+        setup_commands.push(crate::ast::Command::Constructor {
+            span: span.clone(),
+            name: constructor_name.clone(),
+            schema: constructor_schema,
+            cost: None,
+            unextractable: true,
+        });
+
+        setup_commands.push(crate::ast::Command::Relation {
+            span: span.clone(),
+            name: relation_name.clone(),
+            inputs: query_vars
+                .iter()
+                .map(|(_, sort)| sort.name().to_string())
+                .collect(),
+        });
+
+        setup_commands.push(crate::ast::Command::AddRuleset(
+            span.clone(),
+            ruleset_name.clone(),
+        ));
+
+        let body_facts = facts.to_vec();
+        let action_expr = {
+            let args = query_vars
+                .iter()
+                .map(|(var, _)| crate::ast::Expr::Var(span.clone(), var.name.clone()))
+                .collect();
+            crate::ast::Expr::Call(
+                span.clone(),
+                constructor_name.clone(),
+                args,
+            )
+        };
+
+        let rule_actions = crate::ast::GenericActions(vec![crate::ast::Action::Expr(
+            span.clone(),
+            action_expr,
+        )]);
+
+        setup_commands.push(crate::ast::Command::Rule {
+            rule: crate::ast::GenericRule {
+                span: span.clone(),
+                head: rule_actions,
+                body: body_facts,
+                name: rule_name.clone(),
+                ruleset: ruleset_name.clone(),
+            },
+        });
+
+        self.run_program(setup_commands)?;
+
+        let constructor_function = self
+            .functions
+            .get(&constructor_name)
+            .expect("constructor should exist");
+
+        let mut results = Vec::new();
+        self.backend.for_each(constructor_function.backend_id, |row| {
+            let mut bindings = IndexMap::default();
+            for ((var, _), value) in query_vars.iter().zip(row.vals.iter()) {
+                bindings.insert(var.name.clone(), *value);
             }
-            GenericExpr::Call(_, _, children) => {
-                for child in children {
-                    Self::collect_vars_from_mapped(child, vars);
-                }
-            }
-            GenericExpr::Lit(_, _) => {}
-        }
+            results.push(QueryMatch { bindings });
+        });
+
+        let teardown_program = format!(
+            "(pop 1)\n(pop 1)\n(pop 1)",
+        );
+        self.parse_and_run_program(None, &teardown_program)?;
+
+        Ok(results)
     }
 }

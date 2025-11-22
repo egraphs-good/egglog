@@ -4,9 +4,11 @@ mod expr;
 mod parse;
 pub mod remove_globals;
 
+use crate::ast::expr::ResolvedExpr;
 use crate::core::{
     GenericAtom, GenericAtomTerm, GenericExprExt, HeadOrEq, Query, ResolvedCall, ResolvedCoreRule,
 };
+use crate::util::IndexMap;
 use crate::*;
 pub use egglog_ast::generic_ast::{
     Change, GenericAction, GenericActions, GenericExpr, GenericFact, GenericRule, Literal,
