@@ -2,7 +2,6 @@ use egglog::ProofStore;
 use egglog::prelude::*;
 
 #[test]
-#[allow(clippy::disallowed_macros)]
 fn test_query_and_explain_match() {
     // Create an e-graph with proofs enabled
     let mut egraph = EGraph::with_proofs();
