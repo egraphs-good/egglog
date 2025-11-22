@@ -61,7 +61,7 @@ impl EGraph {
     /// add_constructor(&mut egraph, "Num", Schema { input: vec!["i64".into()], output: "Math".into() }, None, false).unwrap();
     /// add_constructor(&mut egraph, "Add", Schema { input: vec!["Math".into(), "Math".into()], output: "Math".into() }, None, false).unwrap();
     ///
-    /// Query for all Add expressions
+    /// // Query for all Add expressions
     /// let matches = egraph.get_matches(facts![(= lhs (Add x y))]).unwrap();
     ///
     /// // We found 1 match with lhs, x, and y bound
