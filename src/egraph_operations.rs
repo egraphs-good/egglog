@@ -52,27 +52,24 @@ impl EGraph {
     /// `EGraph::with_proofs()` to use this feature.
     ///
     /// TODO this implementation is in-progress.
-    /// 
+    ///
     /// # Example
     /// ```
     /// # use egglog::prelude::*;
     /// # let mut egraph = EGraph::with_proofs();
-    /// egraph.parse_and_run_program(None, "
-    ///     (datatype Math (Num i64) (Add Math Math))
-    ///     (Add (Num 1) (Num 2))
-    ///     (Add (Num 3) (Num 4))
-    /// ").unwrap();
+    /// add_sort(&mut egraph, "Math").unwrap();
+    /// add_constructor(&mut egraph, "Num", Schema { input: vec!["i64".into()], output: "Math".into() }, None, false).unwrap();
+    /// add_constructor(&mut egraph, "Add", Schema { input: vec!["Math".into(), "Math".into()], output: "Math".into() }, None, false).unwrap();
     ///
-    /// // Query for all Add expressions
-    /// let matches = egraph.get_matches(&[
-    ///     Fact::Fact(expr!((Add x y)))
-    /// ]).unwrap();
+    /// Query for all Add expressions
+    /// let matches = egraph.get_matches(facts![(= lhs (Add x y))]).unwrap();
     ///
-    /// // We found 2 matches, each with x and y bound
-    /// assert_eq!(matches.len(), 2);
+    /// // We found 1 match with lhs, x, and y bound
+    /// assert_eq!(matches.len(), 1);
     /// assert!(matches[0].get("x").is_some());
     /// assert!(matches[0].get("y").is_some());
-    /// assert_eq!(matches[0].len(), 2);
+    /// assert!(matches[0].get("lhs").is_some());
+    /// assert_eq!(matches[0].len(), 3);
     /// ```
     pub fn get_matches(&mut self, facts: &[Fact]) -> Result<Vec<QueryMatch>, Error> {
         // get_matches requires proofs to be enabled because we need to access the original
