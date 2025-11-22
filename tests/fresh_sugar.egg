@@ -1,4 +1,4 @@
-; Simple fresh! sugar tests
+; Simple unstable-fresh! sugar tests
 
 (datatype Math
   (Let Math Math)
@@ -7,25 +7,34 @@
 ; Seed one Let fact so rules have something to match
 (let seed (Let (Var "x") (Var "y")))
 
-; 1) Single fresh! call; we can at least run without error
+; 1) Single unstable-fresh! call; we can at least run without error
 (rule ((Let a b))
-      ((Let (fresh! Math) b)))
+      ((Let (unstable-fresh! Math) b)))
 
-; 2) Multiple fresh! calls in one rule: ensure they are distinct by joining on inequality
+; 2) Multiple unstable-fresh! calls in one rule: ensure they are distinct by joining on inequality
 ; Create two fresh values in one rule and assert they can't be equal
 (relation dup (Math Math))
 (rule ((Let a b))
-      ((let x (fresh! Math))
-       (let y (fresh! Math))
+      ((let x (unstable-fresh! Math))
+       (let y (unstable-fresh! Math))
        (set (dup x y) ())))
 ; If any dup pair has equal components, this check would hold; we expect it to fail
 (fail (check (dup x y) (= x y)))
 
-; 3) Multiple rules with fresh! calls should not collide
+; 2b) Using unstable-fresh! to construct a self-referential cycle and then unifying it
+(relation fresh_cycle (Math Math))
+(rule ((Let a b))
+      ((let x (unstable-fresh! Math))
+       (let cy (Let x a))
+       (union x cy)
+       (set (fresh_cycle x cy) ())))
+
+
+; 3) Multiple rules with unstable-fresh! calls should not collide
 (relation r1 (Math))
 (relation r2 (Math))
-(rule ((Let a b)) ((let x (fresh! Math)) (set (r1 x) ())))
-(rule ((Let a b)) ((let y (fresh! Math)) (set (r2 y) ())))
+(rule ((Let a b)) ((let x (unstable-fresh! Math)) (set (r1 x) ())))
+(rule ((Let a b)) ((let y (unstable-fresh! Math)) (set (r2 y) ())))
 (relation pair12 (Math Math))
 (rule ((r1 x) (r2 y)) ((set (pair12 x y) ())))
 ; No pair should have equal components
@@ -48,8 +57,20 @@
 (A1)
 (rule ((Let a b)
        (A1))
-      ((let x (fresh! Alpha))
-       (let y (fresh! Math))
+      ((let x (unstable-fresh! Alpha))
+       (let y (unstable-fresh! Math))
        (set (alpha_math x y) ())))
 
 (run 1)
+
+; After the first run, query for a cycle and materialize evidence.
+; (fresh_cycle x y) gives us both the fresh term and the expression using it.
+(relation cycle_witness (Math Math))
+(rule ((fresh_cycle x y)
+       (= x y))
+      ((set (cycle_witness x y) ())))
+
+(run 1)
+
+; Ensure we found a truly cyclic node: its witness records the equality.
+(check (cycle_witness z z))

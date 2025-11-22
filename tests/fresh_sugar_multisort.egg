@@ -1,4 +1,4 @@
-; fresh! sugar tests with multiple sorts in the query to exercise
+; unstable-fresh! sugar tests with multiple sorts in the query to exercise
 ; column inference across heterogeneous subexpressions.
 
 (datatype Math
@@ -19,10 +19,10 @@
 (relation rx (Math))
 (relation ry (Math))
 (rule ((Let (Var "x") (I 0)))
-      ((let a (fresh! Math))
+      ((let a (unstable-fresh! Math))
        (set (rx a) ())))
 (rule ((Let (Var "y") (I 0)))
-      ((let b (fresh! Math))
+      ((let b (unstable-fresh! Math))
        (set (ry b) ())))
 (relation str_pair (Math Math))
 (rule ((rx x) (ry y)) ((set (str_pair x y) ())))
@@ -35,10 +35,10 @@
 (relation r0 (Math))
 (relation r1 (Math))
 (rule ((Let (Var "x") (I 0)))
-      ((let a (fresh! Math))
+      ((let a (unstable-fresh! Math))
        (set (r0 a) ())))
 (rule ((Let (Var "x") (I 1)))
-      ((let b (fresh! Math))
+      ((let b (unstable-fresh! Math))
        (set (r1 b) ())))
 (relation i64_pair (Math Math))
 (rule ((r0 x) (r1 y)) ((set (i64_pair x y) ())))
@@ -50,32 +50,32 @@
 (relation rfoo (Math))
 (relation rbar (Math))
 (rule ((Let (Var "x") (I 0)) (= t (S "foo")))
-      ((let f (fresh! Math))
+      ((let f (unstable-fresh! Math))
        (set (rfoo f) ())))
 (rule ((Let (Var "x") (I 0)) (= t (S "bar")))
-      ((let g (fresh! Math))
+      ((let g (unstable-fresh! Math))
        (set (rbar g) ())))
 (relation extra_pair (Math Math))
 (rule ((rfoo x) (rbar y)) ((set (extra_pair x y) ())))
 (fail (check (extra_pair z z)))
 
-; 4) Nested fresh! calls involving two sorts, with the nested fresh appearing
-;    inline inside a constructor application. Check that fresh! respects
+; 4) Nested unstable-fresh! calls involving two sorts, with the nested fresh appearing
+;    inline inside a constructor application. Check that unstable-fresh! respects
 ;    sort-specific constructor generation without temporary bindings.
 (relation nested_mix (Math Math))
 (rule ((Let (Var "x") (I 0)))
-      ((let outer (fresh! Math))
-       (set (nested_mix outer (Let outer (fresh! Math))) ())))
+      ((let outer (unstable-fresh! Math))
+       (set (nested_mix outer (Let outer (unstable-fresh! Math))) ())))
 ; Ensure no tuple stores identical Math values in both slots.
 (fail (check (nested_mix z z)))
 
 ; 5) Congruence can later equate fresh results once their query columns unify.
 (relation fresh_tag (Math Math))
 (rule ((Let (Var "x") (I 0)))
-      ((let fx (fresh! Math))
+      ((let fx (unstable-fresh! Math))
        (set (fresh_tag fx (Var "x")) ())))
 (rule ((Let (Var "y") (I 0)))
-      ((let fy (fresh! Math))
+      ((let fy (unstable-fresh! Math))
        (set (fresh_tag fy (Var "y")) ())))
 ; Force the queries for x and y to become congruent, which should merge the fresh values.
 (rule ((Let (Var "x") (I 0)) (Let (Var "y") (I 0)))

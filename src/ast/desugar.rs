@@ -198,7 +198,7 @@ fn desugar_rule(
     type_info: &TypeInfo,
 ) -> Result<Vec<NCommand>, Error> {
     let fresh_sorts = collect_fresh_sorts(&rule.head, type_info)?;
-    // If there are no fresh! uses in the actions, return the rule unchanged.
+    // If there are no unstable-fresh! uses in the actions, return the rule unchanged.
     if fresh_sorts.is_empty() {
         return Ok(vec![NCommand::NormRule { rule }]);
     }
@@ -309,7 +309,7 @@ fn collect_fresh_sorts(
                 return expr;
             }
             if let Expr::Call(span, head, args) = &expr {
-                if head == "fresh!" {
+                if head == "unstable-fresh!" {
                     if args.len() != 1 {
                         error = Some(Error::TypeError(TypeError::Arity {
                             expr: expr.clone(),
@@ -359,7 +359,7 @@ fn rewrite_fresh_expr(
 ) -> Expr {
     match expr {
         Expr::Call(span, head, args) => {
-            if head == "fresh!" {
+            if head == "unstable-fresh!" {
                 let sort_name = match args.as_slice() {
                     [Expr::Var(_, sort)] => sort.clone(),
                     _ => return Expr::Call(span, head, args),
