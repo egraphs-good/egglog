@@ -16,6 +16,7 @@ pub mod ast;
 mod cli;
 pub mod constraint;
 mod core;
+pub mod egraph_operations;
 pub mod extract;
 pub mod prelude;
 pub mod scheduler;
@@ -41,6 +42,7 @@ use egglog_ast::span::Span;
 use egglog_ast::util::ListDisplay;
 pub use egglog_bridge::FunctionRow;
 pub use egglog_bridge::match_term_app;
+pub use egglog_bridge::proof_format::{EqProofId, ProofStore, TermProofId};
 pub use egglog_bridge::termdag::{Term, TermDag, TermId};
 use egglog_bridge::{ColumnTy, QueryEntry, SourceExpr, SourceSyntax, TopLevelLhsExpr};
 use egglog_core_relations as core_relations;
@@ -48,6 +50,7 @@ use egglog_numeric_id as numeric_id;
 use egglog_numeric_id::NumericId;
 use egglog_reports::{ReportLevel, RunReport};
 use extract::{CostModel, DefaultCost, Extractor, TreeAdditiveCostModel};
+use indexmap::IndexSet;
 use indexmap::map::Entry;
 use log::{Level, log_enabled};
 use numeric_id::DenseIdMap;
@@ -903,7 +906,9 @@ impl EGraph {
         let result = result.lock().unwrap().unwrap();
         Ok(result)
     }
+}
 
+impl EGraph {
     fn add_combined_ruleset(&mut self, name: String, rulesets: Vec<String>) {
         match self.rulesets.entry(name.clone()) {
             Entry::Occupied(_) => panic!("Ruleset '{name}' was already present"),
@@ -1478,6 +1483,103 @@ impl EGraph {
         self.backend
             .get_canon_repr(val, sort.column_ty(&self.backend))
     }
+
+    /// Generate a proof explaining how a term was constructed in the e-graph.
+    ///
+    /// This method requires that the e-graph was created with [`EGraph::with_proofs()`].
+    /// The proof is stored in the provided `ProofStore` and can be printed or inspected.
+    ///
+    /// # Arguments
+    /// * `id` - The value representing the term to explain
+    /// * `store` - A mutable reference to a `ProofStore` where the proof will be stored
+    ///
+    /// # Returns
+    /// A `TermProofId` that can be used to print or traverse the proof.
+    ///
+    /// # Errors
+    /// Returns an error if:
+    /// - Proofs are not enabled (e-graph not created with `with_proofs()`)
+    /// - The proof cannot be reconstructed
+    ///
+    /// # Example
+    /// ```
+    /// # use egglog::prelude::*;
+    /// # use egglog::ProofStore;
+    /// let mut egraph = EGraph::with_proofs();
+    /// egraph.parse_and_run_program(None, "
+    ///     (datatype Math (Num i64) (Add Math Math))
+    ///     (let x (Add (Num 1) (Num 2)))
+    /// ").unwrap();
+    ///
+    /// // Get the value for x
+    /// let (_, x_value) = egraph.eval_expr(&expr!(x)).unwrap();
+    ///
+    /// // Generate a proof explaining how x was constructed
+    /// let mut store = ProofStore::default();
+    /// let proof_id = egraph.explain_term(x_value, &mut store).unwrap();
+    ///
+    /// // Print the proof
+    /// store.print_term_proof(proof_id, &mut std::io::stdout()).unwrap();
+    /// ```
+    pub fn explain_term(
+        &mut self,
+        id: Value,
+        store: &mut ProofStore,
+    ) -> egglog_bridge::Result<TermProofId> {
+        self.backend.explain_term(id, store)
+    }
+
+    /// Generate a proof explaining why two terms are equal in the e-graph.
+    ///
+    /// This method requires that the e-graph was created with [`EGraph::with_proofs()`].
+    /// The proof shows the sequence of rewrites that establish the equality between the two terms.
+    ///
+    /// # Arguments
+    /// * `id1` - The value representing the first term
+    /// * `id2` - The value representing the second term
+    /// * `store` - A mutable reference to a `ProofStore` where the proof will be stored
+    ///
+    /// # Returns
+    /// An `EqProofId` that can be used to print or traverse the equality proof.
+    ///
+    /// # Errors
+    /// Returns an error if:
+    /// - Proofs are not enabled (e-graph not created with `with_proofs()`)
+    /// - The two terms are not actually equal in the e-graph
+    /// - The proof cannot be reconstructed
+    ///
+    /// # Example
+    /// ```
+    /// # use egglog::prelude::*;
+    /// # use egglog::ProofStore;
+    /// let mut egraph = EGraph::with_proofs();
+    /// egraph.parse_and_run_program(None, "
+    ///     (datatype Math (Num i64) (Add Math Math))
+    ///     (rule ((Add x y)) ((union (Add x y) (Add y x))))
+    ///     (let a (Add (Num 1) (Num 2)))
+    ///     (let b (Add (Num 2) (Num 1)))
+    ///     (run 1)
+    /// ").unwrap();
+    ///
+    /// // Get the values for a and b
+    /// let (_, a_value) = egraph.eval_expr(&expr!(a)).unwrap();
+    /// let (_, b_value) = egraph.eval_expr(&expr!(b)).unwrap();
+    ///
+    /// // Generate a proof that a and b are equal
+    /// let mut store = ProofStore::default();
+    /// let proof_id = egraph.explain_terms_equal(a_value, b_value, &mut store).unwrap();
+    ///
+    /// // Print the proof
+    /// store.print_eq_proof(proof_id, &mut std::io::stdout()).unwrap();
+    /// ```
+    pub fn explain_terms_equal(
+        &mut self,
+        id1: Value,
+        id2: Value,
+        store: &mut ProofStore,
+    ) -> egglog_bridge::Result<EqProofId> {
+        self.backend.explain_terms_equal(id1, id2, store)
+    }
 }
 
 struct BackendRule<'a> {
@@ -1498,10 +1600,6 @@ struct RuleProofState {
 }
 
 impl RuleProofState {
-    /// Helper for `finish` that determines whether a mapped expression corresponds to a value that
-    /// ever appeared in the query bindings. Synthesized temporaries (e.g., helpers introduced by
-    /// global removal or rewrite instrumentation) never get bound, so we should omit them from the
-    /// reconstructed syntax.
     fn expr_is_synthesized<Head>(
         expr: &MappedExpr<Head, ResolvedVar>,
         ctx: &ProofContext<'_, '_>,
@@ -1658,9 +1756,9 @@ impl ProofSyntaxBuilder {
                     .expect("missing column type for variable");
                 let name = variable
                     .name
-                    .as_deref()
-                    .map(str::to_owned)
-                    .unwrap_or_else(|| format!("v{}", variable.id.rep()));
+                    .as_ref()
+                    .map(|n| Arc::<str>::from(n.as_ref()))
+                    .unwrap_or_else(|| Arc::<str>::from(format!("v{}", variable.id.rep())));
                 self.syntax.add_expr(SourceExpr::Var {
                     id: variable.id,
                     ty,
@@ -1738,6 +1836,9 @@ impl ProofSyntaxBuilder {
                         var: variable.id,
                         ty,
                         func: info.func,
+                        name: Arc::<str>::from(
+                            variable.name.as_ref().map(|n| n.as_ref()).unwrap_or(""),
+                        ),
                         args: arg_ids,
                     })
                 } else {

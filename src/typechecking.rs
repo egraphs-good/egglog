@@ -1,3 +1,4 @@
+use crate::ast::expr::ResolvedExpr;
 use crate::{
     core::{CoreRule, GenericActionsExt},
     *,
@@ -559,7 +560,7 @@ impl TypeInfo {
         Ok(())
     }
 
-    fn typecheck_facts(
+    pub(crate) fn typecheck_facts(
         &self,
         symbol_gen: &mut SymbolGen,
         facts: &[Fact],

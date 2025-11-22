@@ -97,3 +97,9 @@ macro_rules! var {
 
 // Rust macro annoyance; see stackoverflow.com/questions/26731243/how-do-i-use-a-macro-across-module-files
 pub use {call, lit, var};
+
+impl ResolvedVar {
+    pub fn name(&self) -> &str {
+        &self.name
+    }
+}

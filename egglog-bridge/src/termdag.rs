@@ -194,6 +194,12 @@ impl TermDag {
         node
     }
 
+    pub fn var_id(&mut self, sym: String) -> TermId {
+        let node = Term::Var(sym);
+        self.add_node(&node);
+        self.lookup(&node)
+    }
+
     fn add_node(&mut self, node: &Term) {
         if self.nodes.get(node).is_none() {
             self.nodes.insert(node.clone());
