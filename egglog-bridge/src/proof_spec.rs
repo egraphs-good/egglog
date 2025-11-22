@@ -13,9 +13,11 @@ use hashbrown::{HashMap, HashSet};
 use crate::{
     ColumnTy, EGraph, FunctionId, GetFirstMatch, QueryEntry, Result, RuleId, SideChannel,
     SourceExpr, TopLevelLhsExpr,
-    proof_format::{CongProof, EqProof, EqProofId, Premise, ProofStore, TermProof, TermProofId},
+    proof_format::{
+        CongProof, EqProof, EqProofId, Premise, ProofStore, RuleVarBinding, TermProof, TermProofId,
+    },
     rule::{AtomId, Bindings, DstVar, VariableId},
-    syntax::{RuleData, SourceSyntax, SyntaxId},
+    syntax::{RuleData, SourceSyntax, SourceVar, SyntaxId},
 };
 
 define_id!(pub(crate) ReasonSpecId, u32, "A unique identifier for the step in a proof.");
@@ -213,14 +215,18 @@ impl EGraph {
         RuleData { syntax, .. }: &RuleData,
         vars: &[Value],
         state: &mut ProofReconstructionState,
-    ) -> (DenseIdMap<VariableId, TermId>, Vec<Premise>) {
+    ) -> (Vec<RuleVarBinding>, Vec<Premise>) {
         // First, reconstruct terms for all the relevant variables.
-        let mut subst_term = DenseIdMap::<VariableId, TermId>::new();
+        let mut subst_term = Vec::with_capacity(syntax.vars.len());
         let mut subst_val = DenseIdMap::<VariableId, Value>::new();
-        for ((var, ty), term_id) in syntax.vars.iter().zip(vars) {
-            subst_val.insert(*var, *term_id);
+        for (SourceVar { id, ty, name }, term_id) in syntax.vars.iter().zip(vars) {
+            subst_val.insert(*id, *term_id);
             let term = self.reconstruct_term(*term_id, *ty, state);
-            subst_term.insert(*var, term);
+            subst_term.push(RuleVarBinding {
+                name: Arc::clone(name),
+                ty: *ty,
+                term,
+            });
         }
         let mut terms = DenseIdMap::<SyntaxId, Value>::new();
         let mut premises = Vec::new();
@@ -401,8 +407,6 @@ impl EGraph {
         let old_term_row = self.get_term_row(old_term_id);
         let new_term_row = self.get_term_row(new_term_id);
         let old_term_proof = self.explain_term_inner(old_term_id, state);
-        let old_term = self.reconstruct_term(old_term_id, ColumnTy::Id, state);
-        let new_term = self.reconstruct_term(new_term_id, ColumnTy::Id, state);
         let func_id = FunctionId::new(old_term_row[0].rep());
         debug_assert_eq!(
             old_term_row[0], new_term_row[0],
@@ -411,6 +415,8 @@ impl EGraph {
         let info = &self.funcs[func_id];
         let schema = info.schema.clone();
         let mut args_eq_proofs = Vec::with_capacity(schema.len() - 1);
+        let old_term = self.reconstruct_term(old_term_id, ColumnTy::Id, state);
+        let new_term = self.reconstruct_term(new_term_id, ColumnTy::Id, state);
         for (i, (ty, (lhs, rhs))) in schema[0..schema.len() - 1]
             .iter()
             .zip(old_term_row[1..].iter().zip(new_term_row[1..].iter()))
@@ -420,8 +426,6 @@ impl EGraph {
                 ColumnTy::Id => self.explain_terms_equal_inner(*lhs, *rhs, state),
                 ColumnTy::Base(_) => {
                     assert_eq!(lhs, rhs, "congruence proof must have equal base values");
-                    // For an equality proof, we first need an existence proof, which we can get by
-                    // doing a projection from the existence proof of `old_term`.
                     let arg_exists = state.store.intern_term(&TermProof::PProj {
                         pf_f_args_ok: old_term_proof,
                         arg_idx: i,
@@ -432,12 +436,13 @@ impl EGraph {
             };
             args_eq_proofs.push(eq_proof);
         }
+        let func_name = Arc::from(self.funcs[func_id].name.as_ref());
         CongProof {
             pf_args_eq: args_eq_proofs,
             pf_f_args_ok: old_term_proof,
             old_term,
             new_term,
-            func: func_id,
+            func: func_name,
         }
     }
 

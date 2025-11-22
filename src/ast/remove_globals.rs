@@ -5,6 +5,7 @@
 //! When a globally-bound primitive value is used in the actions of a rule,
 //! we add a new variable to the query bound to the primitive value.
 
+use crate::ast::expr::ResolvedExpr;
 use crate::*;
 use crate::{core::ResolvedCall, typechecking::FuncType};
 use egglog_ast::generic_ast::{GenericAction, GenericExpr, GenericFact, GenericRule};
