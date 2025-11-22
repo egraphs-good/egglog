@@ -1,5 +1,5 @@
-use crate::*;
 use crate::ast::expr::ResolvedExpr;
+use crate::*;
 
 #[derive(Clone, Debug, Default)]
 pub(crate) struct Names(HashMap<String, Span>);
