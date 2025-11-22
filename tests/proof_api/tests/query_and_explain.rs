@@ -32,7 +32,7 @@ fn test_query_and_explain_match() {
     // Query for all Add expressions with a name bound to them
     // This will match both the original expressions and the ones created by the commutative rule
     let matches = egraph
-        .get_matches(&[Fact::Eq(span!(), expr!(lhs), expr!((Add x y)))])
+        .get_matches(facts![(Fact (= lhs (Add x y)))])
         .unwrap();
 
     println!("Found {} matches", matches.len());
