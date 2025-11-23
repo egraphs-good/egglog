@@ -1589,265 +1589,20 @@ struct BackendRule<'a> {
     type_info: &'a TypeInfo,
     var_types: DenseIdMap<egglog_bridge::VariableId, ColumnTy>,
     resolved_var_entries: HashMap<ResolvedVar, QueryEntry>,
-    proof_state: Option<RuleProofState>,
+    proof_state: Option<ProofState>,
 }
 
-#[derive(Default)]
-struct RuleProofState {
-    mapped_facts: Vec<MappedFact<ResolvedCall, ResolvedVar>>,
-    function_calls: DenseIdMap<egglog_bridge::VariableId, FunctionCallInfo>,
-    primitive_calls: DenseIdMap<egglog_bridge::VariableId, PrimitiveCallInfo>,
+struct ProofState {
+    facts: Vec<MappedFact<ResolvedCall, ResolvedVar>>,
+    syntax_env: SourceSyntax,
 }
 
-impl RuleProofState {
-    fn expr_is_synthesized<Head>(
-        expr: &MappedExpr<Head, ResolvedVar>,
-        ctx: &ProofContext<'_, '_>,
-    ) -> bool
-    where
-        Head: Clone + Display,
-    {
-        match expr {
-            GenericExpr::Var(_, var) => ctx.var_entry(var).is_none(),
-            GenericExpr::Lit(_, _) => false,
-            GenericExpr::Call(_, head, _) => ctx.var_entry(&head.to).is_none(),
+impl ProofState {
+    fn new(facts: Vec<MappedFact<ResolvedCall, ResolvedVar>>) -> ProofState {
+        ProofState {
+            facts,
+            syntax_env: Default::default(),
         }
-    }
-
-    fn finish(&mut self, rule: &BackendRule<'_>) -> SourceSyntax {
-        if self.mapped_facts.is_empty() {
-            return SourceSyntax::default();
-        }
-        let mut builder = ProofSyntaxBuilder::new();
-        let ctx = ProofContext {
-            rule,
-            function_calls: &self.function_calls,
-            primitive_calls: &self.primitive_calls,
-        };
-        for fact in &self.mapped_facts {
-            match fact {
-                GenericFact::Fact(expr) => {
-                    if Self::expr_is_synthesized(expr, &ctx) {
-                        continue;
-                    }
-                    let syntax_id = builder.expr(expr, &ctx);
-                    builder
-                        .syntax
-                        .add_toplevel_expr(TopLevelLhsExpr::Exists(syntax_id));
-                }
-                GenericFact::Eq(_, lhs, rhs) => {
-                    // Extra code  for respecting $rewrite_var__ desugaring in proofs.
-                    //
-                    // (rewrite X Y) should look like (exists X)
-                    let lhs_is_synthesized = Self::expr_is_synthesized(lhs, &ctx);
-                    let rhs_is_synthesized = Self::expr_is_synthesized(rhs, &ctx);
-                    match (lhs_is_synthesized, rhs_is_synthesized) {
-                        (true, true) => {} // equality only involves synthesized temporaries.
-                        (true, false) => {
-                            let rhs_id = builder.expr(rhs, &ctx);
-                            // Only the non-synthesized side needs to appear in the reconstructed
-                            // syntax.
-                            builder
-                                .syntax
-                                .add_toplevel_expr(TopLevelLhsExpr::Exists(rhs_id));
-                        }
-                        (false, true) => {
-                            let lhs_id = builder.expr(lhs, &ctx);
-                            // Only the non-synthesized side needs to appear in the reconstructed
-                            // syntax.
-                            builder
-                                .syntax
-                                .add_toplevel_expr(TopLevelLhsExpr::Exists(lhs_id));
-                        }
-                        (false, false) => {
-                            let lhs_id = builder.expr(lhs, &ctx);
-                            let rhs_id = builder.expr(rhs, &ctx);
-                            builder
-                                .syntax
-                                .add_toplevel_expr(TopLevelLhsExpr::Eq(lhs_id, rhs_id));
-                        }
-                    }
-                }
-            }
-        }
-        builder.finish()
-    }
-}
-
-struct FunctionCallInfo {
-    func: egglog_bridge::FunctionId,
-    atom: egglog_bridge::AtomId,
-}
-
-struct PrimitiveCallInfo {
-    func: ExternalFunctionId,
-}
-
-struct ProofContext<'a, 'b> {
-    rule: &'a BackendRule<'b>,
-    function_calls: &'a DenseIdMap<egglog_bridge::VariableId, FunctionCallInfo>,
-    primitive_calls: &'a DenseIdMap<egglog_bridge::VariableId, PrimitiveCallInfo>,
-}
-
-impl<'a, 'b> ProofContext<'a, 'b> {
-    fn var_entry(&self, var: &ResolvedVar) -> Option<&QueryEntry> {
-        self.rule.resolved_var_entries.get(var)
-    }
-
-    fn var_type(&self, id: egglog_bridge::VariableId) -> Option<ColumnTy> {
-        self.rule.var_types.get(id).copied()
-    }
-
-    fn function_call(&self, id: egglog_bridge::VariableId) -> Option<&FunctionCallInfo> {
-        self.function_calls.get(id)
-    }
-
-    fn primitive_call(&self, id: egglog_bridge::VariableId) -> Option<&PrimitiveCallInfo> {
-        self.primitive_calls.get(id)
-    }
-}
-
-struct ProofSyntaxBuilder {
-    syntax: SourceSyntax,
-    var_cache: HashMap<ResolvedVar, egglog_bridge::syntax::SyntaxId>,
-    const_cache: HashMap<(ColumnTy, u32), egglog_bridge::syntax::SyntaxId>,
-}
-
-impl ProofSyntaxBuilder {
-    fn new() -> Self {
-        Self {
-            syntax: SourceSyntax::default(),
-            var_cache: HashMap::default(),
-            const_cache: HashMap::default(),
-        }
-    }
-
-    fn finish(self) -> SourceSyntax {
-        self.syntax
-    }
-
-    fn expr(
-        &mut self,
-        expr: &MappedExpr<ResolvedCall, ResolvedVar>,
-        ctx: &ProofContext<'_, '_>,
-    ) -> egglog_bridge::syntax::SyntaxId {
-        match expr {
-            GenericExpr::Var(_, var) => self.var(var, ctx),
-            GenericExpr::Lit(_, lit) => self.literal(lit, ctx),
-            GenericExpr::Call(_, head, children) => self.call(head, children, ctx),
-        }
-    }
-
-    fn var(
-        &mut self,
-        var: &ResolvedVar,
-        ctx: &ProofContext<'_, '_>,
-    ) -> egglog_bridge::syntax::SyntaxId {
-        if let Some(id) = self.var_cache.get(var) {
-            return *id;
-        }
-        let entry = ctx
-            .var_entry(var)
-            .unwrap_or_else(|| panic!("resolved var missing from query bindings: {}", var.name));
-        let syntax_id = match entry {
-            QueryEntry::Var(variable) => {
-                let ty = ctx
-                    .var_type(variable.id)
-                    .expect("missing column type for variable");
-                let name = variable
-                    .name
-                    .as_ref()
-                    .map(|n| Arc::<str>::from(n.as_ref()))
-                    .unwrap_or_else(|| Arc::<str>::from(format!("v{}", variable.id.rep())));
-                self.syntax.add_expr(SourceExpr::Var {
-                    id: variable.id,
-                    ty,
-                    name,
-                })
-            }
-            QueryEntry::Const { .. } => {
-                let QueryEntry::Const { val, ty } = entry.clone() else {
-                    unreachable!();
-                };
-                if let Some(id) = self.const_cache.get(&(ty, val.rep())) {
-                    *id
-                } else {
-                    let syntax_id = self.syntax.add_expr(SourceExpr::Const { ty, val });
-                    self.const_cache.insert((ty, val.rep()), syntax_id);
-                    syntax_id
-                }
-            }
-        };
-        self.var_cache.insert(var.clone(), syntax_id);
-        syntax_id
-    }
-
-    fn literal(
-        &mut self,
-        lit: &Literal,
-        ctx: &ProofContext<'_, '_>,
-    ) -> egglog_bridge::syntax::SyntaxId {
-        let entry = ctx.rule.rb.egraph().literal_to_entry(lit);
-        let QueryEntry::Const { val, ty } = entry else {
-            unreachable!();
-        };
-        if let Some(id) = self.const_cache.get(&(ty, val.rep())) {
-            return *id;
-        }
-        let syntax_id = self.syntax.add_expr(SourceExpr::Const { ty, val });
-        self.const_cache.insert((ty, val.rep()), syntax_id);
-        syntax_id
-    }
-
-    fn call(
-        &mut self,
-        head: &CorrespondingVar<ResolvedCall, ResolvedVar>,
-        children: &[MappedExpr<ResolvedCall, ResolvedVar>],
-        ctx: &ProofContext<'_, '_>,
-    ) -> egglog_bridge::syntax::SyntaxId {
-        if let Some(id) = self.var_cache.get(&head.to) {
-            return *id;
-        }
-        let entry = ctx
-            .var_entry(&head.to)
-            .expect("call result missing from bindings");
-        let QueryEntry::Var(variable) = entry else {
-            panic!("expected variable entry for call result");
-        };
-        let arg_ids: Vec<_> = children.iter().map(|c| self.expr(c, ctx)).collect();
-        let syntax_id = match &head.head {
-            ResolvedCall::Func(_) => {
-                if let Some(info) = ctx.function_call(variable.id) {
-                    self.syntax.add_expr(SourceExpr::FunctionCall {
-                        func: info.func,
-                        atom: info.atom,
-                        args: arg_ids,
-                    })
-                } else {
-                    return self.var(&head.to, ctx);
-                }
-            }
-            ResolvedCall::Primitive(_) => {
-                if let Some(info) = ctx.primitive_call(variable.id) {
-                    let ty = ctx
-                        .var_type(variable.id)
-                        .expect("missing column type for primitive result");
-                    self.syntax.add_expr(SourceExpr::ExternalCall {
-                        var: variable.id,
-                        ty,
-                        func: info.func,
-                        name: Arc::<str>::from(
-                            variable.name.as_ref().map(|n| n.as_ref()).unwrap_or(""),
-                        ),
-                        args: arg_ids,
-                    })
-                } else {
-                    return self.var(&head.to, ctx);
-                }
-            }
-        };
-        self.var_cache.insert(head.to.clone(), syntax_id);
-        syntax_id
     }
 }
 
@@ -1859,14 +1614,6 @@ impl<'a> BackendRule<'a> {
         mapped_facts: Vec<MappedFact<ResolvedCall, ResolvedVar>>,
     ) -> BackendRule<'a> {
         let proofs_enabled = rb.egraph().proofs_enabled();
-        let proof_state = if proofs_enabled {
-            Some(RuleProofState {
-                mapped_facts,
-                ..Default::default()
-            })
-        } else {
-            None
-        };
 
         BackendRule {
             rb,
@@ -1875,7 +1622,7 @@ impl<'a> BackendRule<'a> {
             entries: Default::default(),
             var_types: Default::default(),
             resolved_var_entries: Default::default(),
-            proof_state,
+            proof_state: proofs_enabled.then(move || ProofState::new(mapped_facts)),
         }
     }
 
@@ -1982,28 +1729,11 @@ impl<'a> BackendRule<'a> {
                         false => Some(false),
                     };
                     let atom_id = self.rb.query_table(f_id, &args, is_subsumed).unwrap();
-                    if let Some(proof_state) = self.proof_state.as_mut() {
-                        if let Some(QueryEntry::Var(var)) = args.last() {
-                            proof_state.function_calls.insert(
-                                var.id,
-                                FunctionCallInfo {
-                                    func: f_id,
-                                    atom: atom_id,
-                                },
-                            );
-                        }
-                    }
+                    // TODO: use this!
                 }
                 ResolvedCall::Primitive(p) => {
                     let (ext_id, args, ty) = self.prim(p, &atom.args);
                     self.rb.query_prim(ext_id, &args, ty).unwrap();
-                    if let Some(proof_state) = self.proof_state.as_mut() {
-                        if let Some(QueryEntry::Var(var)) = args.last() {
-                            proof_state
-                                .primitive_calls
-                                .insert(var.id, PrimitiveCallInfo { func: ext_id });
-                        }
-                    }
                 }
             }
         }
@@ -2077,10 +1807,10 @@ impl<'a> BackendRule<'a> {
 
     fn build(mut self) -> egglog_bridge::RuleId {
         if let Some(mut proof_state) = self.proof_state.take() {
-            let syntax = proof_state.finish(&self);
-            return self.rb.build_with_syntax(syntax);
+            todo!("DO PROOFS")
+        } else {
+            self.rb.build()
         }
-        self.rb.build()
     }
 }
 
