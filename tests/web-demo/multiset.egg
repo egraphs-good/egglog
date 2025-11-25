@@ -1,28 +1,28 @@
 (datatype Math (Num i64))
-(sort MathToMath (UnstableFn (Math) Math))
+
 (sort Maths (MultiSet Math))
 
 (let xs (multiset-of (Num 1) (Num 2) (Num 3)))
 
 ;; verify equal to other ordering
 (check (=
-    (multiset-of (Num 3) (Num 2) (Num 1))
-    xs
-))
+        (multiset-of (Num 3) (Num 2) (Num 1))
+        xs
+    ))
 
 ;; verify not equal to different counts
 (check (!=
-    (multiset-of (Num 3) (Num 2) (Num 1) (Num 1))
-    xs
-))
+        (multiset-of (Num 3) (Num 2) (Num 1) (Num 1))
+        xs
+    ))
 
 ;; Unclear why check won't work if this is defined inline
 (let inserted (multiset-insert xs (Num 4)))
 ;; insert
 (check (=
-    (multiset-of (Num 1) (Num 2) (Num 3) (Num 4))
-    inserted
-))
+        (multiset-of (Num 1) (Num 2) (Num 3) (Num 4))
+        inserted
+    ))
 
 
 ;; contains and not contains
@@ -31,9 +31,9 @@
 
 ;; remove last
 (check (=
-    (multiset-of (Num 1) (Num 3))
-    (multiset-remove xs (Num 2))
-))
+        (multiset-of (Num 1) (Num 3))
+        (multiset-remove xs (Num 2))
+    ))
 ;; remove one of
 (check (= (multiset-of (Num 1)) (multiset-remove (multiset-of (Num 1) (Num 1)) (Num 1))))
 
@@ -47,24 +47,54 @@
 (check (= (Num 1) (multiset-pick (multiset-of (Num 1)))))
 
 ;; map
+(push)
 (constructor square (Math) Math)
 (rewrite (square (Num x)) (Num (* x x)))
+(sort MathToMath (UnstableFn (Math) Math))
 
 (let squared-xs (unstable-multiset-map (unstable-fn "square") xs))
 (run 1)
 (check (=
-    (multiset-of (Num 1) (Num 4) (Num 9))
-    squared-xs
-))
+        (multiset-of (Num 1) (Num 4) (Num 9))
+        squared-xs
+    ))
 
 ;; sum
 (check (=
-    (multiset-sum (multiset-of (Num 1) (Num 2) (Num 3)) (multiset-of (Num 1) (Num 2) (Num 4)))
-    (multiset-of (Num 1) (Num 4) (Num 2) (Num 3) (Num 2) (Num 1))
-))
+        (multiset-sum (multiset-of (Num 1) (Num 2) (Num 3)) (multiset-of (Num 1) (Num 2) (Num 4)))
+        (multiset-of (Num 1) (Num 4) (Num 2) (Num 3) (Num 2) (Num 1))
+    ))
 
 ;; verify that sum computes length
 (check (=
-    (multiset-length (multiset-sum (multiset-of (Num 1) (Num 2) (Num 3)) (multiset-of (Num 1) (Num 2) (Num 4))))
-    6
-))
+        (multiset-length (multiset-sum (multiset-of (Num 1) (Num 2) (Num 3)) (multiset-of (Num 1) (Num 2) (Num 4))))
+        6
+    ))
+(pop)
+;; Verify multiset of multiset
+(sort Mathss (MultiSet Maths))
+(let xx (multiset-of (multiset-of (Num 1) (Num 2) (Num 3)) (multiset-of (Num 1) (Num 2) (Num 3))))
+(union (Num 1) (Num 2))
+(check (= xx (multiset-of (multiset-of (Num 2) (Num 2) (Num 3)) (multiset-of (Num 2) (Num 2) (Num 3)))))
+
+;; Verify unstable multiset fill index and counting
+(constructor product (Maths) Math)
+(let aa (Num 100))
+(let zz (product xs))
+
+(function ms-count (Maths Math) i64 :merge (+ old new))
+(sort MSIndexFn (UnstableFn (Maths Math) i64))
+; Fill index tables for products
+(rule
+    ((= outer (product inner)))
+    ((unstable-multiset-fill-index inner (unstable-fn "ms-count")))
+)
+(run 10)
+(check (= 2 (ms-count xs (Num 1))))
+; Verify stays the same even if unioned and run again
+(union zz aa)
+(run 10)
+(check (= 2 (ms-count xs (Num 1))))
+; Verify updates properly after unioning child
+(union (Num 1) (Num 3))
+(check (= 3 (ms-count xs (Num 1))))

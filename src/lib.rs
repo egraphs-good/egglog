@@ -208,7 +208,7 @@ pub struct EGraph {
     rulesets: IndexMap<String, Ruleset>,
     pub fact_directory: Option<PathBuf>,
     pub seminaive: bool,
-    type_info: TypeInfo,
+    pub type_info: TypeInfo,
     /// The run report unioned over all runs so far.
     overall_run_report: RunReport,
     schedulers: DenseIdMap<SchedulerId, SchedulerRecord>,

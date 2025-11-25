@@ -50,6 +50,8 @@ impl Presort for MultiSetSort {
             "multiset-length",
             "multiset-sum",
             "unstable-multiset-map",
+            "unstable-multiset-fill-index",
+            "unstable-multiset-clear-index",
         ]
     }
 
@@ -62,14 +64,6 @@ impl Presort for MultiSetSort {
             let e = typeinfo
                 .get_sort_by_name(e)
                 .ok_or(TypeError::UndefinedSort(e.clone(), span.clone()))?;
-
-            if e.is_eq_container_sort() {
-                return Err(TypeError::DisallowedSort(
-                    name,
-                    "Multisets nested with other EqSort containers are not allowed".into(),
-                    span.clone(),
-                ));
-            }
 
             let out = Self {
                 name,
@@ -116,7 +110,7 @@ impl ContainerSort for MultiSetSort {
         let arc = self.clone().to_arcsort();
 
         add_primitive!(eg, "multiset-of" = {self.clone(): MultiSetSort} [xs: # (self.element())] -> @MultiSetContainer (arc) { MultiSetContainer {
-            do_rebuild: self.ctx.element.is_eq_sort(),
+            do_rebuild: self.ctx.element.is_eq_sort() || self.ctx.element.is_eq_container_sort(),
             data: xs.collect()
         } });
 
@@ -130,21 +124,51 @@ impl ContainerSort for MultiSetSort {
 
         add_primitive!(eg, "multiset-sum" = |xs: @MultiSetContainer (arc), ys: @MultiSetContainer (arc)| -> @MultiSetContainer (arc) { MultiSetContainer { data: xs.data.sum(ys.data), ..xs } });
 
-        // Only include map function if we already declared a function sort with the correct signature
-        let fn_sorts = eg.type_info.get_sorts_by(|s: &Arc<FunctionSort>| {
-            (s.inputs().len() == 1)
-                && (s.inputs()[0].name() == self.element.name())
-                && (s.output().name() == self.element.name())
+        let inner_name = self.element.name().to_string();
+        let inner_name_cloned = inner_name.clone();
+        let self_cloned = arc.clone();
+        // For Map, support either defining MultiSet sort or Fn sort first
+        let register_map = Box::new(move |fn_: Arc<FunctionSort>, eg: &mut EGraph| {
+            // Add map if we have a function from E -> E
+            if fn_.inputs().len() == 1
+                && fn_.inputs()[0].name() == inner_name_cloned.clone()
+                && fn_.output().name() == inner_name_cloned.clone()
+            {
+                eg.add_primitive(Map {
+                    name: "unstable-multiset-map".into(),
+                    multiset: self_cloned.clone(),
+                    fn_: fn_.clone(),
+                });
+            }
         });
-        match fn_sorts.len() {
-            0 => {}
-            1 => eg.add_primitive(Map {
-                name: "unstable-multiset-map".into(),
-                multiset: arc,
-                fn_: fn_sorts.into_iter().next().unwrap(),
-            }),
-            _ => panic!("too many applicable function sorts"),
+        for fn_sort in eg.type_info.get_sorts::<FunctionSort>() {
+            register_map(fn_sort.clone(), eg);
         }
+
+        let mut register = REGISTER_FN_PRIMITIVES.lock().unwrap();
+        register.push(register_map);
+        // For FillIndex, you have to define the multiset sort first since the function sort depends on it
+        register.push(Box::new(move |fn_: Arc<FunctionSort>, eg: &mut EGraph| {
+            // add fill-index if we have a function from (MultiSet[E], E) -> I64
+            if fn_.inputs().len() == 2
+                && fn_.inputs()[0].name() == arc.name()
+                && fn_.inputs()[1].name() == inner_name
+                && fn_.output().name() == "i64"
+            {
+                eg.add_primitive(FillIndex {
+                    name: "unstable-multiset-fill-index".into(),
+                    multiset: arc.clone(),
+                    unit: eg.type_info.get_sort_by_name("Unit").unwrap().clone(),
+                    fn_: fn_.clone(),
+                });
+                eg.add_primitive(ClearIndex {
+                    name: "unstable-multiset-clear-index".into(),
+                    multiset: arc.clone(),
+                    unit: eg.type_info.get_sort_by_name("Unit").unwrap().clone(),
+                    fn_,
+                });
+            }
+        }));
     }
 
     fn reconstruct_termdag(
@@ -215,6 +239,107 @@ impl Primitive for Map {
     }
 }
 
+// (unstable-multiset-fill-index ms: MultiSet[X] index_fn: [MultiSet[X], X] -> i64) -> Unit
+// will set the index function for all elements in the multiset
+#[derive(Clone)]
+struct FillIndex {
+    name: String,
+    multiset: ArcSort,
+    unit: ArcSort,
+    fn_: Arc<FunctionSort>,
+}
+
+impl Primitive for FillIndex {
+    fn name(&self) -> &str {
+        &self.name
+    }
+
+    fn get_type_constraints(&self, span: &Span) -> Box<dyn TypeConstraint> {
+        SimpleTypeConstraint::new(
+            self.name(),
+            vec![self.multiset.clone(), self.fn_.clone(), self.unit.clone()],
+            span.clone(),
+        )
+        .into_box()
+    }
+
+    fn apply(&self, exec_state: &mut ExecutionState, args: &[Value]) -> Option<Value> {
+        let fc = exec_state
+            .container_values()
+            .get_val::<FunctionContainer>(args[1])
+            .unwrap()
+            .clone();
+        let multiset = exec_state
+            .container_values()
+            .get_val::<MultiSetContainer>(args[0])
+            .unwrap()
+            .clone();
+        let ResolvedFunctionId::Lookup(mut action) = fc.0 else {
+            panic!(
+                "Primitive functions cannot be used with unstable-multiset-fill-index, since they cannot be set"
+            );
+        };
+        for (v, c) in multiset.data.iter_counts() {
+            let mut row = vec![args[0].clone(), v];
+            // If we have already filled this multiset once, skip since it should still be accurate with the right
+            // merge function
+            if action.lookup(exec_state, &row).is_some() {
+                break;
+            }
+            row.push(exec_state.base_values().get::<i64>(c.try_into().unwrap()));
+            action.insert(exec_state, row.into_iter());
+        }
+        Some(exec_state.base_values().get::<()>(()))
+    }
+}
+
+// (unstable-multiset-clear-index ms: MultiSet[X] index_fn: [MultiSet[X], X] -> i64) -> Unit
+// will clear the index function for all elements in the multiset
+#[derive(Clone)]
+struct ClearIndex {
+    name: String,
+    multiset: ArcSort,
+    unit: ArcSort,
+    fn_: Arc<FunctionSort>,
+}
+
+impl Primitive for ClearIndex {
+    fn name(&self) -> &str {
+        &self.name
+    }
+
+    fn get_type_constraints(&self, span: &Span) -> Box<dyn TypeConstraint> {
+        SimpleTypeConstraint::new(
+            self.name(),
+            vec![self.multiset.clone(), self.fn_.clone(), self.unit.clone()],
+            span.clone(),
+        )
+        .into_box()
+    }
+
+    fn apply(&self, exec_state: &mut ExecutionState, args: &[Value]) -> Option<Value> {
+        let fc = exec_state
+            .container_values()
+            .get_val::<FunctionContainer>(args[1])
+            .unwrap()
+            .clone();
+        let multiset = exec_state
+            .container_values()
+            .get_val::<MultiSetContainer>(args[0])
+            .unwrap()
+            .clone();
+        let ResolvedFunctionId::Lookup(action) = fc.0 else {
+            panic!(
+                "Primitive functions cannot be used with unstable-multiset-clear-index, since they cannot be deleted"
+            );
+        };
+        for (v, _) in multiset.data.iter_counts() {
+            action.remove(exec_state, &[args[0].clone(), v]);
+        }
+        Some(exec_state.base_values().get::<()>(()))
+    }
+}
+
 // Place multiset in its own module to keep implementation details private from sort
 mod inner {
     use std::collections::BTreeMap;
@@ -249,6 +374,11 @@ mod inner {
         /// Return an iterator over all elements in the multiset.
         pub fn iter(&self) -> impl Iterator<Item = &T> {
             self.0.iter().flat_map(|(k, v)| std::iter::repeat_n(k, *v))
+        }
+
+        /// Return an iterator over values and counts
+        pub fn iter_counts(&self) -> impl Iterator<Item = (T, usize)> {
+            self.0.iter().map(|(k, v)| (k.clone(), *v))
         }
 
         /// Return an arbitrary element from the multiset.

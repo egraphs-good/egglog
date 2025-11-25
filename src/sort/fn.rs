@@ -10,10 +10,12 @@
 //! The value is stored similar to the `vec` sort, as an index into a set, where each item in
 //! the set is a `(Symbol, Vec<Value>)` pairs. The Symbol is the function name, and the `Vec<Value>` is
 //! the list of partially applied arguments.
+use std::sync::{LazyLock, Mutex};
+
 use super::*;
 
 #[derive(Clone, Debug, PartialEq, Eq, Hash)]
-pub struct FunctionContainer(ResolvedFunctionId, pub Vec<(bool, Value)>, pub String);
+pub struct FunctionContainer(pub ResolvedFunctionId, pub Vec<(bool, Value)>, pub String);
 
 impl ContainerValue for FunctionContainer {
     fn rebuild_contents(&mut self, rebuilder: &dyn Rebuilder) -> bool {
@@ -31,6 +33,10 @@ impl ContainerValue for FunctionContainer {
         self.1.iter().map(|(_, v)| v).copied()
     }
 }
+// List of functions taking a FunctionSort and a mutable e-graph and registering the necessary primitives.
+pub static REGISTER_FN_PRIMITIVES: LazyLock<
+    Mutex<Vec<Box<dyn Fn(Arc<FunctionSort>, &mut EGraph) + Send + Sync>>>,
+> = LazyLock::new(|| Mutex::new(vec![]));
 
 #[derive(Debug)]
 pub struct FunctionSort {
@@ -165,6 +171,11 @@ impl Sort for FunctionSort {
             name: "unstable-app".into(),
             function: self.clone(),
         });
+        // Register additional higher order primitives
+        let registry = REGISTER_FN_PRIMITIVES.lock().unwrap();
+        for fn_ in registry.iter() {
+            fn_(self.clone(), eg)
+        }
     }
 
     fn value_type(&self) -> Option<TypeId> {
