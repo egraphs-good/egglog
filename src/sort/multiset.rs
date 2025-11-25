@@ -52,6 +52,7 @@ impl Presort for MultiSetSort {
             "unstable-multiset-map",
             "unstable-multiset-fill-index",
             "unstable-multiset-clear-index",
+            "unstable-multiset-flat-map",
         ]
     }
 
@@ -149,7 +150,7 @@ impl ContainerSort for MultiSetSort {
         register.push(register_map);
         // For FillIndex, you have to define the multiset sort first since the function sort depends on it
         register.push(Box::new(move |fn_: Arc<FunctionSort>, eg: &mut EGraph| {
-            // add fill-index if we have a function from (MultiSet[E], E) -> I64
+            // add fill-index and clear-index if we have a function from (MultiSet[E], E) -> I64
             if fn_.inputs().len() == 2
                 && fn_.inputs()[0].name() == arc.name()
                 && fn_.inputs()[1].name() == inner_name
@@ -165,7 +166,18 @@ impl ContainerSort for MultiSetSort {
                     name: "unstable-multiset-clear-index".into(),
                     multiset: arc.clone(),
                     unit: eg.type_info.get_sort_by_name("Unit").unwrap().clone(),
-                    fn_,
+                    fn_: fn_.clone(),
+                });
+            }
+            // Add flat-map if we have a function from E -> MultiSet[E]
+            if fn_.inputs().len() == 1
+                && fn_.inputs()[0].name() == inner_name
+                && fn_.output().name() == arc.name()
+            {
+                eg.add_primitive(FlatMap {
+                    name: "unstable-multiset-flat-map".into(),
+                    multiset: arc.clone(),
+                    fn_: fn_.clone(),
                 });
             }
         }));
@@ -340,6 +352,73 @@ impl Primitive for ClearIndex {
     }
 }
 
+// (unstable-multiset-flat-map (MultiSet[X], [X] -> MultiSet[X]) -> MultiSet[X])
+// will map the function over all elements in the multiset and flatten the result. Any element in the multiset
+// which does not have the function defined for it will be kept as-is.
+#[derive(Clone)]
+struct FlatMap {
+    name: String,
+    multiset: ArcSort,
+    fn_: Arc<FunctionSort>,
+}
+
+impl Primitive for FlatMap {
+    fn name(&self) -> &str {
+        &self.name
+    }
+
+    fn get_type_constraints(&self, span: &Span) -> Box<dyn TypeConstraint> {
+        SimpleTypeConstraint::new(
+            self.name(),
+            vec![
+                self.fn_.clone(),
+                self.multiset.clone(),
+                self.multiset.clone(),
+            ],
+            span.clone(),
+        )
+        .into_box()
+    }
+
+    fn apply(&self, exec_state: &mut ExecutionState, args: &[Value]) -> Option<Value> {
+        let fc = exec_state
+            .container_values()
+            .get_val::<FunctionContainer>(args[0])
+            .unwrap()
+            .clone();
+        let multiset = exec_state
+            .container_values()
+            .get_val::<MultiSetContainer>(args[1])
+            .unwrap()
+            .clone();
+        let mut new_data = MultiSet::<Value>::new();
+        for (v, c) in multiset.data.iter_counts() {
+            let mapped = fc.apply(exec_state, &[v]);
+            if let Some(mapped_ms) = mapped {
+                let mapped_ms = exec_state
+                    .container_values()
+                    .get_val::<MultiSetContainer>(mapped_ms)
+                    .unwrap();
+                for (mv, mc) in mapped_ms.data.iter_counts() {
+                    new_data.insert_multiple_mut(mv, c * mc);
+                }
+            } else {
+                new_data.insert_multiple_mut(v, c);
+            }
+        }
+        let new_container = MultiSetContainer {
+            data: new_data,
+            ..multiset
+        };
+        Some(
+            exec_state
+                .clone()
+                .container_values()
+                .register_val(new_container, exec_state),
+        )
+    }
+}
+
 // Place multiset in its own module to keep implementation details private from sort
 mod inner {
     use std::collections::BTreeMap;
@@ -407,7 +486,7 @@ mod inner {
             }
         }
 
-        fn insert_multiple_mut(&mut self, value: T, n: usize) {
+        pub fn insert_multiple_mut(&mut self, value: T, n: usize) {
             self.1 += n;
             if let Some(v) = self.0.get(&value) {
                 self.0.insert(value, v + n);

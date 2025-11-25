@@ -71,6 +71,18 @@
         6
     ))
 (pop)
+
+; flat-map
+(push)
+(function to-multiset (Math) Maths :no-merge)
+(set (to-multiset (Num 1)) (multiset-of (Num 1) (Num 1)))
+(sort MathsToMaths (UnstableFn (Math) Maths))
+(check (=
+        (unstable-multiset-flat-map (unstable-fn "to-multiset") (multiset-of (Num 1) (Num 2)))
+        (multiset-of (Num 1) (Num 1) (Num 2))
+    ))
+(pop)
+
 ;; Verify multiset of multiset
 (sort Mathss (MultiSet Maths))
 (let xx (multiset-of (multiset-of (Num 1) (Num 2) (Num 3)) (multiset-of (Num 1) (Num 2) (Num 3))))
