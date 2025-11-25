@@ -3,13 +3,62 @@
 //! applications. It is the successor to the rust library [egg](https://github.com/egraphs-good/egg).
 //! egglog is faster and more general than egg.
 //!
-//! # Documentation
-//! Documentation for the egglog language can be found
-//! here: [`Command`]
-//!
 //! # Tutorial
 //! [Here](https://www.youtube.com/watch?v=N2RDQGRBrSY) is the video tutorial on what egglog is and how to use it.
 //! We plan to have a text tutorial here soon, PRs welcome!
+//!
+//! # Documentation
+//! Most documentation for the egglog language can be found here: [`Command`].
+//!
+//! ## Syntactic Sugar: `unstable-fresh!`
+//! Egglog supports a small amount of surface sugar that desugars into core
+//! commands before typechecking and execution. One such sugar is `unstable-fresh!`, which
+//! generates fresh identifiers of a specified sort in rule actions.
+//!
+//! - Syntax: `(unstable-fresh! <Sort>)`
+//! - Where: Allowed only in rule actions (the head), not in queries (the body).
+//! - Purpose: Produce a fresh value of `<Sort>` per match of a rule, optionally
+//!   used inside larger expressions on the action side.
+//!
+//! ### Desugaring
+//! A rule that uses `unstable-fresh!` is transformed into a rule that calls a generated
+//! constructor unique to that rule occurrence. Conceptually, for each rule, egglog
+//! introduces a constructor (name generated via the parser's symbol generator):
+//!
+//! ```text
+//! (constructor GeneratedFreshTableN (<cols...> i64) <Sort>)
+//! ```
+//!
+//! where:
+//! - `<cols...>` are the types of all subexpressions appearing in the rule's
+//!   query (LHS). These are obtained by typechecking the query.
+//! - The trailing `i64` is a per-`unstable-fresh!`-call unique index within the rule,
+//!   ensuring multiple `unstable-fresh!` in the same action are different.
+//! - `<Sort>` is the output sort, as given by the `(unstable-fresh! <Sort>)` syntax.
+//!
+//! Each `(unstable-fresh! <Sort>)` in the action is replaced by a call to this generated
+//! constructor with all the query subexpressions as arguments followed by a
+//! distinct index (0, 1, ...), yielding a unique fresh value per rewrite.
+//!
+//! Notes:
+//! - The generated constructor's name is unique per rule occurrence (via
+//!   `parser.symbol_gen.fresh("GeneratedFreshTable")`).
+//! - The order of `<cols...>` is not semantically significant; it is stable for
+//!   reproducibility.
+//! - `unstable-fresh!` is a surface sugar and does not appear in the core AST.
+//!
+//! #### Warning and Tips
+//! - Since the generated constructor is a pure function of the query subexpressions
+//!   (plus the per-call index), two different rule matches that later become
+//!   equivalent (e.g., via `union` effects in the e-graph) will produce equal
+//!   arguments to the constructor and therefore equal "fresh" results. In other
+//!   words, "fresh" is only as unique as the tuple of its query arguments for a
+//!   given `unstable-fresh!` site.
+//! - This behavior can be useful when you want to intentionally create cycles in
+//!   the e-graph: if a later rewrite makes two matches indistinguishable,
+//!   their derived fresh terms will also unify, closing cycles that encode the
+//!   intended structure.
+//!
 //!
 pub mod ast;
 #[cfg(feature = "bin")]
@@ -69,6 +118,7 @@ pub use typechecking::TypeError;
 pub use typechecking::TypeInfo;
 use util::*;
 
+use crate::ast::desugar::desugar_command;
 use crate::core::{GenericActionsExt, ResolvedRuleExt};
 
 pub const GLOBAL_NAME_PREFIX: &str = "$";
@@ -1333,7 +1383,7 @@ impl EGraph {
     }
 
     fn resolve_command(&mut self, command: Command) -> Result<Vec<ResolvedNCommand>, Error> {
-        let program = desugar::desugar_program(vec![command], &mut self.parser, self.seminaive)?;
+        let program = desugar_command(command, &mut self.parser, &self.type_info, self.seminaive)?;
         Ok(self.typecheck_program(&program)?)
     }
 
