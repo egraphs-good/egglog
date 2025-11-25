@@ -89,6 +89,8 @@
 (union (Num 1) (Num 2))
 (check (= xx (multiset-of (multiset-of (Num 2) (Num 2) (Num 3)) (multiset-of (Num 2) (Num 2) (Num 3)))))
 
+(check (= (multiset-sum-multisets xx)
+        (multiset-of (Num 2) (Num 2) (Num 2) (Num 2) (Num 3) (Num 3))))
 ;; Verify unstable multiset fill index and counting
 (constructor product (Maths) Math)
 (let aa (Num 100))
