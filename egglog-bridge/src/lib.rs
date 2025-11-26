@@ -203,16 +203,21 @@ impl EGraph {
         }
     }
 
-    pub fn literal_to_entry(&self, l: &Literal) -> QueryEntry {
+    pub fn literal_to_typed_constant(&self, l: &Literal) -> (Value, ColumnTy) {
         match l {
-            Literal::Int(x) => self.base_value_constant::<i64>(*x),
-            Literal::Float(x) => self.base_value_constant::<BackendFloat>(x.into()),
+            Literal::Int(x) => self.base_value_typed_constant::<i64>(*x),
+            Literal::Float(x) => self.base_value_typed_constant::<BackendFloat>(x.into()),
             Literal::String(x) => {
-                self.base_value_constant::<BackendString>(BackendString::new(x.clone()))
+                self.base_value_typed_constant::<BackendString>(BackendString::new(x.clone()))
             }
-            Literal::Bool(x) => self.base_value_constant::<bool>(*x),
-            Literal::Unit => self.base_value_constant::<()>(()),
+            Literal::Bool(x) => self.base_value_typed_constant::<bool>(*x),
+            Literal::Unit => self.base_value_typed_constant::<()>(()),
         }
+    }
+
+    pub fn literal_to_entry(&self, l: &Literal) -> QueryEntry {
+        let (val, ty) = self.literal_to_typed_constant(l);
+        QueryEntry::Const { val, ty }
     }
 
     /// Render `v` as a [`Literal`], where possible.
@@ -335,6 +340,17 @@ impl EGraph {
             val: self.base_values().get(x),
             ty: ColumnTy::Base(self.base_values().get_ty::<T>()),
         }
+    }
+
+    /// Create a [`QueryEntry`] for a base value.
+    pub fn base_value_typed_constant<T>(&self, x: T) -> (Value, ColumnTy)
+    where
+        T: BaseValue,
+    {
+        (
+            self.base_values().get(x),
+            ColumnTy::Base(self.base_values().get_ty::<T>()),
+        )
     }
 
     pub fn register_external_func(

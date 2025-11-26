@@ -1,14 +1,15 @@
 use std::io::stdout;
 
+use egglog::Error;
 use egglog::ProofStore;
 use egglog::prelude::*;
 
 #[test]
-fn proofs_from_egg_file() {
+fn proofs_from_egg_file() -> Result<(), Error> {
     let program = include_str!("simple_math.egg");
     let mut egraph = EGraph::with_proofs();
 
-    egraph.parse_and_run_program(None, program);
+    egraph.parse_and_run_program(None, program)?;
 
     let mut store = ProofStore::default();
 
@@ -22,4 +23,5 @@ fn proofs_from_egg_file() {
     store
         .print_term_proof(term_pf, &mut stdout())
         .expect("print term proof");
+    Ok(())
 }

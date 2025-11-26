@@ -205,6 +205,7 @@ where
 
 pub type AtomTerm = GenericAtomTerm<String>;
 pub type ResolvedAtomTerm = GenericAtomTerm<ResolvedVar>;
+pub type CanonicalizedResolvedAtomTerm = GenericAtomTerm<CanonicalizedVar<ResolvedVar>>;
 
 impl<Leaf> GenericAtomTerm<Leaf> {
     pub fn span(&self) -> &Span {
@@ -236,6 +237,16 @@ impl ResolvedAtomTerm {
     }
 }
 
+impl CanonicalizedResolvedAtomTerm {
+    pub fn output(&self) -> ArcSort {
+        match self {
+            CanonicalizedResolvedAtomTerm::Var(_, v) => v.var.sort.clone(),
+            CanonicalizedResolvedAtomTerm::Literal(_, l) => literal_sort(l),
+            CanonicalizedResolvedAtomTerm::Global(_, v) => v.var.sort.clone(),
+        }
+    }
+}
+
 impl std::fmt::Display for AtomTerm {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         match self {
@@ -260,7 +271,6 @@ impl<T: std::fmt::Display> std::fmt::Display for Atom<T> {
         write!(f, "({} {}) ", self.head, ListDisplay(&self.args, " "))
     }
 }
-
 impl<Head, Leaf> GenericAtom<Head, Leaf>
 where
     Leaf: Clone + Eq + Hash,
@@ -273,15 +283,36 @@ where
             GenericAtomTerm::Global(..) => None,
         })
     }
+}
 
-    fn subst(&mut self, subst: &HashMap<Leaf, GenericAtomTerm<Leaf>>) {
+impl<Head, Leaf> GenericAtom<Head, CanonicalizedVar<Leaf>>
+where
+    Leaf: Clone + Eq + Hash,
+    Head: Clone,
+{
+    pub fn current_vars(&self) -> impl Iterator<Item = Leaf> + '_ {
+        self.args.iter().filter_map(|t| match t {
+            GenericAtomTerm::Var(_, v) => Some(v.var.clone()),
+            GenericAtomTerm::Literal(..) => None,
+            GenericAtomTerm::Global(..) => None,
+        })
+    }
+
+    fn subst(
+        &mut self,
+        subst: &HashMap<CanonicalizedVar<Leaf>, GenericAtomTerm<CanonicalizedVar<Leaf>>>,
+    ) {
         for arg in self.args.iter_mut() {
             match arg {
-                GenericAtomTerm::Var(_, v) => {
-                    if let Some(at) = subst.get(v) {
-                        *arg = at.clone();
+                GenericAtomTerm::Var(_, v) => match subst.get(v) {
+                    Some(GenericAtomTerm::Var(_, other)) => {
+                        v.var = other.var.clone();
                     }
-                }
+                    Some(x) => {
+                        *arg = x.clone();
+                    }
+                    None => {}
+                },
                 GenericAtomTerm::Literal(..) => (),
                 GenericAtomTerm::Global(..) => (),
             }
@@ -381,6 +412,37 @@ impl std::fmt::Display for Query<ResolvedCall, String> {
             }
         }
         Ok(())
+    }
+}
+
+impl<Head: Clone, Leaf> Query<Head, Leaf> {
+    pub fn map_leaves<L2>(&self, mut f: impl FnMut(&Leaf) -> L2) -> Query<Head, L2>
+    where
+        Leaf: Clone,
+        L2: Clone,
+    {
+        let atoms = self
+            .atoms
+            .iter()
+            .map(|atom| GenericAtom {
+                span: atom.span.clone(),
+                head: atom.head.clone(),
+                args: atom
+                    .args
+                    .iter()
+                    .map(|arg| match arg {
+                        GenericAtomTerm::Var(span, v) => GenericAtomTerm::Var(span.clone(), f(v)),
+                        GenericAtomTerm::Literal(span, lit) => {
+                            GenericAtomTerm::Literal(span.clone(), lit.clone())
+                        }
+                        GenericAtomTerm::Global(span, g) => {
+                            GenericAtomTerm::Global(span.clone(), f(g))
+                        }
+                    })
+                    .collect(),
+            })
+            .collect();
+        Query { atoms }
     }
 }
 
@@ -818,20 +880,25 @@ where
 
 /// A [`GenericCoreRule`] represents a generalization of lowered form of a rule.
 /// Unlike other `Generic`-prefixed types, [`GenericCoreRule`] takes two `Head`
-/// parameters instead of one. This is because the `Head` parameter of `body` and
-/// `head` can be different. In particular, early in the compilation pipeline,
-/// `body` can contain `Eq` atoms, which denotes equality constraints, so the `Head`
-/// for `body` needs to be a `HeadOrEq<Head>`, while `head` does not have equality
-/// constraints.
+/// parameters and two `Leaf` parameters. This is because the `Head` parameter of
+/// `body` and `head` can be different. Similarly, query and action leaves may
+/// diverge, even though we currently pass the same type for both.
+/// In particular, early in the compilation pipeline, `body` can contain `Eq`
+/// atoms, which denotes equality constraints, so the `Head` for `body` needs to
+/// be a `HeadOrEq<Head>`, while `head` does not have equality constraints.
 #[derive(Debug, Clone)]
-pub struct GenericCoreRule<HeadQ, HeadA, Leaf> {
+pub struct GenericCoreRule<HeadQ, HeadA, LeafQ, LeafA> {
     pub span: Span,
-    pub body: Query<HeadQ, Leaf>,
-    pub head: GenericCoreActions<HeadA, Leaf>,
+    pub body: Query<HeadQ, LeafQ>,
+    pub head: GenericCoreActions<HeadA, LeafA>,
 }
 
-pub(crate) type CoreRule = GenericCoreRule<StringOrEq, String, String>;
-pub(crate) type ResolvedCoreRule = GenericCoreRule<ResolvedCall, ResolvedCall, ResolvedVar>;
+type CanonicalizedCoreRule<HeadQ, HeadA, Leaf> =
+    GenericCoreRule<HeadQ, HeadA, CanonicalizedVar<Leaf>, Leaf>;
+
+pub(crate) type CoreRule = GenericCoreRule<StringOrEq, String, String, String>;
+pub(crate) type ResolvedCoreRule =
+    GenericCoreRule<ResolvedCall, ResolvedCall, CanonicalizedVar<ResolvedVar>, ResolvedVar>;
 
 /// A core rule paired with metadata that records how each original fact maps
 /// onto the flattened query. The `rule` field is the canonicalized core rule
@@ -844,7 +911,7 @@ where
     Leaf: Clone + PartialEq + Eq + Display + Hash,
 {
     /// The canonicalized core rule ready for backend lowering.
-    pub rule: GenericCoreRule<HeadOrEq<Head>, Head, Leaf>,
+    pub rule: GenericCoreRule<HeadOrEq<Head>, Head, Leaf, Leaf>,
     /// Fact annotations that capture how each original AST fact was flattened.
     /// Used when proofs are enabled to reflect source syntax in the backend.
     pub mapped_facts: Vec<MappedFact<Head, Leaf>>,
@@ -852,29 +919,59 @@ where
 
 #[derive(Clone)]
 pub(crate) struct CanonicalizedRule {
-    pub rule: ResolvedCoreRule,
+    pub rule: CanonicalizedCoreRule<ResolvedCall, ResolvedCall, ResolvedVar>,
     pub mapped_facts: Vec<MappedFact<ResolvedCall, ResolvedVar>>,
 }
 
-impl<Head1, Head2, Leaf> GenericCoreRule<Head1, Head2, Leaf>
+impl<Head1, Head2, Leaf> GenericCoreRule<Head1, Head2, CanonicalizedVar<Leaf>, Leaf>
 where
     Head1: Clone,
     Head2: Clone,
     Leaf: Clone + Eq + Hash,
 {
-    pub fn subst(&mut self, subst: &HashMap<Leaf, GenericAtomTerm<Leaf>>) {
+    pub fn subst(
+        &mut self,
+        subst: &HashMap<CanonicalizedVar<Leaf>, GenericAtomTerm<CanonicalizedVar<Leaf>>>,
+    ) {
         for atom in &mut self.body.atoms {
             atom.subst(subst);
         }
-        self.head.subst(subst);
+        let head_subst: HashMap<Leaf, GenericAtomTerm<Leaf>> = subst
+            .iter()
+            .map(|(leaf, term)| {
+                let term = match term {
+                    GenericAtomTerm::Var(span, v) => {
+                        GenericAtomTerm::Var(span.clone(), v.var.clone())
+                    }
+                    GenericAtomTerm::Literal(span, lit) => {
+                        GenericAtomTerm::Literal(span.clone(), lit.clone())
+                    }
+                    GenericAtomTerm::Global(span, v) => {
+                        GenericAtomTerm::Global(span.clone(), v.var.clone())
+                    }
+                };
+                (leaf.var.clone(), term)
+            })
+            .collect();
+        self.head.subst(&head_subst);
     }
 }
 
-impl<Head, Leaf> GenericCoreRule<HeadOrEq<Head>, Head, Leaf>
+impl<Head, Leaf> GenericCoreRule<HeadOrEq<Head>, Head, Leaf, Leaf>
 where
     Leaf: Eq + Clone + Hash + Debug,
     Head: Clone,
 {
+    fn init_canon(self) -> CanonicalizedCoreRule<HeadOrEq<Head>, Head, Leaf> {
+        let body = self
+            .body
+            .map_leaves(|leaf| CanonicalizedVar::new_current(leaf.clone()));
+        GenericCoreRule {
+            span: self.span,
+            body,
+            head: self.head,
+        }
+    }
     /// Transformed a UnresolvedCoreRule into a CanonicalizedCoreRule.
     /// In particular, it removes equality checks between variables and
     /// other arguments, and turns equality checks between non-variable arguments
@@ -882,16 +979,21 @@ where
     pub(crate) fn canonicalize(
         self,
         // Users need to pass in a substitute for equality constraints.
-        value_eq: impl Fn(&GenericAtomTerm<Leaf>, &GenericAtomTerm<Leaf>) -> Head,
-    ) -> GenericCoreRule<Head, Head, Leaf> {
-        let mut result_rule = self;
+        value_eq: impl Fn(
+            &GenericAtomTerm<CanonicalizedVar<Leaf>>,
+            &GenericAtomTerm<CanonicalizedVar<Leaf>>,
+        ) -> Head,
+    ) -> CanonicalizedCoreRule<Head, Head, Leaf> {
+        // TODO: have canonicalization preserve the original leaf code.
+        // to check: does correspondingVar work, or do we need a Canonicalized<Leaf> type.
+        let mut result_rule = self.init_canon();
         loop {
             let mut to_subst = None;
             for atom in result_rule.body.atoms.iter() {
                 if atom.head.is_eq() && atom.args[0] != atom.args[1] {
                     match &atom.args[..] {
                         [GenericAtomTerm::Var(_, x), y] | [y, GenericAtomTerm::Var(_, x)] => {
-                            to_subst = Some((x, y));
+                            to_subst = Some((x.clone(), y.clone()));
                             break;
                         }
                         _ => (),
@@ -927,7 +1029,10 @@ where
                             } else {
                                 Some(GenericAtom {
                                     span: atom.span.clone(),
-                                    head: value_eq(&atom.args[0], &atom.args[1]),
+                                    head: value_eq(
+                                        &atom.args[0],
+                                        &atom.args[1],
+                                    ),
                                     args: vec![
                                         atom.args[0].clone(),
                                         atom.args[1].clone(),
@@ -1009,7 +1114,8 @@ impl ResolvedRuleExt for ResolvedRule {
         fresh_gen: &mut SymbolGen,
     ) -> Result<CanonicalizedRule, TypeError> {
         let value_eq = &typeinfo.get_prims("value-eq").unwrap()[0];
-        let value_eq = |at1: &ResolvedAtomTerm, at2: &ResolvedAtomTerm| {
+        let value_eq = |at1: &CanonicalizedResolvedAtomTerm,
+                        at2: &CanonicalizedResolvedAtomTerm| {
             ResolvedCall::Primitive(SpecializedPrimitive {
                 primitive: value_eq.clone(),
                 input: vec![at1.output(), at2.output()],
