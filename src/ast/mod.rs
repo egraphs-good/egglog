@@ -1092,6 +1092,55 @@ where
     }
 }
 
+/// This is a variant of [`CorrespondingVar`] that tracks `Leaf`s specifically. It is meant to
+/// preserve the original variable names for atoms after canonicalization.
+#[derive(Clone, Debug)]
+pub struct CanonicalizedVar<Leaf>
+where
+    Leaf: Clone + PartialEq + Eq + Hash,
+{
+    /// The actual variable used in the query.
+    pub var: Leaf,
+    /// The original variable used in this position, prior to canonicalization.
+    pub orig: Leaf,
+}
+
+impl<Leaf> CanonicalizedVar<Leaf>
+where
+    Leaf: Clone + PartialEq + Eq + Hash,
+{
+    pub fn new_current(var: Leaf) -> Self {
+        Self {
+            orig: var.clone(),
+            var,
+        }
+    }
+}
+
+impl<Leaf> PartialEq for CanonicalizedVar<Leaf>
+where
+    Leaf: Clone + PartialEq + Eq + Hash,
+{
+    fn eq(&self, other: &Self) -> bool {
+        self.var == other.var
+    }
+}
+
+impl<Leaf> Eq for CanonicalizedVar<Leaf>
+where
+    Leaf: Clone + PartialEq + Eq + Hash,
+{
+}
+
+impl<Leaf> Hash for CanonicalizedVar<Leaf>
+where
+    Leaf: Clone + PartialEq + Eq + Hash,
+{
+    fn hash<H: std::hash::Hasher>(&self, state: &mut H) {
+        self.var.hash(state);
+    }
+}
+
 #[derive(Clone, Debug, PartialEq, Eq, Hash)]
 pub struct CorrespondingVar<Head, Leaf>
 where

@@ -8,7 +8,12 @@ use egglog_bridge::{
 use egglog_reports::RunReport;
 use numeric_id::define_id;
 
-use crate::{ast::ResolvedVar, core::GenericAtomTerm, core::ResolvedCoreRule, util::IndexMap, *};
+use crate::{
+    ast::{CanonicalizedVar, ResolvedVar},
+    core::{GenericAtomTerm, ResolvedCoreRule},
+    util::IndexMap,
+    *,
+};
 
 /// A scheduler decides which matches to be applied for a rule.
 ///
@@ -353,7 +358,12 @@ impl SchedulerRuleInfo {
         qrule_builder.query(&rule.body, true);
         let entries = free_vars
             .iter()
-            .map(|fv| qrule_builder.entry(&GenericAtomTerm::Var(span!(), fv.clone())))
+            .map(|fv| {
+                qrule_builder.entry(&GenericAtomTerm::Var(
+                    span!(),
+                    CanonicalizedVar::new_current(fv.clone()),
+                ))
+            })
             .collect::<Vec<_>>();
         let _var = qrule_builder.rb.call_external_func(
             collect_matches,
@@ -372,7 +382,12 @@ impl SchedulerRuleInfo {
         );
         let mut entries = free_vars
             .iter()
-            .map(|fv| arule_builder.entry(&GenericAtomTerm::Var(span!(), fv.clone())))
+            .map(|fv| {
+                arule_builder.entry(&GenericAtomTerm::Var(
+                    span!(),
+                    CanonicalizedVar::new_current(fv.clone()),
+                ))
+            })
             .collect::<Vec<_>>();
         entries.push(unit_entry);
         arule_builder

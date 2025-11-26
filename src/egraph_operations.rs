@@ -98,34 +98,26 @@ impl EGraph {
             crate::ast::Schema::new(inputs, match_sort_name.clone())
         };
 
-        let mut program = Vec::new();
-        program.push(crate::ast::Command::Push(1));
-        program.push(crate::ast::Command::Sort(
-            span.clone(),
-            match_sort_name.clone(),
-            None,
-        ));
-        program.push(crate::ast::Command::Constructor {
-            span: span.clone(),
-            name: constructor_name.clone(),
-            schema: constructor_schema,
-            cost: None,
-            unextractable: true,
-        });
-
-        program.push(crate::ast::Command::Relation {
-            span: span.clone(),
-            name: relation_name.clone(),
-            inputs: query_vars
-                .iter()
-                .map(|(_, sort)| sort.name().to_string())
-                .collect(),
-        });
-
-        program.push(crate::ast::Command::AddRuleset(
-            span.clone(),
-            ruleset_name.clone(),
-        ));
+        let mut program = vec![
+            crate::ast::Command::Push(1),
+            crate::ast::Command::Sort(span.clone(), match_sort_name.clone(), None),
+            crate::ast::Command::Constructor {
+                span: span.clone(),
+                name: constructor_name.clone(),
+                schema: constructor_schema,
+                cost: None,
+                unextractable: true,
+            },
+            crate::ast::Command::Relation {
+                span: span.clone(),
+                name: relation_name.clone(),
+                inputs: query_vars
+                    .iter()
+                    .map(|(_, sort)| sort.name().to_string())
+                    .collect(),
+            },
+            crate::ast::Command::AddRuleset(span.clone(), ruleset_name.clone()),
+        ];
 
         let body_facts = query_facts.clone();
         let action_expr = {
@@ -208,24 +200,18 @@ impl EGraph {
                 proof_sort_name.clone(),
             );
 
-            let mut program = Vec::new();
-            program.push(crate::ast::Command::Push(1));
-            program.push(crate::ast::Command::Sort(
-                span.clone(),
-                proof_sort_name.clone(),
-                None,
-            ));
-            program.push(crate::ast::Command::Constructor {
-                span: span.clone(),
-                name: constructor_name.clone(),
-                schema: constructor_schema,
-                cost: None,
-                unextractable: true,
-            });
-            program.push(crate::ast::Command::AddRuleset(
-                span.clone(),
-                ruleset_name.clone(),
-            ));
+            let mut program = vec![
+                crate::ast::Command::Push(1),
+                crate::ast::Command::Sort(span.clone(), proof_sort_name.clone(), None),
+                crate::ast::Command::Constructor {
+                    span: span.clone(),
+                    name: constructor_name.clone(),
+                    schema: constructor_schema,
+                    cost: None,
+                    unextractable: true,
+                },
+                crate::ast::Command::AddRuleset(span.clone(), ruleset_name.clone()),
+            ];
 
             let body_facts = query_facts.clone();
             let action_expr = crate::ast::Expr::Call(
