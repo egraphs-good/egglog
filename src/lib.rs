@@ -53,7 +53,6 @@ pub use egglog_bridge::termdag::{Term, TermDag, TermId};
 use egglog_bridge::{ColumnTy, QueryEntry, SourceExpr, SourceSyntax, TopLevelLhsExpr};
 use egglog_core_relations as core_relations;
 use egglog_numeric_id as numeric_id;
-use egglog_numeric_id::NumericId;
 use egglog_reports::{ReportLevel, RunReport};
 use extract::{CostModel, DefaultCost, Extractor, TreeAdditiveCostModel};
 use indexmap::IndexSet;
@@ -1959,6 +1958,7 @@ impl<'a> BackendRule<'a> {
                 name: name.clone(),
             });
         }
+        let ty = prim.output().column_ty(self.rb.egraph());
 
         (
             prim.external_id(),
