@@ -1851,7 +1851,9 @@ impl<'a> BackendRule<'a> {
         let mut qe_args = self.args(args);
 
         if prim.primitive.primitive.name() == "unstable-fn" {
-            let core::CanonicalizedResolvedAtomTerm::Literal(_, Literal::String(ref name)) = args[0] else {
+            let core::CanonicalizedResolvedAtomTerm::Literal(_, Literal::String(ref name)) =
+                args[0]
+            else {
                 panic!("expected string literal after `unstable-fn`")
             };
             let id = if let Some(f) = self.type_info.get_func_type(name) {
@@ -1897,11 +1899,7 @@ impl<'a> BackendRule<'a> {
         }
         let ty = prim.output.column_ty(self.rb.egraph());
 
-        (
-            prim.primitive.id,
-            qe_args,
-            ty,
-        )
+        (prim.primitive.id, qe_args, ty)
     }
 
     fn args<'b>(

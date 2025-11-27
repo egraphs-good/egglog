@@ -161,41 +161,14 @@ impl<'a> ProofChecker<'a> {
     }
 
     /// Apply a substitution to an expression, replacing variables with terms
-    /// Verify that a rule's result term is consistent with the substitution
-    fn verify_rule_result_term(
+    /// Get all propositions that a rule can produce given a substitution and premises
+    fn rule_propositions(
         &mut self,
         rule: &GenericRule<String, String>,
         subst: &[RuleVarBinding],
-        result: TermId,
-    ) -> Result<(), ProofCheckError> {
-        // Check that the rule's head can produce terms (not just equalities)
-        let has_term_action = rule.head.iter().any(|action| {
-            matches!(
-                action,
-                crate::ast::Action::Expr(_, _) | crate::ast::Action::Let(_, _, _)
-            )
-        });
-
-        // If the rule has no actions that can produce terms, it's invalid
-        if rule.head.is_empty() || !has_term_action {
-            // Special case: if there's a union or set action, those produce equalities not terms
-            let has_eq_action = rule.head.iter().any(|action| {
-                matches!(
-                    action,
-                    crate::ast::Action::Set(_, _, _, _) | crate::ast::Action::Union(_, _, _)
-                )
-            });
-
-            if has_eq_action {
-                return Err(ProofCheckError::InvalidProof(
-                    "Rule produces equalities but proof expects a term".to_string(),
-                ));
-            }
-
-            return Err(ProofCheckError::InvalidProof(
-                "Rule has no actions that produce terms".to_string(),
-            ));
-        }
+        _premise_props: &[Proposition],
+    ) -> Result<HashSet<Proposition>, ProofCheckError> {
+        let mut result = HashSet::default();
 
         // Build a substitution map from variable names to TermIds
         let mut var_map: HashMap<String, TermId> = HashMap::default();
@@ -203,71 +176,48 @@ impl<'a> ProofChecker<'a> {
             var_map.insert(binding.name.to_string(), binding.term);
         }
 
-        // Find the first term-producing action and verify it produces the result
+        // Process each action in the head to see what propositions it produces
         for action in rule.head.iter() {
             match action {
                 crate::ast::Action::Expr(_, expr) => {
+                    // An Expr action produces a TermOk proposition
                     let constructed_term = self.construct_term_from_expr(expr, &var_map)?;
-                    if constructed_term != result {
-                        return Err(ProofCheckError::InvalidProof(format!(
-                            "Rule produces term {:?} but proof claims term {:?}",
-                            constructed_term, result
-                        )));
-                    }
-                    return Ok(());
+                    result.insert(Proposition::TermOk(constructed_term));
                 }
                 crate::ast::Action::Let(_, _name, expr) => {
-                    // For let bindings, evaluate the expression
+                    // A Let binding produces a TermOk proposition
                     let constructed_term = self.construct_term_from_expr(expr, &var_map)?;
-                    if constructed_term != result {
-                        return Err(ProofCheckError::InvalidProof(format!(
-                            "Rule produces term {:?} but proof claims term {:?}",
-                            constructed_term, result
-                        )));
-                    }
-                    return Ok(());
+                    result.insert(Proposition::TermOk(constructed_term));
                 }
-                _ => {}
+                crate::ast::Action::Union(_, lhs, rhs) => {
+                    // A Union produces an equality proposition
+                    let lhs_term = self.construct_term_from_expr(lhs, &var_map)?;
+                    let rhs_term = self.construct_term_from_expr(rhs, &var_map)?;
+                    result.insert(Proposition::TermsEq(lhs_term, rhs_term));
+                    // Union is symmetric
+                    result.insert(Proposition::TermsEq(rhs_term, lhs_term));
+                }
+                crate::ast::Action::Set(_, func_name, args, rhs) => {
+                    // A Set produces an equality proposition between the function call and rhs
+                    // First construct the function call term
+                    let arg_terms: Result<Vec<_>, _> = args
+                        .iter()
+                        .map(|arg| self.construct_term_from_expr(arg, &var_map))
+                        .collect();
+                    let arg_terms = arg_terms?;
+                    let lhs_term = self.proof_store.make_app(func_name.clone(), arg_terms);
+                    let rhs_term = self.construct_term_from_expr(rhs, &var_map)?;
+                    result.insert(Proposition::TermsEq(lhs_term, rhs_term));
+                    // Set is also symmetric
+                    result.insert(Proposition::TermsEq(rhs_term, lhs_term));
+                }
+                _ => {
+                    // Other action types (Panic, Change) don't produce propositions we check
+                }
             }
         }
 
-        Ok(())
-    }
-
-    /// Verify that a rule's result equality is consistent with the substitution
-    fn verify_rule_result_equality(
-        &mut self,
-        rule: &GenericRule<String, String>,
-        _subst: &[RuleVarBinding],
-        _lhs: TermId,
-        _rhs: TermId,
-    ) -> Result<(), ProofCheckError> {
-        // Check that the rule's head can produce equalities
-        let has_eq_action = rule.head.iter().any(|action| {
-            matches!(
-                action,
-                crate::ast::Action::Set(_, _, _, _) | crate::ast::Action::Union(_, _, _)
-            )
-        });
-
-        if !has_eq_action && !rule.head.is_empty() {
-            // Check if the rule only has term-producing actions
-            let only_term_actions = rule.head.iter().all(|action| {
-                matches!(
-                    action,
-                    crate::ast::Action::Expr(_, _) | crate::ast::Action::Let(_, _, _)
-                )
-            });
-
-            if only_term_actions {
-                return Err(ProofCheckError::InvalidProof(
-                    "Rule produces terms but proof expects an equality".to_string(),
-                ));
-            }
-        }
-
-        // We can't fully validate the equality without evaluating actions
-        Ok(())
+        Ok(result)
     }
 
     /// Check a term proof
@@ -294,10 +244,18 @@ impl<'a> ProofChecker<'a> {
                 let rule = self.find_rule(&rule_name)?.clone();
                 self.check_rule_fires(&rule_name, &subst, &body_pfs)?;
 
-                // Now check that the rule's head produces the expected result
-                // We verify that the result is consistent with what the rule would produce
-                // The exact verification depends on the type of action in the head
-                self.verify_rule_result_term(&rule, &subst, result)?;
+                // Get all propositions the rule can produce
+                // TODO: collect premise propositions from body_pfs
+                let premise_props = vec![];
+                let propositions = self.rule_propositions(&rule, &subst, &premise_props)?;
+
+                // Check if the result term is in the set of propositions
+                if !propositions.contains(&Proposition::TermOk(result)) {
+                    return Err(ProofCheckError::InvalidProof(format!(
+                        "Rule does not produce the expected term {:?}",
+                        result
+                    )));
+                }
 
                 Ok(Proposition::TermOk(result))
             }
@@ -438,9 +396,23 @@ impl<'a> ProofChecker<'a> {
                 let rule = self.find_rule(&rule_name)?.clone();
                 self.check_rule_fires(&rule_name, &subst, &body_pfs)?;
 
-                // Now check that the rule's head produces the expected equality
-                // The rule's head should produce an equality (through union or similar)
-                self.verify_rule_result_equality(&rule, &subst, result_lhs, result_rhs)?;
+                // Get all propositions the rule can produce
+                // TODO: collect premise propositions from body_pfs
+                let premise_props = vec![];
+                let propositions = self.rule_propositions(&rule, &subst, &premise_props)?;
+
+                // Check if the equality is in the set of propositions
+                let prop = Proposition::TermsEq(result_lhs, result_rhs);
+                if !propositions.contains(&prop) {
+                    // Also check the symmetric version
+                    let prop_sym = Proposition::TermsEq(result_rhs, result_lhs);
+                    if !propositions.contains(&prop_sym) {
+                        return Err(ProofCheckError::InvalidProof(format!(
+                            "Rule does not produce the expected equality {:?} = {:?}",
+                            result_lhs, result_rhs
+                        )));
+                    }
+                }
 
                 Ok(Proposition::TermsEq(result_lhs, result_rhs))
             }
@@ -748,7 +720,7 @@ impl<'a> ProofChecker<'a> {
         }
 
         // The actual verification that the rule's head produces the claimed result
-        // is done in verify_rule_result_term/verify_rule_result_equality
+        // is done in rule_propositions which checks against all possible propositions
 
         Ok(())
     }
