@@ -1874,7 +1874,7 @@ impl<'a> BackendRule<'a> {
         let mut qe_args = self.args(args);
 
         if prim.primitive.primitive.name() == "unstable-fn" {
-            let core::ResolvedAtomTerm::Literal(_, Literal::String(ref name)) = args[0] else {
+            let core::CanonicalizedResolvedAtomTerm::Literal(_, Literal::String(ref name)) = args[0] else {
                 panic!("expected string literal after `unstable-fn`")
             };
             let id = if let Some(f) = self.type_info.get_func_type(name) {
@@ -2007,7 +2007,7 @@ impl<'a> BackendRule<'a> {
                                 var: var.id,
                                 ty,
                                 func: ext_id,
-                                name: p.primitive.0.name().into(),
+                                name: p.primitive.primitive.name().into(),
                             },
                         );
                         Some(())
@@ -2037,7 +2037,7 @@ impl<'a> BackendRule<'a> {
                         }
                         ResolvedCall::Primitive(p) => {
                             let name = p.primitive.primitive.name().to_owned();
-                            let (p, args, ty) = self.prim(p, args);
+                            let (p, args, ty) = self.prim(p, &canon_args);
                             let span = span.clone();
                             self.rb.call_external_func(p, &args, ty, move || {
                                 format!("{span}: call of primitive {name} failed")
