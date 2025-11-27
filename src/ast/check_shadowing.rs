@@ -40,6 +40,10 @@ impl Names {
                 let mut inner = self.clone();
                 inner.check_shadowing_query(query)
             }
+            ResolvedNCommand::ProveQuery(_span, query) => {
+                let mut inner = self.clone();
+                inner.check_shadowing_query(query)
+            }
             ResolvedNCommand::Fail(_span, command) => {
                 let mut inner = self.clone();
                 inner.check_shadowing(command)

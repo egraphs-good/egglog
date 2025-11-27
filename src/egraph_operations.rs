@@ -4,7 +4,10 @@ use egglog_core_relations::Value;
 
 use crate::{
     EGraph, Error, ProofStore, TermProofId,
-    ast::{Facts, RunConfig, Schedule, collect_query_vars},
+    ast::{
+        Action, Command, Expr, Facts, GenericActions, GenericRule, RunConfig, Schedule, Schema,
+        collect_query_vars,
+    },
     util::{FreshGen, IndexMap},
 };
 
@@ -40,18 +43,12 @@ impl QueryMatch {
 impl EGraph {
     /// Returns all matches for the given query as a vector of QueryMatch structs.
     ///
-    /// Each QueryMatch contains bindings only for user-defined variables in the query.
-    /// Internal variables generated during canonicalization (starting with $) are excluded.
-    ///
-    /// **Note**: This method requires proofs to be enabled. Create the EGraph with
-    /// `EGraph::with_proofs()` to use this feature.
-    ///
-    /// TODO this implementation is in-progress.
+    /// Each QueryMatch contains bindings for each variable in the query (excluding globals).
     ///
     /// # Example
     /// ```
     /// # use egglog::prelude::*;
-    /// # let mut egraph = EGraph::with_proofs();
+    /// # let mut egraph = EGraph::default();
     /// egraph.parse_and_run_program(None, "
     ///     (datatype Math
     ///         (Num i64)
@@ -71,11 +68,6 @@ impl EGraph {
     /// ```
     pub fn get_matches(&mut self, facts: Facts<String, String>) -> Result<Vec<QueryMatch>, Error> {
         let Facts(query_facts) = facts;
-        if !self.backend.proofs_enabled() {
-            return Err(Error::BackendError(
-                "get_matches requires proofs to be enabled. Create the EGraph with EGraph::with_proofs().".to_string(),
-            ));
-        }
 
         let span = span!();
 
@@ -95,20 +87,22 @@ impl EGraph {
                 .iter()
                 .map(|(_, sort)| sort.name().to_string())
                 .collect::<Vec<_>>();
-            crate::ast::Schema::new(inputs, match_sort_name.clone())
+            Schema::new(inputs, match_sort_name.clone())
         };
 
+        // TODO currently using Push and Pop to avoid touching the e-graph here.
+        // we should either make push and pop fast or rewrite to clean up the new table and rule.
         let mut program = vec![
-            crate::ast::Command::Push(1),
-            crate::ast::Command::Sort(span.clone(), match_sort_name.clone(), None),
-            crate::ast::Command::Constructor {
+            Command::Push(1),
+            Command::Sort(span.clone(), match_sort_name.clone(), None),
+            Command::Constructor {
                 span: span.clone(),
                 name: constructor_name.clone(),
                 schema: constructor_schema,
                 cost: None,
                 unextractable: true,
             },
-            crate::ast::Command::Relation {
+            Command::Relation {
                 span: span.clone(),
                 name: relation_name.clone(),
                 inputs: query_vars
@@ -116,23 +110,22 @@ impl EGraph {
                     .map(|(_, sort)| sort.name().to_string())
                     .collect(),
             },
-            crate::ast::Command::AddRuleset(span.clone(), ruleset_name.clone()),
+            Command::AddRuleset(span.clone(), ruleset_name.clone()),
         ];
 
         let body_facts = query_facts.clone();
         let action_expr = {
             let args = query_vars
                 .iter()
-                .map(|(var, _)| crate::ast::Expr::Var(span.clone(), var.name.clone()))
+                .map(|(var, _)| Expr::Var(span.clone(), var.name.clone()))
                 .collect();
-            crate::ast::Expr::Call(span.clone(), constructor_name.clone(), args)
+            Expr::Call(span.clone(), constructor_name.clone(), args)
         };
 
-        let rule_actions =
-            crate::ast::GenericActions(vec![crate::ast::Action::Expr(span.clone(), action_expr)]);
+        let rule_actions = GenericActions(vec![Action::Expr(span.clone(), action_expr)]);
 
-        program.push(crate::ast::Command::Rule {
-            rule: crate::ast::GenericRule {
+        program.push(Command::Rule {
+            rule: GenericRule {
                 span: span.clone(),
                 head: rule_actions,
                 body: body_facts,
@@ -141,7 +134,7 @@ impl EGraph {
             },
         });
 
-        program.push(crate::ast::Command::RunSchedule(Schedule::Run(
+        program.push(Command::RunSchedule(Schedule::Run(
             span.clone(),
             RunConfig {
                 ruleset: ruleset_name.clone(),
@@ -165,12 +158,12 @@ impl EGraph {
                 results.push(QueryMatch { bindings });
             });
 
-        self.run_program(vec![crate::ast::Command::Pop(span.clone(), 1)])?;
+        self.run_program(vec![Command::Pop(span.clone(), 1)])?;
 
         Ok(results)
     }
     /// Runs the query and produces a proof for any bound variable; returns the first proof found.
-    pub fn get_proof(
+    pub fn prove_query(
         &mut self,
         facts: Facts<String, String>,
         store: &mut ProofStore,
@@ -195,37 +188,34 @@ impl EGraph {
             let rule_name = self.parser.symbol_gen.fresh("get_proof_rule");
             let proof_sort_name = self.parser.symbol_gen.fresh("get_proof_sort");
 
-            let constructor_schema = crate::ast::Schema::new(
+            let constructor_schema = Schema::new(
                 vec![target_sort.name().to_string()],
                 proof_sort_name.clone(),
             );
 
             let mut program = vec![
-                crate::ast::Command::Push(1),
-                crate::ast::Command::Sort(span.clone(), proof_sort_name.clone(), None),
-                crate::ast::Command::Constructor {
+                Command::Push(1),
+                Command::Sort(span.clone(), proof_sort_name.clone(), None),
+                Command::Constructor {
                     span: span.clone(),
                     name: constructor_name.clone(),
                     schema: constructor_schema,
                     cost: None,
                     unextractable: true,
                 },
-                crate::ast::Command::AddRuleset(span.clone(), ruleset_name.clone()),
+                Command::AddRuleset(span.clone(), ruleset_name.clone()),
             ];
 
             let body_facts = query_facts.clone();
-            let action_expr = crate::ast::Expr::Call(
+            let action_expr = Expr::Call(
                 span.clone(),
                 constructor_name.clone(),
-                vec![crate::ast::Expr::Var(span.clone(), target_var.name.clone())],
+                vec![Expr::Var(span.clone(), target_var.name.clone())],
             );
-            let rule_actions = crate::ast::GenericActions(vec![crate::ast::Action::Expr(
-                span.clone(),
-                action_expr,
-            )]);
+            let rule_actions = GenericActions(vec![Action::Expr(span.clone(), action_expr)]);
 
-            program.push(crate::ast::Command::Rule {
-                rule: crate::ast::GenericRule {
+            program.push(Command::Rule {
+                rule: GenericRule {
                     span: span.clone(),
                     head: rule_actions,
                     body: body_facts,
@@ -234,7 +224,7 @@ impl EGraph {
                 },
             });
 
-            program.push(crate::ast::Command::RunSchedule(Schedule::Run(
+            program.push(Command::RunSchedule(Schedule::Run(
                 span.clone(),
                 RunConfig {
                     ruleset: ruleset_name.clone(),
@@ -253,7 +243,7 @@ impl EGraph {
                     });
             }
 
-            self.run_program(vec![crate::ast::Command::Pop(span.clone(), 1)])?;
+            self.run_program(vec![Command::Pop(span.clone(), 1)])?;
 
             if let Some(value) = captured {
                 let proof = self

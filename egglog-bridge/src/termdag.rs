@@ -26,10 +26,20 @@ pub enum Term {
 }
 
 /// A hashconsing arena for [`Term`]s.
-#[derive(Clone, PartialEq, Eq, Debug, Default)]
+#[derive(Clone, PartialEq, Eq, Debug)]
 pub struct TermDag {
     /// A bidirectional map between deduplicated `Term`s and indices.
     nodes: IndexSet<Term>,
+    /// Optional type information for each term.
+    /// When types are tracked, this maps TermId to its type.
+    /// The String represents the sort name (e.g., "i64", "bool")
+    types: Option<HashMap<TermId, String>>,
+}
+
+impl Default for TermDag {
+    fn default() -> Self {
+        Self::new()
+    }
 }
 
 #[macro_export]
@@ -120,6 +130,46 @@ impl<'w, W: io::Write> PrettyPrinter<'w, W> {
 }
 
 impl TermDag {
+    /// Create a new empty TermDag without type tracking
+    pub fn new() -> Self {
+        Self {
+            nodes: IndexSet::new(),
+            types: None,
+        }
+    }
+
+    /// Create a new empty TermDag with type tracking enabled
+    pub fn new_typed() -> Self {
+        Self {
+            nodes: IndexSet::new(),
+            types: Some(HashMap::new()),
+        }
+    }
+
+    /// Enable type tracking on this TermDag
+    pub fn enable_types(&mut self) {
+        if self.types.is_none() {
+            self.types = Some(HashMap::new());
+        }
+    }
+
+    /// Check if this TermDag has type tracking enabled
+    pub fn has_types(&self) -> bool {
+        self.types.is_some()
+    }
+
+    /// Get the type of a term, if type tracking is enabled
+    pub fn get_type(&self, id: TermId) -> Option<&str> {
+        self.types.as_ref()?.get(&id).map(|s| s.as_str())
+    }
+
+    /// Set the type of a term, if type tracking is enabled
+    pub fn set_type(&mut self, id: TermId, sort: String) {
+        if let Some(types) = &mut self.types {
+            types.insert(id, sort);
+        }
+    }
+
     /// Returns the number of nodes in this DAG.
     pub fn size(&self) -> usize {
         self.nodes.len()
@@ -198,6 +248,14 @@ impl TermDag {
         let node = Term::Var(sym);
         self.add_node(&node);
         self.lookup(&node)
+    }
+
+    /// Get the children of a term by its ID
+    pub fn get_children(&self, id: TermId) -> Vec<TermId> {
+        match self.get(id) {
+            Term::App(_, children) => children.clone(),
+            Term::Lit(_) | Term::Var(_) | Term::UnknownLit => Vec::new(),
+        }
     }
 
     fn add_node(&mut self, node: &Term) {
