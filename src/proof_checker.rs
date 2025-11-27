@@ -166,7 +166,6 @@ impl<'a> ProofChecker<'a> {
         &mut self,
         rule: &GenericRule<String, String>,
         subst: &[RuleVarBinding],
-        _premise_props: &[Proposition],
     ) -> Result<HashSet<Proposition>, ProofCheckError> {
         let mut result = HashSet::default();
 
@@ -245,9 +244,7 @@ impl<'a> ProofChecker<'a> {
                 self.check_rule_fires(&rule_name, &subst, &body_pfs)?;
 
                 // Get all propositions the rule can produce
-                // TODO: collect premise propositions from body_pfs
-                let premise_props = vec![];
-                let propositions = self.rule_propositions(&rule, &subst, &premise_props)?;
+                let propositions = self.rule_propositions(&rule, &subst)?;
 
                 // Check if the result term is in the set of propositions
                 if !propositions.contains(&Proposition::TermOk(result)) {
@@ -397,9 +394,7 @@ impl<'a> ProofChecker<'a> {
                 self.check_rule_fires(&rule_name, &subst, &body_pfs)?;
 
                 // Get all propositions the rule can produce
-                // TODO: collect premise propositions from body_pfs
-                let premise_props = vec![];
-                let propositions = self.rule_propositions(&rule, &subst, &premise_props)?;
+                let propositions = self.rule_propositions(&rule, &subst)?;
 
                 // Check if the equality is in the set of propositions
                 let prop = Proposition::TermsEq(result_lhs, result_rhs);
