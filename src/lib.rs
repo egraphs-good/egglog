@@ -1923,7 +1923,7 @@ impl<'a> BackendRule<'a> {
         (
             prim.primitive.id,
             qe_args,
-            prim.output.column_ty(self.rb.egraph()),
+            ty,
         )
     }
 
