@@ -1147,11 +1147,7 @@ where
     }
 }
 
-impl<Leaf> Eq for CanonicalizedVar<Leaf>
-where
-    Leaf: Clone + PartialEq + Eq + Hash,
-{
-}
+impl<Leaf> Eq for CanonicalizedVar<Leaf> where Leaf: Clone + PartialEq + Eq + Hash {}
 
 impl<Leaf> Hash for CanonicalizedVar<Leaf>
 where
