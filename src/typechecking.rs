@@ -206,6 +206,12 @@ impl EGraph {
     pub fn add_primitive_validator(&mut self, name: &str, validator: PrimitiveValidator) {
         if let Some(primitives) = self.type_info.primitives.get_mut(name) {
             if let Some(last) = primitives.last_mut() {
+                if last.validator.is_some() {
+                    panic!(
+                        "Duplicate validator for primitive '{}'. A validator is already registered.",
+                        name
+                    );
+                }
                 last.validator = Some(validator);
             }
         }
@@ -267,6 +273,13 @@ impl EGraph {
         for prim in primitives.iter_mut() {
             // Check if this primitive accepts this signature
             if prim.accept(&full_signature, &type_info_clone) {
+                if prim.validator.is_some() {
+                    let msg = format!(
+                        "Duplicate validator for primitive '{}' with types {:?} -> {}. A validator is already registered.",
+                        name, input_types, output_type
+                    );
+                    return Err(TypeError::Unbound(msg, Span::Panic));
+                }
                 prim.validator = Some(validator.clone());
                 found = true;
                 break;

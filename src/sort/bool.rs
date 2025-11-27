@@ -14,82 +14,10 @@ impl BaseSort for BoolSort {
     #[rustfmt::skip]
     fn register_primitives(&self, eg: &mut EGraph) {
         add_literal_prim!(eg, "not" = |a: bool| -> bool { !a });
-        eg.add_primitive_validator("not", std::sync::Arc::new(|termdag, lhs| {
-            use egglog_bridge::termdag::Term;
-            use egglog_ast::generic_ast::Literal;
-            if let Term::App(_, args) = termdag.get(lhs) {
-                if args.len() == 1 {
-                    if let Term::Lit(Literal::Bool(a)) = termdag.get(args[0]) {
-                        return Some(Literal::Bool(!a));
-                    }
-                }
-            }
-            None
-        }));
-
         add_literal_prim!(eg, "and" = |a: bool, b: bool| -> bool { a && b });
-        eg.add_primitive_validator("and", std::sync::Arc::new(|termdag, lhs| {
-            use egglog_bridge::termdag::Term;
-            use egglog_ast::generic_ast::Literal;
-            if let Term::App(_, args) = termdag.get(lhs) {
-                if args.len() == 2 {
-                    if let (Term::Lit(Literal::Bool(a)), Term::Lit(Literal::Bool(b))) =
-                        (termdag.get(args[0]), termdag.get(args[1]))
-                    {
-                        return Some(Literal::Bool(*a && *b));
-                    }
-                }
-            }
-            None
-        }));
-
         add_literal_prim!(eg, "or" = |a: bool, b: bool| -> bool { a || b });
-        eg.add_primitive_validator("or", std::sync::Arc::new(|termdag, lhs| {
-            use egglog_bridge::termdag::Term;
-            use egglog_ast::generic_ast::Literal;
-            if let Term::App(_, args) = termdag.get(lhs) {
-                if args.len() == 2 {
-                    if let (Term::Lit(Literal::Bool(a)), Term::Lit(Literal::Bool(b))) =
-                        (termdag.get(args[0]), termdag.get(args[1]))
-                    {
-                        return Some(Literal::Bool(*a || *b));
-                    }
-                }
-            }
-            None
-        }));
-
-        add_primitive!(eg, "xor" = |a: bool, b: bool| -> bool { a ^ b });
-        eg.add_primitive_validator("xor", std::sync::Arc::new(|termdag, lhs| {
-            use egglog_bridge::termdag::Term;
-            use egglog_ast::generic_ast::Literal;
-            if let Term::App(_, args) = termdag.get(lhs) {
-                if args.len() == 2 {
-                    if let (Term::Lit(Literal::Bool(a)), Term::Lit(Literal::Bool(b))) =
-                        (termdag.get(args[0]), termdag.get(args[1]))
-                    {
-                        return Some(Literal::Bool(*a ^ *b));
-                    }
-                }
-            }
-            None
-        }));
-
-        add_primitive!(eg, "=>" = |a: bool, b: bool| -> bool { !a || b });
-        eg.add_primitive_validator("=>", std::sync::Arc::new(|termdag, lhs| {
-            use egglog_bridge::termdag::Term;
-            use egglog_ast::generic_ast::Literal;
-            if let Term::App(_, args) = termdag.get(lhs) {
-                if args.len() == 2 {
-                    if let (Term::Lit(Literal::Bool(a)), Term::Lit(Literal::Bool(b))) =
-                        (termdag.get(args[0]), termdag.get(args[1]))
-                    {
-                        return Some(Literal::Bool(!a || *b));
-                    }
-                }
-            }
-            None
-        }));
+        add_literal_prim!(eg, "xor" = |a: bool, b: bool| -> bool { a ^ b });
+        add_literal_prim!(eg, "=>" = |a: bool, b: bool| -> bool { !a || b });
     }
 
     fn reconstruct_termdag(
