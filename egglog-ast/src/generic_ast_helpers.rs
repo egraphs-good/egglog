@@ -1,3 +1,4 @@
+use std::borrow::Cow;
 use std::fmt::{Display, Formatter};
 use std::hash::Hash;
 
@@ -26,6 +27,14 @@ macro_rules! impl_from {
             }
         }
     };
+}
+
+fn sanitize_internal_name(name: &str) -> Cow<'_, str> {
+    if let Some(stripped) = name.strip_prefix('@') {
+        Cow::Owned(format!("_{}", stripped))
+    } else {
+        Cow::Borrowed(name)
+    }
 }
 
 impl<Head: Display, Leaf: Display> Display for GenericRule<Head, Leaf>
@@ -59,12 +68,12 @@ where
             }
         }
         let ruleset = if !self.ruleset.is_empty() {
-            format!(":ruleset {}", self.ruleset)
+            format!(":ruleset {}", sanitize_internal_name(&self.ruleset))
         } else {
             "".into()
         };
         let name = if !self.name.is_empty() {
-            format!(":name \"{}\"", self.name)
+            format!(":name \"{}\"", sanitize_internal_name(&self.name))
         } else {
             "".into()
         };

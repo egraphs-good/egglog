@@ -421,6 +421,11 @@ impl<'a> ExecutionState<'a> {
         self.db.counters.read(ctr)
     }
 
+    /// Iterate over the identifiers of all tables visible to this execution state.
+    pub fn table_ids(&self) -> impl Iterator<Item = TableId> + '_ {
+        self.db.table_info.iter().map(|(id, _)| id)
+    }
+
     /// Get an immutable reference to the table with id `table`.
     /// Dangerous: Reading from a table during action execution may break the semi-naive evaluation
     pub fn get_table(&self, table: TableId) -> &'a WrappedTable {
