@@ -145,9 +145,13 @@ impl<'a> ProofChecker<'a> {
         // Look for Let commands that define globals
         for cmd in &program {
             if let Command::Action(crate::ast::Action::Let(_, name, _expr)) = cmd {
-                // We would need to evaluate the expression to get the TermId
-                // For now, we just track that this global exists
-                // A complete implementation would maintain the mapping
+                // Track global definitions
+                // Note: To fully validate PFiat proofs, we would need to evaluate
+                // the expression _expr and store its TermId. However, this requires
+                // access to the EGraph which we don't have here. For now, we record
+                // the global name to validate that PFiat axioms refer to actual globals.
+                // A placeholder TermId is used - in a complete implementation this would
+                // be the actual evaluated TermId.
                 global_terms.insert(name.clone(), TermId::from(0usize));
             }
         }
