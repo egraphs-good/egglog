@@ -432,6 +432,11 @@ impl<'a> ExecutionState<'a> {
         &self.db.table_info[table].table
     }
 
+    /// Get the human-readable name for a table, if one exists.
+    pub fn table_name(&self, table: TableId) -> Option<&'a str> {
+        self.db.table_info[table].name()
+    }
+
     pub fn base_values(&self) -> &BaseValues {
         self.db.bases
     }
