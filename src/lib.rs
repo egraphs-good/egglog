@@ -638,7 +638,7 @@ impl EGraph {
 
     /// Print the size of a function. If no function name is provided,
     /// print the size of all functions in "name: len" pairs.
-    pub fn print_size(&mut self, sym: Option<&str>) -> Result<CommandOutput, Error> {
+    pub fn print_size(&self, sym: Option<&str>) -> Result<CommandOutput, Error> {
         if let Some(sym) = sym {
             let f = self
                 .functions

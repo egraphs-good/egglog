@@ -7,6 +7,7 @@ pub mod remove_globals;
 use crate::core::{
     GenericAtom, GenericAtomTerm, GenericExprExt, HeadOrEq, Query, ResolvedCall, ResolvedCoreRule,
 };
+use crate::util::sanitize_internal_name;
 use crate::*;
 pub use egglog_ast::generic_ast::{
     Change, GenericAction, GenericActions, GenericExpr, GenericFact, GenericRule, Literal,
@@ -683,13 +684,20 @@ where
                 span: _,
                 name,
                 variants,
-            } => write!(f, "(datatype {name} {})", ListDisplay(variants, " ")),
+            } => {
+                let name = sanitize_internal_name(name);
+                write!(f, "(datatype {name} {})", ListDisplay(variants, " "))
+            }
             GenericCommand::Action(a) => write!(f, "{a}"),
             GenericCommand::Extract(_span, expr, variants) => {
                 write!(f, "(extract {expr} {variants})")
             }
-            GenericCommand::Sort(_span, name, None) => write!(f, "(sort {name})"),
+            GenericCommand::Sort(_span, name, None) => {
+                let name = sanitize_internal_name(name);
+                write!(f, "(sort {name})")
+            }
             GenericCommand::Sort(_span, name, Some((name2, args))) => {
+                let name = sanitize_internal_name(name);
                 write!(f, "(sort {name} ({name2} {}))", ListDisplay(args, " "))
             }
             GenericCommand::Function {
@@ -698,6 +706,7 @@ where
                 schema,
                 merge,
             } => {
+                let name = sanitize_internal_name(name);
                 write!(f, "(function {name} {schema}")?;
                 if let Some(merge) = &merge {
                     write!(f, " :merge {merge}")?;
@@ -713,6 +722,7 @@ where
                 cost,
                 unextractable,
             } => {
+                let name = sanitize_internal_name(name);
                 write!(f, "(constructor {name} {schema}")?;
                 if let Some(cost) = cost {
                     write!(f, " :cost {cost}")?;
@@ -727,14 +737,23 @@ where
                 name,
                 inputs,
             } => {
+                let name = sanitize_internal_name(name);
                 write!(f, "(relation {name} ({}))", ListDisplay(inputs, " "))
             }
-            GenericCommand::AddRuleset(_span, name) => write!(f, "(ruleset {name})"),
+            GenericCommand::AddRuleset(_span, name) => {
+                let name = sanitize_internal_name(name);
+                write!(f, "(ruleset {name})")
+            }
             GenericCommand::UnstableCombinedRuleset(_span, name, others) => {
+                let name = sanitize_internal_name(name);
+                let others: Vec<_> = others
+                    .iter()
+                    .map(|other| sanitize_internal_name(other).into_owned())
+                    .collect();
                 write!(
                     f,
                     "(unstable-combined-ruleset {name} {})",
-                    ListDisplay(others, " ")
+                    ListDisplay(&others, " ")
                 )
             }
             GenericCommand::Rule { rule } => rule.fmt(f),
@@ -749,6 +768,7 @@ where
             GenericCommand::Push(n) => write!(f, "(push {n})"),
             GenericCommand::Pop(_span, n) => write!(f, "(pop {n})"),
             GenericCommand::PrintFunction(_span, name, n, file, mode) => {
+                let name = sanitize_internal_name(name);
                 write!(f, "(print-function {name}")?;
                 if let Some(n) = n {
                     write!(f, " {n}")?;
@@ -763,13 +783,19 @@ where
                 write!(f, ")")
             }
             GenericCommand::PrintSize(_span, name) => {
+                let name: Option<_> = name
+                    .as_ref()
+                    .map(|value| sanitize_internal_name(value).into_owned());
                 write!(f, "(print-size {})", ListDisplay(name, " "))
             }
             GenericCommand::Input {
                 span: _,
                 name,
                 file,
-            } => write!(f, "(input {name} {file:?})"),
+            } => {
+                let name = sanitize_internal_name(name);
+                write!(f, "(input {name} {file:?})")
+            }
             GenericCommand::Output {
                 span: _,
                 file,
@@ -780,18 +806,22 @@ where
             GenericCommand::Datatypes { span: _, datatypes } => {
                 let datatypes: Vec<_> = datatypes
                     .iter()
-                    .map(|(_, name, variants)| match variants {
-                        Subdatatypes::Variants(variants) => {
-                            format!("({name} {})", ListDisplay(variants, " "))
-                        }
-                        Subdatatypes::NewSort(head, args) => {
-                            format!("(sort {name} ({head} {}))", ListDisplay(args, " "))
+                    .map(|(_, name, variants)| {
+                        let name = sanitize_internal_name(name);
+                        match variants {
+                            Subdatatypes::Variants(variants) => {
+                                format!("({name} {})", ListDisplay(variants, " "))
+                            }
+                            Subdatatypes::NewSort(head, args) => {
+                                format!("(sort {name} ({head} {}))", ListDisplay(args, " "))
+                            }
                         }
                     })
                     .collect();
                 write!(f, "(datatype* {})", ListDisplay(datatypes, " "))
             }
             GenericCommand::UserDefined(_span, name, exprs) => {
+                let name = sanitize_internal_name(name);
                 write!(f, "({name} {})", ListDisplay(exprs, " "))
             }
         }
@@ -844,8 +874,9 @@ where
 {
     fn fmt(&self, f: &mut Formatter) -> std::fmt::Result {
         write!(f, "(run")?;
-        if !self.ruleset.is_empty() {
-            write!(f, " {}", self.ruleset)?;
+        let ruleset = sanitize_internal_name(&self.ruleset);
+        if !ruleset.is_empty() {
+            write!(f, " {ruleset}")?;
         }
         if let Some(until) = &self.until {
             write!(f, " :until {}", ListDisplay(until, " "))?;
@@ -905,7 +936,8 @@ pub struct Variant {
 
 impl Display for Variant {
     fn fmt(&self, f: &mut Formatter) -> std::fmt::Result {
-        write!(f, "({}", self.name)?;
+        let name = sanitize_internal_name(&self.name);
+        write!(f, "({name}")?;
         if !self.types.is_empty() {
             write!(f, " {}", ListDisplay(&self.types, " "))?;
         }
@@ -1142,6 +1174,7 @@ impl<Head: Display, Leaf: Display> GenericRewrite<Head, Leaf> {
             write!(f, " :when ({})", ListDisplay(&self.conditions, " "))?;
         }
         if !ruleset.is_empty() {
+            let ruleset = sanitize_internal_name(ruleset);
             write!(f, " :ruleset {ruleset}")?;
         }
         write!(f, ")")
