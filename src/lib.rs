@@ -848,6 +848,7 @@ impl EGraph {
             &self.type_info,
             Vec::new(),
         );
+
         translator.actions(&actions)?;
         let id = translator.build();
         let result = self.backend.run_rules(&[id]);
@@ -1089,7 +1090,7 @@ impl EGraph {
                     .collect::<Vec<_>>();
 
                 // Use typed termdag for proof generation
-                let mut store = ProofStore::new_typed();
+                let mut store = ProofStore::new();
                 if let Some(proof_id) = self.prove_query(ast::Facts(surface_facts), &mut store)? {
                     // Print the proof
                     let mut buf = Vec::new();

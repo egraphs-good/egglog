@@ -43,12 +43,13 @@ impl QueryMatch {
 impl EGraph {
     /// Returns all matches for the given query as a vector of QueryMatch structs.
     ///
-    /// Each QueryMatch contains bindings for each variable in the query (excluding globals).
+    /// Each QueryMatch contains bindings for ALL variables in the query, including
+    /// variables from both sides of equality constraints (excluding globals).
     ///
     /// # Example
     /// ```
     /// # use egglog::prelude::*;
-    /// # let mut egraph = EGraph::default();
+    /// # let mut egraph = EGraph::with_proofs();
     /// egraph.parse_and_run_program(None, "
     ///     (datatype Math
     ///         (Num i64)
@@ -56,14 +57,17 @@ impl EGraph {
     ///     (Add (Num 1) (Num 2))
     /// ").unwrap();
     ///
-    /// // Query for all Add expressions
+    /// // Query for all Add expressions with an equality constraint.
+    /// // Note that ALL variables appear in the match: lhs, x, and y.
     /// let matches = egraph.get_matches(facts![(= lhs (Add x y))]).unwrap();
     ///
-    /// // We found 1 match with lhs, x, and y bound
+    /// // We found 1 match with ALL variables bound: lhs, x, and y.
+    /// // The variable 'lhs' comes from the left side of the equality,
+    /// // while 'x' and 'y' come from the right side.
     /// assert_eq!(matches.len(), 1);
+    /// assert!(matches[0].get("lhs").is_some());
     /// assert!(matches[0].get("x").is_some());
     /// assert!(matches[0].get("y").is_some());
-    /// assert!(matches[0].get("lhs").is_some());
     /// assert_eq!(matches[0].len(), 3);
     /// ```
     pub fn get_matches(&mut self, facts: Facts<String, String>) -> Result<Vec<QueryMatch>, Error> {

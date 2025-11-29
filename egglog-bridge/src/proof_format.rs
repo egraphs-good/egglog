@@ -51,13 +51,9 @@ pub struct ProofStore {
 }
 
 impl ProofStore {
-    /// Create a new ProofStore with type tracking enabled
-    pub fn new_typed() -> Self {
-        Self {
-            eq_memo: HashCons::default(),
-            term_memo: HashCons::default(),
-            termdag: TermDag::new_typed(),
-        }
+    /// Create a new ProofStore
+    pub fn new() -> Self {
+        Self::default()
     }
 
     /// Get a term proof by ID
