@@ -31,9 +31,7 @@ fn test_query_and_explain_match() {
 
     // Query for all Add expressions with a name bound to them
     // This will match both the original expressions and the ones created by the commutative rule
-    let matches = egraph
-        .get_matches(Facts(vec![Fact::Eq(span!(), expr!(lhs), expr!((Add x y)))]))
-        .unwrap();
+    let matches = egraph.get_matches(facts![(= lhs (Add x y))]).unwrap();
 
     println!("Found {} matches", matches.len());
     // We get 6 matches because the commutative rule creates both (Add a b) and (Add b a)

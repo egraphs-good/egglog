@@ -43,7 +43,7 @@ impl QueryMatch {
 impl EGraph {
     /// Returns all matches for the given query as a vector of QueryMatch structs.
     ///
-    /// Each QueryMatch contains bindings for ALL variables in the query, including
+    /// Each QueryMatch contains bindings for all variables in the query, including
     /// variables from both sides of equality constraints (excluding globals).
     ///
     /// # Example
@@ -58,10 +58,10 @@ impl EGraph {
     /// ").unwrap();
     ///
     /// // Query for all Add expressions with an equality constraint.
-    /// // Note that ALL variables appear in the match: lhs, x, and y.
+    /// // Note that all variables appear in the match: lhs, x, and y.
     /// let matches = egraph.get_matches(facts![(= lhs (Add x y))]).unwrap();
     ///
-    /// // We found 1 match with ALL variables bound: lhs, x, and y.
+    /// // We found 1 match with all variables bound: lhs, x, and y.
     /// // The variable 'lhs' comes from the left side of the equality,
     /// // while 'x' and 'y' come from the right side.
     /// assert_eq!(matches.len(), 1);
