@@ -48,7 +48,9 @@ use egglog_ast::span::Span;
 use egglog_ast::util::ListDisplay;
 pub use egglog_bridge::FunctionRow;
 pub use egglog_bridge::match_term_app;
-pub use egglog_bridge::proof_format::{EqProofId, ProofStore, TermProofId};
+pub use egglog_bridge::proof_format::{
+    CongProof, EqProof, EqProofId, Premise, ProofStore, RuleVarBinding, TermProof, TermProofId,
+};
 use egglog_bridge::syntax::SyntaxId;
 pub use egglog_bridge::termdag::{Term, TermDag, TermId};
 use egglog_bridge::{ColumnTy, QueryEntry, SourceExpr, SourceSyntax, TopLevelLhsExpr};
