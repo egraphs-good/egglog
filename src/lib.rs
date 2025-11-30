@@ -1628,26 +1628,40 @@ struct SyntaxBuilder<'a> {
 impl SyntaxBuilder<'_> {
     fn reconstruct_syntax(mut self) -> SourceSyntax {
         for fact in &self.proof_state.facts {
-            match fact {
-                GenericFact::Eq(_, l, r) => {
-                    let l_id = self.reconstruct_expr(l);
-                    let r_id = self.reconstruct_expr(r);
-                    self.env.add_toplevel_expr(TopLevelLhsExpr::Eq(l_id, r_id));
+            // To use the handy "?". See the comment on `reconstruct_expr` for why this can fail.
+            || -> Option<()> {
+                match fact {
+                    GenericFact::Eq(_, l, r) => {
+                        let l_id = self.reconstruct_expr(l)?;
+                        let r_id = self.reconstruct_expr(r)?;
+                        self.env.add_toplevel_expr(TopLevelLhsExpr::Eq(l_id, r_id));
+                    }
+                    GenericFact::Fact(expr) => {
+                        let id = self.reconstruct_expr(expr)?;
+                        self.env.add_toplevel_expr(TopLevelLhsExpr::Exists(id));
+                    }
                 }
-                GenericFact::Fact(expr) => {
-                    let id = self.reconstruct_expr(expr);
-                    self.env.add_toplevel_expr(TopLevelLhsExpr::Exists(id));
-                }
-            }
+                Some(())
+            }();
         }
         self.env
     }
 
+    /// Generate the corresponding [`SyntaxId`] for an expression.
+    ///
+    /// This returns an Option<SyntaxId> because the source syntax can have expressions involving
+    /// primitives where no actual Syntax needs to be passed down to proofs. For example, a
+    /// primitive call asserting that `(= 2 (+ 1 1))` will have no corresponding substitution
+    /// available, and even something like `(Num x) (= x (+ x x))` can easily be run at proof-check
+    /// time, with no added auxiliary variables needed to be stored in the DB.
+    ///
+    /// In cases like this `reconstruct_expr` return None and the rest of the process
+    /// short-circuits.
     fn reconstruct_expr(
         &mut self,
         expr: &GenericExpr<CorrespondingVar<ResolvedCall, ResolvedVar>, ResolvedVar>,
-    ) -> SyntaxId {
-        match expr {
+    ) -> Option<SyntaxId> {
+        Some(match expr {
             GenericExpr::Var(span, var) => {
                 let Some(qe) = self.var_map.get(&core::CanonicalizedResolvedAtomTerm::Var(
                     span.clone(),
@@ -1673,10 +1687,18 @@ impl SyntaxBuilder<'_> {
             }
 
             GenericExpr::Call(_, CorrespondingVar { head, to }, children) => {
+                let mut any_failed = false;
                 let args: Vec<_> = children
                     .iter()
-                    .map(|child| self.reconstruct_expr(child))
+                    .filter_map(|child| {
+                        let res = self.reconstruct_expr(child);
+                        any_failed |= res.is_none();
+                        res
+                    })
                     .collect();
+                if any_failed {
+                    return None;
+                }
                 match head {
                     ResolvedCall::Func(_) => {
                         let FunctionInfo { atom, backend_id } =
@@ -1688,23 +1710,26 @@ impl SyntaxBuilder<'_> {
                         })
                     }
                     ResolvedCall::Primitive(_) => {
-                        let PrimInfo {
+                        let Some(PrimInfo {
                             var,
                             ty,
                             func,
-                            ref name,
-                        } = self.proof_state.prim_info[to.name()];
+                            name,
+                        }) = self.proof_state.prim_info.get(to.name())
+                        else {
+                            return None;
+                        };
                         self.env.add_expr(SourceExpr::ExternalCall {
-                            var,
-                            ty,
-                            func,
+                            var: *var,
+                            ty: *ty,
+                            func: *func,
                             name: name.clone(),
                             args,
                         })
                     }
                 }
             }
-        }
+        })
     }
 }
 
@@ -1895,7 +1920,11 @@ impl<'a> BackendRule<'a> {
                     let (ext_id, args, ty) = self.prim(p, &atom.args);
                     self.proof_state.as_mut().map(|ps| -> Option<()> {
                         let Some(QueryEntry::Var(var)) = args.last() else {
-                            panic!("unexpected format for arguments in desugared primitive on LHS of a rule: {query:?}. Expected the final argument to be a variable")
+                            // This is an assertion about the output of some primitive. The
+                            // primitive itself is not returning a useful variable for other atoms
+                            // in the query. The proof checker as a result does not need to know
+                            // anything more about this call.
+                            return None;
                         };
                         let core::CanonicalizedResolvedAtomTerm::Var(_span, res_var) =
                             atom.args.last()?
