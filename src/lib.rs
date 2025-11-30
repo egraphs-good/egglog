@@ -1765,9 +1765,10 @@ impl SyntaxBuilder<'_> {
     /// primitives where no actual Syntax needs to be passed down to proofs. For example, a
     /// primitive call asserting that `(= 2 (+ 1 1))` will have no corresponding substitution
     /// available, and even something like `(Num x) (= x (+ x x))` can easily be run at proof-check
-    /// time, with no added auxiliary variables needed to be stored in the DB.
+    /// time, with no added auxiliary variables needed to be stored in the DB for the (= x (+ x x))
+    /// atom.
     ///
-    /// In cases like this `reconstruct_expr` return None and the rest of the process
+    /// In cases like this `reconstruct_expr` returns None and the rest of the process
     /// short-circuits.
     fn reconstruct_expr(
         &mut self,
@@ -1822,15 +1823,12 @@ impl SyntaxBuilder<'_> {
                         })
                     }
                     ResolvedCall::Primitive(_) => {
-                        let Some(PrimInfo {
+                        let PrimInfo {
                             var,
                             ty,
                             func,
                             name,
-                        }) = self.proof_state.prim_info.get(to.name())
-                        else {
-                            return None;
-                        };
+                        } = self.proof_state.prim_info.get(to.name())?;
                         self.env.add_expr(SourceExpr::ExternalCall {
                             var: *var,
                             ty: *ty,
