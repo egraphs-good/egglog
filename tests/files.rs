@@ -8,6 +8,7 @@ struct Run {
     path: PathBuf,
     resugar: bool,
     proof_checking: bool,
+    with_proofs: bool,
 }
 
 impl Run {
@@ -15,6 +16,41 @@ impl Run {
         let _ = env_logger::builder().is_test(true).try_init();
         let program = std::fs::read_to_string(&self.path)
             .unwrap_or_else(|err| panic!("Couldn't read {:?}: {:?}", self.path, err));
+
+        // For with_proofs tests, first check if proofs are supported
+        if self.with_proofs {
+            // Filter out tests with "+" primitive per user request
+            if program.contains("(+ ") {
+                log::info!("Skipping test with + primitive");
+                return;
+            }
+
+            match EGraph::check_program_supports_proofs(&program) {
+                Ok(()) => {
+                    // Run with proofs enabled
+                    let mut egraph = EGraph::with_proofs();
+                    match egraph
+                        .parse_and_run_program(self.path.to_str().map(String::from), &program)
+                    {
+                        Ok(msgs) => {
+                            for msg in msgs {
+                                log::info!("  {}", msg);
+                            }
+                        }
+                        Err(err) => {
+                            // If it's expected to fail, that's ok
+                            if !self.should_fail() {
+                                panic!("Program failed with proofs: {}", err);
+                            }
+                        }
+                    }
+                }
+                Err(err) => {
+                    log::info!("Proofs not supported: {}", err);
+                }
+            }
+            return;
+        }
 
         if !self.resugar {
             self.test_program(
@@ -104,6 +140,9 @@ impl Run {
                 let stem = self.0.path.file_stem().unwrap();
                 let stem_str = stem.to_string_lossy().replace(['.', '-', ' '], "_");
                 write!(f, "{stem_str}")?;
+                if self.0.with_proofs {
+                    write!(f, "_with_proofs")?;
+                }
                 if self.0.proof_checking {
                     write!(f, "_with_proof_checking")?;
                 }
@@ -132,10 +171,20 @@ fn generate_tests(glob: &str) -> Vec<Trial> {
             path: path.clone(),
             resugar: false,
             proof_checking: false,
+            with_proofs: false,
         };
         let should_fail = run.should_fail();
 
         push_trial(run.clone());
+
+        // Add with_proofs test for non-failing tests
+        if !should_fail {
+            push_trial(Run {
+                with_proofs: true,
+                ..run.clone()
+            });
+        }
+
         if !should_fail {
             push_trial(Run {
                 proof_checking: true,

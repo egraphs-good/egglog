@@ -11,6 +11,27 @@ use crate::{
 use egglog_ast::generic_ast::GenericExpr;
 
 impl EGraph {
+    /// Check if a program is compatible with proof mode.
+    /// Returns Ok(()) if the program can be run with proofs,
+    /// otherwise returns the first ProofsNotSupported error encountered.
+    pub fn check_program_supports_proofs(program_str: &str) -> Result<(), Error> {
+        // Create a temporary EGraph with proofs enabled to do the checking
+        let mut egraph = EGraph::with_proofs();
+
+        // Try to parse and run the program to see if it's supported
+        match egraph.parse_and_run_program(None, program_str) {
+            Ok(_) => Ok(()),
+            Err(e) => {
+                // If it's a ProofsNotSupported error, return it
+                if matches!(e, Error::ProofsNotSupported(..)) {
+                    return Err(e);
+                }
+                // Other errors might be expected failures
+                Ok(())
+            }
+        }
+    }
+
     /// Check if a command is compatible with proof mode.
     /// This traverses the entire command AST looking for unsupported features.
     pub(crate) fn check_command_supports_proofs(
