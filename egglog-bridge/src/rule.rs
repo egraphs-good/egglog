@@ -115,6 +115,46 @@ impl<T: Fn(&mut Bindings, &mut CoreRuleBuilder) -> Result<()> + Clone + Send + S
 dyn_clone::clone_trait_object!(Brc);
 type BuildRuleCallback = Box<dyn Brc>;
 
+/// The builders for queries in this module essentially wrap the lower-level
+/// builders from the `core_relations` crate. A single egglog rule can turn into
+/// N core-relations rules. The code is structured by constructing a series of
+/// callbacks that will iteratively build up a low-level rule that looks like
+/// the high-level rule, passing along an environment that keeps track of the
+/// mappings between low and high-level variables.
+#[derive(Clone, Default)]
+struct RuleCallbacks {
+    /// A set of callbacks to run prior to running `build_reason`, which wires up proof metadata.
+    /// Most instructions rely on this proof metadata -- this is currently only used for
+    /// `query_prim`.
+    header: Vec<BuildRuleCallback>,
+    /// An optional callback to wire up proof-related metadata before running
+    /// the RHS of a rule.
+    build_reason: Option<BuildRuleCallback>,
+    add_rule: Vec<BuildRuleCallback>,
+}
+
+impl RuleCallbacks {
+    fn add_callback(&mut self, cb: BuildRuleCallback) {
+        self.add_rule.push(cb);
+    }
+
+    fn add_header_callback(&mut self, cb: BuildRuleCallback) {
+        self.header.push(cb);
+    }
+
+    fn add_build_reason(&mut self, cb: BuildRuleCallback) {
+        self.build_reason = Some(cb);
+    }
+
+    fn run(&self, inner: &mut Bindings, rb: &mut CoreRuleBuilder) -> Result<()> {
+        self.header.iter().try_for_each(|f| f(inner, rb))?;
+        if let Some(build_reason) = &self.build_reason {
+            build_reason(inner, rb)?;
+        }
+        self.add_rule.iter().try_for_each(|f| f(inner, rb))
+    }
+}
+
 #[derive(Clone)]
 pub(crate) struct Query {
     uf_table: TableId,
@@ -126,15 +166,7 @@ pub(crate) struct Query {
     /// The current proofs that are in scope.
     atom_proofs: Vec<Variable>,
     atoms: Vec<(TableId, Vec<QueryEntry>, SchemaMath)>,
-    /// An optional callback to wire up proof-related metadata before running the RHS of a rule.
-    build_reason: Option<BuildRuleCallback>,
-    /// The builders for queries in this module essentially wrap the lower-level
-    /// builders from the `core_relations` crate. A single egglog rule can turn
-    /// into N core-relations rules. The code is structured by constructing a
-    /// series of callbacks that will iteratively build up a low-level rule that
-    /// looks like the high-level rule, passing along an environment that keeps
-    /// track of the mappings between low and high-level variables.
-    add_rule: Vec<BuildRuleCallback>,
+    callbacks: RuleCallbacks,
     /// If set, execute a single rule (rather than O(atoms.len()) rules) during
     /// seminaive, with the given atom as the focus.
     sole_focus: Option<usize>,
@@ -167,12 +199,11 @@ impl EGraph {
                 tracing,
                 rule_id,
                 seminaive,
-                build_reason: None,
                 sole_focus: None,
                 atom_proofs: Default::default(),
                 vars: Default::default(),
                 atoms: Default::default(),
-                add_rule: Default::default(),
+                callbacks: Default::default(),
                 plan_strategy: Default::default(),
             },
         }
@@ -186,7 +217,11 @@ impl EGraph {
 
 impl RuleBuilder<'_> {
     fn add_callback(&mut self, cb: impl Brc + 'static) {
-        self.query.add_rule.push(Box::new(cb));
+        self.query.callbacks.add_callback(Box::new(cb));
+    }
+
+    fn add_header_callback(&mut self, cb: impl Brc + 'static) {
+        self.query.callbacks.add_header_callback(Box::new(cb));
     }
 
     /// Access the underlying egraph within the builder.
@@ -316,11 +351,13 @@ impl RuleBuilder<'_> {
                 let cb = self
                     .proof_builder
                     .create_reason(syntax.clone(), self.egraph);
-                self.query.build_reason = Some(Box::new(move |bndgs, rb| {
-                    let reason = cb(bndgs, rb)?;
-                    bndgs.lhs_reason = Some(reason.into());
-                    Ok(())
-                }));
+                self.query
+                    .callbacks
+                    .add_build_reason(Box::new(move |bndgs, rb| {
+                        let reason = cb(bndgs, rb)?;
+                        bndgs.lhs_reason = Some(reason.into());
+                        Ok(())
+                    }));
             }
         }
         let res = self.query.rule_id;
@@ -448,12 +485,12 @@ impl RuleBuilder<'_> {
         let res = self.new_var(ret_ty);
         // External functions that fail on the RHS of a rule should cause a panic.
         let panic_fn = self.egraph.new_panic_lazy(panic_msg);
-        self.query.add_rule.push(Box::new(move |inner, rb| {
+        self.add_callback(move |inner, rb| {
             let args = inner.convert_all(&args);
             let var = rb.call_external_with_fallback(func, &args, panic_fn, &[])?;
             inner.mapping.insert(res.id, var.into());
             Ok(())
-        }));
+        });
         res
     }
 
@@ -506,7 +543,7 @@ impl RuleBuilder<'_> {
         _ret_ty: ColumnTy,
     ) -> Result<()> {
         let entries = entries.to_vec();
-        self.query.add_rule.push(Box::new(move |inner, rb| {
+        self.add_header_callback(move |inner, rb| {
             let mut dst_vars = inner.convert_all(&entries);
             let expected = dst_vars.pop().expect("must specify a return value");
             let var = rb.call_external(func, &dst_vars)?;
@@ -518,7 +555,7 @@ impl RuleBuilder<'_> {
                 _ => rb.assert_eq(var.into(), expected),
             }
             Ok(())
-        }));
+        });
         Ok(())
     }
 
@@ -682,10 +719,18 @@ impl RuleBuilder<'_> {
                         inner.mapping.insert(term_var.id, term.into());
                         inner.mapping.insert(res.id, var.into());
                         inner.mapping.insert(ts_var.id, ts.into());
-                        rb.assert_eq(var.into(), term.into());
                         // The following bookeeping is only needed
                         // if the value is new. That only happens if
                         // the main id equals the term id.
+                        //
+                        // We could add this line, but it could cause the rest of the rule to also
+                        // fail to run.
+                        //
+                        // > rb.assert_eq(var.into(), term.into());
+                        //
+                        // TODO: what we really need to do is to add this guard to the add_proof
+                        // callback itself, and only run _that_ callback until later. (Though that
+                        // could raise other issues).
                         add_proof(inner, rb)?;
                         Ok(())
                     })
@@ -742,7 +787,7 @@ impl RuleBuilder<'_> {
                 }
             }
         };
-        self.query.add_rule.push(cb);
+        self.query.callbacks.add_callback(cb);
         res
     }
 
@@ -793,7 +838,7 @@ impl RuleBuilder<'_> {
                     .context("union")
             })
         };
-        self.query.add_rule.push(cb);
+        self.query.callbacks.add_callback(cb);
     }
 
     /// This method is equivalent to `remove(table, before); set(table, after)`
@@ -853,7 +898,7 @@ impl RuleBuilder<'_> {
             func_cols: info.schema.len(),
         };
 
-        self.query.add_rule.push(Box::new(move |inner, rb| {
+        self.add_callback(move |inner, rb| {
             add_proof(inner, rb)?;
             let mut dst_vars = inner.convert_all(&after);
             schema_math.write_table_row(
@@ -878,7 +923,7 @@ impl RuleBuilder<'_> {
             )
             .context("rebuild_row_uf")?;
             rb.insert(table, &dst_vars).context("rebuild_row_table")
-        }));
+        });
     }
 
     /// Set the value of a function in the database.
@@ -936,7 +981,7 @@ impl RuleBuilder<'_> {
                     }
                     write_vals
                 };
-                self.query.add_rule.push(Box::new(move |inner, rb| {
+                self.add_callback(move |inner, rb| {
                     let mut dst_vars = inner.convert_all(&entries);
                     let ret_val = dst_vars[schema_math.ret_val_col()];
                     let write_vals = get_write_vals(inner, ret_val);
@@ -961,7 +1006,7 @@ impl RuleBuilder<'_> {
                         },
                     );
                     rb.insert(table, &dst_vars).context("set")
-                }));
+                });
                 return;
             }
 
@@ -992,7 +1037,7 @@ impl RuleBuilder<'_> {
                 });
             }
         } else {
-            self.query.add_rule.push(Box::new(move |inner, rb| {
+            self.add_callback(move |inner, rb| {
                 let mut dst_vars = inner.convert_all(&entries);
                 schema_math.write_table_row(
                     &mut dst_vars,
@@ -1004,7 +1049,7 @@ impl RuleBuilder<'_> {
                     },
                 );
                 rb.insert(table, &dst_vars).context("set")
-            }));
+            });
         };
     }
 
@@ -1016,7 +1061,7 @@ impl RuleBuilder<'_> {
             let dst_vars = inner.convert_all(&entries);
             rb.remove(table, &dst_vars).context("remove")
         });
-        self.query.add_rule.push(cb);
+        self.query.callbacks.add_callback(cb);
     }
 
     /// Panic with a given message.
@@ -1024,11 +1069,11 @@ impl RuleBuilder<'_> {
         let panic = self.egraph.new_panic(message.clone());
         let ret_ty = ColumnTy::Id;
         let res = self.new_var(ret_ty);
-        self.query.add_rule.push(Box::new(move |inner, rb| {
+        self.add_callback(move |inner, rb| {
             let var = rb.call_external(panic, &[])?;
             inner.mapping.insert(res.id, var.into());
             Ok(())
-        }));
+        });
     }
 }
 
@@ -1064,13 +1109,7 @@ impl Query {
     ) -> Result<core_relations::RuleId> {
         let mut rb = qb.build();
         inner.next_ts = Some(rb.read_counter(self.ts_counter).into());
-        // Set up proof state if it's configured.
-        if let Some(build_reason) = &self.build_reason {
-            build_reason(&mut inner, &mut rb)?;
-        }
-        self.add_rule
-            .iter()
-            .try_for_each(|f| f(&mut inner, &mut rb))?;
+        self.callbacks.run(&mut inner, &mut rb)?;
         Ok(rb.build_with_description(desc))
     }
 
