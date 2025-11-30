@@ -291,28 +291,35 @@ impl<'a> ProofChecker<'a> {
 
     /// Check if a term is a valid PFiat axiom
     fn is_valid_pfiat_term(&self, term: TermId) -> bool {
-        let termdag = self.proof_store.termdag();
+       let termdag = self.proof_store.termdag();
 
-        // Literals are always valid axioms
-        if matches!(termdag.get(term), Term::Lit(_)) {
-            return true;
-        }
+       // Literals are always valid axioms
+       if matches!(termdag.get(term), Term::Lit(_)) {
+           return true;
+       }
 
-        // Check if we have this term registered as a global
-        if self.term_to_global.contains_key(&term) {
-            return true;
-        }
-
-        // Check if it's a global variable defined via (let x expr)
-        if let Term::App(name, args) = termdag.get(term) {
-            // Global variables are 0-ary functions
-            if args.is_empty() && self.global_terms.contains_key(name) {
+        // Check if we have this exact term registered as a global value
+        // This ensures we're not accepting arbitrary terms, only ones we computed
+        for (_name, &global_term) in &self.global_terms {
+            if global_term == term {
                 return true;
             }
         }
 
-        false
-    }
+       // Check if it's a global variable defined via (let x expr)
+       if let Term::App(name, args) = termdag.get(term) {
+           // Global variables are 0-ary functions
+           if args.is_empty() {
+                if let Some(&_global_value) = self.global_terms.get(name) {
+                   // For a global reference to be valid, the term should match
+                   // the reference itself (not its value)
+                   return self.term_to_global.contains_key(&term);
+               }
+           }
+       }
+
+       false
+   }
 
     /// Check if a function is a primitive operation
     /// Check a term proof
@@ -634,92 +641,12 @@ impl<'a> ProofChecker<'a> {
                 ))
             }
             EqProof::PFiat { desc: _, lhs, rhs } => {
-                // PFiat for equalities should only be used for:
-                // 1. Primitive operations (which we validate)
-                // 2. User-defined equalities from globals
-
-                // First check if this is a primitive operation we can validate
-                if let Some(validation_result) = self.check_primitive_validation(lhs, rhs) {
-                    if !validation_result {
-                        return Err(ProofCheckError::InvalidProof(
+                // TODO this case is all wrong- these should be top-level global (union ...) actions only. We should record these at the beginning.
+                return Err(ProofCheckError::InvalidProof(
                             "Primitive validation failed: incorrect computation".to_string(),
                         ));
-                    }
-                    // Primitive validated successfully
-                    return Ok(Proposition::TermsEq(lhs, rhs));
-                }
-
-                // If not a primitive, this should be from a user-defined global
-                // Since we can't easily map terms back to global names,
-                // we accept this as a trusted axiom.
-                // A complete implementation would maintain a bidirectional mapping
-                // between global names and their term representations.
-                Ok(Proposition::TermsEq(lhs, rhs))
             }
         }
-    }
-
-    /// Check if a primitive computation is valid
-    /// Returns Some(true) if valid, Some(false) if invalid, None if not a primitive/can't check
-    fn check_primitive_validation(&self, lhs: TermId, rhs: TermId) -> Option<bool> {
-        // Get termdag and check if this is a validatable primitive
-        let termdag = self.proof_store.termdag();
-
-        // Check if lhs is a primitive operation we can validate
-        if let Term::App(func, args) = termdag.get(lhs) {
-            // Look up all overloaded primitives with this name
-            if let Some(prims) = self.type_info.get_prims(func) {
-                // Create a type inference context to identify the correct primitive
-                let mut type_ctx =
-                    TypeInferenceContext::new(termdag, self.type_info, &self.program);
-
-                // Try to find the specific primitive that matches
-                if let Some(prim_idx) = type_ctx.find_matching_primitive(func, args) {
-                    // Found the specific primitive - use its validator
-                    if let Some(prim) = prims.get(prim_idx) {
-                        if let Some(validator) = &prim.validator {
-                            if let Some(computed_lit) = validator(termdag, lhs) {
-                                // Check if the result matches
-                                if let Term::Lit(actual_lit) = termdag.get(rhs) {
-                                    return Some(&computed_lit == actual_lit);
-                                } else {
-                                    return Some(false);
-                                }
-                            } else {
-                                // The validator couldn't compute (e.g., non-constant arguments)
-                                // This doesn't mean computation failed, just that it can't be validated
-                                return None;
-                            }
-                        } else {
-                            // No validator for this specific primitive
-                            return None;
-                        }
-                    }
-                } else {
-                    // Couldn't determine the specific primitive from types
-                    // Fall back to letting validators self-identify
-                    for prim in prims {
-                        if let Some(validator) = &prim.validator {
-                            if let Some(computed_lit) = validator(termdag, lhs) {
-                                if let Term::Lit(actual_lit) = termdag.get(rhs) {
-                                    return Some(&computed_lit == actual_lit);
-                                } else {
-                                    return Some(false);
-                                }
-                            }
-                        }
-                    }
-                }
-
-                // If we have validators but none matched, this is an error
-                if prims.iter().any(|p| p.validator.is_some()) {
-                    return Some(false);
-                }
-            }
-        }
-
-        // Not a primitive we can validate
-        None
     }
 
     /// Check that a rule fires with the given substitution and premises
