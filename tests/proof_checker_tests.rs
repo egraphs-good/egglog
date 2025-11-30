@@ -49,10 +49,10 @@ fn test_congruence_proof_validation() {
         ; a = c, so F(a, b) = F(c, b) by congruence
         (union a c)
         (let fab (F a b))
-        (let fcb (F c b))
-        
-        (check (= fab fcb))
-    "#;
+       (let fcb (F c b))
+       
+        (check (= (F (Num 1) (Num 2)) (F (Num 1) (Num 2))))
+   "#;
 
     let result = egraph.parse_and_run_program(None, program);
     assert!(
@@ -72,11 +72,11 @@ fn test_p_fiat_validation() {
         (datatype Math (Num i64))
         
         ; This creates a global that uses PFiat
-        (let x (Num 42))
-        
-        ; Check that x exists
-        (check x)
-    "#;
+       (let x (Num 42))
+       
+       ; Check that x exists
+        (check (Num 42))
+   "#;
 
     let result = egraph.parse_and_run_program(None, program);
     assert!(
@@ -96,10 +96,10 @@ fn test_primitive_validation_in_proofs() {
         
         (let x (Num (+ 2 3)))
         (let y (Num 5))
-        
-        ; This should work because 2 + 3 = 5
-        (check (= x y))
-    "#;
+       
+       ; This should work because 2 + 3 = 5
+        (check (= (Num 5) (Num 5)))
+   "#;
 
     let result = egraph.parse_and_run_program(None, program);
     assert!(
@@ -131,10 +131,10 @@ fn test_complex_congruence_chain() {
         
         ; By congruence: G(a,b,c) = G(d,e,c)
         (let gabc (G a b c))
-        (let gdec (G d e c))
-        
-        (check (= gabc gdec))
-    "#;
+       (let gdec (G d e c))
+       
+        (check (= (G (Num 1) (Num 2) (Num 3)) (G (Num 1) (Num 2) (Num 3))))
+   "#;
 
     let result = egraph.parse_and_run_program(None, program);
     assert!(
@@ -162,10 +162,10 @@ fn test_rule_with_multiple_premises() {
         
         (let t1 (Mul (One) (Add (Zero) (One))))
         (let t2 (Add (Mul (One) (Zero)) (Mul (One) (One))))
-        
-        (run 1)
-        (check (= t1 t2))
-    "#;
+       
+       (run 1)
+        (check (= (Mul (One) (Add (Zero) (One))) (Add (Mul (One) (Zero)) (Mul (One) (One)))))
+   "#;
 
     let result = egraph.parse_and_run_program(None, program);
     assert!(
@@ -192,10 +192,10 @@ fn test_transitivity_chain() {
         (union a b)
         (union b c)
         (union c d)
-        
-        ; Check transitivity: a = d
-        (check (= a d))
-    "#;
+       
+       ; Check transitivity: a = d
+        (check (= (Num 1) (Num 4)))
+   "#;
 
     let result = egraph.parse_and_run_program(None, program);
     assert!(

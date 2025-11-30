@@ -97,6 +97,7 @@ impl<'a> TypeInferenceContext<'a> {
     }
 
     /// Find the specific primitive that matches the given application.
+    #[allow(dead_code)] // May be used in the future
     pub fn find_matching_primitive(&mut self, func: &str, args: &[TermId]) -> Option<usize> {
         if let Some(prims) = self.type_info.get_prims(func) {
             // Infer argument types

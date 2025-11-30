@@ -104,6 +104,9 @@ pub struct ProofChecker<'a> {
     global_terms: HashMap<String, TermId>,
     /// Reverse mapping from TermId to global name
     term_to_global: HashMap<TermId, String>,
+    /// Set of equalities established by global union actions
+    /// Each entry is a pair (lhs, rhs) that was unified
+    global_unions: HashSet<(TermId, TermId)>,
     type_info: &'a TypeInfo,
 }
 
@@ -119,6 +122,7 @@ impl<'a> ProofChecker<'a> {
             program,
             global_terms: HashMap::default(),
             term_to_global: HashMap::default(),
+            global_unions: HashSet::default(),
             type_info,
         };
 
@@ -133,12 +137,26 @@ impl<'a> ProofChecker<'a> {
         let program_cmds = self.program.clone();
 
         for cmd in &program_cmds {
-            if let Command::Action(crate::ast::Action::Let(_, name, expr)) = cmd {
-                // Evaluate the expression and bind it
-                if let Ok(term_id) = self.evaluate_expr(expr, &HashMap::default()) {
-                    self.global_terms.insert(name.clone(), term_id);
-                    self.term_to_global.insert(term_id, name.clone());
+            match cmd {
+                Command::Action(crate::ast::Action::Let(_, name, expr)) => {
+                    // Evaluate the expression and bind it
+                    if let Ok(term_id) = self.evaluate_expr(expr, &HashMap::default()) {
+                        self.global_terms.insert(name.clone(), term_id);
+                        self.term_to_global.insert(term_id, name.clone());
+                    }
                 }
+                Command::Action(crate::ast::Action::Union(_, lhs, rhs)) => {
+                    // Track global union actions
+                    if let (Ok(lhs_term), Ok(rhs_term)) = (
+                        self.evaluate_expr(lhs, &HashMap::default()),
+                        self.evaluate_expr(rhs, &HashMap::default()),
+                    ) {
+                        // Store both directions of the equality
+                        self.global_unions.insert((lhs_term, rhs_term));
+                        self.global_unions.insert((rhs_term, lhs_term));
+                    }
+                }
+                _ => {}
             }
         }
     }
@@ -186,6 +204,73 @@ impl<'a> ProofChecker<'a> {
 
                 // Return the app term if not a computable primitive
                 Ok(app_term)
+            }
+        }
+    }
+
+    /// Evaluate an expression and collect all subexpression terms created
+    /// Returns the main term and a vector of all intermediate terms (including the main term)
+    fn evaluate_expr_with_subterms(
+        &mut self,
+        expr: &GenericExpr<String, String>,
+        env: &HashMap<String, TermId>,
+    ) -> Result<(TermId, Vec<TermId>), ProofCheckError> {
+        let mut all_terms = Vec::new();
+
+        match expr {
+            GenericExpr::Var(_, name) => {
+                let term = env.get(name).cloned().ok_or_else(|| {
+                    ProofCheckError::SubstitutionError(format!(
+                        "Variable or global '{}' not found in environment",
+                        name
+                    ))
+                })?;
+                // Variables don't create new terms, just reference existing ones
+                Ok((term, vec![]))
+            }
+            GenericExpr::Lit(_, lit) => {
+                let term = self.proof_store.make_lit(lit.clone());
+                all_terms.push(term);
+                Ok((term, all_terms))
+            }
+            GenericExpr::Call(_, func, args) => {
+                // Check if it's a global reference
+                if args.is_empty() && self.global_terms.contains_key(func) {
+                    let term = self.global_terms[func];
+                    // Global references don't create new terms
+                    return Ok((term, vec![]));
+                }
+
+                // Evaluate all arguments and collect their subterms
+                let mut arg_term_ids = Vec::new();
+                for arg in args {
+                    let (term, mut subterms) = self.evaluate_expr_with_subterms(arg, env)?;
+                    arg_term_ids.push(term);
+                    all_terms.append(&mut subterms);
+                }
+
+                // Create the app term
+                let app_term = self
+                    .proof_store
+                    .make_app(func.clone(), arg_term_ids.clone());
+                all_terms.push(app_term);
+
+                // Check if this is a primitive that we can evaluate
+                if let Some(prims) = self.type_info.get_prims(func) {
+                    if let Some(result_term) =
+                        self.evaluate_primitive(func, &arg_term_ids, app_term, prims)?
+                    {
+                        // For primitives, we return the evaluated result
+                        // The app_term is already in all_terms
+                        if result_term != app_term {
+                            all_terms.push(result_term);
+                        }
+                        return Ok((result_term, all_terms));
+                    }
+                }
+
+                // Return the app term and all subterms if not a computable primitive
+                Ok((app_term, all_terms))
             }
         }
     }
@@ -291,12 +376,12 @@ impl<'a> ProofChecker<'a> {
 
     /// Check if a term is a valid PFiat axiom
     fn is_valid_pfiat_term(&self, term: TermId) -> bool {
-       let termdag = self.proof_store.termdag();
+        let termdag = self.proof_store.termdag();
 
-       // Literals are always valid axioms
-       if matches!(termdag.get(term), Term::Lit(_)) {
-           return true;
-       }
+        // Literals are always valid axioms
+        if matches!(termdag.get(term), Term::Lit(_)) {
+            return true;
+        }
 
         // Check if we have this exact term registered as a global value
         // This ensures we're not accepting arbitrary terms, only ones we computed
@@ -306,20 +391,20 @@ impl<'a> ProofChecker<'a> {
             }
         }
 
-       // Check if it's a global variable defined via (let x expr)
-       if let Term::App(name, args) = termdag.get(term) {
-           // Global variables are 0-ary functions
-           if args.is_empty() {
+        // Check if it's a global variable defined via (let x expr)
+        if let Term::App(name, args) = termdag.get(term) {
+            // Global variables are 0-ary functions
+            if args.is_empty() {
                 if let Some(&_global_value) = self.global_terms.get(name) {
-                   // For a global reference to be valid, the term should match
-                   // the reference itself (not its value)
-                   return self.term_to_global.contains_key(&term);
-               }
-           }
-       }
+                    // For a global reference to be valid, the term should match
+                    // the reference itself (not its value)
+                    return self.term_to_global.contains_key(&term);
+                }
+            }
+        }
 
-       false
-   }
+        false
+    }
 
     /// Check if a function is a primitive operation
     /// Check a term proof
@@ -439,26 +524,21 @@ impl<'a> ProofChecker<'a> {
                 }
 
                 // Verify that the new term is constructed correctly
-                // TODO verify the new term is constructed correctly by constructing it directly and comparing for term equality.
-                // Verify that the new term is constructed correctly by checking:
-                // 1. The function name is the same
-                // 2. The arguments match the rewritten arguments from the equality proofs
-                // This ensures congruence is applied correctly
-                let new_term_structure = self.proof_store.termdag().get(cong_proof.new_term);
-                match new_term_structure {
-                    Term::App(new_func, actual_new_args) => {
-                        if new_func != &func_name || actual_new_args != &new_args {
-                            return Err(ProofCheckError::InvalidProof(format!(
-                                "Congruence new term doesn't match expected construction. Expected {}({:?}) but got {}({:?})",
-                                func_name, new_args, new_func, actual_new_args
-                            )));
-                        }
-                    }
-                    _ => {
-                        return Err(ProofCheckError::InvalidProof(
-                            "Congruence new term should be a function application".to_string(),
-                        ));
-                    }
+                // Construct the expected new term directly and verify it matches
+                let expected_new_term = self.proof_store.make_app(func_name, new_args.clone());
+
+                // Verify that the claimed new term matches what we constructed
+                if cong_proof.new_term != expected_new_term {
+                    // Get detailed information for error reporting
+                    let actual_structure = self.proof_store.termdag().get(cong_proof.new_term);
+                    let expected_structure = self.proof_store.termdag().get(expected_new_term);
+                    return Err(ProofCheckError::InvalidProof(format!(
+                        "Congruence new term mismatch. Expected term {:?} (structure: {:?}) but got term {:?} (structure: {:?})",
+                        expected_new_term,
+                        expected_structure,
+                        cong_proof.new_term,
+                        actual_structure
+                    )));
                 }
 
                 Ok(Proposition::TermOk(cong_proof.new_term))
@@ -641,10 +721,16 @@ impl<'a> ProofChecker<'a> {
                 ))
             }
             EqProof::PFiat { desc: _, lhs, rhs } => {
-                // TODO this case is all wrong- these should be top-level global (union ...) actions only. We should record these at the beginning.
-                return Err(ProofCheckError::InvalidProof(
-                            "Primitive validation failed: incorrect computation".to_string(),
-                        ));
+                // PFiat equalities should only be used for global union actions
+                // Check if this equality was established by a global union action
+                if self.global_unions.contains(&(lhs, rhs)) {
+                    Ok(Proposition::TermsEq(lhs, rhs))
+                } else {
+                    Err(ProofCheckError::InvalidProof(format!(
+                        "PFiat equality ({:?}, {:?}) does not correspond to a global union action",
+                        lhs, rhs
+                    )))
+                }
             }
         }
     }
@@ -715,7 +801,9 @@ impl<'a> ProofChecker<'a> {
         Err(ProofCheckError::RuleNotFound(rule_name.to_string()))
     }
 
-    /// Type check the substitution to ensure variables match expected types
+    /// Type check the substitution to ensure variables match expected types.
+    /// An external proof checker would have trouble with this step, so we should consider adding type annotations
+    /// to the egglog
     fn typecheck_substitution(
         &mut self,
         rule: &GenericRule<String, String>,
@@ -821,20 +909,44 @@ impl<'a> ProofChecker<'a> {
             GenericAction::Let(_, name, expr) => {
                 // Let creates a term
                 let _ = name; // Suppress unused warning
-                let term = self.construct_term_from_expr(expr, var_map)?;
-                propositions.insert(Proposition::TermOk(term));
+                let (_term, subterms) = self.evaluate_expr_with_subterms(expr, var_map)?;
+                // Add all subexpression terms
+                for term in subterms {
+                    propositions.insert(Proposition::TermOk(term));
+                }
             }
             GenericAction::Set(_, lhs, args, rhs) => {
                 // Set creates an equality (f(args) = rhs)
                 let app_expr = GenericExpr::Call(Span::Panic, lhs.clone(), args.clone());
-                let lhs_term = self.construct_term_from_expr(&app_expr, var_map)?;
-                let rhs_term = self.construct_term_from_expr(rhs, var_map)?;
+                let (lhs_term, lhs_subterms) =
+                    self.evaluate_expr_with_subterms(&app_expr, var_map)?;
+                let (rhs_term, rhs_subterms) = self.evaluate_expr_with_subterms(rhs, var_map)?;
+
+                // Add all subexpression terms
+                for term in lhs_subterms {
+                    propositions.insert(Proposition::TermOk(term));
+                }
+                for term in rhs_subterms {
+                    propositions.insert(Proposition::TermOk(term));
+                }
+
+                // Add the equality proposition
                 propositions.insert(Proposition::TermsEq(lhs_term, rhs_term));
             }
             GenericAction::Union(_, lhs, rhs) => {
                 // Union creates an equality
-                let lhs_term = self.construct_term_from_expr(lhs, var_map)?;
-                let rhs_term = self.construct_term_from_expr(rhs, var_map)?;
+                let (lhs_term, lhs_subterms) = self.evaluate_expr_with_subterms(lhs, var_map)?;
+                let (rhs_term, rhs_subterms) = self.evaluate_expr_with_subterms(rhs, var_map)?;
+
+                // Add all subexpression terms
+                for term in lhs_subterms {
+                    propositions.insert(Proposition::TermOk(term));
+                }
+                for term in rhs_subterms {
+                    propositions.insert(Proposition::TermOk(term));
+                }
+
+                // Add the equality proposition
                 propositions.insert(Proposition::TermsEq(lhs_term, rhs_term));
             }
             GenericAction::Change(_, _, _, _) => {
@@ -845,8 +957,11 @@ impl<'a> ProofChecker<'a> {
             }
             GenericAction::Expr(_, expr) => {
                 // Expr actions evaluate expressions
-                // TODO they create one term proposition per subexpression. These should be returned. Same with previous cases like union- these create one term proposition per subexpression.
-                let _ = self.construct_term_from_expr(expr, var_map)?;
+                let (_term, subterms) = self.evaluate_expr_with_subterms(expr, var_map)?;
+                // Add all subexpression terms
+                for term in subterms {
+                    propositions.insert(Proposition::TermOk(term));
+                }
             }
         }
 
