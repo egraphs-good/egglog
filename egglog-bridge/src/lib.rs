@@ -164,6 +164,9 @@ pub struct FunctionConfig {
     pub name: String,
     /// Whether or not subsumption is enabled for this function.
     pub can_subsume: bool,
+    /// Whether every write to this table should get an associated "fiat" reason rather than a
+    /// standard, tree-shaped one. This is only relevant when proofs are enabled.
+    pub fiat_reason_only: bool,
 }
 
 pub type BackendFloat = core_relations::Boxed<OrderedFloat<f64>>;
@@ -807,6 +810,7 @@ impl EGraph {
             merge,
             name,
             can_subsume,
+            fiat_reason_only: _,
         } = config;
         assert!(
             !schema.is_empty(),

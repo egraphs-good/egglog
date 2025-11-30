@@ -562,6 +562,7 @@ impl EGraph {
             },
             name: decl.name.to_string(),
             can_subsume,
+            fiat_reason_only: false,
         });
 
         let function = Function {
