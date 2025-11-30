@@ -672,84 +672,25 @@ impl<'a> ProofChecker<'a> {
     fn check_rule_fires(
         &mut self,
         rule_name: &str,
-        _subst: &[RuleVarBinding],
+        subst: &[RuleVarBinding],
         body_pfs: &[Premise],
     ) -> Result<(), ProofCheckError> {
         // Find the rule in the program
         let rule = self.find_rule(rule_name)?.clone();
 
-        // Verify that we have the right number of premises
-        if body_pfs.len() != rule.body.len() {
+        // Get the expected propositions by applying substitution to the rule's query
+        let expected_props = self.get_query_propositions(&rule, subst)?;
+
+        // Get the actual propositions from the proof premises
+        let actual_props = self.get_premise_propositions(body_pfs)?;
+
+        // Check that the propositions match exactly
+        if expected_props != actual_props {
             return Err(ProofCheckError::InvalidProof(format!(
-                "Rule '{}' expects {} body facts, but proof provides {} premises",
-                rule_name,
-                rule.body.len(),
-                body_pfs.len()
+                "Rule '{}' premises don't match expected propositions. Expected: {:?}, Got: {:?}",
+                rule_name, expected_props, actual_props
             )));
         }
-
-        // The actual verification that premises match the rule body is lightweight
-        // Most validation happens in rule_propositions which verifies the rule output
-
-        // Check each premise
-        for (i, premise) in body_pfs.iter().enumerate() {
-            let body_fact = &rule.body[i];
-            match premise {
-                Premise::TermOk(term_pf) => {
-                    let prop = self.check_term_proof(*term_pf)?;
-                    // Verify this corresponds to a fact in the rule body
-                    if let Proposition::TermOk(_term) = prop {
-                        // Check that this is the right kind of premise for this body fact
-                        match body_fact {
-                            GenericFact::Fact(_expr) => {
-                                // This is correct - a Fact in the body should have a TermOk proof
-                                // Ideally we would verify that 'term' matches the instantiation
-                                // of 'expr' with 'subst', but that requires term construction
-                            }
-                            GenericFact::Eq(_, _, _) => {
-                                return Err(ProofCheckError::InvalidPremise(format!(
-                                    "Premise {} is a term proof but body expects equality",
-                                    i
-                                )));
-                            }
-                        }
-                    } else {
-                        return Err(ProofCheckError::InvalidPremise(format!(
-                            "Premise {} is not a valid term proof",
-                            i
-                        )));
-                    }
-                }
-                Premise::Eq(eq_pf) => {
-                    let prop = self.check_eq_proof(*eq_pf)?;
-                    // Verify this corresponds to an equality in the rule body
-                    if let Proposition::TermsEq(_lhs, _rhs) = prop {
-                        // Check that this is the right kind of premise for this body fact
-                        match body_fact {
-                            GenericFact::Eq(_, _e1, _e2) => {
-                                // This is correct - an Eq in the body should have an equality proof
-                                // Ideally we would verify that lhs/rhs match the instantiation
-                                // of e1/e2 with 'subst', but that requires term construction
-                            }
-                            GenericFact::Fact(_) => {
-                                return Err(ProofCheckError::InvalidPremise(format!(
-                                    "Premise {} is an equality proof but body expects term",
-                                    i
-                                )));
-                            }
-                        }
-                    } else {
-                        return Err(ProofCheckError::InvalidPremise(format!(
-                            "Premise {} is not a valid equality proof",
-                            i
-                        )));
-                    }
-                }
-            }
-        }
-
-        // The actual verification that the rule's head produces the claimed result
-        // is done in rule_propositions which checks against all possible propositions
 
         Ok(())
     }
@@ -790,5 +731,62 @@ impl<'a> ProofChecker<'a> {
                 Ok(self.proof_store.make_app(func.clone(), arg_terms))
             }
         }
+    }
+
+    /// Apply substitution to the rule's query to get expected propositions
+    fn get_query_propositions(
+        &mut self,
+        rule: &GenericRule<String, String>,
+        subst: &[RuleVarBinding],
+    ) -> Result<HashSet<Proposition>, ProofCheckError> {
+        let mut result = HashSet::default();
+
+        // Build a substitution map from variable names to TermIds
+        let mut var_map: HashMap<String, TermId> = HashMap::default();
+        for binding in subst {
+            var_map.insert(binding.name.to_string(), binding.term);
+        }
+
+        // Process each fact in the rule body
+        for fact in rule.body.iter() {
+            match fact {
+                GenericFact::Fact(expr) => {
+                    // A fact in the query needs the term to exist
+                    let term = self.construct_term_from_expr(expr, &var_map)?;
+                    result.insert(Proposition::TermOk(term));
+                }
+                GenericFact::Eq(_, lhs, rhs) => {
+                    // An equality in the query needs both terms to be equal
+                    let lhs_term = self.construct_term_from_expr(lhs, &var_map)?;
+                    let rhs_term = self.construct_term_from_expr(rhs, &var_map)?;
+                    result.insert(Proposition::TermsEq(lhs_term, rhs_term));
+                }
+            }
+        }
+
+        Ok(result)
+    }
+
+    /// Extract propositions from the proof premises
+    fn get_premise_propositions(
+        &mut self,
+        body_pfs: &[Premise],
+    ) -> Result<HashSet<Proposition>, ProofCheckError> {
+        let mut result = HashSet::default();
+
+        for premise in body_pfs.iter() {
+            match premise {
+                Premise::TermOk(term_pf) => {
+                    let prop = self.check_term_proof(*term_pf)?;
+                    result.insert(prop);
+                }
+                Premise::Eq(eq_pf) => {
+                    let prop = self.check_eq_proof(*eq_pf)?;
+                    result.insert(prop);
+                }
+            }
+        }
+
+        Ok(result)
     }
 }
