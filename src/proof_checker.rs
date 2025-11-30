@@ -426,16 +426,18 @@ impl<'a> ProofChecker<'a> {
                 }
 
                 // Verify that the new term is constructed correctly
-                // We can't modify the termdag to create the expected term, so we check structurally
-                // The new term should have the same function name and the new arguments
+                // Verify that the new term is constructed correctly by checking:
+                // 1. The function name is the same
+                // 2. The arguments match the rewritten arguments from the equality proofs
+                // This ensures congruence is applied correctly
                 let new_term_structure = self.proof_store.termdag().get(cong_proof.new_term);
                 match new_term_structure {
                     Term::App(new_func, actual_new_args) => {
                         if new_func != &func_name || actual_new_args != &new_args {
-                            return Err(ProofCheckError::InvalidProof(
-                                "Congruence new term doesn't match expected construction"
-                                    .to_string(),
-                            ));
+                            return Err(ProofCheckError::InvalidProof(format!(
+                                "Congruence new term doesn't match expected construction. Expected {}({:?}) but got {}({:?})",
+                                func_name, new_args, new_func, actual_new_args
+                            )));
                         }
                     }
                     _ => {
@@ -618,16 +620,17 @@ impl<'a> ProofChecker<'a> {
                 }
 
                 // Verify that the new term is constructed correctly
-                // We can't modify the termdag to create the expected term, so we check structurally
-                // The new term should have the same function name and the new arguments
+                // Verify that the new term is constructed correctly by checking:
+                // 1. The function name is the same
+                // 2. The arguments match the rewritten arguments from the equality proofs
                 let new_term_structure = self.proof_store.termdag().get(cong_proof.new_term);
                 match new_term_structure {
                     Term::App(new_func, actual_new_args) => {
                         if new_func != &func_name || actual_new_args != &new_args {
-                            return Err(ProofCheckError::InvalidProof(
-                                "Congruence new term doesn't match expected construction"
-                                    .to_string(),
-                            ));
+                            return Err(ProofCheckError::InvalidProof(format!(
+                                "Congruence new term doesn't match expected construction. Expected {}({:?}) but got {}({:?})",
+                                func_name, new_args, new_func, actual_new_args
+                            )));
                         }
                     }
                     _ => {
@@ -755,9 +758,20 @@ impl<'a> ProofChecker<'a> {
         // Type check substitution variables
         self.typecheck_substitution(&rule, subst)?;
 
-        // Rules with empty bodies (no query) can always fire - they're axioms
-        // Rules with empty heads produce no propositions but can still be valid
-        // (e.g., used for checking constraints)
+        // Rules with empty bodies (no query) are axioms that require no premises to fire
+        // They can produce terms/equalities unconditionally
+        if rule.body.is_empty() {
+            // Empty body = no premises required, this is valid
+            if !body_pfs.is_empty() {
+                return Err(ProofCheckError::InvalidProof(
+                    "Empty body rule should have no premises".to_string(),
+                ));
+            }
+            return Ok(());
+        }
+
+        // Rules with non-empty bodies require matching premises
+        // Empty heads are valid (e.g., for constraint checking)
 
         // Get the expected propositions by applying substitution to the rule's query
         let expected_props = self.get_query_propositions(&rule, subst)?;
