@@ -4,47 +4,8 @@
 //! The checker ensures that proof objects correctly justify the equality or term
 //! existence claims they make.
 //!
-//! ## Proof Constructors
-//!
-//! The proof system supports the following proof constructors:
-//!
-//! ### PRule
-//! Proves a term exists or two terms are equal by applying a rewrite rule.
-//! Requires: rule name, variable substitution, and proofs of all premises.
-//!
-//! ### PCong
-//! Proves that if two terms have equal arguments, the function applications are equal.
-//! This is the congruence closure principle.
-//!
-//! ### PRefl, PSym, PTrans
-//! Standard equality axioms: reflexivity, symmetry, and transitivity.
-//!
-//! ### PFiat (Axiom Proofs)
-//! **Use case**: User-defined globals and base values inserted into the database.
-//!
-//! PFiat proofs are axiomatic - they assert a term exists or an equality holds
-//! without providing justification. They should **only** be used for:
-//! - User-defined global constants: `(let x (Const 42))`
-//! - Base values inserted directly into the database
-//!
-//! **Current implementation note**: User-defined globals via `(let x expr)` currently
-//! generate `PRule` proofs (with rule name `"eval_actions"`), but they are intended
-//! to use `PFiat` proofs. This will be fixed in a future update.
-//!
-//! PFiat proofs should **NOT** be used for:
-//! - Primitive operations (e.g., `+`, `-`, `*`) - these MUST use their validators
-//! - User-defined rewrite rules
-//! - Congruence-derived equalities
-//!
-//! Primitives are always evaluated using their validators when all arguments are
-//! concrete values. If a primitive appears in a proof, it must be justified by
-//! evaluation through its validator, never by PFiat.
-//!
-//! The checker accepts PFiat proofs as valid without further verification,
-//! so they represent trusted axioms in the proof system.
-//!
 //! ## Example
-//! ```no_run
+//! ```
 //! use egglog::*;
 //! use egglog::prelude::*;
 //!
@@ -65,14 +26,8 @@
 //! let mut store = ProofStore::default();
 //! let proof_id = egraph.explain_term(x_val, &mut store).unwrap();
 //!
-//! // The proof shows that x was created via eval_actions rule
-//! // (currently using PRule, will eventually use PFiat for globals)
 //! let mut output = Vec::new();
 //! store.print_term_proof(proof_id, &mut output).unwrap();
-//! let proof_str = String::from_utf8(output).unwrap();
-//! // Check that the proof references the eval_actions rule
-//! // which is used for evaluating let bindings
-//! assert!(proof_str.contains("eval_actions") || proof_str.contains("PRule"));
 //! ```
 
 use crate::GenericAction;
@@ -144,6 +99,7 @@ impl std::error::Error for ProofCheckError {}
 pub struct ProofChecker<'a> {
     proof_store: &'a mut ProofStore,
     program: Vec<Command>,
+    /// Mapping from global name to TermId
     global_terms: HashMap<String, TermId>,
     /// Reverse mapping from TermId to global name
     term_to_global: HashMap<TermId, String>,
@@ -170,33 +126,20 @@ impl<'a> ProofChecker<'a> {
         checker
     }
 
-    /// Process global definitions and evaluate them to produce actual TermIds
+    /// Process global definitions and evaluate them to produce [`TermId`]s
     fn process_globals(&mut self) {
         // Process globals in order, building up the mapping
-        // This allows later globals to reference earlier ones
         let program_cmds = self.program.clone();
 
         for cmd in &program_cmds {
             if let Command::Action(crate::ast::Action::Let(_, name, expr)) = cmd {
-                // Evaluate the expression using the current global environment
-                // This allows globals to reference previously defined globals
-                if let Ok(term_id) = self.evaluate_global_expr(expr) {
+                // Evaluate the expression and bind it
+                if let Ok(term_id) = self.evaluate_expr(expr, &HashMap::default()) {
                     self.global_terms.insert(name.clone(), term_id);
                     self.term_to_global.insert(term_id, name.clone());
                 }
             }
         }
-    }
-
-    /// Evaluate a global expression, which can reference other globals
-    fn evaluate_global_expr(
-        &mut self,
-        expr: &GenericExpr<String, String>,
-    ) -> Result<TermId, ProofCheckError> {
-        // Use the unified evaluation function with current global terms as environment
-        // Clone to avoid borrow issues
-        let env = self.global_terms.clone();
-        self.evaluate_expr(expr, &env)
     }
 
     /// Apply a substitution to an expression, replacing variables with terms
@@ -217,7 +160,7 @@ impl<'a> ProofChecker<'a> {
             }),
             GenericExpr::Lit(_, lit) => Ok(self.proof_store.make_lit(lit.clone())),
             GenericExpr::Call(_, func, args) => {
-                // Check if it's a global that we already computed
+                // Check if it's a global reference
                 if args.is_empty() && self.global_terms.contains_key(func) {
                     return Ok(self.global_terms[func]);
                 }
@@ -229,28 +172,31 @@ impl<'a> ProofChecker<'a> {
                 let arg_terms = arg_terms?;
 
                 // Create the app term
+                // TODO make sure all terms have types in the termdag
                 let app_term = self.proof_store.make_app(func.clone(), arg_terms.clone());
 
+
+                // TODO split out evaluation of primitives to a separate function
+                // TODO See if this prim accepts the types of the arguments
+                // TODO make sure at most one prim accepts the argument types
+                // TODO once we have ap prim, make sure that it returns Some, otherwise error with primitive failed
                 // Check if this is a primitive that we can evaluate
                 if let Some(prims) = self.type_info.get_prims(func) {
                     // Try to evaluate the primitive if all args are constants
                     let termdag = self.proof_store.termdag();
-                    let all_constant = arg_terms
-                        .iter()
-                        .all(|&t| matches!(termdag.get(t), Term::Lit(_)));
-
-                    if all_constant {
-                        // Try each primitive variant's validator
-                        for prim in prims {
-                            if let Some(validator) = &prim.validator {
-                                if let Some(computed_lit) = validator(termdag, app_term) {
-                                    // The primitive computed to a literal value
-                                    return Ok(self.proof_store.make_lit(computed_lit));
-                                }
+                    
+                    
+                    // Try each primitive variant's validator
+                    for prim in prims {
+                        if let Some(validator) = &prim.validator {
+                            if let Some(computed_lit) = validator(termdag, app_term) {
+                                // The primitive computed to a literal value
+                                return Ok(self.proof_store.make_lit(computed_lit));
                             }
                         }
                     }
                 }
+
 
                 // Return the app term if not a computable primitive
                 Ok(app_term)
