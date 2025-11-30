@@ -35,6 +35,7 @@ use crate::{
     ArcSort, ProofStore, TypeInfo,
     ast::{Command, GenericExpr, GenericFact, GenericRule, collect_query_vars},
     proof_type_inference::TypeInferenceContext,
+    typechecking::PrimitiveWithId,
     util::HashMap,
     util::HashSet,
     util::SymbolGen,
@@ -172,31 +173,16 @@ impl<'a> ProofChecker<'a> {
                 let arg_terms = arg_terms?;
 
                 // Create the app term
-                // TODO make sure all terms have types in the termdag
                 let app_term = self.proof_store.make_app(func.clone(), arg_terms.clone());
 
-
-                // TODO split out evaluation of primitives to a separate function
-                // TODO See if this prim accepts the types of the arguments
-                // TODO make sure at most one prim accepts the argument types
-                // TODO once we have ap prim, make sure that it returns Some, otherwise error with primitive failed
                 // Check if this is a primitive that we can evaluate
                 if let Some(prims) = self.type_info.get_prims(func) {
-                    // Try to evaluate the primitive if all args are constants
-                    let termdag = self.proof_store.termdag();
-                    
-                    
-                    // Try each primitive variant's validator
-                    for prim in prims {
-                        if let Some(validator) = &prim.validator {
-                            if let Some(computed_lit) = validator(termdag, app_term) {
-                                // The primitive computed to a literal value
-                                return Ok(self.proof_store.make_lit(computed_lit));
-                            }
-                        }
+                    if let Some(result_term) =
+                        self.evaluate_primitive(func, &arg_terms, app_term, prims)?
+                    {
+                        return Ok(result_term);
                     }
                 }
-
 
                 // Return the app term if not a computable primitive
                 Ok(app_term)
@@ -204,6 +190,82 @@ impl<'a> ProofChecker<'a> {
         }
     }
 
+    /// Returns Some(term) if this is a primitive and it was successfully evaluated,
+    /// or None if no primitives match the given function name and argument types.
+    /// Errors if a primitive matches but fails to evaluate (for safety).
+    fn evaluate_primitive(
+        &mut self,
+        func: &str,
+        arg_terms: &[TermId],
+        app_term: TermId,
+        prims: &[PrimitiveWithId],
+    ) -> Result<Option<TermId>, ProofCheckError> {
+        // Get the termdag for evaluation
+        let termdag = self.proof_store.termdag();
+
+        // Infer the types of the argument terms
+        let mut type_ctx = TypeInferenceContext::new(termdag, self.type_info, &self.program);
+
+        let mut arg_types = Vec::new();
+        for &arg_term in arg_terms {
+            let arg_type = type_ctx.infer_type(arg_term).ok_or_else(|| {
+                ProofCheckError::TypeMismatch(format!(
+                    "Failed to infer type for argument term {:?}",
+                    termdag.get(arg_term)
+                ))
+            })?;
+            arg_types.push(arg_type);
+        }
+
+        // Find primitives that accept these argument types
+        let matching_prims: Vec<_> = prims
+            .iter()
+            .filter(|prim| prim.accept(&arg_types, self.type_info))
+            .collect();
+
+        // Ensure exactly one primitive matches
+        if matching_prims.is_empty() {
+            // No primitives match - this might not be a primitive at all
+            return Ok(None);
+        }
+
+        if matching_prims.len() > 1 {
+            return Err(ProofCheckError::TypeMismatch(format!(
+                "Ambiguous primitive call '{}' with argument types: {:?}. {} primitives match.",
+                func,
+                arg_types.iter().map(|t| t.name()).collect::<Vec<_>>(),
+                matching_prims.len()
+            )));
+        }
+
+        let prim = matching_prims[0];
+
+        // If the primitive has a validator, try to evaluate it
+        if let Some(validator) = &prim.validator {
+            // The validator evaluates the primitive if all arguments are constants
+            if let Some(computed_lit) = validator(termdag, app_term) {
+                // The primitive computed to a literal value
+                return Ok(Some(self.proof_store.make_lit(computed_lit)));
+            } else {
+                // Validator returned None - evaluation failed
+                // This happens if arguments are not constants or if evaluation logic fails
+                // For proof checking, we need to ensure primitives always evaluate successfully
+                return Err(ProofCheckError::InvalidProof(format!(
+                    "Primitive '{}' failed to evaluate with given arguments",
+                    func
+                )));
+            }
+        }
+
+        // No validator available - this is an error for proof checking
+        // We need to be safe: primitives without validators cannot be trusted in proofs
+        Err(ProofCheckError::InvalidProof(format!(
+            "Primitive '{}' has no validator and cannot be verified in proofs",
+            func
+        )))
+    }
+
+    /// Infer the type of a term from the termdag.
     /// Get all propositions that a rule can produce given a substitution and premises
     fn rule_propositions(
         &mut self,
@@ -714,9 +776,6 @@ impl<'a> ProofChecker<'a> {
             return Ok(());
         }
 
-        // Rules with non-empty bodies require matching premises
-        // Empty heads are valid (e.g., for constraint checking)
-
         // Get the expected propositions by applying substitution to the rule's query
         let expected_props = self.get_query_propositions(&rule, subst)?;
 
@@ -871,15 +930,13 @@ impl<'a> ProofChecker<'a> {
             }
             GenericAction::Change(_, _, _, _) => {
                 // Change modifies the egraph state but doesn't produce new propositions
-                // It changes function tables in-place, which affects future queries
-                // but doesn't create new terms or equalities that need proof justification
             }
             GenericAction::Panic(_, _) => {
                 // Panic actions abort execution - they don't produce propositions
             }
             GenericAction::Expr(_, expr) => {
-                // Expr actions evaluate expressions for side effects (e.g., extract, check)
-                // They don't produce new terms or equalities needing proof justification
+                // Expr actions evaluate expressions
+                // TODO they create one term proposition per subexpression. These should be returned. Same with previous cases like union- these create one term proposition per subexpression.
                 let _ = self.construct_term_from_expr(expr, var_map)?;
             }
         }
