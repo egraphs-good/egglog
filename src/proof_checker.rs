@@ -432,6 +432,7 @@ impl<'a> ProofChecker<'a> {
                 }
 
                 // Verify that the new term is constructed correctly
+                // TODO verify the new term is constructed correctly by constructing it directly and comparing for term equality.
                 // Verify that the new term is constructed correctly by checking:
                 // 1. The function name is the same
                 // 2. The arguments match the rewritten arguments from the equality proofs
@@ -456,31 +457,12 @@ impl<'a> ProofChecker<'a> {
                 Ok(Proposition::TermOk(cong_proof.new_term))
             }
             TermProof::PFiat { desc: _, term } => {
-                // PFiat should only be used for globals and base values
-                // Check if this term corresponds to a known global
-                //
-                // In practice, PFiat proofs are used for:
-                // 1. Base literals (always valid)
-                // 2. Global variables defined via (let x expr)
-                // 3. Primitive operations (arithmetic, comparison, etc.)
-                //
-                // Enhanced validation:
-                // For a more complete implementation with EGraph access, we would:
-                // 1. Evaluate global expressions at initialization to get actual TermIds
-                // 2. Store bidirectional mapping: global_name <-> TermId
-                // 3. Validate PFiat terms against this mapping
-                //
-                // Current limitations:
-                // - Without EGraph access, we cannot evaluate expressions to get TermIds
-                // - We rely on structural checking and name matching for validation
-                // - Primitive operations are validated by checking against a known list
-                //
+                // PFiat should only be used for terms declared globally or literals.
                 if self.is_valid_pfiat_term(term) {
                     return Ok(Proposition::TermOk(term));
                 }
 
-                // If we cannot validate the PFiat proof, provide detailed information
-                let term_str = format!("{:?}", term); // Temporary formatting
+                let term_str = format!("{:?}", term);
                 Err(ProofCheckError::InvalidProof(format!(
                     "PFiat proof for term '{}' does not correspond to a known global or literal.",
                     term_str
