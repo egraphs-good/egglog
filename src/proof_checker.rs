@@ -175,17 +175,14 @@ impl<'a> ProofChecker<'a> {
         // Process globals in order, building up the mapping
         // This allows later globals to reference earlier ones
         let program_cmds = self.program.clone();
-        let mut global_env: HashMap<String, TermId> = HashMap::default();
 
         for cmd in &program_cmds {
             if let Command::Action(crate::ast::Action::Let(_, name, expr)) = cmd {
                 // Evaluate the expression using the current global environment
                 // This allows globals to reference previously defined globals
-                if let Ok(term_id) = self.evaluate_global_expr(expr, &global_env) {
+                if let Ok(term_id) = self.evaluate_global_expr(expr) {
                     self.global_terms.insert(name.clone(), term_id);
                     self.term_to_global.insert(term_id, name.clone());
-                    // Add to environment for subsequent globals
-                    global_env.insert(name.clone(), term_id);
                 }
             }
         }
@@ -195,10 +192,11 @@ impl<'a> ProofChecker<'a> {
     fn evaluate_global_expr(
         &mut self,
         expr: &GenericExpr<String, String>,
-        global_env: &HashMap<String, TermId>,
     ) -> Result<TermId, ProofCheckError> {
-        // Use the unified evaluation function
-        self.evaluate_expr(expr, global_env)
+        // Use the unified evaluation function with current global terms as environment
+        // Clone to avoid borrow issues
+        let env = self.global_terms.clone();
+        self.evaluate_expr(expr, &env)
     }
 
     /// Apply a substitution to an expression, replacing variables with terms
