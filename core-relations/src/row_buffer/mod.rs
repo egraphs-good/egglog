@@ -74,7 +74,7 @@ impl RowBuffer {
                 total_rows: self.total_rows,
                 data: Default::default(),
             },
-            vec: Some(ParallelVecWriter::new(Pooled::into_inner(data))),
+            vec: ParallelVecWriter::new(Pooled::into_inner(data)),
         }
     }
 
@@ -413,16 +413,14 @@ unsafe fn get_row(data: &[Cell<Value>], n_columns: usize, row: RowId) -> &[Value
 /// most cases.
 pub(crate) struct ParallelRowBufWriter {
     buf: RowBuffer,
-    // This is only an option so we can move out of it in `drop`. It is always
-    // populated.
-    vec: Option<ParallelVecWriter<Cell<Value>>>,
+    vec: ParallelVecWriter<Cell<Value>>,
 }
 
 impl ParallelRowBufWriter {
     pub(crate) fn read_handle(&self) -> ReadHandle<'_, impl Deref<Target = [Cell<Value>]> + '_> {
         ReadHandle {
             buf: &self.buf,
-            data: self.vec.as_ref().unwrap().read_access(),
+            data: self.vec.read_access(),
         }
     }
     pub(crate) fn write_raw_values(
@@ -432,17 +430,13 @@ impl ParallelRowBufWriter {
     ) -> RowId {
         debug_assert_eq!(vals.len() % self.buf.n_columns, 0);
         debug_assert_eq!(vals.len() / self.buf.n_columns, new_rows);
-        let start_off = self
-            .vec
-            .as_ref()
-            .unwrap()
-            .write_contents(vals.map(Cell::new));
+        let start_off = self.vec.write_contents(vals.map(Cell::new));
         debug_assert_eq!(start_off % self.buf.n_columns, 0);
         RowId::from_usize(start_off / self.buf.n_columns)
     }
 
     pub(crate) fn finish(mut self) -> RowBuffer {
-        self.buf.data = Pooled::new(self.vec.take().unwrap().finish());
+        self.buf.data = Pooled::new(self.vec.finish());
         self.buf.total_rows = self.buf.data.len() / self.buf.n_columns;
         self.buf
     }
