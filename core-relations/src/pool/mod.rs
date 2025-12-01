@@ -395,7 +395,7 @@ macro_rules! pool_set {
             }
 
             $vis fn get<T: InPoolSet<Self> + Default>(&self) -> Pooled<T> {
-                self.get_pool().get()
+                T::with_pool(self, |pool| pool.get())
             }
             $vis fn clear(&self) {
                 $( self.$ident.clear(); )*
