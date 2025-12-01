@@ -1392,26 +1392,18 @@ impl EGraph {
     pub fn run_program(&mut self, program: Vec<Command>) -> Result<Vec<CommandOutput>, Error> {
         let mut outputs = Vec::new();
         let mut program_queue: Vec<Command> = program;
-        program_queue.reverse(); // Reverse so we can pop from the end
+        program_queue.reverse();
 
-        // Process commands one by one, expanding includes as we go
         while let Some(command) = program_queue.pop() {
-            // Handle includes by expanding them into the queue
             if let Command::Include(span, file) = &command {
                 let s = std::fs::read_to_string(file)
                     .unwrap_or_else(|_| panic!("{span} Failed to read file {file}"));
                 let included_program = self
                     .parser
                     .get_program_from_string(Some(file.clone()), &s)?;
-
-                // Push included commands onto the stack to be processed individually.
-                // This ensures each command goes through desugar->typecheck->execute
-                // with TypeInfo properly updated between commands.
-                // Extend in reverse order so they get popped in the correct order
+                // Add included commands to be processed next
                 program_queue.extend(included_program.into_iter().rev());
             } else {
-                // Important to process each command individually
-                // because push and pop create new scopes
                 for processed in self.process_command(command)? {
                     let result = self.run_command(processed)?;
                     if let Some(output) = result {
