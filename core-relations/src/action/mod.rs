@@ -633,7 +633,8 @@ impl ExecutionState<'_> {
                                                 bindings[*v][offset]
                                             }
                                             WriteVal::IncCounter(ctr) => {
-                                                Value::from_usize(ctrs.inc(*ctr))
+                                                let res = ctrs.inc(*ctr);
+                                                Value::from_usize(res)
                                             }
                                             WriteVal::CurrentVal(ix) => row[*ix],
                                         };

@@ -12,9 +12,7 @@ use crate::core_relations::{
     WriteVal, make_external_func,
 };
 use crate::numeric_id::{DenseIdMap, IdVec, NumericId, define_id};
-use crate::{
-    ColumnTy, EGraph, NOT_SUBSUMED, ProofReason, QueryEntry, ReasonSpecId, Result, SchemaMath,
-};
+use crate::{ColumnTy, EGraph, ProofReason, QueryEntry, ReasonSpecId, Result, SchemaMath};
 use smallvec::SmallVec;
 
 use crate::{
@@ -215,13 +213,10 @@ impl ProofBuilder {
         };
         let cong_args = CongArgs {
             func_table: func,
-            func_underlying,
-            schema_math,
             reason_table: egraph.reason_table(&ProofReason::CongRow),
             term_table: egraph.term_table(func_underlying),
             reason_counter: egraph.reason_counter,
             term_counter: egraph.id_counter,
-            ts_counter: egraph.timestamp_counter,
             reason_spec_id: egraph.cong_spec,
         };
         let build_term = egraph.register_external_func(make_external_func(move |es, vals| {
@@ -305,10 +300,6 @@ impl TermReconstructionState<'_> {
 struct CongArgs {
     /// The function that we are applying congruence to.
     func_table: FunctionId,
-    /// The undcerlying `core_relations` table that this function corresponds to.
-    func_underlying: TableId,
-    /// Schema-related offset information needed for writing to the table.
-    schema_math: SchemaMath,
     /// The table that will hold the reason justifying the new term, if we need to insert one.
     reason_table: TableId,
     /// The table that will hold the new term, if we need to insert one.
@@ -317,8 +308,6 @@ struct CongArgs {
     reason_counter: CounterId,
     /// The counter that will be incremented when we insert a new term.
     term_counter: CounterId,
-    /// The counter that will be used to read the current timestamp for the new row.
-    ts_counter: CounterId,
     /// The specification (or schema) for the reason we are writing (congruence, in this case).
     reason_spec_id: ReasonSpecId,
 }
@@ -345,15 +334,5 @@ fn cong_term(args: &CongArgs, es: &mut ExecutionState, vals: &[Value]) -> Option
         .into_iter(),
         ColumnId::from_usize(term_row.len()),
     );
-
-    // We should be able to do a raw insert at this point. All conflicting inserts will have the
-    // same term value, and this function only gets called when a lookup fails.
-
-    let ts = Value::from_usize(es.read_counter(args.ts_counter));
-    term_row.resize(args.schema_math.table_columns(), NOT_SUBSUMED);
-    term_row[args.schema_math.ret_val_col()] = term_val;
-    term_row[args.schema_math.proof_id_col()] = term_val;
-    term_row[args.schema_math.ts_col()] = ts;
-    es.stage_insert(args.func_underlying, &term_row);
     Some(term_val)
 }

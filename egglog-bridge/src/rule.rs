@@ -684,9 +684,13 @@ impl RuleBuilder<'_> {
                     let ts_var = self.new_var(ColumnTy::Id);
                     let mut insert_entries = entries.to_vec();
                     insert_entries.push(res.clone().into());
-                    let add_proof =
-                        self.proof_builder
-                            .new_row(func, insert_entries, term_var.id, self.egraph);
+                    let add_proof = self.proof_builder.new_row(
+                        func,
+                        insert_entries,
+                        Some(res.id),
+                        term_var.id,
+                        self.egraph,
+                    );
                     Box::new(move |inner, rb| {
                         let write_vals = get_write_vals(inner);
                         let dst_vars = inner.convert_all(&entries);
@@ -961,7 +965,15 @@ impl RuleBuilder<'_> {
                     });
                     let res_entry = res.clone().into();
                     self.union(res.into(), entries.last().unwrap().clone());
-                    if schema_math.subsume {
+                    if schema_math.subsume
+                        && !matches!(
+                            subsume_entry,
+                            QueryEntry::Const {
+                                val: NOT_SUBSUMED,
+                                ..
+                            },
+                        )
+                    {
                         // Set the original row but with the passed-in subsumption value.
                         self.add_callback(move |inner, rb| {
                             let mut dst_vars = inner.convert_all(&entries);
@@ -991,9 +1003,13 @@ impl RuleBuilder<'_> {
                     let id_counter = self.query.id_counter;
                     let term_var = self.new_var(ColumnTy::Id);
                     let term_var_id = term_var.id;
-                    let add_proof =
-                        self.proof_builder
-                            .new_row(func, entries.clone(), term_var_id, self.egraph);
+                    let add_proof = self.proof_builder.new_row(
+                        func,
+                        entries.clone(),
+                        None,
+                        term_var_id,
+                        self.egraph,
+                    );
                     let get_write_vals = move |inner: &mut Bindings, ret_val: DstVar| {
                         let mut write_vals = SmallVec::<[WriteVal; 4]>::new();
                         for i in schema_math.num_keys()..schema_math.table_columns() {

@@ -744,6 +744,29 @@ impl EGraph {
         drain_buf!(buf);
     }
 
+    /// A basic method for dumping the names and mappings for table information: useful for
+    /// debugging egglog internals.
+    pub fn dump_table_info(&self) {
+        info!("=== View Tables ===");
+        for (id, info) in self.funcs.iter() {
+            info!(
+                "View Table {name} / {id:?} / {table:?}",
+                name = info.name,
+                table = info.table
+            );
+        }
+
+        info!("=== Term Tables ===");
+        for (_, table_id) in &self.term_tables {
+            info!("Term Table {table_id:?}");
+        }
+
+        info!("=== Reason Tables ===");
+        for (_, table_id) in &self.reason_tables {
+            info!("Reason Table {table_id:?}");
+        }
+    }
+
     /// A basic method for dumping the state of the database to `log::info!`.
     ///
     /// For large tables, this is unlikely to give particularly useful output.

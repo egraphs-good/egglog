@@ -117,6 +117,7 @@ impl ProofBuilder {
         &mut self,
         func: FunctionId,
         entries: Vec<QueryEntry>,
+        res_id: Option<VariableId>,
         term_var: VariableId,
         db: &mut EGraph,
     ) -> impl Fn(&mut Bindings, &mut RuleBuilder) -> Result<()> + Clone + use<> {
@@ -134,7 +135,16 @@ impl ProofBuilder {
             }
             translated.push(inner.mapping[term_var]);
             translated.push(reason_var);
-            rb.insert(term_table, &translated)?;
+            if let Some(res_id) = res_id {
+                rb.insert_if_eq(
+                    term_table,
+                    inner.mapping[res_id],
+                    inner.mapping[term_var],
+                    &translated,
+                )?;
+            } else {
+                rb.insert(term_table, &translated)?;
+            }
             Ok(())
         }
     }
