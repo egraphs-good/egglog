@@ -579,6 +579,16 @@ impl WrappedTable {
         self.as_ref().scan(subset)
     }
 
+    /// Return the number of rows currently stored in the table.
+    pub fn len(&self) -> usize {
+        self.inner.len()
+    }
+
+    /// Check if the table is empty.
+    pub fn is_empty(&self) -> bool {
+        self.inner.is_empty()
+    }
+
     pub(crate) fn lookup_row_vectorized(
         &self,
         mask: &mut Mask,
@@ -741,6 +751,11 @@ impl WrappedTableRef<'_> {
     /// Return the contents of the subset as a [`TaggedRowBuffer`].
     pub fn scan(&self, subset: SubsetRef) -> TaggedRowBuffer {
         self.wrapper.scan(self.inner, subset)
+    }
+
+    /// Return the number of rows currently stored in the table.
+    pub fn len(&self) -> usize {
+        self.inner.len()
     }
 
     pub(crate) fn lookup_row_vectorized(
