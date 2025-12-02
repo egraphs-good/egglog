@@ -133,6 +133,10 @@ pub struct EGraph {
     /// union-find. In this way, it's a subset of the full union-find in the `uf_table` row, only
     /// used to resolved temporary inconsistencies in cached term values.
     term_consistency_table: TableId,
+    /// The reason consistency table is the reason-level analog to the term consistency table. When
+    /// identical reasons are inserted to a table concurrently, this table tracks which one is
+    /// canonical.
+    reason_consistency_table: TableId,
     tracing: bool,
     report_level: ReportLevel,
 }
@@ -255,6 +259,8 @@ impl EGraph {
         let cong_spec = proof_specs.push(Arc::new(ProofReason::CongRow));
         let term_consistency_table =
             db.add_table(DisplacedTable::default(), iter::empty(), iter::empty());
+        let reason_consistency_table =
+            db.add_table(DisplacedTable::default(), iter::empty(), iter::empty());
 
         Self {
             db,
@@ -271,6 +277,7 @@ impl EGraph {
             reason_tables: Default::default(),
             term_tables: Default::default(),
             term_consistency_table,
+            reason_consistency_table,
             report_level: Default::default(),
             tracing,
         }
@@ -408,10 +415,14 @@ impl EGraph {
 
     fn canonicalize_term_id(&mut self, term_id: Value) -> Value {
         let table = self.db.get_table(self.term_consistency_table);
-        table
+        let res = table
             .get_row(&[term_id])
             .map(|row| row.vals[1])
-            .unwrap_or(term_id)
+            .unwrap_or(term_id);
+        if res != term_id {
+            let todo_remove = eprintln!("looking up {term_id:?} => {res:?}");
+        }
+        res
     }
 
     fn term_table(&mut self, table: TableId) -> TableId {
@@ -463,14 +474,34 @@ impl EGraph {
         match self.reason_tables.entry(arity) {
             Entry::Occupied(o) => *o.get(),
             Entry::Vacant(v) => {
+                let consistency = self.reason_consistency_table;
+                let ts_counter = self.timestamp_counter;
                 let table = SortedWritesTable::new(
                     arity,
                     arity + 1, // one value for the reason id
                     None,
                     vec![], // no rebuilding needed for reason tables
-                    Box::new(|_, _, _, _| false),
+                    Box::new(move |state, old, new, out| {
+                        let old_id = *old.last().unwrap();
+                        let new_id = *new.last().unwrap();
+                        if new_id < old_id {
+                            Self::record_term_consistency(
+                                state,
+                                consistency,
+                                ts_counter,
+                                old_id,
+                                new_id,
+                            );
+                            out.extend(new);
+                            true
+                        } else {
+                            false
+                        }
+                    }),
                 );
-                let table_id = self.db.add_table(table, iter::empty(), iter::empty());
+                let table_id = self
+                    .db
+                    .add_table(table, iter::empty(), iter::once(consistency));
                 *v.insert(table_id)
             }
         }
