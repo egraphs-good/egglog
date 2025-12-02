@@ -263,7 +263,7 @@ pub struct EGraph {
     rulesets: IndexMap<String, Ruleset>,
     pub fact_directory: Option<PathBuf>,
     pub seminaive: bool,
-    pub type_info: TypeInfo,
+    type_info: TypeInfo,
     /// The run report unioned over all runs so far.
     overall_run_report: RunReport,
     schedulers: DenseIdMap<SchedulerId, SchedulerRecord>,
@@ -271,7 +271,7 @@ pub struct EGraph {
     strict_mode: bool,
     warned_about_missing_global_prefix: bool,
     /// Registry for command-level macros
-    pub command_macros: CommandMacroRegistry,
+    command_macros: CommandMacroRegistry,
 }
 
 /// A user-defined command allows users to inject custom command that can be called
@@ -401,6 +401,16 @@ impl EGraph {
     /// Get the type information for this e-graph
     pub fn type_info(&mut self) -> &mut TypeInfo {
         &mut self.type_info
+    }
+
+    /// Get read-only access to the command macro registry
+    pub fn command_macros(&self) -> &CommandMacroRegistry {
+        &self.command_macros
+    }
+
+    /// Get mutable access to the command macro registry
+    pub fn command_macros_mut(&mut self) -> &mut CommandMacroRegistry {
+        &mut self.command_macros
     }
 
     pub fn add_command(
@@ -1443,7 +1453,9 @@ impl EGraph {
         Ok(outputs)
     }
 
-    pub fn resugar_program(
+    /// Desugars an egglog program by parsing and desugaring each command.
+    /// Outputs a new egglog program without any syntactic sugar, either user provided ([`CommandMacros`]) or built-in (e.g., `rewrite` commands).
+    pub fn desugar_program(
         &mut self,
         filename: Option<String>,
         input: &str,
@@ -1451,13 +1463,37 @@ impl EGraph {
         let parsed = self.parser.get_program_from_string(filename, input)?;
         let mut outputs = Vec::new();
         for command in parsed {
-            for processed in self.resolve_command(command)? {
-                // When re-suggaring, we still need to run scope-related commands (Push/Pop) to make
-                // the program well-scoped.
-                if let GenericNCommand::Push(..) | GenericNCommand::Pop(..) = &processed {
-                    self.run_command(processed.clone())?;
+            // Handle include commands specially - process them but only output the include directive
+            if let Command::Include(span, file) = &command {
+                let s = std::fs::read_to_string(file)
+                    .unwrap_or_else(|_| panic!("{span} Failed to read file {file}"));
+                let included_program = self
+                    .parser
+                    .get_program_from_string(Some(file.clone()), &s)
+                    .unwrap_or_else(|err| panic!("{span} Failed to parse included file: {err}"));
+
+                // Process included commands to update type state but don't output them
+                for included_command in included_program {
+                    for processed in self.resolve_command(included_command)? {
+                        // When re-suggaring, we still need to run scope-related commands
+                        // to make the program well-scoped.
+                        if let GenericNCommand::Push(..) | GenericNCommand::Pop(..) = &processed {
+                            self.run_command(processed.clone())?;
+                        }
+                        // Don't add to outputs - we only want the include directive itself
+                    }
                 }
-                outputs.push(processed.to_command().to_string());
+                // Output the include command
+                outputs.push(command.to_string());
+            } else {
+                for processed in self.resolve_command(command)? {
+                    // When re-suggaring, we still need to run scope-related commands (Push/Pop) to make
+                    // the program well-scoped.
+                    if let GenericNCommand::Push(..) | GenericNCommand::Pop(..) = &processed {
+                        self.run_command(processed.clone())?;
+                    }
+                    outputs.push(processed.to_command().to_string());
+                }
             }
         }
         Ok(outputs)

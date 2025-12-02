@@ -40,18 +40,25 @@ impl CommandMacroRegistry {
         self.macros.push(macro_impl);
     }
 
-   /// Apply all matching macros to a command
-   pub fn apply(
-       &self,
-       command: Command,
-       symbol_gen: &mut SymbolGen,
-       type_info: Option<&TypeInfo>,
-   ) -> Result<Vec<Command>, Error> {
-        // Apply the first macro (if any)
-       for macro_impl in &self.macros {
-            return macro_impl.transform(command, symbol_gen, type_info);
-       }
-       // No macro matched, return the command unchanged
-       Ok(vec![command])
+    /// Apply all registered macros to a command in sequence
+    pub fn apply(
+        &self,
+        command: Command,
+        symbol_gen: &mut SymbolGen,
+        type_info: Option<&TypeInfo>,
+    ) -> Result<Vec<Command>, Error> {
+        // Start with the original command
+        let mut commands = vec![command];
+
+        // Apply each macro in sequence to all commands
+        for macro_impl in &self.macros {
+            let mut next_commands = Vec::new();
+            for cmd in commands {
+                next_commands.extend(macro_impl.transform(cmd, symbol_gen, type_info)?);
+            }
+            commands = next_commands;
+        }
+
+        Ok(commands)
     }
 }
