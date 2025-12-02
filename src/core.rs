@@ -63,7 +63,7 @@ impl SpecializedPrimitive {
     }
 
     /// Get the external function ID of this primitive
-    pub fn external_id(&self) -> ExternalFunctionId {
+    pub(crate) fn external_id(&self) -> ExternalFunctionId {
         self.primitive.1
     }
 }
