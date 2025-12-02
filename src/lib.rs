@@ -63,6 +63,7 @@
 pub mod ast;
 #[cfg(feature = "bin")]
 mod cli;
+mod command_macro;
 pub mod constraint;
 mod core;
 pub mod extract;
@@ -73,14 +74,17 @@ pub mod sort;
 mod termdag;
 mod typechecking;
 pub mod util;
+pub use command_macro::{CommandMacro, CommandMacroRegistry};
 
 // This is used to allow the `add_primitive` macro to work in
 // both this crate and other crates by referring to `::egglog`.
 extern crate self as egglog;
 use ast::*;
+pub use ast::{ResolvedExpr, ResolvedFact, ResolvedVar};
 #[cfg(feature = "bin")]
 pub use cli::*;
 use constraint::{Constraint, Problem, SimpleTypeConstraint, TypeConstraint};
+pub use core::SpecializedPrimitive;
 pub use core::{Atom, AtomTerm};
 use core::{ResolvedAtomTerm, ResolvedCall};
 pub use core_relations::{BaseValue, ContainerValue, ExecutionState, Value};
@@ -116,6 +120,7 @@ pub use termdag::{Term, TermDag, TermId};
 use thiserror::Error;
 pub use typechecking::TypeError;
 pub use typechecking::TypeInfo;
+pub use typechecking::{FuncType, PrimitiveWithId};
 use util::*;
 
 use crate::ast::desugar::desugar_command;
@@ -258,13 +263,15 @@ pub struct EGraph {
     rulesets: IndexMap<String, Ruleset>,
     pub fact_directory: Option<PathBuf>,
     pub seminaive: bool,
-    type_info: TypeInfo,
+    pub type_info: TypeInfo,
     /// The run report unioned over all runs so far.
     overall_run_report: RunReport,
     schedulers: DenseIdMap<SchedulerId, SchedulerRecord>,
     commands: IndexMap<String, Arc<dyn UserDefinedCommand>>,
     strict_mode: bool,
     warned_about_missing_global_prefix: bool,
+    /// Registry for command-level macros
+    pub command_macros: CommandMacroRegistry,
 }
 
 /// A user-defined command allows users to inject custom command that can be called
@@ -349,6 +356,7 @@ impl Default for EGraph {
             commands: Default::default(),
             strict_mode: false,
             warned_about_missing_global_prefix: false,
+            command_macros: Default::default(),
         };
 
         add_base_sort(&mut eg, UnitSort, span!()).unwrap();
@@ -390,6 +398,11 @@ pub struct NotFoundError(String);
 
 impl EGraph {
     /// Add a user-defined command to the e-graph
+    /// Get the type information for this e-graph
+    pub fn type_info(&mut self) -> &mut TypeInfo {
+        &mut self.type_info
+    }
+
     pub fn add_command(
         &mut self,
         name: String,
@@ -513,7 +526,7 @@ impl EGraph {
                     .map(|arg| self.translate_expr_to_mergefn(arg))
                     .collect::<Result<Vec<_>, _>>()?;
                 Ok(egglog_bridge::MergeFn::Primitive(
-                    p.primitive.1,
+                    p.external_id(),
                     translated_args,
                 ))
             }
@@ -1383,8 +1396,9 @@ impl EGraph {
     }
 
     fn resolve_command(&mut self, command: Command) -> Result<Vec<ResolvedNCommand>, Error> {
-        let program = desugar_command(command, &mut self.parser, &self.type_info)?;
-        Ok(self.typecheck_program(&program)?)
+        // Macros are now expanded in run_program to handle multi-command expansion properly
+        let desugared = desugar_command(command, &mut self.parser, &self.type_info)?;
+        Ok(self.typecheck_program(&desugared)?)
     }
 
     /// Run a program, represented as an AST.
@@ -1404,6 +1418,19 @@ impl EGraph {
                 // Add included commands to be processed next
                 program_queue.extend(included_program.into_iter().rev());
             } else {
+                // Check if this command expands to multiple via macros
+                let macro_expanded = self.command_macros.apply(
+                    command.clone(),
+                    &mut self.parser.symbol_gen,
+                    Some(&self.type_info),
+                )?;
+
+                if macro_expanded.len() > 1 {
+                    // Add expanded commands to the queue to be processed in sequence
+                    program_queue.extend(macro_expanded.into_iter().rev());
+                    continue;
+                }
+
                 for processed in self.process_command(command)? {
                     let result = self.run_command(processed)?;
                     if let Some(output) = result {
@@ -1618,7 +1645,7 @@ impl<'a> BackendRule<'a> {
     ) -> (ExternalFunctionId, Vec<QueryEntry>, ColumnTy) {
         let mut qe_args = self.args(args);
 
-        if prim.primitive.0.name() == "unstable-fn" {
+        if prim.name() == "unstable-fn" {
             let core::ResolvedAtomTerm::Literal(_, Literal::String(ref name)) = args[0] else {
                 panic!("expected string literal after `unstable-fn`")
             };
@@ -1635,7 +1662,7 @@ impl<'a> BackendRule<'a> {
                         .into_iter()
                         .any(|f| {
                             let types: Vec<_> = prim
-                                .input
+                                .input()
                                 .iter()
                                 .skip(1)
                                 .chain(f.inputs())
@@ -1650,7 +1677,7 @@ impl<'a> BackendRule<'a> {
             } else {
                 panic!("no callable for {name}");
             };
-            let partial_arcsorts = prim.input.iter().skip(1).cloned().collect();
+            let partial_arcsorts = prim.input().iter().skip(1).cloned().collect();
 
             qe_args[0] = self.rb.egraph().base_value_constant(ResolvedFunction {
                 id,
@@ -1660,9 +1687,9 @@ impl<'a> BackendRule<'a> {
         }
 
         (
-            prim.primitive.1,
+            prim.external_id(),
             qe_args,
-            prim.output.column_ty(self.rb.egraph()),
+            prim.output().column_ty(self.rb.egraph()),
         )
     }
 
@@ -1709,7 +1736,7 @@ impl<'a> BackendRule<'a> {
                             })
                         }
                         ResolvedCall::Primitive(p) => {
-                            let name = p.primitive.0.name().to_owned();
+                            let name = p.name().to_owned();
                             let (p, args, ty) = self.prim(p, args);
                             let span = span.clone();
                             self.rb.call_external_func(p, &args, ty, move || {

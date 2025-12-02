@@ -40,14 +40,36 @@ impl<Head> HeadOrEq<Head> {
 }
 
 #[derive(Debug, Clone)]
-pub(crate) struct SpecializedPrimitive {
-    pub(crate) primitive: PrimitiveWithId,
-    pub(crate) input: Vec<ArcSort>,
-    pub(crate) output: ArcSort,
+pub struct SpecializedPrimitive {
+    primitive: PrimitiveWithId,
+    input: Vec<ArcSort>,
+    output: ArcSort,
+}
+
+impl SpecializedPrimitive {
+    /// Get the name of this primitive
+    pub fn name(&self) -> &str {
+        self.primitive.0.name()
+    }
+
+    /// Get the output sort of this primitive
+    pub fn output(&self) -> &ArcSort {
+        &self.output
+    }
+
+    /// Get the input sorts of this primitive
+    pub fn input(&self) -> &[ArcSort] {
+        &self.input
+    }
+
+    /// Get the external function ID of this primitive
+    pub fn external_id(&self) -> ExternalFunctionId {
+        self.primitive.1
+    }
 }
 
 #[derive(Debug, Clone)]
-pub(crate) enum ResolvedCall {
+pub enum ResolvedCall {
     Func(FuncType),
     Primitive(SpecializedPrimitive),
 }
@@ -56,7 +78,7 @@ impl ResolvedCall {
     pub fn output(&self) -> &ArcSort {
         match self {
             ResolvedCall::Func(func) => &func.output,
-            ResolvedCall::Primitive(prim) => &prim.output,
+            ResolvedCall::Primitive(prim) => prim.output(),
         }
     }
 
@@ -114,7 +136,7 @@ impl Display for ResolvedCall {
     fn fmt(&self, f: &mut Formatter<'_>) -> std::fmt::Result {
         match self {
             ResolvedCall::Func(func) => write!(f, "{}", func.name),
-            ResolvedCall::Primitive(prim) => write!(f, "{}", prim.primitive.0.name()),
+            ResolvedCall::Primitive(prim) => write!(f, "{}", prim.name()),
         }
     }
 }

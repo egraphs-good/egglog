@@ -1047,7 +1047,7 @@ where
 }
 
 pub type Fact = GenericFact<String, String>;
-pub(crate) type ResolvedFact = GenericFact<ResolvedCall, ResolvedVar>;
+pub type ResolvedFact = GenericFact<ResolvedCall, ResolvedVar>;
 pub(crate) type MappedFact<Head, Leaf> = GenericFact<CorrespondingVar<Head, Leaf>, Leaf>;
 
 pub struct Facts<Head, Leaf>(pub Vec<GenericFact<Head, Leaf>>);

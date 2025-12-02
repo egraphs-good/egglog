@@ -599,7 +599,7 @@ impl TypeInfo {
         Ok(())
     }
 
-    pub(crate) fn typecheck_facts(
+    pub fn typecheck_facts(
         &self,
         symbol_gen: &mut SymbolGen,
         facts: &[Fact],
