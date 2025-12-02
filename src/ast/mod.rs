@@ -269,6 +269,7 @@ impl<Head: Display, Leaf: Display> Display for GenericSchedule<Head, Leaf> {
 }
 
 pub type Command = GenericCommand<String, String>;
+pub type ResolvedCommand = GenericCommand<ResolvedCall, ResolvedVar>;
 
 pub type Subsume = bool;
 

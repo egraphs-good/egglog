@@ -1411,10 +1411,15 @@ impl EGraph {
         Ok(self.typecheck_program(&desugared)?)
     }
 
-    /// Run a program, represented as an AST.
-    /// Return a list of messages.
-    pub fn run_program(&mut self, program: Vec<Command>) -> Result<Vec<CommandOutput>, Error> {
+    /// Run a program, returning the desugared outputs as well as the CommandOutputs.
+    /// Can optionally not run the commands, just adding type information.
+    fn run_program_internal(
+        &mut self,
+        program: Vec<Command>,
+        run_commands: bool,
+    ) -> Result<(Vec<CommandOutput>, Vec<ResolvedCommand>), Error> {
         let mut outputs = Vec::new();
+        let mut desugared_commands = Vec::new();
         let mut program_queue: Vec<Command> = program;
         program_queue.reverse();
 
@@ -1427,6 +1432,7 @@ impl EGraph {
                     .get_program_from_string(Some(file.clone()), &s)?;
                 // Add included commands to be processed next
                 program_queue.extend(included_program.into_iter().rev());
+                desugared_commands.push(ResolvedCommand::Include(span.clone(), file.clone()));
             } else {
                 // Check if this command expands to multiple via macros
                 let macro_expanded = self.command_macros.apply(
@@ -1442,14 +1448,24 @@ impl EGraph {
                 }
 
                 for processed in self.process_command(command)? {
-                    let result = self.run_command(processed)?;
-                    if let Some(output) = result {
-                        outputs.push(output);
+                    desugared_commands.push(processed.to_command());
+                    if run_commands {
+                        let result = self.run_command(processed)?;
+                        if let Some(output) = result {
+                            outputs.push(output);
+                        }
                     }
                 }
             }
         }
 
+        Ok((outputs, desugared_commands))
+    }
+
+    /// Run a program, represented as an AST.
+    /// Return a list of messages.
+    pub fn run_program(&mut self, program: Vec<Command>) -> Result<Vec<CommandOutput>, Error> {
+        let (outputs, _desugared_commands) = self.run_program_internal(program, true)?;
         Ok(outputs)
     }
 
@@ -1459,44 +1475,11 @@ impl EGraph {
         &mut self,
         filename: Option<String>,
         input: &str,
-    ) -> Result<Vec<String>, Error> {
+    ) -> Result<Vec<ResolvedCommand>, Error> {
         let parsed = self.parser.get_program_from_string(filename, input)?;
-        let mut outputs = Vec::new();
-        for command in parsed {
-            // Handle include commands specially - process them but only output the include directive
-            if let Command::Include(span, file) = &command {
-                let s = std::fs::read_to_string(file)
-                    .unwrap_or_else(|_| panic!("{span} Failed to read file {file}"));
-                let included_program = self
-                    .parser
-                    .get_program_from_string(Some(file.clone()), &s)
-                    .unwrap_or_else(|err| panic!("{span} Failed to parse included file: {err}"));
-
-                // Process included commands to update type state but don't output them
-                for included_command in included_program {
-                    for processed in self.resolve_command(included_command)? {
-                        // When re-suggaring, we still need to run scope-related commands
-                        // to make the program well-scoped.
-                        if let GenericNCommand::Push(..) | GenericNCommand::Pop(..) = &processed {
-                            self.run_command(processed.clone())?;
-                        }
-                        // Don't add to outputs - we only want the include directive itself
-                    }
-                }
-                // Output the include command
-                outputs.push(command.to_string());
-            } else {
-                for processed in self.resolve_command(command)? {
-                    // When re-suggaring, we still need to run scope-related commands (Push/Pop) to make
-                    // the program well-scoped.
-                    if let GenericNCommand::Push(..) | GenericNCommand::Pop(..) = &processed {
-                        self.run_command(processed.clone())?;
-                    }
-                    outputs.push(processed.to_command().to_string());
-                }
-            }
-        }
-        Ok(outputs)
+        let (_outputs, desugared_commands) =
+            self.run_program_internal(parsed, false)?;
+        Ok(desugared_commands)
     }
 
     /// Takes a source program `input`, parses it, runs it, and returns a list of messages.
