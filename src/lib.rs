@@ -36,9 +36,9 @@ pub use ast::{ResolvedExpr, ResolvedFact, ResolvedVar};
 #[cfg(feature = "bin")]
 pub use cli::*;
 use constraint::{Constraint, Problem, SimpleTypeConstraint, TypeConstraint};
-pub use core::SpecializedPrimitive;
+use core::ResolvedAtomTerm;
 pub use core::{Atom, AtomTerm};
-use core::{ResolvedAtomTerm, ResolvedCall};
+pub use core::{ResolvedCall, SpecializedPrimitive};
 pub use core_relations::{BaseValue, ContainerValue, ExecutionState, Value};
 use core_relations::{ExternalFunctionId, make_external_func};
 use csv::Writer;
@@ -72,10 +72,6 @@ pub use termdag::{Term, TermDag, TermId};
 use thiserror::Error;
 pub use typechecking::TypeError;
 pub use typechecking::TypeInfo;
-
-// Export resolved types for command macro implementations
-pub use ast::{ResolvedExpr, ResolvedFact, ResolvedVar};
-pub use core::{ResolvedCall, SpecializedPrimitive};
 use util::*;
 
 use crate::ast::desugar::desugar_command;
