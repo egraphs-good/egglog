@@ -1,3 +1,4 @@
+use crate::util::INTERNAL_SYMBOL_PREFIX;
 use egglog::ast::*;
 use egglog::util::FreshGen;
 use egglog::*;
@@ -245,7 +246,9 @@ fn test_complex_macro_composition() {
             prefix: "prefixed".to_string(),
         }));
 
-    let input = r#"(rule ((Num x)) ((Num (+ x 1))))"#;
+    let input = r#"
+    (datatype Math (Num i64))
+    (rule ((Num x)) ((Num (+ x 1))))"#;
 
     let result = egraph
         .desugar_program(None, input)
@@ -259,12 +262,12 @@ fn test_complex_macro_composition() {
     // Then PrefixRuleMacro adds "prefixed_" to both
     // So we should have: prefixed_dup1_$rule_<n> and prefixed_dup2_$rule_<n>
     assert!(
-        output.contains("prefixed_dup1_$rule_"),
+        output.contains(&format!("prefixed_{INTERNAL_SYMBOL_PREFIX}dup1_")),
         "Expected first rule with both transformations: {}",
         output
     );
     assert!(
-        output.contains("prefixed_dup2_$rule_"),
+        output.contains(&format!("prefixed_{INTERNAL_SYMBOL_PREFIX}dup2_")),
         "Expected second rule with both transformations: {}",
         output
     );
