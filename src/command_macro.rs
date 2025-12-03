@@ -17,7 +17,7 @@ pub trait CommandMacro: Send + Sync {
         &self,
         command: Command,
         symbol_gen: &mut SymbolGen,
-        type_info: Option<&TypeInfo>,
+        type_info: &TypeInfo,
     ) -> Result<Vec<Command>, Error>;
 }
 
@@ -45,7 +45,7 @@ impl CommandMacroRegistry {
         &self,
         command: Command,
         symbol_gen: &mut SymbolGen,
-        type_info: Option<&TypeInfo>,
+        type_info: &TypeInfo,
     ) -> Result<Vec<Command>, Error> {
         // Start with the original command
         let mut commands = vec![command];

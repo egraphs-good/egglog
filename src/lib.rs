@@ -1390,7 +1390,7 @@ impl EGraph {
                 let macro_expanded = self.command_macros.apply(
                     command.clone(),
                     &mut self.parser.symbol_gen,
-                    Some(&self.type_info),
+                    &self.type_info,
                 )?;
 
                 if macro_expanded.len() > 1 {

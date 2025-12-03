@@ -300,3 +300,48 @@ fn test_macros_work_with_actual_program_execution() {
         result
     );
 }
+
+struct TypeInfoReader;
+
+impl CommandMacro for TypeInfoReader {
+    fn transform(
+        &self,
+        command: Command,
+        symbol_gen: &mut util::SymbolGen,
+        type_info: &TypeInfo,
+    ) -> Result<Vec<Command>, Error> {
+        // if this is a rule command, typecheck the query
+        match command {
+            Command::Rule { rule } => {
+                type_info.typecheck_facts(symbol_gen, &rule.query)?;
+                Ok(vec![Command::Rule { rule }])
+            }
+            cmd => Ok(vec![cmd]),
+        }
+    }
+}
+
+#[test]
+fn test_macro_accesses_type_info() {
+    let mut egraph = EGraph::default();
+    egraph
+        .command_macros_mut()
+        .register(Arc::new(TypeInfoReader));
+    let result = egraph.parse_and_run_program(
+        None,
+        r#"
+        (datatype Math (Num i64))
+        (rule ((Num x)) ((Num (+ x 1))))
+        (let a (Num 1))
+        (constructor Math () B)
+        (union a (B))
+        (check (= (B) (Num 1)))
+        "#,
+    );
+    // The program should run successfully with the macro accessing type info
+    assert!(
+        result.is_ok(),
+        "Program with type info reading macro should run: {:?}",
+        result
+    );
+}
