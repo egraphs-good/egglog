@@ -1422,7 +1422,7 @@ impl EGraph {
     }
 
     /// Desugars an egglog program by parsing and desugaring each command.
-    /// Outputs a new egglog program without any syntactic sugar, either user provided ([`CommandMacros`]) or built-in (e.g., `rewrite` commands).
+    /// Outputs a new egglog program without any syntactic sugar, either user provided ([`CommandMacro`]) or built-in (e.g., `rewrite` commands).
     pub fn desugar_program(
         &mut self,
         filename: Option<String>,

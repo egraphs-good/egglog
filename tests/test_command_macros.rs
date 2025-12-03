@@ -14,7 +14,7 @@ impl CommandMacro for PrefixRuleMacro {
         &self,
         command: Command,
         symbol_gen: &mut util::SymbolGen,
-        _type_info: Option<&TypeInfo>,
+        _type_info: &TypeInfo,
     ) -> Result<Vec<Command>, Error> {
         match command {
             Command::Rule { mut rule } => {
@@ -34,7 +34,7 @@ impl CommandMacro for DuplicateRuleMacro {
         &self,
         command: Command,
         symbol_gen: &mut util::SymbolGen,
-        _type_info: Option<&TypeInfo>,
+        _type_info: &TypeInfo,
     ) -> Result<Vec<Command>, Error> {
         match command {
             Command::Rule { rule } => {
@@ -60,7 +60,7 @@ impl CommandMacro for CommentAfterRuleMacro {
         &self,
         command: Command,
         _symbol_gen: &mut util::SymbolGen,
-        _type_info: Option<&TypeInfo>,
+        _type_info: &TypeInfo,
     ) -> Result<Vec<Command>, Error> {
         match command {
             Command::Rule { rule } => {
@@ -313,7 +313,7 @@ impl CommandMacro for TypeInfoReader {
         // if this is a rule command, typecheck the query
         match command {
             Command::Rule { rule } => {
-                type_info.typecheck_facts(symbol_gen, &rule.query)?;
+                type_info.typecheck_facts(symbol_gen, &rule.body)?;
                 Ok(vec![Command::Rule { rule }])
             }
             cmd => Ok(vec![cmd]),
