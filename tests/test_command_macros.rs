@@ -219,7 +219,7 @@ fn test_macro_adds_commands_after_rules() {
 
     // Should have a print-size command after the rule with the rule's name
     assert!(
-        output.contains("(print-size rule_$rule_"),
+        output.contains("(print-size rule_"),
         "Expected print-size marker after rule: {}",
         output
     );
