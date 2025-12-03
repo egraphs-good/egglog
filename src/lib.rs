@@ -1357,7 +1357,7 @@ impl EGraph {
     }
 
     fn resolve_command(&mut self, command: Command) -> Result<Vec<ResolvedNCommand>, Error> {
-        let desugared = desugar_command(command, &mut self.parser, &self.type_info)?;
+        let desugared = desugar_command(command, &mut self.parser)?;
         Ok(self.typecheck_program(&desugared)?)
     }
 
@@ -1385,6 +1385,8 @@ impl EGraph {
                 desugared_commands.push(ResolvedCommand::Include(span.clone(), file.clone()));
             } else {
                 // Check if this command expands to multiple via macros
+                // Command macros may depend on type information from previous commands!
+                // That's why this code uses a queue of commands rather than executing them right away.
                 let macro_expanded = self.command_macros.apply(
                     command.clone(),
                     &mut self.parser.symbol_gen,

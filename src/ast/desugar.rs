@@ -1,9 +1,6 @@
 use super::{Rewrite, Rule};
-use crate::ast::{Action, Actions, Expr, Fact, ResolvedExpr, ResolvedExprExt, ResolvedFact};
-use crate::typechecking::TypeError;
-use crate::util::{IndexMap, IndexSet};
+use crate::ast::{Action, Actions, Expr, Fact};
 use crate::*;
-use egglog_ast::generic_ast::Literal;
 use egglog_ast::span::Span;
 
 /// Desugars a single command, removing syntactic sugar.
@@ -11,7 +8,6 @@ use egglog_ast::span::Span;
 pub(crate) fn desugar_command(
     command: Command,
     parser: &mut Parser,
-    type_info: &TypeInfo,
 ) -> Result<Vec<NCommand>, Error> {
     let rule_name = rule_name(&command);
     let res = match command {
@@ -132,7 +128,7 @@ pub(crate) fn desugar_command(
             vec![NCommand::Pop(span, num)]
         }
         Command::Fail(span, cmd) => {
-            let mut desugared = desugar_command(*cmd, parser, type_info)?;
+            let mut desugared = desugar_command(*cmd, parser)?;
 
             let last = desugared.pop().unwrap();
             desugared.push(NCommand::Fail(span, Box::new(last)));
