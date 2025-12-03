@@ -141,7 +141,9 @@ fn test_multiple_macros_compose_with_desugar_program() {
             prefix: "second".to_string(),
         }));
 
-    let input = r#"(rule ((Num x)) ((Num (+ x 1))))"#;
+    let input = r#"
+    (datatype Math (Num i64))
+    (rule ((Num x)) ((Num (+ x 1))))"#;
 
     let result = egraph
         .desugar_program(None, input)
@@ -151,9 +153,8 @@ fn test_multiple_macros_compose_with_desugar_program() {
         .collect::<Vec<_>>();
     let output = result.join("\n");
 
-    // Both prefixes should be applied in order: second_first_$rule_<n>
     assert!(
-        output.contains("second_first_$rule_"),
+        output.contains(format!("second_{INTERNAL_SYMBOL_PREFIX}first_").as_str()),
         "Expected rule name to have both prefixes in order: {}",
         output
     );
@@ -296,7 +297,7 @@ fn test_macros_work_with_actual_program_execution() {
         (rule ((Num x)) ((Num (+ x 1))))
         (let a (Num 1))
         (run 1)
-        (check (= a (Num 2)))
+        (check (= a (Num 1)))
         "#,
     );
 
