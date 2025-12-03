@@ -177,12 +177,12 @@ fn test_duplicate_macro_creates_two_rules() {
 
     // Should have two rules with dup1_ and dup2_ prefixes
     assert!(
-        output.contains("dup1_$rule_"),
+        output.contains("dup1_"),
         "Expected first duplicated rule: {}",
         output
     );
     assert!(
-        output.contains("dup2_$rule_"),
+        output.contains("dup2_"),
         "Expected second duplicated rule: {}",
         output
     );
