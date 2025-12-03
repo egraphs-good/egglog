@@ -95,7 +95,7 @@ pub(crate) fn desugar_command(
             desugar_birewrite(ruleset, rule_name, rewrite, parser)
         }
         Command::Include(_span, _file) => {
-            unreachable!("Icnlude commands should be expanded before desugaring")
+            unreachable!("Include commands should be expanded before desugaring")
         }
         Command::Rule { mut rule } => {
             if rule.name.is_empty() {

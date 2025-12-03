@@ -3,12 +3,14 @@
 //! applications. It is the successor to the rust library [egg](https://github.com/egraphs-good/egg).
 //! egglog is faster and more general than egg.
 //!
-//! # Tutorial
-//! [Here](https://www.youtube.com/watch?v=N2RDQGRBrSY) is the video tutorial on what egglog is and how to use it.
-//! We plan to have a text tutorial here soon, PRs welcome!
-//!
 //! # Documentation
-//! Most documentation for the egglog language can be found here: [`Command`].
+//! Documentation for the egglog language can be found here: [`Command`].
+//!
+//! # Tutorial
+//! We have a [text tutorial](https://egraphs-good.github.io/egglog-tutorial/01-basics.html) on egglog and how to use it.
+//! We also have a slightly outdated [video tutorial](https://www.youtube.com/watch?v=N2RDQGRBrSY)..
+//!
+//!
 //!
 pub mod ast;
 #[cfg(feature = "bin")]
