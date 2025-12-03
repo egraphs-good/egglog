@@ -1374,14 +1374,17 @@ impl EGraph {
         program_queue.reverse();
 
         while let Some(command) = program_queue.pop() {
+            // handle include specially- we keep them as-is for desugaring
             if let Command::Include(span, file) = &command {
                 let s = std::fs::read_to_string(file)
                     .unwrap_or_else(|_| panic!("{span} Failed to read file {file}"));
                 let included_program = self
                     .parser
                     .get_program_from_string(Some(file.clone()), &s)?;
-                // Add included commands to be processed next
-                program_queue.extend(included_program.into_iter().rev());
+                // run program internal on these include commands
+                let (included_outputs, _included_desugared) =
+                    self.run_program_internal(included_program, run_commands)?;
+                outputs.extend(included_outputs);
                 desugared_commands.push(ResolvedCommand::Include(span.clone(), file.clone()));
             } else {
                 // Check if this command expands to multiple via macros
@@ -1401,7 +1404,14 @@ impl EGraph {
 
                 for processed in self.process_command(command)? {
                     desugared_commands.push(processed.to_command());
-                    if run_commands {
+
+                    // even in desugar mode we still run push and pop
+                    if run_commands
+                        || matches!(
+                            processed,
+                            ResolvedNCommand::Push(_) | ResolvedNCommand::Pop(_, _)
+                        )
+                    {
                         let result = self.run_command(processed)?;
                         if let Some(output) = result {
                             outputs.push(output);
