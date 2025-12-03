@@ -336,7 +336,7 @@ fn test_macro_accesses_type_info() {
         (datatype Math (Num i64))
         (rule ((Num x)) ((Num (+ x 1))))
         (let a (Num 1))
-        (constructor Math () B)
+        (constructor B () Math)
         (union a (B))
         (check (= (B) (Num 1)))
         "#,
