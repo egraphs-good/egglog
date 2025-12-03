@@ -1373,48 +1373,43 @@ impl EGraph {
         let mut program_queue: Vec<Command> = program;
         program_queue.reverse();
 
-        while let Some(command) = program_queue.pop() {
-            // handle include specially- we keep them as-is for desugaring
-            if let Command::Include(span, file) = &command {
-                let s = std::fs::read_to_string(file)
-                    .unwrap_or_else(|_| panic!("{span} Failed to read file {file}"));
-                let included_program = self
-                    .parser
-                    .get_program_from_string(Some(file.clone()), &s)?;
-                // run program internal on these include commands
-                let (included_outputs, _included_desugared) =
-                    self.run_program_internal(included_program, run_commands)?;
-                outputs.extend(included_outputs);
-                desugared_commands.push(ResolvedCommand::Include(span.clone(), file.clone()));
-            } else {
-                // Check if this command expands to multiple via macros
-                // Command macros may depend on type information from previous commands!
-                // That's why this code uses a queue of commands rather than executing them right away.
-                let macro_expanded = self.command_macros.apply(
-                    command.clone(),
-                    &mut self.parser.symbol_gen,
-                    &self.type_info,
-                )?;
+        while let Some(before_expanded_command) = program_queue.pop() {
+            // First do user-provided macro expansion for this command,
+            // which may rely on type information from previous commands.
+            let macro_expanded = self.command_macros.apply(
+                before_expanded_command.clone(),
+                &mut self.parser.symbol_gen,
+                &self.type_info,
+            )?;
 
-                if macro_expanded.len() > 1 {
-                    // Add expanded commands to the queue to be processed in sequence
-                    program_queue.extend(macro_expanded.into_iter().rev());
-                    continue;
-                }
+            for command in macro_expanded {
+                // handle include specially- we keep them as-is for desugaring
+                if let Command::Include(span, file) = &command {
+                    let s = std::fs::read_to_string(file)
+                        .unwrap_or_else(|_| panic!("{span} Failed to read file {file}"));
+                    let included_program = self
+                        .parser
+                        .get_program_from_string(Some(file.clone()), &s)?;
+                    // run program internal on these include commands
+                    let (included_outputs, _included_desugared) =
+                        self.run_program_internal(included_program, run_commands)?;
+                    outputs.extend(included_outputs);
+                    desugared_commands.push(ResolvedCommand::Include(span.clone(), file.clone()));
+                } else {
+                    for processed in self.process_command(command)? {
+                        desugared_commands.push(processed.to_command());
 
-                for processed in self.process_command(command)? {
-                    desugared_commands.push(processed.to_command());
-
-                    // even in desugar mode we still run push and pop
-                    if run_commands
-                        || matches!(
-                            processed,
-                            ResolvedNCommand::Push(_) | ResolvedNCommand::Pop(_, _)
-                        )
-                    {
-                        let result = self.run_command(processed)?;
-                        if let Some(output) = result {
-                            outputs.push(output);
+                        // even in desugar mode we still run push and pop
+                        if run_commands
+                            || matches!(
+                                processed,
+                                ResolvedNCommand::Push(_) | ResolvedNCommand::Pop(_, _)
+                            )
+                        {
+                            let result = self.run_command(processed)?;
+                            if let Some(output) = result {
+                                outputs.push(output);
+                            }
                         }
                     }
                 }
