@@ -108,16 +108,22 @@ where
     fn fmt(&self, f: &mut Formatter) -> std::fmt::Result {
         match self {
             GenericAction::Let(_, lhs, rhs) => write!(f, "(let {} {})", lhs, rhs),
-            GenericAction::Set(_, lhs, args, rhs) => write!(
-                f,
-                "(set ({} {}) {})",
-                lhs,
-                args.iter()
-                    .map(|a| format!("{}", a))
-                    .collect::<Vec<_>>()
-                    .join(" "),
-                rhs
-            ),
+            GenericAction::Set(_, lhs, args, rhs) => {
+                if args.is_empty() {
+                    write!(f, "(set ({}) {})", lhs, rhs)
+                } else {
+                    write!(
+                        f,
+                        "(set ({} {}) {})",
+                        lhs,
+                        args.iter()
+                            .map(|a| format!("{}", a))
+                            .collect::<Vec<_>>()
+                            .join(" "),
+                        rhs
+                    )
+                }
+            }
             GenericAction::Union(_, lhs, rhs) => write!(f, "(union {} {})", lhs, rhs),
             GenericAction::Change(_, change, lhs, args) => {
                 let change_str = match change {

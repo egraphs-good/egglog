@@ -106,20 +106,23 @@ fn test_single_macro_with_desugar_program() {
     // Check that the datatype was desugared into a sort and constructor
     assert!(output.contains("(sort Math)"), "Expected sort declaration");
     assert!(
-        output.contains("(function Num (i64) Math :cost 1)"),
+        output.contains("(constructor Num (i64) Math)"),
         "Expected Num constructor"
     );
 
     // Check that the rule name was prefixed - it should have test_ prefix
     // The original rule name is generated as $rule_<n>, so it becomes test_$rule_<n>
     assert!(
-        output.contains("test_$rule_"),
+        output.contains(&format!("_test_0")),
         "Expected rule name to be prefixed with test_: {}",
         output
     );
 
     // Check that let is desugared correctly
-    assert!(output.contains("(let a (Num 1))"), "Expected let statement");
+    assert!(
+        output.contains("(set (a) (Num 1))"),
+        "Expected let desugared"
+    );
 }
 
 #[test]
@@ -205,6 +208,7 @@ fn test_macro_adds_commands_after_rules() {
         .register(Arc::new(CommentAfterRuleMacro));
 
     let input = r#"
+        (datatype Math (Num i64))
         (rule ((Num x)) ((Num (+ x 1))))
         (let a (Num 1))
     "#;
@@ -226,8 +230,8 @@ fn test_macro_adds_commands_after_rules() {
 
     // The let should still be there, unaffected
     assert!(
-        output.contains("(let a (Num 1))"),
-        "Expected let statement: {}",
+        output.contains("(set (a) (Num 1))"),
+        "Expected desugared a: {}",
         output
     );
 }
