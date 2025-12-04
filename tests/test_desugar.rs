@@ -52,6 +52,16 @@ fn test_desugar_includes() {
         "desugared output missing let binding: {:?}",
         desugared
     );
+    assert!(
+        desugared.iter().all(|cmd| !cmd.contains("datatype Math")),
+        "desugared output should not include code from include file (datatype Math): {:?}",
+        desugared
+    );
+    assert!(
+        desugared.iter().all(|cmd| !cmd.contains("let x")),
+        "desugared output should not include code from include file (let x): {:?}",
+        desugared
+    );
 
     // Clean up
     std::fs::remove_file(&file_path).ok();
