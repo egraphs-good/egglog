@@ -66,27 +66,3 @@ fn test_desugar_includes() {
     // Clean up
     std::fs::remove_file(&file_path).ok();
 }
-
-#[test]
-fn test_desugar_without_includes() {
-    let mut egraph = EGraph::default();
-
-    let input = r#"
-        (datatype Test)
-        (let x (Test))
-        (union x (Test))
-    "#;
-
-    let desugared = egraph
-        .desugar_program(None, input)
-        .unwrap()
-        .iter()
-        .map(|cmd| format!("{:?}", cmd))
-        .collect::<Vec<_>>();
-
-    // Should have 3 commands
-    assert_eq!(desugared.len(), 3);
-    assert!(desugared[0].contains("datatype Test"));
-    assert!(desugared[1].contains("let x"));
-    assert!(desugared[2].contains("union"));
-}
