@@ -48,11 +48,13 @@
        (!= vx 0.0))
       ((is-not-zero x)))
 
-(relation is-const-or-distinct-var-demand (Math Math))
-(relation is-const-or-distinct-var (Math Math))
-(rule ((is-const-or-distinct-var-demand (Var vv) (Var vw))
-       (!= vv vw))
-      ((is-const-or-distinct-var (Var vv) (Var vw))))
+(relation is-const-or-distinct-var-demand (Math String))
+(relation is-const-or-distinct-var (Math String))
+(rule ((is-const-or-distinct-var-demand (Var w) v)
+       (!= v w))
+      ((is-const-or-distinct-var (Var w) v)))
+(rule ((is-const-or-distinct-var-demand (Const c) v))
+      ((is-const-or-distinct-var (Const c) v)))
 
 (rewrite (Add a b) (Add b a))
 (rewrite (Mul a b) (Mul b a))
@@ -83,11 +85,10 @@
 (rewrite (Pow x (Const -1.0)) (Div (Const 1.0) x) :when ((is-not-zero x)))
 (rewrite (Mul x (Div (Const 1.0) x)) (Const 1.0) :when ((is-not-zero x)))
 
-(rewrite (Diff x x) (Const 1.0) :when ((is-sym x)))
-(rule ((= e (Diff x c))
-       (is-sym x))
+(rewrite (Diff (Var x) (Var x)) (Const 1.0))
+(rule ((Diff (Var x) c))
       ((is-const-or-distinct-var-demand c x)))
-(rewrite (Diff x c) (Const 0.0) :when ((is-sym x) (is-const-or-distinct-var c x)))
+(rewrite (Diff (Var x) c) (Const 0.0) :when ((is-const-or-distinct-var c x)))
 
 (rewrite (Diff x (Add a b)) (Add (Diff x a) (Diff x b)))
 (rewrite (Diff x (Mul a b)) (Add (Mul a (Diff x b)) (Mul b (Diff x a))))
