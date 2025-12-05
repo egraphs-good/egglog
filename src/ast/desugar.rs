@@ -4,7 +4,6 @@ use crate::*;
 use egglog_ast::span::Span;
 
 /// Desugars a single command, removing syntactic sugar.
-/// The `type_info` contains type infromation for already desugared parts of the program.
 pub(crate) fn desugar_command(
     command: Command,
     parser: &mut Parser,

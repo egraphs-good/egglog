@@ -53,25 +53,26 @@ impl CommandMacro for DuplicateRuleMacro {
     }
 }
 
-// Macro that adds a comment after each rule showing its name
-struct CommentAfterRuleMacro;
+struct AddPrintSizeAfterRuleMacro;
 
-impl CommandMacro for CommentAfterRuleMacro {
+impl CommandMacro for AddPrintSizeAfterRuleMacro {
     fn transform(
         &self,
         command: Command,
         _symbol_gen: &mut util::SymbolGen,
         _type_info: &TypeInfo,
     ) -> Result<Vec<Command>, Error> {
-        match command {
-            Command::Rule { rule } => {
-                let rule_name = rule.name.clone();
-                Ok(vec![
-                    Command::Rule { rule },
-                    // Comments don't exist in the AST but we can use PrintSize with None
-                    // as a marker that the macro ran
-                    Command::PrintSize(span!(), Some(format!("rule_{}", rule_name))),
-                ])
+        match command.clone() {
+            Command::Rule {
+                rule: GenericRule { body, .. },
+            } => {
+                if let [Fact::Fact(GenericExpr::Call(_span, head, _children))] = body.as_slice() {
+                    return Ok(vec![
+                        command,
+                        Command::PrintSize(span!(), Some(head.to_string())),
+                    ]);
+                }
+                Ok(vec![command])
             }
             cmd => Ok(vec![cmd]),
         }
@@ -206,7 +207,7 @@ fn test_macro_adds_commands_after_rules() {
     let mut egraph = EGraph::default();
     egraph
         .command_macros_mut()
-        .register(Arc::new(CommentAfterRuleMacro));
+        .register(Arc::new(AddPrintSizeAfterRuleMacro));
 
     let input = r#"
         (datatype Math (Num i64))
@@ -224,7 +225,7 @@ fn test_macro_adds_commands_after_rules() {
 
     // Should have a print-size command after the rule with the rule's name
     assert!(
-        output.contains("(print-size rule_"),
+        output.contains("(print-size Num)"),
         "Expected print-size marker after rule: {}",
         output
     );

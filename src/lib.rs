@@ -1377,7 +1377,7 @@ impl EGraph {
             // First do user-provided macro expansion for this command,
             // which may rely on type information from previous commands.
             let macro_expanded = self.command_macros.apply(
-                before_expanded_command.clone(),
+                before_expanded_command,
                 &mut self.parser.symbol_gen,
                 &self.type_info,
             )?;
