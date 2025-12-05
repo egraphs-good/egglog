@@ -136,6 +136,7 @@ pub(crate) fn desugar_command(
         }
         Command::Extract(span, expr, variants) => vec![NCommand::Extract(span, expr, variants)],
         Command::Check(span, facts) => vec![NCommand::Check(span, facts)],
+        Command::ProveQuery(span, facts) => vec![NCommand::ProveQuery(span, facts)],
         Command::PrintFunction(span, symbol, size, file, mode) => {
             vec![NCommand::PrintFunction(span, symbol, size, file, mode)]
         }

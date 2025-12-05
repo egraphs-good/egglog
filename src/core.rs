@@ -41,14 +41,14 @@ impl<Head> HeadOrEq<Head> {
 }
 
 #[derive(Debug, Clone)]
-pub(crate) struct SpecializedPrimitive {
+pub struct SpecializedPrimitive {
     pub(crate) primitive: PrimitiveWithId,
     pub(crate) input: Vec<ArcSort>,
     pub(crate) output: ArcSort,
 }
 
 #[derive(Debug, Clone)]
-pub(crate) enum ResolvedCall {
+pub enum ResolvedCall {
     Func(FuncType),
     Primitive(SpecializedPrimitive),
 }
@@ -102,11 +102,40 @@ impl ResolvedCall {
                 }
             }
         }
-        assert!(
-            resolved_call.len() == 1,
-            "Ambiguous resolution for {:?}",
-            head,
-        );
+
+        if resolved_call.is_empty() {
+            panic!(
+                "No resolution found for '{}' with types: {:?}",
+                head,
+                types.iter().map(|s| s.name()).collect::<Vec<_>>()
+            );
+        }
+
+        if resolved_call.len() > 1 {
+            let mut msg = format!(
+                "Ambiguous resolution for '{}' with types: {:?}\n",
+                head,
+                types.iter().map(|s| s.name()).collect::<Vec<_>>()
+            );
+            msg.push_str("Found multiple matching primitives/functions:\n");
+            for rc in &resolved_call {
+                match rc {
+                    ResolvedCall::Func(f) => {
+                        msg.push_str(&format!("  - Function: {}\n", f.name));
+                    }
+                    ResolvedCall::Primitive(p) => {
+                        msg.push_str(&format!(
+                            "  - Primitive: {} (inputs: {:?}, output: {})\n",
+                            p.primitive.primitive.name(),
+                            p.input.iter().map(|s| s.name()).collect::<Vec<_>>(),
+                            p.output.name()
+                        ));
+                    }
+                }
+            }
+            panic!("{}", msg);
+        }
+
         resolved_call.pop().unwrap()
     }
 }
@@ -115,7 +144,7 @@ impl Display for ResolvedCall {
     fn fmt(&self, f: &mut Formatter<'_>) -> std::fmt::Result {
         match self {
             ResolvedCall::Func(func) => write!(f, "{}", func.name),
-            ResolvedCall::Primitive(prim) => write!(f, "{}", prim.primitive.0.name()),
+            ResolvedCall::Primitive(prim) => write!(f, "{}", prim.primitive.primitive.name()),
         }
     }
 }
@@ -276,7 +305,10 @@ where
         })
     }
 
-    fn subst(&mut self, subst: &HashMap<CanonicalizedVar<Leaf>, GenericAtomTerm<CanonicalizedVar<Leaf>>>) {
+    fn subst(
+        &mut self,
+        subst: &HashMap<CanonicalizedVar<Leaf>, GenericAtomTerm<CanonicalizedVar<Leaf>>>,
+    ) {
         for arg in self.args.iter_mut() {
             match arg {
                 GenericAtomTerm::Var(_, v) => match subst.get(v) {
@@ -381,7 +413,7 @@ impl std::fmt::Display for Query<ResolvedCall, String> {
                 writeln!(
                     f,
                     "({} {})",
-                    filter.head.primitive.0.name(),
+                    filter.head.primitive.primitive.name(),
                     ListDisplay(&filter.args, " ")
                 )?;
             }
@@ -406,9 +438,7 @@ impl<Head: Clone, Leaf> Query<Head, Leaf> {
                     .args
                     .iter()
                     .map(|arg| match arg {
-                        GenericAtomTerm::Var(span, v) => {
-                            GenericAtomTerm::Var(span.clone(), f(v))
-                        }
+                        GenericAtomTerm::Var(span, v) => GenericAtomTerm::Var(span.clone(), f(v)),
                         GenericAtomTerm::Literal(span, lit) => {
                             GenericAtomTerm::Literal(span.clone(), lit.clone())
                         }
@@ -906,7 +936,10 @@ where
     Head2: Clone,
     Leaf: Clone + Eq + Hash,
 {
-    pub fn subst(&mut self, subst: &HashMap<CanonicalizedVar<Leaf>, GenericAtomTerm<CanonicalizedVar<Leaf>>>) {
+    pub fn subst(
+        &mut self,
+        subst: &HashMap<CanonicalizedVar<Leaf>, GenericAtomTerm<CanonicalizedVar<Leaf>>>,
+    ) {
         for atom in &mut self.body.atoms {
             atom.subst(subst);
         }
@@ -914,9 +947,15 @@ where
             .iter()
             .map(|(leaf, term)| {
                 let term = match term {
-                    GenericAtomTerm::Var(span, v) => GenericAtomTerm::Var(span.clone(), v.var.clone()),
-                    GenericAtomTerm::Literal(span, lit) => GenericAtomTerm::Literal(span.clone(), lit.clone()),
-                    GenericAtomTerm::Global(span, v) => GenericAtomTerm::Global(span.clone(), v.var.clone()),
+                    GenericAtomTerm::Var(span, v) => {
+                        GenericAtomTerm::Var(span.clone(), v.var.clone())
+                    }
+                    GenericAtomTerm::Literal(span, lit) => {
+                        GenericAtomTerm::Literal(span.clone(), lit.clone())
+                    }
+                    GenericAtomTerm::Global(span, v) => {
+                        GenericAtomTerm::Global(span.clone(), v.var.clone())
+                    }
                 };
                 (leaf.var.clone(), term)
             })
@@ -1082,14 +1121,14 @@ impl ResolvedRuleExt for ResolvedRule {
         fresh_gen: &mut SymbolGen,
     ) -> Result<CanonicalizedRule, TypeError> {
         let value_eq = &typeinfo.get_prims("value-eq").unwrap()[0];
-        let value_eq =
-            |at1: &CanonicalizedResolvedAtomTerm, at2: &CanonicalizedResolvedAtomTerm| {
-                ResolvedCall::Primitive(SpecializedPrimitive {
-                    primitive: value_eq.clone(),
-                    input: vec![at1.output(), at2.output()],
-                    output: UnitSort.to_arcsort(),
-                })
-            };
+        let value_eq = |at1: &CanonicalizedResolvedAtomTerm,
+                        at2: &CanonicalizedResolvedAtomTerm| {
+            ResolvedCall::Primitive(SpecializedPrimitive {
+                primitive: value_eq.clone(),
+                input: vec![at1.output(), at2.output()],
+                output: UnitSort.to_arcsort(),
+            })
+        };
 
         let CoreRuleWithFacts { rule, mapped_facts } = self.to_core_rule(typeinfo, fresh_gen)?;
 
