@@ -44,7 +44,7 @@
 (rewrite (Div (Const a) (Const b)) (Const (/ a b)) :when ((!= b 0.0)))
 
 
-;; implement pruning with subsuming, so that it still satures after pruning instead of thrashing
+;; implement pruning with subsuming, so that it still saturates after pruning instead of thrashing
 (ruleset prune)
 (rule ((= (Const _) (Diff x y))) ((subsume (Diff x y))) :ruleset prune)
 (rule ((= (Const _) (Integral x y))) ((subsume (Integral x y))) :ruleset prune)
@@ -64,7 +64,7 @@
        (!= x (Const 0.0)))
       ((is-not-zero x)))
 
-; If something is unioned to be the contant, then remove the is-not-zero
+; If something is unioned to be the constant, then remove the is-not-zero
 (rule ((is-not-zero x) (= x (Const 0.0)))
       ((delete (is-not-zero x))))
 
@@ -266,6 +266,7 @@
 (push)
 (let res (Diff (Var "x") (Sub (Pow (Var "x") (Const 3.0))
                               (Mul (Const 7.0) (Pow (Var "x") (Const 2.0))))))
+; need to add this manually, same as in egg
 (Mul (Var "x") (Sub (Mul (Const 3.0) (Var "x")) (Const 14.0)))
 (run-schedule (repeat 60 (seq
   (run :until (= res (Mul (Var "x") (Sub (Mul (Const 3.0) (Var "x"))
