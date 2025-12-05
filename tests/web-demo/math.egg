@@ -1,7 +1,10 @@
+; Converted from the egg demo at
+; https://github.com/egraphs-good/egg/blob/fb6167957beb5dd7c784121459e08ebd1ccb1a00/tests/math.rs
+
 (datatype Math
-    (Diff Math Math)
-    (Integral Math Math)
-    
+    (Diff Math Math :cost 100)
+    (Integral Math Math :cost 100)
+
     (Add Math Math)
     (Sub Math Math)
     (Mul Math Math)
@@ -9,11 +12,11 @@
     (Pow Math Math)
     (Ln Math)
     (Sqrt Math)
-    
+
     (Sin Math)
     (Cos Math)
-    
-    (Const i64)
+
+    (Const f64)
     (Var String))
 
 (relation MathU (Math))
@@ -31,7 +34,7 @@
 (rule ((= e (Const x))) ((MathU e)))
 (rule ((= e (Var x))) ((MathU e)))
 
-(relation evals-to (Math i64))
+(relation evals-to (Math f64))
 
 (rule ((= e (Const c))) ((evals-to e c)))
 (rule ((= e (Add a b)) (evals-to a va) (evals-to b vb))
@@ -40,7 +43,7 @@
       ((evals-to e (- va vb))))
 (rule ((= e (Mul a b)) (evals-to a va) (evals-to b vb))
       ((evals-to e (* va vb))))
-(rule ((= e (Div a b)) (evals-to a va) (evals-to b vb) (!= vb 0))
+(rule ((= e (Div a b)) (evals-to a va) (evals-to b vb) (!= vb 0.0))
       ((evals-to e (/ va vb))))
 (rule ((evals-to x vx)) ((union x (Const vx))))
 
@@ -52,7 +55,7 @@
 
 (relation is-not-zero (Math))
 (rule ((evals-to x vx)
-       (!= vx 0))
+       (!= vx 0.0))
       ((is-not-zero x)))
 
 (relation is-const-or-distinct-var-demand (Math Math))
@@ -71,73 +74,73 @@
 (rewrite (Add a (Add b c)) (Add (Add a b) c))
 (rewrite (Mul a (Mul b c)) (Mul (Mul a b) c))
 
-(rewrite (Sub a b) (Add a (Mul (Const -1) b)))
-(rewrite (Div a b) (Mul a (Pow b (Const -1))) :when ((is-not-zero b)))
+(rewrite (Sub a b) (Add a (Mul (Const -1.0) b)))
+(rewrite (Div a b) (Mul a (Pow b (Const -1.0))) :when ((is-not-zero b)))
 
-(rewrite (Add a (Const 0)) a)
-(rewrite (Mul a (Const 0)) (Const 0))
-(rewrite (Mul a (Const 1)) a)
+(rewrite (Add a (Const 0.0)) a)
+(rewrite (Mul a (Const 0.0)) (Const 0.0))
+(rewrite (Mul a (Const 1.0)) a)
 
 ;; NOTE: these two rules are different from math.rs, as math.rs does pruning
-(rule ((MathU a) (!= a (Const 0))) ((union a (Add a (Const 0)))))
-(rule ((MathU a) (!= a (Const 1))) ((union a (Mul a (Const 1)))))
+(rule ((MathU a) (!= a (Const 0.0))) ((union a (Add a (Const 0.0)))))
+(rule ((MathU a) (!= a (Const 1.0))) ((union a (Mul a (Const 1.0)))))
 
-(rewrite (Sub a a) (Const 0))
-(rewrite (Div a a) (Const 1) :when ((is-not-zero a)))
+(rewrite (Sub a a) (Const 0.0))
+(rewrite (Div a a) (Const 1.0) :when ((is-not-zero a)))
 
 (rewrite (Mul a (Add b c)) (Add (Mul a b) (Mul a c)))
 (rewrite (Add (Mul a b) (Mul a c)) (Mul a (Add b c)))
 
 (rewrite (Mul (Pow a b) (Pow a c)) (Pow a (Add b c)))
-(rewrite (Pow x (Const 0)) (Const 1) :when ((is-not-zero x)))
-(rewrite (Pow x (Const 1)) x)
-(rewrite (Pow x (Const 2)) (Mul x x))
-(rewrite (Pow x (Const -1)) (Div (Const 1) x) :when ((is-not-zero x)))
-(rewrite (Mul x (Div (Const 1) x)) (Const 1) :when ((is-not-zero x)))
+(rewrite (Pow x (Const 0.0)) (Const 1.0) :when ((is-not-zero x)))
+(rewrite (Pow x (Const 1.0)) x)
+(rewrite (Pow x (Const 2.0)) (Mul x x))
+(rewrite (Pow x (Const -1.0)) (Div (Const 1.0) x) :when ((is-not-zero x)))
+(rewrite (Mul x (Div (Const 1.0) x)) (Const 1.0) :when ((is-not-zero x)))
 
-(rewrite (Diff x x) (Const 1) :when ((is-sym x)))
+(rewrite (Diff x x) (Const 1.0) :when ((is-sym x)))
 (rule ((= e (Diff x c))
        (is-sym x))
       ((is-const-or-distinct-var-demand c x)))
-(rewrite (Diff x c) (Const 0) :when ((is-sym x) (is-const-or-distinct-var c x)))
+(rewrite (Diff x c) (Const 0.0) :when ((is-sym x) (is-const-or-distinct-var c x)))
 
 (rewrite (Diff x (Add a b)) (Add (Diff x a) (Diff x b)))
 (rewrite (Diff x (Mul a b)) (Add (Mul a (Diff x b)) (Mul b (Diff x a))))
 
 (rewrite (Diff x (Sin x)) (Cos x))
-(rewrite (Diff x (Cos x)) (Mul (Const -1) (Sin x)))
+(rewrite (Diff x (Cos x)) (Mul (Const -1.0) (Sin x)))
 
-(rewrite (Diff x (Ln x)) (Div (Const 1) x) :when ((is-not-zero x)))
+(rewrite (Diff x (Ln x)) (Div (Const 1.0) x) :when ((is-not-zero x)))
 
 (rewrite (Diff x (Pow f g))
-         (Mul (Pow f g) 
-              (Add (Mul (Diff x f) (Div g f)) 
-                   (Mul (Diff x g) (Ln f)))) 
-         :when ((is-not-zero f) 
+         (Mul (Pow f g)
+              (Add (Mul (Diff x f) (Div g f))
+                   (Mul (Diff x g) (Ln f))))
+         :when ((is-not-zero f)
                 (is-not-zero g)))
 
-(rewrite (Integral (Const 1) x) x)
+(rewrite (Integral (Const 1.0) x) x)
 (rewrite (Integral (Pow x c) x)
-         (Div (Pow x (Add c (Const 1))) (Add c (Const 1))) 
+         (Div (Pow x (Add c (Const 1.0))) (Add c (Const 1.0)))
          :when ((is-const c)))
 (rewrite (Integral (Cos x) x) (Sin x))
-(rewrite (Integral (Sin x) x) (Mul (Const -1) (Cos x)))
+(rewrite (Integral (Sin x) x) (Mul (Const -1.0) (Cos x)))
 (rewrite (Integral (Add f g) x) (Add (Integral f x) (Integral g x)))
 (rewrite (Integral (Sub f g) x) (Sub (Integral f x) (Integral g x)))
-(rewrite (Integral (Mul a b) x) 
-         (Sub (Mul a (Integral b x)) 
+(rewrite (Integral (Mul a b) x)
+         (Sub (Mul a (Integral b x))
               (Integral (Mul (Diff x a) (Integral b x)) x)))
 
 
-(let start-expr2 (Add (Const 1)
-                        (Sub (Var "a") 
-                             (Mul (Sub (Const 2) 
-                                       (Const 1)) 
+(let start-expr2 (Add (Const 1.0)
+                        (Sub (Var "a")
+                             (Mul (Sub (Const 2.0)
+                                       (Const 1.0))
                                   (Var "a")))))
 
 (run 6)
 
-(let end-expr2 (Const 1))
+(let end-expr2 (Const 1.0))
 
 (check (= start-expr2 end-expr2))
 
