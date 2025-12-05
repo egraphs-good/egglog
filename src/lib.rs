@@ -1370,10 +1370,8 @@ impl EGraph {
     ) -> Result<(Vec<CommandOutput>, Vec<ResolvedCommand>), Error> {
         let mut outputs = Vec::new();
         let mut desugared_commands = Vec::new();
-        let mut program_queue: Vec<Command> = program;
-        program_queue.reverse();
 
-        while let Some(before_expanded_command) = program_queue.pop() {
+        for before_expanded_command in program {
             // First do user-provided macro expansion for this command,
             // which may rely on type information from previous commands.
             let macro_expanded = self.command_macros.apply(
