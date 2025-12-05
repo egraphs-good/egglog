@@ -6,7 +6,7 @@ use libtest_mimic::Trial;
 #[derive(Clone)]
 struct Run {
     path: PathBuf,
-    resugar: bool,
+    desugar: bool,
 }
 
 impl Run {
@@ -15,7 +15,7 @@ impl Run {
         let program = std::fs::read_to_string(&self.path)
             .unwrap_or_else(|err| panic!("Couldn't read {:?}: {:?}", self.path, err));
 
-        if !self.resugar {
+        if !self.desugar {
             self.test_program(
                 self.path.to_str().map(String::from),
                 &program,
@@ -24,8 +24,11 @@ impl Run {
         } else {
             let mut egraph = EGraph::default();
             let desugared_str = egraph
-                .resugar_program(self.path.to_str().map(String::from), &program)
+                .desugar_program(self.path.to_str().map(String::from), &program)
                 .unwrap()
+                .iter()
+                .map(|s| s.to_string())
+                .collect::<Vec<_>>()
                 .join("\n");
 
             self.test_program(
@@ -93,8 +96,8 @@ impl Run {
                 let stem = self.0.path.file_stem().unwrap();
                 let stem_str = stem.to_string_lossy().replace(['.', '-', ' '], "_");
                 write!(f, "{stem_str}")?;
-                if self.0.resugar {
-                    write!(f, "_resugar")?;
+                if self.0.desugar {
+                    write!(f, "_desugar")?;
                 }
                 Ok(())
             }
@@ -114,14 +117,14 @@ fn generate_tests(glob: &str) -> Vec<Trial> {
     for entry in glob::glob(glob).unwrap() {
         let run = Run {
             path: entry.unwrap().clone(),
-            resugar: false,
+            desugar: false,
         };
         let should_fail = run.should_fail();
 
         push_trial(run.clone());
         if !should_fail {
             push_trial(Run {
-                resugar: true,
+                desugar: true,
                 ..run.clone()
             });
         }

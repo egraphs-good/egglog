@@ -19,6 +19,11 @@ nits:
 	cargo fmt --check
 	cargo doc --workspace
 
+fixnits:
+	@rustup component add rustfmt
+	cargo fmt
+	cargo clippy --fix --workspace --allow-dirty
+
 docs:
 	mkdir -p ${WWW}/
 	cargo doc --no-deps --all-features
