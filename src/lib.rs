@@ -20,6 +20,7 @@ pub mod egraph_operations;
 pub mod extract;
 mod literal_convertible;
 pub mod prelude;
+pub mod proof_check;
 #[macro_use]
 pub mod proof_checker;
 mod proof_support;
