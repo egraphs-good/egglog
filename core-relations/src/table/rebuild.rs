@@ -2,14 +2,12 @@
 
 use std::{cmp, mem};
 
-use crate::numeric_id::{IdVec, NumericId};
-use crossbeam_queue::SegQueue;
+use crate::numeric_id::NumericId;
 use rayon::prelude::*;
 
 use crate::{
     ColumnId, ExecutionState, Offset, RowId, Subset, Table, TableId, TaggedRowBuffer, Value,
     WrappedTable,
-    common::ShardId,
     hash_index::{ColumnIndex, Index},
     parallel_heuristics::parallelize_rebuild,
     table_spec::{Rebuilder, WrappedTableRef},
@@ -92,12 +90,6 @@ impl SortedWritesTable {
         );
 
         if parallelize_rebuild(to_scan.size()) {
-            // Iterate over `buf` in parallel and then fan out to a per-shard set of rows then
-            // process each shard in parallel.
-            let mut queues = IdVec::<ShardId, SegQueue<TaggedRowBuffer>>::default();
-            let shard_data = self.hash.shard_data();
-            queues.resize_with(shard_data.n_shards(), SegQueue::new);
-
             WrappedTableRef::with_wrapper(self, |wrapped| {
                 buf.par_iter()
                     .fold(
