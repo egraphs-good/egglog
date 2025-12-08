@@ -74,7 +74,9 @@ impl<K: NumericId, V> DenseIdMap<K, V> {
     /// Create an empty map with space for `n` entries pre-allocated.
     pub fn with_capacity(n: usize) -> Self {
         let mut res = Self::new();
-        res.reserve_space(K::from_usize(n));
+        if n > 0 {
+            res.reserve_space(K::from_usize(n - 1));
+        }
         res
     }
 
