@@ -1,20 +1,4 @@
-use crate::{
-    ast::ResolvedVar,
-    core::{ResolvedCall, SpecializedPrimitive},
-};
-use std::borrow::Cow;
-
-pub const INTERNAL_SYMBOL_PREFIX: &str = "@";
-
-/// Gets rid of internal symbol prefixes for printing.
-/// This allows us to test parsing of desugared programs.
-pub fn sanitize_internal_name(name: &str) -> Cow<'_, str> {
-    if let Some(stripped) = name.strip_prefix(INTERNAL_SYMBOL_PREFIX) {
-        Cow::Owned(format!("_{}", stripped))
-    } else {
-        Cow::Borrowed(name)
-    }
-}
+use crate::{ast::ResolvedVar, core::ResolvedCall};
 
 pub(crate) type BuildHasher = std::hash::BuildHasherDefault<rustc_hash::FxHasher>;
 pub(crate) type HashMap<K, V> = hashbrown::HashMap<K, V, BuildHasher>;
@@ -22,6 +6,9 @@ pub(crate) type HashSet<K> = hashbrown::HashSet<K, BuildHasher>;
 pub(crate) type HEntry<'a, A, B> = hashbrown::hash_map::Entry<'a, A, B, BuildHasher>;
 pub type IndexMap<K, V> = indexmap::IndexMap<K, V, BuildHasher>;
 pub type IndexSet<K> = indexmap::IndexSet<K, BuildHasher>;
+
+pub use egglog_ast::generic_ast_helpers::INTERNAL_SYMBOL_PREFIX;
+pub use egglog_ast::generic_ast_helpers::sanitize_internal_name;
 
 /// Generates fresh symbols for internal use during typechecking and flattening.
 /// These are guaranteed not to collide with the
@@ -78,7 +65,7 @@ impl FreshGen<ResolvedCall, ResolvedVar> for SymbolGen {
         self.count += 1;
         let sort = match name_hint {
             ResolvedCall::Func(f) => f.output.clone(),
-            ResolvedCall::Primitive(SpecializedPrimitive { output, .. }) => output.clone(),
+            ResolvedCall::Primitive(prim) => prim.output().clone(),
         };
         ResolvedVar {
             name,
