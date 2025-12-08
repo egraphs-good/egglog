@@ -9,6 +9,8 @@ pkg/
 flamegraph.svg
 perf.data*
 profile.json
+/*.json
+/*.txt
 
 _scratch.egg
 /*.egg
