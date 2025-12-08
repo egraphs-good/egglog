@@ -8,7 +8,7 @@
 //!
 //! # Tutorial
 //! We have a [text tutorial](https://egraphs-good.github.io/egglog-tutorial/01-basics.html) on egglog and how to use it.
-//! We also have a slightly outdated [video tutorial](https://www.youtube.com/watch?v=N2RDQGRBrSY)..
+//! We also have a slightly outdated [video tutorial](https://www.youtube.com/watch?v=N2RDQGRBrSY).
 //!
 //!
 //!
@@ -889,7 +889,7 @@ impl EGraph {
     pub fn eval_expr(&mut self, expr: &Expr) -> Result<(ArcSort, Value), Error> {
         let span = expr.span();
         let command = Command::Action(Action::Expr(span.clone(), expr.clone()));
-        let resolved_commands = self.process_command(command)?;
+        let resolved_commands = self.resolve_command(command)?;
         assert_eq!(resolved_commands.len(), 1);
         let resolved_command = resolved_commands.into_iter().next().unwrap();
         let resolved_expr = match resolved_command {
@@ -1345,25 +1345,23 @@ impl EGraph {
         Ok(())
     }
 
-    fn process_command(&mut self, command: Command) -> Result<Vec<ResolvedNCommand>, Error> {
-        let mut program = self.resolve_command(command)?;
+    /// Desugars, typechecks, and removes globals from a single [`Command`].
+    /// Leverages previous type information in the [`EGraph`] to do so, adding new type information.
+    fn resolve_command(&mut self, command: Command) -> Result<Vec<ResolvedNCommand>, Error> {
+        let desugared = desugar_command(command, &mut self.parser)?;
+        let mut typechecked = self.typecheck_program(&desugared)?;
 
-        program = remove_globals::remove_globals(program, &mut self.parser.symbol_gen);
-        for command in &program {
+        typechecked = remove_globals::remove_globals(typechecked, &mut self.parser.symbol_gen);
+        for command in &typechecked {
             self.names.check_shadowing(command)?;
         }
 
-        Ok(program)
-    }
-
-    fn resolve_command(&mut self, command: Command) -> Result<Vec<ResolvedNCommand>, Error> {
-        let desugared = desugar_command(command, &mut self.parser)?;
-        Ok(self.typecheck_program(&desugared)?)
+        Ok(typechecked)
     }
 
     /// Run a program, returning the desugared outputs as well as the CommandOutputs.
     /// Can optionally not run the commands, just adding type information.
-    fn run_program_internal(
+    fn process_program_internal(
         &mut self,
         program: Vec<Command>,
         run_commands: bool,
@@ -1390,11 +1388,11 @@ impl EGraph {
                         .get_program_from_string(Some(file.clone()), &s)?;
                     // run program internal on these include commands
                     let (included_outputs, _included_desugared) =
-                        self.run_program_internal(included_program, run_commands)?;
+                        self.process_program_internal(included_program, run_commands)?;
                     outputs.extend(included_outputs);
                     desugared_commands.push(ResolvedCommand::Include(span.clone(), file.clone()));
                 } else {
-                    for processed in self.process_command(command)? {
+                    for processed in self.resolve_command(command)? {
                         desugared_commands.push(processed.to_command());
 
                         // even in desugar mode we still run push and pop
@@ -1420,7 +1418,7 @@ impl EGraph {
     /// Run a program, represented as an AST.
     /// Return a list of messages.
     pub fn run_program(&mut self, program: Vec<Command>) -> Result<Vec<CommandOutput>, Error> {
-        let (outputs, _desugared_commands) = self.run_program_internal(program, true)?;
+        let (outputs, _desugared_commands) = self.process_program_internal(program, true)?;
         Ok(outputs)
     }
 
@@ -1432,7 +1430,7 @@ impl EGraph {
         input: &str,
     ) -> Result<Vec<ResolvedCommand>, Error> {
         let parsed = self.parser.get_program_from_string(filename, input)?;
-        let (_outputs, desugared_commands) = self.run_program_internal(parsed, false)?;
+        let (_outputs, desugared_commands) = self.process_program_internal(parsed, false)?;
         Ok(desugared_commands)
     }
 

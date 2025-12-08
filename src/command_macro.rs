@@ -7,6 +7,7 @@ use crate::Error;
 use crate::ast::*;
 use crate::typechecking::TypeInfo;
 use crate::util::SymbolGen;
+use std::sync::Arc;
 
 /// A command macro that can transform commands during desugaring
 pub trait CommandMacro: Send + Sync {
@@ -26,8 +27,6 @@ pub trait CommandMacro: Send + Sync {
 pub struct CommandMacroRegistry {
     macros: Vec<Arc<dyn CommandMacro>>,
 }
-
-use std::sync::Arc;
 
 impl CommandMacroRegistry {
     /// Create a new empty registry
