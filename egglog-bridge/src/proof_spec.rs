@@ -35,6 +35,11 @@ pub(crate) enum ProofReason {
     Fiat {
         desc: Arc<str>,
     },
+    /// A proof that a term equals itself.
+    ///
+    /// This is generally only used when two identical terms are created, but with a different term
+    /// id (due to concurrency / "term consistency" reasons).
+    Refl,
 }
 
 impl ProofReason {
@@ -43,7 +48,7 @@ impl ProofReason {
         1 + match self {
             ProofReason::CongRow => 1,
             ProofReason::Rule(data) => data.n_vars(),
-            ProofReason::Fiat { .. } => 0,
+            ProofReason::Refl | ProofReason::Fiat { .. } => 0,
         }
     }
 }
@@ -128,7 +133,7 @@ impl ProofBuilder {
             let reason_var = inner
                 .lhs_reason
                 .expect("must have a reason variable for new rows");
-            let mut translated = Vec::new();
+            let mut translated = Vec::with_capacity(entries.len() + 2);
             translated.push(func_val.into());
             for entry in &entries[0..entries.len() - 1] {
                 translated.push(inner.convert(entry));
@@ -222,14 +227,20 @@ impl EGraph {
 
     fn rule_proof(
         &mut self,
-        RuleData { syntax, .. }: &RuleData,
+        RuleData {
+            syntax, rule_name, ..
+        }: &RuleData,
         vars: &[Value],
         state: &mut ProofReconstructionState,
     ) -> (Vec<RuleVarBinding>, Vec<Premise>) {
         // First, reconstruct terms for all the relevant variables.
         let mut subst_term = Vec::with_capacity(syntax.vars.len());
         let mut subst_val = DenseIdMap::<VariableId, Value>::new();
-        for (SourceVar { id, ty, name }, term_id) in syntax.vars.iter().zip(vars) {
+        for (i, (SourceVar { id, ty, name }, term_id)) in syntax.vars.iter().zip(vars).enumerate() {
+            let todo_remove = eprintln!(
+                "reconstructing {i} of {}, {term_id:?} with ty {ty:?} in rule {rule_name} [name={name}]",
+                vars.len()
+            );
             subst_val.insert(*id, *term_id);
             let term = self.reconstruct_term(*term_id, *ty, state);
             subst_term.push(RuleVarBinding {
@@ -300,6 +311,11 @@ impl EGraph {
                     desc: String::from(&**desc).into(),
                     term,
                 })
+            }
+            ProofReason::Refl => {
+                panic!(
+                    "Refl cannot be a reason for a term's existence. This is an internal proofs error"
+                );
             }
         };
 
@@ -491,6 +507,14 @@ impl EGraph {
                 // NB: we could add this if we wanted to.
                 panic!("fiat reason being used to explain equality, rather than a row's existence")
             }
+            ProofReason::Refl => {
+                let l = self.canonicalize_term_id(l);
+                let r = self.canonicalize_term_id(r);
+                assert_eq!(l, r, "refl justification for two non-equal terms");
+                let t_ok_pf = self.explain_term_inner(l, state);
+                let t = self.reconstruct_term(l, ColumnTy::Id, state);
+                state.store.intern_eq(&EqProof::PRefl { t_ok_pf, t })
+            }
         }
     }
 
@@ -533,6 +557,7 @@ impl EGraph {
     }
 
     fn get_reason(&mut self, reason_id: Value) -> Vec<Value> {
+        let reason_id = self.canonicalize_reason_id(reason_id);
         let mut atom = Vec::<DstVar>::new();
         let mut cur = 0;
         loop {

@@ -103,8 +103,8 @@ impl<K: NumericId, V> Clear for DenseIdMap<K, V> {
 define_id!(pub Value, u32, "A generic identifier representing an egglog value");
 
 impl Value {
-    pub(crate) fn stale() -> Self {
-        Value::new(u32::MAX)
+    pub(crate) const fn stale() -> Self {
+        Value::new_const(u32::MAX)
     }
     /// Values have a special "Stale" value that is used to indicate that the
     /// value isn't intended to be read.

@@ -84,6 +84,7 @@ pub struct EGraph {
     /// bound.
     panic_funcs: HashMap<String, ExternalFunctionId>,
     proof_specs: IdVec<ReasonSpecId, Arc<ProofReason>>,
+    refl_reason: Value,
     cong_spec: ReasonSpecId,
     /// Side tables used to store proof information. We initialize these lazily
     /// as a proof object with a given number of parameters is added.
@@ -251,22 +252,25 @@ impl EGraph {
 
     fn create_internal(mut db: Database, uf_table: TableId, tracing: bool) -> EGraph {
         let id_counter = db.add_counter();
-        let trace_counter = db.add_counter();
+        let todo_revert = 1;
+        let reason_counter = db.add_counter_with_initial_val(1_000_000);
         let ts_counter = db.add_counter();
         // Start the timestamp counter at 1.
         db.inc_counter(ts_counter);
         let mut proof_specs = IdVec::default();
         let cong_spec = proof_specs.push(Arc::new(ProofReason::CongRow));
+        let refl_spec = proof_specs.push(Arc::new(ProofReason::Refl));
+        let refl_reason = Value::new(!0);
         let term_consistency_table =
             db.add_table(DisplacedTable::default(), iter::empty(), iter::empty());
         let reason_consistency_table =
             db.add_table(DisplacedTable::default(), iter::empty(), iter::empty());
 
-        Self {
+        let mut res = Self {
             db,
             uf_table,
             id_counter,
-            reason_counter: trace_counter,
+            reason_counter,
             timestamp_counter: ts_counter,
             rules: Default::default(),
             funcs: Default::default(),
@@ -274,13 +278,27 @@ impl EGraph {
             panic_funcs: Default::default(),
             proof_specs,
             cong_spec,
+            refl_reason,
             reason_tables: Default::default(),
             term_tables: Default::default(),
             term_consistency_table,
             reason_consistency_table,
             report_level: Default::default(),
             tracing,
+        };
+        if tracing {
+            let refl_table = res.reason_table(&ProofReason::Refl);
+            let refl_reason = res.with_execution_state(|es| {
+                es.predict_col(
+                    refl_table,
+                    &[Value::new(refl_spec.rep())],
+                    iter::once(MergeVal::Counter(reason_counter)),
+                    ColumnId::new(1),
+                )
+            });
+            res.refl_reason = refl_reason;
         }
+        res
     }
 
     fn next_ts(&self) -> Timestamp {
@@ -409,20 +427,25 @@ impl EGraph {
         if from == to {
             return;
         }
+        let todo_remove = eprintln!("recording term consistency {from:?} = {to:?}");
         let ts = Value::from_usize(state.read_counter(ts_counter));
         state.stage_insert(table, &[from, to, ts]);
     }
 
     fn canonicalize_term_id(&mut self, term_id: Value) -> Value {
         let table = self.db.get_table(self.term_consistency_table);
-        let res = table
+        table
             .get_row(&[term_id])
             .map(|row| row.vals[1])
-            .unwrap_or(term_id);
-        if res != term_id {
-            let todo_remove = eprintln!("looking up {term_id:?} => {res:?}");
-        }
-        res
+            .unwrap_or(term_id)
+    }
+
+    fn canonicalize_reason_id(&mut self, term_id: Value) -> Value {
+        let table = self.db.get_table(self.reason_consistency_table);
+        table
+            .get_row(&[term_id])
+            .map(|row| row.vals[1])
+            .unwrap_or(term_id)
     }
 
     fn term_table(&mut self, table: TableId) -> TableId {
@@ -433,6 +456,7 @@ impl EGraph {
             Entry::Vacant(v) => {
                 let term_index = spec.n_keys + 1;
                 let term_consistency_table = self.term_consistency_table;
+                let reason_consistency_table = self.reason_consistency_table;
                 let ts_counter = self.timestamp_counter;
                 let table = SortedWritesTable::new(
                     spec.n_keys + 1,     // added entry for the tableid
@@ -446,14 +470,17 @@ impl EGraph {
                         // NB: we should only need this merge function when we are executing
                         // rules in parallel. We could consider a simpler merge function if
                         // parallelism is disabled.
-                        if r_term_id < l_term_id {
-                            EGraph::record_term_consistency(
-                                state,
-                                term_consistency_table,
-                                ts_counter,
-                                l_term_id,
-                                r_term_id,
-                            );
+                        if r_term_id == l_term_id {
+                            return false;
+                        }
+                        EGraph::record_term_consistency(
+                            state,
+                            term_consistency_table,
+                            ts_counter,
+                            l_term_id,
+                            r_term_id,
+                        );
+                        if l_term_id > r_term_id {
                             out.extend(new);
                             true
                         } else {
@@ -484,14 +511,17 @@ impl EGraph {
                     Box::new(move |state, old, new, out| {
                         let old_id = *old.last().unwrap();
                         let new_id = *new.last().unwrap();
+                        if new_id == old_id {
+                            return false;
+                        }
+                        Self::record_term_consistency(
+                            state,
+                            consistency,
+                            ts_counter,
+                            old_id,
+                            new_id,
+                        );
                         if new_id < old_id {
-                            Self::record_term_consistency(
-                                state,
-                                consistency,
-                                ts_counter,
-                                old_id,
-                                new_id,
-                            );
                             out.extend(new);
                             true
                         } else {
@@ -840,6 +870,13 @@ impl EGraph {
                 info!("Reason Table {table_id:?}: {spec:?}, {row:?}")
             });
         }
+        info!("=== UF ===");
+        let uf_table = self.db.get_table(self.uf_table);
+        self.scan_table(uf_table, |row| match row {
+            [x, y, t] => info!("Displaced {x:?} => {y:?} @ {t:?}"),
+            [x, y, t, r] => info!("Displaced {x:?} => {y:?} @ {t:?}, reason {r:?}"),
+            _ => panic!("unexpected format for union-find"),
+        });
     }
 
     /// A helper for scanning the entries in a table.
@@ -1366,10 +1403,13 @@ impl MergeFn {
                 args.iter()
                     .for_each(|arg| arg.fill_deps(egraph, read_deps, write_deps));
             }
-            UnionId if !egraph.tracing => {
+            UnionId => {
                 write_deps.insert(egraph.uf_table);
+                if egraph.tracing {
+                    write_deps.insert(egraph.term_consistency_table);
+                }
             }
-            UnionId | AssertEq | Old | New | Const(..) => {}
+            AssertEq | Old | New | Const(..) => {}
         }
     }
 
@@ -1385,17 +1425,31 @@ impl MergeFn {
         );
 
         let resolved = self.resolve(function_name, egraph);
-
+        let refl_reason = egraph.refl_reason;
         Box::new(move |state, cur, new, out| {
             let timestamp = new[schema_math.ts_col()];
 
             let mut changed = false;
 
+            let terms_equal = schema_math.tracing
+                && cur[0..schema_math.ret_val_col()] == new[0..schema_math.ret_val_col()];
+
             let ret_val = {
-                let cur = cur[schema_math.ret_val_col()];
-                let new = new[schema_math.ret_val_col()];
-                let out = resolved.run(state, cur, new, timestamp);
-                changed |= cur != out;
+                let cur_id = cur[schema_math.ret_val_col()];
+                let new_id = new[schema_math.ret_val_col()];
+                let out = resolved.run(
+                    state,
+                    cur_id,
+                    new_id,
+                    timestamp,
+                    terms_equal.then_some(refl_reason),
+                );
+                if schema_math.tracing && cur_id != new_id {
+                    let todo_remove = eprintln!(
+                        "non-equal results, {cur:?} vs {new:?}, [terms_equal={terms_equal}]"
+                    );
+                }
+                changed |= cur_id != out;
                 out
             };
 
@@ -1443,6 +1497,7 @@ impl MergeFn {
             },
             MergeFn::UnionId => ResolvedMergeFn::UnionId {
                 uf_table: egraph.uf_table,
+                term_consistency: egraph.term_consistency_table,
                 tracing: egraph.tracing,
             },
             // NB: The primitive and function-based merge functions heap allocate a single callback
@@ -1496,6 +1551,7 @@ enum ResolvedMergeFn {
     },
     UnionId {
         uf_table: TableId,
+        term_consistency: TableId,
         tracing: bool,
     },
     Primitive {
@@ -1511,7 +1567,17 @@ enum ResolvedMergeFn {
 }
 
 impl ResolvedMergeFn {
-    fn run(&self, state: &mut ExecutionState, cur: Value, new: Value, ts: Value) -> Value {
+    fn run(
+        &self,
+        state: &mut ExecutionState,
+        cur: Value,
+        new: Value,
+        ts: Value,
+        // If `Some`, the corresponding terms for the two ids are equal, in which case this value
+        // is the reason id for a `Refl` reason that should be inserted to the union-find given
+        // table.
+        terms_equal: Option<Value>,
+    ) -> Value {
         match self {
             ResolvedMergeFn::Const(v) => *v,
             ResolvedMergeFn::Old => cur,
@@ -1523,7 +1589,11 @@ impl ResolvedMergeFn {
                 }
                 cur
             }
-            ResolvedMergeFn::UnionId { uf_table, tracing } => {
+            ResolvedMergeFn::UnionId {
+                uf_table,
+                term_consistency,
+                tracing,
+            } => {
                 if cur != new && !tracing {
                     // When proofs are enabled, these are the same term. They are already
                     // equal and we can just do nothing.
@@ -1531,7 +1601,17 @@ impl ResolvedMergeFn {
                     // We pick the minimum when unioning. This matches the original egglog
                     // behavior. THIS MUST MATCH THE UNION-FIND IMPLEMENTATION!
                     std::cmp::min(cur, new)
+                } else if *tracing && cur != new && terms_equal.is_some() {
+                    let Some(refl_reason) = terms_equal else {
+                        unreachable!()
+                    };
+                    state.stage_insert(*uf_table, &[cur, new, ts, refl_reason]);
+                    state.stage_insert(*term_consistency, &[cur, new, ts]);
+                    std::cmp::min(cur, new)
                 } else {
+                    // If proofs are enabled, but we see two non-equal ids targetting the same row,
+                    // we do nothing. We ensure there is a separate reason being populated in the
+                    // union-find table as part of a separate action.
                     cur
                 }
             }
@@ -1542,7 +1622,7 @@ impl ResolvedMergeFn {
             ResolvedMergeFn::Primitive { prim, args, panic } => {
                 let args = args
                     .iter()
-                    .map(|arg| arg.run(state, cur, new, ts))
+                    .map(|arg| arg.run(state, cur, new, ts, terms_equal))
                     .collect::<Vec<_>>();
 
                 match state.call_external_func(*prim, &args) {
@@ -1562,7 +1642,7 @@ impl ResolvedMergeFn {
 
                 let args = args
                     .iter()
-                    .map(|arg| arg.run(state, cur, new, ts))
+                    .map(|arg| arg.run(state, cur, new, ts, terms_equal))
                     .collect::<Vec<_>>();
 
                 func.lookup(state, &args).unwrap_or_else(|| {
