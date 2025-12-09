@@ -252,8 +252,7 @@ impl EGraph {
 
     fn create_internal(mut db: Database, uf_table: TableId, tracing: bool) -> EGraph {
         let id_counter = db.add_counter();
-        let todo_revert = 1;
-        let reason_counter = db.add_counter_with_initial_val(1_000_000);
+        let reason_counter = db.add_counter();
         let ts_counter = db.add_counter();
         // Start the timestamp counter at 1.
         db.inc_counter(ts_counter);
@@ -296,6 +295,7 @@ impl EGraph {
                     ColumnId::new(1),
                 )
             });
+            res.flush_updates();
             res.refl_reason = refl_reason;
         }
         res
@@ -417,21 +417,6 @@ impl EGraph {
         }
     }
 
-    fn record_term_consistency(
-        state: &mut ExecutionState,
-        table: TableId,
-        ts_counter: CounterId,
-        from: Value,
-        to: Value,
-    ) {
-        if from == to {
-            return;
-        }
-        let todo_remove = eprintln!("recording term consistency {from:?} = {to:?}");
-        let ts = Value::from_usize(state.read_counter(ts_counter));
-        state.stage_insert(table, &[from, to, ts]);
-    }
-
     fn canonicalize_term_id(&mut self, term_id: Value) -> Value {
         let table = self.db.get_table(self.term_consistency_table);
         table
@@ -448,44 +433,52 @@ impl EGraph {
             .unwrap_or(term_id)
     }
 
+    fn consistency_merge_fn(
+        uf_table: TableId,
+        ts_counter: CounterId,
+        old_id: Value,
+        new_id: Value,
+        new: &[Value],
+        out: &mut Vec<Value>,
+        state: &mut ExecutionState,
+    ) -> bool {
+        if new_id == old_id {
+            return false;
+        }
+        let ts = Value::from_usize(state.read_counter(ts_counter));
+        state.stage_insert(uf_table, &[old_id, new_id, ts]);
+        if new_id < old_id {
+            out.extend(new);
+            true
+        } else {
+            false
+        }
+    }
+
     fn term_table(&mut self, table: TableId) -> TableId {
         let info = self.db.get_table_info(table);
         let spec = info.spec();
         match self.term_tables.entry(spec.n_keys) {
             Entry::Occupied(o) => *o.get(),
             Entry::Vacant(v) => {
-                let term_index = spec.n_keys + 1;
                 let term_consistency_table = self.term_consistency_table;
-                let reason_consistency_table = self.reason_consistency_table;
                 let ts_counter = self.timestamp_counter;
+                let term_id_col = spec.n_keys + 1;
                 let table = SortedWritesTable::new(
                     spec.n_keys + 1,     // added entry for the tableid
                     spec.n_keys + 1 + 2, // one value for the term id, one for the reason,
                     None,
                     vec![], // no rebuilding needed for term table
                     Box::new(move |state, old, new, out| {
-                        // We want to pick the minimum term value.
-                        let l_term_id = old[term_index];
-                        let r_term_id = new[term_index];
-                        // NB: we should only need this merge function when we are executing
-                        // rules in parallel. We could consider a simpler merge function if
-                        // parallelism is disabled.
-                        if r_term_id == l_term_id {
-                            return false;
-                        }
-                        EGraph::record_term_consistency(
-                            state,
+                        Self::consistency_merge_fn(
                             term_consistency_table,
                             ts_counter,
-                            l_term_id,
-                            r_term_id,
-                        );
-                        if l_term_id > r_term_id {
-                            out.extend(new);
-                            true
-                        } else {
-                            false
-                        }
+                            old[term_id_col],
+                            new[term_id_col],
+                            new,
+                            out,
+                            state,
+                        )
                     }),
                 );
                 let table_id =
@@ -509,24 +502,15 @@ impl EGraph {
                     None,
                     vec![], // no rebuilding needed for reason tables
                     Box::new(move |state, old, new, out| {
-                        let old_id = *old.last().unwrap();
-                        let new_id = *new.last().unwrap();
-                        if new_id == old_id {
-                            return false;
-                        }
-                        Self::record_term_consistency(
-                            state,
+                        Self::consistency_merge_fn(
                             consistency,
                             ts_counter,
-                            old_id,
-                            new_id,
-                        );
-                        if new_id < old_id {
-                            out.extend(new);
-                            true
-                        } else {
-                            false
-                        }
+                            *old.last().unwrap(),
+                            *new.last().unwrap(),
+                            new,
+                            out,
+                            state,
+                        )
                     }),
                 );
                 let table_id = self
@@ -1444,11 +1428,6 @@ impl MergeFn {
                     timestamp,
                     terms_equal.then_some(refl_reason),
                 );
-                if schema_math.tracing && cur_id != new_id {
-                    let todo_remove = eprintln!(
-                        "non-equal results, {cur:?} vs {new:?}, [terms_equal={terms_equal}]"
-                    );
-                }
                 changed |= cur_id != out;
                 out
             };

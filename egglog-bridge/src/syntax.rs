@@ -6,13 +6,13 @@
 //! language in this crate. The proofs machinery then reconstructs proofs according to this syntax.
 use std::{iter, sync::Arc};
 
+use crate::core_relations;
 use crate::core_relations::{
     ColumnId, CounterId, ExecutionState, ExternalFunctionId, MergeVal, RuleBuilder, TableId, Value,
     WriteVal, make_external_func,
 };
 use crate::numeric_id::{DenseIdMap, IdVec, NumericId, define_id};
-use crate::{ColumnTy, EGraph, ProofReason, QueryEntry, ReasonSpecId, Result, RowVals, SchemaMath};
-use crate::{NOT_SUBSUMED, core_relations};
+use crate::{ColumnTy, EGraph, ProofReason, QueryEntry, ReasonSpecId, Result, SchemaMath};
 use smallvec::SmallVec;
 
 use crate::{
@@ -218,8 +218,6 @@ impl ProofBuilder {
             reason_counter: egraph.reason_counter,
             term_counter: egraph.id_counter,
             reason_spec_id: egraph.cong_spec,
-            func_underlying,
-            schema_math,
             ts_counter: egraph.timestamp_counter,
             uf_table: egraph.uf_table,
         };
@@ -316,10 +314,6 @@ struct CongArgs {
     reason_spec_id: ReasonSpecId,
     /// The counter that will be used to read the current timestamp for the new row.
     ts_counter: CounterId,
-    /// The undcerlying `core_relations` table that this function corresponds to.
-    func_underlying: TableId,
-    /// Schema-related offset information needed for writing to the table.
-    schema_math: SchemaMath,
     /// The union-find, used to record equality between existing e-class ids and new terms.
     uf_table: TableId,
 }
@@ -347,24 +341,9 @@ fn cong_term(args: &CongArgs, es: &mut ExecutionState, vals: &[Value]) -> Option
         ColumnId::from_usize(term_row.len()),
     );
 
+    // We just created a new term that wasn't previously inserted into the e-graph. We want to
+    // ensure that this is equal to the existing e-class that this term is in (by congruence).
     let ts = Value::from_usize(es.read_counter(args.ts_counter));
-    let todo_explain_and_clean_up = 1;
     es.stage_insert(args.uf_table, &[old_term, term_val, ts, reason]);
-    // term_row.clear();
-    // term_row.extend_from_slice(new_term);
-    // args.schema_math.write_table_row(
-    //     &mut term_row,
-    //     RowVals {
-    //         timestamp: ts,
-    //         proof: Some(term_val),
-    //         subsume: Some(NOT_SUBSUMED),
-    //         ret_val: Some(term_val),
-    //     },
-    // );
-    // term_row.resize(args.schema_math.table_columns(), NOT_SUBSUMED);
-    // term_row[args.schema_math.ret_val_col()] = term_val;
-    // term_row[args.schema_math.proof_id_col()] = term_val;
-    // term_row[args.schema_math.ts_col()] = ts;
-    // es.stage_insert(args.func_underlying, &term_row);
     Some(term_val)
 }

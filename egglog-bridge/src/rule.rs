@@ -732,9 +732,8 @@ impl RuleBuilder<'_> {
                         //
                         // > rb.assert_eq(var.into(), term.into());
                         //
-                        // TODO: what we really need to do is to add this guard to the add_proof
-                        // callback itself, and only run _that_ callback until later. (Though that
-                        // could raise other issues).
+                        // Instead we leverage the `insert_if_eq` instruction inside of
+                        // `add_proof`.
                         add_proof(inner, rb)?;
                         Ok(())
                     })

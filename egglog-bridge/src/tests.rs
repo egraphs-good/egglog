@@ -249,8 +249,6 @@ fn math_tracing_subsume() {
 /// tables created during this test, and exercise the different column handling caused by enabling
 /// subsumption. Subsumption itself is not used.
 fn math_test(mut egraph: EGraph, can_subsume: bool) {
-    let todo_remove = 1;
-    env_logger::init();
     const N: usize = 8;
     let rational_ty = egraph.base_values_mut().register_type::<Rational64>();
     let string_ty = egraph.base_values_mut().register_type::<&'static str>();

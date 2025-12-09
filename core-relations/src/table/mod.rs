@@ -578,12 +578,6 @@ impl SortedWritesTable {
                                     == to_remove
                         }) {
                             let (ent, _) = entry.remove();
-                            let todo_remove = {
-                                let row = self.data.data.get_row(ent.row);
-                                if row == &SR1[..] || row == &SR2[..] {
-                                    eprintln!("removing the row {row:?}!! (parallel)");
-                                }
-                            };
                             // SAFETY: The safety requirements of
                             // `set_stale_shared` are that there are no
                             // concurrent accesses to `row`. No other threads
@@ -623,12 +617,6 @@ impl SortedWritesTable {
                                     == to_remove
                         }) {
                             let (ent, _) = entry.remove();
-                            let todo_remove = {
-                                let row = self.data.data.get_row(ent.row);
-                                if row == &SR1[..] || row == &SR2[..] {
-                                    eprintln!("removing row {row:?}!! (serial)");
-                                }
-                            };
                             self.data.set_stale(ent.row);
                             changed = true;
                         }
@@ -651,24 +639,22 @@ impl SortedWritesTable {
     fn do_insert(&mut self, exec_state: &mut ExecutionState) -> bool {
         let total = self.pending_state.total_rows.swap(0, Ordering::Relaxed);
         self.data.data.reserve(total);
-        let todo_revert = 1;
-        self.serial_insert(exec_state)
-        // if parallelize_table_op(total) {
-        //     if let Some(col) = self.sort_by {
-        //         self.parallel_insert(
-        //             exec_state,
-        //             SortChecker {
-        //                 col,
-        //                 current: None,
-        //                 baseline: self.offsets.last().map(|(v, _)| *v),
-        //             },
-        //         )
-        //     } else {
-        //         self.parallel_insert(exec_state, ())
-        //     }
-        // } else {
-        //     self.serial_insert(exec_state)
-        // }
+        if parallelize_table_op(total) {
+            if let Some(col) = self.sort_by {
+                self.parallel_insert(
+                    exec_state,
+                    SortChecker {
+                        col,
+                        current: None,
+                        baseline: self.offsets.last().map(|(v, _)| *v),
+                    },
+                )
+            } else {
+                self.parallel_insert(exec_state, ())
+            }
+        } else {
+            self.serial_insert(exec_state)
+        }
     }
 
     fn serial_insert(&mut self, exec_state: &mut ExecutionState) -> bool {
@@ -680,12 +666,6 @@ impl SortedWritesTable {
                 while let Some(buf) = queue.pop() {
                     for query in buf.non_stale() {
                         let key = &query[0..n_keys];
-
-                        let is_special = query.len() == SR1.len()
-                            && (key == &SR1[0..n_keys] || key == &SR2[0..n_keys]);
-                        if is_special {
-                            let todo_remove = eprintln!("inserting special row {query:?}");
-                        }
                         let entry = get_entry_mut(query, n_keys, &mut self.hash, |row| {
                             let Some(row) = self.data.get_row(row) else {
                                 return false;
@@ -702,11 +682,6 @@ impl SortedWritesTable {
                                 .get_row(*row)
                                 .expect("table should not point to stale entry");
                             if (self.merge)(exec_state, cur, query, &mut scratch) {
-                                if is_special {
-                                    let todo_remove = eprintln!(
-                                        "replacing special insert {query:?} and {cur:?} with {scratch:?}"
-                                    );
-                                }
                                 let sort_val = query[sort_by.index()];
                                 let new = self.data.add_row(&scratch);
                                 if let Some(largest) = self.offsets.last().map(|(v, _)| *v) {
@@ -723,12 +698,6 @@ impl SortedWritesTable {
                                 self.data.set_stale(*row);
                                 *row = new;
                                 changed = true;
-                            } else {
-                                if is_special {
-                                    let todo_remove = eprintln!(
-                                        "special insert {query:?} had no effect against {cur:?}"
-                                    );
-                                }
                             }
                             scratch.clear();
                         } else {
@@ -1549,21 +1518,3 @@ impl<I: Iterator> ExactSizeIterator for WithExactSize<I> {
         self.size
     }
 }
-
-const SR1: [Value; 6] = [
-    Value::new_const(440),
-    Value::new_const(771),
-    Value::new_const(5182),
-    Value::new_const(142),
-    Value::new_const(5182),
-    Value::new_const(0),
-];
-
-const SR2: [Value; 6] = [
-    Value::new_const(440),
-    Value::new_const(770),
-    Value::new_const(5171),
-    Value::new_const(142),
-    Value::new_const(5171),
-    Value::new_const(0),
-];

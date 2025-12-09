@@ -309,21 +309,9 @@ impl PredictedVals {
         key: &[Value],
         default: impl FnOnce() -> Pooled<Vec<Value>>,
     ) -> impl Deref<Target = Pooled<Vec<Value>>> + '_ {
-        let todo_revert = 1;
-        // self.data
-        //     .entry((table, SmallVec::from_slice(key)))
-        //     .or_insert_with(default)
-
         self.data
             .entry((table, SmallVec::from_slice(key)))
-            .or_insert_with(move || {
-                let res = default();
-                let id = res[key.len()].rep();
-                if id == 5182 || id == 5172 {
-                    eprintln!("PREDICT adding row {res:?} to {table:?}");
-                }
-                res
-            })
+            .or_insert_with(default)
     }
 }
 
@@ -651,11 +639,6 @@ impl ExecutionState<'_> {
                                             WriteVal::CurrentVal(ix) => row[*ix],
                                         };
                                         row.push(val)
-                                    }
-                                    let todo_revert = 1;
-                                    let id = row[key.len()].rep();
-                                    if id == 5182 || id == 5171 {
-                                        eprintln!("adding row {row:?} to table {table_id:?}");
                                     }
                                     // Insert it into the table.
                                     buffers.get_mut(*table_id).unwrap().stage_insert(&row);

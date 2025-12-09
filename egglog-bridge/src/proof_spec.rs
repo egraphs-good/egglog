@@ -227,20 +227,14 @@ impl EGraph {
 
     fn rule_proof(
         &mut self,
-        RuleData {
-            syntax, rule_name, ..
-        }: &RuleData,
+        RuleData { syntax, .. }: &RuleData,
         vars: &[Value],
         state: &mut ProofReconstructionState,
     ) -> (Vec<RuleVarBinding>, Vec<Premise>) {
         // First, reconstruct terms for all the relevant variables.
         let mut subst_term = Vec::with_capacity(syntax.vars.len());
         let mut subst_val = DenseIdMap::<VariableId, Value>::new();
-        for (i, (SourceVar { id, ty, name }, term_id)) in syntax.vars.iter().zip(vars).enumerate() {
-            let todo_remove = eprintln!(
-                "reconstructing {i} of {}, {term_id:?} with ty {ty:?} in rule {rule_name} [name={name}]",
-                vars.len()
-            );
+        for (SourceVar { id, ty, name }, term_id) in syntax.vars.iter().zip(vars) {
             subst_val.insert(*id, *term_id);
             let term = self.reconstruct_term(*term_id, *ty, state);
             subst_term.push(RuleVarBinding {
