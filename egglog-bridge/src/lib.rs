@@ -1415,6 +1415,31 @@ impl MergeFn {
 
             let mut changed = false;
 
+            // This `terms_equal` handling is here to handle a particular edge case:
+            //
+            // When proofs are enabled we explicitly plumb through a reason for each `union`. This
+            // means that explicit unions within a table are load-bearing in a way that they aren't
+            // without proofs being turned on (they're always the same as lookup+set).
+            //
+            // As a result, unions generally don't happen "implicitly" as part of a merge function.
+            // Instead, all unions or sets are done explicitly with a reason pointing to the rule
+            // that did the union. There's one edge-case though:
+            //
+            // If two separate threads attempt to create the a term (say) `(f x)` concurrently,
+            // they will both create their own term ids (id1 and id2) and insert them to the term
+            // table and `f`. `f`'s merge function will blindly discard the higher id (id2),
+            // assuming that id2 was explicitly `union`ed with id1, but id1 hadn't actually be
+            // inserted yet! This gets even worse if we are inserting something like `(h (f x))`
+            // because now we will have a row in `h` that could reference `id2`, effectively
+            // incorrectly points to an empty e-class.
+            //
+            // This can only happen to duplicate / concurrent insertions of `(f x)`: two equal
+            // e-nodes that correspond to two different terms will still be written to two
+            // different rows and hence will not rely on implicit unions in this way. Because the
+            // only kinds of insertions that fall prey to this are identical terms, we add an
+            // explicit case for when `old` and `new` represent identical terms with different term
+            // ids. In taht case we union these two ids in both the main union-find and the
+            // term-consistency table.
             let terms_equal = schema_math.tracing
                 && cur[0..schema_math.ret_val_col()] == new[0..schema_math.ret_val_col()];
 
