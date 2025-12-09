@@ -1438,8 +1438,8 @@ impl MergeFn {
             // different rows and hence will not rely on implicit unions in this way. Because the
             // only kinds of insertions that fall prey to this are identical terms, we add an
             // explicit case for when `old` and `new` represent identical terms with different term
-            // ids. In taht case we union these two ids in both the main union-find and the
-            // term-consistency table.
+            // ids. In that case we can list our reason for the terms being equal as `Refl`, and
+            // union these two ids in both the main union-find and the term-consistency table.
             let terms_equal = schema_math.tracing
                 && cur[0..schema_math.ret_val_col()] == new[0..schema_math.ret_val_col()];
 
