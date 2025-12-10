@@ -1,4 +1,4 @@
-use std::collections::HashSet;
+use hashbrown::HashSet;
 use std::path::{Path, PathBuf};
 
 use egglog::ast::{Command, Parser};
@@ -248,11 +248,11 @@ fn fact_allows_proofs(
 }
 
 fn expr_allows_proofs(
-    parser: &mut Parser,
-    root: &Path,
-    base_dir: &Path,
+    _parser: &mut Parser,
+    _root: &Path,
+    _base_dir: &Path,
     expr: &egglog::ast::Expr,
-    visited: &mut HashSet<PathBuf>,
+    _visited: &mut HashSet<PathBuf>,
 ) -> bool {
     match expr {
         egglog::ast::Expr::Call(_, head, args) => {
@@ -260,7 +260,7 @@ fn expr_allows_proofs(
                 return false;
             }
             args.iter()
-                .all(|arg| expr_allows_proofs(parser, root, base_dir, arg, visited))
+                .all(|arg| expr_allows_proofs(_parser, _root, _base_dir, arg, _visited))
         }
         _ => true,
     }
