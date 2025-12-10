@@ -246,33 +246,14 @@ impl<C: Cost + Ord + Eq + Clone + Debug> Extractor<C> {
             let elements = sort.inner_values(egraph.backend.container_values(), value);
             let mut ch_costs: Vec<C> = Vec::new();
             for ch in elements.iter() {
-                if let Some(c) = self.compute_cost_node(egraph, ch.1, &ch.0) {
-                    ch_costs.push(c);
-                } else {
-                    return None;
-                }
+                ch_costs.push(self.compute_cost_node(egraph, ch.1, &ch.0)?);
             }
             Some(
                 self.cost_model
                     .container_cost(egraph, sort, value, &ch_costs),
             )
         } else if sort.is_eq_sort() {
-            if self
-                .costs
-                .get(sort.name())
-                .is_some_and(|t| t.get(&value).is_some())
-            {
-                Some(
-                    self.costs
-                        .get(sort.name())
-                        .unwrap()
-                        .get(&value)
-                        .unwrap()
-                        .clone(),
-                )
-            } else {
-                None
-            }
+            self.costs.get(sort.name())?.get(&value).cloned()
         } else {
             // Primitive
             Some(self.cost_model.base_value_cost(egraph, sort, value))
@@ -291,11 +272,7 @@ impl<C: Cost + Ord + Eq + Clone + Debug> Extractor<C> {
         //log::debug!("compute_cost_hyperedge head {} sorts {:?}", head, sorts);
         // Relying on .zip to truncate the values
         for (value, sort) in row.vals.iter().zip(sorts.iter()) {
-            if let Some(c) = self.compute_cost_node(egraph, *value, sort) {
-                ch_costs.push(c);
-            } else {
-                return None;
-            }
+            ch_costs.push(self.compute_cost_node(egraph, *value, sort)?);
         }
         Some(self.cost_model.fold(
             &func.decl.name,
