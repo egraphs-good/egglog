@@ -145,7 +145,46 @@ impl<T> Deref for ReadHandle<'_, T> {
     }
 }
 
-struct SyncUnsafeCell<T>(UnsafeCell<T>);
+pub struct PushOnceQueue<T> {
+    data: ReadOptimizedLock<Vec<MaybeUninit<SyncUnsafeCell<T>>>>,
+    head: AtomicUsize,
+    write_lock: Mutex<()>,
+}
+
+impl<T> PushOnceQueue<T> {
+    pub fn new() -> Self {
+        Self {
+            data: ReadOptimizedLock::new(Vec::new()),
+            head: AtomicUsize::new(0),
+            write_lock: Mutex::new(()),
+        }
+    }
+
+    pub fn allocate_writer(&self) -> PushOnceWriter<T> {
+        let index = self.head.fetch_add(1, Ordering::AcqRel);
+        PushOnceWriter {
+            index,
+            _marker: std::marker::PhantomData,
+        }
+    }
+}
+
+pub struct PushOnceWriter<T> {
+    index: usize,
+    _marker: std::marker::PhantomData<T>,
+}
+
+pub struct SyncUnsafeCell<T>(UnsafeCell<T>);
+
+impl<T> SyncUnsafeCell<T> {
+    pub fn new(value: T) -> Self {
+        Self(UnsafeCell::new(value))
+    }
+
+    pub fn get(&self) -> *mut T {
+        self.0.get()
+    }
+}
 
 unsafe impl<T: Send> Send for SyncUnsafeCell<T> {}
 unsafe impl<T: Sync> Sync for SyncUnsafeCell<T> {}
