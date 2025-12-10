@@ -1,5 +1,6 @@
 use egglog::{extract::DefaultCost, *};
 use egglog_ast::span::{RustSpan, Span};
+use std::collections::HashSet;
 
 #[test]
 fn globals_missing_prefix_warns_by_default() {
@@ -407,6 +408,172 @@ fn test_simple_extract8() {
         panic!();
     };
     assert_eq!(cost, 10);
+}
+
+// Test copied from https://github.com/egraphs-good/egglog-python/issues/387#issuecomment-3628927075
+// to verify that we can implement a cost model that counts DAG nodes and it is extracted properly.
+// We simplify the use case assuming all costs are set as one for all constructors
+#[derive(Clone, Debug)]
+enum DagCostValue {
+    // A set of all the nodes in this sub-graph
+    Nodes(HashSet<(String, Vec<Value>)>),
+    // The "cost" returned by enode_cost is only ever
+    // directly passed into fold as the head cost, so we save this as a different value
+    EnodeCostResult(String, Vec<Value>),
+}
+
+impl DagCostValue {
+    fn cost(&self) -> usize {
+        let DagCostValue::Nodes(nodes) = self else {
+            panic!("never will call")
+        };
+        nodes.len() as usize
+    }
+}
+
+impl PartialEq for DagCostValue {
+    fn eq(&self, other: &Self) -> bool {
+        self.cost() == other.cost()
+    }
+}
+impl Eq for DagCostValue {}
+
+impl PartialOrd for DagCostValue {
+    fn partial_cmp(&self, other: &Self) -> Option<std::cmp::Ordering> {
+        Some(self.cmp(other))
+    }
+}
+impl Ord for DagCostValue {
+    fn cmp(&self, other: &Self) -> std::cmp::Ordering {
+        self.cost().cmp(&other.cost())
+    }
+}
+
+impl extract::Cost for DagCostValue {
+    fn identity() -> Self {
+        panic!("not needed")
+    }
+
+    fn unit() -> Self {
+        panic!("not needed")
+    }
+
+    fn combine(self, _other: &Self) -> Self {
+        panic!("not needed")
+    }
+}
+
+#[derive(Clone, Debug)]
+struct DagCost;
+
+impl extract::CostModel<DagCostValue> for DagCost {
+    fn fold(
+        &self,
+        _head: &str,
+        children_cost: &[DagCostValue],
+        head_cost: DagCostValue,
+    ) -> DagCostValue {
+        let DagCostValue::EnodeCostResult(name, args) = head_cost else {
+            panic!("expected enode cost result")
+        };
+        let mut combined_costs = HashSet::new();
+        for child_cost in children_cost {
+            let DagCostValue::Nodes(child_costs) = child_cost else {
+                panic!("expected costs")
+            };
+            combined_costs.extend(child_costs.iter().cloned());
+        }
+        if combined_costs.contains(&(name.clone(), args.clone())) {
+            panic!("cycle detected in DAG cost extraction, should never happen");
+        }
+        // Add cost for this node
+        combined_costs.insert((name, args));
+        DagCostValue::Nodes(combined_costs)
+    }
+
+    fn enode_cost(
+        &self,
+        _egraph: &EGraph,
+        func: &Function,
+        row: &egglog_bridge::FunctionRow,
+    ) -> DagCostValue {
+        let name = func.name().to_string();
+        // Remove last value which is the output
+        let args: Vec<Value> = row.vals.iter().cloned().take(row.vals.len() - 1).collect();
+        DagCostValue::EnodeCostResult(name, args)
+    }
+
+    fn container_cost(
+        &self,
+        _egraph: &EGraph,
+        _sort: &ArcSort,
+        _value: Value,
+        _element_costs: &[DagCostValue],
+    ) -> DagCostValue {
+        panic!("not needed");
+    }
+
+    fn base_value_cost(&self, _egraph: &EGraph, sort: &ArcSort, value: Value) -> DagCostValue {
+        DagCostValue::Nodes(HashSet::from([(sort.name().to_string(), vec![value])]))
+    }
+}
+
+#[test]
+fn test_dag_cost_extractor() {
+    let _ = env_logger::builder().is_test(true).try_init();
+
+    let mut egraph = EGraph::default();
+
+    let program = r#"
+(sort S)
+
+(constructor Si (i64)     S)
+(constructor Swide (S S S S S S S S) S )
+(constructor Ssa (S)       S)
+(constructor Ssb (S)      S)
+(constructor Ssc (S)      S)
+(constructor Sp (S S)     S)
+
+
+(let w
+  (Swide (Si 0) (Si 1) (Si 2) (Si 3) (Si 4) (Si 5) (Si 6) (Si 7)))
+
+(let l (Ssa (Ssb (Ssc (Si 0)))))
+(let x (Ssa w))
+(let v (Sp w x))
+
+(union x l)
+"#;
+
+    egraph.parse_and_run_program(None, program).unwrap();
+
+    let rootsort = egraph.get_sort_by_name("S").unwrap().clone();
+    let extractor = extract::Extractor::compute_costs_from_rootsorts(
+        Some(vec![rootsort.clone()]),
+        &egraph,
+        DagCost,
+    );
+    let mut termdag = TermDag::default();
+    let w_value = egraph
+        .lookup_function("w", &[])
+        .expect("function w missing");
+
+    let (cost, _term) = extractor
+        .extract_best_with_sort(&egraph, &mut termdag, w_value, rootsort.clone())
+        .expect("failed to extract");
+
+    assert_eq!(cost.cost(), 17);
+
+    let v_value = egraph
+        .lookup_function("v", &[])
+        .expect("function v missing");
+
+    let (cost, _term) = extractor
+        .extract_best_with_sort(&egraph, &mut termdag, v_value, rootsort)
+        .expect("failed to extract");
+    // Cost might either be cheapest of 19 or higher cost of 21 depending on which one it selects first
+    // It's greedy so either is acceptable
+    assert!(cost.cost() == 19 || cost.cost() == 21);
 }
 
 #[test]
