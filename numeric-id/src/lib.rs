@@ -391,6 +391,14 @@ impl<K: NumericId, V: Send + Sync> IdVec<K, V> {
             .enumerate()
             .map(|(i, v)| (K::from_usize(i), v))
     }
+
+    pub fn par_iter(&self) -> impl IndexedParallelIterator<Item = (K, &V)> {
+        self.data
+            .par_iter()
+            .with_max_len(1)
+            .enumerate()
+            .map(|(i, v)| (K::from_usize(i), v))
+    }
 }
 
 impl<K: NumericId, V> ops::Index<K> for IdVec<K, V> {

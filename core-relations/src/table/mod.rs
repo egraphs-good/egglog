@@ -4,19 +4,21 @@
 //! in egglog is that high level concepts like "timestamp" and "merge function"
 //! are abstracted away from the core functionality of the table.
 
+use std::panic;
 use std::{
     any::Any,
     cmp,
     hash::Hasher,
     mem,
     sync::{
-        Arc, Weak,
+        Arc, Mutex, Weak,
         atomic::{AtomicUsize, Ordering},
     },
 };
 
 use crate::numeric_id::{DenseIdMap, NumericId};
-use crossbeam_queue::SegQueue;
+use egglog_concurrency::{ReadOptimizedLock, SyncUnsafeCell};
+use egglog_numeric_id::IdVec;
 use hashbrown::HashTable;
 use rayon::iter::{IndexedParallelIterator, IntoParallelRefMutIterator, ParallelIterator};
 use rustc_hash::FxHasher;
@@ -143,7 +145,7 @@ pub struct SortedWritesTable {
     sort_by: Option<ColumnId>,
     offsets: Vec<(Value, RowId)>,
 
-    pending_state: Arc<PendingState>,
+    pending_state: PendingState,
     merge: Arc<MergeFn>,
     to_rebuild: Vec<ColumnId>,
     rebuild_index: Index<ColumnIndex>,
@@ -161,7 +163,7 @@ impl Clone for SortedWritesTable {
             n_columns: self.n_columns,
             sort_by: self.sort_by,
             offsets: self.offsets.clone(),
-            pending_state: Arc::new(self.pending_state.deep_copy()),
+            pending_state: self.pending_state.deep_copy(),
             merge: self.merge.clone(),
             to_rebuild: self.to_rebuild.clone(),
             rebuild_index: Index::new(self.to_rebuild.clone(), ColumnIndex::new()),
@@ -227,7 +229,10 @@ impl ArbitraryRowBuffer {
 struct Buffer {
     pending_rows: DenseIdMap<ShardId, RowBuffer>,
     pending_removals: DenseIdMap<ShardId, ArbitraryRowBuffer>,
-    state: Weak<PendingState>,
+    row_writer: ShardedUpdateQueueWriter<RowBuffer>,
+    removal_writer: ShardedUpdateQueueWriter<ArbitraryRowBuffer>,
+    total_rows: Weak<AtomicUsize>,
+    total_removals: Weak<AtomicUsize>,
     n_cols: u32,
     n_keys: u32,
     shard_data: ShardData,
@@ -250,7 +255,10 @@ impl MutationBuffer for Buffer {
         Box::new(Buffer {
             pending_rows: Default::default(),
             pending_removals: Default::default(),
-            state: self.state.clone(),
+            row_writer: todo!(),
+            removal_writer: todo!(),
+            total_rows: todo!(),
+            total_removals: todo!(),
             n_cols: self.n_cols,
             n_keys: self.n_keys,
             shard_data: self.shard_data,
@@ -260,29 +268,41 @@ impl MutationBuffer for Buffer {
 
 impl Drop for Buffer {
     fn drop(&mut self) {
-        if let Some(state) = self.state.upgrade() {
-            let mut rows = 0;
-            for shard_id in 0..self.pending_rows.n_ids() {
-                let shard = ShardId::from_usize(shard_id);
-                let Some(buf) = self.pending_rows.take(shard) else {
-                    continue;
-                };
-                rows += buf.len();
-                state.pending_rows[shard].push(buf);
-            }
-            state.total_rows.fetch_add(rows, Ordering::Relaxed);
+        // pending rows
+        let pending_rows = mem::take(&mut self.pending_rows);
 
-            let mut rows = 0;
-            for shard_id in 0..self.pending_removals.n_ids() {
-                let shard = ShardId::from_usize(shard_id);
-                let Some(buf) = self.pending_removals.take(shard) else {
-                    continue;
-                };
+        let mut rows = 0;
+        for shard_id in 0..pending_rows.n_ids() {
+            let shard = ShardId::from_usize(shard_id);
+            if let Some(buf) = pending_rows.get(shard) {
                 rows += buf.len();
-                state.pending_removals[shard].push(buf);
             }
-            state.total_removals.fetch_add(rows, Ordering::Relaxed);
         }
+        self.total_rows
+            .upgrade()
+            .unwrap()
+            .fetch_add(rows, Ordering::Relaxed);
+
+        let row_writer = mem::take(&mut self.row_writer);
+        row_writer.write(pending_rows);
+
+        // pending_removals
+        let pending_removals = mem::take(&mut self.pending_removals);
+
+        let mut removals = 0;
+        for shard_id in 0..pending_removals.n_ids() {
+            let shard = ShardId::from_usize(shard_id);
+            if let Some(buf) = pending_removals.get(shard) {
+                removals += buf.len();
+            }
+        }
+        self.total_removals
+            .upgrade()
+            .unwrap()
+            .fetch_add(removals, Ordering::Relaxed);
+
+        let removal_writer = mem::take(&mut self.removal_writer);
+        removal_writer.write(pending_removals);
     }
 }
 
@@ -481,10 +501,13 @@ impl Table for SortedWritesTable {
         Box::new(Buffer {
             pending_rows: DenseIdMap::with_capacity(n_shards),
             pending_removals: DenseIdMap::with_capacity(n_shards),
-            state: Arc::downgrade(&self.pending_state),
+            row_writer: self.pending_state.pending_rows.allocate_writer(),
+            removal_writer: self.pending_state.pending_removals.allocate_writer(),
             n_keys: u32::try_from(self.n_keys).expect("n_keys should fit in u32"),
             n_cols: u32::try_from(self.n_columns).expect("n_columns should fit in u32"),
             shard_data: self.hash.shard_data(),
+            total_rows: Arc::downgrade(&self.pending_state.total_rows),
+            total_removals: Arc::downgrade(&self.pending_state.total_removals),
         })
     }
 
@@ -542,7 +565,7 @@ impl SortedWritesTable {
             n_columns,
             sort_by,
             offsets: Default::default(),
-            pending_state: Arc::new(PendingState::new(shard_data)),
+            pending_state: PendingState::new(shard_data),
             merge: merge_fn.into(),
             to_rebuild,
             rebuild_index,
@@ -553,27 +576,20 @@ impl SortedWritesTable {
     /// Flush all pending removals, in parallel.
     fn parallel_delete(&mut self) -> bool {
         let shard_data = self.hash.shard_data();
+        let pending_removals = self.pending_state.pending_removals.take();
         let stale_delta: usize = self
             .hash
             .mut_shards()
             .par_iter_mut()
-            .enumerate()
-            .filter_map(|(shard_id, shard)| {
-                let shard_id = ShardId::from_usize(shard_id);
-                if self.pending_state.pending_removals[shard_id].is_empty() {
-                    return None;
-                }
-                Some((shard_id, shard))
-            })
-            .map(|(shard_id, shard)| {
-                let queue = &self.pending_state.pending_removals[shard_id];
+            .zip(pending_removals.par_iter())
+            .map(|(shard, (shard_id, bufs))| {
                 let mut marked_stale = 0;
-                while let Some(buf) = queue.pop() {
+                for buf in bufs {
                     buf.for_each(|to_remove| {
                         let (actual_shard, hc) = hash_code(shard_data, to_remove, self.n_keys);
                         assert_eq!(actual_shard, shard_id);
                         if let Ok(entry) = shard.find_entry(hc, |entry| {
-                            entry.hashcode == (hc as _)
+                            entry.hashcode == (hc as u64)
                                 && &self.data.get_row(entry.row).unwrap()[0..self.n_keys]
                                     == to_remove
                         }) {
@@ -597,22 +613,22 @@ impl SortedWritesTable {
         self.data.stale_rows += stale_delta;
         stale_delta > 0
     }
+
     fn serial_delete(&mut self) -> bool {
         let shard_data = self.hash.shard_data();
         let mut changed = false;
         self.hash
             .mut_shards()
             .iter_mut()
-            .enumerate()
-            .for_each(|(shard_id, shard)| {
-                let shard_id = ShardId::from_usize(shard_id);
-                let queue = &self.pending_state.pending_removals[shard_id];
-                while let Some(buf) = queue.pop() {
+            .zip(self.pending_state.pending_removals.take().iter())
+            // .enumerate()
+            .for_each(|(shard, (shard_id, bufs))| {
+                for buf in bufs {
                     buf.for_each(|to_remove| {
                         let (actual_shard, hc) = hash_code(shard_data, to_remove, self.n_keys);
                         assert_eq!(actual_shard, shard_id);
                         if let Ok(entry) = shard.find_entry(hc, |entry| {
-                            entry.hashcode == (hc as _)
+                            entry.hashcode == (hc as u64)
                                 && &self.data.get_row(entry.row).unwrap()[0..self.n_keys]
                                     == to_remove
                         }) {
@@ -661,9 +677,9 @@ impl SortedWritesTable {
         let mut changed = false;
         let n_keys = self.n_keys;
         let mut scratch = with_pool_set(|ps| ps.get::<Vec<Value>>());
-        for (_outer_shard, queue) in self.pending_state.pending_rows.iter() {
+        for (_outer_shard, bufs) in self.pending_state.pending_rows.take().drain() {
             if let Some(sort_by) = self.sort_by {
-                while let Some(buf) = queue.pop() {
+                for buf in bufs {
                     for query in buf.non_stale() {
                         let key = &query[0..n_keys];
                         let entry = get_entry_mut(query, n_keys, &mut self.hash, |row| {
@@ -731,7 +747,7 @@ impl SortedWritesTable {
                 }
             } else {
                 // Simplified variant without the sorting constraint.
-                while let Some(buf) = queue.pop() {
+                for buf in bufs {
                     for query in buf.non_stale() {
                         let key = &query[0..n_keys];
                         let entry = get_entry_mut(query, n_keys, &mut self.hash, |row| {
@@ -794,13 +810,11 @@ impl SortedWritesTable {
             .hash
             .mut_shards()
             .par_iter_mut()
-            .enumerate()
-            .map(|(shard_id, shard)| {
-                let shard_id = ShardId::from_usize(shard_id);
+            .zip(self.pending_state.pending_rows.take().par_iter())
+            .map(|(shard, (shard_id, bufs))| {
                 let mut checker = checker.clone();
                 let mut exec_state = exec_state.clone();
                 let mut scratch = with_pool_set(|ps| ps.get::<Vec<Value>>());
-                let queue = &self.pending_state.pending_rows[shard_id];
                 let mut marked_stale = 0usize;
                 let mut staged = StagedOutputs::new(n_keys, n_cols, BATCH_SIZE);
                 let mut changed = false;
@@ -890,7 +904,7 @@ impl SortedWritesTable {
                 // * Add new values to `staged`
                 // * Removing entries in `shard` and mark them as stale in
                 // `data` if they will be overwritten.
-                while let Some(buf) = queue.pop() {
+                for buf in bufs {
                     // We create a read_handle once per batch to avoid blocking
                     // too many threads if someone needs to resize the row
                     // writer.
@@ -1228,39 +1242,160 @@ fn hash_code(shard_data: ShardData, row: &[Value], n_keys: usize) -> (ShardId, u
     (shard_data.shard_id(full_code), full_code as HashCode as u64)
 }
 
+/// Conceptually equivalent to `DenseIdMap<ShardId, SegQueue<T>>`.
+struct ShardedUpdateQueue<T> {
+    head: AtomicUsize,
+    completed: Arc<AtomicUsize>,
+    shards: Arc<ReadOptimizedLock<DenseIdMap<ShardId, SyncUnsafeCell<Vec<Option<T>>>>>>,
+    // Any updates to capacity require exclusive access.
+    capacity: AtomicUsize,
+}
+
+struct ShardedUpdateQueueWriter<T> {
+    idx: usize,
+    completed: Weak<AtomicUsize>,
+    data: Weak<ReadOptimizedLock<DenseIdMap<ShardId, SyncUnsafeCell<Vec<Option<T>>>>>>,
+}
+
+impl<T> Default for ShardedUpdateQueueWriter<T> {
+    // TODO: get rid of the default implementation
+    fn default() -> ShardedUpdateQueueWriter<T> {
+        ShardedUpdateQueueWriter {
+            idx: 0,
+            completed: Weak::new(),
+            data: Weak::new(),
+        }
+    }
+}
+
+impl<T> Default for ShardedUpdateQueue<T> {
+    // TODO: get rid of the default implementation
+    fn default() -> ShardedUpdateQueue<T> {
+        ShardedUpdateQueue {
+            head: AtomicUsize::new(0),
+            completed: Arc::new(AtomicUsize::new(0)),
+            shards: Arc::new(ReadOptimizedLock::new(DenseIdMap::new())),
+            capacity: AtomicUsize::new(0),
+        }
+    }
+}
+
+impl<T> ShardedUpdateQueue<T> {
+    fn new(shard_data: ShardData) -> ShardedUpdateQueue<T> {
+        let n_shards = shard_data.n_shards();
+        let mut shards = DenseIdMap::with_capacity(n_shards);
+        for i in 0..n_shards {
+            shards.insert(ShardId::from_usize(i), SyncUnsafeCell::new(Vec::new()));
+        }
+        ShardedUpdateQueue {
+            shards: Arc::new(ReadOptimizedLock::new(shards)),
+            head: AtomicUsize::new(0),
+            completed: Arc::new(AtomicUsize::new(0)),
+            capacity: AtomicUsize::new(0),
+        }
+    }
+
+    fn allocate_writer(&self) -> ShardedUpdateQueueWriter<T> {
+        let idx = self.head.fetch_add(1, Ordering::AcqRel);
+        let capacity = self.capacity.load(Ordering::Acquire);
+        if idx >= capacity {
+            let mut writer = self.shards.lock();
+            let capacity = self.capacity.load(Ordering::Acquire);
+            if idx >= capacity {
+                let new_capacity = cmp::max(capacity * 2, idx + 1);
+                self.capacity.store(new_capacity, Ordering::Release);
+                for (_shard_id, shard_queue) in writer.iter_mut() {
+                    unsafe {
+                        (*shard_queue.get()).resize_with(new_capacity, || None);
+                    }
+                }
+            }
+        }
+        ShardedUpdateQueueWriter {
+            idx,
+            data: Arc::downgrade(&self.shards),
+            completed: Arc::downgrade(&self.completed),
+        }
+    }
+
+    fn clear(&self) {
+        todo!()
+    }
+
+    fn take(&mut self) -> IdVec<ShardId, Vec<T>> {
+        let head = self.head.load(Ordering::Acquire);
+        let mut result = IdVec::with_capacity(head);
+        if head == self.completed.load(Ordering::Acquire) {
+            // No need to acquire a write lock because
+            // 1. There are no active writers
+            // 2. We have exclusive access to the queue so no concurrent writer allocation is possible
+            let reader = self.shards.read();
+            for (shard_id, shard_queue) in reader.iter() {
+                let mut shard_vec = Vec::with_capacity(head);
+                let shard_ptr = shard_queue.get();
+                unsafe {
+                    for slot in &mut *shard_ptr {
+                        if let Some(value) = slot.take() {
+                            shard_vec.push(value);
+                        }
+                        *slot = None;
+                    }
+                }
+                assert!(shard_id.index() == result.len());
+                result.push(shard_vec);
+            }
+            self.head.store(0, Ordering::Release);
+            self.completed.store(0, Ordering::Release);
+            result
+        } else {
+            dbg!(head, self.completed.load(Ordering::Acquire));
+            // TODO: Can we still handle this case? This requires the writer still being able to write to somewhere for future updates
+            panic!("cannot take from sharded update queue with active writers");
+        }
+    }
+}
+
+impl<T> ShardedUpdateQueueWriter<T> {
+    fn write(self, mut update: DenseIdMap<ShardId, T>) {
+        let Some(shards_lock) = self.data.upgrade() else {
+            panic!("sharded update queue has been dropped");
+        };
+        let shards = shards_lock.read();
+        for (shard_id, value) in update.drain() {
+            let shard_ptr = shards[shard_id].get();
+            unsafe {
+                (*shard_ptr)[self.idx] = Some(value);
+            }
+        }
+        let completed = self.completed.upgrade().unwrap();
+        completed.fetch_add(1, Ordering::AcqRel);
+    }
+}
+
 /// A simple struct for packaging up pending mutations to a `SortedWritesTable`.
 struct PendingState {
-    pending_rows: DenseIdMap<ShardId, SegQueue<RowBuffer>>,
-    pending_removals: DenseIdMap<ShardId, SegQueue<ArbitraryRowBuffer>>,
-    total_removals: AtomicUsize,
-    total_rows: AtomicUsize,
+    pending_rows: ShardedUpdateQueue<RowBuffer>,
+    pending_removals: ShardedUpdateQueue<ArbitraryRowBuffer>,
+    total_removals: Arc<AtomicUsize>,
+    total_rows: Arc<AtomicUsize>,
 }
 
 impl PendingState {
     fn new(shard_data: ShardData) -> PendingState {
-        let n_shards = shard_data.n_shards();
-        let mut pending_rows = DenseIdMap::with_capacity(n_shards);
-        let mut pending_removals = DenseIdMap::with_capacity(n_shards);
-        for i in 0..n_shards {
-            pending_rows.insert(ShardId::from_usize(i), SegQueue::default());
-            pending_removals.insert(ShardId::from_usize(i), SegQueue::default());
-        }
+        let pending_rows = ShardedUpdateQueue::new(shard_data);
+        let pending_removals = ShardedUpdateQueue::new(shard_data);
 
         PendingState {
             pending_rows,
             pending_removals,
-            total_removals: AtomicUsize::new(0),
-            total_rows: AtomicUsize::new(0),
+            total_removals: Arc::new(AtomicUsize::new(0)),
+            total_rows: Arc::new(AtomicUsize::new(0)),
         }
     }
-    fn clear(&self) {
-        for (_, queue) in self.pending_rows.iter() {
-            while queue.pop().is_some() {}
-        }
 
-        for (_, queue) in self.pending_removals.iter() {
-            while queue.pop().is_some() {}
-        }
+    fn clear(&self) {
+        self.pending_rows.clear();
+        self.pending_removals.clear();
     }
 
     /// This is only really used in debugging, but it's annoying enough to write
@@ -1269,41 +1404,42 @@ impl PendingState {
     /// We also, however, use it in the clone impl (which should only be called when pending state
     /// is empty).
     fn deep_copy(&self) -> PendingState {
-        let mut pending_rows = DenseIdMap::new();
-        let mut pending_removals = DenseIdMap::new();
-        fn drain_queue<T>(queue: &SegQueue<T>) -> Vec<T> {
-            let mut res = Vec::new();
-            while let Some(x) = queue.pop() {
-                res.push(x);
-            }
-            res
-        }
-        for (shard, queue) in self.pending_rows.iter() {
-            let contents = drain_queue(queue);
-            let new_queue = SegQueue::default();
-            for x in contents {
-                new_queue.push(x.clone());
-                queue.push(x);
-            }
-            pending_rows.insert(shard, new_queue);
-        }
+        todo!()
+        // let mut pending_rows = DenseIdMap::new();
+        // let mut pending_removals = DenseIdMap::new();
+        // fn drain_queue<T>(queue: &SegQueue<T>) -> Vec<T> {
+        //     let mut res = Vec::new();
+        //     while let Some(x) = queue.pop() {
+        //         res.push(x);
+        //     }
+        //     res
+        // }
+        // for (shard, queue) in self.pending_rows.iter() {
+        //     let contents = drain_queue(queue);
+        //     let new_queue = SegQueue::default();
+        //     for x in contents {
+        //         new_queue.push(x.clone());
+        //         queue.push(x);
+        //     }
+        //     pending_rows.insert(shard, new_queue);
+        // }
 
-        for (shard, queue) in self.pending_removals.iter() {
-            let contents = drain_queue(queue);
-            let new_queue = SegQueue::default();
-            for x in contents {
-                new_queue.push(x.clone());
-                queue.push(x);
-            }
-            pending_removals.insert(shard, new_queue);
-        }
+        // for (shard, queue) in self.pending_removals.iter() {
+        //     let contents = drain_queue(queue);
+        //     let new_queue = SegQueue::default();
+        //     for x in contents {
+        //         new_queue.push(x.clone());
+        //         queue.push(x);
+        //     }
+        //     pending_removals.insert(shard, new_queue);
+        // }
 
-        PendingState {
-            pending_rows,
-            pending_removals,
-            total_removals: AtomicUsize::new(self.total_removals.load(Ordering::Acquire)),
-            total_rows: AtomicUsize::new(self.total_rows.load(Ordering::Acquire)),
-        }
+        // PendingState {
+        //     pending_rows,
+        //     pending_removals,
+        //     total_removals: AtomicUsize::new(self.total_removals.load(Ordering::Acquire)),
+        //     total_rows: AtomicUsize::new(self.total_rows.load(Ordering::Acquire)),
+        // }
     }
 }
 
