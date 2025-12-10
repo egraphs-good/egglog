@@ -1,6 +1,6 @@
 use egglog::{extract::DefaultCost, *};
 use egglog_ast::span::{RustSpan, Span};
-use std::collections::HashSet;
+use hashbrown::HashSet;
 
 #[test]
 fn globals_missing_prefix_warns_by_default() {
@@ -427,7 +427,7 @@ impl DagCostValue {
         let DagCostValue::Nodes(nodes) = self else {
             panic!("never will call")
         };
-        nodes.len() as usize
+        nodes.len()
     }
 }
 
