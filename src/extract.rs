@@ -363,9 +363,7 @@ impl<C: Cost + Ord + Eq + Clone + Debug> Extractor<C> {
                     if !row.subsumed {
                         let target = row.vals.last().unwrap();
                         let mut updated = false;
-                        let mut hyperedge_rnk = 0;
                         if let Some(new_cost) = self.compute_cost_hyperedge(egraph, &row, func) {
-                            hyperedge_rnk = self.compute_topo_rnk_hyperedge(egraph, &row, func);
                             match self
                                 .costs
                                 .get_mut(target_sort.name())
@@ -390,18 +388,10 @@ impl<C: Cost + Ord + Eq + Clone + Debug> Extractor<C> {
                         if updated {
                             ensure_fixpoint = false;
                             self.topo_rnk_cnt += 1;
-                            let target_topo_rnk = self.topo_rnk_cnt;
                             self.topo_rnk
                                 .get_mut(target_sort.name())
                                 .unwrap()
-                                .insert(*target, target_topo_rnk);
-                            if target_topo_rnk > hyperedge_rnk {
-                                // Save the edge that produced the best cost before child costs change.
-                                self.parent_edge
-                                    .get_mut(target_sort.name())
-                                    .unwrap()
-                                    .insert(*target, (func.decl.name.clone(), row.vals.to_vec()));
-                            }
+                                .insert(*target, self.topo_rnk_cnt);
                         }
                     }
                 };
@@ -409,6 +399,98 @@ impl<C: Cost + Ord + Eq + Clone + Debug> Extractor<C> {
                 egraph.backend.for_each(func.backend_id, relax_hyperedge);
             }
         }
+
+        // Save the edges for reconstruction
+        for func_name in funcs.iter() {
+            let func = egraph.functions.get(func_name).unwrap();
+            let target_sort = func.schema.output.clone();
+
+            let save_best_parent_edge = |row: egglog_bridge::FunctionRow| {
+                if !row.subsumed {
+                    let target = row.vals.last().unwrap();
+                    if let Some(best_cost) = self.costs.get(target_sort.name()).unwrap().get(target)
+                    {
+                        if Some(best_cost.clone())
+                            == self.compute_cost_hyperedge(egraph, &row, func)
+                        {
+                            // one of the possible best parent edges
+                            let target_topo_rnk = *self
+                                .topo_rnk
+                                .get(target_sort.name())
+                                .unwrap()
+                                .get(target)
+                                .unwrap();
+                            if target_topo_rnk > self.compute_topo_rnk_hyperedge(egraph, &row, func)
+                            {
+                                // one of the parent edges that avoids cycles
+                                if let HEntry::Vacant(e) = self
+                                    .parent_edge
+                                    .get_mut(target_sort.name())
+                                    .unwrap()
+                                    .entry(*target)
+                                {
+                                    e.insert((func.decl.name.clone(), row.vals.to_vec()));
+                                }
+                            }
+                        }
+                    }
+                }
+            };
+
+            egraph
+                .backend
+                .for_each(func.backend_id, save_best_parent_edge);
+        }
+    }
+
+    /// Find a parent edge that witnesses the best cost for `value` in `sort`.
+    /// Only needed when a best-cost edge was not cached because the cost model does *not*
+    /// guarantee parents are strictly more expensive than their children (e.g., equal/negative/flat
+    /// costs, DAG node counting). In those cases every best-cost edge can be skipped during the
+    /// normal pass, so we search again here.
+    fn find_parent_edge(
+        &self,
+        egraph: &EGraph,
+        sort: &ArcSort,
+        value: Value,
+    ) -> Option<(String, Vec<Value>)> {
+        debug_assert!(sort.is_eq_sort());
+
+        let best_cost = self.costs.get(sort.name())?.get(&value)?;
+        let mut best_alternative: Option<(C, (String, Vec<Value>))> = None;
+
+        for func_name in self.funcs.iter() {
+            let func = egraph.functions.get(func_name).unwrap();
+            if func.schema.output.name() != sort.name() {
+                continue;
+            }
+
+            let mut result: Option<(String, Vec<Value>)> = None;
+            let mut consider_row = |row: egglog_bridge::FunctionRow| {
+                if row.subsumed || result.is_some() {
+                    return;
+                }
+                let target = *row.vals.last().unwrap();
+                if target != value {
+                    return;
+                }
+                if let Some(cost) = self.compute_cost_hyperedge(egraph, &row, func) {
+                    if &cost == best_cost {
+                        result = Some((func.decl.name.clone(), row.vals.to_vec()));
+                    } else if best_alternative.as_ref().is_none_or(|(c, _)| cost < *c) {
+                        best_alternative =
+                            Some((cost, (func.decl.name.clone(), row.vals.to_vec())));
+                    }
+                }
+            };
+
+            egraph.backend.for_each(func.backend_id, &mut consider_row);
+            if result.is_some() {
+                return result;
+            }
+        }
+
+        best_alternative.map(|(_, edge)| edge)
     }
 
     /// This recursively reconstruct the termdag that gives the minimum cost for eclass value.
@@ -450,11 +532,12 @@ impl<C: Cost + Ord + Eq + Clone + Debug> Extractor<C> {
                 ch_terms,
             )
         } else if sort.is_eq_sort() {
-            let (func_name, hyperedge) = self
+            let parent_edge = self
                 .parent_edge
                 .get(sort.name())
-                .unwrap()
-                .get(&value)
+                .and_then(|m| m.get(&value))
+                .cloned()
+                .or_else(|| self.find_parent_edge(egraph, sort, value))
                 .unwrap_or_else(|| {
                     panic!(
                         "missing parent edge for value {:?} in sort {}",
@@ -462,8 +545,9 @@ impl<C: Cost + Ord + Eq + Clone + Debug> Extractor<C> {
                         sort.name()
                     )
                 });
+            let (func_name, hyperedge) = parent_edge;
             let mut ch_terms: Vec<Term> = Vec::new();
-            let ch_sorts = &egraph.functions.get(func_name).unwrap().schema.input;
+            let ch_sorts = &egraph.functions.get(&func_name).unwrap().schema.input;
             for (value, sort) in hyperedge.iter().zip(ch_sorts.iter()) {
                 ch_terms.push(
                     self.reconstruct_termdag_node_helper(egraph, termdag, *value, sort, cache),
