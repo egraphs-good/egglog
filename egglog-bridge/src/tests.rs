@@ -20,6 +20,7 @@ use num_rational::Rational64;
 use crate::{
     ColumnTy, DefaultVal, EGraph, FunctionConfig, FunctionId, MergeFn, ProofStore, QueryEntry,
     add_expressions, define_rule,
+    termdag::PrettyPrintConfig,
 };
 
 /// Run a simple associativity/commutativity test. In addition to testing that the rules properly
@@ -1504,6 +1505,70 @@ fn test_simple_rule_proof_format() {
     let _eq_pf_id = egraph
         .explain_terms_equal(not_true_id, false_id, &mut proof_store)
         .unwrap();
+}
+
+#[test]
+fn fiat_reason_proof_is_shallow() {
+    let mut egraph = EGraph::with_tracing();
+    let int_ty = egraph.base_values_mut().register_type::<i64>();
+    let num_table = egraph.add_table(FunctionConfig {
+        schema: vec![ColumnTy::Base(int_ty), ColumnTy::Id],
+        default: DefaultVal::FreshId,
+        merge: MergeFn::UnionId,
+        name: "num".into(),
+        can_subsume: false,
+        fiat_reason_only: None,
+    });
+    let add_table = egraph.add_table(FunctionConfig {
+        schema: vec![ColumnTy::Id; 3],
+        default: DefaultVal::FreshId,
+        merge: MergeFn::UnionId,
+        name: "add".into(),
+        can_subsume: false,
+        fiat_reason_only: Some("fiat add".to_string()),
+    });
+
+    let one_val = egraph.base_values_mut().get(1i64);
+    let two_val = egraph.base_values_mut().get(2i64);
+    let _one = egraph.add_term(num_table, &[one_val], "one");
+    let _two = egraph.add_term(num_table, &[two_val], "two");
+
+    let add_rule = define_rule! {
+        [egraph]
+        ((-> (num_table x) id_x) (-> (num_table y) id_y))
+            => ((set (add_table id_x id_y) id_x))
+    };
+    egraph.run_rules(&[add_rule]).unwrap();
+
+    // Grab any row from the fiat-only table and explain it.
+    let mut row = Vec::new();
+    let mut add_id = None;
+    egraph.for_each(add_table, |func_row| {
+        row.clear();
+        row.extend_from_slice(func_row.vals);
+        add_id = egraph.lookup_id(add_table, &row[0..row.len() - 1]);
+    });
+    let add_id = add_id.expect("expected at least one add row");
+
+    let mut proof_store = ProofStore::default();
+    let term_pf = egraph.explain_term(add_id, &mut proof_store).unwrap();
+    let mut buf = Vec::new();
+    proof_store
+        .print_term_proof_pretty(term_pf, &PrettyPrintConfig::default(), &mut buf)
+        .unwrap();
+    let proof_str = String::from_utf8(buf).unwrap();
+    assert!(
+        proof_str.contains("PFiat"),
+        "fiat-only table should yield fiat proof: {proof_str}"
+    );
+    assert!(
+        !proof_str.contains("PRule"),
+        "fiat-only table proof should be shallow: {proof_str}"
+    );
+    assert!(
+        !proof_str.contains("PCong"),
+        "fiat-only table proof should be shallow: {proof_str}"
+    );
 }
 
 const _: () = {

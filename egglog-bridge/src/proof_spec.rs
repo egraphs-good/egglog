@@ -126,13 +126,22 @@ impl ProofBuilder {
         term_var: VariableId,
         db: &mut EGraph,
     ) -> impl Fn(&mut Bindings, &mut RuleBuilder) -> Result<()> + Clone + use<> {
-        let func_table = db.funcs[func].table;
+        let func_info = &db.funcs[func];
+        let func_table = func_info.table;
+        let fiat_reason = func_info.fiat_reason;
         let term_table = db.term_table(func_table);
         let func_val = Value::new(func.rep());
         move |inner, rb| {
-            let reason_var = inner
-                .lhs_reason
-                .expect("must have a reason variable for new rows");
+            let reason_var: DstVar = if let Some(fiat_reason) = fiat_reason {
+                // This table has been marked as "fiat only", meaning that all proofs for this
+                // table should have a single hard-coded fiat reason, rather than the ambient used
+                // for the rule.
+                fiat_reason.into()
+            } else {
+                inner
+                    .lhs_reason
+                    .expect("must have a reason variable for new rows")
+            };
             let mut translated = Vec::with_capacity(entries.len() + 2);
             translated.push(func_val.into());
             for entry in &entries[0..entries.len() - 1] {
