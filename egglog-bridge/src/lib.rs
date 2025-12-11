@@ -885,7 +885,7 @@ impl EGraph {
             merge,
             name,
             can_subsume,
-            fiat_reason_only: _,
+            fiat_reason_only,
         } = config;
         assert!(
             !schema.is_empty(),
@@ -916,6 +916,26 @@ impl EGraph {
             to_rebuild,
             merge_fn,
         );
+        let fiat_reason: Option<Value> = fiat_reason_only.as_ref().and_then(|desc| {
+            self.tracing.then(|| {
+                let reason = Arc::new(ProofReason::Fiat {
+                    desc: desc.clone().into(),
+                });
+                let reason_table = self.reason_table(&reason);
+                let reason_spec_id = self.proof_specs.push(reason);
+                let reason_id = self.with_execution_state(|es| {
+                    es.predict_col(
+                        reason_table,
+                        &[Value::new(reason_spec_id.rep())],
+                        iter::once(MergeVal::Counter(self.reason_counter)),
+                        ColumnId::new(1),
+                    )
+                });
+                self.flush_updates();
+                reason_id
+            })
+        });
+
         let name: Arc<str> = name.into();
         let table_id = self.db.add_table_named(
             table,
@@ -932,6 +952,7 @@ impl EGraph {
             default_val: default,
             can_subsume,
             name,
+            fiat_reason,
         });
         debug_assert_eq!(res, next_func_id);
         let incremental_rebuild_rules = self.incremental_rebuild_rules(res, &schema);
@@ -1327,6 +1348,8 @@ struct FunctionInfo {
     default_val: DefaultVal,
     can_subsume: bool,
     name: Arc<str>,
+    #[allow(dead_code)]
+    fiat_reason: Option<Value>,
 }
 
 impl FunctionInfo {
