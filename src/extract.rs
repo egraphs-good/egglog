@@ -269,7 +269,6 @@ impl<C: Cost + Ord + Eq + Clone + Debug> Extractor<C> {
     ) -> Option<C> {
         let mut ch_costs: Vec<C> = Vec::new();
         let sorts = &func.schema.input;
-        //log::debug!("compute_cost_hyperedge head {} sorts {:?}", head, sorts);
         // Relying on .zip to truncate the values
         for (value, sort) in row.vals.iter().zip(sorts.iter()) {
             ch_costs.push(self.compute_cost_node(egraph, *value, sort)?);
