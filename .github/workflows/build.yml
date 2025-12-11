@@ -39,6 +39,7 @@ jobs:
           - repro-665-set-union
           - stresstest_large_expr
           - typeinfer
+          - taylor7
     steps:
       - run: echo "CARGO_INCREMENTAL=0" >> "$GITHUB_ENV"
       - uses: actions/checkout@v4
