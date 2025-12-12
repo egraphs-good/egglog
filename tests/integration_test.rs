@@ -1,5 +1,10 @@
-use egglog::{extract::DefaultCost, *};
+use egglog::{extract::CostModel, extract::DefaultCost, extractor_from_cost_model, *};
 use egglog_ast::span::{RustSpan, Span};
+fn cost_as_u64(cost: &DynCost) -> DefaultCost {
+    *cost
+        .downcast_ref::<DefaultCost>()
+        .expect("expected default cost")
+}
 
 #[test]
 fn globals_missing_prefix_warns_by_default() {
@@ -152,10 +157,10 @@ fn test_simple_extract1() {
              (extract expr)"#,
         )
         .unwrap();
-    let CommandOutput::ExtractBest(_, cost, _) = outputs[0] else {
+    let CommandOutput::ExtractBest(_, ref cost, _) = outputs[0] else {
         panic!();
     };
-    assert_eq!(cost, 3);
+    assert_eq!(cost_as_u64(cost), 3);
 }
 
 #[test]
@@ -216,7 +221,10 @@ fn test_simple_extract2() {
              "#,
         )
         .unwrap();
-    assert!(matches!(outputs[0], CommandOutput::ExtractBest(_, 4, _)));
+    assert!(matches!(
+        outputs[0],
+        CommandOutput::ExtractBest(_, ref cost, _) if cost_as_u64(cost) == 4
+    ));
 }
 
 #[test]
@@ -246,10 +254,10 @@ fn test_simple_extract3() {
         )
         .unwrap();
 
-    let CommandOutput::ExtractBest(_, cost, _) = outputs[0] else {
+    let CommandOutput::ExtractBest(_, ref cost, _) = outputs[0] else {
         panic!();
     };
-    assert_eq!(cost, 2);
+    assert_eq!(cost_as_u64(cost), 2);
 }
 
 #[test]
@@ -303,10 +311,10 @@ fn test_simple_extract5() {
         )
         .unwrap();
 
-    let CommandOutput::ExtractBest(_, cost, _) = outputs[0] else {
+    let CommandOutput::ExtractBest(_, ref cost, _) = outputs[0] else {
         panic!();
     };
-    assert_eq!(cost, 0);
+    assert_eq!(cost_as_u64(cost), 0);
 }
 
 #[test]
@@ -329,10 +337,10 @@ fn test_simple_extract6() {
         )
         .unwrap();
 
-    let CommandOutput::ExtractBest(_, cost, _) = outputs[0] else {
+    let CommandOutput::ExtractBest(_, ref cost, _) = outputs[0] else {
         panic!();
     };
-    assert_eq!(cost, 0);
+    assert_eq!(cost_as_u64(cost), 0);
 }
 
 #[test]
@@ -376,10 +384,10 @@ fn test_simple_extract7() {
         )
         .unwrap();
 
-    let CommandOutput::ExtractBest(_, cost, _) = outputs[0] else {
+    let CommandOutput::ExtractBest(_, ref cost, _) = outputs[0] else {
         panic!();
     };
-    assert_eq!(cost, 2);
+    assert_eq!(cost_as_u64(cost), 2);
 }
 
 #[test]
@@ -403,10 +411,103 @@ fn test_simple_extract8() {
         )
         .unwrap();
 
-    let CommandOutput::ExtractBest(_, cost, _) = outputs[0] else {
+    let CommandOutput::ExtractBest(_, ref cost, _) = outputs[0] else {
         panic!();
     };
-    assert_eq!(cost, 10);
+    assert_eq!(cost_as_u64(cost), 10);
+}
+
+#[derive(Clone)]
+struct FavorBadCostModel;
+
+impl extract::CostModel<DefaultCost> for FavorBadCostModel {
+    fn fold(
+        &self,
+        head: &str,
+        children_cost: &[DefaultCost],
+        head_cost: DefaultCost,
+    ) -> DefaultCost {
+        extract::TreeAdditiveCostModel::default().fold(head, children_cost, head_cost)
+    }
+
+    fn enode_cost(
+        &self,
+        _egraph: &EGraph,
+        func: &Function,
+        _row: &egglog_bridge::FunctionRow,
+    ) -> DefaultCost {
+        if func.name() == "Bad" { 0 } else { 100 }
+    }
+}
+
+#[test]
+fn test_custom_cost_model_selection() {
+    let _ = env_logger::builder().is_test(true).try_init();
+
+    let mut egraph = EGraph::default();
+
+    let outputs = egraph
+        .parse_and_run_program(
+            None,
+            r#"
+            (datatype Choice (Good) (Bad))
+            (let good (Good))
+            (let bad (Bad))
+            (union good bad)
+            (extract good)
+            "#,
+        )
+        .unwrap();
+
+    assert!(matches!(
+        outputs[0],
+        CommandOutput::ExtractBest(_, _, Term::App(ref s, ..)) if s == "Good"
+    ));
+
+    egraph.set_extractor(extractor_from_cost_model(FavorBadCostModel));
+    let outputs = egraph
+        .parse_and_run_program(None, "(extract good)")
+        .unwrap();
+    assert!(matches!(
+        outputs[0],
+        CommandOutput::ExtractBest(_, _, Term::App(ref s, ..)) if s == "Bad"
+    ));
+}
+
+#[derive(Clone)]
+struct IntCostModel;
+
+impl CostModel<i32> for IntCostModel {
+    fn fold(&self, _head: &str, children_cost: &[i32], head_cost: i32) -> i32 {
+        children_cost.iter().fold(head_cost, |s, c| s + *c)
+    }
+
+    fn enode_cost(
+        &self,
+        _egraph: &EGraph,
+        func: &Function,
+        _row: &egglog_bridge::FunctionRow<'_>,
+    ) -> i32 {
+        // Use a non-default cost so we can see it in the output.
+        (func.name().len() as i32) + 4
+    }
+}
+
+#[test]
+fn test_custom_cost_model_with_non_default_cost_type() {
+    let mut egraph = EGraph::default();
+    egraph.set_extractor(extractor_from_cost_model(IntCostModel));
+
+    let output = egraph
+        .parse_and_run_program(None, "(datatype S (A))\n(let x (A))\n(extract x)")
+        .unwrap();
+
+    let CommandOutput::ExtractBest(_, cost, _) = output.last().unwrap() else {
+        panic!("expected extract output");
+    };
+
+    assert!(cost.downcast_ref::<DefaultCost>().is_none());
+    assert_eq!(*cost.downcast_ref::<i32>().expect("expected i32 cost"), 5);
 }
 
 #[test]
@@ -446,10 +547,10 @@ fn test_simple_extract9() {
         )
         .unwrap();
 
-    let CommandOutput::ExtractBest(_, cost, _) = outputs[0] else {
+    let CommandOutput::ExtractBest(_, ref cost, _) = outputs[0] else {
         panic!();
     };
-    assert_eq!(cost, DefaultCost::MAX);
+    assert_eq!(cost_as_u64(cost), DefaultCost::MAX);
 
     let outputs = egraph
         .parse_and_run_program(
@@ -460,10 +561,10 @@ fn test_simple_extract9() {
         )
         .unwrap();
 
-    let CommandOutput::ExtractBest(_, cost, _) = outputs[0] else {
+    let CommandOutput::ExtractBest(_, ref cost, _) = outputs[0] else {
         panic!();
     };
-    assert_eq!(cost, DefaultCost::MAX);
+    assert_eq!(cost_as_u64(cost), DefaultCost::MAX);
 
     let outputs = egraph
         .parse_and_run_program(
@@ -474,10 +575,10 @@ fn test_simple_extract9() {
         )
         .unwrap();
 
-    let CommandOutput::ExtractBest(_, cost, _) = outputs[0] else {
+    let CommandOutput::ExtractBest(_, ref cost, _) = outputs[0] else {
         panic!();
     };
-    assert_eq!(cost, DefaultCost::MAX);
+    assert_eq!(cost_as_u64(cost), DefaultCost::MAX);
 }
 
 #[test]

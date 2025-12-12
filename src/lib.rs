@@ -51,7 +51,7 @@ use egglog_bridge::{ColumnTy, QueryEntry};
 use egglog_core_relations as core_relations;
 use egglog_numeric_id as numeric_id;
 use egglog_reports::{ReportLevel, RunReport};
-use extract::{CostModel, DefaultCost, Extractor, TreeAdditiveCostModel};
+use extract::{Cost, CostModel, DefaultCost, Extractor, TreeAdditiveCostModel};
 use indexmap::map::Entry;
 use log::{Level, log_enabled};
 use numeric_id::DenseIdMap;
@@ -66,7 +66,6 @@ use std::io::{Read, Write as _};
 use std::iter::once;
 use std::ops::Deref;
 use std::path::PathBuf;
-use std::str::FromStr;
 use std::sync::Arc;
 pub use termdag::{Term, TermDag, TermId};
 use thiserror::Error;
@@ -80,6 +79,100 @@ use crate::core::{GenericActionsExt, ResolvedRuleExt};
 pub const GLOBAL_NAME_PREFIX: &str = "$";
 
 pub type ArcSort = Arc<dyn Sort>;
+/// Type-erased builder that can construct a dynamic extractor for a given set of root sorts.
+pub trait DynExtractorBuilder: Send + Sync {
+    fn build(&self, rootsorts: Option<Vec<ArcSort>>, egraph: &EGraph) -> Box<dyn DynExtractor>;
+}
+pub type ArcDynExtractorFactory = Arc<dyn DynExtractorBuilder>;
+
+/// Convenience helper to wrap a cost model into a dynamic extractor builder.
+pub fn extractor_from_cost_model<C, M>(cost_model: M) -> ArcDynExtractorFactory
+where
+    C: Cost + Ord + Eq + Clone + Debug + 'static,
+    M: CostModel<C> + Send + Sync + 'static,
+{
+    Arc::new(CostModelExtractorBuilder {
+        cost_model: Arc::new(cost_model),
+        _phantom: std::marker::PhantomData::<C>,
+    })
+}
+
+/// Builder that wraps a typed `CostModel` into a dynamic extractor for registration.
+pub struct CostModelExtractorBuilder<C, M>
+where
+    C: Cost + Ord + Eq + Clone + Debug + 'static,
+    M: CostModel<C> + Send + Sync + 'static,
+{
+    cost_model: Arc<M>,
+    _phantom: std::marker::PhantomData<C>,
+}
+
+impl<C, M> DynExtractorBuilder for CostModelExtractorBuilder<C, M>
+where
+    C: Cost + Ord + Eq + Clone + Debug + 'static,
+    M: CostModel<C> + Send + Sync + 'static,
+{
+    /// Builds a dynamic extractor for the specified root sorts.
+    ///
+    /// If `rootsorts` is `None`, the extractor will extract costs for all sorts.
+    fn build(&self, rootsorts: Option<Vec<ArcSort>>, egraph: &EGraph) -> Box<dyn DynExtractor> {
+        Box::new(Extractor::compute_costs_from_rootsorts(
+            rootsorts,
+            egraph,
+            self.cost_model.clone(),
+        ))
+    }
+}
+
+/// Object-safe interface for invoking extraction with dynamically chosen cost models.
+pub trait DynExtractor: Send + Sync {
+    fn extract_best_with_sort(
+        &self,
+        egraph: &EGraph,
+        termdag: &mut TermDag,
+        value: Value,
+        sort: ArcSort,
+    ) -> Option<(DynCost, Term)>;
+
+    fn extract_variants_with_sort(
+        &self,
+        egraph: &EGraph,
+        termdag: &mut TermDag,
+        value: Value,
+        nvariants: usize,
+        sort: ArcSort,
+    ) -> Vec<(DynCost, Term)>;
+}
+
+impl<C> DynExtractor for Extractor<C>
+where
+    C: Cost + Ord + Eq + Clone + Debug + 'static,
+{
+    fn extract_best_with_sort(
+        &self,
+        egraph: &EGraph,
+        termdag: &mut TermDag,
+        value: Value,
+        sort: ArcSort,
+    ) -> Option<(DynCost, Term)> {
+        self.extract_best_with_sort(egraph, termdag, value, sort)
+            .map(|(c, t)| (c.clone_box(), t))
+    }
+
+    fn extract_variants_with_sort(
+        &self,
+        egraph: &EGraph,
+        termdag: &mut TermDag,
+        value: Value,
+        nvariants: usize,
+        sort: ArcSort,
+    ) -> Vec<(DynCost, Term)> {
+        self.extract_variants_with_sort(egraph, termdag, value, nvariants, sort)
+            .into_iter()
+            .map(|(c, t)| (c.clone_box(), t))
+            .collect()
+    }
+}
 
 /// A trait for implementing custom primitive operations in egglog.
 ///
@@ -102,6 +195,8 @@ pub trait Primitive {
 pub trait UserDefinedCommandOutput: Debug + std::fmt::Display + Send + Sync {}
 impl<T> UserDefinedCommandOutput for T where T: Debug + std::fmt::Display + Send + Sync {}
 
+pub type DynCost = Box<dyn extract::Cost>;
+
 /// Output from a command.
 #[derive(Clone, Debug)]
 pub enum CommandOutput {
@@ -110,7 +205,7 @@ pub enum CommandOutput {
     /// The name of all functions and their sizes
     PrintAllFunctionsSize(Vec<(String, usize)>),
     /// The best function found after extracting
-    ExtractBest(TermDag, DefaultCost, Term),
+    ExtractBest(TermDag, DynCost, Term),
     /// The variants of a function found after extracting
     ExtractVariants(TermDag, Vec<Term>),
     /// The report from all runs
@@ -223,6 +318,7 @@ pub struct EGraph {
     warned_about_missing_global_prefix: bool,
     /// Registry for command-level macros
     command_macros: CommandMacroRegistry,
+    extractor: ArcDynExtractorFactory,
 }
 
 /// A user-defined command allows users to inject custom command that can be called
@@ -308,6 +404,7 @@ impl Default for EGraph {
             strict_mode: false,
             warned_about_missing_global_prefix: false,
             command_macros: Default::default(),
+            extractor: extractor_from_cost_model(TreeAdditiveCostModel::default()),
         };
 
         add_base_sort(&mut eg, UnitSort, span!()).unwrap();
@@ -577,11 +674,7 @@ impl EGraph {
         if include_output {
             rootsorts.push(func.schema.output.clone());
         }
-        let extractor = Extractor::compute_costs_from_rootsorts(
-            Some(rootsorts),
-            self,
-            TreeAdditiveCostModel::default(),
-        );
+        let extractor = self.extractor.build(Some(rootsorts), self);
 
         let mut termdag = TermDag::default();
         let mut inputs: Vec<Term> = Vec::new();
@@ -598,7 +691,12 @@ impl EGraph {
                 for (value, sort) in row.vals.iter().zip(&func.schema.input) {
                     let (_, term) = extractor
                         .extract_best_with_sort(self, &mut termdag, *value, sort.clone())
-                        .unwrap_or_else(|| (0, termdag.var("Unextractable".into())));
+                        .unwrap_or_else(|| {
+                            (
+                                Box::new(DefaultCost::identity()) as DynCost,
+                                termdag.var("Unextractable".into()),
+                            )
+                        });
                     children.push(term);
                 }
                 inputs.push(termdag.app(sym.to_owned(), children));
@@ -607,7 +705,12 @@ impl EGraph {
                     let sort = &func.schema.output;
                     let (_, term) = extractor
                         .extract_best_with_sort(self, &mut termdag, value, sort.clone())
-                        .unwrap_or_else(|| (0, termdag.var("Unextractable".into())));
+                        .unwrap_or_else(|| {
+                            (
+                                Box::new(DefaultCost::identity()) as DynCost,
+                                termdag.var("Unextractable".into()),
+                            )
+                        });
                     output.as_mut().unwrap().push(term);
                 }
                 true
@@ -619,6 +722,16 @@ impl EGraph {
         self.backend.for_each_while(func.backend_id, extract_row);
 
         Ok((inputs, output, termdag))
+    }
+
+    /// Set the extractor factory used for extraction.
+    pub fn set_extractor(&mut self, extractor: ArcDynExtractorFactory) {
+        self.extractor = extractor;
+    }
+
+    /// Get the extractor factory used for extraction.
+    pub fn get_extractor(&self) -> ArcDynExtractorFactory {
+        self.extractor.clone()
     }
 
     /// Print up to `n` the tuples in a given function.
@@ -741,7 +854,7 @@ impl EGraph {
     /// Extract a value to a [`TermDag`] and [`Term`] in the [`TermDag`].
     /// Note that the `TermDag` may contain a superset of the nodes in the `Term`.
     /// See also [`EGraph::extract_value_to_string`] for convenience.
-    pub fn extract_value_with_cost_model<CM: CostModel<DefaultCost> + 'static>(
+    pub fn extract_value_with_cost_model<CM: CostModel<DefaultCost> + Send + Sync + 'static>(
         &self,
         sort: &ArcSort,
         value: Value,
@@ -1094,13 +1207,11 @@ impl EGraph {
 
                 let mut termdag = TermDag::default();
 
-                let extractor = Extractor::compute_costs_from_rootsorts(
-                    Some(vec![sort]),
-                    self,
-                    TreeAdditiveCostModel::default(),
-                );
+                let extractor = self.extractor.build(Some(vec![sort.clone()]), self);
                 return if n == 0 {
-                    if let Some((cost, term)) = extractor.extract_best(self, &mut termdag, x) {
+                    if let Some((cost, term)) =
+                        extractor.extract_best_with_sort(self, &mut termdag, x, sort.clone())
+                    {
                         // dont turn termdag into a string if we have messages disabled for performance reasons
                         if log_enabled!(Level::Info) {
                             log::info!("extracted with cost {cost}: {}", termdag.to_string(&term));
@@ -1117,7 +1228,7 @@ impl EGraph {
                         panic!("Cannot extract negative number of variants");
                     }
                     let terms: Vec<Term> = extractor
-                        .extract_variants(self, &mut termdag, x, n as usize)
+                        .extract_variants_with_sort(self, &mut termdag, x, n as usize, sort)
                         .iter()
                         .map(|e| e.1.clone())
                         .collect();
@@ -1194,11 +1305,7 @@ impl EGraph {
                     .open(&filename)
                     .map_err(|e| Error::IoError(filename.clone(), e, span.clone()))?;
 
-                let extractor = Extractor::compute_costs_from_rootsorts(
-                    None,
-                    self,
-                    TreeAdditiveCostModel::default(),
-                );
+                let extractor = self.extractor.build(None, self);
                 let mut termdag: TermDag = Default::default();
 
                 use std::io::Write;

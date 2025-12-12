@@ -1,7 +1,9 @@
 use crate::termdag::{Term, TermDag};
 use crate::util::{HashMap, HashSet};
 use crate::*;
+use std::any::Any;
 use std::collections::VecDeque;
+use std::sync::Arc;
 
 /// An interface for custom cost model.
 ///
@@ -48,17 +50,53 @@ pub trait CostModel<C: Cost> {
     }
 }
 
+impl<C: Cost, T: CostModel<C> + ?Sized> CostModel<C> for Arc<T> {
+    fn fold(&self, head: &str, children_cost: &[C], head_cost: C) -> C {
+        (**self).fold(head, children_cost, head_cost)
+    }
+
+    fn enode_cost(&self, egraph: &EGraph, func: &Function, row: &egglog_bridge::FunctionRow) -> C {
+        (**self).enode_cost(egraph, func, row)
+    }
+
+    fn container_cost(
+        &self,
+        egraph: &EGraph,
+        sort: &ArcSort,
+        value: Value,
+        element_costs: &[C],
+    ) -> C {
+        (**self).container_cost(egraph, sort, value, element_costs)
+    }
+
+    fn base_value_cost(&self, egraph: &EGraph, sort: &ArcSort, value: Value) -> C {
+        (**self).base_value_cost(egraph, sort, value)
+    }
+}
+
 /// Requirements for a type to be usable as a cost by a [`CostModel`].
-pub trait Cost {
+pub trait Cost: std::fmt::Debug + std::fmt::Display + Send + Sync + 'static {
     /// An identity element, usually zero.
-    fn identity() -> Self;
+    fn identity() -> Self
+    where
+        Self: Sized;
 
     /// The default cost for a node with no children, usually one.
-    fn unit() -> Self;
+    fn unit() -> Self
+    where
+        Self: Sized;
 
     /// A binary operation to combine costs, usually addition.
     /// This operation must NOT overflow or panic when given large values!
-    fn combine(self, other: &Self) -> Self;
+    fn combine(self, other: &Self) -> Self
+    where
+        Self: Sized;
+
+    /// Clone into a boxed cost for dynamic use.
+    fn clone_box(&self) -> Box<dyn Cost>;
+
+    /// Downcast support for callers that need concrete costs.
+    fn as_any(&self) -> &dyn Any;
 }
 
 macro_rules! cost_impl_int {
@@ -68,6 +106,12 @@ macro_rules! cost_impl_int {
             fn unit()     -> Self { 1 }
             fn combine(self, other: &Self) -> Self {
                 self.saturating_add(*other)
+            }
+            fn clone_box(&self) -> Box<dyn Cost> {
+                Box::new(*self)
+            }
+            fn as_any(&self) -> &dyn Any {
+                self
             }
         }
     )*};
@@ -89,12 +133,30 @@ macro_rules! cost_impl_num {
             fn combine(self, other: &Self) -> Self {
                 self + other
             }
+            fn clone_box(&self) -> Box<dyn Cost> {
+                Box::new(self.clone())
+            }
+            fn as_any(&self) -> &dyn Any {
+                self
+            }
         }
     )*};
 }
 cost_impl_num!(num::BigInt, num::BigRational);
 use ordered_float::OrderedFloat;
 cost_impl_num!(f32, f64, OrderedFloat<f32>, OrderedFloat<f64>);
+
+impl dyn Cost {
+    pub fn downcast_ref<T: 'static>(&self) -> Option<&T> {
+        self.as_any().downcast_ref::<T>()
+    }
+}
+
+impl Clone for Box<dyn Cost> {
+    fn clone(&self) -> Self {
+        self.clone_box()
+    }
+}
 
 pub type DefaultCost = u64;
 
@@ -126,7 +188,7 @@ impl CostModel<DefaultCost> for TreeAdditiveCostModel {
 pub struct Extractor<C: Cost + Ord + Eq + Clone + Debug> {
     rootsorts: Vec<ArcSort>,
     funcs: Vec<String>,
-    cost_model: Box<dyn CostModel<C>>,
+    cost_model: Box<dyn CostModel<C> + Send + Sync>,
     costs: HashMap<String, HashMap<Value, C>>,
     topo_rnk_cnt: usize,
     topo_rnk: HashMap<String, HashMap<Value, usize>>,
@@ -143,7 +205,7 @@ impl<C: Cost + Ord + Eq + Clone + Debug> Extractor<C> {
     pub fn compute_costs_from_rootsorts(
         rootsorts: Option<Vec<ArcSort>>,
         egraph: &EGraph,
-        cost_model: impl CostModel<C> + 'static,
+        cost_model: impl CostModel<C> + Send + Sync + 'static,
     ) -> Self {
         // We filter out tables unreachable from the root sorts
         let extract_all_sorts = rootsorts.is_none();
