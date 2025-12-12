@@ -74,7 +74,9 @@ impl<K: NumericId, V> DenseIdMap<K, V> {
     /// Create an empty map with space for `n` entries pre-allocated.
     pub fn with_capacity(n: usize) -> Self {
         let mut res = Self::new();
-        res.reserve_space(K::from_usize(n));
+        if n > 0 {
+            res.reserve_space(K::from_usize(n - 1));
+        }
         res
     }
 
@@ -385,6 +387,14 @@ impl<K: NumericId, V: Send + Sync> IdVec<K, V> {
     pub fn par_iter_mut(&mut self) -> impl IndexedParallelIterator<Item = (K, &mut V)> {
         self.data
             .par_iter_mut()
+            .with_max_len(1)
+            .enumerate()
+            .map(|(i, v)| (K::from_usize(i), v))
+    }
+
+    pub fn par_iter(&self) -> impl IndexedParallelIterator<Item = (K, &V)> {
+        self.data
+            .par_iter()
             .with_max_len(1)
             .enumerate()
             .map(|(i, v)| (K::from_usize(i), v))

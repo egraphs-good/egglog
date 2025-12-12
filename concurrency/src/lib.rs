@@ -8,7 +8,9 @@ pub(crate) mod resettable_oncelock;
 use arc_swap::{ArcSwap, Guard};
 
 pub use bitset::BitSet;
+pub use concurrent_vec::SyncUnsafeCell;
 pub use concurrent_vec::ConcurrentVec;
+pub use concurrent_vec::PushOnceQueue;
 pub use notification::Notification;
 pub use parallel_writer::ParallelVecWriter;
 pub use resettable_oncelock::ResettableOnceLock;
