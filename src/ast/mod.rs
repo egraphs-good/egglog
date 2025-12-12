@@ -61,7 +61,12 @@ where
         rule: GenericRule<Head, Leaf>,
     },
     CoreAction(GenericAction<Head, Leaf>),
-    Extract(Span, GenericExpr<Head, Leaf>, GenericExpr<Head, Leaf>),
+    Extract(
+        Span,
+        GenericExpr<Head, Leaf>,
+        GenericExpr<Head, Leaf>,
+        Option<String>,
+    ),
     RunSchedule(GenericSchedule<Head, Leaf>),
     PrintOverallStatistics(Span, Option<String>),
     Check(Span, Vec<GenericFact<Head, Leaf>>),
@@ -131,9 +136,12 @@ where
                 GenericCommand::PrintOverallStatistics(span.clone(), file.clone())
             }
             GenericNCommand::CoreAction(action) => GenericCommand::Action(action.clone()),
-            GenericNCommand::Extract(span, expr, variants) => {
-                GenericCommand::Extract(span.clone(), expr.clone(), variants.clone())
-            }
+            GenericNCommand::Extract(span, expr, variants, extractor) => GenericCommand::Extract(
+                span.clone(),
+                expr.clone(),
+                variants.clone(),
+                extractor.clone(),
+            ),
             GenericNCommand::Check(span, facts) => {
                 GenericCommand::Check(span.clone(), facts.clone())
             }
@@ -187,9 +195,12 @@ where
             GenericNCommand::CoreAction(action) => {
                 GenericNCommand::CoreAction(action.visit_exprs(f))
             }
-            GenericNCommand::Extract(span, expr, variants) => {
-                GenericNCommand::Extract(span, expr.visit_exprs(f), variants.visit_exprs(f))
-            }
+            GenericNCommand::Extract(span, expr, variants, extractor) => GenericNCommand::Extract(
+                span,
+                expr.visit_exprs(f),
+                variants.visit_exprs(f),
+                extractor.clone(),
+            ),
             GenericNCommand::Check(span, facts) => GenericNCommand::Check(
                 span,
                 facts.into_iter().map(|fact| fact.visit_exprs(f)).collect(),
@@ -575,7 +586,13 @@ where
     /// By default, each constructor costs 1 to extract
     /// (common subexpressions are not shared in the cost
     /// model).
-    Extract(Span, GenericExpr<Head, Leaf>, GenericExpr<Head, Leaf>),
+    /// An optional extractor name can override the default.
+    Extract(
+        Span,
+        GenericExpr<Head, Leaf>,
+        GenericExpr<Head, Leaf>,
+        Option<String>,
+    ),
     /// Runs a [`Schedule`], which specifies
     /// rulesets and the number of times to run them.
     ///
@@ -689,8 +706,12 @@ where
                 write!(f, "(datatype {name} {})", ListDisplay(variants, " "))
             }
             GenericCommand::Action(a) => write!(f, "{a}"),
-            GenericCommand::Extract(_span, expr, variants) => {
-                write!(f, "(extract {expr} {variants})")
+            GenericCommand::Extract(_span, expr, variants, extractor) => {
+                write!(f, "(extract {expr}")?;
+                if let Some(cm) = extractor {
+                    write!(f, " :extractor {cm}")?;
+                }
+                write!(f, " {variants})")
             }
             GenericCommand::Sort(_span, name, None) => {
                 let name = sanitize_internal_name(name);

@@ -1,5 +1,6 @@
 use crate::*;
 use std::io::{self, BufRead, BufReader, IsTerminal, Read, Write};
+use std::str::FromStr;
 
 use clap::Parser;
 use env_logger::Env;

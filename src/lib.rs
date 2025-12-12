@@ -46,7 +46,7 @@ use egglog_bridge::{ColumnTy, QueryEntry};
 use egglog_core_relations as core_relations;
 use egglog_numeric_id as numeric_id;
 use egglog_reports::{ReportLevel, RunReport};
-use extract::{CostModel, DefaultCost, Extractor, TreeAdditiveCostModel};
+use extract::{Cost, CostModel, DefaultCost, Extractor, TreeAdditiveCostModel};
 use indexmap::map::Entry;
 use log::{Level, log_enabled};
 use numeric_id::DenseIdMap;
@@ -61,7 +61,6 @@ use std::io::{Read, Write as _};
 use std::iter::once;
 use std::ops::Deref;
 use std::path::PathBuf;
-use std::str::FromStr;
 use std::sync::Arc;
 pub use termdag::{Term, TermDag, TermId};
 use thiserror::Error;
@@ -74,6 +73,82 @@ use crate::core::{GenericActionsExt, ResolvedRuleExt};
 pub const GLOBAL_NAME_PREFIX: &str = "$";
 
 pub type ArcSort = Arc<dyn Sort>;
+pub trait DynExtractorBuilder: Send + Sync {
+    fn build(&self, rootsorts: Option<Vec<ArcSort>>, egraph: &EGraph) -> Box<dyn DynExtractor>;
+}
+pub type ArcDynExtractorFactory = Arc<dyn DynExtractorBuilder>;
+
+pub struct CostModelExtractorBuilder<C, M>
+where
+    C: Cost + Ord + Eq + Clone + Debug + 'static,
+    M: CostModel<C> + Send + Sync + 'static,
+{
+    cost_model: Arc<M>,
+    _phantom: std::marker::PhantomData<C>,
+}
+
+impl<C, M> DynExtractorBuilder for CostModelExtractorBuilder<C, M>
+where
+    C: Cost + Ord + Eq + Clone + Debug + 'static,
+    M: CostModel<C> + Send + Sync + 'static,
+{
+    fn build(&self, rootsorts: Option<Vec<ArcSort>>, egraph: &EGraph) -> Box<dyn DynExtractor> {
+        Box::new(Extractor::compute_costs_from_rootsorts(
+            rootsorts,
+            egraph,
+            self.cost_model.clone(),
+        ))
+    }
+}
+
+pub trait DynExtractor: Send + Sync {
+    fn extract_best_with_sort(
+        &self,
+        egraph: &EGraph,
+        termdag: &mut TermDag,
+        value: Value,
+        sort: ArcSort,
+    ) -> Option<(DynCost, Term)>;
+
+    fn extract_variants_with_sort(
+        &self,
+        egraph: &EGraph,
+        termdag: &mut TermDag,
+        value: Value,
+        nvariants: usize,
+        sort: ArcSort,
+    ) -> Vec<(DynCost, Term)>;
+}
+
+impl<C> DynExtractor for Extractor<C>
+where
+    C: Cost + Ord + Eq + Clone + Debug + 'static,
+{
+    fn extract_best_with_sort(
+        &self,
+        egraph: &EGraph,
+        termdag: &mut TermDag,
+        value: Value,
+        sort: ArcSort,
+    ) -> Option<(DynCost, Term)> {
+        self.extract_best_with_sort(egraph, termdag, value, sort)
+            .map(|(c, t)| (c.clone_box(), t))
+    }
+
+    fn extract_variants_with_sort(
+        &self,
+        egraph: &EGraph,
+        termdag: &mut TermDag,
+        value: Value,
+        nvariants: usize,
+        sort: ArcSort,
+    ) -> Vec<(DynCost, Term)> {
+        self.extract_variants_with_sort(egraph, termdag, value, nvariants, sort)
+            .into_iter()
+            .map(|(c, t)| (c.clone_box(), t))
+            .collect()
+    }
+}
 
 /// A trait for implementing custom primitive operations in egglog.
 ///
@@ -96,6 +171,8 @@ pub trait Primitive {
 pub trait UserDefinedCommandOutput: Debug + std::fmt::Display + Send + Sync {}
 impl<T> UserDefinedCommandOutput for T where T: Debug + std::fmt::Display + Send + Sync {}
 
+pub type DynCost = Box<dyn extract::Cost>;
+
 /// Output from a command.
 #[derive(Clone, Debug)]
 pub enum CommandOutput {
@@ -104,7 +181,7 @@ pub enum CommandOutput {
     /// The name of all functions and their sizes
     PrintAllFunctionsSize(Vec<(String, usize)>),
     /// The best function found after extracting
-    ExtractBest(TermDag, DefaultCost, Term),
+    ExtractBest(TermDag, DynCost, Term),
     /// The variants of a function found after extracting
     ExtractVariants(TermDag, Vec<Term>),
     /// The report from all runs
@@ -215,6 +292,8 @@ pub struct EGraph {
     commands: IndexMap<String, Arc<dyn UserDefinedCommand>>,
     strict_mode: bool,
     warned_about_missing_global_prefix: bool,
+    extractors: HashMap<String, ArcDynExtractorFactory>,
+    default_extractor: String,
 }
 
 /// A user-defined command allows users to inject custom command that can be called
@@ -299,6 +378,8 @@ impl Default for EGraph {
             commands: Default::default(),
             strict_mode: false,
             warned_about_missing_global_prefix: false,
+            extractors: Default::default(),
+            default_extractor: "tree-additive".to_owned(),
         };
 
         add_base_sort(&mut eg, UnitSort, span!()).unwrap();
@@ -329,6 +410,8 @@ impl Default for EGraph {
 
         eg.rulesets
             .insert("".into(), Ruleset::Rules(Default::default()));
+
+        eg.register_cost_model("tree-additive", TreeAdditiveCostModel::default());
 
         eg
     }
@@ -553,11 +636,7 @@ impl EGraph {
         if include_output {
             rootsorts.push(func.schema.output.clone());
         }
-        let extractor = Extractor::compute_costs_from_rootsorts(
-            Some(rootsorts),
-            self,
-            TreeAdditiveCostModel::default(),
-        );
+        let extractor = self.default_extractor().build(Some(rootsorts), self);
 
         let mut termdag = TermDag::default();
         let mut inputs: Vec<Term> = Vec::new();
@@ -574,7 +653,12 @@ impl EGraph {
                 for (value, sort) in row.vals.iter().zip(&func.schema.input) {
                     let (_, term) = extractor
                         .extract_best_with_sort(self, &mut termdag, *value, sort.clone())
-                        .unwrap_or_else(|| (0, termdag.var("Unextractable".into())));
+                        .unwrap_or_else(|| {
+                            (
+                                Box::new(DefaultCost::identity()) as DynCost,
+                                termdag.var("Unextractable".into()),
+                            )
+                        });
                     children.push(term);
                 }
                 inputs.push(termdag.app(sym.to_owned(), children));
@@ -583,7 +667,12 @@ impl EGraph {
                     let sort = &func.schema.output;
                     let (_, term) = extractor
                         .extract_best_with_sort(self, &mut termdag, value, sort.clone())
-                        .unwrap_or_else(|| (0, termdag.var("Unextractable".into())));
+                        .unwrap_or_else(|| {
+                            (
+                                Box::new(DefaultCost::identity()) as DynCost,
+                                termdag.var("Unextractable".into()),
+                            )
+                        });
                     output.as_mut().unwrap().push(term);
                 }
                 true
@@ -595,6 +684,58 @@ impl EGraph {
         self.backend.for_each_while(func.backend_id, extract_row);
 
         Ok((inputs, output, termdag))
+    }
+
+    /// Register an extractor factory by name for later use with extraction.
+    pub fn register_extractor(
+        &mut self,
+        name: impl Into<String>,
+        extractor: ArcDynExtractorFactory,
+    ) {
+        self.extractors.insert(name.into(), extractor);
+    }
+
+    /// Convenience: register a cost model by name by wrapping it in a typed extractor.
+    pub fn register_cost_model<C, M>(&mut self, name: impl Into<String>, cost_model: M)
+    where
+        C: Cost + Ord + Eq + Clone + Debug + 'static,
+        M: CostModel<C> + Send + Sync + 'static,
+    {
+        let builder = CostModelExtractorBuilder {
+            cost_model: Arc::new(cost_model),
+            _phantom: std::marker::PhantomData::<C>,
+        };
+        self.register_extractor(name, Arc::new(builder));
+    }
+
+    fn extractor_by_name(&self, name: &str, span: Span) -> Result<ArcDynExtractorFactory, Error> {
+        self.extractors
+            .get(name)
+            .cloned()
+            .ok_or_else(|| Error::UnknownExtractor(name.to_string(), span))
+    }
+
+    fn default_extractor(&self) -> ArcDynExtractorFactory {
+        self.extractors
+            .get(&self.default_extractor)
+            .cloned()
+            .expect("default extractor missing")
+    }
+
+    /// Set the default extractor used for extraction.
+    pub fn set_default_extractor(&mut self, name: impl Into<String>) -> Result<(), Error> {
+        let name = name.into();
+        if self.extractors.contains_key(&name) {
+            self.default_extractor = name;
+            Ok(())
+        } else {
+            Err(Error::UnknownExtractor(name, span!()))
+        }
+    }
+
+    /// Backwards compatibility alias for setting the default extractor.
+    pub fn set_default_cost_model(&mut self, name: impl Into<String>) -> Result<(), Error> {
+        self.set_default_extractor(name)
     }
 
     /// Print up to `n` the tuples in a given function.
@@ -704,41 +845,53 @@ impl EGraph {
         }
     }
 
-    /// Extract a value to a [`TermDag`] and [`Term`] in the [`TermDag`] using the default cost model.
-    /// See also [`EGraph::extract_value_with_cost_model`] for more control.
+    /// Extract a value to a [`TermDag`] and [`Term`] in the [`TermDag`] using the default extractor.
     pub fn extract_value(
         &self,
         sort: &ArcSort,
         value: Value,
-    ) -> Result<(TermDag, Term, DefaultCost), Error> {
-        self.extract_value_with_cost_model(sort, value, TreeAdditiveCostModel::default())
+    ) -> Result<(TermDag, Term, DynCost), Error> {
+        self.extract_value_with_registered_extractor(sort, value, self.default_extractor())
     }
 
-    /// Extract a value to a [`TermDag`] and [`Term`] in the [`TermDag`].
+    /// Extract a value to a [`TermDag`] and [`Term`] in the [`TermDag`] using the provided extractor factory.
     /// Note that the `TermDag` may contain a superset of the nodes in the `Term`.
-    /// See also [`EGraph::extract_value_to_string`] for convenience.
-    pub fn extract_value_with_cost_model<CM: CostModel<DefaultCost> + 'static>(
+    pub fn extract_value_with_extractor(
         &self,
         sort: &ArcSort,
         value: Value,
-        cost_model: CM,
-    ) -> Result<(TermDag, Term, DefaultCost), Error> {
-        let extractor =
-            Extractor::compute_costs_from_rootsorts(Some(vec![sort.clone()]), self, cost_model);
+        extractor_factory: ArcDynExtractorFactory,
+    ) -> Result<(TermDag, Term, DynCost), Error> {
+        let extractor = extractor_factory.build(Some(vec![sort.clone()]), self);
         let mut termdag = TermDag::default();
-        let (cost, term) = extractor.extract_best(self, &mut termdag, value).unwrap();
+        let (cost, term) = extractor
+            .extract_best_with_sort(self, &mut termdag, value, sort.clone())
+            .unwrap();
         Ok((termdag, term, cost))
     }
 
     /// Extract a value to a string for printing.
-    /// See also [`EGraph::extract_value`] for more control.
     pub fn extract_value_to_string(
         &self,
         sort: &ArcSort,
         value: Value,
-    ) -> Result<(String, DefaultCost), Error> {
+    ) -> Result<(String, DynCost), Error> {
         let (termdag, term, cost) = self.extract_value(sort, value)?;
         Ok((termdag.to_string(&term), cost))
+    }
+
+    fn extract_value_with_registered_extractor(
+        &self,
+        sort: &ArcSort,
+        value: Value,
+        extractor_factory: ArcDynExtractorFactory,
+    ) -> Result<(TermDag, Term, DynCost), Error> {
+        let extractor = extractor_factory.build(Some(vec![sort.clone()]), self);
+        let mut termdag = TermDag::default();
+        let (cost, term) = extractor
+            .extract_best_with_sort(self, &mut termdag, value, sort.clone())
+            .unwrap();
+        Ok((termdag, term, cost))
     }
 
     fn run_rules(&mut self, span: &Span, config: &ResolvedRunConfig) -> Result<RunReport, Error> {
@@ -1061,7 +1214,7 @@ impl EGraph {
                     self.eval_actions(&ResolvedActions::new(vec![action.clone()]))?;
                 }
             },
-            ResolvedNCommand::Extract(span, expr, variants) => {
+            ResolvedNCommand::Extract(span, expr, variants, extractor_name) => {
                 let sort = expr.output_type();
 
                 let x = self.eval_resolved_expr(span.clone(), &expr)?;
@@ -1070,13 +1223,17 @@ impl EGraph {
 
                 let mut termdag = TermDag::default();
 
-                let extractor = Extractor::compute_costs_from_rootsorts(
-                    Some(vec![sort]),
-                    self,
-                    TreeAdditiveCostModel::default(),
-                );
+                let extractor_factory = if let Some(name) = extractor_name {
+                    self.extractor_by_name(&name, expr.span().clone())?
+                } else {
+                    self.default_extractor()
+                };
+
+                let extractor = extractor_factory.build(Some(vec![sort.clone()]), self);
                 return if n == 0 {
-                    if let Some((cost, term)) = extractor.extract_best(self, &mut termdag, x) {
+                    if let Some((cost, term)) =
+                        extractor.extract_best_with_sort(self, &mut termdag, x, sort.clone())
+                    {
                         // dont turn termdag into a string if we have messages disabled for performance reasons
                         if log_enabled!(Level::Info) {
                             log::info!("extracted with cost {cost}: {}", termdag.to_string(&term));
@@ -1093,7 +1250,7 @@ impl EGraph {
                         panic!("Cannot extract negative number of variants");
                     }
                     let terms: Vec<Term> = extractor
-                        .extract_variants(self, &mut termdag, x, n as usize)
+                        .extract_variants_with_sort(self, &mut termdag, x, n as usize, sort)
                         .iter()
                         .map(|e| e.1.clone())
                         .collect();
@@ -1170,11 +1327,7 @@ impl EGraph {
                     .open(&filename)
                     .map_err(|e| Error::IoError(filename.clone(), e, span.clone()))?;
 
-                let extractor = Extractor::compute_costs_from_rootsorts(
-                    None,
-                    self,
-                    TreeAdditiveCostModel::default(),
-                );
+                let extractor = self.default_extractor().build(None, self);
                 let mut termdag: TermDag = Default::default();
 
                 use std::io::Write;
@@ -1759,6 +1912,8 @@ pub enum Error {
     CommandAlreadyExists(String, Span),
     #[error("Incorrect format in file '{0}'.")]
     InputFileFormatError(String),
+    #[error("{1}\nUnknown extractor: {0}")]
+    UnknownExtractor(String, Span),
 }
 
 #[cfg(test)]
