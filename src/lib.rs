@@ -85,6 +85,18 @@ pub trait DynExtractorBuilder: Send + Sync {
 }
 pub type ArcDynExtractorFactory = Arc<dyn DynExtractorBuilder>;
 
+/// Convenience helper to wrap a cost model into a dynamic extractor builder.
+pub fn extractor_from_cost_model<C, M>(cost_model: M) -> ArcDynExtractorFactory
+where
+    C: Cost + Ord + Eq + Clone + Debug + 'static,
+    M: CostModel<C> + Send + Sync + 'static,
+{
+    Arc::new(CostModelExtractorBuilder {
+        cost_model: Arc::new(cost_model),
+        _phantom: std::marker::PhantomData::<C>,
+    })
+}
+
 /// Builder that wraps a typed `CostModel` into a dynamic extractor for registration.
 pub struct CostModelExtractorBuilder<C, M>
 where
@@ -93,26 +105,6 @@ where
 {
     cost_model: Arc<M>,
     _phantom: std::marker::PhantomData<C>,
-}
-
-impl<C, M> CostModelExtractorBuilder<C, M>
-where
-    C: Cost + Ord + Eq + Clone + Debug + 'static,
-    M: CostModel<C> + Send + Sync + 'static,
-{
-    /// Create a new `CostModelExtractorBuilder` from the given cost model.
-    ///
-    /// Used when registering a cost model extractor in an e-graph:
-    ///
-    /// ```rust
-    /// egraph.register_extractor("mine", Arc::new(CostModelExtractorBuilder::new(MyCostModel::default())));
-    /// ```
-    pub fn new(cost_model: M) -> Self {
-        Self {
-            cost_model: Arc::new(cost_model),
-            _phantom: std::marker::PhantomData::<C>,
-        }
-    }
 }
 
 impl<C, M> DynExtractorBuilder for CostModelExtractorBuilder<C, M>
@@ -326,8 +318,7 @@ pub struct EGraph {
     warned_about_missing_global_prefix: bool,
     /// Registry for command-level macros
     command_macros: CommandMacroRegistry,
-    extractors: HashMap<String, ArcDynExtractorFactory>,
-    default_extractor: String,
+    extractor: ArcDynExtractorFactory,
 }
 
 /// A user-defined command allows users to inject custom command that can be called
@@ -413,8 +404,7 @@ impl Default for EGraph {
             strict_mode: false,
             warned_about_missing_global_prefix: false,
             command_macros: Default::default(),
-            extractors: Default::default(),
-            default_extractor: "tree-additive".to_owned(),
+            extractor: extractor_from_cost_model(TreeAdditiveCostModel::default()),
         };
 
         add_base_sort(&mut eg, UnitSort, span!()).unwrap();
@@ -445,13 +435,6 @@ impl Default for EGraph {
 
         eg.rulesets
             .insert("".into(), Ruleset::Rules(Default::default()));
-
-        eg.register_extractor(
-            "tree-additive",
-            Arc::new(CostModelExtractorBuilder::new(
-                TreeAdditiveCostModel::default(),
-            )),
-        );
 
         eg
     }
@@ -691,7 +674,7 @@ impl EGraph {
         if include_output {
             rootsorts.push(func.schema.output.clone());
         }
-        let extractor = self.default_extractor().build(Some(rootsorts), self);
+        let extractor = self.extractor.build(Some(rootsorts), self);
 
         let mut termdag = TermDag::default();
         let mut inputs: Vec<Term> = Vec::new();
@@ -741,38 +724,14 @@ impl EGraph {
         Ok((inputs, output, termdag))
     }
 
-    /// Register an extractor factory by name for later use with extraction.
-    pub fn register_extractor(
-        &mut self,
-        name: impl Into<String>,
-        extractor: ArcDynExtractorFactory,
-    ) {
-        self.extractors.insert(name.into(), extractor);
+    /// Set the extractor factory used for extraction.
+    pub fn set_extractor(&mut self, extractor: ArcDynExtractorFactory) {
+        self.extractor = extractor;
     }
 
-    fn extractor_by_name(&self, name: &str, span: Span) -> Result<ArcDynExtractorFactory, Error> {
-        self.extractors
-            .get(name)
-            .cloned()
-            .ok_or_else(|| Error::UnknownExtractor(name.to_string(), span))
-    }
-
-    fn default_extractor(&self) -> ArcDynExtractorFactory {
-        self.extractors
-            .get(&self.default_extractor)
-            .cloned()
-            .expect("default extractor missing")
-    }
-
-    /// Set the default extractor used for extraction.
-    pub fn set_default_extractor(&mut self, name: impl Into<String>) -> Result<(), Error> {
-        let name = name.into();
-        if self.extractors.contains_key(&name) {
-            self.default_extractor = name;
-            Ok(())
-        } else {
-            Err(Error::UnknownExtractor(name, span!()))
-        }
+    /// Get the extractor factory used for extraction.
+    pub fn get_extractor(&self) -> ArcDynExtractorFactory {
+        self.extractor.clone()
     }
 
     /// Print up to `n` the tuples in a given function.
@@ -1239,7 +1198,7 @@ impl EGraph {
                     self.eval_actions(&ResolvedActions::new(vec![action.clone()]))?;
                 }
             },
-            ResolvedNCommand::Extract(span, expr, variants, extractor_name) => {
+            ResolvedNCommand::Extract(span, expr, variants) => {
                 let sort = expr.output_type();
 
                 let x = self.eval_resolved_expr(span.clone(), &expr)?;
@@ -1248,13 +1207,7 @@ impl EGraph {
 
                 let mut termdag = TermDag::default();
 
-                let extractor_factory = if let Some(name) = extractor_name {
-                    self.extractor_by_name(&name, expr.span().clone())?
-                } else {
-                    self.default_extractor()
-                };
-
-                let extractor = extractor_factory.build(Some(vec![sort.clone()]), self);
+                let extractor = self.extractor.build(Some(vec![sort.clone()]), self);
                 return if n == 0 {
                     if let Some((cost, term)) =
                         extractor.extract_best_with_sort(self, &mut termdag, x, sort.clone())
@@ -1352,7 +1305,7 @@ impl EGraph {
                     .open(&filename)
                     .map_err(|e| Error::IoError(filename.clone(), e, span.clone()))?;
 
-                let extractor = self.default_extractor().build(None, self);
+                let extractor = self.extractor.build(None, self);
                 let mut termdag: TermDag = Default::default();
 
                 use std::io::Write;
@@ -1972,8 +1925,6 @@ pub enum Error {
     CommandAlreadyExists(String, Span),
     #[error("Incorrect format in file '{0}'.")]
     InputFileFormatError(String),
-    #[error("{1}\nUnknown extractor: {0}")]
-    UnknownExtractor(String, Span),
 }
 
 #[cfg(test)]

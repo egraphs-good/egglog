@@ -478,40 +478,17 @@ impl Parser {
                 map_fallible(tail, self, Self::schedule)?,
             ))],
             "extract" => match tail {
-                [expr] => vec![Command::Extract(
+                [e] => vec![Command::Extract(
                     span.clone(),
-                    self.parse_expr(expr)?,
+                    self.parse_expr(e)?,
                     Expr::Lit(span, Literal::Int(0)),
-                    None,
                 )],
-                [expr, variants] => vec![Command::Extract(
+                [e, v] => vec![Command::Extract(
                     span,
-                    self.parse_expr(expr)?,
-                    self.parse_expr(variants)?,
-                    None,
+                    self.parse_expr(e)?,
+                    self.parse_expr(v)?,
                 )],
-                [expr, variants, Sexp::Atom(opt, _opt_span), name] if opt == ":extractor" => {
-                    vec![Command::Extract(
-                        span,
-                        self.parse_expr(expr)?,
-                        self.parse_expr(variants)?,
-                        Some(name.expect_atom("extractor name")?),
-                    )]
-                }
-                [expr, Sexp::Atom(opt, _opt_span), name] if opt == ":extractor" => {
-                    vec![Command::Extract(
-                        span.clone(),
-                        self.parse_expr(expr)?,
-                        Expr::Lit(span, Literal::Int(0)),
-                        Some(name.expect_atom("extractor name")?),
-                    )]
-                }
-                _ => {
-                    return error!(
-                        span,
-                        "usage: (extract <expr> <variants>? [:extractor <name>]?)"
-                    );
-                }
+                _ => return error!(span, "usage: (extract <expr> <number of variants>?)"),
             },
             "check" => vec![Command::Check(
                 span,

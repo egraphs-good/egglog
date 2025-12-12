@@ -186,7 +186,7 @@ impl EGraph {
                 self.type_info
                     .typecheck_action(symbol_gen, action, &Default::default())?,
             ),
-            NCommand::Extract(span, expr, variants, extractor) => {
+            NCommand::Extract(span, expr, variants) => {
                 let res_expr =
                     self.type_info
                         .typecheck_expr(symbol_gen, expr, &Default::default())?;
@@ -202,7 +202,7 @@ impl EGraph {
                     });
                 }
 
-                ResolvedNCommand::Extract(span.clone(), res_expr, res_variants, extractor.clone())
+                ResolvedNCommand::Extract(span.clone(), res_expr, res_variants)
             }
             NCommand::Check(span, facts) => ResolvedNCommand::Check(
                 span.clone(),

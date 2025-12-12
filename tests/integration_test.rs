@@ -1,7 +1,5 @@
-use egglog::{extract::CostModel, extract::DefaultCost, *};
+use egglog::{extract::CostModel, extract::DefaultCost, extractor_from_cost_model, *};
 use egglog_ast::span::{RustSpan, Span};
-use std::sync::Arc;
-
 fn cost_as_u64(cost: &DynCost) -> DefaultCost {
     *cost
         .downcast_ref::<DefaultCost>()
@@ -447,10 +445,6 @@ fn test_custom_cost_model_selection() {
     let _ = env_logger::builder().is_test(true).try_init();
 
     let mut egraph = EGraph::default();
-    egraph.register_extractor(
-        "favor-bad",
-        Arc::new(CostModelExtractorBuilder::new(FavorBadCostModel)),
-    );
 
     let outputs = egraph
         .parse_and_run_program(
@@ -461,7 +455,6 @@ fn test_custom_cost_model_selection() {
             (let bad (Bad))
             (union good bad)
             (extract good)
-            (extract good :extractor favor-bad)
             "#,
         )
         .unwrap();
@@ -470,12 +463,8 @@ fn test_custom_cost_model_selection() {
         outputs[0],
         CommandOutput::ExtractBest(_, _, Term::App(ref s, ..)) if s == "Good"
     ));
-    assert!(matches!(
-        outputs[1],
-        CommandOutput::ExtractBest(_, _, Term::App(ref s, ..)) if s == "Bad"
-    ));
 
-    egraph.set_default_extractor("favor-bad").unwrap();
+    egraph.set_extractor(extractor_from_cost_model(FavorBadCostModel));
     let outputs = egraph
         .parse_and_run_program(None, "(extract good)")
         .unwrap();
@@ -507,11 +496,7 @@ impl CostModel<i32> for IntCostModel {
 #[test]
 fn test_custom_cost_model_with_non_default_cost_type() {
     let mut egraph = EGraph::default();
-    egraph.register_extractor(
-        "int-cost",
-        Arc::new(CostModelExtractorBuilder::new(IntCostModel)),
-    );
-    egraph.set_default_extractor("int-cost").unwrap();
+    egraph.set_extractor(extractor_from_cost_model(IntCostModel));
 
     let output = egraph
         .parse_and_run_program(None, "(datatype S (A))\n(let x (A))\n(extract x)")
