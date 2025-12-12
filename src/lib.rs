@@ -113,6 +113,9 @@ where
     C: Cost + Ord + Eq + Clone + Debug + 'static,
     M: CostModel<C> + Send + Sync + 'static,
 {
+    /// Builds a dynamic extractor for the specified root sorts.
+    ///
+    /// If `rootsorts` is `None`, the extractor will extract costs for all sorts.
     fn build(&self, rootsorts: Option<Vec<ArcSort>>, egraph: &EGraph) -> Box<dyn DynExtractor> {
         Box::new(Extractor::compute_costs_from_rootsorts(
             rootsorts,
