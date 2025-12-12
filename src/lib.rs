@@ -73,11 +73,13 @@ use crate::core::{GenericActionsExt, ResolvedRuleExt};
 pub const GLOBAL_NAME_PREFIX: &str = "$";
 
 pub type ArcSort = Arc<dyn Sort>;
+/// Type-erased builder that can construct a dynamic extractor for a given set of root sorts.
 pub trait DynExtractorBuilder: Send + Sync {
     fn build(&self, rootsorts: Option<Vec<ArcSort>>, egraph: &EGraph) -> Box<dyn DynExtractor>;
 }
 pub type ArcDynExtractorFactory = Arc<dyn DynExtractorBuilder>;
 
+/// Builder that wraps a typed `CostModel` into a dynamic extractor for registration.
 pub struct CostModelExtractorBuilder<C, M>
 where
     C: Cost + Ord + Eq + Clone + Debug + 'static,
@@ -101,6 +103,7 @@ where
     }
 }
 
+/// Object-safe interface for invoking extraction with dynamically chosen cost models.
 pub trait DynExtractor: Send + Sync {
     fn extract_best_with_sort(
         &self,
