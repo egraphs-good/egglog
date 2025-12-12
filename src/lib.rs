@@ -89,6 +89,19 @@ where
     _phantom: std::marker::PhantomData<C>,
 }
 
+impl<C, M> CostModelExtractorBuilder<C, M>
+where
+    C: Cost + Ord + Eq + Clone + Debug + 'static,
+    M: CostModel<C> + Send + Sync + 'static,
+{
+    pub fn new(cost_model: M) -> Self {
+        Self {
+            cost_model: Arc::new(cost_model),
+            _phantom: std::marker::PhantomData::<C>,
+        }
+    }
+}
+
 impl<C, M> DynExtractorBuilder for CostModelExtractorBuilder<C, M>
 where
     C: Cost + Ord + Eq + Clone + Debug + 'static,
@@ -414,7 +427,12 @@ impl Default for EGraph {
         eg.rulesets
             .insert("".into(), Ruleset::Rules(Default::default()));
 
-        eg.register_cost_model("tree-additive", TreeAdditiveCostModel::default());
+        eg.register_extractor(
+            "tree-additive",
+            Arc::new(CostModelExtractorBuilder::new(
+                TreeAdditiveCostModel::default(),
+            )),
+        );
 
         eg
     }
@@ -698,19 +716,6 @@ impl EGraph {
         self.extractors.insert(name.into(), extractor);
     }
 
-    /// Convenience: register a cost model by name by wrapping it in a typed extractor.
-    pub fn register_cost_model<C, M>(&mut self, name: impl Into<String>, cost_model: M)
-    where
-        C: Cost + Ord + Eq + Clone + Debug + 'static,
-        M: CostModel<C> + Send + Sync + 'static,
-    {
-        let builder = CostModelExtractorBuilder {
-            cost_model: Arc::new(cost_model),
-            _phantom: std::marker::PhantomData::<C>,
-        };
-        self.register_extractor(name, Arc::new(builder));
-    }
-
     fn extractor_by_name(&self, name: &str, span: Span) -> Result<ArcDynExtractorFactory, Error> {
         self.extractors
             .get(name)
@@ -734,11 +739,6 @@ impl EGraph {
         } else {
             Err(Error::UnknownExtractor(name, span!()))
         }
-    }
-
-    /// Backwards compatibility alias for setting the default extractor.
-    pub fn set_default_cost_model(&mut self, name: impl Into<String>) -> Result<(), Error> {
-        self.set_default_extractor(name)
     }
 
     /// Print up to `n` the tuples in a given function.
