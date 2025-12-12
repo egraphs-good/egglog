@@ -1,29 +1,12 @@
 use super::{Rewrite, Rule};
+use crate::ast::{Action, Actions, Expr, Fact};
 use crate::*;
+use egglog_ast::span::Span;
 
-/// Desugars a list of commands into the normalized form.
-/// Gets rid of a bunch of syntactic sugar, but also
-/// makes rules into a SSA-like format (see [`NormFact`]).
-pub(crate) fn desugar_program(
-    program: Vec<Command>,
-    parser: &mut Parser,
-    seminaive_transform: bool,
-) -> Result<Vec<NCommand>, Error> {
-    let mut res = vec![];
-    for command in program {
-        let desugared = desugar_command(command, parser, seminaive_transform)?;
-        res.extend(desugared);
-    }
-    Ok(res)
-}
-
-/// Desugars a single command into the normalized form.
-/// Gets rid of a bunch of syntactic sugar, but also
-/// makes rules into a SSA-like format (see [`NormFact`]).
+/// Desugars a single command, removing syntactic sugar.
 pub(crate) fn desugar_command(
     command: Command,
     parser: &mut Parser,
-    seminaive_transform: bool,
 ) -> Result<Vec<NCommand>, Error> {
     let rule_name = rule_name(&command);
     let res = match command {
@@ -106,14 +89,8 @@ pub(crate) fn desugar_command(
         Command::BiRewrite(ruleset, rewrite) => {
             desugar_birewrite(ruleset, rule_name, rewrite, parser)
         }
-        Command::Include(span, file) => {
-            let s = std::fs::read_to_string(&file)
-                .unwrap_or_else(|_| panic!("{span} Failed to read file {file}"));
-            return desugar_program(
-                parser.get_program_from_string(Some(file), &s)?,
-                parser,
-                seminaive_transform,
-            );
+        Command::Include(_span, _file) => {
+            unreachable!("Include commands should be expanded before desugaring")
         }
         Command::Rule { mut rule } => {
             if rule.name.is_empty() {
@@ -152,7 +129,7 @@ pub(crate) fn desugar_command(
             vec![NCommand::Pop(span, num)]
         }
         Command::Fail(span, cmd) => {
-            let mut desugared = desugar_command(*cmd, parser, seminaive_transform)?;
+            let mut desugared = desugar_command(*cmd, parser)?;
 
             let last = desugared.pop().unwrap();
             desugared.push(NCommand::Fail(span, Box::new(last)));

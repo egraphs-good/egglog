@@ -4,16 +4,18 @@
 //! egglog is faster and more general than egg.
 //!
 //! # Documentation
-//! Documentation for the egglog language can be found
-//! here: [`Command`]
+//! Documentation for the egglog language can be found here: [`Command`].
 //!
 //! # Tutorial
-//! [Here](https://www.youtube.com/watch?v=N2RDQGRBrSY) is the video tutorial on what egglog is and how to use it.
-//! We plan to have a text tutorial here soon, PRs welcome!
+//! We have a [text tutorial](https://egraphs-good.github.io/egglog-tutorial/01-basics.html) on egglog and how to use it.
+//! We also have a slightly outdated [video tutorial](https://www.youtube.com/watch?v=N2RDQGRBrSY).
+//!
+//!
 //!
 pub mod ast;
 #[cfg(feature = "bin")]
 mod cli;
+mod command_macro;
 pub mod constraint;
 mod core;
 pub mod extract;
@@ -24,16 +26,19 @@ pub mod sort;
 mod termdag;
 mod typechecking;
 pub mod util;
+pub use command_macro::{CommandMacro, CommandMacroRegistry};
 
 // This is used to allow the `add_primitive` macro to work in
 // both this crate and other crates by referring to `::egglog`.
 extern crate self as egglog;
 use ast::*;
+pub use ast::{ResolvedExpr, ResolvedFact, ResolvedVar};
 #[cfg(feature = "bin")]
 pub use cli::*;
 use constraint::{Constraint, Problem, SimpleTypeConstraint, TypeConstraint};
+use core::ResolvedAtomTerm;
 pub use core::{Atom, AtomTerm};
-use core::{ResolvedAtomTerm, ResolvedCall};
+pub use core::{ResolvedCall, SpecializedPrimitive};
 pub use core_relations::{BaseValue, ContainerValue, ExecutionState, Value};
 use core_relations::{ExternalFunctionId, make_external_func};
 use csv::Writer;
@@ -68,6 +73,7 @@ pub use typechecking::TypeError;
 pub use typechecking::TypeInfo;
 use util::*;
 
+use crate::ast::desugar::desugar_command;
 use crate::core::{GenericActionsExt, ResolvedRuleExt};
 
 pub const GLOBAL_NAME_PREFIX: &str = "$";
@@ -308,6 +314,8 @@ pub struct EGraph {
     commands: IndexMap<String, Arc<dyn UserDefinedCommand>>,
     strict_mode: bool,
     warned_about_missing_global_prefix: bool,
+    /// Registry for command-level macros
+    command_macros: CommandMacroRegistry,
     extractors: HashMap<String, ArcDynExtractorFactory>,
     default_extractor: String,
 }
@@ -394,6 +402,7 @@ impl Default for EGraph {
             commands: Default::default(),
             strict_mode: false,
             warned_about_missing_global_prefix: false,
+            command_macros: Default::default(),
             extractors: Default::default(),
             default_extractor: "tree-additive".to_owned(),
         };
@@ -444,6 +453,21 @@ pub struct NotFoundError(String);
 
 impl EGraph {
     /// Add a user-defined command to the e-graph
+    /// Get the type information for this e-graph
+    pub fn type_info(&mut self) -> &mut TypeInfo {
+        &mut self.type_info
+    }
+
+    /// Get read-only access to the command macro registry
+    pub fn command_macros(&self) -> &CommandMacroRegistry {
+        &self.command_macros
+    }
+
+    /// Get mutable access to the command macro registry
+    pub fn command_macros_mut(&mut self) -> &mut CommandMacroRegistry {
+        &mut self.command_macros
+    }
+
     pub fn add_command(
         &mut self,
         name: String,
@@ -567,7 +591,7 @@ impl EGraph {
                     .map(|arg| self.translate_expr_to_mergefn(arg))
                     .collect::<Result<Vec<_>, _>>()?;
                 Ok(egglog_bridge::MergeFn::Primitive(
-                    p.primitive.1,
+                    p.external_id(),
                     translated_args,
                 ))
             }
@@ -1021,7 +1045,7 @@ impl EGraph {
     pub fn eval_expr(&mut self, expr: &Expr) -> Result<(ArcSort, Value), Error> {
         let span = expr.span();
         let command = Command::Action(Action::Expr(span.clone(), expr.clone()));
-        let resolved_commands = self.process_command(command)?;
+        let resolved_commands = self.resolve_command(command)?;
         assert_eq!(resolved_commands.len(), 1);
         let resolved_command = resolved_commands.into_iter().next().unwrap();
         let resolved_expr = match resolved_command {
@@ -1477,58 +1501,93 @@ impl EGraph {
         Ok(())
     }
 
-    fn process_command(&mut self, command: Command) -> Result<Vec<ResolvedNCommand>, Error> {
-        let mut program = self.resolve_command(command)?;
+    /// Desugars, typechecks, and removes globals from a single [`Command`].
+    /// Leverages previous type information in the [`EGraph`] to do so, adding new type information.
+    fn resolve_command(&mut self, command: Command) -> Result<Vec<ResolvedNCommand>, Error> {
+        let desugared = desugar_command(command, &mut self.parser)?;
+        let mut typechecked = self.typecheck_program(&desugared)?;
 
-        program = remove_globals::remove_globals(program, &mut self.parser.symbol_gen);
-        for command in &program {
+        typechecked = remove_globals::remove_globals(typechecked, &mut self.parser.symbol_gen);
+        for command in &typechecked {
             self.names.check_shadowing(command)?;
         }
 
-        Ok(program)
+        Ok(typechecked)
     }
 
-    fn resolve_command(&mut self, command: Command) -> Result<Vec<ResolvedNCommand>, Error> {
-        let program = desugar::desugar_program(vec![command], &mut self.parser, self.seminaive)?;
-        Ok(self.typecheck_program(&program)?)
+    /// Run a program, returning the desugared outputs as well as the CommandOutputs.
+    /// Can optionally not run the commands, just adding type information.
+    fn process_program_internal(
+        &mut self,
+        program: Vec<Command>,
+        run_commands: bool,
+    ) -> Result<(Vec<CommandOutput>, Vec<ResolvedCommand>), Error> {
+        let mut outputs = Vec::new();
+        let mut desugared_commands = Vec::new();
+
+        for before_expanded_command in program {
+            // First do user-provided macro expansion for this command,
+            // which may rely on type information from previous commands.
+            let macro_expanded = self.command_macros.apply(
+                before_expanded_command,
+                &mut self.parser.symbol_gen,
+                &self.type_info,
+            )?;
+
+            for command in macro_expanded {
+                // handle include specially- we keep them as-is for desugaring
+                if let Command::Include(span, file) = &command {
+                    let s = std::fs::read_to_string(file)
+                        .unwrap_or_else(|_| panic!("{span} Failed to read file {file}"));
+                    let included_program = self
+                        .parser
+                        .get_program_from_string(Some(file.clone()), &s)?;
+                    // run program internal on these include commands
+                    let (included_outputs, _included_desugared) =
+                        self.process_program_internal(included_program, run_commands)?;
+                    outputs.extend(included_outputs);
+                    desugared_commands.push(ResolvedCommand::Include(span.clone(), file.clone()));
+                } else {
+                    for processed in self.resolve_command(command)? {
+                        desugared_commands.push(processed.to_command());
+
+                        // even in desugar mode we still run push and pop
+                        if run_commands
+                            || matches!(
+                                processed,
+                                ResolvedNCommand::Push(_) | ResolvedNCommand::Pop(_, _)
+                            )
+                        {
+                            let result = self.run_command(processed)?;
+                            if let Some(output) = result {
+                                outputs.push(output);
+                            }
+                        }
+                    }
+                }
+            }
+        }
+
+        Ok((outputs, desugared_commands))
     }
 
     /// Run a program, represented as an AST.
     /// Return a list of messages.
     pub fn run_program(&mut self, program: Vec<Command>) -> Result<Vec<CommandOutput>, Error> {
-        let mut outputs = Vec::new();
-        for command in program {
-            // Important to process each command individually
-            // because push and pop create new scopes
-            for processed in self.process_command(command)? {
-                let result = self.run_command(processed)?;
-                if let Some(output) = result {
-                    outputs.push(output);
-                }
-            }
-        }
-
+        let (outputs, _desugared_commands) = self.process_program_internal(program, true)?;
         Ok(outputs)
     }
 
-    pub fn resugar_program(
+    /// Desugars an egglog program by parsing and desugaring each command.
+    /// Outputs a new egglog program without any syntactic sugar, either user provided ([`CommandMacro`]) or built-in (e.g., `rewrite` commands).
+    pub fn desugar_program(
         &mut self,
         filename: Option<String>,
         input: &str,
-    ) -> Result<Vec<String>, Error> {
+    ) -> Result<Vec<ResolvedCommand>, Error> {
         let parsed = self.parser.get_program_from_string(filename, input)?;
-        let mut outputs = Vec::new();
-        for command in parsed {
-            for processed in self.resolve_command(command)? {
-                // When re-suggaring, we still need to run scope-related commands (Push/Pop) to make
-                // the program well-scoped.
-                if let GenericNCommand::Push(..) | GenericNCommand::Pop(..) = &processed {
-                    self.run_command(processed.clone())?;
-                }
-                outputs.push(processed.to_command().to_string());
-            }
-        }
-        Ok(outputs)
+        let (_outputs, desugared_commands) = self.process_program_internal(parsed, false)?;
+        Ok(desugared_commands)
     }
 
     /// Takes a source program `input`, parses it, runs it, and returns a list of messages.
@@ -1713,7 +1772,7 @@ impl<'a> BackendRule<'a> {
     ) -> (ExternalFunctionId, Vec<QueryEntry>, ColumnTy) {
         let mut qe_args = self.args(args);
 
-        if prim.primitive.0.name() == "unstable-fn" {
+        if prim.name() == "unstable-fn" {
             let core::ResolvedAtomTerm::Literal(_, Literal::String(ref name)) = args[0] else {
                 panic!("expected string literal after `unstable-fn`")
             };
@@ -1730,7 +1789,7 @@ impl<'a> BackendRule<'a> {
                         .into_iter()
                         .any(|f| {
                             let types: Vec<_> = prim
-                                .input
+                                .input()
                                 .iter()
                                 .skip(1)
                                 .chain(f.inputs())
@@ -1745,7 +1804,7 @@ impl<'a> BackendRule<'a> {
             } else {
                 panic!("no callable for {name}");
             };
-            let partial_arcsorts = prim.input.iter().skip(1).cloned().collect();
+            let partial_arcsorts = prim.input().iter().skip(1).cloned().collect();
 
             qe_args[0] = self.rb.egraph().base_value_constant(ResolvedFunction {
                 id,
@@ -1755,9 +1814,9 @@ impl<'a> BackendRule<'a> {
         }
 
         (
-            prim.primitive.1,
+            prim.external_id(),
             qe_args,
-            prim.output.column_ty(self.rb.egraph()),
+            prim.output().column_ty(self.rb.egraph()),
         )
     }
 
@@ -1804,7 +1863,7 @@ impl<'a> BackendRule<'a> {
                             })
                         }
                         ResolvedCall::Primitive(p) => {
-                            let name = p.primitive.0.name().to_owned();
+                            let name = p.name().to_owned();
                             let (p, args, ty) = self.prim(p, args);
                             let span = span.clone();
                             self.rb.call_external_func(p, &args, ty, move || {
