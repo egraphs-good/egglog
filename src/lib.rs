@@ -882,37 +882,39 @@ impl EGraph {
         }
     }
 
-    /// Extract a value to a [`TermDag`] and [`Term`] in the [`TermDag`] using the default extractor.
+    /// Extract a value to a [`TermDag`] and [`Term`] in the [`TermDag`] using the default cost model.
+    /// See also [`EGraph::extract_value_with_cost_model`] for more control.
     pub fn extract_value(
         &self,
         sort: &ArcSort,
         value: Value,
-    ) -> Result<(TermDag, Term, DynCost), Error> {
-        self.extract_value_with_extractor(sort, value, self.default_extractor())
+    ) -> Result<(TermDag, Term, DefaultCost), Error> {
+        self.extract_value_with_cost_model(sort, value, TreeAdditiveCostModel::default())
     }
 
-    /// Extract a value to a [`TermDag`] and [`Term`] in the [`TermDag`] using the provided extractor factory.
+    /// Extract a value to a [`TermDag`] and [`Term`] in the [`TermDag`].
     /// Note that the `TermDag` may contain a superset of the nodes in the `Term`.
-    pub fn extract_value_with_extractor(
+    /// See also [`EGraph::extract_value_to_string`] for convenience.
+    pub fn extract_value_with_cost_model<CM: CostModel<DefaultCost> + Send + Sync + 'static>(
         &self,
         sort: &ArcSort,
         value: Value,
-        extractor_factory: ArcDynExtractorFactory,
-    ) -> Result<(TermDag, Term, DynCost), Error> {
-        let extractor = extractor_factory.build(Some(vec![sort.clone()]), self);
+        cost_model: CM,
+    ) -> Result<(TermDag, Term, DefaultCost), Error> {
+        let extractor =
+            Extractor::compute_costs_from_rootsorts(Some(vec![sort.clone()]), self, cost_model);
         let mut termdag = TermDag::default();
-        let (cost, term) = extractor
-            .extract_best_with_sort(self, &mut termdag, value, sort.clone())
-            .unwrap();
+        let (cost, term) = extractor.extract_best(self, &mut termdag, value).unwrap();
         Ok((termdag, term, cost))
     }
 
     /// Extract a value to a string for printing.
+    /// See also [`EGraph::extract_value`] for more control.
     pub fn extract_value_to_string(
         &self,
         sort: &ArcSort,
         value: Value,
-    ) -> Result<(String, DynCost), Error> {
+    ) -> Result<(String, DefaultCost), Error> {
         let (termdag, term, cost) = self.extract_value(sort, value)?;
         Ok((termdag.to_string(&term), cost))
     }
