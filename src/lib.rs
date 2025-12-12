@@ -100,6 +100,13 @@ where
     C: Cost + Ord + Eq + Clone + Debug + 'static,
     M: CostModel<C> + Send + Sync + 'static,
 {
+    /// Create a new `CostModelExtractorBuilder` from the given cost model.
+    ///
+    /// Used when registering a cost model extractor in an e-graph:
+    ///
+    /// ```rust
+    /// egraph.register_extractor("mine", Arc::new(CostModelExtractorBuilder::new(MyCostModel::default())));
+    /// ```
     pub fn new(cost_model: M) -> Self {
         Self {
             cost_model: Arc::new(cost_model),
