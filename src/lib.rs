@@ -878,7 +878,7 @@ impl EGraph {
         sort: &ArcSort,
         value: Value,
     ) -> Result<(TermDag, Term, DynCost), Error> {
-        self.extract_value_with_registered_extractor(sort, value, self.default_extractor())
+        self.extract_value_with_extractor(sort, value, self.default_extractor())
     }
 
     /// Extract a value to a [`TermDag`] and [`Term`] in the [`TermDag`] using the provided extractor factory.
@@ -905,20 +905,6 @@ impl EGraph {
     ) -> Result<(String, DynCost), Error> {
         let (termdag, term, cost) = self.extract_value(sort, value)?;
         Ok((termdag.to_string(&term), cost))
-    }
-
-    fn extract_value_with_registered_extractor(
-        &self,
-        sort: &ArcSort,
-        value: Value,
-        extractor_factory: ArcDynExtractorFactory,
-    ) -> Result<(TermDag, Term, DynCost), Error> {
-        let extractor = extractor_factory.build(Some(vec![sort.clone()]), self);
-        let mut termdag = TermDag::default();
-        let (cost, term) = extractor
-            .extract_best_with_sort(self, &mut termdag, value, sort.clone())
-            .unwrap();
-        Ok((termdag, term, cost))
     }
 
     fn run_rules(&mut self, span: &Span, config: &ResolvedRunConfig) -> Result<RunReport, Error> {
