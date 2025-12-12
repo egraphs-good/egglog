@@ -477,41 +477,42 @@ impl Parser {
                 span,
                 map_fallible(tail, self, Self::schedule)?,
             ))],
-            "extract" => {
-                let Some((expr_sexp, mut rest)) = tail.split_first() else {
+            "extract" => match tail {
+                [expr] => vec![Command::Extract(
+                    span.clone(),
+                    self.parse_expr(expr)?,
+                    Expr::Lit(span, Literal::Int(0)),
+                    None,
+                )],
+                [expr, variants] => vec![Command::Extract(
+                    span,
+                    self.parse_expr(expr)?,
+                    self.parse_expr(variants)?,
+                    None,
+                )],
+                [expr, variants, Sexp::Atom(opt, _opt_span), name] if opt == ":extractor" => {
+                    vec![Command::Extract(
+                        span,
+                        self.parse_expr(expr)?,
+                        self.parse_expr(variants)?,
+                        Some(name.expect_atom("extractor name")?),
+                    )]
+                }
+                [expr, Sexp::Atom(opt, _opt_span), name] if opt == ":extractor" => {
+                    vec![Command::Extract(
+                        span.clone(),
+                        self.parse_expr(expr)?,
+                        Expr::Lit(span, Literal::Int(0)),
+                        Some(name.expect_atom("extractor name")?),
+                    )]
+                }
+                _ => {
                     return error!(
                         span,
-                        "usage: (extract <expr> [:extractor <name>] <variants>?)"
+                        "usage: (extract <expr> <variants>? [:extractor <name>]?)"
                     );
-                };
-                let expr = self.parse_expr(expr_sexp)?;
-                let mut variants = Expr::Lit(span.clone(), Literal::Int(0));
-                let mut extractor = None;
-                let mut variants_set = false;
-                while let Some((head, tail_rest)) = rest.split_first() {
-                    match head {
-                        Sexp::Atom(opt, opt_span) if opt == ":extractor" => {
-                            let Some(name_sexp) = tail_rest.first() else {
-                                return error!(opt_span.clone(), "expected extractor name");
-                            };
-                            extractor = Some(name_sexp.expect_atom("extractor name")?);
-                            rest = &tail_rest[1..];
-                        }
-                        _ => {
-                            if variants_set {
-                                return error!(
-                                    head.span(),
-                                    "usage: (extract <expr> [:extractor <name>] <variants>?)"
-                                );
-                            }
-                            variants = self.parse_expr(head)?;
-                            variants_set = true;
-                            rest = tail_rest;
-                        }
-                    }
                 }
-                vec![Command::Extract(span, expr, variants, extractor)]
-            }
+            },
             "check" => vec![Command::Check(
                 span,
                 map_fallible(tail, self, Self::parse_fact)?,

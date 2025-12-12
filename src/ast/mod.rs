@@ -708,11 +708,11 @@ where
             }
             GenericCommand::Action(a) => write!(f, "{a}"),
             GenericCommand::Extract(_span, expr, variants, extractor) => {
-                write!(f, "(extract {expr}")?;
+                write!(f, "(extract {expr} {variants}")?;
                 if let Some(cm) = extractor {
                     write!(f, " :extractor {cm}")?;
                 }
-                write!(f, " {variants})")
+                write!(f, ")")
             }
             GenericCommand::Sort(_span, name, None) => {
                 let name = sanitize_internal_name(name);
