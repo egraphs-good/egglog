@@ -2013,7 +2013,7 @@ impl<'a> BackendRule<'a> {
                     self.proof_state.as_mut().map(|ps| -> Option<()> {
                         let last = atom.args.last()?;
                         let core::CanonicalizedResolvedAtomTerm::Var(_span, var) = last else {
-                            panic!("expected unique variable as last argument to a query, instead got {atom:?}");
+                            panic!("expected unique variable as last argument to a query, instead got {last:?}, part of {atom:?}");
                         };
                         ps.record_call(
                             var.orig.name().into(),
