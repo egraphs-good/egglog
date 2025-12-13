@@ -384,13 +384,7 @@ impl TermDag {
     /// Returns None if the term is not an application or the index is out of bounds.
     pub fn proj(&self, term: &Term, arg_idx: usize) -> Option<TermId> {
         match term {
-<<<<<<< HEAD
             Term::App(_hd, args) => args.get(arg_idx).copied(),
-=======
-            Term::App(_hd, args) => {
-                args.get(arg_idx).copied()
-            }
->>>>>>> ced37a12 (some progress)
             _ => None,
         }
     }

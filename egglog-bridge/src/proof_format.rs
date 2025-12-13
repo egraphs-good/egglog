@@ -2,9 +2,10 @@
 //! Doegens, and Oliver Flatt.
 use std::{hash::Hash, io, rc::Rc, sync::Arc};
 
+use egglog_numeric_id::{NumericId, define_id};
 use indexmap::IndexSet;
 
-use crate::ColumnTy;
+use crate::{ColumnTy, termdag::{PrettyPrintConfig, PrettyPrinter, TermDag, TermId}};
 
 define_id!(pub TermProofId, u32, "an id identifying proofs of terms within a [`ProofStore`]");
 define_id!(pub EqProofId, u32, "an id identifying proofs of equality between two terms within a [`ProofStore`]");

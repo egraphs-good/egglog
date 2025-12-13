@@ -245,6 +245,8 @@ pub struct EGraph {
     warned_about_missing_global_prefix: bool,
     /// Registry for command-level macros
     command_macros: CommandMacroRegistry,
+    /// Check all proofs whenever using check and extract
+    proof_checking_enabled: bool,
 }
 
 /// A user-defined command allows users to inject custom command that can be called
@@ -330,6 +332,7 @@ impl EGraph {
             strict_mode: false,
             warned_about_missing_global_prefix: false,
             command_macros: Default::default(),
+            proof_checking_enabled: false,
         };
 
         add_base_sort(&mut eg, UnitSort, span!()).unwrap();
@@ -2029,7 +2032,6 @@ impl<'a> BackendRule<'a> {
                 name: name.clone(),
             });
         }
-        let ty = prim.output().column_ty(self.rb.egraph());
 
         (
             prim.external_id(),

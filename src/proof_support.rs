@@ -57,7 +57,7 @@ impl EGraph {
                     }
                     // Check if this expression uses a primitive without a registered validator
                     if let GenericExpr::Call(span, core::ResolvedCall::Primitive(prim), _) = &expr {
-                        let prim_name = prim.primitive.primitive.name();
+                        let prim_name = prim.name();
 
                         // Check if a validator is registered for this specific primitive overload
                         let has_validator = self
@@ -65,7 +65,7 @@ impl EGraph {
                             .get_prims(prim_name)
                             .and_then(|prims| {
                                 // Look for the specific overload matching this primitive's id
-                                prims.iter().find(|p| p.id == prim.primitive.id)
+                                prims.iter().find(|p| p.id == prim.external_id())
                             })
                             .and_then(|prim_with_id| prim_with_id.validator.as_ref())
                             .is_some();

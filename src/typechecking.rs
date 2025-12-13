@@ -3,7 +3,7 @@ use crate::{
     core::{CoreRule, GenericActionsExt},
     *,
 };
-use ast::{ResolvedAction, ResolvedExpr, ResolvedFact, ResolvedRule, ResolvedVar, Rule};
+use ast::{ResolvedAction, ResolvedFact, ResolvedRule, ResolvedVar, Rule};
 use core_relations::ExternalFunction;
 use egglog_ast::generic_ast::GenericAction;
 use egglog_bridge::termdag::{TermDag, TermId};

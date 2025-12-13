@@ -42,7 +42,7 @@ impl<Head> HeadOrEq<Head> {
 
 #[derive(Debug, Clone)]
 pub struct SpecializedPrimitive {
-    primitive: PrimitiveWithId,
+    pub(crate) primitive: PrimitiveWithId,
     input: Vec<ArcSort>,
     output: ArcSort,
 }
@@ -50,7 +50,7 @@ pub struct SpecializedPrimitive {
 impl SpecializedPrimitive {
     /// Get the name of this primitive
     pub fn name(&self) -> &str {
-        self.primitive.0.name()
+        self.primitive.primitive.name()
     }
 
     /// Get the output sort of this primitive
@@ -65,7 +65,7 @@ impl SpecializedPrimitive {
 
     /// Get the external function ID of this primitive
     pub(crate) fn external_id(&self) -> ExternalFunctionId {
-        self.primitive.1
+        self.primitive.id
     }
 }
 
