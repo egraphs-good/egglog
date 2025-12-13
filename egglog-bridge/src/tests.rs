@@ -19,8 +19,7 @@ use num_rational::Rational64;
 
 use crate::{
     ColumnTy, DefaultVal, EGraph, FunctionConfig, FunctionId, MergeFn, ProofStore, QueryEntry,
-    add_expressions, define_rule,
-    termdag::PrettyPrintConfig,
+    add_expressions, define_rule, termdag::PrettyPrintConfig,
 };
 
 /// Run a simple associativity/commutativity test. In addition to testing that the rules properly

@@ -1026,6 +1026,7 @@ impl RuleBuilder<'_> {
                         }
                         write_vals
                     };
+                    let uf_table = self.egraph.uf_table;
                     self.add_callback(move |inner, rb| {
                         let mut dst_vars = inner.convert_all(&entries);
                         let ret_val = dst_vars[schema_math.ret_val_col()];
@@ -1040,7 +1041,16 @@ impl RuleBuilder<'_> {
                             )
                             .context("set proof lookup")?;
                         inner.mapping.insert(term_var_id, term.into());
-                        add_proof(inner, rb)?;
+
+                        let reason_var = add_proof(inner, rb)?;
+                        // If the term we are creating is different from the id we are setting it
+                        // to, use this rule as the reason why the term and the id are equal.
+                        rb.insert_if_ne(
+                            uf_table,
+                            ret_val,
+                            term.into(),
+                            &[ret_val, term.into(), inner.next_ts(), reason_var],
+                        )?;
                         schema_math.write_table_row(
                             &mut dst_vars,
                             RowVals {

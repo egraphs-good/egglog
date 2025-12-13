@@ -125,7 +125,7 @@ impl ProofBuilder {
         res_id: Option<VariableId>,
         term_var: VariableId,
         db: &mut EGraph,
-    ) -> impl Fn(&mut Bindings, &mut RuleBuilder) -> Result<()> + Clone + use<> {
+    ) -> impl Fn(&mut Bindings, &mut RuleBuilder) -> Result<DstVar> + Clone + use<> {
         let func_info = &db.funcs[func];
         let func_table = func_info.table;
         let fiat_reason = func_info.fiat_reason;
@@ -159,7 +159,7 @@ impl ProofBuilder {
             } else {
                 rb.insert(term_table, &translated)?;
             }
-            Ok(())
+            Ok(reason_var)
         }
     }
 }

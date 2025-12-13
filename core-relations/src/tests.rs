@@ -1082,3 +1082,135 @@ fn call_external_with_fallback() {
     h_contents.sort();
     assert_eq!(h_contents, vec![vec![v(2), v(0)], vec![v(4), v(0)],]);
 }
+
+#[test]
+fn insert_if_ne_with_vars() {
+    fn make_two_col_table() -> SortedWritesTable {
+        SortedWritesTable::new(
+            2,
+            2,
+            None,
+            vec![],
+            Box::new(move |_, a, b, _| {
+                if a != b {
+                    panic!("merge not supported")
+                } else {
+                    false
+                }
+            }),
+        )
+    }
+    let mut db = Database::default();
+    let pairs = db.add_table(make_two_col_table(), iter::empty(), iter::empty());
+    let output = db.add_table(make_two_col_table(), iter::empty(), iter::empty());
+
+    {
+        let mut buf = db.get_table(pairs).new_buffer();
+        buf.stage_insert(&[v(1), v(1)]);
+        buf.stage_insert(&[v(1), v(2)]);
+        buf.stage_insert(&[v(2), v(3)]);
+        buf.stage_insert(&[v(4), v(4)]);
+    }
+    db.merge_all();
+
+    let mut rsb = RuleSetBuilder::new(&mut db);
+    let mut query = rsb.new_rule();
+    let x = query.new_var_named("x");
+    let y = query.new_var_named("y");
+    query.add_atom(pairs, &[x.into(), y.into()], &[]).unwrap();
+    let mut rb = query.build();
+    rb.insert_if_ne(output, x.into(), y.into(), &[x.into(), y.into()])
+        .unwrap();
+    rb.build();
+    let rs = rsb.build();
+    assert!(db.run_rule_set(&rs, ReportLevel::TimeOnly).changed);
+
+    let out = db.get_table(output);
+    let all = out.all();
+    let mut contents = out
+        .scan(all.as_ref())
+        .iter()
+        .map(|(_, row)| row.to_vec())
+        .collect::<Vec<_>>();
+    contents.sort();
+    assert_eq!(contents, vec![vec![v(1), v(2)], vec![v(2), v(3)]]);
+}
+
+#[test]
+fn insert_if_ne_consts_and_vars() {
+    fn make_one_col_table() -> SortedWritesTable {
+        SortedWritesTable::new(
+            1,
+            1,
+            None,
+            vec![],
+            Box::new(move |_, a, b, _| {
+                if a != b {
+                    panic!("merge not supported")
+                } else {
+                    false
+                }
+            }),
+        )
+    }
+    fn make_two_col_table() -> SortedWritesTable {
+        SortedWritesTable::new(
+            2,
+            2,
+            None,
+            vec![],
+            Box::new(move |_, a, b, _| {
+                if a != b {
+                    panic!("merge not supported")
+                } else {
+                    false
+                }
+            }),
+        )
+    }
+
+    let mut db = Database::default();
+    let source = db.add_table(make_one_col_table(), iter::empty(), iter::empty());
+    let output = db.add_table(make_two_col_table(), iter::empty(), iter::empty());
+    {
+        let mut buf = db.get_table(source).new_buffer();
+        buf.stage_insert(&[v(0)]);
+        buf.stage_insert(&[v(1)]);
+    }
+    db.merge_all();
+
+    let mut rsb = RuleSetBuilder::new(&mut db);
+    let mut query = rsb.new_rule();
+    let x = query.new_var_named("x");
+    query.add_atom(source, &[x.into()], &[]).unwrap();
+    let mut rb = query.build();
+    rb.insert_if_ne(output, x.into(), v(1).into(), &[x.into(), v(10).into()])
+        .unwrap();
+    rb.insert_if_ne(
+        output,
+        v(2).into(),
+        v(2).into(),
+        &[v(2).into(), v(2).into()],
+    )
+    .unwrap();
+    rb.insert_if_ne(
+        output,
+        v(3).into(),
+        v(4).into(),
+        &[v(3).into(), v(4).into()],
+    )
+    .unwrap();
+    rb.build();
+    let rs = rsb.build();
+    assert!(db.run_rule_set(&rs, ReportLevel::TimeOnly).changed);
+
+    let output = db.get_table(output);
+    let all = output.all();
+    let mut contents = output
+        .scan(all.as_ref())
+        .iter()
+        .map(|(_, row)| row.to_vec())
+        .collect::<Vec<_>>();
+    contents.sort();
+    assert_eq!(contents, vec![vec![v(0), v(10)], vec![v(3), v(4)]]);
+}

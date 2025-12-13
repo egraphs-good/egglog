@@ -252,7 +252,7 @@ impl EGraph {
 
     fn create_internal(mut db: Database, uf_table: TableId, tracing: bool) -> EGraph {
         let id_counter = db.add_counter();
-        let reason_counter = db.add_counter();
+        let reason_counter = db.add_counter_with_initial_val(1_000_000);
         let ts_counter = db.add_counter();
         // Start the timestamp counter at 1.
         db.inc_counter(ts_counter);

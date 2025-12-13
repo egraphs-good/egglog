@@ -601,6 +601,28 @@ impl RuleBuilder<'_, '_> {
         Ok(())
     }
 
+    /// Insert the specified values into the given table if `l` and `r` are not
+    /// equal.
+    pub fn insert_if_ne(
+        &mut self,
+        table: TableId,
+        l: QueryEntry,
+        r: QueryEntry,
+        vals: &[QueryEntry],
+    ) -> Result<(), QueryError> {
+        let table_info = self.table_info(table);
+        self.validate_row(table, table_info, vals)?;
+        self.qb.instrs.push(Instr::InsertIfNe {
+            table,
+            l,
+            r,
+            vals: vals.to_vec(),
+        });
+        self.qb
+            .mark_used(vals.iter().chain(once(&l)).chain(once(&r)));
+        Ok(())
+    }
+
     /// Remove the specified entry from the given table, if it is there.
     pub fn remove(&mut self, table: TableId, args: &[QueryEntry]) -> Result<(), QueryError> {
         let table_info = self.table_info(table);
