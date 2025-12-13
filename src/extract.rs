@@ -1,6 +1,6 @@
-use crate::termdag::{Term, TermDag};
 use crate::util::{HashMap, HashSet};
 use crate::*;
+use crate::{Term, TermDag};
 use std::collections::VecDeque;
 
 /// An interface for custom cost model.

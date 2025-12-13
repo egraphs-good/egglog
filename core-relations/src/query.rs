@@ -455,6 +455,7 @@ impl RuleBuilder<'_, '_> {
                 None
             }
         }));
+        let desc: String = desc.into();
         let action_id = self.qb.rsb.rule_set.actions.push(ActionInfo {
             instrs: Arc::new(self.qb.instrs),
             used_vars,
@@ -462,7 +463,6 @@ impl RuleBuilder<'_, '_> {
         self.qb.query.action = action_id;
         // Plan the query
         let plan = self.qb.rsb.db.plan_query(self.qb.query);
-        let desc: String = desc.into();
         // Add it to the ruleset.
         self.qb
             .rsb
@@ -591,6 +591,28 @@ impl RuleBuilder<'_, '_> {
         let table_info = self.table_info(table);
         self.validate_row(table, table_info, vals)?;
         self.qb.instrs.push(Instr::InsertIfEq {
+            table,
+            l,
+            r,
+            vals: vals.to_vec(),
+        });
+        self.qb
+            .mark_used(vals.iter().chain(once(&l)).chain(once(&r)));
+        Ok(())
+    }
+
+    /// Insert the specified values into the given table if `l` and `r` are not
+    /// equal.
+    pub fn insert_if_ne(
+        &mut self,
+        table: TableId,
+        l: QueryEntry,
+        r: QueryEntry,
+        vals: &[QueryEntry],
+    ) -> Result<(), QueryError> {
+        let table_info = self.table_info(table);
+        self.validate_row(table, table_info, vals)?;
+        self.qb.instrs.push(Instr::InsertIfNe {
             table,
             l,
             r,

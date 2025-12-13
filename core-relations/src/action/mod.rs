@@ -112,7 +112,8 @@ pub(crate) struct Bindings {
 impl std::ops::Index<Variable> for Bindings {
     type Output = [Value];
     fn index(&self, var: Variable) -> &[Value] {
-        self.get(var).unwrap()
+        self.get(var)
+            .unwrap_or_else(|| panic!("Bindings missing value for variable {:?}", var))
     }
 }
 
@@ -632,7 +633,8 @@ impl ExecutionState<'_> {
                                                 bindings[*v][offset]
                                             }
                                             WriteVal::IncCounter(ctr) => {
-                                                Value::from_usize(ctrs.inc(*ctr))
+                                                let res = ctrs.inc(*ctr);
+                                                Value::from_usize(res)
                                             }
                                             WriteVal::CurrentVal(ix) => row[*ix],
                                         };
@@ -736,6 +738,37 @@ impl ExecutionState<'_> {
                 }
                 (QueryEntry::Const(c1), QueryEntry::Const(c2)) => {
                     if c1 == c2 {
+                        for_each_binding_with_mask!(mask, vals.as_slice(), bindings, |iter| iter
+                            .for_each(|vals| {
+                                self.stage_insert(*table, &vals);
+                            }))
+                    }
+                }
+            },
+            Instr::InsertIfNe { table, l, r, vals } => match (l, r) {
+                (QueryEntry::Var(v1), QueryEntry::Var(v2)) => {
+                    for_each_binding_with_mask!(mask, vals.as_slice(), bindings, |iter| {
+                        iter.zip(&bindings[*v1])
+                            .zip(&bindings[*v2])
+                            .for_each(|((vals, v1), v2)| {
+                                if v1 != v2 {
+                                    self.stage_insert(*table, &vals);
+                                }
+                            })
+                    })
+                }
+                (QueryEntry::Var(v), QueryEntry::Const(c))
+                | (QueryEntry::Const(c), QueryEntry::Var(v)) => {
+                    for_each_binding_with_mask!(mask, vals.as_slice(), bindings, |iter| {
+                        iter.zip(&bindings[*v]).for_each(|(vals, cond)| {
+                            if cond != c {
+                                self.stage_insert(*table, &vals);
+                            }
+                        })
+                    })
+                }
+                (QueryEntry::Const(c1), QueryEntry::Const(c2)) => {
+                    if c1 != c2 {
                         for_each_binding_with_mask!(mask, vals.as_slice(), bindings, |iter| iter
                             .for_each(|vals| {
                                 self.stage_insert(*table, &vals);
@@ -860,6 +893,14 @@ pub(crate) enum Instr {
 
     /// Insert `vals` into `table` if `l` and `r` are equal.
     InsertIfEq {
+        table: TableId,
+        l: QueryEntry,
+        r: QueryEntry,
+        vals: Vec<QueryEntry>,
+    },
+
+    /// Insert `vals` into `table` if `l` and `r` are not equal.
+    InsertIfNe {
         table: TableId,
         l: QueryEntry,
         r: QueryEntry,

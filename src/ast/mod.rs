@@ -1,12 +1,13 @@
 pub mod check_shadowing;
 pub mod desugar;
-mod expr;
+pub mod expr;
 mod parse;
 pub mod remove_globals;
 
 use crate::core::{
     GenericAtom, GenericAtomTerm, GenericExprExt, HeadOrEq, Query, ResolvedCall, ResolvedCoreRule,
 };
+use crate::util::IndexMap;
 use crate::util::sanitize_internal_name;
 use crate::*;
 pub use egglog_ast::generic_ast::{
@@ -1053,6 +1054,35 @@ pub(crate) type MappedFact<Head, Leaf> = GenericFact<CorrespondingVar<Head, Leaf
 
 pub struct Facts<Head, Leaf>(pub Vec<GenericFact<Head, Leaf>>);
 
+pub(crate) fn collect_query_vars(facts: &[ResolvedFact]) -> Vec<(ResolvedVar, ArcSort)> {
+    let mut vars: IndexMap<String, (ResolvedVar, ArcSort)> = IndexMap::default();
+    for fact in facts {
+        match fact {
+            ResolvedFact::Fact(expr) => collect_expr_vars(expr, &mut vars),
+            ResolvedFact::Eq(_, lhs, rhs) => {
+                collect_expr_vars(lhs, &mut vars);
+                collect_expr_vars(rhs, &mut vars);
+            }
+        }
+    }
+    vars.into_iter().map(|(_, entry)| entry).collect()
+}
+
+fn collect_expr_vars(expr: &ResolvedExpr, out: &mut IndexMap<String, (ResolvedVar, ArcSort)>) {
+    match expr {
+        ResolvedExpr::Var(_, var) => {
+            out.entry(var.name.clone())
+                .or_insert_with(|| (var.clone(), var.sort.clone()));
+        }
+        ResolvedExpr::Call(_, _, args) => {
+            for arg in args {
+                collect_expr_vars(arg, out);
+            }
+        }
+        ResolvedExpr::Lit(_, _) => {}
+    }
+}
+
 impl<Head, Leaf> Facts<Head, Leaf>
 where
     Head: Clone + Display,
@@ -1100,6 +1130,51 @@ where
             }
         }
         (Query { atoms }, new_body)
+    }
+}
+
+/// This is a variant of [`CorrespondingVar`] that tracks `Leaf`s specifically. It is meant to
+/// preserve the original variable names for atoms after canonicalization.
+#[derive(Clone, Debug)]
+pub struct CanonicalizedVar<Leaf>
+where
+    Leaf: Clone + PartialEq + Eq + Hash,
+{
+    /// The actual variable used in the query.
+    pub var: Leaf,
+    /// The original variable used in this position, prior to canonicalization.
+    pub orig: Leaf,
+}
+
+impl<Leaf> CanonicalizedVar<Leaf>
+where
+    Leaf: Clone + PartialEq + Eq + Hash,
+{
+    pub fn new_current(var: Leaf) -> Self {
+        Self {
+            orig: var.clone(),
+            var,
+        }
+    }
+}
+
+impl<Leaf> PartialEq for CanonicalizedVar<Leaf>
+where
+    Leaf: Clone + PartialEq + Eq + Hash,
+{
+    fn eq(&self, other: &Self) -> bool {
+        self.var == other.var
+    }
+}
+
+impl<Leaf> Eq for CanonicalizedVar<Leaf> where Leaf: Clone + PartialEq + Eq + Hash {}
+
+impl<Leaf> Hash for CanonicalizedVar<Leaf>
+where
+    Leaf: Clone + PartialEq + Eq + Hash,
+{
+    fn hash<H: std::hash::Hasher>(&self, state: &mut H) {
+        self.var.hash(state);
     }
 }
 

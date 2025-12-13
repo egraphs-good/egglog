@@ -13,6 +13,7 @@ fn main() {
         merge: MergeFn::UnionId,
         name: "num".into(),
         can_subsume: false,
+        fiat_reason_only: None,
     });
     let add_table = egraph.add_table(FunctionConfig {
         schema: vec![ColumnTy::Id; 3],
@@ -20,6 +21,7 @@ fn main() {
         merge: MergeFn::UnionId,
         name: "add".into(),
         can_subsume: false,
+        fiat_reason_only: None,
     });
 
     let add_comm = define_rule! {

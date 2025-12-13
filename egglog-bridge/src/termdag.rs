@@ -1,5 +1,12 @@
+use egglog_ast::{
+    generic_ast::{Expr, GenericExpr, Literal},
+    span::Span,
+};
+
 use crate::*;
-use std::fmt::Write;
+use hashbrown::HashMap;
+use indexmap::IndexSet;
+use std::{fmt::Write, io};
 
 pub type TermId = usize;
 
@@ -11,6 +18,9 @@ pub type TermId = usize;
 #[derive(Clone, PartialEq, Eq, Hash, Debug)]
 pub enum Term {
     Lit(Literal),
+    /// This is a placeholder, used to represent terms that are backed by a base type that we
+    /// cannot model in the source / AST language.
+    UnknownLit,
     Var(String),
     App(String, Vec<TermId>),
 }
@@ -32,6 +42,80 @@ macro_rules! match_term_app {
             }
             _ => panic!("not an app")
         }
+    }
+}
+
+#[derive(Clone, Debug)]
+pub struct PrettyPrintConfig {
+    pub line_width: usize,
+    pub indent_size: usize,
+}
+
+impl Default for PrettyPrintConfig {
+    fn default() -> Self {
+        Self {
+            line_width: 512,
+            indent_size: 4,
+        }
+    }
+}
+
+pub(crate) struct PrettyPrinter<'w, W: io::Write> {
+    writer: &'w mut W,
+    config: &'w PrettyPrintConfig,
+    current_indent: usize,
+    current_line_pos: usize,
+}
+
+impl<'w, W: io::Write> PrettyPrinter<'w, W> {
+    pub(crate) fn new(writer: &'w mut W, config: &'w PrettyPrintConfig) -> Self {
+        Self {
+            writer,
+            config,
+            current_indent: 0,
+            current_line_pos: 0,
+        }
+    }
+
+    pub(crate) fn write_str(&mut self, s: &str) -> io::Result<()> {
+        write!(self.writer, "{s}")?;
+        self.current_line_pos += s.len();
+        Ok(())
+    }
+
+    pub(crate) fn newline(&mut self) -> io::Result<()> {
+        writeln!(self.writer)?;
+        self.current_line_pos = 0;
+        self.write_indent()?;
+        Ok(())
+    }
+
+    pub(crate) fn write_indent(&mut self) -> io::Result<()> {
+        for _ in 0..self.current_indent {
+            write!(self.writer, " ")?;
+        }
+        self.current_line_pos = self.current_indent;
+        Ok(())
+    }
+
+    pub(crate) fn increase_indent(&mut self) {
+        self.current_indent += self.config.indent_size;
+    }
+
+    pub(crate) fn decrease_indent(&mut self) {
+        self.current_indent = self.current_indent.saturating_sub(self.config.indent_size);
+    }
+
+    pub(crate) fn should_break(&self, additional_chars: usize) -> bool {
+        self.current_line_pos + additional_chars > self.config.line_width
+    }
+
+    pub(crate) fn write_with_break(&mut self, s: &str) -> io::Result<()> {
+        if self.should_break(s.len()) && self.current_line_pos > self.current_indent {
+            self.newline()?;
+            self.write_indent()?;
+        }
+        self.write_str(s)
     }
 }
 
@@ -67,6 +151,16 @@ impl TermDag {
         node
     }
 
+    /// Like [`TermDag::app`], but expects and returns [`TermId`]s instead of
+    /// [`Term`]s.
+    pub fn app_id(&mut self, sym: String, children: Vec<TermId>) -> TermId {
+        let node = Term::App(sym, children);
+
+        self.add_node(&node);
+
+        self.lookup(&node)
+    }
+
     /// Make and return a [`Term::Lit`] with the given literal, and insert into
     /// the DAG if it is not already present.
     pub fn lit(&mut self, lit: Literal) -> Term {
@@ -77,6 +171,19 @@ impl TermDag {
         node
     }
 
+    pub fn unknown_lit(&mut self) -> Term {
+        let node = Term::UnknownLit;
+        self.add_node(&node);
+        node
+    }
+
+    /// Like [`TermDag::lit`], but returns a [`TermId`] instead of a [`Term`].
+    pub fn lit_id(&mut self, lit: Literal) -> TermId {
+        let node = Term::Lit(lit);
+        self.add_node(&node);
+        self.lookup(&node)
+    }
+
     /// Make and return a [`Term::Var`] with the given symbol, and insert into
     /// the DAG if it is not already present.
     pub fn var(&mut self, sym: String) -> Term {
@@ -85,6 +192,12 @@ impl TermDag {
         self.add_node(&node);
 
         node
+    }
+
+    pub fn var_id(&mut self, sym: String) -> TermId {
+        let node = Term::Var(sym);
+        self.add_node(&node);
+        self.lookup(&node)
     }
 
     fn add_node(&mut self, node: &Term) {
@@ -119,9 +232,11 @@ impl TermDag {
 
     /// Recursively converts the given term to an expression.
     ///
-    /// Panics if the term contains subterms that are not in the DAG.
+    /// Panics if the term contains subterms that are not in the DAG or cannot be represented by
+    /// the current syntax.
     pub fn term_to_expr(&self, term: &Term, span: Span) -> Expr {
         match term {
+            Term::UnknownLit => panic!("unknown base value"),
             Term::Lit(lit) => Expr::Lit(span, lit.clone()),
             Term::Var(v) => Expr::Var(span, v.clone()),
             Term::App(op, args) => {
@@ -175,6 +290,10 @@ impl TermDag {
                     start_index = Some(result.len());
                     write!(&mut result, "{v}").unwrap();
                 }
+                Term::UnknownLit => {
+                    start_index = Some(result.len());
+                    write!(&mut result, "<unknown-base-val>").unwrap();
+                }
             }
 
             if let Some(start_index) = start_index {
@@ -184,87 +303,73 @@ impl TermDag {
 
         result
     }
-}
 
-#[cfg(test)]
-mod tests {
-    use super::*;
-    use crate::{ast::*, span};
-
-    fn parse_term(s: &str) -> (TermDag, Term) {
-        let e = Parser::default().get_expr_from_string(None, s).unwrap();
-        let mut td = TermDag::default();
-        let t = td.expr_to_term(&e);
-        (td, t)
+    /// Pretty-print the given term to a string.
+    pub fn to_string_pretty(&self, term: &Term) -> String {
+        let mut buf = Vec::new();
+        self.print_term_pretty(term, &PrettyPrintConfig::default(), &mut buf)
+            .expect("pretty printing term failed");
+        String::from_utf8(buf).expect("pretty printer emitted invalid UTF-8")
     }
 
-    #[test]
-    fn test_to_from_expr() {
-        let s = r#"(f (g x y) x y (g x y))"#;
-        let e = Parser::default().get_expr_from_string(None, s).unwrap();
-        let mut td = TermDag::default();
-        assert_eq!(td.size(), 0);
-        let t = td.expr_to_term(&e);
-        assert_eq!(td.size(), 4);
-        // the expression above has 4 distinct subterms.
-        // in left-to-right, depth-first order, they are:
-        //     x, y, (g x y), and the root call to f
-        // so we can compute expected answer by hand:
-        assert_eq!(
-            td.nodes.as_slice().iter().cloned().collect::<Vec<_>>(),
-            vec![
-                Term::Var("x".into()),
-                Term::Var("y".into()),
-                Term::App("g".into(), vec![0, 1]),
-                Term::App("f".into(), vec![2, 0, 1, 2]),
-            ]
-        );
-        // This is tested using string equality because e1 and e2 have different
-        let e2 = td.term_to_expr(&t, span!());
-        // annotations. A better way to test this would be to implement a map_ann
-        // function for GenericExpr.
-        assert_eq!(format!("{e}"), format!("{e2}")); // roundtrip
+    /// Pretty-print the given term to a string by term id.
+    pub fn to_string_pretty_id(&self, term: TermId) -> String {
+        self.to_string_pretty(self.get(term))
     }
 
-    #[test]
-    fn test_match_term_app() {
-        let s = r#"(f (g x y) x y (g x y))"#;
-        let (td, t) = parse_term(s);
-        match_term_app!(t; {
-            ("f", [_, x, _, _]) => {
-                let span = span!();
-                assert_eq!(
-                    td.term_to_expr(td.get(*x), span.clone()),
-                    crate::ast::GenericExpr::Var(span, "x".to_owned())
-                )
+    /// Print the term with pretty-printing configuration.
+    pub fn print_term_pretty(
+        &self,
+        term: &Term,
+        config: &PrettyPrintConfig,
+        writer: &mut impl io::Write,
+    ) -> io::Result<()> {
+        let mut printer = PrettyPrinter::new(writer, config);
+        self.print_term_with_printer(term, &mut printer)
+    }
+
+    pub(crate) fn print_term_with_printer<W: io::Write>(
+        &self,
+        term: &Term,
+        printer: &mut PrettyPrinter<W>,
+    ) -> io::Result<()> {
+        match term {
+            Term::Lit(lit) => {
+                printer.write_str(&format!("{lit}"))?;
             }
-            (head, _) => panic!("unexpected head {}, in {}:{}:{}", head, file!(), line!(), column!())
-        })
+            Term::UnknownLit => {
+                printer.write_str("(unsupported-base-val)")?;
+            }
+            Term::Var(v) => {
+                printer.write_str(v)?;
+            }
+            Term::App(head, args) => {
+                printer.write_str(&format!("({head}"))?;
+                if !args.is_empty() {
+                    printer.increase_indent();
+                    for arg in args.iter() {
+                        printer.write_with_break(" ")?;
+                        self.print_term_with_printer(self.get(*arg), printer)?;
+                    }
+                    printer.decrease_indent();
+                }
+                printer.write_str(")")?;
+            }
+        }
+        Ok(())
     }
 
-    #[test]
-    fn test_to_string() {
-        let s = r#"(f (g x y) x y (g x y))"#;
-        let (td, t) = parse_term(s);
-        assert_eq!(td.to_string(&t), s);
+    /// Project a particular argument of a term by index.
+    /// Returns None if the term is not an application or the index is out of bounds.
+    pub fn proj(&self, term: &Term, arg_idx: usize) -> Option<TermId> {
+        match term {
+            Term::App(_hd, args) => args.get(arg_idx).copied(),
+            _ => None,
+        }
     }
 
-    #[test]
-    fn test_lookup() {
-        let s = r#"(f (g x y) x y (g x y))"#;
-        let (td, t) = parse_term(s);
-        assert_eq!(td.lookup(&t), td.size() - 1);
-    }
-
-    #[test]
-    fn test_app_var_lit() {
-        let s = r#"(f (g x y) x 7 (g x y))"#;
-        let (mut td, t) = parse_term(s);
-        let x = td.var("x".into());
-        let y = td.var("y".into());
-        let seven = td.lit(7.into());
-        let g = td.app("g".into(), vec![x.clone(), y.clone()]);
-        let t2 = td.app("f".into(), vec![g.clone(), x, seven, g]);
-        assert_eq!(t, t2);
+    /// Project a particular argument of a term by index, given the term's id.
+    pub fn proj_id(&self, term: TermId, arg_idx: usize) -> Option<TermId> {
+        self.proj(self.get(term), arg_idx)
     }
 }

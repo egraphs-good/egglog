@@ -433,36 +433,10 @@ macro_rules! atomic_of {
 macro_rules! define_id {
     ($v:vis $name:ident, $repr:tt) => { define_id!($v, $name, $repr, ""); };
     ($v:vis $name:ident, $repr:tt, $doc:tt) => {
-        #[derive(Copy, Clone)]
+        #[derive(Copy, Clone, PartialEq, Eq, PartialOrd, Ord, Hash)]
         #[doc = $doc]
         $v struct $name {
             rep: $repr,
-        }
-
-        impl PartialEq for $name {
-            fn eq(&self, other: &Self) -> bool {
-                self.rep == other.rep
-            }
-        }
-
-        impl Eq for $name {}
-
-        impl PartialOrd for $name {
-            fn partial_cmp(&self, other: &Self) -> Option<std::cmp::Ordering> {
-                Some(self.cmp(other))
-            }
-        }
-
-        impl Ord for $name {
-            fn cmp(&self, other: &Self) -> std::cmp::Ordering {
-                self.rep.cmp(&other.rep)
-            }
-        }
-
-        impl std::hash::Hash for $name {
-            fn hash<H: std::hash::Hasher>(&self, state: &mut H) {
-                self.rep.hash(state);
-            }
         }
 
         impl $name {

@@ -18,12 +18,12 @@ mod cli;
 mod command_macro;
 pub mod constraint;
 mod core;
+pub mod egraph_operations;
 pub mod extract;
 pub mod prelude;
 pub mod scheduler;
 mod serialize;
 pub mod sort;
-mod termdag;
 mod typechecking;
 pub mod util;
 pub use command_macro::{CommandMacro, CommandMacroRegistry};
@@ -31,14 +31,13 @@ pub use command_macro::{CommandMacro, CommandMacroRegistry};
 // This is used to allow the `add_primitive` macro to work in
 // both this crate and other crates by referring to `::egglog`.
 extern crate self as egglog;
+use ast::CanonicalizedVar;
 use ast::*;
 pub use ast::{ResolvedExpr, ResolvedFact, ResolvedVar};
 #[cfg(feature = "bin")]
 pub use cli::*;
 use constraint::{Constraint, Problem, SimpleTypeConstraint, TypeConstraint};
-use core::ResolvedAtomTerm;
-pub use core::{Atom, AtomTerm};
-pub use core::{ResolvedCall, SpecializedPrimitive};
+pub use core::{Atom, AtomTerm, ResolvedCall, SpecializedPrimitive};
 pub use core_relations::{BaseValue, ContainerValue, ExecutionState, Value};
 use core_relations::{ExternalFunctionId, make_external_func};
 use csv::Writer;
@@ -47,11 +46,16 @@ use egglog_ast::generic_ast::{Change, GenericExpr, Literal};
 use egglog_ast::span::Span;
 use egglog_ast::util::ListDisplay;
 pub use egglog_bridge::FunctionRow;
-use egglog_bridge::{ColumnTy, QueryEntry};
+pub use egglog_bridge::match_term_app;
+pub use egglog_bridge::proof_format::{EqProofId, ProofStore, TermProofId};
+use egglog_bridge::syntax::SyntaxId;
+pub use egglog_bridge::termdag::{Term, TermDag, TermId};
+use egglog_bridge::{ColumnTy, QueryEntry, SourceExpr, SourceSyntax, TopLevelLhsExpr};
 use egglog_core_relations as core_relations;
 use egglog_numeric_id as numeric_id;
 use egglog_reports::{ReportLevel, RunReport};
 use extract::{CostModel, DefaultCost, Extractor, TreeAdditiveCostModel};
+use indexmap::IndexSet;
 use indexmap::map::Entry;
 use log::{Level, log_enabled};
 use numeric_id::DenseIdMap;
@@ -68,13 +72,13 @@ use std::ops::Deref;
 use std::path::PathBuf;
 use std::str::FromStr;
 use std::sync::Arc;
-pub use termdag::{Term, TermDag, TermId};
 use thiserror::Error;
 pub use typechecking::TypeError;
 pub use typechecking::TypeInfo;
 use util::*;
 
 use crate::ast::desugar::desugar_command;
+use crate::ast::{CorrespondingVar, MappedExpr, MappedFact};
 use crate::core::{GenericActionsExt, ResolvedRuleExt};
 
 pub const GLOBAL_NAME_PREFIX: &str = "$";
@@ -290,10 +294,10 @@ impl Debug for Function {
     }
 }
 
-impl Default for EGraph {
-    fn default() -> Self {
+impl EGraph {
+    fn new_from_backend(backend: egglog_bridge::EGraph) -> Self {
         let mut eg = Self {
-            backend: Default::default(),
+            backend,
             parser: Default::default(),
             names: Default::default(),
             pushed_egraph: Default::default(),
@@ -340,6 +344,25 @@ impl Default for EGraph {
             .insert("".into(), Ruleset::Rules(Default::default()));
 
         eg
+    }
+
+    /// Create a fresh e-graph with proof tracing enabled.
+    ///
+    /// Proofs are disabled by default. Use this constructor to enable proofs and provenance
+    /// tracking.
+    pub fn with_proofs() -> Self {
+        Self::new_from_backend(egglog_bridge::EGraph::with_tracing())
+    }
+
+    /// Returns `true` if this e-graph was constructed with proofs enabled.
+    pub fn proofs_enabled(&self) -> bool {
+        self.backend.proofs_enabled()
+    }
+}
+
+impl Default for EGraph {
+    fn default() -> Self {
+        Self::new_from_backend(Default::default())
     }
 }
 
@@ -462,7 +485,7 @@ impl EGraph {
     ) -> Result<egglog_bridge::MergeFn, Error> {
         match expr {
             GenericExpr::Lit(_, literal) => {
-                let val = literal_to_value(&self.backend, literal);
+                let val = self.backend.literal_to_value(literal);
                 Ok(egglog_bridge::MergeFn::Const(val))
             }
             GenericExpr::Var(span, resolved_var) => match resolved_var.name.as_str() {
@@ -539,6 +562,7 @@ impl EGraph {
             },
             name: decl.name.to_string(),
             can_subsume,
+            fiat_reason_only: decl.let_binding.then(|| format!("global({})", decl.name)),
         });
 
         let function = Function {
@@ -828,15 +852,16 @@ impl EGraph {
     }
 
     fn add_rule(&mut self, rule: ast::ResolvedRule) -> Result<String, Error> {
-        let core_rule =
+        let canonical =
             rule.to_canonicalized_core_rule(&self.type_info, &mut self.parser.symbol_gen)?;
-        let (query, actions) = (&core_rule.body, &core_rule.head);
+        let (query, actions) = (&canonical.rule.body, &canonical.rule.head);
 
         let rule_id = {
             let mut translator = BackendRule::new(
                 self.backend.new_rule(&rule.name, self.seminaive),
                 &self.functions,
                 &self.type_info,
+                canonical.mapped_facts.clone(),
             );
             translator.query(query, false);
             translator.actions(actions)?;
@@ -851,7 +876,7 @@ impl EGraph {
                             let name = rule.name;
                             panic!("Rule '{name}' was already present")
                         }
-                        indexmap::map::Entry::Vacant(e) => e.insert((core_rule, rule_id)),
+                        indexmap::map::Entry::Vacant(e) => e.insert((canonical.rule, rule_id)),
                     };
                     Ok(rule.name)
                 }
@@ -873,6 +898,7 @@ impl EGraph {
             self.backend.new_rule("eval_actions", false),
             &self.functions,
             &self.type_info,
+            Vec::new(),
         );
         translator.actions(&actions)?;
         let id = translator.build();
@@ -919,6 +945,7 @@ impl EGraph {
             self.backend.new_rule("eval_resolved_expr", false),
             &self.functions,
             &self.type_info,
+            Vec::new(),
         );
 
         let result_var = ResolvedVar {
@@ -940,7 +967,10 @@ impl EGraph {
             .0;
         translator.actions(&actions)?;
 
-        let arg = translator.entry(&ResolvedAtomTerm::Var(span.clone(), result_var));
+        let arg = translator.entry(&core::CanonicalizedResolvedAtomTerm::Var(
+            span.clone(),
+            CanonicalizedVar::new_current(result_var),
+        ));
         translator.rb.call_external_func(
             ext_id,
             &[arg],
@@ -959,7 +989,9 @@ impl EGraph {
         let result = result.lock().unwrap().unwrap();
         Ok(result)
     }
+}
 
+impl EGraph {
     fn add_combined_ruleset(&mut self, name: String, rulesets: Vec<String>) {
         match self.rulesets.entry(name.clone()) {
             Entry::Occupied(_) => panic!("Ruleset '{name}' was already present"),
@@ -984,9 +1016,9 @@ impl EGraph {
             name: fresh_name.clone(),
             ruleset: fresh_ruleset.clone(),
         };
-        let core_rule =
+        let canonical_rule =
             rule.to_canonicalized_core_rule(&self.type_info, &mut self.parser.symbol_gen)?;
-        let query = core_rule.body;
+        let query = canonical_rule.rule.body.clone();
 
         let ext_sc = egglog_bridge::SideChannel::default();
         let ext_sc_ref = ext_sc.clone();
@@ -1001,6 +1033,7 @@ impl EGraph {
             self.backend.new_rule("check_facts", false),
             &self.functions,
             &self.type_info,
+            canonical_rule.mapped_facts,
         );
         translator.query(&query, true);
         translator
@@ -1567,13 +1600,266 @@ impl EGraph {
         self.backend
             .get_canon_repr(val, sort.column_ty(&self.backend))
     }
+
+    /// Generate a proof explaining how a term was constructed in the e-graph.
+    ///
+    /// This method requires that the e-graph was created with [`EGraph::with_proofs()`].
+    /// The proof is stored in the provided `ProofStore` and can be printed or inspected.
+    ///
+    /// # Arguments
+    /// * `id` - The value representing the term to explain
+    /// * `store` - A mutable reference to a `ProofStore` where the proof will be stored
+    ///
+    /// # Returns
+    /// A `TermProofId` that can be used to print or traverse the proof.
+    ///
+    /// # Errors
+    /// Returns an error if:
+    /// - Proofs are not enabled (e-graph not created with `with_proofs()`)
+    /// - The proof cannot be reconstructed
+    ///
+    /// # Example
+    /// ```
+    /// # use egglog::prelude::*;
+    /// # use egglog::ProofStore;
+    /// let mut egraph = EGraph::with_proofs();
+    /// egraph.parse_and_run_program(None, "
+    ///     (datatype Math (Num i64) (Add Math Math))
+    ///     (let x (Add (Num 1) (Num 2)))
+    /// ").unwrap();
+    ///
+    /// // Get the value for x
+    /// let (_, x_value) = egraph.eval_expr(&expr!(x)).unwrap();
+    ///
+    /// // Generate a proof explaining how x was constructed
+    /// let mut store = ProofStore::default();
+    /// let proof_id = egraph.explain_term(x_value, &mut store).unwrap();
+    ///
+    /// // Print the proof
+    /// store.print_term_proof(proof_id, &mut std::io::stdout()).unwrap();
+    /// ```
+    pub fn explain_term(
+        &mut self,
+        id: Value,
+        store: &mut ProofStore,
+    ) -> egglog_bridge::Result<TermProofId> {
+        self.backend.explain_term(id, store)
+    }
+
+    /// Generate a proof explaining why two terms are equal in the e-graph.
+    ///
+    /// This method requires that the e-graph was created with [`EGraph::with_proofs()`].
+    /// The proof shows the sequence of rewrites that establish the equality between the two terms.
+    ///
+    /// # Arguments
+    /// * `id1` - The value representing the first term
+    /// * `id2` - The value representing the second term
+    /// * `store` - A mutable reference to a `ProofStore` where the proof will be stored
+    ///
+    /// # Returns
+    /// An `EqProofId` that can be used to print or traverse the equality proof.
+    ///
+    /// # Errors
+    /// Returns an error if:
+    /// - Proofs are not enabled (e-graph not created with `with_proofs()`)
+    /// - The two terms are not actually equal in the e-graph
+    /// - The proof cannot be reconstructed
+    ///
+    /// # Example
+    /// ```
+    /// # use egglog::prelude::*;
+    /// # use egglog::ProofStore;
+    /// let mut egraph = EGraph::with_proofs();
+    /// egraph.parse_and_run_program(None, "
+    ///     (datatype Math (Num i64) (Add Math Math))
+    ///     (rule ((Add x y)) ((union (Add x y) (Add y x))))
+    ///     (let a (Add (Num 1) (Num 2)))
+    ///     (let b (Add (Num 2) (Num 1)))
+    ///     (run 1)
+    /// ").unwrap();
+    ///
+    /// // Get the values for a and b
+    /// let (_, a_value) = egraph.eval_expr(&expr!(a)).unwrap();
+    /// let (_, b_value) = egraph.eval_expr(&expr!(b)).unwrap();
+    ///
+    /// // Generate a proof that a and b are equal
+    /// let mut store = ProofStore::default();
+    /// let proof_id = egraph.explain_terms_equal(a_value, b_value, &mut store).unwrap();
+    ///
+    /// // Print the proof
+    /// store.print_eq_proof(proof_id, &mut std::io::stdout()).unwrap();
+    /// ```
+    pub fn explain_terms_equal(
+        &mut self,
+        id1: Value,
+        id2: Value,
+        store: &mut ProofStore,
+    ) -> egglog_bridge::Result<EqProofId> {
+        self.backend.explain_terms_equal(id1, id2, store)
+    }
 }
 
 struct BackendRule<'a> {
     rb: egglog_bridge::RuleBuilder<'a>,
-    entries: HashMap<core::ResolvedAtomTerm, QueryEntry>,
+    entries: HashMap<core::CanonicalizedResolvedAtomTerm, QueryEntry>,
     functions: &'a IndexMap<String, Function>,
     type_info: &'a TypeInfo,
+    var_types: DenseIdMap<egglog_bridge::VariableId, ColumnTy>,
+    atoms: DenseIdMap<egglog_bridge::VariableId, egglog_bridge::AtomId>,
+    resolved_var_entries: HashMap<ResolvedVar, QueryEntry>,
+    proof_state: Option<ProofState>,
+}
+
+#[derive(Debug)]
+struct FunctionInfo {
+    atom: egglog_bridge::AtomId,
+    backend_id: egglog_bridge::FunctionId,
+}
+
+#[derive(Debug)]
+struct PrimInfo {
+    var: egglog_bridge::VariableId,
+    ty: ColumnTy,
+    func: ExternalFunctionId,
+    name: Arc<str>,
+}
+
+struct ProofState {
+    facts: Vec<MappedFact<ResolvedCall, ResolvedVar>>,
+    function_info: HashMap<String, FunctionInfo>,
+    prim_info: HashMap<String, PrimInfo>,
+}
+
+struct SyntaxBuilder<'a> {
+    env: SourceSyntax,
+    proof_state: &'a ProofState,
+    egraph: &'a egglog_bridge::EGraph,
+    var_map: &'a HashMap<core::CanonicalizedResolvedAtomTerm, QueryEntry>,
+    var_types: &'a DenseIdMap<egglog_bridge::VariableId, ColumnTy>,
+}
+
+impl SyntaxBuilder<'_> {
+    fn reconstruct_syntax(mut self) -> SourceSyntax {
+        for fact in &self.proof_state.facts {
+            // To use the handy "?". See the comment on `reconstruct_expr` for why this can fail.
+            || -> Option<()> {
+                match fact {
+                    GenericFact::Eq(_, l, r) => {
+                        let l_id = self.reconstruct_expr(l)?;
+                        let r_id = self.reconstruct_expr(r)?;
+                        self.env.add_toplevel_expr(TopLevelLhsExpr::Eq(l_id, r_id));
+                    }
+                    GenericFact::Fact(expr) => {
+                        let id = self.reconstruct_expr(expr)?;
+                        self.env.add_toplevel_expr(TopLevelLhsExpr::Exists(id));
+                    }
+                }
+                Some(())
+            }();
+        }
+        self.env
+    }
+
+    /// Generate the corresponding [`SyntaxId`] for an expression.
+    ///
+    /// This returns an Option<SyntaxId> because the source syntax can have expressions involving
+    /// primitives where no actual Syntax needs to be passed down to proofs. For example, a
+    /// primitive call asserting that `(= 2 (+ 1 1))` will have no corresponding substitution
+    /// available, and even something like `(Num x) (= x (+ x x))` can easily be run at proof-check
+    /// time, with no added auxiliary variables needed to be stored in the DB for the (= x (+ x x))
+    /// atom.
+    ///
+    /// In cases like this `reconstruct_expr` returns None and the rest of the process
+    /// short-circuits.
+    fn reconstruct_expr(
+        &mut self,
+        expr: &GenericExpr<CorrespondingVar<ResolvedCall, ResolvedVar>, ResolvedVar>,
+    ) -> Option<SyntaxId> {
+        Some(match expr {
+            GenericExpr::Var(span, var) => {
+                let Some(qe) = self.var_map.get(&core::CanonicalizedResolvedAtomTerm::Var(
+                    span.clone(),
+                    CanonicalizedVar::new_current(var.clone()),
+                )) else {
+                    panic!("no mapping found for variable {var} [span={span}]")
+                };
+                let QueryEntry::Var(v) = qe else {
+                    panic!(
+                        "found a non-variable entry mapped from a variable {var} [span={span}], instead found {qe:?}"
+                    );
+                };
+                let ty = self.var_types[v.id];
+                self.env.add_expr(SourceExpr::Var {
+                    id: v.id,
+                    ty,
+                    name: var.name().into(),
+                })
+            }
+            GenericExpr::Lit(_, lit) => {
+                let (val, ty) = self.egraph.literal_to_typed_constant(lit);
+                self.env.add_expr(SourceExpr::Const { ty, val })
+            }
+
+            GenericExpr::Call(_, CorrespondingVar { head, to }, children) => {
+                let mut any_failed = false;
+                let args: Vec<_> = children
+                    .iter()
+                    .filter_map(|child| {
+                        let res = self.reconstruct_expr(child);
+                        any_failed |= res.is_none();
+                        res
+                    })
+                    .collect();
+                if any_failed {
+                    return None;
+                }
+                match head {
+                    ResolvedCall::Func(_) => {
+                        let FunctionInfo { atom, backend_id } =
+                            self.proof_state.function_info[to.name()];
+                        self.env.add_expr(SourceExpr::FunctionCall {
+                            func: backend_id,
+                            atom,
+                            args,
+                        })
+                    }
+                    ResolvedCall::Primitive(_) => {
+                        let PrimInfo {
+                            var,
+                            ty,
+                            func,
+                            name,
+                        } = self.proof_state.prim_info.get(to.name())?;
+                        self.env.add_expr(SourceExpr::ExternalCall {
+                            var: *var,
+                            ty: *ty,
+                            func: *func,
+                            name: name.clone(),
+                            args,
+                        })
+                    }
+                }
+            }
+        })
+    }
+}
+
+impl ProofState {
+    fn new(facts: Vec<MappedFact<ResolvedCall, ResolvedVar>>) -> ProofState {
+        ProofState {
+            facts,
+            function_info: Default::default(),
+            prim_info: Default::default(),
+        }
+    }
+
+    fn record_call(&mut self, res_var: String, func: FunctionInfo) {
+        self.function_info.insert(res_var, func);
+    }
+
+    fn record_prim(&mut self, res_var: String, prim: PrimInfo) {
+        self.prim_info.insert(res_var, prim);
+    }
 }
 
 impl<'a> BackendRule<'a> {
@@ -1581,24 +1867,38 @@ impl<'a> BackendRule<'a> {
         rb: egglog_bridge::RuleBuilder<'a>,
         functions: &'a IndexMap<String, Function>,
         type_info: &'a TypeInfo,
+        mapped_facts: Vec<MappedFact<ResolvedCall, ResolvedVar>>,
     ) -> BackendRule<'a> {
+        let proofs_enabled = rb.egraph().proofs_enabled();
+
         BackendRule {
             rb,
             functions,
             type_info,
             entries: Default::default(),
+            var_types: Default::default(),
+            atoms: Default::default(),
+            resolved_var_entries: Default::default(),
+            proof_state: proofs_enabled.then(move || ProofState::new(mapped_facts)),
         }
     }
 
-    fn entry(&mut self, x: &core::ResolvedAtomTerm) -> QueryEntry {
+    fn entry(&mut self, x: &core::CanonicalizedResolvedAtomTerm) -> QueryEntry {
         self.entries
             .entry(x.clone())
             .or_insert_with(|| match x {
-                core::GenericAtomTerm::Var(_, v) => self
-                    .rb
-                    .new_var_named(v.sort.column_ty(self.rb.egraph()), &v.name),
-                core::GenericAtomTerm::Literal(_, l) => literal_to_entry(self.rb.egraph(), l),
-                core::GenericAtomTerm::Global(..) => {
+                core::GenericAtomTerm::Var(_, v) => {
+                    let ty = v.var.sort.column_ty(self.rb.egraph());
+                    let entry = self.rb.new_var_named(ty, &v.var.name);
+                    if let QueryEntry::Var(var) = &entry {
+                        self.var_types.insert(var.id, ty);
+                        self.resolved_var_entries
+                            .insert(v.var.clone(), entry.clone());
+                    }
+                    entry
+                }
+                core::GenericAtomTerm::Literal(_, l) => self.rb.egraph().literal_to_entry(l),
+                core::GenericAtomTerm::Global(_, _) => {
                     panic!("Globals should have been desugared")
                 }
             })
@@ -1612,12 +1912,14 @@ impl<'a> BackendRule<'a> {
     fn prim(
         &mut self,
         prim: &core::SpecializedPrimitive,
-        args: &[core::ResolvedAtomTerm],
+        args: &[core::CanonicalizedResolvedAtomTerm],
     ) -> (ExternalFunctionId, Vec<QueryEntry>, ColumnTy) {
         let mut qe_args = self.args(args);
 
         if prim.name() == "unstable-fn" {
-            let core::ResolvedAtomTerm::Literal(_, Literal::String(ref name)) = args[0] else {
+            let core::CanonicalizedResolvedAtomTerm::Literal(_, Literal::String(ref name)) =
+                args[0]
+            else {
                 panic!("expected string literal after `unstable-fn`")
             };
             let id = if let Some(f) = self.type_info.get_func_type(name) {
@@ -1666,26 +1968,90 @@ impl<'a> BackendRule<'a> {
 
     fn args<'b>(
         &mut self,
-        args: impl IntoIterator<Item = &'b core::ResolvedAtomTerm>,
+        args: impl IntoIterator<Item = &'b core::CanonicalizedResolvedAtomTerm>,
     ) -> Vec<QueryEntry> {
         args.into_iter().map(|x| self.entry(x)).collect()
     }
 
-    fn query(&mut self, query: &core::Query<ResolvedCall, ResolvedVar>, include_subsumed: bool) {
+    fn canon_term(&self, term: &core::ResolvedAtomTerm) -> core::CanonicalizedResolvedAtomTerm {
+        match term {
+            core::GenericAtomTerm::Var(span, v) => {
+                core::GenericAtomTerm::Var(span.clone(), CanonicalizedVar::new_current(v.clone()))
+            }
+            core::GenericAtomTerm::Literal(span, lit) => {
+                core::GenericAtomTerm::Literal(span.clone(), lit.clone())
+            }
+            core::GenericAtomTerm::Global(span, v) => core::GenericAtomTerm::Global(
+                span.clone(),
+                CanonicalizedVar::new_current(v.clone()),
+            ),
+        }
+    }
+
+    fn canon_args<'b>(
+        &self,
+        args: impl IntoIterator<Item = &'b core::ResolvedAtomTerm>,
+    ) -> Vec<core::CanonicalizedResolvedAtomTerm> {
+        args.into_iter().map(|a| self.canon_term(a)).collect()
+    }
+
+    fn query(
+        &mut self,
+        query: &core::Query<ResolvedCall, CanonicalizedVar<ResolvedVar>>,
+        include_subsumed: bool,
+    ) {
         for atom in &query.atoms {
             match &atom.head {
                 ResolvedCall::Func(f) => {
-                    let f = self.func(f);
+                    let f_id = self.func(f);
                     let args = self.args(&atom.args);
                     let is_subsumed = match include_subsumed {
                         true => None,
                         false => Some(false),
                     };
-                    self.rb.query_table(f, &args, is_subsumed).unwrap();
+                    let atom_id = self.rb.query_table(f_id, &args, is_subsumed).unwrap();
+                    self.proof_state.as_mut().map(|ps| -> Option<()> {
+                        let last = atom.args.last()?;
+                        let core::CanonicalizedResolvedAtomTerm::Var(_span, var) = last else {
+                            panic!("expected unique variable as last argument to a query, instead got {last:?}, part of {atom:?}");
+                        };
+                        ps.record_call(
+                            var.orig.name().into(),
+                            FunctionInfo { atom: atom_id, backend_id:f_id  },
+                        );
+                        Some(())
+                    });
+                    if let Some(QueryEntry::Var(var)) = args.last() {
+                        self.atoms.insert(var.id, atom_id);
+                    }
                 }
                 ResolvedCall::Primitive(p) => {
-                    let (p, args, ty) = self.prim(p, &atom.args);
-                    self.rb.query_prim(p, &args, ty).unwrap()
+                    let (ext_id, args, ty) = self.prim(p, &atom.args);
+                    self.proof_state.as_mut().map(|ps| -> Option<()> {
+                        let Some(QueryEntry::Var(var)) = args.last() else {
+                            // This is an assertion about the output of some primitive. The
+                            // primitive itself is not returning a useful variable for other atoms
+                            // in the query. The proof checker as a result does not need to know
+                            // anything more about this call.
+                            return None;
+                        };
+                        let core::CanonicalizedResolvedAtomTerm::Var(_span, res_var) =
+                            atom.args.last()?
+                        else {
+                            panic!("expected unique variable as last argument to a prim query, instead got {atom:?}");
+                        };
+                        ps.record_prim(
+                            res_var.orig.name().into(),
+                            PrimInfo {
+                                var: var.id,
+                                ty,
+                                func: ext_id,
+                                name: p.name().into(),
+                            },
+                        );
+                        Some(())
+                    });
+                    self.rb.query_prim(ext_id, &args, ty).unwrap();
                 }
             }
         }
@@ -1695,12 +2061,14 @@ impl<'a> BackendRule<'a> {
         for action in &actions.0 {
             match action {
                 core::GenericCoreAction::Let(span, v, f, args) => {
-                    let v = core::GenericAtomTerm::Var(span.clone(), v.clone());
+                    let canon_v = CanonicalizedVar::new_current(v.clone());
+                    let v = core::GenericAtomTerm::Var(span.clone(), canon_v.clone());
+                    let canon_args = self.canon_args(args);
                     let y = match f {
                         ResolvedCall::Func(f) => {
                             let name = f.name.clone();
                             let f = self.func(f);
-                            let args = self.args(args);
+                            let args = self.args(canon_args.iter());
                             let span = span.clone();
                             self.rb.lookup(f, &args, move || {
                                 format!("{span}: lookup of function {name} failed")
@@ -1708,7 +2076,7 @@ impl<'a> BackendRule<'a> {
                         }
                         ResolvedCall::Primitive(p) => {
                             let name = p.name().to_owned();
-                            let (p, args, ty) = self.prim(p, args);
+                            let (p, args, ty) = self.prim(p, &canon_args);
                             let span = span.clone();
                             self.rb.call_external_func(p, &args, ty, move || {
                                 format!("{span}: call of primitive {name} failed")
@@ -1718,15 +2086,19 @@ impl<'a> BackendRule<'a> {
                     self.entries.insert(v, y.into());
                 }
                 core::GenericCoreAction::LetAtomTerm(span, v, x) => {
-                    let v = core::GenericAtomTerm::Var(span.clone(), v.clone());
-                    let x = self.entry(x);
+                    let v = core::GenericAtomTerm::Var(
+                        span.clone(),
+                        CanonicalizedVar::new_current(v.clone()),
+                    );
+                    let x = self.entry(&self.canon_term(x));
                     self.entries.insert(v, x);
                 }
                 core::GenericCoreAction::Set(_, f, xs, y) => match f {
                     ResolvedCall::Primitive(..) => panic!("runtime primitive set!"),
                     ResolvedCall::Func(f) => {
                         let f = self.func(f);
-                        let args = self.args(xs.iter().chain([y]));
+                        let canon_args = self.canon_args(xs.iter().chain([y]));
+                        let args = self.args(canon_args.iter());
                         self.rb.set(f, &args)
                     }
                 },
@@ -1736,7 +2108,8 @@ impl<'a> BackendRule<'a> {
                         let name = f.name.clone();
                         let can_subsume = self.functions[&f.name].can_subsume;
                         let f = self.func(f);
-                        let args = self.args(args);
+                        let canon_args = self.canon_args(args);
+                        let args = self.args(canon_args.iter());
                         match change {
                             Change::Delete => self.rb.remove(f, &args),
                             Change::Subsume if can_subsume => self.rb.subsume(f, &args),
@@ -1747,8 +2120,8 @@ impl<'a> BackendRule<'a> {
                     }
                 },
                 core::GenericCoreAction::Union(_, x, y) => {
-                    let x = self.entry(x);
-                    let y = self.entry(y);
+                    let x = self.entry(&self.canon_term(x));
+                    let y = self.entry(&self.canon_term(y));
                     self.rb.union(x, y)
                 }
                 core::GenericCoreAction::Panic(_, message) => self.rb.panic(message.clone()),
@@ -1758,27 +2131,19 @@ impl<'a> BackendRule<'a> {
     }
 
     fn build(self) -> egglog_bridge::RuleId {
-        self.rb.build()
-    }
-}
-
-fn literal_to_entry(egraph: &egglog_bridge::EGraph, l: &Literal) -> QueryEntry {
-    match l {
-        Literal::Int(x) => egraph.base_value_constant::<i64>(*x),
-        Literal::Float(x) => egraph.base_value_constant::<sort::F>(x.into()),
-        Literal::String(x) => egraph.base_value_constant::<sort::S>(sort::S::new(x.clone())),
-        Literal::Bool(x) => egraph.base_value_constant::<bool>(*x),
-        Literal::Unit => egraph.base_value_constant::<()>(()),
-    }
-}
-
-fn literal_to_value(egraph: &egglog_bridge::EGraph, l: &Literal) -> Value {
-    match l {
-        Literal::Int(x) => egraph.base_values().get::<i64>(*x),
-        Literal::Float(x) => egraph.base_values().get::<sort::F>(x.into()),
-        Literal::String(x) => egraph.base_values().get::<sort::S>(sort::S::new(x.clone())),
-        Literal::Bool(x) => egraph.base_values().get::<bool>(*x),
-        Literal::Unit => egraph.base_values().get::<()>(()),
+        if let Some(proof_state) = self.proof_state.as_ref() {
+            let syntax = SyntaxBuilder {
+                proof_state,
+                egraph: self.rb.egraph(),
+                var_map: &self.entries,
+                var_types: &self.var_types,
+                env: Default::default(),
+            }
+            .reconstruct_syntax();
+            self.rb.build_with_syntax(syntax)
+        } else {
+            self.rb.build()
+        }
     }
 }
 

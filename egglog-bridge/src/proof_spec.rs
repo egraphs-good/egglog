@@ -1,11 +1,12 @@
 use std::{iter, rc::Rc, sync::Arc};
 
 use crate::core_relations::{
-    BaseValuePrinter, ColumnId, DisplacedTableWithProvenance, ProofReason as UfProofReason,
-    ProofStep, RuleBuilder, Value,
+    ColumnId, DisplacedTableWithProvenance, ProofReason as UfProofReason, ProofStep, RuleBuilder,
+    Value,
 };
 use crate::numeric_id::{DenseIdMap, NumericId, define_id};
 use crate::rule::Variable;
+use crate::termdag::TermId;
 use egglog_reports::ReportLevel;
 use hashbrown::{HashMap, HashSet};
 
@@ -13,10 +14,10 @@ use crate::{
     ColumnTy, EGraph, FunctionId, GetFirstMatch, QueryEntry, Result, RuleId, SideChannel,
     SourceExpr, TopLevelLhsExpr,
     proof_format::{
-        CongProof, EqProof, EqProofId, Premise, ProofStore, Term, TermId, TermProof, TermProofId,
+        CongProof, EqProof, EqProofId, Premise, ProofStore, RuleVarBinding, TermProof, TermProofId,
     },
     rule::{AtomId, Bindings, DstVar, VariableId},
-    syntax::{RuleData, SourceSyntax, SyntaxId},
+    syntax::{RuleData, SourceSyntax, SourceVar, SyntaxId},
 };
 
 define_id!(pub(crate) ReasonSpecId, u32, "A unique identifier for the step in a proof.");
@@ -34,6 +35,11 @@ pub(crate) enum ProofReason {
     Fiat {
         desc: Arc<str>,
     },
+    /// A proof that a term equals itself.
+    ///
+    /// This is generally only used when two identical terms are created, but with a different term
+    /// id (due to concurrency / "term consistency" reasons).
+    Refl,
 }
 
 impl ProofReason {
@@ -42,7 +48,7 @@ impl ProofReason {
         1 + match self {
             ProofReason::CongRow => 1,
             ProofReason::Rule(data) => data.n_vars(),
-            ProofReason::Fiat { .. } => 0,
+            ProofReason::Refl | ProofReason::Fiat { .. } => 0,
         }
     }
 }
@@ -116,25 +122,44 @@ impl ProofBuilder {
         &mut self,
         func: FunctionId,
         entries: Vec<QueryEntry>,
+        res_id: Option<VariableId>,
         term_var: VariableId,
         db: &mut EGraph,
-    ) -> impl Fn(&mut Bindings, &mut RuleBuilder) -> Result<()> + Clone + use<> {
-        let func_table = db.funcs[func].table;
+    ) -> impl Fn(&mut Bindings, &mut RuleBuilder) -> Result<DstVar> + Clone + use<> {
+        let func_info = &db.funcs[func];
+        let func_table = func_info.table;
+        let fiat_reason = func_info.fiat_reason;
         let term_table = db.term_table(func_table);
         let func_val = Value::new(func.rep());
         move |inner, rb| {
-            let reason_var = inner
-                .lhs_reason
-                .expect("must have a reason variable for new rows");
-            let mut translated = Vec::new();
+            let reason_var: DstVar = if let Some(fiat_reason) = fiat_reason {
+                // This table has been marked as "fiat only", meaning that all proofs for this
+                // table should have a single hard-coded fiat reason, rather than the ambient used
+                // for the rule.
+                fiat_reason.into()
+            } else {
+                inner
+                    .lhs_reason
+                    .expect("must have a reason variable for new rows")
+            };
+            let mut translated = Vec::with_capacity(entries.len() + 2);
             translated.push(func_val.into());
             for entry in &entries[0..entries.len() - 1] {
                 translated.push(inner.convert(entry));
             }
             translated.push(inner.mapping[term_var]);
             translated.push(reason_var);
-            rb.insert(term_table, &translated)?;
-            Ok(())
+            if let Some(res_id) = res_id {
+                rb.insert_if_eq(
+                    term_table,
+                    inner.mapping[res_id],
+                    inner.mapping[term_var],
+                    &translated,
+                )?;
+            } else {
+                rb.insert(term_table, &translated)?;
+            }
+            Ok(reason_var)
         }
     }
 }
@@ -214,14 +239,18 @@ impl EGraph {
         RuleData { syntax, .. }: &RuleData,
         vars: &[Value],
         state: &mut ProofReconstructionState,
-    ) -> (DenseIdMap<VariableId, TermId>, Vec<Premise>) {
+    ) -> (Vec<RuleVarBinding>, Vec<Premise>) {
         // First, reconstruct terms for all the relevant variables.
-        let mut subst_term = DenseIdMap::<VariableId, TermId>::new();
+        let mut subst_term = Vec::with_capacity(syntax.vars.len());
         let mut subst_val = DenseIdMap::<VariableId, Value>::new();
-        for ((var, ty), term_id) in syntax.vars.iter().zip(vars) {
-            subst_val.insert(*var, *term_id);
+        for (SourceVar { id, ty, name }, term_id) in syntax.vars.iter().zip(vars) {
+            subst_val.insert(*id, *term_id);
             let term = self.reconstruct_term(*term_id, *ty, state);
-            subst_term.insert(*var, term);
+            subst_term.push(RuleVarBinding {
+                name: Arc::clone(name),
+                ty: *ty,
+                term,
+            });
         }
         let mut terms = DenseIdMap::<SyntaxId, Value>::new();
         let mut premises = Vec::new();
@@ -262,10 +291,14 @@ impl EGraph {
         let spec = self.proof_specs[ReasonSpecId::new(reason_row[0].rep())].clone();
         let res = match &*spec {
             ProofReason::Rule(data) => {
+                debug_assert_eq!(
+                    self.rules[data.rule_id].desc.as_ref(),
+                    data.rule_name.as_ref()
+                );
                 let (subst, body_pfs) = self.rule_proof(data, &reason_row[1..], state);
                 let result = self.reconstruct_term(term_id, ColumnTy::Id, state);
                 state.store.intern_term(&TermProof::PRule {
-                    rule_name: String::from(&*self.rules[data.rule_id].desc).into(),
+                    rule_name: Rc::<str>::from(data.rule_name.as_ref()),
                     subst,
                     body_pfs,
                     result,
@@ -281,6 +314,11 @@ impl EGraph {
                     desc: String::from(&**desc).into(),
                     term,
                 })
+            }
+            ProofReason::Refl => {
+                panic!(
+                    "Refl cannot be a reason for a term's existence. This is an internal proofs error"
+                );
             }
         };
 
@@ -306,6 +344,7 @@ impl EGraph {
             ColumnTy::Id => {
                 let term_row = self.get_term_row(key_id);
                 let func = FunctionId::new(term_row[0].rep());
+                let func_name = self.funcs[func].name.to_string();
                 let info = &self.funcs[func];
                 // NB: this clone is needed because `get_term_row` borrows the whole egraph, though it
                 // really only needs mutable access to `db`. This is of course fixable if we wanted to get
@@ -313,27 +352,19 @@ impl EGraph {
                 let schema = info.schema.clone();
                 let mut args = Vec::with_capacity(term_row.len() - 1);
                 for (ty, entry) in schema[0..schema.len() - 1].iter().zip(term_row[1..].iter()) {
-                    args.push(self.reconstruct_term(*entry, *ty, state));
+                    let term = self.reconstruct_term(*entry, *ty, state);
+                    args.push(state.store.termdag.get(term).clone());
                 }
-                state
-                    .store
-                    .termdag
-                    .get_or_insert(&Term::Func { id: func, args })
+                let app = state.store.termdag.app(func_name, args);
+                state.store.termdag.lookup(&app)
             }
             ColumnTy::Base(ty) => {
-                let rendered: Rc<str> = format!(
-                    "{:?}",
-                    BaseValuePrinter {
-                        base: self.db.base_values(),
-                        ty,
-                        val: term_id,
-                    }
-                )
-                .into();
-                state.store.termdag.get_or_insert(&Term::Constant {
-                    id: term_id,
-                    rendered: Some(rendered),
-                })
+                let term = if let Some(literal) = self.value_to_literal(&term_id, ty) {
+                    state.store.termdag.lit(literal)
+                } else {
+                    state.store.termdag.unknown_lit()
+                };
+                state.store.termdag.lookup(&term)
             }
         };
 
@@ -405,8 +436,6 @@ impl EGraph {
         let old_term_row = self.get_term_row(old_term_id);
         let new_term_row = self.get_term_row(new_term_id);
         let old_term_proof = self.explain_term_inner(old_term_id, state);
-        let old_term = self.reconstruct_term(old_term_id, ColumnTy::Id, state);
-        let new_term = self.reconstruct_term(new_term_id, ColumnTy::Id, state);
         let func_id = FunctionId::new(old_term_row[0].rep());
         debug_assert_eq!(
             old_term_row[0], new_term_row[0],
@@ -415,6 +444,8 @@ impl EGraph {
         let info = &self.funcs[func_id];
         let schema = info.schema.clone();
         let mut args_eq_proofs = Vec::with_capacity(schema.len() - 1);
+        let old_term = self.reconstruct_term(old_term_id, ColumnTy::Id, state);
+        let new_term = self.reconstruct_term(new_term_id, ColumnTy::Id, state);
         for (i, (ty, (lhs, rhs))) in schema[0..schema.len() - 1]
             .iter()
             .zip(old_term_row[1..].iter().zip(new_term_row[1..].iter()))
@@ -424,24 +455,23 @@ impl EGraph {
                 ColumnTy::Id => self.explain_terms_equal_inner(*lhs, *rhs, state),
                 ColumnTy::Base(_) => {
                     assert_eq!(lhs, rhs, "congruence proof must have equal base values");
-                    // For an equality proof, we first need an existence proof, which we can get by
-                    // doing a projection from the existence proof of `old_term`.
                     let arg_exists = state.store.intern_term(&TermProof::PProj {
                         pf_f_args_ok: old_term_proof,
                         arg_idx: i,
                     });
-                    let arg_term = state.store.termdag.proj(old_term, i);
+                    let arg_term = state.store.termdag.proj_id(old_term, i).unwrap();
                     state.store.refl(arg_exists, arg_term)
                 }
             };
             args_eq_proofs.push(eq_proof);
         }
+        let func_name = Arc::from(self.funcs[func_id].name.as_ref());
         CongProof {
             pf_args_eq: args_eq_proofs,
             pf_f_args_ok: old_term_proof,
             old_term,
             new_term,
-            func: func_id,
+            func: func_name,
         }
     }
 
@@ -456,10 +486,14 @@ impl EGraph {
         let spec = self.proof_specs[ReasonSpecId::new(reason_row[0].rep())].clone();
         match &*spec {
             ProofReason::Rule(data) => {
+                debug_assert_eq!(
+                    self.rules[data.rule_id].desc.as_ref(),
+                    data.rule_name.as_ref()
+                );
                 let (subst, body_pfs) = self.rule_proof(data, &reason_row[1..], state);
                 let l_term = self.reconstruct_term(l, ColumnTy::Id, state);
                 let r_term = self.reconstruct_term(r, ColumnTy::Id, state);
-                let rule_name = String::from(&*self.rules[data.rule_id].desc).into();
+                let rule_name = Rc::<str>::from(data.rule_name.as_ref());
                 state.store.intern_eq(&EqProof::PRule {
                     rule_name,
                     subst,
@@ -475,6 +509,14 @@ impl EGraph {
             ProofReason::Fiat { .. } => {
                 // NB: we could add this if we wanted to.
                 panic!("fiat reason being used to explain equality, rather than a row's existence")
+            }
+            ProofReason::Refl => {
+                let l = self.canonicalize_term_id(l);
+                let r = self.canonicalize_term_id(r);
+                assert_eq!(l, r, "refl justification for two non-equal terms");
+                let t_ok_pf = self.explain_term_inner(l, state);
+                let t = self.reconstruct_term(l, ColumnTy::Id, state);
+                state.store.intern_eq(&EqProof::PRefl { t_ok_pf, t })
             }
         }
     }
@@ -518,6 +560,7 @@ impl EGraph {
     }
 
     fn get_reason(&mut self, reason_id: Value) -> Vec<Value> {
+        let reason_id = self.canonicalize_reason_id(reason_id);
         let mut atom = Vec::<DstVar>::new();
         let mut cur = 0;
         loop {

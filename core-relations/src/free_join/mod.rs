@@ -435,7 +435,14 @@ impl Database {
     ///
     /// These counters can be used to generate unique ids as part of an action.
     pub fn add_counter(&mut self) -> CounterId {
-        self.counters.0.push(AtomicUsize::new(0))
+        self.add_counter_with_initial_val(0)
+    }
+
+    /// Create a new counter for this database starting at the given `val`.
+    ///
+    /// These counters can be used to generate unique ids as part of an action.
+    pub fn add_counter_with_initial_val(&mut self, val: usize) -> CounterId {
+        self.counters.0.push(AtomicUsize::new(val))
     }
 
     /// Increment the given counter and return its previous value.

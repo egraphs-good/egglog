@@ -24,6 +24,7 @@ use crate::core_relations::{
     TableId, TaggedRowBuffer, Value, WrappedTable,
 };
 use crate::numeric_id::{DenseIdMap, DenseIdMapWithReuse, IdVec, NumericId, define_id};
+use egglog_ast::generic_ast::Literal;
 use egglog_core_relations as core_relations;
 use egglog_numeric_id as numeric_id;
 use egglog_reports::{IterationReport, ReportLevel, RuleSetReport};
@@ -31,6 +32,7 @@ use hashbrown::HashMap;
 use indexmap::{IndexMap, IndexSet, map::Entry};
 use log::info;
 use once_cell::sync::Lazy;
+use ordered_float::OrderedFloat;
 pub use proof_format::{EqProofId, ProofStore, TermProofId};
 use proof_spec::{ProofReason, ProofReconstructionState, ReasonSpecId};
 use smallvec::SmallVec;
@@ -41,10 +43,11 @@ pub mod proof_format;
 pub(crate) mod proof_spec;
 pub(crate) mod rule;
 pub mod syntax;
+pub mod termdag;
 #[cfg(test)]
 mod tests;
 
-pub use rule::{Function, QueryEntry, RuleBuilder};
+pub use rule::{AtomId, Function, QueryEntry, RuleBuilder, VariableId};
 pub use syntax::{SourceExpr, SourceSyntax, TopLevelLhsExpr};
 use thiserror::Error;
 
@@ -81,6 +84,7 @@ pub struct EGraph {
     /// bound.
     panic_funcs: HashMap<String, ExternalFunctionId>,
     proof_specs: IdVec<ReasonSpecId, Arc<ProofReason>>,
+    refl_reason: Value,
     cong_spec: ReasonSpecId,
     /// Side tables used to store proof information. We initialize these lazily
     /// as a proof object with a given number of parameters is added.
@@ -130,6 +134,10 @@ pub struct EGraph {
     /// union-find. In this way, it's a subset of the full union-find in the `uf_table` row, only
     /// used to resolved temporary inconsistencies in cached term values.
     term_consistency_table: TableId,
+    /// The reason consistency table is the reason-level analog to the term consistency table. When
+    /// identical reasons are inserted to a table concurrently, this table tracks which one is
+    /// canonical.
+    reason_consistency_table: TableId,
     tracing: bool,
     report_level: ReportLevel,
 }
@@ -161,7 +169,13 @@ pub struct FunctionConfig {
     pub name: String,
     /// Whether or not subsumption is enabled for this function.
     pub can_subsume: bool,
+    /// If present, every write to this table gets an associated "fiat" reason with this label
+    /// rather than a standard, tree-shaped one. This is only relevant when proofs are enabled.
+    pub fiat_reason_only: Option<String>,
 }
+
+pub type BackendFloat = core_relations::Boxed<OrderedFloat<f64>>;
+pub type BackendString = core_relations::Boxed<String>;
 
 impl EGraph {
     /// Create a new EGraph with tracing (aka 'proofs') enabled.
@@ -180,22 +194,82 @@ impl EGraph {
         EGraph::create_internal(db, uf_table, true)
     }
 
+    /// Returns whether this e-graph is collecting provenance data for proofs.
+    pub fn proofs_enabled(&self) -> bool {
+        self.tracing
+    }
+
+    pub fn literal_to_value(&self, l: &Literal) -> Value {
+        match l {
+            Literal::Int(x) => self.base_values().get::<i64>(*x),
+            Literal::Float(x) => self.base_values().get::<BackendFloat>(x.into()),
+            Literal::String(x) => self
+                .base_values()
+                .get::<BackendString>(BackendString::new(x.clone())),
+            Literal::Bool(x) => self.base_values().get::<bool>(*x),
+            Literal::Unit => self.base_values().get::<()>(()),
+        }
+    }
+
+    pub fn literal_to_typed_constant(&self, l: &Literal) -> (Value, ColumnTy) {
+        match l {
+            Literal::Int(x) => self.base_value_typed_constant::<i64>(*x),
+            Literal::Float(x) => self.base_value_typed_constant::<BackendFloat>(x.into()),
+            Literal::String(x) => {
+                self.base_value_typed_constant::<BackendString>(BackendString::new(x.clone()))
+            }
+            Literal::Bool(x) => self.base_value_typed_constant::<bool>(*x),
+            Literal::Unit => self.base_value_typed_constant::<()>(()),
+        }
+    }
+
+    pub fn literal_to_entry(&self, l: &Literal) -> QueryEntry {
+        let (val, ty) = self.literal_to_typed_constant(l);
+        QueryEntry::Const { val, ty }
+    }
+
+    /// Render `v` as a [`Literal`], where possible.
+    ///
+    /// This method returns None when `v` is backed by a type not supported by the [`Literal`]
+    /// enum.
+    pub fn value_to_literal(&self, v: &Value, ty: BaseValueId) -> Option<Literal> {
+        let base_values = self.base_values();
+
+        Some(if let Some(b) = base_values.try_get_as::<bool>(*v, ty) {
+            Literal::Bool(b)
+        } else if let Some(i) = base_values.try_get_as::<i64>(*v, ty) {
+            Literal::Int(i)
+        } else if let Some(f) = base_values.try_get_as::<BackendFloat>(*v, ty) {
+            Literal::Float(f.into_inner())
+        } else if let Some(s) = base_values.try_get_as::<BackendString>(*v, ty) {
+            Literal::String(s.into_inner())
+        } else if base_values.try_get_as::<()>(*v, ty).is_some() {
+            Literal::Unit
+        } else {
+            return None;
+        })
+    }
+
     fn create_internal(mut db: Database, uf_table: TableId, tracing: bool) -> EGraph {
         let id_counter = db.add_counter();
-        let trace_counter = db.add_counter();
+        let reason_counter = db.add_counter_with_initial_val(1_000_000);
         let ts_counter = db.add_counter();
         // Start the timestamp counter at 1.
         db.inc_counter(ts_counter);
         let mut proof_specs = IdVec::default();
         let cong_spec = proof_specs.push(Arc::new(ProofReason::CongRow));
+        let refl_spec = proof_specs.push(Arc::new(ProofReason::Refl));
+        let refl_reason = Value::new(!0);
         let term_consistency_table =
             db.add_table(DisplacedTable::default(), iter::empty(), iter::empty());
+        let reason_consistency_table =
+            db.add_table(DisplacedTable::default(), iter::empty(), iter::empty());
 
-        Self {
+        let mut res = Self {
             db,
             uf_table,
             id_counter,
-            reason_counter: trace_counter,
+            reason_counter,
             timestamp_counter: ts_counter,
             rules: Default::default(),
             funcs: Default::default(),
@@ -203,12 +277,28 @@ impl EGraph {
             panic_funcs: Default::default(),
             proof_specs,
             cong_spec,
+            refl_reason,
             reason_tables: Default::default(),
             term_tables: Default::default(),
             term_consistency_table,
+            reason_consistency_table,
             report_level: Default::default(),
             tracing,
+        };
+        if tracing {
+            let refl_table = res.reason_table(&ProofReason::Refl);
+            let refl_reason = res.with_execution_state(|es| {
+                es.predict_col(
+                    refl_table,
+                    &[Value::new(refl_spec.rep())],
+                    iter::once(MergeVal::Counter(reason_counter)),
+                    ColumnId::new(1),
+                )
+            });
+            res.flush_updates();
+            res.refl_reason = refl_reason;
         }
+        res
     }
 
     fn next_ts(&self) -> Timestamp {
@@ -280,6 +370,17 @@ impl EGraph {
         }
     }
 
+    /// Create a [`QueryEntry`] for a base value.
+    pub fn base_value_typed_constant<T>(&self, x: T) -> (Value, ColumnTy)
+    where
+        T: BaseValue,
+    {
+        (
+            self.base_values().get(x),
+            ColumnTy::Base(self.base_values().get_ty::<T>()),
+        )
+    }
+
     pub fn register_external_func(
         &mut self,
         func: impl ExternalFunction + 'static,
@@ -316,20 +417,6 @@ impl EGraph {
         }
     }
 
-    fn record_term_consistency(
-        state: &mut ExecutionState,
-        table: TableId,
-        ts_counter: CounterId,
-        from: Value,
-        to: Value,
-    ) {
-        if from == to {
-            return;
-        }
-        let ts = Value::from_usize(state.read_counter(ts_counter));
-        state.stage_insert(table, &[from, to, ts]);
-    }
-
     fn canonicalize_term_id(&mut self, term_id: Value) -> Value {
         let table = self.db.get_table(self.term_consistency_table);
         table
@@ -338,40 +425,60 @@ impl EGraph {
             .unwrap_or(term_id)
     }
 
+    fn canonicalize_reason_id(&mut self, term_id: Value) -> Value {
+        let table = self.db.get_table(self.reason_consistency_table);
+        table
+            .get_row(&[term_id])
+            .map(|row| row.vals[1])
+            .unwrap_or(term_id)
+    }
+
+    fn consistency_merge_fn(
+        uf_table: TableId,
+        ts_counter: CounterId,
+        old_id: Value,
+        new_id: Value,
+        new: &[Value],
+        out: &mut Vec<Value>,
+        state: &mut ExecutionState,
+    ) -> bool {
+        if new_id == old_id {
+            return false;
+        }
+        let ts = Value::from_usize(state.read_counter(ts_counter));
+        state.stage_insert(uf_table, &[old_id, new_id, ts]);
+        if new_id < old_id {
+            out.extend(new);
+            true
+        } else {
+            false
+        }
+    }
+
     fn term_table(&mut self, table: TableId) -> TableId {
         let info = self.db.get_table_info(table);
         let spec = info.spec();
         match self.term_tables.entry(spec.n_keys) {
             Entry::Occupied(o) => *o.get(),
             Entry::Vacant(v) => {
-                let term_index = spec.n_keys + 1;
                 let term_consistency_table = self.term_consistency_table;
                 let ts_counter = self.timestamp_counter;
+                let term_id_col = spec.n_keys + 1;
                 let table = SortedWritesTable::new(
                     spec.n_keys + 1,     // added entry for the tableid
                     spec.n_keys + 1 + 2, // one value for the term id, one for the reason,
                     None,
                     vec![], // no rebuilding needed for term table
                     Box::new(move |state, old, new, out| {
-                        // We want to pick the minimum term value.
-                        let l_term_id = old[term_index];
-                        let r_term_id = new[term_index];
-                        // NB: we should only need this merge function when we are executing
-                        // rules in parallel. We could consider a simpler merge function if
-                        // parallelism is disabled.
-                        if r_term_id < l_term_id {
-                            EGraph::record_term_consistency(
-                                state,
-                                term_consistency_table,
-                                ts_counter,
-                                l_term_id,
-                                r_term_id,
-                            );
-                            out.extend(new);
-                            true
-                        } else {
-                            false
-                        }
+                        Self::consistency_merge_fn(
+                            term_consistency_table,
+                            ts_counter,
+                            old[term_id_col],
+                            new[term_id_col],
+                            new,
+                            out,
+                            state,
+                        )
                     }),
                 );
                 let table_id =
@@ -387,14 +494,28 @@ impl EGraph {
         match self.reason_tables.entry(arity) {
             Entry::Occupied(o) => *o.get(),
             Entry::Vacant(v) => {
+                let consistency = self.reason_consistency_table;
+                let ts_counter = self.timestamp_counter;
                 let table = SortedWritesTable::new(
                     arity,
                     arity + 1, // one value for the reason id
                     None,
                     vec![], // no rebuilding needed for reason tables
-                    Box::new(|_, _, _, _| false),
+                    Box::new(move |state, old, new, out| {
+                        Self::consistency_merge_fn(
+                            consistency,
+                            ts_counter,
+                            *old.last().unwrap(),
+                            *new.last().unwrap(),
+                            new,
+                            out,
+                            state,
+                        )
+                    }),
                 );
-                let table_id = self.db.add_table(table, iter::empty(), iter::empty());
+                let table_id = self
+                    .db
+                    .add_table(table, iter::empty(), iter::once(consistency));
                 *v.insert(table_id)
             }
         }
@@ -607,14 +728,10 @@ impl EGraph {
         if self.get_canon_in_uf(id1) != self.get_canon_in_uf(id2) {
             // These terms aren't equal. Reconstruct the relevant terms so as to
             // get a nicer error message on the way out.
-            let mut buf = Vec::<u8>::new();
             let term_id_1 = self.reconstruct_term(id1, ColumnTy::Id, &mut state);
             let term_id_2 = self.reconstruct_term(id2, ColumnTy::Id, &mut state);
-            store.termdag.print_term(term_id_1, &mut buf).unwrap();
-            let term1 = String::from_utf8(buf).unwrap();
-            let mut buf = Vec::<u8>::new();
-            store.termdag.print_term(term_id_2, &mut buf).unwrap();
-            let term2 = String::from_utf8(buf).unwrap();
+            let term1 = store.termdag.to_string_pretty_id(term_id_1);
+            let term2 = store.termdag.to_string_pretty_id(term_id_2);
             return Err(
                 ProofReconstructionError::EqualityExplanationOfUnequalTerms { term1, term2 }.into(),
             );
@@ -672,6 +789,29 @@ impl EGraph {
         drain_buf!(buf);
     }
 
+    /// A basic method for dumping the names and mappings for table information: useful for
+    /// debugging egglog internals.
+    pub fn dump_table_info(&self) {
+        info!("=== View Tables ===");
+        for (id, info) in self.funcs.iter() {
+            info!(
+                "View Table {name} / {id:?} / {table:?}",
+                name = info.name,
+                table = info.table
+            );
+        }
+
+        info!("=== Term Tables ===");
+        for (_, table_id) in &self.term_tables {
+            info!("Term Table {table_id:?}");
+        }
+
+        info!("=== Reason Tables ===");
+        for (_, table_id) in &self.reason_tables {
+            info!("Reason Table {table_id:?}");
+        }
+    }
+
     /// A basic method for dumping the state of the database to `log::info!`.
     ///
     /// For large tables, this is unlikely to give particularly useful output.
@@ -679,6 +819,11 @@ impl EGraph {
         info!("=== View Tables ===");
         for (id, info) in self.funcs.iter() {
             let table = self.db.get_table(info.table);
+            info!(
+                "View Table {name} / {id:?} / {table:?}",
+                name = info.name,
+                table = info.table
+            );
             self.scan_table(table, |row| {
                 info!(
                     "View Table {name} / {id:?} / {table:?}: {row:?}",
@@ -691,6 +836,7 @@ impl EGraph {
         info!("=== Term Tables ===");
         for (_, table_id) in &self.term_tables {
             let table = self.db.get_table(*table_id);
+            info!("Term Table {table_id:?}");
             self.scan_table(table, |row| {
                 let name = &self.funcs[FunctionId::new(row[0].rep())].name;
                 let row = &row[1..];
@@ -700,6 +846,7 @@ impl EGraph {
 
         info!("=== Reason Tables ===");
         for (_, table_id) in &self.reason_tables {
+            info!("Reason Table {table_id:?}");
             let table = self.db.get_table(*table_id);
             self.scan_table(table, |row| {
                 let spec = self.proof_specs[ReasonSpecId::new(row[0].rep())].as_ref();
@@ -707,6 +854,13 @@ impl EGraph {
                 info!("Reason Table {table_id:?}: {spec:?}, {row:?}")
             });
         }
+        info!("=== UF ===");
+        let uf_table = self.db.get_table(self.uf_table);
+        self.scan_table(uf_table, |row| match row {
+            [x, y, t] => info!("Displaced {x:?} => {y:?} @ {t:?}"),
+            [x, y, t, r] => info!("Displaced {x:?} => {y:?} @ {t:?}, reason {r:?}"),
+            _ => panic!("unexpected format for union-find"),
+        });
     }
 
     /// A helper for scanning the entries in a table.
@@ -731,6 +885,7 @@ impl EGraph {
             merge,
             name,
             can_subsume,
+            fiat_reason_only,
         } = config;
         assert!(
             !schema.is_empty(),
@@ -761,6 +916,26 @@ impl EGraph {
             to_rebuild,
             merge_fn,
         );
+        let fiat_reason: Option<Value> = fiat_reason_only.as_ref().and_then(|desc| {
+            self.tracing.then(|| {
+                let reason = Arc::new(ProofReason::Fiat {
+                    desc: desc.clone().into(),
+                });
+                let reason_table = self.reason_table(&reason);
+                let reason_spec_id = self.proof_specs.push(reason);
+                let reason_id = self.with_execution_state(|es| {
+                    es.predict_col(
+                        reason_table,
+                        &[Value::new(reason_spec_id.rep())],
+                        iter::once(MergeVal::Counter(self.reason_counter)),
+                        ColumnId::new(1),
+                    )
+                });
+                self.flush_updates();
+                reason_id
+            })
+        });
+
         let name: Arc<str> = name.into();
         let table_id = self.db.add_table_named(
             table,
@@ -777,6 +952,7 @@ impl EGraph {
             default_val: default,
             can_subsume,
             name,
+            fiat_reason,
         });
         debug_assert_eq!(res, next_func_id);
         let incremental_rebuild_rules = self.incremental_rebuild_rules(res, &schema);
@@ -1172,6 +1348,8 @@ struct FunctionInfo {
     default_val: DefaultVal,
     can_subsume: bool,
     name: Arc<str>,
+    #[allow(dead_code)]
+    fiat_reason: Option<Value>,
 }
 
 impl FunctionInfo {
@@ -1232,10 +1410,13 @@ impl MergeFn {
                 args.iter()
                     .for_each(|arg| arg.fill_deps(egraph, read_deps, write_deps));
             }
-            UnionId if !egraph.tracing => {
+            UnionId => {
                 write_deps.insert(egraph.uf_table);
+                if egraph.tracing {
+                    write_deps.insert(egraph.term_consistency_table);
+                }
             }
-            UnionId | AssertEq | Old | New | Const(..) => {}
+            AssertEq | Old | New | Const(..) => {}
         }
     }
 
@@ -1246,22 +1427,56 @@ impl MergeFn {
         egraph: &mut EGraph,
     ) -> Box<core_relations::MergeFn> {
         assert!(
-            !egraph.tracing || matches!(self, MergeFn::UnionId),
-            "proofs aren't supported for non-union merge functions"
+            !egraph.tracing || matches!(self, MergeFn::UnionId | MergeFn::AssertEq),
+            "proofs aren't supported for merge functions other than UnionId or AssertEq"
         );
 
         let resolved = self.resolve(function_name, egraph);
-
+        let refl_reason = egraph.refl_reason;
         Box::new(move |state, cur, new, out| {
             let timestamp = new[schema_math.ts_col()];
 
             let mut changed = false;
 
+            // This `terms_equal` handling is here to handle a particular edge case:
+            //
+            // When proofs are enabled we explicitly plumb through a reason for each `union`. This
+            // means that explicit unions within a table are load-bearing in a way that they aren't
+            // without proofs being turned on (they're always the same as lookup+set).
+            //
+            // As a result, unions generally don't happen "implicitly" as part of a merge function.
+            // Instead, all unions or sets are done explicitly with a reason pointing to the rule
+            // that did the union. There's one edge-case though:
+            //
+            // If two separate threads attempt to create the a term (say) `(f x)` concurrently,
+            // they will both create their own term ids (id1 and id2) and insert them to the term
+            // table and `f`. `f`'s merge function will blindly discard the higher id (id2),
+            // assuming that id2 was explicitly `union`ed with id1, but id1 hadn't actually be
+            // inserted yet! This gets even worse if we are inserting something like `(h (f x))`
+            // because now we will have a row in `h` that could reference `id2`, effectively
+            // incorrectly points to an empty e-class.
+            //
+            // This can only happen to duplicate / concurrent insertions of `(f x)`: two equal
+            // e-nodes that correspond to two different terms will still be written to two
+            // different rows and hence will not rely on implicit unions in this way. Because the
+            // only kinds of insertions that fall prey to this are identical terms, we add an
+            // explicit case for when `old` and `new` represent identical terms with different term
+            // ids. In that case we can list our reason for the terms being equal as `Refl`, and
+            // union these two ids in both the main union-find and the term-consistency table.
+            let terms_equal = schema_math.tracing
+                && cur[0..schema_math.ret_val_col()] == new[0..schema_math.ret_val_col()];
+
             let ret_val = {
-                let cur = cur[schema_math.ret_val_col()];
-                let new = new[schema_math.ret_val_col()];
-                let out = resolved.run(state, cur, new, timestamp);
-                changed |= cur != out;
+                let cur_id = cur[schema_math.ret_val_col()];
+                let new_id = new[schema_math.ret_val_col()];
+                let out = resolved.run(
+                    state,
+                    cur_id,
+                    new_id,
+                    timestamp,
+                    terms_equal.then_some(refl_reason),
+                );
+                changed |= cur_id != out;
                 out
             };
 
@@ -1309,6 +1524,7 @@ impl MergeFn {
             },
             MergeFn::UnionId => ResolvedMergeFn::UnionId {
                 uf_table: egraph.uf_table,
+                term_consistency: egraph.term_consistency_table,
                 tracing: egraph.tracing,
             },
             // NB: The primitive and function-based merge functions heap allocate a single callback
@@ -1362,6 +1578,7 @@ enum ResolvedMergeFn {
     },
     UnionId {
         uf_table: TableId,
+        term_consistency: TableId,
         tracing: bool,
     },
     Primitive {
@@ -1377,7 +1594,17 @@ enum ResolvedMergeFn {
 }
 
 impl ResolvedMergeFn {
-    fn run(&self, state: &mut ExecutionState, cur: Value, new: Value, ts: Value) -> Value {
+    fn run(
+        &self,
+        state: &mut ExecutionState,
+        cur: Value,
+        new: Value,
+        ts: Value,
+        // If `Some`, the corresponding terms for the two ids are equal, in which case this value
+        // is the reason id for a `Refl` reason that should be inserted to the union-find given
+        // table.
+        terms_equal: Option<Value>,
+    ) -> Value {
         match self {
             ResolvedMergeFn::Const(v) => *v,
             ResolvedMergeFn::Old => cur,
@@ -1389,7 +1616,11 @@ impl ResolvedMergeFn {
                 }
                 cur
             }
-            ResolvedMergeFn::UnionId { uf_table, tracing } => {
+            ResolvedMergeFn::UnionId {
+                uf_table,
+                term_consistency,
+                tracing,
+            } => {
                 if cur != new && !tracing {
                     // When proofs are enabled, these are the same term. They are already
                     // equal and we can just do nothing.
@@ -1397,7 +1628,17 @@ impl ResolvedMergeFn {
                     // We pick the minimum when unioning. This matches the original egglog
                     // behavior. THIS MUST MATCH THE UNION-FIND IMPLEMENTATION!
                     std::cmp::min(cur, new)
+                } else if *tracing && cur != new && terms_equal.is_some() {
+                    let Some(refl_reason) = terms_equal else {
+                        unreachable!()
+                    };
+                    state.stage_insert(*uf_table, &[cur, new, ts, refl_reason]);
+                    state.stage_insert(*term_consistency, &[cur, new, ts]);
+                    std::cmp::min(cur, new)
                 } else {
+                    // If proofs are enabled, but we see two non-equal ids targetting the same row,
+                    // we do nothing. We ensure there is a separate reason being populated in the
+                    // union-find table as part of a separate action.
                     cur
                 }
             }
@@ -1408,7 +1649,7 @@ impl ResolvedMergeFn {
             ResolvedMergeFn::Primitive { prim, args, panic } => {
                 let args = args
                     .iter()
-                    .map(|arg| arg.run(state, cur, new, ts))
+                    .map(|arg| arg.run(state, cur, new, ts, terms_equal))
                     .collect::<Vec<_>>();
 
                 match state.call_external_func(*prim, &args) {
@@ -1428,7 +1669,7 @@ impl ResolvedMergeFn {
 
                 let args = args
                     .iter()
-                    .map(|arg| arg.run(state, cur, new, ts))
+                    .map(|arg| arg.run(state, cur, new, ts, terms_equal))
                     .collect::<Vec<_>>();
 
                 func.lookup(state, &args).unwrap_or_else(|| {

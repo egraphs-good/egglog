@@ -1,3 +1,4 @@
+use crate::ast::expr::ResolvedExpr;
 use crate::{util::HashMap, *};
 
 #[derive(Clone, Debug, Default)]
