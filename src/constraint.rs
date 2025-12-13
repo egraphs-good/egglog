@@ -1,3 +1,4 @@
+use crate::ast::expr::ResolvedExpr;
 use crate::{
     core::{
         Atom, CoreAction, CoreRule, GenericCoreActions, GenericCoreRule, HeadOrEq, Query,
@@ -1120,7 +1121,7 @@ impl TypeConstraint for AllEqualTypeConstraint {
 /// A variable is grounded if it appears in a function call or is equal to a grounded variable.
 /// This pass happens after type resolution and lowering to core rules, but before canonicalization.
 pub(crate) fn grounded_check(
-    rule: &GenericCoreRule<HeadOrEq<ResolvedCall>, ResolvedCall, ResolvedVar>,
+    rule: &GenericCoreRule<HeadOrEq<ResolvedCall>, ResolvedCall, ResolvedVar, ResolvedVar>,
 ) -> Result<(), TypeError> {
     use crate::core::ResolvedAtomTerm;
     let body = &rule.body;

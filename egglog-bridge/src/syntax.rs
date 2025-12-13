@@ -12,11 +12,11 @@ use crate::core_relations::{
     WriteVal, make_external_func,
 };
 use crate::numeric_id::{DenseIdMap, IdVec, NumericId, define_id};
-use crate::{EGraph, NOT_SUBSUMED, ProofReason, QueryEntry, ReasonSpecId, Result, SchemaMath};
+use crate::{ColumnTy, EGraph, ProofReason, QueryEntry, ReasonSpecId, Result, SchemaMath};
 use smallvec::SmallVec;
 
 use crate::{
-    ColumnTy, FunctionId, RuleId,
+    FunctionId, RuleId,
     proof_spec::ProofBuilder,
     rule::{AtomId, Bindings, VariableId},
 };
@@ -41,7 +41,7 @@ pub enum SourceExpr {
     Var {
         id: VariableId,
         ty: ColumnTy,
-        name: String,
+        name: Arc<str>,
     },
     /// A call to an external (aka primitive) function.
     ExternalCall {
@@ -50,6 +50,7 @@ pub enum SourceExpr {
         var: VariableId,
         ty: ColumnTy,
         func: ExternalFunctionId,
+        name: Arc<str>,
         args: Vec<SyntaxId>,
     },
     /// A query of an egglog-level function (i.e. a table).
@@ -64,12 +65,19 @@ pub enum SourceExpr {
     },
 }
 
+#[derive(Debug, Clone)]
+pub(crate) struct SourceVar {
+    pub id: VariableId,
+    pub ty: ColumnTy,
+    pub name: Arc<str>,
+}
+
 /// A data-structure representing an egglog query. Essentially, multiple [`SourceExpr`]s, one per
 /// line, along with a backing store accounting for subterms indexed by [`SyntaxId`].
 #[derive(Debug, Clone, Default)]
 pub struct SourceSyntax {
     pub(crate) backing: IdVec<SyntaxId, SourceExpr>,
-    pub(crate) vars: Vec<(VariableId, ColumnTy)>,
+    pub(crate) vars: Vec<SourceVar>,
     pub(crate) roots: Vec<TopLevelLhsExpr>,
 }
 
@@ -81,8 +89,16 @@ impl SourceSyntax {
     pub fn add_expr(&mut self, expr: SourceExpr) -> SyntaxId {
         match &expr {
             SourceExpr::Const { .. } | SourceExpr::FunctionCall { .. } => {}
-            SourceExpr::Var { id, ty, .. } => self.vars.push((*id, *ty)),
-            SourceExpr::ExternalCall { var, ty, .. } => self.vars.push((*var, *ty)),
+            SourceExpr::Var { id, ty, name } => self.vars.push(SourceVar {
+                id: *id,
+                ty: *ty,
+                name: Arc::clone(name),
+            }),
+            SourceExpr::ExternalCall { var, ty, name, .. } => self.vars.push(SourceVar {
+                id: *var,
+                ty: *ty,
+                name: Arc::clone(name),
+            }),
         };
         self.backing.push(expr)
     }
@@ -108,6 +124,7 @@ impl SourceSyntax {
 #[derive(Debug)]
 pub(crate) struct RuleData {
     pub(crate) rule_id: RuleId,
+    pub(crate) rule_name: Box<str>,
     pub(crate) syntax: SourceSyntax,
 }
 
@@ -144,6 +161,7 @@ impl ProofBuilder {
 
         let reason_spec = Arc::new(ProofReason::Rule(RuleData {
             rule_id: self.rule_id,
+            rule_name: Box::<str>::from(&*self.rule_description),
             syntax: syntax.clone(),
         }));
         let reason_table = egraph.reason_table(&reason_spec);
@@ -173,8 +191,8 @@ impl ProofBuilder {
             // the base substitution of variables into a reason table.
             let mut row = SmallVec::<[core_relations::QueryEntry; 8]>::new();
             row.push(Value::new(reason_spec_id.rep()).into());
-            for (var, _) in &syntax.vars {
-                row.push(bndgs.mapping[*var]);
+            for SourceVar { id, .. } in &syntax.vars {
+                row.push(bndgs.mapping[*id]);
             }
             Ok(rb.lookup_or_insert(
                 reason_table,
@@ -195,14 +213,13 @@ impl ProofBuilder {
         };
         let cong_args = CongArgs {
             func_table: func,
-            func_underlying,
-            schema_math,
             reason_table: egraph.reason_table(&ProofReason::CongRow),
             term_table: egraph.term_table(func_underlying),
             reason_counter: egraph.reason_counter,
             term_counter: egraph.id_counter,
-            ts_counter: egraph.timestamp_counter,
             reason_spec_id: egraph.cong_spec,
+            ts_counter: egraph.timestamp_counter,
+            uf_table: egraph.uf_table,
         };
         let build_term = egraph.register_external_func(make_external_func(move |es, vals| {
             cong_term(&cong_args, es, vals)
@@ -285,10 +302,6 @@ impl TermReconstructionState<'_> {
 struct CongArgs {
     /// The function that we are applying congruence to.
     func_table: FunctionId,
-    /// The undcerlying `core_relations` table that this function corresponds to.
-    func_underlying: TableId,
-    /// Schema-related offset information needed for writing to the table.
-    schema_math: SchemaMath,
     /// The table that will hold the reason justifying the new term, if we need to insert one.
     reason_table: TableId,
     /// The table that will hold the new term, if we need to insert one.
@@ -297,10 +310,12 @@ struct CongArgs {
     reason_counter: CounterId,
     /// The counter that will be incremented when we insert a new term.
     term_counter: CounterId,
-    /// The counter that will be used to read the current timestamp for the new row.
-    ts_counter: CounterId,
     /// The specification (or schema) for the reason we are writing (congruence, in this case).
     reason_spec_id: ReasonSpecId,
+    /// The counter that will be used to read the current timestamp for the new row.
+    ts_counter: CounterId,
+    /// The union-find, used to record equality between existing e-class ids and new terms.
+    uf_table: TableId,
 }
 
 fn cong_term(args: &CongArgs, es: &mut ExecutionState, vals: &[Value]) -> Option<Value> {
@@ -326,14 +341,9 @@ fn cong_term(args: &CongArgs, es: &mut ExecutionState, vals: &[Value]) -> Option
         ColumnId::from_usize(term_row.len()),
     );
 
-    // We should be able to do a raw insert at this point. All conflicting inserts will have the
-    // same term value, and this function only gets called when a lookup fails.
-
+    // We just created a new term that wasn't previously inserted into the e-graph. We want to
+    // ensure that this is equal to the existing e-class that this term is in (by congruence).
     let ts = Value::from_usize(es.read_counter(args.ts_counter));
-    term_row.resize(args.schema_math.table_columns(), NOT_SUBSUMED);
-    term_row[args.schema_math.ret_val_col()] = term_val;
-    term_row[args.schema_math.proof_id_col()] = term_val;
-    term_row[args.schema_math.ts_col()] = ts;
-    es.stage_insert(args.func_underlying, &term_row);
+    es.stage_insert(args.uf_table, &[old_term, term_val, ts, reason]);
     Some(term_val)
 }

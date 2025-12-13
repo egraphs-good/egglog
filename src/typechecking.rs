@@ -131,6 +131,7 @@ impl EGraph {
 
         let prim = Arc::new(x.clone());
         let ext = self.backend.register_external_func(Wrapper(x));
+
         self.type_info
             .primitives
             .entry(prim.name().to_owned())

@@ -1,0 +1,100 @@
+use egglog::prelude::*;
+
+#[test]
+fn test_get_matches_basic() {
+    let mut egraph = EGraph::with_proofs();
+    egraph
+        .parse_and_run_program(
+            None,
+            "
+            (datatype Math
+                (Num i64)
+                (Add Math Math))
+
+            (Add (Num 1) (Num 2))
+            (Add (Num 3) (Num 4))
+            (Add (Num 5) (Num 6))
+            ",
+        )
+        .unwrap();
+
+    let matches = egraph.get_matches(facts![(Add x y)]).unwrap();
+
+    assert_eq!(matches.len(), 3);
+    for m in &matches {
+        assert_eq!(m.len(), 2);
+        assert!(m.get("x").is_some());
+        assert!(m.get("y").is_some());
+    }
+}
+
+#[test]
+fn test_get_matches_with_equality() {
+    let mut egraph = EGraph::with_proofs();
+    egraph
+        .parse_and_run_program(
+            None,
+            "
+            (datatype Math
+                (Num i64)
+                (Add Math Math))
+
+            (let a (Num 1))
+            (let b (Num 2))
+            (let sum (Add a b))
+            (union a (Num 10))
+            ",
+        )
+        .unwrap();
+
+    let matches = egraph.get_matches(facts![(Add x y) (= x (Num 1))]).unwrap();
+
+    assert!(!matches.is_empty());
+}
+
+#[test]
+fn test_get_matches_lhs_equality() {
+    let mut egraph = EGraph::with_proofs();
+    egraph
+        .parse_and_run_program(
+            None,
+            "
+            (datatype Math
+                (Num i64)
+                (Add Math Math))
+
+            (let lhs (Add (Num 1) (Num 2)))
+            ",
+        )
+        .unwrap();
+
+    let matches = egraph.get_matches(facts![(= lhs (Add x y))]).unwrap();
+
+    assert_eq!(matches.len(), 1);
+    let bindings = &matches[0];
+    assert!(bindings.get("lhs").is_some());
+    assert!(bindings.get("x").is_some());
+    assert!(bindings.get("y").is_some());
+    assert_eq!(bindings.len(), 3);
+}
+
+#[test]
+fn test_get_matches_empty_result() {
+    let mut egraph = EGraph::with_proofs();
+    egraph
+        .parse_and_run_program(
+            None,
+            "
+            (datatype Math
+                (Num i64)
+                (Add Math Math))
+
+            (Num 1)
+            (Num 2)
+            ",
+        )
+        .unwrap();
+
+    let matches = egraph.get_matches(facts![(Add x y)]).unwrap();
+    assert_eq!(matches.len(), 0);
+}

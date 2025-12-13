@@ -135,6 +135,7 @@ pub trait Rebuilder: Send + Sync {
 }
 
 /// A row in a table.
+#[derive(Debug)]
 pub struct Row {
     /// The id associated with the row.
     pub id: RowId,
