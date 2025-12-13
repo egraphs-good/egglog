@@ -30,7 +30,7 @@
 //! store.print_term_proof(proof_id, &mut output).unwrap();
 //! ```
 
-use crate::GenericAction;
+use crate::ast::{Action, ResolvedAction, ResolvedCommand};
 use crate::{
     ArcSort, ProofStore, TypeInfo,
     ast::{Command, GenericExpr, GenericFact, GenericRule, collect_query_vars},
@@ -40,6 +40,7 @@ use crate::{
     util::HashSet,
     util::SymbolGen,
 };
+use crate::{GenericAction, ResolvedExpr};
 use egglog_ast::span::Span;
 use egglog_bridge::{
     proof_format::{EqProof, EqProofId, Premise, RuleVarBinding, TermProof, TermProofId},
@@ -99,9 +100,7 @@ impl std::error::Error for ProofCheckError {}
 /// A proof checker that validates egglog proofs
 pub struct ProofChecker<'a> {
     proof_store: &'a mut ProofStore,
-    program: Vec<Command>,
-    /// Mapping from global name to TermId
-    global_terms: HashMap<String, TermId>,
+    program: Vec<ResolvedCommand>,
     /// Reverse mapping from TermId to global name
     term_to_global: HashMap<TermId, String>,
     /// Set of equalities established by global union actions
@@ -114,13 +113,12 @@ impl<'a> ProofChecker<'a> {
     /// Create a new proof checker
     pub fn new(
         proof_store: &'a mut ProofStore,
-        program: Vec<Command>,
+        program: Vec<ResolvedCommand>,
         type_info: &'a TypeInfo,
     ) -> Self {
         let mut checker = ProofChecker {
             proof_store,
             program,
-            global_terms: HashMap::default(),
             term_to_global: HashMap::default(),
             global_unions: HashSet::default(),
             type_info,
@@ -138,14 +136,7 @@ impl<'a> ProofChecker<'a> {
 
         for cmd in &program_cmds {
             match cmd {
-                Command::Action(crate::ast::Action::Let(_, name, expr)) => {
-                    // Evaluate the expression and bind it
-                    if let Ok(term_id) = self.evaluate_expr(expr, &HashMap::default()) {
-                        self.global_terms.insert(name.clone(), term_id);
-                        self.term_to_global.insert(term_id, name.clone());
-                    }
-                }
-                Command::Action(crate::ast::Action::Union(_, lhs, rhs)) => {
+                ResolvedCommand::Action(ResolvedAction::Union(_, lhs, rhs)) => {
                     // Track global union actions
                     if let (Ok(lhs_term), Ok(rhs_term)) = (
                         self.evaluate_expr(lhs, &HashMap::default()),
@@ -154,6 +145,9 @@ impl<'a> ProofChecker<'a> {
                         // Store both directions of the equality
                         self.global_unions.insert((lhs_term, rhs_term));
                         self.global_unions.insert((rhs_term, lhs_term));
+                        // Store reflexive equalities as well
+                        self.global_unions.insert((lhs_term, lhs_term));
+                        self.global_unions.insert((rhs_term, rhs_term));
                     }
                 }
                 _ => {}
@@ -167,7 +161,7 @@ impl<'a> ProofChecker<'a> {
     /// This is used by queries, actions, and global evaluation  
     fn evaluate_expr(
         &mut self,
-        expr: &GenericExpr<String, String>,
+        expr: &ResolvedExpr,
         env: &HashMap<String, TermId>,
     ) -> Result<TermId, ProofCheckError> {
         match expr {
@@ -179,17 +173,13 @@ impl<'a> ProofChecker<'a> {
             }),
             GenericExpr::Lit(_, lit) => Ok(self.proof_store.make_lit(lit.clone())),
             GenericExpr::Call(_, func, args) => {
-                // Check if it's a global reference
-                if args.is_empty() && self.global_terms.contains_key(func) {
-                    return Ok(self.global_terms[func]);
-                }
-
                 let arg_terms: Result<Vec<_>, _> = args
                     .iter()
                     .map(|arg| self.evaluate_expr(arg, env))
                     .collect();
                 let arg_terms = arg_terms?;
 
+                // TODO finish migrating to ResolvedCommand
                 // Create the app term
                 let app_term = self.proof_store.make_app(func.clone(), arg_terms.clone());
 

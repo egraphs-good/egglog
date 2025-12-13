@@ -88,6 +88,7 @@ use util::*;
 use crate::ast::desugar::desugar_command;
 use crate::ast::{CorrespondingVar, MappedExpr, MappedFact};
 use crate::core::{GenericActionsExt, ResolvedRuleExt};
+use crate::proof_checker::ProofCheckError;
 
 pub const GLOBAL_NAME_PREFIX: &str = "$";
 
@@ -2258,7 +2259,7 @@ pub enum Error {
     #[error("Incorrect format in file '{0}'.")]
     InputFileFormatError(String),
     #[error("Proof error: {0}")]
-    ProofError(String),
+    ProofError(ProofCheckError),
     #[error("{1}\nProofs are not supported for this program: {0}")]
     ProofsNotSupported(String, Span),
 }
