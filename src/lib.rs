@@ -562,7 +562,7 @@ impl EGraph {
             },
             name: decl.name.to_string(),
             can_subsume,
-            fiat_reason_only: None,
+            fiat_reason_only: decl.let_binding.then(|| format!("global({})", decl.name)),
         });
 
         let function = Function {
