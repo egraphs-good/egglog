@@ -30,10 +30,10 @@
 //! store.print_term_proof(proof_id, &mut output).unwrap();
 //! ```
 
-use crate::ast::{Action, ResolvedAction, ResolvedCommand};
+use crate::ast::{ResolvedAction, ResolvedCommand};
 use crate::{
-    ArcSort, ProofStore, TypeInfo,
-    ast::{Command, ResolvedExpr, ResolvedFact, ResolvedRule, collect_query_vars},
+    ProofStore, TypeInfo,
+    ast::{ResolvedExpr, ResolvedFact, ResolvedRule},
     util::HashMap,
     util::HashSet,
 };
