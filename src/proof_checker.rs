@@ -19,7 +19,7 @@
 //! ).unwrap();
 //!
 //! // Get the value for x
-//! let x_expr = egglog::ast::GenericExpr::Var(span!(), "x".to_string());
+//! let x_expr = egglog::ast::ResolvedExpr::Var(span!(), "x".to_string());
 //! let (_, x_val) = egraph.eval_expr(&x_expr).unwrap();
 //!
 //! // Get the proof store and explain why x exists
@@ -33,14 +33,14 @@
 use crate::ast::{Action, ResolvedAction, ResolvedCommand};
 use crate::{
     ArcSort, ProofStore, TypeInfo,
-    ast::{Command, GenericExpr, GenericFact, GenericRule, collect_query_vars},
+    ast::{Command, ResolvedExpr, ResolvedFact, ResolvedRule, collect_query_vars},
     proof_type_inference::TypeInferenceContext,
     typechecking::PrimitiveWithId,
     util::HashMap,
     util::HashSet,
     util::SymbolGen,
 };
-use crate::{GenericAction, ResolvedExpr};
+use crate::{ResolvedCall, SpecializedPrimitive};
 use egglog_ast::span::Span;
 use egglog_bridge::{
     proof_format::{EqProof, EqProofId, Premise, RuleVarBinding, TermProof, TermProofId},
@@ -100,7 +100,7 @@ impl std::error::Error for ProofCheckError {}
 /// A proof checker that validates egglog proofs
 pub struct ProofChecker<'a> {
     proof_store: &'a mut ProofStore,
-    program: Vec<ResolvedCommand>,
+    program: &'a Vec<ResolvedCommand>,
     /// Reverse mapping from TermId to global name
     term_to_global: HashMap<TermId, String>,
     /// Set of equalities established by global union actions
@@ -113,7 +113,7 @@ impl<'a> ProofChecker<'a> {
     /// Create a new proof checker
     pub fn new(
         proof_store: &'a mut ProofStore,
-        program: Vec<ResolvedCommand>,
+        program: &'a Vec<ResolvedCommand>,
         type_info: &'a TypeInfo,
     ) -> Self {
         let mut checker = ProofChecker {
@@ -139,8 +139,8 @@ impl<'a> ProofChecker<'a> {
                 ResolvedCommand::Action(ResolvedAction::Union(_, lhs, rhs)) => {
                     // Track global union actions
                     if let (Ok(lhs_term), Ok(rhs_term)) = (
-                        self.evaluate_expr(lhs, &HashMap::default()),
-                        self.evaluate_expr(rhs, &HashMap::default()),
+                        self.evaluate_expr(lhs, &HashMap::default(), &mut HashSet::default()),
+                        self.evaluate_expr(rhs, &HashMap::default(), &mut HashSet::default()),
                     ) {
                         // Store both directions of the equality
                         self.global_unions.insert((lhs_term, rhs_term));
@@ -163,188 +163,58 @@ impl<'a> ProofChecker<'a> {
         &mut self,
         expr: &ResolvedExpr,
         env: &HashMap<String, TermId>,
+        visited: &mut HashSet<TermId>,
     ) -> Result<TermId, ProofCheckError> {
         match expr {
-            GenericExpr::Var(_, name) => env.get(name).cloned().ok_or_else(|| {
-                ProofCheckError::SubstitutionError(format!(
-                    "Variable or global '{}' not found in environment",
-                    name
-                ))
-            }),
-            GenericExpr::Lit(_, lit) => Ok(self.proof_store.make_lit(lit.clone())),
-            GenericExpr::Call(_, func, args) => {
-                let arg_terms: Result<Vec<_>, _> = args
-                    .iter()
-                    .map(|arg| self.evaluate_expr(arg, env))
-                    .collect();
-                let arg_terms = arg_terms?;
-
-                // TODO finish migrating to ResolvedCommand
-                // Create the app term
-                let app_term = self.proof_store.make_app(func.clone(), arg_terms.clone());
-
-                // Check if this is a primitive that we can evaluate
-                if let Some(prims) = self.type_info.get_prims(func) {
-                    if let Some(result_term) =
-                        self.evaluate_primitive(func, &arg_terms, app_term, prims)?
-                    {
-                        return Ok(result_term);
-                    }
-                }
-
-                // Return the app term if not a computable primitive
-                Ok(app_term)
-            }
-        }
-    }
-
-    /// Evaluate an expression and collect all subexpression terms created
-    /// Returns the main term and a vector of all intermediate terms (including the main term)
-    fn evaluate_expr_with_subterms(
-        &mut self,
-        expr: &GenericExpr<String, String>,
-        env: &HashMap<String, TermId>,
-    ) -> Result<(TermId, Vec<TermId>), ProofCheckError> {
-        let mut all_terms = Vec::new();
-
-        match expr {
-            GenericExpr::Var(_, name) => {
-                let term = env.get(name).cloned().ok_or_else(|| {
+            ResolvedExpr::Var(_, name) => {
+                let res = env.get(name.name()).cloned().ok_or_else(|| {
                     ProofCheckError::SubstitutionError(format!(
                         "Variable or global '{}' not found in environment",
                         name
                     ))
                 })?;
-                // Variables don't create new terms, just reference existing ones
-                Ok((term, vec![]))
-            }
-            GenericExpr::Lit(_, lit) => {
-                let term = self.proof_store.make_lit(lit.clone());
-                all_terms.push(term);
-                Ok((term, all_terms))
-            }
-            GenericExpr::Call(_, func, args) => {
-                // Check if it's a global reference
-                if args.is_empty() && self.global_terms.contains_key(func) {
-                    let term = self.global_terms[func];
-                    // Global references don't create new terms
-                    return Ok((term, vec![]));
-                }
 
-                // Evaluate all arguments and collect their subterms
-                let mut arg_term_ids = Vec::new();
+                visited.insert(res);
+                Ok(res)
+            }
+            ResolvedExpr::Lit(_, lit) => Ok(self.proof_store.make_lit(lit.clone())),
+            ResolvedExpr::Call(_, func, args) => {
+                let mut arg_terms = vec![];
                 for arg in args {
-                    let (term, mut subterms) = self.evaluate_expr_with_subterms(arg, env)?;
-                    arg_term_ids.push(term);
-                    all_terms.append(&mut subterms);
+                    let arg_term = self.evaluate_expr(arg, env, visited)?;
+                    arg_terms.push(arg_term);
                 }
 
-                // Create the app term
-                let app_term = self
-                    .proof_store
-                    .make_app(func.clone(), arg_term_ids.clone());
-                all_terms.push(app_term);
-
-                // Check if this is a primitive that we can evaluate
-                if let Some(prims) = self.type_info.get_prims(func) {
-                    if let Some(result_term) =
-                        self.evaluate_primitive(func, &arg_term_ids, app_term, prims)?
-                    {
-                        // For primitives, we return the evaluated result
-                        // The app_term is already in all_terms
-                        if result_term != app_term {
-                            all_terms.push(result_term);
-                        }
-                        return Ok((result_term, all_terms));
+                match func {
+                    ResolvedCall::Func(func_type) => Ok(self
+                        .proof_store
+                        .make_app(func_type.name.clone(), arg_terms.clone())),
+                    ResolvedCall::Primitive(specialized_primitive) => {
+                        self.evaluate_primitive(specialized_primitive, &arg_terms)
                     }
                 }
-
-                // Return the app term and all subterms if not a computable primitive
-                Ok((app_term, all_terms))
             }
         }
     }
 
-    /// Returns Some(term) if this is a primitive and it was successfully evaluated,
-    /// or None if no primitives match the given function name and argument types.
-    /// Errors if a primitive matches but fails to evaluate (for safety).
     fn evaluate_primitive(
         &mut self,
-        func: &str,
+        prim: &SpecializedPrimitive,
         arg_terms: &[TermId],
-        app_term: TermId,
-        prims: &[PrimitiveWithId],
-    ) -> Result<Option<TermId>, ProofCheckError> {
+    ) -> Result<TermId, ProofCheckError> {
         // Get the termdag for evaluation
         let termdag = self.proof_store.termdag();
 
-        // Infer the types of the argument terms
-        let mut type_ctx = TypeInferenceContext::new(termdag, self.type_info, &self.program);
-
-        let mut arg_types = Vec::new();
-        for &arg_term in arg_terms {
-            let arg_type = type_ctx.infer_type(arg_term).ok_or_else(|| {
-                ProofCheckError::TypeMismatch(format!(
-                    "Failed to infer type for argument term {:?}",
-                    termdag.get(arg_term)
-                ))
-            })?;
-            arg_types.push(arg_type);
-        }
-
-        // Find primitives that accept these argument types
-        let matching_prims: Vec<_> = prims
-            .iter()
-            .filter(|prim| prim.accept(&arg_types, self.type_info))
-            .collect();
-
-        // Ensure exactly one primitive matches
-        if matching_prims.is_empty() {
-            // No primitives match - this might not be a primitive at all
-            return Ok(None);
-        }
-
-        if matching_prims.len() > 1 {
-            return Err(ProofCheckError::TypeMismatch(format!(
-                "Ambiguous primitive call '{}' with argument types: {:?}. {} primitives match.",
-                func,
-                arg_types.iter().map(|t| t.name()).collect::<Vec<_>>(),
-                matching_prims.len()
-            )));
-        }
-
-        let prim = matching_prims[0];
-
-        // If the primitive has a validator, try to evaluate it
-        if let Some(validator) = &prim.validator {
-            // The validator evaluates the primitive if all arguments are constants
-            if let Some(computed_lit) = validator(termdag, app_term) {
-                // The primitive computed to a literal value
-                return Ok(Some(self.proof_store.make_lit(computed_lit)));
-            } else {
-                // Validator returned None - evaluation failed
-                // This happens if arguments are not constants or if evaluation logic fails
-                // For proof checking, we need to ensure primitives always evaluate successfully
-                return Err(ProofCheckError::InvalidProof(format!(
-                    "Primitive '{}' failed to evaluate with given arguments",
-                    func
-                )));
-            }
-        }
-
-        // No validator available - this is an error for proof checking
-        // We need to be safe: primitives without validators cannot be trusted in proofs
-        Err(ProofCheckError::InvalidProof(format!(
-            "Primitive '{}' has no validator and cannot be verified in proofs",
-            func
-        )))
+        // Get the validator for this primitive
+        // TODO find the validator in type_info
+        todo!("");
     }
 
     /// Infer the type of a term from the termdag.
     /// Get all propositions that a rule can produce given a substitution and premises
     fn rule_propositions(
         &mut self,
-        rule: &GenericRule<String, String>,
+        rule: &ResolvedRule,
         subst: &[RuleVarBinding],
     ) -> Result<HashSet<Proposition>, ProofCheckError> {
         let mut result = HashSet::default();
@@ -373,27 +243,7 @@ impl<'a> ProofChecker<'a> {
             return true;
         }
 
-        // Check if we have this exact term registered as a global value
-        // This ensures we're not accepting arbitrary terms, only ones we computed
-        for (_name, &global_term) in &self.global_terms {
-            if global_term == term {
-                return true;
-            }
-        }
-
-        // Check if it's a global variable defined via (let x expr)
-        if let Term::App(name, args) = termdag.get(term) {
-            // Global variables are 0-ary functions
-            if args.is_empty() {
-                if let Some(&_global_value) = self.global_terms.get(name) {
-                    // For a global reference to be valid, the term should match
-                    // the reference itself (not its value)
-                    return self.term_to_global.contains_key(&term);
-                }
-            }
-        }
-
-        false
+        self.global_unions.contains(&(term, term))
     }
 
     /// Check if a function is a primitive operation
@@ -746,9 +596,6 @@ impl<'a> ProofChecker<'a> {
         // Find the rule in the program
         let rule = self.find_rule(rule_name)?.clone();
 
-        // Type check substitution variables
-        self.typecheck_substitution(&rule, subst)?;
-
         // Rules with empty bodies (no query) are axioms that require no premises to fire
         // They can produce terms/equalities unconditionally
         if rule.body.is_empty() {
@@ -780,9 +627,9 @@ impl<'a> ProofChecker<'a> {
 
     /// Collect all variable names from a fact
     /// Find a rule by name in the program
-    fn find_rule(&self, rule_name: &str) -> Result<&GenericRule<String, String>, ProofCheckError> {
-        for cmd in &self.program {
-            if let Command::Rule { rule } = cmd {
+    fn find_rule(&self, rule_name: &str) -> Result<&ResolvedRule, ProofCheckError> {
+        for cmd in self.program {
+            if let ResolvedCommand::Rule { rule } = cmd {
                 if rule.name == rule_name {
                     return Ok(rule);
                 }
@@ -791,96 +638,30 @@ impl<'a> ProofChecker<'a> {
         Err(ProofCheckError::RuleNotFound(rule_name.to_string()))
     }
 
-    /// Type check the substitution to ensure variables match expected types.
-    /// An external proof checker would have trouble with this step, so we should consider adding type annotations
-    /// to the egglog
-    fn typecheck_substitution(
-        &mut self,
-        rule: &GenericRule<String, String>,
-        subst: &[RuleVarBinding],
-    ) -> Result<(), ProofCheckError> {
-        // Create a temporary SymbolGen for type checking
-        let mut symbol_gen = SymbolGen::new("proof_check_".into());
-
-        // Type check the rule's body to get expected variable types
-        let resolved_facts = self
-            .type_info
-            .typecheck_facts(&mut symbol_gen, &rule.body)
-            .map_err(|e| {
-                ProofCheckError::TypeMismatch(format!("Failed to typecheck rule body: {}", e))
-            })?;
-
-        // Collect expected variable types from the resolved facts
-        let expected_vars = collect_query_vars(&resolved_facts);
-        let expected_types: HashMap<std::sync::Arc<str>, ArcSort> = expected_vars
-            .into_iter()
-            .map(|(var, sort)| (var.name().to_string().into(), sort))
-            .collect();
-
-        // Check each substitution binding
-        for binding in subst {
-            // Skip internal variables (starting with '$')
-            if binding.name.starts_with('$') {
-                continue;
-            }
-
-            // Check if this variable exists in the rule
-            let expected_sort = expected_types.get(&binding.name[..]).ok_or_else(|| {
-                ProofCheckError::InvalidProof(format!(
-                    "Substitution contains unexpected variable '{}' not found in rule body",
-                    binding.name
-                ))
-            })?;
-
-            // Infer the type of the substituted term
-            let termdag = self.proof_store.termdag();
-            let mut type_context =
-                TypeInferenceContext::new(termdag, self.type_info, &self.program);
-            let inferred_sort = type_context.infer_type(binding.term).ok_or_else(|| {
-                ProofCheckError::TypeMismatch(format!(
-                    "Failed to infer type for substituted term in variable '{}'",
-                    binding.name
-                ))
-            })?;
-
-            // Check if the types match
-            if inferred_sort.name() != expected_sort.name() {
-                return Err(ProofCheckError::TypeMismatch(format!(
-                    "Type mismatch for variable '{}': expected {}, got {}",
-                    binding.name,
-                    expected_sort.name(),
-                    inferred_sort.name()
-                )));
-            }
-        }
-
-        Ok(())
-    }
-
     /// Construct a term from an expression with variable substitution
     fn construct_term_from_expr(
         &mut self,
-        expr: &GenericExpr<String, String>,
+        expr: &ResolvedExpr,
         var_map: &HashMap<String, TermId>,
     ) -> Result<TermId, ProofCheckError> {
         // Use the unified evaluation function
-        self.evaluate_expr(expr, var_map)
+        self.evaluate_expr(expr, var_map, &mut HashSet::default())
     }
 
     /// Shared method to get propositions from expressions or facts
     /// This handles queries, globals, and actions uniformly including primitives
     fn get_propositions_from_fact(
         &mut self,
-        fact: &GenericFact<String, String>,
+        fact: &ResolvedFact,
         var_map: &HashMap<String, TermId>,
     ) -> Result<Proposition, ProofCheckError> {
         match fact {
-            GenericFact::Eq(_, lhs, rhs) => {
+            ResolvedFact::Eq(_, lhs, rhs) => {
                 let lhs_term = self.construct_term_from_expr(lhs, var_map)?;
                 let rhs_term = self.construct_term_from_expr(rhs, var_map)?;
                 Ok(Proposition::TermsEq(lhs_term, rhs_term))
             }
-            GenericFact::Fact(expr) => {
+            ResolvedFact::Fact(expr) => {
                 let term = self.construct_term_from_expr(expr, var_map)?;
                 Ok(Proposition::TermOk(term))
             }
@@ -890,64 +671,59 @@ impl<'a> ProofChecker<'a> {
     /// Get propositions from an action (for rule heads)
     fn get_propositions_from_action(
         &mut self,
-        action: &GenericAction<String, String>,
+        action: &ResolvedAction,
         var_map: &HashMap<String, TermId>,
     ) -> Result<HashSet<Proposition>, ProofCheckError> {
         let mut propositions = HashSet::default();
 
         match action {
-            GenericAction::Let(_, name, expr) => {
+            ResolvedAction::Let(_, _name, expr) => {
                 // Let creates a term
-                let _ = name; // Suppress unused warning
-                let (_term, subterms) = self.evaluate_expr_with_subterms(expr, var_map)?;
+                let mut subterms = HashSet::default();
+                self.evaluate_expr(expr, var_map, &mut subterms)?;
                 // Add all subexpression terms
                 for term in subterms {
                     propositions.insert(Proposition::TermOk(term));
                 }
             }
-            GenericAction::Set(_, lhs, args, rhs) => {
+            ResolvedAction::Set(_, lhs, args, rhs) => {
                 // Set creates an equality (f(args) = rhs)
-                let app_expr = GenericExpr::Call(Span::Panic, lhs.clone(), args.clone());
-                let (lhs_term, lhs_subterms) =
-                    self.evaluate_expr_with_subterms(&app_expr, var_map)?;
-                let (rhs_term, rhs_subterms) = self.evaluate_expr_with_subterms(rhs, var_map)?;
+                let app_expr = ResolvedExpr::Call(Span::Panic, lhs.clone(), args.clone());
+                let mut subterms = HashSet::default();
+                let lhs_term = self.evaluate_expr(&app_expr, var_map, &mut subterms)?;
+                let rhs_term = self.evaluate_expr(rhs, var_map, &mut subterms)?;
 
                 // Add all subexpression terms
-                for term in lhs_subterms {
-                    propositions.insert(Proposition::TermOk(term));
-                }
-                for term in rhs_subterms {
+                for term in subterms {
                     propositions.insert(Proposition::TermOk(term));
                 }
 
                 // Add the equality proposition
                 propositions.insert(Proposition::TermsEq(lhs_term, rhs_term));
             }
-            GenericAction::Union(_, lhs, rhs) => {
+            ResolvedAction::Union(_, lhs, rhs) => {
                 // Union creates an equality
-                let (lhs_term, lhs_subterms) = self.evaluate_expr_with_subterms(lhs, var_map)?;
-                let (rhs_term, rhs_subterms) = self.evaluate_expr_with_subterms(rhs, var_map)?;
+                let mut subterms = HashSet::default();
+                let lhs_term = self.evaluate_expr(lhs, var_map, &mut subterms)?;
+                let rhs_term = self.evaluate_expr(rhs, var_map, &mut subterms)?;
 
                 // Add all subexpression terms
-                for term in lhs_subterms {
-                    propositions.insert(Proposition::TermOk(term));
-                }
-                for term in rhs_subterms {
+                for term in subterms {
                     propositions.insert(Proposition::TermOk(term));
                 }
 
                 // Add the equality proposition
                 propositions.insert(Proposition::TermsEq(lhs_term, rhs_term));
             }
-            GenericAction::Change(_, _, _, _) => {
+            ResolvedAction::Change(_, _, _, _) => {
                 // Change modifies the egraph state but doesn't produce new propositions
             }
-            GenericAction::Panic(_, _) => {
+            ResolvedAction::Panic(_, _) => {
                 // Panic actions abort execution - they don't produce propositions
             }
-            GenericAction::Expr(_, expr) => {
-                // Expr actions evaluate expressions
-                let (_term, subterms) = self.evaluate_expr_with_subterms(expr, var_map)?;
+            ResolvedAction::Expr(_, expr) => {
+                let mut subterms = HashSet::default();
+                self.evaluate_expr(expr, var_map, &mut subterms)?;
                 // Add all subexpression terms
                 for term in subterms {
                     propositions.insert(Proposition::TermOk(term));
@@ -961,7 +737,7 @@ impl<'a> ProofChecker<'a> {
     /// Apply substitution to the rule's query to get expected propositions
     fn get_query_propositions(
         &mut self,
-        rule: &GenericRule<String, String>,
+        rule: &ResolvedRule,
         subst: &[RuleVarBinding],
     ) -> Result<HashSet<Proposition>, ProofCheckError> {
         let mut result = HashSet::default();

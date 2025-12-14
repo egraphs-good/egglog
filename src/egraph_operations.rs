@@ -166,6 +166,7 @@ impl EGraph {
 
         Ok(results)
     }
+
     /// Runs the query and produces a proof for any bound variable; returns the first proof found.
     pub fn prove_query(
         &mut self,

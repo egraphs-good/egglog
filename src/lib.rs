@@ -22,7 +22,6 @@ pub mod egraph_operations;
 pub mod extract;
 mod literal_convertible;
 pub mod prelude;
-pub mod proof_check;
 #[macro_use]
 pub mod proof_checker;
 mod proof_support;
@@ -248,6 +247,8 @@ pub struct EGraph {
     command_macros: CommandMacroRegistry,
     /// Check all proofs whenever using check and extract
     proof_checking_enabled: bool,
+    /// All the commands run so far, desugared
+    desugared_commands: Vec<ResolvedCommand>,
 }
 
 /// A user-defined command allows users to inject custom command that can be called
@@ -334,6 +335,7 @@ impl EGraph {
             warned_about_missing_global_prefix: false,
             command_macros: Default::default(),
             proof_checking_enabled: false,
+            desugared_commands: Default::default(),
         };
 
         add_base_sort(&mut eg, UnitSort, span!()).unwrap();
@@ -1519,6 +1521,8 @@ impl EGraph {
                 }
             }
         }
+
+        self.desugared_commands.extend(desugared_commands.clone());
 
         Ok((outputs, desugared_commands))
     }

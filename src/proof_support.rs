@@ -5,8 +5,9 @@
 
 use crate::{
     EGraph, Error,
-    ast::{Fact, Facts, ResolvedFact, ResolvedNCommand},
+    ast::{Fact, Facts, ResolvedCommand, ResolvedFact, ResolvedNCommand},
     core,
+    proof_checker::{ProofCheckError, ProofChecker},
 };
 use egglog_ast::generic_ast::GenericExpr;
 
@@ -102,13 +103,17 @@ impl EGraph {
         let surface_facts: Vec<Fact> = facts.iter().map(|f| f.clone().make_unresolved()).collect();
 
         // Try to get a proof for this query
-        let _proof = self
-            .prove_query(Facts(surface_facts), &mut proof_store)
-            .map_err(|e| Error::ProofError(format!("Failed to prove check query: {}", e)))?;
+        // TODO throw error instead of unwrap if query did not match
+        let proof = self
+            .prove_query(Facts(surface_facts), &mut proof_store)?
+            .unwrap();
 
-        // If prove_query succeeds and returns a proof, the check is valid
-        // If it returns None, the query has no matches, which means the check fails
-        // (but this should have been caught earlier by check_facts)
+        // Run the checker on the proof
+        let mut checker =
+            ProofChecker::new(&mut proof_store, &self.desugared_commands, &self.type_info);
+        checker
+            .check_term_proof(proof)
+            .map_err(|e| Error::ProofError(e))?;
         Ok(())
     }
 }
