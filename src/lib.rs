@@ -25,7 +25,6 @@ pub mod prelude;
 #[macro_use]
 pub mod proof_checker;
 mod proof_support;
-mod proof_type_inference;
 pub mod scheduler;
 mod serialize;
 pub mod sort;

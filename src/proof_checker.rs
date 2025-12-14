@@ -34,11 +34,8 @@ use crate::ast::{Action, ResolvedAction, ResolvedCommand};
 use crate::{
     ArcSort, ProofStore, TypeInfo,
     ast::{Command, ResolvedExpr, ResolvedFact, ResolvedRule, collect_query_vars},
-    proof_type_inference::TypeInferenceContext,
-    typechecking::PrimitiveWithId,
     util::HashMap,
     util::HashSet,
-    util::SymbolGen,
 };
 use crate::{ResolvedCall, SpecializedPrimitive};
 use egglog_ast::span::Span;
