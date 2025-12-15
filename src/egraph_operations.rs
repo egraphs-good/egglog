@@ -1,4 +1,4 @@
-use crate::span;
+use crate::{CommandOutput, span};
 use egglog_ast::{
     generic_ast::GenericFact,
     span::{RustSpan, Span},
@@ -204,7 +204,7 @@ impl EGraph {
 
         let no_presort: Option<(String, Vec<Expr>)> = None;
         self.declare_sort(proof_sort_name.clone(), &no_presort, span.clone())?;
-        self.run_command(ResolvedNCommand::Sort(
+        self.run_and_record_command(ResolvedNCommand::Sort(
             span.clone(),
             proof_sort_name.clone(),
             None,
@@ -225,9 +225,9 @@ impl EGraph {
             let_binding: false,
             span: span.clone(),
         };
-        self.run_command(ResolvedNCommand::Function(constructor_decl))?;
+        self.run_and_record_command(ResolvedNCommand::Function(constructor_decl))?;
 
-        self.run_command(ResolvedNCommand::AddRuleset(
+        self.run_and_record_command(ResolvedNCommand::AddRuleset(
             span.clone(),
             ruleset_name.clone(),
         ))?;
@@ -250,7 +250,7 @@ impl EGraph {
             ruleset: ruleset_name.clone(),
         };
         let recorded_rule = rule.clone();
-        self.run_command(ResolvedNCommand::NormRule { rule })?;
+        self.run_and_record_command(ResolvedNCommand::NormRule { rule })?;
         self.desugared_commands.push(ResolvedCommand::Rule {
             rule: recorded_rule,
         });
@@ -262,7 +262,7 @@ impl EGraph {
                 until: None,
             },
         );
-        self.run_command(ResolvedNCommand::RunSchedule(schedule))?;
+        self.run_and_record_command(ResolvedNCommand::RunSchedule(schedule))?;
 
         let mut captured = None;
         if let Some(constructor_function) = self.functions.get(&constructor_name) {
@@ -309,5 +309,13 @@ impl EGraph {
         Err(Error::BackendError(
             "internal error: failed to resolve query via check command".to_string(),
         ))
+    }
+
+    pub(crate) fn run_and_record_command(
+        &mut self,
+        command: ResolvedNCommand,
+    ) -> Result<Option<CommandOutput>, Error> {
+        self.desugared_commands.push(command.to_command());
+        self.run_command(command)
     }
 }

@@ -98,8 +98,6 @@ impl std::error::Error for ProofCheckError {}
 pub struct ProofChecker<'a> {
     proof_store: &'a mut ProofStore,
     program: &'a Vec<ResolvedCommand>,
-    /// Reverse mapping from TermId to global name
-    term_to_global: HashMap<TermId, String>,
     /// Set of equalities established by global union actions
     /// Each entry is a pair (lhs, rhs) that was unified
     global_unions: HashSet<(TermId, TermId)>,
@@ -116,7 +114,6 @@ impl<'a> ProofChecker<'a> {
         let mut checker = ProofChecker {
             proof_store,
             program,
-            term_to_global: HashMap::default(),
             global_unions: HashSet::default(),
             type_info,
         };
@@ -132,22 +129,20 @@ impl<'a> ProofChecker<'a> {
         let program_cmds = self.program.clone();
 
         for cmd in &program_cmds {
-            match cmd {
-                ResolvedCommand::Action(ResolvedAction::Union(_, lhs, rhs)) => {
-                    // Track global union actions
-                    if let (Ok(lhs_term), Ok(rhs_term)) = (
-                        self.evaluate_expr(lhs, &HashMap::default(), &mut HashSet::default()),
-                        self.evaluate_expr(rhs, &HashMap::default(), &mut HashSet::default()),
-                    ) {
-                        // Store both directions of the equality
-                        self.global_unions.insert((lhs_term, rhs_term));
-                        self.global_unions.insert((rhs_term, lhs_term));
-                        // Store reflexive equalities as well
-                        self.global_unions.insert((lhs_term, lhs_term));
-                        self.global_unions.insert((rhs_term, rhs_term));
-                    }
+            eprintln!("Processing command for globals: {:?}", cmd.to_string());
+            if let ResolvedCommand::Action(ResolvedAction::Union(_, lhs, rhs)) = cmd {
+                // Track global union actions
+                if let (Ok(lhs_term), Ok(rhs_term)) = (
+                    self.evaluate_expr(lhs, &HashMap::default(), &mut HashSet::default()),
+                    self.evaluate_expr(rhs, &HashMap::default(), &mut HashSet::default()),
+                ) {
+                    // Store both directions of the equality
+                    self.global_unions.insert((lhs_term, rhs_term));
+                    self.global_unions.insert((rhs_term, lhs_term));
+                    // Store reflexive equalities as well
+                    self.global_unions.insert((lhs_term, lhs_term));
+                    self.global_unions.insert((rhs_term, rhs_term));
                 }
-                _ => {}
             }
         }
     }
@@ -236,11 +231,7 @@ impl<'a> ProofChecker<'a> {
         let termdag = self.proof_store.termdag();
 
         // Literals are always valid axioms
-        if matches!(termdag.get(term), Term::Lit(_)) {
-            return true;
-        }
-
-        self.global_unions.contains(&(term, term))
+        matches!(termdag.get(term), Term::Lit(_)) || self.global_unions.contains(&(term, term))
     }
 
     /// Check if a function is a primitive operation
@@ -386,7 +377,7 @@ impl<'a> ProofChecker<'a> {
                     return Ok(Proposition::TermOk(term));
                 }
 
-                let term_str = format!("{:?}", term);
+                let term_str = format!("{:?}", self.proof_store.termdag().get(term));
                 Err(ProofCheckError::InvalidProof(format!(
                     "PFiat proof for term '{}' does not correspond to a known global or literal.",
                     term_str
