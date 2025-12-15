@@ -6,12 +6,16 @@ use egglog_ast::{
 use egglog_core_relations::Value;
 
 use crate::{
-    EGraph, Error, ProofStore, TermProofId,
+    ArcSort, EGraph, Error, ProofStore, TermProofId,
     ast::expr::ResolvedExprExt,
     ast::{
-        Action, Command, Expr, Facts, GenericActions, GenericRule, ResolvedExpr, ResolvedFact,
-        ResolvedNCommand, ResolvedVar, RunConfig, Schedule, Schema, collect_query_vars,
+        Action, Command, Expr, Facts, FunctionSubtype, GenericActions, GenericRule, ResolvedAction,
+        ResolvedActions, ResolvedExpr, ResolvedFact, ResolvedFunctionDecl, ResolvedNCommand,
+        ResolvedRule, ResolvedRunConfig, ResolvedSchedule, ResolvedVar, RunConfig, Schedule,
+        Schema, collect_query_vars,
     },
+    core::ResolvedCall,
+    typechecking::FuncType,
     util::{FreshGen, IndexMap},
 };
 
@@ -193,96 +197,13 @@ impl EGraph {
         }
 
         let span = span!();
-        let mut resolved_facts = facts.to_vec();
-        let mut query_vars = collect_query_vars(&resolved_facts);
+        let resolved_facts = facts.to_vec();
 
-        if query_vars.is_empty() {
-            if !self.ensure_query_has_variable(&mut resolved_facts) {
-                return Ok(None);
-            }
-            query_vars = collect_query_vars(&resolved_facts);
-        }
-
-        let body_facts: Vec<_> = resolved_facts
-            .iter()
-            .map(|fact| fact.clone().make_unresolved())
-            .collect();
-
-        for (target_var, target_sort) in query_vars {
-            let constructor_name = self.parser.symbol_gen.fresh("get_proof_ctor");
-            let ruleset_name = self.parser.symbol_gen.fresh("get_proof_ruleset");
-            let rule_name = self.parser.symbol_gen.fresh("get_proof_rule");
-            let proof_sort_name = self.parser.symbol_gen.fresh("get_proof_sort");
-
-            let constructor_schema = Schema::new(
-                vec![target_sort.name().to_string()],
-                proof_sort_name.clone(),
-            );
-
-            let mut program = vec![
-                Command::Push(1),
-                Command::Sort(span.clone(), proof_sort_name.clone(), None),
-                Command::Constructor {
-                    span: span.clone(),
-                    name: constructor_name.clone(),
-                    schema: constructor_schema,
-                    cost: None,
-                    unextractable: true,
-                },
-                Command::AddRuleset(span.clone(), ruleset_name.clone()),
-            ];
-
-            let action_expr = Expr::Call(
-                span.clone(),
-                constructor_name.clone(),
-                vec![Expr::Var(span.clone(), target_var.name.clone())],
-            );
-            let rule_actions = GenericActions(vec![Action::Expr(span.clone(), action_expr)]);
-
-            program.push(Command::Rule {
-                rule: GenericRule {
-                    span: span.clone(),
-                    head: rule_actions,
-                    body: body_facts.clone(),
-                    name: rule_name.clone(),
-                    ruleset: ruleset_name.clone(),
-                },
-            });
-
-            program.push(Command::RunSchedule(Schedule::Run(
-                span.clone(),
-                RunConfig {
-                    ruleset: ruleset_name.clone(),
-                    until: None,
-                },
-            )));
-            if let Err(err) = self.run_program(program) {
-                let func_names = self.functions.keys().cloned().collect::<Vec<_>>();
-                log::error!(
-                    "prove_resolved_query run_program error: {err}. Known functions: {:?}",
-                    func_names
-                );
-                return Err(err);
-            }
-
-            let mut captured = None;
-            if let Some(constructor_function) = self.functions.get(&constructor_name) {
-                self.backend
-                    .for_each(constructor_function.backend_id, |row| {
-                        if captured.is_none() {
-                            captured = row.vals.first().copied();
-                        }
-                    });
-            }
-
-            self.run_program(vec![Command::Pop(span.clone(), 1)])?;
-
-            if let Some(value) = captured {
-                let proof = self
-                    .explain_term(value, store)
-                    .map_err(|e| Error::BackendError(e.to_string()))?;
-                return Ok(Some(proof));
-            }
+        if let Some(value) = self.capture_query_value(&span, &resolved_facts)? {
+            let proof = self
+                .explain_term(value, store)
+                .map_err(|e| Error::BackendError(e.to_string()))?;
+            return Ok(Some(proof));
         }
 
         Ok(None)
@@ -313,34 +234,87 @@ impl EGraph {
         ))
     }
 
-    fn ensure_query_has_variable(&mut self, facts: &mut Vec<ResolvedFact>) -> bool {
-        if let Some((span, expr)) = Self::pick_expr_for_dummy_var(facts) {
-            let sort = expr.output_type();
-            let name = self.parser.symbol_gen.fresh("prove_query_value");
-            let var = ResolvedVar {
-                name,
-                sort: sort.clone(),
-                is_global_ref: false,
-            };
-            let var_expr = GenericExpr::Var(span.clone(), var.clone());
-            facts.push(ResolvedFact::Eq(span, expr, var_expr));
-            true
-        } else {
-            false
-        }
-    }
+    fn capture_query_value(
+        &mut self,
+        span: &Span,
+        facts: &[ResolvedFact],
+    ) -> Result<Option<Value>, Error> {
+        let constructor_name = self.parser.symbol_gen.fresh("get_proof_ctor");
+        let ruleset_name = self.parser.symbol_gen.fresh("get_proof_ruleset");
+        let rule_name = self.parser.symbol_gen.fresh("get_proof_rule");
+        let proof_sort_name = self.parser.symbol_gen.fresh("get_proof_sort");
 
-    fn pick_expr_for_dummy_var(facts: &[ResolvedFact]) -> Option<(Span, ResolvedExpr)> {
-        for fact in facts {
-            match fact {
-                ResolvedFact::Fact(expr) => {
-                    return Some((expr.span(), expr.clone()));
-                }
-                ResolvedFact::Eq(span, lhs, _) => {
-                    return Some((span.clone(), lhs.clone()));
-                }
-            }
+        self.run_command(ResolvedNCommand::Push(1))?;
+
+        let no_presort: Option<(String, Vec<Expr>)> = None;
+        self.declare_sort(proof_sort_name.clone(), &no_presort, span.clone())?;
+        self.run_command(ResolvedNCommand::Sort(
+            span.clone(),
+            proof_sort_name.clone(),
+            None,
+        ))?;
+        let proof_sort = self
+            .get_sort_by_name(&proof_sort_name)
+            .ok_or_else(|| Error::BackendError("failed to look up get_proof sort".to_string()))?
+            .clone();
+
+        let constructor_schema = Schema::new(vec![], proof_sort_name.clone());
+        let constructor_decl = ResolvedFunctionDecl {
+            name: constructor_name.clone(),
+            subtype: FunctionSubtype::Constructor,
+            schema: constructor_schema,
+            merge: None,
+            cost: None,
+            unextractable: true,
+            let_binding: false,
+            span: span.clone(),
+        };
+        self.run_command(ResolvedNCommand::Function(constructor_decl))?;
+
+        self.run_command(ResolvedNCommand::AddRuleset(
+            span.clone(),
+            ruleset_name.clone(),
+        ))?;
+
+        let constructor_call = ResolvedCall::Func(FuncType {
+            name: constructor_name.clone(),
+            subtype: FunctionSubtype::Constructor,
+            input: vec![],
+            output: proof_sort,
+        });
+        let action_expr = ResolvedExpr::Call(span.clone(), constructor_call, vec![]);
+        let rule_actions: ResolvedActions =
+            GenericActions(vec![ResolvedAction::Expr(span.clone(), action_expr)]);
+
+        let rule = ResolvedRule {
+            span: span.clone(),
+            head: rule_actions,
+            body: facts.to_vec(),
+            name: rule_name.clone(),
+            ruleset: ruleset_name.clone(),
+        };
+        self.run_command(ResolvedNCommand::NormRule { rule })?;
+
+        let schedule = ResolvedSchedule::Run(
+            span.clone(),
+            ResolvedRunConfig {
+                ruleset: ruleset_name.clone(),
+                until: None,
+            },
+        );
+        self.run_command(ResolvedNCommand::RunSchedule(schedule))?;
+
+        let mut captured = None;
+        if let Some(constructor_function) = self.functions.get(&constructor_name) {
+            self.backend
+                .for_each(constructor_function.backend_id, |row| {
+                    if captured.is_none() {
+                        captured = row.vals.first().copied();
+                    }
+                });
         }
-        None
+
+        self.run_command(ResolvedNCommand::Pop(span.clone(), 1))?;
+        Ok(captured)
     }
 }
