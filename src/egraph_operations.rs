@@ -202,8 +202,6 @@ impl EGraph {
         let rule_name = self.parser.symbol_gen.fresh("get_proof_rule");
         let proof_sort_name = self.parser.symbol_gen.fresh("get_proof_sort");
 
-        self.run_command(ResolvedNCommand::Push(1))?;
-
         let no_presort: Option<(String, Vec<Expr>)> = None;
         self.declare_sort(proof_sort_name.clone(), &no_presort, span.clone())?;
         self.run_command(ResolvedNCommand::Sort(
@@ -284,8 +282,6 @@ impl EGraph {
         } else {
             None
         };
-
-        self.run_command(ResolvedNCommand::Pop(span.clone(), 1))?;
 
         Ok(result)
     }
