@@ -1,12 +1,16 @@
 use crate::span;
-use egglog_ast::span::{RustSpan, Span};
+use egglog_ast::{
+    generic_ast::{GenericExpr, GenericFact},
+    span::{RustSpan, Span},
+};
 use egglog_core_relations::Value;
 
 use crate::{
     EGraph, Error, ProofStore, TermProofId,
+    ast::expr::ResolvedExprExt,
     ast::{
-        Action, Command, Expr, Facts, GenericActions, GenericRule, RunConfig, Schedule, Schema,
-        collect_query_vars,
+        Action, Command, Expr, Facts, GenericActions, GenericRule, ResolvedExpr, ResolvedFact,
+        ResolvedNCommand, ResolvedVar, RunConfig, Schedule, Schema, collect_query_vars,
     },
     util::{FreshGen, IndexMap},
 };
@@ -71,14 +75,14 @@ impl EGraph {
     /// assert_eq!(matches[0].len(), 3);
     /// ```
     pub fn get_matches(&mut self, facts: Facts<String, String>) -> Result<Vec<QueryMatch>, Error> {
-        let Facts(query_facts) = facts;
-
         let span = span!();
 
-        let resolved_facts = self
-            .type_info
-            .typecheck_facts(&mut self.parser.symbol_gen, &query_facts)?;
+        let resolved_facts = self.resolve_query(facts)?;
         let query_vars = collect_query_vars(&resolved_facts);
+        let body_facts: Vec<_> = resolved_facts
+            .iter()
+            .map(|fact| fact.clone().make_unresolved())
+            .collect();
 
         let constructor_name = self.parser.symbol_gen.fresh("get_matches_ctor");
         let relation_name = self.parser.symbol_gen.fresh("get_matches_rel");
@@ -117,7 +121,6 @@ impl EGraph {
             Command::AddRuleset(span.clone(), ruleset_name.clone()),
         ];
 
-        let body_facts = query_facts.clone();
         let action_expr = {
             let args = query_vars
                 .iter()
@@ -173,7 +176,15 @@ impl EGraph {
         facts: Facts<String, String>,
         store: &mut ProofStore,
     ) -> Result<Option<TermProofId>, Error> {
-        let Facts(query_facts) = facts;
+        let resolved_facts = self.resolve_query(facts)?;
+        self.prove_resolved_query(&resolved_facts, store)
+    }
+
+    pub(crate) fn prove_resolved_query(
+        &mut self,
+        facts: &[ResolvedFact],
+        store: &mut ProofStore,
+    ) -> Result<Option<TermProofId>, Error> {
         if !self.backend.proofs_enabled() {
             return Err(Error::BackendError(
                 "get_proof requires proofs to be enabled. Create the EGraph with EGraph::with_proofs()."
@@ -182,10 +193,20 @@ impl EGraph {
         }
 
         let span = span!();
-        let resolved_facts = self
-            .type_info
-            .typecheck_facts(&mut self.parser.symbol_gen, &query_facts)?;
-        let query_vars = collect_query_vars(&resolved_facts);
+        let mut resolved_facts = facts.to_vec();
+        let mut query_vars = collect_query_vars(&resolved_facts);
+
+        if query_vars.is_empty() {
+            if !self.ensure_query_has_variable(&mut resolved_facts) {
+                return Ok(None);
+            }
+            query_vars = collect_query_vars(&resolved_facts);
+        }
+
+        let body_facts: Vec<_> = resolved_facts
+            .iter()
+            .map(|fact| fact.clone().make_unresolved())
+            .collect();
 
         for (target_var, target_sort) in query_vars {
             let constructor_name = self.parser.symbol_gen.fresh("get_proof_ctor");
@@ -211,7 +232,6 @@ impl EGraph {
                 Command::AddRuleset(span.clone(), ruleset_name.clone()),
             ];
 
-            let body_facts = query_facts.clone();
             let action_expr = Expr::Call(
                 span.clone(),
                 constructor_name.clone(),
@@ -223,7 +243,7 @@ impl EGraph {
                 rule: GenericRule {
                     span: span.clone(),
                     head: rule_actions,
-                    body: body_facts,
+                    body: body_facts.clone(),
                     name: rule_name.clone(),
                     ruleset: ruleset_name.clone(),
                 },
@@ -236,7 +256,14 @@ impl EGraph {
                     until: None,
                 },
             )));
-            self.run_program(program)?;
+            if let Err(err) = self.run_program(program) {
+                let func_names = self.functions.keys().cloned().collect::<Vec<_>>();
+                log::error!(
+                    "prove_resolved_query run_program error: {err}. Known functions: {:?}",
+                    func_names
+                );
+                return Err(err);
+            }
 
             let mut captured = None;
             if let Some(constructor_function) = self.functions.get(&constructor_name) {
@@ -259,5 +286,61 @@ impl EGraph {
         }
 
         Ok(None)
+    }
+
+    pub fn resolve_query(
+        &mut self,
+        facts: Facts<String, String>,
+    ) -> Result<Vec<ResolvedFact>, Error> {
+        let Facts(query_facts) = facts;
+        let span = query_facts
+            .first()
+            .map(|fact| match fact {
+                GenericFact::Eq(span, ..) => span.clone(),
+                GenericFact::Fact(expr) => expr.span(),
+            })
+            .unwrap_or_else(|| span!());
+
+        let resolved_commands = self.resolve_command(Command::Check(span, query_facts))?;
+        for command in resolved_commands {
+            if let ResolvedNCommand::Check(_, resolved_facts) = command {
+                return Ok(resolved_facts);
+            }
+        }
+
+        Err(Error::BackendError(
+            "internal error: failed to resolve query via check command".to_string(),
+        ))
+    }
+
+    fn ensure_query_has_variable(&mut self, facts: &mut Vec<ResolvedFact>) -> bool {
+        if let Some((span, expr)) = Self::pick_expr_for_dummy_var(facts) {
+            let sort = expr.output_type();
+            let name = self.parser.symbol_gen.fresh("prove_query_value");
+            let var = ResolvedVar {
+                name,
+                sort: sort.clone(),
+                is_global_ref: false,
+            };
+            let var_expr = GenericExpr::Var(span.clone(), var.clone());
+            facts.push(ResolvedFact::Eq(span, expr, var_expr));
+            true
+        } else {
+            false
+        }
+    }
+
+    fn pick_expr_for_dummy_var(facts: &[ResolvedFact]) -> Option<(Span, ResolvedExpr)> {
+        for fact in facts {
+            match fact {
+                ResolvedFact::Fact(expr) => {
+                    return Some((expr.span(), expr.clone()));
+                }
+                ResolvedFact::Eq(span, lhs, _) => {
+                    return Some((span.clone(), lhs.clone()));
+                }
+            }
+        }
+        None
     }
 }

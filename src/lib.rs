@@ -1161,21 +1161,8 @@ impl EGraph {
                 }
                 // First check that the facts hold
                 self.check_facts(&span, &facts)?;
-
-                // Convert facts to surface syntax for prove_query
-                let surface_facts = facts
-                    .iter()
-                    .map(|fact| match fact {
-                        ResolvedFact::Fact(expr) => ast::GenericFact::Fact(expr.to_surface()),
-                        ResolvedFact::Eq(span, lhs, rhs) => {
-                            ast::GenericFact::Eq(span.clone(), lhs.to_surface(), rhs.to_surface())
-                        }
-                    })
-                    .collect::<Vec<_>>();
-
-                // Use typed termdag for proof generation
                 let mut store = ProofStore::new();
-                if let Some(proof_id) = self.prove_query(ast::Facts(surface_facts), &mut store)? {
+                if let Some(proof_id) = self.prove_resolved_query(&facts, &mut store)? {
                     // Print the proof
                     let mut buf = Vec::new();
                     store

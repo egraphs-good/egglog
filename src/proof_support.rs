@@ -4,10 +4,9 @@
 //! with proof mode.
 
 use crate::{
-    EGraph, Error,
-    ast::{Fact, Facts, ResolvedCommand, ResolvedFact, ResolvedNCommand},
-    core,
-    proof_checker::{ProofCheckError, ProofChecker},
+    EGraph, Error, ResolvedCall,
+    ast::{ResolvedFact, ResolvedNCommand},
+    proof_checker::ProofChecker,
 };
 use egglog_ast::generic_ast::GenericExpr;
 
@@ -57,7 +56,7 @@ impl EGraph {
                         return expr;
                     }
                     // Check if this expression uses a primitive without a registered validator
-                    if let GenericExpr::Call(span, core::ResolvedCall::Primitive(prim), _) = &expr {
+                    if let GenericExpr::Call(span, ResolvedCall::Primitive(prim), _) = &expr {
                         let prim_name = prim.name();
 
                         // Check if a validator is registered for this specific primitive overload
@@ -99,13 +98,10 @@ impl EGraph {
         // Use prove_query to get a proof for this check query
         let mut proof_store = ProofStore::default();
 
-        // Convert resolved facts to surface syntax
-        let surface_facts: Vec<Fact> = facts.iter().map(|f| f.clone().make_unresolved()).collect();
-
         // Try to get a proof for this query
         // TODO throw error instead of unwrap if query did not match
         let proof = self
-            .prove_query(Facts(surface_facts), &mut proof_store)?
+            .prove_resolved_query(facts, &mut proof_store)?
             .unwrap();
 
         // Run the checker on the proof
