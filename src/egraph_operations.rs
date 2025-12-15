@@ -1,17 +1,16 @@
 use crate::span;
 use egglog_ast::{
-    generic_ast::{GenericExpr, GenericFact},
+    generic_ast::GenericFact,
     span::{RustSpan, Span},
 };
 use egglog_core_relations::Value;
 
 use crate::{
-    ArcSort, EGraph, Error, ProofStore, TermProofId,
-    ast::expr::ResolvedExprExt,
+    EGraph, Error, ProofStore, TermProofId,
     ast::{
         Action, Command, Expr, Facts, FunctionSubtype, GenericActions, GenericRule, ResolvedAction,
-        ResolvedActions, ResolvedExpr, ResolvedFact, ResolvedFunctionDecl, ResolvedNCommand,
-        ResolvedRule, ResolvedRunConfig, ResolvedSchedule, ResolvedVar, RunConfig, Schedule,
+        ResolvedActions, ResolvedCommand, ResolvedExpr, ResolvedFact, ResolvedFunctionDecl,
+        ResolvedNCommand, ResolvedRule, ResolvedRunConfig, ResolvedSchedule, RunConfig, Schedule,
         Schema, collect_query_vars,
     },
     core::ResolvedCall,
@@ -197,48 +196,7 @@ impl EGraph {
         }
 
         let span = span!();
-        let resolved_facts = facts.to_vec();
 
-        if let Some(value) = self.capture_query_value(&span, &resolved_facts)? {
-            let proof = self
-                .explain_term(value, store)
-                .map_err(|e| Error::BackendError(e.to_string()))?;
-            return Ok(Some(proof));
-        }
-
-        Ok(None)
-    }
-
-    pub fn resolve_query(
-        &mut self,
-        facts: Facts<String, String>,
-    ) -> Result<Vec<ResolvedFact>, Error> {
-        let Facts(query_facts) = facts;
-        let span = query_facts
-            .first()
-            .map(|fact| match fact {
-                GenericFact::Eq(span, ..) => span.clone(),
-                GenericFact::Fact(expr) => expr.span(),
-            })
-            .unwrap_or_else(|| span!());
-
-        let resolved_commands = self.resolve_command(Command::Check(span, query_facts))?;
-        for command in resolved_commands {
-            if let ResolvedNCommand::Check(_, resolved_facts) = command {
-                return Ok(resolved_facts);
-            }
-        }
-
-        Err(Error::BackendError(
-            "internal error: failed to resolve query via check command".to_string(),
-        ))
-    }
-
-    fn capture_query_value(
-        &mut self,
-        span: &Span,
-        facts: &[ResolvedFact],
-    ) -> Result<Option<Value>, Error> {
         let constructor_name = self.parser.symbol_gen.fresh("get_proof_ctor");
         let ruleset_name = self.parser.symbol_gen.fresh("get_proof_ruleset");
         let rule_name = self.parser.symbol_gen.fresh("get_proof_rule");
@@ -293,7 +251,11 @@ impl EGraph {
             name: rule_name.clone(),
             ruleset: ruleset_name.clone(),
         };
+        let recorded_rule = rule.clone();
         self.run_command(ResolvedNCommand::NormRule { rule })?;
+        self.desugared_commands.push(ResolvedCommand::Rule {
+            rule: recorded_rule,
+        });
 
         let schedule = ResolvedSchedule::Run(
             span.clone(),
@@ -314,7 +276,42 @@ impl EGraph {
                 });
         }
 
+        let result = if let Some(value) = captured {
+            Some(
+                self.explain_term(value, store)
+                    .map_err(|e| Error::BackendError(e.to_string()))?,
+            )
+        } else {
+            None
+        };
+
         self.run_command(ResolvedNCommand::Pop(span.clone(), 1))?;
-        Ok(captured)
+
+        Ok(result)
+    }
+
+    pub fn resolve_query(
+        &mut self,
+        facts: Facts<String, String>,
+    ) -> Result<Vec<ResolvedFact>, Error> {
+        let Facts(query_facts) = facts;
+        let span = query_facts
+            .first()
+            .map(|fact| match fact {
+                GenericFact::Eq(span, ..) => span.clone(),
+                GenericFact::Fact(expr) => expr.span(),
+            })
+            .unwrap_or_else(|| span!());
+
+        let resolved_commands = self.resolve_command(Command::Check(span, query_facts))?;
+        for command in resolved_commands {
+            if let ResolvedNCommand::Check(_, resolved_facts) = command {
+                return Ok(resolved_facts);
+            }
+        }
+
+        Err(Error::BackendError(
+            "internal error: failed to resolve query via check command".to_string(),
+        ))
     }
 }
