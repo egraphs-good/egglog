@@ -110,7 +110,7 @@ impl<'a> ProofChecker<'a> {
         proof_store: &'a mut ProofStore,
         program: &'a Vec<ResolvedCommand>,
         type_info: &'a TypeInfo,
-    ) -> Self {
+    ) -> Result<Self, ProofCheckError> {
         let mut checker = ProofChecker {
             proof_store,
             program,
@@ -119,32 +119,49 @@ impl<'a> ProofChecker<'a> {
         };
 
         // Process globals to get their actual TermIds
-        checker.process_globals();
-        checker
+        checker.process_globals()?;
+        Ok(checker)
     }
 
     /// Process global definitions and evaluate them to produce [`TermId`]s
-    fn process_globals(&mut self) {
+    fn process_globals(&mut self) -> Result<(), ProofCheckError> {
         // Process globals in order, building up the mapping
         let program_cmds = self.program.clone();
 
         for cmd in &program_cmds {
-            eprintln!("Processing command for globals: {:?}", cmd.to_string());
-            if let ResolvedCommand::Action(ResolvedAction::Union(_, lhs, rhs)) = cmd {
-                // Track global union actions
-                if let (Ok(lhs_term), Ok(rhs_term)) = (
-                    self.evaluate_expr(lhs, &HashMap::default(), &mut HashSet::default()),
-                    self.evaluate_expr(rhs, &HashMap::default(), &mut HashSet::default()),
-                ) {
-                    // Store both directions of the equality
-                    self.global_unions.insert((lhs_term, rhs_term));
-                    self.global_unions.insert((rhs_term, lhs_term));
-                    // Store reflexive equalities as well
-                    self.global_unions.insert((lhs_term, lhs_term));
-                    self.global_unions.insert((rhs_term, rhs_term));
+            if let ResolvedCommand::Action(action) = cmd {
+                match action {
+                    ResolvedAction::Union(_, lhs, rhs) => {
+                        // Track global union actions
+                        if let (Ok(lhs_term), Ok(rhs_term)) = (
+                            self.evaluate_expr(lhs, &HashMap::default(), &mut HashSet::default()),
+                            self.evaluate_expr(rhs, &HashMap::default(), &mut HashSet::default()),
+                        ) {
+                            // Store both directions of the equality
+                            self.global_unions.insert((lhs_term, rhs_term));
+                            self.global_unions.insert((rhs_term, lhs_term));
+                            // Store reflexive equalities as well
+                            self.global_unions.insert((lhs_term, lhs_term));
+                            self.global_unions.insert((rhs_term, rhs_term));
+                        }
+                    }
+                    ResolvedAction::Set(span, func, args, rhs) => {
+                        let mut args_extended = args.clone();
+                        args_extended.push(rhs.clone());
+                        let term_created = self.evaluate_expr(
+                            &ResolvedExpr::Call(span.clone(), func.clone(), args_extended),
+                            &HashMap::default(),
+                            &mut HashSet::default(),
+                        )?;
+                        self.global_unions
+                            .insert((term_created.clone(), term_created));
+                    }
+                    _ => {}
                 }
             }
         }
+
+        Ok(())
     }
 
     /// Apply a substitution to an expression, replacing variables with terms
@@ -711,7 +728,8 @@ impl<'a> ProofChecker<'a> {
             }
             ResolvedAction::Expr(_, expr) => {
                 let mut subterms = HashSet::default();
-                self.evaluate_expr(expr, var_map, &mut subterms)?;
+                let term = self.evaluate_expr(expr, var_map, &mut subterms)?;
+                propositions.insert(Proposition::TermOk(term));
                 // Add all subexpression terms
                 for term in subterms {
                     propositions.insert(Proposition::TermOk(term));

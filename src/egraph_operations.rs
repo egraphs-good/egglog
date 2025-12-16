@@ -9,9 +9,9 @@ use crate::{
     EGraph, Error, ProofStore, TermProofId,
     ast::{
         Action, Command, Expr, Facts, FunctionSubtype, GenericActions, GenericRule, ResolvedAction,
-        ResolvedActions, ResolvedCommand, ResolvedExpr, ResolvedFact, ResolvedFunctionDecl,
-        ResolvedNCommand, ResolvedRule, ResolvedRunConfig, ResolvedSchedule, RunConfig, Schedule,
-        Schema, collect_query_vars,
+        ResolvedActions, ResolvedExpr, ResolvedFact, ResolvedFunctionDecl, ResolvedNCommand,
+        ResolvedRule, ResolvedRunConfig, ResolvedSchedule, RunConfig, Schedule, Schema,
+        collect_query_vars,
     },
     core::ResolvedCall,
     typechecking::FuncType,
@@ -238,9 +238,9 @@ impl EGraph {
             input: vec![],
             output: proof_sort,
         });
-        let action_expr = ResolvedExpr::Call(span.clone(), constructor_call, vec![]);
+        let constructor_expr = ResolvedExpr::Call(span.clone(), constructor_call, vec![]);
         let rule_actions: ResolvedActions =
-            GenericActions(vec![ResolvedAction::Expr(span.clone(), action_expr)]);
+            GenericActions(vec![ResolvedAction::Expr(span.clone(), constructor_expr)]);
 
         let rule = ResolvedRule {
             span: span.clone(),
@@ -249,11 +249,7 @@ impl EGraph {
             name: rule_name.clone(),
             ruleset: ruleset_name.clone(),
         };
-        let recorded_rule = rule.clone();
         self.run_and_record_command(ResolvedNCommand::NormRule { rule })?;
-        self.desugared_commands.push(ResolvedCommand::Rule {
-            rule: recorded_rule,
-        });
 
         let schedule = ResolvedSchedule::Run(
             span.clone(),
@@ -269,7 +265,7 @@ impl EGraph {
             self.backend
                 .for_each(constructor_function.backend_id, |row| {
                     if captured.is_none() {
-                        captured = row.vals.first().copied();
+                        captured = row.vals.last().copied();
                     }
                 });
         }

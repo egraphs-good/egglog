@@ -106,7 +106,7 @@ impl EGraph {
 
         // Run the checker on the proof
         let mut checker =
-            ProofChecker::new(&mut proof_store, &self.desugared_commands, &self.type_info);
+            ProofChecker::new(&mut proof_store, &self.desugared_commands, &self.type_info).map_err(|e| Error::ProofError(e))?;
         checker
             .check_term_proof(proof)
             .map_err(|e| Error::ProofError(e))?;

@@ -1489,26 +1489,30 @@ impl EGraph {
                     desugared_commands.push(ResolvedCommand::Include(span.clone(), file.clone()));
                 } else {
                     for processed in self.resolve_command(command)? {
-                        desugared_commands.push(processed.to_command());
+                        let recorded_command = processed.to_command();
+                        desugared_commands.push(recorded_command.clone());
 
                         // even in desugar mode we still run push and pop
-                        if run_commands
+                        let should_run = run_commands
                             || matches!(
-                                processed,
+                                &processed,
                                 ResolvedNCommand::Push(_) | ResolvedNCommand::Pop(_, _)
-                            )
-                        {
+                            );
+
+                        if should_run {
                             let result = self.run_command(processed)?;
                             if let Some(output) = result {
                                 outputs.push(output);
                             }
                         }
+
+                        if run_commands {
+                            self.desugared_commands.push(recorded_command);
+                        }
                     }
                 }
             }
         }
-
-        self.desugared_commands.extend(desugared_commands.clone());
 
         Ok((outputs, desugared_commands))
     }
