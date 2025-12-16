@@ -141,6 +141,8 @@ pub enum CommandOutput {
     RunSchedule(RunReport),
     /// A user defined output
     UserDefined(Arc<dyn UserDefinedCommandOutput>),
+    /// A proof as a string
+    Proof(String),
 }
 
 impl std::fmt::Display for CommandOutput {
@@ -206,6 +208,7 @@ impl std::fmt::Display for CommandOutput {
             CommandOutput::UserDefined(output) => {
                 write!(f, "{}", *output)
             }
+            CommandOutput::Proof(proof_str) => f.write_str(&proof_str),
         }
     }
 }
@@ -1169,6 +1172,9 @@ impl EGraph {
                         .print_term_proof(proof_id, &mut buf)
                         .map_err(|e| Error::BackendError(e.to_string()))?;
                     log::info!("Proof:\n{}", String::from_utf8_lossy(&buf));
+                    return Ok(Some(CommandOutput::Proof(
+                        String::from_utf8_lossy(&buf).to_string(),
+                    )));
                 } else {
                     return Err(Error::BackendError("No proof found for query".to_string()));
                 }
