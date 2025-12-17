@@ -62,6 +62,8 @@ pub enum SourceExpr {
         atom: AtomId,
         /// Arguments to the function.
         args: Vec<SyntaxId>,
+        /// Output variable name, useful for reconstructing proofs for functions.
+        output_var: VariableId,
     },
 }
 
@@ -211,10 +213,11 @@ impl ProofBuilder {
             tracing: true,
             func_cols: func_info.schema.len(),
         };
+        let is_constructor = func_info.is_constructor();
         let cong_args = CongArgs {
             func_table: func,
             reason_table: egraph.reason_table(&ProofReason::CongRow),
-            term_table: egraph.term_table(func_underlying),
+            term_table: egraph.term_table(func_underlying, is_constructor),
             reason_counter: egraph.reason_counter,
             term_counter: egraph.id_counter,
             reason_spec_id: egraph.cong_spec,
@@ -274,7 +277,12 @@ impl TermReconstructionState<'_> {
                 }
                 bndgs.mapping[*var]
             }
-            SourceExpr::FunctionCall { func, atom, args } => {
+            SourceExpr::FunctionCall {
+                func,
+                atom,
+                args,
+                output_var: _,
+            } => {
                 let old_term = bndgs.convert(&self.atom_mapping[*atom]);
                 let mut buf: Vec<core_relations::QueryEntry> = vec![old_term];
 

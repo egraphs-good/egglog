@@ -455,18 +455,19 @@ impl EGraph {
         }
     }
 
-    fn term_table(&mut self, table: TableId) -> TableId {
+    fn term_table(&mut self, table: TableId, is_constructor: bool) -> TableId {
         let info = self.db.get_table_info(table);
         let spec = info.spec();
-        match self.term_tables.entry(spec.n_keys) {
+        let arity = spec.n_keys + !is_constructor as usize;
+        match self.term_tables.entry(arity) {
             Entry::Occupied(o) => *o.get(),
             Entry::Vacant(v) => {
                 let term_consistency_table = self.term_consistency_table;
                 let ts_counter = self.timestamp_counter;
-                let term_id_col = spec.n_keys + 1;
-                let table = SortedWritesTable::new(
-                    spec.n_keys + 1,     // added entry for the tableid
-                    spec.n_keys + 1 + 2, // one value for the term id, one for the reason,
+                let term_id_col = arity + 1;
+                let term_table = SortedWritesTable::new(
+                    arity + 1,     // added entry for the tableid
+                    arity + 1 + 2, // one value for the term id, one for the reason,
                     None,
                     vec![], // no rebuilding needed for term table
                     Box::new(move |state, old, new, out| {
@@ -481,9 +482,11 @@ impl EGraph {
                         )
                     }),
                 );
-                let table_id =
-                    self.db
-                        .add_table(table, iter::empty(), iter::once(term_consistency_table));
+                let table_id = self.db.add_table(
+                    term_table,
+                    iter::empty(),
+                    iter::once(term_consistency_table),
+                );
                 *v.insert(table_id)
             }
         }
@@ -578,7 +581,7 @@ impl EGraph {
     /// This method is really only relevant when tracing is enabled.
     fn get_term(&mut self, func: FunctionId, key: &[Value], reason: Value) -> Value {
         let table_id = self.funcs[func].table;
-        let term_table_id = self.term_table(table_id);
+        let term_table_id = self.term_table(table_id, self.funcs[func].is_constructor());
         let table = self.db.get_table(term_table_id);
         let mut term_key = Vec::with_capacity(key.len() + 1);
         term_key.push(Value::new(func.rep()));
@@ -1355,6 +1358,14 @@ struct FunctionInfo {
 impl FunctionInfo {
     fn ret_ty(&self) -> ColumnTy {
         self.schema.last().copied().unwrap()
+    }
+
+    fn is_constructor(&self) -> bool {
+        matches!(self.default_val, DefaultVal::FreshId)
+    }
+
+    fn term_arity(&self) -> usize {
+        self.schema.len() - 1 + !self.is_constructor() as usize
     }
 }
 

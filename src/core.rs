@@ -42,7 +42,7 @@ impl<Head> HeadOrEq<Head> {
 
 #[derive(Debug, Clone)]
 pub struct SpecializedPrimitive {
-    primitive: PrimitiveWithId,
+    pub(crate) primitive: PrimitiveWithId,
     input: Vec<ArcSort>,
     output: ArcSort,
 }
@@ -50,7 +50,7 @@ pub struct SpecializedPrimitive {
 impl SpecializedPrimitive {
     /// Get the name of this primitive
     pub fn name(&self) -> &str {
-        self.primitive.0.name()
+        self.primitive.primitive.name()
     }
 
     /// Get the output sort of this primitive
@@ -65,7 +65,7 @@ impl SpecializedPrimitive {
 
     /// Get the external function ID of this primitive
     pub(crate) fn external_id(&self) -> ExternalFunctionId {
-        self.primitive.1
+        self.primitive.id
     }
 }
 
@@ -124,11 +124,40 @@ impl ResolvedCall {
                 }
             }
         }
-        assert!(
-            resolved_call.len() == 1,
-            "Ambiguous resolution for {:?}",
-            head,
-        );
+
+        if resolved_call.is_empty() {
+            panic!(
+                "No resolution found for '{}' with types: {:?}",
+                head,
+                types.iter().map(|s| s.name()).collect::<Vec<_>>()
+            );
+        }
+
+        if resolved_call.len() > 1 {
+            let mut msg = format!(
+                "Ambiguous resolution for '{}' with types: {:?}\n",
+                head,
+                types.iter().map(|s| s.name()).collect::<Vec<_>>()
+            );
+            msg.push_str("Found multiple matching primitives/functions:\n");
+            for rc in &resolved_call {
+                match rc {
+                    ResolvedCall::Func(f) => {
+                        msg.push_str(&format!("  - Function: {}\n", f.name));
+                    }
+                    ResolvedCall::Primitive(p) => {
+                        msg.push_str(&format!(
+                            "  - Primitive: {} (inputs: {:?}, output: {})\n",
+                            p.primitive.primitive.name(),
+                            p.input.iter().map(|s| s.name()).collect::<Vec<_>>(),
+                            p.output.name()
+                        ));
+                    }
+                }
+            }
+            panic!("{}", msg);
+        }
+
         resolved_call.pop().unwrap()
     }
 }
@@ -406,7 +435,7 @@ impl std::fmt::Display for Query<ResolvedCall, String> {
                 writeln!(
                     f,
                     "({} {})",
-                    filter.head.primitive.0.name(),
+                    filter.head.primitive.primitive.name(),
                     ListDisplay(&filter.args, " ")
                 )?;
             }

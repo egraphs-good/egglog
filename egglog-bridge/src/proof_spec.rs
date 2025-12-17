@@ -1,4 +1,5 @@
-use std::{iter, rc::Rc, sync::Arc};
+use std::rc::Rc;
+use std::{iter, sync::Arc};
 
 use crate::core_relations::{
     ColumnId, DisplacedTableWithProvenance, ProofReason as UfProofReason, ProofStep, RuleBuilder,
@@ -86,8 +87,9 @@ impl ProofBuilder {
         let reason_table = db.reason_table(&reason_spec);
         let reason_spec_id = db.cong_spec;
         let reason_counter = db.reason_counter;
-        let func_table = db.funcs[func].table;
-        let term_table = db.term_table(func_table);
+    let func_table = db.funcs[func].table;
+    let is_constructor = db.funcs[func].is_constructor();
+    let term_table = db.term_table(func_table, is_constructor);
         let term_counter = db.id_counter;
         let after = after.to_vec();
         move |inner, rb| {
@@ -102,6 +104,11 @@ impl ProofBuilder {
             entries.push(Value::new(func.rep()).into());
             for entry in &after[..after.len() - 1] {
                 entries.push(inner.convert(entry));
+            }
+            if !is_constructor {
+                let ret_val = inner
+                    .convert(after.last().expect("function rows must have a return value"));
+                entries.push(ret_val);
             }
             // Now get the new term value, inserting it if the term is new.
             let term_id = rb.lookup_or_insert(
@@ -129,8 +136,14 @@ impl ProofBuilder {
         let func_info = &db.funcs[func];
         let func_table = func_info.table;
         let fiat_reason = func_info.fiat_reason;
-        let term_table = db.term_table(func_table);
+        let is_constructor = func_info.is_constructor();
+        let term_arity = func_info.term_arity();
+        let term_table = db.term_table(func_table, func_info.is_constructor());
         let func_val = Value::new(func.rep());
+        eprintln!(
+            "ProofBuilder::new_row: func={:?}, is_constructor={}, term_arity={}",
+            func, is_constructor, term_arity
+        );
         move |inner, rb| {
             let reason_var: DstVar = if let Some(fiat_reason) = fiat_reason {
                 // This table has been marked as "fiat only", meaning that all proofs for this
@@ -142,10 +155,14 @@ impl ProofBuilder {
                     .lhs_reason
                     .expect("must have a reason variable for new rows")
             };
-            let mut translated = Vec::with_capacity(entries.len() + 2);
+            let mut translated = Vec::with_capacity(term_arity + 2);
             translated.push(func_val.into());
             for entry in &entries[0..entries.len() - 1] {
                 translated.push(inner.convert(entry));
+            }
+            if !is_constructor {
+                let ret_val = inner.convert(entries.last().unwrap());
+                translated.push(ret_val);
             }
             translated.push(inner.mapping[term_var]);
             translated.push(reason_var);
@@ -205,9 +222,13 @@ impl EGraph {
             SourceExpr::Const { val, .. } => *val,
             SourceExpr::Var { id, .. } => subst[*id],
             SourceExpr::ExternalCall { var, .. } => subst[*var],
-            SourceExpr::FunctionCall { func, args, .. } => {
-                // This is the interesting part.
-                //
+            SourceExpr::FunctionCall {
+                func,
+                args,
+                output_var,
+                ..
+            } => {
+                eprintln!("get_syntax_val: func={:?}, args={:?}", func, args);
                 // We want to find the term id that corresponds to
                 // (func args...).
                 let mut row_key = Vec::with_capacity(args.len() + 1);
@@ -215,7 +236,14 @@ impl EGraph {
                 for arg in args {
                     row_key.push(self.get_syntax_val(*arg, syntax, subst, memo));
                 }
-                let term_table = self.term_table(self.funcs[*func].table);
+
+                // Functions require their output variable to be part of the row key.
+                if !self.funcs[*func].is_constructor() {
+                    row_key.push(subst[*output_var]);
+                }
+
+                let term_table =
+                    self.term_table(self.funcs[*func].table, self.funcs[*func].is_constructor());
                 let Some(val) = self
                     .db
                     .get_table(term_table)
@@ -566,10 +594,9 @@ impl EGraph {
         loop {
             // Iterate over the table by index to avoid borrowing issues with the
             // call to `get_proof`.
-            let (arity, table) = self
-                .reason_tables
-                .get_index(cur)
-                .unwrap_or_else(|| panic!("failed to find reason with id {reason_id:?}"));
+            let Some((arity, table)) = self.reason_tables.get_index(cur) else {
+                panic!("failed to find reason with id {reason_id:?}")
+            };
 
             let gfm_sc = SideChannel::default();
             let gfm_id = self.db.add_external_function(GetFirstMatch(gfm_sc.clone()));
