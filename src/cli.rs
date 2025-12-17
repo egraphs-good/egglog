@@ -52,6 +52,8 @@ struct Args {
     /// Treat missing `$` prefixes on globals as errors instead of warnings
     #[clap(long = "strict-mode")]
     strict_mode: bool,
+    /// Run the terms encoding of equality saturation
+    term_encoding: bool,
 }
 
 /// Start a command-line interface for the E-graph.

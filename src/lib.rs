@@ -24,6 +24,7 @@ pub mod scheduler;
 mod serialize;
 pub mod sort;
 mod termdag;
+mod terms;
 mod typechecking;
 pub mod util;
 pub use command_macro::{CommandMacro, CommandMacroRegistry};
@@ -76,6 +77,7 @@ use util::*;
 
 use crate::ast::desugar::desugar_command;
 use crate::core::{GenericActionsExt, ResolvedRuleExt};
+use crate::terms::ProofConstants;
 
 pub const GLOBAL_NAME_PREFIX: &str = "$";
 
@@ -223,6 +225,7 @@ pub struct EGraph {
     warned_about_missing_global_prefix: bool,
     /// Registry for command-level macros
     command_macros: CommandMacroRegistry,
+    proof_constants: ProofConstants,
 }
 
 /// A user-defined command allows users to inject custom command that can be called
@@ -308,6 +311,7 @@ impl Default for EGraph {
             strict_mode: false,
             warned_about_missing_global_prefix: false,
             command_macros: Default::default(),
+            proof_constants: Default::default(),
         };
 
         add_base_sort(&mut eg, UnitSort, span!()).unwrap();
