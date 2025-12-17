@@ -127,7 +127,7 @@ impl CostModel<DefaultCost> for TreeAdditiveCostModel {
 /// Note that this assumes optimal substructure in the cost model, that is, a lower-cost
 /// subterm should always lead to a non-worse superterm, to guarantee the extracted term
 /// being optimal under the given cost model.
-/// If this is not followed, the extractor may panic on reconunstrction
+/// If this is not followed, the extractor may panic on reconstruction
 pub struct Extractor<C: Cost + Ord + Eq + Clone + Debug> {
     rootsorts: Vec<ArcSort>,
     funcs: Vec<String>,
