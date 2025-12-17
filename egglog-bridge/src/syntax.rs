@@ -204,24 +204,18 @@ impl ProofBuilder {
     }
 
     fn build_cong_metadata(&self, func: FunctionId, egraph: &mut EGraph) -> FunctionCongMetadata {
-        let (func_underlying, can_subsume, schema_len, term_has_output) = {
-            let func_info = &egraph.funcs[func];
-            (
-                func_info.table,
-                func_info.can_subsume,
-                func_info.schema.len(),
-                func_info.is_constructor(),
-            )
-        };
+        let func_info = &egraph.funcs[func];
+        let func_underlying = func_info.table;
         let schema_math = SchemaMath {
-            subsume: can_subsume,
+            subsume: func_info.can_subsume,
             tracing: true,
-            func_cols: schema_len,
+            func_cols: func_info.schema.len(),
         };
+        let is_constructor = func_info.is_constructor();
         let cong_args = CongArgs {
             func_table: func,
             reason_table: egraph.reason_table(&ProofReason::CongRow),
-            term_table: egraph.term_table(func_underlying, term_has_output),
+            term_table: egraph.term_table(func_underlying, is_constructor),
             reason_counter: egraph.reason_counter,
             term_counter: egraph.id_counter,
             reason_spec_id: egraph.cong_spec,

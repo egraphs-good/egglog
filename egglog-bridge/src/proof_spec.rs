@@ -88,7 +88,7 @@ impl ProofBuilder {
         let reason_spec_id = db.cong_spec;
         let reason_counter = db.reason_counter;
         let func_table = db.funcs[func].table;
-        let term_table = db.term_table(func_table);
+        let term_table = db.term_table(func_table, db.funcs[func].is_constructor());
         let term_counter = db.id_counter;
         let after = after.to_vec();
         move |inner, rb| {
@@ -132,7 +132,7 @@ impl ProofBuilder {
         let fiat_reason = func_info.fiat_reason;
         let term_has_output = func_info.is_constructor();
         let term_arity = func_info.term_arity();
-        let term_table = db.term_table(func_table);
+        let term_table = db.term_table(func_table, func_info.is_constructor());
         let func_val = Value::new(func.rep());
         move |inner, rb| {
             let reason_var: DstVar = if let Some(fiat_reason) = fiat_reason {
@@ -225,7 +225,8 @@ impl EGraph {
 
                 // TODO add arg to row_key for functions
 
-                let term_table = self.term_table(self.funcs[*func].table);
+                let term_table =
+                    self.term_table(self.funcs[*func].table, self.funcs[*func].is_constructor());
                 let Some(val) = self
                     .db
                     .get_table(term_table)
@@ -293,11 +294,10 @@ impl EGraph {
             state.in_progress.insert(term_id),
             "term id {term_id:?} has a cycle in its explanation!"
         );
-        let (term_row, arity, has_output) = self.get_term_row(term_id);
-        let term_id_col = term_table_term_id_col(arity, has_output);
-        let reason_col = term_table_reason_col(arity, has_output);
-        debug_assert_eq!(term_row[term_id_col], term_id);
-        let reason = term_row[reason_col];
+        let term_row = self.get_term_row(term_id);
+        // Last should be the reason id.
+        debug_assert_eq!(term_row[term_row.len() - 2], term_id);
+        let reason = *term_row.last().unwrap();
         let reason_row = self.get_reason(reason);
         let spec = self.proof_specs[ReasonSpecId::new(reason_row[0].rep())].clone();
         let res = match &*spec {
@@ -353,7 +353,7 @@ impl EGraph {
         }
         let res = match ty {
             ColumnTy::Id => {
-                let (term_row, arity, has_output) = self.get_term_row(key_id);
+                let term_row = self.get_term_row(key_id);
                 let func = FunctionId::new(term_row[0].rep());
                 let func_name = self.funcs[func].name.to_string();
                 let info = &self.funcs[func];
@@ -361,18 +361,10 @@ impl EGraph {
                 // really only needs mutable access to `db`. This is of course fixable if we wanted to get
                 // rid of the clone.
                 let schema = info.schema.clone();
-                let input_len = schema.len() - 1;
-                let input_slice = &term_row[1..1 + input_len];
-                let mut args = Vec::with_capacity(input_len + usize::from(has_output));
-                for (ty, entry) in schema[0..schema.len() - 1].iter().zip(input_slice.iter()) {
+                let mut args = Vec::with_capacity(term_row.len() - 1);
+                for (ty, entry) in schema[0..schema.len() - 1].iter().zip(term_row[1..].iter()) {
                     let term = self.reconstruct_term(*entry, *ty, state);
                     args.push(state.store.termdag.get(term).clone());
-                }
-                if let Some(output_idx) = term_table_output_col(arity, has_output) {
-                    let output_val = term_row[output_idx];
-                    let ret_ty = *schema.last().unwrap();
-                    let ret_term = self.reconstruct_term(output_val, ret_ty, state);
-                    args.push(state.store.termdag.get(ret_term).clone());
                 }
                 let app = state.store.termdag.app(func_name, args);
                 state.store.termdag.lookup(&app)
@@ -452,13 +444,8 @@ impl EGraph {
         new_term_id: Value,
         state: &mut ProofReconstructionState,
     ) -> CongProof {
-        let (old_term_row, arity, has_output) = self.get_term_row(old_term_id);
-        let (new_term_row, new_arity, new_has_output) = self.get_term_row(new_term_id);
-        debug_assert_eq!(arity, new_arity, "term arity mismatch in congruence proof");
-        debug_assert_eq!(
-            has_output, new_has_output,
-            "term output schema mismatch in congruence proof"
-        );
+        let old_term_row = self.get_term_row(old_term_id);
+        let new_term_row = self.get_term_row(new_term_id);
         let old_term_proof = self.explain_term_inner(old_term_id, state);
         let func_id = FunctionId::new(old_term_row[0].rep());
         debug_assert_eq!(
@@ -470,12 +457,9 @@ impl EGraph {
         let mut args_eq_proofs = Vec::with_capacity(schema.len() - 1);
         let old_term = self.reconstruct_term(old_term_id, ColumnTy::Id, state);
         let new_term = self.reconstruct_term(new_term_id, ColumnTy::Id, state);
-        let input_len = schema.len() - 1;
-        let old_inputs = &old_term_row[1..1 + input_len];
-        let new_inputs = &new_term_row[1..1 + input_len];
         for (i, (ty, (lhs, rhs))) in schema[0..schema.len() - 1]
             .iter()
-            .zip(old_inputs.iter().zip(new_inputs.iter()))
+            .zip(old_term_row[1..].iter().zip(new_term_row[1..].iter()))
             .enumerate()
         {
             let eq_proof = match ty {
@@ -548,31 +532,27 @@ impl EGraph {
         }
     }
 
-    fn get_term_row(&mut self, term_id: Value) -> (Vec<Value>, usize, bool) {
+    fn get_term_row(&mut self, term_id: Value) -> Vec<Value> {
         let term_id = self.canonicalize_term_id(term_id);
         let mut atom = Vec::<DstVar>::new();
         let mut cur = 0;
         loop {
             // Iterate over the table by index to avoid borrowing issues with the
             // call to `get_proof`.
-            let Some(((arity, has_output), table)) = self.term_tables.get_index(cur) else {
+            let Some((keys, table)) = self.term_tables.get_index(cur) else {
                 panic!("failed to find term with id {term_id:?}")
             };
-            let total_cols = term_table_total_cols(*arity, *has_output);
-            let term_id_col = term_table_term_id_col(*arity, *has_output);
 
             let gfm_sc = SideChannel::default();
             let gfm_id = self.db.add_external_function(GetFirstMatch(gfm_sc.clone()));
             {
                 let mut rsb = self.db.new_rule_set();
                 let mut qb = rsb.new_rule();
-                for idx in 0..total_cols {
-                    if idx == term_id_col {
-                        atom.push(term_id.into());
-                    } else {
-                        atom.push(qb.new_var().into());
-                    }
+                for _ in 0..*keys + 1 {
+                    atom.push(qb.new_var().into());
                 }
+                atom.push(term_id.into());
+                atom.push(qb.new_var().into()); // reason
                 qb.add_atom(*table, &atom, iter::empty()).unwrap();
                 let mut rb = qb.build();
                 rb.call_external(gfm_id, &atom).unwrap();
@@ -584,7 +564,7 @@ impl EGraph {
             self.db.free_external_function(gfm_id);
 
             if let Some(vals) = gfm_sc.lock().unwrap().take() {
-                return (vals, *arity, *has_output);
+                return vals;
             }
             cur += 1;
         }
