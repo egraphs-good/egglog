@@ -19,6 +19,7 @@ use crate::{
     },
     rule::{AtomId, Bindings, DstVar, VariableId},
     syntax::{RuleData, SourceSyntax, SourceVar, SyntaxId},
+    TermSchema,
 };
 
 define_id!(pub(crate) ReasonSpecId, u32, "A unique identifier for the step in a proof.");
@@ -87,8 +88,10 @@ impl ProofBuilder {
         let reason_table = db.reason_table(&reason_spec);
         let reason_spec_id = db.cong_spec;
         let reason_counter = db.reason_counter;
-        let func_table = db.funcs[func].table;
-        let term_table = db.term_table(func_table);
+        let func_info = &db.funcs[func];
+        let func_table = func_info.table;
+        let term_schema = func_info.term_schema();
+        let term_table = db.term_table(func_table, func_info.term_has_output);
         let term_counter = db.id_counter;
         let after = after.to_vec();
         move |inner, rb| {
@@ -104,12 +107,21 @@ impl ProofBuilder {
             for entry in &after[..after.len() - 1] {
                 entries.push(inner.convert(entry));
             }
+            let ret_val = term_schema
+                .has_output
+                .then(|| inner.convert(after.last().unwrap()));
             // Now get the new term value, inserting it if the term is new.
+            let mut default_vals = Vec::with_capacity(2 + if term_schema.has_output { 1 } else { 0 });
+            if let Some(ret_val) = &ret_val {
+                default_vals.push(ret_val.clone().into());
+            }
+            default_vals.push(term_counter.into());
+            default_vals.push(reason_id.into());
             let term_id = rb.lookup_or_insert(
                 term_table,
                 &entries,
-                &[term_counter.into(), reason_id.into()],
-                ColumnId::from_usize(entries.len()),
+                &default_vals,
+                ColumnId::from_usize(term_schema.term_id_col()),
             )?;
             inner.mapping.insert(vars.new_term.id, term_id.into());
             inner.mapping.insert(vars.reason.id, reason_id.into());
@@ -130,7 +142,8 @@ impl ProofBuilder {
         let func_info = &db.funcs[func];
         let func_table = func_info.table;
         let fiat_reason = func_info.fiat_reason;
-        let term_table = db.term_table(func_table);
+        let term_schema = func_info.term_schema();
+        let term_table = db.term_table(func_table, func_info.term_has_output);
         let func_val = Value::new(func.rep());
         move |inner, rb| {
             let reason_var: DstVar = if let Some(fiat_reason) = fiat_reason {
@@ -143,10 +156,14 @@ impl ProofBuilder {
                     .lhs_reason
                     .expect("must have a reason variable for new rows")
             };
-            let mut translated = Vec::with_capacity(entries.len() + 2);
+            let mut translated = Vec::with_capacity(term_schema.total_cols());
             translated.push(func_val.into());
             for entry in &entries[0..entries.len() - 1] {
                 translated.push(inner.convert(entry));
+            }
+            if term_schema.has_output {
+                let ret_val = inner.convert(entries.last().unwrap());
+                translated.push(ret_val);
             }
             translated.push(inner.mapping[term_var]);
             translated.push(reason_var);
@@ -216,11 +233,16 @@ impl EGraph {
                 for arg in args {
                     row_key.push(self.get_syntax_val(*arg, syntax, subst, memo));
                 }
-                let term_table = self.term_table(self.funcs[*func].table);
+                let func_info = &self.funcs[*func];
+                let term_schema = func_info.term_schema();
+                let term_table = self.term_table(func_info.table, func_info.term_has_output);
                 let Some(val) = self
                     .db
                     .get_table(term_table)
-                    .get_row_column(&row_key, ColumnId::from_usize(args.len() + 1))
+                    .get_row_column(
+                        &row_key,
+                        ColumnId::from_usize(term_schema.term_id_col()),
+                    )
                 else {
                     panic!(
                         "failed to find term for function call ({func:?} {:?}), memo={:?}, arg={node:?}",
@@ -284,10 +306,9 @@ impl EGraph {
             state.in_progress.insert(term_id),
             "term id {term_id:?} has a cycle in its explanation!"
         );
-        let term_row = self.get_term_row(term_id);
-        // Last should be the reason id.
-        debug_assert_eq!(term_row[term_row.len() - 2], term_id);
-        let reason = *term_row.last().unwrap();
+        let (term_row, term_schema) = self.get_term_row(term_id);
+        debug_assert_eq!(term_row[term_schema.term_id_col()], term_id);
+        let reason = term_row[term_schema.reason_col()];
         let reason_row = self.get_reason(reason);
         let spec = self.proof_specs[ReasonSpecId::new(reason_row[0].rep())].clone();
         let res = match &*spec {
@@ -343,7 +364,7 @@ impl EGraph {
         }
         let res = match ty {
             ColumnTy::Id => {
-                let term_row = self.get_term_row(key_id);
+                let (term_row, term_schema) = self.get_term_row(key_id);
                 let func = FunctionId::new(term_row[0].rep());
                 let func_name = self.funcs[func].name.to_string();
                 let info = &self.funcs[func];
@@ -351,11 +372,20 @@ impl EGraph {
                 // really only needs mutable access to `db`. This is of course fixable if we wanted to get
                 // rid of the clone.
                 let schema = info.schema.clone();
-                let mut args = Vec::with_capacity(term_row.len() - 1);
-                for (ty, entry) in schema[0..schema.len() - 1].iter().zip(term_row[1..].iter()) {
+                let input_len = schema.len() - 1;
+                let input_slice = &term_row[1..1 + input_len];
+                let output_val = term_schema
+                    .output_col()
+                    .map(|idx| term_row[idx])
+                    .unwrap_or_else(|| term_row[term_schema.term_id_col()]);
+                let mut args = Vec::with_capacity(schema.len());
+                for (ty, entry) in schema[0..schema.len() - 1].iter().zip(input_slice.iter()) {
                     let term = self.reconstruct_term(*entry, *ty, state);
                     args.push(state.store.termdag.get(term).clone());
                 }
+                let ret_ty = *schema.last().unwrap();
+                let ret_term = self.reconstruct_term(output_val, ret_ty, state);
+                args.push(state.store.termdag.get(ret_term).clone());
                 let app = state.store.termdag.app(func_name, args);
                 state.store.termdag.lookup(&app)
             }
@@ -434,8 +464,12 @@ impl EGraph {
         new_term_id: Value,
         state: &mut ProofReconstructionState,
     ) -> CongProof {
-        let old_term_row = self.get_term_row(old_term_id);
-        let new_term_row = self.get_term_row(new_term_id);
+        let (old_term_row, term_schema) = self.get_term_row(old_term_id);
+        let (new_term_row, new_term_schema) = self.get_term_row(new_term_id);
+        debug_assert_eq!(
+            term_schema, new_term_schema,
+            "term schemas should match for congruent terms"
+        );
         let old_term_proof = self.explain_term_inner(old_term_id, state);
         let func_id = FunctionId::new(old_term_row[0].rep());
         debug_assert_eq!(
@@ -447,9 +481,12 @@ impl EGraph {
         let mut args_eq_proofs = Vec::with_capacity(schema.len() - 1);
         let old_term = self.reconstruct_term(old_term_id, ColumnTy::Id, state);
         let new_term = self.reconstruct_term(new_term_id, ColumnTy::Id, state);
+        let input_len = schema.len() - 1;
+        let old_inputs = &old_term_row[1..1 + input_len];
+        let new_inputs = &new_term_row[1..1 + input_len];
         for (i, (ty, (lhs, rhs))) in schema[0..schema.len() - 1]
             .iter()
-            .zip(old_term_row[1..].iter().zip(new_term_row[1..].iter()))
+            .zip(old_inputs.iter().zip(new_inputs.iter()))
             .enumerate()
         {
             let eq_proof = match ty {
@@ -522,15 +559,19 @@ impl EGraph {
         }
     }
 
-    fn get_term_row(&mut self, term_id: Value) -> Vec<Value> {
+    fn get_term_row(&mut self, term_id: Value) -> (Vec<Value>, TermSchema) {
         let term_id = self.canonicalize_term_id(term_id);
         let mut atom = Vec::<DstVar>::new();
         let mut cur = 0;
         loop {
             // Iterate over the table by index to avoid borrowing issues with the
             // call to `get_proof`.
-            let Some((keys, table)) = self.term_tables.get_index(cur) else {
+            let Some(((arity, has_output), table)) = self.term_tables.get_index(cur) else {
                 panic!("failed to find term with id {term_id:?}")
+            };
+            let term_schema = TermSchema {
+                key_len: arity + 1,
+                has_output: *has_output,
             };
 
             let gfm_sc = SideChannel::default();
@@ -538,11 +579,13 @@ impl EGraph {
             {
                 let mut rsb = self.db.new_rule_set();
                 let mut qb = rsb.new_rule();
-                for _ in 0..*keys + 1 {
-                    atom.push(qb.new_var().into());
+                for idx in 0..term_schema.total_cols() {
+                    if idx == term_schema.term_id_col() {
+                        atom.push(term_id.into());
+                    } else {
+                        atom.push(qb.new_var().into());
+                    }
                 }
-                atom.push(term_id.into());
-                atom.push(qb.new_var().into()); // reason
                 qb.add_atom(*table, &atom, iter::empty()).unwrap();
                 let mut rb = qb.build();
                 rb.call_external(gfm_id, &atom).unwrap();
@@ -554,7 +597,7 @@ impl EGraph {
             self.db.free_external_function(gfm_id);
 
             if let Some(vals) = gfm_sc.lock().unwrap().take() {
-                return vals;
+                return (vals, term_schema);
             }
             cur += 1;
         }
