@@ -62,6 +62,8 @@ pub enum SourceExpr {
         atom: AtomId,
         /// Arguments to the function.
         args: Vec<SyntaxId>,
+        /// Output variable name, useful for reconstructing proofs for functions.
+        output_var: VariableId,
     },
 }
 
@@ -275,7 +277,12 @@ impl TermReconstructionState<'_> {
                 }
                 bndgs.mapping[*var]
             }
-            SourceExpr::FunctionCall { func, atom, args } => {
+            SourceExpr::FunctionCall {
+                func,
+                atom,
+                args,
+                output_var: _,
+            } => {
                 let old_term = bndgs.convert(&self.atom_mapping[*atom]);
                 let mut buf: Vec<core_relations::QueryEntry> = vec![old_term];
 

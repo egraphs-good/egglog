@@ -1875,7 +1875,7 @@ impl SyntaxBuilder<'_> {
                 self.env.add_expr(SourceExpr::Const { ty, val })
             }
 
-            GenericExpr::Call(_, CorrespondingVar { head, to }, children) => {
+            GenericExpr::Call(span, CorrespondingVar { head, to }, children) => {
                 let mut any_failed = false;
                 let args: Vec<_> = children
                     .iter()
@@ -1888,14 +1888,26 @@ impl SyntaxBuilder<'_> {
                 if any_failed {
                     return None;
                 }
+
                 match head {
-                    ResolvedCall::Func(_) => {
+                    ResolvedCall::Func(f) => {
                         let FunctionInfo { atom, backend_id } =
                             self.proof_state.function_info[to.name()];
+
+                        let output_var =
+                            self.var_map.get(&core::CanonicalizedResolvedAtomTerm::Var(
+                                span.clone(),
+                                CanonicalizedVar::new_current(to.clone()),
+                            ));
+                        let QueryEntry::Var(output_var) = output_var.unwrap() else {
+                            panic!("expected output variable to be a variable entry");
+                        };
+
                         self.env.add_expr(SourceExpr::FunctionCall {
                             func: backend_id,
                             atom,
                             args,
+                            output_var: output_var.id,
                         })
                     }
                     ResolvedCall::Primitive(_) => {

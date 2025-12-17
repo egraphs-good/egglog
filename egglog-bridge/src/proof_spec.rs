@@ -213,6 +213,7 @@ impl EGraph {
             SourceExpr::Var { id, .. } => subst[*id],
             SourceExpr::ExternalCall { var, .. } => subst[*var],
             SourceExpr::FunctionCall { func, args, .. } => {
+                eprintln!("get_syntax_val: func={:?}, args={:?}", func, args);
                 // This is the interesting part.
                 //
                 // We want to find the term id that corresponds to
