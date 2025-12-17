@@ -6,5 +6,5 @@
 (let e1 (Num 1))
 (let e2 (Add e1 e1))
 
-(prove-query (= e1 e1))
+(check (= e1 e1))
 

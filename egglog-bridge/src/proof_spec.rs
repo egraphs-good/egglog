@@ -374,18 +374,18 @@ impl EGraph {
                 let schema = info.schema.clone();
                 let input_len = schema.len() - 1;
                 let input_slice = &term_row[1..1 + input_len];
-                let output_val = term_schema
-                    .output_col()
-                    .map(|idx| term_row[idx])
-                    .unwrap_or_else(|| term_row[term_schema.term_id_col()]);
-                let mut args = Vec::with_capacity(schema.len());
+                let mut args =
+                    Vec::with_capacity(input_len + usize::from(term_schema.has_output));
                 for (ty, entry) in schema[0..schema.len() - 1].iter().zip(input_slice.iter()) {
                     let term = self.reconstruct_term(*entry, *ty, state);
                     args.push(state.store.termdag.get(term).clone());
                 }
-                let ret_ty = *schema.last().unwrap();
-                let ret_term = self.reconstruct_term(output_val, ret_ty, state);
-                args.push(state.store.termdag.get(ret_term).clone());
+                if let Some(output_idx) = term_schema.output_col() {
+                    let output_val = term_row[output_idx];
+                    let ret_ty = *schema.last().unwrap();
+                    let ret_term = self.reconstruct_term(output_val, ret_ty, state);
+                    args.push(state.store.termdag.get(ret_term).clone());
+                }
                 let app = state.store.termdag.app(func_name, args);
                 state.store.termdag.lookup(&app)
             }
@@ -610,10 +610,9 @@ impl EGraph {
         loop {
             // Iterate over the table by index to avoid borrowing issues with the
             // call to `get_proof`.
-            let (arity, table) = self
-                .reason_tables
-                .get_index(cur)
-                .unwrap_or_else(|| panic!("failed to find reason with id {reason_id:?}"));
+            let Some((arity, table)) = self.reason_tables.get_index(cur) else {
+                panic!("failed to find reason with id {reason_id:?}")
+            };
 
             let gfm_sc = SideChannel::default();
             let gfm_id = self.db.add_external_function(GetFirstMatch(gfm_sc.clone()));
