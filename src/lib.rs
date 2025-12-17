@@ -1890,16 +1890,19 @@ impl SyntaxBuilder<'_> {
                 }
 
                 match head {
-                    ResolvedCall::Func(f) => {
+                    ResolvedCall::Func(_) => {
                         let FunctionInfo { atom, backend_id } =
                             self.proof_state.function_info[to.name()];
 
-                        let output_var =
+                        let Some(output_var) =
                             self.var_map.get(&core::CanonicalizedResolvedAtomTerm::Var(
                                 span.clone(),
                                 CanonicalizedVar::new_current(to.clone()),
-                            ));
-                        let QueryEntry::Var(output_var) = output_var.unwrap() else {
+                            ))
+                        else {
+                            panic!("no mapping found for output variable {to} [span={span}]")
+                        };
+                        let QueryEntry::Var(output_var) = output_var else {
                             panic!("expected output variable to be a variable entry");
                         };
 
