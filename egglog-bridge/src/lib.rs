@@ -650,6 +650,7 @@ impl EGraph {
                 subsume: table_info.can_subsume,
                 func_cols: table_info.schema.len(),
             };
+            let table_id = table_info.table;
             let term_id = reason_id.map(|reason| {
                 // Get the term id itself
                 let term_id = self.get_term(func, &row[0..schema_math.num_keys()], reason);
@@ -675,9 +676,7 @@ impl EGraph {
                     ret_val: None, // already filled in.
                 },
             );
-            let buf = bufs.get_or_insert(table_info.table, || {
-                self.db.get_table(table_info.table).new_buffer()
-            });
+            let buf = bufs.get_or_insert(table_id, || self.db.get_table(table_id).new_buffer());
             buf.stage_insert(&extended_row);
             extended_row.clear();
         }
