@@ -19,7 +19,6 @@ use crate::{
     },
     rule::{AtomId, Bindings, DstVar, VariableId},
     syntax::{RuleData, SourceSyntax, SourceVar, SyntaxId},
-
 };
 
 define_id!(pub(crate) ReasonSpecId, u32, "A unique identifier for the step in a proof.");
@@ -88,11 +87,8 @@ impl ProofBuilder {
         let reason_table = db.reason_table(&reason_spec);
         let reason_spec_id = db.cong_spec;
         let reason_counter = db.reason_counter;
-        let func_info = &db.funcs[func];
-        let func_table = func_info.table;
-        let term_has_output = func_info.term_has_output();
-        let arity = func_info.arity();
-        let term_table = db.term_table(func_table, term_has_output);
+        let func_table = db.funcs[func].table;
+        let term_table = db.term_table(func_table);
         let term_counter = db.id_counter;
         let after = after.to_vec();
         move |inner, rb| {
@@ -103,24 +99,17 @@ impl ProofBuilder {
                 &[reason_counter.into()],
                 ColumnId::new(2),
             )?;
-            let mut entries = Vec::with_capacity(term_table_key_len(arity, term_has_output));
+            let mut entries = Vec::new();
             entries.push(Value::new(func.rep()).into());
             for entry in &after[..after.len() - 1] {
                 entries.push(inner.convert(entry));
             }
-            let ret_val_entry = term_has_output.then(|| inner.convert(after.last().unwrap()));
-            if let Some(ret_val) = &ret_val_entry {
-                entries.push(ret_val.clone());
-            }
             // Now get the new term value, inserting it if the term is new.
-            let mut default_vals = Vec::with_capacity(2);
-            default_vals.push(term_counter.into());
-            default_vals.push(reason_id.into());
             let term_id = rb.lookup_or_insert(
                 term_table,
                 &entries,
-                &default_vals,
-                ColumnId::from_usize(term_table_term_id_col(arity, term_has_output)),
+                &[term_counter.into(), reason_id.into()],
+                ColumnId::from_usize(entries.len()),
             )?;
             inner.mapping.insert(vars.new_term.id, term_id.into());
             inner.mapping.insert(vars.reason.id, reason_id.into());
@@ -141,9 +130,9 @@ impl ProofBuilder {
         let func_info = &db.funcs[func];
         let func_table = func_info.table;
         let fiat_reason = func_info.fiat_reason;
-        let term_has_output = func_info.term_has_output();
-        let arity = func_info.arity();
-        let term_table = db.term_table(func_table, term_has_output);
+        let term_has_output = func_info.is_constructor();
+        let term_arity = func_info.term_arity();
+        let term_table = db.term_table(func_table);
         let func_val = Value::new(func.rep());
         move |inner, rb| {
             let reason_var: DstVar = if let Some(fiat_reason) = fiat_reason {
@@ -156,7 +145,7 @@ impl ProofBuilder {
                     .lhs_reason
                     .expect("must have a reason variable for new rows")
             };
-            let mut translated = Vec::with_capacity(term_table_total_cols(arity, term_has_output));
+            let mut translated = Vec::with_capacity(term_arity + 2);
             translated.push(func_val.into());
             for entry in &entries[0..entries.len() - 1] {
                 translated.push(inner.convert(entry));
@@ -167,13 +156,6 @@ impl ProofBuilder {
             }
             translated.push(inner.mapping[term_var]);
             translated.push(reason_var);
-            debug_assert_eq!(
-                translated.len(),
-                term_table_total_cols(arity, term_has_output),
-                "term table row for {:?} had unexpected length: {:?}",
-                func_val,
-                translated,
-            );
             if let Some(res_id) = res_id {
                 rb.insert_if_eq(
                     term_table,
@@ -235,44 +217,23 @@ impl EGraph {
                 //
                 // We want to find the term id that corresponds to
                 // (func args...).
-                let mut arg_vals = Vec::with_capacity(args.len());
+                let mut row_key = Vec::with_capacity(args.len() + 1);
+                row_key.push(Value::new(func.rep()));
                 for arg in args {
-                    arg_vals.push(self.get_syntax_val(*arg, syntax, subst, memo));
+                    row_key.push(self.get_syntax_val(*arg, syntax, subst, memo));
                 }
-                let (func_table, schema_len, term_has_output, arity) = {
-                    let info = &self.funcs[*func];
-                    (info.table, info.schema.len(), info.term_has_output(), info.arity())
-                };
-                let term_table = self.term_table(func_table, term_has_output);
-                let mut term_key = Vec::with_capacity(term_table_key_len(arity, term_has_output));
-                term_key.push(Value::new(func.rep()));
-                term_key.extend_from_slice(&arg_vals);
-                if term_has_output {
-                    let func_row = self
-                        .db
-                        .get_table(func_table)
-                        .get_row(&arg_vals)
-                        .unwrap_or_else(|| {
-                            panic!(
-                                "failed to find function row for ({func:?} {:?}), memo={:?}, arg={node:?}",
-                                arg_vals,
-                                memo
-                            )
-                        });
-                    let ret_val = func_row.vals[schema_len - 1];
-                    term_key.push(ret_val);
-                }
+
+                // TODO add arg to row_key for functions
+
+                let term_table = self.term_table(self.funcs[*func].table);
                 let Some(val) = self
                     .db
                     .get_table(term_table)
-                    .get_row_column(
-                        &term_key,
-                        ColumnId::from_usize(term_table_term_id_col(arity, term_has_output)),
-                    )
+                    .get_row_column(&row_key, ColumnId::from_usize(args.len() + 1))
                 else {
                     panic!(
                         "failed to find term for function call ({func:?} {:?}), memo={:?}, arg={node:?}",
-                        &term_key[1..],
+                        &row_key[1..],
                         memo
                     )
                 };
@@ -402,8 +363,7 @@ impl EGraph {
                 let schema = info.schema.clone();
                 let input_len = schema.len() - 1;
                 let input_slice = &term_row[1..1 + input_len];
-                let mut args =
-                    Vec::with_capacity(input_len + usize::from(has_output));
+                let mut args = Vec::with_capacity(input_len + usize::from(has_output));
                 for (ty, entry) in schema[0..schema.len() - 1].iter().zip(input_slice.iter()) {
                     let term = self.reconstruct_term(*entry, *ty, state);
                     args.push(state.store.termdag.get(term).clone());

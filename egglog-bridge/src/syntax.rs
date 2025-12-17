@@ -210,7 +210,7 @@ impl ProofBuilder {
                 func_info.table,
                 func_info.can_subsume,
                 func_info.schema.len(),
-                func_info.term_has_output(),
+                func_info.is_constructor(),
             )
         };
         let schema_math = SchemaMath {

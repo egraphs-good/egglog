@@ -1357,12 +1357,12 @@ impl FunctionInfo {
         self.schema.last().copied().unwrap()
     }
 
-    fn term_has_output(&self) -> bool {
-        !matches!(self.default_val, DefaultVal::FreshId)
+    fn is_constructor(&self) -> bool {
+        matches!(self.default_val, DefaultVal::FreshId)
     }
 
-    fn arity(&self) -> usize {
-        self.schema.len() - 1
+    fn term_arity(&self) -> usize {
+        self.schema.len() - 1 + !self.is_constructor() as usize
     }
 }
 
