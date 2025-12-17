@@ -89,7 +89,7 @@ pub struct EGraph {
     /// Side tables used to store proof information. We initialize these lazily
     /// as a proof object with a given number of parameters is added.
     reason_tables: IndexMap<usize /* arity */, TableId>,
-    term_tables: IndexMap<usize /* arity */, TableId>,
+    term_tables: IndexMap<(usize /* arity */, bool /* has output */), TableId>,
     /// Union-find table that records the stable term id for each provisional term id.
     ///
     /// This table is only used when proofs are enabled. `core-relations` has a concept of a
@@ -455,18 +455,22 @@ impl EGraph {
         }
     }
 
-    fn term_table(&mut self, table: TableId) -> TableId {
+    fn term_table(&mut self, table: TableId, has_output: bool) -> TableId {
         let info = self.db.get_table_info(table);
         let spec = info.spec();
-        match self.term_tables.entry(spec.n_keys) {
+        match self.term_tables.entry((spec.n_keys, has_output)) {
             Entry::Occupied(o) => *o.get(),
             Entry::Vacant(v) => {
                 let term_consistency_table = self.term_consistency_table;
                 let ts_counter = self.timestamp_counter;
-                let term_id_col = spec.n_keys + 1;
+                let term_schema = TermSchema {
+                    key_len: spec.n_keys + 1,
+                    has_output,
+                };
+                let term_id_col = term_schema.term_id_col();
                 let table = SortedWritesTable::new(
-                    spec.n_keys + 1,     // added entry for the tableid
-                    spec.n_keys + 1 + 2, // one value for the term id, one for the reason,
+                    term_schema.key_len, // added entry for the tableid
+                    term_schema.total_cols(),
                     None,
                     vec![], // no rebuilding needed for term table
                     Box::new(move |state, old, new, out| {
@@ -550,7 +554,7 @@ impl EGraph {
         extended_row.extend_from_slice(inputs);
         let term = self.tracing.then(|| {
             let reason = self.get_fiat_reason(desc);
-            self.get_term(func, inputs, reason)
+            self.get_term(func, inputs, None, reason)
         });
         let res = term.unwrap_or_else(|| self.fresh_id());
         schema_math.write_table_row(
@@ -576,17 +580,44 @@ impl EGraph {
     /// corresponding terms table if it isn't there.
     ///
     /// This method is really only relevant when tracing is enabled.
-    fn get_term(&mut self, func: FunctionId, key: &[Value], reason: Value) -> Value {
-        let table_id = self.funcs[func].table;
-        let term_table_id = self.term_table(table_id);
+    fn get_term(
+        &mut self,
+        func: FunctionId,
+        key: &[Value],
+        ret_val: Option<Value>,
+        reason: Value,
+    ) -> Value {
+        let info = &self.funcs[func];
+        let table_id = info.table;
+        let term_schema = info.term_schema();
+        let term_table_id = self.term_table(table_id, info.term_has_output);
         let table = self.db.get_table(term_table_id);
         let mut term_key = Vec::with_capacity(key.len() + 1);
         term_key.push(Value::new(func.rep()));
         term_key.extend(key);
         if let Some(row) = table.get_row(&term_key) {
-            row.vals[row.vals.len() - 2]
+            if let Some(output_col) = term_schema.output_col() {
+                if let Some(expected) = ret_val {
+                    debug_assert_eq!(
+                        row.vals[output_col],
+                        expected,
+                        "Term lookup for func {:?} had mismatched return value",
+                        func
+                    );
+                }
+            }
+            row.vals[term_schema.term_id_col()]
         } else {
             let result = Value::from_usize(self.db.inc_counter(self.id_counter));
+            if term_schema.has_output {
+                let expected = ret_val.unwrap_or(result);
+                term_key.push(expected);
+            } else {
+                debug_assert!(
+                    ret_val.is_none(),
+                    "term output provided for constructor-like function"
+                );
+            }
             term_key.push(result);
             term_key.push(reason);
             self.db
@@ -644,16 +675,28 @@ impl EGraph {
         let reason_id = self.tracing.then(|| self.get_fiat_reason(desc));
         let mut bufs = DenseIdMap::default();
         for (func, row) in values.into_iter() {
-            let table_info = &self.funcs[func];
+            let (table_id, can_subsume, schema_len, term_has_output) = {
+                let table_info = &self.funcs[func];
+                (
+                    table_info.table,
+                    table_info.can_subsume,
+                    table_info.schema.len(),
+                    table_info.term_has_output,
+                )
+            };
             let schema_math = SchemaMath {
                 tracing: self.tracing,
-                subsume: table_info.can_subsume,
-                func_cols: table_info.schema.len(),
+                subsume: can_subsume,
+                func_cols: schema_len,
             };
-            let table_id = table_info.table;
             let term_id = reason_id.map(|reason| {
                 // Get the term id itself
-                let term_id = self.get_term(func, &row[0..schema_math.num_keys()], reason);
+                let term_id = self.get_term(
+                    func,
+                    &row[0..schema_math.num_keys()],
+                    term_has_output.then_some(row[schema_math.ret_val_col()]),
+                    reason,
+                );
                 let buf = bufs.get_or_insert(self.uf_table, || {
                     self.db.get_table(self.uf_table).new_buffer()
                 });
@@ -802,8 +845,10 @@ impl EGraph {
         }
 
         info!("=== Term Tables ===");
-        for (_, table_id) in &self.term_tables {
-            info!("Term Table {table_id:?}");
+        for ((arity, has_output), table_id) in &self.term_tables {
+            info!(
+                "Term Table {table_id:?} / arity={arity} / has_output={has_output}",
+            );
         }
 
         info!("=== Reason Tables ===");
@@ -834,9 +879,11 @@ impl EGraph {
         }
 
         info!("=== Term Tables ===");
-        for (_, table_id) in &self.term_tables {
+        for ((arity, has_output), table_id) in &self.term_tables {
             let table = self.db.get_table(*table_id);
-            info!("Term Table {table_id:?}");
+            info!(
+                "Term Table {table_id:?} / arity={arity} / has_output={has_output}"
+            );
             self.scan_table(table, |row| {
                 let name = &self.funcs[FunctionId::new(row[0].rep())].name;
                 let row = &row[1..];
@@ -887,6 +934,7 @@ impl EGraph {
             can_subsume,
             fiat_reason_only,
         } = config;
+        let term_has_output = !matches!(default, DefaultVal::FreshId);
         assert!(
             !schema.is_empty(),
             "must have at least one column in schema"
@@ -953,6 +1001,7 @@ impl EGraph {
             can_subsume,
             name,
             fiat_reason,
+            term_has_output,
         });
         debug_assert_eq!(res, next_func_id);
         let incremental_rebuild_rules = self.incremental_rebuild_rules(res, &schema);
@@ -1350,11 +1399,19 @@ struct FunctionInfo {
     name: Arc<str>,
     #[allow(dead_code)]
     fiat_reason: Option<Value>,
+    term_has_output: bool,
 }
 
 impl FunctionInfo {
     fn ret_ty(&self) -> ColumnTy {
         self.schema.last().copied().unwrap()
+    }
+
+    fn term_schema(&self) -> TermSchema {
+        TermSchema {
+            key_len: self.schema.len(),
+            has_output: self.term_has_output,
+        }
     }
 }
 
@@ -2013,6 +2070,30 @@ struct SchemaMath {
     subsume: bool,
     /// The number of columns in the function (including the return value).
     func_cols: usize,
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
+pub(crate) struct TermSchema {
+    key_len: usize,
+    has_output: bool,
+}
+
+impl TermSchema {
+    fn output_col(&self) -> Option<usize> {
+        self.has_output.then_some(self.key_len)
+    }
+
+    fn term_id_col(&self) -> usize {
+        self.key_len + if self.has_output { 1 } else { 0 }
+    }
+
+    fn reason_col(&self) -> usize {
+        self.term_id_col() + 1
+    }
+
+    fn total_cols(&self) -> usize {
+        self.reason_col() + 1
+    }
 }
 
 /// A struct containing possible non-key portions of a table row. To be used with

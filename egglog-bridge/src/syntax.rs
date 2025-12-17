@@ -204,17 +204,24 @@ impl ProofBuilder {
     }
 
     fn build_cong_metadata(&self, func: FunctionId, egraph: &mut EGraph) -> FunctionCongMetadata {
-        let func_info = &egraph.funcs[func];
-        let func_underlying = func_info.table;
+        let (func_underlying, can_subsume, schema_len, term_has_output) = {
+            let func_info = &egraph.funcs[func];
+            (
+                func_info.table,
+                func_info.can_subsume,
+                func_info.schema.len(),
+                func_info.term_has_output,
+            )
+        };
         let schema_math = SchemaMath {
-            subsume: func_info.can_subsume,
+            subsume: can_subsume,
             tracing: true,
-            func_cols: func_info.schema.len(),
+            func_cols: schema_len,
         };
         let cong_args = CongArgs {
             func_table: func,
             reason_table: egraph.reason_table(&ProofReason::CongRow),
-            term_table: egraph.term_table(func_underlying),
+            term_table: egraph.term_table(func_underlying, term_has_output),
             reason_counter: egraph.reason_counter,
             term_counter: egraph.id_counter,
             reason_spec_id: egraph.cong_spec,
@@ -334,11 +341,12 @@ fn cong_term(args: &CongArgs, es: &mut ExecutionState, vals: &[Value]) -> Option
         args.term_table,
         &term_row,
         [
+            MergeVal::Constant(old_term),
             MergeVal::Counter(args.term_counter),
             MergeVal::Constant(reason),
         ]
         .into_iter(),
-        ColumnId::from_usize(term_row.len()),
+        ColumnId::from_usize(term_row.len() + 1),
     );
 
     // We just created a new term that wasn't previously inserted into the e-graph. We want to
