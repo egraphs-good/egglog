@@ -210,7 +210,7 @@ impl ProofBuilder {
                 func_info.table,
                 func_info.can_subsume,
                 func_info.schema.len(),
-                func_info.term_has_output,
+                func_info.term_has_output(),
             )
         };
         let schema_math = SchemaMath {
@@ -341,12 +341,11 @@ fn cong_term(args: &CongArgs, es: &mut ExecutionState, vals: &[Value]) -> Option
         args.term_table,
         &term_row,
         [
-            MergeVal::Constant(old_term),
             MergeVal::Counter(args.term_counter),
             MergeVal::Constant(reason),
         ]
         .into_iter(),
-        ColumnId::from_usize(term_row.len() + 1),
+        ColumnId::from_usize(term_row.len()),
     );
 
     // We just created a new term that wasn't previously inserted into the e-graph. We want to
