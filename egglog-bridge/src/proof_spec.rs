@@ -212,7 +212,12 @@ impl EGraph {
             SourceExpr::Const { val, .. } => *val,
             SourceExpr::Var { id, .. } => subst[*id],
             SourceExpr::ExternalCall { var, .. } => subst[*var],
-            SourceExpr::FunctionCall { func, args, .. } => {
+            SourceExpr::FunctionCall {
+                func,
+                args,
+                output_var,
+                ..
+            } => {
                 eprintln!("get_syntax_val: func={:?}, args={:?}", func, args);
                 // We want to find the term id that corresponds to
                 // (func args...).
@@ -224,7 +229,7 @@ impl EGraph {
 
                 // Functions require their output variable to be part of the row key.
                 if !self.funcs[*func].is_constructor() {
-                    row_key.push(subst[self.funcs[*func].output_var]);
+                    row_key.push(subst[*output_var]);
                 }
 
                 let term_table =
