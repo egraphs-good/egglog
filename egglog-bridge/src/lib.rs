@@ -465,7 +465,7 @@ impl EGraph {
                 let term_consistency_table = self.term_consistency_table;
                 let ts_counter = self.timestamp_counter;
                 let term_id_col = arity + 1;
-                let table = SortedWritesTable::new(
+                let term_table = SortedWritesTable::new(
                     arity + 1,     // added entry for the tableid
                     arity + 1 + 2, // one value for the term id, one for the reason,
                     None,
@@ -482,9 +482,11 @@ impl EGraph {
                         )
                     }),
                 );
-                let table_id =
-                    self.db
-                        .add_table(table, iter::empty(), iter::once(term_consistency_table));
+                let table_id = self.db.add_table(
+                    term_table,
+                    iter::empty(),
+                    iter::once(term_consistency_table),
+                );
                 *v.insert(table_id)
             }
         }

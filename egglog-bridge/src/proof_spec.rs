@@ -87,8 +87,9 @@ impl ProofBuilder {
         let reason_table = db.reason_table(&reason_spec);
         let reason_spec_id = db.cong_spec;
         let reason_counter = db.reason_counter;
-        let func_table = db.funcs[func].table;
-        let term_table = db.term_table(func_table, db.funcs[func].is_constructor());
+    let func_table = db.funcs[func].table;
+    let is_constructor = db.funcs[func].is_constructor();
+    let term_table = db.term_table(func_table, is_constructor);
         let term_counter = db.id_counter;
         let after = after.to_vec();
         move |inner, rb| {
@@ -103,6 +104,11 @@ impl ProofBuilder {
             entries.push(Value::new(func.rep()).into());
             for entry in &after[..after.len() - 1] {
                 entries.push(inner.convert(entry));
+            }
+            if !is_constructor {
+                let ret_val = inner
+                    .convert(after.last().expect("function rows must have a return value"));
+                entries.push(ret_val);
             }
             // Now get the new term value, inserting it if the term is new.
             let term_id = rb.lookup_or_insert(
@@ -130,10 +136,14 @@ impl ProofBuilder {
         let func_info = &db.funcs[func];
         let func_table = func_info.table;
         let fiat_reason = func_info.fiat_reason;
-        let term_has_output = func_info.is_constructor();
+        let is_constructor = func_info.is_constructor();
         let term_arity = func_info.term_arity();
         let term_table = db.term_table(func_table, func_info.is_constructor());
         let func_val = Value::new(func.rep());
+        eprintln!(
+            "ProofBuilder::new_row: func={:?}, is_constructor={}, term_arity={}",
+            func, is_constructor, term_arity
+        );
         move |inner, rb| {
             let reason_var: DstVar = if let Some(fiat_reason) = fiat_reason {
                 // This table has been marked as "fiat only", meaning that all proofs for this
@@ -150,7 +160,7 @@ impl ProofBuilder {
             for entry in &entries[0..entries.len() - 1] {
                 translated.push(inner.convert(entry));
             }
-            if term_has_output {
+            if !is_constructor {
                 let ret_val = inner.convert(entries.last().unwrap());
                 translated.push(ret_val);
             }
