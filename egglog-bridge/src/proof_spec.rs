@@ -214,8 +214,6 @@ impl EGraph {
             SourceExpr::ExternalCall { var, .. } => subst[*var],
             SourceExpr::FunctionCall { func, args, .. } => {
                 eprintln!("get_syntax_val: func={:?}, args={:?}", func, args);
-                // This is the interesting part.
-                //
                 // We want to find the term id that corresponds to
                 // (func args...).
                 let mut row_key = Vec::with_capacity(args.len() + 1);
@@ -224,7 +222,10 @@ impl EGraph {
                     row_key.push(self.get_syntax_val(*arg, syntax, subst, memo));
                 }
 
-                // TODO add arg to row_key for functions
+                // Functions require their output variable to be part of the row key.
+                if !self.funcs[*func].is_constructor() {
+                    row_key.push(subst[self.funcs[*func].output_var]);
+                }
 
                 let term_table =
                     self.term_table(self.funcs[*func].table, self.funcs[*func].is_constructor());
