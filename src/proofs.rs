@@ -470,7 +470,7 @@ impl<'a> TermState<'a> {
 
         for command in program {
             match command {
-                ResolvedNCommand::Sort(_, name, _presort_and_args) => {
+                ResolvedNCommand::Sort(span, name, presort_and_args) => {
                     res.push(command.to_command().make_unresolved());
                     res.extend(self.make_parent_table(&name));
                 }

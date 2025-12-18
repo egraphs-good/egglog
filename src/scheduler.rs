@@ -352,7 +352,7 @@ impl SchedulerRuleInfo {
         qrule_builder.query(&rule.body, true);
         let entries = free_vars
             .iter()
-            .map(|fv| qrule_builder.entry(&GenericAtomTerm::Var(span!(), var.clone())))
+            .map(|fv| qrule_builder.entry(&GenericAtomTerm::Var(span!(), fv.clone())))
             .collect::<Vec<_>>();
         let _var = qrule_builder.rb.call_external_func(
             collect_matches,
@@ -370,7 +370,7 @@ impl SchedulerRuleInfo {
         );
         let mut entries = free_vars
             .iter()
-            .map(|fv| arule_builder.entry(&GenericAtomTerm::Var(span!(), var.clone())))
+            .map(|fv| arule_builder.entry(&GenericAtomTerm::Var(span!(), fv.clone())))
             .collect::<Vec<_>>();
         entries.push(unit_entry);
         arule_builder
