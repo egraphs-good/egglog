@@ -133,36 +133,41 @@ impl<'a> TermState<'a> {
         if fdecl.subtype == FunctionSubtype::Custom {
             type_strs.push(fdecl.schema.output.clone());
         }
-        let types = fdecl.resolved_schema.term_types();
+        let types = fdecl.resolved_schema.view_types();
+
         let types2 = types.clone();
 
         let view_name = self.view_name(&fdecl.name);
         let child = |i| format!("c{i}_");
-        let child_parent = move |myself: &mut Self, i| {
-            // TODO weird type error when I don't use iter here
-            let child_t: ArcSort = types2.iter().nth(i).unwrap().clone();
-            myself
-                .get_canonical_expr_of(child(i), child_t)
-                .unwrap_or_else(|| child(i))
-        };
         let children = format!(
             "{}",
             ListDisplay((0..types.len()).map(child).collect::<Vec<_>>(), " ")
         );
+        let mut children_updated_query = vec![];
+        let mut children_updated = vec![];
+        for i in 0..types.len() {
+            if let Some((query, var)) = self.get_canonical_expr_of(child(i), types2[i].clone()) {
+                children_updated_query.push(query);
+                children_updated.push(var);
+            } else {
+                children_updated.push(child(i));
+            }
+        }
+
+        let children_updated_query = format!(
+            "{}",
+            ListDisplay(children_updated_query.into_iter().collect::<Vec<_>>(), " ")
+        );
         let children_updated = format!(
             "{}",
-            ListDisplay(
-                (0..types.len())
-                    .map(|v| child_parent(self, v))
-                    .collect::<Vec<_>>(),
-                " "
-            )
+            ListDisplay(children_updated.into_iter().collect::<Vec<_>>(), " ")
         );
 
         let mut res = vec![];
         // Make a rule that updates the view
         let rule = format!(
-            "(rule ((= lhs ({view_name} {children})))
+            "(rule ((= lhs ({view_name} {children}))
+                        {children_updated_query})
                      (
                       ({view_name} {children_updated})
                      )
@@ -180,6 +185,9 @@ impl<'a> TermState<'a> {
                       :ruleset {})",
             self.rebuilding_ruleset_name()
         );
+
+        res.extend(self.parse_program(&rule).unwrap());
+        res.extend(self.parse_program(&rule2).unwrap());
 
         res
     }
@@ -234,19 +242,22 @@ impl<'a> TermState<'a> {
         }
     }
 
-    fn get_canonical_expr_of(&mut self, var: String, sort: ArcSort) -> Option<String> {
+    // Returns a query for the canonical expression of the given var of the given sort.
+    fn get_canonical_expr_of(&mut self, var: String, sort: ArcSort) -> Option<(String, String)> {
         if sort.is_eq_container_sort() {
+            let fresh = self.fresh_var();
             // todo containers need a custom rebuild
-            Some(format!("(rebuild {})", var))
+            Some((format!("(let {fresh} (rebuild {var}))"), fresh))
         } else {
             self.wrap_parent(var, sort)
         }
     }
 
-    fn wrap_parent(&mut self, var: String, sort: ArcSort) -> Option<String> {
+    fn wrap_parent(&mut self, var: String, sort: ArcSort) -> Option<(String, String)> {
         if sort.is_eq_sort() {
+            let fresh = self.fresh_var();
             let parent = self.parent_name(&sort.name());
-            Some(format!("({parent} {var})"))
+            Some((format!("({parent} {var} {fresh})"), fresh))
         } else {
             None
         }
@@ -282,6 +293,7 @@ impl<'a> TermState<'a> {
                 {
                     exprs.push(self.instrument_action_expr(e, &mut res));
                 }
+                // TODO add to view as well
                 res.push(format!("({} {})", h.name(), ListDisplay(exprs, " ")));
             }
             ResolvedAction::Change(_span, change, h, generic_exprs) => {
@@ -300,6 +312,7 @@ impl<'a> TermState<'a> {
             }
             ResolvedAction::Expr(_span, generic_expr) => {
                 let v = self.instrument_action_expr(generic_expr, &mut res);
+                res.push(format!("{}", v));
             }
         }
 
@@ -357,8 +370,7 @@ impl<'a> TermState<'a> {
     fn instrument_actions(&mut self, actions: &[ResolvedAction]) -> Vec<String> {
         let mut res = vec![];
         for action in actions {
-            let mut instrumented = self.instrument_action(action);
-            res.append(&mut instrumented);
+            res.extend(self.instrument_action(action));
         }
         res
     }
@@ -369,10 +381,14 @@ impl<'a> TermState<'a> {
         self.parse_program(&format!(
             "(rule ({} )
                    ({} )
-                    :ruleset {})",
+                    {})",
             ListDisplay(facts, " "),
             ListDisplay(actions, " "),
-            rule.ruleset,
+            if rule.ruleset == "" {
+                "".to_string()
+            } else {
+                format!(":ruleset {}", rule.ruleset)
+            }
         ))
         .unwrap()
     }

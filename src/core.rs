@@ -91,16 +91,13 @@ impl ResolvedCall {
 
     /// Gives the types for a term's child with the given resolved call.
     /// For functions this includes the output sort, for constructors it's just the inputs.
-    pub(crate) fn term_types(&self) -> Vec<ArcSort> {
+    pub(crate) fn view_types(&self) -> Vec<ArcSort> {
         match self {
-            ResolvedCall::Func(func) => match func.subtype {
-                FunctionSubtype::Constructor | FunctionSubtype::Relation => func.input.clone(),
-                FunctionSubtype::Custom => {
-                    let mut types = func.input.clone();
-                    types.push(func.output.clone());
-                    types
-                }
-            },
+            ResolvedCall::Func(func) => {
+                let mut types = func.input.clone();
+                types.push(func.output.clone());
+                types
+            }
             ResolvedCall::Primitive(prim) => prim.input().to_vec(),
         }
     }
