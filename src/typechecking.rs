@@ -56,7 +56,7 @@ pub struct TypeInfo {
     sorts: HashMap<String, Arc<dyn Sort>>,
     primitives: HashMap<String, Vec<PrimitiveWithId>>,
     func_types: HashMap<String, FuncType>,
-    global_sorts: HashMap<String, ArcSort>,
+    pub(crate) global_sorts: HashMap<String, ArcSort>,
 }
 
 // These methods need to be on the `EGraph` in order to

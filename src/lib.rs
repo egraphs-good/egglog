@@ -1373,6 +1373,7 @@ impl EGraph {
             // TODO inefficient clone to throw away typechecking results
             let before_typechecked = self.clone();
             let mut typechecked = self.typecheck_program(&desugared)?;
+            let global_sorts = self.type_info.global_sorts.clone(); // need global sorts which disappear after remove_globals
 
             typechecked = remove_globals::remove_globals(typechecked, &mut self.parser.symbol_gen);
             for command in &typechecked {
@@ -1384,12 +1385,17 @@ impl EGraph {
             let mut new_typechecked = vec![];
             for new_cmd in term_encoding_added {
                 let desugared = desugar_command(new_cmd, &mut self.parser)?;
-                for d in &desugared {
-                    eprintln!("{}", d.to_command());
-                }
                 let desugared_typechecked = self.typecheck_program(&desugared)?;
+                // remove globals again
+                let desugared_typechecked = remove_globals::remove_globals(
+                    desugared_typechecked,
+                    &mut self.parser.symbol_gen,
+                );
+
                 new_typechecked.extend(desugared_typechecked);
             }
+            // restore global sorts
+            self.type_info.global_sorts = global_sorts;
             Ok(new_typechecked)
         } else {
             let mut typechecked = self.typecheck_program(&desugared)?;

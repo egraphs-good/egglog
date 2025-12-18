@@ -631,6 +631,7 @@ where
                 }
                 GenericAction::Union(span, e1, e2) => {
                     match (e1, e2) {
+                        /* TODO why did we have this case? And why is it using Set?
                         (var @ GenericExpr::Var(..), GenericExpr::Call(_, f, args))
                         | (GenericExpr::Call(_, f, args), var @ GenericExpr::Var(..))
                             if f.is_constructor(typeinfo) =>
@@ -669,7 +670,7 @@ where
                                 mapped_args,
                                 mapped_expr,
                             ));
-                        }
+                        }*/
                         _ => {
                             let mapped_e1 = e1.to_core_actions(
                                 typeinfo,
