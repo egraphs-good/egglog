@@ -24,7 +24,7 @@ pub mod scheduler;
 mod serialize;
 pub mod sort;
 mod termdag;
-mod terms;
+mod proofs;
 mod typechecking;
 pub mod util;
 pub use command_macro::{CommandMacro, CommandMacroRegistry};
@@ -77,7 +77,7 @@ use util::*;
 
 use crate::ast::desugar::desugar_command;
 use crate::core::{GenericActionsExt, ResolvedRuleExt};
-use crate::terms::ProofConstants;
+use crate::proofs::ProofConstants;
 
 pub const GLOBAL_NAME_PREFIX: &str = "$";
 

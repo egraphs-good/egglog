@@ -255,6 +255,24 @@ where
     }
 }
 
+pub(crate) fn to_unresolved_schedule(schedule: &ResolvedSchedule) -> Schedule {
+    match schedule {
+        GenericSchedule::Saturate(span, sched) => {
+            GenericSchedule::Saturate(span.clone(), Box::new(to_unresolved_schedule(sched)))
+        }
+        GenericSchedule::Repeat(span, size, sched) => {
+            GenericSchedule::Repeat(span.clone(), *size, Box::new(to_unresolved_schedule(sched)))
+        }
+        GenericSchedule::Run(span, config) => {
+            GenericSchedule::Run(span.clone(), to_unresolved_run_config(config))
+        }
+        GenericSchedule::Sequence(span, scheds) => GenericSchedule::Sequence(
+            span.clone(),
+            scheds.iter().map(to_unresolved_schedule).collect(),
+        ),
+    }
+}
+
 impl<Head: Display, Leaf: Display> Display for GenericSchedule<Head, Leaf> {
     fn fmt(&self, f: &mut Formatter) -> std::fmt::Result {
         match self {
@@ -916,7 +934,10 @@ where
 {
     pub name: String,
     pub subtype: FunctionSubtype,
+    /// Untyped schema
     pub schema: Schema,
+    /// Resolved schema after typechecking is stored here, otherwise "".
+    pub resolved_schema: Head,
     pub merge: Option<GenericExpr<Head, Leaf>>,
     pub cost: Option<DefaultCost>,
     pub unextractable: bool,
@@ -979,6 +1000,7 @@ impl FunctionDecl {
             name,
             subtype: FunctionSubtype::Custom,
             schema,
+            resolved_schema: String::new(),
             merge,
             cost: None,
             unextractable: true,
@@ -998,6 +1020,7 @@ impl FunctionDecl {
         Self {
             name,
             subtype: FunctionSubtype::Constructor,
+            resolved_schema: String::new(),
             schema,
             merge: None,
             cost,
@@ -1016,6 +1039,7 @@ impl FunctionDecl {
                 input,
                 output: String::from("Unit"),
             },
+            resolved_schema: String::new(),
             merge: None,
             cost: None,
             unextractable: true,
@@ -1038,6 +1062,7 @@ where
             name: self.name,
             subtype: self.subtype,
             schema: self.schema,
+            resolved_schema: self.resolved_schema,
             merge: self.merge.map(|expr| expr.visit_exprs(f)),
             cost: self.cost,
             unextractable: self.unextractable,

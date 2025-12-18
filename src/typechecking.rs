@@ -444,6 +444,7 @@ impl TypeInfo {
             name: fdecl.name.clone(),
             subtype: fdecl.subtype,
             schema: fdecl.schema.clone(),
+            resolved_schema: ResolvedCall::Func(self.func_types.get(&fdecl.name).unwrap().clone()),
             merge: match &fdecl.merge {
                 Some(merge) => Some(self.typecheck_expr(symbol_gen, merge, &bound_vars)?),
                 None => None,
