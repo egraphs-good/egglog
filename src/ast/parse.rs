@@ -150,6 +150,7 @@ pub struct Parser {
     exprs: HashMap<String, Arc<dyn Macro<Expr>>>,
     user_defined: HashSet<String>,
     pub symbol_gen: SymbolGen,
+    pub ensure_no_reserved_symbols: bool,
 }
 
 impl Default for Parser {
@@ -160,13 +161,14 @@ impl Default for Parser {
             exprs: Default::default(),
             user_defined: Default::default(),
             symbol_gen: SymbolGen::new(INTERNAL_SYMBOL_PREFIX.to_string()),
+            ensure_no_reserved_symbols: true,
         }
     }
 }
 
 impl Parser {
     fn ensure_symbol_not_reserved(&self, symbol: &str, span: &Span) -> Result<(), ParseError> {
-        if self.symbol_gen.is_reserved(symbol) {
+        if self.symbol_gen.is_reserved(symbol) && self.ensure_no_reserved_symbols {
             return error!(
                 span.clone(),
                 "symbols starting with '{}' are reserved for egglog internals",

@@ -352,10 +352,18 @@ impl Default for EGraph {
 pub struct NotFoundError(String);
 
 impl EGraph {
+    /// Create a new e-graph with term encoding enabled.
+    /// This instruments the egglog to use a explicit equality relation.
     pub fn new_with_term_encoding() -> Self {
         let mut egraph = EGraph::default();
         egraph.proof_constants.term_mode_enabled = true;
         egraph
+    }
+
+    /// WARNING: this should be called before any commands are added to the e-graph.
+    pub fn with_term_encoding_enabled(mut self) -> Self {
+        self.proof_constants.term_mode_enabled = true;
+        self
     }
 
     /// Add a user-defined command to the e-graph
@@ -1376,6 +1384,9 @@ impl EGraph {
             let mut new_typechecked = vec![];
             for new_cmd in term_encoding_added {
                 let desugared = desugar_command(new_cmd, &mut self.parser)?;
+                for d in &desugared {
+                    eprintln!("{}", d.to_command());
+                }
                 let desugared_typechecked = self.typecheck_program(&desugared)?;
                 new_typechecked.extend(desugared_typechecked);
             }

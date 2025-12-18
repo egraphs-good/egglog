@@ -66,6 +66,7 @@ impl<'a> TermState<'a> {
         self.parse_program(&format!(
             "(sort {fresh_sort})
              (constructor {pname} ({name} {name}) {fresh_sort})
+             (constructor {to_union_name} ({name} {name}) {fresh_sort})
              (rule (({pname} a b)
                     ({pname} b c)
                     (!= b c)
@@ -326,7 +327,7 @@ impl<'a> TermState<'a> {
                         let fv = self.fresh_var();
                         // add to term table
                         res.push(format!(
-                            "(let fv ({} {}))",
+                            "(let {fv} ({} {}))",
                             func_type.name,
                             ListDisplay(args.clone(), " ")
                         ));
@@ -469,7 +470,7 @@ impl<'a> TermState<'a> {
         }
 
         for command in program {
-            match command {
+            match &command {
                 ResolvedNCommand::Sort(span, name, presort_and_args) => {
                     res.push(command.to_command().make_unresolved());
                     res.extend(self.make_parent_table(&name));
@@ -482,25 +483,24 @@ impl<'a> TermState<'a> {
                     res.extend(self.instrument_rule(&rule));
                 }
                 ResolvedNCommand::CoreAction(action) => {
-                    res.extend(
-                        self.parse_program(&self.instrument_action(&action).join("\n"))
-                            .unwrap(),
-                    );
+                    let instrumented = self.instrument_action(&action).join("\n");
+                    res.extend(self.parse_program(&instrumented).unwrap());
                 }
                 ResolvedNCommand::Check(span, facts) => {
+                    let instrumented = self.instrument_facts(&facts);
                     res.push(Command::Check(
-                        span,
-                        self.parse_facts(&self.instrument_facts(&facts)),
+                        span.clone(),
+                        self.parse_facts(&instrumented),
                     ));
                 }
                 ResolvedNCommand::RunSchedule(schedule) => {
                     res.push(Command::RunSchedule(self.instrument_schedule(&schedule)));
                 }
                 ResolvedNCommand::Fail(span, cmd) => {
-                    let mut with_term_encoding = self.add_term_encoding_helper(vec![*cmd]);
+                    let mut with_term_encoding = self.add_term_encoding_helper(vec![*cmd.clone()]);
                     let last = with_term_encoding.pop().unwrap();
                     res.extend(with_term_encoding);
-                    res.push(Command::Fail(span, Box::new(last)));
+                    res.push(Command::Fail(span.clone(), Box::new(last)));
                 }
                 ResolvedNCommand::Pop(..)
                 | ResolvedNCommand::Push(..)
@@ -555,13 +555,19 @@ impl<'a> TermState<'a> {
     }
 
     fn parse_program(&mut self, input: &str) -> Result<Vec<Command>, ParseError> {
-        self.egraph.parser.get_program_from_string(None, input)
+        self.egraph.parser.ensure_no_reserved_symbols = false;
+        let res = self.egraph.parser.get_program_from_string(None, input);
+        self.egraph.parser.ensure_no_reserved_symbols = true;
+        res
     }
 
     fn parse_facts(&mut self, input: &Vec<String>) -> Vec<Fact> {
-        input
+        self.egraph.parser.ensure_no_reserved_symbols = false;
+        let res = input
             .into_iter()
             .map(|f| self.egraph.parser.get_fact_from_string(None, f).unwrap())
-            .collect()
+            .collect();
+        self.egraph.parser.ensure_no_reserved_symbols = true;
+        res
     }
 }

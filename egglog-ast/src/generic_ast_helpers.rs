@@ -194,6 +194,20 @@ where
             ruleset: self.ruleset.clone(),
         }
     }
+
+    pub fn make_unresolved(self) -> GenericRule<String, String> {
+        GenericRule {
+            span: self.span,
+            head: self.head.make_unresolved(),
+            body: self
+                .body
+                .into_iter()
+                .map(GenericFact::make_unresolved)
+                .collect(),
+            name: self.name,
+            ruleset: self.ruleset,
+        }
+    }
 }
 
 impl<Head, Leaf> GenericActions<Head, Leaf>
@@ -232,6 +246,15 @@ where
 
     pub fn singleton(action: GenericAction<Head, Leaf>) -> Self {
         Self(vec![action])
+    }
+
+    pub fn make_unresolved(self) -> GenericActions<String, String> {
+        GenericActions(
+            self.0
+                .into_iter()
+                .map(GenericAction::make_unresolved)
+                .collect(),
+        )
     }
 }
 
@@ -355,6 +378,31 @@ where
             GenericAction::Expr(span, e) => {
                 GenericAction::Expr(span, e.subst_leaf(&mut fvar_expr!()))
             }
+        }
+    }
+
+    pub fn make_unresolved(self) -> GenericAction<String, String> {
+        match self {
+            GenericAction::Let(span, lhs, rhs) => {
+                GenericAction::Let(span, lhs.to_string(), rhs.make_unresolved())
+            }
+            GenericAction::Set(span, head, args, rhs) => GenericAction::Set(
+                span,
+                head.to_string(),
+                args.into_iter().map(GenericExpr::make_unresolved).collect(),
+                rhs.make_unresolved(),
+            ),
+            GenericAction::Change(span, change, head, args) => GenericAction::Change(
+                span,
+                change,
+                head.to_string(),
+                args.into_iter().map(GenericExpr::make_unresolved).collect(),
+            ),
+            GenericAction::Union(span, lhs, rhs) => {
+                GenericAction::Union(span, lhs.make_unresolved(), rhs.make_unresolved())
+            }
+            GenericAction::Panic(span, msg) => GenericAction::Panic(span, msg),
+            GenericAction::Expr(span, expr) => GenericAction::Expr(span, expr.make_unresolved()),
         }
     }
 }
@@ -513,6 +561,13 @@ impl<Head: Clone + Display, Leaf: Hash + Clone + Display + Eq> GenericExpr<Head,
         subst_leaf: &mut impl FnMut(&Span, &Leaf) -> GenericExpr<Head, Leaf2>,
     ) -> GenericExpr<Head, Leaf2> {
         self.subst(subst_leaf, &mut |x| x.clone())
+    }
+
+    pub fn make_unresolved(self) -> GenericExpr<String, String> {
+        let mut subst_leaf =
+            |span: &Span, leaf: &Leaf| GenericExpr::Var(span.clone(), leaf.to_string());
+        let mut subst_head = |head: &Head| head.to_string();
+        self.subst(&mut subst_leaf, &mut subst_head)
     }
 
     pub fn vars(&self) -> impl Iterator<Item = Leaf> + '_ {
