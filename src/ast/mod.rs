@@ -1237,3 +1237,13 @@ where
         }
     }
 }
+
+impl<Head, Leaf> GenericCommand<Head, Leaf>
+where
+    Head: Clone + Display,
+    Leaf: Clone + PartialEq + Eq + Display + Hash,
+{
+    pub fn make_unresolved(self) -> GenericCommand<String, String> {
+        todo!()
+    }
+}

@@ -20,11 +20,11 @@ pub mod constraint;
 mod core;
 pub mod extract;
 pub mod prelude;
+mod proofs;
 pub mod scheduler;
 mod serialize;
 pub mod sort;
 mod termdag;
-mod proofs;
 mod typechecking;
 pub mod util;
 pub use command_macro::{CommandMacro, CommandMacroRegistry};
@@ -77,7 +77,7 @@ use util::*;
 
 use crate::ast::desugar::desugar_command;
 use crate::core::{GenericActionsExt, ResolvedRuleExt};
-use crate::proofs::ProofConstants;
+use crate::proofs::{ProofConstants, TermState};
 
 pub const GLOBAL_NAME_PREFIX: &str = "$";
 
@@ -352,6 +352,12 @@ impl Default for EGraph {
 pub struct NotFoundError(String);
 
 impl EGraph {
+    pub fn new_with_term_encoding() -> Self {
+        let mut egraph = EGraph::default();
+        egraph.proof_constants.term_mode_enabled = true;
+        egraph
+    }
+
     /// Add a user-defined command to the e-graph
     /// Get the type information for this e-graph
     pub fn type_info(&mut self) -> &mut TypeInfo {
@@ -1353,14 +1359,36 @@ impl EGraph {
     /// Leverages previous type information in the [`EGraph`] to do so, adding new type information.
     fn resolve_command(&mut self, command: Command) -> Result<Vec<ResolvedNCommand>, Error> {
         let desugared = desugar_command(command, &mut self.parser)?;
-        let mut typechecked = self.typecheck_program(&desugared)?;
 
-        typechecked = remove_globals::remove_globals(typechecked, &mut self.parser.symbol_gen);
-        for command in &typechecked {
-            self.names.check_shadowing(command)?;
+        // Add term encoding when it is enabled
+        if self.proof_constants.term_mode_enabled {
+            // TODO inefficient clone to throw away typechecking results
+            let before_typechecked = self.clone();
+            let mut typechecked = self.typecheck_program(&desugared)?;
+
+            typechecked = remove_globals::remove_globals(typechecked, &mut self.parser.symbol_gen);
+            for command in &typechecked {
+                self.names.check_shadowing(command)?;
+            }
+
+            *self = before_typechecked;
+            let term_encoding_added = TermState::add_term_encoding(self, typechecked);
+            let mut new_typechecked = vec![];
+            for new_cmd in term_encoding_added {
+                let desugared = desugar_command(new_cmd, &mut self.parser)?;
+                let desugared_typechecked = self.typecheck_program(&desugared)?;
+                new_typechecked.extend(desugared_typechecked);
+            }
+            Ok(new_typechecked)
+        } else {
+            let mut typechecked = self.typecheck_program(&desugared)?;
+
+            typechecked = remove_globals::remove_globals(typechecked, &mut self.parser.symbol_gen);
+            for command in &typechecked {
+                self.names.check_shadowing(command)?;
+            }
+            Ok(typechecked)
         }
-
-        Ok(typechecked)
     }
 
     /// Run a program, returning the desugared outputs as well as the CommandOutputs.

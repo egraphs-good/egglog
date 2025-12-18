@@ -196,6 +196,16 @@ impl Parser {
         self.parse_expr(&sexp)
     }
 
+    // Parse a fact from a string.
+    pub fn get_fact_from_string(
+        &mut self,
+        filename: Option<String>,
+        input: &str,
+    ) -> Result<Fact, ParseError> {
+        let sexp = sexp(&mut SexpParser::new(filename, input))?;
+        self.parse_fact(&sexp)
+    }
+
     pub fn add_command_macro(&mut self, ma: Arc<dyn Macro<Vec<Command>>>) {
         self.commands.insert(ma.name().to_owned(), ma);
     }

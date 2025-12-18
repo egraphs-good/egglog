@@ -1,9 +1,11 @@
 use crate::*;
 
+#[derive(Default, Clone)]
 pub(crate) struct ProofConstants {
     pub uf_parent: HashMap<String, String>,
     pub to_union: HashMap<String, String>,
     pub term_header_added: bool,
+    pub term_mode_enabled: bool,
 }
 
 pub(crate) struct TermState<'a> {
@@ -14,7 +16,7 @@ impl<'a> TermState<'a> {
     /// Make a term state and use it to instrument the code.
     pub(crate) fn add_term_encoding(
         egraph: &'a mut EGraph,
-        program: Vec<ResolvedCommand>,
+        program: Vec<ResolvedNCommand>,
     ) -> Vec<Command> {
         Self { egraph }.add_term_encoding_helper(program)
     }
@@ -94,6 +96,8 @@ impl<'a> TermState<'a> {
     /// The view table stores child terms and their eclass.
     /// The view table is mutated using delete, but we never delete from term tables.
     /// We re-use the original name of the function for the term table.
+    ///
+    /// TODO need a rule to handle merge functions
     fn term_and_view(&mut self, fdecl: &ResolvedFunctionDecl) -> Vec<Command> {
         let schema = &fdecl.schema;
         let mut types = schema.input.clone();
@@ -212,7 +216,7 @@ impl<'a> TermState<'a> {
                             self.view_name(&func_type.name),
                             ListDisplay(args, " ")
                         ));
-                        var
+                        fv
                     }
                     ResolvedCall::Primitive(specialized_primitive) => {
                         let fv = self.fresh_var();
@@ -222,7 +226,7 @@ impl<'a> TermState<'a> {
                             specialized_primitive.name(),
                             ListDisplay(args, " ")
                         ));
-                        var
+                        fv
                     }
                 }
             }
@@ -332,7 +336,7 @@ impl<'a> TermState<'a> {
                             self.view_name(&func_type.name),
                             ListDisplay(args, " ")
                         ));
-                        var
+                        fv
                     }
                     ResolvedCall::Primitive(specialized_primitive) => {
                         let fv = self.fresh_var();
@@ -342,7 +346,7 @@ impl<'a> TermState<'a> {
                             specialized_primitive.name(),
                             ListDisplay(args, " ")
                         ));
-                        var
+                        fv
                     }
                 }
             }
@@ -358,12 +362,7 @@ impl<'a> TermState<'a> {
         res
     }
 
-    fn instrument_rule(
-        &mut self,
-        ruleset: String,
-        name: String,
-        rule: &ResolvedRule,
-    ) -> Vec<Command> {
+    fn instrument_rule(&mut self, rule: &ResolvedRule) -> Vec<Command> {
         let facts = self.instrument_facts(&rule.body);
         let actions = self.instrument_actions(&rule.head.0);
         self.parse_program(&format!(
@@ -372,7 +371,7 @@ impl<'a> TermState<'a> {
                     :ruleset {})",
             ListDisplay(facts, " "),
             ListDisplay(actions, " "),
-            ruleset,
+            rule.ruleset,
         ))
         .unwrap()
     }
@@ -420,7 +419,8 @@ impl<'a> TermState<'a> {
             ResolvedSchedule::Run(span, config) => {
                 let new_run = match config.until {
                     Some(ref facts) => {
-                        let instrumented_facts = self.parse_facts(self.instrument_facts(facts));
+                        let instrumented = self.instrument_facts(facts);
+                        let instrumented_facts = self.parse_facts(&instrumented);
                         Schedule::Run(
                             span.clone(),
                             RunConfig {
@@ -459,7 +459,7 @@ impl<'a> TermState<'a> {
 
     pub(crate) fn add_term_encoding_helper(
         &mut self,
-        program: Vec<ResolvedCommand>,
+        program: Vec<ResolvedNCommand>,
     ) -> Vec<Command> {
         let mut res = vec![];
 
@@ -470,62 +470,61 @@ impl<'a> TermState<'a> {
 
         for command in program {
             match command {
-                ResolvedCommand::Sort(name, _presort_and_args) => {
-                    res.push(command.to_command());
-                    res.extend(self.make_parent_table(*name));
+                ResolvedNCommand::Sort(_, name, _presort_and_args) => {
+                    res.push(command.to_command().make_unresolved());
+                    res.extend(self.make_parent_table(&name));
                 }
-                ResolvedCommand::Function(_, fdecl) => {
-                    res.extend(self.term_and_view(fdecl));
-                    res.extend(self.rebuilding_rules(fdecl));
+                ResolvedNCommand::Function(fdecl) => {
+                    res.extend(self.term_and_view(&fdecl));
+                    res.extend(self.rebuilding_rules(&fdecl));
                 }
-                ResolvedCommand::NormRule {
-                    ruleset,
-                    name,
-                    rule,
-                } => {
-                    res.extend(self.instrument_rule(*ruleset, *name, rule));
+                ResolvedNCommand::NormRule { rule } => {
+                    res.extend(self.instrument_rule(&rule));
                 }
-                ResolvedCommand::NormAction(action) => {
+                ResolvedNCommand::CoreAction(action) => {
                     res.extend(
-                        self.instrument_action(action)
-                            .into_iter()
-                            .map(Command::Action),
+                        self.parse_program(&self.instrument_action(&action).join("\n"))
+                            .unwrap(),
                     );
                 }
-                ResolvedCommand::Check(facts) => {
-                    res.push(Command::Check(self.instrument_facts(facts)));
+                ResolvedNCommand::Check(span, facts) => {
+                    res.push(Command::Check(
+                        span,
+                        self.parse_facts(&self.instrument_facts(&facts)),
+                    ));
                 }
-                ResolvedCommand::RunSchedule(schedule) => {
-                    res.push(Command::RunSchedule(self.instrument_schedule(schedule)));
+                ResolvedNCommand::RunSchedule(schedule) => {
+                    res.push(Command::RunSchedule(self.instrument_schedule(&schedule)));
                 }
-                ResolvedCommand::Fail(cmd) => {
-                    let mut with_term_encoding =
-                        self.add_term_encoding_helper(vec![ResolvedCommand {
-                            command: *cmd.clone(),
-                            metadata: command.metadata.clone(),
-                        }]);
+                ResolvedNCommand::Fail(span, cmd) => {
+                    let mut with_term_encoding = self.add_term_encoding_helper(vec![*cmd]);
                     let last = with_term_encoding.pop().unwrap();
                     res.extend(with_term_encoding);
-                    res.push(Command::Fail(Box::new(last)));
+                    res.push(Command::Fail(span, Box::new(last)));
                 }
-                ResolvedCommand::SetOption { .. }
-                | ResolvedCommand::Pop(..)
-                | ResolvedCommand::Push(..)
-                | ResolvedCommand::AddRuleset(..)
-                | ResolvedCommand::PrintSize(..)
-                | ResolvedCommand::PrintTable(..)
-                | ResolvedCommand::Output { .. }
-                | ResolvedCommand::Input { .. }
-                | ResolvedCommand::CheckProof
-                | ResolvedCommand::PrintOverallStatistics => {
-                    res.push(command.to_command());
+                ResolvedNCommand::Pop(..)
+                | ResolvedNCommand::Push(..)
+                | ResolvedNCommand::AddRuleset(..)
+                | ResolvedNCommand::PrintSize(..)
+                | ResolvedNCommand::Output { .. }
+                | ResolvedNCommand::Input { .. }
+                | ResolvedNCommand::UnstableCombinedRuleset(..)
+                | ResolvedNCommand::PrintOverallStatistics(..)
+                | ResolvedNCommand::PrintFunction(..) => {
+                    res.push(command.to_command().make_unresolved());
+                }
+                ResolvedNCommand::Extract(..) => {
+                    panic!("Extract commands unsupported in term encoding");
+                }
+                ResolvedNCommand::UserDefined(..) => {
+                    panic!("User defined commands unsupported in term encoding");
                 }
             }
 
             // run rebuilding after every command except a few
-            if let ResolvedCommand::Function(..)
-            | ResolvedCommand::NormRule { .. }
-            | ResolvedCommand::Sort(..) = &command.command
+            if let ResolvedNCommand::Function(..)
+            | ResolvedNCommand::NormRule { .. }
+            | ResolvedNCommand::Sort(..) = &command
             {
             } else {
                 res.push(Command::RunSchedule(self.rebuild()));
@@ -543,7 +542,7 @@ impl<'a> TermState<'a> {
         String::from(format!("rebuilding",))
     }
 
-    pub(crate) fn term_header(&self) -> Vec<Command> {
+    pub(crate) fn term_header(&mut self) -> Vec<Command> {
         let str = format!(
             "(ruleset {})
              (ruleset {})
@@ -562,7 +561,7 @@ impl<'a> TermState<'a> {
     fn parse_facts(&mut self, input: &Vec<String>) -> Vec<Fact> {
         input
             .into_iter()
-            .map(|f| self.egraph.parser.parse_fact(f))
+            .map(|f| self.egraph.parser.get_fact_from_string(None, f).unwrap())
             .collect()
     }
 }
