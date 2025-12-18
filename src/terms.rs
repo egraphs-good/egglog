@@ -3,6 +3,7 @@ use crate::*;
 pub(crate) struct ProofConstants {
     pub uf_parent: HashMap<String, String>,
     pub to_union: HashMap<String, String>,
+    pub term_header_added: bool,
 }
 
 pub(crate) struct TermState<'a> {
@@ -19,26 +20,26 @@ impl<'a> TermState<'a> {
     }
 
     pub(crate) fn parent_name(&mut self, sort: &String) -> String {
-        if let Some(name) = self.egraph.proof_constants.uf_parent.get(&sort) {
+        if let Some(name) = self.egraph.proof_constants.uf_parent.get(sort) {
             name.clone()
         } else {
             self.egraph
                 .proof_constants
                 .uf_parent
                 .insert(sort.clone(), String::from(format!("ufparent_{}", sort,)));
-            self.egraph.proof_constants.uf_parent[&sort].clone()
+            self.egraph.proof_constants.uf_parent[sort].clone()
         }
     }
 
     pub(crate) fn to_union_name(&mut self, sort: &String) -> String {
-        if let Some(name) = self.egraph.proof_constants.to_union.get(&sort) {
+        if let Some(name) = self.egraph.proof_constants.to_union.get(sort) {
             name.clone()
         } else {
             self.egraph
                 .proof_constants
                 .to_union
                 .insert(sort.clone(), String::from(format!("ufunion_{}", sort)));
-            self.egraph.proof_constants.to_union[&sort].clone()
+            self.egraph.proof_constants.to_union[sort].clone()
         }
     }
 
@@ -47,7 +48,7 @@ impl<'a> TermState<'a> {
     }
 
     /// Mark two things for unioning.
-    pub(crate) fn union(&mut self, type_name: String, lhs: &str, rhs: &str) -> String {
+    pub(crate) fn union(&mut self, type_name: &String, lhs: &str, rhs: &str) -> String {
         let to_union_name = self.to_union_name(type_name);
         format!("({} {} {})", to_union_name, lhs, rhs)
     }
@@ -99,26 +100,20 @@ impl<'a> TermState<'a> {
 
         let view_name = self.view_name(fdecl.name);
         let sort = fdecl.schema.output.clone();
-        let child_sorts = ListDisplay(types.input.iter().map(|s| s.name()), " ");
-        self.desugar()
-            .parse_program(&format!("
-            
-            (function {view_name} ({child_sorts}) {sort} )"))
-            .unwrap()
+        let child_sorts = ListDisplay(types.iter().map(|s| s.name()), " ");
+        self.parse_program(&format!(
+            "
+            (relation {view_name} ({child_sorts}))"
+        ))
+        .unwrap()
     }
 
-    fn canonicalize_rules(&mut self, fdecl: &NormFunctionDecl) -> Vec<Command> {
-        let types = self.type_info().lookup_user_func(fdecl.name).unwrap();
-        let has_eq_type = types.output.is_eq_sort()
-            || types.output.is_eq_container_sort()
-            || types
-                .input
-                .iter()
-                .any(|s| s.is_eq_sort() || s.is_eq_container_sort());
-
-        if !has_eq_type {
-            return vec![];
+    fn canonicalize_rules(&mut self, fdecl: &ResolvedFunctionDecl) -> Vec<Command> {
+        let types = fdecl.schema.input;
+        if fdecl.subtype == FunctionSubtype::Custom {
+            types.push(fdecl.schema.output.clone());
         }
+        // TODO
 
         let op_name = fdecl.name;
 
@@ -519,10 +514,6 @@ impl<'a> TermState<'a> {
 
     fn parent_direct_ruleset_name(&self) -> String {
         String::from(format!("parent",))
-    }
-
-    fn to_union_name(&self) -> String {
-        String::from(format!("to_union",))
     }
 
     fn rebuilding_ruleset_name(&self) -> String {
