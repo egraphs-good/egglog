@@ -177,8 +177,10 @@ impl<'a> TermState<'a> {
 
         // And a rule that cleans up the view
         let rule2 = format!(
-            "(rule ((!= ({view_name} {children})
-                        ({view_name} {children_updated})))
+            "(rule (
+                        {children_updated_query}
+                        (!= ({view_name} {children})
+                            ({view_name} {children_updated})))
                      (
                       (delete ({view_name} {children}))
                      )
@@ -203,7 +205,7 @@ impl<'a> TermState<'a> {
                 res.push(format!("(= {} {})", v1, v2));
             }
             GenericFact::Fact(generic_expr) => {
-                let v = self.instrument_fact_expr(generic_expr, res);
+                let _ = self.instrument_fact_expr(generic_expr, res);
             }
         }
     }
@@ -293,8 +295,26 @@ impl<'a> TermState<'a> {
                 {
                     exprs.push(self.instrument_action_expr(e, &mut res));
                 }
-                // TODO add to view as well
-                res.push(format!("({} {})", h.name(), ListDisplay(exprs, " ")));
+
+                // todo let else panic
+                let ResolvedCall::Func(func_type) = h else {
+                    panic!(
+                        "Set action on non-function, should have been prevented by typechecking"
+                    );
+                };
+
+                // add to view
+                res.push(format!(
+                    "({} {})",
+                    self.view_name(&func_type.name),
+                    ListDisplay(exprs.clone(), " ")
+                ));
+                // add to term table
+                res.push(format!(
+                    "({} {})",
+                    func_type.name,
+                    ListDisplay(exprs.clone(), " ")
+                ));
             }
             ResolvedAction::Change(_span, change, h, generic_exprs) => {
                 todo!()
@@ -348,8 +368,14 @@ impl<'a> TermState<'a> {
                         res.push(format!(
                             "({} {} {fv})",
                             self.view_name(&func_type.name),
-                            ListDisplay(args, " ")
+                            ListDisplay(args.clone(), " ")
                         ));
+                        // add to uf table if needed
+                        if func_type.output.is_eq_sort() {
+                            let parent_name = self.parent_name(func_type.output.name());
+                            res.push(format!("({} {fv} {})", parent_name, fv));
+                        }
+
                         fv
                     }
                     ResolvedCall::Primitive(specialized_primitive) => {
