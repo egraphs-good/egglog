@@ -20,7 +20,7 @@ pub mod constraint;
 mod core;
 pub mod extract;
 pub mod prelude;
-mod proofs;
+mod terms;
 pub mod scheduler;
 mod serialize;
 pub mod sort;
@@ -77,8 +77,8 @@ use util::*;
 use crate::ast::desugar::desugar_command;
 use crate::ast::*;
 use crate::core::{GenericActionsExt, ResolvedRuleExt};
-pub use crate::proofs::term_encoding_supported;
-use crate::proofs::{ProofConstants, TermState, command_supports_proof_encoding, commands_support_proof_encoding};
+pub use crate::terms::term_encoding_supported;
+use crate::terms::{ProofConstants, TermState, command_supports_proof_encoding, commands_support_proof_encoding};
 
 pub const GLOBAL_NAME_PREFIX: &str = "$";
 
