@@ -44,7 +44,7 @@ impl<'a> TermState<'a> {
             self.egraph
                 .proof_state
                 .to_union
-                .insert(sort.to_string(), String::from(format!("ufunion_{}", sort)));
+                .insert(sort.to_string(), format!("ufunion_{}", sort));
             self.egraph.proof_state.to_union[sort].clone()
         }
     }
@@ -344,8 +344,7 @@ impl<'a> TermState<'a> {
                 res.push(format!("(panic {})", msg));
             }
             ResolvedAction::Expr(_span, generic_expr) => {
-                let v = self.instrument_action_expr(generic_expr, &mut res);
-                res.push(format!("{}", v));
+                self.instrument_action_expr(generic_expr, &mut res);
             }
         }
 
@@ -613,6 +612,7 @@ impl<'a> TermState<'a> {
     }
 
     fn parse_program(&mut self, input: &str) -> Result<Vec<Command>, ParseError> {
+        eprintln!("parsing program:\n{}", input);
         self.egraph.parser.ensure_no_reserved_symbols = false;
         let res = self.egraph.parser.get_program_from_string(None, input);
         self.egraph.parser.ensure_no_reserved_symbols = true;
