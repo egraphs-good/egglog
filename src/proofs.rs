@@ -565,7 +565,7 @@ impl<'a> TermState<'a> {
                     res.push(command.to_command().make_unresolved());
                 }
                 ResolvedNCommand::Extract(..) => {
-                    panic!("Extract commands unsupported in term encoding");
+                    // TODO we just omit extract for now, support in future
                 }
                 ResolvedNCommand::UserDefined(..) => {
                     panic!("User defined commands unsupported in term encoding");
@@ -651,13 +651,17 @@ fn term_encoding_supported_impl(path: &Path, visited: &mut HashSet<PathBuf>) -> 
     };
 
     for command in desugared {
-        if let GenericCommand::Sort(_, _, Some(_)) = command {
+        if let GenericCommand::Sort(_, _, Some(_)) = &command {
             return false;
         }
-        if let GenericCommand::Action(ResolvedAction::Let(_, _, expr)) = command {
+        if let GenericCommand::Action(ResolvedAction::Let(_, _, expr)) = &command {
             if !expr.output_type().is_eq_sort() {
                 return false;
             }
+        }
+
+        if let GenericCommand::UserDefined(..) = &command {
+            return false;
         }
     }
 
