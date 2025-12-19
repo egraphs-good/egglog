@@ -226,7 +226,7 @@ pub struct EGraph {
     warned_about_missing_global_prefix: bool,
     /// Registry for command-level macros
     command_macros: CommandMacroRegistry,
-    proof_constants: ProofConstants,
+    proof_state: ProofConstants,
 }
 
 /// A user-defined command allows users to inject custom command that can be called
@@ -312,7 +312,7 @@ impl Default for EGraph {
             strict_mode: false,
             warned_about_missing_global_prefix: false,
             command_macros: Default::default(),
-            proof_constants: Default::default(),
+            proof_state: Default::default(),
         };
 
         add_base_sort(&mut eg, UnitSort, span!()).unwrap();
@@ -357,13 +357,13 @@ impl EGraph {
     /// This instruments the egglog to use a explicit equality relation.
     pub fn new_with_term_encoding() -> Self {
         let mut egraph = EGraph::default();
-        egraph.proof_constants.term_mode_enabled = true;
+        egraph.proof_state.original_typechecking = Some(Box::new(egraph.clone()));
         egraph
     }
 
     /// WARNING: this should be called before any commands are added to the e-graph.
     pub fn with_term_encoding_enabled(mut self) -> Self {
-        self.proof_constants.term_mode_enabled = true;
+        self.proof_state.original_typechecking = Some(Box::new(self.clone()));
         self
     }
 
@@ -1370,22 +1370,27 @@ impl EGraph {
         let desugared = desugar_command(command, &mut self.parser)?;
 
         // Add term encoding when it is enabled
-        if self.proof_constants.term_mode_enabled {
-            // TODO inefficient clone to throw away typechecking results
-            let before_typechecked = self.clone();
-            let mut typechecked = self.typecheck_program(&desugared)?;
-            let global_sorts = self.type_info.global_sorts.clone(); // need global sorts which disappear after remove_globals
+        if self.proof_state.original_typechecking.is_some() {
+            // Typecheck using the original egraph
+            // TODO this is ugly- we don't need an entire e-graph just for type information.
+            let mut typechecked = self
+                .proof_state
+                .original_typechecking
+                .as_mut()
+                .unwrap()
+                .typecheck_program(&desugared)?;
 
             typechecked = remove_globals::remove_globals(typechecked, &mut self.parser.symbol_gen);
             for command in &typechecked {
                 self.names.check_shadowing(command)?;
             }
 
-            *self = before_typechecked;
             let term_encoding_added = TermState::add_term_encoding(self, typechecked);
             let mut new_typechecked = vec![];
             for new_cmd in term_encoding_added {
                 let desugared = desugar_command(new_cmd, &mut self.parser)?;
+
+                // Now typecheck using self, adding term type information.
                 let desugared_typechecked = self.typecheck_program(&desugared)?;
                 // remove globals again
                 let desugared_typechecked = remove_globals::remove_globals(
@@ -1395,8 +1400,6 @@ impl EGraph {
 
                 new_typechecked.extend(desugared_typechecked);
             }
-            // restore global sorts
-            self.type_info.global_sorts = global_sorts;
             Ok(new_typechecked)
         } else {
             let mut typechecked = self.typecheck_program(&desugared)?;

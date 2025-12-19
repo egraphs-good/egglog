@@ -7,7 +7,9 @@ pub(crate) struct ProofConstants {
     pub uf_parent: HashMap<String, String>,
     pub to_union: HashMap<String, String>,
     pub term_header_added: bool,
-    pub term_mode_enabled: bool,
+    // TODO this is very ugly- we should separate out a typechecking struct
+    // When true, term mode is enabled
+    pub original_typechecking: Option<Box<EGraph>>,
 }
 
 pub(crate) struct TermState<'a> {
@@ -24,26 +26,26 @@ impl<'a> TermState<'a> {
     }
 
     pub(crate) fn parent_name(&mut self, sort: &str) -> String {
-        if let Some(name) = self.egraph.proof_constants.uf_parent.get(sort) {
+        if let Some(name) = self.egraph.proof_state.uf_parent.get(sort) {
             name.clone()
         } else {
-            self.egraph.proof_constants.uf_parent.insert(
+            self.egraph.proof_state.uf_parent.insert(
                 sort.to_string(),
                 String::from(format!("ufparent_{}", sort,)),
             );
-            self.egraph.proof_constants.uf_parent[sort].clone()
+            self.egraph.proof_state.uf_parent[sort].clone()
         }
     }
 
     pub(crate) fn to_union_name(&mut self, sort: &str) -> String {
-        if let Some(name) = self.egraph.proof_constants.to_union.get(sort) {
+        if let Some(name) = self.egraph.proof_state.to_union.get(sort) {
             name.clone()
         } else {
             self.egraph
-                .proof_constants
+                .proof_state
                 .to_union
                 .insert(sort.to_string(), String::from(format!("ufunion_{}", sort)));
-            self.egraph.proof_constants.to_union[sort].clone()
+            self.egraph.proof_state.to_union[sort].clone()
         }
     }
 
@@ -115,12 +117,15 @@ impl<'a> TermState<'a> {
         // the view table has child_sorts + the leader term for the eclass
         self.parse_program(&format!(
             "
-            (constructor {} ({child_sorts}) {})
-
             (sort {fresh_sort})
+            (constructor {} ({child_sorts}) {})
             (constructor {view_name} ({child_sorts} {}) {fresh_sort})",
             fdecl.name,
-            schema.output,
+            if fdecl.subtype == FunctionSubtype::Constructor {
+                schema.output.clone()
+            } else {
+                fresh_sort.clone()
+            },
             if fdecl.subtype == FunctionSubtype::Constructor {
                 fdecl.schema.output.clone()
             } else {
@@ -510,9 +515,9 @@ impl<'a> TermState<'a> {
     ) -> Vec<Command> {
         let mut res = vec![];
 
-        if !self.egraph.proof_constants.term_header_added {
+        if !self.egraph.proof_state.term_header_added {
             res.extend(self.term_header());
-            self.egraph.proof_constants.term_header_added = true;
+            self.egraph.proof_state.term_header_added = true;
         }
 
         for command in program {
@@ -646,7 +651,9 @@ fn term_encoding_supported_impl(path: &Path, visited: &mut HashSet<PathBuf>) -> 
     };
 
     for command in desugared {
-        if let GenericCommand::Sort(_, _, Some(_)) = command { return false }
+        if let GenericCommand::Sort(_, _, Some(_)) = command {
+            return false;
+        }
     }
 
     true
