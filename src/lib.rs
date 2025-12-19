@@ -32,7 +32,6 @@ pub use command_macro::{CommandMacro, CommandMacroRegistry};
 // This is used to allow the `add_primitive` macro to work in
 // both this crate and other crates by referring to `::egglog`.
 extern crate self as egglog;
-use ast::*;
 pub use ast::{ResolvedExpr, ResolvedFact, ResolvedVar};
 #[cfg(feature = "bin")]
 pub use cli::*;
@@ -76,6 +75,7 @@ pub use typechecking::TypeInfo;
 use util::*;
 
 use crate::ast::desugar::desugar_command;
+use crate::ast::*;
 use crate::core::{GenericActionsExt, ResolvedRuleExt};
 pub use crate::proofs::term_encoding_supported;
 use crate::proofs::{ProofConstants, TermState};
@@ -1380,7 +1380,8 @@ impl EGraph {
                 .unwrap()
                 .typecheck_program(&desugared)?;
 
-            typechecked = remove_globals::remove_globals(typechecked, &mut self.parser.symbol_gen);
+            typechecked =
+                proof_global_remover::remove_globals(typechecked, &mut self.parser.symbol_gen);
             for command in &typechecked {
                 self.names.check_shadowing(command)?;
             }
@@ -1392,7 +1393,7 @@ impl EGraph {
 
                 // Now typecheck using self, adding term type information.
                 let desugared_typechecked = self.typecheck_program(&desugared)?;
-                // remove globals again
+                // remove globals again, but this time allow primitive globals
                 let desugared_typechecked = remove_globals::remove_globals(
                     desugared_typechecked,
                     &mut self.parser.symbol_gen,

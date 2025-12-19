@@ -2,6 +2,7 @@ pub mod check_shadowing;
 pub mod desugar;
 mod expr;
 mod parse;
+pub mod proof_global_remover;
 pub mod remove_globals;
 
 use crate::core::{
