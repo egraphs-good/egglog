@@ -78,7 +78,7 @@ use crate::ast::desugar::desugar_command;
 use crate::ast::*;
 use crate::core::{GenericActionsExt, ResolvedRuleExt};
 pub use crate::proofs::term_encoding_supported;
-use crate::proofs::{ProofConstants, TermState};
+use crate::proofs::{ProofConstants, TermState, command_supports_proof_encoding, commands_support_proof_encoding};
 
 pub const GLOBAL_NAME_PREFIX: &str = "$";
 
@@ -1384,6 +1384,13 @@ impl EGraph {
                 proof_global_remover::remove_globals(typechecked, &mut self.parser.symbol_gen);
             for command in &typechecked {
                 self.names.check_shadowing(command)?;
+
+                if !command_supports_proof_encoding(&command.to_command()) {
+                    panic!(
+                        "Command {} does not support proof term encoding",
+                        command.to_command()
+                    );
+                }
             }
 
             let term_encoding_added = TermState::add_term_encoding(self, typechecked);

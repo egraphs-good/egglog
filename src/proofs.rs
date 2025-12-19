@@ -217,6 +217,8 @@ impl<'a> TermState<'a> {
         }
     }
 
+    /// Instruments a fact expression to use the view tables.
+    /// Returns a variable representing the expression.
     fn instrument_fact_expr(&mut self, expr: &ResolvedExpr, res: &mut Vec<String>) -> String {
         match expr {
             ResolvedExpr::Lit(_, lit) => format!("{}", lit),
@@ -242,11 +244,13 @@ impl<'a> TermState<'a> {
                                 "Term encoding does not support eq-sort primitive expressions in facts"
                             );
                         }
-                        format!(
-                            "({} {})",
+                        let fv = self.fresh_var();
+                        res.push(format!(
+                            "(= {fv} ({} {}))",
                             specialized_primitive.name(),
                             ListDisplay(args, " ")
-                        )
+                        ));
+                        fv
                     }
                 }
             }
@@ -509,6 +513,58 @@ impl<'a> TermState<'a> {
         }
     }
 
+    fn term_encode_command(&mut self, command: &ResolvedNCommand, res: &mut Vec<Command>) {
+        match &command {
+            ResolvedNCommand::Sort(span, name, presort_and_args) => {
+                res.push(command.to_command().make_unresolved());
+                res.extend(self.make_parent_table(&name));
+            }
+            ResolvedNCommand::Function(fdecl) => {
+                res.extend(self.term_and_view(&fdecl));
+                res.extend(self.rebuilding_rules(&fdecl));
+            }
+            ResolvedNCommand::NormRule { rule } => {
+                res.extend(self.instrument_rule(&rule));
+            }
+            ResolvedNCommand::CoreAction(action) => {
+                let instrumented = self.instrument_action(&action).join("\n");
+                res.extend(self.parse_program(&instrumented).unwrap());
+            }
+            ResolvedNCommand::Check(span, facts) => {
+                let instrumented = self.instrument_facts(&facts);
+                res.push(Command::Check(
+                    span.clone(),
+                    self.parse_facts(&instrumented),
+                ));
+            }
+            ResolvedNCommand::RunSchedule(schedule) => {
+                res.push(Command::RunSchedule(self.instrument_schedule(&schedule)));
+            }
+            ResolvedNCommand::Fail(span, cmd) => {
+                self.term_encode_command(&cmd, res);
+                let last = res.pop().unwrap();
+                res.push(Command::Fail(span.clone(), Box::new(last)));
+            }
+            ResolvedNCommand::Pop(..)
+            | ResolvedNCommand::Push(..)
+            | ResolvedNCommand::AddRuleset(..)
+            | ResolvedNCommand::PrintSize(..)
+            | ResolvedNCommand::Output { .. }
+            | ResolvedNCommand::Input { .. }
+            | ResolvedNCommand::UnstableCombinedRuleset(..)
+            | ResolvedNCommand::PrintOverallStatistics(..)
+            | ResolvedNCommand::PrintFunction(..) => {
+                res.push(command.to_command().make_unresolved());
+            }
+            ResolvedNCommand::Extract(..) => {
+                // TODO we just omit extract for now, support in future
+            }
+            ResolvedNCommand::UserDefined(..) => {
+                panic!("User defined commands unsupported in term encoding");
+            }
+        }
+    }
+
     pub(crate) fn add_term_encoding_helper(
         &mut self,
         program: Vec<ResolvedNCommand>,
@@ -521,56 +577,7 @@ impl<'a> TermState<'a> {
         }
 
         for command in program {
-            match &command {
-                ResolvedNCommand::Sort(span, name, presort_and_args) => {
-                    res.push(command.to_command().make_unresolved());
-                    res.extend(self.make_parent_table(&name));
-                }
-                ResolvedNCommand::Function(fdecl) => {
-                    res.extend(self.term_and_view(&fdecl));
-                    res.extend(self.rebuilding_rules(&fdecl));
-                }
-                ResolvedNCommand::NormRule { rule } => {
-                    res.extend(self.instrument_rule(&rule));
-                }
-                ResolvedNCommand::CoreAction(action) => {
-                    let instrumented = self.instrument_action(&action).join("\n");
-                    res.extend(self.parse_program(&instrumented).unwrap());
-                }
-                ResolvedNCommand::Check(span, facts) => {
-                    let instrumented = self.instrument_facts(&facts);
-                    res.push(Command::Check(
-                        span.clone(),
-                        self.parse_facts(&instrumented),
-                    ));
-                }
-                ResolvedNCommand::RunSchedule(schedule) => {
-                    res.push(Command::RunSchedule(self.instrument_schedule(&schedule)));
-                }
-                ResolvedNCommand::Fail(span, cmd) => {
-                    let mut with_term_encoding = self.add_term_encoding_helper(vec![*cmd.clone()]);
-                    let last = with_term_encoding.pop().unwrap();
-                    res.extend(with_term_encoding);
-                    res.push(Command::Fail(span.clone(), Box::new(last)));
-                }
-                ResolvedNCommand::Pop(..)
-                | ResolvedNCommand::Push(..)
-                | ResolvedNCommand::AddRuleset(..)
-                | ResolvedNCommand::PrintSize(..)
-                | ResolvedNCommand::Output { .. }
-                | ResolvedNCommand::Input { .. }
-                | ResolvedNCommand::UnstableCombinedRuleset(..)
-                | ResolvedNCommand::PrintOverallStatistics(..)
-                | ResolvedNCommand::PrintFunction(..) => {
-                    res.push(command.to_command().make_unresolved());
-                }
-                ResolvedNCommand::Extract(..) => {
-                    // TODO we just omit extract for now, support in future
-                }
-                ResolvedNCommand::UserDefined(..) => {
-                    panic!("User defined commands unsupported in term encoding");
-                }
-            }
+            self.term_encode_command(&command, &mut res);
 
             // run rebuilding after every command except a few
             if let ResolvedNCommand::Function(..)
@@ -650,20 +657,34 @@ fn term_encoding_supported_impl(path: &Path, visited: &mut HashSet<PathBuf>) -> 
         Err(_) => return false,
     };
 
-    for command in desugared {
-        if let GenericCommand::Sort(_, _, Some(_)) = &command {
+    commands_support_proof_encoding(&desugared)
+}
+
+pub fn commands_support_proof_encoding(commands: &Vec<ResolvedCommand>) -> bool {
+    for command in commands {
+        if !command_supports_proof_encoding(command) {
             return false;
         }
-        if let GenericCommand::Action(ResolvedAction::Let(_, _, expr)) = &command {
-            if !expr.output_type().is_eq_sort() {
-                return false;
-            }
-        }
+    }
+    true
+}
 
-        if let GenericCommand::UserDefined(..) = &command {
+pub fn command_supports_proof_encoding(command: &ResolvedCommand) -> bool {
+    if let GenericCommand::Sort(_, _, Some(_)) = &command {
+        return false;
+    }
+    if let GenericCommand::Action(ResolvedAction::Let(_, _, expr)) = &command {
+        if !expr.output_type().is_eq_sort() {
             return false;
         }
     }
 
+    if let GenericCommand::UserDefined(..) = &command {
+        return false;
+    }
+
+    if let GenericCommand::Relation { .. } = &command {
+        return false;
+    }
     true
 }
