@@ -1437,9 +1437,10 @@ impl EGraph {
                         .parser
                         .get_program_from_string(Some(file.clone()), &s)?;
                     // run program internal on these include commands
-                    let (included_outputs, _included_desugared) =
+                    let (included_outputs, included_desugared) =
                         self.process_program_internal(included_program, run_commands)?;
                     outputs.extend(included_outputs);
+                    desugared_commands.extend(included_desugared);
                     desugared_commands.push(ResolvedCommand::Include(span.clone(), file.clone()));
                 } else {
                     for processed in self.resolve_command(command)? {

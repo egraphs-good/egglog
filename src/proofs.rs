@@ -232,14 +232,16 @@ impl<'a> TermState<'a> {
                         fv
                     }
                     ResolvedCall::Primitive(specialized_primitive) => {
-                        let fv = self.fresh_var();
-                        res.push(format!(
-                            "(let {} ({} {}))",
-                            fv,
+                        if specialized_primitive.output().is_eq_sort() {
+                            panic!(
+                                "Term encoding does not support eq-sort primitive expressions in facts"
+                            );
+                        }
+                        format!(
+                            "({} {})",
                             specialized_primitive.name(),
                             ListDisplay(args, " ")
-                        ));
-                        fv
+                        )
                     }
                 }
             }
@@ -644,33 +646,8 @@ fn term_encoding_supported_impl(path: &Path, visited: &mut HashSet<PathBuf>) -> 
     };
 
     for command in desugared {
-        match command {
-            GenericCommand::Sort(_, _, Some(_)) => return false,
-            _ => {}
-        }
+        if let GenericCommand::Sort(_, _, Some(_)) = command { return false }
     }
 
     true
-}
-
-fn resolve_include_path(current_file: &Path, include_path: &str) -> Option<PathBuf> {
-    let include_path = Path::new(include_path);
-    if include_path.is_absolute() {
-        std::fs::canonicalize(include_path).ok()
-    } else if let Some(parent) = current_file.parent() {
-        let candidate = parent.join(include_path);
-        if candidate.exists() {
-            std::fs::canonicalize(candidate).ok()
-        } else {
-            std::env::current_dir()
-                .ok()
-                .map(|cwd| cwd.join(include_path))
-                .and_then(|candidate| std::fs::canonicalize(candidate).ok())
-        }
-    } else {
-        std::env::current_dir()
-            .ok()
-            .map(|cwd| cwd.join(include_path))
-            .and_then(|candidate| std::fs::canonicalize(candidate).ok())
-    }
 }
