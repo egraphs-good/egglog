@@ -117,9 +117,11 @@ impl ProofGlobalRemover<'_> {
             GenericNCommand::NormRule { rule } => {
                 let new_rule = GenericRule {
                     span: rule.span,
-                    // instrument the old facts and add the new facts to the end
-                    body: rule.body,
-                    // replace references to globals with the newly bound names
+                    body: rule
+                        .body
+                        .iter()
+                        .map(|fact| fact.clone().visit_exprs(&mut replace_global_vars))
+                        .collect(),
                     head: ResolvedActions::new(
                         rule.head
                             .iter()
