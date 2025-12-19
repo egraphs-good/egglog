@@ -1,4 +1,6 @@
+use crate::ast::GenericCommand;
 use crate::*;
+use std::path::{Path, PathBuf};
 
 #[derive(Default, Clone)]
 pub(crate) struct ProofConstants {
@@ -611,5 +613,64 @@ impl<'a> TermState<'a> {
             .collect();
         self.egraph.parser.ensure_no_reserved_symbols = true;
         res
+    }
+}
+
+pub fn term_encoding_supported(path: &Path) -> bool {
+    let mut visited = HashSet::default();
+    term_encoding_supported_impl(path, &mut visited)
+}
+
+fn term_encoding_supported_impl(path: &Path, visited: &mut HashSet<PathBuf>) -> bool {
+    let contents = match std::fs::read_to_string(path) {
+        Ok(contents) => contents,
+        Err(_) => return false,
+    };
+
+    let canonical = match std::fs::canonicalize(path) {
+        Ok(canonical) => canonical,
+        Err(_) => return false,
+    };
+
+    if !visited.insert(canonical.clone()) {
+        return true;
+    }
+
+    let mut egraph = EGraph::default();
+    let filename = canonical.to_string_lossy().into_owned();
+    let desugared = match egraph.desugar_program(Some(filename), &contents) {
+        Ok(commands) => commands,
+        Err(_) => return false,
+    };
+
+    for command in desugared {
+        match command {
+            GenericCommand::Sort(_, _, Some(_)) => return false,
+            _ => {}
+        }
+    }
+
+    true
+}
+
+fn resolve_include_path(current_file: &Path, include_path: &str) -> Option<PathBuf> {
+    let include_path = Path::new(include_path);
+    if include_path.is_absolute() {
+        std::fs::canonicalize(include_path).ok()
+    } else if let Some(parent) = current_file.parent() {
+        let candidate = parent.join(include_path);
+        if candidate.exists() {
+            std::fs::canonicalize(candidate).ok()
+        } else {
+            std::env::current_dir()
+                .ok()
+                .map(|cwd| cwd.join(include_path))
+                .and_then(|candidate| std::fs::canonicalize(candidate).ok())
+        }
+    } else {
+        std::env::current_dir()
+            .ok()
+            .map(|cwd| cwd.join(include_path))
+            .and_then(|candidate| std::fs::canonicalize(candidate).ok())
     }
 }

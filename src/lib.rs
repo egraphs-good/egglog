@@ -77,6 +77,7 @@ use util::*;
 
 use crate::ast::desugar::desugar_command;
 use crate::core::{GenericActionsExt, ResolvedRuleExt};
+pub use crate::proofs::term_encoding_supported;
 use crate::proofs::{ProofConstants, TermState};
 
 pub const GLOBAL_NAME_PREFIX: &str = "$";
