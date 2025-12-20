@@ -767,6 +767,20 @@ pub fn command_supports_proof_encoding(command: &ResolvedCommand) -> bool {
         ResolvedCommand::Action(ResolvedAction::Let(_, _, expr)) => expr.output_type().is_eq_sort(),
         // no-merge isn't supported right now
         ResolvedCommand::Function { merge: None, .. } => false,
-        _ => true,
+        // delete or subsume on custom functions isn't supported
+        _ => {
+            let mut res = true;
+            command.clone().visit_actions(&mut |action| {
+                if let ResolvedAction::Change(_, _change, ResolvedCall::Func(func_type), _) =
+                    &action
+                {
+                    if func_type.subtype == FunctionSubtype::Custom {
+                        res = false;
+                    }
+                }
+                action
+            });
+            res
+        }
     }
 }

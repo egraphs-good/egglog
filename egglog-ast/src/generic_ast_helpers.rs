@@ -195,6 +195,19 @@ where
         }
     }
 
+    pub fn visit_actions(
+        self,
+        f: &mut impl FnMut(GenericAction<Head, Leaf>) -> GenericAction<Head, Leaf>,
+    ) -> Self {
+        Self {
+            span: self.span,
+            head: self.head.visit_actions(f),
+            body: self.body,
+            name: self.name,
+            ruleset: self.ruleset,
+        }
+    }
+
     pub fn make_unresolved(self) -> GenericRule<String, String> {
         GenericRule {
             span: self.span,
@@ -238,6 +251,13 @@ where
         f: &mut impl FnMut(GenericExpr<Head, Leaf>) -> GenericExpr<Head, Leaf>,
     ) -> Self {
         Self(self.0.into_iter().map(|a| a.visit_exprs(f)).collect())
+    }
+
+    pub fn visit_actions(
+        self,
+        f: &mut impl FnMut(GenericAction<Head, Leaf>) -> GenericAction<Head, Leaf>,
+    ) -> Self {
+        Self(self.0.into_iter().map(f).collect())
     }
 
     pub fn new(actions: Vec<GenericAction<Head, Leaf>>) -> Self {
@@ -459,6 +479,7 @@ where
     Leaf: Clone + PartialEq + Eq + Display + Hash,
     Head: Clone + Display,
 {
+    /// Converts all heads and leaves to strings.
     pub fn make_unresolved(self) -> GenericFact<String, String> {
         self.subst(
             &mut |span, v| GenericExpr::Var(span.clone(), v.to_string()),
@@ -563,6 +584,7 @@ impl<Head: Clone + Display, Leaf: Hash + Clone + Display + Eq> GenericExpr<Head,
         self.subst(subst_leaf, &mut |x| x.clone())
     }
 
+    /// Converts all heads and leaves to strings.
     pub fn make_unresolved(self) -> GenericExpr<String, String> {
         let mut subst_leaf =
             |span: &Span, leaf: &Leaf| GenericExpr::Var(span.clone(), leaf.to_string());

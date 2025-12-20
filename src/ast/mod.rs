@@ -255,6 +255,7 @@ where
         }
     }
 
+    /// Converts all heads and leaves to strings.
     pub fn make_unresolved(self) -> GenericSchedule<String, String> {
         match self {
             GenericSchedule::Saturate(span, sched) => {
@@ -1374,6 +1375,22 @@ where
             GenericCommand::UserDefined(span, name, exprs) => {
                 GenericCommand::UserDefined(span, name, exprs)
             }
+        }
+    }
+
+    pub fn visit_actions(
+        self,
+        f: &mut impl FnMut(GenericAction<Head, Leaf>) -> GenericAction<Head, Leaf>,
+    ) -> Self {
+        match self {
+            GenericCommand::Rule { rule } => GenericCommand::Rule {
+                rule: rule.visit_actions(f),
+            },
+            GenericCommand::Action(action) => GenericCommand::Action(f(action)),
+            GenericCommand::Fail(span, cmd) => {
+                GenericCommand::Fail(span, Box::new(cmd.visit_actions(f)))
+            }
+            other => other,
         }
     }
 }
