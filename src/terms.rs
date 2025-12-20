@@ -1,5 +1,5 @@
+use crate::ast::GenericCommand;
 use crate::*;
-use crate::{ast::GenericCommand, core::IsFunc};
 use std::path::{Path, PathBuf};
 
 #[derive(Default, Clone)]
@@ -8,7 +8,8 @@ pub(crate) struct ProofConstants {
     pub to_union: HashMap<String, String>,
     pub term_header_added: bool,
     // TODO this is very ugly- we should separate out a typechecking struct
-    // When true, term mode is enabled
+    // since we didn't need an entire e-graph
+    // When Some term encoding is enabled.
     pub original_typechecking: Option<Box<EGraph>>,
 }
 
@@ -29,10 +30,10 @@ impl<'a> TermState<'a> {
         if let Some(name) = self.egraph.proof_state.uf_parent.get(sort) {
             name.clone()
         } else {
-            self.egraph.proof_state.uf_parent.insert(
-                sort.to_string(),
-                String::from(format!("ufparent_{}", sort,)),
-            );
+            self.egraph
+                .proof_state
+                .uf_parent
+                .insert(sort.to_string(), format!("ufparent_{}", sort,));
             self.egraph.proof_state.uf_parent[sort].clone()
         }
     }
@@ -429,7 +430,7 @@ impl<'a> TermState<'a> {
                 let unioned = self.union(type_name, &v1, &v2);
                 res.push(unioned);
             }
-            ResolvedAction::Panic(_span, msg) => {
+            ResolvedAction::Panic(..) => {
                 res.push(format!("{}", action));
             }
             ResolvedAction::Expr(_span, generic_expr) => {
@@ -603,30 +604,30 @@ impl<'a> TermState<'a> {
 
     fn term_encode_command(&mut self, command: &ResolvedNCommand, res: &mut Vec<Command>) {
         match &command {
-            ResolvedNCommand::Sort(span, name, presort_and_args) => {
+            ResolvedNCommand::Sort(_span, name, _presort_and_args) => {
                 res.push(command.to_command().make_unresolved());
-                res.extend(self.make_parent_table(&name));
+                res.extend(self.make_parent_table(name));
             }
             ResolvedNCommand::Function(fdecl) => {
-                res.extend(self.term_and_view(&fdecl));
-                res.extend(self.rebuilding_rules(&fdecl));
+                res.extend(self.term_and_view(fdecl));
+                res.extend(self.rebuilding_rules(fdecl));
             }
             ResolvedNCommand::NormRule { rule } => {
-                res.extend(self.instrument_rule(&rule));
+                res.extend(self.instrument_rule(rule));
             }
             ResolvedNCommand::CoreAction(action) => {
-                let instrumented = self.instrument_action(&action).join("\n");
+                let instrumented = self.instrument_action(action).join("\n");
                 res.extend(self.parse_program(&instrumented).unwrap());
             }
             ResolvedNCommand::Check(span, facts) => {
-                let instrumented = self.instrument_facts(&facts);
+                let instrumented = self.instrument_facts(facts);
                 res.push(Command::Check(
                     span.clone(),
                     self.parse_facts(&instrumented),
                 ));
             }
             ResolvedNCommand::RunSchedule(schedule) => {
-                res.push(Command::RunSchedule(self.instrument_schedule(&schedule)));
+                res.push(Command::RunSchedule(self.instrument_schedule(schedule)));
             }
             ResolvedNCommand::Fail(span, cmd) => {
                 self.term_encode_command(&cmd, res);
@@ -681,11 +682,11 @@ impl<'a> TermState<'a> {
     }
 
     fn parent_direct_ruleset_name(&self) -> String {
-        String::from(format!("parent",))
+        format!("parent",)
     }
 
     fn rebuilding_ruleset_name(&self) -> String {
-        String::from(format!("rebuilding",))
+        format!("rebuilding",)
     }
 
     pub(crate) fn term_header(&mut self) -> Vec<Command> {
