@@ -1,5 +1,5 @@
-use crate::ast::GenericCommand;
 use crate::*;
+use crate::{ast::GenericCommand, core::IsFunc};
 use std::path::{Path, PathBuf};
 
 #[derive(Default, Clone)]
@@ -137,7 +137,7 @@ impl<'a> TermState<'a> {
                         ({view_name} {child_names} {res_fresh})
                         ({view_name} {child_names} new)
                         ({view_name} {child_names} old)
-                        (!= res_fresh old))
+                        (!= {res_fresh} old))
                        ((delete ({view_name} {child_names} old)))
                         :ruleset {rebuilding_ruleset}
                         :name \"{cleanup_name}\")
@@ -145,7 +145,7 @@ impl<'a> TermState<'a> {
                         ({view_name} {child_names} {res_fresh})
                         ({view_name} {child_names} new)
                         ({view_name} {child_names} old)
-                        (!= res_fresh new))
+                        (!= {res_fresh} new))
                        ((delete ({view_name} {child_names} new)))
                         :ruleset {rebuilding_ruleset}
                         :name \"{cleanup_name2}\")
@@ -396,7 +396,30 @@ impl<'a> TermState<'a> {
                 ));
             }
             ResolvedAction::Change(_span, change, h, generic_exprs) => {
-                todo!()
+                if let ResolvedCall::Func(func_type) = h {
+                    if func_type.subtype == FunctionSubtype::Custom {
+                        panic!("proofs don't support deleting function rows");
+                    } else {
+                        let symbol = match change {
+                            Change::Delete => "delete",
+                            Change::Subsume => "subsume",
+                        };
+                        let children = generic_exprs
+                            .iter()
+                            .map(|e| self.instrument_action_expr(e, &mut res))
+                            .collect::<Vec<_>>();
+
+                        res.push(format!(
+                            "({symbol} ({} {}))",
+                            self.view_name(&func_type.name),
+                            ListDisplay(children, " ")
+                        ));
+                    }
+                } else {
+                    panic!(
+                        "Delete action on non-function, should have been prevented by typechecking"
+                    );
+                }
             }
             ResolvedAction::Union(_span, generic_expr, generic_expr1) => {
                 let v1 = self.instrument_action_expr(generic_expr, &mut res);
@@ -407,7 +430,7 @@ impl<'a> TermState<'a> {
                 res.push(unioned);
             }
             ResolvedAction::Panic(_span, msg) => {
-                res.push(format!("(panic {})", msg));
+                res.push(format!("{}", action));
             }
             ResolvedAction::Expr(_span, generic_expr) => {
                 self.instrument_action_expr(generic_expr, &mut res);
@@ -482,7 +505,7 @@ impl<'a> TermState<'a> {
     fn instrument_rule(&mut self, rule: &ResolvedRule) -> Vec<Command> {
         let facts = self.instrument_facts(&rule.body);
         let actions = self.instrument_actions(&rule.head.0);
-        self.parse_program(&format!(
+        let instrumented = format!(
             "(rule ({} )
                    ({} )
                     {})",
@@ -493,8 +516,8 @@ impl<'a> TermState<'a> {
             } else {
                 format!(":ruleset {}", rule.ruleset)
             }
-        ))
-        .unwrap()
+        );
+        self.parse_program(&instrumented).unwrap()
     }
 
     /// TODO experiment with schedule- unclear what is fastest.
