@@ -117,6 +117,7 @@ impl<'a> TermState<'a> {
                 .unwrap_or_else(|| panic!("Proofs don't support :no-merge"));
 
             let rebuilding_ruleset = self.rebuilding_ruleset_name();
+            let rebuilding_cleanup_ruleset = self.rebuilding_cleanup_ruleset_name();
             let fresh_name = self.egraph.parser.symbol_gen.fresh("merge_rule");
             let cleanup_name = self.egraph.parser.symbol_gen.fresh("merge_cleanup");
             let cleanup_name2 = self.egraph.parser.symbol_gen.fresh("merge_cleanup2");
@@ -128,7 +129,8 @@ impl<'a> TermState<'a> {
             format!(
                 "(rule (({view_name} {child_names} old)
                         ({view_name} {child_names} new)
-                        (!= old new))
+                        (!= old new)
+                        (= (ordering-max old new) new))
                        (({view_name} {child_names} {merge_fn})
                         ({name} {child_names} {merge_fn})
                        )
@@ -140,7 +142,7 @@ impl<'a> TermState<'a> {
                         ({view_name} {child_names} old)
                         (!= {res_fresh} old))
                        ((delete ({view_name} {child_names} old)))
-                        :ruleset {rebuilding_ruleset}
+                        :ruleset {rebuilding_cleanup_ruleset}
                         :name \"{cleanup_name}\")
                  (rule ((= {res_fresh} {merge_fn})
                         ({view_name} {child_names} {res_fresh})
@@ -148,7 +150,7 @@ impl<'a> TermState<'a> {
                         ({view_name} {child_names} old)
                         (!= {res_fresh} new))
                        ((delete ({view_name} {child_names} new)))
-                        :ruleset {rebuilding_ruleset}
+                        :ruleset {rebuilding_cleanup_ruleset}
                         :name \"{cleanup_name2}\")
                 ",
             )
@@ -546,6 +548,26 @@ impl<'a> TermState<'a> {
                             until: None,
                         },
                     ),
+                    Schedule::Saturate(
+                        span!(),
+                        Box::new(Schedule::Run(
+                            span!(),
+                            RunConfig {
+                                ruleset: self.parent_direct_ruleset_name(),
+                                until: None,
+                            },
+                        )),
+                    ),
+                    Schedule::Saturate(
+                        span!(),
+                        Box::new(Schedule::Run(
+                            span!(),
+                            RunConfig {
+                                ruleset: self.rebuilding_cleanup_ruleset_name(),
+                                until: None,
+                            },
+                        )),
+                    ),
                     Schedule::Run(
                         span!(),
                         RunConfig {
@@ -689,14 +711,20 @@ impl<'a> TermState<'a> {
         format!("rebuilding",)
     }
 
+    fn rebuilding_cleanup_ruleset_name(&self) -> String {
+        format!("rebuilding_cleanup",)
+    }
+
     pub(crate) fn term_header(&mut self) -> Vec<Command> {
         let str = format!(
             "(ruleset {})
              (ruleset {})
+             (ruleset {})
              (ruleset {})",
             self.parent_direct_ruleset_name(),
             self.to_union_ruleset_name(),
-            self.rebuilding_ruleset_name()
+            self.rebuilding_ruleset_name(),
+            self.rebuilding_cleanup_ruleset_name(),
         );
         self.parse_program(&str).unwrap()
     }
