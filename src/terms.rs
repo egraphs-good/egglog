@@ -179,7 +179,7 @@ impl<'a> TermState<'a> {
                         ({view_name} {child_names} new)
                         (!= old new)
                         (= (ordering-max old new) new))
-                       (({to_union_fun} old new)
+                       (({to_union_fun} new old)
                        )
                         :ruleset {rebuilding_ruleset}
                         :name \"{fresh_name}\")"
