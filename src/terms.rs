@@ -110,32 +110,46 @@ impl<'a> TermState<'a> {
             let view_name = self.view_name(&fdecl.name);
             let name = &fdecl.name;
 
-            let query = format!(
-                "({view_name} {child_names} old)
-                 ({view_name} {child_names} new)
-                 (!= old new)"
-            );
-            let action = match &fdecl.merge {
-                Some(merge_fn) => {
-                    // TODO in the case that the row was an existing one, this updates the timestamp leading to inefficiency.
-                    format!(
-                        "(delete ({view_name} {child_names} old))
-                         (delete ({view_name} {child_names} new))
-                         ({view_name} {child_names} {merge_fn})
-                         ({name} {child_names} {merge_fn})
-                         ",
-                    )
-                }
-                // TODO this doesn't work right now with "(fail ...)", so proofs don't support :no-merge for now.
-                None => "(panic \"No merge function provided for custom function\")".to_string(),
-            };
+            let merge_fn = &fdecl
+                .merge
+                .as_ref()
+                .unwrap_or_else(|| panic!("Proofs don't support :no-merge"));
 
             let rebuilding_ruleset = self.rebuilding_ruleset_name();
+            let fresh_name = self.egraph.parser.symbol_gen.fresh("merge_rule");
+            let cleanup_name = self.egraph.parser.symbol_gen.fresh("merge_cleanup");
+            let cleanup_name2 = self.egraph.parser.symbol_gen.fresh("merge_cleanup2");
+            let res_fresh = self.egraph.parser.symbol_gen.fresh("r");
+
+            // TODO these cleanup rules are expensive. Could speed up with actual functional dependencies.
+            // The first runs the merge function adding a new row.
+            // The second deletes rows with old values for the old variable, while the third deletes rows with new values for the new variable.
             format!(
-                "(rule ({} )
-                       ({} )
-                        :ruleset {})",
-                query, action, rebuilding_ruleset
+                "(rule (({view_name} {child_names} old)
+                        ({view_name} {child_names} new)
+                        (!= old new))
+                       (({view_name} {child_names} {merge_fn})
+                        ({name} {child_names} {merge_fn})
+                       )
+                        :ruleset {rebuilding_ruleset}
+                        :name \"{fresh_name}\")
+                 (rule ((= {res_fresh} {merge_fn})
+                        ({view_name} {child_names} {res_fresh})
+                        ({view_name} {child_names} new)
+                        ({view_name} {child_names} old)
+                        (!= res_fresh old))
+                       ((delete ({view_name} {child_names} old)))
+                        :ruleset {rebuilding_ruleset}
+                        :name \"{cleanup_name}\")
+                 (rule ((= {res_fresh} {merge_fn})
+                        ({view_name} {child_names} {res_fresh})
+                        ({view_name} {child_names} new)
+                        ({view_name} {child_names} old)
+                        (!= res_fresh new))
+                       ((delete ({view_name} {child_names} new)))
+                        :ruleset {rebuilding_ruleset}
+                        :name \"{cleanup_name2}\")
+                ",
             )
         } else {
             "".to_string()
@@ -218,6 +232,7 @@ impl<'a> TermState<'a> {
         );
 
         let mut res = vec![];
+        let fresh_name = self.egraph.parser.symbol_gen.fresh("rebuild_rule");
         // Make a rule that updates the view
         let rule = format!(
             "(rule ((= lhs ({view_name} {children}))
@@ -225,9 +240,10 @@ impl<'a> TermState<'a> {
                      (
                       ({view_name} {children_updated})
                      )
-                      :ruleset {})",
-            self.rebuilding_ruleset_name()
+                      :ruleset {} :name \"{fresh_name}\")",
+            self.rebuilding_ruleset_name(),
         );
+        let cleanup_name = self.egraph.parser.symbol_gen.fresh("cleanup_rule");
 
         // And a rule that cleans up the view
         let rule2 = format!(
@@ -238,12 +254,15 @@ impl<'a> TermState<'a> {
                      (
                       (delete ({view_name} {children}))
                      )
-                      :ruleset {})",
+                      :ruleset {} :name \"{cleanup_name}\")",
             self.rebuilding_ruleset_name()
         );
 
-        res.extend(self.parse_program(&rule).unwrap());
-        res.extend(self.parse_program(&rule2).unwrap());
+        // don't extend res if none of them needed updating
+        if !children_updated_query.is_empty() {
+            res.extend(self.parse_program(&rule).unwrap());
+            res.extend(self.parse_program(&rule2).unwrap());
+        }
 
         res
     }
