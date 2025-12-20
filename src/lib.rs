@@ -20,11 +20,11 @@ pub mod constraint;
 mod core;
 pub mod extract;
 pub mod prelude;
-mod terms;
 pub mod scheduler;
 mod serialize;
 pub mod sort;
 mod termdag;
+mod terms;
 mod typechecking;
 pub mod util;
 pub use command_macro::{CommandMacro, CommandMacroRegistry};
@@ -78,7 +78,9 @@ use crate::ast::desugar::desugar_command;
 use crate::ast::*;
 use crate::core::{GenericActionsExt, ResolvedRuleExt};
 pub use crate::terms::term_encoding_supported;
-use crate::terms::{ProofConstants, TermState, command_supports_proof_encoding, commands_support_proof_encoding};
+use crate::terms::{
+    ProofConstants, TermState, command_supports_proof_encoding, commands_support_proof_encoding,
+};
 
 pub const GLOBAL_NAME_PREFIX: &str = "$";
 
@@ -1452,7 +1454,6 @@ impl EGraph {
                         self.process_program_internal(included_program, run_commands)?;
                     outputs.extend(included_outputs);
                     desugared_commands.extend(included_desugared);
-                    desugared_commands.push(ResolvedCommand::Include(span.clone(), file.clone()));
                 } else {
                     for processed in self.resolve_command(command)? {
                         desugared_commands.push(processed.to_command());
