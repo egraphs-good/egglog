@@ -115,16 +115,17 @@ impl<'a> TermState<'a> {
 
     // Generate a rule that runs the merge function for custom functions.
     fn handle_merge_fn(&mut self, fdecl: &ResolvedFunctionDecl) -> String {
+        let child_names = fdecl
+            .schema
+            .input
+            .iter()
+            .enumerate()
+            .map(|(i, _)| format!("c{i}_"))
+            .collect::<Vec<_>>()
+            .join(" ");
+        let rebuilding_ruleset = self.rebuilding_ruleset_name();
+        let view_name = self.view_name(&fdecl.name);
         if fdecl.subtype == FunctionSubtype::Custom {
-            let child_names = fdecl
-                .schema
-                .input
-                .iter()
-                .enumerate()
-                .map(|(i, _)| format!("c{i}_"))
-                .collect::<Vec<_>>()
-                .join(" ");
-            let view_name = self.view_name(&fdecl.name);
             let name = &fdecl.name;
 
             let merge_fn = &fdecl
@@ -132,7 +133,6 @@ impl<'a> TermState<'a> {
                 .as_ref()
                 .unwrap_or_else(|| panic!("Proofs don't support :no-merge"));
 
-            let rebuilding_ruleset = self.rebuilding_ruleset_name();
             let rebuilding_cleanup_ruleset = self.rebuilding_cleanup_ruleset_name();
             let fresh_name = self.egraph.parser.symbol_gen.fresh("merge_rule");
             let cleanup_name = self.egraph.parser.symbol_gen.fresh("merge_cleanup");
@@ -171,7 +171,19 @@ impl<'a> TermState<'a> {
                 ",
             )
         } else {
-            "".to_string()
+            // Congruence rule
+            let fresh_name = self.egraph.parser.symbol_gen.fresh("congruence_rule");
+            let to_union_fun = self.to_union_name(&fdecl.schema.output);
+            format!(
+                "(rule (({view_name} {child_names} old)
+                        ({view_name} {child_names} new)
+                        (!= old new)
+                        (= (ordering-max old new) new))
+                       (({to_union_fun} old new)
+                       )
+                        :ruleset {rebuilding_ruleset}
+                        :name \"{fresh_name}\")"
+            )
         }
     }
 
@@ -225,6 +237,7 @@ impl<'a> TermState<'a> {
         let types2 = types.clone();
 
         let view_name = self.view_name(&fdecl.name);
+        let name = &fdecl.name;
         let child = |i| format!("c{i}_");
         let children = format!(
             "{}",
@@ -252,6 +265,7 @@ impl<'a> TermState<'a> {
 
         let mut res = vec![];
         let fresh_name = self.egraph.parser.symbol_gen.fresh("rebuild_rule");
+
         // Make a rule that updates the view
         let rule = format!(
             "(rule ((= lhs ({view_name} {children}))
