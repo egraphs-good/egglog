@@ -68,6 +68,8 @@ impl<'a> TermState<'a> {
         let pname = self.parent_name(name);
         let to_union_name = self.to_union_name(name);
         let fresh_sort = self.egraph.parser.symbol_gen.fresh("uf");
+        let fresh_name = self.egraph.parser.symbol_gen.fresh("uf_update");
+        let fresh_name2 = self.egraph.parser.symbol_gen.fresh("to_union");
         self.parse_program(&format!(
             "(sort {fresh_sort})
              (constructor {pname} ({name} {name}) {fresh_sort})
@@ -75,18 +77,32 @@ impl<'a> TermState<'a> {
              (rule (({pname} a b)
                     ({pname} b c)
                     (!= b c)
-                    (!= a c))
+                    (!= a c)
+                    (!= a b))
                   ((delete ({pname} a b))
                    ({pname} a c))
-                   :ruleset {})
-                   
-                   
+                   :ruleset {}
+                   :name \"{fresh_name}\")
+             (rule (({pname} a b)
+                    ({pname} a c)
+                    (!= b c)
+                    (!= a c)
+                    (!= a b))
+                  ((delete ({pname} a (ordering-max b c)))
+                   ({pname} (ordering-max a b) (ordering-min b c)))
+                   :ruleset {}
+                   :name \"singleparent{fresh_name}\")
+             
              (rule (({to_union_name} a b)
                     ({pname} a pa)
                     ({pname} b pb)
                     (!= pa pb))
-                   (({pname} (ordering-min pa pb) (ordering-max pa pb)))
-                   :ruleset {})",
+                   (({pname} (ordering-max pa pb) (ordering-min pa pb))
+                    (delete ({to_union_name} a b)))
+                   :ruleset {}
+                   :name \"{fresh_name2}\")
+                   ",
+            self.parent_direct_ruleset_name(),
             self.parent_direct_ruleset_name(),
             self.to_union_ruleset_name(),
         ))
@@ -525,59 +541,20 @@ impl<'a> TermState<'a> {
 
     /// TODO experiment with schedule- unclear what is fastest.
     /// Any schedules should be sound.
-    fn rebuild(&self) -> Schedule {
-        Schedule::Saturate(
-            span!(),
-            Box::new(Schedule::Sequence(
-                span!(),
-                vec![
-                    Schedule::Saturate(
-                        span!(),
-                        Box::new(Schedule::Run(
-                            span!(),
-                            RunConfig {
-                                ruleset: self.parent_direct_ruleset_name(),
-                                until: None,
-                            },
-                        )),
-                    ),
-                    Schedule::Run(
-                        span!(),
-                        RunConfig {
-                            ruleset: self.to_union_ruleset_name(),
-                            until: None,
-                        },
-                    ),
-                    Schedule::Saturate(
-                        span!(),
-                        Box::new(Schedule::Run(
-                            span!(),
-                            RunConfig {
-                                ruleset: self.parent_direct_ruleset_name(),
-                                until: None,
-                            },
-                        )),
-                    ),
-                    Schedule::Saturate(
-                        span!(),
-                        Box::new(Schedule::Run(
-                            span!(),
-                            RunConfig {
-                                ruleset: self.rebuilding_cleanup_ruleset_name(),
-                                until: None,
-                            },
-                        )),
-                    ),
-                    Schedule::Run(
-                        span!(),
-                        RunConfig {
-                            ruleset: self.rebuilding_ruleset_name(),
-                            until: None,
-                        },
-                    ),
-                ],
-            )),
-        )
+    fn rebuild(&mut self) -> Schedule {
+        let parent_direct_ruleset = self.parent_direct_ruleset_name();
+        let to_union_ruleset = self.to_union_ruleset_name();
+        let rebuilding_cleanup_ruleset = self.rebuilding_cleanup_ruleset_name();
+        let rebuilding_ruleset = self.rebuilding_ruleset_name();
+        self.parse_schedule(format!(
+            "(saturate
+                  {rebuilding_cleanup_ruleset}
+                  {to_union_ruleset}
+                  (saturate {parent_direct_ruleset})
+                  {rebuilding_ruleset})
+                   "
+        ))
+        .unwrap()
     }
 
     // TODO schedules contain queries we need to instrument
@@ -732,6 +709,13 @@ impl<'a> TermState<'a> {
     fn parse_program(&mut self, input: &str) -> Result<Vec<Command>, ParseError> {
         self.egraph.parser.ensure_no_reserved_symbols = false;
         let res = self.egraph.parser.get_program_from_string(None, input);
+        self.egraph.parser.ensure_no_reserved_symbols = true;
+        res
+    }
+
+    fn parse_schedule(&mut self, input: String) -> Result<Schedule, ParseError> {
+        self.egraph.parser.ensure_no_reserved_symbols = false;
+        let res = self.egraph.parser.get_schedule_from_string(None, &input);
         self.egraph.parser.ensure_no_reserved_symbols = true;
         res
     }

@@ -787,6 +787,7 @@ impl EGraph {
     }
 
     fn run_rules(&mut self, span: &Span, config: &ResolvedRunConfig) -> Result<RunReport, Error> {
+        log::debug!("Running ruleset: {}", config.ruleset);
         let mut report: RunReport = Default::default();
 
         let GenericRunConfig { ruleset, until } = config;

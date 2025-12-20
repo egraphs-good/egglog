@@ -198,6 +198,15 @@ impl Parser {
         self.parse_expr(&sexp)
     }
 
+    pub fn get_schedule_from_string(
+        &mut self,
+        filename: Option<String>,
+        input: &str,
+    ) -> Result<Schedule, ParseError> {
+        let sexp = sexp(&mut SexpParser::new(filename, input))?;
+        self.parse_schedule(&sexp)
+    }
+
     // Parse a fact from a string.
     pub fn get_fact_from_string(
         &mut self,
@@ -487,7 +496,7 @@ impl Parser {
             }
             "run-schedule" => vec![Command::RunSchedule(Schedule::Sequence(
                 span,
-                map_fallible(tail, self, Self::schedule)?,
+                map_fallible(tail, self, Self::parse_schedule)?,
             ))],
             "extract" => match tail {
                 [e] => vec![Command::Extract(
@@ -629,7 +638,7 @@ impl Parser {
         })
     }
 
-    pub fn schedule(&mut self, sexp: &Sexp) -> Result<Schedule, ParseError> {
+    pub fn parse_schedule(&mut self, sexp: &Sexp) -> Result<Schedule, ParseError> {
         if let Sexp::Atom(ruleset, span) = sexp {
             return Ok(Schedule::Run(
                 span.clone(),
@@ -647,17 +656,17 @@ impl Parser {
                 span.clone(),
                 Box::new(Schedule::Sequence(
                     span,
-                    map_fallible(tail, self, Self::schedule)?,
+                    map_fallible(tail, self, Self::parse_schedule)?,
                 )),
             ),
-            "seq" => Schedule::Sequence(span, map_fallible(tail, self, Self::schedule)?),
+            "seq" => Schedule::Sequence(span, map_fallible(tail, self, Self::parse_schedule)?),
             "repeat" => match tail {
                 [limit, tail @ ..] => Schedule::Repeat(
                     span.clone(),
                     limit.expect_uint("number of iterations")?,
                     Box::new(Schedule::Sequence(
                         span,
-                        map_fallible(tail, self, Self::schedule)?,
+                        map_fallible(tail, self, Self::parse_schedule)?,
                     )),
                 ),
                 _ => return error!(span, "usage: (repeat <number of iterations> <schedule>*)"),
