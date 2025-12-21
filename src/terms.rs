@@ -443,24 +443,19 @@ impl<'a> TermState<'a> {
             }
             ResolvedAction::Change(_span, change, h, generic_exprs) => {
                 if let ResolvedCall::Func(func_type) = h {
-                    if func_type.subtype == FunctionSubtype::Custom {
-                        panic!("proofs don't support deleting function rows");
-                    } else {
-                        let symbol = match change {
-                            Change::Delete => "delete",
-                            Change::Subsume => "subsume",
-                        };
-                        let children = generic_exprs
-                            .iter()
-                            .map(|e| self.instrument_action_expr(e, &mut res))
-                            .collect::<Vec<_>>();
+                    let symbol = match change {
+                        Change::Delete => self.to_delete_name(&func_type.name),
+                        Change::Subsume => self.subsumed_name(&func_type.name),
+                    };
+                    let children = generic_exprs
+                        .iter()
+                        .map(|e| self.instrument_action_expr(e, &mut res))
+                        .collect::<Vec<_>>();
 
-                        res.push(format!(
-                            "({symbol} ({} {}))",
-                            self.view_name(&func_type.name),
-                            ListDisplay(children, " ")
-                        ));
-                    }
+                    res.push(format!(
+                        "({symbol} {})",
+                        ListDisplay(children, " ")
+                    ));
                 } else {
                     panic!(
                         "Delete action on non-function, should have been prevented by typechecking"
