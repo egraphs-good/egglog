@@ -26,7 +26,7 @@ impl<'a> TermState<'a> {
         Self { egraph }.add_term_encoding_helper(program)
     }
 
-    pub(crate) fn parent_name(&mut self, sort: &str) -> String {
+    pub(crate) fn uf_name(&mut self, sort: &str) -> String {
         if let Some(name) = self.egraph.proof_state.uf_parent.get(sort) {
             name.clone()
         } else {
@@ -38,73 +38,44 @@ impl<'a> TermState<'a> {
         }
     }
 
-    pub(crate) fn to_union_name(&mut self, sort: &str) -> String {
-        if let Some(name) = self.egraph.proof_state.to_union.get(sort) {
-            name.clone()
-        } else {
-            self.egraph
-                .proof_state
-                .to_union
-                .insert(sort.to_string(), format!("ufunion_{}", sort));
-            self.egraph.proof_state.to_union[sort].clone()
-        }
-    }
-
-    fn to_union_ruleset_name(&self) -> String {
-        String::from(format!("to_union",))
+    fn single_parent_ruleset_name(&self) -> String {
+        String::from(format!("single_parent",))
     }
 
     /// Mark two things for unioning.
     pub(crate) fn union(&mut self, type_name: &str, lhs: &str, rhs: &str) -> String {
-        let to_union_name = self.to_union_name(type_name);
-        format!("({} {} {})", to_union_name, lhs, rhs)
+        let uf_name = self.uf_name(type_name);
+        format!("({uf_name} (ordering-max {lhs} {rhs}) (ordering-min {lhs} {rhs}))",)
     }
 
     /// The parent table is the database representation of a union-find datastructure.
     /// When one term has two parents, those parents are unioned in the merge action.
     /// Also, we have a rule that maintains the invariant that each term points to its
     /// canonical representative.
-    fn make_parent_table(&mut self, name: &str) -> Vec<Command> {
-        let pname = self.parent_name(name);
-        let to_union_name = self.to_union_name(name);
+    fn make_uf_table(&mut self, name: &str) -> Vec<Command> {
+        let pname = self.uf_name(name);
         let fresh_sort = self.egraph.parser.symbol_gen.fresh("uf");
         let fresh_name = self.egraph.parser.symbol_gen.fresh("uf_update");
-        let fresh_name2 = self.egraph.parser.symbol_gen.fresh("to_union");
         self.parse_program(&format!(
             "(sort {fresh_sort})
              (constructor {pname} ({name} {name}) {fresh_sort})
-             (constructor {to_union_name} ({name} {name}) {fresh_sort})
              (rule (({pname} a b)
                     ({pname} b c)
-                    (!= b c)
-                    (!= a c)
-                    (!= a b))
+                    (!= b c))
                   ((delete ({pname} a b))
                    ({pname} a c))
                    :ruleset {}
                    :name \"{fresh_name}\")
              (rule (({pname} a b)
                     ({pname} a c)
-                    (!= b c)
-                    (!= a c)
-                    (!= a b))
+                    (!= b c))
                   ((delete ({pname} a (ordering-max b c)))
-                   ({pname} (ordering-max a b) (ordering-min b c)))
+                   ({pname} (ordering-max b c) (ordering-min b c)))
                    :ruleset {}
                    :name \"singleparent{fresh_name}\")
-             
-             (rule (({to_union_name} a b)
-                    ({pname} a pa)
-                    ({pname} b pb)
-                    (!= pa pb))
-                   (({pname} (ordering-max pa pb) (ordering-min pa pb))
-                    (delete ({to_union_name} a b)))
-                   :ruleset {}
-                   :name \"{fresh_name2}\")
                    ",
             self.parent_direct_ruleset_name(),
-            self.parent_direct_ruleset_name(),
-            self.to_union_ruleset_name(),
+            self.single_parent_ruleset_name(),
         ))
         .unwrap()
     }
@@ -173,14 +144,13 @@ impl<'a> TermState<'a> {
         } else {
             // Congruence rule
             let fresh_name = self.egraph.parser.symbol_gen.fresh("congruence_rule");
-            let to_union_fun = self.to_union_name(&fdecl.schema.output);
+            let uf_name = self.uf_name(&fdecl.schema.output);
             format!(
                 "(rule (({view_name} {child_names} old)
                         ({view_name} {child_names} new)
                         (!= old new)
                         (= (ordering-max old new) new))
-                       (({to_union_fun} new old)
-                       )
+                       (({uf_name} new old))
                         :ruleset {rebuilding_ruleset}
                         :name \"{fresh_name}\")"
             )
@@ -370,7 +340,7 @@ impl<'a> TermState<'a> {
     fn wrap_parent(&mut self, var: String, sort: ArcSort) -> Option<(String, String)> {
         if sort.is_eq_sort() {
             let fresh = self.fresh_var();
-            let parent = self.parent_name(&sort.name());
+            let parent = self.uf_name(&sort.name());
             Some((format!("({parent} {var} {fresh})"), fresh))
         } else {
             None
@@ -504,10 +474,10 @@ impl<'a> TermState<'a> {
                             self.view_name(&func_type.name),
                             ListDisplay(args.clone(), " ")
                         ));
-                        // add to uf table if needed
+                        // add to uf table to initialize eclass for eq sorts
                         if func_type.output.is_eq_sort() {
-                            let parent_name = self.parent_name(func_type.output.name());
-                            res.push(format!("({} {fv} {})", parent_name, fv));
+                            let uf_name = self.uf_name(func_type.output.name());
+                            res.push(format!("({} {fv} {})", uf_name, fv));
                         }
 
                         fv
@@ -557,13 +527,13 @@ impl<'a> TermState<'a> {
     /// Any schedules should be sound.
     fn rebuild(&mut self) -> Schedule {
         let parent_direct_ruleset = self.parent_direct_ruleset_name();
-        let to_union_ruleset = self.to_union_ruleset_name();
+        let single_parent = self.single_parent_ruleset_name();
         let rebuilding_cleanup_ruleset = self.rebuilding_cleanup_ruleset_name();
         let rebuilding_ruleset = self.rebuilding_ruleset_name();
         self.parse_schedule(format!(
             "(saturate
                   {rebuilding_cleanup_ruleset}
-                  {to_union_ruleset}
+                  (saturate {single_parent})
                   (saturate {parent_direct_ruleset})
                   {rebuilding_ruleset})
                    "
@@ -619,7 +589,7 @@ impl<'a> TermState<'a> {
         match &command {
             ResolvedNCommand::Sort(_span, name, _presort_and_args) => {
                 res.push(command.to_command().make_unresolved());
-                res.extend(self.make_parent_table(name));
+                res.extend(self.make_uf_table(name));
             }
             ResolvedNCommand::Function(fdecl) => {
                 res.extend(self.term_and_view(fdecl));
@@ -695,15 +665,15 @@ impl<'a> TermState<'a> {
     }
 
     fn parent_direct_ruleset_name(&self) -> String {
-        format!("parent",)
+        "parent".to_string()
     }
 
     fn rebuilding_ruleset_name(&self) -> String {
-        format!("rebuilding",)
+        "rebuilding".to_string()
     }
 
     fn rebuilding_cleanup_ruleset_name(&self) -> String {
-        format!("rebuilding_cleanup",)
+        "rebuilding_cleanup".to_string()
     }
 
     pub(crate) fn term_header(&mut self) -> Vec<Command> {
@@ -713,7 +683,7 @@ impl<'a> TermState<'a> {
              (ruleset {})
              (ruleset {})",
             self.parent_direct_ruleset_name(),
-            self.to_union_ruleset_name(),
+            self.single_parent_ruleset_name(),
             self.rebuilding_ruleset_name(),
             self.rebuilding_cleanup_ruleset_name(),
         );
