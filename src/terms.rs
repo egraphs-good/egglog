@@ -5,7 +5,6 @@ use std::path::{Path, PathBuf};
 #[derive(Default, Clone)]
 pub(crate) struct ProofConstants {
     pub uf_parent: HashMap<String, String>,
-    pub to_union: HashMap<String, String>,
     pub term_header_added: bool,
     // TODO this is very ugly- we should separate out a typechecking struct
     // since we didn't need an entire e-graph
@@ -80,6 +79,7 @@ impl<'a> TermState<'a> {
         .unwrap()
     }
 
+    // Each function/constructor gets a view table, the canonicalized e-nodes to accelerate e-matching.
     fn view_name(&self, name: &str) -> String {
         String::from(format!("{}View", name,))
     }
