@@ -76,7 +76,6 @@ impl<'a> TermState<'a> {
             self.parent_direct_ruleset_name(),
             self.single_parent_ruleset_name(),
         ))
-        .unwrap()
     }
 
     // Each function/constructor gets a view table, the canonicalized e-nodes to accelerate e-matching.
@@ -93,7 +92,7 @@ impl<'a> TermState<'a> {
     }
 
     fn delete_subsume_ruleset_name(&self) -> String {
-        "to_delete_ruleset".to_string()
+        "delete_subsume_ruleset".to_string()
     }
 
     fn delete_and_subsume(&mut self, fdecl: &ResolvedFunctionDecl) -> String {
@@ -119,7 +118,7 @@ impl<'a> TermState<'a> {
                     :name \"{fresh_name}\")
              (rule (({subsumed_name} {child_names})
                     ({view_name} {child_names} out))
-                   ((subsume ({view_name} {child_names} out))))
+                   ((subsume ({view_name} {child_names} out)))
                     :ruleset {delete_subsume_ruleset}
                     :name \"{fresh_name}_subsume\")"
         )
@@ -239,7 +238,6 @@ impl<'a> TermState<'a> {
                 fresh_sort.clone()
             },
         ))
-        .unwrap()
     }
 
     fn rebuilding_rules(&mut self, fdecl: &ResolvedFunctionDecl) -> Vec<Command> {
@@ -308,8 +306,8 @@ impl<'a> TermState<'a> {
 
         // don't extend res if none of them needed updating
         if !children_updated_query.is_empty() {
-            res.extend(self.parse_program(&rule).unwrap());
-            res.extend(self.parse_program(&rule2).unwrap());
+            res.extend(self.parse_program(&rule));
+            res.extend(self.parse_program(&rule2));
         }
 
         res
@@ -565,7 +563,7 @@ impl<'a> TermState<'a> {
                 format!(":ruleset {}", rule.ruleset)
             }
         );
-        self.parse_program(&instrumented).unwrap()
+        self.parse_program(&instrumented)
     }
 
     /// TODO experiment with schedule- unclear what is fastest.
@@ -584,7 +582,6 @@ impl<'a> TermState<'a> {
                   {rebuilding_ruleset})
              {delete_ruleset}"
         ))
-        .unwrap()
     }
 
     // TODO schedules contain queries we need to instrument
@@ -646,7 +643,7 @@ impl<'a> TermState<'a> {
             }
             ResolvedNCommand::CoreAction(action) => {
                 let instrumented = self.instrument_action(action).join("\n");
-                res.extend(self.parse_program(&instrumented).unwrap());
+                res.extend(self.parse_program(&instrumented));
             }
             ResolvedNCommand::Check(span, facts) => {
                 let instrumented = self.instrument_facts(facts);
@@ -727,27 +724,30 @@ impl<'a> TermState<'a> {
             "(ruleset {})
              (ruleset {})
              (ruleset {})
+             (ruleset {})
              (ruleset {})",
             self.parent_direct_ruleset_name(),
             self.single_parent_ruleset_name(),
             self.rebuilding_ruleset_name(),
             self.rebuilding_cleanup_ruleset_name(),
+            self.delete_subsume_ruleset_name(),
         );
-        self.parse_program(&str).unwrap()
+        self.parse_program(&str)
     }
 
-    fn parse_program(&mut self, input: &str) -> Result<Vec<Command>, ParseError> {
+    fn parse_program(&mut self, input: &str) -> Vec<Command> {
         self.egraph.parser.ensure_no_reserved_symbols = false;
         let res = self.egraph.parser.get_program_from_string(None, input);
         self.egraph.parser.ensure_no_reserved_symbols = true;
-        res
+
+        res.unwrap()
     }
 
-    fn parse_schedule(&mut self, input: String) -> Result<Schedule, ParseError> {
+    fn parse_schedule(&mut self, input: String) -> Schedule {
         self.egraph.parser.ensure_no_reserved_symbols = false;
         let res = self.egraph.parser.get_schedule_from_string(None, &input);
         self.egraph.parser.ensure_no_reserved_symbols = true;
-        res
+        res.unwrap()
     }
 
     fn parse_facts(&mut self, input: &Vec<String>) -> Vec<Fact> {
