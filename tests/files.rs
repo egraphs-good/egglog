@@ -136,7 +136,7 @@ fn generate_tests(glob: &str) -> Vec<Trial> {
                 ..run.clone()
             });
 
-            if term_encoding_supported(&run.path) {
+            if file_supports_proofs(&run.path) {
                 push_trial(Run {
                     term_encoding: true,
                     ..run.clone()

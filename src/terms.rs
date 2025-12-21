@@ -110,15 +110,17 @@ impl<'a> TermState<'a> {
         let delete_subsume_ruleset = self.delete_subsume_ruleset_name();
         let fresh_name = self.egraph.parser.symbol_gen.fresh("delete_rule");
 
+        // Delete just goes once while subsume continues to delete in the future
         format!(
             "(rule (({to_delete_name} {child_names})
                     ({view_name} {child_names} out))
-                   ((delete ({view_name} {child_names} out)))
+                   ((delete ({view_name} {child_names} out))
+                    (delete ({to_delete_name} {child_names})))
                     :ruleset {delete_subsume_ruleset}
                     :name \"{fresh_name}\")
              (rule (({subsumed_name} {child_names})
                     ({view_name} {child_names} out))
-                   ((subsume ({view_name} {child_names} out)))
+                   ((delete ({view_name} {child_names} out)))
                     :ruleset {delete_subsume_ruleset}
                     :name \"{fresh_name}_subsume\")"
         )
@@ -452,10 +454,7 @@ impl<'a> TermState<'a> {
                         .map(|e| self.instrument_action_expr(e, &mut res))
                         .collect::<Vec<_>>();
 
-                    res.push(format!(
-                        "({symbol} {})",
-                        ListDisplay(children, " ")
-                    ));
+                    res.push(format!("({symbol} {})", ListDisplay(children, " ")));
                 } else {
                     panic!(
                         "Delete action on non-function, should have been prevented by typechecking"
@@ -756,12 +755,7 @@ impl<'a> TermState<'a> {
     }
 }
 
-pub fn term_encoding_supported(path: &Path) -> bool {
-    let mut visited = HashSet::default();
-    term_encoding_supported_impl(path, &mut visited)
-}
-
-fn term_encoding_supported_impl(path: &Path, visited: &mut HashSet<PathBuf>) -> bool {
+pub fn file_supports_proofs(path: &Path) -> bool {
     let contents = match std::fs::read_to_string(path) {
         Ok(contents) => contents,
         Err(_) => return false,
@@ -771,10 +765,6 @@ fn term_encoding_supported_impl(path: &Path, visited: &mut HashSet<PathBuf>) -> 
         Ok(canonical) => canonical,
         Err(_) => return false,
     };
-
-    if !visited.insert(canonical.clone()) {
-        return true;
-    }
 
     let mut egraph = EGraph::default();
     let filename = canonical.to_string_lossy().into_owned();
