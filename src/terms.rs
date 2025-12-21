@@ -81,7 +81,48 @@ impl<'a> TermState<'a> {
 
     // Each function/constructor gets a view table, the canonicalized e-nodes to accelerate e-matching.
     fn view_name(&self, name: &str) -> String {
-        String::from(format!("{}View", name,))
+        format!("{}View", name,)
+    }
+
+    fn to_delete_name(&self, name: &str) -> String {
+        format!("to_delete_{}", name,)
+    }
+
+    fn subsumed_name(&self, name: &str) -> String {
+        format!("to_subsume_{}", name,)
+    }
+
+    fn delete_subsume_ruleset_name(&self) -> String {
+        "to_delete_ruleset".to_string()
+    }
+
+    fn delete_and_subsume(&mut self, fdecl: &ResolvedFunctionDecl) -> String {
+        let child_names = fdecl
+            .schema
+            .input
+            .iter()
+            .enumerate()
+            .map(|(i, _)| format!("c{i}_"))
+            .collect::<Vec<_>>()
+            .join(" ");
+        let to_delete_name = self.to_delete_name(&fdecl.name);
+        let subsumed_name = self.subsumed_name(&fdecl.name);
+        let view_name = self.view_name(&fdecl.name);
+        let delete_subsume_ruleset = self.delete_subsume_ruleset_name();
+        let fresh_name = self.egraph.parser.symbol_gen.fresh("delete_rule");
+
+        format!(
+            "(rule (({to_delete_name} {child_names})
+                    ({view_name} {child_names} out))
+                   ((delete ({view_name} {child_names} out)))
+                    :ruleset {delete_subsume_ruleset}
+                    :name \"{fresh_name}\")
+             (rule (({subsumed_name} {child_names})
+                    ({view_name} {child_names} out))
+                   ((subsume ({view_name} {child_names} out))))
+                    :ruleset {delete_subsume_ruleset}
+                    :name \"{fresh_name}_subsume\")"
+        )
     }
 
     // Generate a rule that runs the merge function for custom functions.
@@ -164,35 +205,39 @@ impl<'a> TermState<'a> {
     /// We re-use the original name of the function for the term table.
     fn term_and_view(&mut self, fdecl: &ResolvedFunctionDecl) -> Vec<Command> {
         let schema = &fdecl.schema;
-        let mut types = schema.input.clone();
-        if fdecl.subtype == FunctionSubtype::Custom {
-            types.push(schema.output.clone());
-        }
+        let mut in_types = schema.input.clone();
+        let out_type = schema.output.clone();
 
+        let name = &fdecl.name;
         let view_name = self.view_name(&fdecl.name);
-        let child_sorts = ListDisplay(types, " ");
+        let in_sorts = ListDisplay(in_types, " ");
         let fresh_sort = self.egraph.parser.symbol_gen.fresh("view");
         let merge_rule = self.handle_merge_fn(fdecl);
+        let delete_rule = self.delete_and_subsume(fdecl);
+        let to_delete_name = self.to_delete_name(&fdecl.name);
+        let subsumed_name = self.subsumed_name(&fdecl.name);
+
         // the term table has child_sorts as inputs
         // the view table has child_sorts + the leader term for the eclass
         self.parse_program(&format!(
             "
             (sort {fresh_sort})
-            (constructor {} ({child_sorts}) {})
-            (constructor {view_name} ({child_sorts} {}) {fresh_sort})
-            {}",
-            fdecl.name,
+            (constructor {name} ({in_sorts} {}) {})
+            (constructor {view_name} ({in_sorts} {out_type}) {fresh_sort})
+            (constructor {to_delete_name} ({in_sorts}) {fresh_sort})
+            (constructor {subsumed_name} ({in_sorts}) {fresh_sort})
+            {merge_rule}
+            {delete_rule}",
+            if fdecl.subtype == FunctionSubtype::Constructor {
+                "".to_string()
+            } else {
+                schema.output.to_string()
+            },
             if fdecl.subtype == FunctionSubtype::Constructor {
                 schema.output.clone()
             } else {
                 fresh_sort.clone()
             },
-            if fdecl.subtype == FunctionSubtype::Constructor {
-                fdecl.schema.output.clone()
-            } else {
-                "".to_string()
-            },
-            merge_rule
         ))
         .unwrap()
     }
@@ -530,13 +575,14 @@ impl<'a> TermState<'a> {
         let single_parent = self.single_parent_ruleset_name();
         let rebuilding_cleanup_ruleset = self.rebuilding_cleanup_ruleset_name();
         let rebuilding_ruleset = self.rebuilding_ruleset_name();
+        let delete_ruleset = self.delete_subsume_ruleset_name();
         self.parse_schedule(format!(
             "(saturate
                   {rebuilding_cleanup_ruleset}
                   (saturate {single_parent})
                   (saturate {parent_direct_ruleset})
                   {rebuilding_ruleset})
-                   "
+             {delete_ruleset}"
         ))
         .unwrap()
     }
@@ -764,19 +810,6 @@ pub fn command_supports_proof_encoding(command: &ResolvedCommand) -> bool {
         // no-merge isn't supported right now
         ResolvedCommand::Function { merge: None, .. } => false,
         // delete or subsume on custom functions isn't supported
-        _ => {
-            let mut res = true;
-            command.clone().visit_actions(&mut |action| {
-                if let ResolvedAction::Change(_, _change, ResolvedCall::Func(func_type), _) =
-                    &action
-                {
-                    if func_type.subtype == FunctionSubtype::Custom {
-                        res = false;
-                    }
-                }
-                action
-            });
-            res
-        }
+        _ => true,
     }
 }
