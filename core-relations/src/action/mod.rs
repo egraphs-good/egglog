@@ -106,7 +106,7 @@ pub(crate) struct Bindings {
     // This is used to preallocate chunks of the flat `data` vector.
     max_batch_size: usize,
     data: Pooled<Vec<Value>>,
-    /// Points into `data`. data[vars[var].. vars[var]+matches]` contains the values for `data`.
+    /// Points into `data`. `data[vars[var].. vars[var]+matches]` contains the values for `data`.
     var_offsets: DenseIdMap<Variable, usize>,
 }
 

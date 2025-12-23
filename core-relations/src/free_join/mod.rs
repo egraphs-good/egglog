@@ -633,17 +633,30 @@ impl Database {
     /// Get direct mutable access to the table.
     ///
     /// This method is useful for out-of-band access to databse state.
-    pub fn get_table(&self, id: TableId) -> &WrappedTable {
+    ///
+    // Not in doc comment since it mentions private items:
+    //
+    // **NOTE:** It is legal to call [`Table::new_buffer`] on the returned table handle, and use
+    // that to stage updates to the given table via [`MutationBuffer::stage_insert`] or
+    // [`MutationBuffer::stage_remove`], however this is *likely to be a source of bugs*. Updates
+    // staged in this way will not cause `table` to be marked as having pending changes in the
+    // next call to [`Database::merge_all`]. Instead, such users should use
+    // [`Database::new_buffer`] instead, which plumbs this signal through correctly.
+    //
+    //
+    // Note that most updates to a table are mediated through an [`ExecutionState`], which handles
+    // this correctl, so this is handled automatically for common sources of updates.
+    pub fn get_table(&self, table: TableId) -> &WrappedTable {
         &self
             .tables
-            .get(id)
+            .get(table)
             .expect("must access a table that has been declared in this database")
             .table
     }
 
-    pub fn get_table_info(&self, id: TableId) -> &TableInfo {
+    pub fn get_table_info(&self, table: TableId) -> &TableInfo {
         self.tables
-            .get(id)
+            .get(table)
             .expect("must access a table that has been declared in this database")
     }
 
