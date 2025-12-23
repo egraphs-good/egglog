@@ -1,8 +1,7 @@
 use std::{
     mem,
     sync::{
-        Arc,
-        Barrier,
+        Arc, Barrier,
         atomic::{AtomicUsize, Ordering},
     },
     thread::{self, sleep},
