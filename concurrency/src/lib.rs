@@ -2,6 +2,7 @@
 
 pub(crate) mod bitset;
 pub(crate) mod concurrent_vec;
+pub(crate) mod modified_list;
 pub(crate) mod notification;
 pub mod parallel_writer;
 pub(crate) mod resettable_oncelock;
@@ -9,6 +10,7 @@ use arc_swap::{ArcSwap, Guard};
 
 pub use bitset::BitSet;
 pub use concurrent_vec::ConcurrentVec;
+pub use modified_list::ModifiedList;
 pub use notification::Notification;
 pub use parallel_writer::ParallelVecWriter;
 pub use resettable_oncelock::ResettableOnceLock;

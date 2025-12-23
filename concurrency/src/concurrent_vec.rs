@@ -35,8 +35,9 @@ impl<T> Default for ConcurrentVec<T> {
 
 impl<T> Drop for ConcurrentVec<T> {
     fn drop(&mut self) {
-        let mut writer = self.data.lock();
-        let len = self.head.load(Ordering::Acquire);
+        let this = &self;
+        let mut writer = this.data.lock();
+        let len = this.head.load(Ordering::Acquire);
         if mem::needs_drop::<T>() {
             for i in 0..len {
                 // SAFETY: we own the data, have exclusive access, and know that the
@@ -55,7 +56,24 @@ impl<T> ConcurrentVec<T> {
         Self::with_capacity(128)
     }
 
-    /// Create a new `AsyncVec` with the given starting capacity.
+    pub fn resize_with(&self, new_len: usize, mut f: impl FnMut() -> T) {
+        let head = self.head.load(Ordering::Acquire);
+        if new_len <= head {
+            return;
+        }
+        // We need to write to the vector and potentially resize it. Grab a write lock.
+        let _guard = self.write_lock.lock().unwrap();
+        let head = self.head.load(Ordering::Acquire);
+        if new_len <= head {
+            return;
+        }
+        self.push_at(f(), new_len - 1, || {
+            MaybeUninit::new(SyncUnsafeCell(UnsafeCell::new(f())))
+        });
+        self.head.store(new_len, Ordering::Release);
+    }
+
+    /// Create a new `ConcurrentVec` with the given starting capacity.
     pub fn with_capacity(capacity: usize) -> Self {
         let capacity = capacity.next_power_of_two();
         Self {
@@ -69,12 +87,17 @@ impl<T> ConcurrentVec<T> {
     pub fn push(&self, item: T) -> usize {
         let _guard = self.write_lock.lock().unwrap();
         let index = self.head.load(Ordering::Acquire);
-        self.push_at(item, index);
+        self.push_at(item, index, MaybeUninit::uninit);
         self.head.store(index + 1, Ordering::Release);
         index
     }
 
-    fn push_at(&self, item: T, index: usize) {
+    fn push_at(
+        &self,
+        item: T,
+        index: usize,
+        mut init_fn: impl FnMut() -> MaybeUninit<SyncUnsafeCell<T>>,
+    ) {
         let handle = self.data.read();
         if let Some(slot) = handle.get(index) {
             // SAFETY: we are tansferring ownership of `item` to the slot.
@@ -85,10 +108,10 @@ impl<T> ConcurrentVec<T> {
         mem::drop(handle);
         let mut writer = self.data.lock();
         if index >= writer.len() {
-            writer.resize_with((index + 1).next_power_of_two(), MaybeUninit::uninit);
+            writer.resize_with((index + 1).next_power_of_two(), &mut init_fn);
         }
         mem::drop(writer);
-        self.push_at(item, index);
+        self.push_at(item, index, init_fn);
     }
 
     pub fn read(&self) -> impl Deref<Target = [T]> + '_ {
