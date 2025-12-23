@@ -48,7 +48,7 @@ fn basic_query() {
     // Add the numbers 1 through 10 to the num table at timestamp 0.
     let mut ids = Vec::new();
     {
-        let mut num_buf = db.get_table(num).new_buffer();
+        let mut num_buf = db.new_buffer(num);
         for i in 0..10 {
             let id = db.inc_counter(id_counter);
             let i = db.base_values().get::<i64>(i as i64);
@@ -61,7 +61,7 @@ fn basic_query() {
 
     let mut add_ids = Vec::new();
     {
-        let mut add_buf = db.get_table(add).new_buffer();
+        let mut add_buf = db.new_buffer(add);
         for i in ids.chunks(2) {
             let &[x, y] = i else { unreachable!() };
             // Insert (add x y) into the database with a fresh id at timestamp 0
@@ -155,7 +155,7 @@ fn line_graph_1_test(strat: PlanStrategy) {
     let edges = db.add_table(edge_impl, iter::empty(), iter::empty());
     let nodes = Vec::from_iter((0..10).map(Value::new));
     {
-        let mut edge_buf = db.get_table(edges).new_buffer();
+        let mut edge_buf = db.new_buffer(edges);
         for edge in nodes.windows(2) {
             edge_buf.stage_insert(edge);
         }
@@ -227,7 +227,7 @@ fn line_graph_2_test(strat: PlanStrategy) {
     let edges = db.add_table(edge_impl, iter::empty(), iter::empty());
     let nodes = Vec::from_iter((0..10).map(Value::new));
     {
-        let mut edge_buf = db.get_table_mut(edges).new_buffer();
+        let mut edge_buf = db.new_buffer(edges);
         for edge in nodes.windows(2) {
             edge_buf.stage_insert(edge);
         }
@@ -287,14 +287,14 @@ fn minimal_ac() {
     } = basic_math_egraph();
     {
         {
-            let mut add_buf = db.get_table(add).new_buffer();
+            let mut add_buf = db.new_buffer(add);
             add_buf.stage_insert(&[v(0), v(0), v(1), v(0)]);
             add_buf.stage_insert(&[v(0), v(1), v(2), v(0)]);
             add_buf.stage_insert(&[v(0), v(2), v(3), v(0)]);
         }
         db.merge_all();
         {
-            let mut add_buf = db.get_table(add).new_buffer();
+            let mut add_buf = db.new_buffer(add);
             add_buf.stage_insert(&[v(1), v(0), v(2), v(1)]);
             add_buf.stage_insert(&[v(1), v(1), v(3), v(1)]);
         }
@@ -423,8 +423,7 @@ fn ac_test(strat: PlanStrategy) {
         let id = db.inc_counter(id_counter);
         let i = db.base_values().get::<i64>(i as i64);
         ids.push(i);
-        db.get_table(num)
-            .new_buffer()
+        db.new_buffer(num)
             .stage_insert(&[i, Value::from_usize(id), Value::new(0)]);
     }
 
@@ -438,8 +437,7 @@ fn ac_test(strat: PlanStrategy) {
         let mut prev = ids[0];
         for num in &ids[1..] {
             let id = Value::from_usize(db.inc_counter(id_counter));
-            db.get_table(add)
-                .new_buffer()
+            db.new_buffer(add)
                 .stage_insert(&[*num, prev, id, Value::new(0)]);
             prev = id;
             add_ids.push(id);
@@ -449,8 +447,7 @@ fn ac_test(strat: PlanStrategy) {
         prev = *ids.last().unwrap();
         for num in ids[0..(N - 1)].iter().rev() {
             let id = Value::from_usize(db.inc_counter(id_counter));
-            db.get_table(add)
-                .new_buffer()
+            db.new_buffer(add)
                 .stage_insert(&[prev, *num, id, Value::new(0)]);
             prev = id;
             add_ids.push(id);
@@ -938,12 +935,12 @@ fn lookup_with_fallback_partial_success() {
     };
 
     {
-        let mut buf = db.get_table(f).new_buffer();
+        let mut buf = db.new_buffer(f);
         buf.stage_insert(&[v(1), v(0)]);
         buf.stage_insert(&[v(2), v(0)]);
     }
     {
-        let mut buf = db.get_table(g).new_buffer();
+        let mut buf = db.new_buffer(g);
         buf.stage_insert(&[v(1), v(0)]);
         buf.stage_insert(&[v(3), v(0)]);
         buf.stage_insert(&[v(4), v(0)]);
@@ -1037,7 +1034,7 @@ fn call_external_with_fallback() {
     };
 
     {
-        let mut buf = db.get_table(f).new_buffer();
+        let mut buf = db.new_buffer(f);
         buf.stage_insert(&[v(1), v(0)]);
         buf.stage_insert(&[v(2), v(0)]);
         buf.stage_insert(&[v(3), v(0)]);

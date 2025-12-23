@@ -159,14 +159,17 @@ pub trait Table: Any + Send + Sync {
     ///
     /// Note that value-level rebuilds are only relevant for tables that opt into it. As a result,
     /// tables do nothing by default.
+    ///
+    /// Returns whether any rows may be removed or inserted.
     fn apply_rebuild(
         &mut self,
         _table_id: TableId,
         _table: &WrappedTable,
         _next_ts: Value,
         _exec_state: &mut ExecutionState,
-    ) {
+    ) -> bool {
         // Default implementation does nothing.
+        false
     }
 
     /// A boilerplate method to make it easier to downcast values of `Table`.

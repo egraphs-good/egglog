@@ -8,6 +8,7 @@ use crate::{
     common::HashMap,
     numeric_id::{DenseIdMap, NumericId},
 };
+use egglog_concurrency::NotificationList;
 use smallvec::SmallVec;
 
 use crate::{
@@ -321,6 +322,7 @@ pub(crate) struct DbView<'a> {
     pub(crate) external_funcs: &'a ExternalFunctions,
     pub(crate) bases: &'a BaseValues,
     pub(crate) containers: &'a ContainerValues,
+    pub(crate) notification_list: &'a NotificationList,
 }
 
 /// A handle on a database that may be in the process of running a rule.
@@ -351,23 +353,60 @@ pub(crate) struct DbView<'a> {
 pub struct ExecutionState<'a> {
     pub(crate) predicted: PredictedVals,
     pub(crate) db: DbView<'a>,
-    pub(crate) buffers: DenseIdMap<TableId, Box<dyn MutationBuffer>>,
+    buffers: MutationBuffers<'a>,
     /// Whether any mutations have been staged via this ExecutionState.
     pub(crate) changed: bool,
 }
 
-impl Clone for ExecutionState<'_> {
+/// A basic wrapper around an map from table id to a mutation buffer for that table that also
+/// tracks if a table has been modified.
+struct MutationBuffers<'a> {
+    notify_list: &'a NotificationList,
+    buffers: DenseIdMap<TableId, Box<dyn MutationBuffer>>,
+}
+
+impl Clone for MutationBuffers<'_> {
     fn clone(&self) -> Self {
-        let mut res = ExecutionState {
-            predicted: Default::default(),
-            db: self.db,
-            buffers: DenseIdMap::new(),
-            changed: false,
-        };
+        let mut res = MutationBuffers::new(self.notify_list, Default::default());
         for (id, buf) in self.buffers.iter() {
             res.buffers.insert(id, buf.fresh_handle());
         }
         res
+    }
+}
+
+impl<'a> MutationBuffers<'a> {
+    fn new(
+        notify_list: &'a NotificationList,
+        buffers: DenseIdMap<TableId, Box<dyn MutationBuffer>>,
+    ) -> MutationBuffers<'a> {
+        MutationBuffers {
+            notify_list,
+            buffers,
+        }
+    }
+    fn lazy_init(&mut self, table_id: TableId, f: impl FnOnce() -> Box<dyn MutationBuffer>) {
+        self.buffers.get_or_insert(table_id, f);
+    }
+    fn stage_insert(&mut self, table_id: TableId, row: &[Value]) {
+        self.buffers[table_id].stage_insert(row);
+        self.notify_list.notify(table_id.index());
+    }
+
+    fn stage_remove(&mut self, table_id: TableId, key: &[Value]) {
+        self.buffers[table_id].stage_remove(key);
+        self.notify_list.notify(table_id.index());
+    }
+}
+
+impl Clone for ExecutionState<'_> {
+    fn clone(&self) -> Self {
+        ExecutionState {
+            predicted: Default::default(),
+            db: self.db,
+            buffers: self.buffers.clone(),
+            changed: false,
+        }
     }
 }
 
@@ -379,7 +418,7 @@ impl<'a> ExecutionState<'a> {
         ExecutionState {
             predicted: Default::default(),
             db,
-            buffers,
+            buffers: MutationBuffers::new(db.notification_list, buffers),
             changed: false,
         }
     }
@@ -389,8 +428,8 @@ impl<'a> ExecutionState<'a> {
     /// If you are using `egglog`, consider using `egglog_bridge::TableAction`.
     pub fn stage_insert(&mut self, table: TableId, row: &[Value]) {
         self.buffers
-            .get_or_insert(table, || self.db.table_info[table].table.new_buffer())
-            .stage_insert(row);
+            .lazy_init(table, || self.db.table_info[table].table.new_buffer());
+        self.buffers.stage_insert(table, row);
         self.changed = true;
     }
 
@@ -399,8 +438,8 @@ impl<'a> ExecutionState<'a> {
     /// If you are using `egglog`, consider using `egglog_bridge::TableAction`.
     pub fn stage_remove(&mut self, table: TableId, key: &[Value]) {
         self.buffers
-            .get_or_insert(table, || self.db.table_info[table].table.new_buffer())
-            .stage_remove(key);
+            .lazy_init(table, || self.db.table_info[table].table.new_buffer());
+        self.buffers.stage_remove(table, key);
         self.changed = true;
     }
 
@@ -481,7 +520,7 @@ impl<'a> ExecutionState<'a> {
 
     fn construct_new_row(
         db: &DbView,
-        buffers: &mut DenseIdMap<TableId, Box<dyn MutationBuffer>>,
+        buffers: &mut MutationBuffers,
         changed: &mut bool,
         table: TableId,
         key: &[Value],
@@ -497,9 +536,8 @@ impl<'a> ExecutionState<'a> {
                     MergeVal::Constant(c) => c,
                 })
             }
-            buffers
-                .get_or_insert(table, || db.table_info[table].table.new_buffer())
-                .stage_insert(&new);
+            buffers.lazy_init(table, || db.table_info[table].table.new_buffer());
+            buffers.stage_insert(table, &new);
             *changed = true;
             new
         })
@@ -583,7 +621,7 @@ impl ExecutionState<'_> {
                 dst_var,
             } => {
                 let pool = with_pool_set(|ps| ps.get_pool::<Vec<Value>>().clone());
-                self.buffers.get_or_insert(*table_id, || {
+                self.buffers.lazy_init(*table_id, || {
                     self.db.table_info[*table_id].table.new_buffer()
                 });
                 let table = &self.db.table_info[*table_id].table;
@@ -639,7 +677,7 @@ impl ExecutionState<'_> {
                                         row.push(val)
                                     }
                                     // Insert it into the table.
-                                    buffers.get_mut(*table_id).unwrap().stage_insert(&row);
+                                    buffers.stage_insert(*table_id, &row);
                                     row
                                 });
                         row[dst_col.index()]

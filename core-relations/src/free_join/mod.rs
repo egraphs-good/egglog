@@ -8,10 +8,11 @@ use std::{
 };
 
 use crate::{
+    common::IndexSet,
     hash_index::IndexCatalog,
     numeric_id::{DenseIdMap, DenseIdMapWithReuse, NumericId, define_id},
 };
-use egglog_concurrency::ResettableOnceLock;
+use egglog_concurrency::{NotificationList, ResettableOnceLock};
 use rayon::prelude::*;
 use smallvec::SmallVec;
 
@@ -288,6 +289,7 @@ pub struct Database {
     pub(crate) counters: Counters,
     pub(crate) external_functions: ExternalFunctions,
     container_values: ContainerValues,
+    notification_list: NotificationList,
     // Tracks the relative dependencies between tables during merge operations.
     deps: DependencyGraph,
     base_values: BaseValues,
@@ -367,13 +369,15 @@ impl Database {
             for id in to_rebuild {
                 tables.push((*id, self.tables.take(*id).unwrap()));
             }
-            tables.par_iter_mut().for_each(|(_, info)| {
-                info.table.apply_rebuild(
+            tables.par_iter_mut().for_each(|(id, info)| {
+                if info.table.apply_rebuild(
                     func_id,
                     &func.table,
                     next_ts,
                     &mut ExecutionState::new(self.read_only_view(), Default::default()),
-                );
+                ) {
+                    self.notification_list.notify(id.index());
+                }
             });
             for (id, info) in tables {
                 self.tables.insert(id, info);
@@ -381,12 +385,14 @@ impl Database {
         } else {
             for id in to_rebuild {
                 let mut info = self.tables.take(*id).unwrap();
-                info.table.apply_rebuild(
+                if info.table.apply_rebuild(
                     func_id,
                     &func.table,
                     next_ts,
                     &mut ExecutionState::new(self.read_only_view(), Default::default()),
-                );
+                ) {
+                    self.notification_list.notify(id.index());
+                }
                 self.tables.insert(*id, info);
             }
         }
@@ -407,6 +413,7 @@ impl Database {
             external_funcs: &self.external_functions,
             bases: &self.base_values,
             containers: &self.container_values,
+            notification_list: &self.notification_list,
         }
     }
 
@@ -457,7 +464,15 @@ impl Database {
     pub fn merge_all(&mut self) -> bool {
         let mut ever_changed = false;
         let do_parallel = parallelize_db_level_op(self.total_size_estimate);
+        let mut to_merge = IndexSet::default();
         loop {
+            to_merge.clear();
+            for table in self.notification_list.reset() {
+                to_merge.insert(TableId::from_usize(table));
+            }
+            if to_merge.is_empty() {
+                break;
+            }
             let mut changed = false;
             let mut tables_merging = DenseIdMap::<
                 TableId,
@@ -471,7 +486,7 @@ impl Database {
             >::with_capacity(self.tables.n_ids());
             for stratum in self.deps.strata() {
                 // Initialize the write dependencies first.
-                for table in stratum.iter().copied() {
+                for table in stratum.intersection(&to_merge).copied() {
                     let mut bufs = DenseIdMap::default();
                     for dep in self.deps.write_deps(table) {
                         if let Some(info) = self.tables.get(dep) {
@@ -482,7 +497,7 @@ impl Database {
                 }
                 // Then initialize read dependencies (this two-phase structure is why we have an
                 // Option in the tables_merging map).
-                for table in stratum.iter().copied() {
+                for table in stratum.intersection(&to_merge).copied() {
                     tables_merging[table].0 = Some(self.tables.unwrap_val(table));
                 }
                 let db = self.read_only_view();
@@ -510,9 +525,6 @@ impl Database {
                 }
             }
             ever_changed |= changed;
-            if !changed {
-                break;
-            }
         }
         // Reset all indexes to force an update on the next access.
         let mut size_estimate = 0;
@@ -535,15 +547,16 @@ impl Database {
     /// for a particular table may cause other updates to be buffered
     /// elesewhere. The `merge_all` method runs merges to a fixed point to avoid
     /// surprises here.
-    pub fn merge_table(&mut self, table: TableId) {
+    pub fn merge_table(&mut self, table: TableId) -> bool {
         let mut info = self.tables.unwrap_val(table);
         self.total_size_estimate = self.total_size_estimate.wrapping_sub(info.table.len());
-        let _table_changed = info.table.merge(&mut ExecutionState::new(
+        let table_changed = info.table.merge(&mut ExecutionState::new(
             self.read_only_view(),
             Default::default(),
         ));
         self.total_size_estimate = self.total_size_estimate.wrapping_add(info.table.len());
         self.tables.insert(table, info);
+        table_changed.added || table_changed.removed
     }
 
     /// Get id of the next table to be added to the database.
@@ -612,6 +625,14 @@ impl Database {
         self.tables
             .get(id)
             .expect("must access a table that has been declared in this database")
+    }
+
+    /// Create a new mutation buffer for the table with id `id`.
+    ///
+    /// This will marked the given table as potentially changed for the next round of merging.
+    pub fn new_buffer(&self, id: TableId) -> Box<dyn MutationBuffer> {
+        self.notification_list.notify(id.index());
+        self.get_table(id).new_buffer()
     }
 
     pub(crate) fn process_constraints(
