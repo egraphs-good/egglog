@@ -467,13 +467,15 @@ impl Database {
         let mut to_merge = IndexSet::default();
         loop {
             to_merge.clear();
-            for table in self.notification_list.reset() {
-                to_merge.insert(table);
-            }
-            if to_merge.len() < 8 {
-                ever_changed |= self.merge_simple(to_merge);
+            let to_merge_vec = self.notification_list.reset();
+            if to_merge_vec.len() < 8 {
+                ever_changed |= self.merge_simple(to_merge_vec);
                 break;
             }
+            for table in to_merge_vec {
+                to_merge.insert(table);
+            }
+
             let mut changed = false;
             let mut tables_merging = DenseIdMap::<
                 TableId,
@@ -545,7 +547,7 @@ impl Database {
     /// A "fast path" merge method that is not optimized for parallelism and does not respect read
     /// and write dependencies. This ends up being faster than the full "strata-aware" option in
     /// the body of `merge_all`.
-    fn merge_simple(&mut self, mut to_merge: IndexSet<TableId>) -> bool {
+    fn merge_simple(&mut self, mut to_merge: Vec<TableId>) -> bool {
         let mut changed = false;
         while !to_merge.is_empty() {
             for table_id in to_merge.iter().copied() {
@@ -554,8 +556,7 @@ impl Database {
                 changed |= info.table.merge(&mut es).added || es.changed;
                 self.tables.insert(table_id, info);
             }
-            to_merge.clear();
-            to_merge.extend(self.notification_list.reset())
+            to_merge = self.notification_list.reset();
         }
         changed
     }

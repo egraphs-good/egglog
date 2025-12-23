@@ -14,8 +14,8 @@ use std::sync::{
     atomic::{AtomicBool, Ordering},
 };
 
-use egglog_numeric_id::NumericId;
 use crate::ConcurrentVec;
+use egglog_numeric_id::NumericId;
 
 /// Tracks which dense numeric identifiers have been notified since the last reset.
 #[derive(Clone)]
@@ -62,12 +62,10 @@ impl<K: NumericId> NotificationList<K> {
     pub fn reset(&self) -> Vec<K> {
         // TODO: we can make an optimized version of this that takes advantage of the  exclusive
         // reference.
-        let mut notified = Vec::new();
-        {
+        let notified = {
             let mut handle = self.inner.notified.lock().unwrap();
-            notified.extend_from_slice(&handle);
-            handle.clear();
-        }
+            std::mem::take(&mut *handle)
+        };
         let handle = self.inner.states.read();
         for &item in &notified {
             handle[item.index()].reset();
