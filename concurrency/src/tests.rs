@@ -83,7 +83,7 @@ fn notification_race() {
 
 #[test]
 fn notification_list_single_threaded() {
-    let list = NotificationList::default();
+    let list = NotificationList::<usize>::default();
     list.notify(0);
     list.notify(2);
     list.notify(5);
@@ -99,7 +99,7 @@ fn notification_list_single_threaded() {
 #[test]
 fn notification_list_multi_threaded() {
     for _ in 0..10 {
-        let list = NotificationList::default();
+        let list = NotificationList::<usize>::default();
         let threads: Vec<_> = (0..20)
             .map(|i| {
                 let list = list.clone();

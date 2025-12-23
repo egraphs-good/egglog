@@ -322,7 +322,7 @@ pub(crate) struct DbView<'a> {
     pub(crate) external_funcs: &'a ExternalFunctions,
     pub(crate) bases: &'a BaseValues,
     pub(crate) containers: &'a ContainerValues,
-    pub(crate) notification_list: &'a NotificationList,
+    pub(crate) notification_list: &'a NotificationList<TableId>,
 }
 
 /// A handle on a database that may be in the process of running a rule.
@@ -361,7 +361,7 @@ pub struct ExecutionState<'a> {
 /// A basic wrapper around an map from table id to a mutation buffer for that table that also
 /// tracks if a table has been modified.
 struct MutationBuffers<'a> {
-    notify_list: &'a NotificationList,
+    notify_list: &'a NotificationList<TableId>,
     buffers: DenseIdMap<TableId, Box<dyn MutationBuffer>>,
 }
 
@@ -377,7 +377,7 @@ impl Clone for MutationBuffers<'_> {
 
 impl<'a> MutationBuffers<'a> {
     fn new(
-        notify_list: &'a NotificationList,
+        notify_list: &'a NotificationList<TableId>,
         buffers: DenseIdMap<TableId, Box<dyn MutationBuffer>>,
     ) -> MutationBuffers<'a> {
         MutationBuffers {
@@ -390,12 +390,12 @@ impl<'a> MutationBuffers<'a> {
     }
     fn stage_insert(&mut self, table_id: TableId, row: &[Value]) {
         self.buffers[table_id].stage_insert(row);
-        self.notify_list.notify(table_id.index());
+        self.notify_list.notify(table_id);
     }
 
     fn stage_remove(&mut self, table_id: TableId, key: &[Value]) {
         self.buffers[table_id].stage_remove(key);
-        self.notify_list.notify(table_id.index());
+        self.notify_list.notify(table_id);
     }
 }
 

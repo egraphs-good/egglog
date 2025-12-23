@@ -1,6 +1,6 @@
-//! A type for maintaining a "notified" subset of dense integer identifiers.
+//! A type for maintaining a "notified" subset of dense numeric identifiers.
 //!
-//! Clients can create a [`NotificationList`] and then notify (dense) integer identifiers.
+//! Clients can create a [`NotificationList`] and then notify (dense) numeric identifiers.
 //! Then a client can `reset` the list, extracting the set of items that were notified.
 //!
 //! This is used to efficiently handle collecting a subset of tables that have been notified when
@@ -14,26 +14,36 @@ use std::sync::{
     atomic::{AtomicBool, Ordering},
 };
 
+use egglog_numeric_id::NumericId;
 use crate::ConcurrentVec;
 
-/// Tracks which dense integer identifiers have been notified since the last reset.
-#[derive(Default, Clone)]
-pub struct NotificationList {
-    inner: Arc<Inner>,
+/// Tracks which dense numeric identifiers have been notified since the last reset.
+#[derive(Clone)]
+pub struct NotificationList<K: NumericId> {
+    inner: Arc<Inner<K>>,
 }
 
-impl NotificationList {
+impl<K: NumericId> Default for NotificationList<K> {
+    fn default() -> Self {
+        Self {
+            inner: Arc::new(Inner::default()),
+        }
+    }
+}
+
+impl<K: NumericId> NotificationList<K> {
     /// Notify a given item.
     ///
     /// It is expected that the space of `item`s is fairly dense: this implementation will use O(n)
     /// space where n is the largest value of `item` passed.
-    pub fn notify(&self, item: usize) {
+    pub fn notify(&self, item: K) {
+        let index = item.index();
         self.inner
             .states
-            .resize_with(item + 1, NotificationState::default);
+            .resize_with(index + 1, NotificationState::default);
         {
             let read_guard = self.inner.states.read();
-            let state = &read_guard[item];
+            let state = &read_guard[index];
             if state.already_notified() {
                 return;
             }
@@ -49,7 +59,7 @@ impl NotificationList {
     ///
     /// NB: this method will have unpredictable behavior when it comes to concurrent calls to
     /// `reset` and `notify`. In such a situation, events can be notified more than once.
-    pub fn reset(&self) -> Vec<usize> {
+    pub fn reset(&self) -> Vec<K> {
         // TODO: we can make an optimized version of this that takes advantage of the  exclusive
         // reference.
         let mut notified = Vec::new();
@@ -60,16 +70,24 @@ impl NotificationList {
         }
         let handle = self.inner.states.read();
         for &item in &notified {
-            handle[item].reset();
+            handle[item.index()].reset();
         }
         notified
     }
 }
 
-#[derive(Default)]
-struct Inner {
-    notified: Mutex<Vec<usize>>,
+struct Inner<K: NumericId> {
+    notified: Mutex<Vec<K>>,
     states: ConcurrentVec<NotificationState>,
+}
+
+impl<K: NumericId> Default for Inner<K> {
+    fn default() -> Self {
+        Self {
+            notified: Mutex::new(Vec::new()),
+            states: ConcurrentVec::default(),
+        }
+    }
 }
 
 #[derive(Default)]

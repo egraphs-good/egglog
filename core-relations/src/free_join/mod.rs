@@ -289,7 +289,7 @@ pub struct Database {
     pub(crate) counters: Counters,
     pub(crate) external_functions: ExternalFunctions,
     container_values: ContainerValues,
-    notification_list: NotificationList,
+    notification_list: NotificationList<TableId>,
     // Tracks the relative dependencies between tables during merge operations.
     deps: DependencyGraph,
     base_values: BaseValues,
@@ -376,7 +376,7 @@ impl Database {
                     next_ts,
                     &mut ExecutionState::new(self.read_only_view(), Default::default()),
                 ) {
-                    self.notification_list.notify(id.index());
+                    self.notification_list.notify(*id);
                 }
             });
             for (id, info) in tables {
@@ -391,7 +391,7 @@ impl Database {
                     next_ts,
                     &mut ExecutionState::new(self.read_only_view(), Default::default()),
                 ) {
-                    self.notification_list.notify(id.index());
+                    self.notification_list.notify(*id);
                 }
                 self.tables.insert(*id, info);
             }
@@ -468,7 +468,7 @@ impl Database {
         loop {
             to_merge.clear();
             for table in self.notification_list.reset() {
-                to_merge.insert(TableId::from_usize(table));
+                to_merge.insert(table);
             }
             if to_merge.len() < 8 {
                 ever_changed |= self.merge_simple(to_merge);
@@ -555,12 +555,7 @@ impl Database {
                 self.tables.insert(table_id, info);
             }
             to_merge.clear();
-            to_merge.extend(
-                self.notification_list
-                    .reset()
-                    .into_iter()
-                    .map(TableId::from_usize),
-            )
+            to_merge.extend(self.notification_list.reset())
         }
         changed
     }
@@ -655,7 +650,7 @@ impl Database {
     ///
     /// This will marked the given table as potentially changed for the next round of merging.
     pub fn new_buffer(&self, id: TableId) -> Box<dyn MutationBuffer> {
-        self.notification_list.notify(id.index());
+        self.notification_list.notify(id);
         self.get_table(id).new_buffer()
     }
 
