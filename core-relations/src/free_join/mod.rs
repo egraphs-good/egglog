@@ -547,7 +547,7 @@ impl Database {
     /// A "fast path" merge method that is not optimized for parallelism and does not respect read
     /// and write dependencies. This ends up being faster than the full "strata-aware" option in
     /// the body of `merge_all`.
-    fn merge_simple(&mut self, mut to_merge: Vec<TableId>) -> bool {
+    fn merge_simple(&mut self, mut to_merge: SmallVec<[TableId; 4]>) -> bool {
         let mut changed = false;
         while !to_merge.is_empty() {
             for table_id in to_merge.iter().copied() {

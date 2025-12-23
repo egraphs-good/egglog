@@ -16,6 +16,7 @@ use std::sync::{
 
 use crate::ConcurrentVec;
 use egglog_numeric_id::NumericId;
+use smallvec::SmallVec;
 
 /// Tracks which dense numeric identifiers have been notified since the last reset.
 #[derive(Clone)]
@@ -59,7 +60,7 @@ impl<K: NumericId> NotificationList<K> {
     ///
     /// NB: this method will have unpredictable behavior when it comes to concurrent calls to
     /// `reset` and `notify`. In such a situation, events can be notified more than once.
-    pub fn reset(&self) -> Vec<K> {
+    pub fn reset(&self) -> SmallVec<[K; 4]> {
         // TODO: we can make an optimized version of this that takes advantage of the  exclusive
         // reference.
         let notified = {
@@ -75,15 +76,15 @@ impl<K: NumericId> NotificationList<K> {
 }
 
 struct Inner<K: NumericId> {
-    notified: Mutex<Vec<K>>,
+    notified: Mutex<SmallVec<[K; 4]>>,
     states: ConcurrentVec<NotificationState>,
 }
 
 impl<K: NumericId> Default for Inner<K> {
     fn default() -> Self {
         Self {
-            notified: Mutex::new(Vec::new()),
-            states: ConcurrentVec::default(),
+            notified: Default::default(),
+            states: Default::default(),
         }
     }
 }

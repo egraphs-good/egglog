@@ -8,6 +8,8 @@ use std::{
     time::Duration,
 };
 
+use smallvec::SmallVec;
+
 use crate::{
     ConcurrentVec, Notification, NotificationList, ParallelVecWriter, ReadOptimizedLock,
     ResettableOnceLock,
@@ -88,12 +90,12 @@ fn notification_list_single_threaded() {
     list.notify(2);
     list.notify(5);
     let mut notified = list.reset();
-    assert_eq!(notified, vec![0, 2, 5]);
+    assert_eq!(notified.as_slice(), [0, 2, 5].as_slice());
 
     list.notify(1);
     list.notify(3);
     notified = list.reset();
-    assert_eq!(notified, vec![1, 3]);
+    assert_eq!(notified.as_slice(), [1, 3].as_slice());
 }
 
 #[test]
@@ -116,7 +118,7 @@ fn notification_list_multi_threaded() {
 
         let mut notified = list.reset();
         notified.sort_unstable();
-        let expected = (0..=20).map(|i| i * 100).collect::<Vec<usize>>();
+        let expected = (0..=20).map(|i| i * 100).collect::<SmallVec<[usize; 4]>>();
         assert_eq!(notified.len(), expected.len());
         assert_eq!(notified, expected);
     }
