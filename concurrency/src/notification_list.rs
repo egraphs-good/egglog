@@ -1,14 +1,14 @@
 //! A type for maintaining a "notified" subset of dense integer identifiers.
 //!
-//! Clients can create a [`ModifiedList`] and then mark (dense) integer idenitifiers as "modified".
-//! Then a client can `reset` the list, extracting the set of items that were marked as modified.
+//! Clients can create a [`NotificationList`] and then notify (dense) integer identifiers.
+//! Then a client can `reset` the list, extracting the set of items that were notified.
 //!
-//! This is used to efficiently handle collecting a subset of tables that have been modified when
+//! This is used to efficiently handle collecting a subset of tables that have been notified when
 //! running a set of egglog rules. egglog databases can have hundreds of tables, and tight loops
 //! often only need to take a few tables into account.
 //!
 //! The main complexity in the implementation here is to avoid contention in the common case that
-//! someone is marking a table as modified that has already been marked by a different thread.
+//! someone is notifying a table that has already been notified by a different thread.
 use std::sync::{
     Arc, Mutex,
     atomic::{AtomicBool, Ordering},
@@ -16,16 +16,21 @@ use std::sync::{
 
 use crate::ConcurrentVec;
 
+/// Tracks which dense integer identifiers have been notified since the last reset.
 #[derive(Default, Clone)]
-pub struct ModifiedList {
+pub struct NotificationList {
     inner: Arc<Inner>,
 }
 
-impl ModifiedList {
-    pub fn mark_modified(&self, item: usize) {
+impl NotificationList {
+    /// Notify a given item.
+    ///
+    /// It is expected that the space of `item`s is fairly dense: this implementation will use O(n)
+    /// space where n is the largest value of `item` passed.
+    pub fn notify(&self, item: usize) {
         self.inner
             .states
-            .resize_with(item + 1, ModifyState::default);
+            .resize_with(item + 1, NotificationState::default);
         {
             let read_guard = self.inner.states.read();
             let state = &read_guard[item];
@@ -36,13 +41,14 @@ impl ModifiedList {
                 return;
             }
         }
-        // We were the first to mark this state as modified. Notify this `item`.
+        // We were the first to notify this state. Record this `item`.
         self.inner.notified.lock().unwrap().push(item);
     }
 
-    /// NB: this method is "lossy" in the presence of concurrent calls to `mark_modified`. The
-    /// result will be a valid state, but clear ordering of mark_modified calls is not guaranteed
-    /// when there is an intervening reset.
+    /// Clears all notification state and returns a list of notified items since the last `reset`.
+    ///
+    /// NB: this method will have unpredictable behavior when it comes to concurrent calls to
+    /// `reset` and `notify`. In such a situation, events can be notified more than once.
     pub fn reset(&self) -> Vec<usize> {
         // TODO: we can make an optimized version of this that takes advantage of the  exclusive
         // reference.
@@ -63,17 +69,17 @@ impl ModifiedList {
 #[derive(Default)]
 struct Inner {
     notified: Mutex<Vec<usize>>,
-    states: ConcurrentVec<ModifyState>,
+    states: ConcurrentVec<NotificationState>,
 }
 
 #[derive(Default)]
-struct ModifyState {
+struct NotificationState {
     notified: AtomicBool,
 }
 
-impl ModifyState {
+impl NotificationState {
     fn reset(&self) {
-        self.notified.store(true, Ordering::Relaxed)
+        self.notified.store(false, Ordering::Relaxed)
     }
 
     fn already_notified(&self) -> bool {
