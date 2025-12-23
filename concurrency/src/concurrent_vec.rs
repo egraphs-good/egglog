@@ -35,9 +35,8 @@ impl<T> Default for ConcurrentVec<T> {
 
 impl<T> Drop for ConcurrentVec<T> {
     fn drop(&mut self) {
-        let this = &self;
-        let mut writer = this.data.lock();
-        let len = this.head.load(Ordering::Acquire);
+        let mut writer = self.data.lock();
+        let len = self.head.load(Ordering::Acquire);
         if mem::needs_drop::<T>() {
             for i in 0..len {
                 // SAFETY: we own the data, have exclusive access, and know that the
