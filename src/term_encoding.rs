@@ -1,17 +1,19 @@
 use crate::ast::GenericCommand;
 use crate::*;
-use std::path::{Path, PathBuf};
+use std::path::Path;
 
 #[derive(Default, Clone)]
-pub(crate) struct ProofConstants {
+pub(crate) struct EncodingState {
     pub uf_parent: HashMap<String, String>,
     pub term_header_added: bool,
     // TODO this is very ugly- we should separate out a typechecking struct
     // since we didn't need an entire e-graph
     // When Some term encoding is enabled.
     pub original_typechecking: Option<Box<EGraph>>,
+    pub proofs_enabled: bool,
 }
 
+/// Thin wrapper around an [`EGraph`] for the term encoding
 pub(crate) struct TermState<'a> {
     egraph: &'a mut EGraph,
 }
@@ -29,35 +31,66 @@ impl<'a> TermState<'a> {
         if let Some(name) = self.egraph.proof_state.uf_parent.get(sort) {
             name.clone()
         } else {
-            self.egraph
-                .proof_state
-                .uf_parent
-                .insert(sort.to_string(), format!("ufparent_{}", sort,));
+            self.egraph.proof_state.uf_parent.insert(
+                sort.to_string(),
+                format!("{INTERNAL_SYMBOL_PREFIX}ufparent_{}", sort,),
+            );
             self.egraph.proof_state.uf_parent[sort].clone()
         }
+    }
+
+    pub(crate) fn uf_proof_name(&mut self, sort: &str) -> String {
+        format!("{}Proof", self.uf_name(sort),)
     }
 
     fn single_parent_ruleset_name(&self) -> String {
         String::from(format!("single_parent",))
     }
 
-    /// Mark two things for unioning.
-    pub(crate) fn union(&mut self, type_name: &str, lhs: &str, rhs: &str) -> String {
+    /// Mark two things as equal, adding justification if proofs are enabled.
+    pub(crate) fn union(
+        &mut self,
+        type_name: &str,
+        lhs: &str,
+        rhs: &str,
+        justification: &str,
+    ) -> String {
         let uf_name = self.uf_name(type_name);
-        format!("({uf_name} (ordering-max {lhs} {rhs}) (ordering-min {lhs} {rhs}))",)
+        let uf_proof_name = self.uf_proof_name(type_name);
+        let set_justification = if self.egraph.proof_state.proofs_enabled {
+            format!(
+                "(set ({uf_proof_name} (ordering-max {lhs} {rhs}) (ordering-min {lhs} {rhs})) {justification})"
+            )
+        } else {
+            "".to_string()
+        };
+
+        format!(
+            "
+        ({uf_name} (ordering-max {lhs} {rhs}) (ordering-min {lhs} {rhs}))
+        {set_justification}",
+        )
     }
 
     /// The parent table is the database representation of a union-find datastructure.
     /// When one term has two parents, those parents are unioned in the merge action.
     /// Also, we have a rule that maintains the invariant that each term points to its
     /// canonical representative.
-    fn make_uf_table(&mut self, name: &str) -> Vec<Command> {
-        let pname = self.uf_name(name);
+    fn make_uf_table(&mut self, sort_name: &str) -> Vec<Command> {
+        let pname = self.uf_name(sort_name);
         let fresh_sort = self.egraph.parser.symbol_gen.fresh("uf");
         let fresh_name = self.egraph.parser.symbol_gen.fresh("uf_update");
+        let uf_proof_table = if self.egraph.proof_state.proofs_enabled {
+            let uf_proof_name = self.uf_proof_name(sort_name);
+            format!("(function {uf_proof_name} ({sort_name} {sort_name}) Proof :merge old)")
+        } else {
+            "".to_string()
+        };
+
         self.parse_program(&format!(
             "(sort {fresh_sort})
-             (constructor {pname} ({name} {name}) {fresh_sort})
+             (constructor {pname} ({sort_name} {sort_name}) {fresh_sort})
+             {uf_proof_table}
              (rule (({pname} a b)
                     ({pname} b c)
                     (!= b c))
@@ -217,29 +250,95 @@ impl<'a> TermState<'a> {
         let delete_rule = self.delete_and_subsume(fdecl);
         let to_delete_name = self.to_delete_name(&fdecl.name);
         let subsumed_name = self.subsumed_name(&fdecl.name);
+        let term_sorts = format!(
+            "{in_sorts} {}",
+            if fdecl.subtype == FunctionSubtype::Constructor {
+                "".to_string()
+            } else {
+                schema.output.to_string()
+            }
+        );
+        let view_sorts = format!("{in_sorts} {out_type}",);
+        let proof_constructors = self.proof_functions(fdecl, &term_sorts, &view_sorts);
 
         // the term table has child_sorts as inputs
         // the view table has child_sorts + the leader term for the eclass
         self.parse_program(&format!(
             "
             (sort {fresh_sort})
-            (constructor {name} ({in_sorts} {}) {})
-            (constructor {view_name} ({in_sorts} {out_type}) {fresh_sort})
+            (constructor {name} ({term_sorts}) {})
+            (constructor {view_name} ({view_sorts}) {fresh_sort})
             (constructor {to_delete_name} ({in_sorts}) {fresh_sort})
             (constructor {subsumed_name} ({in_sorts}) {fresh_sort})
+            {proof_constructors}
             {merge_rule}
             {delete_rule}",
-            if fdecl.subtype == FunctionSubtype::Constructor {
-                "".to_string()
-            } else {
-                schema.output.to_string()
-            },
             if fdecl.subtype == FunctionSubtype::Constructor {
                 schema.output.clone()
             } else {
                 fresh_sort.clone()
             },
         ))
+    }
+
+    fn term_proof_name(&self, name: &str) -> String {
+        format!("{}TermProof", name,)
+    }
+
+    fn view_proof_name(&self, name: &str) -> String {
+        format!("{}ViewProof", name,)
+    }
+
+    fn proof_header(&self) -> String {
+        format!(
+            "
+(sort ProofList)
+(sort Ast) ;; wrap sorts in this for proofs
+
+(datatype Justification
+  (Fiat)
+  (Rule
+    String ;; rule name
+    ProofList ;; proofs for body
+))
+
+
+(datatype Proof
+  ;; proves a term exists
+  (Term Jusfication Ast)
+  ;; proves a term is equal to another
+  (Eq Justification Ast Ast)
+
+  (EqTrans Proof Proof)
+  (EqSym Proof)
+  (Congruence Ast Ast ProofList))
+
+;; ProofList definitions
+(function Cons (Proof ProofList) ProofList)
+(declare Null ProofList)
+        "
+        )
+    }
+
+    fn proof_functions(
+        &mut self,
+        fdecl: &ResolvedFunctionDecl,
+        term_sorts: &str,
+        view_sorts: &str,
+    ) -> String {
+        if !self.egraph.proof_state.proofs_enabled {
+            return "".to_string();
+        }
+
+        let term_proof_name = self.term_proof_name(&fdecl.name);
+        let view_proof_name = self.view_proof_name(&fdecl.name);
+
+        format!(
+            "
+            (function {term_proof_name} ({term_sorts}) Proof :merge old)
+            (function {view_proof_name} ({view_sorts}) Proof :merge old)
+            "
+        )
     }
 
     fn rebuilding_rules(&mut self, fdecl: &ResolvedFunctionDecl) -> Vec<Command> {
@@ -406,12 +505,12 @@ impl<'a> TermState<'a> {
 
     // Actions need to be instrumented to add to the view
     // as well as to the terms tables.
-    fn instrument_action(&mut self, action: &ResolvedAction) -> Vec<String> {
+    fn instrument_action(&mut self, action: &ResolvedAction, justification: &str) -> Vec<String> {
         let mut res = vec![];
 
         match action {
             ResolvedAction::Let(_span, v, generic_expr) => {
-                let v2 = self.instrument_action_expr(generic_expr, &mut res);
+                let v2 = self.instrument_action_expr(generic_expr, &mut res, justification);
                 res.push(format!("(let {} {})", v.name, v2));
             }
             ResolvedAction::Set(_span, h, generic_exprs, generic_expr) => {
@@ -420,28 +519,18 @@ impl<'a> TermState<'a> {
                     .into_iter()
                     .chain(std::iter::once(generic_expr))
                 {
-                    exprs.push(self.instrument_action_expr(e, &mut res));
+                    exprs.push(self.instrument_action_expr(e, &mut res, justification));
                 }
 
-                // todo let else panic
                 let ResolvedCall::Func(func_type) = h else {
                     panic!(
                         "Set action on non-function, should have been prevented by typechecking"
                     );
                 };
 
-                // add to view
-                res.push(format!(
-                    "({} {})",
-                    self.view_name(&func_type.name),
-                    ListDisplay(exprs.clone(), " ")
-                ));
-                // add to term table
-                res.push(format!(
-                    "({} {})",
-                    func_type.name,
-                    ListDisplay(exprs.clone(), " ")
-                ));
+                let (mut add_code, _fv) =
+                    self.add_term_and_view(&func_type.name, &exprs, justification);
+                res.extend(add_code);
             }
             ResolvedAction::Change(_span, change, h, generic_exprs) => {
                 if let ResolvedCall::Func(func_type) = h {
@@ -451,7 +540,7 @@ impl<'a> TermState<'a> {
                     };
                     let children = generic_exprs
                         .iter()
-                        .map(|e| self.instrument_action_expr(e, &mut res))
+                        .map(|e| self.instrument_action_expr(e, &mut res, justification))
                         .collect::<Vec<_>>();
 
                     res.push(format!("({symbol} {})", ListDisplay(children, " ")));
@@ -462,33 +551,76 @@ impl<'a> TermState<'a> {
                 }
             }
             ResolvedAction::Union(_span, generic_expr, generic_expr1) => {
-                let v1 = self.instrument_action_expr(generic_expr, &mut res);
-                let v2 = self.instrument_action_expr(generic_expr1, &mut res);
+                let v1 = self.instrument_action_expr(generic_expr, &mut res, justification);
+                let v2 = self.instrument_action_expr(generic_expr1, &mut res, justification);
                 let ot = generic_expr.output_type();
                 let type_name = ot.name();
-                let unioned = self.union(type_name, &v1, &v2);
+                let unioned = self.union(type_name, &v1, &v2, justification);
                 res.push(unioned);
             }
             ResolvedAction::Panic(..) => {
                 res.push(format!("{}", action));
             }
             ResolvedAction::Expr(_span, generic_expr) => {
-                self.instrument_action_expr(generic_expr, &mut res);
+                self.instrument_action_expr(generic_expr, &mut res, justification);
             }
         }
 
         res
     }
 
+    /// Return some code adding to the view and term tables,
+    /// returning a let-bound variable for the created term.
+    fn add_term_and_view(
+        &mut self,
+        fname: &str,
+        args: &Vec<String>,
+        justification: &str,
+    ) -> (Vec<String>, String) {
+        let fv = self.fresh_var();
+        let mut res = vec![];
+        res.push(format!(
+            "(let {fv} ({} {}))",
+            fname,
+            ListDisplay(args.clone(), " ")
+        ));
+        res.push(format!(
+            "({} {} {fv})",
+            self.view_name(&fname),
+            ListDisplay(args.clone(), " ")
+        ));
+
+        // in proof mode, give a justification for the view and term addition
+        if self.egraph.proof_state.proofs_enabled {
+            let proof_name = self.view_proof_name(&fname);
+            let term_proof_name = self.term_proof_name(&fname);
+            res.push(format!(
+                "(set ({proof_name} {}) {justification})",
+                ListDisplay(args.clone(), " ")
+            ));
+            res.push(format!(
+                "(set ({term_proof_name} {}) {justification})",
+                ListDisplay(args.clone(), " ")
+            ));
+        }
+
+        (res, fv)
+    }
+
     // Add to view and term tables, returning a variable for the created term.
-    fn instrument_action_expr(&mut self, expr: &ResolvedExpr, res: &mut Vec<String>) -> String {
+    fn instrument_action_expr(
+        &mut self,
+        expr: &ResolvedExpr,
+        res: &mut Vec<String>,
+        justification: &str,
+    ) -> String {
         match expr {
             ResolvedExpr::Lit(_, lit) => format!("{}", lit),
             ResolvedExpr::Var(_, resolved_var) => resolved_var.name.clone(),
             ResolvedExpr::Call(_, resolved_call, args) => {
                 let args = args
                     .iter()
-                    .map(|arg| self.instrument_action_expr(arg, res))
+                    .map(|arg| self.instrument_action_expr(arg, res, justification))
                     .collect::<Vec<_>>();
                 match resolved_call {
                     ResolvedCall::Func(func_type) => {
@@ -497,24 +629,13 @@ impl<'a> TermState<'a> {
                                 "Found a function lookup in actions, should have been prevented by typechecking"
                             );
                         }
+                        let (add_code, fv) =
+                            self.add_term_and_view(&func_type.name, &args, justification);
+                        res.extend(add_code);
 
-                        let fv = self.fresh_var();
-                        // add to term table
-                        res.push(format!(
-                            "(let {fv} ({} {}))",
-                            func_type.name,
-                            ListDisplay(args.clone(), " ")
-                        ));
-                        // add to view table
-                        res.push(format!(
-                            "({} {} {fv})",
-                            self.view_name(&func_type.name),
-                            ListDisplay(args.clone(), " ")
-                        ));
                         // add to uf table to initialize eclass for eq sorts
                         if func_type.output.is_eq_sort() {
-                            let uf_name = self.uf_name(func_type.output.name());
-                            res.push(format!("({} {fv} {})", uf_name, fv));
+                            self.union(func_type.output.name(), &fv, &fv, justification);
                         }
 
                         fv
@@ -534,21 +655,25 @@ impl<'a> TermState<'a> {
         }
     }
 
-    fn instrument_actions(&mut self, actions: &[ResolvedAction]) -> Vec<String> {
+    /// In proof mode, rule_proof justifies the actions taken.
+    fn instrument_actions(&mut self, actions: &[ResolvedAction], rule_proof: &str) -> Vec<String> {
         let mut res = vec![];
         for action in actions {
-            res.extend(self.instrument_action(action));
+            res.extend(self.instrument_action(action, rule_proof));
         }
         res
     }
 
     fn instrument_rule(&mut self, rule: &ResolvedRule) -> Vec<Command> {
         let facts = self.instrument_facts(&rule.body);
-        let actions = self.instrument_actions(&rule.head.0);
+        // TODO get rule proof
+        let actions = self.instrument_actions(&rule.head.0, "(Fiat)");
+        let name = &rule.name;
         let instrumented = format!(
             "(rule ({} )
                    ({} )
-                    {})",
+                    {}
+                    :name \"{name}\")",
             ListDisplay(facts, " "),
             ListDisplay(actions, " "),
             if rule.ruleset == "" {
@@ -636,7 +761,7 @@ impl<'a> TermState<'a> {
                 res.extend(self.instrument_rule(rule));
             }
             ResolvedNCommand::CoreAction(action) => {
-                let instrumented = self.instrument_action(action).join("\n");
+                let instrumented = self.instrument_action(action, "(Fiat)").join("\n");
                 res.extend(self.parse_program(&instrumented));
             }
             ResolvedNCommand::Check(span, facts) => {
@@ -682,6 +807,9 @@ impl<'a> TermState<'a> {
 
         if !self.egraph.proof_state.term_header_added {
             res.extend(self.term_header());
+            if self.egraph.proof_state.proofs_enabled {
+                res.extend(self.parse_program(&self.proof_header()));
+            }
             self.egraph.proof_state.term_header_added = true;
         }
 

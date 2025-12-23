@@ -20,11 +20,12 @@ pub mod constraint;
 mod core;
 pub mod extract;
 pub mod prelude;
+mod proof_encoding;
 pub mod scheduler;
 mod serialize;
 pub mod sort;
-mod termdag;
 mod term_encoding;
+mod termdag;
 mod typechecking;
 pub mod util;
 pub use command_macro::{CommandMacro, CommandMacroRegistry};
@@ -78,7 +79,7 @@ use crate::ast::desugar::desugar_command;
 use crate::ast::*;
 use crate::core::{GenericActionsExt, ResolvedRuleExt};
 pub use crate::term_encoding::file_supports_proofs;
-use crate::term_encoding::{ProofConstants, TermState, command_supports_proof_encoding};
+use crate::term_encoding::{EncodingState, TermState, command_supports_proof_encoding};
 
 pub const GLOBAL_NAME_PREFIX: &str = "$";
 
@@ -226,7 +227,7 @@ pub struct EGraph {
     warned_about_missing_global_prefix: bool,
     /// Registry for command-level macros
     command_macros: CommandMacroRegistry,
-    proof_state: ProofConstants,
+    proof_state: EncodingState,
 }
 
 /// A user-defined command allows users to inject custom command that can be called
