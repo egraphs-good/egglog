@@ -470,7 +470,8 @@ impl Database {
             for table in self.notification_list.reset() {
                 to_merge.insert(TableId::from_usize(table));
             }
-            if to_merge.is_empty() {
+            if to_merge.len() < 8 {
+                ever_changed |= self.merge_simple(to_merge);
                 break;
             }
             let mut changed = false;
@@ -539,6 +540,29 @@ impl Database {
         }
         self.total_size_estimate = size_estimate;
         ever_changed
+    }
+
+    /// A "fast path" merge method that is not optimized for parallelism and does not respect read
+    /// and write dependencies. This ends up being faster than the full "strata-aware" option in
+    /// the body of `merge_all`.
+    fn merge_simple(&mut self, mut to_merge: IndexSet<TableId>) -> bool {
+        let mut changed = false;
+        while !to_merge.is_empty() {
+            for table_id in to_merge.iter().copied() {
+                let mut info = self.tables.unwrap_val(table_id);
+                let mut es = ExecutionState::new(self.read_only_view(), Default::default());
+                changed |= info.table.merge(&mut es).added || es.changed;
+                self.tables.insert(table_id, info);
+            }
+            to_merge.clear();
+            to_merge.extend(
+                self.notification_list
+                    .reset()
+                    .into_iter()
+                    .map(TableId::from_usize),
+            )
+        }
+        changed
     }
 
     /// A low-level helper for merging pending updates to a particular function.
