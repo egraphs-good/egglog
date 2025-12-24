@@ -47,6 +47,10 @@ impl<'a> TermState<'a> {
         String::from(format!("single_parent",))
     }
 
+    fn to_ast_name(&self, sort: &str) -> String {
+        format!("AST{}", sort,)
+    }
+
     /// Mark two things as equal, adding justification if proofs are enabled.
     pub(crate) fn union(
         &mut self,
@@ -80,9 +84,13 @@ impl<'a> TermState<'a> {
         let pname = self.uf_name(sort_name);
         let fresh_sort = self.egraph.parser.symbol_gen.fresh("uf");
         let fresh_name = self.egraph.parser.symbol_gen.fresh("uf_update");
-        let uf_proof_table = if self.egraph.proof_state.proofs_enabled {
+        let proof_code = if self.egraph.proof_state.proofs_enabled {
             let uf_proof_name = self.uf_proof_name(sort_name);
-            format!("(function {uf_proof_name} ({sort_name} {sort_name}) Proof :merge old)")
+            let to_ast_name = self.to_ast_name(sort_name);
+            format!(
+                "(function {uf_proof_name} ({sort_name} {sort_name}) Proof :merge old)
+                 (constructor {to_ast_name} ({sort_name}) Ast)"
+            )
         } else {
             "".to_string()
         };
@@ -90,7 +98,7 @@ impl<'a> TermState<'a> {
         self.parse_program(&format!(
             "(sort {fresh_sort})
              (constructor {pname} ({sort_name} {sort_name}) {fresh_sort})
-             {uf_proof_table}
+             {proof_code}
              (rule (({pname} a b)
                     ({pname} b c)
                     (!= b c))
@@ -211,7 +219,6 @@ impl<'a> TermState<'a> {
             let mut updated = child_names.clone();
             updated.push(format!("{merge_fn}"));
             let term_and_proof = self.update_view(name, &updated, &rule_proof_var);
-            let term_and_proof = term_and_proof.join("\n");
 
             // The first runs the merge function adding a new row.
             // The second deletes rows with old values for the old variable, while the third deletes rows with new values for the new variable.
@@ -310,6 +317,9 @@ impl<'a> TermState<'a> {
         ))
     }
 
+    /// A view proof for functions proves ... = t by some justification, where t is the term of the view row.
+    /// A constructor view is more complex, representing f(c1, c2, c3, t_r) where t_r is a representative.
+    /// A proof for a view proves that t_r = f(c1, c2, c3).
     fn view_proof_name(&self, name: &str) -> String {
         format!("{}ViewProof", name,)
     }
@@ -342,11 +352,12 @@ impl<'a> TermState<'a> {
 
   (EqTrans Proof Proof)
   (EqSym Proof)
-  (Congr Ast Ast ProofList))
-
-;; ProofList definitions
-(function Cons (Proof ProofList) ProofList)
-(declare Null ProofList)
+  ;; given a proof that t1 = f(..., c1, ...) and a term f(..., c2, ...)
+  ;; and the child index of c1 in the term f(..., c1, ...)
+  ;; and a proof that c1 = c2,
+  ;; produces a proof that t1 = f(..., c2, ...)
+  (Congr Proof i64 Proof)
+  )
         "
         )
     }
@@ -365,75 +376,75 @@ impl<'a> TermState<'a> {
         )
     }
 
+    /// Rules that update the views when children change.
     fn rebuilding_rules(&mut self, fdecl: &ResolvedFunctionDecl) -> Vec<Command> {
-        let mut type_strs = fdecl.schema.input.clone();
-        if fdecl.subtype == FunctionSubtype::Custom {
-            type_strs.push(fdecl.schema.output.clone());
-        }
+        let term_types = &fdecl.resolved_schema.term_types();
         let types = fdecl.resolved_schema.view_types();
-
-        let types2 = types.clone();
-
-        let view_name = self.view_name(&fdecl.name);
-        let child = |i| format!("c{i}_");
-        let children = format!(
-            "{}",
-            ListDisplay((0..types.len()).map(child).collect::<Vec<_>>(), " ")
-        );
-        let mut children_updated_query = vec![];
-        let mut children_updated = vec![];
-        for i in 0..types.len() {
-            if let Some((query, var)) = self.get_canonical_expr_of(child(i), types2[i].clone()) {
-                children_updated_query.push(query);
-                children_updated.push(var);
-            } else {
-                children_updated.push(child(i));
-            }
-        }
-
-        let children_updated_query = format!(
-            "{}",
-            ListDisplay(children_updated_query.into_iter().collect::<Vec<_>>(), " ")
-        );
-        let children_updated = format!(
-            "{}",
-            ListDisplay(children_updated.into_iter().collect::<Vec<_>>(), " ")
-        );
-
         let mut res = vec![];
-        let fresh_name = self.egraph.parser.symbol_gen.fresh("rebuild_rule");
+        // a rule updating index i
+        for i in 0..types.len() {
+            // if the type at index i is not an eq sort, skip
+            if types[i].is_eq_sort() {
+                continue;
+            }
+            let types = fdecl.resolved_schema.view_types();
 
-        // Make a rule that updates the view
-        let rule = format!(
-            "(rule ((= lhs ({view_name} {children}))
-                    {children_updated_query})
+            let view_name = self.view_name(&fdecl.name);
+            let child = |i| format!("c{i}_");
+            let children_vec = (0..types.len()).map(child).collect::<Vec<_>>();
+            let children = format!("{}", ListDisplay(&children_vec, " "));
+            let mut children_updated = vec![];
+            let old_child = child(i);
+            let Some((updated_child_query, updated_child_var, updated_child_prf)) =
+                self.wrap_parent(child(i), types[i].clone())
+            else {
+                panic!("Failed to get canonical expr for rebuilding rule");
+            };
+
+            for j in 0..types.len() {
+                if j == i {
+                    children_updated.push(updated_child_var.clone());
+                } else {
+                    children_updated.push(child(j).to_string());
+                }
+            }
+
+            let mut res = vec![];
+            let fresh_name = self.egraph.parser.symbol_gen.fresh("rebuild_rule");
+            let view_prf = self.query_view_and_get_proof(&fdecl.name, &children_vec);
+
+            let (pf_code, pf_var) = if self.egraph.proof_state.proofs_enabled {
+                let pf_var = self.fresh_var();
+                (
+                    format!(
+                        "(let {pf_var}
+                        (Congr {view_prf} {i}
+                               {updated_child_prf}))
+                    ",
+                    ),
+                    pf_var,
+                )
+            } else {
+                ("".to_string(), "".to_string())
+            };
+            let updated_view = self.update_view(&fdecl.name, &children_updated, &pf_var);
+
+            // Make a rule that updates the view
+            let rule = format!(
+                "(rule (({view_name} {children})
+                        {updated_child_query}
+                        (!= {updated_child_var} {old_child})
+                        )
                      (
-                      ({view_name} {children_updated})
+                      {pf_code}
+                      {updated_view}
+                      (delete ({view_name} {children})
                      )
                       :ruleset {} :name \"{fresh_name}\")",
-            self.rebuilding_ruleset_name(),
-        );
-        let cleanup_name = self.egraph.parser.symbol_gen.fresh("cleanup_rule");
-
-        // And a rule that cleans up the view
-        let rule2 = format!(
-            "(rule (
-                        {children_updated_query}
-                        (!= ({view_name} {children})
-                            ({view_name} {children_updated})))
-                     (
-                      (delete ({view_name} {children}))
-                     )
-                      :ruleset {} :name \"{cleanup_name}\")",
-            self.rebuilding_ruleset_name()
-        );
-
-        // don't extend res if none of them needed updating
-        if !children_updated_query.is_empty() {
-            res.extend(self.parse_program(&rule));
-            res.extend(self.parse_program(&rule2));
+                self.rebuilding_ruleset_name(),
+            );
+            res.push(self.parse_program(&rule));
         }
-
         res
     }
 
@@ -493,22 +504,26 @@ impl<'a> TermState<'a> {
         }
     }
 
-    // Returns a query for the canonical expression of the given var of the given sort.
-    fn get_canonical_expr_of(&mut self, var: String, sort: ArcSort) -> Option<(String, String)> {
-        if sort.is_eq_container_sort() {
-            let fresh = self.fresh_var();
-            // todo containers need a custom rebuild
-            Some((format!("(let {fresh} (rebuild {var}))"), fresh))
-        } else {
-            self.wrap_parent(var, sort)
-        }
-    }
-
-    fn wrap_parent(&mut self, var: String, sort: ArcSort) -> Option<(String, String)> {
+    // Returns a query, variable for the updated child, and proof
+    fn wrap_parent(&mut self, var: String, sort: ArcSort) -> Option<(String, String, String)> {
         if sort.is_eq_sort() {
             let fresh = self.fresh_var();
             let parent = self.uf_name(&sort.name());
-            Some((format!("({parent} {var} {fresh})"), fresh))
+            let fresh_proof = self.fresh_var();
+            let proof = if self.egraph.proof_state.proofs_enabled {
+                let uf_proof = self.uf_proof_name(&sort.name());
+                format!("(= {fresh_proof} ({uf_proof} {var}))")
+            } else {
+                "".to_string()
+            };
+            Some((
+                format!(
+                    "({parent} {var} {fresh})
+                     {proof}"
+                ),
+                fresh,
+                fresh_proof,
+            ))
         } else {
             None
         }
@@ -626,7 +641,7 @@ impl<'a> TermState<'a> {
     }
 
     /// Update the view, with arguments including the eclass for constructors.
-    fn update_view(&mut self, fname: &str, args: &Vec<String>, pf: &str) -> Vec<String> {
+    fn update_view(&mut self, fname: &str, args: &Vec<String>, pf: &str) -> String {
         let mut res = vec![];
         res.push(format!(
             "({} {})",
@@ -641,7 +656,28 @@ impl<'a> TermState<'a> {
                 ListDisplay(args.clone(), " ")
             ));
         }
-        res
+        res.join("\n")
+    }
+
+    /// Returns a query for (fname args) and in proof mode returns a variable for the proof.
+    fn query_view_and_get_proof(&mut self, fname: &str, args: &Vec<String>) -> String {
+        let mut res = vec![];
+        res.push(format!(
+            "({} {})",
+            self.view_name(&fname),
+            ListDisplay(args.clone(), " "),
+        ));
+
+        if self.egraph.proof_state.proofs_enabled {
+            let proof_name = self.view_proof_name(&fname);
+            let pf_var = self.fresh_var();
+            res.push(format!(
+                "(= {pf_var} ({proof_name} {}))",
+                ListDisplay(args.clone(), " ")
+            ));
+        }
+
+        res.join("\n")
     }
 
     // Add to view and term tables, returning a variable for the created term.

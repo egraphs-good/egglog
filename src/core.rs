@@ -102,6 +102,31 @@ impl ResolvedCall {
         }
     }
 
+    /// Types for a term representing this resolved call.
+    /// Omits the output type for constructors.
+    pub(crate) fn term_types(&self) -> Vec<ArcSort> {
+        match self {
+            ResolvedCall::Func(func) => match func.subtype {
+                FunctionSubtype::Constructor => func.input.clone(),
+                _ => {
+                    let mut types = func.input.clone();
+                    types.push(func.output.clone());
+                    types
+                }
+            },
+            ResolvedCall::Primitive(prim) => prim.input().to_vec(),
+        }
+    }
+
+    /// Inputs types for the resolved call.
+    /// Omits output types for constructors, functions, and primitives.
+    pub(crate) fn input_types(&self) -> &[ArcSort] {
+        match self {
+            ResolvedCall::Func(func) => &func.input,
+            ResolvedCall::Primitive(prim) => prim.input(),
+        }
+    }
+
     // Different from `from_resolution`, this function only considers function types and not primitives.
     // As a result, it only requires input argument types, so types.len() == func.input.len(),
     // while for `from_resolution`, types.len() == func.input.len() + 1 to account for the output type
