@@ -1,4 +1,5 @@
 use crate::ast::GenericCommand;
+use crate::typechecking::FuncType;
 use crate::*;
 use std::path::Path;
 
@@ -384,7 +385,7 @@ impl<'a> TermState<'a> {
         // a rule updating index i
         for i in 0..types.len() {
             // if the type at index i is not an eq sort, skip
-            if types[i].is_eq_sort() {
+            if !types[i].is_eq_sort() {
                 continue;
             }
             let types = fdecl.resolved_schema.view_types();
@@ -566,8 +567,7 @@ impl<'a> TermState<'a> {
                     );
                 };
 
-                let (add_code, _fv) =
-                    self.add_term_and_view(&func_type.name, &exprs, justification);
+                let (add_code, _fv) = self.add_term_and_view(func_type, &exprs, justification);
                 res.extend(add_code);
             }
             ResolvedAction::Change(_span, change, h, generic_exprs) => {
@@ -609,9 +609,10 @@ impl<'a> TermState<'a> {
 
     /// Return some code adding to the view and term tables,
     /// returning a let-bound variable for the created term.
+    /// Expects the term arguments as `args`.
     fn add_term_and_view(
         &mut self,
-        fname: &str,
+        func_type: &FuncType,
         args: &Vec<String>,
         justification: &str,
     ) -> (Vec<String>, String) {
@@ -619,18 +620,27 @@ impl<'a> TermState<'a> {
         let mut res = vec![];
         res.push(format!(
             "(let {fv} ({} {}))",
-            fname,
-            ListDisplay(args.clone(), " ")
-        ));
-        res.push(format!(
-            "({} {} {fv})",
-            self.view_name(&fname),
+            func_type.name,
             ListDisplay(args.clone(), " ")
         ));
 
+        if func_type.subtype == FunctionSubtype::Constructor {
+            res.push(format!(
+                "({} {} {fv})",
+                self.view_name(&func_type.name),
+                ListDisplay(args.clone(), " ")
+            ));
+        } else {
+            res.push(format!(
+                "({} {})",
+                self.view_name(&func_type.name),
+                ListDisplay(args.clone(), " ")
+            ));
+        }
+
         // in proof mode, give a justification for the view and term addition
         if self.egraph.proof_state.proofs_enabled {
-            let proof_name = self.view_proof_name(&fname);
+            let proof_name = self.view_proof_name(&func_type.name);
             res.push(format!(
                 "(set ({proof_name} {}) {justification})",
                 ListDisplay(args.clone(), " ")
@@ -703,7 +713,7 @@ impl<'a> TermState<'a> {
                             );
                         }
                         let (add_code, fv) =
-                            self.add_term_and_view(&func_type.name, &args, justification);
+                            self.add_term_and_view(func_type, &args, justification);
                         res.extend(add_code);
 
                         // add to uf table to initialize eclass for eq sorts
