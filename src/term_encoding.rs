@@ -167,8 +167,8 @@ impl<'a> TermState<'a> {
             .iter()
             .enumerate()
             .map(|(i, _)| format!("c{i}_"))
-            .collect::<Vec<_>>()
-            .join(" ");
+            .collect::<Vec<_>>();
+        let child_names_str = child_names.join(" ");
         let rebuilding_ruleset = self.rebuilding_ruleset_name();
         let view_name = self.view_name(&fdecl.name);
         if fdecl.subtype == FunctionSubtype::Custom {
@@ -184,34 +184,63 @@ impl<'a> TermState<'a> {
             let cleanup_name = self.egraph.parser.symbol_gen.fresh("merge_cleanup");
             let cleanup_name2 = self.egraph.parser.symbol_gen.fresh("merge_cleanup2");
             let res_fresh = self.egraph.parser.symbol_gen.fresh("r");
+            let p1_fresh = self.egraph.parser.symbol_gen.fresh("p1");
+            let p2_fresh = self.egraph.parser.symbol_gen.fresh("p2");
+            let view_proof_name = self.view_proof_name(&fdecl.name);
+            let proof_query = if self.egraph.proof_state.proofs_enabled {
+                format!(
+                    "(= {p1_fresh} ({view_proof_name} {child_names_str} old))
+                     (= {p2_fresh} ({view_proof_name} {child_names_str} new))
+                    "
+                )
+            } else {
+                "".to_string()
+            };
+            let rule_proof_var = self.fresh_var();
+            let rule_proof = if self.egraph.proof_state.proofs_enabled {
+                format!(
+                    "(let {rule_proof_var}
+                            (MergeFn \"{name}\"
+                                  {p1_fresh}
+                                  {p2_fresh}))"
+                )
+            } else {
+                "".to_string()
+            };
 
-            // TODO these cleanup rules are expensive. Could speed up with actual functional dependencies.
+            let mut updated = child_names.clone();
+            updated.push(format!("{merge_fn}"));
+            let term_and_proof = self.update_view(name, &updated, &rule_proof_var);
+            let term_and_proof = term_and_proof.join("\n");
+
             // The first runs the merge function adding a new row.
             // The second deletes rows with old values for the old variable, while the third deletes rows with new values for the new variable.
             format!(
-                "(rule (({view_name} {child_names} old)
-                        ({view_name} {child_names} new)
+                "(rule (({view_name} {child_names_str} old)
+                        ({view_name} {child_names_str} new)
                         (!= old new)
-                        (= (ordering-max old new) new))
-                       (({view_name} {child_names} {merge_fn})
-                        ({name} {child_names} {merge_fn})
+                        (= (ordering-max old new) new)
+                        {proof_query})
+                       ({rule_proof}
+                        {term_and_proof}
                        )
                         :ruleset {rebuilding_ruleset}
                         :name \"{fresh_name}\")
+                
                  (rule ((= {res_fresh} {merge_fn})
-                        ({view_name} {child_names} {res_fresh})
-                        ({view_name} {child_names} new)
-                        ({view_name} {child_names} old)
+                        ({view_name} {child_names_str} {res_fresh})
+                        ({view_name} {child_names_str} new)
+                        ({view_name} {child_names_str} old)
                         (!= {res_fresh} old))
-                       ((delete ({view_name} {child_names} old)))
+                       ((delete ({view_name} {child_names_str} old)))
                         :ruleset {rebuilding_cleanup_ruleset}
                         :name \"{cleanup_name}\")
                  (rule ((= {res_fresh} {merge_fn})
-                        ({view_name} {child_names} {res_fresh})
-                        ({view_name} {child_names} new)
-                        ({view_name} {child_names} old)
+                        ({view_name} {child_names_str} {res_fresh})
+                        ({view_name} {child_names_str} new)
+                        ({view_name} {child_names_str} old)
                         (!= {res_fresh} new))
-                       ((delete ({view_name} {child_names} new)))
+                       ((delete ({view_name} {child_names_str} new)))
                         :ruleset {rebuilding_cleanup_ruleset}
                         :name \"{cleanup_name2}\")
                 ",
@@ -221,8 +250,8 @@ impl<'a> TermState<'a> {
             let fresh_name = self.egraph.parser.symbol_gen.fresh("congruence_rule");
             let uf_name = self.uf_name(&fdecl.schema.output);
             format!(
-                "(rule (({view_name} {child_names} old)
-                        ({view_name} {child_names} new)
+                "(rule (({view_name} {child_names_str} old)
+                        ({view_name} {child_names_str} new)
                         (!= old new)
                         (= (ordering-max old new) new))
                        (({uf_name} new old))
@@ -259,7 +288,7 @@ impl<'a> TermState<'a> {
             }
         );
         let view_sorts = format!("{in_sorts} {out_type}",);
-        let proof_constructors = self.proof_functions(fdecl, &term_sorts, &view_sorts);
+        let proof_constructors = self.proof_functions(fdecl, &view_sorts);
 
         // the term table has child_sorts as inputs
         // the view table has child_sorts + the leader term for the eclass
@@ -281,10 +310,6 @@ impl<'a> TermState<'a> {
         ))
     }
 
-    fn term_proof_name(&self, name: &str) -> String {
-        format!("{}TermProof", name,)
-    }
-
     fn view_proof_name(&self, name: &str) -> String {
         format!("{}ViewProof", name,)
     }
@@ -299,19 +324,25 @@ impl<'a> TermState<'a> {
   (Fiat)
   (Rule
     String ;; rule name
-    ProofList ;; proofs for body
-))
+    ProofList ;; proofs for body)
+  (MergeFn
+    String ;; function name
+    Proof ;; proof for old term
+    Proof ;; proof for new term)
+    )
 
 
+;; prove a grounded equality between two terms
+;; proof by refl is not allowed- must be justified by fiat or rule
 (datatype Proof
-  ;; proves a term exists
-  (Term Jusfication Ast)
   ;; proves a term is equal to another
   (Eq Justification Ast Ast)
 
+  (PrimRefl Ast) ;; primitives require no proof for reflexivity
+
   (EqTrans Proof Proof)
   (EqSym Proof)
-  (Congruence Ast Ast ProofList))
+  (Congr Ast Ast ProofList))
 
 ;; ProofList definitions
 (function Cons (Proof ProofList) ProofList)
@@ -320,22 +351,15 @@ impl<'a> TermState<'a> {
         )
     }
 
-    fn proof_functions(
-        &mut self,
-        fdecl: &ResolvedFunctionDecl,
-        term_sorts: &str,
-        view_sorts: &str,
-    ) -> String {
+    fn proof_functions(&mut self, fdecl: &ResolvedFunctionDecl, view_sorts: &str) -> String {
         if !self.egraph.proof_state.proofs_enabled {
             return "".to_string();
         }
 
-        let term_proof_name = self.term_proof_name(&fdecl.name);
         let view_proof_name = self.view_proof_name(&fdecl.name);
 
         format!(
             "
-            (function {term_proof_name} ({term_sorts}) Proof :merge old)
             (function {view_proof_name} ({view_sorts}) Proof :merge old)
             "
         )
@@ -351,7 +375,6 @@ impl<'a> TermState<'a> {
         let types2 = types.clone();
 
         let view_name = self.view_name(&fdecl.name);
-        let name = &fdecl.name;
         let child = |i| format!("c{i}_");
         let children = format!(
             "{}",
@@ -383,7 +406,7 @@ impl<'a> TermState<'a> {
         // Make a rule that updates the view
         let rule = format!(
             "(rule ((= lhs ({view_name} {children}))
-                        {children_updated_query})
+                    {children_updated_query})
                      (
                       ({view_name} {children_updated})
                      )
@@ -528,7 +551,7 @@ impl<'a> TermState<'a> {
                     );
                 };
 
-                let (mut add_code, _fv) =
+                let (add_code, _fv) =
                     self.add_term_and_view(&func_type.name, &exprs, justification);
                 res.extend(add_code);
             }
@@ -593,18 +616,32 @@ impl<'a> TermState<'a> {
         // in proof mode, give a justification for the view and term addition
         if self.egraph.proof_state.proofs_enabled {
             let proof_name = self.view_proof_name(&fname);
-            let term_proof_name = self.term_proof_name(&fname);
             res.push(format!(
                 "(set ({proof_name} {}) {justification})",
-                ListDisplay(args.clone(), " ")
-            ));
-            res.push(format!(
-                "(set ({term_proof_name} {}) {justification})",
                 ListDisplay(args.clone(), " ")
             ));
         }
 
         (res, fv)
+    }
+
+    /// Update the view, with arguments including the eclass for constructors.
+    fn update_view(&mut self, fname: &str, args: &Vec<String>, pf: &str) -> Vec<String> {
+        let mut res = vec![];
+        res.push(format!(
+            "({} {})",
+            self.view_name(&fname),
+            ListDisplay(args.clone(), " "),
+        ));
+
+        if self.egraph.proof_state.proofs_enabled {
+            let proof_name = self.view_proof_name(&fname);
+            res.push(format!(
+                "(set ({proof_name} {}) {pf})",
+                ListDisplay(args.clone(), " ")
+            ));
+        }
+        res
     }
 
     // Add to view and term tables, returning a variable for the created term.
