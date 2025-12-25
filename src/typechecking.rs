@@ -514,7 +514,8 @@ impl TypeInfo {
         constraints.extend(query.get_constraints(self)?);
 
         let mut binding = query.get_vars();
-        let (actions, mapped_action) = head.to_core_actions(self, &mut binding, symbol_gen)?;
+        let (actions, mapped_action) =
+            head.to_core_actions(self, &mut binding, symbol_gen, false)?;
 
         let mut problem = Problem::default();
         problem.add_rule(
@@ -624,7 +625,7 @@ impl TypeInfo {
         let mut binding_set: IndexSet<String> =
             binding.keys().copied().map(str::to_string).collect();
         let (actions, mapped_action) =
-            actions.to_core_actions(self, &mut binding_set, symbol_gen)?;
+            actions.to_core_actions(self, &mut binding_set, symbol_gen, false)?;
         let mut problem = Problem::default();
 
         // add actions to problem

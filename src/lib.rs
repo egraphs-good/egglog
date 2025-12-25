@@ -849,8 +849,13 @@ impl EGraph {
     }
 
     fn add_rule(&mut self, rule: ast::ResolvedRule) -> Result<String, Error> {
-        let core_rule =
-            rule.to_canonicalized_core_rule(&self.type_info, &mut self.parser.symbol_gen)?;
+        // Disable union_to_set optimization in proof or term encoding mode, since
+        // it expects only `union` on constructors (not set).
+        let core_rule = rule.to_canonicalized_core_rule(
+            &self.type_info,
+            &mut self.parser.symbol_gen,
+            self.proof_state.original_typechecking.is_none(),
+        )?;
         let (query, actions) = (&core_rule.body, &core_rule.head);
 
         let rule_id = {
@@ -888,6 +893,7 @@ impl EGraph {
             &self.type_info,
             &mut Default::default(),
             &mut self.parser.symbol_gen,
+            self.proof_state.original_typechecking.is_none(),
         )?;
 
         let mut translator = BackendRule::new(
@@ -957,6 +963,7 @@ impl EGraph {
                 &self.type_info,
                 &mut Default::default(),
                 &mut self.parser.symbol_gen,
+                self.proof_state.original_typechecking.is_none(),
             )?
             .0;
         translator.actions(&actions)?;
@@ -1005,8 +1012,11 @@ impl EGraph {
             name: fresh_name.clone(),
             ruleset: fresh_ruleset.clone(),
         };
-        let core_rule =
-            rule.to_canonicalized_core_rule(&self.type_info, &mut self.parser.symbol_gen)?;
+        let core_rule = rule.to_canonicalized_core_rule(
+            &self.type_info,
+            &mut self.parser.symbol_gen,
+            self.proof_state.original_typechecking.is_none(),
+        )?;
         let query = core_rule.body;
 
         let ext_sc = egglog_bridge::SideChannel::default();

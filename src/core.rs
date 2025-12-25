@@ -167,7 +167,6 @@ impl Display for ResolvedCall {
 /// Currently, we only use this trait to determine whether a symbol is a
 /// [`FunctionSubtype::Constructor`].
 pub trait IsFunc {
-    #[allow(unused)]
     fn is_constructor(&self, type_info: &TypeInfo) -> bool;
 }
 
@@ -530,6 +529,7 @@ pub(crate) trait GenericActionsExt<Head, Leaf> {
         typeinfo: &TypeInfo,
         binding: &mut IndexSet<Leaf>,
         fresh_gen: &mut FG,
+        union_to_set_optimization: bool,
     ) -> Result<(GenericCoreActions<Head, Leaf>, MappedActions<Head, Leaf>), TypeError>
     where
         Head: Clone + Display + IsFunc,
@@ -548,6 +548,7 @@ where
         typeinfo: &TypeInfo,
         binding: &mut IndexSet<Leaf>,
         fresh_gen: &mut FG,
+        union_to_set_optimization: bool,
     ) -> Result<(GenericCoreActions<Head, Leaf>, MappedActions<Head, Leaf>), TypeError>
     where
         Head: Clone + Display + IsFunc,
@@ -631,21 +632,75 @@ where
                     ));
                 }
                 GenericAction::Union(span, e1, e2) => {
-                    {
-                        let mapped_e1 =
-                            e1.to_core_actions(typeinfo, binding, fresh_gen, &mut norm_actions)?;
-                        let mapped_e2 =
-                            e2.to_core_actions(typeinfo, binding, fresh_gen, &mut norm_actions)?;
-                        norm_actions.push(GenericCoreAction::Union(
-                            span.clone(),
-                            mapped_e1.get_corresponding_var_or_lit(typeinfo),
-                            mapped_e2.get_corresponding_var_or_lit(typeinfo),
-                        ));
-                        mapped_actions.0.push(GenericAction::Union(
-                            span.clone(),
-                            mapped_e1,
-                            mapped_e2,
-                        ));
+                    // Optimization: if one side is a constructor call and the other side is a variable,
+                    // we can lower this to a Set action instead of a Union action.
+                    // This produces invalid egglog, since top-level egglog expects only Union on constructors.
+                    // We disable this with union_to_set_optimization flag for term/proof mode.
+                    // TODO move this optimization to later stage so we can keep it enabled in term/proof mode.
+                    match (e1, e2) {
+                        (var @ GenericExpr::Var(..), GenericExpr::Call(_, f, args))
+                        | (GenericExpr::Call(_, f, args), var @ GenericExpr::Var(..))
+                            if f.is_constructor(typeinfo) && union_to_set_optimization =>
+                        {
+                            let head = f;
+                            let expr = var;
+                            let mut mapped_args = vec![];
+                            for arg in args {
+                                let mapped_arg = arg.to_core_actions(
+                                    typeinfo,
+                                    binding,
+                                    fresh_gen,
+                                    &mut norm_actions,
+                                )?;
+                                mapped_args.push(mapped_arg);
+                            }
+                            let mapped_expr = expr.to_core_actions(
+                                typeinfo,
+                                binding,
+                                fresh_gen,
+                                &mut norm_actions,
+                            )?;
+                            norm_actions.push(GenericCoreAction::Set(
+                                span.clone(),
+                                head.clone(),
+                                mapped_args
+                                    .iter()
+                                    .map(|e| e.get_corresponding_var_or_lit(typeinfo))
+                                    .collect(),
+                                mapped_expr.get_corresponding_var_or_lit(typeinfo),
+                            ));
+                            let v = fresh_gen.fresh(head);
+                            mapped_actions.0.push(GenericAction::Set(
+                                span.clone(),
+                                CorrespondingVar::new(head.clone(), v),
+                                mapped_args,
+                                mapped_expr,
+                            ));
+                        }
+                        _ => {
+                            let mapped_e1 = e1.to_core_actions(
+                                typeinfo,
+                                binding,
+                                fresh_gen,
+                                &mut norm_actions,
+                            )?;
+                            let mapped_e2 = e2.to_core_actions(
+                                typeinfo,
+                                binding,
+                                fresh_gen,
+                                &mut norm_actions,
+                            )?;
+                            norm_actions.push(GenericCoreAction::Union(
+                                span.clone(),
+                                mapped_e1.get_corresponding_var_or_lit(typeinfo),
+                                mapped_e2.get_corresponding_var_or_lit(typeinfo),
+                            ));
+                            mapped_actions.0.push(GenericAction::Union(
+                                span.clone(),
+                                mapped_e1,
+                                mapped_e2,
+                            ));
+                        }
                     };
                 }
                 GenericAction::Panic(span, string) => {
@@ -906,6 +961,7 @@ pub(crate) trait GenericRuleExt<Head, Leaf> {
         &self,
         typeinfo: &TypeInfo,
         fresh_gen: &mut impl FreshGen<Head, Leaf>,
+        union_to_set_optimization: bool,
     ) -> Result<GenericCoreRule<HeadOrEq<Head>, Head, Leaf>, TypeError>
     where
         Head: Clone + Display + IsFunc,
@@ -921,6 +977,7 @@ where
         &self,
         typeinfo: &TypeInfo,
         fresh_gen: &mut impl FreshGen<Head, Leaf>,
+        union_to_set_optimization: bool,
     ) -> Result<GenericCoreRule<HeadOrEq<Head>, Head, Leaf>, TypeError>
     where
         Head: Clone + Display + IsFunc,
@@ -928,9 +985,12 @@ where
     {
         let (body, _correspondence) = Facts(self.body.clone()).to_query(typeinfo, fresh_gen);
         let mut binding = body.get_vars();
-        let (head, _correspondence) =
-            self.head
-                .to_core_actions(typeinfo, &mut binding, fresh_gen)?;
+        let (head, _correspondence) = self.head.to_core_actions(
+            typeinfo,
+            &mut binding,
+            fresh_gen,
+            union_to_set_optimization,
+        )?;
         Ok(GenericCoreRule {
             span: self.span.clone(),
             body,
@@ -944,6 +1004,7 @@ pub(crate) trait ResolvedRuleExt {
         &self,
         typeinfo: &TypeInfo,
         fresh_gen: &mut SymbolGen,
+        union_to_set_optimization: bool,
     ) -> Result<ResolvedCoreRule, TypeError>;
 }
 
@@ -952,6 +1013,7 @@ impl ResolvedRuleExt for ResolvedRule {
         &self,
         typeinfo: &TypeInfo,
         fresh_gen: &mut SymbolGen,
+        union_to_set_optimization: bool,
     ) -> Result<ResolvedCoreRule, TypeError> {
         let value_eq = &typeinfo.get_prims("value-eq").unwrap()[0];
         let value_eq = |at1: &ResolvedAtomTerm, at2: &ResolvedAtomTerm| {
@@ -962,7 +1024,7 @@ impl ResolvedRuleExt for ResolvedRule {
             })
         };
 
-        let rule = self.to_core_rule(typeinfo, fresh_gen)?;
+        let rule = self.to_core_rule(typeinfo, fresh_gen, union_to_set_optimization)?;
 
         // The groundedness check happens before canonicalization, because canonicalization
         // may turn ungrounded variables in a query to unbounded variables in actions (e.g.,
