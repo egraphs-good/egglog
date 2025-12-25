@@ -630,71 +630,29 @@ where
                     ));
                 }
                 GenericAction::Union(span, e1, e2) => {
-                    match (e1, e2) {
-                        /* TODO why did we have this case? And why is it using Set?
-                        (var @ GenericExpr::Var(..), GenericExpr::Call(_, f, args))
-                        | (GenericExpr::Call(_, f, args), var @ GenericExpr::Var(..))
-                            if f.is_constructor(typeinfo) =>
-                        {
-                            let head = f;
-                            let expr = var;
-                            let mut mapped_args = vec![];
-                            for arg in args {
-                                let mapped_arg = arg.to_core_actions(
-                                    typeinfo,
-                                    binding,
-                                    fresh_gen,
-                                    &mut norm_actions,
-                                )?;
-                                mapped_args.push(mapped_arg);
-                            }
-                            let mapped_expr = expr.to_core_actions(
-                                typeinfo,
-                                binding,
-                                fresh_gen,
-                                &mut norm_actions,
-                            )?;
-                            norm_actions.push(GenericCoreAction::Set(
-                                span.clone(),
-                                head.clone(),
-                                mapped_args
-                                    .iter()
-                                    .map(|e| e.get_corresponding_var_or_lit(typeinfo))
-                                    .collect(),
-                                mapped_expr.get_corresponding_var_or_lit(typeinfo),
-                            ));
-                            let v = fresh_gen.fresh(head);
-                            mapped_actions.0.push(GenericAction::Set(
-                                span.clone(),
-                                CorrespondingVar::new(head.clone(), v),
-                                mapped_args,
-                                mapped_expr,
-                            ));
-                        }*/
-                        _ => {
-                            let mapped_e1 = e1.to_core_actions(
-                                typeinfo,
-                                binding,
-                                fresh_gen,
-                                &mut norm_actions,
-                            )?;
-                            let mapped_e2 = e2.to_core_actions(
-                                typeinfo,
-                                binding,
-                                fresh_gen,
-                                &mut norm_actions,
-                            )?;
-                            norm_actions.push(GenericCoreAction::Union(
-                                span.clone(),
-                                mapped_e1.get_corresponding_var_or_lit(typeinfo),
-                                mapped_e2.get_corresponding_var_or_lit(typeinfo),
-                            ));
-                            mapped_actions.0.push(GenericAction::Union(
-                                span.clone(),
-                                mapped_e1,
-                                mapped_e2,
-                            ));
-                        }
+                    {
+                        let mapped_e1 = e1.to_core_actions(
+                            typeinfo,
+                            binding,
+                            fresh_gen,
+                            &mut norm_actions,
+                        )?;
+                        let mapped_e2 = e2.to_core_actions(
+                            typeinfo,
+                            binding,
+                            fresh_gen,
+                            &mut norm_actions,
+                        )?;
+                        norm_actions.push(GenericCoreAction::Union(
+                            span.clone(),
+                            mapped_e1.get_corresponding_var_or_lit(typeinfo),
+                            mapped_e2.get_corresponding_var_or_lit(typeinfo),
+                        ));
+                        mapped_actions.0.push(GenericAction::Union(
+                            span.clone(),
+                            mapped_e1,
+                            mapped_e2,
+                        ));
                     };
                 }
                 GenericAction::Panic(span, string) => {
