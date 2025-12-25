@@ -20,7 +20,6 @@ pub mod constraint;
 mod core;
 pub mod extract;
 pub mod prelude;
-mod proof_encoding;
 pub mod scheduler;
 mod serialize;
 pub mod sort;

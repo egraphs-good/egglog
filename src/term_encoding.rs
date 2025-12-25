@@ -217,40 +217,43 @@ impl<'a> TermState<'a> {
                 "".to_string()
             };
 
+            let mut merge_fn_code = vec![];
+            let merge_fn_var =
+                self.instrument_action_expr(merge_fn, &mut merge_fn_code, &rule_proof_var);
+            let merge_fn_code_str = merge_fn_code.join("\n");
             let mut updated = child_names.clone();
-            updated.push(format!("{merge_fn}"));
+            updated.push(merge_fn_var.clone());
             let term_and_proof = self.update_view(name, &updated, &rule_proof_var);
+            let fresh_constructor = self.egraph.parser.symbol_gen.fresh("mergecleanup");
+            let fresh_sort = self.egraph.parser.symbol_gen.fresh("mergecleanup");
+            let output_sort = fdecl.schema.output.clone();
 
             // The first runs the merge function adding a new row.
             // The second deletes rows with old values for the old variable, while the third deletes rows with new values for the new variable.
             format!(
-                "(rule (({view_name} {child_names_str} old)
+                "(sort {fresh_sort})
+                 (constructor {fresh_constructor} ({output_sort} {output_sort}) {fresh_sort})
+                 (rule (({view_name} {child_names_str} old)
                         ({view_name} {child_names_str} new)
                         (!= old new)
                         (= (ordering-max old new) new)
                         {proof_query})
-                       ({rule_proof}
+                       ({merge_fn_code_str}
+                        {rule_proof}
                         {term_and_proof}
+                        ({fresh_constructor} {merge_fn_var} old)
+                        ({fresh_constructor} {merge_fn_var} new)
                        )
                         :ruleset {rebuilding_ruleset}
                         :name \"{fresh_name}\")
                 
-                 (rule ((= {res_fresh} {merge_fn})
-                        ({view_name} {child_names_str} {res_fresh})
-                        ({view_name} {child_names_str} new)
+                 (rule (({fresh_constructor} merged old)
+                        ({view_name} {child_names_str} merged)
                         ({view_name} {child_names_str} old)
-                        (!= {res_fresh} old))
+                        (!= merged old))
                        ((delete ({view_name} {child_names_str} old)))
                         :ruleset {rebuilding_cleanup_ruleset}
                         :name \"{cleanup_name}\")
-                 (rule ((= {res_fresh} {merge_fn})
-                        ({view_name} {child_names_str} {res_fresh})
-                        ({view_name} {child_names_str} new)
-                        ({view_name} {child_names_str} old)
-                        (!= {res_fresh} new))
-                       ((delete ({view_name} {child_names_str} new)))
-                        :ruleset {rebuilding_cleanup_ruleset}
-                        :name \"{cleanup_name2}\")
                 ",
             )
         } else {
