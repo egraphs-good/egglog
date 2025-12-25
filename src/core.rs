@@ -167,6 +167,7 @@ impl Display for ResolvedCall {
 /// Currently, we only use this trait to determine whether a symbol is a
 /// [`FunctionSubtype::Constructor`].
 pub trait IsFunc {
+    #[allow(unused)]
     fn is_constructor(&self, type_info: &TypeInfo) -> bool;
 }
 
@@ -631,18 +632,10 @@ where
                 }
                 GenericAction::Union(span, e1, e2) => {
                     {
-                        let mapped_e1 = e1.to_core_actions(
-                            typeinfo,
-                            binding,
-                            fresh_gen,
-                            &mut norm_actions,
-                        )?;
-                        let mapped_e2 = e2.to_core_actions(
-                            typeinfo,
-                            binding,
-                            fresh_gen,
-                            &mut norm_actions,
-                        )?;
+                        let mapped_e1 =
+                            e1.to_core_actions(typeinfo, binding, fresh_gen, &mut norm_actions)?;
+                        let mapped_e2 =
+                            e2.to_core_actions(typeinfo, binding, fresh_gen, &mut norm_actions)?;
                         norm_actions.push(GenericCoreAction::Union(
                             span.clone(),
                             mapped_e1.get_corresponding_var_or_lit(typeinfo),

@@ -107,6 +107,7 @@ impl<T> UserDefinedCommandOutput for T where T: Debug + std::fmt::Display + Send
 
 /// Output from a command.
 #[derive(Clone, Debug)]
+#[allow(clippy::large_enum_variant)]
 pub enum CommandOutput {
     /// The size of a function
     PrintFunctionSize(usize),
