@@ -686,7 +686,7 @@ impl TypeInfo {
         self.func_types.get(sym)
     }
 
-    pub(crate) fn is_constructor(&self, sym: &str) -> bool {
+    pub fn is_constructor(&self, sym: &str) -> bool {
         self.func_types
             .get(sym)
             .is_some_and(|f| f.subtype == FunctionSubtype::Constructor)

@@ -1,6 +1,7 @@
 use std::path::PathBuf;
 
 use egglog::*;
+use hashbrown::HashSet;
 use libtest_mimic::Trial;
 
 #[derive(Clone)]
@@ -152,7 +153,7 @@ fn main() {
     let args = libtest_mimic::Arguments::from_args();
     let tests = generate_tests("tests/**/*.egg");
     // ensure all the tests have unique names
-    let mut names = std::collections::HashSet::new();
+    let mut names = HashSet::new();
     for test in &tests {
         let name = test.name().to_string();
         if !names.insert(name.clone()) {
