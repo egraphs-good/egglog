@@ -30,38 +30,11 @@ fn test_desugar_includes() {
         .desugar_program(None, &input)
         .unwrap()
         .iter()
-        .map(|cmd| format!("{:?}", cmd))
+        .map(|cmd| format!("{}", cmd))
         .collect::<Vec<_>>();
 
-    // Should contain datatype, include, and let commands
-    assert!(
-        desugared.iter().any(|cmd| cmd.contains("datatype Main")),
-        "desugared output missing datatype definition: {:?}",
-        desugared
-    );
-    assert!(
-        desugared
-            .iter()
-            .any(|cmd| cmd.contains(&format!("include \"{}\"", include_path))),
-        "desugared output missing include for {}: {:?}",
-        include_path,
-        desugared
-    );
-    assert!(
-        desugared.iter().any(|cmd| cmd.contains("let y")),
-        "desugared output missing let binding: {:?}",
-        desugared
-    );
-    assert!(
-        desugared.iter().all(|cmd| !cmd.contains("datatype Math")),
-        "desugared output should not include code from include file (datatype Math): {:?}",
-        desugared
-    );
-    assert!(
-        desugared.iter().all(|cmd| !cmd.contains("let x")),
-        "desugared output should not include code from include file (let x): {:?}",
-        desugared
-    );
+    let snapshot = desugared.join("\n");
+    insta::assert_snapshot!("desugar_includes", snapshot);
 
     // Clean up
     std::fs::remove_file(&file_path).ok();
