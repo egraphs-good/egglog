@@ -45,7 +45,7 @@ impl<'a> TermState<'a> {
     }
 
     fn single_parent_ruleset_name(&self) -> String {
-        String::from(format!("single_parent",))
+        format!("single_parent",)
     }
 
     fn to_ast_name(&self, sort: &str) -> String {
