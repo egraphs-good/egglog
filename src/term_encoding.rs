@@ -777,12 +777,13 @@ impl<'a> TermState<'a> {
         let rebuilding_ruleset = self.rebuilding_ruleset_name();
         let delete_ruleset = self.delete_subsume_ruleset_name();
         self.parse_schedule(format!(
-            "(saturate
+            "(seq
+              (saturate
                   {rebuilding_cleanup_ruleset}
                   (saturate {single_parent})
                   (saturate {parent_direct_ruleset})
                   {rebuilding_ruleset})
-             {delete_ruleset}"
+              {delete_ruleset})"
         ))
     }
 
