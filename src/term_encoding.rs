@@ -379,7 +379,6 @@ impl<'a> TermState<'a> {
 
     /// Rules that update the views when children change.
     fn rebuilding_rules(&mut self, fdecl: &ResolvedFunctionDecl) -> Vec<Command> {
-        let term_types = &fdecl.resolved_schema.term_types();
         let types = fdecl.resolved_schema.view_types();
         let mut res = vec![];
         // a rule updating index i
@@ -388,6 +387,7 @@ impl<'a> TermState<'a> {
             if !types[i].is_eq_sort() {
                 continue;
             }
+
             let types = fdecl.resolved_schema.view_types();
 
             let view_name = self.view_name(&fdecl.name);
@@ -410,19 +410,31 @@ impl<'a> TermState<'a> {
                 }
             }
 
-            let mut res = vec![];
             let fresh_name = self.egraph.parser.symbol_gen.fresh("rebuild_rule");
             let view_prf = self.query_view_and_get_proof(&fdecl.name, &children_vec);
 
             let (pf_code, pf_var) = if self.egraph.proof_state.proofs_enabled {
                 let pf_var = self.fresh_var();
+
+                // if we are updating the last element of a constructor
+                // it's updating the representative term, use transitivity
                 (
-                    format!(
-                        "(let {pf_var}
-                        (Congr {view_prf} {i}
-                               {updated_child_prf}))
+                    if fdecl.subtype == FunctionSubtype::Constructor && i == types.len() - 1 {
+                        format!(
+                            "(let {pf_var}
+                               (EqTrans
+                                  {updated_child_prf}
+                                  {view_prf}))",
+                        )
+                    } else {
+                        // otherwise we are updating a child via congruence
+                        format!(
+                            "(let {pf_var}
+                           (Congr {view_prf} {i}
+                                  {updated_child_prf}))
                     ",
-                    ),
+                        )
+                    },
                     pf_var,
                 )
             } else {
@@ -444,7 +456,7 @@ impl<'a> TermState<'a> {
                       :ruleset {} :name \"{fresh_name}\")",
                 self.rebuilding_ruleset_name(),
             );
-            res.push(self.parse_program(&rule));
+            res.extend(self.parse_program(&rule));
         }
         res
     }
