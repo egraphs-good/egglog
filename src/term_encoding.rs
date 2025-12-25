@@ -439,7 +439,7 @@ impl<'a> TermState<'a> {
                      (
                       {pf_code}
                       {updated_view}
-                      (delete ({view_name} {children})
+                      (delete ({view_name} {children}))
                      )
                       :ruleset {} :name \"{fresh_name}\")",
                 self.rebuilding_ruleset_name(),
