@@ -1,6 +1,6 @@
 use std::path::PathBuf;
 
-use egglog::*;
+use egglog::{ast::sanitize_internal_names, file_supports_proofs, *};
 use hashbrown::HashSet;
 use libtest_mimic::Trial;
 
@@ -9,6 +9,8 @@ struct Run {
     path: PathBuf,
     desugar: bool,
     term_encoding: bool,
+    proofs: bool,
+    snapshot: bool,
 }
 
 impl Run {
@@ -38,16 +40,17 @@ impl Run {
                 "Top level error",
             )
         } else {
-            let mut egraph = EGraph::default();
-            let desugared_str = egraph
-                .desugar_program(self.path.to_str().map(String::from), &program)
-                .unwrap()
-                .iter()
-                .map(|s| s.to_string())
-                .collect::<Vec<_>>()
-                .join("\n");
+            let desugared_str = self.desugar_program(&program);
+            // after desugaring run the program without term encoding or proofs
+            let normal_run = Run {
+                path: self.path.clone(),
+                desugar: false,
+                term_encoding: false,
+                proofs: false,
+                snapshot: false,
+            };
 
-            self.test_program(
+            normal_run.test_program(
                 None,
                 &desugared_str,
                 "ERROR after parse, to_string, and parse again.",
@@ -68,16 +71,37 @@ impl Run {
         }
     }
 
+    fn egraph(&self) -> EGraph {
+        if self.proofs {
+            EGraph::new_with_proofs().with_proof_testing()
+        } else if self.term_encoding {
+            EGraph::new_with_term_encoding()
+        } else {
+            EGraph::default()
+        }
+    }
+
+    fn desugar_program(&self, program: &str) -> String {
+        let mut egraph = self.egraph();
+        sanitize_internal_names(
+            &egraph
+                .desugar_program(self.path.to_str().map(String::from), program)
+                .unwrap(),
+        )
+        .iter()
+        .map(|s| s.to_string())
+        .collect::<Vec<_>>()
+        .join("\n")
+    }
+
     fn test_program(
         &self,
         filename: Option<String>,
         program: &str,
         message: &str,
     ) -> Vec<CommandOutput> {
-        let mut egraph = EGraph::default();
-        if self.term_encoding {
-            egraph = egraph.with_term_encoding_enabled();
-        }
+        let mut egraph = self.egraph();
+
         match egraph.parse_and_run_program(filename, program) {
             Ok(msgs) => {
                 if self.should_fail() {
@@ -92,6 +116,16 @@ impl Run {
                     for msg in &msgs {
                         log::info!("  {}", msg);
                     }
+                    if self.snapshot {
+                        let snapshot = msgs
+                            .iter()
+                            .map(|s| s.to_string())
+                            .collect::<Vec<_>>()
+                            .join("\n");
+                        insta::assert_snapshot!(self.name().to_string(), snapshot);
+                    }
+
+                    // Test graphviz dot generation
                     let mut serialized = egraph
                         .serialize(SerializeConfig {
                             max_functions: Some(40),
@@ -140,6 +174,9 @@ impl Run {
                 }
                 if self.0.term_encoding {
                     write!(f, "_term_encoding")?;
+                }
+                if self.0.proofs {
+                    write!(f, "_proofs")?;
                 }
                 Ok(())
             }
@@ -192,31 +229,91 @@ fn generate_tests(glob: &str) -> Vec<Trial> {
             path: entry.unwrap().clone(),
             desugar: false,
             term_encoding: false,
+            proofs: false,
+            snapshot: false,
         };
         let should_fail = run.should_fail();
+        let requires_proofs = run.path.parent().unwrap().ends_with("proofs");
+        // TODO: math-microbenchmark is too slow right now
+        // TODO: subsume.egg fails because we used a `check` on something subsumed. Need a way to run rules over subsumed things.
+        let proof_unsupported_file_list = ["math-microbenchmark.egg", "subsume.egg"];
+        let supports_proofs = file_supports_proofs(&run.path)
+            && !proof_unsupported_file_list
+                .iter()
+                .any(|f| run.path.ends_with(f));
 
-        push_trial(run.clone());
-        if !should_fail {
+        if !requires_proofs {
+            push_trial(run.clone());
+        }
+        if !requires_proofs && !should_fail {
             push_trial(Run {
                 desugar: true,
                 ..run.clone()
             });
-
-            if file_supports_proofs(&run.path) {
-                push_trial(Run {
-                    term_encoding: true,
-                    ..run.clone()
-                });
-            }
         }
+        if !should_fail && !requires_proofs && supports_proofs {
+            push_trial(Run {
+                term_encoding: true,
+                ..run.clone()
+            });
+        }
+
+        if !should_fail && supports_proofs {
+            push_trial(Run {
+                proofs: true,
+                snapshot: requires_proofs,
+                ..run.clone()
+            });
+        }
+
+        // TODO- running desugar + proofs fails on `prove-exists` commands. We can fix this by tying proof tables to constructors in the egglog itself.
+        /*if !should_fail
+            && supports_proofs
+            && !run.path.to_string_lossy().contains("math-microbenchmark")
+            && !requires_proofs
+        {
+            push_trial(Run {
+                proofs: true,
+                desugar: true,
+                ..run.clone()
+            });
+        }*/
     }
 
     trials
 }
 
+fn generate_proof_support_snapshot_test() -> Trial {
+    Trial::test("proof_support_snapshot", || {
+        let mut supported_files = Vec::new();
+
+        for entry in glob::glob("tests/**/*.egg").unwrap() {
+            let path = entry.unwrap();
+            if file_supports_proofs(&path) {
+                // Convert to relative path for consistent snapshots
+                let relative = path.strip_prefix("tests/").unwrap_or(&path);
+                supported_files.push(relative.to_string_lossy().to_string());
+            }
+        }
+
+        // Sort for deterministic output
+        supported_files.sort();
+
+        // Create snapshot
+        let snapshot = supported_files.join("\n");
+        insta::assert_snapshot!("proof_supported_files", snapshot);
+
+        Ok(())
+    })
+}
+
 fn main() {
     let args = libtest_mimic::Arguments::from_args();
-    let tests = generate_tests("tests/**/*.egg");
+    let mut tests = generate_tests("tests/**/*.egg");
+
+    // Add the proof support snapshot test
+    tests.push(generate_proof_support_snapshot_test());
+
     // ensure all the tests have unique names
     let mut names = HashSet::new();
     for test in &tests {

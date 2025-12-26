@@ -20,10 +20,11 @@ pub mod constraint;
 mod core;
 pub mod extract;
 pub mod prelude;
+mod proofs;
+
 pub mod scheduler;
 mod serialize;
 pub mod sort;
-mod term_encoding;
 mod termdag;
 mod typechecking;
 pub mod util;
@@ -42,7 +43,9 @@ pub use core::{ResolvedCall, SpecializedPrimitive};
 pub use core_relations::{BaseValue, ContainerValue, ExecutionState, Value};
 use core_relations::{ExternalFunctionId, make_external_func};
 use csv::Writer;
+pub use egglog_add_primitive::add_literal_prim;
 pub use egglog_add_primitive::add_primitive;
+pub use egglog_add_primitive::add_primitive_with_validator;
 use egglog_ast::generic_ast::{Change, GenericExpr, Literal};
 use egglog_ast::span::Span;
 use egglog_ast::util::ListDisplay;
@@ -56,6 +59,7 @@ use indexmap::map::Entry;
 use log::{Level, log_enabled};
 use numeric_id::DenseIdMap;
 use prelude::*;
+pub use proofs::proof_encoding_helpers::{file_supports_proofs, program_supports_proofs};
 use scheduler::{SchedulerId, SchedulerRecord};
 pub use serialize::{SerializeConfig, SerializeOutput, SerializedNode};
 use sort::*;
@@ -70,6 +74,7 @@ use std::str::FromStr;
 use std::sync::Arc;
 pub use termdag::{Term, TermDag, TermId};
 use thiserror::Error;
+pub use typechecking::PrimitiveValidator;
 pub use typechecking::TypeError;
 pub use typechecking::TypeInfo;
 use util::*;
@@ -77,8 +82,11 @@ use util::*;
 use crate::ast::desugar::desugar_command;
 use crate::ast::*;
 use crate::core::{GenericActionsExt, ResolvedRuleExt};
-pub use crate::term_encoding::file_supports_proofs;
-use crate::term_encoding::{EncodingState, TermState, command_supports_proof_encoding};
+use crate::proofs::proof_encoding::{EncodingState, ProofInstrumentor};
+use crate::proofs::proof_encoding_helpers::command_supports_proof_encoding;
+use crate::proofs::proof_extraction::ProveExistsError;
+use crate::proofs::proof_format::{ProofId, ProofStore};
+use crate::proofs::proof_normal_form::proof_form;
 
 pub const GLOBAL_NAME_PREFIX: &str = "$";
 
@@ -117,6 +125,11 @@ pub enum CommandOutput {
     ExtractBest(TermDag, DefaultCost, TermId),
     /// The variants of a function found after extracting
     ExtractVariants(TermDag, Vec<TermId>),
+    /// A high-level proof witnessing constructor existence
+    ProveExists {
+        proof_store: ProofStore,
+        proof_id: ProofId,
+    },
     /// The report from all runs
     OverallStatistics(RunReport),
     /// A printed function and all its values
@@ -148,6 +161,10 @@ impl std::fmt::Display for CommandOutput {
                 }
                 writeln!(f, ")")
             }
+            CommandOutput::ProveExists {
+                proof_store,
+                proof_id,
+            } => write!(f, "{}", proof_store.proof_to_string(*proof_id)),
             CommandOutput::OverallStatistics(run_report) => {
                 write!(f, "Overall statistics:\n{}", run_report)
             }
@@ -155,8 +172,9 @@ impl std::fmt::Display for CommandOutput {
                 let out_is_unit = function.schema.output.name() == UnitSort.name();
                 if *mode == PrintFunctionMode::CSV {
                     let mut wtr = Writer::from_writer(vec![]);
-                    for (term, output) in terms_and_outputs {
-                        match termdag.get(*term) {
+                    for (term_id, output) in terms_and_outputs {
+                        let term = termdag.get(*term_id);
+                        match term {
                             Term::App(name, children) => {
                                 let mut values = vec![name.clone()];
                                 for child_id in children {
@@ -228,6 +246,8 @@ pub struct EGraph {
     /// Registry for command-level macros
     command_macros: CommandMacroRegistry,
     proof_state: EncodingState,
+    /// In proof mode, we keep track of all desugared commands so we can check proofs later.
+    desugared_commands: Vec<ResolvedNCommand>,
 }
 
 /// A user-defined command allows users to inject custom command that can be called
@@ -297,9 +317,11 @@ impl Debug for Function {
 
 impl Default for EGraph {
     fn default() -> Self {
+        let mut parser = Parser::default();
+        let proof_state = EncodingState::new(&mut parser.symbol_gen);
         let mut eg = Self {
             backend: Default::default(),
-            parser: Default::default(),
+            parser,
             names: Default::default(),
             pushed_egraph: Default::default(),
             functions: Default::default(),
@@ -313,7 +335,8 @@ impl Default for EGraph {
             strict_mode: false,
             warned_about_global_prefix: false,
             command_macros: Default::default(),
-            proof_state: Default::default(),
+            proof_state,
+            desugared_commands: vec![],
         };
 
         add_base_sort(&mut eg, UnitSort, span!()).unwrap();
@@ -329,9 +352,23 @@ impl Default for EGraph {
         eg.type_info.add_presort::<FunctionSort>(span!()).unwrap();
         eg.type_info.add_presort::<MultiSetSort>(span!()).unwrap();
 
-        add_primitive!(&mut eg, "!=" = |a: #, b: #| -?> () {
-            (a != b).then_some(())
-        });
+        // Add != with a validator that computes inequality result
+        let neq_validator = |termdag: &mut TermDag, args: &[TermId]| -> Option<TermId> {
+            if args.len() == 2 && args[0] != args[1] {
+                // Return unit literal for successful inequality
+                Some(termdag.lit(Literal::Unit))
+            } else {
+                None
+            }
+        };
+        add_primitive_with_validator!(
+            &mut eg,
+            "!=" = |a: #, b: #| -?> () {
+                (a != b).then_some(())
+            },
+            neq_validator
+        );
+
         add_primitive!(&mut eg, "value-eq" = |a: #, b: #| -?> () {
             (a == b).then_some(())
         });
@@ -368,15 +405,33 @@ impl EGraph {
         egraph
     }
 
+    /// Create a new e-graph with proof generation enabled.
+    pub fn new_with_proofs() -> Self {
+        let mut egraph = EGraph::new_with_term_encoding();
+        egraph.proof_state.proofs_enabled = true;
+        egraph
+    }
+
     /// Enable the term-encoding pipeline on an existing `EGraph`.
     ///
-    /// This is primarily a convenience for builder-style APIs that start with
-    /// `EGraph::default()` before deciding whether term encoding is required.  The
-    /// e-graph must still be empty when this is invoked; enabling term encoding
-    /// after commands have been added is unsupported and will lead to panics when
-    /// encoding is attempted.
-    pub fn with_term_encoding_enabled(mut self) -> Self {
+    /// This method is to support the current CLI implementation with egglog-experimental (https://github.com/egraphs-good/egglog/issues/768)
+    pub(crate) fn with_term_encoding_enabled(mut self) -> Self {
         self.proof_state.original_typechecking = Some(Box::new(self.clone()));
+        self
+    }
+
+    /// Enable proof generation on this e-graph.
+    /// TODO proofs should be turned on during creation of the e-graph, not afterwards.
+    /// This method is to support the current CLI implementation with egglog-experimental (https://github.com/egraphs-good/egglog/issues/768)
+    pub(crate) fn with_proofs_enabled(mut self) -> Self {
+        self = self.with_term_encoding_enabled();
+        self.proof_state.proofs_enabled = true;
+        self
+    }
+
+    /// Enable testing of getting proofs for all `check` commands.
+    pub fn with_proof_testing(mut self) -> Self {
+        self.proof_state.proof_testing = true;
         self
     }
 
@@ -566,7 +621,6 @@ impl EGraph {
 
         let can_subsume = match decl.subtype {
             FunctionSubtype::Constructor => true,
-            FunctionSubtype::Relation => true,
             FunctionSubtype::Custom => false,
         };
 
@@ -580,11 +634,9 @@ impl EGraph {
             default: match decl.subtype {
                 FunctionSubtype::Constructor => DefaultVal::FreshId,
                 FunctionSubtype::Custom => DefaultVal::Fail,
-                FunctionSubtype::Relation => DefaultVal::Const(self.backend.base_values().get(())),
             },
             merge: match decl.subtype {
                 FunctionSubtype::Constructor => MergeFn::UnionId,
-                FunctionSubtype::Relation => MergeFn::AssertEq,
                 FunctionSubtype::Custom => match &decl.merge {
                     None => MergeFn::AssertEq,
                     Some(expr) => self.translate_expr_to_mergefn(expr)?,
@@ -649,10 +701,10 @@ impl EGraph {
                 // include subsumed rows
                 let mut children: Vec<TermId> = Vec::new();
                 for (value, sort) in row.vals.iter().zip(&func.schema.input) {
-                    let (_, term) = extractor
+                    let (_, term_id) = extractor
                         .extract_best_with_sort(self, &mut termdag, *value, sort.clone())
                         .unwrap_or_else(|| (0, termdag.var("Unextractable".into())));
-                    children.push(term);
+                    children.push(term_id);
                 }
                 inputs.push(termdag.app(sym.to_owned(), children));
                 if include_output {
@@ -1290,6 +1342,20 @@ impl EGraph {
                 self.commands.insert(name, command);
                 return res;
             }
+            ResolvedNCommand::ProveExists(span, resolved_call) => {
+                let mut instrument = ProofInstrumentor { egraph: self };
+                let (proof_store, proof_id) =
+                    instrument
+                        .prove_exists(&resolved_call)
+                        .map_err(|error| Error::ProofError {
+                            span: span.clone(),
+                            error,
+                        })?;
+                return Ok(Some(CommandOutput::ProveExists {
+                    proof_store,
+                    proof_id,
+                }));
+            }
         };
 
         Ok(None)
@@ -1414,20 +1480,16 @@ impl EGraph {
     /// Desugars, typechecks, and removes globals from a single [`Command`].
     /// Leverages previous type information in the [`EGraph`] to do so, adding new type information.
     fn resolve_command(&mut self, command: Command) -> Result<Vec<ResolvedNCommand>, Error> {
-        let desugared = desugar_command(command, &mut self.parser)?;
+        let desugared = desugar_command(command, &mut self.parser, self.proof_state.proof_testing)?;
 
         // Add term encoding when it is enabled
         if let Some(original_typechecking) = self.proof_state.original_typechecking.as_mut() {
             // Typecheck using the original egraph
             // TODO this is ugly- we don't need an entire e-graph just for type information.
-            let mut typechecked = original_typechecking.typecheck_program(&desugared)?;
+            let typechecked = original_typechecking.typecheck_program(&desugared)?;
 
-            typechecked =
-                proof_global_remover::remove_globals(typechecked, &mut self.parser.symbol_gen);
             for command in &typechecked {
-                self.names.check_shadowing(command)?;
-
-                if !command_supports_proof_encoding(&command.to_command()) {
+                if !command_supports_proof_encoding(&command.to_command(), &self.type_info) {
                     let command_text = format!("{}", command.to_command());
                     return Err(Error::UnsupportedProofCommand {
                         command: command_text,
@@ -1435,10 +1497,27 @@ impl EGraph {
                 }
             }
 
-            let term_encoding_added = TermState::add_term_encoding(self, typechecked);
+            let normalized = proof_form(typechecked, &mut self.parser.symbol_gen);
+
+            // Desugared commands are in proof form but globals are still using let bindings.
+            self.desugared_commands.extend_from_slice(&normalized);
+
+            // Now remove globals for actual execution (but NOT from desugared_commands)
+            let typechecked_no_globals =
+                proof_global_remover::remove_globals(normalized, &mut self.parser.symbol_gen);
+            for command in &typechecked_no_globals {
+                self.names.check_shadowing(command)?;
+            }
+
+            let term_encoding_added =
+                ProofInstrumentor::add_term_encoding(self, typechecked_no_globals);
             let mut new_typechecked = vec![];
             for new_cmd in term_encoding_added {
-                let desugared = desugar_command(new_cmd, &mut self.parser)?;
+                let desugared =
+                    desugar_command(new_cmd, &mut self.parser, self.proof_state.proof_testing)?;
+                for cmd in &desugared {
+                    log::debug!("Desugared term encoding: {}", cmd.to_command());
+                }
 
                 // Now typecheck using self, adding term type information.
                 let desugared_typechecked = self.typecheck_program(&desugared)?;
@@ -1535,6 +1614,16 @@ impl EGraph {
         let parsed = self.parser.get_program_from_string(filename, input)?;
         let (_outputs, desugared_commands) = self.process_program_internal(parsed, false)?;
         Ok(desugared_commands)
+    }
+
+    /// Takes a source program `input` and parses it into a list of [`Command`]s.
+    pub fn parse_program(
+        &mut self,
+        filename: Option<String>,
+        input: &str,
+    ) -> Result<Vec<Command>, Error> {
+        let parsed = self.parser.get_program_from_string(filename, input)?;
+        Ok(parsed)
     }
 
     /// Takes a source program `input`, parses it, runs it, and returns a list of messages.
@@ -1747,7 +1836,7 @@ impl<'a> BackendRule<'a> {
                         })
                 });
                 assert!(ps.len() == 1, "options for {name}: {ps:?}");
-                ResolvedFunctionId::Prim(ps.into_iter().next().unwrap().1)
+                ResolvedFunctionId::Prim(ps.into_iter().next().unwrap().id)
             } else {
                 panic!("no callable for {name}");
             };
@@ -1915,6 +2004,12 @@ pub enum Error {
     SubsumeMergeError(String, Span),
     #[error("extraction failure: {:?}", .0)]
     ExtractError(String),
+    #[error("{span}\n{error}")]
+    ProofError {
+        span: Span,
+        #[source]
+        error: ProveExistsError,
+    },
     #[error("{1}\n{2}\nShadowing is not allowed, but found {0}")]
     Shadowing(String, Span, Span),
     #[error("{1}\nCommand already exists: {0}")]

@@ -1,0 +1,8 @@
+(datatype Math
+  (Num i64))
+
+
+(Num 2)
+
+(prove (Num 2))
+
