@@ -547,23 +547,25 @@ impl<'a> TermState<'a> {
 ;; rule justification- name of rule and one proof per fact in the query
 (constructor {rule_constructor} (String {proof_list_sort}) {justification_datatype})
 ;; merge function justification- name of function and two proofs for the two terms being merged
-(constructor {merge_fn_constructor} (String {proof_datatype} {proof_datatype})
+(constructor {merge_fn_constructor} (String {proof_datatype} {proof_datatype}))
 
 
-;; prove a grounded equality between two terms
+;; proofs all prove a grounded equality between two terms
 ;; proof by refl is not allowed- must be justified by fiat or rule
-(datatype {proof_datatype}
-    ;; proves a term is equal to another
-    ({eq_constructor} {justification_datatype} {ast_sort} {ast_sort})
 
-    ({eq_trans_constructor} {proof_datatype} {proof_datatype})
-    ({eq_sym_constructor} {proof_datatype})
-    ;; given a proof that t1 = f(..., c1, ...) and a term f(..., c2, ...)
-    ;; and the child index of c1 in the term f(..., c1, ...)
-    ;; and a proof that c1 = c2,
-    ;; produces a proof that t1 = f(..., c2, ...)
-    ({congr_constructor} {proof_datatype} i64 {proof_datatype})
-    )
+;; proves a term is equal to another
+(constructor {eq_constructor} ({justification_datatype} {ast_sort} {ast_sort}) {proof_datatype})
+;; transitivity of equality proofs
+(constructor {eq_trans_constructor} ({proof_datatype} {proof_datatype}) {proof_datatype})
+
+;; symmetry of equality proofs
+
+(constructor  {eq_sym_constructor} ({proof_datatype}) {proof_datatype})
+;; given a proof that t1 = f(..., c1, ...) and a term f(..., c2, ...)
+;; and the child index of c1 in the term f(..., c1, ...)
+;; and a proof that c1 = c2,
+;; produces a proof that t1 = f(..., c2, ...)
+(constructor  {congr_constructor} ({proof_datatype} i64 {proof_datatype}) {proof_datatype})
                 "
         )
     }
