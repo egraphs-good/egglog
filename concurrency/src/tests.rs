@@ -231,6 +231,8 @@ fn concurrent_vec_resize_with_parallel_init() {
     let slice = v.read();
     assert_eq!(slice.len(), 128);
     assert!(slice.iter().all(|&value| value == 1 || value == 2));
+    assert!(slice[0..64].windows(2).all(|pair| pair[0] == pair[1]));
+    assert!(slice[64..].windows(2).all(|pair| pair[0] == pair[1]));
 }
 
 #[test]

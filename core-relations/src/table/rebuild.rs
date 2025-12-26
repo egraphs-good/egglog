@@ -140,7 +140,7 @@ impl SortedWritesTable {
                 WrappedTableRef::with_wrapper(self, |wrapped| {
                     rebuilder.rebuild_subset(wrapped, subset, &mut scratch, exec_state);
                 });
-                changed = subset.size() > 0;
+                changed |= subset.size() > 0;
                 for (row_id, row) in scratch.non_stale_mut() {
                     if let Some(to_remove) = self.data.get_row(row_id).map(|x| &x[0..self.n_keys]) {
                         write_buf.stage_remove(to_remove);
