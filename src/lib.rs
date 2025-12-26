@@ -36,8 +36,8 @@ pub use ast::{ResolvedExpr, ResolvedFact, ResolvedVar};
 #[cfg(feature = "bin")]
 pub use cli::*;
 use constraint::{Constraint, Problem, SimpleTypeConstraint, TypeConstraint};
-use core::ResolvedAtomTerm;
 pub use core::{Atom, AtomTerm};
+use core::{CoreActionContext, ResolvedAtomTerm};
 pub use core::{ResolvedCall, SpecializedPrimitive};
 pub use core_relations::{BaseValue, ContainerValue, ExecutionState, Value};
 use core_relations::{ExternalFunctionId, make_external_func};
@@ -889,12 +889,14 @@ impl EGraph {
     }
 
     fn eval_actions(&mut self, actions: &ResolvedActions) -> Result<(), Error> {
-        let (actions, _) = actions.to_core_actions(
+        let mut binding = IndexSet::default();
+        let mut ctx = CoreActionContext::new(
             &self.type_info,
-            &mut Default::default(),
+            &mut binding,
             &mut self.parser.symbol_gen,
             self.proof_state.original_typechecking.is_none(),
-        )?;
+        );
+        let (actions, _) = actions.to_core_actions(&mut ctx)?;
 
         let mut translator = BackendRule::new(
             self.backend.new_rule("eval_actions", false),
@@ -958,14 +960,14 @@ impl EGraph {
             result_var.clone(),
             expr.clone(),
         ));
-        let actions = actions
-            .to_core_actions(
-                &self.type_info,
-                &mut Default::default(),
-                &mut self.parser.symbol_gen,
-                self.proof_state.original_typechecking.is_none(),
-            )?
-            .0;
+        let mut binding = IndexSet::default();
+        let mut ctx = CoreActionContext::new(
+            &self.type_info,
+            &mut binding,
+            &mut self.parser.symbol_gen,
+            self.proof_state.original_typechecking.is_none(),
+        );
+        let actions = actions.to_core_actions(&mut ctx)?.0;
         translator.actions(&actions)?;
 
         let arg = translator.entry(&ResolvedAtomTerm::Var(span.clone(), result_var));

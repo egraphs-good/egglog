@@ -1,5 +1,5 @@
 use crate::{
-    core::{CoreRule, GenericActionsExt},
+    core::{CoreActionContext, CoreRule, GenericActionsExt},
     *,
 };
 use ast::{ResolvedAction, ResolvedExpr, ResolvedFact, ResolvedRule, ResolvedVar, Rule};
@@ -514,8 +514,8 @@ impl TypeInfo {
         constraints.extend(query.get_constraints(self)?);
 
         let mut binding = query.get_vars();
-        let (actions, mapped_action) =
-            head.to_core_actions(self, &mut binding, symbol_gen, false)?;
+        let mut ctx = CoreActionContext::new(self, &mut binding, symbol_gen, false);
+        let (actions, mapped_action) = head.to_core_actions(&mut ctx)?;
 
         let mut problem = Problem::default();
         problem.add_rule(
@@ -624,8 +624,8 @@ impl TypeInfo {
     ) -> Result<ResolvedActions, TypeError> {
         let mut binding_set: IndexSet<String> =
             binding.keys().copied().map(str::to_string).collect();
-        let (actions, mapped_action) =
-            actions.to_core_actions(self, &mut binding_set, symbol_gen, false)?;
+        let mut ctx = CoreActionContext::new(self, &mut binding_set, symbol_gen, false);
+        let (actions, mapped_action) = actions.to_core_actions(&mut ctx)?;
         let mut problem = Problem::default();
 
         // add actions to problem
