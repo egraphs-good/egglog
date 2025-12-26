@@ -1,5 +1,5 @@
 //! Remove global variables from the program by translating
-//! them constructors, making proof generation easier.
+//! them into constructors, making proof generation easier.
 //! Does not support primitive-valued globals.
 
 use crate::ast::{

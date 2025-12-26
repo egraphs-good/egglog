@@ -178,6 +178,7 @@ where
     Head: Clone + Display,
     Leaf: Clone + PartialEq + Eq + Display + Hash,
 {
+    /// Applies `f` to every expression that appears in the rule body or head.
     pub fn visit_exprs(
         self,
         f: &mut impl FnMut(GenericExpr<Head, Leaf>) -> GenericExpr<Head, Leaf>,
@@ -195,6 +196,7 @@ where
         }
     }
 
+    /// Applies `f` to each action in the rule head, leaving the body unchanged.
     pub fn visit_actions(
         self,
         f: &mut impl FnMut(GenericAction<Head, Leaf>) -> GenericAction<Head, Leaf>,
@@ -262,6 +264,7 @@ where
         }
     }
 
+    /// Transforms every expression appearing in the action list using `f`.
     pub fn visit_exprs(
         self,
         f: &mut impl FnMut(GenericExpr<Head, Leaf>) -> GenericExpr<Head, Leaf>,
@@ -269,6 +272,7 @@ where
         Self(self.0.into_iter().map(|a| a.visit_exprs(f)).collect())
     }
 
+    /// Rewrites each action in the collection with the provided closure.
     pub fn visit_actions(
         self,
         f: &mut impl FnMut(GenericAction<Head, Leaf>) -> GenericAction<Head, Leaf>,

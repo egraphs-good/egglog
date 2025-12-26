@@ -1396,15 +1396,10 @@ impl EGraph {
         let desugared = desugar_command(command, &mut self.parser)?;
 
         // Add term encoding when it is enabled
-        if self.proof_state.original_typechecking.is_some() {
+        if let Some(original_typechecking) = self.proof_state.original_typechecking.as_mut() {
             // Typecheck using the original egraph
             // TODO this is ugly- we don't need an entire e-graph just for type information.
-            let mut typechecked = self
-                .proof_state
-                .original_typechecking
-                .as_mut()
-                .unwrap()
-                .typecheck_program(&desugared)?;
+            let mut typechecked = original_typechecking.typecheck_program(&desugared)?;
 
             typechecked =
                 proof_global_remover::remove_globals(typechecked, &mut self.parser.symbol_gen);
@@ -1412,10 +1407,10 @@ impl EGraph {
                 self.names.check_shadowing(command)?;
 
                 if !command_supports_proof_encoding(&command.to_command()) {
-                    panic!(
-                        "Command {} does not support proof term encoding",
-                        command.to_command()
-                    );
+                    let command_text = format!("{}", command.to_command());
+                    return Err(Error::UnsupportedProofCommand {
+                        command: command_text,
+                    });
                 }
             }
 
@@ -1905,6 +1900,13 @@ pub enum Error {
     CommandAlreadyExists(String, Span),
     #[error("Incorrect format in file '{0}'.")]
     InputFileFormatError(String),
+    #[error(
+        "Command is not supported by the current proof term encoding implementation.\n\
+         This typically means the command uses constructs that cannot yet be represented as proof terms.\n\
+         Consider disabling proof term encoding for this run or rewriting the command to avoid unsupported features.\n\
+         Offending command: {command}"
+    )]
+    UnsupportedProofCommand { command: String },
 }
 
 #[cfg(test)]
