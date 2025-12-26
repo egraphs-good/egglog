@@ -289,6 +289,8 @@ pub struct Database {
     pub(crate) counters: Counters,
     pub(crate) external_functions: ExternalFunctions,
     container_values: ContainerValues,
+    /// `notification_list` contains the list of tables that have been modified since the last call
+    /// to [`Database::merge_all`].
     notification_list: NotificationList<TableId>,
     // Tracks the relative dependencies between tables during merge operations.
     deps: DependencyGraph,
@@ -576,7 +578,7 @@ impl Database {
         ));
         self.total_size_estimate = self.total_size_estimate.wrapping_add(info.table.len());
         self.tables.insert(table, info);
-        table_changed.added || table_changed.removed
+        table_changed.added
     }
 
     /// Get id of the next table to be added to the database.
