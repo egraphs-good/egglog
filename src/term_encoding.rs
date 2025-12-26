@@ -89,7 +89,6 @@ pub(crate) struct ProofNames {
     pub rule_constructor: String,
     pub merge_fn_constructor: String,
     pub eq_constructor: String,
-    pub prim_refl_constructor: String,
     pub eq_trans_constructor: String,
     pub eq_sym_constructor: String,
     pub congr_constructor: String,
@@ -98,18 +97,17 @@ pub(crate) struct ProofNames {
 impl ProofNames {
     fn new(symbol_gen: &mut SymbolGen) -> Self {
         Self {
-            proof_list_sort: symbol_gen.fresh("proof_list"),
-            ast_sort: symbol_gen.fresh("proof_ast"),
-            justification_datatype: symbol_gen.fresh("justification"),
-            proof_datatype: symbol_gen.fresh("proof"),
-            fiat_constructor: symbol_gen.fresh("fiat"),
-            rule_constructor: symbol_gen.fresh("rule"),
-            merge_fn_constructor: symbol_gen.fresh("merge_fn"),
-            eq_constructor: symbol_gen.fresh("eq"),
-            prim_refl_constructor: symbol_gen.fresh("prim_refl"),
-            eq_trans_constructor: symbol_gen.fresh("eq_trans"),
-            eq_sym_constructor: symbol_gen.fresh("eq_sym"),
-            congr_constructor: symbol_gen.fresh("congr"),
+            proof_list_sort: symbol_gen.fresh("ProofList"),
+            ast_sort: symbol_gen.fresh("Ast"),
+            justification_datatype: symbol_gen.fresh("Justification"),
+            proof_datatype: symbol_gen.fresh("Proof"),
+            fiat_constructor: symbol_gen.fresh("Fiat"),
+            rule_constructor: symbol_gen.fresh("Rule"),
+            merge_fn_constructor: symbol_gen.fresh("Merge"),
+            eq_constructor: symbol_gen.fresh("Eq"),
+            eq_trans_constructor: symbol_gen.fresh("Trans"),
+            eq_sym_constructor: symbol_gen.fresh("Sym"),
+            congr_constructor: symbol_gen.fresh("Congr"),
         }
     }
 }
@@ -517,7 +515,6 @@ impl<'a> TermState<'a> {
             rule_constructor,
             merge_fn_constructor,
             eq_constructor,
-            prim_refl_constructor,
             eq_trans_constructor,
             eq_sym_constructor,
             congr_constructor,
@@ -532,7 +529,6 @@ impl<'a> TermState<'a> {
                 names.rule_constructor.clone(),
                 names.merge_fn_constructor.clone(),
                 names.eq_constructor.clone(),
-                names.prim_refl_constructor.clone(),
                 names.eq_trans_constructor.clone(),
                 names.eq_sym_constructor.clone(),
                 names.congr_constructor.clone(),
@@ -563,8 +559,6 @@ impl<'a> TermState<'a> {
 (datatype {proof_datatype}
     ;; proves a term is equal to another
     ({eq_constructor} {justification_datatype} {ast_sort} {ast_sort})
-
-    ({prim_refl_constructor} {ast_sort}) ;; primitives require no proof for reflexivity
 
     ({eq_trans_constructor} {proof_datatype} {proof_datatype})
     ({eq_sym_constructor} {proof_datatype})
