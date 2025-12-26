@@ -514,6 +514,8 @@ impl TypeInfo {
         constraints.extend(query.get_constraints(self)?);
 
         let mut binding = query.get_vars();
+        // We lower to core actions with `union_to_set_optimization`
+        // later in the pipeline. For typechecking we do not need it.
         let mut ctx = CoreActionContext::new(self, &mut binding, symbol_gen, false);
         let (actions, mapped_action) = head.to_core_actions(&mut ctx)?;
 
@@ -624,6 +626,8 @@ impl TypeInfo {
     ) -> Result<ResolvedActions, TypeError> {
         let mut binding_set: IndexSet<String> =
             binding.keys().copied().map(str::to_string).collect();
+        // We lower to core actions with `union_to_set_optimization`
+        // later in the pipeline. For typechecking we do not need it.
         let mut ctx = CoreActionContext::new(self, &mut binding_set, symbol_gen, false);
         let (actions, mapped_action) = actions.to_core_actions(&mut ctx)?;
         let mut problem = Problem::default();
