@@ -548,12 +548,14 @@ impl<'a> TermState<'a> {
     ({fiat_constructor})
     ({rule_constructor}
         String ;; rule name
-        {proof_list_sort} ;; proofs for body)
+        {proof_list_sort} ;; proofs for body
+    )
     ({merge_fn_constructor}
         String ;; function name
         {proof_datatype} ;; proof for old term
-        {proof_datatype} ;; proof for new term)
+        {proof_datatype} ;; proof for new term
         )
+    )
 
 
 ;; prove a grounded equality between two terms
