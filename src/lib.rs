@@ -354,15 +354,27 @@ impl Default for EGraph {
 pub struct NotFoundError(String);
 
 impl EGraph {
-    /// Create a new e-graph with term encoding enabled.
-    /// This instruments the egglog to use a explicit equality relation.
+    /// Create a new e-graph with the term-encoding pipeline enabled.
+    ///
+    /// In term-encoding mode the e-graph eagerly instruments every constructor
+    /// and function with auxiliary term tables, view tables, and per-sort
+    /// union-finds so that canonical representatives and their justifications are
+    /// materialized explicitly.  This makes it possible to record and emit
+    /// equality proofs while preserving the observable behaviour of supported
+    /// commands.
     pub fn new_with_term_encoding() -> Self {
         let mut egraph = EGraph::default();
         egraph.proof_state.original_typechecking = Some(Box::new(egraph.clone()));
         egraph
     }
 
-    /// WARNING: this should be called before any commands are added to the e-graph.
+    /// Enable the term-encoding pipeline on an existing `EGraph`.
+    ///
+    /// This is primarily a convenience for builder-style APIs that start with
+    /// `EGraph::default()` before deciding whether term encoding is required.  The
+    /// e-graph must still be empty when this is invoked; enabling term encoding
+    /// after commands have been added is unsupported and will lead to panics when
+    /// encoding is attempted.
     pub fn with_term_encoding_enabled(mut self) -> Self {
         self.proof_state.original_typechecking = Some(Box::new(self.clone()));
         self

@@ -1,3 +1,79 @@
+//! Utilities for rewriting an [`EGraph`](crate::EGraph) into its "term encoding" form.
+//!
+//! The term encoding instruments an egglog program so that every constructor and
+//! function call is backed by explicit term tables, view tables, and per-sort
+//! union-find structures.  This makes canonical representatives and their
+//! equality proofs first-class data, paving the way for proof production while
+//! keeping the operational semantics equivalent to the standard encoding (for the
+//! subset of commands that are currently supported).
+//!
+//! The transformation is triggered when an `EGraph` is created with
+//! [`EGraph::new_with_term_encoding`](crate::EGraph::new_with_term_encoding) or
+//! converted via [`EGraph::with_term_encoding_enabled`](crate::EGraph::with_term_encoding_enabled).
+//!
+//! # Example term encoding output
+//! Consider a tiny program that defines a pure arithmetic helper and checks a fact about it:
+//!
+//! ```text
+//! (function add (i64 i64) i64 :merge old)
+//! (check (= (add 0 0) 0))
+//! ```
+//!
+//! Lowering the program with term encoding expands it to the following commands:
+//!
+//! ```text
+//! (ruleset parent)
+//! (ruleset single_parent)
+//! (ruleset rebuilding)
+//! (ruleset rebuilding_cleanup)
+//! (ruleset delete_subsume_ruleset)
+//! (sort _view1)
+//! (constructor add (i64 i64 i64) @view1)
+//! (constructor addView (i64 i64 i64) @view1)
+//! (constructor to_delete_add (i64 i64) @view1)
+//! (constructor to_subsume_add (i64 i64) @view1)
+//! (sort _mergecleanup8)
+//! (constructor _mergecleanup7 (i64 i64) @mergecleanup8)
+//! (rule ((addView c0_ c1_ old)
+//!        (addView c0_ c1_ new)
+//!        (!= old new)
+//!        (= (ordering-max old new) new))
+//!       ((addView c0_ c1_ old)
+//!        (@mergecleanup7 old old)
+//!        (@mergecleanup7 old new))
+//!         :ruleset rebuilding :name "_merge_rule2")
+//! (rule ((@mergecleanup7 merged old)
+//!        (addView c0_ c1_ merged)
+//!        (addView c0_ c1_ old)
+//!        (!= merged old))
+//!       ((delete (addView c0_ c1_ old)))
+//!         :ruleset rebuilding_cleanup :name "_merge_cleanup3")
+//! (rule ((to_delete_add c0_ c1_)
+//!        (addView c0_ c1_ out))
+//!       ((delete (addView c0_ c1_ out))
+//!        (delete (to_delete_add c0_ c1_)))
+//!         :ruleset delete_subsume_ruleset :name "_delete_rule9")
+//! (rule ((to_subsume_add c0_ c1_)
+//!        (addView c0_ c1_ out))
+//!       ((delete (addView c0_ c1_ out)))
+//!         :ruleset delete_subsume_ruleset :name "_delete_rule9_subsume")
+//! (check (addView 0 0 @v10)
+//! (= @v10 0))
+//! (run-schedule (seq (saturate (seq (run rebuilding_cleanup) (saturate (seq (run single_parent))) (saturate (seq (run parent))) (run rebuilding))) (run delete_subsume_ruleset)))
+//! ```
+//!
+//! *The new rulesets* orchestrate maintenance for per-sort union-find tables (`parent` and `single_parent`),
+//! rebuild-time congruence (`rebuilding` + `rebuilding_cleanup`), and deferred deletions (`delete_subsume_ruleset`).
+//!
+//! *The constructors* materialise term tables (`add`) alongside their view tables (`addView`) and
+//! housekeeping helpers (`to_delete_add`, `to_subsume_add`, and the `_mergecleanup*` pair).
+//!
+//! *The extra rules* keep the view tables and union-find tables coherent by pruning stale rows and
+//! ensuring that congruent applications collapse to a single canonical representative.
+//!
+//! *Original commands* are rewritten to reference these structures. The `check` now reasons about
+//! the canonical representative produced by `addView`, and the trailing `run-schedule` executes the
+//! maintenance rules so that the encoded program stays behaviourally equivalent to the uninstrumented version.
 use crate::ast::GenericCommand;
 use crate::typechecking::FuncType;
 use crate::*;
@@ -1112,5 +1188,68 @@ pub fn command_supports_proof_encoding(command: &ResolvedCommand) -> bool {
         ResolvedCommand::Function { merge: None, .. } => false,
         // delete or subsume on custom functions isn't supported
         _ => true,
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::ast::Parser;
+    use crate::ast::desugar::desugar_command;
+    use crate::ast::proof_global_remover;
+
+    fn term_encode(source: &str) -> Vec<Command> {
+        let mut egraph = crate::EGraph::new_with_term_encoding();
+        let mut parser = Parser::default();
+        let program = parser
+            .get_program_from_string(None, source)
+            .expect("failed to parse program");
+        let mut ncommands = Vec::new();
+        for command in program {
+            let desugared =
+                desugar_command(command, &mut parser).expect("failed to desugar command");
+            ncommands.extend(desugared);
+        }
+
+        let mut resolved = egraph
+            .typecheck_program(&ncommands)
+            .expect("failed to typecheck program");
+        resolved = proof_global_remover::remove_globals(resolved, &mut parser.symbol_gen);
+        TermState::add_term_encoding(&mut egraph, resolved)
+    }
+
+    #[test]
+    fn doc_example_add_function() {
+        let commands = term_encode(
+            r#"
+            (function add (i64 i64) i64 :merge old)
+            (check (= (add 0 0) 0))
+            "#,
+        );
+
+        let rendered: Vec<String> = commands.iter().map(|cmd| cmd.to_string()).collect();
+        let expected = vec![
+            "(ruleset parent)".to_string(),
+            "(ruleset single_parent)".to_string(),
+            "(ruleset rebuilding)".to_string(),
+            "(ruleset rebuilding_cleanup)".to_string(),
+            "(ruleset delete_subsume_ruleset)".to_string(),
+            "(sort _view1)".to_string(),
+            "(constructor add (i64 i64 i64) @view1)".to_string(),
+            "(constructor addView (i64 i64 i64) @view1)".to_string(),
+            "(constructor to_delete_add (i64 i64) @view1)".to_string(),
+            "(constructor to_subsume_add (i64 i64) @view1)".to_string(),
+            "(sort _mergecleanup8)".to_string(),
+            "(constructor _mergecleanup7 (i64 i64) @mergecleanup8)".to_string(),
+            "(rule ((addView c0_ c1_ old)\n       (addView c0_ c1_ new)\n       (!= old new)\n       (= (ordering-max old new) new))\n      ((addView c0_ c1_ old)\n       (@mergecleanup7 old old)\n       (@mergecleanup7 old new))\n        :ruleset rebuilding :name \"_merge_rule2\")".to_string(),
+            "(rule ((@mergecleanup7 merged old)\n       (addView c0_ c1_ merged)\n       (addView c0_ c1_ old)\n       (!= merged old))\n      ((delete (addView c0_ c1_ old)))\n        :ruleset rebuilding_cleanup :name \"_merge_cleanup3\")".to_string(),
+            "(rule ((to_delete_add c0_ c1_)\n       (addView c0_ c1_ out))\n      ((delete (addView c0_ c1_ out))\n       (delete (to_delete_add c0_ c1_)))\n        :ruleset delete_subsume_ruleset :name \"_delete_rule9\")".to_string(),
+            "(rule ((to_subsume_add c0_ c1_)\n       (addView c0_ c1_ out))\n      ((delete (addView c0_ c1_ out)))\n        :ruleset delete_subsume_ruleset :name \"_delete_rule9_subsume\")".to_string(),
+            "(check (addView 0 0 @v10)\n(= @v10 0))".to_string(),
+            "(run-schedule (seq (saturate (seq (run rebuilding_cleanup) (saturate (seq (run single_parent))) (saturate (seq (run parent))) (run rebuilding))) (run delete_subsume_ruleset)))".to_string(),
+        ];
+
+        assert!(rendered.len() >= expected.len());
+        assert_eq!(&rendered[..expected.len()], expected);
     }
 }
