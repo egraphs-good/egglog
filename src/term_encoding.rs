@@ -539,19 +539,15 @@ impl<'a> TermState<'a> {
             "
 (sort {proof_list_sort})
 (sort {ast_sort}) ;; wrap sorts in this for proofs
+(sort {justification_datatype})
+(sort {proof_datatype})
 
-(datatype {justification_datatype}
-    ({fiat_constructor})
-    ({rule_constructor}
-        String ;; rule name
-        {proof_list_sort} ;; proofs for body
-    )
-    ({merge_fn_constructor}
-        String ;; function name
-        {proof_datatype} ;; proof for old term
-        {proof_datatype} ;; proof for new term
-        )
-    )
+;; fiat justification for globals
+(constructor {fiat_constructor} () {justification_datatype})
+;; rule justification- name of rule and one proof per fact in the query
+(constructor {rule_constructor} (String {proof_list_sort}) {justification_datatype})
+;; merge function justification- name of function and two proofs for the two terms being merged
+(constructor {merge_fn_constructor} (String {proof_datatype} {proof_datatype})
 
 
 ;; prove a grounded equality between two terms
@@ -580,6 +576,9 @@ impl<'a> TermState<'a> {
         let view_proof_name = self.view_proof_name(&fdecl.name);
         let proof_type = self.proof_names().proof_datatype.clone();
 
+        // A view proof gives a proof that the representative term t_r equals the term in the view.
+        // Example: (AddView 2 3 t_r) proves the proposition that t_r = Add(2, 3) in that direction.
+        // This direction makes adding more proofs easier.
         format!(
             "
             (function {view_proof_name} ({view_sorts}) {proof_type} :merge old)
