@@ -368,15 +368,27 @@ impl EGraph {
         egraph
     }
 
+    /// Create a new e-graph with proof generation enabled.
+    pub fn new_with_proofs() -> Self {
+        let mut egraph = EGraph::new_with_term_encoding();
+        egraph.proof_state.proofs_enabled = true;
+        egraph
+    }
+
     /// Enable the term-encoding pipeline on an existing `EGraph`.
     ///
-    /// This is primarily a convenience for builder-style APIs that start with
-    /// `EGraph::default()` before deciding whether term encoding is required.  The
-    /// e-graph must still be empty when this is invoked; enabling term encoding
-    /// after commands have been added is unsupported and will lead to panics when
-    /// encoding is attempted.
-    pub fn with_term_encoding_enabled(mut self) -> Self {
+    /// This method is to support the current CLI implementation with egglog-experimental (https://github.com/egraphs-good/egglog/issues/768)
+    pub(crate) fn with_term_encoding_enabled(mut self) -> Self {
         self.proof_state.original_typechecking = Some(Box::new(self.clone()));
+        self
+    }
+
+    /// Enable proof generation on this e-graph.
+    /// TODO proofs should be turned on during creation of the e-graph, not afterwards.
+    /// This method is to support the current CLI implementation with egglog-experimental (https://github.com/egraphs-good/egglog/issues/768)
+    pub(crate) fn with_proofs_enabled(mut self) -> Self {
+        self = self.with_term_encoding_enabled();
+        self.proof_state.proofs_enabled = true;
         self
     }
 

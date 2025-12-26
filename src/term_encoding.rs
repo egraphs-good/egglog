@@ -114,6 +114,7 @@ impl ProofNames {
     }
 }
 
+// TODO refactor so that encoding state is optional on the e-graph, ProofNames not optional on EncodingState. Then we don't have to clone proof names everywhere.
 #[derive(Default, Clone)]
 pub(crate) struct EncodingState {
     pub uf_parent: HashMap<String, String>,
@@ -217,7 +218,7 @@ impl<'a> TermState<'a> {
         let pname = self.uf_name(sort_name);
         let fresh_sort = self.egraph.parser.symbol_gen.fresh("uf");
         let fresh_name = self.egraph.parser.symbol_gen.fresh("uf_update");
-        let proof_code = if self.egraph.proof_state.proofs_enabled {
+        let proof_tables = if self.egraph.proof_state.proofs_enabled {
             let proof_type = self.proof_names().proof_datatype.clone();
             let ast_sort = self.proof_names().ast_sort.clone();
             let uf_proof_name = self.uf_proof_name(sort_name);
@@ -230,22 +231,68 @@ impl<'a> TermState<'a> {
             "".to_string()
         };
 
+        let (proof_query1, proof_action1) = if self.egraph.proof_state.proofs_enabled {
+            let uf_proof_name = self.uf_proof_name(sort_name);
+            let p1_fresh = self.egraph.parser.symbol_gen.fresh("p1");
+            let p2_fresh = self.egraph.parser.symbol_gen.fresh("p2");
+            let trans_constructor = &self.proof_names().eq_trans_constructor;
+
+            (
+                format!(
+                    "(= {p1_fresh} ({uf_proof_name} a b))
+                 (= {p2_fresh} ({uf_proof_name} b c))"
+                ),
+                format!(
+                    "(set ({uf_proof_name} a c)
+                      ({trans_constructor} {p1_fresh} {p2_fresh}))"
+                ),
+            )
+        } else {
+            ("".to_string(), "".to_string())
+        };
+        let (proof_query2, proof_action2) = if self.egraph.proof_state.proofs_enabled {
+            let uf_proof_name = self.uf_proof_name(sort_name);
+            let p_fresh = self.egraph.parser.symbol_gen.fresh("p");
+            let p2_fresh = self.egraph.parser.symbol_gen.fresh("p2");
+            let trans_constructor = self.proof_names().eq_trans_constructor.clone();
+            let symm_constructor = self.proof_names().eq_sym_constructor.clone();
+            (
+                format!(
+                    "(= {p_fresh} ({uf_proof_name} a b))
+                     (= {p2_fresh} ({uf_proof_name} a c))"
+                ),
+                format!(
+                    "(set ({uf_proof_name} b c)
+                      ({trans_constructor}
+                        ({symm_constructor} {p_fresh})
+                        {p2_fresh}))"
+                ),
+            )
+        } else {
+            ("".to_string(), "".to_string())
+        };
+
         self.parse_program(&format!(
             "(sort {fresh_sort})
              (constructor {pname} ({sort_name} {sort_name}) {fresh_sort})
-             {proof_code}
+             {proof_tables}
              (rule (({pname} a b)
                     ({pname} b c)
-                    (!= b c))
+                    (!= b c)
+                    {proof_query1})
                   ((delete ({pname} a b))
-                   ({pname} a c))
+                   ({pname} a c)
+                   {proof_action1})
                    :ruleset {}
                    :name \"{fresh_name}\")
              (rule (({pname} a b)
                     ({pname} a c)
-                    (!= b c))
-                  ((delete ({pname} a (ordering-max b c)))
-                   ({pname} (ordering-max b c) (ordering-min b c)))
+                    (!= b c)
+                    (= (ordering-max b c) b)
+                    {proof_query2})
+                  ((delete ({pname} a b))
+                   ({pname} b c)
+                    {proof_action2})
                    :ruleset {}
                    :name \"singleparent{fresh_name}\")
                    ",
@@ -1122,6 +1169,7 @@ impl<'a> TermState<'a> {
     }
 
     fn parse_program(&mut self, input: &str) -> Vec<Command> {
+        eprintln!("Parsing program:\n{}", input);
         self.egraph.parser.ensure_no_reserved_symbols = false;
         let res = self.egraph.parser.get_program_from_string(None, input);
         self.egraph.parser.ensure_no_reserved_symbols = true;
