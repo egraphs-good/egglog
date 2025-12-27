@@ -24,6 +24,7 @@ pub mod scheduler;
 mod serialize;
 pub mod sort;
 mod term_encoding;
+mod term_encoding_helpers;
 mod termdag;
 mod typechecking;
 pub mod util;
@@ -297,9 +298,11 @@ impl Debug for Function {
 
 impl Default for EGraph {
     fn default() -> Self {
+        let mut parser = Parser::default();
+        let proof_state = EncodingState::new(&mut parser.symbol_gen);
         let mut eg = Self {
             backend: Default::default(),
-            parser: Default::default(),
+            parser,
             names: Default::default(),
             pushed_egraph: Default::default(),
             functions: Default::default(),
@@ -313,7 +316,7 @@ impl Default for EGraph {
             strict_mode: false,
             warned_about_missing_global_prefix: false,
             command_macros: Default::default(),
-            proof_state: Default::default(),
+            proof_state,
         };
 
         add_base_sort(&mut eg, UnitSort, span!()).unwrap();

@@ -1,4 +1,4 @@
-use egglog::{extract::DefaultCost, *};
+use egglog::{ast::{ResolvedCommand, sanitize_internal_names}, extract::DefaultCost, *};
 use egglog_ast::span::{RustSpan, Span};
 
 #[test]
@@ -965,4 +965,48 @@ fn test_serialize_message_max_calls_per_function() {
     });
     assert!(!serialize_output.is_complete());
     assert_eq!(serialize_output.omitted_description(), "Truncated: mk\n");
+}
+
+#[test]
+fn math_microbenchmark_term_encoding_roundtrip() {
+    fn render_program(commands: &[ResolvedCommand]) -> String {
+        let text = sanitize_internal_names(commands).iter()
+            .map(|cmd| cmd.to_string())
+            .collect::<Vec<_>>()
+            .join("\n");
+        format!("{text}\n")
+    }
+
+    let path = std::path::Path::new("tests/math-microbenchmark.egg");
+    let source = std::fs::read_to_string(path)
+        .unwrap_or_else(|err| panic!("failed to read {}: {err}", path.display()));
+
+    // 1. Desugar the program with term encoding enabled.
+    let mut egraph = EGraph::new_with_term_encoding();
+    let desugared_once = egraph
+        .desugar_program(Some(path.display().to_string()), &source)
+        .expect("term-encoding desugaring should succeed");
+    let text_once = render_program(&desugared_once);
+
+    // 2. Parse and desugar the rendered program with a fresh e-graph.
+    let mut egraph = EGraph::default();
+    let desugared_twice = egraph
+        .desugar_program(None, &text_once)
+        .expect("second desugaring should succeed");
+    let text_twice = render_program(&desugared_twice);
+
+    // 3. Parse and desugar again to ensure stability using another fresh e-graph.
+    let mut egraph = EGraph::default();
+    let desugared_thrice = egraph
+        .desugar_program(None, &text_twice)
+        .expect("third desugaring should succeed");
+    let text_thrice = render_program(&desugared_thrice);
+
+    assert_eq!(text_twice, text_thrice, "desugaring should stabilize");
+
+    // 4. Run the stabilized program using term encoding.
+    let mut runner = EGraph::default();
+    runner
+        .parse_and_run_program(None, &text_thrice)
+        .expect("final program should execute successfully");
 }
