@@ -863,6 +863,10 @@ impl<'a> TermState<'a> {
         res
     }
 
+    /// Instrument a rule to use term encoding. This involves using the view tables in facts,
+    /// adding to term and view tables in actions.
+    /// When proofs are enabled we query proof tables, then build a justification for the rule in the actions.
+    /// Finally, each view update also updates the proof tables.
     fn instrument_rule(&mut self, rule: &ResolvedRule) -> Vec<Command> {
         let facts = self.instrument_facts(&rule.body);
         // TODO get rule proof
@@ -870,8 +874,8 @@ impl<'a> TermState<'a> {
         let actions = self.instrument_actions(&rule.head.0, &fiat);
         let name = &rule.name;
         let instrumented = format!(
-            "(rule ({} )
-                   ({} )
+            "(rule ({})
+                   ({})
                     {}
                     :name \"{name}\")",
             ListDisplay(facts, " "),
@@ -1112,7 +1116,7 @@ mod tests {
             "#,
         );
 
-        let snapshot = commands
+        let snapshot = sanitize_internal_names(&commands)
             .iter()
             .map(|cmd| cmd.to_string())
             .collect::<Vec<_>>()
@@ -1132,7 +1136,7 @@ mod tests {
             "#,
         );
 
-        let snapshot = commands
+        let snapshot = sanitize_internal_names(&commands)
             .iter()
             .map(|cmd| cmd.to_string())
             .collect::<Vec<_>>()

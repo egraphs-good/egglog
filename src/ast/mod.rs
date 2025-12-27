@@ -1390,6 +1390,8 @@ where
                     .map(|variant| Variant {
                         span: variant.span,
                         name: fun(variant.name),
+                        // Redundant closure helps with type inference here
+                        #[allow(clippy::redundant_closure)]
                         types: variant.types.into_iter().map(|ty| fun(ty)).collect(),
                         cost: variant.cost,
                         unextractable: variant.unextractable,
@@ -1473,8 +1475,8 @@ where
             GenericCommand::Rule { rule } => {
                 let rule = GenericRule {
                     span: rule.span,
-                    name: rule.name,
-                    ruleset: rule.ruleset,
+                    name: fun(rule.name),
+                    ruleset: fun(rule.ruleset),
                     head: rule.head,
                     body: rule.body,
                 };
