@@ -403,7 +403,7 @@ impl<'a> TermState<'a> {
             updated.push(merge_fn_var.clone());
             let term_and_proof = self.update_view(name, &updated, &rule_proof_var);
             let fresh_constructor = self.egraph.parser.symbol_gen.fresh("mergecleanup");
-            let fresh_sort = self.egraph.parser.symbol_gen.fresh("mergecleanup");
+            let fresh_sort = self.egraph.parser.symbol_gen.fresh("mergecleanupsort");
             let output_sort = fdecl.schema.output.clone();
 
             // The first runs the merge function adding a new row.
@@ -547,12 +547,11 @@ impl<'a> TermState<'a> {
 ;; rule justification- name of rule and one proof per fact in the query
 (constructor {rule_constructor} (String {proof_list_sort}) {justification_datatype})
 ;; merge function justification- name of function and two proofs for the two terms being merged
-(constructor {merge_fn_constructor} (String {proof_datatype} {proof_datatype}))
+(constructor {merge_fn_constructor} (String {proof_datatype} {proof_datatype}) {justification_datatype})
 
 
 ;; proofs all prove a grounded equality between two terms
 ;; proof by refl is not allowed- must be justified by fiat or rule
-
 ;; proves a term is equal to another
 (constructor {eq_constructor} ({justification_datatype} {ast_sort} {ast_sort}) {proof_datatype})
 ;; transitivity of equality proofs
