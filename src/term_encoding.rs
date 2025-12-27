@@ -92,6 +92,9 @@ pub(crate) struct ProofNames {
     pub eq_trans_constructor: String,
     pub eq_sym_constructor: String,
     pub congr_constructor: String,
+    /// For a given function symbol, the name of the function that converts to the AST type.
+    pub sort_to_ast_constructor: HashMap<String, String>,
+    pub fn_to_term_sort: HashMap<String, String>,
 }
 
 impl ProofNames {
@@ -108,6 +111,8 @@ impl ProofNames {
             eq_trans_constructor: symbol_gen.fresh("Trans"),
             eq_sym_constructor: symbol_gen.fresh("Sym"),
             congr_constructor: symbol_gen.fresh("Congr"),
+            sort_to_ast_constructor: HashMap::default(),
+            fn_to_term_sort: HashMap::default(),
         }
     }
 }
@@ -157,10 +162,6 @@ impl<'a> TermState<'a> {
 
     fn single_parent_ruleset_name(&self) -> String {
         "single_parent".to_string()
-    }
-
-    fn to_ast_name(&self, sort: &str) -> String {
-        format!("AST{}", sort,)
     }
 
     fn proof_names(&mut self) -> &ProofNames {
@@ -218,12 +219,10 @@ impl<'a> TermState<'a> {
         let fresh_name = self.egraph.parser.symbol_gen.fresh("uf_update");
         let proof_tables = if self.egraph.proof_state.proofs_enabled {
             let proof_type = self.proof_names().proof_datatype.clone();
-            let ast_sort = self.proof_names().ast_sort.clone();
             let uf_proof_name = self.uf_proof_name(sort_name);
-            let to_ast_name = self.to_ast_name(sort_name);
             format!(
                 "(function {uf_proof_name} ({sort_name} {sort_name}) {proof_type} :merge old)
-                 (constructor {to_ast_name} ({sort_name}) {ast_sort})"
+                 "
             )
         } else {
             "".to_string()
@@ -382,11 +381,11 @@ impl<'a> TermState<'a> {
             } else {
                 "".to_string()
             };
-            let rule_proof_var = self.fresh_var();
+            let justification_var = self.fresh_var();
             let rule_proof = if self.egraph.proof_state.proofs_enabled {
                 let merge_fn_constructor = self.proof_names().merge_fn_constructor.clone();
                 format!(
-                    "(let {rule_proof_var}
+                    "(let {justification_var}
                             ({merge_fn_constructor} \"{name}\"
                                   {p1_fresh}
                                   {p2_fresh}))"
@@ -397,11 +396,11 @@ impl<'a> TermState<'a> {
 
             let mut merge_fn_code = vec![];
             let merge_fn_var =
-                self.instrument_action_expr(merge_fn, &mut merge_fn_code, &rule_proof_var);
+                self.instrument_action_expr(merge_fn, &mut merge_fn_code, &justification_var);
             let merge_fn_code_str = merge_fn_code.join("\n");
             let mut updated = child_names.clone();
             updated.push(merge_fn_var.clone());
-            let term_and_proof = self.update_view(name, &updated, &rule_proof_var);
+            let term_and_proof = self.update_view(name, &updated, &justification_var, false);
             let fresh_constructor = self.egraph.parser.symbol_gen.fresh("mergecleanup");
             let fresh_sort = self.egraph.parser.symbol_gen.fresh("mergecleanupsort");
             let output_sort = fdecl.schema.output.clone();
@@ -478,23 +477,60 @@ impl<'a> TermState<'a> {
         let view_sorts = format!("{in_sorts} {out_type}",);
         let proof_constructors = self.proof_functions(fdecl, &view_sorts);
 
+        let sort_ty = if fdecl.subtype == FunctionSubtype::Constructor {
+            schema.output.clone()
+        } else {
+            fresh_sort.clone()
+        };
+        let to_ast_constructor = if self.egraph.proof_state.proofs_enabled {
+            if self
+                .proof_names()
+                .sort_to_ast_constructor
+                .get(&sort_ty)
+                .is_none()
+            {
+                let to_ast_name = self
+                    .egraph
+                    .parser
+                    .symbol_gen
+                    .fresh(&format!("Ast{}", sort_ty));
+                self.egraph
+                    .proof_state
+                    .proof_names
+                    .as_mut()
+                    .unwrap()
+                    .sort_to_ast_constructor
+                    .insert(sort_ty.clone(), to_ast_name.clone());
+                format!("(constructor {to_ast_name} ({term_sorts}) {out_type})")
+            } else {
+                "".to_string()
+            }
+        } else {
+            "".to_string()
+        };
+
+        if self.egraph.proof_state.proofs_enabled {
+            self.egraph
+                .proof_state
+                .proof_names
+                .as_mut()
+                .unwrap()
+                .fn_to_term_sort
+                .insert(name.clone(), sort_ty.clone());
+        }
         // the term table has child_sorts as inputs
         // the view table has child_sorts + the leader term for the eclass
         self.parse_program(&format!(
             "
             (sort {fresh_sort})
-            (constructor {name} ({term_sorts}) {})
+            (constructor {name} ({term_sorts}) {sort_ty})
             (constructor {view_name} ({view_sorts}) {fresh_sort})
             (constructor {to_delete_name} ({in_sorts}) {fresh_sort})
             (constructor {subsumed_name} ({in_sorts}) {fresh_sort})
+            {to_ast_constructor}
             {proof_constructors}
             {merge_rule}
             {delete_rule}",
-            if fdecl.subtype == FunctionSubtype::Constructor {
-                schema.output.clone()
-            } else {
-                fresh_sort.clone()
-            },
         ))
     }
 
@@ -549,22 +585,21 @@ impl<'a> TermState<'a> {
 ;; merge function justification- name of function and two proofs for the two terms being merged
 (constructor {merge_fn_constructor} (String {proof_datatype} {proof_datatype}) {justification_datatype})
 
-
-;; proofs all prove a grounded equality between two terms
-;; proof by refl is not allowed- must be justified by fiat or rule
-;; proves a term is equal to another
-(constructor {eq_constructor} ({justification_datatype} {ast_sort} {ast_sort}) {proof_datatype})
 ;; transitivity of equality proofs
-(constructor {eq_trans_constructor} ({proof_datatype} {proof_datatype}) {proof_datatype})
+(constructor {eq_trans_constructor} ({proof_datatype} {proof_datatype}) {justification_datatype})
 
 ;; symmetry of equality proofs
-
-(constructor  {eq_sym_constructor} ({proof_datatype}) {proof_datatype})
+(constructor  {eq_sym_constructor} ({proof_datatype}) {justification_datatype})
 ;; given a proof that t1 = f(..., c1, ...) and a term f(..., c2, ...)
 ;; and the child index of c1 in the term f(..., c1, ...)
 ;; and a proof that c1 = c2,
-;; produces a proof that t1 = f(..., c2, ...)
-(constructor  {congr_constructor} ({proof_datatype} i64 {proof_datatype}) {proof_datatype})
+;; produces a justification that t1 = f(..., c2, ...)
+(constructor  {congr_constructor} ({proof_datatype} i64 {proof_datatype}) {justification_datatype})
+
+
+;; A proof shows that two ASTs are equal, justified by some justification
+(constructor {eq_constructor} ({justification_datatype} {ast_sort} {ast_sort}) {proof_datatype})
+
                 "
         )
     }
@@ -624,7 +659,7 @@ impl<'a> TermState<'a> {
             let view_prf = self.query_view_and_get_proof(&fdecl.name, &children_vec);
 
             let (pf_code, pf_var) = if self.egraph.proof_state.proofs_enabled {
-                let pf_var = self.fresh_var();
+                let justification = self.fresh_var();
                 let eq_trans_constructor = self.proof_names().eq_trans_constructor.clone();
                 let congr_constructor = self.proof_names().congr_constructor.clone();
 
@@ -633,7 +668,7 @@ impl<'a> TermState<'a> {
                 (
                     if fdecl.subtype == FunctionSubtype::Constructor && i == types.len() - 1 {
                         format!(
-                            "(let {pf_var}
+                            "(let {justification}
                                ({eq_trans_constructor}
                                   {updated_child_prf}
                                   {view_prf}))",
@@ -641,18 +676,18 @@ impl<'a> TermState<'a> {
                     } else {
                         // otherwise we are updating a child via congruence
                         format!(
-                            "(let {pf_var}
-                           ({congr_constructor} {view_prf} {i}
-                                  {updated_child_prf}))
+                            "(let {justification}
+                                  ({congr_constructor} {view_prf} {i}
+                                                       {updated_child_prf}))
                     ",
                         )
                     },
-                    pf_var,
+                    justification,
                 )
             } else {
                 ("".to_string(), "".to_string())
             };
-            let updated_view = self.update_view(&fdecl.name, &children_updated, &pf_var);
+            let updated_view = self.update_view(&fdecl.name, &children_updated, &pf_var, fdecl.subtype == FunctionSubtype::Constructor);
 
             // Make a rule that updates the view
             let rule = format!(
@@ -871,8 +906,22 @@ impl<'a> TermState<'a> {
         (res, fv)
     }
 
+    fn fname_to_ast_name(&mut self, fname: &str) -> String {
+        let fn_sort = self
+            .proof_names()
+            .fn_to_term_sort
+            .get(fname)
+            .unwrap()
+            .clone();
+        self.proof_names()
+            .sort_to_ast_constructor
+            .get(&fn_sort)
+            .unwrap()
+            .clone()
+    }
+
     /// Update the view, with arguments including the eclass for constructors.
-    fn update_view(&mut self, fname: &str, args: &[String], pf: &str) -> String {
+    fn update_view(&mut self, fname: &str, args: &[String], justification: &str, is_constructor: bool) -> String {
         let mut res = vec![];
         res.push(format!(
             "({} {})",
@@ -882,8 +931,21 @@ impl<'a> TermState<'a> {
 
         if self.egraph.proof_state.proofs_enabled {
             let proof_name = self.view_proof_name(fname);
+            let eq_constructor = self.proof_names().eq_constructor.clone();
+            let to_ast_constructor = self.fname_to_ast_name(fname);
+            let (term1, term2) = if is_constructor {
+                let term_args = args[..args.len() - 1].to_vec();
+                let rep = args[args.len() - 1].clone();
+                (
+                    rep,
+                    format!("({} {})", fname, ListDisplay(&term_args, " ")),
+                )
+            } else {
+                let term = format!("({} {})", fname, ListDisplay(args, " "));
+                (term.clone(), term)
+            };
             res.push(format!(
-                "(set ({proof_name} {}) {pf})",
+                "(set ({proof_name} {}) ({eq_constructor} {justification} ({to_ast_constructor} {term1}) ({to_ast_constructor} {term2})))",
                 ListDisplay(args, " ")
             ));
         }
@@ -960,10 +1022,14 @@ impl<'a> TermState<'a> {
     }
 
     /// In proof mode, rule_proof justifies the actions taken.
-    fn instrument_actions(&mut self, actions: &[ResolvedAction], rule_proof: &str) -> Vec<String> {
+    fn instrument_actions(
+        &mut self,
+        actions: &[ResolvedAction],
+        justification: &str,
+    ) -> Vec<String> {
         let mut res = vec![];
         for action in actions {
-            res.extend(self.instrument_action(action, rule_proof));
+            res.extend(self.instrument_action(action, justification));
         }
         res
     }
