@@ -1,6 +1,6 @@
 use std::path::PathBuf;
 
-use egglog::*;
+use egglog::{ast::sanitize_internal_names, *};
 use hashbrown::HashSet;
 use libtest_mimic::Trial;
 
@@ -54,13 +54,15 @@ impl Run {
 
     fn desugar_program(&self, program: &str) -> String {
         let mut egraph = self.egraph();
-        egraph
-            .desugar_program(self.path.to_str().map(String::from), program)
-            .unwrap()
-            .iter()
-            .map(|s| s.to_string())
-            .collect::<Vec<_>>()
-            .join("\n")
+        sanitize_internal_names(
+            &egraph
+                .desugar_program(self.path.to_str().map(String::from), program)
+                .unwrap(),
+        )
+        .iter()
+        .map(|s| s.to_string())
+        .collect::<Vec<_>>()
+        .join("\n")
     }
 
     fn test_program(&self, filename: Option<String>, program: &str, message: &str) {

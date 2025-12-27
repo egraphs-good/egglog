@@ -163,46 +163,64 @@ impl<'a> TermState<'a> {
             "".to_string()
         };
 
-        let (proof_query1, proof_action1) = if self.egraph.proof_state.proofs_enabled {
-            let uf_proof_name = self.uf_proof_name(sort_name);
-            let p1_fresh = self.egraph.parser.symbol_gen.fresh("p1");
-            let p2_fresh = self.egraph.parser.symbol_gen.fresh("p2");
-            let trans_constructor = &self.proof_names().eq_trans_constructor;
+        let (proof_query1, proof_action1, to_ast_constructor_code, proof_query2, proof_action2) =
+            if self.egraph.proof_state.proofs_enabled {
+                let uf_proof_name = self.uf_proof_name(sort_name);
+                let p1_fresh = self.egraph.parser.symbol_gen.fresh("p1");
+                let p2_fresh = self.egraph.parser.symbol_gen.fresh("p2");
+                assert!(
+                    self.proof_names()
+                        .sort_to_ast_constructor
+                        .get(sort_name)
+                        .is_none()
+                );
+                let to_ast_constructor = self
+                    .egraph
+                    .parser
+                    .symbol_gen
+                    .fresh(&format!("Ast{}", sort_name));
+                self.egraph
+                    .proof_state
+                    .proof_names
+                    .sort_to_ast_constructor
+                    .insert(sort_name.to_string(), to_ast_constructor.clone());
+                let uf_proof_name = self.uf_proof_name(sort_name);
+                let p_fresh = self.egraph.parser.symbol_gen.fresh("p");
+                let p2_fresh = self.egraph.parser.symbol_gen.fresh("p2");
+                let trans_constructor = &self.proof_names().eq_trans_constructor;
+                let symm_constructor = &self.proof_names().eq_sym_constructor;
+                let ast_sort = &self.proof_names().ast_sort;
 
-            (
-                format!(
-                    "(= {p1_fresh} ({uf_proof_name} a b))
+                (
+                    format!(
+                        "(= {p1_fresh} ({uf_proof_name} a b))
                      (= {p2_fresh} ({uf_proof_name} b c))"
-                ),
-                format!(
-                    "(set ({uf_proof_name} a c)
-                      ({trans_constructor} {p1_fresh} {p2_fresh}))"
-                ),
-            )
-        } else {
-            ("".to_string(), "".to_string())
-        };
-        let (proof_query2, proof_action2) = if self.egraph.proof_state.proofs_enabled {
-            let uf_proof_name = self.uf_proof_name(sort_name);
-            let p_fresh = self.egraph.parser.symbol_gen.fresh("p");
-            let p2_fresh = self.egraph.parser.symbol_gen.fresh("p2");
-            let trans_constructor = self.proof_names().eq_trans_constructor.clone();
-            let symm_constructor = self.proof_names().eq_sym_constructor.clone();
-            (
-                format!(
-                    "(= {p_fresh} ({uf_proof_name} a b))
-                     (= {p2_fresh} ({uf_proof_name} a c))"
-                ),
-                format!(
-                    "(set ({uf_proof_name} b c)
-                      ({trans_constructor}
-                        ({symm_constructor} {p_fresh})
-                        {p2_fresh}))"
-                ),
-            )
-        } else {
-            ("".to_string(), "".to_string())
-        };
+                    ),
+                    format!(
+                        "(set ({uf_proof_name} a c)
+                              ({trans_constructor} {p1_fresh} {p2_fresh}))"
+                    ),
+                    format!("(constructor {to_ast_constructor} ({sort_name}) {ast_sort})"),
+                    format!(
+                        "(= {p_fresh} ({uf_proof_name} a b))
+                         (= {p2_fresh} ({uf_proof_name} a c))"
+                    ),
+                    format!(
+                        "(set ({uf_proof_name} b c)
+                          ({trans_constructor}
+                             ({symm_constructor} {p_fresh})
+                             {p2_fresh}))"
+                    ),
+                )
+            } else {
+                (
+                    "".to_string(),
+                    "".to_string(),
+                    "".to_string(),
+                    "".to_string(),
+                    "".to_string(),
+                )
+            };
 
         let parent_direct_ruleset_name = self.parent_direct_ruleset_name();
         let single_parent_ruleset_name = self.proof_names().single_parent_ruleset_name.clone();
@@ -210,6 +228,7 @@ impl<'a> TermState<'a> {
         self.parse_program(&format!(
             "(sort {fresh_sort})
              (constructor {pname} ({sort_name} {sort_name}) {fresh_sort})
+             {to_ast_constructor_code}
              {proof_tables}
              (rule (({pname} a b)
                     ({pname} b c)
@@ -400,32 +419,6 @@ impl<'a> TermState<'a> {
         } else {
             fresh_sort.clone()
         };
-        let to_ast_constructor = if self.egraph.proof_state.proofs_enabled {
-            if self
-                .proof_names()
-                .sort_to_ast_constructor
-                .get(&view_sort)
-                .is_none()
-            {
-                let to_ast_name = self
-                    .egraph
-                    .parser
-                    .symbol_gen
-                    .fresh(&format!("Ast{}", view_sort));
-                let ast_sort = self.proof_names().ast_sort.clone();
-
-                self.egraph
-                    .proof_state
-                    .proof_names
-                    .sort_to_ast_constructor
-                    .insert(view_sort.clone(), to_ast_name.clone());
-                format!("(constructor {to_ast_name} ({view_sort}) {ast_sort})")
-            } else {
-                "".to_string()
-            }
-        } else {
-            "".to_string()
-        };
 
         if self.egraph.proof_state.proofs_enabled {
             self.egraph
@@ -444,7 +437,6 @@ impl<'a> TermState<'a> {
             (constructor {view_name} ({view_sorts}) {fresh_sort})
             (constructor {to_delete_name} ({in_sorts}) {fresh_sort})
             (constructor {subsumed_name} ({in_sorts}) {fresh_sort})
-            {to_ast_constructor}
             {proof_constructors}
             {merge_rule}
             {delete_rule}",
@@ -713,13 +705,7 @@ impl<'a> TermState<'a> {
 
     /// Update the view with  the given arguments.
     /// The arguments include the eclass for constructors.
-    fn update_view(
-        &mut self,
-        fname: &str,
-        args: &[String],
-        justification: &str,
-        is_constructor: bool,
-    ) -> String {
+    fn update_view(&mut self, fname: &str, args: &[String], proof: &str) -> String {
         let mut res = vec![];
         res.push(format!(
             "({} {})",
@@ -729,18 +715,8 @@ impl<'a> TermState<'a> {
 
         if self.egraph.proof_state.proofs_enabled {
             let proof_name = self.view_proof_name(fname);
-            let eq_constructor = self.proof_names().eq_constructor.clone();
-            let to_ast_constructor = self.fname_to_ast_name(fname);
-            let (term1, term2) = if is_constructor {
-                let term_args = args[..args.len() - 1].to_vec();
-                let rep = args[args.len() - 1].clone();
-                (rep, format!("({} {})", fname, ListDisplay(&term_args, " ")))
-            } else {
-                let term = format!("({} {})", fname, ListDisplay(args, " "));
-                (term.clone(), term)
-            };
             res.push(format!(
-                "(set ({proof_name} {}) ({eq_constructor} {justification} ({to_ast_constructor} {term1}) ({to_ast_constructor} {term2})))",
+                "(set ({proof_name} {}) {proof})",
                 ListDisplay(args, " ")
             ));
         }
