@@ -1390,9 +1390,7 @@ where
                     .map(|variant| Variant {
                         span: variant.span,
                         name: fun(variant.name),
-                        // Redundant closure helps with type inference here
-                        #[allow(clippy::redundant_closure)]
-                        types: variant.types.into_iter().map(|ty| fun(ty)).collect(),
+                        types: variant.types.into_iter().map(&mut *fun).collect(),
                         cost: variant.cost,
                         unextractable: variant.unextractable,
                     })
@@ -1411,6 +1409,8 @@ where
                                     .map(|variant| Variant {
                                         span: variant.span,
                                         name: fun(variant.name),
+                                        // Redundant closure helps with type inference here
+                                        #[allow(clippy::redundant_closure)]
                                         types: variant
                                             .types
                                             .into_iter()
@@ -1439,7 +1439,7 @@ where
                 span,
                 name: fun(name),
                 schema: Schema {
-                    input: schema.input.into_iter().map(|param| fun(param)).collect(),
+                    input: schema.input.into_iter().map(&mut *fun).collect(),
                     output: fun(schema.output),
                 },
                 cost,
@@ -1448,7 +1448,7 @@ where
             GenericCommand::Relation { span, name, inputs } => GenericCommand::Relation {
                 span,
                 name: fun(name),
-                inputs: inputs.into_iter().map(|input| fun(input)).collect(),
+                inputs: inputs.into_iter().map(&mut *fun).collect(),
             },
             GenericCommand::Function {
                 span,
@@ -1459,7 +1459,7 @@ where
                 span,
                 name: fun(name),
                 schema: Schema {
-                    input: schema.input.into_iter().map(|param| fun(param)).collect(),
+                    input: schema.input.into_iter().map(&mut *fun).collect(),
                     output: fun(schema.output),
                 },
                 merge,
@@ -1469,7 +1469,7 @@ where
                 GenericCommand::UnstableCombinedRuleset(
                     span,
                     fun(name),
-                    others.into_iter().map(|other| fun(other)).collect(),
+                    others.into_iter().map(&mut *fun).collect(),
                 )
             }
             GenericCommand::Rule { rule } => {
@@ -1503,7 +1503,7 @@ where
                 GenericCommand::PrintFunction(span, fun(name), n, file, mode)
             }
             GenericCommand::PrintSize(span, name) => {
-                GenericCommand::PrintSize(span, name.map(|n| fun(n)))
+                GenericCommand::PrintSize(span, name.map(fun))
             }
             GenericCommand::Input { span, name, file } => GenericCommand::Input {
                 span,
@@ -1672,7 +1672,7 @@ where
 {
     // first convert to unresolved
     let unresolved = program
-        .into_iter()
+        .iter()
         .map(|cmd| cmd.clone().make_unresolved())
         .collect::<Vec<_>>();
     // now count the max number of underscores in any name

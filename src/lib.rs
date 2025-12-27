@@ -1433,6 +1433,14 @@ impl EGraph {
             let mut new_typechecked = vec![];
             for new_cmd in term_encoding_added {
                 let desugared = desugar_command(new_cmd, &mut self.parser)?;
+                eprintln!(
+                    "typechecking after term encoding:\n{}",
+                    desugared
+                        .iter()
+                        .map(|c| format!("{}", c.to_command()))
+                        .collect::<Vec<_>>()
+                        .join("\n")
+                );
 
                 // Now typecheck using self, adding term type information.
                 let desugared_typechecked = self.typecheck_program(&desugared)?;
