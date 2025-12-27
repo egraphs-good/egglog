@@ -255,7 +255,9 @@ where
     if mode == RunMode::ShowDesugaredEgglog {
         return Ok(match egraph.desugar_program(filename, command) {
             Ok(desugared) => {
-                for line in desugared {
+                let sanitized = sanitize_internal_names(&desugared);
+
+                for line in sanitized {
                     writeln!(output, "{line}")?;
                 }
                 None
