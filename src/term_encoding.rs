@@ -150,14 +150,14 @@ impl<'a> TermState<'a> {
         } else {
             self.egraph.proof_state.uf_parent.insert(
                 sort.to_string(),
-                format!("{INTERNAL_SYMBOL_PREFIX}ufparent_{}", sort,),
+                format!("{INTERNAL_SYMBOL_PREFIX}ufparent_{}", sort),
             );
             self.egraph.proof_state.uf_parent[sort].clone()
         }
     }
 
     pub(crate) fn uf_proof_name(&mut self, sort: &str) -> String {
-        format!("{}Proof", self.uf_name(sort),)
+        format!("{}Proof", self.uf_name(sort))
     }
 
     fn single_parent_ruleset_name(&self) -> String {
@@ -269,6 +269,9 @@ impl<'a> TermState<'a> {
             ("".to_string(), "".to_string())
         };
 
+        let parent_direct_ruleset_name = self.parent_direct_ruleset_name();
+        let single_parent_ruleset_name = self.single_parent_ruleset_name();
+
         self.parse_program(&format!(
             "(sort {fresh_sort})
              (constructor {pname} ({sort_name} {sort_name}) {fresh_sort})
@@ -280,7 +283,7 @@ impl<'a> TermState<'a> {
                   ((delete ({pname} a b))
                    ({pname} a c)
                    {proof_action1})
-                   :ruleset {}
+                   :ruleset {parent_direct_ruleset_name}
                    :name \"{fresh_name}\")
              (rule (({pname} a b)
                     ({pname} a c)
@@ -290,25 +293,23 @@ impl<'a> TermState<'a> {
                   ((delete ({pname} a b))
                    ({pname} b c)
                     {proof_action2})
-                   :ruleset {}
+                   :ruleset {single_parent_ruleset_name}
                    :name \"singleparent{fresh_name}\")
                    ",
-            self.parent_direct_ruleset_name(),
-            self.single_parent_ruleset_name(),
         ))
     }
 
     // Each function/constructor gets a view table, the canonicalized e-nodes to accelerate e-matching.
     fn view_name(&self, name: &str) -> String {
-        format!("{}View", name,)
+        format!("{}View", name)
     }
 
     fn to_delete_name(&self, name: &str) -> String {
-        format!("to_delete_{}", name,)
+        format!("to_delete_{}", name)
     }
 
     fn subsumed_name(&self, name: &str) -> String {
-        format!("to_subsume_{}", name,)
+        format!("to_subsume_{}", name)
     }
 
     fn delete_subsume_ruleset_name(&self) -> String {
@@ -474,7 +475,7 @@ impl<'a> TermState<'a> {
                 schema.output.to_string()
             }
         );
-        let view_sorts = format!("{in_sorts} {out_type}",);
+        let view_sorts = format!("{in_sorts} {out_type}");
         let proof_constructors = self.proof_functions(fdecl, &view_sorts);
 
         let sort_ty = if fdecl.subtype == FunctionSubtype::Constructor {
@@ -538,7 +539,7 @@ impl<'a> TermState<'a> {
     /// A constructor view is more complex, representing f(c1, c2, c3, t_r) where t_r is a representative.
     /// A proof for a view proves that t_r = f(c1, c2, c3).
     fn view_proof_name(&self, name: &str) -> String {
-        format!("{}ViewProof", name,)
+        format!("{}ViewProof", name)
     }
 
     fn proof_header(&mut self) -> String {
@@ -687,7 +688,12 @@ impl<'a> TermState<'a> {
             } else {
                 ("".to_string(), "".to_string())
             };
-            let updated_view = self.update_view(&fdecl.name, &children_updated, &pf_var, fdecl.subtype == FunctionSubtype::Constructor);
+            let updated_view = self.update_view(
+                &fdecl.name,
+                &children_updated,
+                &pf_var,
+                fdecl.subtype == FunctionSubtype::Constructor,
+            );
 
             // Make a rule that updates the view
             let rule = format!(
@@ -921,7 +927,13 @@ impl<'a> TermState<'a> {
     }
 
     /// Update the view, with arguments including the eclass for constructors.
-    fn update_view(&mut self, fname: &str, args: &[String], justification: &str, is_constructor: bool) -> String {
+    fn update_view(
+        &mut self,
+        fname: &str,
+        args: &[String],
+        justification: &str,
+        is_constructor: bool,
+    ) -> String {
         let mut res = vec![];
         res.push(format!(
             "({} {})",
@@ -936,10 +948,7 @@ impl<'a> TermState<'a> {
             let (term1, term2) = if is_constructor {
                 let term_args = args[..args.len() - 1].to_vec();
                 let rep = args[args.len() - 1].clone();
-                (
-                    rep,
-                    format!("({} {})", fname, ListDisplay(&term_args, " ")),
-                )
+                (rep, format!("({} {})", fname, ListDisplay(&term_args, " ")))
             } else {
                 let term = format!("({} {})", fname, ListDisplay(args, " "));
                 (term.clone(), term)
