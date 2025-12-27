@@ -23,6 +23,7 @@ pub mod prelude;
 pub mod scheduler;
 mod serialize;
 pub mod sort;
+mod term_encoding;
 mod termdag;
 mod typechecking;
 pub mod util;
@@ -31,13 +32,12 @@ pub use command_macro::{CommandMacro, CommandMacroRegistry};
 // This is used to allow the `add_primitive` macro to work in
 // both this crate and other crates by referring to `::egglog`.
 extern crate self as egglog;
-use ast::*;
 pub use ast::{ResolvedExpr, ResolvedFact, ResolvedVar};
 #[cfg(feature = "bin")]
 pub use cli::*;
 use constraint::{Constraint, Problem, SimpleTypeConstraint, TypeConstraint};
-use core::ResolvedAtomTerm;
 pub use core::{Atom, AtomTerm};
+use core::{CoreActionContext, ResolvedAtomTerm};
 pub use core::{ResolvedCall, SpecializedPrimitive};
 pub use core_relations::{BaseValue, ContainerValue, ExecutionState, Value};
 use core_relations::{ExternalFunctionId, make_external_func};
@@ -75,7 +75,10 @@ pub use typechecking::TypeInfo;
 use util::*;
 
 use crate::ast::desugar::desugar_command;
+use crate::ast::*;
 use crate::core::{GenericActionsExt, ResolvedRuleExt};
+pub use crate::term_encoding::file_supports_proofs;
+use crate::term_encoding::{EncodingState, TermState, command_supports_proof_encoding};
 
 pub const GLOBAL_NAME_PREFIX: &str = "$";
 
@@ -104,6 +107,7 @@ impl<T> UserDefinedCommandOutput for T where T: Debug + std::fmt::Display + Send
 
 /// Output from a command.
 #[derive(Clone, Debug)]
+#[allow(clippy::large_enum_variant)]
 pub enum CommandOutput {
     /// The size of a function
     PrintFunctionSize(usize),
@@ -223,6 +227,7 @@ pub struct EGraph {
     warned_about_missing_global_prefix: bool,
     /// Registry for command-level macros
     command_macros: CommandMacroRegistry,
+    proof_state: EncodingState,
 }
 
 /// A user-defined command allows users to inject custom command that can be called
@@ -308,6 +313,7 @@ impl Default for EGraph {
             strict_mode: false,
             warned_about_missing_global_prefix: false,
             command_macros: Default::default(),
+            proof_state: Default::default(),
         };
 
         add_base_sort(&mut eg, UnitSort, span!()).unwrap();
@@ -348,6 +354,32 @@ impl Default for EGraph {
 pub struct NotFoundError(String);
 
 impl EGraph {
+    /// Create a new e-graph with the term-encoding pipeline enabled.
+    ///
+    /// In term-encoding mode the e-graph eagerly instruments every constructor
+    /// and function with auxiliary term tables, view tables, and per-sort
+    /// union-finds so that canonical representatives and their justifications are
+    /// materialized explicitly.  This makes it possible to record and emit
+    /// equality proofs while preserving the observable behaviour of supported
+    /// commands.
+    pub fn new_with_term_encoding() -> Self {
+        let mut egraph = EGraph::default();
+        egraph.proof_state.original_typechecking = Some(Box::new(egraph.clone()));
+        egraph
+    }
+
+    /// Enable the term-encoding pipeline on an existing `EGraph`.
+    ///
+    /// This is primarily a convenience for builder-style APIs that start with
+    /// `EGraph::default()` before deciding whether term encoding is required.  The
+    /// e-graph must still be empty when this is invoked; enabling term encoding
+    /// after commands have been added is unsupported and will lead to panics when
+    /// encoding is attempted.
+    pub fn with_term_encoding_enabled(mut self) -> Self {
+        self.proof_state.original_typechecking = Some(Box::new(self.clone()));
+        self
+    }
+
     /// Add a user-defined command to the e-graph
     /// Get the type information for this e-graph
     pub fn type_info(&mut self) -> &mut TypeInfo {
@@ -766,6 +798,7 @@ impl EGraph {
     }
 
     fn run_rules(&mut self, span: &Span, config: &ResolvedRunConfig) -> Result<RunReport, Error> {
+        log::debug!("Running ruleset: {}", config.ruleset);
         let mut report: RunReport = Default::default();
 
         let GenericRunConfig { ruleset, until } = config;
@@ -828,8 +861,13 @@ impl EGraph {
     }
 
     fn add_rule(&mut self, rule: ast::ResolvedRule) -> Result<String, Error> {
-        let core_rule =
-            rule.to_canonicalized_core_rule(&self.type_info, &mut self.parser.symbol_gen)?;
+        // Disable union_to_set optimization in proof or term encoding mode, since
+        // it expects only `union` on constructors (not set).
+        let core_rule = rule.to_canonicalized_core_rule(
+            &self.type_info,
+            &mut self.parser.symbol_gen,
+            self.proof_state.original_typechecking.is_none(),
+        )?;
         let (query, actions) = (&core_rule.body, &core_rule.head);
 
         let rule_id = {
@@ -863,11 +901,14 @@ impl EGraph {
     }
 
     fn eval_actions(&mut self, actions: &ResolvedActions) -> Result<(), Error> {
-        let (actions, _) = actions.to_core_actions(
+        let mut binding = IndexSet::default();
+        let mut ctx = CoreActionContext::new(
             &self.type_info,
-            &mut Default::default(),
+            &mut binding,
             &mut self.parser.symbol_gen,
-        )?;
+            self.proof_state.original_typechecking.is_none(),
+        );
+        let (actions, _) = actions.to_core_actions(&mut ctx)?;
 
         let mut translator = BackendRule::new(
             self.backend.new_rule("eval_actions", false),
@@ -931,13 +972,14 @@ impl EGraph {
             result_var.clone(),
             expr.clone(),
         ));
-        let actions = actions
-            .to_core_actions(
-                &self.type_info,
-                &mut Default::default(),
-                &mut self.parser.symbol_gen,
-            )?
-            .0;
+        let mut binding = IndexSet::default();
+        let mut ctx = CoreActionContext::new(
+            &self.type_info,
+            &mut binding,
+            &mut self.parser.symbol_gen,
+            self.proof_state.original_typechecking.is_none(),
+        );
+        let actions = actions.to_core_actions(&mut ctx)?.0;
         translator.actions(&actions)?;
 
         let arg = translator.entry(&ResolvedAtomTerm::Var(span.clone(), result_var));
@@ -984,8 +1026,11 @@ impl EGraph {
             name: fresh_name.clone(),
             ruleset: fresh_ruleset.clone(),
         };
-        let core_rule =
-            rule.to_canonicalized_core_rule(&self.type_info, &mut self.parser.symbol_gen)?;
+        let core_rule = rule.to_canonicalized_core_rule(
+            &self.type_info,
+            &mut self.parser.symbol_gen,
+            self.proof_state.original_typechecking.is_none(),
+        )?;
         let query = core_rule.body;
 
         let ext_sc = egglog_bridge::SideChannel::default();
@@ -1349,14 +1394,51 @@ impl EGraph {
     /// Leverages previous type information in the [`EGraph`] to do so, adding new type information.
     fn resolve_command(&mut self, command: Command) -> Result<Vec<ResolvedNCommand>, Error> {
         let desugared = desugar_command(command, &mut self.parser)?;
-        let mut typechecked = self.typecheck_program(&desugared)?;
 
-        typechecked = remove_globals::remove_globals(typechecked, &mut self.parser.symbol_gen);
-        for command in &typechecked {
-            self.names.check_shadowing(command)?;
+        // Add term encoding when it is enabled
+        if let Some(original_typechecking) = self.proof_state.original_typechecking.as_mut() {
+            // Typecheck using the original egraph
+            // TODO this is ugly- we don't need an entire e-graph just for type information.
+            let mut typechecked = original_typechecking.typecheck_program(&desugared)?;
+
+            typechecked =
+                proof_global_remover::remove_globals(typechecked, &mut self.parser.symbol_gen);
+            for command in &typechecked {
+                self.names.check_shadowing(command)?;
+
+                if !command_supports_proof_encoding(&command.to_command()) {
+                    let command_text = format!("{}", command.to_command());
+                    return Err(Error::UnsupportedProofCommand {
+                        command: command_text,
+                    });
+                }
+            }
+
+            let term_encoding_added = TermState::add_term_encoding(self, typechecked);
+            let mut new_typechecked = vec![];
+            for new_cmd in term_encoding_added {
+                let desugared = desugar_command(new_cmd, &mut self.parser)?;
+
+                // Now typecheck using self, adding term type information.
+                let desugared_typechecked = self.typecheck_program(&desugared)?;
+                // remove globals again, but this time allow primitive globals
+                let desugared_typechecked = remove_globals::remove_globals(
+                    desugared_typechecked,
+                    &mut self.parser.symbol_gen,
+                );
+
+                new_typechecked.extend(desugared_typechecked);
+            }
+            Ok(new_typechecked)
+        } else {
+            let mut typechecked = self.typecheck_program(&desugared)?;
+
+            typechecked = remove_globals::remove_globals(typechecked, &mut self.parser.symbol_gen);
+            for command in &typechecked {
+                self.names.check_shadowing(command)?;
+            }
+            Ok(typechecked)
         }
-
-        Ok(typechecked)
     }
 
     /// Run a program, returning the desugared outputs as well as the CommandOutputs.
@@ -1387,10 +1469,10 @@ impl EGraph {
                         .parser
                         .get_program_from_string(Some(file.clone()), &s)?;
                     // run program internal on these include commands
-                    let (included_outputs, _included_desugared) =
+                    let (included_outputs, included_desugared) =
                         self.process_program_internal(included_program, run_commands)?;
                     outputs.extend(included_outputs);
-                    desugared_commands.push(ResolvedCommand::Include(span.clone(), file.clone()));
+                    desugared_commands.extend(included_desugared);
                 } else {
                     for processed in self.resolve_command(command)? {
                         desugared_commands.push(processed.to_command());
@@ -1818,6 +1900,13 @@ pub enum Error {
     CommandAlreadyExists(String, Span),
     #[error("Incorrect format in file '{0}'.")]
     InputFileFormatError(String),
+    #[error(
+        "Command is not supported by the current proof term encoding implementation.\n\
+         This typically means the command uses constructs that cannot yet be represented as proof terms.\n\
+         Consider disabling proof term encoding for this run or rewriting the command to avoid unsupported features.\n\
+         Offending command: {command}"
+    )]
+    UnsupportedProofCommand { command: String },
 }
 
 #[cfg(test)]

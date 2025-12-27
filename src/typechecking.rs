@@ -1,5 +1,5 @@
 use crate::{
-    core::{CoreRule, GenericActionsExt},
+    core::{CoreActionContext, CoreRule, GenericActionsExt},
     *,
 };
 use ast::{ResolvedAction, ResolvedExpr, ResolvedFact, ResolvedRule, ResolvedVar, Rule};
@@ -56,7 +56,7 @@ pub struct TypeInfo {
     sorts: HashMap<String, Arc<dyn Sort>>,
     primitives: HashMap<String, Vec<PrimitiveWithId>>,
     func_types: HashMap<String, FuncType>,
-    global_sorts: HashMap<String, ArcSort>,
+    pub(crate) global_sorts: HashMap<String, ArcSort>,
 }
 
 // These methods need to be on the `EGraph` in order to
@@ -444,6 +444,7 @@ impl TypeInfo {
             name: fdecl.name.clone(),
             subtype: fdecl.subtype,
             schema: fdecl.schema.clone(),
+            resolved_schema: ResolvedCall::Func(self.func_types.get(&fdecl.name).unwrap().clone()),
             merge: match &fdecl.merge {
                 Some(merge) => Some(self.typecheck_expr(symbol_gen, merge, &bound_vars)?),
                 None => None,
@@ -513,7 +514,10 @@ impl TypeInfo {
         constraints.extend(query.get_constraints(self)?);
 
         let mut binding = query.get_vars();
-        let (actions, mapped_action) = head.to_core_actions(self, &mut binding, symbol_gen)?;
+        // We lower to core actions with `union_to_set_optimization`
+        // later in the pipeline. For typechecking we do not need it.
+        let mut ctx = CoreActionContext::new(self, &mut binding, symbol_gen, false);
+        let (actions, mapped_action) = head.to_core_actions(&mut ctx)?;
 
         let mut problem = Problem::default();
         problem.add_rule(
@@ -622,8 +626,10 @@ impl TypeInfo {
     ) -> Result<ResolvedActions, TypeError> {
         let mut binding_set: IndexSet<String> =
             binding.keys().copied().map(str::to_string).collect();
-        let (actions, mapped_action) =
-            actions.to_core_actions(self, &mut binding_set, symbol_gen)?;
+        // We lower to core actions with `union_to_set_optimization`
+        // later in the pipeline. For typechecking we do not need it.
+        let mut ctx = CoreActionContext::new(self, &mut binding_set, symbol_gen, false);
+        let (actions, mapped_action) = actions.to_core_actions(&mut ctx)?;
         let mut problem = Problem::default();
 
         // add actions to problem
@@ -685,7 +691,7 @@ impl TypeInfo {
         self.func_types.get(sym)
     }
 
-    pub(crate) fn is_constructor(&self, sym: &str) -> bool {
+    pub fn is_constructor(&self, sym: &str) -> bool {
         self.func_types
             .get(sym)
             .is_some_and(|f| f.subtype == FunctionSubtype::Constructor)

@@ -336,7 +336,6 @@ impl<C: Cost + Ord + Eq + Clone + Debug> Extractor<C> {
                 let target_sort = func.schema.output.clone();
 
                 let relax_hyperedge = |row: egglog_bridge::FunctionRow| {
-                    log::debug!("Relaxing a new hyperedge: {:?}", row);
                     if !row.subsumed {
                         let target = row.vals.last().unwrap();
                         let mut updated = false;

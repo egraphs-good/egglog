@@ -2,6 +2,7 @@ pub mod check_shadowing;
 pub mod desugar;
 mod expr;
 mod parse;
+pub mod proof_global_remover;
 pub mod remove_globals;
 
 use crate::core::{
@@ -250,6 +251,28 @@ where
             GenericSchedule::Sequence(span, scheds) => GenericSchedule::Sequence(
                 span,
                 scheds.into_iter().map(|s| s.visit_exprs(f)).collect(),
+            ),
+        }
+    }
+
+    /// Converts all heads and leaves to strings.
+    pub fn make_unresolved(self) -> GenericSchedule<String, String> {
+        match self {
+            GenericSchedule::Saturate(span, sched) => {
+                GenericSchedule::Saturate(span, Box::new(sched.make_unresolved()))
+            }
+            GenericSchedule::Repeat(span, size, sched) => {
+                GenericSchedule::Repeat(span, size, Box::new(sched.make_unresolved()))
+            }
+            GenericSchedule::Run(span, config) => {
+                GenericSchedule::Run(span, config.make_unresolved())
+            }
+            GenericSchedule::Sequence(span, scheds) => GenericSchedule::Sequence(
+                span,
+                scheds
+                    .into_iter()
+                    .map(|sched| sched.make_unresolved())
+                    .collect(),
             ),
         }
     }
@@ -866,6 +889,18 @@ where
                 .map(|until| until.into_iter().map(|fact| fact.visit_exprs(f)).collect()),
         }
     }
+
+    pub fn make_unresolved(self) -> GenericRunConfig<String, String> {
+        GenericRunConfig {
+            ruleset: self.ruleset,
+            until: self.until.map(|facts| {
+                facts
+                    .into_iter()
+                    .map(|fact| fact.make_unresolved())
+                    .collect()
+            }),
+        }
+    }
 }
 
 impl<Head: Display, Leaf: Display> Display for GenericRunConfig<Head, Leaf>
@@ -916,7 +951,10 @@ where
 {
     pub name: String,
     pub subtype: FunctionSubtype,
+    /// Untyped schema
     pub schema: Schema,
+    /// Resolved schema after typechecking is stored here, otherwise "".
+    pub resolved_schema: Head,
     pub merge: Option<GenericExpr<Head, Leaf>>,
     pub cost: Option<DefaultCost>,
     pub unextractable: bool,
@@ -979,6 +1017,7 @@ impl FunctionDecl {
             name,
             subtype: FunctionSubtype::Custom,
             schema,
+            resolved_schema: String::new(),
             merge,
             cost: None,
             unextractable: true,
@@ -998,6 +1037,7 @@ impl FunctionDecl {
         Self {
             name,
             subtype: FunctionSubtype::Constructor,
+            resolved_schema: String::new(),
             schema,
             merge: None,
             cost,
@@ -1016,6 +1056,7 @@ impl FunctionDecl {
                 input,
                 output: String::from("Unit"),
             },
+            resolved_schema: String::new(),
             merge: None,
             cost: None,
             unextractable: true,
@@ -1038,6 +1079,7 @@ where
             name: self.name,
             subtype: self.subtype,
             schema: self.schema,
+            resolved_schema: self.resolved_schema,
             merge: self.merge.map(|expr| expr.visit_exprs(f)),
             cost: self.cost,
             unextractable: self.unextractable,
@@ -1153,6 +1195,25 @@ pub struct GenericRewrite<Head, Leaf> {
     pub conditions: Vec<GenericFact<Head, Leaf>>,
 }
 
+impl<Head, Leaf> GenericRewrite<Head, Leaf>
+where
+    Head: Clone + Display,
+    Leaf: Clone + PartialEq + Eq + Display + Hash,
+{
+    pub fn make_unresolved(self) -> GenericRewrite<String, String> {
+        GenericRewrite {
+            span: self.span,
+            lhs: self.lhs.make_unresolved(),
+            rhs: self.rhs.make_unresolved(),
+            conditions: self
+                .conditions
+                .into_iter()
+                .map(|fact| fact.make_unresolved())
+                .collect(),
+        }
+    }
+}
+
 impl<Head: Display, Leaf: Display> GenericRewrite<Head, Leaf> {
     /// Converts the rewrite into an s-expression.
     pub fn fmt_with_ruleset(
@@ -1209,6 +1270,127 @@ where
             }
             GenericExpr::Lit(span, lit) => GenericAtomTerm::Literal(span.clone(), lit.clone()),
             GenericExpr::Call(span, head, _) => GenericAtomTerm::Var(span.clone(), head.to.clone()),
+        }
+    }
+}
+
+impl<Head, Leaf> GenericCommand<Head, Leaf>
+where
+    Head: Clone + Display,
+    Leaf: Clone + PartialEq + Eq + Display + Hash,
+{
+    pub fn make_unresolved(self) -> GenericCommand<String, String> {
+        match self {
+            GenericCommand::Sort(span, name, params) => GenericCommand::Sort(span, name, params),
+            GenericCommand::Datatype {
+                span,
+                name,
+                variants,
+            } => GenericCommand::Datatype {
+                span,
+                name,
+                variants,
+            },
+            GenericCommand::Datatypes { span, datatypes } => {
+                GenericCommand::Datatypes { span, datatypes }
+            }
+            GenericCommand::Constructor {
+                span,
+                name,
+                schema,
+                cost,
+                unextractable,
+            } => GenericCommand::Constructor {
+                span,
+                name,
+                schema,
+                cost,
+                unextractable,
+            },
+            GenericCommand::Relation { span, name, inputs } => {
+                GenericCommand::Relation { span, name, inputs }
+            }
+            GenericCommand::Function {
+                span,
+                name,
+                schema,
+                merge,
+            } => GenericCommand::Function {
+                span,
+                name,
+                schema,
+                merge: merge.map(|expr| expr.make_unresolved()),
+            },
+            GenericCommand::AddRuleset(span, name) => GenericCommand::AddRuleset(span, name),
+            GenericCommand::UnstableCombinedRuleset(span, name, others) => {
+                GenericCommand::UnstableCombinedRuleset(span, name, others)
+            }
+            GenericCommand::Rule { rule } => GenericCommand::Rule {
+                rule: rule.make_unresolved(),
+            },
+            GenericCommand::Rewrite(name, rewrite, subsume) => {
+                GenericCommand::Rewrite(name, rewrite.make_unresolved(), subsume)
+            }
+            GenericCommand::BiRewrite(name, rewrite) => {
+                GenericCommand::BiRewrite(name, rewrite.make_unresolved())
+            }
+            GenericCommand::Action(action) => GenericCommand::Action(action.make_unresolved()),
+            GenericCommand::Extract(span, expr, variants) => {
+                GenericCommand::Extract(span, expr.make_unresolved(), variants.make_unresolved())
+            }
+            GenericCommand::RunSchedule(schedule) => {
+                GenericCommand::RunSchedule(schedule.make_unresolved())
+            }
+            GenericCommand::PrintOverallStatistics(span, file) => {
+                GenericCommand::PrintOverallStatistics(span, file)
+            }
+            GenericCommand::Check(span, facts) => GenericCommand::Check(
+                span,
+                facts
+                    .into_iter()
+                    .map(|fact| fact.make_unresolved())
+                    .collect(),
+            ),
+            GenericCommand::PrintFunction(span, name, n, file, mode) => {
+                GenericCommand::PrintFunction(span, name, n, file, mode)
+            }
+            GenericCommand::PrintSize(span, name) => GenericCommand::PrintSize(span, name),
+            GenericCommand::Input { span, name, file } => {
+                GenericCommand::Input { span, name, file }
+            }
+            GenericCommand::Output { span, file, exprs } => GenericCommand::Output {
+                span,
+                file,
+                exprs: exprs
+                    .into_iter()
+                    .map(|expr| expr.make_unresolved())
+                    .collect(),
+            },
+            GenericCommand::Push(n) => GenericCommand::Push(n),
+            GenericCommand::Pop(span, n) => GenericCommand::Pop(span, n),
+            GenericCommand::Fail(span, cmd) => {
+                GenericCommand::Fail(span, Box::new(cmd.make_unresolved()))
+            }
+            GenericCommand::Include(span, file) => GenericCommand::Include(span, file),
+            GenericCommand::UserDefined(span, name, exprs) => {
+                GenericCommand::UserDefined(span, name, exprs)
+            }
+        }
+    }
+
+    pub fn visit_actions(
+        self,
+        f: &mut impl FnMut(GenericAction<Head, Leaf>) -> GenericAction<Head, Leaf>,
+    ) -> Self {
+        match self {
+            GenericCommand::Rule { rule } => GenericCommand::Rule {
+                rule: rule.visit_actions(f),
+            },
+            GenericCommand::Action(action) => GenericCommand::Action(f(action)),
+            GenericCommand::Fail(span, cmd) => {
+                GenericCommand::Fail(span, Box::new(cmd.visit_actions(f)))
+            }
+            other => other,
         }
     }
 }

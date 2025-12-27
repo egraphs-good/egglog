@@ -52,6 +52,9 @@ struct Args {
     /// Treat missing `$` prefixes on globals as errors instead of warnings
     #[clap(long = "strict-mode")]
     strict_mode: bool,
+    /// Run the terms encoding of equality saturation
+    #[clap(long)]
+    term_encoding: bool,
 }
 
 /// Start a command-line interface for the E-graph.
@@ -67,6 +70,11 @@ pub fn cli(mut egraph: EGraph) {
         .init();
 
     let args = Args::parse();
+
+    if args.term_encoding {
+        egraph = egraph.with_term_encoding_enabled();
+    }
+
     rayon::ThreadPoolBuilder::new()
         .num_threads(args.threads)
         .build_global()

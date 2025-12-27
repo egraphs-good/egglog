@@ -93,25 +93,26 @@ impl GlobalRemover<'_> {
                 GenericAction::Let(span, name, expr) => {
                     let ty = expr.output_type();
 
-                    let func_decl = ResolvedFunctionDecl {
+                    let resolved_call = ResolvedCall::Func(FuncType {
                         name: name.name.clone(),
+                        subtype: FunctionSubtype::Custom,
+                        input: vec![],
+                        output: ty.clone(),
+                    });
+                    let func_decl = ResolvedFunctionDecl {
+                        name: name.name,
                         subtype: FunctionSubtype::Custom,
                         schema: Schema {
                             input: vec![],
                             output: ty.name().to_owned(),
                         },
+                        resolved_schema: resolved_call.clone(),
                         merge: None,
                         cost: None,
                         unextractable: true,
                         let_binding: true,
                         span: span.clone(),
                     };
-                    let resolved_call = ResolvedCall::Func(FuncType {
-                        name: name.name,
-                        subtype: FunctionSubtype::Custom,
-                        input: vec![],
-                        output: ty.clone(),
-                    });
                     vec![
                         GenericNCommand::Function(func_decl),
                         GenericNCommand::CoreAction(GenericAction::Set(

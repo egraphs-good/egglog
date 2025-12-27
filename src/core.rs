@@ -11,6 +11,7 @@
 //!
 //! Most compiler-time optimizations are expected to be done over CoreRule format.
 use std::hash::Hasher;
+use std::marker::PhantomData;
 use std::ops::AddAssign;
 
 use crate::{constraint::grounded_check, *};
@@ -75,10 +76,30 @@ pub enum ResolvedCall {
 }
 
 impl ResolvedCall {
+    pub fn name(&self) -> &str {
+        match self {
+            ResolvedCall::Func(func) => &func.name,
+            ResolvedCall::Primitive(prim) => prim.name(),
+        }
+    }
+
     pub fn output(&self) -> &ArcSort {
         match self {
             ResolvedCall::Func(func) => &func.output,
             ResolvedCall::Primitive(prim) => prim.output(),
+        }
+    }
+
+    /// Gives the types for a term's child with the given resolved call.
+    /// For functions this includes the output sort, for constructors it's just the inputs.
+    pub(crate) fn view_types(&self) -> Vec<ArcSort> {
+        match self {
+            ResolvedCall::Func(func) => {
+                let mut types = func.input.clone();
+                types.push(func.output.clone());
+                types
+            }
+            ResolvedCall::Primitive(prim) => prim.input().to_vec(),
         }
     }
 
@@ -502,13 +523,42 @@ where
     }
 }
 
+/// Shared state that threads through lowering from surface actions to core actions.
+///
+pub(crate) struct CoreActionContext<'a, Head, Leaf, FG> {
+    /// Type environment describing functions, constructors, and primitives.
+    pub typeinfo: &'a TypeInfo,
+    /// Set of variables that are currently in scope during lowering.
+    pub binding: &'a mut IndexSet<Leaf>,
+    /// Generator used to create fresh symbols for intermediate values.
+    pub fresh_gen: &'a mut FG,
+    /// Whether we may rewrite `union` on constructors into `set`.
+    pub union_to_set_optimization: bool,
+    _marker: PhantomData<fn() -> Head>,
+}
+
+impl<'a, Head, Leaf, FG> CoreActionContext<'a, Head, Leaf, FG> {
+    pub fn new(
+        typeinfo: &'a TypeInfo,
+        binding: &'a mut IndexSet<Leaf>,
+        fresh_gen: &'a mut FG,
+        union_to_set_optimization: bool,
+    ) -> Self {
+        Self {
+            typeinfo,
+            binding,
+            fresh_gen,
+            union_to_set_optimization,
+            _marker: PhantomData,
+        }
+    }
+}
+
 pub(crate) trait GenericActionsExt<Head, Leaf> {
     #[allow(clippy::type_complexity)]
     fn to_core_actions<FG>(
         &self,
-        typeinfo: &TypeInfo,
-        binding: &mut IndexSet<Leaf>,
-        fresh_gen: &mut FG,
+        ctx: &mut CoreActionContext<'_, Head, Leaf, FG>,
     ) -> Result<(GenericCoreActions<Head, Leaf>, MappedActions<Head, Leaf>), TypeError>
     where
         Head: Clone + Display + IsFunc,
@@ -524,9 +574,7 @@ where
     #[allow(clippy::type_complexity)]
     fn to_core_actions<FG>(
         &self,
-        typeinfo: &TypeInfo,
-        binding: &mut IndexSet<Leaf>,
-        fresh_gen: &mut FG,
+        ctx: &mut CoreActionContext<'_, Head, Leaf, FG>,
     ) -> Result<(GenericCoreActions<Head, Leaf>, MappedActions<Head, Leaf>), TypeError>
     where
         Head: Clone + Display + IsFunc,
@@ -535,6 +583,8 @@ where
     {
         let mut norm_actions = vec![];
         let mut mapped_actions: MappedActions<Head, Leaf> = GenericActions(vec![]);
+        let typeinfo = ctx.typeinfo;
+        let union_to_set_optimization = ctx.union_to_set_optimization;
 
         // During the lowering, there are two important guaratees:
         //   Every used variable should be bound.
@@ -542,11 +592,10 @@ where
         for action in self.0.iter() {
             match action {
                 GenericAction::Let(span, var, expr) => {
-                    if binding.contains(var) {
+                    if ctx.binding.contains(var) {
                         return Err(TypeError::AlreadyDefined(var.to_string(), span.clone()));
                     }
-                    let mapped_expr =
-                        expr.to_core_actions(typeinfo, binding, fresh_gen, &mut norm_actions)?;
+                    let mapped_expr = expr.to_core_actions(ctx, &mut norm_actions)?;
                     norm_actions.push(GenericCoreAction::LetAtomTerm(
                         span.clone(),
                         var.clone(),
@@ -557,17 +606,15 @@ where
                         var.clone(),
                         mapped_expr,
                     ));
-                    binding.insert(var.clone());
+                    ctx.binding.insert(var.clone());
                 }
                 GenericAction::Set(span, head, args, expr) => {
                     let mut mapped_args = vec![];
                     for arg in args {
-                        let mapped_arg =
-                            arg.to_core_actions(typeinfo, binding, fresh_gen, &mut norm_actions)?;
+                        let mapped_arg = arg.to_core_actions(ctx, &mut norm_actions)?;
                         mapped_args.push(mapped_arg);
                     }
-                    let mapped_expr =
-                        expr.to_core_actions(typeinfo, binding, fresh_gen, &mut norm_actions)?;
+                    let mapped_expr = expr.to_core_actions(ctx, &mut norm_actions)?;
                     norm_actions.push(GenericCoreAction::Set(
                         span.clone(),
                         head.clone(),
@@ -577,7 +624,7 @@ where
                             .collect(),
                         mapped_expr.get_corresponding_var_or_lit(typeinfo),
                     ));
-                    let v = fresh_gen.fresh(head);
+                    let v = ctx.fresh_gen.fresh(head);
                     mapped_actions.0.push(GenericAction::Set(
                         span.clone(),
                         CorrespondingVar::new(head.clone(), v),
@@ -588,8 +635,7 @@ where
                 GenericAction::Change(span, change, head, args) => {
                     let mut mapped_args = vec![];
                     for arg in args {
-                        let mapped_arg =
-                            arg.to_core_actions(typeinfo, binding, fresh_gen, &mut norm_actions)?;
+                        let mapped_arg = arg.to_core_actions(ctx, &mut norm_actions)?;
                         mapped_args.push(mapped_arg);
                     }
                     norm_actions.push(GenericCoreAction::Change(
@@ -601,7 +647,7 @@ where
                             .map(|e| e.get_corresponding_var_or_lit(typeinfo))
                             .collect(),
                     ));
-                    let v = fresh_gen.fresh(head);
+                    let v = ctx.fresh_gen.fresh(head);
                     mapped_actions.0.push(GenericAction::Change(
                         span.clone(),
                         *change,
@@ -610,29 +656,24 @@ where
                     ));
                 }
                 GenericAction::Union(span, e1, e2) => {
+                    // Optimization: if one side is a constructor call and the other side is a variable,
+                    // we can lower this to a Set action instead of a Union action.
+                    // This produces invalid egglog, since top-level egglog expects only Union on constructors.
+                    // We disable this with union_to_set_optimization flag for term/proof mode.
+                    // TODO move this optimization to later stage so we can keep it enabled in term/proof mode.
                     match (e1, e2) {
                         (var @ GenericExpr::Var(..), GenericExpr::Call(_, f, args))
                         | (GenericExpr::Call(_, f, args), var @ GenericExpr::Var(..))
-                            if f.is_constructor(typeinfo) =>
+                            if f.is_constructor(typeinfo) && union_to_set_optimization =>
                         {
                             let head = f;
                             let expr = var;
                             let mut mapped_args = vec![];
                             for arg in args {
-                                let mapped_arg = arg.to_core_actions(
-                                    typeinfo,
-                                    binding,
-                                    fresh_gen,
-                                    &mut norm_actions,
-                                )?;
+                                let mapped_arg = arg.to_core_actions(ctx, &mut norm_actions)?;
                                 mapped_args.push(mapped_arg);
                             }
-                            let mapped_expr = expr.to_core_actions(
-                                typeinfo,
-                                binding,
-                                fresh_gen,
-                                &mut norm_actions,
-                            )?;
+                            let mapped_expr = expr.to_core_actions(ctx, &mut norm_actions)?;
                             norm_actions.push(GenericCoreAction::Set(
                                 span.clone(),
                                 head.clone(),
@@ -642,7 +683,7 @@ where
                                     .collect(),
                                 mapped_expr.get_corresponding_var_or_lit(typeinfo),
                             ));
-                            let v = fresh_gen.fresh(head);
+                            let v = ctx.fresh_gen.fresh(head);
                             mapped_actions.0.push(GenericAction::Set(
                                 span.clone(),
                                 CorrespondingVar::new(head.clone(), v),
@@ -651,18 +692,8 @@ where
                             ));
                         }
                         _ => {
-                            let mapped_e1 = e1.to_core_actions(
-                                typeinfo,
-                                binding,
-                                fresh_gen,
-                                &mut norm_actions,
-                            )?;
-                            let mapped_e2 = e2.to_core_actions(
-                                typeinfo,
-                                binding,
-                                fresh_gen,
-                                &mut norm_actions,
-                            )?;
+                            let mapped_e1 = e1.to_core_actions(ctx, &mut norm_actions)?;
+                            let mapped_e2 = e2.to_core_actions(ctx, &mut norm_actions)?;
                             norm_actions.push(GenericCoreAction::Union(
                                 span.clone(),
                                 mapped_e1.get_corresponding_var_or_lit(typeinfo),
@@ -683,8 +714,7 @@ where
                         .push(GenericAction::Panic(span.clone(), string.clone()));
                 }
                 GenericAction::Expr(span, expr) => {
-                    let mapped_expr =
-                        expr.to_core_actions(typeinfo, binding, fresh_gen, &mut norm_actions)?;
+                    let mapped_expr = expr.to_core_actions(ctx, &mut norm_actions)?;
                     mapped_actions
                         .0
                         .push(GenericAction::Expr(span.clone(), mapped_expr));
@@ -711,9 +741,7 @@ where
 
     fn to_core_actions<FG: FreshGen<Head, Leaf>>(
         &self,
-        typeinfo: &TypeInfo,
-        binding: &mut IndexSet<Leaf>,
-        fresh_gen: &mut FG,
+        ctx: &mut CoreActionContext<'_, Head, Leaf, FG>,
         out_actions: &mut Vec<GenericCoreAction<Head, Leaf>>,
     ) -> Result<MappedExpr<Head, Leaf>, TypeError>;
 }
@@ -773,16 +801,15 @@ where
 
     fn to_core_actions<FG: FreshGen<Head, Leaf>>(
         &self,
-        typeinfo: &TypeInfo,
-        binding: &mut IndexSet<Leaf>,
-        fresh_gen: &mut FG,
+        ctx: &mut CoreActionContext<'_, Head, Leaf, FG>,
         out_actions: &mut Vec<GenericCoreAction<Head, Leaf>>,
     ) -> Result<MappedExpr<Head, Leaf>, TypeError> {
+        let typeinfo = ctx.typeinfo;
         match self {
             GenericExpr::Lit(span, lit) => Ok(GenericExpr::Lit(span.clone(), lit.clone())),
             GenericExpr::Var(span, v) => {
                 let sym = v.to_string();
-                if binding.contains(v) || typeinfo.is_global(&sym) {
+                if ctx.binding.contains(v) || typeinfo.is_global(&sym) {
                     Ok(GenericExpr::Var(span.clone(), v.clone()))
                 } else {
                     Err(TypeError::Unbound(sym, span.clone()))
@@ -792,13 +819,12 @@ where
                 let mut norm_args = vec![];
                 let mut mapped_args = vec![];
                 for arg in args {
-                    let mapped_arg =
-                        arg.to_core_actions(typeinfo, binding, fresh_gen, out_actions)?;
+                    let mapped_arg = arg.to_core_actions(ctx, out_actions)?;
                     norm_args.push(mapped_arg.get_corresponding_var_or_lit(typeinfo));
                     mapped_args.push(mapped_arg);
                 }
-                let var = fresh_gen.fresh(f);
-                binding.insert(var.clone());
+                let var = ctx.fresh_gen.fresh(f);
+                ctx.binding.insert(var.clone());
                 out_actions.push(GenericCoreAction::Let(
                     span.clone(),
                     var.clone(),
@@ -934,6 +960,7 @@ pub(crate) trait GenericRuleExt<Head, Leaf> {
         &self,
         typeinfo: &TypeInfo,
         fresh_gen: &mut impl FreshGen<Head, Leaf>,
+        union_to_set_optimization: bool,
     ) -> Result<GenericCoreRule<HeadOrEq<Head>, Head, Leaf>, TypeError>
     where
         Head: Clone + Display + IsFunc,
@@ -949,6 +976,7 @@ where
         &self,
         typeinfo: &TypeInfo,
         fresh_gen: &mut impl FreshGen<Head, Leaf>,
+        union_to_set_optimization: bool,
     ) -> Result<GenericCoreRule<HeadOrEq<Head>, Head, Leaf>, TypeError>
     where
         Head: Clone + Display + IsFunc,
@@ -956,9 +984,9 @@ where
     {
         let (body, _correspondence) = Facts(self.body.clone()).to_query(typeinfo, fresh_gen);
         let mut binding = body.get_vars();
-        let (head, _correspondence) =
-            self.head
-                .to_core_actions(typeinfo, &mut binding, fresh_gen)?;
+        let mut ctx =
+            CoreActionContext::new(typeinfo, &mut binding, fresh_gen, union_to_set_optimization);
+        let (head, _correspondence) = self.head.to_core_actions(&mut ctx)?;
         Ok(GenericCoreRule {
             span: self.span.clone(),
             body,
@@ -972,6 +1000,7 @@ pub(crate) trait ResolvedRuleExt {
         &self,
         typeinfo: &TypeInfo,
         fresh_gen: &mut SymbolGen,
+        union_to_set_optimization: bool,
     ) -> Result<ResolvedCoreRule, TypeError>;
 }
 
@@ -980,6 +1009,7 @@ impl ResolvedRuleExt for ResolvedRule {
         &self,
         typeinfo: &TypeInfo,
         fresh_gen: &mut SymbolGen,
+        union_to_set_optimization: bool,
     ) -> Result<ResolvedCoreRule, TypeError> {
         let value_eq = &typeinfo.get_prims("value-eq").unwrap()[0];
         let value_eq = |at1: &ResolvedAtomTerm, at2: &ResolvedAtomTerm| {
@@ -990,7 +1020,7 @@ impl ResolvedRuleExt for ResolvedRule {
             })
         };
 
-        let rule = self.to_core_rule(typeinfo, fresh_gen)?;
+        let rule = self.to_core_rule(typeinfo, fresh_gen, union_to_set_optimization)?;
 
         // The groundedness check happens before canonicalization, because canonicalization
         // may turn ungrounded variables in a query to unbounded variables in actions (e.g.,

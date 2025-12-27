@@ -1,0 +1,12 @@
+---
+source: tests/test_desugar.rs
+expression: snapshot
+---
+(sort Main)
+(constructor Test2 () Main)
+(sort Math)
+(constructor Test () Math)
+(function x () Math :no-merge)
+(set (x) (Test ))
+(function y () Math :no-merge)
+(set (y) (Test ))

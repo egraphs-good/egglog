@@ -1,12 +1,14 @@
 use std::path::PathBuf;
 
 use egglog::*;
+use hashbrown::HashSet;
 use libtest_mimic::Trial;
 
 #[derive(Clone)]
 struct Run {
     path: PathBuf,
     desugar: bool,
+    term_encoding: bool,
 }
 
 impl Run {
@@ -41,6 +43,9 @@ impl Run {
 
     fn test_program(&self, filename: Option<String>, program: &str, message: &str) {
         let mut egraph = EGraph::default();
+        if self.term_encoding {
+            egraph = egraph.with_term_encoding_enabled();
+        }
         match egraph.parse_and_run_program(filename, program) {
             Ok(msgs) => {
                 if self.should_fail() {
@@ -99,6 +104,9 @@ impl Run {
                 if self.0.desugar {
                     write!(f, "_desugar")?;
                 }
+                if self.0.term_encoding {
+                    write!(f, "_term_encoding")?;
+                }
                 Ok(())
             }
         }
@@ -118,6 +126,7 @@ fn generate_tests(glob: &str) -> Vec<Trial> {
         let run = Run {
             path: entry.unwrap().clone(),
             desugar: false,
+            term_encoding: false,
         };
         let should_fail = run.should_fail();
 
@@ -127,6 +136,13 @@ fn generate_tests(glob: &str) -> Vec<Trial> {
                 desugar: true,
                 ..run.clone()
             });
+
+            if file_supports_proofs(&run.path) {
+                push_trial(Run {
+                    term_encoding: true,
+                    ..run.clone()
+                });
+            }
         }
     }
 
@@ -136,5 +152,13 @@ fn generate_tests(glob: &str) -> Vec<Trial> {
 fn main() {
     let args = libtest_mimic::Arguments::from_args();
     let tests = generate_tests("tests/**/*.egg");
+    // ensure all the tests have unique names
+    let mut names = HashSet::new();
+    for test in &tests {
+        let name = test.name().to_string();
+        if !names.insert(name.clone()) {
+            panic!("Duplicate test name: {}", name);
+        }
+    }
     libtest_mimic::run(&args, tests).exit();
 }
