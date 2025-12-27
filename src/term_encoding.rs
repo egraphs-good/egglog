@@ -75,7 +75,7 @@
 //! the canonical representative produced by `addView`, and the trailing `run-schedule` executes the
 //! maintenance rules so that the encoded program stays behaviourally equivalent to the uninstrumented version.
 use crate::ast::GenericCommand;
-use crate::term_encoding_helpers::EncodingNames;
+use crate::term_encoding_helpers::{EncodingNames, JustificationKind};
 use crate::typechecking::FuncType;
 use crate::*;
 use std::path::Path;
@@ -119,19 +119,13 @@ impl<'a> TermState<'a> {
         Self { egraph }.add_term_encoding_helper(program)
     }
 
-    /// Mark two things as equal, adding justification if proofs are enabled.
-    pub(crate) fn union(
-        &mut self,
-        type_name: &str,
-        lhs: &str,
-        rhs: &str,
-        justification: &str,
-    ) -> String {
+    /// Mark two things as equal, adding proof if proofs are enabled.
+    pub(crate) fn union(&mut self, type_name: &str, lhs: &str, rhs: &str, proof: &str) -> String {
         let uf_name = self.uf_name(type_name);
         let uf_proof_name = self.uf_proof_name(type_name);
-        let set_justification = if self.egraph.proof_state.proofs_enabled {
+        let set_proof = if self.egraph.proof_state.proofs_enabled {
             format!(
-                "(set ({uf_proof_name} (ordering-max {lhs} {rhs}) (ordering-min {lhs} {rhs})) {justification})"
+                "(set ({uf_proof_name} (ordering-max {lhs} {rhs}) (ordering-min {lhs} {rhs})) {proof})"
             )
         } else {
             "".to_string()
@@ -140,7 +134,7 @@ impl<'a> TermState<'a> {
         format!(
             "
         ({uf_name} (ordering-max {lhs} {rhs}) (ordering-min {lhs} {rhs}))
-        {set_justification}",
+        {set_proof}",
         )
     }
 
@@ -319,11 +313,11 @@ impl<'a> TermState<'a> {
             } else {
                 "".to_string()
             };
-            let justification_var = self.fresh_var();
+            let proof_var = self.fresh_var();
             let rule_proof = if self.egraph.proof_state.proofs_enabled {
                 let merge_fn_constructor = self.proof_names().merge_fn_constructor.clone();
                 format!(
-                    "(let {justification_var}
+                    "(let {proof_var}
                             ({merge_fn_constructor} \"{name}\"
                                   {p1_fresh}
                                   {p2_fresh}))"
@@ -334,11 +328,11 @@ impl<'a> TermState<'a> {
 
             let mut merge_fn_code = vec![];
             let merge_fn_var =
-                self.instrument_action_expr(merge_fn, &mut merge_fn_code, &justification_var);
+                self.instrument_action_expr(merge_fn, &mut merge_fn_code, &proof_var);
             let merge_fn_code_str = merge_fn_code.join("\n");
             let mut updated = child_names.clone();
             updated.push(merge_fn_var.clone());
-            let term_and_proof = self.update_view(name, &updated, &justification_var, false);
+            let term_and_proof = self.update_view(name, &updated, &proof_var);
             let fresh_constructor = self.egraph.parser.symbol_gen.fresh("mergecleanup");
             let fresh_sort = self.egraph.parser.symbol_gen.fresh("mergecleanupsort");
             let output_sort = fdecl.schema.output.clone();
@@ -498,7 +492,7 @@ impl<'a> TermState<'a> {
             let view_prf = self.query_view_and_get_proof(&fdecl.name, &children_vec);
 
             let (pf_code, pf_var) = if self.egraph.proof_state.proofs_enabled {
-                let justification = self.fresh_var();
+                let proof = self.fresh_var();
                 let eq_trans_constructor = self.proof_names().eq_trans_constructor.clone();
                 let congr_constructor = self.proof_names().congr_constructor.clone();
 
@@ -507,7 +501,7 @@ impl<'a> TermState<'a> {
                 (
                     if fdecl.subtype == FunctionSubtype::Constructor && i == types.len() - 1 {
                         format!(
-                            "(let {justification}
+                            "(let {proof}
                                ({eq_trans_constructor}
                                   {updated_child_prf}
                                   {view_prf}))",
@@ -515,13 +509,13 @@ impl<'a> TermState<'a> {
                     } else {
                         // otherwise we are updating a child via congruence
                         format!(
-                            "(let {justification}
+                            "(let {proof}
                                   ({congr_constructor} {view_prf} {i}
                                                        {updated_child_prf}))
                     ",
                         )
                     },
-                    justification,
+                    proof,
                 )
             } else {
                 ("".to_string(), "".to_string())
@@ -643,7 +637,11 @@ impl<'a> TermState<'a> {
 
     // Actions need to be instrumented to add to the view
     // as well as to the terms tables.
-    fn instrument_action(&mut self, action: &ResolvedAction, justification: &str) -> Vec<String> {
+    fn instrument_action(
+        &mut self,
+        action: &ResolvedAction,
+        justification: &JustificationKind,
+    ) -> Vec<String> {
         let mut res = vec![];
 
         match action {
@@ -729,7 +727,7 @@ impl<'a> TermState<'a> {
         &mut self,
         func_type: &FuncType,
         args: &[String],
-        justification: &str,
+        justification: &JustificationKind,
     ) -> (Vec<String>, String) {
         let fv = self.fresh_var();
         let mut res = vec![];
@@ -747,16 +745,33 @@ impl<'a> TermState<'a> {
             args.to_vec()
         };
 
+        let (proof_str, proof_var) = if self.egraph.proof_state.proofs_enabled {
+            let (term1, term2) = match func_type.subtype {
+                FunctionSubtype::Constructor => {
+                    
+                }
+                FunctionSubtype::Custom => (
+                    fv.clone(),
+                    format!("({} {})", func_type.name, ListDisplay(args, " ")),
+                ),
+                FunctionSubtype::Relation => {
+                    panic!("Relations not supported by proofs, should have been caught earlier.")
+                }
+            };
+        } else {
+            ("".to_string(), "".to_string())
+        };
+
         res.push(self.update_view(
             &func_type.name,
             &args_with_fv,
-            justification,
+            proof,
             func_type.subtype == FunctionSubtype::Constructor,
         ));
 
         // add to uf table to initialize eclass for constructors
         if func_type.subtype == FunctionSubtype::Constructor {
-            self.union(func_type.output.name(), &fv, &fv, justification);
+            self.union(func_type.output.name(), &fv, &fv, proof);
         }
 
         (res, fv)
@@ -788,7 +803,7 @@ impl<'a> TermState<'a> {
         &mut self,
         expr: &ResolvedExpr,
         res: &mut Vec<String>,
-        justification: &str,
+        proof: &JustificationKind,
     ) -> String {
         match expr {
             ResolvedExpr::Lit(_, lit) => format!("{}", lit),
@@ -796,7 +811,7 @@ impl<'a> TermState<'a> {
             ResolvedExpr::Call(_, resolved_call, args) => {
                 let args = args
                     .iter()
-                    .map(|arg| self.instrument_action_expr(arg, res, justification))
+                    .map(|arg| self.instrument_action_expr(arg, res, proof))
                     .collect::<Vec<_>>();
                 match resolved_call {
                     ResolvedCall::Func(func_type) => {
@@ -805,8 +820,7 @@ impl<'a> TermState<'a> {
                                 "Found a function lookup in actions, should have been prevented by typechecking"
                             );
                         }
-                        let (add_code, fv) =
-                            self.add_term_and_view(func_type, &args, justification);
+                        let (add_code, fv) = self.add_term_and_view(func_type, &args, proof);
                         res.extend(add_code);
 
                         fv
@@ -830,24 +844,24 @@ impl<'a> TermState<'a> {
     fn instrument_actions(
         &mut self,
         actions: &[ResolvedAction],
-        justification: &str,
+        justification: &JustificationKind,
     ) -> Vec<String> {
         let mut res = vec![];
         for action in actions {
-            res.extend(self.instrument_action(action, justification));
+            res.extend(self.instrument_action(action, proof));
         }
         res
     }
 
     /// Instrument a rule to use term encoding. This involves using the view tables in facts,
     /// adding to term and view tables in actions.
-    /// When proofs are enabled we query proof tables, then build a justification for the rule in the actions.
+    /// When proofs are enabled we query proof tables, then build a proof for the rule in the actions.
     /// Finally, each view update also updates the proof tables.
     fn instrument_rule(&mut self, rule: &ResolvedRule) -> Vec<Command> {
         let facts = self.instrument_facts(&rule.body);
         // TODO get rule proof
-        let fiat = self.fiat_justification();
-        let actions = self.instrument_actions(&rule.head.0, &fiat);
+        let todoproof = JustificationKind::Rule(rule.name.clone(), format!("(TODOList)"));
+        let actions = self.instrument_actions(&rule.head.0, &todoproof);
         let name = &rule.name;
         let instrumented = format!(
             "(rule ({})
@@ -941,7 +955,7 @@ impl<'a> TermState<'a> {
                 res.extend(self.instrument_rule(rule));
             }
             ResolvedNCommand::CoreAction(action) => {
-                let fiat = self.fiat_justification();
+                let fiat = self.fiat_proof();
                 let instrumented = self.instrument_action(action, &fiat).join("\n");
                 res.extend(self.parse_program(&instrumented));
             }
