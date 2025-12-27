@@ -237,15 +237,12 @@ where
 {
     fn squash_sequences(self) -> Self {
         match self {
-            GenericSchedule::Saturate(span, sched) => GenericSchedule::Saturate(
-                span,
-                Box::new(sched.squash_sequences()),
-            ),
-            GenericSchedule::Repeat(span, size, sched) => GenericSchedule::Repeat(
-                span,
-                size,
-                Box::new(sched.squash_sequences()),
-            ),
+            GenericSchedule::Saturate(span, sched) => {
+                GenericSchedule::Saturate(span, Box::new(sched.squash_sequences()))
+            }
+            GenericSchedule::Repeat(span, size, sched) => {
+                GenericSchedule::Repeat(span, size, Box::new(sched.squash_sequences()))
+            }
             GenericSchedule::Run(span, config) => GenericSchedule::Run(span, config),
             GenericSchedule::Sequence(span, scheds) => {
                 let mut flattened = Vec::new();
@@ -320,15 +317,12 @@ where
         fun: &mut impl FnMut(String) -> String,
     ) -> GenericSchedule<Head, Leaf> {
         let mapped = match self {
-            GenericSchedule::Saturate(span, sched) => GenericSchedule::Saturate(
-                span,
-                Box::new(sched.map_string_symbols(fun)),
-            ),
-            GenericSchedule::Repeat(span, size, sched) => GenericSchedule::Repeat(
-                span,
-                size,
-                Box::new(sched.map_string_symbols(fun)),
-            ),
+            GenericSchedule::Saturate(span, sched) => {
+                GenericSchedule::Saturate(span, Box::new(sched.map_string_symbols(fun)))
+            }
+            GenericSchedule::Repeat(span, size, sched) => {
+                GenericSchedule::Repeat(span, size, Box::new(sched.map_string_symbols(fun)))
+            }
             GenericSchedule::Run(span, config) => {
                 GenericSchedule::Run(span, config.map_string_symbols(fun))
             }
@@ -1396,11 +1390,7 @@ where
                     .map(|variant| Variant {
                         span: variant.span,
                         name: fun(variant.name),
-                        types: variant
-                            .types
-                            .into_iter()
-                            .map(|ty| fun(ty))
-                            .collect(),
+                        types: variant.types.into_iter().map(|ty| fun(ty)).collect(),
                         cost: variant.cost,
                         unextractable: variant.unextractable,
                     })
@@ -1429,10 +1419,9 @@ where
                                     })
                                     .collect(),
                             ),
-                            Subdatatypes::NewSort(head, args) => Subdatatypes::NewSort(
-                                fun(head),
-                                args,
-                            ),
+                            Subdatatypes::NewSort(head, args) => {
+                                Subdatatypes::NewSort(fun(head), args)
+                            }
                         };
                         (span, new_name, new_variants)
                     })
@@ -1448,11 +1437,7 @@ where
                 span,
                 name: fun(name),
                 schema: Schema {
-                    input: schema
-                        .input
-                        .into_iter()
-                        .map(|param| fun(param))
-                        .collect(),
+                    input: schema.input.into_iter().map(|param| fun(param)).collect(),
                     output: fun(schema.output),
                 },
                 cost,
@@ -1472,11 +1457,7 @@ where
                 span,
                 name: fun(name),
                 schema: Schema {
-                    input: schema
-                        .input
-                        .into_iter()
-                        .map(|param| fun(param))
-                        .collect(),
+                    input: schema.input.into_iter().map(|param| fun(param)).collect(),
                     output: fun(schema.output),
                 },
                 merge,
@@ -1498,56 +1479,44 @@ where
                     body: rule.body,
                 };
                 GenericCommand::Rule { rule }
-            },
-            GenericCommand::Rewrite(name, rewrite, subsume) => GenericCommand::Rewrite(
-                fun(name),
-                rewrite,
-                subsume,
-            ),
+            }
+            GenericCommand::Rewrite(name, rewrite, subsume) => {
+                GenericCommand::Rewrite(fun(name), rewrite, subsume)
+            }
             GenericCommand::BiRewrite(name, rewrite) => {
                 GenericCommand::BiRewrite(fun(name), rewrite)
             }
             GenericCommand::Action(action) => GenericCommand::Action(action),
-            GenericCommand::Extract(span, expr, variants) => GenericCommand::Extract(
-                span,
-                expr,
-                variants,
-            ),
+            GenericCommand::Extract(span, expr, variants) => {
+                GenericCommand::Extract(span, expr, variants)
+            }
             GenericCommand::RunSchedule(schedule) => {
                 GenericCommand::RunSchedule(schedule.map_string_symbols(fun))
             }
             GenericCommand::PrintOverallStatistics(span, file) => {
-                GenericCommand::PrintOverallStatistics(
-                    span,
-                    file
-                )
+                GenericCommand::PrintOverallStatistics(span, file)
             }
-            GenericCommand::Check(span, facts) => GenericCommand::Check(
-                span,
-                facts
-            ),
+            GenericCommand::Check(span, facts) => GenericCommand::Check(span, facts),
             GenericCommand::PrintFunction(span, name, n, file, mode) => {
                 GenericCommand::PrintFunction(span, fun(name), n, file, mode)
             }
             GenericCommand::PrintSize(span, name) => {
                 GenericCommand::PrintSize(span, name.map(|n| fun(n)))
             }
-            GenericCommand::Input { span, name, file } => {
-                GenericCommand::Input { span, name: fun(name), file }
-            }
-            GenericCommand::Output { span, file, exprs } => GenericCommand::Output {
+            GenericCommand::Input { span, name, file } => GenericCommand::Input {
                 span,
+                name: fun(name),
                 file,
-                exprs,
             },
+            GenericCommand::Output { span, file, exprs } => {
+                GenericCommand::Output { span, file, exprs }
+            }
             GenericCommand::Push(n) => GenericCommand::Push(n),
             GenericCommand::Pop(span, n) => GenericCommand::Pop(span, n),
             GenericCommand::Fail(span, cmd) => {
                 GenericCommand::Fail(span, Box::new(cmd.map_string_symbols(fun)))
             }
-            GenericCommand::Include(span, file) => {
-                GenericCommand::Include(span, file)
-            }
+            GenericCommand::Include(span, file) => GenericCommand::Include(span, file),
             GenericCommand::UserDefined(span, name, exprs) => {
                 GenericCommand::UserDefined(span, name, exprs)
             }
