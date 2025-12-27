@@ -47,23 +47,19 @@ pub trait FreshGen<Head: ?Sized, Leaf> {
 
 impl FreshGen<str, String> for SymbolGen {
     fn fresh(&mut self, name_hint: &str) -> String {
-        let count_before = match self.hint_to_count.entry(name_hint.to_string()) {
-            HEntry::Occupied(o) => {
-                let before = *o.get();
-                *o.into_mut() += 1;
-                before
+        let entry = self.hint_to_count.entry(name_hint.to_string()).or_insert(0);
+        let count_before = *entry;
+        *entry += 1;
+        format!(
+            "{}{}{}",
+            self.reserved_string,
+            name_hint,
+            if count_before == 0 {
+                "".to_string()
+            } else {
+                count_before.to_string()
             }
-            HEntry::Vacant(v) => {
-                v.insert(0);
-                0
-            }
-        };
-        let s = format!("{}{}{}", self.reserved_string, name_hint, if count_before == 0 {
-            "".to_string()
-        } else {
-            count_before.to_string()
-        });
-        s
+        )
     }
 }
 
@@ -75,22 +71,22 @@ impl FreshGen<String, String> for SymbolGen {
 
 impl FreshGen<ResolvedCall, ResolvedVar> for SymbolGen {
     fn fresh(&mut self, name_hint: &ResolvedCall) -> ResolvedVar {
-        let count = match self.hint_to_count.entry(format!("{name_hint:?}")) {
-            HEntry::Occupied(o) => {
-                let before = *o.get();
-                *o.into_mut() += 1;
-                before
+        let entry = self
+            .hint_to_count
+            .entry(format!("{name_hint:?}"))
+            .or_insert(0);
+        let count = *entry;
+        *entry += 1;
+        let name = format!(
+            "{}{}{}",
+            self.reserved_string,
+            name_hint,
+            if count == 0 {
+                "".to_string()
+            } else {
+                count.to_string()
             }
-            HEntry::Vacant(v) => {
-                v.insert(0);
-                0
-            }
-        };
-        let name = format!("{}{}{}", self.reserved_string, name_hint, if count == 0 {
-            "".to_string()
-        } else {
-            count.to_string()
-        });
+        );
         let sort = match name_hint {
             ResolvedCall::Func(f) => f.output.clone(),
             ResolvedCall::Primitive(prim) => prim.output().clone(),
