@@ -470,7 +470,7 @@ impl Database {
         loop {
             to_merge.clear();
             let to_merge_vec = self.notification_list.reset();
-            if to_merge_vec.len() < 8 {
+            if to_merge_vec.len() < 4 {
                 ever_changed |= self.merge_simple(to_merge_vec);
                 break;
             }
@@ -636,18 +636,16 @@ impl Database {
     ///
     /// This method is useful for out-of-band access to databse state.
     ///
-    // Not in doc comment since it mentions private items:
-    //
-    // **NOTE:** It is legal to call [`Table::new_buffer`] on the returned table handle, and use
-    // that to stage updates to the given table via [`MutationBuffer::stage_insert`] or
-    // [`MutationBuffer::stage_remove`], however this is *likely to be a source of bugs*. Updates
-    // staged in this way will not cause `table` to be marked as having pending changes in the
-    // next call to [`Database::merge_all`]. Instead, such users should use
-    // [`Database::new_buffer`] instead, which plumbs this signal through correctly.
-    //
-    //
-    // Note that most updates to a table are mediated through an [`ExecutionState`], which handles
-    // this correctl, so this is handled automatically for common sources of updates.
+    /// **NOTE:** It is legal to call [`Table::new_buffer`] on the returned table handle, and use
+    /// that to stage updates to the given table via [`MutationBuffer::stage_insert`] or
+    /// [`MutationBuffer::stage_remove`], however this is *likely to be a source of bugs*.
+    ///
+    /// Updates staged in this way will not cause `table` to be marked as having pending changes in
+    /// the next call to [`Database::merge_all`]. Instead, such users should use
+    /// [`Database::new_buffer`], which plumbs this signal through correctly, or better yet,
+    /// perform all updates through an [`ExecutionState`] or a [`crate::RuleBuilder`]. If these
+    /// options do not work, then calling [`Database::merge_table`] directly will force a merge
+    /// call on the table.
     pub fn get_table(&self, table: TableId) -> &WrappedTable {
         &self
             .tables
@@ -656,6 +654,10 @@ impl Database {
             .table
     }
 
+    /// Get a handle on the given table along with metadata about it.
+    ///
+    ///
+    /// **NOTE:** See the note on [`Database::get_table`] around manually staging updates.
     pub fn get_table_info(&self, table: TableId) -> &TableInfo {
         self.tables
             .get(table)
@@ -665,6 +667,8 @@ impl Database {
     /// Create a new mutation buffer for the table with id `id`.
     ///
     /// This will marked the given table as potentially changed for the next round of merging.
+    /// Unlike calling [`Table::new_buffer`] on a table returned from a getter, this method also
+    /// triggers change notification metadata that is read by [`Database::merge_all`].
     pub fn new_buffer(&self, id: TableId) -> Box<dyn MutationBuffer> {
         self.notification_list.notify(id);
         self.get_table(id).new_buffer()
@@ -718,6 +722,9 @@ impl Database {
     /// Get direct mutable access to the table.
     ///
     /// This method is useful for out-of-band access to databse state.
+    ///
+    /// **NOTE:** See the warning around staging updates to handles returned through this method in
+    /// the documentation for [`Database::get_table`].
     pub fn get_table_mut(&mut self, id: TableId) -> &mut dyn Table {
         &mut *self
             .tables
