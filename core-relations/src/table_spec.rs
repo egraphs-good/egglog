@@ -332,7 +332,9 @@ pub trait Table: Any + Send + Sync {
     /// the table.
     fn merge(&mut self, exec_state: &mut ExecutionState) -> TableChange;
 
-    /// Create a new buffer for staging mutations on this table.
+    /// Create a new buffer for staging mutations on this table. Mutations staged to a
+    /// MutationBuffer that is then dropped may not take effect until the next call to
+    /// [`Table::merge`].
     fn new_buffer(&self) -> Box<dyn MutationBuffer>;
 }
 
