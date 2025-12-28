@@ -20,11 +20,12 @@ pub mod constraint;
 mod core;
 pub mod extract;
 pub mod prelude;
+mod proof_tests;
 pub mod scheduler;
 mod serialize;
 pub mod sort;
-mod term_encoding;
-mod term_encoding_helpers;
+mod proof_encoding;
+mod proof_encoding_helpers;
 mod termdag;
 mod typechecking;
 pub mod util;
@@ -78,8 +79,8 @@ use util::*;
 use crate::ast::desugar::desugar_command;
 use crate::ast::*;
 use crate::core::{GenericActionsExt, ResolvedRuleExt};
-pub use crate::term_encoding::file_supports_proofs;
-use crate::term_encoding::{EncodingState, TermState, command_supports_proof_encoding};
+pub use crate::proof_encoding::file_supports_proofs;
+use crate::proof_encoding::{EncodingState, TermState, command_supports_proof_encoding};
 
 pub const GLOBAL_NAME_PREFIX: &str = "$";
 
@@ -1433,14 +1434,6 @@ impl EGraph {
             let mut new_typechecked = vec![];
             for new_cmd in term_encoding_added {
                 let desugared = desugar_command(new_cmd, &mut self.parser)?;
-                eprintln!(
-                    "typechecking after term encoding:\n{}",
-                    desugared
-                        .iter()
-                        .map(|c| format!("{}", c.to_command()))
-                        .collect::<Vec<_>>()
-                        .join("\n")
-                );
 
                 // Now typecheck using self, adding term type information.
                 let desugared_typechecked = self.typecheck_program(&desugared)?;

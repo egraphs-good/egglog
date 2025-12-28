@@ -75,7 +75,7 @@
 //! the canonical representative produced by `addView`, and the trailing `run-schedule` executes the
 //! maintenance rules so that the encoded program stays behaviourally equivalent to the uninstrumented version.
 use crate::ast::GenericCommand;
-use crate::term_encoding_helpers::{EncodingNames, Justification};
+use crate::proof_encoding_helpers::{EncodingNames, Justification};
 use crate::typechecking::FuncType;
 use crate::*;
 use std::path::Path;
