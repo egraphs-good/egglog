@@ -128,24 +128,24 @@ impl<'a> TermState<'a> {
         justification: &Justification,
     ) -> String {
         let uf_name = self.uf_name(type_name);
-        let uf_proof_name = self.uf_proof_name(type_name);
-        let to_ast_constructor = self
-            .proof_names()
-            .sort_to_ast_constructor
-            .get(type_name)
-            .unwrap();
-        let rule_constructor = &self.proof_names().rule_constructor;
-        let fiat_constructor = &self.proof_names().fiat_constructor;
-        let proof = match justification {
-            Justification::Rule(rule_name, proof_list) => format!(
-                "({rule_constructor} \"{rule_name}\" {proof_list} ({to_ast_constructor} {lhs}) ({to_ast_constructor} {rhs}))"
-            ),
-            Justification::Fiat => format!(
-                "({fiat_constructor} ({to_ast_constructor} {lhs}) ({to_ast_constructor} {rhs}))"
-            ),
-            Justification::Proof(existing_proof) => existing_proof.clone(),
-        };
         let set_proof = if self.egraph.proof_state.proofs_enabled {
+            let uf_proof_name = self.uf_proof_name(type_name);
+            let to_ast_constructor = self
+                .proof_names()
+                .sort_to_ast_constructor
+                .get(type_name)
+                .unwrap();
+            let rule_constructor = &self.proof_names().rule_constructor;
+            let fiat_constructor = &self.proof_names().fiat_constructor;
+            let proof = match justification {
+                Justification::Rule(rule_name, proof_list) => format!(
+                    "({rule_constructor} \"{rule_name}\" {proof_list} ({to_ast_constructor} {lhs}) ({to_ast_constructor} {rhs}))"
+                ),
+                Justification::Fiat => format!(
+                    "({fiat_constructor} ({to_ast_constructor} {lhs}) ({to_ast_constructor} {rhs}))"
+                ),
+                Justification::Proof(existing_proof) => existing_proof.clone(),
+            };
             format!(
                 "(set ({uf_proof_name} (ordering-max {lhs} {rhs}) (ordering-min {lhs} {rhs})) {proof})"
             )
@@ -1097,4 +1097,3 @@ pub fn command_supports_proof_encoding(command: &ResolvedCommand) -> bool {
         _ => true,
     }
 }
-

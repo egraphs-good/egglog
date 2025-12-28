@@ -83,7 +83,6 @@ impl<'a> TermState<'a> {
     }
 
     pub(crate) fn parse_program(&mut self, input: &str) -> Vec<Command> {
-        eprintln!("Parsing program:\n{}", input);
         self.egraph.parser.ensure_no_reserved_symbols = false;
         let res = self.egraph.parser.get_program_from_string(None, input);
         self.egraph.parser.ensure_no_reserved_symbols = true;
@@ -183,7 +182,6 @@ impl<'a> TermState<'a> {
                     fname, fn_sort
                 )
             })
-            
     }
 
     /// A view proof for functions proves ... = t by some justification, where t is the term of the view row.
