@@ -1,4 +1,4 @@
-//! Utilities for rewriting an [`EGraph`](crate::EGraph) into its "term encoding" form.
+//! Rewrites an egglog program to use a term encoding, optionally including proof tracking.
 //!
 //! The term encoding instruments an egglog program so that every constructor and
 //! function call is backed by explicit term tables, view tables, and per-sort
@@ -1050,4 +1050,3 @@ impl<'a> TermState<'a> {
         res
     }
 }
-
