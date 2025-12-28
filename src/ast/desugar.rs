@@ -30,10 +30,9 @@ pub(crate) fn desugar_command(
             schema,
             cost,
             unextractable,
+            true,
         ))],
-        Command::Relation { span, name, inputs } => vec![NCommand::Function(
-            FunctionDecl::relation(span, name, inputs),
-        )],
+        Command::Relation { span, name, inputs } => desugar_relation(parser, span, name, inputs),
         Command::Datatype {
             span,
             name,
@@ -77,6 +76,7 @@ pub(crate) fn desugar_command(
                         },
                         variant.cost,
                         false,
+                        true,
                     )));
                 }
             }
@@ -157,6 +157,7 @@ fn desugar_datatype(span: Span, name: String, variants: Vec<Variant>) -> Vec<NCo
                 },
                 variant.cost,
                 variant.unextractable,
+                true,
             ))
         }))
         .collect()
@@ -235,6 +236,31 @@ fn desugar_birewrite(
             parser,
         ))
         .collect()
+}
+
+/// Desugar relation by making a new sort and a constructor for it.
+fn desugar_relation(
+    parser: &mut Parser,
+    span: Span,
+    name: String,
+    inputs: Vec<String>,
+) -> Vec<NCommand> {
+    let dashes_removed = name.replace('-', "");
+    let fresh_sort = parser.symbol_gen.fresh(&format!("{dashes_removed}Sort"));
+    vec![
+        NCommand::Sort(span.clone(), fresh_sort.clone(), None),
+        NCommand::Function(FunctionDecl::constructor(
+            span,
+            name,
+            Schema {
+                input: inputs,
+                output: fresh_sort,
+            },
+            None,
+            false,
+            false,
+        )),
+    ]
 }
 
 pub fn rule_name<Head, Leaf>(command: &GenericCommand<Head, Leaf>) -> String

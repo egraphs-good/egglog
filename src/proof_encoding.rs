@@ -181,7 +181,6 @@ impl<'a> TermState<'a> {
 
         let (proof_query1, proof_action1, to_ast_constructor_code, proof_query2, proof_action2) =
             if self.egraph.proof_state.proofs_enabled {
-                let uf_proof_name = self.uf_proof_name(sort_name);
                 let p1_fresh = self.egraph.parser.symbol_gen.fresh("p1");
                 let p2_fresh = self.egraph.parser.symbol_gen.fresh("p2");
                 assert!(

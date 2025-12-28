@@ -107,11 +107,6 @@ where
                     cost: f.cost,
                     unextractable: f.unextractable,
                 },
-                FunctionSubtype::Relation => GenericCommand::Relation {
-                    span: f.span.clone(),
-                    name: f.name.clone(),
-                    inputs: f.schema.input.clone(),
-                },
                 FunctionSubtype::Custom => GenericCommand::Function {
                     span: f.span.clone(),
                     schema: f.schema.clone(),
@@ -999,7 +994,7 @@ pub(crate) type ResolvedFunctionDecl = GenericFunctionDecl<ResolvedCall, Resolve
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
 pub enum FunctionSubtype {
     Constructor,
-    Relation,
+    // TODO rename to [`Function`] to match surface syntax and terminology.
     Custom,
 }
 
@@ -1007,7 +1002,6 @@ impl Display for FunctionSubtype {
     fn fmt(&self, f: &mut Formatter) -> std::fmt::Result {
         match self {
             FunctionSubtype::Constructor => write!(f, "constructor"),
-            FunctionSubtype::Relation => write!(f, "relation"),
             FunctionSubtype::Custom => write!(f, "function"),
         }
     }
@@ -1034,6 +1028,7 @@ where
     /// This is used by visualization to handle globals differently.
     pub let_binding: bool,
     pub span: Span,
+    pub unionable: bool,
 }
 
 #[derive(Clone, Debug, PartialEq, Eq, Hash)]
@@ -1094,6 +1089,7 @@ impl FunctionDecl {
             unextractable: true,
             let_binding: false,
             span,
+            unionable: false,
         }
     }
 
@@ -1104,6 +1100,7 @@ impl FunctionDecl {
         schema: Schema,
         cost: Option<DefaultCost>,
         unextractable: bool,
+        unionable: bool,
     ) -> Self {
         Self {
             name,
@@ -1115,24 +1112,7 @@ impl FunctionDecl {
             unextractable,
             let_binding: false,
             span,
-        }
-    }
-
-    /// Constructs a `relation`
-    pub fn relation(span: Span, name: String, input: Vec<String>) -> Self {
-        Self {
-            name,
-            subtype: FunctionSubtype::Relation,
-            schema: Schema {
-                input,
-                output: String::from("Unit"),
-            },
-            resolved_schema: String::new(),
-            merge: None,
-            cost: None,
-            unextractable: true,
-            let_binding: false,
-            span,
+            unionable,
         }
     }
 }
@@ -1156,6 +1136,7 @@ where
             unextractable: self.unextractable,
             let_binding: self.let_binding,
             span: self.span,
+            unionable: self.unionable,
         }
     }
 }
@@ -1502,9 +1483,7 @@ where
             GenericCommand::PrintFunction(span, name, n, file, mode) => {
                 GenericCommand::PrintFunction(span, fun(name), n, file, mode)
             }
-            GenericCommand::PrintSize(span, name) => {
-                GenericCommand::PrintSize(span, name.map(fun))
-            }
+            GenericCommand::PrintSize(span, name) => GenericCommand::PrintSize(span, name.map(fun)),
             GenericCommand::Input { span, name, file } => GenericCommand::Input {
                 span,
                 name: fun(name),
