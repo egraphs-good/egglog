@@ -20,12 +20,12 @@ pub mod constraint;
 mod core;
 pub mod extract;
 pub mod prelude;
+mod proof_encoding;
+mod proof_encoding_helpers;
 mod proof_tests;
 pub mod scheduler;
 mod serialize;
 pub mod sort;
-mod proof_encoding;
-mod proof_encoding_helpers;
 mod termdag;
 mod typechecking;
 pub mod util;
@@ -561,7 +561,6 @@ impl EGraph {
 
         let can_subsume = match decl.subtype {
             FunctionSubtype::Constructor => true,
-            FunctionSubtype::Relation => true,
             FunctionSubtype::Custom => false,
         };
 
@@ -575,11 +574,9 @@ impl EGraph {
             default: match decl.subtype {
                 FunctionSubtype::Constructor => DefaultVal::FreshId,
                 FunctionSubtype::Custom => DefaultVal::Fail,
-                FunctionSubtype::Relation => DefaultVal::Const(self.backend.base_values().get(())),
             },
             merge: match decl.subtype {
                 FunctionSubtype::Constructor => MergeFn::UnionId,
-                FunctionSubtype::Relation => MergeFn::AssertEq,
                 FunctionSubtype::Custom => match &decl.merge {
                     None => MergeFn::AssertEq,
                     Some(expr) => self.translate_expr_to_mergefn(expr)?,

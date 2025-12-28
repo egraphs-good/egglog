@@ -489,6 +489,7 @@ impl TypeInfo {
             unextractable: fdecl.unextractable,
             let_binding: fdecl.let_binding,
             span: fdecl.span.clone(),
+            unionable: fdecl.unionable,
         })
     }
 
@@ -589,10 +590,8 @@ impl TypeInfo {
             GenericExpr::Call(span, head, args) => {
                 match head {
                     ResolvedCall::Func(t) => {
-                        // Only allowed to lookup constructor or relation
-                        if t.subtype != FunctionSubtype::Constructor
-                            && t.subtype != FunctionSubtype::Relation
-                        {
+                        // Only allowed to lookup constructor
+                        if t.subtype != FunctionSubtype::Constructor {
                             Err(TypeError::LookupInRuleDisallowed(
                                 head.to_string(),
                                 span.clone(),
