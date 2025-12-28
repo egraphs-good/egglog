@@ -443,10 +443,7 @@ impl EGraph {
         );
         extended_row[schema_math.ret_val_col()] = res;
         let table_id = self.funcs[func].table;
-        self.db
-            .get_table(table_id)
-            .new_buffer()
-            .stage_insert(&extended_row);
+        self.db.new_buffer(table_id).stage_insert(&extended_row);
         self.flush_updates();
         self.get_canon_in_uf(res)
     }
@@ -468,10 +465,7 @@ impl EGraph {
             let result = Value::from_usize(self.db.inc_counter(self.id_counter));
             term_key.push(result);
             term_key.push(reason);
-            self.db
-                .get_table(term_table_id)
-                .new_buffer()
-                .stage_insert(&term_key);
+            self.db.new_buffer(term_table_id).stage_insert(&term_key);
             self.db.merge_table(term_table_id);
             result
         }
@@ -498,8 +492,7 @@ impl EGraph {
         let reason_spec_id = self.proof_specs.push(reason);
         let reason_id = Value::from_usize(self.db.inc_counter(self.reason_counter));
         self.db
-            .get_table(reason_table)
-            .new_buffer()
+            .new_buffer(reason_table)
             .stage_insert(&[Value::new(reason_spec_id.rep()), reason_id]);
         self.db.merge_table(reason_table);
         reason_id
@@ -533,9 +526,7 @@ impl EGraph {
             let term_id = reason_id.map(|reason| {
                 // Get the term id itself
                 let term_id = self.get_term(func, &row[0..schema_math.num_keys()], reason);
-                let buf = bufs.get_or_insert(self.uf_table, || {
-                    self.db.get_table(self.uf_table).new_buffer()
-                });
+                let buf = bufs.get_or_insert(self.uf_table, || self.db.new_buffer(self.uf_table));
                 // Then union it with the value being set for this term.
                 buf.stage_insert(&[
                     *row.last().unwrap(),
@@ -555,7 +546,7 @@ impl EGraph {
                     ret_val: None, // already filled in.
                 },
             );
-            let buf = bufs.get_or_insert(table_id, || self.db.get_table(table_id).new_buffer());
+            let buf = bufs.get_or_insert(table_id, || self.db.new_buffer(table_id));
             buf.stage_insert(&extended_row);
             extended_row.clear();
         }

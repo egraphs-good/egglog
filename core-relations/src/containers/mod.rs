@@ -170,7 +170,7 @@ pub trait ContainerValue: Hash + Eq + Clone + Send + Sync + 'static {
     /// Note that containers can be more structured than just a sequence of values. This iterator
     /// is used to populate an index that in turn is used to speed up rebuilds. If a value in the
     /// container is eligible for a rebuild and it is not mentioned by this iterator, the outer
-    /// [`Containers`] registry may skip rebuilding this container.
+    /// container registry may skip rebuilding this container.
     fn iter(&self) -> impl Iterator<Item = Value> + '_;
 }
 

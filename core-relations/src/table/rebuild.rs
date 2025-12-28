@@ -37,12 +37,12 @@ impl SortedWritesTable {
         table: &WrappedTable,
         next_ts: Value,
         exec_state: &mut ExecutionState,
-    ) {
+    ) -> bool {
         if self.to_rebuild.is_empty() {
-            return;
+            return false;
         }
         let Some(rebuilder) = table.rebuilder(&self.to_rebuild) else {
-            return;
+            return false;
         };
         // First, decide whether to do an incremental or full rebuild.
         if let Some(hint_col) = rebuilder.hint_col() {
@@ -54,19 +54,12 @@ impl SortedWritesTable {
                 self.data.next_row().index(),
                 parallelize_rebuild(to_scan.size()),
             ) {
-                self.rebuild_incremental(
-                    table,
-                    &*rebuilder,
-                    hint_col,
-                    to_scan,
-                    next_ts,
-                    exec_state,
-                );
+                self.rebuild_incremental(table, &*rebuilder, hint_col, to_scan, next_ts, exec_state)
             } else {
-                self.rebuild_nonincremental(&*rebuilder, next_ts, exec_state);
+                self.rebuild_nonincremental(&*rebuilder, next_ts, exec_state)
             }
         } else {
-            self.rebuild_nonincremental(&*rebuilder, next_ts, exec_state);
+            self.rebuild_nonincremental(&*rebuilder, next_ts, exec_state)
         }
     }
 
@@ -78,7 +71,7 @@ impl SortedWritesTable {
         to_scan: Subset,
         next_ts: Value,
         exec_state: &mut ExecutionState,
-    ) {
+    ) -> bool {
         let mut index = mem::replace(
             &mut self.rebuild_index,
             Index::new(vec![], ColumnIndex::new()),
@@ -108,10 +101,10 @@ impl SortedWritesTable {
             WrappedTableRef::with_wrapper(self, |wrapped| {
                 buf.par_iter()
                     .fold(
-                        || (self.new_buffer(), exec_state.clone()),
-                        |(mut mutation_buf, mut exec_state), (_, row)| {
+                        || (self.new_buffer(), exec_state.clone(), false),
+                        |(mut mutation_buf, mut exec_state, mut changed), (_, row)| {
                             let Some(subset) = self.rebuild_index.get_subset(&row[0]) else {
-                                return (mutation_buf, exec_state);
+                                return (mutation_buf, exec_state, changed);
                             };
                             let mut scanned = TaggedRowBuffer::new(self.n_columns);
                             rebuilder.rebuild_subset(
@@ -126,16 +119,20 @@ impl SortedWritesTable {
                                 if let Some(key) = to_remove {
                                     mutation_buf.stage_remove(key);
                                 }
+                                changed = true;
                                 insert_row!(self, mutation_buf, row, next_ts);
                             }
-                            (mutation_buf, exec_state)
+                            (mutation_buf, exec_state, changed)
                         },
                     )
-                    .for_each(|_| {});
-            });
+                    .map(|(_, _, changed)| changed)
+                    .max()
+                    .unwrap_or(false)
+            })
         } else {
             let mut scratch = TaggedRowBuffer::new(self.n_columns);
             let mut write_buf = self.new_buffer();
+            let mut changed = false;
             for (_, id) in buf.iter() {
                 let Some(subset) = self.rebuild_index.get_subset(&id[0]) else {
                     continue;
@@ -143,6 +140,7 @@ impl SortedWritesTable {
                 WrappedTableRef::with_wrapper(self, |wrapped| {
                     rebuilder.rebuild_subset(wrapped, subset, &mut scratch, exec_state);
                 });
+                changed |= subset.size() > 0;
                 for (row_id, row) in scratch.non_stale_mut() {
                     if let Some(to_remove) = self.data.get_row(row_id).map(|x| &x[0..self.n_keys]) {
                         write_buf.stage_remove(to_remove);
@@ -151,6 +149,7 @@ impl SortedWritesTable {
                 }
                 scratch.clear();
             }
+            changed
         }
     }
 
@@ -159,7 +158,7 @@ impl SortedWritesTable {
         rebuilder: &dyn Rebuilder,
         next_ts: Value,
         exec_state: &mut ExecutionState,
-    ) {
+    ) -> bool {
         const STEP_SIZE: usize = 2048;
         if parallelize_rebuild(self.data.next_row().index()) {
             (0..self.data.next_row().index())
@@ -171,9 +170,10 @@ impl SortedWritesTable {
                             self.new_buffer(),
                             TaggedRowBuffer::new(self.n_columns),
                             exec_state.clone(),
+                            false,
                         )
                     },
-                    |(mut mutation_buf, mut buf, mut exec_state), start| {
+                    |(mut mutation_buf, mut buf, mut exec_state, mut changed), start| {
                         rebuilder.rebuild_buf(
                             &self.data.data,
                             RowId::from_usize(start),
@@ -186,18 +186,22 @@ impl SortedWritesTable {
                         );
                         for (row_id, row) in buf.non_stale_mut() {
                             let to_remove = self.data.get_row(row_id).map(|x| &x[0..self.n_keys]);
+                            changed = true;
                             if let Some(key) = to_remove {
                                 mutation_buf.stage_remove(key);
                             }
                             insert_row!(self, mutation_buf, row, next_ts);
                         }
                         buf.clear();
-                        (mutation_buf, buf, exec_state)
+                        (mutation_buf, buf, exec_state, changed)
                     },
                 )
-                .for_each(|_| {});
+                .map(|(_, _, _, changed)| changed)
+                .max()
+                .unwrap_or(false)
         } else {
             let mut buf = TaggedRowBuffer::new(self.n_columns);
+            let mut changed = false;
             let mut write_buf = self.new_buffer();
             let max_row = self.data.next_row().index();
             for start in (0..max_row).step_by(STEP_SIZE) {
@@ -213,9 +217,11 @@ impl SortedWritesTable {
                         write_buf.stage_remove(to_remove);
                     }
                     insert_row!(self, write_buf, row, next_ts);
+                    changed = true;
                 }
                 buf.clear();
             }
+            changed
         }
     }
 }

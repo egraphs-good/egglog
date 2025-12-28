@@ -565,7 +565,9 @@ version = "1.0.0"
 dependencies = [
  "arc-swap",
  "codspeed-divan-compat",
+ "egglog-numeric-id",
  "rayon",
+ "smallvec",
 ]
 
 [[package]]

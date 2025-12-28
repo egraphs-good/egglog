@@ -7,12 +7,12 @@
 /// is hard to gauge ahead of time. In this case, we gate parallel execution based on the number of
 /// threads available and whether the total size of the database exceeds a certain threshold.
 pub(crate) fn parallelize_db_level_op(_db_size: usize) -> bool {
-    #[cfg(test)]
+    #[cfg(debug_assertions)]
     {
         use rand::Rng;
         rand::rng().random_bool(0.5)
     }
-    #[cfg(not(test))]
+    #[cfg(not(debug_assertions))]
     {
         _db_size > 10_000 && rayon::current_num_threads() > 1
     }

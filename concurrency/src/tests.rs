@@ -1,15 +1,18 @@
 use std::{
     mem,
     sync::{
-        Arc,
+        Arc, Barrier,
         atomic::{AtomicUsize, Ordering},
     },
     thread::{self, sleep},
     time::Duration,
 };
 
+use smallvec::SmallVec;
+
 use crate::{
-    ConcurrentVec, Notification, ParallelVecWriter, ReadOptimizedLock, ResettableOnceLock,
+    ConcurrentVec, Notification, NotificationList, ParallelVecWriter, ReadOptimizedLock,
+    ResettableOnceLock,
 };
 
 #[test]
@@ -80,6 +83,47 @@ fn notification_race() {
     assert_eq!(ctr.load(Ordering::SeqCst), 20);
 }
 
+#[test]
+fn notification_list_single_threaded() {
+    let list = NotificationList::<usize>::default();
+    list.notify(0);
+    list.notify(2);
+    list.notify(5);
+    let mut notified = list.reset();
+    assert_eq!(notified.as_slice(), [0, 2, 5].as_slice());
+
+    list.notify(1);
+    list.notify(3);
+    notified = list.reset();
+    assert_eq!(notified.as_slice(), [1, 3].as_slice());
+}
+
+#[test]
+fn notification_list_multi_threaded() {
+    for _ in 0..10 {
+        let list = NotificationList::<usize>::default();
+        let threads: Vec<_> = (0..20)
+            .map(|i| {
+                let list = list.clone();
+                thread::spawn(move || {
+                    list.notify(i * 100);
+                    list.notify((i + 1) * 100);
+                })
+            })
+            .collect();
+
+        for t in threads {
+            t.join().unwrap();
+        }
+
+        let mut notified = list.reset();
+        notified.sort_unstable();
+        let expected = (0..=20).map(|i| i * 100).collect::<SmallVec<[usize; 4]>>();
+        assert_eq!(notified.len(), expected.len());
+        assert_eq!(notified, expected);
+    }
+}
+
 // We get more test coverage in the union-find crate
 
 #[test]
@@ -145,6 +189,81 @@ fn basic_parallel_vec_push() {
         results,
         (0..(N_THREADS * PER_THREAD)).collect::<Vec<usize>>()
     );
+}
+
+#[test]
+fn concurrent_vec_resize_with_serial_init() {
+    let v = ConcurrentVec::with_capacity(0);
+    v.push(10);
+    v.push(20);
+    v.resize_with(6, || 99);
+
+    let slice = v.read();
+    assert_eq!(slice.len(), 6);
+    assert_eq!(slice[0], 10);
+    assert_eq!(slice[1], 20);
+    assert!(slice[2..].iter().all(|&value| value == 99));
+}
+
+#[test]
+fn concurrent_vec_resize_with_parallel_init() {
+    let v = Arc::new(ConcurrentVec::with_capacity(0));
+    let barrier = Arc::new(Barrier::new(3));
+
+    let v_inner = v.clone();
+    let barrier_inner = barrier.clone();
+    let left = thread::spawn(move || {
+        barrier_inner.wait();
+        v_inner.resize_with(64, || 1);
+    });
+
+    let v_inner = v.clone();
+    let barrier_inner = barrier.clone();
+    let right = thread::spawn(move || {
+        barrier_inner.wait();
+        v_inner.resize_with(128, || 2);
+    });
+
+    barrier.wait();
+    left.join().unwrap();
+    right.join().unwrap();
+
+    let slice = v.read();
+    assert_eq!(slice.len(), 128);
+    assert!(slice.iter().all(|&value| value == 1 || value == 2));
+    assert!(slice[0..64].windows(2).all(|pair| pair[0] == pair[1]));
+    assert!(slice[64..].windows(2).all(|pair| pair[0] == pair[1]));
+}
+
+#[test]
+fn concurrent_vec_resize_with_noop_when_sized() {
+    let v = Arc::new(ConcurrentVec::with_capacity(0));
+    v.resize_with(4, || 7);
+
+    let counter = Arc::new(AtomicUsize::new(0));
+    let threads: Vec<_> = (0..4)
+        .map(|_| {
+            let v = v.clone();
+            let counter = counter.clone();
+            thread::spawn(move || {
+                v.resize_with(4, || {
+                    counter.fetch_add(1, Ordering::SeqCst);
+                    9
+                });
+            })
+        })
+        .collect();
+
+    for t in threads {
+        t.join().unwrap();
+    }
+
+    v.resize_with(3, || {
+        counter.fetch_add(1, Ordering::SeqCst);
+        9
+    });
+
+    assert_eq!(counter.load(Ordering::SeqCst), 0);
 }
 
 #[test]

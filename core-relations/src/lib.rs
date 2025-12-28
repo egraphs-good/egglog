@@ -39,8 +39,8 @@ pub use query::{
 pub use row_buffer::TaggedRowBuffer;
 pub use table::{MergeFn, SortedWritesTable};
 pub use table_spec::{
-    ColumnId, Constraint, Offset, Rebuilder, Row, Table, TableChange, TableSpec, TableVersion,
-    WrappedTable,
+    ColumnId, Constraint, MutationBuffer, Offset, Rebuilder, Row, Table, TableChange, TableSpec,
+    TableVersion, WrappedTable,
 };
 pub use uf::{DisplacedTable, DisplacedTableWithProvenance, ProofReason, ProofStep};
 
