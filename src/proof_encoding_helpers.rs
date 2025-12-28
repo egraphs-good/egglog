@@ -1,5 +1,10 @@
+use std::path::Path;
+
 use crate::{
-    ast::{Command, Fact, Schedule},
+    EGraph,
+    ast::{
+        Command, Fact, GenericCommand, ResolvedAction, ResolvedCommand, ResolvedExprExt, Schedule,
+    },
     proof_encoding::TermState,
     util::{FreshGen, HashMap, SymbolGen},
 };
@@ -251,5 +256,48 @@ impl<'a> TermState<'a> {
 (constructor  {congr_constructor} ({proof_datatype} i64 {proof_datatype}) {proof_datatype})
                 "
         )
+    }
+}
+
+pub fn file_supports_proofs(path: &Path) -> bool {
+    let contents = match std::fs::read_to_string(path) {
+        Ok(contents) => contents,
+        Err(_) => return false,
+    };
+
+    let canonical = match std::fs::canonicalize(path) {
+        Ok(canonical) => canonical,
+        Err(_) => return false,
+    };
+
+    let mut egraph = EGraph::default();
+    let filename = canonical.to_string_lossy().into_owned();
+    let desugared = match egraph.desugar_program(Some(filename), &contents) {
+        Ok(commands) => commands,
+        Err(_) => return false,
+    };
+
+    commands_support_proof_encoding(&desugared)
+}
+
+fn commands_support_proof_encoding(commands: &[ResolvedCommand]) -> bool {
+    for command in commands {
+        if !command_supports_proof_encoding(command) {
+            return false;
+        }
+    }
+    true
+}
+
+pub fn command_supports_proof_encoding(command: &ResolvedCommand) -> bool {
+    match command {
+        GenericCommand::Sort(_, _, Some(_))
+        | GenericCommand::UserDefined(..)
+        | GenericCommand::Input { .. } => false,
+        // let binding with non-eq sort not supported
+        ResolvedCommand::Action(ResolvedAction::Let(_, _, expr)) => expr.output_type().is_eq_sort(),
+        // no-merge isn't supported
+        ResolvedCommand::Function { merge: None, .. } => false,
+        _ => true,
     }
 }

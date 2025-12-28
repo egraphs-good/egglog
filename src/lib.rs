@@ -58,6 +58,7 @@ use indexmap::map::Entry;
 use log::{Level, log_enabled};
 use numeric_id::DenseIdMap;
 use prelude::*;
+pub use proof_encoding_helpers::file_supports_proofs;
 use scheduler::{SchedulerId, SchedulerRecord};
 pub use serialize::{SerializeConfig, SerializeOutput, SerializedNode};
 use sort::*;
@@ -79,8 +80,8 @@ use util::*;
 use crate::ast::desugar::desugar_command;
 use crate::ast::*;
 use crate::core::{GenericActionsExt, ResolvedRuleExt};
-pub use crate::proof_encoding::file_supports_proofs;
-use crate::proof_encoding::{EncodingState, TermState, command_supports_proof_encoding};
+use crate::proof_encoding::{EncodingState, TermState};
+use crate::proof_encoding_helpers::command_supports_proof_encoding;
 
 pub const GLOBAL_NAME_PREFIX: &str = "$";
 

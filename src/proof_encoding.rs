@@ -74,11 +74,9 @@
 //! *Original commands* are rewritten to reference these structures. The `check` now reasons about
 //! the canonical representative produced by `addView`, and the trailing `run-schedule` executes the
 //! maintenance rules so that the encoded program stays behaviourally equivalent to the uninstrumented version.
-use crate::ast::GenericCommand;
 use crate::proof_encoding_helpers::{EncodingNames, Justification};
 use crate::typechecking::FuncType;
 use crate::*;
-use std::path::Path;
 
 // TODO refactor so that encoding state is optional on the e-graph, ProofNames not optional on EncodingState. Then we don't have to clone proof names everywhere.
 #[derive(Clone)]
@@ -1053,46 +1051,3 @@ impl<'a> TermState<'a> {
     }
 }
 
-pub fn file_supports_proofs(path: &Path) -> bool {
-    let contents = match std::fs::read_to_string(path) {
-        Ok(contents) => contents,
-        Err(_) => return false,
-    };
-
-    let canonical = match std::fs::canonicalize(path) {
-        Ok(canonical) => canonical,
-        Err(_) => return false,
-    };
-
-    let mut egraph = EGraph::default();
-    let filename = canonical.to_string_lossy().into_owned();
-    let desugared = match egraph.desugar_program(Some(filename), &contents) {
-        Ok(commands) => commands,
-        Err(_) => return false,
-    };
-
-    commands_support_proof_encoding(&desugared)
-}
-
-pub fn commands_support_proof_encoding(commands: &[ResolvedCommand]) -> bool {
-    for command in commands {
-        if !command_supports_proof_encoding(command) {
-            return false;
-        }
-    }
-    true
-}
-
-pub fn command_supports_proof_encoding(command: &ResolvedCommand) -> bool {
-    match command {
-        GenericCommand::Sort(_, _, Some(_))
-        | GenericCommand::UserDefined(..)
-        | GenericCommand::Relation { .. }
-        | GenericCommand::Input { .. } => false,
-        ResolvedCommand::Action(ResolvedAction::Let(_, _, expr)) => expr.output_type().is_eq_sort(),
-        // no-merge isn't supported right now
-        ResolvedCommand::Function { merge: None, .. } => false,
-        // delete or subsume on custom functions isn't supported
-        _ => true,
-    }
-}
