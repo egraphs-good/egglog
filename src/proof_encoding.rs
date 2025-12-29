@@ -154,7 +154,7 @@ impl<'a> TermState<'a> {
         format!(
             "
         ({uf_name} (ordering-max {lhs} {rhs}) (ordering-min {lhs} {rhs}))
-        {set_proof}",
+         {set_proof}",
         )
     }
 
@@ -356,7 +356,7 @@ impl<'a> TermState<'a> {
             let mut updated = child_names.clone();
             updated.push(merge_fn_var.clone());
             let term_and_proof = self.update_view(name, &updated, &proof_var);
-            let fresh_constructor = self.egraph.parser.symbol_gen.fresh("mergecleanup");
+            let cleanup_constructor = self.egraph.parser.symbol_gen.fresh("mergecleanup");
             let fresh_sort = self.egraph.parser.symbol_gen.fresh("mergecleanupsort");
             let output_sort = fdecl.schema.output.clone();
 
@@ -364,7 +364,7 @@ impl<'a> TermState<'a> {
             // The second deletes rows with old values for the old variable, while the third deletes rows with new values for the new variable.
             format!(
                 "(sort {fresh_sort})
-                 (constructor {fresh_constructor} ({output_sort} {output_sort}) {fresh_sort})
+                 (constructor {cleanup_constructor} ({output_sort} {output_sort}) {fresh_sort})
                  (rule (({view_name} {child_names_str} old)
                         ({view_name} {child_names_str} new)
                         (!= old new)
@@ -373,13 +373,13 @@ impl<'a> TermState<'a> {
                        ({merge_fn_code_str}
                         {rule_proof}
                         {term_and_proof}
-                        ({fresh_constructor} {merge_fn_var} old)
-                        ({fresh_constructor} {merge_fn_var} new)
+                        ({cleanup_constructor} {merge_fn_var} old)
+                        ({cleanup_constructor} {merge_fn_var} new)
                        )
                         :ruleset {rebuilding_ruleset}
                         :name \"{fresh_name}\")
                 
-                 (rule (({fresh_constructor} merged old)
+                 (rule (({cleanup_constructor} merged old)
                         ({view_name} {child_names_str} merged)
                         ({view_name} {child_names_str} old)
                         (!= merged old))
@@ -391,13 +391,26 @@ impl<'a> TermState<'a> {
         } else {
             // Congruence rule
             let fresh_name = self.egraph.parser.symbol_gen.fresh("congruence_rule");
-            let uf_name = self.uf_name(&fdecl.schema.output);
+            let mut child_names_new = child_names.clone();
+            child_names_new.push("new".to_string());
+            let mut child_names_old = child_names.clone();
+            child_names_old.push("old".to_string());
+            let (query1, prf1) = self.query_view_and_get_proof(&fdecl.name, &child_names_new);
+            let (query2, prf2) = self.query_view_and_get_proof(&fdecl.name, &child_names_old);
+            let sym = &self.proof_names().eq_sym_constructor;
+            let trans = &self.proof_names().eq_trans_constructor;
+            let union_code = self.union(
+                &fdecl.schema.output,
+                "new",
+                "old",
+                &Justification::Proof(format!("({trans} {prf1} ({sym} {prf2}))",)),
+            );
             format!(
-                "(rule (({view_name} {child_names_str} old)
-                        ({view_name} {child_names_str} new)
+                "(rule ({query1}
+                        {query2}
                         (!= old new)
                         (= (ordering-max old new) new))
-                       (({uf_name} new old))
+                       ({union_code})
                         :ruleset {rebuilding_ruleset}
                         :name \"{fresh_name}\")"
             )
@@ -593,11 +606,11 @@ impl<'a> TermState<'a> {
                 }
                 new_args.push(v.to_string());
 
-                let view_name = self.view_name(&head.name());
+                let view_name = self.view_name(head.name());
                 let args_str = ListDisplay(new_args, " ");
                 res.push(format!("({view_name} {args_str})",));
 
-                let view_proof_name = self.view_proof_name(&head.name());
+                let view_proof_name = self.view_proof_name(head.name());
                 let mut proof = format!("({view_proof_name} {args_str})");
                 for (i, arg_proof) in arg_proofs.into_iter().enumerate() {
                     let congr = &self.proof_names().congr_constructor;
