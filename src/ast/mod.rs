@@ -159,6 +159,25 @@ where
         }
     }
 
+    /// Applies `f` to
+    pub fn visit_queries(
+        self,
+        f: &mut impl FnMut(Vec<GenericFact<Head, Leaf>>) -> Vec<GenericFact<Head, Leaf>>,
+    ) -> Self {
+        match self {
+            GenericNCommand::Check(span, query) => GenericNCommand::Check(span, f(query)),
+            GenericNCommand::NormRule { mut rule } => {
+                rule.body = f(rule.body);
+                GenericNCommand::NormRule { rule }
+            }
+            GenericNCommand::RunSchedule(schedule) => {
+                todo!()
+            }
+            _ => self
+        }
+    }
+
+    /// Applies `f` to all expressions in the command, bottom-up.
     pub fn visit_exprs(
         self,
         f: &mut impl FnMut(GenericExpr<Head, Leaf>) -> GenericExpr<Head, Leaf>,

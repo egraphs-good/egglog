@@ -22,6 +22,7 @@ pub mod extract;
 pub mod prelude;
 mod proof_encoding;
 mod proof_encoding_helpers;
+mod proof_normal_form;
 mod proof_tests;
 pub mod scheduler;
 mod serialize;
@@ -82,6 +83,7 @@ use crate::ast::*;
 use crate::core::{GenericActionsExt, ResolvedRuleExt};
 use crate::proof_encoding::{EncodingState, TermState};
 use crate::proof_encoding_helpers::command_supports_proof_encoding;
+use crate::proof_normal_form::proof_form;
 
 pub const GLOBAL_NAME_PREFIX: &str = "$";
 
@@ -1427,8 +1429,9 @@ impl EGraph {
                     });
                 }
             }
+            let normalized = proof_form(typechecked, &mut self.parser.symbol_gen);
 
-            let term_encoding_added = TermState::add_term_encoding(self, typechecked);
+            let term_encoding_added = TermState::add_term_encoding(self, normalized);
             let mut new_typechecked = vec![];
             for new_cmd in term_encoding_added {
                 let desugared = desugar_command(new_cmd, &mut self.parser)?;

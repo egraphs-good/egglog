@@ -162,15 +162,18 @@ impl<'a> TermState<'a> {
     /// When one term has two parents, those parents are unioned in the merge action.
     /// Also, we have a rule that maintains the invariant that each term points to its
     /// canonical representative.
-    fn make_uf_table(&mut self, sort_name: &str) -> Vec<Command> {
+    fn declare_sort(&mut self, sort_name: &str) -> Vec<Command> {
         let pname = self.uf_name(sort_name);
         let fresh_sort = self.egraph.parser.symbol_gen.fresh("uf");
         let fresh_name = self.egraph.parser.symbol_gen.fresh("uf_update");
         let proof_tables = if self.egraph.proof_state.proofs_enabled {
+            let term_proof_name = self.term_proof_name(sort_name);
             let proof_type = self.proof_names().proof_datatype.clone();
             let uf_proof_name = self.uf_proof_name(sort_name);
             format!(
-                "(function {uf_proof_name} ({sort_name} {sort_name}) {proof_type} :merge old)
+                "
+                (function {term_proof_name} ({sort_name}) {proof_type} :merge old)
+                (function {uf_proof_name} ({sort_name} {sort_name}) {proof_type} :merge old)
                  "
             )
         } else {
@@ -564,7 +567,8 @@ impl<'a> TermState<'a> {
     /// Instrument fact replaces terms with looking up
     /// canonical versions in the view.
     /// It also needs to look up references to globals.
-    fn instrument_fact(&mut self, fact: &ResolvedFact, res: &mut Vec<String>) {
+    /// Adds the instrumented fact to `res` and returns a proof that the fact matched.
+    fn instrument_fact(&mut self, fact: &ResolvedFact, res: &mut Vec<String>) -> String {
         match fact {
             GenericFact::Eq(_span, generic_expr, generic_expr1) => {
                 let v1 = self.instrument_fact_expr(generic_expr, res);
@@ -578,24 +582,67 @@ impl<'a> TermState<'a> {
     }
 
     /// Instruments a fact expression to use the view tables.
-    /// Returns a variable representing the expression.
-    fn instrument_fact_expr(&mut self, expr: &ResolvedExpr, res: &mut Vec<String>) -> String {
+    /// Returns a variable representing the expression and a proof that the expression was matched.
+    /// For a constructor the proof proves a ground equality t1 = t2 where t1 is the eclass representative and t2 matches `expr` syntactically.
+    /// For a function the proof proves a ground equality t1 = t1 where t1 is the output of the function.
+    fn instrument_fact_expr(
+        &mut self,
+        expr: &ResolvedExpr,
+        res: &mut Vec<String>,
+    ) -> (String, String) {
         match expr {
-            ResolvedExpr::Lit(_, lit) => format!("{}", lit),
-            ResolvedExpr::Var(_, resolved_var) => resolved_var.name.clone(),
+            ResolvedExpr::Lit(_, lit) => {
+                let fiat_constructor = &self.proof_names().fiat_constructor;
+                let lit_sort = literal_sort(lit);
+                let to_ast = self
+                    .proof_names()
+                    .sort_to_ast_constructor
+                    .get(lit_sort.name())
+                    .unwrap();
+                (
+                    format!("{}", lit),
+                    format!("({fiat_constructor} ({to_ast} {lit}) ({to_ast} {lit}))"),
+                )
+            }
+            ResolvedExpr::Var(_, resolved_var) => {
+                let view_proof_name = self.view_proof_name(&resolved_var.name);
+                let var = resolved_var.name;
+                (
+                    resolved_var.name.clone(),
+                    if resolved_var.sort.is_eq_sort() {
+                        let term_proof_name = self.term_proof_name(resolved_var.sort.name());
+                        format!("({term_proof_name} {var})")
+                    } else {
+                        let fiat_constructor = &self.proof_names().fiat_constructor;
+                        let lit_sort = resolved_var.sort.name();
+                        let to_ast = self
+                            .proof_names()
+                            .sort_to_ast_constructor
+                            .get(lit_sort)
+                            .unwrap();
+                        format!("({fiat_constructor} ({to_ast} {var}) ({to_ast} {var}))")
+                    },
+                )
+            }
             ResolvedExpr::Call(_, resolved_call, args) => {
                 let args = args
                     .iter()
-                    .map(|arg| self.instrument_fact_expr(arg, res))
+                    .map(|arg| self.instrument_fact_expr(arg, res).0)
                     .collect::<Vec<_>>();
                 match resolved_call {
                     ResolvedCall::Func(func_type) => {
                         let fv = self.fresh_var();
+                        let view_name = self.view_name(&func_type.name);
+                        let args_str = ListDisplay(args, " ");
                         res.push(format!(
-                            "({} {} {fv})",
-                            self.view_name(&func_type.name),
-                            ListDisplay(args, " ")
+                            "({view_name} {args_str} {fv})",
+                            
                         ));
+
+                        let view_proof_name = self.view_proof_name(&func_type.name);
+                        let proof = format!("({view_proof_name} {args_str} {fv})");
+                        todo!()
+
                         fv
                     }
                     ResolvedCall::Primitive(specialized_primitive) => {
@@ -642,12 +689,14 @@ impl<'a> TermState<'a> {
         }
     }
 
-    fn instrument_facts(&mut self, facts: &[ResolvedFact]) -> Vec<String> {
+    /// Return a new query and a proof that the query matched.
+    fn instrument_facts(&mut self, facts: &[ResolvedFact]) -> (Vec<String>, String) {
         let mut res = vec![];
+        let mut proof = "".to_string();
         for fact in facts {
             self.instrument_fact(fact, &mut res);
         }
-        res
+        (res, proof)
     }
 
     // Actions need to be instrumented to add to the view
@@ -969,7 +1018,7 @@ impl<'a> TermState<'a> {
         match &command {
             ResolvedNCommand::Sort(_span, name, _presort_and_args) => {
                 res.push(command.to_command().make_unresolved());
-                res.extend(self.make_uf_table(name));
+                res.extend(self.declare_sort(name));
             }
             ResolvedNCommand::Function(fdecl) => {
                 res.extend(self.term_and_view(fdecl));

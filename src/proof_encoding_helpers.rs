@@ -20,6 +20,7 @@ pub(crate) struct EncodingNames {
     pub(crate) eq_trans_constructor: String,
     pub(crate) eq_sym_constructor: String,
     pub(crate) congr_constructor: String,
+    pub(crate) child_constructor: String,
     /// For a given function symbol, the name of the function that converts to the AST type.
     pub(crate) sort_to_ast_constructor: HashMap<String, String>,
     pub(crate) fn_to_term_sort: HashMap<String, String>,
@@ -46,6 +47,7 @@ impl EncodingNames {
             merge_fn_constructor: symbol_gen.fresh("Merge"),
             eq_trans_constructor: symbol_gen.fresh("Trans"),
             eq_sym_constructor: symbol_gen.fresh("Sym"),
+            child_constructor: symbol_gen.fresh("Child"),
             congr_constructor: symbol_gen.fresh("Congr"),
             sort_to_ast_constructor: HashMap::default(),
             fn_to_term_sort: HashMap::default(),
@@ -158,14 +160,6 @@ impl<'a> TermState<'a> {
         "delete_subsume_ruleset".to_string()
     }
 
-    pub(crate) fn fiat_justification(&mut self) -> String {
-        if !self.egraph.proof_state.proofs_enabled {
-            return String::new();
-        }
-        let names = self.proof_names();
-        format!("({})", names.fiat_constructor)
-    }
-
     pub(crate) fn proof_names(&self) -> &EncodingNames {
         &self.egraph.proof_state.proof_names
     }
@@ -196,11 +190,41 @@ impl<'a> TermState<'a> {
         format!("{}ViewProof", name)
     }
 
+    pub(crate) fn term_proof_name(&self, name: &str) -> String {
+        format!("{}Proof", name)
+    }
+
     pub(crate) fn fresh_var(&mut self) -> String {
         self.egraph.parser.symbol_gen.fresh("v")
     }
 
     pub(crate) fn proof_header(&mut self) -> String {
+        let mut to_ast_constructors = Vec::new();
+        // need to build a Ast{lit} for each lit sort in self
+        for sort_name in self.egraph.type_info.sorts.keys().clone() {
+            if !self
+                .proof_names()
+                .sort_to_ast_constructor
+                .contains_key(sort_name)
+            {
+                let ast_constructor = self
+                    .egraph
+                    .parser
+                    .symbol_gen
+                    .fresh(&format!("Ast{}", sort_name));
+                self.egraph
+                    .proof_state
+                    .proof_names
+                    .sort_to_ast_constructor
+                    .insert(sort_name.clone(), ast_constructor.clone());
+                to_ast_constructors.push(format!(
+                    "(constructor {ast_constructor} ({sort_name} ) {})",
+                    self.proof_names().ast_sort
+                ));
+            }
+        }
+        let to_ast_str = to_ast_constructors.join("\n");
+
         let (
             proof_list_sort,
             ast_sort,
@@ -211,18 +235,20 @@ impl<'a> TermState<'a> {
             eq_trans_constructor,
             eq_sym_constructor,
             congr_constructor,
+            child_constructor,
         ) = {
             let names = self.proof_names();
             (
-                names.proof_list_sort.clone(),
-                names.ast_sort.clone(),
-                names.proof_datatype.clone(),
-                names.fiat_constructor.clone(),
-                names.rule_constructor.clone(),
-                names.merge_fn_constructor.clone(),
-                names.eq_trans_constructor.clone(),
-                names.eq_sym_constructor.clone(),
-                names.congr_constructor.clone(),
+                &names.proof_list_sort,
+                &names.ast_sort,
+                &names.proof_datatype,
+                &names.fiat_constructor,
+                &names.rule_constructor,
+                &names.merge_fn_constructor,
+                &names.eq_trans_constructor,
+                &names.eq_sym_constructor,
+                &names.congr_constructor,
+                &names.child_constructor,
             )
         };
 
@@ -232,17 +258,19 @@ impl<'a> TermState<'a> {
 (sort {ast_sort}) ;; wrap sorts in this for proofs
 (sort {proof_datatype})
 
-;; TODO remove this
-(constructor TODOList () {proof_list_sort})
-;; A proof shows that two ASTs are equal.
+{to_ast_str}
 
-;; Fiat justification for globals
+;; Fiat justification for globals and primitives
 (constructor {fiat_constructor} ({ast_sort} {ast_sort}) {proof_datatype})
 ;; name of rule and one proof per fact in the query
 (constructor {rule_constructor} (String {proof_list_sort} {ast_sort} {ast_sort}) {proof_datatype})
 
 ;; merge function justification- name of function and two proofs for the two terms being merged
 (constructor {merge_fn_constructor} (String {proof_datatype} {proof_datatype}) {proof_datatype})
+
+;; given a proof of f(c_1, c_2, ..., c_n) = f(c_1, c_2, ..., c_n) and an index i
+;; proves c_i = c_i
+(constructor {child_constructor} (i64 {proof_datatype}))
 
 ;; transitivity of equality proofs
 (constructor {eq_trans_constructor} ({proof_datatype} {proof_datatype}) {proof_datatype})
