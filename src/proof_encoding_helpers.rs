@@ -20,12 +20,13 @@ pub(crate) struct EncodingNames {
     pub(crate) eq_trans_constructor: String,
     pub(crate) eq_sym_constructor: String,
     pub(crate) congr_constructor: String,
-    pub(crate) child_constructor: String,
     /// For a given function symbol, the name of the function that converts to the AST type.
     pub(crate) sort_to_ast_constructor: HashMap<String, String>,
     pub(crate) fn_to_term_sort: HashMap<String, String>,
     pub(crate) uf_proof_name: HashMap<String, String>,
     pub(crate) single_parent_ruleset_name: String,
+    pub(crate) pcons: String,
+    pub(crate) pnil: String,
 }
 
 /// Packages proof information for instrumenting actions.
@@ -47,12 +48,13 @@ impl EncodingNames {
             merge_fn_constructor: symbol_gen.fresh("Merge"),
             eq_trans_constructor: symbol_gen.fresh("Trans"),
             eq_sym_constructor: symbol_gen.fresh("Sym"),
-            child_constructor: symbol_gen.fresh("Child"),
             congr_constructor: symbol_gen.fresh("Congr"),
             sort_to_ast_constructor: HashMap::default(),
             fn_to_term_sort: HashMap::default(),
             uf_proof_name: HashMap::default(),
             single_parent_ruleset_name: "single_parent".to_string(),
+            pcons: symbol_gen.fresh("PCons"),
+            pnil: symbol_gen.fresh("PNil"),
         }
     }
 }
@@ -235,7 +237,8 @@ impl<'a> TermState<'a> {
             eq_trans_constructor,
             eq_sym_constructor,
             congr_constructor,
-            child_constructor,
+            pcons,
+            pnil,
         ) = {
             let names = self.proof_names();
             (
@@ -248,7 +251,8 @@ impl<'a> TermState<'a> {
                 &names.eq_trans_constructor,
                 &names.eq_sym_constructor,
                 &names.congr_constructor,
-                &names.child_constructor,
+                &names.pcons,
+                &names.pnil,
             )
         };
 
@@ -257,6 +261,9 @@ impl<'a> TermState<'a> {
 (sort {proof_list_sort})
 (sort {ast_sort}) ;; wrap sorts in this for proofs
 (sort {proof_datatype})
+
+(constructor {pcons} ({proof_datatype} {proof_list_sort}) {proof_list_sort})
+(constructor {pnil} ({}) {proof_list_sort})
 
 {to_ast_str}
 
@@ -268,18 +275,14 @@ impl<'a> TermState<'a> {
 ;; merge function justification- name of function and two proofs for the two terms being merged
 (constructor {merge_fn_constructor} (String {proof_datatype} {proof_datatype}) {proof_datatype})
 
-;; given a proof of f(c_1, c_2, ..., c_n) = f(c_1, c_2, ..., c_n) and an index i
-;; proves c_i = c_i
-(constructor {child_constructor} (i64 {proof_datatype}))
-
 ;; transitivity of equality proofs
 (constructor {eq_trans_constructor} ({proof_datatype} {proof_datatype}) {proof_datatype})
 
 ;; symmetry of equality proofs
 (constructor  {eq_sym_constructor} ({proof_datatype}) {proof_datatype})
-;; given a proof that t1 = f(..., c1, ...) and a term f(..., c2, ...)
-;; and the child index of c1 in the term f(..., c1, ...)
-;; and a proof that c1 = c2,
+;; given a proof that t1 = f(..., ci, ...)
+;; and the child index i of ci in the term f(..., ci, ...)
+;; and a proof that ci = c2,
 ;; produces a justification that t1 = f(..., c2, ...)
 (constructor  {congr_constructor} ({proof_datatype} i64 {proof_datatype}) {proof_datatype})
                 "
