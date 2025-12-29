@@ -570,21 +570,41 @@ impl<'a> TermState<'a> {
     /// Adds the instrumented fact to `res` and returns a proof that the fact matched.
     fn instrument_fact(&mut self, fact: &ResolvedFact, res: &mut Vec<String>) -> String {
         match fact {
-            GenericFact::Eq(_span, generic_expr, generic_expr1) => {
-                let v1 = self.instrument_fact_expr(generic_expr, res);
-                let v2 = self.instrument_fact_expr(generic_expr1, res);
-                res.push(format!("(= {} {})", v1, v2));
+            // In proof normal form, this is the only way that function calls apppear.
+            ResolvedFact::Eq(
+                span,
+                ResolvedExpr::Call(
+                    span2,
+                    head @ ResolvedCall::Func(FuncType {
+                        subtype: FunctionSubtype::Custom,
+                        ..
+                    }),
+                    args,
+                ),
+                ResolvedExpr::Var(span3, v),
+            ) => {
+                todo!();
             }
-            GenericFact::Fact(generic_expr) => {
-                let _ = self.instrument_fact_expr(generic_expr, res);
+            ResolvedFact::Eq(_span, generic_expr, generic_expr1) => {
+                let (v1, p1) = self.instrument_fact_expr(generic_expr, res);
+                let (v2, p2) = self.instrument_fact_expr(generic_expr1, res);
+                let sym = &self.proof_names().eq_sym_constructor;
+                let trans = &self.proof_names().eq_trans_constructor;
+                res.push(format!("(= {} {})", v1, v2));
+
+                format!("({trans} ({sym} {p1}) {p2})",)
+            }
+            ResolvedFact::Fact(generic_expr) => {
+                let (_, proof) = self.instrument_fact_expr(generic_expr, res);
+                proof
             }
         }
     }
 
     /// Instruments a fact expression to use the view tables.
+    /// Assumes there are no function lookups in the term.
     /// Returns a variable representing the expression and a proof that the expression was matched.
-    /// For a constructor the proof proves a ground equality t1 = t2 where t1 is the eclass representative and t2 matches `expr` syntactically.
-    /// For a function the proof proves a ground equality t1 = t1 where t1 is the output of the function.
+    /// Proves a ground equality t1 = t2 where t1 is the eclass representative and t2 matches `expr` syntactically.
     fn instrument_fact_expr(
         &mut self,
         expr: &ResolvedExpr,
@@ -605,8 +625,7 @@ impl<'a> TermState<'a> {
                 )
             }
             ResolvedExpr::Var(_, resolved_var) => {
-                let view_proof_name = self.view_proof_name(&resolved_var.name);
-                let var = resolved_var.name;
+                let var = &resolved_var.name;
                 (
                     resolved_var.name.clone(),
                     if resolved_var.sort.is_eq_sort() {
@@ -625,25 +644,33 @@ impl<'a> TermState<'a> {
                 )
             }
             ResolvedExpr::Call(_, resolved_call, args) => {
-                let args = args
-                    .iter()
-                    .map(|arg| self.instrument_fact_expr(arg, res).0)
-                    .collect::<Vec<_>>();
+                let mut new_args = vec![];
+                let mut arg_proofs = vec![];
+                for arg in args {
+                    let (arg_str, proof) = self.instrument_fact_expr(arg, res);
+                    new_args.push(arg_str);
+                    arg_proofs.push(proof);
+                }
                 match resolved_call {
                     ResolvedCall::Func(func_type) => {
                         let fv = self.fresh_var();
                         let view_name = self.view_name(&func_type.name);
-                        let args_str = ListDisplay(args, " ");
-                        res.push(format!(
-                            "({view_name} {args_str} {fv})",
-                            
-                        ));
+                        let args_str = ListDisplay(new_args, " ");
+                        res.push(format!("({view_name} {args_str} {fv})",));
 
                         let view_proof_name = self.view_proof_name(&func_type.name);
-                        let proof = format!("({view_proof_name} {args_str} {fv})");
-                        todo!()
+                        let mut proof = format!("({view_proof_name} {args_str} {fv})");
+                        for (i, arg_proof) in arg_proofs.into_iter().enumerate() {
+                            let congr = &self.proof_names().congr_constructor;
+                            // add a congruence from the argument (representative) to the term
+                            proof = format!(
+                                "
+                            ({congr} {proof} {i} {arg_proof})
+                            "
+                            );
+                        }
 
-                        fv
+                        (fv, proof)
                     }
                     ResolvedCall::Primitive(specialized_primitive) => {
                         if specialized_primitive.output().is_eq_sort() {
@@ -655,9 +682,19 @@ impl<'a> TermState<'a> {
                         res.push(format!(
                             "(= {fv} ({} {}))",
                             specialized_primitive.name(),
-                            ListDisplay(args, " ")
+                            ListDisplay(new_args, " ")
                         ));
-                        fv
+
+                        let fiat_constructor = &self.proof_names().fiat_constructor;
+                        let to_ast = self
+                            .proof_names()
+                            .sort_to_ast_constructor
+                            .get(specialized_primitive.output().name())
+                            .unwrap();
+                        (
+                            fv.clone(),
+                            format!("({fiat_constructor} ({to_ast} {fv}) ({to_ast} {fv}))"),
+                        )
                     }
                 }
             }
@@ -692,9 +729,12 @@ impl<'a> TermState<'a> {
     /// Return a new query and a proof that the query matched.
     fn instrument_facts(&mut self, facts: &[ResolvedFact]) -> (Vec<String>, String) {
         let mut res = vec![];
-        let mut proof = "".to_string();
+        let pnil = &self.proof_names().pnil;
+        let mut proof = format!("({pnil})");
         for fact in facts {
-            self.instrument_fact(fact, &mut res);
+            let f_proof = self.instrument_fact(fact, &mut res);
+            let pcons = &self.proof_names().pcons;
+            proof = format!("({pcons} {f_proof} {proof})")
         }
         (res, proof)
     }
@@ -931,14 +971,16 @@ impl<'a> TermState<'a> {
     /// When proofs are enabled we query proof tables, then build a proof for the rule in the actions.
     /// Finally, each view update also updates the proof tables.
     fn instrument_rule(&mut self, rule: &ResolvedRule) -> Vec<Command> {
-        let facts = self.instrument_facts(&rule.body);
-        // TODO get rule proof
-        let todoproof = Justification::Rule(rule.name.clone(), format!("(TODOList)"));
-        let actions = self.instrument_actions(&rule.head.0, &todoproof);
+        let (facts, proof_str) = self.instrument_facts(&rule.body);
+        let proof_var = self.fresh_var();
+        let proof = Justification::Rule(rule.name.clone(), proof_var.clone());
+        let actions = self.instrument_actions(&rule.head.0, &proof);
         let name = &rule.name;
         let instrumented = format!(
             "(rule ({})
-                   ({})
+                   ((let {proof_var}
+                         {proof_str})
+                    {})
                     {}
                     :name \"{name}\")",
             ListDisplay(facts, " "),
@@ -976,7 +1018,7 @@ impl<'a> TermState<'a> {
             ResolvedSchedule::Run(span, config) => {
                 let new_run = match config.until {
                     Some(ref facts) => {
-                        let instrumented = self.instrument_facts(facts);
+                        let (instrumented, _proof) = self.instrument_facts(facts);
                         let instrumented_facts = self.parse_facts(&instrumented);
                         Schedule::Run(
                             span.clone(),
@@ -1034,7 +1076,7 @@ impl<'a> TermState<'a> {
                 res.extend(self.parse_program(&instrumented));
             }
             ResolvedNCommand::Check(span, facts) => {
-                let instrumented = self.instrument_facts(facts);
+                let (instrumented, _proof) = self.instrument_facts(facts);
                 res.push(Command::Check(
                     span.clone(),
                     self.parse_facts(&instrumented),
