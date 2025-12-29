@@ -572,18 +572,44 @@ impl<'a> TermState<'a> {
         match fact {
             // In proof normal form, this is the only way that function calls apppear.
             ResolvedFact::Eq(
-                span,
+                _span,
                 ResolvedExpr::Call(
-                    span2,
+                    _span2,
                     head @ ResolvedCall::Func(FuncType {
                         subtype: FunctionSubtype::Custom,
                         ..
                     }),
                     args,
                 ),
-                ResolvedExpr::Var(span3, v),
+                // TODO this could actually be arbitrary pretty easily, it's just nested functions that are hard.
+                ResolvedExpr::Var(_span3, v),
             ) => {
-                todo!();
+                let mut new_args = vec![];
+                let mut arg_proofs = vec![];
+                for arg in args {
+                    let (var, proof) = self.instrument_fact_expr(arg, res);
+                    new_args.push(var);
+                    arg_proofs.push(proof);
+                }
+                new_args.push(v.to_string());
+
+                let view_name = self.view_name(&head.name());
+                let args_str = ListDisplay(new_args, " ");
+                res.push(format!("({view_name} {args_str})",));
+
+                let view_proof_name = self.view_proof_name(&head.name());
+                let mut proof = format!("({view_proof_name} {args_str})");
+                for (i, arg_proof) in arg_proofs.into_iter().enumerate() {
+                    let congr = &self.proof_names().congr_constructor;
+                    // add a congruence from the argument (representative) to the term
+                    proof = format!(
+                        "
+                            ({congr} {proof} {i} {arg_proof})
+                            "
+                    );
+                }
+
+                proof
             }
             ResolvedFact::Eq(_span, generic_expr, generic_expr1) => {
                 let (v1, p1) = self.instrument_fact_expr(generic_expr, res);
@@ -628,9 +654,13 @@ impl<'a> TermState<'a> {
                 let var = &resolved_var.name;
                 (
                     resolved_var.name.clone(),
-                    if resolved_var.sort.is_eq_sort() {
+                    if !self.egraph.proof_state.proofs_enabled {
+                        "".to_string()
+                    } else if resolved_var.sort.is_eq_sort() {
                         let term_proof_name = self.term_proof_name(resolved_var.sort.name());
-                        format!("({term_proof_name} {var})")
+                        let fresh_proof = self.fresh_var();
+                        res.push(format!("(= {fresh_proof} ({term_proof_name} {var}))"));
+                        fresh_proof
                     } else {
                         let fiat_constructor = &self.proof_names().fiat_constructor;
                         let lit_sort = resolved_var.sort.name();
@@ -670,7 +700,10 @@ impl<'a> TermState<'a> {
                             );
                         }
 
-                        (fv, proof)
+                        let proof_fv = self.fresh_var();
+                        res.push(format!("(= {proof_fv} {proof})"));
+
+                        (fv, proof_fv)
                     }
                     ResolvedCall::Primitive(specialized_primitive) => {
                         if specialized_primitive.output().is_eq_sort() {
@@ -849,7 +882,7 @@ impl<'a> TermState<'a> {
             args.to_vec()
         };
 
-        let (proof_str, proof_var) = if self.egraph.proof_state.proofs_enabled {
+        let (proof_str, view_proof_var) = if self.egraph.proof_state.proofs_enabled {
             let to_ast = self.fname_to_ast_name(&func_type.name);
             let rule_constructor = &self.proof_names().rule_constructor;
             let fiat_constructor = &self.proof_names().fiat_constructor;
@@ -865,14 +898,29 @@ impl<'a> TermState<'a> {
                 }
                 Justification::Proof(existing_proof) => existing_proof.clone(),
             };
+
             let proof_var = self.fresh_var();
-            (format!("(let {proof_var} {proof})"), proof_var)
+            // add a proof for the constructor if needed
+            let term_proof = if func_type.subtype == FunctionSubtype::Constructor {
+                let term_proof_constructor = self.term_proof_name(func_type.output.name());
+                format!("(set ({term_proof_constructor} {fv}) {proof_var})")
+            } else {
+                "".to_string()
+            };
+
+            (
+                format!(
+                    "(let {proof_var} {proof})
+                      {term_proof}"
+                ),
+                proof_var,
+            )
         } else {
             ("".to_string(), "".to_string())
         };
 
         res.push(proof_str);
-        res.push(self.update_view(&func_type.name, &args_with_fv, &proof_var));
+        res.push(self.update_view(&func_type.name, &args_with_fv, &view_proof_var));
 
         // add to uf table to initialize eclass for constructors
         if func_type.subtype == FunctionSubtype::Constructor {
@@ -880,7 +928,7 @@ impl<'a> TermState<'a> {
                 func_type.output.name(),
                 &fv,
                 &fv,
-                &Justification::Proof(proof_var),
+                &Justification::Proof(view_proof_var),
             );
         }
 
@@ -974,12 +1022,20 @@ impl<'a> TermState<'a> {
         let (facts, proof_str) = self.instrument_facts(&rule.body);
         let proof_var = self.fresh_var();
         let proof = Justification::Rule(rule.name.clone(), proof_var.clone());
+        let proof_var_binding = if self.egraph.proof_state.proofs_enabled {
+            format!(
+                "(let {proof_var}
+                          {proof_str})"
+            )
+        } else {
+            "".to_string()
+        };
+
         let actions = self.instrument_actions(&rule.head.0, &proof);
         let name = &rule.name;
         let instrumented = format!(
             "(rule ({})
-                   ((let {proof_var}
-                         {proof_str})
+                   ({proof_var_binding}
                     {})
                     {}
                     :name \"{name}\")",

@@ -92,6 +92,7 @@ impl<'a> TermState<'a> {
     }
 
     pub(crate) fn parse_program(&mut self, input: &str) -> Vec<Command> {
+        eprintln!("parsing {}", input);
         self.egraph.parser.ensure_no_reserved_symbols = false;
         let res = self.egraph.parser.get_program_from_string(None, input);
         self.egraph.parser.ensure_no_reserved_symbols = true;
@@ -263,7 +264,7 @@ impl<'a> TermState<'a> {
 (sort {proof_datatype})
 
 (constructor {pcons} ({proof_datatype} {proof_list_sort}) {proof_list_sort})
-(constructor {pnil} ({}) {proof_list_sort})
+(constructor {pnil} () {proof_list_sort})
 
 {to_ast_str}
 
