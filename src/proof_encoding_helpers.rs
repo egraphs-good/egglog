@@ -92,7 +92,6 @@ impl<'a> TermState<'a> {
     }
 
     pub(crate) fn parse_program(&mut self, input: &str) -> Vec<Command> {
-        eprintln!("parsing {}", input);
         self.egraph.parser.ensure_no_reserved_symbols = false;
         let res = self.egraph.parser.get_program_from_string(None, input);
         self.egraph.parser.ensure_no_reserved_symbols = true;

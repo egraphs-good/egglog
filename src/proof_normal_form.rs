@@ -85,7 +85,7 @@ fn proof_form_expr(
         ) => {
             // bind this to a new variable
             let new_args = args
-                .into_iter()
+                .iter()
                 .map(|expr| proof_form_expr(expr.clone(), res, fresh))
                 .collect();
             let resolved = GenericExpr::Var(
