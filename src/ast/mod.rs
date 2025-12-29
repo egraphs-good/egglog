@@ -170,10 +170,8 @@ where
                 rule.body = f(rule.body);
                 GenericNCommand::NormRule { rule }
             }
-            GenericNCommand::RunSchedule(schedule) => {
-                todo!()
-            }
-            _ => self
+            GenericNCommand::RunSchedule(schedule) => GenericNCommand::RunSchedule(schedule.visit_queries(f)),
+            _ => self,
         }
     }
 
@@ -249,6 +247,32 @@ where
     Head: Clone + Display,
     Leaf: Clone + PartialEq + Eq + Display + Hash,
 {
+    /// Applies `f` to all the queries in the schedule.
+    pub fn visit_queries(
+        self,
+        f: &mut impl FnMut(Vec<GenericFact<Head, Leaf>>) -> Vec<GenericFact<Head, Leaf>>,
+    ) -> Self {
+        match self {
+            GenericSchedule::Saturate(span, generic_schedule) => {
+                GenericSchedule::Saturate(span, Box::new(generic_schedule.visit_queries(f)))
+            }
+            GenericSchedule::Repeat(span, iters, generic_schedule) => {
+                GenericSchedule::Repeat(span, iters, Box::new(generic_schedule.visit_queries(f)))
+            }
+            GenericSchedule::Run(span, run_config) => GenericSchedule::Run(
+                span,
+                GenericRunConfig {
+                    ruleset: run_config.ruleset,
+                    until: run_config.until.map(f),
+                },
+            ),
+            GenericSchedule::Sequence(span, generic_schedules) => GenericSchedule::Sequence(
+                span,
+                generic_schedules.into_iter().map(|schedule| schedule.visit_queries(f)).collect(),
+            ),
+        }
+    }
+
     fn squash_sequences(self) -> Self {
         match self {
             GenericSchedule::Saturate(span, sched) => {
