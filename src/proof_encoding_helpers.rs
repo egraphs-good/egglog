@@ -225,7 +225,6 @@ impl<'a> TermState<'a> {
         let mut to_ast_constructors = Vec::new();
         // need to build a Ast{lit} for each lit sort in self
         for sort_name in self.egraph.type_info.sorts.keys().clone() {
-            eprintln!("adding to_ast for sort: {}", sort_name);
             if !self
                 .proof_names()
                 .sort_to_ast_constructor
