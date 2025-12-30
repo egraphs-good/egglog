@@ -62,9 +62,7 @@ impl ContainerIds {
     }
 
     fn get(&self, ty: &TypeId) -> Option<ContainerValueId> {
-        self.ids
-            .get_index_of(ty)
-            .map(|idx| ContainerValueId::from_usize(idx))
+        self.ids.get_index_of(ty).map(ContainerValueId::from_usize)
     }
 }
 
