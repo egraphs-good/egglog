@@ -166,21 +166,25 @@ impl<'a> TermState<'a> {
         &self.egraph.proof_state.proof_names
     }
 
+    pub(crate) fn proofs_enabled(&self) -> bool {
+        self.egraph.proof_state.proofs_enabled
+    }
+
     /// Returns code for a constructor that converts from sort to AST.
     /// Adds to the sort to AST constructor map.
     pub(crate) fn add_to_ast(&mut self, sort: &str) -> String {
-        let to_ast_constructor = self
-                    .egraph
-                    .parser
-                    .symbol_gen
-                    .fresh(&format!("Ast{}", sort));
-        self.egraph
-            .proof_state
-            .proof_names
-            .sort_to_ast_constructor
-            .insert(sort.to_string(), to_ast_constructor.clone());
-        let ast_sort = &self.proof_names().ast_sort;
-        format!("(constructor {to_ast_constructor} ({sort}) {ast_sort})")
+        if self.proofs_enabled() {
+            let to_ast_constructor = self.egraph.parser.symbol_gen.fresh(&format!("Ast{}", sort));
+            self.egraph
+                .proof_state
+                .proof_names
+                .sort_to_ast_constructor
+                .insert(sort.to_string(), to_ast_constructor.clone());
+            let ast_sort = &self.proof_names().ast_sort;
+            format!("(constructor {to_ast_constructor} ({sort}) {ast_sort})")
+        } else {
+            "".to_string()
+        }
     }
 
     /// Given a function name, returns the name of the AST constructor for that function's sort.
@@ -221,6 +225,7 @@ impl<'a> TermState<'a> {
         let mut to_ast_constructors = Vec::new();
         // need to build a Ast{lit} for each lit sort in self
         for sort_name in self.egraph.type_info.sorts.keys().clone() {
+            eprintln!("adding to_ast for sort: {}", sort_name);
             if !self
                 .proof_names()
                 .sort_to_ast_constructor

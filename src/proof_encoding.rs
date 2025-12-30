@@ -603,28 +603,32 @@ impl<'a> TermState<'a> {
                 let args_str = ListDisplay(new_args, " ");
                 res.push(format!("({view_name} {args_str})",));
 
-                let view_proof_name = self.view_proof_name(head.name());
-                let proof_var = self.fresh_var();
-                res.push(format!("(= {proof_var} ({view_proof_name} {args_str}))"));
-                let mut proof = proof_var;
-                for (i, arg_proof) in arg_proofs.into_iter().enumerate() {
-                    let congr = &self.proof_names().congr_constructor;
-                    // add a congruence from the argument (representative) to the term
-                    proof = format!(
-                        "
+                if self.egraph.proof_state.proofs_enabled {
+                    let view_proof_name = self.view_proof_name(head.name());
+                    let proof_var = self.fresh_var();
+                    res.push(format!("(= {proof_var} ({view_proof_name} {args_str}))"));
+                    let mut proof = proof_var;
+                    for (i, arg_proof) in arg_proofs.into_iter().enumerate() {
+                        let congr = &self.proof_names().congr_constructor;
+                        // add a congruence from the argument (representative) to the term
+                        proof = format!(
+                            "
                             ({congr} {proof} {i} {arg_proof})
                             "
-                    );
-                }
+                        );
+                    }
 
-                proof
+                    proof
+                } else {
+                    "".to_string()
+                }
             }
             ResolvedFact::Eq(_span, generic_expr, generic_expr1) => {
                 let (v1, p1) = self.instrument_fact_expr(generic_expr, res);
                 let (v2, p2) = self.instrument_fact_expr(generic_expr1, res);
+                res.push(format!("(= {} {})", v1, v2));
                 let sym = &self.proof_names().eq_sym_constructor;
                 let trans = &self.proof_names().eq_trans_constructor;
-                res.push(format!("(= {} {})", v1, v2));
 
                 format!("({trans} ({sym} {p1}) {p2})",)
             }
@@ -648,15 +652,18 @@ impl<'a> TermState<'a> {
             ResolvedExpr::Lit(_, lit) => {
                 let fiat_constructor = &self.proof_names().fiat_constructor;
                 let lit_sort = literal_sort(lit);
-                let to_ast = self
-                    .proof_names()
-                    .sort_to_ast_constructor
-                    .get(lit_sort.name())
-                    .unwrap();
-                (
-                    format!("{}", lit),
-                    format!("({fiat_constructor} ({to_ast} {lit}) ({to_ast} {lit}))"),
-                )
+                let proof_code = if self.egraph.proof_state.proofs_enabled {
+                    let to_ast = self
+                        .proof_names()
+                        .sort_to_ast_constructor
+                        .get(lit_sort.name())
+                        .unwrap();
+                    format!("({fiat_constructor} ({to_ast} {lit}) ({to_ast} {lit}))")
+                } else {
+                    "".to_string()
+                };
+
+                (format!("{}", lit), proof_code)
             }
             ResolvedExpr::Var(_, resolved_var) => {
                 let var = &resolved_var.name;
@@ -696,21 +703,26 @@ impl<'a> TermState<'a> {
                         let args_str = ListDisplay(new_args, " ");
                         res.push(format!("({view_name} {args_str} {fv})",));
 
-                        let view_proof_var = self.fresh_var();
-                        let view_proof_name = self.view_proof_name(&func_type.name);
-                        res.push(format!(
-                            "(= {view_proof_var} ({view_proof_name} {args_str} {fv}))"
-                        ));
-                        let mut proof = view_proof_var;
-                        for (i, arg_proof) in arg_proofs.into_iter().enumerate() {
-                            let congr = &self.proof_names().congr_constructor;
-                            // add a congruence from the argument (representative) to the term
-                            proof = format!(
-                                "
+                        let proof = if self.proofs_enabled() {
+                            let view_proof_var = self.fresh_var();
+                            let view_proof_name = self.view_proof_name(&func_type.name);
+                            res.push(format!(
+                                "(= {view_proof_var} ({view_proof_name} {args_str} {fv}))"
+                            ));
+                            let mut proof = view_proof_var;
+                            for (i, arg_proof) in arg_proofs.into_iter().enumerate() {
+                                let congr = &self.proof_names().congr_constructor;
+                                // add a congruence from the argument (representative) to the term
+                                proof = format!(
+                                    "
                             ({congr} {proof} {i} {arg_proof})
                             "
-                            );
-                        }
+                                );
+                            }
+                            proof
+                        } else {
+                            "".to_string()
+                        };
                         (fv, proof)
                     }
                     ResolvedCall::Primitive(specialized_primitive) => {
@@ -726,16 +738,19 @@ impl<'a> TermState<'a> {
                             ListDisplay(new_args, " ")
                         ));
 
-                        let fiat_constructor = &self.proof_names().fiat_constructor;
-                        let to_ast = self
-                            .proof_names()
-                            .sort_to_ast_constructor
-                            .get(specialized_primitive.output().name())
-                            .unwrap();
-                        (
-                            fv.clone(),
-                            format!("({fiat_constructor} ({to_ast} {fv}) ({to_ast} {fv}))"),
-                        )
+                        let proof = if self.proofs_enabled() {
+                            let fiat_constructor = &self.proof_names().fiat_constructor;
+                            let to_ast = self
+                                .proof_names()
+                                .sort_to_ast_constructor
+                                .get(specialized_primitive.output().name())
+                                .unwrap();
+                            format!("({fiat_constructor} ({to_ast} {fv}) ({to_ast} {fv}))")
+                        } else {
+                            "".to_string()
+                        };
+
+                        (fv.clone(), proof)
                     }
                 }
             }

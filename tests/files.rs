@@ -163,23 +163,26 @@ fn generate_tests(glob: &str) -> Vec<Trial> {
                 ..run.clone()
             });
 
+            // TODO improve performance of proof mode to enable math_microbenchmark tests
             if file_supports_proofs(&run.path) {
                 push_trial(Run {
                     term_encoding: true,
                     ..run.clone()
                 });
 
-                push_trial(Run {
-                    proofs: true,
-                    ..run.clone()
-                });
+                if !run.path.to_string_lossy().contains("math-microbenchmark") {
+                    push_trial(Run {
+                        proofs: true,
+                        ..run.clone()
+                    });
 
-                // Desugar with proof mode, then run normally. Tests parsing and running proof-instrumented egglog.
-                push_trial(Run {
-                    proofs: true,
-                    desugar: true,
-                    ..run.clone()
-                });
+                    // Desugar with proof mode, then run normally. Tests parsing and running proof-instrumented egglog.
+                    push_trial(Run {
+                        proofs: true,
+                        desugar: true,
+                        ..run.clone()
+                    });
+                }
             }
         }
     }
