@@ -604,7 +604,9 @@ impl<'a> TermState<'a> {
                 res.push(format!("({view_name} {args_str})",));
 
                 let view_proof_name = self.view_proof_name(head.name());
-                let mut proof = format!("({view_proof_name} {args_str})");
+                let proof_var = self.fresh_var();
+                res.push(format!("(= {proof_var} ({view_proof_name} {args_str}))"));
+                let mut proof = proof_var;
                 for (i, arg_proof) in arg_proofs.into_iter().enumerate() {
                     let congr = &self.proof_names().congr_constructor;
                     // add a congruence from the argument (representative) to the term
