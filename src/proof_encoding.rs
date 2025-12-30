@@ -190,20 +190,11 @@ impl<'a> TermState<'a> {
                         .get(sort_name)
                         .is_none()
                 );
-                let to_ast_constructor = self
-                    .egraph
-                    .parser
-                    .symbol_gen
-                    .fresh(&format!("Ast{}", sort_name));
-                self.egraph
-                    .proof_state
-                    .proof_names
-                    .sort_to_ast_constructor
-                    .insert(sort_name.to_string(), to_ast_constructor.clone());
+
+                let code = self.add_to_ast(sort_name);
                 let uf_proof_name = self.uf_proof_name(sort_name);
                 let trans_constructor = &self.proof_names().eq_trans_constructor;
                 let symm_constructor = &self.proof_names().eq_sym_constructor;
-                let ast_sort = &self.proof_names().ast_sort;
 
                 (
                     format!(
@@ -214,7 +205,7 @@ impl<'a> TermState<'a> {
                         "(set ({uf_proof_name} a c)
                               ({trans_constructor} {p1_fresh} {p2_fresh}))"
                     ),
-                    format!("(constructor {to_ast_constructor} ({sort_name}) {ast_sort})"),
+                    code,
                     format!(
                         "(= {p1_fresh} ({uf_proof_name} a b))
                          (= {p2_fresh} ({uf_proof_name} a c))"
@@ -449,6 +440,7 @@ impl<'a> TermState<'a> {
         } else {
             fresh_sort.clone()
         };
+        let to_ast_view_sort = self.add_to_ast(&view_sort);
 
         if self.egraph.proof_state.proofs_enabled {
             self.egraph
@@ -463,6 +455,7 @@ impl<'a> TermState<'a> {
         self.parse_program(&format!(
             "
             (sort {fresh_sort})
+            {to_ast_view_sort}
             (constructor {name} ({term_sorts}) {view_sort})
             (constructor {view_name} ({view_sorts}) {fresh_sort})
             (constructor {to_delete_name} ({in_sorts}) {fresh_sort})
@@ -811,6 +804,7 @@ impl<'a> TermState<'a> {
                     );
                 };
 
+                eprintln!("here with func type {:?}", func_type);
                 let (add_code, _fv) = self.add_term_and_view(func_type, &exprs, justification);
                 res.extend(add_code);
             }
@@ -1127,6 +1121,7 @@ impl<'a> TermState<'a> {
     }
 
     fn term_encode_command(&mut self, command: &ResolvedNCommand, res: &mut Vec<Command>) {
+        log::debug!("Term encoding for {}", command);
         match &command {
             ResolvedNCommand::Sort(_span, name, _presort_and_args) => {
                 res.push(command.to_command().make_unresolved());
