@@ -1,4 +1,8 @@
-use egglog::{ast::{ResolvedCommand, sanitize_internal_names}, extract::DefaultCost, *};
+use egglog::{
+    ast::{ResolvedCommand, sanitize_internal_names},
+    extract::DefaultCost,
+    *,
+};
 use egglog_ast::span::{RustSpan, Span};
 
 #[test]
@@ -970,7 +974,8 @@ fn test_serialize_message_max_calls_per_function() {
 #[test]
 fn math_microbenchmark_term_encoding_roundtrip() {
     fn render_program(commands: &[ResolvedCommand]) -> String {
-        let text = sanitize_internal_names(commands).iter()
+        let text = sanitize_internal_names(commands)
+            .iter()
             .map(|cmd| cmd.to_string())
             .collect::<Vec<_>>()
             .join("\n");
