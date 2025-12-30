@@ -701,8 +701,10 @@ impl<'a> TermState<'a> {
                         let args_str = ListDisplay(new_args, " ");
                         res.push(format!("({view_name} {args_str} {fv})",));
 
+                        let view_proof_var = self.fresh_var();
                         let view_proof_name = self.view_proof_name(&func_type.name);
-                        let mut proof = format!("({view_proof_name} {args_str} {fv})");
+                        res.push(format!("(= {view_proof_var} ({view_proof_name} {args_str} {fv}))"));
+                        let mut proof = view_proof_var;
                         for (i, arg_proof) in arg_proofs.into_iter().enumerate() {
                             let congr = &self.proof_names().congr_constructor;
                             // add a congruence from the argument (representative) to the term
@@ -712,11 +714,7 @@ impl<'a> TermState<'a> {
                             "
                             );
                         }
-
-                        let proof_fv = self.fresh_var();
-                        res.push(format!("(= {proof_fv} {proof})"));
-
-                        (fv, proof_fv)
+                        (fv, proof)
                     }
                     ResolvedCall::Primitive(specialized_primitive) => {
                         if specialized_primitive.output().is_eq_sort() {
@@ -881,6 +879,7 @@ impl<'a> TermState<'a> {
     ) -> (Vec<String>, String) {
         let fv = self.fresh_var();
         let mut res = vec![];
+        // TODO might be able to get rid of this intermediate variable in encoding
         res.push(format!(
             "(let {fv} ({} {}))",
             func_type.name,
@@ -924,7 +923,7 @@ impl<'a> TermState<'a> {
             (
                 format!(
                     "(let {proof_var} {proof})
-                      {term_proof}"
+                     {term_proof}"
                 ),
                 proof_var,
             )
