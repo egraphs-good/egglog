@@ -821,7 +821,6 @@ impl<'a> TermState<'a> {
                     );
                 };
 
-                eprintln!("here with func type {:?}", func_type);
                 let (add_code, _fv) = self.add_term_and_view(func_type, &exprs, justification);
                 res.extend(add_code);
             }
