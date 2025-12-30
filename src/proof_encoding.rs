@@ -370,8 +370,8 @@ impl<'a> TermState<'a> {
                         (!= old new)
                         (= (ordering-max old new) new)
                         {proof_query})
-                       ({merge_fn_code_str}
-                        {rule_proof}
+                       ({rule_proof}
+                        {merge_fn_code_str}
                         {term_and_proof}
                         ({cleanup_constructor} {merge_fn_var} old)
                         ({cleanup_constructor} {merge_fn_var} new)
@@ -703,7 +703,9 @@ impl<'a> TermState<'a> {
 
                         let view_proof_var = self.fresh_var();
                         let view_proof_name = self.view_proof_name(&func_type.name);
-                        res.push(format!("(= {view_proof_var} ({view_proof_name} {args_str} {fv}))"));
+                        res.push(format!(
+                            "(= {view_proof_var} ({view_proof_name} {args_str} {fv}))"
+                        ));
                         let mut proof = view_proof_var;
                         for (i, arg_proof) in arg_proofs.into_iter().enumerate() {
                             let congr = &self.proof_names().congr_constructor;
