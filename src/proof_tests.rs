@@ -3,7 +3,6 @@ mod tests {
     use crate::ast::{Command, sanitize_internal_names};
     use crate::proof_encoding::TermState;
 
-    use super::*;
     use egglog::ast::Parser;
     use egglog::ast::desugar::desugar_command;
     use egglog::ast::proof_global_remover;
