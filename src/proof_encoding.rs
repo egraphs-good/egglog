@@ -104,11 +104,11 @@ impl EncodingState {
 }
 
 /// Thin wrapper around an [`EGraph`] for the term encoding
-pub(crate) struct TermState<'a> {
+pub(crate) struct ProofInstrumentor<'a> {
     pub(crate) egraph: &'a mut EGraph,
 }
 
-impl<'a> TermState<'a> {
+impl<'a> ProofInstrumentor<'a> {
     /// Make a term state and use it to instrument the code.
     pub(crate) fn add_term_encoding(
         egraph: &'a mut EGraph,
@@ -1179,7 +1179,8 @@ impl<'a> TermState<'a> {
             | ResolvedNCommand::Input { .. }
             | ResolvedNCommand::UnstableCombinedRuleset(..)
             | ResolvedNCommand::PrintOverallStatistics(..)
-            | ResolvedNCommand::PrintFunction(..) => {
+            | ResolvedNCommand::PrintFunction(..)
+            | ResolvedNCommand::ProveExists(..) => {
                 res.push(command.to_command().make_unresolved());
             }
             ResolvedNCommand::Extract(..) => {

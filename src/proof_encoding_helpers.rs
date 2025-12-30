@@ -1,11 +1,17 @@
 use std::path::Path;
 
+use egglog_ast::span::Span;
+use egglog_core_relations::{ExecutionState, Value};
+
 use crate::{
-    EGraph,
+    EGraph, Primitive,
     ast::{
         Command, Fact, GenericCommand, ResolvedAction, ResolvedCommand, ResolvedExprExt, Schedule,
     },
-    proof_encoding::TermState,
+    constraint::SimpleTypeConstraint,
+    prelude::BaseSort,
+    proof_encoding::ProofInstrumentor,
+    sort::{I64Sort, UnitSort},
     util::{FreshGen, HashMap, SymbolGen},
 };
 
@@ -59,7 +65,7 @@ impl EncodingNames {
     }
 }
 
-impl<'a> TermState<'a> {
+impl<'a> ProofInstrumentor<'a> {
     pub(crate) fn uf_name(&mut self, sort: &str) -> String {
         if let Some(name) = self.egraph.proof_state.uf_parent.get(sort) {
             name.clone()
@@ -351,5 +357,23 @@ pub fn command_supports_proof_encoding(command: &ResolvedCommand) -> bool {
         // no-merge isn't supported
         ResolvedCommand::Function { merge: None, .. } => false,
         _ => true,
+    }
+}
+
+#[derive(Clone)]
+struct PrintProof {}
+
+impl Primitive for PrintProof {
+    fn name(&self) -> &str {
+        "print-proof"
+    }
+
+    fn get_type_constraints(&self, span: &Span) -> Box<dyn crate::constraint::TypeConstraint> {
+        SimpleTypeConstraint::new(self.name(), vec![UnitSort.to_arcsort()], span.clone()).into_box()
+    }
+
+    fn apply(&self, _exec_state: &mut ExecutionState<'_>, _args: &[Value]) -> Option<Value> {
+        // TODO make this true
+        panic!("print-proof used outside of proof mode, should have been caught before running.");
     }
 }

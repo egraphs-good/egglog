@@ -1,7 +1,7 @@
 #[cfg(test)]
 mod tests {
     use crate::ast::{Command, sanitize_internal_names};
-    use crate::proof_encoding::TermState;
+    use crate::proof_encoding::ProofInstrumentor;
 
     use egglog::ast::Parser;
     use egglog::ast::desugar::desugar_command;
@@ -24,7 +24,7 @@ mod tests {
             .typecheck_program(&ncommands)
             .expect("failed to typecheck program");
         resolved = proof_global_remover::remove_globals(resolved, &mut parser.symbol_gen);
-        TermState::add_term_encoding(&mut egraph, resolved)
+        ProofInstrumentor::add_term_encoding(&mut egraph, resolved)
     }
 
     #[test]

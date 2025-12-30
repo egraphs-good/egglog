@@ -139,9 +139,55 @@ pub(crate) fn desugar_command(
         Command::UserDefined(span, name, args) => {
             vec![NCommand::UserDefined(span, name, args)]
         }
+        Command::ProveQuery(span, query) => desugar_prove_exists(parser, span, query),
+        Command::ProveExists(span, constructor) => vec![NCommand::ProveExists(span, constructor)],
     };
 
     Ok(res)
+}
+
+fn desugar_prove_exists(parser: &mut Parser, span: Span, query: Vec<Fact>) -> Vec<NCommand> {
+    let fresh_sort = parser.symbol_gen.fresh("ExistsSort");
+    let constructor_name = parser.symbol_gen.fresh("ExistsConstructor");
+    let ruleset = parser.symbol_gen.fresh("exists");
+    let name = parser.symbol_gen.fresh("prove_exists_rule");
+    vec![
+        NCommand::Sort(span.clone(), fresh_sort.clone(), None),
+        NCommand::Function(FunctionDecl::constructor(
+            span.clone(),
+            constructor_name.clone(),
+            Schema {
+                input: vec![],
+                output: fresh_sort.clone(),
+            },
+            None,
+            false,
+            false,
+        )),
+        // rule that constructs the new constructor
+        NCommand::NormRule {
+            rule: Rule {
+                span: span.clone(),
+                body: query,
+                head: Actions::singleton(Action::Expr(
+                    span.clone(),
+                    Expr::Call(span.clone(), constructor_name.clone(), vec![]),
+                )),
+                ruleset: ruleset.clone(),
+                name,
+            },
+        },
+        // run the rule
+        NCommand::RunSchedule(GenericSchedule::Run(
+            span.clone(),
+            GenericRunConfig {
+                ruleset,
+                until: None,
+            },
+        )),
+        // get a proof for the constructor
+        NCommand::ProveExists(span, constructor_name),
+    ]
 }
 
 fn desugar_datatype(span: Span, name: String, variants: Vec<Variant>) -> Vec<NCommand> {

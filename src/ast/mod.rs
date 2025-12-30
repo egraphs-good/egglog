@@ -72,6 +72,7 @@ where
         Option<String>,
         PrintFunctionMode,
     ),
+    ProveExists(Span, Head),
     PrintSize(Span, Option<String>),
     Output {
         span: Span,
@@ -135,6 +136,9 @@ where
             GenericNCommand::PrintFunction(span, name, n, file, mode) => {
                 GenericCommand::PrintFunction(span.clone(), name.clone(), *n, file.clone(), *mode)
             }
+            GenericNCommand::ProveExists(span, constructor) => {
+                GenericCommand::ProveExists(span.clone(), constructor.clone())
+            }
             GenericNCommand::PrintSize(span, name) => {
                 GenericCommand::PrintSize(span.clone(), name.clone())
             }
@@ -166,6 +170,7 @@ where
     ) -> Self {
         match self {
             GenericNCommand::Check(span, query) => GenericNCommand::Check(span, f(query)),
+            GenericNCommand::ProveQuery(span, facts) => GenericNCommand::ProveQuery(span, f(facts)),
             GenericNCommand::NormRule { mut rule } => {
                 rule.body = f(rule.body);
                 GenericNCommand::NormRule { rule }
@@ -210,6 +215,13 @@ where
             ),
             GenericNCommand::PrintFunction(span, name, n, file, mode) => {
                 GenericNCommand::PrintFunction(span, name, n, file, mode)
+            }
+            GenericNCommand::ProveQuery(span, facts) => GenericNCommand::ProveQuery(
+                span,
+                facts.into_iter().map(|fact| fact.visit_exprs(f)).collect(),
+            ),
+            GenericNCommand::ProveExists(span, constructor) => {
+                GenericNCommand::ProveExists(span, constructor)
             }
             GenericNCommand::PrintSize(span, name) => GenericNCommand::PrintSize(span, name),
             GenericNCommand::Output { span, file, exprs } => GenericNCommand::Output {
@@ -651,7 +663,9 @@ where
     /// (rule ((path x y) (edge y z))
     ///       ((path x z)))
     /// ```
-    Rule { rule: GenericRule<Head, Leaf> },
+    Rule {
+        rule: GenericRule<Head, Leaf>,
+    },
     /// `rewrite` is syntactic sugar for a specific form of `rule`
     /// which simply unions the left and right hand sides.
     ///
@@ -761,6 +775,8 @@ where
     /// [INFO ] Command failed as expected.
     /// ```
     Check(Span, Vec<GenericFact<Head, Leaf>>),
+    ProveQuery(Span, Vec<GenericFact<Head, Leaf>>),
+    ProveExists(Span, Head),
     /// Print out rows of a given function, extracting each of the elements of the function.
     /// Example:
     ///
@@ -898,6 +914,16 @@ where
             },
             GenericCommand::Check(_ann, facts) => {
                 write!(f, "(check {})", ListDisplay(facts, "\n"))
+            }
+            GenericCommand::ProveQuery(_span, facts) => {
+                if facts.is_empty() {
+                    write!(f, "(prove-query)")
+                } else {
+                    write!(f, "(prove-query {})", ListDisplay(facts, " "))
+                }
+            }
+            GenericCommand::ProveExists(_span, constructor) => {
+                write!(f, "(prove-exists {constructor})")
             }
             GenericCommand::Push(n) => write!(f, "(push {n})"),
             GenericCommand::Pop(_span, n) => write!(f, "(pop {n})"),
@@ -1539,6 +1565,10 @@ where
                 GenericCommand::PrintOverallStatistics(span, file)
             }
             GenericCommand::Check(span, facts) => GenericCommand::Check(span, facts),
+            GenericCommand::ProveQuery(span, facts) => GenericCommand::ProveQuery(span, facts),
+            GenericCommand::ProveExists(span, constructor) => {
+                GenericCommand::ProveExists(span, constructor)
+            }
             GenericCommand::PrintFunction(span, name, n, file, mode) => {
                 GenericCommand::PrintFunction(span, fun(name), n, file, mode)
             }
@@ -1648,6 +1678,16 @@ where
                     .map(|fact| fact.map_symbols(head, leaf))
                     .collect(),
             ),
+            GenericCommand::ProveQuery(span, facts) => GenericCommand::ProveQuery(
+                span,
+                facts
+                    .into_iter()
+                    .map(|fact| fact.map_symbols(head, leaf))
+                    .collect(),
+            ),
+            GenericCommand::ProveExists(span, constructor) => {
+                GenericCommand::ProveExists(span, head(constructor))
+            }
             GenericCommand::PrintFunction(span, name, n, file, mode) => {
                 GenericCommand::PrintFunction(span, name, n, file, mode)
             }

@@ -22,6 +22,7 @@ pub mod extract;
 pub mod prelude;
 mod proof_encoding;
 mod proof_encoding_helpers;
+mod proof_extraction;
 mod proof_normal_form;
 mod proof_tests;
 pub mod scheduler;
@@ -81,7 +82,7 @@ use util::*;
 use crate::ast::desugar::desugar_command;
 use crate::ast::*;
 use crate::core::{GenericActionsExt, ResolvedRuleExt};
-use crate::proof_encoding::{EncodingState, TermState};
+use crate::proof_encoding::{EncodingState, ProofInstrumentor};
 use crate::proof_encoding_helpers::command_supports_proof_encoding;
 use crate::proof_normal_form::proof_form;
 
@@ -1285,6 +1286,11 @@ impl EGraph {
                 self.commands.insert(name, command);
                 return res;
             }
+            ResolvedNCommand::ProveExists(_span, resolved_call) => {
+                let instrument = ProofInstrumentor { egraph: self };
+                let (termdag, term) = instrument.prove_exists(self, &resolved_call)?;
+                todo!();
+            }
         };
 
         Ok(None)
@@ -1431,7 +1437,7 @@ impl EGraph {
             }
             let normalized = proof_form(typechecked, &mut self.parser.symbol_gen);
 
-            let term_encoding_added = TermState::add_term_encoding(self, normalized);
+            let term_encoding_added = ProofInstrumentor::add_term_encoding(self, normalized);
             let mut new_typechecked = vec![];
             for new_cmd in term_encoding_added {
                 let desugared = desugar_command(new_cmd, &mut self.parser)?;
