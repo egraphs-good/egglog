@@ -166,6 +166,23 @@ impl<'a> TermState<'a> {
         &self.egraph.proof_state.proof_names
     }
 
+    /// Returns code for a constructor that converts from sort to AST.
+    /// Adds to the sort to AST constructor map.
+    pub(crate) fn add_to_ast(&mut self, sort: &str) -> String {
+        let to_ast_constructor = self
+                    .egraph
+                    .parser
+                    .symbol_gen
+                    .fresh(&format!("Ast{}", sort));
+        self.egraph
+            .proof_state
+            .proof_names
+            .sort_to_ast_constructor
+            .insert(sort.to_string(), to_ast_constructor.clone());
+        let ast_sort = &self.proof_names().ast_sort;
+        format!("(constructor {to_ast_constructor} ({sort}) {ast_sort})")
+    }
+
     /// Given a function name, returns the name of the AST constructor for that function's sort.
     pub(crate) fn fname_to_ast_name(&self, fname: &str) -> &str {
         let fn_sort = self

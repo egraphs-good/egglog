@@ -170,7 +170,9 @@ where
                 rule.body = f(rule.body);
                 GenericNCommand::NormRule { rule }
             }
-            GenericNCommand::RunSchedule(schedule) => GenericNCommand::RunSchedule(schedule.visit_queries(f)),
+            GenericNCommand::RunSchedule(schedule) => {
+                GenericNCommand::RunSchedule(schedule.visit_queries(f))
+            }
             _ => self,
         }
     }
@@ -231,6 +233,17 @@ where
     }
 }
 
+impl<Head, Leaf> Display for GenericNCommand<Head, Leaf>
+where
+    Head: Clone + Display,
+    Leaf: Clone + PartialEq + Eq + Display + Hash,
+{
+    fn fmt(&self, f: &mut Formatter) -> std::fmt::Result {
+        let command = self.to_command();
+        command.fmt(f)
+    }
+}
+
 pub type Schedule = GenericSchedule<String, String>;
 pub(crate) type ResolvedSchedule = GenericSchedule<ResolvedCall, ResolvedVar>;
 
@@ -268,7 +281,10 @@ where
             ),
             GenericSchedule::Sequence(span, generic_schedules) => GenericSchedule::Sequence(
                 span,
-                generic_schedules.into_iter().map(|schedule| schedule.visit_queries(f)).collect(),
+                generic_schedules
+                    .into_iter()
+                    .map(|schedule| schedule.visit_queries(f))
+                    .collect(),
             ),
         }
     }
