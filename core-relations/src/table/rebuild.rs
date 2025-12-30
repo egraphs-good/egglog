@@ -123,7 +123,6 @@ impl SortedWritesTable {
             })
         } else {
             let mut scratch = TaggedRowBuffer::new(self.n_columns);
-            let mut write_buf = self.new_buffer();
             let mut changed = false;
             for (_, id) in buf.iter() {
                 let Some(subset) = self.rebuild_index.get_subset(&id[0]) else {
@@ -133,13 +132,15 @@ impl SortedWritesTable {
                     rebuilder.rebuild_subset(wrapped, subset, &mut scratch, exec_state);
                 });
                 changed |= subset.size() > 0;
+            }
+            if !scratch.is_empty() {
+                let mut write_buf = self.new_buffer();
                 for (row_id, row) in scratch.non_stale_mut() {
                     if let Some(to_remove) = self.data.get_row(row_id).map(|x| &x[0..self.n_keys]) {
                         write_buf.stage_remove(to_remove);
                     }
                     insert_row!(self, write_buf, row, next_ts);
                 }
-                scratch.clear();
             }
             changed
         }
@@ -194,7 +195,7 @@ impl SortedWritesTable {
         } else {
             let mut buf = TaggedRowBuffer::new(self.n_columns);
             let mut changed = false;
-            let mut write_buf = self.new_buffer();
+
             let max_row = self.data.next_row().index();
             for start in (0..max_row).step_by(STEP_SIZE) {
                 rebuilder.rebuild_buf(
@@ -204,6 +205,9 @@ impl SortedWritesTable {
                     &mut buf,
                     exec_state,
                 );
+            }
+            if !buf.is_empty() {
+                let mut write_buf = self.new_buffer();
                 for (row_id, row) in buf.non_stale_mut() {
                     if let Some(to_remove) = self.data.get_row(row_id).map(|x| &x[0..self.n_keys]) {
                         write_buf.stage_remove(to_remove);
@@ -211,7 +215,6 @@ impl SortedWritesTable {
                     insert_row!(self, write_buf, row, next_ts);
                     changed = true;
                 }
-                buf.clear();
             }
             changed
         }

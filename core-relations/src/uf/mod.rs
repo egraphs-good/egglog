@@ -168,9 +168,10 @@ impl Rebuilder for Canonicalizer<'_> {
         out: &mut TaggedRowBuffer,
         _exec_state: &mut ExecutionState,
     ) {
+        let old_len = u32::try_from(out.len()).expect("row buffer sizes should fit in a u32");
         let _next = other.scan_bounded(subset, Offset::new(0), usize::MAX, out);
         debug_assert!(_next.is_none());
-        for i in 0..u32::try_from(out.len()).expect("row buffer sizes should fit in a u32") {
+        for i in old_len..u32::try_from(out.len()).expect("row buffer sizes should fit in a u32") {
             let i = RowId::new(i);
             let (_id, row) = out.get_row_mut(i);
             let mut changed = false;
