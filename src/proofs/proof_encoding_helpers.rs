@@ -359,21 +359,3 @@ pub fn command_supports_proof_encoding(command: &ResolvedCommand) -> bool {
         _ => true,
     }
 }
-
-#[derive(Clone)]
-struct PrintProof {}
-
-impl Primitive for PrintProof {
-    fn name(&self) -> &str {
-        "print-proof"
-    }
-
-    fn get_type_constraints(&self, span: &Span) -> Box<dyn crate::constraint::TypeConstraint> {
-        SimpleTypeConstraint::new(self.name(), vec![UnitSort.to_arcsort()], span.clone()).into_box()
-    }
-
-    fn apply(&self, _exec_state: &mut ExecutionState<'_>, _args: &[Value]) -> Option<Value> {
-        // TODO make this true
-        panic!("print-proof used outside of proof mode, should have been caught before running.");
-    }
-}
