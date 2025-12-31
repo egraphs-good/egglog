@@ -10,7 +10,7 @@ use crate::{
     },
     constraint::SimpleTypeConstraint,
     prelude::BaseSort,
-    proof_encoding::ProofInstrumentor,
+    proofs::proof_encoding::ProofInstrumentor,
     sort::UnitSort,
     util::{FreshGen, HashMap, SymbolGen},
 };

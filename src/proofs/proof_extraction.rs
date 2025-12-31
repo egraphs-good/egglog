@@ -1,6 +1,6 @@
 use crate::ast::FunctionSubtype;
 use crate::extract::{Extractor, TreeAdditiveCostModel};
-use crate::proof_encoding::ProofInstrumentor;
+use crate::proofs::proof_encoding::ProofInstrumentor;
 use crate::{ResolvedCall, Term, TermDag};
 use thiserror::Error;
 

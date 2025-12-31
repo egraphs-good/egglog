@@ -1,7 +1,7 @@
 #[cfg(test)]
 mod tests {
     use crate::ast::{Command, sanitize_internal_names};
-    use crate::proof_encoding::ProofInstrumentor;
+    use crate::proofs::proof_encoding::ProofInstrumentor;
 
     use egglog::ast::Parser;
     use egglog::ast::desugar::desugar_command;

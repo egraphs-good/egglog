@@ -74,7 +74,7 @@
 //! *Original commands* are rewritten to reference these structures. The `check` now reasons about
 //! the canonical representative produced by `addView`, and the trailing `run-schedule` executes the
 //! maintenance rules so that the encoded program stays behaviourally equivalent to the uninstrumented version.
-use crate::proof_encoding_helpers::{EncodingNames, Justification};
+use crate::proofs::proof_encoding_helpers::{EncodingNames, Justification};
 use crate::typechecking::FuncType;
 use crate::*;
 
