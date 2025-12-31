@@ -204,9 +204,10 @@ impl ProofBuilder {
             ts_counter: egraph.timestamp_counter,
             reason_spec_id: egraph.cong_spec,
         };
-        let build_term = egraph.register_external_func(make_external_func(move |es, vals| {
-            cong_term(&cong_args, es, vals)
-        }));
+        let build_term =
+            egraph.register_external_func(Box::new(make_external_func(move |es, vals| {
+                cong_term(&cong_args, es, vals)
+            })));
         FunctionCongMetadata {
             table: func_underlying,
             build_term,

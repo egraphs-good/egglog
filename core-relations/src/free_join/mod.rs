@@ -193,61 +193,55 @@ pub fn make_external_func<
     Wrapped(f)
 }
 
-pub(crate) trait ExternalFunctionExt: ExternalFunction {
-    /// A vectorized variant of `invoke` to avoid repeated dynamic dispatch.
-    ///
-    /// Implementors should not override this manually (in fact, they shouldn't
-    /// even be able to; some types are private); the default implementation
-    /// delegates core logic to `invoke`.
-    #[doc(hidden)]
-    fn invoke_batch(
-        &self,
-        state: &mut ExecutionState,
-        mask: &mut Mask,
-        bindings: &mut Bindings,
-        args: &[QueryEntry],
-        out_var: Variable,
-    ) {
-        let pool: Pool<Vec<Value>> = with_pool_set(|ps| ps.get_pool().clone());
-        let mut out = pool.get();
-        out.reserve(mask.len());
-        for_each_binding_with_mask!(mask, args, bindings, |iter| {
-            iter.fill_vec(&mut out, Value::stale, |_, args| {
-                self.invoke(state, args.as_slice())
-            });
+/// A vectorized variant of `invoke` to avoid repeated dynamic dispatch.
+///
+/// Implementors should not override this manually (in fact, they shouldn't
+/// even be able to; some types are private); the default implementation
+/// delegates core logic to `invoke`.
+pub(crate) fn invoke_batch(
+    this: &dyn ExternalFunction,
+    state: &mut ExecutionState,
+    mask: &mut Mask,
+    bindings: &mut Bindings,
+    args: &[QueryEntry],
+    out_var: Variable,
+) {
+    let pool: Pool<Vec<Value>> = with_pool_set(|ps| ps.get_pool().clone());
+    let mut out = pool.get();
+    out.reserve(mask.len());
+    for_each_binding_with_mask!(mask, args, bindings, |iter| {
+        iter.fill_vec(&mut out, Value::stale, |_, args| {
+            this.invoke(state, args.as_slice())
         });
-        bindings.insert(out_var, &out);
-    }
-
-    /// A variant of [`ExternalFunctionExt::invoke_batch`] that overwrites the output variable,
-    /// rather than assigning all new values.
-    ///
-    /// *Panics* This method will panic if `out_var` doesn't already have an appropriately-sized
-    /// vector bound in `bindings`.
-    #[doc(hidden)]
-    fn invoke_batch_assign(
-        &self,
-        state: &mut ExecutionState,
-        mask: &mut Mask,
-        bindings: &mut Bindings,
-        args: &[QueryEntry],
-        out_var: Variable,
-    ) {
-        let mut out = bindings.take(out_var).expect("out_var must be bound");
-        for_each_binding_with_mask!(mask, args, bindings, |iter| {
-            iter.assign_vec_and_retain(&mut out.vals, |_, args| self.invoke(state, &args))
-        });
-        bindings.replace(out);
-    }
+    });
+    bindings.insert(out_var, &out);
 }
 
-impl<T: ExternalFunction> ExternalFunctionExt for T {}
+/// A variant of [`ExternalFunctionExt::invoke_batch`] that overwrites the output variable,
+/// rather than assigning all new values.
+///
+/// *Panics* This method will panic if `out_var` doesn't already have an appropriately-sized
+/// vector bound in `bindings`.
+pub(crate) fn invoke_batch_assign(
+    this: &dyn ExternalFunction,
+    state: &mut ExecutionState,
+    mask: &mut Mask,
+    bindings: &mut Bindings,
+    args: &[QueryEntry],
+    out_var: Variable,
+) {
+    let mut out = bindings.take(out_var).expect("out_var must be bound");
+    for_each_binding_with_mask!(mask, args, bindings, |iter| {
+        iter.assign_vec_and_retain(&mut out.vals, |_, args| this.invoke(state, &args))
+    });
+    bindings.replace(out);
+}
 
-// Implements `Clone` for `Box<dyn ExternalFunctionExt>`.
-dyn_clone::clone_trait_object!(ExternalFunctionExt);
+// Implements `Clone` for `Box<dyn ExternalFunction>`.
+dyn_clone::clone_trait_object!(ExternalFunction);
 
 pub(crate) type ExternalFunctions =
-    DenseIdMapWithReuse<ExternalFunctionId, Box<dyn ExternalFunctionExt>>;
+    DenseIdMapWithReuse<ExternalFunctionId, Box<dyn ExternalFunction>>;
 
 #[derive(Default)]
 pub(crate) struct Counters(DenseIdMap<CounterId, AtomicUsize>);
@@ -319,9 +313,9 @@ impl Database {
     /// Add a new external function to the database.
     pub fn add_external_function(
         &mut self,
-        f: impl ExternalFunction + 'static,
+        f: Box<dyn ExternalFunction + 'static>,
     ) -> ExternalFunctionId {
-        self.external_functions.push(Box::new(f))
+        self.external_functions.push(f)
     }
 
     /// Free an existing external function. Make sure not to use `id` afterwards.
