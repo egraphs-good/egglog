@@ -11,7 +11,7 @@ use crate::{
     constraint::SimpleTypeConstraint,
     prelude::BaseSort,
     proof_encoding::ProofInstrumentor,
-    sort::{I64Sort, UnitSort},
+    sort::UnitSort,
     util::{FreshGen, HashMap, SymbolGen},
 };
 

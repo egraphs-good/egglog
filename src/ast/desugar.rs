@@ -139,7 +139,7 @@ pub(crate) fn desugar_command(
         Command::UserDefined(span, name, args) => {
             vec![NCommand::UserDefined(span, name, args)]
         }
-        Command::ProveQuery(span, query) => desugar_prove_exists(parser, span, query),
+        Command::Prove(span, query) => desugar_prove_exists(parser, span, query),
         Command::ProveExists(span, constructor) => vec![NCommand::ProveExists(span, constructor)],
     };
 
@@ -164,6 +164,7 @@ fn desugar_prove_exists(parser: &mut Parser, span: Span, query: Vec<Fact>) -> Ve
             false,
             false,
         )),
+        NCommand::AddRuleset(span.clone(), ruleset.clone()),
         // rule that constructs the new constructor
         NCommand::NormRule {
             rule: Rule {
