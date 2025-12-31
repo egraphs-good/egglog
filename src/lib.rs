@@ -20,11 +20,8 @@ pub mod constraint;
 mod core;
 pub mod extract;
 pub mod prelude;
-mod proof_encoding;
-mod proof_encoding_helpers;
-mod proof_extraction;
-mod proof_normal_form;
-mod proof_tests;
+mod proofs;
+
 pub mod scheduler;
 mod serialize;
 pub mod sort;
@@ -60,7 +57,7 @@ use indexmap::map::Entry;
 use log::{Level, log_enabled};
 use numeric_id::DenseIdMap;
 use prelude::*;
-pub use proof_encoding_helpers::file_supports_proofs;
+pub use proofs::proof_encoding_helpers::file_supports_proofs;
 use scheduler::{SchedulerId, SchedulerRecord};
 pub use serialize::{SerializeConfig, SerializeOutput, SerializedNode};
 use sort::*;
@@ -82,10 +79,10 @@ use util::*;
 use crate::ast::desugar::desugar_command;
 use crate::ast::*;
 use crate::core::{GenericActionsExt, ResolvedRuleExt};
-use crate::proof_encoding::{EncodingState, ProofInstrumentor};
-use crate::proof_encoding_helpers::command_supports_proof_encoding;
-use crate::proof_extraction::ProveExistsError;
-use crate::proof_normal_form::proof_form;
+use crate::proofs::proof_encoding::{EncodingState, ProofInstrumentor};
+use crate::proofs::proof_encoding_helpers::command_supports_proof_encoding;
+use crate::proofs::proof_extraction::ProveExistsError;
+use crate::proofs::proof_normal_form::proof_form;
 
 pub const GLOBAL_NAME_PREFIX: &str = "$";
 
