@@ -491,7 +491,9 @@ impl EGraph {
             };
 
             let gfm_sc = SideChannel::default();
-            let gfm_id = self.db.add_external_function(GetFirstMatch(gfm_sc.clone()));
+            let gfm_id = self
+                .db
+                .add_external_function(Box::new(GetFirstMatch(gfm_sc.clone())));
             {
                 let mut rsb = self.db.new_rule_set();
                 let mut qb = rsb.new_rule();
@@ -529,7 +531,9 @@ impl EGraph {
                 .unwrap_or_else(|| panic!("failed to find reason with id {reason_id:?}"));
 
             let gfm_sc = SideChannel::default();
-            let gfm_id = self.db.add_external_function(GetFirstMatch(gfm_sc.clone()));
+            let gfm_id = self
+                .db
+                .add_external_function(Box::new(GetFirstMatch(gfm_sc.clone())));
             {
                 let mut rsb = self.db.new_rule_set();
                 let mut qb = rsb.new_rule();

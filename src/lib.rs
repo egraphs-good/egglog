@@ -950,11 +950,11 @@ impl EGraph {
         let result_ref = result.clone();
         let ext_id = self
             .backend
-            .register_external_func(make_external_func(move |_es, vals| {
+            .register_external_func(Box::new(make_external_func(move |_es, vals| {
                 debug_assert!(vals.len() == 1);
                 *result_ref.lock().unwrap() = Some(vals[0]);
                 Some(unit_val)
-            }));
+            })));
 
         let mut translator = BackendRule::new(
             self.backend.new_rule("eval_resolved_expr", false),
@@ -1037,10 +1037,10 @@ impl EGraph {
         let ext_sc_ref = ext_sc.clone();
         let ext_id = self
             .backend
-            .register_external_func(make_external_func(move |_, _| {
+            .register_external_func(Box::new(make_external_func(move |_, _| {
                 *ext_sc_ref.lock().unwrap() = Some(());
                 Some(Value::new_const(0))
-            }));
+            })));
 
         let mut translator = BackendRule::new(
             self.backend.new_rule("check_facts", false),

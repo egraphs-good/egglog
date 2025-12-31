@@ -6,6 +6,7 @@ use std::ops::Deref;
 
 use crate::{
     common::HashMap,
+    free_join::{invoke_batch, invoke_batch_assign},
     numeric_id::{DenseIdMap, NumericId},
 };
 use egglog_concurrency::NotificationList;
@@ -731,7 +732,8 @@ impl ExecutionState<'_> {
                 }
 
                 // Call the given external function on all entries where the lookup failed.
-                self.db.external_funcs[*func].invoke_batch_assign(
+                invoke_batch_assign(
+                    self.db.external_funcs[*func].as_ref(),
                     self,
                     &mut to_call_func,
                     bindings,
@@ -789,7 +791,14 @@ impl ExecutionState<'_> {
                 });
             }
             Instr::External { func, args, dst } => {
-                self.db.external_funcs[*func].invoke_batch(self, mask, bindings, args, *dst);
+                invoke_batch(
+                    self.db.external_funcs[*func].as_ref(),
+                    self,
+                    mask,
+                    bindings,
+                    args,
+                    *dst,
+                );
             }
             Instr::ExternalWithFallback {
                 f1,
@@ -799,7 +808,8 @@ impl ExecutionState<'_> {
                 dst,
             } => {
                 let mut f1_result = mask.clone();
-                self.db.external_funcs[*f1].invoke_batch(
+                invoke_batch(
+                    self.db.external_funcs[*f1].as_ref(),
                     self,
                     &mut f1_result,
                     bindings,
@@ -812,7 +822,8 @@ impl ExecutionState<'_> {
                     return;
                 }
                 // Call the given external function on all entries where the first call failed.
-                self.db.external_funcs[*f2].invoke_batch_assign(
+                invoke_batch_assign(
+                    self.db.external_funcs[*f2].as_ref(),
                     self,
                     &mut to_call_f2,
                     bindings,

@@ -130,7 +130,7 @@ impl EGraph {
         }
 
         let prim = Arc::new(x.clone());
-        let ext = self.backend.register_external_func(Wrapper(x));
+        let ext = self.backend.register_external_func(Box::new(Wrapper(x)));
         self.type_info
             .primitives
             .entry(prim.name().to_owned())
