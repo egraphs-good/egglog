@@ -193,11 +193,7 @@ pub fn make_external_func<
     Wrapped(f)
 }
 
-/// A vectorized variant of `invoke` to avoid repeated dynamic dispatch.
-///
-/// Implementors should not override this manually (in fact, they shouldn't
-/// even be able to; some types are private); the default implementation
-/// delegates core logic to `invoke`.
+/// A vectorized variant of [`ExternalFunction::invoke`] to avoid repeated dynamic dispatch.
 pub(crate) fn invoke_batch(
     this: &dyn ExternalFunction,
     state: &mut ExecutionState,
@@ -217,7 +213,7 @@ pub(crate) fn invoke_batch(
     bindings.insert(out_var, &out);
 }
 
-/// A variant of [`ExternalFunctionExt::invoke_batch`] that overwrites the output variable,
+/// A variant of [`invoke_batch`] that overwrites the output variable,
 /// rather than assigning all new values.
 ///
 /// *Panics* This method will panic if `out_var` doesn't already have an appropriately-sized
