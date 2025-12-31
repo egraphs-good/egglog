@@ -193,6 +193,66 @@ fn primitive_error_in_run_schedule_returns_error() {
 }
 
 #[test]
+fn prove_exists_returns_proof_term_when_proofs_enabled() {
+    let _ = env_logger::builder().is_test(true).try_init();
+
+    let mut egraph = EGraph::new_with_proofs();
+    let program = r#"
+        (relation R (i64))
+        (R 2)
+    (prove (R x))
+    "#;
+
+    let outputs = egraph.parse_and_run_program(None, program).unwrap();
+    assert!(!outputs.is_empty(), "expected at least one command output");
+
+    let prove_exists_output = outputs
+        .iter()
+        .find(|output| matches!(output, CommandOutput::ProveExists { .. }))
+        .expect("expected prove-exists output");
+
+    let display = prove_exists_output.to_string();
+
+    let CommandOutput::ProveExists { termdag, proof } = prove_exists_output.clone() else {
+        unreachable!();
+    };
+
+    let proof_str = termdag.to_string(&proof);
+    assert!(
+        proof_str.contains("@prove_exists_rule"),
+        "expected proof term to reference generated rule, got {proof_str}"
+    );
+
+    assert!(
+        display.contains(&proof_str),
+        "formatted output should include proof term"
+    );
+    assert_eq!(
+        display.trim(),
+        proof_str.trim(),
+        "formatted output should match proof term"
+    );
+}
+
+#[test]
+fn prove_exists_reports_query_mismatch() {
+    let _ = env_logger::builder().is_test(true).try_init();
+
+    let mut egraph = EGraph::new_with_proofs();
+    let program = r#"
+        (relation R (i64))
+    (prove (R x))
+    "#;
+
+    let err = egraph.parse_and_run_program(None, program).unwrap_err();
+    let msg = err.to_string();
+    assert!(
+        msg.contains("Could not find a proof due to query not matching"),
+        "expected helpful error message, got {msg}"
+    );
+}
+
+#[test]
 fn test_simple_extract2() {
     let _ = env_logger::builder().is_test(true).try_init();
 

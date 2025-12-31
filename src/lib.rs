@@ -84,6 +84,7 @@ use crate::ast::*;
 use crate::core::{GenericActionsExt, ResolvedRuleExt};
 use crate::proof_encoding::{EncodingState, ProofInstrumentor};
 use crate::proof_encoding_helpers::command_supports_proof_encoding;
+use crate::proof_extraction::ProveExistsError;
 use crate::proof_normal_form::proof_form;
 
 pub const GLOBAL_NAME_PREFIX: &str = "$";
@@ -123,6 +124,8 @@ pub enum CommandOutput {
     ExtractBest(TermDag, DefaultCost, Term),
     /// The variants of a function found after extracting
     ExtractVariants(TermDag, Vec<Term>),
+    /// A proof term witnessing constructor existence
+    ProveExists { termdag: TermDag, proof: Term },
     /// The report from all runs
     OverallStatistics(RunReport),
     /// A printed function and all its values
@@ -153,6 +156,9 @@ impl std::fmt::Display for CommandOutput {
                     writeln!(f, "   {}", termdag.to_string(expr))?;
                 }
                 writeln!(f, ")")
+            }
+            CommandOutput::ProveExists { termdag, proof } => {
+                writeln!(f, "{}", termdag.to_string(proof))
             }
             CommandOutput::OverallStatistics(run_report) => {
                 write!(f, "Overall statistics:\n{}", run_report)
@@ -1286,10 +1292,16 @@ impl EGraph {
                 self.commands.insert(name, command);
                 return res;
             }
-            ResolvedNCommand::ProveExists(_span, resolved_call) => {
-                let instrument = ProofInstrumentor { egraph: self };
-                let (termdag, term) = instrument.prove_exists(self, &resolved_call)?;
-                todo!();
+            ResolvedNCommand::ProveExists(span, resolved_call) => {
+                let mut instrument = ProofInstrumentor { egraph: self };
+                let (termdag, proof) =
+                    instrument
+                        .prove_exists(&resolved_call)
+                        .map_err(|error| Error::ProofError {
+                            span: span.clone(),
+                            error,
+                        })?;
+                return Ok(Some(CommandOutput::ProveExists { termdag, proof }));
             }
         };
 
@@ -1920,6 +1932,12 @@ pub enum Error {
     SubsumeMergeError(String, Span),
     #[error("extraction failure: {:?}", .0)]
     ExtractError(String),
+    #[error("{span}\n{error}")]
+    ProofError {
+        span: Span,
+        #[source]
+        error: ProveExistsError,
+    },
     #[error("{1}\n{2}\nShadowing is not allowed, but found {0}")]
     Shadowing(String, Span, Span),
     #[error("{1}\nCommand already exists: {0}")]

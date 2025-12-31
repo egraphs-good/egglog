@@ -1,5 +1,5 @@
 use crate::{
-    core::{CoreActionContext, CoreRule, GenericActionsExt},
+    core::{CoreActionContext, CoreRule, GenericActionsExt, ResolvedCall},
     *,
 };
 use ast::{ResolvedAction, ResolvedExpr, ResolvedFact, ResolvedRule, ResolvedVar, Rule};
@@ -241,6 +241,19 @@ impl EGraph {
             NCommand::PrintSize(span, n) => {
                 // Should probably also resolve the function symbol here
                 ResolvedNCommand::PrintSize(span.clone(), n.clone())
+            }
+            NCommand::ProveExists(span, constructor) => {
+                let func_type = self
+                    .type_info
+                    .get_func_type(constructor)
+                    .ok_or_else(|| TypeError::UnboundFunction(constructor.clone(), span.clone()))?;
+                if func_type.subtype != FunctionSubtype::Constructor {
+                    return Err(TypeError::ProveExistsRequiresConstructor(
+                        constructor.clone(),
+                        span.clone(),
+                    ));
+                }
+                ResolvedNCommand::ProveExists(span.clone(), ResolvedCall::Func(func_type.clone()))
             }
             NCommand::Output { span, file, exprs } => {
                 let exprs = exprs
@@ -728,6 +741,8 @@ pub enum TypeError {
     DisallowedSort(String, String, Span),
     #[error("{1}\nUnbound function {0}")]
     UnboundFunction(String, Span),
+    #[error("{1}\nprove-exists requires constructor function, but {0} is not a constructor")]
+    ProveExistsRequiresConstructor(String, Span),
     #[error("{1}\nFunction already bound {0}")]
     FunctionAlreadyBound(String, Span),
     #[error("{1}\nSort {0} already declared.")]

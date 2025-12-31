@@ -155,20 +155,25 @@ fn generate_tests(glob: &str) -> Vec<Trial> {
             proofs: false,
         };
         let should_fail = run.should_fail();
+        let requires_proofs = run.path.parent().unwrap().ends_with("proofs");
 
         push_trial(run.clone());
         if !should_fail {
-            push_trial(Run {
-                desugar: true,
-                ..run.clone()
-            });
+            if !requires_proofs {
+                push_trial(Run {
+                    desugar: true,
+                    ..run.clone()
+                });
+            }
 
             // TODO improve performance of proof mode to enable math_microbenchmark tests
             if file_supports_proofs(&run.path) {
-                push_trial(Run {
-                    term_encoding: true,
-                    ..run.clone()
-                });
+                if !requires_proofs {
+                    push_trial(Run {
+                        term_encoding: true,
+                        ..run.clone()
+                    });
+                }
 
                 if !run.path.to_string_lossy().contains("math-microbenchmark") {
                     push_trial(Run {

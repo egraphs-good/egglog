@@ -170,7 +170,6 @@ where
     ) -> Self {
         match self {
             GenericNCommand::Check(span, query) => GenericNCommand::Check(span, f(query)),
-            GenericNCommand::ProveQuery(span, facts) => GenericNCommand::ProveQuery(span, f(facts)),
             GenericNCommand::NormRule { mut rule } => {
                 rule.body = f(rule.body);
                 GenericNCommand::NormRule { rule }
@@ -216,10 +215,6 @@ where
             GenericNCommand::PrintFunction(span, name, n, file, mode) => {
                 GenericNCommand::PrintFunction(span, name, n, file, mode)
             }
-            GenericNCommand::ProveQuery(span, facts) => GenericNCommand::ProveQuery(
-                span,
-                facts.into_iter().map(|fact| fact.visit_exprs(f)).collect(),
-            ),
             GenericNCommand::ProveExists(span, constructor) => {
                 GenericNCommand::ProveExists(span, constructor)
             }
@@ -775,7 +770,7 @@ where
     /// [INFO ] Command failed as expected.
     /// ```
     Check(Span, Vec<GenericFact<Head, Leaf>>),
-    ProveQuery(Span, Vec<GenericFact<Head, Leaf>>),
+    Prove(Span, Vec<GenericFact<Head, Leaf>>),
     ProveExists(Span, Head),
     /// Print out rows of a given function, extracting each of the elements of the function.
     /// Example:
@@ -915,11 +910,11 @@ where
             GenericCommand::Check(_ann, facts) => {
                 write!(f, "(check {})", ListDisplay(facts, "\n"))
             }
-            GenericCommand::ProveQuery(_span, facts) => {
+            GenericCommand::Prove(_span, facts) => {
                 if facts.is_empty() {
-                    write!(f, "(prove-query)")
+                    write!(f, "(prove)")
                 } else {
-                    write!(f, "(prove-query {})", ListDisplay(facts, " "))
+                    write!(f, "(prove {})", ListDisplay(facts, " "))
                 }
             }
             GenericCommand::ProveExists(_span, constructor) => {
@@ -1565,7 +1560,7 @@ where
                 GenericCommand::PrintOverallStatistics(span, file)
             }
             GenericCommand::Check(span, facts) => GenericCommand::Check(span, facts),
-            GenericCommand::ProveQuery(span, facts) => GenericCommand::ProveQuery(span, facts),
+            GenericCommand::Prove(span, facts) => GenericCommand::Prove(span, facts),
             GenericCommand::ProveExists(span, constructor) => {
                 GenericCommand::ProveExists(span, constructor)
             }
@@ -1678,7 +1673,7 @@ where
                     .map(|fact| fact.map_symbols(head, leaf))
                     .collect(),
             ),
-            GenericCommand::ProveQuery(span, facts) => GenericCommand::ProveQuery(
+            GenericCommand::Prove(span, facts) => GenericCommand::Prove(
                 span,
                 facts
                     .into_iter()
