@@ -2,7 +2,7 @@ use crate::{
     Term, TermDag, TermId,
     ast::{ResolvedExpr, ResolvedFact, ResolvedNCommand},
     proofs::proof_encoding_helpers::EncodingNames,
-    util::{FreshGen, HEntry, HashMap, HashSet, IndexSet, SymbolGen},
+    util::{HEntry, HashMap, IndexSet, SymbolGen},
 };
 use egglog_ast::generic_ast::Literal;
 
@@ -259,9 +259,6 @@ impl ProofStore {
         if let Some(&id) = self.proof_id.get(&raw_store.store[raw_proof_id]) {
             return id;
         }
-        let proof_term = raw_store.proof_to_term[&raw_proof_id];
-        let proof_term_str = format!("{}", self.term_dag.to_string(self.term_dag.get(proof_term)));
-
         let raw_proof = &raw_store.store[raw_proof_id];
         let proof = match raw_proof {
             RawProof::Fiat(lhs, rhs) => Proof {
@@ -311,11 +308,6 @@ impl ProofStore {
                 let right_id = self.convert_raw_proof(rules, raw_store, *right_raw);
                 let left = &self.id_to_proof[left_id];
                 let right = &self.id_to_proof[right_id];
-                /*eprintln!("Converting {}", proof_term_str);
-                let left_rhs_str = self.term_dag.to_string(self.term_dag.get(left.rhs));
-                let right_lhs_str = self.term_dag.to_string(self.term_dag.get(right.lhs));
-                eprintln!("  Left RHS: {}", left_rhs_str);
-                eprintln!("  Right LHS: {}", right_lhs_str);*/
                 assert_eq!(
                     left.rhs, right.lhs,
                     "transitivity requires matching middle terms"
@@ -505,41 +497,9 @@ impl ProofStore {
     pub fn proof_to_string(&self, proof_id: ProofId) -> String {
         let symbol_gen = &mut crate::util::SymbolGen::new("".to_string());
         let mut buffer = String::new();
-        let ref_counts = self.collect_proof_ref_counts(proof_id);
-        let mut proof_bindings = HashMap::default();
-        let res = self.print_to_buffer(
-            symbol_gen,
-            proof_id,
-            &mut buffer,
-            &ref_counts,
-            &mut proof_bindings,
-            false,
-        );
+        let res = self.print_to_buffer(symbol_gen, proof_id, &mut buffer);
         buffer.push_str(&res);
         buffer
-    }
-
-    fn collect_proof_ref_counts(&self, proof_id: ProofId) -> HashMap<ProofId, usize> {
-        let mut counts = HashMap::default();
-        let mut visited = HashSet::default();
-        self.collect_proof_ref_counts_inner(proof_id, &mut counts, &mut visited);
-        counts
-    }
-
-    fn collect_proof_ref_counts_inner(
-        &self,
-        proof_id: ProofId,
-        counts: &mut HashMap<ProofId, usize>,
-        visited: &mut HashSet<ProofId>,
-    ) {
-        *counts.entry(proof_id).or_insert(0) += 1;
-        if !visited.insert(proof_id) {
-            return;
-        }
-
-        for child in self.id_to_proof[proof_id].child_proof_ids() {
-            self.collect_proof_ref_counts_inner(child, counts, visited);
-        }
     }
 
     /// Print a proof with the given id, with subproofs and terms
@@ -550,143 +510,133 @@ impl ProofStore {
         symbol_gen: &mut SymbolGen,
         proof_id: ProofId,
         buffer: &mut String,
-        ref_counts: &HashMap<ProofId, usize>,
-        bindings: &mut HashMap<ProofId, String>,
-        allow_binding: bool,
     ) -> String {
-        if let Some(name) = bindings.get(&proof_id) {
-            return name.clone();
+        let mut dag = self.term_dag.clone();
+        let mut cache = HashMap::default();
+        let proof_term_id = self.proof_to_term_for_printing(&mut dag, proof_id, &mut cache);
+        dag.to_string_with_let(symbol_gen, proof_term_id, buffer)
+    }
+
+    fn proof_to_term_for_printing(
+        &self,
+        dag: &mut TermDag,
+        proof_id: ProofId,
+        cache: &mut HashMap<ProofId, TermId>,
+    ) -> TermId {
+        if let Some(&term_id) = cache.get(&proof_id) {
+            return term_id;
         }
 
         let proof = &self.id_to_proof[proof_id];
-        let proof_str = match &proof.justification {
+
+        let term_id = match &proof.justification {
             Justification::Fiat => {
-                let t1 = self
-                    .term_dag
-                    .to_string_with_let(symbol_gen, proof.lhs, buffer);
-                let t2 = self
-                    .term_dag
-                    .to_string_with_let(symbol_gen, proof.rhs, buffer);
-                format!("(fiat {} {})", t1, t2)
+                let lhs_term = dag.get(proof.lhs).clone();
+                let rhs_term = dag.get(proof.rhs).clone();
+                let term = dag.app("fiat".to_string(), vec![lhs_term, rhs_term]);
+                dag.lookup(&term)
             }
             Justification::Rule {
                 name,
                 premise_proofs,
                 substitution,
             } => {
-                let premises_strs: Vec<String> = premise_proofs
+                let lhs_term = dag.get(proof.lhs).clone();
+                let rhs_term = dag.get(proof.rhs).clone();
+                let name_child = dag.var(name.clone());
+                let name_term = dag.app("name".to_string(), vec![name_child]);
+
+                let premise_terms: Vec<Term> = premise_proofs
                     .iter()
                     .map(|pid| {
-                        self.print_to_buffer(symbol_gen, *pid, buffer, ref_counts, bindings, true)
+                        let child_id = self.proof_to_term_for_printing(dag, *pid, cache);
+                        dag.get(child_id).clone()
                     })
                     .collect();
-                let subs_strs: Vec<String> = substitution
+                let premises_term = dag.app("premises".to_string(), premise_terms);
+
+                let substitution_terms: Vec<Term> = substitution
                     .iter()
                     .map(|(var, term_id)| {
-                        let term_str = self
-                            .term_dag
-                            .to_string_with_let(symbol_gen, *term_id, buffer);
-                        format!("({} {})", var, term_str)
+                        let child = dag.get(*term_id).clone();
+                        dag.app(var.clone(), vec![child])
                     })
                     .collect();
-                let t1 = self
-                    .term_dag
-                    .to_string_with_let(symbol_gen, proof.lhs, buffer);
-                let t2 = self
-                    .term_dag
-                    .to_string_with_let(symbol_gen, proof.rhs, buffer);
-                format!(
-                    "(rule {} (premises {}) (substitution {}) {} {})",
-                    name,
-                    premises_strs.join(" "),
-                    subs_strs.join(" "),
-                    t1,
-                    t2
-                )
+                let substitution_term = dag.app("substitution".to_string(), substitution_terms);
+
+                let term = dag.app(
+                    "rule".to_string(),
+                    vec![
+                        lhs_term,
+                        rhs_term,
+                        name_term,
+                        premises_term,
+                        substitution_term,
+                    ],
+                );
+                dag.lookup(&term)
             }
             Justification::MergeFn {
                 function,
                 old_proof,
                 new_proof,
             } => {
-                let old_str = self
-                    .print_to_buffer(symbol_gen, *old_proof, buffer, ref_counts, bindings, true);
-                let new_str = self
-                    .print_to_buffer(symbol_gen, *new_proof, buffer, ref_counts, bindings, true);
-                let t1 = self
-                    .term_dag
-                    .to_string_with_let(symbol_gen, proof.lhs, buffer);
-                let t2 = self
-                    .term_dag
-                    .to_string_with_let(symbol_gen, proof.rhs, buffer);
-                format!(
-                    "(merge-fn {} {} {} {} {})",
-                    function, old_str, new_str, t1, t2
-                )
+                let lhs_term = dag.get(proof.lhs).clone();
+                let rhs_term = dag.get(proof.rhs).clone();
+                let old_term_id = self.proof_to_term_for_printing(dag, *old_proof, cache);
+                let new_term_id = self.proof_to_term_for_printing(dag, *new_proof, cache);
+                let old_term = dag.get(old_term_id).clone();
+                let new_term = dag.get(new_term_id).clone();
+                let function_term = dag.var(function.clone());
+                let term = dag.app(
+                    "merge-fn".to_string(),
+                    vec![function_term, old_term, new_term, lhs_term, rhs_term],
+                );
+                dag.lookup(&term)
             }
             Justification::Trans(left, right) => {
-                let t1 = self
-                    .term_dag
-                    .to_string_with_let(symbol_gen, proof.lhs, buffer);
-                let t2 = self
-                    .term_dag
-                    .to_string_with_let(symbol_gen, proof.rhs, buffer);
-                let left_str =
-                    self.print_to_buffer(symbol_gen, *left, buffer, ref_counts, bindings, true);
-                let right_str =
-                    self.print_to_buffer(symbol_gen, *right, buffer, ref_counts, bindings, true);
-                format!("(trans {} {} {} {})", t1, t2, left_str, right_str)
+                let lhs_term = dag.get(proof.lhs).clone();
+                let rhs_term = dag.get(proof.rhs).clone();
+                let left_term_id = self.proof_to_term_for_printing(dag, *left, cache);
+                let right_term_id = self.proof_to_term_for_printing(dag, *right, cache);
+                let left_term = dag.get(left_term_id).clone();
+                let right_term = dag.get(right_term_id).clone();
+                let term = dag.app(
+                    "trans".to_string(),
+                    vec![lhs_term, rhs_term, left_term, right_term],
+                );
+                dag.lookup(&term)
             }
             Justification::Sym(inner) => {
-                let inner_str =
-                    self.print_to_buffer(symbol_gen, *inner, buffer, ref_counts, bindings, true);
-                let t1 = self
-                    .term_dag
-                    .to_string_with_let(symbol_gen, proof.lhs, buffer);
-                let t2 = self
-                    .term_dag
-                    .to_string_with_let(symbol_gen, proof.rhs, buffer);
-                format!("(sym {} {} {})", inner_str, t1, t2)
+                let lhs_term = dag.get(proof.lhs).clone();
+                let rhs_term = dag.get(proof.rhs).clone();
+                let inner_term_id = self.proof_to_term_for_printing(dag, *inner, cache);
+                let inner_term = dag.get(inner_term_id).clone();
+                let term = dag.app("sym".to_string(), vec![inner_term, lhs_term, rhs_term]);
+                dag.lookup(&term)
             }
             Justification::Congr {
                 proof: base,
                 child_index,
                 child_proof,
             } => {
-                let base_str =
-                    self.print_to_buffer(symbol_gen, *base, buffer, ref_counts, bindings, true);
-                let child_str = self.print_to_buffer(
-                    symbol_gen,
-                    *child_proof,
-                    buffer,
-                    ref_counts,
-                    bindings,
-                    true,
+                let lhs_term = dag.get(proof.lhs).clone();
+                let rhs_term = dag.get(proof.rhs).clone();
+                let base_term_id = self.proof_to_term_for_printing(dag, *base, cache);
+                let base_term = dag.get(base_term_id).clone();
+                let child_term_id = self.proof_to_term_for_printing(dag, *child_proof, cache);
+                let child_term = dag.get(child_term_id).clone();
+                let index_term = dag.lit(Literal::Int(*child_index as i64));
+                let term = dag.app(
+                    "congr".to_string(),
+                    vec![base_term, child_term, index_term, lhs_term, rhs_term],
                 );
-                let t1 = self
-                    .term_dag
-                    .to_string_with_let(symbol_gen, proof.lhs, buffer);
-                let t2 = self
-                    .term_dag
-                    .to_string_with_let(symbol_gen, proof.rhs, buffer);
-                format!(
-                    "(congr {} {} {} {} {})",
-                    base_str, child_str, child_index, t1, t2
-                )
+                dag.lookup(&term)
             }
         };
 
-        let should_bind = allow_binding && ref_counts.get(&proof_id).copied().unwrap_or(1) > 1;
-
-        if should_bind {
-            let let_name = symbol_gen.fresh("p");
-            let trimmed = proof_str.trim_end_matches('\n');
-            buffer.push_str(&format!("(let {} {})\n", let_name, trimmed));
-            bindings.insert(proof_id, let_name.clone());
-            return let_name;
-        }
-
-        proof_str
+        cache.insert(proof_id, term_id);
+        term_id
     }
 
     /// Get the proof with the given id.
@@ -707,11 +657,24 @@ impl ProofStore {
                 // if the child proof proves t = t for some t, we can skip the congruence step
                 let child_proof = self.get(child_proof);
                 if child_proof.lhs == child_proof.rhs {
-                    return self.simplify(base_proof);
+                    self.simplify(base_proof)
+                } else {
+                    self.map_child_proofs(proof_id, |store, pid| store.simplify(pid))
                 }
-
-                todo!()
             }
+            Justification::Trans(p1, p2) => {
+                // if either side is a reflexive proof, skip it
+                let p1_proof = self.get(p1);
+                let p2_proof = self.get(p2);
+                if p1_proof.lhs == p1_proof.rhs {
+                    return self.simplify(p2);
+                } else if p2_proof.lhs == p2_proof.rhs {
+                    return self.simplify(p1);
+                } else {
+                    self.map_child_proofs(proof_id, |store, pid| store.simplify(pid))
+                }
+            }
+
             _ => self.map_child_proofs(proof_id, |store, pid| store.simplify(pid)),
         }
     }
@@ -809,23 +772,6 @@ impl ProofStore {
 }
 
 impl Proof {
-    fn child_proof_ids(&self) -> Vec<ProofId> {
-        match &self.justification {
-            Justification::Fiat => Vec::new(),
-            Justification::Rule { premise_proofs, .. } => premise_proofs.clone(),
-            Justification::MergeFn {
-                old_proof,
-                new_proof,
-                ..
-            } => vec![*old_proof, *new_proof],
-            Justification::Trans(left, right) => vec![*left, *right],
-            Justification::Sym(inner) => vec![*inner],
-            Justification::Congr {
-                proof, child_proof, ..
-            } => vec![*proof, *child_proof],
-        }
-    }
-
     pub fn justification(&self) -> &Justification {
         &self.justification
     }

@@ -35,7 +35,7 @@ expression: snapshot
         :ruleset delete_subsume_ruleset :name "__delete_rule")
 (rule ((to_subsume_add c0_ c1_)
        (addView c0_ c1_ out))
-      ((delete (addView c0_ c1_ out)))
+      ((subsume (addView c0_ c1_ out)))
         :ruleset delete_subsume_ruleset :name "__delete_rule_subsume")
 (check (addView 0 0 __v1)
 (= __v1 0))

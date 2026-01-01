@@ -411,9 +411,9 @@ impl EGraph {
         self
     }
 
-    /// Enable checking of all proofs before they are returned.
-    pub fn enable_proof_checking(&mut self) {
-        self.proof_state.check_all_proofs = true;
+    /// Enable testing of getting proofs for all `check` commands.
+    pub fn enable_proof_testing(&mut self) {
+        self.proof_state.proof_testing = true;
     }
 
     /// Add a user-defined command to the e-graph
@@ -1440,7 +1440,7 @@ impl EGraph {
     /// Desugars, typechecks, and removes globals from a single [`Command`].
     /// Leverages previous type information in the [`EGraph`] to do so, adding new type information.
     fn resolve_command(&mut self, command: Command) -> Result<Vec<ResolvedNCommand>, Error> {
-        let desugared = desugar_command(command, &mut self.parser)?;
+        let desugared = desugar_command(command, &mut self.parser, self.proof_state.proof_testing)?;
 
         // Add term encoding when it is enabled
         if let Some(original_typechecking) = self.proof_state.original_typechecking.as_mut() {
@@ -1448,17 +1448,19 @@ impl EGraph {
             // TODO this is ugly- we don't need an entire e-graph just for type information.
             let mut typechecked = original_typechecking.typecheck_program(&desugared)?;
 
-            typechecked =
-                proof_global_remover::remove_globals(typechecked, &mut self.parser.symbol_gen);
             for command in &typechecked {
-                self.names.check_shadowing(command)?;
-
                 if !command_supports_proof_encoding(&command.to_command(), &self.type_info) {
                     let command_text = format!("{}", command.to_command());
                     return Err(Error::UnsupportedProofCommand {
                         command: command_text,
                     });
                 }
+            }
+
+            typechecked =
+                proof_global_remover::remove_globals(typechecked, &mut self.parser.symbol_gen);
+            for command in &typechecked {
+                self.names.check_shadowing(command)?;
             }
             let normalized = proof_form(typechecked, &mut self.parser.symbol_gen);
 
@@ -1467,7 +1469,8 @@ impl EGraph {
             let term_encoding_added = ProofInstrumentor::add_term_encoding(self, normalized);
             let mut new_typechecked = vec![];
             for new_cmd in term_encoding_added {
-                let desugared = desugar_command(new_cmd, &mut self.parser)?;
+                let desugared =
+                    desugar_command(new_cmd, &mut self.parser, self.proof_state.proof_testing)?;
                 for cmd in &desugared {
                     log::debug!("Desugared term encoding: {}", cmd.to_command());
                 }
