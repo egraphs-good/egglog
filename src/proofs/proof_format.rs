@@ -311,11 +311,11 @@ impl ProofStore {
                 let right_id = self.convert_raw_proof(rules, raw_store, *right_raw);
                 let left = &self.id_to_proof[left_id];
                 let right = &self.id_to_proof[right_id];
-                eprintln!("Converting {}", proof_term_str);
+                /*eprintln!("Converting {}", proof_term_str);
                 let left_rhs_str = self.term_dag.to_string(self.term_dag.get(left.rhs));
                 let right_lhs_str = self.term_dag.to_string(self.term_dag.get(right.lhs));
                 eprintln!("  Left RHS: {}", left_rhs_str);
-                eprintln!("  Right LHS: {}", right_lhs_str);
+                eprintln!("  Right LHS: {}", right_lhs_str);*/
                 assert_eq!(
                     left.rhs, right.lhs,
                     "transitivity requires matching middle terms"
@@ -625,17 +625,17 @@ impl ProofStore {
                 )
             }
             Justification::Trans(left, right) => {
-                let left_str =
-                    self.print_to_buffer(symbol_gen, *left, buffer, ref_counts, bindings, true);
-                let right_str =
-                    self.print_to_buffer(symbol_gen, *right, buffer, ref_counts, bindings, true);
                 let t1 = self
                     .term_dag
                     .to_string_with_let(symbol_gen, proof.lhs, buffer);
                 let t2 = self
                     .term_dag
                     .to_string_with_let(symbol_gen, proof.rhs, buffer);
-                format!("(trans {} {} {} {})", left_str, right_str, t1, t2)
+                let left_str =
+                    self.print_to_buffer(symbol_gen, *left, buffer, ref_counts, bindings, true);
+                let right_str =
+                    self.print_to_buffer(symbol_gen, *right, buffer, ref_counts, bindings, true);
+                format!("(trans {} {} {} {})", t1, t2, left_str, right_str)
             }
             Justification::Sym(inner) => {
                 let inner_str =
