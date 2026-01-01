@@ -166,14 +166,9 @@ fn generate_tests(glob: &str) -> Vec<Trial> {
             proofs: false,
             snapshot: false,
         };
-        eprintln!("Generating trials for {:?}", run.path);
         let should_fail = run.should_fail();
         let requires_proofs = run.path.parent().unwrap().ends_with("proofs");
         let supports_proofs = file_supports_proofs(&run.path);
-        eprintln!(
-            "  should_fail: {}, requires_proofs: {}, supports_proofs: {}",
-            should_fail, requires_proofs, supports_proofs
-        );
 
         if !requires_proofs {
             push_trial(run.clone());

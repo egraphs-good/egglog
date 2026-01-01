@@ -80,9 +80,9 @@ use crate::ast::desugar::desugar_command;
 use crate::ast::*;
 use crate::core::{GenericActionsExt, ResolvedRuleExt};
 use crate::proofs::proof_encoding::{EncodingState, ProofInstrumentor};
-use crate::proofs::proof_format::{ProofId, ProofStore};
 use crate::proofs::proof_encoding_helpers::command_supports_proof_encoding;
 use crate::proofs::proof_extraction::ProveExistsError;
+use crate::proofs::proof_format::{ProofId, ProofStore};
 use crate::proofs::proof_normal_form::proof_form;
 
 pub const GLOBAL_NAME_PREFIX: &str = "$";
@@ -1304,12 +1304,13 @@ impl EGraph {
             }
             ResolvedNCommand::ProveExists(span, resolved_call) => {
                 let mut instrument = ProofInstrumentor { egraph: self };
-                let (proof_store, proof_id) = instrument
-                    .prove_exists(&resolved_call)
-                    .map_err(|error| Error::ProofError {
-                        span: span.clone(),
-                        error,
-                    })?;
+                let (proof_store, proof_id) =
+                    instrument
+                        .prove_exists(&resolved_call)
+                        .map_err(|error| Error::ProofError {
+                            span: span.clone(),
+                            error,
+                        })?;
                 return Ok(Some(CommandOutput::ProveExists {
                     proof_store,
                     proof_id,
@@ -1566,6 +1567,16 @@ impl EGraph {
         let parsed = self.parser.get_program_from_string(filename, input)?;
         let (_outputs, desugared_commands) = self.process_program_internal(parsed, false)?;
         Ok(desugared_commands)
+    }
+
+    /// Takes a source program `input` and parses it into a list of [`Command`]s.
+    pub fn parse_program(
+        &mut self,
+        filename: Option<String>,
+        input: &str,
+    ) -> Result<Vec<Command>, Error> {
+        let parsed = self.parser.get_program_from_string(filename, input)?;
+        Ok(parsed)
     }
 
     /// Takes a source program `input`, parses it, runs it, and returns a list of messages.
