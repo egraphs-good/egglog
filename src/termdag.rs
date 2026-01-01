@@ -210,19 +210,10 @@ impl TermDag {
 
         let rendered = match self.get(term_id) {
             Term::App(name, children) => {
-                if name == "Trans" {
-                    eprintln!("rendering Trans with indent {}", indent);
-                }
                 let mut child_renderings = Vec::with_capacity(children.len());
                 for child_id in children {
                     let rendered_child =
                         self.render_term(*child_id, ctx, true, indent + PRETTY_INDENT_STEP);
-                    if name == "Trans" {
-                        eprintln!(
-                            "  child pretty: {:?}",
-                            rendered_child.pretty.split('\n').collect::<Vec<_>>()
-                        );
-                    }
                     child_renderings.push(rendered_child);
                 }
 
@@ -255,13 +246,6 @@ impl TermDag {
                 } else {
                     inline.clone()
                 };
-
-                if name == "Trans" {
-                    eprintln!(
-                        "result pretty lines: {:?}",
-                        pretty.split('\n').collect::<Vec<_>>()
-                    );
-                }
 
                 RenderedTerm { inline, pretty }
             }
@@ -561,7 +545,6 @@ mod tests {
         let mut buf = String::new();
         let mut sym = SymbolGen::new(String::new());
         let repr = td.to_string_with_let(&mut sym, td.lookup(&t), &mut buf);
-    println!("repr: {repr}");
         assert!(repr.contains('\n'), "expected multiline output, got {repr}");
         let has_lonely_paren = repr.lines().any(|line| line.trim() == ")");
         assert!(
