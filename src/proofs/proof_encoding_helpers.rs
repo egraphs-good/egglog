@@ -1,18 +1,12 @@
 use std::path::Path;
 
-use egglog_ast::span::Span;
-use egglog_core_relations::{ExecutionState, Value};
-
 use crate::{
-    EGraph, Primitive, TypeInfo,
+    EGraph, TypeInfo,
     ast::{
         Command, Fact, GenericCommand, ResolvedAction, ResolvedCommand, ResolvedExprExt, Schedule,
     },
-    constraint::SimpleTypeConstraint,
-    prelude::BaseSort,
     proofs::proof_encoding::ProofInstrumentor,
-    sort::UnitSort,
-    util::{FreshGen, HashMap, HashSet, SymbolGen},
+    util::{FreshGen, HashMap, SymbolGen},
 };
 
 #[derive(Clone)]
@@ -356,27 +350,23 @@ pub fn command_supports_proof_encoding(command: &ResolvedCommand, type_info: &Ty
         | GenericCommand::Input { .. } => false,
         // no-merge on a non-global function
         // To add support: https://github.com/egraphs-good/egglog/issues/774
-        GenericCommand::Function { merge: None, name, .. } => {
+        GenericCommand::Function {
+            merge: None, name, ..
+        } => {
             if type_info.is_global(name) {
                 return true;
             }
             false
         }
         // let binding with non-eq sort not supported by proof_global_desugar
-        // we detect as setting something that is no-merge to a primitive not supported (global primitive binding)
-        ResolvedCommand::Action(action) => match action {
-            ResolvedAction::Set(_span, head, _children, expr) => {
-                if type_info.is_global(head.name()) {
-                    if !expr.output_type().is_eq_sort() {
-                        false
-                    } else {
-                        true
-                    }
-                } else {
-                    true
-                }
-            }
-            _ => true,
+        ResolvedCommand::Action(ResolvedAction::Let(_, _, expr)) => {
+            // let binding with non-eq sort not supported by proof_global_desugar
+            // we detect as setting something that is no-merge to a primitive not supported (global primitive binding)
+            expr.output_type().is_eq_sort()
+        }
+        // After global desugar it may look like this
+        ResolvedCommand::Action(ResolvedAction::Set(_span, head, _children, expr)) => {
+            !type_info.is_global(head.name()) || expr.output_type().is_eq_sort()
         }
         _ => true,
     }

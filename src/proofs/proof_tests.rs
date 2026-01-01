@@ -16,7 +16,7 @@ mod tests {
         let mut ncommands = Vec::new();
         for command in program {
             let desugared =
-                desugar_command(command, &mut parser).expect("failed to desugar command");
+                desugar_command(command, &mut parser, false).expect("failed to desugar command");
             ncommands.extend(desugared);
         }
 

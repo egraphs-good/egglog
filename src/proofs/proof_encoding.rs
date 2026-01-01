@@ -88,7 +88,7 @@ pub(crate) struct EncodingState {
     // When Some term encoding is enabled.
     pub original_typechecking: Option<Box<EGraph>>,
     pub proofs_enabled: bool,
-    pub check_all_proofs: bool,
+    pub proof_testing: bool,
     pub proof_names: EncodingNames,
 }
 
@@ -100,7 +100,7 @@ impl EncodingState {
             original_typechecking: None,
             proofs_enabled: false,
             proof_names: EncodingNames::new(symbol_gen),
-            check_all_proofs: false,
+            proof_testing: false,
         }
     }
 }

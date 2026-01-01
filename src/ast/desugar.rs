@@ -7,6 +7,7 @@ use egglog_ast::span::Span;
 pub(crate) fn desugar_command(
     command: Command,
     parser: &mut Parser,
+    proof_testing: bool,
 ) -> Result<Vec<NCommand>, Error> {
     let rule_name = rule_name(&command);
     let res = match command {
@@ -112,7 +113,13 @@ pub(crate) fn desugar_command(
             vec![NCommand::PrintOverallStatistics(span, file.clone())]
         }
         Command::Extract(span, expr, variants) => vec![NCommand::Extract(span, expr, variants)],
-        Command::Check(span, facts) => vec![NCommand::Check(span, facts)],
+        Command::Check(span, facts) => {
+            if proof_testing {
+                desugar_prove(parser, span.clone(), facts.clone())
+            } else {
+                vec![NCommand::Check(span, facts)]
+            }
+        }
         Command::PrintFunction(span, symbol, size, file, mode) => {
             vec![NCommand::PrintFunction(span, symbol, size, file, mode)]
         }
@@ -127,7 +134,7 @@ pub(crate) fn desugar_command(
             vec![NCommand::Pop(span, num)]
         }
         Command::Fail(span, cmd) => {
-            let mut desugared = desugar_command(*cmd, parser)?;
+            let mut desugared = desugar_command(*cmd, parser, proof_testing)?;
 
             let last = desugared.pop().unwrap();
             desugared.push(NCommand::Fail(span, Box::new(last)));
@@ -139,14 +146,14 @@ pub(crate) fn desugar_command(
         Command::UserDefined(span, name, args) => {
             vec![NCommand::UserDefined(span, name, args)]
         }
-        Command::Prove(span, query) => desugar_prove_exists(parser, span, query),
+        Command::Prove(span, query) => desugar_prove(parser, span, query),
         Command::ProveExists(span, constructor) => vec![NCommand::ProveExists(span, constructor)],
     };
 
     Ok(res)
 }
 
-fn desugar_prove_exists(parser: &mut Parser, span: Span, query: Vec<Fact>) -> Vec<NCommand> {
+fn desugar_prove(parser: &mut Parser, span: Span, query: Vec<Fact>) -> Vec<NCommand> {
     let fresh_sort = parser.symbol_gen.fresh("ExistsSort");
     let constructor_name = parser.symbol_gen.fresh("ExistsConstructor");
     let ruleset = parser.symbol_gen.fresh("exists");
