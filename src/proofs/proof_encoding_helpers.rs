@@ -79,6 +79,8 @@ impl<'a> ProofInstrumentor<'a> {
         }
     }
 
+    /// A UF proof gives a proof of equality between two terms.
+    /// Given two terms, gives a proof they are equal.
     pub(crate) fn uf_proof_name(&mut self, sort: &str) -> String {
         if let Some(name) = self.egraph.proof_state.proof_names.uf_proof_name.get(sort) {
             name.clone()

@@ -128,6 +128,8 @@ impl<'a> ProofInstrumentor<'a> {
         justification: &Justification,
     ) -> String {
         let uf_name = self.uf_name(type_name);
+        let smaller = format!("(ordering-min {lhs} {rhs})");
+        let larger = format!("(ordering-max {lhs} {rhs})");
         let set_proof = if self.egraph.proof_state.proofs_enabled {
             let uf_proof_name = self.uf_proof_name(type_name);
             let to_ast_constructor = self
@@ -139,23 +141,21 @@ impl<'a> ProofInstrumentor<'a> {
             let fiat_constructor = &self.proof_names().fiat_constructor;
             let proof = match justification {
                 Justification::Rule(rule_name, proof_list) => format!(
-                    "({rule_constructor} \"{rule_name}\" {proof_list} ({to_ast_constructor} {lhs}) ({to_ast_constructor} {rhs}))"
+                    "({rule_constructor} \"{rule_name}\" {proof_list} ({to_ast_constructor} {larger}) ({to_ast_constructor} {smaller}))"
                 ),
                 Justification::Fiat => format!(
-                    "({fiat_constructor} ({to_ast_constructor} {lhs}) ({to_ast_constructor} {rhs}))"
+                    "({fiat_constructor} ({to_ast_constructor} {larger}) ({to_ast_constructor} {smaller}))"
                 ),
                 Justification::Proof(existing_proof) => existing_proof.clone(),
             };
-            format!(
-                "(set ({uf_proof_name} (ordering-max {lhs} {rhs}) (ordering-min {lhs} {rhs})) {proof})"
-            )
+            format!("(set ({uf_proof_name} {larger} {smaller}) {proof})")
         } else {
             "".to_string()
         };
 
         format!(
             "
-        ({uf_name} (ordering-max {lhs} {rhs}) (ordering-min {lhs} {rhs}))
+        ({uf_name} {larger} {smaller})
          {set_proof}",
         )
     }
@@ -506,7 +506,7 @@ impl<'a> ProofInstrumentor<'a> {
             let mut children_updated = vec![];
             let old_child = child(i);
             let Some((updated_child_query, updated_child_var, updated_child_prf)) =
-                self.wrap_parent(child(i), types[i].clone())
+                self.lookup(child(i), types[i].clone())
             else {
                 panic!("Failed to get canonical expr for rebuilding rule");
             };
@@ -526,6 +526,7 @@ impl<'a> ProofInstrumentor<'a> {
                 let proof = self.fresh_var();
                 let eq_trans_constructor = self.proof_names().eq_trans_constructor.clone();
                 let congr_constructor = self.proof_names().congr_constructor.clone();
+                let sym_constructor = self.proof_names().eq_sym_constructor.clone();
 
                 // if we are updating the last element of a constructor
                 // it's updating the representative term, use transitivity
@@ -534,7 +535,7 @@ impl<'a> ProofInstrumentor<'a> {
                         format!(
                             "(let {proof}
                                ({eq_trans_constructor}
-                                  {updated_child_prf}
+                                  ({sym_constructor} {updated_child_prf})
                                   {view_prf}))",
                         )
                     } else {
@@ -760,7 +761,7 @@ impl<'a> ProofInstrumentor<'a> {
     }
 
     // Returns a query, variable for the updated child, and proof
-    fn wrap_parent(&mut self, var: String, sort: ArcSort) -> Option<(String, String, String)> {
+    fn lookup(&mut self, var: String, sort: ArcSort) -> Option<(String, String, String)> {
         if sort.is_eq_sort() {
             let fresh = self.fresh_var();
             let parent = self.uf_name(sort.name());
