@@ -196,7 +196,7 @@ impl<'a> ProofInstrumentor<'a> {
                 let code = self.add_to_ast(sort_name);
                 let uf_proof_name = self.uf_proof_name(sort_name);
                 let trans_constructor = &self.proof_names().eq_trans_constructor;
-                let symm_constructor = &self.proof_names().eq_sym_constructor;
+                let sym_constructor = &self.proof_names().eq_sym_constructor;
 
                 (
                     format!(
@@ -215,7 +215,7 @@ impl<'a> ProofInstrumentor<'a> {
                     format!(
                         "(set ({uf_proof_name} b c)
                           ({trans_constructor}
-                             ({symm_constructor} {p1_fresh})
+                             ({sym_constructor} {p1_fresh})
                              {p2_fresh}))"
                     ),
                 )
@@ -788,15 +788,25 @@ impl<'a> ProofInstrumentor<'a> {
     /// Return a new query and a proof that the query matched.
     fn instrument_facts(&mut self, facts: &[ResolvedFact]) -> (Vec<String>, String) {
         let mut res = vec![];
-        let pnil = &self.proof_names().pnil;
-        let mut proof = format!("({pnil})");
-        // Instrument facts in reverse order so that proofs nest correctly.
-        for fact in facts.into_iter().rev() {
+        let mut proof = vec![];
+
+        for fact in facts.into_iter() {
             let f_proof = self.instrument_fact(fact, &mut res);
-            let pcons = &self.proof_names().pcons;
-            proof = format!("({pcons} {f_proof} {proof})")
+            proof.push(f_proof);
         }
-        (res, proof)
+
+        (res, self.format_prooflist(&proof))
+    }
+
+    fn format_prooflist(&self, proofs: &[String]) -> String {
+        let pcons = &self.proof_names().pcons;
+        let pnil = &self.proof_names().pnil;
+
+        let mut prooflist = format!("({pnil})");
+        for proof in proofs.iter().rev() {
+            prooflist = format!("({pcons} {proof} {prooflist})");
+        }
+        prooflist
     }
 
     // Actions need to be instrumented to add to the view
