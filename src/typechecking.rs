@@ -14,8 +14,17 @@ pub struct FuncType {
     pub output: ArcSort,
 }
 
+/// Primitive validators
+/// Validators take (termdag, lhs_term, rhs_term) and return true if the computation is correct.
+pub type PrimitiveValidator =
+    Arc<dyn Fn(&TermDag, TermId) -> Option<egglog_ast::generic_ast::Literal> + Send + Sync>;
+
 #[derive(Clone)]
-pub struct PrimitiveWithId(pub Arc<dyn Primitive + Send + Sync>, pub ExternalFunctionId);
+pub struct PrimitiveWithId {
+    pub(crate) primitive: Arc<dyn Primitive + Send + Sync>,
+    pub(crate) id: ExternalFunctionId,
+    pub(crate) validator: Option<PrimitiveValidator>,
+}
 
 impl PrimitiveWithId {
     /// Takes the full signature of a primitive (both input and output types).
@@ -29,7 +38,7 @@ impl PrimitiveWithId {
             constraints.push(constraint::assign(lit.clone(), ty.clone()))
         }
         constraints.extend(
-            self.0
+            self.primitive
                 .get_type_constraints(&Span::Panic)
                 .get(&lits, typeinfo),
         );
@@ -43,7 +52,7 @@ impl PrimitiveWithId {
 
 impl Debug for PrimitiveWithId {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        write!(f, "Prim({})", self.0.name())
+        write!(f, "Prim({})", self.primitive.name())
     }
 }
 
@@ -129,13 +138,17 @@ impl EGraph {
             }
         }
 
-        let prim = Arc::new(x.clone());
-        let ext = self.backend.register_external_func(Wrapper(x));
+        let primitive = Arc::new(x.clone());
+        let id = self.backend.register_external_func(Wrapper(x));
         self.type_info
             .primitives
-            .entry(prim.name().to_owned())
+            .entry(primitive.name().to_owned())
             .or_default()
-            .push(PrimitiveWithId(prim, ext));
+            .push(PrimitiveWithId {
+                primitive,
+                id,
+                validator: None,
+            });
     }
 
     pub(crate) fn typecheck_program(

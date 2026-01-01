@@ -533,7 +533,7 @@ impl ProofStore {
             Justification::Fiat => {
                 let lhs_term = dag.get(proof.lhs).clone();
                 let rhs_term = dag.get(proof.rhs).clone();
-                let term = dag.app("fiat".to_string(), vec![lhs_term, rhs_term]);
+                let term = dag.app("Fiat".to_string(), vec![lhs_term, rhs_term]);
                 dag.lookup(&term)
             }
             Justification::Rule {
@@ -565,7 +565,7 @@ impl ProofStore {
                 let substitution_term = dag.app("substitution".to_string(), substitution_terms);
 
                 let term = dag.app(
-                    "rule".to_string(),
+                    "Rule".to_string(),
                     vec![
                         lhs_term,
                         rhs_term,
@@ -589,7 +589,7 @@ impl ProofStore {
                 let new_term = dag.get(new_term_id).clone();
                 let function_term = dag.var(function.clone());
                 let term = dag.app(
-                    "merge-fn".to_string(),
+                    "Merge".to_string(),
                     vec![function_term, old_term, new_term, lhs_term, rhs_term],
                 );
                 dag.lookup(&term)
@@ -602,7 +602,7 @@ impl ProofStore {
                 let left_term = dag.get(left_term_id).clone();
                 let right_term = dag.get(right_term_id).clone();
                 let term = dag.app(
-                    "trans".to_string(),
+                    "Trans".to_string(),
                     vec![lhs_term, rhs_term, left_term, right_term],
                 );
                 dag.lookup(&term)
@@ -612,7 +612,7 @@ impl ProofStore {
                 let rhs_term = dag.get(proof.rhs).clone();
                 let inner_term_id = self.proof_to_term_for_printing(dag, *inner, cache);
                 let inner_term = dag.get(inner_term_id).clone();
-                let term = dag.app("sym".to_string(), vec![inner_term, lhs_term, rhs_term]);
+                let term = dag.app("Sym".to_string(), vec![lhs_term, rhs_term, inner_term]);
                 dag.lookup(&term)
             }
             Justification::Congr {
@@ -628,7 +628,7 @@ impl ProofStore {
                 let child_term = dag.get(child_term_id).clone();
                 let index_term = dag.lit(Literal::Int(*child_index as i64));
                 let term = dag.app(
-                    "congr".to_string(),
+                    "Congr".to_string(),
                     vec![base_term, child_term, index_term, lhs_term, rhs_term],
                 );
                 dag.lookup(&term)

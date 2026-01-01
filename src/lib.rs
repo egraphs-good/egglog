@@ -1792,7 +1792,7 @@ impl<'a> BackendRule<'a> {
                         })
                 });
                 assert!(ps.len() == 1, "options for {name}: {ps:?}");
-                ResolvedFunctionId::Prim(ps.into_iter().next().unwrap().1)
+                ResolvedFunctionId::Prim(ps.into_iter().next().unwrap().id)
             } else {
                 panic!("no callable for {name}");
             };
