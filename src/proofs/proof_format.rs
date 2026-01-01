@@ -1,7 +1,8 @@
 use crate::{
-    Term, TermDag, TermId,
-    ast::{ResolvedExpr, ResolvedFact, ResolvedNCommand},
+    ResolvedCall, Term, TermDag, TermId,
+    ast::{FunctionSubtype, ResolvedExpr, ResolvedFact, ResolvedNCommand},
     proofs::proof_encoding_helpers::EncodingNames,
+    typechecking::FuncType,
     util::{HEntry, HashMap, IndexSet, SymbolGen},
 };
 use egglog_ast::generic_ast::Literal;
@@ -363,60 +364,88 @@ impl ProofStore {
             ResolvedNCommand::NormRule { rule } if rule.name == rule_name => Some(rule),
             _ => None,
         }) else {
-            return substitution;
+            panic!("could not find rule with name {}", rule_name);
         };
 
         if rule.body.len() != premise_proofs.len() {
-            return substitution;
+            panic!(
+                "rule {} has {} premises, but got {} premise proofs",
+                rule_name,
+                rule.body.len(),
+                premise_proofs.len()
+            );
         }
 
         let mut current_subst = substitution;
         for (fact, proof_id) in rule.body.iter().zip(premise_proofs.iter()) {
             let proof = &self.id_to_proof[*proof_id];
-            let Some(next_subst) = self.try_unify_fact(fact, proof, &current_subst) else {
-                return HashMap::default();
-            };
-            current_subst = next_subst;
+            self.unify_fact(fact, proof, &mut current_subst);
         }
 
         current_subst
     }
 
-    fn try_unify_fact(
+    fn unify_fact(
         &self,
         fact: &ResolvedFact,
         proof: &Proof,
-        base_subst: &HashMap<String, TermId>,
-    ) -> Option<HashMap<String, TermId>> {
+        base_subst: &mut HashMap<String, TermId>,
+    ) {
         match fact {
-            ResolvedFact::Eq(_, lhs_expr, rhs_expr) => {
-                if let Some(subst) = self
-                    .try_unify_expr(lhs_expr, proof.lhs, base_subst)
-                    .and_then(|candidate| self.try_unify_expr(rhs_expr, proof.rhs, &candidate))
-                {
-                    return Some(subst);
+            // In proof normal form, this is the only way that function calls apppear.
+            ResolvedFact::Eq(
+                _span,
+                ResolvedExpr::Call(
+                    _span2,
+                    head @ ResolvedCall::Func(FuncType {
+                        subtype: FunctionSubtype::Custom,
+                        ..
+                    }),
+                    args,
+                ),
+                // TODO this could actually be arbitrary pretty easily, it's just nested functions that are hard.
+                // We should also allow a function call with no bound output.
+                ResolvedExpr::Var(_span3, v),
+            ) => {
+                let term = proof.rhs;
+                let children = match self.term_dag.get(term) {
+                    Term::App(head_name, children) if head_name == head.name() => children.clone(),
+                    _ => panic!("expected function application term in proof rhs"),
+                };
+                // bind last child to v
+                let var_child_index = args.len() - 1;
+                let var_child_term = children[var_child_index];
+                self.add_to_subst(base_subst, &v.name, var_child_term);
+                // unify other args
+                for (arg_expr, child_term) in args.iter().zip(children.iter()) {
+                    self.unify_expr(arg_expr, *child_term, base_subst);
                 }
-
-                self.try_unify_expr(lhs_expr, proof.rhs, base_subst)
-                    .and_then(|candidate| self.try_unify_expr(rhs_expr, proof.lhs, &candidate))
             }
-            ResolvedFact::Fact(expr) => self
-                .try_unify_expr(expr, proof.lhs, base_subst)
-                .or_else(|| self.try_unify_expr(expr, proof.rhs, base_subst)),
+            ResolvedFact::Eq(_, lhs_expr, rhs_expr) => {
+                self.unify_expr(lhs_expr, proof.lhs, base_subst);
+                self.unify_expr(rhs_expr, proof.rhs, base_subst);
+            }
+            ResolvedFact::Fact(expr) => {
+                self.unify_expr(expr, proof.lhs, base_subst);
+            }
         }
     }
 
-    fn try_unify_expr(
-        &self,
-        expr: &ResolvedExpr,
-        term_id: TermId,
-        base_subst: &HashMap<String, TermId>,
-    ) -> Option<HashMap<String, TermId>> {
-        let mut candidate = base_subst.clone();
-        if self.unify_expr(expr, term_id, &mut candidate).is_ok() {
-            Some(candidate)
-        } else {
-            None
+    fn add_to_subst(&self, subst: &mut HashMap<String, TermId>, var: &str, term_id: TermId) {
+        match subst.entry(var.to_string()) {
+            HEntry::Vacant(entry) => {
+                entry.insert(term_id);
+            }
+            HEntry::Occupied(entry) => {
+                if *entry.get() != term_id {
+                    panic!(
+                        "conflicting substitutions for variable {}: {:?} vs {:?}",
+                        var,
+                        self.term_dag.get(*entry.get()),
+                        self.term_dag.get(term_id)
+                    );
+                }
+            }
         }
     }
 
@@ -425,36 +454,37 @@ impl ProofStore {
         expr: &ResolvedExpr,
         term_id: TermId,
         substitution: &mut HashMap<String, TermId>,
-    ) -> Result<(), ()> {
+    ) {
         match expr {
-            ResolvedExpr::Lit(_, lit) => match self.term_dag.get(term_id) {
-                Term::Lit(existing) if existing == lit => Ok(()),
-                _ => Err(()),
-            },
-            ResolvedExpr::Var(_, var) => match substitution.entry(var.name.clone()) {
-                HEntry::Vacant(entry) => {
-                    entry.insert(term_id);
-                    Ok(())
-                }
-                HEntry::Occupied(entry) => {
-                    if *entry.get() == term_id {
-                        Ok(())
-                    } else {
-                        Err(())
-                    }
-                }
-            },
+            ResolvedExpr::Lit(_, lit) => (),
+            ResolvedExpr::Var(_, var) => {
+                self.add_to_subst(substitution, &var.name, term_id);
+            }
             ResolvedExpr::Call(_, call, args) => match self.term_dag.get(term_id) {
                 Term::App(head, children) => {
-                    if head != call.name() || children.len() != args.len() {
-                        return Err(());
+                    if head != call.name() {
+                        panic!(
+                            "function call head mismatch: expected {}, got {head}",
+                            call.name(),
+                        );
                     }
-                    for (arg_expr, child_id) in args.iter().zip(children.iter()) {
-                        self.unify_expr(arg_expr, *child_id, substitution)?;
+                    if children.len() != args.len() {
+                        panic!(
+                            "function call arity mismatch for {}: expected {}, got {}",
+                            call.name(),
+                            args.len(),
+                            children.len()
+                        );
                     }
-                    Ok(())
+                    for (arg_expr, child_term) in args.iter().zip(children.iter()) {
+                        self.unify_expr(arg_expr, *child_term, substitution);
+                    }
                 }
-                _ => Err(()),
+                _ => panic!(
+                    "expected function application term for call {}, got {:?}",
+                    call.name(),
+                    self.term_dag.get(term_id)
+                ),
             },
         }
     }
