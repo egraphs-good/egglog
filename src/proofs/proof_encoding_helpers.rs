@@ -4,7 +4,7 @@ use egglog_ast::span::Span;
 use egglog_core_relations::{ExecutionState, Value};
 
 use crate::{
-    EGraph, Primitive,
+    EGraph, Primitive, TypeInfo,
     ast::{
         Command, Fact, GenericCommand, ResolvedAction, ResolvedCommand, ResolvedExprExt, Schedule,
     },
@@ -12,7 +12,7 @@ use crate::{
     prelude::BaseSort,
     proofs::proof_encoding::ProofInstrumentor,
     sort::UnitSort,
-    util::{FreshGen, HashMap, SymbolGen},
+    util::{FreshGen, HashMap, HashSet, SymbolGen},
 };
 
 #[derive(Clone)]
@@ -337,40 +337,47 @@ pub fn file_supports_proofs(path: &Path) -> bool {
         Err(_) => return false,
     };
 
-    // TODO support no-merge annotations. We need panic to throw an error so it's catchable.
-    let parsed = egraph.parse_program(Some(filename), &contents);
-    match parsed {
-        Ok(parsed) => {
-            for command in parsed {
-                if let GenericCommand::Function { merge, .. } = command {
-                    if merge.is_none() {
-                        return false;
-                    }
-                }
-            }
-        }
-        Err(_) => return false,
-    };
-
-    commands_support_proof_encoding(&desugared)
+    commands_support_proof_encoding(&desugared, &egraph.type_info)
 }
 
-fn commands_support_proof_encoding(commands: &[ResolvedCommand]) -> bool {
+fn commands_support_proof_encoding(commands: &[ResolvedCommand], type_info: &TypeInfo) -> bool {
     for command in commands {
-        if !command_supports_proof_encoding(command) {
+        if !command_supports_proof_encoding(command, type_info) {
             return false;
         }
     }
     true
 }
 
-pub fn command_supports_proof_encoding(command: &ResolvedCommand) -> bool {
+pub fn command_supports_proof_encoding(command: &ResolvedCommand, type_info: &TypeInfo) -> bool {
     match command {
         GenericCommand::Sort(_, _, Some(_))
         | GenericCommand::UserDefined(..)
         | GenericCommand::Input { .. } => false,
-        // let binding with non-eq sort not supported
-        ResolvedCommand::Action(ResolvedAction::Let(_, _, expr)) => expr.output_type().is_eq_sort(),
+        // no-merge on a non-global function
+        // To add support: https://github.com/egraphs-good/egglog/issues/774
+        GenericCommand::Function { merge: None, name, .. } => {
+            if type_info.is_global(name) {
+                return true;
+            }
+            false
+        }
+        // let binding with non-eq sort not supported by proof_global_desugar
+        // we detect as setting something that is no-merge to a primitive not supported (global primitive binding)
+        ResolvedCommand::Action(action) => match action {
+            ResolvedAction::Set(_span, head, _children, expr) => {
+                if type_info.is_global(head.name()) {
+                    if !expr.output_type().is_eq_sort() {
+                        false
+                    } else {
+                        true
+                    }
+                } else {
+                    true
+                }
+            }
+            _ => true,
+        }
         _ => true,
     }
 }
