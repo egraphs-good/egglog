@@ -1453,7 +1453,7 @@ impl EGraph {
             for command in &typechecked {
                 self.names.check_shadowing(command)?;
 
-                if !command_supports_proof_encoding(&command.to_command()) {
+                if !command_supports_proof_encoding(&command.to_command(), &self.type_info) {
                     let command_text = format!("{}", command.to_command());
                     return Err(Error::UnsupportedProofCommand {
                         command: command_text,
