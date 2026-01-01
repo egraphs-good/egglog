@@ -1,7 +1,7 @@
 use crate::ast::FunctionSubtype;
 use crate::extract::{Extractor, TreeAdditiveCostModel};
 use crate::proofs::proof_encoding::ProofInstrumentor;
-use crate::proofs::proof_format::{ProofId, ProofStore, proof_store_from_term};
+use crate::proofs::proof_format::{Justification, ProofId, ProofStore, proof_store_from_term};
 use crate::{ResolvedCall, TermDag};
 use thiserror::Error;
 
@@ -36,9 +36,8 @@ impl<'a> ProofInstrumentor<'a> {
             }
         };
 
-        let egraph = &mut *self.egraph;
-
-        let function = egraph
+        let function = self
+            .egraph
             .functions
             .get(&func.name)
             .unwrap_or_else(|| panic!("constructor {} is not declared", func.name));
@@ -49,49 +48,43 @@ impl<'a> ProofInstrumentor<'a> {
             });
         }
 
-        if !egraph.proof_state.proofs_enabled {
+        if !self.egraph.proof_state.proofs_enabled {
             return Err(ProveExistsError::ProofsDisabled);
         }
 
         let backend_id = function.backend_id;
         let output_sort = function.schema.output.clone();
 
-        let extractor =
-            Extractor::compute_costs_from_rootsorts(None, egraph, TreeAdditiveCostModel::default());
+        let extractor = Extractor::compute_costs_from_rootsorts(
+            None,
+            self.egraph,
+            TreeAdditiveCostModel::default(),
+        );
 
         let mut termdag = TermDag::default();
         let mut witness_value = None;
 
-        egraph.backend.for_each_while(backend_id, |row| {
-            if row.subsumed {
-                return true;
-            }
-
+        self.egraph.backend.for_each_while(backend_id, |row| {
             let value = *row
                 .vals
                 .last()
                 .expect("constructor rows include their output value");
-
-            if let Some(_) =
-                extractor.extract_best_with_sort(egraph, &mut termdag, value, output_sort.clone())
-            {
-                witness_value = Some(value);
-                return false;
-            }
-
-            true
+            witness_value = Some(value);
+            false
         });
 
         let witness_value = witness_value.ok_or_else(|| ProveExistsError::QueryDidNotMatch {
             constructor: func.name.clone(),
         })?;
 
-        let proof_function_name = format!("{}Proof", output_sort.name());
-        let proof_value = egraph
+        let proof_function_name = self.term_proof_name(output_sort.name());
+        let proof_value = self
+            .egraph
             .lookup_function(&proof_function_name, &[witness_value])
             .unwrap_or_else(|| panic!("no proof recorded for constructor {}", func.name));
 
-        let proof_sort = egraph
+        let proof_sort = self
+            .egraph
             .functions
             .get(&proof_function_name)
             .unwrap_or_else(|| {
@@ -105,19 +98,35 @@ impl<'a> ProofInstrumentor<'a> {
             .clone();
 
         let (_, proof_term) = extractor
-            .extract_best_with_sort(egraph, &mut termdag, proof_value, proof_sort)
+            .extract_best_with_sort(self.egraph, &mut termdag, proof_value, proof_sort)
             .unwrap_or_else(|| {
                 panic!("failed to extract proof term for constructor {}", func.name)
             });
 
         let proof_term_id = termdag.lookup(&proof_term);
         let (proof_store, proof_id) = proof_store_from_term(
-            &egraph.proof_state.proof_names,
+            &self.egraph.proof_state.proof_names,
             termdag,
             proof_term_id,
-            &egraph.desugared_commands,
+            &self.egraph.desugared_commands,
         );
 
-        Ok((proof_store, proof_id))
+        // now every existence proof starts with a rule proof with a single premise, so extract that proof
+        let proof = proof_store.get(proof_id);
+        let premise_proof = match proof.justification() {
+            Justification::Rule { premise_proofs, .. } => match premise_proofs.as_slice() {
+                [premise_proof_id] => *premise_proof_id,
+                _ => panic!("expected a single premise proof for existence proof"),
+            },
+            _ => panic!("expected rule justification for existence proof"),
+        };
+
+        Ok((proof_store, premise_proof))
+    }
+
+    /// A simple simplification pass removing unnecessary steps.
+    /// For example, congruence steps that do not change the term.
+    fn simplify(&mut self, proof: ProofId) -> ProofId {
+        todo!()
     }
 }

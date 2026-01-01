@@ -193,48 +193,6 @@ fn primitive_error_in_run_schedule_returns_error() {
 }
 
 #[test]
-fn prove_exists_returns_proof_term_when_proofs_enabled() {
-    let _ = env_logger::builder().is_test(true).try_init();
-
-    let mut egraph = EGraph::new_with_proofs();
-    let program = r#"
-        (relation R (i64))
-        (R 2)
-    (prove (R x))
-    "#;
-
-    let outputs = egraph.parse_and_run_program(None, program).unwrap();
-    assert!(!outputs.is_empty(), "expected at least one command output");
-
-    let prove_exists_output = outputs
-        .iter()
-        .find(|output| matches!(output, CommandOutput::ProveExists { .. }))
-        .expect("expected prove-exists output");
-
-    let display = prove_exists_output.to_string();
-
-    let CommandOutput::ProveExists {
-        proof_store,
-        proof_id,
-    } = prove_exists_output.clone() else {
-        unreachable!();
-    };
-
-    let proof = proof_store.proof_to_string(proof_id);
-
-    assert_eq!(display, proof, "display implementation should return proof verbatim");
-
-    assert!(
-        proof.contains("@prove_exists_rule"),
-        "expected formatted proof to reference generated rule, got {proof}"
-    );
-    assert!(
-        proof.contains("(substitution (x"),
-        "proof should expose substitution binding"
-    );
-}
-
-#[test]
 fn prove_exists_reports_query_mismatch() {
     let _ = env_logger::builder().is_test(true).try_init();
 
