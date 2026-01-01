@@ -104,7 +104,7 @@ impl<'a> ProofInstrumentor<'a> {
             });
 
         let proof_term_id = termdag.lookup(&proof_term);
-        let (proof_store, proof_id) = proof_store_from_term(
+        let (mut proof_store, proof_id) = proof_store_from_term(
             &self.egraph.proof_state.proof_names,
             termdag,
             proof_term_id,
@@ -121,12 +121,9 @@ impl<'a> ProofInstrumentor<'a> {
             _ => panic!("expected rule justification for existence proof"),
         };
 
-        Ok((proof_store, premise_proof))
-    }
+        // simplify the proof
+        let simplified_proof = proof_store.simplify(premise_proof);
 
-    /// A simple simplification pass removing unnecessary steps.
-    /// For example, congruence steps that do not change the term.
-    fn simplify(&mut self, proof: ProofId) -> ProofId {
-        todo!()
+        Ok((proof_store, simplified_proof))
     }
 }
