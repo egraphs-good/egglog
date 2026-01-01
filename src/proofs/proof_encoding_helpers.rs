@@ -332,8 +332,23 @@ pub fn file_supports_proofs(path: &Path) -> bool {
 
     let mut egraph = EGraph::default();
     let filename = canonical.to_string_lossy().into_owned();
-    let desugared = match egraph.desugar_program(Some(filename), &contents) {
+    let desugared = match egraph.desugar_program(Some(filename.clone()), &contents) {
         Ok(commands) => commands,
+        Err(_) => return false,
+    };
+
+    // TODO support no-merge annotations. We need panic to throw an error so it's catchable.
+    let parsed = egraph.parse_program(Some(filename), &contents);
+    match parsed {
+        Ok(parsed) => {
+            for command in parsed {
+                if let GenericCommand::Function { merge, .. } = command {
+                    if merge.is_none() {
+                        return false;
+                    }
+                }
+            }
+        }
         Err(_) => return false,
     };
 
@@ -356,8 +371,6 @@ pub fn command_supports_proof_encoding(command: &ResolvedCommand) -> bool {
         | GenericCommand::Input { .. } => false,
         // let binding with non-eq sort not supported
         ResolvedCommand::Action(ResolvedAction::Let(_, _, expr)) => expr.output_type().is_eq_sort(),
-        // no-merge isn't supported
-        ResolvedCommand::Function { merge: None, .. } => false,
         _ => true,
     }
 }
