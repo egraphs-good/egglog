@@ -1,5 +1,5 @@
 use crate::{
-    core::{CoreActionContext, CoreRule, GenericActionsExt},
+    core::{CoreActionContext, CoreRule, GenericActionsExt, ResolvedCall},
     *,
 };
 use ast::{ResolvedAction, ResolvedExpr, ResolvedFact, ResolvedRule, ResolvedVar, Rule};
@@ -53,7 +53,7 @@ pub struct TypeInfo {
     mksorts: HashMap<String, MkSort>,
     // TODO(yz): I want to get rid of this as now we have user-defined primitives and constraint based type checking
     reserved_primitives: HashSet<&'static str>,
-    sorts: HashMap<String, Arc<dyn Sort>>,
+    pub(crate) sorts: HashMap<String, Arc<dyn Sort>>,
     primitives: HashMap<String, Vec<PrimitiveWithId>>,
     func_types: HashMap<String, FuncType>,
     pub(crate) global_sorts: HashMap<String, ArcSort>,
@@ -241,6 +241,19 @@ impl EGraph {
             NCommand::PrintSize(span, n) => {
                 // Should probably also resolve the function symbol here
                 ResolvedNCommand::PrintSize(span.clone(), n.clone())
+            }
+            NCommand::ProveExists(span, constructor) => {
+                let func_type = self
+                    .type_info
+                    .get_func_type(constructor)
+                    .ok_or_else(|| TypeError::UnboundFunction(constructor.clone(), span.clone()))?;
+                if func_type.subtype != FunctionSubtype::Constructor {
+                    return Err(TypeError::ProveExistsRequiresConstructor(
+                        constructor.clone(),
+                        span.clone(),
+                    ));
+                }
+                ResolvedNCommand::ProveExists(span.clone(), ResolvedCall::Func(func_type.clone()))
             }
             NCommand::Output { span, file, exprs } => {
                 let exprs = exprs
@@ -453,6 +466,7 @@ impl TypeInfo {
             unextractable: fdecl.unextractable,
             let_binding: fdecl.let_binding,
             span: fdecl.span.clone(),
+            unionable: fdecl.unionable,
         })
     }
 
@@ -553,10 +567,8 @@ impl TypeInfo {
             GenericExpr::Call(span, head, args) => {
                 match head {
                     ResolvedCall::Func(t) => {
-                        // Only allowed to lookup constructor or relation
-                        if t.subtype != FunctionSubtype::Constructor
-                            && t.subtype != FunctionSubtype::Relation
-                        {
+                        // Only allowed to lookup constructor
+                        if t.subtype != FunctionSubtype::Constructor {
                             Err(TypeError::LookupInRuleDisallowed(
                                 head.to_string(),
                                 span.clone(),
@@ -729,6 +741,8 @@ pub enum TypeError {
     DisallowedSort(String, String, Span),
     #[error("{1}\nUnbound function {0}")]
     UnboundFunction(String, Span),
+    #[error("{1}\nprove-exists requires constructor function, but {0} is not a constructor")]
+    ProveExistsRequiresConstructor(String, Span),
     #[error("{1}\nFunction already bound {0}")]
     FunctionAlreadyBound(String, Span),
     #[error("{1}\nSort {0} already declared.")]

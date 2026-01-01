@@ -1,4 +1,4 @@
-//! Utilities for rewriting an [`EGraph`](crate::EGraph) into its "term encoding" form.
+//! Rewrites an egglog program to use a term encoding, optionally including proof tracking.
 //!
 //! The term encoding instruments an egglog program so that every constructor and
 //! function call is backed by explicit term tables, view tables, and per-sort
@@ -11,7 +11,7 @@
 //! [`EGraph::new_with_term_encoding`](crate::EGraph::new_with_term_encoding) or
 //! converted via [`EGraph::with_term_encoding_enabled`](crate::EGraph::with_term_encoding_enabled).
 //!
-//! # Example term encoding output
+//! # Example term encoding for a function
 //! Consider a tiny program that defines a pure arithmetic helper and checks a fact about it:
 //!
 //! ```text
@@ -27,40 +27,40 @@
 //! (ruleset rebuilding)
 //! (ruleset rebuilding_cleanup)
 //! (ruleset delete_subsume_ruleset)
-//! (sort _view1)
-//! (constructor add (i64 i64 i64) @view1)
-//! (constructor addView (i64 i64 i64) @view1)
-//! (constructor to_delete_add (i64 i64) @view1)
-//! (constructor to_subsume_add (i64 i64) @view1)
-//! (sort _mergecleanup8)
-//! (constructor _mergecleanup7 (i64 i64) @mergecleanup8)
+//! (sort _view)
+//! (constructor add (i64 i64 i64) _view)
+//! (constructor addView (i64 i64 i64) _view)
+//! (constructor to_delete_add (i64 i64) _view)
+//! (constructor to_subsume_add (i64 i64) _view)
+//! (sort _mergecleanupsort)
+//! (constructor _mergecleanup (i64 i64) _mergecleanupsort)
 //! (rule ((addView c0_ c1_ old)
 //!        (addView c0_ c1_ new)
 //!        (!= old new)
 //!        (= (ordering-max old new) new))
 //!       ((addView c0_ c1_ old)
-//!        (@mergecleanup7 old old)
-//!        (@mergecleanup7 old new))
-//!         :ruleset rebuilding :name "_merge_rule2")
-//! (rule ((@mergecleanup7 merged old)
+//!        (@mergecleanup old old)
+//!        (@mergecleanup old new))
+//!         :ruleset rebuilding :name "_merge_rule")
+//! (rule ((@mergecleanup merged old)
 //!        (addView c0_ c1_ merged)
 //!        (addView c0_ c1_ old)
 //!        (!= merged old))
 //!       ((delete (addView c0_ c1_ old)))
-//!         :ruleset rebuilding_cleanup :name "_merge_cleanup3")
+//!         :ruleset rebuilding_cleanup :name "_merge_cleanup")
 //! (rule ((to_delete_add c0_ c1_)
 //!        (addView c0_ c1_ out))
 //!       ((delete (addView c0_ c1_ out))
 //!        (delete (to_delete_add c0_ c1_)))
-//!         :ruleset delete_subsume_ruleset :name "_delete_rule9")
+//!         :ruleset delete_subsume_ruleset :name "_delete_rule")
 //! (rule ((to_subsume_add c0_ c1_)
 //!        (addView c0_ c1_ out))
 //!       ((delete (addView c0_ c1_ out)))
-//!         :ruleset delete_subsume_ruleset :name "_delete_rule9_subsume")
-//! (check (addView 0 0 @v10)
-//! (= @v10 0))
+//!         :ruleset delete_subsume_ruleset :name "_delete_rule_subsume")
+//! (check (addView 0 0 @v1)
+//! (= @v1 0))
 //! (run-schedule (seq (saturate (seq (run rebuilding_cleanup) (saturate (seq (run single_parent))) (saturate (seq (run parent))) (run rebuilding))) (run delete_subsume_ruleset)))
-//! ```
+//!```
 //!
 //! *The new rulesets* orchestrate maintenance for per-sort union-find tables (`parent` and `single_parent`),
 //! rebuild-time congruence (`rebuilding` + `rebuilding_cleanup`), and deferred deletions (`delete_subsume_ruleset`).
@@ -74,47 +74,12 @@
 //! *Original commands* are rewritten to reference these structures. The `check` now reasons about
 //! the canonical representative produced by `addView`, and the trailing `run-schedule` executes the
 //! maintenance rules so that the encoded program stays behaviourally equivalent to the uninstrumented version.
-use crate::ast::GenericCommand;
+use crate::proofs::proof_encoding_helpers::{EncodingNames, Justification};
 use crate::typechecking::FuncType;
 use crate::*;
-use std::path::Path;
 
+// TODO refactor so that encoding state is optional on the e-graph, ProofNames not optional on EncodingState. Then we don't have to clone proof names everywhere.
 #[derive(Clone)]
-pub(crate) struct ProofNames {
-    pub proof_list_sort: String,
-    pub ast_sort: String,
-    pub justification_datatype: String,
-    pub proof_datatype: String,
-    pub fiat_constructor: String,
-    pub rule_constructor: String,
-    pub merge_fn_constructor: String,
-    pub eq_constructor: String,
-    pub prim_refl_constructor: String,
-    pub eq_trans_constructor: String,
-    pub eq_sym_constructor: String,
-    pub congr_constructor: String,
-}
-
-impl ProofNames {
-    fn new(symbol_gen: &mut SymbolGen) -> Self {
-        Self {
-            proof_list_sort: symbol_gen.fresh("proof_list"),
-            ast_sort: symbol_gen.fresh("proof_ast"),
-            justification_datatype: symbol_gen.fresh("justification"),
-            proof_datatype: symbol_gen.fresh("proof"),
-            fiat_constructor: symbol_gen.fresh("fiat"),
-            rule_constructor: symbol_gen.fresh("rule"),
-            merge_fn_constructor: symbol_gen.fresh("merge_fn"),
-            eq_constructor: symbol_gen.fresh("eq"),
-            prim_refl_constructor: symbol_gen.fresh("prim_refl"),
-            eq_trans_constructor: symbol_gen.fresh("eq_trans"),
-            eq_sym_constructor: symbol_gen.fresh("eq_sym"),
-            congr_constructor: symbol_gen.fresh("congr"),
-        }
-    }
-}
-
-#[derive(Default, Clone)]
 pub(crate) struct EncodingState {
     pub uf_parent: HashMap<String, String>,
     pub term_header_added: bool,
@@ -123,15 +88,29 @@ pub(crate) struct EncodingState {
     // When Some term encoding is enabled.
     pub original_typechecking: Option<Box<EGraph>>,
     pub proofs_enabled: bool,
-    pub proof_names: Option<ProofNames>,
+    pub proof_testing: bool,
+    pub proof_names: EncodingNames,
+}
+
+impl EncodingState {
+    pub(crate) fn new(symbol_gen: &mut SymbolGen) -> Self {
+        Self {
+            uf_parent: HashMap::default(),
+            term_header_added: false,
+            original_typechecking: None,
+            proofs_enabled: false,
+            proof_names: EncodingNames::new(symbol_gen),
+            proof_testing: false,
+        }
+    }
 }
 
 /// Thin wrapper around an [`EGraph`] for the term encoding
-pub(crate) struct TermState<'a> {
-    egraph: &'a mut EGraph,
+pub(crate) struct ProofInstrumentor<'a> {
+    pub(crate) egraph: &'a mut EGraph,
 }
 
-impl<'a> TermState<'a> {
+impl<'a> ProofInstrumentor<'a> {
     /// Make a term state and use it to instrument the code.
     pub(crate) fn add_term_encoding(
         egraph: &'a mut EGraph,
@@ -140,72 +119,44 @@ impl<'a> TermState<'a> {
         Self { egraph }.add_term_encoding_helper(program)
     }
 
-    pub(crate) fn uf_name(&mut self, sort: &str) -> String {
-        if let Some(name) = self.egraph.proof_state.uf_parent.get(sort) {
-            name.clone()
-        } else {
-            self.egraph.proof_state.uf_parent.insert(
-                sort.to_string(),
-                format!("{INTERNAL_SYMBOL_PREFIX}ufparent_{}", sort,),
-            );
-            self.egraph.proof_state.uf_parent[sort].clone()
-        }
-    }
-
-    pub(crate) fn uf_proof_name(&mut self, sort: &str) -> String {
-        format!("{}Proof", self.uf_name(sort),)
-    }
-
-    fn single_parent_ruleset_name(&self) -> String {
-        "single_parent".to_string()
-    }
-
-    fn to_ast_name(&self, sort: &str) -> String {
-        format!("AST{}", sort,)
-    }
-
-    fn proof_names(&mut self) -> &ProofNames {
-        if self.egraph.proof_state.proof_names.is_none() {
-            let names = ProofNames::new(&mut self.egraph.parser.symbol_gen);
-            self.egraph.proof_state.proof_names = Some(names);
-        }
-        self.egraph
-            .proof_state
-            .proof_names
-            .as_ref()
-            .expect("proof names initialized")
-    }
-
-    fn fiat_justification(&mut self) -> String {
-        if !self.egraph.proof_state.proofs_enabled {
-            return String::new();
-        }
-        let names = self.proof_names();
-        format!("({})", names.fiat_constructor)
-    }
-
-    /// Mark two things as equal, adding justification if proofs are enabled.
+    /// Mark two things as equal, adding proof if proofs are enabled.
     pub(crate) fn union(
         &mut self,
         type_name: &str,
         lhs: &str,
         rhs: &str,
-        justification: &str,
+        justification: &Justification,
     ) -> String {
         let uf_name = self.uf_name(type_name);
-        let uf_proof_name = self.uf_proof_name(type_name);
-        let set_justification = if self.egraph.proof_state.proofs_enabled {
-            format!(
-                "(set ({uf_proof_name} (ordering-max {lhs} {rhs}) (ordering-min {lhs} {rhs})) {justification})"
-            )
+        let smaller = format!("(ordering-min {lhs} {rhs})");
+        let larger = format!("(ordering-max {lhs} {rhs})");
+        let set_proof = if self.egraph.proof_state.proofs_enabled {
+            let uf_proof_name = self.uf_proof_name(type_name);
+            let to_ast_constructor = self
+                .proof_names()
+                .sort_to_ast_constructor
+                .get(type_name)
+                .unwrap();
+            let rule_constructor = &self.proof_names().rule_constructor;
+            let fiat_constructor = &self.proof_names().fiat_constructor;
+            let proof = match justification {
+                Justification::Rule(rule_name, proof_list) => format!(
+                    "({rule_constructor} \"{rule_name}\" {proof_list} ({to_ast_constructor} {larger}) ({to_ast_constructor} {smaller}))"
+                ),
+                Justification::Fiat => format!(
+                    "({fiat_constructor} ({to_ast_constructor} {larger}) ({to_ast_constructor} {smaller}))"
+                ),
+                Justification::Proof(existing_proof) => existing_proof.clone(),
+            };
+            format!("(set ({uf_proof_name} {larger} {smaller}) {proof})")
         } else {
             "".to_string()
         };
 
         format!(
             "
-        ({uf_name} (ordering-max {lhs} {rhs}) (ordering-min {lhs} {rhs}))
-        {set_justification}",
+        ({uf_name} {larger} {smaller})
+         {set_proof}",
         )
     }
 
@@ -213,62 +164,100 @@ impl<'a> TermState<'a> {
     /// When one term has two parents, those parents are unioned in the merge action.
     /// Also, we have a rule that maintains the invariant that each term points to its
     /// canonical representative.
-    fn make_uf_table(&mut self, sort_name: &str) -> Vec<Command> {
+    fn declare_sort(&mut self, sort_name: &str) -> Vec<Command> {
         let pname = self.uf_name(sort_name);
         let fresh_sort = self.egraph.parser.symbol_gen.fresh("uf");
         let fresh_name = self.egraph.parser.symbol_gen.fresh("uf_update");
-        let proof_code = if self.egraph.proof_state.proofs_enabled {
+        let proof_tables = if self.egraph.proof_state.proofs_enabled {
+            let term_proof_name = self.term_proof_name(sort_name);
             let proof_type = self.proof_names().proof_datatype.clone();
-            let ast_sort = self.proof_names().ast_sort.clone();
             let uf_proof_name = self.uf_proof_name(sort_name);
-            let to_ast_name = self.to_ast_name(sort_name);
             format!(
-                "(function {uf_proof_name} ({sort_name} {sort_name}) {proof_type} :merge old)
-                 (constructor {to_ast_name} ({sort_name}) {ast_sort})"
+                "
+                (function {term_proof_name} ({sort_name}) {proof_type} :merge old)
+                (function {uf_proof_name} ({sort_name} {sort_name}) {proof_type} :merge old)
+                 "
             )
         } else {
             "".to_string()
         };
 
+        let (proof_query1, proof_action1, to_ast_constructor_code, proof_query2, proof_action2) =
+            if self.egraph.proof_state.proofs_enabled {
+                let p1_fresh = self.egraph.parser.symbol_gen.fresh("p1");
+                let p2_fresh = self.egraph.parser.symbol_gen.fresh("p2");
+                assert!(
+                    self.proof_names()
+                        .sort_to_ast_constructor
+                        .get(sort_name)
+                        .is_none()
+                );
+
+                let code = self.add_to_ast(sort_name);
+                let uf_proof_name = self.uf_proof_name(sort_name);
+                let trans_constructor = &self.proof_names().eq_trans_constructor;
+                let symm_constructor = &self.proof_names().eq_sym_constructor;
+
+                (
+                    format!(
+                        "(= {p1_fresh} ({uf_proof_name} a b))
+                         (= {p2_fresh} ({uf_proof_name} b c))"
+                    ),
+                    format!(
+                        "(set ({uf_proof_name} a c)
+                              ({trans_constructor} {p1_fresh} {p2_fresh}))"
+                    ),
+                    code,
+                    format!(
+                        "(= {p1_fresh} ({uf_proof_name} a b))
+                         (= {p2_fresh} ({uf_proof_name} a c))"
+                    ),
+                    format!(
+                        "(set ({uf_proof_name} b c)
+                          ({trans_constructor}
+                             ({symm_constructor} {p1_fresh})
+                             {p2_fresh}))"
+                    ),
+                )
+            } else {
+                (
+                    "".to_string(),
+                    "".to_string(),
+                    "".to_string(),
+                    "".to_string(),
+                    "".to_string(),
+                )
+            };
+
+        let parent_direct_ruleset_name = self.parent_direct_ruleset_name();
+        let single_parent_ruleset_name = self.proof_names().single_parent_ruleset_name.clone();
+
         self.parse_program(&format!(
             "(sort {fresh_sort})
              (constructor {pname} ({sort_name} {sort_name}) {fresh_sort})
-             {proof_code}
+             {to_ast_constructor_code}
+             {proof_tables}
              (rule (({pname} a b)
                     ({pname} b c)
-                    (!= b c))
+                    (!= b c)
+                    {proof_query1})
                   ((delete ({pname} a b))
-                   ({pname} a c))
-                   :ruleset {}
+                   ({pname} a c)
+                   {proof_action1})
+                   :ruleset {parent_direct_ruleset_name}
                    :name \"{fresh_name}\")
              (rule (({pname} a b)
                     ({pname} a c)
-                    (!= b c))
-                  ((delete ({pname} a (ordering-max b c)))
-                   ({pname} (ordering-max b c) (ordering-min b c)))
-                   :ruleset {}
+                    (!= b c)
+                    (= (ordering-max b c) b)
+                    {proof_query2})
+                  ((delete ({pname} a b))
+                   ({pname} b c)
+                    {proof_action2})
+                   :ruleset {single_parent_ruleset_name}
                    :name \"singleparent{fresh_name}\")
                    ",
-            self.parent_direct_ruleset_name(),
-            self.single_parent_ruleset_name(),
         ))
-    }
-
-    // Each function/constructor gets a view table, the canonicalized e-nodes to accelerate e-matching.
-    fn view_name(&self, name: &str) -> String {
-        format!("{}View", name,)
-    }
-
-    fn to_delete_name(&self, name: &str) -> String {
-        format!("to_delete_{}", name,)
-    }
-
-    fn subsumed_name(&self, name: &str) -> String {
-        format!("to_subsume_{}", name,)
-    }
-
-    fn delete_subsume_ruleset_name(&self) -> String {
-        "delete_subsume_ruleset".to_string()
     }
 
     fn delete_and_subsume(&mut self, fdecl: &ResolvedFunctionDecl) -> String {
@@ -286,7 +275,7 @@ impl<'a> TermState<'a> {
         let delete_subsume_ruleset = self.delete_subsume_ruleset_name();
         let fresh_name = self.egraph.parser.symbol_gen.fresh("delete_rule");
 
-        // Delete just goes once while subsume continues to delete in the future
+        // Subsume could use delete, except that `check` ignores subsumption.
         format!(
             "(rule (({to_delete_name} {child_names})
                     ({view_name} {child_names} out))
@@ -296,7 +285,7 @@ impl<'a> TermState<'a> {
                     :name \"{fresh_name}\")
              (rule (({subsumed_name} {child_names})
                     ({view_name} {child_names} out))
-                   ((delete ({view_name} {child_names} out)))
+                   ((subsume ({view_name} {child_names} out)))
                     :ruleset {delete_subsume_ruleset}
                     :name \"{fresh_name}_subsume\")"
         )
@@ -337,11 +326,11 @@ impl<'a> TermState<'a> {
             } else {
                 "".to_string()
             };
-            let rule_proof_var = self.fresh_var();
+            let proof_var = self.fresh_var();
             let rule_proof = if self.egraph.proof_state.proofs_enabled {
                 let merge_fn_constructor = self.proof_names().merge_fn_constructor.clone();
                 format!(
-                    "(let {rule_proof_var}
+                    "(let {proof_var}
                             ({merge_fn_constructor} \"{name}\"
                                   {p1_fresh}
                                   {p2_fresh}))"
@@ -351,36 +340,39 @@ impl<'a> TermState<'a> {
             };
 
             let mut merge_fn_code = vec![];
-            let merge_fn_var =
-                self.instrument_action_expr(merge_fn, &mut merge_fn_code, &rule_proof_var);
+            let merge_fn_var = self.instrument_action_expr(
+                merge_fn,
+                &mut merge_fn_code,
+                &Justification::Proof(proof_var.clone()),
+            );
             let merge_fn_code_str = merge_fn_code.join("\n");
             let mut updated = child_names.clone();
             updated.push(merge_fn_var.clone());
-            let term_and_proof = self.update_view(name, &updated, &rule_proof_var);
-            let fresh_constructor = self.egraph.parser.symbol_gen.fresh("mergecleanup");
-            let fresh_sort = self.egraph.parser.symbol_gen.fresh("mergecleanup");
+            let term_and_proof = self.update_view(name, &updated, &proof_var);
+            let cleanup_constructor = self.egraph.parser.symbol_gen.fresh("mergecleanup");
+            let fresh_sort = self.egraph.parser.symbol_gen.fresh("mergecleanupsort");
             let output_sort = fdecl.schema.output.clone();
 
             // The first runs the merge function adding a new row.
             // The second deletes rows with old values for the old variable, while the third deletes rows with new values for the new variable.
             format!(
                 "(sort {fresh_sort})
-                 (constructor {fresh_constructor} ({output_sort} {output_sort}) {fresh_sort})
+                 (constructor {cleanup_constructor} ({output_sort} {output_sort}) {fresh_sort})
                  (rule (({view_name} {child_names_str} old)
                         ({view_name} {child_names_str} new)
                         (!= old new)
                         (= (ordering-max old new) new)
                         {proof_query})
-                       ({merge_fn_code_str}
-                        {rule_proof}
+                       ({rule_proof}
+                        {merge_fn_code_str}
                         {term_and_proof}
-                        ({fresh_constructor} {merge_fn_var} old)
-                        ({fresh_constructor} {merge_fn_var} new)
+                        ({cleanup_constructor} {merge_fn_var} old)
+                        ({cleanup_constructor} {merge_fn_var} new)
                        )
                         :ruleset {rebuilding_ruleset}
                         :name \"{fresh_name}\")
                 
-                 (rule (({fresh_constructor} merged old)
+                 (rule (({cleanup_constructor} merged old)
                         ({view_name} {child_names_str} merged)
                         ({view_name} {child_names_str} old)
                         (!= merged old))
@@ -392,13 +384,26 @@ impl<'a> TermState<'a> {
         } else {
             // Congruence rule
             let fresh_name = self.egraph.parser.symbol_gen.fresh("congruence_rule");
-            let uf_name = self.uf_name(&fdecl.schema.output);
+            let mut child_names_new = child_names.clone();
+            child_names_new.push("new".to_string());
+            let mut child_names_old = child_names.clone();
+            child_names_old.push("old".to_string());
+            let (query1, prf1) = self.query_view_and_get_proof(&fdecl.name, &child_names_new);
+            let (query2, prf2) = self.query_view_and_get_proof(&fdecl.name, &child_names_old);
+            let sym = &self.proof_names().eq_sym_constructor;
+            let trans = &self.proof_names().eq_trans_constructor;
+            let union_code = self.union(
+                &fdecl.schema.output,
+                "new",
+                "old",
+                &Justification::Proof(format!("({trans} {prf1} ({sym} {prf2}))",)),
+            );
             format!(
-                "(rule (({view_name} {child_names_str} old)
-                        ({view_name} {child_names_str} new)
+                "(rule ({query1}
+                        {query2}
                         (!= old new)
                         (= (ordering-max old new) new))
-                       (({uf_name} new old))
+                       ({union_code})
                         :ruleset {rebuilding_ruleset}
                         :name \"{fresh_name}\")"
             )
@@ -418,7 +423,6 @@ impl<'a> TermState<'a> {
         let view_name = self.view_name(&fdecl.name);
         let in_sorts = ListDisplay(schema.input.clone(), " ");
         let fresh_sort = self.egraph.parser.symbol_gen.fresh("view");
-        let merge_rule = self.handle_merge_fn(fdecl);
         let delete_rule = self.delete_and_subsume(fdecl);
         let to_delete_name = self.to_delete_name(&fdecl.name);
         let subsumed_name = self.subsumed_name(&fdecl.name);
@@ -430,103 +434,38 @@ impl<'a> TermState<'a> {
                 schema.output.to_string()
             }
         );
-        let view_sorts = format!("{in_sorts} {out_type}",);
+        let view_sorts = format!("{in_sorts} {out_type}");
         let proof_constructors = self.proof_functions(fdecl, &view_sorts);
 
+        let view_sort = if fdecl.subtype == FunctionSubtype::Constructor {
+            schema.output.clone()
+        } else {
+            fresh_sort.clone()
+        };
+        let to_ast_view_sort = self.add_to_ast(&view_sort);
+
+        if self.egraph.proof_state.proofs_enabled {
+            self.egraph
+                .proof_state
+                .proof_names
+                .fn_to_term_sort
+                .insert(name.clone(), view_sort.clone());
+        }
+        let merge_rule = self.handle_merge_fn(fdecl);
         // the term table has child_sorts as inputs
         // the view table has child_sorts + the leader term for the eclass
         self.parse_program(&format!(
             "
             (sort {fresh_sort})
-            (constructor {name} ({term_sorts}) {})
+            {to_ast_view_sort}
+            (constructor {name} ({term_sorts}) {view_sort})
             (constructor {view_name} ({view_sorts}) {fresh_sort})
             (constructor {to_delete_name} ({in_sorts}) {fresh_sort})
             (constructor {subsumed_name} ({in_sorts}) {fresh_sort})
             {proof_constructors}
             {merge_rule}
             {delete_rule}",
-            if fdecl.subtype == FunctionSubtype::Constructor {
-                schema.output.clone()
-            } else {
-                fresh_sort.clone()
-            },
         ))
-    }
-
-    /// A view proof for functions proves ... = t by some justification, where t is the term of the view row.
-    /// A constructor view is more complex, representing f(c1, c2, c3, t_r) where t_r is a representative.
-    /// A proof for a view proves that t_r = f(c1, c2, c3).
-    fn view_proof_name(&self, name: &str) -> String {
-        format!("{}ViewProof", name,)
-    }
-
-    fn proof_header(&mut self) -> String {
-        let (
-            proof_list_sort,
-            ast_sort,
-            justification_datatype,
-            proof_datatype,
-            fiat_constructor,
-            rule_constructor,
-            merge_fn_constructor,
-            eq_constructor,
-            prim_refl_constructor,
-            eq_trans_constructor,
-            eq_sym_constructor,
-            congr_constructor,
-        ) = {
-            let names = self.proof_names();
-            (
-                names.proof_list_sort.clone(),
-                names.ast_sort.clone(),
-                names.justification_datatype.clone(),
-                names.proof_datatype.clone(),
-                names.fiat_constructor.clone(),
-                names.rule_constructor.clone(),
-                names.merge_fn_constructor.clone(),
-                names.eq_constructor.clone(),
-                names.prim_refl_constructor.clone(),
-                names.eq_trans_constructor.clone(),
-                names.eq_sym_constructor.clone(),
-                names.congr_constructor.clone(),
-            )
-        };
-
-        format!(
-            "
-(sort {proof_list_sort})
-(sort {ast_sort}) ;; wrap sorts in this for proofs
-
-(datatype {justification_datatype}
-    ({fiat_constructor})
-    ({rule_constructor}
-        String ;; rule name
-        {proof_list_sort} ;; proofs for body)
-    ({merge_fn_constructor}
-        String ;; function name
-        {proof_datatype} ;; proof for old term
-        {proof_datatype} ;; proof for new term)
-        )
-
-
-;; prove a grounded equality between two terms
-;; proof by refl is not allowed- must be justified by fiat or rule
-(datatype {proof_datatype}
-    ;; proves a term is equal to another
-    ({eq_constructor} {justification_datatype} {ast_sort} {ast_sort})
-
-    ({prim_refl_constructor} {ast_sort}) ;; primitives require no proof for reflexivity
-
-    ({eq_trans_constructor} {proof_datatype} {proof_datatype})
-    ({eq_sym_constructor} {proof_datatype})
-    ;; given a proof that t1 = f(..., c1, ...) and a term f(..., c2, ...)
-    ;; and the child index of c1 in the term f(..., c1, ...)
-    ;; and a proof that c1 = c2,
-    ;; produces a proof that t1 = f(..., c2, ...)
-    ({congr_constructor} {proof_datatype} i64 {proof_datatype})
-    )
-                "
-        )
     }
 
     fn proof_functions(&mut self, fdecl: &ResolvedFunctionDecl, view_sorts: &str) -> String {
@@ -537,6 +476,9 @@ impl<'a> TermState<'a> {
         let view_proof_name = self.view_proof_name(&fdecl.name);
         let proof_type = self.proof_names().proof_datatype.clone();
 
+        // A view proof gives a proof that the representative term t_r equals the term in the view.
+        // Example: (AddView 2 3 t_r) proves the proposition that t_r = Add(2, 3) in that direction.
+        // This direction makes adding more proofs easier.
         format!(
             "
             (function {view_proof_name} ({view_sorts}) {proof_type} :merge old)
@@ -564,7 +506,7 @@ impl<'a> TermState<'a> {
             let mut children_updated = vec![];
             let old_child = child(i);
             let Some((updated_child_query, updated_child_var, updated_child_prf)) =
-                self.wrap_parent(child(i), types[i].clone())
+                self.lookup(child(i), types[i].clone())
             else {
                 panic!("Failed to get canonical expr for rebuilding rule");
             };
@@ -578,33 +520,34 @@ impl<'a> TermState<'a> {
             }
 
             let fresh_name = self.egraph.parser.symbol_gen.fresh("rebuild_rule");
-            let view_prf = self.query_view_and_get_proof(&fdecl.name, &children_vec);
+            let (query_view, view_prf) = self.query_view_and_get_proof(&fdecl.name, &children_vec);
 
             let (pf_code, pf_var) = if self.egraph.proof_state.proofs_enabled {
-                let pf_var = self.fresh_var();
+                let proof = self.fresh_var();
                 let eq_trans_constructor = self.proof_names().eq_trans_constructor.clone();
                 let congr_constructor = self.proof_names().congr_constructor.clone();
+                let sym_constructor = self.proof_names().eq_sym_constructor.clone();
 
                 // if we are updating the last element of a constructor
                 // it's updating the representative term, use transitivity
                 (
                     if fdecl.subtype == FunctionSubtype::Constructor && i == types.len() - 1 {
                         format!(
-                            "(let {pf_var}
+                            "(let {proof}
                                ({eq_trans_constructor}
-                                  {updated_child_prf}
+                                  ({sym_constructor} {updated_child_prf})
                                   {view_prf}))",
                         )
                     } else {
                         // otherwise we are updating a child via congruence
                         format!(
-                            "(let {pf_var}
-                           ({congr_constructor} {view_prf} {i}
-                                  {updated_child_prf}))
+                            "(let {proof}
+                                  ({congr_constructor} {view_prf} {i}
+                                                       {updated_child_prf}))
                     ",
                         )
                     },
-                    pf_var,
+                    proof,
                 )
             } else {
                 ("".to_string(), "".to_string())
@@ -613,7 +556,7 @@ impl<'a> TermState<'a> {
 
             // Make a rule that updates the view
             let rule = format!(
-                "(rule (({view_name} {children})
+                "(rule ({query_view}
                         {updated_child_query}
                         (!= {updated_child_var} {old_child})
                         )
@@ -633,39 +576,157 @@ impl<'a> TermState<'a> {
     /// Instrument fact replaces terms with looking up
     /// canonical versions in the view.
     /// It also needs to look up references to globals.
-    fn instrument_fact(&mut self, fact: &ResolvedFact, res: &mut Vec<String>) {
+    /// Adds the instrumented fact to `res` and returns a proof that the fact matched.
+    fn instrument_fact(&mut self, fact: &ResolvedFact, res: &mut Vec<String>) -> String {
         match fact {
-            GenericFact::Eq(_span, generic_expr, generic_expr1) => {
-                let v1 = self.instrument_fact_expr(generic_expr, res);
-                let v2 = self.instrument_fact_expr(generic_expr1, res);
-                res.push(format!("(= {} {})", v1, v2));
+            // In proof normal form, this is the only way that function calls apppear.
+            ResolvedFact::Eq(
+                _span,
+                ResolvedExpr::Call(
+                    _span2,
+                    head @ ResolvedCall::Func(FuncType {
+                        subtype: FunctionSubtype::Custom,
+                        ..
+                    }),
+                    args,
+                ),
+                // TODO this could actually be arbitrary pretty easily, it's just nested functions that are hard.
+                ResolvedExpr::Var(_span3, v),
+            ) => {
+                let mut new_args = vec![];
+                let mut arg_proofs = vec![];
+                for arg in args {
+                    let (var, proof) = self.instrument_fact_expr(arg, res);
+                    new_args.push(var);
+                    arg_proofs.push(proof);
+                }
+                new_args.push(v.to_string());
+
+                let view_name = self.view_name(head.name());
+                let args_str = ListDisplay(new_args, " ");
+                res.push(format!("({view_name} {args_str})",));
+
+                if self.egraph.proof_state.proofs_enabled {
+                    let view_proof_name = self.view_proof_name(head.name());
+                    let proof_var = self.fresh_var();
+                    res.push(format!("(= {proof_var} ({view_proof_name} {args_str}))"));
+                    let mut proof = proof_var;
+                    for (i, arg_proof) in arg_proofs.into_iter().enumerate() {
+                        let congr = &self.proof_names().congr_constructor;
+                        // add a congruence from the argument (representative) to the term
+                        proof = format!(
+                            "
+                            ({congr} {proof} {i} {arg_proof})
+                            "
+                        );
+                    }
+
+                    proof
+                } else {
+                    "".to_string()
+                }
             }
-            GenericFact::Fact(generic_expr) => {
-                let _ = self.instrument_fact_expr(generic_expr, res);
+            ResolvedFact::Eq(_span, generic_expr, generic_expr1) => {
+                let (v1, p1) = self.instrument_fact_expr(generic_expr, res);
+                let (v2, p2) = self.instrument_fact_expr(generic_expr1, res);
+                res.push(format!("(= {} {})", v1, v2));
+                let sym = &self.proof_names().eq_sym_constructor;
+                let trans = &self.proof_names().eq_trans_constructor;
+
+                format!("({trans} ({sym} {p1}) {p2})",)
+            }
+            ResolvedFact::Fact(generic_expr) => {
+                let (_, proof) = self.instrument_fact_expr(generic_expr, res);
+                proof
             }
         }
     }
 
     /// Instruments a fact expression to use the view tables.
-    /// Returns a variable representing the expression.
-    fn instrument_fact_expr(&mut self, expr: &ResolvedExpr, res: &mut Vec<String>) -> String {
+    /// Assumes there are no function lookups in the term.
+    /// Returns a variable representing the expression and a proof that the expression was matched.
+    /// Proves a ground equality t1 = t2 where t1 is the eclass representative and t2 matches `expr` syntactically.
+    fn instrument_fact_expr(
+        &mut self,
+        expr: &ResolvedExpr,
+        res: &mut Vec<String>,
+    ) -> (String, String) {
         match expr {
-            ResolvedExpr::Lit(_, lit) => format!("{}", lit),
-            ResolvedExpr::Var(_, resolved_var) => resolved_var.name.clone(),
+            ResolvedExpr::Lit(_, lit) => {
+                let fiat_constructor = &self.proof_names().fiat_constructor;
+                let lit_sort = literal_sort(lit);
+                let proof_code = if self.egraph.proof_state.proofs_enabled {
+                    let to_ast = self
+                        .proof_names()
+                        .sort_to_ast_constructor
+                        .get(lit_sort.name())
+                        .unwrap();
+                    format!("({fiat_constructor} ({to_ast} {lit}) ({to_ast} {lit}))")
+                } else {
+                    "".to_string()
+                };
+
+                (format!("{}", lit), proof_code)
+            }
+            ResolvedExpr::Var(_, resolved_var) => {
+                let var = &resolved_var.name;
+                (
+                    resolved_var.name.clone(),
+                    if !self.egraph.proof_state.proofs_enabled {
+                        "".to_string()
+                    } else if resolved_var.sort.is_eq_sort() {
+                        let term_proof_name = self.term_proof_name(resolved_var.sort.name());
+                        let fresh_proof = self.fresh_var();
+                        res.push(format!("(= {fresh_proof} ({term_proof_name} {var}))"));
+                        fresh_proof
+                    } else {
+                        let fiat_constructor = &self.proof_names().fiat_constructor;
+                        let lit_sort = resolved_var.sort.name();
+                        let to_ast = self
+                            .proof_names()
+                            .sort_to_ast_constructor
+                            .get(lit_sort)
+                            .unwrap();
+                        format!("({fiat_constructor} ({to_ast} {var}) ({to_ast} {var}))")
+                    },
+                )
+            }
             ResolvedExpr::Call(_, resolved_call, args) => {
-                let args = args
-                    .iter()
-                    .map(|arg| self.instrument_fact_expr(arg, res))
-                    .collect::<Vec<_>>();
+                let mut new_args = vec![];
+                let mut arg_proofs = vec![];
+                for arg in args {
+                    let (arg_str, proof) = self.instrument_fact_expr(arg, res);
+                    new_args.push(arg_str);
+                    arg_proofs.push(proof);
+                }
                 match resolved_call {
                     ResolvedCall::Func(func_type) => {
                         let fv = self.fresh_var();
-                        res.push(format!(
-                            "({} {} {fv})",
-                            self.view_name(&func_type.name),
-                            ListDisplay(args, " ")
-                        ));
-                        fv
+                        let view_name = self.view_name(&func_type.name);
+                        let args_str = ListDisplay(new_args, " ");
+                        res.push(format!("({view_name} {args_str} {fv})",));
+
+                        let proof = if self.proofs_enabled() {
+                            let view_proof_var = self.fresh_var();
+                            let view_proof_name = self.view_proof_name(&func_type.name);
+                            res.push(format!(
+                                "(= {view_proof_var} ({view_proof_name} {args_str} {fv}))"
+                            ));
+                            let mut proof = view_proof_var;
+                            for (i, arg_proof) in arg_proofs.into_iter().enumerate() {
+                                let congr = &self.proof_names().congr_constructor;
+                                // add a congruence from the argument (representative) to the term
+                                proof = format!(
+                                    "
+                            ({congr} {proof} {i} {arg_proof})
+                            "
+                                );
+                            }
+                            proof
+                        } else {
+                            "".to_string()
+                        };
+                        (fv, proof)
                     }
                     ResolvedCall::Primitive(specialized_primitive) => {
                         if specialized_primitive.output().is_eq_sort() {
@@ -677,9 +738,22 @@ impl<'a> TermState<'a> {
                         res.push(format!(
                             "(= {fv} ({} {}))",
                             specialized_primitive.name(),
-                            ListDisplay(args, " ")
+                            ListDisplay(new_args, " ")
                         ));
-                        fv
+
+                        let proof = if self.proofs_enabled() {
+                            let fiat_constructor = &self.proof_names().fiat_constructor;
+                            let to_ast = self
+                                .proof_names()
+                                .sort_to_ast_constructor
+                                .get(specialized_primitive.output().name())
+                                .unwrap();
+                            format!("({fiat_constructor} ({to_ast} {fv}) ({to_ast} {fv}))")
+                        } else {
+                            "".to_string()
+                        };
+
+                        (fv.clone(), proof)
                     }
                 }
             }
@@ -687,14 +761,14 @@ impl<'a> TermState<'a> {
     }
 
     // Returns a query, variable for the updated child, and proof
-    fn wrap_parent(&mut self, var: String, sort: ArcSort) -> Option<(String, String, String)> {
+    fn lookup(&mut self, var: String, sort: ArcSort) -> Option<(String, String, String)> {
         if sort.is_eq_sort() {
             let fresh = self.fresh_var();
             let parent = self.uf_name(sort.name());
             let fresh_proof = self.fresh_var();
             let proof = if self.egraph.proof_state.proofs_enabled {
                 let uf_proof = self.uf_proof_name(sort.name());
-                format!("(= {fresh_proof} ({uf_proof} {var}))")
+                format!("(= {fresh_proof} ({uf_proof} {var} {fresh}))")
             } else {
                 "".to_string()
             };
@@ -711,21 +785,26 @@ impl<'a> TermState<'a> {
         }
     }
 
-    fn instrument_facts(&mut self, facts: &[ResolvedFact]) -> Vec<String> {
+    /// Return a new query and a proof that the query matched.
+    fn instrument_facts(&mut self, facts: &[ResolvedFact]) -> (Vec<String>, String) {
         let mut res = vec![];
+        let pnil = &self.proof_names().pnil;
+        let mut proof = format!("({pnil})");
         for fact in facts {
-            self.instrument_fact(fact, &mut res);
+            let f_proof = self.instrument_fact(fact, &mut res);
+            let pcons = &self.proof_names().pcons;
+            proof = format!("({pcons} {f_proof} {proof})")
         }
-        res
-    }
-
-    fn fresh_var(&mut self) -> String {
-        self.egraph.parser.symbol_gen.fresh("v")
+        (res, proof)
     }
 
     // Actions need to be instrumented to add to the view
     // as well as to the terms tables.
-    fn instrument_action(&mut self, action: &ResolvedAction, justification: &str) -> Vec<String> {
+    fn instrument_action(
+        &mut self,
+        action: &ResolvedAction,
+        justification: &Justification,
+    ) -> Vec<String> {
         let mut res = vec![];
 
         match action {
@@ -785,70 +864,106 @@ impl<'a> TermState<'a> {
         res
     }
 
-    /// Return some code adding to the view and term tables,
-    /// returning a let-bound variable for the created term.
-    /// Expects the term arguments as `args`.
+    /// Update the view with  the given arguments.
+    /// The arguments include the eclass for constructors.
+    fn update_view(&mut self, fname: &str, args: &[String], proof: &str) -> String {
+        let mut res = vec![];
+        res.push(format!(
+            "({} {})",
+            self.view_name(fname),
+            ListDisplay(args, " "),
+        ));
+
+        if self.egraph.proof_state.proofs_enabled {
+            let proof_name = self.view_proof_name(fname);
+            res.push(format!(
+                "(set ({proof_name} {}) {proof})",
+                ListDisplay(args, " ")
+            ));
+        }
+        res.join("\n")
+    }
+
+    /// Return some code adding to the view and term tables.
+    /// For constructors, the arguments do not include the eclass of the resulting term (since it may not exist yet).
     fn add_term_and_view(
         &mut self,
         func_type: &FuncType,
         args: &[String],
-        justification: &str,
+        justification: &Justification,
     ) -> (Vec<String>, String) {
         let fv = self.fresh_var();
         let mut res = vec![];
+        // TODO might be able to get rid of this intermediate variable in encoding
         res.push(format!(
             "(let {fv} ({} {}))",
             func_type.name,
             ListDisplay(args, " ")
         ));
 
-        if func_type.subtype == FunctionSubtype::Constructor {
-            res.push(format!(
-                "({} {} {fv})",
-                self.view_name(&func_type.name),
-                ListDisplay(args, " ")
-            ));
+        let args_with_fv = if func_type.subtype == FunctionSubtype::Constructor {
+            let mut a = args.to_vec();
+            a.push(fv.clone());
+            a
         } else {
-            res.push(format!(
-                "({} {})",
-                self.view_name(&func_type.name),
-                ListDisplay(args, " ")
-            ));
-        }
+            args.to_vec()
+        };
 
-        // in proof mode, give a justification for the view and term addition
-        if self.egraph.proof_state.proofs_enabled {
-            let proof_name = self.view_proof_name(&func_type.name);
-            res.push(format!(
-                "(set ({proof_name} {}) {justification})",
-                ListDisplay(args, " ")
-            ));
+        let (proof_str, view_proof_var) = if self.egraph.proof_state.proofs_enabled {
+            let to_ast = self.fname_to_ast_name(&func_type.name);
+            let rule_constructor = &self.proof_names().rule_constructor;
+            let fiat_constructor = &self.proof_names().fiat_constructor;
+
+            let proof = match justification {
+                Justification::Rule(rule_name, rule_proof) => {
+                    format!(
+                        "({rule_constructor} \"{rule_name}\" {rule_proof} ({to_ast} {fv}) ({to_ast} {fv}))",
+                    )
+                }
+                Justification::Fiat => {
+                    format!("({fiat_constructor} ({to_ast} {fv}) ({to_ast} {fv}))",)
+                }
+                Justification::Proof(existing_proof) => existing_proof.clone(),
+            };
+
+            let proof_var = self.fresh_var();
+            // add a proof for the constructor if needed
+            let term_proof = if func_type.subtype == FunctionSubtype::Constructor {
+                let term_proof_constructor = self.term_proof_name(func_type.output.name());
+                format!("(set ({term_proof_constructor} {fv}) {proof_var})")
+            } else {
+                "".to_string()
+            };
+
+            (
+                format!(
+                    "(let {proof_var} {proof})
+                     {term_proof}"
+                ),
+                proof_var,
+            )
+        } else {
+            ("".to_string(), "".to_string())
+        };
+
+        res.push(proof_str);
+        res.push(self.update_view(&func_type.name, &args_with_fv, &view_proof_var));
+
+        // add to uf table to initialize eclass for constructors
+        if func_type.subtype == FunctionSubtype::Constructor {
+            self.union(
+                func_type.output.name(),
+                &fv,
+                &fv,
+                &Justification::Proof(view_proof_var),
+            );
         }
 
         (res, fv)
     }
 
-    /// Update the view, with arguments including the eclass for constructors.
-    fn update_view(&mut self, fname: &str, args: &[String], pf: &str) -> String {
-        let mut res = vec![];
-        res.push(format!(
-            "({} {})",
-            self.view_name(fname),
-            ListDisplay(args, " "),
-        ));
-
-        if self.egraph.proof_state.proofs_enabled {
-            let proof_name = self.view_proof_name(fname);
-            res.push(format!(
-                "(set ({proof_name} {}) {pf})",
-                ListDisplay(args, " ")
-            ));
-        }
-        res.join("\n")
-    }
-
     /// Returns a query for (fname args) and in proof mode returns a variable for the proof.
-    fn query_view_and_get_proof(&mut self, fname: &str, args: &[String]) -> String {
+    fn query_view_and_get_proof(&mut self, fname: &str, args: &[String]) -> (String, String) {
         let mut res = vec![];
         res.push(format!(
             "({} {})",
@@ -856,16 +971,19 @@ impl<'a> TermState<'a> {
             ListDisplay(args, " "),
         ));
 
-        if self.egraph.proof_state.proofs_enabled {
+        let pf_var = if self.egraph.proof_state.proofs_enabled {
             let proof_name = self.view_proof_name(fname);
             let pf_var = self.fresh_var();
             res.push(format!(
                 "(= {pf_var} ({proof_name} {}))",
                 ListDisplay(args, " ")
             ));
-        }
+            pf_var
+        } else {
+            "".to_string()
+        };
 
-        res.join("\n")
+        (res.join("\n"), pf_var)
     }
 
     // Add to view and term tables, returning a variable for the created term.
@@ -873,7 +991,7 @@ impl<'a> TermState<'a> {
         &mut self,
         expr: &ResolvedExpr,
         res: &mut Vec<String>,
-        justification: &str,
+        proof: &Justification,
     ) -> String {
         match expr {
             ResolvedExpr::Lit(_, lit) => format!("{}", lit),
@@ -881,7 +999,7 @@ impl<'a> TermState<'a> {
             ResolvedExpr::Call(_, resolved_call, args) => {
                 let args = args
                     .iter()
-                    .map(|arg| self.instrument_action_expr(arg, res, justification))
+                    .map(|arg| self.instrument_action_expr(arg, res, proof))
                     .collect::<Vec<_>>();
                 match resolved_call {
                     ResolvedCall::Func(func_type) => {
@@ -890,14 +1008,8 @@ impl<'a> TermState<'a> {
                                 "Found a function lookup in actions, should have been prevented by typechecking"
                             );
                         }
-                        let (add_code, fv) =
-                            self.add_term_and_view(func_type, &args, justification);
+                        let (add_code, fv) = self.add_term_and_view(func_type, &args, proof);
                         res.extend(add_code);
-
-                        // add to uf table to initialize eclass for eq sorts
-                        if func_type.output.is_eq_sort() {
-                            self.union(func_type.output.name(), &fv, &fv, justification);
-                        }
 
                         fv
                     }
@@ -917,23 +1029,41 @@ impl<'a> TermState<'a> {
     }
 
     /// In proof mode, rule_proof justifies the actions taken.
-    fn instrument_actions(&mut self, actions: &[ResolvedAction], rule_proof: &str) -> Vec<String> {
+    fn instrument_actions(
+        &mut self,
+        actions: &[ResolvedAction],
+        justification: &Justification,
+    ) -> Vec<String> {
         let mut res = vec![];
         for action in actions {
-            res.extend(self.instrument_action(action, rule_proof));
+            res.extend(self.instrument_action(action, justification));
         }
         res
     }
 
+    /// Instrument a rule to use term encoding. This involves using the view tables in facts,
+    /// adding to term and view tables in actions.
+    /// When proofs are enabled we query proof tables, then build a proof for the rule in the actions.
+    /// Finally, each view update also updates the proof tables.
     fn instrument_rule(&mut self, rule: &ResolvedRule) -> Vec<Command> {
-        let facts = self.instrument_facts(&rule.body);
-        // TODO get rule proof
-        let fiat = self.fiat_justification();
-        let actions = self.instrument_actions(&rule.head.0, &fiat);
+        let (facts, proof_str) = self.instrument_facts(&rule.body);
+        let proof_var = self.fresh_var();
+        let proof = Justification::Rule(rule.name.clone(), proof_var.clone());
+        let proof_var_binding = if self.egraph.proof_state.proofs_enabled {
+            format!(
+                "(let {proof_var}
+                          {proof_str})"
+            )
+        } else {
+            "".to_string()
+        };
+
+        let actions = self.instrument_actions(&rule.head.0, &proof);
         let name = &rule.name;
         let instrumented = format!(
-            "(rule ({} )
-                   ({} )
+            "(rule ({})
+                   ({proof_var_binding}
+                    {})
                     {}
                     :name \"{name}\")",
             ListDisplay(facts, " "),
@@ -951,7 +1081,7 @@ impl<'a> TermState<'a> {
     /// Any schedule should be sound as long as we saturate.
     fn rebuild(&mut self) -> Schedule {
         let parent_direct_ruleset = self.parent_direct_ruleset_name();
-        let single_parent = self.single_parent_ruleset_name();
+        let single_parent = self.proof_names().single_parent_ruleset_name.clone();
         let rebuilding_cleanup_ruleset = self.rebuilding_cleanup_ruleset_name();
         let rebuilding_ruleset = self.rebuilding_ruleset_name();
         let delete_ruleset = self.delete_subsume_ruleset_name();
@@ -971,7 +1101,7 @@ impl<'a> TermState<'a> {
             ResolvedSchedule::Run(span, config) => {
                 let new_run = match config.until {
                     Some(ref facts) => {
-                        let instrumented = self.instrument_facts(facts);
+                        let (instrumented, _proof) = self.instrument_facts(facts);
                         let instrumented_facts = self.parse_facts(&instrumented);
                         Schedule::Run(
                             span.clone(),
@@ -1010,10 +1140,11 @@ impl<'a> TermState<'a> {
     }
 
     fn term_encode_command(&mut self, command: &ResolvedNCommand, res: &mut Vec<Command>) {
+        log::debug!("Term encoding for {}", command);
         match &command {
             ResolvedNCommand::Sort(_span, name, _presort_and_args) => {
                 res.push(command.to_command().make_unresolved());
-                res.extend(self.make_uf_table(name));
+                res.extend(self.declare_sort(name));
             }
             ResolvedNCommand::Function(fdecl) => {
                 res.extend(self.term_and_view(fdecl));
@@ -1023,12 +1154,13 @@ impl<'a> TermState<'a> {
                 res.extend(self.instrument_rule(rule));
             }
             ResolvedNCommand::CoreAction(action) => {
-                let fiat = self.fiat_justification();
-                let instrumented = self.instrument_action(action, &fiat).join("\n");
+                let instrumented = self
+                    .instrument_action(action, &Justification::Fiat)
+                    .join("\n");
                 res.extend(self.parse_program(&instrumented));
             }
             ResolvedNCommand::Check(span, facts) => {
-                let instrumented = self.instrument_facts(facts);
+                let (instrumented, _proof) = self.instrument_facts(facts);
                 res.push(Command::Check(
                     span.clone(),
                     self.parse_facts(&instrumented),
@@ -1050,7 +1182,8 @@ impl<'a> TermState<'a> {
             | ResolvedNCommand::Input { .. }
             | ResolvedNCommand::UnstableCombinedRuleset(..)
             | ResolvedNCommand::PrintOverallStatistics(..)
-            | ResolvedNCommand::PrintFunction(..) => {
+            | ResolvedNCommand::PrintFunction(..)
+            | ResolvedNCommand::ProveExists(..) => {
                 res.push(command.to_command().make_unresolved());
             }
             ResolvedNCommand::Extract(..) => {
@@ -1091,165 +1224,5 @@ impl<'a> TermState<'a> {
         }
 
         res
-    }
-
-    fn parent_direct_ruleset_name(&self) -> String {
-        "parent".to_string()
-    }
-
-    fn rebuilding_ruleset_name(&self) -> String {
-        "rebuilding".to_string()
-    }
-
-    fn rebuilding_cleanup_ruleset_name(&self) -> String {
-        "rebuilding_cleanup".to_string()
-    }
-
-    pub(crate) fn term_header(&mut self) -> Vec<Command> {
-        let str = format!(
-            "(ruleset {})
-             (ruleset {})
-             (ruleset {})
-             (ruleset {})
-             (ruleset {})",
-            self.parent_direct_ruleset_name(),
-            self.single_parent_ruleset_name(),
-            self.rebuilding_ruleset_name(),
-            self.rebuilding_cleanup_ruleset_name(),
-            self.delete_subsume_ruleset_name(),
-        );
-        self.parse_program(&str)
-    }
-
-    fn parse_program(&mut self, input: &str) -> Vec<Command> {
-        self.egraph.parser.ensure_no_reserved_symbols = false;
-        let res = self.egraph.parser.get_program_from_string(None, input);
-        self.egraph.parser.ensure_no_reserved_symbols = true;
-
-        res.unwrap()
-    }
-
-    fn parse_schedule(&mut self, input: String) -> Schedule {
-        self.egraph.parser.ensure_no_reserved_symbols = false;
-        let res = self.egraph.parser.get_schedule_from_string(None, &input);
-        self.egraph.parser.ensure_no_reserved_symbols = true;
-        res.unwrap()
-    }
-
-    fn parse_facts(&mut self, input: &[String]) -> Vec<Fact> {
-        self.egraph.parser.ensure_no_reserved_symbols = false;
-        let res = input
-            .iter()
-            .map(|f| self.egraph.parser.get_fact_from_string(None, f).unwrap())
-            .collect();
-        self.egraph.parser.ensure_no_reserved_symbols = true;
-        res
-    }
-}
-
-pub fn file_supports_proofs(path: &Path) -> bool {
-    let contents = match std::fs::read_to_string(path) {
-        Ok(contents) => contents,
-        Err(_) => return false,
-    };
-
-    let canonical = match std::fs::canonicalize(path) {
-        Ok(canonical) => canonical,
-        Err(_) => return false,
-    };
-
-    let mut egraph = EGraph::default();
-    let filename = canonical.to_string_lossy().into_owned();
-    let desugared = match egraph.desugar_program(Some(filename), &contents) {
-        Ok(commands) => commands,
-        Err(_) => return false,
-    };
-
-    commands_support_proof_encoding(&desugared)
-}
-
-pub fn commands_support_proof_encoding(commands: &[ResolvedCommand]) -> bool {
-    for command in commands {
-        if !command_supports_proof_encoding(command) {
-            return false;
-        }
-    }
-    true
-}
-
-pub fn command_supports_proof_encoding(command: &ResolvedCommand) -> bool {
-    match command {
-        GenericCommand::Sort(_, _, Some(_))
-        | GenericCommand::UserDefined(..)
-        | GenericCommand::Relation { .. }
-        | GenericCommand::Input { .. } => false,
-        ResolvedCommand::Action(ResolvedAction::Let(_, _, expr)) => expr.output_type().is_eq_sort(),
-        // no-merge isn't supported right now
-        ResolvedCommand::Function { merge: None, .. } => false,
-        // delete or subsume on custom functions isn't supported
-        _ => true,
-    }
-}
-
-#[cfg(test)]
-mod tests {
-    use super::*;
-    use crate::ast::Parser;
-    use crate::ast::desugar::desugar_command;
-    use crate::ast::proof_global_remover;
-
-    fn term_encode(source: &str) -> Vec<Command> {
-        let mut egraph = crate::EGraph::new_with_term_encoding();
-        let mut parser = Parser::default();
-        let program = parser
-            .get_program_from_string(None, source)
-            .expect("failed to parse program");
-        let mut ncommands = Vec::new();
-        for command in program {
-            let desugared =
-                desugar_command(command, &mut parser).expect("failed to desugar command");
-            ncommands.extend(desugared);
-        }
-
-        let mut resolved = egraph
-            .typecheck_program(&ncommands)
-            .expect("failed to typecheck program");
-        resolved = proof_global_remover::remove_globals(resolved, &mut parser.symbol_gen);
-        TermState::add_term_encoding(&mut egraph, resolved)
-    }
-
-    #[test]
-    fn doc_example_add_function() {
-        let commands = term_encode(
-            r#"
-            (function add (i64 i64) i64 :merge old)
-            (check (= (add 0 0) 0))
-            "#,
-        );
-
-        let rendered: Vec<String> = commands.iter().map(|cmd| cmd.to_string()).collect();
-        let expected = vec![
-            "(ruleset parent)".to_string(),
-            "(ruleset single_parent)".to_string(),
-            "(ruleset rebuilding)".to_string(),
-            "(ruleset rebuilding_cleanup)".to_string(),
-            "(ruleset delete_subsume_ruleset)".to_string(),
-            "(sort _view1)".to_string(),
-            "(constructor add (i64 i64 i64) @view1)".to_string(),
-            "(constructor addView (i64 i64 i64) @view1)".to_string(),
-            "(constructor to_delete_add (i64 i64) @view1)".to_string(),
-            "(constructor to_subsume_add (i64 i64) @view1)".to_string(),
-            "(sort _mergecleanup8)".to_string(),
-            "(constructor _mergecleanup7 (i64 i64) @mergecleanup8)".to_string(),
-            "(rule ((addView c0_ c1_ old)\n       (addView c0_ c1_ new)\n       (!= old new)\n       (= (ordering-max old new) new))\n      ((addView c0_ c1_ old)\n       (@mergecleanup7 old old)\n       (@mergecleanup7 old new))\n        :ruleset rebuilding :name \"_merge_rule2\")".to_string(),
-            "(rule ((@mergecleanup7 merged old)\n       (addView c0_ c1_ merged)\n       (addView c0_ c1_ old)\n       (!= merged old))\n      ((delete (addView c0_ c1_ old)))\n        :ruleset rebuilding_cleanup :name \"_merge_cleanup3\")".to_string(),
-            "(rule ((to_delete_add c0_ c1_)\n       (addView c0_ c1_ out))\n      ((delete (addView c0_ c1_ out))\n       (delete (to_delete_add c0_ c1_)))\n        :ruleset delete_subsume_ruleset :name \"_delete_rule9\")".to_string(),
-            "(rule ((to_subsume_add c0_ c1_)\n       (addView c0_ c1_ out))\n      ((delete (addView c0_ c1_ out)))\n        :ruleset delete_subsume_ruleset :name \"_delete_rule9_subsume\")".to_string(),
-            "(check (addView 0 0 @v10)\n(= @v10 0))".to_string(),
-            "(run-schedule (seq (saturate (seq (run rebuilding_cleanup) (saturate (seq (run single_parent))) (saturate (seq (run parent))) (run rebuilding))) (run delete_subsume_ruleset)))".to_string(),
-        ];
-
-        assert!(rendered.len() >= expected.len());
-        assert_eq!(&rendered[..expected.len()], expected);
     }
 }

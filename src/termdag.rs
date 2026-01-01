@@ -1,3 +1,4 @@
+use crate::util::{FreshGen, HashMap, HashSet, SymbolGen};
 use crate::*;
 use std::fmt::Write;
 
@@ -130,6 +131,88 @@ impl TermDag {
                     .map(|a| self.term_to_expr(self.get(*a), span.clone()))
                     .collect();
                 Expr::Call(span, op.clone(), args)
+            }
+        }
+    }
+
+    /// Prints a term to a string, putting let bindings for shared subterms in `buf`.
+    /// Returns the final string representation of the term.
+    pub(crate) fn to_string_with_let(
+        &self,
+        fresh: &mut SymbolGen,
+        term_id: TermId,
+        buf: &mut String,
+    ) -> String {
+        let ref_counts = self.collect_term_ref_counts(term_id);
+        let mut bindings = HashMap::default();
+        self.to_string_with_let_inner(fresh, term_id, buf, &ref_counts, &mut bindings, false)
+    }
+
+    fn to_string_with_let_inner(
+        &self,
+        fresh: &mut SymbolGen,
+        term_id: TermId,
+        buf: &mut String,
+        ref_counts: &HashMap<TermId, usize>,
+        bindings: &mut HashMap<TermId, String>,
+        allow_binding: bool,
+    ) -> String {
+        if let Some(existing) = bindings.get(&term_id) {
+            return existing.clone();
+        }
+
+        let result = match self.get(term_id) {
+            Term::App(name, children) => {
+                let child_strs: Vec<String> = children
+                    .iter()
+                    .map(|c| {
+                        self.to_string_with_let_inner(fresh, *c, buf, ref_counts, bindings, true)
+                    })
+                    .collect();
+                let mut s = format!("({}", name);
+                for child_str in child_strs {
+                    s.push(' ');
+                    s.push_str(&child_str);
+                }
+                s.push(')');
+                s
+            }
+            Term::Lit(lit) => format!("{}", lit),
+            Term::Var(v) => v.clone(),
+        };
+
+        let should_bind = allow_binding && ref_counts.get(&term_id).copied().unwrap_or(1) > 1;
+        if should_bind {
+            let let_name = fresh.fresh("t");
+            buf.push_str(&format!("(let {} {})\n", let_name, result));
+            bindings.insert(term_id, let_name.clone());
+            let_name
+        } else {
+            result
+        }
+    }
+
+    fn collect_term_ref_counts(&self, term_id: TermId) -> HashMap<TermId, usize> {
+        let mut counts = HashMap::default();
+        let mut visited = HashSet::default();
+        self.collect_term_ref_counts_inner(term_id, &mut counts, &mut visited);
+        counts
+    }
+
+    fn collect_term_ref_counts_inner(
+        &self,
+        term_id: TermId,
+        counts: &mut HashMap<TermId, usize>,
+        visited: &mut HashSet<TermId>,
+    ) {
+        *counts.entry(term_id).or_insert(0) += 1;
+        if !visited.insert(term_id) {
+            return;
+        }
+
+        if let Term::App(_, children) = self.get(term_id) {
+            for child in children {
+                self.collect_term_ref_counts_inner(*child, counts, visited);
             }
         }
     }

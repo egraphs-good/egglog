@@ -20,10 +20,11 @@ pub mod constraint;
 mod core;
 pub mod extract;
 pub mod prelude;
+mod proofs;
+
 pub mod scheduler;
 mod serialize;
 pub mod sort;
-mod term_encoding;
 mod termdag;
 mod typechecking;
 pub mod util;
@@ -56,6 +57,7 @@ use indexmap::map::Entry;
 use log::{Level, log_enabled};
 use numeric_id::DenseIdMap;
 use prelude::*;
+pub use proofs::proof_encoding_helpers::file_supports_proofs;
 use scheduler::{SchedulerId, SchedulerRecord};
 pub use serialize::{SerializeConfig, SerializeOutput, SerializedNode};
 use sort::*;
@@ -77,8 +79,11 @@ use util::*;
 use crate::ast::desugar::desugar_command;
 use crate::ast::*;
 use crate::core::{GenericActionsExt, ResolvedRuleExt};
-pub use crate::term_encoding::file_supports_proofs;
-use crate::term_encoding::{EncodingState, TermState, command_supports_proof_encoding};
+use crate::proofs::proof_encoding::{EncodingState, ProofInstrumentor};
+use crate::proofs::proof_encoding_helpers::command_supports_proof_encoding;
+use crate::proofs::proof_extraction::ProveExistsError;
+use crate::proofs::proof_format::{ProofId, ProofStore};
+use crate::proofs::proof_normal_form::proof_form;
 
 pub const GLOBAL_NAME_PREFIX: &str = "$";
 
@@ -117,6 +122,11 @@ pub enum CommandOutput {
     ExtractBest(TermDag, DefaultCost, Term),
     /// The variants of a function found after extracting
     ExtractVariants(TermDag, Vec<Term>),
+    /// A high-level proof witnessing constructor existence
+    ProveExists {
+        proof_store: ProofStore,
+        proof_id: ProofId,
+    },
     /// The report from all runs
     OverallStatistics(RunReport),
     /// A printed function and all its values
@@ -148,6 +158,10 @@ impl std::fmt::Display for CommandOutput {
                 }
                 writeln!(f, ")")
             }
+            CommandOutput::ProveExists {
+                proof_store,
+                proof_id,
+            } => write!(f, "{}", proof_store.proof_to_string(*proof_id)),
             CommandOutput::OverallStatistics(run_report) => {
                 write!(f, "Overall statistics:\n{}", run_report)
             }
@@ -228,6 +242,8 @@ pub struct EGraph {
     /// Registry for command-level macros
     command_macros: CommandMacroRegistry,
     proof_state: EncodingState,
+    /// In proof mode, we keep track of all desugared commands so we can check proofs later.
+    desugared_commands: Vec<ResolvedNCommand>,
 }
 
 /// A user-defined command allows users to inject custom command that can be called
@@ -297,9 +313,11 @@ impl Debug for Function {
 
 impl Default for EGraph {
     fn default() -> Self {
+        let mut parser = Parser::default();
+        let proof_state = EncodingState::new(&mut parser.symbol_gen);
         let mut eg = Self {
             backend: Default::default(),
-            parser: Default::default(),
+            parser,
             names: Default::default(),
             pushed_egraph: Default::default(),
             functions: Default::default(),
@@ -313,7 +331,8 @@ impl Default for EGraph {
             strict_mode: false,
             warned_about_missing_global_prefix: false,
             command_macros: Default::default(),
-            proof_state: Default::default(),
+            proof_state,
+            desugared_commands: vec![],
         };
 
         add_base_sort(&mut eg, UnitSort, span!()).unwrap();
@@ -368,16 +387,33 @@ impl EGraph {
         egraph
     }
 
+    /// Create a new e-graph with proof generation enabled.
+    pub fn new_with_proofs() -> Self {
+        let mut egraph = EGraph::new_with_term_encoding();
+        egraph.proof_state.proofs_enabled = true;
+        egraph
+    }
+
     /// Enable the term-encoding pipeline on an existing `EGraph`.
     ///
-    /// This is primarily a convenience for builder-style APIs that start with
-    /// `EGraph::default()` before deciding whether term encoding is required.  The
-    /// e-graph must still be empty when this is invoked; enabling term encoding
-    /// after commands have been added is unsupported and will lead to panics when
-    /// encoding is attempted.
-    pub fn with_term_encoding_enabled(mut self) -> Self {
+    /// This method is to support the current CLI implementation with egglog-experimental (https://github.com/egraphs-good/egglog/issues/768)
+    pub(crate) fn with_term_encoding_enabled(mut self) -> Self {
         self.proof_state.original_typechecking = Some(Box::new(self.clone()));
         self
+    }
+
+    /// Enable proof generation on this e-graph.
+    /// TODO proofs should be turned on during creation of the e-graph, not afterwards.
+    /// This method is to support the current CLI implementation with egglog-experimental (https://github.com/egraphs-good/egglog/issues/768)
+    pub(crate) fn with_proofs_enabled(mut self) -> Self {
+        self = self.with_term_encoding_enabled();
+        self.proof_state.proofs_enabled = true;
+        self
+    }
+
+    /// Enable testing of getting proofs for all `check` commands.
+    pub fn enable_proof_testing(&mut self) {
+        self.proof_state.proof_testing = true;
     }
 
     /// Add a user-defined command to the e-graph
@@ -545,7 +581,6 @@ impl EGraph {
 
         let can_subsume = match decl.subtype {
             FunctionSubtype::Constructor => true,
-            FunctionSubtype::Relation => true,
             FunctionSubtype::Custom => false,
         };
 
@@ -559,11 +594,9 @@ impl EGraph {
             default: match decl.subtype {
                 FunctionSubtype::Constructor => DefaultVal::FreshId,
                 FunctionSubtype::Custom => DefaultVal::Fail,
-                FunctionSubtype::Relation => DefaultVal::Const(self.backend.base_values().get(())),
             },
             merge: match decl.subtype {
                 FunctionSubtype::Constructor => MergeFn::UnionId,
-                FunctionSubtype::Relation => MergeFn::AssertEq,
                 FunctionSubtype::Custom => match &decl.merge {
                     None => MergeFn::AssertEq,
                     Some(expr) => self.translate_expr_to_mergefn(expr)?,
@@ -1269,6 +1302,20 @@ impl EGraph {
                 self.commands.insert(name, command);
                 return res;
             }
+            ResolvedNCommand::ProveExists(span, resolved_call) => {
+                let mut instrument = ProofInstrumentor { egraph: self };
+                let (proof_store, proof_id) =
+                    instrument
+                        .prove_exists(&resolved_call)
+                        .map_err(|error| Error::ProofError {
+                            span: span.clone(),
+                            error,
+                        })?;
+                return Ok(Some(CommandOutput::ProveExists {
+                    proof_store,
+                    proof_id,
+                }));
+            }
         };
 
         Ok(None)
@@ -1393,7 +1440,7 @@ impl EGraph {
     /// Desugars, typechecks, and removes globals from a single [`Command`].
     /// Leverages previous type information in the [`EGraph`] to do so, adding new type information.
     fn resolve_command(&mut self, command: Command) -> Result<Vec<ResolvedNCommand>, Error> {
-        let desugared = desugar_command(command, &mut self.parser)?;
+        let desugared = desugar_command(command, &mut self.parser, self.proof_state.proof_testing)?;
 
         // Add term encoding when it is enabled
         if let Some(original_typechecking) = self.proof_state.original_typechecking.as_mut() {
@@ -1401,12 +1448,8 @@ impl EGraph {
             // TODO this is ugly- we don't need an entire e-graph just for type information.
             let mut typechecked = original_typechecking.typecheck_program(&desugared)?;
 
-            typechecked =
-                proof_global_remover::remove_globals(typechecked, &mut self.parser.symbol_gen);
             for command in &typechecked {
-                self.names.check_shadowing(command)?;
-
-                if !command_supports_proof_encoding(&command.to_command()) {
+                if !command_supports_proof_encoding(&command.to_command(), &self.type_info) {
                     let command_text = format!("{}", command.to_command());
                     return Err(Error::UnsupportedProofCommand {
                         command: command_text,
@@ -1414,10 +1457,23 @@ impl EGraph {
                 }
             }
 
-            let term_encoding_added = TermState::add_term_encoding(self, typechecked);
+            typechecked =
+                proof_global_remover::remove_globals(typechecked, &mut self.parser.symbol_gen);
+            for command in &typechecked {
+                self.names.check_shadowing(command)?;
+            }
+            let normalized = proof_form(typechecked, &mut self.parser.symbol_gen);
+
+            self.desugared_commands.extend_from_slice(&normalized);
+
+            let term_encoding_added = ProofInstrumentor::add_term_encoding(self, normalized);
             let mut new_typechecked = vec![];
             for new_cmd in term_encoding_added {
-                let desugared = desugar_command(new_cmd, &mut self.parser)?;
+                let desugared =
+                    desugar_command(new_cmd, &mut self.parser, self.proof_state.proof_testing)?;
+                for cmd in &desugared {
+                    log::debug!("Desugared term encoding: {}", cmd.to_command());
+                }
 
                 // Now typecheck using self, adding term type information.
                 let desugared_typechecked = self.typecheck_program(&desugared)?;
@@ -1514,6 +1570,16 @@ impl EGraph {
         let parsed = self.parser.get_program_from_string(filename, input)?;
         let (_outputs, desugared_commands) = self.process_program_internal(parsed, false)?;
         Ok(desugared_commands)
+    }
+
+    /// Takes a source program `input` and parses it into a list of [`Command`]s.
+    pub fn parse_program(
+        &mut self,
+        filename: Option<String>,
+        input: &str,
+    ) -> Result<Vec<Command>, Error> {
+        let parsed = self.parser.get_program_from_string(filename, input)?;
+        Ok(parsed)
     }
 
     /// Takes a source program `input`, parses it, runs it, and returns a list of messages.
@@ -1894,6 +1960,12 @@ pub enum Error {
     SubsumeMergeError(String, Span),
     #[error("extraction failure: {:?}", .0)]
     ExtractError(String),
+    #[error("{span}\n{error}")]
+    ProofError {
+        span: Span,
+        #[source]
+        error: ProveExistsError,
+    },
     #[error("{1}\n{2}\nShadowing is not allowed, but found {0}")]
     Shadowing(String, Span, Span),
     #[error("{1}\nCommand already exists: {0}")]

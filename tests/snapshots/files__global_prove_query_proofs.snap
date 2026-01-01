@@ -1,0 +1,9 @@
+---
+source: tests/files.rs
+expression: snapshot
+---
+
+
+
+
+(fiat (R 2) (R 2))
