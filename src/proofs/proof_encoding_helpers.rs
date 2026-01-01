@@ -344,6 +344,9 @@ fn commands_support_proof_encoding(commands: &[ResolvedCommand], type_info: &Typ
 }
 
 pub fn command_supports_proof_encoding(command: &ResolvedCommand, type_info: &TypeInfo) -> bool {
+    // todo map over queries, see if any primitives have terms with non-primitives in them. If so, return false.
+    
+
     match command {
         GenericCommand::Sort(_, _, Some(_))
         | GenericCommand::UserDefined(..)

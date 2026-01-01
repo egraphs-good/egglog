@@ -74,6 +74,8 @@ pub enum Justification {
     /// Also, primitive reflexive equalities like 2 = 2 are justified by Fiat.
     Fiat,
     /// Given a rule name and proofs for each premise, produces a proof of a grounded equality t1 = t2 from the body of the rule.
+    /// A proof for a premise is an equality t1 = t2 that matches the premise under some substitution.
+    /// A proof for a premise that doesn't involve equality (i.e. (Add a b)) gives a proof of t1 = t2 where t2 matches the premise.
     Rule {
         name: String,
         premise_proofs: Vec<ProofId>,
@@ -260,7 +262,15 @@ impl ProofStore {
         if let Some(&id) = self.proof_id.get(&raw_store.store[raw_proof_id]) {
             return id;
         }
+
         let raw_proof = &raw_store.store[raw_proof_id];
+        let raw_term = raw_store.proof_to_term[&raw_proof_id];
+        let formatted_proof = raw_store.term_dag.to_string_with_let(
+            &mut SymbolGen::new("".to_string()),
+            raw_term,
+            &mut String::new(),
+        );
+
         let proof = match raw_proof {
             RawProof::Fiat(lhs, rhs) => Proof {
                 lhs: raw_store.unwrap_ast(*lhs),
@@ -273,6 +283,12 @@ impl ProofStore {
                     .map(|pid| self.convert_raw_proof(rules, raw_store, *pid))
                     .collect();
 
+                eprintln!("Converting Rule proof:\n{}", formatted_proof);
+                let formatted_premises: Vec<String> = converted_premises
+                    .iter()
+                    .map(|pid| self.proof_to_string(*pid))
+                    .collect();
+                eprintln!("With premises:\n{}", formatted_premises.join("\n"));
                 let substitution = self.compute_rule_substitution(rules, name, &converted_premises);
 
                 Proof {
@@ -426,7 +442,7 @@ impl ProofStore {
                 self.unify_expr(rhs_expr, proof.rhs, base_subst);
             }
             ResolvedFact::Fact(expr) => {
-                self.unify_expr(expr, proof.lhs, base_subst);
+                self.unify_expr(expr, proof.rhs, base_subst);
             }
         }
     }
@@ -456,36 +472,42 @@ impl ProofStore {
         substitution: &mut HashMap<String, TermId>,
     ) {
         match expr {
-            ResolvedExpr::Lit(_, lit) => (),
+            ResolvedExpr::Lit(_, _lit) => (),
             ResolvedExpr::Var(_, var) => {
                 self.add_to_subst(substitution, &var.name, term_id);
             }
-            ResolvedExpr::Call(_, call, args) => match self.term_dag.get(term_id) {
-                Term::App(head, children) => {
-                    if head != call.name() {
-                        panic!(
-                            "function call head mismatch: expected {}, got {head}",
-                            call.name(),
-                        );
-                    }
-                    if children.len() != args.len() {
-                        panic!(
-                            "function call arity mismatch for {}: expected {}, got {}",
-                            call.name(),
-                            args.len(),
-                            children.len()
-                        );
-                    }
-                    for (arg_expr, child_term) in args.iter().zip(children.iter()) {
-                        self.unify_expr(arg_expr, *child_term, substitution);
-                    }
+            ResolvedExpr::Call(_, call, args) => {
+                // if the call is a primitive we don't need to do anything
+                // because proofs don't support primitves with children applications that are not primitives
+                if let ResolvedCall::Primitive(_) = call {
+                    return;
                 }
-                _ => panic!(
-                    "expected function application term for call {}, got {:?}",
-                    call.name(),
-                    self.term_dag.get(term_id)
-                ),
-            },
+                let Term::App(head, children) = self.term_dag.get(term_id) else {
+                    panic!(
+                        "expected function application term for call {}, got {:?}",
+                        call.name(),
+                        self.term_dag.get(term_id)
+                    );
+                };
+                if head != call.name() {
+                    panic!(
+                        "function call head mismatch: expected {}, got {head}",
+                        call.name(),
+                    );
+                }
+
+                if children.len() != args.len() {
+                    panic!(
+                        "function call arity mismatch for {}: expected {}, got {}",
+                        call.name(),
+                        args.len(),
+                        children.len()
+                    );
+                }
+                for (arg_expr, child_term) in args.iter().zip(children.iter()) {
+                    self.unify_expr(arg_expr, *child_term, substitution);
+                }
+            }
         }
     }
 
@@ -653,13 +675,19 @@ impl ProofStore {
                 let lhs_term = dag.get(proof.lhs).clone();
                 let rhs_term = dag.get(proof.rhs).clone();
                 let base_term_id = self.proof_to_term_for_printing(dag, *base, cache);
-                let base_term = dag.get(base_term_id).clone();
+                let base_proof_term = dag.get(base_term_id).clone();
                 let child_term_id = self.proof_to_term_for_printing(dag, *child_proof, cache);
-                let child_term = dag.get(child_term_id).clone();
+                let child_proof_term = dag.get(child_term_id).clone();
                 let index_term = dag.lit(Literal::Int(*child_index as i64));
                 let term = dag.app(
                     "Congr".to_string(),
-                    vec![base_term, child_term, index_term, lhs_term, rhs_term],
+                    vec![
+                        lhs_term,
+                        rhs_term,
+                        base_proof_term,
+                        child_proof_term,
+                        index_term,
+                    ],
                 );
                 dag.lookup(&term)
             }
