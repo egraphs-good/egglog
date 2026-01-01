@@ -275,7 +275,7 @@ impl<'a> ProofInstrumentor<'a> {
         let delete_subsume_ruleset = self.delete_subsume_ruleset_name();
         let fresh_name = self.egraph.parser.symbol_gen.fresh("delete_rule");
 
-        // Delete just goes once while subsume continues to delete in the future
+        // Subsume could use delete, except that `check` ignores subsumption.
         format!(
             "(rule (({to_delete_name} {child_names})
                     ({view_name} {child_names} out))
@@ -285,7 +285,7 @@ impl<'a> ProofInstrumentor<'a> {
                     :name \"{fresh_name}\")
              (rule (({subsumed_name} {child_names})
                     ({view_name} {child_names} out))
-                   ((delete ({view_name} {child_names} out)))
+                   ((subsume ({view_name} {child_names} out)))
                     :ruleset {delete_subsume_ruleset}
                     :name \"{fresh_name}_subsume\")"
         )
