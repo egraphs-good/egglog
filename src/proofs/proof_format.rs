@@ -14,6 +14,8 @@ struct RawProofStore {
     /// Bidirectional map between proof terms and their ids.
     store: IndexSet<RawProof>,
     encoding_names: EncodingNames,
+    term_to_proof: HashMap<TermId, ProofId>,
+    proof_to_term: HashMap<ProofId, TermId>,
 }
 
 pub(crate) fn proof_store_from_term(
@@ -108,15 +110,26 @@ impl RawProofStore {
             term_dag: term_dag.clone(),
             store: IndexSet::default(),
             encoding_names: encoding_names.clone(),
+            term_to_proof: HashMap::default(),
+            proof_to_term: HashMap::default(),
         };
         let parsed = store.parse_proof(term);
         (store, parsed)
     }
 
     fn parse_proof(&mut self, term_id: TermId) -> ProofId {
-      
+        if let Some(&proof_id) = self.term_to_proof.get(&term_id) {
+            return proof_id;
+        }
+
+        let proof_id = self.parse_proof_inner(term_id);
+        self.term_to_proof.insert(term_id, proof_id);
+        self.proof_to_term.insert(proof_id, term_id);
+        proof_id
+    }
+
+    fn parse_proof_inner(&mut self, term_id: TermId) -> ProofId {
         let term = self.term_dag.get(term_id).clone();
-        eprintln!("parsing proof for term: {}", self.term_dag.to_string(&term));
         let Term::App(head, args) = term else {
             panic!("expected proof term to be an app, got {:?}", term);
         };
@@ -207,7 +220,7 @@ impl RawProofStore {
 
     fn unwrap_ast(&self, term_id: TermId) -> TermId {
         let term = self.term_dag.get(term_id).clone();
-        let Term::App(head, args) = term else {
+        let Term::App(_, args) = term else {
             panic!("expected ast wrapper application");
         };
         assert!(
@@ -246,6 +259,8 @@ impl ProofStore {
         if let Some(&id) = self.proof_id.get(&raw_store.store[raw_proof_id]) {
             return id;
         }
+        let proof_term = raw_store.proof_to_term[&raw_proof_id];
+        let proof_term_str = format!("{}", self.term_dag.to_string(self.term_dag.get(proof_term)));
 
         let raw_proof = &raw_store.store[raw_proof_id];
         let proof = match raw_proof {
@@ -296,6 +311,11 @@ impl ProofStore {
                 let right_id = self.convert_raw_proof(rules, raw_store, *right_raw);
                 let left = &self.id_to_proof[left_id];
                 let right = &self.id_to_proof[right_id];
+                eprintln!("Converting {}", proof_term_str);
+                let left_rhs_str = self.term_dag.to_string(self.term_dag.get(left.rhs));
+                let right_lhs_str = self.term_dag.to_string(self.term_dag.get(right.lhs));
+                eprintln!("  Left RHS: {}", left_rhs_str);
+                eprintln!("  Right LHS: {}", right_lhs_str);
                 assert_eq!(
                     left.rhs, right.lhs,
                     "transitivity requires matching middle terms"
