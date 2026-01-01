@@ -58,7 +58,7 @@ pub struct ProofStore {
 
 /// A proof shows that two grounded terms are equal, justified by a [`Justification`].
 #[derive(Clone, Debug)]
-struct Proof {
+pub struct Proof {
     lhs: TermId,
     rhs: TermId,
     justification: Justification,
@@ -66,7 +66,7 @@ struct Proof {
 
 /// Justifices a single grounded equality t1 = t2.
 #[derive(Clone, Debug)]
-enum Justification {
+pub enum Justification {
     /// Equalities added at the top level are justified by fiat.
     /// Also, primitive reflexive equalities like 2 = 2 are justified by Fiat.
     Fiat,
@@ -607,5 +607,17 @@ impl ProofStore {
                 )
             }
         }
+    }
+
+    /// Get the proof with the given id.
+    /// Panics if this id is invalid.
+    pub fn get(&self, proof_id: ProofId) -> &Proof {
+        &self.id_to_proof[proof_id]
+    }
+}
+
+impl Proof {
+    pub fn justification(&self) -> &Justification {
+        &self.justification
     }
 }

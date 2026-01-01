@@ -1,0 +1,11 @@
+---
+source: tests/files.rs
+expression: snapshot
+---
+
+
+
+
+(congr (fiat (R 2) (R 2))
+ (fiat 2 2)
+ 0 (R 2) (R 2))

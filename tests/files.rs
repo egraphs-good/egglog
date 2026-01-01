@@ -168,40 +168,45 @@ fn generate_tests(glob: &str) -> Vec<Trial> {
         };
         let should_fail = run.should_fail();
         let requires_proofs = run.path.parent().unwrap().ends_with("proofs");
+        let supports_proofs = file_supports_proofs(&run.path);
 
-        push_trial(run.clone());
-        if !should_fail {
-            if !requires_proofs {
-                push_trial(Run {
-                    desugar: true,
-                    ..run.clone()
-                });
-            }
+        if !requires_proofs {
+            push_trial(run.clone());
+        }
+        if !requires_proofs && !should_fail {
+            push_trial(Run {
+                desugar: true,
+                ..run.clone()
+            });
+        }
+        if !should_fail && !requires_proofs && supports_proofs {
+            push_trial(Run {
+                term_encoding: true,
+                ..run.clone()
+            });
+        }
 
-            // TODO improve performance of proof mode to enable math_microbenchmark tests
-            if file_supports_proofs(&run.path) {
-                if !requires_proofs {
-                    push_trial(Run {
-                        term_encoding: true,
-                        ..run.clone()
-                    });
-                }
+        if !should_fail
+            && supports_proofs
+            && !run.path.to_string_lossy().contains("math-microbenchmark")
+        {
+            push_trial(Run {
+                proofs: true,
+                snapshot: requires_proofs,
+                ..run.clone()
+            });
+        }
 
-                if !run.path.to_string_lossy().contains("math-microbenchmark") {
-                    push_trial(Run {
-                        proofs: true,
-                        snapshot: requires_proofs,
-                        ..run.clone()
-                    });
-
-                    // Desugar with proof mode, then run normally. Tests parsing and running proof-instrumented egglog.
-                    push_trial(Run {
-                        proofs: true,
-                        desugar: true,
-                        ..run.clone()
-                    });
-                }
-            }
+        if !should_fail
+            && supports_proofs
+            && !run.path.to_string_lossy().contains("math-microbenchmark")
+            && !requires_proofs
+        {
+            push_trial(Run {
+                proofs: true,
+                desugar: true,
+                ..run.clone()
+            });
         }
     }
 
