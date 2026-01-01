@@ -80,6 +80,7 @@ use crate::ast::desugar::desugar_command;
 use crate::ast::*;
 use crate::core::{GenericActionsExt, ResolvedRuleExt};
 use crate::proofs::proof_encoding::{EncodingState, ProofInstrumentor};
+use crate::proofs::proof_format::{ProofId, ProofStore};
 use crate::proofs::proof_encoding_helpers::command_supports_proof_encoding;
 use crate::proofs::proof_extraction::ProveExistsError;
 use crate::proofs::proof_normal_form::proof_form;
@@ -121,8 +122,11 @@ pub enum CommandOutput {
     ExtractBest(TermDag, DefaultCost, Term),
     /// The variants of a function found after extracting
     ExtractVariants(TermDag, Vec<Term>),
-    /// A proof term witnessing constructor existence
-    ProveExists { termdag: TermDag, proof: Term },
+    /// A high-level proof witnessing constructor existence
+    ProveExists {
+        proof_store: ProofStore,
+        proof_id: ProofId,
+    },
     /// The report from all runs
     OverallStatistics(RunReport),
     /// A printed function and all its values
@@ -154,9 +158,10 @@ impl std::fmt::Display for CommandOutput {
                 }
                 writeln!(f, ")")
             }
-            CommandOutput::ProveExists { termdag, proof } => {
-                writeln!(f, "{}", termdag.to_string(proof))
-            }
+            CommandOutput::ProveExists {
+                proof_store,
+                proof_id,
+            } => write!(f, "{}", proof_store.proof_to_string(*proof_id)),
             CommandOutput::OverallStatistics(run_report) => {
                 write!(f, "Overall statistics:\n{}", run_report)
             }
@@ -237,6 +242,8 @@ pub struct EGraph {
     /// Registry for command-level macros
     command_macros: CommandMacroRegistry,
     proof_state: EncodingState,
+    /// In proof mode, we keep track of all desugared commands so we can check proofs later.
+    desugared_commands: Vec<ResolvedNCommand>,
 }
 
 /// A user-defined command allows users to inject custom command that can be called
@@ -325,6 +332,7 @@ impl Default for EGraph {
             warned_about_missing_global_prefix: false,
             command_macros: Default::default(),
             proof_state,
+            desugared_commands: vec![],
         };
 
         add_base_sort(&mut eg, UnitSort, span!()).unwrap();
@@ -401,6 +409,11 @@ impl EGraph {
         self = self.with_term_encoding_enabled();
         self.proof_state.proofs_enabled = true;
         self
+    }
+
+    /// Enable checking of all proofs before they are returned.
+    pub fn enable_proof_checking(&mut self) {
+        self.proof_state.check_all_proofs = true;
     }
 
     /// Add a user-defined command to the e-graph
@@ -1291,14 +1304,16 @@ impl EGraph {
             }
             ResolvedNCommand::ProveExists(span, resolved_call) => {
                 let mut instrument = ProofInstrumentor { egraph: self };
-                let (termdag, proof) =
-                    instrument
-                        .prove_exists(&resolved_call)
-                        .map_err(|error| Error::ProofError {
-                            span: span.clone(),
-                            error,
-                        })?;
-                return Ok(Some(CommandOutput::ProveExists { termdag, proof }));
+                let (proof_store, proof_id) = instrument
+                    .prove_exists(&resolved_call)
+                    .map_err(|error| Error::ProofError {
+                        span: span.clone(),
+                        error,
+                    })?;
+                return Ok(Some(CommandOutput::ProveExists {
+                    proof_store,
+                    proof_id,
+                }));
             }
         };
 
@@ -1445,6 +1460,8 @@ impl EGraph {
                 }
             }
             let normalized = proof_form(typechecked, &mut self.parser.symbol_gen);
+
+            self.desugared_commands.extend_from_slice(&normalized);
 
             let term_encoding_added = ProofInstrumentor::add_term_encoding(self, normalized);
             let mut new_typechecked = vec![];

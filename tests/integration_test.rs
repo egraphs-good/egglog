@@ -213,24 +213,24 @@ fn prove_exists_returns_proof_term_when_proofs_enabled() {
 
     let display = prove_exists_output.to_string();
 
-    let CommandOutput::ProveExists { termdag, proof } = prove_exists_output.clone() else {
+    let CommandOutput::ProveExists {
+        proof_store,
+        proof_id,
+    } = prove_exists_output.clone() else {
         unreachable!();
     };
 
-    let proof_str = termdag.to_string(&proof);
-    assert!(
-        proof_str.contains("@prove_exists_rule"),
-        "expected proof term to reference generated rule, got {proof_str}"
-    );
+    let proof = proof_store.proof_to_string(proof_id);
+
+    assert_eq!(display, proof, "display implementation should return proof verbatim");
 
     assert!(
-        display.contains(&proof_str),
-        "formatted output should include proof term"
+        proof.contains("@prove_exists_rule"),
+        "expected formatted proof to reference generated rule, got {proof}"
     );
-    assert_eq!(
-        display.trim(),
-        proof_str.trim(),
-        "formatted output should match proof term"
+    assert!(
+        proof.contains("(substitution (x"),
+        "proof should expose substitution binding"
     );
 }
 

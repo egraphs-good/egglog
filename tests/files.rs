@@ -10,6 +10,7 @@ struct Run {
     desugar: bool,
     term_encoding: bool,
     proofs: bool,
+    snapshot: bool,
 }
 
 impl Run {
@@ -32,6 +33,7 @@ impl Run {
                 desugar: false,
                 term_encoding: false,
                 proofs: false,
+                snapshot: false,
             };
 
             normal_run.test_program(
@@ -79,9 +81,18 @@ impl Run {
                             .join("\n")
                     );
                 } else {
-                    for msg in msgs {
+                    for msg in &msgs {
                         log::info!("  {}", msg);
                     }
+                    if self.snapshot {
+                        let snapshot = msgs
+                            .iter()
+                            .map(|s| s.to_string())
+                            .collect::<Vec<_>>()
+                            .join("\n");
+                        insta::assert_snapshot!(self.name().to_string(), snapshot);
+                    }
+
                     // Test graphviz dot generation
                     let mut serialized = egraph
                         .serialize(SerializeConfig {
@@ -153,6 +164,7 @@ fn generate_tests(glob: &str) -> Vec<Trial> {
             desugar: false,
             term_encoding: false,
             proofs: false,
+            snapshot: false,
         };
         let should_fail = run.should_fail();
         let requires_proofs = run.path.parent().unwrap().ends_with("proofs");
@@ -178,6 +190,7 @@ fn generate_tests(glob: &str) -> Vec<Trial> {
                 if !run.path.to_string_lossy().contains("math-microbenchmark") {
                     push_trial(Run {
                         proofs: true,
+                        snapshot: requires_proofs,
                         ..run.clone()
                     });
 

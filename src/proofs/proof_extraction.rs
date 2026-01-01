@@ -1,7 +1,8 @@
 use crate::ast::FunctionSubtype;
 use crate::extract::{Extractor, TreeAdditiveCostModel};
 use crate::proofs::proof_encoding::ProofInstrumentor;
-use crate::{ResolvedCall, Term, TermDag};
+use crate::proofs::proof_format::{ProofId, ProofStore, proof_store_from_term};
+use crate::{ResolvedCall, TermDag};
 use thiserror::Error;
 
 #[derive(Debug, Error)]
@@ -24,7 +25,7 @@ impl<'a> ProofInstrumentor<'a> {
     pub(crate) fn prove_exists(
         &mut self,
         call: &ResolvedCall,
-    ) -> Result<(TermDag, Term), ProveExistsError> {
+    ) -> Result<(ProofStore, ProofId), ProveExistsError> {
         let func = match call {
             ResolvedCall::Func(func) if func.subtype == FunctionSubtype::Constructor => func,
             ResolvedCall::Func(_) => {
@@ -109,6 +110,14 @@ impl<'a> ProofInstrumentor<'a> {
                 panic!("failed to extract proof term for constructor {}", func.name)
             });
 
-        Ok((termdag, proof_term))
+        let proof_term_id = termdag.lookup(&proof_term);
+        let (proof_store, proof_id) = proof_store_from_term(
+            &egraph.proof_state.proof_names,
+            termdag,
+            proof_term_id,
+            &egraph.desugared_commands,
+        );
+
+        Ok((proof_store, proof_id))
     }
 }
