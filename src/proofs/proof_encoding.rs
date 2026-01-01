@@ -790,7 +790,8 @@ impl<'a> ProofInstrumentor<'a> {
         let mut res = vec![];
         let pnil = &self.proof_names().pnil;
         let mut proof = format!("({pnil})");
-        for fact in facts {
+        // Instrument facts in reverse order so that proofs nest correctly.
+        for fact in facts.into_iter().rev() {
             let f_proof = self.instrument_fact(fact, &mut res);
             let pcons = &self.proof_names().pcons;
             proof = format!("({pcons} {f_proof} {proof})")

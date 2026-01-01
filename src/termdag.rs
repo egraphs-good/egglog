@@ -23,6 +23,10 @@ pub struct TermDag {
     nodes: IndexSet<Term>,
 }
 
+const MAX_PRETTY_LINE_WIDTH: usize = 80;
+const PRETTY_INDENT_STEP: usize = 2;
+const MIN_SHARED_TERM_SIZE: usize = 4;
+
 #[macro_export]
 macro_rules! match_term_app {
     ($e:expr; $body:tt) => {
@@ -32,6 +36,50 @@ macro_rules! match_term_app {
                     $body
             }
             _ => panic!("not an app")
+        }
+    }
+}
+
+#[derive(Clone)]
+struct RenderedTerm {
+    inline: String,
+    pretty: String,
+}
+
+impl RenderedTerm {
+    fn from_symbol(symbol: String) -> Self {
+        Self {
+            inline: symbol.clone(),
+            pretty: symbol,
+        }
+    }
+
+    fn is_multiline(&self) -> bool {
+        self.pretty.contains('\n')
+    }
+}
+
+struct TermRenderContext<'a> {
+    fresh: &'a mut SymbolGen,
+    ref_counts: &'a HashMap<TermId, usize>,
+    sizes: &'a HashMap<TermId, usize>,
+    bindings: HashMap<TermId, String>,
+    buf: &'a mut String,
+}
+
+impl<'a> TermRenderContext<'a> {
+    fn new(
+        fresh: &'a mut SymbolGen,
+        ref_counts: &'a HashMap<TermId, usize>,
+        sizes: &'a HashMap<TermId, usize>,
+        buf: &'a mut String,
+    ) -> Self {
+        Self {
+            fresh,
+            ref_counts,
+            sizes,
+            bindings: HashMap::default(),
+            buf,
         }
     }
 }
@@ -143,60 +191,171 @@ impl TermDag {
         term_id: TermId,
         buf: &mut String,
     ) -> String {
-        let ref_counts = self.collect_term_ref_counts(term_id);
-        let mut bindings = HashMap::default();
-        self.to_string_with_let_inner(fresh, term_id, buf, &ref_counts, &mut bindings, false)
+        let (ref_counts, sizes) = self.collect_term_stats(term_id);
+        let mut ctx = TermRenderContext::new(fresh, &ref_counts, &sizes, buf);
+        let rendered = self.render_term(term_id, &mut ctx, false, 0);
+        rendered.pretty
     }
 
-    fn to_string_with_let_inner(
+    fn render_term(
         &self,
-        fresh: &mut SymbolGen,
         term_id: TermId,
-        buf: &mut String,
-        ref_counts: &HashMap<TermId, usize>,
-        bindings: &mut HashMap<TermId, String>,
+        ctx: &mut TermRenderContext,
         allow_binding: bool,
-    ) -> String {
-        if let Some(existing) = bindings.get(&term_id) {
-            return existing.clone();
+        indent: usize,
+    ) -> RenderedTerm {
+        if let Some(existing) = ctx.bindings.get(&term_id) {
+            return RenderedTerm::from_symbol(existing.clone());
         }
 
-        let result = match self.get(term_id) {
+        let rendered = match self.get(term_id) {
             Term::App(name, children) => {
-                let child_strs: Vec<String> = children
-                    .iter()
-                    .map(|c| {
-                        self.to_string_with_let_inner(fresh, *c, buf, ref_counts, bindings, true)
-                    })
-                    .collect();
-                let mut s = format!("({}", name);
-                for child_str in child_strs {
-                    s.push(' ');
-                    s.push_str(&child_str);
+                if name == "Trans" {
+                    eprintln!("rendering Trans with indent {}", indent);
                 }
-                s.push(')');
-                s
+                let mut child_renderings = Vec::with_capacity(children.len());
+                for child_id in children {
+                    let rendered_child =
+                        self.render_term(*child_id, ctx, true, indent + PRETTY_INDENT_STEP);
+                    if name == "Trans" {
+                        eprintln!(
+                            "  child pretty: {:?}",
+                            rendered_child.pretty.split('\n').collect::<Vec<_>>()
+                        );
+                    }
+                    child_renderings.push(rendered_child);
+                }
+
+                let mut inline = format!("({}", name);
+                for child in &child_renderings {
+                    inline.push(' ');
+                    inline.push_str(&child.inline);
+                }
+                inline.push(')');
+
+                let inline_len = inline.chars().count();
+                let exceeds_width = indent + inline_len > MAX_PRETTY_LINE_WIDTH;
+                let child_multiline = child_renderings.iter().any(|c| c.is_multiline());
+
+                let pretty = if exceeds_width || child_multiline {
+                    if child_renderings.is_empty() {
+                        format!("({})", name)
+                    } else {
+                        let mut s = format!("({}", name);
+                        for (idx, child) in child_renderings.iter().enumerate() {
+                            s.push('\n');
+                            s.push_str(&" ".repeat(indent + PRETTY_INDENT_STEP));
+                            s.push_str(&child.pretty);
+                            if idx + 1 == child_renderings.len() {
+                                s.push(')');
+                            }
+                        }
+                        s
+                    }
+                } else {
+                    inline.clone()
+                };
+
+                if name == "Trans" {
+                    eprintln!(
+                        "result pretty lines: {:?}",
+                        pretty.split('\n').collect::<Vec<_>>()
+                    );
+                }
+
+                RenderedTerm { inline, pretty }
             }
-            Term::Lit(lit) => format!("{}", lit),
-            Term::Var(v) => v.clone(),
+            Term::Lit(lit) => {
+                let repr = format!("{lit}");
+                RenderedTerm {
+                    inline: repr.clone(),
+                    pretty: repr,
+                }
+            }
+            Term::Var(v) => RenderedTerm {
+                inline: v.clone(),
+                pretty: v.clone(),
+            },
         };
 
-        let should_bind = allow_binding && ref_counts.get(&term_id).copied().unwrap_or(1) > 1;
+        let term_size = *ctx.sizes.get(&term_id).unwrap_or(&1);
+        let repeat_count = ctx.ref_counts.get(&term_id).copied().unwrap_or(1);
+        let should_bind = allow_binding && repeat_count > 1 && term_size >= MIN_SHARED_TERM_SIZE;
+
         if should_bind {
-            let let_name = fresh.fresh("t");
-            buf.push_str(&format!("(let {} {})\n", let_name, result));
-            bindings.insert(term_id, let_name.clone());
-            let_name
+            let let_name = ctx.fresh.fresh("t");
+            self.push_binding(ctx.buf, &let_name, &rendered.pretty);
+            ctx.bindings.insert(term_id, let_name.clone());
+            RenderedTerm::from_symbol(let_name)
         } else {
-            result
+            rendered
         }
     }
 
-    fn collect_term_ref_counts(&self, term_id: TermId) -> HashMap<TermId, usize> {
+    fn push_binding(&self, buf: &mut String, name: &str, body: &str) {
+        let trimmed = body.trim_end();
+        if trimmed.is_empty() {
+            buf.push_str("(let ");
+            buf.push_str(name);
+            buf.push_str(")\n");
+            return;
+        }
+
+        if trimmed.contains('\n') {
+            buf.push_str("(let ");
+            buf.push_str(name);
+            buf.push('\n');
+            let lines: Vec<&str> = trimmed.lines().collect();
+            for (idx, line) in lines.iter().enumerate() {
+                buf.push_str(&" ".repeat(PRETTY_INDENT_STEP));
+                buf.push_str(line);
+                if idx + 1 < lines.len() {
+                    buf.push('\n');
+                } else {
+                    buf.push(')');
+                    buf.push('\n');
+                }
+            }
+        } else {
+            buf.push_str("(let ");
+            buf.push_str(name);
+            buf.push(' ');
+            buf.push_str(trimmed);
+            buf.push_str(")\n");
+        }
+    }
+
+    fn collect_term_stats(
+        &self,
+        term_id: TermId,
+    ) -> (HashMap<TermId, usize>, HashMap<TermId, usize>) {
         let mut counts = HashMap::default();
         let mut visited = HashSet::default();
         self.collect_term_ref_counts_inner(term_id, &mut counts, &mut visited);
-        counts
+
+        let mut sizes = HashMap::default();
+        self.compute_term_size(term_id, &mut sizes);
+
+        (counts, sizes)
+    }
+
+    fn compute_term_size(&self, term_id: TermId, sizes: &mut HashMap<TermId, usize>) -> usize {
+        if let Some(size) = sizes.get(&term_id) {
+            return *size;
+        }
+
+        let size = match self.get(term_id) {
+            Term::App(_, children) => {
+                1 + children
+                    .iter()
+                    .map(|child| self.compute_term_size(*child, sizes))
+                    .sum::<usize>()
+            }
+            Term::Lit(_) | Term::Var(_) => 1,
+        };
+
+        sizes.insert(term_id, size);
+        size
     }
 
     fn collect_term_ref_counts_inner(
@@ -272,7 +431,7 @@ impl TermDag {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::{ast::*, span};
+    use crate::{ast::*, span, util::SymbolGen};
 
     fn parse_term(s: &str) -> (TermDag, Term) {
         let e = Parser::default().get_expr_from_string(None, s).unwrap();
@@ -349,5 +508,76 @@ mod tests {
         let g = td.app("g".into(), vec![x.clone(), y.clone()]);
         let t2 = td.app("f".into(), vec![g.clone(), x, seven, g]);
         assert_eq!(t, t2);
+    }
+
+    #[test]
+    fn test_to_string_with_let_inlines_small_terms() {
+        let s = r#"(f (g x) (g x) (g x))"#;
+        let (td, t) = parse_term(s);
+        let mut buf = String::new();
+        let mut sym = SymbolGen::new(String::new());
+        let repr = td.to_string_with_let(&mut sym, td.lookup(&t), &mut buf);
+        assert!(buf.is_empty(), "expected no let bindings, got {buf}");
+        assert_eq!(repr, s);
+    }
+
+    #[test]
+    fn test_to_string_with_let_shares_large_terms() {
+        let g_segment = ["(g a b)"; 8].join(" ");
+        let s = format!("(f (h {0}) (h {0}))", g_segment);
+        let (td, t) = parse_term(&s);
+        let mut buf = String::new();
+        let mut sym = SymbolGen::new(String::new());
+        let repr = td.to_string_with_let(&mut sym, td.lookup(&t), &mut buf);
+        let first_line = buf.lines().next().expect("expected let binding");
+        assert!(first_line.starts_with("(let t"));
+        assert!(buf.contains("(h"));
+        let has_lonely_paren = buf.lines().any(|line| line.trim() == ")");
+        assert!(
+            !has_lonely_paren,
+            "unexpected standalone closing paren in\n{buf}"
+        );
+        assert!(buf.trim_end().ends_with(')'));
+        assert_eq!(repr, "(f t t)");
+    }
+
+    #[test]
+    fn test_to_string_with_let_wraps_long_lines() {
+        let s = r#"(verylongfunctionnamewithmanysegments alpha_argument beta_argument gamma_argument delta_argument epsilon_argument zeta_argument)"#;
+        let (td, t) = parse_term(s);
+        let mut buf = String::new();
+        let mut sym = SymbolGen::new(String::new());
+        let repr = td.to_string_with_let(&mut sym, td.lookup(&t), &mut buf);
+        assert!(buf.is_empty());
+        assert!(repr.contains('\n'));
+        assert!(repr.contains("\n  "));
+        assert!(repr.starts_with("(verylongfunctionnamewithmanysegments"));
+    }
+
+    #[test]
+    fn test_multiline_parentheses_share_final_line() {
+        let expr = "(Trans (Add 3 2) (start) (Rule (Add 3 2) (Add 2 3) (name rw1) (premises t1) (substitution (a 2) (b 3))) t)";
+        let (td, t) = parse_term(expr);
+        let mut buf = String::new();
+        let mut sym = SymbolGen::new(String::new());
+        let repr = td.to_string_with_let(&mut sym, td.lookup(&t), &mut buf);
+    println!("repr: {repr}");
+        assert!(repr.contains('\n'), "expected multiline output, got {repr}");
+        let has_lonely_paren = repr.lines().any(|line| line.trim() == ")");
+        assert!(
+            !has_lonely_paren,
+            "found standalone closing paren line in {repr}"
+        );
+        if let Some(last_line) = repr.lines().last() {
+            assert!(
+                last_line.ends_with(')'),
+                "last line should end with closing paren: {last_line}"
+            );
+        }
+        let buf_has_lonely = buf.lines().any(|line| line.trim() == ")");
+        assert!(
+            !buf_has_lonely,
+            "bindings contain standalone closing paren in\n{buf}"
+        );
     }
 }
