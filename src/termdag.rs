@@ -134,6 +134,52 @@ impl TermDag {
         }
     }
 
+    /// Prints a term to a string, putting let bindings for shared subterms in `buf`.
+    /// Returns the final string representation of the term.
+    pub(crate) fn to_string_with_let(
+        &self,
+        fresh: &mut SymbolGen,
+        term_id: TermId,
+        buf: &mut String,
+    ) -> String {
+        match self.get(term_id) {
+            Term::App(name, children) => {
+                // get the children first
+                let child_strs: Vec<String> = children
+                    .iter()
+                    .map(|c| self.to_string_with_let(fresh, *c, buf))
+                    .collect();
+                // measure the total length
+                let total_len: usize =
+                    2 + name.len() + child_strs.iter().map(|s| s.len() + 1).sum::<usize>() - 1; // -1 for no space before first child
+                // if too long, make let bindings for each child
+                if total_len > 80 {
+                    let mut let_bindings = vec![];
+                    let mut new_children = vec![];
+                    for (i, c) in children.iter().enumerate() {
+                        let fresh_name = fresh.fresh("t");
+                        let child_str = self.to_string_with_let(fresh, *c, buf);
+                        let_bindings.push(format!("(let {} {})", fresh_name, child_str));
+                        new_children.push(fresh_name);
+                        buf.push_str(&let_bindings[i]);
+                        buf.push('\n');
+                    }
+                    format!("({} {})", name, new_children.join(" "))
+                } else {
+                    let mut s = format!("({}", name);
+                    for child_str in child_strs {
+                        s.push(' ');
+                        s.push_str(&child_str);
+                    }
+                    s.push(')');
+                    s
+                }
+            }
+            Term::Lit(lit) => format!("{}", lit),
+            Term::Var(v) => v.clone(),
+        }
+    }
+
     /// Converts the given term to a string.
     ///
     /// Panics if the term or any of its subterms are not in the DAG.

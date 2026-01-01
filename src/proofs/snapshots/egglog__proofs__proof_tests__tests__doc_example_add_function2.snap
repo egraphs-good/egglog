@@ -1,5 +1,5 @@
 ---
-source: src/term_encoding.rs
+source: src/proofs/proof_tests.rs
 expression: snapshot
 ---
 (ruleset parent)

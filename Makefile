@@ -8,7 +8,7 @@ WWW=${PWD}/target/www
 all: test nits docs
 
 test:
-	cargo nextest run --release
+	cargo insta test --release --test-runner nextest --unreferenced reject
 	# nextest doesn't run doctests, so do it here
 	cargo test --doc --release
 

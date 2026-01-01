@@ -1,5 +1,5 @@
 ---
-source: src/term_encoding.rs
+source: src/proofs/proof_tests.rs
 expression: snapshot
 ---
 (ruleset parent)
@@ -28,11 +28,11 @@ expression: snapshot
 (constructor AddView (i64 i64 Math) __view)
 (constructor to_delete_Add (i64 i64) __view)
 (constructor to_subsume_Add (i64 i64) __view)
-(rule ((AddView c0_ c1_ old)
-       (AddView c0_ c1_ new)
+(rule ((AddView c0_ c1_ new)
+       (AddView c0_ c1_ old)
        (!= old new)
        (= (ordering-max old new) new))
-      ((__UF_Math new old))
+      ((__UF_Math (ordering-max new old) (ordering-min new old)))
         :ruleset rebuilding :name "__congruence_rule")
 (rule ((to_delete_Add c0_ c1_)
        (AddView c0_ c1_ out))
