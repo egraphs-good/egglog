@@ -3,6 +3,7 @@
 use std::{iter::once, sync::Arc};
 
 use crate::numeric_id::{DenseIdMap, IdVec, NumericId, define_id};
+use egglog_numeric_id::DenseIdMapSO;
 use smallvec::SmallVec;
 use thiserror::Error;
 
@@ -773,7 +774,7 @@ impl RuleBuilder<'_, '_> {
 pub(crate) struct Atom {
     pub(crate) table: TableId,
     pub(crate) var_to_column: HashMap<Variable, ColumnId>,
-    pub(crate) column_to_var: DenseIdMap<ColumnId, Variable>,
+    pub(crate) column_to_var: DenseIdMapSO<ColumnId, Variable>,
     /// These constraints are an initial take at processing "fast" constraints as well as a
     /// potential list of "slow" constraints.
     ///

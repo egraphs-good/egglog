@@ -11,6 +11,7 @@ use crate::{
 };
 use crossbeam::utils::CachePadded;
 use dashmap::mapref::one::RefMut;
+use egglog_numeric_id::DenseIdMapSO;
 use egglog_reports::{ReportLevel, RuleReport, RuleSetReport};
 use smallvec::SmallVec;
 use web_time::Instant;
@@ -343,7 +344,7 @@ impl Clone for TrieNode {
 
 #[derive(Default, Clone)]
 struct BindingInfo {
-    bindings: DenseIdMap<Variable, Value>,
+    bindings: DenseIdMapSO<Variable, Value>,
     subsets: DenseIdMap<AtomId, TrieNode>,
 }
 
@@ -926,7 +927,7 @@ trait ActionBuffer<'state>: Send {
     fn push_bindings(
         &mut self,
         action: ActionId,
-        bindings: &DenseIdMap<Variable, Value>,
+        bindings: &DenseIdMapSO<Variable, Value>,
         to_exec_state: impl FnMut() -> ExecutionState<'state>,
     );
 
@@ -975,7 +976,7 @@ impl<'a, 'outer: 'a> ActionBuffer<'a> for InPlaceActionBuffer<'outer> {
     fn push_bindings(
         &mut self,
         action: ActionId,
-        bindings: &DenseIdMap<Variable, Value>,
+        bindings: &DenseIdMapSO<Variable, Value>,
         mut to_exec_state: impl FnMut() -> ExecutionState<'a>,
     ) {
         let action_state = self.batches.get_or_default(action);
@@ -1048,7 +1049,7 @@ impl<'scope> ActionBuffer<'scope> for ScopedActionBuffer<'_, 'scope> {
     fn push_bindings(
         &mut self,
         action: ActionId,
-        bindings: &DenseIdMap<Variable, Value>,
+        bindings: &DenseIdMapSO<Variable, Value>,
         mut to_exec_state: impl FnMut() -> ExecutionState<'scope>,
     ) {
         self.needs_flush = true;
@@ -1180,7 +1181,7 @@ fn sort_plan_by_size(
     binding_info: &mut BindingInfo,
 ) {
     // How many times an atom has been intersected/joined
-    let mut times_refined = with_pool_set(|ps| ps.get::<DenseIdMap<AtomId, i64>>());
+    let mut times_refined = with_pool_set(|ps| ps.get::<DenseIdMapSO<AtomId, i64>>());
 
     // Count how many times each atom has been refined so far.
     for ins in instrs[..start].iter() {
@@ -1202,7 +1203,7 @@ fn sort_plan_by_size(
     //   (3) then by the cardinality of the variable to be enumerated
     let key_fn = |join_stage: &JoinStage,
                   binding_info: &BindingInfo,
-                  times_refined: &DenseIdMap<AtomId, i64>| {
+                  times_refined: &DenseIdMapSO<AtomId, i64>| {
         let refine = match join_stage {
             JoinStage::Intersect { scans, .. } => scans
                 .iter()

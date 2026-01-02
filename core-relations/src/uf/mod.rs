@@ -8,6 +8,7 @@ use std::{
 
 use crate::numeric_id::{DenseIdMap, NumericId};
 use crossbeam_queue::SegQueue;
+use egglog_numeric_id::DenseIdMapSO;
 use indexmap::IndexMap;
 use petgraph::{Direction, Graph, algo::dijkstra, graph::NodeIndex, visit::EdgeRef};
 
@@ -258,7 +259,7 @@ impl Table for DisplacedTable {
         self
     }
     fn spec(&self) -> TableSpec {
-        let mut uncacheable_columns = DenseIdMap::default();
+        let mut uncacheable_columns = DenseIdMapSO::default();
         // The second column of this table is determined dynamically by the union-find.
         uncacheable_columns.insert(ColumnId::new(1), true);
         TableSpec {

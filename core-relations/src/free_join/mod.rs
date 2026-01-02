@@ -12,7 +12,9 @@ use crate::{
     hash_index::IndexCatalog,
     numeric_id::{DenseIdMap, DenseIdMapWithReuse, NumericId, define_id},
 };
+use crossbeam::utils::CachePadded;
 use egglog_concurrency::{NotificationList, ResettableOnceLock};
+use egglog_numeric_id::DenseIdMapSO;
 use rayon::prelude::*;
 use smallvec::SmallVec;
 
@@ -240,14 +242,17 @@ pub(crate) type ExternalFunctions =
     DenseIdMapWithReuse<ExternalFunctionId, Box<dyn ExternalFunction>>;
 
 #[derive(Default)]
-pub(crate) struct Counters(DenseIdMap<CounterId, AtomicUsize>);
+pub(crate) struct Counters(DenseIdMapSO<CounterId, CachePadded<AtomicUsize>>);
 
 impl Clone for Counters {
     fn clone(&self) -> Counters {
-        let mut map = DenseIdMap::new();
+        let mut map = DenseIdMapSO::new();
         for (k, v) in self.0.iter() {
             // NB: we may want to experiment with Ordering::Relaxed here.
-            map.insert(k, AtomicUsize::new(v.load(Ordering::SeqCst)))
+            map.insert(
+                k,
+                CachePadded::new(AtomicUsize::new(v.load(Ordering::SeqCst))),
+            )
         }
         Counters(map)
     }
@@ -434,7 +439,7 @@ impl Database {
     ///
     /// These counters can be used to generate unique ids as part of an action.
     pub fn add_counter(&mut self) -> CounterId {
-        self.counters.0.push(AtomicUsize::new(0))
+        self.counters.0.push(CachePadded::new(AtomicUsize::new(0)))
     }
 
     /// Increment the given counter and return its previous value.

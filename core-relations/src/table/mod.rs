@@ -17,6 +17,7 @@ use std::{
 
 use crate::numeric_id::{DenseIdMap, NumericId};
 use crossbeam_queue::SegQueue;
+use egglog_numeric_id::DenseIdMapSO;
 use hashbrown::HashTable;
 use rayon::iter::{IndexedParallelIterator, IntoParallelRefMutIterator, ParallelIterator};
 use rustc_hash::FxHasher;
@@ -1007,7 +1008,7 @@ impl SortedWritesTable {
         struct TimestampStats {
             value: Value,
             count: usize,
-            histogram: Pooled<DenseIdMap<ShardId, usize>>,
+            histogram: Pooled<DenseIdMapSO<ShardId, usize>>,
         }
         impl Default for TimestampStats {
             fn default() -> TimestampStats {
@@ -1023,7 +1024,7 @@ impl SortedWritesTable {
         // Use a macro rather than a lambda to avoid borrow issues.
         macro_rules! compute_hist {
             ($start_val: expr, $start_row: expr, $end_row: expr) => {{
-                let mut histogram: Pooled<DenseIdMap<ShardId, usize>> =
+                let mut histogram: Pooled<DenseIdMapSO<ShardId, usize>> =
                     with_pool_set(|ps| ps.get());
                 let mut cur_row = $start_row;
                 let mut count = 0;

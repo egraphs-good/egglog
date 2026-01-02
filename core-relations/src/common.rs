@@ -7,6 +7,7 @@ use std::{
 
 use crate::numeric_id::{DenseIdMap, IdVec, NumericId, define_id};
 use egglog_concurrency::ConcurrentVec;
+use egglog_numeric_id::DenseIdMapSO;
 use hashbrown::HashTable;
 use rustc_hash::FxHasher;
 
@@ -89,6 +90,18 @@ fn hash_value(v: &impl Hash) -> u64 {
 }
 
 impl<K: NumericId, V> Clear for DenseIdMap<K, V> {
+    fn reuse(&self) -> bool {
+        self.capacity() > 0
+    }
+    fn clear(&mut self) {
+        self.clear();
+    }
+    fn bytes(&self) -> usize {
+        self.capacity() * mem::size_of::<Option<V>>()
+    }
+}
+
+impl<K: NumericId, V> Clear for DenseIdMapSO<K, V> {
     fn reuse(&self) -> bool {
         self.capacity() > 0
     }
@@ -186,7 +199,7 @@ impl ShardData {
 /// of tables that have been passed to the tracker.
 #[derive(Clone, Default)]
 pub(crate) struct SubsetTracker {
-    last_rebuilt_at: DenseIdMap<TableId, TableVersion>,
+    last_rebuilt_at: DenseIdMapSO<TableId, TableVersion>,
 }
 
 impl SubsetTracker {

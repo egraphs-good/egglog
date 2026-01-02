@@ -11,6 +11,7 @@ use std::{
 };
 
 use crate::numeric_id::{DenseIdMap, NumericId, define_id};
+use egglog_numeric_id::DenseIdMapSO;
 use smallvec::SmallVec;
 
 use crate::{
@@ -64,7 +65,7 @@ pub struct TableSpec {
     ///
     /// These columns should (e.g.) never have indexes built for them, as they
     /// will go out of date too quickly.
-    pub uncacheable_columns: DenseIdMap<ColumnId, bool>,
+    pub uncacheable_columns: DenseIdMapSO<ColumnId, bool>,
 
     /// Whether or not deletions are supported for this table.
     ///

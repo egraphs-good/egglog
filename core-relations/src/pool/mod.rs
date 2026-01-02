@@ -14,6 +14,7 @@ use crate::{
     AtomId,
     numeric_id::{DenseIdMap, IdVec},
 };
+use egglog_numeric_id::DenseIdMapSO;
 use fixedbitset::FixedBitSet;
 use hashbrown::HashTable;
 
@@ -435,10 +436,10 @@ pool_set! {
         tuple_indexes: HashTable<TableEntry<BufferedSubset>> [ 1 << 20 ],
         staged_outputs: HashTable<SwTableEntry> [ 1 << 25 ],
         predicted_vals: PredictedVals [ 1 << 20 ],
-        shard_hist: DenseIdMap<ShardId, usize> [ 1 << 20 ],
+        shard_hist: DenseIdMapSO<ShardId, usize> [ 1 << 20 ],
         instr_indexes: Vec<u32> [ 1 << 20 ],
         cached_subsets: IdVec<ColumnId, std::sync::OnceLock<std::sync::Arc<ColumnIndex>>> [ 4 << 20 ],
-        intersected_on: DenseIdMap<AtomId, i64> [ 1 << 20 ],
+        intersected_on: DenseIdMapSO<AtomId, i64> [ 1 << 20 ],
     }
 }
 

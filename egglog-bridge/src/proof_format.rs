@@ -4,6 +4,7 @@ use std::{hash::Hash, io, rc::Rc};
 
 use crate::core_relations::Value;
 use crate::numeric_id::{DenseIdMap, NumericId, define_id};
+use egglog_numeric_id::DenseIdMapSO;
 use indexmap::IndexSet;
 
 use crate::{FunctionId, rule::VariableId};
@@ -444,7 +445,7 @@ pub enum TermProof {
     /// the act_pf gives a location in the action of the proposition
     PRule {
         rule_name: Rc<str>,
-        subst: DenseIdMap<VariableId, TermId>,
+        subst: DenseIdMapSO<VariableId, TermId>,
         body_pfs: Vec<Premise>,
         result: TermId,
     },
@@ -469,7 +470,7 @@ pub enum EqProof {
     /// the act_pf gives a location in the action of the proposition
     PRule {
         rule_name: Rc<str>,
-        subst: DenseIdMap<VariableId, TermId>,
+        subst: DenseIdMapSO<VariableId, TermId>,
         body_pfs: Vec<Premise>,
         result_lhs: TermId,
         result_rhs: TermId,

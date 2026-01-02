@@ -6,6 +6,7 @@ use crate::core_relations::{
 };
 use crate::numeric_id::{DenseIdMap, NumericId, define_id};
 use crate::rule::Variable;
+use egglog_numeric_id::DenseIdMapSO;
 use egglog_reports::ReportLevel;
 use hashbrown::{HashMap, HashSet};
 
@@ -170,8 +171,8 @@ impl EGraph {
         &mut self,
         node: SyntaxId,
         syntax: &SourceSyntax,
-        subst: &DenseIdMap<VariableId, Value>,
-        memo: &mut DenseIdMap<SyntaxId, Value>,
+        subst: &DenseIdMapSO<VariableId, Value>,
+        memo: &mut DenseIdMapSO<SyntaxId, Value>,
     ) -> Value {
         if let Some(prev) = memo.get(node).copied() {
             return prev;
@@ -214,16 +215,16 @@ impl EGraph {
         RuleData { syntax, .. }: &RuleData,
         vars: &[Value],
         state: &mut ProofReconstructionState,
-    ) -> (DenseIdMap<VariableId, TermId>, Vec<Premise>) {
+    ) -> (DenseIdMapSO<VariableId, TermId>, Vec<Premise>) {
         // First, reconstruct terms for all the relevant variables.
-        let mut subst_term = DenseIdMap::<VariableId, TermId>::new();
-        let mut subst_val = DenseIdMap::<VariableId, Value>::new();
+        let mut subst_term = DenseIdMapSO::<VariableId, TermId>::new();
+        let mut subst_val = DenseIdMapSO::<VariableId, Value>::new();
         for ((var, ty), term_id) in syntax.vars.iter().zip(vars) {
             subst_val.insert(*var, *term_id);
             let term = self.reconstruct_term(*term_id, *ty, state);
             subst_term.insert(*var, term);
         }
-        let mut terms = DenseIdMap::<SyntaxId, Value>::new();
+        let mut terms = DenseIdMapSO::<SyntaxId, Value>::new();
         let mut premises = Vec::new();
         for toplevel in &syntax.roots {
             match toplevel {

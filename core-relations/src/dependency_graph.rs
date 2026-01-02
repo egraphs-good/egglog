@@ -1,6 +1,8 @@
 //! A simple data-structure for tracking the dependencies of the merge functions
 //! from different tables on one another.
 
+use egglog_numeric_id::DenseIdMapSO;
+
 use crate::numeric_id::{DenseIdMap, NumericId, define_id};
 
 use crate::{TableId, common::IndexSet};
@@ -14,7 +16,7 @@ define_id!(
 #[derive(Clone, Default)]
 pub(crate) struct DependencyGraph {
     levels: DenseIdMap<LevelId, IndexSet<TableId>>,
-    to_level: DenseIdMap<TableId, LevelId>,
+    to_level: DenseIdMapSO<TableId, LevelId>,
     write_deps: DenseIdMap<TableId, IndexSet<TableId>>,
 }
 

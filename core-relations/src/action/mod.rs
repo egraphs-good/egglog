@@ -10,6 +10,7 @@ use crate::{
     numeric_id::{DenseIdMap, NumericId},
 };
 use egglog_concurrency::NotificationList;
+use egglog_numeric_id::DenseIdMapSO;
 use smallvec::SmallVec;
 
 use crate::{
@@ -108,7 +109,7 @@ pub(crate) struct Bindings {
     max_batch_size: usize,
     data: Pooled<Vec<Value>>,
     /// Points into `data`. `data[vars[var].. vars[var]+matches]` contains the values for `data`.
-    var_offsets: DenseIdMap<Variable, usize>,
+    var_offsets: DenseIdMapSO<Variable, usize>,
 }
 
 impl std::ops::Index<Variable> for Bindings {
@@ -134,7 +135,7 @@ impl Bindings {
             matches: 0,
             max_batch_size,
             data: Default::default(),
-            var_offsets: DenseIdMap::new(),
+            var_offsets: Default::default(),
         }
     }
     fn assert_invariant(&self) {
@@ -200,7 +201,7 @@ impl Bindings {
     /// overhead of boundschecking is noticeable.
     pub(crate) unsafe fn push(
         &mut self,
-        map: &DenseIdMap<Variable, Value>,
+        map: &DenseIdMapSO<Variable, Value>,
         used_vars: &[Variable],
     ) {
         if self.matches != 0 {
