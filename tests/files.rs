@@ -1,6 +1,6 @@
 use std::path::PathBuf;
 
-use egglog::{ast::sanitize_internal_names, *};
+use egglog::{ast::sanitize_internal_names, file_supports_proofs, *};
 use hashbrown::HashSet;
 use libtest_mimic::Trial;
 
@@ -213,9 +213,37 @@ fn generate_tests(glob: &str) -> Vec<Trial> {
     trials
 }
 
+fn generate_proof_support_snapshot_test() -> Trial {
+    Trial::test("proof_support_snapshot", || {
+        let mut supported_files = Vec::new();
+        
+        for entry in glob::glob("tests/**/*.egg").unwrap() {
+            let path = entry.unwrap();
+            if file_supports_proofs(&path) {
+                // Convert to relative path for consistent snapshots
+                let relative = path.strip_prefix("tests/").unwrap_or(&path);
+                supported_files.push(relative.to_string_lossy().to_string());
+            }
+        }
+        
+        // Sort for deterministic output
+        supported_files.sort();
+        
+        // Create snapshot
+        let snapshot = supported_files.join("\n");
+        insta::assert_snapshot!("proof_supported_files", snapshot);
+        
+        Ok(())
+    })
+}
+
 fn main() {
     let args = libtest_mimic::Arguments::from_args();
-    let tests = generate_tests("tests/**/*.egg");
+    let mut tests = generate_tests("tests/**/*.egg");
+    
+    // Add the proof support snapshot test
+    tests.push(generate_proof_support_snapshot_test());
+    
     // ensure all the tests have unique names
     let mut names = HashSet::new();
     for test in &tests {

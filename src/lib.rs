@@ -44,6 +44,8 @@ pub use core_relations::{BaseValue, ContainerValue, ExecutionState, Value};
 use core_relations::{ExternalFunctionId, make_external_func};
 use csv::Writer;
 pub use egglog_add_primitive::add_primitive;
+pub use egglog_add_primitive::add_literal_prim;
+pub use egglog_add_primitive::add_primitive_with_validator;
 use egglog_ast::generic_ast::{Change, GenericExpr, Literal};
 use egglog_ast::span::Span;
 use egglog_ast::util::ListDisplay;
@@ -74,6 +76,7 @@ pub use termdag::{Term, TermDag, TermId};
 use thiserror::Error;
 pub use typechecking::TypeError;
 pub use typechecking::TypeInfo;
+pub use typechecking::PrimitiveValidator;
 use util::*;
 
 use crate::ast::desugar::desugar_command;

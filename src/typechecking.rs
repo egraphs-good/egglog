@@ -161,6 +161,17 @@ impl EGraph {
     where
         T: Clone + Primitive + Send + Sync + 'static,
     {
+        self.add_primitive_with_validator(x, None)
+    }
+
+    /// Add a user-defined primitive with an optional validator
+    pub fn add_primitive_with_validator<T>(
+        &mut self,
+        x: T,
+        validator: Option<PrimitiveValidator>,
+    ) where
+        T: Clone + Primitive + Send + Sync + 'static,
+    {
         // We need to use a wrapper because of the orphan rule.
         // If we just try to implement `ExternalFunction` directly on
         // all `PrimitiveLike`s then it would be possible for a
@@ -182,7 +193,7 @@ impl EGraph {
             .push(PrimitiveWithId {
                 primitive,
                 id,
-                validator: None,
+                validator,
             });
     }
 
