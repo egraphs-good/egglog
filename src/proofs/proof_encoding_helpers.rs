@@ -1,9 +1,10 @@
 use std::path::Path;
 
 use crate::{
-    EGraph, TypeInfo,
+    EGraph, ResolvedCall, TypeInfo,
     ast::{
-        Command, Fact, GenericCommand, ResolvedAction, ResolvedCommand, ResolvedExprExt, Schedule,
+        Command, Fact, GenericCommand, GenericExpr, GenericFact, ResolvedAction, ResolvedCommand,
+        ResolvedExprExt, ResolvedVar, Schedule,
     },
     proofs::proof_encoding::ProofInstrumentor,
     util::{FreshGen, HashMap, SymbolGen},
@@ -343,9 +344,118 @@ fn commands_support_proof_encoding(commands: &[ResolvedCommand], type_info: &Typ
     true
 }
 
+/// Check if an expression is a primitive call
+fn is_primitive_expr(expr: &GenericExpr<ResolvedCall, ResolvedVar>) -> bool {
+    matches!(expr, GenericExpr::Call(_, ResolvedCall::Primitive(_), _))
+}
+
+/// Check if an expression contains any non-primitive function calls.
+/// Variables and literals are OK - only function calls are non-primitive in this context.
+fn contains_non_primitive(expr: &GenericExpr<ResolvedCall, ResolvedVar>) -> bool {
+    match expr {
+        GenericExpr::Var(_, _) => false, // variables are fine - they're bound in queries
+        GenericExpr::Lit(_, _) => false, // literals are fine
+        GenericExpr::Call(_, ResolvedCall::Func(_), _) => true, // function calls are non-primitive
+        GenericExpr::Call(_, ResolvedCall::Primitive(_), args) => {
+            // recursively check arguments
+            args.iter().any(contains_non_primitive)
+        }
+    }
+}
+
+/// Check if any primitive in a fact has arguments that contain non-primitives
+fn fact_has_invalid_primitive(fact: &GenericFact<ResolvedCall, ResolvedVar>) -> bool {
+    let check_expr = |expr: &GenericExpr<ResolvedCall, ResolvedVar>| {
+        if is_primitive_expr(expr) {
+            // If this is a primitive, check if its arguments contain non-primitives
+            if let GenericExpr::Call(_, _, args) = expr {
+                return args.iter().any(contains_non_primitive);
+            }
+        }
+        false
+    };
+
+    match fact {
+        GenericFact::Eq(_, e1, e2) => {
+            // Check both sides of the equality
+            let mut has_invalid = false;
+            e1.walk(
+                &mut |e| {
+                    if check_expr(e) {
+                        has_invalid = true;
+                    }
+                },
+                &mut |_| {},
+            );
+            if has_invalid {
+                return true;
+            }
+            e2.walk(
+                &mut |e| {
+                    if check_expr(e) {
+                        has_invalid = true;
+                    }
+                },
+                &mut |_| {},
+            );
+            has_invalid
+        }
+        GenericFact::Fact(expr) => {
+            let mut has_invalid = false;
+            expr.walk(
+                &mut |e| {
+                    if check_expr(e) {
+                        has_invalid = true;
+                    }
+                },
+                &mut |_| {},
+            );
+            has_invalid
+        }
+    }
+}
+
 pub fn command_supports_proof_encoding(command: &ResolvedCommand, type_info: &TypeInfo) -> bool {
-    // todo map over queries, see if any primitives have terms with non-primitives in them. If so, return false.
-    
+    // Map over queries to check if any primitives have terms with non-primitives in them
+    let check_queries = |queries: &[GenericFact<ResolvedCall, ResolvedVar>]| {
+        for fact in queries {
+            if fact_has_invalid_primitive(fact) {
+                return false;
+            }
+        }
+        true
+    };
+
+    // Check queries in different command types
+    match command {
+        GenericCommand::Check(_, queries) | GenericCommand::Prove(_, queries) => {
+            if !check_queries(queries) {
+                return false;
+            }
+        }
+        GenericCommand::Rule { rule } => {
+            if !check_queries(&rule.body) {
+                return false;
+            }
+        }
+        GenericCommand::Rewrite(_, rewrite, _) => {
+            if !check_queries(&rewrite.conditions) {
+                return false;
+            }
+        }
+        GenericCommand::BiRewrite(_, rewrite) => {
+            if !check_queries(&rewrite.conditions) {
+                return false;
+            }
+        }
+        GenericCommand::RunSchedule(_) => {
+            // For schedules, we need to recursively check contained commands/rules
+            // For now, we'll handle this conservatively by checking what we can access
+            // The schedule may contain rules with queries that we can't easily access here
+            // This is okay because rules will be checked individually when they're processed
+        }
+        _ => {}
+    }
 
     match command {
         GenericCommand::Sort(_, _, Some(_))

@@ -23,11 +23,11 @@ pub(crate) fn proof_store_from_term(
     encoding_names: &EncodingNames,
     term_dag: TermDag,
     proof_term: TermId,
-    rules: &Vec<ResolvedNCommand>,
+    prog: &Vec<ResolvedNCommand>,
 ) -> (ProofStore, ProofId) {
     let (raw_store, raw_proof_id) =
         RawProofStore::from_extracted(encoding_names, term_dag, proof_term);
-    ProofStore::from_raw(rules, raw_store, raw_proof_id)
+    ProofStore::from_raw(prog, raw_store, raw_proof_id)
 }
 
 /// Justifies a single grounded equality t1 = t2.
@@ -54,17 +54,17 @@ pub enum RawProof {
 /// It's a hash-consed arena so that proofs can share sub-proofs.
 #[derive(Clone, Debug)]
 pub struct ProofStore {
-    term_dag: TermDag,
+    pub(super) term_dag: TermDag,
     proof_id: HashMap<RawProof, ProofId>,
-    id_to_proof: Vec<Proof>,
+    pub(super) id_to_proof: Vec<Proof>,
 }
 
 /// A proof shows that two grounded terms are equal, justified by a [`Justification`].
 #[derive(Clone, Debug)]
 pub struct Proof {
-    lhs: TermId,
-    rhs: TermId,
-    justification: Justification,
+    pub(super) lhs: TermId,
+    pub(super) rhs: TermId,
+    pub(super) justification: Justification,
 }
 
 /// Justifices a single grounded equality t1 = t2.
@@ -237,7 +237,7 @@ impl RawProofStore {
 
 impl ProofStore {
     fn from_raw(
-        rules: &Vec<ResolvedNCommand>,
+        prog: &Vec<ResolvedNCommand>,
         raw_store: RawProofStore,
         raw_proof: ProofId,
     ) -> (ProofStore, ProofId) {
@@ -247,7 +247,7 @@ impl ProofStore {
             id_to_proof: Vec::new(),
         };
 
-        let proof_id = store.convert_raw_proof(rules, &raw_store, raw_proof);
+        let proof_id = store.convert_raw_proof(prog, &raw_store, raw_proof);
         (store, proof_id)
     }
 
@@ -255,7 +255,7 @@ impl ProofStore {
     /// This adds new metadata to the proof, such as the substitution for rules.
     fn convert_raw_proof(
         &mut self,
-        rules: &Vec<ResolvedNCommand>,
+        prog: &Vec<ResolvedNCommand>,
         raw_store: &RawProofStore,
         raw_proof_id: ProofId,
     ) -> ProofId {
@@ -280,16 +280,14 @@ impl ProofStore {
             RawProof::Rule(name, premise_proofs, lhs, rhs) => {
                 let converted_premises: Vec<ProofId> = premise_proofs
                     .iter()
-                    .map(|pid| self.convert_raw_proof(rules, raw_store, *pid))
+                    .map(|pid| self.convert_raw_proof(prog, raw_store, *pid))
                     .collect();
 
-                eprintln!("Converting Rule proof:\n{}", formatted_proof);
                 let formatted_premises: Vec<String> = converted_premises
                     .iter()
                     .map(|pid| self.proof_to_string(*pid))
                     .collect();
-                eprintln!("With premises:\n{}", formatted_premises.join("\n"));
-                let substitution = self.compute_rule_substitution(rules, name, &converted_premises);
+                let substitution = self.compute_rule_substitution(prog, name, &converted_premises);
 
                 Proof {
                     lhs: raw_store.unwrap_ast(*lhs),
@@ -302,8 +300,8 @@ impl ProofStore {
                 }
             }
             RawProof::MergeFn(function, old_raw, new_raw) => {
-                let old_proof_id = self.convert_raw_proof(rules, raw_store, *old_raw);
-                let new_proof_id = self.convert_raw_proof(rules, raw_store, *new_raw);
+                let old_proof_id = self.convert_raw_proof(prog, raw_store, *old_raw);
+                let new_proof_id = self.convert_raw_proof(prog, raw_store, *new_raw);
                 let old_proof = &self.id_to_proof[old_proof_id];
                 let new_proof = &self.id_to_proof[new_proof_id];
                 debug_assert_eq!(
@@ -321,8 +319,8 @@ impl ProofStore {
                 }
             }
             RawProof::Trans(left_raw, right_raw) => {
-                let left_id = self.convert_raw_proof(rules, raw_store, *left_raw);
-                let right_id = self.convert_raw_proof(rules, raw_store, *right_raw);
+                let left_id = self.convert_raw_proof(prog, raw_store, *left_raw);
+                let right_id = self.convert_raw_proof(prog, raw_store, *right_raw);
                 let left = &self.id_to_proof[left_id];
                 let right = &self.id_to_proof[right_id];
                 assert_eq!(
@@ -336,7 +334,7 @@ impl ProofStore {
                 }
             }
             RawProof::Sym(inner_raw) => {
-                let inner_id = self.convert_raw_proof(rules, raw_store, *inner_raw);
+                let inner_id = self.convert_raw_proof(prog, raw_store, *inner_raw);
                 let inner = &self.id_to_proof[inner_id];
                 Proof {
                     lhs: inner.rhs,
@@ -345,8 +343,8 @@ impl ProofStore {
                 }
             }
             RawProof::Congr(proof_raw, child_index, child_raw) => {
-                let base_id = self.convert_raw_proof(rules, raw_store, *proof_raw);
-                let child_id = self.convert_raw_proof(rules, raw_store, *child_raw);
+                let base_id = self.convert_raw_proof(prog, raw_store, *proof_raw);
+                let child_id = self.convert_raw_proof(prog, raw_store, *child_raw);
                 let base_lhs = self.id_to_proof[base_id].lhs;
                 let base_rhs = self.id_to_proof[base_id].rhs;
                 let child_rhs = self.id_to_proof[child_id].rhs;
@@ -371,12 +369,12 @@ impl ProofStore {
 
     fn compute_rule_substitution(
         &self,
-        rules: &[ResolvedNCommand],
+        prog: &[ResolvedNCommand],
         rule_name: &str,
         premise_proofs: &[ProofId],
     ) -> HashMap<String, TermId> {
         let substitution = HashMap::default();
-        let Some(rule) = rules.iter().find_map(|cmd| match cmd {
+        let Some(rule) = prog.iter().find_map(|cmd| match cmd {
             ResolvedNCommand::NormRule { rule } if rule.name == rule_name => Some(rule),
             _ => None,
         }) else {
@@ -511,7 +509,7 @@ impl ProofStore {
         }
     }
 
-    fn replace_term_child(
+    pub(super) fn replace_term_child(
         &mut self,
         term_id: TermId,
         child_index: usize,
@@ -581,11 +579,17 @@ impl ProofStore {
 
         let proof = &self.id_to_proof[proof_id];
 
+        // Helper to create (= lhs rhs) term
+        let make_equality = |dag: &mut TermDag, lhs: TermId, rhs: TermId| -> Term {
+            let lhs_term = dag.get(lhs).clone();
+            let rhs_term = dag.get(rhs).clone();
+            dag.app("=".to_string(), vec![lhs_term, rhs_term])
+        };
+
         let term_id = match &proof.justification {
             Justification::Fiat => {
-                let lhs_term = dag.get(proof.lhs).clone();
-                let rhs_term = dag.get(proof.rhs).clone();
-                let term = dag.app("Fiat".to_string(), vec![lhs_term, rhs_term]);
+                let equality = make_equality(dag, proof.lhs, proof.rhs);
+                let term = dag.app("Fiat".to_string(), vec![equality]);
                 dag.lookup(&term)
             }
             Justification::Rule {
@@ -593,8 +597,7 @@ impl ProofStore {
                 premise_proofs,
                 substitution,
             } => {
-                let lhs_term = dag.get(proof.lhs).clone();
-                let rhs_term = dag.get(proof.rhs).clone();
+                let equality = make_equality(dag, proof.lhs, proof.rhs);
                 let name_child = dag.var(name.clone());
                 let name_term = dag.app("name".to_string(), vec![name_child]);
 
@@ -618,13 +621,7 @@ impl ProofStore {
 
                 let term = dag.app(
                     "Rule".to_string(),
-                    vec![
-                        lhs_term,
-                        rhs_term,
-                        name_term,
-                        premises_term,
-                        substitution_term,
-                    ],
+                    vec![equality, name_term, premises_term, substitution_term],
                 );
                 dag.lookup(&term)
             }
@@ -633,8 +630,7 @@ impl ProofStore {
                 old_proof,
                 new_proof,
             } => {
-                let lhs_term = dag.get(proof.lhs).clone();
-                let rhs_term = dag.get(proof.rhs).clone();
+                let equality = make_equality(dag, proof.lhs, proof.rhs);
                 let old_term_id = self.proof_to_term_for_printing(dag, *old_proof, cache);
                 let new_term_id = self.proof_to_term_for_printing(dag, *new_proof, cache);
                 let old_term = dag.get(old_term_id).clone();
@@ -642,29 +638,24 @@ impl ProofStore {
                 let function_term = dag.var(function.clone());
                 let term = dag.app(
                     "Merge".to_string(),
-                    vec![function_term, old_term, new_term, lhs_term, rhs_term],
+                    vec![equality, function_term, old_term, new_term],
                 );
                 dag.lookup(&term)
             }
             Justification::Trans(left, right) => {
-                let lhs_term = dag.get(proof.lhs).clone();
-                let rhs_term = dag.get(proof.rhs).clone();
+                let equality = make_equality(dag, proof.lhs, proof.rhs);
                 let left_term_id = self.proof_to_term_for_printing(dag, *left, cache);
                 let right_term_id = self.proof_to_term_for_printing(dag, *right, cache);
                 let left_term = dag.get(left_term_id).clone();
                 let right_term = dag.get(right_term_id).clone();
-                let term = dag.app(
-                    "Trans".to_string(),
-                    vec![lhs_term, rhs_term, left_term, right_term],
-                );
+                let term = dag.app("Trans".to_string(), vec![equality, left_term, right_term]);
                 dag.lookup(&term)
             }
             Justification::Sym(inner) => {
-                let lhs_term = dag.get(proof.lhs).clone();
-                let rhs_term = dag.get(proof.rhs).clone();
+                let equality = make_equality(dag, proof.lhs, proof.rhs);
                 let inner_term_id = self.proof_to_term_for_printing(dag, *inner, cache);
                 let inner_term = dag.get(inner_term_id).clone();
-                let term = dag.app("Sym".to_string(), vec![lhs_term, rhs_term, inner_term]);
+                let term = dag.app("Sym".to_string(), vec![equality, inner_term]);
                 dag.lookup(&term)
             }
             Justification::Congr {
@@ -672,8 +663,7 @@ impl ProofStore {
                 child_index,
                 child_proof,
             } => {
-                let lhs_term = dag.get(proof.lhs).clone();
-                let rhs_term = dag.get(proof.rhs).clone();
+                let equality = make_equality(dag, proof.lhs, proof.rhs);
                 let base_term_id = self.proof_to_term_for_printing(dag, *base, cache);
                 let base_proof_term = dag.get(base_term_id).clone();
                 let child_term_id = self.proof_to_term_for_printing(dag, *child_proof, cache);
@@ -681,13 +671,7 @@ impl ProofStore {
                 let index_term = dag.lit(Literal::Int(*child_index as i64));
                 let term = dag.app(
                     "Congr".to_string(),
-                    vec![
-                        lhs_term,
-                        rhs_term,
-                        base_proof_term,
-                        child_proof_term,
-                        index_term,
-                    ],
+                    vec![equality, base_proof_term, child_proof_term, index_term],
                 );
                 dag.lookup(&term)
             }
@@ -701,131 +685,6 @@ impl ProofStore {
     /// Panics if this id is invalid.
     pub fn get(&self, proof_id: ProofId) -> &Proof {
         &self.id_to_proof[proof_id]
-    }
-
-    /// A simple simplification pass removing unnecessary steps.
-    /// For example, congruence steps that do not change the term.
-    pub fn simplify(&mut self, proof_id: ProofId) -> ProofId {
-        match self.get(proof_id).justification().clone() {
-            Justification::Congr {
-                child_proof,
-                proof: base_proof,
-                ..
-            } => {
-                // if the child proof proves t = t for some t, we can skip the congruence step
-                let child_proof = self.get(child_proof);
-                if child_proof.lhs == child_proof.rhs {
-                    self.simplify(base_proof)
-                } else {
-                    self.map_child_proofs(proof_id, |store, pid| store.simplify(pid))
-                }
-            }
-            Justification::Trans(p1, p2) => {
-                // if either side is a reflexive proof, skip it
-                let p1_proof = self.get(p1);
-                let p2_proof = self.get(p2);
-                if p1_proof.lhs == p1_proof.rhs {
-                    return self.simplify(p2);
-                } else if p2_proof.lhs == p2_proof.rhs {
-                    return self.simplify(p1);
-                } else {
-                    self.map_child_proofs(proof_id, |store, pid| store.simplify(pid))
-                }
-            }
-
-            _ => self.map_child_proofs(proof_id, |store, pid| store.simplify(pid)),
-        }
-    }
-
-    /// Map over the child proofs of this proof, producing a new proof with the same justification but updated child proofs.
-    pub fn map_child_proofs<F>(&mut self, proof_id: ProofId, mut f: F) -> ProofId
-    where
-        F: FnMut(&mut ProofStore, ProofId) -> ProofId,
-    {
-        let mut proof = self.id_to_proof[proof_id].clone();
-
-        let mut changed = false;
-
-        match &mut proof.justification {
-            Justification::Fiat => return proof_id,
-            Justification::Rule { premise_proofs, .. } => {
-                for pid in premise_proofs.iter_mut() {
-                    let mapped = f(self, *pid);
-                    if mapped != *pid {
-                        *pid = mapped;
-                        changed = true;
-                    }
-                }
-            }
-            Justification::MergeFn {
-                old_proof,
-                new_proof,
-                ..
-            } => {
-                let mapped_old = f(self, *old_proof);
-                let mapped_new = f(self, *new_proof);
-                if mapped_old != *old_proof || mapped_new != *new_proof {
-                    *old_proof = mapped_old;
-                    *new_proof = mapped_new;
-                    let old = self.get(*old_proof);
-                    let new = self.get(*new_proof);
-                    proof.lhs = old.lhs;
-                    proof.rhs = new.rhs;
-                    changed = true;
-                }
-            }
-            Justification::Trans(left, right) => {
-                let mapped_left = f(self, *left);
-                let mapped_right = f(self, *right);
-                if mapped_left != *left || mapped_right != *right {
-                    *left = mapped_left;
-                    *right = mapped_right;
-                    let left_proof = self.get(*left);
-                    let right_proof = self.get(*right);
-                    debug_assert_eq!(
-                        left_proof.rhs, right_proof.lhs,
-                        "transitivity requires matching middle terms"
-                    );
-                    proof.lhs = left_proof.lhs;
-                    proof.rhs = right_proof.rhs;
-                    changed = true;
-                }
-            }
-            Justification::Sym(inner) => {
-                let mapped_inner = f(self, *inner);
-                if mapped_inner != *inner {
-                    *inner = mapped_inner;
-                    let inner_proof = self.get(*inner);
-                    proof.lhs = inner_proof.rhs;
-                    proof.rhs = inner_proof.lhs;
-                    changed = true;
-                }
-            }
-            Justification::Congr {
-                proof: base,
-                child_index,
-                child_proof,
-            } => {
-                let mapped_base = f(self, *base);
-                let mapped_child = f(self, *child_proof);
-                if mapped_base != *base || mapped_child != *child_proof {
-                    *base = mapped_base;
-                    *child_proof = mapped_child;
-                    let base_proof = self.get(*base);
-                    let child = self.get(*child_proof);
-                    proof.lhs = base_proof.lhs;
-                    proof.rhs = self.replace_term_child(base_proof.rhs, *child_index, child.rhs);
-                    changed = true;
-                }
-            }
-        }
-
-        if !changed {
-            return proof_id;
-        }
-
-        self.id_to_proof[proof_id] = proof;
-        proof_id
     }
 }
 

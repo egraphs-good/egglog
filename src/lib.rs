@@ -1457,16 +1457,20 @@ impl EGraph {
                 }
             }
 
-            typechecked =
-                proof_global_remover::remove_globals(typechecked, &mut self.parser.symbol_gen);
-            for command in &typechecked {
-                self.names.check_shadowing(command)?;
-            }
+            
             let normalized = proof_form(typechecked, &mut self.parser.symbol_gen);
-
+            
+            // Desugared commands are in proof form but globals are still using let bindings.
             self.desugared_commands.extend_from_slice(&normalized);
 
-            let term_encoding_added = ProofInstrumentor::add_term_encoding(self, normalized);
+            // Now remove globals for actual execution (but NOT from desugared_commands)
+            let typechecked_no_globals =
+                proof_global_remover::remove_globals(normalized, &mut self.parser.symbol_gen);
+            for command in &typechecked_no_globals {
+                self.names.check_shadowing(command)?;
+            }
+
+            let term_encoding_added = ProofInstrumentor::add_term_encoding(self, typechecked_no_globals);
             let mut new_typechecked = vec![];
             for new_cmd in term_encoding_added {
                 let desugared =
