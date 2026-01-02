@@ -716,12 +716,25 @@ impl ProofStore {
                     let rhs_str = self
                         .term_dag
                         .to_string_with_let(&mut SymbolGen::new("".to_string()), *rhs);
+                    let subst_strs = substitution
+                        .iter()
+                        .map(|(k, v)| {
+                            let term_str = self
+                                .term_dag
+                                .to_string_with_let(&mut SymbolGen::new("".to_string()), *v);
+                            format!("{} -> {}", k, term_str)
+                        })
+                        .collect::<Vec<_>>()
+                        .join(", ");
+                    let expected_str = self
+                        .term_dag
+                        .to_string_with_let(&mut SymbolGen::new("".to_string()), fact_term);
                     return Err(ProofCheckError::RuleSubstitutionMismatch {
                         proof_id,
                         rule_name: rule_name.to_string(),
                         reason: format!(
-                            "Fact {fact} does not match proposition {} under substitution",
-                            rhs_str
+                            "Fact {fact} does not match proposition under substitution {}. Got {}, expected {}.",
+                            subst_strs, rhs_str, expected_str
                         ),
                     });
                 }
