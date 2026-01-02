@@ -69,7 +69,21 @@ impl SpecializedPrimitive {
     }
 }
 
-#[derive(Debug, Clone)]
+impl PartialEq for SpecializedPrimitive {
+    fn eq(&self, other: &Self) -> bool {
+        self.primitive.1 == other.primitive.1
+    }
+}
+
+impl Eq for SpecializedPrimitive {}
+
+impl Hash for SpecializedPrimitive {
+    fn hash<H: Hasher>(&self, state: &mut H) {
+        self.primitive.1.hash(state);
+    }
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Hash)]
 pub enum ResolvedCall {
     Func(FuncType),
     Primitive(SpecializedPrimitive),
@@ -955,6 +969,65 @@ where
     }
 }
 
+impl<Head, Leaf> GenericCoreRule<Head, Head, Leaf>
+where
+    Leaf: Eq + Clone + Hash + Debug,
+    Head: Clone + Eq + Hash,
+{
+    pub(crate) fn remove_dup_vars(
+        mut self,
+        value_eq: impl Fn(&GenericAtomTerm<Leaf>, &GenericAtomTerm<Leaf>) -> Head,
+    ) -> Self {
+        let mut groups: HashMap<(Head, Vec<GenericAtomTerm<Leaf>>), Vec<GenericAtomTerm<Leaf>>> =
+            HashMap::default();
+
+        // Remove entries wit identical (head, inputs) pair and mark respective outputs to be merged.
+        self.body.atoms.retain(|atom| {
+            let (out, inp) = atom.args.split_last().unwrap();
+            let key = (atom.head.clone(), inp.to_owned());
+            let group = groups.entry(key).or_default();
+            group.push(out.clone());
+            group.len() == 1
+        });
+
+        let mut new_atoms = vec![];
+        for g in groups.values() {
+            let first = &g[0];
+            for other in &g[1..] {
+                if first == other {
+                    continue;
+                }
+                new_atoms.push(GenericAtom {
+                    span: span!(),
+                    head: HeadOrEq::Eq,
+                    args: vec![first.clone(), other.clone()],
+                });
+            }
+        }
+
+        if new_atoms.is_empty() {
+            self
+        } else {
+            let atoms: Vec<GenericAtom<HeadOrEq<Head>, Leaf>> = new_atoms
+                .into_iter()
+                .chain(self.body.atoms.into_iter().map(|atom| GenericAtom {
+                    span: atom.span,
+                    head: HeadOrEq::Head(atom.head),
+                    args: atom.args,
+                }))
+                .collect();
+
+            GenericCoreRule {
+                span: self.span,
+                body: Query { atoms },
+                head: self.head,
+            }
+            .canonicalize(&value_eq)
+            .remove_dup_vars(value_eq)
+        }
+    }
+}
+
 pub(crate) trait GenericRuleExt<Head, Leaf> {
     fn to_core_rule(
         &self,
@@ -1027,7 +1100,9 @@ impl ResolvedRuleExt for ResolvedRule {
         // `(rule ((= x y)) ((R x y)))`) but unboundedness is only checked during type checking.
         grounded_check(&rule)?;
 
-        let rule = rule.canonicalize(value_eq);
+        let rule = rule.canonicalize(&value_eq);
+
+        let rule = rule.remove_dup_vars(value_eq);
 
         Ok(rule)
     }

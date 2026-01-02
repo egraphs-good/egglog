@@ -1,3 +1,5 @@
+use std::hash::Hasher;
+
 use crate::{
     core::{CoreActionContext, CoreRule, GenericActionsExt},
     *,
@@ -12,6 +14,40 @@ pub struct FuncType {
     pub subtype: FunctionSubtype,
     pub input: Vec<ArcSort>,
     pub output: ArcSort,
+}
+
+impl PartialEq for FuncType {
+    fn eq(&self, other: &Self) -> bool {
+        if self.name == other.name
+            && self.subtype == other.subtype
+            && self.output.name() == other.output.name()
+        {
+            if self.input.len() != other.input.len() {
+                return false;
+            }
+            for (a, b) in self.input.iter().zip(other.input.iter()) {
+                if a.name() != b.name() {
+                    return false;
+                }
+            }
+            true
+        } else {
+            false
+        }
+    }
+}
+
+impl Eq for FuncType {}
+
+impl Hash for FuncType {
+    fn hash<H: Hasher>(&self, state: &mut H) {
+        self.name.hash(state);
+        self.subtype.hash(state);
+        self.output.name().hash(state);
+        for inp in &self.input {
+            inp.name().hash(state);
+        }
+    }
 }
 
 #[derive(Clone)]
