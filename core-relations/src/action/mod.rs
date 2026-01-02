@@ -222,9 +222,9 @@ impl Bindings {
                 // let start = self.var_offsets.raw()[var].unwrap();
                 // self.data[start + self.matches] = map.raw()[var].unwrap();
                 unsafe {
-                    let start = self.var_offsets.raw().get_unchecked(var).unwrap_unchecked();
+                    let start = self.var_offsets.raw().get_unchecked(var).assume_init_read();
                     *self.data.get_unchecked_mut(start + self.matches) =
-                        map.raw().get_unchecked(var).unwrap_unchecked();
+                        map.raw().get_unchecked(var).assume_init_read();
                 }
             }
         } else {

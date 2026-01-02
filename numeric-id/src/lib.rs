@@ -3,6 +3,7 @@ use std::{
     fmt::{self, Debug},
     hash::Hash,
     marker::PhantomData,
+    mem::MaybeUninit,
     ops,
 };
 
@@ -45,10 +46,52 @@ impl NumericId for usize {
 ///
 /// This mapping is _dense_: it stores a flat array indexed by `K::index()`,
 /// with no hashing. For sparse mappings, use a HashMap.
-#[derive(Clone, PartialEq, Eq, Hash)]
-pub struct DenseIdMap<K, V> {
-    data: Vec<Option<V>>,
+pub struct DenseIdMap<K: NumericId, V> {
+    data: Vec<MaybeUninit<V>>,
+    bitset: Vec<u64>,
     _marker: PhantomData<K>,
+}
+
+impl<K: NumericId, V: Clone> Clone for DenseIdMap<K, V> {
+    fn clone(&self) -> Self {
+        let mut new_map = DenseIdMap::with_capacity(self.n_ids());
+        for (k, v) in self.iter() {
+            new_map.insert(k, v.clone());
+        }
+        new_map
+    }
+}
+
+impl<K: NumericId + PartialEq, V: PartialEq> PartialEq for DenseIdMap<K, V> {
+    fn eq(&self, other: &Self) -> bool {
+        if self.n_ids() != other.n_ids() {
+            return false;
+        }
+        for (k, v) in self.iter() {
+            match other.get(k) {
+                Some(ov) if ov == v => {}
+                _ => return false,
+            }
+        }
+        for (k, v) in other.iter() {
+            match self.get(k) {
+                Some(sv) if sv == v => {}
+                _ => return false,
+            }
+        }
+        true
+    }
+}
+
+impl<K: NumericId + Eq, V: Eq> Eq for DenseIdMap<K, V> {}
+
+impl<K: NumericId, V: Hash> Hash for DenseIdMap<K, V> {
+    fn hash<H: std::hash::Hasher>(&self, state: &mut H) {
+        for (k, v) in self.iter() {
+            k.hash(state);
+            v.hash(state);
+        }
+    }
 }
 
 impl<K: NumericId + Debug, V: Debug> Debug for DenseIdMap<K, V> {
@@ -61,16 +104,47 @@ impl<K: NumericId + Debug, V: Debug> Debug for DenseIdMap<K, V> {
     }
 }
 
-impl<K, V> Default for DenseIdMap<K, V> {
+impl<K: NumericId, V> Default for DenseIdMap<K, V> {
     fn default() -> Self {
         Self {
             data: Vec::new(),
             _marker: PhantomData,
+            bitset: Vec::new(),
         }
     }
 }
 
+/// Check if a bit is set in the bitset at the given index.
+fn is_bit_set(bitset: &[u64], index: usize) -> bool {
+    bitset
+        .get(index / 64)
+        .is_some_and(|word| (word & (1 << (index % 64))) != 0)
+}
+
 impl<K: NumericId, V> DenseIdMap<K, V> {
+    /// Set the bit in the bitset for the given index, marking it as occupied.
+    fn set_bit(&mut self, index: usize) {
+        let word_index = index / 64;
+        let bit_index = index % 64;
+
+        // Ensure bitset has enough capacity
+        if word_index >= self.bitset.len() {
+            self.bitset.resize(word_index + 1, 0);
+        }
+
+        self.bitset[word_index] |= 1 << bit_index;
+    }
+
+    /// Clear the bit in the bitset for the given index, marking it as unoccupied.
+    fn clear_bit(&mut self, index: usize) {
+        let word_index = index / 64;
+        let bit_index = index % 64;
+
+        if word_index < self.bitset.len() {
+            self.bitset[word_index] &= !(1 << bit_index);
+        }
+    }
+
     /// Create an empty map with space for `n` entries pre-allocated.
     pub fn with_capacity(n: usize) -> Self {
         let mut res = Self::new();
@@ -85,7 +159,17 @@ impl<K: NumericId, V> DenseIdMap<K, V> {
 
     /// Clear the table's contents.
     pub fn clear(&mut self) {
+        // Drop all initialized values
+        for i in 0..self.data.len() {
+            if self.contains_key(K::from_usize(i)) {
+                // SAFETY: The bitset indicates this slot is initialized
+                unsafe {
+                    self.data[i].assume_init_drop();
+                }
+            }
+        }
         self.data.clear();
+        self.bitset.clear();
     }
 
     /// Get the current capacity for the table.
@@ -102,7 +186,21 @@ impl<K: NumericId, V> DenseIdMap<K, V> {
     /// Insert the given mapping into the table.
     pub fn insert(&mut self, key: K, value: V) {
         self.reserve_space(key);
-        self.data[key.index()] = Some(value);
+        let index = key.index();
+
+        // Check if there's an existing value that needs to be dropped
+        if self.contains_key(key) {
+            // SAFETY: The bitset indicates this slot is initialized
+            unsafe {
+                self.data[index].assume_init_drop();
+            }
+        }
+
+        // Write the new value
+        self.data[index].write(value);
+
+        // Update the bitset to mark this slot as occupied
+        self.set_bit(index);
     }
 
     /// Get the key that would be returned by the next call to [`DenseIdMap::push`].
@@ -114,24 +212,35 @@ impl<K: NumericId, V> DenseIdMap<K, V> {
     /// [`DenseIdMap::n_ids`].
     pub fn push(&mut self, val: V) -> K {
         let res = self.next_id();
-        self.data.push(Some(val));
+        let index = res.index();
+
+        self.data.push(MaybeUninit::new(val));
+        self.set_bit(index);
+
         res
     }
 
     /// Test whether `key` is set in this map.
     pub fn contains_key(&self, key: K) -> bool {
-        self.data.get(key.index()).is_some_and(Option::is_some)
+        is_bit_set(&self.bitset, key.index())
     }
 
     /// Get the current mapping for `key` in the table.
     pub fn get(&self, key: K) -> Option<&V> {
-        self.data.get(key.index())?.as_ref()
+        if !self.contains_key(key) {
+            return None;
+        }
+        // SAFETY: The bitset indicates this slot is initialized
+        unsafe { Some(self.data.get(key.index())?.assume_init_ref()) }
     }
 
     /// Get a mutable reference to the current mapping for `key` in the table.
     pub fn get_mut(&mut self, key: K) -> Option<&mut V> {
-        self.reserve_space(key);
-        self.data.get_mut(key.index())?.as_mut()
+        if !self.contains_key(key) {
+            return None;
+        }
+        // SAFETY: The bitset indicates this slot is initialized
+        unsafe { Some(self.data.get_mut(key.index())?.assume_init_mut()) }
     }
 
     /// Extract the value mapped to by `key` from the table.
@@ -139,73 +248,129 @@ impl<K: NumericId, V> DenseIdMap<K, V> {
     /// # Panics
     /// This method panics if `key` is not in the table.
     pub fn unwrap_val(&mut self, key: K) -> V {
-        self.reserve_space(key);
-        self.data.get_mut(key.index()).unwrap().take().unwrap()
+        self.take(key).expect("key not found in DenseIdMap")
     }
 
     /// Extract the value mapped to by `key` from the table, if it is present.
     pub fn take(&mut self, key: K) -> Option<V> {
-        self.reserve_space(key);
-        self.data.get_mut(key.index()).unwrap().take()
+        if !self.contains_key(key) {
+            return None;
+        }
+
+        let index = key.index();
+
+        // SAFETY: The bitset indicates this slot is initialized
+        let value = unsafe { self.data.get(index)?.assume_init_read() };
+
+        // Clear the bitset to mark this slot as unoccupied
+        self.clear_bit(index);
+
+        Some(value)
     }
 
     /// Get the current mapping for `key` in the table, or insert the value
     /// returned by `f` and return a mutable reference to it.
     pub fn get_or_insert(&mut self, key: K, f: impl FnOnce() -> V) -> &mut V {
         self.reserve_space(key);
-        self.data[key.index()].get_or_insert_with(f)
+        let index = key.index();
+
+        if !self.contains_key(key) {
+            // Insert the new value
+            self.data[index].write(f());
+            self.set_bit(index);
+        }
+
+        // SAFETY: Either the value was already initialized, or we just initialized it
+        unsafe { self.data[index].assume_init_mut() }
     }
 
-    pub fn raw(&self) -> &[Option<V>] {
+    pub fn raw(&self) -> &[MaybeUninit<V>] {
         &self.data
     }
 
-    pub fn iter(&self) -> impl Iterator<Item = (K, &V)> {
-        self.data
-            .iter()
-            .enumerate()
-            .filter_map(|(i, v)| Some((K::from_usize(i), v.as_ref()?)))
+    pub fn iter(&self) -> impl Iterator<Item = (K, &V)> + '_ {
+        self.data.iter().enumerate().filter_map(|(i, v)| {
+            if self.contains_key(K::from_usize(i)) {
+                // SAFETY: The bitset indicates this slot is initialized
+                Some((K::from_usize(i), unsafe { v.assume_init_ref() }))
+            } else {
+                None
+            }
+        })
     }
 
-    pub fn iter_mut(&mut self) -> impl Iterator<Item = (K, &mut V)> {
-        self.data
-            .iter_mut()
-            .enumerate()
-            .filter_map(|(i, v)| Some((K::from_usize(i), v.as_mut()?)))
+    pub fn iter_mut(&mut self) -> impl Iterator<Item = (K, &mut V)> + '_ {
+        let bitset = &self.bitset;
+        self.data.iter_mut().enumerate().filter_map(|(i, v)| {
+            if is_bit_set(bitset, i) {
+                // SAFETY: The bitset indicates this slot is initialized
+                Some((K::from_usize(i), unsafe { v.assume_init_mut() }))
+            } else {
+                None
+            }
+        })
     }
 
     /// Reserve space up to the given key in the table.
     pub fn reserve_space(&mut self, key: K) {
         let index = key.index();
         if index >= self.data.len() {
-            self.data.resize_with(index + 1, || None);
+            self.data.resize_with(index + 1, MaybeUninit::uninit);
         }
     }
 
     pub fn drain(&mut self) -> impl Iterator<Item = (K, V)> + '_ {
-        // To avoid the need to write down the return type.
-        self.data
-            .drain(..)
-            .enumerate()
-            .filter_map(|(i, v)| Some((K::from_usize(i), v?)))
+        let bitset = std::mem::take(&mut self.bitset);
+        self.data.drain(..).enumerate().filter_map(move |(i, v)| {
+            if is_bit_set(&bitset, i) {
+                // SAFETY: The bitset indicates this slot is initialized
+                Some((K::from_usize(i), unsafe { v.assume_init_read() }))
+            } else {
+                None
+            }
+        })
     }
 }
 
 impl<K: NumericId, V: Send + Sync> DenseIdMap<K, V> {
     /// Get a parallel iterator over the entries in the table.
     pub fn par_iter(&self) -> impl ParallelIterator<Item = (K, &V)> {
-        self.data
-            .par_iter()
-            .enumerate()
-            .filter_map(|(i, v)| Some((K::from_usize(i), v.as_ref()?)))
+        let bitset = &self.bitset;
+        self.data.par_iter().enumerate().filter_map(|(i, v)| {
+            if is_bit_set(bitset, i) {
+                // SAFETY: The bitset indicates this slot is initialized
+                Some((K::from_usize(i), unsafe { v.assume_init_ref() }))
+            } else {
+                None
+            }
+        })
     }
 
     /// Get a parallel iterator over mutable references to the entries in the table.
     pub fn par_iter_mut(&mut self) -> impl ParallelIterator<Item = (K, &mut V)> {
-        self.data
-            .par_iter_mut()
-            .enumerate()
-            .filter_map(|(i, v)| Some((K::from_usize(i), v.as_mut()?)))
+        let bitset = &self.bitset;
+        self.data.par_iter_mut().enumerate().filter_map(|(i, v)| {
+            if is_bit_set(bitset, i) {
+                // SAFETY: The bitset indicates this slot is initialized
+                Some((K::from_usize(i), unsafe { v.assume_init_mut() }))
+            } else {
+                None
+            }
+        })
+    }
+}
+
+impl<K: NumericId, V> Drop for DenseIdMap<K, V> {
+    fn drop(&mut self) {
+        // Drop all initialized values
+        for i in 0..self.data.len() {
+            if is_bit_set(&self.bitset, i) {
+                // SAFETY: The bitset indicates this slot is initialized
+                unsafe {
+                    self.data[i].assume_init_drop();
+                }
+            }
+        }
     }
 }
 
@@ -267,12 +432,12 @@ impl<K, V: Clone> Clone for IdVec<K, V> {
 
 /// Like a [`DenseIdMap`], but supports freeing (and reusing) slots.
 #[derive(Clone)]
-pub struct DenseIdMapWithReuse<K, V> {
+pub struct DenseIdMapWithReuse<K: NumericId, V> {
     data: DenseIdMap<K, V>,
     free: Vec<K>,
 }
 
-impl<K, V> Default for DenseIdMapWithReuse<K, V> {
+impl<K: NumericId, V> Default for DenseIdMapWithReuse<K, V> {
     fn default() -> Self {
         Self {
             data: Default::default(),
