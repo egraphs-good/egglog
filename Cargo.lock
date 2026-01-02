@@ -606,6 +606,7 @@ name = "egglog-numeric-id"
 version = "1.0.0"
 dependencies = [
  "rayon",
+ "smallvec",
 ]
 
 [[package]]
