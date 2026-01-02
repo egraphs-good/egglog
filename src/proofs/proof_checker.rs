@@ -131,18 +131,40 @@ fn eval_expr_with_subst(
                     reason: format!("Variable {} not found in substitution", var.name),
                 })?
         }
-        ResolvedExpr::Call(_, head, args) => {
-            let mut arg_terms = Vec::new();
-            for arg in args {
-                let (arg_term, arg_props) =
-                    eval_expr_with_subst(proof_id, rule_name, arg, dag, subst)?;
-                arg_terms.push(arg_term);
-                propositions.extend(arg_props);
+        ResolvedExpr::Call(_, head, args) => match head {
+            ResolvedCall::Func(_func_type) => {
+                let mut arg_terms = Vec::new();
+                for arg in args {
+                    let (arg_term, arg_props) =
+                        eval_expr_with_subst(proof_id, rule_name, arg, dag, subst)?;
+                    arg_terms.push(arg_term);
+                    propositions.extend(arg_props);
+                }
+                let term_refs: Vec<Term> =
+                    arg_terms.iter().map(|&tid| dag.get(tid).clone()).collect();
+                let term = dag.app(head.name().to_string(), term_refs);
+                dag.lookup(&term)
             }
-            let term_refs: Vec<Term> = arg_terms.iter().map(|&tid| dag.get(tid).clone()).collect();
-            let term = dag.app(head.name().to_string(), term_refs);
-            dag.lookup(&term)
-        }
+            ResolvedCall::Primitive(specialized_primitive) => {
+                // run validator, throwing error if it fails
+                let mut arg_terms = Vec::new();
+                for arg in args {
+                    let (arg_term, arg_props) =
+                        eval_expr_with_subst(proof_id, rule_name, arg, dag, subst)?;
+                    arg_terms.push(arg_term);
+                    propositions.extend(arg_props);
+                }
+                // checked by earlier code showing this program supports proofs
+                let validator = specialized_primitive
+                    .validator()
+                    .expect("Expected primitive to have validator since proof mode is enabled");
+                validator(dag, &arg_terms).ok_or(ProofCheckError::PrimitiveValidationFailed {
+                    proof_id,
+                    function_name: specialized_primitive.name().to_string(),
+                    reason: "Primitive validator failed".to_string(),
+                })?
+            }
+        },
     };
 
     // Add reflexive equality for this term and all its subterms
@@ -694,6 +716,7 @@ impl ProofStore {
 
                 Ok(())
             }
+            // For a plain expr, the proof should have the form t1 = t2 where t2 matches the expr under substitution
             ResolvedFact::Fact(expr) => {
                 let fact_term = self
                     .eval_expr_with_subst(proof_id, rule_name, expr, substitution)
@@ -703,8 +726,7 @@ impl ProofStore {
                         reason: "Failed to evaluate Fact expression under substitution".to_string(),
                     })?;
 
-                // For a Fact, we expect lhs == rhs == fact_term (reflexive equality)
-                if fact_term != *lhs || fact_term != *rhs {
+                if fact_term != *rhs {
                     return Err(ProofCheckError::RuleSubstitutionMismatch {
                         proof_id,
                         rule_name: rule_name.to_string(),
