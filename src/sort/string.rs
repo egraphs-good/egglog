@@ -12,14 +12,17 @@ impl BaseSort for StringSort {
 
     #[rustfmt::skip]
     fn register_primitives(&self, eg: &mut EGraph) {
-        let string_concat_validator = |termdag: &TermDag, args: &[TermId], result: TermId| -> bool {
-            let Term::Lit(Literal::String(result_str)) = termdag.get(result) else { return false };
+        let string_concat_validator = |termdag: &mut TermDag, args: &[TermId]| -> Option<TermId> {
             let mut concatenated = String::new();
             for &arg in args {
-                let Term::Lit(Literal::String(s)) = termdag.get(arg) else { return false };
+                let Term::Lit(Literal::String(s)) = termdag.get(arg) else { 
+                    return None;
+                };
                 concatenated.push_str(s.as_str());
             }
-            result_str.as_str() == concatenated
+            let result_lit = Literal::String(concatenated.into());
+            let result_term = termdag.lit(result_lit);
+            Some(termdag.lookup(&result_term))
         };
         add_primitive_with_validator!(eg, "+" = [xs: S] -> S {{
             let mut y = String::new();

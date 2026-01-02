@@ -1,5 +1,5 @@
 use crate::{
-    Term, TermDag, TermId,
+    Term, TermDag, TermId, Value,
     ast::{
         FunctionSubtype, GenericAction, GenericNCommand, ResolvedExpr, ResolvedFact,
         ResolvedNCommand,
@@ -351,7 +351,14 @@ impl ProofStore {
 
                 // Verify that premises match the rule body under the substitution
                 for (fact, prop) in rule.body.iter().zip(premise_propositions.iter()) {
-                    self.check_fact_matches_proposition(fact, prop, substitution, proof_id, name)?;
+                    self.check_fact_matches_proposition(
+                        fact,
+                        prop,
+                        substitution,
+                        proof_id,
+                        name,
+                        program,
+                    )?;
                 }
 
                 // Verify that the conclusion matches what the rule produces
@@ -535,7 +542,7 @@ impl ProofStore {
         result
     }
 
-    /// Check that a fact matches a proposition under a substitution
+    /// Check that a fact matches a proposition under a substitution  
     fn check_fact_matches_proposition(
         &self,
         fact: &ResolvedFact,
@@ -543,6 +550,7 @@ impl ProofStore {
         substitution: &HashMap<String, TermId>,
         proof_id: ProofId,
         rule_name: &str,
+        program: &[ResolvedNCommand],
     ) -> Result<(), ProofCheckError> {
         let Proposition::TermsEq(lhs, rhs) = prop;
         match fact {
@@ -551,7 +559,15 @@ impl ProofStore {
             ResolvedFact::Eq(
                 _,
                 ResolvedExpr::Var(_, v),
-                ResolvedExpr::Call(_, ResolvedCall::Func(FuncType { subtype: FunctionSubtype::Custom, name, ..}), args)
+                ResolvedExpr::Call(
+                    _,
+                    ResolvedCall::Func(FuncType {
+                        subtype: FunctionSubtype::Custom,
+                        name,
+                        ..
+                    }),
+                    args,
+                ),
             ) => {
                 // Get the output variable's term
                 let var_term = substitution.get(&v.name).copied().ok_or_else(|| {
@@ -596,13 +612,15 @@ impl ProofStore {
                 Ok(())
             }
             ResolvedFact::Eq(_, lhs_expr, rhs_expr) => {
-                let fact_lhs = self.eval_expr_with_subst(lhs_expr,  substitution)
+                let fact_lhs = self
+                    .eval_expr_with_subst(lhs_expr, substitution)
                     .map_err(|_| ProofCheckError::RuleSubstitutionMismatch {
                         proof_id,
                         rule_name: rule_name.to_string(),
                         reason: "Failed to evaluate LHS expression under substitution".to_string(),
                     })?;
-                let fact_rhs = self.eval_expr_with_subst(rhs_expr,  substitution)
+                let fact_rhs = self
+                    .eval_expr_with_subst(rhs_expr, substitution)
                     .map_err(|_| ProofCheckError::RuleSubstitutionMismatch {
                         proof_id,
                         rule_name: rule_name.to_string(),
@@ -623,12 +641,13 @@ impl ProofStore {
                 Ok(())
             }
             ResolvedFact::Fact(expr) => {
-                let fact_term = self.eval_expr_with_subst(expr,  substitution)
-                    .map_err(|_| ProofCheckError::RuleSubstitutionMismatch {
+                let fact_term = self.eval_expr_with_subst(expr, substitution).map_err(|_| {
+                    ProofCheckError::RuleSubstitutionMismatch {
                         proof_id,
                         rule_name: rule_name.to_string(),
                         reason: "Failed to evaluate Fact expression under substitution".to_string(),
-                    })?;
+                    }
+                })?;
 
                 // For a Fact, we expect lhs == rhs == fact_term
                 if fact_term != *lhs || fact_term != *rhs {
@@ -667,17 +686,41 @@ impl ProofStore {
                 }
             }),
             ResolvedExpr::Call(_, head, args) => {
+                // Evaluate all arguments first
                 let mut arg_terms = Vec::new();
                 for arg in args {
                     arg_terms.push(self.eval_expr_with_subst(arg, substitution)?);
                 }
-                let term_refs: Vec<Term> = arg_terms
-                    .iter()
-                    .map(|&tid| self.term_dag.get(tid).clone())
-                    .collect();
-                let mut temp_dag = self.term_dag.clone();
-                let term = temp_dag.app(head.name().to_string(), term_refs);
-                Ok(temp_dag.lookup(&term))
+
+                match head {
+                    ResolvedCall::Primitive(prim) => {
+                        let validator = prim.validator();
+                        todo!()
+                    }
+                    ResolvedCall::Func(func) => {
+                        match func.subtype {
+                            FunctionSubtype::Constructor => {
+                                // Constructors: build the term normally
+                                let term_refs: Vec<Term> = arg_terms
+                                    .iter()
+                                    .map(|&tid| self.term_dag.get(tid).clone())
+                                    .collect();
+                                let mut temp_dag = self.term_dag.clone();
+                                let term = temp_dag.app(func.name.clone(), term_refs);
+                                Ok(temp_dag.lookup(&term))
+                            }
+                            FunctionSubtype::Custom => {
+                                // Custom functions should not appear in proof normal form!
+                                // They should be in the form (= v (f args...)) in the rule body
+                                panic!(
+                                    "Custom function {} should not appear in expression evaluation during proof checking. \
+                                    Functions should be in proof normal form: (= output_var (function args...))",
+                                    func.name
+                                );
+                            }
+                        }
+                    }
+                }
             }
         }
     }
