@@ -165,8 +165,6 @@ fn add_subterm_reflexive_equalities(
 /// without using globals (i.e., all global references are replaced with their definitions).
 ///
 /// This expects the program to be in proof normalized form where globals appear as Let actions.
-///
-/// DEPRECATED: Use `process_actions` instead for more comprehensive context.
 pub(crate) fn gather_globals(
     prog: &[ResolvedNCommand],
     term_dag: &mut TermDag,
@@ -329,6 +327,20 @@ impl ProofCheckContext {
     fn in_globals(&self, lhs: TermId, rhs: TermId) -> bool {
         self.global_equalities.contains(&(lhs, rhs))
     }
+}
+
+/// Helper function to format a term with let bindings
+fn format_term(term_dag: &TermDag, term_id: TermId) -> String {
+    term_dag.to_string_with_let(&mut SymbolGen::new("".to_string()), term_id)
+}
+
+/// Helper function to format a substitution as a string
+fn format_substitution(term_dag: &TermDag, substitution: &HashMap<String, TermId>) -> String {
+    substitution
+        .iter()
+        .map(|(k, v)| format!("{} -> {}", k, format_term(term_dag, *v)))
+        .collect::<Vec<_>>()
+        .join(", ")
 }
 
 impl ProofStore {
@@ -711,30 +723,17 @@ impl ProofStore {
                     }
                 })?;
 
-                // For a Fact, we expect lhs == rhs == fact_term
-                if fact_term != *rhs {
-                    let rhs_str = self
-                        .term_dag
-                        .to_string_with_let(&mut SymbolGen::new("".to_string()), *rhs);
-                    let subst_strs = substitution
-                        .iter()
-                        .map(|(k, v)| {
-                            let term_str = self
-                                .term_dag
-                                .to_string_with_let(&mut SymbolGen::new("".to_string()), *v);
-                            format!("{} -> {}", k, term_str)
-                        })
-                        .collect::<Vec<_>>()
-                        .join(", ");
-                    let expected_str = self
-                        .term_dag
-                        .to_string_with_let(&mut SymbolGen::new("".to_string()), fact_term);
+                // For a Fact, we expect lhs == rhs == fact_term (reflexive equality)
+                if fact_term != *lhs || fact_term != *rhs {
                     return Err(ProofCheckError::RuleSubstitutionMismatch {
                         proof_id,
                         rule_name: rule_name.to_string(),
                         reason: format!(
-                            "Fact {fact} does not match proposition under substitution {}. Got {}, expected {}.",
-                            subst_strs, rhs_str, expected_str
+                            "Fact {} does not match proposition under substitution {}. Got {}, expected {}.",
+                            fact,
+                            format_substitution(&self.term_dag, substitution),
+                            format_term(&self.term_dag, *rhs),
+                            format_term(&self.term_dag, fact_term)
                         ),
                     });
                 }
@@ -831,58 +830,71 @@ impl ProofStore {
         proof_id: ProofId,
         rule_name: &str,
     ) -> Result<(), ProofCheckError> {
-        // Evaluate all actions in the rule head and collect the propositions they produce
-        let mut propositions = HashSet::default();
-
-        for action in &rule.head.0 {
-            match action {
-                GenericAction::Union(_, lhs_expr, rhs_expr) => {
-                    // Evaluate both sides and create equality propositions
-                    if let (Ok(lhs_term), Ok(rhs_term)) = (
-                        self.eval_expr_with_subst(lhs_expr, substitution),
-                        self.eval_expr_with_subst(rhs_expr, substitution),
-                    ) {
-                        // Union creates bidirectional equality
-                        propositions.insert((lhs_term, rhs_term));
-                        propositions.insert((rhs_term, lhs_term));
-                        // Add reflexive equalities
-                        propositions.insert((lhs_term, lhs_term));
-                        propositions.insert((rhs_term, rhs_term));
-                    }
-                }
-                GenericAction::Expr(_, expr) => {
-                    // Expr creates reflexive equality
-                    if let Ok(term) = self.eval_expr_with_subst(expr, substitution) {
-                        propositions.insert((term, term));
-                    }
-                }
-                _ => {
-                    // Other action types don't produce equalities we need to check
-                }
-            }
-        }
+        // Use process_actions to get propositions from the rule head
+        // Note: process_actions expects global variable bindings, but substitution
+        // has the same structure, so we can pass it directly
+        let action_refs: Vec<&GenericAction<ResolvedCall, crate::ast::ResolvedVar>> =
+            rule.head.0.iter().collect();
+        let action_ctx = process_actions_with_substitution(&action_refs, &mut self.term_dag, substitution);
 
         // Check if the claimed equality is in the propositions
-        if propositions.contains(&(claimed_lhs, claimed_rhs))
-            || propositions.contains(&(claimed_rhs, claimed_lhs))
+        if action_ctx.propositions.contains(&(claimed_lhs, claimed_rhs))
+            || action_ctx.propositions.contains(&(claimed_rhs, claimed_lhs))
         {
             return Ok(());
         }
 
-        // If not found, provide detailed error message
-        let lhs_str = self
-            .term_dag
-            .to_string_with_let(&mut SymbolGen::new("".to_string()), claimed_lhs);
-        let rhs_str = self
-            .term_dag
-            .to_string_with_let(&mut SymbolGen::new("".to_string()), claimed_rhs);
-
+        // If not found, provide detailed error message using helper functions
         Err(ProofCheckError::RuleSubstitutionMismatch {
             proof_id,
             rule_name: rule_name.to_string(),
             reason: format!(
-                "Rule head doesn't produce claimed equality Lhs:\n{lhs_str}\nRHS:\n{rhs_str}",
+                "Rule head doesn't produce claimed equality Lhs:\n{}\nRHS:\n{}\nSUBST:\n{}",
+                format_term(&self.term_dag, claimed_lhs),
+                format_term(&self.term_dag, claimed_rhs),
+                format_substitution(&self.term_dag, substitution)
             ),
         })
+    }
+}
+
+/// Process actions with a substitution map (used for rule checking)
+/// This is like process_actions but treats the map as a substitution rather than globals
+fn process_actions_with_substitution(
+    actions: &[&GenericAction<ResolvedCall, crate::ast::ResolvedVar>],
+    term_dag: &mut TermDag,
+    substitution: &HashMap<String, TermId>,
+) -> ActionContext {
+    let mut propositions = HashSet::default();
+
+    for action in actions {
+        match action {
+            GenericAction::Union(_, lhs_expr, rhs_expr) => {
+                // Union creates ground equalities
+                if let (Ok((lhs_term, lhs_props)), Ok((rhs_term, rhs_props))) = (
+                    eval_expr_with_globals(lhs_expr, term_dag, substitution),
+                    eval_expr_with_globals(rhs_expr, term_dag, substitution),
+                ) {
+                    propositions.extend(lhs_props);
+                    propositions.extend(rhs_props);
+                    propositions.insert((lhs_term, rhs_term));
+                    propositions.insert((rhs_term, lhs_term));
+                }
+            }
+            GenericAction::Expr(_, expr) => {
+                // Expr creates reflexive equality
+                if let Ok((_, new_props)) = eval_expr_with_globals(expr, term_dag, substitution) {
+                    propositions.extend(new_props);
+                }
+            }
+            _ => {
+                // Other action types don't produce propositions we need
+            }
+        }
+    }
+
+    ActionContext {
+        var_bindings: HashMap::default(), // Not needed for rule checking
+        propositions,
     }
 }
