@@ -351,9 +351,15 @@ impl Default for EGraph {
         eg.type_info.add_presort::<FunctionSort>(span!()).unwrap();
         eg.type_info.add_presort::<MultiSetSort>(span!()).unwrap();
 
-        // Add != with a validator that checks inequality
-        let neq_validator = |_termdag: &TermDag, args: &[TermId], _result_term: TermId| -> bool {
-            args.len() == 2 && args[0] != args[1]
+        // Add != with a validator that computes inequality result
+        let neq_validator = |termdag: &mut TermDag, args: &[TermId]| -> Option<TermId> {
+            if args.len() == 2 && args[0] != args[1] {
+                // Return unit literal for successful inequality
+                let unit_term = termdag.lit(Literal::Unit);
+                Some(termdag.lookup(&unit_term))
+            } else {
+                None
+            }
         };
         add_primitive_with_validator!(
             &mut eg,

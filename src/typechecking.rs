@@ -51,7 +51,7 @@ impl Hash for FuncType {
 }
 /// Primitive validators
 /// Validators take a termdag, arguments, and expected term id and return true if the computation is correct.
-pub type PrimitiveValidator = Arc<dyn Fn(&TermDag, &[TermId], TermId) -> bool + Send + Sync>;
+pub type PrimitiveValidator = Arc<dyn Fn(&mut TermDag, &[TermId]) -> Option<TermId> + Send + Sync>;
 
 #[derive(Clone)]
 pub struct PrimitiveWithId {

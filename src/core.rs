@@ -68,9 +68,17 @@ impl SpecializedPrimitive {
         self.prim_with_id.id
     }
 
-    /// Check if this primitive has a validator
-    pub fn has_validator(&self) -> bool {
-        self.prim_with_id.validator.is_some()
+    /// Get the validator function of this primitive, if any
+    pub fn validator(
+        &self,
+    ) -> Option<
+        &Arc<
+            dyn for<'a, 'b> std::ops::Fn(&'a mut termdag::TermDag, &'b [TermId]) -> Option<TermId>
+                + Send
+                + Sync,
+        >,
+    > {
+        self.prim_with_id.validator.as_ref()
     }
 }
 

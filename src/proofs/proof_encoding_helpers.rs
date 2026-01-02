@@ -3,8 +3,8 @@ use std::path::Path;
 use crate::{
     EGraph, TypeInfo,
     ast::{
-        Command, Fact, GenericCommand, ResolvedAction, ResolvedCommand, 
-        ResolvedExpr, ResolvedExprExt, Schedule,
+        Command, Fact, GenericCommand, ResolvedAction, ResolvedCommand, ResolvedExpr,
+        ResolvedExprExt, Schedule,
     },
     proofs::proof_encoding::ProofInstrumentor,
     util::{FreshGen, HashMap, SymbolGen},
@@ -360,13 +360,13 @@ fn commands_support_proof_encoding(commands: &[ResolvedCommand], type_info: &Typ
 fn expr_primitives_have_validators(expr: &ResolvedExpr) -> bool {
     use crate::ast::GenericExpr;
     use crate::core::ResolvedCall;
-    
+
     match expr {
         GenericExpr::Lit(_, _) | GenericExpr::Var(_, _) => true,
         GenericExpr::Call(_, call, args) => {
             // Check if this call is a primitive without a validator
             if let ResolvedCall::Primitive(prim) = call {
-                if !prim.has_validator() {
+                if !prim.validator().is_some() {
                     return false;
                 }
             }
@@ -385,11 +385,11 @@ pub fn command_supports_proof_encoding(command: &ResolvedCommand, type_info: &Ty
         }
         expr
     });
-    
+
     if !all_primitives_have_validators {
         return false;
     }
-    
+
     // Now check command-specific constraints
     match command {
         GenericCommand::Sort(_, _, Some(_))

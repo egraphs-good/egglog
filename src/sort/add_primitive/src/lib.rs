@@ -517,10 +517,12 @@ pub fn add_literal_prim(input: TokenStream) -> TokenStream {
     
     // Create the validator expression
     let validator_expr = syn::parse2::<Expr>(quote! {
-        |termdag: &::egglog::TermDag, args: &[::egglog::TermId], expected: ::egglog::TermId| -> bool {
+        |termdag: &mut ::egglog::TermDag, args: &[::egglog::TermId]| -> Option<::egglog::TermId> {
             use egglog::termdag::Term;
             use egglog_ast::generic_ast::Literal;
-            #validator_body
+            Some({
+                #validator_body
+            })
         }
     }).unwrap();
     
@@ -528,7 +530,7 @@ pub fn add_literal_prim(input: TokenStream) -> TokenStream {
     build_add_primitive_impl(parsed, Some(validator_expr))
 }
 
-// Helper function to generate literal validator
+// Helper function to generate literal validator that computes results
 fn generate_literal_validator(
     args: &[Arg],
     ret: &Type,
@@ -543,14 +545,14 @@ fn generate_literal_validator(
                 let #x = if let Term::Lit(lit) = termdag.get(args[#i]) {
                     match <#ty as egglog::prelude::LiteralConvertible>::from_literal(lit) {
                         Some(val) => val,
-                        None => return false,
+                        None => panic!("Failed to extract literal for argument {}", #i),
                     }
                 } else {
-                    return false;
+                    panic!("Argument {} is not a literal", #i);
                 };
             }
         } else {
-            quote!(return false;)
+            quote!(panic!("Polymorphic arguments not supported for literal primitives");)
         }
     });
 
@@ -561,29 +563,25 @@ fn generate_literal_validator(
         quote!(|_| panic!("Polymorphic types not supported for literal primitives"))
     };
 
-    // Generate the body execution and comparison
+    // Generate the body execution and result creation
     let body_exec = if is_fallible {
         quote! {
             let result: Option<_> = #body;
             match result {
                 Some(result) => {
-                    let expected_lit = #ret_conv(result);
-                    if let Term::Lit(actual_lit) = termdag.get(expected) {
-                        return expected_lit == *actual_lit;
-                    }
-                    return false;
+                    let result_lit = #ret_conv(result);
+                    let result_term = termdag.lit(result_lit);
+                    termdag.lookup(&result_term)
                 }
-                None => return false,
+                None => panic!("Primitive operation failed"),
             }
         }
     } else {
         quote! {
             let result = #body;
-            let expected_lit = #ret_conv(result);
-            if let Term::Lit(actual_lit) = termdag.get(expected) {
-                return expected_lit == *actual_lit;
-            }
-            return false;
+            let result_lit = #ret_conv(result);
+            let result_term = termdag.lit(result_lit);
+            termdag.lookup(&result_term)
         }
     };
 
