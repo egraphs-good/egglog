@@ -367,6 +367,9 @@ impl ProofStore {
         proof_id
     }
 
+    /// For a given rule and premise proofs, compute the substitution used in the rule application.
+    /// The proof has enough information to compute the substitution, we do it here
+    /// for convenience.
     fn compute_rule_substitution(
         &self,
         prog: &[ResolvedNCommand],
@@ -598,8 +601,8 @@ impl ProofStore {
                 substitution,
             } => {
                 let equality = make_equality(dag, proof.lhs, proof.rhs);
-                let name_child = dag.var(name.clone());
-                let name_term = dag.app("name".to_string(), vec![name_child]);
+                let name_literal = dag.lit(Literal::String(name.clone()));
+                let name_term = dag.app("name".to_string(), vec![name_literal]);
 
                 let premise_terms: Vec<Term> = premise_proofs
                     .iter()
