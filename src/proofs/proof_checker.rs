@@ -546,14 +546,54 @@ impl ProofStore {
     ) -> Result<(), ProofCheckError> {
         let Proposition::TermsEq(lhs, rhs) = prop;
         match fact {
-            // proof normal form for functions
+            // proof normal form for functions: (= v (f args...))
+            // In the term representation, custom functions store output as last arg: f(args..., v)
             ResolvedFact::Eq(
                 _,
                 ResolvedExpr::Var(_, v),
-                ResolvedExpr::Call(_, ResolvedCall::Func(FuncType { subtype: FunctionSubtype::Custom, ..}), args)
+                ResolvedExpr::Call(_, ResolvedCall::Func(FuncType { subtype: FunctionSubtype::Custom, name, ..}), args)
             ) => {
-                // Evaluate both and put v as the last child of the call
-                todo!()
+                // Get the output variable's term
+                let var_term = substitution.get(&v.name).copied().ok_or_else(|| {
+                    ProofCheckError::RuleSubstitutionMismatch {
+                        proof_id,
+                        rule_name: rule_name.to_string(),
+                        reason: format!("Variable {} not in substitution", v.name),
+                    }
+                })?;
+
+                // Evaluate all the input arguments
+                let mut arg_terms = Vec::new();
+                for arg in args {
+                    arg_terms.push(self.eval_expr_with_subst(arg, substitution)?);
+                }
+                // Add the output variable as the last argument
+                arg_terms.push(var_term);
+
+                // Build the expected term: func(args..., output)
+                let term_refs: Vec<Term> = arg_terms
+                    .iter()
+                    .map(|&tid| self.term_dag.get(tid).clone())
+                    .collect();
+                let mut temp_dag = self.term_dag.clone();
+                let expected_term = temp_dag.app(name.clone(), term_refs);
+                let expected_term_id = temp_dag.lookup(&expected_term);
+
+                // The proposition should be a reflexive equality for this term
+                if *lhs != expected_term_id || *rhs != expected_term_id {
+                    return Err(ProofCheckError::RuleSubstitutionMismatch {
+                        proof_id,
+                        rule_name: rule_name.to_string(),
+                        reason: format!(
+                            "Function fact does not match proposition: expected reflexive equality for {:?}, got {:?} = {:?}",
+                            temp_dag.get(expected_term_id),
+                            self.term_dag.get(*lhs),
+                            self.term_dag.get(*rhs)
+                        ),
+                    });
+                }
+
+                Ok(())
             }
             ResolvedFact::Eq(_, lhs_expr, rhs_expr) => {
                 let fact_lhs = self.eval_expr_with_subst(lhs_expr,  substitution)
