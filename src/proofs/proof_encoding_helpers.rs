@@ -377,6 +377,20 @@ fn expr_primitives_have_validators(expr: &ResolvedExpr) -> bool {
 }
 
 pub fn command_supports_proof_encoding(command: &ResolvedCommand, type_info: &TypeInfo) -> bool {
+    // First, use visit_exprs to check all expressions in the command
+    let mut all_primitives_have_validators = true;
+    command.clone().visit_exprs(&mut |expr| {
+        if !expr_primitives_have_validators(&expr) {
+            all_primitives_have_validators = false;
+        }
+        expr
+    });
+    
+    if !all_primitives_have_validators {
+        return false;
+    }
+    
+    // Now check command-specific constraints
     match command {
         GenericCommand::Sort(_, _, Some(_))
         | GenericCommand::UserDefined(..)
@@ -391,75 +405,16 @@ pub fn command_supports_proof_encoding(command: &ResolvedCommand, type_info: &Ty
             }
             false
         }
-        // Function with merge expression
-        GenericCommand::Function { merge: Some(expr), .. } => {
-            expr_primitives_have_validators(expr)
+        // let binding with non-eq sort not supported by proof_global_desugar
+        ResolvedCommand::Action(ResolvedAction::Let(_, _, expr)) => {
+            // let binding with non-eq sort not supported by proof_global_desugar
+            // we detect as setting something that is no-merge to a primitive not supported (global primitive binding)
+            expr.output_type().is_eq_sort()
         }
-        // Rules contain facts (which have expressions) and actions
-        GenericCommand::Rule { rule } => {
-            rule.body.iter().all(fact_primitives_have_validators)
-                && rule.head.0.iter().all(|action| action_primitives_have_validators(action, type_info))
+        // After global desugar it may look like this
+        ResolvedCommand::Action(ResolvedAction::Set(_span, head, _children, expr)) => {
+            !type_info.is_global(head.name()) || expr.output_type().is_eq_sort()
         }
-        // Rewrite contains lhs, rhs expressions and conditions (facts)
-        GenericCommand::Rewrite(_, rewrite, _) | GenericCommand::BiRewrite(_, rewrite) => {
-            expr_primitives_have_validators(&rewrite.lhs)
-                && expr_primitives_have_validators(&rewrite.rhs)
-                && rewrite.conditions.iter().all(fact_primitives_have_validators)
-        }
-        // Check that all actions have validators for their primitives
-        ResolvedCommand::Action(action) => action_primitives_have_validators(action, type_info),
-        // Extract contains two expressions
-        GenericCommand::Extract(_, expr1, expr2) => {
-            expr_primitives_have_validators(expr1) && expr_primitives_have_validators(expr2)
-        }
-        // Check and Prove contain facts
-        GenericCommand::Check(_, facts) | GenericCommand::Prove(_, facts) => {
-            facts.iter().all(fact_primitives_have_validators)
-        }
-        // Output contains expressions
-        GenericCommand::Output { exprs, .. } => {
-            exprs.iter().all(expr_primitives_have_validators)
-        }
-        // Fail wraps another command
-        GenericCommand::Fail(_, cmd) => command_supports_proof_encoding(cmd, type_info),
         _ => true,
     }
 }
-
-/// Check if a fact's expressions all have primitives with validators
-fn fact_primitives_have_validators(fact: &Fact) -> bool {
-    use crate::ast::GenericFact;
-    match fact {
-        GenericFact::Eq(_, expr1, expr2) => {
-            expr_primitives_have_validators(expr1) && expr_primitives_have_validators(expr2)
-        }
-        GenericFact::Fact(expr) => expr_primitives_have_validators(expr),
-    }
-}
-
-/// Check if an action's expressions all have primitives with validators
-fn action_primitives_have_validators(action: &ResolvedAction, type_info: &TypeInfo) -> bool {
-    use crate::ast::GenericAction;
-    
-    match action {
-        // let binding with non-eq sort not supported by proof_global_desugar
-        GenericAction::Let(_, _, expr) => {
-            expr.output_type().is_eq_sort() && expr_primitives_have_validators(expr)
-        }
-        // After global desugar it may look like this
-        GenericAction::Set(_span, head, children, expr) => {
-            (!type_info.is_global(head.name()) || expr.output_type().is_eq_sort())
-                && children.iter().all(expr_primitives_have_validators)
-                && expr_primitives_have_validators(expr)
-        }
-        GenericAction::Change(_, _, _, children) => {
-            children.iter().all(expr_primitives_have_validators)
-        }
-        GenericAction::Union(_, expr1, expr2) => {
-            expr_primitives_have_validators(expr1) && expr_primitives_have_validators(expr2)
-        }
-        GenericAction::Expr(_, expr) => expr_primitives_have_validators(expr),
-        GenericAction::Panic(_, _) => true,
-    }
-}
-

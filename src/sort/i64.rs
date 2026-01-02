@@ -41,10 +41,33 @@ impl BaseSort for I64Sort {
 
         add_literal_prim!(eg, "log2" = |a: i64| -> i64 { a.ilog2() as i64 });
 
-        add_primitive!(eg, "<" = |a: i64, b: i64| -?> () { (a < b).then_some(()) });
-        add_primitive!(eg, ">" = |a: i64, b: i64| -?> () { (a > b).then_some(()) });
-        add_primitive!(eg, "<=" = |a: i64, b: i64| -?> () { (a <= b).then_some(()) });
-        add_primitive!(eg, ">=" = |a: i64, b: i64| -?> () { (a >= b).then_some(()) });
+        let less_than_validator = |termdag: &TermDag, args: &[TermId], _result: TermId| -> bool {
+            let Term::Lit(Literal::Int(a)) = termdag.get(args[0]) else { return false };
+            let Term::Lit(Literal::Int(b)) = termdag.get(args[1]) else { return false };
+            a < b
+        };
+        add_primitive_with_validator!(eg, "<" = |a: i64, b: i64| -?> () { (a < b).then_some(()) }, less_than_validator);
+
+        let greater_than_validator = |termdag: &TermDag, args: &[TermId], _result: TermId| -> bool {
+            let Term::Lit(Literal::Int(a)) = termdag.get(args[0]) else { return false };
+            let Term::Lit(Literal::Int(b)) = termdag.get(args[1]) else { return false };
+            a > b
+        };
+        add_primitive_with_validator!(eg, ">" = |a: i64, b: i64| -?> () { (a > b).then_some(()) }, greater_than_validator);
+
+        let less_equal_validator = |termdag: &TermDag, args: &[TermId], _result: TermId| -> bool {
+            let Term::Lit(Literal::Int(a)) = termdag.get(args[0]) else { return false };
+            let Term::Lit(Literal::Int(b)) = termdag.get(args[1]) else { return false };
+            a <= b
+        };
+        add_primitive_with_validator!(eg, "<=" = |a: i64, b: i64| -?> () { (a <= b).then_some(()) }, less_equal_validator);
+
+        let greater_equal_validator = |termdag: &TermDag, args: &[TermId], _result: TermId| -> bool {
+            let Term::Lit(Literal::Int(a)) = termdag.get(args[0]) else { return false };
+            let Term::Lit(Literal::Int(b)) = termdag.get(args[1]) else { return false };
+            a >= b
+        };
+        add_primitive_with_validator!(eg, ">=" = |a: i64, b: i64| -?> () { (a >= b).then_some(()) }, greater_equal_validator);
 
         add_literal_prim!(eg, "bool-=" = |a: i64, b: i64| -> bool { a == b });
         add_literal_prim!(eg, "bool-<" = |a: i64, b: i64| -> bool { a < b });
@@ -55,13 +78,28 @@ impl BaseSort for I64Sort {
         add_literal_prim!(eg, "min" = |a: i64, b: i64| -> i64 { a.min(b) });
         add_literal_prim!(eg, "max" = |a: i64, b: i64| -> i64 { a.max(b) });
 
-        add_primitive!(eg, "to-string" = |a: i64| -> S { S::new(a.to_string()) });
+        let to_string_validator = |termdag: &TermDag, args: &[TermId], result: TermId| -> bool {
+            let Term::Lit(Literal::Int(a)) = termdag.get(args[0]) else { return false };
+            let Term::Lit(Literal::String(s)) = termdag.get(result) else { return false };
+            s.as_str() == a.to_string()
+        };
+        add_primitive_with_validator!(eg, "to-string" = |a: i64| -> S { S::new(a.to_string()) }, to_string_validator);
 
         // Must be in the i64 sort register function because
         // the string sort is registered before the i64 sort.
-        add_primitive!(eg, "count-matches" = |a: S, b: S| -> i64 {
-            a.as_str().matches(b.as_str()).count() as i64
-        });
+        let count_matches_validator = |termdag: &TermDag, args: &[TermId], result: TermId| -> bool {
+            let Term::Lit(Literal::String(a)) = termdag.get(args[0]) else { return false };
+            let Term::Lit(Literal::String(b)) = termdag.get(args[1]) else { return false };
+            let Term::Lit(Literal::Int(count)) = termdag.get(result) else { return false };
+            *count == a.as_str().matches(b.as_str()).count() as i64
+        };
+        add_primitive_with_validator!(
+            eg,
+            "count-matches" = |a: S, b: S| -> i64 {
+                a.as_str().matches(b.as_str()).count() as i64
+            },
+            count_matches_validator
+        );
     }
 
     fn reconstruct_termdag(
