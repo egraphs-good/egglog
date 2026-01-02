@@ -112,7 +112,7 @@ impl<'a> ProofInstrumentor<'a> {
         );
 
         // Remove globals from the proof
-        proof_store.remove_globals(&self.egraph.desugared_commands);
+        proof_store.remove_globals(&self.egraph.desugared_commands, proof_id);
 
         // now every existence proof starts with a rule proof with a single premise, so extract that proof
         let proof = proof_store.get(proof_id);
