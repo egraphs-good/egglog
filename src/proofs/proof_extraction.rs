@@ -1,5 +1,6 @@
 use crate::ast::FunctionSubtype;
 use crate::extract::{Extractor, TreeAdditiveCostModel};
+use crate::proofs::proof_checker::ProofCheckError;
 use crate::proofs::proof_encoding::ProofInstrumentor;
 use crate::proofs::proof_format::{Justification, ProofId, ProofStore, proof_store_from_term};
 use crate::{ResolvedCall, TermDag};
@@ -17,6 +18,8 @@ pub enum ProveExistsError {
     ProofsDisabled,
     #[error("Could not find a proof due to query not matching (constructor {constructor}).")]
     QueryDidNotMatch { constructor: String },
+    #[error("Proof check failed: {0}")]
+    ProofCheckFailed(#[from] ProofCheckError),
 }
 
 impl<'a> ProofInstrumentor<'a> {
@@ -124,8 +127,14 @@ impl<'a> ProofInstrumentor<'a> {
             _ => panic!("expected rule justification for existence proof"),
         };
 
+        // Check the proof before simplification
+        proof_store.check_proof(premise_proof, &self.egraph.desugared_commands)?;
+
         // simplify the proof
         let simplified_proof = proof_store.simplify(premise_proof);
+
+        // Check the proof after simplification
+        proof_store.check_proof(simplified_proof, &self.egraph.desugared_commands)?;
 
         Ok((proof_store, simplified_proof))
     }
