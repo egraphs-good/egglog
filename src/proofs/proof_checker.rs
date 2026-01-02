@@ -41,10 +41,10 @@ pub(crate) fn gather_global_actions(
 ///    - Ground equalities from union statements (bidirectional)
 ///    - Reflexive equalities from set statements
 pub(crate) fn process_actions(
+    mut bindings: HashMap<String, TermId>,
     actions: &[&GenericAction<ResolvedCall, crate::ast::ResolvedVar>],
     term_dag: &mut TermDag,
 ) -> ActionContext {
-    let mut var_bindings = HashMap::default();
     let mut propositions = HashSet::default();
 
     // Single pass: process all actions, accumulating bindings and propositions
@@ -52,18 +52,16 @@ pub(crate) fn process_actions(
         match action {
             GenericAction::Let(_, var, expr) => {
                 // Evaluate the expression and collect propositions
-                if let Ok((term_id, new_props)) =
-                    eval_expr_with_globals(expr, term_dag, &var_bindings)
-                {
-                    var_bindings.insert(var.name.clone(), term_id);
+                if let Ok((term_id, new_props)) = eval_expr_with_subst(expr, term_dag, &bindings) {
+                    bindings.insert(var.name.clone(), term_id);
                     propositions.extend(new_props);
                 }
             }
             GenericAction::Union(_, lhs_expr, rhs_expr) => {
                 // Union creates ground equalities
                 if let (Ok((lhs_term, lhs_props)), Ok((rhs_term, rhs_props))) = (
-                    eval_expr_with_globals(lhs_expr, term_dag, &var_bindings),
-                    eval_expr_with_globals(rhs_expr, term_dag, &var_bindings),
+                    eval_expr_with_subst(lhs_expr, term_dag, &bindings),
+                    eval_expr_with_subst(rhs_expr, term_dag, &bindings),
                 ) {
                     // Collect propositions from evaluating both sides
                     propositions.extend(lhs_props);
@@ -78,38 +76,41 @@ pub(crate) fn process_actions(
                 let mut all_args = args.to_vec();
                 all_args.push(rhs.clone());
                 let call_expr = ResolvedExpr::Call(crate::ast::Span::Panic, func.clone(), all_args);
-                if let Ok((term, new_props)) =
-                    eval_expr_with_globals(&call_expr, term_dag, &var_bindings)
+                if let Ok((_term, new_props)) =
+                    eval_expr_with_subst(&call_expr, term_dag, &bindings)
                 {
                     propositions.extend(new_props);
                 }
             }
             GenericAction::Expr(_, expr) => {
                 // Expr creates reflexive equality for its result
-                if let Ok((_, new_props)) = eval_expr_with_globals(expr, term_dag, &var_bindings) {
+                if let Ok((_, new_props)) = eval_expr_with_subst(expr, term_dag, &bindings) {
                     propositions.extend(new_props);
                 }
             }
-            _ => {
-                // Other actions (Panic, Change) don't create propositions
+            GenericAction::Panic(_, _) => {
+                // Panics do not create propositions
+            }
+            GenericAction::Change(_, _, _, _) => {
+                // Changes do not create propositions
             }
         }
     }
 
     ActionContext {
-        var_bindings,
+        var_bindings: bindings,
         propositions,
     }
 }
 
-/// Evaluate an expression with global variable bindings resolved.
+/// Evaluate an expression under a substitution.
 /// Returns Ok((TermId, propositions)) if successful, where propositions include
 /// all reflexive equalities for the term and its subterms.
 /// Returns Err(()) if evaluation fails.
-fn eval_expr_with_globals(
+fn eval_expr_with_subst(
     expr: &ResolvedExpr,
     dag: &mut TermDag,
-    globals: &HashMap<String, TermId>,
+    subst: &HashMap<String, TermId>,
 ) -> Result<(TermId, HashSet<(TermId, TermId)>), ()> {
     let mut propositions = HashSet::default();
 
@@ -120,7 +121,7 @@ fn eval_expr_with_globals(
         }
         ResolvedExpr::Var(_, var) => {
             if var.is_global_ref {
-                globals.get(&var.name).copied().ok_or(())?
+                subst.get(&var.name).copied().ok_or(())?
             } else {
                 return Err(()); // Non-global variables not allowed in global context
             }
@@ -128,7 +129,7 @@ fn eval_expr_with_globals(
         ResolvedExpr::Call(_, head, args) => {
             let mut arg_terms = Vec::new();
             for arg in args {
-                let (arg_term, arg_props) = eval_expr_with_globals(arg, dag, globals)?;
+                let (arg_term, arg_props) = eval_expr_with_subst(arg, dag, subst)?;
                 arg_terms.push(arg_term);
                 propositions.extend(arg_props);
             }
@@ -170,7 +171,7 @@ pub(crate) fn gather_globals(
     term_dag: &mut TermDag,
 ) -> HashMap<String, TermId> {
     let actions = gather_global_actions(prog);
-    let ctx = process_actions(&actions, term_dag);
+    let ctx = process_actions(HashMap::default(), &actions, term_dag);
     ctx.var_bindings
 }
 
@@ -306,6 +307,8 @@ pub(crate) struct ProofCheckContext {
     /// Each entry is a pair (lhs, rhs) that was unified
     /// This includes reflexive equalities (term, term) for all globals
     global_equalities: HashSet<(TermId, TermId)>,
+    /// Map of global variable names to their TermIds
+    global_bindings: HashMap<String, TermId>,
     /// Cache of already-checked proofs
     checked_proofs: HashMap<ProofId, Proposition>,
 }
@@ -316,11 +319,12 @@ impl ProofCheckContext {
     fn new(prog: &[ResolvedNCommand], term_dag: &mut TermDag) -> Self {
         // Use the new refactored functions
         let actions = gather_global_actions(prog);
-        let action_ctx = process_actions(&actions, term_dag);
+        let action_ctx = process_actions(HashMap::default(), &actions, term_dag);
 
         ProofCheckContext {
             global_equalities: action_ctx.propositions,
             checked_proofs: HashMap::default(),
+            global_bindings: action_ctx.var_bindings,
         }
     }
 
@@ -435,6 +439,7 @@ impl ProofStore {
 
                 // Verify that the conclusion matches what the rule produces
                 self.check_rule_produces_equality(
+                    ctx,
                     rule,
                     substitution,
                     proof.lhs,
@@ -823,6 +828,7 @@ impl ProofStore {
     /// Check that a rule produces the claimed equality
     fn check_rule_produces_equality(
         &mut self,
+        ctx: &ProofCheckContext,
         rule: &crate::ast::GenericRule<ResolvedCall, crate::ast::ResolvedVar>,
         substitution: &HashMap<String, TermId>,
         claimed_lhs: TermId,
@@ -835,11 +841,17 @@ impl ProofStore {
         // has the same structure, so we can pass it directly
         let action_refs: Vec<&GenericAction<ResolvedCall, crate::ast::ResolvedVar>> =
             rule.head.0.iter().collect();
-        let action_ctx = process_actions_with_substitution(&action_refs, &mut self.term_dag, substitution);
+        let mut bindings = ctx.global_bindings.clone();
+        bindings.extend(substitution.clone());
+        let action_ctx = process_actions(bindings, &action_refs, &mut self.term_dag);
 
         // Check if the claimed equality is in the propositions
-        if action_ctx.propositions.contains(&(claimed_lhs, claimed_rhs))
-            || action_ctx.propositions.contains(&(claimed_rhs, claimed_lhs))
+        if action_ctx
+            .propositions
+            .contains(&(claimed_lhs, claimed_rhs))
+            || action_ctx
+                .propositions
+                .contains(&(claimed_rhs, claimed_lhs))
         {
             return Ok(());
         }
@@ -855,46 +867,5 @@ impl ProofStore {
                 format_substitution(&self.term_dag, substitution)
             ),
         })
-    }
-}
-
-/// Process actions with a substitution map (used for rule checking)
-/// This is like process_actions but treats the map as a substitution rather than globals
-fn process_actions_with_substitution(
-    actions: &[&GenericAction<ResolvedCall, crate::ast::ResolvedVar>],
-    term_dag: &mut TermDag,
-    substitution: &HashMap<String, TermId>,
-) -> ActionContext {
-    let mut propositions = HashSet::default();
-
-    for action in actions {
-        match action {
-            GenericAction::Union(_, lhs_expr, rhs_expr) => {
-                // Union creates ground equalities
-                if let (Ok((lhs_term, lhs_props)), Ok((rhs_term, rhs_props))) = (
-                    eval_expr_with_globals(lhs_expr, term_dag, substitution),
-                    eval_expr_with_globals(rhs_expr, term_dag, substitution),
-                ) {
-                    propositions.extend(lhs_props);
-                    propositions.extend(rhs_props);
-                    propositions.insert((lhs_term, rhs_term));
-                    propositions.insert((rhs_term, lhs_term));
-                }
-            }
-            GenericAction::Expr(_, expr) => {
-                // Expr creates reflexive equality
-                if let Ok((_, new_props)) = eval_expr_with_globals(expr, term_dag, substitution) {
-                    propositions.extend(new_props);
-                }
-            }
-            _ => {
-                // Other action types don't produce propositions we need
-            }
-        }
-    }
-
-    ActionContext {
-        var_bindings: HashMap::default(), // Not needed for rule checking
-        propositions,
     }
 }

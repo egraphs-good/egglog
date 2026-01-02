@@ -12,9 +12,9 @@ expression: snapshot
 (let t1 (substitution (a 2) (b 3)))
 (Trans
   (= (Add 2 3) (Num 5))
-  (Rule (= (Add 2 3) (Add 3 2)) (name rw1) t t1)
+  (Rule (= (Add 2 3) (Add 3 2)) (name "rw1") t t1)
   (Rule
     (= (Add 3 2) (Num 5))
-    (name rw2)
-    (premises (Rule (= (Add 3 2) (Add 2 3)) (name rw1) t t1) (Fiat (= () ())))
+    (name "rw2")
+    (premises (Rule (= (Add 3 2) (Add 2 3)) (name "rw1") t t1) (Fiat (= () ())))
     (substitution (a 3) (b 2))))

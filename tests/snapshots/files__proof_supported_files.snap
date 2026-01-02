@@ -22,7 +22,7 @@ merge-during-rebuild.egg
 merge-saturates.egg
 name-resolution.egg
 primitives.egg
-proofs/bind_prim_result.egg
+proofs/bind-prim-result.egg
 proofs/commute-collapse.egg
 proofs/global-prove-query.egg
 proofs/primitive-args.egg
