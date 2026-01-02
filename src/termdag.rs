@@ -183,9 +183,16 @@ impl TermDag {
         }
     }
 
+    /// Prints a term to a string, putting let bindings for shared subterms.
+    pub fn to_string_with_let(&self, fresh: &mut SymbolGen, term_id: TermId) -> String {
+        let mut buf = String::new();
+        let final_str = self.to_string_with_let_internal(fresh, term_id, &mut buf);
+        format!("{buf}\n{final_str}")
+    }
+
     /// Prints a term to a string, putting let bindings for shared subterms in `buf`.
     /// Returns the final string representation of the term.
-    pub(crate) fn to_string_with_let(
+    pub(crate) fn to_string_with_let_internal(
         &self,
         fresh: &mut SymbolGen,
         term_id: TermId,
@@ -500,7 +507,7 @@ mod tests {
         let (td, t) = parse_term(s);
         let mut buf = String::new();
         let mut sym = SymbolGen::new(String::new());
-        let repr = td.to_string_with_let(&mut sym, td.lookup(&t), &mut buf);
+        let repr = td.to_string_with_let_internal(&mut sym, td.lookup(&t), &mut buf);
         assert!(buf.is_empty(), "expected no let bindings, got {buf}");
         assert_eq!(repr, s);
     }
@@ -512,7 +519,7 @@ mod tests {
         let (td, t) = parse_term(&s);
         let mut buf = String::new();
         let mut sym = SymbolGen::new(String::new());
-        let repr = td.to_string_with_let(&mut sym, td.lookup(&t), &mut buf);
+        let repr = td.to_string_with_let_internal(&mut sym, td.lookup(&t), &mut buf);
         let first_line = buf.lines().next().expect("expected let binding");
         assert!(first_line.starts_with("(let t"));
         assert!(buf.contains("(h"));
@@ -531,7 +538,7 @@ mod tests {
         let (td, t) = parse_term(s);
         let mut buf = String::new();
         let mut sym = SymbolGen::new(String::new());
-        let repr = td.to_string_with_let(&mut sym, td.lookup(&t), &mut buf);
+        let repr = td.to_string_with_let_internal(&mut sym, td.lookup(&t), &mut buf);
         assert!(buf.is_empty());
         assert!(repr.contains('\n'));
         assert!(repr.contains("\n  "));
@@ -544,7 +551,7 @@ mod tests {
         let (td, t) = parse_term(expr);
         let mut buf = String::new();
         let mut sym = SymbolGen::new(String::new());
-        let repr = td.to_string_with_let(&mut sym, td.lookup(&t), &mut buf);
+        let repr = td.to_string_with_let_internal(&mut sym, td.lookup(&t), &mut buf);
         assert!(repr.contains('\n'), "expected multiline output, got {repr}");
         let has_lonely_paren = repr.lines().any(|line| line.trim() == ")");
         assert!(

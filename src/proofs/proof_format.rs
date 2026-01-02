@@ -265,7 +265,7 @@ impl ProofStore {
 
         let raw_proof = &raw_store.store[raw_proof_id];
         let raw_term = raw_store.proof_to_term[&raw_proof_id];
-        let formatted_proof = raw_store.term_dag.to_string_with_let(
+        let formatted_proof = raw_store.term_dag.to_string_with_let_internal(
             &mut SymbolGen::new("".to_string()),
             raw_term,
             &mut String::new(),
@@ -567,7 +567,7 @@ impl ProofStore {
         let mut dag = self.term_dag.clone();
         let mut cache = HashMap::default();
         let proof_term_id = self.proof_to_term_for_printing(&mut dag, proof_id, &mut cache);
-        dag.to_string_with_let(symbol_gen, proof_term_id, buffer)
+        dag.to_string_with_let_internal(symbol_gen, proof_term_id, buffer)
     }
 
     fn proof_to_term_for_printing(
