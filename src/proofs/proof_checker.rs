@@ -22,7 +22,9 @@ pub(crate) struct ActionContext {
 
 /// Gathers all global CoreActions from a program.
 /// This extracts all actions that occur at the top level, filtering out NormRule and other commands.
-pub(crate) fn gather_global_actions(prog: &[ResolvedNCommand]) -> Vec<&GenericAction<ResolvedCall, crate::ast::ResolvedVar>> {
+pub(crate) fn gather_global_actions(
+    prog: &[ResolvedNCommand],
+) -> Vec<&GenericAction<ResolvedCall, crate::ast::ResolvedVar>> {
     let mut actions = Vec::new();
     for cmd in prog {
         if let GenericNCommand::CoreAction(action) = cmd {
@@ -50,7 +52,9 @@ pub(crate) fn process_actions(
         match action {
             GenericAction::Let(_, var, expr) => {
                 // Evaluate the expression and collect propositions
-                if let Ok((term_id, new_props)) = eval_expr_with_globals(expr, term_dag, &var_bindings) {
+                if let Ok((term_id, new_props)) =
+                    eval_expr_with_globals(expr, term_dag, &var_bindings)
+                {
                     var_bindings.insert(var.name.clone(), term_id);
                     propositions.extend(new_props);
                 }
@@ -74,7 +78,9 @@ pub(crate) fn process_actions(
                 let mut all_args = args.to_vec();
                 all_args.push(rhs.clone());
                 let call_expr = ResolvedExpr::Call(crate::ast::Span::Panic, func.clone(), all_args);
-                if let Ok((term, new_props)) = eval_expr_with_globals(&call_expr, term_dag, &var_bindings) {
+                if let Ok((term, new_props)) =
+                    eval_expr_with_globals(&call_expr, term_dag, &var_bindings)
+                {
                     propositions.extend(new_props);
                 }
             }
@@ -106,7 +112,7 @@ fn eval_expr_with_globals(
     globals: &HashMap<String, TermId>,
 ) -> Result<(TermId, HashSet<(TermId, TermId)>), ()> {
     let mut propositions = HashSet::default();
-    
+
     let term_id = match expr {
         ResolvedExpr::Lit(_, lit) => {
             let term = dag.lit(lit.clone());
@@ -126,16 +132,15 @@ fn eval_expr_with_globals(
                 arg_terms.push(arg_term);
                 propositions.extend(arg_props);
             }
-            let term_refs: Vec<Term> =
-                arg_terms.iter().map(|&tid| dag.get(tid).clone()).collect();
+            let term_refs: Vec<Term> = arg_terms.iter().map(|&tid| dag.get(tid).clone()).collect();
             let term = dag.app(head.name().to_string(), term_refs);
             dag.lookup(&term)
         }
     };
-    
+
     // Add reflexive equality for this term and all its subterms
     add_subterm_reflexive_equalities(term_id, dag, &mut propositions);
-    
+
     Ok((term_id, propositions))
 }
 
@@ -147,7 +152,7 @@ fn add_subterm_reflexive_equalities(
 ) {
     // Add reflexive equality for this term
     propositions.insert((term_id, term_id));
-    
+
     // Recursively add for all children
     if let Term::App(_, children) = term_dag.get(term_id) {
         for &child_id in children {
@@ -160,7 +165,7 @@ fn add_subterm_reflexive_equalities(
 /// without using globals (i.e., all global references are replaced with their definitions).
 ///
 /// This expects the program to be in proof normalized form where globals appear as Let actions.
-/// 
+///
 /// DEPRECATED: Use `process_actions` instead for more comprehensive context.
 pub(crate) fn gather_globals(
     prog: &[ResolvedNCommand],
@@ -672,6 +677,8 @@ impl ProofStore {
                         rule_name: rule_name.to_string(),
                         reason: "Failed to evaluate LHS expression under substitution".to_string(),
                     })?;
+                let fact_lhs_term = self.term_dag.get(fact_lhs);
+                let fact_lhs_str = self.term_dag.to_string(fact_lhs_term);
                 let fact_rhs = self
                     .eval_expr_with_subst(rhs_expr, substitution)
                     .map_err(|_| ProofCheckError::RuleSubstitutionMismatch {
@@ -679,14 +686,16 @@ impl ProofStore {
                         rule_name: rule_name.to_string(),
                         reason: "Failed to evaluate RHS expression under substitution".to_string(),
                     })?;
+                let fact_rhs_term = self.term_dag.get(fact_rhs);
+                let fact_rhs_str = self.term_dag.to_string(fact_rhs_term);
 
                 if fact_lhs != *lhs || fact_rhs != *rhs {
                     return Err(ProofCheckError::RuleSubstitutionMismatch {
                         proof_id,
                         rule_name: rule_name.to_string(),
                         reason: format!(
-                            "Fact {:?} does not match proposition {:?} under substitution",
-                            fact, prop
+                            "Fact {} does not match proposition (= {fact_lhs_str} {fact_rhs_str}) under substitution",
+                            fact.to_string(),
                         ),
                     });
                 }
@@ -703,13 +712,16 @@ impl ProofStore {
                 })?;
 
                 // For a Fact, we expect lhs == rhs == fact_term
-                if fact_term != *lhs || fact_term != *rhs {
+                if fact_term != *rhs {
+                    let rhs_str = self
+                        .term_dag
+                        .to_string_with_let(&mut SymbolGen::new("".to_string()), *rhs);
                     return Err(ProofCheckError::RuleSubstitutionMismatch {
                         proof_id,
                         rule_name: rule_name.to_string(),
                         reason: format!(
-                            "Fact {:?} does not match proposition {:?} under substitution",
-                            fact, prop
+                            "Fact {fact} does not match proposition {} under substitution",
+                            rhs_str
                         ),
                     });
                 }
@@ -808,7 +820,7 @@ impl ProofStore {
     ) -> Result<(), ProofCheckError> {
         // Evaluate all actions in the rule head and collect the propositions they produce
         let mut propositions = HashSet::default();
-        
+
         for action in &rule.head.0 {
             match action {
                 GenericAction::Union(_, lhs_expr, rhs_expr) => {
@@ -838,8 +850,9 @@ impl ProofStore {
         }
 
         // Check if the claimed equality is in the propositions
-        if propositions.contains(&(claimed_lhs, claimed_rhs)) 
-            || propositions.contains(&(claimed_rhs, claimed_lhs)) {
+        if propositions.contains(&(claimed_lhs, claimed_rhs))
+            || propositions.contains(&(claimed_rhs, claimed_lhs))
+        {
             return Ok(());
         }
 
