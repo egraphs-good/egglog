@@ -12,23 +12,9 @@ expression: snapshot
 (Rule
   (= t t)
   (name
-    (rule ((MathU (Const a))
+    "(rule ((MathU (Const a))
        (> (+ a 1) 5))
       ((MathU (Add (Const a) (Const 1))))
-         ))
-  (premises (Fiat (= (MathU (Const 5)) (MathU (Const 5)))) (Fiat (= () ())))
-  (substitution (a 5)))
-
-
-
-
-(let t (MathU (Mul (Const 5) (Const 1))))
-(Rule
-  (= t t)
-  (name
-    (rule ((MathU (Const a))
-       (> a 0))
-      ((MathU (Mul (Const a) (Const 1))))
-         ))
+         )")
   (premises (Fiat (= (MathU (Const 5)) (MathU (Const 5)))) (Fiat (= () ())))
   (substitution (a 5)))
