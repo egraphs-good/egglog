@@ -261,12 +261,6 @@ impl<K: NumericId + PartialEq, V: PartialEq> PartialEq for DenseIdMapSO<K, V> {
                 _ => return false,
             }
         }
-        for (k, v) in other.iter() {
-            match self.get(k) {
-                Some(sv) if sv == v => {}
-                _ => return false,
-            }
-        }
         true
     }
 }
@@ -309,21 +303,26 @@ fn is_bit_set(bitset: &[u64], index: usize) -> bool {
         .is_some_and(|word| (word & (1 << (index % 64))) != 0)
 }
 
-impl<K: NumericId, V> DenseIdMapSO<K, V> {
-    /// Set the bit in the bitset for the given index, marking it as occupied.
-    fn set_bit(&mut self, index: usize) {
-        let word_index = index / 64;
-        let bit_index = index % 64;
+unsafe fn is_bit_set_unchecked(bitset: &[u64], index: usize) -> bool {
+    let word = unsafe { bitset.get_unchecked(index / 64) };
+    (word & (1 << (index % 64))) != 0
+}
 
-        self.bitset[word_index] |= 1 << bit_index;
+impl<K: NumericId, V> DenseIdMapSO<K, V> {
+    #[inline(always)]
+    unsafe fn set_bit_unchecked(&mut self, index: usize) {
+        unsafe {
+            let word = self.bitset.get_unchecked_mut(index / 64);
+            *word |= 1 << (index % 64);
+        }
     }
 
-    /// Clear the bit in the bitset for the given index, marking it as unoccupied.
-    fn clear_bit(&mut self, index: usize) {
-        let word_index = index / 64;
-        let bit_index = index % 64;
-
-        self.bitset[word_index] &= !(1 << bit_index);
+    #[inline(always)]
+    unsafe fn clear_bit_unchecked(&mut self, index: usize) {
+        unsafe {
+            let word = self.bitset.get_unchecked_mut(index / 64);
+            *word &= !(1 << (index % 64));
+        }
     }
 
     /// Create an empty map with space for `n` entries pre-allocated.
@@ -369,19 +368,14 @@ impl<K: NumericId, V> DenseIdMapSO<K, V> {
         self.reserve_space(key);
         let index = key.index();
 
-        // Check if there's an existing value that needs to be dropped
-        if self.contains_key(key) {
-            // SAFETY: The bitset indicates this slot is initialized
-            unsafe {
-                self.data[index].assume_init_drop();
+        // SAFETY: reserve_space
+        unsafe {
+            if is_bit_set_unchecked(&self.bitset, index) {
+                self.data.get_unchecked_mut(index).assume_init_drop();
             }
+            self.data.get_unchecked_mut(index).write(value);
+            self.set_bit_unchecked(index);
         }
-
-        // Write the new value
-        self.data[index].write(value);
-
-        // Update the bitset to mark this slot as occupied
-        self.set_bit(index);
     }
 
     /// Get the key that would be returned by the next call to [`DenseIdMapSO::push`].
@@ -396,8 +390,12 @@ impl<K: NumericId, V> DenseIdMapSO<K, V> {
         let index = res.index();
 
         self.data.push(MaybeUninit::new(val));
-        self.bitset.resize((index / 64) + 1, 0);
-        self.set_bit(index);
+        if index / 64 >= self.bitset.len() {
+            self.bitset.push(0);
+        }
+        unsafe {
+            self.set_bit_unchecked(index);
+        }
 
         res
     }
@@ -444,8 +442,10 @@ impl<K: NumericId, V> DenseIdMapSO<K, V> {
         // SAFETY: The bitset indicates this slot is initialized
         let value = unsafe { self.data.get_unchecked(index).assume_init_read() };
 
-        // Clear the bitset to mark this slot as unoccupied
-        self.clear_bit(index);
+        // SAFETY: contains_key succeeded
+        unsafe {
+            self.clear_bit_unchecked(index);
+        }
 
         Some(value)
     }
@@ -456,10 +456,12 @@ impl<K: NumericId, V> DenseIdMapSO<K, V> {
         self.reserve_space(key);
         let index = key.index();
 
-        if !self.contains_key(key) {
-            // Insert the new value
-            self.data[index].write(f());
-            self.set_bit(index);
+        unsafe {
+            // SAFETY: reserve_space
+            if !is_bit_set_unchecked(&self.bitset, index) {
+                self.data.get_unchecked_mut(index).write(f());
+                self.set_bit_unchecked(index);
+            }
         }
 
         // SAFETY: Either the value was already initialized, or we just initialized it
@@ -471,26 +473,79 @@ impl<K: NumericId, V> DenseIdMapSO<K, V> {
     }
 
     pub fn iter(&self) -> impl Iterator<Item = (K, &V)> + '_ {
-        self.data.iter().enumerate().filter_map(|(i, v)| {
-            if self.contains_key(K::from_usize(i)) {
-                // SAFETY: The bitset indicates this slot is initialized
-                Some((K::from_usize(i), unsafe { v.assume_init_ref() }))
-            } else {
-                None
-            }
-        })
+        self.bitset
+            .iter()
+            .enumerate()
+            .flat_map(move |(word_idx, &word)| {
+                let base_idx = word_idx * 64;
+                if word == 0 {
+                    return itertools::Either::Left(std::iter::empty());
+                }
+                if word == u64::MAX {
+                    let slice = &self.data[base_idx..base_idx + 64];
+                    return itertools::Either::Right(itertools::Either::Left(
+                        slice.iter().enumerate().map(move |(sub_idx, v)| {
+                            // SAFETY: word is u64::MAX, so all 64 elements are initialized
+                            (K::from_usize(base_idx + sub_idx), unsafe {
+                                v.assume_init_ref()
+                            })
+                        }),
+                    ));
+                }
+                let mut w = word;
+                itertools::Either::Right(itertools::Either::Right(std::iter::from_fn(move || {
+                    if w == 0 {
+                        return None;
+                    }
+                    let bit_idx = w.trailing_zeros() as usize;
+                    w &= !(1 << bit_idx); // Clear the least significant bit
+                    let total_idx = base_idx + bit_idx;
+                    // SAFETY: Bitset confirms initialization
+                    unsafe {
+                        Some((
+                            K::from_usize(total_idx),
+                            self.data.get_unchecked(total_idx).assume_init_ref(),
+                        ))
+                    }
+                })))
+            })
     }
 
     pub fn iter_mut(&mut self) -> impl Iterator<Item = (K, &mut V)> + '_ {
-        let bitset = &self.bitset;
-        self.data.iter_mut().enumerate().filter_map(|(i, v)| {
-            if is_bit_set(bitset, i) {
-                // SAFETY: The bitset indicates this slot is initialized
-                Some((K::from_usize(i), unsafe { v.assume_init_mut() }))
-            } else {
-                None
-            }
-        })
+        self.bitset
+            .iter()
+            .enumerate()
+            .zip(self.data.chunks_mut(64))
+            .flat_map(|((word_idx, word), chunk)| {
+                let base_idx = word_idx * 64;
+                if *word == 0 {
+                    return itertools::Either::Left(std::iter::empty());
+                }
+                if *word == u64::MAX {
+                    return itertools::Either::Right(itertools::Either::Left(
+                        chunk.iter_mut().enumerate().map(move |(sub_idx, v)| {
+                            // SAFETY: word is u64::MAX, so all 64 elements are initialized
+                            (K::from_usize(base_idx + sub_idx), unsafe {
+                                v.assume_init_mut()
+                            })
+                        }),
+                    ));
+                }
+                let w = *word;
+                itertools::Either::Right(itertools::Either::Right(
+                    chunk
+                        .iter_mut()
+                        .enumerate()
+                        .filter_map(move |(sub_idx, v)| {
+                            if (w & (1 << sub_idx)) == 0 {
+                                return None;
+                            }
+                            let total_idx = base_idx + sub_idx;
+                            // SAFETY: Bitset confirms initialization
+                            unsafe { Some((K::from_usize(total_idx), v.assume_init_mut())) }
+                        }),
+                ))
+            })
     }
 
     /// Reserve space up to the given key in the table.
