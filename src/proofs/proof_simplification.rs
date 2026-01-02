@@ -84,7 +84,7 @@ impl ProofStore {
     }
 
     /// A simple simplification pass removing unnecessary steps.
-    /// 
+    ///
     /// Simplifications performed:
     /// - Remove reflexive congruence: Congr(p, refl) -> p
     /// - Remove reflexive transitivity: Trans(refl, p) -> p and Trans(p, refl) -> p
@@ -148,20 +148,20 @@ impl ProofStore {
                     // If p1: a = b and p2: b = c, then Trans(p1, p2): a = c
                     // So Sym(Trans(p1, p2)): c = a
                     // Which equals Trans(Sym(p2), Sym(p1)) where Sym(p2): c = b and Sym(p1): b = a
-                    
+
                     // Extract the proof IDs before we start mutating
                     let left_id = *left;
                     let right_id = *right;
-                    
+
                     // Get the lhs/rhs values we need before any mutations
                     let left_proof = self.get(left_id);
                     let left_lhs = left_proof.lhs;
                     let left_rhs = left_proof.rhs;
-                    
+
                     let right_proof = self.get(right_id);
                     let right_lhs = right_proof.lhs;
                     let right_rhs = right_proof.rhs;
-                    
+
                     // Create Sym(p2): c = b
                     let sym_right = Proof {
                         lhs: right_rhs,
@@ -169,7 +169,7 @@ impl ProofStore {
                         justification: Justification::Sym(right_id),
                     };
                     let sym_right_id = self.add_proof(sym_right);
-                    
+
                     // Create Sym(p1): b = a
                     let sym_left = Proof {
                         lhs: left_rhs,
@@ -177,17 +177,17 @@ impl ProofStore {
                         justification: Justification::Sym(left_id),
                     };
                     let sym_left_id = self.add_proof(sym_left);
-                    
+
                     // Create Trans(Sym(p2), Sym(p1)): c = a
                     let new_trans = Proof {
                         lhs: right_rhs,
                         rhs: left_lhs,
                         justification: Justification::Trans(sym_right_id, sym_left_id),
                     };
-                    
+
                     // Replace current proof
                     self.id_to_proof[current_id] = new_trans;
-                    
+
                     // Recursively simplify the result
                     return self.simplify(current_id);
                 };

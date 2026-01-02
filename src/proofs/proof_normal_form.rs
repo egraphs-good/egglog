@@ -3,9 +3,12 @@ use crate::*;
 use crate::{core::ResolvedCall, typechecking::FuncType};
 use egglog_ast::generic_ast::GenericExpr;
 
-/// Puts queries in "proof form". In proof form, function calls like (lower-bound a b)
-/// are always top level and look like this:
-/// (= (lower-bound a b) c)
+/// Puts queries in "proof form". In proof form:
+/// 1. Function calls like (lower-bound a b) are always top level and look like this:
+///    (= (lower-bound a b) c)
+/// 2. Primitives can't have constructors or function calls as arguments.
+///    For example, (!= a (Const 0)) becomes:
+///    (= (Const 0) v), (!= a v)
 ///
 /// Nested function calls like this are not allowed:
 /// (Add c (lower-bound a b))
@@ -112,6 +115,59 @@ fn proof_form_expr(
             );
 
             resolved
+        }
+        ResolvedExpr::Call(span, head @ ResolvedCall::Primitive(_), args) => {
+            // For primitives, extract any constructor/custom function call arguments
+            // into separate facts with fresh variables. Other primitives can stay inline.
+            let mut new_args = vec![];
+            for arg in args {
+                match arg {
+                    // If the argument is a constructor or custom function call, extract it
+                    // (but allow other primitives to stay inline)
+                    ref arg_expr @ ResolvedExpr::Call(
+                        ref arg_span,
+                        ResolvedCall::Func(FuncType { ref output, .. }),
+                        ref inner_args,
+                    ) => {
+                        // First recursively normalize the inner arguments
+                        let normalized_inner_args: Vec<_> = inner_args
+                            .iter()
+                            .map(|e| proof_form_expr(e.clone(), res, fresh))
+                            .collect();
+
+                        // Create a fresh variable for this constructor call
+                        let fresh_var = GenericExpr::Var(
+                            arg_span.clone(),
+                            ResolvedVar {
+                                name: fresh.fresh("v"),
+                                sort: output.clone(),
+                                is_global_ref: false,
+                            },
+                        );
+
+                        // Add an equality fact binding the constructor to the fresh variable
+                        res.push(ResolvedFact::Eq(
+                            arg_span.clone(),
+                            ResolvedExpr::Call(
+                                arg_span.clone(),
+                                match arg_expr {
+                                    ResolvedExpr::Call(_, call, _) => call.clone(),
+                                    _ => unreachable!(),
+                                },
+                                normalized_inner_args,
+                            ),
+                            fresh_var.clone(),
+                        ));
+
+                        new_args.push(fresh_var);
+                    }
+                    // Otherwise just recursively normalize
+                    other => {
+                        new_args.push(proof_form_expr(other, res, fresh));
+                    }
+                }
+            }
+            ResolvedExpr::Call(span, head, new_args)
         }
         ResolvedExpr::Call(span, head, args) => {
             let new_args = args
