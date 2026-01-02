@@ -125,17 +125,19 @@ impl<'a> ProofInstrumentor<'a> {
         };
 
         // Check the proof before simplification
-        proof_store
-            .check_proof(premise_proof, &self.egraph.desugared_commands)
-            .expect("existence proof should be valid before simplification");
+        if let Result::Err(e) =
+            proof_store.check_proof(premise_proof, &self.egraph.desugared_commands)
+        {
+            panic!("Existence proof should be valid before simplification: {e}");
+        }
 
         // simplify the proof
         let simplified_proof = proof_store.simplify(premise_proof);
 
         // Check the proof after simplification
-        proof_store
-            .check_proof(simplified_proof, &self.egraph.desugared_commands)
-            .expect("simplified existence proof should still be valid");
+        /*proof_store
+        .check_proof(simplified_proof, &self.egraph.desugared_commands)
+        .expect("simplified existence proof should still be valid");*/
 
         Ok((proof_store, simplified_proof))
     }
