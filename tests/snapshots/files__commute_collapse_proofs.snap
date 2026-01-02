@@ -1,0 +1,40 @@
+---
+source: tests/files.rs
+expression: snapshot
+---
+
+
+
+
+
+
+(let t (Fiat (Add 2 3) (start)))
+(let t1 (Sym (start) (Add 2 3) t))
+(let t2
+  (Trans
+                (Add 3 2)
+                (start)
+                (Rule
+                  (Add 3 2)
+                  (Add 2 3)
+                  (name rw1)
+                  (premises t1)
+                  (substitution (a 2) (b 3)))
+                t))
+(Trans
+  (Add 2 3)
+  (Num 5)
+  (Sym (Add 2 3) (start) t1)
+  (Sym
+    (start)
+    (Num 5)
+    (Trans
+      (Num 5)
+      (start)
+      (Rule
+        (Num 5)
+        (Add 3 2)
+        (name rw2)
+        (premises (Sym (start) (Add 3 2) t2) (Fiat () ()))
+        (substitution (a 3) (b 2)))
+      t2)))
