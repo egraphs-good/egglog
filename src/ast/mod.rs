@@ -1588,6 +1588,78 @@ where
         }
     }
 
+    /// Applies `f` to all expressions in the command, bottom-up.
+    pub fn visit_exprs(
+        self,
+        f: &mut impl FnMut(GenericExpr<Head, Leaf>) -> GenericExpr<Head, Leaf>,
+    ) -> Self {
+        match self {
+            GenericCommand::Function { span, name, schema, merge } => {
+                GenericCommand::Function {
+                    span,
+                    name,
+                    schema,
+                    merge: merge.map(|e| e.visit_exprs(f)),
+                }
+            }
+            GenericCommand::Rule { rule } => {
+                GenericCommand::Rule {
+                    rule: rule.visit_exprs(f),
+                }
+            }
+            GenericCommand::Rewrite(name, rewrite, subsume) => {
+                GenericCommand::Rewrite(
+                    name,
+                    GenericRewrite {
+                        span: rewrite.span,
+                        lhs: rewrite.lhs.visit_exprs(f),
+                        rhs: rewrite.rhs.visit_exprs(f),
+                        conditions: rewrite.conditions.into_iter().map(|fact| fact.visit_exprs(f)).collect(),
+                    },
+                    subsume,
+                )
+            }
+            GenericCommand::BiRewrite(name, rewrite) => {
+                GenericCommand::BiRewrite(
+                    name,
+                    GenericRewrite {
+                        span: rewrite.span,
+                        lhs: rewrite.lhs.visit_exprs(f),
+                        rhs: rewrite.rhs.visit_exprs(f),
+                        conditions: rewrite.conditions.into_iter().map(|fact| fact.visit_exprs(f)).collect(),
+                    },
+                )
+            }
+            GenericCommand::Action(action) => {
+                GenericCommand::Action(action.visit_exprs(f))
+            }
+            GenericCommand::Extract(span, expr1, expr2) => {
+                GenericCommand::Extract(span, expr1.visit_exprs(f), expr2.visit_exprs(f))
+            }
+            GenericCommand::Check(span, facts) => {
+                GenericCommand::Check(span, facts.into_iter().map(|fact| fact.visit_exprs(f)).collect())
+            }
+            GenericCommand::Prove(span, facts) => {
+                GenericCommand::Prove(span, facts.into_iter().map(|fact| fact.visit_exprs(f)).collect())
+            }
+            GenericCommand::Output { span, file, exprs } => {
+                GenericCommand::Output {
+                    span,
+                    file,
+                    exprs: exprs.into_iter().map(|e| e.visit_exprs(f)).collect(),
+                }
+            }
+            GenericCommand::RunSchedule(schedule) => {
+                GenericCommand::RunSchedule(schedule.visit_exprs(f))
+            }
+            GenericCommand::Fail(span, cmd) => {
+                GenericCommand::Fail(span, Box::new(cmd.visit_exprs(f)))
+            }
+            // All other commands don't contain expressions
+            cmd => cmd,
+        }
+    }
+
     /// Remaps every head and leaf symbol contained in the command.
     pub fn map_symbols<Head2, Leaf2>(
         self,
