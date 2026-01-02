@@ -52,25 +52,15 @@ pub fn add_primitive_with_validator(input: TokenStream) -> TokenStream {
     let primitive_part = &input_str[..split_point];
     let validator_part = &input_str[split_point + 1..].trim();
 
-    // Extract eg variable and name from primitive declaration
-    // Format: eg, "name" = ...
-    let first_comma = primitive_part.find(',').expect("Expected comma after eg");
-    let eg_var = primitive_part[..first_comma].trim();
-
-    let after_eg = &primitive_part[first_comma + 1..];
-    let eq_pos = after_eg
-        .find('=')
-        .expect("Expected = in primitive declaration");
-    let name_literal = after_eg[..eq_pos].trim();
-
-    // Use proc_macro2::TokenStream parsing for the parts we'll reuse
-    // Build the output string directly
-    let output = format!(
-        "{{\n    add_primitive!({});\n    {}.add_primitive_validator({}, std::sync::Arc::new({}));\n}}",
-        primitive_part, eg_var, name_literal, validator_part
-    );
-
-    output.parse().unwrap()
+    // Parse the primitive part
+    let prim_tokens: TokenStream = primitive_part.parse().unwrap();
+    let parsed = parse_macro_input!(prim_tokens as AddPrimitive);
+    
+    // Parse the validator expression
+    let validator_expr: Expr = syn::parse_str(validator_part).expect("Failed to parse validator expression");
+    
+    // Build the primitive construction with validator
+    build_add_primitive_impl(parsed, Some(validator_expr))
 }
 /// This macro lets the user declare custom egglog primitives.
 /// It supports a few special features:
@@ -101,6 +91,10 @@ pub fn add_primitive_with_validator(input: TokenStream) -> TokenStream {
 ///   `T` must be `Clone` and `'static`.
 #[proc_macro]
 pub fn add_primitive(input: TokenStream) -> TokenStream {
+    build_add_primitive_impl(parse_macro_input!(input), None)
+}
+
+fn build_add_primitive_impl(parsed: AddPrimitive, validator: Option<Expr>) -> TokenStream {
     // If you're trying to read this code, you should read the big
     // `quote!` block at the bottom of this function first. Trying
     // to parse all the intermediate gobbledygook is going to be
@@ -116,7 +110,7 @@ pub fn add_primitive(input: TokenStream) -> TokenStream {
         is_fallible,
         ret,
         body,
-    } = parse_macro_input!(input);
+    } = parsed;
 
     // Create a new field name for the `Prim` struct to hold the return sort.
     // (We reuse the closure argument names for the argument sorts.)
@@ -259,6 +253,14 @@ pub fn add_primitive(input: TokenStream) -> TokenStream {
     };
 
     // This is the big `quote!` block that ties everything together.
+    let add_call = match validator {
+        None => quote!(eg.add_primitive(#prim_use);),
+        Some(validator_expr) => quote!(eg.add_primitive_with_validator(
+            #prim_use,
+            Some(::std::sync::Arc::new(#validator_expr))
+        );),
+    };
+    
     quote! {{
         #[allow(unused_imports)] use ::egglog::{*, ast::*, constraint::*};
         #[allow(unused_imports)] use ::std::{any::TypeId, sync::Arc};
@@ -281,7 +283,7 @@ pub fn add_primitive(input: TokenStream) -> TokenStream {
         }
 
         let eg: &mut EGraph = #eg;
-        eg.add_primitive(#prim_use);
+        #add_call
     }}
     .into()
 }
