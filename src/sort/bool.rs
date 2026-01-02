@@ -12,11 +12,11 @@ impl BaseSort for BoolSort {
 
     #[rustfmt::skip]
     fn register_primitives(&self, eg: &mut EGraph) {
-        add_primitive!(eg, "not" = |a: bool| -> bool { !a });
-        add_primitive!(eg, "and" = |a: bool, b: bool| -> bool { a && b });
-        add_primitive!(eg, "or" = |a: bool, b: bool| -> bool { a || b });
-        add_primitive!(eg, "xor" = |a: bool, b: bool| -> bool { a ^ b });
-        add_primitive!(eg, "=>" = |a: bool, b: bool| -> bool { !a || b });
+        add_literal_prim!(eg, "not" = |a: bool| -> bool { !a });
+        add_literal_prim!(eg, "and" = |a: bool, b: bool| -> bool { a && b });
+        add_literal_prim!(eg, "or" = |a: bool, b: bool| -> bool { a || b });
+        add_literal_prim!(eg, "xor" = |a: bool, b: bool| -> bool { a ^ b });
+        add_literal_prim!(eg, "=>" = |a: bool, b: bool| -> bool { !a || b });
     }
 
     fn reconstruct_termdag(

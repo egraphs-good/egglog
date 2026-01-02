@@ -50,14 +50,14 @@ impl Hash for FuncType {
     }
 }
 /// Primitive validators
-/// Validators take (termdag, lhs_term, rhs_term) and return true if the computation is correct.
-pub type PrimitiveValidator =
-    Arc<dyn Fn(&TermDag, TermId) -> Option<egglog_ast::generic_ast::Literal> + Send + Sync>;
+/// Validators take a termdag, arguments, and expected term id and return true if the computation is correct.
+pub type PrimitiveValidator = Arc<dyn Fn(&TermDag, &[TermId], TermId) -> bool + Send + Sync>;
 
 #[derive(Clone)]
 pub struct PrimitiveWithId {
     pub(crate) primitive: Arc<dyn Primitive + Send + Sync>,
     pub(crate) id: ExternalFunctionId,
+    // TODO is storing the validator here inefficient?
     pub(crate) validator: Option<PrimitiveValidator>,
 }
 
@@ -165,11 +165,8 @@ impl EGraph {
     }
 
     /// Add a user-defined primitive with an optional validator
-    pub fn add_primitive_with_validator<T>(
-        &mut self,
-        x: T,
-        validator: Option<PrimitiveValidator>,
-    ) where
+    pub fn add_primitive_with_validator<T>(&mut self, x: T, validator: Option<PrimitiveValidator>)
+    where
         T: Clone + Primitive + Send + Sync + 'static,
     {
         // We need to use a wrapper because of the orphan rule.
@@ -756,6 +753,13 @@ impl TypeInfo {
 
     pub fn is_primitive(&self, sym: &str) -> bool {
         self.primitives.contains_key(sym) || self.reserved_primitives.contains(sym)
+    }
+
+    pub fn primitive_has_validator(&self, id: ExternalFunctionId) -> bool {
+        self.primitives
+            .values()
+            .flat_map(|v| v.iter())
+            .any(|p| p.id == id && p.validator.is_some())
     }
 
     pub fn get_func_type(&self, sym: &str) -> Option<&FuncType> {

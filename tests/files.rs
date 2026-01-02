@@ -216,7 +216,7 @@ fn generate_tests(glob: &str) -> Vec<Trial> {
 fn generate_proof_support_snapshot_test() -> Trial {
     Trial::test("proof_support_snapshot", || {
         let mut supported_files = Vec::new();
-        
+
         for entry in glob::glob("tests/**/*.egg").unwrap() {
             let path = entry.unwrap();
             if file_supports_proofs(&path) {
@@ -225,14 +225,14 @@ fn generate_proof_support_snapshot_test() -> Trial {
                 supported_files.push(relative.to_string_lossy().to_string());
             }
         }
-        
+
         // Sort for deterministic output
         supported_files.sort();
-        
+
         // Create snapshot
         let snapshot = supported_files.join("\n");
         insta::assert_snapshot!("proof_supported_files", snapshot);
-        
+
         Ok(())
     })
 }
@@ -240,10 +240,10 @@ fn generate_proof_support_snapshot_test() -> Trial {
 fn main() {
     let args = libtest_mimic::Arguments::from_args();
     let mut tests = generate_tests("tests/**/*.egg");
-    
+
     // Add the proof support snapshot test
     tests.push(generate_proof_support_snapshot_test());
-    
+
     // ensure all the tests have unique names
     let mut names = HashSet::new();
     for test in &tests {

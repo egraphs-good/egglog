@@ -59,6 +59,18 @@ impl LiteralConvertible for ordered_float::OrderedFloat<f64> {
     }
 }
 
+impl LiteralConvertible for egglog::sort::F {
+    fn to_literal(self) -> egglog_ast::generic_ast::Literal {
+        egglog_ast::generic_ast::Literal::Float(self.0)
+    }
+    fn from_literal(lit: &egglog_ast::generic_ast::Literal) -> Option<Self> {
+        match lit {
+            egglog_ast::generic_ast::Literal::Float(f) => Some(egglog::sort::F::from(*f)),
+            _ => None,
+        }
+    }
+}
+
 impl LiteralConvertible for egglog::sort::S {
     fn to_literal(self) -> egglog_ast::generic_ast::Literal {
         egglog_ast::generic_ast::Literal::String(self.0)

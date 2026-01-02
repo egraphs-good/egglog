@@ -43,8 +43,8 @@ pub use core::{ResolvedCall, SpecializedPrimitive};
 pub use core_relations::{BaseValue, ContainerValue, ExecutionState, Value};
 use core_relations::{ExternalFunctionId, make_external_func};
 use csv::Writer;
-pub use egglog_add_primitive::add_primitive;
 pub use egglog_add_primitive::add_literal_prim;
+pub use egglog_add_primitive::add_primitive;
 pub use egglog_add_primitive::add_primitive_with_validator;
 use egglog_ast::generic_ast::{Change, GenericExpr, Literal};
 use egglog_ast::span::Span;
@@ -74,9 +74,9 @@ use std::str::FromStr;
 use std::sync::Arc;
 pub use termdag::{Term, TermDag, TermId};
 use thiserror::Error;
+pub use typechecking::PrimitiveValidator;
 pub use typechecking::TypeError;
 pub use typechecking::TypeInfo;
-pub use typechecking::PrimitiveValidator;
 use util::*;
 
 use crate::ast::desugar::desugar_command;
@@ -351,9 +351,18 @@ impl Default for EGraph {
         eg.type_info.add_presort::<FunctionSort>(span!()).unwrap();
         eg.type_info.add_presort::<MultiSetSort>(span!()).unwrap();
 
-        add_primitive!(&mut eg, "!=" = |a: #, b: #| -?> () {
-            (a != b).then_some(())
-        });
+        // Add != with a validator that checks inequality
+        let neq_validator = |_termdag: &TermDag, args: &[TermId], _result_term: TermId| -> bool {
+            args.len() == 2 && args[0] != args[1]
+        };
+        add_primitive_with_validator!(
+            &mut eg,
+            "!=" = |a: #, b: #| -?> () {
+                (a != b).then_some(())
+            },
+            neq_validator
+        );
+
         add_primitive!(&mut eg, "value-eq" = |a: #, b: #| -?> () {
             (a == b).then_some(())
         });
@@ -1460,9 +1469,8 @@ impl EGraph {
                 }
             }
 
-            
             let normalized = proof_form(typechecked, &mut self.parser.symbol_gen);
-            
+
             // Desugared commands are in proof form but globals are still using let bindings.
             self.desugared_commands.extend_from_slice(&normalized);
 
@@ -1473,7 +1481,8 @@ impl EGraph {
                 self.names.check_shadowing(command)?;
             }
 
-            let term_encoding_added = ProofInstrumentor::add_term_encoding(self, typechecked_no_globals);
+            let term_encoding_added =
+                ProofInstrumentor::add_term_encoding(self, typechecked_no_globals);
             let mut new_typechecked = vec![];
             for new_cmd in term_encoding_added {
                 let desugared =

@@ -475,92 +475,57 @@ impl Parse for Arrow {
 #[proc_macro]
 pub fn add_literal_prim(input: TokenStream) -> TokenStream {
     // Parse the input using the same structure as add_primitive
-    let AddPrimitive {
-        eg,
-        name,
-        context,
-        is_varargs,
-        args,
-        is_fallible,
-        ret,
-        body,
-    } = parse_macro_input!(input);
-
+    let parsed = parse_macro_input!(input as AddPrimitive);
+    
     // Varargs not supported for literal primitives
-    if is_varargs {
-        return syn::Error::new_spanned(&name, "varargs not supported for literal primitives")
+    if parsed.is_varargs {
+        return syn::Error::new_spanned(&parsed.name, "varargs not supported for literal primitives")
             .to_compile_error()
             .into();
     }
 
     // Context not supported for literal primitives
-    if context.0.is_some() {
-        return syn::Error::new_spanned(&name, "context not supported for literal primitives")
+    if parsed.context.0.is_some() {
+        return syn::Error::new_spanned(&parsed.name, "context not supported for literal primitives")
             .to_compile_error()
             .into();
     }
 
-    // Generate the validator body
-    let validator_body = generate_literal_validator(&args, &ret, &body, is_fallible);
-
-    // Reconstruct primitive call
-    let arrow = if is_fallible {
-        // Use TokenStream::from_str to preserve the custom punctuation
-        syn::parse_str::<quote::__private::TokenStream>("-?>").unwrap()
-    } else {
-        quote!(->)
-    };
-
-    // Build arg_list
-    let arg_list = if args.is_empty() {
-        quote!(||)
-    } else {
-        // Check for polymorphic types first
-        for arg in &args {
-            if arg.t.cast.is_none() {
-                return syn::Error::new_spanned(
-                    &arg.x,
-                    "polymorphic types not supported for literal primitives",
-                )
-                .to_compile_error()
-                .into();
-            }
+    // Check for polymorphic types
+    for arg in &parsed.args {
+        if arg.t.cast.is_none() {
+            return syn::Error::new_spanned(
+                &arg.x,
+                "polymorphic types not supported for literal primitives",
+            )
+            .to_compile_error()
+            .into();
         }
-        let params = args.iter().map(|arg| {
-            let x = &arg.x;
-            let ty = &arg.t.cast.as_ref().unwrap().0;
-            quote!(#x: #ty)
-        });
-        quote!(|#(#params),*|)
-    };
-
-    // Build return type
-    let ret_type = if let Some((ty, _)) = &ret.cast {
-        quote!(#ty)
-    } else {
-        // Polymorphic type not supported for literals
+    }
+    
+    if parsed.ret.cast.is_none() {
         return syn::Error::new_spanned(
-            &name,
+            &parsed.name,
             "polymorphic return type not supported for literal primitives",
         )
         .to_compile_error()
         .into();
-    };
+    }
 
-    // Generate the final output
-    let output = quote! {
-        {{
-            egglog_add_primitive::add_primitive!(#eg, #name = #arg_list #arrow #ret_type { #body });
-            #eg.add_primitive_validator(#name, std::sync::Arc::new(|termdag, lhs| {
-                use egglog_bridge::termdag::Term;
-                use egglog_ast::generic_ast::Literal;
-                #validator_body
-            }));
-
-        }}
-    };
-
-    output.into()
+    // Generate the validator body
+    let validator_body = generate_literal_validator(&parsed.args, &parsed.ret, &parsed.body, parsed.is_fallible);
+    
+    // Create the validator expression
+    let validator_expr = syn::parse2::<Expr>(quote! {
+        |termdag: &::egglog::TermDag, args: &[::egglog::TermId], expected: ::egglog::TermId| -> bool {
+            use egglog::termdag::Term;
+            use egglog_ast::generic_ast::Literal;
+            #validator_body
+        }
+    }).unwrap();
+    
+    // Use the shared implementation with the validator
+    build_add_primitive_impl(parsed, Some(validator_expr))
 }
 
 // Helper function to generate literal validator
@@ -574,13 +539,18 @@ fn generate_literal_validator(
     let arg_extracts = args.iter().enumerate().map(|(i, arg)| {
         let x = &arg.x;
         if let Some((ty, _)) = &arg.t.cast {
-            quote!(let #x = if let Term::Lit(lit) = termdag.get(args[#i]) {
-                <#ty as egglog::prelude::LiteralConvertible>::from_literal(lit)?
-            } else {
-                return None;
-            };)
+            quote! {
+                let #x = if let Term::Lit(lit) = termdag.get(args[#i]) {
+                    match <#ty as egglog::prelude::LiteralConvertible>::from_literal(lit) {
+                        Some(val) => val,
+                        None => return false,
+                    }
+                } else {
+                    return false;
+                };
+            }
         } else {
-            quote!(return None;)
+            quote!(return false;)
         }
     });
 
@@ -591,28 +561,35 @@ fn generate_literal_validator(
         quote!(|_| panic!("Polymorphic types not supported for literal primitives"))
     };
 
-    // Generate the body execution
+    // Generate the body execution and comparison
     let body_exec = if is_fallible {
         quote! {
             let result: Option<_> = #body;
-            return result.map(#ret_conv);
+            match result {
+                Some(result) => {
+                    let expected_lit = #ret_conv(result);
+                    if let Term::Lit(actual_lit) = termdag.get(expected) {
+                        return expected_lit == *actual_lit;
+                    }
+                    return false;
+                }
+                None => return false,
+            }
         }
     } else {
         quote! {
             let result = #body;
-            return Some(#ret_conv(result));
+            let expected_lit = #ret_conv(result);
+            if let Term::Lit(actual_lit) = termdag.get(expected) {
+                return expected_lit == *actual_lit;
+            }
+            return false;
         }
     };
 
     // Put it all together
-    let len = args.len();
     quote! {
-        if let Term::App(_, args) = termdag.get(lhs) {
-            if args.len() == #len {
-                #(#arg_extracts)*
-                #body_exec
-            }
-        }
-        None
+        #(#arg_extracts)*
+        #body_exec
     }
 }
