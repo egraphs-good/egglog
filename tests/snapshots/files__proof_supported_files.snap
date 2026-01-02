@@ -6,7 +6,6 @@ bitwise.egg
 calc.egg
 combined-nested.egg
 complex-merge-func.egg
-complex-merge-prim.egg
 f64.egg
 fail-typecheck/ungrounded-0.egg
 fail-typecheck/ungrounded-1.egg

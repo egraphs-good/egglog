@@ -67,6 +67,11 @@ impl SpecializedPrimitive {
     pub(crate) fn external_id(&self) -> ExternalFunctionId {
         self.prim_with_id.id
     }
+
+    /// Check if this primitive has a validator
+    pub fn has_validator(&self) -> bool {
+        self.prim_with_id.validator.is_some()
+    }
 }
 
 #[derive(Debug, Clone)]

@@ -10,12 +10,25 @@ fn test_add_primitive_validator() {
     let mut egraph = EGraph::default();
     
     // Create a validator
-    let validator = |termdag: &TermDag, result_term: TermId| -> Option<Literal> {
-        // For testing, just return the result as-is if it's a literal
-        match termdag.get(result_term) {
-            Term::Lit(lit) => Some(lit.clone()),
-            _ => None,
-        }
+    let validator = |termdag: &TermDag, args: &[TermId], result_term: TermId| -> bool {
+        // Extract the argument values
+        let a = match termdag.get(args[0]) {
+            Term::Lit(Literal::Int(n)) => *n,
+            _ => return false,
+        };
+        let b = match termdag.get(args[1]) {
+            Term::Lit(Literal::Int(n)) => *n,
+            _ => return false,
+        };
+        
+        // Extract the result value
+        let result = match termdag.get(result_term) {
+            Term::Lit(Literal::Int(n)) => *n,
+            _ => return false,
+        };
+        
+        // Verify a + b = result
+        a + b == result
     };
     
     // Use the macro to add a primitive with a validator
@@ -59,13 +72,26 @@ fn test_add_primitive_with_validator_method() {
         }
     }
     
-    // Create a validator
-    let validator = std::sync::Arc::new(|termdag: &TermDag, result_term: TermId| -> Option<Literal> {
-        // For testing, just return the result as-is if it's a literal
-        match termdag.get(result_term) {
-            Term::Lit(lit) => Some(lit.clone()),
-            _ => None,
-        }
+    // Create a validator - now takes (termdag, args, result) -> bool
+    let validator = std::sync::Arc::new(|termdag: &TermDag, args: &[TermId], result_term: TermId| -> bool {
+        // Extract the argument values
+        let a = match termdag.get(args[0]) {
+            Term::Lit(Literal::Int(n)) => *n,
+            _ => return false,
+        };
+        let b = match termdag.get(args[1]) {
+            Term::Lit(Literal::Int(n)) => *n,
+            _ => return false,
+        };
+        
+        // Extract the result value
+        let result = match termdag.get(result_term) {
+            Term::Lit(Literal::Int(n)) => *n,
+            _ => return false,
+        };
+        
+        // Verify a + b = result
+        a + b == result
     });
     
     // Add the primitive with validator using the direct method
