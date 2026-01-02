@@ -1,10 +1,13 @@
 use crate::{
     Term, TermDag, TermId,
-    ast::{GenericAction, GenericNCommand, ResolvedExpr, ResolvedFact, ResolvedNCommand, FunctionSubtype},
+    ast::{
+        FunctionSubtype, GenericAction, GenericNCommand, ResolvedExpr, ResolvedFact,
+        ResolvedNCommand,
+    },
     core::ResolvedCall,
     proofs::proof_format::{Justification, ProofId, ProofStore},
     typechecking::FuncType,
-    util::{HashMap, HashSet, HEntry},
+    util::{HEntry, HashMap, HashSet},
 };
 use thiserror::Error;
 
@@ -145,10 +148,7 @@ pub enum ProofCheckError {
     },
     /// Fiat proof is invalid (not a global or literal)
     #[error("Proof {proof_id}: Fiat proof invalid: {reason}")]
-    InvalidFiat {
-        proof_id: ProofId,
-        reason: String,
-    },
+    InvalidFiat { proof_id: ProofId, reason: String },
 }
 
 /// Represents a proposition that can be proven
@@ -179,23 +179,21 @@ impl ProofCheckContext {
 
         // First pass: gather all global Let bindings
         let globals = gather_globals(prog, term_dag);
-        
+
         // Store reflexive equality for all global terms
         for &term_id in globals.values() {
             ctx.global_equalities.insert((term_id, term_id));
         }
 
         // Second pass: process all CoreActions to find global unions and sets
-        // These are top-level actions that establish equalities
         for cmd in prog {
             if let GenericNCommand::CoreAction(action) = cmd {
                 match action {
                     GenericAction::Union(_, lhs_expr, rhs_expr) => {
                         // Top-level unions create global equalities
-                        // Evaluate without any local variable context (empty HashMap)
                         if let (Ok(lhs_term), Ok(rhs_term)) = (
-                            Self::eval_expr_with_globals(lhs_expr, term_dag, &globals),
-                            Self::eval_expr_with_globals(rhs_expr, term_dag, &globals),
+                            Self::eval_expr_with_subst(lhs_expr, term_dag, &globals),
+                            Self::eval_expr_with_subst(rhs_expr, term_dag, &globals),
                         ) {
                             // Store both directions of the equality
                             ctx.global_equalities.insert((lhs_term, rhs_term));
@@ -209,28 +207,20 @@ impl ProofCheckContext {
                         // Top-level sets create terms, store reflexive equality
                         let mut all_args = args.to_vec();
                         all_args.push(rhs.clone());
-                        let call_expr = ResolvedExpr::Call(
-                            crate::ast::Span::Panic,
-                            func.clone(),
-                            all_args,
-                        );
-                        if let Ok(term) =
-                            Self::eval_expr_with_globals(&call_expr, term_dag, &globals)
+                        let call_expr =
+                            ResolvedExpr::Call(crate::ast::Span::Panic, func.clone(), all_args);
+                        if let Ok(term) = Self::eval_expr_with_subst(&call_expr, term_dag, &globals)
                         {
                             // Store reflexive equality for set-created terms
                             ctx.global_equalities.insert((term, term));
                         }
                     }
-                    GenericAction::Let(_, _var, expr) => {
-                        // Let actions define new globals (already handled by gather_globals)
-                        // But we should ensure the term gets reflexive equality
-                        if let Ok(term) = Self::eval_expr_with_globals(expr, term_dag, &globals) {
-                            ctx.global_equalities.insert((term, term));
-                        }
+                    GenericAction::Let(_, _var, _expr) => {
+                        // Let actions define new globals already handled by gather_globals
                     }
                     GenericAction::Expr(_, expr) => {
-                        // Expr actions create terms and establish reflexive equality
-                        if let Ok(term) = Self::eval_expr_with_globals(expr, term_dag, &globals) {
+                        // Expr actions create reflexive equalities for their results
+                        if let Ok(term) = Self::eval_expr_with_subst(expr, term_dag, &globals) {
                             ctx.global_equalities.insert((term, term));
                         }
                     }
@@ -245,10 +235,10 @@ impl ProofCheckContext {
     }
 
     /// Evaluate an expression with globals resolved
-    fn eval_expr_with_globals(
+    fn eval_expr_with_subst(
         expr: &ResolvedExpr,
         dag: &mut TermDag,
-        globals: &HashMap<String, TermId>,
+        subst: &HashMap<String, TermId>,
     ) -> Result<TermId, ()> {
         match expr {
             ResolvedExpr::Lit(_, lit) => {
@@ -257,7 +247,7 @@ impl ProofCheckContext {
             }
             ResolvedExpr::Var(_, var) => {
                 if var.is_global_ref {
-                    globals.get(&var.name).copied().ok_or(())
+                    subst.get(&var.name).copied().ok_or(())
                 } else {
                     Err(()) // Non-global variables not allowed in global context
                 }
@@ -265,26 +255,17 @@ impl ProofCheckContext {
             ResolvedExpr::Call(_, head, args) => {
                 let mut arg_terms = Vec::new();
                 for arg in args {
-                    arg_terms.push(Self::eval_expr_with_globals(arg, dag, globals)?);
+                    arg_terms.push(Self::eval_expr_with_subst(arg, dag, subst)?);
                 }
-                let term_refs: Vec<Term> = arg_terms
-                    .iter()
-                    .map(|&tid| dag.get(tid).clone())
-                    .collect();
+                let term_refs: Vec<Term> =
+                    arg_terms.iter().map(|&tid| dag.get(tid).clone()).collect();
                 let term = dag.app(head.name().to_string(), term_refs);
                 Ok(dag.lookup(&term))
             }
         }
     }
 
-    /// Check if a term is valid for a Fiat proof (reflexive case)
-    fn is_valid_fiat(&self, term_id: TermId, term_dag: &TermDag) -> bool {
-        // Literals are always valid, or check if we have the reflexive equality
-        matches!(term_dag.get(term_id), Term::Lit(_)) || self.global_equalities.contains(&(term_id, term_id))
-    }
-
-    /// Check if an equality is valid for a Fiat proof
-    fn is_valid_fiat_equality(&self, lhs: TermId, rhs: TermId) -> bool {
+    fn in_globals(&self, lhs: TermId, rhs: TermId) -> bool {
         self.global_equalities.contains(&(lhs, rhs))
     }
 }
@@ -316,34 +297,22 @@ impl ProofStore {
         let proof = &self.id_to_proof[proof_id];
         let result = match &proof.justification {
             Justification::Fiat => {
-                // Fiat must be either:
-                // 1. Reflexive equality (t = t) where t is a valid fiat term
-                // 2. An equality established by a global action
-                if proof.lhs == proof.rhs {
-                    // Reflexive case
-                    if !ctx.is_valid_fiat(proof.lhs, &self.term_dag) {
-                        return Err(ProofCheckError::InvalidFiat {
-                            proof_id,
-                            reason: format!(
-                                "Reflexive Fiat proof for term {:?} which is not a global or literal",
-                                self.term_dag.get(proof.lhs)
-                            ),
-                        });
-                    }
+                // if the both terms are primitives and equal, accept
+                let term = self.term_dag.get(proof.lhs);
+                if matches!(term, Term::Lit(_)) && proof.lhs == proof.rhs {
+                    Ok(Proposition::TermsEq(proof.lhs, proof.rhs))
+                } else if ctx.in_globals(proof.lhs, proof.rhs) {
+                    Ok(Proposition::TermsEq(proof.lhs, proof.rhs))
                 } else {
-                    // Non-reflexive equality must be a global equality
-                    if !ctx.is_valid_fiat_equality(proof.lhs, proof.rhs) {
-                        return Err(ProofCheckError::InvalidFiat {
-                            proof_id,
-                            reason: format!(
-                                "Fiat equality {:?} = {:?} does not correspond to a global union",
-                                self.term_dag.get(proof.lhs),
-                                self.term_dag.get(proof.rhs)
-                            ),
-                        });
-                    }
+                    Err(ProofCheckError::InvalidFiat {
+                        proof_id,
+                        reason: format!(
+                            "Fiat proof claims {:?} = {:?}, which is not established by globals",
+                            self.term_dag.get(proof.lhs),
+                            self.term_dag.get(proof.rhs)
+                        ),
+                    })
                 }
-                Ok(Proposition::TermsEq(proof.lhs, proof.rhs))
             }
 
             Justification::Rule {
@@ -380,43 +349,12 @@ impl ProofStore {
                     premise_propositions.push(prop);
                 }
 
-                // Verify substitution consistency
-                // The substitution should map each variable to exactly one term
-                let mut var_terms: HashMap<String, TermId> = HashMap::default();
-                for (var_name, &term_id) in substitution {
-                    match var_terms.entry(var_name.clone()) {
-                        HEntry::Occupied(e) => {
-                            if *e.get() != term_id {
-                                return Err(ProofCheckError::RuleSubstitutionMismatch {
-                                    proof_id,
-                                    rule_name: name.clone(),
-                                    reason: format!(
-                                        "Variable {} mapped to multiple terms",
-                                        var_name
-                                    ),
-                                });
-                            }
-                        }
-                        HEntry::Vacant(e) => {
-                            e.insert(term_id);
-                        }
-                    }
-                }
-
                 // Verify that premises match the rule body under the substitution
                 for (fact, prop) in rule.body.iter().zip(premise_propositions.iter()) {
-                    self.check_fact_matches_proposition(
-                        fact,
-                        prop,
-                        substitution,
-                        proof_id,
-                        name,
-                    )?;
+                    self.check_fact_matches_proposition(fact, prop, substitution, proof_id, name)?;
                 }
 
                 // Verify that the conclusion matches what the rule produces
-                // For now, we trust that the proof's lhs and rhs are correct
-                // A more thorough check would verify the rule's head produces this equality
                 self.check_rule_produces_equality(
                     rule,
                     substitution,
@@ -434,37 +372,8 @@ impl ProofStore {
                 old_proof,
                 new_proof,
             } => {
-                // Check both sub-proofs
-                let old_prop = self.check_proof_with_context(*old_proof, program, ctx)?;
-                let new_prop = self.check_proof_with_context(*new_proof, program, ctx)?;
-
-                // Extract lhs from both proofs - they must match
-                let (old_lhs, old_rhs) = match old_prop {
-                    Proposition::TermsEq(l, r) => (l, r),
-                };
-                let (new_lhs, new_rhs) = match new_prop {
-                    Proposition::TermsEq(l, r) => (l, r),
-                };
-
-                if old_lhs != new_lhs {
-                    return Err(ProofCheckError::MergeFnMismatch {
-                        proof_id,
-                        old_lhs,
-                        new_lhs,
-                    });
-                }
-
-                // The result proves old_lhs = new_rhs (going through merge function)
-                if proof.lhs != old_lhs || proof.rhs != new_rhs {
-                    return Err(ProofCheckError::TermMismatch {
-                        proof_id,
-                        expected_lhs: proof.lhs,
-                        expected_rhs: proof.rhs,
-                        actual_lhs: old_lhs,
-                        actual_rhs: new_rhs,
-                    });
-                }
-
+                // need to find the merge function from the program, then run the merge function to produce a new term
+                todo!();
                 Ok(Proposition::TermsEq(proof.lhs, proof.rhs))
             }
 
@@ -635,52 +544,64 @@ impl ProofStore {
         proof_id: ProofId,
         rule_name: &str,
     ) -> Result<(), ProofCheckError> {
-        match (fact, prop) {
-            (ResolvedFact::Eq(_, lhs_expr, rhs_expr), Proposition::TermsEq(prop_lhs, prop_rhs)) => {
-                // Evaluate both sides with substitution
-                let expected_lhs = self.eval_expr_with_subst(lhs_expr, substitution)?;
-                let expected_rhs = self.eval_expr_with_subst(rhs_expr, substitution)?;
+        let Proposition::TermsEq(lhs, rhs) = prop;
+        match fact {
+            // proof normal form for functions
+            ResolvedFact::Eq(
+                _,
+                ResolvedExpr::Var(_, v),
+                ResolvedExpr::Call(_, ResolvedCall::Func(FuncType { subtype: FunctionSubtype::Custom, ..}), args)
+            ) => {
+                // Evaluate both and put v as the last child of the call
+                todo!()
+            }
+            ResolvedFact::Eq(_, lhs_expr, rhs_expr) => {
+                let fact_lhs = self.eval_expr_with_subst(lhs_expr,  substitution)
+                    .map_err(|_| ProofCheckError::RuleSubstitutionMismatch {
+                        proof_id,
+                        rule_name: rule_name.to_string(),
+                        reason: "Failed to evaluate LHS expression under substitution".to_string(),
+                    })?;
+                let fact_rhs = self.eval_expr_with_subst(rhs_expr,  substitution)
+                    .map_err(|_| ProofCheckError::RuleSubstitutionMismatch {
+                        proof_id,
+                        rule_name: rule_name.to_string(),
+                        reason: "Failed to evaluate RHS expression under substitution".to_string(),
+                    })?;
 
-                // Check if they match (allowing for symmetry)
-                if !((expected_lhs == *prop_lhs && expected_rhs == *prop_rhs)
-                    || (expected_lhs == *prop_rhs && expected_rhs == *prop_lhs))
-                {
+                if fact_lhs != *lhs || fact_rhs != *rhs {
                     return Err(ProofCheckError::RuleSubstitutionMismatch {
                         proof_id,
                         rule_name: rule_name.to_string(),
                         reason: format!(
-                            "Premise doesn't match: expected {:?} = {:?}, got {:?} = {:?}",
-                            self.term_dag.get(expected_lhs),
-                            self.term_dag.get(expected_rhs),
-                            self.term_dag.get(*prop_lhs),
-                            self.term_dag.get(*prop_rhs)
+                            "Fact {:?} does not match proposition {:?} under substitution",
+                            fact, prop
                         ),
                     });
                 }
+
                 Ok(())
             }
-            (ResolvedFact::Fact(expr), Proposition::TermsEq(prop_lhs, prop_rhs)) => {
-                // For facts that aren't equalities, we expect a reflexive equality
-                // or the fact should match one side of the equality
-                let expected = self.eval_expr_with_subst(expr, substitution)?;
-                
-                // The proposition should be either reflexive (expected = expected)
-                // or match the expected term on one side
-                if !((*prop_lhs == expected && *prop_rhs == expected)
-                    || *prop_lhs == expected
-                    || *prop_rhs == expected)
-                {
+            ResolvedFact::Fact(expr) => {
+                let fact_term = self.eval_expr_with_subst(expr,  substitution)
+                    .map_err(|_| ProofCheckError::RuleSubstitutionMismatch {
+                        proof_id,
+                        rule_name: rule_name.to_string(),
+                        reason: "Failed to evaluate Fact expression under substitution".to_string(),
+                    })?;
+
+                // For a Fact, we expect lhs == rhs == fact_term
+                if fact_term != *lhs || fact_term != *rhs {
                     return Err(ProofCheckError::RuleSubstitutionMismatch {
                         proof_id,
                         rule_name: rule_name.to_string(),
                         reason: format!(
-                            "Fact premise doesn't match: expected {:?}, got {:?} = {:?}",
-                            self.term_dag.get(expected),
-                            self.term_dag.get(*prop_lhs),
-                            self.term_dag.get(*prop_rhs)
+                            "Fact {:?} does not match proposition {:?} under substitution",
+                            fact, prop
                         ),
                     });
                 }
+
                 Ok(())
             }
         }
@@ -698,14 +619,13 @@ impl ProofStore {
                 let term = temp_dag.lit(lit.clone());
                 Ok(temp_dag.lookup(&term))
             }
-            ResolvedExpr::Var(_, var) => substitution
-                .get(&var.name)
-                .copied()
-                .ok_or_else(|| ProofCheckError::RuleSubstitutionMismatch {
+            ResolvedExpr::Var(_, var) => substitution.get(&var.name).copied().ok_or_else(|| {
+                ProofCheckError::RuleSubstitutionMismatch {
                     proof_id: 0, // Will be filled in by caller
                     rule_name: String::new(),
                     reason: format!("Variable {} not in substitution", var.name),
-                }),
+                }
+            }),
             ResolvedExpr::Call(_, head, args) => {
                 let mut arg_terms = Vec::new();
                 for arg in args {
@@ -732,7 +652,6 @@ impl ProofStore {
         proof_id: ProofId,
         rule_name: &str,
     ) -> Result<(), ProofCheckError> {
-        // Check if any action in the rule head could produce this equality
         let mut found_match = false;
 
         for action in &rule.head.0 {
@@ -753,12 +672,7 @@ impl ProofStore {
                     // Set can produce f(...args, old_rhs) = f(...args, new_rhs)
                     // For simplicity, we'll be permissive here
                     // A more thorough check would verify the exact semantics
-                    if let ResolvedCall::Func(FuncType { subtype: FunctionSubtype::Custom, .. }) = func {
-                        // Custom functions can produce equalities through their merge functions
-                        // We'll accept this for now
-                        found_match = true;
-                        break;
-                    }
+                    todo!()
                 }
                 _ => {}
             }
