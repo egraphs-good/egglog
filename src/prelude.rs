@@ -83,6 +83,18 @@ impl LiteralConvertible for egglog::sort::S {
     }
 }
 
+impl LiteralConvertible for () {
+    fn to_literal(self) -> egglog_ast::generic_ast::Literal {
+        egglog_ast::generic_ast::Literal::Unit
+    }
+    fn from_literal(lit: &egglog_ast::generic_ast::Literal) -> Option<Self> {
+        match lit {
+            egglog_ast::generic_ast::Literal::Unit => Some(()),
+            _ => None,
+        }
+    }
+}
+
 pub mod exprs {
     use super::*;
 

@@ -27,16 +27,9 @@ impl BaseSort for StringSort {
             y.into()
         }}, string_concat_validator);
 
-        let string_replace_validator = |termdag: &TermDag, args: &[TermId], result: TermId| -> bool {
-            let Term::Lit(Literal::String(a)) = termdag.get(args[0]) else { return false };
-            let Term::Lit(Literal::String(b)) = termdag.get(args[1]) else { return false };
-            let Term::Lit(Literal::String(c)) = termdag.get(args[2]) else { return false };
-            let Term::Lit(Literal::String(result_str)) = termdag.get(result) else { return false };
-            result_str.as_str() == a.as_str().replace(b.as_str(), c.as_str())
-        };
-        add_primitive_with_validator!(eg, "replace" = |a: S, b: S, c: S| -> S {
+        add_literal_prim!(eg, "replace" = |a: S, b: S, c: S| -> S {
             a.as_str().replace(b.as_str(), c.as_str()).into()
-        }, string_replace_validator);
+        });
     }
 
     fn reconstruct_termdag(
