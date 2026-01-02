@@ -315,11 +315,6 @@ impl<K: NumericId, V> DenseIdMapSO<K, V> {
         let word_index = index / 64;
         let bit_index = index % 64;
 
-        // Ensure bitset has enough capacity
-        if word_index >= self.bitset.len() {
-            self.bitset.resize(word_index + 1, 0);
-        }
-
         self.bitset[word_index] |= 1 << bit_index;
     }
 
@@ -328,9 +323,7 @@ impl<K: NumericId, V> DenseIdMapSO<K, V> {
         let word_index = index / 64;
         let bit_index = index % 64;
 
-        if word_index < self.bitset.len() {
-            self.bitset[word_index] &= !(1 << bit_index);
-        }
+        self.bitset[word_index] &= !(1 << bit_index);
     }
 
     /// Create an empty map with space for `n` entries pre-allocated.
@@ -403,6 +396,7 @@ impl<K: NumericId, V> DenseIdMapSO<K, V> {
         let index = res.index();
 
         self.data.push(MaybeUninit::new(val));
+        self.bitset.resize((index / 64) + 1, 0);
         self.set_bit(index);
 
         res
@@ -419,7 +413,7 @@ impl<K: NumericId, V> DenseIdMapSO<K, V> {
             return None;
         }
         // SAFETY: The bitset indicates this slot is initialized
-        unsafe { Some(self.data.get(key.index())?.assume_init_ref()) }
+        unsafe { Some(self.data.get_unchecked(key.index()).assume_init_ref()) }
     }
 
     /// Get a mutable reference to the current mapping for `key` in the table.
@@ -428,7 +422,7 @@ impl<K: NumericId, V> DenseIdMapSO<K, V> {
             return None;
         }
         // SAFETY: The bitset indicates this slot is initialized
-        unsafe { Some(self.data.get_mut(key.index())?.assume_init_mut()) }
+        unsafe { Some(self.data.get_unchecked_mut(key.index()).assume_init_mut()) }
     }
 
     /// Extract the value mapped to by `key` from the table.
@@ -448,7 +442,7 @@ impl<K: NumericId, V> DenseIdMapSO<K, V> {
         let index = key.index();
 
         // SAFETY: The bitset indicates this slot is initialized
-        let value = unsafe { self.data.get(index)?.assume_init_read() };
+        let value = unsafe { self.data.get_unchecked(index).assume_init_read() };
 
         // Clear the bitset to mark this slot as unoccupied
         self.clear_bit(index);
@@ -469,7 +463,7 @@ impl<K: NumericId, V> DenseIdMapSO<K, V> {
         }
 
         // SAFETY: Either the value was already initialized, or we just initialized it
-        unsafe { self.data[index].assume_init_mut() }
+        unsafe { self.data.get_unchecked_mut(index).assume_init_mut() }
     }
 
     pub fn raw(&self) -> &[MaybeUninit<V>] {
@@ -504,6 +498,7 @@ impl<K: NumericId, V> DenseIdMapSO<K, V> {
         let index = key.index();
         if index >= self.data.len() {
             self.data.resize_with(index + 1, MaybeUninit::uninit);
+            self.bitset.resize((index / 64) + 1, 0);
         }
     }
 
