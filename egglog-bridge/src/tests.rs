@@ -532,7 +532,7 @@ fn register_vec_push(egraph: &mut EGraph) -> ExternalFunctionId {
         vec.0.shrink_to_fit();
         Some(state.clone().container_values().register_val(vec, state))
     });
-    egraph.register_external_func(external_func)
+    egraph.register_external_func(Box::new(external_func))
 }
 
 fn register_vec_last(egraph: &mut EGraph) -> ExternalFunctionId {
@@ -548,7 +548,7 @@ fn register_vec_last(egraph: &mut EGraph) -> ExternalFunctionId {
             .last()
             .cloned()
     });
-    egraph.register_external_func(external_func)
+    egraph.register_external_func(Box::new(external_func))
 }
 
 fn dump_vecs(egraph: &EGraph) -> Vec<Vec<Value>> {
@@ -614,13 +614,14 @@ fn container_test() {
         name: "vec".into(),
         can_subsume: false,
     });
-    let int_add = egraph.register_external_func(make_external_func(|exec_state, args| {
-        let [x, y] = args else { panic!() };
-        let x: i64 = exec_state.base_values().unwrap(*x);
-        let y: i64 = exec_state.base_values().unwrap(*y);
-        let z: i64 = x + y;
-        Some(exec_state.base_values().get(z))
-    }));
+    let int_add =
+        egraph.register_external_func(Box::new(make_external_func(|exec_state, args| {
+            let [x, y] = args else { panic!() };
+            let x: i64 = exec_state.base_values().unwrap(*x);
+            let y: i64 = exec_state.base_values().unwrap(*y);
+            let z: i64 = x + y;
+            Some(exec_state.base_values().get(z))
+        })));
     let vec_last = register_vec_last(&mut egraph);
     let vec_push = register_vec_push(&mut egraph);
 
@@ -816,10 +817,11 @@ fn rhs_only_rule_only_runs_once() {
     let mut egraph = EGraph::default();
     let counter = Arc::new(AtomicUsize::new(0));
     let inner = counter.clone();
-    let inc_counter_func = egraph.register_external_func(make_external_func(move |_, _| {
-        inner.fetch_add(1, Ordering::SeqCst);
-        Some(Value::new(0))
-    }));
+    let inc_counter_func =
+        egraph.register_external_func(Box::new(make_external_func(move |_, _| {
+            inner.fetch_add(1, Ordering::SeqCst);
+            Some(Value::new(0))
+        })));
     let inc_counter_rule = {
         let mut rb = egraph.new_rule("", true);
         rb.call_external_func(inc_counter_func, &[], ColumnTy::Id, || "".to_string());
@@ -838,8 +840,8 @@ fn mergefn_arithmetic() {
     let int_base = egraph.base_values_mut().register_type::<i64>();
 
     // Create external functions for multiplication and addition
-    let multiply_func = egraph.register_external_func(core_relations::make_external_func(
-        |state, vals| -> Option<Value> {
+    let multiply_func = egraph.register_external_func(Box::new(
+        core_relations::make_external_func(|state, vals| -> Option<Value> {
             let [a, b] = vals else {
                 return None;
             };
@@ -847,10 +849,10 @@ fn mergefn_arithmetic() {
             let b_val = state.base_values().unwrap::<i64>(*b);
             let res = state.base_values().get::<i64>(a_val * b_val);
             Some(res)
-        },
+        }),
     ));
 
-    let add_func = egraph.register_external_func(core_relations::make_external_func(
+    let add_func = egraph.register_external_func(Box::new(core_relations::make_external_func(
         |state, vals| -> Option<Value> {
             let [a, b] = vals else {
                 return None;
@@ -860,7 +862,7 @@ fn mergefn_arithmetic() {
             let res = state.base_values().get::<i64>(a_val + b_val);
             Some(res)
         },
-    ));
+    )));
 
     let value_1 = egraph.base_values_mut().get(1i64);
 
@@ -1099,7 +1101,7 @@ fn constrain_prims_simple() {
         can_subsume: false,
     });
 
-    let is_even = egraph.register_external_func(core_relations::make_external_func(
+    let is_even = egraph.register_external_func(Box::new(core_relations::make_external_func(
         |state, vals| -> Option<Value> {
             let [a] = vals else {
                 return None;
@@ -1108,7 +1110,7 @@ fn constrain_prims_simple() {
             let result: bool = a_val % 2 == 0;
             Some(state.base_values().get(result))
         },
-    ));
+    )));
 
     let value_1 = egraph.base_value_constant(1i64);
     let value_2 = egraph.base_value_constant(2i64);
@@ -1182,7 +1184,7 @@ fn constrain_prims_abstract() {
         can_subsume: false,
     });
 
-    let neg = egraph.register_external_func(core_relations::make_external_func(
+    let neg = egraph.register_external_func(Box::new(core_relations::make_external_func(
         |state, vals| -> Option<Value> {
             let [a] = vals else {
                 return None;
@@ -1190,8 +1192,8 @@ fn constrain_prims_abstract() {
             let a_val = state.base_values().unwrap::<i64>(*a);
             Some(state.base_values().get(-a_val))
         },
-    ));
-    let abs = egraph.register_external_func(core_relations::make_external_func(
+    )));
+    let abs = egraph.register_external_func(Box::new(core_relations::make_external_func(
         |state, vals| -> Option<Value> {
             let [a] = vals else {
                 return None;
@@ -1199,7 +1201,7 @@ fn constrain_prims_abstract() {
             let a_val = state.base_values().unwrap::<i64>(*a);
             Some(state.base_values().get(a_val.abs()))
         },
-    ));
+    )));
 
     let value_n1 = egraph.base_value_constant(-1i64);
     let value_0 = egraph.base_value_constant(0i64);
@@ -1391,7 +1393,7 @@ fn primitive_failure_panics() {
     let value_1 = egraph.base_value_constant(1i64);
     let value_2 = egraph.base_value_constant(2i64);
 
-    let assert_odd = egraph.register_external_func(core_relations::make_external_func(
+    let assert_odd = egraph.register_external_func(Box::new(core_relations::make_external_func(
         |state, vals| -> Option<Value> {
             let [a] = vals else {
                 return None;
@@ -1403,7 +1405,7 @@ fn primitive_failure_panics() {
                 None
             }
         },
-    ));
+    )));
 
     let assert_odd_rule = {
         let mut rb = egraph.new_rule("assert_odd", true);
