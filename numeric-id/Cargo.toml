@@ -10,6 +10,7 @@ readme = { workspace = true }
 
 [dependencies]
 rayon = { workspace = true }
+smallvec = { workspace = true }
 
 [features]
 default = []

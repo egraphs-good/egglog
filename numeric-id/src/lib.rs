@@ -48,7 +48,7 @@ impl NumericId for usize {
 /// with no hashing. For sparse mappings, use a HashMap.
 pub struct DenseIdMap<K: NumericId, V> {
     data: Vec<MaybeUninit<V>>,
-    bitset: Vec<u64>,
+    bitset: SmallVec<[u64; 2]>,
     _marker: PhantomData<K>,
 }
 
@@ -109,7 +109,7 @@ impl<K: NumericId, V> Default for DenseIdMap<K, V> {
         Self {
             data: Vec::new(),
             _marker: PhantomData,
-            bitset: Vec::new(),
+            bitset: SmallVec::new(),
         }
     }
 }
@@ -573,6 +573,7 @@ impl<K: NumericId, V> ops::IndexMut<K> for IdVec<K, V> {
 use rayon::iter::{
     IndexedParallelIterator, IntoParallelRefIterator, IntoParallelRefMutIterator, ParallelIterator,
 };
+use smallvec::SmallVec;
 
 #[macro_export]
 #[doc(hidden)]
