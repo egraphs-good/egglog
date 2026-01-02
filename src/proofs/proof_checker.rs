@@ -273,18 +273,17 @@ impl ProofCheckContext {
 impl ProofStore {
     /// Check that a proof is valid with respect to a typechecked program.
     pub(crate) fn check_proof(
-        &self,
+        &mut self,
         proof_id: ProofId,
         program: &[ResolvedNCommand],
     ) -> Result<Proposition, ProofCheckError> {
-        let mut term_dag = self.term_dag.clone();
-        let mut ctx = ProofCheckContext::new(program, &mut term_dag);
+        let mut ctx = ProofCheckContext::new(program, &mut self.term_dag);
         self.check_proof_with_context(proof_id, program, &mut ctx)
     }
 
     /// Internal recursive proof checker with context
     fn check_proof_with_context(
-        &self,
+        &mut self,
         proof_id: ProofId,
         program: &[ResolvedNCommand],
         ctx: &mut ProofCheckContext,
@@ -294,14 +293,14 @@ impl ProofStore {
             return Ok(prop.clone());
         }
 
-        let proof = &self.id_to_proof[proof_id];
+        let proof = self.id_to_proof[proof_id].clone();
         let result = match &proof.justification {
             Justification::Fiat => {
                 // if the both terms are primitives and equal, accept
                 let term = self.term_dag.get(proof.lhs);
-                if matches!(term, Term::Lit(_)) && proof.lhs == proof.rhs {
-                    Ok(Proposition::TermsEq(proof.lhs, proof.rhs))
-                } else if ctx.in_globals(proof.lhs, proof.rhs) {
+                if (matches!(term, Term::Lit(_)) && proof.lhs == proof.rhs)
+                    || ctx.in_globals(proof.lhs, proof.rhs)
+                {
                     Ok(Proposition::TermsEq(proof.lhs, proof.rhs))
                 } else {
                     Err(ProofCheckError::InvalidFiat {
@@ -506,9 +505,8 @@ impl ProofStore {
                     })
                     .collect();
 
-                let mut temp_dag = self.term_dag.clone();
-                let expected_rhs_term = temp_dag.app(func_name, expected_rhs_children);
-                let expected_rhs_id = temp_dag.lookup(&expected_rhs_term);
+                let expected_rhs_term = self.term_dag.app(func_name, expected_rhs_children);
+                let expected_rhs_id = self.term_dag.lookup(&expected_rhs_term);
 
                 // Verify proof.rhs matches expected
                 if proof.rhs != expected_rhs_id {
@@ -517,7 +515,7 @@ impl ProofStore {
                         reason: format!(
                             "Proof rhs {:?} doesn't match expected {:?}",
                             self.term_dag.get(proof.rhs),
-                            temp_dag.get(expected_rhs_id)
+                            self.term_dag.get(expected_rhs_id)
                         ),
                     });
                 }
@@ -544,7 +542,7 @@ impl ProofStore {
 
     /// Check that a fact matches a proposition under a substitution  
     fn check_fact_matches_proposition(
-        &self,
+        &mut self,
         fact: &ResolvedFact,
         prop: &Proposition,
         substitution: &HashMap<String, TermId>,
@@ -591,9 +589,8 @@ impl ProofStore {
                     .iter()
                     .map(|&tid| self.term_dag.get(tid).clone())
                     .collect();
-                let mut temp_dag = self.term_dag.clone();
-                let expected_term = temp_dag.app(name.clone(), term_refs);
-                let expected_term_id = temp_dag.lookup(&expected_term);
+                let expected_term = self.term_dag.app(name.clone(), term_refs);
+                let expected_term_id = self.term_dag.lookup(&expected_term);
 
                 // The proposition should be a reflexive equality for this term
                 if *lhs != expected_term_id || *rhs != expected_term_id {
@@ -602,7 +599,7 @@ impl ProofStore {
                         rule_name: rule_name.to_string(),
                         reason: format!(
                             "Function fact does not match proposition: expected reflexive equality for {:?}, got {:?} = {:?}",
-                            temp_dag.get(expected_term_id),
+                            self.term_dag.get(expected_term_id),
                             self.term_dag.get(*lhs),
                             self.term_dag.get(*rhs)
                         ),
@@ -668,15 +665,14 @@ impl ProofStore {
 
     /// Evaluate an expression with a variable substitution
     fn eval_expr_with_subst(
-        &self,
+        &mut self,
         expr: &ResolvedExpr,
         substitution: &HashMap<String, TermId>,
     ) -> Result<TermId, ProofCheckError> {
         match expr {
             ResolvedExpr::Lit(_, lit) => {
-                let mut temp_dag = self.term_dag.clone();
-                let term = temp_dag.lit(lit.clone());
-                Ok(temp_dag.lookup(&term))
+                let term = self.term_dag.lit(lit.clone());
+                Ok(self.term_dag.lookup(&term))
             }
             ResolvedExpr::Var(_, var) => substitution.get(&var.name).copied().ok_or_else(|| {
                 ProofCheckError::RuleSubstitutionMismatch {
@@ -694,8 +690,28 @@ impl ProofStore {
 
                 match head {
                     ResolvedCall::Primitive(prim) => {
-                        let validator = prim.validator();
-                        todo!()
+                        // Use the validator to compute the primitive result
+                        if let Some(validator) = prim.validator() {
+                            let result =
+                                validator(&mut self.term_dag, &arg_terms).ok_or_else(|| {
+                                    ProofCheckError::PrimitiveValidationFailed {
+                                        proof_id: 0, // Will be filled in by caller
+                                        function_name: prim.name().to_string(),
+                                        reason:
+                                            "Validator returned None - primitive operation failed"
+                                                .to_string(),
+                                    }
+                                })?;
+                            Ok(result)
+                        } else {
+                            // No validator available - primitives without validators can't be checked in proofs
+                            Err(ProofCheckError::PrimitiveValidationFailed {
+                                proof_id: 0,
+                                function_name: prim.name().to_string(),
+                                reason: "Primitive has no validator - cannot verify in proof"
+                                    .to_string(),
+                            })
+                        }
                     }
                     ResolvedCall::Func(func) => {
                         match func.subtype {
@@ -705,9 +721,8 @@ impl ProofStore {
                                     .iter()
                                     .map(|&tid| self.term_dag.get(tid).clone())
                                     .collect();
-                                let mut temp_dag = self.term_dag.clone();
-                                let term = temp_dag.app(func.name.clone(), term_refs);
-                                Ok(temp_dag.lookup(&term))
+                                let term = self.term_dag.app(func.name.clone(), term_refs);
+                                Ok(self.term_dag.lookup(&term))
                             }
                             FunctionSubtype::Custom => {
                                 // Custom functions should not appear in proof normal form!
@@ -727,7 +742,7 @@ impl ProofStore {
 
     /// Check that a rule produces the claimed equality
     fn check_rule_produces_equality(
-        &self,
+        &mut self,
         rule: &crate::ast::GenericRule<ResolvedCall, crate::ast::ResolvedVar>,
         substitution: &HashMap<String, TermId>,
         claimed_lhs: TermId,
