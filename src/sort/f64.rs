@@ -48,7 +48,7 @@ impl BaseSort for F64Sort {
         base_values: &BaseValues,
         value: Value,
         termdag: &mut TermDag,
-    ) -> Term {
+    ) -> TermId {
         let f = base_values.unwrap::<F>(value);
 
         termdag.lit(Literal::Float(f.0))

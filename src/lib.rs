@@ -1465,7 +1465,7 @@ impl EGraph {
         if let Some(original_typechecking) = self.proof_state.original_typechecking.as_mut() {
             // Typecheck using the original egraph
             // TODO this is ugly- we don't need an entire e-graph just for type information.
-            let mut typechecked = original_typechecking.typecheck_program(&desugared)?;
+            let typechecked = original_typechecking.typecheck_program(&desugared)?;
 
             for command in &typechecked {
                 if !command_supports_proof_encoding(&command.to_command(), &self.type_info) {

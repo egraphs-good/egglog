@@ -552,7 +552,7 @@ fn generate_literal_validator(
         if let Some((ty, _)) = &arg.t.cast {
             quote! {
                 let #x = if let Term::Lit(lit) = termdag.get(args[#i]) {
-                    match <#ty as egglog::prelude::LiteralConvertible>::from_literal(lit) {
+                    match <#ty as egglog::prelude::LiteralConvertible>::from_literal(&lit) {
                         Some(val) => val,
                         None => panic!("Failed to extract literal for argument {}", #i),
                     }

@@ -73,7 +73,6 @@ pub(crate) fn run_merge(
 ///    - Ground equalities from union statements (bidirectional)
 ///    - Reflexive equalities from set statements
 pub(crate) fn process_actions(
-    proof_id: ProofId,
     rule_name: &str,
     mut bindings: HashMap<String, TermId>,
     actions: &[&GenericAction<ResolvedCall, crate::ast::ResolvedVar>],
@@ -218,13 +217,11 @@ fn add_subterm_reflexive_equalities(
 ///
 /// This expects the program to be in proof normalized form where globals appear as Let actions.
 pub(crate) fn gather_globals(
-    proof_id: ProofId,
     prog: &[ResolvedNCommand],
     term_dag: &mut TermDag,
 ) -> HashMap<String, TermId> {
     let actions = gather_global_actions(prog);
     let ctx = process_actions(
-        proof_id,
         "global_action",
         HashMap::default(),
         &actions,
@@ -321,7 +318,6 @@ impl ProofCheckContext {
         // Use the new refactored functions
         let actions = gather_global_actions(prog);
         let action_ctx = process_actions(
-            proof_id,
             "global_actions",
             HashMap::default(),
             &actions,
@@ -834,7 +830,6 @@ impl ProofStore {
         let mut bindings = ctx.global_bindings.clone();
         bindings.extend(substitution.clone());
         let action_ctx = process_actions(
-            proof_id,
             rule_name,
             bindings,
             &action_refs,

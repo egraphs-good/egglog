@@ -111,7 +111,7 @@ impl<'a> ProofInstrumentor<'a> {
         );
 
         // Remove globals from the proof
-        proof_store.remove_globals(&self.egraph.desugared_commands, proof_id);
+        proof_store.remove_globals(&self.egraph.desugared_commands);
 
         // if the existence proof has a single premise, extract that premise proof
         let proof = proof_store.get(proof_id);

@@ -317,7 +317,7 @@ impl ProofStore {
                     .last()
                     .expect("function application should have at least one argument");
                 let merged_last =
-                    run_merge(raw_proof_id, &mut self.term_dag, function, prog, *old_last, *new_last).unwrap();
+                    run_merge(&mut self.term_dag, function, prog, *old_last, *new_last).unwrap();
                 let mut merged_args = old_args[..old_args.len() - 1].to_vec();
                 merged_args.push(merged_last);
                 let merged_term = self.term_dag.app(head.clone(), merged_args);

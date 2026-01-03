@@ -146,7 +146,7 @@ impl ContainerSort for SetSort {
         _value: Value,
         termdag: &mut TermDag,
         element_terms: Vec<TermId>,
-    ) -> Term {
+    ) -> TermId {
         termdag.app("set-of".into(), element_terms)
     }
 
