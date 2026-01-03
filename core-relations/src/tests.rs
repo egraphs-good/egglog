@@ -37,13 +37,13 @@ fn basic_query() {
     } = basic_math_egraph();
 
     db.base_values_mut().register_type::<i64>();
-    let add_int = db.add_external_function(make_external_func(|exec_state, args| {
+    let add_int = db.add_external_function(Box::new(make_external_func(|exec_state, args| {
         let [x, y] = args else { panic!() };
         let x: i64 = exec_state.base_values().unwrap(*x);
         let y: i64 = exec_state.base_values().unwrap(*y);
         let z: i64 = x + y;
         Some(exec_state.base_values().get(z))
-    }));
+    })));
 
     // Add the numbers 1 through 10 to the num table at timestamp 0.
     let mut ids = Vec::new();
@@ -951,20 +951,20 @@ fn lookup_with_fallback_partial_success() {
     let log = Arc::new(Mutex::new(Vec::new()));
     let log_vals = {
         let inner = log.clone();
-        db.add_external_function(make_external_func(move |_, args| {
+        db.add_external_function(Box::new(make_external_func(move |_, args| {
             let [x] = args else { panic!() };
             inner.lock().unwrap().push(*x);
             Some(*x)
-        }))
+        })))
     };
-    let assert_even = db.add_external_function(make_external_func(|_, args| {
+    let assert_even = db.add_external_function(Box::new(make_external_func(|_, args| {
         let [x] = args else { panic!() };
         if x.rep().is_multiple_of(2) {
             Some(*x)
         } else {
             None
         }
-    }));
+    })));
 
     let mut rsb = RuleSetBuilder::new(&mut db);
     let mut query = rsb.new_rule();
@@ -1041,19 +1041,19 @@ fn call_external_with_fallback() {
         buf.stage_insert(&[v(5), v(0)]);
     }
     db.merge_all();
-    let assert_even = db.add_external_function(make_external_func(|_, args| {
+    let assert_even = db.add_external_function(Box::new(make_external_func(|_, args| {
         let [x] = args else { panic!() };
         if x.rep().is_multiple_of(2) {
             Some(*x)
         } else {
             None
         }
-    }));
+    })));
 
-    let inc = db.add_external_function(make_external_func(|_, args| {
+    let inc = db.add_external_function(Box::new(make_external_func(|_, args| {
         let [x] = args else { panic!() };
         if x.rep() == 5 { None } else { Some(x.inc()) }
-    }));
+    })));
 
     let mut rsb = RuleSetBuilder::new(&mut db);
     let mut query = rsb.new_rule();
