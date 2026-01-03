@@ -147,7 +147,9 @@ pub(crate) fn desugar_command(
             vec![NCommand::UserDefined(span, name, args)]
         }
         Command::Prove(span, query) => desugar_prove(parser, span, query),
-        Command::ProveExists(span, constructor) => vec![NCommand::ProveExists(span, constructor)],
+        Command::ProveExists(span, constructor) => {
+            vec![NCommand::ProveExists(span, constructor)]
+        }
     };
 
     Ok(res)
