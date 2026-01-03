@@ -71,8 +71,9 @@ impl ProofStore {
 
         // Now update all proofs to use the new term IDs
         for proof in &mut self.id_to_proof {
-            proof.lhs = *term_mapping.get(&proof.lhs).unwrap_or(&proof.lhs);
-            proof.rhs = *term_mapping.get(&proof.rhs).unwrap_or(&proof.rhs);
+            proof.map_terms_mut(|term_id| {
+                *term_mapping.get(&term_id).unwrap_or(&term_id)
+            });
         }
     }
 
@@ -307,5 +308,32 @@ impl ProofStore {
 
         self.id_to_proof[proof_id] = proof;
         proof_id
+    }
+}
+
+
+impl Proof {
+    fn map_terms_mut<F>(&mut self, mut f: F)
+    where
+        F: FnMut(TermId) -> TermId,
+    {
+        self.lhs = f(self.lhs);
+        self.rhs = f(self.rhs);
+        match &mut self.justification {
+            Justification::Fiat => {}
+            Justification::Rule { name: _, premise_proofs: _, substitution } => {
+                for term_id in substitution.values_mut() {
+                    *term_id = f(*term_id);
+                }
+            }
+            Justification::MergeFn {
+                old_proof: _,
+                new_proof: _,
+                function: _,
+            } => {}
+            Justification::Congr { proof: _, child_index: _, child_proof: _ } => {}
+            Justification::Trans(_, _) => {}
+            Justification::Sym(_) => {}
+        }
     }
 }

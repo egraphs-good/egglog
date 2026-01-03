@@ -58,6 +58,9 @@ struct Args {
     /// Run with proof generation enabled
     #[clap(long)]
     proofs: bool,
+    /// Enable proof testing, turning all `check` statements into `prove` statements
+    #[clap(long)]
+    proof_testing: bool,
 }
 
 /// Start a command-line interface for the E-graph.
@@ -80,6 +83,11 @@ pub fn cli(mut egraph: EGraph) {
 
     if args.proofs {
         egraph = egraph.with_proofs_enabled();
+    }
+
+    if args.proof_testing {
+        egraph = egraph.with_proofs_enabled();
+        egraph = egraph.with_proof_testing();
     }
 
     rayon::ThreadPoolBuilder::new()

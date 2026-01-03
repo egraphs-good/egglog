@@ -1,0 +1,17 @@
+---
+source: tests/files.rs
+expression: snapshot
+---
+
+
+
+
+
+
+(Rule
+  (= (Strings "found" "hello world") (Strings "found" "hello world"))
+  (name "r1")
+  (premises
+    (Fiat (= (Strings "hello" "world") (Strings "hello" "world")))
+    (Fiat (= "hello world" "hello world")))
+  (substitution (a "hello") (res "hello world") (b "world")))

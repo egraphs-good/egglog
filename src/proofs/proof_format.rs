@@ -283,10 +283,6 @@ impl ProofStore {
                     .map(|pid| self.convert_raw_proof(prog, raw_store, *pid))
                     .collect();
 
-                let formatted_premises: Vec<String> = converted_premises
-                    .iter()
-                    .map(|pid| self.proof_to_string(*pid))
-                    .collect();
                 let substitution = self.compute_rule_substitution(prog, name, &converted_premises);
 
                 Proof {
