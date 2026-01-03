@@ -430,8 +430,9 @@ impl EGraph {
     }
 
     /// Enable testing of getting proofs for all `check` commands.
-    pub fn enable_proof_testing(&mut self) {
+    pub fn with_proof_testing(mut self) -> Self {
         self.proof_state.proof_testing = true;
+        self
     }
 
     /// Add a user-defined command to the e-graph

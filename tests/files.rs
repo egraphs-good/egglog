@@ -46,7 +46,7 @@ impl Run {
 
     fn egraph(&self) -> EGraph {
         if self.proofs {
-            EGraph::new_with_proofs()
+            EGraph::new_with_proofs().with_proof_testing()
         } else if self.term_encoding {
             EGraph::new_with_term_encoding()
         } else {

@@ -55,10 +55,11 @@ pub fn add_primitive_with_validator(input: TokenStream) -> TokenStream {
     // Parse the primitive part
     let prim_tokens: TokenStream = primitive_part.parse().unwrap();
     let parsed = parse_macro_input!(prim_tokens as AddPrimitive);
-    
+
     // Parse the validator expression
-    let validator_expr: Expr = syn::parse_str(validator_part).expect("Failed to parse validator expression");
-    
+    let validator_expr: Expr =
+        syn::parse_str(validator_part).expect("Failed to parse validator expression");
+
     // Build the primitive construction with validator
     build_add_primitive_impl(parsed, Some(validator_expr))
 }
@@ -260,7 +261,7 @@ fn build_add_primitive_impl(parsed: AddPrimitive, validator: Option<Expr>) -> To
             Some(::std::sync::Arc::new(#validator_expr))
         );),
     };
-    
+
     quote! {{
         #[allow(unused_imports)] use ::egglog::{*, ast::*, constraint::*};
         #[allow(unused_imports)] use ::std::{any::TypeId, sync::Arc};
@@ -476,19 +477,25 @@ impl Parse for Arrow {
 pub fn add_literal_prim(input: TokenStream) -> TokenStream {
     // Parse the input using the same structure as add_primitive
     let parsed = parse_macro_input!(input as AddPrimitive);
-    
+
     // Varargs not supported for literal primitives
     if parsed.is_varargs {
-        return syn::Error::new_spanned(&parsed.name, "varargs not supported for literal primitives")
-            .to_compile_error()
-            .into();
+        return syn::Error::new_spanned(
+            &parsed.name,
+            "varargs not supported for literal primitives",
+        )
+        .to_compile_error()
+        .into();
     }
 
     // Context not supported for literal primitives
     if parsed.context.0.is_some() {
-        return syn::Error::new_spanned(&parsed.name, "context not supported for literal primitives")
-            .to_compile_error()
-            .into();
+        return syn::Error::new_spanned(
+            &parsed.name,
+            "context not supported for literal primitives",
+        )
+        .to_compile_error()
+        .into();
     }
 
     // Check for polymorphic types
@@ -502,7 +509,7 @@ pub fn add_literal_prim(input: TokenStream) -> TokenStream {
             .into();
         }
     }
-    
+
     if parsed.ret.cast.is_none() {
         return syn::Error::new_spanned(
             &parsed.name,
@@ -513,8 +520,9 @@ pub fn add_literal_prim(input: TokenStream) -> TokenStream {
     }
 
     // Generate the validator body
-    let validator_body = generate_literal_validator(&parsed.args, &parsed.ret, &parsed.body, parsed.is_fallible);
-    
+    let validator_body =
+        generate_literal_validator(&parsed.args, &parsed.ret, &parsed.body, parsed.is_fallible);
+
     // Create the validator expression
     let validator_expr = syn::parse2::<Expr>(quote! {
         |termdag: &mut ::egglog::TermDag, args: &[::egglog::TermId]| -> Option<::egglog::TermId> {
@@ -524,8 +532,9 @@ pub fn add_literal_prim(input: TokenStream) -> TokenStream {
                 #validator_body
             })
         }
-    }).unwrap();
-    
+    })
+    .unwrap();
+
     // Use the shared implementation with the validator
     build_add_primitive_impl(parsed, Some(validator_expr))
 }
