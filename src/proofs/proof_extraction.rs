@@ -97,13 +97,12 @@ impl<'a> ProofInstrumentor<'a> {
             .output
             .clone();
 
-        let (_, proof_term) = extractor
+        let (_, proof_term_id) = extractor
             .extract_best_with_sort(self.egraph, &mut termdag, proof_value, proof_sort)
             .unwrap_or_else(|| {
                 panic!("failed to extract proof term for constructor {}", func.name)
             });
 
-        let proof_term_id = termdag.lookup(&proof_term);
         let (mut proof_store, proof_id) = proof_store_from_term(
             &self.egraph.proof_state.proof_names,
             termdag,

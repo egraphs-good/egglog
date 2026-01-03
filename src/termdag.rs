@@ -108,38 +108,34 @@ impl TermDag {
     /// and insert into the DAG if it is not already present.
     ///
     /// Panics if any of the children are not already in the DAG.
-    pub fn app(&mut self, sym: String, children: Vec<Term>) -> Term {
-        let node = Term::App(sym, children.iter().map(|c| self.lookup(c)).collect());
+    pub fn app(&mut self, sym: String, children: Vec<TermId>) -> TermId {
+        let node = Term::App(sym, children);
 
-        self.add_node(&node);
-
-        node
+        self.add_node(&node)
     }
 
     /// Make and return a [`Term::Lit`] with the given literal, and insert into
     /// the DAG if it is not already present.
-    pub fn lit(&mut self, lit: Literal) -> Term {
+    pub fn lit(&mut self, lit: Literal) -> TermId {
         let node = Term::Lit(lit);
 
-        self.add_node(&node);
-
-        node
+        self.add_node(&node)
     }
 
     /// Make and return a [`Term::Var`] with the given symbol, and insert into
     /// the DAG if it is not already present.
-    pub fn var(&mut self, sym: String) -> Term {
+    pub fn var(&mut self, sym: String) -> TermId {
         let node = Term::Var(sym);
 
-        self.add_node(&node);
-
-        node
+        self.add_node(&node)
     }
 
-    fn add_node(&mut self, node: &Term) {
-        if self.nodes.get(node).is_none() {
+    fn add_node(&mut self, node: &Term) -> TermId {
+        self.nodes.get_index_of(node).unwrap_or_else(|| {
+            let id = self.nodes.len();
             self.nodes.insert(node.clone());
-        }
+            id
+        })
     }
 
     /// Recursively converts the given expression to a term.
@@ -147,36 +143,30 @@ impl TermDag {
     /// This involves inserting every subexpression into this DAG. Because
     /// TermDags are hashconsed, the resulting term is guaranteed to maximally
     /// share subterms.
-    pub fn expr_to_term(&mut self, expr: &GenericExpr<String, String>) -> Term {
+    pub fn expr_to_term(&mut self, expr: &GenericExpr<String, String>) -> TermId {
         let res = match expr {
             GenericExpr::Lit(_, lit) => Term::Lit(lit.clone()),
             GenericExpr::Var(_, v) => Term::Var(v.to_owned()),
             GenericExpr::Call(_, op, args) => {
-                let args = args
-                    .iter()
-                    .map(|a| {
-                        let term = self.expr_to_term(a);
-                        self.lookup(&term)
-                    })
-                    .collect();
+                let args = args.iter().map(|a| self.expr_to_term(a)).collect();
                 Term::App(op.clone(), args)
             }
         };
-        self.add_node(&res);
-        res
+        self.add_node(&res)
     }
 
     /// Recursively converts the given term to an expression.
     ///
     /// Panics if the term contains subterms that are not in the DAG.
-    pub fn term_to_expr(&self, term: &Term, span: Span) -> Expr {
+    pub fn term_to_expr(&self, term: &TermId, span: Span) -> Expr {
+        let term = self.get(*term);
         match term {
             Term::Lit(lit) => Expr::Lit(span, lit.clone()),
             Term::Var(v) => Expr::Var(span, v.clone()),
             Term::App(op, args) => {
                 let args: Vec<_> = args
                     .iter()
-                    .map(|a| self.term_to_expr(self.get(*a), span.clone()))
+                    .map(|a| self.term_to_expr(a, span.clone()))
                     .collect();
                 Expr::Call(span, op.clone(), args)
             }
@@ -370,14 +360,13 @@ impl TermDag {
     /// Converts the given term to a string.
     ///
     /// Panics if the term or any of its subterms are not in the DAG.
-    pub fn to_string(&self, term: &Term) -> String {
+    pub fn to_string(&self, term: TermId) -> String {
         let mut result = String::new();
         // subranges of the `result` string containing already stringified subterms
         let mut ranges = HashMap::<TermId, (usize, usize)>::default();
-        let id = self.lookup(term);
         // use a stack to avoid stack overflow
 
-        let mut stack = vec![(id, false, None)];
+        let mut stack = vec![(term, false, None)];
         while let Some((id, space_before, mut start_index)) = stack.pop() {
             if space_before {
                 result.push(' ');
@@ -424,7 +413,7 @@ mod tests {
     use super::*;
     use crate::{ast::*, span, util::SymbolGen};
 
-    fn parse_term(s: &str) -> (TermDag, Term) {
+    fn parse_term(s: &str) -> (TermDag, TermId) {
         let e = Parser::default().get_expr_from_string(None, s).unwrap();
         let mut td = TermDag::default();
         let t = td.expr_to_term(&e);
@@ -463,11 +452,12 @@ mod tests {
     fn test_match_term_app() {
         let s = r#"(f (g x y) x y (g x y))"#;
         let (td, t) = parse_term(s);
-        match_term_app!(t; {
+        let term = td.get(t);
+        match_term_app!(term; {
             ("f", [_, x, _, _]) => {
                 let span = span!();
                 assert_eq!(
-                    td.term_to_expr(td.get(*x), span.clone()),
+                    td.term_to_expr(x, span.clone()),
                     crate::ast::GenericExpr::Var(span, "x".to_owned())
                 )
             }
@@ -479,14 +469,14 @@ mod tests {
     fn test_to_string() {
         let s = r#"(f (g x y) x y (g x y))"#;
         let (td, t) = parse_term(s);
-        assert_eq!(td.to_string(&t), s);
+        assert_eq!(td.to_string(t), s);
     }
 
     #[test]
     fn test_lookup() {
         let s = r#"(f (g x y) x y (g x y))"#;
         let (td, t) = parse_term(s);
-        assert_eq!(td.lookup(&t), td.size() - 1);
+        assert_eq!(t, td.size() - 1);
     }
 
     #[test]
@@ -507,7 +497,7 @@ mod tests {
         let (td, t) = parse_term(s);
         let mut buf = String::new();
         let mut sym = SymbolGen::new(String::new());
-        let repr = td.to_string_with_let_internal(&mut sym, td.lookup(&t), &mut buf);
+        let repr = td.to_string_with_let_internal(&mut sym, t, &mut buf);
         assert!(buf.is_empty(), "expected no let bindings, got {buf}");
         assert_eq!(repr, s);
     }
@@ -519,7 +509,7 @@ mod tests {
         let (td, t) = parse_term(&s);
         let mut buf = String::new();
         let mut sym = SymbolGen::new(String::new());
-        let repr = td.to_string_with_let_internal(&mut sym, td.lookup(&t), &mut buf);
+        let repr = td.to_string_with_let_internal(&mut sym, t, &mut buf);
         let first_line = buf.lines().next().expect("expected let binding");
         assert!(first_line.starts_with("(let t"));
         assert!(buf.contains("(h"));
@@ -538,7 +528,7 @@ mod tests {
         let (td, t) = parse_term(s);
         let mut buf = String::new();
         let mut sym = SymbolGen::new(String::new());
-        let repr = td.to_string_with_let_internal(&mut sym, td.lookup(&t), &mut buf);
+        let repr = td.to_string_with_let_internal(&mut sym, t, &mut buf);
         assert!(buf.is_empty());
         assert!(repr.contains('\n'));
         assert!(repr.contains("\n  "));
@@ -551,7 +541,7 @@ mod tests {
         let (td, t) = parse_term(expr);
         let mut buf = String::new();
         let mut sym = SymbolGen::new(String::new());
-        let repr = td.to_string_with_let_internal(&mut sym, td.lookup(&t), &mut buf);
+        let repr = td.to_string_with_let_internal(&mut sym, t, &mut buf);
         assert!(repr.contains('\n'), "expected multiline output, got {repr}");
         let has_lonely_paren = repr.lines().any(|line| line.trim() == ")");
         assert!(

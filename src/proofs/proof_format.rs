@@ -1,7 +1,7 @@
 use crate::{
     ResolvedCall, Term, TermDag, TermId,
     ast::{FunctionSubtype, ResolvedExpr, ResolvedFact, ResolvedNCommand},
-    proofs::proof_encoding_helpers::EncodingNames,
+    proofs::{proof_checker::run_merge, proof_encoding_helpers::EncodingNames},
     typechecking::FuncType,
     util::{HEntry, HashMap, IndexSet, SymbolGen},
 };
@@ -300,13 +300,30 @@ impl ProofStore {
                 let new_proof_id = self.convert_raw_proof(prog, raw_store, *new_raw);
                 let old_proof = &self.id_to_proof[old_proof_id];
                 let new_proof = &self.id_to_proof[new_proof_id];
-                debug_assert_eq!(
-                    old_proof.lhs, new_proof.lhs,
-                    "merge function proofs must agree on the canonical term"
-                );
+
+                // TODO we need to run the merge function on the last term to get the proposition we are proving
+                let old_proof_term = self.term_dag.get(old_proof.rhs).clone();
+                let new_proof_term = self.term_dag.get(new_proof.rhs).clone();
+                let Term::App(head, old_args) = old_proof_term else {
+                    panic!("expected function application in merge fn proof lhs");
+                };
+                let Term::App(_, new_args) = new_proof_term else {
+                    panic!("expected function application in merge fn proof rhs");
+                };
+                let old_last = old_args
+                    .last()
+                    .expect("function application should have at least one argument");
+                let new_last = new_args
+                    .last()
+                    .expect("function application should have at least one argument");
+                let merged_last =
+                    run_merge(raw_proof_id, &mut self.term_dag, function, prog, *old_last, *new_last).unwrap();
+                let mut merged_args = old_args[..old_args.len() - 1].to_vec();
+                merged_args.push(merged_last);
+                let merged_term = self.term_dag.app(head.clone(), merged_args);
                 Proof {
-                    lhs: old_proof.lhs,
-                    rhs: new_proof.rhs,
+                    lhs: merged_term,
+                    rhs: merged_term,
                     justification: Justification::MergeFn {
                         function: function.clone(),
                         old_proof: old_proof_id,
@@ -533,20 +550,19 @@ impl ProofStore {
             args.len()
         );
 
-        let updated_children: Vec<Term> = args
+        let updated_children: Vec<TermId> = args
             .iter()
             .enumerate()
             .map(|(idx, child_id)| {
                 if idx == child_index {
-                    self.term_dag.get(new_child).clone()
+                    new_child
                 } else {
-                    self.term_dag.get(*child_id).clone()
+                    *child_id
                 }
             })
             .collect();
 
-        let new_term = self.term_dag.app(head.clone(), updated_children);
-        self.term_dag.lookup(&new_term)
+        self.term_dag.app(head.clone(), updated_children)
     }
 
     /// Get a string representation of the proof with the given id.
@@ -588,17 +604,15 @@ impl ProofStore {
         let proof = &self.id_to_proof[proof_id];
 
         // Helper to create (= lhs rhs) term
-        let make_equality = |dag: &mut TermDag, lhs: TermId, rhs: TermId| -> Term {
-            let lhs_term = dag.get(lhs).clone();
-            let rhs_term = dag.get(rhs).clone();
-            dag.app("=".to_string(), vec![lhs_term, rhs_term])
+        let make_equality = |dag: &mut TermDag, lhs: TermId, rhs: TermId| -> TermId {
+            dag.app("=".to_string(), vec![lhs, rhs])
         };
 
         let term_id = match &proof.justification {
             Justification::Fiat => {
                 let equality = make_equality(dag, proof.lhs, proof.rhs);
                 let term = dag.app("Fiat".to_string(), vec![equality]);
-                dag.lookup(&term)
+                term
             }
             Justification::Rule {
                 name,
@@ -609,29 +623,22 @@ impl ProofStore {
                 let name_literal = dag.lit(Literal::String(name.clone()));
                 let name_term = dag.app("name".to_string(), vec![name_literal]);
 
-                let premise_terms: Vec<Term> = premise_proofs
+                let premise_terms: Vec<TermId> = premise_proofs
                     .iter()
-                    .map(|pid| {
-                        let child_id = self.proof_to_term_for_printing(dag, *pid, cache);
-                        dag.get(child_id).clone()
-                    })
+                    .map(|pid| self.proof_to_term_for_printing(dag, *pid, cache))
                     .collect();
                 let premises_term = dag.app("premises".to_string(), premise_terms);
 
-                let substitution_terms: Vec<Term> = substitution
+                let substitution_terms: Vec<TermId> = substitution
                     .iter()
-                    .map(|(var, term_id)| {
-                        let child = dag.get(*term_id).clone();
-                        dag.app(var.clone(), vec![child])
-                    })
+                    .map(|(var, term_id)| dag.app(var.clone(), vec![term_id.clone()]))
                     .collect();
                 let substitution_term = dag.app("substitution".to_string(), substitution_terms);
 
-                let term = dag.app(
+                dag.app(
                     "Rule".to_string(),
                     vec![equality, name_term, premises_term, substitution_term],
-                );
-                dag.lookup(&term)
+                )
             }
             Justification::MergeFn {
                 function,
@@ -641,30 +648,25 @@ impl ProofStore {
                 let equality = make_equality(dag, proof.lhs, proof.rhs);
                 let old_term_id = self.proof_to_term_for_printing(dag, *old_proof, cache);
                 let new_term_id = self.proof_to_term_for_printing(dag, *new_proof, cache);
-                let old_term = dag.get(old_term_id).clone();
-                let new_term = dag.get(new_term_id).clone();
                 let function_term = dag.var(function.clone());
-                let term = dag.app(
+                dag.app(
                     "Merge".to_string(),
-                    vec![equality, function_term, old_term, new_term],
-                );
-                dag.lookup(&term)
+                    vec![equality, function_term, old_term_id, new_term_id],
+                )
             }
             Justification::Trans(left, right) => {
                 let equality = make_equality(dag, proof.lhs, proof.rhs);
                 let left_term_id = self.proof_to_term_for_printing(dag, *left, cache);
                 let right_term_id = self.proof_to_term_for_printing(dag, *right, cache);
-                let left_term = dag.get(left_term_id).clone();
-                let right_term = dag.get(right_term_id).clone();
-                let term = dag.app("Trans".to_string(), vec![equality, left_term, right_term]);
-                dag.lookup(&term)
+                dag.app(
+                    "Trans".to_string(),
+                    vec![equality, left_term_id, right_term_id],
+                )
             }
             Justification::Sym(inner) => {
                 let equality = make_equality(dag, proof.lhs, proof.rhs);
                 let inner_term_id = self.proof_to_term_for_printing(dag, *inner, cache);
-                let inner_term = dag.get(inner_term_id).clone();
-                let term = dag.app("Sym".to_string(), vec![equality, inner_term]);
-                dag.lookup(&term)
+                dag.app("Sym".to_string(), vec![equality, inner_term_id])
             }
             Justification::Congr {
                 proof: base,
@@ -673,15 +675,12 @@ impl ProofStore {
             } => {
                 let equality = make_equality(dag, proof.lhs, proof.rhs);
                 let base_term_id = self.proof_to_term_for_printing(dag, *base, cache);
-                let base_proof_term = dag.get(base_term_id).clone();
                 let child_term_id = self.proof_to_term_for_printing(dag, *child_proof, cache);
-                let child_proof_term = dag.get(child_term_id).clone();
                 let index_term = dag.lit(Literal::Int(*child_index as i64));
-                let term = dag.app(
+                dag.app(
                     "Congr".to_string(),
-                    vec![equality, base_proof_term, child_proof_term, index_term],
-                );
-                dag.lookup(&term)
+                    vec![equality, base_term_id, child_term_id, index_term],
+                )
             }
         };
 
