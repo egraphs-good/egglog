@@ -1,0 +1,23 @@
+---
+source: tests/files.rs
+expression: snapshot_content
+---
+(
+   (AllocVar (Expr "u"))
+   (AllocVar (Expr "v"))
+   (expr-points-to (Expr "xp"))
+   (expr-points-to (Expr "&(r->x)"))
+   (expr-points-to (Expr "yp"))
+   (expr-points-to (Expr "&(r->y)"))
+   (expr-points-to (Expr "u"))
+   (expr-points-to (Expr "v"))
+   (expr-points-to (Expr "(struct s){u, v}"))
+   (expr-points-to (Expr "zpp"))
+   (expr-points-to (Expr "&(sp->x)"))
+   (ptr-points-to (AllocVar (Expr "sp")))
+)
+(
+   (AllocVar (Expr "sp"))
+   (expr-points-to (Expr "r"))
+   (expr-points-to (Expr "sp"))
+)
