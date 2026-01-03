@@ -691,8 +691,6 @@ impl ProofStore {
                         rule_name: rule_name.to_string(),
                         reason: "Failed to evaluate LHS expression under substitution".to_string(),
                     })?;
-                let fact_lhs_term = self.term_dag.get(fact_lhs);
-                let fact_lhs_str = self.term_dag.to_string(fact_lhs_term);
                 let fact_rhs = self
                     .eval_expr_with_subst(proof_id, rule_name, rhs_expr, substitution)
                     .map_err(|_| ProofCheckError::RuleSubstitutionMismatch {
@@ -700,16 +698,20 @@ impl ProofStore {
                         rule_name: rule_name.to_string(),
                         reason: "Failed to evaluate RHS expression under substitution".to_string(),
                     })?;
-                let fact_rhs_term = self.term_dag.get(fact_rhs);
-                let fact_rhs_str = self.term_dag.to_string(fact_rhs_term);
-
                 if fact_lhs != *lhs || fact_rhs != *rhs {
+                    let fact_lhs_term = self.term_dag.get(fact_lhs);
+                    let fact_lhs_str = self.term_dag.to_string(fact_lhs_term);
+                    let fact_rhs_term = self.term_dag.get(fact_rhs);
+                    let fact_rhs_str = self.term_dag.to_string(fact_rhs_term);
+                    let subst_str = format_substitution(&self.term_dag, substitution);
+                    let proof_str = self.proof_to_string(proof_id);
                     return Err(ProofCheckError::RuleSubstitutionMismatch {
                         proof_id,
                         rule_name: rule_name.to_string(),
                         reason: format!(
-                            "Fact {} does not match proposition (= {fact_lhs_str} {fact_rhs_str}) under substitution",
-                            fact.to_string(),
+                            "Fact {fact} does not match proven proposition under substitution {subst_str}.\nSubstituted: (= {fact_lhs_str} {fact_rhs_str})\nPremise proves: (= {} {})\nProof: {proof_str}",
+                            format_term(&self.term_dag, *lhs),
+                            format_term(&self.term_dag, *rhs),
                         ),
                     });
                 }
