@@ -34,6 +34,38 @@ pub(crate) fn gather_global_actions(
     actions
 }
 
+pub(crate) fn run_merge(
+    term_dag: &mut TermDag,
+    func_name: &str,
+    prog: &[ResolvedNCommand],
+    old_term: TermId,
+    new_term: TermId,
+) -> Result<TermId, ProofCheckError> {
+    let mut subst = HashMap::default();
+    subst.insert("old".to_string(), old_term);
+    subst.insert("new".to_string(), new_term);
+    for cmd in prog {
+        if let GenericNCommand::Function(func_decl) = cmd {
+            if func_decl.name == func_name {
+                // run the merge function for this function using eval_expr
+                let expr =
+                    func_decl
+                        .merge
+                        .as_ref()
+                        .ok_or_else(|| ProofCheckError::FunctionNotFound {
+                            function_name: func_name.to_string(),
+                        })?;
+                let (result_term, _) =
+                    eval_expr_with_subst( "merge_function", expr, term_dag, &subst)?;
+                return Ok(result_term);
+            }
+        }
+    }
+    Err(ProofCheckError::FunctionNotFound {
+        function_name: func_name.to_string(),
+    })
+}
+
 /// Given a sequence of actions, computes:
 /// 1. All the terms bound to variables (from Let actions)
 /// 2. All the propositions implied by the actions:
@@ -55,16 +87,16 @@ pub(crate) fn process_actions(
             GenericAction::Let(_, var, expr) => {
                 // Evaluate the expression and collect propositions
                 let (term_id, new_props) =
-                    eval_expr_with_subst(proof_id, rule_name, expr, term_dag, &bindings)?;
+                    eval_expr_with_subst( rule_name, expr, term_dag, &bindings)?;
                 bindings.insert(var.name.clone(), term_id);
                 propositions.extend(new_props);
             }
             GenericAction::Union(_, lhs_expr, rhs_expr) => {
                 // Union creates ground equalities
                 let (lhs_term, lhs_props) =
-                    eval_expr_with_subst(proof_id, rule_name, lhs_expr, term_dag, &bindings)?;
+                    eval_expr_with_subst( rule_name, lhs_expr, term_dag, &bindings)?;
                 let (rhs_term, rhs_props) =
-                    eval_expr_with_subst(proof_id, rule_name, rhs_expr, term_dag, &bindings)?;
+                    eval_expr_with_subst( rule_name, rhs_expr, term_dag, &bindings)?;
 
                 // Collect propositions from evaluating both sides
                 propositions.extend(lhs_props);
@@ -79,13 +111,13 @@ pub(crate) fn process_actions(
                 all_args.push(rhs.clone());
                 let call_expr = ResolvedExpr::Call(crate::ast::Span::Panic, func.clone(), all_args);
                 let (_term, new_props) =
-                    eval_expr_with_subst(proof_id, rule_name, &call_expr, term_dag, &bindings)?;
+                    eval_expr_with_subst( rule_name, &call_expr, term_dag, &bindings)?;
                 propositions.extend(new_props);
             }
             GenericAction::Expr(_, expr) => {
                 // Expr creates reflexive equality for its result
                 let (_, new_props) =
-                    eval_expr_with_subst(proof_id, rule_name, expr, term_dag, &bindings)?;
+                    eval_expr_with_subst( rule_name, expr, term_dag, &bindings)?;
                 propositions.extend(new_props);
             }
             GenericAction::Panic(_, _) => {
@@ -108,7 +140,6 @@ pub(crate) fn process_actions(
 /// all reflexive equalities for the term and its subterms.
 /// Returns Err(()) if evaluation fails.
 fn eval_expr_with_subst(
-    proof_id: ProofId,
     rule_name: &str,
     expr: &ResolvedExpr,
     dag: &mut TermDag,
@@ -117,16 +148,12 @@ fn eval_expr_with_subst(
     let mut propositions = HashSet::default();
 
     let term_id = match expr {
-        ResolvedExpr::Lit(_, lit) => {
-            let term = dag.lit(lit.clone());
-            dag.lookup(&term)
-        }
+        ResolvedExpr::Lit(_, lit) => dag.lit(lit.clone()),
         ResolvedExpr::Var(_, var) => {
             subst
                 .get(&var.name)
                 .copied()
                 .ok_or(ProofCheckError::RuleSubstitutionMismatch {
-                    proof_id,
                     rule_name: rule_name.to_string(),
                     reason: format!("Variable {} not found in substitution", var.name),
                 })?
@@ -136,21 +163,18 @@ fn eval_expr_with_subst(
                 let mut arg_terms = Vec::new();
                 for arg in args {
                     let (arg_term, arg_props) =
-                        eval_expr_with_subst(proof_id, rule_name, arg, dag, subst)?;
+                        eval_expr_with_subst( rule_name, arg, dag, subst)?;
                     arg_terms.push(arg_term);
                     propositions.extend(arg_props);
                 }
-                let term_refs: Vec<Term> =
-                    arg_terms.iter().map(|&tid| dag.get(tid).clone()).collect();
-                let term = dag.app(head.name().to_string(), term_refs);
-                dag.lookup(&term)
+                dag.app(head.name().to_string(), arg_terms)
             }
             ResolvedCall::Primitive(specialized_primitive) => {
                 // run validator, throwing error if it fails
                 let mut arg_terms = Vec::new();
                 for arg in args {
                     let (arg_term, arg_props) =
-                        eval_expr_with_subst(proof_id, rule_name, arg, dag, subst)?;
+                        eval_expr_with_subst( rule_name, arg, dag, subst)?;
                     arg_terms.push(arg_term);
                     propositions.extend(arg_props);
                 }
@@ -159,7 +183,6 @@ fn eval_expr_with_subst(
                     .validator()
                     .expect("Expected primitive to have validator since proof mode is enabled");
                 validator(dag, &arg_terms).ok_or(ProofCheckError::PrimitiveValidationFailed {
-                    proof_id,
                     function_name: specialized_primitive.name().to_string(),
                     reason: "Primitive validator failed".to_string(),
                 })?
@@ -248,40 +271,25 @@ pub enum ProofCheckError {
         actual: usize,
     },
     /// Rule substitution doesn't match the proof
-    #[error("Proof {proof_id}: rule '{rule_name}' substitution error: {reason}")]
+    #[error("Rule '{rule_name}' substitution error: {reason}")]
     RuleSubstitutionMismatch {
-        proof_id: ProofId,
         rule_name: String,
         reason: String,
     },
     /// Primitive operation validator failed
-    #[error("Proof {proof_id}: primitive '{function_name}' validation failed: {reason}")]
+    #[error("Primitive '{function_name}' validation failed: {reason}")]
     PrimitiveValidationFailed {
-        proof_id: ProofId,
         function_name: String,
         reason: String,
     },
-    /// MergeFn proofs must agree on canonical term
-    #[error(
-        "Proof {proof_id}: merge function proofs must agree on canonical term, but old.lhs = {old_lhs:?} and new.lhs = {new_lhs:?}"
-    )]
-    MergeFnMismatch {
-        proof_id: ProofId,
-        old_lhs: TermId,
-        new_lhs: TermId,
-    },
     /// Could not find the rule referenced in a proof
-    #[error("Proof {proof_id}: could not find rule '{rule_name}'")]
+    #[error("Could not find rule '{rule_name}'")]
     RuleNotFound {
-        proof_id: ProofId,
         rule_name: String,
     },
     /// Could not find the function referenced in a proof
-    #[error("Proof {proof_id}: could not find function '{function_name}'")]
-    FunctionNotFound {
-        proof_id: ProofId,
-        function_name: String,
-    },
+    #[error("Could not find function '{function_name}'")]
+    FunctionNotFound { function_name: String },
     /// Fiat proof is invalid (not a global or literal)
     #[error("Proof {proof_id}: Fiat proof invalid: {reason}")]
     InvalidFiat { proof_id: ProofId, reason: String },
@@ -404,7 +412,6 @@ impl ProofStore {
                         _ => None,
                     })
                     .ok_or_else(|| ProofCheckError::RuleNotFound {
-                        proof_id,
                         rule_name: name.clone(),
                     })?;
 
@@ -564,20 +571,17 @@ impl ProofStore {
                 }
 
                 // Construct the expected new term by replacing the child
-                let expected_rhs_children: Vec<Term> = children
+                let expected_rhs_children: Vec<TermId> = children
                     .iter()
                     .enumerate()
-                    .map(|(i, &child)| {
-                        if i == *child_index {
-                            self.term_dag.get(child_rhs).clone()
-                        } else {
-                            self.term_dag.get(child).clone()
-                        }
-                    })
+                    .map(
+                        |(i, &child)| {
+                            if i == *child_index { child_rhs } else { child }
+                        },
+                    )
                     .collect();
 
-                let expected_rhs_term = self.term_dag.app(func_name, expected_rhs_children);
-                let expected_rhs_id = self.term_dag.lookup(&expected_rhs_term);
+                let expected_rhs_id = self.term_dag.app(func_name, expected_rhs_children);
 
                 // Verify proof.rhs matches expected
                 if proof.rhs != expected_rhs_id {
@@ -640,7 +644,6 @@ impl ProofStore {
                 // Get the output variable's term
                 let var_term = substitution.get(&v.name).copied().ok_or_else(|| {
                     ProofCheckError::RuleSubstitutionMismatch {
-                        proof_id,
                         rule_name: rule_name.to_string(),
                         reason: format!("Variable {} not in substitution", v.name),
                     }
@@ -650,7 +653,6 @@ impl ProofStore {
                 let mut arg_terms = Vec::new();
                 for arg in args {
                     arg_terms.push(self.eval_expr_with_subst(
-                        proof_id,
                         rule_name,
                         arg,
                         substitution,
@@ -659,18 +661,11 @@ impl ProofStore {
                 // Add the output variable as the last argument
                 arg_terms.push(var_term);
 
-                // Build the expected term: func(args..., output)
-                let term_refs: Vec<Term> = arg_terms
-                    .iter()
-                    .map(|&tid| self.term_dag.get(tid).clone())
-                    .collect();
-                let expected_term = self.term_dag.app(name.clone(), term_refs);
-                let expected_term_id = self.term_dag.lookup(&expected_term);
+                let expected_term_id = self.term_dag.app(name.clone(), arg_terms);
 
                 // The proposition should be a reflexive equality for this term
                 if *lhs != expected_term_id || *rhs != expected_term_id {
                     return Err(ProofCheckError::RuleSubstitutionMismatch {
-                        proof_id,
                         rule_name: rule_name.to_string(),
                         reason: format!(
                             "Function fact does not match proposition: expected reflexive equality for {:?}, got {:?} = {:?}",
@@ -685,28 +680,23 @@ impl ProofStore {
             }
             ResolvedFact::Eq(_, lhs_expr, rhs_expr) => {
                 let fact_lhs = self
-                    .eval_expr_with_subst(proof_id, rule_name, lhs_expr, substitution)
+                    .eval_expr_with_subst( rule_name, lhs_expr, substitution)
                     .map_err(|_| ProofCheckError::RuleSubstitutionMismatch {
-                        proof_id,
                         rule_name: rule_name.to_string(),
                         reason: "Failed to evaluate LHS expression under substitution".to_string(),
                     })?;
                 let fact_rhs = self
-                    .eval_expr_with_subst(proof_id, rule_name, rhs_expr, substitution)
+                    .eval_expr_with_subst( rule_name, rhs_expr, substitution)
                     .map_err(|_| ProofCheckError::RuleSubstitutionMismatch {
-                        proof_id,
                         rule_name: rule_name.to_string(),
                         reason: "Failed to evaluate RHS expression under substitution".to_string(),
                     })?;
                 if fact_lhs != *lhs || fact_rhs != *rhs {
-                    let fact_lhs_term = self.term_dag.get(fact_lhs);
-                    let fact_lhs_str = self.term_dag.to_string(fact_lhs_term);
-                    let fact_rhs_term = self.term_dag.get(fact_rhs);
-                    let fact_rhs_str = self.term_dag.to_string(fact_rhs_term);
+                    let fact_lhs_str = self.term_dag.to_string(fact_lhs);
+                    let fact_rhs_str = self.term_dag.to_string(fact_rhs);
                     let subst_str = format_substitution(&self.term_dag, substitution);
                     let proof_str = self.proof_to_string(proof_id);
                     return Err(ProofCheckError::RuleSubstitutionMismatch {
-                        proof_id,
                         rule_name: rule_name.to_string(),
                         reason: format!(
                             "Fact {fact} does not match proven proposition under substitution {subst_str}.\nSubstituted: (= {fact_lhs_str} {fact_rhs_str})\nPremise proves: (= {} {})\nProof: {proof_str}",
@@ -721,16 +711,14 @@ impl ProofStore {
             // For a plain expr, the proof should have the form t1 = t2 where t2 matches the expr under substitution
             ResolvedFact::Fact(expr) => {
                 let fact_term = self
-                    .eval_expr_with_subst(proof_id, rule_name, expr, substitution)
+                    .eval_expr_with_subst( rule_name, expr, substitution)
                     .map_err(|_| ProofCheckError::RuleSubstitutionMismatch {
-                        proof_id,
                         rule_name: rule_name.to_string(),
                         reason: "Failed to evaluate Fact expression under substitution".to_string(),
                     })?;
 
                 if fact_term != *rhs {
                     return Err(ProofCheckError::RuleSubstitutionMismatch {
-                        proof_id,
                         rule_name: rule_name.to_string(),
                         reason: format!(
                             "Fact {} does not match proposition under substitution {}. Got {}, expected {}.",
@@ -750,19 +738,16 @@ impl ProofStore {
     /// Evaluate an expression with a variable substitution
     fn eval_expr_with_subst(
         &mut self,
-        proof_id: ProofId,
         rule_name: &str,
         expr: &ResolvedExpr,
         substitution: &HashMap<String, TermId>,
     ) -> Result<TermId, ProofCheckError> {
         match expr {
             ResolvedExpr::Lit(_, lit) => {
-                let term = self.term_dag.lit(lit.clone());
-                Ok(self.term_dag.lookup(&term))
+                Ok(self.term_dag.lit(lit.clone()))
             }
             ResolvedExpr::Var(_, var) => substitution.get(&var.name).copied().ok_or_else(|| {
                 ProofCheckError::RuleSubstitutionMismatch {
-                    proof_id,
                     rule_name: rule_name.to_string(),
                     reason: format!(
                         "Could not find variable '{}' in substitution. Available variables: {}",
@@ -780,7 +765,6 @@ impl ProofStore {
                 let mut arg_terms = Vec::new();
                 for arg in args {
                     arg_terms.push(self.eval_expr_with_subst(
-                        proof_id,
                         rule_name,
                         arg,
                         substitution,
@@ -794,7 +778,6 @@ impl ProofStore {
                             let result =
                                 validator(&mut self.term_dag, &arg_terms).ok_or_else(|| {
                                     ProofCheckError::PrimitiveValidationFailed {
-                                        proof_id: 0, // Will be filled in by caller
                                         function_name: prim.name().to_string(),
                                         reason:
                                             "Validator returned None - primitive operation failed"
@@ -805,7 +788,6 @@ impl ProofStore {
                         } else {
                             // No validator available - primitives without validators can't be checked in proofs
                             Err(ProofCheckError::PrimitiveValidationFailed {
-                                proof_id: 0,
                                 function_name: prim.name().to_string(),
                                 reason: "Primitive has no validator - cannot verify in proof"
                                     .to_string(),
@@ -815,13 +797,7 @@ impl ProofStore {
                     ResolvedCall::Func(func) => {
                         match func.subtype {
                             FunctionSubtype::Constructor => {
-                                // Constructors: build the term normally
-                                let term_refs: Vec<Term> = arg_terms
-                                    .iter()
-                                    .map(|&tid| self.term_dag.get(tid).clone())
-                                    .collect();
-                                let term = self.term_dag.app(func.name.clone(), term_refs);
-                                Ok(self.term_dag.lookup(&term))
+                                Ok(self.term_dag.app(func.name.clone(), arg_terms))
                             }
                             FunctionSubtype::Custom => {
                                 // Custom functions should not appear in proof normal form!
@@ -865,7 +841,6 @@ impl ProofStore {
             &mut self.term_dag,
         )
         .map_err(|e| ProofCheckError::RuleSubstitutionMismatch {
-            proof_id,
             rule_name: rule_name.to_string(),
             reason: format!("Failed to process rule head actions: {}", e),
         })?;
@@ -881,9 +856,7 @@ impl ProofStore {
             return Ok(());
         }
 
-        // If not found, provide detailed error message using helper functions
         Err(ProofCheckError::RuleSubstitutionMismatch {
-            proof_id,
             rule_name: rule_name.to_string(),
             reason: format!(
                 "Rule head doesn't produce claimed equality Lhs:\n{}\nRHS:\n{}\nSUBST:\n{}",

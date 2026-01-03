@@ -45,24 +45,7 @@ impl ProofStore {
                             .iter()
                             .map(|&child_id| *term_mapping.get(&child_id).unwrap_or(&child_id))
                             .collect();
-
-                        // Check if any children changed
-                        let changed = mapped_args
-                            .iter()
-                            .zip(args.iter())
-                            .any(|(new, old)| new != old);
-
-                        if changed {
-                            // Reconstruct the term with new children
-                            let new_children: Vec<Term> = mapped_args
-                                .iter()
-                                .map(|&id| self.term_dag.get(id).clone())
-                                .collect();
-                            let new_term = self.term_dag.app(head.clone(), new_children);
-                            self.term_dag.lookup(&new_term)
-                        } else {
-                            term_id
-                        }
+                        self.term_dag.app(head.clone(), mapped_args)
                     }
                 }
             };
@@ -71,9 +54,7 @@ impl ProofStore {
 
         // Now update all proofs to use the new term IDs
         for proof in &mut self.id_to_proof {
-            proof.map_terms_mut(|term_id| {
-                *term_mapping.get(&term_id).unwrap_or(&term_id)
-            });
+            proof.map_terms_mut(|term_id| *term_mapping.get(&term_id).unwrap_or(&term_id));
         }
     }
 
@@ -96,8 +77,8 @@ impl ProofStore {
         let proof = self.get(proof_id).clone();
         match proof {
             Proof {
-                lhs,
-                rhs,
+                lhs: _,
+                rhs: _,
                 justification:
                     Justification::Congr {
                         child_proof,
@@ -311,7 +292,6 @@ impl ProofStore {
     }
 }
 
-
 impl Proof {
     fn map_terms_mut<F>(&mut self, mut f: F)
     where
@@ -321,7 +301,11 @@ impl Proof {
         self.rhs = f(self.rhs);
         match &mut self.justification {
             Justification::Fiat => {}
-            Justification::Rule { name: _, premise_proofs: _, substitution } => {
+            Justification::Rule {
+                name: _,
+                premise_proofs: _,
+                substitution,
+            } => {
                 for term_id in substitution.values_mut() {
                     *term_id = f(*term_id);
                 }
@@ -331,7 +315,11 @@ impl Proof {
                 new_proof: _,
                 function: _,
             } => {}
-            Justification::Congr { proof: _, child_index: _, child_proof: _ } => {}
+            Justification::Congr {
+                proof: _,
+                child_index: _,
+                child_proof: _,
+            } => {}
             Justification::Trans(_, _) => {}
             Justification::Sym(_) => {}
         }

@@ -2,6 +2,7 @@
 
 ## [Unreleased] - ReleaseDate
 
+- Refactored API to use [`TermId`] more consistently instead of `Term` where possible, simplifying egglog code.
 - Require globals to use the `$` prefix; missing prefixes now log a warning by default and can be upgraded to errors with `--strict-mode` or `EGraph::set_strict_mode`.
 - Desugar `relation`s to `constructor`s to simplify the language and implementation. Relations no longer return unit `()` values.
 - Export let bindings in the serialized format so they are visualized (#701)
