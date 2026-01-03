@@ -425,10 +425,19 @@ impl ProofStore {
                     Term::App(head_name, children) if head_name == head.name() => children.clone(),
                     _ => panic!("expected function application term in proof rhs"),
                 };
+                // assert children length matches args length + 1 for bound var
+                if children.len() != args.len() + 1 {
+                    panic!(
+                        "function call arity mismatch for {}: expected {}, got {}",
+                        head.name(),
+                        args.len() + 1,
+                        children.len()
+                    );
+                }
+
                 // bind last child to v
-                let var_child_index = args.len() - 1;
-                let var_child_term = children[var_child_index];
-                self.add_to_subst(base_subst, &v.name, var_child_term);
+                let var_child_term = children.last().unwrap();
+                self.add_to_subst(base_subst, &v.name, *var_child_term);
                 // unify other args
                 for (arg_expr, child_term) in args.iter().zip(children.iter()) {
                     self.unify_expr(arg_expr, *child_term, base_subst);
