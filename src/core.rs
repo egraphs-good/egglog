@@ -1107,3 +1107,129 @@ impl ResolvedRuleExt for ResolvedRule {
         Ok(rule)
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    type TestCoreRule = GenericCoreRule<String, String, String>;
+
+    fn make_var(name: &str) -> GenericAtomTerm<String> {
+        GenericAtomTerm::Var(span!(), name.to_string())
+    }
+
+    fn make_atom(head: &str, args: Vec<&str>) -> GenericAtom<String, String> {
+        GenericAtom {
+            span: span!(),
+            head: head.to_string(),
+            args: args.into_iter().map(make_var).collect(),
+        }
+    }
+
+    fn value_eq_string(_at1: &GenericAtomTerm<String>, _at2: &GenericAtomTerm<String>) -> String {
+        "value-eq".to_string()
+    }
+
+    #[test]
+    fn test_remove_dup_vars_basic() {
+        let rule = TestCoreRule {
+            span: span!(),
+            body: Query {
+                atoms: vec![
+                    make_atom("R", vec!["x", "y", "z1"]),
+                    make_atom("R", vec!["x", "y", "z2"]),
+                    make_atom("R", vec!["x", "z3"]),
+                    make_atom("R", vec!["a", "b", "z4"]),
+                    make_atom("R", vec!["c", "d", "z5"]),
+                ],
+            },
+            head: GenericCoreActions::default(),
+        };
+
+        let result = rule.remove_dup_vars(value_eq_string);
+
+        assert_eq!(result.body.atoms.len(), 4);
+        assert_eq!(result.body.atoms[0].head, "R");
+        assert_eq!(result.body.atoms[0].args[0], make_var("x"));
+        assert_eq!(result.body.atoms[0].args[1], make_var("y"));
+        assert_eq!(result.body.atoms[1].args.len(), 2);
+    }
+
+    #[test]
+    fn test_remove_dup_vars_fixpoint() {
+        // Test: R(x, y, z1), R(x, y, z2), R(x, y, z3) should all get unified
+        // This tests that the fixpoint iteration works correctly
+        let rule = TestCoreRule {
+            span: span!(),
+            body: Query {
+                atoms: vec![
+                    make_atom("R", vec!["x", "y", "z1"]),
+                    make_atom("R", vec!["x", "y", "z2"]),
+                    make_atom("R", vec!["x", "y", "z3"]),
+                    make_atom("S", vec!["z1", "z2", "z3"]),
+                    make_atom("S", vec!["z2", "z1", "z4"]),
+                ],
+            },
+            head: GenericCoreActions::default(),
+        };
+
+        let result = rule.remove_dup_vars(value_eq_string);
+
+        assert_eq!(result.body.atoms.len(), 2);
+        assert_eq!(result.body.atoms[0].head, "R");
+        assert_eq!(result.body.atoms[0].args[0], make_var("x"));
+        assert_eq!(result.body.atoms[0].args[1], make_var("y"));
+        assert_eq!(result.body.atoms[1].args[0], result.body.atoms[1].args[1]);
+
+        let rule = TestCoreRule {
+            span: span!(),
+            body: Query {
+                atoms: vec![
+                    make_atom("R", vec!["x", "y", "z1"]),
+                    make_atom("R", vec!["x", "y", "z2"]),
+                    make_atom("R", vec!["x", "y", "z3"]),
+                    make_atom("R", vec!["z1", "z2", "z1"]),
+                    make_atom("R", vec!["z2", "z1", "x"]),
+                    make_atom("R", vec!["z2", "z2", "y"]),
+                ],
+            },
+            head: GenericCoreActions::default(),
+        };
+
+        let result = rule.remove_dup_vars(value_eq_string);
+
+        assert_eq!(result.body.atoms.len(), 1);
+        assert_eq!(result.body.atoms[0].head, "R");
+        assert_eq!(result.body.atoms[0].args[0], result.body.atoms[0].args[1]);
+        assert_eq!(result.body.atoms[0].args[0], result.body.atoms[0].args[2]);
+    }
+
+    #[test]
+    fn test_remove_dup_vars_with_actions_using_removed_var() {
+        let rule = TestCoreRule {
+            span: span!(),
+            body: Query {
+                atoms: vec![
+                    make_atom("R", vec!["x", "y", "z1"]),
+                    make_atom("R", vec!["x", "y", "z2"]),
+                ],
+            },
+            head: GenericCoreActions(vec![GenericCoreAction::Union(
+                span!(),
+                make_var("z2"),
+                make_var("z1"),
+            )]),
+        };
+
+        let result = rule.remove_dup_vars(value_eq_string);
+
+        assert_eq!(result.body.atoms.len(), 1);
+        assert!(matches!(
+            &result.head.0.as_slice(),
+            &[
+                GenericCoreAction::LetAtomTerm(_, _, _),
+                GenericCoreAction::Union(_, _, _)
+            ]
+        ));
+    }
+}
