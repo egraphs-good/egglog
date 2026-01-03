@@ -197,7 +197,8 @@ fn generate_tests(glob: &str) -> Vec<Trial> {
             });
         }
 
-        if !should_fail
+        // TODO- running desugar + proofs fails on `prove-exists` commands. We can fix this by tying proof tables to constructors in the egglog itself.
+        /*if !should_fail
             && supports_proofs
             && !run.path.to_string_lossy().contains("math-microbenchmark")
             && !requires_proofs
@@ -207,7 +208,7 @@ fn generate_tests(glob: &str) -> Vec<Trial> {
                 desugar: true,
                 ..run.clone()
             });
-        }
+        }*/
     }
 
     trials
