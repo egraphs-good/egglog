@@ -172,8 +172,8 @@ impl ContainerSort for MapSort {
         _container_values: &ContainerValues,
         _value: Value,
         termdag: &mut TermDag,
-        element_terms: Vec<Term>,
-    ) -> Term {
+        element_terms: Vec<TermId>,
+    ) -> TermId {
         let mut term = termdag.app("map-empty".into(), vec![]);
 
         for x in element_terms.chunks(2) {

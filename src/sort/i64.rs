@@ -69,7 +69,7 @@ impl BaseSort for I64Sort {
         base_values: &BaseValues,
         value: Value,
         termdag: &mut TermDag,
-    ) -> Term {
+    ) -> TermId {
         let i = base_values.unwrap::<i64>(value);
 
         termdag.lit(Literal::Int(i))
