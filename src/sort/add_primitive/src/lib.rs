@@ -579,8 +579,7 @@ fn generate_literal_validator(
             match result {
                 Some(result) => {
                     let result_lit = #ret_conv(result);
-                    let result_term = termdag.lit(result_lit);
-                    termdag.lookup(&result_term)
+                    termdag.lit(result_lit)
                 }
                 None => panic!("Primitive operation failed"),
             }
@@ -589,8 +588,7 @@ fn generate_literal_validator(
         quote! {
             let result = #body;
             let result_lit = #ret_conv(result);
-            let result_term = termdag.lit(result_lit);
-            termdag.lookup(&result_term)
+            termdag.lit(result_lit)
         }
     };
 
