@@ -622,11 +622,10 @@ impl ProofStore {
     ) -> Result<(), ProofCheckError> {
         let Proposition::TermsEq(lhs, rhs) = prop;
         match fact {
-            // proof normal form for functions: (= v (f args...))
+            // proof normal form for functions: (= (f args...) v)
             // In the term representation, custom functions store output as last arg: f(args..., v)
             ResolvedFact::Eq(
                 _,
-                ResolvedExpr::Var(_, v),
                 ResolvedExpr::Call(
                     _,
                     ResolvedCall::Func(FuncType {
@@ -636,6 +635,7 @@ impl ProofStore {
                     }),
                     args,
                 ),
+                ResolvedExpr::Var(_, v),
             ) => {
                 // Get the output variable's term
                 let var_term = substitution.get(&v.name).copied().ok_or_else(|| {
@@ -825,10 +825,10 @@ impl ProofStore {
                             }
                             FunctionSubtype::Custom => {
                                 // Custom functions should not appear in proof normal form!
-                                // They should be in the form (= v (f args...)) in the rule body
+                                // They should be in the form (= (f args...) v) in the rule body
                                 panic!(
                                     "Custom function {} should not appear in expression evaluation during proof checking. \
-                                    Functions should be in proof normal form: (= output_var (function args...))",
+                                    Functions should be in proof normal form: (= (function args...) output_var)",
                                     func.name
                                 );
                             }

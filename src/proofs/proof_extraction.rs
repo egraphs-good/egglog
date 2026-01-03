@@ -114,25 +114,25 @@ impl<'a> ProofInstrumentor<'a> {
         // Remove globals from the proof
         proof_store.remove_globals(&self.egraph.desugared_commands, proof_id);
 
-        // now every existence proof starts with a rule proof with a single premise, so extract that proof
+        // if the existence proof has a single premise, extract that premise proof
         let proof = proof_store.get(proof_id);
-        let premise_proof = match proof.justification() {
+        let extra_rule_removed = match proof.justification() {
             Justification::Rule { premise_proofs, .. } => match premise_proofs.as_slice() {
                 [premise_proof_id] => *premise_proof_id,
-                _ => panic!("expected a single premise proof for existence proof"),
+                _ => proof_id,
             },
             _ => panic!("expected rule justification for existence proof"),
         };
 
         // Check the proof before simplification
         if let Result::Err(e) =
-            proof_store.check_proof(premise_proof, &self.egraph.desugared_commands)
+            proof_store.check_proof(extra_rule_removed, &self.egraph.desugared_commands)
         {
             panic!("Existence proof should be valid before simplification: {e}");
         }
 
         // simplify the proof
-        let simplified_proof = proof_store.simplify(premise_proof);
+        let simplified_proof = proof_store.simplify(extra_rule_removed);
 
         // Check the proof after simplification
         /*proof_store
