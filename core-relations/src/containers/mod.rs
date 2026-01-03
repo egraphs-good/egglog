@@ -26,7 +26,7 @@ use rustc_hash::FxHasher;
 use crate::{
     ColumnId, CounterId, ExecutionState, Offset, SubsetRef, TableId, TaggedRowBuffer, Value,
     WrappedTable,
-    common::{DashMap, IndexSet, InternTable, SubsetTracker},
+    common::{DashMap, IndexSet, SubsetTracker},
     parallel_heuristics::{parallelize_inter_container_op, parallelize_intra_container_op},
     table_spec::Rebuilder,
 };
@@ -46,9 +46,30 @@ impl<T: Fn(&mut ExecutionState, Value, Value) -> Value + Clone + Send + Sync> Me
 dyn_clone::clone_trait_object!(MergeFn);
 
 #[derive(Clone, Default)]
+struct ContainerIds {
+    ids: IndexSet<TypeId>,
+}
+
+impl ContainerIds {
+    fn insert(&mut self, ty: TypeId) -> ContainerValueId {
+        if let Some(idx) = self.ids.get_index_of(&ty) {
+            ContainerValueId::from_usize(idx)
+        } else {
+            let idx = self.ids.len();
+            self.ids.insert(ty);
+            ContainerValueId::from_usize(idx)
+        }
+    }
+
+    fn get(&self, ty: &TypeId) -> Option<ContainerValueId> {
+        self.ids.get_index_of(ty).map(ContainerValueId::from_usize)
+    }
+}
+
+#[derive(Clone, Default)]
 pub struct ContainerValues {
     subset_tracker: SubsetTracker,
-    container_ids: InternTable<TypeId, ContainerValueId>,
+    container_ids: ContainerIds,
     data: DenseIdMap<ContainerValueId, Box<dyn DynamicContainerEnv + Send + Sync>>,
 }
 
@@ -58,7 +79,7 @@ impl ContainerValues {
     }
 
     fn get<C: ContainerValue>(&self) -> Option<&ContainerEnv<C>> {
-        let id = self.container_ids.intern(&TypeId::of::<C>());
+        let id = self.container_ids.get(&TypeId::of::<C>())?;
         let res = self.data.get(id)?.as_any();
         Some(res.downcast_ref::<ContainerEnv<C>>().unwrap())
     }
@@ -145,7 +166,7 @@ impl ContainerValues {
         id_counter: CounterId,
         merge_fn: impl MergeFn + 'static,
     ) -> ContainerValueId {
-        let id = self.container_ids.intern(&TypeId::of::<C>());
+        let id = self.container_ids.insert(TypeId::of::<C>());
         self.data.get_or_insert(id, || {
             Box::new(ContainerEnv::<C>::new(Box::new(merge_fn), id_counter))
         });
