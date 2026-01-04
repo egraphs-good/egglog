@@ -614,13 +614,14 @@ fn container_test() {
         name: "vec".into(),
         can_subsume: false,
     });
-    let int_add = egraph.register_external_func(Box::new(make_external_func(|exec_state, args| {
-        let [x, y] = args else { panic!() };
-        let x: i64 = exec_state.base_values().unwrap(*x);
-        let y: i64 = exec_state.base_values().unwrap(*y);
-        let z: i64 = x + y;
-        Some(exec_state.base_values().get(z))
-    })));
+    let int_add =
+        egraph.register_external_func(Box::new(make_external_func(|exec_state, args| {
+            let [x, y] = args else { panic!() };
+            let x: i64 = exec_state.base_values().unwrap(*x);
+            let y: i64 = exec_state.base_values().unwrap(*y);
+            let z: i64 = x + y;
+            Some(exec_state.base_values().get(z))
+        })));
     let vec_last = register_vec_last(&mut egraph);
     let vec_push = register_vec_push(&mut egraph);
 
@@ -816,10 +817,11 @@ fn rhs_only_rule_only_runs_once() {
     let mut egraph = EGraph::default();
     let counter = Arc::new(AtomicUsize::new(0));
     let inner = counter.clone();
-    let inc_counter_func = egraph.register_external_func(Box::new(make_external_func(move |_, _| {
-        inner.fetch_add(1, Ordering::SeqCst);
-        Some(Value::new(0))
-    })));
+    let inc_counter_func =
+        egraph.register_external_func(Box::new(make_external_func(move |_, _| {
+            inner.fetch_add(1, Ordering::SeqCst);
+            Some(Value::new(0))
+        })));
     let inc_counter_rule = {
         let mut rb = egraph.new_rule("", true);
         rb.call_external_func(inc_counter_func, &[], ColumnTy::Id, || "".to_string());
@@ -838,8 +840,8 @@ fn mergefn_arithmetic() {
     let int_base = egraph.base_values_mut().register_type::<i64>();
 
     // Create external functions for multiplication and addition
-    let multiply_func = egraph.register_external_func(Box::new(core_relations::make_external_func(
-        |state, vals| -> Option<Value> {
+    let multiply_func = egraph.register_external_func(Box::new(
+        core_relations::make_external_func(|state, vals| -> Option<Value> {
             let [a, b] = vals else {
                 return None;
             };
@@ -847,8 +849,8 @@ fn mergefn_arithmetic() {
             let b_val = state.base_values().unwrap::<i64>(*b);
             let res = state.base_values().get::<i64>(a_val * b_val);
             Some(res)
-        },
-    )));
+        }),
+    ));
 
     let add_func = egraph.register_external_func(Box::new(core_relations::make_external_func(
         |state, vals| -> Option<Value> {
