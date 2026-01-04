@@ -435,6 +435,14 @@ impl ParallelRowBufWriter {
         RowId::from_usize(start_off / self.buf.n_columns)
     }
 
+    #[allow(dead_code)]
+    pub(crate) fn append_contents(&self, rows: &RowBuffer) -> RowId {
+        assert_eq!(rows.n_columns, self.buf.n_columns);
+        let start_off = self.vec.write_cell_slice(rows.data.as_slice());
+        debug_assert_eq!(start_off % self.buf.n_columns, 0);
+        RowId::from_usize(start_off / self.buf.n_columns)
+    }
+
     pub(crate) fn finish(mut self) -> RowBuffer {
         self.buf.data = Pooled::new(self.vec.finish());
         self.buf.total_rows = self.buf.data.len() / self.buf.n_columns;

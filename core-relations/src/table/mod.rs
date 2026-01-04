@@ -810,7 +810,8 @@ impl SortedWritesTable {
                     () => {{
                         // Phase 2: Write the staged rows to the row writer. This only
                         // works due to the `ParallelRowBufWriter` machinery.
-                        let start_row = staged.write_output(&row_writer);
+                        let (start_row, stale) = staged.write_output(&row_writer);
+                        marked_stale += stale;
                         // Phase 3: With the values buffered in the row buffer, we can
                         // write them back to the shard, pointed to the correct rows.
 
@@ -822,6 +823,10 @@ impl SortedWritesTable {
                         let mut cur_row = start_row;
                         let read_handle = row_writer.read_handle();
                         for row in staged.rows() {
+                            if row.first().map(Value::is_stale).unwrap_or(false) {
+                                cur_row = cur_row.inc();
+                                continue;
+                            }
                             use hashbrown::hash_table::Entry;
                             checker.check_local(row);
                             changed = true;
@@ -1417,7 +1422,7 @@ struct StagedOutputs {
 
 impl StagedOutputs {
     fn rows(&self) -> impl Iterator<Item = &[Value]> {
-        self.rows.non_stale()
+        self.rows.iter()
     }
     fn new(n_keys: usize, n_cols: usize, capacity: usize) -> Self {
         let mut res = with_pool_set(|ps| StagedOutputs {
@@ -1480,18 +1485,10 @@ impl StagedOutputs {
         }
     }
 
-    /// Write the contents of the staged outputs to the given writer, returning
-    /// the initial RowId of the new output.
-    fn write_output(&self, output: &ParallelRowBufWriter) -> RowId {
-        let n_rows = self.rows.len() - self.n_stale;
-        let n_vals = n_rows * self.rows.arity();
-        output.write_raw_values(
-            WithExactSize {
-                iter: self.rows.non_stale().flatten().copied(),
-                size: n_vals,
-            },
-            n_rows,
-        )
+    /// Write the contents of the staged outputs to the given writer, returning the initial RowId
+    /// of the new output. Returns the number of stale values in the buffer that was appended.
+    fn write_output(&self, output: &ParallelRowBufWriter) -> (RowId, usize) {
+        (output.append_contents(&self.rows), self.n_stale)
     }
 }
 

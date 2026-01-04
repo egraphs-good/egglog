@@ -133,14 +133,8 @@ impl<T> ParallelVecWriter<T> {
     where
         T: Copy,
     {
-        let start = self.reserve_space(items.len());
-        // SAFETY: the unsafe operations that `write_slice_at` performs are:
-        // * Writing to a shared buffer: this is safe because the `fetch_add` we
-        // perform gives us unique access to the subslice.
-        // * Writing past the length of the vector: this is safe because the
-        // above code pre-reseves sufficient capacity for `items` to write.
-        unsafe { self.write_slice_at(items, start) };
-        start
+        // SAFETY: `T: Copy` ensures it is trivially copyable.
+        unsafe { self.write_slice_raw(items) }
     }
 
     pub fn finish(self) -> Vec<T> {
@@ -200,10 +194,13 @@ impl<T> ParallelVecWriter<T> {
         );
     }
 
-    unsafe fn write_slice_at(&self, items: &[T], start: usize)
-    where
-        T: Copy,
-    {
+    /// Copy a raw slice into the underlying storage.
+    ///
+    /// # Safety
+    /// The caller must ensure that `T` is trivially copyable (bitwise copy is valid and does not
+    /// require Drop).
+    unsafe fn write_slice_raw(&self, items: &[T]) -> usize {
+        let start = self.reserve_space(items.len());
         let reader = self.data.read();
         debug_assert!(reader.capacity() >= start + items.len());
         // SAFETY: the slice is initialized, the destination range is reserved
@@ -216,5 +213,19 @@ impl<T> ParallelVecWriter<T> {
                 items.len(),
             );
         }
+        start
+    }
+}
+
+impl<T: Copy> ParallelVecWriter<std::cell::Cell<T>> {
+    /// A variant of write_slice that applies to `Cell<T>`.
+    ///
+    /// `Cell<T>` could _just_ be copy but it is not for some reason[0]. All of the safety
+    /// guarantees for slices of copy types apply to slices of cells just as well.
+    ///
+    /// [0]: https://users.rust-lang.org/t/why-is-cell-not-copy/2208
+    pub fn write_cell_slice(&self, items: &[std::cell::Cell<T>]) -> usize {
+        // SAFETY: `Cell<T>` is trivially copyable when `T: Copy`.
+        unsafe { self.write_slice_raw(items) }
     }
 }
