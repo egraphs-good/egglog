@@ -1491,27 +1491,3 @@ impl StagedOutputs {
         (output.append_contents(&self.rows), self.n_stale)
     }
 }
-
-/// A simple type used to attach a known size to an arbitrary iterator.
-struct WithExactSize<I> {
-    iter: I,
-    size: usize,
-}
-
-impl<I: Iterator> Iterator for WithExactSize<I> {
-    type Item = I::Item;
-
-    fn next(&mut self) -> Option<Self::Item> {
-        self.iter.next()
-    }
-
-    fn size_hint(&self) -> (usize, Option<usize>) {
-        self.iter.size_hint()
-    }
-}
-
-impl<I: Iterator> ExactSizeIterator for WithExactSize<I> {
-    fn len(&self) -> usize {
-        self.size
-    }
-}
