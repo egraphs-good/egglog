@@ -56,7 +56,12 @@ impl Run {
 
         // Debug mode enables parallelism which can lead to non-deterministic output ordering
         #[cfg(not(debug_assertions))]
-        if !self.should_fail() && !self.should_skip_snapshot() && _outputs.iter().any(|o| !matches!(o, CommandOutput::RunSchedule(..))) {
+        if !self.should_fail()
+            && !self.should_skip_snapshot()
+            && _outputs
+                .iter()
+                .any(|o| !matches!(o, CommandOutput::RunSchedule(..)))
+        {
             let snapshot_name = self.snapshot_name();
             let snapshot_content = self.outputs_to_snapshot(&_outputs);
             insta::assert_snapshot!(snapshot_name, snapshot_content);
