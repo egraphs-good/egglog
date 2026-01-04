@@ -1,0 +1,5 @@
+---
+source: tests/files.rs
+expression: snapshot_content
+---
+(CApp (CApp (CAddConst) (CN 1)) (CN 2))

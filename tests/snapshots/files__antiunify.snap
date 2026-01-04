@@ -1,0 +1,5 @@
+---
+source: tests/files.rs
+expression: snapshot_content
+---
+(Add (AU (Var "x") (Var "y")) (Num 3))

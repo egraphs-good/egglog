@@ -1,0 +1,11 @@
+---
+source: tests/files.rs
+expression: snapshot_content
+---
+(bigrat (from-string "1") (from-string "1"))
+(bigrat (from-string "2") (from-string "1"))
+(bigrat (from-string "401") (from-string "201"))
+(bigrat (from-string "401") (from-string "201"))
+1.9950248756218905
+10000.0
+10000.0

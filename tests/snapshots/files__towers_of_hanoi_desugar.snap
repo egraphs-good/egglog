@@ -1,0 +1,18 @@
+---
+source: tests/files.rs
+expression: snapshot_content
+---
+(
+   (Config (Cons 1 (Cons 2 (Cons 3 (Empty)))) (Empty) (Empty)) -> 0
+   (Config (Cons 2 (Cons 3 (Empty))) (Empty) (Cons 1 (Empty))) -> 1
+   (Config (Cons 2 (Cons 3 (Empty))) (Cons 1 (Empty)) (Empty)) -> 1
+   (Config (Cons 3 (Empty)) (Cons 1 (Empty)) (Cons 2 (Empty))) -> 2
+   (Config (Cons 3 (Empty)) (Cons 2 (Cons 1 (Empty))) (Empty)) -> 2
+   (Config (Cons 3 (Empty)) (Cons 2 (Empty)) (Cons 1 (Empty))) -> 2
+   (Config (Cons 3 (Empty)) (Empty) (Cons 2 (Cons 1 (Empty)))) -> 2
+   (Config (Cons 1 (Cons 3 (Empty))) (Cons 2 (Empty)) (Empty)) -> 3
+   (Config (Empty) (Cons 3 (Cons 2 (Empty))) (Cons 1 (Empty))) -> 3
+   (Config (Empty) (Cons 3 (Cons 2 (Cons 1 (Empty)))) (Empty)) -> 3
+)
+60
+5

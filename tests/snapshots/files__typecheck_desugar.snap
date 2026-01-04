@@ -1,0 +1,8 @@
+---
+source: tests/files.rs
+expression: snapshot_content
+---
+(TArr (TUnitConst) (TUnitConst))
+(TUnitConst)
+(TArr (TUnitConst) (TUnitConst))
+(TArr (TUnitConst) (TArr (TArr (TUnitConst) (TUnitConst)) (TUnitConst)))
