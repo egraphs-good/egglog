@@ -32,8 +32,12 @@ pub(crate) fn proof_store_from_term(
 
 /// Justifies a single grounded equality t1 = t2.
 /// Corresponds closely to the proof header in [`proof_encoding_helpers.rs`](crate::proofs::proof_encoding_helpers).
+/// Compared to [`Proof`], a [`RawProof`] leaves out the implicit [`Proposition`] being proven (in some cases) and
+/// leaves off the implicit rule substitution.
+/// Converting to a [`Proof`] with [`ProofStore::from_raw`] fills in these details.
 #[derive(Clone, PartialEq, Eq, Hash, Debug)]
 pub enum RawProof {
+    /// Equalities added at the top level are justified by fiat.
     Fiat(TermId, TermId),
     /// Given a rule name and proofs for each premise, produces a proof of a grounded equality t1 = t2 from the body of the rule.
     /// The subsitution is implicit- in [`ProofTerm`] they are explicit.
@@ -51,8 +55,9 @@ pub enum RawProof {
     Congr(ProofId, usize, ProofId),
 }
 
-/// The [`ProofStore`] is similar to a [`TermDag`].
-/// It's a hash-consed arena so that proofs can share sub-proofs.
+/// A [`ProofStore`] is similar to a [`TermDag`].
+/// It's a hash-consed arena enabling proofs to share sub-proofs.
+/// We refer to proofs with a [`ProofId`] which is an index into the store, used with [`ProofStore::get`] to retrieve the proof.
 #[derive(Clone, Debug)]
 pub struct ProofStore {
     pub(super) term_dag: TermDag,
@@ -60,7 +65,11 @@ pub struct ProofStore {
     pub(super) id_to_proof: Vec<Proof>,
 }
 
-/// Represents a proposition that can be proven - an equality between two terms
+/// In egglog, all proofs prove a [`Proposition`], which is an equality between two terms.
+/// An egglog e-graph is a partial equality relation, closed under symmetry, transitivity, and congruence.
+///
+/// Note that egglog does not assume reflexivity! For a term t, it's not assumed that t = t.
+/// Once an egglog action adds a term, for example (Add 1 2), then the equality (Add 1 2) = (Add 1 2) can be proven.
 #[derive(Clone, PartialEq, Eq, Hash, Debug)]
 pub struct Proposition {
     pub lhs: TermId,
@@ -68,6 +77,7 @@ pub struct Proposition {
 }
 
 impl Proposition {
+    /// Create a new proposition representing the equality lhs = rhs.
     pub fn new(lhs: TermId, rhs: TermId) -> Self {
         Proposition { lhs, rhs }
     }
@@ -83,41 +93,60 @@ impl Proposition {
     }
 }
 
-/// A proof shows that two grounded terms are equal, justified by a [`Justification`].
+/// A proof shows that a [`Proposition`] is true, justified by a [`Justification`].
 #[derive(Clone, Debug)]
 pub struct Proof {
     pub(super) proposition: Proposition,
     pub(super) justification: Justification,
 }
 
-/// Justifices a single grounded equality t1 = t2.
+/// Justifies a [`Proposition`] using one of several proof rules.
+/// Some justifications are axioms of egglog, like Sym, Trans, and Congr.
+/// Other justifications are based on user input, like Fiat, Rule, and MergeFn.
 #[derive(Clone, Debug)]
 pub enum Justification {
     /// Equalities added at the top level are justified by fiat.
-    /// Also, primitive reflexive equalities like 2 = 2 are justified by Fiat.
+    /// Primitive reflexive equalities like 2 = 2 are also justified by Fiat.
+    /// Reflexivity of equality is not assumed: a proof of `t = t`` must correspond to some `t` added at the top level.
     Fiat,
-    /// Given a rule name and proofs for each premise, produces a proof of a grounded equality t1 = t2 from the body of the rule.
+    /// Proves a grounded equality `t1 = t2` which appears
+    /// in the body of a rule given a substitution given proofs
+    /// for each premise ([`Fact`]) of the rule.
+    /// If the [`Propostion`] proven is a term like `t = t`,
+    /// t may be a subexpression of the body of the rule under the substitution.
+    ///
     /// A proof for a premise is an equality t1 = t2 that matches the premise under some substitution.
     /// A proof for a premise that doesn't involve equality (i.e. (Add a b)) gives a proof of t1 = t2 where t2 matches the premise.
+    /// A proof for a premise about a funciton (= (f a b ...) c) gives a proof (f a b ... c) = (f a b ... c).
     Rule {
         name: String,
         premise_proofs: Vec<ProofId>,
         substitution: HashMap<String, TermId>,
     },
-    /// Given two proofs f(c1, c2, ..., old) = f(c1, c2, ..., old) and f(c1, c2, ..., new) = f(c1, c2, ..., new), produces a proof
-    /// of f(c1, c2, ..., merge_fn)
+    /// Given two proofs f(c1, c2, ..., old) = f(c1, c2, ..., old) and f(c1, c2, ..., new) = f(c1, c2, ..., new),
+    /// proves either:
+    /// 1. f(c1, c2, ..., merge_fn) = f(c1, c2, ..., merge_fn) where merge_fn is the merge function of function f applied to old and new, or
+    /// 2. t = t where t is a subexpression of the merge function applied to old and new.
     MergeFn {
         function: String,
         old_proof: ProofId,
         new_proof: ProofId,
     },
+    /// Given proofs of t1 = t2 and t2 = t3, produces a proof of t1 = t3.
+    /// An axiom egglog assumes.
     Trans(ProofId, ProofId),
+    /// Given a proof of t1 = t2, produces a proof of t2 = t1.
+    /// An axiom egglog assumes.
     Sym(ProofId),
     /// Extends an equality proof with a congruence step.
-    /// given a proof `proof` that t1 = f(..., ci, ...)
-    /// and the child_index of ci in the term f(..., ci, ...)
-    /// and a child_proof that ci = c2,
-    /// proves t1 = f(..., c2, ...)
+    /// Given
+    /// 1) a `proof` with proposition `t1 = f(..., ci, ...)`
+    /// 2) and the `child_index` of `ci` in the term `f(..., ci, ...)`
+    /// 3) and a child_proof with proposition ci = c2,
+    ///
+    /// proves `t1 = f(..., c2, ...)`.
+    ///
+    /// An axiom egglog assumes.
     Congr {
         proof: ProofId,
         child_index: usize,
@@ -260,6 +289,24 @@ impl RawProofStore {
 }
 
 impl ProofStore {
+    /// Get the [`Proof`] with the given id.
+    /// Panics if the id is invalid (if it came from another proof store, for example).
+    pub fn get(&self, proof_id: ProofId) -> &Proof {
+        &self.id_to_proof[proof_id]
+    }
+
+    /// Get a string representation of the proof with the given id.
+    /// The string representation is a pretty-printed s-expression block with
+    /// let bindings for sub-proofs and sub-terms.
+    pub fn proof_to_string(&self, proof_id: ProofId) -> String {
+        let symbol_gen = &mut crate::util::SymbolGen::new("".to_string());
+        let mut buffer = String::new();
+        symbol_gen.include_zero(true);
+        let res = self.print_to_buffer(symbol_gen, proof_id, &mut buffer);
+        buffer.push_str(&res);
+        buffer
+    }
+
     fn from_raw(
         prog: &Vec<ResolvedNCommand>,
         raw_store: RawProofStore,
@@ -359,8 +406,6 @@ impl ProofStore {
                 let base_rhs = self.id_to_proof[base_id].rhs();
                 let child_rhs = self.id_to_proof[child_id].rhs();
                 let rhs = self.replace_term_child(base_rhs, *child_index, child_rhs);
-
-                
 
                 Proof {
                     proposition: Proposition::new(base_lhs, rhs),
@@ -564,18 +609,6 @@ impl ProofStore {
         self.term_dag.app(head.clone(), updated_children)
     }
 
-    /// Get a string representation of the proof with the given id.
-    /// The string representation is a pretty-printed s-expression block with
-    /// let bindings for sub-proofs and sub-terms.
-    pub fn proof_to_string(&self, proof_id: ProofId) -> String {
-        let symbol_gen = &mut crate::util::SymbolGen::new("".to_string());
-        let mut buffer = String::new();
-        symbol_gen.include_zero(true);
-        let res = self.print_to_buffer(symbol_gen, proof_id, &mut buffer);
-        buffer.push_str(&res);
-        buffer
-    }
-
     /// Print a proof with the given id, with subproofs and terms
     /// added as let bindings in `buffer`.
     /// Returns the printed proof string.
@@ -691,12 +724,6 @@ impl ProofStore {
 
         cache.insert(proof_id, term_id);
         term_id
-    }
-
-    /// Get the proof with the given id.
-    /// Panics if this id is invalid.
-    pub fn get(&self, proof_id: ProofId) -> &Proof {
-        &self.id_to_proof[proof_id]
     }
 }
 
