@@ -60,12 +60,36 @@ pub struct ProofStore {
     pub(super) id_to_proof: Vec<Proof>,
 }
 
+/// Represents a proposition that can be proven - an equality between two terms
+#[derive(Clone, PartialEq, Eq, Hash, Debug)]
+pub struct Proposition {
+    pub lhs: TermId,
+    pub rhs: TermId,
+}
+
+impl Proposition {
+    pub fn new(lhs: TermId, rhs: TermId) -> Self {
+        Proposition { lhs, rhs }
+    }
+}
+
 /// A proof shows that two grounded terms are equal, justified by a [`Justification`].
 #[derive(Clone, Debug)]
 pub struct Proof {
-    pub(super) lhs: TermId,
-    pub(super) rhs: TermId,
+    pub(super) proposition: Proposition,
     pub(super) justification: Justification,
+}
+
+impl Proof {
+    /// Get the left-hand side of the proven equality
+    pub fn lhs(&self) -> TermId {
+        self.proposition.lhs
+    }
+
+    /// Get the right-hand side of the proven equality
+    pub fn rhs(&self) -> TermId {
+        self.proposition.rhs
+    }
 }
 
 /// Justifices a single grounded equality t1 = t2.
@@ -244,10 +268,6 @@ impl ProofStore {
         raw_proof_id: ProofId,
     ) -> (ProofStore, ProofId) {
         let raw_term = raw_store.proof_to_term[&raw_proof_id];
-        let formatted_proof = raw_store
-            .term_dag
-            .to_string_with_let(&mut SymbolGen::new("".to_string()), raw_term);
-
         let mut store = ProofStore {
             term_dag: raw_store.term_dag.clone(),
             proof_id: HashMap::default(),
@@ -273,8 +293,10 @@ impl ProofStore {
 
         let proof = match raw_proof {
             RawProof::Fiat(lhs, rhs) => Proof {
-                lhs: raw_store.unwrap_ast(*lhs),
-                rhs: raw_store.unwrap_ast(*rhs),
+                proposition: Proposition::new(
+                    raw_store.unwrap_ast(*lhs),
+                    raw_store.unwrap_ast(*rhs),
+                ),
                 justification: Justification::Fiat,
             },
             RawProof::Rule(name, premise_proofs, lhs, rhs) => {
@@ -286,8 +308,10 @@ impl ProofStore {
                 let substitution = self.compute_rule_substitution(prog, name, &converted_premises);
 
                 Proof {
-                    lhs: raw_store.unwrap_ast(*lhs),
-                    rhs: raw_store.unwrap_ast(*rhs),
+                    proposition: Proposition::new(
+                        raw_store.unwrap_ast(*lhs),
+                        raw_store.unwrap_ast(*rhs),
+                    ),
                     justification: Justification::Rule {
                         name: name.clone(),
                         premise_proofs: converted_premises,
@@ -300,8 +324,7 @@ impl ProofStore {
                 let new_proof_id = self.convert_raw_proof(prog, raw_store, *new_raw);
                 let to_prove = raw_store.unwrap_ast(*to_prove);
                 Proof {
-                    lhs: to_prove,
-                    rhs: to_prove,
+                    proposition: Proposition::new(to_prove, to_prove),
                     justification: Justification::MergeFn {
                         function: function.clone(),
                         old_proof: old_proof_id,
@@ -315,12 +338,12 @@ impl ProofStore {
                 let left = &self.id_to_proof[left_id];
                 let right = &self.id_to_proof[right_id];
                 assert_eq!(
-                    left.rhs, right.lhs,
+                    left.rhs(),
+                    right.lhs(),
                     "transitivity requires matching middle terms"
                 );
                 Proof {
-                    lhs: left.lhs,
-                    rhs: right.rhs,
+                    proposition: Proposition::new(left.lhs(), right.rhs()),
                     justification: Justification::Trans(left_id, right_id),
                 }
             }
@@ -328,17 +351,16 @@ impl ProofStore {
                 let inner_id = self.convert_raw_proof(prog, raw_store, *inner_raw);
                 let inner = &self.id_to_proof[inner_id];
                 Proof {
-                    lhs: inner.rhs,
-                    rhs: inner.lhs,
+                    proposition: Proposition::new(inner.rhs(), inner.lhs()),
                     justification: Justification::Sym(inner_id),
                 }
             }
             RawProof::Congr(proof_raw, child_index, child_raw) => {
                 let base_id = self.convert_raw_proof(prog, raw_store, *proof_raw);
                 let child_id = self.convert_raw_proof(prog, raw_store, *child_raw);
-                let base_lhs = self.id_to_proof[base_id].lhs;
-                let base_rhs = self.id_to_proof[base_id].rhs;
-                let child_rhs = self.id_to_proof[child_id].rhs;
+                let base_lhs = self.id_to_proof[base_id].lhs();
+                let base_rhs = self.id_to_proof[base_id].rhs();
+                let child_rhs = self.id_to_proof[child_id].rhs();
                 let rhs = self.replace_term_child(base_rhs, *child_index, child_rhs);
 
                 let child_raw_term = raw_store.proof_to_term[child_raw].clone();
@@ -347,8 +369,7 @@ impl ProofStore {
                     .to_string_with_let(&mut SymbolGen::new("".to_string()), child_raw_term);
 
                 Proof {
-                    lhs: base_lhs,
-                    rhs,
+                    proposition: Proposition::new(base_lhs, rhs),
                     justification: Justification::Congr {
                         proof: base_id,
                         child_index: *child_index,
@@ -421,7 +442,7 @@ impl ProofStore {
                 // We should also allow a function call with no bound output.
                 ResolvedExpr::Var(_span3, v),
             ) => {
-                let term = proof.rhs;
+                let term = proof.rhs();
                 let children = match self.term_dag.get(term) {
                     Term::App(head_name, children) if head_name == head.name() => children.clone(),
                     _ => panic!("expected function application term in proof rhs"),
@@ -445,11 +466,11 @@ impl ProofStore {
                 }
             }
             ResolvedFact::Eq(_, lhs_expr, rhs_expr) => {
-                self.unify_expr(lhs_expr, proof.lhs, subst);
-                self.unify_expr(rhs_expr, proof.rhs, subst);
+                self.unify_expr(lhs_expr, proof.lhs(), subst);
+                self.unify_expr(rhs_expr, proof.rhs(), subst);
             }
             ResolvedFact::Fact(expr) => {
-                self.unify_expr(expr, proof.rhs, subst);
+                self.unify_expr(expr, proof.rhs(), subst);
             }
         }
     }
@@ -594,7 +615,7 @@ impl ProofStore {
 
         let term_id = match &proof.justification {
             Justification::Fiat => {
-                let equality = make_equality(dag, proof.lhs, proof.rhs);
+                let equality = make_equality(dag, proof.lhs(), proof.rhs());
                 let term = dag.app("Fiat".to_string(), vec![equality]);
                 term
             }
@@ -603,7 +624,7 @@ impl ProofStore {
                 premise_proofs,
                 substitution,
             } => {
-                let equality = make_equality(dag, proof.lhs, proof.rhs);
+                let equality = make_equality(dag, proof.lhs(), proof.rhs());
                 let name_literal = dag.lit(Literal::String(name.clone()));
                 let name_term = dag.app("name".to_string(), vec![name_literal]);
 
@@ -629,7 +650,7 @@ impl ProofStore {
                 old_proof,
                 new_proof,
             } => {
-                let equality = make_equality(dag, proof.lhs, proof.rhs);
+                let equality = make_equality(dag, proof.lhs(), proof.rhs());
                 let old_term_id = self.proof_to_term_for_printing(dag, *old_proof, cache);
                 let new_term_id = self.proof_to_term_for_printing(dag, *new_proof, cache);
                 let function_term = dag.var(function.clone());
@@ -639,7 +660,7 @@ impl ProofStore {
                 )
             }
             Justification::Trans(left, right) => {
-                let equality = make_equality(dag, proof.lhs, proof.rhs);
+                let equality = make_equality(dag, proof.lhs(), proof.rhs());
                 let left_term_id = self.proof_to_term_for_printing(dag, *left, cache);
                 let right_term_id = self.proof_to_term_for_printing(dag, *right, cache);
                 dag.app(
@@ -648,7 +669,7 @@ impl ProofStore {
                 )
             }
             Justification::Sym(inner) => {
-                let equality = make_equality(dag, proof.lhs, proof.rhs);
+                let equality = make_equality(dag, proof.lhs(), proof.rhs());
                 let inner_term_id = self.proof_to_term_for_printing(dag, *inner, cache);
                 dag.app("Sym".to_string(), vec![equality, inner_term_id])
             }
@@ -657,7 +678,7 @@ impl ProofStore {
                 child_index,
                 child_proof,
             } => {
-                let equality = make_equality(dag, proof.lhs, proof.rhs);
+                let equality = make_equality(dag, proof.lhs(), proof.rhs());
                 let base_term_id = self.proof_to_term_for_printing(dag, *base, cache);
                 let child_term_id = self.proof_to_term_for_printing(dag, *child_proof, cache);
                 let index_term = dag.lit(Literal::Int(*child_index as i64));
