@@ -24,7 +24,7 @@ fn test_add_primitive_validator() {
         // Compute the result
         let result = a + b;
         let result_term = termdag.lit(Literal::Int(result));
-        Some(termdag.lookup(&result_term))
+        Some(result_term)
     };
 
     // Use the macro to add a primitive with a validator
@@ -87,7 +87,7 @@ fn test_add_primitive_with_validator_method() {
             // Compute the result
             let result = a + b;
             let result_term = termdag.lit(Literal::Int(result));
-            Some(termdag.lookup(&result_term))
+            Some(result_term)
         });
 
     // Add the primitive with validator using the direct method

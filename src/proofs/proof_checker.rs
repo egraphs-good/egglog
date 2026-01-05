@@ -314,7 +314,7 @@ pub(crate) struct ProofCheckContext {
 impl ProofCheckContext {
     /// Create a new proof check context by analyzing the program.
     /// This gathers all equalities established by global actions (unions and sets).
-    fn new(proof_id: ProofId, prog: &[ResolvedNCommand], term_dag: &mut TermDag) -> Self {
+    fn new(prog: &[ResolvedNCommand], term_dag: &mut TermDag) -> Self {
         // Use the new refactored functions
         let actions = gather_global_actions(prog);
         let action_ctx = process_actions(
@@ -358,7 +358,7 @@ impl ProofStore {
         proof_id: ProofId,
         program: &[ResolvedNCommand],
     ) -> Result<Proposition, ProofCheckError> {
-        let mut ctx = ProofCheckContext::new(proof_id, program, &mut self.term_dag);
+        let mut ctx = ProofCheckContext::new(program, &mut self.term_dag);
         self.check_proof_with_context(proof_id, program, &mut ctx)
     }
 

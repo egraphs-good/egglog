@@ -35,7 +35,8 @@ pub(crate) struct EncodingNames {
 pub(crate) enum Justification {
     Rule(String, String), // rule name and proof list
     Fiat,
-    Proof(String), // existing proof
+    Proof(String),                 // existing proof
+    Merge(String, String, String), // function name, proof1, proof2
 }
 
 impl EncodingNames {
@@ -303,13 +304,14 @@ impl<'a> ProofInstrumentor<'a> {
 
 {to_ast_str}
 
-;; Fiat justification for globals and primitives
+;; Fiat justification for globals and primitives, gives two terms t1 = t2 for the proposition being justified
 (constructor {fiat_constructor} ({ast_sort} {ast_sort}) {proof_datatype})
 ;; name of rule and one proof per fact in the query
 (constructor {rule_constructor} (String {proof_list_sort} {ast_sort} {ast_sort}) {proof_datatype})
 
-;; merge function justification- name of function and two proofs for the two terms being merged
-(constructor {merge_fn_constructor} (String {proof_datatype} {proof_datatype}) {proof_datatype})
+;; merge function justification- name of function and two proofs for the two terms being merged,
+;; and the proposition being justified t = t
+(constructor {merge_fn_constructor} (String {proof_datatype} {proof_datatype} {ast_sort}) {proof_datatype})
 
 ;; transitivity of equality proofs
 (constructor {eq_trans_constructor} ({proof_datatype} {proof_datatype}) {proof_datatype})
