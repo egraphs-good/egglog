@@ -292,7 +292,7 @@ pub(crate) fn plan_query(query: Query) -> Plan {
     let atoms = query.atoms;
     let ctx = PlanningContext {
         vars: query.var_info,
-        atoms: atoms,
+        atoms,
     };
     let (header, instrs) = plan_stages(&ctx, query.plan_strategy);
 
@@ -509,14 +509,9 @@ fn plan_free_join(
     size_info.sort_by_key(|(_, size)| *size);
     let mut atoms = size_info.iter().map(|(atom, _)| *atom);
 
-    loop {
-        match get_next_freejoin_stage(ctx, state, &mut atoms) {
-            Some(info) => {
-                let stage = compile_stage(ctx, state, info);
-                stages.push(stage);
-            }
-            None => break,
-        }
+    while let Some(info) = get_next_freejoin_stage(ctx, state, &mut atoms) {
+        let stage = compile_stage(ctx, state, info);
+        stages.push(stage);
     }
 }
 
@@ -568,12 +563,7 @@ fn get_next_freejoin_stage(
             for var_ix in &cols {
                 let var = ctx.atoms[atom].column_to_var[*var_ix];
                 // form_key is an index _into the subatom forming the cover_.
-                let cover_col = vars
-                    .iter()
-                    .enumerate()
-                    .find(|(_, v)| **v == var)
-                    .map(|(ix, _)| ix)
-                    .unwrap();
+                let cover_col = vars.iter().position(|v| *v == var).unwrap();
                 form_key.push(ColumnId::from_usize(cover_col));
             }
             filters.push((SubAtom { atom, vars: cols }, form_key));
@@ -676,14 +666,11 @@ fn compile_stage(
         }
     }
 
-    if vars.len() == 1 {
-        debug_assert!(
-            filters
-                .iter()
-                .all(|(_, x)| x.len() == 1 && x[0] == ColumnId::new(0)),
-            "filters={filters:?}"
-        );
-
+    if vars.len() == 1
+        && filters
+            .iter()
+            .all(|(_, x)| x.len() == 1 && x[0] == ColumnId::new(0))
+    {
         let scans = SmallVec::<[SingleScanSpec; 3]>::from_iter(
             iter::once(&cover)
                 .chain(filters.iter().map(|(x, _)| x))
@@ -719,7 +706,7 @@ fn compile_stage(
 
     let mut to_intersect = Vec::with_capacity(filters.len());
     for (subatom, key_spec) in filters {
-        let atom = subatom.atom;;
+        let atom = subatom.atom;
         let scan = ScanSpec {
             to_index: subatom,
             constraints: take_atom_constraints_if_new(ctx, state, atom),
