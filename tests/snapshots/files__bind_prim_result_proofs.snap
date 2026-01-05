@@ -12,16 +12,10 @@ expression: snapshot
 (let t1 (Fiat (= "hello world" "hello world")))
 (Congr
   t
-  (Congr
+  (Rule
     t
-    (Rule
-      t
-      (name "r1")
-      (premises
-        (Fiat (= (Strings "hello" "world") (Strings "hello" "world")))
-        t1)
-      (substitution (a "hello") (res "hello world") (b "world")))
-    (Fiat (= "found" "found"))
-    0)
+    (name "r1")
+    (premises (Fiat (= (Strings "hello" "world") (Strings "hello" "world"))) t1)
+    (substitution (a "hello") (res "hello world") (b "world")))
   t1
   1)
