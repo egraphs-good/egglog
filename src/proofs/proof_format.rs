@@ -340,22 +340,12 @@ impl ProofStore {
                 let base_rhs = self.id_to_proof[base_id].rhs;
                 let child_rhs = self.id_to_proof[child_id].rhs;
                 let rhs = self.replace_term_child(base_rhs, *child_index, child_rhs);
-                eprintln!(
-                    "Congruence rhs before: {}",
-                    self.term_dag
-                        .to_string_with_let(&mut SymbolGen::new("".to_string()), base_rhs)
-                );
-                eprintln!("Congruence index: {}", child_index);
-                eprintln!(
-                    "Congruence rhs: {}",
-                    self.term_dag
-                        .to_string_with_let(&mut SymbolGen::new("".to_string()), rhs,)
-                );
+
                 let child_raw_term = raw_store.proof_to_term[child_raw].clone();
                 let child_formatted = raw_store
                     .term_dag
                     .to_string_with_let(&mut SymbolGen::new("".to_string()), child_raw_term);
-                eprintln!("child raw proof: {}", child_formatted);
+
                 Proof {
                     lhs: base_lhs,
                     rhs,
@@ -455,15 +445,6 @@ impl ProofStore {
                 }
             }
             ResolvedFact::Eq(_, lhs_expr, rhs_expr) => {
-                eprintln!(
-                    "unifying lhs expr {} with proof lhs {}",
-                    lhs_expr,
-                    self.term_dag.to_string_with_let_internal(
-                        &mut SymbolGen::new("".to_string()),
-                        proof.lhs,
-                        &mut String::new()
-                    ),
-                );
                 self.unify_expr(lhs_expr, proof.lhs, subst);
                 self.unify_expr(rhs_expr, proof.rhs, subst);
             }

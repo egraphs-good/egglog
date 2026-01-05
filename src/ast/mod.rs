@@ -177,7 +177,24 @@ where
             GenericNCommand::RunSchedule(schedule) => {
                 GenericNCommand::RunSchedule(schedule.visit_queries(f))
             }
-            _ => self,
+            GenericNCommand::Fail(span, cmd) => {
+                GenericNCommand::Fail(span, Box::new(cmd.visit_queries(f)))
+            }
+            GenericNCommand::Sort(..)
+            | GenericNCommand::Function(..)
+            | GenericNCommand::AddRuleset(..)
+            | GenericNCommand::UnstableCombinedRuleset(..)
+            | GenericNCommand::CoreAction(..)
+            | GenericNCommand::Extract(..)
+            | GenericNCommand::PrintOverallStatistics(..)
+            | GenericNCommand::PrintFunction(..)
+            | GenericNCommand::PrintSize(..)
+            | GenericNCommand::Output { .. }
+            | GenericNCommand::Push(..)
+            | GenericNCommand::Pop(..)
+            | GenericNCommand::Input { .. }
+            | GenericNCommand::UserDefined(..)
+            | GenericNCommand::ProveExists(..) => self,
         }
     }
 
@@ -1594,61 +1611,64 @@ where
         f: &mut impl FnMut(GenericExpr<Head, Leaf>) -> GenericExpr<Head, Leaf>,
     ) -> Self {
         match self {
-            GenericCommand::Function { span, name, schema, merge } => {
-                GenericCommand::Function {
-                    span,
-                    name,
-                    schema,
-                    merge: merge.map(|e| e.visit_exprs(f)),
-                }
-            }
-            GenericCommand::Rule { rule } => {
-                GenericCommand::Rule {
-                    rule: rule.visit_exprs(f),
-                }
-            }
-            GenericCommand::Rewrite(name, rewrite, subsume) => {
-                GenericCommand::Rewrite(
-                    name,
-                    GenericRewrite {
-                        span: rewrite.span,
-                        lhs: rewrite.lhs.visit_exprs(f),
-                        rhs: rewrite.rhs.visit_exprs(f),
-                        conditions: rewrite.conditions.into_iter().map(|fact| fact.visit_exprs(f)).collect(),
-                    },
-                    subsume,
-                )
-            }
-            GenericCommand::BiRewrite(name, rewrite) => {
-                GenericCommand::BiRewrite(
-                    name,
-                    GenericRewrite {
-                        span: rewrite.span,
-                        lhs: rewrite.lhs.visit_exprs(f),
-                        rhs: rewrite.rhs.visit_exprs(f),
-                        conditions: rewrite.conditions.into_iter().map(|fact| fact.visit_exprs(f)).collect(),
-                    },
-                )
-            }
-            GenericCommand::Action(action) => {
-                GenericCommand::Action(action.visit_exprs(f))
-            }
+            GenericCommand::Function {
+                span,
+                name,
+                schema,
+                merge,
+            } => GenericCommand::Function {
+                span,
+                name,
+                schema,
+                merge: merge.map(|e| e.visit_exprs(f)),
+            },
+            GenericCommand::Rule { rule } => GenericCommand::Rule {
+                rule: rule.visit_exprs(f),
+            },
+            GenericCommand::Rewrite(name, rewrite, subsume) => GenericCommand::Rewrite(
+                name,
+                GenericRewrite {
+                    span: rewrite.span,
+                    lhs: rewrite.lhs.visit_exprs(f),
+                    rhs: rewrite.rhs.visit_exprs(f),
+                    conditions: rewrite
+                        .conditions
+                        .into_iter()
+                        .map(|fact| fact.visit_exprs(f))
+                        .collect(),
+                },
+                subsume,
+            ),
+            GenericCommand::BiRewrite(name, rewrite) => GenericCommand::BiRewrite(
+                name,
+                GenericRewrite {
+                    span: rewrite.span,
+                    lhs: rewrite.lhs.visit_exprs(f),
+                    rhs: rewrite.rhs.visit_exprs(f),
+                    conditions: rewrite
+                        .conditions
+                        .into_iter()
+                        .map(|fact| fact.visit_exprs(f))
+                        .collect(),
+                },
+            ),
+            GenericCommand::Action(action) => GenericCommand::Action(action.visit_exprs(f)),
             GenericCommand::Extract(span, expr1, expr2) => {
                 GenericCommand::Extract(span, expr1.visit_exprs(f), expr2.visit_exprs(f))
             }
-            GenericCommand::Check(span, facts) => {
-                GenericCommand::Check(span, facts.into_iter().map(|fact| fact.visit_exprs(f)).collect())
-            }
-            GenericCommand::Prove(span, facts) => {
-                GenericCommand::Prove(span, facts.into_iter().map(|fact| fact.visit_exprs(f)).collect())
-            }
-            GenericCommand::Output { span, file, exprs } => {
-                GenericCommand::Output {
-                    span,
-                    file,
-                    exprs: exprs.into_iter().map(|e| e.visit_exprs(f)).collect(),
-                }
-            }
+            GenericCommand::Check(span, facts) => GenericCommand::Check(
+                span,
+                facts.into_iter().map(|fact| fact.visit_exprs(f)).collect(),
+            ),
+            GenericCommand::Prove(span, facts) => GenericCommand::Prove(
+                span,
+                facts.into_iter().map(|fact| fact.visit_exprs(f)).collect(),
+            ),
+            GenericCommand::Output { span, file, exprs } => GenericCommand::Output {
+                span,
+                file,
+                exprs: exprs.into_iter().map(|e| e.visit_exprs(f)).collect(),
+            },
             GenericCommand::RunSchedule(schedule) => {
                 GenericCommand::RunSchedule(schedule.visit_exprs(f))
             }
