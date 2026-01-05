@@ -8,14 +8,16 @@ expression: snapshot
 
 
 
-(let t (= (Strings "found" "hello world") (Strings "found" "hello world")))
-(let t1 (Fiat (= "hello world" "hello world")))
+(let prop0 (= (Strings "found" "hello world") (Strings "found" "hello world")))
+(let prf0 (Fiat (= "hello world" "hello world")))
 (Congr
-  t
+  prop0
   (Rule
-    t
+    prop0
     (name "r1")
-    (premises (Fiat (= (Strings "hello" "world") (Strings "hello" "world"))) t1)
+    (premises
+      (Fiat (= (Strings "hello" "world") (Strings "hello" "world")))
+      prf0)
     (substitution (a "hello") (res "hello world") (b "world")))
-  t1
+  prf0
   1)

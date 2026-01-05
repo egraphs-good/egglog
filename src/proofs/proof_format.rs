@@ -576,6 +576,7 @@ impl ProofStore {
     pub fn proof_to_string(&self, proof_id: ProofId) -> String {
         let symbol_gen = &mut crate::util::SymbolGen::new("".to_string());
         let mut buffer = String::new();
+        symbol_gen.include_zero(true);
         let res = self.print_to_buffer(symbol_gen, proof_id, &mut buffer);
         buffer.push_str(&res);
         buffer
@@ -593,7 +594,13 @@ impl ProofStore {
         let mut dag = self.term_dag.clone();
         let mut cache = HashMap::default();
         let proof_term_id = self.proof_to_term_for_printing(&mut dag, proof_id, &mut cache);
-        dag.to_string_with_let_internal(symbol_gen, proof_term_id, buffer)
+        dag.to_string_with_let_internal(symbol_gen, proof_term_id, buffer, |constructor| {
+            match constructor {
+                "=" => "prop".to_string(),
+                "Fiat" | "Rule" | "Merge" | "Trans" | "Sym" | "Congr" => "prf".to_string(),
+                _ => "t".to_string(),
+            }
+        })
     }
 
     fn proof_to_term_for_printing(

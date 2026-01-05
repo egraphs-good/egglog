@@ -16,24 +16,37 @@ pub use egglog_ast::generic_ast_helpers::INTERNAL_SYMBOL_PREFIX;
 pub struct SymbolGen {
     hint_to_count: HashMap<String, usize>,
     reserved_string: String,
+    leave_off_zero: bool,
 }
 
 impl SymbolGen {
+    /// Create a new symbol generator with the given reserved prefix.
     pub fn new(reserved_string: String) -> Self {
         Self {
             hint_to_count: HashMap::default(),
             reserved_string,
+            leave_off_zero: true,
         }
     }
 
+    /// By default, the first symbol generated with a given hint
+    /// does not have a numeric suffix (e.g., "var" instead of "var0").
+    /// This method changes that behavior.
+    pub fn include_zero(&mut self, include: bool) {
+        self.leave_off_zero = !include;
+    }
+
+    /// Check if this symbol generator has been used to generate any symbols.
     pub fn has_been_used(&self) -> bool {
         !self.hint_to_count.is_empty()
     }
 
+    /// Get the reserved prefix used by this symbol generator.
     pub fn reserved_prefix(&self) -> &str {
         &self.reserved_string
     }
 
+    /// Check if the given symbol is reserved (i.e., starts with the reserved prefix).
     pub fn is_reserved(&self, symbol: &str) -> bool {
         !self.reserved_string.is_empty() && symbol.starts_with(&self.reserved_string)
     }
@@ -53,7 +66,7 @@ impl FreshGen<str, String> for SymbolGen {
             "{}{}{}",
             self.reserved_string,
             name_hint,
-            if count_before == 0 {
+            if self.leave_off_zero && count_before == 0 {
                 "".to_string()
             } else {
                 count_before.to_string()
@@ -80,7 +93,7 @@ impl FreshGen<ResolvedCall, ResolvedVar> for SymbolGen {
             "{}{}{}",
             self.reserved_string,
             name_hint,
-            if count == 0 {
+            if self.leave_off_zero && count == 0 {
                 "".to_string()
             } else {
                 count.to_string()
