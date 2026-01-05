@@ -520,72 +520,6 @@ fn plan_free_join(
     }
 }
 
-/// Plan generic join queries (one variable per stage).
-fn plan_gj(
-    ctx: &PlanningContext,
-    state: &mut PlanningState,
-    remaining_constraints: &DenseIdMap<AtomId, (usize, &Pooled<Vec<Constraint>>)>,
-    stages: &mut Vec<JoinStage>,
-) {
-    // First, map all variables to the size of the smallest atom in which they appear:
-    let mut min_sizes = Vec::with_capacity(ctx.vars.n_ids());
-    let mut atoms_hit = AtomSet::with_capacity(ctx.atoms.n_ids());
-    for (var, var_info) in ctx.vars.iter() {
-        let n_occs = var_info.occurrences.len();
-        if n_occs == 1 && !var_info.used_in_rhs {
-            // Do not plan this one. Unless (see below).
-            continue;
-        }
-        if let Some(min_size) = var_info
-            .occurrences
-            .iter()
-            .map(|subatom| {
-                atoms_hit.set(subatom.atom.index(), true);
-                remaining_constraints[subatom.atom].0
-            })
-            .min()
-        {
-            min_sizes.push((var, min_size, n_occs));
-        }
-        // If the variable has no ocurrences, it may be bound on the RHS of a
-        // rule (or it may just be unused). Either way, we will ignore it when
-        // planning the query.
-    }
-    for (var, var_info) in ctx.vars.iter() {
-        if var_info.occurrences.len() == 1 && !var_info.used_in_rhs {
-            // We skipped this variable the first time around because it
-            // looks "unused". If it belongs to an atom that otherwise has
-            // gone unmentioned, though, we need to plan it anyway.
-            let atom = var_info.occurrences[0].atom;
-            if !atoms_hit.contains(atom.index()) {
-                min_sizes.push((var, remaining_constraints[atom].0, 1));
-            }
-        }
-    }
-    // Sort ascending by size, then descending by number of occurrences.
-    min_sizes.sort_by_key(|(_, size, occs)| (*size, -(*occs as i64)));
-    for (var, _, _) in min_sizes {
-        let occ = ctx.vars[var].occurrences[0].clone();
-        let mut info = StageInfo {
-            cover: occ,
-            vars: smallvec![var],
-            filters: Default::default(),
-        };
-        for occ in &ctx.vars[var].occurrences[1..] {
-            info.filters
-                .push((occ.clone(), smallvec![ColumnId::new(0)]));
-        }
-
-        let next_stage = compile_stage(ctx, state, info);
-        if let Some(prev) = stages.last_mut() {
-            if prev.fuse(&next_stage) {
-                continue;
-            }
-        }
-        stages.push(next_stage);
-    }
-}
-
 /// Generate the next free join stage by picking an atom from the ordering.
 /// Returns the stage info and updated state, or None if all atoms are covered.
 fn get_next_freejoin_stage(
@@ -650,6 +584,72 @@ fn get_next_freejoin_stage(
             vars,
             filters,
         });
+    }
+}
+
+/// Plan generic join queries (one variable per stage).
+fn plan_gj(
+    ctx: &PlanningContext,
+    state: &mut PlanningState,
+    remaining_constraints: &DenseIdMap<AtomId, (usize, &Pooled<Vec<Constraint>>)>,
+    stages: &mut Vec<JoinStage>,
+) {
+    // First, map all variables to the size of the smallest atom in which they appear:
+    let mut min_sizes = Vec::with_capacity(ctx.vars.n_ids());
+    let mut atoms_hit = AtomSet::with_capacity(ctx.atoms.n_ids());
+    for (var, var_info) in ctx.vars.iter() {
+        let n_occs = var_info.occurrences.len();
+        if n_occs == 1 && !var_info.used_in_rhs {
+            // Do not plan this one. Unless (see below).
+            continue;
+        }
+        if let Some(min_size) = var_info
+            .occurrences
+            .iter()
+            .map(|subatom| {
+                atoms_hit.set(subatom.atom.index(), true);
+                remaining_constraints[subatom.atom].0
+            })
+            .min()
+        {
+            min_sizes.push((var, min_size, n_occs));
+        }
+        // If the variable has no ocurrences, it may be bound on the RHS of a
+        // rule (or it may just be unused). Either way, we will ignore it when
+        // planning the query.
+    }
+    for (var, var_info) in ctx.vars.iter() {
+        if var_info.occurrences.len() == 1 && !var_info.used_in_rhs {
+            // We skipped this variable the first time around because it
+            // looks "unused". If it belongs to an atom that otherwise has
+            // gone unmentioned, though, we need to plan it anyway.
+            let atom = var_info.occurrences[0].atom;
+            if !atoms_hit.contains(atom.index()) {
+                min_sizes.push((var, remaining_constraints[atom].0, 1));
+            }
+        }
+    }
+    // Sort ascending by size, then descending by number of occurrences.
+    min_sizes.sort_by_key(|(_, size, occs)| (*size, -(*occs as i64)));
+    for (var, _, _) in min_sizes {
+        let occ = ctx.vars[var].occurrences[0].clone();
+        let mut info = StageInfo {
+            cover: occ,
+            vars: smallvec![var],
+            filters: Default::default(),
+        };
+        for occ in &ctx.vars[var].occurrences[1..] {
+            info.filters
+                .push((occ.clone(), smallvec![ColumnId::new(0)]));
+        }
+
+        let next_stage = compile_stage(ctx, state, info);
+        if let Some(prev) = stages.last_mut() {
+            if prev.fuse(&next_stage) {
+                continue;
+            }
+        }
+        stages.push(next_stage);
     }
 }
 
