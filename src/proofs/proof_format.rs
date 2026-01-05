@@ -1,7 +1,7 @@
 use crate::{
     ResolvedCall, Term, TermDag, TermId,
     ast::{FunctionSubtype, ResolvedExpr, ResolvedFact, ResolvedNCommand},
-    proofs::{proof_checker::run_merge, proof_encoding_helpers::EncodingNames},
+    proofs::proof_encoding_helpers::EncodingNames,
     typechecking::FuncType,
     util::{HEntry, HashMap, IndexSet, SymbolGen},
 };
@@ -71,6 +71,16 @@ impl Proposition {
     pub fn new(lhs: TermId, rhs: TermId) -> Self {
         Proposition { lhs, rhs }
     }
+
+    /// Get the left-hand side of the equality
+    pub fn lhs(&self) -> TermId {
+        self.lhs
+    }
+
+    /// Get the right-hand side of the equality
+    pub fn rhs(&self) -> TermId {
+        self.rhs
+    }
 }
 
 /// A proof shows that two grounded terms are equal, justified by a [`Justification`].
@@ -78,18 +88,6 @@ impl Proposition {
 pub struct Proof {
     pub(super) proposition: Proposition,
     pub(super) justification: Justification,
-}
-
-impl Proof {
-    /// Get the left-hand side of the proven equality
-    pub fn lhs(&self) -> TermId {
-        self.proposition.lhs
-    }
-
-    /// Get the right-hand side of the proven equality
-    pub fn rhs(&self) -> TermId {
-        self.proposition.rhs
-    }
 }
 
 /// Justifices a single grounded equality t1 = t2.
@@ -267,7 +265,6 @@ impl ProofStore {
         raw_store: RawProofStore,
         raw_proof_id: ProofId,
     ) -> (ProofStore, ProofId) {
-        let raw_term = raw_store.proof_to_term[&raw_proof_id];
         let mut store = ProofStore {
             term_dag: raw_store.term_dag.clone(),
             proof_id: HashMap::default(),
@@ -363,10 +360,7 @@ impl ProofStore {
                 let child_rhs = self.id_to_proof[child_id].rhs();
                 let rhs = self.replace_term_child(base_rhs, *child_index, child_rhs);
 
-                let child_raw_term = raw_store.proof_to_term[child_raw].clone();
-                let child_formatted = raw_store
-                    .term_dag
-                    .to_string_with_let(&mut SymbolGen::new("".to_string()), child_raw_term);
+                
 
                 Proof {
                     proposition: Proposition::new(base_lhs, rhs),
@@ -623,8 +617,7 @@ impl ProofStore {
         let term_id = match &proof.justification {
             Justification::Fiat => {
                 let equality = make_equality(dag, proof.lhs(), proof.rhs());
-                let term = dag.app("Fiat".to_string(), vec![equality]);
-                term
+                dag.app("Fiat".to_string(), vec![equality])
             }
             Justification::Rule {
                 name,
@@ -643,7 +636,7 @@ impl ProofStore {
 
                 let substitution_terms: Vec<TermId> = substitution
                     .iter()
-                    .map(|(var, term_id)| dag.app(var.clone(), vec![term_id.clone()]))
+                    .map(|(var, term_id)| dag.app(var.clone(), vec![*term_id]))
                     .collect();
                 let substitution_term = dag.app("substitution".to_string(), substitution_terms);
 
@@ -708,6 +701,21 @@ impl ProofStore {
 }
 
 impl Proof {
+    /// Get the proposition the proof proves
+    pub fn proposition(&self) -> &Proposition {
+        &self.proposition
+    }
+
+    /// Get the left-hand side of the proven equality
+    pub fn lhs(&self) -> TermId {
+        self.proposition.lhs()
+    }
+    /// Get the right-hand side of the proven equality
+    pub fn rhs(&self) -> TermId {
+        self.proposition.rhs()
+    }
+
+    /// Get the justification for the proof
     pub fn justification(&self) -> &Justification {
         &self.justification
     }

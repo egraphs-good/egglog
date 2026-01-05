@@ -146,7 +146,7 @@ impl<'a> ProofInstrumentor<'a> {
                 Justification::Fiat => format!(
                     "({fiat_constructor} ({to_ast_constructor} {larger}) ({to_ast_constructor} {smaller}))"
                 ),
-                Justification::Merge(func_name, proof1, proof2) => panic!(
+                Justification::Merge(_func_name, _proof1, _proof2) => panic!(
                     "Merge functions do not include union actions, so proof should not be by merge"
                 ),
                 Justification::Proof(existing_proof) => existing_proof.clone(),
@@ -342,7 +342,7 @@ impl<'a> ProofInstrumentor<'a> {
             let term = format!("({name} {child_names_str} {merge_fn_var})");
 
             let rule_proof = if self.egraph.proof_state.proofs_enabled {
-                let to_ast = self.fname_to_ast_name(&name);
+                let to_ast = self.fname_to_ast_name(name);
                 let merge_fn_constructor = self.proof_names().merge_fn_constructor.clone();
                 format!(
                     "(let {proof_var}
@@ -803,7 +803,7 @@ impl<'a> ProofInstrumentor<'a> {
         let mut res = vec![];
         let mut proof = vec![];
 
-        for fact in facts.into_iter() {
+        for fact in facts.iter() {
             let f_proof = self.instrument_fact(fact, &mut res);
             proof.push(f_proof);
         }

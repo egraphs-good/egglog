@@ -440,7 +440,7 @@ impl<C: Cost + Ord + Eq + Clone + Debug> Extractor<C> {
     ) -> TermId {
         let key = (value, sort.name().to_owned());
         if let Some(term) = cache.get(&key) {
-            return term.clone();
+            return *term;
         }
 
         let term = if sort.is_container_sort() {
@@ -477,7 +477,7 @@ impl<C: Cost + Ord + Eq + Clone + Debug> Extractor<C> {
             sort.reconstruct_termdag_base(egraph.backend.base_values(), value, termdag)
         };
 
-        cache.insert(key, term.clone());
+        cache.insert(key, term);
         term
     }
 
