@@ -290,8 +290,8 @@ pub enum PlanStrategy {
 
 pub(crate) fn plan_query(query: Query) -> Plan {
     let ctx = PlanningContext {
-        vars: &query.var_info,
-        atoms: &query.atoms,
+        vars: query.var_info,
+        atoms: query.atoms,
     };
     plan_with_context(&ctx, query.plan_strategy, query.action)
 }
@@ -312,9 +312,9 @@ struct StageInfo {
 }
 
 /// Immutable context for query planning containing references to query metadata.
-struct PlanningContext<'a> {
-    vars: &'a DenseIdMap<Variable, VarInfo>,
-    atoms: &'a DenseIdMap<AtomId, Atom>,
+struct PlanningContext {
+    vars: DenseIdMap<Variable, VarInfo>,
+    atoms: DenseIdMap<AtomId, Atom>,
 }
 
 /// Mutable state tracked during query planning.
@@ -483,7 +483,7 @@ fn plan_free_join(
         }
         PlanStrategy::MinCover => {
             let mut eligible_covers = HashSet::default();
-            let mut queue = BucketQueue::new(ctx.vars, ctx.atoms);
+            let mut queue = BucketQueue::new(&ctx.vars, &ctx.atoms);
             while let Some(atom) = queue.pop_min() {
                 eligible_covers.insert(atom);
             }
