@@ -37,6 +37,6 @@ expression: snapshot
        (addView c0_ c1_ out))
       ((subsume (addView c0_ c1_ out)))
         :ruleset delete_subsume_ruleset :name "__delete_rule_subsume")
-(check (addView 0 0 __v1)
-(= __v1 0))
+(check (addView 0 0 __n)
+(= __n 0))
 (run-schedule (seq (saturate (seq (run rebuilding_cleanup) (saturate (run single_parent)) (saturate (run parent)) (run rebuilding))) (run delete_subsume_ruleset)))
