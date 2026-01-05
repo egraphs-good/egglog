@@ -9,8 +9,7 @@ expression: snapshot
 
 
 (let t (= (Strings "found" "hello world") (Strings "found" "hello world")))
-(let t1 (= (Strings "hello" "world") (Strings "hello" "world")))
-(let t2 (Fiat (= "hello world" "hello world")))
+(let t1 (Fiat (= "hello world" "hello world")))
 (Congr
   t
   (Congr
@@ -19,17 +18,10 @@ expression: snapshot
       t
       (name "r1")
       (premises
-        (Congr
-          t1
-          (Congr t1 (Fiat t1) (Fiat (= "hello" "hello")) 0)
-          (Fiat (= "world" "world"))
-          1)
-        (Trans
-          (= "hello world" "hello world")
-          (Sym (= "hello world" "hello world") t2)
-          t2))
+        (Fiat (= (Strings "hello" "world") (Strings "hello" "world")))
+        t1)
       (substitution (a "hello") (res "hello world") (b "world")))
     (Fiat (= "found" "found"))
     0)
-  t2
+  t1
   1)

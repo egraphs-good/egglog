@@ -5,7 +5,7 @@ use crate::{
         ResolvedNCommand,
     },
     core::ResolvedCall,
-    proofs::proof_format::{Justification, ProofId, ProofStore},
+    proofs::proof_format::{Justification, ProofId, ProofStore, Proposition},
     typechecking::FuncType,
     util::{HashMap, HashSet, SymbolGen},
 };
@@ -17,7 +17,7 @@ pub(crate) struct ActionContext {
     /// Terms bound to variables (from Let actions)
     pub var_bindings: HashMap<String, TermId>,
     /// Propositions (equalities) implied by the actions
-    pub propositions: HashSet<(TermId, TermId)>,
+    pub propositions: HashSet<Proposition>,
 }
 
 /// Gathers all global CoreActions from a program.
@@ -41,7 +41,7 @@ pub(crate) fn run_merge(
     prog: &[ResolvedNCommand],
     old_term: TermId,
     new_term: TermId,
-) -> Result<(TermId, HashSet<(TermId, TermId)>), ProofCheckError> {
+) -> Result<(TermId, HashSet<Proposition>), ProofCheckError> {
     let mut subst = HashMap::default();
     subst.insert("old".to_string(), old_term);
     subst.insert("new".to_string(), new_term);
@@ -100,8 +100,8 @@ pub(crate) fn process_actions(
                 propositions.extend(lhs_props);
                 propositions.extend(rhs_props);
                 // Store both directions of the equality
-                propositions.insert((lhs_term, rhs_term));
-                propositions.insert((rhs_term, lhs_term));
+                propositions.insert(Proposition::new(lhs_term, rhs_term));
+                propositions.insert(Proposition::new(rhs_term, lhs_term));
             }
             GenericAction::Set(_, func, args, rhs) => {
                 // Set creates reflexive equality for the resulting term
@@ -141,7 +141,7 @@ fn eval_expr_with_subst(
     expr: &ResolvedExpr,
     dag: &mut TermDag,
     subst: &HashMap<String, TermId>,
-) -> Result<(TermId, HashSet<(TermId, TermId)>), ProofCheckError> {
+) -> Result<(TermId, HashSet<Proposition>), ProofCheckError> {
     let mut propositions = HashSet::default();
 
     let term_id = match expr {
@@ -195,10 +195,10 @@ fn eval_expr_with_subst(
 fn add_subterm_reflexive_equalities(
     term_id: TermId,
     term_dag: &TermDag,
-    propositions: &mut HashSet<(TermId, TermId)>,
+    propositions: &mut HashSet<Proposition>,
 ) {
     // Add reflexive equality for this term
-    propositions.insert((term_id, term_id));
+    propositions.insert(Proposition::new(term_id, term_id));
 
     // Recursively add for all children
     if let Term::App(_, children) = term_dag.get(term_id) {
@@ -281,19 +281,12 @@ pub enum ProofCheckError {
     MergeFnError { proof_id: ProofId, reason: String },
 }
 
-/// Represents a proposition that can be proven
-#[derive(Clone, PartialEq, Eq, Hash, Debug)]
-pub enum Proposition {
-    /// Two terms are equal
-    TermsEq(TermId, TermId),
-}
-
 /// Context needed for proof checking
 pub(crate) struct ProofCheckContext {
     /// Set of equalities established by global union/set actions
     /// Each entry is a pair (lhs, rhs) that was unified
     /// This includes reflexive equalities (term, term) for all globals
-    global_equalities: HashSet<(TermId, TermId)>,
+    global_equalities: HashSet<Proposition>,
     /// Map of global variable names to their TermIds
     global_bindings: HashMap<String, TermId>,
     /// Cache of already-checked proofs
@@ -317,7 +310,7 @@ impl ProofCheckContext {
     }
 
     fn in_globals(&self, lhs: TermId, rhs: TermId) -> bool {
-        self.global_equalities.contains(&(lhs, rhs))
+        self.global_equalities.contains(&Proposition::new(lhs, rhs))
     }
 }
 
@@ -362,18 +355,18 @@ impl ProofStore {
         let result = match &proof.justification {
             Justification::Fiat => {
                 // if the both terms are primitives and equal, accept
-                let term = self.term_dag.get(proof.lhs);
-                if (matches!(term, Term::Lit(_)) && proof.lhs == proof.rhs)
-                    || ctx.in_globals(proof.lhs, proof.rhs)
+                let term = self.term_dag.get(proof.lhs());
+                if (matches!(term, Term::Lit(_)) && proof.lhs() == proof.rhs())
+                    || ctx.in_globals(proof.lhs(), proof.rhs())
                 {
-                    Ok(Proposition::TermsEq(proof.lhs, proof.rhs))
+                    Ok(Proposition::new(proof.lhs(), proof.rhs()))
                 } else {
                     Err(ProofCheckError::InvalidFiat {
                         proof_id,
                         reason: format!(
                             "Fiat proof claims {:?} = {:?}, which is not established by globals",
-                            self.term_dag.get(proof.lhs),
-                            self.term_dag.get(proof.rhs)
+                            self.term_dag.get(proof.lhs()),
+                            self.term_dag.get(proof.rhs())
                         ),
                     })
                 }
@@ -422,13 +415,13 @@ impl ProofStore {
                     ctx,
                     rule,
                     substitution,
-                    proof.lhs,
-                    proof.rhs,
+                    proof.lhs(),
+                    proof.rhs(),
                     proof_id,
                     name,
                 )?;
 
-                Ok(Proposition::TermsEq(proof.lhs, proof.rhs))
+                Ok(Proposition::new(proof.lhs(), proof.rhs()))
             }
 
             Justification::MergeFn {
@@ -440,12 +433,8 @@ impl ProofStore {
                 let old_prop = self.check_proof_with_context(*old_proof, program, ctx)?;
                 let new_prop = self.check_proof_with_context(*new_proof, program, ctx)?;
 
-                let (old_lhs, old_rhs) = match old_prop {
-                    Proposition::TermsEq(l, r) => (l, r),
-                };
-                let (new_lhs, new_rhs) = match new_prop {
-                    Proposition::TermsEq(l, r) => (l, r),
-                };
+                let (old_lhs, old_rhs) = (old_prop.lhs, old_prop.rhs);
+                let (new_lhs, new_rhs) = (new_prop.lhs, new_prop.rhs);
                 let old_view_term = self.term_dag.get(old_rhs);
                 let new_view_term = self.term_dag.get(new_rhs);
 
@@ -515,22 +504,26 @@ impl ProofStore {
                 let mut merged_view_args = input_args.clone();
                 merged_view_args.push(merged_term_child);
                 let merged_term = self.term_dag.app(view_head, merged_view_args);
-                merged_props.insert((merged_term, merged_term));
+                merged_props.insert(Proposition::new(merged_term, merged_term));
                 // Verify the proof's claimed equality is in the merged propositions
-                if !merged_props.contains(&(proof.lhs, proof.rhs)) {
+                if !merged_props.contains(&Proposition::new(proof.lhs(), proof.rhs())) {
                     return Err(ProofCheckError::MergeFnError {
                         proof_id,
                         reason: format!(
                             "proof claims {} = {}, which is not established by merge function",
-                            self.term_dag
-                                .to_string_with_let(&mut SymbolGen::new("".to_string()), proof.lhs),
-                            self.term_dag
-                                .to_string_with_let(&mut SymbolGen::new("".to_string()), proof.rhs)
+                            self.term_dag.to_string_with_let(
+                                &mut SymbolGen::new("".to_string()),
+                                proof.lhs()
+                            ),
+                            self.term_dag.to_string_with_let(
+                                &mut SymbolGen::new("".to_string()),
+                                proof.rhs()
+                            )
                         ),
                     });
                 }
 
-                Ok(Proposition::TermsEq(proof.lhs, proof.rhs))
+                Ok(Proposition::new(proof.lhs(), proof.rhs()))
             }
 
             Justification::Trans(left_id, right_id) => {
@@ -538,12 +531,8 @@ impl ProofStore {
                 let left_prop = self.check_proof_with_context(*left_id, program, ctx)?;
                 let right_prop = self.check_proof_with_context(*right_id, program, ctx)?;
 
-                let (left_lhs, left_rhs) = match left_prop {
-                    Proposition::TermsEq(l, r) => (l, r),
-                };
-                let (right_lhs, right_rhs) = match right_prop {
-                    Proposition::TermsEq(l, r) => (l, r),
-                };
+                let (left_lhs, left_rhs) = (left_prop.lhs, left_prop.rhs);
+                let (right_lhs, right_rhs) = (right_prop.lhs, right_prop.rhs);
 
                 // Check transitivity: left.rhs must equal right.lhs
                 if left_rhs != right_lhs {
@@ -555,38 +544,36 @@ impl ProofStore {
                 }
 
                 // Result should be left_lhs = right_rhs
-                if proof.lhs != left_lhs || proof.rhs != right_rhs {
+                if proof.lhs() != left_lhs || proof.rhs() != right_rhs {
                     return Err(ProofCheckError::TermMismatch {
                         proof_id,
-                        expected_lhs: proof.lhs,
-                        expected_rhs: proof.rhs,
+                        expected_lhs: proof.lhs(),
+                        expected_rhs: proof.rhs(),
                         actual_lhs: left_lhs,
                         actual_rhs: right_rhs,
                     });
                 }
 
-                Ok(Proposition::TermsEq(proof.lhs, proof.rhs))
+                Ok(Proposition::new(proof.lhs(), proof.rhs()))
             }
 
             Justification::Sym(inner_id) => {
                 // Check the inner proof
                 let inner_prop = self.check_proof_with_context(*inner_id, program, ctx)?;
-                let (inner_lhs, inner_rhs) = match inner_prop {
-                    Proposition::TermsEq(l, r) => (l, r),
-                };
+                let (inner_lhs, inner_rhs) = (inner_prop.lhs, inner_prop.rhs);
 
                 // Symmetry swaps lhs and rhs
-                if proof.lhs != inner_rhs || proof.rhs != inner_lhs {
+                if proof.lhs() != inner_rhs || proof.rhs() != inner_lhs {
                     return Err(ProofCheckError::TermMismatch {
                         proof_id,
-                        expected_lhs: proof.lhs,
-                        expected_rhs: proof.rhs,
+                        expected_lhs: proof.lhs(),
+                        expected_rhs: proof.rhs(),
                         actual_lhs: inner_rhs,
                         actual_rhs: inner_lhs,
                     });
                 }
 
-                Ok(Proposition::TermsEq(proof.lhs, proof.rhs))
+                Ok(Proposition::new(proof.lhs(), proof.rhs()))
             }
 
             Justification::Congr {
@@ -596,15 +583,11 @@ impl ProofStore {
             } => {
                 // Check the base proof (proves t1 = f(..., ci, ...))
                 let base_prop = self.check_proof_with_context(*base_id, program, ctx)?;
-                let (base_lhs, base_rhs) = match base_prop {
-                    Proposition::TermsEq(l, r) => (l, r),
-                };
+                let (base_lhs, base_rhs) = (base_prop.lhs, base_prop.rhs);
 
                 // Check the child proof (proves ci = c2)
                 let child_prop = self.check_proof_with_context(*child_id, program, ctx)?;
-                let (child_lhs, child_rhs) = match child_prop {
-                    Proposition::TermsEq(l, r) => (l, r),
-                };
+                let (child_lhs, child_rhs) = (child_prop.lhs, child_prop.rhs);
 
                 // base_rhs should be an application f(...)
                 let (func_name, children) = match self.term_dag.get(base_rhs) {
@@ -655,27 +638,27 @@ impl ProofStore {
 
                 let expected_rhs_id = self.term_dag.app(func_name, expected_rhs_children);
 
-                // Verify proof.rhs matches expected
-                if proof.rhs != expected_rhs_id {
+                // Verify proof.rhs() matches expected
+                if proof.rhs() != expected_rhs_id {
                     return Err(ProofCheckError::CongruenceMismatch {
                         proof_id,
                         reason: format!(
                             "Proof rhs {:?} doesn't match expected {:?}",
-                            self.term_dag.get(proof.rhs),
+                            self.term_dag.get(proof.rhs()),
                             self.term_dag.get(expected_rhs_id)
                         ),
                     });
                 }
 
-                // Verify proof.lhs matches base_lhs
-                if proof.lhs != base_lhs {
+                // Verify proof.lhs() matches base_lhs
+                if proof.lhs() != base_lhs {
                     return Err(ProofCheckError::CongruenceMismatch {
                         proof_id,
                         reason: "Proof lhs doesn't match base proof lhs".to_string(),
                     });
                 }
 
-                Ok(Proposition::TermsEq(proof.lhs, proof.rhs))
+                Ok(Proposition::new(proof.lhs(), proof.rhs()))
             }
         };
 
@@ -696,7 +679,7 @@ impl ProofStore {
         proof_id: ProofId,
         rule_name: &str,
     ) -> Result<(), ProofCheckError> {
-        let Proposition::TermsEq(lhs, rhs) = prop;
+        let (lhs, rhs) = (prop.lhs, prop.rhs);
         match fact {
             // proof normal form for functions: (= (f args...) v)
             // In the term representation, custom functions store output as last arg: f(args..., v)
@@ -732,14 +715,14 @@ impl ProofStore {
                 let expected_term_id = self.term_dag.app(name.clone(), arg_terms);
 
                 // The proposition should be a reflexive equality for this term
-                if *lhs != expected_term_id || *rhs != expected_term_id {
+                if lhs != expected_term_id || rhs != expected_term_id {
                     return Err(ProofCheckError::RuleSubstitutionMismatch {
                         rule_name: rule_name.to_string(),
                         reason: format!(
                             "Function fact does not match proposition: expected reflexive equality for {:?}, got {:?} = {:?}",
                             self.term_dag.get(expected_term_id),
-                            self.term_dag.get(*lhs),
-                            self.term_dag.get(*rhs)
+                            self.term_dag.get(lhs),
+                            self.term_dag.get(rhs)
                         ),
                     });
                 }
@@ -759,7 +742,7 @@ impl ProofStore {
                         rule_name: rule_name.to_string(),
                         reason: "Failed to evaluate RHS expression under substitution".to_string(),
                     })?;
-                if fact_lhs != *lhs || fact_rhs != *rhs {
+                if fact_lhs != lhs || fact_rhs != rhs {
                     let fact_lhs_str = self.term_dag.to_string(fact_lhs);
                     let fact_rhs_str = self.term_dag.to_string(fact_rhs);
                     let subst_str = format_substitution(&self.term_dag, substitution);
@@ -768,8 +751,8 @@ impl ProofStore {
                         rule_name: rule_name.to_string(),
                         reason: format!(
                             "Fact {fact} does not match proven proposition under substitution {subst_str}.\nSubstituted: (= {fact_lhs_str} {fact_rhs_str})\nPremise proves: (= {} {})\nProof: {proof_str}",
-                            format_term(&self.term_dag, *lhs),
-                            format_term(&self.term_dag, *rhs),
+                            format_term(&self.term_dag, lhs),
+                            format_term(&self.term_dag, rhs),
                         ),
                     });
                 }
@@ -785,14 +768,14 @@ impl ProofStore {
                         reason: "Failed to evaluate Fact expression under substitution".to_string(),
                     })?;
 
-                if fact_term != *rhs {
+                if fact_term != rhs {
                     return Err(ProofCheckError::RuleSubstitutionMismatch {
                         rule_name: rule_name.to_string(),
                         reason: format!(
                             "Fact {} does not match proposition under substitution {}. Got {}, expected {}.",
                             fact,
                             format_substitution(&self.term_dag, substitution),
-                            format_term(&self.term_dag, *rhs),
+                            format_term(&self.term_dag, rhs),
                             format_term(&self.term_dag, fact_term)
                         ),
                     });
@@ -904,10 +887,10 @@ impl ProofStore {
         // Check if the claimed equality is in the propositions
         if action_ctx
             .propositions
-            .contains(&(claimed_lhs, claimed_rhs))
+            .contains(&Proposition::new(claimed_lhs, claimed_rhs))
             || action_ctx
                 .propositions
-                .contains(&(claimed_rhs, claimed_lhs))
+                .contains(&Proposition::new(claimed_rhs, claimed_lhs))
         {
             return Ok(());
         }

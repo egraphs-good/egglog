@@ -3,7 +3,7 @@ use crate::{
     ast::ResolvedNCommand,
     proofs::{
         proof_checker::gather_globals,
-        proof_format::{Justification, Proof, ProofId, ProofStore},
+        proof_format::{Justification, Proof, ProofId, ProofStore, Proposition},
     },
     util::HashMap,
 };
@@ -77,8 +77,7 @@ impl ProofStore {
         let proof = self.get(proof_id).clone();
         match proof {
             Proof {
-                lhs: _,
-                rhs: _,
+                proposition: _,
                 justification:
                     Justification::Congr {
                         child_proof,
@@ -88,31 +87,29 @@ impl ProofStore {
             } => {
                 // if the child proof proves t = t for some t, we can skip the congruence step
                 let child_proof = self.get(child_proof);
-                if child_proof.lhs == child_proof.rhs {
+                if child_proof.lhs() == child_proof.rhs() {
                     self.simplify(base_proof)
                 } else {
                     self.map_child_proofs(proof_id, |store, pid| store.simplify(pid))
                 }
             }
             Proof {
-                lhs,
-                rhs,
+                proposition: _,
                 justification: Justification::Trans(p1, p2),
             } => {
                 // if either side is a reflexive proof, skip it
                 let p1_proof = self.get(p1);
                 let p2_proof = self.get(p2);
-                if p1_proof.lhs == p1_proof.rhs {
+                if p1_proof.lhs() == p1_proof.rhs() {
                     return self.simplify(p2);
-                } else if p2_proof.lhs == p2_proof.rhs {
+                } else if p2_proof.lhs() == p2_proof.rhs() {
                     return self.simplify(p1);
                 } else {
                     self.map_child_proofs(proof_id, |store, pid| store.simplify(pid))
                 }
             }
             Proof {
-                lhs,
-                rhs,
+                proposition: _,
                 justification: Justification::Sym(inner),
             } => {
                 let mut current_id = proof_id;
@@ -137,33 +134,30 @@ impl ProofStore {
 
                     // Get the lhs/rhs values we need before any mutations
                     let left_proof = self.get(left_id);
-                    let left_lhs = left_proof.lhs;
-                    let left_rhs = left_proof.rhs;
+                    let left_lhs = left_proof.lhs();
+                    let left_rhs = left_proof.rhs();
 
                     let right_proof = self.get(right_id);
-                    let right_lhs = right_proof.lhs;
-                    let right_rhs = right_proof.rhs;
+                    let right_lhs = right_proof.lhs();
+                    let right_rhs = right_proof.rhs();
 
                     // Create Sym(p2): c = b
                     let sym_right = Proof {
-                        lhs: right_rhs,
-                        rhs: right_lhs,
+                        proposition: Proposition::new(right_rhs, right_lhs),
                         justification: Justification::Sym(right_id),
                     };
                     let sym_right_id = self.add_proof(sym_right);
 
                     // Create Sym(p1): b = a
                     let sym_left = Proof {
-                        lhs: left_rhs,
-                        rhs: left_lhs,
+                        proposition: Proposition::new(left_rhs, left_lhs),
                         justification: Justification::Sym(left_id),
                     };
                     let sym_left_id = self.add_proof(sym_left);
 
                     // Create Trans(Sym(p2), Sym(p1)): c = a
                     let new_trans = Proof {
-                        lhs: right_rhs,
-                        rhs: left_lhs,
+                        proposition: Proposition::new(right_rhs, left_lhs),
                         justification: Justification::Trans(sym_right_id, sym_left_id),
                     };
 
@@ -173,25 +167,6 @@ impl ProofStore {
                     // Recursively simplify the result
                     return self.simplify(current_id);
                 };
-
-                if let Justification::Sym(inner) = self.get(current_id).justification() {
-                    if let Proof {
-                        lhs,
-                        rhs,
-                        justification,
-                    } = self.get(*inner)
-                    {
-                        // swap lhs and rhs
-                        let simplified = Proof {
-                            lhs: *rhs,
-                            rhs: *lhs,
-                            justification: justification.clone(),
-                        };
-
-                        // replace current id with simplified proof
-                        self.id_to_proof[current_id] = simplified;
-                    }
-                }
 
                 current_id
             }
@@ -232,8 +207,8 @@ impl ProofStore {
                     *new_proof = mapped_new;
                     let old = self.get(*old_proof);
                     let new = self.get(*new_proof);
-                    proof.lhs = old.lhs;
-                    proof.rhs = new.rhs;
+                    proof.proposition.lhs = old.lhs();
+                    proof.proposition.rhs = new.rhs();
                     changed = true;
                 }
             }
@@ -246,11 +221,12 @@ impl ProofStore {
                     let left_proof = self.get(*left);
                     let right_proof = self.get(*right);
                     debug_assert_eq!(
-                        left_proof.rhs, right_proof.lhs,
+                        left_proof.rhs(),
+                        right_proof.lhs(),
                         "transitivity requires matching middle terms"
                     );
-                    proof.lhs = left_proof.lhs;
-                    proof.rhs = right_proof.rhs;
+                    proof.proposition.lhs = left_proof.lhs();
+                    proof.proposition.rhs = right_proof.rhs();
                     changed = true;
                 }
             }
@@ -259,8 +235,8 @@ impl ProofStore {
                 if mapped_inner != *inner {
                     *inner = mapped_inner;
                     let inner_proof = self.get(*inner);
-                    proof.lhs = inner_proof.rhs;
-                    proof.rhs = inner_proof.lhs;
+                    proof.proposition.lhs = inner_proof.rhs();
+                    proof.proposition.rhs = inner_proof.lhs();
                     changed = true;
                 }
             }
@@ -276,8 +252,9 @@ impl ProofStore {
                     *child_proof = mapped_child;
                     let base_proof = self.get(*base);
                     let child = self.get(*child_proof);
-                    proof.lhs = base_proof.lhs;
-                    proof.rhs = self.replace_term_child(base_proof.rhs, *child_index, child.rhs);
+                    proof.proposition.lhs = base_proof.lhs();
+                    proof.proposition.rhs =
+                        self.replace_term_child(base_proof.rhs(), *child_index, child.rhs());
                     changed = true;
                 }
             }
@@ -297,8 +274,8 @@ impl Proof {
     where
         F: FnMut(TermId) -> TermId,
     {
-        self.lhs = f(self.lhs);
-        self.rhs = f(self.rhs);
+        self.proposition.lhs = f(self.proposition.lhs);
+        self.proposition.rhs = f(self.proposition.rhs);
         match &mut self.justification {
             Justification::Fiat => {}
             Justification::Rule {

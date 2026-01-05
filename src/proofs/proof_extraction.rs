@@ -131,12 +131,12 @@ impl<'a> ProofInstrumentor<'a> {
         }
 
         // simplify the proof
-        //let simplified_proof = proof_store.simplify(extra_rule_removed);
+        let simplified_proof = proof_store.simplify(extra_rule_removed);
 
         // Check the proof after simplification
-        /*proof_store
-        .check_proof(simplified_proof, &self.egraph.desugared_commands)
-        .expect("simplified existence proof should still be valid");*/
+        proof_store
+            .check_proof(simplified_proof, &self.egraph.desugared_commands)
+            .expect("simplified existence proof should still be valid");
 
         Ok((proof_store, extra_rule_removed))
     }
