@@ -146,6 +146,9 @@ impl<'a> ProofInstrumentor<'a> {
                 Justification::Fiat => format!(
                     "({fiat_constructor} ({to_ast_constructor} {larger}) ({to_ast_constructor} {smaller}))"
                 ),
+                Justification::Merge(func_name, proof1, proof2) => panic!(
+                    "Merge functions do not include union actions, so proof should not be by merge"
+                ),
                 Justification::Proof(existing_proof) => existing_proof.clone(),
             };
             format!("(set ({uf_proof_name} {larger} {smaller}) {proof})")
@@ -327,27 +330,30 @@ impl<'a> ProofInstrumentor<'a> {
                 "".to_string()
             };
             let proof_var = self.fresh_var();
+            let mut merge_fn_code = vec![];
+            let merge_fn_var = self.instrument_action_expr(
+                merge_fn,
+                &mut merge_fn_code,
+                &Justification::Merge(name.clone(), p1_fresh.clone(), p2_fresh.clone()),
+            );
+            let merge_fn_code_str = merge_fn_code.join("\n");
+            let mut updated = child_names.clone();
+            updated.push(merge_fn_var.clone());
+            let term = format!("({name} {child_names_str} {merge_fn_var})");
+            let to_ast = self.fname_to_ast_name(&fdecl.name);
+
             let rule_proof = if self.egraph.proof_state.proofs_enabled {
                 let merge_fn_constructor = self.proof_names().merge_fn_constructor.clone();
                 format!(
                     "(let {proof_var}
                             ({merge_fn_constructor} \"{name}\"
                                   {p1_fresh}
-                                  {p2_fresh}))"
+                                  {p2_fresh}
+                                  ({to_ast} {term})))"
                 )
             } else {
                 "".to_string()
             };
-
-            let mut merge_fn_code = vec![];
-            let merge_fn_var = self.instrument_action_expr(
-                merge_fn,
-                &mut merge_fn_code,
-                &Justification::Proof(proof_var.clone()),
-            );
-            let merge_fn_code_str = merge_fn_code.join("\n");
-            let mut updated = child_names.clone();
-            updated.push(merge_fn_var.clone());
             let term_and_proof = self.update_view(name, &updated, &proof_var);
             let cleanup_constructor = self.egraph.parser.symbol_gen.fresh("mergecleanup");
             let fresh_sort = self.egraph.parser.symbol_gen.fresh("mergecleanupsort");
@@ -363,8 +369,9 @@ impl<'a> ProofInstrumentor<'a> {
                         (!= old new)
                         (= (ordering-max old new) new)
                         {proof_query})
-                       ({rule_proof}
+                       (
                         {merge_fn_code_str}
+                        {rule_proof}
                         {term_and_proof}
                         ({cleanup_constructor} {merge_fn_var} old)
                         ({cleanup_constructor} {merge_fn_var} new)
@@ -528,8 +535,8 @@ impl<'a> ProofInstrumentor<'a> {
                 let congr_constructor = self.proof_names().congr_constructor.clone();
                 let sym_constructor = self.proof_names().eq_sym_constructor.clone();
 
-                // if we are updating the last element of a constructor
-                // it's updating the representative term, use transitivity
+                // if we are updating the last element of a constructor then
+                // it's updating the representative term
                 (
                     if fdecl.subtype == FunctionSubtype::Constructor && i == types.len() - 1 {
                         format!(
@@ -701,6 +708,11 @@ impl<'a> ProofInstrumentor<'a> {
                 }
                 match resolved_call {
                     ResolvedCall::Func(func_type) => {
+                        assert!(
+                            func_type.subtype == FunctionSubtype::Constructor,
+                            "Only constructor function calls are allowed in fact expressions due to proof normal form"
+                        );
+
                         let fv = self.fresh_var();
                         let view_name = self.view_name(&func_type.name);
                         let args_str = ListDisplay(new_args, " ");
@@ -933,6 +945,10 @@ impl<'a> ProofInstrumentor<'a> {
                 }
                 Justification::Fiat => {
                     format!("({fiat_constructor} ({to_ast} {fv}) ({to_ast} {fv}))",)
+                }
+                Justification::Merge(fn_name, p1, p2) => {
+                    let merge_constructor = &self.proof_names().merge_fn_constructor;
+                    format!("({merge_constructor} \"{fn_name}\" {p1} {p2} ({to_ast} {fv}))",)
                 }
                 Justification::Proof(existing_proof) => existing_proof.clone(),
             };

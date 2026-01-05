@@ -38,9 +38,10 @@ pub enum RawProof {
     /// Given a rule name and proofs for each premise, produces a proof of a grounded equality t1 = t2 from the body of the rule.
     /// The subsitution is implicit- in [`ProofTerm`] they are explicit.
     Rule(String, Vec<ProofId>, TermId, TermId),
-    /// Given two proofs f(c1, c2, ..., old) = f(c1, c2, ..., old) and f(c1, c2, ..., new) = f(c1, c2, ..., new), produces a proof
-    /// of f(c1, c2, ..., merge_fn)
-    MergeFn(String, ProofId, ProofId),
+    /// Given two proofs f(c1, c2, ..., old) = f(c1, c2, ..., old) and f(c1, c2, ..., new) = f(c1, c2, ..., new) and a term t produces a proof
+    /// of t = t.
+    /// The term t is either f(c1, c2, ..., merge_fn) or some subexpression of the merge function. Here the merge function is evaluted on the terms old and new.
+    MergeFn(String, ProofId, ProofId, TermId),
     Trans(ProofId, ProofId),
     Sym(ProofId),
     /// given a proof that t1 = f(..., ci, ...)
@@ -146,11 +147,12 @@ impl RawProofStore {
             let premises = self.parse_proof_list(args[1]);
             RawProof::Rule(name, premises, args[2], args[3])
         } else if head == self.encoding_names.merge_fn_constructor {
-            assert!(args.len() == 3, "merge constructor should have 3 args");
+            assert!(args.len() == 4, "merge constructor should have 4 args");
             let function = self.parse_string(args[0]);
             let old_proof = self.parse_proof(args[1]);
             let new_proof = self.parse_proof(args[2]);
-            RawProof::MergeFn(function, old_proof, new_proof)
+            let term = args[3];
+            RawProof::MergeFn(function, old_proof, new_proof, term)
         } else if head == self.encoding_names.eq_trans_constructor {
             assert!(args.len() == 2, "trans constructor should have 2 args");
             let left = self.parse_proof(args[0]);
@@ -239,15 +241,20 @@ impl ProofStore {
     fn from_raw(
         prog: &Vec<ResolvedNCommand>,
         raw_store: RawProofStore,
-        raw_proof: ProofId,
+        raw_proof_id: ProofId,
     ) -> (ProofStore, ProofId) {
+        let raw_term = raw_store.proof_to_term[&raw_proof_id];
+        let formatted_proof = raw_store
+            .term_dag
+            .to_string_with_let(&mut SymbolGen::new("".to_string()), raw_term);
+
         let mut store = ProofStore {
             term_dag: raw_store.term_dag.clone(),
             proof_id: HashMap::default(),
             id_to_proof: Vec::new(),
         };
 
-        let proof_id = store.convert_raw_proof(prog, &raw_store, raw_proof);
+        let proof_id = store.convert_raw_proof(prog, &raw_store, raw_proof_id);
         (store, proof_id)
     }
 
@@ -262,14 +269,7 @@ impl ProofStore {
         if let Some(&id) = self.proof_id.get(&raw_store.store[raw_proof_id]) {
             return id;
         }
-
         let raw_proof = &raw_store.store[raw_proof_id];
-        let raw_term = raw_store.proof_to_term[&raw_proof_id];
-        let formatted_proof = raw_store.term_dag.to_string_with_let_internal(
-            &mut SymbolGen::new("".to_string()),
-            raw_term,
-            &mut String::new(),
-        );
 
         let proof = match raw_proof {
             RawProof::Fiat(lhs, rhs) => Proof {
@@ -295,35 +295,13 @@ impl ProofStore {
                     },
                 }
             }
-            RawProof::MergeFn(function, old_raw, new_raw) => {
+            RawProof::MergeFn(function, old_raw, new_raw, to_prove) => {
                 let old_proof_id = self.convert_raw_proof(prog, raw_store, *old_raw);
                 let new_proof_id = self.convert_raw_proof(prog, raw_store, *new_raw);
-                let old_proof = &self.id_to_proof[old_proof_id];
-                let new_proof = &self.id_to_proof[new_proof_id];
-
-                // TODO we need to run the merge function on the last term to get the proposition we are proving
-                let old_proof_term = self.term_dag.get(old_proof.rhs).clone();
-                let new_proof_term = self.term_dag.get(new_proof.rhs).clone();
-                let Term::App(head, old_args) = old_proof_term else {
-                    panic!("expected function application in merge fn proof lhs");
-                };
-                let Term::App(_, new_args) = new_proof_term else {
-                    panic!("expected function application in merge fn proof rhs");
-                };
-                let old_last = old_args
-                    .last()
-                    .expect("function application should have at least one argument");
-                let new_last = new_args
-                    .last()
-                    .expect("function application should have at least one argument");
-                let merged_last =
-                    run_merge(&mut self.term_dag, function, prog, *old_last, *new_last).unwrap();
-                let mut merged_args = old_args[..old_args.len() - 1].to_vec();
-                merged_args.push(merged_last);
-                let merged_term = self.term_dag.app(head.clone(), merged_args);
+                let to_prove = raw_store.unwrap_ast(*to_prove);
                 Proof {
-                    lhs: merged_term,
-                    rhs: merged_term,
+                    lhs: to_prove,
+                    rhs: to_prove,
                     justification: Justification::MergeFn {
                         function: function.clone(),
                         old_proof: old_proof_id,
@@ -362,6 +340,22 @@ impl ProofStore {
                 let base_rhs = self.id_to_proof[base_id].rhs;
                 let child_rhs = self.id_to_proof[child_id].rhs;
                 let rhs = self.replace_term_child(base_rhs, *child_index, child_rhs);
+                eprintln!(
+                    "Congruence rhs before: {}",
+                    self.term_dag
+                        .to_string_with_let(&mut SymbolGen::new("".to_string()), base_rhs)
+                );
+                eprintln!("Congruence index: {}", child_index);
+                eprintln!(
+                    "Congruence rhs: {}",
+                    self.term_dag
+                        .to_string_with_let(&mut SymbolGen::new("".to_string()), rhs,)
+                );
+                let child_raw_term = raw_store.proof_to_term[child_raw].clone();
+                let child_formatted = raw_store
+                    .term_dag
+                    .to_string_with_let(&mut SymbolGen::new("".to_string()), child_raw_term);
+                eprintln!("child raw proof: {}", child_formatted);
                 Proof {
                     lhs: base_lhs,
                     rhs,
@@ -408,8 +402,7 @@ impl ProofStore {
 
         let mut current_subst = substitution;
         for (fact, proof_id) in rule.body.iter().zip(premise_proofs.iter()) {
-            let proof = &self.id_to_proof[*proof_id];
-            self.unify_fact(fact, proof, &mut current_subst);
+            self.unify_fact(fact, *proof_id, &mut current_subst);
         }
 
         current_subst
@@ -418,9 +411,10 @@ impl ProofStore {
     fn unify_fact(
         &self,
         fact: &ResolvedFact,
-        proof: &Proof,
-        base_subst: &mut HashMap<String, TermId>,
+        proof_id: ProofId,
+        subst: &mut HashMap<String, TermId>,
     ) {
+        let proof = &self.id_to_proof[proof_id];
         match fact {
             // In proof normal form, this is the only way that function calls apppear.
             ResolvedFact::Eq(
@@ -454,18 +448,27 @@ impl ProofStore {
 
                 // bind last child to v
                 let var_child_term = children.last().unwrap();
-                self.add_to_subst(base_subst, &v.name, *var_child_term);
+                self.add_to_subst(subst, &v.name, *var_child_term);
                 // unify other args
                 for (arg_expr, child_term) in args.iter().zip(children.iter()) {
-                    self.unify_expr(arg_expr, *child_term, base_subst);
+                    self.unify_expr(arg_expr, *child_term, subst);
                 }
             }
             ResolvedFact::Eq(_, lhs_expr, rhs_expr) => {
-                self.unify_expr(lhs_expr, proof.lhs, base_subst);
-                self.unify_expr(rhs_expr, proof.rhs, base_subst);
+                eprintln!(
+                    "unifying lhs expr {} with proof lhs {}",
+                    lhs_expr,
+                    self.term_dag.to_string_with_let_internal(
+                        &mut SymbolGen::new("".to_string()),
+                        proof.lhs,
+                        &mut String::new()
+                    ),
+                );
+                self.unify_expr(lhs_expr, proof.lhs, subst);
+                self.unify_expr(rhs_expr, proof.rhs, subst);
             }
             ResolvedFact::Fact(expr) => {
-                self.unify_expr(expr, proof.rhs, base_subst);
+                self.unify_expr(expr, proof.rhs, subst);
             }
         }
     }
