@@ -1,8 +1,7 @@
-use std::{collections::BTreeMap, iter, mem};
+use std::{collections::BTreeMap, iter, mem, sync::Arc};
 
 use crate::{
-    numeric_id::{DenseIdMap, NumericId},
-    query::SymbolMap,
+    numeric_id::{DenseIdMap, NumericId}, query::SymbolMap
 };
 use fixedbitset::FixedBitSet;
 use smallvec::{SmallVec, smallvec};
@@ -164,7 +163,7 @@ impl JoinStage {
 
 #[derive(Debug, Clone)]
 pub(crate) struct Plan {
-    pub atoms: DenseIdMap<AtomId, Atom>,
+    pub atoms: Arc<DenseIdMap<AtomId, Atom>>,
     pub stages: JoinStages,
 }
 impl Plan {
@@ -259,7 +258,7 @@ impl Plan {
 #[derive(Debug, Clone)]
 pub(crate) struct JoinStages {
     pub header: Vec<JoinHeader>,
-    pub instrs: Vec<JoinStage>,
+    pub instrs: Arc<Vec<JoinStage>>,
     pub actions: ActionId,
 }
 
@@ -297,10 +296,10 @@ pub(crate) fn plan_query(query: Query) -> Plan {
     let (header, instrs) = plan_stages(&ctx, query.plan_strategy);
 
     Plan {
-        atoms: ctx.atoms,
+        atoms: Arc::new(ctx.atoms),
         stages: JoinStages {
             header,
-            instrs,
+            instrs: Arc::new(instrs),
             actions: query.action,
         },
     }
