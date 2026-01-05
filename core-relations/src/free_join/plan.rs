@@ -1,4 +1,4 @@
-use std::{collections::BTreeMap, mem, sync::Arc};
+use std::{collections::BTreeMap, mem};
 
 use crate::{
     numeric_id::{DenseIdMap, NumericId},
@@ -164,7 +164,7 @@ impl JoinStage {
 
 #[derive(Debug, Clone)]
 pub(crate) struct Plan {
-    pub atoms: Arc<DenseIdMap<AtomId, Atom>>,
+    pub atoms: DenseIdMap<AtomId, Atom>,
     pub stages: JoinStages,
 }
 impl Plan {
@@ -289,11 +289,21 @@ pub enum PlanStrategy {
 }
 
 pub(crate) fn plan_query(query: Query) -> Plan {
+    let atoms = query.atoms;
     let ctx = PlanningContext {
         vars: query.var_info,
-        atoms: query.atoms,
+        atoms: atoms,
     };
-    plan_with_context(&ctx, query.plan_strategy, query.action)
+    let (header, instrs) = plan_stages(&ctx, query.plan_strategy);
+
+    Plan {
+        atoms: ctx.atoms,
+        stages: JoinStages {
+            header,
+            instrs,
+            actions: query.action,
+        },
+    }
 }
 
 /// StageInfo is an intermediate stage used to describe the ordering of
@@ -417,20 +427,18 @@ impl<'a> BucketQueue<'a> {
     }
 }
 
-/// Main planning function
-fn plan_with_context(
+/// Build join headers from fast constraints and compute remaining constraints for planning.
+/// Returns (headers, remaining_constraints) tuple.
+fn plan_headers(
     ctx: &PlanningContext,
-    strat: PlanStrategy,
-    actions: ActionId,
-) -> Plan {
-    let mut instrs = Vec::new();
+) -> (
+    Vec<JoinHeader>,
+    DenseIdMap<AtomId, (usize, &Pooled<Vec<Constraint>>)>,
+) {
     let mut header = Vec::new();
-    let state = PlanningState::new(ctx.vars.n_ids(), ctx.atoms.n_ids());
-
     let mut remaining_constraints: DenseIdMap<AtomId, (usize, &Pooled<Vec<Constraint>>)> =
         Default::default();
 
-    // Build headers
     for (atom, atom_info) in ctx.atoms.iter() {
         remaining_constraints.insert(
             atom,
@@ -448,6 +456,19 @@ fn plan_with_context(
         }
     }
 
+    (header, remaining_constraints)
+}
+
+/// Plan query execution stages using the specified strategy.
+/// Returns (header, instructions) tuple that can be assembled into a Plan by the caller.
+fn plan_stages(
+    ctx: &PlanningContext,
+    strat: PlanStrategy,
+) -> (Vec<JoinHeader>, Vec<JoinStage>) {
+    let (header, remaining_constraints) = plan_headers(ctx);
+    let mut instrs = Vec::new();
+    let state = PlanningState::new(ctx.vars.n_ids(), ctx.atoms.n_ids());
+
     let _final_state = match strat {
         PlanStrategy::PureSize | PlanStrategy::MinCover => {
             plan_free_join(ctx, state, strat, &remaining_constraints, &mut instrs)
@@ -455,14 +476,7 @@ fn plan_with_context(
         PlanStrategy::Gj => plan_gj(ctx, state, &remaining_constraints, &mut instrs),
     };
 
-    Plan {
-        atoms: ctx.atoms.clone().into(),
-        stages: JoinStages {
-            header,
-            instrs,
-            actions,
-        },
-    }
+    (header, instrs)
 }
 
 /// Plan free join queries using pure size or minimal cover strategy.
