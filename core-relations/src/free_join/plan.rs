@@ -1,4 +1,4 @@
-use std::{collections::BTreeMap, mem};
+use std::{collections::BTreeMap, iter, mem};
 
 use crate::{
     numeric_id::{DenseIdMap, NumericId},
@@ -342,18 +342,16 @@ impl PlanningState {
         }
     }
 
-    fn mark_var_used(mut self, var: Variable) -> Self {
+    fn mark_var_used(&mut self, var: Variable) {
         self.used_vars.insert(var.index());
-        self
     }
 
     fn is_var_used(&self, var: Variable) -> bool {
         self.used_vars.contains(var.index())
     }
 
-    fn mark_atom_constrained(mut self, atom: AtomId) -> Self {
+    fn mark_atom_constrained(&mut self, atom: AtomId) {
         self.constrained_atoms.insert(atom.index());
-        self
     }
 
     fn is_atom_constrained(&self, atom: AtomId) -> bool {
@@ -461,19 +459,16 @@ fn plan_headers(
 
 /// Plan query execution stages using the specified strategy.
 /// Returns (header, instructions) tuple that can be assembled into a Plan by the caller.
-fn plan_stages(
-    ctx: &PlanningContext,
-    strat: PlanStrategy,
-) -> (Vec<JoinHeader>, Vec<JoinStage>) {
+fn plan_stages(ctx: &PlanningContext, strat: PlanStrategy) -> (Vec<JoinHeader>, Vec<JoinStage>) {
     let (header, remaining_constraints) = plan_headers(ctx);
     let mut instrs = Vec::new();
-    let state = PlanningState::new(ctx.vars.n_ids(), ctx.atoms.n_ids());
+    let mut state = PlanningState::new(ctx.vars.n_ids(), ctx.atoms.n_ids());
 
-    let _final_state = match strat {
+    match strat {
         PlanStrategy::PureSize | PlanStrategy::MinCover => {
-            plan_free_join(ctx, state, strat, &remaining_constraints, &mut instrs)
+            plan_free_join(ctx, &mut state, strat, &remaining_constraints, &mut instrs)
         }
-        PlanStrategy::Gj => plan_gj(ctx, state, &remaining_constraints, &mut instrs),
+        PlanStrategy::Gj => plan_gj(ctx, &mut state, &remaining_constraints, &mut instrs),
     };
 
     (header, instrs)
@@ -482,11 +477,11 @@ fn plan_stages(
 /// Plan free join queries using pure size or minimal cover strategy.
 fn plan_free_join(
     ctx: &PlanningContext,
-    mut state: PlanningState,
+    state: &mut PlanningState,
     strat: PlanStrategy,
     remaining_constraints: &DenseIdMap<AtomId, (usize, &Pooled<Vec<Constraint>>)>,
     stages: &mut Vec<JoinStage>,
-) -> PlanningState {
+) {
     let mut size_info = Vec::<(AtomId, usize)>::new();
 
     match strat {
@@ -515,27 +510,23 @@ fn plan_free_join(
     let mut atoms = size_info.iter().map(|(atom, _)| *atom);
 
     loop {
-        let current = mem::replace(&mut state, PlanningState::new(ctx.vars.n_ids(), ctx.atoms.n_ids()));
-        match get_next_freejoin_stage(ctx, current, &mut atoms) {
-            Some((info, new_state)) => {
-                let (stage, final_state) = compile_stage(ctx, new_state, info);
+        match get_next_freejoin_stage(ctx, state, &mut atoms) {
+            Some(info) => {
+                let stage = compile_stage(ctx, state, info);
                 stages.push(stage);
-                state = final_state;
             }
             None => break,
         }
     }
-
-    state
 }
 
 /// Plan generic join queries (one variable per stage).
 fn plan_gj(
     ctx: &PlanningContext,
-    mut state: PlanningState,
+    state: &mut PlanningState,
     remaining_constraints: &DenseIdMap<AtomId, (usize, &Pooled<Vec<Constraint>>)>,
     stages: &mut Vec<JoinStage>,
-) -> PlanningState {
+) {
     // First, map all variables to the size of the smallest atom in which they appear:
     let mut min_sizes = Vec::with_capacity(ctx.vars.n_ids());
     let mut atoms_hit = AtomSet::with_capacity(ctx.atoms.n_ids());
@@ -585,28 +576,23 @@ fn plan_gj(
                 .push((occ.clone(), smallvec![ColumnId::new(0)]));
         }
 
-        let (next_stage, new_state) = compile_stage(ctx, state, info);
+        let next_stage = compile_stage(ctx, state, info);
         if let Some(prev) = stages.last_mut() {
             if prev.fuse(&next_stage) {
-                state = new_state;
                 continue;
             }
         }
         stages.push(next_stage);
-        state = new_state;
     }
-
-    state
 }
 
 /// Generate the next free join stage by picking an atom from the ordering.
 /// Returns the stage info and updated state, or None if all atoms are covered.
 fn get_next_freejoin_stage(
     ctx: &PlanningContext,
-    mut state: PlanningState,
+    state: &mut PlanningState,
     ordering: &mut impl Iterator<Item = AtomId>,
-) -> Option<(StageInfo, PlanningState)> {
-    // Local variable instead of struct field!
+) -> Option<StageInfo> {
     let mut scratch_subatom: HashMap<AtomId, SmallVec<[ColumnId; 2]>> = Default::default();
 
     loop {
@@ -622,7 +608,7 @@ fn get_next_freejoin_stage(
             }
             // This atom is not completely covered by previous stages.
             covered = true;
-            state = state.mark_var_used(*var);
+            state.mark_var_used(*var);
             vars.push(*var);
             cover.vars.push(ix);
 
@@ -659,20 +645,37 @@ fn get_next_freejoin_stage(
             filters.push((SubAtom { atom, vars: cols }, form_key));
         }
 
-        return Some((StageInfo { cover, vars, filters }, state));
+        return Some(StageInfo {
+            cover,
+            vars,
+            filters,
+        });
     }
 }
 
 /// Compile a stage info into a concrete join stage, updating constraint state.
 fn compile_stage(
     ctx: &PlanningContext,
-    mut state: PlanningState,
+    state: &mut PlanningState,
     StageInfo {
         cover,
         vars,
         filters,
     }: StageInfo,
-) -> (JoinStage, PlanningState) {
+) -> JoinStage {
+    fn take_atom_constraints_if_new(
+        ctx: &PlanningContext,
+        state: &mut PlanningState,
+        atom: AtomId,
+    ) -> Vec<Constraint> {
+        if state.is_atom_constrained(atom) {
+            Default::default()
+        } else {
+            state.mark_atom_constrained(atom);
+            ctx.atoms[atom].constraints.slow.clone()
+        }
+    }
+
     if vars.len() == 1 {
         debug_assert!(
             filters
@@ -681,53 +684,31 @@ fn compile_stage(
             "filters={filters:?}"
         );
 
-        let mut scans = SmallVec::<[SingleScanSpec; 3]>::new();
+        let scans = SmallVec::<[SingleScanSpec; 3]>::from_iter(
+            iter::once(&cover)
+                .chain(filters.iter().map(|(x, _)| x))
+                .map(|subatom| {
+                    let atom = subatom.atom;
+                    SingleScanSpec {
+                        atom,
+                        column: subatom.vars[0],
+                        cs: take_atom_constraints_if_new(ctx, state, atom),
+                    }
+                }),
+        );
 
-        // Process cover
-        let atom = cover.atom;
-        let cs = if state.is_atom_constrained(atom) {
-            Default::default()
-        } else {
-            state = state.mark_atom_constrained(atom);
-            ctx.atoms[atom].constraints.slow.clone()
+        return JoinStage::Intersect {
+            var: vars[0],
+            scans,
         };
-        scans.push(SingleScanSpec {
-            atom,
-            column: cover.vars[0],
-            cs,
-        });
-
-        // Process filters
-        for (subatom, _) in filters.iter() {
-            let atom = subatom.atom;
-            let cs = if state.is_atom_constrained(atom) {
-                Default::default()
-            } else {
-                state = state.mark_atom_constrained(atom);
-                ctx.atoms[atom].constraints.slow.clone()
-            };
-            scans.push(SingleScanSpec {
-                atom,
-                column: subatom.vars[0],
-                cs,
-            });
-        }
-
-        return (JoinStage::Intersect { var: vars[0], scans }, state);
     }
 
     // FusedIntersect case
     let atom = cover.atom;
-    let constraints = if state.is_atom_constrained(atom) {
-        Default::default()
-    } else {
-        state = state.mark_atom_constrained(atom);
-        ctx.atoms[atom].constraints.slow.clone()
-    };
 
     let cover_spec = ScanSpec {
         to_index: cover,
-        constraints,
+        constraints: take_atom_constraints_if_new(ctx, state, atom),
     };
 
     let mut bind = SmallVec::new();
@@ -738,26 +719,17 @@ fn compile_stage(
 
     let mut to_intersect = Vec::with_capacity(filters.len());
     for (subatom, key_spec) in filters {
-        let atom = subatom.atom;
-        let constraints = if state.is_atom_constrained(atom) {
-            Default::default()
-        } else {
-            state = state.mark_atom_constrained(atom);
-            ctx.atoms[atom].constraints.slow.clone()
-        };
+        let atom = subatom.atom;;
         let scan = ScanSpec {
             to_index: subatom,
-            constraints,
+            constraints: take_atom_constraints_if_new(ctx, state, atom),
         };
         to_intersect.push((scan, key_spec));
     }
 
-    (
-        JoinStage::FusedIntersect {
-            cover: cover_spec,
-            bind,
-            to_intersect,
-        },
-        state,
-    )
+    JoinStage::FusedIntersect {
+        cover: cover_spec,
+        bind,
+        to_intersect,
+    }
 }
