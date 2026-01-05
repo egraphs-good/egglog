@@ -8,28 +8,28 @@ expression: snapshot
 
 
 
-(let t (Add (Const 5) (Const 1)))
-(let t1 (MathU t))
-(let t2 (= t1 t1))
-(let t3 (premises (Fiat (= (MathU (Const 5)) (MathU (Const 5)))) (Fiat (= () ()))))
+(let t0 (Add (Const 5) (Const 1)))
+(let t1 (MathU t0))
+(let prop0 (= t1 t1))
+(let t2 (premises (Fiat (= (MathU (Const 5)) (MathU (Const 5)))) (Fiat (= () ()))))
 (Congr
-  t2
+  prop0
   (Rule
-    t2
+    prop0
     (name
       "(rule ((MathU (Const a))
        (> (+ a 1) 5))
       ((MathU (Add (Const a) (Const 1))))
          )")
-    t3
+    t2
     (substitution (a 5)))
   (Rule
-    (= t t)
+    (= t0 t0)
     (name
       "(rule ((MathU (Const a))
        (> (+ a 1) 5))
       ((MathU (Add (Const a) (Const 1))))
          )")
-    t3
+    t2
     (substitution (a 5)))
   0)

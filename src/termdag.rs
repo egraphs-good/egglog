@@ -65,22 +65,33 @@ struct TermRenderContext<'a> {
     sizes: &'a HashMap<TermId, usize>,
     bindings: HashMap<TermId, String>,
     buf: &'a mut String,
+    /// Function that takes a constructor name and returns the name hint to use
+    name_hint_fn: Box<dyn Fn(&str) -> String + 'a>,
 }
 
 impl<'a> TermRenderContext<'a> {
-    fn new(
+    fn new<F>(
         fresh: &'a mut SymbolGen,
         ref_counts: &'a HashMap<TermId, usize>,
         sizes: &'a HashMap<TermId, usize>,
         buf: &'a mut String,
-    ) -> Self {
+        name_hint_fn: F,
+    ) -> Self
+    where
+        F: Fn(&str) -> String + 'a,
+    {
         Self {
             fresh,
             ref_counts,
             sizes,
             bindings: HashMap::default(),
             buf,
+            name_hint_fn: Box::new(name_hint_fn),
         }
+    }
+
+    fn get_name_hint(&self, constructor_name: &str) -> String {
+        (self.name_hint_fn)(constructor_name)
     }
 }
 
@@ -175,21 +186,39 @@ impl TermDag {
 
     /// Prints a term to a string, putting let bindings for shared subterms.
     pub fn to_string_with_let(&self, fresh: &mut SymbolGen, term_id: TermId) -> String {
+        self.to_string_with_let_and_hint(fresh, term_id, "t")
+    }
+
+    /// Prints a term to a string, putting let bindings for shared subterms.
+    /// Uses the given name hint for generated variable names.
+    pub fn to_string_with_let_and_hint(
+        &self,
+        fresh: &mut SymbolGen,
+        term_id: TermId,
+        name_hint: &str,
+    ) -> String {
         let mut buf = String::new();
-        let final_str = self.to_string_with_let_internal(fresh, term_id, &mut buf);
+        let hint = name_hint.to_string();
+        let final_str =
+            self.to_string_with_let_internal(fresh, term_id, &mut buf, move |_| hint.clone());
         format!("{buf}\n{final_str}")
     }
 
     /// Prints a term to a string, putting let bindings for shared subterms in `buf`.
     /// Returns the final string representation of the term.
-    pub(crate) fn to_string_with_let_internal(
+    /// The `name_hint_fn` takes a constructor name and returns the hint to use for that term.
+    pub(crate) fn to_string_with_let_internal<'a, F>(
         &self,
-        fresh: &mut SymbolGen,
+        fresh: &'a mut SymbolGen,
         term_id: TermId,
-        buf: &mut String,
-    ) -> String {
+        buf: &'a mut String,
+        name_hint_fn: F,
+    ) -> String
+    where
+        F: Fn(&str) -> String + 'a,
+    {
         let (ref_counts, sizes) = self.collect_term_stats(term_id);
-        let mut ctx = TermRenderContext::new(fresh, &ref_counts, &sizes, buf);
+        let mut ctx = TermRenderContext::new(fresh, &ref_counts, &sizes, buf, name_hint_fn);
         let rendered = self.render_term(term_id, &mut ctx, false, 0);
         rendered.pretty
     }
@@ -204,6 +233,12 @@ impl TermDag {
         if let Some(existing) = ctx.bindings.get(&term_id) {
             return RenderedTerm::from_symbol(existing.clone());
         }
+
+        // Get the constructor name for the hint function (if it's an App)
+        let constructor_name = match self.get(term_id) {
+            Term::App(name, _) => Some(name.clone()),
+            _ => None,
+        };
 
         let rendered = match self.get(term_id) {
             Term::App(name, children) => {
@@ -264,7 +299,8 @@ impl TermDag {
         let should_bind = allow_binding && repeat_count > 1 && term_size >= MIN_SHARED_TERM_SIZE;
 
         if should_bind {
-            let let_name = ctx.fresh.fresh("t");
+            let hint = ctx.get_name_hint(constructor_name.as_deref().unwrap_or("t"));
+            let let_name = ctx.fresh.fresh(&hint);
             self.push_binding(ctx.buf, &let_name, &rendered.pretty);
             ctx.bindings.insert(term_id, let_name.clone());
             RenderedTerm::from_symbol(let_name)
@@ -495,11 +531,10 @@ mod tests {
     fn test_to_string_with_let_inlines_small_terms() {
         let s = r#"(f (g x) (g x) (g x))"#;
         let (td, t) = parse_term(s);
-        let mut buf = String::new();
         let mut sym = SymbolGen::new(String::new());
-        let repr = td.to_string_with_let_internal(&mut sym, t, &mut buf);
-        assert!(buf.is_empty(), "expected no let bindings, got {buf}");
-        assert_eq!(repr, s);
+        let result = td.to_string_with_let(&mut sym, t);
+        // No let bindings means result is just newline + repr
+        assert_eq!(result.trim(), s);
     }
 
     #[test]
@@ -509,7 +544,7 @@ mod tests {
         let (td, t) = parse_term(&s);
         let mut buf = String::new();
         let mut sym = SymbolGen::new(String::new());
-        let repr = td.to_string_with_let_internal(&mut sym, t, &mut buf);
+        let repr = td.to_string_with_let_internal(&mut sym, t, &mut buf, |_| "t".to_string());
         let first_line = buf.lines().next().expect("expected let binding");
         assert!(first_line.starts_with("(let t"));
         assert!(buf.contains("(h"));
@@ -526,10 +561,10 @@ mod tests {
     fn test_to_string_with_let_wraps_long_lines() {
         let s = r#"(verylongfunctionnamewithmanysegments alpha_argument beta_argument gamma_argument delta_argument epsilon_argument zeta_argument)"#;
         let (td, t) = parse_term(s);
-        let mut buf = String::new();
         let mut sym = SymbolGen::new(String::new());
-        let repr = td.to_string_with_let_internal(&mut sym, t, &mut buf);
-        assert!(buf.is_empty());
+        let result = td.to_string_with_let(&mut sym, t);
+        // No let bindings, so result is just newline + repr
+        let repr = result.trim();
         assert!(repr.contains('\n'));
         assert!(repr.contains("\n  "));
         assert!(repr.starts_with("(verylongfunctionnamewithmanysegments"));
@@ -541,7 +576,7 @@ mod tests {
         let (td, t) = parse_term(expr);
         let mut buf = String::new();
         let mut sym = SymbolGen::new(String::new());
-        let repr = td.to_string_with_let_internal(&mut sym, t, &mut buf);
+        let repr = td.to_string_with_let_internal(&mut sym, t, &mut buf, |_| "t".to_string());
         assert!(repr.contains('\n'), "expected multiline output, got {repr}");
         let has_lonely_paren = repr.lines().any(|line| line.trim() == ")");
         assert!(
