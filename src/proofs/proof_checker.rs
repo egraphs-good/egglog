@@ -34,13 +34,14 @@ pub(crate) fn gather_global_actions(
     actions
 }
 
+/// Run a merge function and return the resultig term, as well as a set of propositions learned.
 pub(crate) fn run_merge(
     term_dag: &mut TermDag,
     func_name: &str,
     prog: &[ResolvedNCommand],
     old_term: TermId,
     new_term: TermId,
-) -> Result<TermId, ProofCheckError> {
+) -> Result<(TermId, HashSet<(TermId, TermId)>), ProofCheckError> {
     let mut subst = HashMap::default();
     subst.insert("old".to_string(), old_term);
     subst.insert("new".to_string(), new_term);
@@ -55,9 +56,7 @@ pub(crate) fn run_merge(
                         .ok_or_else(|| ProofCheckError::FunctionNotFound {
                             function_name: func_name.to_string(),
                         })?;
-                let (result_term, _) =
-                    eval_expr_with_subst( "merge_function", expr, term_dag, &subst)?;
-                return Ok(result_term);
+                return eval_expr_with_subst("merge_function", expr, term_dag, &subst);
             }
         }
     }
@@ -86,16 +85,16 @@ pub(crate) fn process_actions(
             GenericAction::Let(_, var, expr) => {
                 // Evaluate the expression and collect propositions
                 let (term_id, new_props) =
-                    eval_expr_with_subst( rule_name, expr, term_dag, &bindings)?;
+                    eval_expr_with_subst(rule_name, expr, term_dag, &bindings)?;
                 bindings.insert(var.name.clone(), term_id);
                 propositions.extend(new_props);
             }
             GenericAction::Union(_, lhs_expr, rhs_expr) => {
                 // Union creates ground equalities
                 let (lhs_term, lhs_props) =
-                    eval_expr_with_subst( rule_name, lhs_expr, term_dag, &bindings)?;
+                    eval_expr_with_subst(rule_name, lhs_expr, term_dag, &bindings)?;
                 let (rhs_term, rhs_props) =
-                    eval_expr_with_subst( rule_name, rhs_expr, term_dag, &bindings)?;
+                    eval_expr_with_subst(rule_name, rhs_expr, term_dag, &bindings)?;
 
                 // Collect propositions from evaluating both sides
                 propositions.extend(lhs_props);
@@ -110,13 +109,12 @@ pub(crate) fn process_actions(
                 all_args.push(rhs.clone());
                 let call_expr = ResolvedExpr::Call(crate::ast::Span::Panic, func.clone(), all_args);
                 let (_term, new_props) =
-                    eval_expr_with_subst( rule_name, &call_expr, term_dag, &bindings)?;
+                    eval_expr_with_subst(rule_name, &call_expr, term_dag, &bindings)?;
                 propositions.extend(new_props);
             }
             GenericAction::Expr(_, expr) => {
                 // Expr creates reflexive equality for its result
-                let (_, new_props) =
-                    eval_expr_with_subst( rule_name, expr, term_dag, &bindings)?;
+                let (_, new_props) = eval_expr_with_subst(rule_name, expr, term_dag, &bindings)?;
                 propositions.extend(new_props);
             }
             GenericAction::Panic(_, _) => {
@@ -161,8 +159,7 @@ fn eval_expr_with_subst(
             ResolvedCall::Func(_func_type) => {
                 let mut arg_terms = Vec::new();
                 for arg in args {
-                    let (arg_term, arg_props) =
-                        eval_expr_with_subst( rule_name, arg, dag, subst)?;
+                    let (arg_term, arg_props) = eval_expr_with_subst(rule_name, arg, dag, subst)?;
                     arg_terms.push(arg_term);
                     propositions.extend(arg_props);
                 }
@@ -172,8 +169,7 @@ fn eval_expr_with_subst(
                 // run validator, throwing error if it fails
                 let mut arg_terms = Vec::new();
                 for arg in args {
-                    let (arg_term, arg_props) =
-                        eval_expr_with_subst( rule_name, arg, dag, subst)?;
+                    let (arg_term, arg_props) = eval_expr_with_subst(rule_name, arg, dag, subst)?;
                     arg_terms.push(arg_term);
                     propositions.extend(arg_props);
                 }
@@ -221,13 +217,8 @@ pub(crate) fn gather_globals(
     term_dag: &mut TermDag,
 ) -> HashMap<String, TermId> {
     let actions = gather_global_actions(prog);
-    let ctx = process_actions(
-        "global_action",
-        HashMap::default(),
-        &actions,
-        term_dag,
-    )
-    .expect("Failed to process global actions");
+    let ctx = process_actions("global_action", HashMap::default(), &actions, term_dag)
+        .expect("Failed to process global actions");
     ctx.var_bindings
 }
 
@@ -269,10 +260,7 @@ pub enum ProofCheckError {
     },
     /// Rule substitution doesn't match the proof
     #[error("Rule '{rule_name}' substitution error: {reason}")]
-    RuleSubstitutionMismatch {
-        rule_name: String,
-        reason: String,
-    },
+    RuleSubstitutionMismatch { rule_name: String, reason: String },
     /// Primitive operation validator failed
     #[error("Primitive '{function_name}' validation failed: {reason}")]
     PrimitiveValidationFailed {
@@ -281,15 +269,16 @@ pub enum ProofCheckError {
     },
     /// Could not find the rule referenced in a proof
     #[error("Could not find rule '{rule_name}'")]
-    RuleNotFound {
-        rule_name: String,
-    },
+    RuleNotFound { rule_name: String },
     /// Could not find the function referenced in a proof
     #[error("Could not find function '{function_name}'")]
     FunctionNotFound { function_name: String },
     /// Fiat proof is invalid (not a global or literal)
     #[error("Proof {proof_id}: Fiat proof invalid: {reason}")]
     InvalidFiat { proof_id: ProofId, reason: String },
+    /// MergeFn proof check failed
+    #[error("Proof {proof_id}: MergeFn error: {reason}")]
+    MergeFnError { proof_id: ProofId, reason: String },
 }
 
 /// Represents a proposition that can be proven
@@ -317,13 +306,8 @@ impl ProofCheckContext {
     fn new(prog: &[ResolvedNCommand], term_dag: &mut TermDag) -> Self {
         // Use the new refactored functions
         let actions = gather_global_actions(prog);
-        let action_ctx = process_actions(
-            "global_actions",
-            HashMap::default(),
-            &actions,
-            term_dag,
-        )
-        .expect("Failed to process global actions for proof checking");
+        let action_ctx = process_actions("global_actions", HashMap::default(), &actions, term_dag)
+            .expect("Failed to process global actions for proof checking");
 
         ProofCheckContext {
             global_equalities: action_ctx.propositions,
@@ -452,8 +436,100 @@ impl ProofStore {
                 old_proof,
                 new_proof,
             } => {
-                // need to find the merge function from the program, then run the merge function to produce a new term
-                todo!();
+                // Check both sub-proofs - they should be reflexive proofs
+                let old_prop = self.check_proof_with_context(*old_proof, program, ctx)?;
+                let new_prop = self.check_proof_with_context(*new_proof, program, ctx)?;
+
+                let (old_lhs, old_rhs) = match old_prop {
+                    Proposition::TermsEq(l, r) => (l, r),
+                };
+                let (new_lhs, new_rhs) = match new_prop {
+                    Proposition::TermsEq(l, r) => (l, r),
+                };
+                let old_view_term = self.term_dag.get(old_rhs);
+                let new_view_term = self.term_dag.get(new_rhs);
+
+                let (old_term, new_term, view_head, input_args) = match (
+                    old_view_term,
+                    new_view_term,
+                ) {
+                    (Term::App(old_head, old_args), Term::App(new_head, new_args)) => {
+                        // Verify both are views of the same function
+                        if old_head != new_head {
+                            return Err(ProofCheckError::MergeFnError {
+                                proof_id,
+                                reason: format!(
+                                    "old and new proofs should be for the same function, but got {} and {}",
+                                    old_head, new_head
+                                ),
+                            });
+                        }
+                        // The last argument is the output
+                        let old_output =
+                            *old_args
+                                .last()
+                                .ok_or_else(|| ProofCheckError::MergeFnError {
+                                    proof_id,
+                                    reason: "old view term has no arguments".to_string(),
+                                })?;
+                        let new_output =
+                            *new_args
+                                .last()
+                                .ok_or_else(|| ProofCheckError::MergeFnError {
+                                    proof_id,
+                                    reason: "new view term has no arguments".to_string(),
+                                })?;
+                        // Get the input arguments (all but the last)
+                        let inputs: Vec<TermId> = old_args[..old_args.len() - 1].to_vec();
+                        // inputs should match for old and new
+                        if inputs.len() != new_args.len() - 1
+                            || inputs
+                                .iter()
+                                .zip(new_args[..new_args.len() - 1].iter())
+                                .any(|(a, b)| a != b)
+                        {
+                            return Err(ProofCheckError::MergeFnError {
+                                proof_id,
+                                reason: "old and new view terms have different input arguments"
+                                    .to_string(),
+                            });
+                        }
+
+                        (old_output, new_output, old_head.clone(), inputs)
+                    }
+                    _ => {
+                        return Err(ProofCheckError::MergeFnError {
+                            proof_id,
+                            reason: format!(
+                                "expected function application terms, got {:?} and {:?}",
+                                old_view_term, new_view_term
+                            ),
+                        });
+                    }
+                };
+
+                // Run the merge function to get the expected result
+                let (merged_term_child, mut merged_props) =
+                    run_merge(&mut self.term_dag, function, program, old_term, new_term)?;
+                // Add f(inputs..., merged_term) to merged_props
+                let mut merged_view_args = input_args.clone();
+                merged_view_args.push(merged_term_child);
+                let merged_term = self.term_dag.app(view_head, merged_view_args);
+                merged_props.insert((merged_term, merged_term));
+                // Verify the proof's claimed equality is in the merged propositions
+                if !merged_props.contains(&(proof.lhs, proof.rhs)) {
+                    return Err(ProofCheckError::MergeFnError {
+                        proof_id,
+                        reason: format!(
+                            "proof claims {} = {}, which is not established by merge function",
+                            self.term_dag
+                                .to_string_with_let(&mut SymbolGen::new("".to_string()), proof.lhs),
+                            self.term_dag
+                                .to_string_with_let(&mut SymbolGen::new("".to_string()), proof.rhs)
+                        ),
+                    });
+                }
+
                 Ok(Proposition::TermsEq(proof.lhs, proof.rhs))
             }
 
@@ -648,11 +724,7 @@ impl ProofStore {
                 // Evaluate all the input arguments
                 let mut arg_terms = Vec::new();
                 for arg in args {
-                    arg_terms.push(self.eval_expr_with_subst(
-                        rule_name,
-                        arg,
-                        substitution,
-                    )?);
+                    arg_terms.push(self.eval_expr_with_subst(rule_name, arg, substitution)?);
                 }
                 // Add the output variable as the last argument
                 arg_terms.push(var_term);
@@ -676,13 +748,13 @@ impl ProofStore {
             }
             ResolvedFact::Eq(_, lhs_expr, rhs_expr) => {
                 let fact_lhs = self
-                    .eval_expr_with_subst( rule_name, lhs_expr, substitution)
+                    .eval_expr_with_subst(rule_name, lhs_expr, substitution)
                     .map_err(|_| ProofCheckError::RuleSubstitutionMismatch {
                         rule_name: rule_name.to_string(),
                         reason: "Failed to evaluate LHS expression under substitution".to_string(),
                     })?;
                 let fact_rhs = self
-                    .eval_expr_with_subst( rule_name, rhs_expr, substitution)
+                    .eval_expr_with_subst(rule_name, rhs_expr, substitution)
                     .map_err(|_| ProofCheckError::RuleSubstitutionMismatch {
                         rule_name: rule_name.to_string(),
                         reason: "Failed to evaluate RHS expression under substitution".to_string(),
@@ -707,7 +779,7 @@ impl ProofStore {
             // For a plain expr, the proof should have the form t1 = t2 where t2 matches the expr under substitution
             ResolvedFact::Fact(expr) => {
                 let fact_term = self
-                    .eval_expr_with_subst( rule_name, expr, substitution)
+                    .eval_expr_with_subst(rule_name, expr, substitution)
                     .map_err(|_| ProofCheckError::RuleSubstitutionMismatch {
                         rule_name: rule_name.to_string(),
                         reason: "Failed to evaluate Fact expression under substitution".to_string(),
@@ -739,9 +811,7 @@ impl ProofStore {
         substitution: &HashMap<String, TermId>,
     ) -> Result<TermId, ProofCheckError> {
         match expr {
-            ResolvedExpr::Lit(_, lit) => {
-                Ok(self.term_dag.lit(lit.clone()))
-            }
+            ResolvedExpr::Lit(_, lit) => Ok(self.term_dag.lit(lit.clone())),
             ResolvedExpr::Var(_, var) => substitution.get(&var.name).copied().ok_or_else(|| {
                 ProofCheckError::RuleSubstitutionMismatch {
                     rule_name: rule_name.to_string(),
@@ -760,11 +830,7 @@ impl ProofStore {
                 // Evaluate all arguments first
                 let mut arg_terms = Vec::new();
                 for arg in args {
-                    arg_terms.push(self.eval_expr_with_subst(
-                        rule_name,
-                        arg,
-                        substitution,
-                    )?);
+                    arg_terms.push(self.eval_expr_with_subst(rule_name, arg, substitution)?);
                 }
 
                 match head {
@@ -829,16 +895,11 @@ impl ProofStore {
             rule.head.0.iter().collect();
         let mut bindings = ctx.global_bindings.clone();
         bindings.extend(substitution.clone());
-        let action_ctx = process_actions(
-            rule_name,
-            bindings,
-            &action_refs,
-            &mut self.term_dag,
-        )
-        .map_err(|e| ProofCheckError::RuleSubstitutionMismatch {
-            rule_name: rule_name.to_string(),
-            reason: format!("Failed to process rule head actions: {}", e),
-        })?;
+        let action_ctx = process_actions(rule_name, bindings, &action_refs, &mut self.term_dag)
+            .map_err(|e| ProofCheckError::RuleSubstitutionMismatch {
+                rule_name: rule_name.to_string(),
+                reason: format!("Failed to process rule head actions: {}", e),
+            })?;
 
         // Check if the claimed equality is in the propositions
         if action_ctx
