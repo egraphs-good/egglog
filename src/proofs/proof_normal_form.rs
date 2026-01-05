@@ -3,7 +3,7 @@ use crate::*;
 use crate::{core::ResolvedCall, typechecking::FuncType};
 use egglog_ast::generic_ast::GenericExpr;
 
-/// Puts queries in "proof form". In proof form:
+/// Puts queries in "proof normal form". In proof form:
 /// 1. Function calls like (lower-bound a b) are always top level and look like this:
 ///    (= (lower-bound a b) c)
 /// 2. Primitives can't have constructors or function calls as arguments.

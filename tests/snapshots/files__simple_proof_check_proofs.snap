@@ -6,4 +6,5 @@ expression: snapshot
 
 
 
-(Fiat (= (Num 2) (Num 2)))
+(let t (= (Num 2) (Num 2)))
+(Congr t (Fiat t) (Fiat (= 2 2)) 0)

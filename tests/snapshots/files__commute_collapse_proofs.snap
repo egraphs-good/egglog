@@ -8,13 +8,46 @@ expression: snapshot
 
 
 
-(let t (premises (Fiat (= (Add 2 3) (Add 2 3)))))
-(let t1 (substitution (a 2) (b 3)))
+(let t (= (Add 2 3) (Num 5)))
+(let t1 (= (Add 2 3) (Add 2 3)))
+(let t2 (Fiat t1))
+(let t3 (Fiat (= 2 2)))
+(let t4 (Fiat (= 3 3)))
+(let t5 (Congr t1 (Congr t1 (Trans t1 (Sym t1 t2) t2) t3 0) t4 1))
+(let t6 (= (Add 2 3) (Add 3 2)))
+(let t7 (= (Add 3 2) (Add 2 3)))
+(let t8 (premises t5))
+(let t9 (substitution (a 2) (b 3)))
+(let t10 (Trans t7 (Rule t7 (name "rw1") t8 t9) t2))
+(let t11
+  (premises
+                (Congr
+                  t6
+                  (Congr
+                    t6
+                    (Trans
+                      t6
+                      (Sym t6 t10)
+                      (Rule (= (Add 3 2) (Add 3 2)) (name "rw1") t8 t9))
+                    t4
+                    0)
+                  t3
+                  1)
+                (Fiat (= () ()))))
+(let t12 (substitution (a 3) (b 2)))
 (Trans
-  (= (Add 2 3) (Num 5))
-  (Rule (= (Add 2 3) (Add 3 2)) (name "rw1") t t1)
-  (Rule
-    (= (Add 3 2) (Num 5))
-    (name "rw2")
-    (premises (Rule (= (Add 3 2) (Add 2 3)) (name "rw1") t t1) (Fiat (= () ())))
-    (substitution (a 3) (b 2))))
+  t
+  (Sym t1 t5)
+  (Congr
+    t
+    (Trans
+      t
+      (Sym
+        t
+        (Trans
+          (= (Num 5) (Add 2 3))
+          (Rule (= (Num 5) (Add 3 2)) (name "rw2") t11 t12)
+          t10))
+      (Rule (= (Num 5) (Num 5)) (name "rw2") t11 t12))
+    (Fiat (= 5 5))
+    0))

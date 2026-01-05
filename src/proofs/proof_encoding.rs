@@ -340,9 +340,9 @@ impl<'a> ProofInstrumentor<'a> {
             let mut updated = child_names.clone();
             updated.push(merge_fn_var.clone());
             let term = format!("({name} {child_names_str} {merge_fn_var})");
-            let to_ast = self.fname_to_ast_name(&fdecl.name);
 
             let rule_proof = if self.egraph.proof_state.proofs_enabled {
+                let to_ast = self.fname_to_ast_name(&name);
                 let merge_fn_constructor = self.proof_names().merge_fn_constructor.clone();
                 format!(
                     "(let {proof_var}
@@ -710,7 +710,8 @@ impl<'a> ProofInstrumentor<'a> {
                     ResolvedCall::Func(func_type) => {
                         assert!(
                             func_type.subtype == FunctionSubtype::Constructor,
-                            "Only constructor function calls are allowed in fact expressions due to proof normal form"
+                            "Only constructor function calls are allowed in fact expressions due to proof normal form. Got {:?}",
+                            func_type
                         );
 
                         let fv = self.fresh_var();
