@@ -11,14 +11,7 @@ expression: snapshot
 (let t (Add (Const 5) (Const 1)))
 (let t1 (MathU t))
 (let t2 (= t1 t1))
-(let t3 (= (MathU (Const 5)) (MathU (Const 5))))
-(let t4 (Fiat t3))
-(let t5 (Fiat (= () ())))
-(let t6 (= t t))
-(let t7 (= (Const 5) (Const 5)))
-(let t8 (Congr t7 (Fiat t7) (Fiat (= 5 5)) 0))
-(let t9 (premises (Congr t3 t4 t8 0) t5))
-(let t10 (= (Const 1) (Const 1)))
+(let t3 (premises (Fiat (= (MathU (Const 5)) (MathU (Const 5)))) (Fiat (= () ()))))
 (Congr
   t2
   (Rule
@@ -28,35 +21,15 @@ expression: snapshot
        (> (+ a 1) 5))
       ((MathU (Add (Const a) (Const 1))))
          )")
-    (premises t4 t5)
+    t3
     (substitution (a 5)))
-  (Congr
-    t6
-    (Congr
-      t6
-      (Rule
-        t6
-        (name
-          "(rule ((MathU (Const a))
+  (Rule
+    (= t t)
+    (name
+      "(rule ((MathU (Const a))
        (> (+ a 1) 5))
       ((MathU (Add (Const a) (Const 1))))
          )")
-        t9
-        (substitution (a 5)))
-      t8
-      0)
-    (Congr
-      t10
-      (Rule
-        t10
-        (name
-          "(rule ((MathU (Const a))
-       (> (+ a 1) 5))
-      ((MathU (Add (Const a) (Const 1))))
-         )")
-        t9
-        (substitution (a 5)))
-      (Fiat (= 1 1))
-      0)
-    1)
+    t3
+    (substitution (a 5)))
   0)

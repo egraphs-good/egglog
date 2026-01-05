@@ -66,113 +66,158 @@ impl ProofStore {
     }
 
     /// A simple simplification pass removing unnecessary steps.
+    /// Applies optimizations until a fixed point is reached.
     ///
     /// Simplifications performed:
     /// - Remove reflexive congruence: Congr(p, refl) -> p
     /// - Remove reflexive transitivity: Trans(refl, p) -> p and Trans(p, refl) -> p
+    /// - Remove reflexive symmetry: Sym(p) -> p when p proves t = t
     /// - Collapse double symmetry: Sym(Sym(p)) -> p
     /// - Push symmetry through transitivity: Sym(Trans(p1, p2)) -> Trans(Sym(p2), Sym(p1))
     ///   This enables further simplifications by exposing the inner proofs
     pub fn simplify(&mut self, proof_id: ProofId) -> ProofId {
-        let proof = self.get(proof_id).clone();
-        match proof {
-            Proof {
-                proposition: _,
-                justification:
-                    Justification::Congr {
-                        child_proof,
-                        proof: base_proof,
-                        ..
-                    },
-            } => {
-                // if the child proof proves t = t for some t, we can skip the congruence step
-                let child_proof = self.get(child_proof);
-                if child_proof.lhs() == child_proof.rhs() {
-                    self.simplify(base_proof)
-                } else {
-                    self.map_child_proofs(proof_id, |store, pid| store.simplify(pid))
-                }
+        // First, recursively simplify all child proofs
+        let proof_id = self.map_child_proofs(proof_id, |store, pid| store.simplify(pid));
+
+        // Apply local optimizations until fixed point
+        let mut current_id = proof_id;
+        loop {
+            let new_id = self.apply_local_optimizations(current_id);
+            if new_id == current_id {
+                break;
             }
-            Proof {
-                proposition: _,
-                justification: Justification::Trans(p1, p2),
-            } => {
-                // if either side is a reflexive proof, skip it
-                let p1_proof = self.get(p1);
-                let p2_proof = self.get(p2);
-                if p1_proof.lhs() == p1_proof.rhs() {
-                    return self.simplify(p2);
-                } else if p2_proof.lhs() == p2_proof.rhs() {
-                    return self.simplify(p1);
-                } else {
-                    self.map_child_proofs(proof_id, |store, pid| store.simplify(pid))
-                }
+            current_id = new_id;
+        }
+        current_id
+    }
+
+    /// Apply local optimizations to a single proof node.
+    /// Returns a potentially different proof ID if an optimization was applied.
+    fn apply_local_optimizations(&mut self, proof_id: ProofId) -> ProofId {
+        // List of optimization functions to try
+        let optimizations: &[fn(&mut ProofStore, ProofId) -> Option<ProofId>] = &[
+            Self::opt_reflexive_congr,
+            Self::opt_reflexive_trans,
+            Self::opt_reflexive_sym,
+            Self::opt_double_sym,
+            Self::opt_sym_trans,
+        ];
+
+        for opt in optimizations {
+            if let Some(new_id) = opt(self, proof_id) {
+                return new_id;
             }
-            Proof {
-                proposition: _,
-                justification: Justification::Sym(inner),
-            } => {
-                let mut current_id = proof_id;
-                // Simplify the inner proof first
-                let simplified_inner = self.simplify(inner);
+        }
+        proof_id
+    }
 
-                // Check if the inner proof is also a Sym - if so, we have Sym(Sym(p)) which equals p
-                let inner_proof = self.get(simplified_inner);
+    /// Optimization: Remove reflexive congruence
+    /// Congr(p, refl) -> p where refl proves t = t
+    fn opt_reflexive_congr(&mut self, proof_id: ProofId) -> Option<ProofId> {
+        let proof = self.get(proof_id);
+        if let Justification::Congr {
+            child_proof,
+            proof: base_proof,
+            ..
+        } = proof.justification()
+        {
+            let child = self.get(*child_proof);
+            if child.lhs() == child.rhs() {
+                return Some(*base_proof);
+            }
+        }
+        None
+    }
 
-                if let Justification::Sym(inner_inner) = inner_proof.justification() {
-                    // Sym(Sym(p)) = p
-                    current_id = *inner_inner;
-                } else if let Justification::Trans(left, right) = inner_proof.justification() {
-                    // Sym(Trans(p1, p2)) = Trans(Sym(p2), Sym(p1))
-                    // If p1: a = b and p2: b = c, then Trans(p1, p2): a = c
-                    // So Sym(Trans(p1, p2)): c = a
-                    // Which equals Trans(Sym(p2), Sym(p1)) where Sym(p2): c = b and Sym(p1): b = a
+    /// Optimization: Remove reflexive transitivity
+    /// Trans(refl, p) -> p and Trans(p, refl) -> p
+    fn opt_reflexive_trans(&mut self, proof_id: ProofId) -> Option<ProofId> {
+        let proof = self.get(proof_id);
+        if let Justification::Trans(p1, p2) = proof.justification() {
+            let p1_proof = self.get(*p1);
+            let p2_proof = self.get(*p2);
+            if p1_proof.lhs() == p1_proof.rhs() {
+                return Some(*p2);
+            } else if p2_proof.lhs() == p2_proof.rhs() {
+                return Some(*p1);
+            }
+        }
+        None
+    }
 
-                    // Extract the proof IDs before we start mutating
-                    let left_id = *left;
-                    let right_id = *right;
+    /// Optimization: Remove reflexive symmetry
+    /// Sym(p) -> p when p proves t = t (identity)
+    fn opt_reflexive_sym(&mut self, proof_id: ProofId) -> Option<ProofId> {
+        let proof = self.get(proof_id);
+        if let Justification::Sym(inner) = proof.justification() {
+            let inner_proof = self.get(*inner);
+            // If inner proof is t = t, then Sym(t = t) is just t = t
+            if inner_proof.lhs() == inner_proof.rhs() {
+                return Some(*inner);
+            }
+        }
+        None
+    }
 
-                    // Get the lhs/rhs values we need before any mutations
-                    let left_proof = self.get(left_id);
-                    let left_lhs = left_proof.lhs();
-                    let left_rhs = left_proof.rhs();
+    /// Optimization: Collapse double symmetry
+    /// Sym(Sym(p)) -> p
+    fn opt_double_sym(&mut self, proof_id: ProofId) -> Option<ProofId> {
+        let proof = self.get(proof_id);
+        if let Justification::Sym(inner) = proof.justification() {
+            let inner_proof = self.get(*inner);
+            if let Justification::Sym(inner_inner) = inner_proof.justification() {
+                return Some(*inner_inner);
+            }
+        }
+        None
+    }
 
-                    let right_proof = self.get(right_id);
-                    let right_lhs = right_proof.lhs();
-                    let right_rhs = right_proof.rhs();
+    /// Optimization: Push symmetry through transitivity
+    /// Sym(Trans(p1, p2)) -> Trans(Sym(p2), Sym(p1))
+    fn opt_sym_trans(&mut self, proof_id: ProofId) -> Option<ProofId> {
+        let proof = self.get(proof_id);
+        if let Justification::Sym(inner) = proof.justification() {
+            let inner_id = *inner;
+            let inner_proof = self.get(inner_id);
+            if let Justification::Trans(left, right) = inner_proof.justification() {
+                let left_id = *left;
+                let right_id = *right;
 
-                    // Create Sym(p2): c = b
-                    let sym_right = Proof {
-                        proposition: Proposition::new(right_rhs, right_lhs),
-                        justification: Justification::Sym(right_id),
-                    };
-                    let sym_right_id = self.add_proof(sym_right);
+                // Get the lhs/rhs values we need before any mutations
+                let left_proof = self.get(left_id);
+                let left_lhs = left_proof.lhs();
+                let left_rhs = left_proof.rhs();
 
-                    // Create Sym(p1): b = a
-                    let sym_left = Proof {
-                        proposition: Proposition::new(left_rhs, left_lhs),
-                        justification: Justification::Sym(left_id),
-                    };
-                    let sym_left_id = self.add_proof(sym_left);
+                let right_proof = self.get(right_id);
+                let right_lhs = right_proof.lhs();
+                let right_rhs = right_proof.rhs();
 
-                    // Create Trans(Sym(p2), Sym(p1)): c = a
-                    let new_trans = Proof {
-                        proposition: Proposition::new(right_rhs, left_lhs),
-                        justification: Justification::Trans(sym_right_id, sym_left_id),
-                    };
+                // Create Sym(p2): c = b
+                let sym_right = Proof {
+                    proposition: Proposition::new(right_rhs, right_lhs),
+                    justification: Justification::Sym(right_id),
+                };
+                let sym_right_id = self.add_proof(sym_right);
 
-                    // Replace current proof
-                    self.id_to_proof[current_id] = new_trans;
+                // Create Sym(p1): b = a
+                let sym_left = Proof {
+                    proposition: Proposition::new(left_rhs, left_lhs),
+                    justification: Justification::Sym(left_id),
+                };
+                let sym_left_id = self.add_proof(sym_left);
 
-                    // Recursively simplify the result
-                    return self.simplify(current_id);
+                // Create Trans(Sym(p2), Sym(p1)): c = a
+                let new_trans = Proof {
+                    proposition: Proposition::new(right_rhs, left_lhs),
+                    justification: Justification::Trans(sym_right_id, sym_left_id),
                 };
 
-                current_id
+                // Replace current proof
+                self.id_to_proof[proof_id] = new_trans;
+                return Some(proof_id);
             }
-
-            _ => self.map_child_proofs(proof_id, |store, pid| store.simplify(pid)),
         }
+        None
     }
 
     /// Map over the child proofs of this proof, producing a new proof with the same justification but updated child proofs.
