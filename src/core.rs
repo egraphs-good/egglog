@@ -969,15 +969,46 @@ where
     }
 }
 
+fn equiv_groups_to_eq_constraints<Head, Leaf>(
+    groups: &HashMap<(Head, Vec<GenericAtomTerm<Leaf>>), Vec<GenericAtomTerm<Leaf>>>,
+    span: &Span,
+) -> Vec<GenericAtom<HeadOrEq<Head>, Leaf>>
+where
+    Leaf: Eq + Clone + Hash + Debug,
+    Head: Clone,
+{
+    let mut eq_constraints = vec![];
+    for group in groups.values() {
+        let first = &group[0];
+        for other in &group[1..] {
+            if first == other {
+                continue;
+            }
+            eq_constraints.push(GenericAtom {
+                span: span.clone(),
+                head: HeadOrEq::Eq,
+                args: vec![first.clone(), other.clone()],
+            });
+        }
+    }
+    eq_constraints
+}
+
 impl<Head, Leaf> GenericCoreRule<Head, Head, Leaf>
 where
     Leaf: Eq + Clone + Hash + Debug,
     Head: Clone + Eq + Hash,
 {
+    /// Functions in egglog follow functional dependency, and this pass removes
+    /// duplicate variables based on functional dependencies.
+    /// For example, if we have two atoms `R(x, y, z1)` and `R(x, y, z2)`,
+    /// then we can remove one of them and add an equality constraint `z1 = z2`.
+    /// This is done until fixpoint, so it is kind of like rebuilding.
     pub(crate) fn remove_dup_vars(
         mut self,
         value_eq: impl Fn(&GenericAtomTerm<Leaf>, &GenericAtomTerm<Leaf>) -> Head,
     ) -> Self {
+        // Maps function calls to sets of equivalent variables to be deduplicated
         let mut groups: HashMap<(Head, Vec<GenericAtomTerm<Leaf>>), Vec<GenericAtomTerm<Leaf>>> =
             HashMap::default();
 
@@ -990,20 +1021,7 @@ where
             group.len() == 1
         });
 
-        let mut new_atoms = vec![];
-        for g in groups.values() {
-            let first = &g[0];
-            for other in &g[1..] {
-                if first == other {
-                    continue;
-                }
-                new_atoms.push(GenericAtom {
-                    span: span!(),
-                    head: HeadOrEq::Eq,
-                    args: vec![first.clone(), other.clone()],
-                });
-            }
-        }
+        let new_atoms = equiv_groups_to_eq_constraints(&groups, &self.span);
 
         if new_atoms.is_empty() {
             self
