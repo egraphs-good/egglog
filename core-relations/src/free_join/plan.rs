@@ -312,6 +312,7 @@ pub(crate) fn plan_query(query: Query) -> Plan {
 ///
 /// This separation makes it easier for us to iterate with different planning
 /// algorithms while sharing the same "backend" that generates a concrete plan.
+#[derive(Debug)]
 struct StageInfo {
     cover: SubAtom,
     vars: SmallVec<[Variable; 1]>,
@@ -630,7 +631,7 @@ fn plan_gj(
         };
         for occ in &ctx.vars[var].occurrences[1..] {
             info.filters
-                .push((occ.clone(), smallvec![ColumnId::new(0)]));
+                .push((occ.clone(), smallvec![ColumnId::new(0); occ.vars.len()]));
         }
 
         let next_stage = compile_stage(ctx, state, info);
@@ -666,11 +667,7 @@ fn compile_stage(
         }
     }
 
-    if vars.len() == 1
-        && filters
-            .iter()
-            .all(|(_, x)| x.len() == 1 && x[0] == ColumnId::new(0))
-    {
+    if vars.len() == 1 {
         let scans = SmallVec::<[SingleScanSpec; 3]>::from_iter(
             iter::once(&cover)
                 .chain(filters.iter().map(|(x, _)| x))
