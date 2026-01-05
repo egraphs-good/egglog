@@ -574,7 +574,7 @@ fn test_subsumed_unextractable_action_extract() {
         )
         .unwrap();
 
-    let CommandOutput::ExtractBest(termdag, cost, term) = &outputs[0] else {
+    let CommandOutput::ExtractBest(termdag, _cost, term) = &outputs[0] else {
         panic!();
     };
     let term = termdag.get(*term);

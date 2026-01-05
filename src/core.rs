@@ -18,7 +18,7 @@ use crate::{constraint::grounded_check, *};
 use egglog_ast::generic_ast::{Change, GenericAction, GenericActions, GenericExpr};
 use egglog_ast::span::Span;
 use egglog_ast::util::ListDisplay;
-use typechecking::{FuncType, PrimitiveWithId, TypeError};
+use typechecking::{FuncType, PrimitiveValidator, PrimitiveWithId, TypeError};
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub(crate) enum HeadOrEq<Head> {
@@ -69,15 +69,7 @@ impl SpecializedPrimitive {
     }
 
     /// Get the validator function of this primitive, if any
-    pub fn validator(
-        &self,
-    ) -> Option<
-        &Arc<
-            dyn for<'a, 'b> std::ops::Fn(&'a mut termdag::TermDag, &'b [TermId]) -> Option<TermId>
-                + Send
-                + Sync,
-        >,
-    > {
+    pub fn validator(&self) -> Option<&PrimitiveValidator> {
         self.prim_with_id.validator.as_ref()
     }
 }

@@ -415,9 +415,8 @@ impl ProofStore {
                     ctx,
                     rule,
                     substitution,
-                    proof.lhs(),
-                    proof.rhs(),
-                    proof_id,
+                    proof.proposition(),
+            
                     name,
                 )?;
 
@@ -433,8 +432,8 @@ impl ProofStore {
                 let old_prop = self.check_proof_with_context(*old_proof, program, ctx)?;
                 let new_prop = self.check_proof_with_context(*new_proof, program, ctx)?;
 
-                let (old_lhs, old_rhs) = (old_prop.lhs, old_prop.rhs);
-                let (new_lhs, new_rhs) = (new_prop.lhs, new_prop.rhs);
+                let (_old_lhs, old_rhs) = (old_prop.lhs, old_prop.rhs);
+                let (_new_lhs, new_rhs) = (new_prop.lhs, new_prop.rhs);
                 let old_view_term = self.term_dag.get(old_rhs);
                 let new_view_term = self.term_dag.get(new_rhs);
 
@@ -866,9 +865,7 @@ impl ProofStore {
         ctx: &ProofCheckContext,
         rule: &crate::ast::GenericRule<ResolvedCall, crate::ast::ResolvedVar>,
         substitution: &HashMap<String, TermId>,
-        claimed_lhs: TermId,
-        claimed_rhs: TermId,
-        proof_id: ProofId,
+        claimed: &Proposition,
         rule_name: &str,
     ) -> Result<(), ProofCheckError> {
         // Use process_actions to get propositions from the rule head
@@ -885,12 +882,10 @@ impl ProofStore {
             })?;
 
         // Check if the claimed equality is in the propositions
-        if action_ctx
-            .propositions
-            .contains(&Proposition::new(claimed_lhs, claimed_rhs))
+        if action_ctx.propositions.contains(claimed)
             || action_ctx
                 .propositions
-                .contains(&Proposition::new(claimed_rhs, claimed_lhs))
+                .contains(claimed)
         {
             return Ok(());
         }
@@ -899,8 +894,8 @@ impl ProofStore {
             rule_name: rule_name.to_string(),
             reason: format!(
                 "Rule head doesn't produce claimed equality Lhs:\n{}\nRHS:\n{}\nSUBST:\n{}",
-                format_term(&self.term_dag, claimed_lhs),
-                format_term(&self.term_dag, claimed_rhs),
+                format_term(&self.term_dag, claimed.lhs()),
+                format_term(&self.term_dag, claimed.rhs()),
                 format_substitution(&self.term_dag, substitution)
             ),
         })

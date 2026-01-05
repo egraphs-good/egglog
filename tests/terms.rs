@@ -24,7 +24,7 @@ fn test_termdag_malicious_client() {
     let td2 = td.clone();
     let y = td.var("y".into());
     // now td = [0 |-> x, 1 |-> y]
-    let f = td.app("f".into(), vec![x.clone(), y.clone()]);
+    let f = td.app("f".into(), vec![x, y]);
     // f is Term::App("f", [0, 1])
     assert_eq!(td.to_string(f), "(f x y)");
     // recall that td2 = [0 |-> x]

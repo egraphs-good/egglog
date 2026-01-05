@@ -1,15 +1,10 @@
 #[cfg(test)]
 mod tests {
-    use crate::ast::{Command, ResolvedCommand, sanitize_internal_names};
-    use crate::proofs::proof_encoding::ProofInstrumentor;
-
-    use egglog::ast::Parser;
-    use egglog::ast::desugar::desugar_command;
-    use egglog::ast::proof_global_remover;
+    use crate::ast::{ResolvedCommand, sanitize_internal_names};
 
     fn term_encode(source: &str) -> Vec<ResolvedCommand> {
         let mut egraph = crate::EGraph::new_with_term_encoding();
-        egraph.desugar_program(None, &source).unwrap()
+        egraph.desugar_program(None, source).unwrap()
     }
 
     #[test]

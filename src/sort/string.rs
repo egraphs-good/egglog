@@ -15,12 +15,12 @@ impl BaseSort for StringSort {
         let string_concat_validator = |termdag: &mut TermDag, args: &[TermId]| -> Option<TermId> {
             let mut concatenated = String::new();
             for &arg in args {
-                let Term::Lit(Literal::String(s)) = termdag.get(arg) else { 
+                let Term::Lit(Literal::String(s)) = termdag.get(arg) else {
                     return None;
                 };
                 concatenated.push_str(s.as_str());
             }
-            let result_lit = Literal::String(concatenated.into());
+            let result_lit = Literal::String(concatenated);
             let result_term = termdag.lit(result_lit);
             Some(result_term)
         };

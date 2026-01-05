@@ -368,7 +368,7 @@ fn expr_primitives_have_validators(expr: &ResolvedExpr) -> bool {
         GenericExpr::Call(_, call, args) => {
             // Check if this call is a primitive without a validator
             if let ResolvedCall::Primitive(prim) = call {
-                if !prim.validator().is_some() {
+                if prim.validator().is_none() {
                     return false;
                 }
             }
@@ -377,7 +377,6 @@ fn expr_primitives_have_validators(expr: &ResolvedExpr) -> bool {
         }
     }
 }
-
 pub fn command_supports_proof_encoding(command: &ResolvedCommand, type_info: &TypeInfo) -> bool {
     // First, use visit_exprs to check all expressions in the command
     let mut all_primitives_have_validators = true;
