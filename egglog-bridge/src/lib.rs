@@ -173,11 +173,13 @@ pub struct FunctionConfig {
     pub can_subsume: bool,
 }
 
+pub type LeaderChangeCallback =
+    Box<dyn Fn(&mut ExecutionState, LeaderChange) + Send + Sync + 'static>;
+
 /// Configuration for a UF-backed function.
 pub struct UfFunctionConfig {
     pub name: String,
-    pub on_leader_change:
-        Option<Box<dyn Fn(&mut ExecutionState, LeaderChange) + Send + Sync + 'static>>,
+    pub on_leader_change: Option<LeaderChangeCallback>,
     pub read_deps: Vec<TableId>,
     pub write_deps: Vec<TableId>,
 }
@@ -788,6 +790,7 @@ impl EGraph {
             can_subsume,
             name,
             kind: FunctionKind::Table,
+            uf_rebuild_rule: None,
         });
         debug_assert_eq!(res, next_func_id);
         let incremental_rebuild_rules = self.incremental_rebuild_rules(res, &schema);
@@ -821,7 +824,7 @@ impl EGraph {
             write_deps.iter().copied(),
         );
         let schema = vec![ColumnTy::Id, ColumnTy::Id];
-        Ok(self.funcs.push(FunctionInfo {
+        let res = self.funcs.push(FunctionInfo {
             table: table_id,
             schema,
             incremental_rebuild_rules: Vec::new(),
@@ -830,7 +833,11 @@ impl EGraph {
             can_subsume: false,
             name,
             kind: FunctionKind::Uf,
-        }))
+            uf_rebuild_rule: None,
+        });
+        let uf_rebuild_rule = self.uf_rebuild_rule(res);
+        self.funcs[res].uf_rebuild_rule = Some(uf_rebuild_rule);
+        Ok(res)
     }
 
     /// Run the given rules, returning whether the database changed.
@@ -865,6 +872,7 @@ impl EGraph {
     }
 
     fn rebuild(&mut self) -> Result<()> {
+        let uf_rules = self.uf_rebuild_rules();
         fn do_parallel() -> bool {
             #[cfg(test)]
             {
@@ -886,6 +894,7 @@ impl EGraph {
                 tables.push(func.table);
             }
             loop {
+                let ts = self.next_ts();
                 // Order matters here: we need to rebuild containers first and then rebuild the
                 // tables. Why?
                 //
@@ -918,11 +927,21 @@ impl EGraph {
                 // Rebuilding containers first will find that v3 and v2 are equal, and the rest of
                 // the rules can proceed.
                 let container_rebuild = self.db.rebuild_containers(self.uf_table);
-                let table_rebuild =
-                    self.db
-                        .apply_rebuild(self.uf_table, &tables, self.next_ts().to_value());
+                let table_rebuild = self.db.apply_rebuild(self.uf_table, &tables, ts.to_value());
+                let uf_rebuild = if uf_rules.is_empty() {
+                    false
+                } else {
+                    run_rules_impl(
+                        &mut self.db,
+                        &mut self.rules,
+                        &uf_rules,
+                        ts,
+                        ReportLevel::TimeOnly,
+                    )?
+                    .changed
+                };
                 self.inc_ts();
-                if !table_rebuild && !container_rebuild {
+                if !table_rebuild && !container_rebuild && !uf_rebuild {
                     break;
                 }
             }
@@ -991,6 +1010,16 @@ impl EGraph {
                     })?;
                 }
             }
+            if !uf_rules.is_empty() {
+                changed |= run_rules_impl(
+                    &mut self.db,
+                    &mut self.rules,
+                    &uf_rules,
+                    ts,
+                    ReportLevel::TimeOnly,
+                )?
+                .changed;
+            }
         }
         log::info!("rebuild took {:?}", start.elapsed());
         Ok(())
@@ -1002,6 +1031,7 @@ impl EGraph {
     /// when the number of active threads is greater than 1.
     fn rebuild_parallel(&mut self) -> Result<()> {
         let start = Instant::now();
+        let uf_rules = self.uf_rebuild_rules();
         #[derive(Default)]
         struct RebuildState {
             nonincremental: Vec<FunctionId>,
@@ -1077,6 +1107,16 @@ impl EGraph {
                 )?
                 .changed;
                 scratch.clear();
+            }
+            if !uf_rules.is_empty() {
+                changed |= run_rules_impl(
+                    &mut self.db,
+                    &mut self.rules,
+                    &uf_rules,
+                    ts,
+                    ReportLevel::TimeOnly,
+                )?
+                .changed;
             }
         }
         log::info!("rebuild took {:?}", start.elapsed());
@@ -1179,6 +1219,25 @@ impl EGraph {
         rb.build_internal(None) // skip the syntax check
     }
 
+    /// Build a rule that forwards global uf_table unions into a UF-backed table so it stays
+    /// consistent with the main union-find.
+    fn uf_rebuild_rule(&mut self, table: FunctionId) -> RuleId {
+        let uf_table = self.uf_table;
+        let mut rb = self.new_rule(&format!("uf rebuild {table:?}"), true);
+        let lhs: QueryEntry = rb.new_var(ColumnTy::Id).into();
+        let rhs: QueryEntry = rb.new_var(ColumnTy::Id).into();
+        rb.add_atom_with_timestamp_and_func(uf_table, None, None, &[lhs.clone(), rhs.clone()]);
+        rb.set(table, &[lhs, rhs]);
+        rb.build_internal(None)
+    }
+
+    fn uf_rebuild_rules(&self) -> Vec<RuleId> {
+        self.funcs
+            .iter()
+            .filter_map(|(_, info)| info.uf_rebuild_rule)
+            .collect()
+    }
+
     /// Gives the user a handle to the underlying ExecutionState. Useful for staging updates
     /// to the database.
     ///
@@ -1234,6 +1293,7 @@ struct FunctionInfo {
     can_subsume: bool,
     name: Arc<str>,
     kind: FunctionKind,
+    uf_rebuild_rule: Option<RuleId>,
 }
 
 impl FunctionInfo {

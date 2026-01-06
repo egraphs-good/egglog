@@ -19,7 +19,7 @@ use num_rational::Rational64;
 
 use crate::{
     ColumnTy, DefaultVal, EGraph, FunctionConfig, FunctionId, MergeFn, ProofStore, QueryEntry,
-    Result, UfFunctionConfig, add_expressions, define_rule,
+    Result, UfFunctionConfig, UnionAction, add_expressions, define_rule,
 };
 
 /// Run a simple associativity/commutativity test. In addition to testing that the rules properly
@@ -151,6 +151,31 @@ fn uf_function_callback_inserts() -> Result<()> {
     let mut rows = Vec::new();
     egraph.for_each(log_table, |row| rows.push(row.vals.to_vec()));
     assert_eq!(rows, vec![vec![lhs, rhs]]);
+    Ok(())
+}
+
+#[test]
+fn uf_function_rebuilds_from_global_uf() -> Result<()> {
+    let mut egraph = EGraph::default();
+    let uf_func = egraph.add_uf_function(UfFunctionConfig {
+        name: "uf_rebuild".into(),
+        on_leader_change: None,
+        read_deps: Vec::new(),
+        write_deps: Vec::new(),
+    })?;
+    let union = UnionAction::new(&egraph);
+    let lhs = Value::from_usize(10);
+    let rhs = Value::from_usize(3);
+    egraph.with_execution_state(|state| {
+        union.union(state, lhs, rhs);
+    });
+    egraph.flush_updates();
+
+    let canon_lhs = egraph.get_canon_in_uf(lhs);
+    let key = if canon_lhs != lhs { lhs } else { rhs };
+    let expected = egraph.get_canon_in_uf(key);
+    let leader = egraph.lookup_id(uf_func, &[key]).unwrap();
+    assert_eq!(leader, expected);
     Ok(())
 }
 
