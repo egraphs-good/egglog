@@ -19,7 +19,7 @@ use num_rational::Rational64;
 
 use crate::{
     ColumnTy, DefaultVal, EGraph, FunctionConfig, FunctionId, MergeFn, ProofStore, QueryEntry,
-    add_expressions, define_rule,
+    UfFunctionConfig, add_expressions, define_rule,
 };
 
 /// Run a simple associativity/commutativity test. In addition to testing that the rules properly
@@ -115,6 +115,76 @@ fn ac_test(tracing: bool, can_subsume: bool) {
         //     .print_eq_proof(_eq_explanation, &mut std::io::stderr())
         //     .unwrap();
     }
+}
+
+#[test]
+fn uf_function_callback_inserts() {
+    let mut egraph = EGraph::default();
+    let log_table = egraph.add_table(FunctionConfig {
+        schema: vec![ColumnTy::Id, ColumnTy::Id],
+        default: DefaultVal::Fail,
+        merge: MergeFn::AssertEq,
+        name: "log".into(),
+        can_subsume: false,
+    });
+    let log_table_id = egraph.funcs[log_table].table;
+    let uf_func = egraph.add_uf_function(UfFunctionConfig {
+        name: "uf_cb".into(),
+        on_leader_change: Some(Box::new(move |state, change| {
+            state.stage_insert(
+                log_table_id,
+                &[change.write_lhs, change.new_leader(), change.ts],
+            );
+        })),
+        read_deps: Vec::new(),
+        write_deps: vec![log_table_id],
+    });
+
+    let lhs = Value::from_usize(5);
+    let rhs = Value::from_usize(3);
+    egraph.add_values([(uf_func, vec![lhs, rhs])]);
+
+    let leader = egraph.lookup_id(uf_func, &[lhs]).unwrap();
+    assert_eq!(leader, rhs);
+
+    let mut rows = Vec::new();
+    egraph.for_each(log_table, |row| rows.push(row.vals.to_vec()));
+    assert_eq!(rows, vec![vec![lhs, rhs]]);
+}
+
+#[test]
+fn uf_function_disallowed_in_merge() {
+    let mut egraph = EGraph::default();
+    let uf_func = egraph.add_uf_function(UfFunctionConfig {
+        name: "uf_func".into(),
+        on_leader_change: None,
+        read_deps: Vec::new(),
+        write_deps: Vec::new(),
+    });
+    let result = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+        egraph.add_table(FunctionConfig {
+            schema: vec![ColumnTy::Id, ColumnTy::Id],
+            default: DefaultVal::Fail,
+            merge: MergeFn::Function(uf_func, vec![MergeFn::New]),
+            name: "bad_merge".into(),
+            can_subsume: false,
+        });
+    }));
+    assert!(result.is_err());
+}
+
+#[test]
+fn uf_function_disallowed_with_tracing() {
+    let mut egraph = EGraph::with_tracing();
+    let result = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+        egraph.add_uf_function(UfFunctionConfig {
+            name: "uf_tracing".into(),
+            on_leader_change: None,
+            read_deps: Vec::new(),
+            write_deps: Vec::new(),
+        });
+    }));
+    assert!(result.is_err());
 }
 
 #[test]

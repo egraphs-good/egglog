@@ -20,8 +20,8 @@ use std::{
 use crate::core_relations::{
     BaseValue, BaseValueId, BaseValues, ColumnId, Constraint, ContainerValue, ContainerValues,
     CounterId, Database, DisplacedTable, DisplacedTableWithProvenance, ExecutionState,
-    ExternalFunction, ExternalFunctionId, MergeVal, Offset, PlanStrategy, SortedWritesTable,
-    TableId, TaggedRowBuffer, Value, WrappedTable,
+    ExternalFunction, ExternalFunctionId, LeaderChange, MergeVal, Offset, PlanStrategy,
+    SortedWritesTable, TableId, TaggedRowBuffer, Value, WrappedTable,
 };
 use crate::numeric_id::{DenseIdMap, DenseIdMapWithReuse, IdVec, NumericId, define_id};
 use egglog_core_relations as core_relations;
@@ -161,6 +161,15 @@ pub struct FunctionConfig {
     pub name: String,
     /// Whether or not subsumption is enabled for this function.
     pub can_subsume: bool,
+}
+
+/// Configuration for a UF-backed function.
+pub struct UfFunctionConfig {
+    pub name: String,
+    pub on_leader_change:
+        Option<Box<dyn Fn(&mut ExecutionState, LeaderChange) + Send + Sync + 'static>>,
+    pub read_deps: Vec<TableId>,
+    pub write_deps: Vec<TableId>,
 }
 
 impl EGraph {
@@ -768,6 +777,7 @@ impl EGraph {
             default_val: default,
             can_subsume,
             name,
+            kind: FunctionKind::Table,
         });
         debug_assert_eq!(res, next_func_id);
         let incremental_rebuild_rules = self.incremental_rebuild_rules(res, &schema);
@@ -776,6 +786,41 @@ impl EGraph {
         info.incremental_rebuild_rules = incremental_rebuild_rules;
         info.nonincremental_rebuild_rule = nonincremental_rebuild_rule;
         res
+    }
+
+    /// Register a UF-backed function in this EGraph.
+    pub fn add_uf_function(&mut self, config: UfFunctionConfig) -> FunctionId {
+        if self.tracing {
+            panic!("UF functions are not supported when tracing is enabled");
+        }
+        let UfFunctionConfig {
+            name,
+            on_leader_change,
+            read_deps,
+            write_deps,
+        } = config;
+        let mut table = DisplacedTable::default();
+        if let Some(callback) = on_leader_change {
+            table.set_leader_change_callback(move |state, change| (callback)(state, change));
+        }
+        let name: Arc<str> = name.into();
+        let table_id = self.db.add_table_named(
+            table,
+            name.clone(),
+            read_deps.iter().copied(),
+            write_deps.iter().copied(),
+        );
+        let schema = vec![ColumnTy::Id, ColumnTy::Id];
+        self.funcs.push(FunctionInfo {
+            table: table_id,
+            schema,
+            incremental_rebuild_rules: Vec::new(),
+            nonincremental_rebuild_rule: RuleId::new(!0),
+            default_val: DefaultVal::Fail,
+            can_subsume: false,
+            name,
+            kind: FunctionKind::Uf,
+        })
     }
 
     /// Run the given rules, returning whether the database changed.
@@ -825,6 +870,9 @@ impl EGraph {
             // The UF implementation supports "native"  rebuilding.
             let mut tables = Vec::with_capacity(self.funcs.next_id().index());
             for (_, func) in self.funcs.iter() {
+                if func.is_uf() {
+                    continue;
+                }
                 tables.push(func.table);
             }
             loop {
@@ -884,6 +932,9 @@ impl EGraph {
             self.inc_ts();
             let ts = self.next_ts();
             for (_, info) in self.funcs.iter_mut() {
+                if info.is_uf() {
+                    continue;
+                }
                 let last_rebuilt_at = self.rules[info.nonincremental_rebuild_rule].last_run_at;
                 let table_size = self.db.estimate_size(info.table, None);
                 let uf_size = self.db.estimate_size(
@@ -964,6 +1015,9 @@ impl EGraph {
             // First, figure out which functions will be rebuilt nonincrementally,
             // vs. incrementally. Group them together.
             for (func, info) in self.funcs.iter_mut() {
+                if info.is_uf() {
+                    continue;
+                }
                 let last_rebuilt_at = self.rules[info.nonincremental_rebuild_rule].last_run_at;
                 let table_size = self.db.estimate_size(info.table, None);
                 let uf_size = self.db.estimate_size(
@@ -1154,6 +1208,12 @@ struct CachedPlanInfo {
     atom_mapping: Vec<core_relations::AtomId>,
 }
 
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+enum FunctionKind {
+    Table,
+    Uf,
+}
+
 #[derive(Clone)]
 struct FunctionInfo {
     table: TableId,
@@ -1163,11 +1223,16 @@ struct FunctionInfo {
     default_val: DefaultVal,
     can_subsume: bool,
     name: Arc<str>,
+    kind: FunctionKind,
 }
 
 impl FunctionInfo {
     fn ret_ty(&self) -> ColumnTy {
         self.schema.last().copied().unwrap()
+    }
+
+    fn is_uf(&self) -> bool {
+        matches!(self.kind, FunctionKind::Uf)
     }
 }
 
@@ -1218,6 +1283,10 @@ impl MergeFn {
                     .for_each(|arg| arg.fill_deps(egraph, read_deps, write_deps));
             }
             Function(func, args) => {
+                assert!(
+                    !egraph.funcs[*func].is_uf(),
+                    "Merge functions cannot call UF-backed functions"
+                );
                 read_deps.insert(egraph.funcs[*func].table);
                 write_deps.insert(egraph.funcs[*func].table);
                 args.iter()
@@ -1318,6 +1387,10 @@ impl MergeFn {
             },
             MergeFn::Function(func, args) => {
                 let func_info = &egraph.funcs[*func];
+                assert!(
+                    !func_info.is_uf(),
+                    "Merge functions cannot call UF-backed functions"
+                );
                 assert_eq!(
                     func_info.schema.len(),
                     args.len() + 1,
@@ -1463,6 +1536,10 @@ impl TableAction {
         assert!(!egraph.tracing, "proofs not supported yet");
 
         let func_info = &egraph.funcs[func];
+        assert!(
+            !func_info.is_uf(),
+            "TableAction does not support UF-backed functions"
+        );
         TableAction {
             table: func_info.table,
             table_math: SchemaMath {
