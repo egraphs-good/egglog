@@ -1,3 +1,5 @@
+use std::sync::{Arc, Mutex};
+
 use crate::numeric_id::NumericId;
 
 use crate::{
@@ -7,7 +9,7 @@ use crate::{
     uf::ProofReason,
 };
 
-use super::DisplacedTable;
+use super::{DisplacedTable, LeaderChange};
 
 fn v(x: usize) -> Value {
     Value::from_usize(x)
@@ -97,4 +99,48 @@ fn displaced_proof() {
             },
         ]
     )
+}
+
+#[test]
+fn displaced_leader_change_callback() {
+    empty_execution_state!(e);
+    let changes: Arc<Mutex<Vec<LeaderChange>>> = Arc::new(Mutex::new(Vec::new()));
+    let changes_ref = Arc::clone(&changes);
+    let mut d = DisplacedTable::with_leader_change_callback(move |_, change| {
+        changes_ref.lock().unwrap().push(change);
+    });
+    {
+        let mut buf = d.new_buffer();
+        buf.stage_insert(&[v(5), v(3), v(0)]);
+        buf.stage_insert(&[v(5), v(3), v(1)]);
+    }
+    d.merge(&mut e);
+
+    {
+        let changes = changes.lock().unwrap();
+        assert_eq!(changes.len(), 1);
+        let change = changes[0];
+        assert_eq!(change.write_lhs, v(5));
+        assert_eq!(change.lhs_leader, v(5));
+        assert_eq!(change.write_rhs, v(3));
+        assert_eq!(change.rhs_leader, v(3));
+        assert_eq!(change.ts, v(0));
+        assert_eq!(change.new_leader(), v(3));
+    }
+
+    {
+        let mut buf = d.new_buffer();
+        buf.stage_insert(&[v(5), v(2), v(2)]);
+    }
+    d.merge(&mut e);
+
+    let changes = changes.lock().unwrap();
+    assert_eq!(changes.len(), 2);
+    let change = changes[1];
+    assert_eq!(change.write_lhs, v(5));
+    assert_eq!(change.lhs_leader, v(3));
+    assert_eq!(change.write_rhs, v(2));
+    assert_eq!(change.rhs_leader, v(2));
+    assert_eq!(change.ts, v(2));
+    assert_eq!(change.new_leader(), v(2));
 }
