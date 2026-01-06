@@ -1,6 +1,8 @@
 use std::{collections::BTreeMap, iter, mem, sync::Arc};
 
 use crate::{
+    TableId,
+    free_join::ProcessedConstraints,
     numeric_id::{DenseIdMap, NumericId},
     query::SymbolMap,
 };
@@ -263,6 +265,14 @@ pub(crate) struct JoinStages {
     pub actions: ActionId,
 }
 
+#[derive(Debug, Clone)]
+pub(crate) struct JoinStageBlocks {
+    pub header: Vec<JoinHeader>,
+    // each block is a list of instructions and how to yield
+    pub blocks: Vec<(Vec<JoinStage>, i64 /* TODO */)>,
+    pub actions: ActionId,
+}
+
 type VarSet = FixedBitSet;
 type AtomSet = FixedBitSet;
 
@@ -286,6 +296,134 @@ pub enum PlanStrategy {
     /// single variable per stage.
     #[default]
     Gj,
+}
+
+pub(crate) fn tree_decompose_and_plan(
+    mut ctx: PlanningContext,
+    strat: PlanStrategy,
+) -> (Vec<JoinHeader>, Vec<JoinStage>) {
+    let mut atoms = ctx.atoms;
+    let mut vars = ctx.vars;
+
+    let mut bags: Vec<PlanningContext> = vec![];
+    let mut n_remaining_vars = vars.iter().count();
+
+    let dummy_table_id = TableId::from_usize(usize::MAX);
+
+    // Step 1. find variable with smallest number of occurrences
+    while let Some((var, vinfo)) = vars.iter().min_by_key(|(_, vinfo)| vinfo.occurrences.len()) {
+        n_remaining_vars -= 1;
+
+        // Step 2. Find the subquery composed of its neighborhood
+        let subquery_vars: IndexSet<Variable> = vinfo
+            .occurrences
+            .iter()
+            .map(|occ| {
+                let atom = &atoms[occ.atom];
+                atom.column_to_var.iter().map(|(_, var)| *var)
+            })
+            .flatten()
+            .collect::<IndexSet<_>>();
+
+        let subquery_atoms: IndexSet<AtomId> = atoms
+            .iter()
+            .filter(|(_, atom)| {
+                atom.column_to_var
+                    .iter()
+                    .any(|(_, var)| subquery_vars.contains(var))
+            })
+            .map(|(atom_id, _)| atom_id)
+            .collect::<IndexSet<_>>();
+
+        // Break if the subquery is the entire remaining query
+        let should_break = subquery_vars.len() == n_remaining_vars;
+
+        // Step 4: Add a fake atom that covers the neighborhood back to the main query
+        // Both atoms and vars need to be updated
+        let fake_covering_atom_id = atoms.push(Atom {
+            column_to_var: subquery_vars
+                .iter()
+                .enumerate()
+                .map(|(ix, var)| (ColumnId::from_usize(ix), *var))
+                .collect(),
+            var_to_column: subquery_vars
+                .iter()
+                .enumerate()
+                .map(|(ix, var)| (*var, ColumnId::from_usize(ix)))
+                .collect(),
+            constraints: ProcessedConstraints::dummy(),
+            table: dummy_table_id,
+        });
+        for &subquery_var in subquery_vars.iter() {
+            if subquery_var != var {
+                vars[subquery_var].occurrences.push(SubAtom {
+                    atom: fake_covering_atom_id,
+                    vars: smallvec![ColumnId::from_usize(
+                        subquery_vars.get_index_of(&subquery_var).unwrap()
+                    )],
+                });
+            }
+        }
+
+        // Step 5: add the subquery (and update the occurrences of the main query)
+        let subquery_vars = DenseIdMap::from_iter(subquery_vars.into_iter().map(|subq_var| {
+            if subq_var == var {
+                (subq_var, vars.take(subq_var).unwrap())
+            } else {
+                let vinfo = &vars[subq_var];
+                let mut subquery_vinfo = VarInfo {
+                    occurrences: vec![],
+                    used_in_rhs: vinfo.used_in_rhs,
+                    defined_in_rhs: vinfo.defined_in_rhs,
+                    name: vinfo.name.clone(),
+                };
+
+                // adjust occurrences for the main query and build subquery's occurrences
+                vars[subq_var].occurrences.retain_mut(|occ| {
+                    if !subquery_atoms.contains(&occ.atom) {
+                        true
+                    } else {
+                        subquery_vinfo.occurrences.push(mem::replace(
+                            occ,
+                            SubAtom {
+                                atom: AtomId::new(0),
+                                vars: smallvec![],
+                            },
+                        ));
+                        false
+                    }
+                });
+
+                (subq_var, subquery_vinfo)
+            }
+        }));
+
+        let subquery_atoms =
+            DenseIdMap::from_iter(subquery_atoms.into_iter().filter_map(|atom_id| {
+                if atoms[atom_id].table == dummy_table_id {
+                    return None;
+                }
+                let atom_info = atoms.take(atom_id).unwrap();
+                Some((atom_id, atom_info))
+            }));
+
+        bags.push(PlanningContext {
+            vars: subquery_vars,
+            atoms: subquery_atoms,
+        });
+
+        if should_break {
+            break;
+        }
+    }
+
+    for bag in bags.into_iter().rev() {
+        let (header, instrs) = plan_stages(&bag, strat);
+        // actual_header.extend(header);
+        // actual_instrs.extend(instrs);
+    }
+
+    todo!()
 }
 
 pub(crate) fn plan_query(query: Query) -> Plan {

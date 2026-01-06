@@ -82,6 +82,14 @@ impl ProcessedConstraints {
     fn approx_size(&self) -> usize {
         self.subset.size()
     }
+
+    pub(crate) fn dummy() -> ProcessedConstraints {
+        ProcessedConstraints {
+            subset: Subset::empty(),
+            fast: Pooled::new(Vec::new()),
+            slow: Pooled::new(Vec::new()),
+        }
+    }
 }
 
 #[derive(Clone, Debug, PartialEq, Eq)]
@@ -99,7 +107,7 @@ impl SubAtom {
     }
 }
 
-#[derive(Debug)]
+#[derive(Debug, Clone)]
 pub(crate) struct VarInfo {
     pub(crate) occurrences: Vec<SubAtom>,
     /// Whether or not this variable shows up in the "actions" portion of a
