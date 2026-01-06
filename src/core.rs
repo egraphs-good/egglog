@@ -69,7 +69,21 @@ impl SpecializedPrimitive {
     }
 }
 
-#[derive(Debug, Clone)]
+impl PartialEq for SpecializedPrimitive {
+    fn eq(&self, other: &Self) -> bool {
+        self.primitive.1 == other.primitive.1
+    }
+}
+
+impl Eq for SpecializedPrimitive {}
+
+impl Hash for SpecializedPrimitive {
+    fn hash<H: Hasher>(&self, state: &mut H) {
+        self.primitive.1.hash(state);
+    }
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Hash)]
 pub enum ResolvedCall {
     Func(FuncType),
     Primitive(SpecializedPrimitive),
@@ -955,6 +969,83 @@ where
     }
 }
 
+fn equiv_groups_to_eq_constraints<Head, Leaf>(
+    groups: &HashMap<(Head, Vec<GenericAtomTerm<Leaf>>), Vec<GenericAtomTerm<Leaf>>>,
+    span: &Span,
+) -> Vec<GenericAtom<HeadOrEq<Head>, Leaf>>
+where
+    Leaf: Eq + Clone + Hash + Debug,
+    Head: Clone,
+{
+    let mut eq_constraints = vec![];
+    for group in groups.values() {
+        let first = &group[0];
+        for other in &group[1..] {
+            if first == other {
+                continue;
+            }
+            eq_constraints.push(GenericAtom {
+                span: span.clone(),
+                head: HeadOrEq::Eq,
+                args: vec![first.clone(), other.clone()],
+            });
+        }
+    }
+    eq_constraints
+}
+
+impl<Head, Leaf> GenericCoreRule<Head, Head, Leaf>
+where
+    Leaf: Eq + Clone + Hash + Debug,
+    Head: Clone + Eq + Hash,
+{
+    /// Functions in egglog follow functional dependency, and this pass removes
+    /// duplicate variables based on functional dependencies.
+    /// For example, if we have two atoms `R(x, y, z1)` and `R(x, y, z2)`,
+    /// then we can remove one of them and add an equality constraint `z1 = z2`.
+    /// This is done until fixpoint, so it is kind of like rebuilding.
+    pub(crate) fn remove_dup_vars(
+        mut self,
+        value_eq: impl Fn(&GenericAtomTerm<Leaf>, &GenericAtomTerm<Leaf>) -> Head,
+    ) -> Self {
+        // Maps function calls to sets of equivalent variables to be deduplicated
+        let mut groups: HashMap<(Head, Vec<GenericAtomTerm<Leaf>>), Vec<GenericAtomTerm<Leaf>>> =
+            HashMap::default();
+
+        // Remove entries wit identical (head, inputs) pair and mark respective outputs to be merged.
+        self.body.atoms.retain(|atom| {
+            let (out, inp) = atom.args.split_last().unwrap();
+            let key = (atom.head.clone(), inp.to_owned());
+            let group = groups.entry(key).or_default();
+            group.push(out.clone());
+            group.len() == 1
+        });
+
+        let new_atoms = equiv_groups_to_eq_constraints(&groups, &self.span);
+
+        if new_atoms.is_empty() {
+            self
+        } else {
+            let atoms: Vec<GenericAtom<HeadOrEq<Head>, Leaf>> = new_atoms
+                .into_iter()
+                .chain(self.body.atoms.into_iter().map(|atom| GenericAtom {
+                    span: atom.span,
+                    head: HeadOrEq::Head(atom.head),
+                    args: atom.args,
+                }))
+                .collect();
+
+            GenericCoreRule {
+                span: self.span,
+                body: Query { atoms },
+                head: self.head,
+            }
+            .canonicalize(&value_eq)
+            .remove_dup_vars(value_eq)
+        }
+    }
+}
+
 pub(crate) trait GenericRuleExt<Head, Leaf> {
     fn to_core_rule(
         &self,
@@ -1027,8 +1118,136 @@ impl ResolvedRuleExt for ResolvedRule {
         // `(rule ((= x y)) ((R x y)))`) but unboundedness is only checked during type checking.
         grounded_check(&rule)?;
 
-        let rule = rule.canonicalize(value_eq);
+        let rule = rule.canonicalize(&value_eq);
+
+        let rule = rule.remove_dup_vars(value_eq);
 
         Ok(rule)
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    type TestCoreRule = GenericCoreRule<String, String, String>;
+
+    fn make_var(name: &str) -> GenericAtomTerm<String> {
+        GenericAtomTerm::Var(span!(), name.to_string())
+    }
+
+    fn make_atom(head: &str, args: Vec<&str>) -> GenericAtom<String, String> {
+        GenericAtom {
+            span: span!(),
+            head: head.to_string(),
+            args: args.into_iter().map(make_var).collect(),
+        }
+    }
+
+    fn value_eq_string(_at1: &GenericAtomTerm<String>, _at2: &GenericAtomTerm<String>) -> String {
+        "value-eq".to_string()
+    }
+
+    #[test]
+    fn test_remove_dup_vars_basic() {
+        let rule = TestCoreRule {
+            span: span!(),
+            body: Query {
+                atoms: vec![
+                    make_atom("R", vec!["x", "y", "z1"]),
+                    make_atom("R", vec!["x", "y", "z2"]),
+                    make_atom("R", vec!["x", "z3"]),
+                    make_atom("R", vec!["a", "b", "z4"]),
+                    make_atom("R", vec!["c", "d", "z5"]),
+                ],
+            },
+            head: GenericCoreActions::default(),
+        };
+
+        let result = rule.remove_dup_vars(value_eq_string);
+
+        assert_eq!(result.body.atoms.len(), 4);
+        assert_eq!(result.body.atoms[0].head, "R");
+        assert_eq!(result.body.atoms[0].args[0], make_var("x"));
+        assert_eq!(result.body.atoms[0].args[1], make_var("y"));
+        assert_eq!(result.body.atoms[1].args.len(), 2);
+    }
+
+    #[test]
+    fn test_remove_dup_vars_fixpoint() {
+        // Test: R(x, y, z1), R(x, y, z2), R(x, y, z3) should all get unified
+        // This tests that the fixpoint iteration works correctly
+        let rule = TestCoreRule {
+            span: span!(),
+            body: Query {
+                atoms: vec![
+                    make_atom("R", vec!["x", "y", "z1"]),
+                    make_atom("R", vec!["x", "y", "z2"]),
+                    make_atom("R", vec!["x", "y", "z3"]),
+                    make_atom("S", vec!["z1", "z2", "z3"]),
+                    make_atom("S", vec!["z2", "z1", "z4"]),
+                ],
+            },
+            head: GenericCoreActions::default(),
+        };
+
+        let result = rule.remove_dup_vars(value_eq_string);
+
+        assert_eq!(result.body.atoms.len(), 2);
+        assert_eq!(result.body.atoms[0].head, "R");
+        assert_eq!(result.body.atoms[0].args[0], make_var("x"));
+        assert_eq!(result.body.atoms[0].args[1], make_var("y"));
+        assert_eq!(result.body.atoms[1].args[0], result.body.atoms[1].args[1]);
+
+        let rule = TestCoreRule {
+            span: span!(),
+            body: Query {
+                atoms: vec![
+                    make_atom("R", vec!["x", "y", "z1"]),
+                    make_atom("R", vec!["x", "y", "z2"]),
+                    make_atom("R", vec!["x", "y", "z3"]),
+                    make_atom("R", vec!["z1", "z2", "z1"]),
+                    make_atom("R", vec!["z2", "z1", "x"]),
+                    make_atom("R", vec!["z2", "z2", "y"]),
+                ],
+            },
+            head: GenericCoreActions::default(),
+        };
+
+        let result = rule.remove_dup_vars(value_eq_string);
+
+        assert_eq!(result.body.atoms.len(), 1);
+        assert_eq!(result.body.atoms[0].head, "R");
+        assert_eq!(result.body.atoms[0].args[0], result.body.atoms[0].args[1]);
+        assert_eq!(result.body.atoms[0].args[0], result.body.atoms[0].args[2]);
+    }
+
+    #[test]
+    fn test_remove_dup_vars_with_actions_using_removed_var() {
+        let rule = TestCoreRule {
+            span: span!(),
+            body: Query {
+                atoms: vec![
+                    make_atom("R", vec!["x", "y", "z1"]),
+                    make_atom("R", vec!["x", "y", "z2"]),
+                ],
+            },
+            head: GenericCoreActions(vec![GenericCoreAction::Union(
+                span!(),
+                make_var("z2"),
+                make_var("z1"),
+            )]),
+        };
+
+        let result = rule.remove_dup_vars(value_eq_string);
+
+        assert_eq!(result.body.atoms.len(), 1);
+        assert!(matches!(
+            &result.head.0.as_slice(),
+            &[
+                GenericCoreAction::LetAtomTerm(_, _, _),
+                GenericCoreAction::Union(_, _, _)
+            ]
+        ));
     }
 }
