@@ -129,7 +129,7 @@ fn uf_function_callback_inserts() -> Result<()> {
         can_subsume: false,
     })?;
     let log_table_id = egraph.funcs[log_table].table;
-    let uf_func = egraph.add_uf_function(UfFunctionConfig {
+    let (uf_func, _uf_canon) = egraph.add_uf_function(UfFunctionConfig {
         name: "uf_cb".into(),
         on_leader_change: Some(Box::new(move |state, change| {
             state.stage_insert(
@@ -157,7 +157,7 @@ fn uf_function_callback_inserts() -> Result<()> {
 #[test]
 fn uf_function_rebuilds_from_global_uf() -> Result<()> {
     let mut egraph = EGraph::default();
-    let uf_func = egraph.add_uf_function(UfFunctionConfig {
+    let (uf_func, _uf_canon) = egraph.add_uf_function(UfFunctionConfig {
         name: "uf_rebuild".into(),
         on_leader_change: None,
         read_deps: Vec::new(),
@@ -180,9 +180,64 @@ fn uf_function_rebuilds_from_global_uf() -> Result<()> {
 }
 
 #[test]
+fn uf_function_canon_prim_query() -> Result<()> {
+    let mut egraph = EGraph::default();
+    let (uf_func, uf_canon) = egraph.add_uf_function(UfFunctionConfig {
+        name: "uf_canon".into(),
+        on_leader_change: None,
+        read_deps: Vec::new(),
+        write_deps: Vec::new(),
+    })?;
+    let input_table = egraph.add_table(FunctionConfig {
+        schema: vec![ColumnTy::Id, ColumnTy::Id],
+        default: DefaultVal::Fail,
+        merge: MergeFn::AssertEq,
+        name: "input".into(),
+        can_subsume: false,
+    })?;
+    let log_table = egraph.add_table(FunctionConfig {
+        schema: vec![ColumnTy::Id, ColumnTy::Id],
+        default: DefaultVal::Fail,
+        merge: MergeFn::AssertEq,
+        name: "log".into(),
+        can_subsume: false,
+    })?;
+
+    let canon_rule = {
+        let mut rb = egraph.new_rule("uf canon prim", true);
+        let input: QueryEntry = rb.new_var(ColumnTy::Id).into();
+        let input_val: QueryEntry = rb.new_var(ColumnTy::Id).into();
+        let canon: QueryEntry = rb.new_var(ColumnTy::Id).into();
+        rb.query_table(input_table, &[input.clone(), input_val], Some(false))?;
+        rb.query_prim(uf_canon, &[input.clone(), canon.clone()], ColumnTy::Id)?;
+        rb.set(log_table, &[input, canon]);
+        rb.build()
+    };
+
+    let lhs = Value::from_usize(10);
+    let rhs = Value::from_usize(3);
+    let untouched = Value::from_usize(77);
+    egraph.add_values(vec![
+        (uf_func, vec![lhs, rhs]),
+        (input_table, vec![lhs, lhs]),
+        (input_table, vec![rhs, rhs]),
+        (input_table, vec![untouched, untouched]),
+    ]);
+    egraph.run_rules(&[canon_rule])?;
+
+    let mut rows = Vec::new();
+    egraph.for_each(log_table, |row| rows.push(row.vals.to_vec()));
+    assert_unordered_eq(
+        rows,
+        vec![vec![lhs, rhs], vec![rhs, rhs], vec![untouched, untouched]],
+    );
+    Ok(())
+}
+
+#[test]
 fn uf_function_disallowed_in_merge() -> Result<()> {
     let mut egraph = EGraph::default();
-    let uf_func = egraph.add_uf_function(UfFunctionConfig {
+    let (uf_func, _uf_canon) = egraph.add_uf_function(UfFunctionConfig {
         name: "uf_func".into(),
         on_leader_change: None,
         read_deps: Vec::new(),

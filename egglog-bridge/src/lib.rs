@@ -21,7 +21,7 @@ use crate::core_relations::{
     BaseValue, BaseValueId, BaseValues, ColumnId, Constraint, ContainerValue, ContainerValues,
     CounterId, Database, DisplacedTable, DisplacedTableWithProvenance, ExecutionState,
     ExternalFunction, ExternalFunctionId, LeaderChange, MergeVal, Offset, PlanStrategy,
-    SortedWritesTable, TableId, TaggedRowBuffer, Value, WrappedTable,
+    SortedWritesTable, TableId, TaggedRowBuffer, Value, WrappedTable, make_external_func,
 };
 use crate::numeric_id::{DenseIdMap, DenseIdMapWithReuse, IdVec, NumericId, define_id};
 use egglog_core_relations as core_relations;
@@ -802,7 +802,25 @@ impl EGraph {
     }
 
     /// Register a UF-backed function in this EGraph.
-    pub fn add_uf_function(&mut self, config: UfFunctionConfig) -> Result<FunctionId> {
+    ///
+    /// UF Functions record the series of "leader changes" in the e-graph, where the leader is
+    /// always 'up to date' with the latest value. It has two columns: one key (the "displaced"
+    /// value), mapping to its current leader. Queries of this such a function, coupled with
+    /// semi-naive evaluation, allow for rules to "listen" on 'leader changes' in the underlying
+    /// union-find. This makes it more efficient, if less convenient, than a standard
+    /// quadratic-sized equivalence relation.
+    ///
+    /// The returned external function canonicalizes its single argument against the underlying
+    /// union-find (the more naive "equivalence relation" encoding, wrapped as a primitive call).
+    ///
+    /// Values in this union find are "coherent" with those of the underlying union-find in the
+    /// e-graph: rebuilding the e-graph also canonicalizes these union-finds with respect to the
+    /// global e-graph. What makes these union-finds useful is that they can store _more_
+    /// equalities that are themselves "visible" to egglog rules: we use this in the term encoding.
+    pub fn add_uf_function(
+        &mut self,
+        config: UfFunctionConfig,
+    ) -> Result<(FunctionId, ExternalFunctionId)> {
         if self.tracing {
             return Err(FunctionConfigError::UfWithTracing.into());
         }
@@ -814,7 +832,7 @@ impl EGraph {
         } = config;
         let mut table = DisplacedTable::default();
         if let Some(callback) = on_leader_change {
-            table.set_leader_change_callback(move |state, change| (callback)(state, change));
+            table.set_leader_change_callback(move |state, change| callback(state, change));
         }
         let name: Arc<str> = name.into();
         let table_id = self.db.add_table_named(
@@ -823,6 +841,17 @@ impl EGraph {
             read_deps.iter().copied(),
             write_deps.iter().copied(),
         );
+        let canon =
+            self.register_external_func(Box::new(make_external_func(move |state, vals| {
+                let [val] = vals else {
+                    panic!("uf canonicalizer expected 1 value, got {vals:?}")
+                };
+                let table = state.get_table(table_id);
+                let canon = table
+                    .get_row_column(&[*val], ColumnId::new(1))
+                    .unwrap_or(*val);
+                Some(canon)
+            })));
         let schema = vec![ColumnTy::Id, ColumnTy::Id];
         let res = self.funcs.push(FunctionInfo {
             table: table_id,
@@ -837,7 +866,7 @@ impl EGraph {
         });
         let uf_rebuild_rule = self.uf_rebuild_rule(res);
         self.funcs[res].uf_rebuild_rule = Some(uf_rebuild_rule);
-        Ok(res)
+        Ok((res, canon))
     }
 
     /// Run the given rules, returning whether the database changed.
