@@ -195,12 +195,12 @@ impl EGraph {
 
         // Step 1: build all the query/action rules and worklist if have not already
         let record = &mut schedulers[scheduler_id];
-        rules.iter().for_each(|(id, rule)| {
-            record
-                .rule_info
-                .entry((*id).to_owned())
-                .or_insert_with(|| SchedulerRuleInfo::new(self, rule, id));
-        });
+        for (id, rule) in &rules {
+            if !record.rule_info.contains_key(id) {
+                let info = SchedulerRuleInfo::new(self, rule, id)?;
+                record.rule_info.insert(id.to_owned(), info);
+            }
+        }
 
         // Step 2: run all the queries for one iteration
         let query_rules = rules
@@ -222,21 +222,24 @@ impl EGraph {
             .map_err(|e| Error::BackendError(e.to_string()))?;
 
         // Step 3: let the scheduler decide which matches need to be kept
-        self.backend.with_execution_state(|state| {
-            for (rule_id, _rule) in rules.iter() {
-                let rule_info = record.rule_info.get_mut(rule_id).unwrap();
+        self.backend
+            .with_execution_state(|state| -> Result<(), Error> {
+                for (rule_id, _rule) in rules.iter() {
+                    let rule_info = record.rule_info.get_mut(rule_id).unwrap();
 
-                let matches: Vec<Value> =
-                    std::mem::take(rule_info.matches.lock().unwrap().as_mut());
-                let mut matches = Matches::new(matches, rule_info.free_vars.clone());
-                rule_info.should_seek =
-                    record
-                        .scheduler
-                        .filter_matches(rule_id, ruleset, &mut matches);
-                let table_action = TableAction::new(&self.backend, rule_info.decided);
-                *rule_info.matches.lock().unwrap() = matches.instantiate(state, table_action);
-            }
-        });
+                    let matches: Vec<Value> =
+                        std::mem::take(rule_info.matches.lock().unwrap().as_mut());
+                    let mut matches = Matches::new(matches, rule_info.free_vars.clone());
+                    rule_info.should_seek =
+                        record
+                            .scheduler
+                            .filter_matches(rule_id, ruleset, &mut matches);
+                    let table_action = TableAction::new(&self.backend, rule_info.decided)
+                        .map_err(|err| Error::BackendError(err.to_string()))?;
+                    *rule_info.matches.lock().unwrap() = matches.instantiate(state, table_action);
+                }
+                Ok(())
+            })?;
         self.backend.flush_updates();
 
         // Step 4: run the action rules
@@ -320,7 +323,11 @@ impl ExternalFunction for CollectMatches {
 }
 
 impl SchedulerRuleInfo {
-    fn new(egraph: &mut EGraph, rule: &ResolvedCoreRule, name: &str) -> SchedulerRuleInfo {
+    fn new(
+        egraph: &mut EGraph,
+        rule: &ResolvedCoreRule,
+        name: &str,
+    ) -> Result<SchedulerRuleInfo, Error> {
         let free_vars = rule.head.get_free_vars().into_iter().collect::<Vec<_>>();
         let unit_type = egraph.backend.base_values().get_ty::<()>();
         let unit = egraph.backend.base_values().get(());
@@ -335,13 +342,16 @@ impl SchedulerRuleInfo {
             .map(|v| v.sort.column_ty(&egraph.backend))
             .chain(std::iter::once(ColumnTy::Base(unit_type)))
             .collect();
-        let decided = egraph.backend.add_table(FunctionConfig {
-            schema,
-            default: DefaultVal::Const(unit),
-            merge: MergeFn::AssertEq,
-            name: "backend".to_string(),
-            can_subsume: false,
-        });
+        let decided = egraph
+            .backend
+            .add_table(FunctionConfig {
+                schema,
+                default: DefaultVal::Const(unit),
+                merge: MergeFn::AssertEq,
+                name: "backend".to_string(),
+                can_subsume: false,
+            })
+            .map_err(|err| Error::BackendError(err.to_string()))?;
 
         // Step 1: build the query rule
         let mut qrule_builder = BackendRule::new(
@@ -349,7 +359,7 @@ impl SchedulerRuleInfo {
             &egraph.functions,
             &egraph.type_info,
         );
-        qrule_builder.query(&rule.body, true);
+        qrule_builder.query(&rule.body, true)?;
         let entries = free_vars
             .iter()
             .map(|fv| qrule_builder.entry(&GenericAtomTerm::Var(span!(), fv.clone())))
@@ -376,21 +386,21 @@ impl SchedulerRuleInfo {
         arule_builder
             .rb
             .query_table(decided, &entries, None)
-            .unwrap();
-        arule_builder.actions(&rule.head).unwrap();
+            .map_err(|e| Error::BackendError(e.to_string()))?;
+        arule_builder.actions(&rule.head)?;
         // Remove the entry as it's now done
         entries.pop();
         arule_builder.rb.remove(decided, &entries);
         let arule_id = arule_builder.build();
 
-        SchedulerRuleInfo {
+        Ok(SchedulerRuleInfo {
             free_vars,
             query_rule: qrule_id,
             action_rule: arule_id,
             matches,
             decided,
             should_seek: true,
-        }
+        })
     }
 }
 

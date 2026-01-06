@@ -136,6 +136,16 @@ pub struct EGraph {
 
 pub type Result<T> = std::result::Result<T, anyhow::Error>;
 
+#[derive(Error, Debug)]
+pub enum FunctionConfigError {
+    #[error("UF functions are not supported when tracing is enabled")]
+    UfWithTracing,
+    #[error("Merge functions cannot call UF-backed function {0}")]
+    MergeUsesUf(String),
+    #[error("TableAction does not support UF-backed function {0}")]
+    TableActionUsesUf(String),
+}
+
 impl Default for EGraph {
     fn default() -> Self {
         let mut db = Database::new();
@@ -724,7 +734,7 @@ impl EGraph {
     }
 
     /// Register a function in this EGraph.
-    pub fn add_table(&mut self, config: FunctionConfig) -> FunctionId {
+    pub fn add_table(&mut self, config: FunctionConfig) -> Result<FunctionId> {
         let FunctionConfig {
             schema,
             default,
@@ -752,8 +762,8 @@ impl EGraph {
         let next_func_id = self.funcs.next_id();
         let mut read_deps = IndexSet::<TableId>::new();
         let mut write_deps = IndexSet::<TableId>::new();
-        merge.fill_deps(self, &mut read_deps, &mut write_deps);
-        let merge_fn = merge.to_callback(schema_math, &name, self);
+        merge.fill_deps(self, &mut read_deps, &mut write_deps)?;
+        let merge_fn = merge.to_callback(schema_math, &name, self)?;
         let table = SortedWritesTable::new(
             n_args,
             n_cols,
@@ -785,13 +795,13 @@ impl EGraph {
         let info = &mut self.funcs[res];
         info.incremental_rebuild_rules = incremental_rebuild_rules;
         info.nonincremental_rebuild_rule = nonincremental_rebuild_rule;
-        res
+        Ok(res)
     }
 
     /// Register a UF-backed function in this EGraph.
-    pub fn add_uf_function(&mut self, config: UfFunctionConfig) -> FunctionId {
+    pub fn add_uf_function(&mut self, config: UfFunctionConfig) -> Result<FunctionId> {
         if self.tracing {
-            panic!("UF functions are not supported when tracing is enabled");
+            return Err(FunctionConfigError::UfWithTracing.into());
         }
         let UfFunctionConfig {
             name,
@@ -811,7 +821,7 @@ impl EGraph {
             write_deps.iter().copied(),
         );
         let schema = vec![ColumnTy::Id, ColumnTy::Id];
-        self.funcs.push(FunctionInfo {
+        Ok(self.funcs.push(FunctionInfo {
             table: table_id,
             schema,
             incremental_rebuild_rules: Vec::new(),
@@ -820,7 +830,7 @@ impl EGraph {
             can_subsume: false,
             name,
             kind: FunctionKind::Uf,
-        })
+        }))
     }
 
     /// Run the given rules, returning whether the database changed.
@@ -1275,28 +1285,33 @@ impl MergeFn {
         egraph: &EGraph,
         read_deps: &mut IndexSet<TableId>,
         write_deps: &mut IndexSet<TableId>,
-    ) {
+    ) -> Result<()> {
         use MergeFn::*;
         match self {
             Primitive(_, args) => {
-                args.iter()
-                    .for_each(|arg| arg.fill_deps(egraph, read_deps, write_deps));
+                for arg in args {
+                    arg.fill_deps(egraph, read_deps, write_deps)?;
+                }
             }
             Function(func, args) => {
-                assert!(
-                    !egraph.funcs[*func].is_uf(),
-                    "Merge functions cannot call UF-backed functions"
-                );
+                if egraph.funcs[*func].is_uf() {
+                    return Err(FunctionConfigError::MergeUsesUf(
+                        egraph.funcs[*func].name.to_string(),
+                    )
+                    .into());
+                }
                 read_deps.insert(egraph.funcs[*func].table);
                 write_deps.insert(egraph.funcs[*func].table);
-                args.iter()
-                    .for_each(|arg| arg.fill_deps(egraph, read_deps, write_deps));
+                for arg in args {
+                    arg.fill_deps(egraph, read_deps, write_deps)?;
+                }
             }
             UnionId if !egraph.tracing => {
                 write_deps.insert(egraph.uf_table);
             }
             UnionId | AssertEq | Old | New | Const(..) => {}
         }
+        Ok(())
     }
 
     fn to_callback(
@@ -1304,15 +1319,15 @@ impl MergeFn {
         schema_math: SchemaMath,
         function_name: &str,
         egraph: &mut EGraph,
-    ) -> Box<core_relations::MergeFn> {
+    ) -> Result<Box<core_relations::MergeFn>> {
         assert!(
             !egraph.tracing || matches!(self, MergeFn::UnionId),
             "proofs aren't supported for non-union merge functions"
         );
 
-        let resolved = self.resolve(function_name, egraph);
+        let resolved = self.resolve(function_name, egraph)?;
 
-        Box::new(move |state, cur, new, out| {
+        Ok(Box::new(move |state, cur, new, out| {
             let timestamp = new[schema_math.ts_col()];
 
             let mut changed = false;
@@ -1354,51 +1369,50 @@ impl MergeFn {
             }
 
             changed
-        })
+        }))
     }
 
-    fn resolve(&self, function_name: &str, egraph: &mut EGraph) -> ResolvedMergeFn {
+    fn resolve(&self, function_name: &str, egraph: &mut EGraph) -> Result<ResolvedMergeFn> {
         match self {
-            MergeFn::Const(v) => ResolvedMergeFn::Const(*v),
-            MergeFn::Old => ResolvedMergeFn::Old,
-            MergeFn::New => ResolvedMergeFn::New,
-            MergeFn::AssertEq => ResolvedMergeFn::AssertEq {
+            MergeFn::Const(v) => Ok(ResolvedMergeFn::Const(*v)),
+            MergeFn::Old => Ok(ResolvedMergeFn::Old),
+            MergeFn::New => Ok(ResolvedMergeFn::New),
+            MergeFn::AssertEq => Ok(ResolvedMergeFn::AssertEq {
                 panic: egraph.new_panic(format!(
                     "Illegal merge attempted for function {function_name}"
                 )),
-            },
-            MergeFn::UnionId => ResolvedMergeFn::UnionId {
+            }),
+            MergeFn::UnionId => Ok(ResolvedMergeFn::UnionId {
                 uf_table: egraph.uf_table,
                 tracing: egraph.tracing,
-            },
+            }),
             // NB: The primitive and function-based merge functions heap allocate a single callback
             // for each layer of nesting. This introduces a bit of overhead, particularly for cases
             // that look like `(f old new)` or `(f new old)`. We could special-case common cases in
             // this function if that overhead shows up.
-            MergeFn::Primitive(prim, args) => ResolvedMergeFn::Primitive {
+            MergeFn::Primitive(prim, args) => Ok(ResolvedMergeFn::Primitive {
                 prim: *prim,
                 args: args
                     .iter()
                     .map(|arg| arg.resolve(function_name, egraph))
-                    .collect::<Vec<_>>(),
+                    .collect::<Result<Vec<_>>>()?,
                 panic: egraph.new_panic(format!(
                     "Merge function for {function_name} primitive call failed"
                 )),
-            },
+            }),
             MergeFn::Function(func, args) => {
                 let func_info = &egraph.funcs[*func];
-                assert!(
-                    !func_info.is_uf(),
-                    "Merge functions cannot call UF-backed functions"
-                );
+                if func_info.is_uf() {
+                    return Err(FunctionConfigError::MergeUsesUf(func_info.name.to_string()).into());
+                }
                 assert_eq!(
                     func_info.schema.len(),
                     args.len() + 1,
                     "Merge function for {function_name} must match function arity for {}",
                     func_info.name
                 );
-                ResolvedMergeFn::Function {
-                    func: TableAction::new(egraph, *func),
+                Ok(ResolvedMergeFn::Function {
+                    func: TableAction::new(egraph, *func)?,
                     panic: egraph.new_panic(format!(
                         "Lookup on {} failed in the merge function for {function_name}",
                         func_info.name
@@ -1406,8 +1420,8 @@ impl MergeFn {
                     args: args
                         .iter()
                         .map(|arg| arg.resolve(function_name, egraph))
-                        .collect::<Vec<_>>(),
-                }
+                        .collect::<Result<Vec<_>>>()?,
+                })
             }
         }
     }
@@ -1532,15 +1546,14 @@ impl Clone for TableAction {
 impl TableAction {
     /// Create a new `TableAction` to be used later.
     /// This requires access to the `egglog_bridge::EGraph`.
-    pub fn new(egraph: &EGraph, func: FunctionId) -> TableAction {
+    pub fn new(egraph: &EGraph, func: FunctionId) -> Result<TableAction> {
         assert!(!egraph.tracing, "proofs not supported yet");
 
         let func_info = &egraph.funcs[func];
-        assert!(
-            !func_info.is_uf(),
-            "TableAction does not support UF-backed functions"
-        );
-        TableAction {
+        if func_info.is_uf() {
+            return Err(FunctionConfigError::TableActionUsesUf(func_info.name.to_string()).into());
+        }
+        Ok(TableAction {
             table: func_info.table,
             table_math: SchemaMath {
                 func_cols: func_info.schema.len(),
@@ -1554,7 +1567,7 @@ impl TableAction {
             },
             timestamp: egraph.timestamp_counter,
             scratch: Vec::new(),
-        }
+        })
     }
 
     /// A "table lookup" is not a read-only operation. It will insert a row when

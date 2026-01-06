@@ -550,28 +550,33 @@ impl EGraph {
         };
 
         use egglog_bridge::{DefaultVal, MergeFn};
-        let backend_id = self.backend.add_table(egglog_bridge::FunctionConfig {
-            schema: input
-                .iter()
-                .chain([&output])
-                .map(|sort| sort.column_ty(&self.backend))
-                .collect(),
-            default: match decl.subtype {
-                FunctionSubtype::Constructor => DefaultVal::FreshId,
-                FunctionSubtype::Custom => DefaultVal::Fail,
-                FunctionSubtype::Relation => DefaultVal::Const(self.backend.base_values().get(())),
-            },
-            merge: match decl.subtype {
-                FunctionSubtype::Constructor => MergeFn::UnionId,
-                FunctionSubtype::Relation => MergeFn::AssertEq,
-                FunctionSubtype::Custom => match &decl.merge {
-                    None => MergeFn::AssertEq,
-                    Some(expr) => self.translate_expr_to_mergefn(expr)?,
+        let backend_id = self
+            .backend
+            .add_table(egglog_bridge::FunctionConfig {
+                schema: input
+                    .iter()
+                    .chain([&output])
+                    .map(|sort| sort.column_ty(&self.backend))
+                    .collect(),
+                default: match decl.subtype {
+                    FunctionSubtype::Constructor => DefaultVal::FreshId,
+                    FunctionSubtype::Custom => DefaultVal::Fail,
+                    FunctionSubtype::Relation => {
+                        DefaultVal::Const(self.backend.base_values().get(()))
+                    }
                 },
-            },
-            name: decl.name.to_string(),
-            can_subsume,
-        });
+                merge: match decl.subtype {
+                    FunctionSubtype::Constructor => MergeFn::UnionId,
+                    FunctionSubtype::Relation => MergeFn::AssertEq,
+                    FunctionSubtype::Custom => match &decl.merge {
+                        None => MergeFn::AssertEq,
+                        Some(expr) => self.translate_expr_to_mergefn(expr)?,
+                    },
+                },
+                name: decl.name.to_string(),
+                can_subsume,
+            })
+            .map_err(|err| Error::BackendError(err.to_string()))?;
 
         let function = Function {
             decl: decl.clone(),
@@ -876,7 +881,7 @@ impl EGraph {
                 &self.functions,
                 &self.type_info,
             );
-            translator.query(query, false);
+            translator.query(query, false)?;
             translator.actions(actions)?;
             translator.build()
         };
@@ -1047,7 +1052,7 @@ impl EGraph {
             &self.functions,
             &self.type_info,
         );
-        translator.query(&query, true);
+        translator.query(&query, true)?;
         translator
             .rb
             .call_external_func(ext_id, &[], egglog_bridge::ColumnTy::Id, || {
@@ -1366,7 +1371,8 @@ impl EGraph {
 
         let num_facts = parsed_contents.len();
 
-        let mut table_action = egglog_bridge::TableAction::new(&self.backend, func.backend_id);
+        let mut table_action = egglog_bridge::TableAction::new(&self.backend, func.backend_id)
+            .map_err(|err| Error::BackendError(err.to_string()))?;
 
         if function_type.subtype != FunctionSubtype::Constructor {
             self.backend.with_execution_state(|es| {
@@ -1695,7 +1701,7 @@ impl<'a> BackendRule<'a> {
         &mut self,
         prim: &core::SpecializedPrimitive,
         args: &[core::ResolvedAtomTerm],
-    ) -> (ExternalFunctionId, Vec<QueryEntry>, ColumnTy) {
+    ) -> Result<(ExternalFunctionId, Vec<QueryEntry>, ColumnTy), Error> {
         let mut qe_args = self.args(args);
 
         if prim.name() == "unstable-fn" {
@@ -1703,10 +1709,10 @@ impl<'a> BackendRule<'a> {
                 panic!("expected string literal after `unstable-fn`")
             };
             let id = if let Some(f) = self.type_info.get_func_type(name) {
-                ResolvedFunctionId::Lookup(egglog_bridge::TableAction::new(
-                    self.rb.egraph(),
-                    self.func(f),
-                ))
+                ResolvedFunctionId::Lookup(
+                    egglog_bridge::TableAction::new(self.rb.egraph(), self.func(f))
+                        .map_err(|err| Error::BackendError(err.to_string()))?,
+                )
             } else if let Some(possible) = self.type_info.get_prims(name) {
                 let mut ps: Vec<_> = possible.iter().collect();
                 ps.retain(|p| {
@@ -1739,11 +1745,11 @@ impl<'a> BackendRule<'a> {
             });
         }
 
-        (
+        Ok((
             prim.external_id(),
             qe_args,
             prim.output().column_ty(self.rb.egraph()),
-        )
+        ))
     }
 
     fn args<'b>(
@@ -1753,7 +1759,11 @@ impl<'a> BackendRule<'a> {
         args.into_iter().map(|x| self.entry(x)).collect()
     }
 
-    fn query(&mut self, query: &core::Query<ResolvedCall, ResolvedVar>, include_subsumed: bool) {
+    fn query(
+        &mut self,
+        query: &core::Query<ResolvedCall, ResolvedVar>,
+        include_subsumed: bool,
+    ) -> Result<(), Error> {
         for atom in &query.atoms {
             match &atom.head {
                 ResolvedCall::Func(f) => {
@@ -1763,14 +1773,19 @@ impl<'a> BackendRule<'a> {
                         true => None,
                         false => Some(false),
                     };
-                    self.rb.query_table(f, &args, is_subsumed).unwrap();
+                    self.rb
+                        .query_table(f, &args, is_subsumed)
+                        .map_err(|e| Error::BackendError(e.to_string()))?;
                 }
                 ResolvedCall::Primitive(p) => {
-                    let (p, args, ty) = self.prim(p, &atom.args);
-                    self.rb.query_prim(p, &args, ty).unwrap()
+                    let (p, args, ty) = self.prim(p, &atom.args)?;
+                    self.rb
+                        .query_prim(p, &args, ty)
+                        .map_err(|e| Error::BackendError(e.to_string()))?
                 }
             }
         }
+        Ok(())
     }
 
     fn actions(&mut self, actions: &core::ResolvedCoreActions) -> Result<(), Error> {
@@ -1790,7 +1805,7 @@ impl<'a> BackendRule<'a> {
                         }
                         ResolvedCall::Primitive(p) => {
                             let name = p.name().to_owned();
-                            let (p, args, ty) = self.prim(p, args);
+                            let (p, args, ty) = self.prim(p, args)?;
                             let span = span.clone();
                             self.rb.call_external_func(p, &args, ty, move || {
                                 format!("{span}: call of primitive {name} failed")

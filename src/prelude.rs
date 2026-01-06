@@ -454,12 +454,11 @@ pub fn rust_rule(
             .functions
             .iter()
             .map(|(k, v)| {
-                (
-                    k.clone(),
-                    egglog_bridge::TableAction::new(&egraph.backend, v.backend_id),
-                )
+                egglog_bridge::TableAction::new(&egraph.backend, v.backend_id)
+                    .map(|action| (k.clone(), action))
             })
-            .collect(),
+            .collect::<Result<_, _>>()
+            .map_err(|err| Error::BackendError(err.to_string()))?,
         panic_id,
         func,
     });
