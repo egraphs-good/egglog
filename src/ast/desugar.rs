@@ -15,8 +15,9 @@ pub(crate) fn desugar_command(
             name,
             schema,
             merge,
+            impl_kind,
         } => vec![NCommand::Function(FunctionDecl::function(
-            span, name, schema, merge,
+            span, name, schema, merge, impl_kind,
         ))],
         Command::Constructor {
             span,

@@ -584,6 +584,10 @@ impl EGraph {
         self.db.get_table(self.funcs[table].table).len()
     }
 
+    pub fn table_id(&self, table: FunctionId) -> TableId {
+        self.funcs[table].table
+    }
+
     /// Generate a proof explaining why a given term is in the database.
     ///
     /// # Errors

@@ -1,0 +1,3 @@
+(datatype Math (A) (B))
+
+(function __UF_Bad (Math Math) Math :impl displaced-union-find)

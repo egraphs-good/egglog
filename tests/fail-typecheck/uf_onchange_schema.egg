@@ -1,0 +1,5 @@
+(datatype Math (A))
+
+(relation BadOnChange (Math Math Math Math))
+
+(function __UF_Math (Math) Math :impl displaced-union-find :onchange BadOnChange)

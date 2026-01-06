@@ -1,0 +1,18 @@
+(datatype Math
+  (A)
+  (B))
+
+(relation __MathUfChange (Math Math Math Math Math))
+
+(function __UF_Math (Math) Math :impl displaced-union-find
+  :onchange __MathUfChange
+  :canon-prim canon-uf-math)
+
+(let $a (A))
+(let $b (B))
+
+(set (__UF_Math $a) $b)
+
+(check (= (__UF_Math (ordering-max $a $b)) (ordering-min $a $b)))
+(check (= (canon-uf-math $a) (canon-uf-math $b)))
+(check (__MathUfChange $a $b $a $b (ordering-min $a $b)))

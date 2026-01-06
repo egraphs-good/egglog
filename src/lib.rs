@@ -503,7 +503,10 @@ impl EGraph {
                 // NB: type-checking should already catch unbound variables here.
                 _ => Err(TypeError::Unbound(resolved_var.name.clone(), span.clone()).into()),
             },
-            GenericExpr::Call(_, ResolvedCall::Func(f), args) => {
+            GenericExpr::Call(span, ResolvedCall::Func(f), args) => {
+                if self.functions[&f.name].decl.impl_kind.is_uf() {
+                    return Err(TypeError::UfFunctionInMerge(f.name.clone(), span.clone()).into());
+                }
                 let translated_args = args
                     .iter()
                     .map(|arg| self.translate_expr_to_mergefn(arg))
@@ -543,40 +546,115 @@ impl EGraph {
             .collect::<Result<Vec<_>, _>>()?;
         let output = get_sort(&decl.schema.output)?;
 
-        let can_subsume = match decl.subtype {
-            FunctionSubtype::Constructor => true,
-            FunctionSubtype::Relation => true,
-            FunctionSubtype::Custom => false,
-        };
+        let (backend_id, can_subsume) = match &decl.impl_kind {
+            FunctionImpl::Default => {
+                let can_subsume = match decl.subtype {
+                    FunctionSubtype::Constructor => true,
+                    FunctionSubtype::Relation => true,
+                    FunctionSubtype::Custom => false,
+                };
 
-        use egglog_bridge::{DefaultVal, MergeFn};
-        let backend_id = self
-            .backend
-            .add_table(egglog_bridge::FunctionConfig {
-                schema: input
-                    .iter()
-                    .chain([&output])
-                    .map(|sort| sort.column_ty(&self.backend))
-                    .collect(),
-                default: match decl.subtype {
-                    FunctionSubtype::Constructor => DefaultVal::FreshId,
-                    FunctionSubtype::Custom => DefaultVal::Fail,
-                    FunctionSubtype::Relation => {
-                        DefaultVal::Const(self.backend.base_values().get(()))
+                use egglog_bridge::{DefaultVal, MergeFn};
+                let backend_id = self
+                    .backend
+                    .add_table(egglog_bridge::FunctionConfig {
+                        schema: input
+                            .iter()
+                            .chain([&output])
+                            .map(|sort| sort.column_ty(&self.backend))
+                            .collect(),
+                        default: match decl.subtype {
+                            FunctionSubtype::Constructor => DefaultVal::FreshId,
+                            FunctionSubtype::Custom => DefaultVal::Fail,
+                            FunctionSubtype::Relation => {
+                                DefaultVal::Const(self.backend.base_values().get(()))
+                            }
+                        },
+                        merge: match decl.subtype {
+                            FunctionSubtype::Constructor => MergeFn::UnionId,
+                            FunctionSubtype::Relation => MergeFn::AssertEq,
+                            FunctionSubtype::Custom => match &decl.merge {
+                                None => MergeFn::AssertEq,
+                                Some(expr) => self.translate_expr_to_mergefn(expr)?,
+                            },
+                        },
+                        name: decl.name.to_string(),
+                        can_subsume,
+                    })
+                    .map_err(|err| Error::BackendError(err.to_string()))?;
+                (backend_id, can_subsume)
+            }
+            FunctionImpl::DisplacedUnionFind {
+                onchange,
+                canon_prim,
+            } => {
+                let mut on_leader_change: Option<egglog_bridge::LeaderChangeCallback> = None;
+                let mut write_deps = Vec::new();
+                if let Some(onchange) = onchange {
+                    let onchange_func = self.functions.get(onchange).ok_or_else(|| {
+                        Error::TypeError(TypeError::UnboundFunction(
+                            onchange.clone(),
+                            decl.span.clone(),
+                        ))
+                    })?;
+                    let onchange_backend_id = onchange_func.backend_id;
+                    write_deps.push(self.backend.table_id(onchange_backend_id));
+                    let table_action =
+                        egglog_bridge::TableAction::new(&self.backend, onchange_backend_id)
+                            .map_err(|err| Error::BackendError(err.to_string()))?;
+                    let callback: egglog_bridge::LeaderChangeCallback = Box::new(
+                        move |state: &mut ExecutionState, change: core_relations::LeaderChange| {
+                            let mut action = table_action.clone();
+                            let unit = state.base_values().get(());
+                            let new_leader = change.new_leader();
+                            action.insert(
+                                state,
+                                [
+                                    change.write_lhs,
+                                    change.write_rhs,
+                                    change.lhs_leader,
+                                    change.rhs_leader,
+                                    new_leader,
+                                    unit,
+                                ]
+                                .into_iter(),
+                            );
+                        },
+                    );
+                    on_leader_change = Some(callback);
+                }
+                let (backend_id, canon_prim_id) = self
+                    .backend
+                    .add_uf_function(egglog_bridge::UfFunctionConfig {
+                        name: decl.name.to_string(),
+                        on_leader_change,
+                        read_deps: Vec::new(),
+                        write_deps,
+                    })
+                    .map_err(|err| Error::BackendError(err.to_string()))?;
+
+                match canon_prim {
+                    Some(canon_prim) => {
+                        let old = self
+                            .type_info
+                            .replace_primitive_external_id(canon_prim, canon_prim_id)
+                            .ok_or_else(|| {
+                                Error::TypeError(TypeError::Unbound(
+                                    canon_prim.clone(),
+                                    decl.span.clone(),
+                                ))
+                            })?;
+                        if old != canon_prim_id {
+                            self.backend.free_external_func(old);
+                        }
                     }
-                },
-                merge: match decl.subtype {
-                    FunctionSubtype::Constructor => MergeFn::UnionId,
-                    FunctionSubtype::Relation => MergeFn::AssertEq,
-                    FunctionSubtype::Custom => match &decl.merge {
-                        None => MergeFn::AssertEq,
-                        Some(expr) => self.translate_expr_to_mergefn(expr)?,
-                    },
-                },
-                name: decl.name.to_string(),
-                can_subsume,
-            })
-            .map_err(|err| Error::BackendError(err.to_string()))?;
+                    None => {
+                        self.backend.free_external_func(canon_prim_id);
+                    }
+                }
+                (backend_id, false)
+            }
+        };
 
         let function = Function {
             decl: decl.clone(),

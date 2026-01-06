@@ -84,6 +84,7 @@ fn remove_globals_cmd(cmd: ResolvedNCommand) -> Vec<ResolvedNCommand> {
                 let func_decl = ResolvedFunctionDecl {
                     name: name.name,
                     subtype: FunctionSubtype::Constructor,
+                    impl_kind: FunctionImpl::Default,
                     schema: Schema {
                         input: vec![],
                         output: ty.name().to_owned(),

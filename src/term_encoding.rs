@@ -1184,8 +1184,15 @@ pub fn command_supports_proof_encoding(command: &ResolvedCommand) -> bool {
         | GenericCommand::Relation { .. }
         | GenericCommand::Input { .. } => false,
         ResolvedCommand::Action(ResolvedAction::Let(_, _, expr)) => expr.output_type().is_eq_sort(),
-        // no-merge isn't supported right now
-        ResolvedCommand::Function { merge: None, .. } => false,
+        ResolvedCommand::Function {
+            impl_kind, merge, ..
+        } => {
+            if impl_kind.is_uf() {
+                return false;
+            }
+            // no-merge isn't supported right now
+            merge.is_some()
+        }
         // delete or subsume on custom functions isn't supported
         _ => true,
     }
