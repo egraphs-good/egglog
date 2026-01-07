@@ -51,20 +51,20 @@ pub struct RuleSet {
     /// The contents of the queries (i.e. the LHS of the rules) for each rule in the set, along
     /// with a description of the rule.
     ///
-    /// The action here is used to map between rule descriptions and ActionIds. The current
+    /// The action here is used to map between rule descriptions and plans, which contain ActionIds. The current
     /// accounting logic assumes that rules and actions stand in a bijection. If we relaxed that
     /// later on, most of the core logic would still work but the accounting logic could get more
     /// complex.
-    pub(crate) plans: IdVec<RuleId, (Plan, Arc<str> /* description */, SymbolMap, ActionId)>,
+    pub(crate) plans: IdVec<RuleId, (Plan, Arc<str> /* description */, SymbolMap)>,
     pub(crate) actions: DenseIdMap<ActionId, ActionInfo>,
 }
 
 impl RuleSet {
     pub fn build_cached_plan(&self, rule_id: RuleId) -> CachedPlan {
-        let (plan, desc, symbol_map, action_id) = self.plans.get(rule_id).expect("rule must exist");
+        let (plan, desc, symbol_map) = self.plans.get(rule_id).expect("rule must exist");
         let actions = self
             .actions
-            .get(*action_id)
+            .get(plan.actions)
             .expect("action must exist")
             .clone();
         CachedPlan {
@@ -137,8 +137,8 @@ impl<'outer> RuleSetBuilder<'outer> {
             stages: JoinStages {
                 header: Default::default(),
                 instrs: cached.plan.stages.instrs.clone(),
-                actions: action_id,
             },
+            actions: action_id,
         };
 
         // Next, patch in the "extra constraints" that we want to add to the plan.
@@ -181,12 +181,9 @@ impl<'outer> RuleSetBuilder<'outer> {
             });
         }
 
-        self.rule_set.plans.push((
-            plan,
-            cached.desc.clone(),
-            cached.symbol_map.clone(),
-            action_id,
-        ))
+        self.rule_set
+            .plans
+            .push((plan, cached.desc.clone(), cached.symbol_map.clone()))
     }
 
     /// Build the ruleset.
@@ -468,7 +465,7 @@ impl RuleBuilder<'_, '_> {
             .rsb
             .rule_set
             .plans
-            .push((plan, desc.into(), symbol_map, action_id))
+            .push((plan, desc.into(), symbol_map))
     }
 
     /// Return a variable containing the result of reading the specified counter.
