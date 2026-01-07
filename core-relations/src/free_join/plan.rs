@@ -168,6 +168,7 @@ impl JoinStage {
 pub(crate) struct Plan {
     pub atoms: Arc<DenseIdMap<AtomId, Atom>>,
     pub stages: JoinStages,
+    pub actions: ActionId,
 }
 impl Plan {
     pub(crate) fn to_report(&self, symbol_map: &SymbolMap) -> egglog_reports::Plan {
@@ -262,7 +263,6 @@ impl Plan {
 pub(crate) struct JoinStages {
     pub header: Vec<JoinHeader>,
     pub instrs: Arc<Vec<JoinStage>>,
-    pub actions: ActionId,
 }
 
 /// Specification of the materialization of the intermediate results, as required by tree decomposition.
@@ -304,8 +304,9 @@ pub enum PlanStrategy {
     Gj,
 }
 
+#[allow(dead_code)]
 pub(crate) fn tree_decompose_and_plan(
-    mut ctx: PlanningContext,
+    ctx: PlanningContext,
     strat: PlanStrategy,
 ) -> Vec<(Vec<JoinHeader>, Vec<JoinStage>, MatSpec)> {
     let mut atoms = ctx.atoms;
@@ -324,11 +325,10 @@ pub(crate) fn tree_decompose_and_plan(
         let subquery_vars: IndexSet<Variable> = vinfo
             .occurrences
             .iter()
-            .map(|occ| {
+            .flat_map(|occ| {
                 let atom = &atoms[occ.atom];
                 atom.column_to_var.iter().map(|(_, var)| *var)
             })
-            .flatten()
             .collect::<IndexSet<_>>();
 
         let subquery_atoms: IndexSet<AtomId> = atoms
@@ -466,8 +466,8 @@ pub(crate) fn plan_query(query: Query) -> Plan {
         stages: JoinStages {
             header,
             instrs: Arc::new(instrs),
-            actions: query.action,
         },
+        actions: query.action,
     }
 }
 
@@ -488,14 +488,14 @@ struct StageInfo {
 }
 
 /// Immutable context for query planning containing references to query metadata.
-struct PlanningContext {
+pub(crate) struct PlanningContext {
     vars: DenseIdMap<Variable, VarInfo>,
     atoms: DenseIdMap<AtomId, Atom>,
 }
 
 /// Mutable state tracked during query planning.
 #[derive(Clone)]
-struct PlanningState {
+pub(crate) struct PlanningState {
     used_vars: VarSet,
     constrained_atoms: AtomSet,
 }
