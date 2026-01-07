@@ -265,11 +265,17 @@ pub(crate) struct JoinStages {
     pub actions: ActionId,
 }
 
+/// Specification of the materialization of the intermediate results, as required by tree decomposition.
+#[derive(Debug, Clone)]
+pub(crate) struct MatSpec {
+    pub msg_vars: Vec<Variable>,
+    pub val_vars: Vec<Variable>,
+}
+
 #[derive(Debug, Clone)]
 pub(crate) struct JoinStageBlocks {
-    pub header: Vec<JoinHeader>,
     // each block is a list of instructions and how to yield
-    pub blocks: Vec<(Vec<JoinStage>, i64 /* TODO */)>,
+    pub blocks: Vec<(Vec<JoinHeader>, Vec<JoinStage>, MatSpec)>,
     pub actions: ActionId,
 }
 
@@ -301,7 +307,7 @@ pub enum PlanStrategy {
 pub(crate) fn tree_decompose_and_plan(
     mut ctx: PlanningContext,
     strat: PlanStrategy,
-) -> (Vec<JoinHeader>, Vec<JoinStage>) {
+) -> Vec<(Vec<JoinHeader>, Vec<JoinStage>, MatSpec)> {
     let mut atoms = ctx.atoms;
     let mut vars = ctx.vars;
 
@@ -417,13 +423,34 @@ pub(crate) fn tree_decompose_and_plan(
         }
     }
 
-    for bag in bags.into_iter().rev() {
-        let (header, instrs) = plan_stages(&bag, strat);
-        // actual_header.extend(header);
-        // actual_instrs.extend(instrs);
+    let mut n_used_in_bag = DenseIdMap::new();
+    for bag in bags.iter() {
+        for (var, _) in bag.vars.iter() {
+            if !n_used_in_bag.contains_key(var) {
+                n_used_in_bag[var] = 0;
+            }
+            n_used_in_bag[var] += 1;
+        }
     }
 
-    todo!()
+    let mut blocks = vec![];
+
+    for bag in bags.into_iter() {
+        let mut msg_vars = vec![];
+        let mut val_vars = vec![];
+        for (var, _) in bag.vars.iter() {
+            n_used_in_bag[var] -= 1;
+            if n_used_in_bag[var] > 0 {
+                msg_vars.push(var);
+            } else {
+                val_vars.push(var);
+            }
+        }
+        let (header, instrs) = plan_stages(&bag, strat);
+        blocks.push((header, instrs, MatSpec { msg_vars, val_vars }));
+    }
+
+    blocks
 }
 
 pub(crate) fn plan_query(query: Query) -> Plan {
