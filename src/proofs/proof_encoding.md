@@ -15,8 +15,6 @@ The transformation is triggered when an `EGraph` is created with
 [`EGraph::new_with_term_encoding`](crate::EGraph::new_with_term_encoding) or
 converted via [`EGraph::with_term_encoding_enabled`](crate::EGraph::with_term_encoding_enabled).
 
-# Example
-
 Consider a tiny program that defines a pure arithmetic helper and checks a fact about it:
 
 ```text
@@ -26,6 +24,7 @@ Consider a tiny program that defines a pure arithmetic helper and checks a fact 
 (rule ((Add a b))
       ((union (Add a b) (Add b a)))
      :name "commutativity")
+(run 1)
 (check (= (Add 1 2) (Add 2 1)))
 ```
 
@@ -78,6 +77,10 @@ rebuild-time congruence (`rebuilding` + `rebuilding_cleanup`), and deferred dele
   classes of terms of that sort.
 A couple rules ensure the union-find is kept up to date as 
   equalities are added.
+We use the `ordering-max` and `ordering-min` egglog primitives
+  to define an arbitrary ordering on terms based on insertion order,
+  so that we can deterministically choose which term becomes the parent
+  in the union-find structure.
 
 
 ```text
@@ -136,6 +139,15 @@ Since global variables are not allowed after this pass,
        :name "commutativity")
 ```
 
+Here we have the instrumented commutativity rule.
+The query uses the view table to find the canonical e-node.
+The actions add to the term table, add to the view table,
+  and add an equality to the union-find table.
+We add an equality to the union-find table for the two terms, using the `ordering-max` and 
+  `ordering-min` egglog primitives to correctly choose a parent.
+
+
+
 
 ```text
 (check (AddView 1 2 __v7)
@@ -143,8 +155,10 @@ Since global variables are not allowed after this pass,
        (= __v7 __v8))
 ```
 
+All queries use the view tables, including check commands.
+This query checks that the e-class representatives for `(Add 1 2)` and `(Add 2 1)` are equal,
+  ensuring they share the same e-class.
 
 
-We add an equality to the union-find table for the two terms, using the `ordering-max` and `ordering-min` egglog primitives
-  which define an arbitrary ordering on terms based on insertion order.
 
+# Proof Tracking
