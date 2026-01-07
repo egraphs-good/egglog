@@ -166,7 +166,7 @@ impl Database {
             // let dash_rule_reports: DashMap<String, Vec<RuleReport>> = DashMap::default();
             let dash_rule_reports: DashMap<Arc<str>, Vec<RuleReport>> = DashMap::default();
             rayon::in_place_scope(|scope| {
-                for (plan, desc, symbol_map, _action) in rule_set.plans.values() {
+                for (plan, desc, symbol_map) in rule_set.plans.values() {
                     // TODO: add stats
                     let report_plan = match report_level {
                         ReportLevel::TimeOnly => None,
@@ -212,7 +212,7 @@ impl Database {
                 match_counter: &match_counter,
                 batches: Default::default(),
             };
-            for (plan, desc, symbol_map, _action) in rule_set.plans.values() {
+            for (plan, desc, symbol_map) in rule_set.plans.values() {
                 let report_plan = match report_level {
                     ReportLevel::TimeOnly => None,
                     ReportLevel::WithPlan | ReportLevel::StageInfo => {
@@ -239,7 +239,7 @@ impl Database {
             }
             action_buf.flush(&mut exec_state.clone());
         }
-        for (_plan, desc, _symbol_map, action) in rule_set.plans.values() {
+        for (plan, desc, _symbol_map) in rule_set.plans.values() {
             let reports = rule_reports.get_mut(desc).unwrap();
             let i = reports
                 .iter()
@@ -251,7 +251,7 @@ impl Database {
             // NB: This requires each action ID correspond to only one query.
             // If an action is used by multiple queries, then we can't tell how many matches are
             // caused by individual queries.
-            reports[i].num_matches = match_counter.read_matches(*action);
+            reports[i].num_matches = match_counter.read_matches(plan.actions);
         }
         let search_and_apply_time = search_and_apply_timer.elapsed();
 
@@ -501,8 +501,8 @@ impl<'a> JoinState<'a> {
         }
 
         if cur >= instr_order.len() {
-            action_buf.push_bindings(plan.stages.actions, &binding_info.bindings, || {
-                self.exec_state.clone()
+            action_buf.push_bindings(plan.actions, &binding_info.bindings, || {
+                ExecutionState::new(self.db.read_only_view(), Default::default())
             });
             return;
         }
