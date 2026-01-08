@@ -7,6 +7,7 @@ use std::{
 
 use crate::{
     common::HashMap,
+    free_join::plan::SinglePlan,
     numeric_id::{DenseIdMap, IdVec, NumericId},
 };
 use crossbeam::utils::CachePadded;
@@ -166,6 +167,9 @@ impl Database {
             let dash_rule_reports: DashMap<Arc<str>, Vec<RuleReport>> = DashMap::default();
             rayon::in_place_scope(|scope| {
                 for (plan, desc, symbol_map) in rule_set.plans.values() {
+                    let Plan::SinglePlan(plan) = plan else {
+                        todo!()
+                    };
                     // TODO: add stats
                     let report_plan = match report_level {
                         ReportLevel::TimeOnly => None,
@@ -215,6 +219,9 @@ impl Database {
                 batches: Default::default(),
             };
             for (plan, desc, symbol_map) in rule_set.plans.values() {
+                let Plan::SinglePlan(plan) = plan else {
+                    todo!()
+                };
                 let report_plan = match report_level {
                     ReportLevel::TimeOnly => None,
                     ReportLevel::WithPlan | ReportLevel::StageInfo => {
@@ -256,7 +263,7 @@ impl Database {
             // NB: This requires each action ID correspond to only one query.
             // If an action is used by multiple queries, then we can't tell how many matches are
             // caused by individual queries.
-            reports[i].num_matches = match_counter.read_matches(plan.actions);
+            reports[i].num_matches = match_counter.read_matches(plan.actions());
         }
         let search_and_apply_time = search_and_apply_timer.elapsed();
 
@@ -383,7 +390,7 @@ impl<'a> JoinState<'a> {
 
     fn get_index(
         &self,
-        plan: &Plan,
+        plan: &SinglePlan,
         atom: AtomId,
         binding_info: &mut BindingInfo,
         cols: impl Iterator<Item = ColumnId>,
@@ -437,7 +444,7 @@ impl<'a> JoinState<'a> {
     }
     fn get_column_index(
         &self,
-        plan: &Plan,
+        plan: &SinglePlan,
         binding_info: &mut BindingInfo,
         atom: AtomId,
         col: ColumnId,
@@ -448,7 +455,7 @@ impl<'a> JoinState<'a> {
     /// Runs the free join plan, starting with the header.
     ///
     /// A bit about the `instr_order` parameter: This defines the order in which the [`JoinStage`]
-    /// instructions will run. We want to support cached [`Plan`]s that may be based on stale
+    /// instructions will run. We want to support cached [`SinglePlan`]s that may be based on stale
     /// ordering information. `instr_order` allows us to specify a new ordering of the instructions
     /// without mutating the plan itself: `run_plan` simply executes
     /// `plan.stages.instrs[instr_order[i]]` at stage `i`.
@@ -456,7 +463,7 @@ impl<'a> JoinState<'a> {
     /// This is also a stepping stone towards supporting fully dynamic variable ordering.
     fn run_header_and_plan<'buf, BUF: ActionBuffer<'buf>>(
         &self,
-        plan: &'a Plan,
+        plan: &'a SinglePlan,
         binding_info: &mut BindingInfo,
         action_buf: &mut BUF,
     ) where
@@ -492,7 +499,7 @@ impl<'a> JoinState<'a> {
     /// default.
     fn run_plan<'buf, BUF: ActionBuffer<'buf>>(
         &self,
-        plan: &'a Plan,
+        plan: &'a SinglePlan,
         instr_order: &mut InstrOrder,
         cur: usize,
         binding_info: &mut BindingInfo,
