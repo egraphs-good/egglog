@@ -165,12 +165,41 @@ impl JoinStage {
 }
 
 #[derive(Debug, Clone)]
-pub(crate) struct Plan {
+pub(crate) enum Plan {
+    SinglePlan(SinglePlan),
+    DecomposedPlan(DecomposedPlan),
+}
+impl Plan {
+    pub fn actions(&self) -> ActionId {
+        match self {
+            Plan::SinglePlan(p) => p.actions,
+            Plan::DecomposedPlan(p) => p.actions,
+        }
+    }
+
+    pub fn atoms(&self) -> Arc<DenseIdMap<AtomId, Atom>> {
+        match self {
+            Plan::SinglePlan(p) => p.atoms.clone(),
+            Plan::DecomposedPlan(p) => p.atoms.clone(),
+        }
+    }
+}
+#[derive(Debug, Clone)]
+pub(crate) struct SinglePlan {
     pub atoms: Arc<DenseIdMap<AtomId, Atom>>,
     pub stages: JoinStages,
     pub actions: ActionId,
 }
-impl Plan {
+
+#[derive(Debug, Clone)]
+pub(crate) struct DecomposedPlan {
+    pub atoms: Arc<DenseIdMap<AtomId, Atom>>,
+    pub atom_to_bag: Arc<DenseIdMap<AtomId, usize>>,
+    pub stages: JoinStageBlocks,
+    pub actions: ActionId,
+}
+
+impl SinglePlan {
     pub(crate) fn to_report(&self, symbol_map: &SymbolMap) -> egglog_reports::Plan {
         use egglog_reports::{
             Plan as ReportPlan, Scan as ReportScan, SingleScan as ReportSingleScan,
@@ -275,8 +304,8 @@ pub(crate) struct MatSpec {
 #[derive(Debug, Clone)]
 pub(crate) struct JoinStageBlocks {
     // each block is a list of instructions and how to yield
-    pub blocks: Vec<(Vec<JoinHeader>, Vec<JoinStage>, MatSpec)>,
-    pub actions: ActionId,
+    // TODO: Arc<MatSpec>
+    pub blocks: Vec<(JoinStages, MatSpec)>,
 }
 
 type VarSet = FixedBitSet;
@@ -304,18 +333,21 @@ pub enum PlanStrategy {
     Gj,
 }
 
+type AtomToBag = DenseIdMap<AtomId, usize>;
+
 #[allow(dead_code)]
 pub(crate) fn tree_decompose_and_plan(
-    ctx: PlanningContext,
+    ctx: &PlanningContext,
     strat: PlanStrategy,
-) -> Vec<(Vec<JoinHeader>, Vec<JoinStage>, MatSpec)> {
-    let mut atoms = ctx.atoms;
-    let mut vars = ctx.vars;
+) -> (Vec<(JoinStages, MatSpec)>, AtomToBag) {
+    let mut atoms = ctx.atoms.clone();
+    let mut vars = ctx.vars.clone();
 
     let mut bags: Vec<PlanningContext> = vec![];
     let mut n_remaining_vars = vars.iter().count();
 
     let dummy_table_id = TableId::from_usize(usize::MAX);
+    let mut atom_to_bag = AtomToBag::new();
 
     // Step 1. find variable with smallest number of occurrences
     while let Some((var, vinfo)) = vars.iter().min_by_key(|(_, vinfo)| vinfo.occurrences.len()) {
@@ -340,6 +372,10 @@ pub(crate) fn tree_decompose_and_plan(
             })
             .map(|(atom_id, _)| atom_id)
             .collect::<IndexSet<_>>();
+        let bag_id = bags.len();
+        for &atom_id in subquery_atoms.iter() {
+            atom_to_bag[atom_id] = bag_id;
+        }
 
         // Break if the subquery is the entire remaining query
         let should_break = subquery_vars.len() == n_remaining_vars;
@@ -423,6 +459,7 @@ pub(crate) fn tree_decompose_and_plan(
         }
     }
 
+    // number of bags a variable is in, used to decide whether to pass it as a message variable or a value variable
     let mut n_used_in_bag = DenseIdMap::new();
     for bag in bags.iter() {
         for (var, _) in bag.vars.iter() {
@@ -440,18 +477,21 @@ pub(crate) fn tree_decompose_and_plan(
         let mut val_vars = vec![];
         for (var, _) in bag.vars.iter() {
             n_used_in_bag[var] -= 1;
+            // If the variable is still used later, this is an information to be passed to the next stage.
             if n_used_in_bag[var] > 0 {
                 msg_vars.push(var);
             } else {
                 val_vars.push(var);
             }
         }
-        let (header, instrs) = plan_stages(&bag, strat);
-        blocks.push((header, instrs, MatSpec { msg_vars, val_vars }));
+        let stages = plan_stages(&bag, strat);
+        blocks.push((stages, MatSpec { msg_vars, val_vars }));
     }
 
-    blocks
+    (blocks, atom_to_bag)
 }
+
+const TREE_DECOMPOSE: bool = true;
 
 pub(crate) fn plan_query(query: Query) -> Plan {
     let atoms = query.atoms;
@@ -459,15 +499,22 @@ pub(crate) fn plan_query(query: Query) -> Plan {
         vars: query.var_info,
         atoms,
     };
-    let (header, instrs) = plan_stages(&ctx, query.plan_strategy);
+    if TREE_DECOMPOSE {
+        let (blocks, atom_to_bag) = tree_decompose_and_plan(&ctx, query.plan_strategy);
+        Plan::DecomposedPlan(DecomposedPlan {
+            atoms: Arc::new(ctx.atoms),
+            atom_to_bag: Arc::new(atom_to_bag),
+            stages: JoinStageBlocks { blocks },
+            actions: query.action,
+        })
+    } else {
+        let stages = plan_stages(&ctx, query.plan_strategy);
 
-    Plan {
-        atoms: Arc::new(ctx.atoms),
-        stages: JoinStages {
-            header,
-            instrs: Arc::new(instrs),
-        },
-        actions: query.action,
+        Plan::SinglePlan(SinglePlan {
+            atoms: Arc::new(ctx.atoms),
+            stages,
+            actions: query.action,
+        })
     }
 }
 
@@ -631,7 +678,7 @@ fn plan_headers(
 
 /// Plan query execution stages using the specified strategy.
 /// Returns (header, instructions) tuple that can be assembled into a Plan by the caller.
-fn plan_stages(ctx: &PlanningContext, strat: PlanStrategy) -> (Vec<JoinHeader>, Vec<JoinStage>) {
+fn plan_stages(ctx: &PlanningContext, strat: PlanStrategy) -> JoinStages {
     let (header, remaining_constraints) = plan_headers(ctx);
     let mut instrs = Vec::new();
     let mut state = PlanningState::new(ctx.vars.n_ids(), ctx.atoms.n_ids());
@@ -643,7 +690,10 @@ fn plan_stages(ctx: &PlanningContext, strat: PlanStrategy) -> (Vec<JoinHeader>, 
         PlanStrategy::Gj => plan_gj(ctx, &mut state, &remaining_constraints, &mut instrs),
     };
 
-    (header, instrs)
+    JoinStages {
+        header,
+        instrs: Arc::new(instrs),
+    }
 }
 
 /// Plan free join queries using pure size or minimal cover strategy.
