@@ -21,6 +21,7 @@ mod core;
 pub mod extract;
 pub mod prelude;
 mod proofs;
+mod slotted_encoding;
 
 pub mod scheduler;
 mod serialize;
