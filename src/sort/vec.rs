@@ -1,3 +1,5 @@
+use crate::constraint::AllEqualTypeConstraint;
+
 use super::*;
 
 #[derive(Clone, Debug, PartialEq, Eq, Hash)]
@@ -137,6 +139,10 @@ impl ContainerSort for VecSort {
         add_primitive!(eg, "vec-get"    = |    xs: @VecContainer (arc), i: i64                       | -?> # (self.element()) { xs.data.get(i as usize).copied() });
         add_primitive!(eg, "vec-set"    = |mut xs: @VecContainer (arc), i: i64, x: # (self.element())| -> @VecContainer (arc) {{ xs.data[i as usize] = x;    xs }});
         add_primitive!(eg, "vec-remove" = |mut xs: @VecContainer (arc), i: i64                       | -> @VecContainer (arc) {{ xs.data.remove(i as usize); xs }});
+
+        eg.add_primitive(Shape {});
+        eg.add_primitive(FindMapping {});
+        eg.add_primitive(ApplyMapping {});
     }
 
     fn reconstruct_termdag(
@@ -191,5 +197,190 @@ mod tests {
                 ),
             )
             .unwrap();
+    }
+}
+
+#[derive(Clone, Debug)]
+struct Shape {}
+
+/// Computes the "shape" of children renaming maps.
+/// The shape is a renaming of a map so that the values start from zero and increase by one when a new unique value is seen.
+/// This first input says "pass b to the first eclass and pass a to the second eclass"
+/// Example input 1: (vec![b], vec![a])
+/// Output: vec![0, 1]
+/// The second input says "pass y to the first eclass and z to the second eclass"
+/// Example input 2: (vec![y], vec![z])
+/// Output: vec![0, 1]
+/// The shapes are the same.
+///
+/// Another example:
+/// Input 1: (vec![b, a, b], vec![a, a])
+/// Output: vec![0, 1, 0, 1, 1]
+/// Input 2: (vec![y, z, y], vec![z, z])
+/// Output: vec![0, 1, 0, 1, 1]
+impl Primitive for Shape {
+    fn name(&self) -> &str {
+        "shape"
+    }
+
+    fn get_type_constraints(&self, span: &Span) -> Box<dyn crate::constraint::TypeConstraint> {
+        // must be vecs of integer sort
+        Box::new(AllEqualTypeConstraint::new("shape", span.clone()))
+    }
+
+    fn apply(&self, exec_state: &mut ExecutionState<'_>, args: &[Value]) -> Option<Value> {
+        let mut maps = vec![];
+        for arg in args {
+            let m = exec_state
+                .container_values()
+                .get_val::<VecContainer>(*arg)
+                .unwrap();
+            maps.push(m);
+        }
+        let mut counter = 0;
+        let mut mapping = HashMap::default();
+        let mut shape = vec![];
+        for m1 in maps.iter() {
+            for i in 0..m1.data.len() {
+                let v = m1.data.get(i).unwrap();
+                let mapped = if mapping.contains_key(v) {
+                    *mapping.get(v).unwrap()
+                } else {
+                    let new_val = exec_state.base_values().get::<i64>(counter);
+                    counter += 1;
+                    mapping.insert(*v, new_val);
+                    new_val
+                };
+                shape.push(mapped);
+            }
+        }
+
+        let result = VecContainer {
+            do_rebuild: false,
+            data: shape,
+        };
+        Some(
+            exec_state
+                .container_values()
+                .register_val(result, exec_state),
+        )
+    }
+}
+
+#[derive(Clone, Debug)]
+struct FindMapping {}
+
+/// Finds a mapping to rename from one renaming map to another.
+/// The two maps must have the same shape (see the `shape` primitive).
+/// The output is a mapping that when applied to the second input produces the first input.
+///
+/// Input 1: (vec![0, 1, 0], vec![1, 2]) (vec![1, 2, 1], vec![2, 0])
+/// Output: vec![2, 0, 2] // zero goes to 2, one goes to 0, two goes to 1
+impl Primitive for FindMapping {
+    fn name(&self) -> &str {
+        "find-mapping"
+    }
+
+    fn get_type_constraints(&self, span: &Span) -> Box<dyn crate::constraint::TypeConstraint> {
+        // must be vecs of integer sort
+        Box::new(AllEqualTypeConstraint::new("shape", span.clone()))
+    }
+
+    fn apply(&self, exec_state: &mut ExecutionState<'_>, args: &[Value]) -> Option<Value> {
+        let first_half = args[0..args.len() / 2].to_vec();
+        let second_half = args[args.len() / 2..].to_vec();
+
+        let mut mapping = HashMap::default();
+        let mut min = i64::MAX;
+        let mut max = i64::MIN;
+        for (m1, m2) in first_half.iter().zip(second_half.iter()) {
+            let vec1 = exec_state
+                .container_values()
+                .get_val::<VecContainer>(*m1)
+                .unwrap();
+            let vec2 = exec_state
+                .container_values()
+                .get_val::<VecContainer>(*m2)
+                .unwrap();
+
+            for (e1, e2) in vec1.data.iter().zip(vec2.data.iter()) {
+                let e1 = exec_state.base_values().unwrap::<i64>(*e1);
+                let e2 = exec_state.base_values().unwrap::<i64>(*e2);
+                mapping.insert(e2, e1);
+                if e2 < min {
+                    min = e2;
+                }
+                if e2 > max {
+                    max = e2;
+                }
+            }
+        }
+
+        assert_eq!(min, 0);
+
+        let mut result_vec = vec![0; (max + 1) as usize];
+        for (k, v) in mapping.iter() {
+            result_vec[*k as usize] = *v;
+        }
+        let result = VecContainer {
+            do_rebuild: false,
+            data: result_vec
+                .iter()
+                .map(|i| exec_state.base_values().get::<i64>(*i))
+                .collect(),
+        };
+        Some(
+            exec_state
+                .container_values()
+                .register_val(result, exec_state),
+        )
+    }
+}
+
+#[derive(Clone, Debug)]
+struct ApplyMapping {}
+
+/// Applies a renaming mapping to a renaming map.
+/// The first input is the renaming map to apply to.
+/// The second input is the mapping to apply.
+/// The output is the renamed renaming map.
+impl Primitive for ApplyMapping {
+    fn name(&self) -> &str {
+        "apply-mapping"
+    }
+
+    fn get_type_constraints(&self, span: &Span) -> Box<dyn crate::constraint::TypeConstraint> {
+        // must be vecs of integer sort
+        Box::new(AllEqualTypeConstraint::new("apply-mapping", span.clone()))
+    }
+
+    fn apply(&self, exec_state: &mut ExecutionState<'_>, args: &[Value]) -> Option<Value> {
+        let map = exec_state
+            .container_values()
+            .get_val::<VecContainer>(args[0])
+            .unwrap();
+        let mapping = exec_state
+            .container_values()
+            .get_val::<VecContainer>(args[1])
+            .unwrap();
+
+        let mut result_vec = vec![];
+        for v in map.data.iter() {
+            let v = exec_state.base_values().unwrap::<i64>(*v);
+            let mapped_v = exec_state
+                .base_values()
+                .unwrap::<i64>(mapping.data[v as usize]);
+            result_vec.push(exec_state.base_values().get::<i64>(mapped_v));
+        }
+
+        let result = VecContainer {
+            do_rebuild: false,
+            data: result_vec,
+        };
+        Some(
+            exec_state
+                .container_values()
+                .register_val(result, exec_state),
+        )
     }
 }

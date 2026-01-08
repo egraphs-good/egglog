@@ -152,6 +152,7 @@ impl ContainerSort for MapSort {
     fn register_primitives(&self, eg: &mut EGraph) {
         let arc = self.clone().to_arcsort();
 
+        // Takes two name maps that map child keys to input names and canonicalizes them, producing a "shape"
         add_primitive!(eg, "map-empty" = {self.clone(): MapSort} || -> @MapContainer (arc) { MapContainer {
             do_rebuild_keys: self.ctx.key.is_eq_sort(),
             do_rebuild_vals: self.ctx.value.is_eq_sort(),
@@ -165,6 +166,18 @@ impl ContainerSort for MapSort {
         add_primitive!(eg, "map-length"       = |xs: @MapContainer (arc)| -> i64 { xs.data.len() as i64 });
         add_primitive!(eg, "map-contains"     = |xs: @MapContainer (arc), x: # (self.key())| -?> () { ( xs.data.contains_key(&x)).then_some(()) });
         add_primitive!(eg, "map-not-contains" = |xs: @MapContainer (arc), x: # (self.key())| -?> () { (!xs.data.contains_key(&x)).then_some(()) });
+
+        add_primitive!(eg, "map-inverse" = |xs: @MapContainer (arc)| -> @MapContainer (arc) {{
+            let mut new_map = BTreeMap::new();
+            for (k, v) in xs.data.iter() {
+                new_map.insert(*v, *k);
+            }
+            MapContainer {
+                do_rebuild_keys: xs.do_rebuild_vals,
+                do_rebuild_vals: xs.do_rebuild_keys,
+                data: new_map
+            }
+        }});
     }
 
     fn reconstruct_termdag(

@@ -1,0 +1,35 @@
+
+(sort NameMap (Vec i64))
+
+
+(sort Expr)
+
+(constructor Var () Expr)
+
+;; String, Child Term, Child Subst relative to eclass inputs
+;; the inputs for an eclass are named (0, 1, 2, 3, ...)
+(constructor App1 (String Expr NameMap) Expr)
+(constructor App2 (String Expr NameMap Expr NameMap) Expr)
+
+
+(relation EqualWithRename (Expr Expr NameMap))
+
+;; Example: deduplicating add exprs based on shape
+(App2 "add" (Var) (vec-of 0)
+            (Var) (vec-of 1))
+
+
+(App2 "add" (Var) (vec-of 1)
+            (Var) (vec-of 0))
+
+
+(sort Fresh)
+(constructor Wrapper (NameMap) Fresh)
+(extract (Wrapper (shape (vec-of 0) (vec-of 1))))
+(extract (Wrapper (shape (vec-of 1) (vec-of 0))))
+
+(let mapping (find-mapping (vec-of 0) (vec-of 1) (vec-of 1) (vec-of 0)))
+(extract (Wrapper mapping))
+
+(extract (apply-mapping (vec-of 0) mapping))
+
