@@ -19,7 +19,7 @@ use num_rational::Rational64;
 
 use crate::{
     ColumnTy, DefaultVal, EGraph, FunctionConfig, FunctionId, MergeFn, ProofStore, QueryEntry,
-    add_expressions, define_rule,
+    Result, UfFunctionConfig, UnionAction, add_expressions, define_rule,
 };
 
 /// Run a simple associativity/commutativity test. In addition to testing that the rules properly
@@ -29,7 +29,7 @@ use crate::{
 /// The `can_subsume` argument is only used to enable subsumption on the underlying tables created
 /// during this test, and exercise the different column handling caused by enabling subsumption.
 /// Subsumption itself is not used.
-fn ac_test(tracing: bool, can_subsume: bool) {
+fn ac_test(tracing: bool, can_subsume: bool) -> Result<()> {
     const N: usize = 5;
     let mut egraph = if tracing {
         EGraph::with_tracing()
@@ -43,14 +43,14 @@ fn ac_test(tracing: bool, can_subsume: bool) {
         merge: MergeFn::UnionId,
         name: "num".into(),
         can_subsume,
-    });
+    })?;
     let add_table = egraph.add_table(FunctionConfig {
         schema: vec![ColumnTy::Id; 3],
         default: DefaultVal::FreshId,
         merge: MergeFn::UnionId,
         name: "add".into(),
         can_subsume,
-    });
+    })?;
 
     let add_comm = define_rule! {
         [egraph] ((-> (add_table x y) id))
@@ -115,30 +115,180 @@ fn ac_test(tracing: bool, can_subsume: bool) {
         //     .print_eq_proof(_eq_explanation, &mut std::io::stderr())
         //     .unwrap();
     }
+    Ok(())
 }
 
 #[test]
-fn ac_tracing_subsume() {
-    ac_test(true, true);
+fn uf_function_callback_inserts() -> Result<()> {
+    let mut egraph = EGraph::default();
+    let log_table = egraph.add_table(FunctionConfig {
+        schema: vec![ColumnTy::Id, ColumnTy::Id],
+        default: DefaultVal::Fail,
+        merge: MergeFn::AssertEq,
+        name: "log".into(),
+        can_subsume: false,
+    })?;
+    let log_table_id = egraph.funcs[log_table].table;
+    let (uf_func, _uf_canon) = egraph.add_uf_function(UfFunctionConfig {
+        name: "uf_cb".into(),
+        on_leader_change: Some(Box::new(move |state, change| {
+            state.stage_insert(
+                log_table_id,
+                &[change.write_lhs, change.new_leader(), change.ts],
+            );
+        })),
+        read_deps: Vec::new(),
+        write_deps: vec![log_table_id],
+    })?;
+
+    let lhs = Value::from_usize(5);
+    let rhs = Value::from_usize(3);
+    egraph.add_values([(uf_func, vec![lhs, rhs])]);
+
+    let leader = egraph.lookup_id(uf_func, &[lhs]).unwrap();
+    assert_eq!(leader, rhs);
+
+    let mut rows = Vec::new();
+    egraph.for_each(log_table, |row| rows.push(row.vals.to_vec()));
+    assert_eq!(rows, vec![vec![lhs, rhs]]);
+    Ok(())
 }
 
 #[test]
-fn ac_tracing() {
-    ac_test(true, false);
+fn uf_function_rebuilds_from_global_uf() -> Result<()> {
+    let mut egraph = EGraph::default();
+    let (uf_func, _uf_canon) = egraph.add_uf_function(UfFunctionConfig {
+        name: "uf_rebuild".into(),
+        on_leader_change: None,
+        read_deps: Vec::new(),
+        write_deps: Vec::new(),
+    })?;
+    let union = UnionAction::new(&egraph);
+    let lhs = Value::from_usize(10);
+    let rhs = Value::from_usize(3);
+    egraph.with_execution_state(|state| {
+        union.union(state, lhs, rhs);
+    });
+    egraph.flush_updates();
+
+    let canon_lhs = egraph.get_canon_in_uf(lhs);
+    let key = if canon_lhs != lhs { lhs } else { rhs };
+    let expected = egraph.get_canon_in_uf(key);
+    let leader = egraph.lookup_id(uf_func, &[key]).unwrap();
+    assert_eq!(leader, expected);
+    Ok(())
 }
 
 #[test]
-fn ac() {
-    ac_test(false, false);
+fn uf_function_canon_prim_query() -> Result<()> {
+    let mut egraph = EGraph::default();
+    let (uf_func, uf_canon) = egraph.add_uf_function(UfFunctionConfig {
+        name: "uf_canon".into(),
+        on_leader_change: None,
+        read_deps: Vec::new(),
+        write_deps: Vec::new(),
+    })?;
+    let input_table = egraph.add_table(FunctionConfig {
+        schema: vec![ColumnTy::Id, ColumnTy::Id],
+        default: DefaultVal::Fail,
+        merge: MergeFn::AssertEq,
+        name: "input".into(),
+        can_subsume: false,
+    })?;
+    let log_table = egraph.add_table(FunctionConfig {
+        schema: vec![ColumnTy::Id, ColumnTy::Id],
+        default: DefaultVal::Fail,
+        merge: MergeFn::AssertEq,
+        name: "log".into(),
+        can_subsume: false,
+    })?;
+
+    let canon_rule = {
+        let mut rb = egraph.new_rule("uf canon prim", true);
+        let input: QueryEntry = rb.new_var(ColumnTy::Id).into();
+        let input_val: QueryEntry = rb.new_var(ColumnTy::Id).into();
+        let canon: QueryEntry = rb.new_var(ColumnTy::Id).into();
+        rb.query_table(input_table, &[input.clone(), input_val], Some(false))?;
+        rb.query_prim(uf_canon, &[input.clone(), canon.clone()], ColumnTy::Id)?;
+        rb.set(log_table, &[input, canon]);
+        rb.build()
+    };
+
+    let lhs = Value::from_usize(10);
+    let rhs = Value::from_usize(3);
+    let untouched = Value::from_usize(77);
+    egraph.add_values(vec![
+        (uf_func, vec![lhs, rhs]),
+        (input_table, vec![lhs, lhs]),
+        (input_table, vec![rhs, rhs]),
+        (input_table, vec![untouched, untouched]),
+    ]);
+    egraph.run_rules(&[canon_rule])?;
+
+    let mut rows = Vec::new();
+    egraph.for_each(log_table, |row| rows.push(row.vals.to_vec()));
+    assert_unordered_eq(
+        rows,
+        vec![vec![lhs, rhs], vec![rhs, rhs], vec![untouched, untouched]],
+    );
+    Ok(())
 }
 
 #[test]
-fn ac_subsume() {
-    ac_test(false, true);
+fn uf_function_disallowed_in_merge() -> Result<()> {
+    let mut egraph = EGraph::default();
+    let (uf_func, _uf_canon) = egraph.add_uf_function(UfFunctionConfig {
+        name: "uf_func".into(),
+        on_leader_change: None,
+        read_deps: Vec::new(),
+        write_deps: Vec::new(),
+    })?;
+    let result = egraph.add_table(FunctionConfig {
+        schema: vec![ColumnTy::Id, ColumnTy::Id],
+        default: DefaultVal::Fail,
+        merge: MergeFn::Function(uf_func, vec![MergeFn::New]),
+        name: "bad_merge".into(),
+        can_subsume: false,
+    });
+    assert!(result.is_err());
+    Ok(())
 }
 
 #[test]
-fn ac_fail() {
+fn uf_function_disallowed_with_tracing() -> Result<()> {
+    let mut egraph = EGraph::with_tracing();
+    let result = egraph.add_uf_function(UfFunctionConfig {
+        name: "uf_tracing".into(),
+        on_leader_change: None,
+        read_deps: Vec::new(),
+        write_deps: Vec::new(),
+    });
+    assert!(result.is_err());
+    Ok(())
+}
+
+#[test]
+fn ac_tracing_subsume() -> Result<()> {
+    ac_test(true, true)
+}
+
+#[test]
+fn ac_tracing() -> Result<()> {
+    ac_test(true, false)
+}
+
+#[test]
+fn ac() -> Result<()> {
+    ac_test(false, false)
+}
+
+#[test]
+fn ac_subsume() -> Result<()> {
+    ac_test(false, true)
+}
+
+#[test]
+fn ac_fail() -> Result<()> {
     const N: usize = 5;
     let mut egraph = EGraph::default();
     egraph.base_values_mut().register_type::<i64>();
@@ -150,14 +300,14 @@ fn ac_fail() {
         merge: MergeFn::UnionId,
         name: "num".into(),
         can_subsume: false,
-    });
+    })?;
     let add_table = egraph.add_table(FunctionConfig {
         schema: vec![ColumnTy::Id; 3],
         default: DefaultVal::FreshId,
         merge: MergeFn::UnionId,
         name: "add".into(),
         can_subsume: false,
-    });
+    })?;
 
     let add_comm = define_rule! {
         [egraph] ((-> (add_table x y) id) (-> (num_table {one}) x))
@@ -212,28 +362,35 @@ fn ac_fail() {
     let canon_left = egraph.get_canon_in_uf(left_root);
     let canon_right = egraph.get_canon_in_uf(right_root);
     assert_ne!(canon_left, canon_right);
+    Ok(())
 }
 
 #[test]
-fn math() {
+fn math() -> Result<()> {
     let handles =
         Vec::from_iter((0..2).map(|_| thread::spawn(|| math_test(EGraph::default(), false))));
-    handles.into_iter().for_each(|h| h.join().unwrap());
+    for handle in handles {
+        handle.join().unwrap()?;
+    }
+    Ok(())
 }
 
 #[test]
-fn math_subsume() {
+fn math_subsume() -> Result<()> {
     let handles =
         Vec::from_iter((0..2).map(|_| thread::spawn(|| math_test(EGraph::default(), true))));
-    handles.into_iter().for_each(|h| h.join().unwrap());
+    for handle in handles {
+        handle.join().unwrap()?;
+    }
+    Ok(())
 }
 
 #[test]
-fn math_tracing() {
+fn math_tracing() -> Result<()> {
     math_test(EGraph::with_tracing(), false)
 }
 #[test]
-fn math_tracing_subsume() {
+fn math_tracing_subsume() -> Result<()> {
     math_test(EGraph::with_tracing(), true)
 }
 
@@ -244,7 +401,7 @@ fn math_tracing_subsume() {
 /// As in `ac_test` the `can_subsume` argument is only used to enable subsumption on the underlying
 /// tables created during this test, and exercise the different column handling caused by enabling
 /// subsumption. Subsumption itself is not used.
-fn math_test(mut egraph: EGraph, can_subsume: bool) {
+fn math_test(mut egraph: EGraph, can_subsume: bool) -> Result<()> {
     const N: usize = 8;
     let rational_ty = egraph.base_values_mut().register_type::<Rational64>();
     let string_ty = egraph.base_values_mut().register_type::<&'static str>();
@@ -255,49 +412,49 @@ fn math_test(mut egraph: EGraph, can_subsume: bool) {
         merge: MergeFn::UnionId,
         name: "diff".into(),
         can_subsume,
-    });
+    })?;
     let integral = egraph.add_table(FunctionConfig {
         schema: vec![ColumnTy::Id, ColumnTy::Id, ColumnTy::Id],
         default: DefaultVal::FreshId,
         merge: MergeFn::UnionId,
         name: "integral".into(),
         can_subsume,
-    });
+    })?;
     let add = egraph.add_table(FunctionConfig {
         schema: vec![ColumnTy::Id, ColumnTy::Id, ColumnTy::Id],
         default: DefaultVal::FreshId,
         merge: MergeFn::UnionId,
         name: "add".into(),
         can_subsume,
-    });
+    })?;
     let sub = egraph.add_table(FunctionConfig {
         schema: vec![ColumnTy::Id, ColumnTy::Id, ColumnTy::Id],
         default: DefaultVal::FreshId,
         merge: MergeFn::UnionId,
         name: "sub".into(),
         can_subsume,
-    });
+    })?;
     let mul = egraph.add_table(FunctionConfig {
         schema: vec![ColumnTy::Id, ColumnTy::Id, ColumnTy::Id],
         default: DefaultVal::FreshId,
         merge: MergeFn::UnionId,
         name: "mul".into(),
         can_subsume,
-    });
+    })?;
     let div = egraph.add_table(FunctionConfig {
         schema: vec![ColumnTy::Id, ColumnTy::Id, ColumnTy::Id],
         default: DefaultVal::FreshId,
         merge: MergeFn::UnionId,
         name: "div".into(),
         can_subsume,
-    });
+    })?;
     let pow = egraph.add_table(FunctionConfig {
         schema: vec![ColumnTy::Id, ColumnTy::Id, ColumnTy::Id],
         default: DefaultVal::FreshId,
         merge: MergeFn::UnionId,
         name: "pow".into(),
         can_subsume,
-    });
+    })?;
 
     let ln = egraph.add_table(FunctionConfig {
         schema: vec![ColumnTy::Id, ColumnTy::Id],
@@ -305,42 +462,42 @@ fn math_test(mut egraph: EGraph, can_subsume: bool) {
         merge: MergeFn::UnionId,
         name: "ln".into(),
         can_subsume,
-    });
+    })?;
     let sqrt = egraph.add_table(FunctionConfig {
         schema: vec![ColumnTy::Id, ColumnTy::Id],
         default: DefaultVal::FreshId,
         merge: MergeFn::UnionId,
         name: "sqrt".into(),
         can_subsume,
-    });
+    })?;
     let sin = egraph.add_table(FunctionConfig {
         schema: vec![ColumnTy::Id, ColumnTy::Id],
         default: DefaultVal::FreshId,
         merge: MergeFn::UnionId,
         name: "sin".into(),
         can_subsume,
-    });
+    })?;
     let cos = egraph.add_table(FunctionConfig {
         schema: vec![ColumnTy::Id, ColumnTy::Id],
         default: DefaultVal::FreshId,
         merge: MergeFn::UnionId,
         name: "cos".into(),
         can_subsume,
-    });
+    })?;
     let rat = egraph.add_table(FunctionConfig {
         schema: vec![ColumnTy::Base(rational_ty), ColumnTy::Id],
         default: DefaultVal::FreshId,
         merge: MergeFn::UnionId,
         name: "rat".into(),
         can_subsume,
-    });
+    })?;
     let var = egraph.add_table(FunctionConfig {
         schema: vec![ColumnTy::Base(string_ty), ColumnTy::Id],
         default: DefaultVal::FreshId,
         merge: MergeFn::UnionId,
         name: "var".into(),
         can_subsume,
-    });
+    })?;
 
     let zero = egraph.base_value_constant(Rational64::new(0, 1));
     let one = egraph.base_value_constant(Rational64::new(1, 1));
@@ -504,6 +661,7 @@ fn math_test(mut egraph: EGraph, can_subsume: bool) {
         let mut proof_store = ProofStore::default();
         let _explain = egraph.explain_term(term_id, &mut proof_store).unwrap();
     }
+    Ok(())
 }
 
 #[derive(Clone, Debug, Hash, Eq, PartialEq)]
@@ -565,7 +723,7 @@ fn assert_unordered_eq<T: Ord + std::fmt::Debug>(mut a: Vec<T>, mut b: Vec<T>) {
     assert_eq!(a, b);
 }
 
-fn container_test() {
+fn container_test() -> Result<()> {
     // Test for containers:
     // * Basic math setup: (num i64), (add math math), (Vec (vec math))
     // * start with:
@@ -599,21 +757,21 @@ fn container_test() {
         merge: MergeFn::UnionId,
         name: "num".into(),
         can_subsume: false,
-    });
+    })?;
     let add_table = egraph.add_table(FunctionConfig {
         schema: vec![ColumnTy::Id; 3],
         default: DefaultVal::FreshId,
         merge: MergeFn::UnionId,
         name: "add".into(),
         can_subsume: false,
-    });
+    })?;
     let vec_table = egraph.add_table(FunctionConfig {
         schema: vec![ColumnTy::Id; 2],
         default: DefaultVal::FreshId,
         merge: MergeFn::UnionId,
         name: "vec".into(),
         can_subsume: false,
-    });
+    })?;
     let int_add =
         egraph.register_external_func(Box::new(make_external_func(|exec_state, args| {
             let [x, y] = args else { panic!() };
@@ -764,18 +922,20 @@ fn container_test() {
             vec![one_id; 4],
         ],
     );
+    Ok(())
 }
 
 #[test]
-fn basic_container() {
+fn basic_container() -> Result<()> {
     // Run the test 8 times to get a decent sample of incremental/nonincremental, parallel/serial.
     for _ in 0..8 {
-        container_test()
+        container_test()?;
     }
+    Ok(())
 }
 
 #[test]
-fn rhs_only_rule() {
+fn rhs_only_rule() -> Result<()> {
     let mut egraph = EGraph::default();
     let int_base = egraph.base_values_mut().register_type::<i64>();
     let zero = egraph.base_values_mut().get(0i64);
@@ -786,7 +946,7 @@ fn rhs_only_rule() {
         merge: MergeFn::UnionId,
         name: "num".into(),
         can_subsume: false,
-    });
+    })?;
     let add_data = {
         let zero = egraph.base_value_constant(0i64);
         let one = egraph.base_value_constant(1i64);
@@ -810,10 +970,11 @@ fn rhs_only_rule() {
         contents,
         vec![vec![zero, Value::new(0)], vec![one, Value::new(1)]]
     );
+    Ok(())
 }
 
 #[test]
-fn rhs_only_rule_only_runs_once() {
+fn rhs_only_rule_only_runs_once() -> Result<()> {
     let mut egraph = EGraph::default();
     let counter = Arc::new(AtomicUsize::new(0));
     let inner = counter.clone();
@@ -832,10 +993,11 @@ fn rhs_only_rule_only_runs_once() {
     assert_eq!(counter.load(Ordering::SeqCst), 1);
     assert!(!egraph.run_rules(&[inc_counter_rule]).unwrap().changed());
     assert_eq!(counter.load(Ordering::SeqCst), 1);
+    Ok(())
 }
 
 #[test]
-fn mergefn_arithmetic() {
+fn mergefn_arithmetic() -> Result<()> {
     let mut egraph = EGraph::default();
     let int_base = egraph.base_values_mut().register_type::<i64>();
 
@@ -880,7 +1042,7 @@ fn mergefn_arithmetic() {
         ),
         name: "f".into(),
         can_subsume: false,
-    });
+    })?;
 
     let value_0 = egraph.base_value_constant(0i64);
     let value_1 = egraph.base_value_constant(1i64);
@@ -956,10 +1118,11 @@ fn mergefn_arithmetic() {
     });
     contents.sort();
     assert_eq!(contents, vec![(1, 4), (2, 29)]);
+    Ok(())
 }
 
 #[test]
-fn mergefn_nested_function() {
+fn mergefn_nested_function() -> Result<()> {
     let mut egraph = EGraph::default();
     let int_base = egraph.base_values_mut().register_type::<i64>();
 
@@ -970,7 +1133,7 @@ fn mergefn_nested_function() {
         merge: MergeFn::UnionId,
         name: "g".into(),
         can_subsume: true,
-    });
+    })?;
 
     // Create a function f whose merge function is (g (g new new) (g old old))
     // This uses nested MergeFn::Function to build the complex merge function
@@ -986,7 +1149,7 @@ fn mergefn_nested_function() {
         ),
         name: "f".into(),
         can_subsume: true,
-    });
+    })?;
 
     let value_1 = egraph.base_value_constant(1i64);
     let value_2 = egraph.base_value_constant(2i64);
@@ -1077,10 +1240,11 @@ fn mergefn_nested_function() {
     assert_eq!(base_l1, base_2);
     assert_eq!(base_r1, base_r2);
     assert_eq!(base_r1, base_1);
+    Ok(())
 }
 
 #[test]
-fn constrain_prims_simple() {
+fn constrain_prims_simple() -> Result<()> {
     // Take two functions, f and g. Fill f with (f 1) (f 2) (f 3), then filter for even numbers
     // when adding to 'g'. This should only add 2 to g.
     let mut egraph = EGraph::default();
@@ -1092,14 +1256,14 @@ fn constrain_prims_simple() {
         merge: MergeFn::UnionId,
         name: "f".into(),
         can_subsume: false,
-    });
+    })?;
     let g_table = egraph.add_table(FunctionConfig {
         schema: vec![ColumnTy::Base(int_base), ColumnTy::Id],
         default: DefaultVal::FreshId,
         merge: MergeFn::UnionId,
         name: "g".into(),
         can_subsume: false,
-    });
+    })?;
 
     let is_even = egraph.register_external_func(Box::new(core_relations::make_external_func(
         |state, vals| -> Option<Value> {
@@ -1160,11 +1324,12 @@ fn constrain_prims_simple() {
     egraph.run_rules(&[copy_to_g]).unwrap();
     let g = get_entries(&egraph, g_table);
     assert_eq!(g.len(), 1);
-    assert_eq!(g[0], f[1])
+    assert_eq!(g[0], f[1]);
+    Ok(())
 }
 
 #[test]
-fn constrain_prims_abstract() {
+fn constrain_prims_abstract() -> Result<()> {
     // Take two functions, f and g. Fill f with (f -1) (f 0) (f 1), then filter for numbers where
     // (neg x) = (abs x) when adding to 'g'. This adds only -1 and 0 to g
     let mut egraph = EGraph::default();
@@ -1175,14 +1340,14 @@ fn constrain_prims_abstract() {
         merge: MergeFn::UnionId,
         name: "f".into(),
         can_subsume: false,
-    });
+    })?;
     let g_table = egraph.add_table(FunctionConfig {
         schema: vec![ColumnTy::Base(int_base), ColumnTy::Id],
         default: DefaultVal::FreshId,
         merge: MergeFn::UnionId,
         name: "g".into(),
         can_subsume: false,
-    });
+    })?;
 
     let neg = egraph.register_external_func(Box::new(core_relations::make_external_func(
         |state, vals| -> Option<Value> {
@@ -1257,11 +1422,12 @@ fn constrain_prims_abstract() {
     egraph.run_rules(&[copy_to_g]).unwrap();
     let g = get_entries(&egraph, g_table);
     assert_eq!(g.len(), 2);
-    assert_eq!(g, f[0..2])
+    assert_eq!(g, f[0..2]);
+    Ok(())
 }
 
 #[test]
-fn basic_subsumption() {
+fn basic_subsumption() -> Result<()> {
     // fill (f 1) (f 2). Subsume (f 3) (f 2). Copy (f to g). Should only see (g 1)
 
     let mut egraph = EGraph::default();
@@ -1272,14 +1438,14 @@ fn basic_subsumption() {
         merge: MergeFn::UnionId,
         name: "f".into(),
         can_subsume: true,
-    });
+    })?;
     let g_table = egraph.add_table(FunctionConfig {
         schema: vec![ColumnTy::Base(int_base), ColumnTy::Id],
         default: DefaultVal::FreshId,
         merge: MergeFn::UnionId,
         name: "g".into(),
         can_subsume: false,
-    });
+    })?;
 
     let value_1 = egraph.base_value_constant(1i64);
     let value_2 = egraph.base_value_constant(2i64);
@@ -1339,11 +1505,12 @@ fn basic_subsumption() {
     egraph.run_rules(&[copy_to_g]).unwrap();
     let g = get_entries(&egraph, g_table);
     assert_eq!((g.0.len(), g.1), (1, 0));
-    assert_eq!(g.0[0], f.0[0])
+    assert_eq!(g.0[0], f.0[0]);
+    Ok(())
 }
 
 #[test]
-fn lookup_failure_panics() {
+fn lookup_failure_panics() -> Result<()> {
     let mut egraph = EGraph::default();
     let f = egraph.add_table(FunctionConfig {
         schema: vec![ColumnTy::Id, ColumnTy::Id],
@@ -1351,7 +1518,7 @@ fn lookup_failure_panics() {
         merge: MergeFn::UnionId,
         name: "test".into(),
         can_subsume: false,
-    });
+    })?;
 
     let to_entry = |val: u32| QueryEntry::Const {
         val: Value::new(val),
@@ -1382,10 +1549,11 @@ fn lookup_failure_panics() {
         rb.build()
     };
     egraph.run_rules(&[lookup_failure]).err().unwrap();
+    Ok(())
 }
 
 #[test]
-fn primitive_failure_panics() {
+fn primitive_failure_panics() -> Result<()> {
     let mut egraph = EGraph::default();
     let _int_base = egraph.base_values_mut().register_type::<i64>();
     let unit_base = egraph.base_values_mut().register_type::<()>();
@@ -1425,10 +1593,11 @@ fn primitive_failure_panics() {
     };
 
     egraph.run_rules(&[assert_odd_rule]).err().unwrap();
+    Ok(())
 }
 
 #[test]
-fn test_simple_rule_proof_format() {
+fn test_simple_rule_proof_format() -> Result<()> {
     use crate::proof_format::*;
     // Setup EGraph with tracing
     let mut egraph = EGraph::with_tracing();
@@ -1443,7 +1612,7 @@ fn test_simple_rule_proof_format() {
         merge: MergeFn::UnionId,
         name: "bool".into(),
         can_subsume: false,
-    });
+    })?;
     // Add table for not function
     let not_table = egraph.add_table(FunctionConfig {
         schema: vec![ColumnTy::Id, ColumnTy::Id],
@@ -1451,7 +1620,7 @@ fn test_simple_rule_proof_format() {
         merge: MergeFn::UnionId,
         name: "not".into(),
         can_subsume: false,
-    });
+    })?;
     // Add true/false wrapped terms
     let true_id = egraph.add_term(bool_table, &[true_val], "true");
     let false_id = egraph.add_term(bool_table, &[false_val], "false");
@@ -1473,6 +1642,7 @@ fn test_simple_rule_proof_format() {
     egraph
         .explain_terms_equal(not_true_id, false_id, &mut proof_store)
         .unwrap();
+    Ok(())
 }
 
 const _: () = {

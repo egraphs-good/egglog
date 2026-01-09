@@ -1,26 +1,38 @@
 use std::mem;
 
-use egglog_bridge::{ColumnTy, DefaultVal, EGraph, FunctionConfig, MergeFn, define_rule};
+use egglog_bridge::{
+    ColumnTy, DefaultVal, EGraph, FunctionConfig, FunctionId, MergeFn, define_rule,
+};
+
+fn add_table(egraph: &mut EGraph, config: FunctionConfig) -> FunctionId {
+    egraph.add_table(config).unwrap()
+}
 
 fn main() {
     const N: usize = 12;
     env_logger::init();
     let mut egraph = EGraph::with_tracing();
     let int_base = egraph.base_values_mut().register_type::<i64>();
-    let num_table = egraph.add_table(FunctionConfig {
-        schema: vec![ColumnTy::Base(int_base), ColumnTy::Id],
-        default: DefaultVal::FreshId,
-        merge: MergeFn::UnionId,
-        name: "num".into(),
-        can_subsume: false,
-    });
-    let add_table = egraph.add_table(FunctionConfig {
-        schema: vec![ColumnTy::Id; 3],
-        default: DefaultVal::FreshId,
-        merge: MergeFn::UnionId,
-        name: "add".into(),
-        can_subsume: false,
-    });
+    let num_table = add_table(
+        &mut egraph,
+        FunctionConfig {
+            schema: vec![ColumnTy::Base(int_base), ColumnTy::Id],
+            default: DefaultVal::FreshId,
+            merge: MergeFn::UnionId,
+            name: "num".into(),
+            can_subsume: false,
+        },
+    );
+    let add_table = add_table(
+        &mut egraph,
+        FunctionConfig {
+            schema: vec![ColumnTy::Id; 3],
+            default: DefaultVal::FreshId,
+            merge: MergeFn::UnionId,
+            name: "add".into(),
+            can_subsume: false,
+        },
+    );
 
     let add_comm = define_rule! {
         [egraph] ((-> (add_table x y) id))

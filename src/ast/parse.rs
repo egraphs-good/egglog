@@ -1,5 +1,6 @@
 //! Parse a string into egglog.
 
+use super::FunctionImpl;
 use crate::util::INTERNAL_SYMBOL_PREFIX;
 use crate::*;
 use egglog_ast::generic_ast::*;
@@ -285,26 +286,119 @@ impl Parser {
                 datatypes: map_fallible(tail, self, Self::rec_datatype)?,
             }],
             "function" => match tail {
-                [name, inputs, output, rest @ ..] => vec![Command::Function {
-                    name: name.expect_atom("function name")?,
-                    schema: self.parse_schema(inputs, output)?,
-                    merge: match self.parse_options(rest)?.as_slice() {
-                        [(":no-merge", [])] => None,
-                        [(":merge", [e])] => Some(self.parse_expr(e)?),
-                        [] => {
-                            return error!(
-                                span,
-                                "functions are required to specify merge behaviour"
-                            );
+                [name, inputs, output, rest @ ..] => {
+                    let mut merge = None;
+                    let mut merge_specified = false;
+                    let mut onchange = None;
+                    let mut canon_prim = None;
+                    let mut impl_kind = FunctionImpl::Default;
+
+                    for (opt, args) in self.parse_options(rest)? {
+                        match opt {
+                            ":merge" => {
+                                if merge_specified {
+                                    return error!(span, "merge option specified more than once");
+                                }
+                                let [expr] = args else {
+                                    return error!(span, "usage: :merge <expr>");
+                                };
+                                merge = Some(self.parse_expr(expr)?);
+                                merge_specified = true;
+                            }
+                            ":no-merge" => {
+                                if merge_specified {
+                                    return error!(span, "merge option specified more than once");
+                                }
+                                if !args.is_empty() {
+                                    return error!(span, "usage: :no-merge");
+                                }
+                                merge = None;
+                                merge_specified = true;
+                            }
+                            ":impl" => {
+                                if !matches!(impl_kind, FunctionImpl::Default) {
+                                    return error!(span, "impl option specified more than once");
+                                }
+                                let [impl_name] = args else {
+                                    return error!(span, "usage: :impl displaced-union-find");
+                                };
+                                let impl_name = impl_name.expect_atom("function implementation")?;
+                                if impl_name != "displaced-union-find" {
+                                    return error!(
+                                        span,
+                                        "unsupported function implementation {impl_name}"
+                                    );
+                                }
+                                impl_kind = FunctionImpl::DisplacedUnionFind {
+                                    onchange: None,
+                                    canon_prim: None,
+                                };
+                            }
+                            ":onchange" => {
+                                let [rel] = args else {
+                                    return error!(span, "usage: :onchange <relation>");
+                                };
+                                if onchange.is_some() {
+                                    return error!(span, ":onchange specified more than once");
+                                }
+                                onchange = Some(rel.expect_atom("onchange relation")?);
+                            }
+                            ":canon-prim" => {
+                                let [prim] = args else {
+                                    return error!(span, "usage: :canon-prim <primitive>");
+                                };
+                                if canon_prim.is_some() {
+                                    return error!(span, ":canon-prim specified more than once");
+                                }
+                                canon_prim = Some(prim.expect_atom("canon-prim name")?);
+                            }
+                            _ => return error!(span, "could not parse function options"),
                         }
-                        _ => return error!(span, "could not parse function options"),
-                    },
-                    span,
-                }],
+                    }
+
+                    let impl_kind = match impl_kind {
+                        FunctionImpl::Default => {
+                            if onchange.is_some() || canon_prim.is_some() {
+                                return error!(
+                                    span,
+                                    ":onchange and :canon-prim require :impl displaced-union-find"
+                                );
+                            }
+                            if !merge_specified {
+                                return error!(
+                                    span,
+                                    "functions are required to specify merge behaviour"
+                                );
+                            }
+                            FunctionImpl::Default
+                        }
+                        FunctionImpl::DisplacedUnionFind { .. } => {
+                            if merge_specified {
+                                return error!(
+                                    span,
+                                    "displaced-union-find functions cannot specify merge behaviour"
+                                );
+                            }
+                            FunctionImpl::DisplacedUnionFind {
+                                onchange,
+                                canon_prim,
+                            }
+                        }
+                    };
+
+                    vec![Command::Function {
+                        name: name.expect_atom("function name")?,
+                        schema: self.parse_schema(inputs, output)?,
+                        merge,
+                        impl_kind,
+                        span,
+                    }]
+                }
                 _ => {
                     let a = "(function <name> (<input sort>*) <output sort> :merge <expr>)";
                     let b = "(function <name> (<input sort>*) <output sort> :no-merge)";
-                    return error!(span, "usages:\n{a}\n{b}");
+                    let c = "(function <name> (<input sort>*) <output sort> :impl displaced-union-find (:onchange <relation>)? (:canon-prim <prim>)?)";
+                    return error!(span, "usages:\n{a}\n{b}\n{c}");
                 }
             },
             "constructor" => match tail {

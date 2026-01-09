@@ -102,6 +102,7 @@ impl GlobalRemover<'_> {
                     let func_decl = ResolvedFunctionDecl {
                         name: name.name,
                         subtype: FunctionSubtype::Custom,
+                        impl_kind: FunctionImpl::Default,
                         schema: Schema {
                             input: vec![],
                             output: ty.name().to_owned(),

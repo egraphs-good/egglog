@@ -118,6 +118,7 @@ where
                     schema: f.schema.clone(),
                     name: f.name.clone(),
                     merge: f.merge.clone(),
+                    impl_kind: f.impl_kind.clone(),
                 },
             },
             GenericNCommand::AddRuleset(span, name) => {
@@ -432,9 +433,8 @@ where
     /// a functional dependency (also called a primary key) on its inputs to one output.
     ///
     /// ```text
-    /// (function <name:Ident> <schema:Schema> <cost:Cost>
-    ///        (:on_merge <List<Action>>)?
-    ///        (:merge <Expr>)?)
+    /// (function <name:Ident> <schema:Schema>
+    ///        (:merge <Expr> | :no-merge | (:impl displaced-union-find (:onchange <relation>)? (:canon-prim <prim>)?)) )
     ///```
     /// A function can have a `cost` for extraction.
     ///
@@ -472,6 +472,7 @@ where
         name: String,
         schema: Schema,
         merge: Option<GenericExpr<Head, Leaf>>,
+        impl_kind: FunctionImpl,
     },
 
     /// Using the `ruleset` command, defines a new
@@ -729,13 +730,30 @@ where
                 name,
                 schema,
                 merge,
+                impl_kind,
             } => {
                 let name = sanitize_internal_name(name);
                 write!(f, "(function {name} {schema}")?;
-                if let Some(merge) = &merge {
-                    write!(f, " :merge {merge}")?;
-                } else {
-                    write!(f, " :no-merge")?;
+                match impl_kind {
+                    FunctionImpl::Default => {
+                        if let Some(merge) = &merge {
+                            write!(f, " :merge {merge}")?;
+                        } else {
+                            write!(f, " :no-merge")?;
+                        }
+                    }
+                    FunctionImpl::DisplacedUnionFind {
+                        onchange,
+                        canon_prim,
+                    } => {
+                        write!(f, " :impl displaced-union-find")?;
+                        if let Some(onchange) = onchange {
+                            write!(f, " :onchange {onchange}")?;
+                        }
+                        if let Some(canon_prim) = canon_prim {
+                            write!(f, " :canon-prim {canon_prim}")?;
+                        }
+                    }
                 }
                 write!(f, ")")
             }
@@ -941,6 +959,21 @@ impl Display for FunctionSubtype {
     }
 }
 
+#[derive(Clone, Debug, PartialEq, Eq, Hash)]
+pub enum FunctionImpl {
+    Default,
+    DisplacedUnionFind {
+        onchange: Option<String>,
+        canon_prim: Option<String>,
+    },
+}
+
+impl FunctionImpl {
+    pub fn is_uf(&self) -> bool {
+        matches!(self, FunctionImpl::DisplacedUnionFind { .. })
+    }
+}
+
 /// Represents the declaration of a function
 /// directly parsed from source syntax.
 #[derive(Clone, Debug, PartialEq, Eq, Hash)]
@@ -951,6 +984,7 @@ where
 {
     pub name: String,
     pub subtype: FunctionSubtype,
+    pub impl_kind: FunctionImpl,
     /// Untyped schema
     pub schema: Schema,
     /// Resolved schema after typechecking is stored here, otherwise "".
@@ -1012,10 +1046,12 @@ impl FunctionDecl {
         name: String,
         schema: Schema,
         merge: Option<GenericExpr<String, String>>,
+        impl_kind: FunctionImpl,
     ) -> Self {
         Self {
             name,
             subtype: FunctionSubtype::Custom,
+            impl_kind,
             schema,
             resolved_schema: String::new(),
             merge,
@@ -1037,6 +1073,7 @@ impl FunctionDecl {
         Self {
             name,
             subtype: FunctionSubtype::Constructor,
+            impl_kind: FunctionImpl::Default,
             resolved_schema: String::new(),
             schema,
             merge: None,
@@ -1052,6 +1089,7 @@ impl FunctionDecl {
         Self {
             name,
             subtype: FunctionSubtype::Relation,
+            impl_kind: FunctionImpl::Default,
             schema: Schema {
                 input,
                 output: String::from("Unit"),
@@ -1078,6 +1116,7 @@ where
         GenericFunctionDecl {
             name: self.name,
             subtype: self.subtype,
+            impl_kind: self.impl_kind,
             schema: self.schema,
             resolved_schema: self.resolved_schema,
             merge: self.merge.map(|expr| expr.visit_exprs(f)),
@@ -1315,11 +1354,13 @@ where
                 name,
                 schema,
                 merge,
+                impl_kind,
             } => GenericCommand::Function {
                 span,
                 name,
                 schema,
                 merge: merge.map(|expr| expr.make_unresolved()),
+                impl_kind,
             },
             GenericCommand::AddRuleset(span, name) => GenericCommand::AddRuleset(span, name),
             GenericCommand::UnstableCombinedRuleset(span, name, others) => {
