@@ -297,6 +297,39 @@ fn basic_parallel_vec_write() {
 }
 
 #[test]
+fn basic_parallel_vec_write_slice() {
+    const N_THREADS: usize = 10;
+    const PER_THREAD: usize = 10;
+    let finish = Arc::new(Notification::new());
+    let v = (0..100).collect::<Vec<usize>>();
+    let v = Arc::new(ParallelVecWriter::new(v));
+    let threads: Vec<_> = (0..N_THREADS)
+        .map(|i| {
+            let finish = finish.clone();
+            let v = v.clone();
+            thread::spawn(move || {
+                let items = (0..PER_THREAD)
+                    .map(|j| i * PER_THREAD + j + 100)
+                    .collect::<Vec<_>>();
+                let dst = v.write_slice(&items);
+                assert!(dst.is_multiple_of(PER_THREAD));
+                finish.wait();
+            })
+        })
+        .collect();
+    thread::sleep(Duration::from_millis(100));
+    for i in 0..100 {
+        v.with_index(i, |x| assert_eq!(*x, i));
+    }
+    v.with_slice(0..100, |x| assert_eq!(x, (0..100).collect::<Vec<usize>>()));
+    finish.notify();
+    threads.into_iter().for_each(|x| x.join().unwrap());
+    let mut v = Arc::try_unwrap(v).ok().unwrap().finish();
+    v.sort();
+    assert_eq!(v, (0..200).collect::<Vec<usize>>());
+}
+
+#[test]
 fn resettable_once_lock_basic() {
     let lock = ResettableOnceLock::new(0);
 
