@@ -13,6 +13,7 @@ use crossbeam::utils::CachePadded;
 use dashmap::mapref::one::RefMut;
 use egglog_reports::{ReportLevel, RuleReport, RuleSetReport};
 use smallvec::SmallVec;
+use smallvec::smallvec;
 use web_time::Instant;
 
 use crate::{
@@ -386,9 +387,8 @@ impl<'a> JoinState<'a> {
         plan: &Plan,
         atom: AtomId,
         binding_info: &mut BindingInfo,
-        cols: impl Iterator<Item = ColumnId>,
+        cols: &[ColumnId],
     ) -> Prober {
-        let cols = SmallVec::<[ColumnId; 4]>::from_iter(cols);
         let trie_node = binding_info.subsets.unwrap_val(atom);
         let subset = &trie_node.subset;
 
@@ -442,7 +442,7 @@ impl<'a> JoinState<'a> {
         atom: AtomId,
         col: ColumnId,
     ) -> Prober {
-        self.get_index(plan, atom, binding_info, iter::once(col))
+        self.get_index(plan, atom, binding_info, &[col])
     }
 
     /// Runs the free join plan, starting with the header.
@@ -762,7 +762,7 @@ impl<'a> JoinState<'a> {
                 if binding_info.has_empty_subset(cover_atom) {
                     return;
                 }
-                let proj = SmallVec::<[ColumnId; 4]>::from_iter(bind.iter().map(|(col, _)| *col));
+                let proj = &bind.cols;
                 let cover_node = binding_info.unwrap_val(cover_atom);
                 let cover_subset = cover_node.subset.as_ref();
                 let mut cur = Offset::new(0);
@@ -785,7 +785,7 @@ impl<'a> JoinState<'a> {
                             Subset::Dense(OffsetRange::new(row, row.inc())),
                         );
                         // bind the values
-                        for (i, (_, var)) in bind.iter().enumerate() {
+                        for (i, var) in bind.vars.iter().enumerate() {
                             updates.push_binding(*var, key[i]);
                         }
                         updates.finish_frame();
@@ -814,21 +814,11 @@ impl<'a> JoinState<'a> {
                 }
                 let index_probers = to_intersect
                     .iter()
-                    .enumerate()
-                    .map(|(i, (spec, _))| {
-                        (
-                            i,
-                            spec.to_index.atom,
-                            self.get_index(
-                                plan,
-                                spec.to_index.atom,
-                                binding_info,
-                                spec.to_index.vars.iter().copied(),
-                            ),
-                        )
+                    .map(|(spec, _)| {
+                        self.get_index(plan, spec.to_index.atom, binding_info, &spec.to_index.vars)
                     })
-                    .collect::<SmallVec<[(usize, AtomId, Prober); 4]>>();
-                let proj = SmallVec::<[ColumnId; 4]>::from_iter(bind.iter().map(|(col, _)| *col));
+                    .collect::<SmallVec<[Prober; 4]>>();
+                let proj = &bind.cols;
                 let cover_node = binding_info.unwrap_val(cover_atom);
                 let cover_subset = cover_node.subset.as_ref();
                 let mut cur = Offset::new(0);
@@ -851,13 +841,17 @@ impl<'a> JoinState<'a> {
                             Subset::Dense(OffsetRange::new(row, row.inc())),
                         );
                         // bind the values
-                        for (i, (_, var)) in bind.iter().enumerate() {
+                        for (i, var) in bind.vars.iter().enumerate() {
                             updates.push_binding(*var, key[i]);
                         }
                         // now probe each remaining indexes
-                        for (i, atom, prober) in &index_probers {
+                        for (i, (prober, atom)) in index_probers
+                            .iter()
+                            .zip(to_intersect.iter().map(|spec| spec.0.to_index.atom))
+                            .enumerate()
+                        {
                             // create a key: to_intersect indexes into the key from the cover
-                            let index_cols = &to_intersect[*i].1;
+                            let index_cols = &to_intersect[i].1;
                             let index_key = index_cols
                                 .iter()
                                 .map(|col| key[col.index()])
@@ -868,15 +862,15 @@ impl<'a> JoinState<'a> {
                                 continue 'mid;
                             };
                             // apply any constraints needed in this scan.
-                            let table_info = &self.db.tables[plan.atoms[*atom].table];
-                            let cs = &to_intersect[*i].0.constraints;
+                            let table_info = &self.db.tables[plan.atoms[atom].table];
+                            let cs = &to_intersect[i].0.constraints;
                             subset = refine_subset(subset, cs, &table_info.table.as_ref());
                             if subset.is_empty() {
                                 updates.rollback();
                                 // There are no possible values for this subset
                                 continue 'mid;
                             }
-                            updates.refine_atom(*atom, subset);
+                            updates.refine_atom(atom, subset);
                         }
                         updates.finish_frame();
                         if updates.frames() >= chunk_size {
@@ -896,7 +890,10 @@ impl<'a> JoinState<'a> {
                 drain_updates!(updates);
                 // Restore the subsets we swapped out.
                 binding_info.move_back_node(cover_atom, cover_node);
-                for (_, atom, prober) in index_probers {
+                for (prober, atom) in index_probers
+                    .into_iter()
+                    .zip(to_intersect.iter().map(|spec| spec.0.to_index.atom))
+                {
                     binding_info.move_back(atom, prober);
                 }
             }

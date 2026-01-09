@@ -71,6 +71,28 @@ impl Clone for JoinHeader {
     }
 }
 
+#[derive(Debug, Clone, Default)]
+pub(crate) struct ToBind {
+    pub(crate) cols: SmallVec<[ColumnId; 2]>,
+    pub(crate) vars: SmallVec<[Variable; 2]>,
+}
+
+impl ToBind {
+    pub fn new(cols: SmallVec<[ColumnId; 2]>, vars: SmallVec<[Variable; 2]>) -> Self {
+        ToBind { cols, vars }
+    }
+
+    pub fn push(&mut self, col: ColumnId, var: Variable) {
+        self.cols.push(col);
+        self.vars.push(var);
+    }
+
+    pub fn len(&self) -> usize {
+        debug_assert!(self.cols.len() == self.vars.len());
+        self.cols.len()
+    }
+}
+
 #[derive(Debug, Clone)]
 pub(crate) enum JoinStage {
     /// `Intersect` takes a variable and intersects a set of atoms
@@ -85,7 +107,7 @@ pub(crate) enum JoinStage {
     /// the entire atom, a hash join.
     FusedIntersect {
         cover: ScanSpec,
-        bind: SmallVec<[(ColumnId, Variable); 2]>,
+        bind: ToBind,
         // to_intersect.1 is the index into the cover atom.
         to_intersect: Vec<(ScanSpec, SmallVec<[ColumnId; 2]>)>,
     },
@@ -112,7 +134,7 @@ impl JoinStage {
                 && scans[0].cs.is_empty() =>
             {
                 let col = scans[0].column;
-                bind.push((col, *var));
+                bind.push(col, *var);
                 cover.to_index.vars.push(col);
                 true
             }
@@ -152,7 +174,7 @@ impl JoinStage {
                         },
                         constraints: mem::take(&mut scans1[0].cs),
                     },
-                    bind: smallvec![(col1, var1), (col2, *var2)],
+                    bind: ToBind::new(smallvec![col1, col2], smallvec![var1, *var2]),
                     to_intersect: Default::default(),
                 };
                 true
@@ -576,10 +598,10 @@ impl<'a> Planner<'a> {
                 Default::default()
             },
         };
-        let mut bind = SmallVec::new();
+        let mut bind = ToBind::default();
         let var_set = &self.atoms[atom].var_to_column;
         for var in vars {
-            bind.push((var_set[&var], var));
+            bind.push(var_set[&var], var);
         }
 
         let mut to_intersect = Vec::with_capacity(filters.len());
