@@ -1,0 +1,1 @@
+window.SIDEBAR_ITEMS = {"enum":["Change","GenericAction","GenericExpr","GenericFact","Literal"],"struct":["GenericActions","GenericRule"]};
