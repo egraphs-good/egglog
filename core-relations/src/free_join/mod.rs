@@ -202,7 +202,7 @@ pub(crate) fn invoke_batch(
     args: &[QueryEntry],
     out_var: Variable,
 ) {
-    let pool: Pool<Vec<Value>> = with_pool_set(|ps| ps.get_pool().clone());
+    let pool: Pool<Vec<Value>> = with_pool_set(|ps| ps.get_pool());
     let mut out = pool.get();
     out.reserve(mask.len());
     for_each_binding_with_mask!(mask, args, bindings, |iter| {
