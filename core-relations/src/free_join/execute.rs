@@ -415,12 +415,12 @@ impl<'a> JoinState<'a> {
                 if cols.len() != 1 {
                     DynamicIndex::Cached {
                         intersect_outer,
-                        table: get_index_from_tableinfo(info, &cols).clone(),
+                        table: get_index_from_tableinfo(info, &cols),
                     }
                 } else {
                     DynamicIndex::CachedColumn {
                         intersect_outer,
-                        table: get_column_index_from_tableinfo(info, cols[0]).clone(),
+                        table: get_column_index_from_tableinfo(info, cols[0]),
                     }
                 }
             } else if cols.len() != 1 {
@@ -431,7 +431,7 @@ impl<'a> JoinState<'a> {
             };
         Prober {
             node: trie_node,
-            pool: with_pool_set(|ps| ps.get_pool().clone()),
+            pool: with_pool_set(|ps| ps.get_pool()),
             ix: dyn_index,
         }
     }
