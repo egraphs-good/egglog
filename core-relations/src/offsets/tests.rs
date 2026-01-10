@@ -78,7 +78,7 @@ fn intersect() {
             let mut expected = Vec::from_iter(l_set.intersection(&r_set).copied());
             l_sub.intersect(
                 r_sub.as_ref(),
-                &with_pool_set(|pool_set| pool_set.get_pool().clone()),
+                &with_pool_set(|pool_set| pool_set.get_pool()),
             );
             expected.sort();
             let mut got = Vec::new();
