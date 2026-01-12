@@ -7,7 +7,7 @@ use std::{
 
 use crate::{
     common::HashMap,
-    free_join::plan::{MatId, ScanMatSpec, SinglePlan},
+    free_join::plan::{JoinStages, MatId, MatSpec, ScanMatSpec, SinglePlan},
     numeric_id::{DenseIdMap, IdVec, NumericId},
     query::Atom,
     row_buffer::RowBuffer,
@@ -191,7 +191,13 @@ impl Database {
                         }
 
                         let search_and_apply_timer = Instant::now();
-                        join_state.run_header_and_plan(plan, &mut binding_info, &mut action_buf);
+                        join_state.run_join_stages(
+                            &plan.stages,
+                            &plan.atoms,
+                            plan.actions,
+                            &mut binding_info,
+                            &mut action_buf,
+                        );
                         let search_and_apply_time = search_and_apply_timer.elapsed();
 
                         if action_buf.needs_flush {
@@ -235,15 +241,42 @@ impl Database {
                 let search_and_apply_timer = Instant::now();
                 match plan {
                     Plan::SinglePlan(plan) => {
-                        join_state.run_header_and_plan(plan, &mut binding_info, &mut action_buf);
+                        join_state.run_join_stages(
+                            &plan.stages,
+                            &plan.atoms,
+                            plan.actions,
+                            &mut binding_info,
+                            &mut action_buf,
+                        );
                     }
                     Plan::DecomposedPlan(plan) => {
-                        for stage_block in plan.stages.blocks.iter() {
-                            join_state.run_header_and_plan(todo!(), &mut binding_info, &mut action_buf);
-
+                        let mut materializations =
+                            DenseIdMap::with_capacity(plan.stages.blocks.len());
+                        for _ in 0..plan.stages.blocks.len() {
+                            materializations.push(DashMap::default());
                         }
-                        // join_state
-                    },
+                        let mut materializer = InPlaceMaterializer {
+                            specs: &plan
+                                .stages
+                                .blocks
+                                .iter()
+                                .enumerate()
+                                .map(|(i, block)| (MatId::from_usize(i), block.1.clone()))
+                                .collect(),
+                            materializations: &materializations,
+                            scratch_key: Default::default(),
+                            scratch_val: Default::default(),
+                        };
+                        for (mat_id, stage_block) in plan.stages.blocks.iter().enumerate() {
+                            join_state.run_join_stages(
+                                &stage_block.0,
+                                &plan.atoms,
+                                MatId::from_usize(mat_id),
+                                &mut binding_info,
+                                &mut materializer,
+                            );
+                        }
+                    }
                 }
                 let search_and_apply_time = search_and_apply_timer.elapsed();
 
@@ -469,15 +502,17 @@ impl<'a> JoinState<'a> {
     /// `plan.stages.instrs[instr_order[i]]` at stage `i`.
     ///
     /// This is also a stepping stone towards supporting fully dynamic variable ordering.
-    fn run_header_and_plan<'buf, BUF: ActionBuffer<'buf>>(
+    fn run_join_stages<'buf, A: NumericId + 'buf, BUF: ActionBuffer<'buf, A>>(
         &self,
-        plan: &'a SinglePlan,
+        stages: &'buf JoinStages,
+        atoms: &'buf Arc<DenseIdMap<AtomId, Atom>>,
+        action: A,
         binding_info: &mut BindingInfo,
         action_buf: &mut BUF,
     ) where
         'a: 'buf,
     {
-        for JoinHeader { atom, subset, .. } in &plan.stages.header {
+        for JoinHeader { atom, subset, .. } in &stages.header {
             if subset.is_empty() {
                 return;
             }
@@ -492,9 +527,17 @@ impl<'a> JoinState<'a> {
                 return;
             }
         }
-        let mut order = InstrOrder::from_iter(0..plan.stages.instrs.len());
-        sort_plan_by_size(&mut order, 0, &plan.stages.instrs, binding_info);
-        self.run_plan(plan, &mut order, 0, binding_info, action_buf);
+        let mut order = InstrOrder::from_iter(0..stages.instrs.len());
+        sort_plan_by_size(&mut order, 0, &stages.instrs, binding_info);
+        self.run_plan(
+            stages,
+            atoms,
+            action,
+            &mut order,
+            0,
+            binding_info,
+            action_buf,
+        );
     }
 
     /// The core method for executing a free join plan.
@@ -505,9 +548,11 @@ impl<'a> JoinState<'a> {
     /// index used to detect if we are at the "top" of a plan rather than the "bottom", and is
     /// currently used as a heuristic to determine if we should increase parallelism more than the
     /// default.
-    fn run_plan<'buf, BUF: ActionBuffer<'buf>>(
+    fn run_plan<'buf, A: NumericId + 'buf, BUF: ActionBuffer<'buf, A>>(
         &self,
-        plan: &'a SinglePlan,
+        stages: &'buf JoinStages,
+        atoms: &'buf Arc<DenseIdMap<AtomId, Atom>>,
+        action: A,
         instr_order: &mut InstrOrder,
         cur: usize,
         binding_info: &mut BindingInfo,
@@ -520,18 +565,18 @@ impl<'a> JoinState<'a> {
         }
 
         if cur >= instr_order.len() {
-            action_buf.push_bindings(plan.actions, &binding_info.bindings, || {
+            action_buf.push_bindings(action, &binding_info.bindings, || {
                 ExecutionState::new(self.db.read_only_view(), Default::default())
             });
             return;
         }
         let chunk_size = action_buf.morsel_size(cur, instr_order.len());
-        let mut cur_size = estimate_size(&plan.stages.instrs[instr_order.get(cur)], binding_info);
+        let mut cur_size = estimate_size(&stages.instrs[instr_order.get(cur)], binding_info);
         if cur_size > 32 && cur % 3 == 1 && cur < instr_order.len() - 1 {
             // If we have a reasonable number of tuples to process, adjust the variable order every
             // 3 rounds, but always make sure to readjust on the second roung.
-            sort_plan_by_size(instr_order, cur, &plan.stages.instrs, binding_info);
-            cur_size = estimate_size(&plan.stages.instrs[instr_order.get(cur)], binding_info);
+            sort_plan_by_size(instr_order, cur, &stages.instrs, binding_info);
+            cur_size = estimate_size(&stages.instrs[instr_order.get(cur)], binding_info);
         }
 
         // Helper macro (not its own method to appease the borrow checker).
@@ -551,7 +596,15 @@ impl<'a> JoinState<'a> {
                             binding_info.insert_subset(atom, subset);
                         }
                         UpdateInstr::EndFrame => {
-                            self.run_plan(plan, instr_order, cur + 1, binding_info, action_buf);
+                            self.run_plan(
+                                stages,
+                                atoms,
+                                action,
+                                instr_order,
+                                cur + 1,
+                                binding_info,
+                                action_buf,
+                            );
                         }
                     })
                 }
@@ -591,7 +644,9 @@ impl<'a> JoinState<'a> {
                                     exec_state: exec_state_for_work.clone(),
                                 }
                                 .run_plan(
-                                    plan,
+                                    stages,
+                                    atoms,
+                                    action,
                                     instr_order,
                                     cur + 1,
                                     binding_info,
@@ -614,15 +669,15 @@ impl<'a> JoinState<'a> {
             table.refine(sub, constraints)
         }
 
-        match &plan.stages.instrs[instr_order.get(cur)] {
+        match &stages.instrs[instr_order.get(cur)] {
             JoinStage::Intersect { var, scans } => match scans.as_slice() {
                 [] => {}
                 [a] if a.cs.is_empty() => {
                     if binding_info.has_empty_subset(a.atom) {
                         return;
                     }
-                    let prober = self.get_column_index(&plan.atoms, binding_info, a.atom, a.column);
-                    let table = self.db.tables[plan.atoms[a.atom].table].table.as_ref();
+                    let prober = self.get_column_index(atoms, binding_info, a.atom, a.column);
+                    let table = self.db.tables[atoms[a.atom].table].table.as_ref();
                     let mut updates = FrameUpdates::with_capacity(cmp::min(chunk_size, cur_size));
                     with_pool_set(|ps| {
                         prober.for_each(|val, x| {
@@ -646,8 +701,8 @@ impl<'a> JoinState<'a> {
                     if binding_info.has_empty_subset(a.atom) {
                         return;
                     }
-                    let prober = self.get_column_index(&plan.atoms, binding_info, a.atom, a.column);
-                    let table = self.db.tables[plan.atoms[a.atom].table].table.as_ref();
+                    let prober = self.get_column_index(atoms, binding_info, a.atom, a.column);
+                    let table = self.db.tables[atoms[a.atom].table].table.as_ref();
                     let mut updates = FrameUpdates::with_capacity(cmp::min(chunk_size, cur_size));
                     with_pool_set(|ps| {
                         prober.for_each(|val, x| {
@@ -668,10 +723,8 @@ impl<'a> JoinState<'a> {
                     binding_info.move_back(a.atom, prober);
                 }
                 [a, b] => {
-                    let a_prober =
-                        self.get_column_index(&plan.atoms, binding_info, a.atom, a.column);
-                    let b_prober =
-                        self.get_column_index(&plan.atoms, binding_info, b.atom, b.column);
+                    let a_prober = self.get_column_index(atoms, binding_info, a.atom, a.column);
+                    let b_prober = self.get_column_index(atoms, binding_info, b.atom, b.column);
 
                     let ((smaller, smaller_scan), (larger, larger_scan)) =
                         if a_prober.len() < b_prober.len() {
@@ -682,10 +735,8 @@ impl<'a> JoinState<'a> {
 
                     let smaller_atom = smaller_scan.atom;
                     let larger_atom = larger_scan.atom;
-                    let large_table = self.db.tables[plan.atoms[larger_atom].table].table.as_ref();
-                    let small_table = self.db.tables[plan.atoms[smaller_atom].table]
-                        .table
-                        .as_ref();
+                    let large_table = self.db.tables[atoms[larger_atom].table].table.as_ref();
+                    let small_table = self.db.tables[atoms[smaller_atom].table].table.as_ref();
                     let mut updates = FrameUpdates::with_capacity(cmp::min(chunk_size, cur_size));
                     with_pool_set(|ps| {
                         smaller.for_each(|val, small_sub| {
@@ -724,12 +775,8 @@ impl<'a> JoinState<'a> {
                     let mut smallest_size = usize::MAX;
                     let mut probers = Vec::with_capacity(rest.len());
                     for (i, scan) in rest.iter().enumerate() {
-                        let prober = self.get_column_index(
-                            &plan.atoms,
-                            binding_info,
-                            scan.atom,
-                            scan.column,
-                        );
+                        let prober =
+                            self.get_column_index(atoms, binding_info, scan.atom, scan.column);
                         let size = prober.len();
                         if size < smallest_size {
                             smallest = i;
@@ -739,9 +786,8 @@ impl<'a> JoinState<'a> {
                     }
 
                     let main_spec = &rest[smallest];
-                    let main_spec_table = self.db.tables[plan.atoms[main_spec.atom].table]
-                        .table
-                        .as_ref();
+                    let main_spec_table =
+                        self.db.tables[atoms[main_spec.atom].table].table.as_ref();
 
                     if smallest_size != 0 {
                         // Smallest leads the scan
@@ -755,7 +801,7 @@ impl<'a> JoinState<'a> {
                                         continue;
                                     }
                                     if let Some(mut sub) = probers[i].get_subset(key) {
-                                        let table = self.db.tables[plan.atoms[rest[i].atom].table]
+                                        let table = self.db.tables[atoms[rest[i].atom].table]
                                             .table
                                             .as_ref();
                                         sub = refine_subset(sub, &rest[i].cs, &table);
@@ -807,7 +853,7 @@ impl<'a> JoinState<'a> {
                 let mut updates = FrameUpdates::with_capacity(cmp::min(chunk_size, cur_size));
                 loop {
                     buffer.clear();
-                    let table = &self.db.tables[plan.atoms[cover_atom].table].table;
+                    let table = &self.db.tables[atoms[cover_atom].table].table;
                     let next = table.scan_project(
                         cover_subset,
                         &proj,
@@ -857,7 +903,7 @@ impl<'a> JoinState<'a> {
                             i,
                             spec.to_index.atom,
                             self.get_index(
-                                &plan.atoms,
+                                atoms,
                                 spec.to_index.atom,
                                 binding_info,
                                 spec.to_index.vars.iter().copied(),
@@ -873,7 +919,7 @@ impl<'a> JoinState<'a> {
                 let mut updates = FrameUpdates::with_capacity(cmp::min(chunk_size, cur_size));
                 loop {
                     buffer.clear();
-                    let table = &self.db.tables[plan.atoms[cover_atom].table].table;
+                    let table = &self.db.tables[atoms[cover_atom].table].table;
                     let next = table.scan_project(
                         cover_subset,
                         &proj,
@@ -905,7 +951,7 @@ impl<'a> JoinState<'a> {
                                 continue 'mid;
                             };
                             // apply any constraints needed in this scan.
-                            let table_info = &self.db.tables[plan.atoms[*atom].table];
+                            let table_info = &self.db.tables[atoms[*atom].table];
                             let cs = &to_intersect[*i].0.constraints;
                             subset = refine_subset(subset, cs, &table_info.table.as_ref());
                             if subset.is_empty() {
@@ -948,7 +994,7 @@ impl<'a> JoinState<'a> {
                     .iter()
                     .map(|(spec, _)| {
                         self.get_index(
-                            &plan.atoms,
+                            atoms,
                             spec.to_index.atom,
                             binding_info,
                             spec.to_index.vars.iter().copied(),
@@ -994,8 +1040,8 @@ const VAR_BATCH_SIZE: usize = 128;
 /// This trait exists as a fairly ad-hoc wrapper over its two implementations.
 /// It allows us to avoid duplicating the (somewhat monstrous) `run_plan` method
 /// for serial and parallel modes.
-trait ActionBuffer<'state>: Send {
-    type AsLocal<'a>: ActionBuffer<'state>
+trait ActionBuffer<'state, A: NumericId>: Send {
+    type AsLocal<'a>: ActionBuffer<'state, A>
     where
         'state: 'a;
     /// Push the given bindings to be executed for the specified action. If this
@@ -1007,7 +1053,7 @@ trait ActionBuffer<'state>: Send {
     /// it should not, in general, be used outside of this module.
     fn push_bindings(
         &mut self,
-        action: ActionId,
+        action: A,
         bindings: &DenseIdMap<Variable, Value>,
         to_exec_state: impl FnMut() -> ExecutionState<'state>,
     );
@@ -1048,7 +1094,7 @@ struct InPlaceActionBuffer<'a> {
     batches: DenseIdMap<ActionId, ActionState>,
 }
 
-impl<'a, 'outer: 'a> ActionBuffer<'a> for InPlaceActionBuffer<'outer> {
+impl<'a, 'outer: 'a> ActionBuffer<'a, ActionId> for InPlaceActionBuffer<'outer> {
     type AsLocal<'b>
         = Self
     where
@@ -1122,7 +1168,7 @@ impl<'inner, 'scope> ScopedActionBuffer<'inner, 'scope> {
     }
 }
 
-impl<'scope> ActionBuffer<'scope> for ScopedActionBuffer<'_, 'scope> {
+impl<'scope> ActionBuffer<'scope, ActionId> for ScopedActionBuffer<'_, 'scope> {
     type AsLocal<'a>
         = ScopedActionBuffer<'a, 'scope>
     where
@@ -1220,6 +1266,59 @@ fn flush_action_states(
         }
     }
 }
+
+struct InPlaceMaterializer<'a> {
+    specs: &'a DenseIdMap<MatId, MatSpec>,
+    materializations: &'a DenseIdMap<MatId, DashMap<Vec<Value>, RowBuffer>>,
+    scratch_key: Vec<Value>,
+    scratch_val: Vec<Value>,
+}
+
+impl<'a> ActionBuffer<'a, MatId> for InPlaceMaterializer<'a> {
+    type AsLocal<'b>
+        = Self
+    where
+        'a: 'b;
+
+    fn push_bindings(
+        &mut self,
+        mat_id: MatId,
+        bindings: &DenseIdMap<Variable, Value>,
+        _to_exec_state: impl FnMut() -> ExecutionState<'a>,
+    ) {
+        let mat = self.materializations.get(mat_id).expect("invalid mat id");
+        let spec = self.specs.get(mat_id).expect("invalid mat id");
+        self.scratch_key.clear();
+        for key in spec.msg_vars.iter().map(|var| bindings[*var]) {
+            self.scratch_key.push(key);
+        }
+        self.scratch_val.clear();
+        for val in spec.val_vars.iter().map(|var| bindings[*var]) {
+            self.scratch_val.push(val);
+        }
+        if let Some(mut buffer) = mat.get_mut(&self.scratch_key) {
+            buffer.add_row(&self.scratch_val);
+        } else {
+            let mut buffer = RowBuffer::new(spec.val_vars.len());
+            buffer.add_row(&self.scratch_val);
+            mat.insert(self.scratch_key.clone(), buffer);
+        }
+    }
+
+    fn flush(&mut self, _exec_state: &mut ExecutionState) {
+        // No-op for in-place materializer.
+    }
+
+    fn recur<'local>(
+        &mut self,
+        local: BorrowedLocalState<'local>,
+        _to_exec_state: impl FnMut() -> ExecutionState<'a> + Send + 'a,
+        work: impl for<'b> FnOnce(BorrowedLocalState<'b>, &mut Self) + Send + 'a,
+    ) {
+        work(local, self)
+    }
+}
+
 struct MatchCounter {
     matches: IdVec<ActionId, CachePadded<AtomicUsize>>,
 }
