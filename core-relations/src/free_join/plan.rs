@@ -37,6 +37,13 @@ pub(crate) struct SingleScanSpec {
 define_id!(pub(crate) MatId, u32, "An identifier for materialization within a decomposed plan.");
 
 #[derive(Clone, Debug, PartialEq, Eq)]
+pub(crate) enum MatScanMode {
+    Full,
+    KeyOnly,
+    Value(Vec<Variable>),
+}
+
+#[derive(Clone, Debug, PartialEq, Eq)]
 pub(crate) enum ScanMatSpec {
     Scan(ScanSpec),
     Materialized(MatId),
@@ -95,10 +102,16 @@ pub(crate) enum JoinStage {
     /// This corresponds to the free join algorithm, or when to_intersect.len() == 1 and cover is
     /// the entire atom, a hash join.
     FusedIntersect {
-        cover: ScanMatSpec,
+        cover: ScanSpec,
         bind: SmallVec<[(ColumnId, Variable); 2]>,
         // to_intersect.1 is the index into the cover atom.
         to_intersect: Vec<(ScanSpec, SmallVec<[ColumnId; 2]>)>,
+    },
+    FusedIntersectMat {
+        cover: MatId,
+        mode: MatScanMode,
+        bind: SmallVec<[(ColumnId, Variable); 2]>,
+        to_intersect: Vec<(ScanMatSpec, SmallVec<[ColumnId; 2]>)>,
     },
 }
 
@@ -112,7 +125,7 @@ impl JoinStage {
         match (self, other) {
             (
                 FusedIntersect {
-                    cover: ScanMatSpec::Scan(cover),
+                    cover,
                     bind,
                     to_intersect,
                 },
@@ -156,13 +169,13 @@ impl JoinStage {
                 let col1 = scans1[0].column;
                 let col2 = scans2[0].column;
                 *x = FusedIntersect {
-                    cover: ScanMatSpec::Scan(ScanSpec {
+                    cover: ScanSpec {
                         to_index: SubAtom {
                             atom,
                             vars: smallvec![col1, col2],
                         },
                         constraints: mem::take(&mut scans1[0].cs),
-                    }),
+                    },
                     bind: smallvec![(col1, var1), (col2, *var2)],
                     to_intersect: Default::default(),
                 };
@@ -274,7 +287,7 @@ impl SinglePlan {
                     }
                 }
                 JoinStage::FusedIntersect {
-                    cover: ScanMatSpec::Scan(cover),
+                    cover,
                     bind: _,
                     to_intersect,
                 } => {
@@ -310,8 +323,9 @@ impl SinglePlan {
                         to_intersect: report_to_intersect,
                     }
                 }
-                JoinStage::FusedIntersect {
-                    cover: ScanMatSpec::Materialized(_),
+                JoinStage::FusedIntersectMat {
+                    cover,
+                    mode,
                     bind,
                     to_intersect,
                 } => {
@@ -360,7 +374,11 @@ type AtomToBag = DenseIdMap<AtomId, usize>;
 pub(crate) fn tree_decompose_and_plan(
     ctx: &PlanningContext,
     strat: PlanStrategy,
-) -> (Vec<(JoinStages, MatSpec)>, AtomToBag) {
+) -> (
+    /* Intermediate materializations */ Vec<(JoinStages, MatSpec)>,
+    /* Final block that produces the final results */ JoinStages,
+    /* Mapping from an atom to the bag it belongs to */ AtomToBag,
+) {
     let mut atoms = ctx.atoms.clone();
     let mut vars = ctx.vars.clone();
 
@@ -491,23 +509,24 @@ pub(crate) fn tree_decompose_and_plan(
         }
     }
 
+    // Step 5: plan each bag. The plan needs to be constrained by message variables from previous bags.
     let mut blocks: Vec<(JoinStages, MatSpec)> = vec![];
-
-    for bag in bags.into_iter() {
+    for bag in bags.iter() {
         let mut msg_vars = vec![];
         let mut val_vars = vec![];
         for (var, _) in bag.vars.iter() {
             n_used_in_bag[var] -= 1;
-            // If the variable is still used later, this is an information to be passed to the next stage.
+            // If the variable is still used later, this is a piece of information to be passed to the next stage.
             if n_used_in_bag[var] > 0 {
                 msg_vars.push(var);
             } else {
                 val_vars.push(var);
             }
         }
-        let stages = plan_stages(&bag, strat);
+        let (header, mut instrs) = plan_stages(&bag, strat);
 
         // TODO: alternatively, we don't introduce any new FusedIntersect, but we modify ScanSpec/SingleScanSpec to include the materializations (MatId)
+        let mut prologue = vec![];
         let mut vars = bag.vars.clone();
         for (i, prev_block) in blocks.iter().enumerate().rev() {
             let mut to_bind = smallvec![];
@@ -543,17 +562,89 @@ pub(crate) fn tree_decompose_and_plan(
                     }
                 }
             }
-            JoinStage::FusedIntersect {
-                cover: ScanMatSpec::Materialized(MatId::from_usize(i)),
+            prologue.push(JoinStage::FusedIntersectMat {
+                cover: MatId::from_usize(i),
+                mode: MatScanMode::KeyOnly,
                 bind: to_bind,
-                to_intersect,
-            };
+                to_intersect: to_intersect
+                    .into_iter()
+                    .map(|(spec, key_spec)| (ScanMatSpec::Scan(spec), key_spec))
+                    .collect(),
+            });
         }
 
+        // prepend the prologue
+        instrs.splice(0..0, prologue.into_iter());
+
+        let stages = JoinStages {
+            header,
+            instrs: Arc::new(instrs),
+        };
         blocks.push((stages, MatSpec { msg_vars, val_vars }));
     }
 
-    (blocks, atom_to_bag)
+    // Step 6: Add the second pass from bottom to top
+    let mut result_block = vec![];
+
+    let mut pinned_vars = DenseIdMap::<Variable, ()>::new();
+    for (i, (_stages, mat_spec)) in blocks.iter().enumerate().rev() {
+        let to_bind: SmallVec<[(ColumnId, Variable); 2]> =
+            Iterator::chain(mat_spec.msg_vars.iter(), mat_spec.val_vars.iter())
+                .copied()
+                .enumerate()
+                .filter(|(_, var)| !pinned_vars.contains_key(*var))
+                .map(|(i, var)| (ColumnId::from_usize(i), var))
+                .collect();
+
+        for (_, var) in to_bind.iter() {
+            pinned_vars.insert(*var, ());
+        }
+
+        // Find which previous blocks need to be intersected
+        // A variable can only be used to prune one materialization, since the materialization it prunes
+        // will continue to use the same variable to prune earlier materializations.
+        // let mut to_prune: HashMap<Variable, ColumnId> =
+        //     to_bind.iter().map(|(col, var)| (*var, *col)).collect();
+        // let mut to_intersect = vec![];
+
+        // for prev_block in blocks[..i].iter().rev() {
+        //     let mut to_isect = smallvec![];
+        //     for msg_var in prev_block.1.msg_vars.iter() {
+        //         if let Some(col) = to_prune.get(msg_var) {
+        //             to_isect.push(*col);
+        //             to_prune.remove(msg_var);
+        //         }
+        //     }
+        //     if !to_isect.is_empty() {
+        //         to_intersect.push((
+        //             ScanMatSpec::Materialized(MatId::from_usize(i - 1)),
+        //             to_isect,
+        //         ));
+        //     }
+        // }
+
+        result_block.push(JoinStage::FusedIntersectMat {
+            cover: MatId::from_usize(i),
+            // TODO: optimization to switch to MatScanMode::KeyOnly or MatScanMode::Value
+            mode: if i == blocks.len() - 1 {
+                MatScanMode::Full
+            } else {
+                MatScanMode::Value(mat_spec.msg_vars.clone())
+            },
+            bind: to_bind,
+            // to_intersect can be empty, because non-top-level scans of materializations
+            // look up the keys anyway.
+            to_intersect: vec![],
+        });
+    }
+    result_block.reverse();
+
+    let result_block = JoinStages {
+        header: vec![],
+        instrs: Arc::new(result_block),
+    };
+
+    (blocks, result_block, atom_to_bag)
 }
 
 const TREE_DECOMPOSE: bool = true;
@@ -565,7 +656,8 @@ pub(crate) fn plan_query(query: Query) -> Plan {
         atoms,
     };
     if TREE_DECOMPOSE {
-        let (blocks, atom_to_bag) = tree_decompose_and_plan(&ctx, query.plan_strategy);
+        let (blocks, result_block, atom_to_bag) =
+            tree_decompose_and_plan(&ctx, query.plan_strategy);
         Plan::DecomposedPlan(DecomposedPlan {
             atoms: Arc::new(ctx.atoms),
             atom_to_bag: Arc::new(atom_to_bag),
@@ -573,7 +665,11 @@ pub(crate) fn plan_query(query: Query) -> Plan {
             actions: query.action,
         })
     } else {
-        let stages = plan_stages(&ctx, query.plan_strategy);
+        let (header, instrs) = plan_stages(&ctx, query.plan_strategy);
+        let stages = JoinStages {
+            header: header,
+            instrs: Arc::new(instrs),
+        };
 
         Plan::SinglePlan(SinglePlan {
             atoms: Arc::new(ctx.atoms),
@@ -743,7 +839,8 @@ fn plan_headers(
 
 /// Plan query execution stages using the specified strategy.
 /// Returns (header, instructions) tuple that can be assembled into a Plan by the caller.
-fn plan_stages(ctx: &PlanningContext, strat: PlanStrategy) -> JoinStages {
+/// It does not directly return the plan because the caller may want to further modify the stages.
+fn plan_stages(ctx: &PlanningContext, strat: PlanStrategy) -> (Vec<JoinHeader>, Vec<JoinStage>) {
     let (header, remaining_constraints) = plan_headers(ctx);
     let mut instrs = Vec::new();
     let mut state = PlanningState::new(ctx.vars.n_ids(), ctx.atoms.n_ids());
@@ -755,10 +852,7 @@ fn plan_stages(ctx: &PlanningContext, strat: PlanStrategy) -> JoinStages {
         PlanStrategy::Gj => plan_gj(ctx, &mut state, &remaining_constraints, &mut instrs),
     };
 
-    JoinStages {
-        header,
-        instrs: Arc::new(instrs),
-    }
+    (header, instrs)
 }
 
 /// Plan free join queries using pure size or minimal cover strategy.
@@ -998,7 +1092,7 @@ fn compile_stage(
     }
 
     JoinStage::FusedIntersect {
-        cover: ScanMatSpec::Scan(cover_spec),
+        cover: cover_spec,
         bind,
         to_intersect,
     }
