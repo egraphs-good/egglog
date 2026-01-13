@@ -1,9 +1,12 @@
 Rewrites an egglog program to use an encoding for equality tracking, optionally including proof tracking.
 
 # Term Encoding
+
 The job of the term encoding is to *remove all calls to union* in the egglog program.
+This makes proof production easier, since all equality reasoning is explicit and
+  can be instrumented with proof tracking.
 The term encoding adds an explicit union-find structure per sort, and maintains it via
-rules that run during scheduled maintenance.
+  rules that run during scheduled maintenance.
 For efficiency, every constructor becomes two tables:
   a term table that stores the actual terms, and a view table storing representative terms along with their e-class (stored as the leader term).
 The term encoding enables proof tracking, done at the
@@ -162,3 +165,36 @@ This query checks that the e-class representatives for `(Add 1 2)` and `(Add 2 1
 
 
 # Proof Tracking
+
+During term encoding, if proof tracking is enabled,
+  we also instrument the program to track proofs of equalities.
+We'll continue with our example from above, showing the additions
+  for proof tracking.
+
+Original program snippet is
+
+```text
+(sort Math)
+(constructor Add (i64 i64) Math)
+(Add 1 2)
+(rule ((Add a b))
+      ((union (Add a b) (Add b a)))
+     :name "commutativity")
+(run 1)
+(check (= (Add 1 2) (Add 2 1)))
+```
+
+
+The encoding with proof tracking adds a proof header before the rest of the program.
+The header defines the proof format corresponding to [`RawProof`](crate::proofs::RawProof) in Rust.
+See the proof header in `proof_encoding_helpers.rs` for details.
+
+```text
+(function MathProof (Math) Proof :merge old)
+```
+
+Every sort gets a proof table storing
+  a proof for that term.
+The proof proves a proposition `t = t` for
+  input term `t`.
+We store the oldest proof currently.

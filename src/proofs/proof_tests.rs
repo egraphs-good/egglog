@@ -35,9 +35,6 @@ mod tests {
 (rule ((Add a b))
       ((union (Add a b) (Add b a)))
      :name "commutativity")
-(rule ((Add a (Add b c))))
-      ((union (Add a b) (Add b a)))
-     :name "commutativity")
 (check (= (Add 1 2) (Add 2 1)))
             "#,
         );

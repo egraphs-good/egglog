@@ -1,3 +1,6 @@
+//! Proof encoding helper functions that handle
+//! naming, headers, and checking whether a program supports proof encoding.
+
 use std::path::Path;
 
 use crate::{
