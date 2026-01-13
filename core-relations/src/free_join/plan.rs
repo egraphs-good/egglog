@@ -243,6 +243,7 @@ pub(crate) struct DecomposedPlan {
     pub atoms: Arc<DenseIdMap<AtomId, Atom>>,
     pub atom_to_bag: Arc<DenseIdMap<AtomId, usize>>,
     pub stages: JoinStageBlocks,
+    pub result_block: JoinStages,
     pub actions: ActionId,
 }
 
@@ -385,7 +386,7 @@ pub(crate) fn tree_decompose_and_plan(
     let mut bags: Vec<PlanningContext> = vec![];
     let mut n_remaining_vars = vars.iter().count();
 
-    let dummy_table_id = TableId::from_usize(usize::MAX);
+    let dummy_table_id = TableId::new(u32::MAX);
     let mut atom_to_bag = AtomToBag::new();
 
     // Step 1. find variable with smallest number of occurrences
@@ -600,29 +601,6 @@ pub(crate) fn tree_decompose_and_plan(
             pinned_vars.insert(*var, ());
         }
 
-        // Find which previous blocks need to be intersected
-        // A variable can only be used to prune one materialization, since the materialization it prunes
-        // will continue to use the same variable to prune earlier materializations.
-        // let mut to_prune: HashMap<Variable, ColumnId> =
-        //     to_bind.iter().map(|(col, var)| (*var, *col)).collect();
-        // let mut to_intersect = vec![];
-
-        // for prev_block in blocks[..i].iter().rev() {
-        //     let mut to_isect = smallvec![];
-        //     for msg_var in prev_block.1.msg_vars.iter() {
-        //         if let Some(col) = to_prune.get(msg_var) {
-        //             to_isect.push(*col);
-        //             to_prune.remove(msg_var);
-        //         }
-        //     }
-        //     if !to_isect.is_empty() {
-        //         to_intersect.push((
-        //             ScanMatSpec::Materialized(MatId::from_usize(i - 1)),
-        //             to_isect,
-        //         ));
-        //     }
-        // }
-
         result_block.push(JoinStage::FusedIntersectMat {
             cover: MatId::from_usize(i),
             // TODO: optimization to switch to MatScanMode::KeyOnly or MatScanMode::Value
@@ -662,6 +640,7 @@ pub(crate) fn plan_query(query: Query) -> Plan {
             atoms: Arc::new(ctx.atoms),
             atom_to_bag: Arc::new(atom_to_bag),
             stages: JoinStageBlocks { blocks },
+            result_block,
             actions: query.action,
         })
     } else {
