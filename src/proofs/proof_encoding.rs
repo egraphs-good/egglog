@@ -625,11 +625,17 @@ impl<'a> ProofInstrumentor<'a> {
             }
             ResolvedExpr::Call(_, resolved_call, args) => {
                 let mut new_args = vec![];
-                let mut arg_proofs = vec![];
+                // Variables and constants don't need subproofs, but constructor calls do.
+                let mut arg_proofs: Vec<Option<String>> = vec![];
                 for arg in args {
-                    let (arg_str, proof) = self.instrument_fact_expr(arg, res);
-                    new_args.push(arg_str);
-                    arg_proofs.push(proof);
+                    if matches!(arg, ResolvedExpr::Var(_, _) | ResolvedExpr::Lit(_, _)) {
+                        new_args.push(arg.to_string());
+                        arg_proofs.push(None);
+                    } else {
+                        let (arg_str, proof) = self.instrument_fact_expr(arg, res);
+                        new_args.push(arg_str);
+                        arg_proofs.push(Some(proof));
+                    }
                 }
                 match resolved_call {
                     ResolvedCall::Func(func_type) => {
@@ -652,13 +658,15 @@ impl<'a> ProofInstrumentor<'a> {
                             ));
                             let mut proof = view_proof_var;
                             for (i, arg_proof) in arg_proofs.into_iter().enumerate() {
-                                let congr = &self.proof_names().congr_constructor;
-                                // add a congruence from the argument (representative) to the term
-                                proof = format!(
-                                    "
+                                if let Some(arg_proof) = arg_proof {
+                                    let congr = &self.proof_names().congr_constructor;
+                                    // add a congruence from the argument (representative) to the term
+                                    proof = format!(
+                                        "
                             ({congr} {proof} {i} {arg_proof})
                             "
-                                );
+                                    );
+                                }
                             }
                             proof
                         } else {

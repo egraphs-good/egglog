@@ -133,12 +133,12 @@ Since global variables are not allowed after this pass,
 
 
 ```text
-(rule ((AddView a b __v3))
-      ((let __v5 (Add a b))
-       (AddView a b __v5)
-       (let __v6 (Add b a))
-       (AddView b a __v6)
-       (__UF_Math (ordering-max __v5 __v6) (ordering-min __v5 __v6)))
+(rule ((AddView a b v3))
+      ((let v5 (Add a b))
+       (AddView a b v5)
+       (let v6 (Add b a))
+       (AddView b a v6)
+       (UF_Math (ordering-max v5 v6) (ordering-min v5 v6)))
        :name "commutativity")
 ```
 
@@ -153,9 +153,9 @@ We add an equality to the union-find table for the two terms, using the `orderin
 
 
 ```text
-(check (AddView 1 2 __v7)
-       (AddView 2 1 __v8)
-       (= __v7 __v8))
+(check (AddView 1 2 v7)
+       (AddView 2 1 v8)
+       (= v7 v8))
 ```
 
 All queries use the view tables, including check commands.
@@ -198,3 +198,65 @@ Every sort gets a proof table storing
 The proof proves a proposition `t = t` for
   input term `t`.
 We store the oldest proof currently.
+
+```text
+(function MathUFProof (Math Math) Proof :merge old)
+```
+
+Similarly, the union-find table gets a proof table storing
+  proofs of equalities between terms.
+If term `a` has parent `b`, it stores a 
+  proof of `a = b`.
+
+
+
+```text
+(constructor AddView (i64 i64 Math) view)
+```
+
+View tables are the trickiest.
+Recall that view tables store a term
+  along with the e-class representative.
+For a term `t` with representative `r`,
+  the proof proves that `r = t`.
+The direction is important, making
+  proof production easier later.
+
+
+```text
+(rule ((AddView a b v8)
+       ;; proof that v8 = Add a b
+       (= v9 (AddViewProof a b v8)))
+      (;; proof list, one per line of the original query
+       (let v10 (PCons v9 (PNil )))
+       
+       (let v11 (Add a b))
+       ;; Proof that Add a b = Add a b
+       (let v12 (Rule "commutativity" v10 (AstMath v11) (AstMath v11)))
+       ;; Setting the proof for Add a b
+       (set (MathProof v11) v12)
+
+       (AddView a b v11)
+       ;; Setting the proof for the view
+       (set (AddViewProof a b v11) v12)
+
+       (let v13 (Add b a))
+       ;; Proof that Add b a = Add b a
+       (let v14 (Rule "commutativity" v10 (AstMath v13) (AstMath v13)))
+       (set (MathProof v13) v14)
+       (AddView b a v13)
+       (set (AddViewProof b a v13) v14)
+
+       (UF_Math (ordering-max v11 v13) (ordering-min v11 v13))
+
+       ;; Set the proof that (Add a b) = (Add b a)
+       (set (MathUFProof (ordering-max v11 v13) (ordering-min v11 v13))
+            (Rule "commutativity" v10 (AstMath (ordering-max v11 v13)) (AstMath (ordering-min v11 v13)))))
+         :name "commutativity")
+```
+
+Instrumented rules with proof tracking query proof tables,
+  then construct proofs for each action.
+For nested terms, congruence proofs are built to ensure
+  the proof terms match the original queries.
+

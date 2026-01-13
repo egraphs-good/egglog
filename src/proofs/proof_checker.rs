@@ -1,3 +1,12 @@
+//! Proof checking for egglog proofs.
+//! Given an egglog program and a proof for some proposition, check that the proof is valid.
+//! The main work is to check proofs for rules, ensuring that under the substitution
+//! the rule would have matched the propositions for each premise, and that the conclusion
+//! is contained in the rule's actions.
+//! For checking queries and actions, we evaluate the expressions under a substitution
+//! and produce a set of valid propositions with `process_actions`.
+//! The set of valid propositions includes reflexive equalities for all subterms.
+
 use crate::{
     Term, TermDag, TermId,
     ast::{
@@ -416,7 +425,6 @@ impl ProofStore {
                     rule,
                     substitution,
                     proof.proposition(),
-            
                     name,
                 )?;
 
@@ -882,11 +890,7 @@ impl ProofStore {
             })?;
 
         // Check if the claimed equality is in the propositions
-        if action_ctx.propositions.contains(claimed)
-            || action_ctx
-                .propositions
-                .contains(claimed)
-        {
+        if action_ctx.propositions.contains(claimed) || action_ctx.propositions.contains(claimed) {
             return Ok(());
         }
 
