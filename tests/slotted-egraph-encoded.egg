@@ -1,7 +1,5 @@
 
 (sort NameMap (Vec i64))
-
-
 (sort Expr)
 
 (constructor Var () Expr)
@@ -11,25 +9,54 @@
 (constructor App1 (String Expr NameMap) Expr)
 (constructor App2 (String Expr NameMap Expr NameMap) Expr)
 
-
+;; mark two eclasses as equal with some rename. You can make nodes from the first class equal to nodes in the other using the rename.
 (relation EqualWithRename (Expr Expr NameMap))
 
+
+
 ;; Example: deduplicating add exprs based on shape
-(App2 "add" (Var) (vec-of 0)
-            (Var) (vec-of 1))
+(let $g1
+  (App2 "add" (Var) (vec-of 0)
+              (Var) (vec-of 1)))
+
+(let $g2
+  (App2 "add" (Var) (vec-of 1)
+              (Var) (vec-of 0)))
+
+(union $g2 (App1 "foo" (Var) (vec-of 0)))
 
 
-(App2 "add" (Var) (vec-of 1)
-            (Var) (vec-of 0))
+
+;; Find two App2 nodes with the same shape
+(rule ((= e1 (App2 f a m1 b m2))
+       (= e2 (App2 f a m3 b m4))
+       (=
+         (shape m1 m2)
+         (shape m3 m4)))
+      ;; find-mapping gives second renames to first
+      ((EqualWithRename e2 e1 (find-mapping m1 m2 m3 m4))))
 
 
-(sort Fresh)
-(constructor Wrapper (NameMap) Fresh)
-(extract (Wrapper (shape (vec-of 0) (vec-of 1))))
-(extract (Wrapper (shape (vec-of 1) (vec-of 0))))
+;; Now we can match on App2 nodes and move them to the other eclass
+(rule ((= e2 (App2 f c m3 d m4))
+       (EqualWithRename e2 e1 r))
+      ((union e1
+              (App2 f c (apply-mapping m3 r)
+                      d (apply-mapping m4 r)))))
 
-(let mapping (find-mapping (vec-of 0) (vec-of 1) (vec-of 1) (vec-of 0)))
-(extract (Wrapper mapping))
+(rule ((= e2 (App1 f c m3))
+       (EqualWithRename e2 e1 r))
+      ((union e1
+              (App1 f c (apply-mapping m3 r)))))
 
-(extract (apply-mapping (vec-of 0) mapping))
+(run 3)
+
+(extract $g1)
+
+
+;; TODO: congruence
+;; redundancies
+;; groups
+;; binders
+
 
