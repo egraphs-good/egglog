@@ -252,8 +252,8 @@ impl Database {
                     Plan::DecomposedPlan(plan) => {
                         let mut materializations =
                             DenseIdMap::with_capacity(plan.stages.blocks.len());
-                        for _ in 0..plan.stages.blocks.len() {
-                            materializations.push(DashMap::default());
+                        for i in 0..plan.stages.blocks.len() {
+                            materializations.insert(MatId::from_usize(i), DashMap::default());
                         }
                         let mut materializer = InPlaceMaterializer {
                             specs: &plan
@@ -263,19 +263,22 @@ impl Database {
                                 .enumerate()
                                 .map(|(i, block)| (MatId::from_usize(i), block.1.clone()))
                                 .collect(),
-                            materializations: &materializations,
+                            materializations,
                             scratch_key: Default::default(),
                             scratch_val: Default::default(),
                         };
                         for (mat_id, stage_block) in plan.stages.blocks.iter().enumerate() {
+                            let mat_id  = MatId::from_usize(mat_id);
                             join_state.run_join_stages(
                                 &stage_block.0,
                                 &plan.atoms,
-                                MatId::from_usize(mat_id),
+                                mat_id,
                                 &mut binding_info,
                                 &mut materializer,
                             );
+                            binding_info.materializations.insert(mat_id, Arc::new(materializer.materializations.take(mat_id).unwrap()));
                         }
+                        join_state.run_join_stages(&plan.result_block, &plan.atoms, plan.actions, &mut binding_info, &mut action_buf);
                     }
                 }
                 let search_and_apply_time = search_and_apply_timer.elapsed();
@@ -1363,7 +1366,7 @@ fn flush_action_states(
 
 struct InPlaceMaterializer<'a> {
     specs: &'a DenseIdMap<MatId, MatSpec>,
-    materializations: &'a DenseIdMap<MatId, DashMap<Vec<Value>, RowBuffer>>,
+    materializations: DenseIdMap<MatId, DashMap<Vec<Value>, RowBuffer>>,
     scratch_key: Vec<Value>,
     scratch_val: Vec<Value>,
 }
@@ -1393,9 +1396,15 @@ impl<'a> ActionBuffer<'a, MatId> for InPlaceMaterializer<'a> {
         if let Some(mut buffer) = mat.get_mut(&self.scratch_key) {
             buffer.add_row(&self.scratch_val);
         } else {
-            let mut buffer = RowBuffer::new(spec.val_vars.len());
-            buffer.add_row(&self.scratch_val);
-            mat.insert(self.scratch_key.clone(), buffer);
+            if spec.val_vars.len() > 0 {
+                let mut buffer = RowBuffer::new(spec.val_vars.len());
+                buffer.add_row(&self.scratch_val);
+                mat.insert(self.scratch_key.clone(), buffer);
+            } else {
+                let mut buffer = RowBuffer::new(1);
+                buffer.add_row(&[Value::stale()]);
+                mat.insert(self.scratch_key.clone(), buffer);
+            }
         }
     }
 

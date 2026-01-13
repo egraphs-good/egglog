@@ -128,65 +128,90 @@ impl<'outer> RuleSetBuilder<'outer> {
         }
     }
 
-    pub fn add_rule_from_cached_plan(
+    fn reprocess_constraints(
+        &self,
+        table: TableId,
+        atom: AtomId,
+        constraints: &[Constraint],
+    ) -> JoinHeader {
+        let processed = self.db.process_constraints(table, constraints);
+        if !processed.slow.is_empty() {
+            panic!(
+                "Cached plans only support constraints with a fast pushdown. \
+                 Got: {constraints:?} for table {table:?}",
+            );
+        }
+        JoinHeader {
+            atom,
+            constraints: processed.fast,
+            subset: processed.subset,
+        }
+    }
+
+    fn push_extra_constraints(
+        &self,
+        stages: &mut JoinStages,
+        atoms: &Arc<DenseIdMap<AtomId, Atom>>,
+        extra_constraints: &[(AtomId, Constraint)],
+        atom_filter: impl Fn(AtomId) -> bool,
+    ) {
+        for (atom_id, constraint) in extra_constraints {
+            if !atom_filter(*atom_id) {
+                continue;
+            }
+
+            let atom_info = atoms.get(*atom_id).expect("atom must exist in plan");
+            let table = atom_info.table;
+
+            let header =
+                self.reprocess_constraints(table, *atom_id, std::slice::from_ref(constraint));
+            stages.header.push(header);
+        }
+    }
+
+    fn reprocess_existing_headers(
+        &self,
+        out: &mut JoinStages,
+        atoms: &Arc<DenseIdMap<AtomId, Atom>>,
+        existing: &[JoinHeader],
+    ) {
+        for JoinHeader {
+            atom, constraints, ..
+        } in existing
+        {
+            let atom_info = atoms.get(*atom).expect("atom must exist in plan");
+            let table = atom_info.table;
+
+            out.header
+                .push(self.reprocess_constraints(table, *atom, constraints));
+        }
+    }
+
+    fn get_rule_with_extra_constraints(
         &mut self,
         cached: &CachedPlan,
+        action_id: ActionId,
         extra_constraints: &[(AtomId, Constraint)],
-    ) -> RuleId {
-        // First, patch in the new action id.
-        let action_id = self.rule_set.actions.push(cached.actions.clone());
-        let plan = match &cached.plan {
+    ) -> Plan {
+        match &cached.plan {
             Plan::SinglePlan(cached_plan) => {
                 let mut stages = JoinStages {
                     header: Vec::new(),
                     instrs: cached_plan.stages.instrs.clone(),
                 };
 
-                // Next, patch in the "extra constraints" that we want to add to the plan.
-                for (atom_id, constraint) in extra_constraints {
-                    let atom_info = cached_plan
-                        .atoms
-                        .get(*atom_id)
-                        .expect("atom must exist in plan");
-                    let table = atom_info.table;
-                    let processed = self
-                        .db
-                        .process_constraints(table, std::slice::from_ref(constraint));
-                    if !processed.slow.is_empty() {
-                        panic!(
-                            "Cached plans only support constraints with a fast pushdown. Got: {constraint:?} for table {table:?}",
-                        );
-                    }
-                    stages.header.push(JoinHeader {
-                        atom: *atom_id,
-                        constraints: processed.fast,
-                        subset: processed.subset,
-                    });
-                }
+                self.push_extra_constraints(
+                    &mut stages,
+                    &cached_plan.atoms,
+                    extra_constraints,
+                    |_| true,
+                );
 
-                // Finally: re-process the rest of the constraints in the plan header and slot in the new
-                // plan.
-                for JoinHeader {
-                    atom, constraints, ..
-                } in &cached_plan.stages.header
-                {
-                    let atom_info = cached_plan
-                        .atoms
-                        .get(*atom)
-                        .expect("atom must exist in plan");
-                    let table = atom_info.table;
-                    let processed = self.db.process_constraints(table, constraints);
-                    if !processed.slow.is_empty() {
-                        panic!(
-                            "Cached plans only support constraints with a fast pushdown. Got: {constraints:?} for table {table:?}",
-                        );
-                    }
-                    stages.header.push(JoinHeader {
-                        atom: *atom,
-                        constraints: processed.fast,
-                        subset: processed.subset,
-                    });
-                }
+                self.reprocess_existing_headers(
+                    &mut stages,
+                    &cached_plan.atoms,
+                    &cached_plan.stages.header,
+                );
 
                 Plan::SinglePlan(SinglePlan {
                     atoms: cached_plan.atoms.clone(),
@@ -197,75 +222,53 @@ impl<'outer> RuleSetBuilder<'outer> {
             Plan::DecomposedPlan(cached_plan) => {
                 let mut blocks = Vec::with_capacity(cached_plan.stages.blocks.len());
                 for (i, cached_block) in cached_plan.stages.blocks.iter().enumerate() {
-                    let mut block = (
-                        JoinStages {
-                            header: vec![],
-                            instrs: cached_block.0.instrs.clone(),
-                        },
-                        cached_block.1.clone(),
+                    let mut stages = JoinStages {
+                        header: Vec::new(),
+                        instrs: cached_block.0.instrs.clone(),
+                    };
+
+                    self.push_extra_constraints(
+                        &mut stages,
+                        &cached_plan.atoms,
+                        extra_constraints,
+                        // Only push constraints for atoms in this block.
+                        |atom| cached_plan.atom_to_bag[atom] == i,
                     );
 
-                    // Next, patch in the "extra constraints" that we want to add to the plan.
-                    for (atom_id, constraint) in extra_constraints {
-                        if cached_plan.atom_to_bag[*atom_id] != i {
-                            continue;
-                        }
-                        let atom_info = cached_plan
-                            .atoms
-                            .get(*atom_id)
-                            .expect("atom must exist in plan");
-                        let table = atom_info.table;
-                        let processed = self
-                            .db
-                            .process_constraints(table, std::slice::from_ref(constraint));
-                        if !processed.slow.is_empty() {
-                            panic!(
-                                "Cached plans only support constraints with a fast pushdown. Got: {constraint:?} for table {table:?}",
-                            );
-                        }
-                        block.0.header.push(JoinHeader {
-                            atom: *atom_id,
-                            constraints: processed.fast,
-                            subset: processed.subset,
-                        });
-                    }
+                    self.reprocess_existing_headers(
+                        &mut stages,
+                        &cached_plan.atoms,
+                        &cached_block.0.header,
+                    );
 
-                    // Finally: re-process the rest of the constraints in the plan header and slot in the new
-                    // plan.
-                    for JoinHeader {
-                        atom, constraints, ..
-                    } in &cached_block.0.header
-                    {
-                        let atom_info = cached_plan
-                            .atoms
-                            .get(*atom)
-                            .expect("atom must exist in plan");
-                        let table = atom_info.table;
-                        let processed = self.db.process_constraints(table, constraints);
-                        if !processed.slow.is_empty() {
-                            panic!(
-                                "Cached plans only support constraints with a fast pushdown. Got: {constraints:?} for table {table:?}",
-                            );
-                        }
-                        block.0.header.push(JoinHeader {
-                            atom: *atom,
-                            constraints: processed.fast,
-                            subset: processed.subset,
-                        });
-                    }
-
-                    blocks.push(block);
+                    blocks.push((stages, cached_block.1.clone()));
                 }
 
+                assert!(cached_plan.result_block.header.is_empty(), "Result blocks should have no headers");
+                let result_block = JoinStages {
+                    header: Vec::new(),
+                    instrs: cached_plan.result_block.instrs.clone(),
+                };
+                
                 Plan::DecomposedPlan(DecomposedPlan {
                     atoms: cached_plan.atoms.clone(),
                     atom_to_bag: cached_plan.atom_to_bag.clone(),
                     stages: JoinStageBlocks { blocks },
                     actions: action_id,
+                    result_block,
                 })
             }
-        };
+        }
+    }
 
+    pub fn add_rule_from_cached_plan(
+        &mut self,
+        cached: &CachedPlan,
+        extra_constraints: &[(AtomId, Constraint)],
+    ) -> RuleId {
+        // First, patch in the new action id.
+        let action_id = self.rule_set.actions.push(cached.actions.clone());
+        let plan = self.get_rule_with_extra_constraints(cached, action_id, extra_constraints);
         self.rule_set
             .plans
             .push((plan, cached.desc.clone(), cached.symbol_map.clone()))
