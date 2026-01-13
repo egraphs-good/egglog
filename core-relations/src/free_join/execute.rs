@@ -7,7 +7,7 @@ use std::{
 
 use crate::{
     common::HashMap,
-    free_join::plan::{JoinStages, MatId, MatSpec, ScanMatSpec, SinglePlan},
+    free_join::plan::{JoinStages, MatId, MatScanMode, MatSpec, ScanMatSpec},
     numeric_id::{DenseIdMap, IdVec, NumericId},
     query::Atom,
     row_buffer::RowBuffer,
@@ -837,7 +837,7 @@ impl<'a> JoinState<'a> {
                 }
             },
             JoinStage::FusedIntersect {
-                cover: ScanMatSpec::Scan(cover),
+                cover,
                 bind,
                 to_intersect,
             } if to_intersect.is_empty() => {
@@ -887,7 +887,7 @@ impl<'a> JoinState<'a> {
                 binding_info.move_back_node(cover_atom, cover_node);
             }
             JoinStage::FusedIntersect {
-                cover: ScanMatSpec::Scan(cover),
+                cover,
                 bind,
                 to_intersect,
             } => {
@@ -983,49 +983,143 @@ impl<'a> JoinState<'a> {
                     binding_info.move_back(atom, prober);
                 }
             }
-            JoinStage::FusedIntersect {
-                cover: ScanMatSpec::Materialized(mat_id),
+            JoinStage::FusedIntersectMat {
+                cover,
+                mode,
                 bind,
                 to_intersect,
             } => {
-                let mat = binding_info.materializations[*mat_id].clone();
+                let cover_mat = binding_info.materializations[*cover].clone();
                 let mut updates = FrameUpdates::with_capacity(cmp::min(chunk_size, cur_size));
                 let probers = to_intersect
                     .iter()
                     .map(|(spec, _)| {
-                        self.get_index(
-                            atoms,
-                            spec.to_index.atom,
-                            binding_info,
-                            spec.to_index.vars.iter().copied(),
-                        )
-                    })
-                    .collect::<SmallVec<[Prober; 4]>>();
-                for msg_vals in mat.iter() {
-                    for (i, var) in bind.iter() {
-                        updates.push_binding(*var, msg_vals.key()[i.index()]);
-                    }
-                    for (spec, prober) in to_intersect.iter().zip(probers.iter()) {
-                        let key = spec
-                            .1
-                            .iter()
-                            .map(|col| msg_vals.key()[col.index()])
-                            .collect::<SmallVec<[Value; 4]>>();
-                        if let Some(subset) = prober.get_subset(&key) {
-                            updates.refine_atom(spec.0.to_index.atom, subset);
+                        if let ScanMatSpec::Scan(spec) = spec {
+                            Some(self.get_index(
+                                atoms,
+                                spec.to_index.atom,
+                                binding_info,
+                                spec.to_index.vars.iter().copied(),
+                            ))
                         } else {
-                            updates.rollback();
-                            continue;
+                            None
+                        }
+                    })
+                    .collect::<SmallVec<[Option<Prober>; 4]>>();
+
+                let mut key = Vec::with_capacity(4);
+                let mut prune_probers =
+                    |updates: &mut FrameUpdates,
+                     binding_info: &mut BindingInfo,
+                     mat_key: Option<&[Value]>,
+                     mat_non_key: Option<&[Value]>| {
+                        for ((spec, cols), prober) in to_intersect.iter().zip(probers.iter()) {
+                            key.clear();
+                            for col in cols.iter() {
+                                let val = match mat_key {
+                                    Some(mat_key) => {
+                                        if col.index() < mat_key.len() {
+                                            mat_key[col.index()]
+                                        } else {
+                                            mat_non_key.unwrap()[col.index() - mat_key.len()]
+                                        }
+                                    }
+                                    None => mat_non_key.unwrap()[col.index()],
+                                };
+                                key.push(val);
+                            }
+                            match spec {
+                                ScanMatSpec::Scan(spec) => {
+                                    let prober = prober.as_ref().unwrap();
+                                    if let Some(subset) = prober.get_subset(&key) {
+                                        updates.refine_atom(spec.to_index.atom, subset);
+                                    } else {
+                                        updates.rollback();
+                                        return;
+                                    }
+                                }
+                                ScanMatSpec::Materialized(spec) => {
+                                    let mat = &binding_info.materializations[*spec];
+                                    if mat.contains_key(&key) {
+                                        // We don't refine materializations. Materializations
+                                        // are only refined when scanning in ScanMatMode::Refine mode,
+                                        // which is done by looking up the relevant variables.
+                                    } else {
+                                        updates.rollback();
+                                        return;
+                                    }
+                                }
+                            }
+                        }
+                    };
+
+                match mode {
+                    MatScanMode::Full | MatScanMode::KeyOnly => {
+                        // enumerate keys
+                        for group in cover_mat.iter() {
+                            let group_key_len = group.key().len();
+                            for (col, var) in bind.iter() {
+                                if col.index() < group_key_len {
+                                    updates.push_binding(*var, group.key()[col.index()]);
+                                }
+                            }
+                            if mode == &MatScanMode::Full {
+                                // enumerate non-keys
+                                for non_keys in group.value().iter() {
+                                    // TODO: optimization that guaratees all keys come before non-keys
+                                    for (col, var) in bind.iter() {
+                                        if col.index() >= group_key_len {
+                                            updates.push_binding(
+                                                *var,
+                                                non_keys[col.index() - group_key_len],
+                                            );
+                                        }
+                                    }
+                                    prune_probers(
+                                        &mut updates,
+                                        binding_info,
+                                        Some(group.key()),
+                                        Some(non_keys),
+                                    );
+                                }
+                            } else if mode == &MatScanMode::KeyOnly {
+                                prune_probers(&mut updates, binding_info, Some(group.key()), None);
+                            }
+
+                            updates.finish_frame();
+                            if updates.frames() >= chunk_size {
+                                drain_updates_parallel!(updates);
+                            }
                         }
                     }
-                    updates.finish_frame();
-                    if updates.frames() >= chunk_size {
-                        drain_updates_parallel!(updates);
+                    MatScanMode::Value(index_vars) => {
+                        let keys = index_vars
+                            .iter()
+                            .map(|var| binding_info.bindings[*var])
+                            .collect::<Vec<Value>>();
+                        // lookup keys
+                        if let Some(group) = cover_mat.get(&keys) {
+                            // enumerate non-keys
+                            for vals in group.value().iter() {
+                                debug_assert!(vals.len() == bind.len());
+                                for (col, var) in bind.iter() {
+                                    updates.push_binding(*var, vals[col.index()]);
+                                }
+                                prune_probers(&mut updates, binding_info, None, Some(vals));
+                                updates.finish_frame();
+                                if updates.frames() >= chunk_size {
+                                    drain_updates_parallel!(updates);
+                                }
+                            }
+                        }
                     }
                 }
+
                 drain_updates!(updates);
                 for (spec, prober) in to_intersect.iter().zip(probers) {
-                    binding_info.move_back(spec.0.to_index.atom, prober);
+                    if let ScanMatSpec::Scan(spec) = &spec.0 {
+                        binding_info.move_back(spec.to_index.atom, prober.unwrap());
+                    }
                 }
             }
         }
@@ -1345,14 +1439,8 @@ fn estimate_size(join_stage: &JoinStage, binding_info: &BindingInfo) -> usize {
             .map(|scan| binding_info.subsets[scan.atom].size())
             .min()
             .unwrap_or(0),
-        JoinStage::FusedIntersect {
-            cover: ScanMatSpec::Scan(cover),
-            ..
-        } => binding_info.subsets[cover.to_index.atom].size(),
-        JoinStage::FusedIntersect {
-            cover: ScanMatSpec::Materialized(cover),
-            ..
-        } => binding_info.materializations[*cover].len(), // TODO: len() might be expensive.
+        JoinStage::FusedIntersect { cover, .. } => binding_info.subsets[cover.to_index.atom].size(),
+        JoinStage::FusedIntersectMat { cover, .. } => binding_info.materializations[*cover].len(), // TODO: len() might be expensive.
     }
 }
 
@@ -1360,6 +1448,7 @@ fn num_intersected_rels(join_stage: &JoinStage) -> i32 {
     match join_stage {
         JoinStage::Intersect { scans, .. } => scans.len() as i32,
         JoinStage::FusedIntersect { to_intersect, .. } => to_intersect.len() as i32 + 1,
+        JoinStage::FusedIntersectMat { to_intersect, .. } => to_intersect.len() as i32 + 1,
     }
 }
 
@@ -1378,17 +1467,11 @@ fn sort_plan_by_size(
             JoinStage::Intersect { scans, .. } => scans.iter().for_each(|scan| {
                 *times_refined.get_or_default(scan.atom) += 1;
             }),
-            JoinStage::FusedIntersect {
-                cover: ScanMatSpec::Scan(cover),
-                ..
-            } => {
+            JoinStage::FusedIntersect { cover, .. } => {
                 *times_refined.get_or_default(cover.to_index.atom) +=
                     cover.to_index.vars.len() as i64;
             }
-            JoinStage::FusedIntersect {
-                cover: ScanMatSpec::Materialized(_),
-                ..
-            } => {
+            JoinStage::FusedIntersectMat { .. } => {
                 continue;
             }
         }
@@ -1407,17 +1490,11 @@ fn sort_plan_by_size(
                 .iter()
                 .map(|scan| times_refined.get(scan.atom).copied().unwrap_or_default())
                 .sum::<i64>(),
-            JoinStage::FusedIntersect {
-                cover: ScanMatSpec::Scan(cover),
-                ..
-            } => times_refined
+            JoinStage::FusedIntersect { cover, .. } => times_refined
                 .get(cover.to_index.atom)
                 .copied()
                 .unwrap_or_default(),
-            JoinStage::FusedIntersect {
-                cover: ScanMatSpec::Materialized(_),
-                ..
-            } => i64::MAX - 1, // prioritize materialized scans first
+            JoinStage::FusedIntersectMat { .. } => i64::MAX - 1, // prioritize materialized scans first
         };
         (
             -refine,
@@ -1439,17 +1516,11 @@ fn sort_plan_by_size(
             JoinStage::Intersect { scans, .. } => scans.iter().for_each(|scan| {
                 *times_refined.get_or_default(scan.atom) += 1;
             }),
-            JoinStage::FusedIntersect {
-                cover: ScanMatSpec::Scan(cover),
-                ..
-            } => {
+            JoinStage::FusedIntersect { cover, .. } => {
                 *times_refined.get_or_default(cover.to_index.atom) +=
                     cover.to_index.vars.len() as i64;
             }
-            JoinStage::FusedIntersect {
-                cover: ScanMatSpec::Materialized(_),
-                ..
-            } => continue,
+            JoinStage::FusedIntersectMat { .. } => continue,
         }
     }
 }
