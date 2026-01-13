@@ -106,6 +106,17 @@ impl<'a> ProofInstrumentor<'a> {
         res.unwrap()
     }
 
+    pub(crate) fn format_prooflist(&self, proofs: &[String]) -> String {
+        let pcons = &self.proof_names().pcons;
+        let pnil = &self.proof_names().pnil;
+
+        let mut prooflist = format!("({pnil})");
+        for proof in proofs.iter().rev() {
+            prooflist = format!("({pcons} {proof} {prooflist})");
+        }
+        prooflist
+    }
+
     // TODO add these as fresh names
     pub(crate) fn parent_direct_ruleset_name(&self) -> String {
         "parent".to_string()
@@ -119,6 +130,7 @@ impl<'a> ProofInstrumentor<'a> {
         "rebuilding_cleanup".to_string()
     }
 
+    /// Header commands for term encoding, setting up rulesets.
     pub(crate) fn term_header(&mut self) -> Vec<Command> {
         let str = format!(
             "(ruleset {})
@@ -135,6 +147,7 @@ impl<'a> ProofInstrumentor<'a> {
         self.parse_program(&str)
     }
 
+    /// Internal parse helper for term encoding- parse and crash on failure.
     pub(crate) fn parse_schedule(&mut self, input: String) -> Schedule {
         self.egraph.parser.ensure_no_reserved_symbols = false;
         let res = self.egraph.parser.get_schedule_from_string(None, &input);
@@ -142,6 +155,7 @@ impl<'a> ProofInstrumentor<'a> {
         res.unwrap()
     }
 
+    /// Internal parse helper for term encoding- parse and crash on failure.
     pub(crate) fn parse_facts(&mut self, input: &[String]) -> Vec<Fact> {
         self.egraph.parser.ensure_no_reserved_symbols = false;
         let res = input
@@ -153,6 +167,7 @@ impl<'a> ProofInstrumentor<'a> {
     }
 
     // Each function/constructor gets a view table, the canonicalized e-nodes to accelerate e-matching.
+    // TODO need fresh names for these
     pub(crate) fn view_name(&self, name: &str) -> String {
         format!("{}View", name)
     }
@@ -232,6 +247,7 @@ impl<'a> ProofInstrumentor<'a> {
         format!("{}ViewProof", name)
     }
 
+    // TODO make fresh names for this
     pub(crate) fn term_proof_name(&self, name: &str) -> String {
         format!("{}Proof", name)
     }
@@ -240,6 +256,8 @@ impl<'a> ProofInstrumentor<'a> {
         self.egraph.parser.symbol_gen.fresh("v")
     }
 
+    /// Header string for proof encoding, defining sorts and constructors.
+    /// Correspondings to [`RawProof`] in the Rust code.
     pub(crate) fn proof_header(&mut self) -> String {
         let mut to_ast_constructors = Vec::new();
         // need to build a Ast{lit} for each lit sort in self

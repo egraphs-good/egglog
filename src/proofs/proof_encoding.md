@@ -119,7 +119,7 @@ The congruence rule adds equalities to the union-find table when two constructor
 The rebuild rule updates view tables so that views
   point to representative terms for child e-classes.
 
-```
+```text
 (function v2 () Math :no-merge)
 (set (v2) (Add 1 2))
 (AddView 1 2 (v2 ))

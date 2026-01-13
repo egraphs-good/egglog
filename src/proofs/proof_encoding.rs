@@ -744,17 +744,6 @@ impl<'a> ProofInstrumentor<'a> {
         (res, self.format_prooflist(&proof))
     }
 
-    fn format_prooflist(&self, proofs: &[String]) -> String {
-        let pcons = &self.proof_names().pcons;
-        let pnil = &self.proof_names().pnil;
-
-        let mut prooflist = format!("({pnil})");
-        for proof in proofs.iter().rev() {
-            prooflist = format!("({pcons} {proof} {prooflist})");
-        }
-        prooflist
-    }
-
     // Actions need to be instrumented to add to the view
     // as well as to the terms tables.
     fn instrument_action(
@@ -1038,7 +1027,6 @@ impl<'a> ProofInstrumentor<'a> {
         self.parse_program(&instrumented)
     }
 
-    /// TODO experiment with schedule- unclear what is fastest.
     /// Any schedule should be sound as long as we saturate.
     fn rebuild(&mut self) -> Schedule {
         let parent_direct_ruleset = self.parent_direct_ruleset_name();
