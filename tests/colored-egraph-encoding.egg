@@ -1,0 +1,65 @@
+(datatype Context
+    (Str String))
+
+(let $basectx (Str "base"))
+
+(datatype Expr
+   (App2 String Expr Expr)
+   (Var String))
+
+(constructor Refines (Context Context))
+
+(rule ((Refines a b)
+       (Refines b c))
+      ((Refines a c)))
+
+(constructor RefinesSym (Context Context))
+(rule ((Refines a b))
+      ((RefinesSym a b)
+       (RefinesSym b a)))
+
+
+;; A UF is a complete copy of the UF specific to the context.
+;; Only stores new unions; it uses leaders from the previous context;
+(constructor UF (Expr Expr Context))
+
+
+;; The reachable contexts following any equality edge
+;; via contexts that are "compatible"
+;; Compatible contexts are ancestors or descendents of the current most specific context
+(constructor EclassReachableContexts (Expr Context))
+
+
+;; exampel: black, red, orange
+;; matching on black                   1 -r 2 -o 4
+;;   red edge 1 = 2                    |o
+;;    orange 1 = 3                     3
+;;    orange 2 = 4
+;;  
+
+
+;; original rule
+;(rule ((App2 a b)
+;       (= b (App2 c d)))
+;      (...))
+
+(rule ((App2 f a b)
+       (= b' (App2 f c d))
+       (UF b b' ctx))
+       (...))
+
+;; original rule
+;; (rule ((App2 "+" b a)
+;;        (App2 "-" b a))
+
+;; match on canonical nodes in base equality relation
+(rule ((App2 "+" b a)
+       (App2 "-" b' a')
+       (UF b bleader ctx)
+       (UF b' bleader ctx)
+       (UF a aleader ctx)
+       (UF a' aleader ctx))
+      (...))
+
+
+
