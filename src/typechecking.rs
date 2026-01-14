@@ -1,7 +1,7 @@
 use std::hash::Hasher;
 
 use crate::{
-    core::{CoreActionContext, CoreRule, GenericActionsExt},
+    core::{CoreActionContext, CoreRule, GenericActionsExt, ResolvedCall},
     *,
 };
 use ast::{ResolvedAction, ResolvedExpr, ResolvedFact, ResolvedRule, ResolvedVar, Rule};
@@ -49,9 +49,17 @@ impl Hash for FuncType {
         }
     }
 }
+/// Primitive validators
+/// Validators take a termdag, arguments, and expected term id and return true if the computation is correct.
+pub type PrimitiveValidator = Arc<dyn Fn(&mut TermDag, &[TermId]) -> Option<TermId> + Send + Sync>;
 
 #[derive(Clone)]
-pub struct PrimitiveWithId(pub Arc<dyn Primitive + Send + Sync>, pub ExternalFunctionId);
+pub struct PrimitiveWithId {
+    pub(crate) primitive: Arc<dyn Primitive + Send + Sync>,
+    pub(crate) id: ExternalFunctionId,
+    // TODO is storing the validator here inefficient?
+    pub(crate) validator: Option<PrimitiveValidator>,
+}
 
 impl PrimitiveWithId {
     /// Takes the full signature of a primitive (both input and output types).
@@ -65,7 +73,7 @@ impl PrimitiveWithId {
             constraints.push(constraint::assign(lit.clone(), ty.clone()))
         }
         constraints.extend(
-            self.0
+            self.primitive
                 .get_type_constraints(&Span::Panic)
                 .get(&lits, typeinfo),
         );
@@ -79,7 +87,7 @@ impl PrimitiveWithId {
 
 impl Debug for PrimitiveWithId {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        write!(f, "Prim({})", self.0.name())
+        write!(f, "Prim({})", self.primitive.name())
     }
 }
 
@@ -89,7 +97,7 @@ pub struct TypeInfo {
     mksorts: HashMap<String, MkSort>,
     // TODO(yz): I want to get rid of this as now we have user-defined primitives and constraint based type checking
     reserved_primitives: HashSet<&'static str>,
-    sorts: HashMap<String, Arc<dyn Sort>>,
+    pub(crate) sorts: HashMap<String, Arc<dyn Sort>>,
     primitives: HashMap<String, Vec<PrimitiveWithId>>,
     func_types: HashMap<String, FuncType>,
     pub(crate) global_sorts: HashMap<String, ArcSort>,
@@ -153,6 +161,14 @@ impl EGraph {
     where
         T: Clone + Primitive + Send + Sync + 'static,
     {
+        self.add_primitive_with_validator(x, None)
+    }
+
+    /// Add a user-defined primitive with an optional validator
+    pub fn add_primitive_with_validator<T>(&mut self, x: T, validator: Option<PrimitiveValidator>)
+    where
+        T: Clone + Primitive + Send + Sync + 'static,
+    {
         // We need to use a wrapper because of the orphan rule.
         // If we just try to implement `ExternalFunction` directly on
         // all `PrimitiveLike`s then it would be possible for a
@@ -165,13 +181,17 @@ impl EGraph {
             }
         }
 
-        let prim = Arc::new(x.clone());
-        let ext = self.backend.register_external_func(Box::new(Wrapper(x)));
+        let primitive = Arc::new(x.clone());
+        let id = self.backend.register_external_func(Box::new(Wrapper(x)));
         self.type_info
             .primitives
-            .entry(prim.name().to_owned())
+            .entry(primitive.name().to_owned())
             .or_default()
-            .push(PrimitiveWithId(prim, ext));
+            .push(PrimitiveWithId {
+                primitive,
+                id,
+                validator,
+            });
     }
 
     pub(crate) fn typecheck_program(
@@ -277,6 +297,19 @@ impl EGraph {
             NCommand::PrintSize(span, n) => {
                 // Should probably also resolve the function symbol here
                 ResolvedNCommand::PrintSize(span.clone(), n.clone())
+            }
+            NCommand::ProveExists(span, constructor) => {
+                let func_type = self
+                    .type_info
+                    .get_func_type(constructor)
+                    .ok_or_else(|| TypeError::UnboundFunction(constructor.clone(), span.clone()))?;
+                if func_type.subtype != FunctionSubtype::Constructor {
+                    return Err(TypeError::ProveExistsRequiresConstructor(
+                        constructor.clone(),
+                        span.clone(),
+                    ));
+                }
+                ResolvedNCommand::ProveExists(span.clone(), ResolvedCall::Func(func_type.clone()))
             }
             NCommand::Output { span, file, exprs } => {
                 let exprs = exprs
@@ -489,6 +522,7 @@ impl TypeInfo {
             unextractable: fdecl.unextractable,
             let_binding: fdecl.let_binding,
             span: fdecl.span.clone(),
+            unionable: fdecl.unionable,
         })
     }
 
@@ -589,10 +623,8 @@ impl TypeInfo {
             GenericExpr::Call(span, head, args) => {
                 match head {
                     ResolvedCall::Func(t) => {
-                        // Only allowed to lookup constructor or relation
-                        if t.subtype != FunctionSubtype::Constructor
-                            && t.subtype != FunctionSubtype::Relation
-                        {
+                        // Only allowed to lookup constructor
+                        if t.subtype != FunctionSubtype::Constructor {
                             Err(TypeError::LookupInRuleDisallowed(
                                 head.to_string(),
                                 span.clone(),
@@ -723,6 +755,13 @@ impl TypeInfo {
         self.primitives.contains_key(sym) || self.reserved_primitives.contains(sym)
     }
 
+    pub fn primitive_has_validator(&self, id: ExternalFunctionId) -> bool {
+        self.primitives
+            .values()
+            .flat_map(|v| v.iter())
+            .any(|p| p.id == id && p.validator.is_some())
+    }
+
     pub fn get_func_type(&self, sym: &str) -> Option<&FuncType> {
         self.func_types.get(sym)
     }
@@ -765,6 +804,8 @@ pub enum TypeError {
     DisallowedSort(String, String, Span),
     #[error("{1}\nUnbound function {0}")]
     UnboundFunction(String, Span),
+    #[error("{1}\nprove-exists requires constructor function, but {0} is not a constructor")]
+    ProveExistsRequiresConstructor(String, Span),
     #[error("{1}\nFunction already bound {0}")]
     FunctionAlreadyBound(String, Span),
     #[error("{1}\nSort {0} already declared.")]

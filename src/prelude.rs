@@ -16,6 +16,85 @@ pub use egglog::{CommandMacro, CommandMacroRegistry};
 pub use egglog::{EGraph, span};
 pub use egglog::{action, actions, datatype, expr, fact, facts, sort, vars};
 
+/// Trait for types that can be converted to/from Literal for use in validated primitives.
+/// This enables automatic validator generation for literal primitives.
+pub trait LiteralConvertible: Sized {
+    fn to_literal(self) -> egglog_ast::generic_ast::Literal;
+    fn from_literal(lit: &egglog_ast::generic_ast::Literal) -> Option<Self>;
+}
+
+impl LiteralConvertible for i64 {
+    fn to_literal(self) -> egglog_ast::generic_ast::Literal {
+        egglog_ast::generic_ast::Literal::Int(self)
+    }
+    fn from_literal(lit: &egglog_ast::generic_ast::Literal) -> Option<Self> {
+        match lit {
+            egglog_ast::generic_ast::Literal::Int(i) => Some(*i),
+            _ => None,
+        }
+    }
+}
+
+impl LiteralConvertible for bool {
+    fn to_literal(self) -> egglog_ast::generic_ast::Literal {
+        egglog_ast::generic_ast::Literal::Bool(self)
+    }
+    fn from_literal(lit: &egglog_ast::generic_ast::Literal) -> Option<Self> {
+        match lit {
+            egglog_ast::generic_ast::Literal::Bool(b) => Some(*b),
+            _ => None,
+        }
+    }
+}
+
+impl LiteralConvertible for ordered_float::OrderedFloat<f64> {
+    fn to_literal(self) -> egglog_ast::generic_ast::Literal {
+        egglog_ast::generic_ast::Literal::Float(self)
+    }
+    fn from_literal(lit: &egglog_ast::generic_ast::Literal) -> Option<Self> {
+        match lit {
+            egglog_ast::generic_ast::Literal::Float(f) => Some(*f),
+            _ => None,
+        }
+    }
+}
+
+impl LiteralConvertible for egglog::sort::F {
+    fn to_literal(self) -> egglog_ast::generic_ast::Literal {
+        egglog_ast::generic_ast::Literal::Float(self.0)
+    }
+    fn from_literal(lit: &egglog_ast::generic_ast::Literal) -> Option<Self> {
+        match lit {
+            egglog_ast::generic_ast::Literal::Float(f) => Some(egglog::sort::F::from(*f)),
+            _ => None,
+        }
+    }
+}
+
+impl LiteralConvertible for egglog::sort::S {
+    fn to_literal(self) -> egglog_ast::generic_ast::Literal {
+        egglog_ast::generic_ast::Literal::String(self.0)
+    }
+    fn from_literal(lit: &egglog_ast::generic_ast::Literal) -> Option<Self> {
+        match lit {
+            egglog_ast::generic_ast::Literal::String(s) => Some(egglog::sort::S::new(s.clone())),
+            _ => None,
+        }
+    }
+}
+
+impl LiteralConvertible for () {
+    fn to_literal(self) -> egglog_ast::generic_ast::Literal {
+        egglog_ast::generic_ast::Literal::Unit
+    }
+    fn from_literal(lit: &egglog_ast::generic_ast::Literal) -> Option<Self> {
+        match lit {
+            egglog_ast::generic_ast::Literal::Unit => Some(()),
+            _ => None,
+        }
+    }
+}
+
 pub mod exprs {
     use super::*;
 
@@ -661,7 +740,7 @@ pub trait BaseSort: Any + Send + Sync + Debug {
     type Base: BaseValue;
     fn name(&self) -> &str;
     fn register_primitives(&self, _eg: &mut EGraph) {}
-    fn reconstruct_termdag(&self, _: &BaseValues, _: Value, _: &mut TermDag) -> Term;
+    fn reconstruct_termdag(&self, _: &BaseValues, _: Value, _: &mut TermDag) -> TermId;
 
     fn to_arcsort(self) -> ArcSort
     where
@@ -705,7 +784,7 @@ impl<T: BaseSort> Sort for BaseSortImpl<T> {
         base_values: &BaseValues,
         value: Value,
         termdag: &mut TermDag,
-    ) -> Term {
+    ) -> TermId {
         self.0.reconstruct_termdag(base_values, value, termdag)
     }
 }
@@ -728,8 +807,8 @@ pub trait ContainerSort: Any + Send + Sync + Debug {
         _: &ContainerValues,
         _: Value,
         _: &mut TermDag,
-        _: Vec<Term>,
-    ) -> Term;
+        _: Vec<TermId>,
+    ) -> TermId;
     fn serialized_name(&self, container_values: &ContainerValues, value: Value) -> String;
 
     fn to_arcsort(self) -> ArcSort
@@ -797,8 +876,8 @@ impl<T: ContainerSort> Sort for ContainerSortImpl<T> {
         container_values: &ContainerValues,
         value: Value,
         termdag: &mut TermDag,
-        element_terms: Vec<Term>,
-    ) -> Term {
+        element_terms: Vec<TermId>,
+    ) -> TermId {
         self.0
             .reconstruct_termdag(container_values, value, termdag, element_terms)
     }
