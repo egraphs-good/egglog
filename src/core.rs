@@ -76,7 +76,7 @@ impl SpecializedPrimitive {
 
 impl PartialEq for SpecializedPrimitive {
     fn eq(&self, other: &Self) -> bool {
-        self.primitive.1 == other.primitive.1
+        self.prim_with_id.id == other.prim_with_id.id
     }
 }
 
@@ -84,7 +84,7 @@ impl Eq for SpecializedPrimitive {}
 
 impl Hash for SpecializedPrimitive {
     fn hash<H: Hasher>(&self, state: &mut H) {
-        self.primitive.1.hash(state);
+        self.prim_with_id.id.hash(state);
     }
 }
 
