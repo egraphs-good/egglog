@@ -229,6 +229,16 @@ impl<K: NumericId, V: Default> DenseIdMap<K, V> {
     }
 }
 
+impl<K: NumericId, V: Clone> FromIterator<(K, V)> for DenseIdMap<K, V> {
+    fn from_iter<T: IntoIterator<Item = (K, V)>>(iter: T) -> Self {
+        let mut res = DenseIdMap::new();
+        for (k, v) in iter {
+            res.insert(k, v);
+        }
+        res
+    }
+}
+
 #[derive(Debug)]
 pub struct IdVec<K, V> {
     data: Vec<V>,
