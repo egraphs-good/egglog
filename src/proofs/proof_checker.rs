@@ -890,7 +890,7 @@ impl ProofStore {
             })?;
 
         // Check if the claimed equality is in the propositions
-        if action_ctx.propositions.contains(claimed) || action_ctx.propositions.contains(claimed) {
+        if action_ctx.propositions.contains(claimed) {
             return Ok(());
         }
 
