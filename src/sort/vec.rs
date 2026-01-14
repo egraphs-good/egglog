@@ -62,14 +62,6 @@ impl Presort for VecSort {
                 .get_sort_by_name(e)
                 .ok_or(TypeError::UndefinedSort(e.clone(), span.clone()))?;
 
-            if e.is_eq_container_sort() {
-                return Err(TypeError::DisallowedSort(
-                    name,
-                    "Vec nested with other EqSort containers are not allowed".into(),
-                    span.clone(),
-                ));
-            }
-
             let out = Self {
                 name,
                 element: e.clone(),
@@ -93,7 +85,7 @@ impl ContainerSort for VecSort {
     }
 
     fn is_eq_container_sort(&self) -> bool {
-        self.element.is_eq_sort()
+        self.element.is_eq_sort() || self.element.is_eq_container_sort()
     }
 
     fn inner_values(
@@ -115,15 +107,15 @@ impl ContainerSort for VecSort {
         let arc = self.clone().to_arcsort();
 
         add_primitive!(eg, "vec-empty"  = {self.clone(): VecSort} |                                | -> @VecContainer (arc) { VecContainer {
-            do_rebuild: self.ctx.element.is_eq_sort(),
+            do_rebuild: self.ctx.is_eq_container_sort(),
             data: Vec::new()
         } });
         add_primitive!(eg, "vec-of"     = {self.clone(): VecSort} [xs: # (self.element())          ] -> @VecContainer (arc) { VecContainer {
-            do_rebuild: self.ctx.element.is_eq_sort(),
+            do_rebuild: self.ctx.is_eq_container_sort(),
             data: xs                     .collect()
         } });
         add_primitive!(eg, "vec-append" = {self.clone(): VecSort} [xs: @VecContainer (arc)] -> @VecContainer (arc) { VecContainer {
-            do_rebuild: self.ctx.element.is_eq_sort(),
+            do_rebuild: self.ctx.is_eq_container_sort(),
             data: xs.flat_map(|x| x.data).collect()
         } });
 
