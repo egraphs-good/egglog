@@ -5,6 +5,7 @@ use std::{
         Arc,
         atomic::{AtomicUsize, Ordering},
     },
+    u32,
 };
 
 use crate::{
@@ -103,6 +104,13 @@ impl SubAtom {
         SubAtom {
             atom,
             vars: Default::default(),
+        }
+    }
+
+    pub(crate) fn dummy() -> SubAtom {
+        SubAtom {
+            atom: AtomId::new(u32::MAX),
+            vars: SmallVec::default(),
         }
     }
 }

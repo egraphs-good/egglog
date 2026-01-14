@@ -107,4 +107,10 @@ impl FrameUpdates {
         self.frames = 0;
         self.last_start = 0;
     }
+
+    // for debugging
+    #[allow(dead_code)]
+    pub(super) fn updates(&self) -> &[UpdateCell] {
+        &self.updates
+    }
 }
