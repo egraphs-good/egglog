@@ -198,7 +198,7 @@ impl<'a> ProofInstrumentor<'a> {
             .map(|(i, _)| format!("c{i}_"))
             .collect::<Vec<_>>()
             .join(" ");
-        let to_delete_name = self.to_delete_name(&fdecl.name);
+        let to_delete_name = self.delete_name(&fdecl.name);
         let subsumed_name = self.subsumed_name(&fdecl.name);
         let view_name = self.view_name(&fdecl.name);
         let delete_subsume_ruleset = self.delete_subsume_ruleset_name();
@@ -359,7 +359,7 @@ impl<'a> ProofInstrumentor<'a> {
         let in_sorts = ListDisplay(schema.input.clone(), " ");
         let fresh_sort = self.egraph.parser.symbol_gen.fresh("view");
         let delete_rule = self.delete_and_subsume(fdecl);
-        let to_delete_name = self.to_delete_name(&fdecl.name);
+        let to_delete_name = self.delete_name(&fdecl.name);
         let subsumed_name = self.subsumed_name(&fdecl.name);
         let term_sorts = format!(
             "{in_sorts} {}",
@@ -779,7 +779,7 @@ impl<'a> ProofInstrumentor<'a> {
             ResolvedAction::Change(_span, change, h, generic_exprs) => {
                 if let ResolvedCall::Func(func_type) = h {
                     let symbol = match change {
-                        Change::Delete => self.to_delete_name(&func_type.name),
+                        Change::Delete => self.delete_name(&func_type.name),
                         Change::Subsume => self.subsumed_name(&func_type.name),
                     };
                     let children = generic_exprs

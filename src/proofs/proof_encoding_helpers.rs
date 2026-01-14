@@ -228,7 +228,7 @@ impl<'a> ProofInstrumentor<'a> {
         }
     }
 
-    pub(crate) fn to_delete_name(&mut self, name: &str) -> String {
+    pub(crate) fn delete_name(&mut self, name: &str) -> String {
         if let Some(n) = self.egraph.proof_state.proof_names.to_delete_name.get(name) {
             n.clone()
         } else {

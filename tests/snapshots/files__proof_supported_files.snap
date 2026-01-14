@@ -35,7 +35,6 @@ repro-new-backend-delete.egg
 repro-new-backend-prims.egg
 repro-noteqbug.egg
 repro-primitive-query.egg
-repro-push-pop-global.egg
 repro-querybug.egg
 repro-querybug2.egg
 repro-querybug4.egg
