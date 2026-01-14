@@ -13,6 +13,9 @@ use crate::{
     util::{FreshGen, HashMap, SymbolGen},
 };
 
+/// Holds all the names used in proof encoding.
+/// We need fresh names that don't collide with user-defined names.
+/// All of these names should be generated with the single global [`SymbolGen`].
 #[derive(Clone)]
 pub(crate) struct EncodingNames {
     pub(crate) proof_list_sort: String,
@@ -31,10 +34,22 @@ pub(crate) struct EncodingNames {
     pub(crate) single_parent_ruleset_name: String,
     pub(crate) pcons: String,
     pub(crate) pnil: String,
+    // Ruleset names
+    pub(crate) parent_direct_ruleset_name: String,
+    pub(crate) rebuilding_ruleset_name: String,
+    pub(crate) rebuilding_cleanup_ruleset_name: String,
+    pub(crate) delete_subsume_ruleset_name: String,
+    // Per-function fresh names
+    pub(crate) view_name: HashMap<String, String>,
+    pub(crate) to_delete_name: HashMap<String, String>,
+    pub(crate) subsumed_name: HashMap<String, String>,
+    pub(crate) view_proof_name: HashMap<String, String>,
+    pub(crate) term_proof_name: HashMap<String, String>,
 }
 
 /// Packages proof information for instrumenting actions.
-/// We may not know yet what terms we are instrumenting, so Rule and Fiat leave that information to be filled in later.
+/// We may not know yet what terms we are instrumenting, so all but Proof leave that information to be filled in later.
+/// This is only used internally in this file, it's not part of the proof format.
 pub(crate) enum Justification {
     Rule(String, String), // rule name and proof list
     Fiat,
@@ -57,9 +72,18 @@ impl EncodingNames {
             sort_to_ast_constructor: HashMap::default(),
             fn_to_term_sort: HashMap::default(),
             uf_proof_name: HashMap::default(),
-            single_parent_ruleset_name: "single_parent".to_string(),
+            single_parent_ruleset_name: symbol_gen.fresh("single_parent"),
             pcons: symbol_gen.fresh("PCons"),
             pnil: symbol_gen.fresh("PNil"),
+            parent_direct_ruleset_name: symbol_gen.fresh("parent"),
+            rebuilding_ruleset_name: symbol_gen.fresh("rebuilding"),
+            rebuilding_cleanup_ruleset_name: symbol_gen.fresh("rebuilding_cleanup"),
+            delete_subsume_ruleset_name: symbol_gen.fresh("delete_subsume_ruleset"),
+            view_name: HashMap::default(),
+            to_delete_name: HashMap::default(),
+            subsumed_name: HashMap::default(),
+            view_proof_name: HashMap::default(),
+            term_proof_name: HashMap::default(),
         }
     }
 }
@@ -117,17 +141,36 @@ impl<'a> ProofInstrumentor<'a> {
         prooflist
     }
 
-    // TODO add these as fresh names
     pub(crate) fn parent_direct_ruleset_name(&self) -> String {
-        "parent".to_string()
+        self.egraph
+            .proof_state
+            .proof_names
+            .parent_direct_ruleset_name
+            .clone()
     }
 
     pub(crate) fn rebuilding_ruleset_name(&self) -> String {
-        "rebuilding".to_string()
+        self.egraph
+            .proof_state
+            .proof_names
+            .rebuilding_ruleset_name
+            .clone()
     }
 
     pub(crate) fn rebuilding_cleanup_ruleset_name(&self) -> String {
-        "rebuilding_cleanup".to_string()
+        self.egraph
+            .proof_state
+            .proof_names
+            .rebuilding_cleanup_ruleset_name
+            .clone()
+    }
+
+    pub(crate) fn delete_subsume_ruleset_name(&self) -> String {
+        self.egraph
+            .proof_state
+            .proof_names
+            .delete_subsume_ruleset_name
+            .clone()
     }
 
     /// Header commands for term encoding, setting up rulesets.
@@ -167,21 +210,58 @@ impl<'a> ProofInstrumentor<'a> {
     }
 
     // Each function/constructor gets a view table, the canonicalized e-nodes to accelerate e-matching.
-    // TODO need fresh names for these
-    pub(crate) fn view_name(&self, name: &str) -> String {
-        format!("{}View", name)
+    pub(crate) fn view_name(&mut self, name: &str) -> String {
+        if let Some(n) = self.egraph.proof_state.proof_names.view_name.get(name) {
+            n.clone()
+        } else {
+            let fresh_name = self
+                .egraph
+                .parser
+                .symbol_gen
+                .fresh(&format!("{}View", name));
+            self.egraph
+                .proof_state
+                .proof_names
+                .view_name
+                .insert(name.to_string(), fresh_name.clone());
+            fresh_name
+        }
     }
 
-    pub(crate) fn to_delete_name(&self, name: &str) -> String {
-        format!("to_delete_{}", name)
+    pub(crate) fn to_delete_name(&mut self, name: &str) -> String {
+        if let Some(n) = self.egraph.proof_state.proof_names.to_delete_name.get(name) {
+            n.clone()
+        } else {
+            let fresh_name = self
+                .egraph
+                .parser
+                .symbol_gen
+                .fresh(&format!("to_delete_{}", name));
+            self.egraph
+                .proof_state
+                .proof_names
+                .to_delete_name
+                .insert(name.to_string(), fresh_name.clone());
+            fresh_name
+        }
     }
 
-    pub(crate) fn subsumed_name(&self, name: &str) -> String {
-        format!("to_subsume_{}", name)
-    }
-
-    pub(crate) fn delete_subsume_ruleset_name(&self) -> String {
-        "delete_subsume_ruleset".to_string()
+    pub(crate) fn subsumed_name(&mut self, name: &str) -> String {
+        if let Some(n) = self.egraph.proof_state.proof_names.subsumed_name.get(name) {
+            n.clone()
+        } else {
+            let fresh_name = self
+                .egraph
+                .parser
+                .symbol_gen
+                .fresh(&format!("to_subsume_{}", name));
+            self.egraph
+                .proof_state
+                .proof_names
+                .subsumed_name
+                .insert(name.to_string(), fresh_name.clone());
+            fresh_name
+        }
     }
 
     pub(crate) fn proof_names(&self) -> &EncodingNames {
@@ -243,13 +323,52 @@ impl<'a> ProofInstrumentor<'a> {
     /// A view proof for functions proves ... = t by some justification, where t is the term of the view row.
     /// A constructor view is more complex, representing f(c1, c2, c3, t_r) where t_r is a representative.
     /// A proof for a view proves that t_r = f(c1, c2, c3).
-    pub(crate) fn view_proof_name(&self, name: &str) -> String {
-        format!("{}ViewProof", name)
+    pub(crate) fn view_proof_name(&mut self, name: &str) -> String {
+        if let Some(n) = self
+            .egraph
+            .proof_state
+            .proof_names
+            .view_proof_name
+            .get(name)
+        {
+            n.clone()
+        } else {
+            let fresh_name = self
+                .egraph
+                .parser
+                .symbol_gen
+                .fresh(&format!("{}ViewProof", name));
+            self.egraph
+                .proof_state
+                .proof_names
+                .view_proof_name
+                .insert(name.to_string(), fresh_name.clone());
+            fresh_name
+        }
     }
 
-    // TODO make fresh names for this
-    pub(crate) fn term_proof_name(&self, name: &str) -> String {
-        format!("{}Proof", name)
+    pub(crate) fn term_proof_name(&mut self, name: &str) -> String {
+        if let Some(n) = self
+            .egraph
+            .proof_state
+            .proof_names
+            .term_proof_name
+            .get(name)
+        {
+            n.clone()
+        } else {
+            let fresh_name = self
+                .egraph
+                .parser
+                .symbol_gen
+                .fresh(&format!("{}Proof", name));
+            self.egraph
+                .proof_state
+                .proof_names
+                .term_proof_name
+                .insert(name.to_string(), fresh_name.clone());
+            fresh_name
+        }
     }
 
     pub(crate) fn fresh_var(&mut self) -> String {
@@ -349,6 +468,7 @@ impl<'a> ProofInstrumentor<'a> {
     }
 }
 
+/// Reads a file and checks that its commands support the proof encoding.
 pub fn file_supports_proofs(path: &Path) -> bool {
     let contents = match std::fs::read_to_string(path) {
         Ok(contents) => contents,
@@ -367,10 +487,11 @@ pub fn file_supports_proofs(path: &Path) -> bool {
         Err(_) => return false,
     };
 
-    commands_support_proof_encoding(&desugared, &egraph.type_info)
+    program_supports_proofs(&desugared, &egraph.type_info)
 }
 
-fn commands_support_proof_encoding(commands: &[ResolvedCommand], type_info: &TypeInfo) -> bool {
+/// Checks whether a desugared program supports proof encoding.
+pub fn program_supports_proofs(commands: &[ResolvedCommand], type_info: &TypeInfo) -> bool {
     for command in commands {
         if !command_supports_proof_encoding(command, type_info) {
             return false;
@@ -384,21 +505,25 @@ fn expr_primitives_have_validators(expr: &ResolvedExpr) -> bool {
     use crate::ast::GenericExpr;
     use crate::core::ResolvedCall;
 
-    match expr {
-        GenericExpr::Lit(_, _) | GenericExpr::Var(_, _) => true,
-        GenericExpr::Call(_, call, args) => {
-            // Check if this call is a primitive without a validator
-            if let ResolvedCall::Primitive(prim) = call {
+    let mut all_valid = true;
+    expr.walk(
+        &mut |e| {
+            if let GenericExpr::Call(_, ResolvedCall::Primitive(prim), _) = e {
                 if prim.validator().is_none() {
-                    return false;
+                    all_valid = false;
                 }
             }
-            // Recursively check all arguments
-            args.iter().all(expr_primitives_have_validators)
-        }
-    }
+        },
+        &mut |_| {},
+    );
+    all_valid
 }
-pub fn command_supports_proof_encoding(command: &ResolvedCommand, type_info: &TypeInfo) -> bool {
+
+/// Checks whether a resolved command supports proof encoding.
+pub(crate) fn command_supports_proof_encoding(
+    command: &ResolvedCommand,
+    type_info: &TypeInfo,
+) -> bool {
     // First, use visit_exprs to check all expressions in the command
     let mut all_primitives_have_validators = true;
     command.clone().visit_exprs(&mut |expr| {

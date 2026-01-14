@@ -188,6 +188,7 @@ impl<'a> ProofInstrumentor<'a> {
         ))
     }
 
+    /// Rules that execute deletion and subsumption based on the tables requesting the deletion/subsumption.
     fn delete_and_subsume(&mut self, fdecl: &ResolvedFunctionDecl) -> String {
         let child_names = fdecl
             .schema
@@ -219,7 +220,9 @@ impl<'a> ProofInstrumentor<'a> {
         )
     }
 
-    // Generate a rule that runs the merge function for custom functions.
+    /// Generate a rule that runs the merge function for custom functions.
+    /// We cleanup old rows that are not needed using a separate table and ruleset.
+    /// In the case of a constructor, we generate a rule encoding congruence.
     fn handle_merge_fn(&mut self, fdecl: &ResolvedFunctionDecl) -> String {
         let child_names = fdecl
             .schema
