@@ -20,7 +20,8 @@ use super::{AtomId, Variable};
 
 define_id!(pub SubsetId, u32, "An offset into a buffer of subsets");
 
-enum UpdateCell {
+#[derive(Debug)]
+pub(super) enum UpdateCell {
     PushBinding(Variable, Value),
     RefineAtom(AtomId, SubsetId),
     EndFrame,
