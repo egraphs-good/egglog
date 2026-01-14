@@ -244,12 +244,15 @@ impl<'outer> RuleSetBuilder<'outer> {
                     blocks.push((stages, cached_block.1.clone()));
                 }
 
-                assert!(cached_plan.result_block.header.is_empty(), "Result blocks should have no headers");
+                assert!(
+                    cached_plan.result_block.header.is_empty(),
+                    "Result blocks should have no headers"
+                );
                 let result_block = JoinStages {
                     header: Vec::new(),
                     instrs: cached_plan.result_block.instrs.clone(),
                 };
-                
+
                 Plan::DecomposedPlan(DecomposedPlan {
                     atoms: cached_plan.atoms.clone(),
                     atom_to_bag: cached_plan.atom_to_bag.clone(),

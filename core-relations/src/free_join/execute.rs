@@ -268,7 +268,7 @@ impl Database {
                             scratch_val: Default::default(),
                         };
                         for (mat_id, stage_block) in plan.stages.blocks.iter().enumerate() {
-                            let mat_id  = MatId::from_usize(mat_id);
+                            let mat_id = MatId::from_usize(mat_id);
                             join_state.run_join_stages(
                                 &stage_block.0,
                                 &plan.atoms,
@@ -276,9 +276,18 @@ impl Database {
                                 &mut binding_info,
                                 &mut materializer,
                             );
-                            binding_info.materializations.insert(mat_id, Arc::new(materializer.materializations.take(mat_id).unwrap()));
+                            binding_info.materializations.insert(
+                                mat_id,
+                                Arc::new(materializer.materializations.take(mat_id).unwrap()),
+                            );
                         }
-                        join_state.run_join_stages(&plan.result_block, &plan.atoms, plan.actions, &mut binding_info, &mut action_buf);
+                        join_state.run_join_stages(
+                            &plan.result_block,
+                            &plan.atoms,
+                            plan.actions,
+                            &mut binding_info,
+                            &mut action_buf,
+                        );
                     }
                 }
                 let search_and_apply_time = search_and_apply_timer.elapsed();
@@ -1011,64 +1020,64 @@ impl<'a> JoinState<'a> {
                     .collect::<SmallVec<[Option<Prober>; 4]>>();
 
                 let mut key = Vec::with_capacity(4);
-                let mut prune_probers =
-                    |updates: &mut FrameUpdates,
-                     binding_info: &mut BindingInfo,
-                     mat_key: Option<&[Value]>,
-                     mat_non_key: Option<&[Value]>| {
-                        for ((spec, cols), prober) in to_intersect.iter().zip(probers.iter()) {
-                            key.clear();
-                            for col in cols.iter() {
-                                let val = match mat_key {
-                                    Some(mat_key) => {
-                                        if col.index() < mat_key.len() {
-                                            mat_key[col.index()]
-                                        } else {
-                                            mat_non_key.unwrap()[col.index() - mat_key.len()]
-                                        }
-                                    }
-                                    None => mat_non_key.unwrap()[col.index()],
-                                };
-                                key.push(val);
-                            }
-                            match spec {
-                                ScanMatSpec::Scan(spec) => {
-                                    let prober = prober.as_ref().unwrap();
-                                    if let Some(subset) = prober.get_subset(&key) {
-                                        updates.refine_atom(spec.to_index.atom, subset);
+                let mut prune_probers = |updates: &mut FrameUpdates,
+                                         binding_info: &mut BindingInfo,
+                                         mat_key: Option<&[Value]>,
+                                         mat_non_key: Option<&[Value]>|
+                 -> bool {
+                    for ((spec, cols), prober) in to_intersect.iter().zip(probers.iter()) {
+                        key.clear();
+                        for col in cols.iter() {
+                            let val = match mat_key {
+                                Some(mat_key) => {
+                                    if col.index() < mat_key.len() {
+                                        mat_key[col.index()]
                                     } else {
-                                        updates.rollback();
-                                        return;
+                                        mat_non_key.unwrap()[col.index() - mat_key.len()]
                                     }
                                 }
-                                ScanMatSpec::Materialized(spec) => {
-                                    let mat = &binding_info.materializations[*spec];
-                                    if mat.contains_key(&key) {
-                                        // We don't refine materializations. Materializations
-                                        // are only refined when scanning in ScanMatMode::Refine mode,
-                                        // which is done by looking up the relevant variables.
-                                    } else {
-                                        updates.rollback();
-                                        return;
-                                    }
+                                None => mat_non_key.unwrap()[col.index()],
+                            };
+                            key.push(val);
+                        }
+                        match spec {
+                            ScanMatSpec::Scan(spec) => {
+                                let prober = prober.as_ref().unwrap();
+                                if let Some(subset) = prober.get_subset(&key) {
+                                    updates.refine_atom(spec.to_index.atom, subset);
+                                } else {
+                                    return false;
+                                }
+                            }
+                            ScanMatSpec::Materialized(spec) => {
+                                let mat = &binding_info.materializations[*spec];
+                                if mat.contains_key(&key) {
+                                    // We don't refine materializations. Materializations
+                                    // are only refined when scanning in ScanMatMode::Refine mode,
+                                    // which is done by looking up the relevant variables.
+                                } else {
+                                    return false;
                                 }
                             }
                         }
-                    };
+                    }
+                    return true;
+                };
 
                 match mode {
                     MatScanMode::Full | MatScanMode::KeyOnly => {
                         // enumerate keys
                         for group in cover_mat.iter() {
                             let group_key_len = group.key().len();
-                            for (col, var) in bind.iter() {
-                                if col.index() < group_key_len {
-                                    updates.push_binding(*var, group.key()[col.index()]);
-                                }
-                            }
                             if mode == &MatScanMode::Full {
                                 // enumerate non-keys
                                 for non_keys in group.value().iter() {
+                                    for (col, var) in bind.iter() {
+                                        if col.index() < group_key_len {
+                                            updates.push_binding(*var, group.key()[col.index()]);
+                                        }
+                                    }
+
                                     // TODO: optimization that guaratees all keys come before non-keys
                                     for (col, var) in bind.iter() {
                                         if col.index() >= group_key_len {
@@ -1078,20 +1087,32 @@ impl<'a> JoinState<'a> {
                                             );
                                         }
                                     }
-                                    prune_probers(
+                                    if prune_probers(
                                         &mut updates,
                                         binding_info,
                                         Some(group.key()),
                                         Some(non_keys),
-                                    );
+                                    ) {
+                                        updates.finish_frame();
+                                    } else {
+                                        updates.rollback();
+                                    }
                                 }
                             } else if mode == &MatScanMode::KeyOnly {
-                                prune_probers(&mut updates, binding_info, Some(group.key()), None);
-                            }
-
-                            updates.finish_frame();
-                            if updates.frames() >= chunk_size {
-                                drain_updates_parallel!(updates);
+                                for (col, var) in bind.iter() {
+                                    debug_assert!(col.index() < group_key_len);
+                                    updates.push_binding(*var, group.key()[col.index()]);
+                                }
+                                if prune_probers(
+                                    &mut updates,
+                                    binding_info,
+                                    Some(group.key()),
+                                    None,
+                                ) {
+                                    updates.finish_frame();
+                                } else {
+                                    updates.rollback();
+                                }
                             }
                         }
                     }
@@ -1104,12 +1125,15 @@ impl<'a> JoinState<'a> {
                         if let Some(group) = cover_mat.get(&keys) {
                             // enumerate non-keys
                             for vals in group.value().iter() {
-                                debug_assert!(vals.len() == bind.len());
+                                debug_assert!(vals.len() == bind.len()); // TODO: not true for non-full query
                                 for (col, var) in bind.iter() {
                                     updates.push_binding(*var, vals[col.index()]);
                                 }
-                                prune_probers(&mut updates, binding_info, None, Some(vals));
-                                updates.finish_frame();
+                                if prune_probers(&mut updates, binding_info, None, Some(vals)) {
+                                    updates.finish_frame();
+                                } else {
+                                    updates.rollback();
+                                }
                                 if updates.frames() >= chunk_size {
                                     drain_updates_parallel!(updates);
                                 }
