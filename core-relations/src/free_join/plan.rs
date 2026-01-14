@@ -8,6 +8,7 @@ use crate::{
 };
 use egglog_numeric_id::define_id;
 use fixedbitset::FixedBitSet;
+use log::Level;
 use smallvec::{SmallVec, smallvec};
 
 use crate::{
@@ -459,21 +460,8 @@ pub(crate) fn tree_decompose_and_plan(
         }
 
         // Step 5: add the subquery (and update the occurrences of the main query)
-        let subquery_vars = DenseIdMap::from_iter(subquery_vars.into_iter().map(|subq_var| {
-            if !covering_vars.contains(&subq_var) {
-                // variable is fully subsumed in this bag.
-                let mut subquery_vinfo = vars.take(subq_var).unwrap();
-                subquery_vinfo.occurrences.retain(|occ| {
-                    debug_assert!(subquery_atoms.contains(&occ.atom));
-                    atoms[occ.atom].table != dummy_table_id
-                });
-                // TODO: this makes certain columns like timestamp and subsumed always used,
-                // and undoes the used_in_rhs optimization that skips scanning these columns.
-                // Maybe we can say if a variable is not used_in_rhs and comes up only in val columns,
-                // then they can stay !used_in_rhs and the materialization won't incldue them.
-                subquery_vinfo.used_in_rhs = true;
-                (subq_var, subquery_vinfo)
-            } else {
+        let subquery_vars =
+            DenseIdMap::from_iter(subquery_vars.into_iter().filter_map(|subq_var| {
                 // We split the occurrences into occurrences of the subquery and those of the remaining query.
                 // We also discard occurrences of fake atoms t
                 let vinfo = &vars[subq_var];
@@ -491,23 +479,29 @@ pub(crate) fn tree_decompose_and_plan(
                         true
                     } else {
                         if atoms[occ.atom].table != dummy_table_id {
-                            subquery_vinfo.occurrences.push(mem::replace(
-                                occ,
-                                SubAtom {
-                                    atom: AtomId::new(0),
-                                    vars: smallvec![],
-                                },
-                            ));
+                            subquery_vinfo
+                                .occurrences
+                                .push(mem::replace(occ, SubAtom::dummy()));
                         }
                         false
                     }
                 });
-                // TODO: see above
+                if vars[subq_var].occurrences.is_empty() {
+                    vars.unwrap_val(subq_var);
+                }
+
+                // TODO: this makes certain columns like timestamp and subsumed always used,
+                // and undoes the used_in_rhs optimization that skips scanning these columns.
+                // Maybe we can say if a variable is not used_in_rhs and comes up only in val columns,
+                // then they can stay !used_in_rhs and the materialization won't incldue them.
                 subquery_vinfo.used_in_rhs = true;
 
-                (subq_var, subquery_vinfo)
-            }
-        }));
+                if !subquery_vinfo.occurrences.is_empty() {
+                    Some((subq_var, subquery_vinfo))
+                } else {
+                    None
+                }
+            }));
 
         let subquery_atoms =
             DenseIdMap::from_iter(subquery_atoms.into_iter().filter_map(|atom_id| {
@@ -520,6 +514,10 @@ pub(crate) fn tree_decompose_and_plan(
                     Some((atom_id, atom_info))
                 }
             }));
+
+        if log::log_enabled!(Level::Debug) {
+            log::debug!(" Producing bag {:?} {:?}", subquery_vars, subquery_atoms);
+        }
 
         bags.push(PlanningContext {
             vars: subquery_vars,
@@ -591,15 +589,17 @@ pub(crate) fn tree_decompose_and_plan(
                     }
                 }
             }
-            prologue.push(JoinStage::FusedIntersectMat {
-                cover: MatId::from_usize(i),
-                mode: MatScanMode::KeyOnly,
-                bind: to_bind,
-                to_intersect: to_intersect
-                    .into_iter()
-                    .map(|(spec, key_spec)| (ScanMatSpec::Scan(spec), key_spec))
-                    .collect(),
-            });
+            if !to_bind.is_empty() && !to_intersect.is_empty() {
+                prologue.push(JoinStage::FusedIntersectMat {
+                    cover: MatId::from_usize(i),
+                    mode: MatScanMode::KeyOnly,
+                    bind: to_bind,
+                    to_intersect: to_intersect
+                        .into_iter()
+                        .map(|(spec, key_spec)| (ScanMatSpec::Scan(spec), key_spec))
+                        .collect(),
+                });
+            }
         }
 
         // prepend the prologue
@@ -625,6 +625,10 @@ pub(crate) fn tree_decompose_and_plan(
                 .filter(|(_, var)| !pinned_vars.contains_key(*var))
                 .map(|(i, var)| (ColumnId::from_usize(i), var))
                 .collect();
+
+        if to_bind.is_empty() {
+            continue;
+        }
 
         for (_, var) in to_bind.iter() {
             pinned_vars.insert(*var, ());

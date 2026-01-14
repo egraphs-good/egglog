@@ -253,7 +253,7 @@ impl Database {
                         let mut materializations =
                             DenseIdMap::with_capacity(plan.stages.blocks.len());
                         for i in 0..plan.stages.blocks.len() {
-                            materializations.insert(MatId::from_usize(i), DashMap::default());
+                            materializations.insert(MatId::from_usize(i), Default::default());
                         }
                         let mut materializer = InPlaceMaterializer {
                             specs: &plan
@@ -278,6 +278,7 @@ impl Database {
                             );
                             binding_info.materializations.insert(
                                 mat_id,
+                                // Arc::new(materializer.materializations.take(mat_id).unwrap()),
                                 Arc::new(materializer.materializations.take(mat_id).unwrap()),
                             );
                         }
@@ -404,7 +405,7 @@ impl Clone for TrieNode {
 struct BindingInfo {
     bindings: DenseIdMap<Variable, Value>,
     subsets: DenseIdMap<AtomId, TrieNode>,
-    materializations: DenseIdMap<MatId, Arc<DashMap<Vec<Value>, RowBuffer>>>,
+    materializations: DenseIdMap<MatId, Arc<HashMap<Vec<Value>, RowBuffer>>>,
 }
 
 impl BindingInfo {
@@ -524,6 +525,9 @@ impl<'a> JoinState<'a> {
     ) where
         'a: 'buf,
     {
+        if log::log_enabled!(log::Level::Debug) {
+            log::debug!("Starting running query stages:\n{:#?}", stages);
+        }
         for JoinHeader { atom, subset, .. } in &stages.header {
             if subset.is_empty() {
                 return;
@@ -1067,14 +1071,15 @@ impl<'a> JoinState<'a> {
                 match mode {
                     MatScanMode::Full | MatScanMode::KeyOnly => {
                         // enumerate keys
+                        // for group in cover_mat.iter() {
                         for group in cover_mat.iter() {
-                            let group_key_len = group.key().len();
+                            let group_key_len = group.0.len();
                             if mode == &MatScanMode::Full {
                                 // enumerate non-keys
-                                for non_keys in group.value().iter() {
+                                for non_keys in group.1.iter() {
                                     for (col, var) in bind.iter() {
                                         if col.index() < group_key_len {
-                                            updates.push_binding(*var, group.key()[col.index()]);
+                                            updates.push_binding(*var, group.0[col.index()]);
                                         }
                                     }
 
@@ -1090,7 +1095,7 @@ impl<'a> JoinState<'a> {
                                     if prune_probers(
                                         &mut updates,
                                         binding_info,
-                                        Some(group.key()),
+                                        Some(group.0),
                                         Some(non_keys),
                                     ) {
                                         updates.finish_frame();
@@ -1101,14 +1106,9 @@ impl<'a> JoinState<'a> {
                             } else if mode == &MatScanMode::KeyOnly {
                                 for (col, var) in bind.iter() {
                                     debug_assert!(col.index() < group_key_len);
-                                    updates.push_binding(*var, group.key()[col.index()]);
+                                    updates.push_binding(*var, group.0[col.index()]);
                                 }
-                                if prune_probers(
-                                    &mut updates,
-                                    binding_info,
-                                    Some(group.key()),
-                                    None,
-                                ) {
+                                if prune_probers(&mut updates, binding_info, Some(group.0), None) {
                                     updates.finish_frame();
                                 } else {
                                     updates.rollback();
@@ -1124,7 +1124,8 @@ impl<'a> JoinState<'a> {
                         // lookup keys
                         if let Some(group) = cover_mat.get(&keys) {
                             // enumerate non-keys
-                            for vals in group.value().iter() {
+                            // for vals in group.value().iter() {
+                            for vals in group.iter() {
                                 debug_assert!(vals.len() == bind.len()); // TODO: not true for non-full query
                                 for (col, var) in bind.iter() {
                                     updates.push_binding(*var, vals[col.index()]);
@@ -1390,7 +1391,7 @@ fn flush_action_states(
 
 struct InPlaceMaterializer<'a> {
     specs: &'a DenseIdMap<MatId, MatSpec>,
-    materializations: DenseIdMap<MatId, DashMap<Vec<Value>, RowBuffer>>,
+    materializations: DenseIdMap<MatId, HashMap<Vec<Value>, RowBuffer>>,
     scratch_key: Vec<Value>,
     scratch_val: Vec<Value>,
 }
@@ -1407,7 +1408,10 @@ impl<'a> ActionBuffer<'a, MatId> for InPlaceMaterializer<'a> {
         bindings: &DenseIdMap<Variable, Value>,
         _to_exec_state: impl FnMut() -> ExecutionState<'a>,
     ) {
-        let mat = self.materializations.get(mat_id).expect("invalid mat id");
+        let mat = self
+            .materializations
+            .get_mut(mat_id)
+            .expect("invalid mat id");
         let spec = self.specs.get(mat_id).expect("invalid mat id");
         self.scratch_key.clear();
         for key in spec.msg_vars.iter().map(|var| bindings[*var]) {
