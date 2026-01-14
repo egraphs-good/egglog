@@ -43,7 +43,7 @@ pub(crate) fn gather_global_actions(
     actions
 }
 
-/// Run a merge function and return the resultig term, as well as a set of propositions learned.
+/// Run a merge function and return the resulting term, as well as a set of propositions learned.
 pub(crate) fn run_merge(
     term_dag: &mut TermDag,
     func_name: &str,
