@@ -1,0 +1,9 @@
+;; https://github.com/egraphs-good/egglog/issues/738
+(sort X)
+(sort Y)
+(sort Y_to_X (UnstableFn (Y) X))
+
+(constructor x () X)
+(constructor fn (X Y) X)
+
+(extract (unstable-fn "fn" (x)))

@@ -8,20 +8,48 @@
 //!
 //!
 //! The value is stored similar to the `vec` sort, as an index into a set, where each item in
-//! the set is a `(Symbol, Vec<Value>)` pairs. The Symbol is the function name, and the `Vec<Value>` is
+//! the set is a `(Symbol, Vec<(Sort, Value)>)` pairs. The Symbol is the function name, and the `Vec<(Sort, Value)>` is
 //! the list of partially applied arguments.
 use std::sync::{LazyLock, Mutex};
 
 use super::*;
 
-#[derive(Clone, Debug, PartialEq, Eq, Hash)]
-pub struct FunctionContainer(pub ResolvedFunctionId, pub Vec<(bool, Value)>, pub String);
+#[derive(Clone, Debug)]
+pub struct FunctionContainer(
+    pub ResolvedFunctionId,
+    pub Vec<(ArcSort, Value)>,
+    pub String,
+);
+
+// implement hash and equality based on values only not arcsorts, since
+// arcsorts are not comparable and any two values that are equal must have the same sort
+
+impl PartialEq for FunctionContainer {
+    fn eq(&self, other: &Self) -> bool {
+        self.0 == other.0
+            && self.1.iter().map(|(_, v)| *v).collect::<Vec<_>>()
+                == other.1.iter().map(|(_, v)| *v).collect::<Vec<_>>()
+            && self.2 == other.2
+    }
+}
+
+impl Eq for FunctionContainer {}
+
+impl Hash for FunctionContainer {
+    fn hash<H: std::hash::Hasher>(&self, state: &mut H) {
+        self.0.hash(state);
+        for (_, v) in &self.1 {
+            v.hash(state);
+        }
+        self.2.hash(state);
+    }
+}
 
 impl ContainerValue for FunctionContainer {
     fn rebuild_contents(&mut self, rebuilder: &dyn Rebuilder) -> bool {
         let mut changed = false;
-        for (do_rebuild, old) in &mut self.1 {
-            if *do_rebuild {
+        for (s, old) in &mut self.1 {
+            if s.is_eq_sort() || s.is_eq_container_sort() {
                 let new = rebuilder.rebuild_val(*old);
                 changed |= *old != new;
                 *old = new;
@@ -43,6 +71,9 @@ pub struct FunctionSort {
     name: String,
     inputs: Vec<ArcSort>,
     output: ArcSort,
+    // store all the arcsorts for functions that were added as partial args to this function sort
+    // so that we can retrieve them during extraction
+    partial_arcsorts: Arc<Mutex<Vec<ArcSort>>>,
 }
 
 impl FunctionSort {
@@ -105,6 +136,7 @@ impl Presort for FunctionSort {
                 name,
                 inputs: input_sorts,
                 output: output_sort.clone(),
+                partial_arcsorts: Arc::new(Mutex::new(vec![])),
             }))
         } else {
             panic!("function sort must be called with list of input args and output sort");
@@ -148,7 +180,7 @@ impl Sort for FunctionSort {
     }
 
     fn inner_sorts(&self) -> Vec<ArcSort> {
-        self.inputs.clone()
+        self.partial_arcsorts.lock().unwrap().clone()
     }
 
     fn inner_values(
@@ -159,7 +191,7 @@ impl Sort for FunctionSort {
         let val = container_values
             .get_val::<FunctionContainer>(value)
             .unwrap();
-        self.inputs.iter().cloned().zip(val.iter()).collect()
+        val.1.clone()
     }
 
     fn register_primitives(self: Arc<Self>, eg: &mut EGraph) {
@@ -320,10 +352,19 @@ impl Primitive for Ctor {
         let (rf, args) = args.split_first().unwrap();
         let ResolvedFunction {
             id,
-            do_rebuild,
+            partial_arcsorts,
             name,
         } = exec_state.base_values().unwrap(*rf);
-        let args = do_rebuild.iter().zip(args).map(|(b, x)| (*b, *x)).collect();
+        self.function
+            .partial_arcsorts
+            .lock()
+            .unwrap()
+            .extend(partial_arcsorts.iter().cloned());
+        let args = partial_arcsorts
+            .iter()
+            .zip(args)
+            .map(|(b, x)| (b.clone(), *x))
+            .collect();
         let y = FunctionContainer(id, args, name);
         Some(
             exec_state
@@ -334,11 +375,39 @@ impl Primitive for Ctor {
     }
 }
 
-#[derive(Clone, Debug, PartialEq, Eq, Hash)]
+#[derive(Clone, Debug)]
 pub struct ResolvedFunction {
     pub id: ResolvedFunctionId,
-    pub do_rebuild: Vec<bool>,
+    pub partial_arcsorts: Vec<ArcSort>,
     pub name: String,
+}
+// implement equality and hash based on id and  arcsort names, since arcsorts are not comparable
+
+impl PartialEq for ResolvedFunction {
+    fn eq(&self, other: &Self) -> bool {
+        self.id == other.id
+            && self
+                .partial_arcsorts
+                .iter()
+                .map(|s| s.name())
+                .collect::<Vec<_>>()
+                == other
+                    .partial_arcsorts
+                    .iter()
+                    .map(|s| s.name())
+                    .collect::<Vec<_>>()
+    }
+}
+
+impl Eq for ResolvedFunction {}
+
+impl Hash for ResolvedFunction {
+    fn hash<H: std::hash::Hasher>(&self, state: &mut H) {
+        self.id.hash(state);
+        for s in &self.partial_arcsorts {
+            s.name().hash(state);
+        }
+    }
 }
 
 impl BaseValue for ResolvedFunction {}
