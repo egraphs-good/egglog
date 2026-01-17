@@ -161,6 +161,7 @@ impl Database {
         let search_and_apply_timer = Instant::now();
         // let mut rule_reports: HashMap<String, Vec<RuleReport>>;
         let mut rule_reports: HashMap<Arc<str>, Vec<RuleReport>>;
+        let exec_state = ExecutionState::new(self.read_only_view(), Default::default());
         if parallelize_db_level_op(self.total_size_estimate) {
             // let dash_rule_reports: DashMap<String, Vec<RuleReport>> = DashMap::default();
             let dash_rule_reports: DashMap<Arc<str>, Vec<RuleReport>> = DashMap::default();
@@ -174,7 +175,7 @@ impl Database {
                         }
                     };
                     scope.spawn(|scope| {
-                        let join_state = JoinState::new(self);
+                        let join_state = JoinState::new(self, exec_state.clone());
                         let mut action_buf =
                             ScopedActionBuffer::new(scope, rule_set, &match_counter);
                         let mut binding_info = BindingInfo::default();
@@ -188,10 +189,7 @@ impl Database {
                         let search_and_apply_time = search_and_apply_timer.elapsed();
 
                         if action_buf.needs_flush {
-                            action_buf.flush(&mut ExecutionState::new(
-                                self.read_only_view(),
-                                Default::default(),
-                            ));
+                            action_buf.flush(&mut exec_state.clone());
                         }
                         let mut rule_report: RefMut<'_, Arc<str>, Vec<RuleReport>> =
                             dash_rule_reports.entry(desc.clone()).or_default();
@@ -206,7 +204,7 @@ impl Database {
             rule_reports = dash_rule_reports.into_iter().collect();
         } else {
             rule_reports = HashMap::default();
-            let join_state = JoinState::new(self);
+            let join_state = JoinState::new(self, exec_state.clone());
             // Just run all of the plans in order with a single in-place action
             // buffer.
             let mut action_buf = InPlaceActionBuffer {
@@ -239,10 +237,7 @@ impl Database {
                     num_matches: usize::MAX,
                 });
             }
-            action_buf.flush(&mut ExecutionState::new(
-                self.read_only_view(),
-                Default::default(),
-            ));
+            action_buf.flush(&mut exec_state.clone());
         }
         for (_plan, desc, _symbol_map, action) in rule_set.plans.values() {
             let reports = rule_reports.get_mut(desc).unwrap();
@@ -291,6 +286,7 @@ impl Default for ActionState {
 
 struct JoinState<'a> {
     db: &'a Database,
+    exec_state: ExecutionState<'a>,
 }
 
 type ColumnIndexes = IdVec<ColumnId, OnceLock<Arc<ColumnIndex>>>;
@@ -377,8 +373,8 @@ impl BindingInfo {
 }
 
 impl<'a> JoinState<'a> {
-    fn new(db: &'a Database) -> Self {
-        Self { db }
+    fn new(db: &'a Database, exec_state: ExecutionState<'a>) -> Self {
+        Self { db, exec_state }
     }
 
     fn get_index(
@@ -500,9 +496,13 @@ impl<'a> JoinState<'a> {
     ) where
         'a: 'buf,
     {
+        if self.exec_state.should_stop() {
+            return;
+        }
+
         if cur >= instr_order.len() {
             action_buf.push_bindings(plan.stages.actions, &binding_info.bindings, || {
-                ExecutionState::new(self.db.read_only_view(), Default::default())
+                self.exec_state.clone()
             });
             return;
         }
@@ -518,6 +518,9 @@ impl<'a> JoinState<'a> {
         // Helper macro (not its own method to appease the borrow checker).
         macro_rules! drain_updates {
             ($updates:expr) => {
+                if self.exec_state.should_stop() {
+                    return;
+                }
                 if cur == 0 || cur == 1 {
                     drain_updates_parallel!($updates)
                 } else {
@@ -537,14 +540,19 @@ impl<'a> JoinState<'a> {
         }
         macro_rules! drain_updates_parallel {
             ($updates:expr) => {{
+                if self.exec_state.should_stop() {
+                    return;
+                }
                 let db = self.db;
+                let exec_state_for_factory = self.exec_state.clone();
+                let exec_state_for_work = self.exec_state.clone();
                 action_buf.recur(
                     BorrowedLocalState {
                         binding_info,
                         instr_order,
                         updates: &mut $updates,
                     },
-                    move || ExecutionState::new(db.read_only_view(), Default::default()),
+                    move || exec_state_for_factory.clone(),
                     move |BorrowedLocalState {
                               binding_info,
                               instr_order,
@@ -559,13 +567,11 @@ impl<'a> JoinState<'a> {
                                 binding_info.insert_subset(atom, subset);
                             }
                             UpdateInstr::EndFrame => {
-                                JoinState { db }.run_plan(
-                                    plan,
-                                    instr_order,
-                                    cur + 1,
-                                    binding_info,
-                                    buf,
-                                );
+                                JoinState {
+                                    db,
+                                    exec_state: exec_state_for_work.clone(),
+                                }
+                                .run_plan(plan, instr_order, cur + 1, binding_info, buf);
                             }
                         })
                     },
@@ -1066,8 +1072,10 @@ impl<'scope> ActionBuffer<'scope> for ScopedActionBuffer<'_, 'scope> {
             let mut bindings =
                 mem::replace(&mut action_state.bindings, Bindings::new(VAR_BATCH_SIZE));
             action_state.len = 0;
+            let match_counter = self.match_counter;
             self.scope.spawn(move |_| {
-                state.run_instrs(&action_info.instrs, &mut bindings);
+                let succeeded = state.run_instrs(&action_info.instrs, &mut bindings);
+                match_counter.inc_matches(action, succeeded);
             });
         }
     }
