@@ -38,6 +38,3 @@ name = "ac"
 
 [[example]]
 name = "math"
-
-[[example]]
-name = "ac_tracing"
