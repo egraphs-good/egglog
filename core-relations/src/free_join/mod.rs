@@ -262,6 +262,11 @@ impl Counters {
         // NB: we may want to experiment with Ordering::Relaxed here.
         self.0[ctr].fetch_add(1, Ordering::Release)
     }
+    pub(crate) fn inc_by(&self, ctr: CounterId, amount: usize) -> usize {
+        // We synchronize with `read_counter` but not with other increments.
+        // NB: we may want to experiment with Ordering::Relaxed here.
+        self.0[ctr].fetch_add(amount, Ordering::Release)
+    }
 }
 
 /// A collection of tables and indexes over them.

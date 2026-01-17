@@ -571,6 +571,7 @@ impl EGraph {
             },
             name: decl.name.to_string(),
             can_subsume,
+            row_id: false,
         });
 
         let function = Function {

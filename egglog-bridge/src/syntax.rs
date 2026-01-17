@@ -191,6 +191,7 @@ impl ProofBuilder {
         let schema_math = SchemaMath {
             subsume: func_info.can_subsume,
             tracing: true,
+            row_id: func_info.row_id,
             func_cols: func_info.schema.len(),
         };
         let cong_args = CongArgs {
@@ -335,6 +336,10 @@ fn cong_term(args: &CongArgs, es: &mut ExecutionState, vals: &[Value]) -> Option
     term_row[args.schema_math.ret_val_col()] = term_val;
     term_row[args.schema_math.proof_id_col()] = term_val;
     term_row[args.schema_math.ts_col()] = ts;
+    if args.schema_math.row_id {
+        // Row ids are assigned by core-relations on insert, so any constant works here.
+        term_row[args.schema_math.row_id_col()] = Value::new_const(0);
+    }
     es.stage_insert(args.func_underlying, &term_row);
     Some(term_val)
 }

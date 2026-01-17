@@ -463,6 +463,19 @@ impl<T: Deref<Target = [Cell<Value>]>> ReadHandle<'_, T> {
         }
     }
 
+    /// Set a specific column for the given row.
+    ///
+    /// # Safety
+    /// The caller must ensure there are no concurrent reads or writes to the row.
+    pub(crate) unsafe fn set_col_shared(&self, row: RowId, col: usize, val: Value) {
+        debug_assert!(col < self.buf.n_columns);
+        let cells: &[Cell<Value>] = &self.data;
+        let cell_ptr: *const Cell<Value> = cells.as_ptr();
+        let to_set: &Cell<Value> =
+            unsafe { &*cell_ptr.add(row.index() * self.buf.n_columns + col) };
+        to_set.set(val);
+    }
+
     /// See the documentation for [`RowBuffer::set_stale_shared`].
     ///
     /// In addition to the requirements there, `row` is allowed to be out of bounds of the initial

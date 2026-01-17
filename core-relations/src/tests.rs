@@ -15,7 +15,7 @@ use crate::{
     free_join::{CounterId, Database, TableId},
     make_external_func,
     query::RuleSetBuilder,
-    table::SortedWritesTable,
+    table::{SortedWritesTable, SortedWritesTableOptions},
     table_shortcuts::v,
     table_spec::{ColumnId, Constraint},
     uf::DisplacedTable,
@@ -142,7 +142,7 @@ fn line_graph_1_test(strat: PlanStrategy) {
     let edge_impl = SortedWritesTable::new(
         2,
         2,
-        None,
+        SortedWritesTableOptions::default(),
         vec![],
         Box::new(move |_, a, b, _| {
             if a != b {
@@ -214,7 +214,7 @@ fn line_graph_2_test(strat: PlanStrategy) {
     let edge_impl = SortedWritesTable::new(
         2,
         2,
-        None,
+        SortedWritesTableOptions::default(),
         vec![],
         Box::new(move |_, a, b, _| {
             if a != b {
@@ -853,7 +853,10 @@ fn basic_math_egraph() -> MathEgraph {
     let num_impl = SortedWritesTable::new(
         1,
         3,
-        Some(ColumnId::new(2)),
+        SortedWritesTableOptions {
+            sort_by: Some(ColumnId::new(2)),
+            row_id: None,
+        },
         vec![],
         Box::new(move |state, a, b, res| {
             if a[1] != b[1] {
@@ -872,7 +875,10 @@ fn basic_math_egraph() -> MathEgraph {
     let add_impl = SortedWritesTable::new(
         2,
         4,
-        Some(ColumnId::new(3)),
+        SortedWritesTableOptions {
+            sort_by: Some(ColumnId::new(3)),
+            row_id: None,
+        },
         vec![],
         Box::new(move |state, a, b, res| {
             // Capture a backtrace as a string
@@ -915,7 +921,7 @@ fn lookup_with_fallback_partial_success() {
                 SortedWritesTable::new(
                     1,
                     2,
-                    None,
+                    SortedWritesTableOptions::default(),
                     vec![],
                     Box::new(move |_, a, b, _| {
                         if a[0] != b[0] {
@@ -1014,7 +1020,7 @@ fn call_external_with_fallback() {
                 SortedWritesTable::new(
                     1,
                     2,
-                    None,
+                    SortedWritesTableOptions::default(),
                     vec![],
                     Box::new(move |_, a, b, _| {
                         if a[0] != b[0] {

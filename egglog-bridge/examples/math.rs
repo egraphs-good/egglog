@@ -25,6 +25,7 @@ fn main() {
             merge: MergeFn::UnionId,
             name: "diff".into(),
             can_subsume: false,
+            row_id: false,
         });
         let integral = egraph.add_table(FunctionConfig {
             schema: vec![ColumnTy::Id, ColumnTy::Id, ColumnTy::Id],
@@ -32,6 +33,7 @@ fn main() {
             merge: MergeFn::UnionId,
             name: "integral".into(),
             can_subsume: false,
+            row_id: false,
         });
 
         let add = egraph.add_table(FunctionConfig {
@@ -40,6 +42,7 @@ fn main() {
             merge: MergeFn::UnionId,
             name: "add".into(),
             can_subsume: false,
+            row_id: false,
         });
         let sub = egraph.add_table(FunctionConfig {
             schema: vec![ColumnTy::Id, ColumnTy::Id, ColumnTy::Id],
@@ -47,6 +50,7 @@ fn main() {
             merge: MergeFn::UnionId,
             name: "sub".into(),
             can_subsume: false,
+            row_id: false,
         });
 
         let mul = egraph.add_table(FunctionConfig {
@@ -55,6 +59,7 @@ fn main() {
             merge: MergeFn::UnionId,
             name: "mul".into(),
             can_subsume: false,
+            row_id: false,
         });
 
         let div = egraph.add_table(FunctionConfig {
@@ -63,6 +68,7 @@ fn main() {
             merge: MergeFn::UnionId,
             name: "div".into(),
             can_subsume: false,
+            row_id: false,
         });
 
         let pow = egraph.add_table(FunctionConfig {
@@ -71,6 +77,7 @@ fn main() {
             merge: MergeFn::UnionId,
             name: "pow".into(),
             can_subsume: false,
+            row_id: false,
         });
 
         let ln = egraph.add_table(FunctionConfig {
@@ -79,6 +86,7 @@ fn main() {
             merge: MergeFn::UnionId,
             name: "ln".into(),
             can_subsume: false,
+            row_id: false,
         });
 
         let sqrt = egraph.add_table(FunctionConfig {
@@ -87,6 +95,7 @@ fn main() {
             merge: MergeFn::UnionId,
             name: "sqrt".into(),
             can_subsume: false,
+            row_id: false,
         });
 
         let sin = egraph.add_table(FunctionConfig {
@@ -95,6 +104,7 @@ fn main() {
             merge: MergeFn::UnionId,
             name: "sin".into(),
             can_subsume: false,
+            row_id: false,
         });
 
         let cos = egraph.add_table(FunctionConfig {
@@ -103,6 +113,7 @@ fn main() {
             merge: MergeFn::UnionId,
             name: "cos".into(),
             can_subsume: false,
+            row_id: false,
         });
 
         let rat = egraph.add_table(FunctionConfig {
@@ -111,6 +122,7 @@ fn main() {
             merge: MergeFn::UnionId,
             name: "rat".into(),
             can_subsume: false,
+            row_id: false,
         });
 
         let var = egraph.add_table(FunctionConfig {
@@ -119,6 +131,7 @@ fn main() {
             merge: MergeFn::UnionId,
             name: "var".into(),
             can_subsume: false,
+            row_id: false,
         });
 
         let zero = egraph.base_value_constant(Rational64::new(0, 1));

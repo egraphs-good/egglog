@@ -393,12 +393,14 @@ impl RuleBuilder<'_> {
             SchemaMath {
                 tracing: self.egraph.tracing,
                 subsume: info.can_subsume,
+                row_id: info.row_id,
                 func_cols: info.schema.len(),
             }
         } else {
             SchemaMath {
                 tracing: self.egraph.tracing,
                 subsume: subsume_entry.is_some(),
+                row_id: false,
                 func_cols: entries.len(),
             }
         };
@@ -418,6 +420,9 @@ impl RuleBuilder<'_> {
                 ret_val: None,
             },
         );
+        if schema_math.row_id {
+            atom[schema_math.row_id_col()] = QueryEntry::Var(self.new_var(ColumnTy::Id));
+        }
         let res = AtomId::from_usize(self.query.atoms.len());
         if self.egraph.tracing {
             let proof_var = atom[schema_math.proof_id_col()].var();
@@ -540,6 +545,7 @@ impl RuleBuilder<'_> {
         let schema_math = SchemaMath {
             tracing: self.egraph.tracing,
             subsume: info.can_subsume,
+            row_id: info.row_id,
             func_cols: info.schema.len(),
         };
         assert!(info.can_subsume);
@@ -608,6 +614,7 @@ impl RuleBuilder<'_> {
         let schema_math = SchemaMath {
             tracing: self.egraph.tracing,
             subsume: info.can_subsume,
+            row_id: info.row_id,
             func_cols: info.schema.len(),
         };
         let cb: BuildRuleCallback = match info.default_val {
@@ -634,6 +641,9 @@ impl RuleBuilder<'_> {
                             write_vals.push(wv_ref);
                         } else if schema_math.subsume && i == schema_math.subsume_col() {
                             write_vals.push(inner.convert(&subsumed).into())
+                        } else if schema_math.row_id && i == schema_math.row_id_col() {
+                            // Row ids are assigned by core-relations on insert, so any constant works here.
+                            write_vals.push(Value::new_const(0).into());
                         } else {
                             unreachable!()
                         }
@@ -850,6 +860,7 @@ impl RuleBuilder<'_> {
         let schema_math = SchemaMath {
             tracing: self.egraph.tracing,
             subsume: info.can_subsume,
+            row_id: info.row_id,
             func_cols: info.schema.len(),
         };
 
@@ -905,6 +916,7 @@ impl RuleBuilder<'_> {
         let schema_math = SchemaMath {
             tracing: self.egraph.tracing,
             subsume: info.can_subsume,
+            row_id: info.row_id,
             func_cols: info.schema.len(),
         };
         if self.egraph.tracing {

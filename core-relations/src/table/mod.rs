@@ -26,6 +26,7 @@ use crate::{
     Pooled, TableChange, TableId,
     action::ExecutionState,
     common::{HashMap, ShardData, ShardId, SubsetTracker, Value},
+    free_join::CounterId,
     hash_index::{ColumnIndex, Index},
     offsets::{OffsetRange, Offsets, RowId, Subset, SubsetRef},
     parallel_heuristics::parallelize_table_op,
@@ -133,6 +134,58 @@ impl Rows {
 pub type MergeFn =
     dyn Fn(&mut ExecutionState, &[Value], &[Value], &mut Vec<Value>) -> bool + Send + Sync;
 
+/// Configuration options for a [`SortedWritesTable`].
+#[derive(Clone, Copy, Debug, Default)]
+pub struct SortedWritesTableOptions {
+    pub sort_by: Option<ColumnId>,
+    /// Configure a stable row-id column for this table.
+    ///
+    /// When set, `(counter, column)` causes `column` to be populated with a
+    /// unique row id allocated from `counter` on insert. Writes to this column
+    /// are ignored. The row-id column must not be part of the key and must not
+    /// be the `sort_by` column. Callers must allocate the extra column in
+    /// `n_columns`.
+    pub row_id: Option<(CounterId, ColumnId)>,
+}
+
+// Allocate row ids in blocks to amortize atomic increments.
+const ROW_ID_BLOCK_SIZE: usize = 128;
+const ROW_ID_PLACEHOLDER: Value = Value::new_const(0);
+
+#[derive(Clone, Copy, Debug)]
+struct RowIdConfig {
+    counter: CounterId,
+    column: ColumnId,
+}
+
+struct RowIdAllocator {
+    counter: CounterId,
+    next: usize,
+    remaining: usize,
+}
+
+impl RowIdAllocator {
+    fn new(counter: CounterId) -> Self {
+        RowIdAllocator {
+            counter,
+            next: 0,
+            remaining: 0,
+        }
+    }
+
+    fn next_value(&mut self, exec_state: &ExecutionState) -> Value {
+        if self.remaining == 0 {
+            let start = exec_state.inc_counter_by(self.counter, ROW_ID_BLOCK_SIZE);
+            self.next = start;
+            self.remaining = ROW_ID_BLOCK_SIZE;
+        }
+        let val = self.next;
+        self.next += 1;
+        self.remaining -= 1;
+        Value::from_usize(val)
+    }
+}
+
 pub struct SortedWritesTable {
     generation: Generation,
     data: Rows,
@@ -141,6 +194,7 @@ pub struct SortedWritesTable {
     n_keys: usize,
     n_columns: usize,
     sort_by: Option<ColumnId>,
+    row_id: Option<RowIdConfig>,
     offsets: Vec<(Value, RowId)>,
 
     pending_state: Arc<PendingState>,
@@ -160,6 +214,7 @@ impl Clone for SortedWritesTable {
             n_keys: self.n_keys,
             n_columns: self.n_columns,
             sort_by: self.sort_by,
+            row_id: self.row_id,
             offsets: self.offsets.clone(),
             pending_state: Arc::new(self.pending_state.deep_copy()),
             merge: self.merge.clone(),
@@ -514,7 +569,7 @@ impl Table for SortedWritesTable {
 
 impl SortedWritesTable {
     /// Create a new [`SortedWritesTable`] with the given number of keys,
-    /// columns, and an optional sort column.
+    /// columns, and options.
     ///
     /// The `merge_fn` is used to evaluate conflicts when more than one row is
     /// inserted with the same primary key. The old and new proposed values are
@@ -527,10 +582,28 @@ impl SortedWritesTable {
     pub fn new(
         n_keys: usize,
         n_columns: usize,
-        sort_by: Option<ColumnId>,
+        options: SortedWritesTableOptions,
         to_rebuild: Vec<ColumnId>,
         merge_fn: Box<MergeFn>,
     ) -> Self {
+        let sort_by = options.sort_by;
+        let row_id = options.row_id.map(|(counter, column)| {
+            assert!(
+                column.index() < n_columns,
+                "row id column {column:?} out of bounds for table with {n_columns} columns"
+            );
+            assert!(
+                column.index() >= n_keys,
+                "row id column {column:?} must not be part of the key"
+            );
+            if let Some(sort_by) = sort_by {
+                assert_ne!(
+                    sort_by, column,
+                    "row id column must not be the sort_by column"
+                );
+            }
+            RowIdConfig { counter, column }
+        });
         let hash = ShardedHashTable::<TableEntry>::default();
         let shard_data = hash.shard_data();
         let rebuild_index = Index::new(to_rebuild.clone(), ColumnIndex::new());
@@ -541,6 +614,7 @@ impl SortedWritesTable {
             n_keys,
             n_columns,
             sort_by,
+            row_id,
             offsets: Default::default(),
             pending_state: Arc::new(PendingState::new(shard_data)),
             merge: merge_fn.into(),
@@ -660,11 +734,14 @@ impl SortedWritesTable {
     fn serial_insert(&mut self, exec_state: &mut ExecutionState) -> bool {
         let mut changed = false;
         let n_keys = self.n_keys;
+        let row_id = self.row_id;
+        let row_id_col = row_id.map(|cfg| cfg.column.index());
+        let mut row_id_alloc = row_id.map(|cfg| RowIdAllocator::new(cfg.counter));
         let mut scratch = with_pool_set(|ps| ps.get::<Vec<Value>>());
         for (_outer_shard, queue) in self.pending_state.pending_rows.iter() {
             if let Some(sort_by) = self.sort_by {
-                while let Some(buf) = queue.pop() {
-                    for query in buf.non_stale() {
+                while let Some(mut buf) = queue.pop() {
+                    for query in buf.non_stale_mut() {
                         let key = &query[0..n_keys];
                         let entry = get_entry_mut(query, n_keys, &mut self.hash, |row| {
                             let Some(row) = self.data.get_row(row) else {
@@ -681,7 +758,15 @@ impl SortedWritesTable {
                                 .data
                                 .get_row(*row)
                                 .expect("table should not point to stale entry");
+                            let cur_row_id = row_id_col.map(|col| cur[col]);
+                            if let Some(row_id_col) = row_id_col {
+                                query[row_id_col] = cur_row_id.expect("row id column missing");
+                            }
                             if (self.merge)(exec_state, cur, query, &mut scratch) {
+                                if let Some(row_id_col) = row_id_col {
+                                    scratch[row_id_col] =
+                                        cur_row_id.expect("row id column missing");
+                                }
                                 let sort_val = query[sort_by.index()];
                                 let new = self.data.add_row(&scratch);
                                 if let Some(largest) = self.offsets.last().map(|(v, _)| *v) {
@@ -703,6 +788,13 @@ impl SortedWritesTable {
                         } else {
                             let sort_val = query[sort_by.index()];
                             // New value: update invariants.
+                            if let Some(row_id_col) = row_id_col {
+                                let row_id = row_id_alloc
+                                    .as_mut()
+                                    .expect("row id allocator missing")
+                                    .next_value(exec_state);
+                                query[row_id_col] = row_id;
+                            }
                             let new = self.data.add_row(query);
                             if let Some(largest) = self.offsets.last().map(|(v, _)| *v) {
                                 assert!(
@@ -731,8 +823,8 @@ impl SortedWritesTable {
                 }
             } else {
                 // Simplified variant without the sorting constraint.
-                while let Some(buf) = queue.pop() {
-                    for query in buf.non_stale() {
+                while let Some(mut buf) = queue.pop() {
+                    for query in buf.non_stale_mut() {
                         let key = &query[0..n_keys];
                         let entry = get_entry_mut(query, n_keys, &mut self.hash, |row| {
                             let Some(row) = self.data.get_row(row) else {
@@ -746,7 +838,15 @@ impl SortedWritesTable {
                                 .data
                                 .get_row(*row)
                                 .expect("table should not point to stale entry");
+                            let cur_row_id = row_id_col.map(|col| cur[col]);
+                            if let Some(row_id_col) = row_id_col {
+                                query[row_id_col] = cur_row_id.expect("row id column missing");
+                            }
                             if (self.merge)(exec_state, cur, query, &mut scratch) {
+                                if let Some(row_id_col) = row_id_col {
+                                    scratch[row_id_col] =
+                                        cur_row_id.expect("row id column missing");
+                                }
                                 let new = self.data.add_row(&scratch);
                                 self.data.set_stale(*row);
                                 *row = new;
@@ -755,6 +855,13 @@ impl SortedWritesTable {
                             scratch.clear();
                         } else {
                             // New value: update invariants.
+                            if let Some(row_id_col) = row_id_col {
+                                let row_id = row_id_alloc
+                                    .as_mut()
+                                    .expect("row id allocator missing")
+                                    .next_value(exec_state);
+                                query[row_id_col] = row_id;
+                            }
                             let new = self.data.add_row(query);
                             let (shard, hc) = hash_code(self.hash.shard_data(), query, self.n_keys);
                             debug_assert_eq!(shard, _outer_shard);
@@ -788,6 +895,7 @@ impl SortedWritesTable {
         let shard_data = self.hash.shard_data();
         let n_keys = self.n_keys;
         let n_cols = self.n_columns;
+        let row_id = self.row_id;
         let next_offset = RowId::from_usize(self.data.data.len());
         let row_writer = self.data.data.parallel_writer();
         let pending_adds = self
@@ -800,6 +908,9 @@ impl SortedWritesTable {
                 let mut checker = checker.clone();
                 let mut exec_state = exec_state.clone();
                 let mut scratch = with_pool_set(|ps| ps.get::<Vec<Value>>());
+                let row_id_col = row_id.map(|cfg| cfg.column.index());
+                let mut row_id_alloc = row_id.map(|cfg| RowIdAllocator::new(cfg.counter));
+                let mut merge_row = row_id_col.map(|_| with_pool_set(|ps| ps.get::<Vec<Value>>()));
                 let queue = &self.pending_state.pending_rows[shard_id];
                 let mut marked_stale = 0usize;
                 let mut staged = StagedOutputs::new(n_keys, n_cols, BATCH_SIZE);
@@ -854,16 +965,40 @@ impl SortedWritesTable {
                                     // SAFETY: `occ` must point to a valid row: we only insert valid rows
                                     // into the map.
                                     let cur = unsafe { read_handle.get_row_unchecked(occ.get().row) };
+                                    let mut cur_row_id = None;
+                                    let new_row = if let Some(row_id_col) = row_id_col {
+                                        let row_id = cur[row_id_col];
+                                        cur_row_id = Some(row_id);
+                                        let merge_row = merge_row
+                                            .as_mut()
+                                            .expect("merge row scratch missing");
+                                        merge_row.clear();
+                                        merge_row.extend_from_slice(row);
+                                        merge_row[row_id_col] = row_id;
+                                        merge_row.as_slice()
+                                    } else {
+                                        row
+                                    };
 
                                     // SAFETY: The safety requirements of
                                     // `set_stale_shared` are that there are no
                                     // concurrent accesses to `row`. We have
                                     // exclusive access to any row whose hash matches this
                                     // shard.
-                                    if (self.merge)(&mut exec_state, cur, row, &mut scratch) {
+                                    if (self.merge)(&mut exec_state, cur, new_row, &mut scratch) {
                                         unsafe {
                                             let _was_stale = read_handle.set_stale_shared(occ.get().row);
                                             debug_assert!(!_was_stale);
+                                        }
+                                        if let Some(row_id_col) = row_id_col {
+                                            // SAFETY: This row is only written by this thread.
+                                            unsafe {
+                                                read_handle.set_col_shared(
+                                                    cur_row,
+                                                    row_id_col,
+                                                    cur_row_id.expect("row id column missing"),
+                                                );
+                                            }
                                         }
                                         occ.get_mut().row = cur_row;
                                         changed = true;
@@ -883,6 +1018,16 @@ impl SortedWritesTable {
                                         hashcode: hc as HashCode,
                                         row: cur_row,
                                     });
+                                    if let Some(row_id_col) = row_id_col {
+                                        let row_id = row_id_alloc
+                                            .as_mut()
+                                            .expect("row id allocator missing")
+                                            .next_value(&exec_state);
+                                        // SAFETY: This row is only written by this thread.
+                                        unsafe {
+                                            read_handle.set_col_shared(cur_row, row_id_col, row_id);
+                                        }
+                                    }
                                 }
                             }
 
@@ -895,13 +1040,22 @@ impl SortedWritesTable {
                 // * Add new values to `staged`
                 // * Removing entries in `shard` and mark them as stale in
                 // `data` if they will be overwritten.
-                while let Some(buf) = queue.pop() {
+                while let Some(mut buf) = queue.pop() {
                     // We create a read_handle once per batch to avoid blocking
                     // too many threads if someone needs to resize the row
                     // writer.
-                    for row in buf.non_stale() {
+                    for row in buf.non_stale_mut() {
+                        if let Some(row_id_col) = row_id_col {
+                            row[row_id_col] = ROW_ID_PLACEHOLDER;
+                        }
                         staged.insert(row, |cur, new, out| {
-                            (self.merge)(&mut exec_state, cur, new, out)
+                            let changed = (self.merge)(&mut exec_state, cur, new, out);
+                            if changed {
+                                if let Some(row_id_col) = row_id_col {
+                                    out[row_id_col] = ROW_ID_PLACEHOLDER;
+                                }
+                            }
+                            changed
                         });
                         if staged.len() >= BATCH_SIZE {
                             flush_staged_outputs!();

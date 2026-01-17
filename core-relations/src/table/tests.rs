@@ -2,10 +2,12 @@ use crate::numeric_id::NumericId;
 use rand::{Rng, rng};
 
 use crate::{
+    action::ExecutionState,
     common::{HashMap, ShardId, Value},
+    free_join::Database,
     offsets::{RowId, SubsetRef},
     row_buffer::TaggedRowBuffer,
-    table::{TableEntry, hash_code},
+    table::{SortedWritesTable, SortedWritesTableOptions, TableEntry, hash_code},
     table_shortcuts::{fill_table, v},
     table_spec::{ColumnId, Constraint, Offset, Table, WrappedTable},
 };
@@ -147,6 +149,129 @@ fn insert_scan_sorted() {
             (RowId::new(0), vec![v(0), v(1), v(2)]),
             (RowId::new(1), vec![v(1), v(2), v(3)]),
         ]
+    );
+}
+
+#[test]
+fn stable_row_id_is_assigned_and_preserved() {
+    let mut db = Database::default();
+    let row_id_counter = db.add_counter();
+    let mut exec_state = ExecutionState::new(db.read_only_view(), Default::default());
+    let mut table = SortedWritesTable::new(
+        1,
+        3,
+        SortedWritesTableOptions {
+            sort_by: None,
+            row_id: Some((row_id_counter, ColumnId::new(2))),
+        },
+        vec![],
+        Box::new(|_, cur, new, out| {
+            assert_eq!(cur[2], new[2], "row id should be stable across merges");
+            if cur[1] != new[1] {
+                out.extend_from_slice(new);
+                true
+            } else {
+                false
+            }
+        }),
+    );
+
+    table.new_buffer().stage_insert(&[v(1), v(10), v(999)]);
+    table.merge(&mut exec_state);
+    let row = table.get_row(&[v(1)]).expect("row should exist");
+    let row_id = row.vals[2];
+    assert_ne!(row_id, v(999));
+
+    table.new_buffer().stage_insert(&[v(1), v(20), v(1000)]);
+    table.merge(&mut exec_state);
+    let row = table.get_row(&[v(1)]).expect("row should exist");
+    assert_eq!(row.vals[2], row_id);
+
+    table.new_buffer().stage_insert(&[v(2), v(30), v(1001)]);
+    table.merge(&mut exec_state);
+    let row = table.get_row(&[v(2)]).expect("row should exist");
+    assert_ne!(row.vals[2], row_id);
+}
+
+#[test]
+fn stable_row_id_across_compaction() {
+    let mut db = Database::default();
+    let row_id_counter = db.add_counter();
+    let mut exec_state = ExecutionState::new(db.read_only_view(), Default::default());
+    let mut table = SortedWritesTable::new(
+        1,
+        3,
+        SortedWritesTableOptions {
+            sort_by: None,
+            row_id: Some((row_id_counter, ColumnId::new(2))),
+        },
+        vec![],
+        Box::new(|_, cur, new, out| {
+            assert_eq!(cur[2], new[2], "row id should be stable across merges");
+            if cur[1] != new[1] {
+                out.extend_from_slice(new);
+                true
+            } else {
+                false
+            }
+        }),
+    );
+
+    const ROWS: usize = 50;
+    {
+        let mut buf = table.new_buffer();
+        for i in 0..ROWS {
+            buf.stage_insert(&[v(i), v(1000 + i), v(123)]);
+        }
+    }
+    table.merge(&mut exec_state);
+
+    let row_id0 = table.get_row(&[v(0)]).expect("row should exist").vals[2];
+    let row_id1 = table.get_row(&[v(1)]).expect("row should exist").vals[2];
+
+    let gen0 = table.version().major.index();
+    {
+        let mut buf = table.new_buffer();
+        for i in 2..ROWS {
+            buf.stage_remove(&[v(i)]);
+        }
+    }
+    table.merge(&mut exec_state);
+    let gen1 = table.version().major.index();
+    assert!(gen1 > gen0, "expected compaction after removals");
+    assert_eq!(
+        table.get_row(&[v(0)]).expect("row should exist").vals[2],
+        row_id0
+    );
+    assert_eq!(
+        table.get_row(&[v(1)]).expect("row should exist").vals[2],
+        row_id1
+    );
+
+    {
+        let mut buf = table.new_buffer();
+        for i in 2..ROWS {
+            buf.stage_insert(&[v(i), v(2000 + i), v(456)]);
+        }
+    }
+    table.merge(&mut exec_state);
+
+    {
+        let mut buf = table.new_buffer();
+        for i in 2..ROWS {
+            buf.stage_remove(&[v(i)]);
+        }
+    }
+    table.merge(&mut exec_state);
+    let gen2 = table.version().major.index();
+    assert!(gen2 > gen1, "expected second compaction after removals");
+    assert_eq!(
+        table.get_row(&[v(0)]).expect("row should exist").vals[2],
+        row_id0
+    );
+    assert_eq!(
+        table.get_row(&[v(1)]).expect("row should exist").vals[2],
+        row_id1
     );
 }
 

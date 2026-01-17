@@ -457,6 +457,10 @@ impl<'a> ExecutionState<'a> {
         self.db.counters.inc(ctr)
     }
 
+    pub fn inc_counter_by(&self, ctr: CounterId, amount: usize) -> usize {
+        self.db.counters.inc_by(ctr, amount)
+    }
+
     pub fn read_counter(&self, ctr: CounterId) -> usize {
         self.db.counters.read(ctr)
     }

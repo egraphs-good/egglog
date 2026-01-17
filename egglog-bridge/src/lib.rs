@@ -21,7 +21,7 @@ use crate::core_relations::{
     BaseValue, BaseValueId, BaseValues, ColumnId, Constraint, ContainerValue, ContainerValues,
     CounterId, Database, DisplacedTable, DisplacedTableWithProvenance, ExecutionState,
     ExternalFunction, ExternalFunctionId, MergeVal, Offset, PlanStrategy, SortedWritesTable,
-    TableId, TaggedRowBuffer, Value, WrappedTable,
+    SortedWritesTableOptions, TableId, TaggedRowBuffer, Value, WrappedTable,
 };
 use crate::numeric_id::{DenseIdMap, DenseIdMapWithReuse, IdVec, NumericId, define_id};
 use egglog_core_relations as core_relations;
@@ -69,6 +69,7 @@ pub struct EGraph {
     db: Database,
     uf_table: TableId,
     id_counter: CounterId,
+    row_id_counter: CounterId,
     reason_counter: CounterId,
     timestamp_counter: CounterId,
     rules: DenseIdMapWithReuse<RuleId, RuleInfo>,
@@ -161,6 +162,8 @@ pub struct FunctionConfig {
     pub name: String,
     /// Whether or not subsumption is enabled for this function.
     pub can_subsume: bool,
+    /// Whether to add a stable row-id column to this function's table.
+    pub row_id: bool,
 }
 
 impl EGraph {
@@ -182,6 +185,7 @@ impl EGraph {
 
     fn create_internal(mut db: Database, uf_table: TableId, tracing: bool) -> EGraph {
         let id_counter = db.add_counter();
+        let row_id_counter = db.add_counter();
         let trace_counter = db.add_counter();
         let ts_counter = db.add_counter();
         // Start the timestamp counter at 1.
@@ -195,6 +199,7 @@ impl EGraph {
             db,
             uf_table,
             id_counter,
+            row_id_counter,
             reason_counter: trace_counter,
             timestamp_counter: ts_counter,
             rules: Default::default(),
@@ -350,7 +355,7 @@ impl EGraph {
                 let table = SortedWritesTable::new(
                     spec.n_keys + 1,     // added entry for the tableid
                     spec.n_keys + 1 + 2, // one value for the term id, one for the reason,
-                    None,
+                    SortedWritesTableOptions::default(),
                     vec![], // no rebuilding needed for term table
                     Box::new(move |state, old, new, out| {
                         // We want to pick the minimum term value.
@@ -390,7 +395,7 @@ impl EGraph {
                 let table = SortedWritesTable::new(
                     arity,
                     arity + 1, // one value for the reason id
-                    None,
+                    SortedWritesTableOptions::default(),
                     vec![], // no rebuilding needed for reason tables
                     Box::new(|_, _, _, _| false),
                 );
@@ -424,6 +429,7 @@ impl EGraph {
             tracing: self.tracing,
             subsume: info.can_subsume,
             func_cols: info.schema.len(),
+            row_id: info.row_id,
         };
         let mut extended_row = Vec::new();
         extended_row.extend_from_slice(inputs);
@@ -479,6 +485,7 @@ impl EGraph {
             tracing: self.tracing,
             subsume: info.can_subsume,
             func_cols: info.schema.len(),
+            row_id: info.row_id,
         };
         let table_id = info.table;
         let table = self.db.get_table(table_id);
@@ -521,6 +528,7 @@ impl EGraph {
                 tracing: self.tracing,
                 subsume: table_info.can_subsume,
                 func_cols: table_info.schema.len(),
+                row_id: table_info.row_id,
             };
             let table_id = table_info.table;
             let term_id = reason_id.map(|reason| {
@@ -632,6 +640,7 @@ impl EGraph {
             tracing: self.tracing,
             subsume: info.can_subsume,
             func_cols: info.schema.len(),
+            row_id: info.row_id,
         };
         let imp = self.db.get_table(table);
         let all = imp.all();
@@ -722,6 +731,7 @@ impl EGraph {
             merge,
             name,
             can_subsume,
+            row_id,
         } = config;
         assert!(
             !schema.is_empty(),
@@ -737,6 +747,7 @@ impl EGraph {
             tracing: self.tracing,
             subsume: can_subsume,
             func_cols: schema.len(),
+            row_id,
         };
         let n_args = schema_math.num_keys();
         let n_cols = schema_math.table_columns();
@@ -748,7 +759,15 @@ impl EGraph {
         let table = SortedWritesTable::new(
             n_args,
             n_cols,
-            Some(ColumnId::from_usize(schema.len())),
+            SortedWritesTableOptions {
+                sort_by: Some(ColumnId::from_usize(schema_math.ts_col())),
+                row_id: row_id.then(|| {
+                    (
+                        self.row_id_counter,
+                        ColumnId::from_usize(schema_math.row_id_col()),
+                    )
+                }),
+            },
             to_rebuild,
             merge_fn,
         );
@@ -767,6 +786,7 @@ impl EGraph {
             nonincremental_rebuild_rule: RuleId::new(!0),
             default_val: default,
             can_subsume,
+            row_id,
             name,
         });
         debug_assert_eq!(res, next_func_id);
@@ -1162,6 +1182,7 @@ struct FunctionInfo {
     nonincremental_rebuild_rule: RuleId,
     default_val: DefaultVal,
     can_subsume: bool,
+    row_id: bool,
     name: Arc<str>,
 }
 
@@ -1469,6 +1490,7 @@ impl TableAction {
                 func_cols: func_info.schema.len(),
                 subsume: func_info.can_subsume,
                 tracing: egraph.tracing,
+                row_id: func_info.row_id,
             },
             default: match &func_info.default_val {
                 DefaultVal::FreshId => Some(MergeVal::Counter(egraph.id_counter)),
@@ -1751,16 +1773,21 @@ fn combine_subsumed(v1: Value, v2: Value) -> Value {
 /// Functions can have multiple "output columns" in the underlying core-relations layer depending
 /// on whether different features are enabled. Roughly, tables are laid out as:
 ///
-/// > `[key0, ..., keyn, return value, timestamp, proof_id?, subsume?]`
+/// > `[key0, ..., keyn, return value, timestamp, proof_id?, subsume?, row_id?]`
 ///
 /// Where there are `n+1` key columns and columns marked with a question mark are optional,
 /// depending on the egraph and table-level configuration.
+///
+/// If row ids are enabled, the trailing row_id column is ignored on writes and is populated by
+/// core-relations during merge.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
 struct SchemaMath {
     /// Whether or not proofs are enabled.
     tracing: bool,
     /// Whether or not the table is enabled for subsumption.
     subsume: bool,
+    /// Whether or not the table stores stable row ids.
+    row_id: bool,
     /// The number of columns in the function (including the return value).
     func_cols: usize,
 }
@@ -1789,7 +1816,7 @@ pub struct FunctionRow<'a> {
 }
 
 impl SchemaMath {
-    fn write_table_row<T: Clone>(
+    fn write_table_row<T: Clone + RowIdPlaceholder>(
         &self,
         row: &mut impl HasResizeWith<T>,
         RowVals {
@@ -1820,6 +1847,10 @@ impl SchemaMath {
                 "subsume flag must be provided if subsumption is enabled"
             );
         }
+        if self.row_id {
+            // Row ids are assigned by core-relations on insert, so any constant works here.
+            row[self.row_id_col()] = T::row_id_placeholder();
+        }
     }
 
     fn num_keys(&self) -> usize {
@@ -1827,7 +1858,10 @@ impl SchemaMath {
     }
 
     fn table_columns(&self) -> usize {
-        self.func_cols + 1 /* timestamp */ + if self.tracing { 1 } else { 0 } + if self.subsume { 1 } else { 0 }
+        self.func_cols + 1 /* timestamp */
+            + if self.tracing { 1 } else { 0 }
+            + if self.subsume { 1 } else { 0 }
+            + if self.row_id { 1 } else { 0 }
     }
 
     #[track_caller]
@@ -1842,6 +1876,12 @@ impl SchemaMath {
 
     fn ts_col(&self) -> usize {
         self.func_cols
+    }
+
+    #[track_caller]
+    fn row_id_col(&self) -> usize {
+        assert!(self.row_id);
+        self.table_columns() - 1
     }
 
     #[track_caller]
@@ -1867,6 +1907,37 @@ trait HasResizeWith<T>:
     fn resize_with<F>(&mut self, new_size: usize, f: F)
     where
         F: FnMut() -> T;
+}
+
+trait RowIdPlaceholder {
+    fn row_id_placeholder() -> Self;
+}
+
+impl RowIdPlaceholder for Value {
+    fn row_id_placeholder() -> Self {
+        Value::new_const(0)
+    }
+}
+
+impl RowIdPlaceholder for core_relations::QueryEntry {
+    fn row_id_placeholder() -> Self {
+        core_relations::QueryEntry::Const(Value::new_const(0))
+    }
+}
+
+impl RowIdPlaceholder for crate::QueryEntry {
+    fn row_id_placeholder() -> Self {
+        crate::QueryEntry::Const {
+            val: Value::new_const(0),
+            ty: ColumnTy::Id,
+        }
+    }
+}
+
+impl RowIdPlaceholder for MergeVal {
+    fn row_id_placeholder() -> Self {
+        MergeVal::Constant(Value::new_const(0))
+    }
 }
 
 impl<T> HasResizeWith<T> for Vec<T> {

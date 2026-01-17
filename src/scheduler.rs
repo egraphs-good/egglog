@@ -341,6 +341,7 @@ impl SchedulerRuleInfo {
             merge: MergeFn::AssertEq,
             name: "backend".to_string(),
             can_subsume: false,
+            row_id: false,
         });
 
         // Step 1: build the query rule

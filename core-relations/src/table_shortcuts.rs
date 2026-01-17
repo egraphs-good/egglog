@@ -4,7 +4,7 @@ use crate::numeric_id::NumericId;
 
 use crate::{
     common::Value,
-    table::SortedWritesTable,
+    table::{SortedWritesTable, SortedWritesTableOptions},
     table_spec::{ColumnId, Table},
 };
 
@@ -39,7 +39,10 @@ pub(crate) fn fill_table(
     let mut table = SortedWritesTable::new(
         n_keys,
         n_cols,
-        sort_by,
+        SortedWritesTableOptions {
+            sort_by,
+            row_id: None,
+        },
         vec![],
         Box::new(move |_, old, new, out| {
             if let Some(res) = merge_fn(old, new) {

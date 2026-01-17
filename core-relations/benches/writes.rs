@@ -1,5 +1,5 @@
 use divan::{Bencher, counter::ItemsCount};
-use egglog_core_relations::{Database, SortedWritesTable, Table, Value};
+use egglog_core_relations::{Database, SortedWritesTable, SortedWritesTableOptions, Table, Value};
 use egglog_numeric_id::NumericId;
 use rand::{Rng, rng};
 use rayon::{
@@ -118,7 +118,7 @@ fn bench_workload<const K: usize, const C: usize>(
                 SortedWritesTable::new(
                     K,
                     C,
-                    None,
+                    SortedWritesTableOptions::default(),
                     vec![],
                     Box::new(|_, old, new, out: &mut Vec<Value>| {
                         out.extend_from_slice(new);
