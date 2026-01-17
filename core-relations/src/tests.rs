@@ -1079,3 +1079,86 @@ fn call_external_with_fallback() {
     h_contents.sort();
     assert_eq!(h_contents, vec![vec![v(2), v(0)], vec![v(4), v(0)],]);
 }
+
+#[test]
+fn early_stop() {
+    let mut db = Database::default();
+
+    // Create a table with 1M rows.
+    let data_table = db.add_table(
+        SortedWritesTable::new(1, 2, None, vec![], Box::new(|_, _, _, _| false)),
+        iter::empty(),
+        iter::empty(),
+    );
+
+    {
+        // Populate with 0.5M rows.
+        let mut buf = db.new_buffer(data_table);
+        for i in 0..500_000 {
+            buf.stage_insert(&[Value::from_usize(i), Value::from_usize(i)]);
+        }
+    }
+    db.merge_all();
+
+    // External function that triggers early stop after 1000 calls.
+    let call_count = Arc::new(Mutex::new(0usize));
+    let call_count_clone = call_count.clone();
+    let stop_trigger = db.add_external_function(Box::new(make_external_func(
+        move |exec_state, args| {
+            let mut count = call_count_clone.lock().unwrap();
+            *count += 1;
+
+            if *count >= 1000 {
+                exec_state.trigger_early_stop();
+            }
+
+            let [x] = args else { panic!() };
+            Some(*x)
+        },
+    )));
+
+    // Build a rule that scans the table and calls the external function.
+    let mut rsb = RuleSetBuilder::new(&mut db);
+    let mut query = rsb.new_rule();
+    let x = query.new_var_named("x");
+    let y = query.new_var_named("y");
+    query
+        .add_atom(data_table, &[x.into(), y.into()], &[])
+        .unwrap();
+    let mut rb = query.build();
+    let _ = rb.call_external(stop_trigger, &[x.into()]).unwrap();
+    rb.build_with_description("early_stop_test");
+    let rs = rsb.build();
+
+    let report = db.run_rule_set(&rs, ReportLevel::TimeOnly);
+
+    let matches = report.num_matches("early_stop_test");
+
+    // NB: 100K is very loose: this test doesn't appear to flake even with 10K as the upper limit.
+    // This is mostly just there to avoid truly unlikely race conditions where there are a huge
+    // number of matches in flight at once.
+    assert!(
+        matches < 100_000,
+        "Expected much fewer than 10k matches due to early stopping, got {}, (call_count={})",
+        matches,
+        call_count.lock().unwrap(),
+    );
+    assert!(
+        matches >= 1000,
+        "Expected at least 1000 matches before stopping, got {} (call_count={})",
+        matches,
+        call_count.lock().unwrap(),
+    );
+
+    let final_count = *call_count.lock().unwrap();
+    assert!(
+        final_count >= 1000,
+        "External function called {} times, should be at least 1000",
+        final_count
+    );
+    assert!(
+        final_count < 100_000,
+        "External function called {} times, should be much less than 10k",
+        final_count
+    );
+}

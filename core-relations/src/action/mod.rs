@@ -2,7 +2,13 @@
 //!
 //! This allows us to execute the "right-hand-side" of a rule. The
 //! implementation here is optimized to execute on a batch of rows at a time.
-use std::ops::Deref;
+use std::{
+    ops::Deref,
+    sync::{
+        Arc,
+        atomic::{AtomicBool, Ordering},
+    },
+};
 
 use crate::{
     common::HashMap,
@@ -357,6 +363,9 @@ pub struct ExecutionState<'a> {
     buffers: MutationBuffers<'a>,
     /// Whether any mutations have been staged via this ExecutionState.
     pub(crate) changed: bool,
+    /// Atomic flag for early stopping of rule execution.
+    /// This flag is shared across all handles (clones) of this ExecutionState.
+    stop_match: Arc<AtomicBool>,
 }
 
 /// A basic wrapper around an map from table id to a mutation buffer for that table that also
@@ -407,6 +416,7 @@ impl Clone for ExecutionState<'_> {
             db: self.db,
             buffers: self.buffers.clone(),
             changed: false,
+            stop_match: Arc::clone(&self.stop_match),
         }
     }
 }
@@ -421,6 +431,7 @@ impl<'a> ExecutionState<'a> {
             db,
             buffers: MutationBuffers::new(db.notification_list, buffers),
             changed: false,
+            stop_match: Arc::new(AtomicBool::new(false)),
         }
     }
 
@@ -566,6 +577,21 @@ impl<'a> ExecutionState<'a> {
                 vals,
             )
         })[col.index()]
+    }
+
+    /// Trigger early stopping by setting the stop_match flag.
+    /// This causes rule execution to halt at the next opportunity.
+    ///
+    /// Uses Release ordering to ensure all prior writes are visible to threads that observe this flag.
+    pub fn trigger_early_stop(&self) {
+        self.stop_match.store(true, Ordering::Release);
+    }
+
+    /// Check if early stopping has been requested.
+    ///
+    /// Uses Acquire ordering to ensure we see all writes that happened before the flag was set.
+    pub fn should_stop(&self) -> bool {
+        self.stop_match.load(Ordering::Acquire)
     }
 }
 

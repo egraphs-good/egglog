@@ -1661,8 +1661,9 @@ impl ExternalFunction for GetFirstMatch {
 struct LazyPanic<F>(Arc<Lazy<String, F>>, SideChannel<String>);
 
 impl<F: FnOnce() -> String + Send> ExternalFunction for LazyPanic<F> {
-    fn invoke(&self, _: &mut core_relations::ExecutionState, args: &[Value]) -> Option<Value> {
+    fn invoke(&self, state: &mut core_relations::ExecutionState, args: &[Value]) -> Option<Value> {
         assert!(args.is_empty());
+        state.trigger_early_stop();
         let mut guard = self.1.lock().unwrap();
         if guard.is_none() {
             *guard = Some(Lazy::force(&self.0).clone());
@@ -1707,10 +1708,11 @@ impl EGraph {
 }
 
 impl ExternalFunction for Panic {
-    fn invoke(&self, _: &mut core_relations::ExecutionState, args: &[Value]) -> Option<Value> {
+    fn invoke(&self, state: &mut core_relations::ExecutionState, args: &[Value]) -> Option<Value> {
         // TODO (egglog feature): change this to support interpolating panic messages
         assert!(args.is_empty());
 
+        state.trigger_early_stop();
         let mut guard = self.1.lock().unwrap();
         if guard.is_none() {
             *guard = Some(self.0.clone());

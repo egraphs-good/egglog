@@ -16,6 +16,7 @@ use crate::core_relations::{
 use crate::numeric_id::NumericId;
 use log::debug;
 use num_rational::Rational64;
+use once_cell::sync::Lazy;
 
 use crate::{
     ColumnTy, DefaultVal, EGraph, FunctionConfig, FunctionId, MergeFn, ProofStore, QueryEntry,
@@ -1406,6 +1407,34 @@ fn primitive_failure_panics() {
     };
 
     egraph.run_rules(&[assert_odd_rule]).err().unwrap();
+}
+
+#[test]
+fn panic_functions_trigger_early_stop() {
+    let db = core_relations::Database::default();
+
+    let channel: crate::SideChannel<String> = Default::default();
+    let panic_fn = super::Panic("panic".to_string(), channel.clone());
+    let stopped = db.with_execution_state(|state| {
+        assert!(!state.should_stop());
+        let res = core_relations::ExternalFunction::invoke(&panic_fn, state, &[]);
+        assert!(res.is_none());
+        state.should_stop()
+    });
+    assert!(stopped);
+    assert_eq!(channel.lock().unwrap().as_deref(), Some("panic"));
+
+    let channel: crate::SideChannel<String> = Default::default();
+    let lazy = Lazy::new(|| "lazy panic".to_string());
+    let panic_fn = super::LazyPanic(Arc::new(lazy), channel.clone());
+    let stopped = db.with_execution_state(|state| {
+        assert!(!state.should_stop());
+        let res = core_relations::ExternalFunction::invoke(&panic_fn, state, &[]);
+        assert!(res.is_none());
+        state.should_stop()
+    });
+    assert!(stopped);
+    assert_eq!(channel.lock().unwrap().as_deref(), Some("lazy panic"));
 }
 
 const _: () = {
