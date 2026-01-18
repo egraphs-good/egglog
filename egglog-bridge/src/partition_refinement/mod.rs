@@ -5,6 +5,7 @@
 
 pub mod crc32_hash;
 pub mod refinement;
+pub mod signature_set;
 pub mod unique_repeat_index;
 
 use std::sync::Arc;
