@@ -532,10 +532,12 @@ fn test_subsumed_unextractable_action_extract() {
         )
         .unwrap();
     // Originally should give back numeric term
-    assert!(matches!(
-        outputs[0],
-        CommandOutput::ExtractBest(_, _, Term::App(ref s, ..)) if s == "cheap"
-    ));
+    assert!(match &outputs[0] {
+        CommandOutput::ExtractBest(termdag, _, term_id) => {
+            matches!(termdag.get(*term_id), Term::App(s, ..) if s == "cheap")
+        }
+        _ => false,
+    });
     // Then if we make one as subsumed, it should give back the variable term
     let outputs = egraph
         .parse_and_run_program(
@@ -546,10 +548,12 @@ fn test_subsumed_unextractable_action_extract() {
             "#,
         )
         .unwrap();
-    assert!(matches!(
-        outputs[0],
-        CommandOutput::ExtractBest(_, _, Term::App(ref s, ..)) if s == "exp"
-    ));
+    assert!(match &outputs[0] {
+        CommandOutput::ExtractBest(termdag, _, term_id) => {
+            matches!(termdag.get(*term_id), Term::App(s, ..) if s == "exp")
+        }
+        _ => false,
+    });
 }
 
 #[test]
@@ -576,10 +580,12 @@ fn test_subsume_unextractable_insert_and_merge() {
             "#,
         )
         .unwrap();
-    assert!(matches!(
-        outputs[0],
-        CommandOutput::ExtractBest(_, _, Term::App(ref s, ..)) if s == "exp"
-    ));
+    assert!(match &outputs[0] {
+        CommandOutput::ExtractBest(termdag, _, term_id) => {
+            matches!(termdag.get(*term_id), Term::App(s, ..) if s == "exp")
+        }
+        _ => false,
+    });
 }
 
 #[test]

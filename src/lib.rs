@@ -114,13 +114,13 @@ pub enum CommandOutput {
     /// The name of all functions and their sizes
     PrintAllFunctionsSize(Vec<(String, usize)>),
     /// The best function found after extracting
-    ExtractBest(TermDag, DefaultCost, Term),
+    ExtractBest(TermDag, DefaultCost, TermId),
     /// The variants of a function found after extracting
-    ExtractVariants(TermDag, Vec<Term>),
+    ExtractVariants(TermDag, Vec<TermId>),
     /// The report from all runs
     OverallStatistics(RunReport),
     /// A printed function and all its values
-    PrintFunction(Function, TermDag, Vec<(Term, Term)>, PrintFunctionMode),
+    PrintFunction(Function, TermDag, Vec<(TermId, TermId)>, PrintFunctionMode),
     /// The report from a single run
     RunSchedule(RunReport),
     /// A user defined output
@@ -139,12 +139,12 @@ impl std::fmt::Display for CommandOutput {
                 Ok(())
             }
             CommandOutput::ExtractBest(termdag, _cost, term) => {
-                writeln!(f, "{}", termdag.to_string(term))
+                writeln!(f, "{}", termdag.to_string(*term))
             }
             CommandOutput::ExtractVariants(termdag, terms) => {
                 writeln!(f, "(")?;
                 for expr in terms {
-                    writeln!(f, "   {}", termdag.to_string(expr))?;
+                    writeln!(f, "   {}", termdag.to_string(*expr))?;
                 }
                 writeln!(f, ")")
             }
@@ -156,15 +156,15 @@ impl std::fmt::Display for CommandOutput {
                 if *mode == PrintFunctionMode::CSV {
                     let mut wtr = Writer::from_writer(vec![]);
                     for (term, output) in terms_and_outputs {
-                        match term {
+                        match termdag.get(*term) {
                             Term::App(name, children) => {
                                 let mut values = vec![name.clone()];
                                 for child_id in children {
-                                    values.push(termdag.to_string(termdag.get(*child_id)));
+                                    values.push(termdag.to_string(*child_id));
                                 }
 
                                 if !out_is_unit {
-                                    values.push(termdag.to_string(output));
+                                    values.push(termdag.to_string(*output));
                                 }
                                 wtr.write_record(&values).map_err(|_| std::fmt::Error)?;
                             }
@@ -176,9 +176,9 @@ impl std::fmt::Display for CommandOutput {
                 } else {
                     writeln!(f, "(")?;
                     for (term, output) in terms_and_outputs.iter() {
-                        write!(f, "   {}", termdag.to_string(term))?;
+                        write!(f, "   {}", termdag.to_string(*term))?;
                         if !out_is_unit {
-                            write!(f, " -> {}", termdag.to_string(output))?;
+                            write!(f, " -> {}", termdag.to_string(*output))?;
                         }
                         writeln!(f)?;
                     }
@@ -600,7 +600,7 @@ impl EGraph {
         sym: &str,
         n: usize,
         include_output: bool,
-    ) -> Result<(Vec<Term>, Option<Vec<Term>>, TermDag), Error> {
+    ) -> Result<(Vec<TermId>, Option<Vec<TermId>>, TermDag), Error> {
         let func = self
             .functions
             .get(sym)
@@ -616,8 +616,8 @@ impl EGraph {
         );
 
         let mut termdag = TermDag::default();
-        let mut inputs: Vec<Term> = Vec::new();
-        let mut output: Option<Vec<Term>> = if include_output {
+        let mut inputs: Vec<TermId> = Vec::new();
+        let mut output: Option<Vec<TermId>> = if include_output {
             Some(Vec::new())
         } else {
             None
@@ -626,7 +626,7 @@ impl EGraph {
         let extract_row = |row: egglog_bridge::FunctionRow| {
             if inputs.len() < n {
                 // include subsumed rows
-                let mut children: Vec<Term> = Vec::new();
+                let mut children: Vec<TermId> = Vec::new();
                 for (value, sort) in row.vals.iter().zip(&func.schema.input) {
                     let (_, term) = extractor
                         .extract_best_with_sort(self, &mut termdag, *value, sort.clone())
@@ -760,17 +760,17 @@ impl EGraph {
         }
     }
 
-    /// Extract a value to a [`TermDag`] and [`Term`] in the [`TermDag`] using the default cost model.
+    /// Extract a value to a [`TermDag`] and [`TermId`] in the [`TermDag`] using the default cost model.
     /// See also [`EGraph::extract_value_with_cost_model`] for more control.
     pub fn extract_value(
         &self,
         sort: &ArcSort,
         value: Value,
-    ) -> Result<(TermDag, Term, DefaultCost), Error> {
+    ) -> Result<(TermDag, TermId, DefaultCost), Error> {
         self.extract_value_with_cost_model(sort, value, TreeAdditiveCostModel::default())
     }
 
-    /// Extract a value to a [`TermDag`] and [`Term`] in the [`TermDag`].
+    /// Extract a value to a [`TermDag`] and [`TermId`] in the [`TermDag`].
     /// Note that the `TermDag` may contain a superset of the nodes in the `Term`.
     /// See also [`EGraph::extract_value_to_string`] for convenience.
     pub fn extract_value_with_cost_model<CM: CostModel<DefaultCost> + 'static>(
@@ -778,7 +778,7 @@ impl EGraph {
         sort: &ArcSort,
         value: Value,
         cost_model: CM,
-    ) -> Result<(TermDag, Term, DefaultCost), Error> {
+    ) -> Result<(TermDag, TermId, DefaultCost), Error> {
         let extractor =
             Extractor::compute_costs_from_rootsorts(Some(vec![sort.clone()]), self, cost_model);
         let mut termdag = TermDag::default();
@@ -794,7 +794,7 @@ impl EGraph {
         value: Value,
     ) -> Result<(String, DefaultCost), Error> {
         let (termdag, term, cost) = self.extract_value(sort, value)?;
-        Ok((termdag.to_string(&term), cost))
+        Ok((termdag.to_string(term), cost))
     }
 
     fn run_rules(&mut self, span: &Span, config: &ResolvedRunConfig) -> Result<RunReport, Error> {
@@ -1148,7 +1148,7 @@ impl EGraph {
                     if let Some((cost, term)) = extractor.extract_best(self, &mut termdag, x) {
                         // dont turn termdag into a string if we have messages disabled for performance reasons
                         if log_enabled!(Level::Info) {
-                            log::info!("extracted with cost {cost}: {}", termdag.to_string(&term));
+                            log::info!("extracted with cost {cost}: {}", termdag.to_string(term));
                         }
                         Ok(Some(CommandOutput::ExtractBest(termdag, cost, term)))
                     } else {
@@ -1161,10 +1161,10 @@ impl EGraph {
                     if n < 0 {
                         panic!("Cannot extract negative number of variants");
                     }
-                    let terms: Vec<Term> = extractor
+                    let terms: Vec<TermId> = extractor
                         .extract_variants(self, &mut termdag, x, n as usize)
                         .iter()
-                        .map(|e| e.1.clone())
+                        .map(|e| e.1)
                         .collect();
                     if log_enabled!(Level::Info) {
                         let expr_str = expr.to_string();
@@ -1255,7 +1255,7 @@ impl EGraph {
                         .extract_best_with_sort(self, &mut termdag, value, expr_type)
                         .unwrap()
                         .1;
-                    writeln!(f, "{}", termdag.to_string(&term))
+                    writeln!(f, "{}", termdag.to_string(term))
                         .map_err(|e| Error::IoError(filename.clone(), e, span.clone()))?;
                 }
 

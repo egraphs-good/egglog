@@ -24,7 +24,7 @@ impl BaseSort for BoolSort {
         base_values: &BaseValues,
         value: Value,
         termdag: &mut TermDag,
-    ) -> Term {
+    ) -> TermId {
         let b = base_values.unwrap::<bool>(value);
 
         termdag.lit(Literal::Bool(b))

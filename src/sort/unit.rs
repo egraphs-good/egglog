@@ -15,7 +15,7 @@ impl BaseSort for UnitSort {
         _base_values: &BaseValues,
         _value: Value,
         termdag: &mut TermDag,
-    ) -> Term {
+    ) -> TermId {
         termdag.lit(Literal::Unit)
     }
 }

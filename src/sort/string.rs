@@ -27,7 +27,7 @@ impl BaseSort for StringSort {
         base_values: &BaseValues,
         value: Value,
         termdag: &mut TermDag,
-    ) -> Term {
+    ) -> TermId {
         let s = base_values.unwrap::<S>(value);
 
         termdag.lit(Literal::String(s.0))
