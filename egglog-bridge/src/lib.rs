@@ -24,6 +24,7 @@ use crate::core_relations::{
     SortedWritesTableOptions, TableId, TaggedRowBuffer, Value, WrappedTable,
 };
 use crate::numeric_id::{DenseIdMap, DenseIdMapWithReuse, IdVec, NumericId, define_id};
+use crate::partition_refinement::HashPartitionRefinementState;
 use egglog_core_relations as core_relations;
 use egglog_numeric_id as numeric_id;
 use egglog_reports::{IterationReport, ReportLevel, RuleSetReport};
@@ -73,6 +74,7 @@ pub struct EGraph {
     row_id_counter: CounterId,
     reason_counter: CounterId,
     timestamp_counter: CounterId,
+    partition_refinement: Option<HashPartitionRefinementState>,
     rules: DenseIdMapWithReuse<RuleId, RuleInfo>,
     funcs: DenseIdMap<FunctionId, FunctionInfo>,
     panic_message: SideChannel<String>,
@@ -136,6 +138,11 @@ pub struct EGraph {
     report_level: ReportLevel,
 }
 
+struct EGraphOptions {
+    tracing: bool,
+    enable_partition_refinement: bool,
+}
+
 pub type Result<T> = std::result::Result<T, anyhow::Error>;
 
 impl Default for EGraph {
@@ -147,7 +154,14 @@ impl Default for EGraph {
             iter::empty(),
             iter::empty(),
         );
-        EGraph::create_internal(db, uf_table, false)
+        EGraph::create_internal(
+            db,
+            uf_table,
+            EGraphOptions {
+                tracing: false,
+                enable_partition_refinement: false,
+            },
+        )
     }
 }
 
@@ -181,10 +195,36 @@ impl EGraph {
             iter::empty(),
             iter::empty(),
         );
-        EGraph::create_internal(db, uf_table, true)
+        EGraph::create_internal(
+            db,
+            uf_table,
+            EGraphOptions {
+                tracing: true,
+                enable_partition_refinement: false,
+            },
+        )
     }
 
-    fn create_internal(mut db: Database, uf_table: TableId, tracing: bool) -> EGraph {
+    /// Create a new EGraph with partition refinement scaffolding enabled.
+    pub fn with_partition_refinement() -> EGraph {
+        let mut db = Database::new();
+        let uf_table = db.add_table_named(
+            DisplacedTable::default(),
+            "$uf".into(),
+            iter::empty(),
+            iter::empty(),
+        );
+        EGraph::create_internal(
+            db,
+            uf_table,
+            EGraphOptions {
+                tracing: false,
+                enable_partition_refinement: true,
+            },
+        )
+    }
+
+    fn create_internal(mut db: Database, uf_table: TableId, options: EGraphOptions) -> EGraph {
         let id_counter = db.add_counter();
         let row_id_counter = db.add_counter();
         let trace_counter = db.add_counter();
@@ -196,13 +236,14 @@ impl EGraph {
         let term_consistency_table =
             db.add_table(DisplacedTable::default(), iter::empty(), iter::empty());
 
-        Self {
+        let mut egraph = Self {
             db,
             uf_table,
             id_counter,
             row_id_counter,
             reason_counter: trace_counter,
             timestamp_counter: ts_counter,
+            partition_refinement: None,
             rules: Default::default(),
             funcs: Default::default(),
             panic_message: Default::default(),
@@ -213,8 +254,16 @@ impl EGraph {
             term_tables: Default::default(),
             term_consistency_table,
             report_level: Default::default(),
-            tracing,
+            tracing: options.tracing,
+        };
+        if options.enable_partition_refinement {
+            egraph.init_partition_refinement();
         }
+        egraph
+    }
+
+    pub fn partition_refinement_enabled(&self) -> bool {
+        self.partition_refinement.is_some()
     }
 
     fn next_ts(&self) -> Timestamp {
@@ -734,6 +783,8 @@ impl EGraph {
             can_subsume,
             row_id,
         } = config;
+        let partition_refinement_enabled = self.partition_refinement.is_some();
+        let row_id = row_id || partition_refinement_enabled;
         assert!(
             !schema.is_empty(),
             "must have at least one column in schema"
@@ -757,6 +808,19 @@ impl EGraph {
         let mut write_deps = IndexSet::<TableId>::new();
         merge.fill_deps(self, &mut read_deps, &mut write_deps);
         let merge_fn = merge.to_callback(schema_math, &name, self);
+        let on_delete = matches!(schema.last(), Some(ColumnTy::Id))
+            .then(|| {
+                self.partition_refinement.as_ref().map(|refine| {
+                    let node_hash_table = refine.node_hash_table.table;
+                    let row_id_idx = schema_math.row_id_col();
+                    write_deps.insert(node_hash_table);
+                    Arc::new(move |state: &mut ExecutionState<'_>, row: &[Value]| {
+                        let row_id = row[row_id_idx];
+                        state.stage_remove(node_hash_table, &[row_id]);
+                    }) as Arc<core_relations::DeleteFn>
+                })
+            })
+            .flatten();
         let table = SortedWritesTable::new(
             n_args,
             n_cols,
@@ -768,7 +832,7 @@ impl EGraph {
                         ColumnId::from_usize(schema_math.row_id_col()),
                     )
                 }),
-                on_delete: None,
+                on_delete,
             },
             to_rebuild,
             merge_fn,
@@ -797,6 +861,9 @@ impl EGraph {
         let info = &mut self.funcs[res];
         info.incremental_rebuild_rules = incremental_rebuild_rules;
         info.nonincremental_rebuild_rule = nonincremental_rebuild_rule;
+        if partition_refinement_enabled {
+            self.add_partition_refinement_rules_for_function(res);
+        }
         res
     }
 

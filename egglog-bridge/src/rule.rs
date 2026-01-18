@@ -50,6 +50,8 @@ enum RuleBuilderError {
     TypeMismatch { expected: ColumnTy, got: ColumnTy },
     #[error("arity mismatch: expected {expected:?}, got {got:?}")]
     ArityMismatch { expected: usize, got: usize },
+    #[error("expected table with row ids enabled")]
+    ExpectedRowId,
 }
 
 #[derive(Clone)]
@@ -107,13 +109,34 @@ impl From<ExternalFunctionId> for Function {
     }
 }
 
-trait Brc:
+pub(crate) trait Brc:
     Fn(&mut Bindings, &mut CoreRuleBuilder) -> Result<()> + dyn_clone::DynClone + Send + Sync
 {
 }
 impl<T: Fn(&mut Bindings, &mut CoreRuleBuilder) -> Result<()> + Clone + Send + Sync> Brc for T {}
 dyn_clone::clone_trait_object!(Brc);
 type BuildRuleCallback = Box<dyn Brc>;
+
+/// Metadata for a table atom in a rule.
+///
+/// Function atoms carry a `SchemaMath` so the rule builder can infer the
+/// timestamp column (and other layout details), while raw atoms name the
+/// timestamp column directly for non-function tables (e.g. partition
+/// refinement side tables).
+#[derive(Clone)]
+enum AtomSchema {
+    Function(SchemaMath),
+    Raw { ts_col: usize },
+}
+
+impl AtomSchema {
+    fn ts_col(&self) -> usize {
+        match self {
+            AtomSchema::Function(schema) => schema.ts_col(),
+            AtomSchema::Raw { ts_col } => *ts_col,
+        }
+    }
+}
 
 #[derive(Clone)]
 pub(crate) struct Query {
@@ -125,7 +148,7 @@ pub(crate) struct Query {
     vars: DenseIdMap<VariableId, VarInfo>,
     /// The current proofs that are in scope.
     atom_proofs: Vec<Variable>,
-    atoms: Vec<(TableId, Vec<QueryEntry>, SchemaMath)>,
+    atoms: Vec<(TableId, Vec<QueryEntry>, AtomSchema)>,
     /// An optional callback to wire up proof-related metadata before running the RHS of a rule.
     build_reason: Option<BuildRuleCallback>,
     /// The builders for queries in this module essentially wrap the lower-level
@@ -185,7 +208,7 @@ impl EGraph {
 }
 
 impl RuleBuilder<'_> {
-    fn add_callback(&mut self, cb: impl Brc + 'static) {
+    pub(crate) fn add_callback(&mut self, cb: impl Brc + 'static) {
         self.query.add_rule.push(Box::new(cb));
     }
 
@@ -386,6 +409,18 @@ impl RuleBuilder<'_> {
         subsume_entry: Option<QueryEntry>,
         entries: &[QueryEntry],
     ) -> AtomId {
+        self.add_atom_with_timestamp_and_func_internal(table, func, subsume_entry, entries, false)
+            .0
+    }
+
+    fn add_atom_with_timestamp_and_func_internal(
+        &mut self,
+        table: TableId,
+        func: Option<FunctionId>,
+        subsume_entry: Option<QueryEntry>,
+        entries: &[QueryEntry],
+        capture_row_id: bool,
+    ) -> (AtomId, Option<QueryEntry>) {
         let mut atom = entries.to_vec();
         let schema_math = if let Some(func) = func {
             let info = &self.egraph.funcs[func];
@@ -420,9 +455,13 @@ impl RuleBuilder<'_> {
                 ret_val: None,
             },
         );
-        if schema_math.row_id {
-            atom[schema_math.row_id_col()] = QueryEntry::Var(self.new_var(ColumnTy::Id));
-        }
+        let row_id_entry = if schema_math.row_id {
+            let entry = QueryEntry::Var(self.new_var(ColumnTy::Id));
+            atom[schema_math.row_id_col()] = entry.clone();
+            Some(entry)
+        } else {
+            None
+        };
         let res = AtomId::from_usize(self.query.atoms.len());
         if self.egraph.tracing {
             let proof_var = atom[schema_math.proof_id_col()].var();
@@ -438,8 +477,11 @@ impl RuleBuilder<'_> {
             }
             self.query.atom_proofs.push(proof_var);
         }
-        self.query.atoms.push((table, atom, schema_math));
-        res
+        self.query
+            .atoms
+            .push((table, atom, AtomSchema::Function(schema_math)));
+        let row_id_entry = if capture_row_id { row_id_entry } else { None };
+        (res, row_id_entry)
     }
 
     pub fn call_external_func(
@@ -499,6 +541,72 @@ impl RuleBuilder<'_> {
             }),
             entries,
         ))
+    }
+
+    /// Add a function-table atom and also return the row-id variable.
+    ///
+    /// This is the same as `query_table`, but it exposes the stable row-id
+    /// column when row ids are enabled for the table. This is used by
+    /// partition refinement to key node-hash entries by row id.
+    pub(crate) fn query_table_with_row_id(
+        &mut self,
+        func: FunctionId,
+        entries: &[QueryEntry],
+    ) -> Result<(AtomId, QueryEntry)> {
+        let info = &self.egraph.funcs[func];
+        let schema = &info.schema;
+        if schema.len() != entries.len() {
+            return Err(anyhow::Error::from(RuleBuilderError::ArityMismatch {
+                expected: schema.len(),
+                got: entries.len(),
+            }))
+            .with_context(|| {
+                format!("query_table_with_row_id: mismatch between {entries:?} and {schema:?}")
+            });
+        }
+        entries
+            .iter()
+            .zip(schema.iter())
+            .try_for_each(|(entry, ty)| {
+                self.assert_has_ty(entry, *ty).with_context(|| {
+                    format!("query_table_with_row_id: mismatch between {entry:?} and {ty:?}")
+                })
+            })?;
+        if !info.row_id {
+            return Err(anyhow::Error::from(RuleBuilderError::ExpectedRowId));
+        }
+        let (atom_id, row_id) = self.add_atom_with_timestamp_and_func_internal(
+            info.table,
+            Some(func),
+            None,
+            entries,
+            true,
+        );
+        let row_id = row_id.expect("row id missing despite row_id enabled");
+        Ok((atom_id, row_id))
+    }
+
+    /// Add an atom for a non-function table with an explicit timestamp column.
+    ///
+    /// Unlike `query_table`, this does not apply function metadata or insert
+    /// optional columns. Callers must supply the full row shape. The timestamp
+    /// column is required so seminaive can constrain this atom.
+    pub(crate) fn query_raw_table(
+        &mut self,
+        table: TableId,
+        entries: &[QueryEntry],
+        ts_col: ColumnId,
+    ) -> AtomId {
+        let atom = entries.to_vec();
+        let res = AtomId::from_usize(self.query.atoms.len());
+        self.query.atoms.push((
+            table,
+            atom,
+            AtomSchema::Raw {
+                ts_col: ts_col.index(),
+            },
+        ));
+        res
     }
 
     /// Add the given primitive atom to query. As elsewhere in the crate, the last

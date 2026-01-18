@@ -297,8 +297,18 @@ impl Debug for Function {
 
 impl Default for EGraph {
     fn default() -> Self {
+        EGraph::from_backend(Default::default())
+    }
+}
+
+#[derive(Debug, Error)]
+#[error("Not found: {0}")]
+pub struct NotFoundError(String);
+
+impl EGraph {
+    fn from_backend(backend: egglog_bridge::EGraph) -> Self {
         let mut eg = Self {
-            backend: Default::default(),
+            backend,
             parser: Default::default(),
             names: Default::default(),
             pushed_egraph: Default::default(),
@@ -347,13 +357,16 @@ impl Default for EGraph {
 
         eg
     }
-}
 
-#[derive(Debug, Error)]
-#[error("Not found: {0}")]
-pub struct NotFoundError(String);
+    pub fn new_with_partition_refinement() -> Self {
+        Self::from_backend(egglog_bridge::EGraph::with_partition_refinement())
+    }
 
-impl EGraph {
+    pub fn run_hash_partition_refinement(&mut self) -> Result<bool, Error> {
+        self.backend
+            .run_hash_partition_refinement()
+            .map_err(|e| Error::BackendError(e.to_string()))
+    }
     /// Create a new e-graph with the term-encoding pipeline enabled.
     ///
     /// In term-encoding mode the e-graph eagerly instruments every constructor
@@ -571,7 +584,7 @@ impl EGraph {
             },
             name: decl.name.to_string(),
             can_subsume,
-            row_id: false,
+            row_id: self.backend.partition_refinement_enabled(),
         });
 
         let function = Function {

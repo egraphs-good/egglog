@@ -56,6 +56,44 @@ pub fn add_block_hash_table(db: &mut Database) -> BlockHashTable {
     }
 }
 
+/// Add an e-class fingerprint table to the database.
+///
+/// The table has one key column (the e-class id), and three value columns:
+/// hash, block id, and timestamp. The table is sorted by timestamp and sums
+/// incoming hashes (wrapping) while preserving the existing block id.
+pub fn add_eclass_fingerprint_table(db: &mut Database) -> BlockHashTable {
+    let key_col = ColumnId::new(0);
+    let hash_col = ColumnId::new(1);
+    let block_col = ColumnId::new(2);
+    let ts_col = ColumnId::new(3);
+    let options = SortedWritesTableOptions {
+        sort_by: Some(ts_col),
+        ..Default::default()
+    };
+    let hash_idx = hash_col.index();
+    let ts_idx = ts_col.index();
+    let merge_fn: Box<MergeFn> = Box::new(move |_, cur, new, out| {
+        let combined = Value::new(cur[hash_idx].rep().wrapping_add(new[hash_idx].rep()));
+        if combined == cur[hash_idx] {
+            return false;
+        }
+        out.clear();
+        out.extend_from_slice(cur);
+        out[hash_idx] = combined;
+        out[ts_idx] = new[ts_idx];
+        true
+    });
+    let table = SortedWritesTable::new(1, 4, options, Vec::new(), merge_fn);
+    let table_id = db.add_table(table, std::iter::empty(), std::iter::empty());
+    BlockHashTable {
+        table: table_id,
+        key_col,
+        hash_col,
+        block_col,
+        ts_col,
+    }
+}
+
 struct BlockHashIndex {
     updated_to: Option<TableVersion>,
     by_block: UniqueRepeatIndex<Value, HashEntry>,
@@ -111,10 +149,8 @@ impl BlockHashIndex {
                 let key = row[0];
                 let hash = row[1];
                 let block = row[2];
-                self.by_block
-                    .add(block, HashEntry { hash, key }, row_id);
-                self.by_hash
-                    .add(hash, BlockEntry { block, key }, row_id);
+                self.by_block.add(block, HashEntry { hash, key }, row_id);
+                self.by_hash.add(hash, BlockEntry { block, key }, row_id);
             }
             match next {
                 Some(next) => start = next,
@@ -161,6 +197,35 @@ impl PartitionRefinement {
     /// The most popular hash keeps its block id. Ties are broken by the
     /// smaller hash value.
     pub fn split_blocks(&mut self, state: &mut ExecutionState) {
+        self.split_blocks_impl(state, Self::stage_block_update_merge);
+    }
+
+    /// Split blocks, replacing existing rows when updating block ids.
+    pub fn split_blocks_replacing(&mut self, state: &mut ExecutionState) {
+        self.split_blocks_impl(state, Self::stage_block_update_replace);
+    }
+
+    /// Split blocks using the provided update strategy.
+    ///
+    /// The `stage_update` callback is invoked for each row that needs a new block:
+    /// - `&Self`: access to table metadata (columns, counters).
+    /// - `&mut ExecutionState`: staging area for updates.
+    /// - `&mut Vec<Value>`: scratch buffer for row construction.
+    /// - `&[Value]`: the current row values (hash and block will be adjusted).
+    /// - `Value`: the new block id to assign.
+    /// - `Value`: the timestamp to write.
+    fn split_blocks_impl(
+        &mut self,
+        state: &mut ExecutionState,
+        mut stage_update: impl FnMut(
+            &Self,
+            &mut ExecutionState,
+            &mut Vec<Value>,
+            &[Value],
+            Value,
+            Value,
+        ),
+    ) {
         let table = state.get_table(self.table);
         self.index
             .refresh(table, self.key_col, self.hash_col, self.block_col);
@@ -181,13 +246,10 @@ impl PartitionRefinement {
                 {
                     continue;
                 }
-                groups
-                    .entry(entry.hash)
-                    .or_default()
-                    .push(KeyedRow {
-                        key: entry.key,
-                        row_id,
-                    });
+                groups.entry(entry.hash).or_default().push(KeyedRow {
+                    key: entry.key,
+                    row_id,
+                });
             }
             if groups.len() <= 1 {
                 continue;
@@ -218,12 +280,10 @@ impl PartitionRefinement {
                     if current.id != row.row_id {
                         continue;
                     }
-                    stage_block_update(
+                    stage_update(
+                        self,
                         state,
                         &mut scratch,
-                        self.table,
-                        self.block_col,
-                        self.ts_col,
                         current.vals.as_ref(),
                         new_block,
                         ts,
@@ -238,6 +298,26 @@ impl PartitionRefinement {
     /// The most popular block keeps its id. Ties are broken by the smallest
     /// row id in the block.
     pub fn merge_blocks(&mut self, state: &mut ExecutionState) {
+        self.merge_blocks_impl(state, Self::stage_block_update_merge);
+    }
+
+    /// Merge blocks, replacing existing rows when updating block ids.
+    pub fn merge_blocks_replacing(&mut self, state: &mut ExecutionState) {
+        self.merge_blocks_impl(state, Self::stage_block_update_replace);
+    }
+
+    fn merge_blocks_impl(
+        &mut self,
+        state: &mut ExecutionState,
+        mut stage_update: impl FnMut(
+            &Self,
+            &mut ExecutionState,
+            &mut Vec<Value>,
+            &[Value],
+            Value,
+            Value,
+        ),
+    ) {
         let table = state.get_table(self.table);
         self.index
             .refresh(table, self.key_col, self.hash_col, self.block_col);
@@ -297,12 +377,10 @@ impl PartitionRefinement {
                     if current.id != row.row_id {
                         continue;
                     }
-                    stage_block_update(
+                    stage_update(
+                        self,
                         state,
                         &mut scratch,
-                        self.table,
-                        self.block_col,
-                        self.ts_col,
                         current.vals.as_ref(),
                         winner_block,
                         ts,
@@ -312,23 +390,41 @@ impl PartitionRefinement {
         }
     }
 
-}
+    /// Stage a block update by inserting a new row for the key.
+    ///
+    /// This keeps the existing row and relies on the table's merge function to
+    /// decide which value wins.
+    fn stage_block_update_merge(
+        &self,
+        state: &mut ExecutionState,
+        scratch: &mut Vec<Value>,
+        row: &[Value],
+        new_block: Value,
+        ts: Value,
+    ) {
+        scratch.clear();
+        scratch.extend_from_slice(row);
+        scratch[self.block_col.index()] = new_block;
+        scratch[self.ts_col.index()] = ts;
+        state.stage_insert(self.table, scratch);
+    }
 
-fn stage_block_update(
-    state: &mut ExecutionState,
-    scratch: &mut Vec<Value>,
-    table: TableId,
-    block_col: ColumnId,
-    ts_col: ColumnId,
-    row: &[Value],
-    new_block: Value,
-    ts: Value,
-) {
-    scratch.clear();
-    scratch.extend_from_slice(row);
-    scratch[block_col.index()] = new_block;
-    scratch[ts_col.index()] = ts;
-    state.stage_insert(table, scratch);
+    /// Stage a block update by removing the old row and reinserting with the new block.
+    ///
+    /// This avoids invoking the merge function, which is required for tables that
+    /// use their merge logic to accumulate hashes.
+    fn stage_block_update_replace(
+        &self,
+        state: &mut ExecutionState,
+        scratch: &mut Vec<Value>,
+        row: &[Value],
+        new_block: Value,
+        ts: Value,
+    ) {
+        let key = row[self.key_col.index()];
+        state.stage_remove(self.table, &[key]);
+        self.stage_block_update_merge(state, scratch, row, new_block, ts);
+    }
 }
 
 #[derive(Clone, Copy, Eq, PartialEq, Hash)]
@@ -443,8 +539,22 @@ mod tests {
         let hash_small = Value::new_const(5);
         let hash_large = Value::new_const(10);
 
-        insert_row(&db, table, Value::new_const(1), hash_small, block, ts_counter);
-        insert_row(&db, table, Value::new_const(2), hash_large, block, ts_counter);
+        insert_row(
+            &db,
+            table,
+            Value::new_const(1),
+            hash_small,
+            block,
+            ts_counter,
+        );
+        insert_row(
+            &db,
+            table,
+            Value::new_const(2),
+            hash_large,
+            block,
+            ts_counter,
+        );
         db.merge_all();
 
         db.inc_counter(ts_counter);
@@ -455,7 +565,12 @@ mod tests {
         let rows = collect_rows(&db, table);
         let new_block = Value::from_usize(200);
         assert!(rows.contains(&(Value::new_const(1), hash_small, block, Value::new_const(0))));
-        assert!(rows.contains(&(Value::new_const(2), hash_large, new_block, Value::new_const(1))));
+        assert!(rows.contains(&(
+            Value::new_const(2),
+            hash_large,
+            new_block,
+            Value::new_const(1)
+        )));
     }
 
     #[test]

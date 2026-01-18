@@ -1,5 +1,4 @@
 use std::{
-    collections::HashSet,
     fmt::Debug,
     hash::Hash,
     slice,
@@ -15,6 +14,7 @@ use crate::core_relations::{
     ContainerValue, ExternalFunctionId, Rebuilder, Value, make_external_func,
 };
 use crate::numeric_id::NumericId;
+use hashbrown::HashSet;
 use log::debug;
 use num_rational::Rational64;
 
@@ -556,6 +556,152 @@ fn assert_row_ids_unique(egraph: &EGraph, tables: &[FunctionId]) {
             );
         });
     }
+}
+
+#[test]
+fn partition_refinement_scaffolds_row_ids_and_rules() {
+    let mut egraph = EGraph::with_partition_refinement();
+    let int_base = egraph.base_values_mut().register_type::<i64>();
+    let num_table = egraph.add_table(FunctionConfig {
+        schema: vec![ColumnTy::Base(int_base), ColumnTy::Id],
+        default: DefaultVal::FreshId,
+        merge: MergeFn::UnionId,
+        name: "num".into(),
+        can_subsume: false,
+        row_id: false,
+    });
+    let value = egraph.base_values_mut().get(42_i64);
+    let _ = egraph.add_term(num_table, &[value], "num");
+    assert_row_ids_unique(&egraph, &[num_table]);
+    let state = egraph
+        .partition_refinement
+        .as_ref()
+        .expect("partition refinement should be enabled");
+    assert_eq!(state.seed_rules.len(), 1);
+    assert_eq!(state.node_hash_rules.len(), 1);
+    let _ = egraph.db.get_table(state.node_hash_table.table);
+    let _ = egraph.db.get_table(state.fingerprint_table.table);
+}
+
+fn add_link_table(egraph: &mut EGraph) -> FunctionId {
+    egraph.add_table(FunctionConfig {
+        schema: vec![ColumnTy::Id, ColumnTy::Id],
+        default: DefaultVal::FreshId,
+        merge: MergeFn::UnionId,
+        name: "link".into(),
+        can_subsume: false,
+        row_id: false,
+    })
+}
+
+fn fingerprint_block(egraph: &EGraph, eclass: Value) -> Value {
+    let state = egraph
+        .partition_refinement
+        .as_ref()
+        .expect("partition refinement should be enabled");
+    let table = egraph.db.get_table(state.fingerprint_table.table);
+    let row = table.get_row(&[eclass]).expect("missing fingerprint row");
+    row.vals[state.fingerprint_table.block_col.index()]
+}
+
+#[test]
+fn partition_refinement_self_cycles_share_block() {
+    let mut egraph = EGraph::with_partition_refinement();
+    let link = add_link_table(&mut egraph);
+    let first = egraph.fresh_id();
+    let second = egraph.fresh_id();
+    let third = egraph.fresh_id();
+    let fourth = egraph.fresh_id();
+    egraph.add_values([
+        (link, vec![first, first]),
+        (link, vec![second, second]),
+        (link, vec![third, fourth]),
+    ]);
+    egraph
+        .run_hash_partition_refinement()
+        .expect("partition refinement failed");
+    let block_first = fingerprint_block(&egraph, first);
+    let block_second = fingerprint_block(&egraph, second);
+    let block_third = fingerprint_block(&egraph, third);
+    let block_fourth = fingerprint_block(&egraph, fourth);
+    assert_eq!(block_first, block_second);
+    assert_ne!(block_first, block_third);
+    assert_ne!(block_first, block_fourth);
+    assert_ne!(block_third, block_fourth);
+}
+
+#[test]
+fn partition_refinement_two_cycles_share_block() {
+    let mut egraph = EGraph::with_partition_refinement();
+    let link = add_link_table(&mut egraph);
+    let a = egraph.fresh_id();
+    let b = egraph.fresh_id();
+    let c = egraph.fresh_id();
+    let d = egraph.fresh_id();
+    egraph.add_values([
+        (link, vec![a, b]),
+        (link, vec![b, a]),
+        (link, vec![c, d]),
+        (link, vec![d, c]),
+    ]);
+    egraph
+        .run_hash_partition_refinement()
+        .expect("partition refinement failed");
+    let block_a = fingerprint_block(&egraph, a);
+    let block_b = fingerprint_block(&egraph, b);
+    let block_c = fingerprint_block(&egraph, c);
+    let block_d = fingerprint_block(&egraph, d);
+    assert_eq!(block_a, block_b);
+    assert_eq!(block_a, block_c);
+    assert_eq!(block_a, block_d);
+}
+
+#[test]
+fn partition_refinement_cycles_broader_embed() {
+    // Two structures like:
+    //       a1               a2
+    //      /  \             /  \
+    //     b1  c1           b2  c2
+    //     ^                ^
+    //     |                |
+    //     +---- self-loop  +---- self-loop
+    //
+    // One child is a self-loop and the other is a leaf. Corresponding nodes
+    // should end up in the same block after refinement.
+    let mut egraph = EGraph::with_partition_refinement();
+    let link = add_link_table(&mut egraph);
+    let pair = egraph.add_table(FunctionConfig {
+        schema: vec![ColumnTy::Id, ColumnTy::Id, ColumnTy::Id],
+        default: DefaultVal::FreshId,
+        merge: MergeFn::UnionId,
+        name: "pair".into(),
+        can_subsume: false,
+        row_id: false,
+    });
+    let a1 = egraph.fresh_id();
+    let b1 = egraph.fresh_id();
+    let c1 = egraph.fresh_id();
+    let a2 = egraph.fresh_id();
+    let b2 = egraph.fresh_id();
+    let c2 = egraph.fresh_id();
+    egraph.add_values([
+        (link, vec![b1, b1]),
+        (link, vec![b2, b2]),
+        (pair, vec![b1, c1, a1]),
+        (pair, vec![b2, c2, a2]),
+    ]);
+    egraph
+        .run_hash_partition_refinement()
+        .expect("partition refinement failed");
+    let block_a1 = fingerprint_block(&egraph, a1);
+    let block_a2 = fingerprint_block(&egraph, a2);
+    let block_b1 = fingerprint_block(&egraph, b1);
+    let block_b2 = fingerprint_block(&egraph, b2);
+    let block_c1 = fingerprint_block(&egraph, c1);
+    let block_c2 = fingerprint_block(&egraph, c2);
+    assert_eq!(block_a1, block_a2);
+    assert_eq!(block_b1, block_b2);
+    assert_eq!(block_c1, block_c2);
 }
 
 #[derive(Clone, Debug, Hash, Eq, PartialEq)]
