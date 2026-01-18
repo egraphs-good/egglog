@@ -26,6 +26,7 @@ rayon = { workspace = true }
 dyn-clone = { workspace = true }
 once_cell = { workspace = true }
 ordered-float = { workspace = true }
+crc32fast = { workspace = true }
 
 [dev-dependencies]
 env_logger = { workspace = true }
