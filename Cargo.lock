@@ -547,6 +547,7 @@ name = "egglog-bridge"
 version = "1.0.0"
 dependencies = [
  "anyhow",
+ "codspeed-divan-compat",
  "crc32fast",
  "dyn-clone",
  "egglog-core-relations",

@@ -32,6 +32,7 @@ crc32fast = { workspace = true }
 env_logger = { workspace = true }
 mimalloc = { workspace = true }
 rand = { workspace = true }
+divan = { workspace = true }
 
 
 [[example]]
@@ -39,3 +40,7 @@ name = "ac"
 
 [[example]]
 name = "math"
+
+[[bench]]
+name = "partition_refinement"
+harness = false
