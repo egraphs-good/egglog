@@ -856,6 +856,7 @@ fn basic_math_egraph() -> MathEgraph {
         SortedWritesTableOptions {
             sort_by: Some(ColumnId::new(2)),
             row_id: None,
+            on_delete: None,
         },
         vec![],
         Box::new(move |state, a, b, res| {
@@ -878,10 +879,10 @@ fn basic_math_egraph() -> MathEgraph {
         SortedWritesTableOptions {
             sort_by: Some(ColumnId::new(3)),
             row_id: None,
+            on_delete: None,
         },
         vec![],
         Box::new(move |state, a, b, res| {
-            // Capture a backtrace as a string
             if a[2] != b[2] {
                 // Mark the two ids as equal. Picking b[2] as the 'presumed winner'
                 state.stage_insert(uf, &[a[2], b[2], b[3]]);

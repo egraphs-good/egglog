@@ -133,9 +133,10 @@ impl Rows {
 /// merge function should return `false`.
 pub type MergeFn =
     dyn Fn(&mut ExecutionState, &[Value], &[Value], &mut Vec<Value>) -> bool + Send + Sync;
+pub type DeleteFn = dyn Fn(&mut ExecutionState, &[Value]) + Send + Sync;
 
 /// Configuration options for a [`SortedWritesTable`].
-#[derive(Clone, Copy, Debug, Default)]
+#[derive(Clone, Default)]
 pub struct SortedWritesTableOptions {
     pub sort_by: Option<ColumnId>,
     /// Configure a stable row-id column for this table.
@@ -146,6 +147,11 @@ pub struct SortedWritesTableOptions {
     /// be the `sort_by` column. Callers must allocate the extra column in
     /// `n_columns`.
     pub row_id: Option<(CounterId, ColumnId)>,
+    /// Optional callback invoked before a row is marked stale due to a remove.
+    ///
+    /// This runs for explicit removals and rebuild-driven removals, but not
+    /// for merges or [`SortedWritesTable::clear`].
+    pub on_delete: Option<Arc<DeleteFn>>,
 }
 
 // Allocate row ids in blocks to amortize atomic increments.
@@ -199,6 +205,7 @@ pub struct SortedWritesTable {
 
     pending_state: Arc<PendingState>,
     merge: Arc<MergeFn>,
+    on_delete: Option<Arc<DeleteFn>>,
     to_rebuild: Vec<ColumnId>,
     rebuild_index: Index<ColumnIndex>,
     // Used to manage incremental rebuilds.
@@ -218,6 +225,7 @@ impl Clone for SortedWritesTable {
             offsets: self.offsets.clone(),
             pending_state: Arc::new(self.pending_state.deep_copy()),
             merge: self.merge.clone(),
+            on_delete: self.on_delete.clone(),
             to_rebuild: self.to_rebuild.clone(),
             rebuild_index: Index::new(self.to_rebuild.clone(), ColumnIndex::new()),
             subset_tracker: Default::default(),
@@ -544,7 +552,7 @@ impl Table for SortedWritesTable {
     }
 
     fn merge(&mut self, exec_state: &mut ExecutionState) -> TableChange {
-        let removed = self.do_delete();
+        let removed = self.do_delete(exec_state);
         let added = self.do_insert(exec_state);
         self.maybe_rehash();
         TableChange { removed, added }
@@ -578,7 +586,7 @@ impl SortedWritesTable {
     /// The return value indicates whether or not the contents of the vector
     /// should be used.
     ///
-    /// Merge functions can access the database via [`ExecutionState`].
+    /// Callbacks can access the database via [`ExecutionState`].
     pub fn new(
         n_keys: usize,
         n_columns: usize,
@@ -586,8 +594,12 @@ impl SortedWritesTable {
         to_rebuild: Vec<ColumnId>,
         merge_fn: Box<MergeFn>,
     ) -> Self {
-        let sort_by = options.sort_by;
-        let row_id = options.row_id.map(|(counter, column)| {
+        let SortedWritesTableOptions {
+            sort_by,
+            row_id,
+            on_delete,
+        } = options;
+        let row_id = row_id.map(|(counter, column)| {
             assert!(
                 column.index() < n_columns,
                 "row id column {column:?} out of bounds for table with {n_columns} columns"
@@ -618,6 +630,7 @@ impl SortedWritesTable {
             offsets: Default::default(),
             pending_state: Arc::new(PendingState::new(shard_data)),
             merge: merge_fn.into(),
+            on_delete,
             to_rebuild,
             rebuild_index,
             subset_tracker: Default::default(),
@@ -625,8 +638,9 @@ impl SortedWritesTable {
     }
 
     /// Flush all pending removals, in parallel.
-    fn parallel_delete(&mut self) -> bool {
+    fn parallel_delete(&mut self, exec_state: &ExecutionState) -> bool {
         let shard_data = self.hash.shard_data();
+        let on_delete = self.on_delete.clone();
         let stale_delta: usize = self
             .hash
             .mut_shards()
@@ -641,6 +655,7 @@ impl SortedWritesTable {
             })
             .map(|(shard_id, shard)| {
                 let queue = &self.pending_state.pending_removals[shard_id];
+                let mut exec_state = exec_state.clone();
                 let mut marked_stale = 0;
                 while let Some(buf) = queue.pop() {
                     buf.for_each(|to_remove| {
@@ -652,6 +667,13 @@ impl SortedWritesTable {
                                     == to_remove
                         }) {
                             let (ent, _) = entry.remove();
+                            if let Some(on_delete) = on_delete.as_ref() {
+                                let row = self
+                                    .data
+                                    .get_row(ent.row)
+                                    .expect("table should not point to stale entry");
+                                on_delete(&mut exec_state, row);
+                            }
                             // SAFETY: The safety requirements of
                             // `set_stale_shared` are that there are no
                             // concurrent accesses to `row`. No other threads
@@ -671,7 +693,7 @@ impl SortedWritesTable {
         self.data.stale_rows += stale_delta;
         stale_delta > 0
     }
-    fn serial_delete(&mut self) -> bool {
+    fn serial_delete(&mut self, exec_state: &mut ExecutionState) -> bool {
         let shard_data = self.hash.shard_data();
         let mut changed = false;
         self.hash
@@ -691,6 +713,13 @@ impl SortedWritesTable {
                                     == to_remove
                         }) {
                             let (ent, _) = entry.remove();
+                            if let Some(on_delete) = self.on_delete.as_ref() {
+                                let row = self
+                                    .data
+                                    .get_row(ent.row)
+                                    .expect("table should not point to stale entry");
+                                on_delete(exec_state, row);
+                            }
                             self.data.set_stale(ent.row);
                             changed = true;
                         }
@@ -700,13 +729,13 @@ impl SortedWritesTable {
         changed
     }
 
-    fn do_delete(&mut self) -> bool {
+    fn do_delete(&mut self, exec_state: &mut ExecutionState) -> bool {
         let total = self.pending_state.total_removals.swap(0, Ordering::Relaxed);
 
         if parallelize_table_op(total) {
-            self.parallel_delete()
+            self.parallel_delete(exec_state)
         } else {
-            self.serial_delete()
+            self.serial_delete(exec_state)
         }
     }
 

@@ -767,6 +767,7 @@ impl EGraph {
                         ColumnId::from_usize(schema_math.row_id_col()),
                     )
                 }),
+                on_delete: None,
             },
             to_rebuild,
             merge_fn,

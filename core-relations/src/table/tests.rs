@@ -1,13 +1,16 @@
+use std::sync::{Arc, Mutex};
+
 use crate::numeric_id::NumericId;
 use rand::{Rng, rng};
 
 use crate::{
+    DisplacedTable,
     action::ExecutionState,
     common::{HashMap, ShardId, Value},
-    free_join::Database,
+    free_join::{Database, TableId},
     offsets::{RowId, SubsetRef},
     row_buffer::TaggedRowBuffer,
-    table::{SortedWritesTable, SortedWritesTableOptions, TableEntry, hash_code},
+    table::{DeleteFn, SortedWritesTable, SortedWritesTableOptions, TableEntry, hash_code},
     table_shortcuts::{fill_table, v},
     table_spec::{ColumnId, Constraint, Offset, Table, WrappedTable},
 };
@@ -163,6 +166,7 @@ fn stable_row_id_is_assigned_and_preserved() {
         SortedWritesTableOptions {
             sort_by: None,
             row_id: Some((row_id_counter, ColumnId::new(2))),
+            on_delete: None,
         },
         vec![],
         Box::new(|_, cur, new, out| {
@@ -204,6 +208,7 @@ fn stable_row_id_across_compaction() {
         SortedWritesTableOptions {
             sort_by: None,
             row_id: Some((row_id_counter, ColumnId::new(2))),
+            on_delete: None,
         },
         vec![],
         Box::new(|_, cur, new, out| {
@@ -273,6 +278,59 @@ fn stable_row_id_across_compaction() {
         table.get_row(&[v(1)]).expect("row should exist").vals[2],
         row_id1
     );
+}
+
+#[test]
+fn delete_callback_runs_on_remove_and_rebuild() {
+    let db = Database::default();
+    let mut exec_state = ExecutionState::new(db.read_only_view(), Default::default());
+    let deleted = Arc::new(Mutex::new(Vec::<Vec<Value>>::new()));
+    let deleted_cb = deleted.clone();
+    let on_delete: Arc<DeleteFn> = Arc::new(move |_, row| {
+        assert!(!row[0].is_stale());
+        deleted_cb.lock().unwrap().push(row.to_vec());
+    });
+
+    let mut table = SortedWritesTable::new(
+        1,
+        2,
+        SortedWritesTableOptions {
+            on_delete: Some(on_delete),
+            ..Default::default()
+        },
+        vec![ColumnId::new(0)],
+        Box::new(|_, cur, new, out| {
+            if cur[1] != new[1] {
+                out.extend_from_slice(new);
+                true
+            } else {
+                false
+            }
+        }),
+    );
+
+    table.new_buffer().stage_insert(&[v(2), v(10)]);
+    table.merge(&mut exec_state);
+
+    table.new_buffer().stage_remove(&[v(2)]);
+    table.merge(&mut exec_state);
+
+    table.new_buffer().stage_insert(&[v(2), v(11)]);
+    table.merge(&mut exec_state);
+
+    let mut uf_table = WrappedTable::new(DisplacedTable::default());
+    {
+        let mut buf = uf_table.new_buffer();
+        buf.stage_insert(&[v(2), v(1), v(0)]);
+    }
+    uf_table.merge(&mut exec_state);
+
+    assert!(table.apply_rebuild(TableId::new(0), &uf_table, v(1), &mut exec_state));
+    table.merge(&mut exec_state);
+
+    let mut deleted = deleted.lock().unwrap().clone();
+    deleted.sort();
+    assert_eq!(deleted, vec![vec![v(2), v(10)], vec![v(2), v(11)]]);
 }
 
 #[test]

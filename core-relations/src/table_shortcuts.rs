@@ -42,6 +42,7 @@ pub(crate) fn fill_table(
         SortedWritesTableOptions {
             sort_by,
             row_id: None,
+            on_delete: None,
         },
         vec![],
         Box::new(move |_, old, new, out| {
