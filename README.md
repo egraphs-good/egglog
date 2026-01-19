@@ -161,6 +161,6 @@ Then run:
 make coverage
 ```
 
-This will generate a coverage report using `nextest` and output it to `lcov.info`. The coverage report is automatically generated and uploaded to [codecov](https://codecov.io/) in CI for all pull requests and commits to main.
+This will generate a coverage report using `nextest` and output it to `lcov.info`. The coverage report is automatically generated and uploaded to [Codecov](https://codecov.io/) in CI for all pull requests and commits to main.
 
 To visualize coverage in VS Code, we recommend using the [Coverage Gutters](https://marketplace.visualstudio.com/items?itemName=ryanluker.vscode-coverage-gutters) extension. After running `make coverage`, click "Watch" in the status bar to see coverage highlighted in your editor.
