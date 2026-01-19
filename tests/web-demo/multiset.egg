@@ -59,6 +59,20 @@
         squared-xs
     ))
 
+;; map to other type
+(push)
+(datatype Math2 (FromMath Math))
+(sort MathToMath2 (UnstableFn (Math) Math2))
+(sort Maths2Multiset (MultiSet Math2))
+(let mapped-xs (unstable-multiset-map (unstable-fn "FromMath") xs))
+(run 1)
+(check (=
+        (multiset-of (FromMath (Num 1)) (FromMath (Num 2)) (FromMath (Num 3)))
+        mapped-xs
+    ))
+(pop)
+
+
 ;; sum
 (check (=
         (multiset-sum (multiset-of (Num 1) (Num 2) (Num 3)) (multiset-of (Num 1) (Num 2) (Num 4)))
@@ -84,6 +98,7 @@
 (pop)
 
 ;; Verify multiset of multiset
+(push)
 (sort Mathss (MultiSet Maths))
 (let xx (multiset-of (multiset-of (Num 1) (Num 2) (Num 3)) (multiset-of (Num 1) (Num 2) (Num 3))))
 (union (Num 1) (Num 2))
@@ -91,7 +106,11 @@
 
 (check (= (multiset-sum-multisets xx)
         (multiset-of (Num 2) (Num 2) (Num 2) (Num 2) (Num 3) (Num 3))))
+(pop)
+
 ;; Verify unstable multiset fill index and counting
+(push)
+(union (Num 1) (Num 2))
 (constructor product (Maths) Math)
 (let aa (Num 100))
 (let zz (product xs))
@@ -112,3 +131,20 @@
 ; Verify updates properly after unioning child
 (union (Num 1) (Num 3))
 (check (= 3 (ms-count xs (Num 1))))
+(pop)
+
+;; fold
+(push)
+(constructor add (Math Math) Math)
+(sort MathAddFn (UnstableFn (Math Math) Math))
+;; not sure why we have to add this first to the e-graph to =?
+(unstable-multiset-fold (unstable-fn "add") (Num 0) xs)
+(check (=
+        (unstable-multiset-fold (unstable-fn "add") (Num 0) xs)
+        (add (add (Num 1) (Num 2)) (Num 3))
+    ))
+(check (=
+        (unstable-multiset-fold (unstable-fn "add") (Num 0) (multiset-of))
+        (Num 0)
+    ))
+(pop)

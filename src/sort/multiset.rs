@@ -53,6 +53,7 @@ impl Presort for MultiSetSort {
             "unstable-multiset-fill-index",
             "unstable-multiset-clear-index",
             "unstable-multiset-flat-map",
+            "unstable-multiset-fold",
         ]
     }
 
@@ -153,23 +154,49 @@ impl ContainerSort for MultiSetSort {
             });
         }
 
-        let inner_name = self.element.name().to_string();
-        let inner_name_cloned = inner_name.clone();
-        let self_cloned = arc.clone();
         // For Map, support either defining MultiSet sort or Fn sort first
+        // Add map from MS[V] to MS[K]
+        let self_cloned = arc.clone();
+        let name = self.name().to_string();
+
         let register_map = Box::new(move |fn_: Arc<FunctionSort>, eg: &mut EGraph| {
-            // Add map if we have a function from E -> E
-            if fn_.inputs().len() == 1
-                && fn_.inputs()[0].name() == inner_name_cloned.clone()
-                && fn_.output().name() == inner_name_cloned.clone()
-            {
-                eg.add_primitive(Map {
-                    name: "unstable-multiset-map".into(),
-                    multiset: self_cloned.clone(),
-                    fn_: fn_.clone(),
-                });
+            let all_other_multiset_sorts = eg.type_info.get_arcsorts_by(|f| {
+                f.name() != name && f.value_type() == Some(TypeId::of::<MultiSetContainer>())
+            });
+
+            // All pairs of multisets to add a map for, all other multisets mapping to this one, this one mapping to itself,
+            // and this one mapping to all other multisets
+            let mut all_multiset_pairs_add = all_other_multiset_sorts
+                .iter()
+                .cloned()
+                .map(|other_ms_sort| (other_ms_sort.clone(), self_cloned.clone()))
+                .collect::<Vec<_>>();
+            all_multiset_pairs_add.extend(
+                all_other_multiset_sorts
+                    .iter()
+                    .cloned()
+                    .map(|other_ms_sort| (self_cloned.clone(), other_ms_sort.clone())),
+            );
+            all_multiset_pairs_add.push((self_cloned.clone(), self_cloned.clone()));
+
+            for (source_ms_sort, output_ms_sort) in &all_multiset_pairs_add {
+                let source_element_sort = source_ms_sort.inner_sorts()[0].clone();
+                let output_element_sort = output_ms_sort.inner_sorts()[0].clone();
+                // If this function is from E -> K where E is inner_name and K is other_ms_sort's inner name
+                if fn_.inputs().len() == 1
+                    && fn_.inputs()[0].name() == source_element_sort.name()
+                    && fn_.output().name() == output_element_sort.name()
+                {
+                    eg.add_primitive(Map {
+                        name: "unstable-multiset-map".into(),
+                        multiset: source_ms_sort.clone(),
+                        output_multiset: output_ms_sort.clone(),
+                        fn_: fn_.clone(),
+                    });
+                }
             }
         });
+        let inner_name = self.element.name().to_string();
         let inner_name_cloned = inner_name.clone();
         let self_cloned = arc.clone();
         // For filter same as map
@@ -186,14 +213,35 @@ impl ContainerSort for MultiSetSort {
                 });
             }
         });
+        let element_clone = self.element.clone();
+        let inner_name_cloned = inner_name.clone();
+        let self_cloned = arc.clone();
+        // fold is ((T, T) -> T, T, MultiSet[T]) -> T
+        let register_fold = Box::new(move |fn_: Arc<FunctionSort>, eg: &mut EGraph| {
+            if fn_.inputs().len() == 2
+                && fn_.inputs()[0].name() == inner_name_cloned.clone()
+                && fn_.inputs()[1].name() == inner_name_cloned.clone()
+                && fn_.output().name() == inner_name_cloned.clone()
+            {
+                eg.add_primitive(Fold {
+                    name: "unstable-multiset-fold".into(),
+                    multiset: self_cloned.clone(),
+                    fn_: fn_.clone(),
+                    element: element_clone.clone(),
+                });
+            }
+        });
+
         for fn_sort in eg.type_info.get_sorts::<FunctionSort>() {
             register_map(fn_sort.clone(), eg);
             register_filter(fn_sort.clone(), eg);
+            register_fold(fn_sort.clone(), eg);
         }
 
         let mut register = REGISTER_FN_PRIMITIVES.lock().unwrap();
         register.push(register_map);
         register.push(register_filter);
+        register.push(register_fold);
         // For FillIndex, you have to define the multiset sort first since the function sort depends on it
         register.push(Box::new(move |fn_: Arc<FunctionSort>, eg: &mut EGraph| {
             // add fill-index and clear-index if we have a function from (MultiSet[E], E) -> I64
@@ -249,6 +297,7 @@ struct Map {
     name: String,
     multiset: ArcSort,
     fn_: Arc<FunctionSort>,
+    output_multiset: ArcSort,
 }
 
 impl Primitive for Map {
@@ -262,7 +311,7 @@ impl Primitive for Map {
             vec![
                 self.fn_.clone(),
                 self.multiset.clone(),
-                self.multiset.clone(),
+                self.output_multiset.clone(),
             ],
             span.clone(),
         )
@@ -579,6 +628,62 @@ impl Primitive for SumMultisets {
                 .container_values()
                 .register_val(multiset, exec_state),
         )
+    }
+}
+
+// (unstable-multiset-fold ([X, X] -> X, X, MultiSet[X]) -> X
+// will fold the multiset using the provided binary function and initial value
+#[derive(Clone)]
+struct Fold {
+    name: String,
+    multiset: ArcSort,
+    fn_: Arc<FunctionSort>,
+    element: ArcSort,
+}
+
+impl Primitive for Fold {
+    fn name(&self) -> &str {
+        &self.name
+    }
+
+    fn get_type_constraints(&self, span: &Span) -> Box<dyn TypeConstraint> {
+        SimpleTypeConstraint::new(
+            self.name(),
+            vec![
+                self.fn_.clone(),
+                self.element.clone(),
+                self.multiset.clone(),
+                self.element.clone(),
+            ],
+            span.clone(),
+        )
+        .into_box()
+    }
+
+    fn apply(&self, exec_state: &mut ExecutionState, args: &[Value]) -> Option<Value> {
+        let fc = exec_state
+            .container_values()
+            .get_val::<FunctionContainer>(args[0])
+            .unwrap()
+            .clone();
+        let initial = args[1];
+        let multiset = exec_state
+            .container_values()
+            .get_val::<MultiSetContainer>(args[2])
+            .unwrap()
+            .clone();
+        let mut values = multiset.data.iter().cloned().collect::<Vec<_>>();
+        let mut acc = if values.is_empty() {
+            initial
+        } else {
+            let first = values[0];
+            values.remove(0);
+            first
+        };
+        for v in values {
+            acc = fc.apply(exec_state, &[acc, v])?;
+        }
+        Some(acc)
     }
 }
 
