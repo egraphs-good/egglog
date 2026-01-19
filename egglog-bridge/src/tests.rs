@@ -14,6 +14,9 @@ use crate::core_relations::{
     ContainerValue, ExternalFunctionId, Rebuilder, Value, make_external_func,
 };
 use crate::numeric_id::NumericId;
+use crate::partition_refinement::{
+    ConstantPartitionHasher, Crc32PartitionHasher, PartitionRefinementHasher,
+};
 use hashbrown::HashSet;
 use log::debug;
 use num_rational::Rational64;
@@ -558,9 +561,12 @@ fn assert_row_ids_unique(egraph: &EGraph, tables: &[FunctionId]) {
     }
 }
 
-#[test]
-fn partition_refinement_scaffolds_row_ids_and_rules() {
-    let mut egraph = EGraph::with_partition_refinement();
+fn partition_refinement_egraph<H: PartitionRefinementHasher>() -> EGraph {
+    EGraph::with_partition_refinement_with_hasher::<H>()
+}
+
+fn partition_refinement_scaffolds_row_ids_and_rules_impl<H: PartitionRefinementHasher>() {
+    let mut egraph = partition_refinement_egraph::<H>();
     let int_base = egraph.base_values_mut().register_type::<i64>();
     let num_table = egraph.add_table(FunctionConfig {
         schema: vec![ColumnTy::Base(int_base), ColumnTy::Id],
@@ -581,6 +587,16 @@ fn partition_refinement_scaffolds_row_ids_and_rules() {
     assert_eq!(state.node_hash_rules.len(), 1);
     let _ = egraph.db.get_table(state.node_hash_table.table);
     let _ = egraph.db.get_table(state.fingerprint_table.table);
+}
+
+#[test]
+fn partition_refinement_scaffolds_row_ids_and_rules_crc() {
+    partition_refinement_scaffolds_row_ids_and_rules_impl::<Crc32PartitionHasher>();
+}
+
+#[test]
+fn partition_refinement_scaffolds_row_ids_and_rules_constant() {
+    partition_refinement_scaffolds_row_ids_and_rules_impl::<ConstantPartitionHasher>();
 }
 
 fn add_link_table(egraph: &mut EGraph) -> FunctionId {
@@ -604,9 +620,8 @@ fn fingerprint_block(egraph: &EGraph, eclass: Value) -> Value {
     row.vals[state.fingerprint_table.block_col.index()]
 }
 
-#[test]
-fn partition_refinement_self_cycles_share_block() {
-    let mut egraph = EGraph::with_partition_refinement();
+fn partition_refinement_self_cycles_share_block_impl<H: PartitionRefinementHasher>() {
+    let mut egraph = partition_refinement_egraph::<H>();
     let link = add_link_table(&mut egraph);
     let first = egraph.fresh_id();
     let second = egraph.fresh_id();
@@ -631,8 +646,17 @@ fn partition_refinement_self_cycles_share_block() {
 }
 
 #[test]
-fn partition_refinement_two_cycles_share_block() {
-    let mut egraph = EGraph::with_partition_refinement();
+fn partition_refinement_self_cycles_share_block_crc() {
+    partition_refinement_self_cycles_share_block_impl::<Crc32PartitionHasher>();
+}
+
+#[test]
+fn partition_refinement_self_cycles_share_block_constant() {
+    partition_refinement_self_cycles_share_block_impl::<ConstantPartitionHasher>();
+}
+
+fn partition_refinement_two_cycles_share_block_impl<H: PartitionRefinementHasher>() {
+    let mut egraph = partition_refinement_egraph::<H>();
     let link = add_link_table(&mut egraph);
     let a = egraph.fresh_id();
     let b = egraph.fresh_id();
@@ -657,7 +681,95 @@ fn partition_refinement_two_cycles_share_block() {
 }
 
 #[test]
-fn partition_refinement_cycles_broader_embed() {
+fn partition_refinement_two_cycles_share_block_crc() {
+    partition_refinement_two_cycles_share_block_impl::<Crc32PartitionHasher>();
+}
+
+#[test]
+fn partition_refinement_two_cycles_share_block_constant() {
+    partition_refinement_two_cycles_share_block_impl::<ConstantPartitionHasher>();
+}
+
+fn partition_refinement_collision_splits_blocks_impl<H: PartitionRefinementHasher>() {
+    let mut egraph = partition_refinement_egraph::<H>();
+    let link = add_link_table(&mut egraph);
+    let pair = egraph.add_table(FunctionConfig {
+        schema: vec![ColumnTy::Id, ColumnTy::Id, ColumnTy::Id],
+        default: DefaultVal::FreshId,
+        merge: MergeFn::UnionId,
+        name: "pair".into(),
+        can_subsume: false,
+        row_id: false,
+    });
+    let a = egraph.fresh_id();
+    let b = egraph.fresh_id();
+    let c = egraph.fresh_id();
+    egraph.add_values([
+        (link, vec![a, a]),
+        (link, vec![b, b]),
+        (pair, vec![c, c, c]),
+    ]);
+    egraph
+        .run_hash_partition_refinement()
+        .expect("partition refinement failed");
+    let block_a = fingerprint_block(&egraph, a);
+    let block_b = fingerprint_block(&egraph, b);
+    let block_c = fingerprint_block(&egraph, c);
+    assert_eq!(block_a, block_b);
+    assert_ne!(block_a, block_c);
+}
+
+#[test]
+fn partition_refinement_collision_splits_blocks_crc() {
+    partition_refinement_collision_splits_blocks_impl::<Crc32PartitionHasher>();
+}
+
+#[test]
+fn partition_refinement_collision_splits_blocks_constant() {
+    partition_refinement_collision_splits_blocks_impl::<ConstantPartitionHasher>();
+}
+
+#[test]
+fn partition_refinement_constant_hash_needs_collision_resolution() {
+    let mut egraph = partition_refinement_egraph::<ConstantPartitionHasher>();
+    let link = add_link_table(&mut egraph);
+    let pair = egraph.add_table(FunctionConfig {
+        schema: vec![ColumnTy::Id, ColumnTy::Id, ColumnTy::Id],
+        default: DefaultVal::FreshId,
+        merge: MergeFn::UnionId,
+        name: "pair".into(),
+        can_subsume: false,
+        row_id: false,
+    });
+    let a = egraph.fresh_id();
+    let b = egraph.fresh_id();
+    let c = egraph.fresh_id();
+    egraph.add_values([
+        (link, vec![a, a]),
+        (link, vec![b, b]),
+        (pair, vec![c, c, c]),
+    ]);
+
+    egraph
+        .run_hash_partition_refinement_no_collisions()
+        .expect("partition refinement failed");
+    let block_a = fingerprint_block(&egraph, a);
+    let block_b = fingerprint_block(&egraph, b);
+    let block_c = fingerprint_block(&egraph, c);
+    assert_eq!(block_a, block_b);
+    assert_eq!(block_a, block_c);
+
+    egraph
+        .run_hash_partition_refinement()
+        .expect("partition refinement failed");
+    let block_a = fingerprint_block(&egraph, a);
+    let block_b = fingerprint_block(&egraph, b);
+    let block_c = fingerprint_block(&egraph, c);
+    assert_eq!(block_a, block_b);
+    assert_ne!(block_a, block_c);
+}
+
+fn partition_refinement_cycles_broader_embed_impl<H: PartitionRefinementHasher>() {
     // Two structures like:
     //       a1               a2
     //      /  \             /  \
@@ -668,7 +780,7 @@ fn partition_refinement_cycles_broader_embed() {
     //
     // One child is a self-loop and the other is a leaf. Corresponding nodes
     // should end up in the same block after refinement.
-    let mut egraph = EGraph::with_partition_refinement();
+    let mut egraph = partition_refinement_egraph::<H>();
     let link = add_link_table(&mut egraph);
     let pair = egraph.add_table(FunctionConfig {
         schema: vec![ColumnTy::Id, ColumnTy::Id, ColumnTy::Id],
@@ -702,6 +814,103 @@ fn partition_refinement_cycles_broader_embed() {
     assert_eq!(block_a1, block_a2);
     assert_eq!(block_b1, block_b2);
     assert_eq!(block_c1, block_c2);
+}
+
+#[test]
+fn partition_refinement_cycles_broader_embed_crc() {
+    partition_refinement_cycles_broader_embed_impl::<Crc32PartitionHasher>();
+}
+
+#[test]
+fn partition_refinement_cycles_broader_embed_constant() {
+    partition_refinement_cycles_broader_embed_impl::<ConstantPartitionHasher>();
+}
+
+fn partition_refinement_incremental_updates_impl<H: PartitionRefinementHasher>() {
+    let mut egraph = partition_refinement_egraph::<H>();
+    let link = add_link_table(&mut egraph);
+    let pair = egraph.add_table(FunctionConfig {
+        schema: vec![ColumnTy::Id, ColumnTy::Id, ColumnTy::Id],
+        default: DefaultVal::FreshId,
+        merge: MergeFn::UnionId,
+        name: "pair".into(),
+        can_subsume: false,
+        row_id: false,
+    });
+    let a = egraph.fresh_id();
+    let b = egraph.fresh_id();
+    egraph.add_values([(link, vec![a, a]), (link, vec![b, b])]);
+    egraph
+        .run_hash_partition_refinement()
+        .expect("partition refinement failed");
+    let block_a0 = fingerprint_block(&egraph, a);
+    let block_b0 = fingerprint_block(&egraph, b);
+    assert_eq!(block_a0, block_b0);
+    egraph
+        .run_hash_partition_refinement()
+        .expect("partition refinement failed");
+    let block_a1 = fingerprint_block(&egraph, a);
+    let block_b1 = fingerprint_block(&egraph, b);
+    assert_eq!(block_a1, block_b1);
+
+    egraph.add_values([(pair, vec![a, a, a])]);
+    egraph
+        .run_hash_partition_refinement()
+        .expect("partition refinement failed");
+    let block_a2 = fingerprint_block(&egraph, a);
+    let block_b2 = fingerprint_block(&egraph, b);
+    assert_ne!(block_a2, block_b2);
+    egraph
+        .run_hash_partition_refinement()
+        .expect("partition refinement failed");
+    let block_a3 = fingerprint_block(&egraph, a);
+    let block_b3 = fingerprint_block(&egraph, b);
+    assert_ne!(block_a3, block_b3);
+}
+
+#[test]
+fn partition_refinement_incremental_updates_crc() {
+    partition_refinement_incremental_updates_impl::<Crc32PartitionHasher>();
+}
+
+#[test]
+fn partition_refinement_incremental_updates_constant() {
+    partition_refinement_incremental_updates_impl::<ConstantPartitionHasher>();
+}
+
+fn partition_refinement_incremental_merges_impl<H: PartitionRefinementHasher>() {
+    let mut egraph = partition_refinement_egraph::<H>();
+    let link = add_link_table(&mut egraph);
+    let a = egraph.fresh_id();
+    let b = egraph.fresh_id();
+    egraph.add_values([(link, vec![a, b]), (link, vec![b, a])]);
+    egraph
+        .run_hash_partition_refinement()
+        .expect("partition refinement failed");
+    let block_a0 = fingerprint_block(&egraph, a);
+    let block_b0 = fingerprint_block(&egraph, b);
+    assert_eq!(block_a0, block_b0);
+
+    let c = egraph.fresh_id();
+    let d = egraph.fresh_id();
+    egraph.add_values([(link, vec![c, d]), (link, vec![d, c])]);
+    egraph
+        .run_hash_partition_refinement()
+        .expect("partition refinement failed");
+    let block_c0 = fingerprint_block(&egraph, c);
+    let block_d0 = fingerprint_block(&egraph, d);
+    assert_eq!(block_c0, block_d0);
+    assert_eq!(block_a0, block_c0);
+}
+
+#[test]
+fn partition_refinement_incremental_merges_crc() {
+    partition_refinement_incremental_merges_impl::<Crc32PartitionHasher>();
+}
+
+#[test]
+fn partition_refinement_incremental_merges_constant() {
+    partition_refinement_incremental_merges_impl::<ConstantPartitionHasher>();
 }
 
 #[derive(Clone, Debug, Hash, Eq, PartialEq)]

@@ -1,6 +1,5 @@
 //! Incremental partition refinement utilities for block/hash tables.
 
-use hashbrown::HashMap;
 use std::hash::Hash;
 
 use crate::core_relations::{
@@ -8,6 +7,8 @@ use crate::core_relations::{
     SortedWritesTableOptions, TableId, TableVersion, TaggedRowBuffer, Value, WrappedTable,
 };
 use crate::numeric_id::NumericId;
+use hashbrown::HashMap;
+use indexmap::IndexMap;
 
 use super::unique_repeat_index::UniqueRepeatIndex;
 
@@ -94,10 +95,12 @@ pub fn add_eclass_fingerprint_table(db: &mut Database) -> BlockHashTable {
     }
 }
 
+#[derive(Clone)]
 struct BlockHashIndex {
     updated_to: Option<TableVersion>,
     by_block: UniqueRepeatIndex<Value, HashEntry>,
     by_hash: UniqueRepeatIndex<Value, BlockEntry>,
+    block_members: IndexMap<Value, Vec<Value>>,
 }
 
 impl BlockHashIndex {
@@ -106,6 +109,7 @@ impl BlockHashIndex {
             updated_to: None,
             by_block: UniqueRepeatIndex::new(),
             by_hash: UniqueRepeatIndex::new(),
+            block_members: IndexMap::new(),
         }
     }
 
@@ -124,6 +128,7 @@ impl BlockHashIndex {
             if cur_version.major != prev.major {
                 self.by_block.clear();
                 self.by_hash.clear();
+                self.block_members.clear();
                 table.all()
             } else {
                 table.updates_since(prev.minor)
@@ -131,6 +136,7 @@ impl BlockHashIndex {
         } else {
             self.by_block.clear();
             self.by_hash.clear();
+            self.block_members.clear();
             table.all()
         };
         if subset.size() == 0 {
@@ -151,6 +157,7 @@ impl BlockHashIndex {
                 let block = row[2];
                 self.by_block.add(block, HashEntry { hash, key }, row_id);
                 self.by_hash.add(hash, BlockEntry { block, key }, row_id);
+                self.block_members.entry(block).or_default().push(key);
             }
             match next {
                 Some(next) => start = next,
@@ -162,6 +169,7 @@ impl BlockHashIndex {
 }
 
 /// Incremental partition refinement for block/hash tables.
+#[derive(Clone)]
 pub struct PartitionRefinement {
     table: TableId,
     key_col: ColumnId,
@@ -190,6 +198,15 @@ impl PartitionRefinement {
             timestamp_counter,
             index: BlockHashIndex::new(),
         }
+    }
+
+    pub(crate) fn refresh_index(&mut self, table: &WrappedTable) {
+        self.index
+            .refresh(table, self.key_col, self.hash_col, self.block_col);
+    }
+
+    pub(crate) fn block_members(&self) -> &IndexMap<Value, Vec<Value>> {
+        &self.index.block_members
     }
 
     /// Split blocks so each block id maps to at most one hash.

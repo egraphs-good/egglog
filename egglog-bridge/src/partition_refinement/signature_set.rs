@@ -9,6 +9,7 @@ use std::hash::{Hash, Hasher};
 use hashbrown::HashTable;
 use rustc_hash::FxHasher;
 
+use crate::core_relations::Value;
 use crate::numeric_id::{NumericId, define_id};
 
 define_id!(pub SignatureId, u32, "An interned exact signature set.");
@@ -80,6 +81,46 @@ impl EClassSignatureTable {
 
     /// Return the canonical enode signature ids for the given e-class signature.
     pub fn signature(&self, sig: EClassSig) -> &[EnodeSig] {
+        let id = SignatureId::from_usize(sig.index());
+        self.signatures.signature(id)
+    }
+}
+
+/// An interner for ordered enode signatures.
+#[derive(Debug, Default, Clone)]
+pub struct EnodeSignatureTable {
+    signatures: SignatureSet<Value>,
+}
+
+impl EnodeSignatureTable {
+    /// Create an empty `EnodeSignatureTable`.
+    pub fn new() -> Self {
+        Self::default()
+    }
+
+    /// Remove all interned signatures while retaining allocated capacity.
+    pub fn clear(&mut self) {
+        self.signatures.clear();
+    }
+
+    /// Return the number of distinct enode signatures stored.
+    pub fn len(&self) -> usize {
+        self.signatures.len()
+    }
+
+    /// Return `true` if no enode signatures are stored.
+    pub fn is_empty(&self) -> bool {
+        self.signatures.is_empty()
+    }
+
+    /// Intern an ordered enode signature.
+    pub fn intern(&mut self, signature: &[Value]) -> EnodeSig {
+        let id = self.signatures.intern(signature);
+        EnodeSig::from_usize(id.index())
+    }
+
+    /// Return the canonical elements for the given enode signature.
+    pub fn signature(&self, sig: EnodeSig) -> &[Value] {
         let id = SignatureId::from_usize(sig.index());
         self.signatures.signature(id)
     }
