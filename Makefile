@@ -1,4 +1,4 @@
-.PHONY: all test nits docs graphs rm-graphs doctest coverage test
+.PHONY: all test nits docs graphs rm-graphs doctest coverage
 
 RUST_SRC=$(shell find . -type f -wholename '*/src/*.rs' -or -name 'Cargo.toml')
 TESTS=$(shell find tests/ -type f -name '*.egg' -not -name '*repro-*')
