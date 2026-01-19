@@ -10,7 +10,7 @@ all: test nits docs
 test: doctest
 	cargo nextest run --release --workspace
 
-coverage: doctest
+coverage:
 	cargo llvm-cov nextest --release --workspace --lcov --output-path lcov.info
 	# Note: doctests are not included in coverage reports
 

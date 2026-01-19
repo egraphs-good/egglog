@@ -16,6 +16,7 @@ jobs:
         with:
           tool: nextest,cargo-llvm-cov
       - uses: Swatinem/rust-cache@v2
+      - run: make doctest
       - run: make coverage
       - uses: codecov/codecov-action@v5
         with:
