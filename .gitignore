@@ -22,3 +22,5 @@ _scratch.egg
 # racket
 scripts/compiled
 tests/*.json
+
+lcov.info

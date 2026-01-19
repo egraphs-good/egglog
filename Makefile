@@ -1,4 +1,4 @@
-.PHONY: all test nits docs graphs rm-graphs
+.PHONY: all test nits docs graphs rm-graphs doctest coverage test
 
 RUST_SRC=$(shell find . -type f -wholename '*/src/*.rs' -or -name 'Cargo.toml')
 TESTS=$(shell find tests/ -type f -name '*.egg' -not -name '*repro-*')
@@ -7,9 +7,14 @@ WWW=${PWD}/target/www
 
 all: test nits docs
 
-test:
+test: doctest
 	cargo nextest run --release --workspace
-	# nextest doesn't run doctests, so do it here
+
+coverage: doctest
+	cargo llvm-cov nextest --release --workspace --lcov --output-path lcov.info
+	# Note: doctests are not included in coverage reports
+
+doctest:
 	cargo test --doc --release --workspace
 
 nits:
