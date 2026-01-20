@@ -46,7 +46,7 @@ pub fn add_block_hash_table(db: &mut Database) -> BlockHashTable {
         out.extend_from_slice(new);
         true
     });
-    let table = SortedWritesTable::new(1, 4, options, Vec::new(), merge_fn);
+    let table = SortedWritesTable::new(1, 4, options, vec![key_col], merge_fn);
     let table_id = db.add_table(table, std::iter::empty(), std::iter::empty());
     BlockHashTable {
         table: table_id,
@@ -84,7 +84,7 @@ pub fn add_eclass_fingerprint_table(db: &mut Database) -> BlockHashTable {
         out[ts_idx] = new[ts_idx];
         true
     });
-    let table = SortedWritesTable::new(1, 4, options, Vec::new(), merge_fn);
+    let table = SortedWritesTable::new(1, 4, options, vec![key_col], merge_fn);
     let table_id = db.add_table(table, std::iter::empty(), std::iter::empty());
     BlockHashTable {
         table: table_id,
@@ -98,6 +98,7 @@ pub fn add_eclass_fingerprint_table(db: &mut Database) -> BlockHashTable {
 #[derive(Clone)]
 struct BlockHashIndex {
     updated_to: Option<TableVersion>,
+    updated_ts: Option<Value>,
     by_block: UniqueRepeatIndex<Value, HashEntry>,
     by_hash: UniqueRepeatIndex<Value, BlockEntry>,
     block_members: IndexMap<Value, Vec<Value>>,
@@ -107,6 +108,7 @@ impl BlockHashIndex {
     fn new() -> Self {
         Self {
             updated_to: None,
+            updated_ts: None,
             by_block: UniqueRepeatIndex::new(),
             by_hash: UniqueRepeatIndex::new(),
             block_members: IndexMap::new(),
@@ -119,42 +121,68 @@ impl BlockHashIndex {
         key_col: ColumnId,
         hash_col: ColumnId,
         block_col: ColumnId,
+        ts_col: ColumnId,
     ) {
         let cur_version = table.version();
-        if self.updated_to.as_ref() == Some(&cur_version) {
-            return;
-        }
-        let subset = if let Some(prev) = self.updated_to.as_ref() {
-            if cur_version.major != prev.major {
-                self.by_block.clear();
-                self.by_hash.clear();
-                self.block_members.clear();
-                table.all()
-            } else {
-                table.updates_since(prev.minor)
-            }
-        } else {
+        let reset = match self.updated_to.as_ref() {
+            Some(prev) => cur_version.major != prev.major,
+            None => true,
+        };
+        if reset {
             self.by_block.clear();
             self.by_hash.clear();
             self.block_members.clear();
-            table.all()
+            self.updated_ts = None;
+        }
+
+        let (subset, constraints) = if let Some(last_ts) = self.updated_ts {
+            let next_rep = last_ts.rep().saturating_add(1);
+            let next_ts = Value::new(next_rep);
+            let constraint = crate::core_relations::Constraint::GeConst {
+                col: ts_col,
+                val: next_ts,
+            };
+            let subset = table
+                .fast_subset(&constraint)
+                .unwrap_or_else(|| table.all());
+            (subset, vec![constraint])
+        } else {
+            (table.all(), Vec::new())
         };
         if subset.size() == 0 {
             self.updated_to = Some(cur_version);
             return;
         }
 
-        let cols = [key_col, hash_col, block_col];
+        let cols = [key_col, hash_col, block_col, ts_col];
         let mut buf = TaggedRowBuffer::new(cols.len());
         let mut start = Offset::new(0);
+        let mut max_ts = self.updated_ts;
         loop {
             buf.clear();
-            let next =
-                table.scan_project(subset.as_ref(), &cols, start, REFRESH_BATCH, &[], &mut buf);
+            let next = table.scan_project(
+                subset.as_ref(),
+                &cols,
+                start,
+                REFRESH_BATCH,
+                &constraints,
+                &mut buf,
+            );
             for (row_id, row) in buf.non_stale() {
                 let key = row[0];
                 let hash = row[1];
                 let block = row[2];
+                let ts = row[3];
+                max_ts = Some(match max_ts {
+                    Some(current) => {
+                        if ts.rep() > current.rep() {
+                            ts
+                        } else {
+                            current
+                        }
+                    }
+                    None => ts,
+                });
                 self.by_block.add(block, HashEntry { hash, key }, row_id);
                 self.by_hash.add(hash, BlockEntry { block, key }, row_id);
                 self.block_members.entry(block).or_default().push(key);
@@ -163,6 +191,9 @@ impl BlockHashIndex {
                 Some(next) => start = next,
                 None => break,
             }
+        }
+        if max_ts.is_some() {
+            self.updated_ts = max_ts;
         }
         self.updated_to = Some(cur_version);
     }
@@ -201,8 +232,13 @@ impl PartitionRefinement {
     }
 
     pub(crate) fn refresh_index(&mut self, table: &WrappedTable) {
-        self.index
-            .refresh(table, self.key_col, self.hash_col, self.block_col);
+        self.index.refresh(
+            table,
+            self.key_col,
+            self.hash_col,
+            self.block_col,
+            self.ts_col,
+        );
     }
 
     pub(crate) fn block_members(&self) -> &IndexMap<Value, Vec<Value>> {
@@ -244,8 +280,13 @@ impl PartitionRefinement {
         ),
     ) {
         let table = state.get_table(self.table);
-        self.index
-            .refresh(table, self.key_col, self.hash_col, self.block_col);
+        self.index.refresh(
+            table,
+            self.key_col,
+            self.hash_col,
+            self.block_col,
+            self.ts_col,
+        );
         let ts = Value::from_usize(state.read_counter(self.timestamp_counter));
         let mut groups: HashMap<Value, Vec<KeyedRow>> = HashMap::new();
         let mut scratch = Vec::new();
@@ -336,8 +377,13 @@ impl PartitionRefinement {
         ),
     ) {
         let table = state.get_table(self.table);
-        self.index
-            .refresh(table, self.key_col, self.hash_col, self.block_col);
+        self.index.refresh(
+            table,
+            self.key_col,
+            self.hash_col,
+            self.block_col,
+            self.ts_col,
+        );
         let ts = Value::from_usize(state.read_counter(self.timestamp_counter));
         let mut groups: HashMap<Value, BlockGroup> = HashMap::new();
         let mut scratch = Vec::new();

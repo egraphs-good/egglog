@@ -16,14 +16,15 @@ use crate::core_relations::{
 use crate::numeric_id::NumericId;
 use crate::partition_refinement::{
     ConstantPartitionHasher, Crc32PartitionHasher, PartitionRefinementHasher,
+    dump_partition_refinement_state,
 };
-use hashbrown::HashSet;
+use hashbrown::{HashMap, HashSet};
 use log::debug;
 use num_rational::Rational64;
 
 use crate::{
     ColumnTy, DefaultVal, EGraph, FunctionConfig, FunctionId, MergeFn, ProofStore, QueryEntry,
-    add_expressions, define_rule,
+    SchemaMath, add_expressions, define_rule,
 };
 
 /// Run a simple associativity/commutativity test. In addition to testing that the rules properly
@@ -565,6 +566,148 @@ fn partition_refinement_egraph<H: PartitionRefinementHasher>() -> EGraph {
     EGraph::with_partition_refinement_with_hasher::<H>()
 }
 
+fn assert_partition_refinement_hashes<H: PartitionRefinementHasher>(egraph: &EGraph) {
+    dump_partition_refinement_state(egraph, "partition refinement check", &[]);
+    let state = egraph
+        .partition_refinement
+        .as_ref()
+        .expect("partition refinement should be enabled");
+    let fingerprint = egraph.db.get_table(state.fingerprint_table.table);
+    let node_hash = egraph.db.get_table(state.node_hash_table.table);
+    let fp_key_idx = state.fingerprint_table.key_col.index();
+    let fp_hash_idx = state.fingerprint_table.hash_col.index();
+    let fp_block_idx = state.fingerprint_table.block_col.index();
+    let mut actual_blocks = HashMap::new();
+    let mut actual_hashes = HashMap::new();
+    egraph.scan_table(fingerprint, |row| {
+        let eclass = row[fp_key_idx];
+        actual_blocks.insert(eclass, row[fp_block_idx]);
+        actual_hashes.insert(eclass, row[fp_hash_idx]);
+    });
+
+    let mut expected_node = HashMap::new();
+    let mut expected_eclass = HashMap::new();
+    for (_, info) in egraph.funcs.iter() {
+        if info.ret_ty() != ColumnTy::Id {
+            continue;
+        }
+        let schema_math = SchemaMath {
+            tracing: egraph.tracing,
+            subsume: info.can_subsume,
+            row_id: info.row_id,
+            func_cols: info.schema.len(),
+        };
+        assert!(info.row_id, "row ids are not enabled for {}", info.name);
+        let row_id_idx = schema_math.row_id_col();
+        let ret_idx = info.schema.len() - 1;
+        let table = egraph.db.get_table(info.table);
+        let mut hash_inputs = Vec::with_capacity(ret_idx + 1);
+        egraph.scan_table(table, |row| {
+            let row_id = row[row_id_idx];
+            let eclass = row[ret_idx];
+            hash_inputs.clear();
+            hash_inputs.push(Value::from_usize(info.table.index()));
+            for (col_idx, ty) in info.schema[..ret_idx].iter().enumerate() {
+                let val = row[col_idx];
+                match ty {
+                    ColumnTy::Id => {
+                        let block = *actual_blocks
+                            .get(&val)
+                            .unwrap_or_else(|| panic!("missing fingerprint block for {val:?}"));
+                        hash_inputs.push(block);
+                    }
+                    ColumnTy::Base(_) => hash_inputs.push(val),
+                }
+            }
+            let hash = H::hash(&hash_inputs);
+            if let Some((prev_hash, prev_eclass)) = expected_node.insert(row_id, (hash, eclass)) {
+                assert_eq!(
+                    prev_hash, hash,
+                    "node hash mismatch for duplicated row id {row_id:?}"
+                );
+                assert_eq!(
+                    prev_eclass, eclass,
+                    "node eclass mismatch for duplicated row id {row_id:?}"
+                );
+            }
+            let entry = expected_eclass.entry(eclass).or_insert(Value::new_const(0));
+            let sum = entry.rep().wrapping_add(hash.rep());
+            *entry = Value::new(sum);
+        });
+    }
+
+    let nh_row_id_idx = state.node_hash_table.row_id_col.index();
+    let nh_hash_idx = state.node_hash_table.hash_col.index();
+    let nh_eclass_idx = state.node_hash_table.eclass_col.index();
+    let mut actual_node = HashMap::new();
+    egraph.scan_table(node_hash, |row| {
+        let row_id = row[nh_row_id_idx];
+        let hash = row[nh_hash_idx];
+        let eclass = row[nh_eclass_idx];
+        if let Some((prev_hash, prev_eclass)) = actual_node.insert(row_id, (hash, eclass)) {
+            assert_eq!(
+                prev_hash, hash,
+                "duplicate node hash row for row id {row_id:?}"
+            );
+            assert_eq!(
+                prev_eclass, eclass,
+                "duplicate node hash row for row id {row_id:?}"
+            );
+        }
+    });
+
+    for (row_id, (expected_hash, expected_eclass)) in expected_node.iter() {
+        let Some((actual_hash, actual_eclass)) = actual_node.get(row_id) else {
+            panic!("missing node hash entry for row id {row_id:?}");
+        };
+        assert_eq!(
+            actual_hash, expected_hash,
+            "node hash mismatch for row id {row_id:?}"
+        );
+        assert_eq!(
+            actual_eclass, expected_eclass,
+            "node eclass mismatch for row id {row_id:?}"
+        );
+    }
+    for row_id in actual_node.keys() {
+        if !expected_node.contains_key(row_id) {
+            panic!("unexpected node hash entry for row id {row_id:?}");
+        }
+    }
+
+    for (eclass, actual_hash) in actual_hashes.iter() {
+        let expected = expected_eclass
+            .get(eclass)
+            .copied()
+            .unwrap_or(Value::new_const(0));
+        assert_eq!(
+            actual_hash, &expected,
+            "fingerprint hash mismatch for eclass {eclass:?}"
+        );
+    }
+    for eclass in expected_eclass.keys() {
+        if !actual_hashes.contains_key(eclass) {
+            panic!("missing fingerprint row for eclass {eclass:?}");
+        }
+    }
+}
+
+fn run_partition_refinement_and_check<H: PartitionRefinementHasher>(egraph: &mut EGraph) {
+    egraph
+        .run_hash_partition_refinement()
+        .expect("partition refinement failed");
+    assert_partition_refinement_hashes::<H>(egraph);
+}
+
+fn run_partition_refinement_no_collisions_and_check<H: PartitionRefinementHasher>(
+    egraph: &mut EGraph,
+) {
+    egraph
+        .run_hash_partition_refinement_no_collisions()
+        .expect("partition refinement failed");
+    assert_partition_refinement_hashes::<H>(egraph);
+}
+
 fn partition_refinement_scaffolds_row_ids_and_rules_impl<H: PartitionRefinementHasher>() {
     let mut egraph = partition_refinement_egraph::<H>();
     let int_base = egraph.base_values_mut().register_type::<i64>();
@@ -611,12 +754,13 @@ fn add_link_table(egraph: &mut EGraph) -> FunctionId {
 }
 
 fn fingerprint_block(egraph: &EGraph, eclass: Value) -> Value {
+    let canon = egraph.get_canon_repr(eclass, ColumnTy::Id);
     let state = egraph
         .partition_refinement
         .as_ref()
         .expect("partition refinement should be enabled");
     let table = egraph.db.get_table(state.fingerprint_table.table);
-    let row = table.get_row(&[eclass]).expect("missing fingerprint row");
+    let row = table.get_row(&[canon]).expect("missing fingerprint row");
     row.vals[state.fingerprint_table.block_col.index()]
 }
 
@@ -632,9 +776,7 @@ fn partition_refinement_self_cycles_share_block_impl<H: PartitionRefinementHashe
         (link, vec![second, second]),
         (link, vec![third, fourth]),
     ]);
-    egraph
-        .run_hash_partition_refinement()
-        .expect("partition refinement failed");
+    run_partition_refinement_and_check::<H>(&mut egraph);
     let block_first = fingerprint_block(&egraph, first);
     let block_second = fingerprint_block(&egraph, second);
     let block_third = fingerprint_block(&egraph, third);
@@ -668,9 +810,7 @@ fn partition_refinement_two_cycles_share_block_impl<H: PartitionRefinementHasher
         (link, vec![c, d]),
         (link, vec![d, c]),
     ]);
-    egraph
-        .run_hash_partition_refinement()
-        .expect("partition refinement failed");
+    run_partition_refinement_and_check::<H>(&mut egraph);
     let block_a = fingerprint_block(&egraph, a);
     let block_b = fingerprint_block(&egraph, b);
     let block_c = fingerprint_block(&egraph, c);
@@ -709,9 +849,7 @@ fn partition_refinement_collision_splits_blocks_impl<H: PartitionRefinementHashe
         (link, vec![b, b]),
         (pair, vec![c, c, c]),
     ]);
-    egraph
-        .run_hash_partition_refinement()
-        .expect("partition refinement failed");
+    run_partition_refinement_and_check::<H>(&mut egraph);
     let block_a = fingerprint_block(&egraph, a);
     let block_b = fingerprint_block(&egraph, b);
     let block_c = fingerprint_block(&egraph, c);
@@ -750,18 +888,14 @@ fn partition_refinement_constant_hash_needs_collision_resolution() {
         (pair, vec![c, c, c]),
     ]);
 
-    egraph
-        .run_hash_partition_refinement_no_collisions()
-        .expect("partition refinement failed");
+    run_partition_refinement_no_collisions_and_check::<ConstantPartitionHasher>(&mut egraph);
     let block_a = fingerprint_block(&egraph, a);
     let block_b = fingerprint_block(&egraph, b);
     let block_c = fingerprint_block(&egraph, c);
     assert_eq!(block_a, block_b);
     assert_eq!(block_a, block_c);
 
-    egraph
-        .run_hash_partition_refinement()
-        .expect("partition refinement failed");
+    run_partition_refinement_and_check::<ConstantPartitionHasher>(&mut egraph);
     let block_a = fingerprint_block(&egraph, a);
     let block_b = fingerprint_block(&egraph, b);
     let block_c = fingerprint_block(&egraph, c);
@@ -802,9 +936,7 @@ fn partition_refinement_cycles_broader_embed_impl<H: PartitionRefinementHasher>(
         (pair, vec![b1, c1, a1]),
         (pair, vec![b2, c2, a2]),
     ]);
-    egraph
-        .run_hash_partition_refinement()
-        .expect("partition refinement failed");
+    run_partition_refinement_and_check::<H>(&mut egraph);
     let block_a1 = fingerprint_block(&egraph, a1);
     let block_a2 = fingerprint_block(&egraph, a2);
     let block_b1 = fingerprint_block(&egraph, b1);
@@ -826,7 +958,9 @@ fn partition_refinement_cycles_broader_embed_constant() {
     partition_refinement_cycles_broader_embed_impl::<ConstantPartitionHasher>();
 }
 
-fn partition_refinement_incremental_updates_impl<H: PartitionRefinementHasher>() {
+fn partition_refinement_incremental_updates_impl<H: PartitionRefinementHasher>(
+    stable_blocks: bool,
+) {
     let mut egraph = partition_refinement_egraph::<H>();
     let link = add_link_table(&mut egraph);
     let pair = egraph.add_table(FunctionConfig {
@@ -839,43 +973,45 @@ fn partition_refinement_incremental_updates_impl<H: PartitionRefinementHasher>()
     });
     let a = egraph.fresh_id();
     let b = egraph.fresh_id();
-    egraph.add_values([(link, vec![a, a]), (link, vec![b, b])]);
-    egraph
-        .run_hash_partition_refinement()
-        .expect("partition refinement failed");
+    egraph.add_values([(link, vec![a, a]), (pair, vec![b, b, b])]);
+    run_partition_refinement_and_check::<H>(&mut egraph);
     let block_a0 = fingerprint_block(&egraph, a);
     let block_b0 = fingerprint_block(&egraph, b);
-    assert_eq!(block_a0, block_b0);
-    egraph
-        .run_hash_partition_refinement()
-        .expect("partition refinement failed");
+    assert_ne!(block_a0, block_b0);
+    run_partition_refinement_and_check::<H>(&mut egraph);
     let block_a1 = fingerprint_block(&egraph, a);
     let block_b1 = fingerprint_block(&egraph, b);
-    assert_eq!(block_a1, block_b1);
+    if stable_blocks {
+        assert_eq!(block_a1, block_a0);
+        assert_eq!(block_b1, block_b0);
+    } else {
+        assert_ne!(block_a1, block_b1);
+    }
 
     egraph.add_values([(pair, vec![a, a, a])]);
-    egraph
-        .run_hash_partition_refinement()
-        .expect("partition refinement failed");
+    run_partition_refinement_and_check::<H>(&mut egraph);
     let block_a2 = fingerprint_block(&egraph, a);
     let block_b2 = fingerprint_block(&egraph, b);
     assert_ne!(block_a2, block_b2);
-    egraph
-        .run_hash_partition_refinement()
-        .expect("partition refinement failed");
+    run_partition_refinement_and_check::<H>(&mut egraph);
     let block_a3 = fingerprint_block(&egraph, a);
     let block_b3 = fingerprint_block(&egraph, b);
-    assert_ne!(block_a3, block_b3);
+    if stable_blocks {
+        assert_eq!(block_a3, block_a2);
+        assert_eq!(block_b3, block_b2);
+    } else {
+        assert_ne!(block_a3, block_b3);
+    }
 }
 
 #[test]
 fn partition_refinement_incremental_updates_crc() {
-    partition_refinement_incremental_updates_impl::<Crc32PartitionHasher>();
+    partition_refinement_incremental_updates_impl::<Crc32PartitionHasher>(true);
 }
 
 #[test]
 fn partition_refinement_incremental_updates_constant() {
-    partition_refinement_incremental_updates_impl::<ConstantPartitionHasher>();
+    partition_refinement_incremental_updates_impl::<ConstantPartitionHasher>(false);
 }
 
 fn partition_refinement_incremental_merges_impl<H: PartitionRefinementHasher>() {
@@ -883,24 +1019,35 @@ fn partition_refinement_incremental_merges_impl<H: PartitionRefinementHasher>() 
     let link = add_link_table(&mut egraph);
     let a = egraph.fresh_id();
     let b = egraph.fresh_id();
-    egraph.add_values([(link, vec![a, b]), (link, vec![b, a])]);
-    egraph
-        .run_hash_partition_refinement()
-        .expect("partition refinement failed");
+    egraph.add_values([(link, vec![a, a]), (link, vec![b, b])]);
+    run_partition_refinement_and_check::<H>(&mut egraph);
+    dump_partition_refinement_state(&egraph, "after first run", &[a, b]);
+    let canon_a0 = egraph.get_canon_repr(a, ColumnTy::Id);
+    let canon_b0 = egraph.get_canon_repr(b, ColumnTy::Id);
+    assert_eq!(canon_a0, canon_b0);
     let block_a0 = fingerprint_block(&egraph, a);
     let block_b0 = fingerprint_block(&egraph, b);
     assert_eq!(block_a0, block_b0);
 
     let c = egraph.fresh_id();
     let d = egraph.fresh_id();
-    egraph.add_values([(link, vec![c, d]), (link, vec![d, c])]);
-    egraph
-        .run_hash_partition_refinement()
-        .expect("partition refinement failed");
+    egraph.add_values([(link, vec![c, c]), (link, vec![d, d])]);
+    run_partition_refinement_and_check::<H>(&mut egraph);
+    dump_partition_refinement_state(&egraph, "after second run", &[a, b, c, d]);
+    let canon_c0 = egraph.get_canon_repr(c, ColumnTy::Id);
+    let canon_d0 = egraph.get_canon_repr(d, ColumnTy::Id);
+    assert_eq!(canon_c0, canon_d0);
+    let canon_a1 = egraph.get_canon_repr(a, ColumnTy::Id);
+    let canon_b1 = egraph.get_canon_repr(b, ColumnTy::Id);
+    assert_eq!(canon_a1, canon_b1);
+    assert_eq!(canon_a1, canon_c0);
     let block_c0 = fingerprint_block(&egraph, c);
     let block_d0 = fingerprint_block(&egraph, d);
     assert_eq!(block_c0, block_d0);
-    assert_eq!(block_a0, block_c0);
+    let block_a1 = fingerprint_block(&egraph, a);
+    let block_b1 = fingerprint_block(&egraph, b);
+    assert_eq!(block_a1, block_b1);
+    assert_eq!(block_a1, block_c0);
 }
 
 #[test]
