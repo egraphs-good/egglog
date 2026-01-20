@@ -11,12 +11,12 @@ pub mod unique_repeat_index;
 use std::sync::Arc;
 
 use crate::core_relations::{
-    ColumnId, CounterId, Database, DeleteFn, ExecutionState, ExternalFunction, ExternalFunctionId,
-    MergeFn, Offset, QueryEntry as CoreQueryEntry, SortedWritesTable, SortedWritesTableOptions,
-    TableId, TaggedRowBuffer, Value,
+    ColumnId, CounterId, Database, DeleteFn, DisplacedTable, ExecutionState, ExternalFunction,
+    ExternalFunctionId, MergeFn, Offset, QueryEntry as CoreQueryEntry, SortedWritesTable,
+    SortedWritesTableOptions, TableId, TaggedRowBuffer, Value,
 };
 #[cfg(test)]
-use crate::core_relations::{DisplacedTable, make_external_func};
+use crate::core_relations::make_external_func;
 use crate::numeric_id::NumericId;
 use crate::partition_refinement::crc32_hash::{crc32_external_func, crc32_hash};
 use crate::partition_refinement::refinement::{
@@ -407,14 +407,14 @@ impl EGraph {
     }
 
     /// Create a new EGraph with partition refinement enabled and a custom hasher.
-    #[cfg(test)]
-    pub(crate) fn with_partition_refinement_with_hasher<H: PartitionRefinementHasher>() -> EGraph {
+    /// This is intended for benchmarking or experimentation; CRC32 is recommended by default.
+    pub fn with_partition_refinement_with_hasher<H: PartitionRefinementHasher>() -> EGraph {
         let mut db = Database::new();
         let uf_table = db.add_table_named(
             DisplacedTable::default(),
             "$uf".into(),
-            iter::empty(),
-            iter::empty(),
+            std::iter::empty(),
+            std::iter::empty(),
         );
         let mut egraph = EGraph::create_internal(
             db,

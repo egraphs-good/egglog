@@ -2,6 +2,8 @@ use divan::Bencher;
 use egglog_bridge::{
     ColumnTy, DefaultVal, EGraph, FunctionConfig, MergeFn, RuleId, add_expressions, define_rule,
 };
+use egglog_bridge::partition_refinement::{Crc32PartitionHasher, PartitionRefinementHasher};
+use egglog_core_relations::{ExternalFunction, Value, make_external_func};
 use mimalloc::MiMalloc;
 use num_rational::Rational64;
 use std::sync::Once;
@@ -9,7 +11,7 @@ use std::sync::Once;
 #[global_allocator]
 static GLOBAL: MiMalloc = MiMalloc;
 
-const N: usize = 5;
+const N: usize = 4;
 
 fn main() {
     divan::main();
@@ -23,6 +25,27 @@ fn init_rayon() {
             .build_global()
             .expect("rayon thread pool should initialize once");
     });
+}
+
+fn identity_hash(values: &[Value]) -> Value {
+    values
+        .first()
+        .copied()
+        .unwrap_or_else(|| Value::new_const(0))
+}
+
+/// A deliberately weak hash for benchmarking collision-heavy partition refinement.
+/// CRC32 is recommended for normal use.
+struct IdentityPartitionHasher;
+
+impl PartitionRefinementHasher for IdentityPartitionHasher {
+    fn external_func() -> Box<dyn ExternalFunction + 'static> {
+        Box::new(make_external_func(|_, values| Some(identity_hash(values))))
+    }
+
+    fn hash(values: &[Value]) -> Value {
+        identity_hash(values)
+    }
 }
 
 fn setup_math(egraph: &mut EGraph) -> Vec<RuleId> {
@@ -278,6 +301,15 @@ fn bench_math(bench: Bencher, cyclic: bool) {
     });
 }
 
+fn bench_math_partition_refine<H: PartitionRefinementHasher>(bench: Bencher) {
+    init_rayon();
+    bench.bench(|| {
+        let mut egraph = EGraph::with_partition_refinement_with_hasher::<H>();
+        let rules = setup_math(&mut egraph);
+        run_iterations(&mut egraph, &rules, N, true);
+    });
+}
+
 #[divan::bench(sample_count = 5)]
 fn math_default(bench: Bencher) {
     bench_math(bench, false);
@@ -285,5 +317,10 @@ fn math_default(bench: Bencher) {
 
 #[divan::bench(sample_count = 5)]
 fn math_partition_refine(bench: Bencher) {
-    bench_math(bench, true);
+    bench_math_partition_refine::<Crc32PartitionHasher>(bench);
+}
+
+#[divan::bench(sample_count = 5)]
+fn math_partition_refine_identity(bench: Bencher) {
+    bench_math_partition_refine::<IdentityPartitionHasher>(bench);
 }
