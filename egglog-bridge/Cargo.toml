@@ -45,3 +45,7 @@ name = "math"
 [[bench]]
 name = "partition_refinement"
 harness = false
+
+[[bench]]
+name = "math_partition_refine"
+harness = false
