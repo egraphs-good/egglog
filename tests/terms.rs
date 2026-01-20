@@ -25,7 +25,7 @@ fn test_termdag_malicious_client() {
     let y = td.var("y".into());
     // now td = [0 |-> x, 1 |-> y]
     let f = td.app("f".into(), vec![x, y]);
-    // f is Term::App("f", [0, 1])
+    // f is a TermId (2) that refers to Term::App("f", [0, 1])
     assert_eq!(td.to_string(f), "(f x y)");
     // recall that td2 = [0 |-> x]
     // notice that f refers to index 1, so this crashes:
