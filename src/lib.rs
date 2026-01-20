@@ -771,7 +771,7 @@ impl EGraph {
     }
 
     /// Extract a value to a [`TermDag`] and [`TermId`] in the [`TermDag`].
-    /// Note that the `TermDag` may contain a superset of the nodes in the `Term`.
+    /// Note that the `TermDag` may contain a superset of the nodes referenced by the returned `TermId`.
     /// See also [`EGraph::extract_value_to_string`] for convenience.
     pub fn extract_value_with_cost_model<CM: CostModel<DefaultCost> + 'static>(
         &self,
