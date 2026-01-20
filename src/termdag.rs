@@ -125,8 +125,8 @@ impl TermDag {
         self.add_node(&node)
     }
 
-    /// Make and return a [`Term::Lit`] with the given literal, and insert into
-    /// the DAG if it is not already present.
+    /// Make a [`Term::Lit`] with the given literal and return its [`TermId`],
+    /// inserting it into the DAG if it is not already present.
     pub fn lit(&mut self, lit: Literal) -> TermId {
         let node = Term::Lit(lit);
 
