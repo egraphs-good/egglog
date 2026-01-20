@@ -3,7 +3,7 @@ use std::{
     hash::Hash,
     slice,
     sync::{
-        Arc,
+        Arc, Once,
         atomic::{AtomicUsize, Ordering},
     },
     thread,
@@ -16,7 +16,6 @@ use crate::core_relations::{
 use crate::numeric_id::NumericId;
 use crate::partition_refinement::{
     ConstantPartitionHasher, Crc32PartitionHasher, PartitionRefinementHasher,
-    dump_partition_refinement_state,
 };
 use hashbrown::{HashMap, HashSet};
 use log::debug;
@@ -562,12 +561,149 @@ fn assert_row_ids_unique(egraph: &EGraph, tables: &[FunctionId]) {
     }
 }
 
+#[allow(unused)]
+fn init_envlog() {
+    static INIT_ENVLOG: Once = Once::new();
+    INIT_ENVLOG.call_once(env_logger::init);
+}
+
+/// Debug helper for partition refinement tests. Dumps fingerprint and node-hash
+/// state, plus expected hashes, when `RUST_LOG=info` is enabled.
+#[allow(unused)]
+pub(crate) fn dump_partition_refinement_state(egraph: &EGraph, label: &str, ids: &[Value]) {
+    init_envlog();
+    if !log::log_enabled!(log::Level::Info) {
+        return;
+    }
+    let state = egraph
+        .partition_refinement
+        .as_ref()
+        .expect("partition refinement should be enabled");
+    log::info!("-- {label} --");
+    let fingerprint = egraph.db.get_table(state.fingerprint_table.table);
+    let fp_key_idx = state.fingerprint_table.key_col.index();
+    let fp_hash_idx = state.fingerprint_table.hash_col.index();
+    let fp_block_idx = state.fingerprint_table.block_col.index();
+    let fp_ts_idx = state.fingerprint_table.ts_col.index();
+    let node_hash = egraph.db.get_table(state.node_hash_table.table);
+    let nh_row_id_idx = state.node_hash_table.row_id_col.index();
+    let nh_hash_idx = state.node_hash_table.hash_col.index();
+    let nh_eclass_idx = state.node_hash_table.eclass_col.index();
+    let mut blocks = HashMap::new();
+    let mut all_ids = HashSet::new();
+    egraph.scan_table(fingerprint, |row| {
+        let eclass = row[fp_key_idx];
+        blocks.insert(eclass, row[fp_block_idx]);
+        all_ids.insert(eclass);
+    });
+    egraph.scan_table(node_hash, |row| {
+        all_ids.insert(row[nh_eclass_idx]);
+    });
+    let mut ids_to_dump = if ids.is_empty() {
+        all_ids.into_iter().collect::<Vec<_>>()
+    } else {
+        ids.to_vec()
+    };
+    ids_to_dump.sort();
+    ids_to_dump.dedup();
+    let mut expected_by_row = HashMap::new();
+    let hash_func = state.hash_func;
+    egraph.db.with_execution_state(|exec| {
+        for (_, info) in egraph.funcs.iter() {
+            if info.ret_ty() != ColumnTy::Id {
+                continue;
+            }
+            let schema_math = SchemaMath {
+                tracing: egraph.tracing,
+                subsume: info.can_subsume,
+                row_id: info.row_id,
+                func_cols: info.schema.len(),
+            };
+            if !info.row_id {
+                log::info!("skipping {}: row ids not enabled", info.name);
+                continue;
+            }
+            let row_id_idx = schema_math.row_id_col();
+            let ret_idx = info.schema.len() - 1;
+            let table = egraph.db.get_table(info.table);
+            let mut hash_inputs = Vec::with_capacity(ret_idx + 1);
+            egraph.scan_table(table, |row| {
+                let row_id = row[row_id_idx];
+                let eclass = row[ret_idx];
+                hash_inputs.clear();
+                hash_inputs.push(Value::from_usize(info.table.index()));
+                for (col_idx, ty) in info.schema[..ret_idx].iter().enumerate() {
+                    let val = row[col_idx];
+                    match ty {
+                        ColumnTy::Id => {
+                            let Some(block) = blocks.get(&val) else {
+                                log::info!(
+                                    "missing fingerprint block for child {val:?} in {}",
+                                    info.name
+                                );
+                                return;
+                            };
+                            hash_inputs.push(*block);
+                        }
+                        ColumnTy::Base(_) => hash_inputs.push(val),
+                    }
+                }
+                let hash = exec
+                    .call_external_func(hash_func, &hash_inputs)
+                    .expect("hash function should return a value");
+                log::info!(
+                    "row_id={row_id:?}, eclass={eclass:?}, hash={hash:?}, ts={:?}",
+                    row[schema_math.ts_col()]
+                );
+                expected_by_row.insert(row_id, (hash, eclass));
+            });
+        }
+    });
+    for &id in &ids_to_dump {
+        let canon = egraph.get_canon_repr(id, ColumnTy::Id);
+        let row = fingerprint
+            .get_row(&[canon])
+            .expect("missing fingerprint row");
+        log::info!(
+            "eclass {id:?} canon={canon:?} hash={:?} block={:?} ts={:?}",
+            row.vals[fp_hash_idx],
+            row.vals[fp_block_idx],
+            row.vals[fp_ts_idx]
+        );
+        let mut entries = Vec::new();
+        let mut expected_sum = 0u32;
+        egraph.scan_table(node_hash, |row| {
+            if row[nh_eclass_idx] == canon {
+                let row_id = row[nh_row_id_idx];
+                let actual_hash = row[nh_hash_idx];
+                let expected_hash = expected_by_row.get(&row_id).copied().map(|(hash, eclass)| {
+                    if eclass != canon {
+                        log::info!("row_id {row_id:?} expected eclass {eclass:?} actual {canon:?}");
+                    }
+                    hash
+                });
+                if let Some(hash) = expected_hash {
+                    expected_sum = expected_sum.wrapping_add(hash.rep());
+                }
+                entries.push((row_id, actual_hash, expected_hash));
+            }
+        });
+        let sum = entries
+            .iter()
+            .fold(0u32, |acc, (_, hash, _)| acc.wrapping_add(hash.rep()));
+        log::info!(
+            "node_hash entries={entries:?} sum={:?} expected_sum={:?}",
+            Value::new(sum),
+            Value::new(expected_sum)
+        );
+    }
+}
+
 fn partition_refinement_egraph<H: PartitionRefinementHasher>() -> EGraph {
     EGraph::with_partition_refinement_with_hasher::<H>()
 }
 
 fn assert_partition_refinement_hashes<H: PartitionRefinementHasher>(egraph: &EGraph) {
-    dump_partition_refinement_state(egraph, "partition refinement check", &[]);
     let state = egraph
         .partition_refinement
         .as_ref()
@@ -1021,7 +1157,6 @@ fn partition_refinement_incremental_merges_impl<H: PartitionRefinementHasher>() 
     let b = egraph.fresh_id();
     egraph.add_values([(link, vec![a, a]), (link, vec![b, b])]);
     run_partition_refinement_and_check::<H>(&mut egraph);
-    dump_partition_refinement_state(&egraph, "after first run", &[a, b]);
     let canon_a0 = egraph.get_canon_repr(a, ColumnTy::Id);
     let canon_b0 = egraph.get_canon_repr(b, ColumnTy::Id);
     assert_eq!(canon_a0, canon_b0);
@@ -1033,7 +1168,6 @@ fn partition_refinement_incremental_merges_impl<H: PartitionRefinementHasher>() 
     let d = egraph.fresh_id();
     egraph.add_values([(link, vec![c, c]), (link, vec![d, d])]);
     run_partition_refinement_and_check::<H>(&mut egraph);
-    dump_partition_refinement_state(&egraph, "after second run", &[a, b, c, d]);
     let canon_c0 = egraph.get_canon_repr(c, ColumnTy::Id);
     let canon_d0 = egraph.get_canon_repr(d, ColumnTy::Id);
     assert_eq!(canon_c0, canon_d0);

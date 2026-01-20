@@ -8,7 +8,7 @@ pub mod refinement;
 pub mod signature_set;
 pub mod unique_repeat_index;
 
-use std::sync::{Arc, Once};
+use std::sync::Arc;
 
 use crate::core_relations::{
     ColumnId, CounterId, Database, DeleteFn, ExecutionState, ExternalFunction, ExternalFunctionId,
@@ -24,10 +24,8 @@ use crate::partition_refinement::refinement::{
 };
 use crate::partition_refinement::signature_set::{EClassSignatureTable, EnodeSignatureTable};
 use crate::{
-    ColumnTy, EGraph, FunctionId, QueryEntry, Result, RuleId, SchemaMath, Timestamp, UnionAction,
-    run_rules_impl,
+    ColumnTy, EGraph, FunctionId, QueryEntry, Result, RuleId, UnionAction, run_rules_impl,
 };
-use hashbrown::{HashMap, HashSet};
 use indexmap::{IndexMap, IndexSet};
 #[cfg(test)]
 use std::iter;
@@ -43,143 +41,6 @@ pub trait PartitionRefinementHasher {
 pub enum PartitionRefinementError {
     #[error("partition refinement is not enabled")]
     NotEnabled,
-}
-
-fn init_envlog() {
-    static INIT_ENVLOG: Once = Once::new();
-    #[cfg(test)]
-    {
-        INIT_ENVLOG.call_once(env_logger::init);
-    }
-}
-
-pub(crate) fn dump_partition_refinement_state(egraph: &EGraph, label: &str, ids: &[Value]) {
-    init_envlog();
-    if !log::log_enabled!(log::Level::Info) {
-        return;
-    }
-    let state = egraph
-        .partition_refinement
-        .as_ref()
-        .expect("partition refinement should be enabled");
-    log::info!("-- {label} --");
-    let fingerprint = egraph.db.get_table(state.fingerprint_table.table);
-    let fp_key_idx = state.fingerprint_table.key_col.index();
-    let fp_hash_idx = state.fingerprint_table.hash_col.index();
-    let fp_block_idx = state.fingerprint_table.block_col.index();
-    let fp_ts_idx = state.fingerprint_table.ts_col.index();
-    let node_hash = egraph.db.get_table(state.node_hash_table.table);
-    let nh_row_id_idx = state.node_hash_table.row_id_col.index();
-    let nh_hash_idx = state.node_hash_table.hash_col.index();
-    let nh_eclass_idx = state.node_hash_table.eclass_col.index();
-    let mut blocks = HashMap::new();
-    let mut all_ids = HashSet::new();
-    egraph.scan_table(fingerprint, |row| {
-        let eclass = row[fp_key_idx];
-        blocks.insert(eclass, row[fp_block_idx]);
-        all_ids.insert(eclass);
-    });
-    egraph.scan_table(node_hash, |row| {
-        all_ids.insert(row[nh_eclass_idx]);
-    });
-    let mut ids_to_dump = if ids.is_empty() {
-        all_ids.into_iter().collect::<Vec<_>>()
-    } else {
-        ids.to_vec()
-    };
-    ids_to_dump.sort();
-    ids_to_dump.dedup();
-    let mut expected_by_row = HashMap::new();
-    let hash_func = state.hash_func;
-    egraph.db.with_execution_state(|exec| {
-        for (_, info) in egraph.funcs.iter() {
-            if info.ret_ty() != ColumnTy::Id {
-                continue;
-            }
-            let schema_math = SchemaMath {
-                tracing: egraph.tracing,
-                subsume: info.can_subsume,
-                row_id: info.row_id,
-                func_cols: info.schema.len(),
-            };
-            if !info.row_id {
-                log::info!("skipping {}: row ids not enabled", info.name);
-                continue;
-            }
-            let row_id_idx = schema_math.row_id_col();
-            let ret_idx = info.schema.len() - 1;
-            let table = egraph.db.get_table(info.table);
-            let mut hash_inputs = Vec::with_capacity(ret_idx + 1);
-            egraph.scan_table(table, |row| {
-                let row_id = row[row_id_idx];
-                let eclass = row[ret_idx];
-                hash_inputs.clear();
-                hash_inputs.push(Value::from_usize(info.table.index()));
-                for (col_idx, ty) in info.schema[..ret_idx].iter().enumerate() {
-                    let val = row[col_idx];
-                    match ty {
-                        ColumnTy::Id => {
-                            let Some(block) = blocks.get(&val) else {
-                                log::info!(
-                                    "missing fingerprint block for child {val:?} in {}",
-                                    info.name
-                                );
-                                return;
-                            };
-                            hash_inputs.push(*block);
-                        }
-                        ColumnTy::Base(_) => hash_inputs.push(val),
-                    }
-                }
-                let hash = exec
-                    .call_external_func(hash_func, &hash_inputs)
-                    .expect("hash function should return a value");
-                log::info!(
-                    "row_id={row_id:?}, eclass={eclass:?}, hash={hash:?}, ts={:?}",
-                    row[schema_math.ts_col()]
-                );
-                expected_by_row.insert(row_id, (hash, eclass));
-            });
-        }
-    });
-    for &id in &ids_to_dump {
-        let canon = egraph.get_canon_repr(id, ColumnTy::Id);
-        let row = fingerprint
-            .get_row(&[canon])
-            .expect("missing fingerprint row");
-        log::info!(
-            "eclass {id:?} canon={canon:?} hash={:?} block={:?} ts={:?}",
-            row.vals[fp_hash_idx],
-            row.vals[fp_block_idx],
-            row.vals[fp_ts_idx]
-        );
-        let mut entries = Vec::new();
-        let mut expected_sum = 0u32;
-        egraph.scan_table(node_hash, |row| {
-            if row[nh_eclass_idx] == canon {
-                let row_id = row[nh_row_id_idx];
-                let actual_hash = row[nh_hash_idx];
-                let expected_hash = expected_by_row.get(&row_id).copied().map(|(hash, eclass)| {
-                    if eclass != canon {
-                        log::info!("row_id {row_id:?} expected eclass {eclass:?} actual {canon:?}");
-                    }
-                    hash
-                });
-                if let Some(hash) = expected_hash {
-                    expected_sum = expected_sum.wrapping_add(hash.rep());
-                }
-                entries.push((row_id, actual_hash, expected_hash));
-            }
-        });
-        let sum = entries
-            .iter()
-            .fold(0u32, |acc, (_, hash, _)| acc.wrapping_add(hash.rep()));
-        log::info!(
-            "node_hash entries={entries:?} sum={:?} expected_sum={:?}",
-            Value::new(sum),
-            Value::new(expected_sum)
-        );
-    }
 }
 
 /// The default CRC32-based hasher.
@@ -247,7 +108,7 @@ pub struct CollisionSignatureTable {
 pub fn add_node_hash_table(
     db: &mut Database,
     fingerprint: BlockHashTable,
-    seed_block: Value,
+    block_counter: CounterId,
     ts_counter: CounterId,
 ) -> NodeHashTable {
     let row_id_col = ColumnId::from_usize(0);
@@ -265,7 +126,7 @@ pub fn add_node_hash_table(
             delete_fingerprint,
             eclass,
             invert_hash(hash),
-            seed_block,
+            block_counter,
             ts_counter,
         );
     });
@@ -288,7 +149,7 @@ pub fn add_node_hash_table(
             merge_fingerprint,
             old_eclass,
             invert_hash(old_hash),
-            seed_block,
+            block_counter,
             ts_counter,
         );
         out.clear();
@@ -368,10 +229,11 @@ fn stage_fingerprint_delta(
     fingerprint: BlockHashTable,
     eclass: Value,
     hash_delta: Value,
-    seed_block: Value,
+    block_counter: CounterId,
     ts_counter: CounterId,
 ) {
     let ts = Value::from_usize(state.read_counter(ts_counter));
+    let seed_block = Value::from_usize(state.read_counter(block_counter));
     state.stage_insert(fingerprint.table, &[eclass, hash_delta, seed_block, ts]);
 }
 
@@ -425,7 +287,6 @@ pub(crate) struct HashPartitionRefinementState {
     pub(crate) node_hash_table: NodeHashTable,
     pub(crate) colliding_eclasses_table: CollidingEClassesTable,
     pub(crate) block_counter: CounterId,
-    pub(crate) seed_block: Value,
     pub(crate) hash_func: ExternalFunctionId,
     pub(crate) seed_rules: Vec<RuleId>,
     pub(crate) node_hash_rules: Vec<RuleId>,
@@ -455,12 +316,11 @@ impl EGraph {
     /// Initialize partition refinement state and tables with a custom hasher.
     pub(crate) fn init_partition_refinement_with_hasher<H: PartitionRefinementHasher>(&mut self) {
         let block_counter = self.db.add_counter();
-        let seed_block = Value::from_usize(self.db.read_counter(block_counter));
         let fingerprint_table = add_eclass_fingerprint_table(&mut self.db);
         let node_hash_table = add_node_hash_table(
             &mut self.db,
             fingerprint_table,
-            seed_block,
+            block_counter,
             self.timestamp_counter,
         );
         let colliding_eclasses_table = add_colliding_eclasses_table(&mut self.db);
@@ -476,18 +336,15 @@ impl EGraph {
                 &[row_id, hash.clone(), eclass.clone(), ts],
                 node_hash_table.ts_col,
             );
-            let seed_block_entry = QueryEntry::Const {
-                val: seed_block,
-                ty: ColumnTy::Id,
-            };
             let fingerprint_table_id = fingerprint_table.table;
             rb.add_callback(move |inner, rb| {
+                let seed_block_entry = CoreQueryEntry::Var(rb.read_counter(block_counter));
                 rb.insert(
                     fingerprint_table_id,
                     &[
                         inner.convert(&eclass),
                         inner.convert(&hash),
-                        inner.convert(&seed_block_entry),
+                        seed_block_entry,
                         inner.next_ts(),
                     ],
                 )?;
@@ -529,7 +386,6 @@ impl EGraph {
             node_hash_table,
             colliding_eclasses_table,
             block_counter,
-            seed_block,
             hash_func,
             seed_rules: Vec::new(),
             node_hash_rules: Vec::new(),
@@ -589,8 +445,7 @@ impl EGraph {
             fingerprint_table,
             node_hash_table,
             colliding_eclasses_table,
-            _block_counter,
-            seed_block,
+            block_counter,
             hash_func,
             signature_table,
         ) = {
@@ -604,7 +459,6 @@ impl EGraph {
                 state.node_hash_table,
                 state.colliding_eclasses_table,
                 state.block_counter,
-                state.seed_block,
                 state.hash_func,
                 signature_table,
             )
@@ -629,19 +483,16 @@ impl EGraph {
                 val: Value::new_const(0),
                 ty: ColumnTy::Id,
             };
-            let seed_block_entry = QueryEntry::Const {
-                val: seed_block,
-                ty: ColumnTy::Id,
-            };
             let fingerprint_table_id = fingerprint_table.table;
             rb.add_callback(move |inner, rb| {
+                let seed_block_entry = CoreQueryEntry::Var(rb.read_counter(block_counter));
                 for entry in &id_entries {
                     rb.insert(
                         fingerprint_table_id,
                         &[
                             inner.convert(entry),
                             inner.convert(&zero),
-                            inner.convert(&seed_block_entry),
+                            seed_block_entry,
                             inner.next_ts(),
                         ],
                     )?;
@@ -824,7 +675,6 @@ impl EGraph {
         let result = (|| {
             let mut changed_any = false;
             loop {
-                let todo_remove = log::info!("TOP OF LOOP");
                 let mut changed = false;
                 if !seed_rules.is_empty() {
                     // Use a fresh timestamp for seed writes.
@@ -837,12 +687,8 @@ impl EGraph {
                         ts,
                         self.report_level,
                     )?;
-                    // db.run_rule_set already merges, but ensure buffers are flushed.
-                    let merged = self.db.merge_all();
-                    changed |= report.changed || merged;
+                    changed |= report.changed;
                 }
-
-                dump_partition_refinement_state(self, "after seed rules", &[]);
 
                 if !node_hash_rules.is_empty() {
                     // Use a fresh timestamp for node-hash writes.
@@ -855,8 +701,7 @@ impl EGraph {
                         ts,
                         self.report_level,
                     )?;
-                    let merged = self.db.merge_all();
-                    changed |= report.changed || merged;
+                    changed |= report.changed;
                     self.inc_ts();
                     let ts = self.next_ts();
 
@@ -867,10 +712,8 @@ impl EGraph {
                         ts,
                         self.report_level,
                     )?;
-                    let merged = self.db.merge_all();
-                    changed |= report.changed || merged;
+                    changed |= report.changed;
                 }
-                dump_partition_refinement_state(self, "after node hash + propagate", &[]);
 
                 // Use a later timestamp for split/merge updates so seminaive can see them.
                 self.inc_ts();
@@ -879,7 +722,6 @@ impl EGraph {
                     refinement.merge_blocks_replacing(state);
                 });
                 let merged_blocks = self.db.merge_all();
-                dump_partition_refinement_state(self, "after split/merge", &[]);
                 changed |= merged_blocks;
                 changed_any |= changed;
                 if !changed {
@@ -888,7 +730,6 @@ impl EGraph {
             }
 
             if resolve_collisions {
-                dump_partition_refinement_state(self, "before resolve collisions", &[]);
                 let collision_changed = self.resolve_hash_collisions_with_refinement(
                     &mut refinement,
                     fingerprint_table,
@@ -897,11 +738,9 @@ impl EGraph {
                     &collision_signature_tables,
                     block_counter,
                 )?;
-                dump_partition_refinement_state(self, "before merge eclasses", &[]);
                 let merged_eclasses =
                     self.merge_eclasses_by_block(&mut refinement, fingerprint_table)?;
                 changed_any |= collision_changed || merged_eclasses;
-                dump_partition_refinement_state(self, "before clear", &[]);
                 if merged_eclasses {
                     self.inc_ts();
                     let ts = self.next_ts();
@@ -912,9 +751,7 @@ impl EGraph {
                         ts,
                         self.report_level,
                     )?;
-                    dump_partition_refinement_state(self, "before node hash", &[]);
-                    let cleared = self.db.merge_all();
-                    changed_any |= clear_report.changed || cleared;
+                    changed_any |= clear_report.changed;
                     if !node_hash_rules.is_empty() {
                         self.inc_ts();
                         let ts = self.next_ts();
@@ -925,8 +762,6 @@ impl EGraph {
                             ts,
                             self.report_level,
                         )?;
-                        let merged = self.db.merge_all();
-                        dump_partition_refinement_state(self, "before propagate", &[]);
                         self.inc_ts();
                         let ts = self.next_ts();
                         let propagate_report = run_rules_impl(
@@ -936,16 +771,12 @@ impl EGraph {
                             ts,
                             self.report_level,
                         )?;
-                        let merged2 = self.db.merge_all();
-                        changed_any |=
-                            hash_report.changed || propagate_report.changed || merged || merged2;
-                        dump_partition_refinement_state(self, "after propagate", &[]);
+                        changed_any |= hash_report.changed || propagate_report.changed;
                     }
                 }
             }
             Ok(changed_any)
         })();
-        let todo_remove = log::info!("DONE");
 
         if let Some(state) = self.partition_refinement.as_mut() {
             state.refinement = Some(refinement);
@@ -1004,7 +835,6 @@ impl EGraph {
                     ts,
                     self.report_level,
                 )?;
-                self.db.merge_all();
             }
 
             let mut enodes_by_eclass: IndexMap<Value, Vec<_>> = IndexMap::new();
@@ -1135,52 +965,44 @@ impl EGraph {
         refinement: &mut PartitionRefinement,
         fingerprint_table: BlockHashTable,
     ) -> Result<bool> {
-        // TODO: avoid the 'seen' stuff and 'unions': just union things directly and wrap this loop
-        // in a  with_execution_state (unconditionally increment timestamp).
+        self.inc_ts();
         let table = self.db.get_table(fingerprint_table.table);
         refinement.refresh_index(table);
         let fingerprint_ref = self.db.get_table(fingerprint_table.table);
         let block_idx = fingerprint_table.block_col.index();
-        let mut unions = Vec::new();
-        let mut seen = IndexSet::new();
-        let mut members = Vec::new();
-        for (block, entries) in refinement.block_members().iter() {
-            seen.clear();
-            members.clear();
-            for &eclass in entries {
-                if !seen.insert(eclass) {
-                    continue;
-                }
-                let Some(row) = fingerprint_ref.get_row(&[eclass]) else {
-                    continue;
-                };
-                if row.vals[block_idx] != *block {
-                    continue;
-                }
-                members.push(eclass);
-            }
-            if members.len() <= 1 {
-                continue;
-            }
-            let leader = *members.iter().min().expect("members should be non-empty");
-            log::info!("merging {members:?}");
-            for &eclass in &members {
-                if eclass != leader {
-                    unions.push((leader, eclass));
-                }
-            }
-        }
-        if unions.is_empty() {
-            return Ok(false);
-        }
-
-        self.inc_ts();
         let union_action = UnionAction::new(self);
+        let mut changed = false;
         self.db.with_execution_state(|state| {
-            for (leader, member) in &unions {
-                union_action.union(state, *leader, *member);
+            let mut members = Vec::new();
+            for (block, entries) in refinement.block_members().iter() {
+                members.clear();
+                for &eclass in entries {
+                    let Some(row) = fingerprint_ref.get_row(&[eclass]) else {
+                        continue;
+                    };
+                    if row.vals[block_idx] != *block {
+                        continue;
+                    }
+                    members.push(eclass);
+                }
+                if members.len() <= 1 {
+                    continue;
+                }
+                members.sort();
+                members.dedup();
+                if members.len() <= 1 {
+                    continue;
+                }
+                let leader = members[0];
+                for &eclass in &members[1..] {
+                    union_action.union(state, leader, eclass);
+                    changed = true;
+                }
             }
         });
+        if !changed {
+            return Ok(false);
+        }
         let merged = self.db.merge_all();
         if merged {
             self.rebuild()?;
@@ -1188,9 +1010,3 @@ impl EGraph {
         Ok(merged)
     }
 }
-
-// TODOs before continuing:
-// * seed_block_entry is plumbed incorrectly. It needs to be refreshed properly (like next_ts()).
-// * Remove any info logging or calls to dump_...state()
-// * Remove redundant calls to db.merge_all() [only do it once tests are passing and you can
-// confirm this wasn't needed]
