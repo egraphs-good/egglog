@@ -12,7 +12,9 @@ use crate::{
 /// do not actually use one.
 macro_rules! empty_execution_state {
     ($es:ident) => {
+        #[allow(unused_mut)]
         let mut __db = $crate::free_join::Database::default();
+        #[allow(unused_mut)]
         let mut $es =
             $crate::action::ExecutionState::new(__db.read_only_view(), Default::default());
     };
