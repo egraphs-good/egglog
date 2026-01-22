@@ -235,8 +235,12 @@ fn generate_tests(glob: &str) -> Vec<Trial> {
         let should_fail = run.should_fail();
         let requires_proofs = run.path.parent().unwrap().ends_with("proofs");
         // TODO: math-microbenchmark is too slow right now
-        // TODO: subsume.egg fails because we used a `check` on something subsumed. Need a way to run rules over subsumed things.
-        let proof_unsupported_file_list = ["math-microbenchmark.egg", "subsume.egg"];
+        // TODO: subsume.egg fails because we used a `check` on something subsumed. Need a way to run rules over subsumed things. Same with subsume-relation.egg.
+        let proof_unsupported_file_list = [
+            "math-microbenchmark.egg",
+            "subsume.egg",
+            "subsume-relation.egg",
+        ];
         let supports_proofs = file_supports_proofs(&run.path)
             && !proof_unsupported_file_list
                 .iter()
