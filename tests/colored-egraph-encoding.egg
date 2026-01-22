@@ -24,6 +24,67 @@
 (constructor UF (Expr Expr Context))
 
 
+
+;; One way to implement colored egraphs (that missing the point) is to
+;; copy all the egraphs for each context.
+
+
+;; Colored egraphs are a set of optimizations. We can do a weaker version.
+;; Make the base context (black) special, and all contexts use representatives from the base context eclasses.
+;; If a color does not have any unions in a particular eclass, don't store any nodes for that eclass.
+;; Otherwise, store the full union find for that eclass in that context.
+;; Then you can either:
+;; 1) Avoid keeping all e-nodes for the eclass and just store new ones. But then matching is slower because it has to join on the UF.
+;; 2) Copy all e-nodes from the eclass to that color.
+
+
+
+;; Could possibly work:
+;(rule ((= lhs (Add a b ctx1))
+;       (= b1 (Add c d ctx2))
+;       (UF b1 b' ctx3)
+;       (UF b b' ctx3)
+;       (!= ctx3 basectx)
+;       (IsBaseOrEqual ctx1 ctx3)
+;       (IsBaseOrEqual ctx2 ctx3)
+;       )
+
+;; but this finds matches in all colors, we just want the earliest one
+;; how bad is this in practice?
+;; In actual colored egraphs we match bottom up, starting with the base Context
+;; We only find new matches using colored jumps
+
+
+;; base
+;; |    \                    \
+;; ifif  in other if         in loop
+
+
+;; Summary of meeting
+;; 1) Implementing real colored egraphs is hard due to duplication of matches between multiple colors
+;; 2) We could just take the hit and allowed matching the same thing across multiple colors, and copying the union find for all colors (except no need to copy base color)
+;; It's unclear if this implementation would actually help things like eggcc
+;; might help a lot
+;; 3) Another suggestion: once there are lots of colored unions, clone the e-graph
+
+;; benchmark suite was cases from theorem proving
+
+;; how do we get benchmarks into egglog?
+;; we could adapt eggcc
+;; original paper has a theorem prover with case splits
+;;   It finds splits and applies them somehow, would need to replicate
+
+;; Chris uses aegraphs
+
+; (rule (...normal query))
+
+;; base -> 1 -> 2 -> 3
+
+
+;; f   g
+;; |
+;; a  
+
 ;; The reachable contexts following any equality edge
 ;; via contexts that are "compatible"
 ;; Compatible contexts are ancestors or descendents of the current most specific context
