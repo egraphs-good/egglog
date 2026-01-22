@@ -554,7 +554,7 @@ fn test_subsumed_unextractable_action_extract() {
         )
         .unwrap();
 
-    let CommandOutput::ExtractBest(term_dag, _, term_id) = &outputs[0] else {
+    let CommandOutput::ExtractBest(_term_dag, _, _term_id) = &outputs[0] else {
         panic!("Should get extract best command output");
     };
     // Originally should give back numeric term

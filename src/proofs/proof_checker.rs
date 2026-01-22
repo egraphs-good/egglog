@@ -58,20 +58,19 @@ pub(crate) fn run_merge(
         if let GenericNCommand::Function(func_decl) = cmd {
             if func_decl.name == func_name {
                 // run the merge function for this function using eval_expr
-                let expr =
-                    func_decl
-                        .merge
-                        .as_ref()
-                        .ok_or_else(|| ProofCheckError::FunctionNotFound {
-                            function_name: func_name.to_string(),
-                        })?;
+                let expr = func_decl.merge.as_ref().ok_or_else(|| {
+                    ProofCheckError::from(ProofCheckErrorKind::FunctionNotFound {
+                        function_name: func_name.to_string(),
+                    })
+                })?;
                 return eval_expr_with_subst("merge_function", expr, term_dag, &subst);
             }
         }
     }
-    Err(ProofCheckError::FunctionNotFound {
+    Err(ProofCheckErrorKind::FunctionNotFound {
         function_name: func_name.to_string(),
-    })
+    }
+    .into())
 }
 
 /// Given a sequence of actions, computes:
@@ -155,16 +154,13 @@ fn eval_expr_with_subst(
 
     let term_id = match expr {
         ResolvedExpr::Lit(_, lit) => dag.lit(lit.clone()),
-        ResolvedExpr::Var(_, var) => {
-            subst
-                .get(&var.name)
-                .copied()
-                .ok_or(ProofCheckError::UnboundVariable {
-                    rule_name: rule_name.to_string(),
-                    variable: var.name.clone(),
-                    available: subst.keys().cloned().collect::<Vec<_>>().join(", "),
-                })?
-        }
+        ResolvedExpr::Var(_, var) => subst.get(&var.name).copied().ok_or_else(|| {
+            ProofCheckError::from(ProofCheckErrorKind::UnboundVariable {
+                rule_name: rule_name.to_string(),
+                variable: var.name.clone(),
+                available: subst.keys().cloned().collect::<Vec<_>>().join(", "),
+            })
+        })?,
         ResolvedExpr::Call(_, head, args) => match head {
             ResolvedCall::Func(_func_type) => {
                 let mut arg_terms = Vec::new();
@@ -187,8 +183,10 @@ fn eval_expr_with_subst(
                 let validator = specialized_primitive
                     .validator()
                     .expect("Expected primitive to have validator since proof mode is enabled");
-                validator(dag, &arg_terms).ok_or(ProofCheckError::PrimitiveValidatorFailed {
-                    function_name: specialized_primitive.name().to_string(),
+                validator(dag, &arg_terms).ok_or_else(|| {
+                    ProofCheckError::from(ProofCheckErrorKind::PrimitiveValidatorFailed {
+                        function_name: specialized_primitive.name().to_string(),
+                    })
                 })?
             }
         },
@@ -231,9 +229,28 @@ pub(crate) fn gather_globals(
     ctx.var_bindings
 }
 
-/// Errors that can occur during proof checking
+/// Errors that can occur during proof checking.
+/// This is a boxed wrapper to keep the error type small.
 #[derive(Debug, Clone, Error)]
-pub enum ProofCheckError {
+#[error("{0}")]
+pub struct ProofCheckError(Box<ProofCheckErrorKind>);
+
+impl ProofCheckError {
+    /// Create a new proof check error
+    fn new(kind: ProofCheckErrorKind) -> Self {
+        ProofCheckError(Box::new(kind))
+    }
+}
+
+impl From<ProofCheckErrorKind> for ProofCheckError {
+    fn from(kind: ProofCheckErrorKind) -> Self {
+        ProofCheckError::new(kind)
+    }
+}
+
+/// The kinds of errors that can occur during proof checking
+#[derive(Debug, Clone, Error)]
+pub enum ProofCheckErrorKind {
     /// The proof claims terms are equal but they don't match the actual terms
     #[error(
         "Proof {proof_id} claims to prove {expected_lhs:?} = {expected_rhs:?}, but actually proves {actual_lhs:?} = {actual_rhs:?}"
@@ -258,14 +275,18 @@ pub enum ProofCheckError {
     #[error("Proof {proof_id}: congruence error - base proof rhs is not a function application")]
     CongruenceBaseNotApp { proof_id: ProofId },
     /// Congruence proof: child index out of bounds
-    #[error("Proof {proof_id}: congruence error - child index {child_index} out of bounds for term with {num_children} children")]
+    #[error(
+        "Proof {proof_id}: congruence error - child index {child_index} out of bounds for term with {num_children} children"
+    )]
     CongruenceChildIndexOutOfBounds {
         proof_id: ProofId,
         child_index: usize,
         num_children: usize,
     },
     /// Congruence proof: child proof lhs doesn't match base term child
-    #[error("Proof {proof_id}: congruence error - child proof lhs {child_lhs:?} doesn't match base term child {base_child:?} at index {child_index}")]
+    #[error(
+        "Proof {proof_id}: congruence error - child proof lhs {child_lhs:?} doesn't match base term child {base_child:?} at index {child_index}"
+    )]
     CongruenceChildMismatch {
         proof_id: ProofId,
         child_lhs: TermId,
@@ -273,7 +294,9 @@ pub enum ProofCheckError {
         child_index: usize,
     },
     /// Congruence proof: result doesn't match expected
-    #[error("Proof {proof_id}: congruence error - proof rhs {proof_rhs:?} doesn't match expected {expected_rhs:?}")]
+    #[error(
+        "Proof {proof_id}: congruence error - proof rhs {proof_rhs:?} doesn't match expected {expected_rhs:?}"
+    )]
     CongruenceResultMismatch {
         proof_id: ProofId,
         proof_rhs: TermId,
@@ -293,14 +316,18 @@ pub enum ProofCheckError {
         actual: usize,
     },
     /// Variable not found in substitution during proof checking
-    #[error("Rule '{rule_name}': variable '{variable}' not found in substitution. Available: {available}")]
+    #[error(
+        "Rule '{rule_name}': variable '{variable}' not found in substitution. Available: {available}"
+    )]
     UnboundVariable {
         rule_name: String,
         variable: String,
         available: String,
     },
     /// Function fact doesn't match the expected reflexive equality proposition
-    #[error("Rule '{rule_name}': function fact mismatch - expected reflexive equality for {expected}, got {actual_lhs} = {actual_rhs}")]
+    #[error(
+        "Rule '{rule_name}': function fact mismatch - expected reflexive equality for {expected}, got {actual_lhs} = {actual_rhs}"
+    )]
     FunctionFactMismatch {
         rule_name: String,
         expected: String,
@@ -308,7 +335,9 @@ pub enum ProofCheckError {
         actual_rhs: String,
     },
     /// Equality fact doesn't match the proven proposition under substitution
-    #[error("Rule '{rule_name}': equality fact mismatch under substitution.\nFact: {fact}\nSubstituted: (= {substituted_lhs} {substituted_rhs})\nPremise proves: (= {proven_lhs} {proven_rhs})")]
+    #[error(
+        "Rule '{rule_name}': equality fact mismatch under substitution.\nFact: {fact}\nSubstituted: (= {substituted_lhs} {substituted_rhs})\nPremise proves: (= {proven_lhs} {proven_rhs})"
+    )]
     EqualityFactMismatch {
         rule_name: String,
         fact: String,
@@ -318,7 +347,9 @@ pub enum ProofCheckError {
         proven_rhs: String,
     },
     /// Plain fact expression doesn't match proposition under substitution
-    #[error("Rule '{rule_name}': fact mismatch - {fact} under substitution {substitution} gives {actual}, expected {expected}")]
+    #[error(
+        "Rule '{rule_name}': fact mismatch - {fact} under substitution {substitution} gives {actual}, expected {expected}"
+    )]
     FactMismatch {
         rule_name: String,
         fact: String,
@@ -327,7 +358,9 @@ pub enum ProofCheckError {
         expected: String,
     },
     /// Rule head actions don't produce the claimed equality
-    #[error("Rule '{rule_name}': rule head doesn't produce claimed equality.\nLHS: {claimed_lhs}\nRHS: {claimed_rhs}\nSubstitution: {substitution}")]
+    #[error(
+        "Rule '{rule_name}': rule head doesn't produce claimed equality.\nLHS: {claimed_lhs}\nRHS: {claimed_rhs}\nSubstitution: {substitution}"
+    )]
     RuleHeadMismatch {
         rule_name: String,
         claimed_lhs: String,
@@ -347,14 +380,18 @@ pub enum ProofCheckError {
     #[error("Could not find function '{function_name}'")]
     FunctionNotFound { function_name: String },
     /// Fiat proof claims equality not established by globals
-    #[error("Proof {proof_id}: Fiat proof claims {lhs:?} = {rhs:?}, which is not established by globals")]
+    #[error(
+        "Proof {proof_id}: Fiat proof claims {lhs:?} = {rhs:?}, which is not established by globals"
+    )]
     InvalidFiat {
         proof_id: ProofId,
         lhs: TermId,
         rhs: TermId,
     },
     /// MergeFn proof: old and new proofs are for different functions
-    #[error("Proof {proof_id}: MergeFn error - old and new proofs should be for the same function, but got {old_func} and {new_func}")]
+    #[error(
+        "Proof {proof_id}: MergeFn error - old and new proofs should be for the same function, but got {old_func} and {new_func}"
+    )]
     MergeFnFunctionMismatch {
         proof_id: ProofId,
         old_func: String,
@@ -364,17 +401,23 @@ pub enum ProofCheckError {
     #[error("Proof {proof_id}: MergeFn error - {which} view term has no arguments")]
     MergeFnEmptyArgs { proof_id: ProofId, which: String },
     /// MergeFn proof: old and new view terms have different input arguments
-    #[error("Proof {proof_id}: MergeFn error - old and new view terms have different input arguments")]
+    #[error(
+        "Proof {proof_id}: MergeFn error - old and new view terms have different input arguments"
+    )]
     MergeFnInputMismatch { proof_id: ProofId },
     /// MergeFn proof: expected function application terms
-    #[error("Proof {proof_id}: MergeFn error - expected function application terms, got {old_term:?} and {new_term:?}")]
+    #[error(
+        "Proof {proof_id}: MergeFn error - expected function application terms, got {old_term:?} and {new_term:?}"
+    )]
     MergeFnNotApp {
         proof_id: ProofId,
         old_term: TermId,
         new_term: TermId,
     },
     /// MergeFn proof: claimed equality not established by merge function
-    #[error("Proof {proof_id}: MergeFn error - proof claims {claimed_lhs} = {claimed_rhs}, which is not established by merge function")]
+    #[error(
+        "Proof {proof_id}: MergeFn error - proof claims {claimed_lhs} = {claimed_rhs}, which is not established by merge function"
+    )]
     MergeFnResultMismatch {
         proof_id: ProofId,
         claimed_lhs: String,
@@ -462,11 +505,12 @@ impl ProofStore {
                 {
                     Ok(Proposition::new(proof.lhs(), proof.rhs()))
                 } else {
-                    Err(ProofCheckError::InvalidFiat {
+                    Err(ProofCheckErrorKind::InvalidFiat {
                         proof_id,
                         lhs: proof.lhs(),
                         rhs: proof.rhs(),
-                    })
+                    }
+                    .into())
                 }
             }
 
@@ -482,18 +526,21 @@ impl ProofStore {
                         GenericNCommand::NormRule { rule } if &rule.name == name => Some(rule),
                         _ => None,
                     })
-                    .ok_or_else(|| ProofCheckError::RuleNotFound {
-                        rule_name: name.clone(),
+                    .ok_or_else(|| {
+                        ProofCheckError::from(ProofCheckErrorKind::RuleNotFound {
+                            rule_name: name.clone(),
+                        })
                     })?;
 
                 // Check premise count
                 if rule.body.len() != premise_proofs.len() {
-                    return Err(ProofCheckError::RulePremiseCountMismatch {
+                    return Err(ProofCheckErrorKind::RulePremiseCountMismatch {
                         proof_id,
                         rule_name: name.clone(),
                         expected: rule.body.len(),
                         actual: premise_proofs.len(),
-                    });
+                    }
+                    .into());
                 }
 
                 // Check each premise proof
@@ -534,56 +581,56 @@ impl ProofStore {
                 let old_view_term = self.term_dag.get(old_rhs);
                 let new_view_term = self.term_dag.get(new_rhs);
 
-                let (old_term, new_term, view_head, input_args) = match (
-                    old_view_term.clone(),
-                    new_view_term.clone(),
-                ) {
-                    (Term::App(old_head, old_args), Term::App(new_head, new_args)) => {
-                        // Verify both are views of the same function
-                        if old_head != new_head {
-                            return Err(ProofCheckError::MergeFnFunctionMismatch {
-                                proof_id,
-                                old_func: old_head.clone(),
-                                new_func: new_head.clone(),
-                            });
-                        }
-                        // The last argument is the output
-                        let old_output =
-                            *old_args
-                                .last()
-                                .ok_or_else(|| ProofCheckError::MergeFnEmptyArgs {
+                let (old_term, new_term, view_head, input_args) =
+                    match (old_view_term.clone(), new_view_term.clone()) {
+                        (Term::App(old_head, old_args), Term::App(new_head, new_args)) => {
+                            // Verify both are views of the same function
+                            if old_head != new_head {
+                                return Err(ProofCheckErrorKind::MergeFnFunctionMismatch {
+                                    proof_id,
+                                    old_func: old_head.clone(),
+                                    new_func: new_head.clone(),
+                                }
+                                .into());
+                            }
+                            // The last argument is the output
+                            let old_output = *old_args.last().ok_or_else(|| {
+                                ProofCheckError::from(ProofCheckErrorKind::MergeFnEmptyArgs {
                                     proof_id,
                                     which: "old".to_string(),
-                                })?;
-                        let new_output =
-                            *new_args
-                                .last()
-                                .ok_or_else(|| ProofCheckError::MergeFnEmptyArgs {
+                                })
+                            })?;
+                            let new_output = *new_args.last().ok_or_else(|| {
+                                ProofCheckError::from(ProofCheckErrorKind::MergeFnEmptyArgs {
                                     proof_id,
                                     which: "new".to_string(),
-                                })?;
-                        // Get the input arguments (all but the last)
-                        let inputs: Vec<TermId> = old_args[..old_args.len() - 1].to_vec();
-                        // inputs should match for old and new
-                        if inputs.len() != new_args.len() - 1
-                            || inputs
-                                .iter()
-                                .zip(new_args[..new_args.len() - 1].iter())
-                                .any(|(a, b)| a != b)
-                        {
-                            return Err(ProofCheckError::MergeFnInputMismatch { proof_id });
-                        }
+                                })
+                            })?;
+                            // Get the input arguments (all but the last)
+                            let inputs: Vec<TermId> = old_args[..old_args.len() - 1].to_vec();
+                            // inputs should match for old and new
+                            if inputs.len() != new_args.len() - 1
+                                || inputs
+                                    .iter()
+                                    .zip(new_args[..new_args.len() - 1].iter())
+                                    .any(|(a, b)| a != b)
+                            {
+                                return Err(
+                                    ProofCheckErrorKind::MergeFnInputMismatch { proof_id }.into()
+                                );
+                            }
 
-                        (old_output, new_output, old_head.clone(), inputs)
-                    }
-                    _ => {
-                        return Err(ProofCheckError::MergeFnNotApp {
-                            proof_id,
-                            old_term: old_rhs,
-                            new_term: new_rhs,
-                        });
-                    }
-                };
+                            (old_output, new_output, old_head.clone(), inputs)
+                        }
+                        _ => {
+                            return Err(ProofCheckErrorKind::MergeFnNotApp {
+                                proof_id,
+                                old_term: old_rhs,
+                                new_term: new_rhs,
+                            }
+                            .into());
+                        }
+                    };
 
                 // Run the merge function to get the expected result
                 let (merged_term_child, mut merged_props) =
@@ -595,17 +642,16 @@ impl ProofStore {
                 merged_props.insert(Proposition::new(merged_term, merged_term));
                 // Verify the proof's claimed equality is in the merged propositions
                 if !merged_props.contains(&Proposition::new(proof.lhs(), proof.rhs())) {
-                    return Err(ProofCheckError::MergeFnResultMismatch {
+                    return Err(ProofCheckErrorKind::MergeFnResultMismatch {
                         proof_id,
-                        claimed_lhs: self.term_dag.to_string_with_let(
-                            &mut SymbolGen::new("".to_string()),
-                            proof.lhs(),
-                        ),
-                        claimed_rhs: self.term_dag.to_string_with_let(
-                            &mut SymbolGen::new("".to_string()),
-                            proof.rhs(),
-                        ),
-                    });
+                        claimed_lhs: self
+                            .term_dag
+                            .to_string_with_let(&mut SymbolGen::new("".to_string()), proof.lhs()),
+                        claimed_rhs: self
+                            .term_dag
+                            .to_string_with_let(&mut SymbolGen::new("".to_string()), proof.rhs()),
+                    }
+                    .into());
                 }
 
                 Ok(Proposition::new(proof.lhs(), proof.rhs()))
@@ -621,22 +667,24 @@ impl ProofStore {
 
                 // Check transitivity: left.rhs must equal right.lhs
                 if left_rhs != right_lhs {
-                    return Err(ProofCheckError::TransitivityMismatch {
+                    return Err(ProofCheckErrorKind::TransitivityMismatch {
                         proof_id,
                         left_rhs,
                         right_lhs,
-                    });
+                    }
+                    .into());
                 }
 
                 // Result should be left_lhs = right_rhs
                 if proof.lhs() != left_lhs || proof.rhs() != right_rhs {
-                    return Err(ProofCheckError::TermMismatch {
+                    return Err(ProofCheckErrorKind::TermMismatch {
                         proof_id,
                         expected_lhs: proof.lhs(),
                         expected_rhs: proof.rhs(),
                         actual_lhs: left_lhs,
                         actual_rhs: right_rhs,
-                    });
+                    }
+                    .into());
                 }
 
                 Ok(Proposition::new(proof.lhs(), proof.rhs()))
@@ -649,13 +697,14 @@ impl ProofStore {
 
                 // Symmetry swaps lhs and rhs
                 if proof.lhs() != inner_rhs || proof.rhs() != inner_lhs {
-                    return Err(ProofCheckError::TermMismatch {
+                    return Err(ProofCheckErrorKind::TermMismatch {
                         proof_id,
                         expected_lhs: proof.lhs(),
                         expected_rhs: proof.rhs(),
                         actual_lhs: inner_rhs,
                         actual_rhs: inner_lhs,
-                    });
+                    }
+                    .into());
                 }
 
                 Ok(Proposition::new(proof.lhs(), proof.rhs()))
@@ -678,27 +727,29 @@ impl ProofStore {
                 let (func_name, children) = match self.term_dag.get(base_rhs) {
                     Term::App(f, cs) => (f.clone(), cs.clone()),
                     _ => {
-                        return Err(ProofCheckError::CongruenceBaseNotApp { proof_id });
+                        return Err(ProofCheckErrorKind::CongruenceBaseNotApp { proof_id }.into());
                     }
                 };
 
                 // Check child_index is valid
                 if *child_index >= children.len() {
-                    return Err(ProofCheckError::CongruenceChildIndexOutOfBounds {
+                    return Err(ProofCheckErrorKind::CongruenceChildIndexOutOfBounds {
                         proof_id,
                         child_index: *child_index,
                         num_children: children.len(),
-                    });
+                    }
+                    .into());
                 }
 
                 // Check that child_lhs matches the child at child_index
                 if children[*child_index] != child_lhs {
-                    return Err(ProofCheckError::CongruenceChildMismatch {
+                    return Err(ProofCheckErrorKind::CongruenceChildMismatch {
                         proof_id,
                         child_lhs,
                         base_child: children[*child_index],
                         child_index: *child_index,
-                    });
+                    }
+                    .into());
                 }
 
                 // Construct the expected new term by replacing the child
@@ -716,16 +767,17 @@ impl ProofStore {
 
                 // Verify proof.rhs() matches expected
                 if proof.rhs() != expected_rhs_id {
-                    return Err(ProofCheckError::CongruenceResultMismatch {
+                    return Err(ProofCheckErrorKind::CongruenceResultMismatch {
                         proof_id,
                         proof_rhs: proof.rhs(),
                         expected_rhs: expected_rhs_id,
-                    });
+                    }
+                    .into());
                 }
 
                 // Verify proof.lhs() matches base_lhs
                 if proof.lhs() != base_lhs {
-                    return Err(ProofCheckError::CongruenceLhsMismatch { proof_id });
+                    return Err(ProofCheckErrorKind::CongruenceLhsMismatch { proof_id }.into());
                 }
 
                 Ok(Proposition::new(proof.lhs(), proof.rhs()))
@@ -767,7 +819,7 @@ impl ProofStore {
             ) => {
                 // Get the output variable's term
                 let var_term = substitution.get(&v.name).copied().ok_or_else(|| {
-                    ProofCheckError::UnboundVariable {
+                    ProofCheckErrorKind::UnboundVariable {
                         rule_name: rule_name.to_string(),
                         variable: v.name.clone(),
                         available: substitution.keys().cloned().collect::<Vec<_>>().join(", "),
@@ -786,12 +838,13 @@ impl ProofStore {
 
                 // The proposition should be a reflexive equality for this term
                 if lhs != expected_term_id || rhs != expected_term_id {
-                    return Err(ProofCheckError::FunctionFactMismatch {
+                    return Err(ProofCheckErrorKind::FunctionFactMismatch {
                         rule_name: rule_name.to_string(),
                         expected: format_term(&self.term_dag, expected_term_id),
                         actual_lhs: format_term(&self.term_dag, lhs),
                         actual_rhs: format_term(&self.term_dag, rhs),
-                    });
+                    }
+                    .into());
                 }
 
                 Ok(())
@@ -800,14 +853,15 @@ impl ProofStore {
                 let fact_lhs = self.eval_expr_with_subst(rule_name, lhs_expr, substitution)?;
                 let fact_rhs = self.eval_expr_with_subst(rule_name, rhs_expr, substitution)?;
                 if fact_lhs != lhs || fact_rhs != rhs {
-                    return Err(ProofCheckError::EqualityFactMismatch {
+                    return Err(ProofCheckErrorKind::EqualityFactMismatch {
                         rule_name: rule_name.to_string(),
                         fact: format!("{fact}"),
                         substituted_lhs: self.term_dag.to_string(fact_lhs),
                         substituted_rhs: self.term_dag.to_string(fact_rhs),
                         proven_lhs: format_term(&self.term_dag, lhs),
                         proven_rhs: format_term(&self.term_dag, rhs),
-                    });
+                    }
+                    .into());
                 }
 
                 Ok(())
@@ -817,13 +871,14 @@ impl ProofStore {
                 let fact_term = self.eval_expr_with_subst(rule_name, expr, substitution)?;
 
                 if fact_term != rhs {
-                    return Err(ProofCheckError::FactMismatch {
+                    return Err(ProofCheckErrorKind::FactMismatch {
                         rule_name: rule_name.to_string(),
                         fact: format!("{fact}"),
                         substitution: format_substitution(&self.term_dag, substitution),
                         actual: format_term(&self.term_dag, rhs),
                         expected: format_term(&self.term_dag, fact_term),
-                    });
+                    }
+                    .into());
                 }
 
                 Ok(())
@@ -841,11 +896,11 @@ impl ProofStore {
         match expr {
             ResolvedExpr::Lit(_, lit) => Ok(self.term_dag.lit(lit.clone())),
             ResolvedExpr::Var(_, var) => substitution.get(&var.name).copied().ok_or_else(|| {
-                ProofCheckError::UnboundVariable {
+                ProofCheckError::from(ProofCheckErrorKind::UnboundVariable {
                     rule_name: rule_name.to_string(),
                     variable: var.name.clone(),
                     available: substitution.keys().cloned().collect::<Vec<_>>().join(", "),
-                }
+                })
             }),
             ResolvedExpr::Call(_, head, args) => {
                 // Evaluate all arguments first
@@ -860,16 +915,17 @@ impl ProofStore {
                         if let Some(validator) = prim.validator() {
                             let result =
                                 validator(&mut self.term_dag, &arg_terms).ok_or_else(|| {
-                                    ProofCheckError::PrimitiveValidatorFailed {
+                                    ProofCheckErrorKind::PrimitiveValidatorFailed {
                                         function_name: prim.name().to_string(),
                                     }
                                 })?;
                             Ok(result)
                         } else {
                             // No validator available - primitives without validators can't be checked in proofs
-                            Err(ProofCheckError::PrimitiveNoValidator {
+                            Err(ProofCheckErrorKind::PrimitiveNoValidator {
                                 function_name: prim.name().to_string(),
-                            })
+                            }
+                            .into())
                         }
                     }
                     ResolvedCall::Func(func) => {
@@ -916,11 +972,12 @@ impl ProofStore {
             return Ok(());
         }
 
-        Err(ProofCheckError::RuleHeadMismatch {
+        Err(ProofCheckErrorKind::RuleHeadMismatch {
             rule_name: rule_name.to_string(),
             claimed_lhs: format_term(&self.term_dag, claimed.lhs()),
             claimed_rhs: format_term(&self.term_dag, claimed.rhs()),
             substitution: format_substitution(&self.term_dag, substitution),
-        })
+        }
+        .into())
     }
 }
