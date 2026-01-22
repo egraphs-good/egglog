@@ -211,16 +211,18 @@ If term `a` has parent `b`, it stores a
 
 
 ```text
-(constructor AddView (i64 i64 Math) view)
+(function AddViewProof (i64 i64 Math) Proof :merge old)
 ```
 
 View tables are the trickiest.
+We store a separate proof table per view table.
 Recall that view tables store a term
   along with the e-class representative.
 For a term `t` with representative `r`,
   the proof proves that `r = t`.
 The direction is important, making
   proof production easier later.
+We store the earliest proof currently.
 
 
 ```text

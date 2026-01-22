@@ -157,7 +157,7 @@ impl<'a> ProofInstrumentor<'a> {
                 )
             };
 
-        let parent_direct_ruleset_name = self.parent_direct_ruleset_name();
+        let path_compress_ruleset_name = self.proof_names().path_compress_ruleset_name.clone();
         let single_parent_ruleset_name = self.proof_names().single_parent_ruleset_name.clone();
 
         self.parse_program(&format!(
@@ -165,6 +165,7 @@ impl<'a> ProofInstrumentor<'a> {
              (constructor {pname} ({sort_name} {sort_name}) {fresh_sort})
              {to_ast_constructor_code}
              {proof_tables}
+             ;; performs path compression, ensuring each term points to the representative
              (rule (({pname} a b)
                     ({pname} b c)
                     (!= b c)
@@ -172,8 +173,9 @@ impl<'a> ProofInstrumentor<'a> {
                   ((delete ({pname} a b))
                    ({pname} a c)
                    {proof_action1})
-                   :ruleset {parent_direct_ruleset_name}
+                   :ruleset {path_compress_ruleset_name}
                    :name \"{fresh_name}\")
+             ;; ensures each term has only one parent
              (rule (({pname} a b)
                     ({pname} a c)
                     (!= b c)
@@ -201,7 +203,7 @@ impl<'a> ProofInstrumentor<'a> {
         let to_delete_name = self.delete_name(&fdecl.name);
         let subsumed_name = self.subsumed_name(&fdecl.name);
         let view_name = self.view_name(&fdecl.name);
-        let delete_subsume_ruleset = self.delete_subsume_ruleset_name();
+        let delete_subsume_ruleset = self.proof_names().delete_subsume_ruleset_name.clone();
         let fresh_name = self.egraph.parser.symbol_gen.fresh("delete_rule");
 
         // Subsume could use delete, except that `check` ignores subsumption.
@@ -232,7 +234,7 @@ impl<'a> ProofInstrumentor<'a> {
             .map(|(i, _)| format!("c{i}_"))
             .collect::<Vec<_>>();
         let child_names_str = child_names.join(" ");
-        let rebuilding_ruleset = self.rebuilding_ruleset_name();
+        let rebuilding_ruleset = self.proof_names().rebuilding_ruleset_name.clone();
         let view_name = self.view_name(&fdecl.name);
         if fdecl.subtype == FunctionSubtype::Custom {
             let name = &fdecl.name;
@@ -242,12 +244,14 @@ impl<'a> ProofInstrumentor<'a> {
                 .as_ref()
                 .unwrap_or_else(|| panic!("Proofs don't support :no-merge"));
 
-            let rebuilding_cleanup_ruleset = self.rebuilding_cleanup_ruleset_name();
             let fresh_name = self.egraph.parser.symbol_gen.fresh("merge_rule");
             let cleanup_name = self.egraph.parser.symbol_gen.fresh("merge_cleanup");
+
             let p1_fresh = self.egraph.parser.symbol_gen.fresh("p1");
             let p2_fresh = self.egraph.parser.symbol_gen.fresh("p2");
             let view_proof_name = self.view_proof_name(&fdecl.name);
+            let rebuilding_cleanup_ruleset =
+                self.proof_names().rebuilding_cleanup_ruleset_name.clone();
             let proof_query = if self.egraph.proof_state.proofs_enabled {
                 format!(
                     "(= {p1_fresh} ({view_proof_name} {child_names_str} old))
@@ -501,7 +505,7 @@ impl<'a> ProofInstrumentor<'a> {
                       (delete ({view_name} {children}))
                      )
                       :ruleset {} :name \"{fresh_name}\")",
-                self.rebuilding_ruleset_name(),
+                self.proof_names().rebuilding_ruleset_name
             );
             res.extend(self.parse_program(&rule));
         }
@@ -1032,17 +1036,17 @@ impl<'a> ProofInstrumentor<'a> {
 
     /// Any schedule should be sound as long as we saturate.
     fn rebuild(&mut self) -> Schedule {
-        let parent_direct_ruleset = self.parent_direct_ruleset_name();
+        let path_compress_ruleset = self.proof_names().path_compress_ruleset_name.clone();
         let single_parent = self.proof_names().single_parent_ruleset_name.clone();
-        let rebuilding_cleanup_ruleset = self.rebuilding_cleanup_ruleset_name();
-        let rebuilding_ruleset = self.rebuilding_ruleset_name();
-        let delete_ruleset = self.delete_subsume_ruleset_name();
+        let rebuilding_cleanup_ruleset = self.proof_names().rebuilding_cleanup_ruleset_name.clone();
+        let rebuilding_ruleset = self.proof_names().rebuilding_ruleset_name.clone();
+        let delete_ruleset = self.proof_names().delete_subsume_ruleset_name.clone();
         self.parse_schedule(format!(
             "(seq
               (saturate
                   {rebuilding_cleanup_ruleset}
                   (saturate {single_parent})
-                  (saturate {parent_direct_ruleset})
+                  (saturate {path_compress_ruleset})
                   {rebuilding_ruleset})
               {delete_ruleset})"
         ))

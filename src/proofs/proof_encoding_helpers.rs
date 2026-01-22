@@ -35,7 +35,7 @@ pub(crate) struct EncodingNames {
     pub(crate) pcons: String,
     pub(crate) pnil: String,
     // Ruleset names
-    pub(crate) parent_direct_ruleset_name: String,
+    pub(crate) path_compress_ruleset_name: String,
     pub(crate) rebuilding_ruleset_name: String,
     pub(crate) rebuilding_cleanup_ruleset_name: String,
     pub(crate) delete_subsume_ruleset_name: String,
@@ -75,7 +75,7 @@ impl EncodingNames {
             single_parent_ruleset_name: symbol_gen.fresh("single_parent"),
             pcons: symbol_gen.fresh("PCons"),
             pnil: symbol_gen.fresh("PNil"),
-            parent_direct_ruleset_name: symbol_gen.fresh("parent"),
+            path_compress_ruleset_name: symbol_gen.fresh("parent"),
             rebuilding_ruleset_name: symbol_gen.fresh("rebuilding"),
             rebuilding_cleanup_ruleset_name: symbol_gen.fresh("rebuilding_cleanup"),
             delete_subsume_ruleset_name: symbol_gen.fresh("delete_subsume_ruleset"),
@@ -141,38 +141,6 @@ impl<'a> ProofInstrumentor<'a> {
         prooflist
     }
 
-    pub(crate) fn parent_direct_ruleset_name(&self) -> String {
-        self.egraph
-            .proof_state
-            .proof_names
-            .parent_direct_ruleset_name
-            .clone()
-    }
-
-    pub(crate) fn rebuilding_ruleset_name(&self) -> String {
-        self.egraph
-            .proof_state
-            .proof_names
-            .rebuilding_ruleset_name
-            .clone()
-    }
-
-    pub(crate) fn rebuilding_cleanup_ruleset_name(&self) -> String {
-        self.egraph
-            .proof_state
-            .proof_names
-            .rebuilding_cleanup_ruleset_name
-            .clone()
-    }
-
-    pub(crate) fn delete_subsume_ruleset_name(&self) -> String {
-        self.egraph
-            .proof_state
-            .proof_names
-            .delete_subsume_ruleset_name
-            .clone()
-    }
-
     /// Header commands for term encoding, setting up rulesets.
     pub(crate) fn term_header(&mut self) -> Vec<Command> {
         let str = format!(
@@ -181,11 +149,11 @@ impl<'a> ProofInstrumentor<'a> {
              (ruleset {})
              (ruleset {})
              (ruleset {})",
-            self.parent_direct_ruleset_name(),
+            self.proof_names().path_compress_ruleset_name,
             self.proof_names().single_parent_ruleset_name,
-            self.rebuilding_ruleset_name(),
-            self.rebuilding_cleanup_ruleset_name(),
-            self.delete_subsume_ruleset_name(),
+            self.proof_names().rebuilding_ruleset_name,
+            self.proof_names().rebuilding_cleanup_ruleset_name,
+            self.proof_names().delete_subsume_ruleset_name
         );
         self.parse_program(&str)
     }
@@ -446,7 +414,7 @@ impl<'a> ProofInstrumentor<'a> {
 
 ;; Fiat justification for globals and primitives, gives two terms t1 = t2 for the proposition being justified
 (constructor {fiat_constructor} ({ast_sort} {ast_sort}) {proof_datatype})
-;; name of rule and one proof per fact in the query
+;; name of rule, one proof per fact in the query, proposition being proven t1 = t2
 (constructor {rule_constructor} (String {proof_list_sort} {ast_sort} {ast_sort}) {proof_datatype})
 
 ;; merge function justification- name of function and two proofs for the two terms being merged,
