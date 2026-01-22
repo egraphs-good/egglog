@@ -59,11 +59,20 @@ impl RenderedTerm {
     }
 }
 
+/// Context used during term rendering with let-binding support.
 struct TermRenderContext<'a> {
+    /// Generator for fresh variable names used in let bindings.
     fresh: &'a mut SymbolGen,
+    /// Maps each term ID to the number of times it is referenced in the DAG.
+    /// Terms referenced multiple times are candidates for let-binding.
     ref_counts: &'a HashMap<TermId, usize>,
+    /// Maps each term ID to its size (number of nodes in the subtree).
+    /// Used to decide whether a term is large enough to warrant let-binding.
     sizes: &'a HashMap<TermId, usize>,
+    /// Maps term IDs to the variable names they've been bound to.
+    /// Once a term is let-bound, subsequent references use this name.
     bindings: HashMap<TermId, String>,
+    /// Buffer where let bindings are accumulated as they are created.
     buf: &'a mut String,
     /// Function that takes a constructor name and returns the name hint to use
     name_hint_fn: Box<dyn Fn(&str) -> String + 'a>,
