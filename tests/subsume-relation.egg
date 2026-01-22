@@ -6,5 +6,4 @@
 (R (A) (C))
 (union (B) (C))
 
-; TODO term encoding and egglog semantics don't agree- asking in slack
-;(fail (check (R (A) (B))))
+(check (R (A) (B)))
