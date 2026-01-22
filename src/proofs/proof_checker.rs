@@ -159,9 +159,10 @@ fn eval_expr_with_subst(
             subst
                 .get(&var.name)
                 .copied()
-                .ok_or(ProofCheckError::RuleSubstitutionMismatch {
+                .ok_or(ProofCheckError::UnboundVariable {
                     rule_name: rule_name.to_string(),
-                    reason: format!("Variable {} not found in substitution", var.name),
+                    variable: var.name.clone(),
+                    available: subst.keys().cloned().collect::<Vec<_>>().join(", "),
                 })?
         }
         ResolvedExpr::Call(_, head, args) => match head {
@@ -186,9 +187,8 @@ fn eval_expr_with_subst(
                 let validator = specialized_primitive
                     .validator()
                     .expect("Expected primitive to have validator since proof mode is enabled");
-                validator(dag, &arg_terms).ok_or(ProofCheckError::PrimitiveValidationFailed {
+                validator(dag, &arg_terms).ok_or(ProofCheckError::PrimitiveValidatorFailed {
                     function_name: specialized_primitive.name().to_string(),
-                    reason: "Primitive validator failed".to_string(),
                 })?
             }
         },
@@ -254,9 +254,34 @@ pub enum ProofCheckError {
         left_rhs: TermId,
         right_lhs: TermId,
     },
-    /// Congruence proof has invalid structure
-    #[error("Proof {proof_id}: congruence error: {reason}")]
-    CongruenceMismatch { proof_id: ProofId, reason: String },
+    /// Congruence proof: base rhs is not a function application
+    #[error("Proof {proof_id}: congruence error - base proof rhs is not a function application")]
+    CongruenceBaseNotApp { proof_id: ProofId },
+    /// Congruence proof: child index out of bounds
+    #[error("Proof {proof_id}: congruence error - child index {child_index} out of bounds for term with {num_children} children")]
+    CongruenceChildIndexOutOfBounds {
+        proof_id: ProofId,
+        child_index: usize,
+        num_children: usize,
+    },
+    /// Congruence proof: child proof lhs doesn't match base term child
+    #[error("Proof {proof_id}: congruence error - child proof lhs {child_lhs:?} doesn't match base term child {base_child:?} at index {child_index}")]
+    CongruenceChildMismatch {
+        proof_id: ProofId,
+        child_lhs: TermId,
+        base_child: TermId,
+        child_index: usize,
+    },
+    /// Congruence proof: result doesn't match expected
+    #[error("Proof {proof_id}: congruence error - proof rhs {proof_rhs:?} doesn't match expected {expected_rhs:?}")]
+    CongruenceResultMismatch {
+        proof_id: ProofId,
+        proof_rhs: TermId,
+        expected_rhs: TermId,
+    },
+    /// Congruence proof: lhs doesn't match base proof lhs
+    #[error("Proof {proof_id}: congruence error - proof lhs doesn't match base proof lhs")]
+    CongruenceLhsMismatch { proof_id: ProofId },
     /// Rule application has wrong number of premises
     #[error(
         "Proof {proof_id}: rule '{rule_name}' expects {expected} premises, but proof has {actual}"
@@ -267,27 +292,94 @@ pub enum ProofCheckError {
         expected: usize,
         actual: usize,
     },
-    /// Rule substitution doesn't match the proof
-    #[error("Rule '{rule_name}' substitution error: {reason}")]
-    RuleSubstitutionMismatch { rule_name: String, reason: String },
-    /// Primitive operation validator failed
-    #[error("Primitive '{function_name}' validation failed: {reason}")]
-    PrimitiveValidationFailed {
-        function_name: String,
-        reason: String,
+    /// Variable not found in substitution during proof checking
+    #[error("Rule '{rule_name}': variable '{variable}' not found in substitution. Available: {available}")]
+    UnboundVariable {
+        rule_name: String,
+        variable: String,
+        available: String,
     },
+    /// Function fact doesn't match the expected reflexive equality proposition
+    #[error("Rule '{rule_name}': function fact mismatch - expected reflexive equality for {expected}, got {actual_lhs} = {actual_rhs}")]
+    FunctionFactMismatch {
+        rule_name: String,
+        expected: String,
+        actual_lhs: String,
+        actual_rhs: String,
+    },
+    /// Equality fact doesn't match the proven proposition under substitution
+    #[error("Rule '{rule_name}': equality fact mismatch under substitution.\nFact: {fact}\nSubstituted: (= {substituted_lhs} {substituted_rhs})\nPremise proves: (= {proven_lhs} {proven_rhs})")]
+    EqualityFactMismatch {
+        rule_name: String,
+        fact: String,
+        substituted_lhs: String,
+        substituted_rhs: String,
+        proven_lhs: String,
+        proven_rhs: String,
+    },
+    /// Plain fact expression doesn't match proposition under substitution
+    #[error("Rule '{rule_name}': fact mismatch - {fact} under substitution {substitution} gives {actual}, expected {expected}")]
+    FactMismatch {
+        rule_name: String,
+        fact: String,
+        substitution: String,
+        actual: String,
+        expected: String,
+    },
+    /// Rule head actions don't produce the claimed equality
+    #[error("Rule '{rule_name}': rule head doesn't produce claimed equality.\nLHS: {claimed_lhs}\nRHS: {claimed_rhs}\nSubstitution: {substitution}")]
+    RuleHeadMismatch {
+        rule_name: String,
+        claimed_lhs: String,
+        claimed_rhs: String,
+        substitution: String,
+    },
+    /// Primitive operation validator failed
+    #[error("Primitive '{function_name}' validation failed")]
+    PrimitiveValidatorFailed { function_name: String },
+    /// Primitive has no validator for proof checking
+    #[error("Primitive '{function_name}' has no validator - cannot verify in proof")]
+    PrimitiveNoValidator { function_name: String },
     /// Could not find the rule referenced in a proof
     #[error("Could not find rule '{rule_name}'")]
     RuleNotFound { rule_name: String },
     /// Could not find the function referenced in a proof
     #[error("Could not find function '{function_name}'")]
     FunctionNotFound { function_name: String },
-    /// Fiat proof is invalid (not a global or literal)
-    #[error("Proof {proof_id}: Fiat proof invalid: {reason}")]
-    InvalidFiat { proof_id: ProofId, reason: String },
-    /// MergeFn proof check failed
-    #[error("Proof {proof_id}: MergeFn error: {reason}")]
-    MergeFnError { proof_id: ProofId, reason: String },
+    /// Fiat proof claims equality not established by globals
+    #[error("Proof {proof_id}: Fiat proof claims {lhs:?} = {rhs:?}, which is not established by globals")]
+    InvalidFiat {
+        proof_id: ProofId,
+        lhs: TermId,
+        rhs: TermId,
+    },
+    /// MergeFn proof: old and new proofs are for different functions
+    #[error("Proof {proof_id}: MergeFn error - old and new proofs should be for the same function, but got {old_func} and {new_func}")]
+    MergeFnFunctionMismatch {
+        proof_id: ProofId,
+        old_func: String,
+        new_func: String,
+    },
+    /// MergeFn proof: view term has no arguments
+    #[error("Proof {proof_id}: MergeFn error - {which} view term has no arguments")]
+    MergeFnEmptyArgs { proof_id: ProofId, which: String },
+    /// MergeFn proof: old and new view terms have different input arguments
+    #[error("Proof {proof_id}: MergeFn error - old and new view terms have different input arguments")]
+    MergeFnInputMismatch { proof_id: ProofId },
+    /// MergeFn proof: expected function application terms
+    #[error("Proof {proof_id}: MergeFn error - expected function application terms, got {old_term:?} and {new_term:?}")]
+    MergeFnNotApp {
+        proof_id: ProofId,
+        old_term: TermId,
+        new_term: TermId,
+    },
+    /// MergeFn proof: claimed equality not established by merge function
+    #[error("Proof {proof_id}: MergeFn error - proof claims {claimed_lhs} = {claimed_rhs}, which is not established by merge function")]
+    MergeFnResultMismatch {
+        proof_id: ProofId,
+        claimed_lhs: String,
+        claimed_rhs: String,
+    },
 }
 
 /// Context needed for proof checking
@@ -372,11 +464,8 @@ impl ProofStore {
                 } else {
                     Err(ProofCheckError::InvalidFiat {
                         proof_id,
-                        reason: format!(
-                            "Fiat proof claims {:?} = {:?}, which is not established by globals",
-                            self.term_dag.get(proof.lhs()),
-                            self.term_dag.get(proof.rhs())
-                        ),
+                        lhs: proof.lhs(),
+                        rhs: proof.rhs(),
                     })
                 }
             }
@@ -416,7 +505,7 @@ impl ProofStore {
 
                 // Verify that premises match the rule body under the substitution
                 for (fact, prop) in rule.body.iter().zip(premise_propositions.iter()) {
-                    self.check_fact_matches_proposition(fact, prop, substitution, proof_id, name)?;
+                    self.check_fact_matches_proposition(fact, prop, substitution, name)?;
                 }
 
                 // Verify that the conclusion matches what the rule produces
@@ -446,34 +535,32 @@ impl ProofStore {
                 let new_view_term = self.term_dag.get(new_rhs);
 
                 let (old_term, new_term, view_head, input_args) = match (
-                    old_view_term,
-                    new_view_term,
+                    old_view_term.clone(),
+                    new_view_term.clone(),
                 ) {
                     (Term::App(old_head, old_args), Term::App(new_head, new_args)) => {
                         // Verify both are views of the same function
                         if old_head != new_head {
-                            return Err(ProofCheckError::MergeFnError {
+                            return Err(ProofCheckError::MergeFnFunctionMismatch {
                                 proof_id,
-                                reason: format!(
-                                    "old and new proofs should be for the same function, but got {} and {}",
-                                    old_head, new_head
-                                ),
+                                old_func: old_head.clone(),
+                                new_func: new_head.clone(),
                             });
                         }
                         // The last argument is the output
                         let old_output =
                             *old_args
                                 .last()
-                                .ok_or_else(|| ProofCheckError::MergeFnError {
+                                .ok_or_else(|| ProofCheckError::MergeFnEmptyArgs {
                                     proof_id,
-                                    reason: "old view term has no arguments".to_string(),
+                                    which: "old".to_string(),
                                 })?;
                         let new_output =
                             *new_args
                                 .last()
-                                .ok_or_else(|| ProofCheckError::MergeFnError {
+                                .ok_or_else(|| ProofCheckError::MergeFnEmptyArgs {
                                     proof_id,
-                                    reason: "new view term has no arguments".to_string(),
+                                    which: "new".to_string(),
                                 })?;
                         // Get the input arguments (all but the last)
                         let inputs: Vec<TermId> = old_args[..old_args.len() - 1].to_vec();
@@ -484,22 +571,16 @@ impl ProofStore {
                                 .zip(new_args[..new_args.len() - 1].iter())
                                 .any(|(a, b)| a != b)
                         {
-                            return Err(ProofCheckError::MergeFnError {
-                                proof_id,
-                                reason: "old and new view terms have different input arguments"
-                                    .to_string(),
-                            });
+                            return Err(ProofCheckError::MergeFnInputMismatch { proof_id });
                         }
 
                         (old_output, new_output, old_head.clone(), inputs)
                     }
                     _ => {
-                        return Err(ProofCheckError::MergeFnError {
+                        return Err(ProofCheckError::MergeFnNotApp {
                             proof_id,
-                            reason: format!(
-                                "expected function application terms, got {:?} and {:?}",
-                                old_view_term, new_view_term
-                            ),
+                            old_term: old_rhs,
+                            new_term: new_rhs,
                         });
                     }
                 };
@@ -514,18 +595,15 @@ impl ProofStore {
                 merged_props.insert(Proposition::new(merged_term, merged_term));
                 // Verify the proof's claimed equality is in the merged propositions
                 if !merged_props.contains(&Proposition::new(proof.lhs(), proof.rhs())) {
-                    return Err(ProofCheckError::MergeFnError {
+                    return Err(ProofCheckError::MergeFnResultMismatch {
                         proof_id,
-                        reason: format!(
-                            "proof claims {} = {}, which is not established by merge function",
-                            self.term_dag.to_string_with_let(
-                                &mut SymbolGen::new("".to_string()),
-                                proof.lhs()
-                            ),
-                            self.term_dag.to_string_with_let(
-                                &mut SymbolGen::new("".to_string()),
-                                proof.rhs()
-                            )
+                        claimed_lhs: self.term_dag.to_string_with_let(
+                            &mut SymbolGen::new("".to_string()),
+                            proof.lhs(),
+                        ),
+                        claimed_rhs: self.term_dag.to_string_with_let(
+                            &mut SymbolGen::new("".to_string()),
+                            proof.rhs(),
                         ),
                     });
                 }
@@ -600,35 +678,26 @@ impl ProofStore {
                 let (func_name, children) = match self.term_dag.get(base_rhs) {
                     Term::App(f, cs) => (f.clone(), cs.clone()),
                     _ => {
-                        return Err(ProofCheckError::CongruenceMismatch {
-                            proof_id,
-                            reason: "Base proof rhs is not a function application".to_string(),
-                        });
+                        return Err(ProofCheckError::CongruenceBaseNotApp { proof_id });
                     }
                 };
 
                 // Check child_index is valid
                 if *child_index >= children.len() {
-                    return Err(ProofCheckError::CongruenceMismatch {
+                    return Err(ProofCheckError::CongruenceChildIndexOutOfBounds {
                         proof_id,
-                        reason: format!(
-                            "Child index {} out of bounds for term with {} children",
-                            child_index,
-                            children.len()
-                        ),
+                        child_index: *child_index,
+                        num_children: children.len(),
                     });
                 }
 
                 // Check that child_lhs matches the child at child_index
                 if children[*child_index] != child_lhs {
-                    return Err(ProofCheckError::CongruenceMismatch {
+                    return Err(ProofCheckError::CongruenceChildMismatch {
                         proof_id,
-                        reason: format!(
-                            "Child proof lhs {:?} doesn't match base term child {:?} at index {}",
-                            self.term_dag.get(child_lhs),
-                            self.term_dag.get(children[*child_index]),
-                            child_index
-                        ),
+                        child_lhs,
+                        base_child: children[*child_index],
+                        child_index: *child_index,
                     });
                 }
 
@@ -647,22 +716,16 @@ impl ProofStore {
 
                 // Verify proof.rhs() matches expected
                 if proof.rhs() != expected_rhs_id {
-                    return Err(ProofCheckError::CongruenceMismatch {
+                    return Err(ProofCheckError::CongruenceResultMismatch {
                         proof_id,
-                        reason: format!(
-                            "Proof rhs {:?} doesn't match expected {:?}",
-                            self.term_dag.get(proof.rhs()),
-                            self.term_dag.get(expected_rhs_id)
-                        ),
+                        proof_rhs: proof.rhs(),
+                        expected_rhs: expected_rhs_id,
                     });
                 }
 
                 // Verify proof.lhs() matches base_lhs
                 if proof.lhs() != base_lhs {
-                    return Err(ProofCheckError::CongruenceMismatch {
-                        proof_id,
-                        reason: "Proof lhs doesn't match base proof lhs".to_string(),
-                    });
+                    return Err(ProofCheckError::CongruenceLhsMismatch { proof_id });
                 }
 
                 Ok(Proposition::new(proof.lhs(), proof.rhs()))
@@ -683,7 +746,6 @@ impl ProofStore {
         fact: &ResolvedFact,
         prop: &Proposition,
         substitution: &HashMap<String, TermId>,
-        proof_id: ProofId,
         rule_name: &str,
     ) -> Result<(), ProofCheckError> {
         let (lhs, rhs) = (prop.lhs, prop.rhs);
@@ -705,9 +767,10 @@ impl ProofStore {
             ) => {
                 // Get the output variable's term
                 let var_term = substitution.get(&v.name).copied().ok_or_else(|| {
-                    ProofCheckError::RuleSubstitutionMismatch {
+                    ProofCheckError::UnboundVariable {
                         rule_name: rule_name.to_string(),
-                        reason: format!("Variable {} not in substitution", v.name),
+                        variable: v.name.clone(),
+                        available: substitution.keys().cloned().collect::<Vec<_>>().join(", "),
                     }
                 })?;
 
@@ -723,14 +786,11 @@ impl ProofStore {
 
                 // The proposition should be a reflexive equality for this term
                 if lhs != expected_term_id || rhs != expected_term_id {
-                    return Err(ProofCheckError::RuleSubstitutionMismatch {
+                    return Err(ProofCheckError::FunctionFactMismatch {
                         rule_name: rule_name.to_string(),
-                        reason: format!(
-                            "Function fact does not match proposition: expected reflexive equality for {:?}, got {:?} = {:?}",
-                            self.term_dag.get(expected_term_id),
-                            self.term_dag.get(lhs),
-                            self.term_dag.get(rhs)
-                        ),
+                        expected: format_term(&self.term_dag, expected_term_id),
+                        actual_lhs: format_term(&self.term_dag, lhs),
+                        actual_rhs: format_term(&self.term_dag, rhs),
                     });
                 }
 
@@ -740,17 +800,13 @@ impl ProofStore {
                 let fact_lhs = self.eval_expr_with_subst(rule_name, lhs_expr, substitution)?;
                 let fact_rhs = self.eval_expr_with_subst(rule_name, rhs_expr, substitution)?;
                 if fact_lhs != lhs || fact_rhs != rhs {
-                    let fact_lhs_str = self.term_dag.to_string(fact_lhs);
-                    let fact_rhs_str = self.term_dag.to_string(fact_rhs);
-                    let subst_str = format_substitution(&self.term_dag, substitution);
-                    let proof_str = self.proof_to_string(proof_id);
-                    return Err(ProofCheckError::RuleSubstitutionMismatch {
+                    return Err(ProofCheckError::EqualityFactMismatch {
                         rule_name: rule_name.to_string(),
-                        reason: format!(
-                            "Fact {fact} does not match proven proposition under substitution {subst_str}.\nSubstituted: (= {fact_lhs_str} {fact_rhs_str})\nPremise proves: (= {} {})\nProof: {proof_str}",
-                            format_term(&self.term_dag, lhs),
-                            format_term(&self.term_dag, rhs),
-                        ),
+                        fact: format!("{fact}"),
+                        substituted_lhs: self.term_dag.to_string(fact_lhs),
+                        substituted_rhs: self.term_dag.to_string(fact_rhs),
+                        proven_lhs: format_term(&self.term_dag, lhs),
+                        proven_rhs: format_term(&self.term_dag, rhs),
                     });
                 }
 
@@ -761,15 +817,12 @@ impl ProofStore {
                 let fact_term = self.eval_expr_with_subst(rule_name, expr, substitution)?;
 
                 if fact_term != rhs {
-                    return Err(ProofCheckError::RuleSubstitutionMismatch {
+                    return Err(ProofCheckError::FactMismatch {
                         rule_name: rule_name.to_string(),
-                        reason: format!(
-                            "Fact {} does not match proposition under substitution {}. Got {}, expected {}.",
-                            fact,
-                            format_substitution(&self.term_dag, substitution),
-                            format_term(&self.term_dag, rhs),
-                            format_term(&self.term_dag, fact_term)
-                        ),
+                        fact: format!("{fact}"),
+                        substitution: format_substitution(&self.term_dag, substitution),
+                        actual: format_term(&self.term_dag, rhs),
+                        expected: format_term(&self.term_dag, fact_term),
                     });
                 }
 
@@ -788,17 +841,10 @@ impl ProofStore {
         match expr {
             ResolvedExpr::Lit(_, lit) => Ok(self.term_dag.lit(lit.clone())),
             ResolvedExpr::Var(_, var) => substitution.get(&var.name).copied().ok_or_else(|| {
-                ProofCheckError::RuleSubstitutionMismatch {
+                ProofCheckError::UnboundVariable {
                     rule_name: rule_name.to_string(),
-                    reason: format!(
-                        "Could not find variable '{}' in substitution. Available variables: {}",
-                        var.name,
-                        substitution
-                            .keys()
-                            .map(|k| k.as_str())
-                            .collect::<Vec<_>>()
-                            .join(", ")
-                    ),
+                    variable: var.name.clone(),
+                    available: substitution.keys().cloned().collect::<Vec<_>>().join(", "),
                 }
             }),
             ResolvedExpr::Call(_, head, args) => {
@@ -814,20 +860,15 @@ impl ProofStore {
                         if let Some(validator) = prim.validator() {
                             let result =
                                 validator(&mut self.term_dag, &arg_terms).ok_or_else(|| {
-                                    ProofCheckError::PrimitiveValidationFailed {
+                                    ProofCheckError::PrimitiveValidatorFailed {
                                         function_name: prim.name().to_string(),
-                                        reason:
-                                            "Validator returned None - primitive operation failed"
-                                                .to_string(),
                                     }
                                 })?;
                             Ok(result)
                         } else {
                             // No validator available - primitives without validators can't be checked in proofs
-                            Err(ProofCheckError::PrimitiveValidationFailed {
+                            Err(ProofCheckError::PrimitiveNoValidator {
                                 function_name: prim.name().to_string(),
-                                reason: "Primitive has no validator - cannot verify in proof"
-                                    .to_string(),
                             })
                         }
                     }
@@ -875,14 +916,11 @@ impl ProofStore {
             return Ok(());
         }
 
-        Err(ProofCheckError::RuleSubstitutionMismatch {
+        Err(ProofCheckError::RuleHeadMismatch {
             rule_name: rule_name.to_string(),
-            reason: format!(
-                "Rule head doesn't produce claimed equality Lhs:\n{}\nRHS:\n{}\nSUBST:\n{}",
-                format_term(&self.term_dag, claimed.lhs()),
-                format_term(&self.term_dag, claimed.rhs()),
-                format_substitution(&self.term_dag, substitution)
-            ),
+            claimed_lhs: format_term(&self.term_dag, claimed.lhs()),
+            claimed_rhs: format_term(&self.term_dag, claimed.rhs()),
+            substitution: format_substitution(&self.term_dag, substitution),
         })
     }
 }
