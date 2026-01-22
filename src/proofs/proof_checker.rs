@@ -737,18 +737,8 @@ impl ProofStore {
                 Ok(())
             }
             ResolvedFact::Eq(_, lhs_expr, rhs_expr) => {
-                let fact_lhs = self
-                    .eval_expr_with_subst(rule_name, lhs_expr, substitution)
-                    .map_err(|_| ProofCheckError::RuleSubstitutionMismatch {
-                        rule_name: rule_name.to_string(),
-                        reason: "Failed to evaluate LHS expression under substitution".to_string(),
-                    })?;
-                let fact_rhs = self
-                    .eval_expr_with_subst(rule_name, rhs_expr, substitution)
-                    .map_err(|_| ProofCheckError::RuleSubstitutionMismatch {
-                        rule_name: rule_name.to_string(),
-                        reason: "Failed to evaluate RHS expression under substitution".to_string(),
-                    })?;
+                let fact_lhs = self.eval_expr_with_subst(rule_name, lhs_expr, substitution)?;
+                let fact_rhs = self.eval_expr_with_subst(rule_name, rhs_expr, substitution)?;
                 if fact_lhs != lhs || fact_rhs != rhs {
                     let fact_lhs_str = self.term_dag.to_string(fact_lhs);
                     let fact_rhs_str = self.term_dag.to_string(fact_rhs);
@@ -768,12 +758,7 @@ impl ProofStore {
             }
             // For a plain expr, the proof should have the form t1 = t2 where t2 matches the expr under substitution
             ResolvedFact::Fact(expr) => {
-                let fact_term = self
-                    .eval_expr_with_subst(rule_name, expr, substitution)
-                    .map_err(|_| ProofCheckError::RuleSubstitutionMismatch {
-                        rule_name: rule_name.to_string(),
-                        reason: "Failed to evaluate Fact expression under substitution".to_string(),
-                    })?;
+                let fact_term = self.eval_expr_with_subst(rule_name, expr, substitution)?;
 
                 if fact_term != rhs {
                     return Err(ProofCheckError::RuleSubstitutionMismatch {
@@ -883,11 +868,7 @@ impl ProofStore {
             rule.head.0.iter().collect();
         let mut bindings = ctx.global_bindings.clone();
         bindings.extend(substitution.clone());
-        let action_ctx = process_actions(rule_name, bindings, &action_refs, &mut self.term_dag)
-            .map_err(|e| ProofCheckError::RuleSubstitutionMismatch {
-                rule_name: rule_name.to_string(),
-                reason: format!("Failed to process rule head actions: {}", e),
-            })?;
+        let action_ctx = process_actions(rule_name, bindings, &action_refs, &mut self.term_dag)?;
 
         // Check if the claimed equality is in the propositions
         if action_ctx.propositions.contains(claimed) {
