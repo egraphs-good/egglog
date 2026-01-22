@@ -152,8 +152,8 @@ impl ContainerSort for MultiSetSort {
         _container_values: &ContainerValues,
         _value: Value,
         termdag: &mut TermDag,
-        element_terms: Vec<Term>,
-    ) -> Term {
+        element_terms: Vec<TermId>,
+    ) -> TermId {
         termdag.app("multiset-of".into(), element_terms)
     }
 

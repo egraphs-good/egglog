@@ -8,7 +8,7 @@ fn test_termdag_public() {
     let x = td.var("x".into());
     let seven = td.lit(7.into());
     let f = td.app("f".into(), vec![x, seven]);
-    assert_eq!(td.to_string(&f), "(f x 7)");
+    assert_eq!(td.to_string(f), "(f x 7)");
 }
 
 #[test]
@@ -24,10 +24,10 @@ fn test_termdag_malicious_client() {
     let td2 = td.clone();
     let y = td.var("y".into());
     // now td = [0 |-> x, 1 |-> y]
-    let f = td.app("f".into(), vec![x.clone(), y.clone()]);
-    // f is Term::App("f", [0, 1])
-    assert_eq!(td.to_string(&f), "(f x y)");
+    let f = td.app("f".into(), vec![x, y]);
+    // f is a TermId (2) that refers to Term::App("f", [0, 1])
+    assert_eq!(td.to_string(f), "(f x y)");
     // recall that td2 = [0 |-> x]
     // notice that f refers to index 1, so this crashes:
-    td2.to_string(&f);
+    td2.to_string(f);
 }

@@ -54,7 +54,7 @@ impl BaseSort for BigIntSort {
         base_values: &BaseValues,
         value: Value,
         termdag: &mut TermDag,
-    ) -> Term {
+    ) -> TermId {
         let bigint = base_values.unwrap::<Z>(value);
 
         let as_string = termdag.lit(Literal::String(bigint.0.to_string()));

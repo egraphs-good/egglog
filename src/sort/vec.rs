@@ -144,8 +144,8 @@ impl ContainerSort for VecSort {
         _container_values: &ContainerValues,
         _value: Value,
         termdag: &mut TermDag,
-        element_terms: Vec<Term>,
-    ) -> Term {
+        element_terms: Vec<TermId>,
+    ) -> TermId {
         if element_terms.is_empty() {
             termdag.app("vec-empty".into(), vec![])
         } else {
