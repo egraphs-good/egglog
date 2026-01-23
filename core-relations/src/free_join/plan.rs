@@ -432,7 +432,13 @@ fn plan_headers(
     ctx: &PlanningContext,
 ) -> (
     Vec<JoinHeader>,
-    DenseIdMap<AtomId, (usize, &Pooled<Vec<Constraint>>)>,
+    DenseIdMap<
+        AtomId,
+        (
+            usize, /* The approx size of the subset matching the constraints. */
+            &Pooled<Vec<Constraint>>,
+        ),
+    >,
 ) {
     let mut header = Vec::new();
     let mut remaining_constraints: DenseIdMap<AtomId, (usize, &Pooled<Vec<Constraint>>)> =
