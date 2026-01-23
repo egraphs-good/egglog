@@ -129,7 +129,7 @@
               (Integral (Mul (Diff x a) (Integral b x)) x)))
 
 
-(let start-expr2 (Add (Const 1)
+(let $start-expr2 (Add (Const 1)
                         (Sub (Var "a") 
                              (Mul (Sub (Const 2) 
                                        (Const 1)) 
@@ -137,8 +137,8 @@
 
 (run 6)
 
-(let end-expr2 (Const 1))
+(let $end-expr2 (Const 1))
 
-(check (= start-expr2 end-expr2))
+(check (= $start-expr2 $end-expr2))
 
-(extract start-expr2)
+(extract $start-expr2)
