@@ -224,7 +224,7 @@ pub struct EGraph {
     schedulers: DenseIdMap<SchedulerId, SchedulerRecord>,
     commands: IndexMap<String, Arc<dyn UserDefinedCommand>>,
     strict_mode: bool,
-    warned_about_missing_global_prefix: bool,
+    warned_about_global_prefix: bool,
     /// Registry for command-level macros
     command_macros: CommandMacroRegistry,
     proof_state: EncodingState,
@@ -311,7 +311,7 @@ impl Default for EGraph {
             schedulers: Default::default(),
             commands: Default::default(),
             strict_mode: false,
-            warned_about_missing_global_prefix: false,
+            warned_about_global_prefix: false,
             command_macros: Default::default(),
             proof_state: Default::default(),
         };
@@ -443,17 +443,38 @@ impl EGraph {
         canonical_name: &str,
     ) -> Result<(), TypeError> {
         if self.strict_mode {
+            return Err(TypeError::GlobalMissingPrefix { name: format!("{}{}", GLOBAL_NAME_PREFIX, canonical_name), span: span.clone() } );
+        }
+        if self.warned_about_global_prefix {
+            return Ok(());
+        }
+        self.warned_about_global_prefix = true;
+        log::warn!(
+            "{}\nGlobal `{}` should start with `{}`. Enable `--strict-mode` to turn this warning into an error. Suppressing additional warnings of this type.",
+            span,
+            canonical_name,
+            GLOBAL_NAME_PREFIX
+        );
+        Ok(())
+    }
+
+    fn warn_prefixed_non_globals(
+        &mut self,
+        span: &Span,
+        canonical_name: &str,
+    ) -> Result<(), TypeError> {
+        if self.strict_mode {
             return Err(TypeError::NonGlobalPrefixed {
                 name: format!("{}{}", GLOBAL_NAME_PREFIX, canonical_name),
                 span: span.clone(),
             });
         }
-        if self.warned_about_missing_global_prefix {
+        if self.warned_about_global_prefix {
             return Ok(());
         }
-        self.warned_about_missing_global_prefix = true;
+        self.warned_about_global_prefix = true;
         log::warn!(
-            "{}\nGlobal `{}` should start with `{}`. Enable `--strict-mode` to turn this warning into an error. Suppressing additional warnings of this type.",
+            "{}\nNon-global `{}` should not start with `{}`. Enable `--strict-mode` to turn this warning into an error. Suppressing additional warnings of this type.",
             span,
             canonical_name,
             GLOBAL_NAME_PREFIX
