@@ -8,9 +8,9 @@ WWW=${PWD}/target/www
 all: test nits docs
 
 test:
-	cargo insta test --test-runner nextest --release
+	cargo insta test --test-runner nextest --release --workspace
 	# nextest doesn't run doctests, so do it here
-	cargo test --doc --release
+	cargo test --doc --release --workspace
 
 nits:
 	@rustup component add clippy
@@ -26,7 +26,7 @@ fixnits:
 
 docs:
 	mkdir -p ${WWW}/
-	cargo doc --no-deps --all-features
+	cargo doc --no-deps --all-features --workspace
 	touch target/doc/.nojekyll # prevent github from trying to run jekyll
 	cp www/index.html ${WWW}/index.html
 	cp -r target/doc ${WWW}/docs

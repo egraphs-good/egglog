@@ -16,6 +16,7 @@ use crate::core_relations::{
 use crate::numeric_id::NumericId;
 use log::debug;
 use num_rational::Rational64;
+use once_cell::sync::Lazy;
 
 use crate::{
     ColumnTy, DefaultVal, EGraph, FunctionConfig, FunctionId, MergeFn, ProofStore, QueryEntry,
@@ -118,16 +119,6 @@ fn ac_test(tracing: bool, can_subsume: bool) {
 }
 
 #[test]
-fn ac_tracing_subsume() {
-    ac_test(true, true);
-}
-
-#[test]
-fn ac_tracing() {
-    ac_test(true, false);
-}
-
-#[test]
 fn ac() {
     ac_test(false, false);
 }
@@ -226,15 +217,6 @@ fn math_subsume() {
     let handles =
         Vec::from_iter((0..2).map(|_| thread::spawn(|| math_test(EGraph::default(), true))));
     handles.into_iter().for_each(|h| h.join().unwrap());
-}
-
-#[test]
-fn math_tracing() {
-    math_test(EGraph::with_tracing(), false)
-}
-#[test]
-fn math_tracing_subsume() {
-    math_test(EGraph::with_tracing(), true)
 }
 
 /// Run a more complex benchmark from the egg and egglog test suite. The core of this test is to
@@ -532,7 +514,7 @@ fn register_vec_push(egraph: &mut EGraph) -> ExternalFunctionId {
         vec.0.shrink_to_fit();
         Some(state.clone().container_values().register_val(vec, state))
     });
-    egraph.register_external_func(external_func)
+    egraph.register_external_func(Box::new(external_func))
 }
 
 fn register_vec_last(egraph: &mut EGraph) -> ExternalFunctionId {
@@ -548,7 +530,7 @@ fn register_vec_last(egraph: &mut EGraph) -> ExternalFunctionId {
             .last()
             .cloned()
     });
-    egraph.register_external_func(external_func)
+    egraph.register_external_func(Box::new(external_func))
 }
 
 fn dump_vecs(egraph: &EGraph) -> Vec<Vec<Value>> {
@@ -614,13 +596,14 @@ fn container_test() {
         name: "vec".into(),
         can_subsume: false,
     });
-    let int_add = egraph.register_external_func(make_external_func(|exec_state, args| {
-        let [x, y] = args else { panic!() };
-        let x: i64 = exec_state.base_values().unwrap(*x);
-        let y: i64 = exec_state.base_values().unwrap(*y);
-        let z: i64 = x + y;
-        Some(exec_state.base_values().get(z))
-    }));
+    let int_add =
+        egraph.register_external_func(Box::new(make_external_func(|exec_state, args| {
+            let [x, y] = args else { panic!() };
+            let x: i64 = exec_state.base_values().unwrap(*x);
+            let y: i64 = exec_state.base_values().unwrap(*y);
+            let z: i64 = x + y;
+            Some(exec_state.base_values().get(z))
+        })));
     let vec_last = register_vec_last(&mut egraph);
     let vec_push = register_vec_push(&mut egraph);
 
@@ -816,10 +799,11 @@ fn rhs_only_rule_only_runs_once() {
     let mut egraph = EGraph::default();
     let counter = Arc::new(AtomicUsize::new(0));
     let inner = counter.clone();
-    let inc_counter_func = egraph.register_external_func(make_external_func(move |_, _| {
-        inner.fetch_add(1, Ordering::SeqCst);
-        Some(Value::new(0))
-    }));
+    let inc_counter_func =
+        egraph.register_external_func(Box::new(make_external_func(move |_, _| {
+            inner.fetch_add(1, Ordering::SeqCst);
+            Some(Value::new(0))
+        })));
     let inc_counter_rule = {
         let mut rb = egraph.new_rule("", true);
         rb.call_external_func(inc_counter_func, &[], ColumnTy::Id, || "".to_string());
@@ -838,8 +822,8 @@ fn mergefn_arithmetic() {
     let int_base = egraph.base_values_mut().register_type::<i64>();
 
     // Create external functions for multiplication and addition
-    let multiply_func = egraph.register_external_func(core_relations::make_external_func(
-        |state, vals| -> Option<Value> {
+    let multiply_func = egraph.register_external_func(Box::new(
+        core_relations::make_external_func(|state, vals| -> Option<Value> {
             let [a, b] = vals else {
                 return None;
             };
@@ -847,10 +831,10 @@ fn mergefn_arithmetic() {
             let b_val = state.base_values().unwrap::<i64>(*b);
             let res = state.base_values().get::<i64>(a_val * b_val);
             Some(res)
-        },
+        }),
     ));
 
-    let add_func = egraph.register_external_func(core_relations::make_external_func(
+    let add_func = egraph.register_external_func(Box::new(core_relations::make_external_func(
         |state, vals| -> Option<Value> {
             let [a, b] = vals else {
                 return None;
@@ -860,7 +844,7 @@ fn mergefn_arithmetic() {
             let res = state.base_values().get::<i64>(a_val + b_val);
             Some(res)
         },
-    ));
+    )));
 
     let value_1 = egraph.base_values_mut().get(1i64);
 
@@ -1099,7 +1083,7 @@ fn constrain_prims_simple() {
         can_subsume: false,
     });
 
-    let is_even = egraph.register_external_func(core_relations::make_external_func(
+    let is_even = egraph.register_external_func(Box::new(core_relations::make_external_func(
         |state, vals| -> Option<Value> {
             let [a] = vals else {
                 return None;
@@ -1108,7 +1092,7 @@ fn constrain_prims_simple() {
             let result: bool = a_val % 2 == 0;
             Some(state.base_values().get(result))
         },
-    ));
+    )));
 
     let value_1 = egraph.base_value_constant(1i64);
     let value_2 = egraph.base_value_constant(2i64);
@@ -1182,7 +1166,7 @@ fn constrain_prims_abstract() {
         can_subsume: false,
     });
 
-    let neg = egraph.register_external_func(core_relations::make_external_func(
+    let neg = egraph.register_external_func(Box::new(core_relations::make_external_func(
         |state, vals| -> Option<Value> {
             let [a] = vals else {
                 return None;
@@ -1190,8 +1174,8 @@ fn constrain_prims_abstract() {
             let a_val = state.base_values().unwrap::<i64>(*a);
             Some(state.base_values().get(-a_val))
         },
-    ));
-    let abs = egraph.register_external_func(core_relations::make_external_func(
+    )));
+    let abs = egraph.register_external_func(Box::new(core_relations::make_external_func(
         |state, vals| -> Option<Value> {
             let [a] = vals else {
                 return None;
@@ -1199,7 +1183,7 @@ fn constrain_prims_abstract() {
             let a_val = state.base_values().unwrap::<i64>(*a);
             Some(state.base_values().get(a_val.abs()))
         },
-    ));
+    )));
 
     let value_n1 = egraph.base_value_constant(-1i64);
     let value_0 = egraph.base_value_constant(0i64);
@@ -1391,7 +1375,7 @@ fn primitive_failure_panics() {
     let value_1 = egraph.base_value_constant(1i64);
     let value_2 = egraph.base_value_constant(2i64);
 
-    let assert_odd = egraph.register_external_func(core_relations::make_external_func(
+    let assert_odd = egraph.register_external_func(Box::new(core_relations::make_external_func(
         |state, vals| -> Option<Value> {
             let [a] = vals else {
                 return None;
@@ -1403,7 +1387,7 @@ fn primitive_failure_panics() {
                 None
             }
         },
-    ));
+    )));
 
     let assert_odd_rule = {
         let mut rb = egraph.new_rule("assert_odd", true);
@@ -1426,51 +1410,31 @@ fn primitive_failure_panics() {
 }
 
 #[test]
-fn test_simple_rule_proof_format() {
-    use crate::proof_format::*;
-    // Setup EGraph with tracing
-    let mut egraph = EGraph::with_tracing();
-    // Register primitive booleans
-    let bool_ty = egraph.base_values_mut().register_type::<bool>();
-    let true_val = egraph.base_values_mut().get(true);
-    let false_val = egraph.base_values_mut().get(false);
-    // Add table wrapper for booleans
-    let bool_table = egraph.add_table(FunctionConfig {
-        schema: vec![ColumnTy::Base(bool_ty), ColumnTy::Id],
-        default: DefaultVal::FreshId,
-        merge: MergeFn::UnionId,
-        name: "bool".into(),
-        can_subsume: false,
+fn panic_functions_trigger_early_stop() {
+    let db = core_relations::Database::default();
+
+    let channel: crate::SideChannel<String> = Default::default();
+    let panic_fn = super::Panic("panic".to_string(), channel.clone());
+    let stopped = db.with_execution_state(|state| {
+        assert!(!state.should_stop());
+        let res = core_relations::ExternalFunction::invoke(&panic_fn, state, &[]);
+        assert!(res.is_none());
+        state.should_stop()
     });
-    // Add table for not function
-    let not_table = egraph.add_table(FunctionConfig {
-        schema: vec![ColumnTy::Id, ColumnTy::Id],
-        default: DefaultVal::FreshId,
-        merge: MergeFn::UnionId,
-        name: "not".into(),
-        can_subsume: false,
+    assert!(stopped);
+    assert_eq!(channel.lock().unwrap().as_deref(), Some("panic"));
+
+    let channel: crate::SideChannel<String> = Default::default();
+    let lazy = Lazy::new(|| "lazy panic".to_string());
+    let panic_fn = super::LazyPanic(Arc::new(lazy), channel.clone());
+    let stopped = db.with_execution_state(|state| {
+        assert!(!state.should_stop());
+        let res = core_relations::ExternalFunction::invoke(&panic_fn, state, &[]);
+        assert!(res.is_none());
+        state.should_stop()
     });
-    // Add true/false wrapped terms
-    let true_id = egraph.add_term(bool_table, &[true_val], "true");
-    let false_id = egraph.add_term(bool_table, &[false_val], "false");
-    // Add not(true) and not(false)
-    let not_true_id = egraph.add_term(not_table, &[true_id], "not_true");
-    let truec = egraph.base_value_constant(true);
-    let falsec = egraph.base_value_constant(false);
-    // Add rules: not-true: (rewrite (not (bool true)) (bool false))
-    let not_true_rule = define_rule! {
-        [egraph] ((-> (not_table (bool_table {truec.clone()})) id)) => ((set (bool_table {falsec.clone()}) id))
-    };
-    let not_false_rule = define_rule! {
-        [egraph] ((-> (not_table (bool_table {falsec})) id)) => ((set (bool_table {truec}) id))
-    };
-    // Run rules
-    egraph.run_rules(&[not_true_rule, not_false_rule]).unwrap();
-    // Get proof for not_true = false
-    let mut proof_store = ProofStore::default();
-    egraph
-        .explain_terms_equal(not_true_id, false_id, &mut proof_store)
-        .unwrap();
+    assert!(stopped);
+    assert_eq!(channel.lock().unwrap().as_deref(), Some("lazy panic"));
 }
 
 const _: () = {

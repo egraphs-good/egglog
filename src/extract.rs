@@ -1,4 +1,4 @@
-use crate::termdag::{Term, TermDag};
+use crate::termdag::{TermDag, TermId};
 use crate::util::{HashMap, HashSet};
 use crate::*;
 use std::collections::VecDeque;
@@ -123,6 +123,11 @@ impl CostModel<DefaultCost> for TreeAdditiveCostModel {
 }
 
 /// The default, Bellman-Ford like extractor. This extractor is optimal for [`CostModel`].
+///
+/// Note that this assumes optimal substructure in the cost model, that is, a lower-cost
+/// subterm should always lead to a non-worse superterm, to guarantee the extracted term
+/// being optimal under the given cost model.
+/// If this is not followed, the extractor may panic on reconstruction
 pub struct Extractor<C: Cost + Ord + Eq + Clone + Debug> {
     rootsorts: Vec<ArcSort>,
     funcs: Vec<String>,
@@ -426,7 +431,7 @@ impl<C: Cost + Ord + Eq + Clone + Debug> Extractor<C> {
         termdag: &mut TermDag,
         value: Value,
         sort: &ArcSort,
-    ) -> Term {
+    ) -> TermId {
         self.reconstruct_termdag_node_helper(egraph, termdag, value, sort, &mut Default::default())
     }
 
@@ -436,16 +441,16 @@ impl<C: Cost + Ord + Eq + Clone + Debug> Extractor<C> {
         termdag: &mut TermDag,
         value: Value,
         sort: &ArcSort,
-        cache: &mut HashMap<(Value, String), Term>,
-    ) -> Term {
+        cache: &mut HashMap<(Value, String), TermId>,
+    ) -> TermId {
         let key = (value, sort.name().to_owned());
         if let Some(term) = cache.get(&key) {
-            return term.clone();
+            return *term;
         }
 
         let term = if sort.is_container_sort() {
             let elements = sort.inner_values(egraph.backend.container_values(), value);
-            let mut ch_terms: Vec<Term> = Vec::new();
+            let mut ch_terms: Vec<TermId> = Vec::new();
             for ch in elements.iter() {
                 ch_terms.push(
                     self.reconstruct_termdag_node_helper(egraph, termdag, ch.1, &ch.0, cache),
@@ -464,7 +469,7 @@ impl<C: Cost + Ord + Eq + Clone + Debug> Extractor<C> {
                 .unwrap()
                 .get(&value)
                 .unwrap();
-            let mut ch_terms: Vec<Term> = Vec::new();
+            let mut ch_terms: Vec<TermId> = Vec::new();
             let ch_sorts = &egraph.functions.get(func_name).unwrap().schema.input;
             for (value, sort) in hyperedge.iter().zip(ch_sorts.iter()) {
                 ch_terms.push(
@@ -477,7 +482,7 @@ impl<C: Cost + Ord + Eq + Clone + Debug> Extractor<C> {
             sort.reconstruct_termdag_base(egraph.backend.base_values(), value, termdag)
         };
 
-        cache.insert(key, term.clone());
+        cache.insert(key, term);
         term
     }
 
@@ -491,7 +496,7 @@ impl<C: Cost + Ord + Eq + Clone + Debug> Extractor<C> {
         termdag: &mut TermDag,
         value: Value,
         sort: ArcSort,
-    ) -> Option<(C, Term)> {
+    ) -> Option<(C, TermId)> {
         match self.compute_cost_node(egraph, value, &sort) {
             Some(best_cost) => {
                 log::debug!("Best cost for the extract root: {:?}", best_cost);
@@ -515,7 +520,7 @@ impl<C: Cost + Ord + Eq + Clone + Debug> Extractor<C> {
         egraph: &EGraph,
         termdag: &mut TermDag,
         value: Value,
-    ) -> Option<(C, Term)> {
+    ) -> Option<(C, TermId)> {
         assert!(
             self.rootsorts.len() == 1,
             "extract_best requires a single rootsort"
@@ -539,7 +544,7 @@ impl<C: Cost + Ord + Eq + Clone + Debug> Extractor<C> {
         value: Value,
         nvariants: usize,
         sort: ArcSort,
-    ) -> Vec<(C, Term)> {
+    ) -> Vec<(C, TermId)> {
         debug_assert!(self.rootsorts.iter().any(|s| { s.name() == sort.name() }));
 
         if sort.is_eq_sort() {
@@ -578,11 +583,11 @@ impl<C: Cost + Ord + Eq + Clone + Debug> Extractor<C> {
                 egraph.backend.for_each(func.backend_id, find_root_variants);
             }
 
-            let mut res: Vec<(C, Term)> = Vec::new();
+            let mut res: Vec<(C, TermId)> = Vec::new();
             root_variants.sort();
             root_variants.truncate(nvariants);
             for (cost, func_name, hyperedge) in root_variants {
-                let mut ch_terms: Vec<Term> = Vec::new();
+                let mut ch_terms: Vec<TermId> = Vec::new();
                 let ch_sorts = &egraph.functions.get(&func_name).unwrap().schema.input;
                 // zip truncates the row
                 for (value, sort) in hyperedge.iter().zip(ch_sorts.iter()) {
@@ -613,7 +618,7 @@ impl<C: Cost + Ord + Eq + Clone + Debug> Extractor<C> {
         termdag: &mut TermDag,
         value: Value,
         nvariants: usize,
-    ) -> Vec<(C, Term)> {
+    ) -> Vec<(C, TermId)> {
         assert!(
             self.rootsorts.len() == 1,
             "extract_variants requires a single rootsort"

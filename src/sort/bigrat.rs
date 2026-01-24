@@ -110,7 +110,7 @@ impl BaseSort for BigRatSort {
         base_values: &BaseValues,
         value: Value,
         termdag: &mut TermDag,
-    ) -> Term {
+    ) -> TermId {
         let rat = base_values.unwrap::<Q>(value);
         let numer = rat.numer();
         let denom = rat.denom();
