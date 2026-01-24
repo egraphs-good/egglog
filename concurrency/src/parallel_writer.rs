@@ -1,7 +1,7 @@
 //! A Utility Struct for Writing to a Vector in parallel without blocking reads.
 
 use std::{
-    mem,
+    cell, mem,
     ops::{Deref, Range},
     sync::atomic::{AtomicUsize, Ordering},
 };
@@ -217,15 +217,18 @@ impl<T> ParallelVecWriter<T> {
     }
 }
 
-impl<T: Copy> ParallelVecWriter<std::cell::Cell<T>> {
-    /// A variant of write_slice that applies to `Cell<T>`.
-    ///
-    /// `Cell<T>` could _just_ be copy but it is not for some reason[0]. All of the safety
-    /// guarantees for slices of copy types apply to slices of cells just as well.
-    ///
-    /// [0]: https://users.rust-lang.org/t/why-is-cell-not-copy/2208
-    pub fn write_cell_slice(&self, items: &[std::cell::Cell<T>]) -> usize {
-        // SAFETY: `Cell<T>` is trivially copyable when `T: Copy`.
-        unsafe { self.write_slice_raw(items) }
-    }
+/// A variant of write_slice that applies to `Cell<T>`.
+///
+/// `Cell<T>` could _just_ be copy but it is not for some reason[0]. All of the safety
+/// guarantees for slices of copy types apply to slices of cells just as well.
+///
+/// There seems to be a bug preventing this from being a member method of ParallelVecWriter.
+///
+/// [0]: https://users.rust-lang.org/t/why-is-cell-not-copy/2208
+pub fn write_cell_slice<T: Copy>(
+    this: &ParallelVecWriter<cell::Cell<T>>,
+    items: &[std::cell::Cell<T>],
+) -> usize {
+    // SAFETY: `Cell<T>` is trivially copyable when `T: Copy`.
+    unsafe { this.write_slice_raw(items) }
 }

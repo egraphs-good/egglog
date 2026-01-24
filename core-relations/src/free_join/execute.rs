@@ -571,7 +571,13 @@ impl<'a> JoinState<'a> {
                                     db,
                                     exec_state: exec_state_for_work.clone(),
                                 }
-                                .run_plan(plan, instr_order, cur + 1, binding_info, buf);
+                                .run_plan(
+                                    plan,
+                                    instr_order,
+                                    cur + 1,
+                                    binding_info,
+                                    buf,
+                                );
                             }
                         })
                     },

@@ -1195,8 +1195,8 @@ fn early_stop() {
     // External function that triggers early stop after 1000 calls.
     let call_count = Arc::new(Mutex::new(0usize));
     let call_count_clone = call_count.clone();
-    let stop_trigger = db.add_external_function(Box::new(make_external_func(
-        move |exec_state, args| {
+    let stop_trigger =
+        db.add_external_function(Box::new(make_external_func(move |exec_state, args| {
             let mut count = call_count_clone.lock().unwrap();
             *count += 1;
 
@@ -1206,8 +1206,7 @@ fn early_stop() {
 
             let [x] = args else { panic!() };
             Some(*x)
-        },
-    )));
+        })));
 
     // Build a rule that scans the table and calls the external function.
     let mut rsb = RuleSetBuilder::new(&mut db);
