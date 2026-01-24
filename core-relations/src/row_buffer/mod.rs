@@ -4,7 +4,7 @@ use core::slice;
 use std::{cell::Cell, mem, ops::Deref};
 
 use crate::numeric_id::NumericId;
-use egglog_concurrency::ParallelVecWriter;
+use egglog_concurrency::{ParallelVecWriter, parallel_writer::write_cell_slice};
 use rayon::iter::ParallelIterator;
 use smallvec::SmallVec;
 
@@ -426,7 +426,7 @@ impl ParallelRowBufWriter {
 
     pub(crate) fn append_contents(&self, rows: &RowBuffer) -> RowId {
         assert_eq!(rows.n_columns, self.buf.n_columns);
-        let start_off = self.vec.write_cell_slice(rows.data.as_slice());
+        let start_off = write_cell_slice(&self.vec, rows.data.as_slice());
         debug_assert_eq!(start_off % self.buf.n_columns, 0);
         RowId::from_usize(start_off / self.buf.n_columns)
     }

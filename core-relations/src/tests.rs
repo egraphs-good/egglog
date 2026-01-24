@@ -277,6 +277,98 @@ fn line_graph_2_test(strat: PlanStrategy) {
     assert_eq!(expected, got);
 }
 
+fn intersection_test(strat: PlanStrategy) {
+    let mut db = Database::default();
+    let rst = (0..3).map(|_| {
+        SortedWritesTable::new(
+            2,
+            2,
+            None,
+            vec![],
+            Box::new(move |_, a, b, _| {
+                if a != b {
+                    panic!("merge not supported")
+                } else {
+                    false
+                }
+            }),
+        )
+    });
+    let u = SortedWritesTable::new(
+        1,
+        1,
+        None,
+        vec![],
+        Box::new(move |_, a, b, _| {
+            if a != b {
+                panic!("merge not supported")
+            } else {
+                false
+            }
+        }),
+    );
+    let rst_ids = rst
+        .map(|r| db.add_table(r, iter::empty(), iter::empty()))
+        .collect::<Vec<TableId>>();
+    let u_id = db.add_table(u, iter::empty(), iter::empty());
+
+    for rel in rst_ids.iter() {
+        let mut rel_buf = db.new_buffer(*rel);
+        for x in 0..10 {
+            rel_buf.stage_insert(&[Value::new(x), Value::new(x)]);
+        }
+    }
+    db.merge_all();
+
+    let mut rsb = RuleSetBuilder::new(&mut db);
+    let mut query = rsb.new_rule();
+    query.set_plan_strategy(strat);
+    // R(x), S(x), T(x), x > 5 => U(X)
+    let x = query.new_var_named("x");
+    for rel in rst_ids.iter() {
+        query
+            .add_atom(
+                *rel,
+                &[x.into(), x.into()],
+                &[Constraint::GtConst {
+                    col: ColumnId::new(0),
+                    val: Value::new(5),
+                }],
+            )
+            .unwrap();
+    }
+    let mut rule = query.build();
+    rule.insert(u_id, &[x.into()]).unwrap();
+    rule.build();
+    let rule_set = rsb.build();
+
+    assert!(db.run_rule_set(&rule_set, ReportLevel::TimeOnly).changed);
+
+    let expected = Vec::from_iter((6..10).map(|x| vec![Value::new(x)]));
+
+    let u_table = db.get_table(u_id);
+    let all = u_table.all();
+    let vals = u_table.scan(all.as_ref());
+    let mut got = Vec::from_iter(vals.iter().map(|(_, row)| row.to_vec()));
+    got.sort();
+    assert_eq!(expected, got);
+}
+
+#[test]
+fn intersection_test_fj_puresize() {
+    intersection_test(PlanStrategy::PureSize);
+}
+
+#[test]
+fn intersection_test_fj_mincover() {
+    intersection_test(PlanStrategy::MinCover);
+}
+
+#[test]
+fn intersection_test_gj() {
+    intersection_test(PlanStrategy::Gj);
+}
+
 #[test]
 fn minimal_ac() {
     let MathEgraph {
@@ -1103,8 +1195,8 @@ fn early_stop() {
     // External function that triggers early stop after 1000 calls.
     let call_count = Arc::new(Mutex::new(0usize));
     let call_count_clone = call_count.clone();
-    let stop_trigger = db.add_external_function(Box::new(make_external_func(
-        move |exec_state, args| {
+    let stop_trigger =
+        db.add_external_function(Box::new(make_external_func(move |exec_state, args| {
             let mut count = call_count_clone.lock().unwrap();
             *count += 1;
 
@@ -1114,8 +1206,7 @@ fn early_stop() {
 
             let [x] = args else { panic!() };
             Some(*x)
-        },
-    )));
+        })));
 
     // Build a rule that scans the table and calls the external function.
     let mut rsb = RuleSetBuilder::new(&mut db);
