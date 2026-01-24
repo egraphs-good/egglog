@@ -8,7 +8,7 @@ WWW=${PWD}/target/www
 all: test nits docs
 
 test:
-	cargo nextest run --release --workspace
+	cargo insta test --test-runner nextest --release --workspace
 	# nextest doesn't run doctests, so do it here
 	cargo test --doc --release --workspace
 

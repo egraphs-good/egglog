@@ -1,0 +1,6 @@
+---
+source: tests/files.rs
+expression: snapshot_content
+---
+(MyVec (vec-of (Num 1) (Num 1)))
+(vec-of (VecContainer (vec-of (Add 1 2))))

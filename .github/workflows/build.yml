@@ -15,6 +15,7 @@ jobs:
       - uses: taiki-e/install-action@v2
         with:
           tool: nextest
+          tool: cargo-insta
       - uses: Swatinem/rust-cache@v2
       - run: make test
   nits:
