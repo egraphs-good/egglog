@@ -1,11 +1,11 @@
 
-(let x (bigint -1234))
-(let y (from-string "2"))
-(let z (bigrat x y))
-(check (= (to-string (numer z)) "-617"))
+(let $x (bigint -1234))
+(let $y (from-string "2"))
+(let $z (bigrat $x $y))
+(check (= (to-string (numer $z)) "-617"))
 
 (function bignums (BigInt BigInt) BigRat :no-merge)
-(set (bignums x y) z)
+(set (bignums $x $y) $z)
 (check
 	(= (bignums a b) c)
 	(= (numer c) (>> a 1))

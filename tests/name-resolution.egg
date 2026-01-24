@@ -2,16 +2,16 @@
   (Add Math Math)
   (Num i64))
   
-(let zero (Num 0))
+(let $zero (Num 0))
 
 
-;; zero here refers to the function/constant zero, not a free variable
-(rewrite (Add zero x) x)
+;; $zero here refers to the function/constant zero, not a free variable
+(rewrite (Add $zero x) x)
 
-(let a (Add (Num 0) (Num 3)))
-(let b (Add (Num 7) (Num 9)))
-(let c (Num 16))
-(union b c)
+(let $a (Add (Num 0) (Num 3)))
+(let $b (Add (Num 7) (Num 9)))
+(let $c (Num 16))
+(union $b $c)
 
 ;; crash if we merge two numbers
 (rule (

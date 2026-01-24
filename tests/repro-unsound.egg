@@ -1,27 +1,27 @@
 
 (datatype HerbieType (Type String))
 (datatype Math (Num HerbieType i64) (Var HerbieType String) (Fma HerbieType Math Math Math) (If HerbieType Math Math Math) (Less HerbieType Math Math) (LessEq HerbieType Math Math) (Greater HerbieType Math Math) (GreaterEq HerbieType Math Math) (Eq HerbieType Math Math) (NotEq HerbieType Math Math) (Add HerbieType Math Math) (Sub HerbieType Math Math) (Mul HerbieType Math Math) (Div HerbieType Math Math) (Pow HerbieType Math Math) (Atan2 HerbieType Math Math) (Hypot HerbieType Math Math) (And HerbieType Math Math) (Or HerbieType Math Math) (Not HerbieType Math) (Neg HerbieType Math) (Sqrt HerbieType Math) (Cbrt HerbieType Math) (Fabs HerbieType Math) (Ceil HerbieType Math) (Floor HerbieType Math) (Round HerbieType Math) (Log HerbieType Math) (Exp HerbieType Math) (Sin HerbieType Math) (Cos HerbieType Math) (Tan HerbieType Math) (Atan HerbieType Math) (Asin HerbieType Math) (Acos HerbieType Math) (Expm1 HerbieType Math) (Log1p HerbieType Math) (Sinh HerbieType Math) (Cosh HerbieType Math) (Tanh HerbieType Math) (PI HerbieType) (E HerbieType) (INFINITY HerbieType) (TRUE HerbieType) (FALSE HerbieType))
-(let r-zero 0)
-(let r-one 1)
-(let r-two 2)
-(let r-three 3)
-(let r-four 4)
-(let r-neg-one -1)
+(let $r-zero 0)
+(let $r-one 1)
+(let $r-two 2)
+(let $r-three 3)
+(let $r-four 4)
+(let $r-neg-one -1)
 (relation universe (Math HerbieType))
 (rule ((= t (Expm1 ty a))) ((universe t ty)))
 (rewrite (Mul ty a b) (Mul ty b a))
 
-(rewrite (Sub ty x x) (Num ty r-zero))
+(rewrite (Sub ty x x) (Num ty $r-zero))
 
-(rewrite (Mul ty x (Num ty r-one)) x)
+(rewrite (Mul ty x (Num ty $r-one)) x)
 
-(rewrite (Div ty x (Num ty r-one)) x)
+(rewrite (Div ty x (Num ty $r-one)) x)
 
-(rewrite (Neg ty x) (Sub ty (Num ty r-zero) x))
+(rewrite (Neg ty x) (Sub ty (Num ty $r-zero) x))
 
-(rewrite (Neg ty x) (Mul ty (Num ty r-neg-one) x))
+(rewrite (Neg ty x) (Mul ty (Num ty $r-neg-one) x))
 
-(rule ((universe t ty)) ((union t (Mul ty (Num ty r-one) t))))
+(rule ((universe t ty)) ((union t (Mul ty (Num ty $r-one) t))))
 
 (rewrite (Div ty (Sub ty a b) c)
          (Sub ty (Div ty a c) (Div ty b c)))
@@ -34,7 +34,7 @@
 ;; errors if a or b errors
 (rewrite (Add ty a b)
          (If ty
-             (NotEq ty (Sub ty a b) (Num ty r-zero)) ;; errors if a or b errors
+             (NotEq ty (Sub ty a b) (Num ty $r-zero)) ;; errors if a or b errors
              (Div ty
                   (Sub ty (Mul ty a a) (Mul ty b b))
                   (Sub ty a b))
@@ -51,12 +51,12 @@
 
 
 (rewrite (Expm1 ty x)
-         (Sub ty (Exp ty x) (Num ty r-one)))
+         (Sub ty (Exp ty x) (Num ty $r-one)))
 
 
 
 
-(let eggvar1 (Div (Type "binary64") (Expm1 (Type "binary64") (Add (Type "binary64") (Var (Type "binary64") "h0") (Var (Type "binary64") "h0"))) (Expm1 (Type "binary64") (Var (Type "binary64") "h0"))))
+(let $eggvar1 (Div (Type "binary64") (Expm1 (Type "binary64") (Add (Type "binary64") (Var (Type "binary64") "h0") (Var (Type "binary64") "h0"))) (Expm1 (Type "binary64") (Var (Type "binary64") "h0"))))
 
 (run 10)
 

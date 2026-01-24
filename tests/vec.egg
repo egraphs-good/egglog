@@ -30,9 +30,9 @@
 (constructor a () X)
 (constructor b () X)
 
-(let p (vec-of (a)))
-(let q (vec-of (b)))
-(check (!= p q))
+(let $p (vec-of (a)))
+(let $q (vec-of (b)))
+(check (!= $p $q))
 
 (union (a) (b))
-(check (= p q))
+(check (= $p $q))

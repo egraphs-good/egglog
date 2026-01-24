@@ -19,11 +19,11 @@
       ((set (Config (Cons x a) b c) (+ len 1))
        (set (Config a (Cons x b) c) (+ len 1))))
 
-(let e (Empty))
+(let $e (Empty))
 
 
 ;; initial state [123 _ _] with path "length" 0
-(set (Config (Cons 1 (Cons 2 (Cons 3 e))) e e) 0)
+(set (Config (Cons 1 (Cons 2 (Cons 3 $e))) $e $e) 0)
 
 ;; find all reachable states
 (run 1000000)
@@ -33,7 +33,7 @@
 (print-size Config)
 
 ;; how to long to move to state [_ _ 123]
-(extract (Config e e (Cons 1 (Cons 2 (Cons 3 e)))))
+(extract (Config $e $e (Cons 1 (Cons 2 (Cons 3 $e)))))
 
 ;; actually do the assertion
-(check (= 5 (Config e e (Cons 1 (Cons 2 (Cons 3 e))))))
+(check (= 5 (Config $e $e (Cons 1 (Cons 2 (Cons 3 $e))))))

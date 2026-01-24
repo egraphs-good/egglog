@@ -9,7 +9,7 @@
     (CaseSplit Term Term Term)
     (Cons Term Term))
 (constructor NilConst () Term)
-(let Nil (NilConst))
+(let $Nil (NilConst))
 
 (constructor V (String) Var) 
 (constructor From (Term) Var)
@@ -45,21 +45,21 @@
        (= (freer e1) fv1)
        (= (freer e2) fv2))
       ((set (freer e) (set-union fv1 fv2))))
-(rule ((= e Nil))
+(rule ((= e $Nil))
       ((set (freer e) (set-empty))))
 
 ;; ==== eval ====
 ; beta
 (rewrite (App (Lam v body) e) (Let v e body))
 ; case-split-nil
-(rewrite (CaseSplit Nil e1 e2) e1)
+(rewrite (CaseSplit $Nil e1 e2) e1)
 ; case-split-cons
 (rewrite (CaseSplit (Cons x xs) e1 e2) (App (App e2 x) xs))
 
 ; let-num
 (rewrite (Let v e (Num n)) (Num n))
 ; let-nil
-(rewrite (Let v e Nil) Nil)
+(rewrite (Let v e $Nil) $Nil)
 ; let-var-same
 (rewrite (Let v1 e (TVar v1)) e)
 ; let-var-diff
@@ -105,7 +105,7 @@
 (rule ((= demand (pushdown f e)) (= e (Lam x e))) ((is-tail e)))
 (rule ((= demand (pushdown f e)) (= e (TVar x))) ((is-tail e)))
 (rule ((= demand (pushdown f e)) (= e (Cons e1 e2))) ((is-tail e)))
-(rule ((= demand (pushdown f e)) (= e Nil)) ((is-tail e)))
+(rule ((= demand (pushdown f e)) (= e $Nil)) ((is-tail e)))
 (rule ((= demand (pushdown f e)) (= e (Add e1 e2))) ((is-tail e)))
 (rule ((= demand (pushdown f e)) (= e (Num n1))) ((is-tail e)))
 (rewrite (pushdown f e) (App f e) :when ((is-tail e)))
@@ -124,7 +124,7 @@
 
 (union (mapf) (Lam (V "xs")
     (CaseSplit (TVar (V "xs"))
-        Nil
+        $Nil
         (Lam (V "x") (Lam (V "xs'")
             (Cons (Add (TVar (V "x")) (Num 1))
                   (App (mapf) (TVar (V "xs'")))))))))
@@ -132,14 +132,14 @@
 (set (freer (sum)) (set-empty))
 (set (freer (mapf)) (set-empty))
 
-(let expr (App (sum) (App (mapf) (TVar (V "expr")))))
+(let $expr (App (sum) (App (mapf) (TVar (V "expr")))))
 
 (run 100)
 
-(extract (freer expr))
+(extract (freer $expr))
 
 
-(let my-output
+(let $my-output
     (CaseSplit (TVar (V "expr")) (Num 0) 
            (Lam (V "x") (Lam (V "xs'") 
                 (Add (Add (TVar (V "x")) (Num 1)) 

@@ -280,33 +280,33 @@
  ((set (unsound) true))
  :ruleset
  unsound-rule)
-(let ?zero (bigrat (from-string "0") (from-string "1")))
+(let $?zero (bigrat (from-string "0") (from-string "1")))
 (rewrite (Add (Num x) (Num y)) (Num (+ x y)) :ruleset const-fold)
 (rewrite (Sub (Num x) (Num y)) (Num (- x y)) :ruleset const-fold)
 (rewrite (Mul (Num x) (Num y)) (Num (* x y)) :ruleset const-fold)
 (rule
- ((= e (Div (Num x) (Num y))) (!= ?zero y))
+ ((= e (Div (Num x) (Num y))) (!= $?zero y))
  ((union e (Num (/ x y))))
  :ruleset
  const-fold)
 (rewrite (Neg (Num x)) (Num (neg x)) :ruleset const-fold)
 (rule
- ((= e (Pow (Num x) (Num y))) (= ?zero x) (> y ?zero))
- ((union e (Num ?zero)))
+ ((= e (Pow (Num x) (Num y))) (= $?zero x) (> y $?zero))
+ ((union e (Num $?zero)))
  :ruleset
  const-fold)
 (rule
- ((= e (Pow (Num x) (Num y))) (= ?zero y) (!= ?zero x))
+ ((= e (Pow (Num x) (Num y))) (= $?zero y) (!= $?zero x))
  ((union e (Num (bigrat (from-string "1") (from-string "1")))))
  :ruleset
  const-fold)
 (rule
- ((= e (Pow (Num x) (Num y))) (> y ?zero) (!= ?zero x) (= y (round y)))
+ ((= e (Pow (Num x) (Num y))) (> y $?zero) (!= $?zero x) (= y (round y)))
  ((union e (Num (pow x y))))
  :ruleset
  const-fold)
 (rule
- ((= e (Pow (Num x) (Num y))) (> y ?zero) (!= ?zero x) (!= y (round y)))
+ ((= e (Pow (Num x) (Num y))) (> y $?zero) (!= $?zero x) (!= y (round y)))
  ((union e (Num (pow x (round y)))))
  :ruleset
  const-fold)
@@ -317,7 +317,7 @@
  const-fold)
 (rule
  ((= e (Log (Num x))) (= (numer x) (denom x)))
- ((union e (Num ?zero)))
+ ((union e (Num $?zero)))
  :ruleset
  const-fold)
 (rule

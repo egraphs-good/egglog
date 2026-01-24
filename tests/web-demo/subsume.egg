@@ -11,20 +11,20 @@
 
 (rewrite (Mul (Num 3) x) (Add x (Add x x)) :subsume)
 
-(let x (Mul (Num 2) (Mul (Num 3) (Var "x"))))
+(let $x (Mul (Num 2) (Mul (Num 3) (Var "x"))))
 
 (run 10)
 
 ; When X is extracted, we get the optimized form, where the * 3 is expanded out
-(check (= x (Mul (Num 2) (Add (Var "x") (Add (Var "x") (Var "x"))))))
-(extract x)
+(check (= $x (Mul (Num 2) (Add (Var "x") (Add (Var "x") (Var "x"))))))
+(extract $x)
 ; Will be (Mul (Num 2) (Add (Var "x") (Add (Var "x") (Var "x"))))
 
-; Even though it can't be extracted, we can still check that x equal 2 * (3 * x)
-(check (= x (Mul (Num 2) (Mul (Num 3) (Var "x")))))
+; Even though it can't be extracted, we can still check that $x equal 2 * (3 * $x)
+(check (= $x (Mul (Num 2) (Mul (Num 3) (Var "x")))))
 
 ; Also if we make multiplication commutative and run that run, we won't get that result either
 ; since the original expr has been subsumed when it was replaced with the addition
-(rewrite (Mul x y) (Mul y x))
+(rewrite (Mul $x y) (Mul y $x))
 (run 10)
-(extract x)
+(extract $x)

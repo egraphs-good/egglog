@@ -85,7 +85,7 @@
 
 
 ;; Tests
-(let start-expr (Div (
+(let $start-expr (Div (
                         Mul (Var "a") (Pow (Const 2) (Const 3))
                     ) (
                         Add (Var "c") (
@@ -93,7 +93,7 @@
                         )
                     )))
 
-(let equiv-expr (Div (
+(let $equiv-expr (Div (
                     LShift (Var "a") (Const 3)
                 ) (
                     Mul (Var "c") (Not (Not (Const 1)))
@@ -102,5 +102,5 @@
 
 (run 4)
 
-(check (= start-expr equiv-expr))
+(check (= $start-expr $equiv-expr))
 

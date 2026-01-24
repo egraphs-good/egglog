@@ -13,15 +13,15 @@
     (Add Expr Expr)
     (App Expr Expr))
 (constructor TConst () Expr)
-(let T (TConst))
+(let $T (TConst))
 (constructor FConst () Expr)
-(let F (FConst))
+(let $F (FConst))
 
 
 ; (\x. (if x then 0 else 1) + 2) false
-(let test
+(let $test
     (App 
-        (Abs "x" (Add (If (Var "x") (N 0) (N 1)) (N 2))) F))
+        (Abs "x" (Add (If (Var "x") (N 0) (N 1)) (N 2))) $F))
 
 (datatype CExpr
     (CVar String :cost 10000) ; (variables that haven't been eliminated yet)
@@ -29,19 +29,19 @@
     (CN i64)
     (CApp CExpr CExpr))
 (constructor CTConst () CExpr)
-(let CT (CTConst))
+(let $CT (CTConst))
 (constructor CFConst () CExpr)
-(let CF (CFConst))
+(let $CF (CFConst))
 (constructor CIfConst () CExpr)
-(let CIf (CIfConst))
+(let $CIf (CIfConst))
 (constructor CAddConst () CExpr)
-(let CAdd (CAddConst))
+(let $CAdd (CAddConst))
 (constructor SConst () CExpr)
-(let S (SConst))
+(let $S (SConst))
 (constructor KConst () CExpr)
-(let K (KConst))
+(let $K (KConst))
 (constructor IConst () CExpr)
-(let I (IConst))
+(let $I (IConst))
 
 ;;;; Conversion functions
 (constructor Comb (Expr) CExpr :cost 1000000)
@@ -53,19 +53,19 @@
 ; Note: we avoid resugaring S/K/I
 (rule ((= x (N n))) ((union (Comb x) (CN n))))
 (rule ((= cx (CN n))) ((union (Uncomb cx) (N n))))
-(rule ((= x T)) ((union (Comb x) CT)))
-(rule ((= cx CT)) ((union (Uncomb cx) T)))
-(rule ((= x F)) ((union (Comb x) CF)))
-(rule ((= cx CF)) ((union (Uncomb cx) F)))
+(rule ((= x $T)) ((union (Comb x) $CT)))
+(rule ((= cx $CT)) ((union (Uncomb cx) $T)))
+(rule ((= x $F)) ((union (Comb x) $CF)))
+(rule ((= cx $CF)) ((union (Uncomb cx) $F)))
 
 (rule ((= x (If c t f)))
-    ((union (Comb x) (CApp (CApp (CApp CIf (Comb c)) (Comb t)) (Comb f)))))
-(rule ((= cx (CApp (CApp (CApp CIf cc) ct) cf)))
+    ((union (Comb x) (CApp (CApp (CApp $CIf (Comb c)) (Comb t)) (Comb f)))))
+(rule ((= cx (CApp (CApp (CApp $CIf cc) ct) cf)))
     ((union (Uncomb cx) (If (Uncomb cc) (Uncomb ct) (Uncomb cf)))))
 
 (rule ((= x (Add l r)))
-    ((union (Comb x) (CApp (CApp CAdd (Comb l)) (Comb r)))))
-(rule ((= cx (CApp (CApp CAdd cl) cr)))
+    ((union (Comb x) (CApp (CApp $CAdd (Comb l)) (Comb r)))))
+(rule ((= cx (CApp (CApp $CAdd cl) cr)))
     ((union (Uncomb cx) (Add (Uncomb cl) (Uncomb cr)))))
 (rule ((= x (App f a))) ((union (Comb x) (CApp (Comb f) (Comb a)))))
 
@@ -73,30 +73,30 @@
 (rule ((= x (Abs v body))) ((union (Comb x) (CAbs v (Comb body)))))
 
 ;;;; Abstraction Elimination 
-(rewrite (CAbs v (CVar v)) I)
+(rewrite (CAbs v (CVar v)) $I)
 ; Hacks, could be replaced by !free computation.
-(rewrite (CAbs v1 (CVar v2)) (CApp K (CVar v2)) 
+(rewrite (CAbs v1 (CVar v2)) (CApp $K (CVar v2)) 
     :when ((!= v1 v2)))
-(rewrite (CAbs v (CN n)) (CApp K (CN n)))
-(rewrite (CAbs v CT) (CApp K CT))
-(rewrite (CAbs v CF) (CApp K CF))
-(rewrite (CAbs v CIf) (CApp K CIf))
-(rewrite (CAbs v CAdd) (CApp K CAdd))
-(rewrite (CAbs v (CApp x y)) (CApp (CApp S (CAbs v x)) (CAbs v y)))
+(rewrite (CAbs v (CN n)) (CApp $K (CN n)))
+(rewrite (CAbs v $CT) (CApp $K $CT))
+(rewrite (CAbs v $CF) (CApp $K $CF))
+(rewrite (CAbs v $CIf) (CApp $K $CIf))
+(rewrite (CAbs v $CAdd) (CApp $K $CAdd))
+(rewrite (CAbs v (CApp x y)) (CApp (CApp $S (CAbs v x)) (CAbs v y)))
 ; May be needed for multiple nested variables
-(rewrite (CAbs v (CApp K (CVar v))) K)
+(rewrite (CAbs v (CApp $K (CVar v))) $K)
 
 ;;;; Primitive Evaluation rules (letd on "surface syntax")
-(rewrite (If T t f) t)
-(rewrite (If F t f) f)
+(rewrite (If $T t f) t)
+(rewrite (If $F t f) f)
 (rewrite (Add (N n) (N m)) (N (+ n m)))
 
 ;;;; Substitution Rules (letd on the combinator representation)
-(rewrite (CApp I cx) cx)
-(rewrite (CApp (CApp K cx) cy) cx)
+(rewrite (CApp $I cx) cx)
+(rewrite (CApp (CApp $K cx) cy) cx)
 ; Without demand, this can cause an explosion in DB size.
-(rewrite (CApp (CApp (CApp S cx) cy) cz) (CApp (CApp cx cz) (CApp cy cz)))
+(rewrite (CApp (CApp (CApp $S cx) cy) cz) (CApp (CApp cx cz) (CApp cy cz)))
 
 (run 11)
-(extract (Comb test))
-(check (= test (N 3)))
+(extract (Comb $test))
+(check (= $test (N 3)))
