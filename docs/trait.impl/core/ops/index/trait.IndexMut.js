@@ -1,0 +1,9 @@
+(function() {
+    var implementors = Object.fromEntries([["egglog_numeric_id",[["impl&lt;K: <a class=\"trait\" href=\"egglog_numeric_id/trait.NumericId.html\" title=\"trait egglog_numeric_id::NumericId\">NumericId</a>, V&gt; <a class=\"trait\" href=\"https://doc.rust-lang.org/1.87.0/core/ops/index/trait.IndexMut.html\" title=\"trait core::ops::index::IndexMut\">IndexMut</a>&lt;K&gt; for <a class=\"struct\" href=\"egglog_numeric_id/struct.DenseIdMap.html\" title=\"struct egglog_numeric_id::DenseIdMap\">DenseIdMap</a>&lt;K, V&gt;"],["impl&lt;K: <a class=\"trait\" href=\"egglog_numeric_id/trait.NumericId.html\" title=\"trait egglog_numeric_id::NumericId\">NumericId</a>, V&gt; <a class=\"trait\" href=\"https://doc.rust-lang.org/1.87.0/core/ops/index/trait.IndexMut.html\" title=\"trait core::ops::index::IndexMut\">IndexMut</a>&lt;K&gt; for <a class=\"struct\" href=\"egglog_numeric_id/struct.DenseIdMapWithReuse.html\" title=\"struct egglog_numeric_id::DenseIdMapWithReuse\">DenseIdMapWithReuse</a>&lt;K, V&gt;"],["impl&lt;K: <a class=\"trait\" href=\"egglog_numeric_id/trait.NumericId.html\" title=\"trait egglog_numeric_id::NumericId\">NumericId</a>, V&gt; <a class=\"trait\" href=\"https://doc.rust-lang.org/1.87.0/core/ops/index/trait.IndexMut.html\" title=\"trait core::ops::index::IndexMut\">IndexMut</a>&lt;K&gt; for <a class=\"struct\" href=\"egglog_numeric_id/struct.IdVec.html\" title=\"struct egglog_numeric_id::IdVec\">IdVec</a>&lt;K, V&gt;"]]]]);
+    if (window.register_implementors) {
+        window.register_implementors(implementors);
+    } else {
+        window.pending_implementors = implementors;
+    }
+})()
+//{"start":57,"fragment_lengths":[1406]}

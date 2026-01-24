@@ -1,0 +1,1 @@
+window.SIDEBAR_ITEMS = {"enum":["SourceExpr","TopLevelLhsExpr"],"struct":["SourceSyntax","SyntaxId"]};
