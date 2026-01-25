@@ -100,7 +100,8 @@ impl ContainerValues {
     /// The return type of this function may contain lock guards. Attempts to modify the contents
     /// of the containers database may deadlock if the given guard has not been dropped.
     pub fn get_val<C: ContainerValue>(&self, val: Value) -> Option<impl Deref<Target = C> + '_> {
-        self.get::<C>()?.get_container(val)
+        let env = self.get::<C>()?;
+        env.get_container(val)
     }
 
     pub fn register_val<C: ContainerValue>(
@@ -111,7 +112,8 @@ impl ContainerValues {
         let env = self
             .get::<C>()
             .expect("must register container type before registering a value");
-        env.get_or_insert(&container, exec_state)
+        let res = env.get_or_insert(&container, exec_state);
+        res
     }
 
     /// Apply the given rebuild to the contents of each container.

@@ -949,6 +949,9 @@ impl EGraph {
                 // Rebuilding containers first will find that v3 and v2 are equal, and the rest of
                 // the rules can proceed.
                 let container_rebuild = self.db.rebuild_containers(self.uf_table);
+                if container_rebuild {
+                    self.db.merge_all();
+                }
                 let table_rebuild =
                     self.db
                         .apply_rebuild(self.uf_table, &tables, self.next_ts().to_value());

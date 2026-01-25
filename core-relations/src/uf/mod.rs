@@ -494,7 +494,6 @@ impl DisplacedTable {
             return None;
         }
         let (parent, child) = self.uf.union(row[0], row[1]);
-
         // Compress paths somewhat, given that we perform naive finds everywhere else.
         let _ = self.uf.find(parent);
         let _ = self.uf.find(child);

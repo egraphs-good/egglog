@@ -95,6 +95,20 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "c08606f8c3cbf4ce6ec8e28fb0014a2c086708fe954eaa885384a6165172e7e8"
 
 [[package]]
+name = "binder-experiments"
+version = "1.0.0"
+dependencies = [
+ "egglog-bridge",
+ "egglog-core-relations",
+ "egglog-numeric-id",
+ "env_logger",
+ "hashbrown 0.16.0",
+ "log",
+ "smallvec",
+ "thiserror",
+]
+
+[[package]]
 name = "bindgen"
 version = "0.72.1"
 source = "registry+https://github.com/rust-lang/crates.io-index"

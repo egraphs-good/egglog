@@ -889,6 +889,34 @@ fn add_link_table(egraph: &mut EGraph) -> FunctionId {
     })
 }
 
+fn add_lam_app_var_tables(egraph: &mut EGraph) -> (FunctionId, FunctionId, FunctionId) {
+    let lam = egraph.add_table(FunctionConfig {
+        schema: vec![ColumnTy::Id, ColumnTy::Id],
+        default: DefaultVal::FreshId,
+        merge: MergeFn::UnionId,
+        name: "lam".into(),
+        can_subsume: false,
+        row_id: false,
+    });
+    let app = egraph.add_table(FunctionConfig {
+        schema: vec![ColumnTy::Id, ColumnTy::Id, ColumnTy::Id],
+        default: DefaultVal::FreshId,
+        merge: MergeFn::UnionId,
+        name: "app".into(),
+        can_subsume: false,
+        row_id: false,
+    });
+    let var = egraph.add_table(FunctionConfig {
+        schema: vec![ColumnTy::Id, ColumnTy::Id],
+        default: DefaultVal::FreshId,
+        merge: MergeFn::UnionId,
+        name: "var".into(),
+        can_subsume: false,
+        row_id: false,
+    });
+    (lam, app, var)
+}
+
 fn fingerprint_block(egraph: &EGraph, eclass: Value) -> Value {
     let canon = egraph.get_canon_repr(eclass, ColumnTy::Id);
     let state = egraph
@@ -898,6 +926,35 @@ fn fingerprint_block(egraph: &EGraph, eclass: Value) -> Value {
     let table = egraph.db.get_table(state.fingerprint_table.table);
     let row = table.get_row(&[canon]).expect("missing fingerprint row");
     row.vals[state.fingerprint_table.block_col.index()]
+}
+
+fn partition_refinement_lambda_splits_lam_blocks_impl<H: PartitionRefinementHasher>() {
+    let mut egraph = partition_refinement_egraph::<H>();
+    let (lam, app, var) = add_lam_app_var_tables(&mut egraph);
+
+    // Build (lam x (lam y (app y x))) with cyclic variable references.
+    let outer_lam = egraph.fresh_id();
+    let inner_lam = egraph.fresh_id();
+    let var_x = egraph.fresh_id();
+    let var_y = egraph.fresh_id();
+    let app_yx = egraph.fresh_id();
+    egraph.add_values([
+        (var, vec![outer_lam, var_x]),
+        (var, vec![inner_lam, var_y]),
+        (app, vec![var_y, var_x, app_yx]),
+        (lam, vec![app_yx, inner_lam]),
+        (lam, vec![inner_lam, outer_lam]),
+    ]);
+
+    run_partition_refinement_and_check::<H>(&mut egraph);
+    let block_outer = fingerprint_block(&egraph, outer_lam);
+    let block_inner = fingerprint_block(&egraph, inner_lam);
+    assert_ne!(block_outer, block_inner);
+}
+
+#[test]
+fn partition_refinement_lambda_splits_lam_blocks_crc() {
+    partition_refinement_lambda_splits_lam_blocks_impl::<Crc32PartitionHasher>();
 }
 
 fn partition_refinement_self_cycles_share_block_impl<H: PartitionRefinementHasher>() {

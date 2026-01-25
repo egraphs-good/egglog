@@ -9,7 +9,7 @@ members = [
   "union-find",
   "src/sort/add_primitive",
   "wasm-example"
-]
+, "binder-experiments"]
 
 [workspace.package]
 version = "1.0.0"

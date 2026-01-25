@@ -1,0 +1,19 @@
+[package]
+name = "binder-experiments"
+version.workspace = true
+edition.workspace = true
+description.workspace = true
+repository.workspace = true
+keywords.workspace = true
+license.workspace = true
+readme.workspace = true
+
+[dependencies]
+egglog-bridge = { workspace = true }
+egglog-core-relations = { workspace = true }
+egglog-numeric-id = { workspace = true }
+hashbrown = { workspace = true }
+env_logger = { workspace = true }
+log = { workspace = true }
+smallvec = { workspace = true }
+thiserror = { workspace = true }
