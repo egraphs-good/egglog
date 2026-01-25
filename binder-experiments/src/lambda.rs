@@ -74,6 +74,7 @@ fn add_lambda_tables(
 ) -> LambdaTables {
     let lam = egraph.add_table(FunctionConfig {
         schema: vec![ColumnTy::Id, ColumnTy::Id],
+        refinement_inputs: None,
         default: DefaultVal::FreshId,
         merge: MergeFn::UnionId,
         name: "lam".to_string(),
@@ -82,6 +83,7 @@ fn add_lambda_tables(
     });
     let app = egraph.add_table(FunctionConfig {
         schema: vec![ColumnTy::Id, ColumnTy::Id, ColumnTy::Id],
+        refinement_inputs: None,
         default: DefaultVal::FreshId,
         merge: MergeFn::UnionId,
         name: "app".to_string(),
@@ -90,6 +92,7 @@ fn add_lambda_tables(
     });
     let var = egraph.add_table(FunctionConfig {
         schema: vec![ColumnTy::Id, ColumnTy::Id],
+        refinement_inputs: None,
         default: DefaultVal::FreshId,
         merge: MergeFn::UnionId,
         name: "var".to_string(),
@@ -98,6 +101,7 @@ fn add_lambda_tables(
     });
     let subst = egraph.add_table(FunctionConfig {
         schema: vec![ColumnTy::Id, ColumnTy::Id, ColumnTy::Id, ColumnTy::Id],
+        refinement_inputs: None,
         default: DefaultVal::FreshId,
         merge: MergeFn::UnionId,
         name: "subst".to_string(),
@@ -106,6 +110,7 @@ fn add_lambda_tables(
     });
     let free_vars = egraph.add_table(FunctionConfig {
         schema: vec![ColumnTy::Id, ColumnTy::Id],
+        refinement_inputs: None,
         default: DefaultVal::Fail,
         merge: MergeFn::Primitive(free_var_funcs.union, vec![MergeFn::Old, MergeFn::New]),
         name: "free-vars".to_string(),
@@ -114,6 +119,7 @@ fn add_lambda_tables(
     });
     let num = egraph.add_table(FunctionConfig {
         schema: vec![ColumnTy::Base(int_base), ColumnTy::Id],
+        refinement_inputs: None,
         default: DefaultVal::FreshId,
         merge: MergeFn::UnionId,
         name: "num".to_string(),
@@ -122,6 +128,7 @@ fn add_lambda_tables(
     });
     let add = egraph.add_table(FunctionConfig {
         schema: vec![ColumnTy::Id, ColumnTy::Id, ColumnTy::Id],
+        refinement_inputs: None,
         default: DefaultVal::FreshId,
         merge: MergeFn::UnionId,
         name: "add".to_string(),

@@ -58,10 +58,8 @@ pub(crate) fn run_church_demo(n: usize, run_partition_refinement: bool) {
     };
     let env = super::setup_lambda(&mut egraph);
     let _expr = add_church_add_application(&mut egraph, &env, n).expect("church demo parse failed");
-    // TODO: Free-variable rules use containers, which currently misbehave when
-    // partition refinement is enabled (container ids can be merged away during rebuild).
-    // Disable them for now to avoid container panics in the cyclic rebuild demo.
     let mut rules = Vec::new();
+    rules.extend(env.rules.free_vars.iter().copied());
     rules.extend(env.rules.subst.iter().copied());
     rules.extend(env.rules.beta.iter().copied());
     let _ = run_to_fixpoint(&mut egraph, &rules, run_partition_refinement);

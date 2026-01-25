@@ -47,7 +47,7 @@ use egglog_ast::generic_ast::{Change, GenericExpr, Literal};
 use egglog_ast::span::Span;
 use egglog_ast::util::ListDisplay;
 pub use egglog_bridge::FunctionRow;
-use egglog_bridge::{ColumnTy, QueryEntry};
+use egglog_bridge::{ColumnTy, QueryEntry, RefinementInput};
 use egglog_core_relations as core_relations;
 use egglog_numeric_id as numeric_id;
 use egglog_reports::{ReportLevel, RunReport};
@@ -563,12 +563,27 @@ impl EGraph {
         };
 
         use egglog_bridge::{DefaultVal, MergeFn};
+        let refinement_inputs = input
+            .iter()
+            .chain([&output])
+            .map(|sort| {
+                if sort.is_container_sort() {
+                    RefinementInput::Raw
+                } else {
+                    match sort.column_ty(&self.backend) {
+                        ColumnTy::Id => RefinementInput::Block,
+                        ColumnTy::Base(_) => RefinementInput::Raw,
+                    }
+                }
+            })
+            .collect();
         let backend_id = self.backend.add_table(egglog_bridge::FunctionConfig {
             schema: input
                 .iter()
                 .chain([&output])
                 .map(|sort| sort.column_ty(&self.backend))
                 .collect(),
+            refinement_inputs: Some(refinement_inputs),
             default: match decl.subtype {
                 FunctionSubtype::Constructor => DefaultVal::FreshId,
                 FunctionSubtype::Custom => DefaultVal::Fail,

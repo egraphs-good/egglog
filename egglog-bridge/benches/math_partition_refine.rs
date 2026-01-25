@@ -54,6 +54,7 @@ fn setup_math(egraph: &mut EGraph) -> Vec<RuleId> {
 
     let diff = egraph.add_table(FunctionConfig {
         schema: vec![ColumnTy::Id, ColumnTy::Id, ColumnTy::Id],
+        refinement_inputs: None,
         default: DefaultVal::FreshId,
         merge: MergeFn::UnionId,
         name: "diff".into(),
@@ -62,6 +63,7 @@ fn setup_math(egraph: &mut EGraph) -> Vec<RuleId> {
     });
     let integral = egraph.add_table(FunctionConfig {
         schema: vec![ColumnTy::Id, ColumnTy::Id, ColumnTy::Id],
+        refinement_inputs: None,
         default: DefaultVal::FreshId,
         merge: MergeFn::UnionId,
         name: "integral".into(),
@@ -71,6 +73,7 @@ fn setup_math(egraph: &mut EGraph) -> Vec<RuleId> {
 
     let add = egraph.add_table(FunctionConfig {
         schema: vec![ColumnTy::Id, ColumnTy::Id, ColumnTy::Id],
+        refinement_inputs: None,
         default: DefaultVal::FreshId,
         merge: MergeFn::UnionId,
         name: "add".into(),
@@ -79,6 +82,7 @@ fn setup_math(egraph: &mut EGraph) -> Vec<RuleId> {
     });
     let sub = egraph.add_table(FunctionConfig {
         schema: vec![ColumnTy::Id, ColumnTy::Id, ColumnTy::Id],
+        refinement_inputs: None,
         default: DefaultVal::FreshId,
         merge: MergeFn::UnionId,
         name: "sub".into(),
@@ -88,6 +92,7 @@ fn setup_math(egraph: &mut EGraph) -> Vec<RuleId> {
 
     let mul = egraph.add_table(FunctionConfig {
         schema: vec![ColumnTy::Id, ColumnTy::Id, ColumnTy::Id],
+        refinement_inputs: None,
         default: DefaultVal::FreshId,
         merge: MergeFn::UnionId,
         name: "mul".into(),
@@ -97,6 +102,7 @@ fn setup_math(egraph: &mut EGraph) -> Vec<RuleId> {
 
     let div = egraph.add_table(FunctionConfig {
         schema: vec![ColumnTy::Id, ColumnTy::Id, ColumnTy::Id],
+        refinement_inputs: None,
         default: DefaultVal::FreshId,
         merge: MergeFn::UnionId,
         name: "div".into(),
@@ -106,6 +112,7 @@ fn setup_math(egraph: &mut EGraph) -> Vec<RuleId> {
 
     let pow = egraph.add_table(FunctionConfig {
         schema: vec![ColumnTy::Id, ColumnTy::Id, ColumnTy::Id],
+        refinement_inputs: None,
         default: DefaultVal::FreshId,
         merge: MergeFn::UnionId,
         name: "pow".into(),
@@ -115,6 +122,7 @@ fn setup_math(egraph: &mut EGraph) -> Vec<RuleId> {
 
     let ln = egraph.add_table(FunctionConfig {
         schema: vec![ColumnTy::Id, ColumnTy::Id],
+        refinement_inputs: None,
         default: DefaultVal::FreshId,
         merge: MergeFn::UnionId,
         name: "ln".into(),
@@ -124,6 +132,7 @@ fn setup_math(egraph: &mut EGraph) -> Vec<RuleId> {
 
     let sqrt = egraph.add_table(FunctionConfig {
         schema: vec![ColumnTy::Id, ColumnTy::Id],
+        refinement_inputs: None,
         default: DefaultVal::FreshId,
         merge: MergeFn::UnionId,
         name: "sqrt".into(),
@@ -133,6 +142,7 @@ fn setup_math(egraph: &mut EGraph) -> Vec<RuleId> {
 
     let sin = egraph.add_table(FunctionConfig {
         schema: vec![ColumnTy::Id, ColumnTy::Id],
+        refinement_inputs: None,
         default: DefaultVal::FreshId,
         merge: MergeFn::UnionId,
         name: "sin".into(),
@@ -142,6 +152,7 @@ fn setup_math(egraph: &mut EGraph) -> Vec<RuleId> {
 
     let cos = egraph.add_table(FunctionConfig {
         schema: vec![ColumnTy::Id, ColumnTy::Id],
+        refinement_inputs: None,
         default: DefaultVal::FreshId,
         merge: MergeFn::UnionId,
         name: "cos".into(),
@@ -151,6 +162,7 @@ fn setup_math(egraph: &mut EGraph) -> Vec<RuleId> {
 
     let rat = egraph.add_table(FunctionConfig {
         schema: vec![ColumnTy::Base(rational_ty), ColumnTy::Id],
+        refinement_inputs: None,
         default: DefaultVal::FreshId,
         merge: MergeFn::UnionId,
         name: "rat".into(),
@@ -160,6 +172,7 @@ fn setup_math(egraph: &mut EGraph) -> Vec<RuleId> {
 
     let var = egraph.add_table(FunctionConfig {
         schema: vec![ColumnTy::Base(string_ty), ColumnTy::Id],
+        refinement_inputs: None,
         default: DefaultVal::FreshId,
         merge: MergeFn::UnionId,
         name: "var".into(),

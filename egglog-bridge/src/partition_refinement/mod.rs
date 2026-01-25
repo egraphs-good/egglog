@@ -24,8 +24,8 @@ use crate::partition_refinement::refinement::{
 };
 use crate::partition_refinement::signature_set::{EClassSignatureTable, EnodeSignatureTable};
 use crate::{
-    ColumnTy, EGraph, FunctionId, QueryEntry, Result, RuleId, SchemaMath, UnionAction,
-    run_rules_impl,
+    ColumnTy, EGraph, FunctionId, QueryEntry, RefinementInput, Result, RuleId, SchemaMath,
+    UnionAction, run_rules_impl,
 };
 use hashbrown::{HashMap, HashSet};
 use indexmap::{IndexMap, IndexSet};
@@ -440,6 +440,7 @@ impl EGraph {
         let func_table = info.table;
         let func_name = info.name.to_string();
         let schema = info.schema.clone();
+        let refinement_inputs = info.refinement_inputs.clone();
         let signature_len = schema.len();
         let (
             fingerprint_table,
@@ -474,8 +475,8 @@ impl EGraph {
                 .query_table(func, &entries, None)
                 .expect("seed rule arity mismatch");
             let mut id_entries = Vec::new();
-            for (entry, ty) in entries.iter().zip(schema.iter()) {
-                if matches!(ty, ColumnTy::Id) {
+            for (entry, input) in entries.iter().zip(refinement_inputs.iter()) {
+                if matches!(input, RefinementInput::Block) {
                     id_entries.push(entry.clone());
                 }
             }
@@ -523,13 +524,13 @@ impl EGraph {
                 val: Value::from_usize(func_table.index()),
                 ty: ColumnTy::Id,
             });
-            for (entry, ty) in entries
+            for (entry, input) in entries
                 .iter()
                 .take(schema.len() - 1)
-                .zip(schema.iter().take(schema.len() - 1))
+                .zip(refinement_inputs.iter().take(schema.len() - 1))
             {
-                match ty {
-                    ColumnTy::Id => {
+                match input {
+                    RefinementInput::Block => {
                         let hash_var: QueryEntry = rb.new_var(ColumnTy::Id).into();
                         let block_var: QueryEntry = rb.new_var(ColumnTy::Id).into();
                         let ts_var: QueryEntry = rb.new_var(ColumnTy::Id).into();
@@ -540,7 +541,7 @@ impl EGraph {
                         );
                         hash_inputs.push(block_var);
                     }
-                    ColumnTy::Base(_) => {
+                    RefinementInput::Raw => {
                         hash_inputs.push(entry.clone());
                     }
                 }
@@ -594,19 +595,23 @@ impl EGraph {
             let block_col = fingerprint_table.block_col;
             let signature_table_id = signature_table.table;
             let schema = schema.clone();
+            let refinement_inputs = refinement_inputs.clone();
             let table_id_val = Value::from_usize(func_table.index());
             rb.add_callback(move |inner, rb| {
                 let ret_idx = schema.len() - 1;
                 let mut signature = Vec::with_capacity(signature_len + 1);
                 signature.push(CoreQueryEntry::Const(table_id_val));
-                for (entry, ty) in entries[..ret_idx].iter().zip(&schema[..ret_idx]) {
-                    match ty {
-                        ColumnTy::Id => {
+                for (entry, input) in entries[..ret_idx]
+                    .iter()
+                    .zip(&refinement_inputs[..ret_idx])
+                {
+                    match input {
+                        RefinementInput::Block => {
                             let child = inner.convert(entry);
                             let block = rb.lookup(fingerprint_table_id, &[child], block_col)?;
                             signature.push(block.into());
                         }
-                        ColumnTy::Base(_) => {
+                        RefinementInput::Raw => {
                             signature.push(inner.convert(entry));
                         }
                     }
@@ -843,6 +848,7 @@ impl EGraph {
                 }
                 let row_id_idx = schema_math.row_id_col();
                 let ret_idx = info.schema.len() - 1;
+                let refinement_inputs = &info.refinement_inputs;
                 let table = self.db.get_table(info.table);
                 let mut hash_inputs = Vec::with_capacity(ret_idx + 1);
                 self.scan_table(table, |row| {
@@ -850,10 +856,10 @@ impl EGraph {
                     let eclass = row[ret_idx];
                     hash_inputs.clear();
                     hash_inputs.push(Value::from_usize(info.table.index()));
-                    for (col_idx, ty) in info.schema[..ret_idx].iter().enumerate() {
+                    for (col_idx, input) in refinement_inputs[..ret_idx].iter().enumerate() {
                         let val = row[col_idx];
-                        match ty {
-                            ColumnTy::Id => {
+                        match input {
+                            RefinementInput::Block => {
                                 let Some(block) = blocks.get(&val) else {
                                     log::info!(
                                         "missing fingerprint block for child {val:?} in {}",
@@ -863,7 +869,7 @@ impl EGraph {
                                 };
                                 hash_inputs.push(*block);
                             }
-                            ColumnTy::Base(_) => hash_inputs.push(val),
+                            RefinementInput::Raw => hash_inputs.push(val),
                         }
                     }
                     let hash = exec

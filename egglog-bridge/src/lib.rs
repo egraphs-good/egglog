@@ -56,6 +56,24 @@ pub enum ColumnTy {
     Base(BaseValueId),
 }
 
+/// Controls how partition refinement treats a column when computing node signatures.
+#[derive(Debug, Copy, Clone, Eq, PartialEq, Hash)]
+pub enum RefinementInput {
+    /// Look up the e-class block for this column (used for e-class ids).
+    Block,
+    /// Treat the column as an opaque value and hash it directly.
+    Raw,
+}
+
+impl RefinementInput {
+    fn default_for_column(ty: ColumnTy) -> Self {
+        match ty {
+            ColumnTy::Id => RefinementInput::Block,
+            ColumnTy::Base(_) => RefinementInput::Raw,
+        }
+    }
+}
+
 define_id!(pub RuleId, u32, "An egglog-style rule");
 define_id!(pub FunctionId, u32, "An id representing an egglog function");
 define_id!(pub(crate) Timestamp, u32, "An abstract timestamp used to track execution of egglog rules");
@@ -169,6 +187,10 @@ impl Default for EGraph {
 pub struct FunctionConfig {
     /// The function's schema. The last column in the schema is the return type.
     pub schema: Vec<ColumnTy>,
+    /// How partition refinement should interpret each schema column.
+    ///
+    /// When `None`, defaults to `Block` for `Id` columns and `Raw` for `Base` columns.
+    pub refinement_inputs: Option<Vec<RefinementInput>>,
     /// The behavior of the function when lookups are made on keys not currently present.
     pub default: DefaultVal,
     /// How to resolve FD conflicts for the function.
@@ -777,6 +799,7 @@ impl EGraph {
     pub fn add_table(&mut self, config: FunctionConfig) -> FunctionId {
         let FunctionConfig {
             schema,
+            refinement_inputs,
             default,
             merge,
             name,
@@ -789,6 +812,18 @@ impl EGraph {
             !schema.is_empty(),
             "must have at least one column in schema"
         );
+        let refinement_inputs = refinement_inputs.unwrap_or_else(|| {
+            schema
+                .iter()
+                .map(|ty| RefinementInput::default_for_column(*ty))
+                .collect()
+        });
+        assert_eq!(
+            refinement_inputs.len(),
+            schema.len(),
+            "refinement_inputs must match schema length"
+        );
+
         let to_rebuild: Vec<ColumnId> = schema
             .iter()
             .enumerate()
@@ -848,6 +883,7 @@ impl EGraph {
         let res = self.funcs.push(FunctionInfo {
             table: table_id,
             schema: schema.clone(),
+            refinement_inputs: refinement_inputs.clone(),
             incremental_rebuild_rules: Default::default(),
             nonincremental_rebuild_rule: RuleId::new(!0),
             default_val: default,
@@ -1250,6 +1286,7 @@ struct CachedPlanInfo {
 struct FunctionInfo {
     table: TableId,
     schema: Vec<ColumnTy>,
+    refinement_inputs: Vec<RefinementInput>,
     incremental_rebuild_rules: Vec<RuleId>,
     nonincremental_rebuild_rule: RuleId,
     default_val: DefaultVal,
