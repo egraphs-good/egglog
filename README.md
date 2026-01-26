@@ -1,3 +1,46 @@
+# about this branch (remove before merge)
+
+This branch implements a highly experimental cycle-aware rebuilding algorithm
+as an optional extension to egglog. This allows for "equivalent" cycles to be
+canonicalized in an optional, rebuilding-like pass. The core idea is similar to
+the [co-egraphs](https://www.philipzucker.com/coegraph/) as described by Phil
+Zucker, though the implementation diverges substantially from the algorithm in
+that post.
+
+Still, the rough idea is the same. We treat e-graphs as Automata-like
+structures (Coalgebras, as described in [the boa paper](https://arxiv.org/abs/2204.12368)), and 
+then (on an opt-in basis) treat two bisimilar e-classes as equivalent. The fun
+part here is building a bisimilarity / partition refinement algorithm that:
+
+* Is egglog-friendly in terms of constant factors: a naive reading of most
+  algorithms requires laying out data or copying it into a non-egglog format.
+* Handles incremental changes to the egglog database without needing to
+  recompute everything.
+* [WIP] is parallelism-friendly.
+
+We leverage the flexible primitives exposed in the `egglog-core-relations` and
+`egglog-bridge` to phrase most of the core phases of partition refinement as
+datalog-esque rules. Some parts of the fixedpoint we run rely on egglog's
+support for nested fixed points and flexible scheduling.
+
+On top of this we use the additional trick of having two copies of the
+algorithm. One that treats the core observations as _hashes_ of the actual
+ones. These hash-based observations require minimal auxiliary data-structures
+to compute. Once these hash-based structures find potential merges, we run a
+more traditional partition refinement algorithm on only the subset of the
+e-graph that may get merged later. Because hash collisions rarely hand back
+false negatives, this second algorithm generally only has to run in a single
+pass.
+
+## Eval
+
+The eval here is very much in-progress. Take it with a grain of salt. The
+`binder-experiments` crate contains an implementation of lambda calculus with
+binders implemented as cycles: variable references point back to the binding
+lambda. In this way, two alpha-equivalent terms in the e-graph will form
+bisimilar cycles. We want to compare this to the slotted egraphs paper and see
+how it compares to the implementation there.
+
 # egglog: The Next-Generation Equality Saturation Engine
 
 <a href="https://egraphs-good.github.io/egglog/">
