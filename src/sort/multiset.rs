@@ -143,7 +143,7 @@ impl ContainerSort for MultiSetSort {
         // Add multiset-sum-multisets if the inner arcsort is also a multiset
         for other_multiset_sort in eg.type_info.get_arcsorts_by(|f| {
             f.name() == self.element.name()
-            // We can't query directly by arcsort type since its wrapped in a ContainerSort which is not public
+            // We can't query directly by arcsort type since it's wrapped in a ContainerSort which is not public
                 && f.value_type() == Some(TypeId::of::<MultiSetContainer>())
         }) {
             eg.add_primitive(SumMultisets {
