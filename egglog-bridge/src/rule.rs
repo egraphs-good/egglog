@@ -548,7 +548,7 @@ impl RuleBuilder<'_> {
     /// This is the same as `query_table`, but it exposes the stable row-id
     /// column when row ids are enabled for the table. This is used by
     /// partition refinement to key node-hash entries by row id.
-    pub(crate) fn query_table_with_row_id(
+    pub fn query_table_with_row_id(
         &mut self,
         func: FunctionId,
         entries: &[QueryEntry],

@@ -17,3 +17,5 @@ env_logger = { workspace = true }
 log = { workspace = true }
 smallvec = { workspace = true }
 thiserror = { workspace = true }
+clap = { workspace = true, features = ["derive"] }
+rayon = { workspace = true }

@@ -50,6 +50,7 @@ pub(crate) fn add_church_add_application(
     add_expr_from_sexp(egraph, env, &expr)
 }
 
+#[allow(dead_code)]
 pub(crate) fn run_church_demo(n: usize, run_partition_refinement: bool) {
     let mut egraph = if run_partition_refinement {
         EGraph::with_partition_refinement()

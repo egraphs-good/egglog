@@ -1,6 +1,7 @@
 use crate::free_var_set::{FreeVarSetExternalFns, register_free_var_set_functions};
 use egglog_bridge::{
-    ColumnTy, DefaultVal, EGraph, FunctionConfig, FunctionId, MergeFn, QueryEntry, RuleId,
+    ColumnTy, DefaultVal, EGraph, FunctionConfig, FunctionId, MergeFn, QueryEntry, RefinementInput,
+    RuleId,
 };
 use egglog_core_relations::{BaseValueId, ExternalFunctionId, Value, make_external_func};
 #[cfg(test)]
@@ -73,6 +74,7 @@ fn add_lambda_tables(
     int_base: BaseValueId,
 ) -> LambdaTables {
     let lam = egraph.add_table(FunctionConfig {
+        participate_in_partition_refinement: true,
         schema: vec![ColumnTy::Id, ColumnTy::Id],
         refinement_inputs: None,
         default: DefaultVal::FreshId,
@@ -82,6 +84,7 @@ fn add_lambda_tables(
         row_id: false,
     });
     let app = egraph.add_table(FunctionConfig {
+        participate_in_partition_refinement: true,
         schema: vec![ColumnTy::Id, ColumnTy::Id, ColumnTy::Id],
         refinement_inputs: None,
         default: DefaultVal::FreshId,
@@ -91,6 +94,7 @@ fn add_lambda_tables(
         row_id: false,
     });
     let var = egraph.add_table(FunctionConfig {
+        participate_in_partition_refinement: true,
         schema: vec![ColumnTy::Id, ColumnTy::Id],
         refinement_inputs: None,
         default: DefaultVal::FreshId,
@@ -100,6 +104,7 @@ fn add_lambda_tables(
         row_id: false,
     });
     let subst = egraph.add_table(FunctionConfig {
+        participate_in_partition_refinement: true,
         schema: vec![ColumnTy::Id, ColumnTy::Id, ColumnTy::Id, ColumnTy::Id],
         refinement_inputs: None,
         default: DefaultVal::FreshId,
@@ -109,8 +114,9 @@ fn add_lambda_tables(
         row_id: false,
     });
     let free_vars = egraph.add_table(FunctionConfig {
+        participate_in_partition_refinement: true,
         schema: vec![ColumnTy::Id, ColumnTy::Id],
-        refinement_inputs: None,
+        refinement_inputs: Some(vec![RefinementInput::Block, RefinementInput::Raw]),
         default: DefaultVal::Fail,
         merge: MergeFn::Primitive(free_var_funcs.union, vec![MergeFn::Old, MergeFn::New]),
         name: "free-vars".to_string(),
@@ -118,6 +124,7 @@ fn add_lambda_tables(
         row_id: false,
     });
     let num = egraph.add_table(FunctionConfig {
+        participate_in_partition_refinement: true,
         schema: vec![ColumnTy::Base(int_base), ColumnTy::Id],
         refinement_inputs: None,
         default: DefaultVal::FreshId,
@@ -127,6 +134,7 @@ fn add_lambda_tables(
         row_id: false,
     });
     let add = egraph.add_table(FunctionConfig {
+        participate_in_partition_refinement: true,
         schema: vec![ColumnTy::Id, ColumnTy::Id, ColumnTy::Id],
         refinement_inputs: None,
         default: DefaultVal::FreshId,
@@ -562,6 +570,7 @@ fn seed_subst(egraph: &mut EGraph, tables: &LambdaTables, b: Value, x: Value, e:
     egraph.flush_updates();
 }
 
+#[allow(dead_code)]
 pub fn run_demo() {
     church::run_church_demo(3, false);
     church::run_church_demo(3, true);

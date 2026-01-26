@@ -15,6 +15,7 @@ fn main() {
         let mut egraph = EGraph::default();
         let int_base = egraph.base_values_mut().register_type::<i64>();
         let num_table = egraph.add_table(FunctionConfig {
+            participate_in_partition_refinement: true,
             schema: vec![ColumnTy::Base(int_base), ColumnTy::Id],
             refinement_inputs: None,
             default: DefaultVal::FreshId,
@@ -24,6 +25,7 @@ fn main() {
             row_id: false,
         });
         let add_table = egraph.add_table(FunctionConfig {
+            participate_in_partition_refinement: true,
             schema: vec![ColumnTy::Id; 3],
             refinement_inputs: None,
             default: DefaultVal::FreshId,

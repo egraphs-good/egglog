@@ -53,6 +53,7 @@ fn setup_math(egraph: &mut EGraph) -> Vec<RuleId> {
     let string_ty = egraph.base_values_mut().register_type::<&'static str>();
 
     let diff = egraph.add_table(FunctionConfig {
+        participate_in_partition_refinement: true,
         schema: vec![ColumnTy::Id, ColumnTy::Id, ColumnTy::Id],
         refinement_inputs: None,
         default: DefaultVal::FreshId,
@@ -62,6 +63,7 @@ fn setup_math(egraph: &mut EGraph) -> Vec<RuleId> {
         row_id: false,
     });
     let integral = egraph.add_table(FunctionConfig {
+        participate_in_partition_refinement: true,
         schema: vec![ColumnTy::Id, ColumnTy::Id, ColumnTy::Id],
         refinement_inputs: None,
         default: DefaultVal::FreshId,
@@ -72,6 +74,7 @@ fn setup_math(egraph: &mut EGraph) -> Vec<RuleId> {
     });
 
     let add = egraph.add_table(FunctionConfig {
+        participate_in_partition_refinement: true,
         schema: vec![ColumnTy::Id, ColumnTy::Id, ColumnTy::Id],
         refinement_inputs: None,
         default: DefaultVal::FreshId,
@@ -81,6 +84,7 @@ fn setup_math(egraph: &mut EGraph) -> Vec<RuleId> {
         row_id: false,
     });
     let sub = egraph.add_table(FunctionConfig {
+        participate_in_partition_refinement: true,
         schema: vec![ColumnTy::Id, ColumnTy::Id, ColumnTy::Id],
         refinement_inputs: None,
         default: DefaultVal::FreshId,
@@ -91,6 +95,7 @@ fn setup_math(egraph: &mut EGraph) -> Vec<RuleId> {
     });
 
     let mul = egraph.add_table(FunctionConfig {
+        participate_in_partition_refinement: true,
         schema: vec![ColumnTy::Id, ColumnTy::Id, ColumnTy::Id],
         refinement_inputs: None,
         default: DefaultVal::FreshId,
@@ -101,6 +106,7 @@ fn setup_math(egraph: &mut EGraph) -> Vec<RuleId> {
     });
 
     let div = egraph.add_table(FunctionConfig {
+        participate_in_partition_refinement: true,
         schema: vec![ColumnTy::Id, ColumnTy::Id, ColumnTy::Id],
         refinement_inputs: None,
         default: DefaultVal::FreshId,
@@ -111,6 +117,7 @@ fn setup_math(egraph: &mut EGraph) -> Vec<RuleId> {
     });
 
     let pow = egraph.add_table(FunctionConfig {
+        participate_in_partition_refinement: true,
         schema: vec![ColumnTy::Id, ColumnTy::Id, ColumnTy::Id],
         refinement_inputs: None,
         default: DefaultVal::FreshId,
@@ -121,6 +128,7 @@ fn setup_math(egraph: &mut EGraph) -> Vec<RuleId> {
     });
 
     let ln = egraph.add_table(FunctionConfig {
+        participate_in_partition_refinement: true,
         schema: vec![ColumnTy::Id, ColumnTy::Id],
         refinement_inputs: None,
         default: DefaultVal::FreshId,
@@ -131,6 +139,7 @@ fn setup_math(egraph: &mut EGraph) -> Vec<RuleId> {
     });
 
     let sqrt = egraph.add_table(FunctionConfig {
+        participate_in_partition_refinement: true,
         schema: vec![ColumnTy::Id, ColumnTy::Id],
         refinement_inputs: None,
         default: DefaultVal::FreshId,
@@ -141,6 +150,7 @@ fn setup_math(egraph: &mut EGraph) -> Vec<RuleId> {
     });
 
     let sin = egraph.add_table(FunctionConfig {
+        participate_in_partition_refinement: true,
         schema: vec![ColumnTy::Id, ColumnTy::Id],
         refinement_inputs: None,
         default: DefaultVal::FreshId,
@@ -151,6 +161,7 @@ fn setup_math(egraph: &mut EGraph) -> Vec<RuleId> {
     });
 
     let cos = egraph.add_table(FunctionConfig {
+        participate_in_partition_refinement: true,
         schema: vec![ColumnTy::Id, ColumnTy::Id],
         refinement_inputs: None,
         default: DefaultVal::FreshId,
@@ -161,6 +172,7 @@ fn setup_math(egraph: &mut EGraph) -> Vec<RuleId> {
     });
 
     let rat = egraph.add_table(FunctionConfig {
+        participate_in_partition_refinement: true,
         schema: vec![ColumnTy::Base(rational_ty), ColumnTy::Id],
         refinement_inputs: None,
         default: DefaultVal::FreshId,
@@ -171,6 +183,7 @@ fn setup_math(egraph: &mut EGraph) -> Vec<RuleId> {
     });
 
     let var = egraph.add_table(FunctionConfig {
+        participate_in_partition_refinement: true,
         schema: vec![ColumnTy::Base(string_ty), ColumnTy::Id],
         refinement_inputs: None,
         default: DefaultVal::FreshId,

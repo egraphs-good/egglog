@@ -1,5 +1,7 @@
 use egglog_bridge::EGraph;
-use egglog_core_relations::{ExternalFunctionId, Rebuilder, Value, make_external_func};
+use egglog_core_relations::{
+    ExecutionState, ExternalFunctionId, Rebuilder, TableId, Value, make_external_func,
+};
 use smallvec::SmallVec;
 
 #[derive(Clone, Debug, Hash, Eq, PartialEq)]
@@ -83,15 +85,42 @@ impl FreeVarSet {
     }
 }
 
+fn canon_value(state: &ExecutionState<'_>, uf_table: TableId, val: Value) -> Value {
+    if !state.table_ids().any(|table| table == uf_table) {
+        return val;
+    }
+    state
+        .get_table(uf_table)
+        .get_row(&[val])
+        .map(|row| row.vals[1])
+        .unwrap_or(val)
+}
+
+fn get_set(state: &ExecutionState<'_>, id: Value) -> Option<FreeVarSet> {
+    if let Some(set) = state.container_values().get_val::<FreeVarSet>(id) {
+        return Some(set.clone());
+    }
+    let mut found = None;
+    state.container_values().for_each::<FreeVarSet>(|set, value| {
+        if value == id {
+            found = Some(set.clone());
+        }
+    });
+    found
+}
+
 pub struct FreeVarSetExternalFns {
     pub empty: ExternalFunctionId,
     pub singleton: ExternalFunctionId,
     pub remove: ExternalFunctionId,
     pub union: ExternalFunctionId,
+    pub contains: ExternalFunctionId,
+    pub not_contains: ExternalFunctionId,
 }
 
 pub fn register_free_var_set_functions(egraph: &mut EGraph) -> FreeVarSetExternalFns {
     egraph.register_container_ty::<FreeVarSet>();
+    let uf_table = egraph.uf_table_id();
 
     let empty = egraph.register_external_func(Box::new(make_external_func(|state, vals| {
         if !vals.is_empty() {
@@ -112,34 +141,61 @@ pub fn register_free_var_set_functions(egraph: &mut EGraph) -> FreeVarSetExterna
         Some(state.container_values().register_val(set, state))
     })));
 
-    let remove = egraph.register_external_func(Box::new(make_external_func(|state, vals| {
+    let remove = egraph.register_external_func(Box::new(make_external_func(move |state, vals| {
         let [set_id, value] = vals else {
             panic!("[free-var-set-remove] expected 2 values, got {vals:?}");
         };
-        let mut set: FreeVarSet = state
-            .container_values()
-            .get_val::<FreeVarSet>(*set_id)?
-            .clone();
+        let set_id = canon_value(state, uf_table, *set_id);
+        let mut set = get_set(state, set_id).unwrap_or_default();
         set.remove(*value);
         Some(state.container_values().register_val(set, state))
     })));
 
-    let union = egraph.register_external_func(Box::new(make_external_func(|state, vals| {
+    let union = egraph.register_external_func(Box::new(make_external_func(move |state, vals| {
         let [left_id, right_id] = vals else {
             panic!("[free-var-set-union] expected 2 values, got {vals:?}");
         };
-        let mut left: FreeVarSet = state
-            .container_values()
-            .get_val::<FreeVarSet>(*left_id)
-            .expect("l")
-            .clone();
-        let right: FreeVarSet = state
-            .container_values()
-            .get_val::<FreeVarSet>(*right_id)
-            .expect("r")
-            .clone();
+        let left_id = canon_value(state, uf_table, *left_id);
+        let right_id = canon_value(state, uf_table, *right_id);
+        if left_id == right_id {
+            return Some(left_id);
+        }
+        let left = get_set(state, left_id);
+        let right = get_set(state, right_id);
+        let (mut left, right) = match (left, right) {
+            (Some(left), Some(right)) => (left, right),
+            (Some(_), None) => return Some(left_id),
+            (None, Some(_)) => return Some(right_id),
+            (None, None) => return Some(state.container_values().register_val(FreeVarSet::empty(), state)),
+        };
         left.union_with(&right);
         Some(state.container_values().register_val(left, state))
+    })));
+
+    let contains = egraph.register_external_func(Box::new(make_external_func(move |state, vals| {
+        let [set_id, value] = vals else {
+            panic!("[free-var-set-contains] expected 2 values, got {vals:?}");
+        };
+        let set_id = canon_value(state, uf_table, *set_id);
+        let set: FreeVarSet = match get_set(state, set_id) {
+            Some(set) => set,
+            None => return None,
+        };
+        let present = set.values.binary_search(value).is_ok();
+        present.then_some(Value::new_const(1))
+    })));
+
+    let not_contains = egraph.register_external_func(Box::new(make_external_func(move |state, vals| {
+        let [set_id, value] = vals else {
+            panic!("[free-var-set-not-contains] expected 2 values, got {vals:?}");
+        };
+        let set_id = canon_value(state, uf_table, *set_id);
+        let set: FreeVarSet = match get_set(state, set_id) {
+            Some(set) => set,
+            None => return Some(Value::new_const(1)),
+        };
+        let present = set.values.binary_search(value).is_ok();
+        (!present).then_some(Value::new_const(1))
     })));
 
     FreeVarSetExternalFns {
@@ -147,6 +203,8 @@ pub fn register_free_var_set_functions(egraph: &mut EGraph) -> FreeVarSetExterna
         singleton,
         remove,
         union,
+        contains,
+        not_contains,
     }
 }
 
@@ -325,5 +383,41 @@ mod tests {
             .get_val::<FreeVarSet>(union_id)
             .expect("expected container value for union set");
         assert_eq!(collect_values(&set), vec![Value::new(1), Value::new(2)]);
+    }
+
+    #[test]
+    fn external_contains_set() {
+        let mut egraph = EGraph::default();
+        let funcs = register_free_var_set_functions(&mut egraph);
+        let value = Value::new(7);
+        let set_id = egraph
+            .with_execution_state(|state| state.call_external_func(funcs.singleton, &[value]))
+            .expect("expected free-var-set-singleton result");
+        let present = egraph.with_execution_state(|state| {
+            state.call_external_func(funcs.contains, &[set_id, value])
+        });
+        assert!(present.is_some());
+        let absent = egraph.with_execution_state(|state| {
+            state.call_external_func(funcs.contains, &[set_id, Value::new(9)])
+        });
+        assert!(absent.is_none());
+    }
+
+    #[test]
+    fn external_not_contains_set() {
+        let mut egraph = EGraph::default();
+        let funcs = register_free_var_set_functions(&mut egraph);
+        let value = Value::new(4);
+        let set_id = egraph
+            .with_execution_state(|state| state.call_external_func(funcs.singleton, &[value]))
+            .expect("expected free-var-set-singleton result");
+        let present = egraph.with_execution_state(|state| {
+            state.call_external_func(funcs.not_contains, &[set_id, value])
+        });
+        assert!(present.is_none());
+        let absent = egraph.with_execution_state(|state| {
+            state.call_external_func(funcs.not_contains, &[set_id, Value::new(11)])
+        });
+        assert!(absent.is_some());
     }
 }

@@ -336,6 +336,7 @@ impl SchedulerRuleInfo {
             .chain(std::iter::once(ColumnTy::Base(unit_type)))
             .collect();
         let decided = egraph.backend.add_table(FunctionConfig {
+            participate_in_partition_refinement: true,
             schema,
             refinement_inputs: None,
             default: DefaultVal::Const(unit),

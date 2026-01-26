@@ -185,6 +185,11 @@ impl Default for EGraph {
 
 /// Properties of a function added to an [`EGraph`].
 pub struct FunctionConfig {
+    /// Whether this function participates in partition refinement hashing.
+    ///
+    /// Defaults to true for most tables. Set to false for auxiliary tables whose
+    /// rows should not influence e-class fingerprints.
+    pub participate_in_partition_refinement: bool,
     /// The function's schema. The last column in the schema is the return type.
     pub schema: Vec<ColumnTy>,
     /// How partition refinement should interpret each schema column.
@@ -311,6 +316,11 @@ impl EGraph {
     /// Get a reference to the underlying table of containers for this `EGraph`.
     pub fn container_values(&self) -> &ContainerValues {
         self.db.container_values()
+    }
+
+    /// Expose the union-find table id for low-level helpers.
+    pub fn uf_table_id(&self) -> TableId {
+        self.uf_table
     }
 
     /// Intern the given container value into the EGraph.
@@ -798,6 +808,7 @@ impl EGraph {
     /// Register a function in this EGraph.
     pub fn add_table(&mut self, config: FunctionConfig) -> FunctionId {
         let FunctionConfig {
+            participate_in_partition_refinement,
             schema,
             refinement_inputs,
             default,
@@ -897,7 +908,7 @@ impl EGraph {
         let info = &mut self.funcs[res];
         info.incremental_rebuild_rules = incremental_rebuild_rules;
         info.nonincremental_rebuild_rule = nonincremental_rebuild_rule;
-        if partition_refinement_enabled {
+        if partition_refinement_enabled && participate_in_partition_refinement {
             self.add_partition_refinement_rules_for_function(res);
         }
         res

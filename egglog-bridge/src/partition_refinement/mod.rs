@@ -465,6 +465,15 @@ impl EGraph {
             )
         };
 
+        let return_refinement = refinement_inputs
+            .last()
+            .copied()
+            .unwrap_or(RefinementInput::Block);
+        if !matches!(return_refinement, RefinementInput::Block) {
+            // Only tables whose return value is an e-class participate in partition refinement.
+            return;
+        }
+
         let seed_rule = {
             let mut rb = self.new_rule(&format!("partition_refinement: seed {}", func_name), true);
             let mut entries = Vec::with_capacity(schema.len());

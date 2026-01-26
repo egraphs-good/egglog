@@ -578,6 +578,7 @@ impl EGraph {
             })
             .collect();
         let backend_id = self.backend.add_table(egglog_bridge::FunctionConfig {
+            participate_in_partition_refinement: true,
             schema: input
                 .iter()
                 .chain([&output])

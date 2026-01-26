@@ -7,6 +7,11 @@
 //! This is a relatively "eagler" implementation of containers, reflecting egglog's current
 //! semantics. One could imagine a variant of containers in which they behave more like egglog
 //! functions than base values.
+//!
+//! NOTE: We have observed that container ids can become non-canonical after union-find updates,
+//! while stale `to_container` mappings linger even when `to_id` no longer references those ids.
+//! These stale entries appear to increase rebuild work but are not currently cleaned up. This
+//! module does not attempt to reconcile or prune those mappings yet.
 
 use std::{
     any::{Any, TypeId},
@@ -112,8 +117,7 @@ impl ContainerValues {
         let env = self
             .get::<C>()
             .expect("must register container type before registering a value");
-        let res = env.get_or_insert(&container, exec_state);
-        res
+        env.get_or_insert(&container, exec_state)
     }
 
     /// Apply the given rebuild to the contents of each container.

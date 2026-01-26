@@ -1,7 +1,8 @@
 mod free_var_set;
 mod lambda;
+mod rise;
 
 fn main() {
     env_logger::init();
-    lambda::run_demo();
+    rise::run_rise_benchmark();
 }

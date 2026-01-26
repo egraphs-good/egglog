@@ -43,6 +43,7 @@ fn ac_test(tracing: bool, can_subsume: bool, row_id: bool) {
     };
     let int_base = egraph.base_values_mut().register_type::<i64>();
     let num_table = egraph.add_table(FunctionConfig {
+        participate_in_partition_refinement: true,
         schema: vec![ColumnTy::Base(int_base), ColumnTy::Id],
         refinement_inputs: None,
         default: DefaultVal::FreshId,
@@ -52,6 +53,7 @@ fn ac_test(tracing: bool, can_subsume: bool, row_id: bool) {
         row_id,
     });
     let add_table = egraph.add_table(FunctionConfig {
+        participate_in_partition_refinement: true,
         schema: vec![ColumnTy::Id; 3],
         refinement_inputs: None,
         default: DefaultVal::FreshId,
@@ -157,6 +159,7 @@ fn ac_fail() {
     let int_base = egraph.base_values_mut().get_ty::<i64>();
     let one = egraph.base_value_constant(1i64);
     let num_table = egraph.add_table(FunctionConfig {
+        participate_in_partition_refinement: true,
         schema: vec![ColumnTy::Base(int_base), ColumnTy::Id],
         refinement_inputs: None,
         default: DefaultVal::FreshId,
@@ -166,6 +169,7 @@ fn ac_fail() {
         row_id: false,
     });
     let add_table = egraph.add_table(FunctionConfig {
+        participate_in_partition_refinement: true,
         schema: vec![ColumnTy::Id; 3],
         refinement_inputs: None,
         default: DefaultVal::FreshId,
@@ -272,6 +276,7 @@ fn math_test(mut egraph: EGraph, can_subsume: bool, row_id: bool) {
     let string_ty = egraph.base_values_mut().register_type::<&'static str>();
     // tables
     let diff = egraph.add_table(FunctionConfig {
+        participate_in_partition_refinement: true,
         schema: vec![ColumnTy::Id, ColumnTy::Id, ColumnTy::Id],
         refinement_inputs: None,
         default: DefaultVal::FreshId,
@@ -281,6 +286,7 @@ fn math_test(mut egraph: EGraph, can_subsume: bool, row_id: bool) {
         row_id,
     });
     let integral = egraph.add_table(FunctionConfig {
+        participate_in_partition_refinement: true,
         schema: vec![ColumnTy::Id, ColumnTy::Id, ColumnTy::Id],
         refinement_inputs: None,
         default: DefaultVal::FreshId,
@@ -290,6 +296,7 @@ fn math_test(mut egraph: EGraph, can_subsume: bool, row_id: bool) {
         row_id,
     });
     let add = egraph.add_table(FunctionConfig {
+        participate_in_partition_refinement: true,
         schema: vec![ColumnTy::Id, ColumnTy::Id, ColumnTy::Id],
         refinement_inputs: None,
         default: DefaultVal::FreshId,
@@ -299,6 +306,7 @@ fn math_test(mut egraph: EGraph, can_subsume: bool, row_id: bool) {
         row_id,
     });
     let sub = egraph.add_table(FunctionConfig {
+        participate_in_partition_refinement: true,
         schema: vec![ColumnTy::Id, ColumnTy::Id, ColumnTy::Id],
         refinement_inputs: None,
         default: DefaultVal::FreshId,
@@ -308,6 +316,7 @@ fn math_test(mut egraph: EGraph, can_subsume: bool, row_id: bool) {
         row_id,
     });
     let mul = egraph.add_table(FunctionConfig {
+        participate_in_partition_refinement: true,
         schema: vec![ColumnTy::Id, ColumnTy::Id, ColumnTy::Id],
         refinement_inputs: None,
         default: DefaultVal::FreshId,
@@ -317,6 +326,7 @@ fn math_test(mut egraph: EGraph, can_subsume: bool, row_id: bool) {
         row_id,
     });
     let div = egraph.add_table(FunctionConfig {
+        participate_in_partition_refinement: true,
         schema: vec![ColumnTy::Id, ColumnTy::Id, ColumnTy::Id],
         refinement_inputs: None,
         default: DefaultVal::FreshId,
@@ -326,6 +336,7 @@ fn math_test(mut egraph: EGraph, can_subsume: bool, row_id: bool) {
         row_id,
     });
     let pow = egraph.add_table(FunctionConfig {
+        participate_in_partition_refinement: true,
         schema: vec![ColumnTy::Id, ColumnTy::Id, ColumnTy::Id],
         refinement_inputs: None,
         default: DefaultVal::FreshId,
@@ -336,6 +347,7 @@ fn math_test(mut egraph: EGraph, can_subsume: bool, row_id: bool) {
     });
 
     let ln = egraph.add_table(FunctionConfig {
+        participate_in_partition_refinement: true,
         schema: vec![ColumnTy::Id, ColumnTy::Id],
         refinement_inputs: None,
         default: DefaultVal::FreshId,
@@ -345,6 +357,7 @@ fn math_test(mut egraph: EGraph, can_subsume: bool, row_id: bool) {
         row_id,
     });
     let sqrt = egraph.add_table(FunctionConfig {
+        participate_in_partition_refinement: true,
         schema: vec![ColumnTy::Id, ColumnTy::Id],
         refinement_inputs: None,
         default: DefaultVal::FreshId,
@@ -354,6 +367,7 @@ fn math_test(mut egraph: EGraph, can_subsume: bool, row_id: bool) {
         row_id,
     });
     let sin = egraph.add_table(FunctionConfig {
+        participate_in_partition_refinement: true,
         schema: vec![ColumnTy::Id, ColumnTy::Id],
         refinement_inputs: None,
         default: DefaultVal::FreshId,
@@ -363,6 +377,7 @@ fn math_test(mut egraph: EGraph, can_subsume: bool, row_id: bool) {
         row_id,
     });
     let cos = egraph.add_table(FunctionConfig {
+        participate_in_partition_refinement: true,
         schema: vec![ColumnTy::Id, ColumnTy::Id],
         refinement_inputs: None,
         default: DefaultVal::FreshId,
@@ -372,6 +387,7 @@ fn math_test(mut egraph: EGraph, can_subsume: bool, row_id: bool) {
         row_id,
     });
     let rat = egraph.add_table(FunctionConfig {
+        participate_in_partition_refinement: true,
         schema: vec![ColumnTy::Base(rational_ty), ColumnTy::Id],
         refinement_inputs: None,
         default: DefaultVal::FreshId,
@@ -381,6 +397,7 @@ fn math_test(mut egraph: EGraph, can_subsume: bool, row_id: bool) {
         row_id,
     });
     let var = egraph.add_table(FunctionConfig {
+        participate_in_partition_refinement: true,
         schema: vec![ColumnTy::Base(string_ty), ColumnTy::Id],
         refinement_inputs: None,
         default: DefaultVal::FreshId,
@@ -866,6 +883,7 @@ fn partition_refinement_scaffolds_row_ids_and_rules_impl<H: PartitionRefinementH
     let mut egraph = partition_refinement_egraph::<H>();
     let int_base = egraph.base_values_mut().register_type::<i64>();
     let num_table = egraph.add_table(FunctionConfig {
+        participate_in_partition_refinement: true,
         schema: vec![ColumnTy::Base(int_base), ColumnTy::Id],
         refinement_inputs: None,
         default: DefaultVal::FreshId,
@@ -899,6 +917,7 @@ fn partition_refinement_scaffolds_row_ids_and_rules_constant() {
 
 fn add_link_table(egraph: &mut EGraph) -> FunctionId {
     egraph.add_table(FunctionConfig {
+        participate_in_partition_refinement: true,
         schema: vec![ColumnTy::Id, ColumnTy::Id],
         refinement_inputs: None,
         default: DefaultVal::FreshId,
@@ -911,6 +930,7 @@ fn add_link_table(egraph: &mut EGraph) -> FunctionId {
 
 fn add_lam_app_var_tables(egraph: &mut EGraph) -> (FunctionId, FunctionId, FunctionId) {
     let lam = egraph.add_table(FunctionConfig {
+        participate_in_partition_refinement: true,
         schema: vec![ColumnTy::Id, ColumnTy::Id],
         refinement_inputs: None,
         default: DefaultVal::FreshId,
@@ -920,6 +940,7 @@ fn add_lam_app_var_tables(egraph: &mut EGraph) -> (FunctionId, FunctionId, Funct
         row_id: false,
     });
     let app = egraph.add_table(FunctionConfig {
+        participate_in_partition_refinement: true,
         schema: vec![ColumnTy::Id, ColumnTy::Id, ColumnTy::Id],
         refinement_inputs: None,
         default: DefaultVal::FreshId,
@@ -929,6 +950,7 @@ fn add_lam_app_var_tables(egraph: &mut EGraph) -> (FunctionId, FunctionId, Funct
         row_id: false,
     });
     let var = egraph.add_table(FunctionConfig {
+        participate_in_partition_refinement: true,
         schema: vec![ColumnTy::Id, ColumnTy::Id],
         refinement_inputs: None,
         default: DefaultVal::FreshId,
@@ -1050,6 +1072,7 @@ fn partition_refinement_collision_splits_blocks_impl<H: PartitionRefinementHashe
     let mut egraph = partition_refinement_egraph::<H>();
     let link = add_link_table(&mut egraph);
     let pair = egraph.add_table(FunctionConfig {
+        participate_in_partition_refinement: true,
         schema: vec![ColumnTy::Id, ColumnTy::Id, ColumnTy::Id],
         refinement_inputs: None,
         default: DefaultVal::FreshId,
@@ -1089,6 +1112,7 @@ fn partition_refinement_constant_hash_needs_collision_resolution() {
     let mut egraph = partition_refinement_egraph::<ConstantPartitionHasher>();
     let link = add_link_table(&mut egraph);
     let pair = egraph.add_table(FunctionConfig {
+        participate_in_partition_refinement: true,
         schema: vec![ColumnTy::Id, ColumnTy::Id, ColumnTy::Id],
         refinement_inputs: None,
         default: DefaultVal::FreshId,
@@ -1135,6 +1159,7 @@ fn partition_refinement_cycles_broader_embed_impl<H: PartitionRefinementHasher>(
     let mut egraph = partition_refinement_egraph::<H>();
     let link = add_link_table(&mut egraph);
     let pair = egraph.add_table(FunctionConfig {
+        participate_in_partition_refinement: true,
         schema: vec![ColumnTy::Id, ColumnTy::Id, ColumnTy::Id],
         refinement_inputs: None,
         default: DefaultVal::FreshId,
@@ -1183,6 +1208,7 @@ fn partition_refinement_incremental_updates_impl<H: PartitionRefinementHasher>(
     let mut egraph = partition_refinement_egraph::<H>();
     let link = add_link_table(&mut egraph);
     let pair = egraph.add_table(FunctionConfig {
+        participate_in_partition_refinement: true,
         schema: vec![ColumnTy::Id, ColumnTy::Id, ColumnTy::Id],
         refinement_inputs: None,
         default: DefaultVal::FreshId,
@@ -1366,6 +1392,7 @@ fn container_test() {
     let mut egraph = EGraph::default();
     let int_base = egraph.base_values_mut().register_type::<i64>();
     let num_table = egraph.add_table(FunctionConfig {
+        participate_in_partition_refinement: true,
         schema: vec![ColumnTy::Base(int_base), ColumnTy::Id],
         refinement_inputs: None,
         default: DefaultVal::FreshId,
@@ -1375,6 +1402,7 @@ fn container_test() {
         row_id: false,
     });
     let add_table = egraph.add_table(FunctionConfig {
+        participate_in_partition_refinement: true,
         schema: vec![ColumnTy::Id; 3],
         refinement_inputs: None,
         default: DefaultVal::FreshId,
@@ -1384,6 +1412,7 @@ fn container_test() {
         row_id: false,
     });
     let vec_table = egraph.add_table(FunctionConfig {
+        participate_in_partition_refinement: true,
         schema: vec![ColumnTy::Id; 2],
         refinement_inputs: None,
         default: DefaultVal::FreshId,
@@ -1558,6 +1587,7 @@ fn partition_refinement_hashes_container_raw() {
     egraph.register_container_ty::<VecContainer>();
 
     let vec_table = egraph.add_table(FunctionConfig {
+        participate_in_partition_refinement: true,
         schema: vec![ColumnTy::Id, ColumnTy::Id],
         refinement_inputs: Some(vec![RefinementInput::Raw, RefinementInput::Block]),
         default: DefaultVal::FreshId,
@@ -1602,6 +1632,7 @@ fn rhs_only_rule() {
     let zero = egraph.base_values_mut().get(0i64);
     let one = egraph.base_values_mut().get(1i64);
     let num_table = egraph.add_table(FunctionConfig {
+        participate_in_partition_refinement: true,
         schema: vec![ColumnTy::Base(int_base), ColumnTy::Id],
         refinement_inputs: None,
         default: DefaultVal::FreshId,
@@ -1692,6 +1723,7 @@ fn mergefn_arithmetic() {
     // Create a function with merge function (+ 1 (* old new))
     // This uses nested MergeFn::Primitive with external functions to build the complex merge function
     let f_table = egraph.add_table(FunctionConfig {
+        participate_in_partition_refinement: true,
         schema: vec![ColumnTy::Base(int_base), ColumnTy::Base(int_base)],
         refinement_inputs: None,
         default: DefaultVal::Fail,
@@ -1790,6 +1822,7 @@ fn mergefn_nested_function() {
 
     // Create a function g that will be used in the merge function for f
     let g_table = egraph.add_table(FunctionConfig {
+        participate_in_partition_refinement: true,
         schema: vec![ColumnTy::Id, ColumnTy::Id, ColumnTy::Id],
         refinement_inputs: None,
         default: DefaultVal::FreshId,
@@ -1802,6 +1835,7 @@ fn mergefn_nested_function() {
     // Create a function f whose merge function is (g (g new new) (g old old))
     // This uses nested MergeFn::Function to build the complex merge function
     let f_table = egraph.add_table(FunctionConfig {
+        participate_in_partition_refinement: true,
         schema: vec![ColumnTy::Base(int_base), ColumnTy::Id],
         refinement_inputs: None,
         default: DefaultVal::FreshId,
@@ -1916,6 +1950,7 @@ fn constrain_prims_simple() {
     let int_base = egraph.base_values_mut().register_type::<i64>();
     let bool_base = egraph.base_values_mut().register_type::<bool>();
     let f_table = egraph.add_table(FunctionConfig {
+        participate_in_partition_refinement: true,
         schema: vec![ColumnTy::Base(int_base), ColumnTy::Id],
         refinement_inputs: None,
         default: DefaultVal::FreshId,
@@ -1925,6 +1960,7 @@ fn constrain_prims_simple() {
         row_id: false,
     });
     let g_table = egraph.add_table(FunctionConfig {
+        participate_in_partition_refinement: true,
         schema: vec![ColumnTy::Base(int_base), ColumnTy::Id],
         refinement_inputs: None,
         default: DefaultVal::FreshId,
@@ -2003,6 +2039,7 @@ fn constrain_prims_abstract() {
     let mut egraph = EGraph::default();
     let int_base = egraph.base_values_mut().register_type::<i64>();
     let f_table = egraph.add_table(FunctionConfig {
+        participate_in_partition_refinement: true,
         schema: vec![ColumnTy::Base(int_base), ColumnTy::Id],
         refinement_inputs: None,
         default: DefaultVal::FreshId,
@@ -2012,6 +2049,7 @@ fn constrain_prims_abstract() {
         row_id: false,
     });
     let g_table = egraph.add_table(FunctionConfig {
+        participate_in_partition_refinement: true,
         schema: vec![ColumnTy::Base(int_base), ColumnTy::Id],
         refinement_inputs: None,
         default: DefaultVal::FreshId,
@@ -2104,6 +2142,7 @@ fn basic_subsumption() {
     let mut egraph = EGraph::default();
     let int_base = egraph.base_values_mut().register_type::<i64>();
     let f_table = egraph.add_table(FunctionConfig {
+        participate_in_partition_refinement: true,
         schema: vec![ColumnTy::Base(int_base), ColumnTy::Id],
         refinement_inputs: None,
         default: DefaultVal::FreshId,
@@ -2113,6 +2152,7 @@ fn basic_subsumption() {
         row_id: false,
     });
     let g_table = egraph.add_table(FunctionConfig {
+        participate_in_partition_refinement: true,
         schema: vec![ColumnTy::Base(int_base), ColumnTy::Id],
         refinement_inputs: None,
         default: DefaultVal::FreshId,
@@ -2187,6 +2227,7 @@ fn basic_subsumption() {
 fn lookup_failure_panics() {
     let mut egraph = EGraph::default();
     let f = egraph.add_table(FunctionConfig {
+        participate_in_partition_refinement: true,
         schema: vec![ColumnTy::Id, ColumnTy::Id],
         refinement_inputs: None,
         default: DefaultVal::Fail,

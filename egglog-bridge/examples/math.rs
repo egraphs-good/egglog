@@ -20,6 +20,7 @@ fn main() {
         let string_ty = egraph.base_values_mut().register_type::<&'static str>();
         // tables
         let diff = egraph.add_table(FunctionConfig {
+            participate_in_partition_refinement: true,
             schema: vec![ColumnTy::Id, ColumnTy::Id, ColumnTy::Id],
             refinement_inputs: None,
             default: DefaultVal::FreshId,
@@ -29,6 +30,7 @@ fn main() {
             row_id: false,
         });
         let integral = egraph.add_table(FunctionConfig {
+            participate_in_partition_refinement: true,
             schema: vec![ColumnTy::Id, ColumnTy::Id, ColumnTy::Id],
             refinement_inputs: None,
             default: DefaultVal::FreshId,
@@ -39,6 +41,7 @@ fn main() {
         });
 
         let add = egraph.add_table(FunctionConfig {
+            participate_in_partition_refinement: true,
             schema: vec![ColumnTy::Id, ColumnTy::Id, ColumnTy::Id],
             refinement_inputs: None,
             default: DefaultVal::FreshId,
@@ -48,6 +51,7 @@ fn main() {
             row_id: false,
         });
         let sub = egraph.add_table(FunctionConfig {
+            participate_in_partition_refinement: true,
             schema: vec![ColumnTy::Id, ColumnTy::Id, ColumnTy::Id],
             refinement_inputs: None,
             default: DefaultVal::FreshId,
@@ -58,6 +62,7 @@ fn main() {
         });
 
         let mul = egraph.add_table(FunctionConfig {
+            participate_in_partition_refinement: true,
             schema: vec![ColumnTy::Id, ColumnTy::Id, ColumnTy::Id],
             refinement_inputs: None,
             default: DefaultVal::FreshId,
@@ -68,6 +73,7 @@ fn main() {
         });
 
         let div = egraph.add_table(FunctionConfig {
+            participate_in_partition_refinement: true,
             schema: vec![ColumnTy::Id, ColumnTy::Id, ColumnTy::Id],
             refinement_inputs: None,
             default: DefaultVal::FreshId,
@@ -78,6 +84,7 @@ fn main() {
         });
 
         let pow = egraph.add_table(FunctionConfig {
+            participate_in_partition_refinement: true,
             schema: vec![ColumnTy::Id, ColumnTy::Id, ColumnTy::Id],
             refinement_inputs: None,
             default: DefaultVal::FreshId,
@@ -88,6 +95,7 @@ fn main() {
         });
 
         let ln = egraph.add_table(FunctionConfig {
+            participate_in_partition_refinement: true,
             schema: vec![ColumnTy::Id, ColumnTy::Id],
             refinement_inputs: None,
             default: DefaultVal::FreshId,
@@ -98,6 +106,7 @@ fn main() {
         });
 
         let sqrt = egraph.add_table(FunctionConfig {
+            participate_in_partition_refinement: true,
             schema: vec![ColumnTy::Id, ColumnTy::Id],
             refinement_inputs: None,
             default: DefaultVal::FreshId,
@@ -108,6 +117,7 @@ fn main() {
         });
 
         let sin = egraph.add_table(FunctionConfig {
+            participate_in_partition_refinement: true,
             schema: vec![ColumnTy::Id, ColumnTy::Id],
             refinement_inputs: None,
             default: DefaultVal::FreshId,
@@ -118,6 +128,7 @@ fn main() {
         });
 
         let cos = egraph.add_table(FunctionConfig {
+            participate_in_partition_refinement: true,
             schema: vec![ColumnTy::Id, ColumnTy::Id],
             refinement_inputs: None,
             default: DefaultVal::FreshId,
@@ -128,6 +139,7 @@ fn main() {
         });
 
         let rat = egraph.add_table(FunctionConfig {
+            participate_in_partition_refinement: true,
             schema: vec![ColumnTy::Base(rational_ty), ColumnTy::Id],
             refinement_inputs: None,
             default: DefaultVal::FreshId,
@@ -138,6 +150,7 @@ fn main() {
         });
 
         let var = egraph.add_table(FunctionConfig {
+            participate_in_partition_refinement: true,
             schema: vec![ColumnTy::Base(string_ty), ColumnTy::Id],
             refinement_inputs: None,
             default: DefaultVal::FreshId,
