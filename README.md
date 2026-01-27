@@ -151,13 +151,13 @@ We are open to new contributors helping with egglog!
 
 A group of core egglog developers are responsible for final decisions on what code will be accepted.
 
-We organize our issues with into three stages:
+We organize our issues into three stages:
 
-1. [`status:needs discussion`](https://github.com/egraphs-good/egglog/issues?q=state%3Aopen%20label%3A%22status%3Aneeds%20discussion%22): More work refinining this should happen on or offline, before its ready to be considered.
+1. [`status:needs discussion`](https://github.com/egraphs-good/egglog/issues?q=state%3Aopen%20label%3A%22status%3Aneeds%20discussion%22): More work refining this should happen on or offline, before its ready to be considered.
 2. [`status: needs decision`](https://github.com/egraphs-good/egglog/issues?q=state%3Aopen%20label%3A%22status%3Aneeds%20decision%22): There is a concrete proposal here which needs to be considered by the core developers.
 3. [`status: ready for work`](https://github.com/egraphs-good/egglog/issues?q=state%3Aopen%20label%3A%22status%3Aready%20for%20work%22): This is ready to be implemented and a PR to address it would be supported.
 
-So if you are looking to find an issue to solve, looking for one that is `status: ready for work` will be more likely to resault in a PR that could be accepted. We also try to maintain a set of [`good first issue`](https://github.com/egraphs-good/egglog/issues?q=state%3Aopen%20label%3A%22good%20first%20issue%22)s which may be easier to approach.
+So if you are looking to find an issue to solve, looking for one that is `status: ready for work` will be more likely to result in a PR that could be accepted. We also try to maintain a set of [`good first issue`](https://github.com/egraphs-good/egglog/issues?q=state%3Aopen%20label%3A%22good%20first%20issue%22)s which may be easier to approach.
 
 The core developers will regularly review [all open un-triaged issues](https://github.com/egraphs-good/egglog/issues?q=state%3Aopen%20no%3Alabel) to categorize them.
 
