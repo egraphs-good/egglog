@@ -313,18 +313,21 @@ where
         }
     }
 
-    fn squash_sequences(self) -> Self {
+    /// Recursively flattens nested `Sequence` nodes into a single level.
+    /// For example, `(seq (seq a b) c)` becomes `(seq a b c)`.
+    /// Also unwraps single-element sequences into their inner schedule.
+    fn flatten_sequences(self) -> Self {
         match self {
             GenericSchedule::Saturate(span, sched) => {
-                GenericSchedule::Saturate(span, Box::new(sched.squash_sequences()))
+                GenericSchedule::Saturate(span, Box::new(sched.flatten_sequences()))
             }
             GenericSchedule::Repeat(span, size, sched) => {
-                GenericSchedule::Repeat(span, size, Box::new(sched.squash_sequences()))
+                GenericSchedule::Repeat(span, size, Box::new(sched.flatten_sequences()))
             }
             GenericSchedule::Run(span, config) => GenericSchedule::Run(span, config),
             GenericSchedule::Sequence(span, scheds) => {
                 let mut flattened = Vec::new();
-                for sched in scheds.into_iter().map(Self::squash_sequences) {
+                for sched in scheds.into_iter().map(Self::flatten_sequences) {
                     match sched {
                         GenericSchedule::Sequence(_, nested) => flattened.extend(nested),
                         other => flattened.push(other),
@@ -389,7 +392,8 @@ where
         }
     }
 
-    /// Applies `fun` to every string-valued symbol contained in the schedule.
+    /// Applies `fun` to every string-valued symbol contained in the schedule,
+    /// normalizes result with `flatten_sequences`.
     pub fn map_string_symbols(
         self,
         fun: &mut impl FnMut(String) -> String,
@@ -413,7 +417,7 @@ where
             ),
         };
 
-        mapped.squash_sequences()
+        mapped.flatten_sequences()
     }
 
     /// Converts all heads and leaves to strings.

@@ -29,6 +29,8 @@ Consider a tiny program that defines a pure arithmetic helper and checks a fact 
      :name "commutativity")
 (run 1)
 (check (= (Add 1 2) (Add 2 1)))
+
+(delete (Add 1 2))
 ```
 
 Lowering the program with the term encoding expands to a bunch of new egglog, which we'll show (most of) in pieces.
@@ -97,6 +99,10 @@ We use the `ordering-max` and `ordering-min` egglog primitives
 Each constructor in the original program is expanded to
   a term table (`Add`), a view table (`AddView`), and helpers for deferred deletion/subsumption
   (`to_delete_Add`, `to_subsume_Add`).
+A view table stores "canonicalized" terms and their e-class representative.
+A canonicalized term has representative terms for its children.
+The last column of the view table is the representative term for the e-class.
+The view tables are kept up to date during rebuilding.
 
 ```text
 (rule ((AddView c0 c1 new)
@@ -122,14 +128,16 @@ The rebuild rule updates view tables so that views
 ```text
 (function v2 () Math :no-merge)
 (set (v2) (Add 1 2))
-(AddView 1 2 (v2 ))
+(AddView 1 2 (v2))
 ```
 
 Above is the desugaring for `(Add 1 2)`.
 We add to both view and term tables whenever we evaluate
   a constructor or function application.
+It's straightforward except for global variables.
 Since global variables are not allowed after this pass,
-  we use functions with no arguments to represent them.
+  we use functions with no arguments to represent them
+  (see globals section below).
 
 
 ```text
@@ -161,6 +169,56 @@ We add an equality to the union-find table for the two terms, using the `orderin
 All queries use the view tables, including check commands.
 This query checks that the e-class representatives for `(Add 1 2)` and `(Add 2 1)` are equal,
   ensuring they share the same e-class.
+
+```text
+(rule ((to_delete_Add c0 c1)
+       (AddView c0 c1 out))
+      ((delete (AddView c0 c1 out))
+       (delete (to_delete_Add c0 c1)))
+        :ruleset delete_subsume_ruleset :name "delete_rule")
+(rule ((to_subsume_Add c0 c1)
+       (AddView c0 c1 out))
+      ((subsume (AddView c0 c1 out)))
+        :ruleset delete_subsume_ruleset :name "delete_rule_subsume")
+
+(to_delete_Add 1 2)
+```
+
+Finally, deletions and subsumptions are deferred via helper tables.
+For every constructor, we add a `to_delete_<Constructor>` and `to_subsume_<Constructor>` table.
+When a deletion or subsumption is requested, we add to these tables.
+During rebuilding, we process these tables to actually delete or subsume the requested terms.
+We only need to delete or subsume from the view tables,
+  since the term tables are not used for queries.
+This has the added benefit of allowing us to keep terms around
+  for proof tracking even after they are deleted from the e-graph.
+
+
+# Globals
+
+*Before the term encoding*, egglog desugars all global
+  variables to constructors with the `proof_global_remover.rs` pass.
+This makes the encoding simpler and makes it so the backend
+  need not worry about globals.
+The above program doesn't have any global variables, so it stays the same.
+A different program like this one:
+```text
+(sort Math)
+(constructor Add (i64 i64) Math)
+(let g1 (Add 1 2))
+(rule ((= g1 (Add 2 3))
+      ((Add 3 4))))
+```
+
+Would desugar to this before term encoding:
+```text
+(sort Math)
+(constructor Add (i64 i64) Math)
+(constructor g1 () Math)
+(union (g1) (Add 1 2))
+(rule ((= (g1) (Add 2 3)))
+      ((Add 3 4)))
+```
 
 
 
@@ -207,7 +265,9 @@ Similarly, the union-find table gets a proof table storing
   proofs of equalities between terms.
 If term `a` has parent `b`, it stores a 
   proof of `a = b`.
-
+The rules that update the union-find tables
+  are instrumented to produce proofs using
+  symmetry (`Sym`) and transitivity (`Trans`) as needed.
 
 
 ```text

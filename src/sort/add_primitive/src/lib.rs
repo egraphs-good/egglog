@@ -6,6 +6,7 @@ use syn::{Expr, Ident, LitStr, Token, braced, bracketed, parenthesized, parse_ma
 
 /// This macro lets the user declare custom egglog primitives with explicit validators.
 /// It combines primitive registration with a custom validator function.
+/// See [`PrimitiveValidator`] for details on the validator function signature.
 ///
 /// # Example
 /// ```rust,ignore
@@ -20,49 +21,28 @@ use syn::{Expr, Ident, LitStr, Token, braced, bracketed, parenthesized, parse_ma
 /// ```
 #[proc_macro]
 pub fn add_primitive_with_validator(input: TokenStream) -> TokenStream {
-    // Convert to string to do manual parsing
-    let input_str = input.to_string();
-
-    // Find the end of the primitive body (last })
-    let mut brace_depth = 0;
-    let mut in_string = false;
-    let mut primitive_end = 0;
-
-    for (i, ch) in input_str.chars().enumerate() {
-        if ch == '"' && (i == 0 || input_str.chars().nth(i.saturating_sub(1)) != Some('\\')) {
-            in_string = !in_string;
-        }
-        if !in_string {
-            if ch == '{' {
-                brace_depth += 1;
-            } else if ch == '}' {
-                brace_depth -= 1;
-                if brace_depth == 0 {
-                    primitive_end = i + 1;
-                }
-            }
-        }
-    }
-
-    // Find the comma after the primitive body
-    let rest = &input_str[primitive_end..];
-    let comma_pos = rest.find(',').expect("Expected comma after primitive body");
-    let split_point = primitive_end + comma_pos;
-
-    let primitive_part = &input_str[..split_point];
-    let validator_part = &input_str[split_point + 1..].trim();
-
-    // Parse the primitive part
-    let prim_tokens: TokenStream = primitive_part.parse().unwrap();
-    let parsed = parse_macro_input!(prim_tokens as AddPrimitive);
-
-    // Parse the validator expression
-    let validator_expr: Expr =
-        syn::parse_str(validator_part).expect("Failed to parse validator expression");
-
-    // Build the primitive construction with validator
-    build_add_primitive_impl(parsed, Some(validator_expr))
+    let parsed = parse_macro_input!(input as AddPrimitiveWithValidator);
+    build_add_primitive_impl(parsed.primitive, Some(parsed.validator))
 }
+
+/// Parses an `AddPrimitive` followed by a comma and a validator expression.
+struct AddPrimitiveWithValidator {
+    primitive: AddPrimitive,
+    validator: Expr,
+}
+
+impl Parse for AddPrimitiveWithValidator {
+    fn parse(input: ParseStream) -> Result<Self> {
+        let primitive = input.parse()?;
+        input.parse::<Token![,]>()?;
+        let validator = input.parse()?;
+        Ok(AddPrimitiveWithValidator {
+            primitive,
+            validator,
+        })
+    }
+}
+
 /// This macro lets the user declare custom egglog primitives.
 /// It supports a few special features:
 ///

@@ -10,7 +10,7 @@ use egglog_ast::generic_ast::GenericExpr;
 ///    For example, (!= a (Const 0)) becomes:
 ///    (= (Const 0) v), (!= a v)
 ///
-/// Nested function calls like this are not allowed:
+/// Nested function calls like this are flattened:
 /// (Add c (lower-bound a b))
 pub(crate) fn proof_form(
     prog: Vec<ResolvedNCommand>,

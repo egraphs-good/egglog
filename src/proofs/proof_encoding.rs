@@ -222,79 +222,74 @@ impl<'a> ProofInstrumentor<'a> {
         )
     }
 
-    /// Generate a rule that runs the merge function for custom functions.
-    /// We cleanup old rows that are not needed using a separate table and ruleset.
-    /// In the case of a constructor, we generate a rule encoding congruence.
-    fn handle_merge_fn(&mut self, fdecl: &ResolvedFunctionDecl) -> String {
-        let child_names = fdecl
-            .schema
-            .input
-            .iter()
-            .enumerate()
-            .map(|(i, _)| format!("c{i}_"))
-            .collect::<Vec<_>>();
-        let child_names_str = child_names.join(" ");
-        let rebuilding_ruleset = self.proof_names().rebuilding_ruleset_name.clone();
-        let view_name = self.view_name(&fdecl.name);
-        if fdecl.subtype == FunctionSubtype::Custom {
-            let name = &fdecl.name;
+    /// Generate rules that run a merge function for a custom function.
+    /// One rule runs the merge function when two different values are present for the same children.
+    /// Another rule cleans up old values, necessary because the newly merged value may be equal to one of the old values.
+    fn handle_merge_fn(
+        &mut self,
+        fdecl: &ResolvedFunctionDecl,
+        child_names: &[String],
+        child_names_str: &str,
+        view_name: &str,
+        rebuilding_ruleset: &str,
+    ) -> String {
+        let name = &fdecl.name;
 
-            let merge_fn = &fdecl
-                .merge
-                .as_ref()
-                .unwrap_or_else(|| panic!("Proofs don't support :no-merge"));
+        let merge_fn = &fdecl
+            .merge
+            .as_ref()
+            .unwrap_or_else(|| panic!("Proofs don't support :no-merge"));
 
-            let fresh_name = self.egraph.parser.symbol_gen.fresh("merge_rule");
-            let cleanup_name = self.egraph.parser.symbol_gen.fresh("merge_cleanup");
+        let fresh_name = self.egraph.parser.symbol_gen.fresh("merge_rule");
+        let cleanup_name = self.egraph.parser.symbol_gen.fresh("merge_cleanup");
 
-            let p1_fresh = self.egraph.parser.symbol_gen.fresh("p1");
-            let p2_fresh = self.egraph.parser.symbol_gen.fresh("p2");
-            let view_proof_name = self.view_proof_name(&fdecl.name);
-            let rebuilding_cleanup_ruleset =
-                self.proof_names().rebuilding_cleanup_ruleset_name.clone();
-            let proof_query = if self.egraph.proof_state.proofs_enabled {
-                format!(
-                    "(= {p1_fresh} ({view_proof_name} {child_names_str} old))
+        let p1_fresh = self.egraph.parser.symbol_gen.fresh("p1");
+        let p2_fresh = self.egraph.parser.symbol_gen.fresh("p2");
+        let view_proof_name = self.view_proof_name(&fdecl.name);
+        let rebuilding_cleanup_ruleset = self.proof_names().rebuilding_cleanup_ruleset_name.clone();
+        let proof_query = if self.egraph.proof_state.proofs_enabled {
+            format!(
+                "(= {p1_fresh} ({view_proof_name} {child_names_str} old))
                      (= {p2_fresh} ({view_proof_name} {child_names_str} new))
                     "
-                )
-            } else {
-                "".to_string()
-            };
-            let proof_var = self.fresh_var();
-            let mut merge_fn_code = vec![];
-            let merge_fn_var = self.instrument_action_expr(
-                merge_fn,
-                &mut merge_fn_code,
-                &Justification::Merge(name.clone(), p1_fresh.clone(), p2_fresh.clone()),
-            );
-            let merge_fn_code_str = merge_fn_code.join("\n");
-            let mut updated = child_names.clone();
-            updated.push(merge_fn_var.clone());
-            let term = format!("({name} {child_names_str} {merge_fn_var})");
+            )
+        } else {
+            "".to_string()
+        };
+        let proof_var = self.fresh_var();
+        let mut merge_fn_code = vec![];
+        let merge_fn_var = self.instrument_action_expr(
+            merge_fn,
+            &mut merge_fn_code,
+            &Justification::Merge(name.clone(), p1_fresh.clone(), p2_fresh.clone()),
+        );
+        let merge_fn_code_str = merge_fn_code.join("\n");
+        let mut updated = child_names.to_vec();
+        updated.push(merge_fn_var.clone());
+        let term = format!("({name} {child_names_str} {merge_fn_var})");
 
-            let rule_proof = if self.egraph.proof_state.proofs_enabled {
-                let to_ast = self.fname_to_ast_name(name);
-                let merge_fn_constructor = self.proof_names().merge_fn_constructor.clone();
-                format!(
-                    "(let {proof_var}
+        let rule_proof = if self.egraph.proof_state.proofs_enabled {
+            let to_ast = self.fname_to_ast_name(name);
+            let merge_fn_constructor = self.proof_names().merge_fn_constructor.clone();
+            format!(
+                "(let {proof_var}
                             ({merge_fn_constructor} \"{name}\"
                                   {p1_fresh}
                                   {p2_fresh}
                                   ({to_ast} {term})))"
-                )
-            } else {
-                "".to_string()
-            };
-            let term_and_proof = self.update_view(name, &updated, &proof_var);
-            let cleanup_constructor = self.egraph.parser.symbol_gen.fresh("mergecleanup");
-            let fresh_sort = self.egraph.parser.symbol_gen.fresh("mergecleanupsort");
-            let output_sort = fdecl.schema.output.clone();
+            )
+        } else {
+            "".to_string()
+        };
+        let term_and_proof = self.update_view(name, &updated, &proof_var);
+        let cleanup_constructor = self.egraph.parser.symbol_gen.fresh("mergecleanup");
+        let fresh_sort = self.egraph.parser.symbol_gen.fresh("mergecleanupsort");
+        let output_sort = fdecl.schema.output.clone();
 
-            // The first runs the merge function adding a new row.
-            // The second deletes rows with old values for the old variable, while the third deletes rows with new values for the new variable.
-            format!(
-                "(sort {fresh_sort})
+        // The first runs the merge function adding a new row.
+        // The second deletes rows with old values for the old variable, while the third deletes rows with new values for the new variable.
+        format!(
+            "(sort {fresh_sort})
                  (constructor {cleanup_constructor} ({output_sort} {output_sort}) {fresh_sort})
                  (rule (({view_name} {child_names_str} old)
                         ({view_name} {child_names_str} new)
@@ -319,33 +314,74 @@ impl<'a> ProofInstrumentor<'a> {
                         :ruleset {rebuilding_cleanup_ruleset}
                         :name \"{cleanup_name}\")
                 ",
-            )
-        } else {
-            // Congruence rule
-            let fresh_name = self.egraph.parser.symbol_gen.fresh("congruence_rule");
-            let mut child_names_new = child_names.clone();
-            child_names_new.push("new".to_string());
-            let mut child_names_old = child_names.clone();
-            child_names_old.push("old".to_string());
-            let (query1, prf1) = self.query_view_and_get_proof(&fdecl.name, &child_names_new);
-            let (query2, prf2) = self.query_view_and_get_proof(&fdecl.name, &child_names_old);
-            let sym = &self.proof_names().eq_sym_constructor;
-            let trans = &self.proof_names().eq_trans_constructor;
-            let union_code = self.union(
-                &fdecl.schema.output,
-                "new",
-                "old",
-                &Justification::Proof(format!("({trans} {prf1} ({sym} {prf2}))",)),
-            );
-            format!(
-                "(rule ({query1}
+        )
+    }
+
+    /// Generate a rule that handles congruence for constructors.
+    /// When two different values are present for the same children,
+    /// we union those two values together.
+    fn handle_congruence(
+        &mut self,
+        fdecl: &ResolvedFunctionDecl,
+        child_names: &[String],
+        rebuilding_ruleset: &str,
+    ) -> String {
+        // Congruence rule
+        let fresh_name = self.egraph.parser.symbol_gen.fresh("congruence_rule");
+        let mut child_names_new = child_names.to_vec();
+        child_names_new.push("new".to_string());
+        let mut child_names_old = child_names.to_vec();
+        child_names_old.push("old".to_string());
+        let (query1, prf1) = self.query_view_and_get_proof(&fdecl.name, &child_names_new);
+        let (query2, prf2) = self.query_view_and_get_proof(&fdecl.name, &child_names_old);
+        let sym = &self.proof_names().eq_sym_constructor;
+        let trans = &self.proof_names().eq_trans_constructor;
+
+        // Proof is by transitivity. A view proof gives a proof that
+        // representative r_1 = f(c_1,...,c_n).
+        // We also have a proof that other eclass representative r_2 = f(c_1,...,c_n), the same term.
+        // We want a proof that r1 = r2, which we get by transitivity.
+        let union_code = self.union(
+            &fdecl.schema.output,
+            "new",
+            "old",
+            &Justification::Proof(format!("({trans} {prf1} ({sym} {prf2}))",)),
+        );
+        format!(
+            "(rule ({query1}
                         {query2}
                         (!= old new)
                         (= (ordering-max old new) new))
                        ({union_code})
                         :ruleset {rebuilding_ruleset}
                         :name \"{fresh_name}\")"
+        )
+    }
+
+    /// Generate rules that handle merge functions or congruence.
+    /// For custom functions, we generate rules that run the merge function.
+    /// For constructors, we generate congruence rules.
+    fn handle_merge_or_congruence(&mut self, fdecl: &ResolvedFunctionDecl) -> String {
+        let child_names = fdecl
+            .schema
+            .input
+            .iter()
+            .enumerate()
+            .map(|(i, _)| format!("c{i}_"))
+            .collect::<Vec<_>>();
+        let child_names_str = child_names.join(" ");
+        let rebuilding_ruleset = self.proof_names().rebuilding_ruleset_name.clone();
+        let view_name = self.view_name(&fdecl.name);
+        if fdecl.subtype == FunctionSubtype::Custom {
+            self.handle_merge_fn(
+                fdecl,
+                &child_names,
+                &child_names_str,
+                &view_name,
+                &rebuilding_ruleset,
             )
+        } else {
+            self.handle_congruence(fdecl, &child_names, &rebuilding_ruleset)
         }
     }
 
@@ -390,7 +426,7 @@ impl<'a> ProofInstrumentor<'a> {
                 .fn_to_term_sort
                 .insert(name.clone(), view_sort.clone());
         }
-        let merge_rule = self.handle_merge_fn(fdecl);
+        let merge_rule = self.handle_merge_or_congruence(fdecl);
         // the term table has child_sorts as inputs
         // the view table has child_sorts + the leader term for the eclass
         self.parse_program(&format!(
@@ -417,7 +453,9 @@ impl<'a> ProofInstrumentor<'a> {
 
         // A view proof gives a proof that the representative term t_r equals the term in the view.
         // Example: (AddView 2 3 t_r) proves the proposition that t_r = Add(2, 3) in that direction.
-        // This direction makes adding more proofs easier.
+        // This direction makes proof instrumentation use fewer symmetries, since the goal is to
+        // match the right-hand side of the equality to the concrete syntax
+        // of the original rule.
         format!(
             "
             (function {view_proof_name} ({view_sorts}) {proof_type} :merge old)
@@ -444,10 +482,20 @@ impl<'a> ProofInstrumentor<'a> {
             let children = format!("{}", ListDisplay(&children_vec, " "));
             let mut children_updated = vec![];
             let old_child = child(i);
-            let Some((updated_child_query, updated_child_var, updated_child_prf)) =
-                self.lookup(child(i), types[i].clone())
-            else {
-                panic!("Failed to get canonical expr for rebuilding rule");
+
+            let updated_child_var = self.fresh_var();
+            let parent = self.uf_name(types[i].name());
+            let updated_child_proof = self.fresh_var();
+            // Query that the old child has been updated to updated_child_var,
+            // and get a proof for that update if proofs are enabled.
+            let updated_child_query = if self.egraph.proof_state.proofs_enabled {
+                let uf_proof = self.uf_proof_name(types[i].name());
+                format!(
+                    "({parent} {old_child} {updated_child_var})
+                     (= {updated_child_proof} ({uf_proof} {old_child} {updated_child_var}))"
+                )
+            } else {
+                format!("({parent} {old_child} {updated_child_var})")
             };
 
             for j in 0..types.len() {
@@ -474,7 +522,7 @@ impl<'a> ProofInstrumentor<'a> {
                         format!(
                             "(let {proof}
                                ({eq_trans_constructor}
-                                  ({sym_constructor} {updated_child_prf})
+                                  ({sym_constructor} {updated_child_proof})
                                   {view_prf}))",
                         )
                     } else {
@@ -482,7 +530,7 @@ impl<'a> ProofInstrumentor<'a> {
                         format!(
                             "(let {proof}
                                   ({congr_constructor} {view_prf} {i}
-                                                       {updated_child_prf}))
+                                                       {updated_child_proof}))
                     ",
                         )
                     },
@@ -565,9 +613,9 @@ impl<'a> ProofInstrumentor<'a> {
                     "".to_string()
                 }
             }
-            ResolvedFact::Eq(_span, generic_expr, generic_expr1) => {
-                let (v1, p1) = self.instrument_fact_expr(generic_expr, res);
-                let (v2, p2) = self.instrument_fact_expr(generic_expr1, res);
+            ResolvedFact::Eq(_span, left_expr, right_expr) => {
+                let (v1, p1) = self.instrument_fact_expr(left_expr, res);
+                let (v2, p2) = self.instrument_fact_expr(right_expr, res);
                 res.push(format!("(= {} {})", v1, v2));
                 let sym = &self.proof_names().eq_sym_constructor;
                 let trans = &self.proof_names().eq_trans_constructor;
@@ -648,8 +696,7 @@ impl<'a> ProofInstrumentor<'a> {
                     ResolvedCall::Func(func_type) => {
                         assert!(
                             func_type.subtype == FunctionSubtype::Constructor,
-                            "Only constructor function calls are allowed in fact expressions due to proof normal form. Got {:?}",
-                            func_type
+                            "Only constructor function calls are allowed in fact expressions due to proof normal form. Got {func_type:?}",
                         );
 
                         let fv = self.fresh_var();
@@ -710,31 +757,6 @@ impl<'a> ProofInstrumentor<'a> {
                     }
                 }
             }
-        }
-    }
-
-    // Returns a query, variable for the updated child, and proof
-    fn lookup(&mut self, var: String, sort: ArcSort) -> Option<(String, String, String)> {
-        if sort.is_eq_sort() {
-            let fresh = self.fresh_var();
-            let parent = self.uf_name(sort.name());
-            let fresh_proof = self.fresh_var();
-            let proof = if self.egraph.proof_state.proofs_enabled {
-                let uf_proof = self.uf_proof_name(sort.name());
-                format!("(= {fresh_proof} ({uf_proof} {var} {fresh}))")
-            } else {
-                "".to_string()
-            };
-            Some((
-                format!(
-                    "({parent} {var} {fresh})
-                     {proof}"
-                ),
-                fresh,
-                fresh_proof,
-            ))
-        } else {
-            None
         }
     }
 
@@ -817,7 +839,7 @@ impl<'a> ProofInstrumentor<'a> {
         res
     }
 
-    /// Update the view with  the given arguments.
+    /// Update the view with the given arguments.
     /// The arguments include the eclass for constructors.
     fn update_view(&mut self, fname: &str, args: &[String], proof: &str) -> String {
         let mut res = vec![];
@@ -838,13 +860,18 @@ impl<'a> ProofInstrumentor<'a> {
     }
 
     /// Return some code adding to the view and term tables.
-    /// For constructors, the arguments do not include the eclass of the resulting term (since it may not exist yet).
+    /// For constructors, `args` should not include the eclass of the resulting term (since it may not exist yet).
+    /// For custom functions, `args` should include all arguments (including the output for the function).
+    ///
+    /// Returns a vector of strings representing code to add and a variable for the created term.
+    /// We could return the term itself, but this might make the encoding blow up the code.
     fn add_term_and_view(
         &mut self,
         func_type: &FuncType,
         args: &[String],
         justification: &Justification,
     ) -> (Vec<String>, String) {
+        // A fresh variable for the new term.
         let fv = self.fresh_var();
         let mut res = vec![];
         // TODO might be able to get rid of this intermediate variable in encoding

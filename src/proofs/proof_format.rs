@@ -6,8 +6,21 @@ use crate::{
     util::{HEntry, HashMap, IndexSet, SymbolGen},
 };
 use egglog_ast::generic_ast::Literal;
+use egglog_numeric_id::{DenseIdMap, NumericId, define_id};
+use std::fmt;
 
-pub type ProofId = usize;
+define_id!(
+    RawProofId,
+    u32,
+    "An identifier for a proof in a RawProofStore"
+);
+define_id!(pub ProofId, u32, "An identifier for a proof in a ProofStore");
+
+impl fmt::Display for ProofId {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        write!(f, "{}", self.index())
+    }
+}
 
 /// A proof straight from the e-graph, not exposed to users.
 struct RawProofStore {
@@ -15,8 +28,8 @@ struct RawProofStore {
     /// Bidirectional map between proof terms and their ids.
     store: IndexSet<RawProof>,
     encoding_names: EncodingNames,
-    term_to_proof: HashMap<TermId, ProofId>,
-    proof_to_term: HashMap<ProofId, TermId>,
+    term_to_proof: HashMap<TermId, RawProofId>,
+    proof_to_term: HashMap<RawProofId, TermId>,
 }
 
 pub(crate) fn proof_store_from_term(
@@ -36,23 +49,23 @@ pub(crate) fn proof_store_from_term(
 /// leaves off the implicit rule substitution.
 /// Converting to a [`Proof`] with [`ProofStore::from_raw`] fills in these details.
 #[derive(Clone, PartialEq, Eq, Hash, Debug)]
-pub enum RawProof {
+enum RawProof {
     /// Equalities added at the top level are justified by fiat.
     Fiat(TermId, TermId),
     /// Given a rule name and proofs for each premise, produces a proof of a grounded equality t1 = t2 from the body of the rule.
     /// The subsitution is implicit- in [`ProofTerm`] they are explicit.
-    Rule(String, Vec<ProofId>, TermId, TermId),
+    Rule(String, Vec<RawProofId>, TermId, TermId),
     /// Given two proofs f(c1, c2, ..., old) = f(c1, c2, ..., old) and f(c1, c2, ..., new) = f(c1, c2, ..., new) and a term t produces a proof
     /// of t = t.
     /// The term t is either f(c1, c2, ..., merge_fn) or some subexpression of the merge function. Here the merge function is evaluted on the terms old and new.
-    MergeFn(String, ProofId, ProofId, TermId),
-    Trans(ProofId, ProofId),
-    Sym(ProofId),
+    MergeFn(String, RawProofId, RawProofId, TermId),
+    Trans(RawProofId, RawProofId),
+    Sym(RawProofId),
     /// given a proof that t1 = f(..., ci, ...)
     /// and the child index i of ci in the term f(..., ci, ...)
     /// and a proof that ci = c2,
     /// produces a justification that t1 = f(..., c2, ...)
-    Congr(ProofId, usize, ProofId),
+    Congr(RawProofId, usize, RawProofId),
 }
 
 /// A [`ProofStore`] is similar to a [`TermDag`].
@@ -62,7 +75,7 @@ pub enum RawProof {
 pub struct ProofStore {
     pub(super) term_dag: TermDag,
     proof_id: HashMap<RawProof, ProofId>,
-    pub(super) id_to_proof: Vec<Proof>,
+    pub(super) id_to_proof: DenseIdMap<ProofId, Proof>,
 }
 
 /// In egglog, all proofs prove a [`Proposition`], which is an equality between two terms.
@@ -103,6 +116,10 @@ pub struct Proof {
 /// Justifies a [`Proposition`] using one of several proof rules.
 /// Some justifications are axioms of egglog, like Sym, Trans, and Congr.
 /// Other justifications are based on user input, like Fiat, Rule, and MergeFn.
+///
+/// Compared to [`RawProof`], a [`Justification`] is always paired with the [`Proposition`] being proven (in a [`Proof`]).
+/// Additionally, [`Justification::Rule`] includes the explicit substitution mapping variable names to terms,
+/// while [`RawProof::Rule`] leaves this implicit.
 #[derive(Clone, Debug)]
 pub enum Justification {
     /// Equalities added at the top level are justified by fiat.
@@ -160,7 +177,7 @@ impl RawProofStore {
         encoding_names: &EncodingNames,
         term_dag: TermDag,
         term: TermId,
-    ) -> (Self, ProofId) {
+    ) -> (Self, RawProofId) {
         let mut store = RawProofStore {
             term_dag: term_dag.clone(),
             store: IndexSet::default(),
@@ -172,7 +189,7 @@ impl RawProofStore {
         (store, parsed)
     }
 
-    fn parse_proof(&mut self, term_id: TermId) -> ProofId {
+    fn parse_proof(&mut self, term_id: TermId) -> RawProofId {
         if let Some(&proof_id) = self.term_to_proof.get(&term_id) {
             return proof_id;
         }
@@ -183,10 +200,13 @@ impl RawProofStore {
         proof_id
     }
 
-    fn parse_proof_inner(&mut self, term_id: TermId) -> ProofId {
+    fn parse_proof_inner(&mut self, term_id: TermId) -> RawProofId {
         let term = self.term_dag.get(term_id).clone();
         let Term::App(head, args) = term else {
-            panic!("expected proof term to be an app, got {:?}", term);
+            panic!(
+                "Expected proof term to be an app, got {:?}. Proof parsing assumes valid proofs.",
+                term
+            );
         };
 
         let proof = if head == self.encoding_names.fiat_constructor {
@@ -220,13 +240,16 @@ impl RawProofStore {
             let child_proof = self.parse_proof(args[2]);
             RawProof::Congr(proof, child_index, child_proof)
         } else {
-            panic!("Unrecognized proof term head: {}", head);
+            panic!(
+                "Unrecognized proof term head: {}. Proof parsing assumes valid proofs.",
+                head
+            );
         };
 
         self.add_proof(proof)
     }
 
-    fn parse_proof_list(&mut self, list_term: TermId) -> Vec<ProofId> {
+    fn parse_proof_list(&mut self, list_term: TermId) -> Vec<RawProofId> {
         let term = self.term_dag.get(list_term).clone();
         match term {
             Term::App(head, args) => {
@@ -242,17 +265,26 @@ impl RawProofStore {
                     list.extend(rest);
                     list
                 } else {
-                    panic!("expected proof list constructor, got {}", head);
+                    panic!(
+                        "expected proof list constructor, got {}. Proof parsing assumes valid proofs.",
+                        head
+                    );
                 }
             }
-            other => panic!("expected proof list, got {:?}", other),
+            other => panic!(
+                "expected proof list, got {:?}. Proof parsing assumes valid proofs.",
+                other
+            ),
         }
     }
 
     fn parse_string(&self, term_id: TermId) -> String {
         match self.term_dag.get(term_id) {
             Term::Lit(Literal::String(s)) => s.clone(),
-            other => panic!("expected string literal in proof term, got {:?}", other),
+            other => panic!(
+                "expected string literal in proof term, got {:?}. Proof parsing expects valid proofs.",
+                other
+            ),
         }
     }
 
@@ -266,12 +298,12 @@ impl RawProofStore {
         }
     }
 
-    fn add_proof(&mut self, proof: RawProof) -> ProofId {
+    fn add_proof(&mut self, proof: RawProof) -> RawProofId {
         if let Some(id) = self.store.get_index_of(&proof) {
-            return id;
+            return RawProofId::from_usize(id);
         }
         self.store.insert(proof);
-        self.store.len() - 1
+        RawProofId::from_usize(self.store.len() - 1)
     }
 
     fn unwrap_ast(&self, term_id: TermId) -> TermId {
@@ -310,12 +342,12 @@ impl ProofStore {
     fn from_raw(
         prog: &Vec<ResolvedNCommand>,
         raw_store: RawProofStore,
-        raw_proof_id: ProofId,
+        raw_proof_id: RawProofId,
     ) -> (ProofStore, ProofId) {
         let mut store = ProofStore {
             term_dag: raw_store.term_dag.clone(),
             proof_id: HashMap::default(),
-            id_to_proof: Vec::new(),
+            id_to_proof: DenseIdMap::new(),
         };
 
         let proof_id = store.convert_raw_proof(prog, &raw_store, raw_proof_id);
@@ -324,16 +356,18 @@ impl ProofStore {
 
     /// Converts a raw proof into a user-facing proof, recursively converting sub-proofs as needed.
     /// This adds new metadata to the proof, such as the substitution for rules.
+    ///
+    /// Panics if the raw proof is invalid with respect to the program.
     fn convert_raw_proof(
         &mut self,
         prog: &Vec<ResolvedNCommand>,
         raw_store: &RawProofStore,
-        raw_proof_id: ProofId,
+        raw_proof_id: RawProofId,
     ) -> ProofId {
-        if let Some(&id) = self.proof_id.get(&raw_store.store[raw_proof_id]) {
+        if let Some(&id) = self.proof_id.get(&raw_store.store[raw_proof_id.index()]) {
             return id;
         }
-        let raw_proof = &raw_store.store[raw_proof_id];
+        let raw_proof = &raw_store.store[raw_proof_id.index()];
 
         let proof = match raw_proof {
             RawProof::Fiat(lhs, rhs) => Proof {
@@ -418,8 +452,7 @@ impl ProofStore {
             }
         };
 
-        let proof_id = self.id_to_proof.len();
-        self.id_to_proof.push(proof);
+        let proof_id = self.id_to_proof.push(proof);
         self.proof_id.insert(raw_proof.clone(), proof_id);
         proof_id
     }
@@ -477,8 +510,6 @@ impl ProofStore {
                     }),
                     args,
                 ),
-                // TODO this could actually be arbitrary pretty easily, it's just nested functions that are hard.
-                // We should also allow a function call with no bound output.
                 ResolvedExpr::Var(_span3, v),
             ) => {
                 let term = proof.rhs();
@@ -551,7 +582,7 @@ impl ProofStore {
                 }
                 let Term::App(head, children) = self.term_dag.get(term_id) else {
                     panic!(
-                        "expected function application term for call {}, got {:?}",
+                        "expected function application term for call {}, got {:?}. Conversion from raw proofs assumes valid proofs with respect to the program.",
                         call.name(),
                         self.term_dag.get(term_id)
                     );

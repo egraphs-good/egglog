@@ -155,6 +155,21 @@ pub(crate) fn desugar_command(
     Ok(res)
 }
 
+/// Desugars a `prove` command into egglog commands.
+/// For example, `(prove (= a b))` becomes:
+/// ```text
+/// (sort ExistsSort)
+/// (function ExistsConstructor () ExistsSort)
+/// (ruleset exists)
+/// (rule ((= a b))
+///       ((ExistsConstructor))
+///       :ruleset exists
+///       :name "prove_exists_rule")
+/// (run exists)
+/// (prove-exists ExistsConstructor)
+/// ```
+/// This creates a fresh constructor that can only be created if the query holds.
+/// Then `prove-exists` extracts a proof that the constructor exists.
 fn desugar_prove(parser: &mut Parser, span: Span, query: Vec<Fact>) -> Vec<NCommand> {
     let fresh_sort = parser.symbol_gen.fresh("ExistsSort");
     let constructor_name = parser.symbol_gen.fresh("ExistsConstructor");

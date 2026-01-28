@@ -2,7 +2,7 @@ use crate::{
     Term, TermId,
     ast::ResolvedNCommand,
     proofs::{
-        proof_checker::gather_globals,
+        proof_checker::{ProofCheckError, gather_globals},
         proof_format::{Justification, Proof, ProofId, ProofStore, Proposition},
     },
     util::HashMap,
@@ -13,13 +13,14 @@ impl ProofStore {
     /// with their computed values.
     /// This constructs a map of global names to their terms (without globals),
     /// then replaces all occurrences of those globals in the proof's term dag.
-    pub fn remove_globals(&mut self, prog: &[ResolvedNCommand]) {
+    pub fn remove_globals(&mut self, prog: &[ResolvedNCommand]) -> Result<(), ProofCheckError> {
         // Gather all globals and their values as terms
-        let globals = gather_globals(prog, &mut self.term_dag);
+        let globals = gather_globals(prog, &mut self.term_dag)?;
 
         // Replace all global function calls (nullary functions) in the term dag
         // with their computed values
         self.replace_global_terms(&globals);
+        Ok(())
     }
 
     /// Replace all global function applications in the term dag with their values.
@@ -53,16 +54,14 @@ impl ProofStore {
         }
 
         // Now update all proofs to use the new term IDs
-        for proof in &mut self.id_to_proof {
+        for (_id, proof) in self.id_to_proof.iter_mut() {
             proof.map_terms_mut(|term_id| *term_mapping.get(&term_id).unwrap_or(&term_id));
         }
     }
 
     /// Add a new proof to the store and return its ID.
     fn add_proof(&mut self, proof: Proof) -> ProofId {
-        let proof_id = self.id_to_proof.len();
-        self.id_to_proof.push(proof);
-        proof_id
+        self.id_to_proof.push(proof)
     }
 
     /// A simple simplification pass removing unnecessary steps.
@@ -212,7 +211,8 @@ impl ProofStore {
                     justification: Justification::Trans(sym_right_id, sym_left_id),
                 };
 
-                // Replace current proof
+                // Replace current proof, mutating in place.
+                // Other optimizations may not need to do this if they return existing proofs.
                 self.id_to_proof[proof_id] = new_trans;
                 return Some(proof_id);
             }

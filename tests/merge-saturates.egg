@@ -26,10 +26,10 @@
 ; The exploit above is no longer valid due to the removal of default
 ; however, can still do with lookups in merge and constructors/relations
 
-(relation baz (i64))
 
-;; TODO now that relations are desugared, this trick also doesn't work:
-;; Probable we delete this test?
+
+;; Now that relations are desugared, this trick also doesn't work because the relation has a fresh sort:
+;; (relation baz (i64))
 
 ;;(function const (Unit) i64 :no-merge)
 ;;
