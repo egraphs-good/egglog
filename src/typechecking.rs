@@ -49,15 +49,15 @@ impl Hash for FuncType {
         }
     }
 }
-/// Primitive validators
-/// Validators take a termdag, arguments, and expected term id and return true if the computation is correct.
+/// Validators take a termdag and arguments (as TermIds) and return
+/// a newly computed TermId if the primitive application is valid,
+/// or None if it is invalid.
 pub type PrimitiveValidator = Arc<dyn Fn(&mut TermDag, &[TermId]) -> Option<TermId> + Send + Sync>;
 
 #[derive(Clone)]
 pub struct PrimitiveWithId {
     pub(crate) primitive: Arc<dyn Primitive + Send + Sync>,
     pub(crate) id: ExternalFunctionId,
-    // TODO is storing the validator here inefficient?
     pub(crate) validator: Option<PrimitiveValidator>,
 }
 

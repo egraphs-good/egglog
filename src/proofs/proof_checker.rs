@@ -33,14 +33,14 @@ pub(crate) struct ActionContext {
 /// This extracts all actions that occur at the top level, filtering out NormRule and other commands.
 pub(crate) fn gather_global_actions(
     prog: &[ResolvedNCommand],
-) -> Vec<&GenericAction<ResolvedCall, crate::ast::ResolvedVar>> {
-    let mut actions = Vec::new();
-    for cmd in prog {
+) -> impl Iterator<Item = &GenericAction<ResolvedCall, crate::ast::ResolvedVar>> {
+    prog.iter().filter_map(|cmd| {
         if let GenericNCommand::CoreAction(action) = cmd {
-            actions.push(action);
+            Some(action)
+        } else {
+            None
         }
-    }
-    actions
+    })
 }
 
 /// Run a merge function and return the resulting term, as well as a set of propositions learned.
@@ -198,7 +198,9 @@ fn eval_expr_with_subst(
     Ok((term_id, propositions))
 }
 
-/// Add reflexive equalities for all subterms of a term
+/// Add reflexive equalities for all subterms of a term.
+/// For example, if we have proved `(f (g 1)) = (f (g 1))`, then we have also proved
+// that `(g 1) = (g 1)` and `1 = 1`.
 fn add_subterm_reflexive_equalities(
     term_id: TermId,
     term_dag: &TermDag,
@@ -222,11 +224,10 @@ fn add_subterm_reflexive_equalities(
 pub(crate) fn gather_globals(
     prog: &[ResolvedNCommand],
     term_dag: &mut TermDag,
-) -> HashMap<String, TermId> {
-    let actions = gather_global_actions(prog);
-    let ctx = process_actions("global_action", HashMap::default(), &actions, term_dag)
-        .expect("Failed to process global actions");
-    ctx.var_bindings
+) -> Result<HashMap<String, TermId>, ProofCheckError> {
+    let actions: Vec<_> = gather_global_actions(prog).collect();
+    let ctx = process_actions("global_action", HashMap::default(), &actions, term_dag)?;
+    Ok(ctx.var_bindings)
 }
 
 /// Errors that can occur during proof checking.
@@ -423,6 +424,16 @@ pub enum ProofCheckErrorKind {
         claimed_lhs: String,
         claimed_rhs: String,
     },
+    /// MergeFn proof: sub-proof is not reflexive
+    #[error(
+        "Proof {proof_id}: MergeFn error - {which} proof is not reflexive, lhs {lhs:?} != rhs {rhs:?}"
+    )]
+    MergeFnNotReflexive {
+        proof_id: ProofId,
+        which: String,
+        lhs: TermId,
+        rhs: TermId,
+    },
 }
 
 /// Context needed for proof checking
@@ -440,17 +451,16 @@ pub(crate) struct ProofCheckContext {
 impl ProofCheckContext {
     /// Create a new proof check context by analyzing the program.
     /// This gathers all equalities established by global actions (unions and sets).
-    fn new(prog: &[ResolvedNCommand], term_dag: &mut TermDag) -> Self {
+    fn new(prog: &[ResolvedNCommand], term_dag: &mut TermDag) -> Result<Self, ProofCheckError> {
         // Use the new refactored functions
-        let actions = gather_global_actions(prog);
-        let action_ctx = process_actions("global_actions", HashMap::default(), &actions, term_dag)
-            .expect("Failed to process global actions for proof checking");
+        let actions: Vec<_> = gather_global_actions(prog).collect();
+        let action_ctx = process_actions("global_actions", HashMap::default(), &actions, term_dag)?;
 
-        ProofCheckContext {
+        Ok(ProofCheckContext {
             global_equalities: action_ctx.propositions,
             checked_proofs: HashMap::default(),
             global_bindings: action_ctx.var_bindings,
-        }
+        })
     }
 
     fn in_globals(&self, lhs: TermId, rhs: TermId) -> bool {
@@ -479,7 +489,7 @@ impl ProofStore {
         proof_id: ProofId,
         program: &[ResolvedNCommand],
     ) -> Result<Proposition, ProofCheckError> {
-        let mut ctx = ProofCheckContext::new(program, &mut self.term_dag);
+        let mut ctx = ProofCheckContext::new(program, &mut self.term_dag)?;
         self.check_proof_with_context(proof_id, program, &mut ctx)
     }
 
@@ -576,8 +586,29 @@ impl ProofStore {
                 let old_prop = self.check_proof_with_context(*old_proof, program, ctx)?;
                 let new_prop = self.check_proof_with_context(*new_proof, program, ctx)?;
 
-                let (_old_lhs, old_rhs) = (old_prop.lhs, old_prop.rhs);
-                let (_new_lhs, new_rhs) = (new_prop.lhs, new_prop.rhs);
+                let (old_lhs, old_rhs) = (old_prop.lhs, old_prop.rhs);
+                let (new_lhs, new_rhs) = (new_prop.lhs, new_prop.rhs);
+
+                // MergeFn proofs expect reflexive equality proofs
+                if old_lhs != old_rhs {
+                    return Err(ProofCheckErrorKind::MergeFnNotReflexive {
+                        proof_id,
+                        which: "old".to_string(),
+                        lhs: old_lhs,
+                        rhs: old_rhs,
+                    }
+                    .into());
+                }
+                if new_lhs != new_rhs {
+                    return Err(ProofCheckErrorKind::MergeFnNotReflexive {
+                        proof_id,
+                        which: "new".to_string(),
+                        lhs: new_lhs,
+                        rhs: new_rhs,
+                    }
+                    .into());
+                }
+
                 let old_view_term = self.term_dag.get(old_rhs);
                 let new_view_term = self.term_dag.get(new_rhs);
 

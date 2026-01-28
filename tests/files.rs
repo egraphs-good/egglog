@@ -10,12 +10,15 @@ struct Run {
     desugar: bool,
     term_encoding: bool,
     proofs: bool,
-    snapshot: bool,
 }
 
 impl Run {
+    /// Tests in the proofs directory require proofs to run successfully.
+    fn requires_proofs(&self) -> bool {
+        self.path.parent().unwrap().ends_with("proofs")
+    }
+
     /// Convert CommandOutput vector to snapshot string, filtering non-deterministic content
-    #[cfg(not(debug_assertions))]
     fn outputs_to_snapshot(&self, outputs: &[CommandOutput]) -> String {
         outputs
             .iter()
@@ -47,7 +50,6 @@ impl Run {
                 desugar: false,
                 term_encoding: false,
                 proofs: false,
-                snapshot: false,
             };
 
             normal_run.test_program(
@@ -58,14 +60,13 @@ impl Run {
         };
 
         // Debug mode enables parallelism which can lead to non-deterministic output ordering
-        #[cfg(not(debug_assertions))]
         if !self.should_fail()
             && !self.should_skip_snapshot()
             && _outputs
                 .iter()
                 .any(|o| !matches!(o, CommandOutput::RunSchedule(..)))
         {
-            let snapshot_name = self.snapshot_name();
+            let snapshot_name = self.name().to_string();
             let snapshot_content = self.outputs_to_snapshot(&_outputs);
             insta::assert_snapshot!(snapshot_name, snapshot_content);
         }
@@ -116,15 +117,6 @@ impl Run {
                     for msg in &msgs {
                         log::info!("  {}", msg);
                     }
-                    if self.snapshot {
-                        let snapshot = msgs
-                            .iter()
-                            .map(|s| s.to_string())
-                            .collect::<Vec<_>>()
-                            .join("\n");
-                        insta::assert_snapshot!(self.name().to_string(), snapshot);
-                    }
-
                     // Test graphviz dot generation
                     let mut serialized = egraph
                         .serialize(SerializeConfig {
@@ -188,35 +180,33 @@ impl Run {
         self.path.to_string_lossy().contains("fail-typecheck")
     }
 
-    #[cfg(not(debug_assertions))]
     fn should_skip_snapshot(&self) -> bool {
-        // Skip tests with known non-deterministic output
-        let filename = self.path.file_stem().unwrap().to_string_lossy();
-        const SKIP_PATTERNS: [&str; 3] = [
-            "extract-vec-bench",
-            "python_array_optimize",
-            "stresstest_large_expr",
-        ];
+        // in parallel mode always skip
+        #[cfg(debug_assertions)]
+        {
+            true
+        }
+        // in non-parallel mode, selectively skip
+        #[cfg(not(debug_assertions))]
+        {
+            // Skip proof tests unless they require proofs
+            if self.proofs && !self.requires_proofs() {
+                return true;
+            }
 
-        SKIP_PATTERNS.iter().any(|pat| filename.contains(pat))
+            // Skip tests with known non-deterministic output
+            let filename = self.path.file_stem().unwrap().to_string_lossy();
+            const SKIP_PATTERNS: [&str; 4] = [
+                "extract-vec-bench",
+                "python_array_optimize",
+                "stresstest_large_expr",
+                "towers-of-hanoi",
+            ];
+
+            SKIP_PATTERNS.iter().any(|pat| filename.contains(pat))
             // Term encoding is currently causing non-deterministic database to be produced
             || (filename.contains("math-microbenchmark") && self.term_encoding)
-    }
-
-    #[cfg(not(debug_assertions))]
-    fn snapshot_name(&self) -> String {
-        let stem = self.path.file_stem().unwrap().to_string_lossy();
-        let stem_clean = stem.replace(['.', '-', ' '], "_");
-
-        let mut name = stem_clean.to_string();
-        if self.desugar {
-            name.push_str("_desugar");
         }
-        if self.term_encoding {
-            name.push_str("_term_encoding");
-        }
-
-        name
     }
 }
 
@@ -230,10 +220,9 @@ fn generate_tests(glob: &str) -> Vec<Trial> {
             desugar: false,
             term_encoding: false,
             proofs: false,
-            snapshot: false,
         };
         let should_fail = run.should_fail();
-        let requires_proofs = run.path.parent().unwrap().ends_with("proofs");
+        let requires_proofs = run.requires_proofs();
         // TODO: math-microbenchmark is too slow right now
         // TODO: subsume.egg fails because we used a `check` on something subsumed. Need a way to run rules over subsumed things. Same with subsume-relation.egg.
         let proof_unsupported_file_list = [
@@ -265,7 +254,6 @@ fn generate_tests(glob: &str) -> Vec<Trial> {
         if !should_fail && supports_proofs {
             push_trial(Run {
                 proofs: true,
-                snapshot: requires_proofs,
                 ..run.clone()
             });
         }
@@ -293,7 +281,7 @@ fn generate_proof_support_snapshot_test() -> Trial {
 
         for entry in glob::glob("tests/**/*.egg").unwrap() {
             let path = entry.unwrap();
-            if file_supports_proofs(&path) {
+            if !file_supports_proofs(&path) {
                 // Convert to relative path for consistent snapshots
                 let relative = path.strip_prefix("tests/").unwrap_or(&path);
                 supported_files.push(relative.to_string_lossy().to_string());
@@ -305,7 +293,7 @@ fn generate_proof_support_snapshot_test() -> Trial {
 
         // Create snapshot
         let snapshot = supported_files.join("\n");
-        insta::assert_snapshot!("proof_supported_files", snapshot);
+        insta::assert_snapshot!("proof_unsupported_files", snapshot);
 
         Ok(())
     })

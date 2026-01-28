@@ -88,7 +88,7 @@ impl EncodingNames {
     }
 }
 
-impl<'a> ProofInstrumentor<'a> {
+impl ProofInstrumentor<'_> {
     pub(crate) fn uf_name(&mut self, sort: &str) -> String {
         if let Some(name) = self.egraph.proof_state.uf_parent.get(sort) {
             name.clone()
@@ -372,34 +372,20 @@ impl<'a> ProofInstrumentor<'a> {
         }
         let to_ast_str = to_ast_constructors.join("\n");
 
-        let (
-            proof_list_sort,
-            ast_sort,
-            proof_datatype,
-            fiat_constructor,
-            rule_constructor,
-            merge_fn_constructor,
-            eq_trans_constructor,
-            eq_sym_constructor,
-            congr_constructor,
-            pcons,
-            pnil,
-        ) = {
-            let names = self.proof_names();
-            (
-                &names.proof_list_sort,
-                &names.ast_sort,
-                &names.proof_datatype,
-                &names.fiat_constructor,
-                &names.rule_constructor,
-                &names.merge_fn_constructor,
-                &names.eq_trans_constructor,
-                &names.eq_sym_constructor,
-                &names.congr_constructor,
-                &names.pcons,
-                &names.pnil,
-            )
-        };
+        let EncodingNames {
+            ref proof_list_sort,
+            ref ast_sort,
+            ref proof_datatype,
+            ref fiat_constructor,
+            ref rule_constructor,
+            ref merge_fn_constructor,
+            ref eq_trans_constructor,
+            ref eq_sym_constructor,
+            ref congr_constructor,
+            ref pcons,
+            ref pnil,
+            ..
+        } = *self.proof_names();
 
         format!(
             "
