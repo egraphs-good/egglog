@@ -40,6 +40,20 @@
 (pop)
 
 ; Test union
+(push)
 (vec-union p q)
 (check (= p q))
 (check (= (a) (b)))
+(pop)
+
+; test union fails on different lengths
+(fail (vec-union (vec-of (a)) (vec-of (b) (a))))
+
+; verify vec-union works as merge function
+(function ff () VX :merge (vec-union old new))
+(push)
+(set (ff) p)
+(set (ff) q)
+(check (= p q))
+(check (= (a) (b)))
+(pop)
