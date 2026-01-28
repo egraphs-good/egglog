@@ -206,8 +206,8 @@ impl Sort for FunctionSort {
         container_values: &ContainerValues,
         value: Value,
         termdag: &mut TermDag,
-        mut element_terms: Vec<Term>,
-    ) -> Term {
+        mut element_terms: Vec<TermId>,
+    ) -> TermId {
         let name = &container_values
             .get_val::<FunctionContainer>(value)
             .unwrap()

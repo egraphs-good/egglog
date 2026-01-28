@@ -12,17 +12,31 @@ struct Run {
 }
 
 impl Run {
+    /// Convert CommandOutput vector to snapshot string, filtering non-deterministic content
+    #[cfg(not(debug_assertions))]
+    fn outputs_to_snapshot(&self, outputs: &[CommandOutput]) -> String {
+        outputs
+            .iter()
+            .filter_map(|output| match output {
+                // Skip OverallStatistics - contains non-deterministic Duration timing data
+                CommandOutput::OverallStatistics(_) => None,
+                // All other variants use normal Display formatting
+                other => Some(other.to_string()),
+            })
+            .collect::<Vec<_>>()
+            .join("")
+    }
     fn run(&self) {
         let _ = env_logger::builder().is_test(true).try_init();
         let program = std::fs::read_to_string(&self.path)
             .unwrap_or_else(|err| panic!("Couldn't read {:?}: {:?}", self.path, err));
 
-        if !self.desugar {
+        let _outputs = if !self.desugar {
             self.test_program(
                 self.path.to_str().map(String::from),
                 &program,
                 "Top level error",
-            );
+            )
         } else {
             let mut egraph = EGraph::default();
             let desugared_str = egraph
@@ -37,11 +51,29 @@ impl Run {
                 None,
                 &desugared_str,
                 "ERROR after parse, to_string, and parse again.",
-            );
+            )
+        };
+
+        // Debug mode enables parallelism which can lead to non-deterministic output ordering
+        #[cfg(not(debug_assertions))]
+        if !self.should_fail()
+            && !self.should_skip_snapshot()
+            && _outputs
+                .iter()
+                .any(|o| !matches!(o, CommandOutput::RunSchedule(..)))
+        {
+            let snapshot_name = self.snapshot_name();
+            let snapshot_content = self.outputs_to_snapshot(&_outputs);
+            insta::assert_snapshot!(snapshot_name, snapshot_content);
         }
     }
 
-    fn test_program(&self, filename: Option<String>, program: &str, message: &str) {
+    fn test_program(
+        &self,
+        filename: Option<String>,
+        program: &str,
+        message: &str,
+    ) -> Vec<CommandOutput> {
         let mut egraph = EGraph::default();
         if self.term_encoding {
             egraph = egraph.with_term_encoding_enabled();
@@ -57,10 +89,9 @@ impl Run {
                             .join("\n")
                     );
                 } else {
-                    for msg in msgs {
+                    for msg in &msgs {
                         log::info!("  {}", msg);
                     }
-                    // Test graphviz dot generation
                     let mut serialized = egraph
                         .serialize(SerializeConfig {
                             max_functions: Some(40),
@@ -73,14 +104,17 @@ impl Run {
                     serialized.split_classes(|id, _| egraph.from_node_id(id).is_primitive());
                     serialized.inline_leaves();
                     serialized.to_dot();
+
+                    msgs
                 }
             }
             Err(err) => {
                 if !self.should_fail() {
                     panic!("{}: {err}", message)
                 }
+                vec![]
             }
-        };
+        }
     }
 
     fn into_trial(self) -> Trial {
@@ -115,6 +149,37 @@ impl Run {
 
     fn should_fail(&self) -> bool {
         self.path.to_string_lossy().contains("fail-typecheck")
+    }
+
+    #[cfg(not(debug_assertions))]
+    fn should_skip_snapshot(&self) -> bool {
+        // Skip tests with known non-deterministic output
+        let filename = self.path.file_stem().unwrap().to_string_lossy();
+        const SKIP_PATTERNS: [&str; 3] = [
+            "extract-vec-bench",
+            "python_array_optimize",
+            "stresstest_large_expr",
+        ];
+
+        SKIP_PATTERNS.iter().any(|pat| filename.contains(pat))
+            // Term encoding is currently causing non-deterministic database to be produced
+            || (filename.contains("math-microbenchmark") && self.term_encoding)
+    }
+
+    #[cfg(not(debug_assertions))]
+    fn snapshot_name(&self) -> String {
+        let stem = self.path.file_stem().unwrap().to_string_lossy();
+        let stem_clean = stem.replace(['.', '-', ' '], "_");
+
+        let mut name = stem_clean.to_string();
+        if self.desugar {
+            name.push_str("_desugar");
+        }
+        if self.term_encoding {
+            name.push_str("_term_encoding");
+        }
+
+        name
     }
 }
 

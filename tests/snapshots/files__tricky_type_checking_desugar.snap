@@ -1,0 +1,15 @@
+---
+source: tests/files.rs
+expression: snapshot_content
+---
+(
+)
+(
+   (type (fConst)) -> (type (fConst))
+   (type (gConst)) -> (type (gConst))
+   (type (AConst)) -> (Ob)
+   (type (BConst)) -> (Ob)
+   (type (compose (gConst) (fConst))) -> (Hom (BConst) (BConst))
+   (type (id (AConst))) -> (Hom (AConst) (AConst))
+   (type (id (BConst))) -> (Hom (BConst) (BConst))
+)
