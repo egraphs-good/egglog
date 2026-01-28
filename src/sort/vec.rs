@@ -1,3 +1,7 @@
+use std::iter::zip;
+
+use egglog_bridge::UnionAction;
+
 use super::*;
 
 #[derive(Clone, Debug, PartialEq, Eq, Hash)]
@@ -49,6 +53,7 @@ impl Presort for VecSort {
             "vec-get",
             "vec-set",
             "vec-remove",
+            "vec-union",
         ]
     }
 
@@ -129,6 +134,13 @@ impl ContainerSort for VecSort {
         add_primitive!(eg, "vec-get"    = |    xs: @VecContainer (arc), i: i64                       | -?> # (self.element()) { xs.data.get(i as usize).copied() });
         add_primitive!(eg, "vec-set"    = |mut xs: @VecContainer (arc), i: i64, x: # (self.element())| -> @VecContainer (arc) {{ xs.data[i as usize] = x;    xs }});
         add_primitive!(eg, "vec-remove" = |mut xs: @VecContainer (arc), i: i64                       | -> @VecContainer (arc) {{ xs.data.remove(i as usize); xs }});
+        if self.element.is_eq_sort() {
+            eg.add_primitive(Union {
+                name: "vec-union".into(),
+                vec: arc,
+                action: eg.new_union_action(),
+            });
+        }
     }
 
     fn reconstruct_termdag(
@@ -147,6 +159,53 @@ impl ContainerSort for VecSort {
 
     fn serialized_name(&self, _container_values: &ContainerValues, _: Value) -> String {
         "vec-of".to_owned()
+    }
+}
+
+// (vec-union Vec[A] Vec[A]) -> Vec[A]
+// where A: Eq
+// Unions items from two vecs, asserting they are the same length.
+#[derive(Clone)]
+struct Union {
+    name: String,
+    vec: ArcSort,
+    action: UnionAction,
+}
+
+impl Primitive for Union {
+    fn name(&self) -> &str {
+        &self.name
+    }
+
+    fn get_type_constraints(&self, span: &Span) -> Box<dyn TypeConstraint> {
+        SimpleTypeConstraint::new(
+            self.name(),
+            vec![self.vec.clone(), self.vec.clone(), self.vec.clone()],
+            span.clone(),
+        )
+        .into_box()
+    }
+
+    fn apply(&self, exec_state: &mut ExecutionState, args: &[Value]) -> Option<Value> {
+        let left = exec_state
+            .container_values()
+            .get_val::<VecContainer>(args[0])
+            .unwrap()
+            .clone()
+            .data;
+        let right = exec_state
+            .container_values()
+            .get_val::<VecContainer>(args[1])
+            .unwrap()
+            .clone()
+            .data;
+        if left.len() != right.len() {
+            return None;
+        }
+        for (l, r) in zip(left, right) {
+            self.action.union(exec_state, l, r);
+        }
+        Some(args[0])
     }
 }
 

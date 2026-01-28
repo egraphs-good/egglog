@@ -42,7 +42,7 @@ use egglog_ast::generic_ast::{Change, GenericExpr, Literal};
 use egglog_ast::span::Span;
 use egglog_ast::util::ListDisplay;
 pub use egglog_bridge::FunctionRow;
-use egglog_bridge::{ColumnTy, QueryEntry};
+use egglog_bridge::{ColumnTy, QueryEntry, UnionAction};
 use egglog_core_relations as core_relations;
 use egglog_numeric_id as numeric_id;
 use egglog_reports::{ReportLevel, RunReport};
@@ -1507,6 +1507,11 @@ impl EGraph {
     pub fn get_canonical_value(&self, val: Value, sort: &ArcSort) -> Value {
         self.backend
             .get_canon_repr(val, sort.column_ty(&self.backend))
+    }
+
+    /// Create a new union action that can be used to union two values.
+    pub fn new_union_action(&self) -> egglog_bridge::UnionAction {
+        UnionAction::new(&self.backend)
     }
 }
 

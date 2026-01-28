@@ -34,5 +34,12 @@
 (let q (vec-of (b)))
 (check (!= p q))
 
+(push)
 (union (a) (b))
 (check (= p q))
+(pop)
+
+; Test union
+(vec-union p q)
+(check (= p q))
+(check (= (a) (b)))
