@@ -1225,6 +1225,7 @@ impl MergeFn {
             Primitive(_, args) => {
                 args.iter()
                     .for_each(|arg| arg.fill_deps(egraph, read_deps, write_deps));
+                write_deps.insert(egraph.uf_table);
             }
             Function(func, args) => {
                 read_deps.insert(egraph.funcs[*func].table);
