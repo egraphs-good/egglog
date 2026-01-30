@@ -11,9 +11,9 @@
 
 This is the repo for the core of the `egglog` engine, which combines the power of equality saturation and Datalog.
 
-For getting started, try out the [egglog tutorial](https://github.com/egraphs-good/egglog-tutorial)!
+For getting started, try out the [egglog tutorial](https://egraphs-good.github.io/egglog-tutorial)!
 
-You also can [run egglog in your web browser](https://egraphs-good.github.io/egglog/) or check out [the documentation](https://egraphs-good.github.io/egglog/docs/egglog).
+You can also [run egglog in your web browser](https://egraphs-good.github.io/egglog/) or check out [the documentation](https://egraphs-good.github.io/egglog/docs/egglog).
 
 For a "battery-included" experience, we recommend [egglog-experimental](https://github.com/egraphs-good/egglog-experimental). It provides more features through additional `egglog` plugins.
 
