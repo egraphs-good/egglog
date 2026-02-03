@@ -198,13 +198,13 @@ impl std::fmt::Display for CommandOutput {
 /// ```
 #[derive(Clone)]
 pub struct EGraph {
-    backend: egglog_bridge::EGraph,
+    pub backend: egglog_bridge::EGraph,
     pub parser: Parser,
     names: check_shadowing::Names,
     /// pushed_egraph forms a linked list of pushed egraphs.
     /// Pop reverts the egraph to the last pushed egraph.
     pushed_egraph: Option<Box<Self>>,
-    functions: IndexMap<String, Function>,
+    pub functions: IndexMap<String, Function>,
     rulesets: IndexMap<String, Ruleset>,
     pub fact_directory: Option<PathBuf>,
     pub seminaive: bool,
@@ -236,7 +236,7 @@ pub struct Function {
     decl: ResolvedFunctionDecl,
     schema: ResolvedSchema,
     can_subsume: bool,
-    backend_id: egglog_bridge::FunctionId,
+    pub backend_id: egglog_bridge::FunctionId,
 }
 
 impl Function {
@@ -300,6 +300,8 @@ impl Default for EGraph {
             strict_mode: false,
             warned_about_missing_global_prefix: false,
         };
+        let mut register = REGISTER_FN_PRIMITIVES.lock().unwrap();
+        register.clear();
 
         add_base_sort(&mut eg, UnitSort, span!()).unwrap();
         add_base_sort(&mut eg, StringSort, span!()).unwrap();

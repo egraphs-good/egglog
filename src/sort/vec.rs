@@ -1,4 +1,6 @@
+use std::any::TypeId;
 use std::iter::zip;
+use std::ptr;
 
 use egglog_bridge::UnionAction;
 
@@ -54,6 +56,8 @@ impl Presort for VecSort {
             "vec-set",
             "vec-remove",
             "vec-union",
+            "vec-range",
+            "unstable-vec-map",
         ]
     }
 
@@ -137,10 +141,72 @@ impl ContainerSort for VecSort {
         if self.element.is_eq_sort() {
             eg.add_primitive(Union {
                 name: "vec-union".into(),
-                vec: arc,
+                vec: arc.clone(),
                 action: eg.new_union_action(),
             });
         }
+        // vec-range
+        if self.element.name() == "i64" {
+            add_primitive!(eg, "vec-range" = {self.clone(): VecSort} |end: i64| -> @VecContainer (arc) { VecContainer {
+                do_rebuild: self.ctx.is_eq_container_sort(),
+                data: {
+                    let end: usize = end.try_into().unwrap_or(0);
+                    (0..end)
+                        .map(|i| exec_state.base_values().get::<i64>(i as i64))
+                        .collect()
+                }
+            } });
+        }
+        // unstable-vec-map (fn Vec[A], (A -> B)) -> Vec[B]
+        // For Map, support either defining Vec sort or Fn sort first
+        let self_cloned = arc.clone();
+        let element_name = self.element.name().to_string();
+
+        // If we are registering a fn type A -> B and either and A == element or B == element,
+        // Then find all Vec sorts with element type B or A respectively and register unstable-vec-map
+        let all_vec_sorts = eg
+            .type_info
+            .get_arcsorts_by(|f| f.value_type() == Some(TypeId::of::<VecContainer>()));
+
+        // Iterate through all function sorts and add any that match this element type
+        // Then for each of those, register the unstable-vec-map primitive
+        let register_map = Box::new(move |fn_: Arc<FunctionSort>, eg: &mut EGraph| {
+            if fn_.inputs().len() != 1 {
+                return;
+            }
+            let input_name = fn_.inputs()[0].name();
+            let fn_output = fn_.output();
+            let output_name = fn_output.name();
+
+            //
+            if input_name != element_name && output_name != element_name {
+                return;
+            }
+            for some_vec_sort in &all_vec_sorts {
+                let inner_sorts = some_vec_sort.inner_sorts();
+                let some_vec_name = inner_sorts[0].name();
+                let (input_vec, output_vec) =
+                    if input_name == some_vec_name && output_name == element_name {
+                        (some_vec_sort.clone(), self_cloned.clone())
+                    } else if input_name == element_name && output_name == some_vec_name {
+                        (self_cloned.clone(), some_vec_sort.clone())
+                    } else {
+                        continue;
+                    };
+                eg.add_primitive(VecMap {
+                    name: "unstable-vec-map".into(),
+                    vec: input_vec,
+                    output_vec,
+                    fn_: fn_.clone(),
+                });
+            }
+        });
+
+        for fn_sort in eg.type_info.get_sorts::<FunctionSort>() {
+            register_map(fn_sort.clone(), eg);
+        }
+        let mut register = REGISTER_FN_PRIMITIVES.lock().unwrap();
+        register.push(register_map);
     }
 
     fn reconstruct_termdag(
@@ -159,6 +225,61 @@ impl ContainerSort for VecSort {
 
     fn serialized_name(&self, _container_values: &ContainerValues, _: Value) -> String {
         "vec-of".to_owned()
+    }
+}
+
+// (unstable-vec-map (Vec[X], [X] -> Y) -> Vec[Y])
+// will map the function over all elements in the vec and drop elements where it is undefined.
+#[derive(Clone)]
+struct VecMap {
+    name: String,
+    vec: ArcSort,
+    output_vec: ArcSort,
+    fn_: Arc<FunctionSort>,
+}
+
+impl Primitive for VecMap {
+    fn name(&self) -> &str {
+        &self.name
+    }
+
+    fn get_type_constraints(&self, span: &Span) -> Box<dyn TypeConstraint> {
+        SimpleTypeConstraint::new(
+            self.name(),
+            vec![self.fn_.clone(), self.vec.clone(), self.output_vec.clone()],
+            span.clone(),
+        )
+        .into_box()
+    }
+
+    fn apply(&self, exec_state: &mut ExecutionState, args: &[Value]) -> Option<Value> {
+        let fc = exec_state
+            .container_values()
+            .get_val::<FunctionContainer>(args[0])
+            .unwrap()
+            .clone();
+        let vec = exec_state
+            .container_values()
+            .get_val::<VecContainer>(args[1])
+            .unwrap()
+            .clone();
+        let mut new_data = Vec::with_capacity(vec.data.len());
+        for v in vec.data {
+            let mapped = fc.apply(exec_state, &[v]);
+            if let Some(mapped_v) = mapped {
+                new_data.push(mapped_v);
+            }
+        }
+        let vec = VecContainer {
+            do_rebuild: self.output_vec.is_eq_container_sort(),
+            data: new_data,
+        };
+        Some(
+            exec_state
+                .clone()
+                .container_values()
+                .register_val(vec, exec_state),
+        )
     }
 }
 

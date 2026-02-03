@@ -57,3 +57,15 @@
 (check (= p q))
 (check (= (a) (b)))
 (pop)
+
+; range
+(check (= (vec-range 5) (vec-of 0 1 2 3 4)))
+
+; Test unstable-vec-map
+(sort Y)
+(sort VY (Vec Y))
+(sort XY (UnstableFn (X) Y))
+(constructor y (X) Y)
+(let mapped (unstable-vec-map (unstable-fn "y") (vec-of (a) (b))))
+(check (= mapped (vec-of (y (a)) (y (b)))))
+
