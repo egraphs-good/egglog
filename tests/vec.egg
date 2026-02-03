@@ -66,6 +66,14 @@
 (sort VY (Vec Y))
 (sort XY (UnstableFn (X) Y))
 (constructor y (X) Y)
+(push)
 (let mapped (unstable-vec-map (unstable-fn "y") (vec-of (a) (b))))
 (check (= mapped (vec-of (y (a)) (y (b)))))
+(pop)
 
+; Verify that it panics on unbound functions
+(function xToY (X) Y :no-merge)
+(set (xToY (a)) (y (a)))
+(let mapped (unstable-vec-map (unstable-fn "xToY") (vec-of (a) )))
+(check (= mapped (vec-of (y (a)) )))
+(fail (unstable-vec-map (unstable-fn "xToY")  (vec-of (b) )))

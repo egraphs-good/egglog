@@ -265,10 +265,7 @@ impl Primitive for VecMap {
             .clone();
         let mut new_data = Vec::with_capacity(vec.data.len());
         for v in vec.data {
-            let mapped = fc.apply(exec_state, &[v]);
-            if let Some(mapped_v) = mapped {
-                new_data.push(mapped_v);
-            }
+            new_data.push(fc.apply(exec_state, &[v])?);
         }
         let vec = VecContainer {
             do_rebuild: self.output_vec.is_eq_container_sort(),
@@ -310,14 +307,12 @@ impl Primitive for Union {
     fn apply(&self, exec_state: &mut ExecutionState, args: &[Value]) -> Option<Value> {
         let left = exec_state
             .container_values()
-            .get_val::<VecContainer>(args[0])
-            .unwrap()
+            .get_val::<VecContainer>(args[0])?
             .clone()
             .data;
         let right = exec_state
             .container_values()
-            .get_val::<VecContainer>(args[1])
-            .unwrap()
+            .get_val::<VecContainer>(args[1])?
             .clone()
             .data;
         if left.len() != right.len() {
