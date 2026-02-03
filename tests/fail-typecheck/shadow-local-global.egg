@@ -1,8 +1,8 @@
 (datatype MySort
   (Wrap i64))
 
-(let a (Wrap 1))
+(let $a (Wrap 1))
 
 
 (rule ((Wrap 1))
-      ((let a (Wrap 1))))
+      ((let $a (Wrap 1))))

@@ -315,8 +315,8 @@ impl EGraph {
         if var.is_global_ref {
             return Ok(());
         }
-        if let Some(stripped) = var.name.strip_prefix(crate::GLOBAL_NAME_PREFIX) {
-            self.warn_missing_global_prefix(span, stripped)?;
+        if var.name.starts_with(crate::GLOBAL_NAME_PREFIX) {
+            self.warn_prefixed_non_globals(span, &var.name)?;
         }
         Ok(())
     }

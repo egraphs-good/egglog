@@ -16,11 +16,11 @@
  (AU (Add a b) (Add c d))
  (Add (AU a c) (AU b d)))
 
-(let e1 (Add (Var "x") (Add (Num 1) (Num 2))))
-(let e2 (Add (Num 3) (Var "y")))
+(let $e1 (Add (Var "x") (Add (Num 1) (Num 2))))
+(let $e2 (Add (Num 3) (Var "y")))
 
-(let au12 (AU e1 e2))
+(let $au12 (AU $e1 $e2))
 
 (run 4)
-(check (= au12 (Add (Num 3) (AU (Var "x") (Var "y")))))
-(extract au12)
+(check (= $au12 (Add (Num 3) (AU (Var "x") (Var "y")))))
+(extract $au12)
