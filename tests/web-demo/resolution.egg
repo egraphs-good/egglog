@@ -34,7 +34,7 @@
 (constructor myor (Bool Bool) Bool)
 (constructor negate (Bool) Bool)
 
-; clauses are assumed in the normal form (or a (or b (or c $False)))
+; clauses are assumed in the normal form (or a (or b (or c False)))
 
 (union (negate $False) $True)
 (union (negate $True) $False)
@@ -63,9 +63,8 @@
 ; This is kind of interesting actually.
 ; Looks a bit like equation solving
 
-; The following is not valid egglog but could be?
-;(rewrite p $True    
-;    :when ((= $True (or p $False))))
+(rewrite p $True
+    :when ((= $True (myor p $False))))
 
 (rule ((= $True (myor p $False))) ((union p $True)))
 

@@ -205,7 +205,6 @@
       ((occurs-check x fr)
        (occurs-check x to)))
 (rule ((occurs-check x (TVar x)))
-      ; ((set (errors) x))
       ((panic "occurs check fail")))
 (rule ((occurs-check x (TArr fr to)))
       ((occurs-check x fr)
@@ -312,7 +311,7 @@
 
 (push)
 
-;; ((lambda ($x) ((lambda (f) ((lambda ($x) (f $x)) #t)) (lambda (y) $x))) 5)
+;; ((lambda (x) ((lambda (f) ((lambda (x) (f x)) #t)) (lambda (y) x))) 5)
 (let $let-env-hard (App (Abs (V "x") 
                                (App (Abs (V "f") 
                                          (App (Abs (V "x") (App (Var (V "f")) (Var (V "x")))) 

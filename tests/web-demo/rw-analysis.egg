@@ -220,7 +220,7 @@
     (RProg l (Goto l2))
 ))
 
-; replace if $Top
+; replace if Top
 (rule (
     (= (Prog l) (If b l1 l2))
     (= $Top (const-prop l b))
