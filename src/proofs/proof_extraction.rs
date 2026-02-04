@@ -19,7 +19,7 @@ pub enum ProveExistsError {
     QueryDidNotMatch { constructor: String },
 }
 
-impl<'a> ProofInstrumentor<'a> {
+impl ProofInstrumentor<'_> {
     /// Prove the existence of a constructor or fail if a proof cannot be found.
     /// We use a constructor because inserting a value at the top level would give a trivial proof.
     pub(crate) fn prove_exists(
