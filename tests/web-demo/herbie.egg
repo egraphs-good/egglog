@@ -43,7 +43,7 @@
 ;;
 ;; Analyses
 ;; --------
-;; This example has $three analyses:
+;; This example has three analyses:
 ;; an interval analysis consisting of a hi and lo component
 ;; and a non-zero analysis.
 ;; The non-zero analysis is built off the interval analysis (in order to prove
@@ -74,8 +74,8 @@
 (rewrite (Round (Num a)) (Num (round a)))
 (rewrite (Log (Num a)) (Num res) :when ((= res (log a))))
 
-;; To check if something is zero, we check that $zero is not contained in the
-;; interval. There are $two possible (overlapping!) cases:
+;; To check if something is zero, we check that zero is not contained in the
+;; interval. There are two possible (overlapping!) cases:
 ;; - There exists a lo interval, in which case it must be larger than 0
 ;; - There exists a hi interval, in which case it must be smaller than 0
 ;; This assumes that intervals are well-formed: lo <= hi at all times.
