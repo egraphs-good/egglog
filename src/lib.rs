@@ -254,6 +254,11 @@ impl Function {
     pub fn can_subsume(&self) -> bool {
         self.can_subsume
     }
+
+    /// Whether this is a let binding
+    pub fn is_let_binding(&self) -> bool {
+        self.decl.let_binding
+    }
 }
 
 #[derive(Clone, Debug)]

@@ -1,8 +1,6 @@
+use egglog_bridge::UnionAction;
 use std::any::TypeId;
 use std::iter::zip;
-use std::ptr;
-
-use egglog_bridge::UnionAction;
 
 use super::*;
 
@@ -265,7 +263,10 @@ impl Primitive for VecMap {
             .clone();
         let mut new_data = Vec::with_capacity(vec.data.len());
         for v in vec.data {
-            new_data.push(fc.apply(exec_state, &[v])?);
+            new_data.push(
+                fc.apply(exec_state, &[v])
+                    .expect("Vec map function returned None"),
+            );
         }
         let vec = VecContainer {
             do_rebuild: self.output_vec.is_eq_container_sort(),

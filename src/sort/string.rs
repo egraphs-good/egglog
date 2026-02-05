@@ -20,6 +20,11 @@ impl BaseSort for StringSort {
         add_primitive!(eg, "replace" = |a: S, b: S, c: S| -> S {
             a.as_str().replace(b.as_str(), c.as_str()).into()
         });
+        add_primitive!(eg, "log" = |a: S| -> () {
+            {
+                println!("{}", a.0);
+            }
+        });
     }
 
     fn reconstruct_termdag(

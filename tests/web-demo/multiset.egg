@@ -16,12 +16,11 @@
         xs
     ))
 
-;; Unclear why check won't work if this is defined inline
-(let inserted (multiset-insert xs (Num 4)))
+(Num 4)
 ;; insert
 (check (=
         (multiset-of (Num 1) (Num 2) (Num 3) (Num 4))
-        inserted
+        (multiset-insert xs (Num 4))
     ))
 
 

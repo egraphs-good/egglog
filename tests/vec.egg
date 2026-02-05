@@ -76,4 +76,5 @@
 (set (xToY (a)) (y (a)))
 (let mapped (unstable-vec-map (unstable-fn "xToY") (vec-of (a) )))
 (check (= mapped (vec-of (y (a)) )))
+(fail (unstable-vec-map (unstable-fn "xToY")  (vec-of (a) (b) )))
 (fail (unstable-vec-map (unstable-fn "xToY")  (vec-of (b) )))
