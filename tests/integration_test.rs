@@ -36,7 +36,7 @@ fn globals_missing_prefix_warns_for_prefixed_pattern_variable_by_default() {
         assert!(
             bodies
                 .iter()
-                .any(|body| body.contains("Global `x` should start with `$`")),
+                .any(|body| body.contains("Non-global `$x` should not start with `$`")),
             "expected warning about missing global prefix, got logs: {:?}",
             bodies
         );
@@ -57,9 +57,9 @@ fn globals_missing_prefix_warns_for_prefixed_rule_let_by_default() {
         assert!(
             bodies
                 .iter()
-                .any(|body| body.contains("Global `y` should start with `$`")),
-            "expected warning about missing global prefix, got logs: {:?}",
-            bodies
+                .any(|body| body.contains("Non-global `$y` should not start with `$`")),
+            "expected warning about missing global prefix, got logs: {}",
+            bodies.join("\n")
         );
     });
 }
