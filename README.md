@@ -66,7 +66,11 @@ Egglog can also be compiled to WebAssembly, see [./wasm-example](./wasm-example)
 
 To view documentation in a browser, run `cargo doc --open`.
 
-Run `cargo test` to run the core `egglog` tests.
+To get started locally, install Rust, [cargo-insta](https://insta.rs/docs/cli/), and [cargo-nextest](https://nexte.st/docs/installation/pre-built-binaries/).
+
+Run `make test` to run the core `egglog` tests.
+
+If the snapshots are out of date, run `make update-snapshots` to update them.
 
 ## Community extensions
 
@@ -113,7 +117,7 @@ performance. However, please take care not to pessimize parallel performance
 where possible (e.g. by adding coarse-grained locks).
 
 We use rayon's global thread pool for parallelism, and the number of threads used
-is set to `1` by default when egglog's CLI is run. If you use egglog as a library, 
+is set to `1` by default when egglog's CLI is run. If you use egglog as a library,
 you can control the level of parallelism by setting rayon's `num_threads`.
 
 ### Codspeed specifics

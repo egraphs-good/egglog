@@ -1,4 +1,4 @@
-.PHONY: all test nits docs graphs rm-graphs
+.PHONY: all test nits docs graphs rm-graphs update-snapshots
 
 RUST_SRC=$(shell find . -type f -wholename '*/src/*.rs' -or -name 'Cargo.toml')
 TESTS=$(shell find tests/ -type f -name '*.egg' -not -name '*repro-*')
@@ -8,9 +8,12 @@ WWW=${PWD}/target/www
 all: test nits docs
 
 test:
-	cargo insta test --test-runner nextest --release --workspace
+	cargo nextest run --release --workspace
 	# nextest doesn't run doctests, so do it here
 	cargo test --doc --release --workspace
+
+update-snapshots:
+	cargo insta test --test-runner nextest --release --disable-nextest-doctest --accept
 
 nits:
 	@rustup component add clippy
