@@ -3,15 +3,15 @@ source: tests/files.rs
 expression: snapshot_content
 ---
 (
-   (R 1 2)
-   (R 2 3)
-   (R 3 4)
-   (R 5 6)
+   (R 1 2) -> (R 1 2)
+   (R 2 3) -> (R 2 3)
+   (R 3 4) -> (R 3 4)
+   (R 5 6) -> (R 5 6)
 )
 (
-   (R 1 2)
-   (R 2 3)
-   (R 3 4)
+   (R 1 2) -> (R 1 2)
+   (R 2 3) -> (R 2 3)
+   (R 3 4) -> (R 3 4)
 )
 (
    (G (F 1) "1") -> 1

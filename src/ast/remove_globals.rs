@@ -112,6 +112,7 @@ impl GlobalRemover<'_> {
                         unextractable: true,
                         let_binding: true,
                         span: span.clone(),
+                        unionable: false,
                     };
                     vec![
                         GenericNCommand::Function(func_decl),
