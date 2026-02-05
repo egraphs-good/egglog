@@ -443,7 +443,10 @@ impl EGraph {
         canonical_name: &str,
     ) -> Result<(), TypeError> {
         if self.strict_mode {
-            return Err(TypeError::GlobalMissingPrefix { name: format!("{}{}", GLOBAL_NAME_PREFIX, canonical_name), span: span.clone() } );
+            return Err(TypeError::GlobalMissingPrefix {
+                name: format!("{}{}", GLOBAL_NAME_PREFIX, canonical_name),
+                span: span.clone(),
+            });
         }
         if self.warned_about_global_prefix {
             return Ok(());
@@ -465,7 +468,7 @@ impl EGraph {
     ) -> Result<(), TypeError> {
         if self.strict_mode {
             return Err(TypeError::NonGlobalPrefixed {
-                name: format!("{}{}", GLOBAL_NAME_PREFIX, canonical_name),
+                name: format!("{}", canonical_name),
                 span: span.clone(),
             });
         }
