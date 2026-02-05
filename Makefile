@@ -1,4 +1,4 @@
-.PHONY: all test nits docs graphs rm-graphs
+.PHONY: all test nits docs graphs rm-graphs doctest coverage insta-test
 
 RUST_SRC=$(shell find . -type f -wholename '*/src/*.rs' -or -name 'Cargo.toml')
 TESTS=$(shell find tests/ -type f -name '*.egg' -not -name '*repro-*')
@@ -7,10 +7,19 @@ WWW=${PWD}/target/www
 
 all: test nits docs
 
-test:
-	cargo insta test --test-runner nextest --release --workspace
-	# nextest doesn't run doctests, so do it here
+test: doctest
+	cargo nextest run --release --workspace
+
+coverage:
+	cargo llvm-cov nextest --release --workspace --lcov --output-path lcov.info
+	# Note: doctests are not included in coverage reports
+
+doctest:
 	cargo test --doc --release --workspace
+
+# update insta snapshots for all tests and cause them to pass even if they differ
+insta-test:
+	cargo insta test --test-runner nextest --release --workspace
 
 nits:
 	@rustup component add clippy
