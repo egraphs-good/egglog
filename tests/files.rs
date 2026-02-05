@@ -20,6 +20,8 @@ impl Run {
             .filter_map(|output| match output {
                 // Skip OverallStatistics - contains non-deterministic Duration timing data
                 CommandOutput::OverallStatistics(_) => None,
+                // Skip print function for now as well
+                CommandOutput::PrintFunction(_, _, _, _) => None,
                 // All other variants use normal Display formatting
                 other => Some(other.to_string()),
             })
