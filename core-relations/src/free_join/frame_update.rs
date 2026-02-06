@@ -20,7 +20,8 @@ use super::{AtomId, Variable};
 
 define_id!(pub SubsetId, u32, "An offset into a buffer of subsets");
 
-enum UpdateCell {
+#[derive(Debug)]
+pub(super) enum UpdateCell {
     PushBinding(Variable, Value),
     RefineAtom(AtomId, SubsetId),
     EndFrame,
@@ -105,5 +106,11 @@ impl FrameUpdates {
         self.subsets.clear();
         self.frames = 0;
         self.last_start = 0;
+    }
+
+    // for debugging
+    #[allow(dead_code)]
+    pub(super) fn updates(&self) -> &[UpdateCell] {
+        &self.updates
     }
 }
