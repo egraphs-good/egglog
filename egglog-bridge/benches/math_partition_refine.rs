@@ -1,8 +1,8 @@
 use divan::Bencher;
+use egglog_bridge::partition_refinement::{Crc32PartitionHasher, PartitionRefinementHasher};
 use egglog_bridge::{
     ColumnTy, DefaultVal, EGraph, FunctionConfig, MergeFn, RuleId, add_expressions, define_rule,
 };
-use egglog_bridge::partition_refinement::{Crc32PartitionHasher, PartitionRefinementHasher};
 use egglog_core_relations::{ExternalFunction, Value, make_external_func};
 use mimalloc::MiMalloc;
 use num_rational::Rational64;
@@ -11,7 +11,7 @@ use std::sync::Once;
 #[global_allocator]
 static GLOBAL: MiMalloc = MiMalloc;
 
-const N: usize = 4;
+const N: usize = 5;
 
 fn main() {
     divan::main();
@@ -48,7 +48,11 @@ impl PartitionRefinementHasher for IdentityPartitionHasher {
     }
 }
 
-fn setup_math(egraph: &mut EGraph) -> Vec<RuleId> {
+struct MathEnv {
+    rules: Vec<RuleId>,
+}
+
+fn setup_math(egraph: &mut EGraph) -> MathEnv {
     let rational_ty = egraph.base_values_mut().register_type::<Rational64>();
     let string_ty = egraph.base_values_mut().register_type::<&'static str>();
 
@@ -300,13 +304,13 @@ fn setup_math(egraph: &mut EGraph) -> Vec<RuleId> {
                   (div (sub (rat one) (sqrt (var five_str))) (rat two))))
     }
 
-    rules
+    MathEnv { rules }
 }
 
-fn run_iterations(egraph: &mut EGraph, rules: &[RuleId], n: usize, cyclic: bool) {
-    for _ in 0..n {
+fn run_iterations(egraph: &mut EGraph, rules: &[RuleId], n: usize, pr_every: usize) {
+    for iteration in 0..n {
         let _ = egraph.run_rules(rules).expect("rules should run");
-        if cyclic {
+        if pr_every > 0 && (iteration + 1) % pr_every == 0 {
             let _ = egraph
                 .run_hash_partition_refinement()
                 .expect("partition refinement should run");
@@ -314,39 +318,45 @@ fn run_iterations(egraph: &mut EGraph, rules: &[RuleId], n: usize, cyclic: bool)
     }
 }
 
-fn bench_math(bench: Bencher, cyclic: bool) {
+fn bench_math(bench: Bencher) {
     init_rayon();
     bench.bench(|| {
-        let mut egraph = if cyclic {
-            EGraph::with_partition_refinement()
-        } else {
-            EGraph::default()
-        };
-        let rules = setup_math(&mut egraph);
-        run_iterations(&mut egraph, &rules, N, cyclic);
+        let mut egraph = EGraph::default();
+        let env = setup_math(&mut egraph);
+        run_iterations(&mut egraph, &env.rules, N, 0);
     });
 }
 
-fn bench_math_partition_refine<H: PartitionRefinementHasher>(bench: Bencher) {
+fn bench_math_partition_refine<H: PartitionRefinementHasher>(bench: Bencher, pr_every: usize) {
     init_rayon();
     bench.bench(|| {
         let mut egraph = EGraph::with_partition_refinement_with_hasher::<H>();
-        let rules = setup_math(&mut egraph);
-        run_iterations(&mut egraph, &rules, N, true);
+        let env = setup_math(&mut egraph);
+        run_iterations(&mut egraph, &env.rules, N, pr_every);
     });
 }
 
 #[divan::bench(sample_count = 5)]
 fn math_default(bench: Bencher) {
-    bench_math(bench, false);
+    bench_math(bench);
 }
 
 #[divan::bench(sample_count = 5)]
 fn math_partition_refine(bench: Bencher) {
-    bench_math_partition_refine::<Crc32PartitionHasher>(bench);
+    bench_math_partition_refine::<Crc32PartitionHasher>(bench, 1);
+}
+
+#[divan::bench(sample_count = 5)]
+fn math_partition_refine_every2(bench: Bencher) {
+    bench_math_partition_refine::<Crc32PartitionHasher>(bench, 2);
+}
+
+#[divan::bench(sample_count = 5)]
+fn math_partition_refine_every4(bench: Bencher) {
+    bench_math_partition_refine::<Crc32PartitionHasher>(bench, 4);
 }
 
 #[divan::bench(sample_count = 5)]
 fn math_partition_refine_identity(bench: Bencher) {
-    bench_math_partition_refine::<IdentityPartitionHasher>(bench);
+    bench_math_partition_refine::<IdentityPartitionHasher>(bench, 1);
 }

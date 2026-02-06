@@ -1026,6 +1026,9 @@ struct RiseArgs {
     /// Enable partition refinement
     #[arg(long, default_value_t = true)]
     pr: bool,
+    /// Run partition refinement to a fixpoint after rule execution
+    #[arg(long, default_value_t = false)]
+    pr_final_fixpoint: bool,
     /// Keep iterating until lhs == rhs (or max iters), even if no changes occur
     #[arg(long, default_value_t = false)]
     until_equal: bool,
@@ -1044,6 +1047,7 @@ struct RiseBenchConfig {
     pr_every: usize,
     use_partition_refinement: bool,
     until_equal: bool,
+    pr_final_fixpoint: bool,
     run_free_vars: bool,
     run_subst: bool,
     run_beta: bool,
@@ -1066,6 +1070,7 @@ pub(crate) fn run_rise_benchmark() {
         pr_every: args.pr_every,
         use_partition_refinement: args.pr,
         until_equal: args.until_equal,
+        pr_final_fixpoint: args.pr_final_fixpoint,
         run_free_vars: rules.free_vars,
         run_subst: rules.subst,
         run_beta: rules.beta,
@@ -1115,7 +1120,10 @@ fn run_rise_benchmark_with_config(config: &RiseBenchConfig) {
         "  pr: enabled={} pr_every={}",
         config.use_partition_refinement, config.pr_every
     );
-    info!("  iters={} until_equal={}", config.iters, config.until_equal);
+    info!(
+        "  iters={} until_equal={} pr_final_fixpoint={}",
+        config.iters, config.until_equal, config.pr_final_fixpoint
+    );
 
     let start = std::time::Instant::now();
     let mut iterations = 0usize;
@@ -1157,6 +1165,25 @@ fn run_rise_benchmark_with_config(config: &RiseBenchConfig) {
     }
 
     let elapsed = start.elapsed();
+    if config.use_partition_refinement && config.pr_final_fixpoint {
+        let fixpoint_start = std::time::Instant::now();
+        let mut pr_iters = 0usize;
+        loop {
+            let changed = egraph
+                .run_hash_partition_refinement()
+                .expect("partition refinement failed");
+            pr_iters += 1;
+            if !changed {
+                break;
+            }
+        }
+        let fixpoint_elapsed = fixpoint_start.elapsed();
+        info!(
+            "Final PR fixpoint: iterations={} elapsed_ms={}",
+            pr_iters,
+            fixpoint_elapsed.as_millis()
+        );
+    }
     let sizes = table_sizes(&egraph, &env.tables);
     let total_enodes = sizes
         .iter()
