@@ -24,6 +24,7 @@ fail-typecheck/set-a-primitive.egg
 fail-typecheck/shadow-global-constructor.egg
 fail-typecheck/shadow-global.egg
 fail-typecheck/shadow-local-constructor.egg
+fail-typecheck/shadow-local-global-no-prefix.egg
 fail-typecheck/shadow-local-global.egg
 fail-typecheck/shadow-local.egg
 fail-typecheck/unbound.egg
