@@ -544,7 +544,7 @@ impl<'a> JoinState<'a> {
             }
         }
         let mut order = InstrOrder::from_iter(0..stages.instrs.len());
-        sort_plan_by_size(&mut order, 0, &stages.instrs, binding_info);
+        // sort_plan_by_size(&mut order, 0, &stages.instrs, binding_info);
         self.run_plan(
             stages,
             atoms,
@@ -588,12 +588,12 @@ impl<'a> JoinState<'a> {
         }
         let chunk_size = action_buf.morsel_size(cur, instr_order.len());
         let mut cur_size = estimate_size(&stages.instrs[instr_order.get(cur)], binding_info);
-        if cur_size > 32 && cur % 3 == 1 && cur < instr_order.len() - 1 {
-            // If we have a reasonable number of tuples to process, adjust the variable order every
-            // 3 rounds, but always make sure to readjust on the second roung.
-            sort_plan_by_size(instr_order, cur, &stages.instrs, binding_info);
-            cur_size = estimate_size(&stages.instrs[instr_order.get(cur)], binding_info);
-        }
+        // if cur_size > 32 && cur % 3 == 1 && cur < instr_order.len() - 1 {
+        //     // If we have a reasonable number of tuples to process, adjust the variable order every
+        //     // 3 rounds, but always make sure to readjust on the second roung.
+        //     sort_plan_by_size(instr_order, cur, &stages.instrs, binding_info);
+        //     cur_size = estimate_size(&stages.instrs[instr_order.get(cur)], binding_info);
+        // }
 
         // Helper macro (not its own method to appease the borrow checker).
         macro_rules! drain_updates {
