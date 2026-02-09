@@ -105,7 +105,7 @@ where
 /// Creates an implication constraint that activates when all watch variables are assigned.
 /// The constraint function is called with the values of the watch variables to generate the actual constraint.
 pub fn implies<Var, Value>(
-    name: String,
+    name: Rc<dyn Fn() -> String>,
     watch_vars: Vec<Var>,
     constraint: DelayedConstraintFn<Var, Value>,
 ) -> Box<dyn Constraint<Var, Value>>
@@ -130,7 +130,7 @@ enum DelayedConstraint<Var, Value> {
 
 #[derive(Clone)]
 struct Implies<Var, Value> {
-    name: String,
+    name: Rc<dyn Fn() -> String>,
     watch_vars: Vec<Var>,
     constraint: DelayedConstraint<Var, Value>,
 }
@@ -173,7 +173,7 @@ where
             .map(|v| format!("{:?}", v))
             .collect::<Vec<_>>()
             .join(", ");
-        format!("{} => {}({})", vars, self.name, vars)
+        format!("{} => {}({})", vars, (self.name)(), vars)
     }
 }
 
@@ -1147,8 +1147,9 @@ pub(crate) fn grounded_check(
             HeadOrEq::Head(ResolvedCall::Primitive(_)) => {
                 let (out, inp) = atom.args.split_last().unwrap();
                 let out = out.clone();
+                let out_name = out.clone();
                 problem.constraints.push(implies(
-                    format!("grounded_{:?}", out),
+                    Rc::new(move || format!("grounded_{:?}", out_name)),
                     inp.to_vec(),
                     Rc::new(move |_| assign(out.clone(), ())),
                 ));
