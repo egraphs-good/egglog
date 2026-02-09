@@ -8,7 +8,6 @@ pub mod remove_globals;
 use crate::core::{
     GenericAtom, GenericAtomTerm, GenericExprExt, HeadOrEq, Query, ResolvedCall, ResolvedCoreRule,
 };
-use crate::util::sanitize_internal_name;
 use crate::*;
 pub use egglog_ast::generic_ast::{
     Change, GenericAction, GenericActions, GenericExpr, GenericFact, GenericRule, Literal,
@@ -73,6 +72,7 @@ where
         Option<String>,
         PrintFunctionMode,
     ),
+    ProveExists(Span, Head),
     PrintSize(Span, Option<String>),
     Output {
         span: Span,
@@ -108,11 +108,6 @@ where
                     cost: f.cost,
                     unextractable: f.unextractable,
                 },
-                FunctionSubtype::Relation => GenericCommand::Relation {
-                    span: f.span.clone(),
-                    name: f.name.clone(),
-                    inputs: f.schema.input.clone(),
-                },
                 FunctionSubtype::Custom => GenericCommand::Function {
                     span: f.span.clone(),
                     schema: f.schema.clone(),
@@ -141,6 +136,9 @@ where
             GenericNCommand::PrintFunction(span, name, n, file, mode) => {
                 GenericCommand::PrintFunction(span.clone(), name.clone(), *n, file.clone(), *mode)
             }
+            GenericNCommand::ProveExists(span, constructor) => {
+                GenericCommand::ProveExists(span.clone(), constructor.clone())
+            }
             GenericNCommand::PrintSize(span, name) => {
                 GenericCommand::PrintSize(span.clone(), name.clone())
             }
@@ -165,6 +163,42 @@ where
         }
     }
 
+    /// Applies `f` to
+    pub fn visit_queries(
+        self,
+        f: &mut impl FnMut(Vec<GenericFact<Head, Leaf>>) -> Vec<GenericFact<Head, Leaf>>,
+    ) -> Self {
+        match self {
+            GenericNCommand::Check(span, query) => GenericNCommand::Check(span, f(query)),
+            GenericNCommand::NormRule { mut rule } => {
+                rule.body = f(rule.body);
+                GenericNCommand::NormRule { rule }
+            }
+            GenericNCommand::RunSchedule(schedule) => {
+                GenericNCommand::RunSchedule(schedule.visit_queries(f))
+            }
+            GenericNCommand::Fail(span, cmd) => {
+                GenericNCommand::Fail(span, Box::new(cmd.visit_queries(f)))
+            }
+            GenericNCommand::Sort(..)
+            | GenericNCommand::Function(..)
+            | GenericNCommand::AddRuleset(..)
+            | GenericNCommand::UnstableCombinedRuleset(..)
+            | GenericNCommand::CoreAction(..)
+            | GenericNCommand::Extract(..)
+            | GenericNCommand::PrintOverallStatistics(..)
+            | GenericNCommand::PrintFunction(..)
+            | GenericNCommand::PrintSize(..)
+            | GenericNCommand::Output { .. }
+            | GenericNCommand::Push(..)
+            | GenericNCommand::Pop(..)
+            | GenericNCommand::Input { .. }
+            | GenericNCommand::UserDefined(..)
+            | GenericNCommand::ProveExists(..) => self,
+        }
+    }
+
+    /// Applies `f` to all expressions in the command, bottom-up.
     pub fn visit_exprs(
         self,
         f: &mut impl FnMut(GenericExpr<Head, Leaf>) -> GenericExpr<Head, Leaf>,
@@ -198,6 +232,9 @@ where
             GenericNCommand::PrintFunction(span, name, n, file, mode) => {
                 GenericNCommand::PrintFunction(span, name, n, file, mode)
             }
+            GenericNCommand::ProveExists(span, constructor) => {
+                GenericNCommand::ProveExists(span, constructor)
+            }
             GenericNCommand::PrintSize(span, name) => GenericNCommand::PrintSize(span, name),
             GenericNCommand::Output { span, file, exprs } => GenericNCommand::Output {
                 span,
@@ -220,6 +257,17 @@ where
     }
 }
 
+impl<Head, Leaf> Display for GenericNCommand<Head, Leaf>
+where
+    Head: Clone + Display,
+    Leaf: Clone + PartialEq + Eq + Display + Hash,
+{
+    fn fmt(&self, f: &mut Formatter) -> std::fmt::Result {
+        let command = self.to_command();
+        command.fmt(f)
+    }
+}
+
 pub type Schedule = GenericSchedule<String, String>;
 pub(crate) type ResolvedSchedule = GenericSchedule<ResolvedCall, ResolvedVar>;
 
@@ -236,6 +284,65 @@ where
     Head: Clone + Display,
     Leaf: Clone + PartialEq + Eq + Display + Hash,
 {
+    /// Applies `f` to all the queries in the schedule.
+    pub fn visit_queries(
+        self,
+        f: &mut impl FnMut(Vec<GenericFact<Head, Leaf>>) -> Vec<GenericFact<Head, Leaf>>,
+    ) -> Self {
+        match self {
+            GenericSchedule::Saturate(span, generic_schedule) => {
+                GenericSchedule::Saturate(span, Box::new(generic_schedule.visit_queries(f)))
+            }
+            GenericSchedule::Repeat(span, iters, generic_schedule) => {
+                GenericSchedule::Repeat(span, iters, Box::new(generic_schedule.visit_queries(f)))
+            }
+            GenericSchedule::Run(span, run_config) => GenericSchedule::Run(
+                span,
+                GenericRunConfig {
+                    ruleset: run_config.ruleset,
+                    until: run_config.until.map(f),
+                },
+            ),
+            GenericSchedule::Sequence(span, generic_schedules) => GenericSchedule::Sequence(
+                span,
+                generic_schedules
+                    .into_iter()
+                    .map(|schedule| schedule.visit_queries(f))
+                    .collect(),
+            ),
+        }
+    }
+
+    /// Recursively flattens nested `Sequence` nodes into a single level.
+    /// For example, `(seq (seq a b) c)` becomes `(seq a b c)`.
+    /// Also unwraps single-element sequences into their inner schedule.
+    fn flatten_sequences(self) -> Self {
+        match self {
+            GenericSchedule::Saturate(span, sched) => {
+                GenericSchedule::Saturate(span, Box::new(sched.flatten_sequences()))
+            }
+            GenericSchedule::Repeat(span, size, sched) => {
+                GenericSchedule::Repeat(span, size, Box::new(sched.flatten_sequences()))
+            }
+            GenericSchedule::Run(span, config) => GenericSchedule::Run(span, config),
+            GenericSchedule::Sequence(span, scheds) => {
+                let mut flattened = Vec::new();
+                for sched in scheds.into_iter().map(Self::flatten_sequences) {
+                    match sched {
+                        GenericSchedule::Sequence(_, nested) => flattened.extend(nested),
+                        other => flattened.push(other),
+                    }
+                }
+
+                match flattened.len() {
+                    0 => GenericSchedule::Sequence(span, flattened),
+                    1 => flattened.into_iter().next().unwrap(),
+                    _ => GenericSchedule::Sequence(span, flattened),
+                }
+            }
+        }
+    }
+
     fn visit_exprs(
         self,
         f: &mut impl FnMut(GenericExpr<Head, Leaf>) -> GenericExpr<Head, Leaf>,
@@ -255,26 +362,69 @@ where
         }
     }
 
-    /// Converts all heads and leaves to strings.
-    pub fn make_unresolved(self) -> GenericSchedule<String, String> {
+    /// Remaps every head and leaf symbol in the schedule using the supplied closures.
+    pub fn map_symbols<Head2, Leaf2>(
+        self,
+        head: &mut impl FnMut(Head) -> Head2,
+        leaf: &mut impl FnMut(Leaf) -> Leaf2,
+    ) -> GenericSchedule<Head2, Leaf2>
+    where
+        Head2: Clone + Display,
+        Leaf2: Clone + PartialEq + Eq + Display + Hash,
+    {
         match self {
             GenericSchedule::Saturate(span, sched) => {
-                GenericSchedule::Saturate(span, Box::new(sched.make_unresolved()))
+                GenericSchedule::Saturate(span, Box::new(sched.map_symbols(head, leaf)))
             }
             GenericSchedule::Repeat(span, size, sched) => {
-                GenericSchedule::Repeat(span, size, Box::new(sched.make_unresolved()))
+                GenericSchedule::Repeat(span, size, Box::new(sched.map_symbols(head, leaf)))
             }
             GenericSchedule::Run(span, config) => {
-                GenericSchedule::Run(span, config.make_unresolved())
+                GenericSchedule::Run(span, config.map_symbols(head, leaf))
             }
             GenericSchedule::Sequence(span, scheds) => GenericSchedule::Sequence(
                 span,
                 scheds
                     .into_iter()
-                    .map(|sched| sched.make_unresolved())
+                    .map(|sched| sched.map_symbols(head, leaf))
                     .collect(),
             ),
         }
+    }
+
+    /// Applies `fun` to every string-valued symbol contained in the schedule,
+    /// normalizes result with `flatten_sequences`.
+    pub fn map_string_symbols(
+        self,
+        fun: &mut impl FnMut(String) -> String,
+    ) -> GenericSchedule<Head, Leaf> {
+        let mapped = match self {
+            GenericSchedule::Saturate(span, sched) => {
+                GenericSchedule::Saturate(span, Box::new(sched.map_string_symbols(fun)))
+            }
+            GenericSchedule::Repeat(span, size, sched) => {
+                GenericSchedule::Repeat(span, size, Box::new(sched.map_string_symbols(fun)))
+            }
+            GenericSchedule::Run(span, config) => {
+                GenericSchedule::Run(span, config.map_string_symbols(fun))
+            }
+            GenericSchedule::Sequence(span, scheds) => GenericSchedule::Sequence(
+                span,
+                scheds
+                    .into_iter()
+                    .map(|sched| sched.map_string_symbols(fun))
+                    .collect(),
+            ),
+        };
+
+        mapped.flatten_sequences()
+    }
+
+    /// Converts all heads and leaves to strings.
+    pub fn make_unresolved(self) -> GenericSchedule<String, String> {
+        let mut map_head = |h: Head| h.to_string();
+        let mut map_leaf = |l: Leaf| l.to_string();
+        self.map_symbols(&mut map_head, &mut map_leaf)
     }
 }
 
@@ -529,7 +679,9 @@ where
     /// (rule ((path x y) (edge y z))
     ///       ((path x z)))
     /// ```
-    Rule { rule: GenericRule<Head, Leaf> },
+    Rule {
+        rule: GenericRule<Head, Leaf>,
+    },
     /// `rewrite` is syntactic sugar for a specific form of `rule`
     /// which simply unions the left and right hand sides.
     ///
@@ -639,6 +791,8 @@ where
     /// [INFO ] Command failed as expected.
     /// ```
     Check(Span, Vec<GenericFact<Head, Leaf>>),
+    Prove(Span, Vec<GenericFact<Head, Leaf>>),
+    ProveExists(Span, Head),
     /// Print out rows of a given function, extracting each of the elements of the function.
     /// Example:
     ///
@@ -709,7 +863,6 @@ where
                 name,
                 variants,
             } => {
-                let name = sanitize_internal_name(name);
                 write!(f, "(datatype {name} {})", ListDisplay(variants, " "))
             }
             GenericCommand::Action(a) => write!(f, "{a}"),
@@ -717,11 +870,9 @@ where
                 write!(f, "(extract {expr} {variants})")
             }
             GenericCommand::Sort(_span, name, None) => {
-                let name = sanitize_internal_name(name);
                 write!(f, "(sort {name})")
             }
             GenericCommand::Sort(_span, name, Some((name2, args))) => {
-                let name = sanitize_internal_name(name);
                 write!(f, "(sort {name} ({name2} {}))", ListDisplay(args, " "))
             }
             GenericCommand::Function {
@@ -730,7 +881,6 @@ where
                 schema,
                 merge,
             } => {
-                let name = sanitize_internal_name(name);
                 write!(f, "(function {name} {schema}")?;
                 if let Some(merge) = &merge {
                     write!(f, " :merge {merge}")?;
@@ -746,7 +896,6 @@ where
                 cost,
                 unextractable,
             } => {
-                let name = sanitize_internal_name(name);
                 write!(f, "(constructor {name} {schema}")?;
                 if let Some(cost) = cost {
                     write!(f, " :cost {cost}")?;
@@ -761,23 +910,16 @@ where
                 name,
                 inputs,
             } => {
-                let name = sanitize_internal_name(name);
                 write!(f, "(relation {name} ({}))", ListDisplay(inputs, " "))
             }
             GenericCommand::AddRuleset(_span, name) => {
-                let name = sanitize_internal_name(name);
                 write!(f, "(ruleset {name})")
             }
             GenericCommand::UnstableCombinedRuleset(_span, name, others) => {
-                let name = sanitize_internal_name(name);
-                let others: Vec<_> = others
-                    .iter()
-                    .map(|other| sanitize_internal_name(other).into_owned())
-                    .collect();
                 write!(
                     f,
                     "(unstable-combined-ruleset {name} {})",
-                    ListDisplay(&others, " ")
+                    ListDisplay(others, " ")
                 )
             }
             GenericCommand::Rule { rule } => rule.fmt(f),
@@ -789,10 +931,19 @@ where
             GenericCommand::Check(_ann, facts) => {
                 write!(f, "(check {})", ListDisplay(facts, "\n"))
             }
+            GenericCommand::Prove(_span, facts) => {
+                if facts.is_empty() {
+                    write!(f, "(prove)")
+                } else {
+                    write!(f, "(prove {})", ListDisplay(facts, " "))
+                }
+            }
+            GenericCommand::ProveExists(_span, constructor) => {
+                write!(f, "(prove-exists {constructor})")
+            }
             GenericCommand::Push(n) => write!(f, "(push {n})"),
             GenericCommand::Pop(_span, n) => write!(f, "(pop {n})"),
             GenericCommand::PrintFunction(_span, name, n, file, mode) => {
-                let name = sanitize_internal_name(name);
                 write!(f, "(print-function {name}")?;
                 if let Some(n) = n {
                     write!(f, " {n}")?;
@@ -807,9 +958,6 @@ where
                 write!(f, ")")
             }
             GenericCommand::PrintSize(_span, name) => {
-                let name: Option<_> = name
-                    .as_ref()
-                    .map(|value| sanitize_internal_name(value).into_owned());
                 write!(f, "(print-size {})", ListDisplay(name, " "))
             }
             GenericCommand::Input {
@@ -817,7 +965,6 @@ where
                 name,
                 file,
             } => {
-                let name = sanitize_internal_name(name);
                 write!(f, "(input {name} {file:?})")
             }
             GenericCommand::Output {
@@ -830,22 +977,18 @@ where
             GenericCommand::Datatypes { span: _, datatypes } => {
                 let datatypes: Vec<_> = datatypes
                     .iter()
-                    .map(|(_, name, variants)| {
-                        let name = sanitize_internal_name(name);
-                        match variants {
-                            Subdatatypes::Variants(variants) => {
-                                format!("({name} {})", ListDisplay(variants, " "))
-                            }
-                            Subdatatypes::NewSort(head, args) => {
-                                format!("(sort {name} ({head} {}))", ListDisplay(args, " "))
-                            }
+                    .map(|(_, name, variants)| match variants {
+                        Subdatatypes::Variants(variants) => {
+                            format!("({name} {})", ListDisplay(variants, " "))
+                        }
+                        Subdatatypes::NewSort(head, args) => {
+                            format!("(sort {name} ({head} {}))", ListDisplay(args, " "))
                         }
                     })
                     .collect();
                 write!(f, "(datatype* {})", ListDisplay(datatypes, " "))
             }
             GenericCommand::UserDefined(_span, name, exprs) => {
-                let name = sanitize_internal_name(name);
                 write!(f, "({name} {})", ListDisplay(exprs, " "))
             }
         }
@@ -890,16 +1033,42 @@ where
         }
     }
 
-    pub fn make_unresolved(self) -> GenericRunConfig<String, String> {
+    /// Remaps every head and leaf symbol in the run configuration.
+    pub fn map_symbols<Head2, Leaf2>(
+        self,
+        head: &mut impl FnMut(Head) -> Head2,
+        leaf: &mut impl FnMut(Leaf) -> Leaf2,
+    ) -> GenericRunConfig<Head2, Leaf2>
+    where
+        Head2: Clone + Display,
+        Leaf2: Clone + PartialEq + Eq + Display + Hash,
+    {
         GenericRunConfig {
             ruleset: self.ruleset,
             until: self.until.map(|facts| {
                 facts
                     .into_iter()
-                    .map(|fact| fact.make_unresolved())
+                    .map(|fact| fact.map_symbols(head, leaf))
                     .collect()
             }),
         }
+    }
+
+    /// Applies `fun` to string-valued symbols within the run configuration.
+    pub fn map_string_symbols(
+        self,
+        fun: &mut impl FnMut(String) -> String,
+    ) -> GenericRunConfig<Head, Leaf> {
+        GenericRunConfig {
+            ruleset: fun(self.ruleset),
+            until: self.until,
+        }
+    }
+
+    pub fn make_unresolved(self) -> GenericRunConfig<String, String> {
+        let mut map_head = |h: Head| h.to_string();
+        let mut map_leaf = |l: Leaf| l.to_string();
+        self.map_symbols(&mut map_head, &mut map_leaf)
     }
 }
 
@@ -910,9 +1079,8 @@ where
 {
     fn fmt(&self, f: &mut Formatter) -> std::fmt::Result {
         write!(f, "(run")?;
-        let ruleset = sanitize_internal_name(&self.ruleset);
-        if !ruleset.is_empty() {
-            write!(f, " {ruleset}")?;
+        if !self.ruleset.is_empty() {
+            write!(f, " {}", self.ruleset)?;
         }
         if let Some(until) = &self.until {
             write!(f, " :until {}", ListDisplay(until, " "))?;
@@ -927,7 +1095,7 @@ pub(crate) type ResolvedFunctionDecl = GenericFunctionDecl<ResolvedCall, Resolve
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
 pub enum FunctionSubtype {
     Constructor,
-    Relation,
+    // TODO rename to [`Function`] to match surface syntax and terminology.
     Custom,
 }
 
@@ -935,7 +1103,6 @@ impl Display for FunctionSubtype {
     fn fmt(&self, f: &mut Formatter) -> std::fmt::Result {
         match self {
             FunctionSubtype::Constructor => write!(f, "constructor"),
-            FunctionSubtype::Relation => write!(f, "relation"),
             FunctionSubtype::Custom => write!(f, "function"),
         }
     }
@@ -962,6 +1129,7 @@ where
     /// This is used by visualization to handle globals differently.
     pub let_binding: bool,
     pub span: Span,
+    pub unionable: bool,
 }
 
 #[derive(Clone, Debug, PartialEq, Eq, Hash)]
@@ -975,8 +1143,7 @@ pub struct Variant {
 
 impl Display for Variant {
     fn fmt(&self, f: &mut Formatter) -> std::fmt::Result {
-        let name = sanitize_internal_name(&self.name);
-        write!(f, "({name}")?;
+        write!(f, "({}", self.name)?;
         if !self.types.is_empty() {
             write!(f, " {}", ListDisplay(&self.types, " "))?;
         }
@@ -1023,6 +1190,7 @@ impl FunctionDecl {
             unextractable: true,
             let_binding: false,
             span,
+            unionable: false,
         }
     }
 
@@ -1033,6 +1201,7 @@ impl FunctionDecl {
         schema: Schema,
         cost: Option<DefaultCost>,
         unextractable: bool,
+        unionable: bool,
     ) -> Self {
         Self {
             name,
@@ -1044,24 +1213,7 @@ impl FunctionDecl {
             unextractable,
             let_binding: false,
             span,
-        }
-    }
-
-    /// Constructs a `relation`
-    pub fn relation(span: Span, name: String, input: Vec<String>) -> Self {
-        Self {
-            name,
-            subtype: FunctionSubtype::Relation,
-            schema: Schema {
-                input,
-                output: String::from("Unit"),
-            },
-            resolved_schema: String::new(),
-            merge: None,
-            cost: None,
-            unextractable: true,
-            let_binding: false,
-            span,
+            unionable,
         }
     }
 }
@@ -1085,6 +1237,7 @@ where
             unextractable: self.unextractable,
             let_binding: self.let_binding,
             span: self.span,
+            unionable: self.unionable,
         }
     }
 }
@@ -1200,17 +1353,32 @@ where
     Head: Clone + Display,
     Leaf: Clone + PartialEq + Eq + Display + Hash,
 {
-    pub fn make_unresolved(self) -> GenericRewrite<String, String> {
+    /// Remaps every head and leaf symbol in the rewrite, including the optional conditions.
+    pub fn map_symbols<Head2, Leaf2>(
+        self,
+        head: &mut impl FnMut(Head) -> Head2,
+        leaf: &mut impl FnMut(Leaf) -> Leaf2,
+    ) -> GenericRewrite<Head2, Leaf2>
+    where
+        Head2: Clone + Display,
+        Leaf2: Clone + PartialEq + Eq + Display + Hash,
+    {
         GenericRewrite {
             span: self.span,
-            lhs: self.lhs.make_unresolved(),
-            rhs: self.rhs.make_unresolved(),
+            lhs: self.lhs.map_symbols(head, leaf),
+            rhs: self.rhs.map_symbols(head, leaf),
             conditions: self
                 .conditions
                 .into_iter()
-                .map(|fact| fact.make_unresolved())
+                .map(|fact| fact.map_symbols(head, leaf))
                 .collect(),
         }
+    }
+
+    pub fn make_unresolved(self) -> GenericRewrite<String, String> {
+        let mut map_head = |h: Head| h.to_string();
+        let mut map_leaf = |l: Leaf| l.to_string();
+        self.map_symbols(&mut map_head, &mut map_leaf)
     }
 }
 
@@ -1236,7 +1404,6 @@ impl<Head: Display, Leaf: Display> GenericRewrite<Head, Leaf> {
             write!(f, " :when ({})", ListDisplay(&self.conditions, " "))?;
         }
         if !ruleset.is_empty() {
-            let ruleset = sanitize_internal_name(ruleset);
             write!(f, " :ruleset {ruleset}")?;
         }
         write!(f, ")")
@@ -1279,7 +1446,254 @@ where
     Head: Clone + Display,
     Leaf: Clone + PartialEq + Eq + Display + Hash,
 {
-    pub fn make_unresolved(self) -> GenericCommand<String, String> {
+    /// The current egglog AST has strings even when resolved.
+    /// We map over those strings with this function, used by sanitize_internal_symbols.
+    pub fn map_string_symbols(
+        self,
+        fun: &mut impl FnMut(String) -> String,
+    ) -> GenericCommand<Head, Leaf>
+    where
+        Head: Clone + Display,
+        Leaf: Clone + PartialEq + Eq + Display + Hash,
+    {
+        match self {
+            GenericCommand::Sort(span, name, params) => {
+                GenericCommand::Sort(span, fun(name), params)
+            }
+            GenericCommand::Datatype {
+                span,
+                name,
+                variants,
+            } => GenericCommand::Datatype {
+                span,
+                name: fun(name),
+                variants: variants
+                    .into_iter()
+                    .map(|variant| Variant {
+                        span: variant.span,
+                        name: fun(variant.name),
+                        types: variant.types.into_iter().map(&mut *fun).collect(),
+                        cost: variant.cost,
+                        unextractable: variant.unextractable,
+                    })
+                    .collect(),
+            },
+            GenericCommand::Datatypes { span, datatypes } => GenericCommand::Datatypes {
+                span,
+                datatypes: datatypes
+                    .into_iter()
+                    .map(|(span, name, variants)| {
+                        let new_name = fun(name);
+                        let new_variants = match variants {
+                            Subdatatypes::Variants(variants) => Subdatatypes::Variants(
+                                variants
+                                    .into_iter()
+                                    .map(|variant| Variant {
+                                        span: variant.span,
+                                        name: fun(variant.name),
+                                        // Redundant closure helps with type inference here
+                                        #[allow(clippy::redundant_closure)]
+                                        types: variant
+                                            .types
+                                            .into_iter()
+                                            .map(|ty| fun(ty))
+                                            .collect(),
+                                        cost: variant.cost,
+                                        unextractable: variant.unextractable,
+                                    })
+                                    .collect(),
+                            ),
+                            Subdatatypes::NewSort(head, args) => {
+                                Subdatatypes::NewSort(fun(head), args)
+                            }
+                        };
+                        (span, new_name, new_variants)
+                    })
+                    .collect(),
+            },
+            GenericCommand::Constructor {
+                span,
+                name,
+                schema,
+                cost,
+                unextractable,
+            } => GenericCommand::Constructor {
+                span,
+                name: fun(name),
+                schema: Schema {
+                    input: schema.input.into_iter().map(&mut *fun).collect(),
+                    output: fun(schema.output),
+                },
+                cost,
+                unextractable,
+            },
+            GenericCommand::Relation { span, name, inputs } => GenericCommand::Relation {
+                span,
+                name: fun(name),
+                inputs: inputs.into_iter().map(&mut *fun).collect(),
+            },
+            GenericCommand::Function {
+                span,
+                name,
+                schema,
+                merge,
+            } => GenericCommand::Function {
+                span,
+                name: fun(name),
+                schema: Schema {
+                    input: schema.input.into_iter().map(&mut *fun).collect(),
+                    output: fun(schema.output),
+                },
+                merge,
+            },
+            GenericCommand::AddRuleset(span, name) => GenericCommand::AddRuleset(span, fun(name)),
+            GenericCommand::UnstableCombinedRuleset(span, name, others) => {
+                GenericCommand::UnstableCombinedRuleset(
+                    span,
+                    fun(name),
+                    others.into_iter().map(&mut *fun).collect(),
+                )
+            }
+            GenericCommand::Rule { rule } => {
+                let rule = GenericRule {
+                    span: rule.span,
+                    name: fun(rule.name),
+                    ruleset: fun(rule.ruleset),
+                    head: rule.head,
+                    body: rule.body,
+                };
+                GenericCommand::Rule { rule }
+            }
+            GenericCommand::Rewrite(name, rewrite, subsume) => {
+                GenericCommand::Rewrite(fun(name), rewrite, subsume)
+            }
+            GenericCommand::BiRewrite(name, rewrite) => {
+                GenericCommand::BiRewrite(fun(name), rewrite)
+            }
+            GenericCommand::Action(action) => GenericCommand::Action(action),
+            GenericCommand::Extract(span, expr, variants) => {
+                GenericCommand::Extract(span, expr, variants)
+            }
+            GenericCommand::RunSchedule(schedule) => {
+                GenericCommand::RunSchedule(schedule.map_string_symbols(fun))
+            }
+            GenericCommand::PrintOverallStatistics(span, file) => {
+                GenericCommand::PrintOverallStatistics(span, file)
+            }
+            GenericCommand::Check(span, facts) => GenericCommand::Check(span, facts),
+            GenericCommand::Prove(span, facts) => GenericCommand::Prove(span, facts),
+            GenericCommand::ProveExists(span, constructor) => {
+                GenericCommand::ProveExists(span, constructor)
+            }
+            GenericCommand::PrintFunction(span, name, n, file, mode) => {
+                GenericCommand::PrintFunction(span, fun(name), n, file, mode)
+            }
+            GenericCommand::PrintSize(span, name) => GenericCommand::PrintSize(span, name.map(fun)),
+            GenericCommand::Input { span, name, file } => GenericCommand::Input {
+                span,
+                name: fun(name),
+                file,
+            },
+            GenericCommand::Output { span, file, exprs } => {
+                GenericCommand::Output { span, file, exprs }
+            }
+            GenericCommand::Push(n) => GenericCommand::Push(n),
+            GenericCommand::Pop(span, n) => GenericCommand::Pop(span, n),
+            GenericCommand::Fail(span, cmd) => {
+                GenericCommand::Fail(span, Box::new(cmd.map_string_symbols(fun)))
+            }
+            GenericCommand::Include(span, file) => GenericCommand::Include(span, file),
+            GenericCommand::UserDefined(span, name, exprs) => {
+                GenericCommand::UserDefined(span, name, exprs)
+            }
+        }
+    }
+
+    /// Applies `f` to all expressions in the command, bottom-up.
+    pub fn visit_exprs(
+        self,
+        f: &mut impl FnMut(GenericExpr<Head, Leaf>) -> GenericExpr<Head, Leaf>,
+    ) -> Self {
+        match self {
+            GenericCommand::Function {
+                span,
+                name,
+                schema,
+                merge,
+            } => GenericCommand::Function {
+                span,
+                name,
+                schema,
+                merge: merge.map(|e| e.visit_exprs(f)),
+            },
+            GenericCommand::Rule { rule } => GenericCommand::Rule {
+                rule: rule.visit_exprs(f),
+            },
+            GenericCommand::Rewrite(name, rewrite, subsume) => GenericCommand::Rewrite(
+                name,
+                GenericRewrite {
+                    span: rewrite.span,
+                    lhs: rewrite.lhs.visit_exprs(f),
+                    rhs: rewrite.rhs.visit_exprs(f),
+                    conditions: rewrite
+                        .conditions
+                        .into_iter()
+                        .map(|fact| fact.visit_exprs(f))
+                        .collect(),
+                },
+                subsume,
+            ),
+            GenericCommand::BiRewrite(name, rewrite) => GenericCommand::BiRewrite(
+                name,
+                GenericRewrite {
+                    span: rewrite.span,
+                    lhs: rewrite.lhs.visit_exprs(f),
+                    rhs: rewrite.rhs.visit_exprs(f),
+                    conditions: rewrite
+                        .conditions
+                        .into_iter()
+                        .map(|fact| fact.visit_exprs(f))
+                        .collect(),
+                },
+            ),
+            GenericCommand::Action(action) => GenericCommand::Action(action.visit_exprs(f)),
+            GenericCommand::Extract(span, expr1, expr2) => {
+                GenericCommand::Extract(span, expr1.visit_exprs(f), expr2.visit_exprs(f))
+            }
+            GenericCommand::Check(span, facts) => GenericCommand::Check(
+                span,
+                facts.into_iter().map(|fact| fact.visit_exprs(f)).collect(),
+            ),
+            GenericCommand::Prove(span, facts) => GenericCommand::Prove(
+                span,
+                facts.into_iter().map(|fact| fact.visit_exprs(f)).collect(),
+            ),
+            GenericCommand::Output { span, file, exprs } => GenericCommand::Output {
+                span,
+                file,
+                exprs: exprs.into_iter().map(|e| e.visit_exprs(f)).collect(),
+            },
+            GenericCommand::RunSchedule(schedule) => {
+                GenericCommand::RunSchedule(schedule.visit_exprs(f))
+            }
+            GenericCommand::Fail(span, cmd) => {
+                GenericCommand::Fail(span, Box::new(cmd.visit_exprs(f)))
+            }
+            // All other commands don't contain expressions
+            cmd => cmd,
+        }
+    }
+
+    /// Remaps every head and leaf symbol contained in the command.
+    pub fn map_symbols<Head2, Leaf2>(
+        self,
+        head: &mut impl FnMut(Head) -> Head2,
+        leaf: &mut impl FnMut(Leaf) -> Leaf2,
+    ) -> GenericCommand<Head2, Leaf2>
+    where
+        Head2: Clone + Display,
+        Leaf2: Clone + PartialEq + Eq + Display + Hash,
+    {
         match self {
             GenericCommand::Sort(span, name, params) => GenericCommand::Sort(span, name, params),
             GenericCommand::Datatype {
@@ -1319,27 +1733,31 @@ where
                 span,
                 name,
                 schema,
-                merge: merge.map(|expr| expr.make_unresolved()),
+                merge: merge.map(|expr| expr.map_symbols(head, leaf)),
             },
             GenericCommand::AddRuleset(span, name) => GenericCommand::AddRuleset(span, name),
             GenericCommand::UnstableCombinedRuleset(span, name, others) => {
                 GenericCommand::UnstableCombinedRuleset(span, name, others)
             }
             GenericCommand::Rule { rule } => GenericCommand::Rule {
-                rule: rule.make_unresolved(),
+                rule: rule.map_symbols(head, leaf),
             },
             GenericCommand::Rewrite(name, rewrite, subsume) => {
-                GenericCommand::Rewrite(name, rewrite.make_unresolved(), subsume)
+                GenericCommand::Rewrite(name, rewrite.map_symbols(head, leaf), subsume)
             }
             GenericCommand::BiRewrite(name, rewrite) => {
-                GenericCommand::BiRewrite(name, rewrite.make_unresolved())
+                GenericCommand::BiRewrite(name, rewrite.map_symbols(head, leaf))
             }
-            GenericCommand::Action(action) => GenericCommand::Action(action.make_unresolved()),
-            GenericCommand::Extract(span, expr, variants) => {
-                GenericCommand::Extract(span, expr.make_unresolved(), variants.make_unresolved())
+            GenericCommand::Action(action) => {
+                GenericCommand::Action(action.map_symbols(head, leaf))
             }
+            GenericCommand::Extract(span, expr, variants) => GenericCommand::Extract(
+                span,
+                expr.map_symbols(head, leaf),
+                variants.map_symbols(head, leaf),
+            ),
             GenericCommand::RunSchedule(schedule) => {
-                GenericCommand::RunSchedule(schedule.make_unresolved())
+                GenericCommand::RunSchedule(schedule.map_symbols(head, leaf))
             }
             GenericCommand::PrintOverallStatistics(span, file) => {
                 GenericCommand::PrintOverallStatistics(span, file)
@@ -1348,9 +1766,19 @@ where
                 span,
                 facts
                     .into_iter()
-                    .map(|fact| fact.make_unresolved())
+                    .map(|fact| fact.map_symbols(head, leaf))
                     .collect(),
             ),
+            GenericCommand::Prove(span, facts) => GenericCommand::Prove(
+                span,
+                facts
+                    .into_iter()
+                    .map(|fact| fact.map_symbols(head, leaf))
+                    .collect(),
+            ),
+            GenericCommand::ProveExists(span, constructor) => {
+                GenericCommand::ProveExists(span, head(constructor))
+            }
             GenericCommand::PrintFunction(span, name, n, file, mode) => {
                 GenericCommand::PrintFunction(span, name, n, file, mode)
             }
@@ -1363,19 +1791,26 @@ where
                 file,
                 exprs: exprs
                     .into_iter()
-                    .map(|expr| expr.make_unresolved())
+                    .map(|expr| expr.map_symbols(head, leaf))
                     .collect(),
             },
             GenericCommand::Push(n) => GenericCommand::Push(n),
             GenericCommand::Pop(span, n) => GenericCommand::Pop(span, n),
             GenericCommand::Fail(span, cmd) => {
-                GenericCommand::Fail(span, Box::new(cmd.make_unresolved()))
+                GenericCommand::Fail(span, Box::new(cmd.map_symbols(head, leaf)))
             }
             GenericCommand::Include(span, file) => GenericCommand::Include(span, file),
             GenericCommand::UserDefined(span, name, exprs) => {
                 GenericCommand::UserDefined(span, name, exprs)
             }
         }
+    }
+
+    /// Makes the command unresolved by converting all Head and Leaf types to String.
+    pub fn make_unresolved(self) -> GenericCommand<String, String> {
+        let mut map_head = |h: Head| h.to_string();
+        let mut map_leaf = |l: Leaf| l.to_string();
+        self.map_symbols(&mut map_head, &mut map_leaf)
     }
 
     pub fn visit_actions(
@@ -1393,4 +1828,63 @@ where
             other => other,
         }
     }
+}
+
+/// Sanitizes internal names so they do not contain any internal characters.
+/// This enables printing desugared egglog in a way that can be re-parsed.
+pub fn sanitize_internal_names<Head, Leaf>(
+    program: &[GenericCommand<Head, Leaf>],
+) -> Vec<GenericCommand<String, String>>
+where
+    Head: Clone + Display,
+    Leaf: Clone + PartialEq + Eq + Display + Hash,
+{
+    // first convert to unresolved
+    let unresolved = program
+        .iter()
+        .map(|cmd| cmd.clone().make_unresolved())
+        .collect::<Vec<_>>();
+    // now count the max number of underscores in any name
+    let mut max_underscores = 0;
+    let mut max_underscores2 = 0;
+    for cmd in &unresolved {
+        cmd.clone().map_symbols(
+            &mut |h: String| {
+                let count = h.matches(INTERNAL_SYMBOL_PREFIX).count();
+                if count > max_underscores {
+                    max_underscores = count;
+                }
+                h
+            },
+            &mut |l: String| {
+                let count = l.matches(INTERNAL_SYMBOL_PREFIX).count();
+                if count > max_underscores2 {
+                    max_underscores2 = count;
+                }
+                l
+            },
+        );
+        cmd.clone().map_string_symbols(&mut |s: String| {
+            let count = s.matches(INTERNAL_SYMBOL_PREFIX).count();
+            if count > max_underscores {
+                max_underscores = count;
+            }
+            s
+        });
+    }
+    let replacement_head = "_".repeat(max_underscores + 1);
+    let replacement_leaf = "_".repeat(max_underscores2 + 1);
+    // now replace INTERNAL_SYMBOL_PREFIX with replacement
+    unresolved
+        .into_iter()
+        .map(|cmd| {
+            let cmd = cmd.map_symbols(
+                &mut |h: String| h.replace(INTERNAL_SYMBOL_PREFIX, &replacement_head),
+                &mut |l: String| l.replace(INTERNAL_SYMBOL_PREFIX, &replacement_leaf),
+            );
+            cmd.map_string_symbols(&mut |s: String| {
+                s.replace(INTERNAL_SYMBOL_PREFIX, &replacement_head)
+            })
+        })
+        .collect()
 }

@@ -26,24 +26,27 @@
 ; The exploit above is no longer valid due to the removal of default
 ; however, can still do with lookups in merge and constructors/relations
 
-(relation baz (i64))
 
-(function const (Unit) i64 :no-merge)
 
-(set (const ()) 0)
+;; Now that relations are desugared, this trick also doesn't work because the relation has a fresh sort:
+;; (relation baz (i64))
 
-(function bar () i64 :merge (const (baz new)))
-
-(set (bar) 0)
-(set (bar) 1)
-(set (bar) 2)
-
-(rule (
-      (baz x)
-      (< x 50)
-) (
-      (set (bar) (+ x 1))
-))
-
-(run 100)
-(check (baz 50))
+;;(function const (Unit) i64 :no-merge)
+;;
+;;(set (const ()) 0)
+;;
+;;(function bar () i64 :merge (const (baz new)))
+;;
+;;(set (bar) 0)
+;;(set (bar) 1)
+;;(set (bar) 2)
+;;
+;;(rule (
+;;      (baz x)
+;;      (< x 50)
+;;) (
+;;      (set (bar) (+ x 1))
+;;))
+;;
+;;(run 100)
+;;(check (baz 50))
