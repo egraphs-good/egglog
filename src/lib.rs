@@ -523,7 +523,7 @@ impl EGraph {
     ) -> Result<(), TypeError> {
         if self.strict_mode {
             return Err(TypeError::NonGlobalPrefixed {
-                name: format!("{}{}", GLOBAL_NAME_PREFIX, canonical_name),
+                name: canonical_name.to_string(),
                 span: span.clone(),
             });
         }
