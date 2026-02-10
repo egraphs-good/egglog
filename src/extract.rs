@@ -184,15 +184,14 @@ impl<C: Cost + Ord + Eq + Clone + Debug> Extractor<C> {
         // Only include constructors (not regular functions) and respect unextractable flag
         let mut rev_index: HashMap<String, Vec<String>> = Default::default();
         for func in egraph.functions.iter() {
-            // Skip non-constructors (regular functions shouldn't be extracted)
-            if func.1.decl.subtype != FunctionSubtype::Constructor {
-                continue;
-            }
-            // Skip view tables when requested (for proof extraction, we need original term names)
-            if skip_view_tables && func.1.decl.term_constructor.is_some() {
-                continue;
-            }
-            if !respect_unextractable || !func.1.decl.unextractable {
+            let unextractable = func.1.decl.unextractable && respect_unextractable;
+            let should_skip_view = (skip_view_tables && func.1.decl.term_constructor.is_some());
+
+            // only extract constructors, skip view tables when requested for proof extraction, and respect unextractable flag
+            if !unextractable
+                && !should_skip_view
+                && func.1.decl.subtype == FunctionSubtype::Constructor
+            {
                 let func_name = func.0.clone();
                 // For view tables (with term_constructor in proof mode), the e-class is the last input column
                 let output_sort_name = func.1.extraction_output_sort().name();
