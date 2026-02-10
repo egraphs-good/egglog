@@ -7,7 +7,10 @@ use std::{
 
 use crate::{
     common::HashMap,
+    free_join::plan::{JoinStages, MatId, MatScanMode, MatSpec, ScanMatSpec},
     numeric_id::{DenseIdMap, IdVec, NumericId},
+    query::Atom,
+    row_buffer::RowBuffer,
 };
 use crossbeam::utils::CachePadded;
 use dashmap::mapref::one::RefMut;
@@ -166,7 +169,10 @@ impl Database {
             // let dash_rule_reports: DashMap<String, Vec<RuleReport>> = DashMap::default();
             let dash_rule_reports: DashMap<Arc<str>, Vec<RuleReport>> = DashMap::default();
             rayon::in_place_scope(|scope| {
-                for (plan, desc, symbol_map, _action) in rule_set.plans.values() {
+                for (plan, desc, symbol_map) in rule_set.plans.values() {
+                    let Plan::SinglePlan(plan) = plan else {
+                        todo!()
+                    };
                     // TODO: add stats
                     let report_plan = match report_level {
                         ReportLevel::TimeOnly => None,
@@ -185,7 +191,13 @@ impl Database {
                         }
 
                         let search_and_apply_timer = Instant::now();
-                        join_state.run_header_and_plan(plan, &mut binding_info, &mut action_buf);
+                        join_state.run_join_stages(
+                            &plan.stages,
+                            &plan.atoms,
+                            plan.actions,
+                            &mut binding_info,
+                            &mut action_buf,
+                        );
                         let search_and_apply_time = search_and_apply_timer.elapsed();
 
                         if action_buf.needs_flush {
@@ -212,7 +224,7 @@ impl Database {
                 match_counter: &match_counter,
                 batches: Default::default(),
             };
-            for (plan, desc, symbol_map, _action) in rule_set.plans.values() {
+            for (plan, desc, symbol_map) in rule_set.plans.values() {
                 let report_plan = match report_level {
                     ReportLevel::TimeOnly => None,
                     ReportLevel::WithPlan | ReportLevel::StageInfo => {
@@ -220,13 +232,65 @@ impl Database {
                     }
                 };
                 let mut binding_info = BindingInfo::default();
-                for (id, info) in plan.atoms.iter() {
+
+                for (id, info) in plan.atoms().iter() {
                     let table = join_state.db.get_table(info.table);
                     binding_info.insert_subset(id, table.all());
                 }
 
                 let search_and_apply_timer = Instant::now();
-                join_state.run_header_and_plan(plan, &mut binding_info, &mut action_buf);
+                match plan {
+                    Plan::SinglePlan(plan) => {
+                        join_state.run_join_stages(
+                            &plan.stages,
+                            &plan.atoms,
+                            plan.actions,
+                            &mut binding_info,
+                            &mut action_buf,
+                        );
+                    }
+                    Plan::DecomposedPlan(plan) => {
+                        let mut materializations =
+                            DenseIdMap::with_capacity(plan.stages.blocks.len());
+                        for i in 0..plan.stages.blocks.len() {
+                            materializations.insert(MatId::from_usize(i), Default::default());
+                        }
+                        let mut materializer = InPlaceMaterializer {
+                            specs: &plan
+                                .stages
+                                .blocks
+                                .iter()
+                                .enumerate()
+                                .map(|(i, block)| (MatId::from_usize(i), block.1.clone()))
+                                .collect(),
+                            materializations,
+                            scratch_key: Default::default(),
+                            scratch_val: Default::default(),
+                        };
+                        for (mat_id, stage_block) in plan.stages.blocks.iter().enumerate() {
+                            let mat_id = MatId::from_usize(mat_id);
+                            join_state.run_join_stages(
+                                &stage_block.0,
+                                &plan.atoms,
+                                mat_id,
+                                &mut binding_info,
+                                &mut materializer,
+                            );
+                            binding_info.materializations.insert(
+                                mat_id,
+                                // Arc::new(materializer.materializations.take(mat_id).unwrap()),
+                                Arc::new(materializer.materializations.take(mat_id).unwrap()),
+                            );
+                        }
+                        join_state.run_join_stages(
+                            &plan.result_block,
+                            &plan.atoms,
+                            plan.actions,
+                            &mut binding_info,
+                            &mut action_buf,
+                        );
+                    }
+                }
                 let search_and_apply_time = search_and_apply_timer.elapsed();
 
                 // TODO: unnecessary cloning in many cases
@@ -239,7 +303,7 @@ impl Database {
             }
             action_buf.flush(&mut exec_state.clone());
         }
-        for (_plan, desc, _symbol_map, action) in rule_set.plans.values() {
+        for (plan, desc, _symbol_map) in rule_set.plans.values() {
             let reports = rule_reports.get_mut(desc).unwrap();
             let i = reports
                 .iter()
@@ -251,7 +315,7 @@ impl Database {
             // NB: This requires each action ID correspond to only one query.
             // If an action is used by multiple queries, then we can't tell how many matches are
             // caused by individual queries.
-            reports[i].num_matches = match_counter.read_matches(*action);
+            reports[i].num_matches = match_counter.read_matches(plan.actions());
         }
         let search_and_apply_time = search_and_apply_timer.elapsed();
 
@@ -341,6 +405,7 @@ impl Clone for TrieNode {
 struct BindingInfo {
     bindings: DenseIdMap<Variable, Value>,
     subsets: DenseIdMap<AtomId, TrieNode>,
+    materializations: DenseIdMap<MatId, Arc<HashMap<Vec<Value>, RowBuffer>>>,
 }
 
 impl BindingInfo {
@@ -379,7 +444,7 @@ impl<'a> JoinState<'a> {
 
     fn get_index(
         &self,
-        plan: &Plan,
+        atoms: &Arc<DenseIdMap<AtomId, Atom>>,
         atom: AtomId,
         binding_info: &mut BindingInfo,
         cols: impl Iterator<Item = ColumnId>,
@@ -388,7 +453,7 @@ impl<'a> JoinState<'a> {
         let trie_node = binding_info.subsets.unwrap_val(atom);
         let subset = &trie_node.subset;
 
-        let table_id = plan.atoms[atom].table;
+        let table_id = atoms[atom].table;
         let info = &self.db.tables[table_id];
         let all_cacheable = cols.iter().all(|col| {
             !info
@@ -411,7 +476,7 @@ impl<'a> JoinState<'a> {
                 if cols.len() != 1 {
                     DynamicIndex::Cached {
                         intersect_outer,
-                        table: get_index_from_tableinfo(info, &cols).clone(),
+                        table: get_index_from_tableinfo(info, &cols),
                     }
                 } else {
                     DynamicIndex::CachedColumn {
@@ -433,32 +498,37 @@ impl<'a> JoinState<'a> {
     }
     fn get_column_index(
         &self,
-        plan: &Plan,
+        atoms: &Arc<DenseIdMap<AtomId, Atom>>,
         binding_info: &mut BindingInfo,
         atom: AtomId,
         col: ColumnId,
     ) -> Prober {
-        self.get_index(plan, atom, binding_info, iter::once(col))
+        self.get_index(atoms, atom, binding_info, iter::once(col))
     }
 
     /// Runs the free join plan, starting with the header.
     ///
     /// A bit about the `instr_order` parameter: This defines the order in which the [`JoinStage`]
-    /// instructions will run. We want to support cached [`Plan`]s that may be based on stale
+    /// instructions will run. We want to support cached [`SinglePlan`]s that may be based on stale
     /// ordering information. `instr_order` allows us to specify a new ordering of the instructions
     /// without mutating the plan itself: `run_plan` simply executes
     /// `plan.stages.instrs[instr_order[i]]` at stage `i`.
     ///
     /// This is also a stepping stone towards supporting fully dynamic variable ordering.
-    fn run_header_and_plan<'buf, BUF: ActionBuffer<'buf>>(
+    fn run_join_stages<'buf, A: NumericId + 'buf, BUF: ActionBuffer<'buf, A>>(
         &self,
-        plan: &'a Plan,
+        stages: &'buf JoinStages,
+        atoms: &'buf Arc<DenseIdMap<AtomId, Atom>>,
+        action: A,
         binding_info: &mut BindingInfo,
         action_buf: &mut BUF,
     ) where
         'a: 'buf,
     {
-        for JoinHeader { atom, subset, .. } in &plan.stages.header {
+        if log::log_enabled!(log::Level::Debug) {
+            log::debug!("Starting running query stages:\n{:#?}", stages);
+        }
+        for JoinHeader { atom, subset, .. } in &stages.header {
             if subset.is_empty() {
                 return;
             }
@@ -473,9 +543,17 @@ impl<'a> JoinState<'a> {
                 return;
             }
         }
-        let mut order = InstrOrder::from_iter(0..plan.stages.instrs.len());
-        sort_plan_by_size(&mut order, 0, &plan.stages.instrs, binding_info);
-        self.run_plan(plan, &mut order, 0, binding_info, action_buf);
+        let mut order = InstrOrder::from_iter(0..stages.instrs.len());
+        // sort_plan_by_size(&mut order, 0, &stages.instrs, binding_info);
+        self.run_plan(
+            stages,
+            atoms,
+            action,
+            &mut order,
+            0,
+            binding_info,
+            action_buf,
+        );
     }
 
     /// The core method for executing a free join plan.
@@ -486,9 +564,11 @@ impl<'a> JoinState<'a> {
     /// index used to detect if we are at the "top" of a plan rather than the "bottom", and is
     /// currently used as a heuristic to determine if we should increase parallelism more than the
     /// default.
-    fn run_plan<'buf, BUF: ActionBuffer<'buf>>(
+    fn run_plan<'buf, A: NumericId + 'buf, BUF: ActionBuffer<'buf, A>>(
         &self,
-        plan: &'a Plan,
+        stages: &'buf JoinStages,
+        atoms: &'buf Arc<DenseIdMap<AtomId, Atom>>,
+        action: A,
         instr_order: &mut InstrOrder,
         cur: usize,
         binding_info: &mut BindingInfo,
@@ -501,19 +581,20 @@ impl<'a> JoinState<'a> {
         }
 
         if cur >= instr_order.len() {
-            action_buf.push_bindings(plan.stages.actions, &binding_info.bindings, || {
-                self.exec_state.clone()
+            action_buf.push_bindings(action, &binding_info.bindings, || {
+                ExecutionState::new(self.db.read_only_view(), Default::default())
             });
             return;
         }
         let chunk_size = action_buf.morsel_size(cur, instr_order.len());
-        let mut cur_size = estimate_size(&plan.stages.instrs[instr_order.get(cur)], binding_info);
-        if cur_size > 32 && cur % 3 == 1 && cur < instr_order.len() - 1 {
-            // If we have a reasonable number of tuples to process, adjust the variable order every
-            // 3 rounds, but always make sure to readjust on the second roung.
-            sort_plan_by_size(instr_order, cur, &plan.stages.instrs, binding_info);
-            cur_size = estimate_size(&plan.stages.instrs[instr_order.get(cur)], binding_info);
-        }
+        let mut cur_size = estimate_size(&stages.instrs[instr_order.get(cur)], binding_info);
+        // TODO: add dynamic sort plan back
+        // if cur_size > 32 && cur % 3 == 1 && cur < instr_order.len() - 1 {
+        //     // If we have a reasonable number of tuples to process, adjust the variable order every
+        //     // 3 rounds, but always make sure to readjust on the second roung.
+        //     sort_plan_by_size(instr_order, cur, &stages.instrs, binding_info);
+        //     cur_size = estimate_size(&stages.instrs[instr_order.get(cur)], binding_info);
+        // }
 
         // Helper macro (not its own method to appease the borrow checker).
         macro_rules! drain_updates {
@@ -532,7 +613,15 @@ impl<'a> JoinState<'a> {
                             binding_info.insert_subset(atom, subset);
                         }
                         UpdateInstr::EndFrame => {
-                            self.run_plan(plan, instr_order, cur + 1, binding_info, action_buf);
+                            self.run_plan(
+                                stages,
+                                atoms,
+                                action,
+                                instr_order,
+                                cur + 1,
+                                binding_info,
+                                action_buf,
+                            );
                         }
                     })
                 }
@@ -572,7 +661,9 @@ impl<'a> JoinState<'a> {
                                     exec_state: exec_state_for_work.clone(),
                                 }
                                 .run_plan(
-                                    plan,
+                                    stages,
+                                    atoms,
+                                    action,
                                     instr_order,
                                     cur + 1,
                                     binding_info,
@@ -595,15 +686,15 @@ impl<'a> JoinState<'a> {
             table.refine(sub, constraints)
         }
 
-        match &plan.stages.instrs[instr_order.get(cur)] {
+        match &stages.instrs[instr_order.get(cur)] {
             JoinStage::Intersect { var, scans } => match scans.as_slice() {
                 [] => {}
                 [a] if a.cs.is_empty() => {
                     if binding_info.has_empty_subset(a.atom) {
                         return;
                     }
-                    let prober = self.get_column_index(plan, binding_info, a.atom, a.column);
-                    let table = self.db.tables[plan.atoms[a.atom].table].table.as_ref();
+                    let prober = self.get_column_index(atoms, binding_info, a.atom, a.column);
+                    let table = self.db.tables[atoms[a.atom].table].table.as_ref();
                     let mut updates = FrameUpdates::with_capacity(cmp::min(chunk_size, cur_size));
                     with_pool_set(|ps| {
                         prober.for_each(|val, x| {
@@ -627,8 +718,8 @@ impl<'a> JoinState<'a> {
                     if binding_info.has_empty_subset(a.atom) {
                         return;
                     }
-                    let prober = self.get_column_index(plan, binding_info, a.atom, a.column);
-                    let table = self.db.tables[plan.atoms[a.atom].table].table.as_ref();
+                    let prober = self.get_column_index(atoms, binding_info, a.atom, a.column);
+                    let table = self.db.tables[atoms[a.atom].table].table.as_ref();
                     let mut updates = FrameUpdates::with_capacity(cmp::min(chunk_size, cur_size));
                     with_pool_set(|ps| {
                         prober.for_each(|val, x| {
@@ -649,8 +740,8 @@ impl<'a> JoinState<'a> {
                     binding_info.move_back(a.atom, prober);
                 }
                 [a, b] => {
-                    let a_prober = self.get_column_index(plan, binding_info, a.atom, a.column);
-                    let b_prober = self.get_column_index(plan, binding_info, b.atom, b.column);
+                    let a_prober = self.get_column_index(atoms, binding_info, a.atom, a.column);
+                    let b_prober = self.get_column_index(atoms, binding_info, b.atom, b.column);
 
                     let ((smaller, smaller_scan), (larger, larger_scan)) =
                         if a_prober.len() < b_prober.len() {
@@ -661,10 +752,8 @@ impl<'a> JoinState<'a> {
 
                     let smaller_atom = smaller_scan.atom;
                     let larger_atom = larger_scan.atom;
-                    let large_table = self.db.tables[plan.atoms[larger_atom].table].table.as_ref();
-                    let small_table = self.db.tables[plan.atoms[smaller_atom].table]
-                        .table
-                        .as_ref();
+                    let large_table = self.db.tables[atoms[larger_atom].table].table.as_ref();
+                    let small_table = self.db.tables[atoms[smaller_atom].table].table.as_ref();
                     let mut updates = FrameUpdates::with_capacity(cmp::min(chunk_size, cur_size));
                     with_pool_set(|ps| {
                         smaller.for_each(|val, small_sub| {
@@ -704,7 +793,7 @@ impl<'a> JoinState<'a> {
                     let mut probers = Vec::with_capacity(rest.len());
                     for (i, scan) in rest.iter().enumerate() {
                         let prober =
-                            self.get_column_index(plan, binding_info, scan.atom, scan.column);
+                            self.get_column_index(atoms, binding_info, scan.atom, scan.column);
                         let size = prober.len();
                         if size < smallest_size {
                             smallest = i;
@@ -714,9 +803,8 @@ impl<'a> JoinState<'a> {
                     }
 
                     let main_spec = &rest[smallest];
-                    let main_spec_table = self.db.tables[plan.atoms[main_spec.atom].table]
-                        .table
-                        .as_ref();
+                    let main_spec_table =
+                        self.db.tables[atoms[main_spec.atom].table].table.as_ref();
 
                     if smallest_size != 0 {
                         // Smallest leads the scan
@@ -730,7 +818,7 @@ impl<'a> JoinState<'a> {
                                         continue;
                                     }
                                     if let Some(mut sub) = probers[i].get_subset(key) {
-                                        let table = self.db.tables[plan.atoms[rest[i].atom].table]
+                                        let table = self.db.tables[atoms[rest[i].atom].table]
                                             .table
                                             .as_ref();
                                         sub = refine_subset(sub, &rest[i].cs, &table);
@@ -782,7 +870,7 @@ impl<'a> JoinState<'a> {
                 let mut updates = FrameUpdates::with_capacity(cmp::min(chunk_size, cur_size));
                 loop {
                     buffer.clear();
-                    let table = &self.db.tables[plan.atoms[cover_atom].table].table;
+                    let table = &self.db.tables[atoms[cover_atom].table].table;
                     let next = table.scan_project(
                         cover_subset,
                         &proj,
@@ -832,7 +920,7 @@ impl<'a> JoinState<'a> {
                             i,
                             spec.to_index.atom,
                             self.get_index(
-                                plan,
+                                atoms,
                                 spec.to_index.atom,
                                 binding_info,
                                 spec.to_index.vars.iter().copied(),
@@ -848,7 +936,7 @@ impl<'a> JoinState<'a> {
                 let mut updates = FrameUpdates::with_capacity(cmp::min(chunk_size, cur_size));
                 loop {
                     buffer.clear();
-                    let table = &self.db.tables[plan.atoms[cover_atom].table].table;
+                    let table = &self.db.tables[atoms[cover_atom].table].table;
                     let next = table.scan_project(
                         cover_subset,
                         &proj,
@@ -880,7 +968,7 @@ impl<'a> JoinState<'a> {
                                 continue 'mid;
                             };
                             // apply any constraints needed in this scan.
-                            let table_info = &self.db.tables[plan.atoms[*atom].table];
+                            let table_info = &self.db.tables[atoms[*atom].table];
                             let cs = &to_intersect[*i].0.constraints;
                             subset = refine_subset(subset, cs, &table_info.table.as_ref());
                             if subset.is_empty() {
@@ -912,6 +1000,166 @@ impl<'a> JoinState<'a> {
                     binding_info.move_back(atom, prober);
                 }
             }
+            JoinStage::FusedIntersectMat {
+                cover,
+                mode,
+                bind,
+                to_intersect,
+            } => {
+                let cover_mat = binding_info.materializations[*cover].clone();
+                let mut updates = FrameUpdates::with_capacity(cmp::min(chunk_size, cur_size));
+                let probers = to_intersect
+                    .iter()
+                    .map(|(spec, _)| {
+                        if let ScanMatSpec::Scan(spec) = spec {
+                            Some(self.get_index(
+                                atoms,
+                                spec.to_index.atom,
+                                binding_info,
+                                spec.to_index.vars.iter().copied(),
+                            ))
+                        } else {
+                            None
+                        }
+                    })
+                    .collect::<SmallVec<[Option<Prober>; 4]>>();
+
+                let mut key = Vec::with_capacity(4);
+                let mut prune_probers = |updates: &mut FrameUpdates,
+                                         binding_info: &mut BindingInfo,
+                                         mat_key: Option<&[Value]>,
+                                         mat_non_key: Option<&[Value]>|
+                 -> bool {
+                    for ((spec, cols), prober) in to_intersect.iter().zip(probers.iter()) {
+                        key.clear();
+                        for col in cols.iter() {
+                            let val = match mat_key {
+                                Some(mat_key) => {
+                                    if col.index() < mat_key.len() {
+                                        mat_key[col.index()]
+                                    } else {
+                                        mat_non_key.unwrap()[col.index() - mat_key.len()]
+                                    }
+                                }
+                                None => mat_non_key.unwrap()[col.index()],
+                            };
+                            key.push(val);
+                        }
+                        match spec {
+                            ScanMatSpec::Scan(spec) => {
+                                let prober = prober.as_ref().unwrap();
+                                if let Some(subset) = prober.get_subset(&key) {
+                                    updates.refine_atom(spec.to_index.atom, subset);
+                                } else {
+                                    return false;
+                                }
+                            }
+                            ScanMatSpec::Materialized(spec) => {
+                                let mat = &binding_info.materializations[*spec];
+                                if mat.contains_key(&key) {
+                                    // We don't refine materializations. Materializations
+                                    // are only refined when scanning in ScanMatMode::Refine mode,
+                                    // which is done by looking up the relevant variables.
+                                } else {
+                                    return false;
+                                }
+                            }
+                        }
+                    }
+                    return true;
+                };
+
+                match mode {
+                    MatScanMode::Full | MatScanMode::KeyOnly => {
+                        // enumerate keys
+                        // for group in cover_mat.iter() {
+                        for group in cover_mat.iter() {
+                            let group_key_len = group.0.len();
+                            if mode == &MatScanMode::Full {
+                                // enumerate non-keys
+                                for non_keys in group.1.iter() {
+                                    for (col, var) in bind.iter() {
+                                        if col.index() < group_key_len {
+                                            updates.push_binding(*var, group.0[col.index()]);
+                                        }
+                                    }
+
+                                    // TODO: optimization that guaratees all keys come before non-keys
+                                    for (col, var) in bind.iter() {
+                                        if col.index() >= group_key_len {
+                                            updates.push_binding(
+                                                *var,
+                                                non_keys[col.index() - group_key_len],
+                                            );
+                                        }
+                                    }
+                                    if prune_probers(
+                                        &mut updates,
+                                        binding_info,
+                                        Some(group.0),
+                                        Some(non_keys),
+                                    ) {
+                                        updates.finish_frame();
+                                    } else {
+                                        updates.rollback();
+                                    }
+                                }
+                            } else if mode == &MatScanMode::KeyOnly {
+                                for (col, var) in bind.iter() {
+                                    debug_assert!(col.index() < group_key_len);
+                                    updates.push_binding(*var, group.0[col.index()]);
+                                }
+                                if prune_probers(&mut updates, binding_info, Some(group.0), None) {
+                                    updates.finish_frame();
+                                } else {
+                                    updates.rollback();
+                                }
+                            }
+                        }
+                    }
+                    MatScanMode::Value(index_vars) | MatScanMode::Lookup(index_vars) => {
+                        let keys = index_vars
+                            .iter()
+                            .map(|var| binding_info.bindings[*var])
+                            .collect::<Vec<Value>>();
+                        // lookup keys
+                        if let Some(group) = cover_mat.get(&keys) {
+                            if matches!(mode, MatScanMode::Lookup(_)) {
+                                assert_eq!(to_intersect.len(), 0);
+                                assert_eq!(bind.len(), 0);
+                                if group.len() > 0 {
+                                    updates.finish_frame();
+                                }
+                                drain_updates!(updates);
+                            } else {
+                                // enumerate non-keys
+                                // for vals in group.value().iter() {
+                                for vals in group.iter() {
+                                    debug_assert!(vals.len() == bind.len()); // TODO: not true for non-full query
+                                    for (col, var) in bind.iter() {
+                                        updates.push_binding(*var, vals[col.index()]);
+                                    }
+                                    if prune_probers(&mut updates, binding_info, None, Some(vals)) {
+                                        updates.finish_frame();
+                                    } else {
+                                        updates.rollback();
+                                    }
+                                    if updates.frames() >= chunk_size {
+                                        drain_updates_parallel!(updates);
+                                    }
+                                }
+                            }
+                        }
+                    }
+                }
+
+                drain_updates!(updates);
+                for (spec, prober) in to_intersect.iter().zip(probers) {
+                    if let ScanMatSpec::Scan(spec) = &spec.0 {
+                        binding_info.move_back(spec.to_index.atom, prober.unwrap());
+                    }
+                }
+            }
         }
     }
 }
@@ -924,8 +1172,8 @@ const VAR_BATCH_SIZE: usize = 128;
 /// This trait exists as a fairly ad-hoc wrapper over its two implementations.
 /// It allows us to avoid duplicating the (somewhat monstrous) `run_plan` method
 /// for serial and parallel modes.
-trait ActionBuffer<'state>: Send {
-    type AsLocal<'a>: ActionBuffer<'state>
+trait ActionBuffer<'state, A: NumericId>: Send {
+    type AsLocal<'a>: ActionBuffer<'state, A>
     where
         'state: 'a;
     /// Push the given bindings to be executed for the specified action. If this
@@ -937,7 +1185,7 @@ trait ActionBuffer<'state>: Send {
     /// it should not, in general, be used outside of this module.
     fn push_bindings(
         &mut self,
-        action: ActionId,
+        action: A,
         bindings: &DenseIdMap<Variable, Value>,
         to_exec_state: impl FnMut() -> ExecutionState<'state>,
     );
@@ -978,7 +1226,7 @@ struct InPlaceActionBuffer<'a> {
     batches: DenseIdMap<ActionId, ActionState>,
 }
 
-impl<'a, 'outer: 'a> ActionBuffer<'a> for InPlaceActionBuffer<'outer> {
+impl<'a, 'outer: 'a> ActionBuffer<'a, ActionId> for InPlaceActionBuffer<'outer> {
     type AsLocal<'b>
         = Self
     where
@@ -1052,7 +1300,7 @@ impl<'inner, 'scope> ScopedActionBuffer<'inner, 'scope> {
     }
 }
 
-impl<'scope> ActionBuffer<'scope> for ScopedActionBuffer<'_, 'scope> {
+impl<'scope> ActionBuffer<'scope, ActionId> for ScopedActionBuffer<'_, 'scope> {
     type AsLocal<'a>
         = ScopedActionBuffer<'a, 'scope>
     where
@@ -1150,6 +1398,68 @@ fn flush_action_states(
         }
     }
 }
+
+struct InPlaceMaterializer<'a> {
+    specs: &'a DenseIdMap<MatId, MatSpec>,
+    materializations: DenseIdMap<MatId, HashMap<Vec<Value>, RowBuffer>>,
+    scratch_key: Vec<Value>,
+    scratch_val: Vec<Value>,
+}
+
+impl<'a> ActionBuffer<'a, MatId> for InPlaceMaterializer<'a> {
+    type AsLocal<'b>
+        = Self
+    where
+        'a: 'b;
+
+    fn push_bindings(
+        &mut self,
+        mat_id: MatId,
+        bindings: &DenseIdMap<Variable, Value>,
+        _to_exec_state: impl FnMut() -> ExecutionState<'a>,
+    ) {
+        let mat = self
+            .materializations
+            .get_mut(mat_id)
+            .expect("invalid mat id");
+        let spec = self.specs.get(mat_id).expect("invalid mat id");
+        self.scratch_key.clear();
+        for key in spec.msg_vars.iter().map(|var| bindings[*var]) {
+            self.scratch_key.push(key);
+        }
+        self.scratch_val.clear();
+        for val in spec.val_vars.iter().map(|var| bindings[*var]) {
+            self.scratch_val.push(val);
+        }
+        if let Some(mut buffer) = mat.get_mut(&self.scratch_key) {
+            buffer.add_row(&self.scratch_val);
+        } else {
+            if spec.val_vars.len() > 0 {
+                let mut buffer = RowBuffer::new(spec.val_vars.len());
+                buffer.add_row(&self.scratch_val);
+                mat.insert(self.scratch_key.clone(), buffer);
+            } else {
+                let mut buffer = RowBuffer::new(1);
+                buffer.add_row(&[Value::stale()]);
+                mat.insert(self.scratch_key.clone(), buffer);
+            }
+        }
+    }
+
+    fn flush(&mut self, _exec_state: &mut ExecutionState) {
+        // No-op for in-place materializer.
+    }
+
+    fn recur<'local>(
+        &mut self,
+        local: BorrowedLocalState<'local>,
+        _to_exec_state: impl FnMut() -> ExecutionState<'a> + Send + 'a,
+        work: impl for<'b> FnOnce(BorrowedLocalState<'b>, &mut Self) + Send + 'a,
+    ) {
+        work(local, self)
+    }
+}
+
 struct MatchCounter {
     matches: IdVec<ActionId, CachePadded<AtomicUsize>>,
 }
@@ -1177,6 +1487,7 @@ fn estimate_size(join_stage: &JoinStage, binding_info: &BindingInfo) -> usize {
             .min()
             .unwrap_or(0),
         JoinStage::FusedIntersect { cover, .. } => binding_info.subsets[cover.to_index.atom].size(),
+        JoinStage::FusedIntersectMat { cover, .. } => binding_info.materializations[*cover].len(), // TODO: len() might be expensive.
     }
 }
 
@@ -1184,6 +1495,7 @@ fn num_intersected_rels(join_stage: &JoinStage) -> i32 {
     match join_stage {
         JoinStage::Intersect { scans, .. } => scans.len() as i32,
         JoinStage::FusedIntersect { to_intersect, .. } => to_intersect.len() as i32 + 1,
+        JoinStage::FusedIntersectMat { to_intersect, .. } => to_intersect.len() as i32 + 1,
     }
 }
 
@@ -1206,6 +1518,9 @@ fn sort_plan_by_size(
                 *times_refined.get_or_default(cover.to_index.atom) +=
                     cover.to_index.vars.len() as i64;
             }
+            JoinStage::FusedIntersectMat { .. } => {
+                continue;
+            }
         }
     }
 
@@ -1226,6 +1541,7 @@ fn sort_plan_by_size(
                 .get(cover.to_index.atom)
                 .copied()
                 .unwrap_or_default(),
+            JoinStage::FusedIntersectMat { .. } => i64::MAX - 1, // prioritize materialized scans first
         };
         (
             -refine,
@@ -1251,6 +1567,7 @@ fn sort_plan_by_size(
                 *times_refined.get_or_default(cover.to_index.atom) +=
                     cover.to_index.vars.len() as i64;
             }
+            JoinStage::FusedIntersectMat { .. } => continue,
         }
     }
 }

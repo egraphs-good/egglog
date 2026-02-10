@@ -20,12 +20,14 @@ use super::{AtomId, Variable};
 
 define_id!(pub SubsetId, u32, "An offset into a buffer of subsets");
 
-enum UpdateCell {
+#[derive(Debug)]
+pub(super) enum UpdateCell {
     PushBinding(Variable, Value),
     RefineAtom(AtomId, SubsetId),
     EndFrame,
 }
 
+#[derive(Debug)]
 pub(super) enum UpdateInstr {
     PushBinding(Variable, Value),
     RefineAtom(AtomId, Subset),
@@ -87,11 +89,13 @@ impl FrameUpdates {
     }
 
     pub(super) fn drain(&mut self, f: impl FnMut(UpdateInstr)) {
-        let start = if matches!(self.updates.first(), Some(UpdateCell::EndFrame)) {
-            1 // Skip the first EndFrame
-        } else {
-            0
-        };
+        // TODO: why do we skip the first endframe?
+        // let start = if matches!(self.updates.first(), Some(UpdateCell::EndFrame)) {
+        //     1 // Skip the first EndFrame
+        // } else {
+        //     0
+        // };
+        let start = 0;
         self.updates
             .drain(start..)
             .map(|cell| match cell {
@@ -105,5 +109,11 @@ impl FrameUpdates {
         self.subsets.clear();
         self.frames = 0;
         self.last_start = 0;
+    }
+
+    // for debugging
+    #[allow(dead_code)]
+    pub(super) fn updates(&self) -> &[UpdateCell] {
+        &self.updates
     }
 }
