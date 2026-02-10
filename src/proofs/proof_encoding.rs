@@ -437,9 +437,12 @@ impl<'a> ProofInstrumentor<'a> {
             view_flags.push_str(&format!(" :cost {cost}"));
         }
         if fdecl.unextractable {
-            term_flags.push_str(" :unextractable");
+            
             view_flags.push_str(" :unextractable");
         }
+        // The term table is always unextractable as an optimization for normal extraction.
+        // When we extract a proof, we ignore this annotation. 
+        term_flags.push_str(" :unextractable");
         self.parse_program(&format!(
             "
             (sort {fresh_sort})

@@ -150,6 +150,26 @@ impl<C: Cost + Ord + Eq + Clone + Debug> Extractor<C> {
         egraph: &EGraph,
         cost_model: impl CostModel<C> + 'static,
     ) -> Self {
+        Self::compute_costs_from_rootsorts_internal(rootsorts, egraph, cost_model, true)
+    }
+
+    /// Like `compute_costs_from_rootsorts`, but ignores the unextractable flag.
+    /// This is used for proof extraction where we need to extract proofs even
+    /// from terms that are marked unextractable (like global let bindings).
+    pub(crate) fn compute_costs_from_rootsorts_ignoring_unextractable(
+        rootsorts: Option<Vec<ArcSort>>,
+        egraph: &EGraph,
+        cost_model: impl CostModel<C> + 'static,
+    ) -> Self {
+        Self::compute_costs_from_rootsorts_internal(rootsorts, egraph, cost_model, false)
+    }
+
+    fn compute_costs_from_rootsorts_internal(
+        rootsorts: Option<Vec<ArcSort>>,
+        egraph: &EGraph,
+        cost_model: impl CostModel<C> + 'static,
+        respect_unextractable: bool,
+    ) -> Self {
         // We filter out tables unreachable from the root sorts
         let extract_all_sorts = rootsorts.is_none();
 
@@ -158,7 +178,7 @@ impl<C: Cost + Ord + Eq + Clone + Debug> Extractor<C> {
         // Built a reverse index from output sort to function head symbols
         let mut rev_index: HashMap<String, Vec<String>> = Default::default();
         for func in egraph.functions.iter() {
-            if !func.1.decl.unextractable {
+            if !respect_unextractable || !func.1.decl.unextractable {
                 let func_name = func.0.clone();
                 // For view tables (with term_constructor in proof mode), the e-class is the last input colunm, so use this helper
                 let output_sort_name = func.1.extraction_output_sort().name();
