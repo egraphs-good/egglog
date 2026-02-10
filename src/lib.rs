@@ -83,7 +83,9 @@ use crate::ast::desugar::desugar_command;
 use crate::ast::*;
 use crate::core::{GenericActionsExt, ResolvedRuleExt};
 use crate::proofs::proof_encoding::{EncodingState, ProofInstrumentor};
-use crate::proofs::proof_encoding_helpers::command_supports_proof_encoding;
+use crate::proofs::proof_encoding_helpers::{
+    command_supports_proof_encoding, ProofEncodingUnsupportedReason,
+};
 use crate::proofs::proof_extraction::ProveExistsError;
 use crate::proofs::proof_format::{ProofId, ProofStore};
 use crate::proofs::proof_normal_form::proof_form;
@@ -1541,10 +1543,13 @@ impl EGraph {
             let typechecked = original_typechecking.typecheck_program(&desugared)?;
 
             for command in &typechecked {
-                if !command_supports_proof_encoding(&command.to_command(), &self.type_info) {
+                if let Err(reason) =
+                    command_supports_proof_encoding(&command.to_command(), &self.type_info)
+                {
                     let command_text = format!("{}", command.to_command());
                     return Err(Error::UnsupportedProofCommand {
                         command: command_text,
+                        reason,
                     });
                 }
             }
@@ -2070,11 +2075,15 @@ pub enum Error {
     InputFileFormatError(String),
     #[error(
         "Command is not supported by the current proof term encoding implementation.\n\
+         Reason: {reason}\n\
          This typically means the command uses constructs that cannot yet be represented as proof terms.\n\
          Consider disabling proof term encoding for this run or rewriting the command to avoid unsupported features.\n\
          Offending command: {command}"
     )]
-    UnsupportedProofCommand { command: String },
+    UnsupportedProofCommand {
+        command: String,
+        reason: ProofEncodingUnsupportedReason,
+    },
 }
 
 #[cfg(test)]

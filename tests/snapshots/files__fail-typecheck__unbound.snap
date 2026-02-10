@@ -1,0 +1,6 @@
+---
+source: tests/files.rs
+expression: err_msg
+---
+In 6:33-33 of tests/fail-typecheck/unbound.egg: i
+Unbound symbol i

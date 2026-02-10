@@ -1,0 +1,6 @@
+---
+source: tests/files.rs
+expression: err_msg
+---
+In 1:1-22 of tests/fail-typecheck/looking_up_nonconstructor_in_action_case_union.egg: (function f (i64) i64)
+parse error: functions are required to specify merge behaviour

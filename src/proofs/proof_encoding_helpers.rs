@@ -452,10 +452,35 @@ pub fn file_supports_proofs(path: &Path) -> bool {
     program_supports_proofs(&desugared, &egraph.type_info)
 }
 
+/// Reasons why a command doesn't support proof encoding
+#[derive(Debug, Clone, thiserror::Error)]
+pub enum ProofEncodingUnsupportedReason {
+    #[error("primitive operation lacks a validator function")]
+    PrimitiveWithoutValidator,
+    #[error(
+        "action contains a function lookup. Finding the output of a function is only supported in queries."
+    )]
+    FunctionLookupInAction,
+    #[error(
+        "sort has a presort (custom sort container implementation). Custom sorts are not supported by proof encoding."
+    )]
+    SortWithPresort,
+    #[error("user-defined commands are not supported.")]
+    UserDefinedCommand,
+    #[error("input commands are not supported.")]
+    InputCommand,
+    #[error("missing merge function. All functions need to specify a :merge function.")]
+    NoMergeOnNonGlobalFunction,
+    #[error(
+        "let binding with a primitive in the body. For silly internal reasons, we don't support primitive bindings for proofs at the moment, sorry."
+    )]
+    LetBindingWithNonEqSort,
+}
+
 /// Checks whether a desugared program supports proof encoding.
 pub fn program_supports_proofs(commands: &[ResolvedCommand], type_info: &TypeInfo) -> bool {
     for command in commands {
-        if !command_supports_proof_encoding(command, type_info) {
+        if command_supports_proof_encoding(command, type_info).is_err() {
             return false;
         }
     }
@@ -494,10 +519,11 @@ fn action_has_function_lookup(action: &ResolvedAction, type_info: &TypeInfo) -> 
 }
 
 /// Checks whether a resolved command supports proof encoding.
+/// Returns Ok(()) if supported, or Err with the reason if not.
 pub(crate) fn command_supports_proof_encoding(
     command: &ResolvedCommand,
     type_info: &TypeInfo,
-) -> bool {
+) -> Result<(), ProofEncodingUnsupportedReason> {
     // Check all expressions for primitives without validators
     let mut all_primitives_have_validators = true;
     command.clone().visit_exprs(&mut |expr| {
@@ -508,7 +534,7 @@ pub(crate) fn command_supports_proof_encoding(
     });
 
     if !all_primitives_have_validators {
-        return false;
+        return Err(ProofEncodingUnsupportedReason::PrimitiveWithoutValidator);
     }
 
     // Check actions (not queries) for function lookups
@@ -523,20 +549,28 @@ pub(crate) fn command_supports_proof_encoding(
     });
 
     if has_function_lookup_in_action {
-        return false;
+        return Err(ProofEncodingUnsupportedReason::FunctionLookupInAction);
     }
 
     // Now check command-specific constraints
     match command {
-        GenericCommand::Sort { presort_and_args: Some(_), .. }
-        | GenericCommand::UserDefined(..)
-        | GenericCommand::Input { .. } => false,
+        GenericCommand::Sort {
+            presort_and_args: Some(_),
+            ..
+        } => Err(ProofEncodingUnsupportedReason::SortWithPresort),
+        GenericCommand::UserDefined(..) => Err(ProofEncodingUnsupportedReason::UserDefinedCommand),
+        GenericCommand::Input { .. } => Err(ProofEncodingUnsupportedReason::InputCommand),
         // Extract commands can't have non-global function lookups
         // because instrument_action_expr doesn't support them
         // (global function calls are fine - they get desugared to constructors)
         GenericCommand::Extract(_, expr, variants) => {
-            type_info.expr_has_function_lookup(expr).is_none()
-                && type_info.expr_has_function_lookup(variants).is_none()
+            if type_info.expr_has_function_lookup(expr).is_some()
+                || type_info.expr_has_function_lookup(variants).is_some()
+            {
+                Err(ProofEncodingUnsupportedReason::FunctionLookupInAction)
+            } else {
+                Ok(())
+            }
         }
         // no-merge on a non-global function
         // To add support: https://github.com/egraphs-good/egglog/issues/774
@@ -544,20 +578,29 @@ pub(crate) fn command_supports_proof_encoding(
             merge: None, name, ..
         } => {
             if type_info.is_global(name) {
-                return true;
+                Ok(())
+            } else {
+                Err(ProofEncodingUnsupportedReason::NoMergeOnNonGlobalFunction)
             }
-            false
         }
         // let binding with non-eq sort not supported by proof_global_desugar
         ResolvedCommand::Action(ResolvedAction::Let(_, _, expr)) => {
             // let binding with non-eq sort not supported by proof_global_desugar
             // we detect as setting something that is no-merge to a primitive not supported (global primitive binding)
-            expr.output_type().is_eq_sort()
+            if expr.output_type().is_eq_sort() {
+                Ok(())
+            } else {
+                Err(ProofEncodingUnsupportedReason::LetBindingWithNonEqSort)
+            }
         }
         // After global desugar it may look like this
         ResolvedCommand::Action(ResolvedAction::Set(_span, head, _children, expr)) => {
-            !type_info.is_global(head.name()) || expr.output_type().is_eq_sort()
+            if !type_info.is_global(head.name()) || expr.output_type().is_eq_sort() {
+                Ok(())
+            } else {
+                Err(ProofEncodingUnsupportedReason::LetBindingWithNonEqSort)
+            }
         }
-        _ => true,
+        _ => Ok(()),
     }
 }

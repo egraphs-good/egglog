@@ -1,0 +1,6 @@
+---
+source: tests/files.rs
+expression: err_msg
+---
+In 1:1-15 of tests/fail-typecheck/set-a-primitive.egg: (set (+ 1 2) 3)
+Unbound function +

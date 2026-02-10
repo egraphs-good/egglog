@@ -1,0 +1,7 @@
+---
+source: tests/files.rs
+expression: err_msg
+---
+In 4:1-17 of tests/fail-typecheck/shadow-global.egg: (let $a (Wrap 1))
+In 5:1-17 of tests/fail-typecheck/shadow-global.egg: (let $a (Wrap 2))
+Shadowing is not allowed, but found $a

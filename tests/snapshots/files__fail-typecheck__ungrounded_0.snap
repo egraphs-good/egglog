@@ -1,0 +1,6 @@
+---
+source: tests/files.rs
+expression: err_msg
+---
+In 4:1-20 of tests/fail-typecheck/ungrounded-0.egg: (birewrite (S1 x) x)
+Variable x is ungrounded

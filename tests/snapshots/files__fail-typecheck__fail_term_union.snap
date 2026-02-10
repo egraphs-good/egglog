@@ -1,0 +1,6 @@
+---
+source: tests/files.rs
+expression: err_msg
+---
+In 13:1-35 of tests/fail-typecheck/fail_term_union.egg: (union (term-fn 1 2) (term-fn 3 4))
+Cannot union values of sort TermSort because it is marked as non-unionable (from :term or relation)

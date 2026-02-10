@@ -39,6 +39,7 @@ impl Run {
 
     /// Extraction results may differ slightly due to the proof encoding when multiple
     /// solutions have the same cost. We filter the output to include only things that remain the same.
+    #[allow(dead_code)]
     fn outputs_to_snapshot_preserved_across_treatments(&self, outputs: &[CommandOutput]) -> String {
         outputs
             .iter()
@@ -61,7 +62,7 @@ impl Run {
         let program = std::fs::read_to_string(&self.path)
             .unwrap_or_else(|err| panic!("Couldn't read {:?}: {:?}", self.path, err));
 
-        let _outputs = if !self.desugar {
+        let result = if !self.desugar {
             self.test_program(
                 self.path.to_str().map(String::from),
                 &program,
@@ -86,27 +87,37 @@ impl Run {
         };
 
         // Debug mode enables parallelism which can lead to non-deterministic output ordering
-        if !self.should_fail()
-            && !self.should_skip_snapshot()
-            && _outputs
-                .iter()
-                .any(|o| !matches!(o, CommandOutput::RunSchedule(..)))
-        {
-            // Use base snapshot name (without desugar/term_encoding/proofs suffixes)
-            // so all variants compare against the same expected output
-            // proof_testing has different output due to automatic prove-exists, so it uses separate snapshots
-            let name = self.name().to_string();
-            let snapshot_content = self.outputs_to_snapshot(&_outputs);
-            insta::assert_snapshot!(name, snapshot_content);
+        if !self.should_skip_snapshot() {
+            match &result {
+                Ok(outputs)
+                    if outputs
+                        .iter()
+                        .any(|o| !matches!(o, CommandOutput::RunSchedule(..))) =>
+                {
+                    // Use base snapshot name (without desugar/term_encoding/proofs suffixes)
+                    // so all variants compare against the same expected output
+                    // proof_testing has different output due to automatic prove-exists, so it uses separate snapshots
+                    let name = self.name().to_string();
+                    let snapshot_content = self.outputs_to_snapshot(outputs);
+                    insta::assert_snapshot!(name, snapshot_content);
 
-            if !self.proof_testing {
-                let snapshot_name_across_treatments = self.snapshot_name_across_treatments();
-                let snapshot_content_across_treatments =
-                    self.outputs_to_snapshot_preserved_across_treatments(&_outputs);
-                insta::assert_snapshot!(
-                    snapshot_name_across_treatments,
-                    snapshot_content_across_treatments
-                );
+                    if !self.proof_testing {
+                        let snapshot_name_across_treatments =
+                            self.snapshot_name_across_treatments();
+                        let snapshot_content_across_treatments =
+                            self.outputs_to_snapshot_preserved_across_treatments(outputs);
+                        insta::assert_snapshot!(
+                            snapshot_name_across_treatments,
+                            snapshot_content_across_treatments
+                        );
+                    }
+                }
+                Err(err_msg) => {
+                    // Snapshot the error message for fail-typecheck tests
+                    let name = self.name().to_string();
+                    insta::assert_snapshot!(name, err_msg);
+                }
+                _ => {}
             }
         }
     }
@@ -141,7 +152,7 @@ impl Run {
         filename: Option<String>,
         program: &str,
         message: &str,
-    ) -> Vec<CommandOutput> {
+    ) -> Result<Vec<CommandOutput>, String> {
         let mut egraph = self.egraph();
 
         match egraph.parse_and_run_program(filename, program) {
@@ -172,14 +183,14 @@ impl Run {
                     serialized.inline_leaves();
                     serialized.to_dot();
 
-                    msgs
+                    Ok(msgs)
                 }
             }
             Err(err) => {
                 if !self.should_fail() {
                     panic!("{}: {err}", message)
                 }
-                vec![]
+                Err(err.to_string())
             }
         }
     }

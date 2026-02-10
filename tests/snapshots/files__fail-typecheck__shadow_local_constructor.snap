@@ -1,0 +1,7 @@
+---
+source: tests/files.rs
+expression: err_msg
+---
+In 2:3-12 of tests/fail-typecheck/shadow-local-constructor.egg: (Wrap i64)
+In 6:8-19 of tests/fail-typecheck/shadow-local-constructor.egg: (let Wrap 2)
+Shadowing is not allowed, but found Wrap

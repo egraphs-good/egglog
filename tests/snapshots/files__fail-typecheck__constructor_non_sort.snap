@@ -1,0 +1,6 @@
+---
+source: tests/files.rs
+expression: err_msg
+---
+In 1:1-22 of tests/fail-typecheck/constructor_non_sort.egg: (constructor f () i64)
+The output type of constructor function f must be sort

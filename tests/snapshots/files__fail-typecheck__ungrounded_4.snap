@@ -1,0 +1,12 @@
+---
+source: tests/files.rs
+expression: err_msg
+---
+In 5:1-11:43 of tests/fail-typecheck/ungrounded-4.egg: (rule
+ ((= e1 (F (vec-of "a" "b") (vec-of a b)))
+  (= e2 (F (vec-of "a" "b") (vec-of a b)))
+  (= e3 (F (vec-of "a" "b") (vec-of a c)))
+  (= e4 (F (vec-of "a" "b") (vec-of b c))))
+ ((F (vec-of "a" "b" "c") (vec-of a b c))
+  (F (vec-of "a" "b" "c") (vec-of a b c))))
+Variable c is ungrounded

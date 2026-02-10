@@ -1,0 +1,5 @@
+---
+source: tests/files.rs
+expression: err_msg
+---
+Function type mismatch: expected Math => i64, actual Math => Math

@@ -543,11 +543,14 @@ impl<C: Cost + Ord + Eq + Clone + Debug> Extractor<C> {
         value: Value,
         sort: ArcSort,
     ) -> Option<(C, TermId)> {
-        match self.compute_cost_node(egraph, value, &sort) {
+        // Canonicalize the value using the union-find if available (for term-encoding mode)
+        let canonical_value = self.find_canonical(egraph, value, &sort);
+
+        match self.compute_cost_node(egraph, canonical_value, &sort) {
             Some(best_cost) => {
                 log::debug!("Best cost for the extract root: {:?}", best_cost);
 
-                let term = self.reconstruct_termdag_node(egraph, termdag, value, &sort);
+                let term = self.reconstruct_termdag_node(egraph, termdag, canonical_value, &sort);
 
                 Some((best_cost, term))
             }
@@ -595,12 +598,14 @@ impl<C: Cost + Ord + Eq + Clone + Debug> Extractor<C> {
 
         // Single lookup in UF table - it's guaranteed to be one hop to canonical
         let mut canonical = value;
-        egraph.backend.for_each(uf_func.backend_id, |row: egglog_bridge::FunctionRow| {
-            // UF table has (child, parent) as inputs
-            if row.vals[0] == value {
-                canonical = row.vals[1];
-            }
-        });
+        egraph
+            .backend
+            .for_each(uf_func.backend_id, |row: egglog_bridge::FunctionRow| {
+                // UF table has (child, parent) as inputs
+                if row.vals[0] == value {
+                    canonical = row.vals[1];
+                }
+            });
 
         canonical
     }
@@ -671,7 +676,10 @@ impl<C: Cost + Ord + Eq + Clone + Debug> Extractor<C> {
                     ch_terms.push(self.reconstruct_termdag_node(egraph, termdag, *value, sort));
                 }
                 // Use extraction_term_name for view tables (maps to the original constructor)
-                res.push((cost, termdag.app(func.extraction_term_name().to_string(), ch_terms)));
+                res.push((
+                    cost,
+                    termdag.app(func.extraction_term_name().to_string(), ch_terms),
+                ));
             }
 
             res

@@ -1,0 +1,38 @@
+---
+source: tests/files.rs
+expression: snapshot_content
+---
+(let t0 (g* (g* (AConst) (AConst)) (g* (AConst) (AConst))))
+(let t1 (g* t0 t0))
+(let prop0 (= t1 (IConst)))
+(let t2 (g* (AConst) (g* (AConst) (g* (AConst) (AConst)))))
+(let prf0
+  (Rule
+              (= t0 (IConst))
+              (name "(rewrite (g* $A (g* $A (g* $A $A))) $I)")
+              (premises
+                (Sym
+                  (= t0 t2)
+                  (Rule
+                    (= t2 t0)
+                    (name "(birewrite (g* (g* a b) c) (g* a (g* b c)))=>")
+                    (premises (Fiat (= t0 t0)))
+                    (substitution
+                      (c (g* (AConst) (AConst)))
+                      (a (AConst))
+                      (b (AConst))
+                      (@rewrite_var__ t0)))))
+              (substitution (@rewrite_var__4 t0) ($A (AConst)))))
+(Trans
+  prop0
+  (Rule
+    prop0
+    (name "(rewrite (g* $I a) a)")
+    (premises
+      (Congr
+        (= t1 (g* (IConst) (IConst)))
+        (Congr (= t1 (g* t0 (IConst))) (Fiat (= t1 t1)) prf0 1)
+        prf0
+        0))
+    (substitution (@rewrite_var__2 t1) (a (IConst)) ($I (IConst))))
+  (Fiat (= (IConst) (IConst))))(Fiat (= () ()))(Fiat (= () ()))
