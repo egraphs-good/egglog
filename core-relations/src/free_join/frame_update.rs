@@ -27,6 +27,7 @@ pub(super) enum UpdateCell {
     EndFrame,
 }
 
+#[derive(Debug)]
 pub(super) enum UpdateInstr {
     PushBinding(Variable, Value),
     RefineAtom(AtomId, Subset),
@@ -88,11 +89,13 @@ impl FrameUpdates {
     }
 
     pub(super) fn drain(&mut self, f: impl FnMut(UpdateInstr)) {
-        let start = if matches!(self.updates.first(), Some(UpdateCell::EndFrame)) {
-            1 // Skip the first EndFrame
-        } else {
-            0
-        };
+        // TODO: why do we skip the first endframe?
+        // let start = if matches!(self.updates.first(), Some(UpdateCell::EndFrame)) {
+        //     1 // Skip the first EndFrame
+        // } else {
+        //     0
+        // };
+        let start = 0;
         self.updates
             .drain(start..)
             .map(|cell| match cell {
