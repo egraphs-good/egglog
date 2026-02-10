@@ -91,6 +91,25 @@ impl Debug for PrimitiveWithId {
     }
 }
 
+/// Check if an expression contains function lookups (FunctionSubtype::Custom calls).
+/// Returns Some(span) if a lookup is found, None otherwise.
+pub fn expr_has_function_lookup(expr: &ResolvedExpr) -> Option<Span> {
+    use ast::GenericExpr;
+
+    let mut lookup_span = None;
+    expr.walk(
+        &mut |e| {
+            if let GenericExpr::Call(span, ResolvedCall::Func(func_type), _) = e {
+                if func_type.subtype == FunctionSubtype::Custom {
+                    lookup_span = Some(span.clone());
+                }
+            }
+        },
+        &mut |_| {},
+    );
+    lookup_span
+}
+
 /// Stores resolved typechecking information.
 #[derive(Clone, Default)]
 pub struct TypeInfo {
@@ -633,55 +652,38 @@ impl TypeInfo {
         })
     }
 
-    fn check_lookup_expr(expr: &GenericExpr<ResolvedCall, ResolvedVar>) -> Result<(), TypeError> {
-        match expr {
-            GenericExpr::Call(span, head, args) => {
-                match head {
-                    ResolvedCall::Func(t) => {
-                        // Only allowed to lookup constructor
-                        if t.subtype != FunctionSubtype::Constructor {
-                            Err(TypeError::LookupInRuleDisallowed(
-                                head.to_string(),
-                                span.clone(),
-                            ))
-                        } else {
-                            Ok(())
-                        }
-                    }
-                    ResolvedCall::Primitive(_) => Ok(()),
-                }?;
-                for arg in args.iter() {
-                    Self::check_lookup_expr(arg)?
-                }
-                Ok(())
-            }
-            _ => Ok(()),
+    fn check_lookup_expr(expr: &ResolvedExpr) -> Result<(), TypeError> {
+        if let Some(span) = expr_has_function_lookup(expr) {
+            return Err(TypeError::LookupInRuleDisallowed(
+                "function".to_string(),
+                span,
+            ));
         }
+        Ok(())
     }
 
     fn check_lookup_actions(actions: &ResolvedActions) -> Result<(), TypeError> {
         for action in actions.iter() {
             match action {
-                GenericAction::Let(_, _, rhs) => Self::check_lookup_expr(rhs),
+                GenericAction::Let(_, _, rhs) => Self::check_lookup_expr(rhs)?,
                 GenericAction::Set(_, _, args, rhs) => {
                     for arg in args.iter() {
-                        Self::check_lookup_expr(arg)?
+                        Self::check_lookup_expr(arg)?;
                     }
-                    Self::check_lookup_expr(rhs)
+                    Self::check_lookup_expr(rhs)?;
                 }
                 GenericAction::Union(_, lhs, rhs) => {
                     Self::check_lookup_expr(lhs)?;
-                    Self::check_lookup_expr(rhs)
+                    Self::check_lookup_expr(rhs)?;
                 }
                 GenericAction::Change(_, _, _, args) => {
                     for arg in args.iter() {
-                        Self::check_lookup_expr(arg)?
+                        Self::check_lookup_expr(arg)?;
                     }
-                    Ok(())
                 }
-                GenericAction::Panic(..) => Ok(()),
-                GenericAction::Expr(_, expr) => Self::check_lookup_expr(expr),
-            }?
+                GenericAction::Panic(..) => {}
+                GenericAction::Expr(_, expr) => Self::check_lookup_expr(expr)?,
+            }
         }
         Ok(())
     }

@@ -10,6 +10,7 @@ use crate::{
         ResolvedExprExt, Schedule,
     },
     proofs::proof_encoding::ProofInstrumentor,
+    typechecking::expr_has_function_lookup,
     util::{FreshGen, HashMap, SymbolGen},
 };
 
@@ -481,12 +482,24 @@ fn expr_primitives_have_validators(expr: &ResolvedExpr) -> bool {
     all_valid
 }
 
+/// Check if an action contains function lookups in any of its expressions
+fn action_has_function_lookup(action: &ResolvedAction) -> bool {
+    let mut has_lookup = false;
+    action.clone().visit_exprs(&mut |expr| {
+        if expr_has_function_lookup(&expr).is_some() {
+            has_lookup = true;
+        }
+        expr
+    });
+    has_lookup
+}
+
 /// Checks whether a resolved command supports proof encoding.
 pub(crate) fn command_supports_proof_encoding(
     command: &ResolvedCommand,
     type_info: &TypeInfo,
 ) -> bool {
-    // First, use visit_exprs to check all expressions in the command
+    // Check all expressions for primitives without validators
     let mut all_primitives_have_validators = true;
     command.clone().visit_exprs(&mut |expr| {
         if !expr_primitives_have_validators(&expr) {
@@ -496,6 +509,20 @@ pub(crate) fn command_supports_proof_encoding(
     });
 
     if !all_primitives_have_validators {
+        return false;
+    }
+
+    // Check actions (not queries) for function lookups
+    // Egglog supports lookups in actions at the global level, but not in proofs mode
+    let mut has_function_lookup_in_action = false;
+    command.clone().visit_actions(&mut |action| {
+        if action_has_function_lookup(&action) {
+            has_function_lookup_in_action = true;
+        }
+        action
+    });
+
+    if has_function_lookup_in_action {
         return false;
     }
 
