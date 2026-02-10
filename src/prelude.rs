@@ -306,15 +306,13 @@ pub fn rule(
     facts: Facts<String, String>,
     actions: Actions,
 ) -> Result<Vec<CommandOutput>, Error> {
-    let mut rule = Rule {
+    let rule = Rule {
         span: span!(),
         head: actions,
         body: facts.0,
         name: "".into(),
         ruleset: ruleset.into(),
     };
-
-    rule.name = format!("{rule:?}");
 
     egraph.run_program(vec![Command::Rule { rule }])
 }
@@ -664,7 +662,13 @@ pub fn query(
 
 /// Declare a new sort.
 pub fn add_sort(egraph: &mut EGraph, name: &str) -> Result<Vec<CommandOutput>, Error> {
-    egraph.run_program(vec![Command::Sort(span!(), name.to_owned(), None)])
+    egraph.run_program(vec![Command::Sort {
+        span: span!(),
+        name: name.to_owned(),
+        presort_and_args: None,
+        uf: None,
+        unionable: true,
+    }])
 }
 
 /// Declare a new function table.
@@ -696,6 +700,7 @@ pub fn add_constructor(
         schema,
         cost,
         unextractable,
+        term_constructor: None,
     }])
 }
 

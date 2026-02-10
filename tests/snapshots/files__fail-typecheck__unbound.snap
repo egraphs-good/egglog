@@ -1,0 +1,6 @@
+---
+source: tests/files.rs
+expression: err_msg
+---
+In 6:33-33 of unbound.egg: i
+Unbound symbol i

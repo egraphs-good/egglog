@@ -1,0 +1,6 @@
+---
+source: tests/files.rs
+expression: err_msg
+---
+In 5:1-15 of union_non_sort.egg: (union (f) (g))
+Cannot union values of sort i64

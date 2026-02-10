@@ -74,7 +74,14 @@ impl Display for Span {
                     .file
                     .get_location((span.j.saturating_sub(1)).max(span.i));
                 let quote = self.string();
-                match (&span.file.name, start_line == end_line) {
+                // Use just the file name, not the full path, for cross-platform consistency in snapshots
+                let display_name = span.file.name.as_ref().map(|path| {
+                    std::path::Path::new(path)
+                        .file_name()
+                        .and_then(|n| n.to_str())
+                        .unwrap_or(path)
+                });
+                match (&display_name, start_line == end_line) {
                     (Some(filename), true) => write!(
                         f,
                         "In {}:{}-{} of {filename}: {quote}",

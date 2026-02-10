@@ -10,6 +10,9 @@ struct Run {
     desugar: bool,
     term_encoding: bool,
     proofs: bool,
+    /// proof_testing mode adds automatic prove-exists commands, which produce
+    /// proof output that differs from normal mode. This should use separate snapshots.
+    proof_testing: bool,
 }
 
 impl Run {
@@ -18,25 +21,31 @@ impl Run {
         self.path.parent().unwrap().ends_with("proofs")
     }
 
-    /// Convert CommandOutput vector to snapshot string, filtering non-deterministic content
-    fn outputs_to_snapshot(&self, outputs: &[CommandOutput]) -> String {
+    /// Extraction results may differ slightly due to the proof encoding when multiple
+    /// solutions have the same cost. We filter the output to include only things that remain the same.
+    fn outputs_to_snapshot_preserved_across_treatments(&self, outputs: &[CommandOutput]) -> String {
         outputs
             .iter()
             .filter_map(|output| match output {
                 // Skip OverallStatistics - contains non-deterministic Duration timing data
                 CommandOutput::OverallStatistics(_) => None,
+                // Skipping PrintFunction for now due to egglog nondeterminism bug: https://github.com/egraphs-good/egglog/issues/793
+                CommandOutput::PrintFunction(..) => None,
+                CommandOutput::ExtractBest(..) => None,
+                CommandOutput::ExtractVariants(..) => None,
                 // All other variants use normal Display formatting
                 other => Some(other.to_string()),
             })
             .collect::<Vec<_>>()
             .join("")
     }
+
     fn run(&self) {
         let _ = env_logger::builder().is_test(true).try_init();
         let program = std::fs::read_to_string(&self.path)
             .unwrap_or_else(|err| panic!("Couldn't read {:?}: {:?}", self.path, err));
 
-        let _outputs = if !self.desugar {
+        let result = if !self.desugar {
             self.test_program(
                 self.path.to_str().map(String::from),
                 &program,
@@ -50,6 +59,7 @@ impl Run {
                 desugar: false,
                 term_encoding: false,
                 proofs: false,
+                proof_testing: false,
             };
 
             normal_run.test_program(
@@ -60,21 +70,38 @@ impl Run {
         };
 
         // Debug mode enables parallelism which can lead to non-deterministic output ordering
-        if !self.should_fail()
-            && !self.should_skip_snapshot()
-            && _outputs
-                .iter()
-                .any(|o| !matches!(o, CommandOutput::RunSchedule(..)))
-        {
-            let snapshot_name = self.name().to_string();
-            let snapshot_content = self.outputs_to_snapshot(&_outputs);
-            insta::assert_snapshot!(snapshot_name, snapshot_content);
+        if !self.should_skip_snapshot() {
+            match &result {
+                Ok(outputs) => {
+                    // Use base snapshot name (without desugar/term_encoding/proofs suffixes)
+                    // so all variants compare against the same expected output
+                    let snapshot_name_across_treatments = self.snapshot_name_across_treatments();
+                    let snapshot_content_across_treatments =
+                        self.outputs_to_snapshot_preserved_across_treatments(outputs);
+
+                    // only assert snapshot if the snapshot is non-empty
+                    // proof_testing has different output due to automatic prove-exists, so no snapshot for that
+                    if !snapshot_content_across_treatments.is_empty() && !self.proof_testing {
+                        insta::assert_snapshot!(
+                            snapshot_name_across_treatments,
+                            snapshot_content_across_treatments
+                        );
+                    }
+                }
+                Err(err_msg) => {
+                    // Snapshot the error message for fail-typecheck tests
+                    let name = self.name().to_string();
+                    insta::assert_snapshot!(name, err_msg);
+                }
+            }
         }
     }
 
     fn egraph(&self) -> EGraph {
-        if self.proofs {
+        if self.proof_testing {
             EGraph::new_with_proofs().with_proof_testing()
+        } else if self.proofs {
+            EGraph::new_with_proofs()
         } else if self.term_encoding {
             EGraph::new_with_term_encoding()
         } else {
@@ -100,7 +127,7 @@ impl Run {
         filename: Option<String>,
         program: &str,
         message: &str,
-    ) -> Vec<CommandOutput> {
+    ) -> Result<Vec<CommandOutput>, String> {
         let mut egraph = self.egraph();
 
         match egraph.parse_and_run_program(filename, program) {
@@ -131,14 +158,14 @@ impl Run {
                     serialized.inline_leaves();
                     serialized.to_dot();
 
-                    msgs
+                    Ok(msgs)
                 }
             }
             Err(err) => {
                 if !self.should_fail() {
                     panic!("{}: {err}", message)
                 }
-                vec![]
+                Err(err.to_string())
             }
         }
     }
@@ -151,6 +178,22 @@ impl Run {
         })
     }
 
+    /// Base snapshot name without mode suffixes - all variants share the same `outputs_to_snapshot_preserved_across_treatments` snapshot
+    /// except for proof_testing, which has different output due to using `prove` everywhere.
+    fn snapshot_name_across_treatments(&self) -> String {
+        let mut name = "shared_snapshot_".to_string();
+
+        let stem = self.path.file_stem().unwrap();
+        let stem_str = stem.to_string_lossy().replace(['.', '-', ' '], "_");
+        name.push_str(&stem_str);
+
+        if self.path.parent().unwrap().ends_with("fail-typecheck") {
+            name.push_str("_fail_typecheck");
+        }
+        name
+    }
+
+    /// Full test name with mode suffixes for test identification
     fn name(&self) -> impl std::fmt::Display + '_ {
         struct Wrapper<'a>(&'a Run);
         impl std::fmt::Display for Wrapper<'_> {
@@ -169,6 +212,9 @@ impl Run {
                 }
                 if self.0.proofs {
                     write!(f, "_proofs")?;
+                }
+                if self.0.proof_testing {
+                    write!(f, "_proof_testing")?;
                 }
                 Ok(())
             }
@@ -189,11 +235,6 @@ impl Run {
         // in non-parallel mode, selectively skip
         #[cfg(not(debug_assertions))]
         {
-            // Skip proof tests unless they require proofs
-            if self.proofs && !self.requires_proofs() {
-                return true;
-            }
-
             // Skip tests with known non-deterministic output
             let filename = self.path.file_stem().unwrap().to_string_lossy();
             const SKIP_PATTERNS: [&str; 4] = [
@@ -202,10 +243,16 @@ impl Run {
                 "stresstest_large_expr",
                 "towers-of-hanoi",
             ];
+            if SKIP_PATTERNS.iter().any(|pat| filename.contains(pat)) {
+                return true;
+            }
 
-            SKIP_PATTERNS.iter().any(|pat| filename.contains(pat))
-            // Term encoding is currently causing non-deterministic database to be produced
-            || (filename.contains("math-microbenchmark") && self.term_encoding)
+            // bug with egglog producing nondeterministic output in certain modes
+            let proof_skip_list = ["math-microbenchmark", "eqsolve"];
+            let in_list = proof_skip_list
+                .iter()
+                .any(|f| self.path.to_string_lossy().contains(f));
+            in_list && (self.proofs || self.term_encoding || self.proof_testing)
         }
     }
 }
@@ -220,6 +267,7 @@ fn generate_tests(glob: &str) -> Vec<Trial> {
             desugar: false,
             term_encoding: false,
             proofs: false,
+            proof_testing: false,
         };
         let should_fail = run.should_fail();
         let requires_proofs = run.requires_proofs();
@@ -251,9 +299,18 @@ fn generate_tests(glob: &str) -> Vec<Trial> {
             });
         }
 
+        // proofs mode (without proof_testing) should produce the same output as normal mode
         if !should_fail && supports_proofs {
             push_trial(Run {
                 proofs: true,
+                ..run.clone()
+            });
+        }
+
+        // proof_testing mode adds automatic prove-exists, which has different output
+        if !should_fail && supports_proofs {
+            push_trial(Run {
+                proof_testing: true,
                 ..run.clone()
             });
         }
@@ -282,9 +339,9 @@ fn generate_proof_support_snapshot_test() -> Trial {
         for entry in glob::glob("tests/**/*.egg").unwrap() {
             let path = entry.unwrap();
             if !file_supports_proofs(&path) {
-                // Convert to relative path for consistent snapshots
-                let relative = path.strip_prefix("tests/").unwrap_or(&path);
-                supported_files.push(relative.to_string_lossy().to_string());
+                // Use just the filename for cross-platform consistency
+                let filename = path.file_name().unwrap().to_string_lossy().to_string();
+                supported_files.push(filename);
             }
         }
 

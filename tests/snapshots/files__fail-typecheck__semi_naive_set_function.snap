@@ -1,0 +1,6 @@
+---
+source: tests/files.rs
+expression: err_msg
+---
+In 18:34-38 of semi_naive_set_function.egg: (f 3)
+Value lookup of non-constructor function function in rule is disallowed.

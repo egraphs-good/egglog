@@ -1,9 +1,0 @@
----
-source: tests/files.rs
-expression: snapshot_content
----
-(
-   (f (f (Var "a3")))
-   (f (f (Var "b3")))
-   (intersect (f (f (Var "a1"))) (f (f (Var "a2"))))
-)

@@ -25,14 +25,12 @@ pub(crate) fn desugar_command(
             schema,
             cost,
             unextractable,
-        } => vec![NCommand::Function(FunctionDecl::constructor(
-            span,
-            name,
-            schema,
-            cost,
-            unextractable,
-            true,
-        ))],
+            term_constructor,
+        } => {
+            let mut fdecl = FunctionDecl::constructor(span, name, schema, cost, unextractable);
+            fdecl.term_constructor = term_constructor;
+            std::iter::once(NCommand::Function(fdecl)).collect()
+        }
         Command::Relation { span, name, inputs } => desugar_relation(parser, span, name, inputs),
         Command::Datatype {
             span,
@@ -46,7 +44,13 @@ pub(crate) fn desugar_command(
                 let span = datatype.0.clone();
                 let name = datatype.1.clone();
                 if let Subdatatypes::Variants(..) = datatype.2 {
-                    res.push(NCommand::Sort(span, name, None));
+                    res.push(NCommand::Sort {
+                        span,
+                        name,
+                        presort_and_args: None,
+                        uf: None,
+                        unionable: true,
+                    });
                 }
             }
             let (variants_vec, sorts): (Vec<_>, Vec<_>) = datatypes
@@ -59,7 +63,13 @@ pub(crate) fn desugar_command(
                 let Subdatatypes::NewSort(sort, args) = sort.2 else {
                     unreachable!()
                 };
-                res.push(NCommand::Sort(span, name, Some((sort, args))));
+                res.push(NCommand::Sort {
+                    span,
+                    name,
+                    presort_and_args: Some((sort, args)),
+                    uf: None,
+                    unionable: true,
+                });
             }
 
             for variants in variants_vec {
@@ -77,7 +87,6 @@ pub(crate) fn desugar_command(
                         },
                         variant.cost,
                         false,
-                        true,
                     )));
                 }
             }
@@ -100,7 +109,19 @@ pub(crate) fn desugar_command(
             }
             vec![NCommand::NormRule { rule }]
         }
-        Command::Sort(span, sort, option) => vec![NCommand::Sort(span, sort, option)],
+        Command::Sort {
+            span,
+            name,
+            presort_and_args,
+            uf,
+            unionable,
+        } => vec![NCommand::Sort {
+            span,
+            name,
+            presort_and_args,
+            uf,
+            unionable,
+        }],
         Command::AddRuleset(span, name) => vec![NCommand::AddRuleset(span, name)],
         Command::UnstableCombinedRuleset(span, name, subrulesets) => {
             vec![NCommand::UnstableCombinedRuleset(span, name, subrulesets)]
@@ -176,7 +197,13 @@ fn desugar_prove(parser: &mut Parser, span: Span, query: Vec<Fact>) -> Vec<NComm
     let ruleset = parser.symbol_gen.fresh("exists");
     let name = parser.symbol_gen.fresh("prove_exists_rule");
     vec![
-        NCommand::Sort(span.clone(), fresh_sort.clone(), None),
+        NCommand::Sort {
+            span: span.clone(),
+            name: fresh_sort.clone(),
+            presort_and_args: None,
+            uf: None,
+            unionable: false,
+        },
         NCommand::Function(FunctionDecl::constructor(
             span.clone(),
             constructor_name.clone(),
@@ -185,7 +212,6 @@ fn desugar_prove(parser: &mut Parser, span: Span, query: Vec<Fact>) -> Vec<NComm
                 output: fresh_sort.clone(),
             },
             None,
-            false,
             false,
         )),
         NCommand::AddRuleset(span.clone(), ruleset.clone()),
@@ -216,22 +242,27 @@ fn desugar_prove(parser: &mut Parser, span: Span, query: Vec<Fact>) -> Vec<NComm
 }
 
 fn desugar_datatype(span: Span, name: String, variants: Vec<Variant>) -> Vec<NCommand> {
-    vec![NCommand::Sort(span.clone(), name.clone(), None)]
-        .into_iter()
-        .chain(variants.into_iter().map(|variant| {
-            NCommand::Function(FunctionDecl::constructor(
-                variant.span,
-                variant.name,
-                Schema {
-                    input: variant.types,
-                    output: name.clone(),
-                },
-                variant.cost,
-                variant.unextractable,
-                true,
-            ))
-        }))
-        .collect()
+    vec![NCommand::Sort {
+        span: span.clone(),
+        name: name.clone(),
+        presort_and_args: None,
+        uf: None,
+        unionable: true,
+    }]
+    .into_iter()
+    .chain(variants.into_iter().map(|variant| {
+        NCommand::Function(FunctionDecl::constructor(
+            variant.span,
+            variant.name,
+            Schema {
+                input: variant.types,
+                output: name.clone(),
+            },
+            variant.cost,
+            variant.unextractable,
+        ))
+    }))
+    .collect()
 }
 
 fn desugar_rewrite(
@@ -310,6 +341,7 @@ fn desugar_birewrite(
 }
 
 /// Desugar relation by making a new sort and a constructor for it.
+/// The sort is marked as non-unionable since relations don't support union.
 fn desugar_relation(
     parser: &mut Parser,
     span: Span,
@@ -319,7 +351,13 @@ fn desugar_relation(
     let dashes_removed = name.replace('-', "");
     let fresh_sort = parser.symbol_gen.fresh(&format!("{dashes_removed}Sort"));
     vec![
-        NCommand::Sort(span.clone(), fresh_sort.clone(), None),
+        NCommand::Sort {
+            span: span.clone(),
+            name: fresh_sort.clone(),
+            presort_and_args: None,
+            uf: None,
+            unionable: false,
+        },
         NCommand::Function(FunctionDecl::constructor(
             span,
             name,
@@ -328,7 +366,6 @@ fn desugar_relation(
                 output: fresh_sort,
             },
             None,
-            false,
             false,
         )),
     ]

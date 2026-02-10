@@ -1,0 +1,6 @@
+---
+source: tests/files.rs
+expression: err_msg
+---
+In 2:1-24 of ungrounded-1.egg: (rule ((= x y)) ((R x)))
+Variable x is ungrounded

@@ -1,0 +1,9 @@
+---
+source: tests/files.rs
+expression: err_msg
+---
+In 6:1-9:9 of ungrounded-3.egg: (rule
+ ((= e1 (F (vec-of "a" "b") (vec-of a b))))
+ ((R a)
+  (R b)))
+Variable b is ungrounded

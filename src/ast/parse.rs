@@ -255,23 +255,59 @@ impl Parser {
         }
 
         Ok(match head.as_str() {
-            "sort" => match tail {
-                [name] => vec![Command::Sort(span, name.expect_atom("sort name")?, None)],
-                [name, call] => {
-                    let (func, args, _) = call.expect_call("container sort declaration")?;
-                    vec![Command::Sort(
+            "sort" => {
+                // Parse sort - :uf and container sorts are mutually exclusive
+                // (sort <name>)
+                // (sort <name> :uf <uf-function>)
+                // (sort <name> (<container sort> <argument sort>*))
+                match tail {
+                    [name] => vec![Command::Sort {
                         span,
-                        name.expect_atom("sort name")?,
-                        Some((func, map_fallible(args, self, Self::parse_expr)?)),
-                    )]
+                        name: name.expect_atom("sort name")?,
+                        presort_and_args: None,
+                        uf: None,
+                        unionable: true,
+                    }],
+                    [name, call @ Sexp::List(..)] => {
+                        let (func, args, _) = call.expect_call("container sort declaration")?;
+                        vec![Command::Sort {
+                            span,
+                            name: name.expect_atom("sort name")?,
+                            presort_and_args: Some((
+                                func,
+                                map_fallible(args, self, Self::parse_expr)?,
+                            )),
+                            uf: None,
+                            unionable: true,
+                        }]
+                    }
+                    [name, rest @ ..] => {
+                        // Parse :uf annotation
+                        let uf = match self.parse_options(rest)?.as_slice() {
+                            [(":uf", [uf_func])] => Some(uf_func.expect_atom("uf function name")?),
+                            _ => {
+                                return error!(
+                                    span,
+                                    "usages:\n(sort <name>)\n(sort <name> :uf <uf-function>)\n(sort <name> (<container sort> <argument sort>*))"
+                                );
+                            }
+                        };
+                        vec![Command::Sort {
+                            span,
+                            name: name.expect_atom("sort name")?,
+                            presort_and_args: None,
+                            uf,
+                            unionable: true,
+                        }]
+                    }
+                    _ => {
+                        return error!(
+                            span,
+                            "usages:\n(sort <name>)\n(sort <name> :uf <uf-function>)\n(sort <name> (<container sort> <argument sort>*))"
+                        );
+                    }
                 }
-                _ => {
-                    return error!(
-                        span,
-                        "usages:\n(sort <name>)\n(sort <name> (<container sort> <argument sort>*))"
-                    );
-                }
-            },
+            }
             "datatype" => match tail {
                 [name, variants @ ..] => vec![Command::Datatype {
                     span,
@@ -307,32 +343,47 @@ impl Parser {
                     return error!(span, "usages:\n{a}\n{b}");
                 }
             },
-            "constructor" => match tail {
-                [name, inputs, output, rest @ ..] => {
-                    let mut cost = None;
-                    let mut unextractable = false;
-                    match self.parse_options(rest)?.as_slice() {
-                        [] => {}
-                        [(":unextractable", [])] => unextractable = true,
-                        [(":cost", [c])] => cost = Some(c.expect_uint("cost")?),
-                        _ => return error!(span, "could not parse constructor options"),
-                    }
+            "constructor" => {
+                // Parse constructor with optional annotations
+                // (constructor <name> (<input sort>*) <output sort>)
+                // (constructor <name> (<input sort>*) <output sort> :cost <cost>)
+                // (constructor <name> (<input sort>*) <output sort> :unextractable)
+                // (constructor <name> (<input sort>*) <output sort> :term-constructor <constructor name>)
+                match tail {
+                    [name, inputs, output, rest @ ..] => {
+                        let mut cost = None;
+                        let mut unextractable = false;
+                        let mut term_constructor = None;
+                        for (key, val) in self.parse_options(rest)? {
+                            match (key, val) {
+                                (":unextractable", []) => unextractable = true,
+                                (":cost", [c]) => cost = Some(c.expect_uint("cost")?),
+                                (":term-constructor", [tc]) => {
+                                    term_constructor =
+                                        Some(tc.expect_atom("term constructor name")?)
+                                }
+                                _ => return error!(span, "could not parse constructor options"),
+                            }
+                        }
 
-                    vec![Command::Constructor {
-                        span,
-                        name: name.expect_atom("constructor name")?,
-                        schema: self.parse_schema(inputs, output)?,
-                        cost,
-                        unextractable,
-                    }]
+                        vec![Command::Constructor {
+                            span,
+                            name: name.expect_atom("constructor name")?,
+                            schema: self.parse_schema(inputs, output)?,
+                            cost,
+                            unextractable,
+                            term_constructor,
+                        }]
+                    }
+                    _ => {
+                        let a = "(constructor <name> (<input sort>*) <output sort>)";
+                        let b = "(constructor <name> (<input sort>*) <output sort> :cost <cost>)";
+                        let c = "(constructor <name> (<input sort>*) <output sort> :unextractable)";
+                        let d = "(constructor <name> (<input sort>*) <output sort> :term-constructor <constructor name>)";
+                        return error!(span, "usages:\n{a}\n{b}\n{c}\n{d}");
+                    }
                 }
-                _ => {
-                    let a = "(constructor <name> (<input sort>*) <output sort>)";
-                    let b = "(constructor <name> (<input sort>*) <output sort> :cost <cost>)";
-                    let c = "(constructor <name> (<input sort>*) <output sort> :unextractable)";
-                    return error!(span, "usages:\n{a}\n{b}\n{c}");
-                }
-            },
+            }
             "relation" => match tail {
                 [name, inputs] => vec![Command::Relation {
                     span,

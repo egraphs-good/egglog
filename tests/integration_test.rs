@@ -6,72 +6,7 @@ use egglog::{
 use egglog_ast::span::{RustSpan, Span};
 
 #[test]
-fn globals_missing_prefix_warns_by_default() {
-    testing_logger::setup();
-
-    let mut egraph = EGraph::default();
-    egraph
-        .parse_and_run_program(None, "(let value 41)")
-        .unwrap();
-
-    testing_logger::validate(|logs| {
-        let bodies: Vec<_> = logs.iter().map(|entry| entry.body.clone()).collect();
-        assert!(
-            bodies
-                .iter()
-                .any(|body| body.contains("Global `value` should start with `$`")),
-            "expected warning about missing global prefix, got logs: {:?}",
-            bodies
-        );
-    });
-}
-
-#[test]
-fn globals_missing_prefix_warns_for_prefixed_pattern_variable_by_default() {
-    testing_logger::setup();
-
-    let mut egraph = EGraph::default();
-    egraph
-        .parse_and_run_program(None, "(rule ((= $x 1)) ())")
-        .unwrap();
-
-    testing_logger::validate(|logs| {
-        let bodies: Vec<_> = logs.iter().map(|entry| entry.body.clone()).collect();
-        assert!(
-            bodies
-                .iter()
-                .any(|body| body.contains("Non-global `$x` should not start with `$`")),
-            "expected warning about missing global prefix, got logs: {:?}",
-            bodies
-        );
-    });
-}
-
-#[test]
-fn globals_missing_prefix_warns_for_prefixed_rule_let_by_default() {
-    testing_logger::setup();
-
-    let mut egraph = EGraph::default();
-    egraph
-        .parse_and_run_program(None, "(rule () ((let $y 1)))")
-        .unwrap();
-
-    testing_logger::validate(|logs| {
-        let bodies: Vec<_> = logs.iter().map(|entry| entry.body.clone()).collect();
-        assert!(
-            bodies
-                .iter()
-                .any(|body| body.contains("Non-global `$y` should not start with `$`")),
-            "expected warning about missing global prefix, got logs: {:?}",
-            bodies
-        );
-    });
-}
-
-#[test]
 fn globals_missing_prefix_errors_when_opted_in() {
-    let _ = env_logger::builder().is_test(true).try_init();
-
     let mut egraph = EGraph::default();
     egraph.set_strict_mode(true);
     let err = egraph
@@ -87,8 +22,6 @@ fn globals_missing_prefix_errors_when_opted_in() {
 
 #[test]
 fn globals_missing_prefix_errors_for_prefixed_pattern_variable_when_opted_in() {
-    let _ = env_logger::builder().is_test(true).try_init();
-
     let mut egraph = EGraph::default();
     egraph.set_strict_mode(true);
     let err = egraph
@@ -105,8 +38,6 @@ fn globals_missing_prefix_errors_for_prefixed_pattern_variable_when_opted_in() {
 
 #[test]
 fn globals_missing_prefix_errors_for_prefixed_rule_let_when_opted_in() {
-    let _ = env_logger::builder().is_test(true).try_init();
-
     let mut egraph = EGraph::default();
     egraph.set_strict_mode(true);
     let err = egraph

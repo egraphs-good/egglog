@@ -1,0 +1,15 @@
+---
+source: tests/files.rs
+expression: err_msg
+---
+All alternative definitions considered failed
+  In 1:4-4 of arity-mismatch.egg: 1
+ Expect expression 1 to have type String, but get type i64
+  In 1:1-9 of arity-mismatch.egg: (+ 1 2 3)
+Arity mismatch, expected 2 args: (+ 1 2 3)
+  In 1:1-9 of arity-mismatch.egg: (+ 1 2 3)
+Arity mismatch, expected 2 args: (+ 1 2 3)
+  In 1:1-9 of arity-mismatch.egg: (+ 1 2 3)
+Arity mismatch, expected 2 args: (+ 1 2 3)
+  In 1:1-9 of arity-mismatch.egg: (+ 1 2 3)
+Arity mismatch, expected 2 args: (+ 1 2 3)

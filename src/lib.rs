@@ -54,7 +54,7 @@ use egglog_bridge::{ColumnTy, QueryEntry};
 use egglog_core_relations as core_relations;
 use egglog_numeric_id as numeric_id;
 use egglog_reports::{ReportLevel, RunReport};
-use extract::{CostModel, DefaultCost, Extractor, TreeAdditiveCostModel};
+use extract::{DefaultCost, Extractor, TreeAdditiveCostModel};
 use indexmap::map::Entry;
 use log::{Level, log_enabled};
 use numeric_id::DenseIdMap;
@@ -83,7 +83,9 @@ use crate::ast::desugar::desugar_command;
 use crate::ast::*;
 use crate::core::{GenericActionsExt, ResolvedRuleExt};
 use crate::proofs::proof_encoding::{EncodingState, ProofInstrumentor};
-use crate::proofs::proof_encoding_helpers::command_supports_proof_encoding;
+use crate::proofs::proof_encoding_helpers::{
+    ProofEncodingUnsupportedReason, command_supports_proof_encoding,
+};
 use crate::proofs::proof_extraction::ProveExistsError;
 use crate::proofs::proof_format::{ProofId, ProofStore};
 use crate::proofs::proof_normal_form::proof_form;
@@ -670,65 +672,6 @@ impl EGraph {
     /// Extract rows of a table using the default cost model with name sym
     /// The `include_output` parameter controls whether the output column is always extracted
     /// For functions, the output column is usually useful
-    /// For constructors and relations, the output column can be ignored
-    pub fn function_to_dag(
-        &self,
-        sym: &str,
-        n: usize,
-        include_output: bool,
-    ) -> Result<(Vec<TermId>, Option<Vec<TermId>>, TermDag), Error> {
-        let func = self
-            .functions
-            .get(sym)
-            .ok_or(TypeError::UnboundFunction(sym.to_owned(), span!()))?;
-        let mut rootsorts = func.schema.input.clone();
-        if include_output {
-            rootsorts.push(func.schema.output.clone());
-        }
-        let extractor = Extractor::compute_costs_from_rootsorts(
-            Some(rootsorts),
-            self,
-            TreeAdditiveCostModel::default(),
-        );
-
-        let mut termdag = TermDag::default();
-        let mut inputs: Vec<TermId> = Vec::new();
-        let mut output: Option<Vec<TermId>> = if include_output {
-            Some(Vec::new())
-        } else {
-            None
-        };
-
-        let extract_row = |row: egglog_bridge::FunctionRow| {
-            if inputs.len() < n {
-                // include subsumed rows
-                let mut children: Vec<TermId> = Vec::new();
-                for (value, sort) in row.vals.iter().zip(&func.schema.input) {
-                    let (_, term_id) = extractor
-                        .extract_best_with_sort(self, &mut termdag, *value, sort.clone())
-                        .unwrap_or_else(|| (0, termdag.var("Unextractable".into())));
-                    children.push(term_id);
-                }
-                inputs.push(termdag.app(sym.to_owned(), children));
-                if include_output {
-                    let value = row.vals[func.schema.input.len()];
-                    let sort = &func.schema.output;
-                    let (_, term) = extractor
-                        .extract_best_with_sort(self, &mut termdag, value, sort.clone())
-                        .unwrap_or_else(|| (0, termdag.var("Unextractable".into())));
-                    output.as_mut().unwrap().push(term);
-                }
-                true
-            } else {
-                false
-            }
-        };
-
-        self.backend.for_each_while(func.backend_id, extract_row);
-
-        Ok((inputs, output, termdag))
-    }
-
     /// Print up to `n` the tuples in a given function.
     /// Print all tuples if `n` is not provided.
     pub fn print_function(
@@ -834,43 +777,6 @@ impl EGraph {
                 Ok(report)
             }
         }
-    }
-
-    /// Extract a value to a [`TermDag`] and [`TermId`] in the [`TermDag`] using the default cost model.
-    /// See also [`EGraph::extract_value_with_cost_model`] for more control.
-    pub fn extract_value(
-        &self,
-        sort: &ArcSort,
-        value: Value,
-    ) -> Result<(TermDag, TermId, DefaultCost), Error> {
-        self.extract_value_with_cost_model(sort, value, TreeAdditiveCostModel::default())
-    }
-
-    /// Extract a value to a [`TermDag`] and [`TermId`] in the [`TermDag`].
-    /// Note that the `TermDag` may contain a superset of the nodes referenced by the returned `TermId`.
-    /// See also [`EGraph::extract_value_to_string`] for convenience.
-    pub fn extract_value_with_cost_model<CM: CostModel<DefaultCost> + 'static>(
-        &self,
-        sort: &ArcSort,
-        value: Value,
-        cost_model: CM,
-    ) -> Result<(TermDag, TermId, DefaultCost), Error> {
-        let extractor =
-            Extractor::compute_costs_from_rootsorts(Some(vec![sort.clone()]), self, cost_model);
-        let mut termdag = TermDag::default();
-        let (cost, term) = extractor.extract_best(self, &mut termdag, value).unwrap();
-        Ok((termdag, term, cost))
-    }
-
-    /// Extract a value to a string for printing.
-    /// See also [`EGraph::extract_value`] for more control.
-    pub fn extract_value_to_string(
-        &self,
-        sort: &ArcSort,
-        value: Value,
-    ) -> Result<(String, DefaultCost), Error> {
-        let (termdag, term, cost) = self.extract_value(sort, value)?;
-        Ok((termdag.to_string(term), cost))
     }
 
     fn run_rules(&mut self, span: &Span, config: &ResolvedRunConfig) -> Result<RunReport, Error> {
@@ -1151,7 +1057,11 @@ impl EGraph {
     fn run_command(&mut self, command: ResolvedNCommand) -> Result<Option<CommandOutput>, Error> {
         match command {
             // Sorts are already declared during typechecking
-            ResolvedNCommand::Sort(_span, name, _presort_and_args) => {
+            ResolvedNCommand::Sort { name, uf, .. } => {
+                // If the sort has a :uf field, store the mapping for extraction
+                if let Some(uf_name) = uf {
+                    self.proof_state.uf_parent.insert(name.clone(), uf_name);
+                }
                 log::info!("Declared sort {}.", name)
             }
             ResolvedNCommand::Function(fdecl) => {
@@ -1492,10 +1402,13 @@ impl EGraph {
             let typechecked = original_typechecking.typecheck_program(&desugared)?;
 
             for command in &typechecked {
-                if !command_supports_proof_encoding(&command.to_command(), &self.type_info) {
+                if let Err(reason) =
+                    command_supports_proof_encoding(&command.to_command(), &self.type_info)
+                {
                     let command_text = format!("{}", command.to_command());
                     return Err(Error::UnsupportedProofCommand {
                         command: command_text,
+                        reason,
                     });
                 }
             }
@@ -2021,11 +1934,15 @@ pub enum Error {
     InputFileFormatError(String),
     #[error(
         "Command is not supported by the current proof term encoding implementation.\n\
+         Reason: {reason}\n\
          This typically means the command uses constructs that cannot yet be represented as proof terms.\n\
          Consider disabling proof term encoding for this run or rewriting the command to avoid unsupported features.\n\
          Offending command: {command}"
     )]
-    UnsupportedProofCommand { command: String },
+    UnsupportedProofCommand {
+        command: String,
+        reason: ProofEncodingUnsupportedReason,
+    },
 }
 
 #[cfg(test)]
