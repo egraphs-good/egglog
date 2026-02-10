@@ -1001,6 +1001,11 @@ impl<'a> ProofInstrumentor<'a> {
                 match resolved_call {
                     ResolvedCall::Func(func_type) => {
                         if func_type.subtype == FunctionSubtype::Custom {
+                            // Globals are desugared to no-arg functions (in non-proof mode)
+                            // They're allowed, in proof mode they are constructors.
+                            if self.egraph.type_info.is_global(&func_type.name) {
+                                return format!("({} {})", func_type.name, ListDisplay(&args, " "));
+                            }
                             panic!(
                                 "Found a function lookup in actions, should have been prevented by typechecking"
                             );
@@ -1138,8 +1143,14 @@ impl<'a> ProofInstrumentor<'a> {
     fn term_encode_command(&mut self, command: &ResolvedNCommand, res: &mut Vec<Command>) {
         log::debug!("Term encoding for {}", command);
         match &command {
-            ResolvedNCommand::Sort(_span, name, _presort_and_args) => {
-                res.push(command.to_command().make_unresolved());
+            ResolvedNCommand::Sort { span, name, presort_and_args, .. } => {
+                let uf_name = self.uf_name(name);
+                res.push(Command::Sort {
+                    span: span.clone(),
+                    name: name.clone(),
+                    presort_and_args: presort_and_args.clone(),
+                    uf: Some(uf_name),
+                });
                 res.extend(self.declare_sort(name));
             }
             ResolvedNCommand::Function(fdecl) => {
@@ -1242,7 +1253,7 @@ impl<'a> ProofInstrumentor<'a> {
             // run rebuilding after every command except a few
             if let ResolvedNCommand::Function(..)
             | ResolvedNCommand::NormRule { .. }
-            | ResolvedNCommand::Sort(..) = &command
+            | ResolvedNCommand::Sort { .. } = &command
             {
             } else {
                 res.push(Command::RunSchedule(self.rebuild()));

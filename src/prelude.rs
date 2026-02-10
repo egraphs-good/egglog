@@ -662,7 +662,7 @@ pub fn query(
 
 /// Declare a new sort.
 pub fn add_sort(egraph: &mut EGraph, name: &str) -> Result<Vec<CommandOutput>, Error> {
-    egraph.run_program(vec![Command::Sort(span!(), name.to_owned(), None)])
+    egraph.run_program(vec![Command::Sort { span: span!(), name: name.to_owned(), presort_and_args: None, uf: None }])
 }
 
 /// Declare a new function table.

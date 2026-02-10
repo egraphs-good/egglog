@@ -10,7 +10,6 @@ use crate::{
         ResolvedExprExt, Schedule,
     },
     proofs::proof_encoding::ProofInstrumentor,
-    typechecking::expr_has_function_lookup,
     util::{FreshGen, HashMap, SymbolGen},
 };
 
@@ -482,11 +481,11 @@ fn expr_primitives_have_validators(expr: &ResolvedExpr) -> bool {
     all_valid
 }
 
-/// Check if an action contains function lookups in any of its expressions
-fn action_has_function_lookup(action: &ResolvedAction) -> bool {
+/// Check if an action contains non-global function lookups in any of its expressions
+fn action_has_function_lookup(action: &ResolvedAction, type_info: &TypeInfo) -> bool {
     let mut has_lookup = false;
     action.clone().visit_exprs(&mut |expr| {
-        if expr_has_function_lookup(&expr).is_some() {
+        if type_info.expr_has_function_lookup(&expr).is_some() {
             has_lookup = true;
         }
         expr
@@ -514,9 +513,10 @@ pub(crate) fn command_supports_proof_encoding(
 
     // Check actions (not queries) for function lookups
     // Egglog supports lookups in actions at the global level, but not in proofs mode
+    // (global function calls are allowed - they get desugared to constructors)
     let mut has_function_lookup_in_action = false;
     command.clone().visit_actions(&mut |action| {
-        if action_has_function_lookup(&action) {
+        if action_has_function_lookup(&action, type_info) {
             has_function_lookup_in_action = true;
         }
         action
@@ -528,13 +528,15 @@ pub(crate) fn command_supports_proof_encoding(
 
     // Now check command-specific constraints
     match command {
-        GenericCommand::Sort(_, _, Some(_))
+        GenericCommand::Sort { presort_and_args: Some(_), .. }
         | GenericCommand::UserDefined(..)
         | GenericCommand::Input { .. } => false,
-        // Extract commands can't have function lookups
+        // Extract commands can't have non-global function lookups
         // because instrument_action_expr doesn't support them
+        // (global function calls are fine - they get desugared to constructors)
         GenericCommand::Extract(_, expr, variants) => {
-            expr_has_function_lookup(expr).is_none() && expr_has_function_lookup(variants).is_none()
+            type_info.expr_has_function_lookup(expr).is_none()
+                && type_info.expr_has_function_lookup(variants).is_none()
         }
         // no-merge on a non-global function
         // To add support: https://github.com/egraphs-good/egglog/issues/774

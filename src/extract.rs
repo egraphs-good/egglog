@@ -579,6 +579,32 @@ impl<C: Cost + Ord + Eq + Clone + Debug> Extractor<C> {
         )
     }
 
+    /// Find the canonical representative of a value using the union-find table.
+    /// If no UF is registered for this sort, returns the original value.
+    /// The UF table stores (value, canonical) pairs - one hop lookup.
+    fn find_canonical(&self, egraph: &EGraph, value: Value, sort: &ArcSort) -> Value {
+        // Check if there's a UF registered for this sort
+        let Some(uf_name) = egraph.proof_state.uf_parent.get(sort.name()) else {
+            return value;
+        };
+
+        // Get the UF function
+        let Some(uf_func) = egraph.functions.get(uf_name) else {
+            return value;
+        };
+
+        // Single lookup in UF table - it's guaranteed to be one hop to canonical
+        let mut canonical = value;
+        egraph.backend.for_each(uf_func.backend_id, |row: egglog_bridge::FunctionRow| {
+            // UF table has (child, parent) as inputs
+            if row.vals[0] == value {
+                canonical = row.vals[1];
+            }
+        });
+
+        canonical
+    }
+
     /// Extract variants of an e-class.
     ///
     /// The variants are selected by first picking `nvairants` e-nodes with the lowest cost from the e-class
@@ -594,6 +620,9 @@ impl<C: Cost + Ord + Eq + Clone + Debug> Extractor<C> {
         debug_assert!(self.rootsorts.iter().any(|s| { s.name() == sort.name() }));
 
         if sort.is_eq_sort() {
+            // Canonicalize the value using the union-find if available
+            let canonical_value = self.find_canonical(egraph, value, &sort);
+
             let mut root_variants: Vec<(C, String, Vec<Value>)> = Vec::new();
 
             let mut root_funcs: Vec<String> = Vec::new();
@@ -619,7 +648,7 @@ impl<C: Cost + Ord + Eq + Clone + Debug> Extractor<C> {
                 let find_root_variants = |row: egglog_bridge::FunctionRow| {
                     if !row.subsumed {
                         let target = &row.vals[output_idx];
-                        if *target == value {
+                        if *target == canonical_value {
                             let cost = self.compute_cost_hyperedge(egraph, &row, func).unwrap();
                             root_variants.push((cost, func_name.clone(), row.vals.to_vec()));
                         }
@@ -634,12 +663,15 @@ impl<C: Cost + Ord + Eq + Clone + Debug> Extractor<C> {
             root_variants.truncate(nvariants);
             for (cost, func_name, hyperedge) in root_variants {
                 let mut ch_terms: Vec<TermId> = Vec::new();
-                let ch_sorts = &egraph.functions.get(&func_name).unwrap().schema.input;
-                // zip truncates the row
-                for (value, sort) in hyperedge.iter().zip(ch_sorts.iter()) {
+                let func = egraph.functions.get(&func_name).unwrap();
+                let ch_sorts = &func.schema.input;
+                let num_children = func.extraction_num_children();
+                // For view tables, children are all but the last input (which is the e-class)
+                for (value, sort) in hyperedge.iter().zip(ch_sorts.iter()).take(num_children) {
                     ch_terms.push(self.reconstruct_termdag_node(egraph, termdag, *value, sort));
                 }
-                res.push((cost, termdag.app(func_name, ch_terms)));
+                // Use extraction_term_name for view tables (maps to the original constructor)
+                res.push((cost, termdag.app(func.extraction_term_name().to_string(), ch_terms)));
             }
 
             res

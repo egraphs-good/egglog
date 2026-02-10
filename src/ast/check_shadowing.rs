@@ -48,7 +48,7 @@ impl Names {
     /// changing the `EGraph` will be wrong.
     pub(crate) fn check_shadowing(&mut self, command: &ResolvedNCommand) -> Result<(), Error> {
         match command {
-            ResolvedNCommand::Sort(span, name, _args) => self.check(name.clone(), span.clone()),
+            ResolvedNCommand::Sort { span, name, .. } => self.check(name.clone(), span.clone()),
             ResolvedNCommand::Function(decl) => {
                 self.check(decl.name.clone(), decl.span.clone())?;
                 if decl.let_binding {

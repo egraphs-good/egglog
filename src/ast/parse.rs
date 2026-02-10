@@ -256,14 +256,15 @@ impl Parser {
 
         Ok(match head.as_str() {
             "sort" => match tail {
-                [name] => vec![Command::Sort(span, name.expect_atom("sort name")?, None)],
+                [name] => vec![Command::Sort { span, name: name.expect_atom("sort name")?, presort_and_args: None, uf: None }],
                 [name, call] => {
                     let (func, args, _) = call.expect_call("container sort declaration")?;
-                    vec![Command::Sort(
+                    vec![Command::Sort {
                         span,
-                        name.expect_atom("sort name")?,
-                        Some((func, map_fallible(args, self, Self::parse_expr)?)),
-                    )]
+                        name: name.expect_atom("sort name")?,
+                        presort_and_args: Some((func, map_fallible(args, self, Self::parse_expr)?)),
+                        uf: None,
+                    }]
                 }
                 _ => {
                     return error!(

@@ -1196,7 +1196,11 @@ impl EGraph {
     fn run_command(&mut self, command: ResolvedNCommand) -> Result<Option<CommandOutput>, Error> {
         match command {
             // Sorts are already declared during typechecking
-            ResolvedNCommand::Sort(_span, name, _presort_and_args) => {
+            ResolvedNCommand::Sort { name, uf, .. } => {
+                // If the sort has a :uf field, store the mapping for extraction
+                if let Some(uf_name) = uf {
+                    self.proof_state.uf_parent.insert(name.clone(), uf_name);
+                }
                 log::info!("Declared sort {}.", name)
             }
             ResolvedNCommand::Function(fdecl) => {

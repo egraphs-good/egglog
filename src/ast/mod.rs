@@ -49,11 +49,14 @@ where
     Head: Clone + Display,
     Leaf: Clone + PartialEq + Eq + Display + Hash,
 {
-    Sort(
-        Span,
-        String,
-        Option<(String, Vec<GenericExpr<String, String>>)>,
-    ),
+    Sort {
+        span: Span,
+        name: String,
+        presort_and_args: Option<(String, Vec<GenericExpr<String, String>>)>,
+        /// The name of the union-find function for this sort.
+        /// Used in term encoding to canonicalize values during extraction.
+        uf: Option<String>,
+    },
     Function(GenericFunctionDecl<Head, Leaf>),
     AddRuleset(Span, String),
     UnstableCombinedRuleset(Span, String, Vec<String>),
@@ -97,8 +100,8 @@ where
 {
     pub fn to_command(&self) -> GenericCommand<Head, Leaf> {
         match self {
-            GenericNCommand::Sort(span, name, params) => {
-                GenericCommand::Sort(span.clone(), name.clone(), params.clone())
+            GenericNCommand::Sort { span, name, presort_and_args, uf } => {
+                GenericCommand::Sort { span: span.clone(), name: name.clone(), presort_and_args: presort_and_args.clone(), uf: uf.clone() }
             }
             GenericNCommand::Function(f) => match f.subtype {
                 FunctionSubtype::Constructor => GenericCommand::Constructor {
@@ -182,7 +185,7 @@ where
             GenericNCommand::Fail(span, cmd) => {
                 GenericNCommand::Fail(span, Box::new(cmd.visit_queries(f)))
             }
-            GenericNCommand::Sort(..)
+            GenericNCommand::Sort { .. }
             | GenericNCommand::Function(..)
             | GenericNCommand::AddRuleset(..)
             | GenericNCommand::UnstableCombinedRuleset(..)
@@ -206,7 +209,7 @@ where
         f: &mut impl FnMut(GenericExpr<Head, Leaf>) -> GenericExpr<Head, Leaf>,
     ) -> Self {
         match self {
-            GenericNCommand::Sort(span, name, params) => GenericNCommand::Sort(span, name, params),
+            GenericNCommand::Sort { span, name, presort_and_args, uf } => GenericNCommand::Sort { span, name, presort_and_args, uf },
             GenericNCommand::Function(func) => GenericNCommand::Function(func.visit_exprs(f)),
             GenericNCommand::AddRuleset(span, name) => GenericNCommand::AddRuleset(span, name),
             GenericNCommand::UnstableCombinedRuleset(span, name, rulesets) => {
@@ -504,7 +507,14 @@ where
     /// ```
     ///
     /// Now `MathVec` can be used as an input or output sort.
-    Sort(Span, String, Option<(String, Vec<Expr>)>),
+    Sort {
+        span: Span,
+        name: String,
+        presort_and_args: Option<(String, Vec<Expr>)>,
+        /// The name of the union-find function for this sort.
+        /// Used in term encoding to canonicalize values during extraction.
+        uf: Option<String>,
+    },
 
     /// Egglog supports three types of functions
     ///
@@ -878,10 +888,10 @@ where
             GenericCommand::Extract(_span, expr, variants) => {
                 write!(f, "(extract {expr} {variants})")
             }
-            GenericCommand::Sort(_span, name, None) => {
+            GenericCommand::Sort { name, presort_and_args: None, .. } => {
                 write!(f, "(sort {name})")
             }
-            GenericCommand::Sort(_span, name, Some((name2, args))) => {
+            GenericCommand::Sort { name, presort_and_args: Some((name2, args)), .. } => {
                 write!(f, "(sort {name} ({name2} {}))", ListDisplay(args, " "))
             }
             GenericCommand::Function {
@@ -1480,8 +1490,8 @@ where
         Leaf: Clone + PartialEq + Eq + Display + Hash,
     {
         match self {
-            GenericCommand::Sort(span, name, params) => {
-                GenericCommand::Sort(span, fun(name), params)
+            GenericCommand::Sort { span, name, presort_and_args, uf } => {
+                GenericCommand::Sort { span, name: fun(name), presort_and_args, uf }
             }
             GenericCommand::Datatype {
                 span,
@@ -1722,7 +1732,7 @@ where
         Leaf2: Clone + PartialEq + Eq + Display + Hash,
     {
         match self {
-            GenericCommand::Sort(span, name, params) => GenericCommand::Sort(span, name, params),
+            GenericCommand::Sort { span, name, presort_and_args, uf } => GenericCommand::Sort { span, name, presort_and_args, uf },
             GenericCommand::Datatype {
                 span,
                 name,

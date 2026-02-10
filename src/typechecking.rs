@@ -91,25 +91,6 @@ impl Debug for PrimitiveWithId {
     }
 }
 
-/// Check if an expression contains function lookups (FunctionSubtype::Custom calls).
-/// Returns Some(span) if a lookup is found, None otherwise.
-pub fn expr_has_function_lookup(expr: &ResolvedExpr) -> Option<Span> {
-    use ast::GenericExpr;
-
-    let mut lookup_span = None;
-    expr.walk(
-        &mut |e| {
-            if let GenericExpr::Call(span, ResolvedCall::Func(func_type), _) = e {
-                if func_type.subtype == FunctionSubtype::Custom {
-                    lookup_span = Some(span.clone());
-                }
-            }
-        },
-        &mut |_| {},
-    );
-    lookup_span
-}
-
 /// Stores resolved typechecking information.
 #[derive(Clone, Default)]
 pub struct TypeInfo {
@@ -236,11 +217,11 @@ impl EGraph {
             NCommand::NormRule { rule } => ResolvedNCommand::NormRule {
                 rule: self.type_info.typecheck_rule(symbol_gen, rule)?,
             },
-            NCommand::Sort(span, sort, presort_and_args) => {
+            NCommand::Sort { span, name, presort_and_args, uf } => {
                 // Note this is bad since typechecking should be pure and idempotent
                 // Otherwise typechecking the same program twice will fail
-                self.declare_sort(sort.clone(), presort_and_args, span.clone())?;
-                ResolvedNCommand::Sort(span.clone(), sort.clone(), presort_and_args.clone())
+                self.declare_sort(name.clone(), presort_and_args, span.clone())?;
+                ResolvedNCommand::Sort { span: span.clone(), name: name.clone(), presort_and_args: presort_and_args.clone(), uf: uf.clone() }
             }
             NCommand::CoreAction(Action::Let(span, var, expr)) => {
                 let expr = self
@@ -641,7 +622,7 @@ impl TypeInfo {
         let body: Vec<ResolvedFact> = assignment.annotate_facts(&mapped_query, self);
         let actions: ResolvedActions = assignment.annotate_actions(&mapped_action, self)?;
 
-        Self::check_lookup_actions(&actions)?;
+        self.check_lookup_actions(&actions)?;
 
         Ok(ResolvedRule {
             span: span.clone(),
@@ -652,8 +633,8 @@ impl TypeInfo {
         })
     }
 
-    fn check_lookup_expr(expr: &ResolvedExpr) -> Result<(), TypeError> {
-        if let Some(span) = expr_has_function_lookup(expr) {
+    fn check_lookup_expr(&self, expr: &ResolvedExpr) -> Result<(), TypeError> {
+        if let Some(span) = self.expr_has_function_lookup(expr) {
             return Err(TypeError::LookupInRuleDisallowed(
                 "function".to_string(),
                 span,
@@ -662,27 +643,27 @@ impl TypeInfo {
         Ok(())
     }
 
-    fn check_lookup_actions(actions: &ResolvedActions) -> Result<(), TypeError> {
+    fn check_lookup_actions(&self, actions: &ResolvedActions) -> Result<(), TypeError> {
         for action in actions.iter() {
             match action {
-                GenericAction::Let(_, _, rhs) => Self::check_lookup_expr(rhs)?,
+                GenericAction::Let(_, _, rhs) => self.check_lookup_expr(rhs)?,
                 GenericAction::Set(_, _, args, rhs) => {
                     for arg in args.iter() {
-                        Self::check_lookup_expr(arg)?;
+                        self.check_lookup_expr(arg)?;
                     }
-                    Self::check_lookup_expr(rhs)?;
+                    self.check_lookup_expr(rhs)?;
                 }
                 GenericAction::Union(_, lhs, rhs) => {
-                    Self::check_lookup_expr(lhs)?;
-                    Self::check_lookup_expr(rhs)?;
+                    self.check_lookup_expr(lhs)?;
+                    self.check_lookup_expr(rhs)?;
                 }
                 GenericAction::Change(_, _, _, args) => {
                     for arg in args.iter() {
-                        Self::check_lookup_expr(arg)?;
+                        self.check_lookup_expr(arg)?;
                     }
                 }
                 GenericAction::Panic(..) => {}
-                GenericAction::Expr(_, expr) => Self::check_lookup_expr(expr)?,
+                GenericAction::Expr(_, expr) => self.check_lookup_expr(expr)?,
             }
         }
         Ok(())
@@ -795,6 +776,29 @@ impl TypeInfo {
 
     pub fn is_global(&self, sym: &str) -> bool {
         self.global_sorts.contains_key(sym)
+    }
+
+    /// Check if an expression contains non-global function lookups (FunctionSubtype::Custom calls).
+    /// Global function calls are allowed since they get desugared to constructors.
+    /// Returns Some(span) if a lookup is found, None otherwise.
+    pub fn expr_has_function_lookup(&self, expr: &ResolvedExpr) -> Option<Span> {
+        use ast::GenericExpr;
+
+        let mut lookup_span = None;
+        expr.walk(
+            &mut |e| {
+                if let GenericExpr::Call(span, ResolvedCall::Func(func_type), _) = e {
+                    if func_type.subtype == FunctionSubtype::Custom {
+                        // Skip global functions - they get desugared to constructors
+                        if !self.is_global(&func_type.name) {
+                            lookup_span = Some(span.clone());
+                        }
+                    }
+                }
+            },
+            &mut |_| {},
+        );
+        lookup_span
     }
 }
 
