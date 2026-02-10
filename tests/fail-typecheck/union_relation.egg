@@ -1,0 +1,10 @@
+; Test that union fails on relations
+; Relations are desugared with unionable: false, so they don't allow union
+
+(relation edge (i64 i64))
+
+(edge 1 2)
+(edge 3 4)
+
+; This should fail - cannot union values of a non-unionable sort (relation)
+(union (edge 1 2) (edge 3 4))

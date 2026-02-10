@@ -1,0 +1,17 @@
+; Test :term constructors with extraction
+; :term constructors can still be extracted
+
+(sort TermSort)
+(constructor term-leaf (i64) TermSort :term)
+(constructor term-branch (TermSort TermSort) TermSort :term :cost 2)
+
+; Build a simple tree
+(term-branch 
+  (term-leaf 1)
+  (term-branch
+    (term-leaf 2)
+    (term-leaf 3)))
+
+; Extract should work on :term constructors
+(extract (term-leaf 1))
+(extract (term-branch (term-leaf 1) (term-branch (term-leaf 2) (term-leaf 3))))

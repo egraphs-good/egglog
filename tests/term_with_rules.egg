@@ -1,0 +1,29 @@
+; Test :term constructors with rules
+; Rules can still pattern match on :term constructors and create new terms
+
+(sort TermSort)
+(constructor term-node (i64) TermSort :term)
+(constructor term-pair (TermSort TermSort) TermSort :term)
+
+; Create some term nodes
+(term-node 1)
+(term-node 2)
+(term-node 3)
+
+; Create some pairs
+(term-pair (term-node 1) (term-node 2))
+(term-pair (term-node 2) (term-node 3))
+
+; Rule to propagate terms - this creates new term entries but doesn't union
+(rule ((term-pair x y))
+      ((term-pair y x)))  ; Create reverse pair
+
+(run 1)
+
+; Check that the original pairs exist
+(check (term-pair (term-node 1) (term-node 2)))
+(check (term-pair (term-node 2) (term-node 3)))
+
+; Check that the reverse pairs were created
+(check (term-pair (term-node 2) (term-node 1)))
+(check (term-pair (term-node 3) (term-node 2)))

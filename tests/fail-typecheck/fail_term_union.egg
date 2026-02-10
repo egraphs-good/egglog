@@ -1,0 +1,13 @@
+; Test that union on :term constructors fails
+; This test SHOULD fail because :term marks the sort as non-unionable
+; (This file is kept for manual testing - the fail-typecheck version is used by the test suite)
+
+(sort TermSort)
+(constructor term-fn (i64 i64) TermSort :term)
+
+; Create two terms
+(term-fn 1 2)
+(term-fn 3 4)
+
+; This should fail with: "Cannot union values of sort TermSort because it is marked as non-unionable"
+(union (term-fn 1 2) (term-fn 3 4))
