@@ -437,11 +437,10 @@ impl<'a> ProofInstrumentor<'a> {
             view_flags.push_str(&format!(" :cost {cost}"));
         }
         if fdecl.unextractable {
-            
             view_flags.push_str(" :unextractable");
         }
         // The term table is always unextractable as an optimization for normal extraction.
-        // When we extract a proof, we ignore this annotation. 
+        // When we extract a proof, we ignore this annotation.
         term_flags.push_str(" :unextractable");
         self.parse_program(&format!(
             "
@@ -1192,9 +1191,12 @@ impl<'a> ProofInstrumentor<'a> {
             ResolvedNCommand::PrintSize(span, name) => {
                 // In proof mode, print the size of the view table for constructors
                 let new_name = name.as_ref().map(|n| {
-                    if self.egraph.type_info.get_func_type(n).is_some_and(|f| {
-                        f.subtype == FunctionSubtype::Constructor
-                    }) {
+                    if self
+                        .egraph
+                        .type_info
+                        .get_func_type(n)
+                        .is_some_and(|f| f.subtype == FunctionSubtype::Constructor)
+                    {
                         self.view_name(n)
                     } else {
                         n.clone()

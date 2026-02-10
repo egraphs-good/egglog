@@ -1,0 +1,27 @@
+---
+source: tests/files.rs
+expression: snapshot_content_across_treatments
+---
+(let prop0 (= (Add 2 3) (Num 5)))
+(let prf0 (Fiat (= (Add 2 3) (Add 2 3))))
+(let prf1
+  (Sym
+        (= (Add 2 3) (Add 3 2))
+        (Rule
+          (= (Add 3 2) (Add 2 3))
+          (name "rw1")
+          (premises prf0)
+          (substitution (a 2) (b 3)))))
+(Trans
+  prop0
+  prf0
+  (Trans
+    prop0
+    prf1
+    (Sym
+      (= (Add 3 2) (Num 5))
+      (Rule
+        (= (Num 5) (Add 3 2))
+        (name "rw2")
+        (premises prf1 (Fiat (= () ())))
+        (substitution (a 3) (b 2))))))

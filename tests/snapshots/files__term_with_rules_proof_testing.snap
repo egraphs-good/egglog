@@ -1,0 +1,37 @@
+---
+source: tests/files.rs
+expression: snapshot_content
+---
+(let t0 (term-pair (term-node 1) (term-node 2)))
+(let prop0 (= t0 t0))
+(Congr prop0 (Fiat prop0) (Fiat (= (term-node 2) (term-node 2))) 1)(let t0 (term-pair (term-node 2) (term-node 3)))
+(let prop0 (= t0 t0))
+(Congr prop0 (Fiat prop0) (Fiat (= (term-node 3) (term-node 3))) 1)(let t0 (term-pair (term-node 2) (term-node 1)))
+(let prop0 (= t0 t0))
+(let t1 (term-pair (term-node 1) (term-node 2)))
+(Congr
+  prop0
+  (Rule
+    prop0
+    (name
+      "(rule ((term-pair x y))
+      ((term-pair y x))
+         )")
+    (premises (Fiat (= t1 t1)))
+    (substitution (x (term-node 1)) (y (term-node 2))))
+  (Fiat (= (term-node 1) (term-node 1)))
+  1)(let t0 (term-pair (term-node 3) (term-node 2)))
+(let prop0 (= t0 t0))
+(let t1 (term-pair (term-node 2) (term-node 3)))
+(Congr
+  prop0
+  (Rule
+    prop0
+    (name
+      "(rule ((term-pair x y))
+      ((term-pair y x))
+         )")
+    (premises (Fiat (= t1 t1)))
+    (substitution (x (term-node 2)) (y (term-node 3))))
+  (Fiat (= (term-node 2) (term-node 2)))
+  1)

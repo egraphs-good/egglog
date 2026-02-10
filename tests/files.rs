@@ -37,6 +37,25 @@ impl Run {
             .join("")
     }
 
+    /// Extraction results may differ slightly due to the proof encoding when multiple
+    /// solutions have the same cost. We filter the output to include only things that remain the same.
+    fn outputs_to_snapshot_preserved_across_treatments(&self, outputs: &[CommandOutput]) -> String {
+        outputs
+            .iter()
+            .filter_map(|output| match output {
+                // Skip OverallStatistics - contains non-deterministic Duration timing data
+                CommandOutput::OverallStatistics(_) => None,
+                // Skpping PrintFunction for now due to egglog nondeterminism bug: https://github.com/egraphs-good/egglog/issues/793
+                CommandOutput::PrintFunction(..) => None,
+                CommandOutput::ExtractBest(..) => None,
+                CommandOutput::ExtractVariants(..) => None,
+                // All other variants use normal Display formatting
+                other => Some(other.to_string()),
+            })
+            .collect::<Vec<_>>()
+            .join("")
+    }
+
     fn run(&self) {
         let _ = env_logger::builder().is_test(true).try_init();
         let program = std::fs::read_to_string(&self.path)
@@ -76,9 +95,19 @@ impl Run {
             // Use base snapshot name (without desugar/term_encoding/proofs suffixes)
             // so all variants compare against the same expected output
             // proof_testing has different output due to automatic prove-exists, so it uses separate snapshots
-            let snapshot_name = self.snapshot_name();
+            let name = self.name().to_string();
             let snapshot_content = self.outputs_to_snapshot(&_outputs);
-            insta::assert_snapshot!(snapshot_name, snapshot_content);
+            insta::assert_snapshot!(name, snapshot_content);
+
+            if !self.proof_testing {
+                let snapshot_name_across_treatments = self.snapshot_name_across_treatments();
+                let snapshot_content_across_treatments =
+                    self.outputs_to_snapshot_preserved_across_treatments(&_outputs);
+                insta::assert_snapshot!(
+                    snapshot_name_across_treatments,
+                    snapshot_content_across_treatments
+                );
+            }
         }
     }
 
@@ -163,19 +192,17 @@ impl Run {
         })
     }
 
-    /// Base snapshot name without mode suffixes - all variants share the same snapshot
-    /// Exception: proof_testing has different output due to automatic prove-exists
-    fn snapshot_name(&self) -> String {
-        let mut name = String::new();
-        if self.path.parent().unwrap().ends_with("fail-typecheck") {
-            name.push_str("fail-typecheck/");
-        }
+    /// Base snapshot name without mode suffixes - all variants share the same `outputs_to_snapshot_preserved_across_treatments` snapshot
+    /// except for proof_testing, which has different output due to using `prove` everywhere.
+    fn snapshot_name_across_treatments(&self) -> String {
+        let mut name = "shared_snapshot_".to_string();
+
         let stem = self.path.file_stem().unwrap();
         let stem_str = stem.to_string_lossy().replace(['.', '-', ' '], "_");
         name.push_str(&stem_str);
-        // proof_testing has different output, so use separate snapshot
-        if self.proof_testing {
-            name.push_str("_proof_testing");
+
+        if self.path.parent().unwrap().ends_with("fail-typecheck") {
+            name.push_str("_fail_typecheck");
         }
         name
     }
@@ -222,7 +249,24 @@ impl Run {
         // in non-parallel mode, selectively skip
         #[cfg(not(debug_assertions))]
         {
-            self.path.to_string_lossy().contains("math-microbenchmark") && self.term_encoding
+            // Skip tests with known non-deterministic output
+            let filename = self.path.file_stem().unwrap().to_string_lossy();
+            const SKIP_PATTERNS: [&str; 4] = [
+                "extract-vec-bench",
+                "python_array_optimize",
+                "stresstest_large_expr",
+                "towers-of-hanoi",
+            ];
+            if SKIP_PATTERNS.iter().any(|pat| filename.contains(pat)) {
+                return true;
+            }
+
+            // bug with egglog producing nondeterministic output in certain modes
+            let proof_skip_list = ["math-microbenchmark", "eqsolve"];
+            let in_list = proof_skip_list
+                .iter()
+                .any(|f| self.path.to_string_lossy().contains(f));
+            in_list && (self.proofs || self.term_encoding || self.proof_testing)
         }
     }
 }

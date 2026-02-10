@@ -1,0 +1,10 @@
+---
+source: tests/files.rs
+expression: snapshot_content
+---
+(
+   (@AllocVarView (Expr "u") (AllocVar (Expr "u")))
+)
+(
+   (@AllocVarView (Expr "sp") (AllocVar (Expr "sp")))
+)

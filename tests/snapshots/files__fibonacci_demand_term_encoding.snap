@@ -2,14 +2,4 @@
 source: tests/files.rs
 expression: snapshot_content
 ---
-(
-   (Fib 7) -> Unextractable
-   (Fib 6) -> (Num 8)
-   (Fib 5) -> (Num 5)
-   (Fib 3) -> (Num 2)
-   (Fib 4) -> (Num 3)
-   (Fib 1) -> Unextractable
-   (Fib 2) -> (Num 1)
-   (Fib 0) -> (Num 0)
-)
 (Num 13)

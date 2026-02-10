@@ -1,0 +1,116 @@
+---
+source: tests/files.rs
+expression: snapshot_content
+---
+(let t0 (Sub (Const 2) (Const 1)))
+(let t1 (Mul t0 (Var "a")))
+(let t2 (Sub (Var "a") t1))
+(let t3 (Add (Const 1) t2))
+(let prop0 (= t3 (Const 1)))
+(let prf0 (Fiat (= t3 t3)))
+(let t4 (Mul (Const 1) (Var "a")))
+(let t5 (evals-to t0 1))
+(let t6 (evals-to (Const 2) 2))
+(let t7 (evals-to (Const 1) 1))
+(let prf1 (Fiat (= (Const 1) (Const 1))))
+(let t8 (Mul (Var "a") (Const 1)))
+(Trans
+  prop0
+  prf0
+  (Sym
+    prop0
+    (Rule
+      (= (Const 1) t3)
+      (name "(rewrite (Add a (Const 0)) a)")
+      (premises
+        (Congr
+          (= t3 (Add (Const 1) (Const 0)))
+          prf0
+          (Sym
+            (= t2 (Const 0))
+            (Rule
+              (= (Const 0) t2)
+              (name "(rewrite (Sub a a) (Const 0))")
+              (premises
+                (Congr
+                  (= t2 (Sub (Var "a") (Var "a")))
+                  (Fiat (= t2 t2))
+                  (Trans
+                    (= t1 (Var "a"))
+                    (Congr
+                      (= t1 t4)
+                      (Fiat (= t1 t1))
+                      (Rule
+                        (= t0 (Const 1))
+                        (name
+                          "(rule ((evals-to x vx))
+      ((union x (Const vx)))
+         )")
+                        (premises
+                          (Rule
+                            (= t5 t5)
+                            (name
+                              "(rule ((= e (Sub a b))
+       (evals-to a va)
+       (evals-to b vb))
+      ((evals-to e (- va vb)))
+         )")
+                            (premises
+                              (Fiat (= t0 t0))
+                              (Rule
+                                (= t6 t6)
+                                (name
+                                  "(rule ((= e (Const c)))
+      ((evals-to e c))
+         )")
+                                (premises (Fiat (= (Const 2) (Const 2))))
+                                (substitution (e (Const 2)) (c 2)))
+                              (Rule
+                                (= t7 t7)
+                                (name
+                                  "(rule ((= e (Const c)))
+      ((evals-to e c))
+         )")
+                                (premises prf1)
+                                (substitution (e (Const 1)) (c 1))))
+                            (substitution
+                              (e t0)
+                              (va 2)
+                              (a (Const 2))
+                              (b (Const 1))
+                              (vb 1))))
+                        (substitution (x t0) (vx 1)))
+                      0)
+                    (Rule
+                      (= t4 (Var "a"))
+                      (name "(rewrite (Mul a b) (Mul b a))")
+                      (premises
+                        (Sym
+                          (= (Var "a") t8)
+                          (Rule
+                            (= t8 (Var "a"))
+                            (name
+                              "(rule ((MathU a)
+       (!= a (Const 1)))
+      ((union a (Mul a (Const 1))))
+         )")
+                            (premises
+                              (Rule
+                                (= (MathU (Var "a")) (MathU (Var "a")))
+                                (name
+                                  "(rule ((= e (Var x)))
+      ((MathU e))
+         )")
+                                (premises (Fiat (= (Var "a") (Var "a"))))
+                                (substitution (e (Var "a")) (x "a")))
+                              prf1
+                              (Fiat (= () ())))
+                            (substitution (a (Var "a")) (@v484 (Const 1))))))
+                      (substitution
+                        (@rewrite_var__1 (Var "a"))
+                        (a (Var "a"))
+                        (b (Const 1)))))
+                  1))
+              (substitution (a (Var "a")) (@rewrite_var__9 t2))))
+          1))
+      (substitution (a (Const 1)) (@rewrite_var__6 t3)))))(Const 1)

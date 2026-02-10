@@ -2,8 +2,4 @@
 source: tests/files.rs
 expression: snapshot_content
 ---
-(
-   (solution 2 4 2) -> (solution 2 4 2)
-   (solution 3 4 3) -> (solution 3 4 3)
-   (solution 1 4 1) -> (solution 1 4 1)
-)
+
