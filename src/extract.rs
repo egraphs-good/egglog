@@ -185,7 +185,7 @@ impl<C: Cost + Ord + Eq + Clone + Debug> Extractor<C> {
         let mut rev_index: HashMap<String, Vec<String>> = Default::default();
         for func in egraph.functions.iter() {
             let unextractable = func.1.decl.unextractable && respect_unextractable;
-            let should_skip_view = (skip_view_tables && func.1.decl.term_constructor.is_some());
+            let should_skip_view = skip_view_tables && func.1.decl.term_constructor.is_some();
 
             // only extract constructors, skip view tables when requested for proof extraction, and respect unextractable flag
             if !unextractable

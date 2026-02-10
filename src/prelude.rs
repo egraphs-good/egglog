@@ -306,7 +306,7 @@ pub fn rule(
     facts: Facts<String, String>,
     actions: Actions,
 ) -> Result<Vec<CommandOutput>, Error> {
-    let mut rule = Rule {
+    let rule = Rule {
         span: span!(),
         head: actions,
         body: facts.0,

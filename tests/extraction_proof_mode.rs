@@ -1,5 +1,5 @@
-use egglog::prelude::*;
 use egglog::EGraph;
+use egglog::prelude::*;
 
 #[test]
 fn test_extraction_same_with_proof_mode() {
@@ -32,9 +32,7 @@ fn test_extraction_same_with_proof_mode() {
 
     // Run in normal mode and extract
     let mut egraph_normal = EGraph::default();
-    egraph_normal
-        .parse_and_run_program(None, program)
-        .unwrap();
+    egraph_normal.parse_and_run_program(None, program).unwrap();
     let normal_output = egraph_normal
         .parse_and_run_program(None, "(extract expr)")
         .unwrap();
@@ -42,9 +40,7 @@ fn test_extraction_same_with_proof_mode() {
 
     // Run in proof mode and extract
     let mut egraph_proofs = EGraph::new_with_proofs();
-    egraph_proofs
-        .parse_and_run_program(None, program)
-        .unwrap();
+    egraph_proofs.parse_and_run_program(None, program).unwrap();
     let proofs_output = egraph_proofs
         .parse_and_run_program(None, "(extract expr)")
         .unwrap();

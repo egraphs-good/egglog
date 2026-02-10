@@ -531,6 +531,11 @@ pub(crate) fn command_supports_proof_encoding(
         GenericCommand::Sort(_, _, Some(_))
         | GenericCommand::UserDefined(..)
         | GenericCommand::Input { .. } => false,
+        // Extract commands can't have function lookups
+        // because instrument_action_expr doesn't support them
+        GenericCommand::Extract(_, expr, variants) => {
+            expr_has_function_lookup(expr).is_none() && expr_has_function_lookup(variants).is_none()
+        }
         // no-merge on a non-global function
         // To add support: https://github.com/egraphs-good/egglog/issues/774
         GenericCommand::Function {

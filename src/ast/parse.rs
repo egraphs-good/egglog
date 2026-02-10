@@ -314,7 +314,7 @@ impl Parser {
                     let mut term_constructor = None;
                     let mut term = false;
                     for (key, val) in self.parse_options(rest)? {
-                        match (key, &val[..]) {
+                        match (key, val) {
                             (":unextractable", []) => unextractable = true,
                             (":cost", [c]) => cost = Some(c.expect_uint("cost")?),
                             (":term-constructor", [tc]) => {
