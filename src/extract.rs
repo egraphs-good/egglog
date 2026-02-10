@@ -151,18 +151,21 @@ impl<C: Cost + Ord + Eq + Clone + Debug> Extractor<C> {
         egraph: &EGraph,
         cost_model: impl CostModel<C> + 'static,
     ) -> Self {
-        Self::compute_costs_from_rootsorts_internal(rootsorts, egraph, cost_model, true)
+        // For user extraction: respect unextractable, don't skip view tables (use them for better names)
+        Self::compute_costs_from_rootsorts_internal(rootsorts, egraph, cost_model, true, false)
     }
 
     /// Like `compute_costs_from_rootsorts`, but ignores the unextractable flag.
     /// This is used for proof extraction where we need to extract proofs even
     /// from terms that are marked unextractable (like global let bindings).
+    /// Also skips view tables (those with term_constructor) since proofs need
+    /// to extract from the original term tables with their original names.
     pub(crate) fn compute_costs_from_rootsorts_allow_unextractable(
         rootsorts: Option<Vec<ArcSort>>,
         egraph: &EGraph,
         cost_model: impl CostModel<C> + 'static,
     ) -> Self {
-        Self::compute_costs_from_rootsorts_internal(rootsorts, egraph, cost_model, false)
+        Self::compute_costs_from_rootsorts_internal(rootsorts, egraph, cost_model, false, true)
     }
 
     fn compute_costs_from_rootsorts_internal(
@@ -170,6 +173,7 @@ impl<C: Cost + Ord + Eq + Clone + Debug> Extractor<C> {
         egraph: &EGraph,
         cost_model: impl CostModel<C> + 'static,
         respect_unextractable: bool,
+        skip_view_tables: bool,
     ) -> Self {
         // We filter out tables unreachable from the root sorts
         let extract_all_sorts = rootsorts.is_none();
@@ -181,15 +185,16 @@ impl<C: Cost + Ord + Eq + Clone + Debug> Extractor<C> {
         let mut rev_index: HashMap<String, Vec<String>> = Default::default();
         for func in egraph.functions.iter() {
             // Skip non-constructors (regular functions shouldn't be extracted)
-            // But allow functions with term_constructor (view tables in proof mode)
-            let is_constructor = func.1.decl.subtype == FunctionSubtype::Constructor
-                || func.1.decl.term_constructor.is_some();
-            if !is_constructor {
+            if func.1.decl.subtype != FunctionSubtype::Constructor {
+                continue;
+            }
+            // Skip view tables when requested (for proof extraction, we need original term names)
+            if skip_view_tables && func.1.decl.term_constructor.is_some() {
                 continue;
             }
             if !respect_unextractable || !func.1.decl.unextractable {
                 let func_name = func.0.clone();
-                // For view tables (with term_constructor in proof mode), the e-class is the last input colunm, so use this helper
+                // For view tables (with term_constructor in proof mode), the e-class is the last input column
                 let output_sort_name = func.1.extraction_output_sort().name();
                 if let Some(v) = rev_index.get_mut(output_sort_name) {
                     v.push(func_name);

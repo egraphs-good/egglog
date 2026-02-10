@@ -518,8 +518,7 @@ impl TypeInfo {
         // Mark the output sort as non-unionable if this is a non-unionable constructor
         // (e.g., from `:term` annotation or relation desugaring)
         if fdecl.subtype == FunctionSubtype::Constructor && !fdecl.unionable {
-            self.non_unionable_sorts
-                .insert(fdecl.schema.output.clone());
+            self.non_unionable_sorts.insert(fdecl.schema.output.clone());
         }
         bound_vars.insert("old", (fdecl.span.clone(), output_type.clone()));
         bound_vars.insert("new", (fdecl.span.clone(), output_type.clone()));

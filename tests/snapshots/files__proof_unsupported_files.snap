@@ -12,6 +12,7 @@ eggcc-extraction.egg
 extract-vec-bench.egg
 fail-typecheck/arity-mismatch.egg
 fail-typecheck/constructor_non_sort.egg
+fail-typecheck/fail_term_union.egg
 fail-typecheck/looking_up_nonconstructor_in_action_case_let.egg
 fail-typecheck/looking_up_nonconstructor_in_action_case_set.egg
 fail-typecheck/looking_up_nonconstructor_in_action_case_union.egg
@@ -31,6 +32,8 @@ fail-typecheck/unbound.egg
 fail-typecheck/ungrounded-3.egg
 fail-typecheck/ungrounded-4.egg
 fail-typecheck/union_non_sort.egg
+fail-typecheck/union_relation.egg
+fail-typecheck/union_term_constructor.egg
 fail-typecheck/unstable-fn-wrong-args-type.egg
 fail-typecheck/unstable-fn-wrong-args.egg
 fail-typecheck/unstable-fn-wrong-return-type.egg
