@@ -429,12 +429,23 @@ impl<'a> ProofInstrumentor<'a> {
         let merge_rule = self.handle_merge_or_congruence(fdecl);
         // the term table has child_sorts as inputs
         // the view table has child_sorts + the leader term for the eclass
+        // Propagate cost and unextractable flags from the original function
+        let mut term_flags = String::new();
+        let mut view_flags = String::new();
+        if let Some(cost) = fdecl.cost {
+            term_flags.push_str(&format!(" :cost {cost}"));
+            view_flags.push_str(&format!(" :cost {cost}"));
+        }
+        if fdecl.unextractable {
+            term_flags.push_str(" :unextractable");
+            view_flags.push_str(" :unextractable");
+        }
         self.parse_program(&format!(
             "
             (sort {fresh_sort})
             {to_ast_view_sort}
-            (constructor {name} ({term_sorts}) {view_sort})
-            (constructor {view_name} ({view_sorts}) {fresh_sort})
+            (constructor {name} ({term_sorts}) {view_sort}{term_flags})
+            (constructor {view_name} ({view_sorts}) {fresh_sort} :term-constructor {name}{view_flags})
             (constructor {to_delete_name} ({in_sorts}) {fresh_sort})
             (constructor {subsumed_name} ({in_sorts}) {fresh_sort})
             {proof_constructors}
@@ -1157,6 +1168,24 @@ impl<'a> ProofInstrumentor<'a> {
                 let last = res.pop().unwrap();
                 res.push(Command::Fail(span.clone(), Box::new(last)));
             }
+            ResolvedNCommand::Extract(span, expr, variants) => {
+                // Instrument the expressions to use view tables (like actions, not facts)
+                let mut action_stmts = vec![];
+                let instrumented_expr =
+                    self.instrument_action_expr(expr, &mut action_stmts, &Justification::Fiat);
+                let instrumented_variants =
+                    self.instrument_action_expr(variants, &mut action_stmts, &Justification::Fiat);
+
+                // Add any action statements needed to set up the expressions
+                for stmt in action_stmts {
+                    res.extend(self.parse_program(&stmt));
+                }
+                res.push(Command::Extract(
+                    span.clone(),
+                    self.parse_expr(&instrumented_expr),
+                    self.parse_expr(&instrumented_variants),
+                ));
+            }
             ResolvedNCommand::Pop(..)
             | ResolvedNCommand::Push(..)
             | ResolvedNCommand::AddRuleset(..)
@@ -1168,9 +1197,6 @@ impl<'a> ProofInstrumentor<'a> {
             | ResolvedNCommand::PrintFunction(..)
             | ResolvedNCommand::ProveExists(..) => {
                 res.push(command.to_command().make_unresolved());
-            }
-            ResolvedNCommand::Extract(..) => {
-                // TODO we just omit extract for now, support in future
             }
             ResolvedNCommand::UserDefined(..) => {
                 panic!("User defined commands unsupported in term encoding");

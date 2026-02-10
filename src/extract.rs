@@ -160,13 +160,14 @@ impl<C: Cost + Ord + Eq + Clone + Debug> Extractor<C> {
         for func in egraph.functions.iter() {
             if !func.1.decl.unextractable {
                 let func_name = func.0.clone();
-                let output_sort_name = func.1.schema.output.name();
+                // For view tables (with term_constructor in proof mode), the e-class is the last input colunm, so use this helper
+                let output_sort_name = func.1.extraction_output_sort().name();
                 if let Some(v) = rev_index.get_mut(output_sort_name) {
                     v.push(func_name);
                 } else {
                     rev_index.insert(output_sort_name.to_owned(), vec![func_name]);
                     if extract_all_sorts {
-                        rootsorts.push(func.1.schema.output.clone());
+                        rootsorts.push(func.1.extraction_output_sort().clone());
                     }
                 }
             }
@@ -197,7 +198,9 @@ impl<C: Cost + Ord + Eq + Clone + Debug> Extractor<C> {
                     for h in head_symbols {
                         if !funcs_set.contains(h) {
                             let func = egraph.functions.get(h).unwrap();
-                            for ch in &func.schema.input {
+                            // For view tables, children are all but the last input (which is the e-class)
+                            let num_children = func.extraction_num_children();
+                            for ch in func.schema.input.iter().take(num_children) {
                                 let ch_name = ch.name();
                                 if !seen.contains(ch_name) {
                                     q.push_back(ch.clone());
@@ -220,11 +223,11 @@ impl<C: Cost + Ord + Eq + Clone + Debug> Extractor<C> {
 
         for func_name in funcs.iter() {
             let func = egraph.functions.get(func_name).unwrap();
-            if !costs.contains_key(func.schema.output.name()) {
-                debug_assert!(func.schema.output.is_eq_sort());
-                costs.insert(func.schema.output.name().to_owned(), Default::default());
-                topo_rnk.insert(func.schema.output.name().to_owned(), Default::default());
-                parent_edge.insert(func.schema.output.name().to_owned(), Default::default());
+            let output_sort_name = func.extraction_output_sort().name();
+            if !costs.contains_key(output_sort_name) {
+                costs.insert(output_sort_name.to_owned(), Default::default());
+                topo_rnk.insert(output_sort_name.to_owned(), Default::default());
+                parent_edge.insert(output_sort_name.to_owned(), Default::default());
             }
         }
 
@@ -274,12 +277,13 @@ impl<C: Cost + Ord + Eq + Clone + Debug> Extractor<C> {
     ) -> Option<C> {
         let mut ch_costs: Vec<C> = Vec::new();
         let sorts = &func.schema.input;
-        // Relying on .zip to truncate the values
-        for (value, sort) in row.vals.iter().zip(sorts.iter()) {
+        let num_children = func.extraction_num_children();
+        for (value, sort) in row.vals.iter().take(num_children).zip(sorts.iter()) {
             ch_costs.push(self.compute_cost_node(egraph, *value, sort)?);
         }
+        let head_name = func.extraction_term_name();
         Some(self.cost_model.fold(
-            &func.decl.name,
+            head_name,
             &ch_costs,
             self.cost_model.enode_cost(egraph, func, row),
         ))
@@ -310,8 +314,10 @@ impl<C: Cost + Ord + Eq + Clone + Debug> Extractor<C> {
         func: &Function,
     ) -> usize {
         let sorts = &func.schema.input;
+        let num_children = func.extraction_num_children();
         row.vals
             .iter()
+            .take(num_children)
             .zip(sorts.iter())
             .fold(0, |ret, (value, sort)| {
                 usize::max(ret, self.compute_topo_rnk_node(egraph, *value, sort))
@@ -338,11 +344,12 @@ impl<C: Cost + Ord + Eq + Clone + Debug> Extractor<C> {
 
             for func_name in funcs.iter() {
                 let func = egraph.functions.get(func_name).unwrap();
-                let target_sort = func.schema.output.clone();
+                let target_sort = func.extraction_output_sort();
 
+                let output_idx = func.extraction_output_index();
                 let relax_hyperedge = |row: egglog_bridge::FunctionRow| {
                     if !row.subsumed {
-                        let target = row.vals.last().unwrap();
+                        let target = &row.vals[output_idx];
                         let mut updated = false;
                         if let Some(new_cost) = self.compute_cost_hyperedge(egraph, &row, func) {
                             match self
@@ -384,11 +391,12 @@ impl<C: Cost + Ord + Eq + Clone + Debug> Extractor<C> {
         // Save the edges for reconstruction
         for func_name in funcs.iter() {
             let func = egraph.functions.get(func_name).unwrap();
-            let target_sort = func.schema.output.clone();
+            let target_sort = func.extraction_output_sort();
+            let output_idx = func.extraction_output_index();
 
             let save_best_parent_edge = |row: egglog_bridge::FunctionRow| {
                 if !row.subsumed {
-                    let target = row.vals.last().unwrap();
+                    let target = &row.vals[output_idx];
                     if let Some(best_cost) = self.costs.get(target_sort.name()).unwrap().get(target)
                     {
                         if Some(best_cost.clone())
@@ -469,14 +477,19 @@ impl<C: Cost + Ord + Eq + Clone + Debug> Extractor<C> {
                 .unwrap()
                 .get(&value)
                 .unwrap();
+            let func = egraph.functions.get(func_name).unwrap();
+            let ch_sorts = &func.schema.input;
+
+            let num_children = func.extraction_num_children();
+            let output_name = func.extraction_term_name();
+
             let mut ch_terms: Vec<TermId> = Vec::new();
-            let ch_sorts = &egraph.functions.get(func_name).unwrap().schema.input;
-            for (value, sort) in hyperedge.iter().zip(ch_sorts.iter()) {
+            for (value, sort) in hyperedge.iter().take(num_children).zip(ch_sorts.iter()) {
                 ch_terms.push(
                     self.reconstruct_termdag_node_helper(egraph, termdag, *value, sort, cache),
                 );
             }
-            termdag.app(func_name.clone(), ch_terms)
+            termdag.app(output_name.to_string(), ch_terms)
         } else {
             // Base value case
             sort.reconstruct_termdag_base(egraph.backend.base_values(), value, termdag)
@@ -553,14 +566,13 @@ impl<C: Cost + Ord + Eq + Clone + Debug> Extractor<C> {
             let mut root_funcs: Vec<String> = Vec::new();
 
             for func_name in self.funcs.iter() {
-                // Need an eq on sorts
+                // Need an eq on sorts - use extraction_output_sort for view table support
                 if sort.name()
                     == egraph
                         .functions
                         .get(func_name)
                         .unwrap()
-                        .schema
-                        .output
+                        .extraction_output_sort()
                         .name()
                 {
                     root_funcs.push(func_name.clone());
@@ -569,10 +581,11 @@ impl<C: Cost + Ord + Eq + Clone + Debug> Extractor<C> {
 
             for func_name in root_funcs.iter() {
                 let func = egraph.functions.get(func_name).unwrap();
+                let output_idx = func.extraction_output_index();
 
                 let find_root_variants = |row: egglog_bridge::FunctionRow| {
                     if !row.subsumed {
-                        let target = row.vals.last().unwrap();
+                        let target = &row.vals[output_idx];
                         if *target == value {
                             let cost = self.compute_cost_hyperedge(egraph, &row, func).unwrap();
                             root_variants.push((cost, func_name.clone(), row.vals.to_vec()));

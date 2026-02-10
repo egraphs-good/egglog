@@ -95,6 +95,7 @@ fn remove_globals_cmd(cmd: ResolvedNCommand) -> Vec<ResolvedNCommand> {
                     let_binding: true,
                     span: span.clone(),
                     unionable: true,
+                    term_constructor: None,
                 };
                 vec![
                     GenericNCommand::Function(func_decl),

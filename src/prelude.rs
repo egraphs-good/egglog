@@ -314,8 +314,6 @@ pub fn rule(
         ruleset: ruleset.into(),
     };
 
-    rule.name = format!("{rule:?}");
-
     egraph.run_program(vec![Command::Rule { rule }])
 }
 
@@ -696,6 +694,7 @@ pub fn add_constructor(
         schema,
         cost,
         unextractable,
+        term_constructor: None,
     }])
 }
 

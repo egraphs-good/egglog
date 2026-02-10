@@ -25,7 +25,7 @@ expression: snapshot
         :ruleset __single_parent :name "singleparent__uf_update")
 (sort __view)
 (constructor Add (i64 i64) Math)
-(constructor __AddView (i64 i64 Math) __view)
+(constructor __AddView (i64 i64 Math) __view :term-constructor Add)
 (constructor __to_delete_Add (i64 i64) __view)
 (constructor __to_subsume_Add (i64 i64) __view)
 (rule ((__AddView c0_ c1_ new)

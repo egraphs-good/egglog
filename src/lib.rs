@@ -287,6 +287,51 @@ impl Function {
     pub fn can_subsume(&self) -> bool {
         self.can_subsume
     }
+
+    /// For view tables (with term_constructor), the effective output sort is the last input column.
+    /// For regular tables, it's the output sort.
+    /// This is used by extraction to determine which sort a table produces values for.
+    pub(crate) fn extraction_output_sort(&self) -> &ArcSort {
+        if self.decl.term_constructor.is_some() {
+            self.schema.input.last().unwrap()
+        } else {
+            &self.schema.output
+        }
+    }
+
+    /// Returns the number of children for extraction purposes.
+    /// For view tables, this excludes the last column (the e-class).
+    pub(crate) fn extraction_num_children(&self) -> usize {
+        if self.decl.term_constructor.is_some() {
+            self.schema.input.len() - 1
+        } else {
+            self.schema.input.len()
+        }
+    }
+
+    /// Returns the name to use when building terms during extraction.
+    /// For view tables, this is the term_constructor name.
+    pub(crate) fn extraction_term_name(&self) -> &str {
+        self.decl
+            .term_constructor
+            .as_ref()
+            .unwrap_or(&self.decl.name)
+    }
+
+    /// Returns the index of the output value in a row for extraction purposes.
+    /// For view tables, the e-class is the last input column (second-to-last in the row).
+    /// For regular tables, it's the last column (the actual output).
+    pub(crate) fn extraction_output_index(&self) -> usize {
+        if self.decl.term_constructor.is_some() {
+            // For view tables: input is [children..., eclass], output is view_sort
+            // Row is [children..., eclass, view_sort]
+            // We want eclass which is at index input.len() - 1
+            self.schema.input.len() - 1
+        } else {
+            // For regular tables: row is [inputs..., output]
+            self.schema.input.len()
+        }
+    }
 }
 
 #[derive(Clone, Debug)]

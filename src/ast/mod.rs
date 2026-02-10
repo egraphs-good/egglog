@@ -107,6 +107,7 @@ where
                     schema: f.schema.clone(),
                     cost: f.cost,
                     unextractable: f.unextractable,
+                    term_constructor: f.term_constructor.clone(),
                 },
                 FunctionSubtype::Custom => GenericCommand::Function {
                     span: f.span.clone(),
@@ -564,6 +565,9 @@ where
         schema: Schema,
         cost: Option<DefaultCost>,
         unextractable: bool,
+        /// For view tables in proof encoding: the constructor to use for building
+        /// terms from the first n-1 children during extraction.
+        term_constructor: Option<String>,
     },
 
     /// The `relation` command declares a named relation
@@ -895,6 +899,7 @@ where
                 schema,
                 cost,
                 unextractable,
+                term_constructor,
             } => {
                 write!(f, "(constructor {name} {schema}")?;
                 if let Some(cost) = cost {
@@ -902,6 +907,9 @@ where
                 }
                 if *unextractable {
                     write!(f, " :unextractable")?;
+                }
+                if let Some(tc) = term_constructor {
+                    write!(f, " :term-constructor {tc}")?;
                 }
                 write!(f, ")")
             }
@@ -1130,6 +1138,9 @@ where
     pub let_binding: bool,
     pub span: Span,
     pub unionable: bool,
+    /// For view tables in proof encoding: the constructor to use for building
+    /// terms from the first n-1 children during extraction.
+    pub term_constructor: Option<String>,
 }
 
 #[derive(Clone, Debug, PartialEq, Eq, Hash)]
@@ -1191,6 +1202,7 @@ impl FunctionDecl {
             let_binding: false,
             span,
             unionable: false,
+            term_constructor: None,
         }
     }
 
@@ -1214,6 +1226,7 @@ impl FunctionDecl {
             let_binding: false,
             span,
             unionable,
+            term_constructor: None,
         }
     }
 }
@@ -1238,6 +1251,7 @@ where
             let_binding: self.let_binding,
             span: self.span,
             unionable: self.unionable,
+            term_constructor: self.term_constructor,
         }
     }
 }
@@ -1517,6 +1531,7 @@ where
                 schema,
                 cost,
                 unextractable,
+                term_constructor,
             } => GenericCommand::Constructor {
                 span,
                 name: fun(name),
@@ -1526,6 +1541,7 @@ where
                 },
                 cost,
                 unextractable,
+                term_constructor: term_constructor.map(&mut *fun),
             },
             GenericCommand::Relation { span, name, inputs } => GenericCommand::Relation {
                 span,
@@ -1714,12 +1730,14 @@ where
                 schema,
                 cost,
                 unextractable,
+                term_constructor,
             } => GenericCommand::Constructor {
                 span,
                 name,
                 schema,
                 cost,
                 unextractable,
+                term_constructor,
             },
             GenericCommand::Relation { span, name, inputs } => {
                 GenericCommand::Relation { span, name, inputs }

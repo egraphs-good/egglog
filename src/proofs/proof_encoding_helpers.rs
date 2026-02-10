@@ -6,7 +6,7 @@ use std::path::Path;
 use crate::{
     EGraph, TypeInfo,
     ast::{
-        Command, Fact, GenericCommand, ResolvedAction, ResolvedCommand, ResolvedExpr,
+        Command, Expr, Fact, GenericCommand, ResolvedAction, ResolvedCommand, ResolvedExpr,
         ResolvedExprExt, Schedule,
     },
     proofs::proof_encoding::ProofInstrumentor,
@@ -175,6 +175,14 @@ impl ProofInstrumentor<'_> {
             .collect();
         self.egraph.parser.ensure_no_reserved_symbols = true;
         res
+    }
+
+    /// Internal parse helper for term encoding- parse an expression and crash on failure.
+    pub(crate) fn parse_expr(&mut self, input: &str) -> Expr {
+        self.egraph.parser.ensure_no_reserved_symbols = false;
+        let res = self.egraph.parser.get_expr_from_string(None, input);
+        self.egraph.parser.ensure_no_reserved_symbols = true;
+        res.unwrap()
     }
 
     // Each function/constructor gets a view table, the canonicalized e-nodes to accelerate e-matching.

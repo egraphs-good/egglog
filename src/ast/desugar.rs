@@ -25,14 +25,13 @@ pub(crate) fn desugar_command(
             schema,
             cost,
             unextractable,
-        } => vec![NCommand::Function(FunctionDecl::constructor(
-            span,
-            name,
-            schema,
-            cost,
-            unextractable,
-            true,
-        ))],
+            term_constructor,
+        } => {
+            let mut fdecl =
+                FunctionDecl::constructor(span, name, schema, cost, unextractable, true);
+            fdecl.term_constructor = term_constructor;
+            vec![NCommand::Function(fdecl)]
+        }
         Command::Relation { span, name, inputs } => desugar_relation(parser, span, name, inputs),
         Command::Datatype {
             span,
