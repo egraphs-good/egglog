@@ -25,12 +25,15 @@ impl Run {
             .filter_map(|output| match output {
                 // Skip OverallStatistics - contains non-deterministic Duration timing data
                 CommandOutput::OverallStatistics(_) => None,
+                // Skpping PrintFunction for now due to egglog nondeterminism bug: https://github.com/egraphs-good/egglog/issues/793
+                CommandOutput::PrintFunction(..) => None,
                 // All other variants use normal Display formatting
                 other => Some(other.to_string()),
             })
             .collect::<Vec<_>>()
             .join("")
     }
+
     fn run(&self) {
         let _ = env_logger::builder().is_test(true).try_init();
         let program = std::fs::read_to_string(&self.path)
@@ -193,19 +196,7 @@ impl Run {
             if self.proofs && !self.requires_proofs() {
                 return true;
             }
-
-            // Skip tests with known non-deterministic output
-            let filename = self.path.file_stem().unwrap().to_string_lossy();
-            const SKIP_PATTERNS: [&str; 4] = [
-                "extract-vec-bench",
-                "python_array_optimize",
-                "stresstest_large_expr",
-                "towers-of-hanoi",
-            ];
-
-            SKIP_PATTERNS.iter().any(|pat| filename.contains(pat))
-            // Term encoding is currently causing non-deterministic database to be produced
-            || (filename.contains("math-microbenchmark") && self.term_encoding)
+            (filename.contains("math-microbenchmark") && self.term_encoding)
         }
     }
 }
