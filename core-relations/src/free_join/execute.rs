@@ -588,6 +588,7 @@ impl<'a> JoinState<'a> {
         }
         let chunk_size = action_buf.morsel_size(cur, instr_order.len());
         let mut cur_size = estimate_size(&stages.instrs[instr_order.get(cur)], binding_info);
+        // TODO: add dynamic sort plan back
         // if cur_size > 32 && cur % 3 == 1 && cur < instr_order.len() - 1 {
         //     // If we have a reasonable number of tuples to process, adjust the variable order every
         //     // 3 rounds, but always make sure to readjust on the second roung.
@@ -1116,27 +1117,36 @@ impl<'a> JoinState<'a> {
                             }
                         }
                     }
-                    MatScanMode::Value(index_vars) => {
+                    MatScanMode::Value(index_vars) | MatScanMode::Lookup(index_vars) => {
                         let keys = index_vars
                             .iter()
                             .map(|var| binding_info.bindings[*var])
                             .collect::<Vec<Value>>();
                         // lookup keys
                         if let Some(group) = cover_mat.get(&keys) {
-                            // enumerate non-keys
-                            // for vals in group.value().iter() {
-                            for vals in group.iter() {
-                                debug_assert!(vals.len() == bind.len()); // TODO: not true for non-full query
-                                for (col, var) in bind.iter() {
-                                    updates.push_binding(*var, vals[col.index()]);
-                                }
-                                if prune_probers(&mut updates, binding_info, None, Some(vals)) {
+                            if matches!(mode, MatScanMode::Lookup(_)) {
+                                assert_eq!(to_intersect.len(), 0);
+                                assert_eq!(bind.len(), 0);
+                                if group.len() > 0 {
                                     updates.finish_frame();
-                                } else {
-                                    updates.rollback();
                                 }
-                                if updates.frames() >= chunk_size {
-                                    drain_updates_parallel!(updates);
+                                drain_updates!(updates);
+                            } else {
+                                // enumerate non-keys
+                                // for vals in group.value().iter() {
+                                for vals in group.iter() {
+                                    debug_assert!(vals.len() == bind.len()); // TODO: not true for non-full query
+                                    for (col, var) in bind.iter() {
+                                        updates.push_binding(*var, vals[col.index()]);
+                                    }
+                                    if prune_probers(&mut updates, binding_info, None, Some(vals)) {
+                                        updates.finish_frame();
+                                    } else {
+                                        updates.rollback();
+                                    }
+                                    if updates.frames() >= chunk_size {
+                                        drain_updates_parallel!(updates);
+                                    }
                                 }
                             }
                         }
