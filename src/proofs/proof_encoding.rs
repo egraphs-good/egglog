@@ -1189,10 +1189,22 @@ impl<'a> ProofInstrumentor<'a> {
                     self.parse_expr(&instrumented_variants),
                 ));
             }
+            ResolvedNCommand::PrintSize(span, name) => {
+                // In proof mode, print the size of the view table for constructors
+                let new_name = name.as_ref().map(|n| {
+                    if self.egraph.type_info.get_func_type(n).is_some_and(|f| {
+                        f.subtype == FunctionSubtype::Constructor
+                    }) {
+                        self.view_name(n)
+                    } else {
+                        n.clone()
+                    }
+                });
+                res.push(Command::PrintSize(span.clone(), new_name));
+            }
             ResolvedNCommand::Pop(..)
             | ResolvedNCommand::Push(..)
             | ResolvedNCommand::AddRuleset(..)
-            | ResolvedNCommand::PrintSize(..)
             | ResolvedNCommand::Output { .. }
             | ResolvedNCommand::Input { .. }
             | ResolvedNCommand::UnstableCombinedRuleset(..)
