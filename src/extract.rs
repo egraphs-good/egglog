@@ -1,3 +1,4 @@
+use crate::ast::FunctionSubtype;
 use crate::termdag::{TermDag, TermId};
 use crate::util::{HashMap, HashSet};
 use crate::*;
@@ -176,8 +177,16 @@ impl<C: Cost + Ord + Eq + Clone + Debug> Extractor<C> {
         let mut rootsorts = rootsorts.unwrap_or_default();
 
         // Built a reverse index from output sort to function head symbols
+        // Only include constructors (not regular functions) and respect unextractable flag
         let mut rev_index: HashMap<String, Vec<String>> = Default::default();
         for func in egraph.functions.iter() {
+            // Skip non-constructors (regular functions shouldn't be extracted)
+            // But allow functions with term_constructor (view tables in proof mode)
+            let is_constructor = func.1.decl.subtype == FunctionSubtype::Constructor
+                || func.1.decl.term_constructor.is_some();
+            if !is_constructor {
+                continue;
+            }
             if !respect_unextractable || !func.1.decl.unextractable {
                 let func_name = func.0.clone();
                 // For view tables (with term_constructor in proof mode), the e-class is the last input colunm, so use this helper
