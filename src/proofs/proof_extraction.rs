@@ -49,7 +49,7 @@ impl ProofInstrumentor<'_> {
 
         // Use the version that ignores unextractable flag since proof extraction
         // needs to extract proofs from all terms including those marked unextractable
-        let extractor = Extractor::compute_costs_from_rootsorts_ignoring_unextractable(
+        let extractor = Extractor::compute_costs_from_rootsorts_allow_unextractable(
             None,
             self.egraph,
             TreeAdditiveCostModel::default(),

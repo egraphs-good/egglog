@@ -695,6 +695,7 @@ pub fn add_constructor(
         cost,
         unextractable,
         term_constructor: None,
+        term: false,
     }])
 }
 

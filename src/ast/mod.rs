@@ -108,6 +108,7 @@ where
                     cost: f.cost,
                     unextractable: f.unextractable,
                     term_constructor: f.term_constructor.clone(),
+                    term: !f.unionable,
                 },
                 FunctionSubtype::Custom => GenericCommand::Function {
                     span: f.span.clone(),
@@ -568,6 +569,10 @@ where
         /// For view tables in proof encoding: the constructor to use for building
         /// terms from the first n-1 children during extraction.
         term_constructor: Option<String>,
+        /// If true, this is a "term" table that does not allow union.
+        /// Sets `unionable: false` on the function declaration.
+        /// This is used by the relation desugaring and by proofs.
+        term: bool,
     },
 
     /// The `relation` command declares a named relation
@@ -900,6 +905,7 @@ where
                 cost,
                 unextractable,
                 term_constructor,
+                term,
             } => {
                 write!(f, "(constructor {name} {schema}")?;
                 if let Some(cost) = cost {
@@ -910,6 +916,9 @@ where
                 }
                 if let Some(tc) = term_constructor {
                     write!(f, " :term-constructor {tc}")?;
+                }
+                if *term {
+                    write!(f, " :term")?;
                 }
                 write!(f, ")")
             }
@@ -1532,6 +1541,7 @@ where
                 cost,
                 unextractable,
                 term_constructor,
+                term,
             } => GenericCommand::Constructor {
                 span,
                 name: fun(name),
@@ -1542,6 +1552,7 @@ where
                 cost,
                 unextractable,
                 term_constructor: term_constructor.map(&mut *fun),
+                term,
             },
             GenericCommand::Relation { span, name, inputs } => GenericCommand::Relation {
                 span,
@@ -1731,6 +1742,7 @@ where
                 cost,
                 unextractable,
                 term_constructor,
+                term,
             } => GenericCommand::Constructor {
                 span,
                 name,
@@ -1738,6 +1750,7 @@ where
                 cost,
                 unextractable,
                 term_constructor,
+                term,
             },
             GenericCommand::Relation { span, name, inputs } => {
                 GenericCommand::Relation { span, name, inputs }

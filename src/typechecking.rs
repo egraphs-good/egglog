@@ -101,6 +101,8 @@ pub struct TypeInfo {
     primitives: HashMap<String, Vec<PrimitiveWithId>>,
     func_types: HashMap<String, FuncType>,
     pub(crate) global_sorts: HashMap<String, ArcSort>,
+    /// Sorts that do not allow union (e.g., from `:term` constructors or relations).
+    pub(crate) non_unionable_sorts: HashSet<String>,
 }
 
 // These methods need to be on the `EGraph` in order to
@@ -444,6 +446,13 @@ impl TypeInfo {
         results.into_iter().next().unwrap()
     }
 
+    /// Check if a sort allows union operations.
+    /// A sort is unionable if it's an eq_sort and not marked as non-unionable
+    /// (e.g., from a `:term` constructor or relation desugaring).
+    pub fn is_sort_unionable(&self, sort: &ArcSort) -> bool {
+        sort.is_eq_sort() && !self.non_unionable_sorts.contains(sort.name())
+    }
+
     fn function_to_functype(&self, func: &FunctionDecl) -> Result<FuncType, TypeError> {
         let input = func
             .schema
@@ -505,6 +514,12 @@ impl TypeInfo {
                 fdecl.name.clone(),
                 fdecl.span.clone(),
             ));
+        }
+        // Mark the output sort as non-unionable if this is a non-unionable constructor
+        // (e.g., from `:term` annotation or relation desugaring)
+        if fdecl.subtype == FunctionSubtype::Constructor && !fdecl.unionable {
+            self.non_unionable_sorts
+                .insert(fdecl.schema.output.clone());
         }
         bound_vars.insert("old", (fdecl.span.clone(), output_type.clone()));
         bound_vars.insert("new", (fdecl.span.clone(), output_type.clone()));
@@ -829,6 +844,8 @@ pub enum TypeError {
     AllAlternativeFailed(Vec<TypeError>),
     #[error("{}\nCannot union values of sort {}", .1, .0.name())]
     NonEqsortUnion(ArcSort, Span),
+    #[error("{}\nCannot union values of sort {} because it is marked as non-unionable (from :term or relation)", .1, .0.name())]
+    NonUnionableSort(ArcSort, Span),
     #[error(
         "{span}\nNon-global variable `{name}` must not start with `{}`.",
         crate::GLOBAL_NAME_PREFIX

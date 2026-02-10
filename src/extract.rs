@@ -157,7 +157,7 @@ impl<C: Cost + Ord + Eq + Clone + Debug> Extractor<C> {
     /// Like `compute_costs_from_rootsorts`, but ignores the unextractable flag.
     /// This is used for proof extraction where we need to extract proofs even
     /// from terms that are marked unextractable (like global let bindings).
-    pub(crate) fn compute_costs_from_rootsorts_ignoring_unextractable(
+    pub(crate) fn compute_costs_from_rootsorts_allow_unextractable(
         rootsorts: Option<Vec<ArcSort>>,
         egraph: &EGraph,
         cost_model: impl CostModel<C> + 'static,
