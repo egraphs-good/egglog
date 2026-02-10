@@ -10,6 +10,9 @@ struct Run {
     desugar: bool,
     term_encoding: bool,
     proofs: bool,
+    /// proof_testing mode adds automatic prove-exists commands, which produce
+    /// proof output that differs from normal mode. This should use separate snapshots.
+    proof_testing: bool,
 }
 
 impl Run {
@@ -53,6 +56,7 @@ impl Run {
                 desugar: false,
                 term_encoding: false,
                 proofs: false,
+                proof_testing: false,
             };
 
             normal_run.test_program(
@@ -69,15 +73,20 @@ impl Run {
                 .iter()
                 .any(|o| !matches!(o, CommandOutput::RunSchedule(..)))
         {
-            let snapshot_name = self.name().to_string();
+            // Use base snapshot name (without desugar/term_encoding/proofs suffixes)
+            // so all variants compare against the same expected output
+            // proof_testing has different output due to automatic prove-exists, so it uses separate snapshots
+            let snapshot_name = self.snapshot_name();
             let snapshot_content = self.outputs_to_snapshot(&_outputs);
             insta::assert_snapshot!(snapshot_name, snapshot_content);
         }
     }
 
     fn egraph(&self) -> EGraph {
-        if self.proofs {
+        if self.proof_testing {
             EGraph::new_with_proofs().with_proof_testing()
+        } else if self.proofs {
+            EGraph::new_with_proofs()
         } else if self.term_encoding {
             EGraph::new_with_term_encoding()
         } else {
@@ -154,6 +163,24 @@ impl Run {
         })
     }
 
+    /// Base snapshot name without mode suffixes - all variants share the same snapshot
+    /// Exception: proof_testing has different output due to automatic prove-exists
+    fn snapshot_name(&self) -> String {
+        let mut name = String::new();
+        if self.path.parent().unwrap().ends_with("fail-typecheck") {
+            name.push_str("fail-typecheck/");
+        }
+        let stem = self.path.file_stem().unwrap();
+        let stem_str = stem.to_string_lossy().replace(['.', '-', ' '], "_");
+        name.push_str(&stem_str);
+        // proof_testing has different output, so use separate snapshot
+        if self.proof_testing {
+            name.push_str("_proof_testing");
+        }
+        name
+    }
+
+    /// Full test name with mode suffixes for test identification
     fn name(&self) -> impl std::fmt::Display + '_ {
         struct Wrapper<'a>(&'a Run);
         impl std::fmt::Display for Wrapper<'_> {
@@ -172,6 +199,9 @@ impl Run {
                 }
                 if self.0.proofs {
                     write!(f, "_proofs")?;
+                }
+                if self.0.proof_testing {
+                    write!(f, "_proof_testing")?;
                 }
                 Ok(())
             }
@@ -192,11 +222,7 @@ impl Run {
         // in non-parallel mode, selectively skip
         #[cfg(not(debug_assertions))]
         {
-            // Skip proof tests unless they require proofs
-            if self.proofs && !self.requires_proofs() {
-                return true;
-            }
-            (filename.contains("math-microbenchmark") && self.term_encoding)
+            self.path.to_string_lossy().contains("math-microbenchmark") && self.term_encoding
         }
     }
 }
@@ -211,6 +237,7 @@ fn generate_tests(glob: &str) -> Vec<Trial> {
             desugar: false,
             term_encoding: false,
             proofs: false,
+            proof_testing: false,
         };
         let should_fail = run.should_fail();
         let requires_proofs = run.requires_proofs();
@@ -242,9 +269,18 @@ fn generate_tests(glob: &str) -> Vec<Trial> {
             });
         }
 
+        // proofs mode (without proof_testing) should produce the same output as normal mode
         if !should_fail && supports_proofs {
             push_trial(Run {
                 proofs: true,
+                ..run.clone()
+            });
+        }
+
+        // proof_testing mode adds automatic prove-exists, which has different output
+        if !should_fail && supports_proofs {
+            push_trial(Run {
+                proof_testing: true,
                 ..run.clone()
             });
         }
