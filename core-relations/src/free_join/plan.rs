@@ -42,6 +42,7 @@ pub(crate) enum MatScanMode {
     Full,
     KeyOnly,
     Value(Vec<Variable>),
+    Lookup(Vec<Variable>),
 }
 
 #[derive(Clone, Debug, PartialEq, Eq)]
@@ -413,10 +414,6 @@ pub(crate) fn tree_decompose_and_plan(
             })
             .map(|(atom_id, _)| atom_id)
             .collect::<IndexSet<_>>();
-        let bag_id = bags.len();
-        for &atom_id in subquery_atoms.iter() {
-            atom_to_bag.insert(atom_id, bag_id);
-        }
 
         // Step 4: Add a fake atom that covers the neighborhood back to the main query
         // Both atoms and vars need to be updated
@@ -525,6 +522,44 @@ pub(crate) fn tree_decompose_and_plan(
         });
     }
 
+    // Step 5.5: Resort the bags to be in topological order
+    let mut bags = bags.into_iter().map(Some).collect::<Vec<_>>();
+    let mut bags_topo = Vec::with_capacity(bags.len());
+    let mut visited = vec![false; bags.len()];
+    let mut stack = Vec::new();
+    if bags.len() > 0 {
+        stack.push(0);
+        visited[0] = true;
+    }
+    // eprintln!("Topologically sorting bags...");
+    while !stack.is_empty() {
+        let bag_id = stack.pop().unwrap();
+        // eprintln!("visiting {}", bag_id);
+        let bag = mem::take(&mut bags[bag_id]).unwrap();
+        for (i, child_bag) in bags.iter().enumerate().filter(|(_, b)| b.is_some()) {
+            let child_bag = child_bag.as_ref().unwrap();
+            if child_bag
+                .vars
+                .iter()
+                .any(|(var, _)| bag.vars.contains_key(var))
+                && !visited[i]
+            {
+                visited[i] = true;
+                // eprintln!("{} -> {}", bag_id, i);
+                stack.push(i);
+            }
+        }
+        bags_topo.push(bag);
+    }
+    // from leaves to root
+    bags_topo.reverse();
+    let bags = bags_topo;
+    for (i, bag) in bags.iter().enumerate() {
+        for (atom_id, _) in bag.atoms.iter() {
+            atom_to_bag.insert(atom_id, i);
+        }
+    }
+
     // number of bags a variable is in, used to decide whether to pass it as a message variable or a value variable
     let mut n_used_in_bag = DenseIdMap::new();
     for bag in bags.iter() {
@@ -536,7 +571,7 @@ pub(crate) fn tree_decompose_and_plan(
         }
     }
 
-    // Step 5: plan each bag. The plan needs to be constrained by message variables from previous bags.
+    // Step 6: plan each bag. The plan needs to be constrained by message variables from previous bags.
     let mut blocks: Vec<(JoinStages, MatSpec)> = vec![];
     for bag in bags.iter() {
         let mut msg_vars = vec![];
@@ -552,58 +587,31 @@ pub(crate) fn tree_decompose_and_plan(
         }
         let (header, mut instrs) = plan_stages(&bag, strat);
 
-        // TODO: alternatively, we don't introduce any new FusedIntersect, but we modify ScanSpec/SingleScanSpec to include the materializations (MatId)
-        let mut prologue = vec![];
-        let mut vars = bag.vars.clone();
+        let mut epilogue = vec![];
         for (i, prev_block) in blocks.iter().enumerate().rev() {
-            let mut to_bind = smallvec![];
-            let mut to_intersect: Vec<(ScanSpec, SmallVec<[ColumnId; 2]>)> = vec![];
-            for (i, &msg_var) in prev_block.1.msg_vars.iter().enumerate() {
-                if let Some(vinfo) = vars.take(msg_var) {
-                    to_bind.push((ColumnId::from_usize(i), msg_var));
-                    for occ in vinfo.occurrences {
-                        let atom_desc = match to_intersect
-                            .iter_mut()
-                            .find(|(spec, _)| spec.to_index.atom == occ.atom)
-                        {
-                            Some(x) => x,
-                            None => {
-                                to_intersect.push((
-                                    ScanSpec {
-                                        to_index: SubAtom {
-                                            atom: occ.atom,
-                                            vars: smallvec![],
-                                        },
-                                        constraints: vec![],
-                                    },
-                                    smallvec![],
-                                ));
-                                to_intersect.last_mut().unwrap()
-                            }
-                        };
-                        // Make sure the FusedIntersect is used to prune this atom (which may have been pruned by other variables)
-                        atom_desc.0.to_index.vars.extend(occ.vars.iter().copied());
-                        atom_desc
-                            .1
-                            .extend(occ.vars.iter().map(|_| ColumnId::from_usize(i)));
-                    }
-                }
-            }
-            if !to_bind.is_empty() && !to_intersect.is_empty() {
-                prologue.push(JoinStage::FusedIntersectMat {
+            if prev_block
+                .1
+                .msg_vars
+                .iter()
+                .all(|var| bag.vars.contains_key(*var))
+            {
+                epilogue.push(JoinStage::FusedIntersectMat {
                     cover: MatId::from_usize(i),
-                    mode: MatScanMode::KeyOnly,
-                    bind: to_bind,
-                    to_intersect: to_intersect
-                        .into_iter()
-                        .map(|(spec, key_spec)| (ScanMatSpec::Scan(spec), key_spec))
-                        .collect(),
+                    mode: MatScanMode::Lookup(prev_block.1.msg_vars.clone()),
+                    bind: smallvec![],
+                    to_intersect: vec![],
                 });
+            } else {
+                // assert!(
+                //     !prev_block
+                //         .1
+                //         .msg_vars
+                //         .iter()
+                //         .any(|var| bag.vars.contains_key(*var))
+                // );
             }
         }
-
-        // prepend the prologue
-        instrs.splice(0..0, prologue.into_iter());
+        instrs.extend(epilogue.into_iter());
 
         let stages = JoinStages {
             header,
@@ -612,7 +620,7 @@ pub(crate) fn tree_decompose_and_plan(
         blocks.push((stages, MatSpec { msg_vars, val_vars }));
     }
 
-    // Step 6: Add the second pass from bottom to top
+    // Step 7: Add the second pass from bottom to top
     let mut result_block = vec![];
 
     let mut pinned_vars = DenseIdMap::<Variable, ()>::new();
@@ -681,6 +689,7 @@ pub(crate) fn plan_query(query: Query) -> Plan {
             header: header,
             instrs: Arc::new(instrs),
         };
+        dbg!(&stages);
 
         Plan::SinglePlan(SinglePlan {
             atoms: Arc::new(ctx.atoms),
@@ -707,6 +716,7 @@ struct StageInfo {
 }
 
 /// Immutable context for query planning containing references to query metadata.
+#[derive(Debug)]
 pub(crate) struct PlanningContext {
     vars: DenseIdMap<Variable, VarInfo>,
     atoms: DenseIdMap<AtomId, Atom>,
