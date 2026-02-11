@@ -552,6 +552,7 @@ impl TypeInfo {
             },
             cost: fdecl.cost,
             unextractable: fdecl.unextractable,
+            hidden: fdecl.hidden,
             let_binding: fdecl.let_binding,
             span: fdecl.span.clone(),
             term_constructor: fdecl.term_constructor.clone(),

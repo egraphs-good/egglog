@@ -1,0 +1,11 @@
+---
+source: tests/files.rs
+assertion_line: 102
+expression: snapshot_content
+---
+@HiddenView: 1
+@VisibleView: 1
+@v4: 1
+@v5: 1
+Hidden: 1
+Visible: 1

@@ -110,6 +110,7 @@ impl GlobalRemover<'_> {
                         merge: None,
                         cost: None,
                         unextractable: true,
+                        hidden: false,
                         let_binding: true,
                         span: span.clone(),
                         term_constructor: None,

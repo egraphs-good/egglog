@@ -700,6 +700,7 @@ pub fn add_constructor(
         schema,
         cost,
         unextractable,
+        hidden: false,
         term_constructor: None,
     }])
 }

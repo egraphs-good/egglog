@@ -1,0 +1,6 @@
+---
+source: tests/files.rs
+assertion_line: 102
+expression: snapshot_content
+---
+Visible: 1
