@@ -364,9 +364,9 @@ fn generate_proof_support_snapshot_test() -> Trial {
         for entry in glob::glob("tests/**/*.egg").unwrap() {
             let path = entry.unwrap();
             if !file_supports_proofs(&path) {
-                // Convert to relative path for consistent snapshots
-                let relative = path.strip_prefix("tests/").unwrap_or(&path);
-                supported_files.push(relative.to_string_lossy().to_string());
+                // Use just the filename for cross-platform consistency
+                let filename = path.file_name().unwrap().to_string_lossy().to_string();
+                supported_files.push(filename);
             }
         }
 

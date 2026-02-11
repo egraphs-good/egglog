@@ -1,9 +1,9 @@
-; Test :term constructors with extraction
-; :term constructors can still be extracted
+; Test :nounion sorts with extraction
+; :nounion sorts can still be extracted
 
-(sort TermSort)
-(constructor term-leaf (i64) TermSort :term)
-(constructor term-branch (TermSort TermSort) TermSort :term :cost 2)
+(sort TermSort :nounion)
+(constructor term-leaf (i64) TermSort)
+(constructor term-branch (TermSort TermSort) TermSort :cost 2)
 
 ; Build a simple tree
 (term-branch 
@@ -12,6 +12,6 @@
     (term-leaf 2)
     (term-leaf 3)))
 
-; Extract should work on :term constructors
+; Extract should work on :nounion sorts
 (extract (term-leaf 1))
 (extract (term-branch (term-leaf 1) (term-branch (term-leaf 2) (term-leaf 3))))

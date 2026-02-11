@@ -2,5 +2,5 @@
 source: tests/files.rs
 expression: err_msg
 ---
-In 1:1-22 of tests/fail-typecheck/repro-duplicated-var.egg: (function f (i64) i64)
+In 1:1-22 of repro-duplicated-var.egg: (function f (i64) i64)
 parse error: functions are required to specify merge behaviour

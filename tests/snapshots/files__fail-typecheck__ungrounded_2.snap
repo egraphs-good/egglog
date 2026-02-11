@@ -2,5 +2,5 @@
 source: tests/files.rs
 expression: err_msg
 ---
-In 1:1-25 of tests/fail-typecheck/ungrounded-2.egg: (rule ((= 1 (+ x x))) ())
+In 1:1-25 of ungrounded-2.egg: (rule ((= 1 (+ x x))) ())
 Variable x is ungrounded

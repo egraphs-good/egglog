@@ -101,7 +101,7 @@ pub struct TypeInfo {
     primitives: HashMap<String, Vec<PrimitiveWithId>>,
     func_types: HashMap<String, FuncType>,
     pub(crate) global_sorts: HashMap<String, ArcSort>,
-    /// Sorts that do not allow union (e.g., from `:term` constructors or relations).
+    /// Sorts that do not allow union (e.g., from `:no-union` sorts or relations).
     pub(crate) non_unionable_sorts: HashSet<String>,
 }
 
@@ -222,15 +222,21 @@ impl EGraph {
                 name,
                 presort_and_args,
                 uf,
+                unionable,
             } => {
                 // Note this is bad since typechecking should be pure and idempotent
                 // Otherwise typechecking the same program twice will fail
                 self.declare_sort(name.clone(), presort_and_args, span.clone())?;
+                // Mark as non-unionable if the sort declaration says so
+                if !unionable {
+                    self.type_info.non_unionable_sorts.insert(name.clone());
+                }
                 ResolvedNCommand::Sort {
                     span: span.clone(),
                     name: name.clone(),
                     presort_and_args: presort_and_args.clone(),
                     uf: uf.clone(),
+                    unionable: *unionable,
                 }
             }
             NCommand::CoreAction(Action::Let(span, var, expr)) => {
@@ -458,7 +464,7 @@ impl TypeInfo {
 
     /// Check if a sort allows union operations.
     /// A sort is unionable if it's an eq_sort and not marked as non-unionable
-    /// (e.g., from a `:term` constructor or relation desugaring).
+    /// (e.g., from `(sort Foo :no-union)` or relation desugaring).
     pub fn is_sort_unionable(&self, sort: &ArcSort) -> bool {
         sort.is_eq_sort() && !self.non_unionable_sorts.contains(sort.name())
     }
@@ -525,11 +531,6 @@ impl TypeInfo {
                 fdecl.span.clone(),
             ));
         }
-        // Mark the output sort as non-unionable if this is a non-unionable constructor
-        // (e.g., from `:term` annotation or relation desugaring)
-        if fdecl.subtype == FunctionSubtype::Constructor && !fdecl.unionable {
-            self.non_unionable_sorts.insert(fdecl.schema.output.clone());
-        }
         bound_vars.insert("old", (fdecl.span.clone(), output_type.clone()));
         bound_vars.insert("new", (fdecl.span.clone(), output_type.clone()));
 
@@ -546,7 +547,6 @@ impl TypeInfo {
             unextractable: fdecl.unextractable,
             let_binding: fdecl.let_binding,
             span: fdecl.span.clone(),
-            unionable: fdecl.unionable,
             term_constructor: fdecl.term_constructor.clone(),
         })
     }
@@ -859,7 +859,7 @@ pub enum TypeError {
     AllAlternativeFailed(Vec<TypeError>),
     #[error("{}\nCannot union values of sort {}", .1, .0.name())]
     NonEqsortUnion(ArcSort, Span),
-    #[error("{}\nCannot union values of sort {} because it is marked as non-unionable (from :term or relation)", .1, .0.name())]
+    #[error("{}\nCannot union values of sort {} because it is marked as non-unionable (:nounion or relation)", .1, .0.name())]
     NonUnionableSort(ArcSort, Span),
     #[error(
         "{span}\nNon-global variable `{name}` must not start with `{}`.",

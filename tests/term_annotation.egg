@@ -1,9 +1,9 @@
-; Test the :term annotation
-; :term marks a constructor as non-unionable, meaning values of its output sort cannot be unioned
+; Test the :nounion annotation on sorts
+; :nounion marks a sort as non-unionable, meaning values of that sort cannot be unioned
 
-; Create a sort and a :term constructor
-(sort TermSort)
-(constructor term-fn (i64 i64) TermSort :term)
+; Create a sort with :nounion and a constructor
+(sort TermSort :nounion)
+(constructor term-fn (i64 i64) TermSort)
 
 ; Create some terms - this should succeed
 (term-fn 1 2)
@@ -15,15 +15,15 @@
 (check (term-fn 3 4))
 (check (term-fn 5 6))
 
-; Test :term with :cost option
-(sort TermSort2)
-(constructor term-fn2 (i64) TermSort2 :term :cost 5)
+; Test :nounion with constructor :cost option
+(sort TermSort2 :nounion)
+(constructor term-fn2 (i64) TermSort2 :cost 5)
 (term-fn2 100)
 (check (term-fn2 100))
 
-; Test :term with :unextractable option  
-(sort TermSort3)
-(constructor term-fn3 (i64) TermSort3 :term :unextractable)
+; Test :nounion with constructor :unextractable option  
+(sort TermSort3 :nounion)
+(constructor term-fn3 (i64) TermSort3 :unextractable)
 (term-fn3 200)
 (check (term-fn3 200))
 

@@ -2,6 +2,6 @@
 source: tests/files.rs
 expression: err_msg
 ---
-In 4:1-17 of tests/fail-typecheck/shadow-local-global.egg: (let $a (Wrap 1))
-In 8:8-24 of tests/fail-typecheck/shadow-local-global.egg: (let $a (Wrap 1))
+In 4:1-17 of shadow-local-global.egg: (let $a (Wrap 1))
+In 8:8-24 of shadow-local-global.egg: (let $a (Wrap 1))
 Shadowing is not allowed, but found pattern variable `$a` conflicts with global `$a`

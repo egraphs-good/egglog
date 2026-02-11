@@ -2,5 +2,8 @@
 source: tests/files.rs
 expression: err_msg
 ---
-In 13:1-35 of tests/fail-typecheck/fail_term_union.egg: (union (term-fn 1 2) (term-fn 3 4))
-Cannot union values of sort TermSort because it is marked as non-unionable (from :term or relation)
+In 5:1-24 of fail_term_union.egg: (sort TermSort :nounion)
+parse error: usages:
+(sort <name>)
+(sort <name> :uf <uf-function>)
+(sort <name> (<container sort> <argument sort>*))

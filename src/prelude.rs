@@ -667,6 +667,7 @@ pub fn add_sort(egraph: &mut EGraph, name: &str) -> Result<Vec<CommandOutput>, E
         name: name.to_owned(),
         presort_and_args: None,
         uf: None,
+        unionable: true,
     }])
 }
 
@@ -700,7 +701,6 @@ pub fn add_constructor(
         cost,
         unextractable,
         term_constructor: None,
-        term: false,
     }])
 }
 

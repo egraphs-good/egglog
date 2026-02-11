@@ -266,6 +266,7 @@ impl Parser {
                         name: name.expect_atom("sort name")?,
                         presort_and_args: None,
                         uf: None,
+                        unionable: true,
                     }],
                     [name, call @ Sexp::List(..)] => {
                         let (func, args, _) = call.expect_call("container sort declaration")?;
@@ -277,6 +278,7 @@ impl Parser {
                                 map_fallible(args, self, Self::parse_expr)?,
                             )),
                             uf: None,
+                            unionable: true,
                         }]
                     }
                     [name, rest @ ..] => {
@@ -295,6 +297,7 @@ impl Parser {
                             name: name.expect_atom("sort name")?,
                             presort_and_args: None,
                             uf,
+                            unionable: true,
                         }]
                     }
                     _ => {
@@ -345,7 +348,6 @@ impl Parser {
                     let mut cost = None;
                     let mut unextractable = false;
                     let mut term_constructor = None;
-                    let mut term = false;
                     for (key, val) in self.parse_options(rest)? {
                         match (key, val) {
                             (":unextractable", []) => unextractable = true,
@@ -353,7 +355,6 @@ impl Parser {
                             (":term-constructor", [tc]) => {
                                 term_constructor = Some(tc.expect_atom("term constructor name")?)
                             }
-                            (":term", []) => term = true,
                             _ => return error!(span, "could not parse constructor options"),
                         }
                     }
@@ -365,7 +366,6 @@ impl Parser {
                         cost,
                         unextractable,
                         term_constructor,
-                        term,
                     }]
                 }
                 _ => {
@@ -373,8 +373,7 @@ impl Parser {
                     let b = "(constructor <name> (<input sort>*) <output sort> :cost <cost>)";
                     let c = "(constructor <name> (<input sort>*) <output sort> :unextractable)";
                     let d = "(constructor <name> (<input sort>*) <output sort> :term-constructor <constructor name>)";
-                    let e = "(constructor <name> (<input sort>*) <output sort> :term)";
-                    return error!(span, "usages:\n{a}\n{b}\n{c}\n{d}\n{e}");
+                    return error!(span, "usages:\n{a}\n{b}\n{c}\n{d}");
                 }
             },
             "relation" => match tail {

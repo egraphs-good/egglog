@@ -1,0 +1,7 @@
+---
+source: tests/files.rs
+expression: snapshot_content
+---
+(let prop0 (= (Num 1) (Num 1)))
+(let prf0 (Fiat prop0))
+(Trans prop0 prf0 prf0)

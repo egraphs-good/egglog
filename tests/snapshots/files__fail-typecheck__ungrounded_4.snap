@@ -2,7 +2,7 @@
 source: tests/files.rs
 expression: err_msg
 ---
-In 5:1-11:43 of tests/fail-typecheck/ungrounded-4.egg: (rule
+In 5:1-11:43 of ungrounded-4.egg: (rule
  ((= e1 (F (vec-of "a" "b") (vec-of a b)))
   (= e2 (F (vec-of "a" "b") (vec-of a b)))
   (= e3 (F (vec-of "a" "b") (vec-of a c)))

@@ -2,5 +2,5 @@
 source: tests/files.rs
 expression: err_msg
 ---
-In 7:8-23 of tests/fail-typecheck/shadow-local.egg: (let z (Wrap 2))
+In 7:8-23 of shadow-local.egg: (let z (Wrap 2))
 Variable z was already defined

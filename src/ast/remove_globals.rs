@@ -112,7 +112,6 @@ impl GlobalRemover<'_> {
                         unextractable: true,
                         let_binding: true,
                         span: span.clone(),
-                        unionable: false,
                         term_constructor: None,
                     };
                     vec![

@@ -1,8 +1,8 @@
-; Test that union fails on constructors marked with :term
-; The :term annotation marks a constructor's output sort as non-unionable
+; Test that union fails on sorts marked with :nounion
+; The :nounion annotation marks a sort as non-unionable
 
-(sort TermSort)
-(constructor term-fn (i64 i64) TermSort :term)
+(sort TermSort :nounion)
+(constructor term-fn (i64 i64) TermSort)
 
 (term-fn 1 2)
 (term-fn 3 4)

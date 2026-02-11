@@ -2,5 +2,5 @@
 source: tests/files.rs
 expression: err_msg
 ---
-In 8:35-36 of tests/fail-typecheck/unstable-fn-wrong-args.egg: 10
+In 8:35-36 of unstable-fn-wrong-args.egg: 10
  Expect expression 10 to have type Math, but get type i64

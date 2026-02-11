@@ -2,6 +2,6 @@
 source: tests/files.rs
 expression: err_msg
 ---
-In 2:3-12 of tests/fail-typecheck/shadow-global-constructor.egg: (Wrap i64)
-In 4:1-12 of tests/fail-typecheck/shadow-global-constructor.egg: (let Wrap 3)
+In 2:3-12 of shadow-global-constructor.egg: (Wrap i64)
+In 4:1-12 of shadow-global-constructor.egg: (let Wrap 3)
 Shadowing is not allowed, but found Wrap

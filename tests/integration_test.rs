@@ -4,8 +4,10 @@ use egglog::{
     *,
 };
 use egglog_ast::span::{RustSpan, Span};
+use serial_test::serial;
 
 #[test]
+#[serial]
 fn globals_missing_prefix_warns_by_default() {
     testing_logger::setup();
 
@@ -27,6 +29,7 @@ fn globals_missing_prefix_warns_by_default() {
 }
 
 #[test]
+#[serial]
 fn globals_missing_prefix_warns_for_prefixed_pattern_variable_by_default() {
     testing_logger::setup();
 
@@ -48,6 +51,7 @@ fn globals_missing_prefix_warns_for_prefixed_pattern_variable_by_default() {
 }
 
 #[test]
+#[serial]
 fn globals_missing_prefix_warns_for_prefixed_rule_let_by_default() {
     testing_logger::setup();
 

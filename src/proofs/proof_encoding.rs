@@ -1147,6 +1147,7 @@ impl<'a> ProofInstrumentor<'a> {
                 span,
                 name,
                 presort_and_args,
+                unionable,
                 ..
             } => {
                 let uf_name = self.uf_name(name);
@@ -1155,6 +1156,7 @@ impl<'a> ProofInstrumentor<'a> {
                     name: name.clone(),
                     presort_and_args: presort_and_args.clone(),
                     uf: Some(uf_name),
+                    unionable: *unionable,
                 });
                 res.extend(self.declare_sort(name));
             }

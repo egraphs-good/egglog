@@ -1,9 +1,9 @@
-; Test that union on :term constructors fails
-; This test SHOULD fail because :term marks the sort as non-unionable
+; Test that union on :nounion sorts fails
+; This test SHOULD fail because :nounion marks the sort as non-unionable
 ; (This file is kept for manual testing - the fail-typecheck version is used by the test suite)
 
-(sort TermSort)
-(constructor term-fn (i64 i64) TermSort :term)
+(sort TermSort :nounion)
+(constructor term-fn (i64 i64) TermSort)
 
 ; Create two terms
 (term-fn 1 2)

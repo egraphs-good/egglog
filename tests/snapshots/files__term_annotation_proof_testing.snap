@@ -1,5 +1,0 @@
----
-source: tests/files.rs
-expression: snapshot_content
----
-(Fiat (= (term-fn 1 2) (term-fn 1 2)))(Fiat (= (term-fn 3 4) (term-fn 3 4)))(Fiat (= (term-fn 5 6) (term-fn 5 6)))(Fiat (= (term-fn2 100) (term-fn2 100)))(Fiat (= (term-fn3 200) (term-fn3 200)))

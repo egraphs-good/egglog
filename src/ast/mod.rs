@@ -56,6 +56,10 @@ where
         /// The name of the union-find function for this sort.
         /// Used in term encoding to canonicalize values during extraction.
         uf: Option<String>,
+        /// Whether values of this sort can be unioned.
+        /// Defaults to true for user-defined sorts.
+        /// Set to false for relations and term tables that should not allow union.
+        unionable: bool,
     },
     Function(GenericFunctionDecl<Head, Leaf>),
     AddRuleset(Span, String),
@@ -105,11 +109,13 @@ where
                 name,
                 presort_and_args,
                 uf,
+                unionable,
             } => GenericCommand::Sort {
                 span: span.clone(),
                 name: name.clone(),
                 presort_and_args: presort_and_args.clone(),
                 uf: uf.clone(),
+                unionable: *unionable,
             },
             GenericNCommand::Function(f) => match f.subtype {
                 FunctionSubtype::Constructor => GenericCommand::Constructor {
@@ -119,7 +125,6 @@ where
                     cost: f.cost,
                     unextractable: f.unextractable,
                     term_constructor: f.term_constructor.clone(),
-                    term: !f.unionable,
                 },
                 FunctionSubtype::Custom => GenericCommand::Function {
                     span: f.span.clone(),
@@ -222,11 +227,13 @@ where
                 name,
                 presort_and_args,
                 uf,
+                unionable,
             } => GenericNCommand::Sort {
                 span,
                 name,
                 presort_and_args,
                 uf,
+                unionable,
             },
             GenericNCommand::Function(func) => GenericNCommand::Function(func.visit_exprs(f)),
             GenericNCommand::AddRuleset(span, name) => GenericNCommand::AddRuleset(span, name),
@@ -532,6 +539,10 @@ where
         /// The name of the union-find function for this sort.
         /// Used in term encoding to canonicalize values during extraction.
         uf: Option<String>,
+        /// Whether values of this sort can be unioned.
+        /// Defaults to true for user-defined sorts.
+        /// Set to false for relations and term tables that should not allow union.
+        unionable: bool,
     },
 
     /// Egglog supports three types of functions
@@ -597,10 +608,6 @@ where
         /// For view tables in proof encoding: the constructor to use for building
         /// terms from the first n-1 children during extraction.
         term_constructor: Option<String>,
-        /// If true, this is a "term" table that does not allow union.
-        /// Sets `unionable: false` on the function declaration.
-        /// This is used by the relation desugaring and by proofs.
-        term: bool,
     },
 
     /// The `relation` command declares a named relation
@@ -941,7 +948,6 @@ where
                 cost,
                 unextractable,
                 term_constructor,
-                term,
             } => {
                 write!(f, "(constructor {name} {schema}")?;
                 if let Some(cost) = cost {
@@ -952,9 +958,6 @@ where
                 }
                 if let Some(tc) = term_constructor {
                     write!(f, " :term-constructor {tc}")?;
-                }
-                if *term {
-                    write!(f, " :term")?;
                 }
                 write!(f, ")")
             }
@@ -1182,7 +1185,6 @@ where
     /// This is used by visualization to handle globals differently.
     pub let_binding: bool,
     pub span: Span,
-    pub unionable: bool,
     /// For view tables in proof encoding: the constructor to use for building
     /// terms from the first n-1 children during extraction.
     pub term_constructor: Option<String>,
@@ -1246,7 +1248,6 @@ impl FunctionDecl {
             unextractable: true,
             let_binding: false,
             span,
-            unionable: false,
             term_constructor: None,
         }
     }
@@ -1258,7 +1259,6 @@ impl FunctionDecl {
         schema: Schema,
         cost: Option<DefaultCost>,
         unextractable: bool,
-        unionable: bool,
     ) -> Self {
         Self {
             name,
@@ -1270,7 +1270,6 @@ impl FunctionDecl {
             unextractable,
             let_binding: false,
             span,
-            unionable,
             term_constructor: None,
         }
     }
@@ -1295,7 +1294,6 @@ where
             unextractable: self.unextractable,
             let_binding: self.let_binding,
             span: self.span,
-            unionable: self.unionable,
             term_constructor: self.term_constructor,
         }
     }
@@ -1521,11 +1519,13 @@ where
                 name,
                 presort_and_args,
                 uf,
+                unionable,
             } => GenericCommand::Sort {
                 span,
                 name: fun(name),
                 presort_and_args,
                 uf,
+                unionable,
             },
             GenericCommand::Datatype {
                 span,
@@ -1585,7 +1585,6 @@ where
                 cost,
                 unextractable,
                 term_constructor,
-                term,
             } => GenericCommand::Constructor {
                 span,
                 name: fun(name),
@@ -1596,7 +1595,6 @@ where
                 cost,
                 unextractable,
                 term_constructor: term_constructor.map(&mut *fun),
-                term,
             },
             GenericCommand::Relation { span, name, inputs } => GenericCommand::Relation {
                 span,
@@ -1771,11 +1769,13 @@ where
                 name,
                 presort_and_args,
                 uf,
+                unionable,
             } => GenericCommand::Sort {
                 span,
                 name,
                 presort_and_args,
                 uf,
+                unionable,
             },
             GenericCommand::Datatype {
                 span,
@@ -1796,7 +1796,6 @@ where
                 cost,
                 unextractable,
                 term_constructor,
-                term,
             } => GenericCommand::Constructor {
                 span,
                 name,
@@ -1804,7 +1803,6 @@ where
                 cost,
                 unextractable,
                 term_constructor,
-                term,
             },
             GenericCommand::Relation { span, name, inputs } => {
                 GenericCommand::Relation { span, name, inputs }

@@ -1,6 +1,0 @@
----
-source: tests/files.rs
-expression: snapshot_content
----
-(term-leaf 1)
-(term-branch (term-leaf 1) (term-branch (term-leaf 2) (term-leaf 3)))

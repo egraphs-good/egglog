@@ -1,9 +1,9 @@
-; Test :term constructors with rules
-; Rules can still pattern match on :term constructors and create new terms
+; Test :nounion sorts with rules
+; Rules can still pattern match on :nounion sorts and create new terms
 
-(sort TermSort)
-(constructor term-node (i64) TermSort :term)
-(constructor term-pair (TermSort TermSort) TermSort :term)
+(sort TermSort :nounion)
+(constructor term-node (i64) TermSort)
+(constructor term-pair (TermSort TermSort) TermSort)
 
 ; Create some term nodes
 (term-node 1)

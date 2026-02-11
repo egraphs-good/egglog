@@ -2,5 +2,5 @@
 source: tests/files.rs
 expression: err_msg
 ---
-In 4:1-69 of tests/fail-typecheck/repro-containers-disallowed.egg: (fail (check (= (vec-of 1 2) (vec-push (vec-push (vec-empty) 1) 2))))
+In 4:1-69 of repro-containers-disallowed.egg: (fail (check (= (vec-of 1 2) (vec-push (vec-push (vec-empty) 1) 2))))
 Command should have failed.
