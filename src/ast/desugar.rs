@@ -25,9 +25,11 @@ pub(crate) fn desugar_command(
             schema,
             cost,
             unextractable,
+            hidden,
             term_constructor,
         } => {
-            let mut fdecl = FunctionDecl::constructor(span, name, schema, cost, unextractable);
+            let mut fdecl =
+                FunctionDecl::constructor(span, name, schema, cost, unextractable, hidden);
             fdecl.term_constructor = term_constructor;
             std::iter::once(NCommand::Function(fdecl)).collect()
         }
@@ -86,6 +88,7 @@ pub(crate) fn desugar_command(
                             output: datatype.clone(),
                         },
                         variant.cost,
+                        false,
                         false,
                     )));
                 }
@@ -213,6 +216,7 @@ fn desugar_prove(parser: &mut Parser, span: Span, query: Vec<Fact>) -> Vec<NComm
             },
             None,
             false,
+            false,
         )),
         NCommand::AddRuleset(span.clone(), ruleset.clone()),
         // rule that constructs the new constructor
@@ -260,6 +264,7 @@ fn desugar_datatype(span: Span, name: String, variants: Vec<Variant>) -> Vec<NCo
             },
             variant.cost,
             variant.unextractable,
+            false,
         ))
     }))
     .collect()
@@ -366,6 +371,7 @@ fn desugar_relation(
                 output: fresh_sort,
             },
             None,
+            false,
             false,
         )),
     ]

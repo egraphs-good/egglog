@@ -1,0 +1,17 @@
+---
+source: tests/files.rs
+assertion_line: 102
+expression: snapshot_content
+---
+@HiddenView: 1
+@HiddenViewProof: 1
+@MySortProof: 2
+@MySortUFProof: 0
+@VisibleView: 1
+@VisibleViewProof: 1
+@v12: 1
+@v13: 1
+@v14: 1
+@v15: 1
+Hidden: 1
+Visible: 1

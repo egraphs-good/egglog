@@ -712,7 +712,7 @@ impl EGraph {
     }
 
     /// Print the size of a function. If no function name is provided,
-    /// print the size of all functions in "name: len" pairs.
+    /// print the size of all non-hidden functions in "name: len" pairs.
     pub fn print_size(&self, sym: Option<&str>) -> Result<CommandOutput, Error> {
         if let Some(sym) = sym {
             let f = self
@@ -723,10 +723,11 @@ impl EGraph {
             log::info!("Function {} has size {}", sym, size);
             Ok(CommandOutput::PrintFunctionSize(size))
         } else {
-            // Print size of all functions
+            // Print size of all non-hidden functions
             let mut lens = self
                 .functions
                 .iter()
+                .filter(|(_, f)| !f.decl.hidden)
                 .map(|(sym, f)| (sym.clone(), self.backend.table_size(f.backend_id)))
                 .collect::<Vec<_>>();
 
