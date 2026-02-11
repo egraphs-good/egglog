@@ -59,6 +59,7 @@ string_quotes.egg
 taylor51.egg
 tricky-type-checking.egg
 type-constraints-tests.egg
+uf-extraction.egg
 vec.egg
 web-demo/array.egg
 web-demo/bdd.egg
