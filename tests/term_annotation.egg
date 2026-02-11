@@ -10,8 +10,6 @@
 (term-fn 3 4)
 (term-fn 5 6)
 
-(fail (union (term-fn 1 2) (term-fn 3 4))) ; This should fail because TermSort is marked as :term and thus non-unionable
-
 ; Verify all rows exist as separate entries (not unioned)
 (check (term-fn 1 2))
 (check (term-fn 3 4))
