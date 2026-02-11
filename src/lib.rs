@@ -84,7 +84,7 @@ use crate::ast::*;
 use crate::core::{GenericActionsExt, ResolvedRuleExt};
 use crate::proofs::proof_encoding::{EncodingState, ProofInstrumentor};
 use crate::proofs::proof_encoding_helpers::{
-    command_supports_proof_encoding, ProofEncodingUnsupportedReason,
+    ProofEncodingUnsupportedReason, command_supports_proof_encoding,
 };
 use crate::proofs::proof_extraction::ProveExistsError;
 use crate::proofs::proof_format::{ProofId, ProofStore};

@@ -1143,7 +1143,12 @@ impl<'a> ProofInstrumentor<'a> {
     fn term_encode_command(&mut self, command: &ResolvedNCommand, res: &mut Vec<Command>) {
         log::debug!("Term encoding for {}", command);
         match &command {
-            ResolvedNCommand::Sort { span, name, presort_and_args, .. } => {
+            ResolvedNCommand::Sort {
+                span,
+                name,
+                presort_and_args,
+                ..
+            } => {
                 let uf_name = self.uf_name(name);
                 res.push(Command::Sort {
                     span: span.clone(),

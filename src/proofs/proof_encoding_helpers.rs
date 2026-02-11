@@ -465,6 +465,10 @@ pub enum ProofEncodingUnsupportedReason {
         "sort has a presort (custom sort container implementation). Custom sorts are not supported by proof encoding."
     )]
     SortWithPresort,
+    #[error(
+        "sort has a :uf annotation. The :uf annotation is used internally by term encoding and cannot be specified manually in proof mode."
+    )]
+    SortWithUfAnnotation,
     #[error("user-defined commands are not supported.")]
     UserDefinedCommand,
     #[error("input commands are not supported.")]
@@ -558,6 +562,9 @@ pub(crate) fn command_supports_proof_encoding(
             presort_and_args: Some(_),
             ..
         } => Err(ProofEncodingUnsupportedReason::SortWithPresort),
+        GenericCommand::Sort { uf: Some(_), .. } => {
+            Err(ProofEncodingUnsupportedReason::SortWithUfAnnotation)
+        }
         GenericCommand::UserDefined(..) => Err(ProofEncodingUnsupportedReason::UserDefinedCommand),
         GenericCommand::Input { .. } => Err(ProofEncodingUnsupportedReason::InputCommand),
         // Extract commands can't have non-global function lookups

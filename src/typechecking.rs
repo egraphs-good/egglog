@@ -217,11 +217,21 @@ impl EGraph {
             NCommand::NormRule { rule } => ResolvedNCommand::NormRule {
                 rule: self.type_info.typecheck_rule(symbol_gen, rule)?,
             },
-            NCommand::Sort { span, name, presort_and_args, uf } => {
+            NCommand::Sort {
+                span,
+                name,
+                presort_and_args,
+                uf,
+            } => {
                 // Note this is bad since typechecking should be pure and idempotent
                 // Otherwise typechecking the same program twice will fail
                 self.declare_sort(name.clone(), presort_and_args, span.clone())?;
-                ResolvedNCommand::Sort { span: span.clone(), name: name.clone(), presort_and_args: presort_and_args.clone(), uf: uf.clone() }
+                ResolvedNCommand::Sort {
+                    span: span.clone(),
+                    name: name.clone(),
+                    presort_and_args: presort_and_args.clone(),
+                    uf: uf.clone(),
+                }
             }
             NCommand::CoreAction(Action::Let(span, var, expr)) => {
                 let expr = self

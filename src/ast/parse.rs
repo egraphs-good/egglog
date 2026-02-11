@@ -255,24 +255,56 @@ impl Parser {
         }
 
         Ok(match head.as_str() {
-            "sort" => match tail {
-                [name] => vec![Command::Sort { span, name: name.expect_atom("sort name")?, presort_and_args: None, uf: None }],
-                [name, call] => {
-                    let (func, args, _) = call.expect_call("container sort declaration")?;
-                    vec![Command::Sort {
+            "sort" => {
+                // Parse sort - :uf and container sorts are mutually exclusive
+                // (sort <name>)
+                // (sort <name> :uf <uf-function>)
+                // (sort <name> (<container sort> <argument sort>*))
+                match tail {
+                    [name] => vec![Command::Sort {
                         span,
                         name: name.expect_atom("sort name")?,
-                        presort_and_args: Some((func, map_fallible(args, self, Self::parse_expr)?)),
+                        presort_and_args: None,
                         uf: None,
-                    }]
+                    }],
+                    [name, call @ Sexp::List(..)] => {
+                        let (func, args, _) = call.expect_call("container sort declaration")?;
+                        vec![Command::Sort {
+                            span,
+                            name: name.expect_atom("sort name")?,
+                            presort_and_args: Some((
+                                func,
+                                map_fallible(args, self, Self::parse_expr)?,
+                            )),
+                            uf: None,
+                        }]
+                    }
+                    [name, rest @ ..] => {
+                        // Parse :uf annotation
+                        let uf = match self.parse_options(rest)?.as_slice() {
+                            [(":uf", [uf_func])] => Some(uf_func.expect_atom("uf function name")?),
+                            _ => {
+                                return error!(
+                                    span,
+                                    "usages:\n(sort <name>)\n(sort <name> :uf <uf-function>)\n(sort <name> (<container sort> <argument sort>*))"
+                                );
+                            }
+                        };
+                        vec![Command::Sort {
+                            span,
+                            name: name.expect_atom("sort name")?,
+                            presort_and_args: None,
+                            uf,
+                        }]
+                    }
+                    _ => {
+                        return error!(
+                            span,
+                            "usages:\n(sort <name>)\n(sort <name> :uf <uf-function>)\n(sort <name> (<container sort> <argument sort>*))"
+                        );
+                    }
                 }
-                _ => {
-                    return error!(
-                        span,
-                        "usages:\n(sort <name>)\n(sort <name> (<container sort> <argument sort>*))"
-                    );
-                }
-            },
+            }
             "datatype" => match tail {
                 [name, variants @ ..] => vec![Command::Datatype {
                     span,
