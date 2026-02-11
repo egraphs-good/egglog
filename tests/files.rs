@@ -28,7 +28,7 @@ impl Run {
             .filter_map(|output| match output {
                 // Skip OverallStatistics - contains non-deterministic Duration timing data
                 CommandOutput::OverallStatistics(_) => None,
-                // Skpping PrintFunction for now due to egglog nondeterminism bug: https://github.com/egraphs-good/egglog/issues/793
+                // Skipping PrintFunction for now due to egglog nondeterminism bug: https://github.com/egraphs-good/egglog/issues/793
                 CommandOutput::PrintFunction(..) => None,
                 // All other variants use normal Display formatting
                 other => Some(other.to_string()),
@@ -46,7 +46,7 @@ impl Run {
             .filter_map(|output| match output {
                 // Skip OverallStatistics - contains non-deterministic Duration timing data
                 CommandOutput::OverallStatistics(_) => None,
-                // Skpping PrintFunction for now due to egglog nondeterminism bug: https://github.com/egraphs-good/egglog/issues/793
+                // Skipping PrintFunction for now due to egglog nondeterminism bug: https://github.com/egraphs-good/egglog/issues/793
                 CommandOutput::PrintFunction(..) => None,
                 CommandOutput::ExtractBest(..) => None,
                 CommandOutput::ExtractVariants(..) => None,

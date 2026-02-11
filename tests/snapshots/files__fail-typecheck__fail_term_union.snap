@@ -1,9 +1,0 @@
----
-source: tests/files.rs
-expression: err_msg
----
-In 5:1-24 of fail_term_union.egg: (sort TermSort :nounion)
-parse error: usages:
-(sort <name>)
-(sort <name> :uf <uf-function>)
-(sort <name> (<container sort> <argument sort>*))

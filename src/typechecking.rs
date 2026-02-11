@@ -516,6 +516,13 @@ impl TypeInfo {
                 fdecl.span.clone(),
             ));
         }
+        // View tables (with term_constructor) must have at least one input (the e-class)
+        if fdecl.term_constructor.is_some() && fdecl.schema.input.is_empty() {
+            return Err(TypeError::TermConstructorNoInputs(
+                fdecl.name.clone(),
+                fdecl.span.clone(),
+            ));
+        }
         let ftype = self.function_to_functype(fdecl)?;
         if self.func_types.insert(fdecl.name.clone(), ftype).is_some() {
             return Err(TypeError::FunctionAlreadyBound(
@@ -859,8 +866,12 @@ pub enum TypeError {
     AllAlternativeFailed(Vec<TypeError>),
     #[error("{}\nCannot union values of sort {}", .1, .0.name())]
     NonEqsortUnion(ArcSort, Span),
-    #[error("{}\nCannot union values of sort {} because it is marked as non-unionable (:nounion or relation)", .1, .0.name())]
+    #[error("{}\nCannot union values of sort {} because it is marked as non-unionable (e.g. from a relation)", .1, .0.name())]
     NonUnionableSort(ArcSort, Span),
+    #[error(
+        "{1}\nView table {0} with :term-constructor must have at least one input (the e-class)."
+    )]
+    TermConstructorNoInputs(String, Span),
     #[error(
         "{span}\nNon-global variable `{name}` must not start with `{}`.",
         crate::GLOBAL_NAME_PREFIX

@@ -18,7 +18,6 @@ delete.egg
 eggcc-extraction.egg
 eqsat-basic-multiset.egg
 extract-vec-bench.egg
-fail_term_union.egg
 fibonacci.egg
 fusion.egg
 herbie-tutorial.egg
@@ -64,9 +63,6 @@ shadow-local.egg
 stresstest_large_expr.egg
 string_quotes.egg
 taylor51.egg
-term_annotation.egg
-term_extraction.egg
-term_with_rules.egg
 towers-of-hanoi.egg
 tricky-type-checking.egg
 type-constraints-tests.egg

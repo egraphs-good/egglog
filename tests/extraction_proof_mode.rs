@@ -66,22 +66,24 @@ fn test_extraction_same_with_proof_mode_using_rule_macro() {
     // Test using the rule! macro from prelude
     let _ = env_logger::builder().is_test(true).try_init();
 
-    // Setup program with datatypes
+    // Setup program with datatypes - use an expression that simplifies to a unique result
     let setup = r#"
         (datatype Expr
             (Var String)
             (Lit i64)
             (Add Expr Expr))
 
+        ; Simplification rule that gives a unique result
+        (rewrite (Add (Lit a) (Lit b)) (Lit (+ a b)))
+
         (let x (Add (Lit 1) (Lit 2)))
-        (let y (Add (Lit 2) (Lit 1)))
+        (run 10)
     "#;
 
     // Run in normal mode
     let mut egraph_normal = EGraph::default();
     egraph_normal.parse_and_run_program(None, setup).unwrap();
 
-    // Add a commutativity rule using the rule! macro
     add_ruleset(&mut egraph_normal, "my_rules").unwrap();
     rule(
         &mut egraph_normal,
@@ -91,12 +93,10 @@ fn test_extraction_same_with_proof_mode_using_rule_macro() {
     )
     .unwrap();
 
-    // Run the rules
     for _ in 0..5 {
         run_ruleset(&mut egraph_normal, "my_rules").unwrap();
     }
 
-    // Extract
     let normal_output = egraph_normal
         .parse_and_run_program(None, "(extract x)")
         .unwrap();
@@ -106,7 +106,7 @@ fn test_extraction_same_with_proof_mode_using_rule_macro() {
     let mut egraph_proofs = EGraph::new_with_proofs();
     egraph_proofs.parse_and_run_program(None, setup).unwrap();
 
-    // Add the same rule using the rule! macro
+    // Add the same rule
     add_ruleset(&mut egraph_proofs, "my_rules").unwrap();
     rule(
         &mut egraph_proofs,
@@ -116,7 +116,6 @@ fn test_extraction_same_with_proof_mode_using_rule_macro() {
     )
     .unwrap();
 
-    // Run the rules
     for _ in 0..5 {
         run_ruleset(&mut egraph_proofs, "my_rules").unwrap();
     }
@@ -132,5 +131,12 @@ fn test_extraction_same_with_proof_mode_using_rule_macro() {
         normal_extracted, proofs_extracted,
         "Extraction differs between normal mode and proof mode:\nNormal: {}\nProofs: {}",
         normal_extracted, proofs_extracted
+    );
+
+    // The result should be (Lit 3) since 1+2=3
+    assert!(
+        normal_extracted.contains("Lit") && normal_extracted.contains("3"),
+        "Expected (Lit 3), got: {}",
+        normal_extracted
     );
 }
