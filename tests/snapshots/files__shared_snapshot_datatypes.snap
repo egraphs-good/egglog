@@ -1,0 +1,9 @@
+---
+source: tests/files.rs
+expression: snapshot_content_across_treatments
+---
+Add: 1
+B: 2
+False: 1
+Sum: 1
+True: 1

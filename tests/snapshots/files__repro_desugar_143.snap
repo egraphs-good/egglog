@@ -2,4 +2,6 @@
 source: tests/files.rs
 expression: snapshot_content
 ---
-
+Num: 36
+f: 41
+fib: 22

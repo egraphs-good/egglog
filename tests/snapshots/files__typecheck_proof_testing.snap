@@ -43,7 +43,8 @@ expression: snapshot_content
         (@rewrite_var__1 t1)
         (x "x")))
     1)
-  (Fiat (= (TArr (TUnitConst) (TUnitConst)) (TArr (TUnitConst) (TUnitConst)))))(TUnitConst)
+  (Fiat (= (TArr (TUnitConst) (TUnitConst)) (TArr (TUnitConst) (TUnitConst)))))
+(TUnitConst)
 (let t0 (App (Var "f") (Var "x")))
 (let t1 (Lam "f" (TArr (TUnitConst) (TUnitConst)) t0))
 (let t2 (Lam "x" (TUnitConst) t1))
@@ -306,7 +307,8 @@ expression: snapshot_content
                   (x "x")))))
           0)))
     (substitution (t2 (TUnitConst)) (e (Var "x")) t35 (f (Var "f")) t30))
-  (Fiat (= (TUnitConst) (TUnitConst))))(TArr (TUnitConst) (TUnitConst))
+  (Fiat (= (TUnitConst) (TUnitConst))))
+(TArr (TUnitConst) (TUnitConst))
 (let t0 (Cons "y" (TUnitConst) (NilConst)))
 (let t1 (typeof t0 (Lam "x" (TUnitConst) (Var "y"))))
 (let prop0 (= t1 (TArr (TUnitConst) (TUnitConst))))
@@ -364,7 +366,8 @@ expression: snapshot_content
         (@rewrite_var__1 t2)
         (x "y")))
     1)
-  (Fiat (= (TArr (TUnitConst) (TUnitConst)) (TArr (TUnitConst) (TUnitConst)))))(TArr (TUnitConst) (TArr (TArr (TUnitConst) (TUnitConst)) (TUnitConst)))
+  (Fiat (= (TArr (TUnitConst) (TUnitConst)) (TArr (TUnitConst) (TUnitConst)))))
+(TArr (TUnitConst) (TArr (TArr (TUnitConst) (TUnitConst)) (TUnitConst)))
 (let t0 (TArr (TArr (TUnitConst) (TUnitConst)) (TUnitConst)))
 (let t1 (Cons "y" t0 (NilConst)))
 (let t2 (typeof t1 (Lam "x" (TUnitConst) (Var "y"))))
@@ -421,3 +424,12 @@ expression: snapshot_content
               (x "y")))))
       (substitution (t t0) (ctx (NilConst)) (@rewrite_var__1 t3) (x "y")))
     1))
+App: 3
+Cons: 6
+Lam: 4
+MyUnitConst: 1
+NilConst: 1
+TArr: 4
+TUnitConst: 1
+Var: 3
+typeof: 19

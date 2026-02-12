@@ -51,7 +51,7 @@ impl Names {
             ResolvedNCommand::Sort { span, name, .. } => self.check(name.clone(), span.clone()),
             ResolvedNCommand::Function(decl) => {
                 self.check(decl.name.clone(), decl.span.clone())?;
-                if decl.let_binding {
+                if decl.internal_let {
                     self.track_global_alias(&decl.name, &decl.span);
                 }
                 Ok(())

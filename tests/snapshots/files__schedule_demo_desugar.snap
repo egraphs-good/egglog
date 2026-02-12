@@ -1,0 +1,6 @@
+---
+source: tests/files.rs
+expression: snapshot_content
+---
+left: 11
+right: 10

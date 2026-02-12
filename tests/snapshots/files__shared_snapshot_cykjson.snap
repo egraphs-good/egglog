@@ -1,0 +1,11 @@
+---
+source: tests/files.rs
+expression: snapshot_content_across_treatments
+---
+B: 3218
+End: 17
+NT: 120
+P: 3218
+Prod: 17
+T: 11
+getString: 801

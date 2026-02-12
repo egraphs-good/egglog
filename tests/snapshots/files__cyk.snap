@@ -15,3 +15,12 @@ expression: snapshot_content
    (NT "S" (NT "B" (T "C" "a") (NT "C" (T "A" "a") (NT "B" (T "C" "a") (T "C" "a")))) (T "C" "a"))
    (B 5 1 (NonTerm "S"))
 )
+B: 0
+End: 3
+NT: 0
+NonTerm: 4
+P: 0
+Prod: 5
+T: 0
+Term: 0
+getString: 0

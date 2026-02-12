@@ -35,4 +35,12 @@ expression: snapshot_content
         prf0
         0))
     (substitution (@rewrite_var__2 t1) (a (IConst)) ($I (IConst))))
-  (Fiat (= (IConst) (IConst))))(Fiat (= () ()))(Fiat (= () ()))
+  (Fiat (= (IConst) (IConst))))
+(Fiat (= () ()))
+(Fiat (= () ()))
+AConst: 1
+BConst: 1
+IConst: 1
+allgs: 4
+g*: 21
+inv: 0

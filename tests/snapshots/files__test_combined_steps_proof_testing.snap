@@ -10,14 +10,17 @@ expression: snapshot_content
       ((left (+ x 1)))
         :ruleset step-left )")
   (premises (Fiat (= (left 0) (left 0))) (Fiat (= (right 0) (right 0))))
-  (substitution (x 0)))(Fiat (= (right 0) (right 0)))(Rule
+  (substitution (x 0)))
+(Fiat (= (right 0) (right 0)))
+(Rule
   (= (middle 0) (middle 0))
   (name
     "(rule ((left x))
       ((middle x))
         :ruleset step-middle )")
   (premises (Fiat (= (left 0) (left 0))))
-  (substitution (x 0)))(let prf0 (Fiat (= (right 0) (right 0))))
+  (substitution (x 0)))
+(let prf0 (Fiat (= (right 0) (right 0))))
 (let prf1
   (Rule
                                         (= (left 1) (left 1))
@@ -217,7 +220,8 @@ expression: snapshot_content
         :ruleset step-right )")
       (premises prf17 prf16 (Fiat (= 9 9)))
       (substitution (x 9) (y 8))))
-  (substitution (x 9)))(let prf0 (Fiat (= (right 0) (right 0))))
+  (substitution (x 9)))
+(let prf0 (Fiat (= (right 0) (right 0))))
 (let prf1
   (Rule
                                             (= (left 1) (left 1))
@@ -429,7 +433,8 @@ expression: snapshot_content
       (substitution (x 9)))
     prf18
     (Fiat (= 10 10)))
-  (substitution (x 10) (y 9)))(let prf0 (Fiat (= (right 0) (right 0))))
+  (substitution (x 10) (y 9)))
+(let prf0 (Fiat (= (right 0) (right 0))))
 (let prf1
   (Rule
                                         (= (left 1) (left 1))
@@ -617,3 +622,6 @@ expression: snapshot_content
           (substitution (x 8) (y 7))))
       (substitution (x 8))))
   (substitution (x 9)))
+left: 11
+middle: 10
+right: 11

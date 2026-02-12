@@ -9,3 +9,4 @@ expression: snapshot_content
     (Fiat (= (predicate 1 false) (predicate 1 false)))
     (Fiat (= false false)))
   (substitution (@n false)))
+predicate: 2

@@ -51,7 +51,8 @@ expression: snapshot_content
               t11))
           (substitution t6 (@rewrite_var__ t8)))
         0)
-      0)))(let t0 (S (S (S (Z)))))
+      0)))
+(let t0 (S (S (S (Z)))))
 (let t1 (Times (S (S (Z))) t0))
 (let t2 (Plus (S (S (Z))) (S (S (Z)))))
 (let t3 (Plus (S (S (Z))) t2))
@@ -355,3 +356,7 @@ expression: snapshot_content
       (Sym
         (= t3 t6)
         (Rule prop2 (name "(rewrite (Plus (S m) n) (S (Plus m n)))") t53 t55)))))
+Plus: 14
+S: 6
+Times: 3
+Z: 1

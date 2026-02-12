@@ -2,7 +2,8 @@
 source: tests/files.rs
 expression: snapshot_content
 ---
-(Fiat (= (edge 1 2) (edge 1 2)))(Rule
+(Fiat (= (edge 1 2) (edge 1 2)))
+(Rule
   (= (path 1 4) (path 1 4))
   (name
     "(rule ((path x y)
@@ -30,3 +31,5 @@ expression: snapshot_content
       (substitution (z 3) (x 1) (y 2)))
     (Fiat (= (edge 3 4) (edge 3 4))))
   (substitution (z 4) (x 1) (y 3)))
+edge: 3
+path: 6

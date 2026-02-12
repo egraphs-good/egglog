@@ -18,7 +18,8 @@ expression: snapshot_content
        (union b d))
          )")
       (premises (Sym (= t0 t1) (Fiat (= t1 t0))))
-      (substitution (d (Lit 2)) (a (Var "a")) (b (Var "a")) (c (Lit 1))))))(let t0 (Mul (Var "a") (Var "a")))
+      (substitution (d (Lit 2)) (a (Var "a")) (b (Var "a")) (c (Lit 1))))))
+(let t0 (Mul (Var "a") (Var "a")))
 (let t1 (Mul (Lit 1) (Lit 2)))
 (let t2 (premises (Sym (= t0 t1) (Fiat (= t1 t0)))))
 (let t3 (substitution (d (Lit 2)) (a (Var "a")) (b (Var "a")) (c (Lit 1))))
@@ -44,3 +45,6 @@ expression: snapshot_content
          )")
       t2
       t3)))
+Lit: 2
+Mul: 1
+Var: 1

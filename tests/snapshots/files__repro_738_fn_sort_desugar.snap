@@ -3,3 +3,5 @@ source: tests/files.rs
 expression: snapshot_content
 ---
 (unstable-fn "fn" (x))
+fn: 0
+x: 1
