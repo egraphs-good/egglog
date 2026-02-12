@@ -3,14 +3,8 @@ source: tests/files.rs
 expression: snapshot_content
 ---
 C1: 2
-C1: 2
-C2: 4
 C2: 4
 Leaf: 1
-Leaf: 1
-Leaf2: 1
 Leaf2: 1
 X: 1
-X: 1
-f: 3
 f: 1

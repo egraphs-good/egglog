@@ -3,4 +3,3 @@ source: tests/files.rs
 expression: snapshot_content
 ---
 R: 2
-R: 2

@@ -3,6 +3,4 @@ source: tests/files.rs
 expression: snapshot_content_across_treatments
 ---
 edge: 3
-edge: 3
-path: 6
 path: 6

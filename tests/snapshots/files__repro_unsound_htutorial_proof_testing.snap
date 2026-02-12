@@ -3,14 +3,8 @@ source: tests/files.rs
 expression: snapshot_content
 ---
 @ExistsConstructor: 0
-@ExistsConstructor: 0
-Add: 1
 Add: 1
 Div: 0
-Div: 0
-Mul: 0
 Mul: 0
 Num: 0
-Num: 0
-Var: 3
 Var: 3

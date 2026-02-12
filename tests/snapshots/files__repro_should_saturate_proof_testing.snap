@@ -2,5 +2,4 @@
 source: tests/files.rs
 expression: snapshot_content
 ---
-MyMap: 2
 MyMap: 1

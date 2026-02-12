@@ -3,6 +3,4 @@ source: tests/files.rs
 expression: snapshot_content
 ---
 Node: 4
-Node: 4
-distance: 2
 distance: 1

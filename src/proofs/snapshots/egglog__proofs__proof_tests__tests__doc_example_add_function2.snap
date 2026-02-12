@@ -8,7 +8,7 @@ expression: snapshot
 (ruleset __rebuilding_cleanup)
 (ruleset __delete_subsume_ruleset)
 (sort __view)
-(constructor add (i64 i64 i64) __view :unextractable)
+(constructor add (i64 i64 i64) __view :unextractable :internal-hidden)
 (constructor __addView (i64 i64 i64) __view :unextractable :term-constructor add)
 (constructor __to_delete_add (i64 i64) __view :internal-hidden)
 (constructor __to_subsume_add (i64 i64) __view :internal-hidden)

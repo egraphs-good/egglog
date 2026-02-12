@@ -3,12 +3,7 @@ source: tests/files.rs
 expression: snapshot_content
 ---
 FalseConst: 1
-FalseConst: 1
 TrueConst: 1
-TrueConst: 1
-myor: 146
 myor: 3
-negate: 5
 negate: 2
-p: 3
 p: 3

@@ -3,6 +3,4 @@ source: tests/files.rs
 expression: snapshot_content
 ---
 Num: 1
-Num: 1
-OtherNum: 1
 OtherNum: 1
