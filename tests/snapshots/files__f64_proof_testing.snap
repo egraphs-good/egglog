@@ -1,0 +1,22 @@
+---
+source: tests/files.rs
+expression: snapshot_content
+---
+(let prf0 (Fiat (= -1.5 -1.5)))
+(Trans (= -1.5 -1.5) prf0 prf0)
+(let prf0 (Fiat (= 10.7 10.7)))
+(Trans (= 10.7 10.7) prf0 prf0)
+(let prf0 (Fiat (= 6.25 6.25)))
+(Trans (= 6.25 6.25) prf0 prf0)
+(Fiat (= () ()))
+(Fiat (= () ()))
+(let prf0 (Fiat (= 243.0 243.0)))
+(Trans (= 243.0 243.0) prf0 prf0)
+(let prf0 (Fiat (= 1.0 1.0)))
+(Trans (= 1.0 1.0) prf0 prf0)
+(let prf0 (Fiat (= 1 1)))
+(Trans (= 1 1) prf0 prf0)
+(let prf0 (Fiat (= "1.2" "1.2")))
+(Trans (= "1.2" "1.2") prf0 prf0)
+(let prf0 (Fiat (= "1.0" "1.0")))
+(Trans (= "1.0" "1.0") prf0 prf0)

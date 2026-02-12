@@ -1,6 +1,6 @@
 ---
 source: tests/files.rs
-expression: snapshot_content_across_treatments
+expression: snapshot_content
 ---
 (Rule
   (= (Strings "found" "hello world") (Strings "found" "hello world"))

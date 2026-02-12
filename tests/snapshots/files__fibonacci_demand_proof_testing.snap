@@ -1,0 +1,313 @@
+---
+source: tests/files.rs
+expression: snapshot_content
+---
+(Num 13)
+(let prop0 (= (Fib 7) (Num 13)))
+(let prf0 (Fiat (= (Fib 7) (Fib 7))))
+(let t0 (Add (Fib 6) (Fib 5)))
+(let prf1 (Fiat (= () ())))
+(let t1 (premises prf0 prf1))
+(let t2 (substitution (@rewrite_var__1 (Fib 7)) (x 7)))
+(let t3 (Add (Fib 5) (Fib 4)))
+(let t4 (Add (Fib 4) (Fib 3)))
+(let t5
+  (premises
+                                        (Rule
+                                          (= (Fib 5) (Fib 5))
+                                          (name
+                                            "(rewrite (Fib x) (Add (Fib (- x 1)) (Fib (- x 2))) :when ((> x 1)))")
+                                          t1
+                                          t2)
+                                        prf1))
+(let t6
+  (substitution
+                                        (@rewrite_var__1 (Fib 5))
+                                        (x 5)))
+(let t7 (Add (Fib 3) (Fib 2)))
+(let t8 (Add (Fib 2) (Fib 1)))
+(let t9
+  (premises
+                                                              (Rule
+                                                                (=
+                                                                  (Fib 3)
+                                                                  (Fib 3))
+                                                                (name
+                                                                  "(rewrite (Fib x) (Add (Fib (- x 1)) (Fib (- x 2))) :when ((> x 1)))")
+                                                                t5
+                                                                t6)
+                                                              prf1))
+(let t10
+  (substitution
+                                                              (@rewrite_var__1
+                                                                (Fib 3))
+                                                              (x 3)))
+(let prf2
+  (Sym
+                                                            (= (Fib 1) (Num 1))
+                                                            (Rule
+                                                              (= (Num 1) (Fib 1))
+                                                              (name
+                                                                "(rewrite (Fib x) (Num x) :when ((<= x 1)))")
+                                                              (premises
+                                                                (Rule
+                                                                  (=
+                                                                    (Fib 1)
+                                                                    (Fib 1))
+                                                                  (name
+                                                                    "(rewrite (Fib x) (Add (Fib (- x 1)) (Fib (- x 2))) :when ((> x 1)))")
+                                                                  t9
+                                                                  t10)
+                                                                prf1)
+                                                              (substitution
+                                                                (@rewrite_var__2
+                                                                  (Fib 1))
+                                                                (x 1)))))
+(let t11
+  (Add
+                                                                        (Fib 1)
+                                                                        (Fib 0)))
+(let t12
+  (premises
+                                                                        (Rule
+                                                                          (=
+                                                                            (Fib
+                                                                              2)
+                                                                            (Fib
+                                                                              2))
+                                                                          (name
+                                                                            "(rewrite (Fib x) (Add (Fib (- x 1)) (Fib (- x 2))) :when ((> x 1)))")
+                                                                          t9
+                                                                          t10)
+                                                                        prf1))
+(let t13
+  (substitution
+                                                                        (@rewrite_var__1
+                                                                          (Fib 2))
+                                                                        (x 2)))
+(let prf3
+  (Rule
+                                                            (= (Num 1) (Fib 2))
+                                                            (name
+                                                              "(rewrite (Add (Num a) (Num b)) (Num (+ a b)))")
+                                                            (premises
+                                                              (Congr
+                                                                (=
+                                                                  (Fib 2)
+                                                                  (Add
+                                                                    (Num 1)
+                                                                    (Num 0)))
+                                                                (Congr
+                                                                  (=
+                                                                    (Fib 2)
+                                                                    (Add
+                                                                      (Num 1)
+                                                                      (Fib 0)))
+                                                                  (Sym
+                                                                    (=
+                                                                      (Fib 2)
+                                                                      t11)
+                                                                    (Rule
+                                                                      (=
+                                                                        t11
+                                                                        (Fib 2))
+                                                                      (name
+                                                                        "(rewrite (Fib x) (Add (Fib (- x 1)) (Fib (- x 2))) :when ((> x 1)))")
+                                                                      t12
+                                                                      t13))
+                                                                  prf2
+                                                                  0)
+                                                                (Sym
+                                                                  (=
+                                                                    (Fib 0)
+                                                                    (Num 0))
+                                                                  (Rule
+                                                                    (=
+                                                                      (Num 0)
+                                                                      (Fib 0))
+                                                                    (name
+                                                                      "(rewrite (Fib x) (Num x) :when ((<= x 1)))")
+                                                                    (premises
+                                                                      (Rule
+                                                                        (=
+                                                                          (Fib 0)
+                                                                          (Fib 0))
+                                                                        (name
+                                                                          "(rewrite (Fib x) (Add (Fib (- x 1)) (Fib (- x 2))) :when ((> x 1)))")
+                                                                        t12
+                                                                        t13)
+                                                                      prf1)
+                                                                    (substitution
+                                                                      (@rewrite_var__2
+                                                                        (Fib 0))
+                                                                      (x 0))))
+                                                                1))
+                                                            (substitution
+                                                              (a 1)
+                                                              (b 0)
+                                                              (@rewrite_var__
+                                                                (Fib 2)))))
+(let prf4
+  (Sym
+                                                        (= (Fib 2) (Num 1))
+                                                        prf3))
+(let prf5
+  (Sym
+                                              (= (Fib 3) (Num 2))
+                                              (Rule
+                                                (= (Num 2) (Fib 3))
+                                                (name
+                                                  "(rewrite (Add (Num a) (Num b)) (Num (+ a b)))")
+                                                (premises
+                                                  (Congr
+                                                    (=
+                                                      (Fib 3)
+                                                      (Add (Num 1) (Num 1)))
+                                                    (Congr
+                                                      (=
+                                                        (Fib 3)
+                                                        (Add (Num 1) (Fib 2)))
+                                                      (Congr
+                                                        (=
+                                                          (Fib 3)
+                                                          (Add (Fib 2) (Fib 2)))
+                                                        (Sym
+                                                          (= (Fib 3) t8)
+                                                          (Rule
+                                                            (= t8 (Fib 3))
+                                                            (name
+                                                              "(rewrite (Fib x) (Add (Fib (- x 1)) (Fib (- x 2))) :when ((> x 1)))")
+                                                            t9
+                                                            t10))
+                                                        (Trans
+                                                          (= (Fib 1) (Fib 2))
+                                                          prf2
+                                                          prf3)
+                                                        1)
+                                                      prf4
+                                                      0)
+                                                    prf4
+                                                    1))
+                                                (substitution
+                                                  (a 1)
+                                                  (b 1)
+                                                  (@rewrite_var__ (Fib 3))))))
+(let prf6
+  (Sym
+                                    (= (Fib 4) (Num 3))
+                                    (Rule
+                                      (= (Num 3) (Fib 4))
+                                      (name
+                                        "(rewrite (Add (Num a) (Num b)) (Num (+ a b)))")
+                                      (premises
+                                        (Congr
+                                          (= (Fib 4) (Add (Num 2) (Num 1)))
+                                          (Congr
+                                            (= (Fib 4) (Add (Num 2) (Fib 2)))
+                                            (Sym
+                                              (= (Fib 4) t7)
+                                              (Rule
+                                                (= t7 (Fib 4))
+                                                (name
+                                                  "(rewrite (Fib x) (Add (Fib (- x 1)) (Fib (- x 2))) :when ((> x 1)))")
+                                                (premises
+                                                  (Rule
+                                                    (= (Fib 4) (Fib 4))
+                                                    (name
+                                                      "(rewrite (Fib x) (Add (Fib (- x 1)) (Fib (- x 2))) :when ((> x 1)))")
+                                                    t5
+                                                    t6)
+                                                  prf1)
+                                                (substitution
+                                                  (@rewrite_var__1 (Fib 4))
+                                                  (x 4))))
+                                            prf5
+                                            0)
+                                          prf4
+                                          1))
+                                      (substitution
+                                        (a 2)
+                                        (b 1)
+                                        (@rewrite_var__ (Fib 4))))))
+(let prf7
+  (Sym
+                          (= (Fib 5) (Num 5))
+                          (Rule
+                            (= (Num 5) (Fib 5))
+                            (name "(rewrite (Add (Num a) (Num b)) (Num (+ a b)))")
+                            (premises
+                              (Congr
+                                (= (Fib 5) (Add (Num 3) (Num 2)))
+                                (Congr
+                                  (= (Fib 5) (Add (Num 3) (Fib 3)))
+                                  (Sym
+                                    (= (Fib 5) t4)
+                                    (Rule
+                                      (= t4 (Fib 5))
+                                      (name
+                                        "(rewrite (Fib x) (Add (Fib (- x 1)) (Fib (- x 2))) :when ((> x 1)))")
+                                      t5
+                                      t6))
+                                  prf6
+                                  0)
+                                prf5
+                                1))
+                            (substitution (a 3) (b 2) (@rewrite_var__ (Fib 5))))))
+(Trans
+  prop0
+  prf0
+  (Sym
+    prop0
+    (Rule
+      (= (Num 13) (Fib 7))
+      (name "(rewrite (Add (Num a) (Num b)) (Num (+ a b)))")
+      (premises
+        (Congr
+          (= (Fib 7) (Add (Num 8) (Num 5)))
+          (Congr
+            (= (Fib 7) (Add (Num 8) (Fib 5)))
+            (Sym
+              (= (Fib 7) t0)
+              (Rule
+                (= t0 (Fib 7))
+                (name
+                  "(rewrite (Fib x) (Add (Fib (- x 1)) (Fib (- x 2))) :when ((> x 1)))")
+                t1
+                t2))
+            (Sym
+              (= (Fib 6) (Num 8))
+              (Rule
+                (= (Num 8) (Fib 6))
+                (name "(rewrite (Add (Num a) (Num b)) (Num (+ a b)))")
+                (premises
+                  (Congr
+                    (= (Fib 6) (Add (Num 5) (Num 3)))
+                    (Congr
+                      (= (Fib 6) (Add (Num 5) (Fib 4)))
+                      (Sym
+                        (= (Fib 6) t3)
+                        (Rule
+                          (= t3 (Fib 6))
+                          (name
+                            "(rewrite (Fib x) (Add (Fib (- x 1)) (Fib (- x 2))) :when ((> x 1)))")
+                          (premises
+                            (Rule
+                              (= (Fib 6) (Fib 6))
+                              (name
+                                "(rewrite (Fib x) (Add (Fib (- x 1)) (Fib (- x 2))) :when ((> x 1)))")
+                              t1
+                              t2)
+                            prf1)
+                          (substitution (@rewrite_var__1 (Fib 6)) (x 6))))
+                      prf7
+                      0)
+                    prf6
+                    1))
+                (substitution (a 5) (b 3) (@rewrite_var__ (Fib 6)))))
+            0)
+          prf7
+          1))
+      (substitution (a 8) (b 5) (@rewrite_var__ (Fib 7))))))
+Add: 6
+Fib: 8
+Num: 7

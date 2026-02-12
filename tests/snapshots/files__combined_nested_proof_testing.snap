@@ -1,0 +1,37 @@
+---
+source: tests/files.rs
+expression: snapshot_content
+---
+(Rule
+  (= (number 1) (number 1))
+  (name
+    "(rule ()
+      ((number 1))
+        :ruleset myrules1 )")
+  (premises)
+  (substitution))
+(Rule
+  (= (number 2) (number 2))
+  (name
+    "(rule ()
+      ((number 2))
+        :ruleset myrules2 )")
+  (premises)
+  (substitution))
+(Rule
+  (= (number 3) (number 3))
+  (name
+    "(rule ()
+      ((number 3))
+        :ruleset myrules2 )")
+  (premises)
+  (substitution))
+(Rule
+  (= (number 5) (number 5))
+  (name
+    "(rule ()
+      ((number 5))
+        :ruleset myrules5 )")
+  (premises)
+  (substitution))
+number: 4

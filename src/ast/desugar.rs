@@ -223,7 +223,7 @@ fn desugar_prove(parser: &mut Parser, span: Span, query: Vec<Fact>) -> Vec<NComm
             },
             None,
             false,
-            false,
+            true, // hidden - internal to prove desugaring
         )),
         NCommand::AddRuleset(span.clone(), ruleset.clone()),
         // rule that constructs the new constructor

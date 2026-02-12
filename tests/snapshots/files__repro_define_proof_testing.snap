@@ -1,0 +1,12 @@
+---
+source: tests/files.rs
+expression: snapshot_content
+---
+(let t0 (S (S (S (ZeroConst)))))
+(let prop0 (= (S (S (ZeroConst))) t0))
+(Trans
+  prop0
+  (Fiat (= (S (S (ZeroConst))) (S (S (ZeroConst)))))
+  (Sym prop0 (Fiat (= t0 (S (S (ZeroConst)))))))
+S: 3
+ZeroConst: 1

@@ -152,6 +152,9 @@ struct ExtractionOptions<C: Cost> {
     /// When true, view tables are skipped, which is useful for proof extraction
     /// where we need to extract from the original term tables with their original names.
     skip_view_tables: bool,
+    /// Whether to respect the hidden flag on constructors.
+    /// When true, constructors marked as hidden will not be used during extraction.
+    respect_hidden: bool,
 }
 
 impl<C: Cost + Ord + Eq + Clone + Debug> Extractor<C> {
@@ -166,7 +169,7 @@ impl<C: Cost + Ord + Eq + Clone + Debug> Extractor<C> {
         egraph: &EGraph,
         cost_model: impl CostModel<C> + 'static,
     ) -> Self {
-        // For user extraction: respect unextractable, don't skip view tables (use them for better names)
+        // For user extraction: respect unextractable and hidden, but use view tables (they have better names)
         Self::compute_costs_from_rootsorts_internal(
             egraph,
             ExtractionOptions {
@@ -174,11 +177,12 @@ impl<C: Cost + Ord + Eq + Clone + Debug> Extractor<C> {
                 rootsorts,
                 respect_unextractable: true,
                 skip_view_tables: false,
+                respect_hidden: true,
             },
         )
     }
 
-    /// Like `compute_costs_from_rootsorts`, but ignores the unextractable flag.
+    /// Like `compute_costs_from_rootsorts`, but ignores the unextractable and hidden flags.
     /// This is used for proof extraction where we need to extract proofs even
     /// from terms that are marked unextractable (like global let bindings).
     /// Also skips view tables (those with term_constructor) since proofs need
@@ -195,6 +199,7 @@ impl<C: Cost + Ord + Eq + Clone + Debug> Extractor<C> {
                 rootsorts,
                 respect_unextractable: false,
                 skip_view_tables: true,
+                respect_hidden: false,
             },
         )
     }
@@ -215,7 +220,7 @@ impl<C: Cost + Ord + Eq + Clone + Debug> Extractor<C> {
             let unextractable = func.1.decl.unextractable && options.respect_unextractable;
             let should_skip_view =
                 options.skip_view_tables && func.1.decl.term_constructor.is_some();
-            let hidden = func.1.decl.hidden;
+            let hidden = func.1.decl.hidden && options.respect_hidden;
 
             // only extract constructors, skip view tables when requested for proof extraction, and respect unextractable/hidden flag
             if !unextractable

@@ -1,0 +1,50 @@
+---
+source: tests/files.rs
+expression: snapshot_content
+---
+(let prop0 (= (Var "a") (Lit 1)))
+(let t0 (Mul (Var "a") (Var "a")))
+(let t1 (Mul (Lit 1) (Lit 2)))
+(Trans
+  prop0
+  (Fiat (= (Var "a") (Var "a")))
+  (Sym
+    prop0
+    (Rule
+      (= (Lit 1) (Var "a"))
+      (name
+        "(rule ((= (Mul a b) (Mul c d)))
+      ((union a c)
+       (union b d))
+         )")
+      (premises (Sym (= t0 t1) (Fiat (= t1 t0))))
+      (substitution (d (Lit 2)) (a (Var "a")) (b (Var "a")) (c (Lit 1))))))
+(let t0 (Mul (Var "a") (Var "a")))
+(let t1 (Mul (Lit 1) (Lit 2)))
+(let t2 (premises (Sym (= t0 t1) (Fiat (= t1 t0)))))
+(let t3 (substitution (d (Lit 2)) (a (Var "a")) (b (Var "a")) (c (Lit 1))))
+(Trans
+  (= (Lit 2) (Lit 1))
+  (Rule
+    (= (Lit 2) (Var "a"))
+    (name
+      "(rule ((= (Mul a b) (Mul c d)))
+      ((union a c)
+       (union b d))
+         )")
+    t2
+    t3)
+  (Sym
+    (= (Var "a") (Lit 1))
+    (Rule
+      (= (Lit 1) (Var "a"))
+      (name
+        "(rule ((= (Mul a b) (Mul c d)))
+      ((union a c)
+       (union b d))
+         )")
+      t2
+      t3)))
+Lit: 2
+Mul: 1
+Var: 1

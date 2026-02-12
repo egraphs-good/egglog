@@ -1,6 +1,6 @@
 ---
 source: tests/files.rs
-expression: snapshot_content_across_treatments
+expression: snapshot_content
 ---
 (let t0 (Add (Const 5) (Const 1)))
 (let t1 (MathU t0))

@@ -1,0 +1,170 @@
+---
+source: tests/files.rs
+expression: snapshot_content
+---
+(let prop0 (= (nrows (NamedMat "B")) (NamedDim "m")))
+(Trans prop0 (Fiat prop0) (Fiat (= (NamedDim "m") (NamedDim "m"))))
+(let t0 (Kron (Id (NamedDim "n")) (NamedMat "B")))
+(let t1 (nrows t0))
+(let t2 (Times (NamedDim "n") (NamedDim "m")))
+(let t3 (Kron (NamedMat "A") (Id (NamedDim "m"))))
+(let t4 (nrows (MMul t0 t3)))
+(let prf0
+  (Rule
+      (= t1 t4)
+      (name "(rewrite (nrows (MMul A B)) (nrows A))")
+      (premises (Fiat (= t4 t4)))
+      (substitution (B t3) (@rewrite_var__6 t4) (A t0))))
+(let t5 (nrows (Id (NamedDim "n"))))
+(let t6 (Times t5 (nrows (NamedMat "B"))))
+(let t7 (A (Id (NamedDim "n"))))
+(Trans
+  (= t1 t2)
+  prf0
+  (Congr
+    (= t4 t2)
+    (Congr
+      (= t4 (Times t5 (NamedDim "m")))
+      (Sym
+        (= t4 t6)
+        (Rule
+          (= t6 t4)
+          (name "(rewrite (nrows (Kron A B)) (Times (nrows A) (nrows B)))")
+          (premises (Sym (= t4 t1) prf0))
+          (substitution (@rewrite_var__4 t4) t7 (B (NamedMat "B")))))
+      (Fiat (= (nrows (NamedMat "B")) (NamedDim "m")))
+      1)
+    (Rule
+      (= t5 (NamedDim "n"))
+      (name "(rewrite (nrows (Id n)) n)")
+      (premises
+        (Rule
+          (= t5 t5)
+          (name
+            "(rule ((= e (Kron A B)))
+      ((ncols A)
+       (nrows A)
+       (ncols B)
+       (nrows B))
+         )")
+          (premises (Fiat (= t0 t0)))
+          (substitution (B (NamedMat "B")) (e t0) t7)))
+      (substitution (n (NamedDim "n")) (@rewrite_var__8 t5)))
+    0))
+(let t0 (Kron (Id (NamedDim "n")) (NamedMat "B")))
+(let t1 (Kron (NamedMat "A") (Id (NamedDim "m"))))
+(let t2 (MMul t0 t1))
+(let prop0 (= t2 (Kron (NamedMat "A") (NamedMat "B"))))
+(let prf0 (Fiat (= t2 t2)))
+(let t3 (MMul (Id (NamedDim "n")) (NamedMat "A")))
+(let t4 (MMul (NamedMat "B") (Id (NamedDim "m"))))
+(let t5 (Kron t3 t4))
+(let t6 (ncols (Id (NamedDim "n"))))
+(let t7 (A (Id (NamedDim "n"))))
+(let t8 (nrows (Id (NamedDim "m"))))
+(let t9
+  (premises
+              prf0
+              (Trans
+                (= t6 (nrows (NamedMat "A")))
+                (Rule
+                  (= t6 (NamedDim "n"))
+                  (name "(rewrite (ncols (Id n)) n)")
+                  (premises
+                    (Rule
+                      (= t6 t6)
+                      (name
+                        "(rule ((= e (Kron A B)))
+        ((ncols A)
+         (nrows A)
+         (ncols B)
+         (nrows B))
+           )")
+                      (premises (Fiat (= t0 t0)))
+                      (substitution (B (NamedMat "B")) (e t0) t7)))
+                  (substitution (n (NamedDim "n")) (@rewrite_var__9 t6)))
+                (Sym
+                  (= (NamedDim "n") (nrows (NamedMat "A")))
+                  (Fiat (= (nrows (NamedMat "A")) (NamedDim "n")))))
+              (Trans
+                (= (ncols (NamedMat "B")) t8)
+                (Fiat (= (ncols (NamedMat "B")) (NamedDim "m")))
+                (Sym
+                  (= (NamedDim "m") t8)
+                  (Rule
+                    (= t8 (NamedDim "m"))
+                    (name "(rewrite (nrows (Id n)) n)")
+                    (premises
+                      (Rule
+                        (= t8 t8)
+                        (name
+                          "(rule ((= e (Kron A B)))
+        ((ncols A)
+         (nrows A)
+         (ncols B)
+         (nrows B))
+           )")
+                        (premises (Fiat (= t1 t1)))
+                        (substitution
+                          (B (Id (NamedDim "m")))
+                          (e t1)
+                          (A (NamedMat "A")))))
+                    (substitution (n (NamedDim "m")) (@rewrite_var__8 t8)))))))
+(let t10
+  (substitution
+              (B (NamedMat "B"))
+              t7
+              (@rewrite_var__17 t2)
+              (D (Id (NamedDim "m")))
+              (C (NamedMat "A"))))
+(Trans
+  prop0
+  prf0
+  (Congr
+    prop0
+    (Congr
+      (= t2 (Kron t3 (NamedMat "B")))
+      (Sym
+        (= t2 t5)
+        (Rule
+          (= t5 t2)
+          (name
+            "(rewrite (MMul (Kron A B) (Kron C D)) (Kron (MMul A C) (MMul B D)) :when ((= (ncols A) (nrows C)) (= (ncols B) (nrows D))))")
+          t9
+          t10))
+      (Rule
+        (= t4 (NamedMat "B"))
+        (name "(rewrite (MMul A (Id n)) A)")
+        (premises
+          (Rule
+            (= t4 t4)
+            (name
+              "(rewrite (MMul (Kron A B) (Kron C D)) (Kron (MMul A C) (MMul B D)) :when ((= (ncols A) (nrows C)) (= (ncols B) (nrows D))))")
+            t9
+            t10))
+        (substitution
+          (n (NamedDim "m"))
+          (@rewrite_var__11 t4)
+          (A (NamedMat "B"))))
+      1)
+    (Rule
+      (= t3 (NamedMat "A"))
+      (name "(rewrite (MMul (Id n) A) A)")
+      (premises
+        (Rule
+          (= t3 t3)
+          (name
+            "(rewrite (MMul (Kron A B) (Kron C D)) (Kron (MMul A C) (MMul B D)) :when ((= (ncols A) (nrows C)) (= (ncols B) (nrows D))))")
+          t9
+          t10))
+      (substitution (@rewrite_var__10 t3) (A (NamedMat "A")) (n (NamedDim "n"))))
+    0))
+Id: 3
+Kron: 5
+Lit: 0
+MMul: 12
+NamedDim: 3
+NamedMat: 3
+Times: 3
+ncols: 12
+nrows: 12

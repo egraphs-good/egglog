@@ -1,0 +1,10 @@
+---
+source: tests/files.rs
+expression: snapshot_content
+---
+(Rule
+  (= (@ExistsConstructor) (@ExistsConstructor))
+  (name "@prove_exists_rule")
+  (premises (Fiat (= (foo 10) (foo 10))) (Fiat (= () ())))
+  (substitution (@v8 10)))
+foo: 1

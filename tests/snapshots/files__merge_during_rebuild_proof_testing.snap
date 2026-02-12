@@ -1,0 +1,29 @@
+---
+source: tests/files.rs
+expression: snapshot_content
+---
+(let t0 (distance (Node 2) (Node 3) 1))
+(let prop0 (= t0 t0))
+(let prf0 (Fiat (= (Node 2) (Node 0))))
+(let prf1 (Fiat (= (Node 3) (Node 1))))
+(Rule
+  (= (@ExistsConstructor) (@ExistsConstructor))
+  (name "@prove_exists_rule")
+  (premises
+    (Congr
+      prop0
+      (Congr
+        (= t0 (distance (Node 2) (Node 1) 1))
+        (Congr
+          (= t0 (distance (Node 0) (Node 1) 1))
+          (Congr (= t0 (distance (Node 0) (Node 3) 1)) (Fiat prop0) prf0 0)
+          prf1
+          1)
+        (Sym (= (Node 0) (Node 2)) prf0)
+        0)
+      (Sym (= (Node 1) (Node 3)) prf1)
+      1)
+    (Fiat (= 1 1)))
+  (substitution ($y (Node 3)) (@n 1) ($x (Node 2))))
+Node: 4
+distance: 1

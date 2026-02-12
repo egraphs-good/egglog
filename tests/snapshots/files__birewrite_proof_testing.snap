@@ -1,0 +1,34 @@
+---
+source: tests/files.rs
+expression: snapshot_content
+---
+(let t0 (Add (Add (Lit 1) (Lit 2)) (Lit 3)))
+(let t1 (Add (Lit 1) (Add (Lit 2) (Lit 3))))
+(let prop0 (= t0 t1))
+(let prf0 (Fiat (= t0 t0)))
+(Trans
+  prop0
+  prf0
+  (Sym
+    prop0
+    (Rule
+      (= t1 t0)
+      (name "(birewrite (Add (Add x y) z) (Add x (Add y z)))=>")
+      (premises prf0)
+      (substitution (z (Lit 3)) (y (Lit 2)) (x (Lit 1)) (@rewrite_var__ t0)))))
+(let t0 (Add (Lit 4) (Add (Lit 5) (Lit 6))))
+(let t1 (Add (Add (Lit 4) (Lit 5)) (Lit 6)))
+(let prop0 (= t0 t1))
+(let prf0 (Fiat (= t0 t0)))
+(Trans
+  prop0
+  prf0
+  (Sym
+    prop0
+    (Rule
+      (= t1 t0)
+      (name "(birewrite (Add (Add x y) z) (Add x (Add y z)))<=")
+      (premises prf0)
+      (substitution (z (Lit 6)) (y (Lit 5)) (@rewrite_var__1 t0) (x (Lit 4))))))
+Add: 8
+Lit: 6

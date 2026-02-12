@@ -1,6 +1,6 @@
 ---
 source: tests/files.rs
-expression: snapshot_content_across_treatments
+expression: snapshot_content
 ---
 (let prop0 (= (Add 2 3) (Num 5)))
 (let prf0 (Fiat (= (Add 2 3) (Add 2 3))))
