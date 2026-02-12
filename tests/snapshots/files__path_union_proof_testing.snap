@@ -8,7 +8,8 @@ expression: snapshot_content
   prop0
   (Congr prop0 (Fiat (= t0 t0)) (Fiat (= (mk 5) (mk 3))) 0)
   (Fiat (= (mk 6) (mk 6)))
-  1)(let t0 (path (mk 1) (mk 6)))
+  1)
+(let t0 (path (mk 1) (mk 6)))
 (let prop0 (= t0 t0))
 (let t1 (path (mk 1) (mk 3)))
 (let t2 (path (mk 1) (mk 2)))
@@ -51,3 +52,6 @@ expression: snapshot_content
     (substitution (z (mk 6)) (x (mk 1)) (y (mk 3))))
   (Fiat (= (mk 6) (mk 6)))
   1)
+edge: 3
+mk: 5
+path: 6

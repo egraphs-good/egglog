@@ -69,4 +69,9 @@ expression: snapshot_content
         (substitution (@rewrite_var__2 t5) (x t0)))
       0)
     (Sym (= t0 (Num 3)) prf1)
-    0))(Add (Num 3) (AU (Var "x") (Var "y")))
+    0))
+(Add (Num 3) (AU (Var "x") (Var "y")))
+AU: 21
+Add: 24
+Num: 3
+Var: 2

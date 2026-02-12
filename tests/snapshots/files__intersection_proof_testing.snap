@@ -131,7 +131,8 @@ expression: snapshot_content
          )")
         t17
         t18))
-    0))(let t0 (intersect (f (Var "a1")) (f (Var "a2"))))
+    0))
+(let t0 (intersect (f (Var "a1")) (f (Var "a2"))))
 (let t1 (intersect (Var "a1") (Var "a2")))
 (let t2 (f1 (f (Var "a1"))))
 (let t3 (intersect (f (Var "a1")) (f (Var "b2"))))
@@ -180,3 +181,6 @@ expression: snapshot_content
         t2))
     (Fiat (= () ())))
   (substitution (@v221 t0) (@v222 t3) ($a3 (Var "a3")) ($b3 (Var "b3"))))
+Var: 6
+f: 11
+intersect: 5

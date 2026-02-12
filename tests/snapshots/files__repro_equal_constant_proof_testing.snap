@@ -7,3 +7,4 @@ expression: snapshot_content
   (name "@prove_exists_rule")
   (premises (Fiat (= (foo 10) (foo 10))) (Fiat (= () ())))
   (substitution (@v8 10)))
+foo: 1

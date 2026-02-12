@@ -16,3 +16,4 @@ expression: snapshot_content
       (substitution (@n 10)))
     (Fiat (= 4 4)))
   (substitution (@n1 4)))
+foo: 1

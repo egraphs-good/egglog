@@ -16,7 +16,8 @@ expression: snapshot_content
     (premises (Fiat (= t1 t1)))
     (substitution (a "o1") (x t1) (b (Class "A"))))
   (Fiat (= (Class "A") (Class "A")))
-  1)(let t0 (VarPointsTo "o2" (Class "B")))
+  1)
+(let t0 (VarPointsTo "o2" (Class "B")))
 (let prop0 (= t0 t0))
 (let t1 (New "o2" (Class "B")))
 (Congr
@@ -30,7 +31,8 @@ expression: snapshot_content
     (premises (Fiat (= t1 t1)))
     (substitution (a "o2") (x t1) (b (Class "B"))))
   (Fiat (= (Class "B") (Class "B")))
-  1)(let t0 (VarPointsTo "o3" (Class "B")))
+  1)
+(let t0 (VarPointsTo "o3" (Class "B")))
 (let prop0 (= t0 t0))
 (let t1 (VarPointsTo "o2" (Class "B")))
 (let t2 (New "o2" (Class "B")))
@@ -55,7 +57,8 @@ expression: snapshot_content
         (substitution (a "o2") (x t2) (b (Class "B")))))
     (substitution (v1 "o3") (c2 (Class "B")) (v2 "o2") (x (Assign "o3" "o2"))))
   (Fiat (= (Class "B") (Class "B")))
-  1)(let t0 (HeapPointsTo (Class "B") (Field "f") (Class "A")))
+  1)
+(let t0 (HeapPointsTo (Class "B") (Field "f") (Class "A")))
 (let prop0 (= t0 t0))
 (let t1 (Store "o2" (Field "f") "o1"))
 (let t2 (VarPointsTo "o2" (Class "B")))
@@ -98,7 +101,8 @@ expression: snapshot_content
       (x t1)
       (v1 "o2")))
   (Fiat (= (Class "A") (Class "A")))
-  2)(let t0 (VarPointsTo "r" (Class "A")))
+  2)
+(let t0 (VarPointsTo "r" (Class "A")))
 (let prop0 (= t0 t0))
 (let t1 (Load "r" "o3" (Field "f")))
 (let t2 (VarPointsTo "o3" (Class "B")))
@@ -177,3 +181,11 @@ expression: snapshot_content
       (x t1)))
   (Fiat (= (Class "A") (Class "A")))
   1)
+Assign: 1
+Class: 2
+Field: 1
+HeapPointsTo: 1
+Load: 1
+New: 2
+Store: 1
+VarPointsTo: 4

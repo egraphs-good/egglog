@@ -3,7 +3,8 @@ source: tests/files.rs
 expression: snapshot_content
 ---
 (let prop0 (= (nrows (NamedMat "B")) (NamedDim "m")))
-(Trans prop0 (Fiat prop0) (Fiat (= (NamedDim "m") (NamedDim "m"))))(let t0 (Kron (Id (NamedDim "n")) (NamedMat "B")))
+(Trans prop0 (Fiat prop0) (Fiat (= (NamedDim "m") (NamedDim "m"))))
+(let t0 (Kron (Id (NamedDim "n")) (NamedMat "B")))
 (let t1 (nrows t0))
 (let t2 (Times (NamedDim "n") (NamedDim "m")))
 (let t3 (Kron (NamedMat "A") (Id (NamedDim "m"))))
@@ -49,7 +50,8 @@ expression: snapshot_content
           (premises (Fiat (= t0 t0)))
           (substitution (B (NamedMat "B")) (e t0) t7)))
       (substitution (n (NamedDim "n")) (@rewrite_var__8 t5)))
-    0))(let t0 (Kron (Id (NamedDim "n")) (NamedMat "B")))
+    0))
+(let t0 (Kron (Id (NamedDim "n")) (NamedMat "B")))
 (let t1 (Kron (NamedMat "A") (Id (NamedDim "m"))))
 (let t2 (MMul t0 t1))
 (let prop0 (= t2 (Kron (NamedMat "A") (NamedMat "B"))))
@@ -157,3 +159,12 @@ expression: snapshot_content
           t10))
       (substitution (@rewrite_var__10 t3) (A (NamedMat "A")) (n (NamedDim "n"))))
     0))
+Id: 3
+Kron: 5
+Lit: 0
+MMul: 12
+NamedDim: 3
+NamedMat: 3
+Times: 3
+ncols: 12
+nrows: 12

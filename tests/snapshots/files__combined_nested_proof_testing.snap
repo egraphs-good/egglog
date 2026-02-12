@@ -9,21 +9,24 @@ expression: snapshot_content
       ((number 1))
         :ruleset myrules1 )")
   (premises)
-  (substitution))(Rule
+  (substitution))
+(Rule
   (= (number 2) (number 2))
   (name
     "(rule ()
       ((number 2))
         :ruleset myrules2 )")
   (premises)
-  (substitution))(Rule
+  (substitution))
+(Rule
   (= (number 3) (number 3))
   (name
     "(rule ()
       ((number 3))
         :ruleset myrules2 )")
   (premises)
-  (substitution))(Rule
+  (substitution))
+(Rule
   (= (number 5) (number 5))
   (name
     "(rule ()
@@ -31,3 +34,4 @@ expression: snapshot_content
         :ruleset myrules5 )")
   (premises)
   (substitution))
+number: 4

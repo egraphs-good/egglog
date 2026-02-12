@@ -166,7 +166,7 @@ impl std::fmt::Display for CommandOutput {
             CommandOutput::ProveExists {
                 proof_store,
                 proof_id,
-            } => write!(f, "{}", proof_store.proof_to_string(*proof_id)),
+            } => writeln!(f, "{}", proof_store.proof_to_string(*proof_id)),
             CommandOutput::OverallStatistics(run_report) => {
                 write!(f, "Overall statistics:\n{}", run_report)
             }

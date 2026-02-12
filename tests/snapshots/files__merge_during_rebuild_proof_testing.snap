@@ -25,3 +25,5 @@ expression: snapshot_content
       1)
     (Fiat (= 1 1)))
   (substitution ($y (Node 3)) (@n 1) ($x (Node 2))))
+Node: 4
+distance: 1

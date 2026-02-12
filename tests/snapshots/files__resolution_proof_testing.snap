@@ -2,7 +2,8 @@
 source: tests/files.rs
 expression: snapshot_content
 ---
-(Fiat (= () ()))(let prop0 (= (p 0) (FalseConst)))
+(Fiat (= () ()))
+(let prop0 (= (p 0) (FalseConst)))
 (let t0 (myor (negate (p 0)) (myor (FalseConst) (FalseConst))))
 (let prop1 (= (negate (p 0)) t0))
 (let prop2 (= t0 (negate (p 0))))
@@ -127,7 +128,8 @@ expression: snapshot_content
                 (a (p 2))
                 (as (negate (p 0)))))))))
     (substitution (p (p 0)) ($True (TrueConst))))
-  (Fiat (= (FalseConst) (FalseConst))))(let prop0 (= (p 2) (FalseConst)))
+  (Fiat (= (FalseConst) (FalseConst))))
+(let prop0 (= (p 2) (FalseConst)))
 (let t0 (myor (negate (p 2)) (FalseConst)))
 (let prop1 (= (negate (p 2)) t0))
 (let prop2 (= t0 (negate (p 2))))
@@ -177,3 +179,8 @@ expression: snapshot_content
                 (a t0)))))))
     (substitution (p (p 2)) ($True (TrueConst))))
   (Fiat (= (FalseConst) (FalseConst))))
+FalseConst: 1
+TrueConst: 1
+myor: 3
+negate: 2
+p: 3

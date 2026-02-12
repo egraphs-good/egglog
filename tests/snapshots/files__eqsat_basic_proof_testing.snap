@@ -57,3 +57,7 @@ expression: snapshot_content
           (name "(rewrite (Add a b) (Add b a))")
           (premises (Fiat (= t2 t2)))
           (substitution (a (Num 6)) (b t1) (@rewrite_var__ t2)))))))
+Add: 4
+Mul: 3
+Num: 3
+Var: 1

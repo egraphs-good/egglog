@@ -1,13 +1,7 @@
 ---
 source: tests/files.rs
-expression: snapshot
+expression: snapshot_content
 ---
-
-
-
-
-
-
 (let prop0 (= (Add 2 3) (Num 5)))
 (let prf0 (Fiat (= (Add 2 3) (Add 2 3))))
 (let prf1
@@ -31,3 +25,5 @@ expression: snapshot
         (name "rw2")
         (premises prf1 (Fiat (= () ())))
         (substitution (a 3) (b 2))))))
+Add: 2
+Num: 1

@@ -6,7 +6,8 @@ expression: snapshot_content
 (let t1 (g* t0 t0))
 (let prop0 (= t1 t1))
 (let prf0 (Fiat prop0))
-(Trans prop0 prf0 prf0)(let t0 (g* (g* (AConst) (AConst)) (g* (AConst) (AConst))))
+(Trans prop0 prf0 prf0)
+(let t0 (g* (g* (AConst) (AConst)) (g* (AConst) (AConst))))
 (let t1 (g* t0 t0))
 (let t2 (g* (g* (AConst) (AConst)) (g* (g* (AConst) (AConst)) t0)))
 (let prop0 (= t1 t2))
@@ -24,7 +25,8 @@ expression: snapshot_content
         (c t0)
         (a (g* (AConst) (AConst)))
         (b (g* (AConst) (AConst)))
-        (@rewrite_var__ t1)))))(let t0 (g* (inv (aConst)) (aConst)))
+        (@rewrite_var__ t1)))))
+(let t0 (g* (inv (aConst)) (aConst)))
 (let t1 (g* (bConst) t0))
 (let t2 (g* t1 (inv (bConst))))
 (let prop0 (= t2 (g* (bConst) (inv (bConst)))))
@@ -55,7 +57,8 @@ expression: snapshot_content
       (Sym (= (IConst) t0) prf0)
       1)
     0)
-  prf3)(let t0 (g* (bConst) (inv (bConst))))
+  prf3)
+(let t0 (g* (bConst) (inv (bConst))))
 (let prop0 (= t0 (IConst)))
 (Trans
   prop0
@@ -65,3 +68,10 @@ expression: snapshot_content
     (premises (Fiat (= t0 t0)))
     (substitution (a (bConst)) (@rewrite_var__5 t0)))
   (Fiat (= (IConst) (IConst))))
+AConst: 1
+BConst: 1
+IConst: 1
+aConst: 1
+bConst: 1
+g*: 3
+inv: 0

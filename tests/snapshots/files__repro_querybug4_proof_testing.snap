@@ -17,3 +17,5 @@ expression: snapshot_content
     (premises prf0 prf0 prf0)
     (substitution (y 2) (fvar5__ 2) (fvar6__ 2)))
   (Fiat (= (Num 2) (Num 2))))
+Num: 1
+OtherNum: 1

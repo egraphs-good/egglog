@@ -8,3 +8,5 @@ expression: snapshot_content
   prop0
   (Fiat (= (S (S (ZeroConst))) (S (S (ZeroConst)))))
   (Sym prop0 (Fiat (= t0 (S (S (ZeroConst)))))))
+S: 3
+ZeroConst: 1

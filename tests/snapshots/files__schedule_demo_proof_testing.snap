@@ -202,7 +202,8 @@ expression: snapshot_content
         :ruleset step-right )")
       (premises prf17 prf16 (Fiat (= 9 9)))
       (substitution (x 9) (y 8))))
-  (substitution (x 9)))(let prf0 (Fiat (= (right 0) (right 0))))
+  (substitution (x 9)))
+(let prf0 (Fiat (= (right 0) (right 0))))
 (let prf1
   (Rule
                                         (= (left 1) (left 1))
@@ -394,3 +395,5 @@ expression: snapshot_content
     prf16
     (Fiat (= 9 9)))
   (substitution (x 9) (y 8)))
+left: 11
+right: 10
