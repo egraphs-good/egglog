@@ -3,6 +3,4 @@ source: tests/files.rs
 expression: snapshot_content
 ---
 edge: 4
-edge: 4
-path: 9
 path: 9

@@ -3,6 +3,4 @@ source: tests/files.rs
 expression: snapshot_content
 ---
 Add: 8
-Add: 8
-Lit: 6
 Lit: 6

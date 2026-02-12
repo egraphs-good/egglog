@@ -1,0 +1,26 @@
+---
+source: tests/files.rs
+expression: snapshot_content
+---
+(CApp (CApp (CAddConst) (CN 1)) (CN 2))
+Abs: 1
+Add: 2
+App: 1
+CAbs: 124
+CAddConst: 1
+CApp: 434
+CFConst: 1
+CIfConst: 1
+CN: 3
+CTConst: 1
+CVar: 1
+Comb: 10
+FConst: 1
+IConst: 1
+If: 2
+KConst: 1
+N: 4
+SConst: 1
+TConst: 1
+Uncomb: 9
+Var: 1

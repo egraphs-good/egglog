@@ -2,5 +2,4 @@
 source: tests/files.rs
 expression: snapshot_content_across_treatments
 ---
-predicate: 3
 predicate: 2

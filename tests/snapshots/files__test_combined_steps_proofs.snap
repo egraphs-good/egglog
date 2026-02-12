@@ -3,8 +3,5 @@ source: tests/files.rs
 expression: snapshot_content
 ---
 left: 11
-left: 11
 middle: 10
-middle: 10
-right: 11
 right: 11

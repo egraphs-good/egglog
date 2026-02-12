@@ -3,4 +3,3 @@ source: tests/files.rs
 expression: snapshot_content_across_treatments
 ---
 foo: 1
-foo: 1

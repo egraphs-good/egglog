@@ -15,4 +15,3 @@
 (run 1)
 
 (check (= (f 0) (C2 (C1 (Leaf (X)) (Leaf2 (X))) (C2 (Leaf (X)) (Leaf2 (X))))))
-(print-size)

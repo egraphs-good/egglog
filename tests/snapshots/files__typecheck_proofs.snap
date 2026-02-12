@@ -1,0 +1,17 @@
+---
+source: tests/files.rs
+expression: snapshot_content
+---
+(TArr (TUnitConst) (TUnitConst))
+(TUnitConst)
+(TArr (TUnitConst) (TUnitConst))
+(TArr (TUnitConst) (TArr (TArr (TUnitConst) (TUnitConst)) (TUnitConst)))
+App: 3
+Cons: 6
+Lam: 4
+MyUnitConst: 1
+NilConst: 1
+TArr: 4
+TUnitConst: 1
+Var: 3
+typeof: 19

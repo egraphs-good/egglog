@@ -15,5 +15,3 @@
 (print-function Fib 10)
 (extract $f7)
 (check (= $f7 (Num 13)))
-       
- 

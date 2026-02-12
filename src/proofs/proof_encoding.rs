@@ -439,18 +439,17 @@ impl<'a> ProofInstrumentor<'a> {
         if fdecl.unextractable {
             view_flags.push_str(" :unextractable");
         }
-        if fdecl.hidden || fdecl.internal_let {
-            term_flags.push_str(" :internal-hidden");
+        if fdecl.hidden {
             view_flags.push_str(" :internal-hidden");
         }
-        // The term table is always unextractable as an optimization for normal extraction.
-        // When we extract a proof, we ignore this annotation.
-        term_flags.push_str(" :unextractable");
+        if fdecl.internal_let {
+            view_flags.push_str(" :internal-let");
+        }
         self.parse_program(&format!(
             "
             (sort {fresh_sort})
             {to_ast_view_sort}
-            (constructor {name} ({term_sorts}) {view_sort}{term_flags})
+            (constructor {name} ({term_sorts}) {view_sort}{term_flags} :internal-hidden :unextractable)
             (constructor {view_name} ({view_sorts}) {fresh_sort} :term-constructor {name}{view_flags})
             (constructor {to_delete_name} ({in_sorts}) {fresh_sort} :internal-hidden)
             (constructor {subsumed_name} ({in_sorts}) {fresh_sort} :internal-hidden)
