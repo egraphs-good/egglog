@@ -5,3 +5,8 @@ expression: snapshot_content
 (Num 5)
 (Num 4)
 (Num 2)
+Add: 788
+Mul: 67
+Neg: 31
+Num: 22
+Var: 3

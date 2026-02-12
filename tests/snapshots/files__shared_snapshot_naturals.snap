@@ -1,0 +1,12 @@
+---
+source: tests/files.rs
+expression: snapshot_content_across_treatments
+---
+Plus: 18
+Plus: 14
+S: 18
+S: 6
+Times: 3
+Times: 3
+Z: 1
+Z: 1

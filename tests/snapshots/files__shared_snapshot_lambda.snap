@@ -1,0 +1,20 @@
+---
+source: tests/files.rs
+expression: snapshot_content_across_treatments
+---
+Add: 0
+App: 0
+Eq: 0
+FalseConst: 1
+Fix: 0
+From: 0
+If: 0
+Lam: 0
+Let: 0
+Num: 0
+TrueConst: 1
+V: 0
+Val: 0
+Var: 0
+evals-to: 0
+freer: 0

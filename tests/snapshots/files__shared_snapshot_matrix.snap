@@ -1,0 +1,22 @@
+---
+source: tests/files.rs
+expression: snapshot_content_across_treatments
+---
+Id: 3
+Id: 3
+Kron: 11
+Kron: 5
+Lit: 0
+Lit: 0
+MMul: 45
+MMul: 12
+NamedDim: 3
+NamedDim: 3
+NamedMat: 3
+NamedMat: 3
+Times: 15
+Times: 3
+ncols: 16
+ncols: 12
+nrows: 16
+nrows: 12

@@ -1,0 +1,10 @@
+---
+source: tests/files.rs
+expression: snapshot_content_across_treatments
+---
+Cons: 1
+Cons: 1
+EmptyConst: 1
+EmptyConst: 1
+eq: 2
+eq: 2

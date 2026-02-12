@@ -1,0 +1,8 @@
+---
+source: tests/files.rs
+expression: snapshot_content
+---
+AConst: 1
+AConst: 1
+par: 1
+par: 1

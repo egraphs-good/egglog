@@ -271,7 +271,7 @@ impl ProofInstrumentor<'_> {
                 .sort_to_ast_constructor
                 .insert(sort.to_string(), to_ast_constructor.clone());
             let ast_sort = &self.proof_names().ast_sort;
-            format!("(constructor {to_ast_constructor} ({sort}) {ast_sort} :hidden)")
+            format!("(constructor {to_ast_constructor} ({sort}) {ast_sort} :internal-hidden)")
         } else {
             "".to_string()
         }
@@ -373,7 +373,7 @@ impl ProofInstrumentor<'_> {
                     .sort_to_ast_constructor
                     .insert(sort_name.clone(), ast_constructor.clone());
                 to_ast_constructors.push(format!(
-                    "(constructor {ast_constructor} ({sort_name} ) {} :hidden)",
+                    "(constructor {ast_constructor} ({sort_name} ) {} :internal-hidden)",
                     self.proof_names().ast_sort
                 ));
             }
@@ -401,30 +401,30 @@ impl ProofInstrumentor<'_> {
 (sort {ast_sort}) ;; wrap sorts in this for proofs
 (sort {proof_datatype})
 
-(constructor {pcons} ({proof_datatype} {proof_list_sort}) {proof_list_sort} :hidden)
-(constructor {pnil} () {proof_list_sort} :hidden)
+(constructor {pcons} ({proof_datatype} {proof_list_sort}) {proof_list_sort} :internal-hidden)
+(constructor {pnil} () {proof_list_sort} :internal-hidden)
 
 {to_ast_str}
 
 ;; Fiat justification for globals and primitives, gives two terms t1 = t2 for the proposition being justified
-(constructor {fiat_constructor} ({ast_sort} {ast_sort}) {proof_datatype} :hidden)
+(constructor {fiat_constructor} ({ast_sort} {ast_sort}) {proof_datatype} :internal-hidden)
 ;; name of rule, one proof per fact in the query, proposition being proven t1 = t2
-(constructor {rule_constructor} (String {proof_list_sort} {ast_sort} {ast_sort}) {proof_datatype} :hidden)
+(constructor {rule_constructor} (String {proof_list_sort} {ast_sort} {ast_sort}) {proof_datatype} :internal-hidden)
 
 ;; merge function justification- name of function and two proofs for the two terms being merged,
 ;; and the proposition being justified t = t
-(constructor {merge_fn_constructor} (String {proof_datatype} {proof_datatype} {ast_sort}) {proof_datatype} :hidden)
+(constructor {merge_fn_constructor} (String {proof_datatype} {proof_datatype} {ast_sort}) {proof_datatype} :internal-hidden)
 
 ;; transitivity of equality proofs
-(constructor {eq_trans_constructor} ({proof_datatype} {proof_datatype}) {proof_datatype} :hidden)
+(constructor {eq_trans_constructor} ({proof_datatype} {proof_datatype}) {proof_datatype} :internal-hidden)
 
 ;; symmetry of equality proofs
-(constructor  {eq_sym_constructor} ({proof_datatype}) {proof_datatype} :hidden)
+(constructor  {eq_sym_constructor} ({proof_datatype}) {proof_datatype} :internal-hidden)
 ;; given a proof that t1 = f(..., ci, ...)
 ;; and the child index i of ci in the term f(..., ci, ...)
 ;; and a proof that ci = c2,
 ;; produces a justification that t1 = f(..., c2, ...)
-(constructor  {congr_constructor} ({proof_datatype} i64 {proof_datatype}) {proof_datatype} :hidden)
+(constructor  {congr_constructor} ({proof_datatype} i64 {proof_datatype}) {proof_datatype} :internal-hidden)
                 "
         )
     }

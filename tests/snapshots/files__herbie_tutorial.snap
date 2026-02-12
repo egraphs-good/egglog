@@ -9,3 +9,12 @@ expression: snapshot_content
 1.9950248756218905
 10000.0
 10000.0
+Add: 4
+Div: 2
+Mul: 0
+Num: 4
+Var: 1
+best-error: 0
+lower-bound: 6
+true-value: 6
+upper-bound: 6

@@ -2,4 +2,6 @@
 source: tests/files.rs
 expression: snapshot_content
 ---
-
+F: 4
+G: 4
+R: 4

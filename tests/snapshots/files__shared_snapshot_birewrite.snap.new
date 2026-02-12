@@ -1,0 +1,7 @@
+---
+source: tests/files.rs
+assertion_line: 109
+expression: snapshot_content_across_treatments
+---
+Add: 8
+Lit: 6

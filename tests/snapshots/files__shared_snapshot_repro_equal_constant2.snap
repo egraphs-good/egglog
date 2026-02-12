@@ -1,0 +1,6 @@
+---
+source: tests/files.rs
+expression: snapshot_content_across_treatments
+---
+foo: 2
+foo: 1

@@ -1,0 +1,5 @@
+---
+source: tests/files.rs
+expression: snapshot_content
+---
+foo: 1

@@ -3,3 +3,8 @@ source: tests/files.rs
 expression: snapshot_content
 ---
 100
+Mul: 1
+Num: 0
+Var: 1
+hi: 1
+lo: 2

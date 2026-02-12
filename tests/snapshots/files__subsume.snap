@@ -4,3 +4,7 @@ expression: snapshot_content
 ---
 (Mul (Num 2) (Add (Var "x") (Add (Var "x") (Var "x"))))
 (Mul (Num 2) (Add (Var "x") (Add (Var "x") (Var "x"))))
+Add: 2
+Mul: 2
+Num: 2
+Var: 1

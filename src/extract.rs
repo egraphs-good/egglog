@@ -186,10 +186,12 @@ impl<C: Cost + Ord + Eq + Clone + Debug> Extractor<C> {
         for func in egraph.functions.iter() {
             let unextractable = func.1.decl.unextractable && respect_unextractable;
             let should_skip_view = skip_view_tables && func.1.decl.term_constructor.is_some();
+            let hidden = func.1.decl.hidden;
 
-            // only extract constructors, skip view tables when requested for proof extraction, and respect unextractable flag
+            // only extract constructors, skip view tables when requested for proof extraction, and respect unextractable/hidden flag
             if !unextractable
                 && !should_skip_view
+                && !hidden
                 && func.1.decl.subtype == FunctionSubtype::Constructor
             {
                 let func_name = func.0.clone();
