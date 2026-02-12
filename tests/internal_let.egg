@@ -1,0 +1,20 @@
+; Test that :internal-let flag hides constructors from print-size
+; Global let bindings should not appear in print-size output
+
+(datatype Math
+  (Num i64)
+  (Add Math Math))
+
+; Define some global bindings
+(let $x (Num 1))
+(let $y (Num 2))
+(let $sum (Add $x $y))
+
+; Run to populate the e-graph
+(run 1)
+
+; print-size should only show Num and Add, not $x, $y, or $sum
+(print-size)
+; Expected output:
+; Add: 1
+; Num: 2
