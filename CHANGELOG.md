@@ -2,13 +2,51 @@
 
 ## [Unreleased] - ReleaseDate
 
-- Refactored API to use [`TermId`] more consistently instead of `Term` where possible, simplifying egglog code.
-- Require globals to use the `$` prefix; missing prefixes now log a warning by default and can be upgraded to errors with `--strict-mode` or `EGraph::set_strict_mode`.
 - Desugar `relation`s to `constructor`s to simplify the language and implementation. Relations no longer return unit `()` values.
-- Export let bindings in the serialized format so they are visualized (#701)
-  - Breaking change: renames `ignore_viz` to `let_binding` in `GenericFunctionDecl`.
+- Refactored API to use [`TermId`] more consistently instead of `Term` where possible, simplifying egglog code.
 
-## [1.0.0] - 2025-8-22
+## [2.0.0] - 2026-02-11
+
+Bigger changes
+
+- Index catalog optimized for small set of indices (#719)
+- Warn when globals lack the $ prefix; require globals to use the `$` prefix; missing prefixes now log a warning by default and can be upgraded to errors with `--strict-mode` or `EGraph::set_strict_mode`. (#722)
+- Rename global vars in tests (#792, #800)
+- Make interactive mode a delimiter (#729)
+- Enable type-aware macros for fresh! sugar (#741)
+- Proof preparation and term encoding (#742, #743, #765, #789)
+- Export let bindings in the serialized format so they are visualized; Renames `ignore_viz` to `let_binding` (#701)
+- Add snapshot tests (#778)
+
+Bug fixes
+
+- Fix Incorrect Unstable Function Behavior (#739)
+- Run all tests in the workspace in CI (#776)
+
+Performance improvements
+
+- Low-level optimization for rebuilding (#754)
+- Improve merge performance by being precise (#766)
+- Avoid excessive cross-crate monomorphization (#773)
+- Remove duplicate variables using functional dependency (#777)
+- Memcpy for parallel writes and fix compilation failures (#779)
+
+Misc. improvements
+
+- Pin cargo codspeed version to fix CI (#734)
+- Expose type constraints related APIs (#747)
+- Remove lazy_static (#714)
+- Simplify extract option handling (#759)
+- Add longer extraction benchmark (#760)
+- Specify that extractor does not support DAG costs (#763)
+- Helpers for getting table sizes in primitives (#752)
+- Refactor query planning (#780)
+- Disable tracing tests (#787)
+- Add initial early stopping support and use it for panic functions (#788)
+- Update links in README for egglog resources (#798)
+
+
+## [1.0.0] - 2025-10-18
 
 This is the first release of egglog that is based on our new database-first, highly parallel backend.
 
@@ -36,7 +74,7 @@ Misc. Improvements
 - Add support for the :unextractable flag for datatype variants (#712)
 - Move egglog ast into its own crates (#670)
 
-## [0.5.0] - 2025-6-10
+## [0.5.0] - 2025-6-9
 
 This is the last major release before we switch to a database-first, highly parallel new backend.
 
@@ -115,7 +153,7 @@ Cleanups and improvements
 - Improvements to performance of testing (#458)
 - Other small cleanups and improvements (#428, #429, #433, #434, #436, #437, #440, #442, #444, #445, #449, #453, #456, #469, #474, #477, #490, #491, #494, #501, #504, #508, #511)
 
-## [0.3.0] - 2024-9-12
+## [0.3.0] - 2024-10-02
 
 Cleanups
 
@@ -149,7 +187,7 @@ Import relation from files
 
 - Accept f64 function arguments #384
 
-## [0.2.0] - 2024-05-17
+## [0.2.0] - 2024-05-24
 
 Usability
 
@@ -179,22 +217,24 @@ Others
 
 - Numerous bug fixes
 
-## [0.1.0] - 2023-10-24
+## [0.1.0] - 2023-10-31
+
 This is egglog's first release! Egglog is ready for use, but is still fairly experimental. Expect some significant changes in the future.
 
 - Egglog is better than [egg](https://github.com/egraphs-good/egg) in many ways, including performance and new features.
 - Egglog now includes cargo documentation for the language interface.
 
-As of yet, the rust interface is not documented or well supported. We reccomend using the language interface. Egglog also lacks proofs, a feature that egg has.
+As of yet, the rust interface is not documented or well supported. We recommend using the language interface. Egglog also lacks proofs, a feature that egg has.
 
 
-[Unreleased]: https://github.com/egraphs-good/egglog/compare/v1.0.0...HEAD
+[Unreleased]: https://github.com/egraphs-good/egglog/compare/v2.0.0...HEAD
 [0.1.0]: https://github.com/egraphs-good/egglog/tree/v0.1.0
 [0.2.0]: https://github.com/egraphs-good/egglog/tree/v0.2.0
 [0.3.0]: https://github.com/egraphs-good/egglog/tree/v0.3.0
 [0.4.0]: https://github.com/egraphs-good/egglog/tree/v0.4.0
 [0.5.0]: https://github.com/egraphs-good/egglog/tree/v0.5.0
 [1.0.0]: https://github.com/egraphs-good/egglog/tree/v1.0.0
+[2.0.0]: https://github.com/egraphs-good/egglog/tree/v2.0.0
 
 
 See release-instructions.md for more information on how to do a release.
