@@ -1,0 +1,10 @@
+---
+source: tests/files.rs
+expression: snapshot_content_across_treatments
+---
+Var: 6
+Var: 6
+f: 12
+f: 11
+intersect: 5
+intersect: 5

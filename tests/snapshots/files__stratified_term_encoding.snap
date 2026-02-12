@@ -1,0 +1,8 @@
+---
+source: tests/files.rs
+expression: snapshot_content
+---
+edge: 4
+edge: 4
+path: 6
+path: 6

@@ -1,0 +1,15 @@
+---
+source: tests/files.rs
+expression: snapshot_content_across_treatments
+---
+Add: 0
+Cons: 12
+Mul: 8
+Nil: 1
+Num: 10
+Var: 0
+composed-i64-math: 1
+composed-math: 3
+list-map-math: 12
+list-multiply-by: 1
+square: 6

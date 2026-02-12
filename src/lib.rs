@@ -715,20 +715,35 @@ impl EGraph {
     /// print the size of all non-hidden functions in "name: len" pairs.
     pub fn print_size(&self, sym: Option<&str>) -> Result<CommandOutput, Error> {
         if let Some(sym) = sym {
+            // First check if this is a term_constructor name that maps to a view table
             let f = self
                 .functions
-                .get(sym)
+                .values()
+                .find(|f| f.decl.term_constructor.as_deref() == Some(sym))
+                .or_else(|| self.functions.get(sym))
                 .ok_or(TypeError::UnboundFunction(sym.to_owned(), span!()))?;
+            // Skip hidden and let_binding functions
+            if f.decl.hidden || f.decl.internal_let {
+                return Err(TypeError::UnboundFunction(sym.to_owned(), span!()).into());
+            }
             let size = self.backend.table_size(f.backend_id);
             log::info!("Function {} has size {}", sym, size);
             Ok(CommandOutput::PrintFunctionSize(size))
         } else {
-            // Print size of all non-hidden functions
+            // Print size of all non-hidden, non-let_binding functions
+            // For view tables, use the term_constructor name instead
             let mut lens = self
                 .functions
                 .iter()
-                .filter(|(_, f)| !f.decl.hidden)
-                .map(|(sym, f)| (sym.clone(), self.backend.table_size(f.backend_id)))
+                .filter(|(_, f)| !f.decl.hidden && !f.decl.internal_let)
+                .map(|(sym, f)| {
+                    let name = f
+                        .decl
+                        .term_constructor
+                        .clone()
+                        .unwrap_or_else(|| sym.clone());
+                    (name, self.backend.table_size(f.backend_id))
+                })
                 .collect::<Vec<_>>();
 
             // Function name's alphabetical order

@@ -16,9 +16,14 @@ pub(crate) fn desugar_command(
             name,
             schema,
             merge,
-        } => vec![NCommand::Function(FunctionDecl::function(
-            span, name, schema, merge,
-        ))],
+            hidden,
+            let_binding,
+        } => {
+            let mut fdecl = FunctionDecl::function(span, name, schema, merge);
+            fdecl.hidden = hidden;
+            fdecl.internal_let = let_binding;
+            vec![NCommand::Function(fdecl)]
+        }
         Command::Constructor {
             span,
             name,
@@ -26,10 +31,12 @@ pub(crate) fn desugar_command(
             cost,
             unextractable,
             hidden,
+            let_binding,
             term_constructor,
         } => {
             let mut fdecl =
                 FunctionDecl::constructor(span, name, schema, cost, unextractable, hidden);
+            fdecl.internal_let = let_binding;
             fdecl.term_constructor = term_constructor;
             std::iter::once(NCommand::Function(fdecl)).collect()
         }

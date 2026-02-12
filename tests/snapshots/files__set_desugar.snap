@@ -1,0 +1,6 @@
+---
+source: tests/files.rs
+expression: snapshot_content
+---
+IS: 1
+ISet-get: 4

@@ -63,7 +63,6 @@ shadow-local.egg
 stresstest_large_expr.egg
 string_quotes.egg
 taylor51.egg
-<<<<<<< HEAD
 towers-of-hanoi.egg
 tricky-type-checking.egg
 type-constraints-tests.egg
@@ -79,10 +78,4 @@ unstable-fn-wrong-args.egg
 unstable-fn-wrong-return-type.egg
 unstable-fn-wrong-return.egg
 unstable-fn.egg
-=======
-term_annotation.egg
-tricky-type-checking.egg
-type-constraints-tests.egg
-uf-extraction.egg
->>>>>>> c7a62d7b (working on hidden)
 vec.egg

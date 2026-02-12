@@ -102,8 +102,8 @@ impl<'a> ProofInstrumentor<'a> {
             let uf_proof_name = self.uf_proof_name(sort_name);
             format!(
                 "
-                (function {term_proof_name} ({sort_name}) {proof_type} :merge old)
-                (function {uf_proof_name} ({sort_name} {sort_name}) {proof_type} :merge old)
+                (function {term_proof_name} ({sort_name}) {proof_type} :merge old :internal-hidden)
+                (function {uf_proof_name} ({sort_name} {sort_name}) {proof_type} :merge old :internal-hidden)
                  "
             )
         } else {
@@ -162,7 +162,7 @@ impl<'a> ProofInstrumentor<'a> {
 
         self.parse_program(&format!(
             "(sort {fresh_sort})
-             (constructor {pname} ({sort_name} {sort_name}) {fresh_sort} :hidden)
+             (constructor {pname} ({sort_name} {sort_name}) {fresh_sort} :internal-hidden)
              {to_ast_constructor_code}
              {proof_tables}
              ;; performs path compression, ensuring each term points to the representative
@@ -290,7 +290,7 @@ impl<'a> ProofInstrumentor<'a> {
         // The second deletes rows with old values for the old variable, while the third deletes rows with new values for the new variable.
         format!(
             "(sort {fresh_sort})
-                 (constructor {cleanup_constructor} ({output_sort} {output_sort}) {fresh_sort} :hidden)
+                 (constructor {cleanup_constructor} ({output_sort} {output_sort}) {fresh_sort} :internal-hidden)
                  (rule (({view_name} {child_names_str} old)
                         ({view_name} {child_names_str} new)
                         (!= old new)
@@ -429,7 +429,7 @@ impl<'a> ProofInstrumentor<'a> {
         let merge_rule = self.handle_merge_or_congruence(fdecl);
         // the term table has child_sorts as inputs
         // the view table has child_sorts + the leader term for the eclass
-        // Propagate cost, unextractable, and hidden flags from the original function
+        // Propagate cost, unextractable, hidden, and internal_let flags from the original function
         let mut term_flags = String::new();
         let mut view_flags = String::new();
         if let Some(cost) = fdecl.cost {
@@ -439,9 +439,9 @@ impl<'a> ProofInstrumentor<'a> {
         if fdecl.unextractable {
             view_flags.push_str(" :unextractable");
         }
-        if fdecl.hidden {
-            term_flags.push_str(" :hidden");
-            view_flags.push_str(" :hidden");
+        if fdecl.hidden || fdecl.internal_let {
+            term_flags.push_str(" :internal-hidden");
+            view_flags.push_str(" :internal-hidden");
         }
         // The term table is always unextractable as an optimization for normal extraction.
         // When we extract a proof, we ignore this annotation.
@@ -452,8 +452,8 @@ impl<'a> ProofInstrumentor<'a> {
             {to_ast_view_sort}
             (constructor {name} ({term_sorts}) {view_sort}{term_flags})
             (constructor {view_name} ({view_sorts}) {fresh_sort} :term-constructor {name}{view_flags})
-            (constructor {to_delete_name} ({in_sorts}) {fresh_sort} :hidden)
-            (constructor {subsumed_name} ({in_sorts}) {fresh_sort} :hidden)
+            (constructor {to_delete_name} ({in_sorts}) {fresh_sort} :internal-hidden)
+            (constructor {subsumed_name} ({in_sorts}) {fresh_sort} :internal-hidden)
             {proof_constructors}
             {merge_rule}
             {delete_rule}",
@@ -475,7 +475,7 @@ impl<'a> ProofInstrumentor<'a> {
         // of the original rule.
         format!(
             "
-            (function {view_proof_name} ({view_sorts}) {proof_type} :merge old)
+            (function {view_proof_name} ({view_sorts}) {proof_type} :merge old :internal-hidden)
             "
         )
     }

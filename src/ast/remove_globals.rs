@@ -111,7 +111,7 @@ impl GlobalRemover<'_> {
                         cost: None,
                         unextractable: true,
                         hidden: false,
-                        let_binding: true,
+                        internal_let: true,
                         span: span.clone(),
                         term_constructor: None,
                     };

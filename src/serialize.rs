@@ -150,7 +150,7 @@ impl EGraph {
                 }
                 let (out, inps) = row.vals.split_last().unwrap();
                 let class_id = self.value_to_class_id(&function.schema.output, *out);
-                if function.decl.let_binding {
+                if function.decl.internal_let {
                     let_bindings
                         .entry(class_id.clone())
                         .or_insert_with(Vec::new)

@@ -1,0 +1,16 @@
+---
+source: tests/files.rs
+expression: snapshot_content
+---
+AConst: 1
+AConst: 1
+BConst: 1
+BConst: 1
+IConst: 1
+IConst: 1
+allgs: 4
+allgs: 4
+g*: 134
+g*: 21
+inv: 0
+inv: 0

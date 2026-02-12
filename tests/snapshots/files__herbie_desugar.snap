@@ -1,0 +1,24 @@
+---
+source: tests/files.rs
+expression: snapshot_content
+---
+Add: 0
+Cbrt: 0
+Ceil: 0
+Const: 0
+Div: 0
+Fabs: 0
+Floor: 0
+Log: 0
+Mul: 0
+Neg: 1
+Num: 4
+Pow: 0
+Round: 0
+Sqrt: 0
+Sub: 0
+Unary: 0
+Var: 1
+hi: 0
+lo: 0
+non-zero: 0

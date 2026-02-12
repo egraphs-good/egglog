@@ -215,10 +215,12 @@ impl<C: Cost + Ord + Eq + Clone + Debug> Extractor<C> {
             let unextractable = func.1.decl.unextractable && options.respect_unextractable;
             let should_skip_view =
                 options.skip_view_tables && func.1.decl.term_constructor.is_some();
+            let hidden = func.1.decl.hidden;
 
-            // only extract constructors, skip view tables when requested for proof extraction, and respect unextractable flag
+            // only extract constructors, skip view tables when requested for proof extraction, and respect unextractable/hidden flag
             if !unextractable
                 && !should_skip_view
+                && !hidden
                 && func.1.decl.subtype == FunctionSubtype::Constructor
             {
                 let func_name = func.0.clone();

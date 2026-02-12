@@ -1,4 +1,4 @@
-; Test that :hidden constructors are excluded from print-size output
+; Test that :internal-hidden constructors are excluded from print-size output
 
 (sort MySort)
 
@@ -6,7 +6,7 @@
 (constructor Visible () MySort)
 
 ; A hidden constructor - should NOT show up in print-size
-(constructor Hidden () MySort :hidden)
+(constructor Hidden () MySort :internal-hidden)
 
 ; Add some data
 (Visible)

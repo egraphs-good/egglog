@@ -1,0 +1,7 @@
+---
+source: tests/files.rs
+expression: snapshot_content
+---
+Cons: 1
+EmptyConst: 1
+eq: 2

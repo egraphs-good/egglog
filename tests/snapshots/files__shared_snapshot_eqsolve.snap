@@ -1,0 +1,9 @@
+---
+source: tests/files.rs
+expression: snapshot_content_across_treatments
+---
+Add: 788
+Mul: 67
+Neg: 31
+Num: 22
+Var: 3

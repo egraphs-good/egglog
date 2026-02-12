@@ -212,7 +212,15 @@ impl EGraph {
 
         let command: ResolvedNCommand = match command {
             NCommand::Function(fdecl) => {
-                ResolvedNCommand::Function(self.type_info.typecheck_function(symbol_gen, fdecl)?)
+                let resolved = self.type_info.typecheck_function(symbol_gen, fdecl)?;
+                // If this is a let binding, add it to global_sorts
+                if resolved.internal_let {
+                    let output_sort = self.type_info.sorts.get(&fdecl.schema.output).unwrap();
+                    self.type_info
+                        .global_sorts
+                        .insert(fdecl.name.clone(), output_sort.clone());
+                }
+                ResolvedNCommand::Function(resolved)
             }
             NCommand::NormRule { rule } => ResolvedNCommand::NormRule {
                 rule: self.type_info.typecheck_rule(symbol_gen, rule)?,
@@ -553,7 +561,7 @@ impl TypeInfo {
             cost: fdecl.cost,
             unextractable: fdecl.unextractable,
             hidden: fdecl.hidden,
-            let_binding: fdecl.let_binding,
+            internal_let: fdecl.internal_let,
             span: fdecl.span.clone(),
             term_constructor: fdecl.term_constructor.clone(),
         })

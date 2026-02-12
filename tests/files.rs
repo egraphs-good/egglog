@@ -130,7 +130,10 @@ impl Run {
     ) -> Result<Vec<CommandOutput>, String> {
         let mut egraph = self.egraph();
 
-        match egraph.parse_and_run_program(filename, program) {
+        // Append print-size to every test file to ensure it works
+        let program = format!("{}\n(print-size)", program);
+
+        match egraph.parse_and_run_program(filename, &program) {
             Ok(msgs) => {
                 if self.should_fail() {
                     panic!(

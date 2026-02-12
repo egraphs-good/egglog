@@ -683,6 +683,8 @@ pub fn add_function(
         name: name.to_owned(),
         schema,
         merge,
+        hidden: false,
+        let_binding: false,
     }])
 }
 
@@ -701,6 +703,7 @@ pub fn add_constructor(
         cost,
         unextractable,
         hidden: false,
+        let_binding: false,
         term_constructor: None,
     }])
 }

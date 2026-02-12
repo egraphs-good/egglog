@@ -1,0 +1,13 @@
+---
+source: tests/files.rs
+expression: snapshot_content_across_treatments
+---
+Edge: 8
+current-iteration: 1
+edge-exists: 4
+edge-in-mst: 3
+iteration-to-best-edge: 3
+iteration-to-best-edge-weight: 4
+mytrue: 1
+solution: 3
+vertex-included: 4

@@ -23,3 +23,5 @@
       
       
 (run 10)
+
+(print-size)

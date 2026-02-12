@@ -1,0 +1,11 @@
+---
+source: tests/files.rs
+expression: snapshot_content
+---
+Add: 16
+Cons: 13
+Knap: 58
+Max: 17
+NilConst: 1
+Num: 17
+Unwrap: 17
