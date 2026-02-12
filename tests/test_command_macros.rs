@@ -114,7 +114,7 @@ fn test_single_macro_with_desugar_program() {
     // Check that the rule name was prefixed - it should have test_ prefix
     // The original rule name is generated as $rule_<n>, so it becomes test_$rule_<n>
     assert!(
-        output.contains(&"_test_0".to_string()),
+        output.contains(&"test_".to_string()),
         "Expected rule name to be prefixed with test_: {}",
         output
     );

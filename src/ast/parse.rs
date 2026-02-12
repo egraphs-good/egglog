@@ -515,6 +515,17 @@ impl Parser {
                 span,
                 map_fallible(tail, self, Self::parse_fact)?,
             )],
+            "prove" => vec![Command::Prove(
+                span,
+                map_fallible(tail, self, Self::parse_fact)?,
+            )],
+            "prove-exists" => match tail {
+                [constructor] => vec![Command::ProveExists(
+                    span,
+                    constructor.expect_atom("constructor name")?,
+                )],
+                _ => return error!(span, "usage: (prove-exists <constructor>)"),
+            },
             "push" => match tail {
                 [] => vec![Command::Push(1)],
                 [n] => vec![Command::Push(n.expect_uint("number of times to push")?)],

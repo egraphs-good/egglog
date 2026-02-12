@@ -1,0 +1,20 @@
+; Test that primitives can have other primitives as arguments,
+; but constructor/function calls get extracted
+
+(datatype Math
+  (Const i64)
+  (Add Math Math)
+  (Mul Math Math))
+
+(relation MathU (Math))
+
+(rule ((MathU (Const a))
+       (> (+ a 1) 5))
+      ((MathU (Add (Const a) (Const 1)))))
+
+(MathU (Const 5))
+(run 3)
+
+; Check that the rules fired
+(prove (MathU (Add (Const 5) (Const 1))))
+

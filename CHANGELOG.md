@@ -2,6 +2,9 @@
 
 ## [Unreleased] - ReleaseDate
 
+- Desugar `relation`s to `constructor`s to simplify the language and implementation. Relations no longer return unit `()` values.
+- Refactored API to use [`TermId`] more consistently instead of `Term` where possible, simplifying egglog code.
+
 ## [2.0.0] - 2026-02-11
 
 Bigger changes
