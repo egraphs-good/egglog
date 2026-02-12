@@ -12,7 +12,7 @@ members = [
 ]
 
 [workspace.package]
-version = "1.0.0"
+version = "2.0.0"
 edition = "2024"
 description = "egglog is a language that combines the benefits of equality saturation and datalog. It can be used for analysis, optimization, and synthesis of programs. It is the successor to the popular rust library egg."
 repository = "https://github.com/egraphs-good/egglog"
@@ -70,15 +70,15 @@ libtest-mimic = "0.8"
 ######################
 # member crates
 ######################
-egglog-core-relations = { path = "core-relations", version = "1.0.0" }
-egglog-ast = { path = "egglog-ast", version = "1.0.0" }
-egglog-bridge = { path = "egglog-bridge", version = "1.0.0" }
-egglog-concurrency = { path = "concurrency", version = "1.0.0" }
-egglog-numeric-id = { path = "numeric-id", version = "1.0.0" }
-egglog-union-find = { path = "union-find", version = "1.0.0" }
-egglog-add-primitive = { path = "src/sort/add_primitive", version = "1.0.0" }
-egglog-reports = { path = "egglog-reports", version = "1.0.0" }
-egglog = { path = ".", default-features = false, version = "1.0.0" }
+egglog-core-relations = { path = "core-relations", version = "2.0.0" }
+egglog-ast = { path = "egglog-ast", version = "2.0.0" }
+egglog-bridge = { path = "egglog-bridge", version = "2.0.0" }
+egglog-concurrency = { path = "concurrency", version = "2.0.0" }
+egglog-numeric-id = { path = "numeric-id", version = "2.0.0" }
+egglog-union-find = { path = "union-find", version = "2.0.0" }
+egglog-add-primitive = { path = "src/sort/add_primitive", version = "2.0.0" }
+egglog-reports = { path = "egglog-reports", version = "2.0.0" }
+egglog = { path = ".", default-features = false, version = "2.0.0" }
 
 ######################
 # wasm
