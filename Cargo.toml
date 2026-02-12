@@ -161,6 +161,7 @@ glob = { workspace = true }
 libtest-mimic = { workspace = true }
 testing_logger = "0.1"
 insta = "1.40"
+serial_test = "3"
 
 [profile.release]
 incremental = true

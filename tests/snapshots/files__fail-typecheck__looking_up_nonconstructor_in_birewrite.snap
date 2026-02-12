@@ -1,0 +1,6 @@
+---
+source: tests/files.rs
+expression: err_msg
+---
+In 1:1-22 of looking_up_nonconstructor_in_birewrite.egg: (function f (i64) i64)
+parse error: functions are required to specify merge behaviour

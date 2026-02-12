@@ -1,0 +1,31 @@
+; Test that extraction works correctly with a custom :uf annotation.
+; The :uf annotation specifies a union-find table that tracks
+; canonical representatives for a sort. When extracting, the UF table
+; is consulted to find the canonical value.
+
+; The UF table needs its own sort (like the proof encoding produces)
+(sort UFSort)
+
+; Declare the sort with :uf pointing to the UF constructor (declared next)
+(sort Expr :uf UF_Expr)
+
+; Define a union-find constructor for Expr
+; First arg is the term, second arg is its canonical representative
+(constructor UF_Expr (Expr Expr) UFSort)
+
+; Define constructors for Expr
+(constructor Foo () Expr)
+(constructor Bar () Expr)
+
+; Create two different terms
+(let $t1 (Foo))
+(let $t2 (Bar))
+
+; Set up UF entries: $t2 points to $t1 as the canonical representative
+; This makes $t1 the canonical rep for both
+(UF_Expr $t1 $t1)
+(UF_Expr $t2 $t1)
+
+; Now extract $t2 - it should use UF_Expr to find that $t1 is the canonical rep
+; So we expect to see (Foo), not (Bar)
+(extract $t2)

@@ -11,8 +11,6 @@ pub enum ProveExistsError {
     RequiresConstructor,
     #[error("prove-exists does not support primitives")]
     PrimitivesUnsupported,
-    #[error("constructor {name} is marked :unextractable")]
-    ConstructorUnextractable { name: String },
     #[error("prove requires proofs mode")]
     ProofsDisabled,
     #[error("Could not find a proof due to query not matching (constructor {constructor}).")]
@@ -42,12 +40,6 @@ impl ProofInstrumentor<'_> {
             .get(&func.name)
             .unwrap_or_else(|| panic!("constructor {} is not declared", func.name));
 
-        if function.decl.unextractable {
-            return Err(ProveExistsError::ConstructorUnextractable {
-                name: func.name.clone(),
-            });
-        }
-
         if !self.egraph.proof_state.proofs_enabled {
             return Err(ProveExistsError::ProofsDisabled);
         }
@@ -55,7 +47,9 @@ impl ProofInstrumentor<'_> {
         let backend_id = function.backend_id;
         let output_sort = function.schema.output.clone();
 
-        let extractor = Extractor::compute_costs_from_rootsorts(
+        // Use the version that ignores unextractable flag since proof extraction
+        // needs to extract proofs from all terms including those marked unextractable
+        let extractor = Extractor::compute_costs_from_rootsorts_allow_unextractable(
             None,
             self.egraph,
             TreeAdditiveCostModel::default(),

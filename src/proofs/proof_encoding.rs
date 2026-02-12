@@ -429,12 +429,25 @@ impl<'a> ProofInstrumentor<'a> {
         let merge_rule = self.handle_merge_or_congruence(fdecl);
         // the term table has child_sorts as inputs
         // the view table has child_sorts + the leader term for the eclass
+        // Propagate cost and unextractable flags from the original function
+        let mut term_flags = String::new();
+        let mut view_flags = String::new();
+        if let Some(cost) = fdecl.cost {
+            term_flags.push_str(&format!(" :cost {cost}"));
+            view_flags.push_str(&format!(" :cost {cost}"));
+        }
+        if fdecl.unextractable {
+            view_flags.push_str(" :unextractable");
+        }
+        // The term table is always unextractable as an optimization for normal extraction.
+        // When we extract a proof, we ignore this annotation.
+        term_flags.push_str(" :unextractable");
         self.parse_program(&format!(
             "
             (sort {fresh_sort})
             {to_ast_view_sort}
-            (constructor {name} ({term_sorts}) {view_sort})
-            (constructor {view_name} ({view_sorts}) {fresh_sort})
+            (constructor {name} ({term_sorts}) {view_sort}{term_flags})
+            (constructor {view_name} ({view_sorts}) {fresh_sort} :term-constructor {name}{view_flags})
             (constructor {to_delete_name} ({in_sorts}) {fresh_sort})
             (constructor {subsumed_name} ({in_sorts}) {fresh_sort})
             {proof_constructors}
@@ -988,6 +1001,11 @@ impl<'a> ProofInstrumentor<'a> {
                 match resolved_call {
                     ResolvedCall::Func(func_type) => {
                         if func_type.subtype == FunctionSubtype::Custom {
+                            // Globals are desugared to no-arg functions (in non-proof mode)
+                            // They're allowed, in proof mode they are constructors.
+                            if self.egraph.type_info.is_global(&func_type.name) {
+                                return format!("({} {})", func_type.name, ListDisplay(&args, " "));
+                            }
                             panic!(
                                 "Found a function lookup in actions, should have been prevented by typechecking"
                             );
@@ -1125,8 +1143,21 @@ impl<'a> ProofInstrumentor<'a> {
     fn term_encode_command(&mut self, command: &ResolvedNCommand, res: &mut Vec<Command>) {
         log::debug!("Term encoding for {}", command);
         match &command {
-            ResolvedNCommand::Sort(_span, name, _presort_and_args) => {
-                res.push(command.to_command().make_unresolved());
+            ResolvedNCommand::Sort {
+                span,
+                name,
+                presort_and_args,
+                unionable,
+                ..
+            } => {
+                let uf_name = self.uf_name(name);
+                res.push(Command::Sort {
+                    span: span.clone(),
+                    name: name.clone(),
+                    presort_and_args: presort_and_args.clone(),
+                    uf: Some(uf_name),
+                    unionable: *unionable,
+                });
                 res.extend(self.declare_sort(name));
             }
             ResolvedNCommand::Function(fdecl) => {
@@ -1157,10 +1188,43 @@ impl<'a> ProofInstrumentor<'a> {
                 let last = res.pop().unwrap();
                 res.push(Command::Fail(span.clone(), Box::new(last)));
             }
+            ResolvedNCommand::Extract(span, expr, variants) => {
+                // Instrument the expressions to use view tables (like actions, not facts)
+                let mut action_stmts = vec![];
+                let instrumented_expr =
+                    self.instrument_action_expr(expr, &mut action_stmts, &Justification::Fiat);
+                let instrumented_variants =
+                    self.instrument_action_expr(variants, &mut action_stmts, &Justification::Fiat);
+
+                // Add any action statements needed to set up the expressions
+                for stmt in action_stmts {
+                    res.extend(self.parse_program(&stmt));
+                }
+                res.push(Command::Extract(
+                    span.clone(),
+                    self.parse_expr(&instrumented_expr),
+                    self.parse_expr(&instrumented_variants),
+                ));
+            }
+            ResolvedNCommand::PrintSize(span, name) => {
+                // In proof mode, print the size of the view table for constructors
+                let new_name = name.as_ref().map(|n| {
+                    if self
+                        .egraph
+                        .type_info
+                        .get_func_type(n)
+                        .is_some_and(|f| f.subtype == FunctionSubtype::Constructor)
+                    {
+                        self.view_name(n)
+                    } else {
+                        n.clone()
+                    }
+                });
+                res.push(Command::PrintSize(span.clone(), new_name));
+            }
             ResolvedNCommand::Pop(..)
             | ResolvedNCommand::Push(..)
             | ResolvedNCommand::AddRuleset(..)
-            | ResolvedNCommand::PrintSize(..)
             | ResolvedNCommand::Output { .. }
             | ResolvedNCommand::Input { .. }
             | ResolvedNCommand::UnstableCombinedRuleset(..)
@@ -1168,9 +1232,6 @@ impl<'a> ProofInstrumentor<'a> {
             | ResolvedNCommand::PrintFunction(..)
             | ResolvedNCommand::ProveExists(..) => {
                 res.push(command.to_command().make_unresolved());
-            }
-            ResolvedNCommand::Extract(..) => {
-                // TODO we just omit extract for now, support in future
             }
             ResolvedNCommand::UserDefined(..) => {
                 panic!("User defined commands unsupported in term encoding");
@@ -1199,7 +1260,7 @@ impl<'a> ProofInstrumentor<'a> {
             // run rebuilding after every command except a few
             if let ResolvedNCommand::Function(..)
             | ResolvedNCommand::NormRule { .. }
-            | ResolvedNCommand::Sort(..) = &command
+            | ResolvedNCommand::Sort { .. } = &command
             {
             } else {
                 res.push(Command::RunSchedule(self.rebuild()));

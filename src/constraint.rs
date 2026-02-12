@@ -667,6 +667,9 @@ impl Assignment<AtomTerm, ArcSort> {
                 if !sort.is_eq_sort() {
                     return Err(TypeError::NonEqsortUnion(sort, span.clone()));
                 }
+                if !typeinfo.is_sort_unionable(&sort) {
+                    return Err(TypeError::NonUnionableSort(sort, span.clone()));
+                }
 
                 Ok(ResolvedAction::Union(span.clone(), lhs, rhs))
             }

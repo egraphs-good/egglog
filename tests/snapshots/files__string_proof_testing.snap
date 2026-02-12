@@ -1,0 +1,8 @@
+---
+source: tests/files.rs
+expression: snapshot_content
+---
+(let prf0 (Fiat (= "abcde" "abcde")))
+(Trans (= "abcde" "abcde") prf0 prf0)(let prf0 (Fiat (= 2 2)))
+(Trans (= 2 2) prf0 prf0)(let prf0 (Fiat (= "cd cd" "cd cd")))
+(Trans (= "cd cd" "cd cd") prf0 prf0)

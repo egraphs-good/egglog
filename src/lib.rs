@@ -83,7 +83,9 @@ use crate::ast::desugar::desugar_command;
 use crate::ast::*;
 use crate::core::{GenericActionsExt, ResolvedRuleExt};
 use crate::proofs::proof_encoding::{EncodingState, ProofInstrumentor};
-use crate::proofs::proof_encoding_helpers::command_supports_proof_encoding;
+use crate::proofs::proof_encoding_helpers::{
+    ProofEncodingUnsupportedReason, command_supports_proof_encoding,
+};
 use crate::proofs::proof_extraction::ProveExistsError;
 use crate::proofs::proof_format::{ProofId, ProofStore};
 use crate::proofs::proof_normal_form::proof_form;
@@ -286,6 +288,51 @@ impl Function {
     /// Whether this function supports subsumption.
     pub fn can_subsume(&self) -> bool {
         self.can_subsume
+    }
+
+    /// For view tables (with term_constructor), the effective output sort is the last input column.
+    /// For regular tables, it's the output sort.
+    /// This is used by extraction to determine which sort a table produces values for.
+    pub(crate) fn extraction_output_sort(&self) -> &ArcSort {
+        if self.decl.term_constructor.is_some() {
+            self.schema.input.last().unwrap()
+        } else {
+            &self.schema.output
+        }
+    }
+
+    /// Returns the number of children for extraction purposes.
+    /// For view tables, this excludes the last column (the e-class).
+    pub(crate) fn extraction_num_children(&self) -> usize {
+        if self.decl.term_constructor.is_some() {
+            self.schema.input.len() - 1
+        } else {
+            self.schema.input.len()
+        }
+    }
+
+    /// Returns the name to use when building terms during extraction.
+    /// For view tables, this is the term_constructor name.
+    pub(crate) fn extraction_term_name(&self) -> &str {
+        self.decl
+            .term_constructor
+            .as_ref()
+            .unwrap_or(&self.decl.name)
+    }
+
+    /// Returns the index of the output value in a row for extraction purposes.
+    /// For view tables, the e-class is the last input column (second-to-last in the row).
+    /// For regular tables, it's the last column (the actual output).
+    pub(crate) fn extraction_output_index(&self) -> usize {
+        if self.decl.term_constructor.is_some() {
+            // For view tables: input is [children..., eclass], output is view_sort
+            // Row is [children..., eclass, view_sort]
+            // We want eclass which is at index input.len() - 1
+            self.schema.input.len() - 1
+        } else {
+            // For regular tables: row is [inputs..., output]
+            self.schema.input.len()
+        }
     }
 }
 
@@ -1151,7 +1198,11 @@ impl EGraph {
     fn run_command(&mut self, command: ResolvedNCommand) -> Result<Option<CommandOutput>, Error> {
         match command {
             // Sorts are already declared during typechecking
-            ResolvedNCommand::Sort(_span, name, _presort_and_args) => {
+            ResolvedNCommand::Sort { name, uf, .. } => {
+                // If the sort has a :uf field, store the mapping for extraction
+                if let Some(uf_name) = uf {
+                    self.proof_state.uf_parent.insert(name.clone(), uf_name);
+                }
                 log::info!("Declared sort {}.", name)
             }
             ResolvedNCommand::Function(fdecl) => {
@@ -1492,10 +1543,13 @@ impl EGraph {
             let typechecked = original_typechecking.typecheck_program(&desugared)?;
 
             for command in &typechecked {
-                if !command_supports_proof_encoding(&command.to_command(), &self.type_info) {
+                if let Err(reason) =
+                    command_supports_proof_encoding(&command.to_command(), &self.type_info)
+                {
                     let command_text = format!("{}", command.to_command());
                     return Err(Error::UnsupportedProofCommand {
                         command: command_text,
+                        reason,
                     });
                 }
             }
@@ -2021,11 +2075,15 @@ pub enum Error {
     InputFileFormatError(String),
     #[error(
         "Command is not supported by the current proof term encoding implementation.\n\
+         Reason: {reason}\n\
          This typically means the command uses constructs that cannot yet be represented as proof terms.\n\
          Consider disabling proof term encoding for this run or rewriting the command to avoid unsupported features.\n\
          Offending command: {command}"
     )]
-    UnsupportedProofCommand { command: String },
+    UnsupportedProofCommand {
+        command: String,
+        reason: ProofEncodingUnsupportedReason,
+    },
 }
 
 #[cfg(test)]

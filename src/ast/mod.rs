@@ -49,11 +49,18 @@ where
     Head: Clone + Display,
     Leaf: Clone + PartialEq + Eq + Display + Hash,
 {
-    Sort(
-        Span,
-        String,
-        Option<(String, Vec<GenericExpr<String, String>>)>,
-    ),
+    Sort {
+        span: Span,
+        name: String,
+        presort_and_args: Option<(String, Vec<GenericExpr<String, String>>)>,
+        /// The name of the union-find function for this sort.
+        /// Used in term encoding to canonicalize values during extraction.
+        uf: Option<String>,
+        /// Whether values of this sort can be unioned.
+        /// Defaults to true for user-defined sorts.
+        /// Set to false for relations and term tables that should not allow union.
+        unionable: bool,
+    },
     Function(GenericFunctionDecl<Head, Leaf>),
     AddRuleset(Span, String),
     UnstableCombinedRuleset(Span, String, Vec<String>),
@@ -97,9 +104,19 @@ where
 {
     pub fn to_command(&self) -> GenericCommand<Head, Leaf> {
         match self {
-            GenericNCommand::Sort(span, name, params) => {
-                GenericCommand::Sort(span.clone(), name.clone(), params.clone())
-            }
+            GenericNCommand::Sort {
+                span,
+                name,
+                presort_and_args,
+                uf,
+                unionable,
+            } => GenericCommand::Sort {
+                span: span.clone(),
+                name: name.clone(),
+                presort_and_args: presort_and_args.clone(),
+                uf: uf.clone(),
+                unionable: *unionable,
+            },
             GenericNCommand::Function(f) => match f.subtype {
                 FunctionSubtype::Constructor => GenericCommand::Constructor {
                     span: f.span.clone(),
@@ -107,6 +124,7 @@ where
                     schema: f.schema.clone(),
                     cost: f.cost,
                     unextractable: f.unextractable,
+                    term_constructor: f.term_constructor.clone(),
                 },
                 FunctionSubtype::Custom => GenericCommand::Function {
                     span: f.span.clone(),
@@ -180,7 +198,7 @@ where
             GenericNCommand::Fail(span, cmd) => {
                 GenericNCommand::Fail(span, Box::new(cmd.visit_queries(f)))
             }
-            GenericNCommand::Sort(..)
+            GenericNCommand::Sort { .. }
             | GenericNCommand::Function(..)
             | GenericNCommand::AddRuleset(..)
             | GenericNCommand::UnstableCombinedRuleset(..)
@@ -204,7 +222,19 @@ where
         f: &mut impl FnMut(GenericExpr<Head, Leaf>) -> GenericExpr<Head, Leaf>,
     ) -> Self {
         match self {
-            GenericNCommand::Sort(span, name, params) => GenericNCommand::Sort(span, name, params),
+            GenericNCommand::Sort {
+                span,
+                name,
+                presort_and_args,
+                uf,
+                unionable,
+            } => GenericNCommand::Sort {
+                span,
+                name,
+                presort_and_args,
+                uf,
+                unionable,
+            },
             GenericNCommand::Function(func) => GenericNCommand::Function(func.visit_exprs(f)),
             GenericNCommand::AddRuleset(span, name) => GenericNCommand::AddRuleset(span, name),
             GenericNCommand::UnstableCombinedRuleset(span, name, rulesets) => {
@@ -502,7 +532,18 @@ where
     /// ```
     ///
     /// Now `MathVec` can be used as an input or output sort.
-    Sort(Span, String, Option<(String, Vec<Expr>)>),
+    Sort {
+        span: Span,
+        name: String,
+        presort_and_args: Option<(String, Vec<Expr>)>,
+        /// The name of the union-find function for this sort.
+        /// Used in term encoding to canonicalize values during extraction.
+        uf: Option<String>,
+        /// Whether values of this sort can be unioned.
+        /// Defaults to true for user-defined sorts.
+        /// Set to false for relations and term tables that should not allow union.
+        unionable: bool,
+    },
 
     /// Egglog supports three types of functions
     ///
@@ -564,6 +605,9 @@ where
         schema: Schema,
         cost: Option<DefaultCost>,
         unextractable: bool,
+        /// For view tables in proof encoding: the constructor to use for building
+        /// terms from the first n-1 children during extraction.
+        term_constructor: Option<String>,
     },
 
     /// The `relation` command declares a named relation
@@ -869,10 +913,18 @@ where
             GenericCommand::Extract(_span, expr, variants) => {
                 write!(f, "(extract {expr} {variants})")
             }
-            GenericCommand::Sort(_span, name, None) => {
+            GenericCommand::Sort {
+                name,
+                presort_and_args: None,
+                ..
+            } => {
                 write!(f, "(sort {name})")
             }
-            GenericCommand::Sort(_span, name, Some((name2, args))) => {
+            GenericCommand::Sort {
+                name,
+                presort_and_args: Some((name2, args)),
+                ..
+            } => {
                 write!(f, "(sort {name} ({name2} {}))", ListDisplay(args, " "))
             }
             GenericCommand::Function {
@@ -895,6 +947,7 @@ where
                 schema,
                 cost,
                 unextractable,
+                term_constructor,
             } => {
                 write!(f, "(constructor {name} {schema}")?;
                 if let Some(cost) = cost {
@@ -902,6 +955,9 @@ where
                 }
                 if *unextractable {
                     write!(f, " :unextractable")?;
+                }
+                if let Some(tc) = term_constructor {
+                    write!(f, " :term-constructor {tc}")?;
                 }
                 write!(f, ")")
             }
@@ -1129,7 +1185,9 @@ where
     /// This is used by visualization to handle globals differently.
     pub let_binding: bool,
     pub span: Span,
-    pub unionable: bool,
+    /// For view tables in proof encoding: the constructor to use for building
+    /// terms from the first n-1 children during extraction.
+    pub term_constructor: Option<String>,
 }
 
 #[derive(Clone, Debug, PartialEq, Eq, Hash)]
@@ -1190,7 +1248,7 @@ impl FunctionDecl {
             unextractable: true,
             let_binding: false,
             span,
-            unionable: false,
+            term_constructor: None,
         }
     }
 
@@ -1201,7 +1259,6 @@ impl FunctionDecl {
         schema: Schema,
         cost: Option<DefaultCost>,
         unextractable: bool,
-        unionable: bool,
     ) -> Self {
         Self {
             name,
@@ -1213,7 +1270,7 @@ impl FunctionDecl {
             unextractable,
             let_binding: false,
             span,
-            unionable,
+            term_constructor: None,
         }
     }
 }
@@ -1237,7 +1294,7 @@ where
             unextractable: self.unextractable,
             let_binding: self.let_binding,
             span: self.span,
-            unionable: self.unionable,
+            term_constructor: self.term_constructor,
         }
     }
 }
@@ -1457,9 +1514,19 @@ where
         Leaf: Clone + PartialEq + Eq + Display + Hash,
     {
         match self {
-            GenericCommand::Sort(span, name, params) => {
-                GenericCommand::Sort(span, fun(name), params)
-            }
+            GenericCommand::Sort {
+                span,
+                name,
+                presort_and_args,
+                uf,
+                unionable,
+            } => GenericCommand::Sort {
+                span,
+                name: fun(name),
+                presort_and_args,
+                uf,
+                unionable,
+            },
             GenericCommand::Datatype {
                 span,
                 name,
@@ -1517,6 +1584,7 @@ where
                 schema,
                 cost,
                 unextractable,
+                term_constructor,
             } => GenericCommand::Constructor {
                 span,
                 name: fun(name),
@@ -1526,6 +1594,7 @@ where
                 },
                 cost,
                 unextractable,
+                term_constructor: term_constructor.map(&mut *fun),
             },
             GenericCommand::Relation { span, name, inputs } => GenericCommand::Relation {
                 span,
@@ -1695,7 +1764,19 @@ where
         Leaf2: Clone + PartialEq + Eq + Display + Hash,
     {
         match self {
-            GenericCommand::Sort(span, name, params) => GenericCommand::Sort(span, name, params),
+            GenericCommand::Sort {
+                span,
+                name,
+                presort_and_args,
+                uf,
+                unionable,
+            } => GenericCommand::Sort {
+                span,
+                name,
+                presort_and_args,
+                uf,
+                unionable,
+            },
             GenericCommand::Datatype {
                 span,
                 name,
@@ -1714,12 +1795,14 @@ where
                 schema,
                 cost,
                 unextractable,
+                term_constructor,
             } => GenericCommand::Constructor {
                 span,
                 name,
                 schema,
                 cost,
                 unextractable,
+                term_constructor,
             },
             GenericCommand::Relation { span, name, inputs } => {
                 GenericCommand::Relation { span, name, inputs }

@@ -1,0 +1,6 @@
+---
+source: tests/files.rs
+expression: err_msg
+---
+In 1:1-19 of looking_up_nonconstructor_in_action_case_let.egg: (function f () i64)
+parse error: functions are required to specify merge behaviour

@@ -1,0 +1,67 @@
+---
+source: tests/files.rs
+expression: snapshot_content
+---
+(let t0 (g* (g* (AConst) (AConst)) (g* (AConst) (AConst))))
+(let t1 (g* t0 t0))
+(let prop0 (= t1 t1))
+(let prf0 (Fiat prop0))
+(Trans prop0 prf0 prf0)(let t0 (g* (g* (AConst) (AConst)) (g* (AConst) (AConst))))
+(let t1 (g* t0 t0))
+(let t2 (g* (g* (AConst) (AConst)) (g* (g* (AConst) (AConst)) t0)))
+(let prop0 (= t1 t2))
+(let prf0 (Fiat (= t1 t1)))
+(Trans
+  prop0
+  prf0
+  (Sym
+    prop0
+    (Rule
+      (= t2 t1)
+      (name "(birewrite (g* (g* a b) c) (g* a (g* b c)))=>")
+      (premises prf0)
+      (substitution
+        (c t0)
+        (a (g* (AConst) (AConst)))
+        (b (g* (AConst) (AConst)))
+        (@rewrite_var__ t1)))))(let t0 (g* (inv (aConst)) (aConst)))
+(let t1 (g* (bConst) t0))
+(let t2 (g* t1 (inv (bConst))))
+(let prop0 (= t2 (g* (bConst) (inv (bConst)))))
+(let prop1 (= t2 t2))
+(let prf0
+  (Rule
+                (= t0 (IConst))
+                (name "(rewrite (g* (inv a) a) $I)")
+                (premises (Fiat (= t0 t0)))
+                (substitution (@rewrite_var__4 t0) (a (aConst)))))
+(let prf1 (Congr (= t1 (g* (bConst) (IConst))) (Fiat (= t1 t1)) prf0 1))
+(let prf2
+  (Rule
+          (= t1 (bConst))
+          (name "(rewrite (g* a $I) a)")
+          (premises prf1)
+          (substitution (a (bConst)) ($I (IConst)) (@rewrite_var__3 t1))))
+(let prf3 (Congr prop0 (Fiat prop1) prf2 0))
+(let prop2 (= (bConst) t1))
+(Trans
+  prop0
+  (Congr
+    prop1
+    prf3
+    (Congr
+      prop2
+      (Trans (= (bConst) (g* (bConst) (IConst))) (Sym prop2 prf2) prf1)
+      (Sym (= (IConst) t0) prf0)
+      1)
+    0)
+  prf3)(let t0 (g* (bConst) (inv (bConst))))
+(let prop0 (= t0 (IConst)))
+(Trans
+  prop0
+  (Rule
+    prop0
+    (name "(rewrite (g* a (inv a)) $I)")
+    (premises (Fiat (= t0 t0)))
+    (substitution (a (bConst)) (@rewrite_var__5 t0)))
+  (Fiat (= (IConst) (IConst))))
