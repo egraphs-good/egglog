@@ -1,0 +1,1 @@
+window.SIDEBAR_ITEMS = {"enum":["EqProof","Premise","Term","TermProof"],"struct":["CongProof","EqProofId","PrettyPrintConfig","ProofStore","TermDag","TermId","TermProofId"]};
