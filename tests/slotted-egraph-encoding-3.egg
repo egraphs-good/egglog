@@ -1,6 +1,7 @@
 
 
 (sort NameMap (Map i64 i64))
+(sort VecOfNameMap (Vec NameMap))
 (sort Expr)
 
 ;; A variable has a name as an i64
@@ -8,7 +9,7 @@
 
 
 (sort AppliedId)
-(construcor AppId (NameMap Expr) AppliedId)
+(constructor AppId (NameMap Expr) AppliedId)
 
 (constructor App2 (String AppliedId AppliedId) Expr)
 (constructor App2View (String AppliedId AppliedId) Expr)
@@ -32,7 +33,20 @@
        (ShapeOf lhs shape-to-original (App2View f (AppId m1_p c1) (AppId m2_p c2)))))
 
 
+(rule ((ShapeOf e1 mapping1 shape)
+       (ShapeOf e2 mapping2 shape)
+       (= e1 (Var 0))
+       )
+      ((EqualWithRename e1 e2 (compose-invert mapping2 mapping1))))
 
 
+(let $x (Var 0))
+(let $y (Var 1))
+
+(run 10)
+
+(check (EqualWithRename $x $y some-rename))
+
+(print-function EqualWithRename)
 
 
