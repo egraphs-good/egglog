@@ -37,6 +37,7 @@
       ((EqualWithRename e2 e1 (find-mapping m1 m2 m3 m4))))
 
 
+
 ;; Now we can match on App2 nodes and move them to the other eclass
 (rule ((= e2 (App2 f c m3 d m4))
        (EqualWithRename e2 e1 r))

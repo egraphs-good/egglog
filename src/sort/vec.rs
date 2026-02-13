@@ -213,6 +213,7 @@ struct Shape {}
 /// Output: vec![0, 1]
 /// The shapes are the same.
 ///
+///
 /// Another example:
 /// Input 1: (vec![b, a, b], vec![a, a])
 /// Output: vec![0, 1, 0, 1, 1]
@@ -270,11 +271,13 @@ impl Primitive for Shape {
 #[derive(Clone, Debug)]
 struct FindMapping {}
 
+///
+///
 /// Finds a mapping to rename from one renaming map to another.
 /// The two maps must have the same shape (see the `shape` primitive).
 /// The output is a mapping that when applied to the second input produces the first input.
 ///
-/// Input 1: (vec![0, 1, 0], vec![1, 2]) (vec![1, 2, 1], vec![2, 0])
+/// Input 1: (vec![0, 1, 0], vec![1, 2]) <- (vec![1, 2, 1], vec![2, 0])
 /// Output: vec![2, 0, 2] // zero goes to 2, one goes to 0, two goes to 1
 impl Primitive for FindMapping {
     fn name(&self) -> &str {

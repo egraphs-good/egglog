@@ -1,0 +1,38 @@
+
+
+(sort NameMap (Map i64 i64))
+(sort Expr)
+
+;; A variable has a name as an i64
+(constructor Var (i64) Expr)
+
+
+(sort AppliedId)
+(construcor AppId (NameMap Expr) AppliedId)
+
+(constructor App2 (String AppliedId AppliedId) Expr)
+(constructor App2View (String AppliedId AppliedId) Expr)
+
+;; this is the union-find
+(relation EqualWithRename (Expr Expr NameMap))
+
+
+(relation ShapeOf (Expr NameMap Expr))
+
+
+(rule ((Var n))
+      ((ShapeOf (Var n) (map-insert (map-empty) 0 n) (Var 0))))
+
+
+(rule ((= lhs (App2View f (AppId m1 c1) (AppId m2 c2))))
+      ((let tuple (shape m1 m2))
+       (let m1_p (vec-get tuple 0))
+       (let m2_p (vec-get tuple 1))
+       (let shape-to-original (vec-get tuple 2))
+       (ShapeOf lhs shape-to-original (App2View f (AppId m1_p c1) (AppId m2_p c2)))))
+
+
+
+
+
+
