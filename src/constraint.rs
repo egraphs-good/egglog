@@ -1014,6 +1014,23 @@ impl TypeConstraint for SimpleTypeConstraint {
     }
 }
 
+pub struct NoTypeConstraint;
+impl NoTypeConstraint {
+    pub fn new() -> NoTypeConstraint {
+        NoTypeConstraint
+    }
+}
+
+impl TypeConstraint for NoTypeConstraint {
+    fn get(
+        &self,
+        _arguments: &[AtomTerm],
+        _typeinfo: &TypeInfo,
+    ) -> Vec<Box<dyn Constraint<AtomTerm, ArcSort>>> {
+        vec![]
+    }
+}
+
 /// A type constraint that requires all or some arguments to have the same type.
 ///
 /// See the `with_all_arguments_sort`, `with_exact_length`, and `with_output_sort` methods
