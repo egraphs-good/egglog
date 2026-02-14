@@ -308,10 +308,6 @@ impl Primitive for ComposeInvert {
             .get_val::<MapContainer>(args[1])?
             .clone();
         let res = compose(&invert(&m1.data), &m2.data);
-        eprintln!(
-            "compose-invert: m1 = {:?}, m2 = {:?}, res = {:?}",
-            m1.data, m2.data, res
-        );
         let map_value = exec_state.container_values().register_val(
             MapContainer {
                 do_rebuild_keys: false,
@@ -325,12 +321,16 @@ impl Primitive for ComposeInvert {
     }
 }
 
-// Given a mapping m1 and a mapping m2, gives a mapping which is like m1(m2(x)).
-// In other words maps through m2 and then m1. For example, if m1 maps a to b and m2 maps c to a, then the output maps c to b.
+// Given a mapping m1 and a mapping m2, gives a mapping which is like m2(m1(x)).
+// In other words maps through m1 and then m2.
+
+// m1 :: X -> Y
+// m2 :: Y -> Z
+// compose(m1, m2) :: X -> Z
 fn compose(m1: &BTreeMap<Value, Value>, m2: &BTreeMap<Value, Value>) -> BTreeMap<Value, Value> {
     let mut res = BTreeMap::new();
-    for (k, v) in m2.iter() {
-        if let Some(v2) = m1.get(v) {
+    for (k, v) in m1.iter() {
+        if let Some(v2) = m2.get(v) {
             res.insert(*k, *v2);
         }
     }

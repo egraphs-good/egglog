@@ -35,7 +35,6 @@
 
 (rule ((ShapeOf e1 mapping1 shape)
        (ShapeOf e2 mapping2 shape)
-       (= e1 (Var 0))
        )
       ((EqualWithRename e1 e2 (compose-invert mapping2 mapping1))))
 
