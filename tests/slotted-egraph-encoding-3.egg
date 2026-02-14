@@ -15,7 +15,7 @@
 (constructor App2View (String AppliedId AppliedId) Expr)
 
 ;; this is the union-find
-(relation EqualWithRename (Expr Expr NameMap))
+(relation EqualWithRename (Expr AppliedId))
 
 
 (relation ShapeOf (Expr NameMap Expr))
@@ -36,7 +36,7 @@
 (rule ((ShapeOf e1 mapping1 shape)
        (ShapeOf e2 mapping2 shape)
        )
-      ((EqualWithRename e1 e2 (compose-invert mapping2 mapping1))))
+      ((EqualWithRename e1 (AppId (compose-invert mapping2 mapping1) e2))))
 
 
 (let $x (Var 0))
@@ -44,7 +44,7 @@
 
 (run 10)
 
-(check (EqualWithRename $x $y some-rename))
+(check (EqualWithRename $x (AppId some-rename $y)))
 
 (print-function EqualWithRename)
 
