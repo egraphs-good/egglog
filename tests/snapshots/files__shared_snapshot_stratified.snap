@@ -2,5 +2,5 @@
 source: tests/files.rs
 expression: snapshot_content_across_treatments
 ---
-edge: 4
-path: 6
+((edge 4)
+ (path 6))

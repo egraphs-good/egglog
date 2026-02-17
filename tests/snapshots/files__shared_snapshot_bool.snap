@@ -2,5 +2,5 @@
 source: tests/files.rs
 expression: snapshot_content_across_treatments
 ---
-F: 1
-R: 1
+((F 1)
+ (R 1))

@@ -2,5 +2,5 @@
 source: tests/files.rs
 expression: snapshot_content_across_treatments
 ---
-IS: 1
-ISet-get: 4
+((IS 1)
+ (ISet-get 4))

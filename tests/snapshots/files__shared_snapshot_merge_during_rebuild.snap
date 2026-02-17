@@ -2,5 +2,5 @@
 source: tests/files.rs
 expression: snapshot_content_across_treatments
 ---
-Node: 4
-distance: 1
+((Node 4)
+ (distance 1))

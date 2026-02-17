@@ -2,4 +2,4 @@
 source: tests/files.rs
 expression: snapshot_content_across_treatments
 ---
-Wrap: 1
+((Wrap 1))

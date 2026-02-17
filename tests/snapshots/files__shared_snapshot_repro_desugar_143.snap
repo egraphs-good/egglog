@@ -2,6 +2,6 @@
 source: tests/files.rs
 expression: snapshot_content_across_treatments
 ---
-Num: 36
-f: 41
-fib: 22
+((Num 36)
+ (f 41)
+ (fib 22))

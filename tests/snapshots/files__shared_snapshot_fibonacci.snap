@@ -2,4 +2,4 @@
 source: tests/files.rs
 expression: snapshot_content_across_treatments
 ---
-fib: 9
+((fib 9))

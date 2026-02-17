@@ -2,107 +2,107 @@
 source: tests/files.rs
 expression: snapshot_content_across_treatments
 ---
-Arg: 6
-Body-contains-Body: 72
-Body-contains-Expr: 69
-Body-contains-Operand: 274
-Body-is-pure: 10
-BodyAndCost: 38
-BodyToVecOperand: 2
-BodyToVecOperandHelper: 13
-Bool: 0
-BoolI: 0
-BoolT: 1
-Bril: 1
-Call: 0
-Char: 0
-CharT: 0
-Const: 2
-Expr-is-pure: 10
-ExprAndCost: 21
-ExtractedBody: 25
-ExtractedExpr: 15
-ExtractedOperand: 54
-ExtractedVecOperand: 118
-ExtractedVecOperandHelper: 609
-ExtractedVecVecOperand: 9
-ExtractedVecVecOperandHelper: 25
-Float: 0
-FloatT: 0
-Func: 1
-Function-is-pure: 0
-Gamma: 24
-IntI: 2
-IntT: 1
-Node: 17
-NoneType: 0
-Num: 2
-Operand-is-pure: 16
-OperandAndCost: 78
-OperandGroup: 0
-PRINT: 2
-PassThroughArguments: 2
-PassThroughArgumentsHelper: 13
-PointerT: 0
-PrintState: 1
-Project: 47
-PureOp: 17
-ShiftBody: 0
-ShiftExpr: 0
-ShiftOperand: 0
-ShiftVecOperand: 0
-ShiftVecOperand-helper: 0
-ShiftVecVecOperand: 0
-ShiftVecVecOperand-helper: 0
-Smaller: 85
-SomeType: 0
-SubstBody: 0
-SubstBodyAll: 20
-SubstExpr: 0
-SubstExprAll: 10
-SubstOperand: 0
-SubstOperandAll: 94
-SubstVecOperand: 0
-SubstVecOperand-helper: 0
-SubstVecOperandAll: 16
-SubstVecOperandAll-helper: 106
-SubstVecVecOperand: 0
-SubstVecVecOperand-helper: 0
-SubstVecVecOperandAll: 0
-SubstVecVecOperandAll-helper: 0
-Theta: 6
-VO: 131
-VVO: 11
-VecOperand-get: 491
-VecOperand-is-pure: 33
-VecOperand-length: 118
-VecOperand-pure-prefix: 118
-VecOperandAndCost: 127
-VecVecOperand-get: 16
-VecVecOperand-is-pure: 5
-VecVecOperand-length: 11
-VecVecOperand-pure-prefix: 11
-VecVecOperandAndCost: 8
-badd: 4
-band: 0
-bdiv: 0
-beq: 0
-bfmul: 0
-bge: 0
-bgt: 0
-ble: 0
-blt: 8
-bmul: 1
-bnot: 0
-bor: 0
-bsub: 0
-can-subst-Body-beneath: 0
-can-subst-Expr-beneath: 0
-can-subst-Operand-beneath: 0
-can-subst-VecOperand-beneath: 0
-can-subst-VecVecOperand-beneath: 0
-const: 1
-context-ival: 0
-interval-intersect: 2
-interval-union: 1
-ival: 6
+((Arg 6)
+ (Body-contains-Body 72)
+ (Body-contains-Expr 69)
+ (Body-contains-Operand 274)
+ (Body-is-pure 10)
+ (BodyAndCost 38)
+ (BodyToVecOperand 2)
+ (BodyToVecOperandHelper 13)
+ (Bool 0)
+ (BoolI 0)
+ (BoolT 1)
+ (Bril 1)
+ (Call 0)
+ (Char 0)
+ (CharT 0)
+ (Const 2)
+ (Expr-is-pure 10)
+ (ExprAndCost 21)
+ (ExtractedBody 25)
+ (ExtractedExpr 15)
+ (ExtractedOperand 54)
+ (ExtractedVecOperand 118)
+ (ExtractedVecOperandHelper 609)
+ (ExtractedVecVecOperand 9)
+ (ExtractedVecVecOperandHelper 25)
+ (Float 0)
+ (FloatT 0)
+ (Func 1)
+ (Function-is-pure 0)
+ (Gamma 24)
+ (IntI 2)
+ (IntT 1)
+ (Node 17)
+ (NoneType 0)
+ (Num 2)
+ (Operand-is-pure 16)
+ (OperandAndCost 78)
+ (OperandGroup 0)
+ (PRINT 2)
+ (PassThroughArguments 2)
+ (PassThroughArgumentsHelper 13)
+ (PointerT 0)
+ (PrintState 1)
+ (Project 47)
+ (PureOp 17)
+ (ShiftBody 0)
+ (ShiftExpr 0)
+ (ShiftOperand 0)
+ (ShiftVecOperand 0)
+ (ShiftVecOperand-helper 0)
+ (ShiftVecVecOperand 0)
+ (ShiftVecVecOperand-helper 0)
+ (Smaller 85)
+ (SomeType 0)
+ (SubstBody 0)
+ (SubstBodyAll 20)
+ (SubstExpr 0)
+ (SubstExprAll 10)
+ (SubstOperand 0)
+ (SubstOperandAll 94)
+ (SubstVecOperand 0)
+ (SubstVecOperand-helper 0)
+ (SubstVecOperandAll 16)
+ (SubstVecOperandAll-helper 106)
+ (SubstVecVecOperand 0)
+ (SubstVecVecOperand-helper 0)
+ (SubstVecVecOperandAll 0)
+ (SubstVecVecOperandAll-helper 0)
+ (Theta 6)
+ (VO 131)
+ (VVO 11)
+ (VecOperand-get 491)
+ (VecOperand-is-pure 33)
+ (VecOperand-length 118)
+ (VecOperand-pure-prefix 118)
+ (VecOperandAndCost 127)
+ (VecVecOperand-get 16)
+ (VecVecOperand-is-pure 5)
+ (VecVecOperand-length 11)
+ (VecVecOperand-pure-prefix 11)
+ (VecVecOperandAndCost 8)
+ (badd 4)
+ (band 0)
+ (bdiv 0)
+ (beq 0)
+ (bfmul 0)
+ (bge 0)
+ (bgt 0)
+ (ble 0)
+ (blt 8)
+ (bmul 1)
+ (bnot 0)
+ (bor 0)
+ (bsub 0)
+ (can-subst-Body-beneath 0)
+ (can-subst-Expr-beneath 0)
+ (can-subst-Operand-beneath 0)
+ (can-subst-VecOperand-beneath 0)
+ (can-subst-VecVecOperand-beneath 0)
+ (const 1)
+ (context-ival 0)
+ (interval-intersect 2)
+ (interval-union 1)
+ (ival 6))

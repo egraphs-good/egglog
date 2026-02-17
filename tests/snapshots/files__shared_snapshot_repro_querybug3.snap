@@ -2,15 +2,15 @@
 source: tests/files.rs
 expression: snapshot_content_across_treatments
 ---
-Add: 1
-App: 1
-CaseSplit: 1
-Cons: 0
-Lam: 3
-Let: 0
-Nil: 0
-Num: 1
-V: 3
-Var: 3
-freer: 5
-sum: 1
+((Add 1)
+ (App 1)
+ (CaseSplit 1)
+ (Cons 0)
+ (Lam 3)
+ (Let 0)
+ (Nil 0)
+ (Num 1)
+ (V 3)
+ (Var 3)
+ (freer 5)
+ (sum 1))

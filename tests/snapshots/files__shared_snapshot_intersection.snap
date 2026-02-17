@@ -2,6 +2,6 @@
 source: tests/files.rs
 expression: snapshot_content_across_treatments
 ---
-Var: 6
-f: 11
-intersect: 5
+((Var 6)
+ (f 11)
+ (intersect 5))

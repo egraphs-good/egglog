@@ -2,5 +2,5 @@
 source: tests/files.rs
 expression: snapshot_content_across_treatments
 ---
-Num: 5
-square: 3
+((Num 5)
+ (square 3))

@@ -2,10 +2,10 @@
 source: tests/files.rs
 expression: snapshot_content_across_treatments
 ---
-Add: 16
-Cons: 13
-Knap: 58
-Max: 17
-NilConst: 1
-Num: 17
-Unwrap: 17
+((Add 16)
+ (Cons 13)
+ (Knap 58)
+ (Max 17)
+ (NilConst 1)
+ (Num 17)
+ (Unwrap 17))

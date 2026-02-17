@@ -2,7 +2,7 @@
 source: tests/files.rs
 expression: snapshot_content_across_treatments
 ---
-Add: 4
-Mul: 3
-Num: 3
-Var: 1
+((Add 4)
+ (Mul 3)
+ (Num 3)
+ (Var 1))

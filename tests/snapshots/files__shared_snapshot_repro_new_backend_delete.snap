@@ -2,4 +2,4 @@
 source: tests/files.rs
 expression: snapshot_content_across_treatments
 ---
-A: 0
+((A 0))

@@ -3,4 +3,4 @@ source: tests/files.rs
 expression: snapshot_content_across_treatments
 ---
 (Fiat (= (R 2) (R 2)))
-R: 1
+((R 1))

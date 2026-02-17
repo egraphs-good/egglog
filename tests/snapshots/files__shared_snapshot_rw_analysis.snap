@@ -2,25 +2,25 @@
 source: tests/files.rs
 expression: snapshot_content_across_treatments
 ---
-Add: 2
-Ass: 10
-Bool: 2
-Call: 2
-Const: 5
-EndConst: 1
-Eq: 1
-FalseConst: 1
-Goto: 3
-I: 3
-If: 2
-L: 15
-Prog: 15
-RProg: 13
-TopConst: 1
-TrueConst: 1
-V: 9
-Var: 0
-add-val: 1
-const-prop: 59
-eq-val: 1
-merge-val: 0
+((Add 2)
+ (Ass 10)
+ (Bool 2)
+ (Call 2)
+ (Const 5)
+ (EndConst 1)
+ (Eq 1)
+ (FalseConst 1)
+ (Goto 3)
+ (I 3)
+ (If 2)
+ (L 15)
+ (Prog 15)
+ (RProg 13)
+ (TopConst 1)
+ (TrueConst 1)
+ (V 9)
+ (Var 0)
+ (add-val 1)
+ (const-prop 59)
+ (eq-val 1)
+ (merge-val 0))

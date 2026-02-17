@@ -2,9 +2,9 @@
 source: tests/files.rs
 expression: snapshot_content_across_treatments
 ---
-AConst: 1
-BConst: 1
-IConst: 1
-allgs: 4
-g*: 21
-inv: 0
+((AConst 1)
+ (BConst 1)
+ (IConst 1)
+ (allgs 4)
+ (g* 21)
+ (inv 0))

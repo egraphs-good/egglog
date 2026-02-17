@@ -2,12 +2,12 @@
 source: tests/files.rs
 expression: snapshot_content_across_treatments
 ---
-B: 0
-End: 3
-NT: 0
-NonTerm: 4
-P: 0
-Prod: 5
-T: 0
-Term: 0
-getString: 0
+((B 0)
+ (End 3)
+ (NT 0)
+ (NonTerm 4)
+ (P 0)
+ (Prod 5)
+ (T 0)
+ (Term 0)
+ (getString 0))

@@ -2,5 +2,5 @@
 source: tests/files.rs
 expression: snapshot_content_across_treatments
 ---
-left: 11
-right: 10
+((left 11)
+ (right 10))

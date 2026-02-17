@@ -2,206 +2,206 @@
 source: tests/files.rs
 expression: snapshot_content_across_treatments
 ---
-ALL_INDICES: 0
-Boolean___and__: 0
-Boolean___eq__: 0
-Boolean___init__: 2
-Boolean___invert__: 0
-Boolean___or__: 0
-Boolean_to_bool: 2
-DType___eq__: 0
-DType_bool: 0
-DType_float32: 0
-DType_float64: 0
-DType_int32: 0
-DType_int64: 0
-DType_object: 0
-Float___add__: 0
-Float___eq__: 0
-Float___init__: 0
-Float___mul__: 0
-Float___pow__: 0
-Float___sub__: 0
-Float___truediv__: 0
-Float_abs: 0
-Float_from_int: 0
-Float_rational: 0
-Float_to_f64: 0
-IndexKey_int: 0
-Int_NEVER: 1
-Int___add__: 2
-Int___and__: 0
-Int___eq__: 4
-Int___floordiv__: 8
-Int___ge__: 0
-Int___gt__: 0
-Int___init__: 6
-Int___invert__: 0
-Int___lshift__: 0
-Int___lt__: 0
-Int___mod__: 4
-Int___mul__: 2
-Int___or__: 0
-Int___rshift__: 0
-Int___sub__: 2
-Int___xor__: 0
-Int_if_: 8
-Int_to_i64: 6
-IsDtypeKind_NULL: 0
-IsDtypeKind___or__: 0
-IsDtypeKind_dtype: 0
-IsDtypeKind_string: 0
-LoopNestAPI___init__: 0
-LoopNestAPI_from_tuple: 0
-LoopNestAPI_get_dims: 0
-LoopNestAPI_indices: 0
-NDArray_NEVER: 0
-NDArray_T: 0
-NDArray___getitem__: 0
-NDArray___gt__: 0
-NDArray___init__: 0
-NDArray___lt__: 0
-NDArray___sub__: 0
-NDArray___truediv__: 0
-NDArray_dtype: 0
-NDArray_if_: 0
-NDArray_index: 0
-NDArray_ndim: 0
-NDArray_scalar: 0
-NDArray_shape: 0
-NDArray_size: 0
-NDArray_to_value: 0
-NDArray_to_values: 0
-NDArray_vector: 0
-OptionalBool_none: 0
-OptionalDType_none: 0
-OptionalDevice_none: 0
-OptionalIntOrTuple_none: 0
-OptionalInt_none: 0
-OptionalLoopNestAPI_NONE: 0
-OptionalLoopNestAPI___init__: 0
-OptionalLoopNestAPI_unwrap: 0
-ShapeAPI___init__: 0
-ShapeAPI_deselect: 0
-ShapeAPI_select: 0
-ShapeAPI_to_tuple: 0
-TupleInt_EMPTY: 1
-TupleInt_NEVER: 1
-TupleInt___add__: 0
-TupleInt___getitem__: 10
-TupleInt___init__: 18
-TupleInt_append: 11
-TupleInt_contains: 0
-TupleInt_deselect: 0
-TupleInt_drop: 0
-TupleInt_filter: 0
-TupleInt_foldl: 3
-TupleInt_foldl_boolean: 0
-TupleInt_foldl_tuple_int: 0
-TupleInt_from_vec: 12
-TupleInt_if_: 4
-TupleInt_length: 5
-TupleInt_map: 0
-TupleInt_map_tuple_int: 0
-TupleInt_product: 3
-TupleInt_range: 0
-TupleInt_select: 0
-TupleInt_single: 0
-TupleInt_to_vec: 12
-TupleNDArray_EMPTY: 0
-TupleNDArray___add__: 0
-TupleNDArray___getitem__: 0
-TupleNDArray___init__: 0
-TupleNDArray_append: 0
-TupleNDArray_from_vec: 0
-TupleNDArray_length: 0
-TupleNDArray_to_vec: 0
-TupleTupleInt_EMPTY: 1
-TupleTupleInt___add__: 0
-TupleTupleInt___getitem__: 7
-TupleTupleInt___init__: 8
-TupleTupleInt_append: 7
-TupleTupleInt_drop: 2
-TupleTupleInt_foldl_value: 0
-TupleTupleInt_from_vec: 8
-TupleTupleInt_length: 4
-TupleTupleInt_map_int: 3
-TupleTupleInt_product: 1
-TupleTupleInt_single: 0
-TupleTupleInt_to_vec: 8
-TupleValue_EMPTY: 0
-TupleValue___add__: 0
-TupleValue___getitem__: 0
-TupleValue___init__: 0
-TupleValue_append: 0
-TupleValue_contains: 0
-TupleValue_foldl_boolean: 0
-TupleValue_from_tuple_int: 0
-TupleValue_from_vec: 0
-TupleValue_length: 0
-Value_NEVER: 0
-Value___add__: 0
-Value___eq__: 0
-Value___lt__: 0
-Value___truediv__: 0
-Value_astype: 0
-Value_bool: 0
-Value_conj: 0
-Value_dtype: 0
-Value_float: 0
-Value_if_: 0
-Value_int: 0
-Value_isfinite: 0
-Value_real: 0
-Value_sqrt: 0
-Value_to_bool: 0
-Value_to_int: 0
-Value_to_truthy_value: 0
-acc-Int_i-Int__Int___mul___acc_i_: 2
-any: 0
-asarray: 0
-assume_dtype: 0
-assume_isfinite: 0
-assume_shape: 0
-assume_value_one_of: 0
-astype: 0
-axis-TupleInt_i-Int__Boolean___invert____TupleInt_contains_axis_i__: 0
-axis-TupleInt_i-Int__TupleInt_contains_axis_i_: 0
-broadcast_index: 0
-broadcast_shapes: 0
-check_index: 0
-concat: 0
-dims-TupleInt_i-Int__TupleInt___getitem___dims_i_: 0
-f-UnstableFn_Boolean_Int_acc-TupleInt_v-Int__TupleInt_if___unstable-app_f_v___TupleInt_append_acc_v__acc_: 0
-f-UnstableFn_Int_Int_self-TupleInt_i-Int__unstable-app_f__TupleInt___getitem___self_i__: 0
-f-UnstableFn_Int_TupleInt_self-TupleTupleInt_i-Int__unstable-app_f__TupleTupleInt___getitem___self_i__: 3
-f-UnstableFn_TupleInt_Int_self-TupleInt_i-Int__unstable-app_f__TupleInt___getitem___self_i__: 0
-greater_zero: 0
-i-Int__-Int_i: 0
-i-Int_acc-Boolean_j-Int__Boolean___or___acc__Int___eq___i_j__: 0
-i-Int_i: 0
-i-Int_self-TupleTupleInt_j-Int__TupleInt___getitem____TupleTupleInt___getitem___self_j___Int___mod____Int___floordiv___i__TupleInt_product__TupleTupleInt_map_int__TupleTupleInt_drop_self__Int___add___j__Int___init___1_____unstable-fn__x-TupleInt__TupleInt_length_x________TupleInt_length__TupleTupleInt___getitem___self_j____: 8
-i-TupleInt__-Int_i: 0
-indices-TupleInt_i-Int__Boolean___invert____TupleInt_contains_indices_i__: 0
-isdtype: 0
-isfinite: 0
-n-Int_self-TupleInt_i-Int__TupleInt___getitem___self__Int___add___i_n__: 0
-n-Int_self-TupleTupleInt_i-Int__TupleTupleInt___getitem___self__Int___add___i_n__: 1
-ndarray-abs: 0
-other-TupleInt_self-TupleInt_i-Int__Int_if___Int___lt___i__TupleInt_length_self____TupleInt___getitem___self_i___TupleInt___getitem___other__Int___sub___i__TupleInt_length_self____: 0
-other-TupleNDArray_self-TupleNDArray_i-Int__NDArray_if___Int___lt___i__TupleNDArray_length_self____TupleNDArray___getitem___self_i___TupleNDArray___getitem___other__Int___sub___i__TupleNDArray_length_self____: 0
-other-TupleTupleInt_self-TupleTupleInt_i-Int__TupleInt_if___Int___lt___i__TupleTupleInt_length_self____TupleTupleInt___getitem___self_i___TupleTupleInt___getitem___other__Int___sub___i__TupleTupleInt_length_self____: 0
-other-TupleValue_self-TupleValue_i-Int__Value_if___Int___lt___i__TupleValue_length_self____TupleValue___getitem___self_i___TupleValue___getitem___other__Int___sub___i__TupleValue_length_self____: 0
-possible_values: 0
-reshape: 0
-self-TupleInt_i-Int__TupleInt___getitem___self_i_: 0
-self-TupleTupleInt_i-Int__TupleInt___init____TupleTupleInt_length_self___unstable-fn__i-Int_self-TupleTupleInt_j-Int__TupleInt___getitem____TupleTupleInt___getitem___self_j___Int___mod____Int___floordiv___i__TupleInt_product__TupleTupleInt_map_int__TupleTupleInt_drop_self__Int___add___j__Int___init___1_____unstable-fn__x-TupleInt__TupleInt_length_x________TupleInt_length__TupleTupleInt___getitem___self_j______i_self__: 4
-sum: 0
-svd: 0
-ti-TupleInt_i-Int__Value_int__TupleInt___getitem___ti_i__: 0
-unique_counts: 0
-unique_inverse: 0
-unique_values: 0
-value-Value__-TupleInt_value: 0
-value-Value_acc-Boolean_j-Value__Boolean___or___acc__Value___eq___value_j__: 0
-x-TupleInt__TupleInt_length_x_: 2
+((ALL_INDICES 0)
+ (Boolean___and__ 0)
+ (Boolean___eq__ 0)
+ (Boolean___init__ 2)
+ (Boolean___invert__ 0)
+ (Boolean___or__ 0)
+ (Boolean_to_bool 2)
+ (DType___eq__ 0)
+ (DType_bool 0)
+ (DType_float32 0)
+ (DType_float64 0)
+ (DType_int32 0)
+ (DType_int64 0)
+ (DType_object 0)
+ (Float___add__ 0)
+ (Float___eq__ 0)
+ (Float___init__ 0)
+ (Float___mul__ 0)
+ (Float___pow__ 0)
+ (Float___sub__ 0)
+ (Float___truediv__ 0)
+ (Float_abs 0)
+ (Float_from_int 0)
+ (Float_rational 0)
+ (Float_to_f64 0)
+ (IndexKey_int 0)
+ (Int_NEVER 1)
+ (Int___add__ 2)
+ (Int___and__ 0)
+ (Int___eq__ 4)
+ (Int___floordiv__ 8)
+ (Int___ge__ 0)
+ (Int___gt__ 0)
+ (Int___init__ 6)
+ (Int___invert__ 0)
+ (Int___lshift__ 0)
+ (Int___lt__ 0)
+ (Int___mod__ 4)
+ (Int___mul__ 2)
+ (Int___or__ 0)
+ (Int___rshift__ 0)
+ (Int___sub__ 2)
+ (Int___xor__ 0)
+ (Int_if_ 8)
+ (Int_to_i64 6)
+ (IsDtypeKind_NULL 0)
+ (IsDtypeKind___or__ 0)
+ (IsDtypeKind_dtype 0)
+ (IsDtypeKind_string 0)
+ (LoopNestAPI___init__ 0)
+ (LoopNestAPI_from_tuple 0)
+ (LoopNestAPI_get_dims 0)
+ (LoopNestAPI_indices 0)
+ (NDArray_NEVER 0)
+ (NDArray_T 0)
+ (NDArray___getitem__ 0)
+ (NDArray___gt__ 0)
+ (NDArray___init__ 0)
+ (NDArray___lt__ 0)
+ (NDArray___sub__ 0)
+ (NDArray___truediv__ 0)
+ (NDArray_dtype 0)
+ (NDArray_if_ 0)
+ (NDArray_index 0)
+ (NDArray_ndim 0)
+ (NDArray_scalar 0)
+ (NDArray_shape 0)
+ (NDArray_size 0)
+ (NDArray_to_value 0)
+ (NDArray_to_values 0)
+ (NDArray_vector 0)
+ (OptionalBool_none 0)
+ (OptionalDType_none 0)
+ (OptionalDevice_none 0)
+ (OptionalIntOrTuple_none 0)
+ (OptionalInt_none 0)
+ (OptionalLoopNestAPI_NONE 0)
+ (OptionalLoopNestAPI___init__ 0)
+ (OptionalLoopNestAPI_unwrap 0)
+ (ShapeAPI___init__ 0)
+ (ShapeAPI_deselect 0)
+ (ShapeAPI_select 0)
+ (ShapeAPI_to_tuple 0)
+ (TupleInt_EMPTY 1)
+ (TupleInt_NEVER 1)
+ (TupleInt___add__ 0)
+ (TupleInt___getitem__ 10)
+ (TupleInt___init__ 18)
+ (TupleInt_append 11)
+ (TupleInt_contains 0)
+ (TupleInt_deselect 0)
+ (TupleInt_drop 0)
+ (TupleInt_filter 0)
+ (TupleInt_foldl 3)
+ (TupleInt_foldl_boolean 0)
+ (TupleInt_foldl_tuple_int 0)
+ (TupleInt_from_vec 12)
+ (TupleInt_if_ 4)
+ (TupleInt_length 5)
+ (TupleInt_map 0)
+ (TupleInt_map_tuple_int 0)
+ (TupleInt_product 3)
+ (TupleInt_range 0)
+ (TupleInt_select 0)
+ (TupleInt_single 0)
+ (TupleInt_to_vec 12)
+ (TupleNDArray_EMPTY 0)
+ (TupleNDArray___add__ 0)
+ (TupleNDArray___getitem__ 0)
+ (TupleNDArray___init__ 0)
+ (TupleNDArray_append 0)
+ (TupleNDArray_from_vec 0)
+ (TupleNDArray_length 0)
+ (TupleNDArray_to_vec 0)
+ (TupleTupleInt_EMPTY 1)
+ (TupleTupleInt___add__ 0)
+ (TupleTupleInt___getitem__ 7)
+ (TupleTupleInt___init__ 8)
+ (TupleTupleInt_append 7)
+ (TupleTupleInt_drop 2)
+ (TupleTupleInt_foldl_value 0)
+ (TupleTupleInt_from_vec 8)
+ (TupleTupleInt_length 4)
+ (TupleTupleInt_map_int 3)
+ (TupleTupleInt_product 1)
+ (TupleTupleInt_single 0)
+ (TupleTupleInt_to_vec 8)
+ (TupleValue_EMPTY 0)
+ (TupleValue___add__ 0)
+ (TupleValue___getitem__ 0)
+ (TupleValue___init__ 0)
+ (TupleValue_append 0)
+ (TupleValue_contains 0)
+ (TupleValue_foldl_boolean 0)
+ (TupleValue_from_tuple_int 0)
+ (TupleValue_from_vec 0)
+ (TupleValue_length 0)
+ (Value_NEVER 0)
+ (Value___add__ 0)
+ (Value___eq__ 0)
+ (Value___lt__ 0)
+ (Value___truediv__ 0)
+ (Value_astype 0)
+ (Value_bool 0)
+ (Value_conj 0)
+ (Value_dtype 0)
+ (Value_float 0)
+ (Value_if_ 0)
+ (Value_int 0)
+ (Value_isfinite 0)
+ (Value_real 0)
+ (Value_sqrt 0)
+ (Value_to_bool 0)
+ (Value_to_int 0)
+ (Value_to_truthy_value 0)
+ (acc-Int_i-Int__Int___mul___acc_i_ 2)
+ (any 0)
+ (asarray 0)
+ (assume_dtype 0)
+ (assume_isfinite 0)
+ (assume_shape 0)
+ (assume_value_one_of 0)
+ (astype 0)
+ (axis-TupleInt_i-Int__Boolean___invert____TupleInt_contains_axis_i__ 0)
+ (axis-TupleInt_i-Int__TupleInt_contains_axis_i_ 0)
+ (broadcast_index 0)
+ (broadcast_shapes 0)
+ (check_index 0)
+ (concat 0)
+ (dims-TupleInt_i-Int__TupleInt___getitem___dims_i_ 0)
+ (f-UnstableFn_Boolean_Int_acc-TupleInt_v-Int__TupleInt_if___unstable-app_f_v___TupleInt_append_acc_v__acc_ 0)
+ (f-UnstableFn_Int_Int_self-TupleInt_i-Int__unstable-app_f__TupleInt___getitem___self_i__ 0)
+ (f-UnstableFn_Int_TupleInt_self-TupleTupleInt_i-Int__unstable-app_f__TupleTupleInt___getitem___self_i__ 3)
+ (f-UnstableFn_TupleInt_Int_self-TupleInt_i-Int__unstable-app_f__TupleInt___getitem___self_i__ 0)
+ (greater_zero 0)
+ (i-Int__-Int_i 0)
+ (i-Int_acc-Boolean_j-Int__Boolean___or___acc__Int___eq___i_j__ 0)
+ (i-Int_i 0)
+ (i-Int_self-TupleTupleInt_j-Int__TupleInt___getitem____TupleTupleInt___getitem___self_j___Int___mod____Int___floordiv___i__TupleInt_product__TupleTupleInt_map_int__TupleTupleInt_drop_self__Int___add___j__Int___init___1_____unstable-fn__x-TupleInt__TupleInt_length_x________TupleInt_length__TupleTupleInt___getitem___self_j____ 8)
+ (i-TupleInt__-Int_i 0)
+ (indices-TupleInt_i-Int__Boolean___invert____TupleInt_contains_indices_i__ 0)
+ (isdtype 0)
+ (isfinite 0)
+ (n-Int_self-TupleInt_i-Int__TupleInt___getitem___self__Int___add___i_n__ 0)
+ (n-Int_self-TupleTupleInt_i-Int__TupleTupleInt___getitem___self__Int___add___i_n__ 1)
+ (ndarray-abs 0)
+ (other-TupleInt_self-TupleInt_i-Int__Int_if___Int___lt___i__TupleInt_length_self____TupleInt___getitem___self_i___TupleInt___getitem___other__Int___sub___i__TupleInt_length_self____ 0)
+ (other-TupleNDArray_self-TupleNDArray_i-Int__NDArray_if___Int___lt___i__TupleNDArray_length_self____TupleNDArray___getitem___self_i___TupleNDArray___getitem___other__Int___sub___i__TupleNDArray_length_self____ 0)
+ (other-TupleTupleInt_self-TupleTupleInt_i-Int__TupleInt_if___Int___lt___i__TupleTupleInt_length_self____TupleTupleInt___getitem___self_i___TupleTupleInt___getitem___other__Int___sub___i__TupleTupleInt_length_self____ 0)
+ (other-TupleValue_self-TupleValue_i-Int__Value_if___Int___lt___i__TupleValue_length_self____TupleValue___getitem___self_i___TupleValue___getitem___other__Int___sub___i__TupleValue_length_self____ 0)
+ (possible_values 0)
+ (reshape 0)
+ (self-TupleInt_i-Int__TupleInt___getitem___self_i_ 0)
+ (self-TupleTupleInt_i-Int__TupleInt___init____TupleTupleInt_length_self___unstable-fn__i-Int_self-TupleTupleInt_j-Int__TupleInt___getitem____TupleTupleInt___getitem___self_j___Int___mod____Int___floordiv___i__TupleInt_product__TupleTupleInt_map_int__TupleTupleInt_drop_self__Int___add___j__Int___init___1_____unstable-fn__x-TupleInt__TupleInt_length_x________TupleInt_length__TupleTupleInt___getitem___self_j______i_self__ 4)
+ (sum 0)
+ (svd 0)
+ (ti-TupleInt_i-Int__Value_int__TupleInt___getitem___ti_i__ 0)
+ (unique_counts 0)
+ (unique_inverse 0)
+ (unique_values 0)
+ (value-Value__-TupleInt_value 0)
+ (value-Value_acc-Boolean_j-Value__Boolean___or___acc__Value___eq___value_j__ 0)
+ (x-TupleInt__TupleInt_length_x_ 2))

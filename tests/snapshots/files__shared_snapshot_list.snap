@@ -2,11 +2,11 @@
 source: tests/files.rs
 expression: snapshot_content_across_treatments
 ---
-Cons: 7
-Nil: 1
-list-append: 3
-list-get: 3
-list-get-demand: 3
-list-length: 4
-list-length-demand: 4
-list-set: 2
+((Cons 7)
+ (Nil 1)
+ (list-append 3)
+ (list-get 3)
+ (list-get-demand 3)
+ (list-length 4)
+ (list-length-demand 4)
+ (list-set 2))

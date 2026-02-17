@@ -9,4 +9,4 @@ expression: snapshot_content_across_treatments
     (Fiat (= (Strings "hello" "world") (Strings "hello" "world")))
     (Fiat (= "hello world" "hello world")))
   (substitution (a "hello") (res "hello world") (b "world")))
-Strings: 2
+((Strings 2))

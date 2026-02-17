@@ -2,9 +2,9 @@
 source: tests/files.rs
 expression: snapshot_content_across_treatments
 ---
-C1: 2
-C2: 4
-Leaf: 1
-Leaf2: 1
-X: 1
-f: 1
+((C1 2)
+ (C2 4)
+ (Leaf 1)
+ (Leaf2 1)
+ (X 1)
+ (f 1))

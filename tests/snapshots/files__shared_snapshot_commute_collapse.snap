@@ -25,5 +25,5 @@ expression: snapshot_content_across_treatments
         (name "rw2")
         (premises prf1 (Fiat (= () ())))
         (substitution (a 3) (b 2))))))
-Add: 2
-Num: 1
+((Add 2)
+ (Num 1))

@@ -2,5 +2,5 @@
 source: tests/files.rs
 expression: snapshot_content_across_treatments
 ---
-S: 3
-ZeroConst: 1
+((S 3)
+ (ZeroConst 1))

@@ -2,11 +2,11 @@
 source: tests/files.rs
 expression: snapshot_content_across_treatments
 ---
-Add: 8
-Cons: 22
-EditDist: 110
-EmptyConst: 1
-Length: 19
-Min: 25
-Num: 9
-Unwrap: 9
+((Add 8)
+ (Cons 22)
+ (EditDist 110)
+ (EmptyConst 1)
+ (Length 19)
+ (Min 25)
+ (Num 9)
+ (Unwrap 9))

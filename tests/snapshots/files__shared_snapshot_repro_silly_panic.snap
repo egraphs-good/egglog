@@ -2,5 +2,5 @@
 source: tests/files.rs
 expression: snapshot_content_across_treatments
 ---
-AConst: 1
-par: 1
+((AConst 1)
+ (par 1))
