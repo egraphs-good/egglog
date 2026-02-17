@@ -1,6 +1,0 @@
----
-source: tests/files.rs
-expression: snapshot_content
----
-Visible: 1
-Visible: 1

@@ -1,6 +1,0 @@
----
-source: tests/files.rs
-expression: snapshot_content
----
-f: 0
-g: 2

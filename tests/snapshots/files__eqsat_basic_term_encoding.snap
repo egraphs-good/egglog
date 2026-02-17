@@ -1,8 +1,0 @@
----
-source: tests/files.rs
-expression: snapshot_content
----
-Add: 4
-Mul: 3
-Num: 3
-Var: 1

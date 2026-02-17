@@ -1,6 +1,0 @@
----
-source: tests/files.rs
-expression: snapshot_content
----
-S: 3
-ZeroConst: 1

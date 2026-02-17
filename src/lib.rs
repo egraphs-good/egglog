@@ -148,10 +148,14 @@ impl std::fmt::Display for CommandOutput {
         match self {
             CommandOutput::PrintFunctionSize(size) => writeln!(f, "{}", size),
             CommandOutput::PrintAllFunctionsSize(names_and_sizes) => {
-                for name in names_and_sizes {
-                    writeln!(f, "{}: {}", name.0, name.1)?;
+                write!(f, "(")?;
+                for (i, (name, size)) in names_and_sizes.iter().enumerate() {
+                    if i > 0 {
+                        write!(f, " ")?;
+                    }
+                    write!(f, "({} {})", name, size)?;
                 }
-                Ok(())
+                writeln!(f, ")")
             }
             CommandOutput::ExtractBest(termdag, _cost, term) => {
                 writeln!(f, "{}", termdag.to_string(*term))

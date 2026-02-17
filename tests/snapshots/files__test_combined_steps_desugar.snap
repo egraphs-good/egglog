@@ -1,7 +1,0 @@
----
-source: tests/files.rs
-expression: snapshot_content
----
-left: 11
-middle: 10
-right: 11

@@ -1,9 +1,0 @@
----
-source: tests/files.rs
-expression: snapshot_content
----
-(let prop0 (= (R 1) (R 2)))
-(Trans prop0 (Fiat (= (R 1) (R 1))) (Sym prop0 (Fiat (= (R 2) (R 1)))))
-(let prop0 (= (R 1) (R 2)))
-(Trans prop0 (Fiat (= (R 1) (R 1))) (Sym prop0 (Fiat (= (R 2) (R 1)))))
-R: 2

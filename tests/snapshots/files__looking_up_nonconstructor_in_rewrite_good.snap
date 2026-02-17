@@ -1,6 +1,0 @@
----
-source: tests/files.rs
-expression: snapshot_content
----
-Sum: 0
-f: 0

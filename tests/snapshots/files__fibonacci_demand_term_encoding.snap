@@ -1,8 +1,0 @@
----
-source: tests/files.rs
-expression: snapshot_content
----
-(Num 13)
-Add: 6
-Fib: 8
-Num: 7

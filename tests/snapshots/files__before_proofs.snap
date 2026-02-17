@@ -1,8 +1,0 @@
----
-source: tests/files.rs
-expression: snapshot_content
----
-Add: 10
-Const: 2
-Sub: 0
-Var: 1

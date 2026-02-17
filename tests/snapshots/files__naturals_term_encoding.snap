@@ -1,8 +1,0 @@
----
-source: tests/files.rs
-expression: snapshot_content
----
-Plus: 14
-S: 6
-Times: 3
-Z: 1
