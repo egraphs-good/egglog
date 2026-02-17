@@ -139,6 +139,21 @@ pub struct Extractor<C: Cost + Ord + Eq + Clone + Debug> {
     parent_edge: HashMap<String, HashMap<Value, (String, Vec<Value>)>>,
 }
 
+/// Options for configuring extraction behavior.
+struct ExtractionOptions<C: Cost> {
+    /// The cost model to use for extraction.
+    cost_model: Box<dyn CostModel<C>>,
+    /// Root sorts to extract from. If None, all extractable root sorts are used.
+    rootsorts: Option<Vec<ArcSort>>,
+    /// Whether to respect the unextractable flag on constructors.
+    /// When true, constructors marked as unextractable will not be used during extraction.
+    respect_unextractable: bool,
+    /// Whether to skip view tables (those with term_constructor annotations).
+    /// When true, view tables are skipped, which is useful for proof extraction
+    /// where we need to extract from the original term tables with their original names.
+    skip_view_tables: bool,
+}
+
 impl<C: Cost + Ord + Eq + Clone + Debug> Extractor<C> {
     /// Bulk of the computation happens at initialization time.
     /// The later extractions only reuses saved results.
@@ -152,7 +167,15 @@ impl<C: Cost + Ord + Eq + Clone + Debug> Extractor<C> {
         cost_model: impl CostModel<C> + 'static,
     ) -> Self {
         // For user extraction: respect unextractable, don't skip view tables (use them for better names)
-        Self::compute_costs_from_rootsorts_internal(rootsorts, egraph, cost_model, true, false)
+        Self::compute_costs_from_rootsorts_internal(
+            egraph,
+            ExtractionOptions {
+                cost_model: Box::new(cost_model),
+                rootsorts,
+                respect_unextractable: true,
+                skip_view_tables: false,
+            },
+        )
     }
 
     /// Like `compute_costs_from_rootsorts`, but ignores the unextractable flag.
@@ -165,27 +188,33 @@ impl<C: Cost + Ord + Eq + Clone + Debug> Extractor<C> {
         egraph: &EGraph,
         cost_model: impl CostModel<C> + 'static,
     ) -> Self {
-        Self::compute_costs_from_rootsorts_internal(rootsorts, egraph, cost_model, false, true)
+        Self::compute_costs_from_rootsorts_internal(
+            egraph,
+            ExtractionOptions {
+                cost_model: Box::new(cost_model),
+                rootsorts,
+                respect_unextractable: false,
+                skip_view_tables: true,
+            },
+        )
     }
 
     fn compute_costs_from_rootsorts_internal(
-        rootsorts: Option<Vec<ArcSort>>,
         egraph: &EGraph,
-        cost_model: impl CostModel<C> + 'static,
-        respect_unextractable: bool,
-        skip_view_tables: bool,
+        options: ExtractionOptions<C>,
     ) -> Self {
         // We filter out tables unreachable from the root sorts
-        let extract_all_sorts = rootsorts.is_none();
+        let extract_all_sorts = options.rootsorts.is_none();
 
-        let mut rootsorts = rootsorts.unwrap_or_default();
+        let mut rootsorts = options.rootsorts.unwrap_or_default();
 
         // Built a reverse index from output sort to function head symbols
         // Only include constructors (not regular functions) and respect unextractable flag
         let mut rev_index: HashMap<String, Vec<String>> = Default::default();
         for func in egraph.functions.iter() {
-            let unextractable = func.1.decl.unextractable && respect_unextractable;
-            let should_skip_view = skip_view_tables && func.1.decl.term_constructor.is_some();
+            let unextractable = func.1.decl.unextractable && options.respect_unextractable;
+            let should_skip_view =
+                options.skip_view_tables && func.1.decl.term_constructor.is_some();
 
             // only extract constructors, skip view tables when requested for proof extraction, and respect unextractable flag
             if !unextractable
@@ -267,7 +296,7 @@ impl<C: Cost + Ord + Eq + Clone + Debug> Extractor<C> {
         let mut extractor = Extractor {
             rootsorts,
             funcs,
-            cost_model: Box::new(cost_model),
+            cost_model: options.cost_model,
             costs,
             topo_rnk_cnt: 0,
             topo_rnk,

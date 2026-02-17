@@ -602,6 +602,8 @@ impl<Head: Clone + Display, Leaf: Hash + Clone + Display + Eq> GenericExpr<Head,
         size
     }
 
+    /// Traverse the expression tree, calling `pre` before visiting children
+    /// and `post` after visiting children. Visits all nodes in the tree.
     pub fn walk(&self, pre: &mut impl FnMut(&Self), post: &mut impl FnMut(&Self)) {
         pre(self);
         self.children()
@@ -610,9 +612,30 @@ impl<Head: Clone + Display, Leaf: Hash + Clone + Display + Eq> GenericExpr<Head,
         post(self);
     }
 
+    /// Fold over the expression tree bottom-up, collecting results from children.
+    /// The function `f` is called on each node with the node itself and the results
+    /// from folding over its children. Results are computed from leaves to root.
     pub fn fold<Out>(&self, f: &mut impl FnMut(&Self, Vec<Out>) -> Out) -> Out {
         let ts = self.children().iter().map(|child| child.fold(f)).collect();
         f(self, ts)
+    }
+
+    /// Search for the first node matching a predicate, returning early once found.
+    /// Traverses the tree in pre-order (top-down).
+    pub fn find<Out>(&self, f: &mut impl FnMut(&Self) -> Option<Out>) -> Option<Out> {
+        // Check current node first
+        if let Some(result) = f(self) {
+            return Some(result);
+        }
+
+        // Then check children
+        for child in self.children().iter() {
+            if let Some(result) = child.find(f) {
+                return Some(result);
+            }
+        }
+
+        None
     }
 
     /// Applys `f` to all sub-expressions (including `self`)

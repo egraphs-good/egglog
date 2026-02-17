@@ -546,9 +546,7 @@ pub(crate) fn command_supports_proof_encoding(
     // (global function calls are allowed - they get desugared to constructors)
     let mut has_function_lookup_in_action = false;
     command.clone().visit_actions(&mut |action| {
-        if action_has_function_lookup(&action, type_info) {
-            has_function_lookup_in_action = true;
-        }
+        has_function_lookup_in_action |= action_has_function_lookup(&action, type_info);
         action
     });
 

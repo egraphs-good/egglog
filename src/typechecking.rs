@@ -801,21 +801,17 @@ impl TypeInfo {
     pub fn expr_has_function_lookup(&self, expr: &ResolvedExpr) -> Option<Span> {
         use ast::GenericExpr;
 
-        let mut lookup_span = None;
-        expr.walk(
-            &mut |e| {
-                if let GenericExpr::Call(span, ResolvedCall::Func(func_type), _) = e {
-                    if func_type.subtype == FunctionSubtype::Custom {
-                        // Skip global functions - they get desugared to constructors
-                        if !self.is_global(&func_type.name) {
-                            lookup_span = Some(span.clone());
-                        }
+        expr.find(&mut |e| {
+            if let GenericExpr::Call(span, ResolvedCall::Func(func_type), _) = e {
+                if func_type.subtype == FunctionSubtype::Custom {
+                    // Skip global functions - they get desugared to constructors
+                    if !self.is_global(&func_type.name) {
+                        return Some(span.clone());
                     }
                 }
-            },
-            &mut |_| {},
-        );
-        lookup_span
+            }
+            None
+        })
     }
 }
 
