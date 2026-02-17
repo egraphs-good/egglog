@@ -8,7 +8,7 @@ WWW=${PWD}/target/www
 all: test nits docs
 
 test: doctest
-	cargo nextest run --release --workspace
+	cargo insta test --test-runner nextest --release --workspace  --unreferenced reject
 
 coverage:
 	cargo llvm-cov nextest --release --workspace --lcov --output-path lcov.info
@@ -17,9 +17,6 @@ coverage:
 doctest:
 	cargo test --doc --release --workspace
 
-# update insta snapshots for all tests and cause them to pass even if they differ
-insta-test:
-	cargo insta test --test-runner nextest --release --workspace  --unreferenced reject
 
 nits:
 	@rustup component add clippy
