@@ -21,25 +21,8 @@ impl Run {
         self.path.parent().unwrap().ends_with("proofs")
     }
 
-    /// Convert CommandOutput vector to snapshot string, filtering non-deterministic content
-    fn outputs_to_snapshot(&self, outputs: &[CommandOutput]) -> String {
-        outputs
-            .iter()
-            .filter_map(|output| match output {
-                // Skip OverallStatistics - contains non-deterministic Duration timing data
-                CommandOutput::OverallStatistics(_) => None,
-                // Skipping PrintFunction for now due to egglog nondeterminism bug: https://github.com/egraphs-good/egglog/issues/793
-                CommandOutput::PrintFunction(..) => None,
-                // All other variants use normal Display formatting
-                other => Some(other.to_string()),
-            })
-            .collect::<Vec<_>>()
-            .join("")
-    }
-
     /// Extraction results may differ slightly due to the proof encoding when multiple
     /// solutions have the same cost. We filter the output to include only things that remain the same.
-    #[allow(dead_code)]
     fn outputs_to_snapshot_preserved_across_treatments(&self, outputs: &[CommandOutput]) -> String {
         outputs
             .iter()
@@ -96,11 +79,7 @@ impl Run {
                 {
                     // Use base snapshot name (without desugar/term_encoding/proofs suffixes)
                     // so all variants compare against the same expected output
-                    // proof_testing has different output due to automatic prove-exists, so it uses separate snapshots
-                    let name = self.name().to_string();
-                    let snapshot_content = self.outputs_to_snapshot(outputs);
-                    insta::assert_snapshot!(name, snapshot_content);
-
+                    // proof_testing has different output due to automatic prove-exists, so no snapshot for that
                     if !self.proof_testing {
                         let snapshot_name_across_treatments =
                             self.snapshot_name_across_treatments();

@@ -343,39 +343,47 @@ impl Parser {
                     return error!(span, "usages:\n{a}\n{b}");
                 }
             },
-            "constructor" => match tail {
-                [name, inputs, output, rest @ ..] => {
-                    let mut cost = None;
-                    let mut unextractable = false;
-                    let mut term_constructor = None;
-                    for (key, val) in self.parse_options(rest)? {
-                        match (key, val) {
-                            (":unextractable", []) => unextractable = true,
-                            (":cost", [c]) => cost = Some(c.expect_uint("cost")?),
-                            (":term-constructor", [tc]) => {
-                                term_constructor = Some(tc.expect_atom("term constructor name")?)
+            "constructor" => {
+                // Parse constructor with optional annotations
+                // (constructor <name> (<input sort>*) <output sort>)
+                // (constructor <name> (<input sort>*) <output sort> :cost <cost>)
+                // (constructor <name> (<input sort>*) <output sort> :unextractable)
+                // (constructor <name> (<input sort>*) <output sort> :term-constructor <constructor name>)
+                match tail {
+                    [name, inputs, output, rest @ ..] => {
+                        let mut cost = None;
+                        let mut unextractable = false;
+                        let mut term_constructor = None;
+                        for (key, val) in self.parse_options(rest)? {
+                            match (key, val) {
+                                (":unextractable", []) => unextractable = true,
+                                (":cost", [c]) => cost = Some(c.expect_uint("cost")?),
+                                (":term-constructor", [tc]) => {
+                                    term_constructor =
+                                        Some(tc.expect_atom("term constructor name")?)
+                                }
+                                _ => return error!(span, "could not parse constructor options"),
                             }
-                            _ => return error!(span, "could not parse constructor options"),
                         }
-                    }
 
-                    vec![Command::Constructor {
-                        span,
-                        name: name.expect_atom("constructor name")?,
-                        schema: self.parse_schema(inputs, output)?,
-                        cost,
-                        unextractable,
-                        term_constructor,
-                    }]
+                        vec![Command::Constructor {
+                            span,
+                            name: name.expect_atom("constructor name")?,
+                            schema: self.parse_schema(inputs, output)?,
+                            cost,
+                            unextractable,
+                            term_constructor,
+                        }]
+                    }
+                    _ => {
+                        let a = "(constructor <name> (<input sort>*) <output sort>)";
+                        let b = "(constructor <name> (<input sort>*) <output sort> :cost <cost>)";
+                        let c = "(constructor <name> (<input sort>*) <output sort> :unextractable)";
+                        let d = "(constructor <name> (<input sort>*) <output sort> :term-constructor <constructor name>)";
+                        return error!(span, "usages:\n{a}\n{b}\n{c}\n{d}");
+                    }
                 }
-                _ => {
-                    let a = "(constructor <name> (<input sort>*) <output sort>)";
-                    let b = "(constructor <name> (<input sort>*) <output sort> :cost <cost>)";
-                    let c = "(constructor <name> (<input sort>*) <output sort> :unextractable)";
-                    let d = "(constructor <name> (<input sort>*) <output sort> :term-constructor <constructor name>)";
-                    return error!(span, "usages:\n{a}\n{b}\n{c}\n{d}");
-                }
-            },
+            }
             "relation" => match tail {
                 [name, inputs] => vec![Command::Relation {
                     span,

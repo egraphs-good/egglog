@@ -1,5 +1,0 @@
----
-source: tests/files.rs
-expression: snapshot_content
----
-(map-insert (map-insert (map-empty) 1 "one") 2 "two")

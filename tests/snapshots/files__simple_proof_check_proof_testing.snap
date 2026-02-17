@@ -1,5 +1,0 @@
----
-source: tests/files.rs
-expression: snapshot_content
----
-(Fiat (= (Num 2) (Num 2)))

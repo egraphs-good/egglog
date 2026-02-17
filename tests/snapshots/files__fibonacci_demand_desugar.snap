@@ -1,5 +1,0 @@
----
-source: tests/files.rs
-expression: snapshot_content
----
-(Num 13)

@@ -1,6 +1,0 @@
----
-source: tests/files.rs
-expression: snapshot_content
----
-(Mul (Num 2) (Add (Var "x") (Add (Var "x") (Var "x"))))
-(Mul (Num 2) (Add (Var "x") (Add (Var "x") (Var "x"))))

@@ -29,7 +29,7 @@ pub(crate) fn desugar_command(
         } => {
             let mut fdecl = FunctionDecl::constructor(span, name, schema, cost, unextractable);
             fdecl.term_constructor = term_constructor;
-            vec![NCommand::Function(fdecl)]
+            std::iter::once(NCommand::Function(fdecl)).collect()
         }
         Command::Relation { span, name, inputs } => desugar_relation(parser, span, name, inputs),
         Command::Datatype {
