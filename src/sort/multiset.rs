@@ -1,4 +1,5 @@
 use super::*;
+use egglog_bridge::UnionAction;
 use inner::MultiSet;
 
 #[derive(Clone, Debug, PartialEq, Eq, Hash)]
@@ -43,6 +44,7 @@ impl Presort for MultiSetSort {
     fn reserved_primitives() -> Vec<&'static str> {
         vec![
             "multiset-of",
+            "multiset-single",
             "multiset-insert",
             "multiset-contains",
             "multiset-not-contains",
@@ -116,14 +118,22 @@ impl ContainerSort for MultiSetSort {
             data: xs.collect()
         } });
 
+        add_primitive!(eg, "multiset-single" = {self.clone(): MultiSetSort} |x: # (self.element()), i: i64| -> @MultiSetContainer (arc) { MultiSetContainer {
+            do_rebuild: self.ctx.element.is_eq_sort() || self.ctx.element.is_eq_container_sort(),
+            data: std::iter::repeat(x).take(i.try_into().unwrap()).collect()
+        } });
         add_primitive!(eg, "multiset-pick" = |xs: @MultiSetContainer (arc)| -> # (self.element()) { *xs.data.pick().expect("Cannot pick from an empty multiset") });
         add_primitive!(eg, "multiset-insert" = |mut xs: @MultiSetContainer (arc), x: # (self.element())| -> @MultiSetContainer (arc) { MultiSetContainer { data: xs.data.insert( x) , ..xs } });
         add_primitive!(eg, "multiset-remove" = |mut xs: @MultiSetContainer (arc), x: # (self.element())| -?> @MultiSetContainer (arc) { Some(MultiSetContainer { data: xs.data.remove(&x)?, ..xs } )});
         add_primitive!(eg, "multiset-remove-swapped" = |x: # (self.element()), mut xs: @MultiSetContainer (arc)| -?> @MultiSetContainer (arc) { Some(MultiSetContainer { data: xs.data.remove(&x)?, ..xs }) });
+        add_primitive!(eg, "multiset-subtract" = |mut xs: @MultiSetContainer (arc), other: @MultiSetContainer (arc)| -?> @MultiSetContainer (arc) { Some(MultiSetContainer { data: xs.data.subtract(&other.data)?, ..xs }) });
+        add_primitive!(eg, "multiset-subtract-swapped" = |other: @MultiSetContainer (arc), mut xs: @MultiSetContainer (arc)| -?> @MultiSetContainer (arc) { Some(MultiSetContainer { data: xs.data.subtract(&other.data)?, ..xs }) });
         add_primitive!(eg, "multiset-length"       = |xs: @MultiSetContainer (arc)| -> i64 { xs.data.len() as i64 });
         add_primitive!(eg, "multiset-contains"     = |xs: @MultiSetContainer (arc), x: # (self.element())| -?> () { ( xs.data.contains(&x)).then_some(()) });
         add_primitive!(eg, "multiset-not-contains" = |xs: @MultiSetContainer (arc), x: # (self.element())| -?> () { (!xs.data.contains(&x)).then_some(()) });
+        add_primitive!(eg, "multiset-contains-swapped" = |x: # (self.element()), xs: @MultiSetContainer (arc)| -?> () { (xs.data.contains(&x)).then_some(()) });
         add_primitive!(eg, "multiset-not-contains-swapped" = |x: # (self.element()), xs: @MultiSetContainer (arc)| -?> () { (!xs.data.contains(&x)).then_some(()) });
+        add_primitive!(eg, "multiset-intersection" = |xs: @MultiSetContainer (arc), ys: @MultiSetContainer (arc)| -> @MultiSetContainer (arc) { MultiSetContainer { data: xs.data.intersection(ys.data), ..xs } });
         add_primitive!(eg, "multiset-sum" = |xs: @MultiSetContainer (arc), ys: @MultiSetContainer (arc)| -> @MultiSetContainer (arc) { MultiSetContainer { data: xs.data.sum(ys.data), ..xs } });
         // Set counts to one
         add_primitive!(eg, "multiset-reset-counts" = |mut xs: @MultiSetContainer (arc)| -> @MultiSetContainer (arc) { {
@@ -157,43 +167,41 @@ impl ContainerSort for MultiSetSort {
         // For Map, support either defining MultiSet sort or Fn sort first
         // Add map from MS[V] to MS[K]
         let self_cloned = arc.clone();
-        let name = self.name().to_string();
+        let element_name = self.element.name().to_string();
+
+        let all_ms_sorts = eg
+            .type_info
+            .get_arcsorts_by(|f| f.value_type() == Some(TypeId::of::<MultiSetContainer>()));
 
         let register_map = Box::new(move |fn_: Arc<FunctionSort>, eg: &mut EGraph| {
-            let all_other_multiset_sorts = eg.type_info.get_arcsorts_by(|f| {
-                f.name() != name && f.value_type() == Some(TypeId::of::<MultiSetContainer>())
-            });
+            if fn_.inputs().len() != 1 {
+                return;
+            }
+            let input_name = fn_.inputs()[0].name();
+            let fn_output = fn_.output();
+            let output_name = fn_output.name();
 
-            // All pairs of multisets to add a map for, all other multisets mapping to this one, this one mapping to itself,
-            // and this one mapping to all other multisets
-            let mut all_multiset_pairs_add = all_other_multiset_sorts
-                .iter()
-                .cloned()
-                .map(|other_ms_sort| (other_ms_sort.clone(), self_cloned.clone()))
-                .collect::<Vec<_>>();
-            all_multiset_pairs_add.extend(
-                all_other_multiset_sorts
-                    .iter()
-                    .cloned()
-                    .map(|other_ms_sort| (self_cloned.clone(), other_ms_sort.clone())),
-            );
-            all_multiset_pairs_add.push((self_cloned.clone(), self_cloned.clone()));
-
-            for (source_ms_sort, output_ms_sort) in &all_multiset_pairs_add {
-                let source_element_sort = source_ms_sort.inner_sorts()[0].clone();
-                let output_element_sort = output_ms_sort.inner_sorts()[0].clone();
-                // If this function is from E -> K where E is inner_name and K is other_ms_sort's inner name
-                if fn_.inputs().len() == 1
-                    && fn_.inputs()[0].name() == source_element_sort.name()
-                    && fn_.output().name() == output_element_sort.name()
-                {
-                    eg.add_primitive(Map {
-                        name: "unstable-multiset-map".into(),
-                        multiset: source_ms_sort.clone(),
-                        output_multiset: output_ms_sort.clone(),
-                        fn_: fn_.clone(),
-                    });
-                }
+            //
+            if input_name != element_name && output_name != element_name {
+                return;
+            }
+            for some_vec_sort in &all_ms_sorts {
+                let inner_sorts = some_vec_sort.inner_sorts();
+                let some_vec_name = inner_sorts[0].name();
+                let (input_vec, output_vec) =
+                    if input_name == some_vec_name && output_name == element_name {
+                        (some_vec_sort.clone(), self_cloned.clone())
+                    } else if input_name == element_name && output_name == some_vec_name {
+                        (self_cloned.clone(), some_vec_sort.clone())
+                    } else {
+                        continue;
+                    };
+                eg.add_primitive(Map {
+                    name: "unstable-multiset-map".into(),
+                    multiset: input_vec,
+                    output_multiset: output_vec,
+                    fn_: fn_.clone(),
+                });
             }
         });
         let inner_name = self.element.name().to_string();
@@ -243,22 +251,23 @@ impl ContainerSort for MultiSetSort {
         register.push(register_filter);
         register.push(register_fold);
         // For FillIndex, you have to define the multiset sort first since the function sort depends on it
+        let self_cloned = arc.clone();
         register.push(Box::new(move |fn_: Arc<FunctionSort>, eg: &mut EGraph| {
             // add fill-index and clear-index if we have a function from (MultiSet[E], E) -> I64
             if fn_.inputs().len() == 2
-                && fn_.inputs()[0].name() == arc.name()
+                && fn_.inputs()[0].name() == self_cloned.name()
                 && fn_.inputs()[1].name() == inner_name
                 && fn_.output().name() == "i64"
             {
                 eg.add_primitive(FillIndex {
                     name: "unstable-multiset-fill-index".into(),
-                    multiset: arc.clone(),
+                    multiset: self_cloned.clone(),
                     unit: eg.type_info.get_sort_by_name("Unit").unwrap().clone(),
                     fn_: fn_.clone(),
                 });
                 eg.add_primitive(ClearIndex {
                     name: "unstable-multiset-clear-index".into(),
-                    multiset: arc.clone(),
+                    multiset: self_cloned.clone(),
                     unit: eg.type_info.get_sort_by_name("Unit").unwrap().clone(),
                     fn_: fn_.clone(),
                 });
@@ -266,15 +275,24 @@ impl ContainerSort for MultiSetSort {
             // Add flat-map if we have a function from E -> MultiSet[E]
             if fn_.inputs().len() == 1
                 && fn_.inputs()[0].name() == inner_name
-                && fn_.output().name() == arc.name()
+                && fn_.output().name() == self_cloned.name()
             {
                 eg.add_primitive(FlatMap {
                     name: "unstable-multiset-flat-map".into(),
-                    multiset: arc.clone(),
+                    multiset: self_cloned.clone(),
                     fn_: fn_.clone(),
                 });
             }
         }));
+
+        if self.element.is_eq_sort() {
+            eg.add_primitive(UnionValues {
+                name: "multiset-union-values".into(),
+                multiset: arc.clone(),
+                action: eg.new_union_action(),
+                element: self.element.clone(),
+            });
+        }
     }
 
     fn reconstruct_termdag(
@@ -687,6 +705,49 @@ impl Primitive for Fold {
     }
 }
 
+// (multiset-union-values MultiSet[A]) -> A
+// where A: Eq
+// Unions all values in the multiset together using the union action defined for the inner type.
+#[derive(Clone)]
+struct UnionValues {
+    name: String,
+    multiset: ArcSort,
+    element: ArcSort,
+    action: UnionAction,
+}
+
+impl Primitive for UnionValues {
+    fn name(&self) -> &str {
+        &self.name
+    }
+
+    fn get_type_constraints(&self, span: &Span) -> Box<dyn TypeConstraint> {
+        SimpleTypeConstraint::new(
+            self.name(),
+            vec![self.multiset.clone(), self.element.clone()],
+            span.clone(),
+        )
+        .into_box()
+    }
+
+    fn apply(&self, exec_state: &mut ExecutionState, args: &[Value]) -> Option<Value> {
+        let values = exec_state
+            .container_values()
+            .get_val::<MultiSetContainer>(args[0])?
+            .clone()
+            .data;
+        let values: Vec<_> = values.iter_counts().map(|(v, _c)| v).collect();
+        if values.len() == 0 {
+            return None;
+        }
+        let first = values[0];
+        for v in values.into_iter().skip(1) {
+            self.action.union(exec_state, first, v);
+        }
+        Some(first)
+    }
+}
+
 // Place multiset in its own module to keep implementation details private from sort
 mod inner {
     use std::collections::BTreeMap;
@@ -754,6 +815,25 @@ mod inner {
             }
         }
 
+        /// Subtract the counts of another multiset from this multiset, taking ownership of both and returning a new multiset.
+        pub fn subtract(mut self, other: &MultiSet<T>) -> Option<MultiSet<T>> {
+            for (k, v) in other.0.iter() {
+                if let Some(self_v) = self.0.get_mut(k) {
+                    if *self_v < *v {
+                        return None;
+                    }
+                    *self_v -= *v;
+                    self.1 -= *v;
+                    if *self_v == 0 {
+                        self.0.remove(k);
+                    }
+                } else {
+                    return None;
+                }
+            }
+            Some(self)
+        }
+
         pub fn insert_multiple_mut(&mut self, value: T, n: usize) {
             self.1 += n;
             if let Some(v) = self.0.get(&value) {
@@ -771,6 +851,20 @@ mod inner {
             }
             assert_eq!(self.1, target_count);
             self
+        }
+
+        /// Compute the intersection of two multisets.
+        /// The count of each element in the result is the minimum of its counts in the two multisets.
+        pub fn intersection(self, MultiSet(other_map, _): Self) -> Self {
+            let mut new_map = BTreeMap::new();
+            for (k, v) in self.0.into_iter() {
+                if let Some(other_v) = other_map.get(&k) {
+                    let new_v = std::cmp::min(v, *other_v);
+                    new_map.insert(k, new_v);
+                }
+            }
+            let new_count = new_map.values().sum();
+            MultiSet(new_map, new_count)
         }
     }
 

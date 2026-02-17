@@ -4,6 +4,7 @@
 
 (let xs (multiset-of (Num 1) (Num 2) (Num 3)))
 
+(check (= (multiset-of (Num 1) (Num 1)) (multiset-single (Num 1) 2)))
 ;; verify equal to other ordering
 (check (=
         (multiset-of (Num 3) (Num 2) (Num 1))
@@ -23,6 +24,20 @@
         (multiset-insert xs (Num 4))
     ))
 
+;; intersection
+
+(check (=
+        (multiset-of (Num 2) (Num 2) (Num 3))
+        (multiset-intersection (multiset-of (Num 1) (Num 2) (Num 2) (Num 3)) (multiset-of (Num 2) (Num 2) (Num 3) (Num 4)))
+))
+
+
+;; Subtraction swapped
+
+(check (=
+        (multiset-of (Num 1) (Num 2))
+        (multiset-subtract-swapped (multiset-of (Num 3)) (multiset-of (Num 1) (Num 2) (Num 3)))
+    ))
 
 ;; contains and not contains
 (check (multiset-contains xs (Num 1)))

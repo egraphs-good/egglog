@@ -1,7 +1,7 @@
 (datatype Math
     (Diff Math Math)
     (Integral Math Math)
-    
+
     (Add Math Math)
     (Sub Math Math)
     (Mul Math Math)
@@ -9,10 +9,10 @@
     (Pow Math Math)
     (Ln Math)
     (Sqrt Math)
-    
+
     (Sin Math)
     (Cos Math)
-    
+
     (Const i64)
     (Var String))
 
@@ -48,8 +48,8 @@
 (rewrite (Integral (Sin x) x) (Mul (Const -1) (Cos x)))
 (rewrite (Integral (Add f g) x) (Add (Integral f x) (Integral g x)))
 (rewrite (Integral (Sub f g) x) (Sub (Integral f x) (Integral g x)))
-(rewrite (Integral (Mul a b) x) 
-(Sub (Mul a (Integral b x)) 
+(rewrite (Integral (Mul a b) x)
+(Sub (Mul a (Integral b x))
     (Integral (Mul (Diff x a) (Integral b x)) x)))
 (Integral (Ln (Var "x")) (Var "x"))
 (Integral (Add (Var "x") (Cos (Var "x"))) (Var "x"))
@@ -64,7 +64,7 @@
                             (Div (Sub (Const 1)
                                     (Sqrt (Var "five")))
                                 (Const 2))))
-(run 11)
+(run 20)
 (print-size Add)
 (print-size Mul)
 
