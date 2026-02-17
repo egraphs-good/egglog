@@ -19,7 +19,7 @@ doctest:
 
 # update insta snapshots for all tests and cause them to pass even if they differ
 insta-test:
-	cargo insta test --test-runner nextest --release --workspace
+	cargo insta test --test-runner nextest --release --workspace  --unreferenced reject
 
 nits:
 	@rustup component add clippy

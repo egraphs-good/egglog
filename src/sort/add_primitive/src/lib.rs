@@ -4,6 +4,45 @@ use syn::parse::{Parse, ParseStream, Result};
 use syn::punctuated::Punctuated;
 use syn::{Expr, Ident, LitStr, Token, braced, bracketed, parenthesized, parse_macro_input};
 
+/// This macro lets the user declare custom egglog primitives with explicit validators.
+/// It combines primitive registration with a custom validator function.
+/// See [`PrimitiveValidator`] for details on the validator function signature.
+///
+/// # Example
+/// ```rust,ignore
+/// add_primitive_with_validator!(
+///     eg,
+///     "custom-op" = |a: Value| -> Value { a },
+///     |termdag, lhs| {
+///         // Custom validation logic
+///         None
+///     }
+/// );
+/// ```
+#[proc_macro]
+pub fn add_primitive_with_validator(input: TokenStream) -> TokenStream {
+    let parsed = parse_macro_input!(input as AddPrimitiveWithValidator);
+    build_add_primitive_impl(parsed.primitive, Some(parsed.validator))
+}
+
+/// Parses an `AddPrimitive` followed by a comma and a validator expression.
+struct AddPrimitiveWithValidator {
+    primitive: AddPrimitive,
+    validator: Expr,
+}
+
+impl Parse for AddPrimitiveWithValidator {
+    fn parse(input: ParseStream) -> Result<Self> {
+        let primitive = input.parse()?;
+        input.parse::<Token![,]>()?;
+        let validator = input.parse()?;
+        Ok(AddPrimitiveWithValidator {
+            primitive,
+            validator,
+        })
+    }
+}
+
 /// This macro lets the user declare custom egglog primitives.
 /// It supports a few special features:
 ///
@@ -33,6 +72,10 @@ use syn::{Expr, Ident, LitStr, Token, braced, bracketed, parenthesized, parse_ma
 ///   `T` must be `Clone` and `'static`.
 #[proc_macro]
 pub fn add_primitive(input: TokenStream) -> TokenStream {
+    build_add_primitive_impl(parse_macro_input!(input), None)
+}
+
+fn build_add_primitive_impl(parsed: AddPrimitive, validator: Option<Expr>) -> TokenStream {
     // If you're trying to read this code, you should read the big
     // `quote!` block at the bottom of this function first. Trying
     // to parse all the intermediate gobbledygook is going to be
@@ -48,7 +91,7 @@ pub fn add_primitive(input: TokenStream) -> TokenStream {
         is_fallible,
         ret,
         body,
-    } = parse_macro_input!(input);
+    } = parsed;
 
     // Create a new field name for the `Prim` struct to hold the return sort.
     // (We reuse the closure argument names for the argument sorts.)
@@ -191,6 +234,14 @@ pub fn add_primitive(input: TokenStream) -> TokenStream {
     };
 
     // This is the big `quote!` block that ties everything together.
+    let add_call = match validator {
+        None => quote!(eg.add_primitive(#prim_use);),
+        Some(validator_expr) => quote!(eg.add_primitive_with_validator(
+            #prim_use,
+            Some(::std::sync::Arc::new(#validator_expr))
+        );),
+    };
+
     quote! {{
         #[allow(unused_imports)] use ::egglog::{*, ast::*, constraint::*};
         #[allow(unused_imports)] use ::std::{any::TypeId, sync::Arc};
@@ -213,7 +264,7 @@ pub fn add_primitive(input: TokenStream) -> TokenStream {
         }
 
         let eg: &mut EGraph = #eg;
-        eg.add_primitive(#prim_use);
+        #add_call
     }}
     .into()
 }
@@ -390,5 +441,140 @@ impl Parse for Arrow {
         } else {
             Err(input.error("expected -> or -?>"))
         }
+    }
+}
+
+/// This macro lets the user declare literal primitives with automatic validator generation.
+/// It automatically generates validators by converting between Rust values and Literal types.
+///
+/// # Example
+/// ```rust,ignore
+/// add_literal_prim!(eg, "not" = |a: bool| -> bool { !a });
+/// add_literal_prim!(eg, "+" = |a: i64, b: i64| -> i64 { a + b });
+/// add_literal_prim!(eg, "<" = |a: i64, b: i64| -> bool { a < b });
+/// ```
+#[proc_macro]
+pub fn add_literal_prim(input: TokenStream) -> TokenStream {
+    // Parse the input using the same structure as add_primitive
+    let parsed = parse_macro_input!(input as AddPrimitive);
+
+    // Varargs not supported for literal primitives
+    if parsed.is_varargs {
+        return syn::Error::new_spanned(
+            &parsed.name,
+            "varargs not supported for literal primitives",
+        )
+        .to_compile_error()
+        .into();
+    }
+
+    // Context not supported for literal primitives
+    if parsed.context.0.is_some() {
+        return syn::Error::new_spanned(
+            &parsed.name,
+            "context not supported for literal primitives",
+        )
+        .to_compile_error()
+        .into();
+    }
+
+    // Check for polymorphic types
+    for arg in &parsed.args {
+        if arg.t.cast.is_none() {
+            return syn::Error::new_spanned(
+                &arg.x,
+                "polymorphic types not supported for literal primitives",
+            )
+            .to_compile_error()
+            .into();
+        }
+    }
+
+    if parsed.ret.cast.is_none() {
+        return syn::Error::new_spanned(
+            &parsed.name,
+            "polymorphic return type not supported for literal primitives",
+        )
+        .to_compile_error()
+        .into();
+    }
+
+    // Generate the validator body
+    let validator_body =
+        generate_literal_validator(&parsed.args, &parsed.ret, &parsed.body, parsed.is_fallible);
+
+    // Create the validator expression
+    let validator_expr = syn::parse2::<Expr>(quote! {
+        |termdag: &mut ::egglog::TermDag, args: &[::egglog::TermId]| -> Option<::egglog::TermId> {
+            use egglog::termdag::Term;
+            use egglog_ast::generic_ast::Literal;
+            Some({
+                #validator_body
+            })
+        }
+    })
+    .unwrap();
+
+    // Use the shared implementation with the validator
+    build_add_primitive_impl(parsed, Some(validator_expr))
+}
+
+// Helper function to generate literal validator that computes results
+fn generate_literal_validator(
+    args: &[Arg],
+    ret: &Type,
+    body: &Expr,
+    is_fallible: bool,
+) -> quote::__private::TokenStream {
+    // Generate extraction code for arguments
+    let arg_extracts = args.iter().enumerate().map(|(i, arg)| {
+        let x = &arg.x;
+        if let Some((ty, _)) = &arg.t.cast {
+            quote! {
+                let #x = if let Term::Lit(lit) = termdag.get(args[#i]) {
+                    match <#ty as egglog::prelude::LiteralConvertible>::from_literal(&lit) {
+                        Some(val) => val,
+                        None => panic!("Failed to extract literal for argument {}", #i),
+                    }
+                } else {
+                    panic!("Argument {} is not a literal", #i);
+                };
+            }
+        } else {
+            quote!(panic!("Polymorphic arguments not supported for literal primitives");)
+        }
+    });
+
+    // Generate converter for return value
+    let ret_conv = if let Some((ty, _)) = &ret.cast {
+        quote!(<#ty as egglog::prelude::LiteralConvertible>::to_literal)
+    } else {
+        quote!(|_| panic!("Polymorphic types not supported for literal primitives"))
+    };
+
+    // Generate the body execution and result creation
+    let body_exec = if is_fallible {
+        quote! {
+            let result: Option<_> = #body;
+            match result {
+                Some(result) => {
+                    let result_lit = #ret_conv(result);
+                    termdag.lit(result_lit)
+                }
+                None => panic!("Primitive operation failed"),
+            }
+        }
+    } else {
+        quote! {
+            let result = #body;
+            let result_lit = #ret_conv(result);
+            termdag.lit(result_lit)
+        }
+    };
+
+    // Put it all together
+    quote! {
+        #(#arg_extracts)*
+        #body_exec
     }
 }

@@ -105,7 +105,7 @@ where
 /// Creates an implication constraint that activates when all watch variables are assigned.
 /// The constraint function is called with the values of the watch variables to generate the actual constraint.
 pub fn implies<Var, Value>(
-    name: String,
+    out: ResolvedAtomTerm,
     watch_vars: Vec<Var>,
     constraint: DelayedConstraintFn<Var, Value>,
 ) -> Box<dyn Constraint<Var, Value>>
@@ -114,7 +114,7 @@ where
     Value: Clone + Debug + 'static,
 {
     Box::new(Implies {
-        name,
+        out,
         watch_vars,
         constraint: DelayedConstraint::Delayed(constraint),
     })
@@ -130,7 +130,7 @@ enum DelayedConstraint<Var, Value> {
 
 #[derive(Clone)]
 struct Implies<Var, Value> {
-    name: String,
+    out: ResolvedAtomTerm,
     watch_vars: Vec<Var>,
     constraint: DelayedConstraint<Var, Value>,
 }
@@ -173,7 +173,7 @@ where
             .map(|v| format!("{:?}", v))
             .collect::<Vec<_>>()
             .join(", ");
-        format!("{} => {}({})", vars, self.name, vars)
+        format!("{} => {:?}({})", vars, self.out, vars)
     }
 }
 
@@ -914,7 +914,7 @@ fn get_atom_application_constraints(
     // primitive atom constraints
     if let Some(primitives) = type_info.get_prims(head) {
         for p in primitives {
-            let constraints = p.0.get_type_constraints(span).get(args, type_info);
+            let constraints = p.primitive.get_type_constraints(span).get(args, type_info);
             xor_constraints.push(constraints);
         }
     }
@@ -1148,7 +1148,7 @@ pub(crate) fn grounded_check(
                 let (out, inp) = atom.args.split_last().unwrap();
                 let out = out.clone();
                 problem.constraints.push(implies(
-                    format!("grounded_{:?}", out),
+                    out.clone(),
                     inp.to_vec(),
                     Rc::new(move |_| assign(out.clone(), ())),
                 ));

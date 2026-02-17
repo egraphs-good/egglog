@@ -58,13 +58,13 @@
 
 (run 100)
 
-(let test1 (B 7 1 (NonTerm "S")))
+(let $test1 (B 7 1 (NonTerm "S")))
 
 (check (P 7 1 (NonTerm "S")))
 (fail (check (P 7 1 (NonTerm "VP"))))
 (fail (check (P 7 1 (NonTerm ""))))
 
-(extract test1)
+(extract $test1)
 
 (pop)
 
@@ -90,8 +90,8 @@
 (run 100)
 (check (P 5 1 (NonTerm "S")))
 (fail (check (P 5 1 (NonTerm "B"))))
-(let test2 (B 5 1 (NonTerm "S")))
-(extract test2 10)
+(let $test2 (B 5 1 (NonTerm "S")))
+(extract $test2 10)
 
 (pop)
 
@@ -109,7 +109,7 @@
 (fail (check (P 5 1 (NonTerm "B"))))
 (fail (check (P 5 1 (NonTerm ""))))
 (fail (check (P 5 1 (NonTerm "unrelated"))))
-(let test3 (B 5 1 (NonTerm "S")))
-(extract test3 10)
+(let $test3 (B 5 1 (NonTerm "S")))
+(extract $test3 10)
 
 (pop)

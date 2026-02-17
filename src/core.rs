@@ -18,7 +18,7 @@ use crate::{constraint::grounded_check, *};
 use egglog_ast::generic_ast::{Change, GenericAction, GenericActions, GenericExpr};
 use egglog_ast::span::Span;
 use egglog_ast::util::ListDisplay;
-use typechecking::{FuncType, PrimitiveWithId, TypeError};
+use typechecking::{FuncType, PrimitiveValidator, PrimitiveWithId, TypeError};
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub(crate) enum HeadOrEq<Head> {
@@ -42,7 +42,7 @@ impl<Head> HeadOrEq<Head> {
 
 #[derive(Debug, Clone)]
 pub struct SpecializedPrimitive {
-    primitive: PrimitiveWithId,
+    prim_with_id: PrimitiveWithId,
     input: Vec<ArcSort>,
     output: ArcSort,
 }
@@ -50,7 +50,7 @@ pub struct SpecializedPrimitive {
 impl SpecializedPrimitive {
     /// Get the name of this primitive
     pub fn name(&self) -> &str {
-        self.primitive.0.name()
+        self.prim_with_id.primitive.name()
     }
 
     /// Get the output sort of this primitive
@@ -65,13 +65,18 @@ impl SpecializedPrimitive {
 
     /// Get the external function ID of this primitive
     pub(crate) fn external_id(&self) -> ExternalFunctionId {
-        self.primitive.1
+        self.prim_with_id.id
+    }
+
+    /// Get the validator function of this primitive, if any
+    pub fn validator(&self) -> Option<&PrimitiveValidator> {
+        self.prim_with_id.validator.as_ref()
     }
 }
 
 impl PartialEq for SpecializedPrimitive {
     fn eq(&self, other: &Self) -> bool {
-        self.primitive.1 == other.primitive.1
+        self.prim_with_id.id == other.prim_with_id.id
     }
 }
 
@@ -79,7 +84,7 @@ impl Eq for SpecializedPrimitive {}
 
 impl Hash for SpecializedPrimitive {
     fn hash<H: Hasher>(&self, state: &mut H) {
-        self.primitive.1.hash(state);
+        self.prim_with_id.id.hash(state);
     }
 }
 
@@ -151,7 +156,7 @@ impl ResolvedCall {
                 if primitive.accept(types, typeinfo) {
                     let (out, inp) = types.split_last().unwrap();
                     resolved_call.push(ResolvedCall::Primitive(SpecializedPrimitive {
-                        primitive: primitive.clone(),
+                        prim_with_id: primitive.clone(),
                         input: inp.to_vec(),
                         output: out.clone(),
                     }));
@@ -409,7 +414,7 @@ impl std::fmt::Display for Query<ResolvedCall, String> {
                 writeln!(
                     f,
                     "({} {})",
-                    filter.head.primitive.0.name(),
+                    filter.head.prim_with_id.primitive.name(),
                     ListDisplay(&filter.args, " ")
                 )?;
             }
@@ -1105,7 +1110,7 @@ impl ResolvedRuleExt for ResolvedRule {
         let value_eq = &typeinfo.get_prims("value-eq").unwrap()[0];
         let value_eq = |at1: &ResolvedAtomTerm, at2: &ResolvedAtomTerm| {
             ResolvedCall::Primitive(SpecializedPrimitive {
-                primitive: value_eq.clone(),
+                prim_with_id: value_eq.clone(),
                 input: vec![at1.output(), at2.output()],
                 output: UnitSort.to_arcsort(),
             })

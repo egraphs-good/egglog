@@ -1,0 +1,14 @@
+---
+source: tests/files.rs
+expression: snapshot_content
+---
+(
+   (Fib 7) -> (Fib 7)
+   (Fib 6) -> (Fib 6)
+   (Fib 5) -> (Fib 5)
+   (Fib 3) -> (Fib 3)
+   (Fib 4) -> (Fib 4)
+   (Fib 1) -> (Fib 1)
+   (Fib 2) -> (Fib 2)
+   (Fib 0) -> (Fib 0)
+)

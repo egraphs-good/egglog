@@ -55,6 +55,12 @@ struct Args {
     /// Run the terms encoding of equality saturation
     #[clap(long)]
     term_encoding: bool,
+    /// Run with proof generation enabled
+    #[clap(long)]
+    proofs: bool,
+    /// Enable proof testing, turning all `check` statements into `prove` statements
+    #[clap(long)]
+    proof_testing: bool,
 }
 
 /// Start a command-line interface for the E-graph.
@@ -73,6 +79,15 @@ pub fn cli(mut egraph: EGraph) {
 
     if args.term_encoding {
         egraph = egraph.with_term_encoding_enabled();
+    }
+
+    if args.proofs {
+        egraph = egraph.with_proofs_enabled();
+    }
+
+    if args.proof_testing {
+        egraph = egraph.with_proofs_enabled();
+        egraph = egraph.with_proof_testing();
     }
 
     rayon::ThreadPoolBuilder::new()
@@ -248,7 +263,9 @@ where
     if mode == RunMode::ShowDesugaredEgglog {
         return Ok(match egraph.desugar_program(filename, command) {
             Ok(desugared) => {
-                for line in desugared {
+                let sanitized = sanitize_internal_names(&desugared);
+
+                for line in sanitized {
                     writeln!(output, "{line}")?;
                 }
                 None

@@ -1,0 +1,12 @@
+(relation Strings (String String))
+
+(Strings "hello" "world")
+
+(rule ((Strings a b)
+       (= res (+ a " " b)))
+      ((Strings "found" "hello world"))
+      :name "r1")
+
+(run 1)
+
+(prove (Strings "found" "hello world"))

@@ -43,21 +43,21 @@
 ; l4: o2.f = o1;
 ; l5: Object r = o3.f;
 
-(let A (Class "A"))
-(let B (Class "B"))
-(let f (Field "f"))
+(let $A (Class "A"))
+(let $B (Class "B"))
+(let $f (Field "f"))
 
-(let l1 (New "o1" A))
-(let l2 (New "o2" B))
-(let l3 (Assign "o3" "o2"))
-(let l4 (Store "o2" f "o1"))
-(let l5 (Load "r" "o3" f))
+(let $l1 (New "o1" $A))
+(let $l2 (New "o2" $B))
+(let $l3 (Assign "o3" "o2"))
+(let $l4 (Store "o2" $f "o1"))
+(let $l5 (Load "r" "o3" $f))
 
 (run 3)
 
-(check (VarPointsTo "o1" A))
-(check (VarPointsTo "o2" B))
+(check (VarPointsTo "o1" $A))
+(check (VarPointsTo "o2" $B))
 
-(check (VarPointsTo "o3" B))
-(check (HeapPointsTo B f A))
-(check (VarPointsTo "r" A))
+(check (VarPointsTo "o3" $B))
+(check (HeapPointsTo $B $f $A))
+(check (VarPointsTo "r" $A))
