@@ -162,5 +162,24 @@ make coverage
 ```
 
 This will generate a coverage report using `nextest` and output it to `lcov.info`. The coverage report is automatically generated and uploaded to [Codecov](https://codecov.io/) in CI for all pull requests and commits to main.
-
 To visualize coverage in VS Code, we recommend using the [Coverage Gutters](https://marketplace.visualstudio.com/items?itemName=ryanluker.vscode-coverage-gutters) extension. After running `make coverage`, click "Watch" in the status bar to see coverage highlighted in your editor.
+
+
+
+## Contributing
+
+We are open to new contributors helping with egglog!
+
+A group of core egglog developers are responsible for final decisions on what code will be accepted.
+
+We organize our issues into three stages:
+
+1. [`status:needs discussion`](https://github.com/egraphs-good/egglog/issues?q=state%3Aopen%20label%3A%22status%3Aneeds%20discussion%22): More work refining this should happen on or offline, before its ready to be considered.
+2. [`status: needs decision`](https://github.com/egraphs-good/egglog/issues?q=state%3Aopen%20label%3A%22status%3Aneeds%20decision%22): There is a concrete proposal here which needs to be considered by the core developers.
+3. [`status: ready for work`](https://github.com/egraphs-good/egglog/issues?q=state%3Aopen%20label%3A%22status%3Aready%20for%20work%22): This is ready to be implemented and a PR to address it would be supported.
+
+So if you are looking to find an issue to solve, looking for one that is `status: ready for work` will be more likely to result in a PR that could be accepted. We also try to maintain a set of [`good first issue`](https://github.com/egraphs-good/egglog/issues?q=state%3Aopen%20label%3A%22good%20first%20issue%22)s which may be easier to approach.
+
+The core developers will regularly review [all open un-triaged issues](https://github.com/egraphs-good/egglog/issues?q=state%3Aopen%20no%3Alabel) to categorize them.
+
+So if you are unsure if a feature is desired, feel free to open an issue on it first to get feedback before spending time implementing it. 
