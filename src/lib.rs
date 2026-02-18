@@ -155,7 +155,7 @@ impl std::fmt::Display for CommandOutput {
                     }
                     write!(f, "({} {})", name, size)?;
                     if i < names_and_sizes.len() - 1 {
-                        write!(f, "\n")?;
+                        writeln!(f)?;
                     }
                 }
                 writeln!(f, ")")
