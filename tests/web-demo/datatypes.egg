@@ -8,4 +8,4 @@
         (True)
         (False)))
 
-(let expr (Add (Sum (vec-of (B (True)) (B (False)))) (B (True))))
+(let $expr (Add (Sum (vec-of (B (True)) (B (False)))) (B (True))))

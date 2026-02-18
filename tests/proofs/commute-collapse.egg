@@ -1,0 +1,22 @@
+
+(datatype Math
+  (Add i64 i64)
+  (Num i64))
+
+;; Commutativity
+(rule ((Add a b)) ((union (Add a b) (Add b a))) :name "rw1")
+
+;; Constant folding with an extra condition, forcing commute first
+(rule ((Add a b)
+       (> a b))
+      ((union (Add a b) (Num (+ a b)))) :name "rw2")
+
+;; 2 + 3
+(let start (Add 2 3))
+
+(run 2)
+
+;; 2 + 3 = 5 by
+;; 2 + 3 = 3 + 2 (commute)
+;; 3 + 2 = 5 (constant fold)
+(prove (= (Add 2 3) (Num 5)))

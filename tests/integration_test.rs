@@ -1,4 +1,8 @@
-use egglog::{extract::DefaultCost, *};
+use egglog::{
+    ast::{ResolvedCommand, sanitize_internal_names},
+    extract::DefaultCost,
+    *,
+};
 use egglog_ast::span::{RustSpan, Span};
 
 #[test]
@@ -36,7 +40,7 @@ fn globals_missing_prefix_warns_for_prefixed_pattern_variable_by_default() {
         assert!(
             bodies
                 .iter()
-                .any(|body| body.contains("Global `x` should start with `$`")),
+                .any(|body| body.contains("Non-global `$x` should not start with `$`")),
             "expected warning about missing global prefix, got logs: {:?}",
             bodies
         );
@@ -57,7 +61,7 @@ fn globals_missing_prefix_warns_for_prefixed_rule_let_by_default() {
         assert!(
             bodies
                 .iter()
-                .any(|body| body.contains("Global `y` should start with `$`")),
+                .any(|body| body.contains("Non-global `$y` should not start with `$`")),
             "expected warning about missing global prefix, got logs: {:?}",
             bodies
         );
@@ -186,6 +190,24 @@ fn primitive_error_in_run_schedule_returns_error() {
 
     let err = egraph.parse_and_run_program(None, program).unwrap_err();
     assert!(err.to_string().contains("call of primitive << failed"));
+}
+
+#[test]
+fn prove_exists_reports_query_mismatch() {
+    let _ = env_logger::builder().is_test(true).try_init();
+
+    let mut egraph = EGraph::new_with_proofs();
+    let program = r#"
+        (relation R (i64))
+    (prove (R x))
+    "#;
+
+    let err = egraph.parse_and_run_program(None, program).unwrap_err();
+    let msg = err.to_string();
+    assert!(
+        msg.contains("Could not find a proof due to query not matching"),
+        "expected helpful error message, got {msg}"
+    );
 }
 
 #[test]
@@ -531,6 +553,10 @@ fn test_subsumed_unextractable_action_extract() {
             "#,
         )
         .unwrap();
+
+    let CommandOutput::ExtractBest(_term_dag, _, _term_id) = &outputs[0] else {
+        panic!("Should get extract best command output");
+    };
     // Originally should give back numeric term
     assert!(match &outputs[0] {
         CommandOutput::ExtractBest(termdag, _, term_id) => {
@@ -971,4 +997,49 @@ fn test_serialize_message_max_calls_per_function() {
     });
     assert!(!serialize_output.is_complete());
     assert_eq!(serialize_output.omitted_description(), "Truncated: mk\n");
+}
+
+#[test]
+fn math_term_encoding_roundtrip() {
+    fn render_program(commands: &[ResolvedCommand]) -> String {
+        let text = sanitize_internal_names(commands)
+            .iter()
+            .map(|cmd| cmd.to_string())
+            .collect::<Vec<_>>()
+            .join("\n");
+        format!("{text}\n")
+    }
+
+    let path = std::path::Path::new("tests/web-demo/math.egg");
+    let source = std::fs::read_to_string(path)
+        .unwrap_or_else(|err| panic!("failed to read {}: {err}", path.display()));
+
+    // 1. Desugar the program with term encoding enabled.
+    let mut egraph = EGraph::new_with_term_encoding();
+    let desugared_once = egraph
+        .desugar_program(Some(path.display().to_string()), &source)
+        .expect("term-encoding desugaring should succeed");
+    let text_once = render_program(&desugared_once);
+
+    // 2. Parse and desugar the rendered program with a fresh e-graph.
+    let mut egraph = EGraph::default();
+    let desugared_twice = egraph
+        .desugar_program(None, &text_once)
+        .expect("second desugaring should succeed");
+    let text_twice = render_program(&desugared_twice);
+
+    // 3. Parse and desugar again to ensure stability using another fresh e-graph.
+    let mut egraph = EGraph::default();
+    let desugared_thrice = egraph
+        .desugar_program(None, &text_twice)
+        .expect("third desugaring should succeed");
+    let text_thrice = render_program(&desugared_thrice);
+
+    assert_eq!(text_twice, text_thrice, "desugaring should stabilize");
+
+    // 4. Run the stabilized program using term encoding.
+    let mut runner = EGraph::default();
+    runner
+        .parse_and_run_program(None, &text_thrice)
+        .expect("final program should execute successfully");
 }

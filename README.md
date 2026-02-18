@@ -8,12 +8,14 @@
     <img src="https://img.shields.io/endpoint?url=https://codspeed.io/badge.json" alt="CodSpeed Badge"/></a>
 <a href="https://egraphs.zulipchat.com/#narrow/stream/375765-egglog">
     <img src="https://img.shields.io/badge/zulip-join%20chat-blue" alt="Zulip Chat"/></a>
+<a href="https://codecov.io/gh/egraphs-good/egglog" >
+    <img src="https://codecov.io/gh/egraphs-good/egglog/graph/badge.svg?token=7FWFBSKLQE"/></a>
 
 This is the repo for the core of the `egglog` engine, which combines the power of equality saturation and Datalog.
 
-For getting started, try out the [egglog tutorial](https://github.com/egraphs-good/egglog-tutorial)!
+For getting started, try out the [egglog tutorial](https://egraphs-good.github.io/egglog-tutorial)!
 
-You also can [run egglog in your web browser](https://egraphs-good.github.io/egglog/) or check out [the documentation](https://egraphs-good.github.io/egglog/docs/egglog).
+You can also [run egglog in your web browser](https://egraphs-good.github.io/egglog/) or check out [the documentation](https://egraphs-good.github.io/egglog/docs/egglog).
 
 For a "battery-included" experience, we recommend [egglog-experimental](https://github.com/egraphs-good/egglog-experimental). It provides more features through additional `egglog` plugins.
 
@@ -55,7 +57,7 @@ One can also use `egglog` as a Rust library by adding the following to your `Car
 
 ```
 [dependencies]
-egglog = "1.0.0"
+egglog = "2.0.0"
 ```
 
 See also the [Python binding](https://github.com/egraphs-good/egglog-python) for using `egglog` in Python.
@@ -74,6 +76,18 @@ The community has maintained egglog extensions for IDEs. However, they are outda
 
 * [@hatoo](https://github.com/hatoo) maintains an [egglog-language extension](https://marketplace.visualstudio.com/items?itemName=hatookov.egglog-language) in VS Code (just search for "egglog" in VS Code). (Outdated)
 * [@segeljakt](https://github.com/segeljakt) maintains a [Neovim plugin](https://github.com/segeljakt/tree-sitter-egg) for egglog using tree-sitter. (Outdated)
+
+## Parallelism
+
+egglog has support to run programs in parallel
+via the `-j` flag. This support is relatively new and most users just run
+egglog single-threaded; the codspeed benchmarks only evaluate single-threaded
+performance. However, please take care not to pessimize parallel performance
+where possible (e.g. by adding coarse-grained locks).
+
+We use rayon's global thread pool for parallelism, and the number of threads used
+is set to `1` by default when egglog's CLI is run. If you use egglog as a library,
+you can control the level of parallelism by setting rayon's `num_threads`.
 
 ## Benchmarks
 
@@ -104,21 +118,9 @@ samply record ./target/profiling/egglog tests/extract-vec-bench.egg
 env RUST_LOG=error samply record ./target/profiling/egglog --no-messages tests/extract-vec-bench.egg
 ```
 
-## Parallelism
+### CodSpeed
 
-egglog has support to run programs in parallel
-via the `-j` flag. This support is relatively new and most users just run
-egglog single-threaded; the codspeed benchmarks only evaluate single-threaded
-performance. However, please take care not to pessimize parallel performance
-where possible (e.g. by adding coarse-grained locks).
-
-We use rayon's global thread pool for parallelism, and the number of threads used
-is set to `1` by default when egglog's CLI is run. If you use egglog as a library, 
-you can control the level of parallelism by setting rayon's `num_threads`.
-
-### Codspeed specifics
-
-We run all of our "examples" [as benchmarks in codspeed](https://codspeed.io/egraphs-good/egglog).
+We run all of our "examples" [as benchmarks in CodSpeed](https://codspeed.io/egraphs-good/egglog).
 These are in CI for every commit in main and for all PRs. It will run the
 examples with extra instrumentation added so that it can capture a single trace
 of the CPU interactions
@@ -135,14 +137,33 @@ Since many of the shorter running benchmarks have unstable timings due to non
 deterministic performance ([like in the memory
 allocator](https://github.com/oxc-project/backlog/issues/89)), we
 ["ignore"](https://docs.codspeed.io/features/ignoring-benchmarks/) them in
-codspeed. That way, we still capture their performance, but their timings don't
+CodSpeed. That way, we still capture their performance, but their timings don't
 show up in our reports by default.
 
-We use 50ms as our cutoff currently, any benchmarks shorter than that are
+We use 50 ms as our cutoff currently, any benchmarks shorter than that are
 ignored. This number was selected to try to ignore any benchmarks with have
 changes > 1% when they haven't been modified. Note that all the ignoring is
 done manually, so if you add another example that's short, an admin on the
-codspeed project will need to manually ignore it.
+CodSpeed project will need to manually ignore it.
+
+
+## Code Coverage
+
+To generate code coverage reports locally, first install `cargo-llvm-cov`:
+
+```bash
+cargo install cargo-llvm-cov
+```
+
+Then run:
+
+```bash
+make coverage
+```
+
+This will generate a coverage report using `nextest` and output it to `lcov.info`. The coverage report is automatically generated and uploaded to [Codecov](https://codecov.io/) in CI for all pull requests and commits to main.
+To visualize coverage in VS Code, we recommend using the [Coverage Gutters](https://marketplace.visualstudio.com/items?itemName=ryanluker.vscode-coverage-gutters) extension. After running `make coverage`, click "Watch" in the status bar to see coverage highlighted in your editor.
+
 
 
 ## Contributing

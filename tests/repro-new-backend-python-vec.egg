@@ -11,7 +11,7 @@
 (sort Vec_Int (Vec Int))
 (constructor TupleInt_from_vec (Vec_Int) TupleInt)
 (constructor Int___init__ (i64) Int)
-(let %__check_eq_x (TupleTupleInt_product (TupleTupleInt_from_vec (vec-of (TupleInt_from_vec (vec-of (Int___init__ 0) (Int___init__ 1))) (TupleInt_from_vec (vec-of (Int___init__ 4) (Int___init__ 5)))))))
+(let $%__check_eq_x (TupleTupleInt_product (TupleTupleInt_from_vec (vec-of (TupleInt_from_vec (vec-of (Int___init__ 0) (Int___init__ 1))) (TupleInt_from_vec (vec-of (Int___init__ 4) (Int___init__ 5)))))))
 (ruleset array_api_ruleset)
 (constructor i-TupleInt__-Int_i (TupleInt Int) TupleInt)
 (rewrite (i-TupleInt__-Int_i i _) i :subsume :ruleset array_api_ruleset)
