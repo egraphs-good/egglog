@@ -747,3 +747,148 @@ impl<C: Cost + Ord + Eq + Clone + Debug> Extractor<C> {
         )
     }
 }
+
+impl Function {
+    /// For view tables (with term_constructor), the effective output sort is the last input column.
+    /// For regular tables, it's the output sort.
+    /// This is used by extraction to determine which sort a table produces values for.
+    pub(crate) fn extraction_output_sort(&self) -> &ArcSort {
+        if self.decl.term_constructor.is_some() {
+            self.schema.input.last().unwrap()
+        } else {
+            &self.schema.output
+        }
+    }
+
+    /// Returns the number of children for extraction purposes.
+    /// For view tables, this excludes the last column (the e-class).
+    pub(crate) fn extraction_num_children(&self) -> usize {
+        if self.decl.term_constructor.is_some() {
+            self.schema.input.len() - 1
+        } else {
+            self.schema.input.len()
+        }
+    }
+
+    /// Returns the name to use when building terms during extraction.
+    /// For view tables, this is the term_constructor name.
+    pub(crate) fn extraction_term_name(&self) -> &str {
+        self.decl
+            .term_constructor
+            .as_ref()
+            .unwrap_or(&self.decl.name)
+    }
+
+    /// Returns the index of the output value in a row for extraction purposes.
+    /// For view tables, the e-class is the last input column (second-to-last in the row).
+    /// For regular tables, it's the last column (the actual output).
+    pub(crate) fn extraction_output_index(&self) -> usize {
+        if self.decl.term_constructor.is_some() {
+            // For view tables: input is [children..., eclass], output is view_sort
+            // Row is [children..., eclass, view_sort]
+            // We want eclass which is at index input.len() - 1
+            self.schema.input.len() - 1
+        } else {
+            // For regular tables: row is [inputs..., output]
+            self.schema.input.len()
+        }
+    }
+}
+
+impl EGraph {
+    /// Extract a value to a [`TermDag`] and [`TermId`] in the [`TermDag`] using the default cost model.
+    /// See also [`EGraph::extract_value_with_cost_model`] for more control.
+    pub fn extract_value(
+        &self,
+        sort: &ArcSort,
+        value: Value,
+    ) -> Result<(TermDag, TermId, DefaultCost), Error> {
+        self.extract_value_with_cost_model(sort, value, TreeAdditiveCostModel::default())
+    }
+
+    /// Extract a value to a [`TermDag`] and [`TermId`] in the [`TermDag`].
+    /// Note that the `TermDag` may contain a superset of the nodes referenced by the returned `TermId`.
+    /// See also [`EGraph::extract_value_to_string`] for convenience.
+    pub fn extract_value_with_cost_model<CM: CostModel<DefaultCost> + 'static>(
+        &self,
+        sort: &ArcSort,
+        value: Value,
+        cost_model: CM,
+    ) -> Result<(TermDag, TermId, DefaultCost), Error> {
+        let extractor =
+            Extractor::compute_costs_from_rootsorts(Some(vec![sort.clone()]), self, cost_model);
+        let mut termdag = TermDag::default();
+        let (cost, term) = extractor.extract_best(self, &mut termdag, value).unwrap();
+        Ok((termdag, term, cost))
+    }
+
+    /// Extract a value to a string for printing.
+    /// See also [`EGraph::extract_value`] for more control.
+    pub fn extract_value_to_string(
+        &self,
+        sort: &ArcSort,
+        value: Value,
+    ) -> Result<(String, DefaultCost), Error> {
+        let (termdag, term, cost) = self.extract_value(sort, value)?;
+        Ok((termdag.to_string(term), cost))
+    }
+
+    /// For constructors and relations, the output column can be ignored
+    pub fn function_to_dag(
+        &self,
+        sym: &str,
+        n: usize,
+        include_output: bool,
+    ) -> Result<(Vec<TermId>, Option<Vec<TermId>>, TermDag), Error> {
+        let func = self
+            .functions
+            .get(sym)
+            .ok_or(TypeError::UnboundFunction(sym.to_owned(), span!()))?;
+        let mut rootsorts = func.schema.input.clone();
+        if include_output {
+            rootsorts.push(func.schema.output.clone());
+        }
+        let extractor = Extractor::compute_costs_from_rootsorts(
+            Some(rootsorts),
+            self,
+            TreeAdditiveCostModel::default(),
+        );
+
+        let mut termdag = TermDag::default();
+        let mut inputs: Vec<TermId> = Vec::new();
+        let mut output: Option<Vec<TermId>> = if include_output {
+            Some(Vec::new())
+        } else {
+            None
+        };
+
+        let extract_row = |row: egglog_bridge::FunctionRow| {
+            if inputs.len() < n {
+                // include subsumed rows
+                let mut children: Vec<TermId> = Vec::new();
+                for (value, sort) in row.vals.iter().zip(&func.schema.input) {
+                    let (_, term_id) = extractor
+                        .extract_best_with_sort(self, &mut termdag, *value, sort.clone())
+                        .unwrap_or_else(|| (0, termdag.var("Unextractable".into())));
+                    children.push(term_id);
+                }
+                inputs.push(termdag.app(sym.to_owned(), children));
+                if include_output {
+                    let value = row.vals[func.schema.input.len()];
+                    let sort = &func.schema.output;
+                    let (_, term) = extractor
+                        .extract_best_with_sort(self, &mut termdag, value, sort.clone())
+                        .unwrap_or_else(|| (0, termdag.var("Unextractable".into())));
+                    output.as_mut().unwrap().push(term);
+                }
+                true
+            } else {
+                false
+            }
+        };
+
+        self.backend.for_each_while(func.backend_id, extract_row);
+
+        Ok((inputs, output, termdag))
+    }
+}

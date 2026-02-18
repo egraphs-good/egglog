@@ -72,19 +72,16 @@ impl Run {
         // Debug mode enables parallelism which can lead to non-deterministic output ordering
         if !self.should_skip_snapshot() {
             match &result {
-                Ok(outputs)
-                    if outputs
-                        .iter()
-                        .any(|o| !matches!(o, CommandOutput::RunSchedule(..))) =>
-                {
+                Ok(outputs) => {
                     // Use base snapshot name (without desugar/term_encoding/proofs suffixes)
                     // so all variants compare against the same expected output
+                    let snapshot_name_across_treatments = self.snapshot_name_across_treatments();
+                    let snapshot_content_across_treatments =
+                        self.outputs_to_snapshot_preserved_across_treatments(outputs);
+
+                    // only assert snapshot if the snapshot is non-empty
                     // proof_testing has different output due to automatic prove-exists, so no snapshot for that
-                    if !self.proof_testing {
-                        let snapshot_name_across_treatments =
-                            self.snapshot_name_across_treatments();
-                        let snapshot_content_across_treatments =
-                            self.outputs_to_snapshot_preserved_across_treatments(outputs);
+                    if !snapshot_content_across_treatments.is_empty() && !self.proof_testing {
                         insta::assert_snapshot!(
                             snapshot_name_across_treatments,
                             snapshot_content_across_treatments
@@ -96,7 +93,6 @@ impl Run {
                     let name = self.name().to_string();
                     insta::assert_snapshot!(name, err_msg);
                 }
-                _ => {}
             }
         }
     }
