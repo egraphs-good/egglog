@@ -719,7 +719,8 @@ impl EGraph {
     }
 
     /// Print the size of a function. If no function name is provided,
-    /// print the size of all non-hidden functions in "name: len" pairs.
+    /// print the size of all non-hidden functions as an s-expression list of
+    /// `(name size)` pairs, e.g. `((name size) ...)`.
     pub fn print_size(&self, sym: Option<&str>) -> Result<CommandOutput, Error> {
         if let Some(sym) = sym {
             // First check if this is a term_constructor name that maps to a view table
