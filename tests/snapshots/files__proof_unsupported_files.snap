@@ -9,6 +9,7 @@ before-proofs.egg
 bignum.egg
 bool.egg
 complex-merge-prim.egg
+conflicting-merge-options.egg
 constructor_non_sort.egg
 container-rebuild.egg
 cyk.egg
