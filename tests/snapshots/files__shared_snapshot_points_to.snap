@@ -1,0 +1,12 @@
+---
+source: tests/files.rs
+expression: snapshot_content_across_treatments
+---
+((Assign 1)
+ (Class 2)
+ (Field 1)
+ (HeapPointsTo 1)
+ (Load 1)
+ (New 2)
+ (Store 1)
+ (VarPointsTo 4))

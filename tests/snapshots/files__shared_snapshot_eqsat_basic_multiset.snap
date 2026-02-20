@@ -1,0 +1,11 @@
+---
+source: tests/files.rs
+expression: snapshot_content_across_treatments
+---
+((Add 2)
+ (Mul 2)
+ (Num 3)
+ (Product 4)
+ (Sum 2)
+ (Var 1)
+ (tmp-fn 2))

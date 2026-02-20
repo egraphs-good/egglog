@@ -27,3 +27,7 @@ expression: snapshot_content_across_treatments
     t2
     (substitution (a 5)))
   0)
+((Add 1)
+ (Const 2)
+ (MathU 2)
+ (Mul 0))

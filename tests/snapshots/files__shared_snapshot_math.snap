@@ -1,0 +1,24 @@
+---
+source: tests/files.rs
+expression: snapshot_content_across_treatments
+---
+((Add 1128)
+ (Const 7)
+ (Cos 0)
+ (Diff 0)
+ (Div 0)
+ (Integral 0)
+ (Ln 0)
+ (MathU 45)
+ (Mul 367)
+ (Pow 0)
+ (Sin 0)
+ (Sqrt 0)
+ (Sub 2)
+ (Var 1)
+ (evals-to 12)
+ (is-const 7)
+ (is-const-or-distinct-var 0)
+ (is-const-or-distinct-var-demand 0)
+ (is-not-zero 6)
+ (is-sym 1))

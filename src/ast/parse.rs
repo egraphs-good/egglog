@@ -321,22 +321,53 @@ impl Parser {
                 datatypes: map_fallible(tail, self, Self::rec_datatype)?,
             }],
             "function" => match tail {
-                [name, inputs, output, rest @ ..] => vec![Command::Function {
-                    name: name.expect_atom("function name")?,
-                    schema: self.parse_schema(inputs, output)?,
-                    merge: match self.parse_options(rest)?.as_slice() {
-                        [(":no-merge", [])] => None,
-                        [(":merge", [e])] => Some(self.parse_expr(e)?),
-                        [] => {
+                [name, inputs, output, rest @ ..] => {
+                    let mut merge = None;
+                    let mut hidden = false;
+                    let mut let_binding = false;
+                    for (key, val) in self.parse_options(rest)? {
+                        match (key, val) {
+                            (":no-merge", []) => {
+                                if merge.is_some() {
+                                    return error!(
+                                        span,
+                                        "conflicting merge options: :no-merge and :merge cannot both be specified"
+                                    );
+                                }
+                                merge = Some(None);
+                            }
+                            (":merge", [e]) => {
+                                if merge.is_some() {
+                                    return error!(
+                                        span,
+                                        "conflicting merge options: :merge and :no-merge cannot both be specified"
+                                    );
+                                }
+                                merge = Some(Some(self.parse_expr(e)?));
+                            }
+                            (":internal-hidden", []) => hidden = true,
+                            (":internal-let", []) => let_binding = true,
+                            _ => return error!(span, "could not parse function options"),
+                        }
+                    }
+                    let merge = match merge {
+                        Some(m) => m,
+                        None => {
                             return error!(
                                 span,
                                 "functions are required to specify merge behaviour"
                             );
                         }
-                        _ => return error!(span, "could not parse function options"),
-                    },
-                    span,
-                }],
+                    };
+                    vec![Command::Function {
+                        name: name.expect_atom("function name")?,
+                        schema: self.parse_schema(inputs, output)?,
+                        merge,
+                        hidden,
+                        let_binding,
+                        span,
+                    }]
+                }
                 _ => {
                     let a = "(function <name> (<input sort>*) <output sort> :merge <expr>)";
                     let b = "(function <name> (<input sort>*) <output sort> :no-merge)";
@@ -353,10 +384,14 @@ impl Parser {
                     [name, inputs, output, rest @ ..] => {
                         let mut cost = None;
                         let mut unextractable = false;
+                        let mut hidden = false;
+                        let mut let_binding = false;
                         let mut term_constructor = None;
                         for (key, val) in self.parse_options(rest)? {
                             match (key, val) {
                                 (":unextractable", []) => unextractable = true,
+                                (":internal-hidden", []) => hidden = true,
+                                (":internal-let", []) => let_binding = true,
                                 (":cost", [c]) => cost = Some(c.expect_uint("cost")?),
                                 (":term-constructor", [tc]) => {
                                     term_constructor =
@@ -372,6 +407,8 @@ impl Parser {
                             schema: self.parse_schema(inputs, output)?,
                             cost,
                             unextractable,
+                            hidden,
+                            let_binding,
                             term_constructor,
                         }]
                     }

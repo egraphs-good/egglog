@@ -1,0 +1,8 @@
+---
+source: tests/files.rs
+expression: snapshot_content_across_treatments
+---
+((AU 21)
+ (Add 24)
+ (Num 3)
+ (Var 2))

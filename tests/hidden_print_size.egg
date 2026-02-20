@@ -1,0 +1,16 @@
+; Test that :internal-hidden constructors are excluded from print-size output
+
+(sort MySort)
+
+; A normal constructor - should show up in print-size
+(constructor Visible () MySort)
+
+; A hidden constructor - should NOT show up in print-size
+(constructor Hidden () MySort :internal-hidden)
+
+; Add some data
+(Visible)
+(Hidden)
+
+; print-size should only show Visible, not Hidden
+(print-size)

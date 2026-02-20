@@ -1,0 +1,7 @@
+---
+source: tests/files.rs
+expression: snapshot_content_across_treatments
+---
+((Add 6)
+ (Fib 8)
+ (Num 7))

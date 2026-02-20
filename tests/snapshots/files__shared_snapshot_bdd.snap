@@ -1,0 +1,11 @@
+---
+source: tests/files.rs
+expression: snapshot_content_across_treatments
+---
+((FalseConst 1)
+ (ITE 0)
+ (TrueConst 1)
+ (bddand 0)
+ (bddnot 0)
+ (bddor 0)
+ (bddxor 0))

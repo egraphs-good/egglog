@@ -1,0 +1,8 @@
+---
+source: tests/files.rs
+expression: snapshot_content_across_treatments
+---
+((Plus 14)
+ (S 6)
+ (Times 3)
+ (Z 1))

@@ -148,10 +148,20 @@ impl std::fmt::Display for CommandOutput {
         match self {
             CommandOutput::PrintFunctionSize(size) => writeln!(f, "{}", size),
             CommandOutput::PrintAllFunctionsSize(names_and_sizes) => {
-                for name in names_and_sizes {
-                    writeln!(f, "{}: {}", name.0, name.1)?;
+                write!(f, "(")?;
+                for (i, (name, size)) in names_and_sizes.iter().enumerate() {
+                    // indent except for the first line
+                    if i > 0 {
+                        write!(f, " ")?;
+                    }
+                    // write the pair of funciton symbol and size
+                    write!(f, "({} {})", name, size)?;
+                    // add a newline except at the end
+                    if i < names_and_sizes.len() - 1 {
+                        writeln!(f)?;
+                    }
                 }
-                Ok(())
+                writeln!(f, ")")
             }
             CommandOutput::ExtractBest(termdag, _cost, term) => {
                 writeln!(f, "{}", termdag.to_string(*term))
@@ -166,7 +176,7 @@ impl std::fmt::Display for CommandOutput {
             CommandOutput::ProveExists {
                 proof_store,
                 proof_id,
-            } => write!(f, "{}", proof_store.proof_to_string(*proof_id)),
+            } => writeln!(f, "{}", proof_store.proof_to_string(*proof_id)),
             CommandOutput::OverallStatistics(run_report) => {
                 write!(f, "Overall statistics:\n{}", run_report)
             }
@@ -712,22 +722,41 @@ impl EGraph {
     }
 
     /// Print the size of a function. If no function name is provided,
-    /// print the size of all functions in "name: len" pairs.
+    /// print the size of all non-hidden functions as an s-expression list of
+    /// `(name size)` pairs, e.g. `((name size) ...)`.
     pub fn print_size(&self, sym: Option<&str>) -> Result<CommandOutput, Error> {
         if let Some(sym) = sym {
+            // In proof mode, we have view tables instead of term tables.
+            // So we do a linear scan to find the view table first, falling back on the normal table otherwise.
+            // (We don't check the proof mode flag so that this still works after desugaring)
             let f = self
                 .functions
-                .get(sym)
+                .values()
+                .find(|f| f.decl.term_constructor.as_deref() == Some(sym))
+                .or_else(|| self.functions.get(sym))
                 .ok_or(TypeError::UnboundFunction(sym.to_owned(), span!()))?;
+            // Skip hidden and let_binding functions
+            if f.decl.internal_hidden || f.decl.internal_let {
+                return Err(TypeError::UnboundFunction(sym.to_owned(), span!()).into());
+            }
             let size = self.backend.table_size(f.backend_id);
             log::info!("Function {} has size {}", sym, size);
             Ok(CommandOutput::PrintFunctionSize(size))
         } else {
-            // Print size of all functions
+            // Print size of all non-hidden, non-let_binding functions
+            // For view tables, use the term_constructor name instead
             let mut lens = self
                 .functions
                 .iter()
-                .map(|(sym, f)| (sym.clone(), self.backend.table_size(f.backend_id)))
+                .filter(|(_, f)| !f.decl.internal_hidden && !f.decl.internal_let)
+                .map(|(sym, f)| {
+                    let name = f
+                        .decl
+                        .term_constructor
+                        .clone()
+                        .unwrap_or_else(|| sym.clone());
+                    (name, self.backend.table_size(f.backend_id))
+                })
                 .collect::<Vec<_>>();
 
             // Function name's alphabetical order

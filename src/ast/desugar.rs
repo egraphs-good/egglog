@@ -16,18 +16,27 @@ pub(crate) fn desugar_command(
             name,
             schema,
             merge,
-        } => vec![NCommand::Function(FunctionDecl::function(
-            span, name, schema, merge,
-        ))],
+            hidden,
+            let_binding,
+        } => {
+            let mut fdecl = FunctionDecl::function(span, name, schema, merge);
+            fdecl.internal_hidden = hidden;
+            fdecl.internal_let = let_binding;
+            vec![NCommand::Function(fdecl)]
+        }
         Command::Constructor {
             span,
             name,
             schema,
             cost,
             unextractable,
+            hidden,
+            let_binding,
             term_constructor,
         } => {
-            let mut fdecl = FunctionDecl::constructor(span, name, schema, cost, unextractable);
+            let mut fdecl =
+                FunctionDecl::constructor(span, name, schema, cost, unextractable, hidden);
+            fdecl.internal_let = let_binding;
             fdecl.term_constructor = term_constructor;
             std::iter::once(NCommand::Function(fdecl)).collect()
         }
@@ -86,6 +95,7 @@ pub(crate) fn desugar_command(
                             output: datatype.clone(),
                         },
                         variant.cost,
+                        false,
                         false,
                     )));
                 }
@@ -213,6 +223,7 @@ fn desugar_prove(parser: &mut Parser, span: Span, query: Vec<Fact>) -> Vec<NComm
             },
             None,
             false,
+            true, // hidden - internal to prove desugaring
         )),
         NCommand::AddRuleset(span.clone(), ruleset.clone()),
         // rule that constructs the new constructor
@@ -260,6 +271,7 @@ fn desugar_datatype(span: Span, name: String, variants: Vec<Variant>) -> Vec<NCo
             },
             variant.cost,
             variant.unextractable,
+            false,
         ))
     }))
     .collect()
@@ -366,6 +378,7 @@ fn desugar_relation(
                 output: fresh_sort,
             },
             None,
+            false,
             false,
         )),
     ]

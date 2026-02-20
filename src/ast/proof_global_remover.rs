@@ -92,7 +92,8 @@ fn remove_globals_cmd(cmd: ResolvedNCommand) -> Vec<ResolvedNCommand> {
                     merge: None,
                     cost: None,
                     unextractable: true,
-                    let_binding: true,
+                    internal_hidden: false,
+                    internal_let: true,
                     span: span.clone(),
                     term_constructor: None,
                 };

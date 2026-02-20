@@ -1,0 +1,21 @@
+---
+source: tests/files.rs
+expression: snapshot_content_across_treatments
+---
+((Add 6)
+ (App 16)
+ (CaseSplit 14)
+ (Cons 1)
+ (From 0)
+ (Lam 13)
+ (Let 60)
+ (NilConst 1)
+ (Num 2)
+ (TVar 4)
+ (V 4)
+ (freer 36)
+ (is-tail 0)
+ (mapf 1)
+ (pushdown 2)
+ (sum 1)
+ (sum-o-mapf 1))
