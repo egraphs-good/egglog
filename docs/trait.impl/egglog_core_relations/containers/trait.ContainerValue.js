@@ -1,0 +1,9 @@
+(function() {
+    var implementors = Object.fromEntries([["egglog",[["impl <a class=\"trait\" href=\"egglog/trait.ContainerValue.html\" title=\"trait egglog::ContainerValue\">ContainerValue</a> for <a class=\"struct\" href=\"egglog/sort/struct.FunctionContainer.html\" title=\"struct egglog::sort::FunctionContainer\">FunctionContainer</a>"],["impl <a class=\"trait\" href=\"egglog/trait.ContainerValue.html\" title=\"trait egglog::ContainerValue\">ContainerValue</a> for <a class=\"struct\" href=\"egglog/sort/struct.MapContainer.html\" title=\"struct egglog::sort::MapContainer\">MapContainer</a>"],["impl <a class=\"trait\" href=\"egglog/trait.ContainerValue.html\" title=\"trait egglog::ContainerValue\">ContainerValue</a> for <a class=\"struct\" href=\"egglog/sort/struct.MultiSetContainer.html\" title=\"struct egglog::sort::MultiSetContainer\">MultiSetContainer</a>"],["impl <a class=\"trait\" href=\"egglog/trait.ContainerValue.html\" title=\"trait egglog::ContainerValue\">ContainerValue</a> for <a class=\"struct\" href=\"egglog/sort/struct.SetContainer.html\" title=\"struct egglog::sort::SetContainer\">SetContainer</a>"],["impl <a class=\"trait\" href=\"egglog/trait.ContainerValue.html\" title=\"trait egglog::ContainerValue\">ContainerValue</a> for <a class=\"struct\" href=\"egglog/sort/struct.VecContainer.html\" title=\"struct egglog::sort::VecContainer\">VecContainer</a>"]]]]);
+    if (window.register_implementors) {
+        window.register_implementors(implementors);
+    } else {
+        window.pending_implementors = implementors;
+    }
+})()
+//{"start":57,"fragment_lengths":[1337]}

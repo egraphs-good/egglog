@@ -1,0 +1,83 @@
+<!DOCTYPE html><html lang="en"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width, initial-scale=1.0"><meta name="generator" content="rustdoc"><meta name="description" content="Add a rule to the e-graph whose right-hand side is a Rust callback."><title>rust_rule in egglog::prelude - Rust</title><script>if(window.location.protocol!=="file:")document.head.insertAdjacentHTML("beforeend","SourceSerif4-Regular-6b053e98.ttf.woff2,FiraSans-Italic-81dc35de.woff2,FiraSans-Regular-0fe48ade.woff2,FiraSans-MediumItalic-ccf7e434.woff2,FiraSans-Medium-e1aa3f0a.woff2,SourceCodePro-Regular-8badfe75.ttf.woff2,SourceCodePro-Semibold-aa29a496.ttf.woff2".split(",").map(f=>`<link rel="preload" as="font" type="font/woff2" crossorigin href="../../static.files/${f}">`).join(""))</script><link rel="stylesheet" href="../../static.files/normalize-9960930a.css"><link rel="stylesheet" href="../../static.files/rustdoc-916cea96.css"><meta name="rustdoc-vars" data-root-path="../../" data-static-root-path="../../static.files/" data-current-crate="egglog" data-themes="" data-resource-suffix="" data-rustdoc-version="1.87.0 (17067e9ac 2025-05-09)" data-channel="1.87.0" data-search-js="search-e7298875.js" data-settings-js="settings-d72f25bb.js" ><script src="../../static.files/storage-82c7156e.js"></script><script defer src="sidebar-items.js"></script><script defer src="../../static.files/main-fb8c74a8.js"></script><noscript><link rel="stylesheet" href="../../static.files/noscript-893ab5e7.css"></noscript><link rel="alternate icon" type="image/png" href="../../static.files/favicon-32x32-6580c154.png"><link rel="icon" type="image/svg+xml" href="../../static.files/favicon-044be391.svg"></head><body class="rustdoc fn"><!--[if lte IE 11]><div class="warning">This old browser is unsupported and will most likely display funky things.</div><![endif]--><nav class="mobile-topbar"><button class="sidebar-menu-toggle" title="show sidebar"></button></nav><nav class="sidebar"><div class="sidebar-crate"><h2><a href="../../egglog/index.html">egglog</a><span class="version">2.0.0</span></h2></div><div class="sidebar-elems"><div id="rustdoc-modnav"><h2><a href="index.html">In egglog::<wbr>prelude</a></h2></div></div></nav><div class="sidebar-resizer"></div><main><div class="width-limiter"><rustdoc-search></rustdoc-search><section id="main-content" class="content"><div class="main-heading"><div class="rustdoc-breadcrumbs"><a href="../index.html">egglog</a>::<wbr><a href="index.html">prelude</a></div><h1>Function <span class="fn">rust_rule</span><button id="copy-path" title="Copy item path to clipboard">Copy item path</button></h1><rustdoc-toolbar></rustdoc-toolbar><span class="sub-heading"><a class="src" href="../../src/egglog/prelude.rs.html#516-559">Source</a> </span></div><pre class="rust item-decl"><code>pub fn rust_rule(
+    egraph: &amp;mut <a class="struct" href="../struct.EGraph.html" title="struct egglog::EGraph">EGraph</a>,
+    rule_name: &amp;<a class="primitive" href="https://doc.rust-lang.org/1.87.0/std/primitive.str.html">str</a>,
+    ruleset: &amp;<a class="primitive" href="https://doc.rust-lang.org/1.87.0/std/primitive.str.html">str</a>,
+    vars: &amp;[(&amp;<a class="primitive" href="https://doc.rust-lang.org/1.87.0/std/primitive.str.html">str</a>, <a class="type" href="../type.ArcSort.html" title="type egglog::ArcSort">ArcSort</a>)],
+    facts: <a class="struct" href="../ast/struct.Facts.html" title="struct egglog::ast::Facts">Facts</a>&lt;<a class="struct" href="https://doc.rust-lang.org/1.87.0/alloc/string/struct.String.html" title="struct alloc::string::String">String</a>, <a class="struct" href="https://doc.rust-lang.org/1.87.0/alloc/string/struct.String.html" title="struct alloc::string::String">String</a>&gt;,
+    func: impl <a class="trait" href="https://doc.rust-lang.org/1.87.0/core/ops/function/trait.Fn.html" title="trait core::ops::function::Fn">Fn</a>(&amp;mut <a class="struct" href="struct.RustRuleContext.html" title="struct egglog::prelude::RustRuleContext">RustRuleContext</a>&lt;'_, '_&gt;, &amp;[<a class="struct" href="../struct.Value.html" title="struct egglog::Value">Value</a>]) -&gt; <a class="enum" href="https://doc.rust-lang.org/1.87.0/core/option/enum.Option.html" title="enum core::option::Option">Option</a>&lt;<a class="primitive" href="https://doc.rust-lang.org/1.87.0/std/primitive.unit.html">()</a>&gt; + <a class="trait" href="https://doc.rust-lang.org/1.87.0/core/clone/trait.Clone.html" title="trait core::clone::Clone">Clone</a> + <a class="trait" href="https://doc.rust-lang.org/1.87.0/core/marker/trait.Send.html" title="trait core::marker::Send">Send</a> + <a class="trait" href="https://doc.rust-lang.org/1.87.0/core/marker/trait.Sync.html" title="trait core::marker::Sync">Sync</a> + 'static,
+) -&gt; <a class="enum" href="https://doc.rust-lang.org/1.87.0/core/result/enum.Result.html" title="enum core::result::Result">Result</a>&lt;<a class="struct" href="https://doc.rust-lang.org/1.87.0/alloc/vec/struct.Vec.html" title="struct alloc::vec::Vec">Vec</a>&lt;<a class="enum" href="../enum.CommandOutput.html" title="enum egglog::CommandOutput">CommandOutput</a>&gt;, <a class="enum" href="../enum.Error.html" title="enum egglog::Error">Error</a>&gt;</code></pre><details class="toggle top-doc" open><summary class="hideme"><span>Expand description</span></summary><div class="docblock"><p>Add a rule to the e-graph whose right-hand side is a Rust callback.</p>
+
+<div class="example-wrap"><pre class="rust rust-example-rendered"><code><span class="kw">use </span>egglog::prelude::<span class="kw-2">*</span>;
+
+<span class="kw">let </span><span class="kw-2">mut </span>egraph = EGraph::default();
+egraph.parse_and_run_program(
+    <span class="prelude-val">None</span>,
+    <span class="string">"
+(function fib (i64) i64 :no-merge)
+(set (fib 0) 0)
+(set (fib 1) 1)
+(rule (
+    (= f0 (fib x))
+    (= f1 (fib (+ x 1)))
+) (
+    (set (fib (+ x 2)) (+ f0 f1))
+))
+(run 10)
+    "</span>,
+)<span class="question-mark">?</span>;
+
+<span class="kw">let </span>big_number = <span class="number">20</span>;
+
+<span class="comment">// check that `(fib 20)` is not in the e-graph
+</span><span class="kw">let </span>results = query(
+    <span class="kw-2">&amp;mut </span>egraph,
+    <span class="macro">vars!</span>[f: i64],
+    <span class="macro">facts!</span>[(= (fib (unquote exprs::int(big_number))) f)],
+)<span class="question-mark">?</span>;
+
+<span class="macro">assert!</span>(results.iter().next().is_none());
+
+<span class="kw">let </span>ruleset = <span class="string">"custom_ruleset"</span>;
+add_ruleset(<span class="kw-2">&amp;mut </span>egraph, ruleset)<span class="question-mark">?</span>;
+
+<span class="comment">// add the rule from `build_test_database` to the egraph
+</span>rust_rule(
+    <span class="kw-2">&amp;mut </span>egraph,
+    <span class="string">"fib_rule"</span>,
+    ruleset,
+    <span class="macro">vars!</span>[x: i64, f0: i64, f1: i64],
+    <span class="macro">facts!</span>[
+        (= f0 (fib x))
+        (= f1 (fib (+ x <span class="number">1</span>)))
+    ],
+    <span class="kw">move </span>|ctx, values| {
+        <span class="kw">let </span>[x, f0, f1] = values <span class="kw">else </span>{ <span class="macro">unreachable!</span>() };
+        <span class="kw">let </span>x = ctx.value_to_base::&lt;i64&gt;(<span class="kw-2">*</span>x);
+        <span class="kw">let </span>f0 = ctx.value_to_base::&lt;i64&gt;(<span class="kw-2">*</span>f0);
+        <span class="kw">let </span>f1 = ctx.value_to_base::&lt;i64&gt;(<span class="kw-2">*</span>f1);
+
+        <span class="kw">let </span>y = ctx.base_to_value::&lt;i64&gt;(x + <span class="number">2</span>);
+        <span class="kw">let </span>f2 = ctx.base_to_value::&lt;i64&gt;(f0 + f1);
+        ctx.insert(<span class="string">"fib"</span>, [y, f2].into_iter());
+
+        <span class="prelude-val">Some</span>(())
+    },
+)<span class="question-mark">?</span>;
+
+<span class="comment">// run that rule 10 times
+</span><span class="kw">for _ in </span><span class="number">0</span>..<span class="number">10 </span>{
+    run_ruleset(<span class="kw-2">&amp;mut </span>egraph, ruleset)<span class="question-mark">?</span>;
+}
+
+<span class="comment">// check that `(fib 20)` is now in the e-graph
+</span><span class="kw">let </span>results = query(
+    <span class="kw-2">&amp;mut </span>egraph,
+    <span class="macro">vars!</span>[f: i64],
+    <span class="macro">facts!</span>[(= (fib (unquote exprs::int(big_number))) f)],
+)<span class="question-mark">?</span>;
+
+<span class="kw">let </span>y = egraph.base_to_value::&lt;i64&gt;(<span class="number">6765</span>);
+<span class="kw">let </span>results: Vec&lt;<span class="kw">_</span>&gt; = results.iter().collect();
+<span class="macro">assert_eq!</span>(results, [[y]]);
+</code></pre></div>
+</div></details></section></div></main></body></html>

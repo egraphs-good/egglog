@@ -1,0 +1,9 @@
+(function() {
+    var implementors = Object.fromEntries([["egglog_concurrency",[["impl&lt;T&gt; <a class=\"trait\" href=\"https://doc.rust-lang.org/1.87.0/core/ops/deref/trait.DerefMut.html\" title=\"trait core::ops::deref::DerefMut\">DerefMut</a> for <a class=\"struct\" href=\"egglog_concurrency/struct.MutexWriter.html\" title=\"struct egglog_concurrency::MutexWriter\">MutexWriter</a>&lt;'_, T&gt;"]]],["egglog_core_relations",[["impl <a class=\"trait\" href=\"https://doc.rust-lang.org/1.87.0/core/ops/deref/trait.DerefMut.html\" title=\"trait core::ops::deref::DerefMut\">DerefMut</a> for <a class=\"struct\" href=\"egglog_core_relations/struct.WrappedTable.html\" title=\"struct egglog_core_relations::WrappedTable\">WrappedTable</a>"],["impl&lt;T&gt; <a class=\"trait\" href=\"https://doc.rust-lang.org/1.87.0/core/ops/deref/trait.DerefMut.html\" title=\"trait core::ops::deref::DerefMut\">DerefMut</a> for <a class=\"struct\" href=\"egglog_core_relations/struct.Boxed.html\" title=\"struct egglog_core_relations::Boxed\">Boxed</a>&lt;T&gt;"],["impl&lt;T: Clear + InPoolSet&lt;<a class=\"struct\" href=\"egglog_core_relations/struct.PoolSet.html\" title=\"struct egglog_core_relations::PoolSet\">PoolSet</a>&gt;&gt; <a class=\"trait\" href=\"https://doc.rust-lang.org/1.87.0/core/ops/deref/trait.DerefMut.html\" title=\"trait core::ops::deref::DerefMut\">DerefMut</a> for <a class=\"struct\" href=\"egglog_core_relations/struct.Pooled.html\" title=\"struct egglog_core_relations::Pooled\">Pooled</a>&lt;T&gt;"]]]]);
+    if (window.register_implementors) {
+        window.register_implementors(implementors);
+    } else {
+        window.pending_implementors = implementors;
+    }
+})()
+//{"start":57,"fragment_lengths":[348,1115]}

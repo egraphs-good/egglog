@@ -1,0 +1,1 @@
+window.SIDEBAR_ITEMS = {"enum":["ConstraintError","ImpossibleConstraint"],"fn":["and","assign","eq","implies","impossible","xor"],"struct":["AllEqualTypeConstraint","Assignment","Problem","SimpleTypeConstraint"],"trait":["Constraint","TypeConstraint"],"type":["DelayedConstraintFn"]};
