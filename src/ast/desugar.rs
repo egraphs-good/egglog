@@ -20,7 +20,7 @@ pub(crate) fn desugar_command(
             let_binding,
         } => {
             let mut fdecl = FunctionDecl::function(span, name, schema, merge);
-            fdecl.hidden = hidden;
+            fdecl.internal_hidden = hidden;
             fdecl.internal_let = let_binding;
             vec![NCommand::Function(fdecl)]
         }

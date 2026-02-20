@@ -150,10 +150,9 @@ impl std::fmt::Display for CommandOutput {
             CommandOutput::PrintAllFunctionsSize(names_and_sizes) => {
                 write!(f, "(")?;
                 for (i, (name, size)) in names_and_sizes.iter().enumerate() {
-                    if i > 0 {
-                        write!(f, " ")?;
-                    }
+                    // write the pair of funciton symbol and size
                     write!(f, "({} {})", name, size)?;
+                    // add a newline except at the end
                     if i < names_and_sizes.len() - 1 {
                         writeln!(f)?;
                     }
@@ -723,7 +722,9 @@ impl EGraph {
     /// `(name size)` pairs, e.g. `((name size) ...)`.
     pub fn print_size(&self, sym: Option<&str>) -> Result<CommandOutput, Error> {
         if let Some(sym) = sym {
-            // First check if this is a term_constructor name that maps to a view table
+            // In proof mode, we have view tables instead of term tables.
+            // So we do a linear scan to find the view table first, falling back on the normal table otherwise.
+            // (We don't check the proof mode flag so that this still works after desugaring)
             let f = self
                 .functions
                 .values()
@@ -731,7 +732,7 @@ impl EGraph {
                 .or_else(|| self.functions.get(sym))
                 .ok_or(TypeError::UnboundFunction(sym.to_owned(), span!()))?;
             // Skip hidden and let_binding functions
-            if f.decl.hidden || f.decl.internal_let {
+            if f.decl.internal_hidden || f.decl.internal_let {
                 return Err(TypeError::UnboundFunction(sym.to_owned(), span!()).into());
             }
             let size = self.backend.table_size(f.backend_id);
@@ -743,7 +744,7 @@ impl EGraph {
             let mut lens = self
                 .functions
                 .iter()
-                .filter(|(_, f)| !f.decl.hidden && !f.decl.internal_let)
+                .filter(|(_, f)| !f.decl.internal_hidden && !f.decl.internal_let)
                 .map(|(sym, f)| {
                     let name = f
                         .decl

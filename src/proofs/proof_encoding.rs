@@ -439,7 +439,7 @@ impl<'a> ProofInstrumentor<'a> {
         if fdecl.unextractable {
             view_flags.push_str(" :unextractable");
         }
-        if fdecl.hidden {
+        if fdecl.internal_hidden {
             view_flags.push_str(" :internal-hidden");
         }
         if fdecl.internal_let {

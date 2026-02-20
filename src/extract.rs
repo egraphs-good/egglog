@@ -220,7 +220,7 @@ impl<C: Cost + Ord + Eq + Clone + Debug> Extractor<C> {
             let unextractable = func.1.decl.unextractable && options.respect_unextractable;
             let should_skip_view =
                 options.skip_view_tables && func.1.decl.term_constructor.is_some();
-            let hidden = func.1.decl.hidden && options.respect_hidden;
+            let hidden = func.1.decl.internal_hidden && options.respect_hidden;
 
             // only extract constructors, skip view tables when requested for proof extraction, and respect unextractable/hidden flag
             if !unextractable
