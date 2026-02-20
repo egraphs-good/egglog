@@ -868,6 +868,8 @@ pub enum TypeError {
     ConstructorOutputNotSort(String, Span),
     #[error("{1}\nValue lookup of non-constructor function {0} in rule is disallowed.")]
     LookupInRuleDisallowed(String, Span),
+    #[error("{1}\nCannot set constructor {0}. Use `union` instead or declare {0} as a function.")]
+    SetConstructorDisallowed(String, Span),
     #[error("All alternative definitions considered failed\n{}", .0.iter().map(|e| format!("  {e}\n")).collect::<Vec<_>>().join(""))]
     AllAlternativeFailed(Vec<TypeError>),
     #[error("{}\nCannot union values of sort {}", .1, .0.name())]

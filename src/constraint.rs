@@ -805,6 +805,16 @@ impl CoreAction {
                     .collect())
             }
             CoreAction::Set(span, head, args, rhs) => {
+                // Check that we're not trying to set a constructor
+                if let Some(func_type) = typeinfo.get_func_type(head) {
+                    if func_type.subtype == crate::ast::FunctionSubtype::Constructor {
+                        return Err(TypeError::SetConstructorDisallowed(
+                            head.clone(),
+                            span.clone(),
+                        ));
+                    }
+                }
+
                 let mut args = args.clone();
                 args.push(rhs.clone());
 

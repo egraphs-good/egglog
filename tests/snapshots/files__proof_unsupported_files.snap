@@ -2,15 +2,12 @@
 source: tests/files.rs
 expression: snapshot
 ---
-arity-mismatch.egg
 array.egg
 bdd.egg
 before-proofs.egg
 bignum.egg
 bool.egg
 complex-merge-prim.egg
-conflicting-merge-options.egg
-constructor_non_sort.egg
 container-rebuild.egg
 cyk.egg
 cykjson.egg
@@ -29,11 +26,6 @@ lambda.egg
 levenshtein-distance.egg
 list.egg
 looking_up_global.egg
-looking_up_nonconstructor_in_action_case_let.egg
-looking_up_nonconstructor_in_action_case_set.egg
-looking_up_nonconstructor_in_action_case_union.egg
-looking_up_nonconstructor_in_birewrite.egg
-looking_up_nonconstructor_in_rewrite.egg
 looking_up_nonconstructor_in_rewrite_good.egg
 map.egg
 merge_read.egg
@@ -44,23 +36,13 @@ python_array_optimize.egg
 rat-pow-eval.egg
 repro-665-set-union.egg
 repro-738-fn-sort.egg
-repro-containers-disallowed.egg
 repro-desugar-143.egg
-repro-duplicated-var.egg
 repro-new-backend-python-vec.egg
 repro-querybug3.egg
 repro-unsound.egg
 repro-vec-unequal.egg
-semi_naive_set_function.egg
-set-a-primitive.egg
 set.egg
 set_sort_function.egg
-shadow-global-constructor.egg
-shadow-global.egg
-shadow-local-constructor.egg
-shadow-local-global-no-prefix.egg
-shadow-local-global.egg
-shadow-local.egg
 stresstest_large_expr.egg
 string_quotes.egg
 taylor51.egg
@@ -69,14 +51,5 @@ tricky-type-checking.egg
 type-constraints-tests.egg
 typeinfer.egg
 uf-extraction.egg
-unbound.egg
-ungrounded-3.egg
-ungrounded-4.egg
-union_non_sort.egg
-union_relation.egg
-unstable-fn-wrong-args-type.egg
-unstable-fn-wrong-args.egg
-unstable-fn-wrong-return-type.egg
-unstable-fn-wrong-return.egg
 unstable-fn.egg
 vec.egg

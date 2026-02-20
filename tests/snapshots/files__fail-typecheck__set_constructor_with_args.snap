@@ -1,0 +1,6 @@
+---
+source: tests/files.rs
+expression: err_msg
+---
+In 9:1-23 of set_constructor_with_args.egg: (set (Add x y) (Num 3))
+Cannot set constructor Add. Use `union` instead or declare Add as a function.
