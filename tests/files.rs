@@ -342,7 +342,7 @@ fn generate_proof_support_snapshot_test() -> Trial {
 
         for entry in glob::glob("tests/**/*.egg").unwrap() {
             let path = entry.unwrap();
-            if !file_supports_proofs(&path) {
+            if !file_supports_proofs(&path) && !path.parent().unwrap().ends_with("fail-typecheck") {
                 // Use just the filename for cross-platform consistency
                 let filename = path.file_name().unwrap().to_string_lossy().to_string();
                 supported_files.push(filename);

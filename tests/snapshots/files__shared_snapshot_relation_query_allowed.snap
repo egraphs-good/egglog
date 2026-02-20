@@ -1,0 +1,8 @@
+---
+source: tests/files.rs
+expression: snapshot_content_across_treatments
+---
+((Num 0)
+ (myrel 2)
+ (shouldappear 1)
+ (shouldnotappear 0))
