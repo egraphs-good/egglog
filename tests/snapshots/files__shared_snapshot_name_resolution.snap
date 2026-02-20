@@ -4,5 +4,3 @@ expression: snapshot_content_across_treatments
 ---
 ((Add 2)
  (Num 5))
-((Add 2)
- (Num 5))

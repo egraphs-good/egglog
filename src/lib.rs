@@ -150,6 +150,10 @@ impl std::fmt::Display for CommandOutput {
             CommandOutput::PrintAllFunctionsSize(names_and_sizes) => {
                 write!(f, "(")?;
                 for (i, (name, size)) in names_and_sizes.iter().enumerate() {
+                    // indent except for the first line
+                    if i > 0 {
+                        write!(f, " ")?;
+                    }
                     // write the pair of funciton symbol and size
                     write!(f, "({} {})", name, size)?;
                     // add a newline except at the end

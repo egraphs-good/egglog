@@ -327,8 +327,24 @@ impl Parser {
                     let mut let_binding = false;
                     for (key, val) in self.parse_options(rest)? {
                         match (key, val) {
-                            (":no-merge", []) => merge = Some(None),
-                            (":merge", [e]) => merge = Some(Some(self.parse_expr(e)?)),
+                            (":no-merge", []) => {
+                                if merge.is_some() {
+                                    return error!(
+                                        span,
+                                        "conflicting merge options: :no-merge and :merge cannot both be specified"
+                                    );
+                                }
+                                merge = Some(None);
+                            }
+                            (":merge", [e]) => {
+                                if merge.is_some() {
+                                    return error!(
+                                        span,
+                                        "conflicting merge options: :merge and :no-merge cannot both be specified"
+                                    );
+                                }
+                                merge = Some(Some(self.parse_expr(e)?));
+                            }
                             (":internal-hidden", []) => hidden = true,
                             (":internal-let", []) => let_binding = true,
                             _ => return error!(span, "could not parse function options"),

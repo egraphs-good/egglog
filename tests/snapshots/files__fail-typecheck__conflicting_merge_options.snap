@@ -1,0 +1,6 @@
+---
+source: tests/files.rs
+expression: err_msg
+---
+In 1:1-43 of conflicting-merge-options.egg: (function f (i64) i64 :no-merge :merge old)
+parse error: conflicting merge options: :merge and :no-merge cannot both be specified
