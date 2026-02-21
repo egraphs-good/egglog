@@ -1,10 +1,14 @@
 use std::{collections::BTreeMap, iter, mem, sync::Arc};
 
 use crate::{
+    TableId,
+    free_join::ProcessedConstraints,
     numeric_id::{DenseIdMap, NumericId},
     query::SymbolMap,
 };
+use egglog_numeric_id::define_id;
 use fixedbitset::FixedBitSet;
+use log::Level;
 use smallvec::{SmallVec, smallvec};
 
 use crate::{
@@ -29,6 +33,22 @@ pub(crate) struct SingleScanSpec {
     pub atom: AtomId,
     pub column: ColumnId,
     pub cs: Vec<Constraint>,
+}
+
+define_id!(pub(crate) MatId, u32, "An identifier for materialization within a decomposed plan.");
+
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub(crate) enum MatScanMode {
+    Full,
+    KeyOnly,
+    Value(Vec<Variable>),
+    Lookup(Vec<Variable>),
+}
+
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub(crate) enum ScanMatSpec {
+    Scan(ScanSpec),
+    Materialized(MatId),
 }
 
 /// Join headers evaluate constraints on a single atom; they prune the search space before the rest
@@ -88,6 +108,12 @@ pub(crate) enum JoinStage {
         bind: SmallVec<[(ColumnId, Variable); 2]>,
         // to_intersect.1 is the index into the cover atom.
         to_intersect: Vec<(ScanSpec, SmallVec<[ColumnId; 2]>)>,
+    },
+    FusedIntersectMat {
+        cover: MatId,
+        mode: MatScanMode,
+        bind: SmallVec<[(ColumnId, Variable); 2]>,
+        to_intersect: Vec<(ScanMatSpec, SmallVec<[ColumnId; 2]>)>,
     },
 }
 
@@ -163,11 +189,67 @@ impl JoinStage {
 }
 
 #[derive(Debug, Clone)]
-pub(crate) struct Plan {
-    pub atoms: Arc<DenseIdMap<AtomId, Atom>>,
-    pub stages: JoinStages,
+pub(crate) enum Plan {
+    SinglePlan(SinglePlan),
+    DecomposedPlan(DecomposedPlan),
 }
 impl Plan {
+    pub fn actions(&self) -> ActionId {
+        match self {
+            Plan::SinglePlan(p) => p.actions,
+            Plan::DecomposedPlan(p) => p.actions,
+        }
+    }
+
+    pub fn atoms(&self) -> Arc<DenseIdMap<AtomId, Atom>> {
+        match self {
+            Plan::SinglePlan(p) => p.atoms.clone(),
+            Plan::DecomposedPlan(p) => p.atoms.clone(),
+        }
+    }
+
+    pub(crate) fn to_report(&self, symbol_map: &SymbolMap) -> egglog_reports::Plan {
+        todo!()
+    }
+}
+
+#[derive(Debug, Clone)]
+pub(crate) struct SinglePlan {
+    pub atoms: Arc<DenseIdMap<AtomId, Atom>>,
+    pub stages: JoinStages,
+    pub actions: ActionId,
+}
+
+#[derive(Debug, Clone)]
+pub(crate) struct JoinStages {
+    pub header: Vec<JoinHeader>,
+    pub instrs: Arc<Vec<JoinStage>>,
+}
+
+/// Specification of the materialization of the intermediate results, as required by tree decomposition.
+#[derive(Debug, Clone)]
+pub(crate) struct MatSpec {
+    pub msg_vars: Vec<Variable>,
+    pub val_vars: Vec<Variable>,
+}
+
+#[derive(Debug, Clone)]
+pub(crate) struct JoinStageBlocks {
+    // each block is a list of instructions and how to yield
+    // TODO: Arc<MatSpec>
+    pub blocks: Vec<(JoinStages, MatSpec)>,
+}
+
+#[derive(Debug, Clone)]
+pub(crate) struct DecomposedPlan {
+    pub atoms: Arc<DenseIdMap<AtomId, Atom>>,
+    pub atom_to_bag: Arc<DenseIdMap<AtomId, usize>>,
+    pub stages: JoinStageBlocks,
+    pub result_block: JoinStages,
+    pub actions: ActionId,
+}
+
+impl SinglePlan {
     pub(crate) fn to_report(&self, symbol_map: &SymbolMap) -> egglog_reports::Plan {
         use egglog_reports::{
             Plan as ReportPlan, Scan as ReportScan, SingleScan as ReportSingleScan,
@@ -244,6 +326,14 @@ impl Plan {
                         to_intersect: report_to_intersect,
                     }
                 }
+                JoinStage::FusedIntersectMat {
+                    cover,
+                    mode,
+                    bind,
+                    to_intersect,
+                } => {
+                    todo!("materialization")
+                }
             };
             let next = if i == self.stages.instrs.len() - 1 {
                 vec![]
@@ -254,13 +344,6 @@ impl Plan {
         }
         ReportPlan { stages }
     }
-}
-
-#[derive(Debug, Clone)]
-pub(crate) struct JoinStages {
-    pub header: Vec<JoinHeader>,
-    pub instrs: Arc<Vec<JoinStage>>,
-    pub actions: ActionId,
 }
 
 type VarSet = FixedBitSet;
@@ -288,21 +371,331 @@ pub enum PlanStrategy {
     Gj,
 }
 
+type AtomToBag = DenseIdMap<AtomId, usize>;
+
+#[allow(dead_code)]
+pub(crate) fn tree_decompose_and_plan(
+    ctx: &PlanningContext,
+    strat: PlanStrategy,
+) -> (
+    /* Intermediate materializations */ Vec<(JoinStages, MatSpec)>,
+    /* Final block that produces the final results */ JoinStages,
+    /* Mapping from an atom to the bag it belongs to */ AtomToBag,
+) {
+    let mut atoms = ctx.atoms.clone();
+    let mut vars = ctx.vars.clone();
+    // Prune variables with no occurrences.
+    for (var, vinfo) in ctx.vars.iter() {
+        if vinfo.occurrences.is_empty() {
+            vars.take(var).unwrap();
+        }
+    }
+
+    let mut bags: Vec<PlanningContext> = vec![];
+
+    let dummy_table_id = TableId::new(u32::MAX);
+    let mut atom_to_bag = AtomToBag::new();
+
+    // Step 1. find variable with smallest number of occurrences
+    while let Some((var, _vinfo)) = vars.iter().min_by_key(|(_, vinfo)| vinfo.occurrences.len()) {
+        // Step 2. Find the subquery composed of its neighborhood
+        let subquery_vars: IndexSet<Variable> = atoms
+            .iter()
+            .filter(|(_, atom)| atom.column_to_var.iter().any(|(_, avar)| *avar == var))
+            .flat_map(|(_, atom)| atom.column_to_var.iter().map(|(_, var)| *var))
+            .collect::<IndexSet<_>>();
+
+        let subquery_atoms: IndexSet<AtomId> = atoms
+            .iter()
+            .filter(|(_, atom)| {
+                atom.column_to_var
+                    .iter()
+                    .all(|(_, var)| subquery_vars.contains(var))
+            })
+            .map(|(atom_id, _)| atom_id)
+            .collect::<IndexSet<_>>();
+
+        // Step 4: Add a fake atom that covers the neighborhood back to the main query
+        // Both atoms and vars need to be updated
+        // The covering atom should have variables that are not fully subsumed by this bag.
+        let covering_vars: Vec<_> = subquery_vars
+            .iter()
+            .filter(|var| {
+                vars[**var]
+                    .occurrences
+                    .iter()
+                    .any(|occ| !subquery_atoms.contains(&occ.atom))
+            })
+            .copied()
+            .collect();
+        let fake_covering_atom_id = atoms.push(Atom {
+            column_to_var: covering_vars
+                .iter()
+                .enumerate()
+                .map(|(ix, var)| (ColumnId::from_usize(ix), *var))
+                .collect(),
+            var_to_column: covering_vars
+                .iter()
+                .enumerate()
+                .map(|(ix, var)| (*var, ColumnId::from_usize(ix)))
+                .collect(),
+            constraints: ProcessedConstraints::dummy(),
+            table: dummy_table_id,
+        });
+        for &subquery_var in subquery_vars.iter() {
+            if covering_vars.contains(&subquery_var) {
+                vars[subquery_var].occurrences.push(SubAtom {
+                    atom: fake_covering_atom_id,
+                    vars: smallvec![ColumnId::from_usize(
+                        covering_vars
+                            .iter()
+                            .position(|v| *v == subquery_var)
+                            .unwrap()
+                    )],
+                });
+            }
+        }
+
+        // Step 5: add the subquery (and update the occurrences of the main query)
+        let subquery_vars =
+            DenseIdMap::from_iter(subquery_vars.into_iter().filter_map(|subq_var| {
+                // We split the occurrences into occurrences of the subquery and those of the remaining query.
+                // We also discard occurrences of fake atoms t
+                let vinfo = &vars[subq_var];
+                let mut subquery_vinfo = VarInfo {
+                    occurrences: vec![],
+                    // used_in_rhs: vinfo.used_in_rhs,
+                    used_in_rhs: true,
+                    defined_in_rhs: vinfo.defined_in_rhs,
+                    name: vinfo.name.clone(),
+                };
+
+                // adjust occurrences for the main query and build subquery's occurrences
+                vars[subq_var].occurrences.retain_mut(|occ| {
+                    if !subquery_atoms.contains(&occ.atom) {
+                        true
+                    } else {
+                        if atoms[occ.atom].table != dummy_table_id {
+                            subquery_vinfo
+                                .occurrences
+                                .push(mem::replace(occ, SubAtom::dummy()));
+                        }
+                        false
+                    }
+                });
+                if vars[subq_var].occurrences.is_empty() {
+                    vars.unwrap_val(subq_var);
+                }
+
+                // TODO: this makes certain columns like timestamp and subsumed always used,
+                // and undoes the used_in_rhs optimization that skips scanning these columns.
+                // Maybe we can say if a variable is not used_in_rhs and comes up only in val columns,
+                // then they can stay !used_in_rhs and the materialization won't incldue them.
+                subquery_vinfo.used_in_rhs = true;
+
+                if !subquery_vinfo.occurrences.is_empty() {
+                    Some((subq_var, subquery_vinfo))
+                } else {
+                    None
+                }
+            }));
+
+        let subquery_atoms =
+            DenseIdMap::from_iter(subquery_atoms.into_iter().filter_map(|atom_id| {
+                let atom_info = atoms.take(atom_id).unwrap();
+
+                // We remove dummy atoms from atom list but don't use them in the subquery.
+                if atom_info.table == dummy_table_id {
+                    None
+                } else {
+                    Some((atom_id, atom_info))
+                }
+            }));
+
+        if log::log_enabled!(Level::Debug) {
+            log::debug!(" Producing bag {:?} {:?}", subquery_vars, subquery_atoms);
+        }
+
+        bags.push(PlanningContext {
+            vars: subquery_vars,
+            atoms: subquery_atoms,
+        });
+    }
+
+    // Step 5.5: Resort the bags to be in topological order
+    let mut bags = bags.into_iter().map(Some).collect::<Vec<_>>();
+    let mut bags_topo = Vec::with_capacity(bags.len());
+    let mut visited = vec![false; bags.len()];
+    let mut stack = Vec::new();
+    if bags.len() > 0 {
+        stack.push(0);
+        visited[0] = true;
+    }
+    // eprintln!("Topologically sorting bags...");
+    while !stack.is_empty() {
+        let bag_id = stack.pop().unwrap();
+        // eprintln!("visiting {}", bag_id);
+        let bag = mem::take(&mut bags[bag_id]).unwrap();
+        for (i, child_bag) in bags.iter().enumerate().filter(|(_, b)| b.is_some()) {
+            let child_bag = child_bag.as_ref().unwrap();
+            if child_bag
+                .vars
+                .iter()
+                .any(|(var, _)| bag.vars.contains_key(var))
+                && !visited[i]
+            {
+                visited[i] = true;
+                // eprintln!("{} -> {}", bag_id, i);
+                stack.push(i);
+            }
+        }
+        bags_topo.push(bag);
+    }
+    // from leaves to root
+    bags_topo.reverse();
+    let bags = bags_topo;
+    for (i, bag) in bags.iter().enumerate() {
+        for (atom_id, _) in bag.atoms.iter() {
+            atom_to_bag.insert(atom_id, i);
+        }
+    }
+
+    // number of bags a variable is in, used to decide whether to pass it as a message variable or a value variable
+    let mut n_used_in_bag = DenseIdMap::new();
+    for bag in bags.iter() {
+        for (var, _) in bag.vars.iter() {
+            if !n_used_in_bag.contains_key(var) {
+                n_used_in_bag.insert(var, 0);
+            }
+            n_used_in_bag[var] += 1;
+        }
+    }
+
+    // Step 6: plan each bag. The plan needs to be constrained by message variables from previous bags.
+    let mut blocks: Vec<(JoinStages, MatSpec)> = vec![];
+    for bag in bags.iter() {
+        let mut msg_vars = vec![];
+        let mut val_vars = vec![];
+        for (var, _) in bag.vars.iter() {
+            n_used_in_bag[var] -= 1;
+            // If the variable is still used later, this is a piece of information to be passed to the next stage.
+            if n_used_in_bag[var] > 0 {
+                msg_vars.push(var);
+            } else {
+                val_vars.push(var);
+            }
+        }
+        let (header, mut instrs) = plan_stages(&bag, strat);
+
+        let mut epilogue = vec![];
+        for (i, prev_block) in blocks.iter().enumerate().rev() {
+            if prev_block
+                .1
+                .msg_vars
+                .iter()
+                .all(|var| bag.vars.contains_key(*var))
+            {
+                epilogue.push(JoinStage::FusedIntersectMat {
+                    cover: MatId::from_usize(i),
+                    mode: MatScanMode::Lookup(prev_block.1.msg_vars.clone()),
+                    bind: smallvec![],
+                    to_intersect: vec![],
+                });
+            } else {
+                // assert!(
+                //     !prev_block
+                //         .1
+                //         .msg_vars
+                //         .iter()
+                //         .any(|var| bag.vars.contains_key(*var))
+                // );
+            }
+        }
+        instrs.extend(epilogue.into_iter());
+
+        let stages = JoinStages {
+            header,
+            instrs: Arc::new(instrs),
+        };
+        blocks.push((stages, MatSpec { msg_vars, val_vars }));
+    }
+
+    // Step 7: Add the second pass from bottom to top
+    let mut result_block = vec![];
+
+    let mut pinned_vars = DenseIdMap::<Variable, ()>::new();
+    for (i, (_stages, mat_spec)) in blocks.iter().enumerate().rev() {
+        let to_bind: SmallVec<[(ColumnId, Variable); 2]> =
+            // Iterator::chain(mat_spec.msg_vars.iter(), mat_spec.val_vars.iter())
+            mat_spec.val_vars.iter()
+                .copied()
+                .enumerate()
+                .filter(|(_, var)| !pinned_vars.contains_key(*var))
+                .map(|(i, var)| (ColumnId::from_usize(i), var))
+                .collect();
+
+        if to_bind.is_empty() {
+            continue;
+        }
+
+        for (_, var) in to_bind.iter() {
+            pinned_vars.insert(*var, ());
+        }
+
+        result_block.push(JoinStage::FusedIntersectMat {
+            cover: MatId::from_usize(i),
+            // TODO: optimization to switch to MatScanMode::KeyOnly or MatScanMode::Value
+            mode: if i == blocks.len() - 1 {
+                MatScanMode::Full
+            } else {
+                MatScanMode::Value(mat_spec.msg_vars.clone())
+            },
+            bind: to_bind,
+            // to_intersect can be empty, because non-top-level scans of materializations
+            // look up the keys anyway.
+            to_intersect: vec![],
+        });
+    }
+
+    let result_block = JoinStages {
+        header: vec![],
+        instrs: Arc::new(result_block),
+    };
+
+    (blocks, result_block, atom_to_bag)
+}
+
+const TREE_DECOMPOSE: bool = true;
+
 pub(crate) fn plan_query(query: Query) -> Plan {
     let atoms = query.atoms;
     let ctx = PlanningContext {
         vars: query.var_info,
         atoms,
     };
-    let (header, instrs) = plan_stages(&ctx, query.plan_strategy);
-
-    Plan {
-        atoms: Arc::new(ctx.atoms),
-        stages: JoinStages {
-            header,
-            instrs: Arc::new(instrs),
+    if TREE_DECOMPOSE {
+        let (blocks, result_block, atom_to_bag) =
+            tree_decompose_and_plan(&ctx, query.plan_strategy);
+        Plan::DecomposedPlan(DecomposedPlan {
+            atoms: Arc::new(ctx.atoms),
+            atom_to_bag: Arc::new(atom_to_bag),
+            stages: JoinStageBlocks { blocks },
+            result_block,
             actions: query.action,
-        },
+        })
+    } else {
+        let (header, instrs) = plan_stages(&ctx, query.plan_strategy);
+        let stages = JoinStages {
+            header: header,
+            instrs: Arc::new(instrs),
+        };
+        dbg!(&stages);
+
+        Plan::SinglePlan(SinglePlan {
+            atoms: Arc::new(ctx.atoms),
+            stages,
+            actions: query.action,
+        })
     }
 }
 
@@ -323,14 +716,15 @@ struct StageInfo {
 }
 
 /// Immutable context for query planning containing references to query metadata.
-struct PlanningContext {
+#[derive(Debug)]
+pub(crate) struct PlanningContext {
     vars: DenseIdMap<Variable, VarInfo>,
     atoms: DenseIdMap<AtomId, Atom>,
 }
 
 /// Mutable state tracked during query planning.
 #[derive(Clone)]
-struct PlanningState {
+pub(crate) struct PlanningState {
     used_vars: VarSet,
     constrained_atoms: AtomSet,
 }
@@ -466,6 +860,7 @@ fn plan_headers(
 
 /// Plan query execution stages using the specified strategy.
 /// Returns (header, instructions) tuple that can be assembled into a Plan by the caller.
+/// It does not directly return the plan because the caller may want to further modify the stages.
 fn plan_stages(ctx: &PlanningContext, strat: PlanStrategy) -> (Vec<JoinHeader>, Vec<JoinStage>) {
     let (header, remaining_constraints) = plan_headers(ctx);
     let mut instrs = Vec::new();
