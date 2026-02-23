@@ -183,7 +183,7 @@ impl ContainerSort for MapSort {
 
         // add shape primitive
         eg.add_primitive(Shape {});
-        eg.add_primitive(ComposeInvert {});
+        eg.add_primitive(Invert {});
         eg.add_primitive(Compose {});
     }
 
@@ -286,29 +286,25 @@ impl Primitive for Shape {
 }
 
 #[derive(Clone, Debug)]
-struct ComposeInvert {}
+struct Invert {}
 
-// This computes (compose (invert m1) m2) for two arguments m1 and m2.
-impl Primitive for ComposeInvert {
+// This computes (invert m).
+impl Primitive for Invert {
     fn name(&self) -> &str {
-        "compose-invert"
+        "invert"
     }
 
     fn get_type_constraints(&self, span: &Span) -> Box<dyn crate::constraint::TypeConstraint> {
         // must be vecs of integer sort
-        Box::new(AllEqualTypeConstraint::new("compose-invert", span.clone()))
+        Box::new(AllEqualTypeConstraint::new("invert", span.clone()))
     }
 
     fn apply(&self, exec_state: &mut ExecutionState, args: &[Value]) -> Option<Value> {
-        let m1 = exec_state
+        let m = exec_state
             .container_values()
             .get_val::<MapContainer>(args[0])?
             .clone();
-        let m2 = exec_state
-            .container_values()
-            .get_val::<MapContainer>(args[1])?
-            .clone();
-        let res = compose(&invert(&m1.data), &m2.data);
+        let res = invert(&m.data);
         let map_value = exec_state.container_values().register_val(
             MapContainer {
                 do_rebuild_keys: false,

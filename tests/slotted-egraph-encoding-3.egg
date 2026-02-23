@@ -36,7 +36,7 @@
 (rule ((ShapeOf e1 mapping1 shape)
        (ShapeOf e2 mapping2 shape)
        )
-      ((EqualWithRename e1 (AppId (compose-invert mapping2 mapping1) e2))))
+      ((EqualWithRename e1 (AppId (compose (invert mapping2) mapping1) e2))))
 
 
 (rule (
@@ -57,6 +57,11 @@
     ; -> m_a2 * ch_a2 = (m_a2 * m) * i
     ; -> m_a2 * ch_a2 = (compose m m_a2) * i
     ((App2 f lhs (AppId (compose m m_a2) i)))
+)
+
+; symmetry
+(rule ((EqualWithRename x (AppId m y)))
+   ((EqualWithRename y (AppId (invert m) x)))
 )
 
 
@@ -107,9 +112,17 @@
 (let $fxy (App2 "f" $x $y))
 (let $fyx (App2 "f" $y $x))
 
-(run 10)
+(relation ThingyRelation (Expr))
 
-(print-function EqualWithRename)
+(rule ((ShapeOf (App2 f (AppId _ (Var 0)) (AppId _ (Var 0))) _ thingy))
+  ((ThingyRelation thingy))
+)
+
+(run 30)
+
+
+; (print-function EqualWithRename)
+(print-function ThingyRelation)
 ; (check (EqualWithRename $fxy (AppId some-rename $fyx)))
 
 (pop)
