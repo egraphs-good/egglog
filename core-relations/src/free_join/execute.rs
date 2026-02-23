@@ -587,7 +587,7 @@ impl<'a> JoinState<'a> {
             return;
         }
         let chunk_size = action_buf.morsel_size(cur, instr_order.len());
-        let mut cur_size = estimate_size(&stages.instrs[instr_order.get(cur)], binding_info);
+        let cur_size = estimate_size(&stages.instrs[instr_order.get(cur)], binding_info);
         // TODO: add dynamic sort plan back
         // if cur_size > 32 && cur % 3 == 1 && cur < instr_order.len() - 1 {
         //     // If we have a reasonable number of tuples to process, adjust the variable order every
@@ -1431,7 +1431,7 @@ impl<'a> ActionBuffer<'a, MatId> for InPlaceMaterializer<'a> {
         for val in spec.val_vars.iter().map(|var| bindings[*var]) {
             self.scratch_val.push(val);
         }
-        if let Some(mut buffer) = mat.get_mut(&self.scratch_key) {
+        if let Some(buffer) = mat.get_mut(&self.scratch_key) {
             buffer.add_row(&self.scratch_val);
         } else {
             if spec.val_vars.len() > 0 {
@@ -1491,6 +1491,7 @@ fn estimate_size(join_stage: &JoinStage, binding_info: &BindingInfo) -> usize {
     }
 }
 
+#[allow(unused)]
 fn num_intersected_rels(join_stage: &JoinStage) -> i32 {
     match join_stage {
         JoinStage::Intersect { scans, .. } => scans.len() as i32,
@@ -1499,6 +1500,7 @@ fn num_intersected_rels(join_stage: &JoinStage) -> i32 {
     }
 }
 
+#[allow(unused)]
 fn sort_plan_by_size(
     order: &mut InstrOrder,
     start: usize,
