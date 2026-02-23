@@ -171,6 +171,7 @@ impl ContainerSort for MapSort {
         // add shape primitive
         eg.add_primitive(Shape {});
         eg.add_primitive(ComposeInvert {});
+        eg.add_primitive(Compose {});
     }
 
     fn reconstruct_termdag(
