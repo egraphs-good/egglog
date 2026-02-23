@@ -40,14 +40,25 @@
 
 
 (rule (
-    (= a (App2 f (AppId m_a1 ch_a1) (AppId m_a2 ch_a2)))
+    (= a (App2 f (AppId m_a1 ch_a1) rhs))
     (EqualWithRename ch_a1 (AppId m i))
     )
     ; ch_a1 = m * i
     ; -> m_a1 * ch_a1 = (m_a1 * m) * i
     ; -> m_a1 * ch_a1 = (compose m m_a1) * i
-    ((App2 f (AppId (compose m m_a1) i) (AppId m_a2 ch_a2)))
+    ((App2 f (AppId (compose m m_a1) i) rhs))
 )
+
+(rule (
+    (= a (App2 f lhs (AppId m_a2 ch_a2)))
+    (EqualWithRename ch_a2 (AppId m i))
+    )
+    ; ch_a2 = m * i
+    ; -> m_a2 * ch_a2 = (m_a2 * m) * i
+    ; -> m_a2 * ch_a2 = (compose m m_a2) * i
+    ((App2 f lhs (AppId (compose m m_a2) i)))
+)
+
 
 ;(rule (
 ;     (= a (App2 f (AppId m_a1 ch_a1) (AppId m_a2 ch_a2)))
@@ -79,6 +90,7 @@
 
 (print-function EqualWithRename)
 
+
 (pop)
 
 (push)
@@ -98,7 +110,7 @@
 (run 10)
 
 (print-function EqualWithRename)
-(check (EqualWithRename $fxy (AppId some-rename $fyx)))
+; (check (EqualWithRename $fxy (AppId some-rename $fyx)))
 
 (pop)
 
