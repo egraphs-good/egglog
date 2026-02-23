@@ -55,6 +55,17 @@ impl Variable {
 }
 
 define_id!(pub TableId, u32, "a table in the database");
+
+impl TableId {
+    pub fn dummy() -> TableId {
+        TableId::new(u32::MAX)
+    }
+
+    pub fn is_dummy(&self) -> bool {
+        self.rep == u32::MAX
+    }
+}
+
 define_id!(pub(crate) ActionId, u32, "an identifier picking out the RHS of a rule");
 
 #[derive(Debug)]
