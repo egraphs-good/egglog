@@ -8,7 +8,6 @@ use crate::{
 };
 use egglog_numeric_id::define_id;
 use fixedbitset::FixedBitSet;
-use log::Level;
 use smallvec::{SmallVec, smallvec};
 
 use crate::{
@@ -393,24 +392,56 @@ pub(crate) fn tree_decompose_and_plan(
 
     let mut bags: Vec<PlanningContext> = vec![];
 
-    let dummy_table_id = TableId::new(u32::MAX);
     let mut atom_to_bag = AtomToBag::new();
 
-    // Step 1. find variable with smallest number of occurrences
-    while let Some((var, _vinfo)) = vars.iter().min_by_key(|(_, vinfo)| vinfo.occurrences.len()) {
-        // Step 2. Find the subquery composed of its neighborhood
-        let subquery_vars: IndexSet<Variable> = atoms
-            .iter()
-            .filter(|(_, atom)| atom.column_to_var.iter().any(|(_, avar)| *avar == var))
-            .flat_map(|(_, atom)| atom.column_to_var.iter().map(|(_, var)| *var))
-            .collect::<IndexSet<_>>();
+    // Heuristic to return the next variable to eliminate, as well as the subquery composed of its neighborhood.
+    // The heuristic prioritizes variables that leads to neighborhoods that are more subsumed by existing bags. It is a generalization of "min-fill" to hypergraphs.
+    fn next_var_to_eliminate(
+        vars: &DenseIdMap<Variable, VarInfo>,
+        atoms: &DenseIdMap<AtomId, Atom>,
+        bags: &[PlanningContext],
+    ) -> Option<(Variable, IndexSet<Variable>)> {
+        vars.iter()
+            .map(|(var, vinfo)| {
+                let subquery_vars: IndexSet<Variable> = atoms
+                    .iter()
+                    .filter(|(_, atom)| atom.column_to_var.iter().any(|(_, avar)| *avar == var))
+                    .flat_map(|(_, atom)| atom.column_to_var.iter().map(|(_, var)| *var))
+                    .collect::<IndexSet<_>>();
+                let is_private = vinfo.occurrences.len() == 1;
+                // At most how many variables of the proposed hyperedge are subsumed, by for any existing hyperedge (bag)?
+                let min_fill = subquery_vars.len()
+                    - bags
+                        .iter()
+                        .map(|bag| {
+                            bag.vars
+                                .iter()
+                                .filter(|(v, _)| subquery_vars.contains(v))
+                                .count()
+                        })
+                        .max()
+                        .unwrap_or(0);
+                // Don't consider private variables until absolutely necessary (i.e., the relation is not joined with any other relation).
+                (is_private, min_fill, var, subquery_vars)
+            })
+            .min_by(|a, b| (a.0, a.1).cmp(&(b.0, b.1)))
+            .map(|(_is_private, _min_fill, var, subquery_vars)| (var, subquery_vars))
+    }
 
-        let subquery_atoms: IndexSet<AtomId> = atoms
+    // Step 1. find variable with smallest number of occurrences
+    while let Some((var, subquery_vars)) = next_var_to_eliminate(&vars, &atoms, &bags) {
+        // The subquery consists of atoms that only contain the subquery variables
+        let subquery_atoms: IndexSet<AtomId> = ctx
+            .atoms
             .iter()
             .filter(|(_, atom)| {
                 atom.column_to_var
                     .iter()
+                    // TODO: here we consider an atom only if all its variables are in the subquery.
+                    // This gives a conservative tree decomposition, while in reality you can add more
+                    // projected-out atoms to reduce time complexity
                     .all(|(_, var)| subquery_vars.contains(var))
+                // .any(|(_, var)| subquery_vars.contains(var))
             })
             .map(|(atom_id, _)| atom_id)
             .collect::<IndexSet<_>>();
@@ -424,7 +455,13 @@ pub(crate) fn tree_decompose_and_plan(
                 vars[**var]
                     .occurrences
                     .iter()
-                    .any(|occ| !subquery_atoms.contains(&occ.atom))
+                    // If the variable occurs in some atom that is not fully subsumed by the subquery.
+                    .any(|occ| {
+                        atoms[occ.atom]
+                            .var_to_column
+                            .iter()
+                            .any(|(ov, _)| !subquery_vars.contains(ov))
+                    })
             })
             .copied()
             .collect();
@@ -440,8 +477,9 @@ pub(crate) fn tree_decompose_and_plan(
                 .map(|(ix, var)| (*var, ColumnId::from_usize(ix)))
                 .collect(),
             constraints: ProcessedConstraints::dummy(),
-            table: dummy_table_id,
+            table: TableId::dummy(),
         });
+        // Update the occurrences with the new fake atom
         for &subquery_var in subquery_vars.iter() {
             if covering_vars.contains(&subquery_var) {
                 vars[subquery_var].occurrences.push(SubAtom {
@@ -457,99 +495,125 @@ pub(crate) fn tree_decompose_and_plan(
         }
 
         // Step 5: add the subquery (and update the occurrences of the main query)
-        let subquery_vars =
-            DenseIdMap::from_iter(subquery_vars.into_iter().filter_map(|subq_var| {
-                // We split the occurrences into occurrences of the subquery and those of the remaining query.
-                // We also discard occurrences of fake atoms t
-                let vinfo = &vars[subq_var];
-                let mut subquery_vinfo = VarInfo {
-                    occurrences: vec![],
-                    // used_in_rhs: vinfo.used_in_rhs,
-                    used_in_rhs: true,
-                    defined_in_rhs: vinfo.defined_in_rhs,
-                    name: vinfo.name.clone(),
-                };
+        let subquery_vars = DenseIdMap::from_iter(subquery_vars.iter().filter_map(|&subq_var| {
+            // We split the occurrences into occurrences of the subquery and those of the remaining query.
+            // We also discard occurrences of fake atoms t
+            let vinfo = &vars[subq_var];
+            let mut subquery_vinfo = VarInfo {
+                occurrences: vec![],
+                // used_in_rhs: vinfo.used_in_rhs,
+                used_in_rhs: true,
+                defined_in_rhs: vinfo.defined_in_rhs,
+                name: vinfo.name.clone(),
+            };
 
-                // adjust occurrences for the main query and build subquery's occurrences
-                vars[subq_var].occurrences.retain_mut(|occ| {
-                    if !subquery_atoms.contains(&occ.atom) {
-                        true
-                    } else {
-                        if atoms[occ.atom].table != dummy_table_id {
-                            subquery_vinfo
-                                .occurrences
-                                .push(mem::replace(occ, SubAtom::dummy()));
-                        }
-                        false
+            // adjust occurrences for the main query and build subquery's occurrences
+            vars[subq_var].occurrences.retain_mut(|occ| {
+                if !atoms[occ.atom]
+                    .var_to_column
+                    .iter()
+                    .all(|(ov, _)| subquery_vars.contains(ov))
+                {
+                    true
+                } else {
+                    if !atoms[occ.atom].table.is_dummy() {
+                        subquery_vinfo
+                            .occurrences
+                            .push(mem::replace(occ, SubAtom::dummy()));
                     }
-                });
-                if vars[subq_var].occurrences.is_empty() {
-                    vars.unwrap_val(subq_var);
+                    false
                 }
+            });
+            if vars[subq_var].occurrences.is_empty() {
+                vars.unwrap_val(subq_var);
+            }
 
-                // TODO: this makes certain columns like timestamp and subsumed always used,
-                // and undoes the used_in_rhs optimization that skips scanning these columns.
-                // Maybe we can say if a variable is not used_in_rhs and comes up only in val columns,
-                // then they can stay !used_in_rhs and the materialization won't incldue them.
-                subquery_vinfo.used_in_rhs = true;
+            // TODO: this makes certain columns like timestamp and subsumed always used,
+            // and undoes the used_in_rhs optimization that skips scanning these columns.
+            // Maybe we can say if a variable is not used_in_rhs and comes up only in val columns,
+            // then they can stay !used_in_rhs and the materialization won't incldue them.
+            subquery_vinfo.used_in_rhs = true;
 
-                if !subquery_vinfo.occurrences.is_empty() {
-                    Some((subq_var, subquery_vinfo))
-                } else {
-                    None
-                }
-            }));
+            if !subquery_vinfo.occurrences.is_empty() {
+                Some((subq_var, subquery_vinfo))
+            } else {
+                None
+            }
+        }));
 
-        let subquery_atoms =
-            DenseIdMap::from_iter(subquery_atoms.into_iter().filter_map(|atom_id| {
-                let atom_info = atoms.take(atom_id).unwrap();
-
-                // We remove dummy atoms from atom list but don't use them in the subquery.
-                if atom_info.table == dummy_table_id {
-                    None
-                } else {
-                    Some((atom_id, atom_info))
-                }
-            }));
-
-        if log::log_enabled!(Level::Debug) {
-            log::debug!(" Producing bag {:?} {:?}", subquery_vars, subquery_atoms);
-        }
-
-        bags.push(PlanningContext {
-            vars: subquery_vars,
-            atoms: subquery_atoms,
+        let subquery_atoms = DenseIdMap::from_iter(
+            subquery_atoms
+                .into_iter()
+                .map(|atom_id| (atom_id, ctx.atoms[atom_id].clone())),
+        );
+        atoms.retain(|_, atom| {
+            !atom
+                .var_to_column
+                .iter()
+                .all(|(var, _)| subquery_vars.contains_key(*var))
         });
+
+        // if log::log_enabled!(Level::Debug) {
+        // }
+
+        if !bags.iter().any(|bag| {
+            subquery_vars
+                .iter()
+                .all(|(var, _)| bag.vars.contains_key(var))
+        }) {
+            eprintln!(
+                " Producing bag {:?} {:?}",
+                subquery_atoms.iter().map(|(id, _)| id).collect::<Vec<_>>(),
+                subquery_vars.iter().map(|(var, _)| var).collect::<Vec<_>>()
+            );
+            bags.push(PlanningContext {
+                vars: subquery_vars,
+                atoms: subquery_atoms,
+            });
+        }
     }
+    assert!(
+        atoms
+            .iter()
+            .filter(
+                |(_, atom_info)| !atom_info.table.is_dummy() && !atom_info.var_to_column.is_empty()
+            )
+            .next()
+            .is_none(),
+        "All atoms should be put into bags"
+    );
 
     // Step 5.5: Resort the bags to be in topological order
     let mut bags = bags.into_iter().map(Some).collect::<Vec<_>>();
     let mut bags_topo = Vec::with_capacity(bags.len());
     let mut visited = vec![false; bags.len()];
     let mut stack = Vec::new();
-    if bags.len() > 0 {
-        stack.push(0);
-        visited[0] = true;
-    }
-    // eprintln!("Topologically sorting bags...");
-    while !stack.is_empty() {
-        let bag_id = stack.pop().unwrap();
-        // eprintln!("visiting {}", bag_id);
-        let bag = mem::take(&mut bags[bag_id]).unwrap();
-        for (i, child_bag) in bags.iter().enumerate().filter(|(_, b)| b.is_some()) {
-            let child_bag = child_bag.as_ref().unwrap();
-            if child_bag
-                .vars
-                .iter()
-                .any(|(var, _)| bag.vars.contains_key(var))
-                && !visited[i]
-            {
-                visited[i] = true;
-                // eprintln!("{} -> {}", bag_id, i);
-                stack.push(i);
-            }
+    for i in 0..bags.len() {
+        if visited[i] {
+            continue;
         }
-        bags_topo.push(bag);
+        stack.push(i);
+        visited[i] = true;
+
+        while !stack.is_empty() {
+            let bag_id = stack.pop().unwrap();
+            // eprintln!("visiting {}", bag_id);
+            let bag = mem::take(&mut bags[bag_id]).unwrap();
+            for (i, child_bag) in bags.iter().enumerate().filter(|(_, b)| b.is_some()) {
+                let child_bag = child_bag.as_ref().unwrap();
+                if child_bag
+                    .vars
+                    .iter()
+                    .any(|(var, _)| bag.vars.contains_key(var))
+                    && !visited[i]
+                {
+                    visited[i] = true;
+                    // eprintln!("{} -> {}", bag_id, i);
+                    stack.push(i);
+                }
+            }
+            bags_topo.push(bag);
+        }
     }
     // from leaves to root
     bags_topo.reverse();
@@ -689,7 +753,6 @@ pub(crate) fn plan_query(query: Query) -> Plan {
             header: header,
             instrs: Arc::new(instrs),
         };
-        dbg!(&stages);
 
         Plan::SinglePlan(SinglePlan {
             atoms: Arc::new(ctx.atoms),
