@@ -189,6 +189,16 @@ impl<K: NumericId, V> DenseIdMap<K, V> {
             .enumerate()
             .filter_map(|(i, v)| Some((K::from_usize(i), v?)))
     }
+
+    pub fn retain(&mut self, mut f: impl FnMut(K, &V) -> bool) {
+        for (i, v) in self.data.iter_mut().enumerate() {
+            if let Some(inner) = v {
+                if !f(K::from_usize(i), inner) {
+                    *v = None;
+                }
+            }
+        }
+    }
 }
 
 impl<K: NumericId, V: Send + Sync> DenseIdMap<K, V> {

@@ -221,6 +221,10 @@ impl<'outer> RuleSetBuilder<'outer> {
             }
             Plan::DecomposedPlan(cached_plan) => {
                 let mut blocks = Vec::with_capacity(cached_plan.stages.blocks.len());
+                // dbg!(&extra_constraints);
+                // dbg!(&cached_plan);
+                // dbg!(&cached_plan.stages);
+                // dbg!(&cached_plan.result_block);
                 for (i, cached_block) in cached_plan.stages.blocks.iter().enumerate() {
                     let mut stages = JoinStages {
                         header: Vec::new(),
@@ -232,7 +236,11 @@ impl<'outer> RuleSetBuilder<'outer> {
                         &cached_plan.atoms,
                         extra_constraints,
                         // Only push constraints for atoms in this block.
-                        |atom| cached_plan.atom_to_bag[atom] == i,
+                        |atom| {
+                            // cached_plan.atom_to_bag.contains_key(atom)
+                            //     &&
+                            cached_plan.atom_to_bag[atom] == i
+                        },
                     );
 
                     self.reprocess_existing_headers(
