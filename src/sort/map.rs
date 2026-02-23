@@ -308,6 +308,43 @@ impl Primitive for ComposeInvert {
     }
 }
 
+#[derive(Clone, Debug)]
+struct Compose {}
+
+// This computes (compose m1 m2) for two arguments m1 and m2.
+impl Primitive for Compose {
+    fn name(&self) -> &str {
+        "compose"
+    }
+
+    fn get_type_constraints(&self, span: &Span) -> Box<dyn crate::constraint::TypeConstraint> {
+        // must be vecs of integer sort
+        Box::new(AllEqualTypeConstraint::new("compose", span.clone()))
+    }
+
+    fn apply(&self, exec_state: &mut ExecutionState, args: &[Value]) -> Option<Value> {
+        let m1 = exec_state
+            .container_values()
+            .get_val::<MapContainer>(args[0])?
+            .clone();
+        let m2 = exec_state
+            .container_values()
+            .get_val::<MapContainer>(args[1])?
+            .clone();
+        let res = compose(&&m1.data, &m2.data);
+        let map_value = exec_state.container_values().register_val(
+            MapContainer {
+                do_rebuild_keys: false,
+                do_rebuild_vals: false,
+                data: res,
+            },
+            exec_state,
+        );
+
+        Some(map_value)
+    }
+}
+
 // Given a mapping m1 and a mapping m2, gives a mapping which is like m2(m1(x)).
 // In other words maps through m1 and then m2.
 
