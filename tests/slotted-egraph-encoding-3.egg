@@ -21,10 +21,12 @@
 (relation ShapeOf (Expr NameMap Expr))
 
 
+; shape computation of var
 (rule ((Var n))
       ((ShapeOf (Var n) (map-insert (map-empty) 0 n) (Var 0))))
 
 
+; shape computation of App2
 (rule ((= lhs (App2 f (AppId m1 c1) (AppId m2 c2))))
       ((let tuple (shape m1 m2))
        (let m1_p (vec-get tuple 0))
@@ -33,6 +35,7 @@
        (ShapeOf lhs shape-to-original (App2 f (AppId m1_p c1) (AppId m2_p c2)))))
 
 
+; equal shape? -> merge in unionfind. congruence.
 (rule ((ShapeOf e1 mapping1 shape)
        (ShapeOf e2 mapping2 shape)
       (= e1 (ordering-max e1 e2))
@@ -40,6 +43,7 @@
       )
      ((EqualWithRename e1 (AppId (compose (invert mapping2) mapping1) e2))))
 
+; path compression in the UF
 (rule (
     (EqualWithRename a (AppId m1 b))
     (EqualWithRename b (AppId m2 c))
@@ -55,21 +59,23 @@
     )
 )
 
-; (rule ((EqualWithRename a (AppId m1 b))
-      ; (EqualWithRename a (AppId m2 c))
-      ; (!= b c)
-      ; (= (ordering-max b c) b)
-      ; )
-      ; ((delete (EqualWithRename a (AppId m1 b)))
-      ; ; a = m1 * b
-      ; ; a = m2 * c
-      ; ; m1 * b = m2 * c
-      ; ; -> b = (m1⁻¹ * m2) * c
-      ; (EqualWithRename b (AppId (compose (invert m1) m2) c))
-      ; )
-; )
+; resolving multiple parents in the UF.
+(rule ((EqualWithRename a (AppId m1 b))
+      (EqualWithRename a (AppId m2 c))
+      (!= b c)
+      (= (ordering-max b c) b)
+      )
+      ((delete (EqualWithRename a (AppId m1 b)))
+      ; a = m1 * b
+      ; a = m2 * c
+      ; m1 * b = m2 * c
+      ; -> b = (m1⁻¹ * m2) * c
+      (EqualWithRename b (AppId (compose (invert m1) m2) c))
+      )
+)
 
 
+; rebuilding left.
 (rule (
     (= a (App2 f (AppId m_a1 ch_a1) rhs))
     (EqualWithRename ch_a1 (AppId m i))
@@ -80,6 +86,7 @@
     ((App2 f (AppId (compose m m_a1) i) rhs))
 )
 
+; rebuilding right.
 (rule (
     (= a (App2 f lhs (AppId m_a2 ch_a2)))
     (EqualWithRename ch_a2 (AppId m i))
@@ -90,22 +97,6 @@
     ((App2 f lhs (AppId (compose m m_a2) i)))
 )
 
-; symmetry
-(rule ((EqualWithRename x (AppId m y)))
-   ((EqualWithRename y (AppId (invert m) x)))
-)
-
-
-;(rule (
-;     (= a (App2 f (AppId m_a1 ch_a1) (AppId m_a2 ch_a2)))
-;     (= b (App2 f (AppId m_b1 ch_b1) (AppId m_b2 ch_b2)))
-;     (EqualWithRename ch_b1 (AppId m2 ch_a1))
-;     (EqualWithRename ch_b2 (AppId m1 ch_a2)))
-;     ; ch_b1 = m2 * ch_a1
-;     ; ch_b2 = m1 * ch_a2
-;     (EqualWithRename a (AppId ? b))
-;)
-
 ; user writes:
 ; (rule (App2 "*" (App2 "+" a b) c)))
 
@@ -115,6 +106,9 @@
 ;    (EqualWithRename sub1 (AppId m2 (App2 "+" a b)))
 ; ))
 
+
+; Tests:
+
 (push)
 
 (let $x (Var 0))
@@ -122,41 +116,34 @@
 
 (run 10)
 
-; (check (EqualWithRename $y (AppId some-rename $x)))
+(check (EqualWithRename $y (AppId some-rename $x)))
 
 (print-function ShapeOf)
 (print-function EqualWithRename)
 
+(pop)
+
+(push)
+
+(let $identity0 (map-insert (map-empty) 0 0))
+(let $identity1 (map-insert (map-empty) 1 1))
+
+(let $x (AppId $identity0 (Var 0)))
+(let $y (AppId $identity1 (Var 1)))
+
+; add f(x, y), f(y, x)
+; hopefully they are represented by the same e-class.
+(let $fxy (App2 "f" $x $y))
+(let $fyx (App2 "f" $y $x))
+
+(run 30)
+
+(check (EqualWithRename $fxy (AppId _ $fxy)))
+(check (EqualWithRename $fyx (AppId _ $fxy)))
+
+(print-function EqualWithRename)
+(print-function ShapeOf)
 
 (pop)
 
-; (push)
-; 
-; (let $identity0 (map-insert (map-empty) 0 0))
-; (let $identity1 (map-insert (map-empty) 1 1))
-; 
-; 
-; (let $x (AppId $identity0 (Var 0)))
-; (let $y (AppId $identity1 (Var 1)))
-; 
-; ; add f(x, y), f(y, x)
-; ; hopefully they are represented by the same e-class.
-; (let $fxy (App2 "f" $x $y))
-; (let $fyx (App2 "f" $y $x))
-; 
-; (relation ThingyRelation (Expr))
-; 
-; (rule ((ShapeOf (App2 f (AppId _ (Var 0)) (AppId _ (Var 0))) _ thingy))
-  ; ((ThingyRelation thingy))
-; )
-; 
-; (run 30)
-; 
-; 
-; ; (print-function EqualWithRename)
-; (print-function ThingyRelation)
-; ; (check (EqualWithRename $fxy (AppId some-rename $fyx)))
-; 
-; (pop)
-; 
-; 
+
