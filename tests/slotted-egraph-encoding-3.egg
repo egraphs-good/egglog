@@ -35,8 +35,39 @@
 
 (rule ((ShapeOf e1 mapping1 shape)
        (ShapeOf e2 mapping2 shape)
-       )
-      ((EqualWithRename e1 (AppId (compose (invert mapping2) mapping1) e2))))
+      (= e1 (ordering-max e1 e2))
+      (!= e1 e2)
+      )
+     ((EqualWithRename e1 (AppId (compose (invert mapping2) mapping1) e2))))
+
+(rule (
+    (EqualWithRename a (AppId m1 b))
+    (EqualWithRename b (AppId m2 c))
+    (= b (ordering-max b c))
+    (!= b c)
+    )
+    ; a = m1*b
+    ; b = m2*c
+    ; a = m1*m2 * c
+    (
+    (delete (EqualWithRename a (AppId m1 b)))
+    (EqualWithRename a (AppId (compose m2 m1) c))
+    )
+)
+
+; (rule ((EqualWithRename a (AppId m1 b))
+      ; (EqualWithRename a (AppId m2 c))
+      ; (!= b c)
+      ; (= (ordering-max b c) b)
+      ; )
+      ; ((delete (EqualWithRename a (AppId m1 b)))
+      ; ; a = m1 * b
+      ; ; a = m2 * c
+      ; ; m1 * b = m2 * c
+      ; ; -> b = (m1⁻¹ * m2) * c
+      ; (EqualWithRename b (AppId (compose (invert m1) m2) c))
+      ; )
+; )
 
 
 (rule (
@@ -91,40 +122,41 @@
 
 (run 10)
 
-(check (EqualWithRename $x (AppId some-rename $y)))
+; (check (EqualWithRename $y (AppId some-rename $x)))
 
+(print-function ShapeOf)
 (print-function EqualWithRename)
 
 
 (pop)
 
-(push)
-
-(let $identity0 (map-insert (map-empty) 0 0))
-(let $identity1 (map-insert (map-empty) 1 1))
-
-
-(let $x (AppId $identity0 (Var 0)))
-(let $y (AppId $identity1 (Var 1)))
-
-; add f(x, y), f(y, x)
-; hopefully they are represented by the same e-class.
-(let $fxy (App2 "f" $x $y))
-(let $fyx (App2 "f" $y $x))
-
-(relation ThingyRelation (Expr))
-
-(rule ((ShapeOf (App2 f (AppId _ (Var 0)) (AppId _ (Var 0))) _ thingy))
-  ((ThingyRelation thingy))
-)
-
-(run 30)
-
-
-; (print-function EqualWithRename)
-(print-function ThingyRelation)
-; (check (EqualWithRename $fxy (AppId some-rename $fyx)))
-
-(pop)
-
-
+; (push)
+; 
+; (let $identity0 (map-insert (map-empty) 0 0))
+; (let $identity1 (map-insert (map-empty) 1 1))
+; 
+; 
+; (let $x (AppId $identity0 (Var 0)))
+; (let $y (AppId $identity1 (Var 1)))
+; 
+; ; add f(x, y), f(y, x)
+; ; hopefully they are represented by the same e-class.
+; (let $fxy (App2 "f" $x $y))
+; (let $fyx (App2 "f" $y $x))
+; 
+; (relation ThingyRelation (Expr))
+; 
+; (rule ((ShapeOf (App2 f (AppId _ (Var 0)) (AppId _ (Var 0))) _ thingy))
+  ; ((ThingyRelation thingy))
+; )
+; 
+; (run 30)
+; 
+; 
+; ; (print-function EqualWithRename)
+; (print-function ThingyRelation)
+; ; (check (EqualWithRename $fxy (AppId some-rename $fyx)))
+; 
+; (pop)
+; 
+; 
