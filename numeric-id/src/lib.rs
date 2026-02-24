@@ -451,8 +451,10 @@ macro_rules! atomic_of {
 
 #[macro_export]
 macro_rules! define_id {
-    ($v:vis $name:ident, $repr:tt) => { define_id!($v, $name, $repr, ""); };
-    ($v:vis $name:ident, $repr:tt, $doc:tt) => {
+    ($v:vis $name:ident, $repr:tt) => { define_id!($v $name, $repr, "", pretty ""); };
+    ($v:vis $name:ident, $repr:tt, $doc:tt) => { define_id!($v $name, $repr, $doc, pretty ""); };
+    ($v:vis $name:ident, $repr:tt, pretty $pretty_name:expr) => { define_id!($v $name, $repr, "", pretty $pretty_name); };
+    ($v:vis $name:ident, $repr:tt, $doc:tt, pretty $pretty_name:tt) => {
         #[derive(Copy, Clone)]
         #[doc = $doc]
         $v struct $name {
@@ -524,7 +526,12 @@ macro_rules! define_id {
 
         impl std::fmt::Debug for $name {
             fn fmt(&self, fmt: &mut std::fmt::Formatter) -> std::fmt::Result {
-                write!(fmt, "{}({:?})", stringify!($name), self.rep)
+                let name = if $pretty_name.is_empty() {
+                    stringify!($name).to_string()
+                } else {
+                    $pretty_name.to_string()
+                };
+                write!(fmt, "{}({:?})", name, self.rep)
             }
         }
     };
