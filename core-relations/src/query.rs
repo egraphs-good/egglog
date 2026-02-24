@@ -4,7 +4,7 @@ use std::{iter::once, sync::Arc};
 
 use crate::{
     common::IndexSet,
-    free_join::plan::{DecomposedPlan, JoinStageBlocks, SinglePlan},
+    free_join::plan::{BagId, DecomposedPlan, JoinStageBlocks, SinglePlan},
     numeric_id::{DenseIdMap, IdVec, NumericId, define_id},
 };
 use smallvec::SmallVec;
@@ -223,6 +223,7 @@ impl<'outer> RuleSetBuilder<'outer> {
             }
             Plan::DecomposedPlan(cached_plan) => {
                 let mut blocks = Vec::with_capacity(cached_plan.stages.blocks.len());
+                // Process body blocks
                 for (i, cached_block) in cached_plan.stages.blocks.iter().enumerate() {
                     let mut stages = JoinStages {
                         header: Vec::new(),
@@ -233,8 +234,7 @@ impl<'outer> RuleSetBuilder<'outer> {
                         &mut stages,
                         &cached_plan.atoms,
                         extra_constraints,
-                        // Only push constraints for atoms in this block.
-                        |atom| cached_plan.atom_to_bag[atom].contains(&i),
+                        |atom| cached_plan.atom_to_bag[atom].contains(&BagId::Block(i as u32)),
                     );
 
                     self.reprocess_existing_headers(
@@ -246,14 +246,22 @@ impl<'outer> RuleSetBuilder<'outer> {
                     blocks.push((stages, cached_block.1.clone()));
                 }
 
-                assert!(
-                    cached_plan.result_block.header.is_empty(),
-                    "Result blocks should have no headers"
-                );
-                let result_block = JoinStages {
+                // Process result blocks
+                let mut result_block = JoinStages {
                     header: Vec::new(),
                     instrs: cached_plan.result_block.instrs.clone(),
                 };
+                self.push_extra_constraints(
+                    &mut result_block,
+                    &cached_plan.atoms,
+                    extra_constraints,
+                    |atom| cached_plan.atom_to_bag[atom].contains(&BagId::ResultBlock),
+                );
+                self.reprocess_existing_headers(
+                    &mut result_block,
+                    &cached_plan.atoms,
+                    &cached_plan.result_block.header,
+                );
 
                 Plan::DecomposedPlan(DecomposedPlan {
                     atoms: cached_plan.atoms.clone(),
