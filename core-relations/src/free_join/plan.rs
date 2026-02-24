@@ -477,52 +477,22 @@ fn remove_occurrences(
     subquery_vars: &IndexSet<Variable>,
     vars: &mut DenseIdMap<Variable, VarInfo>,
     atoms: &DenseIdMap<AtomId, Atom>,
-) -> DenseIdMap<Variable, VarInfo> {
-    DenseIdMap::from_iter(subquery_vars.iter().filter_map(|&subq_var| {
-        let vinfo = &vars[subq_var];
-        let mut subquery_vinfo = VarInfo {
-            occurrences: vec![],
-            // TODO: this makes certain columns like timestamp and subsumed always used,
-            // and undoes the used_in_rhs optimization that skips scanning these columns.
-            // Maybe we can say if a variable is not used_in_rhs and comes up only in val columns,
-            // then they can stay !used_in_rhs and the materialization won't include them.
-            used_in_rhs: true,
-            defined_in_rhs: vinfo.defined_in_rhs,
-            name: vinfo.name.clone(),
-        };
-
+) {
+    subquery_vars.iter().for_each(|&subq_var| {
         // Separate occurrences into subquery and main query parts
         vars[subq_var].occurrences.retain_mut(|occ| {
             // If the variable only occurs in the current bag, we remove this variable from the main
             // query.
-            if !atoms[occ.atom]
+            !atoms[occ.atom]
                 .var_to_column
                 .iter()
                 .all(|(ov, _)| subquery_vars.contains(ov))
-            {
-                true
-            } else {
-                // TODO: CRITICAL: is this correct? We are not using the subquery from the tree decomposition?
-                // Should move this to main so that it's planed based on subquery_atoms
-                if !atoms[occ.atom].table.is_dummy() {
-                    subquery_vinfo
-                        .occurrences
-                        .push(mem::replace(occ, SubAtom::dummy()));
-                }
-                false
-            }
         });
 
         if vars[subq_var].occurrences.is_empty() {
             vars.unwrap_val(subq_var);
         }
-
-        if !subquery_vinfo.occurrences.is_empty() {
-            Some((subq_var, subquery_vinfo))
-        } else {
-            None
-        }
-    }))
+    })
 }
 
 /// Performs variable elimination to decompose the query into tree-structured bags.
@@ -553,6 +523,8 @@ fn decompose_into_bags(original_ctx: &PlanningContext) -> Vec<PlanningContext> {
             .filter(|(_, atom)| {
                 atom.column_to_var
                     .iter()
+                    // Use `any` to include any atom that contains subquery variables.
+                    // This gives better bound if atom can be properly projected before the query
                     .all(|(_, var)| subquery_vars.contains(var))
             })
             .map(|(atom_id, _)| atom_id)
@@ -562,7 +534,19 @@ fn decompose_into_bags(original_ctx: &PlanningContext) -> Vec<PlanningContext> {
         create_covering_atom(&subquery_vars, &mut vars, &mut atoms);
 
         // Split variable occurrences and extract subquery variables
-        let subquery_var_map = remove_occurrences(&subquery_vars, &mut vars, &atoms);
+        remove_occurrences(&subquery_vars, &mut vars, &atoms);
+        let subquery_var_map = DenseIdMap::from_iter(subquery_vars.iter().map(|&var| {
+            let mut var_info = original_ctx.vars[var].clone();
+            // TODO: this makes certain columns like timestamp and subsumed always used,
+            // and undoes the used_in_rhs optimization that skips scanning these columns.
+            // Maybe we can say if a variable is not used_in_rhs and comes up only in val columns,
+            // then they can stay !used_in_rhs and the materialization won't include them.
+            var_info.used_in_rhs = true;
+            var_info
+                .occurrences
+                .retain(|occ| subquery_atoms.contains(&occ.atom));
+            (var, var_info)
+        }));
 
         // Extract subquery atoms
         let subquery_atom_map = DenseIdMap::from_iter(
