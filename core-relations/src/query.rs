@@ -232,7 +232,7 @@ impl<'outer> RuleSetBuilder<'outer> {
                         &cached_plan.atoms,
                         extra_constraints,
                         // Only push constraints for atoms in this block.
-                        |atom| cached_plan.atom_to_bag[atom] == i,
+                        |atom| cached_plan.atom_to_bag[atom].contains(&i),
                     );
 
                     self.reprocess_existing_headers(

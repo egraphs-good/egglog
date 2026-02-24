@@ -117,13 +117,6 @@ impl SubAtom {
             vars: Default::default(),
         }
     }
-
-    pub(crate) fn dummy() -> SubAtom {
-        SubAtom {
-            atom: AtomId::new(u32::MAX),
-            vars: SmallVec::default(),
-        }
-    }
 }
 
 #[derive(Debug, Clone)]
