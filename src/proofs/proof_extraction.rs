@@ -11,8 +11,6 @@ pub enum ProveExistsError {
     RequiresConstructor,
     #[error("prove-exists does not support primitives")]
     PrimitivesUnsupported,
-    #[error("prove requires proofs mode")]
-    ProofsDisabled,
     #[error("Could not find a proof due to query not matching (constructor {constructor}).")]
     QueryDidNotMatch { constructor: String },
 }
@@ -39,10 +37,6 @@ impl ProofInstrumentor<'_> {
             .functions
             .get(&func.name)
             .unwrap_or_else(|| panic!("constructor {} is not declared", func.name));
-
-        if !self.egraph.proof_state.proofs_enabled {
-            return Err(ProveExistsError::ProofsDisabled);
-        }
 
         let backend_id = function.backend_id;
         let output_sort = function.schema.output.clone();
@@ -71,7 +65,19 @@ impl ProofInstrumentor<'_> {
             constructor: func.name.clone(),
         })?;
 
-        let proof_function_name = self.term_proof_name(output_sort.name());
+        let proof_function_name = self
+            .egraph
+            .proof_state
+            .proof_func_parent
+            .get(output_sort.name())
+            .unwrap_or_else(|| {
+                panic!(
+                    "no :proof-func annotation recorded for sort {} (constructor {})",
+                    output_sort.name(),
+                    func.name
+                )
+            })
+            .clone();
         let proof_value = self
             .egraph
             .lookup_function(&proof_function_name, &[witness_value])

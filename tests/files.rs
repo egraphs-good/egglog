@@ -311,26 +311,20 @@ fn generate_tests(glob: &str) -> Vec<Trial> {
             });
         }
 
-        // proof_testing mode adds automatic prove-exists, which has different output
         if !should_fail && supports_proofs {
+            // proof_testing mode adds automatic prove-exists, which has different output
             push_trial(Run {
                 proof_testing: true,
                 ..run.clone()
             });
-        }
 
-        // TODO- running desugar + proofs fails on `prove-exists` commands. We can fix this by tying proof tables to constructors in the egglog itself.
-        /*if !should_fail
-            && supports_proofs
-            && !run.path.to_string_lossy().contains("math-microbenchmark")
-            && !requires_proofs
-        {
+            // also test desugaring in proof mode, then running normally
             push_trial(Run {
-                proofs: true,
+                proof_testing: true,
                 desugar: true,
                 ..run.clone()
             });
-        }*/
+        }
     }
 
     trials

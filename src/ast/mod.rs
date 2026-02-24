@@ -56,6 +56,9 @@ where
         /// The name of the union-find function for this sort.
         /// Used in term encoding to canonicalize values during extraction.
         uf: Option<String>,
+        /// The name of the proof function for this sort.
+        /// Set by proof desugaring to record where proofs are stored for this sort.
+        proof_func: Option<String>,
         /// Whether values of this sort can be unioned.
         /// Defaults to true for user-defined sorts.
         /// Set to false for relations and term tables that should not allow union.
@@ -109,12 +112,14 @@ where
                 name,
                 presort_and_args,
                 uf,
+                proof_func,
                 unionable,
             } => GenericCommand::Sort {
                 span: span.clone(),
                 name: name.clone(),
                 presort_and_args: presort_and_args.clone(),
                 uf: uf.clone(),
+                proof_func: proof_func.clone(),
                 unionable: *unionable,
             },
             GenericNCommand::Function(f) => match f.subtype {
@@ -231,12 +236,14 @@ where
                 name,
                 presort_and_args,
                 uf,
+                proof_func,
                 unionable,
             } => GenericNCommand::Sort {
                 span,
                 name,
                 presort_and_args,
                 uf,
+                proof_func,
                 unionable,
             },
             GenericNCommand::Function(func) => GenericNCommand::Function(func.visit_exprs(f)),
@@ -543,6 +550,9 @@ where
         /// The name of the union-find function for this sort.
         /// Used in term encoding to canonicalize values during extraction.
         uf: Option<String>,
+        /// The name of the proof function for this sort.
+        /// Set by proof desugaring to record where proofs are stored for this sort.
+        proof_func: Option<String>,
         /// Whether values of this sort can be unioned.
         /// Defaults to true for user-defined sorts.
         /// Set to false for relations and term tables that should not allow union.
@@ -937,9 +947,18 @@ where
             GenericCommand::Sort {
                 name,
                 presort_and_args: None,
+                uf,
+                proof_func,
                 ..
             } => {
-                write!(f, "(sort {name})")
+                write!(f, "(sort {name}")?;
+                if let Some(uf) = uf {
+                    write!(f, " :uf {uf}")?;
+                }
+                if let Some(pf) = proof_func {
+                    write!(f, " :proof-func {pf}")?;
+                }
+                write!(f, ")")
             }
             GenericCommand::Sort {
                 name,
@@ -1563,12 +1582,14 @@ where
                 name,
                 presort_and_args,
                 uf,
+                proof_func,
                 unionable,
             } => GenericCommand::Sort {
                 span,
                 name: fun(name),
                 presort_and_args,
-                uf,
+                uf: uf.map(&mut *fun),
+                proof_func: proof_func.map(&mut *fun),
                 unionable,
             },
             GenericCommand::Datatype {
@@ -1825,12 +1846,14 @@ where
                 name,
                 presort_and_args,
                 uf,
+                proof_func,
                 unionable,
             } => GenericCommand::Sort {
                 span,
                 name,
                 presort_and_args,
                 uf,
+                proof_func,
                 unionable,
             },
             GenericCommand::Datatype {

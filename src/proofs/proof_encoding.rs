@@ -7,6 +7,8 @@ use crate::*;
 #[derive(Clone)]
 pub(crate) struct EncodingState {
     pub uf_parent: HashMap<String, String>,
+    /// Maps sort name -> proof function name (set from :proof-func annotation).
+    pub proof_func_parent: HashMap<String, String>,
     pub term_header_added: bool,
     // TODO this is very ugly- we should separate out a typechecking struct
     // since we didn't need an entire e-graph
@@ -21,6 +23,7 @@ impl EncodingState {
     pub(crate) fn new(symbol_gen: &mut SymbolGen) -> Self {
         Self {
             uf_parent: HashMap::default(),
+            proof_func_parent: HashMap::default(),
             term_header_added: false,
             original_typechecking: None,
             proofs_enabled: false,
@@ -1154,11 +1157,17 @@ impl<'a> ProofInstrumentor<'a> {
                 ..
             } => {
                 let uf_name = self.uf_name(name);
+                let proof_func = if self.egraph.proof_state.proofs_enabled {
+                    Some(self.term_proof_name(name))
+                } else {
+                    None
+                };
                 res.push(Command::Sort {
                     span: span.clone(),
                     name: name.clone(),
                     presort_and_args: presort_and_args.clone(),
                     uf: Some(uf_name),
+                    proof_func,
                     unionable: *unionable,
                 });
                 res.extend(self.declare_sort(name));

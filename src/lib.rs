@@ -1080,10 +1080,22 @@ impl EGraph {
     fn run_command(&mut self, command: ResolvedNCommand) -> Result<Option<CommandOutput>, Error> {
         match command {
             // Sorts are already declared during typechecking
-            ResolvedNCommand::Sort { name, uf, .. } => {
+            ResolvedNCommand::Sort {
+                name,
+                uf,
+                proof_func,
+                ..
+            } => {
                 // If the sort has a :uf field, store the mapping for extraction
                 if let Some(uf_name) = uf {
                     self.proof_state.uf_parent.insert(name.clone(), uf_name);
+                }
+                // If the sort has a :proof-func field, store the mapping for proof lookup.
+                // This annotation is set by proof instrumentation and consumed here.
+                if let Some(proof_func_name) = proof_func {
+                    self.proof_state
+                        .proof_func_parent
+                        .insert(name.clone(), proof_func_name);
                 }
                 log::info!("Declared sort {name}.")
             }
@@ -1671,7 +1683,11 @@ impl EGraph {
     /// Returns `None` if the tuple does not exist.
     /// `panics` if the function does not exist.
     pub fn lookup_function(&self, name: &str, key: &[Value]) -> Option<Value> {
-        let func = self.functions.get(name).unwrap().backend_id;
+        let func = self
+            .functions
+            .get(name)
+            .unwrap_or_else(|| panic!("Could not find function {name}"))
+            .backend_id;
         self.backend.lookup_id(func, key)
     }
 

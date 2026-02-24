@@ -58,6 +58,7 @@ pub(crate) fn desugar_command(
                         name,
                         presort_and_args: None,
                         uf: None,
+                        proof_func: None,
                         unionable: true,
                     });
                 }
@@ -77,6 +78,7 @@ pub(crate) fn desugar_command(
                     name,
                     presort_and_args: Some((sort, args)),
                     uf: None,
+                    proof_func: None,
                     unionable: true,
                 });
             }
@@ -124,12 +126,14 @@ pub(crate) fn desugar_command(
             name,
             presort_and_args,
             uf,
+            proof_func,
             unionable,
         } => vec![NCommand::Sort {
             span,
             name,
             presort_and_args,
             uf,
+            proof_func,
             unionable,
         }],
         Command::AddRuleset(span, name) => vec![NCommand::AddRuleset(span, name)],
@@ -212,6 +216,7 @@ fn desugar_prove(parser: &mut Parser, span: Span, query: Vec<Fact>) -> Vec<NComm
             name: fresh_sort.clone(),
             presort_and_args: None,
             uf: None,
+            proof_func: None,
             unionable: false,
         },
         NCommand::Function(FunctionDecl::constructor(
@@ -258,6 +263,7 @@ fn desugar_datatype(span: Span, name: String, variants: Vec<Variant>) -> Vec<NCo
         name: name.clone(),
         presort_and_args: None,
         uf: None,
+        proof_func: None,
         unionable: true,
     }]
     .into_iter()
@@ -368,6 +374,7 @@ fn desugar_relation(
             name: fresh_sort.clone(),
             presort_and_args: None,
             uf: None,
+            proof_func: None,
             unionable: false,
         },
         NCommand::Function(FunctionDecl::constructor(

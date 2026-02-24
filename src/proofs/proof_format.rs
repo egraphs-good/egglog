@@ -27,7 +27,6 @@ struct RawProofStore {
     term_dag: TermDag,
     /// Bidirectional map between proof terms and their ids.
     store: IndexSet<RawProof>,
-    encoding_names: EncodingNames,
     term_to_proof: HashMap<TermId, RawProofId>,
     proof_to_term: HashMap<RawProofId, TermId>,
 }
@@ -174,14 +173,13 @@ pub enum Justification {
 impl RawProofStore {
     /// After extracting a proof from the e-graph, convert it to a [`RawProof`].
     pub(crate) fn from_extracted(
-        encoding_names: &EncodingNames,
+        _encoding_names: &EncodingNames,
         term_dag: TermDag,
         term: TermId,
     ) -> (Self, RawProofId) {
         let mut store = RawProofStore {
             term_dag: term_dag.clone(),
             store: IndexSet::default(),
-            encoding_names: encoding_names.clone(),
             term_to_proof: HashMap::default(),
             proof_to_term: HashMap::default(),
         };
@@ -208,31 +206,31 @@ impl RawProofStore {
             );
         };
 
-        let proof = if head == self.encoding_names.fiat_constructor {
+        let proof = if head.contains("Fiat") {
             assert!(args.len() == 2, "fiat constructor should have 2 args");
             RawProof::Fiat(args[0], args[1])
-        } else if head == self.encoding_names.rule_constructor {
+        } else if head.contains("Rule") {
             assert!(args.len() == 4, "rule constructor should have 4 args");
             let name = self.parse_string(args[0]);
             let premises = self.parse_proof_list(args[1]);
             RawProof::Rule(name, premises, args[2], args[3])
-        } else if head == self.encoding_names.merge_fn_constructor {
+        } else if head.contains("Merge") {
             assert!(args.len() == 4, "merge constructor should have 4 args");
             let function = self.parse_string(args[0]);
             let old_proof = self.parse_proof(args[1]);
             let new_proof = self.parse_proof(args[2]);
             let term = args[3];
             RawProof::MergeFn(function, old_proof, new_proof, term)
-        } else if head == self.encoding_names.eq_trans_constructor {
+        } else if head.contains("Trans") {
             assert!(args.len() == 2, "trans constructor should have 2 args");
             let left = self.parse_proof(args[0]);
             let right = self.parse_proof(args[1]);
             RawProof::Trans(left, right)
-        } else if head == self.encoding_names.eq_sym_constructor {
+        } else if head.contains("Sym") {
             assert!(args.len() == 1, "sym constructor should have 1 arg");
             let inner = self.parse_proof(args[0]);
             RawProof::Sym(inner)
-        } else if head == self.encoding_names.congr_constructor {
+        } else if head.contains("Congr") {
             assert!(args.len() == 3, "congr constructor should have 3 args");
             let proof = self.parse_proof(args[0]);
             let child_index = self.parse_index(args[1]);
@@ -249,10 +247,10 @@ impl RawProofStore {
         let term = self.term_dag.get(list_term).clone();
         match term {
             Term::App(head, args) => {
-                if head == self.encoding_names.pnil {
+                if head.contains("PNil") {
                     assert!(args.is_empty(), "pnil should not have arguments");
                     Vec::new()
-                } else if head == self.encoding_names.pcons {
+                } else if head.contains("PCons") {
                     assert!(args.len() == 2, "pcons should have 2 arguments");
                     let head_proof = self.parse_proof(args[0]);
                     let rest = self.parse_proof_list(args[1]);
