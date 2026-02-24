@@ -4,7 +4,7 @@ use crate::{
     TableId,
     free_join::ProcessedConstraints,
     numeric_id::{DenseIdMap, NumericId},
-    query::SymbolMap,
+    query::{FunDeps, SymbolMap},
 };
 use egglog_numeric_id::define_id;
 use fixedbitset::FixedBitSet;
@@ -385,14 +385,16 @@ fn next_var_to_eliminate(
     vars: &DenseIdMap<Variable, VarInfo>,
     atoms: &DenseIdMap<AtomId, Atom>,
     bags: &[PlanningContext],
+    fun_deps: &FunDeps,
 ) -> Option<IndexSet<Variable>> {
     vars.iter()
         .map(|(var, vinfo)| {
-            let subquery_vars: IndexSet<Variable> = atoms
+            let subquery_vars = atoms
                 .iter()
                 .filter(|(_, atom)| atom.column_to_var.iter().any(|(_, avar)| *avar == var))
-                .flat_map(|(_, atom)| atom.column_to_var.iter().map(|(_, var)| *var))
-                .collect::<IndexSet<_>>();
+                .flat_map(|(_, atom)| atom.column_to_var.iter().map(|(_, var)| *var));
+            let subquery_vars = fun_deps.closure(subquery_vars);
+
             let is_private = vinfo.occurrences.len() == 1;
             // At most how many variables of the proposed hyperedge are subsumed by any existing bag?
             let min_fill = subquery_vars.len()
@@ -515,7 +517,9 @@ fn decompose_into_bags(original_ctx: &PlanningContext) -> Vec<PlanningContext> {
     let mut bags = Vec::new();
 
     // Variable elimination loop
-    while let Some(subquery_vars) = next_var_to_eliminate(&vars, &atoms, &bags) {
+    while let Some(subquery_vars) =
+        next_var_to_eliminate(&vars, &atoms, &bags, &original_ctx.fun_deps)
+    {
         // Collect atoms that only contain subquery variables
         let subquery_atoms: IndexSet<AtomId> = original_ctx
             .atoms
@@ -572,6 +576,7 @@ fn decompose_into_bags(original_ctx: &PlanningContext) -> Vec<PlanningContext> {
             bags.push(PlanningContext {
                 vars: subquery_var_map,
                 atoms: subquery_atom_map,
+                fun_deps: original_ctx.fun_deps.clone(),
             });
         }
     }
@@ -749,21 +754,32 @@ fn build_result_block(blocks: &[(JoinStages, MatSpec)]) -> JoinStages {
 }
 
 pub(crate) fn tree_decompose_and_plan(
-    ctx: &PlanningContext,
+    ctx: PlanningContext,
     strat: PlanStrategy,
-) -> (
-    /* Intermediate materializations */ Vec<(JoinStages, MatSpec)>,
-    /* Final block that produces the final results */ JoinStages,
-    /* Mapping from an atom to the bag it belongs to */ AtomToBag,
-) {
+    actions: ActionId,
+) -> Plan {
     // Step 1: Decompose the query into tree-structured bags
-    let bags = decompose_into_bags(ctx);
-    let mut atom_to_bag = AtomToBag::new();
+    let bags = decompose_into_bags(&ctx);
+    if bags.len() == 1 {
+        // Don't do Yannakakis if it's just one bag
+        let (header, instrs) = plan_stages(&ctx, strat);
+        let stages = JoinStages {
+            header: header,
+            instrs: Arc::new(instrs),
+        };
+
+        return Plan::SinglePlan(SinglePlan {
+            atoms: Arc::new(ctx.atoms),
+            stages,
+            actions,
+        });
+    }
 
     // Step 2: Sort bags topologically
     let bags = topologically_sort_bags(bags);
 
     // Map atoms to their bag indices
+    let mut atom_to_bag = AtomToBag::new();
     for (i, bag) in bags.iter().enumerate() {
         for (atom_id, _) in bag.atoms.iter() {
             if !atom_to_bag.contains_key(atom_id) {
@@ -786,40 +802,23 @@ pub(crate) fn tree_decompose_and_plan(
     // Step 5: Build the final result block
     let result_block = build_result_block(&blocks);
 
-    (blocks, result_block, atom_to_bag)
+    Plan::DecomposedPlan(DecomposedPlan {
+        atoms: Arc::new(ctx.atoms),
+        atom_to_bag: Arc::new(atom_to_bag),
+        stages: JoinStageBlocks { blocks },
+        result_block,
+        actions,
+    })
 }
-
-const TREE_DECOMPOSE: bool = true;
 
 pub(crate) fn plan_query(query: Query) -> Plan {
     let atoms = query.atoms;
     let ctx = PlanningContext {
         vars: query.var_info,
         atoms,
+        fun_deps: Arc::new(query.fun_deps),
     };
-    if TREE_DECOMPOSE {
-        let (blocks, result_block, atom_to_bag) =
-            tree_decompose_and_plan(&ctx, query.plan_strategy);
-        Plan::DecomposedPlan(DecomposedPlan {
-            atoms: Arc::new(ctx.atoms),
-            atom_to_bag: Arc::new(atom_to_bag),
-            stages: JoinStageBlocks { blocks },
-            result_block,
-            actions: query.action,
-        })
-    } else {
-        let (header, instrs) = plan_stages(&ctx, query.plan_strategy);
-        let stages = JoinStages {
-            header: header,
-            instrs: Arc::new(instrs),
-        };
-
-        Plan::SinglePlan(SinglePlan {
-            atoms: Arc::new(ctx.atoms),
-            stages,
-            actions: query.action,
-        })
-    }
+    tree_decompose_and_plan(ctx, query.plan_strategy, query.action)
 }
 
 /// StageInfo is an intermediate stage used to describe the ordering of
@@ -843,6 +842,7 @@ struct StageInfo {
 pub(crate) struct PlanningContext {
     vars: DenseIdMap<Variable, VarInfo>,
     atoms: DenseIdMap<AtomId, Atom>,
+    fun_deps: Arc<FunDeps>,
 }
 
 /// Mutable state tracked during query planning.
