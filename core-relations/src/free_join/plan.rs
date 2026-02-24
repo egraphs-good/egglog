@@ -372,7 +372,13 @@ pub enum PlanStrategy {
     Gj,
 }
 
-type AtomToBag = DenseIdMap<AtomId, Vec<usize>>;
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
+pub(crate) enum BagId {
+    ResultBlock,
+    Block(u32),
+}
+
+type AtomToBag = DenseIdMap<AtomId, Vec<BagId>>;
 
 /// Computes the next variable to eliminate and the subquery of its neighborhood.
 ///
@@ -749,6 +755,56 @@ fn build_result_block(blocks: &[(JoinStages, MatSpec)]) -> JoinStages {
     }
 }
 
+/// The last stage and the result block have the following structure:
+///
+/// for ...
+///    yield [] -> x1, x2, ... as Mn
+///
+/// For x1, x2, ... in Mn:
+///   ...
+///
+/// This can be fused into one loop
+fn fuse_last_stage(
+    mut blocks: Vec<(JoinStages, MatSpec)>,
+    result_block: JoinStages,
+    mut atom_to_bag: AtomToBag,
+) -> (Vec<(JoinStages, MatSpec)>, JoinStages, AtomToBag) {
+    if blocks.is_empty() {
+        return (blocks, result_block, atom_to_bag);
+    }
+
+    let last_block = blocks.pop().unwrap();
+    assert!(last_block.1.msg_vars.is_empty());
+    assert!(result_block.header.is_empty());
+    if !matches!(
+        result_block.instrs[0],
+        JoinStage::FusedIntersectMat {
+            cover,
+            mode: MatScanMode::Full,
+            ..
+        } if cover == MatId::from_usize(blocks.len()
+    )) {
+        // If the first stage of the result block does not scan the last materialization
+        return (blocks, result_block, atom_to_bag);
+    }
+
+    // Fuse the instructions
+    let mut last_block = last_block.0;
+    let mut instrs = Arc::unwrap_or_clone(last_block.instrs);
+    instrs.extend(result_block.instrs[1..].iter().cloned());
+    last_block.instrs = Arc::new(instrs);
+
+    // Update the atom_to_bag
+    for (_atom, bag) in atom_to_bag.iter_mut() {
+        for b in bag.iter_mut() {
+            if *b == BagId::Block(blocks.len() as u32) {
+                *b = BagId::ResultBlock;
+            }
+        }
+    }
+    (blocks, last_block, atom_to_bag)
+}
+
 pub(crate) fn tree_decompose_and_plan(
     ctx: PlanningContext,
     strat: PlanStrategy,
@@ -756,7 +812,7 @@ pub(crate) fn tree_decompose_and_plan(
 ) -> Plan {
     // Step 1: Decompose the query into tree-structured bags
     let bags = decompose_into_bags(&ctx);
-    if bags.len() == 1 {
+    if bags.len() <= 1 {
         // Don't do Yannakakis if it's just one bag
         let (header, instrs) = plan_stages(&ctx, strat);
         let stages = JoinStages {
@@ -781,7 +837,7 @@ pub(crate) fn tree_decompose_and_plan(
             if !atom_to_bag.contains_key(atom_id) {
                 atom_to_bag.insert(atom_id, vec![]);
             }
-            atom_to_bag.get_mut(atom_id).unwrap().push(i);
+            atom_to_bag[atom_id].push(BagId::Block(i as u32));
         }
     }
 
@@ -797,6 +853,9 @@ pub(crate) fn tree_decompose_and_plan(
 
     // Step 5: Build the final result block
     let result_block = build_result_block(&blocks);
+
+    // Optimization the avoids the last materialization
+    let (blocks, result_block, atom_to_bag) = fuse_last_stage(blocks, result_block, atom_to_bag);
 
     Plan::DecomposedPlan(DecomposedPlan {
         atoms: Arc::new(ctx.atoms),
