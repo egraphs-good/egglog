@@ -407,8 +407,7 @@ impl<'outer, 'a> QueryBuilder<'outer, 'a> {
         let processed = self.rsb.db.process_constraints(table_id, &cs);
         let mut atom = Atom {
             table: table_id,
-            var_to_column: Default::default(),
-            column_to_var: Default::default(),
+            var_columns: Default::default(),
             constraints: processed,
         };
         let next_atom = AtomId::from_usize(self.query.atoms.n_ids());
@@ -424,13 +423,12 @@ impl<'outer, 'a> QueryBuilder<'outer, 'a> {
                 continue;
             }
             let col = ColumnId::from_usize(i);
-            if let Some(prev) = atom.var_to_column.insert(var, col) {
+            if let Some(prev) = atom.var_columns.insert(var, col) {
                 atom.constraints.slow.push(Constraint::Eq {
                     l_col: col,
                     r_col: prev,
                 })
             };
-            atom.column_to_var.insert(col, var);
             subatoms
                 .entry(var)
                 .or_insert_with(|| SubAtom::new(next_atom))
@@ -878,14 +876,69 @@ impl RuleBuilder<'_, '_> {
 #[derive(Debug, Clone)]
 pub(crate) struct Atom {
     pub(crate) table: TableId,
-    pub(crate) var_to_column: HashMap<Variable, ColumnId>,
-    pub(crate) column_to_var: DenseIdMap<ColumnId, Variable>,
+    pub(crate) var_columns: VarColumnMap,
     /// These constraints are an initial take at processing "fast" constraints as well as a
     /// potential list of "slow" constraints.
     ///
     /// Fast constraints get re-computed when queries are executed. In particular, this makes it
     /// possible to cache plans and add new fast constraints to them without re-planning.
     pub(crate) constraints: ProcessedConstraints,
+}
+
+#[derive(Clone, Default)]
+pub(crate) struct VarColumnMap {
+    var_to_column: HashMap<Variable, ColumnId>,
+    column_to_var: DenseIdMap<ColumnId, Variable>,
+}
+
+impl std::fmt::Debug for VarColumnMap {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        let mut entries: Vec<_> = self.column_to_var.iter().collect();
+        entries.sort_by_key(|(col, _)| col.index());
+
+        f.write_str("VarColumnMap(")?;
+        for (i, (col, var)) in entries.iter().enumerate() {
+            if i > 0 {
+                f.write_str(", ")?;
+            }
+            write!(f, "{:?} -> {:?}", col, var)?;
+        }
+        f.write_str(")")
+    }
+}
+
+impl VarColumnMap {
+    pub(crate) fn insert(&mut self, var: Variable, col: ColumnId) -> Option<ColumnId> {
+        let prev = self.var_to_column.insert(var, col);
+        self.column_to_var.insert(col, var);
+        prev
+    }
+
+    pub(crate) fn get_col(&self, var: Variable) -> ColumnId {
+        self.var_to_column
+            .get(&var)
+            .copied()
+            .expect("variable must exist in atom")
+    }
+
+    pub(crate) fn get_var(&self, col: ColumnId) -> Variable {
+        self.column_to_var
+            .get(col)
+            .copied()
+            .expect("column must exist in atom")
+    }
+
+    pub(crate) fn cols(&self) -> impl Iterator<Item = (ColumnId, Variable)> + '_ {
+        self.column_to_var.iter().map(|(col, var)| (col, *var))
+    }
+
+    pub(crate) fn vars(&self) -> impl Iterator<Item = (Variable, ColumnId)> + '_ {
+        self.var_to_column.iter().map(|(var, col)| (*var, *col))
+    }
+
+    pub(crate) fn is_empty(&self) -> bool {
+        self.var_to_column.is_empty()
+    }
 }
 
 /// A functional dependency inferencer.
