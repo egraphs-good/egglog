@@ -922,26 +922,20 @@ impl VarColumnMap {
         prev
     }
 
-    pub(crate) fn get_col(&self, var: Variable) -> ColumnId {
-        self.var_to_column
-            .get(&var)
-            .copied()
-            .expect("variable must exist in atom")
+    pub(crate) fn get_col(&self, var: Variable) -> Option<ColumnId> {
+        self.var_to_column.get(&var).copied()
     }
 
-    pub(crate) fn get_var(&self, col: ColumnId) -> Variable {
-        self.column_to_var
-            .get(col)
-            .copied()
-            .expect("column must exist in atom")
+    pub(crate) fn get_var(&self, col: ColumnId) -> Option<Variable> {
+        self.column_to_var.get(col).copied()
     }
 
-    pub(crate) fn cols(&self) -> impl Iterator<Item = (ColumnId, Variable)> + '_ {
+    pub(crate) fn iter(&self) -> impl Iterator<Item = (ColumnId, Variable)> + '_ {
         self.column_to_var.iter().map(|(col, var)| (col, *var))
     }
 
-    pub(crate) fn vars(&self) -> impl Iterator<Item = (Variable, ColumnId)> + '_ {
-        self.var_to_column.iter().map(|(var, col)| (*var, *col))
+    pub(crate) fn vars(&self) -> impl Iterator<Item = Variable> + '_ {
+        self.iter().map(|(_, var)| var)
     }
 
     pub(crate) fn is_empty(&self) -> bool {
