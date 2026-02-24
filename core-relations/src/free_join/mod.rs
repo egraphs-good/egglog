@@ -46,7 +46,7 @@ define_id!(
     u32,
     "A component of a query consisting of a function and a list of variables or constants"
 );
-define_id!(pub Variable, u32, "a variable in a query");
+define_id!(pub Variable, u32, "a variable in a query", pretty "Var");
 
 impl Variable {
     pub fn placeholder() -> Variable {
