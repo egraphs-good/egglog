@@ -13,6 +13,8 @@ struct Run {
     /// proof_testing mode adds automatic prove-exists commands, which produce
     /// proof output that differs from normal mode. This should use separate snapshots.
     proof_testing: bool,
+    /// Set to false in desugared mode because the program no longer matches the original
+    proof_checking: bool,
 }
 
 impl Run {
@@ -60,6 +62,7 @@ impl Run {
                 term_encoding: false,
                 proofs: false,
                 proof_testing: false,
+                proof_checking: false,
             };
 
             normal_run.test_program(
@@ -98,7 +101,7 @@ impl Run {
     }
 
     fn egraph(&self) -> EGraph {
-        if self.proof_testing {
+        let res = if self.proof_testing {
             EGraph::new_with_proofs().with_proof_testing()
         } else if self.proofs {
             EGraph::new_with_proofs()
@@ -106,6 +109,12 @@ impl Run {
             EGraph::new_with_term_encoding()
         } else {
             EGraph::default()
+        };
+
+        if self.proof_testing {
+            res
+        } else {
+            res.without_proof_checking()
         }
     }
 
@@ -272,6 +281,7 @@ fn generate_tests(glob: &str) -> Vec<Trial> {
             term_encoding: false,
             proofs: false,
             proof_testing: false,
+            proof_checking: true,
         };
         let should_fail = run.should_fail();
         let requires_proofs = run.requires_proofs();

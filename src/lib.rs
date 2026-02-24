@@ -447,6 +447,13 @@ impl EGraph {
         self
     }
 
+    /// Turn off proof checking. This should not be generally used!
+    /// Can speed up proof generation slightly, or be used after interally after desugaring when the program no longer matches the original exactly.
+    pub fn without_proof_checking(mut self) -> Self {
+        self.proof_state.proof_checking = false;
+        self
+    }
+
     /// Add a user-defined command to the e-graph
     /// Get the type information for this e-graph
     pub fn type_info(&mut self) -> &mut TypeInfo {
@@ -1488,6 +1495,8 @@ impl EGraph {
             for command in &typechecked {
                 self.names.check_shadowing(command)?;
             }
+            // Store desugared commands
+            self.desugared_commands.extend_from_slice(&typechecked);
             Ok(typechecked)
         }
     }

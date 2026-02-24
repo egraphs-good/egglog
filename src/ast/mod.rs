@@ -2048,6 +2048,26 @@ where
     unresolved
         .into_iter()
         .map(|cmd| {
+            // First, sanitize rule names referred to by @Rule proof constructors.
+            // These are string literals (not symbols), so map_symbols won't reach them.
+            // We must do this before map_symbols changes @Rule -> ___Rule.
+            let cmd = cmd.visit_exprs(&mut |expr| {
+                if let GenericExpr::Call(span, head, mut args) = expr {
+                    if head == format!("{INTERNAL_SYMBOL_PREFIX}Rule") && !args.is_empty() {
+                        if let GenericExpr::Lit(lit_span, Literal::String(s)) = args[0].clone() {
+                            args[0] = GenericExpr::Lit(
+                                lit_span,
+                                Literal::String(
+                                    s.replace(INTERNAL_SYMBOL_PREFIX, &replacement_head),
+                                ),
+                            );
+                        }
+                    }
+                    GenericExpr::Call(span, head, args)
+                } else {
+                    expr
+                }
+            });
             let cmd = cmd.map_symbols(
                 &mut |h: String| h.replace(INTERNAL_SYMBOL_PREFIX, &replacement_head),
                 &mut |l: String| l.replace(INTERNAL_SYMBOL_PREFIX, &replacement_leaf),

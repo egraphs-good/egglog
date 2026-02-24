@@ -457,6 +457,7 @@ impl ProofStore {
         premise_proofs: &[ProofId],
     ) -> HashMap<String, TermId> {
         let substitution = HashMap::default();
+
         let Some(rule) = prog.iter().find_map(|cmd| match cmd {
             ResolvedNCommand::NormRule { rule } if rule.name == rule_name => Some(rule),
             _ => None,

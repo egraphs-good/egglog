@@ -17,6 +17,7 @@ pub(crate) struct EncodingState {
     pub proofs_enabled: bool,
     pub proof_testing: bool,
     pub proof_names: EncodingNames,
+    pub proof_checking: bool,
 }
 
 impl EncodingState {
@@ -29,6 +30,7 @@ impl EncodingState {
             proofs_enabled: false,
             proof_names: EncodingNames::new(symbol_gen),
             proof_testing: false,
+            proof_checking: true,
         }
     }
 }
