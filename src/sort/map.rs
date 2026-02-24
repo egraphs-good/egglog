@@ -203,7 +203,7 @@ impl Primitive for Shape {
         "shape"
     }
 
-    fn get_type_constraints(&self, span: &Span) -> Box<dyn crate::constraint::TypeConstraint> {
+    fn get_type_constraints(&self, _span: &Span) -> Box<dyn crate::constraint::TypeConstraint> {
         // todo no type contraints
         Box::new(NoTypeConstraint::new())
     }
@@ -228,7 +228,7 @@ impl Primitive for Shape {
             maps.push(kv_pairs);
         }
 
-        let res: Vec<Value> = maps.into_iter().flatten().map(|(k, v)| v).collect();
+        let res: Vec<Value> = maps.into_iter().flatten().map(|(_, v)| v).collect();
 
         // maps from shape slots to original slots
         let mut m: BTreeMap<Value, Value> = BTreeMap::new();
