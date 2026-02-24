@@ -243,7 +243,7 @@ pub(crate) struct JoinStageBlocks {
 #[derive(Debug, Clone)]
 pub(crate) struct DecomposedPlan {
     pub atoms: Arc<DenseIdMap<AtomId, Atom>>,
-    pub atom_to_bag: Arc<DenseIdMap<AtomId, usize>>,
+    pub atom_to_bag: Arc<AtomToBag>,
     pub stages: JoinStageBlocks,
     pub result_block: JoinStages,
     pub actions: ActionId,
@@ -371,7 +371,7 @@ pub enum PlanStrategy {
     Gj,
 }
 
-type AtomToBag = DenseIdMap<AtomId, usize>;
+type AtomToBag = DenseIdMap<AtomId, Vec<usize>>;
 
 /// Computes the next variable to eliminate and the subquery of its neighborhood.
 ///
@@ -766,7 +766,10 @@ pub(crate) fn tree_decompose_and_plan(
     // Map atoms to their bag indices
     for (i, bag) in bags.iter().enumerate() {
         for (atom_id, _) in bag.atoms.iter() {
-            atom_to_bag.insert(atom_id, i);
+            if !atom_to_bag.contains_key(atom_id) {
+                atom_to_bag.insert(atom_id, vec![]);
+            }
+            atom_to_bag.get_mut(atom_id).unwrap().push(i);
         }
     }
 
