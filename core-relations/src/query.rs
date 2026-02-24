@@ -3,6 +3,7 @@
 use std::{iter::once, sync::Arc};
 
 use crate::{
+    common::IndexSet,
     free_join::plan::{DecomposedPlan, JoinStageBlocks, SinglePlan},
     numeric_id::{DenseIdMap, IdVec, NumericId, define_id},
 };
@@ -124,6 +125,7 @@ impl<'outer> RuleSetBuilder<'outer> {
                 // start with an invalid ActionId
                 action: ActionId::new(u32::MAX),
                 plan_strategy: Default::default(),
+                fun_deps: Default::default(),
             },
         }
     }
@@ -443,6 +445,22 @@ impl<'outer, 'a> QueryBuilder<'outer, 'a> {
                 .occurrences
                 .push(subatom);
         }
+
+        // Add functional dependencies for this atom.
+        let get_var = |qe: &QueryEntry| match qe {
+            QueryEntry::Var(v) => Some(*v),
+            QueryEntry::Const(_) => None,
+        };
+        let antecedent = vars[..info.spec().n_keys]
+            .iter()
+            .filter_map(get_var)
+            .collect::<Vec<_>>();
+        let consequent = vars[info.spec().n_keys..]
+            .iter()
+            .filter_map(get_var)
+            .collect::<Vec<_>>();
+        self.query.fun_deps.add_dependency(antecedent, consequent);
+
         Ok(self.query.atoms.push(atom))
     }
 }
@@ -870,9 +888,90 @@ pub(crate) struct Atom {
     pub(crate) constraints: ProcessedConstraints,
 }
 
+/// A functional dependency inferencer.
+///
+/// A functional dependency (x, y, ...) -> (u, v, ...) means that if we know
+/// the values of x, y, ..., then we can determine u, v, ...
+///
+/// This data structure can compute the closure of a set of variables under
+/// a set of functional dependencies.
+#[derive(Clone, Default)]
+pub(crate) struct FunDeps {
+    /// List of functional dependencies (antecedent -> consequent)
+    dependencies: Vec<(Vec<Variable>, Vec<Variable>)>,
+}
+
+impl FunDeps {
+    /// Add a functional dependency: antecedent -> consequent.
+    pub fn add_dependency(&mut self, antecedent: Vec<Variable>, consequent: Vec<Variable>) {
+        self.dependencies.push((antecedent, consequent));
+    }
+
+    /// Returns all variables that can be determined from the input variables
+    /// using the functional dependencies.
+    pub fn closure(&self, variables: impl IntoIterator<Item = Variable>) -> IndexSet<Variable> {
+        let mut result: IndexSet<Variable> = IndexSet::from_iter(variables);
+        let mut changed = true;
+
+        while changed {
+            changed = false;
+            for (antecedent, consequent) in &self.dependencies {
+                // If all variables in the antecedent are in the result,
+                // add all variables in the consequent.
+                if antecedent.iter().all(|v| result.contains(v)) {
+                    for v in consequent {
+                        if result.insert(*v) {
+                            changed = true;
+                        }
+                    }
+                }
+            }
+        }
+
+        result
+    }
+}
+
+impl std::fmt::Debug for FunDeps {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        use std::fmt::Write;
+
+        let mut deps = String::new();
+
+        for (i, (ant, cons)) in self.dependencies.iter().enumerate() {
+            if i > 0 {
+                deps.push_str("; ");
+            }
+
+            deps.push('{');
+            for (j, v) in ant.iter().enumerate() {
+                if j > 0 {
+                    deps.push_str(", ");
+                }
+                write!(&mut deps, "{:?}", v)?;
+            }
+            deps.push('}');
+
+            deps.push_str(" -> ");
+
+            deps.push('{');
+            for (j, v) in cons.iter().enumerate() {
+                if j > 0 {
+                    deps.push_str(", ");
+                }
+                write!(&mut deps, "{:?}", v)?;
+            }
+            deps.push('}');
+        }
+
+        write!(f, "FunDeps {{ {} }}", deps)
+    }
+}
+
 pub(crate) struct Query {
     pub(crate) var_info: DenseIdMap<Variable, VarInfo>,
     pub(crate) atoms: DenseIdMap<AtomId, Atom>,
     pub(crate) action: ActionId,
     pub(crate) plan_strategy: PlanStrategy,
+    pub(crate) fun_deps: FunDeps,
 }
