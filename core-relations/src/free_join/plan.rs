@@ -14,7 +14,7 @@ use crate::{
     common::{HashMap, HashSet, IndexSet},
     offsets::Subset,
     pool::Pooled,
-    query::{Atom, Query},
+    query::{Atom, Query, VarColumnMap},
     table_spec::Constraint,
 };
 
@@ -301,7 +301,7 @@ impl SinglePlan {
                         .iter()
                         .map(|col| {
                             let var_name =
-                                get_var(self.atoms[cover.to_index.atom].column_to_var[*col]);
+                                get_var(self.atoms[cover.to_index.atom].var_columns.get_var(*col));
                             (var_name, col.index() as i64)
                         })
                         .collect();
@@ -313,8 +313,9 @@ impl SinglePlan {
                             let cols: Vec<(String, i64)> = key_spec
                                 .iter()
                                 .map(|col| {
-                                    let var_name =
-                                        get_var(self.atoms[scan.to_index.atom].column_to_var[*col]);
+                                    let var_name = get_var(
+                                        self.atoms[scan.to_index.atom].var_columns.get_var(*col),
+                                    );
                                     (var_name, col.index() as i64)
                                 })
                                 .collect();
@@ -391,8 +392,8 @@ fn next_var_to_eliminate(
         .map(|(var, vinfo)| {
             let subquery_vars = atoms
                 .iter()
-                .filter(|(_, atom)| atom.column_to_var.iter().any(|(_, avar)| *avar == var))
-                .flat_map(|(_, atom)| atom.column_to_var.iter().map(|(_, var)| *var));
+                .filter(|(_, atom)| atom.var_columns.cols().any(|(_, avar)| avar == var))
+                .flat_map(|(_, atom)| atom.var_columns.cols().map(|(_, var)| var));
             let subquery_vars = fun_deps.closure(subquery_vars);
 
             let is_private = vinfo.occurrences.len() == 1;
@@ -428,25 +429,20 @@ fn create_covering_atom(
         .filter(|var| {
             vars[**var].occurrences.iter().any(|occ| {
                 atoms[occ.atom]
-                    .var_to_column
-                    .iter()
-                    .any(|(ov, _)| !subquery_vars.contains(ov))
+                    .var_columns
+                    .vars()
+                    .any(|(ov, _)| !subquery_vars.contains(&ov))
             })
         })
         .copied()
         .collect();
 
+    let mut var_columns = VarColumnMap::default();
+    for (ix, var) in covering_vars.iter().enumerate() {
+        var_columns.insert(*var, ColumnId::from_usize(ix));
+    }
     let fake_atom_id = atoms.push(Atom {
-        column_to_var: covering_vars
-            .iter()
-            .enumerate()
-            .map(|(ix, var)| (ColumnId::from_usize(ix), *var))
-            .collect(),
-        var_to_column: covering_vars
-            .iter()
-            .enumerate()
-            .map(|(ix, var)| (*var, ColumnId::from_usize(ix)))
-            .collect(),
+        var_columns,
         constraints: ProcessedConstraints::dummy(),
         table: TableId::dummy(),
     });
@@ -486,9 +482,9 @@ fn remove_occurrences(
             // If the variable only occurs in the current bag, we remove this variable from the main
             // query.
             !atoms[occ.atom]
-                .var_to_column
-                .iter()
-                .all(|(ov, _)| subquery_vars.contains(ov))
+                .var_columns
+                .vars()
+                .all(|(ov, _)| subquery_vars.contains(&ov))
         });
 
         if vars[subq_var].occurrences.is_empty() {
@@ -525,11 +521,11 @@ fn decompose_into_bags(original_ctx: &PlanningContext) -> Vec<PlanningContext> {
             .atoms
             .iter()
             .filter(|(_, atom)| {
-                atom.column_to_var
-                    .iter()
+                atom.var_columns
+                    .cols()
                     // Use `any` to include any atom that contains subquery variables.
                     // This gives better bound if atom can be properly projected before the query
-                    .all(|(_, var)| subquery_vars.contains(var))
+                    .all(|(_, var)| subquery_vars.contains(&var))
             })
             .map(|(atom_id, _)| atom_id)
             .collect();
@@ -562,9 +558,9 @@ fn decompose_into_bags(original_ctx: &PlanningContext) -> Vec<PlanningContext> {
         // Remove subquery atoms from main query
         atoms.retain(|_, atom| {
             !atom
-                .var_to_column
-                .iter()
-                .all(|(var, _)| subquery_var_map.contains_key(*var))
+                .var_columns
+                .vars()
+                .all(|(var, _)| subquery_var_map.contains_key(var))
         });
 
         // Add bag if it's not already covered by an existing bag
@@ -584,9 +580,9 @@ fn decompose_into_bags(original_ctx: &PlanningContext) -> Vec<PlanningContext> {
     assert!(
         atoms
             .iter()
-            .filter(
-                |(_, atom_info)| !atom_info.table.is_dummy() && !atom_info.var_to_column.is_empty()
-            )
+            .filter(|(_, atom_info)| {
+                !atom_info.table.is_dummy() && !atom_info.var_columns.is_empty()
+            })
             .next()
             .is_none(),
         "All atoms should be put into bags"
@@ -893,7 +889,7 @@ impl<'a> BucketQueue<'a> {
         let mut sizes = BTreeMap::<usize, IndexSet<AtomId>>::new();
         for (id, atom) in atoms.iter() {
             let mut bitset = VarSet::with_capacity(var_info.n_ids());
-            for (_, var) in atom.column_to_var.iter() {
+            for (_, var) in atom.var_columns.cols() {
                 bitset.insert(var.index());
             }
             sizes.entry(bitset.count_ones(..)).or_default().insert(id);
@@ -1056,17 +1052,17 @@ fn get_next_freejoin_stage(
         let mut cover = SubAtom::new(atom);
         let mut vars = SmallVec::<[Variable; 1]>::new();
 
-        for (ix, var) in atom_info.column_to_var.iter() {
-            if state.is_var_used(*var) {
+        for (ix, var) in atom_info.var_columns.cols() {
+            if state.is_var_used(var) {
                 continue;
             }
             // This atom is not completely covered by previous stages.
             covered = true;
-            state.mark_var_used(*var);
-            vars.push(*var);
+            state.mark_var_used(var);
+            vars.push(var);
             cover.vars.push(ix);
 
-            for subatom in ctx.vars[*var].occurrences.iter() {
+            for subatom in ctx.vars[var].occurrences.iter() {
                 if subatom.atom == atom {
                     continue;
                 }
@@ -1086,7 +1082,7 @@ fn get_next_freejoin_stage(
         for (atom, cols) in scratch_subatom.drain() {
             let mut form_key = SmallVec::<[ColumnId; 2]>::new();
             for var_ix in &cols {
-                let var = ctx.atoms[atom].column_to_var[*var_ix];
+                let var = ctx.atoms[atom].var_columns.get_var(*var_ix);
                 // form_key is an index _into the subatom forming the cover_.
                 let cover_col = vars.iter().position(|v| *v == var).unwrap();
                 form_key.push(ColumnId::from_usize(cover_col));
@@ -1220,9 +1216,8 @@ fn compile_stage(
     };
 
     let mut bind = SmallVec::new();
-    let var_set = &ctx.atoms[atom].var_to_column;
     for var in vars {
-        bind.push((var_set[&var], var));
+        bind.push((ctx.atoms[atom].var_columns.get_col(var), var));
     }
 
     let mut to_intersect = Vec::with_capacity(filters.len());
