@@ -183,7 +183,7 @@ impl ContainerSort for MapSort {
 
         // add shape primitive
         eg.add_primitive(Shape {});
-        eg.add_primitive(Invert {});
+        eg.add_primitive(Inverse {});
         eg.add_primitive(Compose {});
     }
 
@@ -213,7 +213,7 @@ struct Shape {}
 
 impl Primitive for Shape {
     fn name(&self) -> &str {
-        "shape"
+        "shape2"
     }
 
     fn get_type_constraints(&self, _span: &Span) -> Box<dyn crate::constraint::TypeConstraint> {
@@ -222,81 +222,50 @@ impl Primitive for Shape {
     }
 
     fn apply(&self, exec_state: &mut ExecutionState, args: &[Value]) -> Option<Value> {
-        let mut original_pairs = vec![];
-        let mut maps = vec![];
+        // maps from original slots to shape slots.
+        let mut out: BTreeMap<Value, Value> = BTreeMap::new();
+
         for arg in args {
             let m = exec_state
                 .container_values()
                 .get_val::<MapContainer>(*arg)?;
-            original_pairs.push(m.clone().data);
-            let kv_pairs: Vec<(Value, Value)> = m.clone().data.into_iter().collect();
+            let mut kv_pairs: Vec<(Value, Value)> = m.clone().data.into_iter().collect();
+            kv_pairs.sort_by_key(|(k, _)| {
+                exec_state.base_values().unwrap::<i64>(*k)
+            });
 
-            let mut kv_pairs: Vec<(i64, Value)> = kv_pairs
-                .into_iter()
-                .map(|(k, v)| (exec_state.base_values().unwrap::<i64>(k), v))
-                .collect();
-
-            kv_pairs.sort();
-
-            maps.push(kv_pairs);
-        }
-
-        let res: Vec<Value> = maps.into_iter().flatten().map(|(_, v)| v).collect();
-
-        // maps from shape slots to original slots
-        let mut m: BTreeMap<Value, Value> = BTreeMap::new();
-        for r in res {
-            if !m.contains_key(&r) {
-                m.insert(r, exec_state.base_values().get::<i64>(m.len() as i64));
+            for (_, v) in kv_pairs {
+                if !out.contains_key(&v) {
+                    let new_v = exec_state.base_values().get::<i64>(out.len() as i64);
+                    out.insert(v, new_v);
+                }
             }
         }
 
-        // we want mappings from arguements to shape slots
-        let shape_parts: Vec<BTreeMap<Value, Value>> =
-            original_pairs.iter().map(|x| compose(&m, x)).collect();
-
-        let mut res = shape_parts;
-        res.push(m);
-
-        // turn each btree into a value
-        let mut res_values = vec![];
-        for m in res {
-            let map_value = exec_state.container_values().register_val(
-                MapContainer {
-                    do_rebuild_keys: false,
-                    do_rebuild_vals: false,
-                    data: m,
-                },
-                exec_state,
-            );
-            res_values.push(map_value);
-        }
-
-        // run res into a vector value
-        let vec_value = exec_state.container_values().register_val(
-            VecContainer {
-                do_rebuild: false,
-                data: res_values,
+        let out = exec_state.container_values().register_val(
+            MapContainer {
+                do_rebuild_keys: false,
+                do_rebuild_vals: false,
+                data: out,
             },
             exec_state,
         );
-
-        Some(vec_value)
+        Some(out)
     }
 }
 
 #[derive(Clone, Debug)]
-struct Invert {}
+struct Inverse {}
 
-// This computes (invert m).
-impl Primitive for Invert {
+// This computes (inverse m).
+impl Primitive for Inverse {
     fn name(&self) -> &str {
-        "invert"
+        "inverse"
     }
 
     fn get_type_constraints(&self, span: &Span) -> Box<dyn crate::constraint::TypeConstraint> {
         // must be vecs of integer sort
-        Box::new(AllEqualTypeConstraint::new("invert", span.clone()))
+        Box::new(AllEqualTypeConstraint::new("inverse", span.clone()))
     }
 
     fn apply(&self, exec_state: &mut ExecutionState, args: &[Value]) -> Option<Value> {
@@ -304,7 +273,7 @@ impl Primitive for Invert {
             .container_values()
             .get_val::<MapContainer>(args[0])?
             .clone();
-        let res = invert(&m.data);
+        let res = inverse(&m.data);
         let map_value = exec_state.container_values().register_val(
             MapContainer {
                 do_rebuild_keys: false,
@@ -321,7 +290,7 @@ impl Primitive for Invert {
 #[derive(Clone, Debug)]
 struct Compose {}
 
-// This computes (compose m1 m2) for two arguments m1 and m2.
+// '(compose m1 m2) * a' is conceptually the same as 'm1 * m2 * a'
 impl Primitive for Compose {
     fn name(&self) -> &str {
         "compose"
@@ -355,23 +324,20 @@ impl Primitive for Compose {
     }
 }
 
-// Given a mapping m1 and a mapping m2, gives a mapping which is like m2(m1(x)).
-// In other words maps through m1 and then m2.
-
-// m1 :: X -> Y
-// m2 :: Y -> Z
-// compose(m1, m2) :: X -> Z
+// returns m1 * m2.
+// Note that m2 is applied "first". i.e. m1 * m2 * a = m1(m2(a))
+// Further note that this is a *partial compose*.
 fn compose(m1: &BTreeMap<Value, Value>, m2: &BTreeMap<Value, Value>) -> BTreeMap<Value, Value> {
     let mut res = BTreeMap::new();
-    for (k, v) in m1.iter() {
-        if let Some(v2) = m2.get(v) {
+    for (k, v) in m2.iter() {
+        if let Some(v2) = m1.get(v) {
             res.insert(*k, *v2);
         }
     }
     res
 }
 
-fn invert(m1: &BTreeMap<Value, Value>) -> BTreeMap<Value, Value> {
+fn inverse(m1: &BTreeMap<Value, Value>) -> BTreeMap<Value, Value> {
     let mut res = BTreeMap::new();
     for (k, v) in m1.iter() {
         res.insert(*v, *k);

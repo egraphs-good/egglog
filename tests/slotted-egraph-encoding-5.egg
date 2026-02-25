@@ -25,7 +25,7 @@
     ; x = m1*y; y = m2*z; -> x=m1*m2*z
     
     (
-        (NF x (compose m2 m1) z)
+        (NF x (compose m1 m2) z)
     )
 )
 
@@ -34,13 +34,11 @@
         (= x (App f t1 t2))
         (NF t1 m1 a1)
         (NF t2 m2 a2)
-        (= tuple (shape m1 m2))
-        (= m1_p (vec-get tuple 0))
-        (= m2_p (vec-get tuple 1))
-        (= shape-to-orig (vec-get tuple 2))
+        (= m_sh (shape2 m1 m2))
+        ; m_sh :: slots(x) -> shape-slots
     )
     (
-        (NF x shape-to-orig (App f (Rename m1_p a1) (Rename m2_p a2)))
+        (NF x (inverse m_sh) (App f (Rename (compose m_sh m1) a1) (Rename (compose m_sh m2) a2)))
     )
 )
 
@@ -56,7 +54,7 @@
         ; m2*a2 = m1*a1
         ; -> a2 = m2⁻¹*m1*a1
         (delete (NF lhs m2 a2))
-        (NF a2 (compose m1 (invert m2)) a1)
+        (NF a2 (compose (inverse m2) m1) a1)
     )
 )
 
@@ -69,15 +67,19 @@
     )
 
     (
-        (NF a (compose m2 m1) c)
+        (NF a (compose m1 m2) c)
     )
 )
 
-(let $x (App "f" (Var 24) (Var 12)))
-; (let $y (App "f" (Var 3) (Var 4)))
+(let $v1 (Var 24))
+(let $v2 (Var 12))
+(let $v3 (Var 3))
+(let $v4 (Var 4))
 
+(let $x (App "f" $v1 $v2))
+(let $y (App "f" $v3 $v4))
 
 (run 100)
-; (check (NF (Var 12) _ a) (NF (Var 24) _ a))
-; (check (NF $x _ a) (NF $y _ a))
+(check (NF $v1 _ a) (NF $v4 _ a))
+(check (NF $x _ a) (NF $y _ a)) ; Here we check equality up to renaming!
 (print-function NF)
