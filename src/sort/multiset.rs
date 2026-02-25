@@ -211,8 +211,11 @@ impl ContainerSort for MultiSetSort {
         let self_cloned = arc.clone();
         // For filter same as map
         let register_filter = Box::new(move |fn_: Arc<FunctionSort>, eg: &mut EGraph| {
-            // Add filter if we have a function from E -> T
-            if fn_.inputs().len() == 1 && fn_.inputs()[0].name() == inner_name_cloned.clone() {
+            // Add filter if we have a function from E -> Unit
+            if fn_.inputs().len() == 1
+                && fn_.inputs()[0].name() == inner_name_cloned.clone()
+                && fn_.output().name() == "Unit"
+            {
                 eg.add_primitive(Filter {
                     name: "unstable-multiset-filter".into(),
                     multiset: self_cloned.clone(),
@@ -542,7 +545,7 @@ impl Primitive for FlatMap {
     }
 }
 
-// (unstable-multiset-filter (MultiSet[X], [X] -> T) -> MultiSet[X])
+// (unstable-multiset-filter (MultiSet[X], [X] -> Unit) -> MultiSet[X])
 // will filter the elements in the multiset based on whether the function is defined for them.
 // If skip_empty is true, it will keep elements where the function is defined, otherwise it will keep elements where the function is not defined.
 #[derive(Clone)]
