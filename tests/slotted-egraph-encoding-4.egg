@@ -1,4 +1,6 @@
+;;;;;;;;;;;;;;;;
 ; slotted unionfind
+;;;;;;;;;;;;;;;;
 
 ;; sorts & constructors.
 
@@ -91,9 +93,43 @@
     )
 )
 
+;;;;;;;;;;;;;;;;;;;
+; Slotted E-Graph ;
+;;;;;;;;;;;;;;;;;;;
+
+(sort Node)
+(constructor App (String AppliedId AppliedId) Node)
+
+; for shapes.
+(relation Hashcons (Node AppliedId))
+
+; for nodes in general.
+(relation HashconsFind (Node AppliedId))
+
+(rule
+    (
+        (App f x1 x2)
+        (= (Find x1) (MkAppliedId m1 a1))
+        (= (Find x2) (MkAppliedId m2 a2))
+        (= tuple (shape m1 m2))
+        (= m1_p (vec-get tuple 0))
+        (= m2_p (vec-get tuple 1))
+        (= shape-to-original (vec-get tuple 2))
+        (= resulting-shape (App f (MkAppliedId m1_p a1) (MkAppliedId m2_p a2)))
+        (Hashcons resulting-shape (MkAppliedId m_sh a_sh))
+    )
+
+    (
+        (HashconsFind (App f x1 x2) (MkAppliedId (compose m_sh shape-to-original) a_sh))
+    )
+)
 
 
-; EXAMPLE:
+
+;;;;;;;;;;;
+; EXAMPLE ;
+;;;;;;;;;;;
+
 (constructor A () Id) ; :: [0]
 (constructor B () Id) ; :: [1]
 (constructor C () Id) ; :: [2]
@@ -114,3 +150,5 @@
 
 (print-function Unionfind)
 (print-function Find)
+(print-function Hashcons)
+(print-function HashconsFind)
