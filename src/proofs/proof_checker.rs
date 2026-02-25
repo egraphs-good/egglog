@@ -434,6 +434,9 @@ pub enum ProofCheckErrorKind {
         lhs: TermId,
         rhs: TermId,
     },
+    /// Two rules have the same name
+    #[error("Duplicate rule name '{rule_name}' found in the program")]
+    DuplicateRuleName { rule_name: String },
 }
 
 /// Context needed for proof checking
@@ -452,6 +455,19 @@ impl ProofCheckContext {
     /// Create a new proof check context by analyzing the program.
     /// This gathers all equalities established by global actions (unions and sets).
     fn new(prog: &[ResolvedNCommand], term_dag: &mut TermDag) -> Result<Self, ProofCheckError> {
+        // Check for duplicate rule names
+        let mut seen_rule_names: HashSet<&str> = HashSet::default();
+        for cmd in prog {
+            if let GenericNCommand::NormRule { rule } = cmd {
+                if !seen_rule_names.insert(&rule.name) {
+                    return Err(ProofCheckErrorKind::DuplicateRuleName {
+                        rule_name: rule.name.clone(),
+                    }
+                    .into());
+                }
+            }
+        }
+
         // Use the new refactored functions
         let actions: Vec<_> = gather_global_actions(prog).collect();
         let action_ctx = process_actions("global_actions", HashMap::default(), &actions, term_dag)?;

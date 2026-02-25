@@ -591,11 +591,13 @@ impl EGraph {
     /// egraph.
     pub fn pop(&mut self) -> Result<(), Error> {
         match self.pushed_egraph.take() {
-            Some(e) => {
-                // Copy the overall report from the popped egraph
-                let overall_run_report = self.overall_run_report.clone();
+            Some(mut e) => {
+                // Preserve the overall report from the popped egraph
+                std::mem::swap(&mut self.overall_run_report, &mut e.overall_run_report);
+                // Preserve the symbol generator so that fresh symbols
+                // generated after pop don't collide with ones generated before pop.
+                std::mem::swap(&mut self.parser.symbol_gen, &mut e.parser.symbol_gen);
                 *self = *e;
-                self.overall_run_report = overall_run_report;
                 Ok(())
             }
             None => Err(Error::Pop(span!())),

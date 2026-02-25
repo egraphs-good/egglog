@@ -342,7 +342,8 @@ fn generate_tests(glob: &str) -> Vec<Trial> {
                 ..run.clone()
             });
 
-            // also test desugaring in proof mode, then running normally
+            // Complex mode: desugar using proof encoding, then run normally.
+            // Yes this mode is important! It has found multiple bugs.
             push_trial(Run {
                 proof_testing: true,
                 desugar: true,
