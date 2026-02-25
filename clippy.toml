@@ -13,4 +13,11 @@ disallowed-macros = [
     "std::eprintln",
 ]
 
+disallowed-methods = [
+    # run time of these methods scales linearly with the number of cores.
+    "dashmap::DashMap::len",
+    "dashmap::DashMap::iter",
+    "dashmap::DashMap::clear",
+]
+
 type-complexity-threshold = 350
