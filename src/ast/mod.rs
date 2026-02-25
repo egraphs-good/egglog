@@ -5,6 +5,8 @@ mod parse;
 pub mod proof_global_remover;
 pub mod remove_globals;
 
+use std::cmp::max;
+
 use crate::core::{
     GenericAtom, GenericAtomTerm, GenericExprExt, HeadOrEq, Query, ResolvedCall, ResolvedCoreRule,
 };
@@ -2000,24 +2002,12 @@ where
     }
 }
 
-/// Sanitizes internal names so they do not contain any internal characters.
-/// This enables printing desugared egglog in a way that can be re-parsed.
-pub fn sanitize_internal_names<Head, Leaf>(
-    program: &[GenericCommand<Head, Leaf>],
-) -> Vec<GenericCommand<String, String>>
-where
-    Head: Clone + Display,
-    Leaf: Clone + PartialEq + Eq + Display + Hash,
-{
-    // first convert to unresolved
-    let unresolved = program
-        .iter()
-        .map(|cmd| cmd.clone().make_unresolved())
-        .collect::<Vec<_>>();
+/// Computes the maximum number of underscores in any symbol name in the program.
+pub fn get_max_underscores(program: &[GenericCommand<String, String>]) -> usize {
     // now count the max number of underscores in any name
     let mut max_underscores = 0;
     let mut max_underscores2 = 0;
-    for cmd in &unresolved {
+    for cmd in program {
         cmd.clone().map_symbols(
             &mut |h: String| {
                 let count = h.matches(INTERNAL_SYMBOL_PREFIX).count();
@@ -2042,24 +2032,27 @@ where
             s
         });
     }
-    let replacement_head = "_".repeat(max_underscores + 1);
-    let replacement_leaf = "_".repeat(max_underscores2 + 1);
-    // now replace INTERNAL_SYMBOL_PREFIX with replacement
-    unresolved
-        .into_iter()
+    max(max_underscores, max_underscores2)
+}
+
+/// Replaces all identifiers containing the internal symbol prefix with the given replacement string.
+pub fn replace_internal_symbol_with(
+    program: &[GenericCommand<String, String>],
+    replacement: &str,
+) -> Vec<GenericCommand<String, String>> {
+    program
+        .iter()
         .map(|cmd| {
             // First, sanitize rule names referred to by @Rule proof constructors.
             // These are string literals (not symbols), so map_symbols won't reach them.
             // We must do this before map_symbols changes @Rule -> ___Rule.
-            let cmd = cmd.visit_exprs(&mut |expr| {
+            let cmd = cmd.clone().visit_exprs(&mut |expr| {
                 if let GenericExpr::Call(span, head, mut args) = expr {
                     if head == format!("{INTERNAL_SYMBOL_PREFIX}Rule") && !args.is_empty() {
                         if let GenericExpr::Lit(lit_span, Literal::String(s)) = args[0].clone() {
                             args[0] = GenericExpr::Lit(
                                 lit_span,
-                                Literal::String(
-                                    s.replace(INTERNAL_SYMBOL_PREFIX, &replacement_head),
-                                ),
+                                Literal::String(s.replace(INTERNAL_SYMBOL_PREFIX, replacement)),
                             );
                         }
                     }
@@ -2069,12 +2062,59 @@ where
                 }
             });
             let cmd = cmd.map_symbols(
-                &mut |h: String| h.replace(INTERNAL_SYMBOL_PREFIX, &replacement_head),
-                &mut |l: String| l.replace(INTERNAL_SYMBOL_PREFIX, &replacement_leaf),
+                &mut |h: String| h.replace(INTERNAL_SYMBOL_PREFIX, replacement),
+                &mut |l: String| l.replace(INTERNAL_SYMBOL_PREFIX, replacement),
             );
-            cmd.map_string_symbols(&mut |s: String| {
-                s.replace(INTERNAL_SYMBOL_PREFIX, &replacement_head)
-            })
+            cmd.map_string_symbols(&mut |s: String| s.replace(INTERNAL_SYMBOL_PREFIX, replacement))
         })
+        .collect()
+}
+
+/// Sanitizes internal names so they do not contain any internal characters.
+/// This enables printing desugared egglog in a way that can be re-parsed.
+pub fn sanitize_internal_names<Head, Leaf>(
+    program: &[GenericCommand<Head, Leaf>],
+) -> Vec<GenericCommand<String, String>>
+where
+    Head: Clone + Display,
+    Leaf: Clone + PartialEq + Eq + Display + Hash,
+{
+    // first convert to unresolved
+    let unresolved = program
+        .iter()
+        .map(|cmd| cmd.clone().make_unresolved())
+        .collect::<Vec<_>>();
+    let max_underscores = get_max_underscores(&unresolved);
+    let replacement = "_".repeat(max_underscores + 1);
+    replace_internal_symbol_with(&unresolved, &replacement)
+}
+
+/// Sanitizes internal names in multiple programs at once, using a shared replacement string.
+pub fn sanitize_internal_names_multiple<Head, Leaf>(
+    programs: &[Vec<GenericCommand<Head, Leaf>>],
+) -> Vec<Vec<GenericCommand<String, String>>>
+where
+    Head: Clone + Display,
+    Leaf: Clone + PartialEq + Eq + Display + Hash,
+{
+    // first convert to unresolved
+    let mut all_unresolved: Vec<Vec<GenericCommand<String, String>>> = vec![];
+    for program in programs {
+        all_unresolved.push(
+            program
+                .iter()
+                .map(|cmd| cmd.clone().make_unresolved())
+                .collect(),
+        );
+    }
+    let max_underscores = all_unresolved
+        .iter()
+        .map(|program| get_max_underscores(program))
+        .max()
+        .unwrap_or(0);
+    let replacement = "_".repeat(max_underscores + 1);
+    all_unresolved
+        .into_iter()
+        .map(|program| replace_internal_symbol_with(&program, &replacement))
         .collect()
 }

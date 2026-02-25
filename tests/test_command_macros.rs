@@ -97,6 +97,7 @@ fn test_single_macro_with_desugar_program() {
     let result = egraph
         .resolve_program(None, input)
         .unwrap()
+        .resolved
         .iter()
         .map(|s| s.to_string())
         .collect::<Vec<_>>();
@@ -148,6 +149,7 @@ fn test_multiple_macros_compose_with_desugar_program() {
     let result = egraph
         .resolve_program(None, input)
         .unwrap()
+        .resolved
         .iter()
         .map(|s| s.to_string())
         .collect::<Vec<_>>();
@@ -174,6 +176,7 @@ fn test_duplicate_macro_creates_two_rules() {
     let result = egraph
         .resolve_program(None, input)
         .unwrap()
+        .resolved
         .iter()
         .map(|s| s.to_string())
         .collect::<Vec<_>>();
@@ -210,6 +213,7 @@ fn test_macro_adds_commands_after_rules() {
     let result = egraph
         .resolve_program(None, input)
         .unwrap()
+        .resolved
         .iter()
         .map(|s| s.to_string())
         .collect::<Vec<_>>();
@@ -249,6 +253,7 @@ fn test_complex_macro_composition() {
     let result = egraph
         .resolve_program(None, input)
         .unwrap()
+        .resolved
         .iter()
         .map(|s| s.to_string())
         .collect::<Vec<_>>();

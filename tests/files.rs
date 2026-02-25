@@ -1,6 +1,12 @@
-use std::path::PathBuf;
+use std::{cmp::max, path::PathBuf};
 
-use egglog::{ast::sanitize_internal_names, file_supports_proofs, *};
+use egglog::{
+    ast::{
+        get_max_underscores, replace_internal_symbol_with, sanitize_internal_names,
+        sanitize_internal_names_multiple,
+    },
+    file_supports_proofs, *,
+};
 use hashbrown::HashSet;
 use libtest_mimic::Trial;
 
@@ -49,11 +55,11 @@ impl Run {
             self.test_program(
                 self.path.to_str().map(String::from),
                 &program,
-                &"",
+                "",
                 "Top level error",
             )
         } else {
-            let (desugared_str, before_proofs_desugared_str) = self.desugar_program(&program);
+            let (resolved_str, before_proofs_resolved_str) = self.resolve_prog(&program);
             // after desugaring run the program without term encoding or proofs
             let normal_run = Run {
                 path: self.path.clone(),
@@ -65,8 +71,8 @@ impl Run {
 
             normal_run.test_program(
                 None,
-                &desugared_str,
-                before_proofs_desugared_str.as_str(),
+                &resolved_str,
+                &before_proofs_resolved_str,
                 "ERROR after parse, to_string, and parse again.",
             )
         };
@@ -112,20 +118,23 @@ impl Run {
     }
 
     // Returns a string of the desugared program and a string for the desugared program without proofs
-    fn desugar_program(&self, program: &str) -> (String, String) {
+    fn resolve_prog(&self, program: &str) -> (String, String) {
         let mut egraph = self.egraph();
+
         let resolved = egraph
             .resolve_program(self.path.to_str().map(String::from), program)
             .unwrap();
+        let sanitized =
+            sanitize_internal_names_multiple(&[resolved.resolved, resolved.resolved_before_proofs]);
         (
-            sanitize_internal_names(&resolved.resolved)
+            sanitized[0]
                 .iter()
-                .map(|s| s.to_string())
+                .map(|cmd| cmd.to_string())
                 .collect::<Vec<_>>()
                 .join("\n"),
-            sanitize_internal_names(&resolved.resolved_before_proofs)
+            sanitized[1]
                 .iter()
-                .map(|s| s.to_string())
+                .map(|cmd| cmd.to_string())
                 .collect::<Vec<_>>()
                 .join("\n"),
         )
@@ -139,19 +148,12 @@ impl Run {
         message: &str,
     ) -> Result<Vec<CommandOutput>, String> {
         let mut egraph = self.egraph();
-        let parsed_proof_check_prog =
-            egraph
-                .parse_program(None, proof_check_prog)
-                .unwrap_or_else(|err| {
-                    panic!(
-                        "Failed to parse proof check program for {}: {}. Program was:\n{}",
-                        self.name(),
-                        err,
-                        proof_check_prog
-                    )
-                });
-
-        egraph.set_proof_checking_program(parsed_proof_check_prog);
+        let parsed_proof_check_prog = egraph
+            .parse_program(None, proof_check_prog)
+            .unwrap_or_else(|_| panic!("Failed to parse proof check program"));
+        egraph
+            .set_proof_checking_program(parsed_proof_check_prog)
+            .expect("Failed to set proof checking program");
 
         // Append print-size to every test file to ensure it works
         let program = format!("{program}\n(print-size)");
