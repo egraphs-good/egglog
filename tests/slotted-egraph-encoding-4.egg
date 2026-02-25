@@ -1,9 +1,5 @@
 ; slotted unionfind
 
-; ruleset priorities:
-; 1. path compression in unionfind & fixing critical pairs in UF
-; 2. update the Find table based on the unionfind.
-
 ;; sorts & constructors.
 
 (sort NameMap (Map i64 i64))
@@ -14,7 +10,6 @@
 (constructor MkAppliedId (NameMap Id) AppliedId)
 
 ;;; UNIONFIND
-(relation Alloc (AppliedId))
 (relation Unionfind (Id AppliedId))
 (relation Union (AppliedId AppliedId))
 (function Find (AppliedId) AppliedId :merge new)
@@ -22,11 +17,13 @@
 ;;; Puts a new AppliedId in the unionfind as a leader.
 (rule
     (
-        (Alloc (MkAppliedId m i))
-        (= m (compose m m)) ; We require a partial identity mapping.
+        (MkAppliedId m i)
+        ; i :: X
+        ; m :: X -> Y
+        ; m⁻¹ * m :: X -> X
     )
     (
-        (Unionfind i (MkAppliedId m i))
+        (Unionfind i (MkAppliedId (compose m (invert m)) i))
     )
 )
 
@@ -77,22 +74,41 @@
     )
 )
 
+; unionfind CPs
+(rule
+    (
+        (= x1 (MkAppliedId m1 a1))
+        (= x2 (MkAppliedId m2 a2))
+        (Unionfind i x1)
+        (Unionfind i x2)
+        (!= x1 x2)
+        (= a2 (ordering-max a1 a2)) ; x2 -> x1
+    )
+
+    (
+        (Union x1 x2)
+        (delete (Unionfind i x2))
+    )
+)
 
 
 
 ; EXAMPLE:
 (constructor A () Id) ; :: [0]
 (constructor B () Id) ; :: [1]
+(constructor C () Id) ; :: [2]
 
 (let $m00 (map-insert (map-empty) 0 0))
 (let $m11 (map-insert (map-empty) 1 1))
+
 (let $m13 (map-insert (map-empty) 1 3))
 (let $m03 (map-insert (map-empty) 0 3))
 
-(Alloc (MkAppliedId $m00 (A)))
-(Alloc (MkAppliedId $m11 (B)))
+(let $m07 (map-insert (map-empty) 0 7))
+(let $m27 (map-insert (map-empty) 2 7))
 
 (Union (MkAppliedId $m03 (A)) (MkAppliedId $m13 (B)))
+(Union (MkAppliedId $m07 (A)) (MkAppliedId $m27 (C)))
 
 (run 10)
 
