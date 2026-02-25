@@ -45,22 +45,39 @@
 )
 
 ; NF CPs
-;(rule
-;    (
-;        (NF lhs m1 a1)
-;        (NF lhs m2 a2)
-;        (!= a1 a2)
-;        (= (ordering-max a1 a2) a2) ; a2 -> a1
-;    )
-;    (
-;        (delete (NF lhs m2 a2))
-;    )
-;)
+(rule
+    (
+        (NF lhs m1 a1)
+        (NF lhs m2 a2)
+        (!= a1 a2) ; TODO: fix redundancy
+        (= (ordering-max a1 a2) a2) ; a2 -> a1
+    )
+    (
+        ; m2*a2 = m1*a1
+        ; -> a2 = m2⁻¹*m1*a1
+        (delete (NF lhs m2 a2))
+        (NF a2 (compose m1 (invert m2)) a1)
+    )
+)
 
 ; NF path compression
+(rule
+    (
+        (NF a m1 b)
+        (NF b m2 c)
+        (= b (ordering-max b c))
+    )
+
+    (
+        (NF a (compose m2 m1) c)
+    )
+)
 
 (let $x (App "f" (Var 24) (Var 12)))
-(let $y (App "f" (Var 3) (Var 4)))
+; (let $y (App "f" (Var 3) (Var 4)))
+
 
 (run 100)
+; (check (NF (Var 12) _ a) (NF (Var 24) _ a))
+; (check (NF $x _ a) (NF $y _ a))
 (print-function NF)
