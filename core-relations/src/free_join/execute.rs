@@ -564,6 +564,7 @@ impl<'a> JoinState<'a> {
     /// index used to detect if we are at the "top" of a plan rather than the "bottom", and is
     /// currently used as a heuristic to determine if we should increase parallelism more than the
     /// default.
+    #[allow(clippy::too_many_arguments)]
     fn run_plan<'buf, A: NumericId + 'buf, BUF: ActionBuffer<'buf, A>>(
         &self,
         stages: &'buf JoinStages,
@@ -1066,7 +1067,7 @@ impl<'a> JoinState<'a> {
                             }
                         }
                     }
-                    return true;
+                    true
                 };
 
                 match mode {
@@ -1433,16 +1434,14 @@ impl<'a> ActionBuffer<'a, MatId> for InPlaceMaterializer<'a> {
         }
         if let Some(buffer) = mat.get_mut(&self.scratch_key) {
             buffer.add_row(&self.scratch_val);
+        } else if !spec.val_vars.is_empty() {
+            let mut buffer = RowBuffer::new(spec.val_vars.len());
+            buffer.add_row(&self.scratch_val);
+            mat.insert(self.scratch_key.clone(), buffer);
         } else {
-            if spec.val_vars.len() > 0 {
-                let mut buffer = RowBuffer::new(spec.val_vars.len());
-                buffer.add_row(&self.scratch_val);
-                mat.insert(self.scratch_key.clone(), buffer);
-            } else {
-                let mut buffer = RowBuffer::new(1);
-                buffer.add_row(&[Value::stale()]);
-                mat.insert(self.scratch_key.clone(), buffer);
-            }
+            let mut buffer = RowBuffer::new(1);
+            buffer.add_row(&[Value::stale()]);
+            mat.insert(self.scratch_key.clone(), buffer);
         }
     }
 

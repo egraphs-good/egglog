@@ -467,7 +467,7 @@ fn update_hypergraph(
     for &subq_var in subquery_vars.iter() {
         vars[subq_var]
             .occurrences
-            .retain(|occ| removed.iter().find(|&&a| a == occ.atom).is_none());
+            .retain(|occ| !removed.contains(&occ.atom));
 
         if vars[subq_var].occurrences.is_empty() {
             vars.unwrap_val(subq_var);
@@ -582,13 +582,9 @@ fn decompose_into_bags(original_ctx: &PlanningContext) -> Vec<PlanningContext> {
     }
 
     assert!(
-        atoms
-            .iter()
-            .filter(|(_, atom_info)| {
-                !atom_info.table.is_dummy() && !atom_info.var_columns.is_empty()
-            })
-            .next()
-            .is_none(),
+        !atoms.iter().any(|(_, atom_info)| {
+            !atom_info.table.is_dummy() && !atom_info.var_columns.is_empty()
+        }),
         "All atoms should be put into bags"
     );
 
@@ -632,8 +628,7 @@ fn topologically_sort_bags(bags: Vec<PlanningContext>) -> Vec<PlanningContext> {
         stack.push(i);
         visited[i] = true;
 
-        while !stack.is_empty() {
-            let bag_id = stack.pop().unwrap();
+        while let Some(bag_id) = stack.pop() {
             let bag = mem::take(&mut bags_opt[bag_id]).unwrap();
 
             // Find child bags that share variables with this bag
@@ -718,7 +713,7 @@ fn plan_single_bag(
             });
         }
     }
-    instrs.extend(epilogue.into_iter());
+    instrs.extend(epilogue);
 
     let stages = JoinStages {
         header,
@@ -834,7 +829,7 @@ pub(crate) fn tree_decompose_and_plan(
         // Don't do Yannakakis if it's just one bag
         let (header, instrs) = plan_stages(&ctx, strat);
         let stages = JoinStages {
-            header: header,
+            header,
             instrs: Arc::new(instrs),
         };
 
