@@ -433,12 +433,12 @@ pub fn file_supports_proofs(path: &Path) -> bool {
 
     let mut egraph = EGraph::default();
     let filename = canonical.to_string_lossy().into_owned();
-    let desugared = match egraph.desugar_program(Some(filename.clone()), &contents) {
+    let desugared = match egraph.resolve_program(Some(filename.clone()), &contents) {
         Ok(commands) => commands,
         Err(_) => return false,
     };
 
-    program_supports_proofs(&desugared, &egraph.type_info)
+    program_supports_proofs(&desugared.resolved, &egraph.type_info)
 }
 
 /// Reasons why a command doesn't support proof encoding

@@ -13,8 +13,6 @@ struct Run {
     /// proof_testing mode adds automatic prove-exists commands, which produce
     /// proof output that differs from normal mode. This should use separate snapshots.
     proof_testing: bool,
-    /// Set to false in desugared mode because the program no longer matches the original
-    proof_checking: bool,
 }
 
 impl Run {
@@ -51,10 +49,11 @@ impl Run {
             self.test_program(
                 self.path.to_str().map(String::from),
                 &program,
+                &"",
                 "Top level error",
             )
         } else {
-            let desugared_str = self.desugar_program(&program);
+            let (desugared_str, before_proofs_desugared_str) = self.desugar_program(&program);
             // after desugaring run the program without term encoding or proofs
             let normal_run = Run {
                 path: self.path.clone(),
@@ -62,12 +61,12 @@ impl Run {
                 term_encoding: false,
                 proofs: false,
                 proof_testing: false,
-                proof_checking: false,
             };
 
             normal_run.test_program(
                 None,
                 &desugared_str,
+                before_proofs_desugared_str.as_str(),
                 "ERROR after parse, to_string, and parse again.",
             )
         };
@@ -101,7 +100,7 @@ impl Run {
     }
 
     fn egraph(&self) -> EGraph {
-        let res = if self.proof_testing {
+        if self.proof_testing {
             EGraph::new_with_proofs().with_proof_testing()
         } else if self.proofs {
             EGraph::new_with_proofs()
@@ -109,35 +108,50 @@ impl Run {
             EGraph::new_with_term_encoding()
         } else {
             EGraph::default()
-        };
-
-        if self.proof_testing {
-            res
-        } else {
-            res.without_proof_checking()
         }
     }
 
-    fn desugar_program(&self, program: &str) -> String {
+    // Returns a string of the desugared program and a string for the desugared program without proofs
+    fn desugar_program(&self, program: &str) -> (String, String) {
         let mut egraph = self.egraph();
-        sanitize_internal_names(
-            &egraph
-                .desugar_program(self.path.to_str().map(String::from), program)
-                .unwrap(),
+        let resolved = egraph
+            .resolve_program(self.path.to_str().map(String::from), program)
+            .unwrap();
+        (
+            sanitize_internal_names(&resolved.resolved)
+                .iter()
+                .map(|s| s.to_string())
+                .collect::<Vec<_>>()
+                .join("\n"),
+            sanitize_internal_names(&resolved.resolved_before_proofs)
+                .iter()
+                .map(|s| s.to_string())
+                .collect::<Vec<_>>()
+                .join("\n"),
         )
-        .iter()
-        .map(|s| s.to_string())
-        .collect::<Vec<_>>()
-        .join("\n")
     }
 
     fn test_program(
         &self,
         filename: Option<String>,
         program: &str,
+        proof_check_prog: &str,
         message: &str,
     ) -> Result<Vec<CommandOutput>, String> {
         let mut egraph = self.egraph();
+        let parsed_proof_check_prog =
+            egraph
+                .parse_program(None, proof_check_prog)
+                .unwrap_or_else(|err| {
+                    panic!(
+                        "Failed to parse proof check program for {}: {}. Program was:\n{}",
+                        self.name(),
+                        err,
+                        proof_check_prog
+                    )
+                });
+
+        egraph.set_proof_checking_program(parsed_proof_check_prog);
 
         // Append print-size to every test file to ensure it works
         let program = format!("{program}\n(print-size)");
@@ -281,7 +295,6 @@ fn generate_tests(glob: &str) -> Vec<Trial> {
             term_encoding: false,
             proofs: false,
             proof_testing: false,
-            proof_checking: true,
         };
         let should_fail = run.should_fail();
         let requires_proofs = run.requires_proofs();

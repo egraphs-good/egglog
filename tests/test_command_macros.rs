@@ -95,7 +95,7 @@ fn test_single_macro_with_desugar_program() {
     "#;
 
     let result = egraph
-        .desugar_program(None, input)
+        .resolve_program(None, input)
         .unwrap()
         .iter()
         .map(|s| s.to_string())
@@ -146,7 +146,7 @@ fn test_multiple_macros_compose_with_desugar_program() {
     (rule ((Num x)) ((Num (+ x 1))))"#;
 
     let result = egraph
-        .desugar_program(None, input)
+        .resolve_program(None, input)
         .unwrap()
         .iter()
         .map(|s| s.to_string())
@@ -172,7 +172,7 @@ fn test_duplicate_macro_creates_two_rules() {
     "#;
 
     let result = egraph
-        .desugar_program(None, input)
+        .resolve_program(None, input)
         .unwrap()
         .iter()
         .map(|s| s.to_string())
@@ -208,7 +208,7 @@ fn test_macro_adds_commands_after_rules() {
     "#;
 
     let result = egraph
-        .desugar_program(None, input)
+        .resolve_program(None, input)
         .unwrap()
         .iter()
         .map(|s| s.to_string())
@@ -247,7 +247,7 @@ fn test_complex_macro_composition() {
     (rule ((Num x)) ((Num (+ x 1))))"#;
 
     let result = egraph
-        .desugar_program(None, input)
+        .resolve_program(None, input)
         .unwrap()
         .iter()
         .map(|s| s.to_string())

@@ -261,9 +261,9 @@ where
     W: Write,
 {
     if mode == RunMode::ShowDesugaredEgglog {
-        return Ok(match egraph.desugar_program(filename, command) {
-            Ok(desugared) => {
-                let sanitized = sanitize_internal_names(&desugared);
+        return Ok(match egraph.resolve_program(filename, command) {
+            Ok(resolved) => {
+                let sanitized = sanitize_internal_names(&resolved.resolved);
 
                 for line in sanitized {
                     writeln!(output, "{line}")?;
