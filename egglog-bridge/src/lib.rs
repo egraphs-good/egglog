@@ -1570,6 +1570,11 @@ impl TableAction {
         );
         state.stage_insert(self.table, &self.scratch);
     }
+
+    /// Set this table action to have no default value. Lookups that miss in this table will return `None`.
+    pub fn set_no_default(&mut self) {
+        self.default = None;
+    }
 }
 
 /// A variant of `TableAction` for the union-find.

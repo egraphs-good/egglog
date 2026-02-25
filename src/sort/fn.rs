@@ -21,6 +21,15 @@ pub struct FunctionContainer(
     pub String,
 );
 
+impl FunctionContainer {
+    /// Set this function to have no default value. Lookups that miss in this function will return `None`.
+    pub fn set_no_default(&mut self) {
+        if let ResolvedFunctionId::Lookup(action) = &mut self.0 {
+            action.set_no_default();
+        }
+    }
+}
+
 // implement hash and equality based on values only not arcsorts, since
 // arcsorts are not comparable and any two values that are equal must have the same sort
 

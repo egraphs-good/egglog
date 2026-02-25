@@ -10,11 +10,13 @@ pub struct MultiSetContainer {
 
 impl ContainerValue for MultiSetContainer {
     fn rebuild_contents(&mut self, rebuilder: &dyn Rebuilder) -> bool {
+        // If the contents are an eq-sort then we want to rebuild
         if self.do_rebuild {
             let mut xs: Vec<_> = self.data.iter().copied().collect();
             let changed = rebuilder.rebuild_slice(&mut xs);
             self.data = xs.into_iter().collect();
             changed
+        // if the contents are just a primitive then don't need to do anything.
         } else {
             false
         }
@@ -209,15 +211,19 @@ impl ContainerSort for MultiSetSort {
         let self_cloned = arc.clone();
         // For filter same as map
         let register_filter = Box::new(move |fn_: Arc<FunctionSort>, eg: &mut EGraph| {
-            // Add filter if we have a function from E -> Unit
-            if fn_.inputs().len() == 1
-                && fn_.inputs()[0].name() == inner_name_cloned.clone()
-                && fn_.output().name() == "Unit"
-            {
+            // Add filter if we have a function from E -> T
+            if fn_.inputs().len() == 1 && fn_.inputs()[0].name() == inner_name_cloned.clone() {
                 eg.add_primitive(Filter {
                     name: "unstable-multiset-filter".into(),
                     multiset: self_cloned.clone(),
                     fn_: fn_.clone(),
+                    skip_empty: true,
+                });
+                eg.add_primitive(Filter {
+                    name: "unstable-multiset-filter-not".into(),
+                    multiset: self_cloned.clone(),
+                    fn_: fn_.clone(),
+                    skip_empty: false,
                 });
             }
         });
@@ -536,13 +542,15 @@ impl Primitive for FlatMap {
     }
 }
 
-// (unstable-multiset-filter (MultiSet[X], [X] -> Unit) -> MultiSet[X])
+// (unstable-multiset-filter (MultiSet[X], [X] -> T) -> MultiSet[X])
 // will filter the elements in the multiset based on whether the function is defined for them.
+// If skip_empty is true, it will keep elements where the function is defined, otherwise it will keep elements where the function is not defined.
 #[derive(Clone)]
 struct Filter {
     name: String,
     multiset: ArcSort,
     fn_: Arc<FunctionSort>,
+    skip_empty: bool,
 }
 
 impl Primitive for Filter {
@@ -564,11 +572,13 @@ impl Primitive for Filter {
     }
 
     fn apply(&self, exec_state: &mut ExecutionState, args: &[Value]) -> Option<Value> {
-        let fc = exec_state
+        let mut fc = exec_state
             .container_values()
             .get_val::<FunctionContainer>(args[0])
             .unwrap()
             .clone();
+        // We just want to see if this function exists, not if it has a default.
+        fc.set_no_default();
         let multiset = exec_state
             .container_values()
             .get_val::<MultiSetContainer>(args[1])
@@ -578,7 +588,7 @@ impl Primitive for Filter {
         // Filter out any elements which do not have the function defined for them
         for (v, c) in multiset.data.iter_counts() {
             let mapped = fc.apply(exec_state, &[v]);
-            if mapped.is_some() {
+            if mapped.is_some() == self.skip_empty {
                 new_data.insert_multiple_mut(v, c);
             }
         }
