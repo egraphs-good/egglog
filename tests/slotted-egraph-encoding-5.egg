@@ -1,0 +1,66 @@
+(sort Renaming (Map i64 i64))
+(sort VecOfRenaming (Vec Renaming))
+
+(sort U) ; includes terms, ids, nodes.
+
+; NF (a m b) means a -> m*b
+(relation NF (U Renaming U))
+
+(constructor Var (i64) U)
+(constructor App (String U U) U)
+(constructor Rename (Renaming U) U)
+
+; NF for Var
+(rule
+    ((Var n))
+    ((NF (Var n) (map-insert (map-empty) 0 n) (Var 0)))
+)
+
+; NF for Rename
+(rule
+    (
+        (= x (Rename m1 y))
+        (NF y m2 z)
+    )
+    ; x = m1*y; y = m2*z; -> x=m1*m2*z
+    
+    (
+        (NF x (compose m2 m1) z)
+    )
+)
+
+(rule 
+    (
+        (= x (App f t1 t2))
+        (NF t1 m1 a1)
+        (NF t2 m2 a2)
+        (= tuple (shape m1 m2))
+        (= m1_p (vec-get tuple 0))
+        (= m2_p (vec-get tuple 1))
+        (= shape-to-orig (vec-get tuple 2))
+    )
+    (
+        (NF x shape-to-orig (App f (Rename m1_p a1) (Rename m2_p a2)))
+    )
+)
+
+; NF CPs
+;(rule
+;    (
+;        (NF lhs m1 a1)
+;        (NF lhs m2 a2)
+;        (!= a1 a2)
+;        (= (ordering-max a1 a2) a2) ; a2 -> a1
+;    )
+;    (
+;        (delete (NF lhs m2 a2))
+;    )
+;)
+
+; NF path compression
+
+(let $x (App "f" (Var 24) (Var 12)))
+(let $y (App "f" (Var 3) (Var 4)))
+
+(run 100)
+(print-function NF)
