@@ -503,8 +503,9 @@ impl EGraph {
     }
 
     /// Configure whether the internal reserved symbol (@) is allowed in user-defined names.
-    /// WARNING: do not use, this is for testing only.
-    /// TODO can we make this private?
+    /// WARNING: do not use, this is for testing running egglog after desugaring.
+    /// Public so files.rs can use it, hidden from documentation because it is not intended for general use.
+    #[doc(hidden)]
     pub fn ensure_no_reserved_symbols(&mut self, should_ensure: bool) {
         self.parser.ensure_no_reserved_symbols = should_ensure;
     }
