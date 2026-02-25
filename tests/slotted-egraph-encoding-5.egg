@@ -88,6 +88,6 @@
 ; Here we check equality up to renaming!
 (check (NF $v1 _ a) (NF $v4 _ a))
 (check (NF $x _ a) (NF $y _ a))
-(check (NF $x2 _ a) (NF $y2 _ a)) ; Here we check equality up to renaming!
+(check (NF $x2 _ a) (NF $y2 _ a))
 
 (print-function NF)
