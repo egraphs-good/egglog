@@ -738,9 +738,11 @@ impl EGraph {
         }
     }
 
-    /// Set the commands run so far which is used for proof checking.
-    /// This allows users to check one egglog program's proofs against another program's rules.
+    /// Provide a program for use in proof checking.
+    /// This enables testing of a desugared egglog proof program outside of proof mode.
     /// When proof_testing is true, turns all the `check` commands into `prove` commands.
+    /// Not intended for general use but needed in files.rs, so public but hidden.
+    #[doc(hidden)]
     pub fn set_proof_checking_program(
         &mut self,
         prog: Vec<Command>,
