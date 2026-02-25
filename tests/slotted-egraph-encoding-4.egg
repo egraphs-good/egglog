@@ -1,0 +1,39 @@
+; slotted unionfind
+
+(sort NameMap (Map i64 i64))
+(sort VecOfNameMap (Vec NameMap))
+
+(sort Id)
+(sort AppliedId)
+
+(constructor MkAppliedId (NameMap Id) AppliedId)
+
+(relation Unionfind (Id AppliedId))
+
+; canonicalizes an AppliedId.
+(relation Find (AppliedId AppliedId))
+
+(constructor A () Id)
+(constructor B () Id)
+
+(let $m (map-insert (map-empty) 0 0))
+
+(Unionfind (A) (MkAppliedId $m (B)))
+(Unionfind (B) (MkAppliedId $m (B)))
+
+; implementation of find based on the unionfind.
+(rule
+    (
+        (MkAppliedId m1 i)
+        (Unionfind i (MkAppliedId m2 j))
+    )
+
+    (
+        (Find (MkAppliedId m1 i) (MkAppliedId (compose m2 m1) j))
+    )
+)
+
+(run 10)
+
+(print-function Unionfind)
+(print-function Find)
