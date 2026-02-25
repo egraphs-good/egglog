@@ -511,6 +511,13 @@ impl EGraph {
         self.strict_mode
     }
 
+    /// Configure whether the internal reserved symbol (@) is allowed in user-defined names.
+    /// WARNING: do not use, this is for testing only.
+    /// TODO can we make this private?
+    pub fn ensure_no_reserved_symbols(&mut self, should_ensure: bool) {
+        self.parser.ensure_no_reserved_symbols = should_ensure;
+    }
+
     fn ensure_global_name_prefix(&mut self, span: &Span, name: &str) -> Result<(), TypeError> {
         if name.starts_with(GLOBAL_NAME_PREFIX) {
             return Ok(());
@@ -739,10 +746,19 @@ impl EGraph {
 
     /// Set the commands run so far which is used for proof checking.
     /// This allows users to check one egglog program's proofs against another program's rules.
-    pub fn set_proof_checking_program(&mut self, prog: Vec<Command>) -> Result<(), Error> {
+    /// When proof_testing is true, turns all the `check` commands into `prove` commands.
+    pub fn set_proof_checking_program(
+        &mut self,
+        prog: Vec<Command>,
+        proof_testing: bool,
+    ) -> Result<(), Error> {
         // make a new e-graph, desugar the program in proof mode
         let mut proof_check_eg = EGraph::new_with_proofs();
+        if proof_testing {
+            proof_check_eg = proof_check_eg.with_proof_testing();
+        }
         let resolved = proof_check_eg.process_program_internal(prog, false)?;
+
         self.proof_check_program = resolved.resolved_before_proofs;
         Ok(())
     }

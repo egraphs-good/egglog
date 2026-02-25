@@ -1,7 +1,7 @@
 use crate::{
     ResolvedCall, Term, TermDag, TermId,
     ast::{FunctionSubtype, ResolvedExpr, ResolvedFact, ResolvedNCommand},
-    proofs::proof_encoding_helpers::EncodingNames,
+    proofs::{proof_checker::gather_globals, proof_encoding_helpers::EncodingNames},
     typechecking::FuncType,
     util::{HEntry, HashMap, IndexSet, SymbolGen},
 };
@@ -354,6 +354,9 @@ impl ProofStore {
         raw_store: &RawProofStore,
         raw_proof_id: RawProofId,
     ) -> ProofId {
+        let globals = gather_globals(prog, &mut self.term_dag)
+            .unwrap_or_else(|_| panic!("failed to gather globals from program"));
+
         if let Some(&id) = self.proof_id.get(&raw_store.store[raw_proof_id.index()]) {
             return id;
         }
@@ -373,7 +376,10 @@ impl ProofStore {
                     .map(|pid| self.convert_raw_proof(prog, raw_store, *pid))
                     .collect();
 
-                let substitution = self.compute_rule_substitution(prog, name, &converted_premises);
+                let mut substitution =
+                    self.compute_rule_substitution(prog, name, &converted_premises);
+                // remove globals from the substitution, since they are not necessary
+                substitution.retain(|var, _term_id| globals.get(var).is_none());
 
                 Proof {
                     proposition: Proposition::new(

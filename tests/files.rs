@@ -59,7 +59,7 @@ impl Run {
                 "Top level error",
             )
         } else {
-            let (resolved_str, before_proofs_resolved_str) = self.resolve_prog(&program);
+            let resolved_str = self.resolve_prog(&program);
             // after desugaring run the program without term encoding or proofs
             let normal_run = Run {
                 path: self.path.clone(),
@@ -68,11 +68,16 @@ impl Run {
                 proofs: false,
                 proof_testing: false,
             };
+            let proof_check_prog = if self.proof_testing {
+                program.clone()
+            } else {
+                "".to_string()
+            };
 
             normal_run.test_program(
                 None,
                 &resolved_str,
-                &before_proofs_resolved_str,
+                &proof_check_prog,
                 "ERROR after parse, to_string, and parse again.",
             )
         };
@@ -118,26 +123,18 @@ impl Run {
     }
 
     // Returns a string of the desugared program and a string for the desugared program without proofs
-    fn resolve_prog(&self, program: &str) -> (String, String) {
+    fn resolve_prog(&self, program: &str) -> String {
         let mut egraph = self.egraph();
 
         let resolved = egraph
             .resolve_program(self.path.to_str().map(String::from), program)
             .unwrap();
-        let sanitized =
-            sanitize_internal_names_multiple(&[resolved.resolved, resolved.resolved_before_proofs]);
-        (
-            sanitized[0]
-                .iter()
-                .map(|cmd| cmd.to_string())
-                .collect::<Vec<_>>()
-                .join("\n"),
-            sanitized[1]
-                .iter()
-                .map(|cmd| cmd.to_string())
-                .collect::<Vec<_>>()
-                .join("\n"),
-        )
+        let sanitized = sanitize_internal_names(&resolved.resolved);
+        sanitized
+            .iter()
+            .map(|cmd| cmd.to_string())
+            .collect::<Vec<_>>()
+            .join("\n")
     }
 
     fn test_program(
@@ -152,7 +149,7 @@ impl Run {
             .parse_program(None, proof_check_prog)
             .unwrap_or_else(|_| panic!("Failed to parse proof check program"));
         egraph
-            .set_proof_checking_program(parsed_proof_check_prog)
+            .set_proof_checking_program(parsed_proof_check_prog, true)
             .expect("Failed to set proof checking program");
 
         // Append print-size to every test file to ensure it works

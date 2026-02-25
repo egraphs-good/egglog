@@ -2,6 +2,7 @@ use crate::ast::FunctionSubtype;
 use crate::extract::{Extractor, TreeAdditiveCostModel};
 use crate::proofs::proof_encoding::ProofInstrumentor;
 use crate::proofs::proof_format::{Justification, ProofId, ProofStore, proof_store_from_term};
+use crate::util::SymbolGen;
 use crate::{ResolvedCall, TermDag};
 use thiserror::Error;
 
@@ -22,6 +23,17 @@ impl ProofInstrumentor<'_> {
         &mut self,
         call: &ResolvedCall,
     ) -> Result<(ProofStore, ProofId), ProveExistsError> {
+        eprintln!("proving existence for call: {call}");
+        eprintln!(
+            "program check against which we're proving existence: {}",
+            self.egraph
+                .proof_check_program
+                .iter()
+                .map(|cmd| format!("{cmd}"))
+                .collect::<Vec<_>>()
+                .join("\n")
+        );
+
         let func = match call {
             ResolvedCall::Func(func) if func.subtype == FunctionSubtype::Constructor => func,
             ResolvedCall::Func(_) => {
@@ -103,17 +115,32 @@ impl ProofInstrumentor<'_> {
                 panic!("failed to extract proof term for constructor {}", func.name)
             });
 
+        eprintln!(
+            "extracted proof term for constructor {}: term id {proof_term_id}",
+            func.name
+        );
+        eprintln!(
+            "extracted proof pretty print: {}",
+            termdag.to_string_with_let(&mut SymbolGen::new("t".to_string()), proof_term_id)
+        );
         let (mut proof_store, proof_id) = proof_store_from_term(
             &self.egraph.proof_state.proof_names,
             termdag,
             proof_term_id,
             &self.egraph.proof_check_program,
         );
+        eprintln!("initial proof:\n{}", proof_store.proof_to_string(proof_id));
 
         // Remove globals from the proof
         if let Result::Err(e) = proof_store.remove_globals(&self.egraph.proof_check_program) {
             panic!("Failed to remove globals from proof: {e}");
         }
+
+        eprintln!("removed globals from proof, now checking existence proof");
+        eprintln!(
+            "Proof after removing globals:\n{}",
+            proof_store.proof_to_string(proof_id)
+        );
 
         // if the existence proof has a single premise, extract that premise proof
         let proof = proof_store.get(proof_id);
