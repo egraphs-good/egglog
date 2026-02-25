@@ -16,7 +16,7 @@
     ((NF (Var n) (map-insert (map-empty) 0 n) (Var 0)))
 )
 
-; NF for Rename
+; NF for Rename (is this necessary to have?)
 (rule
     (
         (= x (Rename m1 y))
@@ -29,6 +29,7 @@
     )
 )
 
+; NF for App
 (rule 
     (
         (= x (App f t1 t2))
@@ -42,7 +43,7 @@
     )
 )
 
-; NF CPs
+; handle critical pairs in NF.
 (rule
     (
         (NF lhs m1 a1)
@@ -58,7 +59,7 @@
     )
 )
 
-; NF path compression
+; path compression in NF.
 (rule
     (
         (NF a m1 b)
