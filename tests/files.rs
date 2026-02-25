@@ -129,8 +129,8 @@ impl Run {
         let resolved = egraph
             .resolve_program(self.path.to_str().map(String::from), program)
             .unwrap();
-        let sanitized = sanitize_internal_names(&resolved.resolved);
-        sanitized
+        resolved
+            .resolved
             .iter()
             .map(|cmd| cmd.to_string())
             .collect::<Vec<_>>()
@@ -151,6 +151,8 @@ impl Run {
         egraph
             .set_proof_checking_program(parsed_proof_check_prog, true)
             .expect("Failed to set proof checking program");
+
+        egraph.ensure_no_reserved_symbols(false);
 
         // Append print-size to every test file to ensure it works
         let program = format!("{program}\n(print-size)");
