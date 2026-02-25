@@ -1,12 +1,6 @@
-use std::{cmp::max, path::PathBuf};
+use std::path::PathBuf;
 
-use egglog::{
-    ast::{
-        get_max_underscores, replace_internal_symbol_with, sanitize_internal_names,
-        sanitize_internal_names_multiple,
-    },
-    file_supports_proofs, *,
-};
+use egglog::{file_supports_proofs, *};
 use hashbrown::HashSet;
 use libtest_mimic::Trial;
 
@@ -130,7 +124,6 @@ impl Run {
             .resolve_program(self.path.to_str().map(String::from), program)
             .unwrap();
         resolved
-            .resolved
             .iter()
             .map(|cmd| cmd.to_string())
             .collect::<Vec<_>>()

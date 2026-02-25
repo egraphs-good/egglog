@@ -398,15 +398,6 @@ impl Default for EGraph {
     }
 }
 
-/// The result of desugaring. Gives the commands after egglog's desugaring phase,
-/// including removing syntax sugar and global variables.
-/// In proof mode, also includes the desugared commands before proof instrumentation, which is what we use for proof checking.
-pub struct ResolvedCommands {
-    pub resolved: Vec<ResolvedCommand>,
-    /// In proof mode, populated with the desugared program before instrumented with proofs
-    pub resolved_before_proofs: Vec<ResolvedCommand>,
-}
-
 struct ResolvedNCommands {
     desugared: Vec<ResolvedNCommand>,
     /// In proof mode, populated with the desugared program before instrumented with proofs
@@ -1651,18 +1642,11 @@ impl EGraph {
         &mut self,
         filename: Option<String>,
         input: &str,
-    ) -> Result<ResolvedCommands, Error> {
+    ) -> Result<Vec<ResolvedCommand>, Error> {
         let parsed = self.parser.get_program_from_string(filename, input)?;
         let res = self.process_program_internal(parsed, false)?;
 
-        Ok(ResolvedCommands {
-            resolved_before_proofs: res
-                .resolved_before_proofs
-                .into_iter()
-                .map(|c| c.to_command())
-                .collect(),
-            resolved: res.resolved.into_iter().map(|c| c.to_command()).collect(),
-        })
+        Ok(res.resolved.into_iter().map(|c| c.to_command()).collect())
     }
 
     pub fn set_program_for_proof_checker(&mut self, prog: Vec<ResolvedNCommand>) {

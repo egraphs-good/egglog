@@ -438,7 +438,7 @@ pub fn file_supports_proofs(path: &Path) -> bool {
         Err(_) => return false,
     };
 
-    program_supports_proofs(&desugared.resolved, &egraph.type_info)
+    program_supports_proofs(&desugared, &egraph.type_info)
 }
 
 /// Reasons why a command doesn't support proof encoding

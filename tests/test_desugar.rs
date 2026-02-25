@@ -28,7 +28,6 @@ fn test_desugar_includes() {
     let desugared = egraph
         .resolve_program(None, &input)
         .unwrap()
-        .resolved
         .iter()
         .map(|cmd| format!("{cmd}"))
         .collect::<Vec<_>>();

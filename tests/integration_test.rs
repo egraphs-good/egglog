@@ -949,24 +949,21 @@ fn eqsat_basic_term_encoding_roundtrip() {
     let mut egraph = EGraph::new_with_term_encoding();
     let desugared_once = egraph
         .resolve_program(Some(path.display().to_string()), &source)
-        .expect("term-encoding desugaring should succeed")
-        .resolved;
+        .expect("term-encoding desugaring should succeed");
     let text_once = render_program(&desugared_once);
 
     // 2. Parse and desugar the rendered program with a fresh e-graph.
     let mut egraph = EGraph::default();
     let desugared_twice = egraph
         .resolve_program(None, &text_once)
-        .expect("second desugaring should succeed")
-        .resolved;
+        .expect("second desugaring should succeed");
     let text_twice = render_program(&desugared_twice);
 
     // 3. Parse and desugar again to ensure stability using another fresh e-graph.
     let mut egraph = EGraph::default();
     let desugared_thrice = egraph
         .resolve_program(None, &text_twice)
-        .expect("third desugaring should succeed")
-        .resolved;
+        .expect("third desugaring should succeed");
     let text_thrice = render_program(&desugared_thrice);
 
     assert_eq!(text_twice, text_thrice, "desugaring should stabilize");

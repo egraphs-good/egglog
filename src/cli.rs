@@ -263,7 +263,7 @@ where
     if mode == RunMode::ShowDesugaredEgglog {
         return Ok(match egraph.resolve_program(filename, command) {
             Ok(resolved) => {
-                let sanitized = sanitize_internal_names(&resolved.resolved);
+                let sanitized = sanitize_internal_names(&resolved);
 
                 for line in sanitized {
                     writeln!(output, "{line}")?;

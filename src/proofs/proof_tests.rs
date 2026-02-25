@@ -4,7 +4,7 @@ mod tests {
 
     fn term_encode(source: &str) -> Vec<ResolvedCommand> {
         let mut egraph = crate::EGraph::new_with_term_encoding();
-        egraph.resolve_program(None, source).unwrap().resolved
+        egraph.resolve_program(None, source).unwrap()
     }
 
     #[test]

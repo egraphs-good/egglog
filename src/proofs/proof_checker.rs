@@ -595,9 +595,8 @@ impl ProofStore {
 
                 // Verify that the conclusion matches what the rule produces
                 self.check_rule_produces_equality(
-                    ctx,
                     rule,
-                    &substitution,
+                    substitution,
                     &substitution_with_globals,
                     proof.proposition(),
                     name,
@@ -1022,10 +1021,9 @@ impl ProofStore {
     /// Check that a rule produces the claimed equality
     fn check_rule_produces_equality(
         &mut self,
-        ctx: &ProofCheckContext,
         rule: &crate::ast::GenericRule<ResolvedCall, crate::ast::ResolvedVar>,
         substitution: &HashMap<String, TermId>,
-        substitution_with_globals: &HashMap<String, TermId>,
+        subst_with_globals: &HashMap<String, TermId>,
         claimed: &Proposition,
         rule_name: &str,
     ) -> Result<(), ProofCheckError> {
@@ -1034,7 +1032,7 @@ impl ProofStore {
         // has the same structure, so we can pass it directly
         let action_refs: Vec<&GenericAction<ResolvedCall, crate::ast::ResolvedVar>> =
             rule.head.0.iter().collect();
-        let mut bindings = substitution_with_globals.clone();
+        let bindings = subst_with_globals.clone();
         let action_ctx = process_actions(rule_name, bindings, &action_refs, &mut self.term_dag)?;
 
         // Check if the claimed equality is in the propositions
