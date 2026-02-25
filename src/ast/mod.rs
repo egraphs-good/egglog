@@ -2088,33 +2088,3 @@ where
     let replacement = "_".repeat(max_underscores + 1);
     replace_internal_symbol_with(&unresolved, &replacement)
 }
-
-/// Sanitizes internal names in multiple programs at once, using a shared replacement string.
-pub fn sanitize_internal_names_multiple<Head, Leaf>(
-    programs: &[Vec<GenericCommand<Head, Leaf>>],
-) -> Vec<Vec<GenericCommand<String, String>>>
-where
-    Head: Clone + Display,
-    Leaf: Clone + PartialEq + Eq + Display + Hash,
-{
-    // first convert to unresolved
-    let mut all_unresolved: Vec<Vec<GenericCommand<String, String>>> = vec![];
-    for program in programs {
-        all_unresolved.push(
-            program
-                .iter()
-                .map(|cmd| cmd.clone().make_unresolved())
-                .collect(),
-        );
-    }
-    let max_underscores = all_unresolved
-        .iter()
-        .map(|program| get_max_underscores(program))
-        .max()
-        .unwrap_or(0);
-    let replacement = "_".repeat(max_underscores + 1);
-    all_unresolved
-        .into_iter()
-        .map(|program| replace_internal_symbol_with(&program, &replacement))
-        .collect()
-}
