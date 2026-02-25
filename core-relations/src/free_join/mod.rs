@@ -5,7 +5,6 @@ use std::{
         Arc,
         atomic::{AtomicUsize, Ordering},
     },
-    u32,
 };
 
 use crate::{
