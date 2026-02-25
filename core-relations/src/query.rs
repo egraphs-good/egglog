@@ -893,6 +893,20 @@ pub(crate) struct Atom {
     pub(crate) constraints: ProcessedConstraints,
 }
 
+impl Atom {
+    pub(crate) fn vars(&self) -> impl Iterator<Item = Variable> + '_ {
+        self.var_columns.vars()
+    }
+
+    pub(crate) fn get_var(&self, col: ColumnId) -> Option<Variable> {
+        self.var_columns.get_var(col)
+    }
+
+    pub(crate) fn get_col(&self, var: Variable) -> Option<ColumnId> {
+        self.var_columns.get_col(var)
+    }
+}
+
 #[derive(Clone, Default)]
 pub(crate) struct VarColumnMap {
     var_to_column: HashMap<Variable, ColumnId>,
