@@ -86,7 +86,7 @@ use crate::proofs::proof_encoding::{EncodingState, ProofInstrumentor};
 use crate::proofs::proof_encoding_helpers::{
     ProofEncodingUnsupportedReason, command_supports_proof_encoding,
 };
-use crate::proofs::proof_extraction::ProveExistsError;
+use crate::proofs::extract_proof::ProveExistsError;
 use crate::proofs::proof_format::{ProofId, ProofStore};
 use crate::proofs::proof_normal_form::proof_form;
 use crate::proofs::prove_extraction::{ExtractWithProofError, ProveEqualToRepresentative};
