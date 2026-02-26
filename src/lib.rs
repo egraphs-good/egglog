@@ -82,11 +82,11 @@ use util::*;
 use crate::ast::desugar::desugar_command;
 use crate::ast::*;
 use crate::core::{GenericActionsExt, ResolvedRuleExt};
+use crate::proofs::extract_proof::ProveExistsError;
 use crate::proofs::proof_encoding::{EncodingState, ProofInstrumentor};
 use crate::proofs::proof_encoding_helpers::{
     ProofEncodingUnsupportedReason, command_supports_proof_encoding,
 };
-use crate::proofs::extract_proof::ProveExistsError;
 use crate::proofs::proof_format::{ProofId, ProofStore};
 use crate::proofs::proof_normal_form::proof_form;
 use crate::proofs::prove_extraction::{ExtractWithProofError, ProveEqualToRepresentative};
@@ -133,7 +133,8 @@ pub enum CommandOutput {
         proof_store: ProofStore,
         proof_id: ProofId,
     },
-    /// An extracted term together with a proof that it equals the input term
+    /// An extracted term together with a proof that it equals the input term.
+    /// The proof proves a proposition of the form `extracted_term = input_term`.
     ExtractWithProof {
         proof_store: ProofStore,
         proof_id: ProofId,
@@ -1408,11 +1409,6 @@ impl EGraph {
                             error,
                         }
                     })?;
-
-                log::info!(
-                    "extracted with proof: {}",
-                    proof_store.proof_to_string(proof_id)
-                );
 
                 return Ok(Some(CommandOutput::ExtractWithProof {
                     proof_store,

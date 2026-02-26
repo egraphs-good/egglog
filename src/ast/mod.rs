@@ -85,6 +85,7 @@ where
         PrintFunctionMode,
     ),
     ProveExists(Span, Head),
+    /// See [`GenericCommand::ExtractWithProof`].
     ExtractWithProof(Span, GenericExpr<Head, Leaf>),
     PrintSize(Span, Option<String>),
     Output {
@@ -882,6 +883,42 @@ where
     Check(Span, Vec<GenericFact<Head, Leaf>>),
     Prove(Span, Vec<GenericFact<Head, Leaf>>),
     ProveExists(Span, Head),
+
+    /// Extract a term from the e-graph and produce a proof that
+    /// the extracted (simplified) term is equal to the input term.
+    ///
+    /// Requires proof production to be enabled (using the `--proofs` flag
+    /// or calling `egraph.enable_proofs()` from the Rust API).
+    ///
+    /// The output is a `CommandOutput::ExtractWithProof`, containing a
+    /// `ProofStore` and a `ProofId`.
+    /// See the `proofs::proof_format` module for
+    /// details on the proof representation.
+    ///
+    /// Example:
+    ///
+    /// ```text
+    /// (datatype Expr
+    ///   (Num i64)
+    ///   (Add Expr Expr)
+    ///   (Mul Expr Expr))
+    ///
+    /// ;; x + 0 = x
+    /// (rule ((Add a (Num 0)))
+    ///       ((union (Add a (Num 0)) a))
+    ///       :name "add-zero")
+    ///
+    /// ;; constant folding for Mul
+    /// (rule ((Mul (Num a) (Num b)))
+    ///       ((union (Mul (Num a) (Num b)) (Num (* a b))))
+    ///       :name "mul-fold")
+    ///
+    /// (let $e (Mul (Num 2) (Add (Num 3) (Num 0))))
+    /// (run 10)
+    ///
+    /// ;; Extracts (Num 6) and prints a proof that (Num 6) = (Mul (Num 2) (Add (Num 3) (Num 0)))
+    /// (extract-with-proof (Mul (Num 2) (Add (Num 3) (Num 0))))
+    /// ```
     ExtractWithProof(Span, GenericExpr<Head, Leaf>),
     /// Print out rows of a given function, extracting each of the elements of the function.
     /// Example:

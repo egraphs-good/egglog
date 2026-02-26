@@ -149,7 +149,14 @@ pub(crate) fn desugar_command(
         Command::PrintOverallStatistics(span, file) => {
             vec![NCommand::PrintOverallStatistics(span, file.clone())]
         }
-        Command::Extract(span, expr, variants) => vec![NCommand::Extract(span, expr, variants)],
+        Command::Extract(span, expr, variants) => {
+            // In proof testing mode test using extraction with proofs
+            if proof_testing {
+                vec![NCommand::ExtractWithProof(span, expr)]
+            } else {
+                vec![NCommand::Extract(span, expr, variants)]
+            }
+        }
         Command::Check(span, facts) => {
             if proof_testing {
                 desugar_prove(parser, span.clone(), facts.clone())
