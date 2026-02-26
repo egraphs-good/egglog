@@ -1652,10 +1652,6 @@ impl EGraph {
         Ok(res.resolved.into_iter().map(|c| c.to_command()).collect())
     }
 
-    pub fn set_program_for_proof_checker(&mut self, prog: Vec<ResolvedNCommand>) {
-        self.proof_check_program = prog;
-    }
-
     /// Takes a source program `input` and parses it into a list of [`Command`]s.
     pub fn parse_program(
         &mut self,
