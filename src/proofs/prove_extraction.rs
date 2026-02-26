@@ -382,7 +382,7 @@ impl<'a> ProveEqualToRepresentative<'a> {
         termdag.app("ToAst".to_string(), vec![inner])
     }
 
-    /// Extract the best term for `value` and produce a proof that the
+    /// Extract a term for `value` and produce a proof that the
     /// extracted term equals `value`.
     ///
     /// # Algorithm

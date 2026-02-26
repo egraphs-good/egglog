@@ -1,7 +1,7 @@
+pub(crate) mod extract_proof;
 pub(crate) mod proof_checker;
 pub(crate) mod proof_encoding;
 pub(crate) mod proof_encoding_helpers;
-pub(crate) mod extract_proof;
 pub(crate) mod proof_format;
 pub(crate) mod proof_normal_form;
 pub(crate) mod proof_simplification;
