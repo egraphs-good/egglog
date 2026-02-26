@@ -299,7 +299,7 @@ impl RawProofStore {
     fn unwrap_ast(&self, term_id: TermId) -> TermId {
         let term = self.term_dag.get(term_id).clone();
         let Term::App(_, args) = term else {
-            panic!("expected ast wrapper application");
+            panic!("expected ast wrapper application, got {:?}", term);
         };
         assert!(
             args.len() == 1,

@@ -195,11 +195,8 @@ impl<'a> ProveEqualToRepresentative<'a> {
             egraph,
             TreeAdditiveCostModel::default(),
         );
-        let user_extractor = Extractor::compute_costs_from_rootsorts(
-            None,
-            egraph,
-            TreeAdditiveCostModel::default(),
-        );
+        let user_extractor =
+            Extractor::compute_costs_from_rootsorts(None, egraph, TreeAdditiveCostModel::default());
 
         // Resolve the proof sort by name from the encoding state.
         let proof_sort_name = &egraph.proof_state.proof_names.proof_datatype;
@@ -375,39 +372,14 @@ impl<'a> ProveEqualToRepresentative<'a> {
         }
     }
 
-    /// Wrap a term in the appropriate `Ast<Sort>` constructor for proof terms.
+    /// Wrap a term in a `ToAst` wrapper for proof terms.
     ///
-    /// For eq-sorts (constructors), we look up the registered
-    /// `sort_to_ast_constructor`. For base/primitive sorts (literals), we need
-    /// to find an ast constructor too – the encoding registers one per sort
-    /// that appears in the program.
+    /// The proof format uses single-arg `App` wrappers around terms in
+    /// propositions. The exact constructor name doesn't matter because
+    /// `unwrap_ast` simply strips the outer `App` layer. We always use
+    /// a fixed `"ToAst"` name here.
     fn wrap_in_ast(&self, termdag: &mut TermDag, inner: TermId) -> TermId {
-        // Try to find an ast constructor for the term. For an App, look up
-        // via fn_to_term_sort → sort_to_ast_constructor. For a Lit we need the
-        // sort name, but we don't have it directly. We'll look through all
-        // registered ast constructors and pick the first one that matches the
-        // sort. For simplicity in the literal case, we try all constructors.
-        let names = &self.egraph.proof_state.proof_names;
-        let term = termdag.get(inner).clone();
-        match term {
-            Term::App(ref head, _) => {
-                // Get the sort for this function, then the ast constructor.
-                if let Some(sort_name) = names.fn_to_term_sort.get(head) {
-                    if let Some(ast_ctor) = names.sort_to_ast_constructor.get(sort_name) {
-                        return termdag.app(ast_ctor.clone(), vec![inner]);
-                    }
-                }
-                // Fallback: return unwrapped (shouldn't normally happen).
-                inner
-            }
-            _ => {
-                // For literals, we don't have a sort-specific ast wrapper in
-                // the general case. This path is only hit for Fiat proofs of
-                // base values which are self-equalities; callers may not need
-                // the ast wrapper for these.
-                inner
-            }
-        }
+        termdag.app("ToAst".to_string(), vec![inner])
     }
 
     /// Extract the best term for `value` and produce a proof that the
