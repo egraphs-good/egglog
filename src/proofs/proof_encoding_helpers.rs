@@ -462,6 +462,10 @@ pub enum ProofEncodingUnsupportedReason {
         "sort has a :internal-proof-func annotation. The :internal-proof-func annotation is used internally by proof encoding and cannot be specified manually in proof mode."
     )]
     SortWithProofFuncAnnotation,
+    #[error(
+        "constructor has a :proof-function annotation. The :proof-function annotation is used internally by proof encoding and cannot be specified manually in proof mode."
+    )]
+    ConstructorWithProofFunctionAnnotation,
     #[error("user-defined commands are not supported.")]
     UserDefinedCommand,
     #[error("input commands are not supported.")]
@@ -560,6 +564,10 @@ pub(crate) fn command_supports_proof_encoding(
             proof_func: Some(_),
             ..
         } => Err(ProofEncodingUnsupportedReason::SortWithProofFuncAnnotation),
+        GenericCommand::Constructor {
+            proof_function: Some(_),
+            ..
+        } => Err(ProofEncodingUnsupportedReason::ConstructorWithProofFunctionAnnotation),
         GenericCommand::UserDefined(..) => Err(ProofEncodingUnsupportedReason::UserDefinedCommand),
         GenericCommand::Input { .. } => Err(ProofEncodingUnsupportedReason::InputCommand),
         // Extract commands can't have non-global function lookups

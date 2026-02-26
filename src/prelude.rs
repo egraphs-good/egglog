@@ -706,6 +706,7 @@ pub fn add_constructor(
         hidden: false,
         let_binding: false,
         term_constructor: None,
+        proof_function: None,
     }])
 }
 

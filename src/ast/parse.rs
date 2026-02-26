@@ -394,6 +394,7 @@ impl Parser {
                 // (constructor <name> (<input sort>*) <output sort> :cost <cost>)
                 // (constructor <name> (<input sort>*) <output sort> :unextractable)
                 // (constructor <name> (<input sort>*) <output sort> :term-constructor <constructor name>)
+                // (constructor <name> (<input sort>*) <output sort> :proof-function <proof function name>)
                 match tail {
                     [name, inputs, output, rest @ ..] => {
                         let mut cost = None;
@@ -401,6 +402,7 @@ impl Parser {
                         let mut hidden = false;
                         let mut let_binding = false;
                         let mut term_constructor = None;
+                        let mut proof_function = None;
                         for (key, val) in self.parse_options(rest)? {
                             match (key, val) {
                                 (":unextractable", []) => unextractable = true,
@@ -410,6 +412,9 @@ impl Parser {
                                 (":term-constructor", [tc]) => {
                                     term_constructor =
                                         Some(tc.expect_atom("term constructor name")?)
+                                }
+                                (":proof-function", [pf]) => {
+                                    proof_function = Some(pf.expect_atom("proof function name")?)
                                 }
                                 _ => return error!(span, "could not parse constructor options"),
                             }
@@ -424,6 +429,7 @@ impl Parser {
                             hidden,
                             let_binding,
                             term_constructor,
+                            proof_function,
                         }]
                     }
                     _ => {
@@ -431,7 +437,8 @@ impl Parser {
                         let b = "(constructor <name> (<input sort>*) <output sort> :cost <cost>)";
                         let c = "(constructor <name> (<input sort>*) <output sort> :unextractable)";
                         let d = "(constructor <name> (<input sort>*) <output sort> :term-constructor <constructor name>)";
-                        return error!(span, "usages:\n{a}\n{b}\n{c}\n{d}");
+                        let e = "(constructor <name> (<input sort>*) <output sort> :proof-function <proof function name>)";
+                        return error!(span, "usages:\n{a}\n{b}\n{c}\n{d}\n{e}");
                     }
                 }
             }

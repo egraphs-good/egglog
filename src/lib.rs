@@ -1160,6 +1160,16 @@ impl EGraph {
                 log::info!("Declared sort {name}.")
             }
             ResolvedNCommand::Function(fdecl) => {
+                // If the constructor has a :proof-function annotation, store the mapping.
+                // This annotation is set by proof instrumentation on view tables.
+                if let Some(ref proof_fn_name) = fdecl.proof_function {
+                    if let Some(ref tc_name) = fdecl.term_constructor {
+                        self.proof_state
+                            .proof_names
+                            .view_proof_name
+                            .insert(tc_name.clone(), proof_fn_name.clone());
+                    }
+                }
                 self.declare_function(&fdecl)?;
                 log::info!("Declared {} {}.", fdecl.subtype, fdecl.name)
             }

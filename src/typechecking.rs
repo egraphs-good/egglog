@@ -573,6 +573,7 @@ impl TypeInfo {
             internal_let: fdecl.internal_let,
             span: fdecl.span.clone(),
             term_constructor: fdecl.term_constructor.clone(),
+            proof_function: fdecl.proof_function.clone(),
         })
     }
 

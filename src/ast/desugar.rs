@@ -33,11 +33,13 @@ pub(crate) fn desugar_command(
             hidden,
             let_binding,
             term_constructor,
+            proof_function,
         } => {
             let mut fdecl =
                 FunctionDecl::constructor(span, name, schema, cost, unextractable, hidden);
             fdecl.internal_let = let_binding;
             fdecl.term_constructor = term_constructor;
+            fdecl.proof_function = proof_function;
             std::iter::once(NCommand::Function(fdecl)).collect()
         }
         Command::Relation { span, name, inputs } => desugar_relation(parser, span, name, inputs),

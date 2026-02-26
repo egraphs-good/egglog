@@ -135,6 +135,7 @@ where
                     hidden: f.internal_hidden,
                     let_binding: f.internal_let,
                     term_constructor: f.term_constructor.clone(),
+                    proof_function: f.proof_function.clone(),
                 },
                 FunctionSubtype::Custom => GenericCommand::Function {
                     span: f.span.clone(),
@@ -647,6 +648,9 @@ where
         /// For view tables in proof encoding: the constructor to use for building
         /// terms from the first n-1 children during extraction.
         term_constructor: Option<String>,
+        /// For view tables in proof encoding: the name of the proof function
+        /// that stores proofs for this view table.
+        proof_function: Option<String>,
     },
 
     /// The `relation` command declares a named relation
@@ -1009,6 +1013,7 @@ where
                 hidden,
                 let_binding,
                 term_constructor,
+                proof_function,
             } => {
                 write!(f, "(constructor {name} {schema}")?;
                 if let Some(cost) = cost {
@@ -1025,6 +1030,9 @@ where
                 }
                 if let Some(tc) = term_constructor {
                     write!(f, " :term-constructor {tc}")?;
+                }
+                if let Some(pf) = proof_function {
+                    write!(f, " :proof-function {pf}")?;
                 }
                 write!(f, ")")
             }
@@ -1261,6 +1269,9 @@ where
     /// For view tables in proof encoding: the constructor to use for building
     /// terms from the first n-1 children during extraction.
     pub term_constructor: Option<String>,
+    /// For view tables in proof encoding: the name of the proof function
+    /// that stores proofs for this view table.
+    pub proof_function: Option<String>,
 }
 
 #[derive(Clone, Debug, PartialEq, Eq, Hash)]
@@ -1323,6 +1334,7 @@ impl FunctionDecl {
             internal_let: false,
             span,
             term_constructor: None,
+            proof_function: None,
         }
     }
 
@@ -1347,6 +1359,7 @@ impl FunctionDecl {
             internal_let: false,
             span,
             term_constructor: None,
+            proof_function: None,
         }
     }
 }
@@ -1372,6 +1385,7 @@ where
             internal_let: self.internal_let,
             span: self.span,
             term_constructor: self.term_constructor,
+            proof_function: self.proof_function,
         }
     }
 }
@@ -1666,6 +1680,7 @@ where
                 hidden,
                 let_binding,
                 term_constructor,
+                proof_function,
             } => GenericCommand::Constructor {
                 span,
                 name: fun(name),
@@ -1678,6 +1693,7 @@ where
                 hidden,
                 let_binding,
                 term_constructor: term_constructor.map(&mut *fun),
+                proof_function: proof_function.map(&mut *fun),
             },
             GenericCommand::Relation { span, name, inputs } => GenericCommand::Relation {
                 span,
@@ -1894,6 +1910,7 @@ where
                 hidden,
                 let_binding,
                 term_constructor,
+                proof_function,
             } => GenericCommand::Constructor {
                 span,
                 name,
@@ -1903,6 +1920,7 @@ where
                 hidden,
                 let_binding,
                 term_constructor,
+                proof_function,
             },
             GenericCommand::Relation { span, name, inputs } => {
                 GenericCommand::Relation { span, name, inputs }
