@@ -175,7 +175,12 @@ pub enum ExtractWithProofError {
 pub(crate) struct ProveEqualToRepresentative<'a> {
     egraph: &'a EGraph,
     index: ViewProofIndex,
-    extractor: Extractor<DefaultCost>,
+    /// Extractor that ignores unextractable/hidden flags — used for extracting
+    /// proof terms from internal tables.
+    proof_extractor: Extractor<DefaultCost>,
+    /// Extractor that respects unextractable/hidden flags — used for extracting
+    /// the user-facing "best" term.
+    user_extractor: Extractor<DefaultCost>,
     proof_sort: ArcSort,
 }
 
@@ -185,7 +190,12 @@ impl<'a> ProveEqualToRepresentative<'a> {
     /// This scans all view/proof tables and pre-computes the extractor costs.
     pub(crate) fn new(egraph: &'a EGraph) -> Self {
         let index = ViewProofIndex::new(egraph);
-        let extractor = Extractor::compute_costs_from_rootsorts_allow_unextractable(
+        let proof_extractor = Extractor::compute_costs_from_rootsorts_allow_unextractable(
+            None,
+            egraph,
+            TreeAdditiveCostModel::default(),
+        );
+        let user_extractor = Extractor::compute_costs_from_rootsorts(
             None,
             egraph,
             TreeAdditiveCostModel::default(),
@@ -207,7 +217,8 @@ impl<'a> ProveEqualToRepresentative<'a> {
         Self {
             egraph,
             index,
-            extractor,
+            proof_extractor,
+            user_extractor,
             proof_sort,
         }
     }
@@ -304,7 +315,7 @@ impl<'a> ProveEqualToRepresentative<'a> {
 
                 // 4. Extract the proof Value into a proof TermId.
                 let view_proof_term = self
-                    .extractor
+                    .proof_extractor
                     .extract_best_with_sort(
                         self.egraph,
                         termdag,
@@ -477,7 +488,7 @@ impl<'a> ProveEqualToRepresentative<'a> {
         // ── 2. Extract the best term for the representative ─────────────
         let mut termdag = TermDag::default();
         let (_, extracted_term_id) = self
-            .extractor
+            .user_extractor
             .extract_best_with_sort(self.egraph, &mut termdag, representative, sort.clone())
             .ok_or_else(|| ExtractWithProofError::ExtractionFailed {
                 value: representative,
@@ -512,7 +523,7 @@ impl<'a> ProveEqualToRepresentative<'a> {
 
             // Extract the UF proof value into a proof TermId.
             let (_, uf_proof_term) = self
-                .extractor
+                .proof_extractor
                 .extract_best_with_sort(
                     self.egraph,
                     &mut termdag,
@@ -538,13 +549,28 @@ impl<'a> ProveEqualToRepresentative<'a> {
         };
 
         // ── 6. Convert to high-level ProofStore ─────────────────────────
-        let (proof_store, proof_id) = proof_store_from_term(
+        let (mut proof_store, proof_id) = proof_store_from_term(
             proof_names,
             termdag.clone(),
             final_proof,
             &self.egraph.proof_check_program,
         );
 
-        Ok((proof_store, proof_id))
+        // ── 7. Post-process: remove globals, check, simplify ───────────
+        if let Err(e) = proof_store.remove_globals(&self.egraph.proof_check_program) {
+            panic!("Failed to remove globals from extract-with-proof proof: {e}");
+        }
+
+        if let Err(e) = proof_store.check_proof(proof_id, &self.egraph.proof_check_program) {
+            panic!("extract-with-proof proof should be valid before simplification: {e}");
+        }
+
+        let simplified = proof_store.simplify(proof_id);
+
+        proof_store
+            .check_proof(simplified, &self.egraph.proof_check_program)
+            .expect("simplified extract-with-proof proof should still be valid");
+
+        Ok((proof_store, simplified))
     }
 }
