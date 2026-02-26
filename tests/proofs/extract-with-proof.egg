@@ -1,23 +1,3 @@
-;; Non-trivial test for extract-with-proof.
-;;
-;; We define a small arithmetic expression language with variables,
-;; addition, multiplication, and numeric literals. Several rewrite
-;; rules interact:
-;;   - commutativity of addition and multiplication
-;;   - constant folding for addition
-;;   - identity elimination (x + 0 = x, x * 1 = x)
-;;   - distribution (a * (b + c) = a*b + a*c)
-;;
-;; The starting expression  (Mul 2 (Add (Num 3) (Num 0)))
-;; should simplify through multiple steps to (Num 6):
-;;   Mul 2 (Add (Num 3) (Num 0))
-;;   = Mul 2 (Num 3)             ;; identity: 3 + 0 = 3
-;;   = Mul (Num 3) (Num 2)       ;; commutativity of Mul (so > check works)
-;;   = Num 6                     ;; constant fold of Mul
-;;
-;; The extract-with-proof command should return a proof of a ground
-;; equality whose LHS is the best extracted term.
-
 (datatype Expr
   (Num i64)
   (Add Expr Expr)
