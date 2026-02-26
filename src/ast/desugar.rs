@@ -185,6 +185,9 @@ pub(crate) fn desugar_command(
         Command::ProveExists(span, constructor) => {
             vec![NCommand::ProveExists(span, constructor)]
         }
+        Command::ExtractWithProof(span, expr) => {
+            vec![NCommand::ExtractWithProof(span, expr)]
+        }
     };
 
     Ok(res)

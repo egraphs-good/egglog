@@ -89,6 +89,7 @@ use crate::proofs::proof_encoding_helpers::{
 use crate::proofs::proof_extraction::ProveExistsError;
 use crate::proofs::proof_format::{ProofId, ProofStore};
 use crate::proofs::proof_normal_form::proof_form;
+use crate::proofs::prove_extraction::{ExtractWithProofError, ProveEqualToRepresentative};
 
 pub const GLOBAL_NAME_PREFIX: &str = "$";
 
@@ -129,6 +130,11 @@ pub enum CommandOutput {
     ExtractVariants(TermDag, Vec<TermId>),
     /// A high-level proof witnessing constructor existence
     ProveExists {
+        proof_store: ProofStore,
+        proof_id: ProofId,
+    },
+    /// An extracted term together with a proof that it equals the input term
+    ExtractWithProof {
         proof_store: ProofStore,
         proof_id: ProofId,
     },
@@ -174,6 +180,10 @@ impl std::fmt::Display for CommandOutput {
                 writeln!(f, ")")
             }
             CommandOutput::ProveExists {
+                proof_store,
+                proof_id,
+            } => writeln!(f, "{}", proof_store.proof_to_string(*proof_id)),
+            CommandOutput::ExtractWithProof {
                 proof_store,
                 proof_id,
             } => writeln!(f, "{}", proof_store.proof_to_string(*proof_id)),
@@ -1354,6 +1364,29 @@ impl EGraph {
                     proof_id,
                 }));
             }
+            ResolvedNCommand::ExtractWithProof(span, expr) => {
+                let sort = expr.output_type();
+                let value = self.eval_resolved_expr(span.clone(), &expr)?;
+
+                let prover = ProveEqualToRepresentative::new(self);
+                let (proof_store, proof_id) =
+                    prover
+                        .extract_with_proof(value, sort)
+                        .map_err(|error| Error::ExtractWithProofError {
+                            span: span.clone(),
+                            error,
+                        })?;
+
+                log::info!(
+                    "extracted with proof: {}",
+                    proof_store.proof_to_string(proof_id)
+                );
+
+                return Ok(Some(CommandOutput::ExtractWithProof {
+                    proof_store,
+                    proof_id,
+                }));
+            }
         };
 
         Ok(None)
@@ -2049,6 +2082,12 @@ pub enum Error {
         span: Span,
         #[source]
         error: ProveExistsError,
+    },
+    #[error("{span}\n{error}")]
+    ExtractWithProofError {
+        span: Span,
+        #[source]
+        error: ExtractWithProofError,
     },
     #[error("{1}\n{2}\nShadowing is not allowed, but found {0}")]
     Shadowing(String, Span, Span),

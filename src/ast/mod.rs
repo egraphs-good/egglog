@@ -85,6 +85,7 @@ where
         PrintFunctionMode,
     ),
     ProveExists(Span, Head),
+    ExtractWithProof(Span, GenericExpr<Head, Leaf>),
     PrintSize(Span, Option<String>),
     Output {
         span: Span,
@@ -168,6 +169,9 @@ where
             GenericNCommand::ProveExists(span, constructor) => {
                 GenericCommand::ProveExists(span.clone(), constructor.clone())
             }
+            GenericNCommand::ExtractWithProof(span, expr) => {
+                GenericCommand::ExtractWithProof(span.clone(), expr.clone())
+            }
             GenericNCommand::PrintSize(span, name) => {
                 GenericCommand::PrintSize(span.clone(), name.clone())
             }
@@ -223,7 +227,8 @@ where
             | GenericNCommand::Pop(..)
             | GenericNCommand::Input { .. }
             | GenericNCommand::UserDefined(..)
-            | GenericNCommand::ProveExists(..) => self,
+            | GenericNCommand::ProveExists(..)
+            | GenericNCommand::ExtractWithProof(..) => self,
         }
     }
 
@@ -277,6 +282,9 @@ where
             }
             GenericNCommand::ProveExists(span, constructor) => {
                 GenericNCommand::ProveExists(span, constructor)
+            }
+            GenericNCommand::ExtractWithProof(span, expr) => {
+                GenericNCommand::ExtractWithProof(span, expr.visit_exprs(f))
             }
             GenericNCommand::PrintSize(span, name) => GenericNCommand::PrintSize(span, name),
             GenericNCommand::Output { span, file, exprs } => GenericNCommand::Output {
@@ -870,6 +878,7 @@ where
     Check(Span, Vec<GenericFact<Head, Leaf>>),
     Prove(Span, Vec<GenericFact<Head, Leaf>>),
     ProveExists(Span, Head),
+    ExtractWithProof(Span, GenericExpr<Head, Leaf>),
     /// Print out rows of a given function, extracting each of the elements of the function.
     /// Example:
     ///
@@ -1054,6 +1063,9 @@ where
             }
             GenericCommand::ProveExists(_span, constructor) => {
                 write!(f, "(prove-exists {constructor})")
+            }
+            GenericCommand::ExtractWithProof(_span, expr) => {
+                write!(f, "(extract-with-proof {expr})")
             }
             GenericCommand::Push(n) => write!(f, "(push {n})"),
             GenericCommand::Pop(_span, n) => write!(f, "(pop {n})"),
@@ -1729,6 +1741,9 @@ where
             GenericCommand::ProveExists(span, constructor) => {
                 GenericCommand::ProveExists(span, constructor)
             }
+            GenericCommand::ExtractWithProof(span, expr) => {
+                GenericCommand::ExtractWithProof(span, expr)
+            }
             GenericCommand::PrintFunction(span, name, n, file, mode) => {
                 GenericCommand::PrintFunction(span, fun(name), n, file, mode)
             }
@@ -1950,6 +1965,9 @@ where
             ),
             GenericCommand::ProveExists(span, constructor) => {
                 GenericCommand::ProveExists(span, head(constructor))
+            }
+            GenericCommand::ExtractWithProof(span, expr) => {
+                GenericCommand::ExtractWithProof(span, expr.map_symbols(head, leaf))
             }
             GenericCommand::PrintFunction(span, name, n, file, mode) => {
                 GenericCommand::PrintFunction(span, name, n, file, mode)

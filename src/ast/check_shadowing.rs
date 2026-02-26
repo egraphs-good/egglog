@@ -78,6 +78,7 @@ impl Names {
             ResolvedNCommand::RunSchedule(..) => Ok(()),
             ResolvedNCommand::PrintOverallStatistics(..) => Ok(()),
             ResolvedNCommand::ProveExists(..) => Ok(()),
+            ResolvedNCommand::ExtractWithProof(..) => Ok(()),
             ResolvedNCommand::PrintFunction(..) => Ok(()),
             ResolvedNCommand::PrintSize(..) => Ok(()),
             ResolvedNCommand::Input { .. } => Ok(()),

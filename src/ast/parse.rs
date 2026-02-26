@@ -628,6 +628,10 @@ impl Parser {
                 )],
                 _ => return error!(span, "usage: (prove-exists <constructor>)"),
             },
+            "extract-with-proof" => match tail {
+                [e] => vec![Command::ExtractWithProof(span, self.parse_expr(e)?)],
+                _ => return error!(span, "usage: (extract-with-proof <expr>)"),
+            },
             "push" => match tail {
                 [] => vec![Command::Push(1)],
                 [n] => vec![Command::Push(n.expect_uint("number of times to push")?)],

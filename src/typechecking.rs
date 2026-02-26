@@ -340,6 +340,12 @@ impl EGraph {
                 }
                 ResolvedNCommand::ProveExists(span.clone(), ResolvedCall::Func(func_type.clone()))
             }
+            NCommand::ExtractWithProof(span, expr) => {
+                let res_expr =
+                    self.type_info
+                        .typecheck_expr(symbol_gen, expr, &Default::default())?;
+                ResolvedNCommand::ExtractWithProof(span.clone(), res_expr)
+            }
             NCommand::Output { span, file, exprs } => {
                 let exprs = exprs
                     .iter()
