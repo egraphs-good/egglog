@@ -1160,14 +1160,36 @@ impl EGraph {
                 log::info!("Declared sort {name}.")
             }
             ResolvedNCommand::Function(fdecl) => {
+                // If the constructor has a :term-constructor annotation, store the
+                // view_name mapping (original constructor -> view table name).
+                // This is needed so that proof extraction can find view tables
+                // after a round-trip through to_string + re-parse.
+                if let Some(ref tc_name) = fdecl.term_constructor {
+                    self.proof_state
+                        .proof_names
+                        .view_name
+                        .insert(tc_name.clone(), fdecl.name.clone());
+                }
                 // If the constructor has a :proof-function annotation, store the mapping.
-                // This annotation is set by proof instrumentation on view tables.
+                // This annotation is set by proof instrumentation on view tables and UF constructors.
                 if let Some(ref proof_fn_name) = fdecl.proof_function {
                     if let Some(ref tc_name) = fdecl.term_constructor {
+                        // View table case: map original constructor -> view proof function
                         self.proof_state
                             .proof_names
                             .view_proof_name
                             .insert(tc_name.clone(), proof_fn_name.clone());
+                    }
+                    // UF constructor case: if this function is a UF parent for some sort,
+                    // store the sort -> uf_proof_name mapping.
+                    for (sort_name, uf_name) in &self.proof_state.uf_parent {
+                        if *uf_name == fdecl.name {
+                            self.proof_state
+                                .proof_names
+                                .uf_proof_name
+                                .insert(sort_name.clone(), proof_fn_name.clone());
+                            break;
+                        }
                     }
                 }
                 self.declare_function(&fdecl)?;
@@ -1380,12 +1402,12 @@ impl EGraph {
 
                 let prover = ProveEqualToRepresentative::new(self);
                 let (proof_store, proof_id) =
-                    prover
-                        .extract_with_proof(value, sort)
-                        .map_err(|error| Error::ExtractWithProofError {
+                    prover.extract_with_proof(value, sort).map_err(|error| {
+                        Error::ExtractWithProofError {
                             span: span.clone(),
                             error,
-                        })?;
+                        }
+                    })?;
 
                 log::info!(
                     "extracted with proof: {}",

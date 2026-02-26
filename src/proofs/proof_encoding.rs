@@ -163,9 +163,16 @@ impl<'a> ProofInstrumentor<'a> {
         let path_compress_ruleset_name = self.proof_names().path_compress_ruleset_name.clone();
         let single_parent_ruleset_name = self.proof_names().single_parent_ruleset_name.clone();
 
+        let uf_proof_function_flag = if self.egraph.proof_state.proofs_enabled {
+            let uf_proof_name = self.uf_proof_name(sort_name);
+            format!(" :proof-function {uf_proof_name}")
+        } else {
+            "".to_string()
+        };
+
         self.parse_program(&format!(
             "(sort {fresh_sort})
-             (constructor {pname} ({sort_name} {sort_name}) {fresh_sort} :internal-hidden)
+             (constructor {pname} ({sort_name} {sort_name}) {fresh_sort} :internal-hidden{uf_proof_function_flag})
              {to_ast_constructor_code}
              {proof_tables}
              ;; performs path compression, ensuring each term points to the representative
