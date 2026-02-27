@@ -112,9 +112,10 @@ The view tables are kept up to date during rebuilding.
       ((UF_Math (ordering-max new old) (ordering-min new old)))
        :ruleset rebuilding :name "congruence_rule")
 (rule ((AddView c0 c1 c2)
-       (UF_Math c2 v)
-       (!= v c2))
-      ((AddView c0 c1 v)
+       (UF_Math c2 c2_leader)
+       (filter
+         (or (bool-!= c2 c2_leader))))
+      ((AddView c0 c1 c2_leader)
        (delete (AddView c0 c1 c2)))
         :ruleset rebuilding :name "rebuild_rule")
 ```

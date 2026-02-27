@@ -485,98 +485,126 @@ impl<'a> ProofInstrumentor<'a> {
     /// Rules that update the views when children change.
     fn rebuilding_rules(&mut self, fdecl: &ResolvedFunctionDecl) -> Vec<Command> {
         let types = fdecl.resolved_schema.view_types();
-        let mut res = vec![];
-        // a rule updating index i
-        for i in 0..types.len() {
-            // if the type at index i is not an eq sort, skip
-            if !types[i].is_eq_sort() {
-                continue;
-            }
 
-            let types = fdecl.resolved_schema.view_types();
+        // Check if there are any eq-sort columns at all; if not, no rebuild rule needed.
+        if !types.iter().any(|t| t.is_eq_sort()) {
+            return vec![];
+        }
 
-            let view_name = self.view_name(&fdecl.name);
-            let child = |i| format!("c{i}_");
-            let children_vec = (0..types.len()).map(child).collect::<Vec<_>>();
-            let children = format!("{}", ListDisplay(&children_vec, " "));
-            let mut children_updated = vec![];
-            let old_child = child(i);
+        let view_name = self.view_name(&fdecl.name);
+        let child = |i: usize| format!("c{i}_");
+        let children_vec: Vec<String> = (0..types.len()).map(child).collect();
+        let children = format!("{}", ListDisplay(&children_vec, " "));
 
-            let updated_child_var = self.fresh_var();
-            let parent = self.uf_name(types[i].name());
-            let updated_child_proof = self.fresh_var();
-            // Query that the old child has been updated to updated_child_var,
-            // and get a proof for that update if proofs are enabled.
-            let updated_child_query = if self.egraph.proof_state.proofs_enabled {
-                let uf_proof = self.uf_proof_name(types[i].name());
-                format!(
-                    "({parent} {old_child} {updated_child_var})
-                     (= {updated_child_proof} ({uf_proof} {old_child} {updated_child_var}))"
-                )
-            } else {
-                format!("({parent} {old_child} {updated_child_var})")
-            };
+        // For each eq-sort column, look up its leader via the UF table.
+        // For non-eq-sort columns, the leader is the same as the original.
+        let mut uf_queries = vec![];
+        let mut leader_vars: Vec<String> = vec![];
+        let mut bool_neq_exprs = vec![];
+        let mut uf_proof_vars: Vec<Option<String>> = vec![];
 
-            for j in 0..types.len() {
-                if j == i {
-                    children_updated.push(updated_child_var.clone());
+        for (i, ty) in types.iter().enumerate() {
+            if ty.is_eq_sort() {
+                let leader_var = format!("c{i}_leader_");
+                let parent = self.uf_name(ty.name());
+                let ci = child(i);
+
+                if self.egraph.proof_state.proofs_enabled {
+                    let uf_proof = self.uf_proof_name(ty.name());
+                    let proof_var = self.fresh_var();
+                    uf_queries.push(format!(
+                        "({parent} {ci} {leader_var})
+                         (= {proof_var} ({uf_proof} {ci} {leader_var}))"
+                    ));
+                    uf_proof_vars.push(Some(proof_var));
                 } else {
-                    children_updated.push(child(j).to_string());
+                    uf_queries.push(format!("({parent} {ci} {leader_var})"));
+                    uf_proof_vars.push(None);
+                }
+
+                bool_neq_exprs.push(format!("(bool-!= {ci} {leader_var})"));
+                leader_vars.push(leader_var);
+            } else {
+                leader_vars.push(child(i));
+                uf_proof_vars.push(None);
+            }
+        }
+
+        let uf_query_str = uf_queries.join("\n       ");
+        let or_expr = format!("(or {})", bool_neq_exprs.join("\n             "));
+        let filter_query = format!("(filter {or_expr})");
+
+        // Build the updated children: use leader_var for eq-sort columns, original for others.
+        let children_updated: Vec<String> = leader_vars.clone();
+
+        let fresh_name = self.egraph.parser.symbol_gen.fresh("rebuild_rule");
+        let (query_view, view_prf) = self.query_view_and_get_proof(&fdecl.name, &children_vec);
+
+        // Build proof code if proofs are enabled.
+        // We chain congruence proofs for each updated child and a transitivity proof
+        // for the representative (last column) update.
+        let (pf_code, pf_var) = if self.egraph.proof_state.proofs_enabled {
+            let eq_trans_constructor = self.proof_names().eq_trans_constructor.clone();
+            let congr_constructor = self.proof_names().congr_constructor.clone();
+            let sym_constructor = self.proof_names().eq_sym_constructor.clone();
+
+            // Start with the view proof and apply congruence for each eq-sort child
+            // (excluding the last column if this is a constructor, since that's the representative).
+            let mut current_proof = view_prf.clone();
+            let mut proof_code_parts = vec![];
+
+            for (i, ty) in types.iter().enumerate() {
+                if !ty.is_eq_sort() {
+                    continue;
+                }
+
+                let uf_prf = uf_proof_vars[i].as_ref().unwrap();
+
+                if fdecl.subtype == FunctionSubtype::Constructor && i == types.len() - 1 {
+                    // Updating the representative term (last column of constructor):
+                    // use transitivity with sym of the UF proof
+                    let new_proof = self.fresh_var();
+                    proof_code_parts.push(format!(
+                        "(let {new_proof}
+                           ({eq_trans_constructor}
+                              ({sym_constructor} {uf_prf})
+                              {current_proof}))",
+                    ));
+                    current_proof = new_proof;
+                } else {
+                    // Updating a child via congruence
+                    let new_proof = self.fresh_var();
+                    proof_code_parts.push(format!(
+                        "(let {new_proof}
+                              ({congr_constructor} {current_proof} {i}
+                                                   {uf_prf}))",
+                    ));
+                    current_proof = new_proof;
                 }
             }
 
-            let fresh_name = self.egraph.parser.symbol_gen.fresh("rebuild_rule");
-            let (query_view, view_prf) = self.query_view_and_get_proof(&fdecl.name, &children_vec);
+            (proof_code_parts.join("\n"), current_proof)
+        } else {
+            ("".to_string(), "".to_string())
+        };
 
-            let (pf_code, pf_var) = if self.egraph.proof_state.proofs_enabled {
-                let proof = self.fresh_var();
-                let eq_trans_constructor = self.proof_names().eq_trans_constructor.clone();
-                let congr_constructor = self.proof_names().congr_constructor.clone();
-                let sym_constructor = self.proof_names().eq_sym_constructor.clone();
+        let updated_view = self.update_view(&fdecl.name, &children_updated, &pf_var);
 
-                // if we are updating the last element of a constructor then
-                // it's updating the representative term
-                (
-                    if fdecl.subtype == FunctionSubtype::Constructor && i == types.len() - 1 {
-                        format!(
-                            "(let {proof}
-                               ({eq_trans_constructor}
-                                  ({sym_constructor} {updated_child_proof})
-                                  {view_prf}))",
-                        )
-                    } else {
-                        // otherwise we are updating a child via congruence
-                        format!(
-                            "(let {proof}
-                                  ({congr_constructor} {view_prf} {i}
-                                                       {updated_child_proof}))
-                    ",
-                        )
-                    },
-                    proof,
-                )
-            } else {
-                ("".to_string(), "".to_string())
-            };
-            let updated_view = self.update_view(&fdecl.name, &children_updated, &pf_var);
-
-            // Make a rule that updates the view
-            let rule = format!(
-                "(rule ({query_view}
-                        {updated_child_query}
-                        (!= {updated_child_var} {old_child})
-                        )
-                     (
-                      {pf_code}
-                      {updated_view}
-                      (delete ({view_name} {children}))
-                     )
-                      :ruleset {} :name \"{fresh_name}\")",
-                self.proof_names().rebuilding_ruleset_name
-            );
-            res.extend(self.parse_program(&rule));
-        }
-        res
+        // Make a single rule that updates the view when any child's leader differs.
+        let rule = format!(
+            "(rule ({query_view}
+                    {uf_query_str}
+                    {filter_query}
+                    )
+                 (
+                  {pf_code}
+                  {updated_view}
+                  (delete ({view_name} {children}))
+                 )
+                  :ruleset {} :name \"{fresh_name}\")",
+            self.proof_names().rebuilding_ruleset_name
+        );
+        self.parse_program(&rule)
     }
 
     /// Instrument fact replaces terms with looking up

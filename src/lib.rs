@@ -381,6 +381,14 @@ impl Default for EGraph {
             neq_validator
         );
 
+        add_primitive_with_validator!(
+            &mut eg,
+            "bool-!=" = |a: #, b: #| -> bool {
+                (a != b)
+            },
+            neq_validator
+        );
+
         add_primitive!(&mut eg, "value-eq" = |a: #, b: #| -?> () {
             (a == b).then_some(())
         });
