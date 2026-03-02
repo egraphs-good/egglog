@@ -23,6 +23,11 @@
         (multiset-of (Num 1) (Num 2) (Num 3) (Num 4))
         (multiset-insert xs (Num 4))
     ))
+;; subtract
+(check (=
+        (multiset-of (Num 1) (Num 2))
+        (multiset-subtract xs (multiset-of (Num 3)))
+    ))
 
 ;; intersection
 
