@@ -982,12 +982,12 @@ impl<'a> ProofInstrumentor<'a> {
 
         // add to uf table to initialize eclass for constructors
         if func_type.subtype == FunctionSubtype::Constructor {
-            self.union(
+            res.push(self.union(
                 func_type.output.name(),
                 &fv,
                 &fv,
                 &Justification::Proof(view_proof_var),
-            );
+            ));
         }
 
         (res, fv)
