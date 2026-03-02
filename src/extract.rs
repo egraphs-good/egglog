@@ -700,6 +700,7 @@ impl<C: Cost + Ord + Eq + Clone + Debug> Extractor<C> {
             }
 
             let mut res: Vec<(C, TermId)> = Vec::new();
+            let mut cache: HashMap<(Value, String), TermId> = Default::default();
             root_variants.sort();
             root_variants.truncate(nvariants);
             for (cost, func_name, hyperedge) in root_variants {
@@ -709,7 +710,9 @@ impl<C: Cost + Ord + Eq + Clone + Debug> Extractor<C> {
                 let num_children = func.extraction_num_children();
                 // For view tables, children are all but the last input (which is the e-class)
                 for (value, sort) in hyperedge.iter().zip(ch_sorts.iter()).take(num_children) {
-                    ch_terms.push(self.reconstruct_termdag_node(egraph, termdag, *value, sort));
+                    ch_terms.push(self.reconstruct_termdag_node_helper(
+                        egraph, termdag, *value, sort, &mut cache,
+                    ));
                 }
                 // Use extraction_term_name for view tables (maps to the original constructor)
                 res.push((
