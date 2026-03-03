@@ -191,10 +191,7 @@ fn test_duplicate_macro_creates_two_rules() {
 
     // Count the number of rule declarations - should be 2
     let rule_count = output.matches("(rule ").count();
-    assert_eq!(
-        rule_count, 2,
-        "Expected exactly 2 rules, got {rule_count}"
-    );
+    assert_eq!(rule_count, 2, "Expected exactly 2 rules, got {rule_count}");
 }
 
 #[test]

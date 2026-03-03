@@ -1191,9 +1191,7 @@ pub(crate) fn grounded_check(
         ConstraintError::UnconstrainedVar(ResolvedAtomTerm::Var(span, v)) => {
             TypeError::Ungrounded(v.to_string(), span)
         }
-        _ => panic!(
-            "unexpected constraint error in groundedness check {err:?}"
-        ),
+        _ => panic!("unexpected constraint error in groundedness check {err:?}"),
     })?;
 
     Ok(())

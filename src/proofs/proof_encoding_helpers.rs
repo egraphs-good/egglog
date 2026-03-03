@@ -190,11 +190,7 @@ impl ProofInstrumentor<'_> {
         if let Some(n) = self.egraph.proof_state.proof_names.view_name.get(name) {
             n.clone()
         } else {
-            let fresh_name = self
-                .egraph
-                .parser
-                .symbol_gen
-                .fresh(&format!("{name}View"));
+            let fresh_name = self.egraph.parser.symbol_gen.fresh(&format!("{name}View"));
             self.egraph
                 .proof_state
                 .proof_names
@@ -289,9 +285,7 @@ impl ProofInstrumentor<'_> {
             .sort_to_ast_constructor
             .get(&fn_sort)
             .unwrap_or_else(|| {
-                panic!(
-                    "Function {fname}'s sort {fn_sort} has no recorded AST constructor"
-                )
+                panic!("Function {fname}'s sort {fn_sort} has no recorded AST constructor")
             })
     }
 
@@ -332,11 +326,7 @@ impl ProofInstrumentor<'_> {
         {
             n.clone()
         } else {
-            let fresh_name = self
-                .egraph
-                .parser
-                .symbol_gen
-                .fresh(&format!("{name}Proof"));
+            let fresh_name = self.egraph.parser.symbol_gen.fresh(&format!("{name}Proof"));
             self.egraph
                 .proof_state
                 .proof_names

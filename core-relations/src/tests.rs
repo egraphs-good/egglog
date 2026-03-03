@@ -1244,12 +1244,10 @@ fn early_stop() {
     let final_count = *call_count.lock().unwrap();
     assert!(
         final_count >= 1000,
-        "External function called {} times, should be at least 1000",
-        final_count
+        "External function called {final_count} times, should be at least 1000"
     );
     assert!(
         final_count < 100_000,
-        "External function called {} times, should be much less than 10k",
-        final_count
+        "External function called {final_count} times, should be much less than 10k"
     );
 }

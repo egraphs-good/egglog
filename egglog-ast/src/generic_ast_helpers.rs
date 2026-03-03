@@ -40,24 +40,24 @@ where
         write!(f, "(rule (")?;
         for (i, fact) in self.body.iter().enumerate() {
             if i > 0 {
-                write!(f, "{}", indent)?;
+                write!(f, "{indent}")?;
             }
 
             if i != self.body.len() - 1 {
-                writeln!(f, "{}", fact)?;
+                writeln!(f, "{fact}")?;
             } else {
-                write!(f, "{}", fact)?;
+                write!(f, "{fact}")?;
             }
         }
         write!(f, ")\n      (")?;
         for (i, action) in self.head.0.iter().enumerate() {
             if i > 0 {
-                write!(f, "{}", indent)?;
+                write!(f, "{indent}")?;
             }
             if i != self.head.0.len() - 1 {
-                writeln!(f, "{}", action)?;
+                writeln!(f, "{action}")?;
             } else {
-                write!(f, "{}", action)?;
+                write!(f, "{action}")?;
             }
         }
         let ruleset = if !self.ruleset.is_empty() {
@@ -70,7 +70,7 @@ where
         } else {
             "".into()
         };
-        write!(f, ")\n{} {} {})", indent, ruleset, name)
+        write!(f, ")\n{indent} {ruleset} {name})")
     }
 }
 
@@ -96,24 +96,24 @@ where
 {
     fn fmt(&self, f: &mut Formatter) -> std::fmt::Result {
         match self {
-            GenericAction::Let(_, lhs, rhs) => write!(f, "(let {} {})", lhs, rhs),
+            GenericAction::Let(_, lhs, rhs) => write!(f, "(let {lhs} {rhs})"),
             GenericAction::Set(_, lhs, args, rhs) => {
                 if args.is_empty() {
-                    write!(f, "(set ({}) {})", lhs, rhs)
+                    write!(f, "(set ({lhs}) {rhs})")
                 } else {
                     write!(
                         f,
                         "(set ({} {}) {})",
                         lhs,
                         args.iter()
-                            .map(|a| format!("{}", a))
+                            .map(|a| format!("{a}"))
                             .collect::<Vec<_>>()
                             .join(" "),
                         rhs
                     )
                 }
             }
-            GenericAction::Union(_, lhs, rhs) => write!(f, "(union {} {})", lhs, rhs),
+            GenericAction::Union(_, lhs, rhs) => write!(f, "(union {lhs} {rhs})"),
             GenericAction::Change(_, change, lhs, args) => {
                 let change_str = match change {
                     Change::Delete => "delete",
@@ -125,13 +125,13 @@ where
                     change_str,
                     lhs,
                     args.iter()
-                        .map(|a| format!("{}", a))
+                        .map(|a| format!("{a}"))
                         .collect::<Vec<_>>()
                         .join(" ")
                 )
             }
-            GenericAction::Panic(_, msg) => write!(f, "(panic \"{}\")", msg),
-            GenericAction::Expr(_, e) => write!(f, "{}", e),
+            GenericAction::Panic(_, msg) => write!(f, "(panic \"{msg}\")"),
+            GenericAction::Expr(_, e) => write!(f, "{e}"),
         }
     }
 }
@@ -721,13 +721,13 @@ impl Display for Literal {
                 // need to display with decimal if there is none
                 let str = n.to_string();
                 if let Ok(_num) = str.parse::<i64>() {
-                    write!(f, "{}.0", str)
+                    write!(f, "{str}.0")
                 } else {
-                    write!(f, "{}", str)
+                    write!(f, "{str}")
                 }
             }
             Literal::Bool(b) => Display::fmt(b, f),
-            Literal::String(s) => write!(f, "\"{}\"", s),
+            Literal::String(s) => write!(f, "\"{s}\""),
             Literal::Unit => write!(f, "()"),
         }
     }

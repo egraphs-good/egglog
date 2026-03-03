@@ -30,9 +30,7 @@ impl Names {
             .to_owned();
         if let Some((global_name, global_span)) = self.global_aliases.get(&canonical) {
             return Err(Error::Shadowing(
-                format!(
-                    "pattern variable `{name}` conflicts with global `{global_name}`"
-                ),
+                format!("pattern variable `{name}` conflicts with global `{global_name}`"),
                 global_span.clone(),
                 span.clone(),
             ));
