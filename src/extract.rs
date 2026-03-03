@@ -584,14 +584,14 @@ impl<C: Cost + Ord + Eq + Clone + Debug> Extractor<C> {
 
         match self.compute_cost_node(egraph, canonical_value, &sort) {
             Some(best_cost) => {
-                log::debug!("Best cost for the extract root: {:?}", best_cost);
+                log::debug!("Best cost for the extract root: {best_cost:?}");
 
                 let term = self.reconstruct_termdag_node(egraph, termdag, canonical_value, &sort);
 
                 Some((best_cost, term))
             }
             None => {
-                log::error!("Unextractable root {:?} with sort {:?}", value, sort,);
+                log::error!("Unextractable root {value:?} with sort {sort:?}",);
                 None
             }
         }

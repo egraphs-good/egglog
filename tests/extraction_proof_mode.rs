@@ -49,15 +49,13 @@ fn test_extraction_same_with_proof_mode() {
     // They should produce the same extraction result
     assert_eq!(
         normal_extracted, proofs_extracted,
-        "Extraction differs between normal mode and proof mode:\nNormal: {}\nProofs: {}",
-        normal_extracted, proofs_extracted
+        "Extraction differs between normal mode and proof mode:\nNormal: {normal_extracted}\nProofs: {proofs_extracted}"
     );
 
     // The result should be (Num 9) since (1+2)*3 = 9
     assert!(
         normal_extracted.contains("Num") && normal_extracted.contains("9"),
-        "Expected (Num 9), got: {}",
-        normal_extracted
+        "Expected (Num 9), got: {normal_extracted}"
     );
 }
 
@@ -129,14 +127,12 @@ fn test_extraction_same_with_proof_mode_using_rule_macro() {
     // They should produce the same extraction result
     assert_eq!(
         normal_extracted, proofs_extracted,
-        "Extraction differs between normal mode and proof mode:\nNormal: {}\nProofs: {}",
-        normal_extracted, proofs_extracted
+        "Extraction differs between normal mode and proof mode:\nNormal: {normal_extracted}\nProofs: {proofs_extracted}"
     );
 
     // The result should be (Lit 3) since 1+2=3
     assert!(
         normal_extracted.contains("Lit") && normal_extracted.contains("3"),
-        "Expected (Lit 3), got: {}",
-        normal_extracted
+        "Expected (Lit 3), got: {normal_extracted}"
     );
 }

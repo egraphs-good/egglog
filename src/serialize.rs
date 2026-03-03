@@ -266,7 +266,7 @@ impl EGraph {
         match node {
             SerializedNode::Function { name, offset } => {
                 assert!(sort.is_none());
-                format!("function-{}-{}", offset, name).into()
+                format!("function-{offset}-{name}").into()
             }
             SerializedNode::Primitive(value) => {
                 format!("primitive-{}", self.value_to_class_id(sort.unwrap(), value)).into()
@@ -303,7 +303,7 @@ impl EGraph {
                 let node_id: egraph_serialize::NodeId = rest.into();
                 SerializedNode::Split(Box::new(self.from_node_id(&node_id)))
             }
-            _ => std::panic::panic_any(format!("Unknown node ID: {}-{}", tag, rest)),
+            _ => std::panic::panic_any(format!("Unknown node ID: {tag}-{rest}")),
         }
     }
 
@@ -366,7 +366,7 @@ impl EGraph {
                         ty: primitive_id,
                         val: value,
                     };
-                    format!("{:?}", formatted_val)
+                    format!("{formatted_val:?}")
                 };
                 serializer.result.nodes.insert(
                     node_id.clone(),

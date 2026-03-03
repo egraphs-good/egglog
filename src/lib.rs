@@ -146,7 +146,7 @@ impl std::fmt::Display for CommandOutput {
     /// Format the command output for display, ending with a newline.
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         match self {
-            CommandOutput::PrintFunctionSize(size) => writeln!(f, "{}", size),
+            CommandOutput::PrintFunctionSize(size) => writeln!(f, "{size}"),
             CommandOutput::PrintAllFunctionsSize(names_and_sizes) => {
                 write!(f, "(")?;
                 for (i, (name, size)) in names_and_sizes.iter().enumerate() {
@@ -155,7 +155,7 @@ impl std::fmt::Display for CommandOutput {
                         write!(f, " ")?;
                     }
                     // write the pair of funciton symbol and size
-                    write!(f, "({} {})", name, size)?;
+                    write!(f, "({name} {size})")?;
                     // add a newline except at the end
                     if i < names_and_sizes.len() - 1 {
                         writeln!(f)?;
@@ -178,7 +178,7 @@ impl std::fmt::Display for CommandOutput {
                 proof_id,
             } => writeln!(f, "{}", proof_store.proof_to_string(*proof_id)),
             CommandOutput::OverallStatistics(run_report) => {
-                write!(f, "Overall statistics:\n{}", run_report)
+                write!(f, "Overall statistics:\n{run_report}")
             }
             CommandOutput::PrintFunction(function, termdag, terms_and_outputs, mode) => {
                 let out_is_unit = function.schema.output.name() == UnitSort.name();
@@ -511,7 +511,7 @@ impl EGraph {
     ) -> Result<(), TypeError> {
         if self.strict_mode {
             return Err(TypeError::GlobalMissingPrefix {
-                name: format!("{}{}", GLOBAL_NAME_PREFIX, canonical_name),
+                name: format!("{GLOBAL_NAME_PREFIX}{canonical_name}"),
                 span: span.clone(),
             });
         }
@@ -520,10 +520,7 @@ impl EGraph {
         }
         self.warned_about_global_prefix = true;
         log::warn!(
-            "{}\nGlobal `{}` should start with `{}`. Enable `--strict-mode` to turn this warning into an error. Suppressing additional warnings of this type.",
-            span,
-            canonical_name,
-            GLOBAL_NAME_PREFIX
+            "{span}\nGlobal `{canonical_name}` should start with `{GLOBAL_NAME_PREFIX}`. Enable `--strict-mode` to turn this warning into an error. Suppressing additional warnings of this type."
         );
         Ok(())
     }
@@ -544,10 +541,7 @@ impl EGraph {
         }
         self.warned_about_global_prefix = true;
         log::warn!(
-            "{}\nNon-global `{}` should not start with `{}`. Enable `--strict-mode` to turn this warning into an error. Suppressing additional warnings of this type.",
-            span,
-            canonical_name,
-            GLOBAL_NAME_PREFIX
+            "{span}\nNon-global `{canonical_name}` should not start with `{GLOBAL_NAME_PREFIX}`. Enable `--strict-mode` to turn this warning into an error. Suppressing additional warnings of this type."
         );
         Ok(())
     }
@@ -740,7 +734,7 @@ impl EGraph {
                 return Err(TypeError::UnboundFunction(sym.to_owned(), span!()).into());
             }
             let size = self.backend.table_size(f.backend_id);
-            log::info!("Function {} has size {}", sym, size);
+            log::info!("Function {sym} has size {size}");
             Ok(CommandOutput::PrintFunctionSize(size))
         } else {
             // Print size of all non-hidden, non-let_binding functions
@@ -763,7 +757,7 @@ impl EGraph {
             lens.sort_by_key(|(name, _)| name.clone());
             if log_enabled!(Level::Info) {
                 for (sym, len) in &lens {
-                    log::info!("Function {} has size {}", sym, len);
+                    log::info!("Function {sym} has size {len}");
                 }
             }
             Ok(CommandOutput::PrintAllFunctionsSize(lens))
@@ -1006,7 +1000,7 @@ impl EGraph {
         self.backend.free_rule(id);
         self.backend.free_external_func(ext_id);
         let _ = rule_result.map_err(|e| {
-            Error::BackendError(format!("Failed to evaluate expression '{}': {}", expr, e))
+            Error::BackendError(format!("Failed to evaluate expression '{expr}': {e}"))
         })?;
 
         let result = result.lock().unwrap().unwrap();
@@ -1091,7 +1085,7 @@ impl EGraph {
                 if let Some(uf_name) = uf {
                     self.proof_state.uf_parent.insert(name.clone(), uf_name);
                 }
-                log::info!("Declared sort {}.", name)
+                log::info!("Declared sort {name}.")
             }
             ResolvedNCommand::Function(fdecl) => {
                 self.declare_function(&fdecl)?;
@@ -1112,8 +1106,8 @@ impl EGraph {
             }
             ResolvedNCommand::RunSchedule(sched) => {
                 let report = self.run_schedule(&sched)?;
-                log::info!("Ran schedule {}.", sched);
-                log::info!("Report: {}", report);
+                log::info!("Ran schedule {sched}.");
+                log::info!("Report: {report}");
                 self.overall_run_report.union(report.clone());
                 return Ok(Some(CommandOutput::RunSchedule(report)));
             }
@@ -1127,7 +1121,7 @@ impl EGraph {
                 Some(path) => {
                     let mut file = std::fs::File::create(&path)
                         .map_err(|e| Error::IoError(path.clone().into(), e, span.clone()))?;
-                    log::info!("Printed overall statistics to json file {}", path);
+                    log::info!("Printed overall statistics to json file {path}");
 
                     serde_json::to_writer(&mut file, &self.overall_run_report)
                         .expect("error serializing to json");
@@ -1135,7 +1129,7 @@ impl EGraph {
             },
             ResolvedNCommand::Check(span, facts) => {
                 self.check_facts(&span, &facts)?;
-                log::info!("Checked fact {:?}.", facts);
+                log::info!("Checked fact {facts:?}.");
             }
             ResolvedNCommand::CoreAction(action) => match &action {
                 ResolvedAction::Let(_, name, contents) => {
@@ -1278,7 +1272,7 @@ impl EGraph {
             }
             ResolvedNCommand::UserDefined(_span, name, exprs) => {
                 let command = self.commands.swap_remove(&name).unwrap_or_else(|| {
-                    panic!("Unrecognized user-defined command: {}", name);
+                    panic!("Unrecognized user-defined command: {name}");
                 });
                 let res = command.update(self, &exprs);
                 self.commands.insert(name, command);
@@ -1307,7 +1301,7 @@ impl EGraph {
         let function_type = self
             .type_info
             .get_func_type(func_name)
-            .unwrap_or_else(|| panic!("Unrecognized function name {}", func_name));
+            .unwrap_or_else(|| panic!("Unrecognized function name {func_name}"));
         let func = self.functions.get_mut(func_name).unwrap();
 
         let mut filename = self.fact_directory.clone().unwrap_or_default();
@@ -1318,18 +1312,18 @@ impl EGraph {
         for t in &func.schema.input {
             match t.name() {
                 "i64" | "f64" | "String" => {}
-                s => panic!("Unsupported type {} for input", s),
+                s => panic!("Unsupported type {s} for input"),
             }
         }
 
         if function_type.subtype != FunctionSubtype::Constructor {
             match func.schema.output.name() {
                 "i64" | "String" | "Unit" => {}
-                s => panic!("Unsupported type {} for input", s),
+                s => panic!("Unsupported type {s} for input"),
             }
         }
 
-        log::info!("Opening file '{:?}'...", filename);
+        log::info!("Opening file '{filename:?}'...");
         let mut f = File::open(filename).unwrap();
         let mut contents = String::new();
         f.read_to_string(&mut contents).unwrap();
@@ -1342,7 +1336,7 @@ impl EGraph {
             row_schema.push(func.schema.output.clone());
         }
 
-        log::debug!("{:?}", row_schema);
+        log::debug!("{row_schema:?}");
 
         let unit_val = self.backend.base_values().get(());
 

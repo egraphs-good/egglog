@@ -115,8 +115,7 @@ fn test_single_macro_with_desugar_program() {
     // The original rule name is generated as $rule_<n>, so it becomes test_$rule_<n>
     assert!(
         output.contains(&"test_".to_string()),
-        "Expected rule name to be prefixed with test_: {}",
-        output
+        "Expected rule name to be prefixed with test_: {output}"
     );
 
     // Check that let is desugared correctly
@@ -156,8 +155,7 @@ fn test_multiple_macros_compose_with_desugar_program() {
 
     assert!(
         output.contains(format!("second_{INTERNAL_SYMBOL_PREFIX}first_").as_str()),
-        "Expected rule name to have both prefixes in order: {}",
-        output
+        "Expected rule name to have both prefixes in order: {output}"
     );
 }
 
@@ -184,21 +182,18 @@ fn test_duplicate_macro_creates_two_rules() {
     // Should have two rules with dup1_ and dup2_ prefixes
     assert!(
         output.contains("dup1_"),
-        "Expected first duplicated rule: {}",
-        output
+        "Expected first duplicated rule: {output}"
     );
     assert!(
         output.contains("dup2_"),
-        "Expected second duplicated rule: {}",
-        output
+        "Expected second duplicated rule: {output}"
     );
 
     // Count the number of rule declarations - should be 2
     let rule_count = output.matches("(rule ").count();
     assert_eq!(
         rule_count, 2,
-        "Expected exactly 2 rules, got {}",
-        rule_count
+        "Expected exactly 2 rules, got {rule_count}"
     );
 }
 
@@ -226,15 +221,13 @@ fn test_macro_adds_commands_after_rules() {
     // Should have a print-size command after the rule with the rule's name
     assert!(
         output.contains("(print-size Num)"),
-        "Expected print-size marker after rule: {}",
-        output
+        "Expected print-size marker after rule: {output}"
     );
 
     // The let should still be there, unaffected
     assert!(
         output.contains("(set (a) (Num 1))"),
-        "Expected desugared a: {}",
-        output
+        "Expected desugared a: {output}"
     );
 }
 
@@ -269,13 +262,11 @@ fn test_complex_macro_composition() {
     // So we should have: prefixed_dup1_$rule_<n> and prefixed_dup2_$rule_<n>
     assert!(
         output.contains(&format!("prefixed_{INTERNAL_SYMBOL_PREFIX}dup1_")),
-        "Expected first rule with both transformations: {}",
-        output
+        "Expected first rule with both transformations: {output}"
     );
     assert!(
         output.contains(&format!("prefixed_{INTERNAL_SYMBOL_PREFIX}dup2_")),
-        "Expected second rule with both transformations: {}",
-        output
+        "Expected second rule with both transformations: {output}"
     );
 
     // Should have exactly 2 rules
@@ -305,8 +296,7 @@ fn test_macros_work_with_actual_program_execution() {
     // The program should run successfully with duplicated rules
     assert!(
         result.is_ok(),
-        "Program with duplicated rules should run: {:?}",
-        result
+        "Program with duplicated rules should run: {result:?}"
     );
 }
 
@@ -350,7 +340,6 @@ fn test_macro_accesses_type_info() {
     // The program should run successfully with the macro accessing type info
     assert!(
         result.is_ok(),
-        "Program with type info reading macro should run: {:?}",
-        result
+        "Program with type info reading macro should run: {result:?}"
     );
 }

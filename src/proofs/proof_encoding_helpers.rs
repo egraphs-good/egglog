@@ -93,7 +93,7 @@ impl ProofInstrumentor<'_> {
         if let Some(name) = self.egraph.proof_state.uf_parent.get(sort) {
             name.clone()
         } else {
-            let fresh_name = self.egraph.parser.symbol_gen.fresh(&format!("UF_{}", sort));
+            let fresh_name = self.egraph.parser.symbol_gen.fresh(&format!("UF_{sort}"));
             self.egraph
                 .proof_state
                 .uf_parent
@@ -112,7 +112,7 @@ impl ProofInstrumentor<'_> {
                 .egraph
                 .parser
                 .symbol_gen
-                .fresh(&format!("{}UFProof", sort));
+                .fresh(&format!("{sort}UFProof"));
             self.egraph
                 .proof_state
                 .proof_names
@@ -194,7 +194,7 @@ impl ProofInstrumentor<'_> {
                 .egraph
                 .parser
                 .symbol_gen
-                .fresh(&format!("{}View", name));
+                .fresh(&format!("{name}View"));
             self.egraph
                 .proof_state
                 .proof_names
@@ -212,7 +212,7 @@ impl ProofInstrumentor<'_> {
                 .egraph
                 .parser
                 .symbol_gen
-                .fresh(&format!("to_delete_{}", name));
+                .fresh(&format!("to_delete_{name}"));
             self.egraph
                 .proof_state
                 .proof_names
@@ -230,7 +230,7 @@ impl ProofInstrumentor<'_> {
                 .egraph
                 .parser
                 .symbol_gen
-                .fresh(&format!("to_subsume_{}", name));
+                .fresh(&format!("to_subsume_{name}"));
             self.egraph
                 .proof_state
                 .proof_names
@@ -264,7 +264,7 @@ impl ProofInstrumentor<'_> {
                 return "".to_string();
             }
 
-            let to_ast_constructor = self.egraph.parser.symbol_gen.fresh(&format!("Ast{}", sort));
+            let to_ast_constructor = self.egraph.parser.symbol_gen.fresh(&format!("Ast{sort}"));
             self.egraph
                 .proof_state
                 .proof_names
@@ -283,15 +283,14 @@ impl ProofInstrumentor<'_> {
             .proof_names()
             .fn_to_term_sort
             .get(fname)
-            .unwrap_or_else(|| panic!("Function {} has no recorded sort", fname))
+            .unwrap_or_else(|| panic!("Function {fname} has no recorded sort"))
             .clone();
         self.proof_names()
             .sort_to_ast_constructor
             .get(&fn_sort)
             .unwrap_or_else(|| {
                 panic!(
-                    "Function {}'s sort {} has no recorded AST constructor",
-                    fname, fn_sort
+                    "Function {fname}'s sort {fn_sort} has no recorded AST constructor"
                 )
             })
     }
@@ -313,7 +312,7 @@ impl ProofInstrumentor<'_> {
                 .egraph
                 .parser
                 .symbol_gen
-                .fresh(&format!("{}ViewProof", name));
+                .fresh(&format!("{name}ViewProof"));
             self.egraph
                 .proof_state
                 .proof_names
@@ -337,7 +336,7 @@ impl ProofInstrumentor<'_> {
                 .egraph
                 .parser
                 .symbol_gen
-                .fresh(&format!("{}Proof", name));
+                .fresh(&format!("{name}Proof"));
             self.egraph
                 .proof_state
                 .proof_names
@@ -366,7 +365,7 @@ impl ProofInstrumentor<'_> {
                     .egraph
                     .parser
                     .symbol_gen
-                    .fresh(&format!("Ast{}", sort_name));
+                    .fresh(&format!("Ast{sort_name}"));
                 self.egraph
                     .proof_state
                     .proof_names

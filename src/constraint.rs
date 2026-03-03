@@ -170,7 +170,7 @@ where
         let vars: String = self
             .watch_vars
             .iter()
-            .map(|v| format!("{:?}", v))
+            .map(|v| format!("{v:?}"))
             .collect::<Vec<_>>()
             .join(", ");
         format!("{} => {:?}({})", vars, self.out, vars)
@@ -1192,8 +1192,7 @@ pub(crate) fn grounded_check(
             TypeError::Ungrounded(v.to_string(), span)
         }
         _ => panic!(
-            "unexpected constraint error in groundedness check {:?}",
-            err
+            "unexpected constraint error in groundedness check {err:?}"
         ),
     })?;
 

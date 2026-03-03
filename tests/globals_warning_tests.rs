@@ -21,8 +21,7 @@ fn globals_missing_prefix_warns_by_default() {
             bodies
                 .iter()
                 .any(|body| body.contains("Global `value` should start with `$`")),
-            "expected warning about missing global prefix, got logs: {:?}",
-            bodies
+            "expected warning about missing global prefix, got logs: {bodies:?}"
         );
     });
 }
@@ -43,8 +42,7 @@ fn globals_missing_prefix_warns_for_prefixed_pattern_variable_by_default() {
             bodies
                 .iter()
                 .any(|body| body.contains("Non-global `$x` should not start with `$`")),
-            "expected warning about missing global prefix, got logs: {:?}",
-            bodies
+            "expected warning about missing global prefix, got logs: {bodies:?}"
         );
     });
 }
@@ -65,8 +63,7 @@ fn globals_missing_prefix_warns_for_prefixed_rule_let_by_default() {
             bodies
                 .iter()
                 .any(|body| body.contains("Non-global `$y` should not start with `$`")),
-            "expected warning about missing global prefix, got logs: {:?}",
-            bodies
+            "expected warning about missing global prefix, got logs: {bodies:?}"
         );
     });
 }
