@@ -71,6 +71,11 @@ enum RunMode {
     //      Run the egglog program, skipping declarations of Sorts and Rules
     //      Save the completed timeline, for consumption by the nightly frontend
     Mine,
+
+    // For each egg file under the input path,
+    //      run the egglog program and record timing information.
+    //      Print size information on the serialized egraphs.
+    SizeReport,
 }
 
 impl Display for RunMode {
@@ -87,6 +92,7 @@ impl Display for RunMode {
                 RunMode::NoIO => "no-io",
                 RunMode::Extract => "extract",
                 RunMode::Mine => "mine",
+                RunMode::SizeReport => "size-report"
             }
         )
     }
@@ -651,6 +657,14 @@ fn poach(
                 },
             )
         }
+        RunMode::SizeReport => process_files(
+                &files,
+                out_dir,
+                initial_egraph.as_deref(),
+                |egg_file, _, timed_egraph| {
+                    timed_egraph.run_from_file(egg_file)?;
+                    timed_egraph.print_size_report()
+                }),
     }
 }
 

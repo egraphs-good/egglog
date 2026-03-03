@@ -30,6 +30,8 @@ mod typechecking;
 pub mod util;
 pub use command_macro::{CommandMacro, CommandMacroRegistry};
 
+mod serialize_size;
+
 // This is used to allow the `add_primitive` macro to work in
 // both this crate and other crates by referring to `::egglog`.
 extern crate self as egglog;
@@ -64,6 +66,7 @@ use serde::ser::SerializeStruct;
 use serde::{Deserialize, Serialize};
 use serde_json::json;
 pub use serialize_vis::{SerializeConfig, SerializeOutput, SerializedNode};
+use serialize_size::GenerateSizeReport;
 use size::GetSizePrimitive;
 use sort::*;
 use std::any::Any;
@@ -2663,6 +2666,11 @@ impl TimedEgraph {
         self.egraphs.push(egraph);
         self.timeline.push(timeline);
 
+        Ok(())
+    }
+
+    pub fn print_size_report(&mut self) -> Result<()> {
+        self.egraphs.last().unwrap().get_sizerp().pretty_print(0);
         Ok(())
     }
 
