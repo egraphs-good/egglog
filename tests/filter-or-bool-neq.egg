@@ -1,0 +1,33 @@
+; Test that filter, or, and bool-!= work correctly together
+
+; Basic bool-!= tests
+(check (= (bool-!= 1 2) true))
+(check (= (bool-!= 1 1) false))
+
+; Basic or tests
+(check (= (or true false) true))
+(check (= (or false false) false))
+(check (= (or false true) true))
+(check (= (or true true) true))
+
+; Varargs or
+(check (= (or false false false) false))
+(check (= (or false true false) true))
+(check (= (or true true true) true))
+
+; Single arg or
+(check (= (or true) true))
+(check (= (or false) false))
+
+; filter with true should succeed
+(check (filter true))
+
+; Combined: filter with or and bool-!=
+(check (filter (or (bool-!= 1 2))))
+(check (filter (or (bool-!= 1 1) (bool-!= 2 3))))
+(check (filter (or (bool-!= 1 2) (bool-!= 3 3))))
+
+; filter with or of all-equal should fail
+(fail (check (filter (or (bool-!= 1 1)))))
+(fail (check (filter (or (bool-!= 1 1) (bool-!= 2 2)))))
+(fail (check (filter false)))
