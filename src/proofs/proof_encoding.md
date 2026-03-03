@@ -87,6 +87,14 @@ We use the `ordering-max` and `ordering-min` egglog primitives
   so that we can deterministically choose which term becomes the parent
   in the union-find structure.
 
+**Important invariant:** every representative term must have a self-loop
+  entry in the union-find table (e.g., `(UF_Math v v)`).
+This is because the rebuild rules query the union-find for every
+  eq-sort column simultaneously, so a missing entry for any column
+  prevents the rule from firing even when other columns have changed.
+Self-loops are added in `add_term_and_view` whenever a constructor
+  value is created.
+
 
 ```text
 (sort view)
