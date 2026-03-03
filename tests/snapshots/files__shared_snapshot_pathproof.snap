@@ -1,0 +1,8 @@
+---
+source: tests/files.rs
+expression: snapshot_content_across_treatments
+---
+((Edge 3)
+ (Trans 6)
+ (edge 3)
+ (path 9))

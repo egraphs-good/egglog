@@ -1,0 +1,1 @@
+(function f (i64) i64 :no-merge :merge old)

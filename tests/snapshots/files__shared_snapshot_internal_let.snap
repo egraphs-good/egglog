@@ -1,0 +1,8 @@
+---
+source: tests/files.rs
+expression: snapshot_content_across_treatments
+---
+((Add 1)
+ (Num 2))
+((Add 1)
+ (Num 2))

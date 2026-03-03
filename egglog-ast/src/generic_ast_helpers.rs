@@ -1,4 +1,3 @@
-use std::borrow::Cow;
 use std::fmt::{Display, Formatter};
 use std::hash::Hash;
 
@@ -29,13 +28,7 @@ macro_rules! impl_from {
     };
 }
 
-fn sanitize_internal_name(name: &str) -> Cow<'_, str> {
-    if let Some(stripped) = name.strip_prefix('@') {
-        Cow::Owned(format!("_{}", stripped))
-    } else {
-        Cow::Borrowed(name)
-    }
-}
+pub const INTERNAL_SYMBOL_PREFIX: &str = "@";
 
 impl<Head: Display, Leaf: Display> Display for GenericRule<Head, Leaf>
 where
@@ -68,12 +61,12 @@ where
             }
         }
         let ruleset = if !self.ruleset.is_empty() {
-            format!(":ruleset {}", sanitize_internal_name(&self.ruleset))
+            format!(":ruleset {}", &self.ruleset)
         } else {
             "".into()
         };
         let name = if !self.name.is_empty() {
-            format!(":name \"{}\"", sanitize_internal_name(&self.name))
+            format!(":name \"{}\"", &self.name)
         } else {
             "".into()
         };
@@ -104,16 +97,22 @@ where
     fn fmt(&self, f: &mut Formatter) -> std::fmt::Result {
         match self {
             GenericAction::Let(_, lhs, rhs) => write!(f, "(let {} {})", lhs, rhs),
-            GenericAction::Set(_, lhs, args, rhs) => write!(
-                f,
-                "(set ({} {}) {})",
-                lhs,
-                args.iter()
-                    .map(|a| format!("{}", a))
-                    .collect::<Vec<_>>()
-                    .join(" "),
-                rhs
-            ),
+            GenericAction::Set(_, lhs, args, rhs) => {
+                if args.is_empty() {
+                    write!(f, "(set ({}) {})", lhs, rhs)
+                } else {
+                    write!(
+                        f,
+                        "(set ({} {}) {})",
+                        lhs,
+                        args.iter()
+                            .map(|a| format!("{}", a))
+                            .collect::<Vec<_>>()
+                            .join(" "),
+                        rhs
+                    )
+                }
+            }
             GenericAction::Union(_, lhs, rhs) => write!(f, "(union {} {})", lhs, rhs),
             GenericAction::Change(_, change, lhs, args) => {
                 let change_str = match change {
@@ -168,6 +167,7 @@ where
     Head: Clone + Display,
     Leaf: Clone + PartialEq + Eq + Display + Hash,
 {
+    /// Applies `f` to every expression that appears in the rule body or head.
     pub fn visit_exprs(
         self,
         f: &mut impl FnMut(GenericExpr<Head, Leaf>) -> GenericExpr<Head, Leaf>,
@@ -183,6 +183,50 @@ where
             name: self.name.clone(),
             ruleset: self.ruleset.clone(),
         }
+    }
+
+    /// Applies `f` to each action in the rule head, leaving the body unchanged.
+    pub fn visit_actions(
+        self,
+        f: &mut impl FnMut(GenericAction<Head, Leaf>) -> GenericAction<Head, Leaf>,
+    ) -> Self {
+        Self {
+            span: self.span,
+            head: self.head.visit_actions(f),
+            body: self.body,
+            name: self.name,
+            ruleset: self.ruleset,
+        }
+    }
+
+    /// Applies the provided `head` and `leaf` mappings to every symbol that appears in the rule.
+    pub fn map_symbols<Head2, Leaf2>(
+        self,
+        head: &mut impl FnMut(Head) -> Head2,
+        leaf: &mut impl FnMut(Leaf) -> Leaf2,
+    ) -> GenericRule<Head2, Leaf2>
+    where
+        Head2: Clone + Display,
+        Leaf2: Clone + PartialEq + Eq + Display + Hash,
+    {
+        GenericRule {
+            span: self.span,
+            head: self.head.map_symbols(head, leaf),
+            body: self
+                .body
+                .into_iter()
+                .map(|fact| fact.map_symbols(head, leaf))
+                .collect(),
+            name: self.name,
+            ruleset: self.ruleset,
+        }
+    }
+
+    /// Converts the rule into its unresolved representation by formatting heads and leaves.
+    pub fn make_unresolved(self) -> GenericRule<String, String> {
+        let mut map_head = |h: Head| h.to_string();
+        let mut map_leaf = |l: Leaf| l.to_string();
+        self.map_symbols(&mut map_head, &mut map_leaf)
     }
 }
 
@@ -209,11 +253,20 @@ where
         }
     }
 
+    /// Transforms every expression appearing in the action list using `f`.
     pub fn visit_exprs(
         self,
         f: &mut impl FnMut(GenericExpr<Head, Leaf>) -> GenericExpr<Head, Leaf>,
     ) -> Self {
         Self(self.0.into_iter().map(|a| a.visit_exprs(f)).collect())
+    }
+
+    /// Rewrites each action in the collection with the provided closure.
+    pub fn visit_actions(
+        self,
+        f: &mut impl FnMut(GenericAction<Head, Leaf>) -> GenericAction<Head, Leaf>,
+    ) -> Self {
+        Self(self.0.into_iter().map(f).collect())
     }
 
     pub fn new(actions: Vec<GenericAction<Head, Leaf>>) -> Self {
@@ -222,6 +275,31 @@ where
 
     pub fn singleton(action: GenericAction<Head, Leaf>) -> Self {
         Self(vec![action])
+    }
+
+    /// Applies the provided `head` and `leaf` mappings to each action.
+    pub fn map_symbols<Head2, Leaf2>(
+        self,
+        head: &mut impl FnMut(Head) -> Head2,
+        leaf: &mut impl FnMut(Leaf) -> Leaf2,
+    ) -> GenericActions<Head2, Leaf2>
+    where
+        Head2: Clone + Display,
+        Leaf2: Clone + PartialEq + Eq + Display + Hash,
+    {
+        GenericActions(
+            self.0
+                .into_iter()
+                .map(|action| action.map_symbols(head, leaf))
+                .collect(),
+        )
+    }
+
+    /// Converts the actions into their unresolved representation by formatting heads and leaves.
+    pub fn make_unresolved(self) -> GenericActions<String, String> {
+        let mut map_head = |h: Head| h.to_string();
+        let mut map_leaf = |l: Leaf| l.to_string();
+        self.map_symbols(&mut map_head, &mut map_leaf)
     }
 }
 
@@ -347,6 +425,59 @@ where
             }
         }
     }
+
+    /// Applies the provided `head` and `leaf` mappings to the action and all nested expressions.
+    pub fn map_symbols<Head2, Leaf2>(
+        self,
+        head: &mut impl FnMut(Head) -> Head2,
+        leaf: &mut impl FnMut(Leaf) -> Leaf2,
+    ) -> GenericAction<Head2, Leaf2>
+    where
+        Head2: Clone + Display,
+        Leaf2: Clone + Eq + Display + Hash,
+    {
+        match self {
+            GenericAction::Let(span, lhs, rhs) => {
+                GenericAction::Let(span, leaf(lhs), rhs.map_symbols(head, leaf))
+            }
+            GenericAction::Set(span, head_sym, args, rhs) => {
+                let mut mapped_args = Vec::with_capacity(args.len());
+                for arg in args {
+                    mapped_args.push(arg.map_symbols(head, leaf));
+                }
+                GenericAction::Set(
+                    span,
+                    head(head_sym),
+                    mapped_args,
+                    rhs.map_symbols(head, leaf),
+                )
+            }
+            GenericAction::Change(span, change, head_sym, args) => {
+                let mut mapped_args = Vec::with_capacity(args.len());
+                for arg in args {
+                    mapped_args.push(arg.map_symbols(head, leaf));
+                }
+                GenericAction::Change(span, change, head(head_sym), mapped_args)
+            }
+            GenericAction::Union(span, lhs, rhs) => GenericAction::Union(
+                span,
+                lhs.map_symbols(head, leaf),
+                rhs.map_symbols(head, leaf),
+            ),
+            GenericAction::Panic(span, msg) => GenericAction::Panic(span, msg),
+            GenericAction::Expr(span, expr) => {
+                GenericAction::Expr(span, expr.map_symbols(head, leaf))
+            }
+        }
+    }
+
+    /// Converts the action into its unresolved representation using String by
+    /// formatting heads and leaves.
+    pub fn make_unresolved(self) -> GenericAction<String, String> {
+        let mut map_head = |h: Head| h.to_string();
+        let mut map_leaf = |l: Leaf| l.to_string();
+        self.map_symbols(&mut map_head, &mut map_leaf)
+    }
 }
 
 impl<Head, Leaf> GenericFact<Head, Leaf>
@@ -401,11 +532,29 @@ where
     Leaf: Clone + PartialEq + Eq + Display + Hash,
     Head: Clone + Display,
 {
+    /// Applies the provided `head` and `leaf` mappings to the fact.
+    pub fn map_symbols<Head2, Leaf2>(
+        self,
+        head: &mut impl FnMut(Head) -> Head2,
+        leaf: &mut impl FnMut(Leaf) -> Leaf2,
+    ) -> GenericFact<Head2, Leaf2>
+    where
+        Head2: Clone + Display,
+        Leaf2: Clone + PartialEq + Eq + Display + Hash,
+    {
+        match self {
+            GenericFact::Eq(span, e1, e2) => {
+                GenericFact::Eq(span, e1.map_symbols(head, leaf), e2.map_symbols(head, leaf))
+            }
+            GenericFact::Fact(expr) => GenericFact::Fact(expr.map_symbols(head, leaf)),
+        }
+    }
+
+    /// Converts all heads and leaves to strings.
     pub fn make_unresolved(self) -> GenericFact<String, String> {
-        self.subst(
-            &mut |span, v| GenericExpr::Var(span.clone(), v.to_string()),
-            &mut |h| h.to_string(),
-        )
+        let mut map_head = |h: Head| h.to_string();
+        let mut map_leaf = |l: Leaf| l.to_string();
+        self.map_symbols(&mut map_head, &mut map_leaf)
     }
 }
 
@@ -453,6 +602,8 @@ impl<Head: Clone + Display, Leaf: Hash + Clone + Display + Eq> GenericExpr<Head,
         size
     }
 
+    /// Traverse the expression tree, calling `pre` before visiting children
+    /// and `post` after visiting children. Visits all nodes in the tree.
     pub fn walk(&self, pre: &mut impl FnMut(&Self), post: &mut impl FnMut(&Self)) {
         pre(self);
         self.children()
@@ -461,9 +612,30 @@ impl<Head: Clone + Display, Leaf: Hash + Clone + Display + Eq> GenericExpr<Head,
         post(self);
     }
 
+    /// Fold over the expression tree bottom-up, collecting results from children.
+    /// The function `f` is called on each node with the node itself and the results
+    /// from folding over its children. Results are computed from leaves to root.
     pub fn fold<Out>(&self, f: &mut impl FnMut(&Self, Vec<Out>) -> Out) -> Out {
         let ts = self.children().iter().map(|child| child.fold(f)).collect();
         f(self, ts)
+    }
+
+    /// Search for the first node matching a predicate, returning early once found.
+    /// Traverses the tree in pre-order (top-down).
+    pub fn find<Out>(&self, f: &mut impl FnMut(&Self) -> Option<Out>) -> Option<Out> {
+        // Check current node first
+        if let Some(result) = f(self) {
+            return Some(result);
+        }
+
+        // Then check children
+        for child in self.children().iter() {
+            if let Some(result) = child.find(f) {
+                return Some(result);
+            }
+        }
+
+        None
     }
 
     /// Applys `f` to all sub-expressions (including `self`)
@@ -503,6 +675,32 @@ impl<Head: Clone + Display, Leaf: Hash + Clone + Display + Eq> GenericExpr<Head,
         subst_leaf: &mut impl FnMut(&Span, &Leaf) -> GenericExpr<Head, Leaf2>,
     ) -> GenericExpr<Head, Leaf2> {
         self.subst(subst_leaf, &mut |x| x.clone())
+    }
+
+    /// Applies the provided `head` and `leaf` mappings to every symbol within the expression.
+    pub fn map_symbols<Head2, Leaf2>(
+        self,
+        head: &mut impl FnMut(Head) -> Head2,
+        leaf: &mut impl FnMut(Leaf) -> Leaf2,
+    ) -> GenericExpr<Head2, Leaf2> {
+        match self {
+            GenericExpr::Lit(span, lit) => GenericExpr::Lit(span, lit),
+            GenericExpr::Var(span, var) => GenericExpr::Var(span, leaf(var)),
+            GenericExpr::Call(span, op, children) => {
+                let mut mapped_children = Vec::with_capacity(children.len());
+                for child in children {
+                    mapped_children.push(child.map_symbols(head, leaf));
+                }
+                GenericExpr::Call(span, head(op), mapped_children)
+            }
+        }
+    }
+
+    /// Converts all heads and leaves to strings.
+    pub fn make_unresolved(self) -> GenericExpr<String, String> {
+        let mut map_head = |h: Head| h.to_string();
+        let mut map_leaf = |l: Leaf| l.to_string();
+        self.map_symbols(&mut map_head, &mut map_leaf)
     }
 
     pub fn vars(&self) -> impl Iterator<Item = Leaf> + '_ {

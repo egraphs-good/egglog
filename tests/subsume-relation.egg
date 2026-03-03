@@ -6,4 +6,4 @@
 (R (A) (C))
 (union (B) (C))
 
-(check (= (R (A) (B)) ()))
+(check (R (A) (B)))

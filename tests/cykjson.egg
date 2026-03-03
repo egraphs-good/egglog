@@ -39,6 +39,6 @@
 
 (run 10000)
 
-(let test1 (B 801 1 "VAL"))
+(let $test1 (B 801 1 "VAL"))
 
 (check (P 801 1 "VAL"))

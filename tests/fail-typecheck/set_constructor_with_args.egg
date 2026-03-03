@@ -1,0 +1,9 @@
+(sort Math)
+(constructor Add (Math Math) Math)
+(constructor Num (i64) Math)
+
+(let x (Num 1))
+(let y (Num 2))
+
+; This should fail - cannot set a constructor
+(set (Add x y) (Num 3))

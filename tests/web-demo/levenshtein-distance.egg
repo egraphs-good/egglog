@@ -11,14 +11,14 @@
 (datatype str
     (Cons String str))
 (constructor EmptyConst () str)
-(let Empty (EmptyConst))
+(let $Empty (EmptyConst))
 
 ; Length function
 
 (constructor Length (str) expr)
 
-(rule ((= f (Length Empty)))
-      ((union (Length Empty) (Num 0))))
+(rule ((= f (Length $Empty)))
+      ((union (Length $Empty) (Num 0))))
 
 (rule ((= f (Length (Cons c cs))))
       ((union (Length (Cons c cs)) (Add (Num 1) (Length cs)))))
@@ -27,11 +27,11 @@
 
 (constructor EditDist (str str) expr)
 
-(rule ((= f (EditDist Empty s)))
-      ((union (EditDist Empty s) (Length s))))
+(rule ((= f (EditDist $Empty s)))
+      ((union (EditDist $Empty s) (Length s))))
 
-(rule ((= f (EditDist s Empty)))
-      ((union (EditDist s Empty) (Length s))))
+(rule ((= f (EditDist s $Empty)))
+      ((union (EditDist s $Empty) (Length s))))
 
 (rule ((= f (EditDist (Cons head rest1) (Cons head rest2))))
       ((union (EditDist (Cons head rest1) (Cons head rest2))
@@ -50,22 +50,22 @@
 (rule ((= x (Num n))) ((set (Unwrap (Num n)) n)))
 
 ; Tests
-(let HorseStr (Cons "h" (Cons "o" (Cons "r" (Cons "s" (Cons "e" Empty))))))
-(let RosStr (Cons "r" (Cons "o" (Cons "s" Empty))))
-(let IntentionStr (Cons "i" (Cons "n" (Cons "t" (Cons "e" (Cons "n" (Cons "t" (Cons "i" (Cons "o" (Cons "n" Empty))))))))))
-(let ExecutionStr (Cons "e" (Cons "x" (Cons "e" (Cons "c" (Cons "u" (Cons "t" (Cons "i" (Cons "o" (Cons "n" Empty))))))))))
+(let $HorseStr (Cons "h" (Cons "o" (Cons "r" (Cons "s" (Cons "e" $Empty))))))
+(let $RosStr (Cons "r" (Cons "o" (Cons "s" $Empty))))
+(let $IntentionStr (Cons "i" (Cons "n" (Cons "t" (Cons "e" (Cons "n" (Cons "t" (Cons "i" (Cons "o" (Cons "n" $Empty))))))))))
+(let $ExecutionStr (Cons "e" (Cons "x" (Cons "e" (Cons "c" (Cons "u" (Cons "t" (Cons "i" (Cons "o" (Cons "n" $Empty))))))))))
 
-(let Test1 (EditDist HorseStr RosStr))
-(let Test2 (EditDist IntentionStr ExecutionStr))
-(let Test3 (EditDist HorseStr Empty))
+(let $Test1 (EditDist $HorseStr $RosStr))
+(let $Test2 (EditDist $IntentionStr $ExecutionStr))
+(let $Test3 (EditDist $HorseStr $Empty))
 
 (run 100)
 
-(extract (Unwrap Test1))
-(check (= Test1 (Num 3)))
+(extract (Unwrap $Test1))
+(check (= $Test1 (Num 3)))
 
-(extract (Unwrap Test2))
-(check (= Test2 (Num 5)))
+(extract (Unwrap $Test2))
+(check (= $Test2 (Num 5)))
 
-(extract (Unwrap Test3))
-(check (= Test3 (Num 5)))
+(extract (Unwrap $Test3))
+(check (= $Test3 (Num 5)))

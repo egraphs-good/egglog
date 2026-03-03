@@ -1,0 +1,23 @@
+(sort Math)
+(constructor Num (i64) Math)
+
+(relation myrel (i64))
+
+(relation shouldappear ())
+(relation shouldnotappear ())
+
+
+
+(myrel 1)
+(myrel 2)
+
+(rule ((= (myrel 1) (myrel 1)))
+      ((shouldappear)))
+
+(rule ((= (myrel 1) (myrel 2)))
+      ((shouldnotappear)))
+
+
+(run 1)
+(check (shouldappear))
+(fail (check (shouldnotappear)))

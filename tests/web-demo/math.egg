@@ -141,7 +141,7 @@
   (rewrite (Add a b) (Add b a) :ruleset add-ac)
   (rewrite (Add a (Add b c)) (Add (Add a b) c) :ruleset add-ac)
   ; Add one through seven
-  (let res
+  (let $res
     (Add (Const 1.0)
          (Add (Const 2.0)
               (Add (Const 3.0)
@@ -150,7 +150,7 @@
                              (Add (Const 6.0)
                                   (Const 7.0))))))))
   (run add-ac 7)
-  (check (= res
+  (check (= $res
     (Add (Const 7.0)
          (Add (Const 6.0)
               (Add (Const 5.0)
@@ -162,172 +162,172 @@
 
 ; math_fail
 (push)
-(let res (Add (Var "x") (Var "y")))
+(let $res (Add (Var "x") (Var "y")))
 (run-schedule (saturate (seq (run) (run prune))))
-(fail (check (= res (Div (Var "x") (Var "y")))))
+(fail (check (= $res (Div (Var "x") (Var "y")))))
 (pop)
 
 ; math_simplify_add
 (push)
-(let x (Var "x"))
-(let res (Add (Add (Add x x) x) x))
-(run-schedule (saturate (seq (run :until (= res (Mul (Const 4.0) x))) (run prune))))
-(check (= res (Mul (Const 4.0) x)))
+(let $x (Var "x"))
+(let $res (Add (Add (Add $x $x) $x) $x))
+(run-schedule (saturate (seq (run :until (= $res (Mul (Const 4.0) $x))) (run prune))))
+(check (= $res (Mul (Const 4.0) $x)))
 (pop)
 
 ; math_powers
 (push)
-(let res (Mul (Pow (Const 2.0) (Var "x")) (Pow (Const 2.0) (Var "y"))))
+(let $res (Mul (Pow (Const 2.0) (Var "x")) (Pow (Const 2.0) (Var "y"))))
 (run-schedule (saturate (seq
-     (run :until (= res (Pow (Const 2.0) (Add (Var "x") (Var "y")))))
+     (run :until (= $res (Pow (Const 2.0) (Add (Var "x") (Var "y")))))
      (run prune))))
-(check (= res (Pow (Const 2.0) (Add (Var "x") (Var "y")))))
+(check (= $res (Pow (Const 2.0) (Add (Var "x") (Var "y")))))
 (pop)
 
 ; math_simplify_const
 (push)
-(let res (Add (Const 1.0)
+(let $res (Add (Const 1.0)
                (Sub (Var "a")
                     (Mul (Sub (Const 2.0)
                               (Const 1.0))
                          (Var "a")))))
-(run-schedule (saturate (seq (run :until (= res (Const 1.0))) (run prune))))
-(check (= res (Const 1.0)))
+(run-schedule (saturate (seq (run :until (= $res (Const 1.0))) (run prune))))
+(check (= $res (Const 1.0)))
 (pop)
 
 ; math_simplify_root
 (push)
-(let res (Div (Const 1.0)
+(let $res (Div (Const 1.0)
               (Sub (Div (Add (Const 1.0) (Sqrt (Var "five")))
                         (Const 2.0))
                   (Div (Sub (Const 1.0) (Sqrt (Var "five")))
                         (Const 2.0)))))
 (run-schedule (saturate (seq
-  (run :until (= res (Div (Const 1.0) (Sqrt (Var "five")))) )
+  (run :until (= $res (Div (Const 1.0) (Sqrt (Var "five")))) )
   (run prune))))
-(check (= res (Div (Const 1.0) (Sqrt (Var "five")))))
+(check (= $res (Div (Const 1.0) (Sqrt (Var "five")))))
 (pop)
 
 ;   math_simplify_factor, rules(),
 (push)
-(let x (Var "x"))
-(let res (Mul (Add x (Const 3.0)) (Add x (Const 1.0))))
+(let $x (Var "x"))
+(let $res (Mul (Add $x (Const 3.0)) (Add $x (Const 1.0))))
 (run-schedule (saturate (seq
-  (run :until (= res (Add (Add (Mul x x) (Mul (Const 4.0) x)) (Const 3.0))))
+  (run :until (= $res (Add (Add (Mul $x $x) (Mul (Const 4.0) $x)) (Const 3.0))))
   (run prune))))
-(check (= res (Add (Add (Mul x x) (Mul (Const 4.0) x)) (Const 3.0))))
+(check (= $res (Add (Add (Mul $x $x) (Mul (Const 4.0) $x)) (Const 3.0))))
 (pop)
 
 ; math_diff_same
 (push)
-(let res (Diff (Var "x") (Var "x")))
-(run-schedule (saturate (seq (run :until (= res (Const 1.0))) (run prune))))
-(check (= res (Const 1.0)))
+(let $res (Diff (Var "x") (Var "x")))
+(run-schedule (saturate (seq (run :until (= $res (Const 1.0))) (run prune))))
+(check (= $res (Const 1.0)))
 (pop)
 
 ; math_diff_different
 (push)
-(let res (Diff (Var "x") (Var "y")))
-(run-schedule (saturate (seq (run :until (= res (Const 0.0))) (run prune))))
-(check (= res (Const 0.0)))
+(let $res (Diff (Var "x") (Var "y")))
+(run-schedule (saturate (seq (run :until (= $res (Const 0.0))) (run prune))))
+(check (= $res (Const 0.0)))
 (pop)
 
 ; math_diff_simple1
 (push)
-(let res (Diff (Var "x") (Add (Const 1.0) (Mul (Const 2.0) (Var "x")))))
-(run-schedule (saturate (seq (run :until (= res (Const 2.0))) (run prune))))
-(check (= res (Const 2.0)))
+(let $res (Diff (Var "x") (Add (Const 1.0) (Mul (Const 2.0) (Var "x")))))
+(run-schedule (saturate (seq (run :until (= $res (Const 2.0))) (run prune))))
+(check (= $res (Const 2.0)))
 (pop)
 
 ; math_diff_simple2
 (push)
-(let res (Diff (Var "x") (Add (Const 1.0) (Mul (Var "y") (Var "x")))))
-(run-schedule (saturate (seq (run :until (= res (Var "y"))) (run prune))))
-(check (= res (Var "y")))
+(let $res (Diff (Var "x") (Add (Const 1.0) (Mul (Var "y") (Var "x")))))
+(run-schedule (saturate (seq (run :until (= $res (Var "y"))) (run prune))))
+(check (= $res (Var "y")))
 (pop)
 
 ; math_diff_ln
 (push)
-(let res (Diff (Var "x") (Ln (Var "x"))))
-(run-schedule (saturate (seq (run :until (= res (Div (Const 1.0) (Var "x")))) (run prune))))
-(check (= res (Div (Const 1.0) (Var "x"))))
+(let $res (Diff (Var "x") (Ln (Var "x"))))
+(run-schedule (saturate (seq (run :until (= $res (Div (Const 1.0) (Var "x")))) (run prune))))
+(check (= $res (Div (Const 1.0) (Var "x"))))
 (pop)
 
 ; diff_power_simple
 (push)
-(let res (Diff (Var "x") (Pow (Var "x") (Const 3.0))))
+(let $res (Diff (Var "x") (Pow (Var "x") (Const 3.0))))
 (run-schedule (saturate (seq
-  (run :until (= res (Mul (Const 3.0) (Pow (Var "x") (Const 2.0))))))
+  (run :until (= $res (Mul (Const 3.0) (Pow (Var "x") (Const 2.0))))))
   (run prune)))
-(check (= res (Mul (Const 3.0) (Pow (Var "x") (Const 2.0)))))
+(check (= $res (Mul (Const 3.0) (Pow (Var "x") (Const 2.0)))))
 (pop)
 
 ; diff_power_harder
 (push)
-(let res (Diff (Var "x") (Sub (Pow (Var "x") (Const 3.0))
+(let $res (Diff (Var "x") (Sub (Pow (Var "x") (Const 3.0))
                               (Mul (Const 7.0) (Pow (Var "x") (Const 2.0))))))
 ; need to add this manually, same as in egg
 (Mul (Var "x") (Sub (Mul (Const 3.0) (Var "x")) (Const 14.0)))
 (run-schedule (repeat 60 (seq
-  (run :until (= res (Mul (Var "x") (Sub (Mul (Const 3.0) (Var "x"))
+  (run :until (= $res (Mul (Var "x") (Sub (Mul (Const 3.0) (Var "x"))
                                  (Const 14.0)))))
   (run prune))))
-(check (= res (Mul (Var "x") (Sub (Mul (Const 3.0) (Var "x"))
+(check (= $res (Mul (Var "x") (Sub (Mul (Const 3.0) (Var "x"))
                                  (Const 14.0)))))
 (pop)
 
 ; integ_one
 (push)
-(let res (Integral (Const 1.0) (Var "x")))
-(run-schedule (saturate (seq (run :until (= res (Var "x"))) (run prune))))
-(check (= res (Var "x")))
+(let $res (Integral (Const 1.0) (Var "x")))
+(run-schedule (saturate (seq (run :until (= $res (Var "x"))) (run prune))))
+(check (= $res (Var "x")))
 (pop)
 
 ; integ_sin
 (push)
-(let res (Integral (Cos (Var "x")) (Var "x")))
-(run-schedule (saturate (seq (run :until (= res (Sin (Var "x")))) (run prune))))
-(check (= res (Sin (Var "x"))))
+(let $res (Integral (Cos (Var "x")) (Var "x")))
+(run-schedule (saturate (seq (run :until (= $res (Sin (Var "x")))) (run prune))))
+(check (= $res (Sin (Var "x"))))
 (pop)
 
 ; integ_x
 (push)
-(let res (Integral (Pow (Var "x") (Const 1.0)) (Var "x")))
+(let $res (Integral (Pow (Var "x") (Const 1.0)) (Var "x")))
 (run-schedule (saturate (seq
-  (run :until (= res (Div (Pow (Var "x") (Const 2.0)) (Const 2.0))))
+  (run :until (= $res (Div (Pow (Var "x") (Const 2.0)) (Const 2.0))))
   (run prune))))
-(check (= res (Div (Pow (Var "x") (Const 2.0)) (Const 2.0))))
+(check (= $res (Div (Pow (Var "x") (Const 2.0)) (Const 2.0))))
 (pop)
 
 ; integ_part1
 (push)
-(let res (Integral (Mul (Var "x") (Cos (Var "x"))) (Var "x")))
+(let $res (Integral (Mul (Var "x") (Cos (Var "x"))) (Var "x")))
 (run-schedule (saturate (seq
-  (run :until (= res (Add (Mul (Var "x") (Sin (Var "x")))
+  (run :until (= $res (Add (Mul (Var "x") (Sin (Var "x")))
                           (Cos (Var "x")))))
   (run prune))))
-(check (= res (Add (Mul (Var "x") (Sin (Var "x")))
+(check (= $res (Add (Mul (Var "x") (Sin (Var "x")))
                    (Cos (Var "x")))))
 (pop)
 
 ; integ_part2
 (push)
-(let res (Integral (Mul (Cos (Var "x")) (Var "x")) (Var "x")))
+(let $res (Integral (Mul (Cos (Var "x")) (Var "x")) (Var "x")))
 (run-schedule (saturate (seq
-  (run :until (= res (Add (Mul (Var "x") (Sin (Var "x")))
+  (run :until (= $res (Add (Mul (Var "x") (Sin (Var "x")))
                           (Cos (Var "x")))))
   (run prune))))
-(check (= res (Add (Mul (Var "x") (Sin (Var "x")))
+(check (= $res (Add (Mul (Var "x") (Sin (Var "x")))
                    (Cos (Var "x")))))
 (pop)
 
 ; integ_part3
 (push)
-(let res (Integral (Ln (Var "x")) (Var "x")))
+(let $res (Integral (Ln (Var "x")) (Var "x")))
 (run-schedule (saturate (seq
-  (run :until (= res (Sub (Mul (Var "x") (Ln (Var "x"))) (Var "x"))))
+  (run :until (= $res (Sub (Mul (Var "x") (Ln (Var "x"))) (Var "x"))))
   (run prune))))
-(check (= res (Sub (Mul (Var "x") (Ln (Var "x"))) (Var "x"))))
+(check (= $res (Sub (Mul (Var "x") (Ln (Var "x"))) (Var "x"))))
 (pop)
 
 ; assoc_mul_saturates

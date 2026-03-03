@@ -4,40 +4,48 @@
 //! egglog is faster and more general than egg.
 //!
 //! # Documentation
-//! Documentation for the egglog language can be found
-//! here: [`Command`]
+//! Documentation for the egglog language can be found here: [`Command`].
 //!
 //! # Tutorial
-//! [Here](https://www.youtube.com/watch?v=N2RDQGRBrSY) is the video tutorial on what egglog is and how to use it.
-//! We plan to have a text tutorial here soon, PRs welcome!
+//! We have a [text tutorial](https://egraphs-good.github.io/egglog-tutorial/01-basics.html) on egglog and how to use it.
+//! We also have a slightly outdated [video tutorial](https://www.youtube.com/watch?v=N2RDQGRBrSY).
+//!
+//!
 //!
 pub mod ast;
 #[cfg(feature = "bin")]
 mod cli;
+mod command_macro;
 pub mod constraint;
 mod core;
 pub mod extract;
 pub mod prelude;
+mod proofs;
+
 pub mod scheduler;
 mod serialize;
 pub mod sort;
 mod termdag;
 mod typechecking;
 pub mod util;
+pub use command_macro::{CommandMacro, CommandMacroRegistry};
 
 // This is used to allow the `add_primitive` macro to work in
 // both this crate and other crates by referring to `::egglog`.
 extern crate self as egglog;
-use ast::*;
+pub use ast::{ResolvedExpr, ResolvedFact, ResolvedVar};
 #[cfg(feature = "bin")]
 pub use cli::*;
 use constraint::{Constraint, Problem, SimpleTypeConstraint, TypeConstraint};
 pub use core::{Atom, AtomTerm};
-use core::{ResolvedAtomTerm, ResolvedCall};
+use core::{CoreActionContext, ResolvedAtomTerm};
+pub use core::{ResolvedCall, SpecializedPrimitive};
 pub use core_relations::{BaseValue, ContainerValue, ExecutionState, Value};
 use core_relations::{ExternalFunctionId, make_external_func};
 use csv::Writer;
+pub use egglog_add_primitive::add_literal_prim;
 pub use egglog_add_primitive::add_primitive;
+pub use egglog_add_primitive::add_primitive_with_validator;
 use egglog_ast::generic_ast::{Change, GenericExpr, Literal};
 use egglog_ast::span::Span;
 use egglog_ast::util::ListDisplay;
@@ -46,11 +54,12 @@ use egglog_bridge::{ColumnTy, QueryEntry};
 use egglog_core_relations as core_relations;
 use egglog_numeric_id as numeric_id;
 use egglog_reports::{ReportLevel, RunReport};
-use extract::{CostModel, DefaultCost, Extractor, TreeAdditiveCostModel};
+use extract::{DefaultCost, Extractor, TreeAdditiveCostModel};
 use indexmap::map::Entry;
 use log::{Level, log_enabled};
 use numeric_id::DenseIdMap;
 use prelude::*;
+pub use proofs::proof_encoding_helpers::{file_supports_proofs, program_supports_proofs};
 use scheduler::{SchedulerId, SchedulerRecord};
 pub use serialize::{SerializeConfig, SerializeOutput, SerializedNode};
 use sort::*;
@@ -65,11 +74,21 @@ use std::str::FromStr;
 use std::sync::Arc;
 pub use termdag::{Term, TermDag, TermId};
 use thiserror::Error;
+pub use typechecking::PrimitiveValidator;
 pub use typechecking::TypeError;
 pub use typechecking::TypeInfo;
 use util::*;
 
+use crate::ast::desugar::desugar_command;
+use crate::ast::*;
 use crate::core::{GenericActionsExt, ResolvedRuleExt};
+use crate::proofs::proof_encoding::{EncodingState, ProofInstrumentor};
+use crate::proofs::proof_encoding_helpers::{
+    ProofEncodingUnsupportedReason, command_supports_proof_encoding,
+};
+use crate::proofs::proof_extraction::ProveExistsError;
+use crate::proofs::proof_format::{ProofId, ProofStore};
+use crate::proofs::proof_normal_form::proof_form;
 
 pub const GLOBAL_NAME_PREFIX: &str = "$";
 
@@ -98,19 +117,25 @@ impl<T> UserDefinedCommandOutput for T where T: Debug + std::fmt::Display + Send
 
 /// Output from a command.
 #[derive(Clone, Debug)]
+#[allow(clippy::large_enum_variant)]
 pub enum CommandOutput {
     /// The size of a function
     PrintFunctionSize(usize),
     /// The name of all functions and their sizes
     PrintAllFunctionsSize(Vec<(String, usize)>),
     /// The best function found after extracting
-    ExtractBest(TermDag, DefaultCost, Term),
+    ExtractBest(TermDag, DefaultCost, TermId),
     /// The variants of a function found after extracting
-    ExtractVariants(TermDag, Vec<Term>),
+    ExtractVariants(TermDag, Vec<TermId>),
+    /// A high-level proof witnessing constructor existence
+    ProveExists {
+        proof_store: ProofStore,
+        proof_id: ProofId,
+    },
     /// The report from all runs
     OverallStatistics(RunReport),
     /// A printed function and all its values
-    PrintFunction(Function, TermDag, Vec<(Term, Term)>, PrintFunctionMode),
+    PrintFunction(Function, TermDag, Vec<(TermId, TermId)>, PrintFunctionMode),
     /// The report from a single run
     RunSchedule(RunReport),
     /// A user defined output
@@ -123,21 +148,35 @@ impl std::fmt::Display for CommandOutput {
         match self {
             CommandOutput::PrintFunctionSize(size) => writeln!(f, "{}", size),
             CommandOutput::PrintAllFunctionsSize(names_and_sizes) => {
-                for name in names_and_sizes {
-                    writeln!(f, "{}: {}", name.0, name.1)?;
+                write!(f, "(")?;
+                for (i, (name, size)) in names_and_sizes.iter().enumerate() {
+                    // indent except for the first line
+                    if i > 0 {
+                        write!(f, " ")?;
+                    }
+                    // write the pair of funciton symbol and size
+                    write!(f, "({} {})", name, size)?;
+                    // add a newline except at the end
+                    if i < names_and_sizes.len() - 1 {
+                        writeln!(f)?;
+                    }
                 }
-                Ok(())
+                writeln!(f, ")")
             }
             CommandOutput::ExtractBest(termdag, _cost, term) => {
-                writeln!(f, "{}", termdag.to_string(term))
+                writeln!(f, "{}", termdag.to_string(*term))
             }
             CommandOutput::ExtractVariants(termdag, terms) => {
                 writeln!(f, "(")?;
                 for expr in terms {
-                    writeln!(f, "   {}", termdag.to_string(expr))?;
+                    writeln!(f, "   {}", termdag.to_string(*expr))?;
                 }
                 writeln!(f, ")")
             }
+            CommandOutput::ProveExists {
+                proof_store,
+                proof_id,
+            } => writeln!(f, "{}", proof_store.proof_to_string(*proof_id)),
             CommandOutput::OverallStatistics(run_report) => {
                 write!(f, "Overall statistics:\n{}", run_report)
             }
@@ -145,16 +184,17 @@ impl std::fmt::Display for CommandOutput {
                 let out_is_unit = function.schema.output.name() == UnitSort.name();
                 if *mode == PrintFunctionMode::CSV {
                     let mut wtr = Writer::from_writer(vec![]);
-                    for (term, output) in terms_and_outputs {
+                    for (term_id, output) in terms_and_outputs {
+                        let term = termdag.get(*term_id);
                         match term {
                             Term::App(name, children) => {
                                 let mut values = vec![name.clone()];
                                 for child_id in children {
-                                    values.push(termdag.to_string(termdag.get(*child_id)));
+                                    values.push(termdag.to_string(*child_id));
                                 }
 
                                 if !out_is_unit {
-                                    values.push(termdag.to_string(output));
+                                    values.push(termdag.to_string(*output));
                                 }
                                 wtr.write_record(&values).map_err(|_| std::fmt::Error)?;
                             }
@@ -166,9 +206,9 @@ impl std::fmt::Display for CommandOutput {
                 } else {
                     writeln!(f, "(")?;
                     for (term, output) in terms_and_outputs.iter() {
-                        write!(f, "   {}", termdag.to_string(term))?;
+                        write!(f, "   {}", termdag.to_string(*term))?;
                         if !out_is_unit {
-                            write!(f, " -> {}", termdag.to_string(output))?;
+                            write!(f, " -> {}", termdag.to_string(*output))?;
                         }
                         writeln!(f)?;
                     }
@@ -214,7 +254,12 @@ pub struct EGraph {
     schedulers: DenseIdMap<SchedulerId, SchedulerRecord>,
     commands: IndexMap<String, Arc<dyn UserDefinedCommand>>,
     strict_mode: bool,
-    warned_about_missing_global_prefix: bool,
+    warned_about_global_prefix: bool,
+    /// Registry for command-level macros
+    command_macros: CommandMacroRegistry,
+    proof_state: EncodingState,
+    /// In proof mode, we keep track of all desugared commands so we can check proofs later.
+    desugared_commands: Vec<ResolvedNCommand>,
 }
 
 /// A user-defined command allows users to inject custom command that can be called
@@ -284,9 +329,11 @@ impl Debug for Function {
 
 impl Default for EGraph {
     fn default() -> Self {
+        let mut parser = Parser::default();
+        let proof_state = EncodingState::new(&mut parser.symbol_gen);
         let mut eg = Self {
             backend: Default::default(),
-            parser: Default::default(),
+            parser,
             names: Default::default(),
             pushed_egraph: Default::default(),
             functions: Default::default(),
@@ -298,7 +345,10 @@ impl Default for EGraph {
             schedulers: Default::default(),
             commands: Default::default(),
             strict_mode: false,
-            warned_about_missing_global_prefix: false,
+            warned_about_global_prefix: false,
+            command_macros: Default::default(),
+            proof_state,
+            desugared_commands: vec![],
         };
 
         add_base_sort(&mut eg, UnitSort, span!()).unwrap();
@@ -314,9 +364,23 @@ impl Default for EGraph {
         eg.type_info.add_presort::<FunctionSort>(span!()).unwrap();
         eg.type_info.add_presort::<MultiSetSort>(span!()).unwrap();
 
-        add_primitive!(&mut eg, "!=" = |a: #, b: #| -?> () {
-            (a != b).then_some(())
-        });
+        // Add != with a validator that computes inequality result
+        let neq_validator = |termdag: &mut TermDag, args: &[TermId]| -> Option<TermId> {
+            if args.len() == 2 && args[0] != args[1] {
+                // Return unit literal for successful inequality
+                Some(termdag.lit(Literal::Unit))
+            } else {
+                None
+            }
+        };
+        add_primitive_with_validator!(
+            &mut eg,
+            "!=" = |a: #, b: #| -?> () {
+                (a != b).then_some(())
+            },
+            neq_validator
+        );
+
         add_primitive!(&mut eg, "value-eq" = |a: #, b: #| -?> () {
             (a == b).then_some(())
         });
@@ -339,7 +403,66 @@ impl Default for EGraph {
 pub struct NotFoundError(String);
 
 impl EGraph {
+    /// Create a new e-graph with the term-encoding pipeline enabled.
+    ///
+    /// In term-encoding mode the e-graph eagerly instruments every constructor
+    /// and function with auxiliary term tables, view tables, and per-sort
+    /// union-finds so that canonical representatives and their justifications are
+    /// materialized explicitly.  This makes it possible to record and emit
+    /// equality proofs while preserving the observable behaviour of supported
+    /// commands.
+    pub fn new_with_term_encoding() -> Self {
+        let mut egraph = EGraph::default();
+        egraph.proof_state.original_typechecking = Some(Box::new(egraph.clone()));
+        egraph
+    }
+
+    /// Create a new e-graph with proof generation enabled.
+    pub fn new_with_proofs() -> Self {
+        let mut egraph = EGraph::new_with_term_encoding();
+        egraph.proof_state.proofs_enabled = true;
+        egraph
+    }
+
+    /// Enable the term-encoding pipeline on an existing `EGraph`.
+    ///
+    /// This method is to support the current CLI implementation with egglog-experimental (https://github.com/egraphs-good/egglog/issues/768)
+    pub(crate) fn with_term_encoding_enabled(mut self) -> Self {
+        self.proof_state.original_typechecking = Some(Box::new(self.clone()));
+        self
+    }
+
+    /// Enable proof generation on this e-graph.
+    /// TODO proofs should be turned on during creation of the e-graph, not afterwards.
+    /// This method is to support the current CLI implementation with egglog-experimental (https://github.com/egraphs-good/egglog/issues/768)
+    pub(crate) fn with_proofs_enabled(mut self) -> Self {
+        self = self.with_term_encoding_enabled();
+        self.proof_state.proofs_enabled = true;
+        self
+    }
+
+    /// Enable testing of getting proofs for all `check` commands.
+    pub fn with_proof_testing(mut self) -> Self {
+        self.proof_state.proof_testing = true;
+        self
+    }
+
     /// Add a user-defined command to the e-graph
+    /// Get the type information for this e-graph
+    pub fn type_info(&mut self) -> &mut TypeInfo {
+        &mut self.type_info
+    }
+
+    /// Get read-only access to the command macro registry
+    pub fn command_macros(&self) -> &CommandMacroRegistry {
+        &self.command_macros
+    }
+
+    /// Get mutable access to the command macro registry
+    pub fn command_macros_mut(&mut self) -> &mut CommandMacroRegistry {
+        &mut self.command_macros
+    }
+
     pub fn add_command(
         &mut self,
         name: String,
@@ -387,17 +510,41 @@ impl EGraph {
         canonical_name: &str,
     ) -> Result<(), TypeError> {
         if self.strict_mode {
-            return Err(TypeError::NonGlobalPrefixed {
+            return Err(TypeError::GlobalMissingPrefix {
                 name: format!("{}{}", GLOBAL_NAME_PREFIX, canonical_name),
                 span: span.clone(),
             });
         }
-        if self.warned_about_missing_global_prefix {
+        if self.warned_about_global_prefix {
             return Ok(());
         }
-        self.warned_about_missing_global_prefix = true;
+        self.warned_about_global_prefix = true;
         log::warn!(
             "{}\nGlobal `{}` should start with `{}`. Enable `--strict-mode` to turn this warning into an error. Suppressing additional warnings of this type.",
+            span,
+            canonical_name,
+            GLOBAL_NAME_PREFIX
+        );
+        Ok(())
+    }
+
+    fn warn_prefixed_non_globals(
+        &mut self,
+        span: &Span,
+        canonical_name: &str,
+    ) -> Result<(), TypeError> {
+        if self.strict_mode {
+            return Err(TypeError::NonGlobalPrefixed {
+                name: canonical_name.to_string(),
+                span: span.clone(),
+            });
+        }
+        if self.warned_about_global_prefix {
+            return Ok(());
+        }
+        self.warned_about_global_prefix = true;
+        log::warn!(
+            "{}\nNon-global `{}` should not start with `{}`. Enable `--strict-mode` to turn this warning into an error. Suppressing additional warnings of this type.",
             span,
             canonical_name,
             GLOBAL_NAME_PREFIX
@@ -463,7 +610,7 @@ impl EGraph {
                     .map(|arg| self.translate_expr_to_mergefn(arg))
                     .collect::<Result<Vec<_>, _>>()?;
                 Ok(egglog_bridge::MergeFn::Primitive(
-                    p.primitive.1,
+                    p.external_id(),
                     translated_args,
                 ))
             }
@@ -489,7 +636,6 @@ impl EGraph {
 
         let can_subsume = match decl.subtype {
             FunctionSubtype::Constructor => true,
-            FunctionSubtype::Relation => true,
             FunctionSubtype::Custom => false,
         };
 
@@ -503,11 +649,9 @@ impl EGraph {
             default: match decl.subtype {
                 FunctionSubtype::Constructor => DefaultVal::FreshId,
                 FunctionSubtype::Custom => DefaultVal::Fail,
-                FunctionSubtype::Relation => DefaultVal::Const(self.backend.base_values().get(())),
             },
             merge: match decl.subtype {
                 FunctionSubtype::Constructor => MergeFn::UnionId,
-                FunctionSubtype::Relation => MergeFn::AssertEq,
                 FunctionSubtype::Custom => match &decl.merge {
                     None => MergeFn::AssertEq,
                     Some(expr) => self.translate_expr_to_mergefn(expr)?,
@@ -538,65 +682,6 @@ impl EGraph {
     /// Extract rows of a table using the default cost model with name sym
     /// The `include_output` parameter controls whether the output column is always extracted
     /// For functions, the output column is usually useful
-    /// For constructors and relations, the output column can be ignored
-    pub fn function_to_dag(
-        &self,
-        sym: &str,
-        n: usize,
-        include_output: bool,
-    ) -> Result<(Vec<Term>, Option<Vec<Term>>, TermDag), Error> {
-        let func = self
-            .functions
-            .get(sym)
-            .ok_or(TypeError::UnboundFunction(sym.to_owned(), span!()))?;
-        let mut rootsorts = func.schema.input.clone();
-        if include_output {
-            rootsorts.push(func.schema.output.clone());
-        }
-        let extractor = Extractor::compute_costs_from_rootsorts(
-            Some(rootsorts),
-            self,
-            TreeAdditiveCostModel::default(),
-        );
-
-        let mut termdag = TermDag::default();
-        let mut inputs: Vec<Term> = Vec::new();
-        let mut output: Option<Vec<Term>> = if include_output {
-            Some(Vec::new())
-        } else {
-            None
-        };
-
-        let extract_row = |row: egglog_bridge::FunctionRow| {
-            if inputs.len() < n {
-                // include subsumed rows
-                let mut children: Vec<Term> = Vec::new();
-                for (value, sort) in row.vals.iter().zip(&func.schema.input) {
-                    let (_, term) = extractor
-                        .extract_best_with_sort(self, &mut termdag, *value, sort.clone())
-                        .unwrap_or_else(|| (0, termdag.var("Unextractable".into())));
-                    children.push(term);
-                }
-                inputs.push(termdag.app(sym.to_owned(), children));
-                if include_output {
-                    let value = row.vals[func.schema.input.len()];
-                    let sort = &func.schema.output;
-                    let (_, term) = extractor
-                        .extract_best_with_sort(self, &mut termdag, value, sort.clone())
-                        .unwrap_or_else(|| (0, termdag.var("Unextractable".into())));
-                    output.as_mut().unwrap().push(term);
-                }
-                true
-            } else {
-                false
-            }
-        };
-
-        self.backend.for_each_while(func.backend_id, extract_row);
-
-        Ok((inputs, output, termdag))
-    }
-
     /// Print up to `n` the tuples in a given function.
     /// Print all tuples if `n` is not provided.
     pub fn print_function(
@@ -637,22 +722,41 @@ impl EGraph {
     }
 
     /// Print the size of a function. If no function name is provided,
-    /// print the size of all functions in "name: len" pairs.
+    /// print the size of all non-hidden functions as an s-expression list of
+    /// `(name size)` pairs, e.g. `((name size) ...)`.
     pub fn print_size(&self, sym: Option<&str>) -> Result<CommandOutput, Error> {
         if let Some(sym) = sym {
+            // In proof mode, we have view tables instead of term tables.
+            // So we do a linear scan to find the view table first, falling back on the normal table otherwise.
+            // (We don't check the proof mode flag so that this still works after desugaring)
             let f = self
                 .functions
-                .get(sym)
+                .values()
+                .find(|f| f.decl.term_constructor.as_deref() == Some(sym))
+                .or_else(|| self.functions.get(sym))
                 .ok_or(TypeError::UnboundFunction(sym.to_owned(), span!()))?;
+            // Skip hidden and let_binding functions
+            if f.decl.internal_hidden || f.decl.internal_let {
+                return Err(TypeError::UnboundFunction(sym.to_owned(), span!()).into());
+            }
             let size = self.backend.table_size(f.backend_id);
             log::info!("Function {} has size {}", sym, size);
             Ok(CommandOutput::PrintFunctionSize(size))
         } else {
-            // Print size of all functions
+            // Print size of all non-hidden, non-let_binding functions
+            // For view tables, use the term_constructor name instead
             let mut lens = self
                 .functions
                 .iter()
-                .map(|(sym, f)| (sym.clone(), self.backend.table_size(f.backend_id)))
+                .filter(|(_, f)| !f.decl.internal_hidden && !f.decl.internal_let)
+                .map(|(sym, f)| {
+                    let name = f
+                        .decl
+                        .term_constructor
+                        .clone()
+                        .unwrap_or_else(|| sym.clone());
+                    (name, self.backend.table_size(f.backend_id))
+                })
                 .collect::<Vec<_>>();
 
             // Function name's alphabetical order
@@ -704,44 +808,8 @@ impl EGraph {
         }
     }
 
-    /// Extract a value to a [`TermDag`] and [`Term`] in the [`TermDag`] using the default cost model.
-    /// See also [`EGraph::extract_value_with_cost_model`] for more control.
-    pub fn extract_value(
-        &self,
-        sort: &ArcSort,
-        value: Value,
-    ) -> Result<(TermDag, Term, DefaultCost), Error> {
-        self.extract_value_with_cost_model(sort, value, TreeAdditiveCostModel::default())
-    }
-
-    /// Extract a value to a [`TermDag`] and [`Term`] in the [`TermDag`].
-    /// Note that the `TermDag` may contain a superset of the nodes in the `Term`.
-    /// See also [`EGraph::extract_value_to_string`] for convenience.
-    pub fn extract_value_with_cost_model<CM: CostModel<DefaultCost> + 'static>(
-        &self,
-        sort: &ArcSort,
-        value: Value,
-        cost_model: CM,
-    ) -> Result<(TermDag, Term, DefaultCost), Error> {
-        let extractor =
-            Extractor::compute_costs_from_rootsorts(Some(vec![sort.clone()]), self, cost_model);
-        let mut termdag = TermDag::default();
-        let (cost, term) = extractor.extract_best(self, &mut termdag, value).unwrap();
-        Ok((termdag, term, cost))
-    }
-
-    /// Extract a value to a string for printing.
-    /// See also [`EGraph::extract_value`] for more control.
-    pub fn extract_value_to_string(
-        &self,
-        sort: &ArcSort,
-        value: Value,
-    ) -> Result<(String, DefaultCost), Error> {
-        let (termdag, term, cost) = self.extract_value(sort, value)?;
-        Ok((termdag.to_string(&term), cost))
-    }
-
     fn run_rules(&mut self, span: &Span, config: &ResolvedRunConfig) -> Result<RunReport, Error> {
+        log::debug!("Running ruleset: {}", config.ruleset);
         let mut report: RunReport = Default::default();
 
         let GenericRunConfig { ruleset, until } = config;
@@ -804,8 +872,13 @@ impl EGraph {
     }
 
     fn add_rule(&mut self, rule: ast::ResolvedRule) -> Result<String, Error> {
-        let core_rule =
-            rule.to_canonicalized_core_rule(&self.type_info, &mut self.parser.symbol_gen)?;
+        // Disable union_to_set optimization in proof or term encoding mode, since
+        // it expects only `union` on constructors (not set).
+        let core_rule = rule.to_canonicalized_core_rule(
+            &self.type_info,
+            &mut self.parser.symbol_gen,
+            self.proof_state.original_typechecking.is_none(),
+        )?;
         let (query, actions) = (&core_rule.body, &core_rule.head);
 
         let rule_id = {
@@ -839,11 +912,14 @@ impl EGraph {
     }
 
     fn eval_actions(&mut self, actions: &ResolvedActions) -> Result<(), Error> {
-        let (actions, _) = actions.to_core_actions(
+        let mut binding = IndexSet::default();
+        let mut ctx = CoreActionContext::new(
             &self.type_info,
-            &mut Default::default(),
+            &mut binding,
             &mut self.parser.symbol_gen,
-        )?;
+            self.proof_state.original_typechecking.is_none(),
+        );
+        let (actions, _) = actions.to_core_actions(&mut ctx)?;
 
         let mut translator = BackendRule::new(
             self.backend.new_rule("eval_actions", false),
@@ -865,7 +941,7 @@ impl EGraph {
     pub fn eval_expr(&mut self, expr: &Expr) -> Result<(ArcSort, Value), Error> {
         let span = expr.span();
         let command = Command::Action(Action::Expr(span.clone(), expr.clone()));
-        let resolved_commands = self.process_command(command)?;
+        let resolved_commands = self.resolve_command(command)?;
         assert_eq!(resolved_commands.len(), 1);
         let resolved_command = resolved_commands.into_iter().next().unwrap();
         let resolved_expr = match resolved_command {
@@ -885,11 +961,11 @@ impl EGraph {
         let result_ref = result.clone();
         let ext_id = self
             .backend
-            .register_external_func(make_external_func(move |_es, vals| {
+            .register_external_func(Box::new(make_external_func(move |_es, vals| {
                 debug_assert!(vals.len() == 1);
                 *result_ref.lock().unwrap() = Some(vals[0]);
                 Some(unit_val)
-            }));
+            })));
 
         let mut translator = BackendRule::new(
             self.backend.new_rule("eval_resolved_expr", false),
@@ -907,13 +983,14 @@ impl EGraph {
             result_var.clone(),
             expr.clone(),
         ));
-        let actions = actions
-            .to_core_actions(
-                &self.type_info,
-                &mut Default::default(),
-                &mut self.parser.symbol_gen,
-            )?
-            .0;
+        let mut binding = IndexSet::default();
+        let mut ctx = CoreActionContext::new(
+            &self.type_info,
+            &mut binding,
+            &mut self.parser.symbol_gen,
+            self.proof_state.original_typechecking.is_none(),
+        );
+        let actions = actions.to_core_actions(&mut ctx)?.0;
         translator.actions(&actions)?;
 
         let arg = translator.entry(&ResolvedAtomTerm::Var(span.clone(), result_var));
@@ -960,18 +1037,21 @@ impl EGraph {
             name: fresh_name.clone(),
             ruleset: fresh_ruleset.clone(),
         };
-        let core_rule =
-            rule.to_canonicalized_core_rule(&self.type_info, &mut self.parser.symbol_gen)?;
+        let core_rule = rule.to_canonicalized_core_rule(
+            &self.type_info,
+            &mut self.parser.symbol_gen,
+            self.proof_state.original_typechecking.is_none(),
+        )?;
         let query = core_rule.body;
 
         let ext_sc = egglog_bridge::SideChannel::default();
         let ext_sc_ref = ext_sc.clone();
         let ext_id = self
             .backend
-            .register_external_func(make_external_func(move |_, _| {
+            .register_external_func(Box::new(make_external_func(move |_, _| {
                 *ext_sc_ref.lock().unwrap() = Some(());
                 Some(Value::new_const(0))
-            }));
+            })));
 
         let mut translator = BackendRule::new(
             self.backend.new_rule("check_facts", false),
@@ -1006,7 +1086,11 @@ impl EGraph {
     fn run_command(&mut self, command: ResolvedNCommand) -> Result<Option<CommandOutput>, Error> {
         match command {
             // Sorts are already declared during typechecking
-            ResolvedNCommand::Sort(_span, name, _presort_and_args) => {
+            ResolvedNCommand::Sort { name, uf, .. } => {
+                // If the sort has a :uf field, store the mapping for extraction
+                if let Some(uf_name) = uf {
+                    self.proof_state.uf_parent.insert(name.clone(), uf_name);
+                }
                 log::info!("Declared sort {}.", name)
             }
             ResolvedNCommand::Function(fdecl) => {
@@ -1079,7 +1163,7 @@ impl EGraph {
                     if let Some((cost, term)) = extractor.extract_best(self, &mut termdag, x) {
                         // dont turn termdag into a string if we have messages disabled for performance reasons
                         if log_enabled!(Level::Info) {
-                            log::info!("extracted with cost {cost}: {}", termdag.to_string(&term));
+                            log::info!("extracted with cost {cost}: {}", termdag.to_string(term));
                         }
                         Ok(Some(CommandOutput::ExtractBest(termdag, cost, term)))
                     } else {
@@ -1092,10 +1176,10 @@ impl EGraph {
                     if n < 0 {
                         panic!("Cannot extract negative number of variants");
                     }
-                    let terms: Vec<Term> = extractor
+                    let terms: Vec<TermId> = extractor
                         .extract_variants(self, &mut termdag, x, n as usize)
                         .iter()
-                        .map(|e| e.1.clone())
+                        .map(|e| e.1)
                         .collect();
                     if log_enabled!(Level::Info) {
                         let expr_str = expr.to_string();
@@ -1186,7 +1270,7 @@ impl EGraph {
                         .extract_best_with_sort(self, &mut termdag, value, expr_type)
                         .unwrap()
                         .1;
-                    writeln!(f, "{}", termdag.to_string(&term))
+                    writeln!(f, "{}", termdag.to_string(term))
                         .map_err(|e| Error::IoError(filename.clone(), e, span.clone()))?;
                 }
 
@@ -1199,6 +1283,20 @@ impl EGraph {
                 let res = command.update(self, &exprs);
                 self.commands.insert(name, command);
                 return res;
+            }
+            ResolvedNCommand::ProveExists(span, resolved_call) => {
+                let mut instrument = ProofInstrumentor { egraph: self };
+                let (proof_store, proof_id) =
+                    instrument
+                        .prove_exists(&resolved_call)
+                        .map_err(|error| Error::ProofError {
+                            span: span.clone(),
+                            error,
+                        })?;
+                return Ok(Some(CommandOutput::ProveExists {
+                    proof_store,
+                    proof_id,
+                }));
             }
         };
 
@@ -1321,58 +1419,156 @@ impl EGraph {
         Ok(())
     }
 
-    fn process_command(&mut self, command: Command) -> Result<Vec<ResolvedNCommand>, Error> {
-        let mut program = self.resolve_command(command)?;
+    /// Desugars, typechecks, and removes globals from a single [`Command`].
+    /// Leverages previous type information in the [`EGraph`] to do so, adding new type information.
+    fn resolve_command(&mut self, command: Command) -> Result<Vec<ResolvedNCommand>, Error> {
+        let desugared = desugar_command(command, &mut self.parser, self.proof_state.proof_testing)?;
 
-        program = remove_globals::remove_globals(program, &mut self.parser.symbol_gen);
-        for command in &program {
-            self.names.check_shadowing(command)?;
+        // Add term encoding when it is enabled
+        if let Some(original_typechecking) = self.proof_state.original_typechecking.as_mut() {
+            // Typecheck using the original egraph
+            // TODO this is ugly- we don't need an entire e-graph just for type information.
+            let typechecked = original_typechecking.typecheck_program(&desugared)?;
+
+            for command in &typechecked {
+                if let Err(reason) =
+                    command_supports_proof_encoding(&command.to_command(), &self.type_info)
+                {
+                    let command_text = format!("{}", command.to_command());
+                    return Err(Error::UnsupportedProofCommand {
+                        command: command_text,
+                        reason,
+                    });
+                }
+            }
+
+            let normalized = proof_form(typechecked, &mut self.parser.symbol_gen);
+
+            // Desugared commands are in proof form but globals are still using let bindings.
+            self.desugared_commands.extend_from_slice(&normalized);
+
+            // Now remove globals for actual execution (but NOT from desugared_commands)
+            let typechecked_no_globals =
+                proof_global_remover::remove_globals(normalized, &mut self.parser.symbol_gen);
+            for command in &typechecked_no_globals {
+                self.names.check_shadowing(command)?;
+            }
+
+            let term_encoding_added =
+                ProofInstrumentor::add_term_encoding(self, typechecked_no_globals);
+            let mut new_typechecked = vec![];
+            for new_cmd in term_encoding_added {
+                let desugared =
+                    desugar_command(new_cmd, &mut self.parser, self.proof_state.proof_testing)?;
+                for cmd in &desugared {
+                    log::debug!("Desugared term encoding: {}", cmd.to_command());
+                }
+
+                // Now typecheck using self, adding term type information.
+                let desugared_typechecked = self.typecheck_program(&desugared)?;
+                // remove globals again, but this time allow primitive globals
+                let desugared_typechecked = remove_globals::remove_globals(
+                    desugared_typechecked,
+                    &mut self.parser.symbol_gen,
+                );
+
+                new_typechecked.extend(desugared_typechecked);
+            }
+            Ok(new_typechecked)
+        } else {
+            let mut typechecked = self.typecheck_program(&desugared)?;
+
+            typechecked = remove_globals::remove_globals(typechecked, &mut self.parser.symbol_gen);
+            for command in &typechecked {
+                self.names.check_shadowing(command)?;
+            }
+            Ok(typechecked)
         }
-
-        Ok(program)
     }
 
-    fn resolve_command(&mut self, command: Command) -> Result<Vec<ResolvedNCommand>, Error> {
-        let program = desugar::desugar_program(vec![command], &mut self.parser, self.seminaive)?;
-        Ok(self.typecheck_program(&program)?)
+    /// Run a program, returning the desugared outputs as well as the CommandOutputs.
+    /// Can optionally not run the commands, just adding type information.
+    fn process_program_internal(
+        &mut self,
+        program: Vec<Command>,
+        run_commands: bool,
+    ) -> Result<(Vec<CommandOutput>, Vec<ResolvedCommand>), Error> {
+        let mut outputs = Vec::new();
+        let mut desugared_commands = Vec::new();
+
+        for before_expanded_command in program {
+            // First do user-provided macro expansion for this command,
+            // which may rely on type information from previous commands.
+            let macro_expanded = self.command_macros.apply(
+                before_expanded_command,
+                &mut self.parser.symbol_gen,
+                &self.type_info,
+            )?;
+
+            for command in macro_expanded {
+                // handle include specially- we keep them as-is for desugaring
+                if let Command::Include(span, file) = &command {
+                    let s = std::fs::read_to_string(file)
+                        .unwrap_or_else(|_| panic!("{span} Failed to read file {file}"));
+                    let included_program = self
+                        .parser
+                        .get_program_from_string(Some(file.clone()), &s)?;
+                    // run program internal on these include commands
+                    let (included_outputs, included_desugared) =
+                        self.process_program_internal(included_program, run_commands)?;
+                    outputs.extend(included_outputs);
+                    desugared_commands.extend(included_desugared);
+                } else {
+                    for processed in self.resolve_command(command)? {
+                        desugared_commands.push(processed.to_command());
+
+                        // even in desugar mode we still run push and pop
+                        if run_commands
+                            || matches!(
+                                processed,
+                                ResolvedNCommand::Push(_) | ResolvedNCommand::Pop(_, _)
+                            )
+                        {
+                            let result = self.run_command(processed)?;
+                            if let Some(output) = result {
+                                outputs.push(output);
+                            }
+                        }
+                    }
+                }
+            }
+        }
+
+        Ok((outputs, desugared_commands))
     }
 
     /// Run a program, represented as an AST.
     /// Return a list of messages.
     pub fn run_program(&mut self, program: Vec<Command>) -> Result<Vec<CommandOutput>, Error> {
-        let mut outputs = Vec::new();
-        for command in program {
-            // Important to process each command individually
-            // because push and pop create new scopes
-            for processed in self.process_command(command)? {
-                let result = self.run_command(processed)?;
-                if let Some(output) = result {
-                    outputs.push(output);
-                }
-            }
-        }
-
+        let (outputs, _desugared_commands) = self.process_program_internal(program, true)?;
         Ok(outputs)
     }
 
-    pub fn resugar_program(
+    /// Desugars an egglog program by parsing and desugaring each command.
+    /// Outputs a new egglog program without any syntactic sugar, either user provided ([`CommandMacro`]) or built-in (e.g., `rewrite` commands).
+    pub fn desugar_program(
         &mut self,
         filename: Option<String>,
         input: &str,
-    ) -> Result<Vec<String>, Error> {
+    ) -> Result<Vec<ResolvedCommand>, Error> {
         let parsed = self.parser.get_program_from_string(filename, input)?;
-        let mut outputs = Vec::new();
-        for command in parsed {
-            for processed in self.resolve_command(command)? {
-                // When re-suggaring, we still need to run scope-related commands (Push/Pop) to make
-                // the program well-scoped.
-                if let GenericNCommand::Push(..) | GenericNCommand::Pop(..) = &processed {
-                    self.run_command(processed.clone())?;
-                }
-                outputs.push(processed.to_command().to_string());
-            }
-        }
-        Ok(outputs)
+        let (_outputs, desugared_commands) = self.process_program_internal(parsed, false)?;
+        Ok(desugared_commands)
+    }
+
+    /// Takes a source program `input` and parses it into a list of [`Command`]s.
+    pub fn parse_program(
+        &mut self,
+        filename: Option<String>,
+        input: &str,
+    ) -> Result<Vec<Command>, Error> {
+        let parsed = self.parser.get_program_from_string(filename, input)?;
+        Ok(parsed)
     }
 
     /// Takes a source program `input`, parses it, runs it, and returns a list of messages.
@@ -1557,7 +1753,7 @@ impl<'a> BackendRule<'a> {
     ) -> (ExternalFunctionId, Vec<QueryEntry>, ColumnTy) {
         let mut qe_args = self.args(args);
 
-        if prim.primitive.0.name() == "unstable-fn" {
+        if prim.name() == "unstable-fn" {
             let core::ResolvedAtomTerm::Literal(_, Literal::String(ref name)) = args[0] else {
                 panic!("expected string literal after `unstable-fn`")
             };
@@ -1574,7 +1770,7 @@ impl<'a> BackendRule<'a> {
                         .into_iter()
                         .any(|f| {
                             let types: Vec<_> = prim
-                                .input
+                                .input()
                                 .iter()
                                 .skip(1)
                                 .chain(f.inputs())
@@ -1585,11 +1781,11 @@ impl<'a> BackendRule<'a> {
                         })
                 });
                 assert!(ps.len() == 1, "options for {name}: {ps:?}");
-                ResolvedFunctionId::Prim(ps.into_iter().next().unwrap().1)
+                ResolvedFunctionId::Prim(ps.into_iter().next().unwrap().id)
             } else {
                 panic!("no callable for {name}");
             };
-            let partial_arcsorts = prim.input.iter().skip(1).cloned().collect();
+            let partial_arcsorts = prim.input().iter().skip(1).cloned().collect();
 
             qe_args[0] = self.rb.egraph().base_value_constant(ResolvedFunction {
                 id,
@@ -1599,9 +1795,9 @@ impl<'a> BackendRule<'a> {
         }
 
         (
-            prim.primitive.1,
+            prim.external_id(),
             qe_args,
-            prim.output.column_ty(self.rb.egraph()),
+            prim.output().column_ty(self.rb.egraph()),
         )
     }
 
@@ -1648,7 +1844,7 @@ impl<'a> BackendRule<'a> {
                             })
                         }
                         ResolvedCall::Primitive(p) => {
-                            let name = p.primitive.0.name().to_owned();
+                            let name = p.name().to_owned();
                             let (p, args, ty) = self.prim(p, args);
                             let span = span.clone();
                             self.rb.call_external_func(p, &args, ty, move || {
@@ -1753,12 +1949,29 @@ pub enum Error {
     SubsumeMergeError(String, Span),
     #[error("extraction failure: {:?}", .0)]
     ExtractError(String),
+    #[error("{span}\n{error}")]
+    ProofError {
+        span: Span,
+        #[source]
+        error: ProveExistsError,
+    },
     #[error("{1}\n{2}\nShadowing is not allowed, but found {0}")]
     Shadowing(String, Span, Span),
     #[error("{1}\nCommand already exists: {0}")]
     CommandAlreadyExists(String, Span),
     #[error("Incorrect format in file '{0}'.")]
     InputFileFormatError(String),
+    #[error(
+        "Command is not supported by the current proof term encoding implementation.\n\
+         Reason: {reason}\n\
+         This typically means the command uses constructs that cannot yet be represented as proof terms.\n\
+         Consider disabling proof term encoding for this run or rewriting the command to avoid unsupported features.\n\
+         Offending command: {command}"
+    )]
+    UnsupportedProofCommand {
+        command: String,
+        reason: ProofEncodingUnsupportedReason,
+    },
 }
 
 #[cfg(test)]

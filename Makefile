@@ -1,4 +1,4 @@
-.PHONY: all test nits docs graphs rm-graphs
+.PHONY: all test nits docs graphs rm-graphs doctest coverage insta-test
 
 RUST_SRC=$(shell find . -type f -wholename '*/src/*.rs' -or -name 'Cargo.toml')
 TESTS=$(shell find tests/ -type f -name '*.egg' -not -name '*repro-*')
@@ -7,10 +7,16 @@ WWW=${PWD}/target/www
 
 all: test nits docs
 
-test:
-	cargo nextest run --release
-	# nextest doesn't run doctests, so do it here
-	cargo test --doc --release
+test: doctest
+	cargo insta test --test-runner nextest --release --workspace  --unreferenced reject
+
+coverage:
+	cargo llvm-cov nextest --release --workspace --lcov --output-path lcov.info
+	# Note: doctests are not included in coverage reports
+
+doctest:
+	cargo test --doc --release --workspace
+
 
 nits:
 	@rustup component add clippy
@@ -19,9 +25,14 @@ nits:
 	cargo fmt --check
 	cargo doc --workspace
 
+fixnits:
+	@rustup component add rustfmt
+	cargo fmt
+	cargo clippy --fix --workspace --allow-dirty
+
 docs:
 	mkdir -p ${WWW}/
-	cargo doc --no-deps --all-features
+	cargo doc --no-deps --all-features --workspace
 	touch target/doc/.nojekyll # prevent github from trying to run jekyll
 	cp www/index.html ${WWW}/index.html
 	cp -r target/doc ${WWW}/docs

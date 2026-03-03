@@ -52,6 +52,15 @@ struct Args {
     /// Treat missing `$` prefixes on globals as errors instead of warnings
     #[clap(long = "strict-mode")]
     strict_mode: bool,
+    /// Run the terms encoding of equality saturation
+    #[clap(long)]
+    term_encoding: bool,
+    /// Run with proof generation enabled
+    #[clap(long)]
+    proofs: bool,
+    /// Enable proof testing, turning all `check` statements into `prove` statements
+    #[clap(long)]
+    proof_testing: bool,
 }
 
 /// Start a command-line interface for the E-graph.
@@ -67,6 +76,20 @@ pub fn cli(mut egraph: EGraph) {
         .init();
 
     let args = Args::parse();
+
+    if args.term_encoding {
+        egraph = egraph.with_term_encoding_enabled();
+    }
+
+    if args.proofs {
+        egraph = egraph.with_proofs_enabled();
+    }
+
+    if args.proof_testing {
+        egraph = egraph.with_proofs_enabled();
+        egraph = egraph.with_proof_testing();
+    }
+
     rayon::ThreadPoolBuilder::new()
         .num_threads(args.threads)
         .build_global()
@@ -238,9 +261,11 @@ where
     W: Write,
 {
     if mode == RunMode::ShowDesugaredEgglog {
-        return Ok(match egraph.resugar_program(filename, command) {
+        return Ok(match egraph.desugar_program(filename, command) {
             Ok(desugared) => {
-                for line in desugared {
+                let sanitized = sanitize_internal_names(&desugared);
+
+                for line in sanitized {
                     writeln!(output, "{line}")?;
                 }
                 None
@@ -286,7 +311,7 @@ impl Display for RunMode {
     fn fmt(&self, f: &mut Formatter<'_>) -> std::fmt::Result {
         match self {
             RunMode::Normal => write!(f, "normal"),
-            RunMode::ShowDesugaredEgglog => write!(f, "resugar"),
+            RunMode::ShowDesugaredEgglog => write!(f, "desugar"),
             RunMode::Interactive => write!(f, "interactive"),
             RunMode::NoMessages => write!(f, "no-messages"),
         }
@@ -299,7 +324,7 @@ impl FromStr for RunMode {
     fn from_str(s: &str) -> Result<Self, Self::Err> {
         match s {
             "normal" => Ok(RunMode::Normal),
-            "resugar" => Ok(RunMode::ShowDesugaredEgglog),
+            "desugar" => Ok(RunMode::ShowDesugaredEgglog),
             "interactive" => Ok(RunMode::Interactive),
             "no-messages" => Ok(RunMode::NoMessages),
             _ => Err(format!("Unknown run mode: {s}")),

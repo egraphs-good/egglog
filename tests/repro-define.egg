@@ -1,9 +1,9 @@
 (datatype Nat
   (S Nat))
 (constructor ZeroConst () Nat)
-(let Zero (ZeroConst))
+(let $Zero (ZeroConst))
 
-(let two (S (S Zero)))
+(let $two (S (S $Zero)))
 
-(union two (S (S (S Zero))))
-(check (= two (S (S (S Zero)))))
+(union $two (S (S (S $Zero))))
+(check (= $two (S (S (S $Zero)))))

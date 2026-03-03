@@ -1,0 +1,6 @@
+---
+source: tests/files.rs
+expression: err_msg
+---
+In 5:16-18 of looking_up_nonconstructor_in_action_case_set.egg: (f)
+Value lookup of non-constructor function function in rule is disallowed.

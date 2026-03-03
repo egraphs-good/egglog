@@ -117,8 +117,8 @@ pub trait Sort: Any + Send + Sync + Debug {
         container_values: &ContainerValues,
         value: Value,
         termdag: &mut TermDag,
-        element_terms: Vec<Term>,
-    ) -> Term {
+        element_terms: Vec<TermId>,
+    ) -> TermId {
         let _container_values = container_values;
         let _value = value;
         let _termdag = termdag;
@@ -132,7 +132,7 @@ pub trait Sort: Any + Send + Sync + Debug {
         base_values: &BaseValues,
         value: Value,
         termdag: &mut TermDag,
-    ) -> Term {
+    ) -> TermId {
         let _base_values = base_values;
         let _value = value;
         let _termdag = termdag;

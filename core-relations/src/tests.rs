@@ -37,18 +37,18 @@ fn basic_query() {
     } = basic_math_egraph();
 
     db.base_values_mut().register_type::<i64>();
-    let add_int = db.add_external_function(make_external_func(|exec_state, args| {
+    let add_int = db.add_external_function(Box::new(make_external_func(|exec_state, args| {
         let [x, y] = args else { panic!() };
         let x: i64 = exec_state.base_values().unwrap(*x);
         let y: i64 = exec_state.base_values().unwrap(*y);
         let z: i64 = x + y;
         Some(exec_state.base_values().get(z))
-    }));
+    })));
 
     // Add the numbers 1 through 10 to the num table at timestamp 0.
     let mut ids = Vec::new();
     {
-        let mut num_buf = db.get_table(num).new_buffer();
+        let mut num_buf = db.new_buffer(num);
         for i in 0..10 {
             let id = db.inc_counter(id_counter);
             let i = db.base_values().get::<i64>(i as i64);
@@ -61,7 +61,7 @@ fn basic_query() {
 
     let mut add_ids = Vec::new();
     {
-        let mut add_buf = db.get_table(add).new_buffer();
+        let mut add_buf = db.new_buffer(add);
         for i in ids.chunks(2) {
             let &[x, y] = i else { unreachable!() };
             // Insert (add x y) into the database with a fresh id at timestamp 0
@@ -155,7 +155,7 @@ fn line_graph_1_test(strat: PlanStrategy) {
     let edges = db.add_table(edge_impl, iter::empty(), iter::empty());
     let nodes = Vec::from_iter((0..10).map(Value::new));
     {
-        let mut edge_buf = db.get_table(edges).new_buffer();
+        let mut edge_buf = db.new_buffer(edges);
         for edge in nodes.windows(2) {
             edge_buf.stage_insert(edge);
         }
@@ -227,7 +227,7 @@ fn line_graph_2_test(strat: PlanStrategy) {
     let edges = db.add_table(edge_impl, iter::empty(), iter::empty());
     let nodes = Vec::from_iter((0..10).map(Value::new));
     {
-        let mut edge_buf = db.get_table_mut(edges).new_buffer();
+        let mut edge_buf = db.new_buffer(edges);
         for edge in nodes.windows(2) {
             edge_buf.stage_insert(edge);
         }
@@ -277,6 +277,98 @@ fn line_graph_2_test(strat: PlanStrategy) {
     assert_eq!(expected, got);
 }
 
+fn intersection_test(strat: PlanStrategy) {
+    let mut db = Database::default();
+    let rst = (0..3).map(|_| {
+        SortedWritesTable::new(
+            2,
+            2,
+            None,
+            vec![],
+            Box::new(move |_, a, b, _| {
+                if a != b {
+                    panic!("merge not supported")
+                } else {
+                    false
+                }
+            }),
+        )
+    });
+    let u = SortedWritesTable::new(
+        1,
+        1,
+        None,
+        vec![],
+        Box::new(move |_, a, b, _| {
+            if a != b {
+                panic!("merge not supported")
+            } else {
+                false
+            }
+        }),
+    );
+    let rst_ids = rst
+        .map(|r| db.add_table(r, iter::empty(), iter::empty()))
+        .collect::<Vec<TableId>>();
+    let u_id = db.add_table(u, iter::empty(), iter::empty());
+
+    for rel in rst_ids.iter() {
+        let mut rel_buf = db.new_buffer(*rel);
+        for x in 0..10 {
+            rel_buf.stage_insert(&[Value::new(x), Value::new(x)]);
+        }
+    }
+    db.merge_all();
+
+    let mut rsb = RuleSetBuilder::new(&mut db);
+    let mut query = rsb.new_rule();
+    query.set_plan_strategy(strat);
+    // R(x), S(x), T(x), x > 5 => U(X)
+    let x = query.new_var_named("x");
+    for rel in rst_ids.iter() {
+        query
+            .add_atom(
+                *rel,
+                &[x.into(), x.into()],
+                &[Constraint::GtConst {
+                    col: ColumnId::new(0),
+                    val: Value::new(5),
+                }],
+            )
+            .unwrap();
+    }
+    let mut rule = query.build();
+    rule.insert(u_id, &[x.into()]).unwrap();
+    rule.build();
+    let rule_set = rsb.build();
+
+    assert!(db.run_rule_set(&rule_set, ReportLevel::TimeOnly).changed);
+
+    let expected = Vec::from_iter((6..10).map(|x| vec![Value::new(x)]));
+
+    let u_table = db.get_table(u_id);
+    let all = u_table.all();
+    let vals = u_table.scan(all.as_ref());
+    let mut got = Vec::from_iter(vals.iter().map(|(_, row)| row.to_vec()));
+    got.sort();
+    assert_eq!(expected, got);
+}
+
+#[test]
+fn intersection_test_fj_puresize() {
+    intersection_test(PlanStrategy::PureSize);
+}
+
+#[test]
+fn intersection_test_fj_mincover() {
+    intersection_test(PlanStrategy::MinCover);
+}
+
+#[test]
+fn intersection_test_gj() {
+    intersection_test(PlanStrategy::Gj);
+}
+
 #[test]
 fn minimal_ac() {
     let MathEgraph {
@@ -287,14 +379,14 @@ fn minimal_ac() {
     } = basic_math_egraph();
     {
         {
-            let mut add_buf = db.get_table(add).new_buffer();
+            let mut add_buf = db.new_buffer(add);
             add_buf.stage_insert(&[v(0), v(0), v(1), v(0)]);
             add_buf.stage_insert(&[v(0), v(1), v(2), v(0)]);
             add_buf.stage_insert(&[v(0), v(2), v(3), v(0)]);
         }
         db.merge_all();
         {
-            let mut add_buf = db.get_table(add).new_buffer();
+            let mut add_buf = db.new_buffer(add);
             add_buf.stage_insert(&[v(1), v(0), v(2), v(1)]);
             add_buf.stage_insert(&[v(1), v(1), v(3), v(1)]);
         }
@@ -423,8 +515,7 @@ fn ac_test(strat: PlanStrategy) {
         let id = db.inc_counter(id_counter);
         let i = db.base_values().get::<i64>(i as i64);
         ids.push(i);
-        db.get_table(num)
-            .new_buffer()
+        db.new_buffer(num)
             .stage_insert(&[i, Value::from_usize(id), Value::new(0)]);
     }
 
@@ -438,8 +529,7 @@ fn ac_test(strat: PlanStrategy) {
         let mut prev = ids[0];
         for num in &ids[1..] {
             let id = Value::from_usize(db.inc_counter(id_counter));
-            db.get_table(add)
-                .new_buffer()
+            db.new_buffer(add)
                 .stage_insert(&[*num, prev, id, Value::new(0)]);
             prev = id;
             add_ids.push(id);
@@ -449,8 +539,7 @@ fn ac_test(strat: PlanStrategy) {
         prev = *ids.last().unwrap();
         for num in ids[0..(N - 1)].iter().rev() {
             let id = Value::from_usize(db.inc_counter(id_counter));
-            db.get_table(add)
-                .new_buffer()
+            db.new_buffer(add)
                 .stage_insert(&[prev, *num, id, Value::new(0)]);
             prev = id;
             add_ids.push(id);
@@ -938,12 +1027,12 @@ fn lookup_with_fallback_partial_success() {
     };
 
     {
-        let mut buf = db.get_table(f).new_buffer();
+        let mut buf = db.new_buffer(f);
         buf.stage_insert(&[v(1), v(0)]);
         buf.stage_insert(&[v(2), v(0)]);
     }
     {
-        let mut buf = db.get_table(g).new_buffer();
+        let mut buf = db.new_buffer(g);
         buf.stage_insert(&[v(1), v(0)]);
         buf.stage_insert(&[v(3), v(0)]);
         buf.stage_insert(&[v(4), v(0)]);
@@ -954,20 +1043,20 @@ fn lookup_with_fallback_partial_success() {
     let log = Arc::new(Mutex::new(Vec::new()));
     let log_vals = {
         let inner = log.clone();
-        db.add_external_function(make_external_func(move |_, args| {
+        db.add_external_function(Box::new(make_external_func(move |_, args| {
             let [x] = args else { panic!() };
             inner.lock().unwrap().push(*x);
             Some(*x)
-        }))
+        })))
     };
-    let assert_even = db.add_external_function(make_external_func(|_, args| {
+    let assert_even = db.add_external_function(Box::new(make_external_func(|_, args| {
         let [x] = args else { panic!() };
         if x.rep().is_multiple_of(2) {
             Some(*x)
         } else {
             None
         }
-    }));
+    })));
 
     let mut rsb = RuleSetBuilder::new(&mut db);
     let mut query = rsb.new_rule();
@@ -1037,26 +1126,26 @@ fn call_external_with_fallback() {
     };
 
     {
-        let mut buf = db.get_table(f).new_buffer();
+        let mut buf = db.new_buffer(f);
         buf.stage_insert(&[v(1), v(0)]);
         buf.stage_insert(&[v(2), v(0)]);
         buf.stage_insert(&[v(3), v(0)]);
         buf.stage_insert(&[v(5), v(0)]);
     }
     db.merge_all();
-    let assert_even = db.add_external_function(make_external_func(|_, args| {
+    let assert_even = db.add_external_function(Box::new(make_external_func(|_, args| {
         let [x] = args else { panic!() };
         if x.rep().is_multiple_of(2) {
             Some(*x)
         } else {
             None
         }
-    }));
+    })));
 
-    let inc = db.add_external_function(make_external_func(|_, args| {
+    let inc = db.add_external_function(Box::new(make_external_func(|_, args| {
         let [x] = args else { panic!() };
         if x.rep() == 5 { None } else { Some(x.inc()) }
-    }));
+    })));
 
     let mut rsb = RuleSetBuilder::new(&mut db);
     let mut query = rsb.new_rule();
@@ -1081,4 +1170,86 @@ fn call_external_with_fallback() {
         .collect::<Vec<_>>();
     h_contents.sort();
     assert_eq!(h_contents, vec![vec![v(2), v(0)], vec![v(4), v(0)],]);
+}
+
+#[test]
+fn early_stop() {
+    let mut db = Database::default();
+
+    // Create a table with 1M rows.
+    let data_table = db.add_table(
+        SortedWritesTable::new(1, 2, None, vec![], Box::new(|_, _, _, _| false)),
+        iter::empty(),
+        iter::empty(),
+    );
+
+    {
+        // Populate with 0.5M rows.
+        let mut buf = db.new_buffer(data_table);
+        for i in 0..500_000 {
+            buf.stage_insert(&[Value::from_usize(i), Value::from_usize(i)]);
+        }
+    }
+    db.merge_all();
+
+    // External function that triggers early stop after 1000 calls.
+    let call_count = Arc::new(Mutex::new(0usize));
+    let call_count_clone = call_count.clone();
+    let stop_trigger =
+        db.add_external_function(Box::new(make_external_func(move |exec_state, args| {
+            let mut count = call_count_clone.lock().unwrap();
+            *count += 1;
+
+            if *count >= 1000 {
+                exec_state.trigger_early_stop();
+            }
+
+            let [x] = args else { panic!() };
+            Some(*x)
+        })));
+
+    // Build a rule that scans the table and calls the external function.
+    let mut rsb = RuleSetBuilder::new(&mut db);
+    let mut query = rsb.new_rule();
+    let x = query.new_var_named("x");
+    let y = query.new_var_named("y");
+    query
+        .add_atom(data_table, &[x.into(), y.into()], &[])
+        .unwrap();
+    let mut rb = query.build();
+    let _ = rb.call_external(stop_trigger, &[x.into()]).unwrap();
+    rb.build_with_description("early_stop_test");
+    let rs = rsb.build();
+
+    let report = db.run_rule_set(&rs, ReportLevel::TimeOnly);
+
+    let matches = report.num_matches("early_stop_test");
+
+    // NB: 100K is very loose: this test doesn't appear to flake even with 10K as the upper limit.
+    // This is mostly just there to avoid truly unlikely race conditions where there are a huge
+    // number of matches in flight at once.
+    assert!(
+        matches < 100_000,
+        "Expected much fewer than 10k matches due to early stopping, got {}, (call_count={})",
+        matches,
+        call_count.lock().unwrap(),
+    );
+    assert!(
+        matches >= 1000,
+        "Expected at least 1000 matches before stopping, got {} (call_count={})",
+        matches,
+        call_count.lock().unwrap(),
+    );
+
+    let final_count = *call_count.lock().unwrap();
+    assert!(
+        final_count >= 1000,
+        "External function called {} times, should be at least 1000",
+        final_count
+    );
+    assert!(
+        final_count < 100_000,
+        "External function called {} times, should be much less than 10k",
+        final_count
+    );
 }

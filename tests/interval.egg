@@ -16,15 +16,15 @@
           (min (min (* loa lob) (* loa hib))
                (min (* hia lob) (* hia hib))))))
 
-(let x (Var "x"))
-(let e (Mul x x))
+(let $x (Var "x"))
+(let $e (Mul $x $x))
 
-(set (lo x) -10)
-(set (hi x) 10)
+(set (lo $x) -10)
+(set (hi $x) 10)
 
 (run 1)
 
-(check (= (lo e) -100))
+(check (= (lo $e) -100))
 
 (rule ((= mul (Mul a a))
        (= loa (lo a))
@@ -32,7 +32,7 @@
       ((set (lo mul) (* loa loa))))
 
 (run 1)
-(check (= (lo e) 100))
+(check (= (lo $e) 100))
 
 ;; testing extraction of rationals
-(extract (lo e))
+(extract (lo $e))

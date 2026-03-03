@@ -4,7 +4,7 @@
   (TArr Type Type) ; t1 -> t2
 )
 (constructor TUnitConst () Type)
-(let TUnit (TUnitConst))
+(let $TUnit (TUnitConst))
 
 (datatype Expr 
   (Lam String Type Expr) ; lam x : t . e
@@ -12,19 +12,19 @@
   (Var String) 
 )
 (constructor MyUnitConst () Expr)
-(let MyUnit (MyUnitConst))
+(let $MyUnit (MyUnitConst))
 
 (datatype Ctx 
   (Cons String Type Ctx)
 )
 (constructor NilConst () Ctx)
-(let Nil (NilConst))
+(let $Nil (NilConst))
 
 ; ctx |- expr : type
 (constructor typeof (Ctx Expr) Type)
 
 ; ctx |- () : unit
-(rewrite (typeof ctx MyUnit) TUnit)
+(rewrite (typeof ctx $MyUnit) $TUnit)
 
 ; ctx; x: t |- x : t
 (rewrite (typeof (Cons x t ctx) (Var x)) t)
@@ -68,35 +68,35 @@
 ; ----
 
 ; lam x : unit, f : unit -> unit . f x
-(let e 
-  (Lam "x" TUnit 
-       (Lam "f" (TArr TUnit TUnit)
+(let $e 
+  (Lam "x" $TUnit 
+       (Lam "f" (TArr $TUnit $TUnit)
             (App (Var "f") (Var "x")))))
 
 ; lam x : unit . x
-(let id (Lam "x" TUnit (Var "x")))
-(let t-id (typeof Nil id))
+(let $id (Lam "x" $TUnit (Var "x")))
+(let $t-id (typeof $Nil $id))
 
-; (e () id) = ()
-(let app-unit-id (App (App e MyUnit) id))
-(let t-app (typeof Nil app-unit-id))
+; ($e () $id) = ()
+(let $app-unit-id (App (App $e $MyUnit) $id))
+(let $t-app (typeof $Nil $app-unit-id))
 
-(let free (Lam "x" TUnit (Var "y")))
-(let t-free-ill (typeof Nil free))
-(let t-free-1 (typeof (Cons "y" TUnit Nil) free))
-(let t-free-2 (typeof (Cons "y" (TArr (TArr TUnit TUnit) TUnit) Nil) free))
+(let $free (Lam "x" $TUnit (Var "y")))
+(let $t-free-ill (typeof $Nil $free))
+(let $t-free-1 (typeof (Cons "y" $TUnit $Nil) $free))
+(let $t-free-2 (typeof (Cons "y" (TArr (TArr $TUnit $TUnit) $TUnit) $Nil) $free))
 
 (run 15)
 
-(extract t-id)
-(check (= t-id (TArr TUnit TUnit)))
+(extract $t-id)
+(check (= $t-id (TArr $TUnit $TUnit)))
 
-(extract t-app)
-(check (= t-app TUnit))
+(extract $t-app)
+(check (= $t-app $TUnit))
 
-(extract t-free-1)
-(check (= t-free-1 (TArr TUnit TUnit)))
-(extract t-free-2)
-(check (= t-free-2 (TArr TUnit (TArr (TArr TUnit TUnit) TUnit))))
+(extract $t-free-1)
+(check (= $t-free-1 (TArr $TUnit $TUnit)))
+(extract $t-free-2)
+(check (= $t-free-2 (TArr $TUnit (TArr (TArr $TUnit $TUnit) $TUnit))))
 ; this will err
-; (extract t-free-ill)
+; (extract $t-free-ill)
