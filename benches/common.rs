@@ -6,8 +6,12 @@ static GLOBAL: mimalloc::MiMalloc = mimalloc::MiMalloc;
 
 static CONFIGURE_RAYON: Once = Once::new();
 
-pub fn run_example(filename: &str, program: &str) {
-    let mut egraph = EGraph::default();
+pub fn run_example(filename: &str, program: &str, proof_testing: bool) {
+    let mut egraph = if proof_testing {
+        EGraph::new_with_proofs().with_proof_testing()
+    } else {
+        EGraph::default()
+    };
     egraph
         .parse_and_run_program(Some(filename.to_owned()), program)
         .unwrap();
@@ -51,10 +55,45 @@ pub fn bench_cases(glob: &str) -> Vec<BenchCase> {
         .collect()
 }
 
+const PROOF_UNSUPPORTED_FILES: &[&str] = &[
+    "math-microbenchmark.egg",
+    "subsume.egg",
+    "subsume-relation.egg",
+];
+
+pub fn bench_cases_proof_testing(glob: &str) -> Vec<BenchCase> {
+    configure_rayon_once();
+
+    glob::glob(glob)
+        .unwrap()
+        .filter_map(Result::ok)
+        .filter(|path| !path.to_string_lossy().contains("fail-typecheck"))
+        .filter(|path| egglog::file_supports_proofs(path))
+        .filter(|path| !PROOF_UNSUPPORTED_FILES.iter().any(|f| path.ends_with(f)))
+        .map(|path| {
+            let filename = path.to_string_lossy().to_string();
+            let program = std::fs::read_to_string(&filename).unwrap();
+            let name = path.file_stem().unwrap().to_string_lossy().to_string();
+
+            BenchCase {
+                name,
+                filename,
+                program,
+            }
+        })
+        .collect()
+}
+
 pub fn bench_case(case: &BenchCase) {
     configure_rayon_once();
 
-    run_example(&case.filename, &case.program);
+    run_example(&case.filename, &case.program, false);
+}
+
+pub fn bench_case_proof_testing(case: &BenchCase) {
+    configure_rayon_once();
+
+    run_example(&case.filename, &case.program, true);
 }
 
 fn configure_rayon_once() {
