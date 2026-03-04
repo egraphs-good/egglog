@@ -386,7 +386,13 @@ impl Default for EGraph {
             "bool-!=" = |a: #, b: #| -> bool {
                 (a != b)
             },
-            neq_validator
+            |termdag: &mut TermDag, args: &[TermId]| -> Option<TermId> {
+                if args.len() == 2 {
+                    Some(termdag.lit(Literal::Bool(args[0] != args[1])))
+                } else {
+                    None
+                }
+            }
         );
 
         add_primitive!(&mut eg, "value-eq" = |a: #, b: #| -?> () {
