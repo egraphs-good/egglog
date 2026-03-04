@@ -1,0 +1,25 @@
+;; Two sorts, like the original
+(sort Exp)
+(sort Stmt)
+(constructor UF_Exp (Exp Exp) Exp)
+(constructor UF_Stmt (Stmt Stmt) Stmt)
+(constructor View (Exp Stmt) Stmt)
+(constructor E () Exp)
+(constructor S1 () Stmt)
+(constructor S2 () Stmt)
+
+(let $e (E))
+(let $s1 (S1))
+(let $s2 (S2))
+
+;; UF_Exp: $e -> $e (same, bool-!= = false)
+;; UF_Stmt: $s1 -> $s2 (diff, bool-!= = true)
+(UF_Exp $e $e)
+(UF_Stmt $s1 $s2)
+(View $e $s1)
+
+;; Should fire: or(false, true) = true
+(check (View c1 c2)
+       (UF_Exp c1 c1_leader)
+       (UF_Stmt c2 c2_leader)
+       (filter (or (bool-!= c1 c1_leader) (bool-!= c2 c2_leader))))
