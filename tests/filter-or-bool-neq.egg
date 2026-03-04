@@ -27,6 +27,19 @@
 (check (filter (or (bool-!= 1 1) (bool-!= 2 3))))
 (check (filter (or (bool-!= 1 2) (bool-!= 3 3))))
 
+(check (filter (or (bool-!= 1 1) (bool-!= 2 1))))
+
+(datatype Math
+  (Add Math Math)
+  (Mul Math Math)
+  (Val i64))
+
+(Val 1)
+(Val 2)
+
+;; with Math eclass it still works
+(check (filter (or (bool-!= (Val 1) (Val 2)) (bool-!= (Val 1) (Val 1)))))
+
 ; filter with or of all-equal should fail
 (fail (check (filter (or (bool-!= 1 1)))))
 (fail (check (filter (or (bool-!= 1 1) (bool-!= 2 2)))))
