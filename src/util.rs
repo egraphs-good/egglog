@@ -85,7 +85,7 @@ impl FreshGen<ResolvedCall, ResolvedVar> for SymbolGen {
     fn fresh(&mut self, name_hint: &ResolvedCall) -> ResolvedVar {
         let entry = self
             .hint_to_count
-            .entry(format!("{name_hint:?}"))
+            .entry(format!("{name_hint}"))
             .or_insert(0);
         let count = *entry;
         *entry += 1;
