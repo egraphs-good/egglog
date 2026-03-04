@@ -20,17 +20,16 @@ fn test_desugar_includes() {
     let input = format!(
         r#"
         (datatype Main (Test2))
-        (include "{}")
+        (include "{include_path}")
         (let y (Test))
-    "#,
-        include_path
+    "#
     );
 
     let desugared = egraph
         .desugar_program(None, &input)
         .unwrap()
         .iter()
-        .map(|cmd| format!("{}", cmd))
+        .map(|cmd| format!("{cmd}"))
         .collect::<Vec<_>>();
 
     let snapshot = desugared.join("\n");

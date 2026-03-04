@@ -6,7 +6,6 @@ use syn::{Expr, Ident, LitStr, Token, braced, bracketed, parenthesized, parse_ma
 
 /// This macro lets the user declare custom egglog primitives with explicit validators.
 /// It combines primitive registration with a custom validator function.
-/// See [`PrimitiveValidator`] for details on the validator function signature.
 ///
 /// # Example
 /// ```rust,ignore

@@ -204,8 +204,7 @@ impl RawProofStore {
         let term = self.term_dag.get(term_id).clone();
         let Term::App(head, args) = term else {
             panic!(
-                "Expected proof term to be an app, got {:?}. Proof parsing assumes valid proofs.",
-                term
+                "Expected proof term to be an app, got {term:?}. Proof parsing assumes valid proofs."
             );
         };
 
@@ -240,10 +239,7 @@ impl RawProofStore {
             let child_proof = self.parse_proof(args[2]);
             RawProof::Congr(proof, child_index, child_proof)
         } else {
-            panic!(
-                "Unrecognized proof term head: {}. Proof parsing assumes valid proofs.",
-                head
-            );
+            panic!("Unrecognized proof term head: {head}. Proof parsing assumes valid proofs.");
         };
 
         self.add_proof(proof)
@@ -266,15 +262,13 @@ impl RawProofStore {
                     list
                 } else {
                     panic!(
-                        "expected proof list constructor, got {}. Proof parsing assumes valid proofs.",
-                        head
+                        "expected proof list constructor, got {head}. Proof parsing assumes valid proofs."
                     );
                 }
             }
-            other => panic!(
-                "expected proof list, got {:?}. Proof parsing assumes valid proofs.",
-                other
-            ),
+            other => {
+                panic!("expected proof list, got {other:?}. Proof parsing assumes valid proofs.")
+            }
         }
     }
 
@@ -282,8 +276,7 @@ impl RawProofStore {
         match self.term_dag.get(term_id) {
             Term::Lit(Literal::String(s)) => s.clone(),
             other => panic!(
-                "expected string literal in proof term, got {:?}. Proof parsing expects valid proofs.",
-                other
+                "expected string literal in proof term, got {other:?}. Proof parsing expects valid proofs."
             ),
         }
     }
@@ -291,10 +284,9 @@ impl RawProofStore {
     fn parse_index(&self, term_id: TermId) -> usize {
         match self.term_dag.get(term_id) {
             Term::Lit(Literal::Int(i)) if *i >= 0 => *i as usize,
-            other => panic!(
-                "expected non-negative integer literal for congruence index, got {:?}",
-                other
-            ),
+            other => {
+                panic!("expected non-negative integer literal for congruence index, got {other:?}")
+            }
         }
     }
 
@@ -471,7 +463,7 @@ impl ProofStore {
             ResolvedNCommand::NormRule { rule } if rule.name == rule_name => Some(rule),
             _ => None,
         }) else {
-            panic!("could not find rule with name {}", rule_name);
+            panic!("could not find rule with name {rule_name}");
         };
 
         if rule.body.len() != premise_proofs.len() {

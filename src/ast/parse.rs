@@ -1190,7 +1190,7 @@ mod tests {
     fn test_parser_display_roundtrip() {
         let s = r#"(f (g a 3) 4.0 (H "hello"))"#;
         let e = Parser::default().get_expr_from_string(None, s).unwrap();
-        assert_eq!(format!("{}", e), s);
+        assert_eq!(format!("{e}"), s);
     }
 
     #[test]
@@ -1216,6 +1216,6 @@ mod tests {
         let s = r#"(f (qqqq a 3) 4.0 (H "hello"))"#;
         let t = r#"(f (xxxx a 3) 4.0 (H "hello"))"#;
         let e = parser.get_expr_from_string(None, s).unwrap();
-        assert_eq!(format!("{}", e), t);
+        assert_eq!(format!("{e}"), t);
     }
 }

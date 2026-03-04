@@ -912,7 +912,7 @@ mod test {
             })) => {
                 assert_eq!(e.span().string(), "(f a b c)");
             }
-            _ => panic!("Expected arity mismatch, got: {:?}", res),
+            _ => panic!("Expected arity mismatch, got: {res:?}"),
         }
     }
 }

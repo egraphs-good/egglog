@@ -632,7 +632,7 @@ impl<'a> ProofInstrumentor<'a> {
             ResolvedFact::Eq(_span, left_expr, right_expr) => {
                 let (v1, p1) = self.instrument_fact_expr(left_expr, res);
                 let (v2, p2) = self.instrument_fact_expr(right_expr, res);
-                res.push(format!("(= {} {})", v1, v2));
+                res.push(format!("(= {v1} {v2})"));
                 let sym = &self.proof_names().eq_sym_constructor;
                 let trans = &self.proof_names().eq_trans_constructor;
 
@@ -669,7 +669,7 @@ impl<'a> ProofInstrumentor<'a> {
                     "".to_string()
                 };
 
-                (format!("{}", lit), proof_code)
+                (format!("{lit}"), proof_code)
             }
             ResolvedExpr::Var(_, resolved_var) => {
                 let var = &resolved_var.name;
@@ -845,7 +845,7 @@ impl<'a> ProofInstrumentor<'a> {
                 res.push(unioned);
             }
             ResolvedAction::Panic(..) => {
-                res.push(format!("{}", action));
+                res.push(format!("{action}"));
             }
             ResolvedAction::Expr(_span, generic_expr) => {
                 self.instrument_action_expr(generic_expr, &mut res, justification);
@@ -994,7 +994,7 @@ impl<'a> ProofInstrumentor<'a> {
         proof: &Justification,
     ) -> String {
         match expr {
-            ResolvedExpr::Lit(_, lit) => format!("{}", lit),
+            ResolvedExpr::Lit(_, lit) => format!("{lit}"),
             ResolvedExpr::Var(_, resolved_var) => resolved_var.name.clone(),
             ResolvedExpr::Call(_, resolved_call, args) => {
                 let args = args
@@ -1144,7 +1144,7 @@ impl<'a> ProofInstrumentor<'a> {
     }
 
     fn term_encode_command(&mut self, command: &ResolvedNCommand, res: &mut Vec<Command>) {
-        log::debug!("Term encoding for {}", command);
+        log::debug!("Term encoding for {command}");
         match &command {
             ResolvedNCommand::Sort {
                 span,

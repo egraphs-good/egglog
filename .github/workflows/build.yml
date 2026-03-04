@@ -67,7 +67,7 @@ jobs:
       - uses: CodSpeedHQ/action@v4
         with:
           run: cargo codspeed run ${{ matrix.benchmark }}
-          mode: ${{ matrix.runner == 'ubuntu-latest' && 'instrumentation' || 'walltime' }}
+          mode: ${{ matrix.runner == 'ubuntu-latest' && 'simulation' || 'walltime' }}
   wasm:
     runs-on: ubuntu-latest
     steps:

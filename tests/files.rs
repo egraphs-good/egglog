@@ -131,7 +131,7 @@ impl Run {
         let mut egraph = self.egraph();
 
         // Append print-size to every test file to ensure it works
-        let program = format!("{}\n(print-size)", program);
+        let program = format!("{program}\n(print-size)");
 
         match egraph.parse_and_run_program(filename, &program) {
             Ok(msgs) => {
@@ -145,7 +145,7 @@ impl Run {
                     );
                 } else {
                     for msg in &msgs {
-                        log::info!("  {}", msg);
+                        log::info!("  {msg}");
                     }
                     // Test graphviz dot generation
                     let mut serialized = egraph
@@ -166,7 +166,7 @@ impl Run {
             }
             Err(err) => {
                 if !self.should_fail() {
-                    panic!("{}: {err}", message)
+                    panic!("{message}: {err}")
                 }
                 Err(err.to_string())
             }
@@ -372,7 +372,7 @@ fn main() {
     for test in &tests {
         let name = test.name().to_string();
         if !names.insert(name.clone()) {
-            panic!("Duplicate test name: {}", name);
+            panic!("Duplicate test name: {name}");
         }
     }
     libtest_mimic::run(&args, tests).exit();

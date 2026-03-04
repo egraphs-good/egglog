@@ -28,6 +28,7 @@ list.egg
 looking_up_global.egg
 looking_up_nonconstructor_in_rewrite_good.egg
 map.egg
+math.egg
 merge_read.egg
 multiset.egg
 prims.egg

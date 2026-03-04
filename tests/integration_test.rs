@@ -931,7 +931,7 @@ fn test_serialize_message_max_calls_per_function() {
 }
 
 #[test]
-fn math_term_encoding_roundtrip() {
+fn eqsat_basic_term_encoding_roundtrip() {
     fn render_program(commands: &[ResolvedCommand]) -> String {
         let text = sanitize_internal_names(commands)
             .iter()
@@ -941,7 +941,7 @@ fn math_term_encoding_roundtrip() {
         format!("{text}\n")
     }
 
-    let path = std::path::Path::new("tests/web-demo/math.egg");
+    let path = std::path::Path::new("tests/web-demo/eqsat-basic.egg");
     let source = std::fs::read_to_string(path)
         .unwrap_or_else(|err| panic!("failed to read {}: {err}", path.display()));
 

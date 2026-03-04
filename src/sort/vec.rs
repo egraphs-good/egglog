@@ -76,7 +76,7 @@ impl Presort for VecSort {
             };
             Ok(out.to_arcsort())
         } else {
-            panic!("Vec sort must have sort as argument. Got {:?}", args)
+            panic!("Vec sort must have sort as argument. Got {args:?}")
         }
     }
 }

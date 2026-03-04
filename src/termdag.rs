@@ -258,7 +258,7 @@ impl TermDag {
                     child_renderings.push(rendered_child);
                 }
 
-                let mut inline = format!("({}", name);
+                let mut inline = format!("({name}");
                 for child in &child_renderings {
                     inline.push(' ');
                     inline.push_str(&child.inline);
@@ -271,9 +271,9 @@ impl TermDag {
 
                 let pretty = if exceeds_width || child_multiline {
                     if child_renderings.is_empty() {
-                        format!("({})", name)
+                        format!("({name})")
                     } else {
-                        let mut s = format!("({}", name);
+                        let mut s = format!("({name}");
                         for (idx, child) in child_renderings.iter().enumerate() {
                             s.push('\n');
                             s.push_str(&" ".repeat(indent + PRETTY_INDENT_STEP));
@@ -428,7 +428,7 @@ impl TermDag {
                         result.push(')');
                     } else {
                         stack.push((id, false, Some(result.len())));
-                        write!(&mut result, "({}", name).unwrap();
+                        write!(&mut result, "({name}").unwrap();
                         for c in children.iter().rev() {
                             stack.push((*c, true, None));
                         }
@@ -549,7 +549,7 @@ mod tests {
     #[test]
     fn test_to_string_with_let_shares_large_terms() {
         let g_segment = ["(g a b)"; 8].join(" ");
-        let s = format!("(f (h {0}) (h {0}))", g_segment);
+        let s = format!("(f (h {g_segment}) (h {g_segment}))");
         let (td, t) = parse_term(&s);
         let mut buf = String::new();
         let mut sym = SymbolGen::new(String::new());
