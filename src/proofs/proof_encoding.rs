@@ -1240,6 +1240,8 @@ impl<'a> ProofInstrumentor<'a> {
                 for stmt in action_stmts {
                     res.extend(self.parse_program(&stmt));
                 }
+                // Rebuild before extract- we may have added new view rows that need canonicalization
+                res.push(Command::RunSchedule(self.rebuild()));
                 res.push(Command::Extract(
                     span.clone(),
                     self.parse_expr(&instrumented_expr),
