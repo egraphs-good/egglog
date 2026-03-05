@@ -339,8 +339,10 @@ impl ProofStore {
             proof_id: HashMap::default(),
             id_to_proof: DenseIdMap::new(),
         };
+        let globals = gather_globals(prog, &mut store.term_dag)
+            .unwrap_or_else(|_| panic!("failed to gather globals from program"));
 
-        let proof_id = store.convert_raw_proof(prog, &raw_store, raw_proof_id);
+        let proof_id = store.convert_raw_proof(prog, &globals, &raw_store, raw_proof_id);
         (store, proof_id)
     }
 
@@ -351,12 +353,10 @@ impl ProofStore {
     fn convert_raw_proof(
         &mut self,
         prog: &Vec<ResolvedNCommand>,
+        globals: &HashMap<String, TermId>,
         raw_store: &RawProofStore,
         raw_proof_id: RawProofId,
     ) -> ProofId {
-        let globals = gather_globals(prog, &mut self.term_dag)
-            .unwrap_or_else(|_| panic!("failed to gather globals from program"));
-
         if let Some(&id) = self.proof_id.get(&raw_store.store[raw_proof_id.index()]) {
             return id;
         }
@@ -373,7 +373,7 @@ impl ProofStore {
             RawProof::Rule(name, premise_proofs, lhs, rhs) => {
                 let converted_premises: Vec<ProofId> = premise_proofs
                     .iter()
-                    .map(|pid| self.convert_raw_proof(prog, raw_store, *pid))
+                    .map(|pid| self.convert_raw_proof(prog, globals, raw_store, *pid))
                     .collect();
 
                 let mut substitution =
@@ -394,8 +394,8 @@ impl ProofStore {
                 }
             }
             RawProof::MergeFn(function, old_raw, new_raw, to_prove) => {
-                let old_proof_id = self.convert_raw_proof(prog, raw_store, *old_raw);
-                let new_proof_id = self.convert_raw_proof(prog, raw_store, *new_raw);
+                let old_proof_id = self.convert_raw_proof(prog, globals, raw_store, *old_raw);
+                let new_proof_id = self.convert_raw_proof(prog, globals, raw_store, *new_raw);
                 let to_prove = raw_store.unwrap_ast(*to_prove);
                 Proof {
                     proposition: Proposition::new(to_prove, to_prove),
@@ -407,8 +407,8 @@ impl ProofStore {
                 }
             }
             RawProof::Trans(left_raw, right_raw) => {
-                let left_id = self.convert_raw_proof(prog, raw_store, *left_raw);
-                let right_id = self.convert_raw_proof(prog, raw_store, *right_raw);
+                let left_id = self.convert_raw_proof(prog, globals, raw_store, *left_raw);
+                let right_id = self.convert_raw_proof(prog, globals, raw_store, *right_raw);
                 let left = &self.id_to_proof[left_id];
                 let right = &self.id_to_proof[right_id];
                 assert_eq!(
@@ -422,7 +422,7 @@ impl ProofStore {
                 }
             }
             RawProof::Sym(inner_raw) => {
-                let inner_id = self.convert_raw_proof(prog, raw_store, *inner_raw);
+                let inner_id = self.convert_raw_proof(prog, globals, raw_store, *inner_raw);
                 let inner = &self.id_to_proof[inner_id];
                 Proof {
                     proposition: Proposition::new(inner.rhs(), inner.lhs()),
@@ -430,8 +430,8 @@ impl ProofStore {
                 }
             }
             RawProof::Congr(proof_raw, child_index, child_raw) => {
-                let base_id = self.convert_raw_proof(prog, raw_store, *proof_raw);
-                let child_id = self.convert_raw_proof(prog, raw_store, *child_raw);
+                let base_id = self.convert_raw_proof(prog, globals, raw_store, *proof_raw);
+                let child_id = self.convert_raw_proof(prog, globals, raw_store, *child_raw);
                 let base_lhs = self.id_to_proof[base_id].lhs();
                 let base_rhs = self.id_to_proof[base_id].rhs();
                 let child_rhs = self.id_to_proof[child_id].rhs();
