@@ -73,7 +73,8 @@ pub fn bench_cases_proof_testing(glob: &str) -> Vec<BenchCase> {
         .map(|path| {
             let filename = path.to_string_lossy().to_string();
             let program = std::fs::read_to_string(&filename).unwrap();
-            let name = path.file_stem().unwrap().to_string_lossy().to_string();
+            let stem = path.file_stem().unwrap().to_string_lossy().to_string();
+            let name = format!("proof_testing_{stem}");
 
             BenchCase {
                 name,
