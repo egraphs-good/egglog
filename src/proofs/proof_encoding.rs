@@ -466,7 +466,7 @@ impl<'a> ProofInstrumentor<'a> {
             (sort {fresh_sort})
             {to_ast_view_sort}
             (constructor {name} ({term_sorts}) {view_sort}{term_flags} :internal-hidden :unextractable)
-            (constructor {view_name} ({view_sorts}) {fresh_sort} :term-constructor {name}{proof_function_flag}{view_flags})
+            (constructor {view_name} ({view_sorts}) {fresh_sort} :internal-term-constructor {name}{proof_function_flag}{view_flags})
             (constructor {to_delete_name} ({in_sorts}) {fresh_sort} :internal-hidden)
             (constructor {subsumed_name} ({in_sorts}) {fresh_sort} :internal-hidden)
             {proof_constructors}

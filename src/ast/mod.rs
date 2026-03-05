@@ -1066,7 +1066,7 @@ where
                     write!(f, " :internal-let")?;
                 }
                 if let Some(tc) = term_constructor {
-                    write!(f, " :term-constructor {tc}")?;
+                    write!(f, " :internal-term-constructor {tc}")?;
                 }
                 if let Some(pf) = proof_function {
                     write!(f, " :internal-proof-function {pf}")?;

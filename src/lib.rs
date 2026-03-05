@@ -1161,7 +1161,7 @@ impl EGraph {
                 log::info!("Declared sort {name}.")
             }
             ResolvedNCommand::Function(fdecl) => {
-                // If the constructor has a :term-constructor annotation, store the
+                // If the constructor has a :internal-term-constructor annotation, store the
                 // view_name mapping (original constructor -> view table name).
                 // This is needed so that proof extraction can find view tables
                 // after a round-trip through to_string + re-parse.

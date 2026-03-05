@@ -393,7 +393,7 @@ impl Parser {
                 // (constructor <name> (<input sort>*) <output sort>)
                 // (constructor <name> (<input sort>*) <output sort> :cost <cost>)
                 // (constructor <name> (<input sort>*) <output sort> :unextractable)
-                // (constructor <name> (<input sort>*) <output sort> :term-constructor <constructor name>)
+                // (constructor <name> (<input sort>*) <output sort> :internal-term-constructor <constructor name>)
                 // (constructor <name> (<input sort>*) <output sort> :internal-proof-function <proof function name>)
                 match tail {
                     [name, inputs, output, rest @ ..] => {
@@ -409,7 +409,7 @@ impl Parser {
                                 (":internal-hidden", []) => hidden = true,
                                 (":internal-let", []) => let_binding = true,
                                 (":cost", [c]) => cost = Some(c.expect_uint("cost")?),
-                                (":term-constructor", [tc]) => {
+                                (":internal-term-constructor", [tc]) => {
                                     term_constructor =
                                         Some(tc.expect_atom("term constructor name")?)
                                 }
