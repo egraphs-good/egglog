@@ -455,11 +455,11 @@ pub enum ProofEncodingUnsupportedReason {
     )]
     SortWithPresort,
     #[error(
-        "sort has a :uf annotation. The :uf annotation is used internally by term encoding and cannot be specified manually in proof mode."
+        "sort has a :internal-uf annotation. The :internal-uf annotation is used internally by term encoding and cannot be specified manually in proof mode."
     )]
     SortWithUfAnnotation,
     #[error(
-        "sort has a :proof-func annotation. The :proof-func annotation is used internally by proof encoding and cannot be specified manually in proof mode."
+        "sort has a :internal-proof-func annotation. The :internal-proof-func annotation is used internally by proof encoding and cannot be specified manually in proof mode."
     )]
     SortWithProofFuncAnnotation,
     #[error("user-defined commands are not supported.")]

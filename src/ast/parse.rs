@@ -256,10 +256,10 @@ impl Parser {
 
         Ok(match head.as_str() {
             "sort" => {
-                // Parse sort - :uf/:proof-func and container sorts are mutually exclusive
+                // Parse sort - :internal-uf/:internal-proof-func and container sorts are mutually exclusive
                 // (sort <name>)
-                // (sort <name> :uf <uf-function>)
-                // (sort <name> :proof-func <proof-func-name>)
+                // (sort <name> :internal-uf <uf-function>)
+                // (sort <name> :internal-proof-func <internal-proof-func-name>)
                 // (sort <name> (<container sort> <argument sort>*))
                 match tail {
                     [name] => vec![Command::Sort {
@@ -285,21 +285,22 @@ impl Parser {
                         }]
                     }
                     [name, rest @ ..] => {
-                        // Parse :uf and :proof-func annotations
+                        // Parse :internal-uf and :internal-proof-func annotations
                         let mut uf = None;
                         let mut proof_func = None;
                         for (key, val) in self.parse_options(rest)? {
                             match (key, val) {
-                                (":uf", [uf_func]) => {
+                                (":internal-uf", [uf_func]) => {
                                     uf = Some(uf_func.expect_atom("uf function name")?);
                                 }
-                                (":proof-func", [pf]) => {
-                                    proof_func = Some(pf.expect_atom("proof-func function name")?);
+                                (":internal-proof-func", [pf]) => {
+                                    proof_func =
+                                        Some(pf.expect_atom("internal-proof-func function name")?);
                                 }
                                 _ => {
                                     return error!(
                                         span,
-                                        "usages:\n(sort <name>)\n(sort <name> :uf <uf-function>)\n(sort <name> :proof-func <proof-func-name>)\n(sort <name> (<container sort> <argument sort>*))"
+                                        "usages:\n(sort <name>)\n(sort <name> :internal-uf <uf-function>)\n(sort <name> :internal-proof-func <internal-proof-func-name>)\n(sort <name> (<container sort> <argument sort>*))"
                                     );
                                 }
                             }
@@ -316,7 +317,7 @@ impl Parser {
                     _ => {
                         return error!(
                             span,
-                            "usages:\n(sort <name>)\n(sort <name> :uf <uf-function>)\n(sort <name> :proof-func <proof-func-name>)\n(sort <name> (<container sort> <argument sort>*))"
+                            "usages:\n(sort <name>)\n(sort <name> (<container sort> <argument sort>*))"
                         );
                     }
                 }

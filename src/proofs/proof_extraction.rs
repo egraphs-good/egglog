@@ -72,7 +72,7 @@ impl ProofInstrumentor<'_> {
             .get(output_sort.name())
             .unwrap_or_else(|| {
                 panic!(
-                    "no :proof-func annotation recorded for sort {} (constructor {})",
+                    "no :internal-proof-func annotation recorded for sort {} (constructor {})",
                     output_sort.name(),
                     func.name
                 )

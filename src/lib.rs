@@ -1136,11 +1136,11 @@ impl EGraph {
                 proof_func,
                 ..
             } => {
-                // If the sort has a :uf field, store the mapping for extraction
+                // If the sort has a :internal-uf field, store the mapping for extraction
                 if let Some(uf_name) = uf {
                     self.proof_state.uf_parent.insert(name.clone(), uf_name);
                 }
-                // If the sort has a :proof-func field, store the mapping for proof lookup.
+                // If the sort has a :internal-proof-func field, store the mapping for proof lookup.
                 // This annotation is set by proof instrumentation and consumed here.
                 if let Some(proof_func_name) = proof_func {
                     self.proof_state
@@ -1477,7 +1477,7 @@ impl EGraph {
 
     /// Returns true if proofs are enabled.
     pub fn are_proofs_enabled(&self) -> bool {
-        self.proof_state.original_typechecking.is_some()
+        self.proof_state.proofs_enabled
     }
 
     fn resolve_command_before_proofs(

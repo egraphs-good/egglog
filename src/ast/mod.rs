@@ -955,10 +955,10 @@ where
             } => {
                 write!(f, "(sort {name}")?;
                 if let Some(uf) = uf {
-                    write!(f, " :uf {uf}")?;
+                    write!(f, " :internal-uf {uf}")?;
                 }
                 if let Some(pf) = proof_func {
-                    write!(f, " :proof-func {pf}")?;
+                    write!(f, " :internal-proof-func {pf}")?;
                 }
                 write!(f, ")")
             }
@@ -2066,7 +2066,9 @@ where
         .iter()
         .map(|cmd| cmd.clone().make_unresolved())
         .collect::<Vec<_>>();
+    // get the maximum number of underscores currently present, that way we can soundly add more than that to get fresh symbols
     let max_underscores = get_max_underscores(&unresolved);
     let replacement = "_".repeat(max_underscores + 1);
+    // replace occurances of the internal symbol with replacement
     replace_internal_symbol_with(&unresolved, &replacement)
 }
