@@ -217,6 +217,15 @@ impl Sort for FunctionSort {
         for fn_ in registry.iter() {
             fn_(self.clone(), eg)
         }
+
+        let all_ms_sorts = eg
+            .type_info
+            .get_arcsorts_by(|f| f.value_type() == Some(TypeId::of::<MultiSetContainer>()));
+        for input_ms in &all_ms_sorts {
+            for output_ms in &all_ms_sorts {
+                try_registering_multiset_map(eg, self.clone(), input_ms.clone(), output_ms.clone());
+            }
+        }
     }
 
     fn value_type(&self) -> Option<TypeId> {

@@ -166,46 +166,6 @@ impl ContainerSort for MultiSetSort {
             });
         }
 
-        // For Map, support either defining MultiSet sort or Fn sort first
-        // Add map from MS[V] to MS[K]
-        let self_cloned = arc.clone();
-        let element_name = self.element.name().to_string();
-
-        let all_ms_sorts = eg
-            .type_info
-            .get_arcsorts_by(|f| f.value_type() == Some(TypeId::of::<MultiSetContainer>()));
-
-        let register_map = Box::new(move |fn_: Arc<FunctionSort>, eg: &mut EGraph| {
-            if fn_.inputs().len() != 1 {
-                return;
-            }
-            let input_name = fn_.inputs()[0].name();
-            let fn_output = fn_.output();
-            let output_name = fn_output.name();
-
-            //
-            if input_name != element_name && output_name != element_name {
-                return;
-            }
-            for some_vec_sort in &all_ms_sorts {
-                let inner_sorts = some_vec_sort.inner_sorts();
-                let some_vec_name = inner_sorts[0].name();
-                let (input_vec, output_vec) =
-                    if input_name == some_vec_name && output_name == element_name {
-                        (some_vec_sort.clone(), self_cloned.clone())
-                    } else if input_name == element_name && output_name == some_vec_name {
-                        (self_cloned.clone(), some_vec_sort.clone())
-                    } else {
-                        continue;
-                    };
-                eg.add_primitive(Map {
-                    name: "unstable-multiset-map".into(),
-                    multiset: input_vec,
-                    output_multiset: output_vec,
-                    fn_: fn_.clone(),
-                });
-            }
-        });
         let inner_name = self.element.name().to_string();
         let inner_name_cloned = inner_name.clone();
         let self_cloned = arc.clone();
@@ -249,14 +209,24 @@ impl ContainerSort for MultiSetSort {
             }
         });
 
+        let all_ms_sorts = eg
+            .type_info
+            .get_arcsorts_by(|f| f.value_type() == Some(TypeId::of::<MultiSetContainer>()));
+
         for fn_sort in eg.type_info.get_sorts::<FunctionSort>() {
-            register_map(fn_sort.clone(), eg);
+            // For Map, support either defining MultiSet sort or Fn sort first
+            // Add map from MS[V] to MS[K]
+            for ms_sort in &all_ms_sorts {
+                try_registering_multiset_map(eg, fn_sort.clone(), ms_sort.clone(), arc.clone());
+                if ms_sort.name() != self.name() {
+                    try_registering_multiset_map(eg, fn_sort.clone(), arc.clone(), ms_sort.clone());
+                }
+            }
             register_filter(fn_sort.clone(), eg);
             register_fold(fn_sort.clone(), eg);
         }
 
         let mut register = REGISTER_FN_PRIMITIVES.lock().unwrap();
-        register.push(register_map);
         register.push(register_filter);
         register.push(register_fold);
         // For FillIndex, you have to define the multiset sort first since the function sort depends on it
@@ -317,6 +287,29 @@ impl ContainerSort for MultiSetSort {
     fn serialized_name(&self, _container_values: &ContainerValues, _: Value) -> String {
         "multiset-of".to_owned()
     }
+}
+
+/**
+ * Register a multiset map primitive if the function matches the input and output multiset.
+ */
+pub(crate) fn try_registering_multiset_map(
+    eg: &mut EGraph,
+    fn_: Arc<FunctionSort>,
+    input_ms: ArcSort,
+    output_ms: ArcSort,
+) {
+    if fn_.inputs().len() != 1
+        || fn_.inputs()[0].name() != input_ms.inner_sorts()[0].name()
+        || fn_.output().name() != output_ms.inner_sorts()[0].name()
+    {
+        return;
+    }
+    eg.add_primitive(Map {
+        name: "unstable-multiset-map".into(),
+        multiset: input_ms,
+        output_multiset: output_ms,
+        fn_: fn_.clone(),
+    });
 }
 
 #[derive(Clone)]
