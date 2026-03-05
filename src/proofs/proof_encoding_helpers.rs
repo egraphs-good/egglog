@@ -463,7 +463,7 @@ pub enum ProofEncodingUnsupportedReason {
     )]
     SortWithProofFuncAnnotation,
     #[error(
-        "constructor has a :proof-function annotation. The :proof-function annotation is used internally by proof encoding and cannot be specified manually in proof mode."
+        "constructor has a :internal-proof-function annotation. The :internal-proof-function annotation is used internally by proof encoding and cannot be specified manually in proof mode."
     )]
     ConstructorWithProofFunctionAnnotation,
     #[error("user-defined commands are not supported.")]

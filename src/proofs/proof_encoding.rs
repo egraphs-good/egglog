@@ -165,7 +165,7 @@ impl<'a> ProofInstrumentor<'a> {
 
         let uf_proof_function_flag = if self.egraph.proof_state.proofs_enabled {
             let uf_proof_name = self.uf_proof_name(sort_name);
-            format!(" :proof-function {uf_proof_name}")
+            format!(" :internal-proof-function {uf_proof_name}")
         } else {
             "".to_string()
         };
@@ -457,7 +457,7 @@ impl<'a> ProofInstrumentor<'a> {
         }
         let proof_function_flag = if self.egraph.proof_state.proofs_enabled {
             let view_proof_name = self.view_proof_name(&fdecl.name);
-            format!(" :proof-function {view_proof_name}")
+            format!(" :internal-proof-function {view_proof_name}")
         } else {
             "".to_string()
         };

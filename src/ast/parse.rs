@@ -394,7 +394,7 @@ impl Parser {
                 // (constructor <name> (<input sort>*) <output sort> :cost <cost>)
                 // (constructor <name> (<input sort>*) <output sort> :unextractable)
                 // (constructor <name> (<input sort>*) <output sort> :term-constructor <constructor name>)
-                // (constructor <name> (<input sort>*) <output sort> :proof-function <proof function name>)
+                // (constructor <name> (<input sort>*) <output sort> :internal-proof-function <proof function name>)
                 match tail {
                     [name, inputs, output, rest @ ..] => {
                         let mut cost = None;
@@ -413,7 +413,7 @@ impl Parser {
                                     term_constructor =
                                         Some(tc.expect_atom("term constructor name")?)
                                 }
-                                (":proof-function", [pf]) => {
+                                (":internal-proof-function", [pf]) => {
                                     proof_function = Some(pf.expect_atom("proof function name")?)
                                 }
                                 _ => return error!(span, "could not parse constructor options"),
@@ -436,9 +436,7 @@ impl Parser {
                         let a = "(constructor <name> (<input sort>*) <output sort>)";
                         let b = "(constructor <name> (<input sort>*) <output sort> :cost <cost>)";
                         let c = "(constructor <name> (<input sort>*) <output sort> :unextractable)";
-                        let d = "(constructor <name> (<input sort>*) <output sort> :term-constructor <constructor name>)";
-                        let e = "(constructor <name> (<input sort>*) <output sort> :proof-function <proof function name>)";
-                        return error!(span, "usages:\n{a}\n{b}\n{c}\n{d}\n{e}");
+                        return error!(span, "usages:\n{a}\n{b}\n{c}");
                     }
                 }
             }

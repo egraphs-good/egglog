@@ -1171,7 +1171,7 @@ impl EGraph {
                         .view_name
                         .insert(tc_name.clone(), fdecl.name.clone());
                 }
-                // If the constructor has a :proof-function annotation, store the mapping.
+                // If the constructor has a :internal-proof-function annotation, store the mapping.
                 // This annotation is set by proof instrumentation on view tables and UF constructors.
                 if let Some(ref proof_fn_name) = fdecl.proof_function {
                     if let Some(ref tc_name) = fdecl.term_constructor {

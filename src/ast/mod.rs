@@ -1069,7 +1069,7 @@ where
                     write!(f, " :term-constructor {tc}")?;
                 }
                 if let Some(pf) = proof_function {
-                    write!(f, " :proof-function {pf}")?;
+                    write!(f, " :internal-proof-function {pf}")?;
                 }
                 write!(f, ")")
             }
