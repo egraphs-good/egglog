@@ -10,7 +10,7 @@
 //! The value is stored similar to the `vec` sort, as an index into a set, where each item in
 //! the set is a `(Symbol, Vec<(Sort, Value)>)` pairs. The Symbol is the function name, and the `Vec<(Sort, Value)>` is
 //! the list of partially applied arguments.
-use std::sync::{LazyLock, Mutex};
+use std::sync::Mutex;
 
 use super::*;
 
@@ -70,11 +70,6 @@ impl ContainerValue for FunctionContainer {
         self.1.iter().map(|(_, v)| v).copied()
     }
 }
-// List of functions taking a FunctionSort and a mutable e-graph and registering the necessary primitives.
-pub static REGISTER_FN_PRIMITIVES: LazyLock<
-    Mutex<Vec<Box<dyn Fn(Arc<FunctionSort>, &mut EGraph) + Send + Sync>>>,
-> = LazyLock::new(|| Mutex::new(vec![]));
-
 #[derive(Debug)]
 pub struct FunctionSort {
     name: String,
@@ -212,20 +207,9 @@ impl Sort for FunctionSort {
             name: "unstable-app".into(),
             function: self.clone(),
         });
-        // Register additional higher order primitives
-        let registry = REGISTER_FN_PRIMITIVES.lock().unwrap();
-        for fn_ in registry.iter() {
-            fn_(self.clone(), eg)
-        }
 
-        let all_ms_sorts = eg
-            .type_info
-            .get_arcsorts_by(|f| f.value_type() == Some(TypeId::of::<MultiSetContainer>()));
-        for input_ms in &all_ms_sorts {
-            for output_ms in &all_ms_sorts {
-                try_registering_multiset_map(eg, self.clone(), input_ms.clone(), output_ms.clone());
-            }
-        }
+        register_vec_primitives_for_function(eg, self.clone());
+        register_multiset_primitives_for_function(eg, self.clone());
     }
 
     fn value_type(&self) -> Option<TypeId> {

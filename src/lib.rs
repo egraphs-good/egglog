@@ -305,9 +305,6 @@ impl Default for EGraph {
             strict_mode: false,
             warned_about_missing_global_prefix: false,
         };
-        let mut register = REGISTER_FN_PRIMITIVES.lock().unwrap();
-        register.clear();
-
         add_base_sort(&mut eg, UnitSort, span!()).unwrap();
         add_base_sort(&mut eg, StringSort, span!()).unwrap();
         add_base_sort(&mut eg, BoolSort, span!()).unwrap();

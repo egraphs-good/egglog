@@ -111,7 +111,7 @@ impl ContainerSort for VecSort {
     }
 
     fn register_primitives(&self, eg: &mut EGraph) {
-        let arc = self.clone().to_arcsort();
+        let arc: Arc<dyn Sort> = self.clone().to_arcsort();
 
         add_primitive!(eg, "vec-empty"  = {self.clone(): VecSort} |                                | -> @VecContainer (arc) { VecContainer {
             do_rebuild: self.ctx.is_eq_container_sort(),
@@ -155,56 +155,17 @@ impl ContainerSort for VecSort {
                 }
             } });
         }
-        // unstable-vec-map (fn Vec[A], (A -> B)) -> Vec[B]
-        // For Map, support either defining Vec sort or Fn sort first
-        let self_cloned = arc.clone();
-        let element_name = self.element.name().to_string();
-
-        // If we are registering a fn type A -> B and either and A == element or B == element,
-        // Then find all Vec sorts with element type B or A respectively and register unstable-vec-map
         let all_vec_sorts = eg
             .type_info
             .get_arcsorts_by(|f| f.value_type() == Some(TypeId::of::<VecContainer>()));
-
-        // Iterate through all function sorts and add any that match this element type
-        // Then for each of those, register the unstable-vec-map primitive
-        let register_map = Box::new(move |fn_: Arc<FunctionSort>, eg: &mut EGraph| {
-            if fn_.inputs().len() != 1 {
-                return;
-            }
-            let input_name = fn_.inputs()[0].name();
-            let fn_output = fn_.output();
-            let output_name = fn_output.name();
-
-            //
-            if input_name != element_name && output_name != element_name {
-                return;
-            }
-            for some_vec_sort in &all_vec_sorts {
-                let inner_sorts = some_vec_sort.inner_sorts();
-                let some_vec_name = inner_sorts[0].name();
-                let (input_vec, output_vec) =
-                    if input_name == some_vec_name && output_name == element_name {
-                        (some_vec_sort.clone(), self_cloned.clone())
-                    } else if input_name == element_name && output_name == some_vec_name {
-                        (self_cloned.clone(), some_vec_sort.clone())
-                    } else {
-                        continue;
-                    };
-                eg.add_primitive(VecMap {
-                    name: "unstable-vec-map".into(),
-                    vec: input_vec,
-                    output_vec,
-                    fn_: fn_.clone(),
-                });
-            }
-        });
-
         for fn_sort in eg.type_info.get_sorts::<FunctionSort>() {
-            register_map(fn_sort.clone(), eg);
+            for vec_sort in &all_vec_sorts {
+                try_registering_vec_map(eg, fn_sort.clone(), vec_sort.clone(), arc.clone());
+                if vec_sort.name() != arc.name() {
+                    try_registering_vec_map(eg, fn_sort.clone(), arc.clone(), vec_sort.clone());
+                }
+            }
         }
-        let mut register = REGISTER_FN_PRIMITIVES.lock().unwrap();
-        register.push(register_map);
     }
 
     fn reconstruct_termdag(
@@ -223,6 +184,40 @@ impl ContainerSort for VecSort {
 
     fn serialized_name(&self, _container_values: &ContainerValues, _: Value) -> String {
         "vec-of".to_owned()
+    }
+}
+
+/**
+ * Register a vec map primitive if the function matches the input and output vec.
+ */
+pub(crate) fn try_registering_vec_map(
+    eg: &mut EGraph,
+    fn_: Arc<FunctionSort>,
+    input_vec: ArcSort,
+    output_vec: ArcSort,
+) {
+    if fn_.inputs().len() != 1
+        || fn_.inputs()[0].name() != input_vec.inner_sorts()[0].name()
+        || fn_.output().name() != output_vec.inner_sorts()[0].name()
+    {
+        return;
+    }
+    eg.add_primitive(VecMap {
+        name: "unstable-vec-map".into(),
+        vec: input_vec,
+        output_vec,
+        fn_: fn_.clone(),
+    });
+}
+
+pub(crate) fn register_vec_primitives_for_function(eg: &mut EGraph, fn_: Arc<FunctionSort>) {
+    let all_vec_sorts = eg
+        .type_info
+        .get_arcsorts_by(|f| f.value_type() == Some(TypeId::of::<VecContainer>()));
+    for input_vec in &all_vec_sorts {
+        for output_vec in &all_vec_sorts {
+            try_registering_vec_map(eg, fn_.clone(), input_vec.clone(), output_vec.clone());
+        }
     }
 }
 
@@ -263,10 +258,9 @@ impl Primitive for VecMap {
             .clone();
         let mut new_data = Vec::with_capacity(vec.data.len());
         for v in vec.data {
-            new_data.push(
-                fc.apply(exec_state, &[v])
-                    .expect("Vec map function returned None"),
-            );
+            if let Some(mapped) = fc.apply(exec_state, &[v]) {
+                new_data.push(mapped);
+            }
         }
         let vec = VecContainer {
             do_rebuild: self.output_vec.is_eq_container_sort(),

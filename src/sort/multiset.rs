@@ -165,105 +165,18 @@ impl ContainerSort for MultiSetSort {
                 do_rebuild: other_multiset_sort.is_eq_container_sort(),
             });
         }
-
-        let inner_name = self.element.name().to_string();
-        let inner_name_cloned = inner_name.clone();
-        let self_cloned = arc.clone();
-        // For filter same as map
-        let register_filter = Box::new(move |fn_: Arc<FunctionSort>, eg: &mut EGraph| {
-            // Add filter if we have a function from E -> Unit
-            if fn_.inputs().len() == 1
-                && fn_.inputs()[0].name() == inner_name_cloned.clone()
-                && fn_.output().name() == "Unit"
-            {
-                eg.add_primitive(Filter {
-                    name: "unstable-multiset-filter".into(),
-                    multiset: self_cloned.clone(),
-                    fn_: fn_.clone(),
-                    skip_empty: true,
-                });
-                eg.add_primitive(Filter {
-                    name: "unstable-multiset-filter-not".into(),
-                    multiset: self_cloned.clone(),
-                    fn_: fn_.clone(),
-                    skip_empty: false,
-                });
-            }
-        });
-        let element_clone = self.element.clone();
-        let inner_name_cloned = inner_name.clone();
-        let self_cloned = arc.clone();
-        // fold is ((T, T) -> T, T, MultiSet[T]) -> T
-        let register_fold = Box::new(move |fn_: Arc<FunctionSort>, eg: &mut EGraph| {
-            if fn_.inputs().len() == 2
-                && fn_.inputs()[0].name() == inner_name_cloned.clone()
-                && fn_.inputs()[1].name() == inner_name_cloned.clone()
-                && fn_.output().name() == inner_name_cloned.clone()
-            {
-                eg.add_primitive(Fold {
-                    name: "unstable-multiset-fold".into(),
-                    multiset: self_cloned.clone(),
-                    fn_: fn_.clone(),
-                    element: element_clone.clone(),
-                });
-            }
-        });
-
         let all_ms_sorts = eg
             .type_info
             .get_arcsorts_by(|f| f.value_type() == Some(TypeId::of::<MultiSetContainer>()));
-
         for fn_sort in eg.type_info.get_sorts::<FunctionSort>() {
-            // For Map, support either defining MultiSet sort or Fn sort first
-            // Add map from MS[V] to MS[K]
             for ms_sort in &all_ms_sorts {
                 try_registering_multiset_map(eg, fn_sort.clone(), ms_sort.clone(), arc.clone());
-                if ms_sort.name() != self.name() {
+                if ms_sort.name() != arc.name() {
                     try_registering_multiset_map(eg, fn_sort.clone(), arc.clone(), ms_sort.clone());
                 }
             }
-            register_filter(fn_sort.clone(), eg);
-            register_fold(fn_sort.clone(), eg);
+            try_registering_multiset_non_map_primitives(eg, fn_sort.clone(), arc.clone());
         }
-
-        let mut register = REGISTER_FN_PRIMITIVES.lock().unwrap();
-        register.push(register_filter);
-        register.push(register_fold);
-        // For FillIndex, you have to define the multiset sort first since the function sort depends on it
-        let self_cloned = arc.clone();
-        register.push(Box::new(move |fn_: Arc<FunctionSort>, eg: &mut EGraph| {
-            // add fill-index and clear-index if we have a function from (MultiSet[E], E) -> I64
-            if fn_.inputs().len() == 2
-                && fn_.inputs()[0].name() == self_cloned.name()
-                && fn_.inputs()[1].name() == inner_name
-                && fn_.output().name() == "i64"
-            {
-                eg.add_primitive(FillIndex {
-                    name: "unstable-multiset-fill-index".into(),
-                    multiset: self_cloned.clone(),
-                    unit: eg.type_info.get_sort_by_name("Unit").unwrap().clone(),
-                    fn_: fn_.clone(),
-                });
-                eg.add_primitive(ClearIndex {
-                    name: "unstable-multiset-clear-index".into(),
-                    multiset: self_cloned.clone(),
-                    unit: eg.type_info.get_sort_by_name("Unit").unwrap().clone(),
-                    fn_: fn_.clone(),
-                });
-            }
-            // Add flat-map if we have a function from E -> MultiSet[E]
-            if fn_.inputs().len() == 1
-                && fn_.inputs()[0].name() == inner_name
-                && fn_.output().name() == self_cloned.name()
-            {
-                eg.add_primitive(FlatMap {
-                    name: "unstable-multiset-flat-map".into(),
-                    multiset: self_cloned.clone(),
-                    fn_: fn_.clone(),
-                });
-            }
-        }));
-
         if self.element.is_eq_sort() {
             eg.add_primitive(UnionValues {
                 name: "multiset-union-values".into(),
@@ -310,6 +223,91 @@ pub(crate) fn try_registering_multiset_map(
         output_multiset: output_ms,
         fn_: fn_.clone(),
     });
+}
+
+pub(crate) fn register_multiset_primitives_for_function(eg: &mut EGraph, fn_: Arc<FunctionSort>) {
+    let all_ms_sorts = eg
+        .type_info
+        .get_arcsorts_by(|f| f.value_type() == Some(TypeId::of::<MultiSetContainer>()));
+    for input_ms in &all_ms_sorts {
+        for output_ms in &all_ms_sorts {
+            try_registering_multiset_map(eg, fn_.clone(), input_ms.clone(), output_ms.clone());
+        }
+    }
+    for ms_sort in &all_ms_sorts {
+        try_registering_multiset_non_map_primitives(eg, fn_.clone(), ms_sort.clone());
+    }
+}
+
+fn try_registering_multiset_non_map_primitives(
+    eg: &mut EGraph,
+    fn_: Arc<FunctionSort>,
+    multiset: ArcSort,
+) {
+    let element = multiset.inner_sorts()[0].clone();
+    let element_name = element.name();
+
+    if fn_.inputs().len() == 1
+        && fn_.inputs()[0].name() == element_name
+        && fn_.output().name() == "Unit"
+    {
+        eg.add_primitive(Filter {
+            name: "unstable-multiset-filter".into(),
+            multiset: multiset.clone(),
+            fn_: fn_.clone(),
+            skip_empty: true,
+        });
+        eg.add_primitive(Filter {
+            name: "unstable-multiset-filter-not".into(),
+            multiset: multiset.clone(),
+            fn_: fn_.clone(),
+            skip_empty: false,
+        });
+    }
+
+    if fn_.inputs().len() == 2
+        && fn_.inputs()[0].name() == element_name
+        && fn_.inputs()[1].name() == element_name
+        && fn_.output().name() == element_name
+    {
+        eg.add_primitive(Fold {
+            name: "unstable-multiset-fold".into(),
+            multiset: multiset.clone(),
+            fn_: fn_.clone(),
+            element: element.clone(),
+        });
+    }
+
+    if fn_.inputs().len() == 2
+        && fn_.inputs()[0].name() == multiset.name()
+        && fn_.inputs()[1].name() == element_name
+        && fn_.output().name() == "i64"
+    {
+        let unit = eg.type_info.get_sort_by_name("Unit").unwrap().clone();
+        eg.add_primitive(FillIndex {
+            name: "unstable-multiset-fill-index".into(),
+            multiset: multiset.clone(),
+            unit: unit.clone(),
+            fn_: fn_.clone(),
+        });
+        eg.add_primitive(ClearIndex {
+            name: "unstable-multiset-clear-index".into(),
+            multiset: multiset.clone(),
+            unit,
+            fn_: fn_.clone(),
+        });
+    }
+
+    if fn_.inputs().len() == 1
+        && fn_.inputs()[0].name() == element_name
+        && fn_.output().name() == multiset.name()
+    {
+        eg.add_primitive(FlatMap {
+            name: "unstable-multiset-flat-map".into(),
+            multiset,
+            fn_: fn_.clone(),
+        });
+    }
 }
 
 #[derive(Clone)]
