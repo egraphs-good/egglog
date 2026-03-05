@@ -105,7 +105,7 @@ where
 /// Creates an implication constraint that activates when all watch variables are assigned.
 /// The constraint function is called with the values of the watch variables to generate the actual constraint.
 pub fn implies<Var, Value>(
-    name: String,
+    out: ResolvedAtomTerm,
     watch_vars: Vec<Var>,
     constraint: DelayedConstraintFn<Var, Value>,
 ) -> Box<dyn Constraint<Var, Value>>
@@ -114,7 +114,7 @@ where
     Value: Clone + Debug + 'static,
 {
     Box::new(Implies {
-        name,
+        out,
         watch_vars,
         constraint: DelayedConstraint::Delayed(constraint),
     })
@@ -130,7 +130,7 @@ enum DelayedConstraint<Var, Value> {
 
 #[derive(Clone)]
 struct Implies<Var, Value> {
-    name: String,
+    out: ResolvedAtomTerm,
     watch_vars: Vec<Var>,
     constraint: DelayedConstraint<Var, Value>,
 }
@@ -170,10 +170,10 @@ where
         let vars: String = self
             .watch_vars
             .iter()
-            .map(|v| format!("{:?}", v))
+            .map(|v| format!("{v:?}"))
             .collect::<Vec<_>>()
             .join(", ");
-        format!("{} => {}({})", vars, self.name, vars)
+        format!("{} => {:?}({})", vars, self.out, vars)
     }
 }
 
@@ -667,6 +667,9 @@ impl Assignment<AtomTerm, ArcSort> {
                 if !sort.is_eq_sort() {
                     return Err(TypeError::NonEqsortUnion(sort, span.clone()));
                 }
+                if !typeinfo.is_sort_unionable(&sort) {
+                    return Err(TypeError::NonUnionableSort(sort, span.clone()));
+                }
 
                 Ok(ResolvedAction::Union(span.clone(), lhs, rhs))
             }
@@ -802,6 +805,16 @@ impl CoreAction {
                     .collect())
             }
             CoreAction::Set(span, head, args, rhs) => {
+                // Check that we're not trying to set a constructor
+                if let Some(func_type) = typeinfo.get_func_type(head) {
+                    if func_type.subtype == crate::ast::FunctionSubtype::Constructor {
+                        return Err(TypeError::SetConstructorDisallowed(
+                            head.clone(),
+                            span.clone(),
+                        ));
+                    }
+                }
+
                 let mut args = args.clone();
                 args.push(rhs.clone());
 
@@ -914,7 +927,7 @@ fn get_atom_application_constraints(
     // primitive atom constraints
     if let Some(primitives) = type_info.get_prims(head) {
         for p in primitives {
-            let constraints = p.0.get_type_constraints(span).get(args, type_info);
+            let constraints = p.primitive.get_type_constraints(span).get(args, type_info);
             xor_constraints.push(constraints);
         }
     }
@@ -1148,7 +1161,7 @@ pub(crate) fn grounded_check(
                 let (out, inp) = atom.args.split_last().unwrap();
                 let out = out.clone();
                 problem.constraints.push(implies(
-                    format!("grounded_{:?}", out),
+                    out.clone(),
                     inp.to_vec(),
                     Rc::new(move |_| assign(out.clone(), ())),
                 ));
@@ -1178,10 +1191,7 @@ pub(crate) fn grounded_check(
         ConstraintError::UnconstrainedVar(ResolvedAtomTerm::Var(span, v)) => {
             TypeError::Ungrounded(v.to_string(), span)
         }
-        _ => panic!(
-            "unexpected constraint error in groundedness check {:?}",
-            err
-        ),
+        _ => panic!("unexpected constraint error in groundedness check {err:?}"),
     })?;
 
     Ok(())

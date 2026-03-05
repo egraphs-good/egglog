@@ -1,0 +1,6 @@
+---
+source: tests/files.rs
+expression: err_msg
+---
+In 5:1-21 of set_constructor_simple.egg: (set (Num 1) (Num 2))
+Cannot set constructor Num. Use `union` instead or declare Num as a function.

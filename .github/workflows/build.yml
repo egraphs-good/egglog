@@ -10,20 +10,36 @@ jobs:
   test:
     runs-on: ubuntu-latest
     steps:
-    - run: echo "CARGO_INCREMENTAL=0" >> "$GITHUB_ENV"
-    - uses: actions/checkout@v3
-    - uses: taiki-e/install-action@v2
-      with:
-        tool: nextest
-    - uses: Swatinem/rust-cache@v2
-    - run: make test
+      - run: echo "CARGO_INCREMENTAL=0" >> "$GITHUB_ENV"
+      - uses: actions/checkout@v3
+      - uses: taiki-e/install-action@v2
+        with:
+          tool: nextest,cargo-insta
+      - uses: Swatinem/rust-cache@v2
+      - run: make test
+  coverage:
+    runs-on: ubuntu-latest
+    steps:
+      - run: echo "CARGO_INCREMENTAL=0" >> "$GITHUB_ENV"
+      - uses: actions/checkout@v3
+      - uses: taiki-e/install-action@v2
+        with:
+          tool: nextest,cargo-llvm-cov
+      - uses: Swatinem/rust-cache@v2
+      - run: make coverage
+      - uses: codecov/codecov-action@v5
+        with:
+          files: lcov.info
+          fail_ci_if_error: true
+        env:
+          CODECOV_TOKEN: ${{ secrets.CODECOV_TOKEN }}
   nits:
     runs-on: ubuntu-latest
     steps:
-    - run: echo "CARGO_INCREMENTAL=0" >> "$GITHUB_ENV"
-    - uses: actions/checkout@v3
-    - uses: Swatinem/rust-cache@v2
-    - run: make nits
+      - run: echo "CARGO_INCREMENTAL=0" >> "$GITHUB_ENV"
+      - uses: actions/checkout@v3
+      - uses: Swatinem/rust-cache@v2
+      - run: make nits
   benchmark:
     runs-on: ${{ matrix.runner }}
     strategy:
@@ -39,6 +55,7 @@ jobs:
           - repro-665-set-union
           - stresstest_large_expr
           - typeinfer
+          - taylor51
     steps:
       - run: echo "CARGO_INCREMENTAL=0" >> "$GITHUB_ENV"
       - uses: actions/checkout@v4
@@ -50,7 +67,7 @@ jobs:
       - uses: CodSpeedHQ/action@v4
         with:
           run: cargo codspeed run ${{ matrix.benchmark }}
-          mode: ${{ matrix.runner == 'ubuntu-latest' && 'instrumentation' || 'walltime' }}
+          mode: ${{ matrix.runner == 'ubuntu-latest' && 'simulation' || 'walltime' }}
   wasm:
     runs-on: ubuntu-latest
     steps:

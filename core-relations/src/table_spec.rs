@@ -159,14 +159,17 @@ pub trait Table: Any + Send + Sync {
     ///
     /// Note that value-level rebuilds are only relevant for tables that opt into it. As a result,
     /// tables do nothing by default.
+    ///
+    /// Returns whether any rows may be removed or inserted.
     fn apply_rebuild(
         &mut self,
         _table_id: TableId,
         _table: &WrappedTable,
         _next_ts: Value,
         _exec_state: &mut ExecutionState,
-    ) {
+    ) -> bool {
         // Default implementation does nothing.
+        false
     }
 
     /// A boilerplate method to make it easier to downcast values of `Table`.
@@ -329,7 +332,9 @@ pub trait Table: Any + Send + Sync {
     /// the table.
     fn merge(&mut self, exec_state: &mut ExecutionState) -> TableChange;
 
-    /// Create a new buffer for staging mutations on this table.
+    /// Create a new buffer for staging mutations on this table. Mutations staged to a
+    /// MutationBuffer that is then dropped may not take effect until the next call to
+    /// [`Table::merge`].
     fn new_buffer(&self) -> Box<dyn MutationBuffer>;
 }
 
@@ -579,6 +584,16 @@ impl WrappedTable {
         self.as_ref().scan(subset)
     }
 
+    /// Return the number of rows currently stored in the table.
+    pub fn len(&self) -> usize {
+        self.inner.len()
+    }
+
+    /// Check if the table is empty.
+    pub fn is_empty(&self) -> bool {
+        self.inner.is_empty()
+    }
+
     pub(crate) fn lookup_row_vectorized(
         &self,
         mask: &mut Mask,
@@ -741,6 +756,11 @@ impl WrappedTableRef<'_> {
     /// Return the contents of the subset as a [`TaggedRowBuffer`].
     pub fn scan(&self, subset: SubsetRef) -> TaggedRowBuffer {
         self.wrapper.scan(self.inner, subset)
+    }
+
+    /// Return the number of rows currently stored in the table.
+    pub fn len(&self) -> usize {
+        self.inner.len()
     }
 
     pub(crate) fn lookup_row_vectorized(

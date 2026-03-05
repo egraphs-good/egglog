@@ -60,3 +60,22 @@ fn basic_tagged_row() {
         ]
     );
 }
+
+#[test]
+fn parallel_row_buf_append_contents() {
+    let mut rows = RowBuffer::new(2);
+    rows.add_row(&[v(0), v(1)]);
+    let writer = rows.parallel_writer();
+
+    let mut extra = RowBuffer::new(2);
+    extra.add_row(&[v(2), v(3)]);
+    extra.add_row(&[v(4), v(5)]);
+    let start = writer.append_contents(&extra);
+    assert_eq!(start, RowId::new(1));
+
+    let rows = writer.finish();
+    assert_eq!(rows.len(), 3);
+    assert_eq!(rows.get_row(RowId::new(0)), [v(0), v(1)].as_slice());
+    assert_eq!(rows.get_row(RowId::new(1)), [v(2), v(3)].as_slice());
+    assert_eq!(rows.get_row(RowId::new(2)), [v(4), v(5)].as_slice());
+}

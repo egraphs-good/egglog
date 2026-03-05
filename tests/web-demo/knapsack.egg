@@ -9,7 +9,7 @@
 (datatype objects
     (Cons i64 i64 objects))
 (constructor NilConst () objects)
-(let Nil (NilConst))
+(let $Nil (NilConst))
 
 ; Given a capacity and a list of objects, finds the maximum value of a
 ; collection of objects whose total weight does not exceed the capacity.
@@ -25,16 +25,16 @@
       ((union (Knap capacity (Cons weight val rest))
             (Knap capacity rest))))
 
-(rule ((= f (Knap capacity Nil)))
-      ((union (Knap capacity Nil) (Num 0))))
+(rule ((= f (Knap capacity $Nil)))
+      ((union (Knap capacity $Nil) (Num 0))))
 
-(let test1 (Knap 13 (Cons 5 5 (Cons 3 3 (Cons 12 12 (Cons 5 5 Nil))))))
+(let $test1 (Knap 13 (Cons 5 5 (Cons 3 3 (Cons 12 12 (Cons 5 5 $Nil))))))
 
-(let test2 (Knap 5 (Cons 6 6 Nil)))
+(let $test2 (Knap 5 (Cons 6 6 $Nil)))
 
-(let test3 (Knap 5 (Cons 1 1 (Cons 1 1 (Cons 1 1 Nil)))))
+(let $test3 (Knap 5 (Cons 1 1 (Cons 1 1 (Cons 1 1 $Nil)))))
 
-(let test4 (Knap 15 (Cons 12 40 (Cons 2 20 (Cons 1 20 (Cons 1 10 (Cons 4 100 Nil)))))))
+(let $test4 (Knap 15 (Cons 12 40 (Cons 2 20 (Cons 1 20 (Cons 1 10 (Cons 4 100 $Nil)))))))
 
 ; turn a (Num n) into n
 (function Unwrap (expr) i64 :no-merge)
@@ -42,5 +42,5 @@
 
 (run 100)
 
-(check (= test1 (Num 13)))
+(check (= $test1 (Num 13)))
 

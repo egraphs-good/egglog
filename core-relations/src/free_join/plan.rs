@@ -289,19 +289,21 @@ pub enum PlanStrategy {
 }
 
 pub(crate) fn plan_query(query: Query) -> Plan {
-    Planner::new(&query.var_info, &query.atoms).plan(query.plan_strategy, query.action)
-}
+    let atoms = query.atoms;
+    let ctx = PlanningContext {
+        vars: query.var_info,
+        atoms,
+    };
+    let (header, instrs) = plan_stages(&ctx, query.plan_strategy);
 
-struct Planner<'a> {
-    // immutable
-    vars: &'a DenseIdMap<Variable, VarInfo>,
-    atoms: &'a DenseIdMap<AtomId, Atom>,
-
-    // mutable
-    used: VarSet,
-    constrained: AtomSet,
-
-    scratch_subatom: HashMap<AtomId, SmallVec<[ColumnId; 2]>>,
+    Plan {
+        atoms: Arc::new(ctx.atoms),
+        stages: JoinStages {
+            header,
+            instrs: Arc::new(instrs),
+            actions: query.action,
+        },
+    }
 }
 
 /// StageInfo is an intermediate stage used to describe the ordering of
@@ -310,6 +312,7 @@ struct Planner<'a> {
 ///
 /// This separation makes it easier for us to iterate with different planning
 /// algorithms while sharing the same "backend" that generates a concrete plan.
+#[derive(Debug)]
 struct StageInfo {
     cover: SubAtom,
     vars: SmallVec<[Variable; 1]>,
@@ -319,288 +322,41 @@ struct StageInfo {
     )>,
 }
 
-impl<'a> Planner<'a> {
-    pub(crate) fn new(
-        vars: &'a DenseIdMap<Variable, VarInfo>,
-        atoms: &'a DenseIdMap<AtomId, Atom>,
-    ) -> Self {
-        Planner {
-            vars,
-            atoms,
-            used: VarSet::with_capacity(vars.n_ids()),
-            constrained: AtomSet::with_capacity(atoms.n_ids()),
-            scratch_subatom: Default::default(),
+/// Immutable context for query planning containing references to query metadata.
+struct PlanningContext {
+    vars: DenseIdMap<Variable, VarInfo>,
+    atoms: DenseIdMap<AtomId, Atom>,
+}
+
+/// Mutable state tracked during query planning.
+#[derive(Clone)]
+struct PlanningState {
+    used_vars: VarSet,
+    constrained_atoms: AtomSet,
+}
+
+impl PlanningState {
+    fn new(n_vars: usize, n_atoms: usize) -> Self {
+        Self {
+            used_vars: VarSet::with_capacity(n_vars),
+            constrained_atoms: AtomSet::with_capacity(n_atoms),
         }
     }
 
-    fn plan_free_join(
-        &mut self,
-        strat: PlanStrategy,
-        remaining_constraints: &DenseIdMap<AtomId, (usize, &Pooled<Vec<Constraint>>)>,
-        stages: &mut Vec<JoinStage>,
-    ) {
-        let mut size_info = Vec::<(AtomId, usize)>::new();
-        match strat {
-            PlanStrategy::PureSize => {
-                for (atom, (size, _)) in remaining_constraints.iter() {
-                    size_info.push((atom, *size));
-                }
-            }
-            PlanStrategy::MinCover => {
-                let mut eligible_covers = HashSet::default();
-                let mut queue = BucketQueue::new(self.vars, self.atoms);
-                while let Some(atom) = queue.pop_min() {
-                    eligible_covers.insert(atom);
-                }
-                for (atom, (size, _)) in remaining_constraints
-                    .iter()
-                    .filter(|(atom, _)| eligible_covers.contains(atom))
-                {
-                    size_info.push((atom, *size));
-                }
-            }
-            PlanStrategy::Gj => unreachable!(),
-        };
-        size_info.sort_by_key(|(_, size)| *size);
-        let mut atoms = size_info.iter().map(|(atom, _)| *atom);
-        while let Some(info) = self.get_next_freejoin_stage(&mut atoms) {
-            stages.push(self.compile_stage(info))
-        }
+    fn mark_var_used(&mut self, var: Variable) {
+        self.used_vars.insert(var.index());
     }
 
-    fn plan_gj(
-        &mut self,
-        remaining_constraints: &DenseIdMap<AtomId, (usize, &Pooled<Vec<Constraint>>)>,
-        stages: &mut Vec<JoinStage>,
-    ) {
-        // First, map all variables to the size of the smallest atom in which they appear:
-        let mut min_sizes = Vec::with_capacity(self.vars.n_ids());
-        let mut atoms_hit = AtomSet::with_capacity(self.atoms.n_ids());
-        for (var, var_info) in self.vars.iter() {
-            let n_occs = var_info.occurrences.len();
-            if n_occs == 1 && !var_info.used_in_rhs {
-                // Do not plan this one. Unless (see below).
-                continue;
-            }
-            if let Some(min_size) = var_info
-                .occurrences
-                .iter()
-                .map(|subatom| {
-                    atoms_hit.set(subatom.atom.index(), true);
-                    remaining_constraints[subatom.atom].0
-                })
-                .min()
-            {
-                min_sizes.push((var, min_size, n_occs));
-            }
-            // If the variable has no ocurrences, it may be bound on the RHS of a
-            // rule (or it may just be unused). Either way, we will ignore it when
-            // planning the query.
-        }
-        for (var, var_info) in self.vars.iter() {
-            if var_info.occurrences.len() == 1 && !var_info.used_in_rhs {
-                // We skipped this variable the first time around because it
-                // looks "unused". If it belongs to an atom that otherwise has
-                // gone unmentioned, though, we need to plan it anyway.
-                let atom = var_info.occurrences[0].atom;
-                if !atoms_hit.contains(atom.index()) {
-                    min_sizes.push((var, remaining_constraints[atom].0, 1));
-                }
-            }
-        }
-        // Sort ascending by size, then descending by number of occurrences.
-        min_sizes.sort_by_key(|(_, size, occs)| (*size, -(*occs as i64)));
-        for (var, _, _) in min_sizes {
-            let occ = self.vars[var].occurrences[0].clone();
-            let mut info = StageInfo {
-                cover: occ,
-                vars: smallvec![var],
-                filters: Default::default(),
-            };
-            for occ in &self.vars[var].occurrences[1..] {
-                info.filters
-                    .push((occ.clone(), smallvec![ColumnId::new(0)]));
-            }
-            let next_stage = self.compile_stage(info);
-            if let Some(prev) = stages.last_mut() {
-                if prev.fuse(&next_stage) {
-                    continue;
-                }
-            }
-            stages.push(next_stage);
-        }
+    fn is_var_used(&self, var: Variable) -> bool {
+        self.used_vars.contains(var.index())
     }
 
-    pub(crate) fn plan(&mut self, strat: PlanStrategy, actions: ActionId) -> Plan {
-        let mut instrs = Vec::new();
-        let mut header = Vec::new();
-        self.used.clear();
-        self.constrained.clear();
-        let mut remaining_constraints: DenseIdMap<AtomId, (usize, &Pooled<Vec<Constraint>>)> =
-            Default::default();
-        // First, plan all the constants:
-        for (atom, atom_info) in self.atoms.iter() {
-            remaining_constraints.insert(
-                atom,
-                (
-                    atom_info.constraints.approx_size(),
-                    &atom_info.constraints.slow,
-                ),
-            );
-            if atom_info.constraints.fast.is_empty() {
-                continue;
-            }
-            header.push(JoinHeader {
-                atom,
-                constraints: Pooled::cloned(&atom_info.constraints.fast),
-                subset: atom_info.constraints.subset.clone(),
-            });
-        }
-        match strat {
-            PlanStrategy::PureSize | PlanStrategy::MinCover => {
-                self.plan_free_join(strat, &remaining_constraints, &mut instrs);
-            }
-            PlanStrategy::Gj => {
-                self.plan_gj(&remaining_constraints, &mut instrs);
-            }
-        }
-        Plan {
-            atoms: self.atoms.clone().into(),
-            stages: JoinStages {
-                header,
-                instrs: Arc::new(instrs),
-                actions,
-            },
-        }
+    fn mark_atom_constrained(&mut self, atom: AtomId) {
+        self.constrained_atoms.insert(atom.index());
     }
 
-    fn get_next_freejoin_stage(
-        &mut self,
-        ordering: &mut impl Iterator<Item = AtomId>,
-    ) -> Option<StageInfo> {
-        loop {
-            let mut covered = false;
-            let mut filters = Vec::new();
-            let atom = ordering.next()?;
-            let atom_info = &self.atoms[atom];
-            let mut cover = SubAtom::new(atom);
-            let mut vars = SmallVec::<[Variable; 1]>::new();
-            for (ix, var) in atom_info.column_to_var.iter() {
-                if self.used.contains(var.index()) {
-                    continue;
-                }
-                // This atom is not completely covered by previous stages.
-                covered = true;
-                self.used.insert(var.index());
-                vars.push(*var);
-                cover.vars.push(ix);
-                for subatom in self.vars[*var].occurrences.iter() {
-                    if subatom.atom == atom {
-                        continue;
-                    }
-                    self.scratch_subatom
-                        .entry(subatom.atom)
-                        .or_default()
-                        .extend(subatom.vars.iter().copied());
-                }
-            }
-            if !covered {
-                // Search the next atom.
-                continue;
-            }
-            for (atom, cols) in self.scratch_subatom.drain() {
-                let mut form_key = SmallVec::<[ColumnId; 2]>::new();
-                for var_ix in &cols {
-                    let var = self.atoms[atom].column_to_var[*var_ix];
-                    // form_key is an index _into the subatom forming the cover_.
-                    let cover_col = vars
-                        .iter()
-                        .enumerate()
-                        .find(|(_, v)| **v == var)
-                        .map(|(ix, _)| ix)
-                        .unwrap();
-                    form_key.push(ColumnId::from_usize(cover_col));
-                }
-                filters.push((SubAtom { atom, vars: cols }, form_key));
-            }
-            return Some(StageInfo {
-                cover,
-                vars,
-                filters,
-            });
-        }
-    }
-
-    fn compile_stage(
-        &mut self,
-        StageInfo {
-            cover,
-            vars,
-            filters,
-        }: StageInfo,
-    ) -> JoinStage {
-        if vars.len() == 1 {
-            debug_assert!(
-                filters
-                    .iter()
-                    .all(|(_, x)| x.len() == 1 && x[0] == ColumnId::new(0)),
-                "filters={filters:?}"
-            );
-            let scans = SmallVec::<[SingleScanSpec; 3]>::from_iter(
-                iter::once(&cover)
-                    .chain(filters.iter().map(|(x, _)| x))
-                    .map(|subatom| {
-                        let atom = subatom.atom;
-                        SingleScanSpec {
-                            atom,
-                            column: subatom.vars[0],
-                            cs: if !self.constrained.put(atom.index()) {
-                                self.atoms[atom].constraints.slow.clone()
-                            } else {
-                                Default::default()
-                            },
-                        }
-                    }),
-            );
-            return JoinStage::Intersect {
-                var: vars[0],
-                scans,
-            };
-        }
-        let atom = cover.atom;
-        let cover = ScanSpec {
-            to_index: cover,
-            constraints: if !self.constrained.put(atom.index()) {
-                self.atoms[atom].constraints.slow.clone()
-            } else {
-                Default::default()
-            },
-        };
-        let mut bind = SmallVec::new();
-        let var_set = &self.atoms[atom].var_to_column;
-        for var in vars {
-            bind.push((var_set[&var], var));
-        }
-
-        let mut to_intersect = Vec::with_capacity(filters.len());
-        for (subatom, key_spec) in filters {
-            let atom = subatom.atom;
-            let scan = ScanSpec {
-                to_index: subatom,
-                constraints: if !self.constrained.put(atom.index()) {
-                    self.atoms[atom].constraints.slow.clone()
-                } else {
-                    Default::default()
-                },
-            };
-            to_intersect.push((scan, key_spec));
-        }
-
-        JoinStage::FusedIntersect {
-            cover,
-            bind,
-            to_intersect,
-        }
+    fn is_atom_constrained(&self, atom: AtomId) -> bool {
+        self.constrained_atoms.contains(atom.index())
     }
 }
 
@@ -667,5 +423,303 @@ impl<'a> BucketQueue<'a> {
         }
         self.cover.union_with(&vars);
         Some(res)
+    }
+}
+
+/// Build join headers from fast constraints and compute remaining constraints for planning.
+/// Returns (headers, remaining_constraints) tuple.
+fn plan_headers(
+    ctx: &PlanningContext,
+) -> (
+    Vec<JoinHeader>,
+    DenseIdMap<
+        AtomId,
+        (
+            usize, /* The approx size of the subset matching the constraints. */
+            &Pooled<Vec<Constraint>>,
+        ),
+    >,
+) {
+    let mut header = Vec::new();
+    let mut remaining_constraints: DenseIdMap<AtomId, (usize, &Pooled<Vec<Constraint>>)> =
+        Default::default();
+
+    for (atom, atom_info) in ctx.atoms.iter() {
+        remaining_constraints.insert(
+            atom,
+            (
+                atom_info.constraints.approx_size(),
+                &atom_info.constraints.slow,
+            ),
+        );
+        if !atom_info.constraints.fast.is_empty() {
+            header.push(JoinHeader {
+                atom,
+                constraints: Pooled::cloned(&atom_info.constraints.fast),
+                subset: atom_info.constraints.subset.clone(),
+            });
+        }
+    }
+
+    (header, remaining_constraints)
+}
+
+/// Plan query execution stages using the specified strategy.
+/// Returns (header, instructions) tuple that can be assembled into a Plan by the caller.
+fn plan_stages(ctx: &PlanningContext, strat: PlanStrategy) -> (Vec<JoinHeader>, Vec<JoinStage>) {
+    let (header, remaining_constraints) = plan_headers(ctx);
+    let mut instrs = Vec::new();
+    let mut state = PlanningState::new(ctx.vars.n_ids(), ctx.atoms.n_ids());
+
+    match strat {
+        PlanStrategy::PureSize | PlanStrategy::MinCover => {
+            plan_free_join(ctx, &mut state, strat, &remaining_constraints, &mut instrs)
+        }
+        PlanStrategy::Gj => plan_gj(ctx, &mut state, &remaining_constraints, &mut instrs),
+    };
+
+    (header, instrs)
+}
+
+/// Plan free join queries using pure size or minimal cover strategy.
+fn plan_free_join(
+    ctx: &PlanningContext,
+    state: &mut PlanningState,
+    strat: PlanStrategy,
+    remaining_constraints: &DenseIdMap<AtomId, (usize, &Pooled<Vec<Constraint>>)>,
+    stages: &mut Vec<JoinStage>,
+) {
+    let mut size_info = Vec::<(AtomId, usize)>::new();
+
+    match strat {
+        PlanStrategy::PureSize => {
+            for (atom, (size, _)) in remaining_constraints.iter() {
+                size_info.push((atom, *size));
+            }
+        }
+        PlanStrategy::MinCover => {
+            let mut eligible_covers = HashSet::default();
+            let mut queue = BucketQueue::new(&ctx.vars, &ctx.atoms);
+            while let Some(atom) = queue.pop_min() {
+                eligible_covers.insert(atom);
+            }
+            for (atom, (size, _)) in remaining_constraints
+                .iter()
+                .filter(|(atom, _)| eligible_covers.contains(atom))
+            {
+                size_info.push((atom, *size));
+            }
+        }
+        PlanStrategy::Gj => unreachable!(),
+    };
+
+    size_info.sort_by_key(|(_, size)| *size);
+    let mut atoms = size_info.iter().map(|(atom, _)| *atom);
+
+    while let Some(info) = get_next_freejoin_stage(ctx, state, &mut atoms) {
+        let stage = compile_stage(ctx, state, info);
+        stages.push(stage);
+    }
+}
+
+/// Generate the next free join stage by picking an atom from the ordering.
+/// Returns the stage info and updated state, or None if all atoms are covered.
+fn get_next_freejoin_stage(
+    ctx: &PlanningContext,
+    state: &mut PlanningState,
+    ordering: &mut impl Iterator<Item = AtomId>,
+) -> Option<StageInfo> {
+    let mut scratch_subatom: HashMap<AtomId, SmallVec<[ColumnId; 2]>> = Default::default();
+
+    loop {
+        let mut covered = false;
+        let atom = ordering.next()?;
+        let atom_info = &ctx.atoms[atom];
+        let mut cover = SubAtom::new(atom);
+        let mut vars = SmallVec::<[Variable; 1]>::new();
+
+        for (ix, var) in atom_info.column_to_var.iter() {
+            if state.is_var_used(*var) {
+                continue;
+            }
+            // This atom is not completely covered by previous stages.
+            covered = true;
+            state.mark_var_used(*var);
+            vars.push(*var);
+            cover.vars.push(ix);
+
+            for subatom in ctx.vars[*var].occurrences.iter() {
+                if subatom.atom == atom {
+                    continue;
+                }
+                scratch_subatom
+                    .entry(subatom.atom)
+                    .or_default()
+                    .extend(subatom.vars.iter().copied());
+            }
+        }
+
+        if !covered {
+            // Search the next atom.
+            continue;
+        }
+
+        let mut filters = Vec::new();
+        for (atom, cols) in scratch_subatom.drain() {
+            let mut form_key = SmallVec::<[ColumnId; 2]>::new();
+            for var_ix in &cols {
+                let var = ctx.atoms[atom].column_to_var[*var_ix];
+                // form_key is an index _into the subatom forming the cover_.
+                let cover_col = vars.iter().position(|v| *v == var).unwrap();
+                form_key.push(ColumnId::from_usize(cover_col));
+            }
+            filters.push((SubAtom { atom, vars: cols }, form_key));
+        }
+
+        return Some(StageInfo {
+            cover,
+            vars,
+            filters,
+        });
+    }
+}
+
+/// Plan generic join queries (one variable per stage).
+fn plan_gj(
+    ctx: &PlanningContext,
+    state: &mut PlanningState,
+    remaining_constraints: &DenseIdMap<AtomId, (usize, &Pooled<Vec<Constraint>>)>,
+    stages: &mut Vec<JoinStage>,
+) {
+    // First, map all variables to the size of the smallest atom in which they appear:
+    let mut min_sizes = Vec::with_capacity(ctx.vars.n_ids());
+    let mut atoms_hit = AtomSet::with_capacity(ctx.atoms.n_ids());
+    for (var, var_info) in ctx.vars.iter() {
+        let n_occs = var_info.occurrences.len();
+        if n_occs == 1 && !var_info.used_in_rhs {
+            // Do not plan this one. Unless (see below).
+            continue;
+        }
+        if let Some(min_size) = var_info
+            .occurrences
+            .iter()
+            .map(|subatom| {
+                atoms_hit.set(subatom.atom.index(), true);
+                remaining_constraints[subatom.atom].0
+            })
+            .min()
+        {
+            min_sizes.push((var, min_size, n_occs));
+        }
+        // If the variable has no ocurrences, it may be bound on the RHS of a
+        // rule (or it may just be unused). Either way, we will ignore it when
+        // planning the query.
+    }
+    for (var, var_info) in ctx.vars.iter() {
+        if var_info.occurrences.len() == 1 && !var_info.used_in_rhs {
+            // We skipped this variable the first time around because it
+            // looks "unused". If it belongs to an atom that otherwise has
+            // gone unmentioned, though, we need to plan it anyway.
+            let atom = var_info.occurrences[0].atom;
+            if !atoms_hit.contains(atom.index()) {
+                min_sizes.push((var, remaining_constraints[atom].0, 1));
+            }
+        }
+    }
+    // Sort ascending by size, then descending by number of occurrences.
+    min_sizes.sort_by_key(|(_, size, occs)| (*size, -(*occs as i64)));
+    for (var, _, _) in min_sizes {
+        let occ = ctx.vars[var].occurrences[0].clone();
+        let mut info = StageInfo {
+            cover: occ,
+            vars: smallvec![var],
+            filters: Default::default(),
+        };
+        for occ in &ctx.vars[var].occurrences[1..] {
+            info.filters
+                .push((occ.clone(), smallvec![ColumnId::new(0); occ.vars.len()]));
+        }
+
+        let next_stage = compile_stage(ctx, state, info);
+        if let Some(prev) = stages.last_mut() {
+            if prev.fuse(&next_stage) {
+                continue;
+            }
+        }
+        stages.push(next_stage);
+    }
+}
+
+/// Compile a stage info into a concrete join stage, updating constraint state.
+fn compile_stage(
+    ctx: &PlanningContext,
+    state: &mut PlanningState,
+    StageInfo {
+        cover,
+        vars,
+        filters,
+    }: StageInfo,
+) -> JoinStage {
+    fn take_atom_constraints_if_new(
+        ctx: &PlanningContext,
+        state: &mut PlanningState,
+        atom: AtomId,
+    ) -> Vec<Constraint> {
+        if state.is_atom_constrained(atom) {
+            Default::default()
+        } else {
+            state.mark_atom_constrained(atom);
+            ctx.atoms[atom].constraints.slow.clone()
+        }
+    }
+
+    if vars.len() == 1 {
+        let scans = SmallVec::<[SingleScanSpec; 3]>::from_iter(
+            iter::once(&cover)
+                .chain(filters.iter().map(|(x, _)| x))
+                .map(|subatom| {
+                    let atom = subatom.atom;
+                    SingleScanSpec {
+                        atom,
+                        column: subatom.vars[0],
+                        cs: take_atom_constraints_if_new(ctx, state, atom),
+                    }
+                }),
+        );
+
+        return JoinStage::Intersect {
+            var: vars[0],
+            scans,
+        };
+    }
+
+    // FusedIntersect case
+    let atom = cover.atom;
+
+    let cover_spec = ScanSpec {
+        to_index: cover,
+        constraints: take_atom_constraints_if_new(ctx, state, atom),
+    };
+
+    let mut bind = SmallVec::new();
+    let var_set = &ctx.atoms[atom].var_to_column;
+    for var in vars {
+        bind.push((var_set[&var], var));
+    }
+
+    let mut to_intersect = Vec::with_capacity(filters.len());
+    for (subatom, key_spec) in filters {
+        let atom = subatom.atom;
+        let scan = ScanSpec {
+            to_index: subatom,
+            constraints: take_atom_constraints_if_new(ctx, state, atom),
+        };
+        to_intersect.push((scan, key_spec));
+    }
+
+    JoinStage::FusedIntersect {
+        cover: cover_spec,
+        bind,
+        to_intersect,
     }
 }

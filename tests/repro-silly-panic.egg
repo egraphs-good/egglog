@@ -2,11 +2,11 @@
     (par KAT KAT)
 )
 (constructor AConst () KAT)
-(let A (AConst))
+(let $A (AConst))
 
 (rewrite (par p p) p)
 (rule ((= r (par q r)) (= q (par q r))) ((union r q)))
 
 ; tests
-(let q (par A A))
+(let $q (par $A $A))
 (run 10)

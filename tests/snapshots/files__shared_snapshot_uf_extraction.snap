@@ -1,0 +1,7 @@
+---
+source: tests/files.rs
+expression: snapshot_content_across_treatments
+---
+((Bar 1)
+ (Foo 1)
+ (UF_Expr 2))

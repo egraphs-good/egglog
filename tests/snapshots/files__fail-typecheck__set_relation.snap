@@ -1,0 +1,6 @@
+---
+source: tests/files.rs
+expression: err_msg
+---
+In 7:1-27 of set_relation.egg: (set (edge 3 4) (edge 4 5))
+Cannot set constructor edge. Use `union` instead or declare edge as a function.

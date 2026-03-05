@@ -1,7 +1,7 @@
 //! A Utility Struct for Writing to a Vector in parallel without blocking reads.
 
 use std::{
-    mem,
+    cell, mem,
     ops::{Deref, Range},
     sync::atomic::{AtomicUsize, Ordering},
 };
@@ -117,19 +117,7 @@ impl<T> ParallelVecWriter<T> {
     /// length. This method panics if the actual length does not match the
     /// length method.
     pub fn write_contents(&self, items: impl ExactSizeIterator<Item = T>) -> usize {
-        let start = self.end_len.fetch_add(items.len(), Ordering::AcqRel);
-        let end = start + items.len();
-        let reader = self.data.read();
-        let current_len = reader.len();
-        let current_cap = reader.capacity();
-        mem::drop(reader);
-        if current_cap < end {
-            let mut writer = self.data.lock();
-            if writer.capacity() < end {
-                let new_cap = std::cmp::max(end, current_cap * 2);
-                writer.reserve(new_cap - current_len);
-            }
-        }
+        let start = self.reserve_space(items.len());
         // SAFETY: the unsafe operations that `write_contents_at` performs are:
         // * Writing to a shared buffer: this is safe because the `fetch_add` we
         // perform gives us unique access to the subslice.
@@ -137,6 +125,16 @@ impl<T> ParallelVecWriter<T> {
         // above code pre-reseves sufficient capacity for `items` to write.
         unsafe { self.write_contents_at(items, start) };
         start
+    }
+
+    /// Write the contents of `items` to a contiguous chunk of the vector,
+    /// returning the index of the first element in `items`.
+    pub fn write_slice(&self, items: &[T]) -> usize
+    where
+        T: Copy,
+    {
+        // SAFETY: `T: Copy` ensures it is trivially copyable.
+        unsafe { self.write_slice_raw(items) }
     }
 
     pub fn finish(self) -> Vec<T> {
@@ -160,6 +158,23 @@ impl<T> ParallelVecWriter<T> {
         res
     }
 
+    fn reserve_space(&self, len: usize) -> usize {
+        let start = self.end_len.fetch_add(len, Ordering::AcqRel);
+        let end = start + len;
+        let reader = self.data.read();
+        let current_len = reader.len();
+        let current_cap = reader.capacity();
+        mem::drop(reader);
+        if current_cap < end {
+            let mut writer = self.data.lock();
+            if writer.capacity() < end {
+                let new_cap = std::cmp::max(end, writer.capacity() * 2);
+                writer.reserve(new_cap - current_len);
+            }
+        }
+        start
+    }
+
     unsafe fn write_contents_at(&self, items: impl ExactSizeIterator<Item = T>, start: usize) {
         let mut written = 0;
         let expected = items.len();
@@ -178,4 +193,42 @@ impl<T> ParallelVecWriter<T> {
             "passed ExactSizeIterator with incorrect number of items"
         );
     }
+
+    /// Copy a raw slice into the underlying storage.
+    ///
+    /// # Safety
+    /// The caller must ensure that `T` is trivially copyable (bitwise copy is valid and does not
+    /// require Drop).
+    unsafe fn write_slice_raw(&self, items: &[T]) -> usize {
+        let start = self.reserve_space(items.len());
+        let reader = self.data.read();
+        debug_assert!(reader.capacity() >= start + items.len());
+        // SAFETY: the slice is initialized, the destination range is reserved
+        // for this writer and is disjoint from the slice, and we hold a read
+        // guard to prevent reallocations while copying.
+        unsafe {
+            std::ptr::copy_nonoverlapping(
+                items.as_ptr(),
+                (reader.as_ptr() as *mut T).add(start),
+                items.len(),
+            );
+        }
+        start
+    }
+}
+
+/// A variant of write_slice that applies to `Cell<T>`.
+///
+/// `Cell<T>` could _just_ be copy but it is not for some reason[0]. All of the safety
+/// guarantees for slices of copy types apply to slices of cells just as well.
+///
+/// There seems to be a bug preventing this from being a member method of ParallelVecWriter.
+///
+/// [0]: https://users.rust-lang.org/t/why-is-cell-not-copy/2208
+pub fn write_cell_slice<T: Copy>(
+    this: &ParallelVecWriter<cell::Cell<T>>,
+    items: &[std::cell::Cell<T>],
+) -> usize {
+    // SAFETY: `Cell<T>` is trivially copyable when `T: Copy`.
+    unsafe { this.write_slice_raw(items) }
 }

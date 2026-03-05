@@ -1,0 +1,7 @@
+(relation edge (i64 i64))
+
+(edge 1 2)
+(edge 2 3)
+
+; This should fail - cannot set a relation (which is a constructor)
+(set (edge 3 4) (edge 4 5))

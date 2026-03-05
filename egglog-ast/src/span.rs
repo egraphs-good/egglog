@@ -59,7 +59,7 @@ impl Span {
 
 impl Debug for Span {
     fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
-        write!(f, "{}", self)
+        write!(f, "{self}")
     }
 }
 
@@ -74,24 +74,28 @@ impl Display for Span {
                     .file
                     .get_location((span.j.saturating_sub(1)).max(span.i));
                 let quote = self.string();
-                match (&span.file.name, start_line == end_line) {
+                // Use just the file name, not the full path, for cross-platform consistency in snapshots
+                let display_name = span.file.name.as_ref().map(|path| {
+                    std::path::Path::new(path)
+                        .file_name()
+                        .and_then(|n| n.to_str())
+                        .unwrap_or(path)
+                });
+                match (&display_name, start_line == end_line) {
                     (Some(filename), true) => write!(
                         f,
-                        "In {}:{}-{} of {filename}: {quote}",
-                        start_line, start_col, end_col
+                        "In {start_line}:{start_col}-{end_col} of {filename}: {quote}"
                     ),
                     (Some(filename), false) => write!(
                         f,
-                        "In {}:{}-{}:{} of {filename}: {quote}",
-                        start_line, start_col, end_line, end_col
+                        "In {start_line}:{start_col}-{end_line}:{end_col} of {filename}: {quote}"
                     ),
                     (None, false) => write!(
                         f,
-                        "In {}:{}-{}:{}: {quote}",
-                        start_line, start_col, end_line, end_col
+                        "In {start_line}:{start_col}-{end_line}:{end_col}: {quote}"
                     ),
                     (None, true) => {
-                        write!(f, "In {}:{}-{}: {quote}", start_line, start_col, end_col)
+                        write!(f, "In {start_line}:{start_col}-{end_col}: {quote}")
                     }
                 }
             }

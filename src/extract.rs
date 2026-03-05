@@ -1,4 +1,5 @@
-use crate::termdag::{Term, TermDag};
+use crate::ast::FunctionSubtype;
+use crate::termdag::{TermDag, TermId};
 use crate::util::{HashMap, HashSet};
 use crate::*;
 use std::collections::VecDeque;
@@ -123,6 +124,11 @@ impl CostModel<DefaultCost> for TreeAdditiveCostModel {
 }
 
 /// The default, Bellman-Ford like extractor. This extractor is optimal for [`CostModel`].
+///
+/// Note that this assumes optimal substructure in the cost model, that is, a lower-cost
+/// subterm should always lead to a non-worse superterm, to guarantee the extracted term
+/// being optimal under the given cost model.
+/// If this is not followed, the extractor may panic on reconstruction
 pub struct Extractor<C: Cost + Ord + Eq + Clone + Debug> {
     rootsorts: Vec<ArcSort>,
     funcs: Vec<String>,
@@ -131,6 +137,24 @@ pub struct Extractor<C: Cost + Ord + Eq + Clone + Debug> {
     topo_rnk_cnt: usize,
     topo_rnk: HashMap<String, HashMap<Value, usize>>,
     parent_edge: HashMap<String, HashMap<Value, (String, Vec<Value>)>>,
+}
+
+/// Options for configuring extraction behavior.
+struct ExtractionOptions<C: Cost> {
+    /// The cost model to use for extraction.
+    cost_model: Box<dyn CostModel<C>>,
+    /// Root sorts to extract from. If None, all extractable root sorts are used.
+    rootsorts: Option<Vec<ArcSort>>,
+    /// Whether to respect the unextractable flag on constructors.
+    /// When true, constructors marked as unextractable will not be used during extraction.
+    respect_unextractable: bool,
+    /// Whether to skip view tables (those with term_constructor annotations).
+    /// When true, view tables are skipped, which is useful for proof extraction
+    /// where we need to extract from the original term tables with their original names.
+    skip_view_tables: bool,
+    /// Whether to respect the hidden flag on constructors.
+    /// When true, constructors marked as hidden will not be used during extraction.
+    respect_hidden: bool,
 }
 
 impl<C: Cost + Ord + Eq + Clone + Debug> Extractor<C> {
@@ -145,23 +169,74 @@ impl<C: Cost + Ord + Eq + Clone + Debug> Extractor<C> {
         egraph: &EGraph,
         cost_model: impl CostModel<C> + 'static,
     ) -> Self {
-        // We filter out tables unreachable from the root sorts
-        let extract_all_sorts = rootsorts.is_none();
+        // For user extraction: respect unextractable and hidden, but use view tables (they have better names)
+        Self::compute_costs_from_rootsorts_internal(
+            egraph,
+            ExtractionOptions {
+                cost_model: Box::new(cost_model),
+                rootsorts,
+                respect_unextractable: true,
+                skip_view_tables: false,
+                respect_hidden: true,
+            },
+        )
+    }
 
-        let mut rootsorts = rootsorts.unwrap_or_default();
+    /// Like `compute_costs_from_rootsorts`, but ignores the unextractable and hidden flags.
+    /// This is used for proof extraction where we need to extract proofs even
+    /// from terms that are marked unextractable (like global let bindings).
+    /// Also skips view tables (those with term_constructor) since proofs need
+    /// to extract from the original term tables with their original names.
+    pub(crate) fn compute_costs_from_rootsorts_allow_unextractable(
+        rootsorts: Option<Vec<ArcSort>>,
+        egraph: &EGraph,
+        cost_model: impl CostModel<C> + 'static,
+    ) -> Self {
+        Self::compute_costs_from_rootsorts_internal(
+            egraph,
+            ExtractionOptions {
+                cost_model: Box::new(cost_model),
+                rootsorts,
+                respect_unextractable: false,
+                skip_view_tables: true,
+                respect_hidden: false,
+            },
+        )
+    }
+
+    fn compute_costs_from_rootsorts_internal(
+        egraph: &EGraph,
+        options: ExtractionOptions<C>,
+    ) -> Self {
+        // We filter out tables unreachable from the root sorts
+        let extract_all_sorts = options.rootsorts.is_none();
+
+        let mut rootsorts = options.rootsorts.unwrap_or_default();
 
         // Built a reverse index from output sort to function head symbols
+        // Only include constructors (not regular functions) and respect unextractable flag
         let mut rev_index: HashMap<String, Vec<String>> = Default::default();
         for func in egraph.functions.iter() {
-            if !func.1.decl.unextractable {
+            let unextractable = func.1.decl.unextractable && options.respect_unextractable;
+            let should_skip_view =
+                options.skip_view_tables && func.1.decl.term_constructor.is_some();
+            let hidden = func.1.decl.internal_hidden && options.respect_hidden;
+
+            // only extract constructors, skip view tables when requested for proof extraction, and respect unextractable/hidden flag
+            if !unextractable
+                && !should_skip_view
+                && !hidden
+                && func.1.decl.subtype == FunctionSubtype::Constructor
+            {
                 let func_name = func.0.clone();
-                let output_sort_name = func.1.schema.output.name();
+                // For view tables (with term_constructor in proof mode), the e-class is the last input column
+                let output_sort_name = func.1.extraction_output_sort().name();
                 if let Some(v) = rev_index.get_mut(output_sort_name) {
                     v.push(func_name);
                 } else {
                     rev_index.insert(output_sort_name.to_owned(), vec![func_name]);
                     if extract_all_sorts {
-                        rootsorts.push(func.1.schema.output.clone());
+                        rootsorts.push(func.1.extraction_output_sort().clone());
                     }
                 }
             }
@@ -192,7 +267,9 @@ impl<C: Cost + Ord + Eq + Clone + Debug> Extractor<C> {
                     for h in head_symbols {
                         if !funcs_set.contains(h) {
                             let func = egraph.functions.get(h).unwrap();
-                            for ch in &func.schema.input {
+                            // For view tables, children are all but the last input (which is the e-class)
+                            let num_children = func.extraction_num_children();
+                            for ch in func.schema.input.iter().take(num_children) {
                                 let ch_name = ch.name();
                                 if !seen.contains(ch_name) {
                                     q.push_back(ch.clone());
@@ -215,18 +292,18 @@ impl<C: Cost + Ord + Eq + Clone + Debug> Extractor<C> {
 
         for func_name in funcs.iter() {
             let func = egraph.functions.get(func_name).unwrap();
-            if !costs.contains_key(func.schema.output.name()) {
-                debug_assert!(func.schema.output.is_eq_sort());
-                costs.insert(func.schema.output.name().to_owned(), Default::default());
-                topo_rnk.insert(func.schema.output.name().to_owned(), Default::default());
-                parent_edge.insert(func.schema.output.name().to_owned(), Default::default());
+            let output_sort_name = func.extraction_output_sort().name();
+            if !costs.contains_key(output_sort_name) {
+                costs.insert(output_sort_name.to_owned(), Default::default());
+                topo_rnk.insert(output_sort_name.to_owned(), Default::default());
+                parent_edge.insert(output_sort_name.to_owned(), Default::default());
             }
         }
 
         let mut extractor = Extractor {
             rootsorts,
             funcs,
-            cost_model: Box::new(cost_model),
+            cost_model: options.cost_model,
             costs,
             topo_rnk_cnt: 0,
             topo_rnk,
@@ -246,33 +323,14 @@ impl<C: Cost + Ord + Eq + Clone + Debug> Extractor<C> {
             let elements = sort.inner_values(egraph.backend.container_values(), value);
             let mut ch_costs: Vec<C> = Vec::new();
             for ch in elements.iter() {
-                if let Some(c) = self.compute_cost_node(egraph, ch.1, &ch.0) {
-                    ch_costs.push(c);
-                } else {
-                    return None;
-                }
+                ch_costs.push(self.compute_cost_node(egraph, ch.1, &ch.0)?);
             }
             Some(
                 self.cost_model
                     .container_cost(egraph, sort, value, &ch_costs),
             )
         } else if sort.is_eq_sort() {
-            if self
-                .costs
-                .get(sort.name())
-                .is_some_and(|t| t.get(&value).is_some())
-            {
-                Some(
-                    self.costs
-                        .get(sort.name())
-                        .unwrap()
-                        .get(&value)
-                        .unwrap()
-                        .clone(),
-                )
-            } else {
-                None
-            }
+            self.costs.get(sort.name())?.get(&value).cloned()
         } else {
             // Primitive
             Some(self.cost_model.base_value_cost(egraph, sort, value))
@@ -288,17 +346,13 @@ impl<C: Cost + Ord + Eq + Clone + Debug> Extractor<C> {
     ) -> Option<C> {
         let mut ch_costs: Vec<C> = Vec::new();
         let sorts = &func.schema.input;
-        //log::debug!("compute_cost_hyperedge head {} sorts {:?}", head, sorts);
-        // Relying on .zip to truncate the values
-        for (value, sort) in row.vals.iter().zip(sorts.iter()) {
-            if let Some(c) = self.compute_cost_node(egraph, *value, sort) {
-                ch_costs.push(c);
-            } else {
-                return None;
-            }
+        let num_children = func.extraction_num_children();
+        for (value, sort) in row.vals.iter().take(num_children).zip(sorts.iter()) {
+            ch_costs.push(self.compute_cost_node(egraph, *value, sort)?);
         }
+        let head_name = func.extraction_term_name();
         Some(self.cost_model.fold(
-            &func.decl.name,
+            head_name,
             &ch_costs,
             self.cost_model.enode_cost(egraph, func, row),
         ))
@@ -329,8 +383,10 @@ impl<C: Cost + Ord + Eq + Clone + Debug> Extractor<C> {
         func: &Function,
     ) -> usize {
         let sorts = &func.schema.input;
+        let num_children = func.extraction_num_children();
         row.vals
             .iter()
+            .take(num_children)
             .zip(sorts.iter())
             .fold(0, |ret, (value, sort)| {
                 usize::max(ret, self.compute_topo_rnk_node(egraph, *value, sort))
@@ -357,12 +413,12 @@ impl<C: Cost + Ord + Eq + Clone + Debug> Extractor<C> {
 
             for func_name in funcs.iter() {
                 let func = egraph.functions.get(func_name).unwrap();
-                let target_sort = func.schema.output.clone();
+                let target_sort = func.extraction_output_sort();
 
+                let output_idx = func.extraction_output_index();
                 let relax_hyperedge = |row: egglog_bridge::FunctionRow| {
-                    log::debug!("Relaxing a new hyperedge: {:?}", row);
                     if !row.subsumed {
-                        let target = row.vals.last().unwrap();
+                        let target = &row.vals[output_idx];
                         let mut updated = false;
                         if let Some(new_cost) = self.compute_cost_hyperedge(egraph, &row, func) {
                             match self
@@ -404,11 +460,12 @@ impl<C: Cost + Ord + Eq + Clone + Debug> Extractor<C> {
         // Save the edges for reconstruction
         for func_name in funcs.iter() {
             let func = egraph.functions.get(func_name).unwrap();
-            let target_sort = func.schema.output.clone();
+            let target_sort = func.extraction_output_sort();
+            let output_idx = func.extraction_output_index();
 
             let save_best_parent_edge = |row: egglog_bridge::FunctionRow| {
                 if !row.subsumed {
-                    let target = row.vals.last().unwrap();
+                    let target = &row.vals[output_idx];
                     if let Some(best_cost) = self.costs.get(target_sort.name()).unwrap().get(target)
                     {
                         if Some(best_cost.clone())
@@ -451,7 +508,7 @@ impl<C: Cost + Ord + Eq + Clone + Debug> Extractor<C> {
         termdag: &mut TermDag,
         value: Value,
         sort: &ArcSort,
-    ) -> Term {
+    ) -> TermId {
         self.reconstruct_termdag_node_helper(egraph, termdag, value, sort, &mut Default::default())
     }
 
@@ -461,16 +518,16 @@ impl<C: Cost + Ord + Eq + Clone + Debug> Extractor<C> {
         termdag: &mut TermDag,
         value: Value,
         sort: &ArcSort,
-        cache: &mut HashMap<(Value, String), Term>,
-    ) -> Term {
+        cache: &mut HashMap<(Value, String), TermId>,
+    ) -> TermId {
         let key = (value, sort.name().to_owned());
         if let Some(term) = cache.get(&key) {
-            return term.clone();
+            return *term;
         }
 
         let term = if sort.is_container_sort() {
             let elements = sort.inner_values(egraph.backend.container_values(), value);
-            let mut ch_terms: Vec<Term> = Vec::new();
+            let mut ch_terms: Vec<TermId> = Vec::new();
             for ch in elements.iter() {
                 ch_terms.push(
                     self.reconstruct_termdag_node_helper(egraph, termdag, ch.1, &ch.0, cache),
@@ -489,20 +546,25 @@ impl<C: Cost + Ord + Eq + Clone + Debug> Extractor<C> {
                 .unwrap()
                 .get(&value)
                 .unwrap();
-            let mut ch_terms: Vec<Term> = Vec::new();
-            let ch_sorts = &egraph.functions.get(func_name).unwrap().schema.input;
-            for (value, sort) in hyperedge.iter().zip(ch_sorts.iter()) {
+            let func = egraph.functions.get(func_name).unwrap();
+            let ch_sorts = &func.schema.input;
+
+            let num_children = func.extraction_num_children();
+            let output_name = func.extraction_term_name();
+
+            let mut ch_terms: Vec<TermId> = Vec::new();
+            for (value, sort) in hyperedge.iter().take(num_children).zip(ch_sorts.iter()) {
                 ch_terms.push(
                     self.reconstruct_termdag_node_helper(egraph, termdag, *value, sort, cache),
                 );
             }
-            termdag.app(func_name.clone(), ch_terms)
+            termdag.app(output_name.to_string(), ch_terms)
         } else {
             // Base value case
             sort.reconstruct_termdag_base(egraph.backend.base_values(), value, termdag)
         };
 
-        cache.insert(key, term.clone());
+        cache.insert(key, term);
         term
     }
 
@@ -516,17 +578,20 @@ impl<C: Cost + Ord + Eq + Clone + Debug> Extractor<C> {
         termdag: &mut TermDag,
         value: Value,
         sort: ArcSort,
-    ) -> Option<(C, Term)> {
-        match self.compute_cost_node(egraph, value, &sort) {
-            Some(best_cost) => {
-                log::debug!("Best cost for the extract root: {:?}", best_cost);
+    ) -> Option<(C, TermId)> {
+        // Canonicalize the value using the union-find if available (for term-encoding mode)
+        let canonical_value = self.find_canonical(egraph, value, &sort);
 
-                let term = self.reconstruct_termdag_node(egraph, termdag, value, &sort);
+        match self.compute_cost_node(egraph, canonical_value, &sort) {
+            Some(best_cost) => {
+                log::debug!("Best cost for the extract root: {best_cost:?}");
+
+                let term = self.reconstruct_termdag_node(egraph, termdag, canonical_value, &sort);
 
                 Some((best_cost, term))
             }
             None => {
-                log::error!("Unextractable root {:?} with sort {:?}", value, sort,);
+                log::error!("Unextractable root {value:?} with sort {sort:?}",);
                 None
             }
         }
@@ -540,7 +605,7 @@ impl<C: Cost + Ord + Eq + Clone + Debug> Extractor<C> {
         egraph: &EGraph,
         termdag: &mut TermDag,
         value: Value,
-    ) -> Option<(C, Term)> {
+    ) -> Option<(C, TermId)> {
         assert!(
             self.rootsorts.len() == 1,
             "extract_best requires a single rootsort"
@@ -551,6 +616,34 @@ impl<C: Cost + Ord + Eq + Clone + Debug> Extractor<C> {
             value,
             self.rootsorts.first().unwrap().clone(),
         )
+    }
+
+    /// Find the canonical representative of a value using the union-find table.
+    /// If no UF is registered for this sort, returns the original value.
+    /// The UF table stores (value, canonical) pairs - one hop lookup.
+    fn find_canonical(&self, egraph: &EGraph, value: Value, sort: &ArcSort) -> Value {
+        // Check if there's a UF registered for this sort
+        let Some(uf_name) = egraph.proof_state.uf_parent.get(sort.name()) else {
+            return value;
+        };
+
+        // Get the UF function
+        let Some(uf_func) = egraph.functions.get(uf_name) else {
+            return value;
+        };
+
+        // Single lookup in UF table - it's guaranteed to be one hop to canonical
+        let mut canonical = value;
+        egraph
+            .backend
+            .for_each(uf_func.backend_id, |row: egglog_bridge::FunctionRow| {
+                // UF table has (child, parent) as inputs
+                if row.vals[0] == value {
+                    canonical = row.vals[1];
+                }
+            });
+
+        canonical
     }
 
     /// Extract variants of an e-class.
@@ -564,23 +657,25 @@ impl<C: Cost + Ord + Eq + Clone + Debug> Extractor<C> {
         value: Value,
         nvariants: usize,
         sort: ArcSort,
-    ) -> Vec<(C, Term)> {
+    ) -> Vec<(C, TermId)> {
         debug_assert!(self.rootsorts.iter().any(|s| { s.name() == sort.name() }));
 
         if sort.is_eq_sort() {
+            // Canonicalize the value using the union-find if available
+            let canonical_value = self.find_canonical(egraph, value, &sort);
+
             let mut root_variants: Vec<(C, String, Vec<Value>)> = Vec::new();
 
             let mut root_funcs: Vec<String> = Vec::new();
 
             for func_name in self.funcs.iter() {
-                // Need an eq on sorts
+                // Need an eq on sorts - use extraction_output_sort for view table support
                 if sort.name()
                     == egraph
                         .functions
                         .get(func_name)
                         .unwrap()
-                        .schema
-                        .output
+                        .extraction_output_sort()
                         .name()
                 {
                     root_funcs.push(func_name.clone());
@@ -589,11 +684,12 @@ impl<C: Cost + Ord + Eq + Clone + Debug> Extractor<C> {
 
             for func_name in root_funcs.iter() {
                 let func = egraph.functions.get(func_name).unwrap();
+                let output_idx = func.extraction_output_index();
 
                 let find_root_variants = |row: egglog_bridge::FunctionRow| {
                     if !row.subsumed {
-                        let target = row.vals.last().unwrap();
-                        if *target == value {
+                        let target = &row.vals[output_idx];
+                        if *target == canonical_value {
                             let cost = self.compute_cost_hyperedge(egraph, &row, func).unwrap();
                             root_variants.push((cost, func_name.clone(), row.vals.to_vec()));
                         }
@@ -603,17 +699,26 @@ impl<C: Cost + Ord + Eq + Clone + Debug> Extractor<C> {
                 egraph.backend.for_each(func.backend_id, find_root_variants);
             }
 
-            let mut res: Vec<(C, Term)> = Vec::new();
+            let mut res: Vec<(C, TermId)> = Vec::new();
+            let mut cache: HashMap<(Value, String), TermId> = Default::default();
             root_variants.sort();
             root_variants.truncate(nvariants);
             for (cost, func_name, hyperedge) in root_variants {
-                let mut ch_terms: Vec<Term> = Vec::new();
-                let ch_sorts = &egraph.functions.get(&func_name).unwrap().schema.input;
-                // zip truncates the row
-                for (value, sort) in hyperedge.iter().zip(ch_sorts.iter()) {
-                    ch_terms.push(self.reconstruct_termdag_node(egraph, termdag, *value, sort));
+                let mut ch_terms: Vec<TermId> = Vec::new();
+                let func = egraph.functions.get(&func_name).unwrap();
+                let ch_sorts = &func.schema.input;
+                let num_children = func.extraction_num_children();
+                // For view tables, children are all but the last input (which is the e-class)
+                for (value, sort) in hyperedge.iter().zip(ch_sorts.iter()).take(num_children) {
+                    ch_terms.push(self.reconstruct_termdag_node_helper(
+                        egraph, termdag, *value, sort, &mut cache,
+                    ));
                 }
-                res.push((cost, termdag.app(func_name, ch_terms)));
+                // Use extraction_term_name for view tables (maps to the original constructor)
+                res.push((
+                    cost,
+                    termdag.app(func.extraction_term_name().to_string(), ch_terms),
+                ));
             }
 
             res
@@ -638,7 +743,7 @@ impl<C: Cost + Ord + Eq + Clone + Debug> Extractor<C> {
         termdag: &mut TermDag,
         value: Value,
         nvariants: usize,
-    ) -> Vec<(C, Term)> {
+    ) -> Vec<(C, TermId)> {
         assert!(
             self.rootsorts.len() == 1,
             "extract_variants requires a single rootsort"
@@ -650,5 +755,150 @@ impl<C: Cost + Ord + Eq + Clone + Debug> Extractor<C> {
             nvariants,
             self.rootsorts.first().unwrap().clone(),
         )
+    }
+}
+
+impl Function {
+    /// For view tables (with term_constructor), the effective output sort is the last input column.
+    /// For regular tables, it's the output sort.
+    /// This is used by extraction to determine which sort a table produces values for.
+    pub(crate) fn extraction_output_sort(&self) -> &ArcSort {
+        if self.decl.term_constructor.is_some() {
+            self.schema.input.last().unwrap()
+        } else {
+            &self.schema.output
+        }
+    }
+
+    /// Returns the number of children for extraction purposes.
+    /// For view tables, this excludes the last column (the e-class).
+    pub(crate) fn extraction_num_children(&self) -> usize {
+        if self.decl.term_constructor.is_some() {
+            self.schema.input.len() - 1
+        } else {
+            self.schema.input.len()
+        }
+    }
+
+    /// Returns the name to use when building terms during extraction.
+    /// For view tables, this is the term_constructor name.
+    pub(crate) fn extraction_term_name(&self) -> &str {
+        self.decl
+            .term_constructor
+            .as_ref()
+            .unwrap_or(&self.decl.name)
+    }
+
+    /// Returns the index of the output value in a row for extraction purposes.
+    /// For view tables, the e-class is the last input column (second-to-last in the row).
+    /// For regular tables, it's the last column (the actual output).
+    pub(crate) fn extraction_output_index(&self) -> usize {
+        if self.decl.term_constructor.is_some() {
+            // For view tables: input is [children..., eclass], output is view_sort
+            // Row is [children..., eclass, view_sort]
+            // We want eclass which is at index input.len() - 1
+            self.schema.input.len() - 1
+        } else {
+            // For regular tables: row is [inputs..., output]
+            self.schema.input.len()
+        }
+    }
+}
+
+impl EGraph {
+    /// Extract a value to a [`TermDag`] and [`TermId`] in the [`TermDag`] using the default cost model.
+    /// See also [`EGraph::extract_value_with_cost_model`] for more control.
+    pub fn extract_value(
+        &self,
+        sort: &ArcSort,
+        value: Value,
+    ) -> Result<(TermDag, TermId, DefaultCost), Error> {
+        self.extract_value_with_cost_model(sort, value, TreeAdditiveCostModel::default())
+    }
+
+    /// Extract a value to a [`TermDag`] and [`TermId`] in the [`TermDag`].
+    /// Note that the `TermDag` may contain a superset of the nodes referenced by the returned `TermId`.
+    /// See also [`EGraph::extract_value_to_string`] for convenience.
+    pub fn extract_value_with_cost_model<CM: CostModel<DefaultCost> + 'static>(
+        &self,
+        sort: &ArcSort,
+        value: Value,
+        cost_model: CM,
+    ) -> Result<(TermDag, TermId, DefaultCost), Error> {
+        let extractor =
+            Extractor::compute_costs_from_rootsorts(Some(vec![sort.clone()]), self, cost_model);
+        let mut termdag = TermDag::default();
+        let (cost, term) = extractor.extract_best(self, &mut termdag, value).unwrap();
+        Ok((termdag, term, cost))
+    }
+
+    /// Extract a value to a string for printing.
+    /// See also [`EGraph::extract_value`] for more control.
+    pub fn extract_value_to_string(
+        &self,
+        sort: &ArcSort,
+        value: Value,
+    ) -> Result<(String, DefaultCost), Error> {
+        let (termdag, term, cost) = self.extract_value(sort, value)?;
+        Ok((termdag.to_string(term), cost))
+    }
+
+    /// For constructors and relations, the output column can be ignored
+    pub fn function_to_dag(
+        &self,
+        sym: &str,
+        n: usize,
+        include_output: bool,
+    ) -> Result<(Vec<TermId>, Option<Vec<TermId>>, TermDag), Error> {
+        let func = self
+            .functions
+            .get(sym)
+            .ok_or(TypeError::UnboundFunction(sym.to_owned(), span!()))?;
+        let mut rootsorts = func.schema.input.clone();
+        if include_output {
+            rootsorts.push(func.schema.output.clone());
+        }
+        let extractor = Extractor::compute_costs_from_rootsorts(
+            Some(rootsorts),
+            self,
+            TreeAdditiveCostModel::default(),
+        );
+
+        let mut termdag = TermDag::default();
+        let mut inputs: Vec<TermId> = Vec::new();
+        let mut output: Option<Vec<TermId>> = if include_output {
+            Some(Vec::new())
+        } else {
+            None
+        };
+
+        let extract_row = |row: egglog_bridge::FunctionRow| {
+            if inputs.len() < n {
+                // include subsumed rows
+                let mut children: Vec<TermId> = Vec::new();
+                for (value, sort) in row.vals.iter().zip(&func.schema.input) {
+                    let (_, term_id) = extractor
+                        .extract_best_with_sort(self, &mut termdag, *value, sort.clone())
+                        .unwrap_or_else(|| (0, termdag.var("Unextractable".into())));
+                    children.push(term_id);
+                }
+                inputs.push(termdag.app(sym.to_owned(), children));
+                if include_output {
+                    let value = row.vals[func.schema.input.len()];
+                    let sort = &func.schema.output;
+                    let (_, term) = extractor
+                        .extract_best_with_sort(self, &mut termdag, value, sort.clone())
+                        .unwrap_or_else(|| (0, termdag.var("Unextractable".into())));
+                    output.as_mut().unwrap().push(term);
+                }
+                true
+            } else {
+                false
+            }
+        };
+
+        self.backend.for_each_while(func.backend_id, extract_row);
+
+        Ok((inputs, output, termdag))
     }
 }

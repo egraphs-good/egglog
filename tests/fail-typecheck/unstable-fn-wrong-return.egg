@@ -6,6 +6,6 @@
     (Inc Math))
 
 (sort Fn (UnstableFn (Math) Math))
-(let x (unstable-app (unstable-fn "Inc") (Zero)))
+(let $x (unstable-app (unstable-fn "Inc") (Zero)))
 
-(+ x 10)
+(+ $x 10)

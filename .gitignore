@@ -9,6 +9,8 @@ pkg/
 flamegraph.svg
 perf.data*
 profile.json
+/*.json
+/*.txt
 
 _scratch.egg
 /*.egg
@@ -20,3 +22,5 @@ _scratch.egg
 # racket
 scripts/compiled
 tests/*.json
+
+lcov.info

@@ -1,5 +1,7 @@
+use std::hash::Hasher;
+
 use crate::{
-    core::{CoreRule, GenericActionsExt},
+    core::{CoreActionContext, CoreRule, GenericActionsExt, ResolvedCall},
     *,
 };
 use ast::{ResolvedAction, ResolvedExpr, ResolvedFact, ResolvedRule, ResolvedVar, Rule};
@@ -14,8 +16,50 @@ pub struct FuncType {
     pub output: ArcSort,
 }
 
+impl PartialEq for FuncType {
+    fn eq(&self, other: &Self) -> bool {
+        if self.name == other.name
+            && self.subtype == other.subtype
+            && self.output.name() == other.output.name()
+        {
+            if self.input.len() != other.input.len() {
+                return false;
+            }
+            for (a, b) in self.input.iter().zip(other.input.iter()) {
+                if a.name() != b.name() {
+                    return false;
+                }
+            }
+            true
+        } else {
+            false
+        }
+    }
+}
+
+impl Eq for FuncType {}
+
+impl Hash for FuncType {
+    fn hash<H: Hasher>(&self, state: &mut H) {
+        self.name.hash(state);
+        self.subtype.hash(state);
+        self.output.name().hash(state);
+        for inp in &self.input {
+            inp.name().hash(state);
+        }
+    }
+}
+/// Validators take a termdag and arguments (as TermIds) and return
+/// a newly computed TermId if the primitive application is valid,
+/// or None if it is invalid.
+pub type PrimitiveValidator = Arc<dyn Fn(&mut TermDag, &[TermId]) -> Option<TermId> + Send + Sync>;
+
 #[derive(Clone)]
-pub struct PrimitiveWithId(pub Arc<dyn Primitive + Send + Sync>, pub ExternalFunctionId);
+pub struct PrimitiveWithId {
+    pub(crate) primitive: Arc<dyn Primitive + Send + Sync>,
+    pub(crate) id: ExternalFunctionId,
+    pub(crate) validator: Option<PrimitiveValidator>,
+}
 
 impl PrimitiveWithId {
     /// Takes the full signature of a primitive (both input and output types).
@@ -29,7 +73,7 @@ impl PrimitiveWithId {
             constraints.push(constraint::assign(lit.clone(), ty.clone()))
         }
         constraints.extend(
-            self.0
+            self.primitive
                 .get_type_constraints(&Span::Panic)
                 .get(&lits, typeinfo),
         );
@@ -43,7 +87,7 @@ impl PrimitiveWithId {
 
 impl Debug for PrimitiveWithId {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        write!(f, "Prim({})", self.0.name())
+        write!(f, "Prim({})", self.primitive.name())
     }
 }
 
@@ -53,10 +97,12 @@ pub struct TypeInfo {
     mksorts: HashMap<String, MkSort>,
     // TODO(yz): I want to get rid of this as now we have user-defined primitives and constraint based type checking
     reserved_primitives: HashSet<&'static str>,
-    sorts: HashMap<String, Arc<dyn Sort>>,
+    pub(crate) sorts: HashMap<String, Arc<dyn Sort>>,
     primitives: HashMap<String, Vec<PrimitiveWithId>>,
     func_types: HashMap<String, FuncType>,
-    global_sorts: HashMap<String, ArcSort>,
+    pub(crate) global_sorts: HashMap<String, ArcSort>,
+    /// Sorts that do not allow union (e.g., from `:no-union` sorts or relations).
+    pub(crate) non_unionable_sorts: HashSet<String>,
 }
 
 // These methods need to be on the `EGraph` in order to
@@ -117,6 +163,14 @@ impl EGraph {
     where
         T: Clone + Primitive + Send + Sync + 'static,
     {
+        self.add_primitive_with_validator(x, None)
+    }
+
+    /// Add a user-defined primitive with an optional validator
+    pub fn add_primitive_with_validator<T>(&mut self, x: T, validator: Option<PrimitiveValidator>)
+    where
+        T: Clone + Primitive + Send + Sync + 'static,
+    {
         // We need to use a wrapper because of the orphan rule.
         // If we just try to implement `ExternalFunction` directly on
         // all `PrimitiveLike`s then it would be possible for a
@@ -129,13 +183,17 @@ impl EGraph {
             }
         }
 
-        let prim = Arc::new(x.clone());
-        let ext = self.backend.register_external_func(Wrapper(x));
+        let primitive = Arc::new(x.clone());
+        let id = self.backend.register_external_func(Box::new(Wrapper(x)));
         self.type_info
             .primitives
-            .entry(prim.name().to_owned())
+            .entry(primitive.name().to_owned())
             .or_default()
-            .push(PrimitiveWithId(prim, ext));
+            .push(PrimitiveWithId {
+                primitive,
+                id,
+                validator,
+            });
     }
 
     pub(crate) fn typecheck_program(
@@ -154,16 +212,43 @@ impl EGraph {
 
         let command: ResolvedNCommand = match command {
             NCommand::Function(fdecl) => {
-                ResolvedNCommand::Function(self.type_info.typecheck_function(symbol_gen, fdecl)?)
+                let resolved = self.type_info.typecheck_function(symbol_gen, fdecl)?;
+                // If this is a let binding, add it to global_sorts
+                // This preserves bahavior for lets after desugaring
+                if resolved.internal_let {
+                    let output_sort = self.type_info.sorts.get(&fdecl.schema.output).unwrap();
+                    self.type_info
+                        .global_sorts
+                        .insert(fdecl.name.clone(), output_sort.clone());
+                }
+                ResolvedNCommand::Function(resolved)
             }
             NCommand::NormRule { rule } => ResolvedNCommand::NormRule {
                 rule: self.type_info.typecheck_rule(symbol_gen, rule)?,
             },
-            NCommand::Sort(span, sort, presort_and_args) => {
+            NCommand::Sort {
+                span,
+                name,
+                presort_and_args,
+                uf,
+                proof_func,
+                unionable,
+            } => {
                 // Note this is bad since typechecking should be pure and idempotent
                 // Otherwise typechecking the same program twice will fail
-                self.declare_sort(sort.clone(), presort_and_args, span.clone())?;
-                ResolvedNCommand::Sort(span.clone(), sort.clone(), presort_and_args.clone())
+                self.declare_sort(name.clone(), presort_and_args, span.clone())?;
+                // Mark as non-unionable if the sort declaration says so
+                if !unionable {
+                    self.type_info.non_unionable_sorts.insert(name.clone());
+                }
+                ResolvedNCommand::Sort {
+                    span: span.clone(),
+                    name: name.clone(),
+                    presort_and_args: presort_and_args.clone(),
+                    uf: uf.clone(),
+                    proof_func: proof_func.clone(),
+                    unionable: *unionable,
+                }
             }
             NCommand::CoreAction(Action::Let(span, var, expr)) => {
                 let expr = self
@@ -242,6 +327,19 @@ impl EGraph {
                 // Should probably also resolve the function symbol here
                 ResolvedNCommand::PrintSize(span.clone(), n.clone())
             }
+            NCommand::ProveExists(span, constructor) => {
+                let func_type = self
+                    .type_info
+                    .get_func_type(constructor)
+                    .ok_or_else(|| TypeError::UnboundFunction(constructor.clone(), span.clone()))?;
+                if func_type.subtype != FunctionSubtype::Constructor {
+                    return Err(TypeError::ProveExistsRequiresConstructor(
+                        constructor.clone(),
+                        span.clone(),
+                    ));
+                }
+                ResolvedNCommand::ProveExists(span.clone(), ResolvedCall::Func(func_type.clone()))
+            }
             NCommand::Output { span, file, exprs } => {
                 let exprs = exprs
                     .iter()
@@ -279,8 +377,8 @@ impl EGraph {
         if var.is_global_ref {
             return Ok(());
         }
-        if let Some(stripped) = var.name.strip_prefix(crate::GLOBAL_NAME_PREFIX) {
-            self.warn_missing_global_prefix(span, stripped)?;
+        if var.name.starts_with(crate::GLOBAL_NAME_PREFIX) {
+            self.warn_prefixed_non_globals(span, &var.name)?;
         }
         Ok(())
     }
@@ -375,6 +473,13 @@ impl TypeInfo {
         results.into_iter().next().unwrap()
     }
 
+    /// Check if a sort allows union operations.
+    /// A sort is unionable if it's an eq_sort and not marked as non-unionable
+    /// (e.g., from `(sort Foo :no-union)` or relation desugaring).
+    pub fn is_sort_unionable(&self, sort: &ArcSort) -> bool {
+        sort.is_eq_sort() && !self.non_unionable_sorts.contains(sort.name())
+    }
+
     fn function_to_functype(&self, func: &FunctionDecl) -> Result<FuncType, TypeError> {
         let input = func
             .schema
@@ -422,6 +527,13 @@ impl TypeInfo {
                 fdecl.span.clone(),
             ));
         }
+        // View tables (with term_constructor) must have at least one input (the e-class)
+        if fdecl.term_constructor.is_some() && fdecl.schema.input.is_empty() {
+            return Err(TypeError::TermConstructorNoInputs(
+                fdecl.name.clone(),
+                fdecl.span.clone(),
+            ));
+        }
         let ftype = self.function_to_functype(fdecl)?;
         if self.func_types.insert(fdecl.name.clone(), ftype).is_some() {
             return Err(TypeError::FunctionAlreadyBound(
@@ -444,14 +556,17 @@ impl TypeInfo {
             name: fdecl.name.clone(),
             subtype: fdecl.subtype,
             schema: fdecl.schema.clone(),
+            resolved_schema: ResolvedCall::Func(self.func_types.get(&fdecl.name).unwrap().clone()),
             merge: match &fdecl.merge {
                 Some(merge) => Some(self.typecheck_expr(symbol_gen, merge, &bound_vars)?),
                 None => None,
             },
             cost: fdecl.cost,
             unextractable: fdecl.unextractable,
-            let_binding: fdecl.let_binding,
+            internal_hidden: fdecl.internal_hidden,
+            internal_let: fdecl.internal_let,
             span: fdecl.span.clone(),
+            term_constructor: fdecl.term_constructor.clone(),
         })
     }
 
@@ -513,7 +628,10 @@ impl TypeInfo {
         constraints.extend(query.get_constraints(self)?);
 
         let mut binding = query.get_vars();
-        let (actions, mapped_action) = head.to_core_actions(self, &mut binding, symbol_gen)?;
+        // We lower to core actions with `union_to_set_optimization`
+        // later in the pipeline. For typechecking we do not need it.
+        let mut ctx = CoreActionContext::new(self, &mut binding, symbol_gen, false);
+        let (actions, mapped_action) = head.to_core_actions(&mut ctx)?;
 
         let mut problem = Problem::default();
         problem.add_rule(
@@ -533,7 +651,7 @@ impl TypeInfo {
         let body: Vec<ResolvedFact> = assignment.annotate_facts(&mapped_query, self);
         let actions: ResolvedActions = assignment.annotate_actions(&mapped_action, self)?;
 
-        Self::check_lookup_actions(&actions)?;
+        self.check_lookup_actions(&actions)?;
 
         Ok(ResolvedRule {
             span: span.clone(),
@@ -544,62 +662,43 @@ impl TypeInfo {
         })
     }
 
-    fn check_lookup_expr(expr: &GenericExpr<ResolvedCall, ResolvedVar>) -> Result<(), TypeError> {
-        match expr {
-            GenericExpr::Call(span, head, args) => {
-                match head {
-                    ResolvedCall::Func(t) => {
-                        // Only allowed to lookup constructor or relation
-                        if t.subtype != FunctionSubtype::Constructor
-                            && t.subtype != FunctionSubtype::Relation
-                        {
-                            Err(TypeError::LookupInRuleDisallowed(
-                                head.to_string(),
-                                span.clone(),
-                            ))
-                        } else {
-                            Ok(())
-                        }
-                    }
-                    ResolvedCall::Primitive(_) => Ok(()),
-                }?;
-                for arg in args.iter() {
-                    Self::check_lookup_expr(arg)?
-                }
-                Ok(())
-            }
-            _ => Ok(()),
-        }
-    }
-
-    fn check_lookup_actions(actions: &ResolvedActions) -> Result<(), TypeError> {
-        for action in actions.iter() {
-            match action {
-                GenericAction::Let(_, _, rhs) => Self::check_lookup_expr(rhs),
-                GenericAction::Set(_, _, args, rhs) => {
-                    for arg in args.iter() {
-                        Self::check_lookup_expr(arg)?
-                    }
-                    Self::check_lookup_expr(rhs)
-                }
-                GenericAction::Union(_, lhs, rhs) => {
-                    Self::check_lookup_expr(lhs)?;
-                    Self::check_lookup_expr(rhs)
-                }
-                GenericAction::Change(_, _, _, args) => {
-                    for arg in args.iter() {
-                        Self::check_lookup_expr(arg)?
-                    }
-                    Ok(())
-                }
-                GenericAction::Panic(..) => Ok(()),
-                GenericAction::Expr(_, expr) => Self::check_lookup_expr(expr),
-            }?
+    fn check_lookup_expr(&self, expr: &ResolvedExpr) -> Result<(), TypeError> {
+        if let Some(span) = self.expr_has_function_lookup(expr) {
+            return Err(TypeError::LookupInRuleDisallowed(
+                "function".to_string(),
+                span,
+            ));
         }
         Ok(())
     }
 
-    fn typecheck_facts(
+    fn check_lookup_actions(&self, actions: &ResolvedActions) -> Result<(), TypeError> {
+        for action in actions.iter() {
+            match action {
+                GenericAction::Let(_, _, rhs) => self.check_lookup_expr(rhs)?,
+                GenericAction::Set(_, _, args, rhs) => {
+                    for arg in args.iter() {
+                        self.check_lookup_expr(arg)?;
+                    }
+                    self.check_lookup_expr(rhs)?;
+                }
+                GenericAction::Union(_, lhs, rhs) => {
+                    self.check_lookup_expr(lhs)?;
+                    self.check_lookup_expr(rhs)?;
+                }
+                GenericAction::Change(_, _, _, args) => {
+                    for arg in args.iter() {
+                        self.check_lookup_expr(arg)?;
+                    }
+                }
+                GenericAction::Panic(..) => {}
+                GenericAction::Expr(_, expr) => self.check_lookup_expr(expr)?,
+            }
+        }
+        Ok(())
+    }
+
+    pub fn typecheck_facts(
         &self,
         symbol_gen: &mut SymbolGen,
         facts: &[Fact],
@@ -622,8 +721,10 @@ impl TypeInfo {
     ) -> Result<ResolvedActions, TypeError> {
         let mut binding_set: IndexSet<String> =
             binding.keys().copied().map(str::to_string).collect();
-        let (actions, mapped_action) =
-            actions.to_core_actions(self, &mut binding_set, symbol_gen)?;
+        // We lower to core actions with `union_to_set_optimization`
+        // later in the pipeline. For typechecking we do not need it.
+        let mut ctx = CoreActionContext::new(self, &mut binding_set, symbol_gen, false);
+        let (actions, mapped_action) = actions.to_core_actions(&mut ctx)?;
         let mut problem = Problem::default();
 
         // add actions to problem
@@ -681,11 +782,18 @@ impl TypeInfo {
         self.primitives.contains_key(sym) || self.reserved_primitives.contains(sym)
     }
 
+    pub fn primitive_has_validator(&self, id: ExternalFunctionId) -> bool {
+        self.primitives
+            .values()
+            .flat_map(|v| v.iter())
+            .any(|p| p.id == id && p.validator.is_some())
+    }
+
     pub fn get_func_type(&self, sym: &str) -> Option<&FuncType> {
         self.func_types.get(sym)
     }
 
-    pub(crate) fn is_constructor(&self, sym: &str) -> bool {
+    pub fn is_constructor(&self, sym: &str) -> bool {
         self.func_types
             .get(sym)
             .is_some_and(|f| f.subtype == FunctionSubtype::Constructor)
@@ -697,6 +805,25 @@ impl TypeInfo {
 
     pub fn is_global(&self, sym: &str) -> bool {
         self.global_sorts.contains_key(sym)
+    }
+
+    /// Check if an expression contains non-global function lookups (FunctionSubtype::Custom calls).
+    /// Global function calls are allowed since they get desugared to constructors.
+    /// Returns Some(span) if a lookup is found, None otherwise.
+    pub fn expr_has_function_lookup(&self, expr: &ResolvedExpr) -> Option<Span> {
+        use ast::GenericExpr;
+
+        expr.find(&mut |e| {
+            if let GenericExpr::Call(span, ResolvedCall::Func(func_type), _) = e {
+                if func_type.subtype == FunctionSubtype::Custom {
+                    // Skip global functions - they get desugared to constructors
+                    if !self.is_global(&func_type.name) {
+                        return Some(span.clone());
+                    }
+                }
+            }
+            None
+        })
     }
 }
 
@@ -723,6 +850,8 @@ pub enum TypeError {
     DisallowedSort(String, String, Span),
     #[error("{1}\nUnbound function {0}")]
     UnboundFunction(String, Span),
+    #[error("{1}\nprove-exists requires constructor function, but {0} is not a constructor")]
+    ProveExistsRequiresConstructor(String, Span),
     #[error("{1}\nFunction already bound {0}")]
     FunctionAlreadyBound(String, Span),
     #[error("{1}\nSort {0} already declared.")]
@@ -741,10 +870,18 @@ pub enum TypeError {
     ConstructorOutputNotSort(String, Span),
     #[error("{1}\nValue lookup of non-constructor function {0} in rule is disallowed.")]
     LookupInRuleDisallowed(String, Span),
+    #[error("{1}\nCannot set constructor {0}. Use `union` instead or declare {0} as a function.")]
+    SetConstructorDisallowed(String, Span),
     #[error("All alternative definitions considered failed\n{}", .0.iter().map(|e| format!("  {e}\n")).collect::<Vec<_>>().join(""))]
     AllAlternativeFailed(Vec<TypeError>),
     #[error("{}\nCannot union values of sort {}", .1, .0.name())]
     NonEqsortUnion(ArcSort, Span),
+    #[error("{}\nCannot union values of sort {} because it is marked as non-unionable (e.g. from a relation)", .1, .0.name())]
+    NonUnionableSort(ArcSort, Span),
+    #[error(
+        "{1}\nView table {0} with :term-constructor must have at least one input (the e-class)."
+    )]
+    TermConstructorNoInputs(String, Span),
     #[error(
         "{span}\nNon-global variable `{name}` must not start with `{}`.",
         crate::GLOBAL_NAME_PREFIX
@@ -777,7 +914,7 @@ mod test {
             })) => {
                 assert_eq!(e.span().string(), "(f a b c)");
             }
-            _ => panic!("Expected arity mismatch, got: {:?}", res),
+            _ => panic!("Expected arity mismatch, got: {res:?}"),
         }
     }
 }

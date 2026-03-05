@@ -5,30 +5,30 @@
   (Div Math Math)
   (Mul Math Math))
 
-(let zero (Num (bigrat (bigint 0) (bigint 1))))
-(let one (Num (bigrat (bigint 1) (bigint 1))))
-(let two (Num (bigrat (bigint 2) (bigint 1))))
+(let $zero (Num (bigrat (bigint 0) (bigint 1))))
+(let $one (Num (bigrat (bigint 1) (bigint 1))))
+(let $two (Num (bigrat (bigint 2) (bigint 1))))
 
 (rewrite (Add a b) (Add b a))
-(rewrite (Add a zero) a)
+(rewrite (Add a $zero) a)
 (rewrite (Add (Num r1) (Num r2))
          (Num (+ r1 r2)))
 
-(let one-two (Add one two))
+(let $one-two (Add $one $two))
 
 (push)
 (run 1)
 ;; yay, constant folding works
-(check (= one-two (Num (bigrat (bigint 3) (bigint 1)))))
+(check (= $one-two (Num (bigrat (bigint 3) (bigint 1)))))
 ;; also, commutativity works
-(check (= (Add two one) one-two))
+(check (= (Add $two $one) $one-two))
 (pop)
 
 (push)
 ;; rule is like rewrite, but more general
 ;; the following rule doesn't union (Num r) with the result:
 (rule ((Num r))
-      ((union one (Div (Num r) (Num r)))))
+      ((union $one (Div (Num r) (Num r)))))
 ;; uh oh, division by zero!
 (run 1)
 
@@ -64,32 +64,32 @@
 
 (rule ((= e (Add a b))
        (> (lower-bound e) (bigrat (bigint 0) (bigint 1))))
-      ((union one (Div (Add a b) (Add a b)))))
+      ((union $one (Div (Add a b) (Add a b)))))
 
-(let x (Var "x"))
-(let x1 (Add x one))
+(let $x (Var "x"))
+(let $x1 (Add $x $one))
 
 (push)
-(set (lower-bound x) (bigrat (bigint 0) (bigint 1)))
-(set (upper-bound x) (bigrat (bigint 1) (bigint 1)))
+(set (lower-bound $x) (bigrat (bigint 0) (bigint 1)))
+(set (upper-bound $x) (bigrat (bigint 1) (bigint 1)))
 
 (run 3)
 
-(extract (lower-bound x1))
-(extract (upper-bound x1))
-(check (= one (Div x1 x1)))
+(extract (lower-bound $x1))
+(extract (upper-bound $x1))
+(check (= $one (Div $x1 $x1)))
 
 (pop)
 
 
-;; Set the variable x to a particular input value 200/201
-(set (lower-bound x) (bigrat (bigint 200) (bigint 201)))
-(set (upper-bound x) (bigrat (bigint 200) (bigint 201)))
+;; Set the variable $x to a particular input value 200/201
+(set (lower-bound $x) (bigrat (bigint 200) (bigint 201)))
+(set (upper-bound $x) (bigrat (bigint 200) (bigint 201)))
 
 (run 3)
 
-(extract (lower-bound x1))
-(extract (upper-bound x1))
+(extract (lower-bound $x1))
+(extract (upper-bound $x1))
 
 (function true-value (Math) f64 :no-merge)
 
@@ -101,7 +101,7 @@
             (to-f64 lbe))))
 
 (run 1)
-(extract (true-value x1))
+(extract (true-value $x1))
 
 (function best-error (Math) f64 :merge new)
 
@@ -123,7 +123,7 @@
 
 (push)
 
-(let target
+(let $target
   (Add 
     (Add (Num (bigrat (bigint 1) (bigint 100))) (Num (bigrat (bigint 1) (bigint 100))))
     (Num (bigrat (bigint -2) (bigint 100)))))
@@ -131,14 +131,14 @@
 (run 1)
 
 ;; set a default
-(set (best-error target) (to-f64 (bigrat (bigint 10000) (bigint 1))))
+(set (best-error $target) (to-f64 (bigrat (bigint 10000) (bigint 1))))
 ;; error is bad, constant folding hasn't fired enough
-(extract (best-error target))
+(extract (best-error $target))
 
 (run 1)
 
 ;; error is good, constant folding has fired enough
-(extract (best-error target))
+(extract (best-error $target))
 
 
 (pop)

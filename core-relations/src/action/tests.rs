@@ -101,3 +101,50 @@ fn fill_vec() {
         }
     }
 }
+
+#[test]
+fn test_early_stop_initial_state() {
+    empty_execution_state!(state);
+    assert!(!state.should_stop());
+}
+
+#[test]
+fn test_early_stop_trigger() {
+    empty_execution_state!(state);
+    assert!(!state.should_stop());
+
+    state.trigger_early_stop();
+
+    assert!(state.should_stop());
+}
+
+#[test]
+fn test_early_stop_shared_across_clones() {
+    empty_execution_state!(state1);
+    let state2 = state1.clone();
+
+    assert!(!state1.should_stop());
+    assert!(!state2.should_stop());
+
+    state1.trigger_early_stop();
+
+    assert!(state1.should_stop());
+    assert!(state2.should_stop());
+}
+
+#[test]
+fn test_early_stop_multiple_clones() {
+    empty_execution_state!(state1);
+    let state2 = state1.clone();
+    let state3 = state2.clone();
+
+    assert!(!state1.should_stop());
+    assert!(!state2.should_stop());
+    assert!(!state3.should_stop());
+
+    state2.trigger_early_stop();
+
+    assert!(state1.should_stop());
+    assert!(state2.should_stop());
+    assert!(state3.should_stop());
+}

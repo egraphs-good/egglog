@@ -1,0 +1,6 @@
+---
+source: tests/files.rs
+expression: err_msg
+---
+In 10:1-29 of union_relation.egg: (union (edge 1 2) (edge 3 4))
+Cannot union values of sort @edgeSort because it is marked as non-unionable (e.g. from a relation)

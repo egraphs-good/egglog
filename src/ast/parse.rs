@@ -150,6 +150,7 @@ pub struct Parser {
     exprs: HashMap<String, Arc<dyn Macro<Expr>>>,
     user_defined: HashSet<String>,
     pub symbol_gen: SymbolGen,
+    pub ensure_no_reserved_symbols: bool,
 }
 
 impl Default for Parser {
@@ -160,13 +161,14 @@ impl Default for Parser {
             exprs: Default::default(),
             user_defined: Default::default(),
             symbol_gen: SymbolGen::new(INTERNAL_SYMBOL_PREFIX.to_string()),
+            ensure_no_reserved_symbols: true,
         }
     }
 }
 
 impl Parser {
     fn ensure_symbol_not_reserved(&self, symbol: &str, span: &Span) -> Result<(), ParseError> {
-        if self.symbol_gen.is_reserved(symbol) {
+        if self.symbol_gen.is_reserved(symbol) && self.ensure_no_reserved_symbols {
             return error!(
                 span.clone(),
                 "symbols starting with '{}' are reserved for egglog internals",
@@ -194,6 +196,25 @@ impl Parser {
     ) -> Result<Expr, ParseError> {
         let sexp = sexp(&mut SexpParser::new(filename, input))?;
         self.parse_expr(&sexp)
+    }
+
+    pub fn get_schedule_from_string(
+        &mut self,
+        filename: Option<String>,
+        input: &str,
+    ) -> Result<Schedule, ParseError> {
+        let sexp = sexp(&mut SexpParser::new(filename, input))?;
+        self.parse_schedule(&sexp)
+    }
+
+    // Parse a fact from a string.
+    pub fn get_fact_from_string(
+        &mut self,
+        filename: Option<String>,
+        input: &str,
+    ) -> Result<Fact, ParseError> {
+        let sexp = sexp(&mut SexpParser::new(filename, input))?;
+        self.parse_fact(&sexp)
     }
 
     pub fn add_command_macro(&mut self, ma: Arc<dyn Macro<Vec<Command>>>) {
@@ -234,23 +255,73 @@ impl Parser {
         }
 
         Ok(match head.as_str() {
-            "sort" => match tail {
-                [name] => vec![Command::Sort(span, name.expect_atom("sort name")?, None)],
-                [name, call] => {
-                    let (func, args, _) = call.expect_call("container sort declaration")?;
-                    vec![Command::Sort(
+            "sort" => {
+                // Parse sort - :internal-uf/:internal-proof-func and container sorts are mutually exclusive
+                // (sort <name>)
+                // (sort <name> :internal-uf <uf-function>)
+                // (sort <name> :internal-proof-func <internal-proof-func-name>)
+                // (sort <name> (<container sort> <argument sort>*))
+                match tail {
+                    [name] => vec![Command::Sort {
                         span,
-                        name.expect_atom("sort name")?,
-                        Some((func, map_fallible(args, self, Self::parse_expr)?)),
-                    )]
+                        name: name.expect_atom("sort name")?,
+                        presort_and_args: None,
+                        uf: None,
+                        proof_func: None,
+                        unionable: true,
+                    }],
+                    [name, call @ Sexp::List(..)] => {
+                        let (func, args, _) = call.expect_call("container sort declaration")?;
+                        vec![Command::Sort {
+                            span,
+                            name: name.expect_atom("sort name")?,
+                            presort_and_args: Some((
+                                func,
+                                map_fallible(args, self, Self::parse_expr)?,
+                            )),
+                            uf: None,
+                            proof_func: None,
+                            unionable: true,
+                        }]
+                    }
+                    [name, rest @ ..] => {
+                        // Parse :internal-uf and :internal-proof-func annotations
+                        let mut uf = None;
+                        let mut proof_func = None;
+                        for (key, val) in self.parse_options(rest)? {
+                            match (key, val) {
+                                (":internal-uf", [uf_func]) => {
+                                    uf = Some(uf_func.expect_atom("uf function name")?);
+                                }
+                                (":internal-proof-func", [pf]) => {
+                                    proof_func =
+                                        Some(pf.expect_atom("internal-proof-func function name")?);
+                                }
+                                _ => {
+                                    return error!(
+                                        span,
+                                        "usages:\n(sort <name>)\n(sort <name> :internal-uf <uf-function>)\n(sort <name> :internal-proof-func <internal-proof-func-name>)\n(sort <name> (<container sort> <argument sort>*))"
+                                    );
+                                }
+                            }
+                        }
+                        vec![Command::Sort {
+                            span,
+                            name: name.expect_atom("sort name")?,
+                            presort_and_args: None,
+                            uf,
+                            proof_func,
+                            unionable: true,
+                        }]
+                    }
+                    _ => {
+                        return error!(
+                            span,
+                            "usages:\n(sort <name>)\n(sort <name> (<container sort> <argument sort>*))"
+                        );
+                    }
                 }
-                _ => {
-                    return error!(
-                        span,
-                        "usages:\n(sort <name>)\n(sort <name> (<container sort> <argument sort>*))"
-                    );
-                }
-            },
+            }
             "datatype" => match tail {
                 [name, variants @ ..] => vec![Command::Datatype {
                     span,
@@ -264,54 +335,106 @@ impl Parser {
                 datatypes: map_fallible(tail, self, Self::rec_datatype)?,
             }],
             "function" => match tail {
-                [name, inputs, output, rest @ ..] => vec![Command::Function {
-                    name: name.expect_atom("function name")?,
-                    schema: self.parse_schema(inputs, output)?,
-                    merge: match self.parse_options(rest)?.as_slice() {
-                        [(":no-merge", [])] => None,
-                        [(":merge", [e])] => Some(self.parse_expr(e)?),
-                        [] => {
+                [name, inputs, output, rest @ ..] => {
+                    let mut merge = None;
+                    let mut hidden = false;
+                    let mut let_binding = false;
+                    for (key, val) in self.parse_options(rest)? {
+                        match (key, val) {
+                            (":no-merge", []) => {
+                                if merge.is_some() {
+                                    return error!(
+                                        span,
+                                        "conflicting merge options: :no-merge and :merge cannot both be specified"
+                                    );
+                                }
+                                merge = Some(None);
+                            }
+                            (":merge", [e]) => {
+                                if merge.is_some() {
+                                    return error!(
+                                        span,
+                                        "conflicting merge options: :merge and :no-merge cannot both be specified"
+                                    );
+                                }
+                                merge = Some(Some(self.parse_expr(e)?));
+                            }
+                            (":internal-hidden", []) => hidden = true,
+                            (":internal-let", []) => let_binding = true,
+                            _ => return error!(span, "could not parse function options"),
+                        }
+                    }
+                    let merge = match merge {
+                        Some(m) => m,
+                        None => {
                             return error!(
                                 span,
                                 "functions are required to specify merge behaviour"
                             );
                         }
-                        _ => return error!(span, "could not parse function options"),
-                    },
-                    span,
-                }],
+                    };
+                    vec![Command::Function {
+                        name: name.expect_atom("function name")?,
+                        schema: self.parse_schema(inputs, output)?,
+                        merge,
+                        hidden,
+                        let_binding,
+                        span,
+                    }]
+                }
                 _ => {
                     let a = "(function <name> (<input sort>*) <output sort> :merge <expr>)";
                     let b = "(function <name> (<input sort>*) <output sort> :no-merge)";
                     return error!(span, "usages:\n{a}\n{b}");
                 }
             },
-            "constructor" => match tail {
-                [name, inputs, output, rest @ ..] => {
-                    let mut cost = None;
-                    let mut unextractable = false;
-                    match self.parse_options(rest)?.as_slice() {
-                        [] => {}
-                        [(":unextractable", [])] => unextractable = true,
-                        [(":cost", [c])] => cost = Some(c.expect_uint("cost")?),
-                        _ => return error!(span, "could not parse constructor options"),
-                    }
+            "constructor" => {
+                // Parse constructor with optional annotations
+                // (constructor <name> (<input sort>*) <output sort>)
+                // (constructor <name> (<input sort>*) <output sort> :cost <cost>)
+                // (constructor <name> (<input sort>*) <output sort> :unextractable)
+                // (constructor <name> (<input sort>*) <output sort> :term-constructor <constructor name>)
+                match tail {
+                    [name, inputs, output, rest @ ..] => {
+                        let mut cost = None;
+                        let mut unextractable = false;
+                        let mut hidden = false;
+                        let mut let_binding = false;
+                        let mut term_constructor = None;
+                        for (key, val) in self.parse_options(rest)? {
+                            match (key, val) {
+                                (":unextractable", []) => unextractable = true,
+                                (":internal-hidden", []) => hidden = true,
+                                (":internal-let", []) => let_binding = true,
+                                (":cost", [c]) => cost = Some(c.expect_uint("cost")?),
+                                (":term-constructor", [tc]) => {
+                                    term_constructor =
+                                        Some(tc.expect_atom("term constructor name")?)
+                                }
+                                _ => return error!(span, "could not parse constructor options"),
+                            }
+                        }
 
-                    vec![Command::Constructor {
-                        span,
-                        name: name.expect_atom("constructor name")?,
-                        schema: self.parse_schema(inputs, output)?,
-                        cost,
-                        unextractable,
-                    }]
+                        vec![Command::Constructor {
+                            span,
+                            name: name.expect_atom("constructor name")?,
+                            schema: self.parse_schema(inputs, output)?,
+                            cost,
+                            unextractable,
+                            hidden,
+                            let_binding,
+                            term_constructor,
+                        }]
+                    }
+                    _ => {
+                        let a = "(constructor <name> (<input sort>*) <output sort>)";
+                        let b = "(constructor <name> (<input sort>*) <output sort> :cost <cost>)";
+                        let c = "(constructor <name> (<input sort>*) <output sort> :unextractable)";
+                        let d = "(constructor <name> (<input sort>*) <output sort> :term-constructor <constructor name>)";
+                        return error!(span, "usages:\n{a}\n{b}\n{c}\n{d}");
+                    }
                 }
-                _ => {
-                    let a = "(constructor <name> (<input sort>*) <output sort>)";
-                    let b = "(constructor <name> (<input sort>*) <output sort> :cost <cost>)";
-                    let c = "(constructor <name> (<input sort>*) <output sort> :unextractable)";
-                    return error!(span, "usages:\n{a}\n{b}\n{c}");
-                }
-            },
+            }
             "relation" => match tail {
                 [name, inputs] => vec![Command::Relation {
                     span,
@@ -475,7 +598,7 @@ impl Parser {
             }
             "run-schedule" => vec![Command::RunSchedule(Schedule::Sequence(
                 span,
-                map_fallible(tail, self, Self::schedule)?,
+                map_fallible(tail, self, Self::parse_schedule)?,
             ))],
             "extract" => match tail {
                 [e] => vec![Command::Extract(
@@ -494,6 +617,17 @@ impl Parser {
                 span,
                 map_fallible(tail, self, Self::parse_fact)?,
             )],
+            "prove" => vec![Command::Prove(
+                span,
+                map_fallible(tail, self, Self::parse_fact)?,
+            )],
+            "prove-exists" => match tail {
+                [constructor] => vec![Command::ProveExists(
+                    span,
+                    constructor.expect_atom("constructor name")?,
+                )],
+                _ => return error!(span, "usage: (prove-exists <constructor>)"),
+            },
             "push" => match tail {
                 [] => vec![Command::Push(1)],
                 [n] => vec![Command::Push(n.expect_uint("number of times to push")?)],
@@ -617,7 +751,7 @@ impl Parser {
         })
     }
 
-    pub fn schedule(&mut self, sexp: &Sexp) -> Result<Schedule, ParseError> {
+    pub fn parse_schedule(&mut self, sexp: &Sexp) -> Result<Schedule, ParseError> {
         if let Sexp::Atom(ruleset, span) = sexp {
             return Ok(Schedule::Run(
                 span.clone(),
@@ -635,17 +769,17 @@ impl Parser {
                 span.clone(),
                 Box::new(Schedule::Sequence(
                     span,
-                    map_fallible(tail, self, Self::schedule)?,
+                    map_fallible(tail, self, Self::parse_schedule)?,
                 )),
             ),
-            "seq" => Schedule::Sequence(span, map_fallible(tail, self, Self::schedule)?),
+            "seq" => Schedule::Sequence(span, map_fallible(tail, self, Self::parse_schedule)?),
             "repeat" => match tail {
                 [limit, tail @ ..] => Schedule::Repeat(
                     span.clone(),
                     limit.expect_uint("number of iterations")?,
                     Box::new(Schedule::Sequence(
                         span,
-                        map_fallible(tail, self, Self::schedule)?,
+                        map_fallible(tail, self, Self::parse_schedule)?,
                     )),
                 ),
                 _ => return error!(span, "usage: (repeat <number of iterations> <schedule>*)"),
@@ -1070,7 +1204,7 @@ mod tests {
     fn test_parser_display_roundtrip() {
         let s = r#"(f (g a 3) 4.0 (H "hello"))"#;
         let e = Parser::default().get_expr_from_string(None, s).unwrap();
-        assert_eq!(format!("{}", e), s);
+        assert_eq!(format!("{e}"), s);
     }
 
     #[test]
@@ -1096,6 +1230,6 @@ mod tests {
         let s = r#"(f (qqqq a 3) 4.0 (H "hello"))"#;
         let t = r#"(f (xxxx a 3) 4.0 (H "hello"))"#;
         let e = parser.get_expr_from_string(None, s).unwrap();
-        assert_eq!(format!("{}", e), t);
+        assert_eq!(format!("{e}"), t);
     }
 }

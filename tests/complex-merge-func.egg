@@ -1,9 +1,17 @@
 (datatype Base (X))
-(datatype Tree (Leaf Base) (C1 Tree) (C2 Tree Tree))
+(datatype Tree (Leaf Base) (Leaf2 Base) (C1 Tree Tree) (C2 Tree Tree))
 
-(function f (i64) Tree :merge (C2 (C1 old) (C2 old new)))
+(function f (i64) Tree :merge (C2 (C1 old new) (C2 old new)))
+
+;; egglog does not guarantee order of merges, so we need commutativity to 
+;; check that it worked
+(rewrite (C2 a b) (C2 b a))
+(rewrite (C1 a b) (C1 b a))
 
 (set (f 0) (Leaf (X)))
+(run 1)
 (check (= (f 0) (Leaf (X))))
-(set (f 0) (C1 (Leaf (X))))
-(check (= (f 0) (C2 (C1 (Leaf (X))) (C2 (Leaf (X)) (C1 (Leaf (X)))))))
+(set (f 0) (Leaf2 (X)))
+(run 1)
+
+(check (= (f 0) (C2 (C1 (Leaf (X)) (Leaf2 (X))) (C2 (Leaf (X)) (Leaf2 (X))))))
