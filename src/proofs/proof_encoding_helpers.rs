@@ -433,7 +433,7 @@ pub fn file_supports_proofs(path: &Path) -> bool {
 
     let mut egraph = EGraph::default();
     let filename = canonical.to_string_lossy().into_owned();
-    let desugared = match egraph.desugar_program(Some(filename.clone()), &contents) {
+    let desugared = match egraph.resolve_program(Some(filename.clone()), &contents) {
         Ok(commands) => commands,
         Err(_) => return false,
     };
@@ -455,9 +455,13 @@ pub enum ProofEncodingUnsupportedReason {
     )]
     SortWithPresort,
     #[error(
-        "sort has a :uf annotation. The :uf annotation is used internally by term encoding and cannot be specified manually in proof mode."
+        "sort has a :internal-uf annotation. The :internal-uf annotation is used internally by term encoding and cannot be specified manually in proof mode."
     )]
     SortWithUfAnnotation,
+    #[error(
+        "sort has a :internal-proof-func annotation. The :internal-proof-func annotation is used internally by proof encoding and cannot be specified manually in proof mode."
+    )]
+    SortWithProofFuncAnnotation,
     #[error("user-defined commands are not supported.")]
     UserDefinedCommand,
     #[error("input commands are not supported.")]
@@ -552,6 +556,10 @@ pub(crate) fn command_supports_proof_encoding(
         GenericCommand::Sort { uf: Some(_), .. } => {
             Err(ProofEncodingUnsupportedReason::SortWithUfAnnotation)
         }
+        GenericCommand::Sort {
+            proof_func: Some(_),
+            ..
+        } => Err(ProofEncodingUnsupportedReason::SortWithProofFuncAnnotation),
         GenericCommand::UserDefined(..) => Err(ProofEncodingUnsupportedReason::UserDefinedCommand),
         GenericCommand::Input { .. } => Err(ProofEncodingUnsupportedReason::InputCommand),
         // Extract commands can't have non-global function lookups

@@ -256,9 +256,10 @@ impl Parser {
 
         Ok(match head.as_str() {
             "sort" => {
-                // Parse sort - :uf and container sorts are mutually exclusive
+                // Parse sort - :internal-uf/:internal-proof-func and container sorts are mutually exclusive
                 // (sort <name>)
-                // (sort <name> :uf <uf-function>)
+                // (sort <name> :internal-uf <uf-function>)
+                // (sort <name> :internal-proof-func <internal-proof-func-name>)
                 // (sort <name> (<container sort> <argument sort>*))
                 match tail {
                     [name] => vec![Command::Sort {
@@ -266,6 +267,7 @@ impl Parser {
                         name: name.expect_atom("sort name")?,
                         presort_and_args: None,
                         uf: None,
+                        proof_func: None,
                         unionable: true,
                     }],
                     [name, call @ Sexp::List(..)] => {
@@ -278,32 +280,44 @@ impl Parser {
                                 map_fallible(args, self, Self::parse_expr)?,
                             )),
                             uf: None,
+                            proof_func: None,
                             unionable: true,
                         }]
                     }
                     [name, rest @ ..] => {
-                        // Parse :uf annotation
-                        let uf = match self.parse_options(rest)?.as_slice() {
-                            [(":uf", [uf_func])] => Some(uf_func.expect_atom("uf function name")?),
-                            _ => {
-                                return error!(
-                                    span,
-                                    "usages:\n(sort <name>)\n(sort <name> :uf <uf-function>)\n(sort <name> (<container sort> <argument sort>*))"
-                                );
+                        // Parse :internal-uf and :internal-proof-func annotations
+                        let mut uf = None;
+                        let mut proof_func = None;
+                        for (key, val) in self.parse_options(rest)? {
+                            match (key, val) {
+                                (":internal-uf", [uf_func]) => {
+                                    uf = Some(uf_func.expect_atom("uf function name")?);
+                                }
+                                (":internal-proof-func", [pf]) => {
+                                    proof_func =
+                                        Some(pf.expect_atom("internal-proof-func function name")?);
+                                }
+                                _ => {
+                                    return error!(
+                                        span,
+                                        "usages:\n(sort <name>)\n(sort <name> :internal-uf <uf-function>)\n(sort <name> :internal-proof-func <internal-proof-func-name>)\n(sort <name> (<container sort> <argument sort>*))"
+                                    );
+                                }
                             }
-                        };
+                        }
                         vec![Command::Sort {
                             span,
                             name: name.expect_atom("sort name")?,
                             presort_and_args: None,
                             uf,
+                            proof_func,
                             unionable: true,
                         }]
                     }
                     _ => {
                         return error!(
                             span,
-                            "usages:\n(sort <name>)\n(sort <name> :uf <uf-function>)\n(sort <name> (<container sort> <argument sort>*))"
+                            "usages:\n(sort <name>)\n(sort <name> (<container sort> <argument sort>*))"
                         );
                     }
                 }

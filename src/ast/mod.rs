@@ -5,6 +5,8 @@ mod parse;
 pub mod proof_global_remover;
 pub mod remove_globals;
 
+use std::cmp::max;
+
 use crate::core::{
     GenericAtom, GenericAtomTerm, GenericExprExt, HeadOrEq, Query, ResolvedCall, ResolvedCoreRule,
 };
@@ -56,6 +58,9 @@ where
         /// The name of the union-find function for this sort.
         /// Used in term encoding to canonicalize values during extraction.
         uf: Option<String>,
+        /// The name of the proof function for this sort.
+        /// Set by proof desugaring to record where proofs are stored for this sort.
+        proof_func: Option<String>,
         /// Whether values of this sort can be unioned.
         /// Defaults to true for user-defined sorts.
         /// Set to false for relations and term tables that should not allow union.
@@ -109,12 +114,14 @@ where
                 name,
                 presort_and_args,
                 uf,
+                proof_func,
                 unionable,
             } => GenericCommand::Sort {
                 span: span.clone(),
                 name: name.clone(),
                 presort_and_args: presort_and_args.clone(),
                 uf: uf.clone(),
+                proof_func: proof_func.clone(),
                 unionable: *unionable,
             },
             GenericNCommand::Function(f) => match f.subtype {
@@ -231,12 +238,14 @@ where
                 name,
                 presort_and_args,
                 uf,
+                proof_func,
                 unionable,
             } => GenericNCommand::Sort {
                 span,
                 name,
                 presort_and_args,
                 uf,
+                proof_func,
                 unionable,
             },
             GenericNCommand::Function(func) => GenericNCommand::Function(func.visit_exprs(f)),
@@ -543,6 +552,9 @@ where
         /// The name of the union-find function for this sort.
         /// Used in term encoding to canonicalize values during extraction.
         uf: Option<String>,
+        /// The name of the proof function for this sort.
+        /// Set by proof desugaring to record where proofs are stored for this sort.
+        proof_func: Option<String>,
         /// Whether values of this sort can be unioned.
         /// Defaults to true for user-defined sorts.
         /// Set to false for relations and term tables that should not allow union.
@@ -937,9 +949,18 @@ where
             GenericCommand::Sort {
                 name,
                 presort_and_args: None,
+                uf,
+                proof_func,
                 ..
             } => {
-                write!(f, "(sort {name})")
+                write!(f, "(sort {name}")?;
+                if let Some(uf) = uf {
+                    write!(f, " :internal-uf {uf}")?;
+                }
+                if let Some(pf) = proof_func {
+                    write!(f, " :internal-proof-func {pf}")?;
+                }
+                write!(f, ")")
             }
             GenericCommand::Sort {
                 name,
@@ -1563,12 +1584,14 @@ where
                 name,
                 presort_and_args,
                 uf,
+                proof_func,
                 unionable,
             } => GenericCommand::Sort {
                 span,
                 name: fun(name),
                 presort_and_args,
-                uf,
+                uf: uf.map(&mut *fun),
+                proof_func: proof_func.map(&mut *fun),
                 unionable,
             },
             GenericCommand::Datatype {
@@ -1825,12 +1848,14 @@ where
                 name,
                 presort_and_args,
                 uf,
+                proof_func,
                 unionable,
             } => GenericCommand::Sort {
                 span,
                 name,
                 presort_and_args,
                 uf,
+                proof_func,
                 unionable,
             },
             GenericCommand::Datatype {
@@ -1977,24 +2002,12 @@ where
     }
 }
 
-/// Sanitizes internal names so they do not contain any internal characters.
-/// This enables printing desugared egglog in a way that can be re-parsed.
-pub fn sanitize_internal_names<Head, Leaf>(
-    program: &[GenericCommand<Head, Leaf>],
-) -> Vec<GenericCommand<String, String>>
-where
-    Head: Clone + Display,
-    Leaf: Clone + PartialEq + Eq + Display + Hash,
-{
-    // first convert to unresolved
-    let unresolved = program
-        .iter()
-        .map(|cmd| cmd.clone().make_unresolved())
-        .collect::<Vec<_>>();
+/// Computes the maximum number of underscores in any symbol name in the program.
+pub fn get_max_underscores(program: &[GenericCommand<String, String>]) -> usize {
     // now count the max number of underscores in any name
     let mut max_underscores = 0;
     let mut max_underscores2 = 0;
-    for cmd in &unresolved {
+    for cmd in program {
         cmd.clone().map_symbols(
             &mut |h: String| {
                 let count = h.matches(INTERNAL_SYMBOL_PREFIX).count();
@@ -2019,19 +2032,43 @@ where
             s
         });
     }
-    let replacement_head = "_".repeat(max_underscores + 1);
-    let replacement_leaf = "_".repeat(max_underscores2 + 1);
-    // now replace INTERNAL_SYMBOL_PREFIX with replacement
-    unresolved
-        .into_iter()
+    max(max_underscores, max_underscores2)
+}
+
+/// Replaces all identifiers containing the internal symbol prefix with the given replacement string.
+pub fn replace_internal_symbol_with(
+    program: &[GenericCommand<String, String>],
+    replacement: &str,
+) -> Vec<GenericCommand<String, String>> {
+    program
+        .iter()
         .map(|cmd| {
-            let cmd = cmd.map_symbols(
-                &mut |h: String| h.replace(INTERNAL_SYMBOL_PREFIX, &replacement_head),
-                &mut |l: String| l.replace(INTERNAL_SYMBOL_PREFIX, &replacement_leaf),
+            let cmd = cmd.clone().map_symbols(
+                &mut |h: String| h.replace(INTERNAL_SYMBOL_PREFIX, replacement),
+                &mut |l: String| l.replace(INTERNAL_SYMBOL_PREFIX, replacement),
             );
-            cmd.map_string_symbols(&mut |s: String| {
-                s.replace(INTERNAL_SYMBOL_PREFIX, &replacement_head)
-            })
+            cmd.map_string_symbols(&mut |s: String| s.replace(INTERNAL_SYMBOL_PREFIX, replacement))
         })
         .collect()
+}
+
+/// Sanitizes internal names so they do not contain any internal characters.
+/// This enables printing desugared egglog in a way that can be re-parsed.
+pub fn sanitize_internal_names<Head, Leaf>(
+    program: &[GenericCommand<Head, Leaf>],
+) -> Vec<GenericCommand<String, String>>
+where
+    Head: Clone + Display,
+    Leaf: Clone + PartialEq + Eq + Display + Hash,
+{
+    // first convert to unresolved
+    let unresolved = program
+        .iter()
+        .map(|cmd| cmd.clone().make_unresolved())
+        .collect::<Vec<_>>();
+    // get the maximum number of underscores currently present, that way we can soundly add more than that to get fresh symbols
+    let max_underscores = get_max_underscores(&unresolved);
+    let replacement = "_".repeat(max_underscores + 1);
+    // replace occurances of the internal symbol with replacement
+    replace_internal_symbol_with(&unresolved, &replacement)
 }

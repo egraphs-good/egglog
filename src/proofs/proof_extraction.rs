@@ -11,8 +11,6 @@ pub enum ProveExistsError {
     RequiresConstructor,
     #[error("prove-exists does not support primitives")]
     PrimitivesUnsupported,
-    #[error("prove requires proofs mode")]
-    ProofsDisabled,
     #[error("Could not find a proof due to query not matching (constructor {constructor}).")]
     QueryDidNotMatch { constructor: String },
 }
@@ -39,10 +37,6 @@ impl ProofInstrumentor<'_> {
             .functions
             .get(&func.name)
             .unwrap_or_else(|| panic!("constructor {} is not declared", func.name));
-
-        if !self.egraph.proof_state.proofs_enabled {
-            return Err(ProveExistsError::ProofsDisabled);
-        }
 
         let backend_id = function.backend_id;
         let output_sort = function.schema.output.clone();
@@ -71,7 +65,19 @@ impl ProofInstrumentor<'_> {
             constructor: func.name.clone(),
         })?;
 
-        let proof_function_name = self.term_proof_name(output_sort.name());
+        let proof_function_name = self
+            .egraph
+            .proof_state
+            .proof_func_parent
+            .get(output_sort.name())
+            .unwrap_or_else(|| {
+                panic!(
+                    "no :internal-proof-func annotation recorded for sort {} (constructor {})",
+                    output_sort.name(),
+                    func.name
+                )
+            })
+            .clone();
         let proof_value = self
             .egraph
             .lookup_function(&proof_function_name, &[witness_value])
@@ -101,11 +107,11 @@ impl ProofInstrumentor<'_> {
             &self.egraph.proof_state.proof_names,
             termdag,
             proof_term_id,
-            &self.egraph.desugared_commands,
+            &self.egraph.proof_check_program,
         );
 
         // Remove globals from the proof
-        if let Result::Err(e) = proof_store.remove_globals(&self.egraph.desugared_commands) {
+        if let Result::Err(e) = proof_store.remove_globals(&self.egraph.proof_check_program) {
             panic!("Failed to remove globals from proof: {e}");
         }
 
@@ -121,7 +127,7 @@ impl ProofInstrumentor<'_> {
 
         // Check the proof before simplification
         if let Result::Err(e) =
-            proof_store.check_proof(extra_rule_removed, &self.egraph.desugared_commands)
+            proof_store.check_proof(extra_rule_removed, &self.egraph.proof_check_program)
         {
             panic!("Existence proof should be valid before simplification: {e}");
         }
@@ -131,7 +137,7 @@ impl ProofInstrumentor<'_> {
 
         // Check the proof after simplification
         proof_store
-            .check_proof(simplified_proof, &self.egraph.desugared_commands)
+            .check_proof(simplified_proof, &self.egraph.proof_check_program)
             .expect("simplified existence proof should still be valid");
 
         Ok((proof_store, extra_rule_removed))

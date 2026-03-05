@@ -434,6 +434,9 @@ pub enum ProofCheckErrorKind {
         lhs: TermId,
         rhs: TermId,
     },
+    /// Two rules have the same name
+    #[error("Duplicate rule name '{rule_name}' found in the program")]
+    DuplicateRuleName { rule_name: String },
 }
 
 /// Context needed for proof checking
@@ -452,6 +455,19 @@ impl ProofCheckContext {
     /// Create a new proof check context by analyzing the program.
     /// This gathers all equalities established by global actions (unions and sets).
     fn new(prog: &[ResolvedNCommand], term_dag: &mut TermDag) -> Result<Self, ProofCheckError> {
+        // Check for duplicate rule names
+        let mut seen_rule_names: HashSet<&str> = HashSet::default();
+        for cmd in prog {
+            if let GenericNCommand::NormRule { rule } = cmd {
+                if !seen_rule_names.insert(&rule.name) {
+                    return Err(ProofCheckErrorKind::DuplicateRuleName {
+                        rule_name: rule.name.clone(),
+                    }
+                    .into());
+                }
+            }
+        }
+
         // Use the new refactored functions
         let actions: Vec<_> = gather_global_actions(prog).collect();
         let action_ctx = process_actions("global_actions", HashMap::default(), &actions, term_dag)?;
@@ -560,16 +576,28 @@ impl ProofStore {
                     premise_propositions.push(prop);
                 }
 
+                let substitution_with_globals = ctx
+                    .global_bindings
+                    .iter()
+                    .map(|(k, v)| (k.clone(), *v))
+                    .chain(substitution.iter().map(|(k, v)| (k.clone(), *v)))
+                    .collect::<HashMap<_, _>>();
+
                 // Verify that premises match the rule body under the substitution
                 for (fact, prop) in rule.body.iter().zip(premise_propositions.iter()) {
-                    self.check_fact_matches_proposition(fact, prop, substitution, name)?;
+                    self.check_fact_matches_proposition(
+                        fact,
+                        prop,
+                        &substitution_with_globals,
+                        name,
+                    )?;
                 }
 
                 // Verify that the conclusion matches what the rule produces
                 self.check_rule_produces_equality(
-                    ctx,
                     rule,
                     substitution,
+                    &substitution_with_globals,
                     proof.proposition(),
                     name,
                 )?;
@@ -828,7 +856,7 @@ impl ProofStore {
         &mut self,
         fact: &ResolvedFact,
         prop: &Proposition,
-        substitution: &HashMap<String, TermId>,
+        subst_with_globals: &HashMap<String, TermId>,
         rule_name: &str,
     ) -> Result<(), ProofCheckError> {
         let (lhs, rhs) = (prop.lhs, prop.rhs);
@@ -849,18 +877,26 @@ impl ProofStore {
                 ResolvedExpr::Var(_, v),
             ) => {
                 // Get the output variable's term
-                let var_term = substitution.get(&v.name).copied().ok_or_else(|| {
+                let var_term = subst_with_globals.get(&v.name).copied().ok_or_else(|| {
                     ProofCheckErrorKind::UnboundVariable {
                         rule_name: rule_name.to_string(),
                         variable: v.name.clone(),
-                        available: substitution.keys().cloned().collect::<Vec<_>>().join(", "),
+                        available: subst_with_globals
+                            .keys()
+                            .cloned()
+                            .collect::<Vec<_>>()
+                            .join(", "),
                     }
                 })?;
 
                 // Evaluate all the input arguments
                 let mut arg_terms = Vec::new();
                 for arg in args {
-                    arg_terms.push(self.eval_expr_with_subst(rule_name, arg, substitution)?);
+                    arg_terms.push(self.eval_expr_with_subst(
+                        rule_name,
+                        arg,
+                        subst_with_globals,
+                    )?);
                 }
                 // Add the output variable as the last argument
                 arg_terms.push(var_term);
@@ -881,8 +917,10 @@ impl ProofStore {
                 Ok(())
             }
             ResolvedFact::Eq(_, lhs_expr, rhs_expr) => {
-                let fact_lhs = self.eval_expr_with_subst(rule_name, lhs_expr, substitution)?;
-                let fact_rhs = self.eval_expr_with_subst(rule_name, rhs_expr, substitution)?;
+                let fact_lhs =
+                    self.eval_expr_with_subst(rule_name, lhs_expr, subst_with_globals)?;
+                let fact_rhs =
+                    self.eval_expr_with_subst(rule_name, rhs_expr, subst_with_globals)?;
                 if fact_lhs != lhs || fact_rhs != rhs {
                     return Err(ProofCheckErrorKind::EqualityFactMismatch {
                         rule_name: rule_name.to_string(),
@@ -899,13 +937,13 @@ impl ProofStore {
             }
             // For a plain expr, the proof should have the form t1 = t2 where t2 matches the expr under substitution
             ResolvedFact::Fact(expr) => {
-                let fact_term = self.eval_expr_with_subst(rule_name, expr, substitution)?;
+                let fact_term = self.eval_expr_with_subst(rule_name, expr, subst_with_globals)?;
 
                 if fact_term != rhs {
                     return Err(ProofCheckErrorKind::FactMismatch {
                         rule_name: rule_name.to_string(),
                         fact: format!("{fact}"),
-                        substitution: format_substitution(&self.term_dag, substitution),
+                        substitution: format_substitution(&self.term_dag, subst_with_globals),
                         actual: format_term(&self.term_dag, rhs),
                         expected: format_term(&self.term_dag, fact_term),
                     }
@@ -983,9 +1021,9 @@ impl ProofStore {
     /// Check that a rule produces the claimed equality
     fn check_rule_produces_equality(
         &mut self,
-        ctx: &ProofCheckContext,
         rule: &crate::ast::GenericRule<ResolvedCall, crate::ast::ResolvedVar>,
         substitution: &HashMap<String, TermId>,
+        subst_with_globals: &HashMap<String, TermId>,
         claimed: &Proposition,
         rule_name: &str,
     ) -> Result<(), ProofCheckError> {
@@ -994,8 +1032,7 @@ impl ProofStore {
         // has the same structure, so we can pass it directly
         let action_refs: Vec<&GenericAction<ResolvedCall, crate::ast::ResolvedVar>> =
             rule.head.0.iter().collect();
-        let mut bindings = ctx.global_bindings.clone();
-        bindings.extend(substitution.clone());
+        let bindings = subst_with_globals.clone();
         let action_ctx = process_actions(rule_name, bindings, &action_refs, &mut self.term_dag)?;
 
         // Check if the claimed equality is in the propositions

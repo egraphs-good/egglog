@@ -1,7 +1,7 @@
 use crate::{
     ResolvedCall, Term, TermDag, TermId,
     ast::{FunctionSubtype, ResolvedExpr, ResolvedFact, ResolvedNCommand},
-    proofs::proof_encoding_helpers::EncodingNames,
+    proofs::{proof_checker::gather_globals, proof_encoding_helpers::EncodingNames},
     typechecking::FuncType,
     util::{HEntry, HashMap, IndexSet, SymbolGen},
 };
@@ -27,7 +27,6 @@ struct RawProofStore {
     term_dag: TermDag,
     /// Bidirectional map between proof terms and their ids.
     store: IndexSet<RawProof>,
-    encoding_names: EncodingNames,
     term_to_proof: HashMap<TermId, RawProofId>,
     proof_to_term: HashMap<RawProofId, TermId>,
 }
@@ -174,14 +173,13 @@ pub enum Justification {
 impl RawProofStore {
     /// After extracting a proof from the e-graph, convert it to a [`RawProof`].
     pub(crate) fn from_extracted(
-        encoding_names: &EncodingNames,
+        _encoding_names: &EncodingNames,
         term_dag: TermDag,
         term: TermId,
     ) -> (Self, RawProofId) {
         let mut store = RawProofStore {
             term_dag: term_dag.clone(),
             store: IndexSet::default(),
-            encoding_names: encoding_names.clone(),
             term_to_proof: HashMap::default(),
             proof_to_term: HashMap::default(),
         };
@@ -208,31 +206,31 @@ impl RawProofStore {
             );
         };
 
-        let proof = if head == self.encoding_names.fiat_constructor {
+        let proof = if head.contains("Fiat") {
             assert!(args.len() == 2, "fiat constructor should have 2 args");
             RawProof::Fiat(args[0], args[1])
-        } else if head == self.encoding_names.rule_constructor {
+        } else if head.contains("Rule") {
             assert!(args.len() == 4, "rule constructor should have 4 args");
             let name = self.parse_string(args[0]);
             let premises = self.parse_proof_list(args[1]);
             RawProof::Rule(name, premises, args[2], args[3])
-        } else if head == self.encoding_names.merge_fn_constructor {
+        } else if head.contains("Merge") {
             assert!(args.len() == 4, "merge constructor should have 4 args");
             let function = self.parse_string(args[0]);
             let old_proof = self.parse_proof(args[1]);
             let new_proof = self.parse_proof(args[2]);
             let term = args[3];
             RawProof::MergeFn(function, old_proof, new_proof, term)
-        } else if head == self.encoding_names.eq_trans_constructor {
+        } else if head.contains("Trans") {
             assert!(args.len() == 2, "trans constructor should have 2 args");
             let left = self.parse_proof(args[0]);
             let right = self.parse_proof(args[1]);
             RawProof::Trans(left, right)
-        } else if head == self.encoding_names.eq_sym_constructor {
+        } else if head.contains("Sym") {
             assert!(args.len() == 1, "sym constructor should have 1 arg");
             let inner = self.parse_proof(args[0]);
             RawProof::Sym(inner)
-        } else if head == self.encoding_names.congr_constructor {
+        } else if head.contains("Congr") {
             assert!(args.len() == 3, "congr constructor should have 3 args");
             let proof = self.parse_proof(args[0]);
             let child_index = self.parse_index(args[1]);
@@ -249,10 +247,10 @@ impl RawProofStore {
         let term = self.term_dag.get(list_term).clone();
         match term {
             Term::App(head, args) => {
-                if head == self.encoding_names.pnil {
+                if head.contains("PNil") {
                     assert!(args.is_empty(), "pnil should not have arguments");
                     Vec::new()
-                } else if head == self.encoding_names.pcons {
+                } else if head.contains("PCons") {
                     assert!(args.len() == 2, "pcons should have 2 arguments");
                     let head_proof = self.parse_proof(args[0]);
                     let rest = self.parse_proof_list(args[1]);
@@ -341,8 +339,10 @@ impl ProofStore {
             proof_id: HashMap::default(),
             id_to_proof: DenseIdMap::new(),
         };
+        let globals = gather_globals(prog, &mut store.term_dag)
+            .unwrap_or_else(|_| panic!("failed to gather globals from program"));
 
-        let proof_id = store.convert_raw_proof(prog, &raw_store, raw_proof_id);
+        let proof_id = store.convert_raw_proof(prog, &globals, &raw_store, raw_proof_id);
         (store, proof_id)
     }
 
@@ -353,6 +353,7 @@ impl ProofStore {
     fn convert_raw_proof(
         &mut self,
         prog: &Vec<ResolvedNCommand>,
+        globals: &HashMap<String, TermId>,
         raw_store: &RawProofStore,
         raw_proof_id: RawProofId,
     ) -> ProofId {
@@ -372,10 +373,13 @@ impl ProofStore {
             RawProof::Rule(name, premise_proofs, lhs, rhs) => {
                 let converted_premises: Vec<ProofId> = premise_proofs
                     .iter()
-                    .map(|pid| self.convert_raw_proof(prog, raw_store, *pid))
+                    .map(|pid| self.convert_raw_proof(prog, globals, raw_store, *pid))
                     .collect();
 
-                let substitution = self.compute_rule_substitution(prog, name, &converted_premises);
+                let mut substitution =
+                    self.compute_rule_substitution(prog, name, &converted_premises);
+                // remove globals from the substitution, since they are not necessary
+                substitution.retain(|var, _term_id| globals.get(var).is_none());
 
                 Proof {
                     proposition: Proposition::new(
@@ -390,8 +394,8 @@ impl ProofStore {
                 }
             }
             RawProof::MergeFn(function, old_raw, new_raw, to_prove) => {
-                let old_proof_id = self.convert_raw_proof(prog, raw_store, *old_raw);
-                let new_proof_id = self.convert_raw_proof(prog, raw_store, *new_raw);
+                let old_proof_id = self.convert_raw_proof(prog, globals, raw_store, *old_raw);
+                let new_proof_id = self.convert_raw_proof(prog, globals, raw_store, *new_raw);
                 let to_prove = raw_store.unwrap_ast(*to_prove);
                 Proof {
                     proposition: Proposition::new(to_prove, to_prove),
@@ -403,8 +407,8 @@ impl ProofStore {
                 }
             }
             RawProof::Trans(left_raw, right_raw) => {
-                let left_id = self.convert_raw_proof(prog, raw_store, *left_raw);
-                let right_id = self.convert_raw_proof(prog, raw_store, *right_raw);
+                let left_id = self.convert_raw_proof(prog, globals, raw_store, *left_raw);
+                let right_id = self.convert_raw_proof(prog, globals, raw_store, *right_raw);
                 let left = &self.id_to_proof[left_id];
                 let right = &self.id_to_proof[right_id];
                 assert_eq!(
@@ -418,7 +422,7 @@ impl ProofStore {
                 }
             }
             RawProof::Sym(inner_raw) => {
-                let inner_id = self.convert_raw_proof(prog, raw_store, *inner_raw);
+                let inner_id = self.convert_raw_proof(prog, globals, raw_store, *inner_raw);
                 let inner = &self.id_to_proof[inner_id];
                 Proof {
                     proposition: Proposition::new(inner.rhs(), inner.lhs()),
@@ -426,8 +430,8 @@ impl ProofStore {
                 }
             }
             RawProof::Congr(proof_raw, child_index, child_raw) => {
-                let base_id = self.convert_raw_proof(prog, raw_store, *proof_raw);
-                let child_id = self.convert_raw_proof(prog, raw_store, *child_raw);
+                let base_id = self.convert_raw_proof(prog, globals, raw_store, *proof_raw);
+                let child_id = self.convert_raw_proof(prog, globals, raw_store, *child_raw);
                 let base_lhs = self.id_to_proof[base_id].lhs();
                 let base_rhs = self.id_to_proof[base_id].rhs();
                 let child_rhs = self.id_to_proof[child_id].rhs();
@@ -459,6 +463,7 @@ impl ProofStore {
         premise_proofs: &[ProofId],
     ) -> HashMap<String, TermId> {
         let substitution = HashMap::default();
+
         let Some(rule) = prog.iter().find_map(|cmd| match cmd {
             ResolvedNCommand::NormRule { rule } if rule.name == rule_name => Some(rule),
             _ => None,

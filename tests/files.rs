@@ -1,6 +1,6 @@
 use std::path::PathBuf;
 
-use egglog::{ast::sanitize_internal_names, file_supports_proofs, *};
+use egglog::{file_supports_proofs, *};
 use hashbrown::HashSet;
 use libtest_mimic::Trial;
 
@@ -49,10 +49,11 @@ impl Run {
             self.test_program(
                 self.path.to_str().map(String::from),
                 &program,
+                "",
                 "Top level error",
             )
         } else {
-            let desugared_str = self.desugar_program(&program);
+            let resolved_str = self.resolve_prog(&program);
             // after desugaring run the program without term encoding or proofs
             let normal_run = Run {
                 path: self.path.clone(),
@@ -61,10 +62,16 @@ impl Run {
                 proofs: false,
                 proof_testing: false,
             };
+            let proof_check_prog = if self.proof_testing {
+                program.clone()
+            } else {
+                "".to_string()
+            };
 
             normal_run.test_program(
                 None,
-                &desugared_str,
+                &resolved_str,
+                &proof_check_prog,
                 "ERROR after parse, to_string, and parse again.",
             )
         };
@@ -109,26 +116,37 @@ impl Run {
         }
     }
 
-    fn desugar_program(&self, program: &str) -> String {
+    // Returns a string of the desugared program and a string for the desugared program without proofs
+    fn resolve_prog(&self, program: &str) -> String {
         let mut egraph = self.egraph();
-        sanitize_internal_names(
-            &egraph
-                .desugar_program(self.path.to_str().map(String::from), program)
-                .unwrap(),
-        )
-        .iter()
-        .map(|s| s.to_string())
-        .collect::<Vec<_>>()
-        .join("\n")
+
+        let resolved = egraph
+            .resolve_program(self.path.to_str().map(String::from), program)
+            .unwrap();
+        resolved
+            .iter()
+            .map(|cmd| cmd.to_string())
+            .collect::<Vec<_>>()
+            .join("\n")
     }
 
     fn test_program(
         &self,
         filename: Option<String>,
         program: &str,
+        proof_check_prog: &str,
         message: &str,
     ) -> Result<Vec<CommandOutput>, String> {
         let mut egraph = self.egraph();
+        let parsed_proof_check_prog = egraph
+            .parse_program(None, proof_check_prog)
+            .unwrap_or_else(|_| panic!("Failed to parse proof check program"));
+        // hard code proof testing to true, we only use proof checking program in proof testing mode
+        egraph
+            .set_proof_checking_program(parsed_proof_check_prog, true)
+            .expect("Failed to set proof checking program");
+
+        egraph.ensure_no_reserved_symbols(false);
 
         // Append print-size to every test file to ensure it works
         let program = format!("{program}\n(print-size)");
@@ -311,26 +329,21 @@ fn generate_tests(glob: &str) -> Vec<Trial> {
             });
         }
 
-        // proof_testing mode adds automatic prove-exists, which has different output
         if !should_fail && supports_proofs {
+            // proof_testing mode adds automatic prove-exists, which has different output
             push_trial(Run {
                 proof_testing: true,
                 ..run.clone()
             });
-        }
 
-        // TODO- running desugar + proofs fails on `prove-exists` commands. We can fix this by tying proof tables to constructors in the egglog itself.
-        /*if !should_fail
-            && supports_proofs
-            && !run.path.to_string_lossy().contains("math-microbenchmark")
-            && !requires_proofs
-        {
+            // Complex mode: desugar using proof encoding, then run normally.
+            // Yes this mode is important! It has found multiple bugs.
             push_trial(Run {
-                proofs: true,
+                proof_testing: true,
                 desugar: true,
                 ..run.clone()
             });
-        }*/
+        }
     }
 
     trials

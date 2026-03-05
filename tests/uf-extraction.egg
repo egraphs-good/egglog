@@ -1,13 +1,13 @@
-; Test that extraction works correctly with a custom :uf annotation.
-; The :uf annotation specifies a union-find table that tracks
+; Test that extraction works correctly with a custom :internal-uf annotation.
+; The :internal-uf annotation specifies a union-find table that tracks
 ; canonical representatives for a sort. When extracting, the UF table
 ; is consulted to find the canonical value.
 
 ; The UF table needs its own sort (like the proof encoding produces)
 (sort UFSort)
 
-; Declare the sort with :uf pointing to the UF constructor (declared next)
-(sort Expr :uf UF_Expr)
+; Declare the sort with :internal-uf pointing to the UF constructor (declared next)
+(sort Expr :internal-uf UF_Expr)
 
 ; Define a union-find constructor for Expr
 ; First arg is the term, second arg is its canonical representative

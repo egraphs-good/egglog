@@ -258,8 +258,8 @@ pub struct EGraph {
     /// Registry for command-level macros
     command_macros: CommandMacroRegistry,
     proof_state: EncodingState,
-    /// In proof mode, we keep track of all desugared commands so we can check proofs later.
-    desugared_commands: Vec<ResolvedNCommand>,
+    /// In proof mode, this is the program before proof instrumentation and the version we use for proof checking.
+    proof_check_program: Vec<ResolvedNCommand>,
 }
 
 /// A user-defined command allows users to inject custom command that can be called
@@ -348,7 +348,7 @@ impl Default for EGraph {
             warned_about_global_prefix: false,
             command_macros: Default::default(),
             proof_state,
-            desugared_commands: vec![],
+            proof_check_program: vec![],
         };
 
         add_base_sort(&mut eg, UnitSort, span!()).unwrap();
@@ -396,6 +396,19 @@ impl Default for EGraph {
 
         eg
     }
+}
+
+struct ResolvedNCommands {
+    desugared: Vec<ResolvedNCommand>,
+    /// In proof mode, populated with the desugared program before instrumented with proofs
+    desugared_before_proofs: Vec<ResolvedNCommand>,
+}
+
+struct ResolvedNCommandsWithOutput {
+    outputs: Vec<CommandOutput>,
+    resolved: Vec<ResolvedNCommand>,
+    /// In proof mode, populated with the desugared program before instrumented with proofs
+    resolved_before_proofs: Vec<ResolvedNCommand>,
 }
 
 #[derive(Debug, Error)]
@@ -489,6 +502,14 @@ impl EGraph {
         self.strict_mode
     }
 
+    /// Configure whether the internal reserved symbol (@) is allowed in user-defined names.
+    /// WARNING: do not use, this is for testing running egglog after desugaring.
+    /// Public so files.rs can use it, hidden from documentation because it is not intended for general use.
+    #[doc(hidden)]
+    pub fn ensure_no_reserved_symbols(&mut self, should_ensure: bool) {
+        self.parser.ensure_no_reserved_symbols = should_ensure;
+    }
+
     fn ensure_global_name_prefix(&mut self, span: &Span, name: &str) -> Result<(), TypeError> {
         if name.starts_with(GLOBAL_NAME_PREFIX) {
             return Ok(());
@@ -562,11 +583,13 @@ impl EGraph {
     /// egraph.
     pub fn pop(&mut self) -> Result<(), Error> {
         match self.pushed_egraph.take() {
-            Some(e) => {
-                // Copy the overall report from the popped egraph
-                let overall_run_report = self.overall_run_report.clone();
+            Some(mut e) => {
+                // Preserve the overall report from the popped egraph
+                std::mem::swap(&mut self.overall_run_report, &mut e.overall_run_report);
+                // Preserve the symbol generator so that fresh symbols
+                // generated after pop don't collide with ones generated before pop.
+                std::mem::swap(&mut self.parser.symbol_gen, &mut e.parser.symbol_gen);
                 *self = *e;
-                self.overall_run_report = overall_run_report;
                 Ok(())
             }
             None => Err(Error::Pop(span!())),
@@ -713,6 +736,27 @@ impl EGraph {
             }
             None => Ok(Some(output)),
         }
+    }
+
+    /// Provide a program for use in proof checking.
+    /// This enables testing of a desugared egglog proof program outside of proof mode.
+    /// When proof_testing is true, turns all the `check` commands into `prove` commands.
+    /// Not intended for general use but needed in files.rs, so public but hidden.
+    #[doc(hidden)]
+    pub fn set_proof_checking_program(
+        &mut self,
+        prog: Vec<Command>,
+        proof_testing: bool,
+    ) -> Result<(), Error> {
+        // make a new e-graph, desugar the program in proof mode
+        let mut proof_check_eg = EGraph::new_with_proofs();
+        if proof_testing {
+            proof_check_eg = proof_check_eg.with_proof_testing();
+        }
+        let resolved = proof_check_eg.process_program_internal(prog, false)?;
+
+        self.proof_check_program = resolved.resolved_before_proofs;
+        Ok(())
     }
 
     /// Print the size of a function. If no function name is provided,
@@ -935,7 +979,13 @@ impl EGraph {
     pub fn eval_expr(&mut self, expr: &Expr) -> Result<(ArcSort, Value), Error> {
         let span = expr.span();
         let command = Command::Action(Action::Expr(span.clone(), expr.clone()));
-        let resolved_commands = self.resolve_command(command)?;
+        let resolved = self.resolve_command(command)?;
+        if self.are_proofs_enabled() {
+            self.proof_check_program
+                .extend(resolved.desugared_before_proofs);
+        }
+        let resolved_commands = resolved.desugared;
+
         assert_eq!(resolved_commands.len(), 1);
         let resolved_command = resolved_commands.into_iter().next().unwrap();
         let resolved_expr = match resolved_command {
@@ -1080,10 +1130,22 @@ impl EGraph {
     fn run_command(&mut self, command: ResolvedNCommand) -> Result<Option<CommandOutput>, Error> {
         match command {
             // Sorts are already declared during typechecking
-            ResolvedNCommand::Sort { name, uf, .. } => {
-                // If the sort has a :uf field, store the mapping for extraction
+            ResolvedNCommand::Sort {
+                name,
+                uf,
+                proof_func,
+                ..
+            } => {
+                // If the sort has a :internal-uf field, store the mapping for extraction
                 if let Some(uf_name) = uf {
                     self.proof_state.uf_parent.insert(name.clone(), uf_name);
+                }
+                // If the sort has a :internal-proof-func field, store the mapping for proof lookup.
+                // This annotation is set by proof instrumentation and consumed here.
+                if let Some(proof_func_name) = proof_func {
+                    self.proof_state
+                        .proof_func_parent
+                        .insert(name.clone(), proof_func_name);
                 }
                 log::info!("Declared sort {name}.")
             }
@@ -1413,12 +1475,16 @@ impl EGraph {
         Ok(())
     }
 
-    /// Desugars, typechecks, and removes globals from a single [`Command`].
-    /// Leverages previous type information in the [`EGraph`] to do so, adding new type information.
-    fn resolve_command(&mut self, command: Command) -> Result<Vec<ResolvedNCommand>, Error> {
-        let desugared = desugar_command(command, &mut self.parser, self.proof_state.proof_testing)?;
+    /// Returns true if proofs are enabled.
+    pub fn are_proofs_enabled(&self) -> bool {
+        self.proof_state.proofs_enabled
+    }
 
-        // Add term encoding when it is enabled
+    fn resolve_command_before_proofs(
+        &mut self,
+        command: Command,
+    ) -> Result<Vec<ResolvedNCommand>, Error> {
+        let desugared = desugar_command(command, &mut self.parser, self.proof_state.proof_testing)?;
         if let Some(original_typechecking) = self.proof_state.original_typechecking.as_mut() {
             // Typecheck using the original egraph
             // TODO this is ugly- we don't need an entire e-graph just for type information.
@@ -1436,14 +1502,36 @@ impl EGraph {
                 }
             }
 
-            let normalized = proof_form(typechecked, &mut self.parser.symbol_gen);
+            Ok(proof_form(typechecked, &mut self.parser.symbol_gen))
+        } else {
+            let mut typechecked = self.typecheck_program(&desugared)?;
 
-            // Desugared commands are in proof form but globals are still using let bindings.
-            self.desugared_commands.extend_from_slice(&normalized);
+            typechecked = remove_globals::remove_globals(typechecked, &mut self.parser.symbol_gen);
+            for command in &typechecked {
+                self.names.check_shadowing(command)?;
+            }
+            Ok(typechecked)
+        }
+    }
 
+    /// Desugars, typechecks, and removes globals from a single [`Command`].
+    /// Leverages previous type information in the [`EGraph`] to do so, adding new type information.
+    /// When will_run is true, adds to `desugared_commands_run_so_far`, which is used for proof checking.
+    fn resolve_command(&mut self, command: Command) -> Result<ResolvedNCommands, Error> {
+        let resolved_before_proofs = self.resolve_command_before_proofs(command)?;
+
+        // Add term encoding when it is enabled
+        if self.proof_state.original_typechecking.is_none() {
+            Ok(ResolvedNCommands {
+                desugared: resolved_before_proofs,
+                desugared_before_proofs: vec![],
+            })
+        } else {
             // Now remove globals for actual execution (but NOT from desugared_commands)
-            let typechecked_no_globals =
-                proof_global_remover::remove_globals(normalized, &mut self.parser.symbol_gen);
+            let typechecked_no_globals = proof_global_remover::remove_globals(
+                resolved_before_proofs.clone(),
+                &mut self.parser.symbol_gen,
+            );
             for command in &typechecked_no_globals {
                 self.names.check_shadowing(command)?;
             }
@@ -1468,15 +1556,10 @@ impl EGraph {
 
                 new_typechecked.extend(desugared_typechecked);
             }
-            Ok(new_typechecked)
-        } else {
-            let mut typechecked = self.typecheck_program(&desugared)?;
-
-            typechecked = remove_globals::remove_globals(typechecked, &mut self.parser.symbol_gen);
-            for command in &typechecked {
-                self.names.check_shadowing(command)?;
-            }
-            Ok(typechecked)
+            Ok(ResolvedNCommands {
+                desugared: new_typechecked,
+                desugared_before_proofs: resolved_before_proofs,
+            })
         }
     }
 
@@ -1486,9 +1569,10 @@ impl EGraph {
         &mut self,
         program: Vec<Command>,
         run_commands: bool,
-    ) -> Result<(Vec<CommandOutput>, Vec<ResolvedCommand>), Error> {
+    ) -> Result<ResolvedNCommandsWithOutput, Error> {
         let mut outputs = Vec::new();
-        let mut desugared_commands = Vec::new();
+        let mut desugared_before_proofs = Vec::new();
+        let mut desugared = Vec::new();
 
         for before_expanded_command in program {
             // First do user-provided macro expansion for this command,
@@ -1508,14 +1592,21 @@ impl EGraph {
                         .parser
                         .get_program_from_string(Some(file.clone()), &s)?;
                     // run program internal on these include commands
-                    let (included_outputs, included_desugared) =
-                        self.process_program_internal(included_program, run_commands)?;
-                    outputs.extend(included_outputs);
-                    desugared_commands.extend(included_desugared);
+                    let resolved = self.process_program_internal(included_program, run_commands)?;
+                    outputs.extend(resolved.outputs);
+                    desugared.extend(resolved.resolved);
+                    desugared_before_proofs.extend(resolved.resolved_before_proofs);
                 } else {
-                    for processed in self.resolve_command(command)? {
-                        desugared_commands.push(processed.to_command());
+                    let resolved = self.resolve_command(command)?;
+                    if run_commands && self.are_proofs_enabled() {
+                        self.proof_check_program
+                            .extend(resolved.desugared_before_proofs.clone());
+                    }
 
+                    desugared_before_proofs.extend(resolved.desugared_before_proofs);
+                    desugared.extend(resolved.desugared.clone());
+
+                    for processed in resolved.desugared {
                         // even in desugar mode we still run push and pop
                         if run_commands
                             || matches!(
@@ -1533,26 +1624,32 @@ impl EGraph {
             }
         }
 
-        Ok((outputs, desugared_commands))
+        Ok(ResolvedNCommandsWithOutput {
+            outputs,
+            resolved_before_proofs: desugared_before_proofs,
+            resolved: desugared,
+        })
     }
 
     /// Run a program, represented as an AST.
     /// Return a list of messages.
     pub fn run_program(&mut self, program: Vec<Command>) -> Result<Vec<CommandOutput>, Error> {
-        let (outputs, _desugared_commands) = self.process_program_internal(program, true)?;
-        Ok(outputs)
+        let res = self.process_program_internal(program, true)?;
+        Ok(res.outputs)
     }
 
-    /// Desugars an egglog program by parsing and desugaring each command.
+    /// Resolves an egglog program by parsing, typechecking, and desugaring each command.
     /// Outputs a new egglog program without any syntactic sugar, either user provided ([`CommandMacro`]) or built-in (e.g., `rewrite` commands).
-    pub fn desugar_program(
+    /// Also removes globals from the program by replacing with new constructors.
+    pub fn resolve_program(
         &mut self,
         filename: Option<String>,
         input: &str,
     ) -> Result<Vec<ResolvedCommand>, Error> {
         let parsed = self.parser.get_program_from_string(filename, input)?;
-        let (_outputs, desugared_commands) = self.process_program_internal(parsed, false)?;
-        Ok(desugared_commands)
+        let res = self.process_program_internal(parsed, false)?;
+
+        Ok(res.resolved.into_iter().map(|c| c.to_command()).collect())
     }
 
     /// Takes a source program `input` and parses it into a list of [`Command`]s.
@@ -1671,7 +1768,11 @@ impl EGraph {
     /// Returns `None` if the tuple does not exist.
     /// `panics` if the function does not exist.
     pub fn lookup_function(&self, name: &str, key: &[Value]) -> Option<Value> {
-        let func = self.functions.get(name).unwrap().backend_id;
+        let func = self
+            .functions
+            .get(name)
+            .unwrap_or_else(|| panic!("Could not find function {name}"))
+            .backend_id;
         self.backend.lookup_id(func, key)
     }
 
