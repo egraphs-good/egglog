@@ -1,4 +1,4 @@
-.PHONY: all test nits docs graphs rm-graphs doctest coverage insta-test
+.PHONY: all test nits docs graphs rm-graphs doctest coverage insta-test nits-fix
 
 RUST_SRC=$(shell find . -type f -wholename '*/src/*.rs' -or -name 'Cargo.toml')
 TESTS=$(shell find tests/ -type f -name '*.egg' -not -name '*repro-*')
@@ -24,6 +24,12 @@ nits:
 	@rustup component add rustfmt
 	cargo fmt --check
 	cargo doc --workspace
+
+nits-fix:
+	@rustup component add clippy
+	cargo clippy --fix --tests --workspace --allow-dirty
+	@rustup component add rustfmt
+	cargo fmt
 
 fixnits:
 	@rustup component add rustfmt

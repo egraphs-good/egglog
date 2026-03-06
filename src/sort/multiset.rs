@@ -122,7 +122,7 @@ impl ContainerSort for MultiSetSort {
 
         add_primitive!(eg, "multiset-single" = {self.clone(): MultiSetSort} |x: # (self.element()), i: i64| -> @MultiSetContainer (arc) { MultiSetContainer {
             do_rebuild: self.ctx.element.is_eq_sort() || self.ctx.element.is_eq_container_sort(),
-            data: std::iter::repeat(x).take(i.try_into().unwrap()).collect()
+            data: std::iter::repeat_n(x, i.try_into().unwrap()).collect()
         } });
         add_primitive!(eg, "multiset-pick" = |xs: @MultiSetContainer (arc)| -> # (self.element()) { *xs.data.pick().expect("Cannot pick from an empty multiset") });
         add_primitive!(eg, "multiset-insert" = |mut xs: @MultiSetContainer (arc), x: # (self.element())| -> @MultiSetContainer (arc) { MultiSetContainer { data: xs.data.insert( x) , ..xs } });
@@ -409,7 +409,7 @@ impl Primitive for FillIndex {
             );
         };
         for (v, c) in multiset.data.iter_counts() {
-            let mut row = vec![args[0].clone(), v];
+            let mut row = vec![args[0], v];
             // If we have already filled this multiset once, skip since it should still be accurate with the right
             // merge function
             if action.lookup(exec_state, &row).is_some() {
@@ -463,7 +463,7 @@ impl Primitive for ClearIndex {
             );
         };
         for (v, _) in multiset.data.iter_counts() {
-            action.remove(exec_state, &[args[0].clone(), v]);
+            action.remove(exec_state, &[args[0], v]);
         }
         Some(exec_state.base_values().get::<()>(()))
     }
@@ -741,7 +741,7 @@ impl Primitive for UnionValues {
             .clone()
             .data;
         let values: Vec<_> = values.iter_counts().map(|(v, _c)| v).collect();
-        if values.len() == 0 {
+        if values.is_empty() {
             return None;
         }
         let first = values[0];
