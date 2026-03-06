@@ -29,6 +29,14 @@
         (multiset-subtract $xs (multiset-of (Num 3)))
     ))
 
+;; if count is less than the other fail
+(fail (multiset-subtract $xs (multiset-of (Num 3) (Num 3))))
+;; if the other doesn't contain the item fail
+(fail (multiset-subtract $xs (multiset-of (Num 4))))
+
+;; multiset-pick-max
+(check (= (Num 3) (multiset-pick-max (multiset-of (Num 3) (Num 3) (Num 1)))))
+
 ;; intersection
 
 
@@ -56,12 +64,16 @@
     ))
 ;; remove one of
 (check (= (multiset-of (Num 1)) (multiset-remove (multiset-of (Num 1) (Num 1)) (Num 1))))
-
+;; remove not contained
+(fail (multiset-remove $xs (Num 4)))
 
 ;; length
 (check (= 3 (multiset-length $xs)))
 ;; length repeated
 (check (= 3 (multiset-length (multiset-of (Num 1) (Num 1) (Num 1)))))
+
+;; count
+(check (= 1 (multiset-count $xs (Num 1))))
 
 ;; pick
 (check (= (Num 1) (multiset-pick (multiset-of (Num 1)))))
@@ -151,7 +163,19 @@
 ; Verify updates properly after unioning child
 (union (Num 1) (Num 3))
 (check (= 3 (ms-count $xs (Num 1))))
+
+;; check clear index
+(unstable-multiset-clear-index  $xs (unstable-fn "ms-count"))
+(fail (ms-count $xs (Num 1)))
+
 (pop)
+
+;; union values should union all items inside
+(push)
+(multiset-union-values $xs)
+(check (= (Num 1) (Num 2)))
+(pop)
+
 
 ;; fold
 (push)
