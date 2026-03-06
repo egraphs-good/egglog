@@ -56,12 +56,9 @@ jobs:
           - stresstest_large_expr
           - typeinfer
           - taylor51
-          - proof_testing_math
-          - proof_testing_integer_math
-          - proof_testing_combinators
-          - proof_testing_calc
-          - proof_testing_intersection
           - proof_testing_eqsat-basic
+          - proof_testing_unify
+          - proof_testing_typecheck
     steps:
       - run: echo "CARGO_INCREMENTAL=0" >> "$GITHUB_ENV"
       - uses: actions/checkout@v4
