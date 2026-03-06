@@ -26,6 +26,7 @@ pub struct BenchCase {
     pub name: String,
     pub filename: String,
     pub program: String,
+    pub proof_testing: bool,
 }
 
 impl fmt::Display for BenchCase {
@@ -37,10 +38,14 @@ impl fmt::Display for BenchCase {
 pub fn bench_cases(glob: &str) -> Vec<BenchCase> {
     configure_rayon_once();
 
-    glob::glob(glob)
+    let mut cases = Vec::new();
+
+    // Add regular test cases
+    let regular_cases = glob::glob(glob)
         .unwrap()
         .filter_map(Result::ok)
         .filter(|path| !path.to_string_lossy().contains("fail-typecheck"))
+        .filter(|path| !path.to_string_lossy().contains("proofs"))
         .map(|path| {
             let filename = path.to_string_lossy().to_string();
             let program = std::fs::read_to_string(&filename).unwrap();
@@ -50,9 +55,15 @@ pub fn bench_cases(glob: &str) -> Vec<BenchCase> {
                 name,
                 filename,
                 program,
+                proof_testing: false,
             }
-        })
-        .collect()
+        });
+    cases.extend(regular_cases);
+
+    // Add proof testing cases
+    cases.extend(bench_cases_proof_testing(glob));
+
+    cases
 }
 
 const PROOF_UNSUPPORTED_FILES: &[&str] = &[
@@ -80,6 +91,7 @@ pub fn bench_cases_proof_testing(glob: &str) -> Vec<BenchCase> {
                 name,
                 filename,
                 program,
+                proof_testing: true,
             }
         })
         .collect()
@@ -88,13 +100,7 @@ pub fn bench_cases_proof_testing(glob: &str) -> Vec<BenchCase> {
 pub fn bench_case(case: &BenchCase) {
     configure_rayon_once();
 
-    run_example(&case.filename, &case.program, false);
-}
-
-pub fn bench_case_proof_testing(case: &BenchCase) {
-    configure_rayon_once();
-
-    run_example(&case.filename, &case.program, true);
+    run_example(&case.filename, &case.program, case.proof_testing);
 }
 
 fn configure_rayon_once() {
