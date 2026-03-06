@@ -566,13 +566,11 @@ impl Primitive for Filter {
     }
 
     fn apply(&self, exec_state: &mut ExecutionState, args: &[Value]) -> Option<Value> {
-        let mut fc = exec_state
+        let fc = exec_state
             .container_values()
             .get_val::<FunctionContainer>(args[0])
             .unwrap()
             .clone();
-        // We just want to see if this function exists, not if it has a default.
-        fc.set_no_default();
         let multiset = exec_state
             .container_values()
             .get_val::<MultiSetContainer>(args[1])
