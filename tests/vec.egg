@@ -9,6 +9,9 @@
 ; Test vec-pop
 (check (= (vec-pop (vec-of 1 2 3)) (vec-of 1 2)))
 
+; Regression: inline checks must not alias different vec-of arities.
+(check (= (vec-of 1 2) (vec-pop (vec-of 1 2 3))))
+
 ; Test vec-not-contains
 (check (vec-not-contains (vec-of 1 2 3) 4))
 

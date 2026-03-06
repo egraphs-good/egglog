@@ -76,7 +76,7 @@
 (run 1)
 (check (=
         (multiset-of (Num 1) (Num 4) (Num 9))
-        squared-xs
+        $squared-xs
     ))
 
 ;; map to other type
@@ -120,7 +120,7 @@
 ;; Verify multiset of multiset
 (push)
 (sort Mathss (MultiSet Maths))
-(let xx (multiset-of (multiset-of (Num 1) (Num 2) (Num 3)) (multiset-of (Num 1) (Num 2) (Num 3))))
+(let $xx (multiset-of (multiset-of (Num 1) (Num 2) (Num 3)) (multiset-of (Num 1) (Num 2) (Num 3))))
 (union (Num 1) (Num 2))
 (check (= $xx (multiset-of (multiset-of (Num 2) (Num 2) (Num 3)) (multiset-of (Num 2) (Num 2) (Num 3)))))
 
@@ -171,8 +171,8 @@
 
 ;; filter
 (push)
-(relation is-even (Math))
-(is-even (Num 2))
+(function is-even (Math) Unit :no-merge)
+(set (is-even (Num 2)) ())
 (sort IsEvenFn (UnstableFn (Math) Unit))
 (check (=
     (unstable-multiset-filter (unstable-fn "is-even") $xs)
