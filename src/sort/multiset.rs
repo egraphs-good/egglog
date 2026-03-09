@@ -132,10 +132,13 @@ impl ContainerSort for MultiSetSort {
             data: xs.collect()
         } });
 
-        add_primitive!(eg, "multiset-single" = {self.clone(): MultiSetSort} |x: # (self.element()), i: i64| -> @MultiSetContainer (arc) { MultiSetContainer {
-            do_rebuild: self.ctx.is_eq_container_sort(),
-            data: std::iter::repeat_n(x, i.try_into().unwrap()).collect()
-        } });
+        add_primitive!(eg, "multiset-single" = {self.clone(): MultiSetSort} |x: # (self.element()), i: i64| -?> @MultiSetContainer (arc) {
+            i.try_into().ok().map(|i|
+                MultiSetContainer {
+                do_rebuild: self.ctx.is_eq_container_sort(),
+                data: std::iter::repeat_n(x, i).collect()
+            })
+        });
         add_primitive!(eg, "multiset-pick" = |xs: @MultiSetContainer (arc)| -> # (self.element()) { *xs.data.pick().expect("Cannot pick from an empty multiset") });
         add_primitive!(eg, "multiset-insert" = |mut xs: @MultiSetContainer (arc), x: # (self.element())| -> @MultiSetContainer (arc) { MultiSetContainer { data: xs.data.insert( x) , ..xs } });
         add_primitive!(eg, "multiset-remove" = |mut xs: @MultiSetContainer (arc), x: # (self.element())| -?> @MultiSetContainer (arc) { Some(MultiSetContainer { data: xs.data.remove(&x)?, ..xs } )});
