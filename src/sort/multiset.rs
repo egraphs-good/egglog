@@ -66,7 +66,7 @@ impl Presort for MultiSetSort {
             "unstable-multiset-map",
             "unstable-multiset-filter",
             "unstable-multiset-filter-not",
-            "unstable-multiset-fold",
+            "unstable-multiset-reduce",
             "unstable-multiset-fill-index",
             "unstable-multiset-clear-index",
             "unstable-multiset-flat-map",
@@ -281,8 +281,8 @@ fn try_registering_multiset_non_map_primitives(
         && fn_.inputs()[1].name() == element_name
         && fn_.output().name() == element_name
     {
-        eg.add_primitive(Fold {
-            name: "unstable-multiset-fold".into(),
+        eg.add_primitive(Reduce {
+            name: "unstable-multiset-reduce".into(),
             multiset: multiset.clone(),
             fn_: fn_.clone(),
             element: element.clone(),
@@ -661,17 +661,18 @@ impl Primitive for SumMultisets {
     }
 }
 
-// (unstable-multiset-fold ([X, X] -> X, X, MultiSet[X]) -> X
-// will fold the multiset using the provided binary function and initial value
+// (unstable-multiset-reduce ([X, X] -> X, X, MultiSet[X]) -> X
+// will reduce the multiset using the provided binary function and initial value
+// Won't use the initial value if the multiset is non-empty.
 #[derive(Clone)]
-struct Fold {
+struct Reduce {
     name: String,
     multiset: ArcSort,
     fn_: Arc<FunctionSort>,
     element: ArcSort,
 }
 
-impl Primitive for Fold {
+impl Primitive for Reduce {
     fn name(&self) -> &str {
         &self.name
     }

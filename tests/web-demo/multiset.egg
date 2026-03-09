@@ -182,13 +182,13 @@
 (constructor add (Math Math) Math)
 (sort MathAddFn (UnstableFn (Math Math) Math))
 ;; not sure why we have to add this first to the e-graph to =?
-(unstable-multiset-fold (unstable-fn "add") (Num 0) $xs)
+(unstable-multiset-reduce (unstable-fn "add") (Num 0) $xs)
 (check (=
-        (unstable-multiset-fold (unstable-fn "add") (Num 0) $xs)
+        (unstable-multiset-reduce (unstable-fn "add") (Num 0) $xs)
         (add (add (Num 1) (Num 2)) (Num 3))
     ))
 (check (=
-        (unstable-multiset-fold (unstable-fn "add") (Num 0) (multiset-of))
+        (unstable-multiset-reduce (unstable-fn "add") (Num 0) (multiset-of))
         (Num 0)
     ))
 (pop)
