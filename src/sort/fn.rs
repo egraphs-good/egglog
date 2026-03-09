@@ -164,7 +164,9 @@ impl Sort for FunctionSort {
     }
 
     fn is_eq_container_sort(&self) -> bool {
-        self.inputs.iter().any(|s| s.is_eq_sort())
+        self.inputs
+            .iter()
+            .any(|s| s.is_eq_sort() || s.is_eq_container_sort())
     }
 
     fn serialized_name(&self, container_values: &ContainerValues, value: Value) -> String {

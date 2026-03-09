@@ -106,7 +106,7 @@ impl ContainerSort for MultiSetSort {
     }
 
     fn is_eq_container_sort(&self) -> bool {
-        self.element.is_eq_sort()
+        self.element.is_eq_sort() || self.element.is_eq_container_sort()
     }
 
     fn inner_values(
@@ -128,12 +128,12 @@ impl ContainerSort for MultiSetSort {
         let arc = self.clone().to_arcsort();
 
         add_primitive!(eg, "multiset-of" = {self.clone(): MultiSetSort} [xs: # (self.element())] -> @MultiSetContainer (arc) { MultiSetContainer {
-            do_rebuild: self.ctx.element.is_eq_sort() || self.ctx.element.is_eq_container_sort(),
+            do_rebuild: self.ctx.is_eq_container_sort(),
             data: xs.collect()
         } });
 
         add_primitive!(eg, "multiset-single" = {self.clone(): MultiSetSort} |x: # (self.element()), i: i64| -> @MultiSetContainer (arc) { MultiSetContainer {
-            do_rebuild: self.ctx.element.is_eq_sort() || self.ctx.element.is_eq_container_sort(),
+            do_rebuild: self.ctx.is_eq_container_sort(),
             data: std::iter::repeat_n(x, i.try_into().unwrap()).collect()
         } });
         add_primitive!(eg, "multiset-pick" = |xs: @MultiSetContainer (arc)| -> # (self.element()) { *xs.data.pick().expect("Cannot pick from an empty multiset") });
@@ -174,7 +174,6 @@ impl ContainerSort for MultiSetSort {
                 name: "multiset-sum-multisets".into(),
                 multiset: other_multiset_sort.clone(),
                 multiset_of_multisets: arc.clone(),
-                do_rebuild: other_multiset_sort.is_eq_container_sort(),
             });
         }
         let all_ms_sorts = eg
@@ -617,7 +616,6 @@ struct SumMultisets {
     name: String,
     multiset: ArcSort,
     multiset_of_multisets: ArcSort,
-    do_rebuild: bool,
 }
 
 impl Primitive for SumMultisets {
@@ -652,7 +650,7 @@ impl Primitive for SumMultisets {
         }
         let multiset = MultiSetContainer {
             data,
-            do_rebuild: self.do_rebuild,
+            do_rebuild: self.multiset.is_eq_container_sort(),
         };
         Some(
             exec_state
