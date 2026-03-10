@@ -245,7 +245,7 @@ pub struct EGraph {
     /// pushed_egraph forms a linked list of pushed egraphs.
     /// Pop reverts the egraph to the last pushed egraph.
     pushed_egraph: Option<Box<Self>>,
-    pub functions: IndexMap<String, Function>,
+    functions: IndexMap<String, Function>,
     rulesets: IndexMap<String, Ruleset>,
     pub fact_directory: Option<PathBuf>,
     pub seminaive: bool,
@@ -978,6 +978,11 @@ impl EGraph {
             Ok(_) => Ok(()),
             Err(e) => Err(Error::BackendError(e.to_string())),
         }
+    }
+
+    /// Get the list of all functions in the e-graph.
+    pub fn get_function_names(&self) -> Vec<String> {
+        self.functions.keys().cloned().collect()
     }
 
     /// Read the contents of the given function.
