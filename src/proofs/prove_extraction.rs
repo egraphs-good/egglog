@@ -453,9 +453,8 @@ impl<'a> ProveEqualToRepresentative<'a> {
                     sort_name: sort_name.clone(),
                 }
             })?;
-            *canon_map.get(&value).unwrap_or_else(|| {
-                panic!("value {value:?} not found in UF index for sort `{sort_name}`")
-            })
+            // TODO turn this into an error after #871 merges
+            *canon_map.get(&value).unwrap_or(&value)
         } else {
             // Primitive sorts have no UF; the value is its own representative.
             value
