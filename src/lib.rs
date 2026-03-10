@@ -239,7 +239,7 @@ impl std::fmt::Display for CommandOutput {
 /// ```
 #[derive(Clone)]
 pub struct EGraph {
-    pub backend: egglog_bridge::EGraph,
+    backend: egglog_bridge::EGraph,
     pub parser: Parser,
     names: check_shadowing::Names,
     /// pushed_egraph forms a linked list of pushed egraphs.
@@ -249,7 +249,7 @@ pub struct EGraph {
     rulesets: IndexMap<String, Ruleset>,
     pub fact_directory: Option<PathBuf>,
     pub seminaive: bool,
-    pub type_info: TypeInfo,
+    type_info: TypeInfo,
     /// The run report unioned over all runs so far.
     overall_run_report: RunReport,
     schedulers: DenseIdMap<SchedulerId, SchedulerRecord>,
@@ -282,7 +282,7 @@ pub struct Function {
     decl: ResolvedFunctionDecl,
     schema: ResolvedSchema,
     can_subsume: bool,
-    pub backend_id: egglog_bridge::FunctionId,
+    backend_id: egglog_bridge::FunctionId,
 }
 
 impl Function {
@@ -978,6 +978,12 @@ impl EGraph {
             Ok(_) => Ok(()),
             Err(e) => Err(Error::BackendError(e.to_string())),
         }
+    }
+
+    /// Read the contents of the given function.
+    /// The callback f is called with each row and its subsumption status.
+    pub fn function_for_each(&self, func: &Function, f: impl FnMut(FunctionRow<'_>)) {
+        self.backend.for_each(func.backend_id, f);
     }
 
     /// Evaluates an expression, returns the sort of the expression and the evaluation result.
