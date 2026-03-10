@@ -43,6 +43,13 @@ pub(crate) struct ViewProofIndex {
     /// Value: `HashMap` from `(inputs, eclass)` concatenated as `Vec<Value>` to
     /// the proof `Value`.
     pub(crate) view_proofs: HashMap<String, HashMap<Vec<Value>, Value>>,
+
+    /// For each eq-sort that has a UF table, maps each value to its canonical
+    /// representative.
+    ///
+    /// Key: sort name (e.g. `"Math"`).
+    /// Value: `HashMap` from a `Value` to its canonical representative `Value`.
+    pub(crate) uf_canonical: HashMap<String, HashMap<Value, Value>>,
 }
 
 impl ViewProofIndex {
@@ -65,13 +72,27 @@ impl ViewProofIndex {
         let mut view_eclass: HashMap<String, HashMap<Vec<Value>, Value>> = HashMap::default();
         let mut view_proofs: HashMap<String, HashMap<Vec<Value>, Value>> = HashMap::default();
 
+        // Build the UF index: for each eq-sort, map value -> canonical.
+        let mut uf_canonical: HashMap<String, HashMap<Value, Value>> = HashMap::default();
+        for (sort_name, uf_table_name) in egraph.proof_state.uf_parent.iter() {
+            let uf_func = egraph
+                .get_function(uf_table_name)
+                .unwrap_or_else(|| panic!("failed to find UF function {uf_table_name}"));
+            let mut canon_map: HashMap<Value, Value> = HashMap::default();
+            egraph
+                .backend
+                .for_each(uf_func.backend_id, |row: egglog_bridge::FunctionRow| {
+                    canon_map.insert(row.vals[0], row.vals[1]);
+                });
+            uf_canonical.insert(sort_name.clone(), canon_map);
+        }
+
         // Iterate over every view table that was registered during proof encoding.
         for (original_name, view_table_name) in proof_names.view_name.iter() {
             // Look up the view table's `Function` in the e-graph.
-            let view_function = match egraph.get_function(view_table_name) {
-                Some(f) => f,
-                None => continue,
-            };
+            let view_function = egraph
+                .get_function(view_table_name)
+                .unwrap_or_else(|| panic!("failed to find view function {view_table_name}"));
             let view_backend_id = view_function.backend_id;
 
             // ----------------------------------------------------------
@@ -91,14 +112,13 @@ impl ViewProofIndex {
             // ----------------------------------------------------------
             // Look for the corresponding proof table and build its map.
             // ----------------------------------------------------------
-            let proof_table_name = match proof_names.view_proof_name.get(original_name) {
-                Some(name) => name,
-                None => continue,
-            };
-            let proof_function = match egraph.get_function(proof_table_name) {
-                Some(f) => f,
-                None => continue,
-            };
+            let proof_table_name = proof_names
+                .view_proof_name
+                .get(original_name)
+                .unwrap_or_else(|| panic!("failed to find proof table name for {original_name}"));
+            let proof_function = egraph
+                .get_function(proof_table_name)
+                .unwrap_or_else(|| panic!("failed to find proof function {proof_table_name}"));
             let proof_backend_id = proof_function.backend_id;
 
             let mut proof_map: HashMap<Vec<Value>, Value> = HashMap::default();
@@ -107,7 +127,7 @@ impl ViewProofIndex {
                 if !vals.is_empty() {
                     let key = vals[..vals.len() - 1].to_vec();
                     let proof_value = vals[vals.len() - 1];
-                    proof_map.insert(key, proof_value);
+                    assert!(proof_map.insert(key, proof_value).is_none());
                 }
             });
             view_proofs.insert(original_name.clone(), proof_map);
@@ -116,6 +136,7 @@ impl ViewProofIndex {
         Self {
             view_eclass,
             view_proofs,
+            uf_canonical,
         }
     }
 }
@@ -425,33 +446,16 @@ impl<'a> ProveEqualToRepresentative<'a> {
         let sort_name = sort.name().to_string();
         let proof_names = &self.egraph.proof_state.proof_names;
 
-        // ── 1. Find the representative via the UF table ─────────────────
+        // ── 1. Find the representative via the UF index ─────────────────
         let representative = if sort.is_eq_sort() {
-            let uf_table_name = self
-                .egraph
-                .proof_state
-                .uf_parent
-                .get(&sort_name)
-                .ok_or_else(|| ExtractWithProofError::NoUfTable {
-                    sort_name: sort_name.clone(),
-                })?;
-            // The UF table is a constructor UF_Sort(child, parent) -> uf,
-            // so we scan for the row where vals[0] == value and read vals[1].
-            // If no entry exists the value IS the representative.
-            let uf_func = self.egraph.get_function(uf_table_name).ok_or_else(|| {
+            let canon_map = self.index.uf_canonical.get(&sort_name).ok_or_else(|| {
                 ExtractWithProofError::NoUfTable {
                     sort_name: sort_name.clone(),
                 }
             })?;
-            let mut canonical = value;
-            self.egraph
-                .backend
-                .for_each(uf_func.backend_id, |row: egglog_bridge::FunctionRow| {
-                    if row.vals[0] == value {
-                        canonical = row.vals[1];
-                    }
-                });
-            canonical
+            *canon_map.get(&value).unwrap_or_else(|| {
+                panic!("value {value:?} not found in UF index for sort `{sort_name}`")
+            })
         } else {
             // Primitive sorts have no UF; the value is its own representative.
             value

@@ -150,8 +150,9 @@ pub(crate) fn desugar_command(
             vec![NCommand::PrintOverallStatistics(span, file.clone())]
         }
         Command::Extract(span, expr, variants) => {
-            // In proof testing mode test using extraction with proofs
-            if proof_testing {
+            // In proof testing mode test using extraction with proofs,
+            // but only for the default number of variants (0).
+            if proof_testing && matches!(&variants, Expr::Lit(_, Literal::Int(0))) {
                 vec![NCommand::ExtractWithProof(span, expr)]
             } else {
                 vec![NCommand::Extract(span, expr, variants)]
