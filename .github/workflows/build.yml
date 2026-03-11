@@ -63,6 +63,7 @@ jobs:
           - proof_testing_eqsat-basic
           - proof_testing_unify
           - proof_testing_typecheck
+          - eggcc-3mm
           - rust_rule_fib
           - rust_rule_match_overhead
           - rust_rule_match_with_serialize
