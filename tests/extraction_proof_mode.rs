@@ -1,5 +1,14 @@
+use egglog::CommandOutput;
 use egglog::EGraph;
 use egglog::prelude::*;
+
+fn find_extract_best(outputs: &[CommandOutput]) -> String {
+    outputs
+        .iter()
+        .find(|o| matches!(o, CommandOutput::ExtractBest(..)))
+        .expect("No ExtractBest output found")
+        .to_string()
+}
 
 #[test]
 fn test_extraction_same_with_proof_mode() {
@@ -36,7 +45,7 @@ fn test_extraction_same_with_proof_mode() {
     let normal_output = egraph_normal
         .parse_and_run_program(None, "(extract expr)")
         .unwrap();
-    let normal_extracted = normal_output[0].to_string();
+    let normal_extracted = find_extract_best(&normal_output);
 
     // Run in proof mode and extract
     let mut egraph_proofs = EGraph::new_with_proofs();
@@ -44,7 +53,7 @@ fn test_extraction_same_with_proof_mode() {
     let proofs_output = egraph_proofs
         .parse_and_run_program(None, "(extract expr)")
         .unwrap();
-    let proofs_extracted = proofs_output[0].to_string();
+    let proofs_extracted = find_extract_best(&proofs_output);
 
     // They should produce the same extraction result
     assert_eq!(
@@ -98,7 +107,7 @@ fn test_extraction_same_with_proof_mode_using_rule_macro() {
     let normal_output = egraph_normal
         .parse_and_run_program(None, "(extract x)")
         .unwrap();
-    let normal_extracted = normal_output[0].to_string();
+    let normal_extracted = find_extract_best(&normal_output);
 
     // Run in proof mode
     let mut egraph_proofs = EGraph::new_with_proofs();
@@ -122,7 +131,7 @@ fn test_extraction_same_with_proof_mode_using_rule_macro() {
     let proofs_output = egraph_proofs
         .parse_and_run_program(None, "(extract x)")
         .unwrap();
-    let proofs_extracted = proofs_output[0].to_string();
+    let proofs_extracted = find_extract_best(&proofs_output);
 
     // They should produce the same extraction result
     assert_eq!(

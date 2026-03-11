@@ -1,0 +1,13 @@
+---
+source: tests/files.rs
+expression: snapshot_content_across_treatments
+---
+((App 1)
+ (Cons 1)
+ (Lam 3)
+ (MyUnitConst 1)
+ (NilConst 1)
+ (TArr 1)
+ (TUnitConst 1)
+ (Var 2)
+ (typeof 2))
