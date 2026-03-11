@@ -478,20 +478,33 @@ fn minimal_ac() {
 
 #[test]
 fn ac_gj() {
-    ac_test(PlanStrategy::Gj);
+    ac_test_both(PlanStrategy::Gj);
 }
 
 #[test]
 fn ac_fj_mincover() {
-    ac_test(PlanStrategy::MinCover);
+    ac_test_both(PlanStrategy::MinCover);
 }
 
 #[test]
 fn ac_fj_puresize() {
-    ac_test(PlanStrategy::PureSize);
+    ac_test_both(PlanStrategy::PureSize);
 }
 
-fn ac_test(strat: PlanStrategy) {
+fn ac_test_both(strat: PlanStrategy) {
+    ac_test(strat, 1);
+    ac_test(strat, 4);
+}
+
+fn ac_test(strat: PlanStrategy, parallelism: usize) {
+    let pool = rayon::ThreadPoolBuilder::new()
+        .num_threads(parallelism)
+        .build()
+        .unwrap();
+    pool.install(|| ac_test_inner(strat));
+}
+
+fn ac_test_inner(strat: PlanStrategy) {
     // This test is very involved. It reimplements major egglog features on top
     // of this library:
     // 1. rebuilding, including heuristics for incremental vs. nonincremental.
