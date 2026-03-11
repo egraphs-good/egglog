@@ -260,6 +260,9 @@ pub struct EGraph {
     proof_state: EncodingState,
     /// In proof mode, this is the program before proof instrumentation and the version we use for proof checking.
     proof_check_program: Vec<ResolvedNCommand>,
+    /// Thread pool used for parallel operations. All rayon parallel work is
+    /// scoped to this pool rather than the global thread pool.
+    pool: Arc<rayon::ThreadPool>,
 }
 
 /// A user-defined command allows users to inject custom command that can be called
@@ -331,6 +334,12 @@ impl Default for EGraph {
     fn default() -> Self {
         let mut parser = Parser::default();
         let proof_state = EncodingState::new(&mut parser.symbol_gen);
+        let pool = Arc::new(
+            rayon::ThreadPoolBuilder::new()
+                .num_threads(1)
+                .build()
+                .expect("failed to build rayon thread pool"),
+        );
         let mut eg = Self {
             backend: Default::default(),
             parser,
@@ -349,6 +358,7 @@ impl Default for EGraph {
             command_macros: Default::default(),
             proof_state,
             proof_check_program: vec![],
+            pool,
         };
 
         add_base_sort(&mut eg, UnitSort, span!()).unwrap();
@@ -472,6 +482,22 @@ impl EGraph {
     pub fn with_proof_testing(mut self) -> Self {
         self.proof_state.proof_testing = true;
         self
+    }
+
+    /// Set the number of threads used for parallel operations.
+    pub fn with_num_threads(mut self, num_threads: usize) -> Self {
+        self.pool = Arc::new(
+            rayon::ThreadPoolBuilder::new()
+                .num_threads(num_threads)
+                .build()
+                .expect("failed to build rayon thread pool"),
+        );
+        self
+    }
+
+    /// Return the number of threads in this EGraph's thread pool.
+    pub fn num_threads(&self) -> usize {
+        self.pool.current_num_threads()
     }
 
     /// Add a user-defined command to the e-graph
@@ -1648,8 +1674,11 @@ impl EGraph {
     /// Run a program, represented as an AST.
     /// Return a list of messages.
     pub fn run_program(&mut self, program: Vec<Command>) -> Result<Vec<CommandOutput>, Error> {
-        let res = self.process_program_internal(program, true)?;
-        Ok(res.outputs)
+        let pool = self.pool.clone();
+        pool.install(|| {
+            let res = self.process_program_internal(program, true)?;
+            Ok(res.outputs)
+        })
     }
 
     /// Resolves an egglog program by parsing, typechecking, and desugaring each command.
@@ -1660,10 +1689,12 @@ impl EGraph {
         filename: Option<String>,
         input: &str,
     ) -> Result<Vec<ResolvedCommand>, Error> {
-        let parsed = self.parser.get_program_from_string(filename, input)?;
-        let res = self.process_program_internal(parsed, false)?;
-
-        Ok(res.resolved.into_iter().map(|c| c.to_command()).collect())
+        let pool = self.pool.clone();
+        pool.install(|| {
+            let parsed = self.parser.get_program_from_string(filename, input)?;
+            let res = self.process_program_internal(parsed, false)?;
+            Ok(res.resolved.into_iter().map(|c| c.to_command()).collect())
+        })
     }
 
     /// Takes a source program `input` and parses it into a list of [`Command`]s.

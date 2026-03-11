@@ -43,16 +43,6 @@ impl Run {
 
     fn run(&self) {
         let _ = env_logger::builder().is_test(true).try_init();
-
-        let pool = rayon::ThreadPoolBuilder::new()
-            .num_threads(self.threads)
-            .build()
-            .unwrap();
-
-        pool.install(|| self.run_inner());
-    }
-
-    fn run_inner(&self) {
         let program = std::fs::read_to_string(&self.path)
             .unwrap_or_else(|err| panic!("Couldn't read {:?}: {:?}", self.path, err));
 
@@ -117,7 +107,7 @@ impl Run {
     }
 
     fn egraph(&self) -> EGraph {
-        if self.proof_testing {
+        let egraph = if self.proof_testing {
             EGraph::new_with_proofs().with_proof_testing()
         } else if self.proofs {
             EGraph::new_with_proofs()
@@ -125,7 +115,8 @@ impl Run {
             EGraph::new_with_term_encoding()
         } else {
             EGraph::default()
-        }
+        };
+        egraph.with_num_threads(self.threads)
     }
 
     // Returns a string of the desugared program and a string for the desugared program without proofs

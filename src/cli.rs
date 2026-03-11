@@ -90,13 +90,10 @@ pub fn cli(mut egraph: EGraph) {
         egraph = egraph.with_proof_testing();
     }
 
-    rayon::ThreadPoolBuilder::new()
-        .num_threads(args.threads)
-        .build_global()
-        .unwrap();
+    egraph = egraph.with_num_threads(args.threads);
     log::debug!(
         "Initialized thread pool with {} threads",
-        rayon::current_num_threads()
+        egraph.num_threads()
     );
     egraph.fact_directory.clone_from(&args.fact_directory);
     egraph.seminaive = !args.naive;
