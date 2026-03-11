@@ -1,0 +1,48 @@
+(datatype Expr
+  (Num i64)
+  (Add Expr Expr)
+  (Mul Expr Expr))
+
+;; Commutativity of Add
+(rule ((Add a b))
+      ((union (Add a b) (Add b a)))
+      :name "add-comm")
+
+;; Commutativity of Mul
+(rule ((Mul a b))
+      ((union (Mul a b) (Mul b a)))
+      :name "mul-comm")
+
+;; Additive identity: x + 0 = x
+(rule ((Add a (Num 0)))
+      ((union (Add a (Num 0)) a))
+      :name "add-zero")
+
+;; Multiplicative identity: x * 1 = x
+(rule ((Mul a (Num 1)))
+      ((union (Mul a (Num 1)) a))
+      :name "mul-one")
+
+;; Constant folding for Add
+(rule ((Add (Num a) (Num b)))
+      ((union (Add (Num a) (Num b)) (Num (+ a b))))
+      :name "add-fold")
+
+;; Constant folding for Mul, with condition to force ordering
+(rule ((Mul (Num a) (Num b))
+       (>= a b))
+      ((union (Mul (Num a) (Num b)) (Num (* a b))))
+      :name "mul-fold")
+
+(let $start (Mul (Num 2) (Add (Num 3) (Num 0))))
+
+(run 10)
+
+;; Sanity check: the e-graph should have merged everything to (Num 6)
+(check (= $start (Num 6)))
+
+;; Now extract with a proof.
+;; The proof demonstrates that the extracted term equals the input.
+;; Use the literal expression rather than the global to avoid
+;; global-to-constructor issues in the desugar_proof_testing mode.
+(extract-with-proof (Mul (Num 2) (Add (Num 3) (Num 0))))

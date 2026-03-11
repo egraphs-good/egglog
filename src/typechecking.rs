@@ -340,6 +340,12 @@ impl EGraph {
                 }
                 ResolvedNCommand::ProveExists(span.clone(), ResolvedCall::Func(func_type.clone()))
             }
+            NCommand::ExtractWithProof(span, expr) => {
+                let res_expr =
+                    self.type_info
+                        .typecheck_expr(symbol_gen, expr, &Default::default())?;
+                ResolvedNCommand::ExtractWithProof(span.clone(), res_expr)
+            }
             NCommand::Output { span, file, exprs } => {
                 let exprs = exprs
                     .iter()
@@ -567,6 +573,7 @@ impl TypeInfo {
             internal_let: fdecl.internal_let,
             span: fdecl.span.clone(),
             term_constructor: fdecl.term_constructor.clone(),
+            proof_function: fdecl.proof_function.clone(),
         })
     }
 
@@ -879,7 +886,7 @@ pub enum TypeError {
     #[error("{}\nCannot union values of sort {} because it is marked as non-unionable (e.g. from a relation)", .1, .0.name())]
     NonUnionableSort(ArcSort, Span),
     #[error(
-        "{1}\nView table {0} with :term-constructor must have at least one input (the e-class)."
+        "{1}\nView table {0} with :internal-term-constructor must have at least one input (the e-class)."
     )]
     TermConstructorNoInputs(String, Span),
     #[error(

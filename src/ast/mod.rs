@@ -85,6 +85,8 @@ where
         PrintFunctionMode,
     ),
     ProveExists(Span, Head),
+    /// See [`GenericCommand::ExtractWithProof`].
+    ExtractWithProof(Span, GenericExpr<Head, Leaf>),
     PrintSize(Span, Option<String>),
     Output {
         span: Span,
@@ -134,6 +136,7 @@ where
                     hidden: f.internal_hidden,
                     let_binding: f.internal_let,
                     term_constructor: f.term_constructor.clone(),
+                    proof_function: f.proof_function.clone(),
                 },
                 FunctionSubtype::Custom => GenericCommand::Function {
                     span: f.span.clone(),
@@ -167,6 +170,9 @@ where
             }
             GenericNCommand::ProveExists(span, constructor) => {
                 GenericCommand::ProveExists(span.clone(), constructor.clone())
+            }
+            GenericNCommand::ExtractWithProof(span, expr) => {
+                GenericCommand::ExtractWithProof(span.clone(), expr.clone())
             }
             GenericNCommand::PrintSize(span, name) => {
                 GenericCommand::PrintSize(span.clone(), name.clone())
@@ -223,7 +229,8 @@ where
             | GenericNCommand::Pop(..)
             | GenericNCommand::Input { .. }
             | GenericNCommand::UserDefined(..)
-            | GenericNCommand::ProveExists(..) => self,
+            | GenericNCommand::ProveExists(..)
+            | GenericNCommand::ExtractWithProof(..) => self,
         }
     }
 
@@ -277,6 +284,9 @@ where
             }
             GenericNCommand::ProveExists(span, constructor) => {
                 GenericNCommand::ProveExists(span, constructor)
+            }
+            GenericNCommand::ExtractWithProof(span, expr) => {
+                GenericNCommand::ExtractWithProof(span, expr.visit_exprs(f))
             }
             GenericNCommand::PrintSize(span, name) => GenericNCommand::PrintSize(span, name),
             GenericNCommand::Output { span, file, exprs } => GenericNCommand::Output {
@@ -639,6 +649,9 @@ where
         /// For view tables in proof encoding: the constructor to use for building
         /// terms from the first n-1 children during extraction.
         term_constructor: Option<String>,
+        /// For view tables in proof encoding: the name of the proof function
+        /// that stores proofs for this view table.
+        proof_function: Option<String>,
     },
 
     /// The `relation` command declares a named relation
@@ -870,6 +883,43 @@ where
     Check(Span, Vec<GenericFact<Head, Leaf>>),
     Prove(Span, Vec<GenericFact<Head, Leaf>>),
     ProveExists(Span, Head),
+
+    /// Extract a term from the e-graph and produce a proof that
+    /// the extracted (simplified) term is equal to the input term.
+    ///
+    /// Requires proof production to be enabled (using the `--proofs` flag
+    /// or calling `egraph.enable_proofs()` from the Rust API).
+    ///
+    /// The output is a `CommandOutput::ExtractWithProof`, containing a
+    /// `ProofStore` and a `ProofId`.
+    /// See the `proofs::proof_format` module for
+    /// details on the proof representation.
+    ///
+    /// Example:
+    ///
+    /// ```text
+    /// (datatype Expr
+    ///   (Num i64)
+    ///   (Add Expr Expr)
+    ///   (Mul Expr Expr))
+    ///
+    /// ;; x + 0 = x
+    /// (rule ((Add a (Num 0)))
+    ///       ((union (Add a (Num 0)) a))
+    ///       :name "add-zero")
+    ///
+    /// ;; constant folding for Mul
+    /// (rule ((Mul (Num a) (Num b)))
+    ///       ((union (Mul (Num a) (Num b)) (Num (* a b))))
+    ///       :name "mul-fold")
+    ///
+    /// (let $e (Mul (Num 2) (Add (Num 3) (Num 0))))
+    /// (run 10)
+    ///
+    /// ;; Extracts (Num 6) and prints a proof that (Num 6) = (Mul (Num 2) (Add (Num 3) (Num 0)))
+    /// (extract-with-proof (Mul (Num 2) (Add (Num 3) (Num 0))))
+    /// ```
+    ExtractWithProof(Span, GenericExpr<Head, Leaf>),
     /// Print out rows of a given function, extracting each of the elements of the function.
     /// Example:
     ///
@@ -1000,6 +1050,7 @@ where
                 hidden,
                 let_binding,
                 term_constructor,
+                proof_function,
             } => {
                 write!(f, "(constructor {name} {schema}")?;
                 if let Some(cost) = cost {
@@ -1015,7 +1066,10 @@ where
                     write!(f, " :internal-let")?;
                 }
                 if let Some(tc) = term_constructor {
-                    write!(f, " :term-constructor {tc}")?;
+                    write!(f, " :internal-term-constructor {tc}")?;
+                }
+                if let Some(pf) = proof_function {
+                    write!(f, " :internal-proof-function {pf}")?;
                 }
                 write!(f, ")")
             }
@@ -1054,6 +1108,9 @@ where
             }
             GenericCommand::ProveExists(_span, constructor) => {
                 write!(f, "(prove-exists {constructor})")
+            }
+            GenericCommand::ExtractWithProof(_span, expr) => {
+                write!(f, "(extract-with-proof {expr})")
             }
             GenericCommand::Push(n) => write!(f, "(push {n})"),
             GenericCommand::Pop(_span, n) => write!(f, "(pop {n})"),
@@ -1249,6 +1306,9 @@ where
     /// For view tables in proof encoding: the constructor to use for building
     /// terms from the first n-1 children during extraction.
     pub term_constructor: Option<String>,
+    /// For view tables in proof encoding: the name of the proof function
+    /// that stores proofs for this view table.
+    pub proof_function: Option<String>,
 }
 
 #[derive(Clone, Debug, PartialEq, Eq, Hash)]
@@ -1311,6 +1371,7 @@ impl FunctionDecl {
             internal_let: false,
             span,
             term_constructor: None,
+            proof_function: None,
         }
     }
 
@@ -1335,6 +1396,7 @@ impl FunctionDecl {
             internal_let: false,
             span,
             term_constructor: None,
+            proof_function: None,
         }
     }
 }
@@ -1360,6 +1422,7 @@ where
             internal_let: self.internal_let,
             span: self.span,
             term_constructor: self.term_constructor,
+            proof_function: self.proof_function,
         }
     }
 }
@@ -1654,6 +1717,7 @@ where
                 hidden,
                 let_binding,
                 term_constructor,
+                proof_function,
             } => GenericCommand::Constructor {
                 span,
                 name: fun(name),
@@ -1666,6 +1730,7 @@ where
                 hidden,
                 let_binding,
                 term_constructor: term_constructor.map(&mut *fun),
+                proof_function: proof_function.map(&mut *fun),
             },
             GenericCommand::Relation { span, name, inputs } => GenericCommand::Relation {
                 span,
@@ -1728,6 +1793,9 @@ where
             GenericCommand::Prove(span, facts) => GenericCommand::Prove(span, facts),
             GenericCommand::ProveExists(span, constructor) => {
                 GenericCommand::ProveExists(span, constructor)
+            }
+            GenericCommand::ExtractWithProof(span, expr) => {
+                GenericCommand::ExtractWithProof(span, expr)
             }
             GenericCommand::PrintFunction(span, name, n, file, mode) => {
                 GenericCommand::PrintFunction(span, fun(name), n, file, mode)
@@ -1879,6 +1947,7 @@ where
                 hidden,
                 let_binding,
                 term_constructor,
+                proof_function,
             } => GenericCommand::Constructor {
                 span,
                 name,
@@ -1888,6 +1957,7 @@ where
                 hidden,
                 let_binding,
                 term_constructor,
+                proof_function,
             },
             GenericCommand::Relation { span, name, inputs } => {
                 GenericCommand::Relation { span, name, inputs }
@@ -1950,6 +2020,9 @@ where
             ),
             GenericCommand::ProveExists(span, constructor) => {
                 GenericCommand::ProveExists(span, head(constructor))
+            }
+            GenericCommand::ExtractWithProof(span, expr) => {
+                GenericCommand::ExtractWithProof(span, expr.map_symbols(head, leaf))
             }
             GenericCommand::PrintFunction(span, name, n, file, mode) => {
                 GenericCommand::PrintFunction(span, name, n, file, mode)

@@ -82,13 +82,14 @@ use util::*;
 use crate::ast::desugar::desugar_command;
 use crate::ast::*;
 use crate::core::{GenericActionsExt, ResolvedRuleExt};
+use crate::proofs::extract_proof::ProveExistsError;
 use crate::proofs::proof_encoding::{EncodingState, ProofInstrumentor};
 use crate::proofs::proof_encoding_helpers::{
     ProofEncodingUnsupportedReason, command_supports_proof_encoding,
 };
-use crate::proofs::proof_extraction::ProveExistsError;
 use crate::proofs::proof_format::{ProofId, ProofStore};
 use crate::proofs::proof_normal_form::proof_form;
+use crate::proofs::prove_extraction::{ExtractWithProofError, ProveEqualToRepresentative};
 
 pub const GLOBAL_NAME_PREFIX: &str = "$";
 
@@ -129,6 +130,12 @@ pub enum CommandOutput {
     ExtractVariants(TermDag, Vec<TermId>),
     /// A high-level proof witnessing constructor existence
     ProveExists {
+        proof_store: ProofStore,
+        proof_id: ProofId,
+    },
+    /// An extracted term together with a proof that it equals the input term.
+    /// The proof proves a proposition of the form `extracted_term = input_term`.
+    ExtractWithProof {
         proof_store: ProofStore,
         proof_id: ProofId,
     },
@@ -174,6 +181,10 @@ impl std::fmt::Display for CommandOutput {
                 writeln!(f, ")")
             }
             CommandOutput::ProveExists {
+                proof_store,
+                proof_id,
+            } => writeln!(f, "{}", proof_store.proof_to_string(*proof_id)),
+            CommandOutput::ExtractWithProof {
                 proof_store,
                 proof_id,
             } => writeln!(f, "{}", proof_store.proof_to_string(*proof_id)),
@@ -1150,6 +1161,38 @@ impl EGraph {
                 log::info!("Declared sort {name}.")
             }
             ResolvedNCommand::Function(fdecl) => {
+                // If the constructor has a :internal-term-constructor annotation, store the
+                // view_name mapping (original constructor -> view table name).
+                // This is needed so that proof extraction can find view tables
+                // after a round-trip through to_string + re-parse.
+                if let Some(ref tc_name) = fdecl.term_constructor {
+                    self.proof_state
+                        .proof_names
+                        .view_name
+                        .insert(tc_name.clone(), fdecl.name.clone());
+                }
+                // If the constructor has a :internal-proof-function annotation, store the mapping.
+                // This annotation is set by proof instrumentation on view tables and UF constructors.
+                if let Some(ref proof_fn_name) = fdecl.proof_function {
+                    if let Some(ref tc_name) = fdecl.term_constructor {
+                        // View table case: map original constructor -> view proof function
+                        self.proof_state
+                            .proof_names
+                            .view_proof_name
+                            .insert(tc_name.clone(), proof_fn_name.clone());
+                    }
+                    // UF constructor case: if this function is a UF parent for some sort,
+                    // store the sort -> uf_proof_name mapping.
+                    for (sort_name, uf_name) in &self.proof_state.uf_parent {
+                        if *uf_name == fdecl.name {
+                            self.proof_state
+                                .proof_names
+                                .uf_proof_name
+                                .insert(sort_name.clone(), proof_fn_name.clone());
+                            break;
+                        }
+                    }
+                }
                 self.declare_function(&fdecl)?;
                 log::info!("Declared {} {}.", fdecl.subtype, fdecl.name)
             }
@@ -1350,6 +1393,24 @@ impl EGraph {
                             error,
                         })?;
                 return Ok(Some(CommandOutput::ProveExists {
+                    proof_store,
+                    proof_id,
+                }));
+            }
+            ResolvedNCommand::ExtractWithProof(span, expr) => {
+                let sort = expr.output_type();
+                let value = self.eval_resolved_expr(span.clone(), &expr)?;
+
+                let prover = ProveEqualToRepresentative::new(self);
+                let (proof_store, proof_id) =
+                    prover.extract_with_proof(value, sort).map_err(|error| {
+                        Error::ExtractWithProofError {
+                            span: span.clone(),
+                            error,
+                        }
+                    })?;
+
+                return Ok(Some(CommandOutput::ExtractWithProof {
                     proof_store,
                     proof_id,
                 }));
@@ -2049,6 +2110,12 @@ pub enum Error {
         span: Span,
         #[source]
         error: ProveExistsError,
+    },
+    #[error("{span}\n{error}")]
+    ExtractWithProofError {
+        span: Span,
+        #[source]
+        error: ExtractWithProofError,
     },
     #[error("{1}\n{2}\nShadowing is not allowed, but found {0}")]
     Shadowing(String, Span, Span),

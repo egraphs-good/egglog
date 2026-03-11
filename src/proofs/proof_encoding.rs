@@ -163,9 +163,16 @@ impl<'a> ProofInstrumentor<'a> {
         let path_compress_ruleset_name = self.proof_names().path_compress_ruleset_name.clone();
         let single_parent_ruleset_name = self.proof_names().single_parent_ruleset_name.clone();
 
+        let uf_proof_function_flag = if self.egraph.proof_state.proofs_enabled {
+            let uf_proof_name = self.uf_proof_name(sort_name);
+            format!(" :internal-proof-function {uf_proof_name}")
+        } else {
+            "".to_string()
+        };
+
         self.parse_program(&format!(
             "(sort {fresh_sort})
-             (constructor {pname} ({sort_name} {sort_name}) {fresh_sort} :internal-hidden)
+             (constructor {pname} ({sort_name} {sort_name}) {fresh_sort} :internal-hidden{uf_proof_function_flag})
              {to_ast_constructor_code}
              {proof_tables}
              ;; performs path compression, ensuring each term points to the representative
@@ -448,12 +455,18 @@ impl<'a> ProofInstrumentor<'a> {
         if fdecl.internal_let {
             view_flags.push_str(" :internal-let");
         }
+        let proof_function_flag = if self.egraph.proof_state.proofs_enabled {
+            let view_proof_name = self.view_proof_name(&fdecl.name);
+            format!(" :internal-proof-function {view_proof_name}")
+        } else {
+            "".to_string()
+        };
         self.parse_program(&format!(
             "
             (sort {fresh_sort})
             {to_ast_view_sort}
             (constructor {name} ({term_sorts}) {view_sort}{term_flags} :internal-hidden :unextractable)
-            (constructor {view_name} ({view_sorts}) {fresh_sort} :term-constructor {name}{view_flags})
+            (constructor {view_name} ({view_sorts}) {fresh_sort} :internal-term-constructor {name}{proof_function_flag}{view_flags})
             (constructor {to_delete_name} ({in_sorts}) {fresh_sort} :internal-hidden)
             (constructor {subsumed_name} ({in_sorts}) {fresh_sort} :internal-hidden)
             {proof_constructors}
@@ -1242,7 +1255,8 @@ impl<'a> ProofInstrumentor<'a> {
             | ResolvedNCommand::UnstableCombinedRuleset(..)
             | ResolvedNCommand::PrintOverallStatistics(..)
             | ResolvedNCommand::PrintFunction(..)
-            | ResolvedNCommand::ProveExists(..) => {
+            | ResolvedNCommand::ProveExists(..)
+            | ResolvedNCommand::ExtractWithProof(..) => {
                 res.push(command.to_command().make_unresolved());
             }
             ResolvedNCommand::UserDefined(..) => {

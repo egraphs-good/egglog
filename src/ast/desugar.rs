@@ -33,11 +33,13 @@ pub(crate) fn desugar_command(
             hidden,
             let_binding,
             term_constructor,
+            proof_function,
         } => {
             let mut fdecl =
                 FunctionDecl::constructor(span, name, schema, cost, unextractable, hidden);
             fdecl.internal_let = let_binding;
             fdecl.term_constructor = term_constructor;
+            fdecl.proof_function = proof_function;
             std::iter::once(NCommand::Function(fdecl)).collect()
         }
         Command::Relation { span, name, inputs } => desugar_relation(parser, span, name, inputs),
@@ -147,7 +149,15 @@ pub(crate) fn desugar_command(
         Command::PrintOverallStatistics(span, file) => {
             vec![NCommand::PrintOverallStatistics(span, file.clone())]
         }
-        Command::Extract(span, expr, variants) => vec![NCommand::Extract(span, expr, variants)],
+        Command::Extract(span, expr, variants) => {
+            // In proof testing mode test using extraction with proofs,
+            // but only for the default number of variants (0).
+            if proof_testing && matches!(&variants, Expr::Lit(_, Literal::Int(0))) {
+                vec![NCommand::ExtractWithProof(span, expr)]
+            } else {
+                vec![NCommand::Extract(span, expr, variants)]
+            }
+        }
         Command::Check(span, facts) => {
             if proof_testing {
                 desugar_prove(parser, span.clone(), facts.clone())
@@ -184,6 +194,9 @@ pub(crate) fn desugar_command(
         Command::Prove(span, query) => desugar_prove(parser, span, query),
         Command::ProveExists(span, constructor) => {
             vec![NCommand::ProveExists(span, constructor)]
+        }
+        Command::ExtractWithProof(span, expr) => {
+            vec![NCommand::ExtractWithProof(span, expr)]
         }
     };
 

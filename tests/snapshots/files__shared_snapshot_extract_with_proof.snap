@@ -1,0 +1,53 @@
+---
+source: tests/files.rs
+expression: snapshot_content_across_treatments
+---
+(let t0 (Add (Num 3) (Num 0)))
+(let t1 (Mul (Num 2) t0))
+(let t2 (Mul (Num 2) (Num 3)))
+(let t3 (Mul (Num 3) (Num 2)))
+(let prf0 (Fiat (= t1 t1)))
+(let prf1
+  (Rule
+                  (= t0 (Num 3))
+                  (name "add-zero")
+                  (premises (Fiat (= t0 t0)))
+                  (substitution (a (Num 3)))))
+(let prf2 (Congr (= t1 t2) prf0 prf1 1))
+(let t4 (Mul t0 (Num 2)))
+(Trans
+  (= (Num 6) t1)
+  (Sym
+    (= (Num 6) t2)
+    (Trans
+      (= t2 (Num 6))
+      (Sym
+        (= t2 t3)
+        (Rule
+          (= t3 t2)
+          (name "mul-comm")
+          (premises prf2)
+          (substitution (a (Num 2)) (b (Num 3)))))
+      (Sym
+        (= t3 (Num 6))
+        (Rule
+          (= (Num 6) t3)
+          (name "mul-fold")
+          (premises
+            (Congr
+              (= t1 t3)
+              (Sym
+                (= t1 t4)
+                (Rule
+                  (= t4 t1)
+                  (name "mul-comm")
+                  (premises prf0)
+                  (substitution (a (Num 2)) (b t0))))
+              prf1
+              0)
+            (Fiat (= () ())))
+          (substitution (a 3) (b 2))))))
+  (Sym (= t2 t1) prf2))
+((Add 2)
+ (Mul 2)
+ (Num 4))
