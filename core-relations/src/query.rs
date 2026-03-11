@@ -973,7 +973,10 @@ pub(crate) struct FunDeps {
 impl FunDeps {
     /// Add a functional dependency: antecedent -> consequent.
     pub fn add_dependency(&mut self, antecedent: Vec<Variable>, consequent: Vec<Variable>) {
-        self.dependencies.push((antecedent, consequent));
+        // Don't add trivial dependencies.
+        if !antecedent.is_empty() {
+            self.dependencies.push((antecedent, consequent));
+        }
     }
 
     /// Returns all variables that can be determined from the input variables
