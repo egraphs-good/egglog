@@ -166,7 +166,7 @@ impl Bindings {
         self.assert_invariant();
     }
 
-    pub fn get(&self, var: Variable) -> Option<&[Value]> {
+    fn get(&self, var: Variable) -> Option<&[Value]> {
         let start = self.var_offsets.get(var)?;
         Some(&self.data[*start..*start + self.matches])
     }
@@ -225,13 +225,13 @@ impl Bindings {
             for var in used_vars {
                 let var = var.index();
                 // Safe version: this degrades some benchmarks by ~6%
-                let start = self.var_offsets.raw()[var].unwrap();
-                self.data[start + self.matches] = map.raw()[var].unwrap();
-                // unsafe {
-                //     let start = self.var_offsets.raw().get_unchecked(var).unwrap_unchecked();
-                //     *self.data.get_unchecked_mut(start + self.matches) =
-                //         map.raw().get_unchecked(var).unwrap_unchecked();
-                // }
+                // let start = self.var_offsets.raw()[var].unwrap();
+                // self.data[start + self.matches] = map.raw()[var].unwrap();
+                unsafe {
+                    let start = self.var_offsets.raw().get_unchecked(var).unwrap_unchecked();
+                    *self.data.get_unchecked_mut(start + self.matches) =
+                        map.raw().get_unchecked(var).unwrap_unchecked();
+                }
             }
         } else {
             for (var, val) in map.iter() {

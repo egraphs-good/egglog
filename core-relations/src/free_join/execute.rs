@@ -2,6 +2,7 @@
 
 use std::{
     cmp, iter, mem,
+    ops::Range,
     sync::{Arc, OnceLock, atomic::AtomicUsize},
 };
 
@@ -267,6 +268,8 @@ impl Database {
                             scratch_key: Default::default(),
                             scratch_val: Default::default(),
                         };
+                        // eprintln!("Running {desc}");
+                        let mut empty_query = false;
                         for (mat_id, stage_block) in plan.stages.blocks.iter().enumerate() {
                             let mat_id = MatId::from_usize(mat_id);
                             join_state.run_join_stages(
@@ -276,19 +279,28 @@ impl Database {
                                 &mut binding_info,
                                 &mut materializer,
                             );
+                            if materializer.materializations[mat_id].is_empty() {
+                                empty_query = true;
+                                break;
+                            }
+                            // eprintln!(
+                            //     "{mat_id:?} has size {:?}",
+                            //     materializer.materializations[mat_id].len()
+                            // );
                             binding_info.materializations.insert(
                                 mat_id,
-                                // Arc::new(materializer.materializations.take(mat_id).unwrap()),
                                 Arc::new(materializer.materializations.take(mat_id).unwrap()),
                             );
                         }
-                        join_state.run_join_stages(
-                            &plan.result_block,
-                            &plan.atoms,
-                            plan.actions,
-                            &mut binding_info,
-                            &mut action_buf,
-                        );
+                        if !empty_query {
+                            join_state.run_join_stages(
+                                &plan.result_block,
+                                &plan.atoms,
+                                plan.actions,
+                                &mut binding_info,
+                                &mut action_buf,
+                            );
+                        }
                     }
                 }
                 let search_and_apply_time = search_and_apply_timer.elapsed();
@@ -544,7 +556,26 @@ impl<'a> JoinState<'a> {
             }
         }
         let mut order = InstrOrder::from_iter(0..stages.instrs.len());
-        // sort_plan_by_size(&mut order, 0, &stages.instrs, binding_info);
+        let mut last_pos = 0;
+        for i in 0..stages.instrs.len() {
+            if matches!(
+                &stages.instrs[i],
+                JoinStage::FusedIntersectMat {
+                    mode: MatScanMode::Lookup(_) | MatScanMode::Value(_) | MatScanMode::Full,
+                    ..
+                }
+            ) {
+                sort_plan_by_size(&mut order, last_pos..i, &stages.instrs, binding_info);
+                last_pos = i + 1;
+            }
+        }
+        sort_plan_by_size(
+            &mut order,
+            last_pos..stages.instrs.len(),
+            &stages.instrs,
+            binding_info,
+        );
+        // eprintln!("{:?}",order.data.iter().map(|i| &stages.instrs[*i as usize]).collect::<Vec<&JoinStage>>());
         self.run_plan(
             stages,
             atoms,
@@ -1495,14 +1526,14 @@ fn num_intersected_rels(join_stage: &JoinStage) -> i32 {
     match join_stage {
         JoinStage::Intersect { scans, .. } => scans.len() as i32,
         JoinStage::FusedIntersect { to_intersect, .. } => to_intersect.len() as i32 + 1,
-        JoinStage::FusedIntersectMat { to_intersect, .. } => to_intersect.len() as i32 + 1,
+        JoinStage::FusedIntersectMat { to_intersect, .. } => to_intersect.len() as i32,
     }
 }
 
 #[allow(unused)]
 fn sort_plan_by_size(
     order: &mut InstrOrder,
-    start: usize,
+    range: Range<usize>,
     instrs: &[JoinStage],
     binding_info: &mut BindingInfo,
 ) {
@@ -1510,17 +1541,35 @@ fn sort_plan_by_size(
     let mut times_refined = with_pool_set(|ps| ps.get::<DenseIdMap<AtomId, i64>>());
 
     // Count how many times each atom has been refined so far.
-    for ins in instrs[..start].iter() {
+    for ins in instrs[..range.start].iter() {
         match ins {
             JoinStage::Intersect { scans, .. } => scans.iter().for_each(|scan| {
                 *times_refined.get_or_default(scan.atom) += 1;
             }),
-            JoinStage::FusedIntersect { cover, .. } => {
+            JoinStage::FusedIntersect {
+                cover,
+                bind,
+                to_intersect,
+            } => {
                 *times_refined.get_or_default(cover.to_index.atom) +=
                     cover.to_index.vars.len() as i64;
+                to_intersect.iter().for_each(|(spec, _)| {
+                    *times_refined.get_or_default(spec.to_index.atom) +=
+                        spec.to_index.vars.len() as i64;
+                });
             }
-            JoinStage::FusedIntersectMat { .. } => {
-                continue;
+            JoinStage::FusedIntersectMat {
+                cover,
+                mode,
+                bind,
+                to_intersect,
+            } => {
+                to_intersect.iter().for_each(|(spec, _)| {
+                    if let ScanMatSpec::Scan(spec) = spec {
+                        *times_refined.get_or_default(spec.to_index.atom) +=
+                            spec.to_index.vars.len() as i64;
+                    }
+                });
             }
         }
     }
@@ -1542,7 +1591,7 @@ fn sort_plan_by_size(
                 .get(cover.to_index.atom)
                 .copied()
                 .unwrap_or_default(),
-            JoinStage::FusedIntersectMat { .. } => i64::MAX - 1, // prioritize materialized scans first
+            JoinStage::FusedIntersectMat { .. } => i64::MAX - 1,
         };
         (
             -refine,
@@ -1551,8 +1600,8 @@ fn sort_plan_by_size(
         )
     };
 
-    for i in start..order.len() {
-        for j in i + 1..order.len() {
+    for i in range.clone() {
+        for j in (i + 1)..range.end {
             let key_i = key_fn(&instrs[order.get(i)], binding_info, &times_refined);
             let key_j = key_fn(&instrs[order.get(j)], binding_info, &times_refined);
             if key_j < key_i {
@@ -1564,11 +1613,27 @@ fn sort_plan_by_size(
             JoinStage::Intersect { scans, .. } => scans.iter().for_each(|scan| {
                 *times_refined.get_or_default(scan.atom) += 1;
             }),
-            JoinStage::FusedIntersect { cover, .. } => {
+            JoinStage::FusedIntersect {
+                cover,
+                to_intersect,
+                ..
+            } => {
                 *times_refined.get_or_default(cover.to_index.atom) +=
                     cover.to_index.vars.len() as i64;
+
+                to_intersect.iter().for_each(|(spec, _)| {
+                    *times_refined.get_or_default(spec.to_index.atom) +=
+                        spec.to_index.vars.len() as i64;
+                });
             }
-            JoinStage::FusedIntersectMat { .. } => continue,
+            JoinStage::FusedIntersectMat { to_intersect, .. } => {
+                to_intersect.iter().for_each(|(spec, _)| {
+                    if let ScanMatSpec::Scan(spec) = spec {
+                        *times_refined.get_or_default(spec.to_index.atom) +=
+                            spec.to_index.vars.len() as i64;
+                    }
+                });
+            }
         }
     }
 }
