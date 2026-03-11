@@ -94,6 +94,8 @@ This is because the rebuild rules query the union-find for every
   prevents the rule from firing even when other columns have changed.
 Self-loops are added in `add_term_and_view` whenever a constructor
   value is created.
+We may want to remove this invariant in the future if we move
+  to a different encoding, saving some space and time.
 
 
 ```text
@@ -121,7 +123,7 @@ The view tables are kept up to date during rebuilding.
        :ruleset rebuilding :name "congruence_rule")
 (rule ((AddView c0 c1 c2)
        (UF_Math c2 c2_leader)
-       (filter
+       (guard
          (or (bool-!= c2 c2_leader))))
       ((AddView c0 c1 c2_leader)
        (delete (AddView c0 c1 c2)))

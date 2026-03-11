@@ -29,8 +29,8 @@ impl BaseSort for BoolSort {
         }, or_validator);
         add_literal_prim!(eg, "xor" = |a: bool, b: bool| -> bool { a ^ b });
         add_literal_prim!(eg, "=>" = |a: bool, b: bool| -> bool { !a || b });
-        // A filter primitive that fails the query if the boolean is false
-        add_literal_prim!(eg, "filter" = |a: bool| -?> () { a.then_some(()) });
+        // A guard primitive that fails the query if the boolean is false
+        add_literal_prim!(eg, "guard" = |a: bool| -?> () { a.then_some(()) });
     }
 
     fn reconstruct_termdag(

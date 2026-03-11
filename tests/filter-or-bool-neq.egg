@@ -1,4 +1,4 @@
-; Test that filter, or, and bool-!= work correctly together
+; Test that guard, or, and bool-!= work correctly together
 
 ; Basic bool-!= tests
 (check (= (bool-!= 1 2) true))
@@ -19,15 +19,15 @@
 (check (= (or true) true))
 (check (= (or false) false))
 
-; filter with true should succeed
-(check (filter true))
+; guard with true should succeed
+(check (guard true))
 
-; Combined: filter with or and bool-!=
-(check (filter (or (bool-!= 1 2))))
-(check (filter (or (bool-!= 1 1) (bool-!= 2 3))))
-(check (filter (or (bool-!= 1 2) (bool-!= 3 3))))
+; Combined: guard with or and bool-!=
+(check (guard (or (bool-!= 1 2))))
+(check (guard (or (bool-!= 1 1) (bool-!= 2 3))))
+(check (guard (or (bool-!= 1 2) (bool-!= 3 3))))
 
-(check (filter (or (bool-!= 1 1) (bool-!= 2 1))))
+(check (guard (or (bool-!= 1 1) (bool-!= 2 1))))
 
 (datatype Math
   (Add Math Math)
@@ -38,9 +38,9 @@
 (Val 2)
 
 ;; with Math eclass it still works
-(check (filter (or (bool-!= (Val 1) (Val 2)) (bool-!= (Val 1) (Val 1)))))
+(check (guard (or (bool-!= (Val 1) (Val 2)) (bool-!= (Val 1) (Val 1)))))
 
-; filter with or of all-equal should fail
-(fail (check (filter (or (bool-!= 1 1)))))
-(fail (check (filter (or (bool-!= 1 1) (bool-!= 2 2)))))
-(fail (check (filter false)))
+; guard with or of all-equal should fail
+(fail (check (guard (or (bool-!= 1 1)))))
+(fail (check (guard (or (bool-!= 1 1) (bool-!= 2 2)))))
+(fail (check (guard false)))

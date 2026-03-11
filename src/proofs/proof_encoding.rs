@@ -532,7 +532,7 @@ impl<'a> ProofInstrumentor<'a> {
 
         let uf_query_str = uf_queries.join("\n       ");
         let or_expr = format!("(or {})", bool_neq_exprs.join("\n             "));
-        let filter_query = format!("(filter {or_expr})");
+        let filter_query = format!("(guard {or_expr})");
 
         // Build the updated children: use leader_var for eq-sort columns, original for others.
         let children_updated: Vec<String> = leader_vars.clone();
@@ -1240,7 +1240,7 @@ impl<'a> ProofInstrumentor<'a> {
                 for stmt in action_stmts {
                     res.extend(self.parse_program(&stmt));
                 }
-                // Rebuild before extract- we may have added new view rows that need canonicalization
+                // Rebuild before extract; we may have added new view rows that need canonicalization
                 res.push(Command::RunSchedule(self.rebuild()));
                 res.push(Command::Extract(
                     span.clone(),

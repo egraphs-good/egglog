@@ -22,4 +22,4 @@
 (check (View c1 c2)
        (UF_Exp c1 c1_leader)
        (UF_Stmt c2 c2_leader)
-       (filter (or (bool-!= c1 c1_leader) (bool-!= c2 c2_leader))))
+       (guard (or (bool-!= c1 c1_leader) (bool-!= c2 c2_leader))))
