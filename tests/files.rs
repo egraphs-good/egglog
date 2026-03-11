@@ -13,6 +13,7 @@ struct Run {
     /// proof_testing mode adds automatic prove-exists commands, which produce
     /// proof output that differs from normal mode. This should use separate snapshots.
     proof_testing: bool,
+    threads: usize,
 }
 
 impl Run {
@@ -42,6 +43,16 @@ impl Run {
 
     fn run(&self) {
         let _ = env_logger::builder().is_test(true).try_init();
+
+        let pool = rayon::ThreadPoolBuilder::new()
+            .num_threads(self.threads)
+            .build()
+            .unwrap();
+
+        pool.install(|| self.run_inner());
+    }
+
+    fn run_inner(&self) {
         let program = std::fs::read_to_string(&self.path)
             .unwrap_or_else(|err| panic!("Couldn't read {:?}: {:?}", self.path, err));
 
@@ -61,6 +72,7 @@ impl Run {
                 term_encoding: false,
                 proofs: false,
                 proof_testing: false,
+                threads: self.threads,
             };
             let proof_check_prog = if self.proof_testing {
                 program.clone()
@@ -237,6 +249,11 @@ impl Run {
                 if self.0.proof_testing {
                     write!(f, "_proof_testing")?;
                 }
+
+                if self.0.threads > 1 {
+                    write!(f, "_{}threads", self.0.threads)?;
+                }
+
                 Ok(())
             }
         }
@@ -248,14 +265,10 @@ impl Run {
     }
 
     fn should_skip_snapshot(&self) -> bool {
-        // in parallel mode always skip
-        #[cfg(debug_assertions)]
-        {
+        if self.threads > 1 {
+            // Skip snapshots for parallel tests due to non-deterministic output ordering
             true
-        }
-        // in non-parallel mode, selectively skip
-        #[cfg(not(debug_assertions))]
-        {
+        } else {
             // Skip tests with known non-deterministic output
             let filename = self.path.file_stem().unwrap().to_string_lossy();
             const SKIP_PATTERNS: [&str; 5] = [
@@ -290,6 +303,7 @@ fn generate_tests(glob: &str) -> Vec<Trial> {
             term_encoding: false,
             proofs: false,
             proof_testing: false,
+            threads: 1,
         };
         let should_fail = run.should_fail();
         let requires_proofs = run.requires_proofs();
@@ -307,6 +321,11 @@ fn generate_tests(glob: &str) -> Vec<Trial> {
 
         if !requires_proofs {
             push_trial(run.clone());
+
+            push_trial(Run {
+                threads: 4,
+                ..run.clone()
+            });
         }
         if !requires_proofs && !should_fail {
             push_trial(Run {
