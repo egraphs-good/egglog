@@ -59,6 +59,7 @@ jobs:
           - proof_testing_eqsat-basic
           - proof_testing_unify
           - proof_testing_typecheck
+          - eggcc-3mm
     steps:
       - run: echo "CARGO_INCREMENTAL=0" >> "$GITHUB_ENV"
       - uses: actions/checkout@v4
@@ -67,6 +68,9 @@ jobs:
           tool: cargo-codspeed@4.0.1
       - uses: Swatinem/rust-cache@v2
       - run: cargo codspeed build
+      - name: Set DIVAN_SAMPLE_SIZE for eggcc-3mm
+        if: matrix.benchmark == 'eggcc-3mm'
+        run: echo "DIVAN_SAMPLE_SIZE=1" >> "$GITHUB_ENV"
       - uses: CodSpeedHQ/action@v4
         with:
           run: cargo codspeed run ${{ matrix.benchmark }}
