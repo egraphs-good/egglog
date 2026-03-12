@@ -954,11 +954,11 @@ pub(crate) fn tree_decompose_and_plan(
     // let (blocks, result_block) = fuse_last_stage(blocks, result_block);
 
     // Lifting variables
-    let blocks = blocks
+    let mut blocks = blocks
         .into_iter()
         .map(|(stages, mat_spec)| (loop_lifting(stages), mat_spec))
         .collect::<Vec<_>>();
-    let result_block = loop_lifting(result_block);
+    let mut result_block = loop_lifting(result_block);
 
     // // Inline materializations that are just scan
     // for i in 0..blocks.len() {
@@ -973,12 +973,10 @@ pub(crate) fn tree_decompose_and_plan(
     //     {
     //         let mat_atom = cover.clone();
     //         let bind = bind.clone();
-    //         let header = block.0.header.clone();
     //         assert!(to_intersect.is_empty());
     //         for j in i + 1..blocks.len() {
     //             let other_block = &mut blocks[j];
     //             let mut instrs = Arc::unwrap_or_clone(mem::take(&mut other_block.0.instrs));
-    //             let mut changed = false;
     //             for instr in instrs.iter_mut() {
     //                 match instr {
     //                     JoinStage::FusedIntersectMat {
@@ -997,19 +995,14 @@ pub(crate) fn tree_decompose_and_plan(
     //                             bind: bind.clone(),
     //                             to_intersect: vec![],
     //                         };
-    //                         changed = true;
     //                     }
     //                     _ => {}
     //                 }
     //             }
     //             other_block.0.instrs = Arc::new(instrs);
-    //             if changed {
-    //                 other_block.0.header.extend(header.iter().cloned());
-    //             }
     //         }
 
     //         let mut instrs = Arc::unwrap_or_clone(mem::take(&mut result_block.instrs));
-    //         let mut changed = false;
     //         for instr in instrs.iter_mut() {
     //             match instr {
     //                 JoinStage::FusedIntersectMat {
@@ -1025,18 +1018,13 @@ pub(crate) fn tree_decompose_and_plan(
     //                         bind: bind.clone(),
     //                         to_intersect: vec![],
     //                     };
-    //                     changed = true;
     //                 }
     //                 _ => {}
     //             }
     //         }
     //         result_block.instrs = Arc::new(instrs);
-    //         if changed {
-    //             result_block.header.extend(header.iter().cloned());
-    //         }
 
     //         blocks[i].0.instrs = Arc::new(vec![]);
-    //         blocks[i].0.header = vec![];
     //         blocks[i].1 = MatSpec {
     //             msg_vars: vec![],
     //             val_vars: vec![],
