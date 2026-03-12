@@ -297,7 +297,7 @@ impl Database {
                             // eprintln!("Running {desc}");
                             for (mat_id, stage_block) in plan.stages.blocks.iter().enumerate() {
                                 let mat_id = MatId::from_usize(mat_id);
-                                // let start_time = Instant::now();
+                                let start_time = Instant::now();
                                 join_state.run_join_stages(
                                     &stage_block.0,
                                     &plan.atoms,
@@ -308,24 +308,16 @@ impl Database {
                                 if materializer.materializations[mat_id].is_empty() {
                                     break 'eval;
                                 }
-                                // eprintln!(
-                                //     "{mat_id:?} has size {:?}/{:?}",
-                                //     materializer.materializations[mat_id].len(),
-                                //     materializer.materializations[mat_id]
-                                //         .iter()
-                                //         .map(|(_k, v)| v.len())
-                                //         .sum::<usize>(),
-                                // );
-                                // eprintln!(
-                                //     "Finished materializing {mat_id:?} in {:?}",
-                                //     start_time.elapsed()
-                                // );
+                                #[rustfmt::skip]
+                                // eprintln!("{mat_id:?} has size {:?}/{:?}",materializer.materializations[mat_id].iter().map(|(_k, v)| v.len()).sum::<usize>(),materializer.materializations[mat_id].len());
+                                #[rustfmt::skip]
+                                // eprintln!("Finished materializing {mat_id:?} in {:?}",start_time.elapsed());
                                 binding_info.materializations.insert(
                                     mat_id,
                                     Arc::new(materializer.materializations.take(mat_id).unwrap()),
                                 );
                             }
-                            // let start_time = Instant::now();
+                            let start_time = Instant::now();
                             join_state.run_join_stages(
                                 &plan.result_block,
                                 &plan.atoms,
@@ -333,10 +325,9 @@ impl Database {
                                 &mut binding_info,
                                 &mut action_buf,
                             );
-                            // eprintln!(
-                            //     "Finished applying final stage block in {:?}",
-                            //     start_time.elapsed()
-                            // );
+                            #[rustfmt::skip]
+                            // eprintln!("Finished applying final stage block in {:?}", start_time.elapsed());
+                            {()};
                         }
                     }
                 }
@@ -602,15 +593,8 @@ impl<'a> JoinState<'a> {
             &stages.instrs,
             binding_info,
         );
-        // eprintln!("{:?}", &stages.header);
-        // eprintln!(
-        //     "{:?}",
-        //     order
-        //         .data
-        //         .iter()
-        //         .map(|i| &stages.instrs[*i as usize])
-        //         .collect::<Vec<&JoinStage>>()
-        // );
+        #[rustfmt::skip]
+        // eprintln!("{:?}",order.data.iter().map(|i| &stages.instrs[*i as usize]).collect::<Vec<&JoinStage>>());
         self.run_plan(
             stages,
             atoms,
@@ -1471,15 +1455,14 @@ impl<'a> ActionBuffer<'a, MatId> for InPlaceMaterializer<'a> {
         for val in spec.val_vars.iter().map(|var| bindings[*var]) {
             self.scratch_val.push(val);
         }
+        if self.scratch_val.is_empty() {
+            self.scratch_val.push(Value::stale());
+        }
         if let Some(buffer) = mat.get_mut(&self.scratch_key) {
             buffer.add_row(&self.scratch_val);
-        } else if !spec.val_vars.is_empty() {
-            let mut buffer = RowBuffer::new(spec.val_vars.len());
-            buffer.add_row(&self.scratch_val);
-            mat.insert(self.scratch_key.clone(), buffer);
         } else {
-            let mut buffer = RowBuffer::new(1);
-            buffer.add_row(&[Value::stale()]);
+            let mut buffer = RowBuffer::new(usize::max(spec.val_vars.len(), 1));
+            buffer.add_row(&self.scratch_val);
             mat.insert(self.scratch_key.clone(), buffer);
         }
     }
