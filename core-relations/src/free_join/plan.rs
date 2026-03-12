@@ -44,13 +44,6 @@ pub(crate) enum MatScanMode {
     Lookup(Vec<Variable>),
 }
 
-#[allow(unused)]
-#[derive(Clone, Debug, PartialEq, Eq)]
-pub(crate) enum ScanMatSpec {
-    Scan(ScanSpec),
-    Materialized(MatId),
-}
-
 /// Join headers evaluate constraints on a single atom; they prune the search space before the rest
 /// of the join plan is executed.
 pub(crate) struct JoinHeader {
@@ -113,7 +106,7 @@ pub(crate) enum JoinStage {
         cover: MatId,
         mode: MatScanMode,
         bind: SmallVec<[(ColumnId, Variable); 2]>,
-        to_intersect: Vec<(ScanMatSpec, SmallVec<[ColumnId; 2]>)>,
+        to_intersect: Vec<(ScanSpec, SmallVec<[ColumnId; 2]>)>,
     },
 }
 
@@ -506,14 +499,7 @@ fn decompose_into_bags(original_ctx: &PlanningContext) -> Vec<PlanningContext> {
     let mut bags = Vec::new();
 
     // Variable elimination loop
-    while let Some(subquery_vars) = next_var_to_eliminate(&vars, &atoms, &&original_ctx.fun_deps) {
-        // eprintln!(
-        //     "Subquery vars: {:?}",
-        //     subquery_vars
-        //         .iter()
-        //         .filter_map(|var| original_ctx.vars[*var].name.clone())
-        //         .collect::<Vec<_>>()
-        // );
+    while let Some(subquery_vars) = next_var_to_eliminate(&vars, &atoms, &original_ctx.fun_deps) {
         // Create a fake covering atom to bridge back to the main query
         // Remove hyperedges that only contain subquery variables.
         update_hypergraph(&subquery_vars, &mut vars, &mut atoms);
@@ -570,24 +556,18 @@ fn decompose_into_bags(original_ctx: &PlanningContext) -> Vec<PlanningContext> {
         // );
         // let subquery_vars = IndexSet::from_iter(covered_vars);
 
-        let subquery_var_map = DenseIdMap::from_iter(
-            subquery_vars
-                .iter()
-                .map(|v| (v, true))
-                // .chain(aux_vars.iter().map(|v| (v, false)))
-                .map(|(var, used)| {
-                    let mut var_info = original_ctx.vars[*var].clone();
-                    // TODO: this makes certain columns like timestamp and subsumed always used,
-                    // and undoes the used_in_rhs optimization that skips scanning these columns.
-                    // Maybe we can say if a variable is not used_in_rhs and comes up only in val columns,
-                    // then they can stay !used_in_rhs and the materialization won't include them.
-                    var_info.used_in_rhs = used;
-                    var_info
-                        .occurrences
-                        .retain(|occ| subquery_atoms.contains_key(occ.atom));
-                    (*var, var_info)
-                }),
-        );
+        let subquery_var_map = DenseIdMap::from_iter(subquery_vars.iter().map(|var| {
+            let mut var_info = original_ctx.vars[*var].clone();
+            // TODO: this makes certain columns like timestamp and subsumed always used,
+            // and undoes the used_in_rhs optimization that skips scanning these columns.
+            // Maybe we can say if a variable is not used_in_rhs and comes up only in val columns,
+            // then they can stay !used_in_rhs and the materialization won't include them.
+            var_info.used_in_rhs = true;
+            var_info
+                .occurrences
+                .retain(|occ| subquery_atoms.contains_key(occ.atom));
+            (*var, var_info)
+        }));
 
         bags.push(PlanningContext {
             vars: subquery_var_map,
@@ -610,16 +590,8 @@ fn decompose_into_bags(original_ctx: &PlanningContext) -> Vec<PlanningContext> {
     for bag1 in bags.into_iter() {
         let mut should_add = true;
         pruned_bags.retain(|bag2| {
-            let leq = bag1
-                .vars
-                .iter()
-                .filter(|(_, vinfo)| vinfo.used_in_rhs)
-                .all(|(var, _)| bag2.vars.contains_key(var) && bag2.vars[var].used_in_rhs);
-            let geq = bag2
-                .vars
-                .iter()
-                .filter(|(_, vinfo)| vinfo.used_in_rhs)
-                .all(|(var, _)| bag1.vars.contains_key(var) && bag1.vars[var].used_in_rhs);
+            let leq = bag1.vars.iter().all(|(var, _)| bag2.vars.contains_key(var));
+            let geq = bag2.vars.iter().all(|(var, _)| bag1.vars.contains_key(var));
             if leq {
                 should_add = false;
             }
@@ -663,8 +635,7 @@ fn topologically_sort_bags(bags: Vec<PlanningContext>) -> Vec<PlanningContext> {
                 if child_bag
                     .vars
                     .iter()
-                    .filter(|(_, vinfo)| vinfo.used_in_rhs)
-                    .any(|(var, _)| bag.vars.contains_key(var) && bag.vars[var].used_in_rhs)
+                    .any(|(var, _)| bag.vars.contains_key(var))
                     && !visited[i]
                 {
                     visited[i] = true;
@@ -686,10 +657,7 @@ fn topologically_sort_bags(bags: Vec<PlanningContext>) -> Vec<PlanningContext> {
 fn count_variable_usage_per_bag(bags: &[PlanningContext]) -> DenseIdMap<Variable, usize> {
     let mut n_used_in_bag = DenseIdMap::new();
     for bag in bags {
-        for (var, vinfo) in bag.vars.iter() {
-            if !vinfo.used_in_rhs {
-                continue;
-            }
+        for (var, _vinfo) in bag.vars.iter() {
             if !n_used_in_bag.contains_key(var) {
                 n_used_in_bag.insert(var, 0);
             }
@@ -717,10 +685,7 @@ fn plan_single_bag(
     let mut val_vars = vec![];
 
     // Classify variables as message or value variables
-    for (var, vinfo) in bag.vars.iter() {
-        if !vinfo.used_in_rhs {
-            continue;
-        }
+    for (var, _vinfo) in bag.vars.iter() {
         n_used_in_bag[var] -= 1;
         if n_used_in_bag[var] > 0 {
             msg_vars.push(var);
@@ -743,7 +708,7 @@ fn plan_single_bag(
                 .1
                 .msg_vars
                 .iter()
-                .all(|var| bag.vars.contains_key(*var) && bag.vars[*var].used_in_rhs)
+                .all(|var| bag.vars.contains_key(*var))
         {
             has_block_contributed[i] = true;
             if prologue.is_none() {
@@ -788,10 +753,7 @@ fn plan_single_bag(
                     cover: MatId::from_usize(i),
                     mode: MatScanMode::KeyOnly,
                     bind,
-                    to_intersect: to_intersect
-                        .into_iter()
-                        .map(|(spec, key_spec)| (ScanMatSpec::Scan(spec), key_spec))
-                        .collect(),
+                    to_intersect,
                 });
 
                 stripped_bag
@@ -874,6 +836,9 @@ fn build_result_block(blocks: &[(JoinStages, MatSpec)]) -> JoinStages {
 ///   ...
 ///
 /// This can be fused into one loop
+///
+/// This is currently not used because somehow iterating the materialized RowBuffer is much faster than iterating the table
+#[allow(unused)]
 fn fuse_last_stage(
     mut blocks: Vec<(JoinStages, MatSpec)>,
     result_block: JoinStages,
