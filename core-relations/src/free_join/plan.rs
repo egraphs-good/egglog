@@ -364,12 +364,6 @@ pub enum PlanStrategy {
     Gj,
 }
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
-pub(crate) enum BagId {
-    ResultBlock,
-    Block(u32),
-}
-
 // Computes the next variable to eliminate and the subquery of its neighborhood.
 ///
 /// Uses a min-fill heuristic that prioritizes variables whose elimination creates
