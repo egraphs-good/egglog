@@ -8,7 +8,7 @@ use std::{
 
 use crate::{
     common::HashMap,
-    free_join::plan::{JoinStages, MatId, MatScanMode, MatSpec, ScanMatSpec},
+    free_join::plan::{JoinStages, MatId, MatScanMode, MatSpec},
     numeric_id::{DenseIdMap, IdVec, NumericId},
     query::Atom,
     row_buffer::RowBuffer,
@@ -1083,22 +1083,17 @@ impl<'a> JoinState<'a> {
                 let probers = to_intersect
                     .iter()
                     .map(|(spec, _)| {
-                        if let ScanMatSpec::Scan(spec) = spec {
-                            Some(self.get_index(
-                                atoms,
-                                spec.to_index.atom,
-                                binding_info,
-                                spec.to_index.vars.iter().copied(),
-                            ))
-                        } else {
-                            None
-                        }
+                        self.get_index(
+                            atoms,
+                            spec.to_index.atom,
+                            binding_info,
+                            spec.to_index.vars.iter().copied(),
+                        )
                     })
-                    .collect::<SmallVec<[Option<Prober>; 4]>>();
+                    .collect::<SmallVec<[Prober; 4]>>();
 
                 let mut key = Vec::with_capacity(4);
                 let mut prune_probers = |updates: &mut FrameUpdates,
-                                         binding_info: &mut BindingInfo,
                                          mat_key: Option<&[Value]>,
                                          mat_non_key: Option<&[Value]>|
                  -> bool {
@@ -1117,25 +1112,10 @@ impl<'a> JoinState<'a> {
                             };
                             key.push(val);
                         }
-                        match spec {
-                            ScanMatSpec::Scan(spec) => {
-                                let prober = prober.as_ref().unwrap();
-                                if let Some(subset) = prober.get_subset(&key) {
-                                    updates.refine_atom(spec.to_index.atom, subset);
-                                } else {
-                                    return false;
-                                }
-                            }
-                            ScanMatSpec::Materialized(spec) => {
-                                let mat = &binding_info.materializations[*spec];
-                                if mat.contains_key(&key) {
-                                    // We don't refine materializations. Materializations
-                                    // are only refined when scanning in ScanMatMode::Refine mode,
-                                    // which is done by looking up the relevant variables.
-                                } else {
-                                    return false;
-                                }
-                            }
+                        if let Some(subset) = prober.get_subset(&key) {
+                            updates.refine_atom(spec.to_index.atom, subset);
+                        } else {
+                            return false;
                         }
                     }
                     true
@@ -1165,12 +1145,7 @@ impl<'a> JoinState<'a> {
                                             );
                                         }
                                     }
-                                    if prune_probers(
-                                        &mut updates,
-                                        binding_info,
-                                        Some(group.0),
-                                        Some(non_keys),
-                                    ) {
+                                    if prune_probers(&mut updates, Some(group.0), Some(non_keys)) {
                                         updates.finish_frame();
                                     } else {
                                         updates.rollback();
@@ -1181,7 +1156,7 @@ impl<'a> JoinState<'a> {
                                     debug_assert!(col.index() < group_key_len);
                                     updates.push_binding(*var, group.0[col.index()]);
                                 }
-                                if prune_probers(&mut updates, binding_info, Some(group.0), None) {
+                                if prune_probers(&mut updates, Some(group.0), None) {
                                     updates.finish_frame();
                                 } else {
                                     updates.rollback();
@@ -1211,7 +1186,7 @@ impl<'a> JoinState<'a> {
                                     for (col, var) in bind.iter() {
                                         updates.push_binding(*var, vals[col.index()]);
                                     }
-                                    if prune_probers(&mut updates, binding_info, None, Some(vals)) {
+                                    if prune_probers(&mut updates, None, Some(vals)) {
                                         updates.finish_frame();
                                     } else {
                                         updates.rollback();
@@ -1227,9 +1202,7 @@ impl<'a> JoinState<'a> {
 
                 drain_updates!(updates);
                 for (spec, prober) in to_intersect.iter().zip(probers) {
-                    if let ScanMatSpec::Scan(spec) = &spec.0 {
-                        binding_info.move_back(spec.to_index.atom, prober.unwrap());
-                    }
+                    binding_info.move_back(spec.0.to_index.atom, prober);
                 }
             }
         }
@@ -1561,7 +1534,6 @@ fn estimate_size(join_stage: &JoinStage, binding_info: &BindingInfo) -> usize {
     }
 }
 
-#[allow(unused)]
 fn num_intersected_rels(join_stage: &JoinStage) -> i32 {
     match join_stage {
         JoinStage::Intersect { scans, .. } => scans.len() as i32,
@@ -1570,7 +1542,6 @@ fn num_intersected_rels(join_stage: &JoinStage) -> i32 {
     }
 }
 
-#[allow(unused)]
 fn sort_plan_by_size(
     order: &mut InstrOrder,
     range: Range<usize>,
@@ -1588,8 +1559,8 @@ fn sort_plan_by_size(
             }),
             JoinStage::FusedIntersect {
                 cover,
-                bind,
                 to_intersect,
+                ..
             } => {
                 *times_refined.get_or_default(cover.to_index.atom) +=
                     cover.to_index.vars.len() as i64;
@@ -1598,17 +1569,10 @@ fn sort_plan_by_size(
                         spec.to_index.vars.len() as i64;
                 });
             }
-            JoinStage::FusedIntersectMat {
-                cover,
-                mode,
-                bind,
-                to_intersect,
-            } => {
+            JoinStage::FusedIntersectMat { to_intersect, .. } => {
                 to_intersect.iter().for_each(|(spec, _)| {
-                    if let ScanMatSpec::Scan(spec) = spec {
-                        *times_refined.get_or_default(spec.to_index.atom) +=
-                            spec.to_index.vars.len() as i64;
-                    }
+                    *times_refined.get_or_default(spec.to_index.atom) +=
+                        spec.to_index.vars.len() as i64;
                 });
             }
         }
@@ -1668,10 +1632,8 @@ fn sort_plan_by_size(
             }
             JoinStage::FusedIntersectMat { to_intersect, .. } => {
                 to_intersect.iter().for_each(|(spec, _)| {
-                    if let ScanMatSpec::Scan(spec) = spec {
-                        *times_refined.get_or_default(spec.to_index.atom) +=
-                            spec.to_index.vars.len() as i64;
-                    }
+                    *times_refined.get_or_default(spec.to_index.atom) +=
+                        spec.to_index.vars.len() as i64;
                 });
             }
         }
