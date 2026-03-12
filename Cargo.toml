@@ -141,7 +141,6 @@ rustc-hash = { workspace = true }
 thiserror = { workspace = true }
 web-time = { workspace = true }
 dyn-clone = { workspace = true }
-rayon = { workspace = true }
 mimalloc = { workspace = true, optional = true }
 csv = { workspace = true }
 egglog-core-relations = { workspace = true }

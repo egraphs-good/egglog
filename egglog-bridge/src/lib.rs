@@ -132,6 +132,9 @@ pub struct EGraph {
     term_consistency_table: TableId,
     tracing: bool,
     report_level: ReportLevel,
+    /// Thread pool used for parallel operations. All rayon parallel work is
+    /// scoped to this pool rather than the global thread pool.
+    pool: Arc<rayon::ThreadPool>,
 }
 
 pub type Result<T> = std::result::Result<T, anyhow::Error>;
@@ -208,6 +211,12 @@ impl EGraph {
             term_consistency_table,
             report_level: Default::default(),
             tracing,
+            pool: Arc::new(
+                rayon::ThreadPoolBuilder::new()
+                    .num_threads(1)
+                    .build()
+                    .expect("failed to build rayon thread pool"),
+            ),
         }
     }
 
@@ -782,6 +791,11 @@ impl EGraph {
     ///
     /// If the given rules are malformed, this method can return an error.
     pub fn run_rules(&mut self, rules: &[RuleId]) -> Result<IterationReport> {
+        let pool = self.pool.clone();
+        pool.install(|| self.run_rules_inner(rules))
+    }
+
+    fn run_rules_inner(&mut self, rules: &[RuleId]) -> Result<IterationReport> {
         let ts = self.next_ts();
 
         let rule_set_report =
@@ -810,9 +824,7 @@ impl EGraph {
     }
 
     fn rebuild(&mut self) -> Result<()> {
-        fn do_parallel() -> bool {
-            rayon::current_num_threads() > 1
-        }
+        let do_parallel = self.pool.current_num_threads() > 1;
         if self.db.get_table(self.uf_table).rebuilder(&[]).is_some() {
             // The UF implementation supports "native"  rebuilding.
             let mut tables = Vec::with_capacity(self.funcs.next_id().index());
@@ -862,7 +874,7 @@ impl EGraph {
             }
             return Ok(());
         }
-        if do_parallel() {
+        if do_parallel {
             return self.rebuild_parallel();
         }
         let start = Instant::now();
@@ -1119,14 +1131,32 @@ impl EGraph {
     /// Flush the pending update buffers to the EGraph.
     /// Returns `true` if the database is updated.
     pub fn flush_updates(&mut self) -> bool {
-        let updated = self.db.merge_all();
-        self.inc_ts();
-        self.rebuild().unwrap();
-        updated
+        let pool = self.pool.clone();
+        pool.install(|| {
+            let updated = self.db.merge_all();
+            self.inc_ts();
+            self.rebuild().unwrap();
+            updated
+        })
     }
 
     pub fn set_report_level(&mut self, level: ReportLevel) {
         self.report_level = level;
+    }
+
+    /// Set the number of threads used for parallel operations.
+    pub fn set_num_threads(&mut self, num_threads: usize) {
+        self.pool = Arc::new(
+            rayon::ThreadPoolBuilder::new()
+                .num_threads(num_threads)
+                .build()
+                .expect("failed to build rayon thread pool"),
+        );
+    }
+
+    /// Return the number of threads in this EGraph's thread pool.
+    pub fn num_threads(&self) -> usize {
+        self.pool.current_num_threads()
     }
 }
 

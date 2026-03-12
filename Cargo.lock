@@ -510,7 +510,6 @@ dependencies = [
  "mimalloc",
  "num",
  "ordered-float",
- "rayon",
  "rustc-hash",
  "serde_json",
  "serial_test",
