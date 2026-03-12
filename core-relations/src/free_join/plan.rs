@@ -209,13 +209,13 @@ impl Plan {
 #[derive(Debug, Clone)]
 pub(crate) struct SinglePlan {
     pub atoms: Arc<DenseIdMap<AtomId, Atom>>,
+    pub header: Vec<JoinHeader>,
     pub stages: JoinStages,
     pub actions: ActionId,
 }
 
 #[derive(Debug, Clone)]
 pub(crate) struct JoinStages {
-    pub header: Vec<JoinHeader>,
     pub instrs: Arc<Vec<JoinStage>>,
 }
 
@@ -235,7 +235,7 @@ pub(crate) struct JoinStageBlocks {
 #[derive(Debug, Clone)]
 pub(crate) struct DecomposedPlan {
     pub atoms: Arc<DenseIdMap<AtomId, Atom>>,
-    pub atom_to_bag: Arc<AtomToBag>,
+    pub header: Vec<JoinHeader>,
     pub stages: JoinStageBlocks,
     pub result_block: JoinStages,
     pub actions: ActionId,
@@ -370,9 +370,7 @@ pub(crate) enum BagId {
     Block(u32),
 }
 
-type AtomToBag = DenseIdMap<AtomId, Vec<BagId>>;
-
-/// Computes the next variable to eliminate and the subquery of its neighborhood.
+// Computes the next variable to eliminate and the subquery of its neighborhood.
 ///
 /// Uses a min-fill heuristic that prioritizes variables whose elimination creates
 /// neighborhoods that are more subsumed by existing bags. This is a generalization
@@ -680,7 +678,7 @@ fn plan_single_bag(
     has_block_contributed: &mut [bool],
     n_used_in_bag: &mut DenseIdMap<Variable, usize>,
     strat: PlanStrategy,
-) -> (JoinStages, MatSpec) {
+) -> (Vec<JoinHeader>, JoinStages, MatSpec) {
     let mut msg_vars = vec![];
     let mut val_vars = vec![];
 
@@ -775,11 +773,10 @@ fn plan_single_bag(
     instrs.extend(epilogue);
 
     let stages = JoinStages {
-        header,
         instrs: Arc::new(instrs),
     };
 
-    (stages, MatSpec { msg_vars, val_vars })
+    (header, stages, MatSpec { msg_vars, val_vars })
 }
 
 /// Builds the final result block that collects results from all materialized bags.
@@ -822,7 +819,6 @@ fn build_result_block(blocks: &[(JoinStages, MatSpec)]) -> JoinStages {
     }
 
     JoinStages {
-        header: vec![],
         instrs: Arc::new(result_block),
     }
 }
@@ -842,15 +838,13 @@ fn build_result_block(blocks: &[(JoinStages, MatSpec)]) -> JoinStages {
 fn fuse_last_stage(
     mut blocks: Vec<(JoinStages, MatSpec)>,
     result_block: JoinStages,
-    mut atom_to_bag: AtomToBag,
-) -> (Vec<(JoinStages, MatSpec)>, JoinStages, AtomToBag) {
+) -> (Vec<(JoinStages, MatSpec)>, JoinStages) {
     if blocks.is_empty() {
-        return (blocks, result_block, atom_to_bag);
+        return (blocks, result_block);
     }
 
     let last_block = blocks.pop().unwrap();
     assert!(last_block.1.msg_vars.is_empty());
-    assert!(result_block.header.is_empty());
     if !matches!(
         result_block.instrs[0],
         JoinStage::FusedIntersectMat {
@@ -860,7 +854,7 @@ fn fuse_last_stage(
         } if cover == MatId::from_usize(blocks.len()
     )) {
         // If the first stage of the result block does not scan the last materialization
-        return (blocks, result_block, atom_to_bag);
+        return (blocks, result_block);
     }
 
     // Fuse the instructions
@@ -869,15 +863,7 @@ fn fuse_last_stage(
     instrs.extend(result_block.instrs[1..].iter().cloned());
     last_block.instrs = Arc::new(instrs);
 
-    // Update the atom_to_bag
-    for (_atom, bag) in atom_to_bag.iter_mut() {
-        for b in bag.iter_mut() {
-            if *b == BagId::Block(blocks.len() as u32) {
-                *b = BagId::ResultBlock;
-            }
-        }
-    }
-    (blocks, last_block, atom_to_bag)
+    (blocks, last_block)
 }
 
 /// Lift variable lookups up if it's not used.
@@ -909,7 +895,6 @@ fn loop_lifting(stages: JoinStages) -> JoinStages {
         }
     }
     JoinStages {
-        header: stages.header,
         instrs: Arc::new(instrs),
     }
 }
@@ -926,12 +911,12 @@ pub(crate) fn tree_decompose_and_plan(
         // Don't do Yannakakis if it's just one bag
         let (header, instrs) = plan_stages(&ctx, strat);
         let stages = JoinStages {
-            header,
             instrs: Arc::new(instrs),
         };
 
         return Plan::SinglePlan(SinglePlan {
             atoms: Arc::new(ctx.atoms),
+            header,
             stages,
             actions,
         });
@@ -941,25 +926,15 @@ pub(crate) fn tree_decompose_and_plan(
     let bags = topologically_sort_bags(bags);
     // dbg!(&bags);
 
-    // Map atoms to their bag indices
-    let mut atom_to_bag = AtomToBag::new();
-    for (i, bag) in bags.iter().enumerate() {
-        for (atom_id, _) in bag.atoms.iter() {
-            if !atom_to_bag.contains_key(atom_id) {
-                atom_to_bag.insert(atom_id, vec![]);
-            }
-            atom_to_bag[atom_id].push(BagId::Block(i as u32));
-        }
-    }
-
     // Step 3: Count variable usage across bags
     let mut n_used_in_bag = count_variable_usage_per_bag(&bags);
     let mut has_block_contributed = vec![false; bags.len()];
 
     // Step 4: Plan each bag and create materialization blocks
     let mut blocks = Vec::new();
+    let mut header = vec![];
     for bag in bags.iter() {
-        let (stages, mat_spec) = plan_single_bag(
+        let (bag_header, stages, mat_spec) = plan_single_bag(
             bag,
             &blocks,
             &mut has_block_contributed,
@@ -967,13 +942,14 @@ pub(crate) fn tree_decompose_and_plan(
             strat,
         );
         blocks.push((stages, mat_spec));
+        header.extend(bag_header);
     }
 
     // Step 5: Build the final result block
     let result_block = build_result_block(&blocks);
 
     // Optimization the avoids the last materialization
-    // let (blocks, result_block, atom_to_bag) = fuse_last_stage(blocks, result_block, atom_to_bag);
+    // let (blocks, result_block) = fuse_last_stage(blocks, result_block);
 
     // Lifting variables
     let blocks = blocks
@@ -1027,7 +1003,6 @@ pub(crate) fn tree_decompose_and_plan(
     //             other_block.0.instrs = Arc::new(instrs);
     //             if changed {
     //                 other_block.0.header.extend(header.iter().cloned());
-    //                 atom_to_bag[mat_atom.to_index.atom].push(BagId::Block(j as u32));
     //             }
     //         }
 
@@ -1056,10 +1031,7 @@ pub(crate) fn tree_decompose_and_plan(
     //         result_block.instrs = Arc::new(instrs);
     //         if changed {
     //             result_block.header.extend(header.iter().cloned());
-    //             atom_to_bag[mat_atom.to_index.atom].push(BagId::ResultBlock);
     //         }
-
-    //         atom_to_bag[mat_atom.to_index.atom].retain(|b| *b != BagId::Block(i as u32));
 
     //         blocks[i].0.instrs = Arc::new(vec![]);
     //         blocks[i].0.header = vec![];
@@ -1072,7 +1044,7 @@ pub(crate) fn tree_decompose_and_plan(
 
     Plan::DecomposedPlan(DecomposedPlan {
         atoms: Arc::new(ctx.atoms),
-        atom_to_bag: Arc::new(atom_to_bag),
+        header,
         stages: JoinStageBlocks { blocks },
         result_block,
         actions,

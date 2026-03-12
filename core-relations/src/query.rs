@@ -4,7 +4,7 @@ use std::{iter::once, sync::Arc};
 
 use crate::{
     common::IndexSet,
-    free_join::plan::{BagId, DecomposedPlan, JoinStageBlocks, SinglePlan},
+    free_join::plan::{DecomposedPlan, JoinStageBlocks, SinglePlan},
     numeric_id::{DenseIdMap, IdVec, NumericId, define_id},
 };
 use smallvec::SmallVec;
@@ -152,28 +152,23 @@ impl<'outer> RuleSetBuilder<'outer> {
 
     fn push_extra_constraints(
         &self,
-        stages: &mut JoinStages,
+        headers: &mut Vec<JoinHeader>,
         atoms: &Arc<DenseIdMap<AtomId, Atom>>,
         extra_constraints: &[(AtomId, Constraint)],
-        atom_filter: impl Fn(AtomId) -> bool,
     ) {
         for (atom_id, constraint) in extra_constraints {
-            if !atom_filter(*atom_id) {
-                continue;
-            }
-
             let atom_info = atoms.get(*atom_id).expect("atom must exist in plan");
             let table = atom_info.table;
 
             let header =
                 self.reprocess_constraints(table, *atom_id, std::slice::from_ref(constraint));
-            stages.header.push(header);
+            headers.push(header);
         }
     }
 
     fn reprocess_existing_headers(
         &self,
-        out: &mut JoinStages,
+        headers: &mut Vec<JoinHeader>,
         atoms: &Arc<DenseIdMap<AtomId, Atom>>,
         existing: &[JoinHeader],
     ) {
@@ -184,8 +179,7 @@ impl<'outer> RuleSetBuilder<'outer> {
             let atom_info = atoms.get(*atom).expect("atom must exist in plan");
             let table = atom_info.table;
 
-            out.header
-                .push(self.reprocess_constraints(table, *atom, constraints));
+            headers.push(self.reprocess_constraints(table, *atom, constraints));
         }
     }
 
@@ -197,75 +191,53 @@ impl<'outer> RuleSetBuilder<'outer> {
     ) -> Plan {
         match &cached.plan {
             Plan::SinglePlan(cached_plan) => {
-                let mut stages = JoinStages {
-                    header: Vec::new(),
+                let mut headers = vec![];
+                let stages = JoinStages {
                     instrs: cached_plan.stages.instrs.clone(),
                 };
 
-                self.push_extra_constraints(
-                    &mut stages,
-                    &cached_plan.atoms,
-                    extra_constraints,
-                    |_| true,
-                );
+                self.push_extra_constraints(&mut headers, &cached_plan.atoms, extra_constraints);
 
                 self.reprocess_existing_headers(
-                    &mut stages,
+                    &mut headers,
                     &cached_plan.atoms,
-                    &cached_plan.stages.header,
+                    &cached_plan.header,
                 );
 
                 Plan::SinglePlan(SinglePlan {
                     atoms: cached_plan.atoms.clone(),
+                    header: headers,
                     stages,
                     actions: action_id,
                 })
             }
             Plan::DecomposedPlan(cached_plan) => {
                 let mut blocks = Vec::with_capacity(cached_plan.stages.blocks.len());
+                let mut headers = vec![];
+                self.push_extra_constraints(&mut headers, &cached_plan.atoms, extra_constraints);
+                self.reprocess_existing_headers(
+                    &mut headers,
+                    &cached_plan.atoms,
+                    &cached_plan.header,
+                );
+
                 // Process body blocks
-                for (i, cached_block) in cached_plan.stages.blocks.iter().enumerate() {
-                    let mut stages = JoinStages {
-                        header: Vec::new(),
+                for cached_block in cached_plan.stages.blocks.iter() {
+                    let stages = JoinStages {
                         instrs: cached_block.0.instrs.clone(),
                     };
-
-                    self.push_extra_constraints(
-                        &mut stages,
-                        &cached_plan.atoms,
-                        extra_constraints,
-                        |atom| cached_plan.atom_to_bag[atom].contains(&BagId::Block(i as u32)),
-                    );
-
-                    self.reprocess_existing_headers(
-                        &mut stages,
-                        &cached_plan.atoms,
-                        &cached_block.0.header,
-                    );
 
                     blocks.push((stages, cached_block.1.clone()));
                 }
 
                 // Process result blocks
-                let mut result_block = JoinStages {
-                    header: Vec::new(),
+                let result_block = JoinStages {
                     instrs: cached_plan.result_block.instrs.clone(),
                 };
-                self.push_extra_constraints(
-                    &mut result_block,
-                    &cached_plan.atoms,
-                    extra_constraints,
-                    |atom| cached_plan.atom_to_bag[atom].contains(&BagId::ResultBlock),
-                );
-                self.reprocess_existing_headers(
-                    &mut result_block,
-                    &cached_plan.atoms,
-                    &cached_plan.result_block.header,
-                );
 
                 Plan::DecomposedPlan(DecomposedPlan {
                     atoms: cached_plan.atoms.clone(),
-                    atom_to_bag: cached_plan.atom_to_bag.clone(),
+                    header: headers,
                     stages: JoinStageBlocks { blocks },
                     actions: action_id,
                     result_block,
