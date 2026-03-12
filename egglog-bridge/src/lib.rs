@@ -134,6 +134,10 @@ pub struct EGraph {
     report_level: ReportLevel,
     /// Thread pool used for parallel operations. All rayon parallel work is
     /// scoped to this pool rather than the global thread pool.
+    ///
+    /// This field does not exist on wasm, where spawning threads is
+    /// unsupported.
+    #[cfg(not(target_family = "wasm"))]
     pool: Arc<rayon::ThreadPool>,
 }
 
@@ -211,6 +215,7 @@ impl EGraph {
             term_consistency_table,
             report_level: Default::default(),
             tracing,
+            #[cfg(not(target_family = "wasm"))]
             pool: Arc::new(
                 rayon::ThreadPoolBuilder::new()
                     .num_threads(1)
@@ -791,8 +796,7 @@ impl EGraph {
     ///
     /// If the given rules are malformed, this method can return an error.
     pub fn run_rules(&mut self, rules: &[RuleId]) -> Result<IterationReport> {
-        let pool = self.pool.clone();
-        pool.install(|| self.run_rules_inner(rules))
+        self.with_pool(|this| this.run_rules_inner(rules))
     }
 
     fn run_rules_inner(&mut self, rules: &[RuleId]) -> Result<IterationReport> {
@@ -824,7 +828,7 @@ impl EGraph {
     }
 
     fn rebuild(&mut self) -> Result<()> {
-        let do_parallel = self.pool.current_num_threads() > 1;
+        let do_parallel = self.num_threads() > 1;
         if self.db.get_table(self.uf_table).rebuilder(&[]).is_some() {
             // The UF implementation supports "native"  rebuilding.
             let mut tables = Vec::with_capacity(self.funcs.next_id().index());
@@ -1131,13 +1135,22 @@ impl EGraph {
     /// Flush the pending update buffers to the EGraph.
     /// Returns `true` if the database is updated.
     pub fn flush_updates(&mut self) -> bool {
-        let pool = self.pool.clone();
-        pool.install(|| {
-            let updated = self.db.merge_all();
-            self.inc_ts();
-            self.rebuild().unwrap();
+        self.with_pool(|this| {
+            let updated = this.db.merge_all();
+            this.inc_ts();
+            this.rebuild().unwrap();
             updated
         })
+    }
+
+    /// Run `f` on the configured thread pool if multi-threaded, or inline otherwise.
+    fn with_pool<R: Send>(&mut self, f: impl FnOnce(&mut Self) -> R + Send) -> R {
+        #[cfg(not(target_family = "wasm"))]
+        if self.pool.current_num_threads() > 1 {
+            let pool = self.pool.clone();
+            return pool.install(|| f(self));
+        }
+        f(self)
     }
 
     pub fn set_report_level(&mut self, level: ReportLevel) {
@@ -1145,18 +1158,38 @@ impl EGraph {
     }
 
     /// Set the number of threads used for parallel operations.
+    ///
+    /// A value of 1 disables the thread pool (runs on the current thread).
+    /// Values greater than 1 create a dedicated rayon thread pool.
+    ///
+    /// # Panics
+    ///
+    /// Panics on wasm if `num_threads > 1`, as wasm does not support
+    /// spawning OS threads.
     pub fn set_num_threads(&mut self, num_threads: usize) {
-        self.pool = Arc::new(
-            rayon::ThreadPoolBuilder::new()
-                .num_threads(num_threads)
-                .build()
-                .expect("failed to build rayon thread pool"),
-        );
+        #[cfg(target_family = "wasm")]
+        if num_threads > 1 {
+            panic!("cannot use more than 1 thread on wasm");
+        }
+        #[cfg(not(target_family = "wasm"))]
+        {
+            self.pool = Arc::new(
+                rayon::ThreadPoolBuilder::new()
+                    .num_threads(num_threads)
+                    .build()
+                    .expect("failed to build rayon thread pool"),
+            );
+        }
     }
 
     /// Return the number of threads in this EGraph's thread pool.
+    ///
+    /// Returns 1 on wasm.
     pub fn num_threads(&self) -> usize {
-        self.pool.current_num_threads()
+        #[cfg(not(target_family = "wasm"))]
+        return self.pool.current_num_threads();
+        #[cfg(target_family = "wasm")]
+        1
     }
 }
 
