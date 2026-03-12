@@ -240,59 +240,97 @@ impl Database {
                 }
 
                 let search_and_apply_timer = Instant::now();
-                match plan {
-                    Plan::SinglePlan(plan) => {
-                        join_state.run_join_stages(
-                            &plan.stages,
-                            &plan.atoms,
-                            plan.actions,
-                            &mut binding_info,
-                            &mut action_buf,
-                        );
-                    }
-                    Plan::DecomposedPlan(plan) => {
-                        let mut materializations =
-                            DenseIdMap::with_capacity(plan.stages.blocks.len());
-                        for i in 0..plan.stages.blocks.len() {
-                            materializations.insert(MatId::from_usize(i), Default::default());
-                        }
-                        let mut materializer = InPlaceMaterializer {
-                            specs: &plan
-                                .stages
-                                .blocks
-                                .iter()
-                                .enumerate()
-                                .map(|(i, block)| (MatId::from_usize(i), block.1.clone()))
-                                .collect(),
-                            materializations,
-                            scratch_key: Default::default(),
-                            scratch_val: Default::default(),
-                        };
-                        // eprintln!("Running {desc}");
-                        let mut empty_query = false;
-                        for (mat_id, stage_block) in plan.stages.blocks.iter().enumerate() {
-                            let mat_id = MatId::from_usize(mat_id);
-                            join_state.run_join_stages(
-                                &stage_block.0,
-                                &plan.atoms,
-                                mat_id,
-                                &mut binding_info,
-                                &mut materializer,
-                            );
-                            if materializer.materializations[mat_id].is_empty() {
-                                empty_query = true;
-                                break;
+                'eval: {
+                    match plan {
+                        Plan::SinglePlan(plan) => {
+                            for JoinHeader { atom, subset, .. } in &plan.stages.header {
+                                if subset.is_empty() {
+                                    break 'eval;
+                                }
+                                let mut cur = binding_info.unwrap_val(*atom);
+                                debug_assert!(cur.cached_subsets.get().is_none());
+                                cur.subset
+                                    .intersect(subset.as_ref(), &with_pool_set(|ps| ps.get_pool()));
+                                binding_info.move_back_node(*atom, cur);
                             }
-                            // eprintln!(
-                            //     "{mat_id:?} has size {:?}",
-                            //     materializer.materializations[mat_id].len()
-                            // );
-                            binding_info.materializations.insert(
-                                mat_id,
-                                Arc::new(materializer.materializations.take(mat_id).unwrap()),
+                            join_state.run_join_stages(
+                                &plan.stages,
+                                &plan.atoms,
+                                plan.actions,
+                                &mut binding_info,
+                                &mut action_buf,
                             );
                         }
-                        if !empty_query {
+                        Plan::DecomposedPlan(plan) => {
+                            for (stage_block, _) in &plan.stages.blocks {
+                                for JoinHeader { atom, subset, .. } in stage_block.header.iter() {
+                                    if subset.is_empty() {
+                                        break 'eval;
+                                    }
+                                    let mut cur = binding_info.unwrap_val(*atom);
+                                    debug_assert!(cur.cached_subsets.get().is_none());
+                                    // let mut new = cur.clone();
+                                    cur.subset.intersect(
+                                        subset.as_ref(),
+                                        &with_pool_set(|ps| ps.get_pool()),
+                                    );
+                                    if cur.subset.is_empty() {
+                                        break 'eval;
+                                    }
+                                    binding_info.move_back_node(*atom, cur);
+                                }
+                            }
+
+                            let mut materializations =
+                                DenseIdMap::with_capacity(plan.stages.blocks.len());
+                            for i in 0..plan.stages.blocks.len() {
+                                materializations.insert(MatId::from_usize(i), Default::default());
+                            }
+                            let mut materializer = InPlaceMaterializer {
+                                specs: &plan
+                                    .stages
+                                    .blocks
+                                    .iter()
+                                    .enumerate()
+                                    .map(|(i, block)| (MatId::from_usize(i), block.1.clone()))
+                                    .collect(),
+                                materializations,
+                                scratch_key: Default::default(),
+                                scratch_val: Default::default(),
+                            };
+
+                            // eprintln!("Running {desc}");
+                            for (mat_id, stage_block) in plan.stages.blocks.iter().enumerate() {
+                                let mat_id = MatId::from_usize(mat_id);
+                                // let start_time = Instant::now();
+                                join_state.run_join_stages(
+                                    &stage_block.0,
+                                    &plan.atoms,
+                                    mat_id,
+                                    &mut binding_info,
+                                    &mut materializer,
+                                );
+                                if materializer.materializations[mat_id].is_empty() {
+                                    break 'eval;
+                                }
+                                // eprintln!(
+                                //     "{mat_id:?} has size {:?}/{:?}",
+                                //     materializer.materializations[mat_id].len(),
+                                //     materializer.materializations[mat_id]
+                                //         .iter()
+                                //         .map(|(_k, v)| v.len())
+                                //         .sum::<usize>(),
+                                // );
+                                // eprintln!(
+                                //     "Finished materializing {mat_id:?} in {:?}",
+                                //     start_time.elapsed()
+                                // );
+                                binding_info.materializations.insert(
+                                    mat_id,
+                                    Arc::new(materializer.materializations.take(mat_id).unwrap()),
+                                );
+                            }
+                            // let start_time = Instant::now();
                             join_state.run_join_stages(
                                 &plan.result_block,
                                 &plan.atoms,
@@ -300,6 +338,10 @@ impl Database {
                                 &mut binding_info,
                                 &mut action_buf,
                             );
+                            // eprintln!(
+                            //     "Finished applying final stage block in {:?}",
+                            //     start_time.elapsed()
+                            // );
                         }
                     }
                 }
@@ -540,16 +582,6 @@ impl<'a> JoinState<'a> {
         if log::log_enabled!(log::Level::Debug) {
             log::debug!("Starting running query stages:\n{:#?}", stages);
         }
-        for JoinHeader { atom, subset, .. } in &stages.header {
-            if subset.is_empty() {
-                return;
-            }
-            let mut cur = binding_info.unwrap_val(*atom);
-            debug_assert!(cur.cached_subsets.get().is_none());
-            cur.subset
-                .intersect(subset.as_ref(), &with_pool_set(|ps| ps.get_pool()));
-            binding_info.move_back_node(*atom, cur);
-        }
         for (_, node) in binding_info.subsets.iter() {
             if node.subset.is_empty() {
                 return;
@@ -575,7 +607,15 @@ impl<'a> JoinState<'a> {
             &stages.instrs,
             binding_info,
         );
-        // eprintln!("{:?}",order.data.iter().map(|i| &stages.instrs[*i as usize]).collect::<Vec<&JoinStage>>());
+        // eprintln!("{:?}", &stages.header);
+        // eprintln!(
+        //     "{:?}",
+        //     order
+        //         .data
+        //         .iter()
+        //         .map(|i| &stages.instrs[*i as usize])
+        //         .collect::<Vec<&JoinStage>>()
+        // );
         self.run_plan(
             stages,
             atoms,
