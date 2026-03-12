@@ -527,7 +527,7 @@ fn decompose_into_bags(original_ctx: &PlanningContext) -> Vec<PlanningContext> {
             .map(|(atom_id, atom)| (atom_id, atom.clone()))
             .collect();
 
-        let mut aux_vars = IndexSet::default();
+        // let mut aux_vars = IndexSet::default();
         for (atom_id, atom) in original_ctx.atoms.iter() {
             if !atom.vars().all(|var| subquery_vars.contains(&var))
                 && atom.vars().any(|var| subquery_vars.contains(&var))
@@ -574,7 +574,7 @@ fn decompose_into_bags(original_ctx: &PlanningContext) -> Vec<PlanningContext> {
             subquery_vars
                 .iter()
                 .map(|v| (v, true))
-                .chain(aux_vars.iter().map(|v| (v, false)))
+                // .chain(aux_vars.iter().map(|v| (v, false)))
                 .map(|(var, used)| {
                     let mut var_info = original_ctx.vars[*var].clone();
                     // TODO: this makes certain columns like timestamp and subsumed always used,
@@ -1008,85 +1008,102 @@ pub(crate) fn tree_decompose_and_plan(
     let result_block = build_result_block(&blocks);
 
     // Optimization the avoids the last materialization
-    let (blocks, result_block, atom_to_bag) = fuse_last_stage(blocks, result_block, atom_to_bag);
+    // let (blocks, result_block, atom_to_bag) = fuse_last_stage(blocks, result_block, atom_to_bag);
 
     // Lifting variables
-    let mut blocks = blocks
+    let blocks = blocks
         .into_iter()
         .map(|(stages, mat_spec)| (loop_lifting(stages), mat_spec))
         .collect::<Vec<_>>();
-    let mut result_block = loop_lifting(result_block);
+    let result_block = loop_lifting(result_block);
 
-    // Inline materializations that are just scan
-    for i in 0..blocks.len() {
-        let block = &blocks[i];
-        if let [
-            JoinStage::FusedIntersect {
-                cover,
-                bind,
-                to_intersect,
-            },
-        ] = block.0.instrs.as_slice()
-        {
-            let mat_atom = cover.clone();
-            let bind = bind.clone();
-            let header = block.0.header.clone();
-            assert!(to_intersect.is_empty());
-            for j in i + 1..blocks.len() {
-                let other_block = &mut blocks[j];
-                let mut instrs = Arc::unwrap_or_clone(mem::take(&mut other_block.0.instrs));
-                let mut changed = false;
-                for instr in instrs.iter_mut() {
-                    match instr {
-                        JoinStage::FusedIntersectMat { cover, mode, .. } if cover.index() == i => {
-                            assert!(
-                                mode == &MatScanMode::Full || mode == &MatScanMode::Value(vec![])
-                            );
-                            *instr = JoinStage::FusedIntersect {
-                                cover: mat_atom.clone(),
-                                bind: bind.clone(),
-                                to_intersect: vec![],
-                            };
-                            changed = true;
-                        }
-                        _ => {}
-                    }
-                }
-                other_block.0.instrs = Arc::new(instrs);
-                if changed {
-                    other_block.0.header.extend(header.iter().cloned());
-                }
-            }
+    // // Inline materializations that are just scan
+    // for i in 0..blocks.len() {
+    //     let block = &blocks[i];
+    //     if let [
+    //         JoinStage::FusedIntersect {
+    //             cover,
+    //             bind,
+    //             to_intersect,
+    //         },
+    //     ] = block.0.instrs.as_slice()
+    //     {
+    //         let mat_atom = cover.clone();
+    //         let bind = bind.clone();
+    //         let header = block.0.header.clone();
+    //         assert!(to_intersect.is_empty());
+    //         for j in i + 1..blocks.len() {
+    //             let other_block = &mut blocks[j];
+    //             let mut instrs = Arc::unwrap_or_clone(mem::take(&mut other_block.0.instrs));
+    //             let mut changed = false;
+    //             for instr in instrs.iter_mut() {
+    //                 match instr {
+    //                     JoinStage::FusedIntersectMat {
+    //                         cover,
+    //                         mode,
+    //                         bind: _,
+    //                         to_intersect,
+    //                     } if cover.index() == i => {
+    //                         assert!(
+    //                             mode == &MatScanMode::Full || mode == &MatScanMode::Value(vec![])
+    //                         );
+    //                         assert!(to_intersect.is_empty());
 
-            let mut instrs = Arc::unwrap_or_clone(mem::take(&mut result_block.instrs));
-            let mut changed = false;
-            for instr in instrs.iter_mut() {
-                match instr {
-                    JoinStage::FusedIntersectMat { cover, mode, .. } if cover.index() == i => {
-                        assert!(mode == &MatScanMode::Full || mode == &MatScanMode::Value(vec![]));
-                        *instr = JoinStage::FusedIntersect {
-                            cover: mat_atom.clone(),
-                            bind: bind.clone(),
-                            to_intersect: vec![],
-                        };
-                        changed = true;
-                    }
-                    _ => {}
-                }
-            }
-            result_block.instrs = Arc::new(instrs);
-            if changed {
-                result_block.header.extend(header.iter().cloned());
-            }
+    //                         *instr = JoinStage::FusedIntersect {
+    //                             cover: mat_atom.clone(),
+    //                             bind: bind.clone(),
+    //                             to_intersect: vec![],
+    //                         };
+    //                         changed = true;
+    //                     }
+    //                     _ => {}
+    //                 }
+    //             }
+    //             other_block.0.instrs = Arc::new(instrs);
+    //             if changed {
+    //                 other_block.0.header.extend(header.iter().cloned());
+    //                 atom_to_bag[mat_atom.to_index.atom].push(BagId::Block(j as u32));
+    //             }
+    //         }
 
-            blocks[i].0.instrs = Arc::new(vec![]);
-            blocks[i].0.header = vec![];
-            blocks[i].1 = MatSpec {msg_vars: vec![], val_vars: vec![] };
-        }
-    }
+    //         let mut instrs = Arc::unwrap_or_clone(mem::take(&mut result_block.instrs));
+    //         let mut changed = false;
+    //         for instr in instrs.iter_mut() {
+    //             match instr {
+    //                 JoinStage::FusedIntersectMat {
+    //                     cover,
+    //                     mode,
+    //                     bind: _,
+    //                     to_intersect,
+    //                 } if cover.index() == i => {
+    //                     assert!(mode == &MatScanMode::Full || mode == &MatScanMode::Value(vec![]));
+    //                     assert!(to_intersect.is_empty());
+    //                     *instr = JoinStage::FusedIntersect {
+    //                         cover: mat_atom.clone(),
+    //                         bind: bind.clone(),
+    //                         to_intersect: vec![],
+    //                     };
+    //                     changed = true;
+    //                 }
+    //                 _ => {}
+    //             }
+    //         }
+    //         result_block.instrs = Arc::new(instrs);
+    //         if changed {
+    //             result_block.header.extend(header.iter().cloned());
+    //             atom_to_bag[mat_atom.to_index.atom].push(BagId::ResultBlock);
+    //         }
 
-    // dbg!(&blocks);
-    // dbg!(&result_block);
+    //         atom_to_bag[mat_atom.to_index.atom].retain(|b| *b != BagId::Block(i as u32));
+
+    //         blocks[i].0.instrs = Arc::new(vec![]);
+    //         blocks[i].0.header = vec![];
+    //         blocks[i].1 = MatSpec {
+    //             msg_vars: vec![],
+    //             val_vars: vec![],
+    //         };
+    //     }
+    // }
 
     Plan::DecomposedPlan(DecomposedPlan {
         atoms: Arc::new(ctx.atoms),
