@@ -243,7 +243,7 @@ impl Database {
                 'eval: {
                     match plan {
                         Plan::SinglePlan(plan) => {
-                            for JoinHeader { atom, subset, .. } in &plan.stages.header {
+                            for JoinHeader { atom, subset, .. } in &plan.header {
                                 if subset.is_empty() {
                                     break 'eval;
                                 }
@@ -262,23 +262,18 @@ impl Database {
                             );
                         }
                         Plan::DecomposedPlan(plan) => {
-                            for (stage_block, _) in &plan.stages.blocks {
-                                for JoinHeader { atom, subset, .. } in stage_block.header.iter() {
-                                    if subset.is_empty() {
-                                        break 'eval;
-                                    }
-                                    let mut cur = binding_info.unwrap_val(*atom);
-                                    debug_assert!(cur.cached_subsets.get().is_none());
-                                    // let mut new = cur.clone();
-                                    cur.subset.intersect(
-                                        subset.as_ref(),
-                                        &with_pool_set(|ps| ps.get_pool()),
-                                    );
-                                    if cur.subset.is_empty() {
-                                        break 'eval;
-                                    }
-                                    binding_info.move_back_node(*atom, cur);
+                            for JoinHeader { atom, subset, .. } in plan.header.iter() {
+                                if subset.is_empty() {
+                                    break 'eval;
                                 }
+                                let mut cur = binding_info.unwrap_val(*atom);
+                                debug_assert!(cur.cached_subsets.get().is_none());
+                                cur.subset
+                                    .intersect(subset.as_ref(), &with_pool_set(|ps| ps.get_pool()));
+                                if cur.subset.is_empty() {
+                                    break 'eval;
+                                }
+                                binding_info.move_back_node(*atom, cur);
                             }
 
                             let mut materializations =
