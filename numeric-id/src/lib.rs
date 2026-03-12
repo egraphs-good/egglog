@@ -189,6 +189,16 @@ impl<K: NumericId, V> DenseIdMap<K, V> {
             .enumerate()
             .filter_map(|(i, v)| Some((K::from_usize(i), v?)))
     }
+
+    pub fn retain(&mut self, mut f: impl FnMut(K, &V) -> bool) {
+        for (i, v) in self.data.iter_mut().enumerate() {
+            if let Some(inner) = v {
+                if !f(K::from_usize(i), inner) {
+                    *v = None;
+                }
+            }
+        }
+    }
 }
 
 impl<K: NumericId, V: Send + Sync> DenseIdMap<K, V> {
@@ -226,6 +236,16 @@ impl<K: NumericId, V> ops::IndexMut<K> for DenseIdMap<K, V> {
 impl<K: NumericId, V: Default> DenseIdMap<K, V> {
     pub fn get_or_default(&mut self, key: K) -> &mut V {
         self.get_or_insert(key, V::default)
+    }
+}
+
+impl<K: NumericId, V: Clone> FromIterator<(K, V)> for DenseIdMap<K, V> {
+    fn from_iter<T: IntoIterator<Item = (K, V)>>(iter: T) -> Self {
+        let mut res = DenseIdMap::new();
+        for (k, v) in iter {
+            res.insert(k, v);
+        }
+        res
     }
 }
 
@@ -431,8 +451,10 @@ macro_rules! atomic_of {
 
 #[macro_export]
 macro_rules! define_id {
-    ($v:vis $name:ident, $repr:tt) => { define_id!($v, $name, $repr, ""); };
-    ($v:vis $name:ident, $repr:tt, $doc:tt) => {
+    ($v:vis $name:ident, $repr:tt) => { define_id!($v $name, $repr, "", pretty ""); };
+    ($v:vis $name:ident, $repr:tt, $doc:tt) => { define_id!($v $name, $repr, $doc, pretty ""); };
+    ($v:vis $name:ident, $repr:tt, pretty $pretty_name:expr) => { define_id!($v $name, $repr, "", pretty $pretty_name); };
+    ($v:vis $name:ident, $repr:tt, $doc:tt, pretty $pretty_name:tt) => {
         #[derive(Copy, Clone)]
         #[doc = $doc]
         $v struct $name {
@@ -504,7 +526,12 @@ macro_rules! define_id {
 
         impl std::fmt::Debug for $name {
             fn fmt(&self, fmt: &mut std::fmt::Formatter) -> std::fmt::Result {
-                write!(fmt, "{}({:?})", stringify!($name), self.rep)
+                let name = if $pretty_name.is_empty() {
+                    stringify!($name).to_string()
+                } else {
+                    $pretty_name.to_string()
+                };
+                write!(fmt, "{}({:?})", name, self.rep)
             }
         }
     };

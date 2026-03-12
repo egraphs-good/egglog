@@ -45,7 +45,7 @@ define_id!(
     u32,
     "A component of a query consisting of a function and a list of variables or constants"
 );
-define_id!(pub Variable, u32, "a variable in a query");
+define_id!(pub Variable, u32, "a variable in a query", pretty "Var");
 
 impl Variable {
     pub fn placeholder() -> Variable {
@@ -54,6 +54,17 @@ impl Variable {
 }
 
 define_id!(pub TableId, u32, "a table in the database");
+
+impl TableId {
+    pub fn dummy() -> TableId {
+        TableId::new(u32::MAX)
+    }
+
+    pub fn is_dummy(&self) -> bool {
+        self.rep == u32::MAX
+    }
+}
+
 define_id!(pub(crate) ActionId, u32, "an identifier picking out the RHS of a rule");
 
 #[derive(Debug)]
@@ -82,6 +93,14 @@ impl ProcessedConstraints {
     fn approx_size(&self) -> usize {
         self.subset.size()
     }
+
+    pub(crate) fn dummy() -> ProcessedConstraints {
+        ProcessedConstraints {
+            subset: Subset::empty(),
+            fast: Pooled::new(Vec::new()),
+            slow: Pooled::new(Vec::new()),
+        }
+    }
 }
 
 #[derive(Clone, Debug, PartialEq, Eq)]
@@ -99,7 +118,7 @@ impl SubAtom {
     }
 }
 
-#[derive(Debug)]
+#[derive(Debug, Clone)]
 pub(crate) struct VarInfo {
     pub(crate) occurrences: Vec<SubAtom>,
     /// Whether or not this variable shows up in the "actions" portion of a
