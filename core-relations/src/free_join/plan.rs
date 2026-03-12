@@ -550,11 +550,7 @@ fn decompose_into_bags(original_ctx: &PlanningContext) -> Vec<PlanningContext> {
 
         let subquery_var_map = DenseIdMap::from_iter(subquery_vars.iter().map(|var| {
             let mut var_info = original_ctx.vars[*var].clone();
-            // TODO: this makes certain columns like timestamp and subsumed always used,
-            // and undoes the used_in_rhs optimization that skips scanning these columns.
-            // Maybe we can say if a variable is not used_in_rhs and comes up only in val columns,
-            // then they can stay !used_in_rhs and the materialization won't include them.
-            var_info.used_in_rhs = true;
+            // NB: used_in_rhs is handled in [`plan_single_bag`]
             var_info
                 .occurrences
                 .retain(|occ| subquery_atoms.contains_key(occ.atom));
@@ -666,7 +662,7 @@ fn count_variable_usage_per_bag(bags: &[PlanningContext]) -> DenseIdMap<Variable
 /// - Planning join stages within the bag
 /// - Adding epilogue instructions to look up previous materialized bags
 fn plan_single_bag(
-    bag: &PlanningContext,
+    bag: &mut PlanningContext,
     blocks: &[(JoinStages, MatSpec)],
     // If this bag has been used to prune its parent
     has_block_contributed: &mut [bool],
@@ -677,12 +673,24 @@ fn plan_single_bag(
     let mut val_vars = vec![];
 
     // Classify variables as message or value variables
-    for (var, _vinfo) in bag.vars.iter() {
+    for (var, vinfo) in bag.vars.iter_mut() {
         n_used_in_bag[var] -= 1;
         if n_used_in_bag[var] > 0 {
+            // If this is a public variable, then we need to pass it on anyway
+            vinfo.used_in_rhs = true;
             msg_vars.push(var);
         } else {
+            // If this variable is not used in later and previous bag,
+            // and it is not used in the right hand side,
+            // this variable don't need to be expanded.
+            if !vinfo.used_in_rhs
+                && blocks.iter().all(|(_, spec)| !spec.msg_vars.contains(&var))
+                && n_used_in_bag[var] == 0
+            {
+                continue;
+            }
             val_vars.push(var);
+            vinfo.used_in_rhs = true;
         }
     }
 
@@ -917,7 +925,7 @@ pub(crate) fn tree_decompose_and_plan(
     }
 
     // Step 2: Sort bags topologically
-    let bags = topologically_sort_bags(bags);
+    let mut bags = topologically_sort_bags(bags);
     // dbg!(&bags);
 
     // Step 3: Count variable usage across bags
@@ -927,7 +935,7 @@ pub(crate) fn tree_decompose_and_plan(
     // Step 4: Plan each bag and create materialization blocks
     let mut blocks = Vec::new();
     let mut header = vec![];
-    for bag in bags.iter() {
+    for bag in bags.iter_mut() {
         let (bag_header, stages, mat_spec) = plan_single_bag(
             bag,
             &blocks,
