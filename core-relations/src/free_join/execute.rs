@@ -1573,7 +1573,7 @@ fn sort_plan_by_size(
                 .get(cover.to_index.atom)
                 .copied()
                 .unwrap_or_default(),
-            JoinStage::FusedIntersectMat { .. } => i64::MAX - 1,
+            JoinStage::FusedIntersectMat { .. } => 0,
         };
         (
             -refine,
