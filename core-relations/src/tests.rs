@@ -26,8 +26,23 @@ use crate::{
 #[global_allocator]
 static GLOBAL: mimalloc::MiMalloc = mimalloc::MiMalloc;
 
+/// Run a test closure both single-threaded and with 4 threads.
+fn run_serial_and_parallel(f: impl Fn() + Send + Sync) {
+    for num_threads in [1, 4] {
+        let pool = rayon::ThreadPoolBuilder::new()
+            .num_threads(num_threads)
+            .build()
+            .unwrap();
+        pool.install(&f);
+    }
+}
+
 #[test]
 fn basic_query() {
+    run_serial_and_parallel(basic_query_inner);
+}
+
+fn basic_query_inner() {
     let MathEgraph {
         num,
         add,
@@ -124,17 +139,17 @@ fn basic_query() {
 
 #[test]
 fn line_graph_1_fj_puresize() {
-    line_graph_1_test(PlanStrategy::PureSize);
+    run_serial_and_parallel(|| line_graph_1_test(PlanStrategy::PureSize));
 }
 
 #[test]
 fn line_graph_1_fj_mincover() {
-    line_graph_1_test(PlanStrategy::MinCover);
+    run_serial_and_parallel(|| line_graph_1_test(PlanStrategy::MinCover));
 }
 
 #[test]
 fn line_graph_1_gj() {
-    line_graph_1_test(PlanStrategy::Gj);
+    run_serial_and_parallel(|| line_graph_1_test(PlanStrategy::Gj));
 }
 
 fn line_graph_1_test(strat: PlanStrategy) {
@@ -196,17 +211,17 @@ fn line_graph_1_test(strat: PlanStrategy) {
 
 #[test]
 fn line_graph_2_fj_puresize() {
-    line_graph_2_test(PlanStrategy::PureSize);
+    run_serial_and_parallel(|| line_graph_2_test(PlanStrategy::PureSize));
 }
 
 #[test]
 fn line_graph_2_fj_mincover() {
-    line_graph_2_test(PlanStrategy::MinCover);
+    run_serial_and_parallel(|| line_graph_2_test(PlanStrategy::MinCover));
 }
 
 #[test]
 fn line_graph_2_gj() {
-    line_graph_2_test(PlanStrategy::Gj);
+    run_serial_and_parallel(|| line_graph_2_test(PlanStrategy::Gj));
 }
 
 fn line_graph_2_test(strat: PlanStrategy) {
@@ -356,21 +371,25 @@ fn intersection_test(strat: PlanStrategy) {
 
 #[test]
 fn intersection_test_fj_puresize() {
-    intersection_test(PlanStrategy::PureSize);
+    run_serial_and_parallel(|| intersection_test(PlanStrategy::PureSize));
 }
 
 #[test]
 fn intersection_test_fj_mincover() {
-    intersection_test(PlanStrategy::MinCover);
+    run_serial_and_parallel(|| intersection_test(PlanStrategy::MinCover));
 }
 
 #[test]
 fn intersection_test_gj() {
-    intersection_test(PlanStrategy::Gj);
+    run_serial_and_parallel(|| intersection_test(PlanStrategy::Gj));
 }
 
 #[test]
 fn minimal_ac() {
+    run_serial_and_parallel(minimal_ac_inner);
+}
+
+fn minimal_ac_inner() {
     let MathEgraph {
         add,
         id_counter,
@@ -478,20 +497,20 @@ fn minimal_ac() {
 
 #[test]
 fn ac_gj() {
-    ac_test(PlanStrategy::Gj);
+    run_serial_and_parallel(|| ac_test_inner(PlanStrategy::Gj));
 }
 
 #[test]
 fn ac_fj_mincover() {
-    ac_test(PlanStrategy::MinCover);
+    run_serial_and_parallel(|| ac_test_inner(PlanStrategy::MinCover));
 }
 
 #[test]
 fn ac_fj_puresize() {
-    ac_test(PlanStrategy::PureSize);
+    run_serial_and_parallel(|| ac_test_inner(PlanStrategy::PureSize));
 }
 
-fn ac_test(strat: PlanStrategy) {
+fn ac_test_inner(strat: PlanStrategy) {
     // This test is very involved. It reimplements major egglog features on top
     // of this library:
     // 1. rebuilding, including heuristics for incremental vs. nonincremental.
@@ -996,6 +1015,10 @@ fn incremental_rebuild(uf_size: usize, table_size: usize) -> bool {
 
 #[test]
 fn lookup_with_fallback_partial_success() {
+    run_serial_and_parallel(lookup_with_fallback_partial_success_inner);
+}
+
+fn lookup_with_fallback_partial_success_inner() {
     // Insert (f 1) (f 2), (g 1) (g 3) (g 4).
     // Run a query that iterates over g, binding x to 1, 3, 4.
     // Insert (h (lookup f x, with fallback assert-even))
@@ -1092,6 +1115,10 @@ fn lookup_with_fallback_partial_success() {
 
 #[test]
 fn call_external_with_fallback() {
+    run_serial_and_parallel(call_external_with_fallback_inner);
+}
+
+fn call_external_with_fallback_inner() {
     // Insert (f 1) (f 2) (f 3) (f 5).
     // Iterate over f, binding x to 1, 2, 3.
     // Have two external functions:
@@ -1174,6 +1201,10 @@ fn call_external_with_fallback() {
 
 #[test]
 fn early_stop() {
+    run_serial_and_parallel(early_stop_inner);
+}
+
+fn early_stop_inner() {
     let mut db = Database::default();
 
     // Create a table with 1M rows.

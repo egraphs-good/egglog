@@ -782,6 +782,10 @@ impl EGraph {
     ///
     /// If the given rules are malformed, this method can return an error.
     pub fn run_rules(&mut self, rules: &[RuleId]) -> Result<IterationReport> {
+        self.run_rules_inner(rules)
+    }
+
+    fn run_rules_inner(&mut self, rules: &[RuleId]) -> Result<IterationReport> {
         let ts = self.next_ts();
 
         let rule_set_report =
@@ -810,17 +814,7 @@ impl EGraph {
     }
 
     fn rebuild(&mut self) -> Result<()> {
-        fn do_parallel() -> bool {
-            #[cfg(test)]
-            {
-                use rand::Rng;
-                rand::rng().random_bool(0.5)
-            }
-            #[cfg(not(test))]
-            {
-                rayon::current_num_threads() > 1
-            }
-        }
+        let do_parallel = rayon::current_num_threads() > 1;
         if self.db.get_table(self.uf_table).rebuilder(&[]).is_some() {
             // The UF implementation supports "native"  rebuilding.
             let mut tables = Vec::with_capacity(self.funcs.next_id().index());
@@ -870,7 +864,7 @@ impl EGraph {
             }
             return Ok(());
         }
-        if do_parallel() {
+        if do_parallel {
             return self.rebuild_parallel();
         }
         let start = Instant::now();

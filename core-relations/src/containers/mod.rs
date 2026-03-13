@@ -578,17 +578,9 @@ impl<C: ContainerValue> ContainerEnv<C> {
 }
 
 fn incremental_rebuild(_uf_size: usize, _table_size: usize, _parallel: bool) -> bool {
-    #[cfg(debug_assertions)]
-    {
-        use rand::Rng;
-        rand::rng().random_bool(0.5)
-    }
-    #[cfg(not(debug_assertions))]
-    {
-        if _parallel {
-            _table_size > 1000 && _uf_size * 512 <= _table_size
-        } else {
-            _table_size > 1000 && _uf_size * 8 <= _table_size
-        }
+    if _parallel {
+        _table_size > 1000 && _uf_size * 512 <= _table_size
+    } else {
+        _table_size > 1000 && _uf_size * 8 <= _table_size
     }
 }
