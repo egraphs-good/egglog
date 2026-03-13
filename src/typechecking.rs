@@ -846,8 +846,6 @@ pub enum TypeError {
     Ungrounded(String, Span),
     #[error("{1}\nUndefined sort {0}")]
     UndefinedSort(String, Span),
-    #[error("{2}\nSort {0} definition is disallowed: {1}")]
-    DisallowedSort(String, String, Span),
     #[error("{1}\nUnbound function {0}")]
     UnboundFunction(String, Span),
     #[error("{1}\nprove-exists requires constructor function, but {0} is not a constructor")]

@@ -91,22 +91,6 @@ impl Presort for MapSort {
                 .get_sort_by_name(v)
                 .ok_or(TypeError::UndefinedSort(v.clone(), v_span.clone()))?;
 
-            // TODO: specialize the error message
-            if k.is_eq_container_sort() {
-                return Err(TypeError::DisallowedSort(
-                    name,
-                    "Maps nested with other EqSort containers are not allowed".into(),
-                    k_span.clone(),
-                ));
-            }
-            if v.is_container_sort() {
-                return Err(TypeError::DisallowedSort(
-                    name,
-                    "Maps nested with other containers are not allowed".into(),
-                    v_span.clone(),
-                ));
-            }
-
             let out = Self {
                 name,
                 key: k.clone(),
@@ -131,7 +115,10 @@ impl ContainerSort for MapSort {
     }
 
     fn is_eq_container_sort(&self) -> bool {
-        self.key.is_eq_sort() || self.value.is_eq_sort()
+        self.key.is_eq_sort()
+            || self.value.is_eq_sort()
+            || self.key.is_eq_container_sort()
+            || self.value.is_eq_container_sort()
     }
 
     fn inner_values(
@@ -153,8 +140,8 @@ impl ContainerSort for MapSort {
         let arc = self.clone().to_arcsort();
 
         add_primitive!(eg, "map-empty" = {self.clone(): MapSort} || -> @MapContainer (arc) { MapContainer {
-            do_rebuild_keys: self.ctx.key.is_eq_sort(),
-            do_rebuild_vals: self.ctx.value.is_eq_sort(),
+            do_rebuild_keys: self.ctx.key.is_eq_sort() || self.ctx.key.is_eq_container_sort(),
+            do_rebuild_vals: self.ctx.value.is_eq_sort() || self.ctx.value.is_eq_container_sort(),
             data: BTreeMap::new()
         } });
 

@@ -1,9 +1,10 @@
 (datatype Math (Num i64))
-(sort MathToMath (UnstableFn (Math) Math))
+
 (sort Maths (MultiSet Math))
 
 (let $xs (multiset-of (Num 1) (Num 2) (Num 3)))
 
+(check (= (multiset-of (Num 1) (Num 1)) (multiset-single (Num 1) 2)))
 ;; verify equal to other ordering
 (check (=
     (multiset-of (Num 3) (Num 2) (Num 1))
@@ -16,14 +17,41 @@
     $xs
 ))
 
-;; Unclear why check won't work if this is defined inline
-(let $inserted (multiset-insert $xs (Num 4)))
+(Num 4)
 ;; insert
 (check (=
-    (multiset-of (Num 1) (Num 2) (Num 3) (Num 4))
-    $inserted
+        (multiset-of (Num 1) (Num 2) (Num 3) (Num 4))
+        (multiset-insert $xs (Num 4))
+    ))
+;; subtract
+(check (=
+        (multiset-of (Num 1) (Num 2))
+        (multiset-subtract $xs (multiset-of (Num 3)))
+    ))
+
+;; if count is less than the other fail
+(fail (multiset-subtract $xs (multiset-of (Num 3) (Num 3))))
+;; if the other doesn't contain the item fail
+(fail (multiset-subtract $xs (multiset-of (Num 4))))
+
+;; multiset-pick-max
+(check (= (Num 3) (multiset-pick-max (multiset-of (Num 3) (Num 3) (Num 1)))))
+
+;; intersection
+
+
+(check (=
+        (multiset-of (Num 2) (Num 2) (Num 3))
+        (multiset-intersection (multiset-of (Num 1) (Num 2) (Num 2) (Num 3)) (multiset-of (Num 2) (Num 2) (Num 3) (Num 4)))
 ))
 
+
+;; Subtraction swapped
+
+(check (=
+        (multiset-of (Num 1) (Num 2))
+        (multiset-subtract-swapped (multiset-of (Num 3)) (multiset-of (Num 1) (Num 2) (Num 3)))
+    ))
 
 ;; contains and not contains
 (check (multiset-contains $xs (Num 1)))
@@ -31,40 +59,150 @@
 
 ;; remove last
 (check (=
-    (multiset-of (Num 1) (Num 3))
-    (multiset-remove $xs (Num 2))
-))
+        (multiset-of (Num 1) (Num 3))
+        (multiset-remove $xs (Num 2))
+    ))
 ;; remove one of
 (check (= (multiset-of (Num 1)) (multiset-remove (multiset-of (Num 1) (Num 1)) (Num 1))))
-
+;; remove not contained
+(fail (multiset-remove $xs (Num 4)))
 
 ;; length
 (check (= 3 (multiset-length $xs)))
 ;; length repeated
 (check (= 3 (multiset-length (multiset-of (Num 1) (Num 1) (Num 1)))))
 
+;; count
+(check (= 1 (multiset-count $xs (Num 1))))
+
 ;; pick
 (check (= (Num 1) (multiset-pick (multiset-of (Num 1)))))
 
 ;; map
+(push)
 (constructor square (Math) Math)
 (rewrite (square (Num x)) (Num (* x x)))
+(sort MathToMath (UnstableFn (Math) Math))
 
 (let $squared-xs (unstable-multiset-map (unstable-fn "square") $xs))
 (run 1)
 (check (=
-    (multiset-of (Num 1) (Num 4) (Num 9))
-    $squared-xs
-))
+        (multiset-of (Num 1) (Num 4) (Num 9))
+        $squared-xs
+    ))
+
+;; map to other type
+(push)
+(datatype Math2 (FromMath Math))
+(sort MathToMath2 (UnstableFn (Math) Math2))
+(sort Maths2Multiset (MultiSet Math2))
+(let $mapped-xs (unstable-multiset-map (unstable-fn "FromMath") $xs))
+(run 1)
+(check (=
+        (multiset-of (FromMath (Num 1)) (FromMath (Num 2)) (FromMath (Num 3)))
+        $mapped-xs
+    ))
+(pop)
+
 
 ;; sum
 (check (=
-    (multiset-sum (multiset-of (Num 1) (Num 2) (Num 3)) (multiset-of (Num 1) (Num 2) (Num 4)))
-    (multiset-of (Num 1) (Num 4) (Num 2) (Num 3) (Num 2) (Num 1))
-))
+        (multiset-sum (multiset-of (Num 1) (Num 2) (Num 3)) (multiset-of (Num 1) (Num 2) (Num 4)))
+        (multiset-of (Num 1) (Num 4) (Num 2) (Num 3) (Num 2) (Num 1))
+    ))
 
 ;; verify that sum computes length
 (check (=
-    (multiset-length (multiset-sum (multiset-of (Num 1) (Num 2) (Num 3)) (multiset-of (Num 1) (Num 2) (Num 4))))
-    6
-))
+        (multiset-length (multiset-sum (multiset-of (Num 1) (Num 2) (Num 3)) (multiset-of (Num 1) (Num 2) (Num 4))))
+        6
+    ))
+(pop)
+
+; flat-map
+(push)
+(function to-multiset (Math) Maths :no-merge)
+(set (to-multiset (Num 1)) (multiset-of (Num 1) (Num 1)))
+(sort MathsToMaths (UnstableFn (Math) Maths))
+(check (=
+        (unstable-multiset-flat-map (unstable-fn "to-multiset") (multiset-of (Num 1) (Num 2)))
+        (multiset-of (Num 1) (Num 1) (Num 2))
+    ))
+(pop)
+
+;; Verify multiset of multiset
+(push)
+(sort Mathss (MultiSet Maths))
+(let $xx (multiset-of (multiset-of (Num 1) (Num 2) (Num 3)) (multiset-of (Num 1) (Num 2) (Num 3))))
+(union (Num 1) (Num 2))
+(check (= $xx (multiset-of (multiset-of (Num 2) (Num 2) (Num 3)) (multiset-of (Num 2) (Num 2) (Num 3)))))
+
+(check (= (multiset-sum-multisets $xx)
+        (multiset-of (Num 2) (Num 2) (Num 2) (Num 2) (Num 3) (Num 3))))
+(pop)
+
+;; Verify unstable multiset fill index and counting
+(push)
+(union (Num 1) (Num 2))
+(constructor product (Maths) Math)
+(let $aa (Num 100))
+(let $zz (product $xs))
+
+(function ms-count (Maths Math) i64 :merge (+ old new))
+(sort MSIndexFn (UnstableFn (Maths Math) i64))
+; Fill index tables for products
+(rule
+    ((= outer (product inner)))
+    ((unstable-multiset-fill-index inner (unstable-fn "ms-count")))
+)
+(run 10)
+(check (= 2 (ms-count $xs (Num 1))))
+; Verify stays the same even if unioned and run again
+(union $zz $aa)
+(run 10)
+(check (= 2 (ms-count $xs (Num 1))))
+; Verify updates properly after unioning child
+(union (Num 1) (Num 3))
+(check (= 3 (ms-count $xs (Num 1))))
+
+;; check clear index
+(unstable-multiset-clear-index  $xs (unstable-fn "ms-count"))
+(fail (ms-count $xs (Num 1)))
+
+(pop)
+
+;; union values should union all items inside
+(push)
+(multiset-union-values $xs)
+(check (= (Num 1) (Num 2)))
+(pop)
+
+
+;; fold
+(push)
+(constructor add (Math Math) Math)
+(sort MathAddFn (UnstableFn (Math Math) Math))
+;; not sure why we have to add this first to the e-graph to =?
+(unstable-multiset-reduce (unstable-fn "add") (Num 0) $xs)
+(check (=
+        (unstable-multiset-reduce (unstable-fn "add") (Num 0) $xs)
+        (add (add (Num 1) (Num 2)) (Num 3))
+    ))
+(check (=
+        (unstable-multiset-reduce (unstable-fn "add") (Num 0) (multiset-of))
+        (Num 0)
+    ))
+(pop)
+
+;; filter
+(push)
+(function is-even (Math) Unit :no-merge)
+(set (is-even (Num 2)) ())
+(sort IsEvenFn (UnstableFn (Math) Unit))
+(check (=
+    (unstable-multiset-filter (unstable-fn "is-even") $xs)
+    (multiset-of (Num 2))))
+(check (=
+    (unstable-multiset-filter-not (unstable-fn "is-even") $xs)
+    (multiset-of (Num 1) (Num 3))))
+
+(pop)
