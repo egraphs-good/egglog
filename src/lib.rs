@@ -524,7 +524,7 @@ impl EGraph {
         #[cfg(not(target_family = "wasm"))]
         {
             let pool = self.pool.clone();
-            return pool.install(|| f(self));
+            pool.install(|| f(self))
         }
         #[cfg(target_family = "wasm")]
         f(self)
