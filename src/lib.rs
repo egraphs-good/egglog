@@ -515,13 +515,18 @@ impl EGraph {
         1
     }
 
-    /// Run `f` on the configured thread pool if multi-threaded, or inline otherwise.
+    /// Run `f` on the configured thread pool.
+    ///
+    /// This ensures `rayon::current_num_threads()` inside the closure reflects
+    /// this EGraph's pool, so parallel heuristics in core-relations behave
+    /// correctly.
     fn with_pool<R: Send>(&mut self, f: impl FnOnce(&mut Self) -> R + Send) -> R {
         #[cfg(not(target_family = "wasm"))]
-        if self.pool.current_num_threads() > 1 {
+        {
             let pool = self.pool.clone();
             return pool.install(|| f(self));
         }
+        #[cfg(target_family = "wasm")]
         f(self)
     }
 
