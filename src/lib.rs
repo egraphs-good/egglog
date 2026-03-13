@@ -987,8 +987,19 @@ impl EGraph {
 
     /// Read the contents of the given function.
     /// The callback f is called with each row and its subsumption status.
-    pub fn function_for_each(&self, func: &Function, f: impl FnMut(FunctionRow<'_>)) {
+    ///
+    /// Raises an error if the function does not exist.
+    pub fn function_for_each(
+        &self,
+        func_name: &str,
+        f: impl FnMut(FunctionRow<'_>),
+    ) -> Result<(), Error> {
+        let func = self
+            .functions
+            .get(func_name)
+            .ok_or_else(|| TypeError::UnboundFunction(func_name.to_string(), span!()))?;
         self.backend.for_each(func.backend_id, f);
+        Ok(())
     }
 
     /// Evaluates an expression, returns the sort of the expression and the evaluation result.
