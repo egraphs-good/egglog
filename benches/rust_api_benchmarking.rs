@@ -79,7 +79,7 @@ fn rust_rule_match_overhead(bencher: divan::Bencher, case: RustRuleBenchCase) {
     ],
     sample_count = 10
 )]
-fn rust_rule_match_overhead_plus_serialize(bencher: divan::Bencher, case: RustRuleBenchCase) {
+fn rust_rule_match_with_serialize(bencher: divan::Bencher, case: RustRuleBenchCase) {
     use egglog::prelude::run_ruleset;
 
     bencher
@@ -143,7 +143,7 @@ fn fib_setup() -> RustRuleBenchInput {
     ],
     sample_count = 10
 )]
-fn fib(bencher: divan::Bencher, case: RustRuleBenchCase) {
+fn rust_rule_fib(bencher: divan::Bencher, case: RustRuleBenchCase) {
     use egglog::prelude::run_ruleset;
 
     bencher
