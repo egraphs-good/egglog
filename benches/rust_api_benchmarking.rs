@@ -1,12 +1,15 @@
+mod common;
+
 #[derive(Clone, Copy)]
 struct RustRuleBenchCase {
-    n_facts: usize,
-    n_funcs: usize,
+    n_facts_input: Option<usize>,
+    n_rule_run_estimated: Option<usize>,
 }
 
 impl std::fmt::Display for RustRuleBenchCase {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        write!(f, "rust_rule_facts{}_funcs{}", self.n_facts, self.n_funcs)
+        // write!(f, "rust_rule_facts{}", self.n_facts_input.unwrap_or(0))
+        write!(f, "rule_run_{}", self.n_rule_run_estimated.unwrap_or(0))
     }
 }
 
@@ -15,26 +18,19 @@ struct RustRuleBenchInput {
     ruleset: String,
 }
 
-fn rust_rule_setup(case: RustRuleBenchCase) -> RustRuleBenchInput {
+// match only rust rule test, to isolate the overhead of matching a rust rule without any actual work in the rule body
+fn match_only_rust_rule_setup(case: RustRuleBenchCase) -> RustRuleBenchInput {
     use egglog::prelude::*;
 
-    static CONFIGURE_RAYON: std::sync::Once = std::sync::Once::new();
-    CONFIGURE_RAYON.call_once(|| {
-        // `build_global` can only be called once; if another benchmark already initialized the
-        // global pool we just keep that configuration.
-        let _ = rayon::ThreadPoolBuilder::new()
-            .num_threads(1)
-            .build_global();
-    });
+    common::configure_rayon_once();
 
     let mut program = String::new();
     program.push_str("(relation R (i64))\n");
 
-    for i in 0..case.n_funcs {
-        use std::fmt::Write;
-        let _ = writeln!(&mut program, "(function dummy_f{} (i64) i64 :no-merge)", i);
-    }
-    for i in 0..case.n_facts {
+    for i in 0..case
+        .n_facts_input
+        .expect("n_facts_input must be set for match_only_rust_rule_setup")
+    {
         use std::fmt::Write;
         let _ = writeln!(&mut program, "(R {})", i as i64);
     }
@@ -63,9 +59,7 @@ fn rust_rule_setup(case: RustRuleBenchCase) -> RustRuleBenchInput {
 
 #[divan::bench(
     args = [
-        RustRuleBenchCase { n_facts: 1_000, n_funcs: 50 },
-        RustRuleBenchCase { n_facts: 10_000, n_funcs: 50 },
-        RustRuleBenchCase { n_facts: 10_000, n_funcs: 200 },
+        RustRuleBenchCase { n_facts_input: Some(50_000), n_rule_run_estimated: Some(1) },
     ],
     sample_count = 10
 )]
@@ -73,7 +67,7 @@ fn rust_rule_match_overhead(bencher: divan::Bencher, case: RustRuleBenchCase) {
     use egglog::prelude::run_ruleset;
 
     bencher
-        .with_inputs(|| rust_rule_setup(case))
+        .with_inputs(|| match_only_rust_rule_setup(case))
         .bench_local_refs(|input| {
             run_ruleset(&mut input.egraph, &input.ruleset).unwrap();
         });
@@ -81,9 +75,7 @@ fn rust_rule_match_overhead(bencher: divan::Bencher, case: RustRuleBenchCase) {
 
 #[divan::bench(
     args = [
-        RustRuleBenchCase { n_facts: 1_000, n_funcs: 50 },
-        RustRuleBenchCase { n_facts: 10_000, n_funcs: 50 },
-        RustRuleBenchCase { n_facts: 10_000, n_funcs: 200 },
+        RustRuleBenchCase { n_facts_input: Some(50_000), n_rule_run_estimated: Some(1) },
     ],
     sample_count = 10
 )]
@@ -91,7 +83,7 @@ fn rust_rule_match_overhead_plus_serialize(bencher: divan::Bencher, case: RustRu
     use egglog::prelude::run_ruleset;
 
     bencher
-        .with_inputs(|| rust_rule_setup(case))
+        .with_inputs(|| match_only_rust_rule_setup(case))
         .bench_local_refs(|input| {
             run_ruleset(&mut input.egraph, &input.ruleset).unwrap();
             input.egraph.serialize(egglog::SerializeConfig::default());
@@ -100,4 +92,68 @@ fn rust_rule_match_overhead_plus_serialize(bencher: divan::Bencher, case: RustRu
 
 fn main() {
     divan::main();
+}
+
+fn fib_setup() -> RustRuleBenchInput {
+    use egglog::prelude::*;
+    common::configure_rayon_once();
+
+    let mut program = String::new();
+    program.push_str("(function fib (i64) i64 :no-merge)");
+    program.push_str("(set (fib 0) 0)\n");
+    program.push_str("(set (fib 1) 1)\n");
+    let mut egraph = egglog::EGraph::default();
+
+    egraph.parse_and_run_program(None, &program).unwrap();
+    let ruleset = "fib_ruleset";
+    add_ruleset(&mut egraph, ruleset).unwrap();
+    rust_rule(
+        &mut egraph,
+        "fib_rule",
+        ruleset,
+        vars![x: i64, f0: i64, f1: i64],
+        facts![
+            (= f0 (fib x))
+            (= f1 (fib (+ x 1)))
+        ],
+        move |ctx, values| {
+            let [x, f0, f1] = values else { unreachable!() };
+            let x = ctx.value_to_base::<i64>(*x);
+            let f0 = ctx.value_to_base::<i64>(*f0);
+            let f1 = ctx.value_to_base::<i64>(*f1);
+
+            let y = ctx.base_to_value::<i64>(x + 2);
+            let f2 = ctx.base_to_value::<i64>(f0 + f1);
+            ctx.insert("fib", [y, f2].into_iter());
+
+            Some(())
+        },
+    )
+    .expect("setupt rule failed");
+
+    RustRuleBenchInput {
+        egraph,
+        ruleset: ruleset.to_owned(),
+    }
+}
+
+#[divan::bench(
+    args = [
+        RustRuleBenchCase { n_facts_input: None, n_rule_run_estimated: Some(1_000)},
+    ],
+    sample_count = 10
+)]
+fn fib(bencher: divan::Bencher, case: RustRuleBenchCase) {
+    use egglog::prelude::run_ruleset;
+
+    bencher
+        .with_inputs(|| fib_setup())
+        .bench_local_refs(|input| {
+            for _ in 0..case.n_rule_run_estimated.unwrap() {
+                run_ruleset(&mut input.egraph, &input.ruleset).unwrap();
+            }
+            input.egraph.serialize(egglog::SerializeConfig::default());
+            // let mut f = std::fs::File::create("./fib.dot").unwrap();
+            // f.write_all(output.egraph.to_dot().as_bytes()).unwrap();
+        });
 }

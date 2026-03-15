@@ -103,7 +103,7 @@ pub fn bench_case(case: &BenchCase) {
     run_example(&case.filename, &case.program, case.proof_testing);
 }
 
-fn configure_rayon_once() {
+pub fn configure_rayon_once() {
     CONFIGURE_RAYON.call_once(|| {
         rayon::ThreadPoolBuilder::new()
             .num_threads(1)
