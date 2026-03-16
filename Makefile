@@ -28,7 +28,7 @@ nits:
 fixnits:
 	@rustup component add rustfmt
 	cargo fmt
-	@rustup component add rustfmt
+	@rustup component add clippy
 	cargo clippy --fix --tests --workspace --allow-dirty
 
 docs:
