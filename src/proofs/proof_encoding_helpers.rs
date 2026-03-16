@@ -108,11 +108,7 @@ impl ProofInstrumentor<'_> {
         if let Some(name) = self.egraph.proof_state.uf_function.get(sort) {
             name.clone()
         } else {
-            let fresh_name = self
-                .egraph
-                .parser
-                .symbol_gen
-                .fresh(&format!("UF_{sort}f"));
+            let fresh_name = self.egraph.parser.symbol_gen.fresh(&format!("UF_{sort}f"));
             self.egraph
                 .proof_state
                 .uf_function
