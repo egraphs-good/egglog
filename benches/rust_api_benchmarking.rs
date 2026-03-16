@@ -32,6 +32,7 @@ impl std::fmt::Display for RustRuleTableActionBenchCase {
 #[derive(Clone, Copy)]
 struct RustRuleInsertLoopBenchCase {
     n_ops: usize,
+    n_dummy_funcs: usize,
 }
 
 impl std::fmt::Display for RustRuleInsertLoopBenchCase {
@@ -50,6 +51,10 @@ fn insert_loop_setup(case: RustRuleInsertLoopBenchCase) -> RustRuleBenchInput {
     let mut program = String::new();
     program.push_str("(relation R (i64))\n");
     program.push_str("(function f (i64) i64 :no-merge)\n");
+    for i in 0..case.n_dummy_funcs {
+        use std::fmt::Write;
+        let _ = writeln!(&mut program, "(function dummy_f{} (i64) i64 :no-merge)", i);
+    }
     program.push_str("(R 0)\n");
 
     let mut egraph = egglog::EGraph::default();
@@ -102,14 +107,19 @@ fn tableaction_hot_path_setup(case: RustRuleTableActionBenchCase) -> RustRuleBen
     let mut egraph = egglog::EGraph::default();
     egraph.parse_and_run_program(None, &program).unwrap();
 
-    let ruleset = "rust_rule_tableaction_hot_path";
-    add_ruleset(&mut egraph, ruleset).unwrap();
+    // We split the workload into two rulesets to avoid the "write then read in the
+    // same rust_rule callback" visibility pitfall:
+    // - fill: insert f(x) = x+1 for all R(x)
+    // - read: lookup f(x) and do a cheap union
+    let fill_ruleset = "rust_rule_tableaction_hot_path_fill";
+    let read_ruleset = "rust_rule_tableaction_hot_path_read";
+    add_ruleset(&mut egraph, fill_ruleset).unwrap();
+    add_ruleset(&mut egraph, read_ruleset).unwrap();
 
-    // a rule rewrite R x to f(x) = x + 1
     rust_rule(
         &mut egraph,
-        "rust_rule_tableaction_hot_path",
-        ruleset,
+        "rust_rule_tableaction_hot_path_fill",
+        fill_ruleset,
         vars![x: i64],
         facts![(R x)],
         move |ctx, values| {
@@ -118,19 +128,39 @@ fn tableaction_hot_path_setup(case: RustRuleTableActionBenchCase) -> RustRuleBen
             let k = ctx.base_to_value::<i64>(x);
             let y = ctx.base_to_value::<i64>(x + 1);
 
-            // A minimal “hot path” that stresses the Rust API table ops.
+            // Populate f(x)=x+1. (No lookup here; it may not be visible within the same callback.)
             ctx.insert("f", [k, y].into_iter());
-            let out = ctx.lookup("f", &[k]).expect("just inserted");
-            ctx.union(out, y);
-
             Some(())
         },
     )
     .unwrap();
 
+    rust_rule(
+        &mut egraph,
+        "rust_rule_tableaction_hot_path_read",
+        read_ruleset,
+        vars![x: i64],
+        facts![(R x)],
+        move |ctx, values| {
+            let [x] = values else { unreachable!() };
+            let x = ctx.value_to_base::<i64>(*x);
+            let k = ctx.base_to_value::<i64>(x);
+            let y = ctx.base_to_value::<i64>(x + 1);
+
+            // Stress the Rust API table ops in the action:
+            // lookup should succeed because we pre-filled the table.
+            let out = ctx.lookup("f", &[k]).expect("f(x) should exist");
+            ctx.union(out, y);
+            Some(())
+        },
+    )
+    .unwrap();
+
+    run_ruleset(&mut egraph, fill_ruleset).unwrap();
+
     RustRuleBenchInput {
         egraph,
-        ruleset: ruleset.to_owned(),
+        ruleset: read_ruleset.to_owned(),
     }
 }
 
@@ -157,7 +187,7 @@ fn rust_rule_tableaction_hot_path(bencher: divan::Bencher, case: RustRuleTableAc
 
 #[divan::bench(
     args = [
-        RustRuleInsertLoopBenchCase { n_ops: 2000_000},
+        RustRuleInsertLoopBenchCase { n_ops: 1_000, n_dummy_funcs: 200 },
     ],
     sample_count = 10
 )]
