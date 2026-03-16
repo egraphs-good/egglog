@@ -2,7 +2,6 @@ mod common;
 
 #[derive(Clone, Copy)]
 struct RustRuleBenchCase {
-    n_facts_input: Option<usize>,
     n_rule_run_estimated: Option<usize>,
 }
 
@@ -33,7 +32,6 @@ impl std::fmt::Display for RustRuleTableActionBenchCase {
 #[derive(Clone, Copy)]
 struct RustRuleInsertLoopBenchCase {
     n_ops: usize,
-    n_dummy_funcs: usize,
 }
 
 impl std::fmt::Display for RustRuleInsertLoopBenchCase {
@@ -42,46 +40,7 @@ impl std::fmt::Display for RustRuleInsertLoopBenchCase {
     }
 }
 
-// match only rust rule test, to isolate the overhead of matching a rust rule without any actual work in the rule body
-fn match_only_rust_rule_setup(case: RustRuleBenchCase) -> RustRuleBenchInput {
-    use egglog::prelude::*;
-
-    common::configure_rayon_once();
-
-    let mut program = String::new();
-    program.push_str("(relation R (i64))\n");
-
-    for i in 0..case
-        .n_facts_input
-        .expect("n_facts_input must be set for match_only_rust_rule_setup")
-    {
-        use std::fmt::Write;
-        let _ = writeln!(&mut program, "(R {})", i as i64);
-    }
-
-    let mut egraph = egglog::EGraph::default();
-    egraph.parse_and_run_program(None, &program).unwrap();
-
-    let ruleset = "rust_rule_bench";
-    add_ruleset(&mut egraph, ruleset).unwrap();
-
-    rust_rule(
-        &mut egraph,
-        "rust_rule_bench",
-        ruleset,
-        vars![x: i64],
-        facts![(R x)],
-        |_ctx, _values| Some(()),
-    )
-    .unwrap();
-
-    RustRuleBenchInput {
-        egraph,
-        ruleset: ruleset.to_owned(),
-    }
-}
-
-// Ultra-minimal stress test for the Rust API "tableaction" hot path:
+// stress test for the Rust API "tableaction" hot path:
 // a single match triggers a tight loop of `ctx.insert(...)` calls.
 fn insert_loop_setup(case: RustRuleInsertLoopBenchCase) -> RustRuleBenchInput {
     use egglog::prelude::*;
@@ -91,14 +50,6 @@ fn insert_loop_setup(case: RustRuleInsertLoopBenchCase) -> RustRuleBenchInput {
     let mut program = String::new();
     program.push_str("(relation R (i64))\n");
     program.push_str("(function f (i64) i64 :no-merge)\n");
-    for i in 0..case.n_dummy_funcs {
-        use std::fmt::Write;
-        let _ = writeln!(
-            &mut program,
-            "(function dummy_f{} (i64) i64 :no-merge)",
-            i
-        );
-    }
     program.push_str("(R 0)\n");
 
     let mut egraph = egglog::EGraph::default();
@@ -113,6 +64,7 @@ fn insert_loop_setup(case: RustRuleInsertLoopBenchCase) -> RustRuleBenchInput {
         ruleset,
         vars![x: i64],
         facts![(R x)],
+        // insert f(x) = x + 1, f(x+1) = x + 2, ..., f(x+n_ops-1) = x + n_ops in one rule run
         move |ctx, _values| {
             for i in 0..case.n_ops {
                 let k = ctx.base_to_value::<i64>(i as i64);
@@ -130,10 +82,6 @@ fn insert_loop_setup(case: RustRuleInsertLoopBenchCase) -> RustRuleBenchInput {
     }
 }
 
-// Mimics eggplant's `math-microbenchmark` hotspot pattern:
-// many matches, and each match does several `RustRuleContext` table ops
-// (insert + lookup + union). Also inflates the number of tables to make any
-// per-match table-action cloning/lookup overhead visible.
 fn tableaction_hot_path_setup(case: RustRuleTableActionBenchCase) -> RustRuleBenchInput {
     use egglog::prelude::*;
 
@@ -144,11 +92,7 @@ fn tableaction_hot_path_setup(case: RustRuleTableActionBenchCase) -> RustRuleBen
     program.push_str("(function f (i64) i64 :no-merge)\n");
     for i in 0..case.n_dummy_funcs {
         use std::fmt::Write;
-        let _ = writeln!(
-            &mut program,
-            "(function dummy_f{} (i64) i64 :no-merge)",
-            i
-        );
+        let _ = writeln!(&mut program, "(function dummy_f{} (i64) i64 :no-merge)", i);
     }
     for i in 0..case.n_facts_input {
         use std::fmt::Write;
@@ -161,6 +105,7 @@ fn tableaction_hot_path_setup(case: RustRuleTableActionBenchCase) -> RustRuleBen
     let ruleset = "rust_rule_tableaction_hot_path";
     add_ruleset(&mut egraph, ruleset).unwrap();
 
+    // a rule rewrite R x to f(x) = x + 1
     rust_rule(
         &mut egraph,
         "rust_rule_tableaction_hot_path",
@@ -189,39 +134,11 @@ fn tableaction_hot_path_setup(case: RustRuleTableActionBenchCase) -> RustRuleBen
     }
 }
 
-#[divan::bench(
-    args = [
-        RustRuleBenchCase { n_facts_input: Some(50_000), n_rule_run_estimated: Some(1) },
-    ],
-    sample_count = 10
-)]
-fn rust_rule_match_overhead(bencher: divan::Bencher, case: RustRuleBenchCase) {
-    use egglog::prelude::run_ruleset;
-
-    bencher
-        .with_inputs(|| match_only_rust_rule_setup(case))
-        .bench_local_refs(|input| {
-            run_ruleset(&mut input.egraph, &input.ruleset).unwrap();
-        });
-}
-
-#[divan::bench(
-    args = [
-        RustRuleBenchCase { n_facts_input: Some(50_000), n_rule_run_estimated: Some(1) },
-    ],
-    sample_count = 10
-)]
-fn rust_rule_match_with_serialize(bencher: divan::Bencher, case: RustRuleBenchCase) {
-    use egglog::prelude::run_ruleset;
-
-    bencher
-        .with_inputs(|| match_only_rust_rule_setup(case))
-        .bench_local_refs(|input| {
-            run_ruleset(&mut input.egraph, &input.ruleset).unwrap();
-            input.egraph.serialize(egglog::SerializeConfig::default());
-        });
-}
-
+// Mimics eggplant's `math-microbenchmark` hotspot pattern:
+// many matches, and each match does several `RustRuleContext` table ops
+// (insert + lookup + union). Also inflates the number of tables to make any
+// per-match table-action cloning/lookup overhead visible.
+// which is more representative of real-world Rust rule usage patterns than insert_loop_setup.
 #[divan::bench(
     args = [
         RustRuleTableActionBenchCase { n_facts_input: 50_000, n_dummy_funcs: 200 },
@@ -240,27 +157,7 @@ fn rust_rule_tableaction_hot_path(bencher: divan::Bencher, case: RustRuleTableAc
 
 #[divan::bench(
     args = [
-        RustRuleTableActionBenchCase { n_facts_input: 50_000, n_dummy_funcs: 200 },
-    ],
-    sample_count = 10
-)]
-fn rust_rule_tableaction_hot_path_with_serialize(
-    bencher: divan::Bencher,
-    case: RustRuleTableActionBenchCase,
-) {
-    use egglog::prelude::run_ruleset;
-
-    bencher
-        .with_inputs(|| tableaction_hot_path_setup(case))
-        .bench_local_refs(|input| {
-            run_ruleset(&mut input.egraph, &input.ruleset).unwrap();
-            input.egraph.serialize(egglog::SerializeConfig::default());
-        });
-}
-
-#[divan::bench(
-    args = [
-        RustRuleInsertLoopBenchCase { n_ops: 1_000, n_dummy_funcs: 200 },
+        RustRuleInsertLoopBenchCase { n_ops: 2000_000},
     ],
     sample_count = 10
 )]
@@ -321,9 +218,12 @@ fn fib_setup() -> RustRuleBenchInput {
     }
 }
 
+// basic sanity check for the Rust rule API, and a microbenchmark for the
+// overhead of running a Rust rule with a non-trivial match condition
+// (many matches, but the rule body does almost no work).
 #[divan::bench(
     args = [
-        RustRuleBenchCase { n_facts_input: None, n_rule_run_estimated: Some(1_000)},
+        RustRuleBenchCase {  n_rule_run_estimated: Some(1_000)},
     ],
     sample_count = 10
 )]
