@@ -30,6 +30,18 @@ impl std::fmt::Display for RustRuleTableActionBenchCase {
     }
 }
 
+#[derive(Clone, Copy)]
+struct RustRuleInsertLoopBenchCase {
+    n_ops: usize,
+    n_dummy_funcs: usize,
+}
+
+impl std::fmt::Display for RustRuleInsertLoopBenchCase {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        write!(f, "ops{}_funcs{}", self.n_ops, self.n_dummy_funcs)
+    }
+}
+
 // match only rust rule test, to isolate the overhead of matching a rust rule without any actual work in the rule body
 fn match_only_rust_rule_setup(case: RustRuleBenchCase) -> RustRuleBenchInput {
     use egglog::prelude::*;
@@ -60,6 +72,55 @@ fn match_only_rust_rule_setup(case: RustRuleBenchCase) -> RustRuleBenchInput {
         vars![x: i64],
         facts![(R x)],
         |_ctx, _values| Some(()),
+    )
+    .unwrap();
+
+    RustRuleBenchInput {
+        egraph,
+        ruleset: ruleset.to_owned(),
+    }
+}
+
+// Ultra-minimal stress test for the Rust API "tableaction" hot path:
+// a single match triggers a tight loop of `ctx.insert(...)` calls.
+fn insert_loop_setup(case: RustRuleInsertLoopBenchCase) -> RustRuleBenchInput {
+    use egglog::prelude::*;
+
+    common::configure_rayon_once();
+
+    let mut program = String::new();
+    program.push_str("(relation R (i64))\n");
+    program.push_str("(function f (i64) i64 :no-merge)\n");
+    for i in 0..case.n_dummy_funcs {
+        use std::fmt::Write;
+        let _ = writeln!(
+            &mut program,
+            "(function dummy_f{} (i64) i64 :no-merge)",
+            i
+        );
+    }
+    program.push_str("(R 0)\n");
+
+    let mut egraph = egglog::EGraph::default();
+    egraph.parse_and_run_program(None, &program).unwrap();
+
+    let ruleset = "rust_rule_insert_loop";
+    add_ruleset(&mut egraph, ruleset).unwrap();
+
+    rust_rule(
+        &mut egraph,
+        "rust_rule_insert_loop",
+        ruleset,
+        vars![x: i64],
+        facts![(R x)],
+        move |ctx, _values| {
+            for i in 0..case.n_ops {
+                let k = ctx.base_to_value::<i64>(i as i64);
+                let y = ctx.base_to_value::<i64>(i as i64 + 1);
+                ctx.insert("f", [k, y].into_iter());
+            }
+            Some(())
+        },
     )
     .unwrap();
 
@@ -194,6 +255,22 @@ fn rust_rule_tableaction_hot_path_with_serialize(
         .bench_local_refs(|input| {
             run_ruleset(&mut input.egraph, &input.ruleset).unwrap();
             input.egraph.serialize(egglog::SerializeConfig::default());
+        });
+}
+
+#[divan::bench(
+    args = [
+        RustRuleInsertLoopBenchCase { n_ops: 1_000, n_dummy_funcs: 200 },
+    ],
+    sample_count = 10
+)]
+fn rust_rule_insert_loop(bencher: divan::Bencher, case: RustRuleInsertLoopBenchCase) {
+    use egglog::prelude::run_ruleset;
+
+    bencher
+        .with_inputs(|| insert_loop_setup(case))
+        .bench_local_refs(|input| {
+            run_ruleset(&mut input.egraph, &input.ruleset).unwrap();
         });
 }
 
