@@ -7,6 +7,9 @@ This makes proof production easier, since all equality reasoning is explicit and
   can be instrumented with proof tracking.
 The term encoding adds an explicit union-find structure per sort, and maintains it via
   rules that run during scheduled maintenance.
+To speed up rebuild queries, each sort now uses two UF tables:
+  a constructor UF table (`UF_<Sort>`) that stores raw parent edges, and a function UF table
+  (`UF_<Sort>f`) that stores the current parent for each term as an index.
 For efficiency, every constructor becomes two tables:
   a term table that stores the actual terms, and a view table storing representative terms along with their e-class (stored as the leader term).
 The term encoding enables proof tracking, done at the
@@ -38,12 +41,14 @@ Lowering the program with the term encoding expands to a bunch of new egglog, wh
 ```text
 (ruleset parent)
 (ruleset single_parent)
+(ruleset uf_function_index)
 (ruleset rebuilding)
 (ruleset rebuilding_cleanup)
 (ruleset delete_subsume_ruleset)
 ```
 
 *The new rulesets* orchestrate new rules for per-sort union-find tables (`parent` and `single_parent`),
+building a fast function index over UF (`uf_function_index`),
 rebuild-time congruence (`rebuilding` + `rebuilding_cleanup`), and deferred deletions/subsumptions (`delete_subsume_ruleset`).
 
 ```text
@@ -52,6 +57,7 @@ rebuild-time congruence (`rebuilding` + `rebuilding_cleanup`), and deferred dele
        rebuilding_cleanup ;; cleanup merged rows
        (saturate single_parent) ;; ensure each term points to single parent
        (saturate parent) ;; transitively close parent links
+       (saturate uf_function_index) ;; mirror UF constructor rows into UF function index
        rebuilding) ;; find new equalities via congruence
     delete_subsume_ruleset) ;; process deletions/subsumptions
 ```
@@ -63,6 +69,7 @@ rebuild-time congruence (`rebuilding` + `rebuilding_cleanup`), and deferred dele
 (sort Math)
 (sort uf)
 (constructor UF_Math (Math Math) uf)
+(function UF_Mathf (Math) Math :merge new)
 (rule ((UF_Math a b)
       (UF_Math b c)
       (!= b c))
@@ -76,24 +83,32 @@ rebuild-time congruence (`rebuilding` + `rebuilding_cleanup`), and deferred dele
      ((delete (UF_Math a b))
       (UF_Math b c))
        :ruleset single_parent :name "singleparentuf_update")
+(rule ((UF_Math a b))
+      ((set (UF_Mathf a) b))
+       :ruleset uf_function_index :name "uf_function_index_update")
 ```
 
-*The union-find* tables for each sort store the equivalence 
+*The union-find* tables for each sort store the equivalence
   classes of terms of that sort.
-A couple rules ensure the union-find is kept up to date as 
-  equalities are added.
+`UF_<Sort>` remains the source of truth for UF maintenance updates,
+  while `UF_<Sort>f` is a function-backed index used by rebuild rules.
+A couple rules ensure the constructor UF is kept up to date as
+  equalities are added, and the indexing ruleset mirrors those rows
+  into the function UF.
 We use the `ordering-max` and `ordering-min` egglog primitives
   to define an arbitrary ordering on terms based on insertion order,
   so that we can deterministically choose which term becomes the parent
   in the union-find structure.
 
 **Important invariant:** every representative term must have a self-loop
-  entry in the union-find table (e.g., `(UF_Math v v)`).
+  entry in the constructor union-find table (e.g., `(UF_Math v v)`).
 This is because the rebuild rules query the union-find for every
   eq-sort column simultaneously, so a missing entry for any column
   prevents the rule from firing even when other columns have changed.
 Self-loops are added in `add_term_and_view` whenever a constructor
   value is created.
+The `uf_function_index` ruleset then copies those rows into
+  `UF_<Sort>f`, so representatives also satisfy `(= (UF_<Sort>f v) v)`.
 We may want to remove this invariant in the future if we move
   to a different encoding, saving some space and time.
 
@@ -122,7 +137,7 @@ The view tables are kept up to date during rebuilding.
       ((UF_Math (ordering-max new old) (ordering-min new old)))
        :ruleset rebuilding :name "congruence_rule")
 (rule ((AddView c0 c1 c2)
-       (UF_Math c2 c2_leader)
+       (= c2_leader (UF_Mathf c2))
        (guard
          (or (bool-!= c2 c2_leader))))
       ((AddView c0 c1 c2_leader)
@@ -135,6 +150,9 @@ The congruence rule adds equalities to the union-find table when two constructor
   have equal arguments.
 The rebuild rule updates view tables so that views
   point to representative terms for child e-classes.
+Rebuild rules read representatives from `UF_<Sort>f` (function lookup)
+  rather than joining directly on `UF_<Sort>` (constructor rows),
+  which avoids expensive UF constructor joins during rebuilding.
 
 ```text
 (function v2 () Math :no-merge)
