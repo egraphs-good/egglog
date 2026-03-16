@@ -1,3 +1,7 @@
+use egglog_bridge::UnionAction;
+use std::any::TypeId;
+use std::iter::zip;
+
 use super::*;
 
 #[derive(Clone, Debug, PartialEq, Eq, Hash)]
@@ -49,6 +53,9 @@ impl Presort for VecSort {
             "vec-get",
             "vec-set",
             "vec-remove",
+            "vec-union",
+            "vec-range",
+            "unstable-vec-map",
         ]
     }
 
@@ -61,14 +68,6 @@ impl Presort for VecSort {
             let e = typeinfo
                 .get_sort_by_name(e)
                 .ok_or(TypeError::UndefinedSort(e.clone(), span.clone()))?;
-
-            if e.is_eq_container_sort() {
-                return Err(TypeError::DisallowedSort(
-                    name,
-                    "Vec nested with other EqSort containers are not allowed".into(),
-                    span.clone(),
-                ));
-            }
 
             let out = Self {
                 name,
@@ -93,7 +92,7 @@ impl ContainerSort for VecSort {
     }
 
     fn is_eq_container_sort(&self) -> bool {
-        self.element.is_eq_sort()
+        self.element.is_eq_sort() || self.element.is_eq_container_sort()
     }
 
     fn inner_values(
@@ -112,18 +111,18 @@ impl ContainerSort for VecSort {
     }
 
     fn register_primitives(&self, eg: &mut EGraph) {
-        let arc = self.clone().to_arcsort();
+        let arc: Arc<dyn Sort> = self.clone().to_arcsort();
 
         add_primitive!(eg, "vec-empty"  = {self.clone(): VecSort} |                                | -> @VecContainer (arc) { VecContainer {
-            do_rebuild: self.ctx.element.is_eq_sort(),
+            do_rebuild: self.ctx.is_eq_container_sort(),
             data: Vec::new()
         } });
         add_primitive!(eg, "vec-of"     = {self.clone(): VecSort} [xs: # (self.element())          ] -> @VecContainer (arc) { VecContainer {
-            do_rebuild: self.ctx.element.is_eq_sort(),
+            do_rebuild: self.ctx.is_eq_container_sort(),
             data: xs                     .collect()
         } });
         add_primitive!(eg, "vec-append" = {self.clone(): VecSort} [xs: @VecContainer (arc)] -> @VecContainer (arc) { VecContainer {
-            do_rebuild: self.ctx.element.is_eq_sort(),
+            do_rebuild: self.ctx.is_eq_container_sort(),
             data: xs.flat_map(|x| x.data).collect()
         } });
 
@@ -137,6 +136,36 @@ impl ContainerSort for VecSort {
         add_primitive!(eg, "vec-get"    = |    xs: @VecContainer (arc), i: i64                       | -?> # (self.element()) { xs.data.get(i as usize).copied() });
         add_primitive!(eg, "vec-set"    = |mut xs: @VecContainer (arc), i: i64, x: # (self.element())| -> @VecContainer (arc) {{ xs.data[i as usize] = x;    xs }});
         add_primitive!(eg, "vec-remove" = |mut xs: @VecContainer (arc), i: i64                       | -> @VecContainer (arc) {{ xs.data.remove(i as usize); xs }});
+        if self.element.is_eq_sort() {
+            eg.add_primitive(Union {
+                name: "vec-union".into(),
+                vec: arc.clone(),
+                action: eg.new_union_action(),
+            });
+        }
+        // vec-range
+        if self.element.name() == "i64" {
+            add_primitive!(eg, "vec-range" = {self.clone(): VecSort} |end: i64| -> @VecContainer (arc) { VecContainer {
+                do_rebuild: self.ctx.is_eq_container_sort(),
+                data: {
+                    let end: usize = end.try_into().unwrap_or(0);
+                    (0..end)
+                        .map(|i| exec_state.base_values().get::<i64>(i as i64))
+                        .collect()
+                }
+            } });
+        }
+        let all_vec_sorts = eg
+            .type_info
+            .get_arcsorts_by(|f| f.value_type() == Some(TypeId::of::<VecContainer>()));
+        for fn_sort in eg.type_info.get_sorts::<FunctionSort>() {
+            for vec_sort in &all_vec_sorts {
+                try_registering_vec_map(eg, fn_sort.clone(), vec_sort.clone(), arc.clone());
+                if vec_sort.name() != arc.name() {
+                    try_registering_vec_map(eg, fn_sort.clone(), arc.clone(), vec_sort.clone());
+                }
+            }
+        }
     }
 
     fn reconstruct_termdag(
@@ -155,6 +184,139 @@ impl ContainerSort for VecSort {
 
     fn serialized_name(&self, _container_values: &ContainerValues, _: Value) -> String {
         "vec-of".to_owned()
+    }
+}
+
+/**
+ * Register a vec map primitive if the function matches the input and output vec.
+ */
+pub(crate) fn try_registering_vec_map(
+    eg: &mut EGraph,
+    fn_: Arc<FunctionSort>,
+    input_vec: ArcSort,
+    output_vec: ArcSort,
+) {
+    if fn_.inputs().len() != 1
+        || fn_.inputs()[0].name() != input_vec.inner_sorts()[0].name()
+        || fn_.output().name() != output_vec.inner_sorts()[0].name()
+    {
+        return;
+    }
+    eg.add_primitive(VecMap {
+        name: "unstable-vec-map".into(),
+        vec: input_vec,
+        output_vec,
+        fn_: fn_.clone(),
+    });
+}
+
+pub(crate) fn register_vec_primitives_for_function(eg: &mut EGraph, fn_: Arc<FunctionSort>) {
+    let all_vec_sorts = eg
+        .type_info
+        .get_arcsorts_by(|f| f.value_type() == Some(TypeId::of::<VecContainer>()));
+    for input_vec in &all_vec_sorts {
+        for output_vec in &all_vec_sorts {
+            try_registering_vec_map(eg, fn_.clone(), input_vec.clone(), output_vec.clone());
+        }
+    }
+}
+
+// (unstable-vec-map (Vec[X], [X] -> Y) -> Vec[Y])
+// will map the function over all elements in the vec and drop elements where it is undefined.
+#[derive(Clone)]
+struct VecMap {
+    name: String,
+    vec: ArcSort,
+    output_vec: ArcSort,
+    fn_: Arc<FunctionSort>,
+}
+
+impl Primitive for VecMap {
+    fn name(&self) -> &str {
+        &self.name
+    }
+
+    fn get_type_constraints(&self, span: &Span) -> Box<dyn TypeConstraint> {
+        SimpleTypeConstraint::new(
+            self.name(),
+            vec![self.fn_.clone(), self.vec.clone(), self.output_vec.clone()],
+            span.clone(),
+        )
+        .into_box()
+    }
+
+    fn apply(&self, exec_state: &mut ExecutionState, args: &[Value]) -> Option<Value> {
+        let fc = exec_state
+            .container_values()
+            .get_val::<FunctionContainer>(args[0])
+            .unwrap()
+            .clone();
+        let vec = exec_state
+            .container_values()
+            .get_val::<VecContainer>(args[1])
+            .unwrap()
+            .clone();
+        let mut new_data = Vec::with_capacity(vec.data.len());
+        for v in vec.data {
+            if let Some(mapped) = fc.apply(exec_state, &[v]) {
+                new_data.push(mapped);
+            }
+        }
+        let vec = VecContainer {
+            do_rebuild: self.output_vec.is_eq_container_sort(),
+            data: new_data,
+        };
+        Some(
+            exec_state
+                .clone()
+                .container_values()
+                .register_val(vec, exec_state),
+        )
+    }
+}
+
+// (vec-union Vec[A] Vec[A]) -> Vec[A]
+// where A: Eq
+// Unions items from two vecs, asserting they are the same length.
+#[derive(Clone)]
+struct Union {
+    name: String,
+    vec: ArcSort,
+    action: UnionAction,
+}
+
+impl Primitive for Union {
+    fn name(&self) -> &str {
+        &self.name
+    }
+
+    fn get_type_constraints(&self, span: &Span) -> Box<dyn TypeConstraint> {
+        SimpleTypeConstraint::new(
+            self.name(),
+            vec![self.vec.clone(), self.vec.clone(), self.vec.clone()],
+            span.clone(),
+        )
+        .into_box()
+    }
+
+    fn apply(&self, exec_state: &mut ExecutionState, args: &[Value]) -> Option<Value> {
+        let left = exec_state
+            .container_values()
+            .get_val::<VecContainer>(args[0])?
+            .clone()
+            .data;
+        let right = exec_state
+            .container_values()
+            .get_val::<VecContainer>(args[1])?
+            .clone()
+            .data;
+        if left.len() != right.len() {
+            return None;
+        }
+        for (l, r) in zip(left, right) {
+            self.action.union(exec_state, l, r);
+        }
+        Some(args[0])
     }
 }
 
