@@ -100,9 +100,9 @@ impl<K: NumericId, V> DenseIdMap<K, V> {
     }
 
     /// Insert the given mapping into the table.
-    pub fn insert(&mut self, key: K, value: V) {
+    pub fn insert(&mut self, key: K, value: V) -> Option<V> {
         self.reserve_space(key);
-        self.data[key.index()] = Some(value);
+        self.data[key.index()].replace(value)
     }
 
     /// Get the key that would be returned by the next call to [`DenseIdMap::push`].
@@ -205,6 +205,10 @@ impl<K: NumericId, V> DenseIdMap<K, V> {
                 }
             }
         }
+    }
+
+    pub fn len(&self) -> usize {
+        self.data.iter().filter(|v| v.is_some()).count()
     }
 }
 
@@ -325,7 +329,7 @@ impl<K: NumericId, V> DenseIdMapWithReuse<K, V> {
     /// want to use [`DenseIdMapWithReuse::push`] instead, unless you need to use
     /// the key to build the value, in which case you can
     /// use [`DenseIdMapWithReuse::reserve_slot`] to get the key for this method.
-    pub fn insert(&mut self, key: K, value: V) {
+    pub fn insert(&mut self, key: K, value: V) -> Option<V> {
         self.data.insert(key, value)
     }
 

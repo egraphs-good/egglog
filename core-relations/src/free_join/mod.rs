@@ -266,7 +266,7 @@ impl Clone for Counters {
         let mut map = DenseIdMap::new();
         for (k, v) in self.0.iter() {
             // NB: we may want to experiment with Ordering::Relaxed here.
-            map.insert(k, AtomicUsize::new(v.load(Ordering::SeqCst)))
+            map.insert(k, AtomicUsize::new(v.load(Ordering::SeqCst)));
         }
         Counters(map)
     }
