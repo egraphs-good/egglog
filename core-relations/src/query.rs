@@ -881,7 +881,7 @@ impl Atom {
 
 #[derive(Clone, Default)]
 pub(crate) struct VarColumnMap {
-    var_to_column: HashMap<Variable, ColumnId>,
+    var_to_column: DenseIdMap<Variable, ColumnId>,
     column_to_var: DenseIdMap<ColumnId, Variable>,
 }
 
@@ -909,7 +909,7 @@ impl VarColumnMap {
     }
 
     pub(crate) fn get_col(&self, var: Variable) -> Option<ColumnId> {
-        self.var_to_column.get(&var).copied()
+        self.var_to_column.get(var).copied()
     }
 
     pub(crate) fn get_var(&self, col: ColumnId) -> Option<Variable> {
@@ -925,7 +925,7 @@ impl VarColumnMap {
     }
 
     pub(crate) fn is_empty(&self) -> bool {
-        self.var_to_column.is_empty()
+        self.var_to_column.len() == 0
     }
 }
 
@@ -953,8 +953,12 @@ impl FunDeps {
 
     /// Returns all variables that can be determined from the input variables
     /// using the functional dependencies.
-    pub fn closure(&self, variables: impl IntoIterator<Item = Variable>) -> IndexSet<Variable> {
-        let mut result: IndexSet<Variable> = IndexSet::from_iter(variables);
+    pub fn closure(
+        &self,
+        variables: impl IntoIterator<Item = Variable>,
+    ) -> DenseIdMap<Variable, ()> {
+        let mut result: DenseIdMap<Variable, ()> =
+            DenseIdMap::from_iter(variables.into_iter().map(|v| (v, ())));
         let mut changed = true;
 
         while changed {
@@ -962,9 +966,10 @@ impl FunDeps {
             for (antecedent, consequent) in &self.dependencies {
                 // If all variables in the antecedent are in the result,
                 // add all variables in the consequent.
-                if antecedent.iter().all(|v| result.contains(v)) {
+                if antecedent.iter().all(|v| result.contains_key(*v)) {
                     for v in consequent {
-                        if result.insert(*v) {
+                        if !result.contains_key(*v) {
+                            result.insert(*v, ());
                             changed = true;
                         }
                     }
