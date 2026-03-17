@@ -89,12 +89,6 @@ impl FrameUpdates {
     }
 
     pub(super) fn drain(&mut self, f: impl FnMut(UpdateInstr)) {
-        // TODO: why do we skip the first endframe?
-        // let start = if matches!(self.updates.first(), Some(UpdateCell::EndFrame)) {
-        //     1 // Skip the first EndFrame
-        // } else {
-        //     0
-        // };
         let start = 0;
         self.updates
             .drain(start..)
