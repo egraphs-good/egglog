@@ -2,6 +2,7 @@ mod common;
 
 #[derive(Clone, Copy)]
 struct RustRuleBenchCase {
+    n_facts_input: Option<usize>,
     n_rule_run_estimated: Option<usize>,
 }
 
@@ -15,6 +16,46 @@ impl std::fmt::Display for RustRuleBenchCase {
 struct RustRuleBenchInput {
     egraph: egglog::EGraph,
     ruleset: String,
+}
+
+// Match-only rust_rule bench setup, to isolate the overhead of matching a rust rule
+// without doing any actual work in the rule body.
+fn match_only_rust_rule_setup(case: RustRuleBenchCase) -> RustRuleBenchInput {
+    use egglog::prelude::*;
+
+    common::configure_rayon_once();
+
+    let mut program = String::new();
+    program.push_str("(relation R (i64))\n");
+
+    for i in 0..case
+        .n_facts_input
+        .expect("n_facts_input must be set for match_only_rust_rule_setup")
+    {
+        use std::fmt::Write;
+        let _ = writeln!(&mut program, "(R {})", i as i64);
+    }
+
+    let mut egraph = egglog::EGraph::default();
+    egraph.parse_and_run_program(None, &program).unwrap();
+
+    let ruleset = "rust_rule_bench";
+    add_ruleset(&mut egraph, ruleset).unwrap();
+
+    rust_rule(
+        &mut egraph,
+        "rust_rule_bench",
+        ruleset,
+        vars![x: i64],
+        facts![(R x)],
+        |_ctx, _values| Some(()),
+    )
+    .unwrap();
+
+    RustRuleBenchInput {
+        egraph,
+        ruleset: ruleset.to_owned(),
+    }
 }
 
 #[derive(Clone, Copy)]
@@ -39,6 +80,39 @@ impl std::fmt::Display for RustRuleInsertLoopBenchCase {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         write!(f, "ops{}_funcs{}", self.n_ops, self.n_dummy_funcs)
     }
+}
+
+#[divan::bench(
+    args = [
+        RustRuleBenchCase { n_facts_input: Some(50_000), n_rule_run_estimated: Some(1) },
+    ],
+    sample_count = 10
+)]
+fn rust_rule_match_overhead(bencher: divan::Bencher, case: RustRuleBenchCase) {
+    use egglog::prelude::run_ruleset;
+
+    bencher
+        .with_inputs(|| match_only_rust_rule_setup(case))
+        .bench_local_refs(|input| {
+            run_ruleset(&mut input.egraph, &input.ruleset).unwrap();
+        });
+}
+
+#[divan::bench(
+    args = [
+        RustRuleBenchCase { n_facts_input: Some(50_000), n_rule_run_estimated: Some(1) },
+    ],
+    sample_count = 10
+)]
+fn rust_rule_match_with_serialize(bencher: divan::Bencher, case: RustRuleBenchCase) {
+    use egglog::prelude::run_ruleset;
+
+    bencher
+        .with_inputs(|| match_only_rust_rule_setup(case))
+        .bench_local_refs(|input| {
+            run_ruleset(&mut input.egraph, &input.ruleset).unwrap();
+            input.egraph.serialize(egglog::SerializeConfig::default());
+        });
 }
 
 // stress test for the Rust API "tableaction" hot path:
@@ -253,7 +327,7 @@ fn fib_setup() -> RustRuleBenchInput {
 // (many matches, but the rule body does almost no work).
 #[divan::bench(
     args = [
-        RustRuleBenchCase {  n_rule_run_estimated: Some(1_000)},
+        RustRuleBenchCase { n_facts_input: None, n_rule_run_estimated: Some(1_000) },
     ],
     sample_count = 10
 )]
