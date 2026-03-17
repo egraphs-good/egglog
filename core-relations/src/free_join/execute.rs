@@ -294,7 +294,7 @@ impl Database {
                                 scratch_val: Default::default(),
                             };
 
-                            // eprintln!("Running {desc}");
+                            // eprintln!("Running {desc} with {} stages", plan.stages.blocks.len());
                             for (mat_id, stage_block) in plan.stages.blocks.iter().enumerate() {
                                 let mat_id = MatId::from_usize(mat_id);
                                 let start_time = Instant::now();
