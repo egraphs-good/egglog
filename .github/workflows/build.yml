@@ -59,6 +59,11 @@ jobs:
           - proof_testing_eqsat-basic
           - proof_testing_unify
           - proof_testing_typecheck
+          - rust_rule_fib
+          - rust_rule_match_overhead
+          - rust_rule_match_with_serialize
+          - rust_rule_insert_loop
+          - rust_rule_tableaction_hot_path
     steps:
       - run: echo "CARGO_INCREMENTAL=0" >> "$GITHUB_ENV"
       - uses: actions/checkout@v4
