@@ -174,6 +174,13 @@ impl<K: NumericId, V> DenseIdMap<K, V> {
             .filter_map(|(i, v)| Some((K::from_usize(i), v.as_mut()?)))
     }
 
+    pub fn into_iter(self) -> impl Iterator<Item = (K, V)> {
+        self.data
+            .into_iter()
+            .enumerate()
+            .filter_map(|(i, v)| Some((K::from_usize(i), v?)))
+    }
+
     /// Reserve space up to the given key in the table.
     pub fn reserve_space(&mut self, key: K) {
         let index = key.index();
