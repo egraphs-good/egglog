@@ -1,4 +1,5 @@
 use super::*;
+use egglog_bridge::UnionAction;
 use inner::MultiSet;
 
 #[derive(Clone, Debug, PartialEq, Eq, Hash)]
@@ -9,11 +10,13 @@ pub struct MultiSetContainer {
 
 impl ContainerValue for MultiSetContainer {
     fn rebuild_contents(&mut self, rebuilder: &dyn Rebuilder) -> bool {
+        // If the contents are an eq-sort then we want to rebuild
         if self.do_rebuild {
             let mut xs: Vec<_> = self.data.iter().copied().collect();
             let changed = rebuilder.rebuild_slice(&mut xs);
             self.data = xs.into_iter().collect();
             changed
+        // if the contents are just a primitive then don't need to do anything.
         } else {
             false
         }
@@ -43,13 +46,30 @@ impl Presort for MultiSetSort {
     fn reserved_primitives() -> Vec<&'static str> {
         vec![
             "multiset-of",
+            "multiset-single",
             "multiset-insert",
+            "multiset-remove",
+            "multiset-remove-swapped",
+            "multiset-subtract",
+            "multiset-subtract-swapped",
+            "multiset-length",
             "multiset-contains",
             "multiset-not-contains",
-            "multiset-remove",
-            "multiset-length",
+            "multiset-contains-swapped",
+            "multiset-not-contains-swapped",
+            "multiset-intersection",
             "multiset-sum",
+            "multiset-reset-counts",
+            "multiset-pick-max",
+            "multiset-count",
+            "multiset-sum-multisets",
             "unstable-multiset-map",
+            "unstable-multiset-filter",
+            "unstable-multiset-filter-not",
+            "unstable-multiset-reduce",
+            "unstable-multiset-fill-index",
+            "unstable-multiset-clear-index",
+            "unstable-multiset-flat-map",
         ]
     }
 
@@ -62,14 +82,6 @@ impl Presort for MultiSetSort {
             let e = typeinfo
                 .get_sort_by_name(e)
                 .ok_or(TypeError::UndefinedSort(e.clone(), span.clone()))?;
-
-            if e.is_eq_container_sort() {
-                return Err(TypeError::DisallowedSort(
-                    name,
-                    "Multisets nested with other EqSort containers are not allowed".into(),
-                    span.clone(),
-                ));
-            }
 
             let out = Self {
                 name,
@@ -94,7 +106,7 @@ impl ContainerSort for MultiSetSort {
     }
 
     fn is_eq_container_sort(&self) -> bool {
-        self.element.is_eq_sort()
+        self.element.is_eq_sort() || self.element.is_eq_container_sort()
     }
 
     fn inner_values(
@@ -116,34 +128,76 @@ impl ContainerSort for MultiSetSort {
         let arc = self.clone().to_arcsort();
 
         add_primitive!(eg, "multiset-of" = {self.clone(): MultiSetSort} [xs: # (self.element())] -> @MultiSetContainer (arc) { MultiSetContainer {
-            do_rebuild: self.ctx.element.is_eq_sort(),
+            do_rebuild: self.ctx.is_eq_container_sort(),
             data: xs.collect()
         } });
 
+        add_primitive!(eg, "multiset-single" = {self.clone(): MultiSetSort} |x: # (self.element()), i: i64| -?> @MultiSetContainer (arc) {
+            i.try_into().ok().map(|i|
+                MultiSetContainer {
+                do_rebuild: self.ctx.is_eq_container_sort(),
+                data: std::iter::repeat_n(x, i).collect()
+            })
+        });
         add_primitive!(eg, "multiset-pick" = |xs: @MultiSetContainer (arc)| -> # (self.element()) { *xs.data.pick().expect("Cannot pick from an empty multiset") });
         add_primitive!(eg, "multiset-insert" = |mut xs: @MultiSetContainer (arc), x: # (self.element())| -> @MultiSetContainer (arc) { MultiSetContainer { data: xs.data.insert( x) , ..xs } });
-        add_primitive!(eg, "multiset-remove" = |mut xs: @MultiSetContainer (arc), x: # (self.element())| -> @MultiSetContainer (arc) { MultiSetContainer { data: xs.data.remove(&x)?, ..xs } });
-
+        add_primitive!(eg, "multiset-remove" = |mut xs: @MultiSetContainer (arc), x: # (self.element())| -?> @MultiSetContainer (arc) { Some(MultiSetContainer { data: xs.data.remove(&x)?, ..xs } )});
+        add_primitive!(eg, "multiset-remove-swapped" = |x: # (self.element()), mut xs: @MultiSetContainer (arc)| -?> @MultiSetContainer (arc) { Some(MultiSetContainer { data: xs.data.remove(&x)?, ..xs }) });
+        add_primitive!(eg, "multiset-subtract" = |mut xs: @MultiSetContainer (arc), other: @MultiSetContainer (arc)| -?> @MultiSetContainer (arc) { Some(MultiSetContainer { data: xs.data.subtract(&other.data)?, ..xs }) });
+        add_primitive!(eg, "multiset-subtract-swapped" = |other: @MultiSetContainer (arc), mut xs: @MultiSetContainer (arc)| -?> @MultiSetContainer (arc) { Some(MultiSetContainer { data: xs.data.subtract(&other.data)?, ..xs }) });
         add_primitive!(eg, "multiset-length"       = |xs: @MultiSetContainer (arc)| -> i64 { xs.data.len() as i64 });
         add_primitive!(eg, "multiset-contains"     = |xs: @MultiSetContainer (arc), x: # (self.element())| -?> () { ( xs.data.contains(&x)).then_some(()) });
         add_primitive!(eg, "multiset-not-contains" = |xs: @MultiSetContainer (arc), x: # (self.element())| -?> () { (!xs.data.contains(&x)).then_some(()) });
-
+        add_primitive!(eg, "multiset-contains-swapped" = |x: # (self.element()), xs: @MultiSetContainer (arc)| -?> () { (xs.data.contains(&x)).then_some(()) });
+        add_primitive!(eg, "multiset-not-contains-swapped" = |x: # (self.element()), xs: @MultiSetContainer (arc)| -?> () { (!xs.data.contains(&x)).then_some(()) });
+        add_primitive!(eg, "multiset-intersection" = |xs: @MultiSetContainer (arc), ys: @MultiSetContainer (arc)| -> @MultiSetContainer (arc) { MultiSetContainer { data: xs.data.intersection(ys.data), ..xs } });
         add_primitive!(eg, "multiset-sum" = |xs: @MultiSetContainer (arc), ys: @MultiSetContainer (arc)| -> @MultiSetContainer (arc) { MultiSetContainer { data: xs.data.sum(ys.data), ..xs } });
-
-        // Only include map function if we already declared a function sort with the correct signature
-        let fn_sorts = eg.type_info.get_sorts_by(|s: &Arc<FunctionSort>| {
-            (s.inputs().len() == 1)
-                && (s.inputs()[0].name() == self.element.name())
-                && (s.output().name() == self.element.name())
+        // Set counts to one
+        add_primitive!(eg, "multiset-reset-counts" = |mut xs: @MultiSetContainer (arc)| -> @MultiSetContainer (arc) { {
+            let mut new_data = MultiSet::<Value>::new();
+            for (v, _) in xs.data.iter_counts() {
+                new_data.insert_multiple_mut(v, 1);
+            }
+            MultiSetContainer { data: new_data, ..xs }
+        }});
+        add_primitive!(eg, "multiset-pick-max" = |xs: @MultiSetContainer (arc)| -?>  # (self.element()) {
+            Some(xs.data.iter_counts().max_by_key(|(_, c)| *c)?.0)
         });
-        match fn_sorts.len() {
-            0 => {}
-            1 => eg.add_primitive(Map {
-                name: "unstable-multiset-map".into(),
-                multiset: arc,
-                fn_: fn_sorts.into_iter().next().unwrap(),
-            }),
-            _ => panic!("too many applicable function sorts"),
+        add_primitive!(eg, "multiset-count" = |xs: @MultiSetContainer (arc), x: # (self.element())| -> i64 {
+            xs.data.iter_counts().find(|(v, _)| *v == x).map(|(_, c)| c as i64).unwrap_or(0)
+        });
+
+        // Add multiset-sum-multisets if the inner arcsort is also a multiset
+        for other_multiset_sort in eg.type_info.get_arcsorts_by(|f| {
+            f.name() == self.element.name()
+            // We can't query directly by arcsort type since it's wrapped in a ContainerSort which is not public
+                && f.value_type() == Some(TypeId::of::<MultiSetContainer>())
+        }) {
+            eg.add_primitive(SumMultisets {
+                name: "multiset-sum-multisets".into(),
+                multiset: other_multiset_sort.clone(),
+                multiset_of_multisets: arc.clone(),
+            });
+        }
+        let all_ms_sorts = eg
+            .type_info
+            .get_arcsorts_by(|f| f.value_type() == Some(TypeId::of::<MultiSetContainer>()));
+        for fn_sort in eg.type_info.get_sorts::<FunctionSort>() {
+            for ms_sort in &all_ms_sorts {
+                try_registering_multiset_map(eg, fn_sort.clone(), ms_sort.clone(), arc.clone());
+                if ms_sort.name() != arc.name() {
+                    try_registering_multiset_map(eg, fn_sort.clone(), arc.clone(), ms_sort.clone());
+                }
+            }
+            try_registering_multiset_non_map_primitives(eg, fn_sort.clone(), arc.clone());
+        }
+        if self.element.is_eq_sort() {
+            eg.add_primitive(UnionValues {
+                name: "multiset-union-values".into(),
+                multiset: arc.clone(),
+                action: eg.new_union_action(),
+                element: self.element.clone(),
+            });
         }
     }
 
@@ -162,14 +216,284 @@ impl ContainerSort for MultiSetSort {
     }
 }
 
+/**
+ * Register a multiset map primitive if the function matches the input and output multiset.
+ */
+pub(crate) fn try_registering_multiset_map(
+    eg: &mut EGraph,
+    fn_: Arc<FunctionSort>,
+    input_ms: ArcSort,
+    output_ms: ArcSort,
+) {
+    if fn_.inputs().len() != 1
+        || fn_.inputs()[0].name() != input_ms.inner_sorts()[0].name()
+        || fn_.output().name() != output_ms.inner_sorts()[0].name()
+    {
+        return;
+    }
+    eg.add_primitive(Map {
+        name: "unstable-multiset-map".into(),
+        multiset: input_ms,
+        output_multiset: output_ms,
+        fn_: fn_.clone(),
+    });
+}
+
+pub(crate) fn register_multiset_primitives_for_function(eg: &mut EGraph, fn_: Arc<FunctionSort>) {
+    let all_ms_sorts = eg
+        .type_info
+        .get_arcsorts_by(|f| f.value_type() == Some(TypeId::of::<MultiSetContainer>()));
+    for input_ms in &all_ms_sorts {
+        for output_ms in &all_ms_sorts {
+            try_registering_multiset_map(eg, fn_.clone(), input_ms.clone(), output_ms.clone());
+        }
+    }
+    for ms_sort in &all_ms_sorts {
+        try_registering_multiset_non_map_primitives(eg, fn_.clone(), ms_sort.clone());
+    }
+}
+
+fn try_registering_multiset_non_map_primitives(
+    eg: &mut EGraph,
+    fn_: Arc<FunctionSort>,
+    multiset: ArcSort,
+) {
+    let element = multiset.inner_sorts()[0].clone();
+    let element_name = element.name();
+
+    if fn_.inputs().len() == 1
+        && fn_.inputs()[0].name() == element_name
+        && fn_.output().name() == "Unit"
+    {
+        eg.add_primitive(Filter {
+            name: "unstable-multiset-filter".into(),
+            multiset: multiset.clone(),
+            fn_: fn_.clone(),
+            skip_empty: true,
+        });
+        eg.add_primitive(Filter {
+            name: "unstable-multiset-filter-not".into(),
+            multiset: multiset.clone(),
+            fn_: fn_.clone(),
+            skip_empty: false,
+        });
+    }
+
+    if fn_.inputs().len() == 2
+        && fn_.inputs()[0].name() == element_name
+        && fn_.inputs()[1].name() == element_name
+        && fn_.output().name() == element_name
+    {
+        eg.add_primitive(Reduce {
+            name: "unstable-multiset-reduce".into(),
+            multiset: multiset.clone(),
+            fn_: fn_.clone(),
+            element: element.clone(),
+        });
+    }
+
+    if fn_.inputs().len() == 2
+        && fn_.inputs()[0].name() == multiset.name()
+        && fn_.inputs()[1].name() == element_name
+        && fn_.output().name() == "i64"
+    {
+        let unit = eg.type_info.get_sort_by_name("Unit").unwrap().clone();
+        eg.add_primitive(FillIndex {
+            name: "unstable-multiset-fill-index".into(),
+            multiset: multiset.clone(),
+            unit: unit.clone(),
+            fn_: fn_.clone(),
+        });
+        eg.add_primitive(ClearIndex {
+            name: "unstable-multiset-clear-index".into(),
+            multiset: multiset.clone(),
+            unit,
+            fn_: fn_.clone(),
+        });
+    }
+
+    if fn_.inputs().len() == 1
+        && fn_.inputs()[0].name() == element_name
+        && fn_.output().name() == multiset.name()
+    {
+        eg.add_primitive(FlatMap {
+            name: "unstable-multiset-flat-map".into(),
+            multiset,
+            fn_: fn_.clone(),
+        });
+    }
+}
+
 #[derive(Clone)]
 struct Map {
     name: String,
     multiset: ArcSort,
     fn_: Arc<FunctionSort>,
+    output_multiset: ArcSort,
 }
 
 impl Primitive for Map {
+    fn name(&self) -> &str {
+        &self.name
+    }
+
+    fn get_type_constraints(&self, span: &Span) -> Box<dyn TypeConstraint> {
+        SimpleTypeConstraint::new(
+            self.name(),
+            vec![
+                self.fn_.clone(),
+                self.multiset.clone(),
+                self.output_multiset.clone(),
+            ],
+            span.clone(),
+        )
+        .into_box()
+    }
+
+    fn apply(&self, exec_state: &mut ExecutionState, args: &[Value]) -> Option<Value> {
+        let fc = exec_state
+            .container_values()
+            .get_val::<FunctionContainer>(args[0])
+            .unwrap()
+            .clone();
+        let multiset = exec_state
+            .container_values()
+            .get_val::<MultiSetContainer>(args[1])
+            .unwrap()
+            .clone();
+        let mut new_data = MultiSet::<Value>::new();
+        // Filter out any elements which do not have the function defined for them
+        for (v, c) in multiset.data.iter_counts() {
+            let mapped = fc.apply(exec_state, &[v]);
+            if let Some(mapped_v) = mapped {
+                new_data.insert_multiple_mut(mapped_v, c);
+            }
+        }
+        let multiset = MultiSetContainer {
+            data: new_data,
+            ..multiset
+        };
+        Some(
+            exec_state
+                .clone()
+                .container_values()
+                .register_val(multiset, exec_state),
+        )
+    }
+}
+
+// (unstable-multiset-fill-index ms: MultiSet[X] index_fn: [MultiSet[X], X] -> i64) -> Unit
+// will set the index function for all elements in the multiset
+#[derive(Clone)]
+struct FillIndex {
+    name: String,
+    multiset: ArcSort,
+    unit: ArcSort,
+    fn_: Arc<FunctionSort>,
+}
+
+impl Primitive for FillIndex {
+    fn name(&self) -> &str {
+        &self.name
+    }
+
+    fn get_type_constraints(&self, span: &Span) -> Box<dyn TypeConstraint> {
+        SimpleTypeConstraint::new(
+            self.name(),
+            vec![self.multiset.clone(), self.fn_.clone(), self.unit.clone()],
+            span.clone(),
+        )
+        .into_box()
+    }
+
+    fn apply(&self, exec_state: &mut ExecutionState, args: &[Value]) -> Option<Value> {
+        let fc = exec_state
+            .container_values()
+            .get_val::<FunctionContainer>(args[1])
+            .unwrap()
+            .clone();
+        let multiset = exec_state
+            .container_values()
+            .get_val::<MultiSetContainer>(args[0])
+            .unwrap()
+            .clone();
+        let ResolvedFunctionId::Lookup(mut action) = fc.0 else {
+            panic!(
+                "Primitive functions cannot be used with unstable-multiset-fill-index, since they cannot be set"
+            );
+        };
+        for (v, c) in multiset.data.iter_counts() {
+            let mut row = vec![args[0], v];
+            // If we have already filled this multiset once, skip since it should still be accurate with the right
+            // merge function
+            if action.lookup(exec_state, &row).is_some() {
+                break;
+            }
+            row.push(exec_state.base_values().get::<i64>(c.try_into().unwrap()));
+            action.insert(exec_state, row.into_iter());
+        }
+        Some(exec_state.base_values().get::<()>(()))
+    }
+}
+
+// (unstable-multiset-clear-index ms: MultiSet[X] index_fn: [MultiSet[X], X] -> i64) -> Unit
+// will clear the index function for all elements in the multiset
+#[derive(Clone)]
+struct ClearIndex {
+    name: String,
+    multiset: ArcSort,
+    unit: ArcSort,
+    fn_: Arc<FunctionSort>,
+}
+
+impl Primitive for ClearIndex {
+    fn name(&self) -> &str {
+        &self.name
+    }
+
+    fn get_type_constraints(&self, span: &Span) -> Box<dyn TypeConstraint> {
+        SimpleTypeConstraint::new(
+            self.name(),
+            vec![self.multiset.clone(), self.fn_.clone(), self.unit.clone()],
+            span.clone(),
+        )
+        .into_box()
+    }
+
+    fn apply(&self, exec_state: &mut ExecutionState, args: &[Value]) -> Option<Value> {
+        let fc = exec_state
+            .container_values()
+            .get_val::<FunctionContainer>(args[1])
+            .unwrap()
+            .clone();
+        let multiset = exec_state
+            .container_values()
+            .get_val::<MultiSetContainer>(args[0])
+            .unwrap()
+            .clone();
+        let ResolvedFunctionId::Lookup(action) = fc.0 else {
+            panic!(
+                "Primitive functions cannot be used with unstable-multiset-clear-index, since they cannot be deleted"
+            );
+        };
+        for (v, _) in multiset.data.iter_counts() {
+            action.remove(exec_state, &[args[0], v]);
+        }
+        Some(exec_state.base_values().get::<()>(()))
+    }
+}
+
+// (unstable-multiset-flat-map (MultiSet[X], [X] -> MultiSet[X]) -> MultiSet[X])
+// will map the function over all elements in the multiset and flatten the result. Any element in the multiset
+// which does not have the function defined for it will be kept as-is.
+#[derive(Clone)]
+struct FlatMap {
+    name: String,
+    multiset: ArcSort,
+    fn_: Arc<FunctionSort>,
+}
+
+impl Primitive for FlatMap {
     fn name(&self) -> &str {
         &self.name
     }
@@ -198,12 +522,84 @@ impl Primitive for Map {
             .get_val::<MultiSetContainer>(args[1])
             .unwrap()
             .clone();
+        let mut new_data = MultiSet::<Value>::new();
+        for (v, c) in multiset.data.iter_counts() {
+            let mapped = fc.apply(exec_state, &[v]);
+            if let Some(mapped_ms) = mapped {
+                let mapped_ms = exec_state
+                    .container_values()
+                    .get_val::<MultiSetContainer>(mapped_ms)
+                    .unwrap();
+                for (mv, mc) in mapped_ms.data.iter_counts() {
+                    new_data.insert_multiple_mut(mv, c * mc);
+                }
+            } else {
+                new_data.insert_multiple_mut(v, c);
+            }
+        }
+        let new_container = MultiSetContainer {
+            data: new_data,
+            ..multiset
+        };
+        Some(
+            exec_state
+                .clone()
+                .container_values()
+                .register_val(new_container, exec_state),
+        )
+    }
+}
+
+// (unstable-multiset-filter (MultiSet[X], [X] -> Unit) -> MultiSet[X])
+// will filter the elements in the multiset based on whether the function is defined for them.
+// If skip_empty is true, it will keep elements where the function is defined, otherwise it will keep elements where the function is not defined.
+#[derive(Clone)]
+struct Filter {
+    name: String,
+    multiset: ArcSort,
+    fn_: Arc<FunctionSort>,
+    skip_empty: bool,
+}
+
+impl Primitive for Filter {
+    fn name(&self) -> &str {
+        &self.name
+    }
+
+    fn get_type_constraints(&self, span: &Span) -> Box<dyn TypeConstraint> {
+        SimpleTypeConstraint::new(
+            self.name(),
+            vec![
+                self.fn_.clone(),
+                self.multiset.clone(),
+                self.multiset.clone(),
+            ],
+            span.clone(),
+        )
+        .into_box()
+    }
+
+    fn apply(&self, exec_state: &mut ExecutionState, args: &[Value]) -> Option<Value> {
+        let fc = exec_state
+            .container_values()
+            .get_val::<FunctionContainer>(args[0])
+            .unwrap()
+            .clone();
+        let multiset = exec_state
+            .container_values()
+            .get_val::<MultiSetContainer>(args[1])
+            .unwrap()
+            .clone();
+        let mut new_data = MultiSet::<Value>::new();
+        // Filter out any elements which do not have the function defined for them
+        for (v, c) in multiset.data.iter_counts() {
+            let mapped = fc.apply(exec_state, &[v]);
+            if mapped.is_some() == self.skip_empty {
+                new_data.insert_multiple_mut(v, c);
+            }
+        }
         let multiset = MultiSetContainer {
-            data: multiset
-                .data
-                .iter()
-                .map(|e| fc.apply(exec_state, &[*e]))
-                .collect::<Option<_>>()?,
+            data: new_data,
             ..multiset
         };
         Some(
@@ -212,6 +608,159 @@ impl Primitive for Map {
                 .container_values()
                 .register_val(multiset, exec_state),
         )
+    }
+}
+
+// (multiset-sum-multisets (MultiSet[MultiSet[X]]) -> MultiSet[X])
+// will sum all multisets in the outer multiset into a single multiset
+
+#[derive(Clone)]
+struct SumMultisets {
+    name: String,
+    multiset: ArcSort,
+    multiset_of_multisets: ArcSort,
+}
+
+impl Primitive for SumMultisets {
+    fn name(&self) -> &str {
+        &self.name
+    }
+
+    fn get_type_constraints(&self, span: &Span) -> Box<dyn TypeConstraint> {
+        SimpleTypeConstraint::new(
+            self.name(),
+            vec![self.multiset_of_multisets.clone(), self.multiset.clone()],
+            span.clone(),
+        )
+        .into_box()
+    }
+
+    fn apply(&self, exec_state: &mut ExecutionState, args: &[Value]) -> Option<Value> {
+        let mut data = MultiSet::<Value>::new();
+        let ms_of_ms = exec_state
+            .container_values()
+            .get_val::<MultiSetContainer>(args[0])
+            .unwrap()
+            .clone();
+        for (ms_value, counts) in ms_of_ms.data.iter_counts() {
+            let ms = exec_state
+                .container_values()
+                .get_val::<MultiSetContainer>(ms_value)
+                .unwrap();
+            for (v, c) in ms.data.iter_counts() {
+                data.insert_multiple_mut(v, c * counts);
+            }
+        }
+        let multiset = MultiSetContainer {
+            data,
+            do_rebuild: self.multiset.is_eq_container_sort(),
+        };
+        Some(
+            exec_state
+                .clone()
+                .container_values()
+                .register_val(multiset, exec_state),
+        )
+    }
+}
+
+// (unstable-multiset-reduce ([X, X] -> X, X, MultiSet[X]) -> X
+// will reduce the multiset using the provided binary function and initial value
+// Won't use the initial value if the multiset is non-empty.
+#[derive(Clone)]
+struct Reduce {
+    name: String,
+    multiset: ArcSort,
+    fn_: Arc<FunctionSort>,
+    element: ArcSort,
+}
+
+impl Primitive for Reduce {
+    fn name(&self) -> &str {
+        &self.name
+    }
+
+    fn get_type_constraints(&self, span: &Span) -> Box<dyn TypeConstraint> {
+        SimpleTypeConstraint::new(
+            self.name(),
+            vec![
+                self.fn_.clone(),
+                self.element.clone(),
+                self.multiset.clone(),
+                self.element.clone(),
+            ],
+            span.clone(),
+        )
+        .into_box()
+    }
+
+    fn apply(&self, exec_state: &mut ExecutionState, args: &[Value]) -> Option<Value> {
+        let fc = exec_state
+            .container_values()
+            .get_val::<FunctionContainer>(args[0])
+            .unwrap()
+            .clone();
+        let initial = args[1];
+        let multiset = exec_state
+            .container_values()
+            .get_val::<MultiSetContainer>(args[2])
+            .unwrap()
+            .clone();
+        let mut values = multiset.data.iter().cloned().collect::<Vec<_>>();
+        let mut acc = if values.is_empty() {
+            initial
+        } else {
+            let first = values[0];
+            values.remove(0);
+            first
+        };
+        for v in values {
+            acc = fc.apply(exec_state, &[acc, v])?;
+        }
+        Some(acc)
+    }
+}
+
+// (multiset-union-values MultiSet[A]) -> A
+// where A: Eq
+// Unions all values in the multiset together using the union action defined for the inner type.
+#[derive(Clone)]
+struct UnionValues {
+    name: String,
+    multiset: ArcSort,
+    element: ArcSort,
+    action: UnionAction,
+}
+
+impl Primitive for UnionValues {
+    fn name(&self) -> &str {
+        &self.name
+    }
+
+    fn get_type_constraints(&self, span: &Span) -> Box<dyn TypeConstraint> {
+        SimpleTypeConstraint::new(
+            self.name(),
+            vec![self.multiset.clone(), self.element.clone()],
+            span.clone(),
+        )
+        .into_box()
+    }
+
+    fn apply(&self, exec_state: &mut ExecutionState, args: &[Value]) -> Option<Value> {
+        let values = exec_state
+            .container_values()
+            .get_val::<MultiSetContainer>(args[0])?
+            .clone()
+            .data;
+        let values: Vec<_> = values.iter_counts().map(|(v, _c)| v).collect();
+        if values.is_empty() {
+            return None;
+        }
+        let first = values[0];
+        for v in values.into_iter().skip(1) {
+            self.action.union(exec_state, first, v);
+        }
+        Some(first)
     }
 }
 
@@ -251,6 +800,11 @@ mod inner {
             self.0.iter().flat_map(|(k, v)| std::iter::repeat_n(k, *v))
         }
 
+        /// Return an iterator over values and counts
+        pub fn iter_counts(&self) -> impl Iterator<Item = (T, usize)> {
+            self.0.iter().map(|(k, v)| (k.clone(), *v))
+        }
+
         /// Return an arbitrary element from the multiset.
         pub fn pick(&self) -> Option<&T> {
             self.0.keys().next()
@@ -277,7 +831,26 @@ mod inner {
             }
         }
 
-        fn insert_multiple_mut(&mut self, value: T, n: usize) {
+        /// Subtract the counts of another multiset from this multiset, taking ownership of both and returning a new multiset.
+        pub fn subtract(mut self, other: &MultiSet<T>) -> Option<MultiSet<T>> {
+            for (k, v) in other.0.iter() {
+                if let Some(self_v) = self.0.get_mut(k) {
+                    if *self_v < *v {
+                        return None;
+                    }
+                    *self_v -= *v;
+                    self.1 -= *v;
+                    if *self_v == 0 {
+                        self.0.remove(k);
+                    }
+                } else {
+                    return None;
+                }
+            }
+            Some(self)
+        }
+
+        pub fn insert_multiple_mut(&mut self, value: T, n: usize) {
             self.1 += n;
             if let Some(v) = self.0.get(&value) {
                 self.0.insert(value, v + n);
@@ -294,6 +867,20 @@ mod inner {
             }
             assert_eq!(self.1, target_count);
             self
+        }
+
+        /// Compute the intersection of two multisets.
+        /// The count of each element in the result is the minimum of its counts in the two multisets.
+        pub fn intersection(self, MultiSet(other_map, _): Self) -> Self {
+            let mut new_map = BTreeMap::new();
+            for (k, v) in self.0.into_iter() {
+                if let Some(other_v) = other_map.get(&k) {
+                    let new_v = std::cmp::min(v, *other_v);
+                    new_map.insert(k, new_v);
+                }
+            }
+            let new_count = new_map.values().sum();
+            MultiSet(new_map, new_count)
         }
     }
 

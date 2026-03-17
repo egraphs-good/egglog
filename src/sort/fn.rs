@@ -15,7 +15,11 @@ use std::sync::Mutex;
 use super::*;
 
 #[derive(Clone, Debug)]
-pub struct FunctionContainer(ResolvedFunctionId, pub Vec<(ArcSort, Value)>, pub String);
+pub struct FunctionContainer(
+    pub ResolvedFunctionId,
+    pub Vec<(ArcSort, Value)>,
+    pub String,
+);
 
 // implement hash and equality based on values only not arcsorts, since
 // arcsorts are not comparable and any two values that are equal must have the same sort
@@ -57,7 +61,6 @@ impl ContainerValue for FunctionContainer {
         self.1.iter().map(|(_, v)| v).copied()
     }
 }
-
 #[derive(Debug)]
 pub struct FunctionSort {
     name: String,
@@ -161,7 +164,9 @@ impl Sort for FunctionSort {
     }
 
     fn is_eq_container_sort(&self) -> bool {
-        self.inputs.iter().any(|s| s.is_eq_sort())
+        self.inputs
+            .iter()
+            .any(|s| s.is_eq_sort() || s.is_eq_container_sort())
     }
 
     fn serialized_name(&self, container_values: &ContainerValues, value: Value) -> String {
@@ -195,6 +200,9 @@ impl Sort for FunctionSort {
             name: "unstable-app".into(),
             function: self.clone(),
         });
+
+        register_vec_primitives_for_function(eg, self.clone());
+        register_multiset_primitives_for_function(eg, self.clone());
     }
 
     fn value_type(&self) -> Option<TypeId> {

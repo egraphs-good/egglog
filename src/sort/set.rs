@@ -66,14 +66,6 @@ impl Presort for SetSort {
                 .get_sort_by_name(e)
                 .ok_or(TypeError::UndefinedSort(e.clone(), span.clone()))?;
 
-            if e.is_eq_container_sort() {
-                return Err(TypeError::DisallowedSort(
-                    name,
-                    "Sets nested with other EqSort containers are not allowed".into(),
-                    span.clone(),
-                ));
-            }
-
             let out = Self {
                 name,
                 element: e.clone(),
@@ -97,7 +89,7 @@ impl ContainerSort for SetSort {
     }
 
     fn is_eq_container_sort(&self) -> bool {
-        self.element.is_eq_sort()
+        self.element.is_eq_sort() || self.element.is_eq_container_sort()
     }
 
     fn inner_values(
@@ -119,11 +111,11 @@ impl ContainerSort for SetSort {
         let arc = self.clone().to_arcsort();
 
         add_primitive!(eg, "set-empty" = {self.clone(): SetSort} |                      | -> @SetContainer (arc) { SetContainer {
-            do_rebuild: self.ctx.element.is_eq_sort(),
+            do_rebuild: self.ctx.is_eq_container_sort(),
             data: BTreeSet::new()
         } });
         add_primitive!(eg, "set-of"    = {self.clone(): SetSort} [xs: # (self.element())] -> @SetContainer (arc) { SetContainer {
-            do_rebuild: self.ctx.element.is_eq_sort(),
+            do_rebuild: self.ctx.is_eq_container_sort(),
             data: xs.collect()
         } });
 

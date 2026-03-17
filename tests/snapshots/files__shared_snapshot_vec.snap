@@ -3,4 +3,7 @@ source: tests/files.rs
 expression: snapshot_content_across_treatments
 ---
 ((a 1)
- (b 1))
+ (b 1)
+ (ff 0)
+ (xToY 1)
+ (y 1))

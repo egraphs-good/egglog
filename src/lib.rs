@@ -37,8 +37,9 @@ pub use ast::{ResolvedExpr, ResolvedFact, ResolvedVar};
 #[cfg(feature = "bin")]
 pub use cli::*;
 use constraint::{Constraint, Problem, SimpleTypeConstraint, TypeConstraint};
+use core::CoreActionContext;
+use core::ResolvedAtomTerm;
 pub use core::{Atom, AtomTerm};
-use core::{CoreActionContext, ResolvedAtomTerm};
 pub use core::{ResolvedCall, SpecializedPrimitive};
 pub use core_relations::{BaseValue, ContainerValue, ExecutionState, Value};
 use core_relations::{ExternalFunctionId, make_external_func};
@@ -50,7 +51,7 @@ use egglog_ast::generic_ast::{Change, GenericExpr, Literal};
 use egglog_ast::span::Span;
 use egglog_ast::util::ListDisplay;
 pub use egglog_bridge::FunctionRow;
-use egglog_bridge::{ColumnTy, QueryEntry};
+use egglog_bridge::{ColumnTy, QueryEntry, UnionAction};
 use egglog_core_relations as core_relations;
 use egglog_numeric_id as numeric_id;
 use egglog_reports::{ReportLevel, RunReport};
@@ -299,6 +300,11 @@ impl Function {
     pub fn can_subsume(&self) -> bool {
         self.can_subsume
     }
+
+    /// Whether this is a let binding
+    pub fn is_let_binding(&self) -> bool {
+        self.decl.internal_let
+    }
 }
 
 #[derive(Clone, Debug)]
@@ -350,7 +356,6 @@ impl Default for EGraph {
             proof_state,
             proof_check_program: vec![],
         };
-
         add_base_sort(&mut eg, UnitSort, span!()).unwrap();
         add_base_sort(&mut eg, StringSort, span!()).unwrap();
         add_base_sort(&mut eg, BoolSort, span!()).unwrap();
@@ -987,6 +992,28 @@ impl EGraph {
             Ok(_) => Ok(()),
             Err(e) => Err(Error::BackendError(e.to_string())),
         }
+    }
+
+    /// Get the list of all functions in the e-graph.
+    pub fn get_function_names(&self) -> Vec<String> {
+        self.functions.keys().cloned().collect()
+    }
+
+    /// Read the contents of the given function.
+    /// The callback f is called with each row and its subsumption status.
+    ///
+    /// Raises an error if the function does not exist.
+    pub fn function_for_each(
+        &self,
+        func_name: &str,
+        f: impl FnMut(FunctionRow<'_>),
+    ) -> Result<(), Error> {
+        let func = self
+            .functions
+            .get(func_name)
+            .ok_or_else(|| TypeError::UnboundFunction(func_name.to_string(), span!()))?;
+        self.backend.for_each(func.backend_id, f);
+        Ok(())
     }
 
     /// Evaluates an expression, returns the sort of the expression and the evaluation result.
@@ -1812,6 +1839,11 @@ impl EGraph {
     pub fn get_canonical_value(&self, val: Value, sort: &ArcSort) -> Value {
         self.backend
             .get_canon_repr(val, sort.column_ty(&self.backend))
+    }
+
+    /// Create a new union action that can be used to union two values.
+    pub fn new_union_action(&self) -> egglog_bridge::UnionAction {
+        UnionAction::new(&self.backend)
     }
 }
 
