@@ -9,6 +9,9 @@
 ; Test vec-pop
 (check (= (vec-pop (vec-of 1 2 3)) (vec-of 1 2)))
 
+; Regression: inline checks must not alias different vec-of arities.
+(check (= (vec-of 1 2) (vec-pop (vec-of 1 2 3))))
+
 ; Test vec-not-contains
 (check (vec-not-contains (vec-of 1 2 3) 4))
 
@@ -34,5 +37,46 @@
 (let $q (vec-of (b)))
 (check (!= $p $q))
 
+(push)
 (union (a) (b))
 (check (= $p $q))
+(pop)
+
+; Test union
+(push)
+(vec-union $p $q)
+(check (= $p $q))
+(check (= (a) (b)))
+(pop)
+
+; test union fails on different lengths
+(fail (vec-union (vec-of (a)) (vec-of (b) (a))))
+
+; verify vec-union works as merge function
+(function ff () VX :merge (vec-union old new))
+(push)
+(set (ff) $p)
+(set (ff) $q)
+(check (= $p $q))
+(check (= (a) (b)))
+(pop)
+
+; range
+(check (= (vec-range 5) (vec-of 0 1 2 3 4)))
+
+; Test unstable-vec-map
+(sort Y)
+(sort VY (Vec Y))
+(sort XY (UnstableFn (X) Y))
+(constructor y (X) Y)
+(push)
+(let $mapped (unstable-vec-map (unstable-fn "y") (vec-of (a) (b))))
+(check (= $mapped (vec-of (y (a)) (y (b)))))
+(pop)
+
+; Verify that it skips on undefined
+(function xToY (X) Y :no-merge)
+(set (xToY (a)) (y (a)))
+(let $mapped (unstable-vec-map (unstable-fn "xToY") (vec-of (a) )))
+(check (= $mapped (vec-of (y (a)) )))
+(check (= (unstable-vec-map (unstable-fn "xToY") (vec-of (a) (b) )) (vec-of (y (a)) )))

@@ -76,7 +76,7 @@ pub trait Sort: Any + Send + Sync + Debug {
         false
     }
 
-    // return true if it is a container sort that contains ids.
+    // return true if it is a container sort that contains ids or other container sorts that contain ids.
     // only eq_sort and eq_container_sort need to be canonicalized.
     fn is_eq_container_sort(&self) -> bool {
         false
