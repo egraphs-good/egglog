@@ -378,7 +378,10 @@ impl RustRuleContext<'_, '_, '_> {
     }
 
     fn get_table_action_cache_by_id<'a>(
-        table_actions_cache_by_id: &'a mut Vec<(egglog_bridge::FunctionId, egglog_bridge::TableAction)>,
+        table_actions_cache_by_id: &'a mut Vec<(
+            egglog_bridge::FunctionId,
+            egglog_bridge::TableAction,
+        )>,
         table_actions_by_id: &[Option<egglog_bridge::TableAction>],
         table: egglog_bridge::FunctionId,
     ) -> &'a mut egglog_bridge::TableAction {
@@ -391,10 +394,7 @@ impl RustRuleContext<'_, '_, '_> {
 
         let action = Self::get_table_action_by_id(table_actions_by_id, table).clone();
         table_actions_cache_by_id.push((table, action));
-        &mut table_actions_cache_by_id
-            .last_mut()
-            .expect("just pushed")
-            .1
+        &mut table_actions_cache_by_id.last_mut().expect("just pushed").1
     }
 
     /// Do a table lookup. This is potentially a mutable operation!
@@ -430,7 +430,11 @@ impl RustRuleContext<'_, '_, '_> {
 
     /// Insert a row into a table by cached backend FunctionId.
     /// For more information, see `egglog_bridge::TableAction::insert`.
-    pub fn insert_id(&mut self, table: egglog_bridge::FunctionId, row: impl Iterator<Item = Value>) {
+    pub fn insert_id(
+        &mut self,
+        table: egglog_bridge::FunctionId,
+        row: impl Iterator<Item = Value>,
+    ) {
         let RustRuleContext {
             exec_state,
             table_actions_by_id,
@@ -626,7 +630,10 @@ pub fn rust_rule(
         if table_actions_by_id.len() <= idx {
             table_actions_by_id.resize_with(idx + 1, || None);
         }
-        table_actions_by_id[idx] = Some(egglog_bridge::TableAction::new(&egraph.backend, v.backend_id));
+        table_actions_by_id[idx] = Some(egglog_bridge::TableAction::new(
+            &egraph.backend,
+            v.backend_id,
+        ));
     }
 
     egraph.add_primitive(RustRuleRhs {
