@@ -603,20 +603,33 @@ fn decompose_into_bags(original_ctx: &PlanningContext) -> Vec<PlanningContext> {
 #[allow(dead_code)]
 fn topologically_sort_bags(bags: Vec<PlanningContext>) -> Vec<PlanningContext> {
     let mut bags_opt = bags.into_iter().map(Some).collect::<Vec<_>>();
-    let mut bags_topo = Vec::with_capacity(bags_opt.len());
+    let mut bags_topo = Vec::<PlanningContext>::with_capacity(bags_opt.len());
     let mut visited = vec![false; bags_opt.len()];
     let mut stack = Vec::new();
 
+    // A bag is a leaf if it only fully covers one atom, so it is essentially doing a scan (that semi-join reduces with other atoms).
+    // In this case, merging this bag with its parent bag avoids the expensive algorithm and incurs no overhead.
+    let is_leaf = |bag: &PlanningContext| {
+        bag.atoms
+            .iter()
+            .filter(|(_, atom)| atom.vars().all(|var| bag.vars.contains_key(var)))
+            .count()
+            == 1
+    };
+
+    // Starting from the last, since early bags are more likely to be leaves and we don't
+    // want a leafy bag to be a root.
     for i in (0..bags_opt.len()).rev() {
         if visited[i] {
             continue;
         }
-        stack.push(i);
+        stack.push((i, usize::MAX));
         visited[i] = true;
 
-        while let Some(bag_id) = stack.pop() {
+        while let Some((bag_id, parent)) = stack.pop() {
             let bag = mem::take(&mut bags_opt[bag_id]).unwrap();
 
+            let mut has_children = false;
             // Find child bags that share variables with this bag
             for (i, child_bag) in bags_opt.iter().enumerate().filter(|(_, b)| b.is_some()) {
                 let child_bag = child_bag.as_ref().unwrap();
@@ -627,10 +640,35 @@ fn topologically_sort_bags(bags: Vec<PlanningContext>) -> Vec<PlanningContext> {
                     && !visited[i]
                 {
                     visited[i] = true;
-                    stack.push(i);
+                    has_children = true;
+                    stack.push((i, bags_topo.len()));
                 }
             }
-            bags_topo.push(bag);
+
+            if !has_children && is_leaf(&bag) && parent != usize::MAX {
+                // merging with parent bag
+                let parent_bag = bags_topo.get_mut(parent).unwrap();
+                for (var_id, vinfo) in bag.vars.into_iter() {
+                    if !parent_bag.vars.contains_key(var_id) {
+                        parent_bag.vars.insert(var_id, vinfo);
+                    } else {
+                        let parent_vinfo = parent_bag.vars.get_mut(var_id).unwrap();
+                        parent_vinfo.occurrences.extend(
+                            vinfo
+                                .occurrences
+                                .into_iter()
+                                .filter(|occ| !parent_bag.atoms.contains_key(occ.atom)),
+                        );
+                    }
+                }
+                for (atom_id, atom) in bag.atoms.into_iter() {
+                    if !parent_bag.atoms.contains_key(atom_id) {
+                        parent_bag.atoms.insert(atom_id, atom);
+                    }
+                }
+            } else {
+                bags_topo.push(bag);
+            }
         }
     }
 
@@ -909,6 +947,9 @@ pub(crate) fn tree_decompose_and_plan(
     // dbg!(&ctx);
     // Step 1: Decompose the query into tree-structured bags
     let bags = decompose_into_bags(&ctx);
+    // Step 2: Sort bags topologically
+    let mut bags = topologically_sort_bags(bags);
+
     if bags.len() <= 1 {
         // Don't do Yannakakis if it's just one bag
         let (header, instrs) = plan_stages(&ctx, strat);
@@ -923,10 +964,6 @@ pub(crate) fn tree_decompose_and_plan(
             actions,
         });
     }
-
-    // Step 2: Sort bags topologically
-    let mut bags = topologically_sort_bags(bags);
-    // dbg!(&bags);
 
     // Step 3: Count variable usage across bags
     let mut n_used_in_bag = count_variable_usage_per_bag(&bags);
