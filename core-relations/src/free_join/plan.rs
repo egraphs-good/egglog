@@ -377,6 +377,11 @@ fn next_var_to_eliminate(
     atoms: &DenseIdMap<AtomId, Atom>,
     fun_deps: &FunDeps,
 ) -> Option<IndexSet<Variable>> {
+    // eprintln!(
+    //     "Variables left to eliminate: {:?}, atoms: {:?}",
+    //     vars.iter().count(),
+    //     atoms.iter().count()
+    // );
     let (_var, subquery_vars) = vars
         .iter()
         .map(|(var, _vinfo)| {
@@ -393,14 +398,16 @@ fn next_var_to_eliminate(
 
             let occ = atoms
                 .iter()
-                .filter(|(_, atom)| atom.vars().any(|v| subquery_vars.contains(&v)))
+                .filter(|(_, atom)| atom.vars().any(|v| subquery_vars.contains_key(v)))
                 .count();
             (occ, var, subquery_vars)
         })
         .min_by_key(|a| a.0)
         .map(|a| (a.1, a.2))?;
     // eprintln!("Picking variable {:?}", _var);
-    Some(subquery_vars)
+    Some(IndexSet::from_iter(
+        subquery_vars.into_iter().map(|(var, _)| var),
+    ))
 }
 
 /// It updates the hypergraph with the given bag of variables by:
@@ -492,6 +499,18 @@ fn decompose_into_bags(original_ctx: &PlanningContext) -> Vec<PlanningContext> {
 
     // Variable elimination loop
     while let Some(subquery_vars) = next_var_to_eliminate(&vars, &atoms, &original_ctx.fun_deps) {
+        // eprintln!(
+        //     "Next variable to eliminate: {:?}, subquery vars: {:?}",
+        //     subquery_vars,
+        //     subquery_vars
+        //         .iter()
+        //         .map(|var| original_ctx.vars[*var]
+        //             .occurrences
+        //             .iter()
+        //             .map(|occ| occ.atom)
+        //             .collect::<Vec<_>>())
+        //         .collect::<Vec<_>>()
+        // );
         // Create a fake covering atom to bridge back to the main query
         // Remove hyperedges that only contain subquery variables.
         update_hypergraph(&subquery_vars, &mut vars, &mut atoms);
@@ -501,52 +520,9 @@ fn decompose_into_bags(original_ctx: &PlanningContext) -> Vec<PlanningContext> {
         let mut subquery_atoms: DenseIdMap<AtomId, Atom> = original_ctx
             .atoms
             .iter()
-            .filter(|(_, atom)| atom.vars().all(|var| subquery_vars.contains(&var)))
+            .filter(|(_, atom)| atom.vars().any(|var| subquery_vars.contains(&var)))
             .map(|(atom_id, atom)| (atom_id, atom.clone()))
             .collect();
-
-        // let mut aux_vars = IndexSet::default();
-        for (atom_id, atom) in original_ctx.atoms.iter() {
-            if !atom.vars().all(|var| subquery_vars.contains(&var))
-                && atom.vars().any(|var| subquery_vars.contains(&var))
-            {
-                subquery_atoms.insert(atom_id, atom.clone());
-                // aux_vars.extend(atom.vars().filter(|var| !subquery_vars.contains(var)));
-            }
-        }
-
-        // // If there are variables still not covered, we add atoms that connect covered
-        // // and uncovered variables. The raionale is (1) This also avoids cross product and
-        // // (2) we don't just add any atoms
-        // let mut covered_vars = HashSet::default();
-        // let mut uncovered_vars = HashSet::from_iter(subquery_vars.iter().copied());
-        // for (_atom_id, atom) in subquery_atoms.iter() {
-        //     for var in atom.vars() {
-        //         covered_vars.insert(var);
-        //         uncovered_vars.remove(&var);
-        //     }
-        // }
-        // while !uncovered_vars.is_empty() {
-        //     for (atom_id, atom) in original_ctx.atoms.iter() {
-        //         if subquery_atoms.contains_key(atom_id) {
-        //             continue;
-        //         }
-        //         if atom.vars().any(|var| uncovered_vars.contains(&var))
-        //             && atom.vars().any(|var| covered_vars.contains(&var))
-        //         {
-        //             subquery_atoms.insert(atom_id, atom.clone());
-        //             for var in atom.vars() {
-        //                 covered_vars.insert(var);
-        //                 uncovered_vars.remove(&var);
-        //             }
-        //         }
-        //     }
-        // }
-        // assert!(
-        //     uncovered_vars.is_empty(),
-        //     "All subquery variables should be covered"
-        // );
-        // let subquery_vars = IndexSet::from_iter(covered_vars);
 
         let subquery_var_map = DenseIdMap::from_iter(subquery_vars.iter().map(|var| {
             let mut var_info = original_ctx.vars[*var].clone();
@@ -944,25 +920,38 @@ pub(crate) fn tree_decompose_and_plan(
     strat: PlanStrategy,
     actions: ActionId,
 ) -> Plan {
-    // dbg!(&ctx);
+    macro_rules! fast_path {
+        () => {{
+            let (header, instrs) = plan_stages(&ctx, strat);
+            let stages = JoinStages {
+                instrs: Arc::new(instrs),
+            };
+
+            Plan::SinglePlan(SinglePlan {
+                atoms: Arc::new(ctx.atoms),
+                header,
+                stages,
+                actions,
+            })
+        }};
+    }
+    if ctx.atoms.len() <= 2 {
+        return fast_path!();
+    }
+
     // Step 1: Decompose the query into tree-structured bags
     let bags = decompose_into_bags(&ctx);
-    // Step 2: Sort bags topologically
+    if bags.len() <= 1 {
+        // Don't do Yannakakis if it's just one bag
+        return fast_path!();
+    }
+
+    // Step 2: Sort bags topologically and merge leafy bags with their parents
     let mut bags = topologically_sort_bags(bags);
 
     if bags.len() <= 1 {
         // Don't do Yannakakis if it's just one bag
-        let (header, instrs) = plan_stages(&ctx, strat);
-        let stages = JoinStages {
-            instrs: Arc::new(instrs),
-        };
-
-        return Plan::SinglePlan(SinglePlan {
-            atoms: Arc::new(ctx.atoms),
-            header,
-            stages,
-            actions,
-        });
+        return fast_path!();
     }
 
     // Step 3: Count variable usage across bags
