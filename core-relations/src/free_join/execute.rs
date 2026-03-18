@@ -720,9 +720,7 @@ impl<'a> JoinState<'a> {
         }
 
         if cur >= instr_order.len() {
-            action_buf.push_bindings(action, &binding_info.bindings, || {
-                ExecutionState::new(self.db.read_only_view(), Default::default())
-            });
+            action_buf.push_bindings(action, &binding_info.bindings, || self.exec_state.clone());
             return;
         }
         let chunk_size = action_buf.morsel_size(cur, instr_order.len());
