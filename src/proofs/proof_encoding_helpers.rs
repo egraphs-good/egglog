@@ -32,6 +32,7 @@ pub(crate) struct EncodingNames {
     pub(crate) fn_to_term_sort: HashMap<String, String>,
     pub(crate) uf_proof_name: HashMap<String, String>,
     pub(crate) single_parent_ruleset_name: String,
+    pub(crate) uf_function_index_ruleset_name: String,
     pub(crate) pcons: String,
     pub(crate) pnil: String,
     // Ruleset names
@@ -73,6 +74,7 @@ impl EncodingNames {
             fn_to_term_sort: HashMap::default(),
             uf_proof_name: HashMap::default(),
             single_parent_ruleset_name: symbol_gen.fresh("single_parent"),
+            uf_function_index_ruleset_name: symbol_gen.fresh("uf_function_index"),
             pcons: symbol_gen.fresh("PCons"),
             pnil: symbol_gen.fresh("PNil"),
             path_compress_ruleset_name: symbol_gen.fresh("parent"),
@@ -97,6 +99,19 @@ impl ProofInstrumentor<'_> {
             self.egraph
                 .proof_state
                 .uf_parent
+                .insert(sort.to_string(), fresh_name.clone());
+            fresh_name
+        }
+    }
+
+    pub(crate) fn uf_function_name(&mut self, sort: &str) -> String {
+        if let Some(name) = self.egraph.proof_state.uf_function.get(sort) {
+            name.clone()
+        } else {
+            let fresh_name = self.egraph.parser.symbol_gen.fresh(&format!("UF_{sort}f"));
+            self.egraph
+                .proof_state
+                .uf_function
                 .insert(sort.to_string(), fresh_name.clone());
             fresh_name
         }
@@ -148,9 +163,11 @@ impl ProofInstrumentor<'_> {
              (ruleset {})
              (ruleset {})
              (ruleset {})
+             (ruleset {})
              (ruleset {})",
             self.proof_names().path_compress_ruleset_name,
             self.proof_names().single_parent_ruleset_name,
+            self.proof_names().uf_function_index_ruleset_name,
             self.proof_names().rebuilding_ruleset_name,
             self.proof_names().rebuilding_cleanup_ruleset_name,
             self.proof_names().delete_subsume_ruleset_name

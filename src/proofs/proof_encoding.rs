@@ -7,6 +7,7 @@ use crate::*;
 #[derive(Clone)]
 pub(crate) struct EncodingState {
     pub uf_parent: HashMap<String, String>,
+    pub uf_function: HashMap<String, String>,
     /// Maps sort name -> proof function name (set from :internal-proof-func annotation).
     pub proof_func_parent: HashMap<String, String>,
     pub term_header_added: bool,
@@ -23,6 +24,7 @@ impl EncodingState {
     pub(crate) fn new(symbol_gen: &mut SymbolGen) -> Self {
         Self {
             uf_parent: HashMap::default(),
+            uf_function: HashMap::default(),
             proof_func_parent: HashMap::default(),
             term_header_added: false,
             original_typechecking: None,
@@ -97,8 +99,10 @@ impl<'a> ProofInstrumentor<'a> {
     /// canonical representative.
     fn declare_sort(&mut self, sort_name: &str) -> Vec<Command> {
         let pname = self.uf_name(sort_name);
+        let uf_function_name = self.uf_function_name(sort_name);
         let fresh_sort = self.egraph.parser.symbol_gen.fresh("uf");
         let fresh_name = self.egraph.parser.symbol_gen.fresh("uf_update");
+        let uf_function_index_name = self.egraph.parser.symbol_gen.fresh("uf_function_index");
         let proof_tables = if self.egraph.proof_state.proofs_enabled {
             let term_proof_name = self.term_proof_name(sort_name);
             let proof_type = self.proof_names().proof_datatype.clone();
@@ -162,10 +166,13 @@ impl<'a> ProofInstrumentor<'a> {
 
         let path_compress_ruleset_name = self.proof_names().path_compress_ruleset_name.clone();
         let single_parent_ruleset_name = self.proof_names().single_parent_ruleset_name.clone();
+        let uf_function_index_ruleset_name =
+            self.proof_names().uf_function_index_ruleset_name.clone();
 
         self.parse_program(&format!(
             "(sort {fresh_sort})
              (constructor {pname} ({sort_name} {sort_name}) {fresh_sort} :internal-hidden)
+             (function {uf_function_name} ({sort_name}) {sort_name} :merge new :internal-hidden)
              {to_ast_constructor_code}
              {proof_tables}
              ;; performs path compression, ensuring each term points to the representative
@@ -189,6 +196,11 @@ impl<'a> ProofInstrumentor<'a> {
                     {proof_action2})
                    :ruleset {single_parent_ruleset_name}
                    :name \"singleparent{fresh_name}\")
+             ;; mirrors UF rows into a function-backed UF index for faster rebuild lookups
+             (rule (({pname} a b))
+                   ((set ({uf_function_name} a) b))
+                   :ruleset {uf_function_index_ruleset_name}
+                   :name \"{uf_function_index_name}\")
                    ",
         ))
     }
@@ -506,19 +518,19 @@ impl<'a> ProofInstrumentor<'a> {
         for (i, ty) in types.iter().enumerate() {
             if ty.is_eq_sort() {
                 let leader_var = format!("c{i}_leader_");
-                let parent = self.uf_name(ty.name());
+                let uf_function_name = self.uf_function_name(ty.name());
                 let ci = child(i);
 
                 if self.egraph.proof_state.proofs_enabled {
                     let uf_proof = self.uf_proof_name(ty.name());
                     let proof_var = self.fresh_var();
                     uf_queries.push(format!(
-                        "({parent} {ci} {leader_var})
+                        "(= {leader_var} ({uf_function_name} {ci}))
                          (= {proof_var} ({uf_proof} {ci} {leader_var}))"
                     ));
                     uf_proof_vars.push(Some(proof_var));
                 } else {
-                    uf_queries.push(format!("({parent} {ci} {leader_var})"));
+                    uf_queries.push(format!("(= {leader_var} ({uf_function_name} {ci}))"));
                     uf_proof_vars.push(None);
                 }
 
@@ -1117,6 +1129,7 @@ impl<'a> ProofInstrumentor<'a> {
     fn rebuild(&mut self) -> Schedule {
         let path_compress_ruleset = self.proof_names().path_compress_ruleset_name.clone();
         let single_parent = self.proof_names().single_parent_ruleset_name.clone();
+        let uf_function_index = self.proof_names().uf_function_index_ruleset_name.clone();
         let rebuilding_cleanup_ruleset = self.proof_names().rebuilding_cleanup_ruleset_name.clone();
         let rebuilding_ruleset = self.proof_names().rebuilding_ruleset_name.clone();
         let delete_ruleset = self.proof_names().delete_subsume_ruleset_name.clone();
@@ -1126,6 +1139,7 @@ impl<'a> ProofInstrumentor<'a> {
                   {rebuilding_cleanup_ruleset}
                   (saturate {single_parent})
                   (saturate {path_compress_ruleset})
+                  (saturate {uf_function_index})
                   {rebuilding_ruleset})
               {delete_ruleset})"
         ))

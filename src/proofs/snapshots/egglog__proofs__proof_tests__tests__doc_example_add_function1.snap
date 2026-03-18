@@ -1,16 +1,17 @@
 ---
 source: src/proofs/proof_tests.rs
-assertion_line: 48
 expression: snapshot
 ---
 (ruleset __parent)
 (ruleset __single_parent)
+(ruleset __uf_function_index)
 (ruleset __rebuilding)
 (ruleset __rebuilding_cleanup)
 (ruleset __delete_subsume_ruleset)
 (sort Math :internal-uf __UF_Math)
 (sort __uf)
 (constructor __UF_Math (Math Math) __uf :internal-hidden)
+(function __UF_Mathf (Math) Math :merge new :internal-hidden)
 (rule ((__UF_Math a b)
        (__UF_Math b c)
        (!= b c))
@@ -24,6 +25,9 @@ expression: snapshot
       ((delete (__UF_Math a b))
        (__UF_Math b c))
         :ruleset __single_parent :name "singleparent__uf_update")
+(rule ((__UF_Math a b))
+      ((set (__UF_Mathf a) b))
+        :ruleset __uf_function_index :name "__uf_function_index1")
 (sort __view)
 (constructor Add (i64 i64) Math :unextractable :internal-hidden)
 (constructor __AddView (i64 i64 Math) __view :term-constructor Add)
@@ -45,7 +49,7 @@ expression: snapshot
       ((subsume (__AddView c0_ c1_ out)))
         :ruleset __delete_subsume_ruleset :name "__delete_rule_subsume")
 (rule ((__AddView c0_ c1_ c2_)
-       (__UF_Math c2_ c2_leader_)
+       (= c2_leader_ (__UF_Mathf c2_))
        (guard (or (bool-!= c2_ c2_leader_))))
       ((__AddView c0_ c1_ c2_leader_)
        (delete (__AddView c0_ c1_ c2_)))
@@ -54,7 +58,7 @@ expression: snapshot
 (set (__v) (Add 1 2))
 (__AddView 1 2 (__v ))
 (__UF_Math (ordering-max (__v ) (__v )) (ordering-min (__v ) (__v )))
-(run-schedule (seq (saturate (seq (run __rebuilding_cleanup) (saturate (run __single_parent)) (saturate (run __parent)) (run __rebuilding))) (run __delete_subsume_ruleset)))
+(run-schedule (seq (saturate (seq (run __rebuilding_cleanup) (saturate (run __single_parent)) (saturate (run __parent)) (saturate (run __uf_function_index)) (run __rebuilding))) (run __delete_subsume_ruleset)))
 (rule ((__AddView a b __v1))
       ((let __v3 (Add a b))
        (__AddView a b __v3)
@@ -67,4 +71,4 @@ expression: snapshot
 (check (__AddView 1 2 __v5)
 (__AddView 2 1 __v6)
 (= __v5 __v6))
-(run-schedule (seq (saturate (seq (run __rebuilding_cleanup) (saturate (run __single_parent)) (saturate (run __parent)) (run __rebuilding))) (run __delete_subsume_ruleset)))
+(run-schedule (seq (saturate (seq (run __rebuilding_cleanup) (saturate (run __single_parent)) (saturate (run __parent)) (saturate (run __uf_function_index)) (run __rebuilding))) (run __delete_subsume_ruleset)))

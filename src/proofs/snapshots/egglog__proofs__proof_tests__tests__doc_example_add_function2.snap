@@ -4,6 +4,7 @@ expression: snapshot
 ---
 (ruleset __parent)
 (ruleset __single_parent)
+(ruleset __uf_function_index)
 (ruleset __rebuilding)
 (ruleset __rebuilding_cleanup)
 (ruleset __delete_subsume_ruleset)
@@ -39,4 +40,4 @@ expression: snapshot
         :ruleset __delete_subsume_ruleset :name "__delete_rule_subsume")
 (check (__addView 0 0 __n)
 (= __n 0))
-(run-schedule (seq (saturate (seq (run __rebuilding_cleanup) (saturate (run __single_parent)) (saturate (run __parent)) (run __rebuilding))) (run __delete_subsume_ruleset)))
+(run-schedule (seq (saturate (seq (run __rebuilding_cleanup) (saturate (run __single_parent)) (saturate (run __parent)) (saturate (run __uf_function_index)) (run __rebuilding))) (run __delete_subsume_ruleset)))
