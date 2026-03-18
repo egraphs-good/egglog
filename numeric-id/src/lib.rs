@@ -174,6 +174,7 @@ impl<K: NumericId, V> DenseIdMap<K, V> {
             .filter_map(|(i, v)| Some((K::from_usize(i), v.as_mut()?)))
     }
 
+    #[allow(clippy::should_implement_trait)]
     pub fn into_iter(self) -> impl Iterator<Item = (K, V)> {
         self.data
             .into_iter()
@@ -209,6 +210,10 @@ impl<K: NumericId, V> DenseIdMap<K, V> {
 
     pub fn len(&self) -> usize {
         self.data.iter().filter(|v| v.is_some()).count()
+    }
+
+    pub fn is_empty(&self) -> bool {
+        self.data.iter().all(|v| v.is_none())
     }
 }
 
