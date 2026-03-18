@@ -275,7 +275,7 @@ impl RuleBuilder<'_> {
         let res = self.query.rule_id;
         let cached_plan = self
             .query
-            .build_cached_plan(&mut self.egraph.db, &self.proof_builder.rule_description)
+            .build_cached_plan(&mut self.egraph.db, &self.desc)
             .ok();
         let info = RuleInfo {
             last_run_at: Timestamp::new(0),

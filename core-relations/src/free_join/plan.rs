@@ -1420,10 +1420,10 @@ fn plan_gj(
         }
 
         let next_stage = compile_stage(ctx, state, info);
-        if let Some(prev) = stages.last_mut() {
-            if prev.fuse(&next_stage) {
-                continue;
-            }
+        if let Some(prev) = stages.last_mut()
+            && prev.fuse(&next_stage)
+        {
+            continue;
         }
         stages.push(next_stage);
     }
