@@ -3,7 +3,6 @@
 use std::{iter::once, sync::Arc};
 
 use crate::{
-    common::IndexSet,
     free_join::plan::{DecomposedPlan, JoinStageBlocks, SinglePlan},
     numeric_id::{DenseIdMap, IdVec, NumericId, define_id},
 };

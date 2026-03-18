@@ -202,7 +202,12 @@ impl Plan {
     }
 
     pub(crate) fn to_report(&self, _symbol_map: &SymbolMap) -> egglog_reports::Plan {
-        todo!()
+        match self {
+            Plan::SinglePlan(p) => p.to_report(_symbol_map),
+            Plan::DecomposedPlan(_) => {
+                todo!()
+            }
+        }
     }
 }
 
@@ -517,7 +522,7 @@ fn decompose_into_bags(original_ctx: &PlanningContext) -> Vec<PlanningContext> {
 
         // Collect atoms that only contain subquery variables.
         // TODO: can be optimized to be in one pass
-        let mut subquery_atoms: DenseIdMap<AtomId, Atom> = original_ctx
+        let subquery_atoms: DenseIdMap<AtomId, Atom> = original_ctx
             .atoms
             .iter()
             .filter(|(_, atom)| atom.vars().any(|var| subquery_vars.contains(&var)))
@@ -980,11 +985,11 @@ pub(crate) fn tree_decompose_and_plan(
     // let (blocks, result_block) = fuse_last_stage(blocks, result_block);
 
     // Lifting variables
-    let mut blocks = blocks
+    let blocks = blocks
         .into_iter()
         .map(|(stages, mat_spec)| (loop_lifting(stages), mat_spec))
         .collect::<Vec<_>>();
-    let mut result_block = loop_lifting(result_block);
+    let result_block = loop_lifting(result_block);
 
     // // Inline materializations that are just scan
     // for i in 0..blocks.len() {
