@@ -14,6 +14,7 @@ use crate::{
     row_buffer::RowBuffer,
 };
 use crossbeam::utils::CachePadded;
+use dashmap::mapref::entry::Entry;
 use dashmap::mapref::one::RefMut;
 use egglog_reports::{ReportLevel, RuleReport, RuleSetReport};
 use smallvec::SmallVec;
@@ -653,7 +654,7 @@ impl<'a> JoinState<'a> {
         'a: 'buf,
     {
         if log::log_enabled!(log::Level::Debug) {
-            log::debug!("Starting running query stages:\n{:#?}", stages);
+            log::debug!("Starting running query stages:\n{stages:#?}");
         }
         for (_, node) in binding_info.subsets.iter() {
             if node.subset.is_empty() {
@@ -1604,12 +1605,16 @@ impl<'scope> ActionBuffer<'scope, MatId> for ScopedMaterializer<'_, 'scope> {
         if self.scratch_val.is_empty() {
             self.scratch_val.push(Value::stale());
         }
-        if let Some(mut buffer) = mat.get_mut(&self.scratch_key) {
-            buffer.add_row(&self.scratch_val);
-        } else {
-            let mut buffer = RowBuffer::new(usize::max(spec.val_vars.len(), 1));
-            buffer.add_row(&self.scratch_val);
-            mat.insert(self.scratch_key.clone(), buffer);
+        let key = self.scratch_key.clone();
+        match mat.entry(key) {
+            Entry::Occupied(mut occ) => {
+                occ.get_mut().add_row(&self.scratch_val);
+            }
+            Entry::Vacant(vac) => {
+                let mut buffer = RowBuffer::new(usize::max(spec.val_vars.len(), 1));
+                buffer.add_row(&self.scratch_val);
+                vac.insert(buffer);
+            }
         }
     }
 
@@ -1620,7 +1625,7 @@ impl<'scope> ActionBuffer<'scope, MatId> for ScopedMaterializer<'_, 'scope> {
     fn recur<'local>(
         &mut self,
         mut local: BorrowedLocalState<'local>,
-        mut _to_exec_state: impl FnMut() -> ExecutionState<'scope> + Send + 'scope,
+        _to_exec_state: impl FnMut() -> ExecutionState<'scope> + Send + 'scope,
         work: impl for<'a> FnOnce(BorrowedLocalState<'a>, &mut ScopedMaterializer<'a, 'scope>)
         + Send
         + 'scope,

@@ -894,7 +894,7 @@ impl std::fmt::Debug for VarColumnMap {
             if i > 0 {
                 f.write_str(", ")?;
             }
-            write!(f, "{:?} -> {:?}", col, var)?;
+            write!(f, "{col:?} -> {var:?}")?;
         }
         f.write_str(")")
     }
@@ -996,7 +996,7 @@ impl std::fmt::Debug for FunDeps {
                 if j > 0 {
                     deps.push_str(", ");
                 }
-                write!(&mut deps, "{:?}", v)?;
+                write!(&mut deps, "{v:?}")?;
             }
             deps.push('}');
 
@@ -1007,12 +1007,12 @@ impl std::fmt::Debug for FunDeps {
                 if j > 0 {
                     deps.push_str(", ");
                 }
-                write!(&mut deps, "{:?}", v)?;
+                write!(&mut deps, "{v:?}")?;
             }
             deps.push('}');
         }
 
-        write!(f, "FunDeps {{ {} }}", deps)
+        write!(f, "FunDeps {{ {deps} }}")
     }
 }
 
