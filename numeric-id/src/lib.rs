@@ -200,10 +200,10 @@ impl<K: NumericId, V> DenseIdMap<K, V> {
 
     pub fn retain(&mut self, mut f: impl FnMut(K, &V) -> bool) {
         for (i, v) in self.data.iter_mut().enumerate() {
-            if let Some(inner) = v {
-                if !f(K::from_usize(i), inner) {
-                    *v = None;
-                }
+            if let Some(inner) = v
+                && !f(K::from_usize(i), inner)
+            {
+                *v = None;
             }
         }
     }

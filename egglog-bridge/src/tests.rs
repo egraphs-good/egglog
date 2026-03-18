@@ -705,7 +705,9 @@ fn container_test() {
                 || "".to_string(),
             )
             .into();
-        let boxed: QueryEntry = rb.lookup(num_table, &[evaled.clone()], String::new).into();
+        let boxed: QueryEntry = rb
+            .lookup(num_table, std::slice::from_ref(&evaled), String::new)
+            .into();
         rb.union(add_id.clone(), boxed.clone());
         rb.build()
     };

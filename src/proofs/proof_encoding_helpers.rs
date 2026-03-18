@@ -492,10 +492,10 @@ fn expr_primitives_have_validators(expr: &ResolvedExpr) -> bool {
     let mut all_valid = true;
     expr.walk(
         &mut |e| {
-            if let GenericExpr::Call(_, ResolvedCall::Primitive(prim), _) = e {
-                if prim.validator().is_none() {
-                    all_valid = false;
-                }
+            if let GenericExpr::Call(_, ResolvedCall::Primitive(prim), _) = e
+                && prim.validator().is_none()
+            {
+                all_valid = false;
             }
         },
         &mut |_| {},

@@ -55,12 +55,11 @@ impl Sexp {
     }
 
     pub fn expect_uint<UInt: TryFrom<u64>>(&self, e: &'static str) -> Result<UInt, ParseError> {
-        if let Sexp::Literal(Literal::Int(x), _) = self {
-            if *x >= 0 {
-                if let Ok(v) = (*x as u64).try_into() {
-                    return Ok(v);
-                }
-            }
+        if let Sexp::Literal(Literal::Int(x), _) = self
+            && *x >= 0
+            && let Ok(v) = (*x as u64).try_into()
+        {
+            return Ok(v);
         }
         error!(
             self.span(),
@@ -90,10 +89,10 @@ impl Sexp {
     }
 
     pub fn expect_call(&self, e: &'static str) -> Result<(String, &[Sexp], Span), ParseError> {
-        if let Sexp::List(sexps, span) = self {
-            if let [Sexp::Atom(func, _), args @ ..] = sexps.as_slice() {
-                return Ok((func.clone(), args, span.clone()));
-            }
+        if let Sexp::List(sexps, span) = self
+            && let [Sexp::Atom(func, _), args @ ..] = sexps.as_slice()
+        {
+            return Ok((func.clone(), args, span.clone()));
         }
         error!(self.span(), "expected {e}")
     }
@@ -966,10 +965,10 @@ impl Parser {
         sexps: &'a [Sexp],
     ) -> Result<Vec<(&'a str, &'a [Sexp])>, ParseError> {
         fn option_name(sexp: &Sexp) -> Option<&str> {
-            if let Sexp::Atom(s, _) = sexp {
-                if let Some(':') = s.chars().next() {
-                    return Some(s);
-                }
+            if let Sexp::Atom(s, _) = sexp
+                && let Some(':') = s.chars().next()
+            {
+                return Some(s);
             }
             None
         }
