@@ -1,0 +1,62 @@
+;; Thesis:
+;; This looks like a seminaive matching / rebuild issue, not a missing rewrite.
+;; In the first egraph, `make_elem` goes through a top-level `unstable-vec-map`
+;; and an inner `unstable-app` to produce a new `lookup(array_lit(...), vec-of(...))`
+;; term. That term is visible to extraction, but the later `lookup` rewrites do not
+;; fire all the way down to `lit 1` until the extracted term is re-added to a fresh
+;; egraph. That suggests the original egraph is not noticing that the function- and
+;; container-produced term created a new match for the downstream `lookup` rewrites.
+;;
+;; Repro: the first egraph gets stuck with an unresolved lookup term,
+;; but re-adding the extracted term to a fresh egraph resolves it.
+;;
+;; The key ingredients are:
+;; - a top-level unstable-vec-map
+;; - one inner unstable-app
+;; - a lookup rewrite that should reduce all the way to a literal element
+
+(sort Elem)
+(sort VElem (Vec Elem))
+(sort Vi64 (Vec i64))
+(sort ElemToi64 (UnstableFn (i64) Elem))
+(sort ElemToElem (UnstableFn (Elem) Elem))
+
+;; wrap a host integer as an Elem.
+(constructor lit (i64) Elem)
+;; treat a built-in VElem as a first-class value that lookup can index.
+(constructor array_lit (VElem) Elem)
+;; index an Elem-valued array with an Elem-valued index vector.
+(constructor lookup (Elem VElem) Elem)
+;; build one output element for unstable-vec-map.
+(constructor make_elem (i64) Elem)
+;; ignore the second argument and return the first as an Elem index.
+(constructor const_idx (i64 Elem) Elem)
+
+(rewrite (const_idx i ignored) (lit i))
+(rewrite (make_elem i)
+  (lookup
+    (array_lit (vec-of (lit 1)))
+    (vec-of (unstable-app (unstable-fn "const_idx" i) (lit 0))))
+  :subsume)
+(rewrite (lookup (array_lit values) (vec-of (lit k)))
+  (lookup (vec-get values k) (vec-empty)))
+(rewrite (lookup (lit value) indices) (lit value))
+
+;; First egraph: extraction gets stuck on an unresolved lookup term.
+(push)
+(let $stuck (unstable-vec-map (unstable-fn "make_elem") (vec-range 1)))
+(run-schedule (saturate (run)))
+(extract $stuck)
+(check (= $stuck
+  (vec-of
+    (lookup (array_lit (vec-of (lit 1))) (vec-of (lit 0))))))
+(fail (check (= $stuck (vec-of (lit 1)))))
+(pop)
+
+;; Fresh egraph: the same extracted term now resolves.
+(let $resolved
+  (vec-of
+    (lookup (array_lit (vec-of (lit 1))) (vec-of (lit 0)))))
+(run-schedule (saturate (run)))
+(extract $resolved)
+(check (= $resolved (vec-of (lit 1))))
