@@ -1,9 +1,12 @@
 use std::{collections::BTreeMap, iter, mem, sync::Arc};
 
 use crate::{
+    TableId,
+    free_join::ProcessedConstraints,
     numeric_id::{DenseIdMap, NumericId},
-    query::SymbolMap,
+    query::{FunDeps, SymbolMap},
 };
+use egglog_numeric_id::define_id;
 use fixedbitset::FixedBitSet;
 use smallvec::{SmallVec, smallvec};
 
@@ -11,7 +14,7 @@ use crate::{
     common::{HashMap, HashSet, IndexSet},
     offsets::Subset,
     pool::Pooled,
-    query::{Atom, Query},
+    query::{Atom, Query, VarColumnMap},
     table_spec::Constraint,
 };
 
@@ -29,6 +32,16 @@ pub(crate) struct SingleScanSpec {
     pub atom: AtomId,
     pub column: ColumnId,
     pub cs: Vec<Constraint>,
+}
+
+define_id!(pub(crate) MatId, u32, "An identifier for materialization within a decomposed plan.");
+
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub(crate) enum MatScanMode {
+    Full,
+    KeyOnly,
+    Value(Vec<Variable>),
+    Lookup(Vec<Variable>),
 }
 
 /// Join headers evaluate constraints on a single atom; they prune the search space before the rest
@@ -87,6 +100,12 @@ pub(crate) enum JoinStage {
         cover: ScanSpec,
         bind: SmallVec<[(ColumnId, Variable); 2]>,
         // to_intersect.1 is the index into the cover atom.
+        to_intersect: Vec<(ScanSpec, SmallVec<[ColumnId; 2]>)>,
+    },
+    FusedIntersectMat {
+        cover: MatId,
+        mode: MatScanMode,
+        bind: SmallVec<[(ColumnId, Variable); 2]>,
         to_intersect: Vec<(ScanSpec, SmallVec<[ColumnId; 2]>)>,
     },
 }
@@ -163,11 +182,71 @@ impl JoinStage {
 }
 
 #[derive(Debug, Clone)]
-pub(crate) struct Plan {
-    pub atoms: Arc<DenseIdMap<AtomId, Atom>>,
-    pub stages: JoinStages,
+pub(crate) enum Plan {
+    SinglePlan(SinglePlan),
+    DecomposedPlan(DecomposedPlan),
 }
 impl Plan {
+    pub fn actions(&self) -> ActionId {
+        match self {
+            Plan::SinglePlan(p) => p.actions,
+            Plan::DecomposedPlan(p) => p.actions,
+        }
+    }
+
+    pub fn atoms(&self) -> Arc<DenseIdMap<AtomId, Atom>> {
+        match self {
+            Plan::SinglePlan(p) => p.atoms.clone(),
+            Plan::DecomposedPlan(p) => p.atoms.clone(),
+        }
+    }
+
+    pub(crate) fn to_report(&self, _symbol_map: &SymbolMap) -> egglog_reports::Plan {
+        match self {
+            Plan::SinglePlan(p) => p.to_report(_symbol_map),
+            Plan::DecomposedPlan(_) => {
+                todo!()
+            }
+        }
+    }
+}
+
+#[derive(Debug, Clone)]
+pub(crate) struct SinglePlan {
+    pub atoms: Arc<DenseIdMap<AtomId, Atom>>,
+    pub header: Vec<JoinHeader>,
+    pub stages: JoinStages,
+    pub actions: ActionId,
+}
+
+#[derive(Debug, Clone)]
+pub(crate) struct JoinStages {
+    pub instrs: Arc<Vec<JoinStage>>,
+}
+
+/// Specification of the materialization of the intermediate results, as required by tree decomposition.
+#[derive(Debug, Clone)]
+pub(crate) struct MatSpec {
+    pub msg_vars: Vec<Variable>,
+    pub val_vars: Vec<Variable>,
+}
+
+#[derive(Debug, Clone)]
+pub(crate) struct JoinStageBlocks {
+    // each block is a list of instructions and how to yield
+    pub blocks: Vec<(JoinStages, MatSpec)>,
+}
+
+#[derive(Debug, Clone)]
+pub(crate) struct DecomposedPlan {
+    pub atoms: Arc<DenseIdMap<AtomId, Atom>>,
+    pub header: Vec<JoinHeader>,
+    pub stages: JoinStageBlocks,
+    pub result_block: JoinStages,
+    pub actions: ActionId,
+}
+
+impl SinglePlan {
     pub(crate) fn to_report(&self, symbol_map: &SymbolMap) -> egglog_reports::Plan {
         use egglog_reports::{
             Plan as ReportPlan, Scan as ReportScan, SingleScan as ReportSingleScan,
@@ -219,7 +298,7 @@ impl Plan {
                         .iter()
                         .map(|col| {
                             let var_name =
-                                get_var(self.atoms[cover.to_index.atom].column_to_var[*col]);
+                                get_var(self.atoms[cover.to_index.atom].get_var(*col).unwrap());
                             (var_name, col.index() as i64)
                         })
                         .collect();
@@ -231,8 +310,9 @@ impl Plan {
                             let cols: Vec<(String, i64)> = key_spec
                                 .iter()
                                 .map(|col| {
-                                    let var_name =
-                                        get_var(self.atoms[scan.to_index.atom].column_to_var[*col]);
+                                    let var_name = get_var(
+                                        self.atoms[scan.to_index.atom].get_var(*col).unwrap(),
+                                    );
                                     (var_name, col.index() as i64)
                                 })
                                 .collect();
@@ -244,6 +324,14 @@ impl Plan {
                         to_intersect: report_to_intersect,
                     }
                 }
+                JoinStage::FusedIntersectMat {
+                    cover: _,
+                    mode: _,
+                    bind: _,
+                    to_intersect: _,
+                } => {
+                    todo!("materialization")
+                }
             };
             let next = if i == self.stages.instrs.len() - 1 {
                 vec![]
@@ -254,13 +342,6 @@ impl Plan {
         }
         ReportPlan { stages }
     }
-}
-
-#[derive(Debug, Clone)]
-pub(crate) struct JoinStages {
-    pub header: Vec<JoinHeader>,
-    pub instrs: Arc<Vec<JoinStage>>,
-    pub actions: ActionId,
 }
 
 type VarSet = FixedBitSet;
@@ -288,22 +369,717 @@ pub enum PlanStrategy {
     Gj,
 }
 
+// Computes the next variable to eliminate and the subquery of its neighborhood.
+///
+/// Uses a min-fill heuristic that prioritizes variables whose elimination creates
+/// neighborhoods that are more subsumed by existing bags. This is a generalization
+/// of the "min-fill" heuristic to hypergraphs.
+///
+/// Variables occurring in only one atom are deprioritized until absolutely necessary
+/// (i.e., when the atom is not joined with any other relation).
+fn next_var_to_eliminate(
+    vars: &DenseIdMap<Variable, VarInfo>,
+    atoms: &DenseIdMap<AtomId, Atom>,
+    fun_deps: &FunDeps,
+) -> Option<IndexSet<Variable>> {
+    // eprintln!(
+    //     "Variables left to eliminate: {:?}, atoms: {:?}",
+    //     vars.iter().count(),
+    //     atoms.iter().count()
+    // );
+    let (_var, subquery_vars) = vars
+        .iter()
+        .map(|(var, _vinfo)| {
+            let subquery_vars = atoms
+                .iter()
+                // every atom that contains this variable
+                .filter(|(_, atom)| atom.get_col(var).is_some())
+                // every variable of those atoms
+                .flat_map(|(_, atom)| atom.vars());
+
+            // Optimization: use functional dependencies to find all variables inferred by the
+            // current neightborhood.
+            let subquery_vars = fun_deps.closure(subquery_vars);
+
+            let occ = atoms
+                .iter()
+                .filter(|(_, atom)| atom.vars().any(|v| subquery_vars.contains_key(v)))
+                .count();
+            (occ, var, subquery_vars)
+        })
+        .min_by_key(|a| a.0)
+        .map(|a| (a.1, a.2))?;
+    // eprintln!("Picking variable {:?}", _var);
+    Some(IndexSet::from_iter(
+        subquery_vars.into_iter().map(|(var, _)| var),
+    ))
+}
+
+/// It updates the hypergraph with the given bag of variables by:
+/// 1. Remove atoms that only contain subquery variables and remove variable occurrences of those atoms, and
+/// 2. Add a covering hyperedge that contains every non-private variable
+fn update_hypergraph(
+    subquery_vars: &IndexSet<Variable>,
+    vars: &mut DenseIdMap<Variable, VarInfo>,
+    atoms: &mut DenseIdMap<AtomId, Atom>,
+) {
+    // Build the covering hyperedge before we remove from the hypergraph
+
+    // Find variables that occur not just in the subquery
+    let covering_vars: Vec<_> = subquery_vars
+        .iter()
+        .copied()
+        .filter(|&var| {
+            vars.contains_key(var)
+                && vars[var].occurrences.iter().any(|occ| {
+                    atoms[occ.atom]
+                        .vars()
+                        .any(|ov| !subquery_vars.contains(&ov))
+                })
+        })
+        .collect();
+
+    // Remove atoms from the hypergraph
+    let mut removed = Vec::new();
+    atoms.retain(|atom_id, atom| {
+        if atom.vars().all(|var| subquery_vars.contains(&var)) {
+            removed.push(atom_id);
+            false
+        } else {
+            true
+        }
+    });
+
+    // Update occurrences to reflect removed atoms
+    for &subq_var in subquery_vars.iter() {
+        if vars.contains_key(subq_var) {
+            vars[subq_var]
+                .occurrences
+                .retain(|occ| !removed.contains(&occ.atom));
+
+            if vars[subq_var].occurrences.is_empty() {
+                vars.unwrap_val(subq_var);
+            }
+        }
+    }
+
+    // Add the covering atom to the hypergraph
+    let mut var_columns = VarColumnMap::default();
+    for (ix, var) in covering_vars.iter().enumerate() {
+        var_columns.insert(*var, ColumnId::from_usize(ix));
+    }
+    let fake_atom_id = atoms.push(Atom {
+        var_columns,
+        constraints: ProcessedConstraints::dummy(),
+        table: TableId::dummy(),
+    });
+
+    // Update variable occurrences to include the covering atom
+    for (i, &covering_var) in covering_vars.iter().enumerate() {
+        vars[covering_var].occurrences.push(SubAtom {
+            atom: fake_atom_id,
+            vars: smallvec![ColumnId::from_usize(i)],
+        });
+    }
+}
+
+/// Performs variable elimination to decompose the query into tree-structured bags.
+///
+/// This is the core tree decomposition algorithm. It iteratively:
+/// 1. Selects the next variable to eliminate using a min-fill heuristic
+/// 2. Creates a bag for the subquery of that variable's neighborhood
+/// 3. Updates variable and atom information for the remaining main query
+fn decompose_into_bags(original_ctx: &PlanningContext) -> Vec<PlanningContext> {
+    let mut atoms = original_ctx.atoms.clone();
+    let mut vars = original_ctx.vars.clone();
+
+    // Prune variables with no occurrences
+    for (var, vinfo) in original_ctx.vars.iter() {
+        if vinfo.occurrences.is_empty() {
+            vars.take(var).unwrap();
+        }
+    }
+
+    let mut bags = Vec::new();
+
+    // Variable elimination loop
+    while let Some(subquery_vars) = next_var_to_eliminate(&vars, &atoms, &original_ctx.fun_deps) {
+        // eprintln!(
+        //     "Next variable to eliminate: {:?}, subquery vars: {:?}",
+        //     subquery_vars,
+        //     subquery_vars
+        //         .iter()
+        //         .map(|var| original_ctx.vars[*var]
+        //             .occurrences
+        //             .iter()
+        //             .map(|occ| occ.atom)
+        //             .collect::<Vec<_>>())
+        //         .collect::<Vec<_>>()
+        // );
+        // Create a fake covering atom to bridge back to the main query
+        // Remove hyperedges that only contain subquery variables.
+        update_hypergraph(&subquery_vars, &mut vars, &mut atoms);
+
+        // Collect atoms that only contain subquery variables.
+        // TODO: can be optimized to be in one pass
+        let subquery_atoms: DenseIdMap<AtomId, Atom> = original_ctx
+            .atoms
+            .iter()
+            .filter(|(_, atom)| atom.vars().any(|var| subquery_vars.contains(&var)))
+            .map(|(atom_id, atom)| (atom_id, atom.clone()))
+            .collect();
+
+        let subquery_var_map = DenseIdMap::from_iter(subquery_vars.iter().map(|var| {
+            let mut var_info = original_ctx.vars[*var].clone();
+            // NB: used_in_rhs is handled in [`plan_single_bag`]
+            var_info
+                .occurrences
+                .retain(|occ| subquery_atoms.contains_key(occ.atom));
+            (*var, var_info)
+        }));
+
+        bags.push(PlanningContext {
+            vars: subquery_var_map,
+            atoms: subquery_atoms,
+            fun_deps: original_ctx.fun_deps.clone(),
+        });
+    }
+
+    assert!(
+        !atoms.iter().any(|(_, atom_info)| {
+            !atom_info.table.is_dummy() && !atom_info.var_columns.is_empty()
+        }),
+        "All atoms should be put into bags"
+    );
+
+    // bags
+
+    // Remove bags that are subsumed by others
+    let mut pruned_bags: Vec<PlanningContext> = Vec::with_capacity(bags.len());
+    for bag1 in bags.into_iter() {
+        let mut should_add = true;
+        pruned_bags.retain(|bag2| {
+            let leq = bag1.vars.iter().all(|(var, _)| bag2.vars.contains_key(var));
+            let geq = bag2.vars.iter().all(|(var, _)| bag1.vars.contains_key(var));
+            if leq {
+                should_add = false;
+            }
+            // We don't need to add the atoms from one bag to another,
+            // because of the property that the subquery of a smaller bag is
+            // always a subset of the bigger bag.
+            leq || !geq
+        });
+        if should_add {
+            pruned_bags.push(bag1);
+        }
+    }
+
+    pruned_bags
+}
+
+/// Topologically sorts bags based on variable dependencies.
+///
+/// A child bag depends on its parent if they share variables. The result is
+/// ordered from leaves to root, enabling bottom-up processing.
+#[allow(dead_code)]
+fn topologically_sort_bags(bags: Vec<PlanningContext>) -> Vec<PlanningContext> {
+    let mut bags_opt = bags.into_iter().map(Some).collect::<Vec<_>>();
+    let mut bags_topo = Vec::<PlanningContext>::with_capacity(bags_opt.len());
+    let mut visited = vec![false; bags_opt.len()];
+    let mut stack = Vec::new();
+
+    // A bag is a leaf if it only fully covers one atom, so it is essentially doing a scan (that semi-join reduces with other atoms).
+    // In this case, merging this bag with its parent bag avoids the expensive algorithm and incurs no overhead.
+    let is_leaf = |bag: &PlanningContext| {
+        bag.atoms
+            .iter()
+            .filter(|(_, atom)| atom.vars().all(|var| bag.vars.contains_key(var)))
+            .count()
+            == 1
+    };
+
+    // Starting from the last, since early bags are more likely to be leaves and we don't
+    // want a leafy bag to be a root.
+    for i in (0..bags_opt.len()).rev() {
+        if visited[i] {
+            continue;
+        }
+        stack.push((i, usize::MAX));
+        visited[i] = true;
+
+        while let Some((bag_id, parent)) = stack.pop() {
+            let bag = mem::take(&mut bags_opt[bag_id]).unwrap();
+
+            let mut has_children = false;
+            // Find child bags that share variables with this bag
+            for (i, child_bag) in bags_opt.iter().enumerate().filter(|(_, b)| b.is_some()) {
+                let child_bag = child_bag.as_ref().unwrap();
+                if child_bag
+                    .vars
+                    .iter()
+                    .any(|(var, _)| bag.vars.contains_key(var))
+                    && !visited[i]
+                {
+                    visited[i] = true;
+                    has_children = true;
+                    stack.push((i, bags_topo.len()));
+                }
+            }
+
+            if !has_children && is_leaf(&bag) && parent != usize::MAX {
+                // merging with parent bag
+                let parent_bag = bags_topo.get_mut(parent).unwrap();
+                for (var_id, vinfo) in bag.vars.into_iter() {
+                    if !parent_bag.vars.contains_key(var_id) {
+                        parent_bag.vars.insert(var_id, vinfo);
+                    } else {
+                        let parent_vinfo = parent_bag.vars.get_mut(var_id).unwrap();
+                        parent_vinfo.occurrences.extend(
+                            vinfo
+                                .occurrences
+                                .into_iter()
+                                .filter(|occ| !parent_bag.atoms.contains_key(occ.atom)),
+                        );
+                    }
+                }
+                for (atom_id, atom) in bag.atoms.into_iter() {
+                    if !parent_bag.atoms.contains_key(atom_id) {
+                        parent_bag.atoms.insert(atom_id, atom);
+                    }
+                }
+            } else {
+                bags_topo.push(bag);
+            }
+        }
+    }
+
+    bags_topo.reverse();
+    bags_topo
+}
+
+/// Counts how many bags each variable appears in.
+///
+/// This is used to determine whether a variable should be passed as a message
+/// variable (if used in later bags) or a value variable (if only used in the current bag).
+fn count_variable_usage_per_bag(bags: &[PlanningContext]) -> DenseIdMap<Variable, usize> {
+    let mut n_used_in_bag = DenseIdMap::new();
+    for bag in bags {
+        for (var, _vinfo) in bag.vars.iter() {
+            if !n_used_in_bag.contains_key(var) {
+                n_used_in_bag.insert(var, 0);
+            }
+            n_used_in_bag[var] += 1;
+        }
+    }
+    n_used_in_bag
+}
+
+/// Plans the execution stages for a single bag.
+///
+/// This involves:
+/// - Dividing variables into message variables (passed to later stages) and value variables
+/// - Planning join stages within the bag
+/// - Adding epilogue instructions to look up previous materialized bags
+fn plan_single_bag(
+    bag: &mut PlanningContext,
+    blocks: &[(JoinStages, MatSpec)],
+    // If this bag has been used to prune its parent
+    has_block_contributed: &mut [bool],
+    n_used_in_bag: &mut DenseIdMap<Variable, usize>,
+    strat: PlanStrategy,
+) -> (Vec<JoinHeader>, JoinStages, MatSpec) {
+    let mut msg_vars = vec![];
+    let mut val_vars = vec![];
+
+    // Classify variables as message or value variables
+    for (var, vinfo) in bag.vars.iter_mut() {
+        n_used_in_bag[var] -= 1;
+        if n_used_in_bag[var] > 0 {
+            // If this is a public variable, then we need to pass it on anyway
+            vinfo.used_in_rhs = true;
+            msg_vars.push(var);
+        } else {
+            // If this variable is not used in later and previous bag,
+            // and it is not used in the right hand side,
+            // this variable don't need to be expanded.
+            if !vinfo.used_in_rhs
+                && blocks.iter().all(|(_, spec)| !spec.msg_vars.contains(&var))
+                && n_used_in_bag[var] == 0
+            {
+                continue;
+            }
+            val_vars.push(var);
+            vinfo.used_in_rhs = true;
+        }
+    }
+
+    let mut stripped_bag = bag.clone();
+
+    // Add epilogue instructions to look up previous materialized bags
+    let mut prologue = None;
+    let mut epilogue = Vec::new();
+    for (i, prev_block) in blocks.iter().enumerate().rev() {
+        if prev_block.1.msg_vars.is_empty() {
+            continue;
+        }
+        if !has_block_contributed[i]
+            && prev_block
+                .1
+                .msg_vars
+                .iter()
+                .all(|var| bag.vars.contains_key(*var))
+        {
+            has_block_contributed[i] = true;
+            if prologue.is_none() {
+                let bind = prev_block
+                    .1
+                    .msg_vars
+                    .iter()
+                    .enumerate()
+                    .map(|(j, var)| (ColumnId::from_usize(j), *var))
+                    .collect();
+                let mut to_intersect: Vec<(ScanSpec, SmallVec<[ColumnId; 2]>)> = vec![];
+                for (col, var) in prev_block.1.msg_vars.iter().enumerate() {
+                    let vinfo = &bag.vars[*var];
+                    for occ in vinfo.occurrences.iter() {
+                        let isect = match to_intersect
+                            .iter_mut()
+                            .find(|(spec, _)| spec.to_index.atom == occ.atom)
+                        {
+                            Some(isect) => isect,
+                            None => {
+                                to_intersect.push((
+                                    ScanSpec {
+                                        to_index: SubAtom {
+                                            atom: occ.atom,
+                                            vars: smallvec![],
+                                        },
+                                        constraints: vec![],
+                                    },
+                                    smallvec![],
+                                ));
+                                to_intersect.last_mut().unwrap()
+                            }
+                        };
+                        isect.0.to_index.vars.extend(occ.vars.iter().copied());
+                        isect
+                            .1
+                            .extend(occ.vars.iter().map(|_| ColumnId::from_usize(col)));
+                    }
+                }
+
+                prologue = Some(JoinStage::FusedIntersectMat {
+                    cover: MatId::from_usize(i),
+                    mode: MatScanMode::KeyOnly,
+                    bind,
+                    to_intersect,
+                });
+
+                stripped_bag
+                    .vars
+                    .retain(|var, _vinfo| !prev_block.1.msg_vars.contains(&var));
+            } else {
+                epilogue.push(JoinStage::FusedIntersectMat {
+                    cover: MatId::from_usize(i),
+                    mode: MatScanMode::Lookup(prev_block.1.msg_vars.clone()),
+                    bind: smallvec![],
+                    to_intersect: vec![],
+                });
+            }
+        }
+    }
+
+    let (header, mut instrs) = plan_stages(&stripped_bag, strat);
+    instrs.splice(0..0, prologue);
+    instrs.extend(epilogue);
+
+    let stages = JoinStages {
+        instrs: Arc::new(instrs),
+    };
+
+    (header, stages, MatSpec { msg_vars, val_vars })
+}
+
+/// Builds the final result block that collects results from all materialized bags.
+///
+/// This performs a bottom-up pass through the materialized bags, binding value
+/// variables and gathering results. Each block is scanned at most once.
+fn build_result_block(blocks: &[(JoinStages, MatSpec)]) -> JoinStages {
+    let mut result_block = Vec::new();
+    let mut pinned_vars = DenseIdMap::<Variable, ()>::new();
+
+    for (i, (_stages, mat_spec)) in blocks.iter().enumerate().rev() {
+        let to_bind: SmallVec<[(ColumnId, Variable); 2]> = mat_spec
+            .val_vars
+            .iter()
+            .copied()
+            .enumerate()
+            .filter(|(_, var)| !pinned_vars.contains_key(*var))
+            .map(|(i, var)| (ColumnId::from_usize(i), var))
+            .collect();
+
+        if to_bind.is_empty() {
+            continue;
+        }
+
+        for (_, var) in to_bind.iter() {
+            pinned_vars.insert(*var, ());
+        }
+
+        result_block.push(JoinStage::FusedIntersectMat {
+            cover: MatId::from_usize(i),
+            // TODO: optimization to switch to MatScanMode::KeyOnly or MatScanMode::Value
+            mode: if i == blocks.len() - 1 {
+                MatScanMode::Full
+            } else {
+                MatScanMode::Value(mat_spec.msg_vars.clone())
+            },
+            bind: to_bind,
+            to_intersect: vec![],
+        });
+    }
+
+    JoinStages {
+        instrs: Arc::new(result_block),
+    }
+}
+
+/// The last stage and the result block have the following structure:
+///
+/// for ...
+///    yield [] -> x1, x2, ... as Mn
+///
+/// For x1, x2, ... in Mn:
+///   ...
+///
+/// This can be fused into one loop
+///
+/// This is currently not used because somehow iterating the materialized RowBuffer is much faster than iterating the table
+#[allow(unused)]
+fn fuse_last_stage(
+    mut blocks: Vec<(JoinStages, MatSpec)>,
+    result_block: JoinStages,
+) -> (Vec<(JoinStages, MatSpec)>, JoinStages) {
+    if blocks.is_empty() {
+        return (blocks, result_block);
+    }
+
+    let last_block = blocks.pop().unwrap();
+    assert!(last_block.1.msg_vars.is_empty());
+    if !matches!(
+        result_block.instrs[0],
+        JoinStage::FusedIntersectMat {
+            cover,
+            mode: MatScanMode::Full,
+            ..
+        } if cover == MatId::from_usize(blocks.len()
+    )) {
+        // If the first stage of the result block does not scan the last materialization
+        return (blocks, result_block);
+    }
+
+    // Fuse the instructions
+    let mut last_block = last_block.0;
+    let mut instrs = Arc::unwrap_or_clone(last_block.instrs);
+    instrs.extend(result_block.instrs[1..].iter().cloned());
+    last_block.instrs = Arc::new(instrs);
+
+    (blocks, last_block)
+}
+
+/// Lift variable lookups up if it's not used.
+fn loop_lifting(stages: JoinStages) -> JoinStages {
+    let mut instrs = Arc::unwrap_or_clone(stages.instrs);
+    for i in 1..instrs.len() {
+        if let JoinStage::FusedIntersectMat {
+            cover: _,
+            mode: MatScanMode::Lookup(vars),
+            bind,
+            to_intersect,
+        } = &instrs[i]
+        {
+            assert!(bind.is_empty() && to_intersect.is_empty());
+            let vars = vars.clone();
+            let mut j = i;
+            while j > 0 {
+                if matches!(
+                    &instrs[j - 1], JoinStage::FusedIntersect { bind, .. } | JoinStage::FusedIntersectMat { bind, ..}
+                        if bind.iter().all(|(_, var)| !vars.contains(var))
+                ) || matches!(&instrs[j - 1], JoinStage::Intersect { var, .. } if !vars.contains(var))
+                {
+                    instrs.swap(j - 1, j);
+                    j -= 1;
+                } else {
+                    break;
+                }
+            }
+        }
+    }
+    JoinStages {
+        instrs: Arc::new(instrs),
+    }
+}
+
+pub(crate) fn tree_decompose_and_plan(
+    ctx: PlanningContext,
+    strat: PlanStrategy,
+    actions: ActionId,
+) -> Plan {
+    macro_rules! fast_path {
+        () => {{
+            let (header, instrs) = plan_stages(&ctx, strat);
+            let stages = JoinStages {
+                instrs: Arc::new(instrs),
+            };
+
+            Plan::SinglePlan(SinglePlan {
+                atoms: Arc::new(ctx.atoms),
+                header,
+                stages,
+                actions,
+            })
+        }};
+    }
+    if ctx.atoms.len() <= 2 {
+        return fast_path!();
+    }
+
+    // Step 1: Decompose the query into tree-structured bags
+    let bags = decompose_into_bags(&ctx);
+    if bags.len() <= 1 {
+        // Don't do Yannakakis if it's just one bag
+        return fast_path!();
+    }
+
+    // Step 2: Sort bags topologically and merge leafy bags with their parents
+    let mut bags = topologically_sort_bags(bags);
+
+    if bags.len() <= 1 {
+        // Don't do Yannakakis if it's just one bag
+        return fast_path!();
+    }
+
+    // Step 3: Count variable usage across bags
+    let mut n_used_in_bag = count_variable_usage_per_bag(&bags);
+    let mut has_block_contributed = vec![false; bags.len()];
+
+    // Step 4: Plan each bag and create materialization blocks
+    let mut blocks = Vec::new();
+    let mut header = vec![];
+    for bag in bags.iter_mut() {
+        let (bag_header, stages, mat_spec) = plan_single_bag(
+            bag,
+            &blocks,
+            &mut has_block_contributed,
+            &mut n_used_in_bag,
+            strat,
+        );
+        blocks.push((stages, mat_spec));
+        header.extend(bag_header);
+    }
+
+    // Step 5: Build the final result block
+    let result_block = build_result_block(&blocks);
+
+    // Optimization the avoids the last materialization
+    // let (blocks, result_block) = fuse_last_stage(blocks, result_block);
+
+    // Lifting variables
+    let blocks = blocks
+        .into_iter()
+        .map(|(stages, mat_spec)| (loop_lifting(stages), mat_spec))
+        .collect::<Vec<_>>();
+    let result_block = loop_lifting(result_block);
+
+    // // Inline materializations that are just scan
+    // for i in 0..blocks.len() {
+    //     let block = &blocks[i];
+    //     if let [
+    //         JoinStage::FusedIntersect {
+    //             cover,
+    //             bind,
+    //             to_intersect,
+    //         },
+    //     ] = block.0.instrs.as_slice()
+    //     {
+    //         let mat_atom = cover.clone();
+    //         let bind = bind.clone();
+    //         assert!(to_intersect.is_empty());
+    //         for j in i + 1..blocks.len() {
+    //             let other_block = &mut blocks[j];
+    //             let mut instrs = Arc::unwrap_or_clone(mem::take(&mut other_block.0.instrs));
+    //             for instr in instrs.iter_mut() {
+    //                 match instr {
+    //                     JoinStage::FusedIntersectMat {
+    //                         cover,
+    //                         mode,
+    //                         bind: _,
+    //                         to_intersect,
+    //                     } if cover.index() == i => {
+    //                         assert!(
+    //                             mode == &MatScanMode::Full || mode == &MatScanMode::Value(vec![])
+    //                         );
+    //                         assert!(to_intersect.is_empty());
+
+    //                         *instr = JoinStage::FusedIntersect {
+    //                             cover: mat_atom.clone(),
+    //                             bind: bind.clone(),
+    //                             to_intersect: vec![],
+    //                         };
+    //                     }
+    //                     _ => {}
+    //                 }
+    //             }
+    //             other_block.0.instrs = Arc::new(instrs);
+    //         }
+
+    //         let mut instrs = Arc::unwrap_or_clone(mem::take(&mut result_block.instrs));
+    //         for instr in instrs.iter_mut() {
+    //             match instr {
+    //                 JoinStage::FusedIntersectMat {
+    //                     cover,
+    //                     mode,
+    //                     bind: _,
+    //                     to_intersect,
+    //                 } if cover.index() == i => {
+    //                     assert!(mode == &MatScanMode::Full || mode == &MatScanMode::Value(vec![]));
+    //                     assert!(to_intersect.is_empty());
+    //                     *instr = JoinStage::FusedIntersect {
+    //                         cover: mat_atom.clone(),
+    //                         bind: bind.clone(),
+    //                         to_intersect: vec![],
+    //                     };
+    //                 }
+    //                 _ => {}
+    //             }
+    //         }
+    //         result_block.instrs = Arc::new(instrs);
+
+    //         blocks[i].0.instrs = Arc::new(vec![]);
+    //         blocks[i].1 = MatSpec {
+    //             msg_vars: vec![],
+    //             val_vars: vec![],
+    //         };
+    //     }
+    // }
+
+    Plan::DecomposedPlan(DecomposedPlan {
+        atoms: Arc::new(ctx.atoms),
+        header,
+        stages: JoinStageBlocks { blocks },
+        result_block,
+        actions,
+    })
+}
+
 pub(crate) fn plan_query(query: Query) -> Plan {
     let atoms = query.atoms;
     let ctx = PlanningContext {
         vars: query.var_info,
         atoms,
+        fun_deps: Arc::new(query.fun_deps),
     };
-    let (header, instrs) = plan_stages(&ctx, query.plan_strategy);
-
-    Plan {
-        atoms: Arc::new(ctx.atoms),
-        stages: JoinStages {
-            header,
-            instrs: Arc::new(instrs),
-            actions: query.action,
-        },
-    }
+    tree_decompose_and_plan(ctx, query.plan_strategy, query.action)
 }
 
 /// StageInfo is an intermediate stage used to describe the ordering of
@@ -323,14 +1099,16 @@ struct StageInfo {
 }
 
 /// Immutable context for query planning containing references to query metadata.
-struct PlanningContext {
+#[derive(Debug, Clone)]
+pub(crate) struct PlanningContext {
     vars: DenseIdMap<Variable, VarInfo>,
     atoms: DenseIdMap<AtomId, Atom>,
+    fun_deps: Arc<FunDeps>,
 }
 
 /// Mutable state tracked during query planning.
 #[derive(Clone)]
-struct PlanningState {
+pub(crate) struct PlanningState {
     used_vars: VarSet,
     constrained_atoms: AtomSet,
 }
@@ -376,7 +1154,7 @@ impl<'a> BucketQueue<'a> {
         let mut sizes = BTreeMap::<usize, IndexSet<AtomId>>::new();
         for (id, atom) in atoms.iter() {
             let mut bitset = VarSet::with_capacity(var_info.n_ids());
-            for (_, var) in atom.column_to_var.iter() {
+            for var in atom.vars() {
                 bitset.insert(var.index());
             }
             sizes.entry(bitset.count_ones(..)).or_default().insert(id);
@@ -466,6 +1244,7 @@ fn plan_headers(
 
 /// Plan query execution stages using the specified strategy.
 /// Returns (header, instructions) tuple that can be assembled into a Plan by the caller.
+/// It does not directly return the plan because the caller may want to further modify the stages.
 fn plan_stages(ctx: &PlanningContext, strat: PlanStrategy) -> (Vec<JoinHeader>, Vec<JoinStage>) {
     let (header, remaining_constraints) = plan_headers(ctx);
     let mut instrs = Vec::new();
@@ -538,17 +1317,17 @@ fn get_next_freejoin_stage(
         let mut cover = SubAtom::new(atom);
         let mut vars = SmallVec::<[Variable; 1]>::new();
 
-        for (ix, var) in atom_info.column_to_var.iter() {
-            if state.is_var_used(*var) {
+        for (ix, var) in atom_info.var_columns.iter() {
+            if state.is_var_used(var) {
                 continue;
             }
             // This atom is not completely covered by previous stages.
             covered = true;
-            state.mark_var_used(*var);
-            vars.push(*var);
+            state.mark_var_used(var);
+            vars.push(var);
             cover.vars.push(ix);
 
-            for subatom in ctx.vars[*var].occurrences.iter() {
+            for subatom in ctx.vars[var].occurrences.iter() {
                 if subatom.atom == atom {
                     continue;
                 }
@@ -568,7 +1347,7 @@ fn get_next_freejoin_stage(
         for (atom, cols) in scratch_subatom.drain() {
             let mut form_key = SmallVec::<[ColumnId; 2]>::new();
             for var_ix in &cols {
-                let var = ctx.atoms[atom].column_to_var[*var_ix];
+                let var = ctx.atoms[atom].get_var(*var_ix).unwrap();
                 // form_key is an index _into the subatom forming the cover_.
                 let cover_col = vars.iter().position(|v| *v == var).unwrap();
                 form_key.push(ColumnId::from_usize(cover_col));
@@ -641,10 +1420,10 @@ fn plan_gj(
         }
 
         let next_stage = compile_stage(ctx, state, info);
-        if let Some(prev) = stages.last_mut() {
-            if prev.fuse(&next_stage) {
-                continue;
-            }
+        if let Some(prev) = stages.last_mut()
+            && prev.fuse(&next_stage)
+        {
+            continue;
         }
         stages.push(next_stage);
     }
@@ -702,9 +1481,8 @@ fn compile_stage(
     };
 
     let mut bind = SmallVec::new();
-    let var_set = &ctx.atoms[atom].var_to_column;
     for var in vars {
-        bind.push((var_set[&var], var));
+        bind.push((ctx.atoms[atom].get_col(var).unwrap(), var));
     }
 
     let mut to_intersect = Vec::with_capacity(filters.len());

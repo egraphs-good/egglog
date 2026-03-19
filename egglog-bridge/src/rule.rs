@@ -311,23 +311,28 @@ impl RuleBuilder<'_> {
         if self.query.atoms.len() == 1 {
             self.query.plan_strategy = PlanStrategy::MinCover;
         }
-        if let Some(syntax) = &syntax {
-            if self.egraph.tracing {
-                let cb = self
-                    .proof_builder
-                    .create_reason(syntax.clone(), self.egraph);
-                self.query.build_reason = Some(Box::new(move |bndgs, rb| {
-                    let reason = cb(bndgs, rb)?;
-                    bndgs.lhs_reason = Some(reason.into());
-                    Ok(())
-                }));
-            }
+        if let Some(syntax) = &syntax
+            && self.egraph.tracing
+        {
+            let cb = self
+                .proof_builder
+                .create_reason(syntax.clone(), self.egraph);
+            self.query.build_reason = Some(Box::new(move |bndgs, rb| {
+                let reason = cb(bndgs, rb)?;
+                bndgs.lhs_reason = Some(reason.into());
+                Ok(())
+            }));
         }
         let res = self.query.rule_id;
+        let cached_plan = self
+            .query
+            .build_cached_plan(&mut self.egraph.db, &self.proof_builder.rule_description)
+            .ok();
         let info = RuleInfo {
             last_run_at: Timestamp::new(0),
             query: self.query,
-            cached_plan: None,
+            // cached_plan: None,
+            cached_plan,
             desc: self.proof_builder.rule_description,
         };
         debug!("created rule {res:?} / {}", info.desc);
@@ -424,12 +429,12 @@ impl RuleBuilder<'_> {
             self.proof_builder
                 .term_vars
                 .insert(res, proof_var.clone().into());
-            if let Some(QueryEntry::Var(Variable { id, .. })) = entries.last() {
-                if table != self.egraph.uf_table {
-                    // Don't overwrite "term_var" for uf_table; it stores
-                    // reasons inline / doesn't have terms.
-                    self.query.vars[*id].term_var = proof_var.clone();
-                }
+            if let Some(QueryEntry::Var(Variable { id, .. })) = entries.last()
+                && table != self.egraph.uf_table
+            {
+                // Don't overwrite "term_var" for uf_table; it stores
+                // reasons inline / doesn't have terms.
+                self.query.vars[*id].term_var = proof_var.clone();
             }
             self.query.atom_proofs.push(proof_var);
         }

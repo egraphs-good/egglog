@@ -258,61 +258,61 @@ impl TypeConstraint for FunctionCTorTypeConstraint {
         );
         // If first arg is a literal string and we know the name of the function and can use that to know what
         // types to expect
-        if let AtomTerm::Literal(_, Literal::String(ref name)) = arguments[0] {
-            if let Some(func_type) = typeinfo.get_func_type(name) {
-                // The arguments contains the return sort as well as the function name
-                let n_partial_args = arguments.len() - 2;
-                // the number of partial args must match the number of inputs from the func type minus the number from
-                // this function sort
-                if self.function.inputs.len() + n_partial_args != func_type.input.len() {
-                    return vec![constraint::impossible(
-                        constraint::ImpossibleConstraint::ArityMismatch {
-                            atom: core::Atom {
-                                span: self.span.clone(),
-                                head: self.name.clone(),
-                                args: arguments.to_vec(),
-                            },
-                            expected: self.function.inputs.len() + func_type.input.len() + 1,
+        if let AtomTerm::Literal(_, Literal::String(ref name)) = arguments[0]
+            && let Some(func_type) = typeinfo.get_func_type(name)
+        {
+            // The arguments contains the return sort as well as the function name
+            let n_partial_args = arguments.len() - 2;
+            // the number of partial args must match the number of inputs from the func type minus the number from
+            // this function sort
+            if self.function.inputs.len() + n_partial_args != func_type.input.len() {
+                return vec![constraint::impossible(
+                    constraint::ImpossibleConstraint::ArityMismatch {
+                        atom: core::Atom {
+                            span: self.span.clone(),
+                            head: self.name.clone(),
+                            args: arguments.to_vec(),
                         },
-                    )];
-                }
-                // the output type and input types (starting after the partial args) must match between these functions
-                let expected_output = self.function.output.clone();
-                let expected_input = self.function.inputs.clone();
-                let actual_output = func_type.output.clone();
-                let actual_input: Vec<ArcSort> = func_type
-                    .input
-                    .iter()
-                    .skip(n_partial_args)
-                    .cloned()
-                    .collect();
-                if expected_output.name() != actual_output.name()
-                    || expected_input
-                        .iter()
-                        .map(|s| s.name())
-                        .ne(actual_input.iter().map(|s| s.name()))
-                {
-                    return vec![constraint::impossible(
-                        constraint::ImpossibleConstraint::FunctionMismatch {
-                            expected_output,
-                            expected_input,
-                            actual_output,
-                            actual_input,
-                        },
-                    )];
-                }
-                // if they match, then just make sure the partial args match as well
-                return func_type
-                    .input
-                    .iter()
-                    .take(n_partial_args)
-                    .zip(arguments.iter().skip(1))
-                    .map(|(expected_sort, actual_term)| {
-                        constraint::assign(actual_term.clone(), expected_sort.clone())
-                    })
-                    .chain(once(output_sort_constraint))
-                    .collect();
+                        expected: self.function.inputs.len() + func_type.input.len() + 1,
+                    },
+                )];
             }
+            // the output type and input types (starting after the partial args) must match between these functions
+            let expected_output = self.function.output.clone();
+            let expected_input = self.function.inputs.clone();
+            let actual_output = func_type.output.clone();
+            let actual_input: Vec<ArcSort> = func_type
+                .input
+                .iter()
+                .skip(n_partial_args)
+                .cloned()
+                .collect();
+            if expected_output.name() != actual_output.name()
+                || expected_input
+                    .iter()
+                    .map(|s| s.name())
+                    .ne(actual_input.iter().map(|s| s.name()))
+            {
+                return vec![constraint::impossible(
+                    constraint::ImpossibleConstraint::FunctionMismatch {
+                        expected_output,
+                        expected_input,
+                        actual_output,
+                        actual_input,
+                    },
+                )];
+            }
+            // if they match, then just make sure the partial args match as well
+            return func_type
+                .input
+                .iter()
+                .take(n_partial_args)
+                .zip(arguments.iter().skip(1))
+                .map(|(expected_sort, actual_term)| {
+                    constraint::assign(actual_term.clone(), expected_sort.clone())
+                })
+                .chain(once(output_sort_constraint))
+                .collect();
         }
 
         // Otherwise we just try assuming it's this function, we don't know if it is or not

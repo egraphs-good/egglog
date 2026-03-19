@@ -871,14 +871,14 @@ impl EGraph {
 
         let GenericRunConfig { ruleset, until } = config;
 
-        if let Some(facts) = until {
-            if self.check_facts(span, facts).is_ok() {
-                log::info!(
-                    "Breaking early because of facts:\n {}!",
-                    ListDisplay(facts, "\n")
-                );
-                return Ok(report);
-            }
+        if let Some(facts) = until
+            && self.check_facts(span, facts).is_ok()
+        {
+            log::info!(
+                "Breaking early because of facts:\n {}!",
+                ListDisplay(facts, "\n")
+            );
+            return Ok(report);
         }
 
         let subreport = self.step_rules(ruleset)?;

@@ -62,7 +62,7 @@ impl Matches {
     fn new(matches: Vec<Value>, vars: Vec<ResolvedVar>) -> Self {
         let total_len = matches.len();
         let tuple_len = vars.len();
-        assert!(total_len % tuple_len == 0);
+        assert!(total_len.is_multiple_of(tuple_len));
         Self {
             matches,
             vars,
