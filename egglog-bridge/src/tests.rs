@@ -756,6 +756,104 @@ fn basic_container() {
     }
 }
 
+fn run_container_rebuild_match_case(seminaive: bool, seed_canonical: bool) -> bool {
+    let mut egraph = EGraph::default();
+    let k_table = egraph.add_table(FunctionConfig {
+        schema: vec![ColumnTy::Id, ColumnTy::Id],
+        default: DefaultVal::FreshId,
+        merge: MergeFn::UnionId,
+        name: "k".into(),
+        can_subsume: false,
+    });
+    let w_table = egraph.add_table(FunctionConfig {
+        schema: vec![ColumnTy::Id, ColumnTy::Id],
+        default: DefaultVal::FreshId,
+        merge: MergeFn::UnionId,
+        name: "w".into(),
+        can_subsume: false,
+    });
+    let l_table = egraph.add_table(FunctionConfig {
+        schema: vec![ColumnTy::Id, ColumnTy::Id],
+        default: DefaultVal::FreshId,
+        merge: MergeFn::UnionId,
+        name: "l".into(),
+        can_subsume: false,
+    });
+
+    let b = egraph.fresh_id();
+    let k_b = egraph.add_term(k_table, &[b], "k(b)");
+    if seed_canonical {
+        let _ = egraph.get_container_value(VecContainer(vec![k_b]));
+    }
+    let w_k_b = egraph.add_term(w_table, &[k_b], "w(k(b))");
+    let vec = egraph.get_container_value(VecContainer(vec![w_k_b]));
+    let l_id = egraph.add_term(l_table, &[vec], "l(vec)");
+
+    let raw_k_table = egraph.funcs[k_table].table;
+    let match_singleton_k =
+        egraph.register_external_func(Box::new(make_external_func(move |state, vals| {
+            let [vec_id] = vals else {
+                panic!("match_singleton_k expected 1 arg, got {vals:?}");
+            };
+            let vec = state.container_values().get_val::<VecContainer>(*vec_id)?;
+            let [entry] = vec.0.as_slice() else {
+                return None;
+            };
+            let table = state.get_table(raw_k_table);
+            let rows = table.scan(table.all().as_ref());
+            for (_, row) in rows.non_stale() {
+                if row[1] == *entry {
+                    return Some(row[0]);
+                }
+            }
+            None
+        })));
+
+    let w_rewrite = {
+        let mut rb = egraph.new_rule("w_rewrite", seminaive);
+        let x: QueryEntry = rb.new_var(ColumnTy::Id).into();
+        let w_id: QueryEntry = rb.new_var(ColumnTy::Id).into();
+        rb.query_table(w_table, &[x.clone(), w_id.clone()], Some(false))
+            .unwrap();
+        rb.union(w_id, x);
+        rb.build()
+    };
+
+    let l_rewrite = {
+        let mut rb = egraph.new_rule("l_rewrite", seminaive);
+        let vec: QueryEntry = rb.new_var(ColumnTy::Id).into();
+        let l_id_entry: QueryEntry = rb.new_var(ColumnTy::Id).into();
+        let x: QueryEntry = rb.new_var(ColumnTy::Id).into();
+        rb.query_table(l_table, &[vec.clone(), l_id_entry.clone()], Some(false))
+            .unwrap();
+        rb.query_prim(match_singleton_k, &[vec, x.clone()], ColumnTy::Id)
+            .unwrap();
+        rb.union(l_id_entry, x);
+        rb.build()
+    };
+
+    let mut saturated = false;
+    for _ in 0..8 {
+        saturated = !egraph.run_rules(&[w_rewrite, l_rewrite]).unwrap().changed();
+        if saturated {
+            break;
+        }
+    }
+    assert!(saturated, "failed to saturate after 8 iterations");
+    egraph.get_canon_in_uf(l_id) == egraph.get_canon_in_uf(b)
+}
+
+#[test]
+fn seminaive_revisits_rows_after_same_id_container_rebuild() {
+    assert!(run_container_rebuild_match_case(true, false));
+    assert!(run_container_rebuild_match_case(false, false));
+}
+
+#[test]
+fn seminaive_container_rebuild_with_preseeded_canonical_container() {
+    assert!(run_container_rebuild_match_case(true, true));
+}
+
 #[test]
 fn rhs_only_rule() {
     let mut egraph = EGraph::default();

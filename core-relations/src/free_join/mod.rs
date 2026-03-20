@@ -17,7 +17,7 @@ use rayon::prelude::*;
 use smallvec::SmallVec;
 
 use crate::{
-    BaseValues, ContainerValues, PoolSet, QueryEntry, TupleIndex, Value,
+    BaseValues, ContainerRebuildSummary, ContainerValues, PoolSet, QueryEntry, TupleIndex, Value,
     action::{
         Bindings, DbView,
         mask::{Mask, MaskIter, ValueSource},
@@ -335,7 +335,7 @@ impl Database {
         &mut self.container_values
     }
 
-    pub fn rebuild_containers(&mut self, table_id: TableId) -> bool {
+    pub fn rebuild_containers(&mut self, table_id: TableId) -> ContainerRebuildSummary {
         let mut containers = mem::take(&mut self.container_values);
         let table = &self.tables[table_id].table;
         let res = self.with_execution_state(|state| containers.rebuild_all(table_id, table, state));
@@ -354,6 +354,7 @@ impl Database {
         func_id: TableId,
         to_rebuild: &[TableId],
         next_ts: Value,
+        refresh_values: &[Value],
     ) -> bool {
         let func = self.tables.take(func_id).unwrap();
         if parallelize_db_level_op(self.total_size_estimate) {
@@ -366,6 +367,7 @@ impl Database {
                     func_id,
                     &func.table,
                     next_ts,
+                    refresh_values,
                     &mut ExecutionState::new(self.read_only_view(), Default::default()),
                 ) {
                     self.notification_list.notify(*id);
@@ -381,6 +383,7 @@ impl Database {
                     func_id,
                     &func.table,
                     next_ts,
+                    refresh_values,
                     &mut ExecutionState::new(self.read_only_view(), Default::default()),
                 ) {
                     self.notification_list.notify(*id);
