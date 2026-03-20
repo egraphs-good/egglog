@@ -54,7 +54,7 @@ expression: snapshot_content_across_treatments
  (ShiftVecOperand-helper 0)
  (ShiftVecVecOperand 0)
  (ShiftVecVecOperand-helper 0)
- (Smaller 85)
+ (Smaller 109)
  (SomeType 0)
  (SubstBody 0)
  (SubstBodyAll 20)
