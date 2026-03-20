@@ -21,13 +21,12 @@ use hashbrown::HashTable;
 use rayon::iter::{IndexedParallelIterator, IntoParallelRefMutIterator, ParallelIterator};
 use rustc_hash::FxHasher;
 use sharded_hash_table::ShardedHashTable;
-use smallvec::SmallVec;
 
 use crate::{
     Pooled, TableChange, TableId,
     action::ExecutionState,
     common::{HashMap, ShardData, ShardId, SubsetTracker, Value},
-    hash_index::{ColumnIndex, Index, IndexBase},
+    hash_index::{ColumnIndex, Index},
     offsets::{OffsetRange, Offsets, RowId, Subset, SubsetRef},
     parallel_heuristics::parallelize_table_op,
     pool::with_pool_set,
@@ -148,7 +147,6 @@ pub struct SortedWritesTable {
     merge: Arc<MergeFn>,
     to_rebuild: Vec<ColumnId>,
     rebuild_index: Index<ColumnIndex>,
-    refresh_index: ColumnIndex,
     // Used to manage incremental rebuilds.
     subset_tracker: SubsetTracker,
 }
@@ -167,7 +165,6 @@ impl Clone for SortedWritesTable {
             merge: self.merge.clone(),
             to_rebuild: self.to_rebuild.clone(),
             rebuild_index: Index::new(self.to_rebuild.clone(), ColumnIndex::new()),
-            refresh_index: self.refresh_index.clone(),
             subset_tracker: Default::default(),
         }
     }
@@ -298,7 +295,6 @@ impl Table for SortedWritesTable {
     }
     fn clear(&mut self) {
         self.pending_state.clear();
-        self.refresh_index.clear();
         if self.data.data.len() == 0 {
             return;
         }
@@ -554,7 +550,6 @@ impl SortedWritesTable {
             merge: merge_fn.into(),
             to_rebuild,
             rebuild_index,
-            refresh_index: ColumnIndex::new(),
             subset_tracker: Default::default(),
         }
     }
@@ -647,9 +642,8 @@ impl SortedWritesTable {
 
     fn do_insert(&mut self, exec_state: &mut ExecutionState) -> bool {
         let total = self.pending_state.total_rows.swap(0, Ordering::Relaxed);
-        let start_row = self.data.next_row();
         self.data.data.reserve(total);
-        let changed = if parallelize_table_op(total) {
+        if parallelize_table_op(total) {
             if let Some(col) = self.sort_by {
                 self.parallel_insert(
                     exec_state,
@@ -664,11 +658,7 @@ impl SortedWritesTable {
             }
         } else {
             self.serial_insert(exec_state)
-        };
-        if changed {
-            self.index_live_rows_from(start_row);
         }
-        changed
     }
 
     fn serial_insert(&mut self, exec_state: &mut ExecutionState) -> bool {
@@ -1163,7 +1153,6 @@ impl SortedWritesTable {
         unsafe { self.data.scratch.set_len(prev_count) };
         mem::swap(&mut self.data.data, &mut self.data.scratch);
         self.data.stale_rows = 0;
-        self.rebuild_refresh_index();
     }
     fn rehash_impl(
         sort_by: Option<ColumnId>,
@@ -1204,33 +1193,7 @@ impl SortedWritesTable {
             &mut self.data,
             &mut self.offsets,
             &mut self.hash,
-        );
-        self.rebuild_refresh_index();
-    }
-
-    fn index_live_rows_from(&mut self, start: RowId) {
-        if self.to_rebuild.is_empty() {
-            return;
-        }
-        let mut scratch = SmallVec::<[Value; 4]>::new();
-        for row_idx in start.index()..self.data.next_row().index() {
-            let row_id = RowId::from_usize(row_idx);
-            {
-                let Some(row) = self.data.get_row(row_id) else {
-                    continue;
-                };
-                scratch.clear();
-                for col in &self.to_rebuild {
-                    scratch.push(row[col.index()]);
-                }
-            }
-            self.refresh_index.add_row(&scratch, row_id);
-        }
-    }
-
-    fn rebuild_refresh_index(&mut self) {
-        self.refresh_index.clear();
-        self.index_live_rows_from(RowId::new(0));
+        )
     }
 }
 

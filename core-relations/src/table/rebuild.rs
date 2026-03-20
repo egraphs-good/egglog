@@ -9,7 +9,7 @@ use crate::{
     ColumnId, ExecutionState, Offset, RowId, Subset, Table, TableId, TaggedRowBuffer, Value,
     WrappedTable,
     common::HashSet,
-    hash_index::{ColumnIndex, Index, IndexBase},
+    hash_index::{ColumnIndex, Index},
     offsets::Offsets,
     parallel_heuristics::parallelize_rebuild,
     table_spec::{Rebuilder, WrappedTableRef},
@@ -67,10 +67,18 @@ impl SortedWritesTable {
         if values.is_empty() || self.to_rebuild.is_empty() {
             return false;
         }
+        let mut index = mem::replace(
+            &mut self.rebuild_index,
+            Index::new(vec![], ColumnIndex::new()),
+        );
+        WrappedTableRef::with_wrapper(self, |wrapped| {
+            index.refresh(wrapped);
+        });
+        self.rebuild_index = index;
 
         let mut candidate_rows = HashSet::<RowId>::default();
         for value in values {
-            let Some(subset) = self.refresh_index.get_subset(value) else {
+            let Some(subset) = self.rebuild_index.get_subset(value) else {
                 continue;
             };
             subset.offsets(|row_id| {
