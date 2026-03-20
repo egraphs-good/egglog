@@ -577,7 +577,7 @@ impl SortedWritesTable {
                         let (actual_shard, hc) = hash_code(shard_data, to_remove, self.n_keys);
                         assert_eq!(actual_shard, shard_id);
                         if let Ok(entry) = shard.find_entry(hc, |entry| {
-                            entry.hashcode == (hc as _)
+                            entry.hashcode == (hc as HashCode)
                                 && &self.data.get_row(entry.row).unwrap()[0..self.n_keys]
                                     == to_remove
                         }) {
@@ -616,7 +616,7 @@ impl SortedWritesTable {
                         let (actual_shard, hc) = hash_code(shard_data, to_remove, self.n_keys);
                         assert_eq!(actual_shard, shard_id);
                         if let Ok(entry) = shard.find_entry(hc, |entry| {
-                            entry.hashcode == (hc as _)
+                            entry.hashcode == (hc as HashCode)
                                 && &self.data.get_row(entry.row).unwrap()[0..self.n_keys]
                                     == to_remove
                         }) {

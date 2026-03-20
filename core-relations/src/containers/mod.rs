@@ -375,6 +375,28 @@ impl<C: ContainerValue> ContainerEnv<C> {
             }
         }
     }
+
+    fn reinsert_incremental(
+        &self,
+        container: C,
+        old_id: Value,
+        rebuilt_id: Value,
+        container_changed: bool,
+        exec_state: &mut ExecutionState,
+        summary: &mut ContainerRebuildSummary,
+    ) {
+        if container_changed || rebuilt_id != old_id {
+            summary.note_change();
+        }
+        if rebuilt_id != old_id {
+            self.to_container.remove(&old_id);
+        }
+        let actual = self.insert_owned(container, rebuilt_id, exec_state);
+        if container_changed && rebuilt_id == old_id && actual == old_id {
+            summary.note_refresh_value(old_id);
+        }
+    }
+
     fn apply_rebuild_incremental(
         &mut self,
         table: &WrappedTable,
@@ -418,15 +440,16 @@ impl<C: ContainerValue> ContainerEnv<C> {
             else {
                 continue;
             };
-            if container.rebuild_contents(rebuilder) {
-                summary.note_change();
-                let actual = self.insert_owned(container, id, exec_state);
-                if actual == id {
-                    summary.note_refresh_value(id);
-                }
-            } else {
-                self.insert_owned(container, id, exec_state);
-            }
+            let rebuilt_id = rebuilder.rebuild_val(id);
+            let container_changed = container.rebuild_contents(rebuilder);
+            self.reinsert_incremental(
+                container,
+                id,
+                rebuilt_id,
+                container_changed,
+                exec_state,
+                &mut summary,
+            );
         }
         summary
     }
@@ -462,7 +485,7 @@ impl<C: ContainerValue> ContainerEnv<C> {
                     // buckets they have already yielded have been removed.
                     let ((container, _), _) = unsafe { shard.remove(bucket) };
                     self.to_container.remove(&old_val);
-                    to_reinsert.push((container, new_val));
+                    to_reinsert.push((container, new_val, new_val == old_val));
                 } else {
                     // Just the value changed. Leave the container in place.
                     *val.get_mut() = new_val;
@@ -471,9 +494,9 @@ impl<C: ContainerValue> ContainerEnv<C> {
                 }
             }
         }
-        for (container, val) in to_reinsert {
+        for (container, val, stable_id) in to_reinsert {
             let actual = self.insert_owned(container, val, exec_state);
-            if actual == val {
+            if stable_id && actual == val {
                 summary.note_refresh_value(val);
             }
         }
@@ -489,7 +512,8 @@ impl<C: ContainerValue> ContainerEnv<C> {
         // `to_reinsert` isn't a flat vector. It's instead a vector of queues - one per
         // destination map shard. This lets us do a bulk insertion in parallel without having
         // to grab a lock per container.
-        let mut to_reinsert = IdVec::<usize /* to_id shard */, SegQueue<(C, Value)>>::default();
+        let mut to_reinsert =
+            IdVec::<usize /* to_id shard */, SegQueue<(C, Value, bool)>>::default();
         to_reinsert.resize_with(self.to_id.shards().len(), Default::default);
 
         let shards = self.to_id.shards_mut();
@@ -523,7 +547,7 @@ impl<C: ContainerValue> ContainerEnv<C> {
                         let shard = self
                             .to_container
                             .determine_shard(hash_container(&container) as usize);
-                        to_reinsert[shard].push((container, new_val));
+                        to_reinsert[shard].push((container, new_val, new_val == old_val));
                     } else {
                         // Just the value changed. Leave the container in place.
                         *val.get_mut() = new_val;
@@ -550,7 +574,7 @@ impl<C: ContainerValue> ContainerEnv<C> {
                 // to `to_container` and `val_index`.
                 let shard = shard.get_mut();
                 let queue = &to_reinsert[shard_id];
-                while let Some((container, val)) = queue.pop() {
+                while let Some((container, val, stable_id)) = queue.pop() {
                     let hc = hash_container(&container);
                     let target_map = self.to_container.determine_shard(hc as usize);
                     match shard.find_or_find_insert_slot(
@@ -574,7 +598,7 @@ impl<C: ContainerValue> ContainerEnv<C> {
                                     index.insert(result);
                                 }
                             }
-                            if result == val {
+                            if stable_id && result == val {
                                 refresh_values.push(val);
                             }
                         }
@@ -588,7 +612,9 @@ impl<C: ContainerValue> ContainerEnv<C> {
                             unsafe {
                                 shard.insert_in_slot(hc, slot, (container, SharedValue::new(val)));
                             }
-                            refresh_values.push(val);
+                            if stable_id {
+                                refresh_values.push(val);
+                            }
                         }
                     }
                 }
