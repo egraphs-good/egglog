@@ -356,38 +356,14 @@ impl Database {
         next_ts: Value,
     ) -> bool {
         let func = self.tables.take(func_id).unwrap();
-        if parallelize_db_level_op(self.total_size_estimate) {
-            let mut tables = Vec::with_capacity(to_rebuild.len());
-            for id in to_rebuild {
-                tables.push((*id, self.tables.take(*id).unwrap()));
-            }
-            tables.par_iter_mut().for_each(|(id, info)| {
-                if info.table.apply_rebuild(
-                    func_id,
-                    &func.table,
-                    next_ts,
-                    &mut ExecutionState::new(self.read_only_view(), Default::default()),
-                ) {
-                    self.notification_list.notify(*id);
-                }
-            });
-            for (id, info) in tables {
-                self.tables.insert(id, info);
-            }
-        } else {
-            for id in to_rebuild {
-                let mut info = self.tables.take(*id).unwrap();
-                if info.table.apply_rebuild(
-                    func_id,
-                    &func.table,
-                    next_ts,
-                    &mut ExecutionState::new(self.read_only_view(), Default::default()),
-                ) {
-                    self.notification_list.notify(*id);
-                }
-                self.tables.insert(*id, info);
-            }
-        }
+        self.run_on_tables(to_rebuild, |_, info, view| {
+            info.table.apply_rebuild(
+                func_id,
+                &func.table,
+                next_ts,
+                &mut ExecutionState::new(*view, Default::default()),
+            )
+        });
         self.tables.insert(func_id, func);
         self.merge_all()
     }
@@ -404,13 +380,25 @@ impl Database {
         // This runs after ordinary table rebuild. At this point `values`
         // should only contain same-id container changes, so retimestamping the
         // matching parent rows is enough to make seminaive revisit them.
+        self.run_on_tables(to_refresh, |_, info, _| {
+            info.table.refresh_rows_for_values(values, next_ts)
+        });
+        self.merge_all()
+    }
+
+    fn run_on_tables(
+        &mut self,
+        table_ids: &[TableId],
+        run: impl for<'a> Fn(TableId, &mut TableInfo, &DbView<'a>) -> bool + Sync,
+    ) {
         if parallelize_db_level_op(self.total_size_estimate) {
-            let mut tables = Vec::with_capacity(to_refresh.len());
-            for id in to_refresh {
+            let mut tables = Vec::with_capacity(table_ids.len());
+            for id in table_ids {
                 tables.push((*id, self.tables.take(*id).unwrap()));
             }
+            let view = self.read_only_view();
             tables.par_iter_mut().for_each(|(id, info)| {
-                if info.table.refresh_rows_for_values(values, next_ts) {
+                if run(*id, info, &view) {
                     self.notification_list.notify(*id);
                 }
             });
@@ -418,15 +406,18 @@ impl Database {
                 self.tables.insert(id, info);
             }
         } else {
-            for id in to_refresh {
+            for id in table_ids {
                 let mut info = self.tables.take(*id).unwrap();
-                if info.table.refresh_rows_for_values(values, next_ts) {
+                let changed = {
+                    let view = self.read_only_view();
+                    run(*id, &mut info, &view)
+                };
+                if changed {
                     self.notification_list.notify(*id);
                 }
                 self.tables.insert(*id, info);
             }
         }
-        self.merge_all()
     }
 
     /// Run `f` with access to an `ExecutionState` mapped to this database.
