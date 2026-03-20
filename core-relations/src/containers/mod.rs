@@ -76,7 +76,9 @@ pub struct ContainerValues {
 #[derive(Clone, Default)]
 pub struct ContainerRebuildSummary {
     changed: bool,
-    stable_changed: IndexSet<Value>,
+    // Container ids whose semantics changed in a way that may not produce a
+    // fresh parent-row delta during ordinary table rebuild.
+    refresh_values: IndexSet<Value>,
 }
 
 impl ContainerRebuildSummary {
@@ -84,22 +86,22 @@ impl ContainerRebuildSummary {
         self.changed
     }
 
-    pub fn stable_changed(&self) -> &IndexSet<Value> {
-        &self.stable_changed
+    pub fn refresh_values(&self) -> &IndexSet<Value> {
+        &self.refresh_values
     }
 
     fn note_change(&mut self) {
         self.changed = true;
     }
 
-    fn note_stable_change(&mut self, value: Value) {
+    fn note_refresh_value(&mut self, value: Value) {
         self.changed = true;
-        self.stable_changed.insert(value);
+        self.refresh_values.insert(value);
     }
 
     fn extend(&mut self, other: Self) {
         self.changed |= other.changed;
-        self.stable_changed.extend(other.stable_changed);
+        self.refresh_values.extend(other.refresh_values);
     }
 }
 
@@ -420,7 +422,7 @@ impl<C: ContainerValue> ContainerEnv<C> {
                 summary.note_change();
                 let actual = self.insert_owned(container, id, exec_state);
                 if actual == id {
-                    summary.note_stable_change(id);
+                    summary.note_refresh_value(id);
                 }
             } else {
                 self.insert_owned(container, id, exec_state);
@@ -472,7 +474,7 @@ impl<C: ContainerValue> ContainerEnv<C> {
         for (container, val) in to_reinsert {
             let actual = self.insert_owned(container, val, exec_state);
             if actual == val {
-                summary.note_stable_change(val);
+                summary.note_refresh_value(val);
             }
         }
         summary
@@ -534,7 +536,7 @@ impl<C: ContainerValue> ContainerEnv<C> {
             .max()
             .unwrap_or(false);
 
-        let stable_changed = SegQueue::new();
+        let refresh_values = SegQueue::new();
         shards
             .iter_mut()
             .enumerate()
@@ -573,7 +575,7 @@ impl<C: ContainerValue> ContainerEnv<C> {
                                 }
                             }
                             if result == val {
-                                stable_changed.push(val);
+                                refresh_values.push(val);
                             }
                         }
                         Err(slot) => {
@@ -586,7 +588,7 @@ impl<C: ContainerValue> ContainerEnv<C> {
                             unsafe {
                                 shard.insert_in_slot(hc, slot, (container, SharedValue::new(val)));
                             }
-                            stable_changed.push(val);
+                            refresh_values.push(val);
                         }
                     }
                 }
@@ -595,8 +597,8 @@ impl<C: ContainerValue> ContainerEnv<C> {
         if changed {
             summary.note_change();
         }
-        while let Some(value) = stable_changed.pop() {
-            summary.note_stable_change(value);
+        while let Some(value) = refresh_values.pop() {
+            summary.note_refresh_value(value);
         }
         summary
     }

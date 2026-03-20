@@ -69,11 +69,6 @@ impl Parse for AddPrimitiveWithValidator {
 ///   will let you access the expression `x` of type `T` from inside
 ///   the body as `self.ctx`. `T` must be the real Rust type of `x`.
 ///   `T` must be `Clone` and `'static`.
-///
-/// # Examples
-/// ```rust,ignore
-/// add_primitive!(eg, "i64-inc" = |a: i64| -> i64 { a + 1 });
-/// ```
 #[proc_macro]
 pub fn add_primitive(input: TokenStream) -> TokenStream {
     build_add_primitive_impl(parse_macro_input!(input), None)
@@ -450,6 +445,7 @@ impl Parse for Arrow {
 
 /// This macro lets the user declare literal primitives with automatic validator generation.
 /// It automatically generates validators by converting between Rust values and Literal types.
+///
 /// # Example
 /// ```rust,ignore
 /// add_literal_prim!(eg, "not" = |a: bool| -> bool { !a });

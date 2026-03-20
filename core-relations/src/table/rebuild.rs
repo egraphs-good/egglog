@@ -31,6 +31,17 @@ macro_rules! insert_row {
 }
 
 impl SortedWritesTable {
+    fn refresh_rebuild_index(&mut self) {
+        let mut index = mem::replace(
+            &mut self.rebuild_index,
+            Index::new(vec![], ColumnIndex::new()),
+        );
+        WrappedTableRef::with_wrapper(self, |wrapped| {
+            index.refresh(wrapped);
+        });
+        self.rebuild_index = index;
+    }
+
     pub(super) fn do_rebuild(
         &mut self,
         table_id: TableId,
@@ -67,14 +78,9 @@ impl SortedWritesTable {
         if values.is_empty() || self.to_rebuild.is_empty() {
             return false;
         }
-        let mut index = mem::replace(
-            &mut self.rebuild_index,
-            Index::new(vec![], ColumnIndex::new()),
-        );
-        WrappedTableRef::with_wrapper(self, |wrapped| {
-            index.refresh(wrapped);
-        });
-        self.rebuild_index = index;
+        // Reuse the rebuild index to find rows whose rebuildable columns mention
+        // one of the changed container ids.
+        self.refresh_rebuild_index();
 
         let mut candidate_rows = HashSet::<RowId>::default();
         for value in values {
@@ -118,15 +124,7 @@ impl SortedWritesTable {
         next_ts: Value,
         exec_state: &mut ExecutionState,
     ) -> bool {
-        let mut index = mem::replace(
-            &mut self.rebuild_index,
-            Index::new(vec![], ColumnIndex::new()),
-        );
-        // Update the index.
-        WrappedTableRef::with_wrapper(self, |wrapped| {
-            index.refresh(wrapped);
-        });
-        self.rebuild_index = index;
+        self.refresh_rebuild_index();
         let mut buf = TaggedRowBuffer::new(1);
         table.scan_project(
             to_scan.as_ref(),
