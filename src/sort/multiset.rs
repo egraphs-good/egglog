@@ -350,6 +350,10 @@ impl Primitive for Map {
         .into_box()
     }
 
+    fn is_stateful(&self) -> bool {
+        true
+    }
+
     fn apply(&self, exec_state: &mut ExecutionState, args: &[Value]) -> Option<Value> {
         let fc = exec_state
             .container_values()
@@ -406,6 +410,10 @@ impl Primitive for FillIndex {
         .into_box()
     }
 
+    fn is_stateful(&self) -> bool {
+        true
+    }
+
     fn apply(&self, exec_state: &mut ExecutionState, args: &[Value]) -> Option<Value> {
         let fc = exec_state
             .container_values()
@@ -460,6 +468,10 @@ impl Primitive for ClearIndex {
         .into_box()
     }
 
+    fn is_stateful(&self) -> bool {
+        true
+    }
+
     fn apply(&self, exec_state: &mut ExecutionState, args: &[Value]) -> Option<Value> {
         let fc = exec_state
             .container_values()
@@ -509,6 +521,10 @@ impl Primitive for FlatMap {
             span.clone(),
         )
         .into_box()
+    }
+
+    fn is_stateful(&self) -> bool {
+        true
     }
 
     fn apply(&self, exec_state: &mut ExecutionState, args: &[Value]) -> Option<Value> {
@@ -579,6 +595,10 @@ impl Primitive for Filter {
         .into_box()
     }
 
+    fn is_stateful(&self) -> bool {
+        true
+    }
+
     fn apply(&self, exec_state: &mut ExecutionState, args: &[Value]) -> Option<Value> {
         let fc = exec_state
             .container_values()
@@ -633,6 +653,10 @@ impl Primitive for SumMultisets {
             span.clone(),
         )
         .into_box()
+    }
+
+    fn is_stateful(&self) -> bool {
+        self.multiset.is_eq_container_sort() || self.multiset_of_multisets.is_eq_container_sort()
     }
 
     fn apply(&self, exec_state: &mut ExecutionState, args: &[Value]) -> Option<Value> {
@@ -694,6 +718,10 @@ impl Primitive for Reduce {
         .into_box()
     }
 
+    fn is_stateful(&self) -> bool {
+        true
+    }
+
     fn apply(&self, exec_state: &mut ExecutionState, args: &[Value]) -> Option<Value> {
         let fc = exec_state
             .container_values()
@@ -744,6 +772,10 @@ impl Primitive for UnionValues {
             span.clone(),
         )
         .into_box()
+    }
+
+    fn is_stateful(&self) -> bool {
+        true
     }
 
     fn apply(&self, exec_state: &mut ExecutionState, args: &[Value]) -> Option<Value> {

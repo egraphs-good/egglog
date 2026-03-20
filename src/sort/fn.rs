@@ -343,6 +343,10 @@ impl Primitive for Ctor {
         })
     }
 
+    fn is_stateful(&self) -> bool {
+        false
+    }
+
     fn apply(&self, exec_state: &mut ExecutionState, args: &[Value]) -> Option<Value> {
         let (rf, args) = args.split_first().unwrap();
         let ResolvedFunction {
@@ -430,6 +434,10 @@ impl Primitive for Apply {
         sorts.extend(self.function.inputs.clone());
         sorts.push(self.function.output.clone());
         SimpleTypeConstraint::new(self.name(), sorts, span.clone()).into_box()
+    }
+
+    fn is_stateful(&self) -> bool {
+        true
     }
 
     fn apply(&self, exec_state: &mut ExecutionState, args: &[Value]) -> Option<Value> {

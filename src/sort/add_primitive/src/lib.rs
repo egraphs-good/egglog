@@ -69,6 +69,22 @@ impl Parse for AddPrimitiveWithValidator {
 ///   will let you access the expression `x` of type `T` from inside
 ///   the body as `self.ctx`. `T` must be the real Rust type of `x`.
 ///   `T` must be `Clone` and `'static`.
+///
+/// - Query statefulness: you can optionally write `:stable` or `:stateful`
+///   immediately after the primitive name.
+///   This controls whether query-side uses of the primitive keep seminaive
+///   execution enabled.
+///   If no override is provided, the macro infers `is_stateful()` conservatively:
+///   bare polymorphic `#` signatures are treated as stateful, and any captured
+///   input or output sort that is an eq-sort or eq-container-sort is treated as
+///   stateful. Otherwise the primitive is treated as stable.
+///
+/// # Examples
+/// ```rust,ignore
+/// add_primitive!(eg, "i64-inc" = |a: i64| -> i64 { a + 1 });
+/// add_primitive!(eg, "forced-stable" :stable = |x: # (some_sort.clone())| -> # (some_sort.clone()) { x });
+/// add_primitive!(eg, "forced-stateful" :stateful = |a: i64| -> i64 { a + 1 });
+/// ```
 #[proc_macro]
 pub fn add_primitive(input: TokenStream) -> TokenStream {
     build_add_primitive_impl(parse_macro_input!(input), None)
@@ -84,6 +100,7 @@ fn build_add_primitive_impl(parsed: AddPrimitive, validator: Option<Expr>) -> To
     let AddPrimitive {
         eg,
         name,
+        statefulness,
         context,
         is_varargs,
         args,
@@ -116,6 +133,30 @@ fn build_add_primitive_impl(parsed: AddPrimitive, validator: Option<Expr>) -> To
     // Bundle up the defs and uses into structs.
     let prim_def = quote!(struct Prim { #(#field_defs,)* });
     let prim_use = quote!(       Prim { #(#field_uses,)* });
+
+    // Keep the inference policy in the macro so the backend only needs the final boolean.
+    let is_stateful = match statefulness {
+        Some(PrimitiveStatefulness::Stable) => quote!(false),
+        Some(PrimitiveStatefulness::Stateful) => quote!(true),
+        None => {
+            let has_untyped = args.iter().any(|arg| arg.t.field.is_none()) || ret.field.is_none();
+            if has_untyped {
+                quote!(true)
+            } else {
+                let checks: Vec<_> = args
+                    .iter()
+                    .map(|arg| &arg.x)
+                    .chain([&y])
+                    .map(|x| quote!(self.#x.is_eq_sort() || self.#x.is_eq_container_sort()))
+                    .collect();
+                if checks.is_empty() {
+                    quote!(false)
+                } else {
+                    quote!(#(#checks)||*)
+                }
+            }
+        }
+    };
 
     // Create the type constraint for the `egglog` typechecker.
     // TODO: add a new type constraint that supports all possible combinations
@@ -257,6 +298,10 @@ fn build_add_primitive_impl(parsed: AddPrimitive, validator: Option<Expr>) -> To
                 #type_constraint
             }
 
+            fn is_stateful(&self) -> bool {
+                #is_stateful
+            }
+
             fn apply(&self, exec_state: &mut ExecutionState, args: &[Value]) -> Option<Value> {
                 #apply
             }
@@ -271,6 +316,7 @@ fn build_add_primitive_impl(parsed: AddPrimitive, validator: Option<Expr>) -> To
 struct AddPrimitive {
     eg: Expr,
     name: LitStr,
+    statefulness: Option<PrimitiveStatefulness>,
     context: Context,
     args: Vec<Arg>,
     ret: Type,
@@ -284,6 +330,11 @@ impl Parse for AddPrimitive {
         let eg = input.parse()?;
         input.parse::<Token![,]>()?;
         let name = input.parse()?;
+        let statefulness = if input.peek(Token![:]) {
+            Some(input.parse()?)
+        } else {
+            None
+        };
         input.parse::<Token![=]>()?;
         let context = input.parse()?;
         let Args { is_varargs, args } = input.parse()?;
@@ -297,6 +348,7 @@ impl Parse for AddPrimitive {
         Ok(AddPrimitive {
             eg,
             name,
+            statefulness,
             context,
             args,
             ret,
@@ -304,6 +356,26 @@ impl Parse for AddPrimitive {
             is_varargs,
             is_fallible,
         })
+    }
+}
+
+enum PrimitiveStatefulness {
+    Stable,
+    Stateful,
+}
+
+impl Parse for PrimitiveStatefulness {
+    fn parse(input: ParseStream) -> Result<Self> {
+        input.parse::<Token![:]>()?;
+        let ident: Ident = input.parse()?;
+        match ident.to_string().as_str() {
+            "stable" => Ok(Self::Stable),
+            "stateful" => Ok(Self::Stateful),
+            _ => Err(syn::Error::new(
+                ident.span(),
+                "expected `stable` or `stateful`",
+            )),
+        }
     }
 }
 
@@ -445,6 +517,8 @@ impl Parse for Arrow {
 
 /// This macro lets the user declare literal primitives with automatic validator generation.
 /// It automatically generates validators by converting between Rust values and Literal types.
+/// It shares the same `:stable` / `:stateful` annotation and default `is_stateful()`
+/// inference as `add_primitive!`.
 ///
 /// # Example
 /// ```rust,ignore

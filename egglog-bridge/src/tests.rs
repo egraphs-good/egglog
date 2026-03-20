@@ -637,7 +637,7 @@ fn container_test() {
         let last: QueryEntry = rb.new_var(ColumnTy::Id).into();
         rb.query_table(vec_table, &[vec.clone(), vec_id], Some(false))
             .unwrap();
-        rb.query_prim(vec_last, &[vec.clone(), last.clone()], ColumnTy::Id)
+        rb.query_prim(vec_last, &[vec.clone(), last.clone()], ColumnTy::Id, true)
             .unwrap();
         let add_last_0 = rb
             .lookup(
@@ -823,7 +823,7 @@ fn run_query_prim_container_match_case(seminaive: bool) -> bool {
         let x: QueryEntry = rb.new_var(ColumnTy::Id).into();
         rb.query_table(l_table, &[vec.clone(), l_id_entry.clone()], Some(false))
             .unwrap();
-        rb.query_prim(match_singleton_k, &[vec, x.clone()], ColumnTy::Id)
+        rb.query_prim(match_singleton_k, &[vec, x.clone()], ColumnTy::Id, true)
             .unwrap();
         rb.union(l_id_entry, x);
         rb.build()
@@ -1173,11 +1173,14 @@ fn constrain_prims_simple() {
         can_subsume: false,
     });
 
+    let query_prim_invocations = Arc::new(AtomicUsize::new(0));
+    let query_prim_invocations_clone = query_prim_invocations.clone();
     let is_even = egraph.register_external_func(Box::new(core_relations::make_external_func(
-        |state, vals| -> Option<Value> {
+        move |state, vals| -> Option<Value> {
             let [a] = vals else {
                 return None;
             };
+            query_prim_invocations_clone.fetch_add(1, Ordering::Relaxed);
             let a_val = state.base_values().unwrap::<i64>(*a);
             let result: bool = a_val % 2 == 0;
             Some(state.base_values().get(result))
@@ -1206,6 +1209,7 @@ fn constrain_prims_simple() {
             is_even,
             &[val.clone(), value_true.clone()],
             ColumnTy::Base(bool_base),
+            false,
         )
         .unwrap();
         rb.set(g_table, &[val, id]);
@@ -1230,6 +1234,9 @@ fn constrain_prims_simple() {
     let f = get_entries(&egraph, f_table);
     assert_eq!(f.len(), 3);
     egraph.run_rules(&[copy_to_g]).unwrap();
+    assert_eq!(query_prim_invocations.load(Ordering::Relaxed), 3);
+    assert!(!egraph.run_rules(&[copy_to_g]).unwrap().changed());
+    assert_eq!(query_prim_invocations.load(Ordering::Relaxed), 3);
     let g = get_entries(&egraph, g_table);
     assert_eq!(g.len(), 1);
     assert_eq!(g[0], f[1])
@@ -1297,12 +1304,14 @@ fn constrain_prims_abstract() {
             neg,
             &[val.clone(), negval.clone()],
             ColumnTy::Base(int_base),
+            false,
         )
         .unwrap();
         rb.query_prim(
             abs,
             &[val.clone(), negval.clone()],
             ColumnTy::Base(int_base),
+            false,
         )
         .unwrap();
         rb.set(g_table, &[val.clone(), id.clone()]);

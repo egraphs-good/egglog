@@ -106,6 +106,12 @@ pub trait Primitive {
     /// for error localization.
     fn get_type_constraints(&self, span: &Span) -> Box<dyn TypeConstraint>;
 
+    /// Returns whether query-side uses of this primitive can depend on evolving egraph state
+    /// beyond the explicit argument values passed to it.
+    fn is_stateful(&self) -> bool {
+        true
+    }
+
     /// Applies the primitive operation to the given arguments.
     ///
     /// Returns `Some(value)` if the operation succeeds, or `None` if it fails.
@@ -1877,7 +1883,7 @@ impl<'a> BackendRule<'a> {
         &mut self,
         prim: &core::SpecializedPrimitive,
         args: &[core::ResolvedAtomTerm],
-    ) -> (ExternalFunctionId, Vec<QueryEntry>, ColumnTy) {
+    ) -> (ExternalFunctionId, Vec<QueryEntry>, ColumnTy, bool) {
         let mut qe_args = self.args(args);
 
         if prim.name() == "unstable-fn" {
@@ -1925,6 +1931,7 @@ impl<'a> BackendRule<'a> {
             prim.external_id(),
             qe_args,
             prim.output().column_ty(self.rb.egraph()),
+            prim.is_stateful(),
         )
     }
 
@@ -1948,8 +1955,8 @@ impl<'a> BackendRule<'a> {
                     self.rb.query_table(f, &args, is_subsumed).unwrap();
                 }
                 ResolvedCall::Primitive(p) => {
-                    let (p, args, ty) = self.prim(p, &atom.args);
-                    self.rb.query_prim(p, &args, ty).unwrap()
+                    let (p, args, ty, is_stateful) = self.prim(p, &atom.args);
+                    self.rb.query_prim(p, &args, ty, is_stateful).unwrap()
                 }
             }
         }
@@ -1972,7 +1979,7 @@ impl<'a> BackendRule<'a> {
                         }
                         ResolvedCall::Primitive(p) => {
                             let name = p.name().to_owned();
-                            let (p, args, ty) = self.prim(p, args);
+                            let (p, args, ty, _) = self.prim(p, args);
                             let span = span.clone();
                             self.rb.call_external_func(p, &args, ty, move || {
                                 format!("{span}: call of primitive {name} failed")
@@ -2126,6 +2133,10 @@ mod tests {
             .into_box()
         }
 
+        fn is_stateful(&self) -> bool {
+            false
+        }
+
         fn apply(&self, exec_state: &mut ExecutionState<'_>, args: &[Value]) -> Option<Value> {
             let mut sum = 0;
             let vec1 = exec_state
@@ -2170,6 +2181,69 @@ mod tests {
             ",
             )
             .unwrap();
+    }
+
+    fn primitive_is_stateful(egraph: &EGraph, name: &str) -> bool {
+        let prims = egraph.type_info.get_prims(name).unwrap();
+        assert_eq!(prims.len(), 1);
+        prims[0].primitive.is_stateful()
+    }
+
+    #[test]
+    fn test_add_primitive_macro_infers_base_sorts_stable() {
+        let mut egraph = EGraph::default();
+        add_primitive!(&mut egraph, "stable-base" = |x: i64| -> i64 { x });
+        assert!(!primitive_is_stateful(&egraph, "stable-base"));
+    }
+
+    #[test]
+    fn test_add_primitive_macro_infers_eq_sort_stateful() {
+        let mut egraph = EGraph::default();
+        egraph.parse_and_run_program(None, "(sort E)").unwrap();
+        let eq_sort = egraph.type_info.sorts.get("E").unwrap().clone();
+        add_primitive!(
+            &mut egraph,
+            "eq-id" = |x: # (eq_sort.clone())| -> # (eq_sort.clone()) { x }
+        );
+        assert!(primitive_is_stateful(&egraph, "eq-id"));
+    }
+
+    #[test]
+    fn test_add_primitive_macro_infers_eq_container_sort_stateful() {
+        let mut egraph = EGraph::default();
+        egraph
+            .parse_and_run_program(None, "(sort E)\n(sort VE (Vec E))")
+            .unwrap();
+        let vec_sort = egraph.type_info.sorts.get("VE").unwrap().clone();
+        add_primitive!(
+            &mut egraph,
+            "vec-len" = |xs: @VecContainer (vec_sort.clone())| -> i64 { xs.data.len() as i64 }
+        );
+        assert!(primitive_is_stateful(&egraph, "vec-len"));
+    }
+
+    #[test]
+    fn test_add_primitive_macro_infers_bare_polymorphic_stateful() {
+        let mut egraph = EGraph::default();
+        add_primitive!(&mut egraph, "poly-id" = |x: #| -> # { x });
+        assert!(primitive_is_stateful(&egraph, "poly-id"));
+    }
+
+    #[test]
+    fn test_add_primitive_macro_statefulness_overrides() {
+        let mut egraph = EGraph::default();
+        egraph.parse_and_run_program(None, "(sort E)").unwrap();
+        let eq_sort = egraph.type_info.sorts.get("E").unwrap().clone();
+        add_primitive!(
+            &mut egraph,
+            "forced-stable" :stable = |x: # (eq_sort.clone())| -> # (eq_sort.clone()) { x }
+        );
+        add_primitive!(
+            &mut egraph,
+            "forced-stateful" :stateful = |x: i64| -> i64 { x }
+        );
+        assert!(!primitive_is_stateful(&egraph, "forced-stable"));
+        assert!(primitive_is_stateful(&egraph, "forced-stateful"));
     }
 
     // Test that an `EGraph` is `Send` & `Sync`
