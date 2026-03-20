@@ -17,7 +17,7 @@ use rayon::prelude::*;
 use smallvec::SmallVec;
 
 use crate::{
-    BaseValues, ContainerValues, PoolSet, QueryEntry, TupleIndex, Value,
+    BaseValues, ContainerRebuildSummary, ContainerValues, PoolSet, QueryEntry, TupleIndex, Value,
     action::{
         Bindings, DbView,
         mask::{Mask, MaskIter, ValueSource},
@@ -335,7 +335,7 @@ impl Database {
         &mut self.container_values
     }
 
-    pub fn rebuild_containers(&mut self, table_id: TableId) -> bool {
+    pub fn rebuild_containers(&mut self, table_id: TableId) -> ContainerRebuildSummary {
         let mut containers = mem::take(&mut self.container_values);
         let table = &self.tables[table_id].table;
         let res = self.with_execution_state(|state| containers.rebuild_all(table_id, table, state));
@@ -389,6 +389,40 @@ impl Database {
             }
         }
         self.tables.insert(func_id, func);
+        self.merge_all()
+    }
+
+    pub fn refresh_rows_for_values(
+        &mut self,
+        to_refresh: &[TableId],
+        values: &[Value],
+        next_ts: Value,
+    ) -> bool {
+        if values.is_empty() {
+            return false;
+        }
+        if parallelize_db_level_op(self.total_size_estimate) {
+            let mut tables = Vec::with_capacity(to_refresh.len());
+            for id in to_refresh {
+                tables.push((*id, self.tables.take(*id).unwrap()));
+            }
+            tables.par_iter_mut().for_each(|(id, info)| {
+                if info.table.refresh_rows_for_values(values, next_ts) {
+                    self.notification_list.notify(*id);
+                }
+            });
+            for (id, info) in tables {
+                self.tables.insert(id, info);
+            }
+        } else {
+            for id in to_refresh {
+                let mut info = self.tables.take(*id).unwrap();
+                if info.table.refresh_rows_for_values(values, next_ts) {
+                    self.notification_list.notify(*id);
+                }
+                self.tables.insert(*id, info);
+            }
+        }
         self.merge_all()
     }
 

@@ -860,11 +860,15 @@ impl EGraph {
                 // Rebuilding containers first will find that v3 and v2 are equal, and the rest of
                 // the rules can proceed.
                 let container_rebuild = self.db.rebuild_containers(self.uf_table);
-                let table_rebuild =
+                let next_ts = self.next_ts().to_value();
+                let table_rebuild = self.db.apply_rebuild(self.uf_table, &tables, next_ts);
+                let refresh_values: Vec<Value> =
+                    container_rebuild.stable_changed().iter().copied().collect();
+                let refreshed_rows =
                     self.db
-                        .apply_rebuild(self.uf_table, &tables, self.next_ts().to_value());
+                        .refresh_rows_for_values(&tables, &refresh_values, next_ts);
                 self.inc_ts();
-                if !table_rebuild && !container_rebuild {
+                if !table_rebuild && !refreshed_rows && !container_rebuild.changed() {
                     break;
                 }
             }

@@ -245,10 +245,6 @@ impl Primitive for VecMap {
         .into_box()
     }
 
-    fn is_stateful(&self) -> bool {
-        true
-    }
-
     fn apply(&self, exec_state: &mut ExecutionState, args: &[Value]) -> Option<Value> {
         let fc = exec_state
             .container_values()
@@ -301,10 +297,6 @@ impl Primitive for Union {
             span.clone(),
         )
         .into_box()
-    }
-
-    fn is_stateful(&self) -> bool {
-        true
     }
 
     fn apply(&self, exec_state: &mut ExecutionState, args: &[Value]) -> Option<Value> {

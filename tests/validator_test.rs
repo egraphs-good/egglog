@@ -64,9 +64,6 @@ fn test_add_primitive_with_validator_method() {
             )
             .into_box()
         }
-        fn is_stateful(&self) -> bool {
-            false
-        }
         fn apply(&self, exec_state: &mut ExecutionState, args: &[Value]) -> Option<Value> {
             let a = exec_state.base_values().unwrap::<i64>(args[0]);
             let b = exec_state.base_values().unwrap::<i64>(args[1]);

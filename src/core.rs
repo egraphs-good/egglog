@@ -53,11 +53,6 @@ impl SpecializedPrimitive {
         self.prim_with_id.primitive.name()
     }
 
-    /// Returns whether query-side uses of this primitive can depend on evolving egraph state.
-    pub fn is_stateful(&self) -> bool {
-        self.prim_with_id.primitive.is_stateful()
-    }
-
     /// Get the output sort of this primitive
     pub fn output(&self) -> &ArcSort {
         &self.output

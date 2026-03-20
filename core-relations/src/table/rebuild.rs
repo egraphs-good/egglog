@@ -8,7 +8,9 @@ use rayon::prelude::*;
 use crate::{
     ColumnId, ExecutionState, Offset, RowId, Subset, Table, TableId, TaggedRowBuffer, Value,
     WrappedTable,
+    common::HashSet,
     hash_index::{ColumnIndex, Index},
+    offsets::Offsets,
     parallel_heuristics::parallelize_rebuild,
     table_spec::{Rebuilder, WrappedTableRef},
 };
@@ -59,6 +61,52 @@ impl SortedWritesTable {
         } else {
             self.rebuild_nonincremental(&*rebuilder, next_ts, exec_state)
         }
+    }
+
+    pub(super) fn refresh_rows_for_values(&mut self, values: &[Value], next_ts: Value) -> bool {
+        if values.is_empty() || self.to_rebuild.is_empty() {
+            return false;
+        }
+        let mut index = mem::replace(
+            &mut self.rebuild_index,
+            Index::new(vec![], ColumnIndex::new()),
+        );
+        WrappedTableRef::with_wrapper(self, |wrapped| {
+            index.refresh(wrapped);
+        });
+        self.rebuild_index = index;
+
+        let mut candidate_rows = HashSet::<RowId>::default();
+        for value in values {
+            let Some(subset) = self.rebuild_index.get_subset(value) else {
+                continue;
+            };
+            subset.offsets(|row_id| {
+                candidate_rows.insert(row_id);
+            });
+        }
+
+        if candidate_rows.is_empty() {
+            return false;
+        }
+
+        let mut changed = false;
+        let mut mutation_buf = self.new_buffer();
+        let mut refreshed_row = Vec::<Value>::with_capacity(self.n_columns);
+        for row_id in candidate_rows {
+            let Some(current_row) = self.data.get_row(row_id) else {
+                continue;
+            };
+            mutation_buf.stage_remove(&current_row[0..self.n_keys]);
+            refreshed_row.clear();
+            refreshed_row.extend_from_slice(current_row);
+            if let Some(sort_by) = self.sort_by {
+                refreshed_row[sort_by.index()] = next_ts;
+            }
+            mutation_buf.stage_insert(&refreshed_row);
+            changed = true;
+        }
+        changed
     }
 
     fn rebuild_incremental(

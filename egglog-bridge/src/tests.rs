@@ -637,7 +637,7 @@ fn container_test() {
         let last: QueryEntry = rb.new_var(ColumnTy::Id).into();
         rb.query_table(vec_table, &[vec.clone(), vec_id], Some(false))
             .unwrap();
-        rb.query_prim(vec_last, &[vec.clone(), last.clone()], ColumnTy::Id, true)
+        rb.query_prim(vec_last, &[vec.clone(), last.clone()], ColumnTy::Id)
             .unwrap();
         let add_last_0 = rb
             .lookup(
@@ -756,7 +756,7 @@ fn basic_container() {
     }
 }
 
-fn run_query_prim_container_match_case(seminaive: bool) -> bool {
+fn run_query_prim_container_match_case(seminaive: bool, seed_canonical: bool) -> bool {
     let mut egraph = EGraph::default();
     let k_table = egraph.add_table(FunctionConfig {
         schema: vec![ColumnTy::Id, ColumnTy::Id],
@@ -782,6 +782,9 @@ fn run_query_prim_container_match_case(seminaive: bool) -> bool {
 
     let b = egraph.fresh_id();
     let k_b = egraph.add_term(k_table, &[b], "k(b)");
+    if seed_canonical {
+        let _ = egraph.get_container_value(VecContainer(vec![k_b]));
+    }
     let w_k_b = egraph.add_term(w_table, &[k_b], "w(k(b))");
     let vec = egraph.get_container_value(VecContainer(vec![w_k_b]));
     let l_id = egraph.add_term(l_table, &[vec], "l(vec)");
@@ -823,7 +826,7 @@ fn run_query_prim_container_match_case(seminaive: bool) -> bool {
         let x: QueryEntry = rb.new_var(ColumnTy::Id).into();
         rb.query_table(l_table, &[vec.clone(), l_id_entry.clone()], Some(false))
             .unwrap();
-        rb.query_prim(match_singleton_k, &[vec, x.clone()], ColumnTy::Id, true)
+        rb.query_prim(match_singleton_k, &[vec, x.clone()], ColumnTy::Id)
             .unwrap();
         rb.union(l_id_entry, x);
         rb.build()
@@ -842,8 +845,13 @@ fn run_query_prim_container_match_case(seminaive: bool) -> bool {
 
 #[test]
 fn seminaive_query_prim_rechecks_after_rebuild() {
-    assert!(run_query_prim_container_match_case(true));
-    assert!(run_query_prim_container_match_case(false));
+    assert!(run_query_prim_container_match_case(true, false));
+    assert!(run_query_prim_container_match_case(false, false));
+}
+
+#[test]
+fn seminaive_query_prim_rechecks_after_preseeded_container_rebuild() {
+    assert!(run_query_prim_container_match_case(true, true));
 }
 
 #[test]
@@ -1209,7 +1217,6 @@ fn constrain_prims_simple() {
             is_even,
             &[val.clone(), value_true.clone()],
             ColumnTy::Base(bool_base),
-            false,
         )
         .unwrap();
         rb.set(g_table, &[val, id]);
@@ -1304,14 +1311,12 @@ fn constrain_prims_abstract() {
             neg,
             &[val.clone(), negval.clone()],
             ColumnTy::Base(int_base),
-            false,
         )
         .unwrap();
         rb.query_prim(
             abs,
             &[val.clone(), negval.clone()],
             ColumnTy::Base(int_base),
-            false,
         )
         .unwrap();
         rb.set(g_table, &[val.clone(), id.clone()]);

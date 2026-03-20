@@ -504,22 +504,7 @@ impl RuleBuilder<'_> {
         entries: &[QueryEntry],
         // NB: not clear if we still need this now that proof checker is in a separate crate.
         _ret_ty: ColumnTy,
-        is_stateful: bool,
     ) -> Result<()> {
-        if is_stateful {
-            // Query-side primitives are not timestamped table atoms. If one can change from
-            // "doesn't match" to "matches" after rebuild/union while its explicit input values
-            // stay the same, focused seminaive execution has no delta source that would force
-            // the rule to run again.
-            //
-            // The motivating case is `tests/container-fail.egg`: a container child rebuilds in
-            // place, which makes a later query primitive/container matcher succeed, but no parent
-            // table row gets a fresh delta. A more targeted solution would track which primitive
-            // reads depend on which changing backend state and only invalidate those rules. The
-            // current strategy is simpler and sounder: stateful query primitives conservatively
-            // disable seminaive for their containing rule, while stable ones keep seminaive.
-            self.query.seminaive = false;
-        }
         let entries = entries.to_vec();
         self.query.add_rule.push(Box::new(move |inner, rb| {
             let mut dst_vars = inner.convert_all(&entries);

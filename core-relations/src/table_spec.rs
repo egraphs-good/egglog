@@ -172,6 +172,12 @@ pub trait Table: Any + Send + Sync {
         false
     }
 
+    /// Refresh rows whose rebuildable columns mention one of `values` by re-inserting the same
+    /// logical row with a fresh timestamp.
+    fn refresh_rows_for_values(&mut self, _values: &[Value], _next_ts: Value) -> bool {
+        false
+    }
+
     /// A boilerplate method to make it easier to downcast values of `Table`.
     ///
     /// Implementors should be able to implement this method by returning
