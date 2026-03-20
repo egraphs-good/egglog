@@ -32,6 +32,8 @@ impl ContainerValue for VecContainer {
     }
 }
 
+/// A tiny rebuilder used to isolate outer-id canonicalization from inner
+/// container rewrites in the unit tests below.
 struct FakeRebuilder {
     old_outer_id: Option<Value>,
     new_outer_id: Option<Value>,

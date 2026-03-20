@@ -103,6 +103,8 @@ impl SortedWritesTable {
             let Some(current_row) = self.data.get_row(row_id) else {
                 continue;
             };
+            // Preserve the logical row and only advance its sort/timestamp
+            // column, so seminaive treats this as a fresh parent-row delta.
             mutation_buf.stage_remove(&current_row[0..self.n_keys]);
             refreshed_row.clear();
             refreshed_row.extend_from_slice(current_row);

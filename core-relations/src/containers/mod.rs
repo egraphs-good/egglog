@@ -73,6 +73,15 @@ pub struct ContainerValues {
     data: DenseIdMap<ContainerValueId, Box<dyn DynamicContainerEnv + Send + Sync>>,
 }
 
+/// Summary returned by container rebuild.
+///
+/// `changed` means some container entry changed during rebuild, either because
+/// its contents changed or because its outer id canonicalized.
+///
+/// `refresh_values` is narrower: it records container ids whose semantics
+/// changed while their stored outer id stayed stable. Ordinary table rebuild
+/// does not manufacture a fresh parent-row delta for that case, so parent rows
+/// mentioning those ids need a follow-up timestamp refresh.
 #[derive(Clone, Default)]
 pub struct ContainerRebuildSummary {
     changed: bool,
@@ -82,10 +91,12 @@ pub struct ContainerRebuildSummary {
 }
 
 impl ContainerRebuildSummary {
+    /// Returns whether any container entry changed during rebuild.
     pub fn changed(&self) -> bool {
         self.changed
     }
 
+    /// Returns the container ids whose parent rows may need retimestamping.
     pub fn refresh_values(&self) -> &IndexSet<Value> {
         &self.refresh_values
     }
@@ -389,6 +400,8 @@ impl<C: ContainerValue> ContainerEnv<C> {
             summary.note_change();
         }
         if rebuilt_id != old_id {
+            // Parent rows will get a real delta from ordinary table rebuild, so
+            // we only need an explicit refresh when the outer id stayed stable.
             self.to_container.remove(&old_id);
         }
         let actual = self.insert_owned(container, rebuilt_id, exec_state);
@@ -496,6 +509,9 @@ impl<C: ContainerValue> ContainerEnv<C> {
         }
         for (container, val, stable_id) in to_reinsert {
             let actual = self.insert_owned(container, val, exec_state);
+            // Refresh only when rebuild changed container semantics in place.
+            // If the outer id changed, ordinary table rebuild already creates a
+            // fresh parent-row delta for seminaive to follow.
             if stable_id && actual == val {
                 summary.note_refresh_value(val);
             }
@@ -598,6 +614,8 @@ impl<C: ContainerValue> ContainerEnv<C> {
                                     index.insert(result);
                                 }
                             }
+                            // As in the serial path, only same-id semantic
+                            // changes need an explicit parent-row refresh.
                             if stable_id && result == val {
                                 refresh_values.push(val);
                             }

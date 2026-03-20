@@ -401,6 +401,9 @@ impl Database {
         if values.is_empty() {
             return false;
         }
+        // This runs after ordinary table rebuild. At this point `values`
+        // should only contain same-id container changes, so retimestamping the
+        // matching parent rows is enough to make seminaive revisit them.
         if parallelize_db_level_op(self.total_size_estimate) {
             let mut tables = Vec::with_capacity(to_refresh.len());
             for id in to_refresh {
