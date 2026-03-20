@@ -318,10 +318,9 @@ impl Table for SortedWritesTable {
         table_id: TableId,
         table: &crate::WrappedTable,
         next_ts: Value,
-        refresh_values: &[Value],
         exec_state: &mut ExecutionState,
     ) -> bool {
-        self.do_rebuild(table_id, table, next_ts, refresh_values, exec_state)
+        self.do_rebuild(table_id, table, next_ts, exec_state)
     }
 
     fn version(&self) -> TableVersion {

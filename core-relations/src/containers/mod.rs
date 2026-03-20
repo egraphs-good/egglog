@@ -73,36 +73,6 @@ pub struct ContainerValues {
     data: DenseIdMap<ContainerValueId, Box<dyn DynamicContainerEnv + Send + Sync>>,
 }
 
-#[derive(Clone, Default)]
-pub struct ContainerRebuildSummary {
-    changed: bool,
-    stable_changed: IndexSet<Value>,
-}
-
-impl ContainerRebuildSummary {
-    pub fn changed(&self) -> bool {
-        self.changed
-    }
-
-    pub fn stable_changed(&self) -> &IndexSet<Value> {
-        &self.stable_changed
-    }
-
-    fn note_change(&mut self) {
-        self.changed = true;
-    }
-
-    fn note_stable_change(&mut self, value: Value) {
-        self.changed = true;
-        self.stable_changed.insert(value);
-    }
-
-    fn extend(&mut self, other: Self) {
-        self.changed |= other.changed;
-        self.stable_changed.extend(other.stable_changed);
-    }
-}
-
 impl ContainerValues {
     pub fn new() -> Self {
         Default::default()
@@ -150,9 +120,9 @@ impl ContainerValues {
         table_id: TableId,
         table: &WrappedTable,
         exec_state: &mut ExecutionState,
-    ) -> ContainerRebuildSummary {
+    ) -> bool {
         let Some(rebuilder) = table.rebuilder(&[]) else {
-            return Default::default();
+            return false;
         };
         let to_scan = rebuilder.hint_col().map(|_| {
             // We may attempt an incremental rebuild.
@@ -171,21 +141,19 @@ impl ContainerValues {
                         &mut exec_state,
                     )
                 })
-                .reduce(ContainerRebuildSummary::default, |mut acc, summary| {
-                    acc.extend(summary);
-                    acc
-                })
+                .max()
+                .unwrap_or(false)
         } else {
-            let mut summary = ContainerRebuildSummary::default();
+            let mut changed = false;
             for (_, env) in self.data.iter_mut() {
-                summary.extend(env.apply_rebuild(
+                changed |= env.apply_rebuild(
                     table,
                     &*rebuilder,
                     to_scan.as_ref().map(|x| x.as_ref()),
                     exec_state,
-                ));
+                );
             }
-            summary
+            changed
         }
     }
 
@@ -235,7 +203,7 @@ pub trait DynamicContainerEnv: Any + dyn_clone::DynClone + Send + Sync {
         rebuilder: &dyn Rebuilder,
         subset: Option<SubsetRef>,
         exec_state: &mut ExecutionState,
-    ) -> ContainerRebuildSummary;
+    ) -> bool;
 }
 
 // Implements `Clone` for `Box<dyn DynamicContainerEnv>`.
@@ -268,7 +236,7 @@ impl<C: ContainerValue> DynamicContainerEnv for ContainerEnv<C> {
         rebuilder: &dyn Rebuilder,
         subset: Option<SubsetRef>,
         exec_state: &mut ExecutionState,
-    ) -> ContainerRebuildSummary {
+    ) -> bool {
         if let Some(subset) = subset {
             if incremental_rebuild(
                 subset.size(),
@@ -344,7 +312,7 @@ impl<C: ContainerValue> ContainerEnv<C> {
         }
     }
 
-    fn insert_owned(&self, container: C, value: Value, exec_state: &mut ExecutionState) -> Value {
+    fn insert_owned(&self, container: C, value: Value, exec_state: &mut ExecutionState) {
         let hc = hash_container(&container);
         let target_map = self.to_id.determine_map(&container);
         match self.to_id.entry(container) {
@@ -361,7 +329,6 @@ impl<C: ContainerValue> ContainerEnv<C> {
                         index.insert(result);
                     }
                 }
-                result
             }
             dashmap::Entry::Vacant(vacant_entry) => {
                 self.to_container.insert(value, (hc as usize, target_map));
@@ -369,7 +336,6 @@ impl<C: ContainerValue> ContainerEnv<C> {
                     self.val_index.entry(val).or_default().insert(value);
                 }
                 vacant_entry.insert(value);
-                value
             }
         }
     }
@@ -380,14 +346,14 @@ impl<C: ContainerValue> ContainerEnv<C> {
         exec_state: &mut ExecutionState,
         to_scan: SubsetRef,
         search_col: ColumnId,
-    ) -> ContainerRebuildSummary {
+    ) -> bool {
         // NB: there is no parallel implementation as of now.
         //
         // Implementing one should be straightforward, but we should wait for a real benchmark that
         // requires it. It's possible that incremental rebuilding will only be profitable when the
         // total number of ids to rebuild is small, in which case the overhead of parallelism may
         // not be worth it in the first place.
-        let mut summary = ContainerRebuildSummary::default();
+        let mut changed = false;
         let mut buf = TaggedRowBuffer::new(1);
         table.scan_project(
             to_scan,
@@ -416,28 +382,21 @@ impl<C: ContainerValue> ContainerEnv<C> {
             else {
                 continue;
             };
-            if container.rebuild_contents(rebuilder) {
-                summary.note_change();
-                let actual = self.insert_owned(container, id, exec_state);
-                if actual == id {
-                    summary.note_stable_change(id);
-                }
-            } else {
-                self.insert_owned(container, id, exec_state);
-            }
+            changed |= container.rebuild_contents(rebuilder);
+            self.insert_owned(container, id, exec_state);
         }
-        summary
+        changed
     }
 
     fn apply_rebuild_nonincremental(
         &mut self,
         rebuilder: &dyn Rebuilder,
         exec_state: &mut ExecutionState,
-    ) -> ContainerRebuildSummary {
+    ) -> bool {
         if parallelize_inter_container_op(self.to_id.len()) {
             return self.apply_rebuild_nonincremental_parallel(rebuilder, exec_state);
         }
-        let mut summary = ContainerRebuildSummary::default();
+        let mut changed = false;
         let mut to_reinsert = Vec::new();
         let shards = self.to_id.shards_mut();
         for shard in shards.iter_mut() {
@@ -453,14 +412,14 @@ impl<C: ContainerValue> ContainerEnv<C> {
                     // Nothing changed about this entry. Leave it in place.
                     continue;
                 }
-                summary.note_change();
+                changed = true;
                 if container_changed {
                     // The container changed. Remove both map entries then reinsert.
                     // SAFETY: This is a valid bucket. Furthermore, iterators remain valid if
                     // buckets they have already yielded have been removed.
                     let ((container, _), _) = unsafe { shard.remove(bucket) };
                     self.to_container.remove(&old_val);
-                    to_reinsert.push((container, new_val, old_val));
+                    to_reinsert.push((container, new_val));
                 } else {
                     // Just the value changed. Leave the container in place.
                     *val.get_mut() = new_val;
@@ -469,28 +428,23 @@ impl<C: ContainerValue> ContainerEnv<C> {
                 }
             }
         }
-        for (container, val, old_val) in to_reinsert {
-            let actual = self.insert_owned(container, val, exec_state);
-            if actual == old_val {
-                summary.note_stable_change(old_val);
-            }
+        for (container, val) in to_reinsert {
+            self.insert_owned(container, val, exec_state);
         }
-        summary
+        changed
     }
 
     fn apply_rebuild_nonincremental_parallel(
         &mut self,
         rebuilder: &dyn Rebuilder,
         exec_state: &mut ExecutionState,
-    ) -> ContainerRebuildSummary {
+    ) -> bool {
         // This is very similar to the serial variant. The main difference is that
         // `to_reinsert` isn't a flat vector. It's instead a vector of queues - one per
         // destination map shard. This lets us do a bulk insertion in parallel without having
         // to grab a lock per container.
-        let mut to_reinsert =
-            IdVec::<usize /* to_id shard */, SegQueue<(C, Value, Value)>>::default();
+        let mut to_reinsert = IdVec::<usize /* to_id shard */, SegQueue<(C, Value)>>::default();
         to_reinsert.resize_with(self.to_id.shards().len(), Default::default);
-        let stable_changed = SegQueue::<Value>::default();
 
         let shards = self.to_id.shards_mut();
         let changed = shards
@@ -523,7 +477,7 @@ impl<C: ContainerValue> ContainerEnv<C> {
                         let shard = self
                             .to_container
                             .determine_shard(hash_container(&container) as usize);
-                        to_reinsert[shard].push((container, new_val, old_val));
+                        to_reinsert[shard].push((container, new_val));
                     } else {
                         // Just the value changed. Leave the container in place.
                         *val.get_mut() = new_val;
@@ -549,10 +503,10 @@ impl<C: ContainerValue> ContainerEnv<C> {
                 // to `to_container` and `val_index`.
                 let shard = shard.get_mut();
                 let queue = &to_reinsert[shard_id];
-                while let Some((container, val, old_val)) = queue.pop() {
+                while let Some((container, val)) = queue.pop() {
                     let hc = hash_container(&container);
                     let target_map = self.to_container.determine_shard(hc as usize);
-                    let actual = match shard.find_or_find_insert_slot(
+                    match shard.find_or_find_insert_slot(
                         hc,
                         |(c, _)| c == &container,
                         |(c, _)| hash_container(c),
@@ -573,7 +527,6 @@ impl<C: ContainerValue> ContainerEnv<C> {
                                     index.insert(result);
                                 }
                             }
-                            result
                         }
                         Err(slot) => {
                             self.to_container.insert(val, (hc as usize, target_map));
@@ -585,22 +538,11 @@ impl<C: ContainerValue> ContainerEnv<C> {
                             unsafe {
                                 shard.insert_in_slot(hc, slot, (container, SharedValue::new(val)));
                             }
-                            val
                         }
-                    };
-                    if actual == old_val {
-                        stable_changed.push(old_val);
                     }
                 }
             });
-        let mut summary = ContainerRebuildSummary::default();
-        if changed {
-            summary.note_change();
-        }
-        while let Some(value) = stable_changed.pop() {
-            summary.note_stable_change(value);
-        }
-        summary
+        changed
     }
 
     fn get_container(&self, value: Value) -> Option<impl Deref<Target = C> + '_> {

@@ -505,6 +505,10 @@ impl RuleBuilder<'_> {
         // NB: not clear if we still need this now that proof checker is in a separate crate.
         _ret_ty: ColumnTy,
     ) -> Result<()> {
+        // Query-side primitives can depend on evolving egraph state without producing a
+        // timestamped table atom. If they fail before rebuild/union and succeed later, focused
+        // seminaive execution has no delta source that would force the rule to run again.
+        self.query.seminaive = false;
         let entries = entries.to_vec();
         self.query.add_rule.push(Box::new(move |inner, rb| {
             let mut dst_vars = inner.convert_all(&entries);

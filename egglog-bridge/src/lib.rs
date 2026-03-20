@@ -29,7 +29,7 @@ use egglog_numeric_id as numeric_id;
 use egglog_reports::{IterationReport, ReportLevel, RuleSetReport};
 use hashbrown::HashMap;
 use indexmap::{IndexMap, IndexSet, map::Entry};
-use log::{debug, info};
+use log::info;
 use once_cell::sync::Lazy;
 pub use proof_format::{EqProofId, ProofStore, TermProofId};
 use proof_spec::{ProofReason, ProofReconstructionState, ReasonSpecId};
@@ -860,23 +860,11 @@ impl EGraph {
                 // Rebuilding containers first will find that v3 and v2 are equal, and the rest of
                 // the rules can proceed.
                 let container_rebuild = self.db.rebuild_containers(self.uf_table);
-                let refresh_values: Vec<Value> =
-                    container_rebuild.stable_changed().iter().copied().collect();
-                if !refresh_values.is_empty() {
-                    debug!(
-                        "refreshing {} table-visible rows after {} same-id container rebuilds",
-                        tables.len(),
-                        refresh_values.len()
-                    );
-                }
-                let table_rebuild = self.db.apply_rebuild(
-                    self.uf_table,
-                    &tables,
-                    self.next_ts().to_value(),
-                    &refresh_values,
-                );
+                let table_rebuild =
+                    self.db
+                        .apply_rebuild(self.uf_table, &tables, self.next_ts().to_value());
                 self.inc_ts();
-                if !table_rebuild && !container_rebuild.changed() {
+                if !table_rebuild && !container_rebuild {
                     break;
                 }
             }

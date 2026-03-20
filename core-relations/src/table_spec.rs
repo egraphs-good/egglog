@@ -166,7 +166,6 @@ pub trait Table: Any + Send + Sync {
         _table_id: TableId,
         _table: &WrappedTable,
         _next_ts: Value,
-        _refresh_values: &[Value],
         _exec_state: &mut ExecutionState,
     ) -> bool {
         // Default implementation does nothing.

@@ -8,9 +8,7 @@ use rayon::prelude::*;
 use crate::{
     ColumnId, ExecutionState, Offset, RowId, Subset, Table, TableId, TaggedRowBuffer, Value,
     WrappedTable,
-    common::HashSet,
     hash_index::{ColumnIndex, Index},
-    offsets::Offsets,
     parallel_heuristics::parallelize_rebuild,
     table_spec::{Rebuilder, WrappedTableRef},
 };
@@ -36,7 +34,6 @@ impl SortedWritesTable {
         table_id: TableId,
         table: &WrappedTable,
         next_ts: Value,
-        refresh_values: &[Value],
         exec_state: &mut ExecutionState,
     ) -> bool {
         if self.to_rebuild.is_empty() {
@@ -45,28 +42,6 @@ impl SortedWritesTable {
         let Some(rebuilder) = table.rebuilder(&self.to_rebuild) else {
             return false;
         };
-        if !refresh_values.is_empty() {
-            if let Some(hint_col) = rebuilder.hint_col() {
-                let to_scan = self.subset_tracker.recent_updates(table_id, table);
-                if incremental_rebuild(to_scan.size(), self.data.next_row().index(), false) {
-                    return self.rebuild_incremental_with_refresh(
-                        table,
-                        &*rebuilder,
-                        hint_col,
-                        to_scan,
-                        refresh_values,
-                        next_ts,
-                        exec_state,
-                    );
-                }
-            }
-            return self.rebuild_nonincremental_with_refresh(
-                &*rebuilder,
-                refresh_values,
-                next_ts,
-                exec_state,
-            );
-        }
         // First, decide whether to do an incremental or full rebuild.
         if let Some(hint_col) = rebuilder.hint_col() {
             // Incremental rebuilds are possible if we can scan the subset of the columns that are
@@ -171,97 +146,6 @@ impl SortedWritesTable {
         }
     }
 
-    fn rebuild_incremental_with_refresh(
-        &mut self,
-        table: &WrappedTable,
-        rebuilder: &dyn Rebuilder,
-        search_col: ColumnId,
-        to_scan: Subset,
-        refresh_values: &[Value],
-        next_ts: Value,
-        exec_state: &mut ExecutionState,
-    ) -> bool {
-        let mut index = mem::replace(
-            &mut self.rebuild_index,
-            Index::new(vec![], ColumnIndex::new()),
-        );
-        WrappedTableRef::with_wrapper(self, |wrapped| {
-            index.refresh(wrapped);
-        });
-        self.rebuild_index = index;
-
-        let mut candidate_rows = HashSet::<RowId>::default();
-        let mut buf = TaggedRowBuffer::new(1);
-        table.scan_project(
-            to_scan.as_ref(),
-            &[search_col],
-            Offset::new(0),
-            usize::MAX,
-            &[],
-            &mut buf,
-        );
-        for (_, row) in buf.iter() {
-            let Some(subset) = self.rebuild_index.get_subset(&row[0]) else {
-                continue;
-            };
-            subset.offsets(|row_id| {
-                candidate_rows.insert(row_id);
-            });
-        }
-        for value in refresh_values {
-            let Some(subset) = self.rebuild_index.get_subset(value) else {
-                continue;
-            };
-            subset.offsets(|row_id| {
-                candidate_rows.insert(row_id);
-            });
-        }
-
-        let refresh_values: HashSet<Value> = refresh_values.iter().copied().collect();
-        let mut changed = false;
-        let mut rebuilt = TaggedRowBuffer::new(self.n_columns);
-        let mut mutation_buf = self.new_buffer();
-        let mut refreshed_row = Vec::<Value>::with_capacity(self.n_columns);
-
-        for row_id in candidate_rows {
-            let Some(current_row) = self.data.get_row(row_id) else {
-                continue;
-            };
-            rebuilt.clear();
-            rebuilder.rebuild_buf(
-                &self.data.data,
-                row_id,
-                row_id.inc(),
-                &mut rebuilt,
-                exec_state,
-            );
-            if let Some((rebuilt_row_id, row)) = rebuilt.non_stale_mut().next() {
-                if let Some(to_remove) = self
-                    .data
-                    .get_row(rebuilt_row_id)
-                    .map(|x| &x[0..self.n_keys])
-                {
-                    mutation_buf.stage_remove(to_remove);
-                }
-                insert_row!(self, mutation_buf, row, next_ts);
-                changed = true;
-                continue;
-            }
-            if !self.row_mentions_refresh_values(current_row, &refresh_values) {
-                continue;
-            }
-            mutation_buf.stage_remove(&current_row[0..self.n_keys]);
-            refreshed_row.clear();
-            refreshed_row.extend_from_slice(current_row);
-            if let Some(sort_by) = self.sort_by {
-                refreshed_row[sort_by.index()] = next_ts;
-            }
-            mutation_buf.stage_insert(&refreshed_row);
-            changed = true;
-        }
-        changed
-    }
-
     fn rebuild_nonincremental(
         &mut self,
         rebuilder: &dyn Rebuilder,
@@ -334,65 +218,6 @@ impl SortedWritesTable {
             }
             changed
         }
-    }
-
-    fn rebuild_nonincremental_with_refresh(
-        &mut self,
-        rebuilder: &dyn Rebuilder,
-        refresh_values: &[Value],
-        next_ts: Value,
-        exec_state: &mut ExecutionState,
-    ) -> bool {
-        let refresh_values: HashSet<Value> = refresh_values.iter().copied().collect();
-        let mut changed = false;
-        let mut rebuilt = TaggedRowBuffer::new(self.n_columns);
-        let mut mutation_buf = self.new_buffer();
-        let mut refreshed_row = Vec::<Value>::with_capacity(self.n_columns);
-
-        for row_idx in 0..self.data.next_row().index() {
-            let row_id = RowId::from_usize(row_idx);
-            let Some(current_row) = self.data.get_row(row_id) else {
-                continue;
-            };
-            rebuilt.clear();
-            rebuilder.rebuild_buf(
-                &self.data.data,
-                row_id,
-                row_id.inc(),
-                &mut rebuilt,
-                exec_state,
-            );
-            if let Some((rebuilt_row_id, row)) = rebuilt.non_stale_mut().next() {
-                if let Some(to_remove) = self
-                    .data
-                    .get_row(rebuilt_row_id)
-                    .map(|x| &x[0..self.n_keys])
-                {
-                    mutation_buf.stage_remove(to_remove);
-                }
-                insert_row!(self, mutation_buf, row, next_ts);
-                changed = true;
-                continue;
-            }
-            if !self.row_mentions_refresh_values(current_row, &refresh_values) {
-                continue;
-            }
-            mutation_buf.stage_remove(&current_row[0..self.n_keys]);
-            refreshed_row.clear();
-            refreshed_row.extend_from_slice(current_row);
-            if let Some(sort_by) = self.sort_by {
-                refreshed_row[sort_by.index()] = next_ts;
-            }
-            mutation_buf.stage_insert(&refreshed_row);
-            changed = true;
-        }
-        changed
-    }
-
-    fn row_mentions_refresh_values(&self, row: &[Value], refresh_values: &HashSet<Value>) -> bool {
-        self.to_rebuild
-            .iter()
-            .any(|col| refresh_values.contains(&row[col.index()]))
     }
 }
 

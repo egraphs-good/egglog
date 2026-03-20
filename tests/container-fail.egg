@@ -1,20 +1,22 @@
-;; https://github.com/egraphs-good/egglog/issues/831
+;; Regression for #831. This used to saturate at `l(vec-of(k(b)))` because the
+;; container child rebuilt in place and the query-side match was not revisited.
 (sort E)
-(sort F (UnstableFn () E))
 (sort VE (Vec E))
 
 (constructor b () E)
 (constructor k (E) E)
 (constructor w (E) E)
 (constructor l (VE) E)
-(constructor m () E)
 
 (rewrite (w x) x)
-(rewrite (m)
-  (l (vec-of (w (k (b))))))
-(rewrite (l (vec-of (k x)))
-  x)
+(rewrite (l (vec-of (k x))) x)
 
-(let $from-unstable (unstable-app (unstable-fn "m")))
+(push)
+(let $rebuilt (l (vec-of (w (k (b))))))
 (run-schedule (saturate (run)))
-(check (= $from-unstable (b))))
+(check (= $rebuilt (b)))
+(pop)
+
+(let $resolved (l (vec-of (k (b)))))
+(run-schedule (saturate (run)))
+(check (= $resolved (b)))

@@ -756,7 +756,7 @@ fn basic_container() {
     }
 }
 
-fn run_container_rebuild_match_case(seminaive: bool, seed_canonical: bool) -> bool {
+fn run_query_prim_container_match_case(seminaive: bool) -> bool {
     let mut egraph = EGraph::default();
     let k_table = egraph.add_table(FunctionConfig {
         schema: vec![ColumnTy::Id, ColumnTy::Id],
@@ -782,9 +782,6 @@ fn run_container_rebuild_match_case(seminaive: bool, seed_canonical: bool) -> bo
 
     let b = egraph.fresh_id();
     let k_b = egraph.add_term(k_table, &[b], "k(b)");
-    if seed_canonical {
-        let _ = egraph.get_container_value(VecContainer(vec![k_b]));
-    }
     let w_k_b = egraph.add_term(w_table, &[k_b], "w(k(b))");
     let vec = egraph.get_container_value(VecContainer(vec![w_k_b]));
     let l_id = egraph.add_term(l_table, &[vec], "l(vec)");
@@ -844,14 +841,9 @@ fn run_container_rebuild_match_case(seminaive: bool, seed_canonical: bool) -> bo
 }
 
 #[test]
-fn seminaive_revisits_rows_after_same_id_container_rebuild() {
-    assert!(run_container_rebuild_match_case(true, false));
-    assert!(run_container_rebuild_match_case(false, false));
-}
-
-#[test]
-fn seminaive_container_rebuild_with_preseeded_canonical_container() {
-    assert!(run_container_rebuild_match_case(true, true));
+fn seminaive_query_prim_rechecks_after_rebuild() {
+    assert!(run_query_prim_container_match_case(true));
+    assert!(run_query_prim_container_match_case(false));
 }
 
 #[test]
