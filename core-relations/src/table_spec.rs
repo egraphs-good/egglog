@@ -172,6 +172,22 @@ pub trait Table: Any + Send + Sync {
         false
     }
 
+    /// Refresh rows whose rebuildable columns mention one of `dirty_ids` by re-inserting the same
+    /// logical row with a fresh timestamp.
+    ///
+    /// This is the narrow escape hatch used when some external rebuild step
+    /// changes the semantics of an id in place, so seminaive needs a new
+    /// parent-row delta even though the row's key columns do not otherwise
+    /// change.
+    ///
+    /// One source of such ids is [`crate::ContainerRebuildSummary::dirty_ids`].
+    ///
+    /// Tables that do not maintain rebuildable id columns can use the default
+    /// no-op implementation.
+    fn refresh_rows_for_values(&mut self, _dirty_ids: &[Value], _next_ts: Value) -> bool {
+        false
+    }
+
     /// A boilerplate method to make it easier to downcast values of `Table`.
     ///
     /// Implementors should be able to implement this method by returning

@@ -8,6 +8,7 @@ before-proofs.egg
 bignum.egg
 bool.egg
 complex-merge-prim.egg
+container-fail.egg
 container-rebuild.egg
 cyk.egg
 cykjson.egg

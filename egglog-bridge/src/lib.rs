@@ -860,11 +860,17 @@ impl EGraph {
                 // Rebuilding containers first will find that v3 and v2 are equal, and the rest of
                 // the rules can proceed.
                 let container_rebuild = self.db.rebuild_containers(self.uf_table);
-                let table_rebuild =
-                    self.db
-                        .apply_rebuild(self.uf_table, &tables, self.next_ts().to_value());
+                let next_ts = self.next_ts().to_value();
+                let table_rebuild = self.db.apply_rebuild(self.uf_table, &tables, next_ts);
+                // Container rebuild can make a parent row newly matchable without
+                // changing the row's stored id. Re-timestamp those parents so
+                // seminaive sees the newly enabled match on the next pass.
+                let dirty_ids: Vec<Value> = container_rebuild.dirty_ids().iter().copied().collect();
+                let refreshed_rows = self
+                    .db
+                    .refresh_rows_for_values(&tables, &dirty_ids, next_ts);
                 self.inc_ts();
-                if !table_rebuild && !container_rebuild {
+                if !table_rebuild && !refreshed_rows && !container_rebuild.changed() {
                     break;
                 }
             }

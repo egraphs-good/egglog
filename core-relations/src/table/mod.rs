@@ -323,6 +323,10 @@ impl Table for SortedWritesTable {
         self.do_rebuild(table_id, table, next_ts, exec_state)
     }
 
+    fn refresh_rows_for_values(&mut self, dirty_ids: &[Value], next_ts: Value) -> bool {
+        SortedWritesTable::refresh_rows_for_values(self, dirty_ids, next_ts)
+    }
+
     fn version(&self) -> TableVersion {
         TableVersion {
             major: self.generation,

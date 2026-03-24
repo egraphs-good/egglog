@@ -17,7 +17,7 @@ use rayon::prelude::*;
 use smallvec::SmallVec;
 
 use crate::{
-    BaseValues, ContainerValues, PoolSet, QueryEntry, TupleIndex, Value,
+    BaseValues, ContainerRebuildSummary, ContainerValues, PoolSet, QueryEntry, TupleIndex, Value,
     action::{
         Bindings, DbView,
         mask::{Mask, MaskIter, ValueSource},
@@ -335,7 +335,7 @@ impl Database {
         &mut self.container_values
     }
 
-    pub fn rebuild_containers(&mut self, table_id: TableId) -> bool {
+    pub fn rebuild_containers(&mut self, table_id: TableId) -> ContainerRebuildSummary {
         let mut containers = mem::take(&mut self.container_values);
         let table = &self.tables[table_id].table;
         let res = self.with_execution_state(|state| containers.rebuild_all(table_id, table, state));
@@ -356,18 +356,53 @@ impl Database {
         next_ts: Value,
     ) -> bool {
         let func = self.tables.take(func_id).unwrap();
+        self.run_on_tables(to_rebuild, |_, info, view| {
+            info.table.apply_rebuild(
+                func_id,
+                &func.table,
+                next_ts,
+                &mut ExecutionState::new(*view, Default::default()),
+            )
+        });
+        self.tables.insert(func_id, func);
+        self.merge_all()
+    }
+
+    pub fn refresh_rows_for_values(
+        &mut self,
+        to_refresh: &[TableId],
+        dirty_ids: &[Value],
+        next_ts: Value,
+    ) -> bool {
+        if dirty_ids.is_empty() {
+            return false;
+        }
+        // This is the follow-up for `ContainerRebuildSummary::dirty_ids()`.
+        // These ids changed semantics without changing identity, so parent
+        // rows can become newly matchable without getting an ordinary table
+        // delta.
+        //
+        // It must run after ordinary table rebuild, which already handles
+        // changed-id cases by rewriting parent rows to the new id.
+        self.run_on_tables(to_refresh, |_, info, _| {
+            info.table.refresh_rows_for_values(dirty_ids, next_ts)
+        });
+        self.merge_all()
+    }
+
+    fn run_on_tables(
+        &mut self,
+        table_ids: &[TableId],
+        run: impl for<'a> Fn(TableId, &mut TableInfo, &DbView<'a>) -> bool + Sync,
+    ) {
         if parallelize_db_level_op(self.total_size_estimate) {
-            let mut tables = Vec::with_capacity(to_rebuild.len());
-            for id in to_rebuild {
+            let mut tables = Vec::with_capacity(table_ids.len());
+            for id in table_ids {
                 tables.push((*id, self.tables.take(*id).unwrap()));
             }
+            let view = self.read_only_view();
             tables.par_iter_mut().for_each(|(id, info)| {
-                if info.table.apply_rebuild(
-                    func_id,
-                    &func.table,
-                    next_ts,
-                    &mut ExecutionState::new(self.read_only_view(), Default::default()),
-                ) {
+                if run(*id, info, &view) {
                     self.notification_list.notify(*id);
                 }
             });
@@ -375,21 +410,18 @@ impl Database {
                 self.tables.insert(id, info);
             }
         } else {
-            for id in to_rebuild {
+            for id in table_ids {
                 let mut info = self.tables.take(*id).unwrap();
-                if info.table.apply_rebuild(
-                    func_id,
-                    &func.table,
-                    next_ts,
-                    &mut ExecutionState::new(self.read_only_view(), Default::default()),
-                ) {
+                let changed = {
+                    let view = self.read_only_view();
+                    run(*id, &mut info, &view)
+                };
+                if changed {
                     self.notification_list.notify(*id);
                 }
                 self.tables.insert(*id, info);
             }
         }
-        self.tables.insert(func_id, func);
-        self.merge_all()
     }
 
     /// Run `f` with access to an `ExecutionState` mapped to this database.

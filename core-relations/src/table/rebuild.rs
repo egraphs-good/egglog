@@ -8,7 +8,9 @@ use rayon::prelude::*;
 use crate::{
     ColumnId, ExecutionState, Offset, RowId, Subset, Table, TableId, TaggedRowBuffer, Value,
     WrappedTable,
+    common::HashSet,
     hash_index::{ColumnIndex, Index},
+    offsets::Offsets,
     parallel_heuristics::parallelize_rebuild,
     table_spec::{Rebuilder, WrappedTableRef},
 };
@@ -29,6 +31,17 @@ macro_rules! insert_row {
 }
 
 impl SortedWritesTable {
+    fn refresh_rebuild_index(&mut self) {
+        let mut index = mem::replace(
+            &mut self.rebuild_index,
+            Index::new(vec![], ColumnIndex::new()),
+        );
+        WrappedTableRef::with_wrapper(self, |wrapped| {
+            index.refresh(wrapped);
+        });
+        self.rebuild_index = index;
+    }
+
     pub(super) fn do_rebuild(
         &mut self,
         table_id: TableId,
@@ -61,6 +74,49 @@ impl SortedWritesTable {
         }
     }
 
+    pub(super) fn refresh_rows_for_values(&mut self, dirty_ids: &[Value], next_ts: Value) -> bool {
+        if dirty_ids.is_empty() || self.to_rebuild.is_empty() {
+            return false;
+        }
+        // Reuse the rebuild index to find rows whose rebuildable columns mention
+        // one of the same-id dirty container ids.
+        self.refresh_rebuild_index();
+
+        let mut candidate_rows = HashSet::<RowId>::default();
+        for value in dirty_ids {
+            let Some(subset) = self.rebuild_index.get_subset(value) else {
+                continue;
+            };
+            subset.offsets(|row_id| {
+                candidate_rows.insert(row_id);
+            });
+        }
+
+        if candidate_rows.is_empty() {
+            return false;
+        }
+
+        let mut changed = false;
+        let mut mutation_buf = self.new_buffer();
+        let mut refreshed_row = Vec::<Value>::with_capacity(self.n_columns);
+        for row_id in candidate_rows {
+            let Some(current_row) = self.data.get_row(row_id) else {
+                continue;
+            };
+            // Preserve the logical row and only advance its sort/timestamp
+            // column, so seminaive treats this as a fresh parent-row delta.
+            mutation_buf.stage_remove(&current_row[0..self.n_keys]);
+            refreshed_row.clear();
+            refreshed_row.extend_from_slice(current_row);
+            if let Some(sort_by) = self.sort_by {
+                refreshed_row[sort_by.index()] = next_ts;
+            }
+            mutation_buf.stage_insert(&refreshed_row);
+            changed = true;
+        }
+        changed
+    }
+
     fn rebuild_incremental(
         &mut self,
         table: &WrappedTable,
@@ -70,15 +126,7 @@ impl SortedWritesTable {
         next_ts: Value,
         exec_state: &mut ExecutionState,
     ) -> bool {
-        let mut index = mem::replace(
-            &mut self.rebuild_index,
-            Index::new(vec![], ColumnIndex::new()),
-        );
-        // Update the index.
-        WrappedTableRef::with_wrapper(self, |wrapped| {
-            index.refresh(wrapped);
-        });
-        self.rebuild_index = index;
+        self.refresh_rebuild_index();
         let mut buf = TaggedRowBuffer::new(1);
         table.scan_project(
             to_scan.as_ref(),
