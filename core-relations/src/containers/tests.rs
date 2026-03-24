@@ -158,14 +158,14 @@ fn incremental_reinsert_canonicalizes_displaced_outer_id() {
         env.reinsert_incremental(container, old_id, new_id, false, es, &mut summary);
 
         assert!(summary.changed());
-        assert!(summary.refresh_values().is_empty());
+        assert!(summary.dirty_ids().is_empty());
         assert!(env.get_container(old_id).is_none());
         assert_eq!(&*env.get_container(new_id).unwrap(), &cont([1, 2, 3]));
     });
 }
 
 #[test]
-fn nonincremental_refresh_values_only_include_stable_ids() {
+fn nonincremental_dirty_ids_only_include_stable_ids() {
     let mut db = Database::new();
     let counter = db.add_counter();
     let old_inner = Value::from_usize(1);
@@ -196,7 +196,7 @@ fn nonincremental_refresh_values_only_include_stable_ids() {
             let summary = env.apply_rebuild_nonincremental(&rebuilder, es);
             assert!(summary.changed());
             if outer_id_changes {
-                assert!(summary.refresh_values().is_empty());
+                assert!(summary.dirty_ids().is_empty());
                 assert!(env.get_container(old_id).is_none());
                 assert_eq!(
                     &*env.get_container(new_id).unwrap(),
@@ -204,7 +204,7 @@ fn nonincremental_refresh_values_only_include_stable_ids() {
                 );
             } else {
                 assert_eq!(
-                    summary.refresh_values().iter().copied().collect::<Vec<_>>(),
+                    summary.dirty_ids().iter().copied().collect::<Vec<_>>(),
                     vec![old_id]
                 );
                 assert_eq!(

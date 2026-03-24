@@ -371,17 +371,21 @@ impl Database {
     pub fn refresh_rows_for_values(
         &mut self,
         to_refresh: &[TableId],
-        values: &[Value],
+        dirty_ids: &[Value],
         next_ts: Value,
     ) -> bool {
-        if values.is_empty() {
+        if dirty_ids.is_empty() {
             return false;
         }
-        // This runs after ordinary table rebuild. At this point `values`
-        // should only contain same-id container changes, so retimestamping the
-        // matching parent rows is enough to make seminaive revisit them.
+        // This is the follow-up for `ContainerRebuildSummary::dirty_ids()`.
+        // These ids changed semantics without changing identity, so parent
+        // rows can become newly matchable without getting an ordinary table
+        // delta.
+        //
+        // It must run after ordinary table rebuild, which already handles
+        // changed-id cases by rewriting parent rows to the new id.
         self.run_on_tables(to_refresh, |_, info, _| {
-            info.table.refresh_rows_for_values(values, next_ts)
+            info.table.refresh_rows_for_values(dirty_ids, next_ts)
         });
         self.merge_all()
     }

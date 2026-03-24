@@ -865,11 +865,10 @@ impl EGraph {
                 // Container rebuild can make a parent row newly matchable without
                 // changing the row's stored id. Re-timestamp those parents so
                 // seminaive sees the newly enabled match on the next pass.
-                let refresh_values: Vec<Value> =
-                    container_rebuild.refresh_values().iter().copied().collect();
-                let refreshed_rows =
-                    self.db
-                        .refresh_rows_for_values(&tables, &refresh_values, next_ts);
+                let dirty_ids: Vec<Value> = container_rebuild.dirty_ids().iter().copied().collect();
+                let refreshed_rows = self
+                    .db
+                    .refresh_rows_for_values(&tables, &dirty_ids, next_ts);
                 self.inc_ts();
                 if !table_rebuild && !refreshed_rows && !container_rebuild.changed() {
                     break;

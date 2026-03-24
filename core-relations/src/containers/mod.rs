@@ -78,16 +78,19 @@ pub struct ContainerValues {
 /// `changed` means some container entry changed during rebuild, either because
 /// its contents changed or because its outer id canonicalized.
 ///
-/// `refresh_values` is narrower: it records container ids whose semantics
-/// changed while their stored outer id stayed stable. Ordinary table rebuild
-/// does not manufacture a fresh parent-row delta for that case, so parent rows
-/// mentioning those ids need a follow-up timestamp refresh.
+/// `dirty_ids` is narrower: it records container ids whose semantics changed
+/// while their stored outer id stayed stable. Ordinary table rebuild already
+/// handles changed-id cases; these ids need a follow-up parent-row refresh.
+///
+/// For example, `l(vec-of(w(k(b))))` can rebuild to `l(vec-of(k(b)))` without
+/// changing the `Vec` id. The row is now newly matchable, but seminaive will
+/// miss it unless the parent row is retimestamped.
 #[derive(Clone, Default)]
 pub struct ContainerRebuildSummary {
     changed: bool,
     // Container ids whose semantics changed in a way that may not produce a
     // fresh parent-row delta during ordinary table rebuild.
-    refresh_values: IndexSet<Value>,
+    dirty_ids: IndexSet<Value>,
 }
 
 impl ContainerRebuildSummary {
@@ -97,22 +100,22 @@ impl ContainerRebuildSummary {
     }
 
     /// Returns the container ids whose parent rows may need retimestamping.
-    pub fn refresh_values(&self) -> &IndexSet<Value> {
-        &self.refresh_values
+    pub fn dirty_ids(&self) -> &IndexSet<Value> {
+        &self.dirty_ids
     }
 
     fn note_change(&mut self) {
         self.changed = true;
     }
 
-    fn note_refresh_value(&mut self, value: Value) {
+    fn note_dirty_id(&mut self, value: Value) {
         self.changed = true;
-        self.refresh_values.insert(value);
+        self.dirty_ids.insert(value);
     }
 
     fn extend(&mut self, other: Self) {
         self.changed |= other.changed;
-        self.refresh_values.extend(other.refresh_values);
+        self.dirty_ids.extend(other.dirty_ids);
     }
 }
 
@@ -406,7 +409,7 @@ impl<C: ContainerValue> ContainerEnv<C> {
         }
         let actual = self.insert_owned(container, rebuilt_id, exec_state);
         if container_changed && rebuilt_id == old_id && actual == old_id {
-            summary.note_refresh_value(old_id);
+            summary.note_dirty_id(old_id);
         }
     }
 
@@ -513,7 +516,7 @@ impl<C: ContainerValue> ContainerEnv<C> {
             // If the outer id changed, ordinary table rebuild already creates a
             // fresh parent-row delta for seminaive to follow.
             if stable_id && actual == val {
-                summary.note_refresh_value(val);
+                summary.note_dirty_id(val);
             }
         }
         summary
@@ -576,7 +579,7 @@ impl<C: ContainerValue> ContainerEnv<C> {
             .max()
             .unwrap_or(false);
 
-        let refresh_values = SegQueue::new();
+        let dirty_ids = SegQueue::new();
         shards
             .iter_mut()
             .enumerate()
@@ -617,7 +620,7 @@ impl<C: ContainerValue> ContainerEnv<C> {
                             // As in the serial path, only same-id semantic
                             // changes need an explicit parent-row refresh.
                             if stable_id && result == val {
-                                refresh_values.push(val);
+                                dirty_ids.push(val);
                             }
                         }
                         Err(slot) => {
@@ -631,7 +634,7 @@ impl<C: ContainerValue> ContainerEnv<C> {
                                 shard.insert_in_slot(hc, slot, (container, SharedValue::new(val)));
                             }
                             if stable_id {
-                                refresh_values.push(val);
+                                dirty_ids.push(val);
                             }
                         }
                     }
@@ -641,8 +644,8 @@ impl<C: ContainerValue> ContainerEnv<C> {
         if changed {
             summary.note_change();
         }
-        while let Some(value) = refresh_values.pop() {
-            summary.note_refresh_value(value);
+        while let Some(value) = dirty_ids.pop() {
+            summary.note_dirty_id(value);
         }
         summary
     }

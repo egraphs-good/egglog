@@ -74,16 +74,16 @@ impl SortedWritesTable {
         }
     }
 
-    pub(super) fn refresh_rows_for_values(&mut self, values: &[Value], next_ts: Value) -> bool {
-        if values.is_empty() || self.to_rebuild.is_empty() {
+    pub(super) fn refresh_rows_for_values(&mut self, dirty_ids: &[Value], next_ts: Value) -> bool {
+        if dirty_ids.is_empty() || self.to_rebuild.is_empty() {
             return false;
         }
         // Reuse the rebuild index to find rows whose rebuildable columns mention
-        // one of the changed container ids.
+        // one of the same-id dirty container ids.
         self.refresh_rebuild_index();
 
         let mut candidate_rows = HashSet::<RowId>::default();
-        for value in values {
+        for value in dirty_ids {
             let Some(subset) = self.rebuild_index.get_subset(value) else {
                 continue;
             };

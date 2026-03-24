@@ -323,8 +323,8 @@ impl Table for SortedWritesTable {
         self.do_rebuild(table_id, table, next_ts, exec_state)
     }
 
-    fn refresh_rows_for_values(&mut self, values: &[Value], next_ts: Value) -> bool {
-        SortedWritesTable::refresh_rows_for_values(self, values, next_ts)
+    fn refresh_rows_for_values(&mut self, dirty_ids: &[Value], next_ts: Value) -> bool {
+        SortedWritesTable::refresh_rows_for_values(self, dirty_ids, next_ts)
     }
 
     fn version(&self) -> TableVersion {
@@ -577,7 +577,7 @@ impl SortedWritesTable {
                         let (actual_shard, hc) = hash_code(shard_data, to_remove, self.n_keys);
                         assert_eq!(actual_shard, shard_id);
                         if let Ok(entry) = shard.find_entry(hc, |entry| {
-                            entry.hashcode == (hc as HashCode)
+                            entry.hashcode == (hc as _)
                                 && &self.data.get_row(entry.row).unwrap()[0..self.n_keys]
                                     == to_remove
                         }) {
@@ -616,7 +616,7 @@ impl SortedWritesTable {
                         let (actual_shard, hc) = hash_code(shard_data, to_remove, self.n_keys);
                         assert_eq!(actual_shard, shard_id);
                         if let Ok(entry) = shard.find_entry(hc, |entry| {
-                            entry.hashcode == (hc as HashCode)
+                            entry.hashcode == (hc as _)
                                 && &self.data.get_row(entry.row).unwrap()[0..self.n_keys]
                                     == to_remove
                         }) {
