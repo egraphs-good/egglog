@@ -3,7 +3,8 @@ use super::*;
 /// 64-bit floating point numbers supporting these primitives:
 /// - Arithmetic: `+`, `-`, `*`, `/`, `%`, `^`, `neg`, `abs`
 /// - Comparisons: `<`, `>`, `<=`, `>=`
-/// - Other: `min`, `max`, `abs`, `exp`, `log`, `sqrt`, `to-i64`, `to-string`
+/// - Other: `min`, `max`, `exp`, `log`, `sqrt`
+/// - Conversions: `to-f64`, `to-i64`, `to-string`
 #[derive(Debug)]
 pub struct F64Sort;
 
