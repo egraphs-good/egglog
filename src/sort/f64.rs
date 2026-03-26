@@ -3,7 +3,7 @@ use super::*;
 /// 64-bit floating point numbers supporting these primitives:
 /// - Arithmetic: `+`, `-`, `*`, `/`, `%`, `^`, `neg`, `abs`
 /// - Comparisons: `<`, `>`, `<=`, `>=`
-/// - Other: `min`, `max`, `to-i64`, `to-string`
+/// - Other: `min`, `max`, `abs`, `exp`, `log`, `sqrt`, `to-i64`, `to-string`
 #[derive(Debug)]
 pub struct F64Sort;
 
@@ -35,6 +35,13 @@ impl BaseSort for F64Sort {
         add_literal_prim!(eg, "min" = |a: F, b: F| -> F { a.min(b) });
         add_literal_prim!(eg, "max" = |a: F, b: F| -> F { a.max(b) });
         add_literal_prim!(eg, "abs" = |a: F| -> F { F::from(a.abs()) });
+        add_literal_prim!(eg, "exp" = |a: F| -> F { F::from(OrderedFloat(a.exp())) });
+        add_literal_prim!(eg, "log" = |a: F| -?> F {
+            (*a > OrderedFloat(0.0)).then(|| F::from(OrderedFloat(a.ln())))
+        });
+        add_literal_prim!(eg, "sqrt" = |a: F| -?> F {
+            (*a >= OrderedFloat(0.0)).then(|| F::from(OrderedFloat(a.sqrt())))
+        });
 
         // `to-f64` should be in `i64.rs`, but `F64Sort` wouldn't exist yet
         add_literal_prim!(eg, "to-f64" = |a: i64| -> F { F::from(OrderedFloat(a as f64)) });
