@@ -7,6 +7,7 @@
 //! and [`ContainerSort`].
 
 use crate::*;
+use egglog_numeric_id::NumericId;
 use std::any::{Any, TypeId};
 
 // Re-exports in `prelude` for convenience.
@@ -319,14 +320,19 @@ pub fn rule(
 
 /// A wrapper around an `ExecutionState` for rules that are written in Rust.
 /// See the [`rust_rule`] documentation for an example of how to use this.
-pub struct RustRuleContext<'a, 'b> {
+pub struct RustRuleContext<'a, 'b, 'c> {
     exec_state: &'a mut ExecutionState<'b>,
     union_action: egglog_bridge::UnionAction,
-    table_actions: HashMap<String, egglog_bridge::TableAction>,
+    /// Name -> backend FunctionId (captured at rust-rule registration time).
+    func_ids: &'c HashMap<String, egglog_bridge::FunctionId>,
+    /// Table actions indexed by backend FunctionId (captured at rust-rule registration time).
+    table_actions_by_id: &'c [Option<egglog_bridge::TableAction>],
+    /// Per-match table actions, lazily populated from `table_actions_by_id` (for scratch reuse).
+    table_actions_cache_by_id: Vec<(egglog_bridge::FunctionId, egglog_bridge::TableAction)>,
     panic_id: ExternalFunctionId,
 }
 
-impl RustRuleContext<'_, '_> {
+impl RustRuleContext<'_, '_, '_> {
     /// Convert from an egglog value to a Rust type.
     pub fn value_to_base<T: BaseValue>(&self, x: Value) -> T {
         self.exec_state.base_values().unwrap::<T>(x)
@@ -354,14 +360,59 @@ impl RustRuleContext<'_, '_> {
             .register_val::<T>(x, self.exec_state)
     }
 
-    fn get_table_action(&self, table: &str) -> egglog_bridge::TableAction {
-        self.table_actions[table].clone()
+    fn func_id(&self, table: &str) -> egglog_bridge::FunctionId {
+        *self
+            .func_ids
+            .get(table)
+            .unwrap_or_else(|| panic!("missing function id for table: {table}"))
+    }
+
+    fn get_table_action_by_id(
+        table_actions_by_id: &[Option<egglog_bridge::TableAction>],
+        table: egglog_bridge::FunctionId,
+    ) -> &egglog_bridge::TableAction {
+        table_actions_by_id
+            .get(table.rep() as usize)
+            .and_then(|x| x.as_ref())
+            .unwrap_or_else(|| panic!("missing table action for FunctionId({})", table.rep()))
+    }
+
+    fn get_table_action_cache_by_id<'a>(
+        table_actions_cache_by_id: &'a mut Vec<(
+            egglog_bridge::FunctionId,
+            egglog_bridge::TableAction,
+        )>,
+        table_actions_by_id: &[Option<egglog_bridge::TableAction>],
+        table: egglog_bridge::FunctionId,
+    ) -> &'a mut egglog_bridge::TableAction {
+        if let Some(pos) = table_actions_cache_by_id
+            .iter()
+            .position(|(id, _)| *id == table)
+        {
+            return &mut table_actions_cache_by_id[pos].1;
+        }
+
+        let action = Self::get_table_action_by_id(table_actions_by_id, table).clone();
+        table_actions_cache_by_id.push((table, action));
+        &mut table_actions_cache_by_id.last_mut().expect("just pushed").1
     }
 
     /// Do a table lookup. This is potentially a mutable operation!
     /// For more information, see `egglog_bridge::TableAction::lookup`.
     pub fn lookup(&mut self, table: &str, key: &[Value]) -> Option<Value> {
-        self.get_table_action(table).lookup(self.exec_state, key)
+        let table_id = self.func_id(table);
+        self.lookup_id(table_id, key)
+    }
+
+    /// Do a table lookup by cached backend FunctionId.
+    /// For more information, see `egglog_bridge::TableAction::lookup`.
+    pub fn lookup_id(&mut self, table: egglog_bridge::FunctionId, key: &[Value]) -> Option<Value> {
+        let RustRuleContext {
+            exec_state,
+            table_actions_by_id,
+            ..
+        } = self;
+        Self::get_table_action_by_id(table_actions_by_id, table).lookup(exec_state, key)
     }
 
     /// Union two values in the e-graph.
@@ -373,20 +424,63 @@ impl RustRuleContext<'_, '_> {
     /// Insert a row into a table.
     /// For more information, see `egglog_bridge::TableAction::insert`.
     pub fn insert(&mut self, table: &str, row: impl Iterator<Item = Value>) {
-        self.get_table_action(table).insert(self.exec_state, row)
+        let table_id = self.func_id(table);
+        self.insert_id(table_id, row)
+    }
+
+    /// Insert a row into a table by cached backend FunctionId.
+    /// For more information, see `egglog_bridge::TableAction::insert`.
+    pub fn insert_id(
+        &mut self,
+        table: egglog_bridge::FunctionId,
+        row: impl Iterator<Item = Value>,
+    ) {
+        let RustRuleContext {
+            exec_state,
+            table_actions_by_id,
+            table_actions_cache_by_id,
+            ..
+        } = self;
+        Self::get_table_action_cache_by_id(table_actions_cache_by_id, table_actions_by_id, table)
+            .insert(exec_state, row)
     }
 
     /// Remove a row from a table.
     /// For more information, see `egglog_bridge::TableAction::remove`.
     pub fn remove(&mut self, table: &str, key: &[Value]) {
-        self.get_table_action(table).remove(self.exec_state, key)
+        let table_id = self.func_id(table);
+        self.remove_id(table_id, key)
+    }
+
+    /// Remove a row from a table by cached backend FunctionId.
+    /// For more information, see `egglog_bridge::TableAction::remove`.
+    pub fn remove_id(&mut self, table: egglog_bridge::FunctionId, key: &[Value]) {
+        let RustRuleContext {
+            exec_state,
+            table_actions_by_id,
+            ..
+        } = self;
+        Self::get_table_action_by_id(table_actions_by_id, table).remove(exec_state, key)
     }
 
     /// Subsume a row in a table.
     /// For more information, see `egglog_bridge::TableAction::subsume`.
     pub fn subsume(&mut self, table: &str, key: &[Value]) {
-        self.get_table_action(table)
-            .subsume(self.exec_state, key.iter().copied())
+        let table_id = self.func_id(table);
+        self.subsume_id(table_id, key)
+    }
+
+    /// Subsume a row in a table by cached backend FunctionId.
+    /// For more information, see `egglog_bridge::TableAction::subsume`.
+    pub fn subsume_id(&mut self, table: egglog_bridge::FunctionId, key: &[Value]) {
+        let RustRuleContext {
+            exec_state,
+            table_actions_by_id,
+            table_actions_cache_by_id,
+            ..
+        } = self;
+        Self::get_table_action_cache_by_id(table_actions_cache_by_id, table_actions_by_id, table)
+            .subsume(exec_state, key.iter().copied())
     }
 
     /// Panic.
@@ -404,7 +498,8 @@ struct RustRuleRhs<F: Fn(&mut RustRuleContext, &[Value]) -> Option<()>> {
     name: String,
     inputs: Vec<ArcSort>,
     union_action: egglog_bridge::UnionAction,
-    table_actions: HashMap<String, egglog_bridge::TableAction>,
+    func_ids: std::sync::Arc<HashMap<String, egglog_bridge::FunctionId>>,
+    table_actions_by_id: std::sync::Arc<Vec<Option<egglog_bridge::TableAction>>>,
     panic_id: ExternalFunctionId,
     func: F,
 }
@@ -428,7 +523,9 @@ impl<F: Fn(&mut RustRuleContext, &[Value]) -> Option<()>> Primitive for RustRule
         let mut context = RustRuleContext {
             exec_state,
             union_action: self.union_action,
-            table_actions: self.table_actions.clone(),
+            func_ids: self.func_ids.as_ref(),
+            table_actions_by_id: self.table_actions_by_id.as_slice(),
+            table_actions_cache_by_id: Vec::new(),
             panic_id: self.panic_id,
         };
         (self.func)(&mut context, values)?;
@@ -523,20 +620,28 @@ pub fn rust_rule(
 ) -> Result<Vec<CommandOutput>, Error> {
     let prim_name = egraph.parser.symbol_gen.fresh("rust_rule_prim");
     let panic_id = egraph.backend.new_panic(format!("{prim_name}_panic"));
+
+    let mut func_ids: HashMap<String, egglog_bridge::FunctionId> = Default::default();
+    func_ids.reserve(egraph.functions.len());
+    let mut table_actions_by_id: Vec<Option<egglog_bridge::TableAction>> = Vec::new();
+    for (k, v) in egraph.functions.iter() {
+        func_ids.insert(k.clone(), v.backend_id);
+        let idx = v.backend_id.rep() as usize;
+        if table_actions_by_id.len() <= idx {
+            table_actions_by_id.resize_with(idx + 1, || None);
+        }
+        table_actions_by_id[idx] = Some(egglog_bridge::TableAction::new(
+            &egraph.backend,
+            v.backend_id,
+        ));
+    }
+
     egraph.add_primitive(RustRuleRhs {
         name: prim_name.clone(),
         inputs: vars.iter().map(|(_, s)| s.clone()).collect(),
         union_action: egglog_bridge::UnionAction::new(&egraph.backend),
-        table_actions: egraph
-            .functions
-            .iter()
-            .map(|(k, v)| {
-                (
-                    k.clone(),
-                    egglog_bridge::TableAction::new(&egraph.backend, v.backend_id),
-                )
-            })
-            .collect(),
+        func_ids: std::sync::Arc::new(func_ids),
+        table_actions_by_id: std::sync::Arc::new(table_actions_by_id),
         panic_id,
         func,
     });
