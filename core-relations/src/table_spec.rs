@@ -8,6 +8,7 @@ use std::{
     any::Any,
     marker::PhantomData,
     ops::{Deref, DerefMut},
+    sync::Arc,
 };
 
 use crate::numeric_id::{DenseIdMap, NumericId, define_id};
@@ -381,17 +382,29 @@ impl<T: Table> TableWrapper for WrapperImpl<T> {
             out.add_row(row_id, row);
         })
     }
-    fn group_by_col(&self, table: &dyn Table, subset: SubsetRef, col: ColumnId) -> ColumnIndex {
+    fn group_by_col(
+        &self,
+        table: &dyn Table,
+        subset: SubsetRef,
+        col: ColumnId,
+        pool: Arc<crate::ThreadPool>,
+    ) -> ColumnIndex {
         let table = table.as_any().downcast_ref::<T>().unwrap();
-        let mut res = ColumnIndex::new();
+        let mut res = ColumnIndex::new(pool);
         table.scan_generic(subset, |row_id, row| {
             res.add_row(&[row[col.index()]], row_id);
         });
         res
     }
-    fn group_by_key(&self, table: &dyn Table, subset: SubsetRef, cols: &[ColumnId]) -> TupleIndex {
+    fn group_by_key(
+        &self,
+        table: &dyn Table,
+        subset: SubsetRef,
+        cols: &[ColumnId],
+        pool: Arc<crate::ThreadPool>,
+    ) -> TupleIndex {
         let table = table.as_any().downcast_ref::<T>().unwrap();
-        let mut res = TupleIndex::new(cols.len());
+        let mut res = TupleIndex::new(cols.len(), pool);
         match cols {
             [] => {}
             [col] => table.scan_generic(subset, |row_id, row| {
@@ -556,13 +569,23 @@ impl WrappedTable {
     }
 
     /// Group the contents of the given subset by the given column.
-    pub(crate) fn group_by_col(&self, subset: SubsetRef, col: ColumnId) -> ColumnIndex {
-        self.as_ref().group_by_col(subset, col)
+    pub(crate) fn group_by_col(
+        &self,
+        subset: SubsetRef,
+        col: ColumnId,
+        pool: Arc<crate::ThreadPool>,
+    ) -> ColumnIndex {
+        self.as_ref().group_by_col(subset, col, pool)
     }
 
     /// A multi-column vairant of [`WrappedTable::group_by_col`].
-    pub(crate) fn group_by_key(&self, subset: SubsetRef, cols: &[ColumnId]) -> TupleIndex {
-        self.as_ref().group_by_key(subset, cols)
+    pub(crate) fn group_by_key(
+        &self,
+        subset: SubsetRef,
+        cols: &[ColumnId],
+        pool: Arc<crate::ThreadPool>,
+    ) -> TupleIndex {
+        self.as_ref().group_by_key(subset, cols, pool)
     }
 
     /// A variant fo [`WrappedTable::scan_bounded`] that projects a subset of
@@ -645,8 +668,20 @@ pub(crate) trait TableWrapper: Send + Sync {
         n: usize,
         out: &mut TaggedRowBuffer,
     ) -> Option<Offset>;
-    fn group_by_col(&self, table: &dyn Table, subset: SubsetRef, col: ColumnId) -> ColumnIndex;
-    fn group_by_key(&self, table: &dyn Table, subset: SubsetRef, cols: &[ColumnId]) -> TupleIndex;
+    fn group_by_col(
+        &self,
+        table: &dyn Table,
+        subset: SubsetRef,
+        col: ColumnId,
+        pool: Arc<crate::ThreadPool>,
+    ) -> ColumnIndex;
+    fn group_by_key(
+        &self,
+        table: &dyn Table,
+        subset: SubsetRef,
+        cols: &[ColumnId],
+        pool: Arc<crate::ThreadPool>,
+    ) -> TupleIndex;
 
     #[allow(clippy::too_many_arguments)]
     fn scan_project(
@@ -729,13 +764,23 @@ impl WrappedTableRef<'_> {
     }
 
     /// Group the contents of the given subset by the given column.
-    pub(crate) fn group_by_col(&self, subset: SubsetRef, col: ColumnId) -> ColumnIndex {
-        self.wrapper.group_by_col(self.inner, subset, col)
+    pub(crate) fn group_by_col(
+        &self,
+        subset: SubsetRef,
+        col: ColumnId,
+        pool: Arc<crate::ThreadPool>,
+    ) -> ColumnIndex {
+        self.wrapper.group_by_col(self.inner, subset, col, pool)
     }
 
     /// A multi-column vairant of [`WrappedTable::group_by_col`].
-    pub(crate) fn group_by_key(&self, subset: SubsetRef, cols: &[ColumnId]) -> TupleIndex {
-        self.wrapper.group_by_key(self.inner, subset, cols)
+    pub(crate) fn group_by_key(
+        &self,
+        subset: SubsetRef,
+        cols: &[ColumnId],
+        pool: Arc<crate::ThreadPool>,
+    ) -> TupleIndex {
+        self.wrapper.group_by_key(self.inner, subset, cols, pool)
     }
 
     /// A variant fo [`WrappedTable::scan_bounded`] that projects a subset of

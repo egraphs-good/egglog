@@ -247,7 +247,7 @@ impl Clone for Counters {
         let mut map = DenseIdMap::new();
         for (k, v) in self.0.iter() {
             // NB: we may want to experiment with Ordering::Relaxed here.
-            map.insert(k, AtomicUsize::new(v.load(Ordering::SeqCst)))
+            map.insert(k, AtomicUsize::new(v.load(Ordering::SeqCst)));
         }
         Counters(map)
     }
@@ -267,7 +267,7 @@ impl Counters {
 /// A collection of tables and indexes over them.
 ///
 /// A database also owns the memory pools used by its tables.
-#[derive(Clone, Default)]
+#[derive(Clone)]
 pub struct Database {
     // NB: some fields are pub(crate) to allow some internal modules to avoid
     // borrowing the whole table.
@@ -290,15 +290,65 @@ pub struct Database {
     /// This is primarily used to determine whether or not to attempt to do some operations in
     /// parallel.
     total_size_estimate: usize,
+    /// Thread pools for parallel operations.
+    pool: Arc<crate::ThreadPool>,
+    /// A thread pool specifically for parallel hash index construction.
+    ///
+    /// We use a separate thread pool here because callers can construct an index under a lock,
+    /// and we do not want to take a long-running lock in the global thread pool without another
+    /// way to get parallelism.
+    ///
+    /// Earlier solutions using rayon::yield_now() were unreliable.
+    index_building_pool: Arc<crate::ThreadPool>,
+}
+
+impl Default for Database {
+    fn default() -> Self {
+        Database {
+            tables: Default::default(),
+            counters: Default::default(),
+            external_functions: Default::default(),
+            container_values: Default::default(),
+            notification_list: Default::default(),
+            deps: Default::default(),
+            base_values: Default::default(),
+            total_size_estimate: 0,
+            pool: Arc::new(crate::ThreadPool::new(1)),
+            index_building_pool: Arc::new(crate::ThreadPool::new(1)),
+        }
+    }
 }
 
 impl Database {
     /// Create an empty Database.
-    ///
-    /// Queries are executed using the current rayon thread pool, which defaults to the global
-    /// thread pool.
     pub fn new() -> Database {
         Database::default()
+    }
+
+    /// Set the number of threads used for parallel operations.
+    ///
+    /// # Panics
+    ///
+    /// Panics on wasm if `num_threads > 1`.
+    pub fn with_num_threads(mut self, num_threads: usize) -> Self {
+        self.pool = Arc::new(crate::ThreadPool::new(num_threads));
+        self.index_building_pool = Arc::new(crate::ThreadPool::new(num_threads));
+        self
+    }
+
+    /// Return the number of threads in this Database's thread pool.
+    pub fn num_threads(&self) -> usize {
+        return self.pool.num_threads();
+    }
+
+    /// Get a reference to the thread pool used for parallel operations.
+    pub fn thread_pool(&self) -> &Arc<crate::ThreadPool> {
+        &self.pool
+    }
+
+    /// Get a reference to the thread pool used for parallel hash index construction.
+    pub fn index_building_thread_pool(&self) -> &Arc<crate::ThreadPool> {
+        &self.index_building_pool
     }
 
     /// Initialize a new rulse set to run against this database.
@@ -361,15 +411,19 @@ impl Database {
             for id in to_rebuild {
                 tables.push((*id, self.tables.take(*id).unwrap()));
             }
-            tables.par_iter_mut().for_each(|(id, info)| {
-                if info.table.apply_rebuild(
-                    func_id,
-                    &func.table,
-                    next_ts,
-                    &mut ExecutionState::new(self.read_only_view(), Default::default()),
-                ) {
-                    self.notification_list.notify(*id);
-                }
+            let pool = self.pool.clone();
+
+            pool.install(|| {
+                tables.par_iter_mut().for_each(|(id, info)| {
+                    if info.table.apply_rebuild(
+                        func_id,
+                        &func.table,
+                        next_ts,
+                        &mut ExecutionState::new(self.read_only_view(), Default::default()),
+                    ) {
+                        self.notification_list.notify(*id);
+                    }
+                });
             });
             for (id, info) in tables {
                 self.tables.insert(id, info);
@@ -454,6 +508,7 @@ impl Database {
     ///
     /// Useful for out-of-band insertions into the database.
     pub fn merge_all(&mut self) -> bool {
+        let pool = self.pool.clone();
         let mut ever_changed = false;
         let do_parallel = parallelize_db_level_op(self.total_size_estimate);
         let mut to_merge = IndexSet::default();
@@ -497,14 +552,17 @@ impl Database {
                 }
                 let db = self.read_only_view();
                 changed |= if do_parallel {
-                    tables_merging
-                        .par_iter_mut()
-                        .map(|(_, (info, buffers))| {
-                            let mut es = ExecutionState::new(db, mem::take(buffers));
-                            info.as_mut().unwrap().table.merge(&mut es).added || es.changed
-                        })
-                        .max()
-                        .unwrap_or(false)
+                    let result = pool.install(|| {
+                        tables_merging
+                            .par_iter_mut()
+                            .map(|(_, (info, buffers))| {
+                                let mut es = ExecutionState::new(db, mem::take(buffers));
+                                info.as_mut().unwrap().table.merge(&mut es).added || es.changed
+                            })
+                            .max()
+                            .unwrap_or(false)
+                    });
+                    result
                 } else {
                     tables_merging
                         .iter_mut()
@@ -693,7 +751,7 @@ impl Database {
             // We have or will build an index: upgrade this constraint to
             // 'fast'.
             fast.push(c.clone());
-            let index = get_column_index_from_tableinfo(table_info, col);
+            let index = get_column_index_from_tableinfo(table_info, col, &self.index_building_pool);
             match index.get().unwrap().get_subset(&val) {
                 Some(s) => {
                     with_pool_set(|ps| subset.intersect(s, &ps.get_pool()));
@@ -734,7 +792,7 @@ impl Drop for Database {
         //
         // Calling mem::forget on the egraph can result in much faster execution times.
         with_pool_set(PoolSet::clear);
-        rayon::broadcast(|_| with_pool_set(PoolSet::clear));
+        self.pool.broadcast(|| with_pool_set(PoolSet::clear));
     }
 }
 
@@ -742,11 +800,15 @@ impl Drop for Database {
 ///
 /// This is in a separate function to allow us to reuse it while already
 /// borrowing a `TableInfo`.
-fn get_index_from_tableinfo(table_info: &TableInfo, cols: &[ColumnId]) -> HashIndex {
+fn get_index_from_tableinfo(
+    table_info: &TableInfo,
+    cols: &[ColumnId],
+    pool: &Arc<crate::ThreadPool>,
+) -> HashIndex {
     let index: Arc<_> = table_info.indexes.get_or_insert(cols.into(), || {
         Arc::new(ResettableOnceLock::new(Index::new(
             cols.to_vec(),
-            TupleIndex::new(cols.len()),
+            TupleIndex::new(cols.len(), pool.clone()),
         )))
     });
     index.get_or_update(|index| {
@@ -764,11 +826,15 @@ fn get_index_from_tableinfo(table_info: &TableInfo, cols: &[ColumnId]) -> HashIn
 /// The core logic behind getting and updating a column index.
 ///
 /// This is the single-column analog to [`get_index_from_tableinfo`].
-fn get_column_index_from_tableinfo(table_info: &TableInfo, col: ColumnId) -> HashColumnIndex {
+fn get_column_index_from_tableinfo(
+    table_info: &TableInfo,
+    col: ColumnId,
+    pool: &Arc<crate::ThreadPool>,
+) -> HashColumnIndex {
     let index: Arc<_> = table_info.column_indexes.get_or_insert(col, || {
         Arc::new(ResettableOnceLock::new(Index::new(
             vec![col],
-            ColumnIndex::new(),
+            ColumnIndex::new(pool.clone()),
         )))
     });
     index.get_or_update(|index| {

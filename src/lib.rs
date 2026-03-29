@@ -260,10 +260,6 @@ pub struct EGraph {
     proof_state: EncodingState,
     /// In proof mode, this is the program before proof instrumentation and the version we use for proof checking.
     proof_check_program: Vec<ResolvedNCommand>,
-    /// Thread pool used for parallel operations.
-    /// Does not exist on wasm, where spawning threads is unsupported.
-    #[cfg(not(target_family = "wasm"))]
-    pool: Arc<rayon::ThreadPool>,
 }
 
 /// A user-defined command allows users to inject custom command that can be called
@@ -353,13 +349,6 @@ impl Default for EGraph {
             command_macros: Default::default(),
             proof_state,
             proof_check_program: vec![],
-            #[cfg(not(target_family = "wasm"))]
-            pool: Arc::new(
-                rayon::ThreadPoolBuilder::new()
-                    .num_threads(1)
-                    .build()
-                    .expect("failed to build rayon thread pool"),
-            ),
         };
 
         add_base_sort(&mut eg, UnitSort, span!()).unwrap();
@@ -491,43 +480,13 @@ impl EGraph {
     ///
     /// Panics on wasm if `num_threads > 1`.
     pub fn with_num_threads(mut self, num_threads: usize) -> Self {
-        #[cfg(target_family = "wasm")]
-        if num_threads > 1 {
-            panic!("cannot use more than 1 thread on wasm");
-        }
-        #[cfg(not(target_family = "wasm"))]
-        {
-            self.pool = Arc::new(
-                rayon::ThreadPoolBuilder::new()
-                    .num_threads(num_threads)
-                    .build()
-                    .expect("failed to build rayon thread pool"),
-            );
-        }
+        self.backend = self.backend.with_num_threads(num_threads);
         self
     }
 
     /// Return the number of threads in this EGraph's thread pool.
     pub fn num_threads(&self) -> usize {
-        #[cfg(not(target_family = "wasm"))]
-        return self.pool.current_num_threads();
-        #[cfg(target_family = "wasm")]
-        1
-    }
-
-    /// Run `f` on the configured thread pool.
-    ///
-    /// This ensures `rayon::current_num_threads()` inside the closure reflects
-    /// this EGraph's pool, so parallel heuristics in core-relations behave
-    /// correctly.
-    fn with_pool<R: Send>(&mut self, f: impl FnOnce(&mut Self) -> R + Send) -> R {
-        #[cfg(not(target_family = "wasm"))]
-        {
-            let pool = self.pool.clone();
-            return pool.install(|| f(self));
-        }
-        #[cfg(target_family = "wasm")]
-        f(self)
+        self.backend.num_threads()
     }
 
     /// Add a user-defined command to the e-graph
@@ -1640,14 +1599,6 @@ impl EGraph {
         program: Vec<Command>,
         run_commands: bool,
     ) -> Result<ResolvedNCommandsWithOutput, Error> {
-        self.with_pool(|this| this.process_program_internal_helper(program, run_commands))
-    }
-
-    fn process_program_internal_helper(
-        &mut self,
-        program: Vec<Command>,
-        run_commands: bool,
-    ) -> Result<ResolvedNCommandsWithOutput, Error> {
         let mut outputs = Vec::new();
         let mut desugared_before_proofs = Vec::new();
         let mut desugared = Vec::new();
@@ -1670,8 +1621,7 @@ impl EGraph {
                         .parser
                         .get_program_from_string(Some(file.clone()), &s)?;
                     // run program internal on these include commands
-                    let resolved =
-                        self.process_program_internal_helper(included_program, run_commands)?;
+                    let resolved = self.process_program_internal(included_program, run_commands)?;
                     outputs.extend(resolved.outputs);
                     desugared.extend(resolved.resolved);
                     desugared_before_proofs.extend(resolved.resolved_before_proofs);

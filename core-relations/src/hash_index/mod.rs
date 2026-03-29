@@ -8,7 +8,6 @@ use std::{
 use crate::numeric_id::{IdVec, NumericId, define_id};
 use egglog_concurrency::{Notification, ReadOptimizedLock};
 use hashbrown::HashTable;
-use once_cell::sync::Lazy;
 use rayon::iter::ParallelIterator;
 use rustc_hash::FxHasher;
 
@@ -110,6 +109,10 @@ impl<TI: IndexBase> Index<TI> {
     pub(crate) fn len(&self) -> usize {
         self.table.len()
     }
+
+    pub(crate) fn thread_pool(&self) -> &Arc<crate::ThreadPool> {
+        self.table.thread_pool()
+    }
 }
 
 pub(crate) struct SubsetTable {
@@ -158,6 +161,8 @@ pub(crate) trait IndexBase {
     fn for_each(&self, f: impl FnMut(&Self::Key, SubsetRef));
     /// The number of keys in the index.
     fn len(&self) -> usize;
+    /// The thread pool used for parallel index building. Used when cloning an index.
+    fn thread_pool(&self) -> &Arc<crate::ThreadPool>;
 
     fn merge_parallel(&mut self, cols: &[ColumnId], table: WrappedTableRef, subset: SubsetRef);
 }
@@ -181,6 +186,7 @@ pub struct ColumnIndex {
     // A specialized index used when we are indexing on a single column.
     shard_data: ShardData,
     shards: IdVec<ShardId, ColumnIndexShard>,
+    pool: Arc<crate::ThreadPool>,
 }
 
 impl IndexBase for ColumnIndex {
@@ -262,7 +268,7 @@ impl IndexBase for ColumnIndex {
             }
         };
 
-        run_in_thread_pool_and_block(&THREAD_POOL, || {
+        run_in_thread_pool_and_block(&self.pool, || {
             rayon::in_place_scope(|inner| {
                 let mut cur = Offset::new(0);
                 loop {
@@ -303,6 +309,10 @@ impl IndexBase for ColumnIndex {
             });
         });
     }
+
+    fn thread_pool(&self) -> &Arc<crate::ThreadPool> {
+        &self.pool
+    }
 }
 
 /// This function is an alternative for [`rayon::ThreadPool::install`] that doesn't steal work from
@@ -316,7 +326,18 @@ impl IndexBase for ColumnIndex {
 /// held. In particular, if another task on the thread pool _itself_ attempts to aquire the same
 /// lock, this can cause a deadlock. We saw this in the tests for this crate. The relevant lock
 /// are those around individual indexes stored in the database-level index cache.
-fn run_in_thread_pool_and_block<'a>(pool: &rayon::ThreadPool, f: impl FnMut() + Send + 'a) {
+fn run_in_thread_pool_and_block<'a>(pool: &crate::ThreadPool, f: impl FnMut() + Send + 'a) {
+    #[cfg(not(target_family = "wasm"))]
+    run_in_rayon_pool_and_block(pool.rayon_pool(), f);
+    #[cfg(target_family = "wasm")]
+    {
+        let mut f = f;
+        f();
+    }
+}
+
+#[cfg(not(target_family = "wasm"))]
+fn run_in_rayon_pool_and_block<'a>(pool: &rayon::ThreadPool, f: impl FnMut() + Send + 'a) {
     // NB: We don't need the heap allocations here. But we are only calling this function if
     // we are about to do a bunch of work, so clarify is probably going to be better than (even
     // more) unsafe code.
@@ -343,7 +364,7 @@ fn run_in_thread_pool_and_block<'a>(pool: &rayon::ThreadPool, f: impl FnMut() + 
 }
 
 impl ColumnIndex {
-    pub(crate) fn new() -> ColumnIndex {
+    pub(crate) fn new(pool: Arc<crate::ThreadPool>) -> ColumnIndex {
         with_pool_set(|ps| {
             let shard_data = ShardData::new(num_shards());
             let mut shards = IdVec::with_capacity(shard_data.n_shards());
@@ -351,7 +372,11 @@ impl ColumnIndex {
                 table: ps.get(),
                 subsets: SubsetBuffer::default(),
             });
-            ColumnIndex { shard_data, shards }
+            ColumnIndex {
+                shard_data,
+                shards,
+                pool,
+            }
         })
     }
 }
@@ -369,17 +394,22 @@ pub struct TupleIndex {
     // (u32, RowId) instead of RowId. Trades copying off for indirections.
     shard_data: ShardData,
     shards: IdVec<ShardId, TupleIndexShard>,
+    pool: Arc<crate::ThreadPool>,
 }
 
 impl TupleIndex {
-    pub(crate) fn new(key_arity: usize) -> TupleIndex {
+    pub(crate) fn new(key_arity: usize, pool: Arc<crate::ThreadPool>) -> TupleIndex {
         let shard_data = ShardData::new(num_shards());
         let mut shards = IdVec::with_capacity(shard_data.n_shards());
         shards.resize_with(shard_data.n_shards(), || TupleIndexShard {
             table: SubsetTable::new(key_arity),
             subsets: SubsetBuffer::default(),
         });
-        TupleIndex { shard_data, shards }
+        TupleIndex {
+            shard_data,
+            shards,
+            pool,
+        }
     }
 }
 
@@ -487,7 +517,7 @@ impl IndexBase for TupleIndex {
                 queues[shard_id].lock().unwrap().push((first, buf));
             }
         };
-        run_in_thread_pool_and_block(&THREAD_POOL, || {
+        run_in_thread_pool_and_block(&self.pool, || {
             rayon::scope(|scope| {
                 let mut cur = Offset::new(0);
                 loop {
@@ -541,6 +571,10 @@ impl IndexBase for TupleIndex {
                 }
             });
         });
+    }
+
+    fn thread_pool(&self) -> &Arc<crate::ThreadPool> {
+        &self.pool
     }
 }
 
@@ -791,20 +825,6 @@ fn num_shards() -> usize {
     let n_threads = rayon::current_num_threads();
     if n_threads == 1 { 1 } else { n_threads * 2 }
 }
-
-/// A thread pool specifically for parallel hash index construction.
-///
-/// We use a separate thread pool here because callers can construct an index under a lock,
-/// and we do not want to take a long-running lock in the global thread pool without another
-/// way to get parallelism.
-///
-/// Earlier solutions using rayon::yield_now() were unreliable.
-static THREAD_POOL: Lazy<rayon::ThreadPool> = Lazy::new(|| {
-    rayon::ThreadPoolBuilder::new()
-        .num_threads(rayon::current_num_threads())
-        .build()
-        .unwrap()
-});
 
 /// A simple free list used to reuse slots in a [`SubsetBuffer`].
 ///

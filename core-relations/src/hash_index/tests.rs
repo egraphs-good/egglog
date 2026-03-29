@@ -1,3 +1,5 @@
+use std::sync::Arc;
+
 use crate::numeric_id::NumericId;
 
 use crate::{
@@ -10,6 +12,7 @@ use super::Index;
 
 #[test]
 fn basic_updates() {
+    let index_building_pool = Arc::new(crate::ThreadPool::new(rayon::current_num_threads()));
     // Get slightly higher coverage with nondeterministic parallelism.
     for _ in 0..10 {
         // fill a SortedWritesTable with some data. confirm that an index built on
@@ -29,9 +32,13 @@ fn basic_updates() {
                 assert_eq!(old, new, "no conflicts in this test");
                 None
             },
+            index_building_pool.clone(),
         ));
 
-        let mut index = Index::new(vec![ColumnId::new(0), ColumnId::new(2)], TupleIndex::new(2));
+        let mut index = Index::new(
+            vec![ColumnId::new(0), ColumnId::new(2)],
+            TupleIndex::new(2, index_building_pool.clone()),
+        );
         assert!(index.get_subset(&[v(0), v(2)]).is_none());
         index.refresh(table.as_ref());
         for i in 0..=4 {

@@ -27,13 +27,9 @@ use crate::{
 static GLOBAL: mimalloc::MiMalloc = mimalloc::MiMalloc;
 
 /// Run a test closure both single-threaded and with 4 threads.
-fn run_serial_and_parallel(f: impl Fn() + Send + Sync) {
-    for num_threads in [1, 4] {
-        let pool = rayon::ThreadPoolBuilder::new()
-            .num_threads(num_threads)
-            .build()
-            .unwrap();
-        pool.install(&f);
+fn run_serial_and_parallel(f: impl Fn(usize) + Send + Sync) {
+    for num_threads in [1, 32] {
+        f(num_threads);
     }
 }
 
@@ -42,14 +38,14 @@ fn basic_query() {
     run_serial_and_parallel(basic_query_inner);
 }
 
-fn basic_query_inner() {
+fn basic_query_inner(num_threads: usize) {
     let MathEgraph {
         num,
         add,
         id_counter,
         mut db,
         ..
-    } = basic_math_egraph();
+    } = basic_math_egraph(num_threads);
 
     db.base_values_mut().register_type::<i64>();
     let add_int = db.add_external_function(Box::new(make_external_func(|exec_state, args| {
@@ -139,21 +135,21 @@ fn basic_query_inner() {
 
 #[test]
 fn line_graph_1_fj_puresize() {
-    run_serial_and_parallel(|| line_graph_1_test(PlanStrategy::PureSize));
+    run_serial_and_parallel(|num_threads| line_graph_1_test(PlanStrategy::PureSize, num_threads));
 }
 
 #[test]
 fn line_graph_1_fj_mincover() {
-    run_serial_and_parallel(|| line_graph_1_test(PlanStrategy::MinCover));
+    run_serial_and_parallel(|num_threads| line_graph_1_test(PlanStrategy::MinCover, num_threads));
 }
 
 #[test]
 fn line_graph_1_gj() {
-    run_serial_and_parallel(|| line_graph_1_test(PlanStrategy::Gj));
+    run_serial_and_parallel(|num_threads| line_graph_1_test(PlanStrategy::Gj, num_threads));
 }
 
-fn line_graph_1_test(strat: PlanStrategy) {
-    let mut db = Database::default();
+fn line_graph_1_test(strat: PlanStrategy, num_threads: usize) {
+    let mut db = Database::default().with_num_threads(num_threads);
     let edge_impl = SortedWritesTable::new(
         2,
         2,
@@ -166,6 +162,7 @@ fn line_graph_1_test(strat: PlanStrategy) {
                 false
             }
         }),
+        db.index_building_thread_pool().clone(),
     );
     let edges = db.add_table(edge_impl, iter::empty(), iter::empty());
     let nodes = Vec::from_iter((0..10).map(Value::new));
@@ -211,21 +208,21 @@ fn line_graph_1_test(strat: PlanStrategy) {
 
 #[test]
 fn line_graph_2_fj_puresize() {
-    run_serial_and_parallel(|| line_graph_2_test(PlanStrategy::PureSize));
+    run_serial_and_parallel(|num_threads| line_graph_2_test(PlanStrategy::PureSize, num_threads));
 }
 
 #[test]
 fn line_graph_2_fj_mincover() {
-    run_serial_and_parallel(|| line_graph_2_test(PlanStrategy::MinCover));
+    run_serial_and_parallel(|num_threads| line_graph_2_test(PlanStrategy::MinCover, num_threads));
 }
 
 #[test]
 fn line_graph_2_gj() {
-    run_serial_and_parallel(|| line_graph_2_test(PlanStrategy::Gj));
+    run_serial_and_parallel(|num_threads| line_graph_2_test(PlanStrategy::Gj, num_threads));
 }
 
-fn line_graph_2_test(strat: PlanStrategy) {
-    let mut db = Database::default();
+fn line_graph_2_test(strat: PlanStrategy, num_threads: usize) {
+    let mut db = Database::default().with_num_threads(num_threads);
     let edge_impl = SortedWritesTable::new(
         2,
         2,
@@ -238,6 +235,7 @@ fn line_graph_2_test(strat: PlanStrategy) {
                 false
             }
         }),
+        db.index_building_thread_pool().clone(),
     );
     let edges = db.add_table(edge_impl, iter::empty(), iter::empty());
     let nodes = Vec::from_iter((0..10).map(Value::new));
@@ -292,8 +290,9 @@ fn line_graph_2_test(strat: PlanStrategy) {
     assert_eq!(expected, got);
 }
 
-fn intersection_test(strat: PlanStrategy) {
-    let mut db = Database::default();
+fn intersection_test(strat: PlanStrategy, num_threads: usize) {
+    let mut db = Database::default().with_num_threads(num_threads);
+    let index_building_pool = db.index_building_thread_pool().clone();
     let rst = (0..3).map(|_| {
         SortedWritesTable::new(
             2,
@@ -307,6 +306,7 @@ fn intersection_test(strat: PlanStrategy) {
                     false
                 }
             }),
+            index_building_pool.clone(),
         )
     });
     let u = SortedWritesTable::new(
@@ -321,6 +321,7 @@ fn intersection_test(strat: PlanStrategy) {
                 false
             }
         }),
+        index_building_pool.clone(),
     );
     let rst_ids = rst
         .map(|r| db.add_table(r, iter::empty(), iter::empty()))
@@ -371,31 +372,31 @@ fn intersection_test(strat: PlanStrategy) {
 
 #[test]
 fn intersection_test_fj_puresize() {
-    run_serial_and_parallel(|| intersection_test(PlanStrategy::PureSize));
+    run_serial_and_parallel(|num_threads| intersection_test(PlanStrategy::PureSize, num_threads));
 }
 
 #[test]
 fn intersection_test_fj_mincover() {
-    run_serial_and_parallel(|| intersection_test(PlanStrategy::MinCover));
+    run_serial_and_parallel(|num_threads| intersection_test(PlanStrategy::MinCover, num_threads));
 }
 
 #[test]
 fn intersection_test_gj() {
-    run_serial_and_parallel(|| intersection_test(PlanStrategy::Gj));
+    run_serial_and_parallel(|num_threads| intersection_test(PlanStrategy::Gj, num_threads));
 }
 
 #[test]
 fn minimal_ac() {
-    run_serial_and_parallel(minimal_ac_inner);
+    run_serial_and_parallel(|num_threads| minimal_ac_inner(num_threads));
 }
 
-fn minimal_ac_inner() {
+fn minimal_ac_inner(num_threads: usize) {
     let MathEgraph {
         add,
         id_counter,
         mut db,
         ..
-    } = basic_math_egraph();
+    } = basic_math_egraph(num_threads);
     {
         {
             let mut add_buf = db.new_buffer(add);
@@ -497,20 +498,20 @@ fn minimal_ac_inner() {
 
 #[test]
 fn ac_gj() {
-    run_serial_and_parallel(|| ac_test_inner(PlanStrategy::Gj));
+    run_serial_and_parallel(|num_threads| ac_test_inner(PlanStrategy::Gj, num_threads));
 }
 
 #[test]
 fn ac_fj_mincover() {
-    run_serial_and_parallel(|| ac_test_inner(PlanStrategy::MinCover));
+    run_serial_and_parallel(|num_threads| ac_test_inner(PlanStrategy::MinCover, num_threads));
 }
 
 #[test]
 fn ac_fj_puresize() {
-    run_serial_and_parallel(|| ac_test_inner(PlanStrategy::PureSize));
+    run_serial_and_parallel(|num_threads| ac_test_inner(PlanStrategy::PureSize, num_threads));
 }
 
-fn ac_test_inner(strat: PlanStrategy) {
+fn ac_test_inner(strat: PlanStrategy, num_threads: usize) {
     // This test is very involved. It reimplements major egglog features on top
     // of this library:
     // 1. rebuilding, including heuristics for incremental vs. nonincremental.
@@ -525,7 +526,7 @@ fn ac_test_inner(strat: PlanStrategy) {
         id_counter,
         mut db,
         uf,
-    } = basic_math_egraph();
+    } = basic_math_egraph(num_threads);
 
     // Add the numbers 1 through 10 to the num table at timestamp 0.
     let mut ids = Vec::new();
@@ -958,8 +959,8 @@ struct MathEgraph {
     db: Database,
 }
 
-fn basic_math_egraph() -> MathEgraph {
-    let mut db = Database::default();
+fn basic_math_egraph(num_threads: usize) -> MathEgraph {
+    let mut db = Database::default().with_num_threads(num_threads);
     let uf = db.add_table(DisplacedTable::default(), iter::empty(), iter::empty());
     let num_impl = SortedWritesTable::new(
         1,
@@ -976,6 +977,7 @@ fn basic_math_egraph() -> MathEgraph {
                 false
             }
         }),
+        db.index_building_thread_pool().clone(),
     );
 
     let id_counter = db.add_counter();
@@ -996,6 +998,7 @@ fn basic_math_egraph() -> MathEgraph {
                 false
             }
         }),
+        db.index_building_thread_pool().clone(),
     );
 
     let add = db.add_table(add_impl, iter::once(uf), iter::empty());
@@ -1018,12 +1021,13 @@ fn lookup_with_fallback_partial_success() {
     run_serial_and_parallel(lookup_with_fallback_partial_success_inner);
 }
 
-fn lookup_with_fallback_partial_success_inner() {
+fn lookup_with_fallback_partial_success_inner(num_threads: usize) {
     // Insert (f 1) (f 2), (g 1) (g 3) (g 4).
     // Run a query that iterates over g, binding x to 1, 3, 4.
     // Insert (h (lookup f x, with fallback assert-even))
     // Should get h 1, h 4
-    let mut db = Database::default();
+    let mut db = Database::default().with_num_threads(num_threads);
+    let index_building_pool = db.index_building_thread_pool().clone();
     let [f, g, h] = (0..3)
         .map(|_| {
             db.add_table(
@@ -1039,6 +1043,7 @@ fn lookup_with_fallback_partial_success_inner() {
                             false
                         }
                     }),
+                    index_building_pool.clone(),
                 ),
                 iter::empty(),
                 iter::empty(),
@@ -1118,7 +1123,7 @@ fn call_external_with_fallback() {
     run_serial_and_parallel(call_external_with_fallback_inner);
 }
 
-fn call_external_with_fallback_inner() {
+fn call_external_with_fallback_inner(num_threads: usize) {
     // Insert (f 1) (f 2) (f 3) (f 5).
     // Iterate over f, binding x to 1, 2, 3.
     // Have two external functions:
@@ -1126,7 +1131,7 @@ fn call_external_with_fallback_inner() {
     // 2. inc, which increments the input value and only fails on the number 5
     // Insert (h (call assert_even x, with fallback inc x))
     // We should get h 2, h 4.
-    let mut db = Database::default();
+    let mut db = Database::default().with_num_threads(num_threads);
     let [f, h] = (0..2)
         .map(|_| {
             db.add_table(
@@ -1142,6 +1147,7 @@ fn call_external_with_fallback_inner() {
                             false
                         }
                     }),
+                    db.index_building_thread_pool().clone(),
                 ),
                 iter::empty(),
                 iter::empty(),
@@ -1204,12 +1210,19 @@ fn early_stop() {
     run_serial_and_parallel(early_stop_inner);
 }
 
-fn early_stop_inner() {
-    let mut db = Database::default();
+fn early_stop_inner(num_threads: usize) {
+    let mut db = Database::default().with_num_threads(num_threads);
 
     // Create a table with 1M rows.
     let data_table = db.add_table(
-        SortedWritesTable::new(1, 2, None, vec![], Box::new(|_, _, _, _| false)),
+        SortedWritesTable::new(
+            1,
+            2,
+            None,
+            vec![],
+            Box::new(|_, _, _, _| false),
+            db.index_building_thread_pool().clone(),
+        ),
         iter::empty(),
         iter::empty(),
     );

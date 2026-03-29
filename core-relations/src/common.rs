@@ -211,3 +211,63 @@ impl SubsetTracker {
         res
     }
 }
+
+/// A WASM-compatible thread pool wrapper.
+pub struct ThreadPool {
+    #[cfg(not(target_family = "wasm"))]
+    pool: Arc<rayon::ThreadPool>,
+}
+
+impl ThreadPool {
+    pub fn new(n_threads: usize) -> Self {
+        #[cfg(target_family = "wasm")]
+        if n_threads > 1 {
+            panic!("cannot use more than 1 thread on wasm");
+        }
+        #[cfg(not(target_family = "wasm"))]
+        let pool = Arc::new(
+            rayon::ThreadPoolBuilder::new()
+                .num_threads(n_threads)
+                .build()
+                .unwrap(),
+        );
+        ThreadPool {
+            #[cfg(not(target_family = "wasm"))]
+            pool,
+        }
+    }
+
+    pub(crate) fn install<F, R>(&self, f: F) -> R
+    where
+        F: FnOnce() -> R + Send,
+        R: Send,
+    {
+        #[cfg(not(target_family = "wasm"))]
+        return self.pool.install(f);
+        #[cfg(target_family = "wasm")]
+        return f();
+    }
+
+    pub(crate) fn num_threads(&self) -> usize {
+        #[cfg(not(target_family = "wasm"))]
+        return self.pool.current_num_threads();
+        #[cfg(target_family = "wasm")]
+        return 1;
+    }
+
+    #[cfg(not(target_family = "wasm"))]
+    pub(crate) fn rayon_pool(&self) -> &rayon::ThreadPool {
+        &self.pool
+    }
+
+    pub(crate) fn broadcast<F, R>(&self, f: F) -> Vec<R>
+    where
+        F: Fn() -> R + Sync,
+        R: Send,
+    {
+        #[cfg(not(target_family = "wasm"))]
+        return self.pool.broadcast(|_| f());
+        #[cfg(target_family = "wasm")]
+        return vec![f()];
+    }
+}

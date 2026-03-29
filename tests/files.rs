@@ -314,7 +314,7 @@ fn generate_tests(glob: &str) -> Vec<Trial> {
             push_trial(run.clone());
 
             push_trial(Run {
-                threads: 4,
+                threads: 32,
                 ..run.clone()
             });
         }

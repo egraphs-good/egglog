@@ -164,7 +164,10 @@ impl Clone for SortedWritesTable {
             pending_state: Arc::new(self.pending_state.deep_copy()),
             merge: self.merge.clone(),
             to_rebuild: self.to_rebuild.clone(),
-            rebuild_index: Index::new(self.to_rebuild.clone(), ColumnIndex::new()),
+            rebuild_index: Index::new(
+                self.to_rebuild.clone(),
+                ColumnIndex::new(self.rebuild_index.thread_pool().clone()),
+            ),
             subset_tracker: Default::default(),
         }
     }
@@ -530,10 +533,11 @@ impl SortedWritesTable {
         sort_by: Option<ColumnId>,
         to_rebuild: Vec<ColumnId>,
         merge_fn: Box<MergeFn>,
+        index_thread_pool: Arc<crate::ThreadPool>,
     ) -> Self {
         let hash = ShardedHashTable::<TableEntry>::default();
         let shard_data = hash.shard_data();
-        let rebuild_index = Index::new(to_rebuild.clone(), ColumnIndex::new());
+        let rebuild_index = Index::new(to_rebuild.clone(), ColumnIndex::new(index_thread_pool));
         SortedWritesTable {
             generation: Generation::new(0),
             data: Rows::new(RowBuffer::new(n_columns)),

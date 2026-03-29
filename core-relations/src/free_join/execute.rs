@@ -309,7 +309,12 @@ impl TrieNode {
     fn size(&self) -> usize {
         self.subset.size()
     }
-    fn get_cached_index(&self, col: ColumnId, info: &TableInfo) -> Arc<ColumnIndex> {
+    fn get_cached_index(
+        &self,
+        col: ColumnId,
+        info: &TableInfo,
+        pool: &Arc<crate::ThreadPool>,
+    ) -> Arc<ColumnIndex> {
         self.cached_subsets.get_or_init(|| {
             // Pre-size the vector so we do not need to borrow it mutably to initialize the index.
             let mut vec: Pooled<ColumnIndexes> = with_pool_set(|ps| ps.get());
@@ -317,7 +322,9 @@ impl TrieNode {
             Arc::new(vec)
         })[col]
             .get_or_init(|| {
-                let col_index = info.table.group_by_col(self.subset.as_ref(), col);
+                let col_index = info
+                    .table
+                    .group_by_col(self.subset.as_ref(), col, pool.clone());
                 Arc::new(col_index)
             })
             .clone()
@@ -411,19 +418,33 @@ impl<'a> JoinState<'a> {
                 if cols.len() != 1 {
                     DynamicIndex::Cached {
                         intersect_outer,
-                        table: get_index_from_tableinfo(info, &cols).clone(),
+                        table: get_index_from_tableinfo(info, &cols, &self.db.index_building_pool)
+                            .clone(),
                     }
                 } else {
                     DynamicIndex::CachedColumn {
                         intersect_outer,
-                        table: get_column_index_from_tableinfo(info, cols[0]).clone(),
+                        table: get_column_index_from_tableinfo(
+                            info,
+                            cols[0],
+                            &self.db.index_building_pool,
+                        )
+                        .clone(),
                     }
                 }
             } else if cols.len() != 1 {
                 // NB: we should have a caching strategy for non-column indexes.
-                DynamicIndex::Dynamic(info.table.group_by_key(subset.as_ref(), &cols))
+                DynamicIndex::Dynamic(info.table.group_by_key(
+                    subset.as_ref(),
+                    &cols,
+                    self.db.index_building_pool.clone(),
+                ))
             } else {
-                DynamicIndex::DynamicColumn(trie_node.get_cached_index(cols[0], info))
+                DynamicIndex::DynamicColumn(trie_node.get_cached_index(
+                    cols[0],
+                    info,
+                    &self.db.index_building_pool,
+                ))
             };
         Prober {
             node: trie_node,

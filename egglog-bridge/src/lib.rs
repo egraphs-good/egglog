@@ -373,6 +373,7 @@ impl EGraph {
                             false
                         }
                     }),
+                    self.db.index_building_thread_pool().clone(),
                 );
                 let table_id =
                     self.db
@@ -393,6 +394,7 @@ impl EGraph {
                     None,
                     vec![], // no rebuilding needed for reason tables
                     Box::new(|_, _, _, _| false),
+                    self.db.index_building_thread_pool().clone(),
                 );
                 let table_id = self.db.add_table(table, iter::empty(), iter::empty());
                 *v.insert(table_id)
@@ -751,6 +753,7 @@ impl EGraph {
             Some(ColumnId::from_usize(schema.len())),
             to_rebuild,
             merge_fn,
+            self.db.index_building_thread_pool().clone(),
         );
         let name: Arc<str> = name.into();
         let table_id = self.db.add_table_named(
@@ -813,8 +816,19 @@ impl EGraph {
         Ok(iteration_report)
     }
 
+    /// Set the number of threads used for parallel operations.
+    pub fn with_num_threads(mut self, num_threads: usize) -> Self {
+        self.db = self.db.with_num_threads(num_threads);
+        self
+    }
+
+    /// Return the number of threads in this EGraph's thread pool.
+    pub fn num_threads(&self) -> usize {
+        self.db.num_threads()
+    }
+
     fn rebuild(&mut self) -> Result<()> {
-        let do_parallel = rayon::current_num_threads() > 1;
+        let do_parallel = self.db.num_threads() > 1;
         if self.db.get_table(self.uf_table).rebuilder(&[]).is_some() {
             // The UF implementation supports "native"  rebuilding.
             let mut tables = Vec::with_capacity(self.funcs.next_id().index());

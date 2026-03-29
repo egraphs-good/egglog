@@ -1,5 +1,7 @@
+use std::sync::Arc;
+
 use divan::{Bencher, counter::ItemsCount};
-use egglog_core_relations::{Database, SortedWritesTable, Table, Value};
+use egglog_core_relations::{Database, SortedWritesTable, Table, ThreadPool, Value};
 use egglog_numeric_id::NumericId;
 use rand::{Rng, rng};
 use rayon::{
@@ -110,6 +112,7 @@ fn bench_workload<const K: usize, const C: usize>(
         .num_threads(threads)
         .build()
         .unwrap();
+    let index_building_pool = Arc::new(ThreadPool::new(threads));
     let workload_size = workload.len();
     bench
         .with_inputs(|| {
@@ -124,6 +127,7 @@ fn bench_workload<const K: usize, const C: usize>(
                         out.extend_from_slice(new);
                         old != new
                     }),
+                    index_building_pool.clone(),
                 ),
             )
         })

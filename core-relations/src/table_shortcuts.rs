@@ -1,5 +1,7 @@
 //! Utilities helpful in unit tests for manipulating tables.
 
+use std::sync::Arc;
+
 use crate::numeric_id::NumericId;
 
 use crate::{
@@ -32,6 +34,7 @@ pub(crate) fn fill_table(
     n_keys: usize,
     sort_by: Option<ColumnId>,
     merge_fn: impl Fn(&[Value], &[Value]) -> Option<Vec<Value>> + 'static + Send + Sync,
+    index_building_pool: Arc<crate::ThreadPool>,
 ) -> SortedWritesTable {
     empty_execution_state!(e);
     let mut iter = rows.into_iter();
@@ -51,6 +54,7 @@ pub(crate) fn fill_table(
                 false
             }
         }),
+        index_building_pool,
     );
 
     // We write tests that assume that assume rows are inserted in order.

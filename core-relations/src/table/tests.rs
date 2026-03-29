@@ -1,3 +1,5 @@
+use std::sync::Arc;
+
 use crate::numeric_id::NumericId;
 use rand::{Rng, rng};
 
@@ -35,6 +37,7 @@ fn empty_key() {
         0,
         None,
         |_, new| Some(new.to_vec()),
+        Arc::new(crate::ThreadPool::new(rayon::current_num_threads())),
     );
     let row = table.get_row(&[]).expect("empty key should be present");
     assert_eq!(*row.vals, vec![v(2), v(3)]);
@@ -60,6 +63,7 @@ fn insert_scan() {
         2,
         None,
         |_, new| Some(new.to_vec()),
+        Arc::new(crate::ThreadPool::new(rayon::current_num_threads())),
     );
 
     let all = table.all();
@@ -112,6 +116,7 @@ fn insert_scan_sorted() {
         2,
         Some(ColumnId::new(2)),
         |_, new| Some(new.to_vec()),
+        Arc::new(crate::ThreadPool::new(rayon::current_num_threads())),
     );
 
     let all = table.all();
