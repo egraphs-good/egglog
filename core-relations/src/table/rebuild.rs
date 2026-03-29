@@ -1,6 +1,6 @@
 //! Apply value-level rebuilds to a table.
 
-use std::{cmp, mem, sync::Arc};
+use std::{cmp, mem};
 
 use crate::numeric_id::NumericId;
 use rayon::prelude::*;

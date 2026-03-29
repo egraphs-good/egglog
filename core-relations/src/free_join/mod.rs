@@ -338,7 +338,7 @@ impl Database {
 
     /// Return the number of threads in this Database's thread pool.
     pub fn num_threads(&self) -> usize {
-        return self.pool.num_threads();
+        self.pool.num_threads()
     }
 
     /// Get a reference to the thread pool used for parallel operations.
@@ -552,7 +552,8 @@ impl Database {
                 }
                 let db = self.read_only_view();
                 changed |= if do_parallel {
-                    let result = pool.install(|| {
+                    
+                    pool.install(|| {
                         tables_merging
                             .par_iter_mut()
                             .map(|(_, (info, buffers))| {
@@ -561,8 +562,7 @@ impl Database {
                             })
                             .max()
                             .unwrap_or(false)
-                    });
-                    result
+                    })
                 } else {
                     tables_merging
                         .iter_mut()

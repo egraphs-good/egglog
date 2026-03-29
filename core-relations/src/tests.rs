@@ -387,7 +387,7 @@ fn intersection_test_gj() {
 
 #[test]
 fn minimal_ac() {
-    run_serial_and_parallel(|num_threads| minimal_ac_inner(num_threads));
+    run_serial_and_parallel(minimal_ac_inner);
 }
 
 fn minimal_ac_inner(num_threads: usize) {
