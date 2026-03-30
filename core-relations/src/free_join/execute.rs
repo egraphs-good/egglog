@@ -153,6 +153,15 @@ impl Prober {
 
 impl Database {
     pub fn run_rule_set(&mut self, rule_set: &RuleSet, report_level: ReportLevel) -> RuleSetReport {
+        let pool = self.pool.clone();
+        pool.install(|| self.run_rule_set_impl(rule_set, report_level))
+    }
+
+    fn run_rule_set_impl(
+        &mut self,
+        rule_set: &RuleSet,
+        report_level: ReportLevel,
+    ) -> RuleSetReport {
         if rule_set.plans.is_empty() {
             return RuleSetReport::default();
         }
@@ -256,7 +265,7 @@ impl Database {
         let search_and_apply_time = search_and_apply_timer.elapsed();
 
         let merge_timer = Instant::now();
-        let changed = self.merge_all();
+        let changed = self.merge_all_impl();
         let merge_time = merge_timer.elapsed();
 
         RuleSetReport {

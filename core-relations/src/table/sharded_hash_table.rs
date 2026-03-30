@@ -11,21 +11,19 @@ pub(crate) struct ShardedHashTable<T> {
     shards: Vec<HashTable<T>>,
 }
 
-impl<T> Default for ShardedHashTable<T> {
-    fn default() -> Self {
-        let cur_threads = rayon::current_num_threads();
+impl<T> ShardedHashTable<T> {
+    pub(crate) fn new(cur_threads: usize) -> Self {
         if cur_threads == 1 {
             Self::with_shards(1)
         } else {
             Self::with_shards(cur_threads * 2)
         }
     }
-}
 
-impl<T> ShardedHashTable<T> {
     pub(crate) fn clear(&mut self) {
         self.shards.iter_mut().for_each(|s| s.clear());
     }
+
     pub(crate) fn with_shards(shards: usize) -> Self {
         let shard_data = ShardData::new(shards);
         let shards = (0..shard_data.n_shards())

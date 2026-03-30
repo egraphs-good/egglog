@@ -115,7 +115,9 @@ impl ContainerValues {
     }
 
     /// Apply the given rebuild to the contents of each container.
-    pub fn rebuild_all(
+    ///
+    /// Private to this crate because it needs to be run in the e-graph's thread pool.
+    pub(crate) fn rebuild_all(
         &mut self,
         table_id: TableId,
         table: &WrappedTable,

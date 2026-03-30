@@ -535,7 +535,7 @@ impl SortedWritesTable {
         merge_fn: Box<MergeFn>,
         index_thread_pool: Arc<crate::ThreadPool>,
     ) -> Self {
-        let hash = ShardedHashTable::<TableEntry>::default();
+        let hash = ShardedHashTable::<TableEntry>::new(index_thread_pool.num_threads());
         let shard_data = hash.shard_data();
         let rebuild_index = Index::new(to_rebuild.clone(), ColumnIndex::new(index_thread_pool));
         SortedWritesTable {

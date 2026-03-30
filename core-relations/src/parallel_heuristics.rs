@@ -11,8 +11,8 @@ pub(crate) fn parallelize_db_level_op(db_size: usize) -> bool {
 }
 
 /// Whether or not to use a parallel algorithm to construct a hash index.
-pub(crate) fn parallelize_index_construction(items_to_insert: usize) -> bool {
-    items_to_insert > 20_000 && rayon::current_num_threads() > 1
+pub(crate) fn parallelize_index_construction(items_to_insert: usize, num_threads: usize) -> bool {
+    items_to_insert > 20_000 && num_threads > 1
 }
 
 /// Whether or not to use a parallel algorithm to rebuild a [`crate::table::SortedWritesTable`].

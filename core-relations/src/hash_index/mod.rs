@@ -72,7 +72,7 @@ impl<TI: IndexBase> Index<TI> {
         } else {
             table.updates_since(self.updated_to.minor)
         };
-        if parallelize_index_construction(subset.size()) {
+        if parallelize_index_construction(subset.size(), self.thread_pool().num_threads()) {
             self.table.merge_parallel(&self.key, table, subset.as_ref());
         } else {
             self.refresh_serial(table, subset);
@@ -366,7 +366,7 @@ fn run_in_rayon_pool_and_block<'a>(pool: &rayon::ThreadPool, f: impl FnMut() + S
 impl ColumnIndex {
     pub(crate) fn new(pool: Arc<crate::ThreadPool>) -> ColumnIndex {
         with_pool_set(|ps| {
-            let shard_data = ShardData::new(num_shards());
+            let shard_data = ShardData::new(num_shards(pool.num_threads()));
             let mut shards = IdVec::with_capacity(shard_data.n_shards());
             shards.resize_with(shard_data.n_shards(), || ColumnIndexShard {
                 table: ps.get(),
@@ -399,7 +399,7 @@ pub struct TupleIndex {
 
 impl TupleIndex {
     pub(crate) fn new(key_arity: usize, pool: Arc<crate::ThreadPool>) -> TupleIndex {
-        let shard_data = ShardData::new(num_shards());
+        let shard_data = ShardData::new(num_shards(pool.num_threads()));
         let mut shards = IdVec::with_capacity(shard_data.n_shards());
         shards.resize_with(shard_data.n_shards(), || TupleIndexShard {
             table: SubsetTable::new(key_arity),
@@ -821,8 +821,7 @@ impl BufferedSubset {
     }
 }
 
-fn num_shards() -> usize {
-    let n_threads = rayon::current_num_threads();
+fn num_shards(n_threads: usize) -> usize {
     if n_threads == 1 { 1 } else { n_threads * 2 }
 }
 

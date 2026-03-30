@@ -388,7 +388,10 @@ impl Database {
     pub fn rebuild_containers(&mut self, table_id: TableId) -> bool {
         let mut containers = mem::take(&mut self.container_values);
         let table = &self.tables[table_id].table;
-        let res = self.with_execution_state(|state| containers.rebuild_all(table_id, table, state));
+        let pool = self.pool.clone();
+        let res = pool.install(|| {
+            self.with_execution_state(|state| containers.rebuild_all(table_id, table, state))
+        });
         self.container_values = containers;
         res
     }
@@ -405,25 +408,31 @@ impl Database {
         to_rebuild: &[TableId],
         next_ts: Value,
     ) -> bool {
+        let pool = self.pool.clone();
+        pool.install(|| self.apply_rebuild_impl(func_id, to_rebuild, next_ts))
+    }
+
+    fn apply_rebuild_impl(
+        &mut self,
+        func_id: TableId,
+        to_rebuild: &[TableId],
+        next_ts: Value,
+    ) -> bool {
         let func = self.tables.take(func_id).unwrap();
         if parallelize_db_level_op(self.total_size_estimate) {
             let mut tables = Vec::with_capacity(to_rebuild.len());
             for id in to_rebuild {
                 tables.push((*id, self.tables.take(*id).unwrap()));
             }
-            let pool = self.pool.clone();
-
-            pool.install(|| {
-                tables.par_iter_mut().for_each(|(id, info)| {
-                    if info.table.apply_rebuild(
-                        func_id,
-                        &func.table,
-                        next_ts,
-                        &mut ExecutionState::new(self.read_only_view(), Default::default()),
-                    ) {
-                        self.notification_list.notify(*id);
-                    }
-                });
+            tables.par_iter_mut().for_each(|(id, info)| {
+                if info.table.apply_rebuild(
+                    func_id,
+                    &func.table,
+                    next_ts,
+                    &mut ExecutionState::new(self.read_only_view(), Default::default()),
+                ) {
+                    self.notification_list.notify(*id);
+                }
             });
             for (id, info) in tables {
                 self.tables.insert(id, info);
@@ -443,7 +452,7 @@ impl Database {
             }
         }
         self.tables.insert(func_id, func);
-        self.merge_all()
+        self.merge_all_impl()
     }
 
     /// Run `f` with access to an `ExecutionState` mapped to this database.
@@ -509,6 +518,10 @@ impl Database {
     /// Useful for out-of-band insertions into the database.
     pub fn merge_all(&mut self) -> bool {
         let pool = self.pool.clone();
+        pool.install(|| self.merge_all_impl())
+    }
+
+    fn merge_all_impl(&mut self) -> bool {
         let mut ever_changed = false;
         let do_parallel = parallelize_db_level_op(self.total_size_estimate);
         let mut to_merge = IndexSet::default();
@@ -552,16 +565,14 @@ impl Database {
                 }
                 let db = self.read_only_view();
                 changed |= if do_parallel {
-                    pool.install(|| {
-                        tables_merging
-                            .par_iter_mut()
-                            .map(|(_, (info, buffers))| {
-                                let mut es = ExecutionState::new(db, mem::take(buffers));
-                                info.as_mut().unwrap().table.merge(&mut es).added || es.changed
-                            })
-                            .max()
-                            .unwrap_or(false)
-                    })
+                    tables_merging
+                        .par_iter_mut()
+                        .map(|(_, (info, buffers))| {
+                            let mut es = ExecutionState::new(db, mem::take(buffers));
+                            info.as_mut().unwrap().table.merge(&mut es).added || es.changed
+                        })
+                        .max()
+                        .unwrap_or(false)
                 } else {
                     tables_merging
                         .iter_mut()
@@ -617,6 +628,11 @@ impl Database {
     /// elesewhere. The `merge_all` method runs merges to a fixed point to avoid
     /// surprises here.
     pub fn merge_table(&mut self, table: TableId) -> bool {
+        let pool = self.pool.clone();
+        pool.install(|| self.merge_table_impl(table))
+    }
+
+    fn merge_table_impl(&mut self, table: TableId) -> bool {
         let mut info = self.tables.unwrap_val(table);
         self.total_size_estimate = self.total_size_estimate.wrapping_sub(info.table.len());
         let table_changed = info.table.merge(&mut ExecutionState::new(
