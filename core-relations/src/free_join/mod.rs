@@ -552,7 +552,6 @@ impl Database {
                 }
                 let db = self.read_only_view();
                 changed |= if do_parallel {
-                    
                     pool.install(|| {
                         tables_merging
                             .par_iter_mut()
