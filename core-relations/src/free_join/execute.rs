@@ -255,7 +255,7 @@ impl Database {
                                             })
                                             .collect(),
                                     );
-                                    let materializations = Arc::new(materializations);
+                                    let mut materializations = Arc::new(materializations);
 
                                     for (mat_id, stage_block) in
                                         plan.stages.blocks.iter().enumerate()
@@ -280,9 +280,19 @@ impl Database {
                                         if materializations[mat_id].is_empty() {
                                             break 'eval;
                                         }
+                                        assert_eq!(Arc::strong_count(&materializations), 1);
+                                        let mut materializations_dearc =
+                                            Arc::unwrap_or_clone(materializations);
+                                        let materialization = mem::take(
+                                            Arc::get_mut(&mut materializations_dearc[mat_id])
+                                                .unwrap(),
+                                        )
+                                        .into_iter()
+                                        .collect::<HashMap<_, _>>();
                                         binding_info
                                             .materializations
-                                            .insert(mat_id, materializations[mat_id].clone());
+                                            .insert(mat_id, Arc::new(materialization));
+                                        materializations = Arc::new(materializations_dearc);
                                     }
                                     join_state.run_join_stages(
                                         &plan.result_block,
@@ -376,7 +386,7 @@ impl Database {
                             let mut materializations =
                                 DenseIdMap::with_capacity(plan.stages.blocks.len());
                             for i in 0..plan.stages.blocks.len() {
-                                materializations.insert(MatId::from_usize(i), Default::default());
+                                materializations.insert(MatId::from_usize(i), HashMap::default());
                             }
                             let mut materializer = InPlaceMaterializer {
                                 specs: &plan
@@ -533,7 +543,7 @@ impl Clone for TrieNode {
 struct BindingInfo {
     bindings: DenseIdMap<Variable, Value>,
     subsets: DenseIdMap<AtomId, TrieNode>,
-    materializations: DenseIdMap<MatId, Arc<DashMap<Vec<Value>, RowBuffer>>>,
+    materializations: DenseIdMap<MatId, Arc<HashMap<Vec<Value>, RowBuffer>>>,
 }
 
 impl BindingInfo {
@@ -1191,13 +1201,15 @@ impl<'a> JoinState<'a> {
                         // enumerate keys
                         // for group in cover_mat.iter() {
                         for group in cover_mat.iter() {
-                            let group_key_len = group.key().len();
+                            let group_key = group.0;
+                            let group_val = group.1;
+                            let group_key_len = group_key.len();
                             if mode == &MatScanMode::Full {
                                 // enumerate non-keys
-                                for non_keys in group.value().iter() {
+                                for non_keys in group_val.iter() {
                                     for (col, var) in bind.iter() {
                                         if col.index() < group_key_len {
-                                            updates.push_binding(*var, group.key()[col.index()]);
+                                            updates.push_binding(*var, group_key[col.index()]);
                                         }
                                     }
 
@@ -1210,11 +1222,8 @@ impl<'a> JoinState<'a> {
                                             );
                                         }
                                     }
-                                    if prune_probers(
-                                        &mut updates,
-                                        Some(group.key()),
-                                        Some(non_keys),
-                                    ) {
+                                    if prune_probers(&mut updates, Some(group_key), Some(non_keys))
+                                    {
                                         updates.finish_frame();
                                     } else {
                                         updates.rollback();
@@ -1223,9 +1232,9 @@ impl<'a> JoinState<'a> {
                             } else if mode == &MatScanMode::KeyOnly {
                                 for (col, var) in bind.iter() {
                                     debug_assert!(col.index() < group_key_len);
-                                    updates.push_binding(*var, group.key()[col.index()]);
+                                    updates.push_binding(*var, group_key[col.index()]);
                                 }
-                                if prune_probers(&mut updates, Some(group.key()), None) {
+                                if prune_probers(&mut updates, Some(group_key), None) {
                                     updates.finish_frame();
                                 } else {
                                     updates.rollback();
@@ -1515,7 +1524,7 @@ fn flush_action_states(
 
 struct InPlaceMaterializer<'a> {
     specs: &'a DenseIdMap<MatId, MatSpec>,
-    materializations: DenseIdMap<MatId, DashMap<Vec<Value>, RowBuffer>>,
+    materializations: DenseIdMap<MatId, HashMap<Vec<Value>, RowBuffer>>,
     scratch_key: Vec<Value>,
     scratch_val: Vec<Value>,
 }
@@ -1548,8 +1557,8 @@ impl<'a> ActionBuffer<'a, MatId> for InPlaceMaterializer<'a> {
         if self.scratch_val.is_empty() {
             self.scratch_val.push(Value::stale());
         }
-        if let Some(mut buffer) = mat.get_mut(&self.scratch_key) {
-            buffer.value_mut().add_row(&self.scratch_val);
+        if let Some(buffer) = mat.get_mut(&self.scratch_key) {
+            buffer.add_row(&self.scratch_val);
         } else {
             let mut buffer = RowBuffer::new(usize::max(spec.val_vars.len(), 1));
             buffer.add_row(&self.scratch_val);
