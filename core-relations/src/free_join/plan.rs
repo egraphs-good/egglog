@@ -382,11 +382,6 @@ fn next_var_to_eliminate(
     atoms: &DenseIdMap<AtomId, Atom>,
     fun_deps: &FunDeps,
 ) -> Option<IndexSet<Variable>> {
-    // eprintln!(
-    //     "Variables left to eliminate: {:?}, atoms: {:?}",
-    //     vars.iter().count(),
-    //     atoms.iter().count()
-    // );
     let (_var, subquery_vars) = vars
         .iter()
         .map(|(var, _vinfo)| {
@@ -409,7 +404,6 @@ fn next_var_to_eliminate(
         })
         .min_by_key(|a| a.0)
         .map(|a| (a.1, a.2))?;
-    // eprintln!("Picking variable {:?}", _var);
     Some(IndexSet::from_iter(
         subquery_vars.into_iter().map(|(var, _)| var),
     ))
@@ -504,24 +498,11 @@ fn decompose_into_bags(original_ctx: &PlanningContext) -> Vec<PlanningContext> {
 
     // Variable elimination loop
     while let Some(subquery_vars) = next_var_to_eliminate(&vars, &atoms, &original_ctx.fun_deps) {
-        // eprintln!(
-        //     "Next variable to eliminate: {:?}, subquery vars: {:?}",
-        //     subquery_vars,
-        //     subquery_vars
-        //         .iter()
-        //         .map(|var| original_ctx.vars[*var]
-        //             .occurrences
-        //             .iter()
-        //             .map(|occ| occ.atom)
-        //             .collect::<Vec<_>>())
-        //         .collect::<Vec<_>>()
-        // );
         // Create a fake covering atom to bridge back to the main query
         // Remove hyperedges that only contain subquery variables.
         update_hypergraph(&subquery_vars, &mut vars, &mut atoms);
 
         // Collect atoms that only contain subquery variables.
-        // TODO: can be optimized to be in one pass
         let subquery_atoms: DenseIdMap<AtomId, Atom> = original_ctx
             .atoms
             .iter()
@@ -701,7 +682,7 @@ fn plan_single_bag(
         } else {
             // If this variable is not used in later and previous bag,
             // and it is not used in the right hand side,
-            // this variable don't need to be expanded.
+            // this variable doesn't need to be expanded.
             if !vinfo.used_in_rhs
                 && blocks.iter().all(|(_, spec)| !spec.msg_vars.contains(&var))
                 && n_used_in_bag[var] == 0

@@ -691,8 +691,6 @@ impl<'a> JoinState<'a> {
             &stages.instrs,
             binding_info,
         );
-        #[rustfmt::skip]
-        // eprintln!("{:?}",order.data.iter().map(|i| &stages.instrs[*i as usize]).collect::<Vec<&JoinStage>>());
         self.run_plan(
             stages,
             atoms,
