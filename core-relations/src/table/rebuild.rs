@@ -221,10 +221,10 @@ impl SortedWritesTable {
     }
 }
 
-fn incremental_rebuild(_uf_size: usize, _table_size: usize, _parallel: bool) -> bool {
-    if _parallel {
-        _table_size > 10_000 && _uf_size * 8192 <= _table_size
+fn incremental_rebuild(uf_size: usize, table_size: usize, parallel: bool) -> bool {
+    if parallel {
+        table_size > 10_000 && uf_size * 8192 <= table_size
     } else {
-        _table_size > 10000 && _uf_size * 8 <= _table_size
+        table_size > 10000 && uf_size * 8 <= table_size
     }
 }
