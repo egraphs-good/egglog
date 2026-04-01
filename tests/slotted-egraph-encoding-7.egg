@@ -100,10 +100,9 @@
 
 (run 1000)
 
-(print-function Rename)
-(print-function ProjectLeader)
+; (print-function Rename)
+; (print-function ProjectLeader)
 
 ; Here we check equality up to renaming!
-; (check (= $v1 (Rename _ $v4)))
-; (check (= $x2 (Rename _ $y2)))
-
+(check (= (Project $v1) (Project $v4)))
+(check (= (Project $x2) (Project $y2)))
