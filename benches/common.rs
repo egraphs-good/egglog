@@ -36,6 +36,8 @@ impl fmt::Display for BenchCase {
 }
 
 pub fn bench_cases(glob: &str) -> Vec<BenchCase> {
+    configure_rayon_once();
+
     let mut cases = Vec::new();
 
     // Add regular test cases
@@ -71,6 +73,8 @@ const PROOF_UNSUPPORTED_FILES: &[&str] = &[
 ];
 
 pub fn bench_cases_proof_testing(glob: &str) -> Vec<BenchCase> {
+    configure_rayon_once();
+
     glob::glob(glob)
         .unwrap()
         .filter_map(Result::ok)
