@@ -28,7 +28,7 @@ static GLOBAL: mimalloc::MiMalloc = mimalloc::MiMalloc;
 
 /// Run a test closure both single-threaded and with 4 threads.
 fn run_serial_and_parallel(f: impl Fn() + Send + Sync) {
-    for num_threads in [1, 4] {
+    for num_threads in [1, 32] {
         let pool = rayon::ThreadPoolBuilder::new()
             .num_threads(num_threads)
             .build()

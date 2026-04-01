@@ -1,8 +1,10 @@
 use egglog::EGraph;
-use std::fmt;
+use std::{fmt, sync::Once};
 
 #[global_allocator]
 static GLOBAL: mimalloc::MiMalloc = mimalloc::MiMalloc;
+
+static CONFIGURE_RAYON: Once = Once::new();
 
 pub fn run_example(filename: &str, program: &str, proof_testing: bool) {
     let mut egraph = if proof_testing {
@@ -92,5 +94,16 @@ pub fn bench_cases_proof_testing(glob: &str) -> Vec<BenchCase> {
 }
 
 pub fn bench_case(case: &BenchCase) {
+    configure_rayon_once();
+
     run_example(&case.filename, &case.program, case.proof_testing);
+}
+
+fn configure_rayon_once() {
+    CONFIGURE_RAYON.call_once(|| {
+        rayon::ThreadPoolBuilder::new()
+            .num_threads(1)
+            .build_global()
+            .unwrap();
+    });
 }
