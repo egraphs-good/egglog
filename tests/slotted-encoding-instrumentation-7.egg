@@ -1,0 +1,33 @@
+
+
+
+;; commutativity, untouched
+(rule ((= lhs (App "Add" a b)))
+      ((union (App "Add" a b) (App "Add" b a))))
+
+
+;; associativity before
+(rule ((= lhs (App "Add" (App "Add" a b) c)))
+      ((union (App "Add" (App "Add" a b) c)
+              (App "Add" a (App "Add" b c)))))
+
+;; associativity after
+(rule ((= lhs (App "Add" (Rename m (App "Add" a b)) c)))
+      ((union (App "Add" (Rename m (App "Add" a b)) c)
+              (App "Add" (Rename m a) (App "Add" (Rename m b) c)))))
+
+
+;; rule with depth 3 before
+(rule ((= lhs (App "f" (App "f" (App "f" a)))))
+      ((union a lhs)))
+
+;; instrumented rule with depth 3
+(rule ((= lhs (App "f" (Rename m (App "f" (Rename m2 (App "f" a)))))))
+      ((union (Rename (compose m m2) a) lhs)))
+
+;; multipatterns??
+(rule ((= a (App "f" (App "f" a))))
+      (...))
+(rule ((= a (App "f" (Rename m (App "f" a2))))
+       (= a2 (Rename m a)))
+      (...))
