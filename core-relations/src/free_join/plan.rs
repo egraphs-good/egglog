@@ -597,7 +597,7 @@ fn decompose_into_bags(original_ctx: &PlanningContext) -> Vec<PlanningContext> {
             i += 1;
             continue;
         }
-        let Some((j, count)) = (0..bags.len())
+        let js = (0..bags.len())
             .filter(|j| *j != i)
             .map(|j| {
                 (
@@ -609,19 +609,26 @@ fn decompose_into_bags(original_ctx: &PlanningContext) -> Vec<PlanningContext> {
                         .count(),
                 )
             })
-            .max_by_key(|(_, count)| *count)
-        else {
+            .filter(|(_, count)| *count > 0)
+            .collect::<Vec<_>>();
+
+        let Some((j, _)) = js.into_iter().max_by_key(|(_, c)| *c) else {
             i += 1;
             continue;
         };
-        if count == 0 {
-            i += 1;
-            continue;
-        }
 
-        let bag = mem::take(&mut bags[i]);
-        merge_bag(&mut bags[j], &bag);
-        bags.swap_remove(i);
+        // Invariant: bigger-numbered bags are heavier and should stay at the root of the tree
+        if i < j {
+            let bag = mem::take(&mut bags[i]);
+            merge_bag(&mut bags[j], &bag);
+            // bags.swap_remove(i);
+            bags.remove(i);
+        } else {
+            let bag = mem::take(&mut bags[j]);
+            merge_bag(&mut bags[i], &bag);
+            bags.remove(j);
+            i += 1;
+        }
     }
     bags
 }
