@@ -555,7 +555,75 @@ fn decompose_into_bags(original_ctx: &PlanningContext) -> Vec<PlanningContext> {
         }
     }
 
-    pruned_bags
+    // Additionally, we try to merge "ears" with other bags, because expansion of the ears are for free
+    let mut bags = pruned_bags;
+
+    let is_ear = |bag: &PlanningContext| {
+        // A bag is an ear if it only has one atom all of whose variables are in the bag (i.e., the bag only
+        // has one useful relations)
+        bag.atoms
+            .iter()
+            .filter(|a| a.1.vars().all(|var| bag.vars.contains_key(var)))
+            .count()
+            == 1
+    };
+    let merge_bag = |bag1: &mut PlanningContext, bag2: &PlanningContext| {
+        for (var, vinfo) in bag2.vars.iter() {
+            if bag1.vars.contains_key(var) {
+                for new_occ in vinfo.occurrences.iter().cloned() {
+                    if bag1.vars[var]
+                        .occurrences
+                        .iter()
+                        .position(|occ| occ.atom == new_occ.atom)
+                        .is_none()
+                    {
+                        bag1.vars[var].occurrences.push(new_occ);
+                    }
+                }
+            } else {
+                bag1.vars.insert(var, vinfo.clone());
+            }
+        }
+        for (atom_id, atom) in bag2.atoms.iter() {
+            // atoms don't need to be merged
+            if !bag1.atoms.contains_key(atom_id) {
+                bag1.atoms.insert(atom_id, atom.clone());
+            }
+        }
+    };
+    let mut i = 0;
+    while i < bags.len() {
+        if !is_ear(&bags[i]) {
+            i += 1;
+            continue;
+        }
+        let Some((j, count)) = (0..bags.len())
+            .filter(|j| *j != i)
+            .map(|j| {
+                (
+                    j,
+                    bags[j]
+                        .vars
+                        .iter()
+                        .filter(|(var, _)| bags[i].vars.contains_key(*var))
+                        .count(),
+                )
+            })
+            .max_by_key(|(_, count)| *count)
+        else {
+            i += 1;
+            continue;
+        };
+        if count == 0 {
+            i += 1;
+            continue;
+        }
+
+        let bag = mem::take(&mut bags[i]);
+        merge_bag(&mut bags[j], &bag);
+        bags.swap_remove(i);
+    }
+    bags
 }
 
 /// Topologically sorts bags based on variable dependencies.
@@ -1060,7 +1128,9 @@ pub(crate) fn plan_query(query: Query) -> Plan {
         atoms,
         fun_deps: Arc::new(query.fun_deps),
     };
-    tree_decompose_and_plan(ctx, query.plan_strategy, query.action)
+    let result = tree_decompose_and_plan(ctx, query.plan_strategy, query.action);
+    // eprintln!("{:?}", result);
+    result
 }
 
 /// StageInfo is an intermediate stage used to describe the ordering of
@@ -1080,7 +1150,7 @@ struct StageInfo {
 }
 
 /// Immutable context for query planning containing references to query metadata.
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, Default)]
 pub(crate) struct PlanningContext {
     vars: DenseIdMap<Variable, VarInfo>,
     atoms: DenseIdMap<AtomId, Atom>,
