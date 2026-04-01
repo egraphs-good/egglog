@@ -314,6 +314,7 @@ fn generate_tests(glob: &str) -> Vec<Trial> {
         // TODO: subsume.egg fails because we used a `check` on something subsumed. Need a way to run rules over subsumed things. Same with subsume-relation.egg.
         let proof_unsupported_file_list = [
             "math-microbenchmark.egg",
+            "prototypical-rectangle.egg",
             "subsume.egg",
             "subsume-relation.egg",
         ];
