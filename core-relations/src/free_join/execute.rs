@@ -672,25 +672,7 @@ impl<'a> JoinState<'a> {
             }
         }
         let mut order = InstrOrder::from_iter(0..stages.instrs.len());
-        let mut last_pos = 0;
-        for i in 0..stages.instrs.len() {
-            if matches!(
-                &stages.instrs[i],
-                JoinStage::FusedIntersectMat {
-                    mode: MatScanMode::Lookup(_) | MatScanMode::Value(_) | MatScanMode::Full,
-                    ..
-                }
-            ) {
-                sort_plan_by_size(&mut order, last_pos..i, &stages.instrs, binding_info);
-                last_pos = i + 1;
-            }
-        }
-        sort_plan_by_size(
-            &mut order,
-            last_pos..stages.instrs.len(),
-            &stages.instrs,
-            binding_info,
-        );
+        sort_plan_by_size(&mut order, 0, &stages.instrs, binding_info);
         self.run_plan(
             stages,
             atoms,
@@ -732,14 +714,14 @@ impl<'a> JoinState<'a> {
             return;
         }
         let chunk_size = action_buf.morsel_size(cur, instr_order.len());
-        let cur_size = estimate_size(&stages.instrs[instr_order.get(cur)], binding_info);
+        let mut cur_size = estimate_size(&stages.instrs[instr_order.get(cur)], binding_info);
         // TODO: add dynamic sort plan back
-        // if cur_size > 32 && cur % 3 == 1 && cur < instr_order.len() - 1 {
-        //     // If we have a reasonable number of tuples to process, adjust the variable order every
-        //     // 3 rounds, but always make sure to readjust on the second roung.
-        //     sort_plan_by_size(instr_order, cur, &stages.instrs, binding_info);
-        //     cur_size = estimate_size(&stages.instrs[instr_order.get(cur)], binding_info);
-        // }
+        if cur_size > 32 && cur % 3 == 1 && cur < instr_order.len() - 1 {
+            // If we have a reasonable number of tuples to process, adjust the variable order every
+            // 3 rounds, but always make sure to readjust on the second roung.
+            sort_plan_by_size(instr_order, cur, &stages.instrs, binding_info);
+            cur_size = estimate_size(&stages.instrs[instr_order.get(cur)], binding_info);
+        }
 
         // Helper macro (not its own method to appease the borrow checker).
         macro_rules! drain_updates {
@@ -1692,6 +1674,28 @@ fn num_intersected_rels(join_stage: &JoinStage) -> i32 {
 }
 
 fn sort_plan_by_size(
+    order: &mut InstrOrder,
+    start: usize,
+    instrs: &[JoinStage],
+    binding_info: &mut BindingInfo,
+) {
+    let mut last_pos = start;
+    for i in 0..instrs.len() {
+        if matches!(
+            &instrs[i],
+            JoinStage::FusedIntersectMat {
+                mode: MatScanMode::Lookup(_) | MatScanMode::Value(_) | MatScanMode::Full,
+                ..
+            }
+        ) {
+            sort_plan_by_size_inner(order, last_pos..i, &instrs, binding_info);
+            last_pos = i + 1;
+        }
+    }
+    sort_plan_by_size_inner(order, last_pos..instrs.len(), &instrs, binding_info);
+}
+
+fn sort_plan_by_size_inner(
     order: &mut InstrOrder,
     range: Range<usize>,
     instrs: &[JoinStage],
