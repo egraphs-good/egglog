@@ -1688,11 +1688,11 @@ fn sort_plan_by_size(
                 ..
             }
         ) {
-            sort_plan_by_size_inner(order, last_pos..i, &instrs, binding_info);
+            sort_plan_by_size_inner(order, last_pos..i, instrs, binding_info);
             last_pos = i + 1;
         }
     }
-    sort_plan_by_size_inner(order, last_pos..instrs.len(), &instrs, binding_info);
+    sort_plan_by_size_inner(order, last_pos..instrs.len(), instrs, binding_info);
 }
 
 fn sort_plan_by_size_inner(
