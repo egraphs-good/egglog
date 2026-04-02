@@ -533,41 +533,15 @@ fn decompose_into_bags(original_ctx: &PlanningContext) -> Vec<PlanningContext> {
         "All atoms should be put into bags"
     );
 
-    // bags
-    let cmp = |bag1: &PlanningContext, bag2: &PlanningContext| {
-        bag1.vars.iter().all(|(var, _)| bag2.vars.contains_key(var))
-    };
-
-    let merge_bag = |bag1: &mut PlanningContext, bag2: &PlanningContext| {
-        for (var, vinfo) in bag2.vars.iter() {
-            if bag1.vars.contains_key(var) {
-                for new_occ in vinfo.occurrences.iter().cloned() {
-                    if !bag1.vars[var]
-                        .occurrences
-                        .iter()
-                        .any(|occ| occ.atom == new_occ.atom)
-                    {
-                        bag1.vars[var].occurrences.push(new_occ);
-                    }
-                }
-            } else {
-                bag1.vars.insert(var, vinfo.clone());
-            }
-        }
-        for (atom_id, atom) in bag2.atoms.iter() {
-            // atoms don't need to be merged
-            if !bag1.atoms.contains_key(atom_id) {
-                bag1.atoms.insert(atom_id, atom.clone());
-            }
-        }
-    };
     // Remove bags that are subsumed by others
     let mut pruned_bags: Vec<PlanningContext> = Vec::with_capacity(bags.len());
+    let is_subsumed = |bag1: &PlanningContext, bag2: &PlanningContext| {
+        bag1.vars.iter().all(|(var, _)| bag2.vars.contains_key(var))
+    };
     for mut bag1 in bags.into_iter() {
-        // let mut should_add = true;
         pruned_bags.retain_mut(|bag2| {
-            let leq = cmp(&bag1, bag2);
-            let geq = cmp(bag2, &bag1);
+            let leq = is_subsumed(&bag1, bag2);
+            let geq = is_subsumed(bag2, &bag1);
             if leq || geq {
                 merge_bag(&mut bag1, bag2);
                 false
@@ -580,7 +554,6 @@ fn decompose_into_bags(original_ctx: &PlanningContext) -> Vec<PlanningContext> {
 
     // Additionally, we try to merge "ears" with other bags, because expansion of the ears are for free
     bags = pruned_bags;
-
     let is_ear = |bag: &PlanningContext| {
         // A bag is an ear if it only has one atom all of whose variables are in the bag (i.e., the bag only
         // has one useful relations)
@@ -591,36 +564,24 @@ fn decompose_into_bags(original_ctx: &PlanningContext) -> Vec<PlanningContext> {
     };
     let mut i = 0;
     while i < bags.len() {
-        if !is_ear(&bags[i]) {
-            i += 1;
-            continue;
-        }
-        let js = (0..bags.len())
-            .filter(|j| *j != i)
-            .map(|j| {
-                (
-                    j,
-                    bags[j]
-                        .vars
-                        .iter()
-                        .filter(|(var, _)| bags[i].vars.contains_key(*var))
-                        .count(),
-                )
-            })
-            .filter(|(_, count)| *count > 0)
+        // Find the unique parent of this ear, if any
+        let parent = bags
+            .iter()
+            .enumerate()
+            .filter(|(j, b)| *j != i && b.vars.iter().any(|(v, _)| bags[i].vars.contains_key(v)))
+            .map(|(j, _)| j)
             .collect::<Vec<_>>();
 
-        if js.len() != 1 {
+        if !is_ear(&bags[i]) || parent.len() != 1 {
             i += 1;
             continue;
         }
-        let j = js[0].0;
+        let j = parent[0];
 
         // Invariant: bigger-numbered bags are heavier and should stay at the root of the tree
         if i < j {
             let bag = mem::take(&mut bags[i]);
             merge_bag(&mut bags[j], &bag);
-            // bags.swap_remove(i);
             bags.remove(i);
         } else {
             let bag = mem::take(&mut bags[j]);
@@ -636,7 +597,6 @@ fn decompose_into_bags(original_ctx: &PlanningContext) -> Vec<PlanningContext> {
 ///
 /// A child bag depends on its parent if they share variables. The result is
 /// ordered from leaves to root, enabling bottom-up processing.
-#[allow(dead_code)]
 fn topologically_sort_bags(bags: Vec<PlanningContext>) -> Vec<PlanningContext> {
     let mut bags_opt = bags.into_iter().map(Some).collect::<Vec<_>>();
     let mut bags_topo = Vec::<PlanningContext>::with_capacity(bags_opt.len());
@@ -770,7 +730,9 @@ fn plan_single_bag(
 
     let mut stripped_bag = bag.clone();
 
-    // Add epilogue instructions to look up previous materialized bags
+    // Add prologue and epilogue instructions to look up previous materialized bags
+    // These are constraints from children blocks. If there's only one such block, it can be the header.
+    // Otherwise, they have to be epilogue instructions doing filtering at the end, which is less efficient.
     let mut prologue = None;
     let mut epilogue = Vec::new();
     for (i, prev_block) in blocks.iter().enumerate().rev() {
@@ -883,7 +845,6 @@ fn build_result_block(blocks: &[(JoinStages, MatSpec)]) -> JoinStages {
 
         result_block.push(JoinStage::FusedIntersectMat {
             cover: MatId::from_usize(i),
-            // TODO: optimization to switch to MatScanMode::KeyOnly or MatScanMode::Value
             mode: if i == blocks.len() - 1 {
                 MatScanMode::Full
             } else {
@@ -942,7 +903,15 @@ fn fuse_last_stage(
     (blocks, last_block)
 }
 
-/// Lift variable lookups up if it's not used.
+/// Eagerly lift materialization lookups up
+///
+/// For example, in the following, looking up of `r` can be lifted up before `z`
+///
+/// for x in R isec S:
+///  R = R[x]; S = S[x]
+///  for z in R:
+///   if r in Mat[x]:
+///     yield
 fn loop_lifting(stages: JoinStages) -> JoinStages {
     let mut instrs = Arc::unwrap_or_clone(stages.instrs);
     for i in 1..instrs.len() {
@@ -1010,11 +979,10 @@ pub(crate) fn tree_decompose_and_plan(
     let mut bags = topologically_sort_bags(bags);
 
     if bags.len() <= 1 {
-        // Don't do Yannakakis if it's just one bag
         return fast_path!();
     }
 
-    // Step 3: Count variable usage across bags
+    // Step 3: Count variable usage across bags. Used for deciding if a variable is public (i.e., messaege variables) or private.
     let mut n_used_in_bag = count_variable_usage_per_bag(&bags);
     let mut has_block_contributed = vec![false; bags.len()];
 
@@ -1045,78 +1013,6 @@ pub(crate) fn tree_decompose_and_plan(
         .map(|(stages, mat_spec)| (loop_lifting(stages), mat_spec))
         .collect::<Vec<_>>();
     let result_block = loop_lifting(result_block);
-
-    // // Inline materializations that are just scan
-    // for i in 0..blocks.len() {
-    //     let block = &blocks[i];
-    //     if let [
-    //         JoinStage::FusedIntersect {
-    //             cover,
-    //             bind,
-    //             to_intersect,
-    //         },
-    //     ] = block.0.instrs.as_slice()
-    //     {
-    //         let mat_atom = cover.clone();
-    //         let bind = bind.clone();
-    //         assert!(to_intersect.is_empty());
-    //         for j in i + 1..blocks.len() {
-    //             let other_block = &mut blocks[j];
-    //             let mut instrs = Arc::unwrap_or_clone(mem::take(&mut other_block.0.instrs));
-    //             for instr in instrs.iter_mut() {
-    //                 match instr {
-    //                     JoinStage::FusedIntersectMat {
-    //                         cover,
-    //                         mode,
-    //                         bind: _,
-    //                         to_intersect,
-    //                     } if cover.index() == i => {
-    //                         assert!(
-    //                             mode == &MatScanMode::Full || mode == &MatScanMode::Value(vec![])
-    //                         );
-    //                         assert!(to_intersect.is_empty());
-
-    //                         *instr = JoinStage::FusedIntersect {
-    //                             cover: mat_atom.clone(),
-    //                             bind: bind.clone(),
-    //                             to_intersect: vec![],
-    //                         };
-    //                     }
-    //                     _ => {}
-    //                 }
-    //             }
-    //             other_block.0.instrs = Arc::new(instrs);
-    //         }
-
-    //         let mut instrs = Arc::unwrap_or_clone(mem::take(&mut result_block.instrs));
-    //         for instr in instrs.iter_mut() {
-    //             match instr {
-    //                 JoinStage::FusedIntersectMat {
-    //                     cover,
-    //                     mode,
-    //                     bind: _,
-    //                     to_intersect,
-    //                 } if cover.index() == i => {
-    //                     assert!(mode == &MatScanMode::Full || mode == &MatScanMode::Value(vec![]));
-    //                     assert!(to_intersect.is_empty());
-    //                     *instr = JoinStage::FusedIntersect {
-    //                         cover: mat_atom.clone(),
-    //                         bind: bind.clone(),
-    //                         to_intersect: vec![],
-    //                     };
-    //                 }
-    //                 _ => {}
-    //             }
-    //         }
-    //         result_block.instrs = Arc::new(instrs);
-
-    //         blocks[i].0.instrs = Arc::new(vec![]);
-    //         blocks[i].1 = MatSpec {
-    //             msg_vars: vec![],
-    //             val_vars: vec![],
-    //         };
-    //     }
-    // }
 
     Plan::DecomposedPlan(DecomposedPlan {
         atoms: Arc::new(ctx.atoms),
@@ -1159,6 +1055,30 @@ pub(crate) struct PlanningContext {
     vars: DenseIdMap<Variable, VarInfo>,
     atoms: DenseIdMap<AtomId, Atom>,
     fun_deps: Arc<FunDeps>,
+}
+
+fn merge_bag(bag1: &mut PlanningContext, bag2: &PlanningContext) {
+    for (var, vinfo) in bag2.vars.iter() {
+        if bag1.vars.contains_key(var) {
+            for new_occ in vinfo.occurrences.iter().cloned() {
+                if !bag1.vars[var]
+                    .occurrences
+                    .iter()
+                    .any(|occ| occ.atom == new_occ.atom)
+                {
+                    bag1.vars[var].occurrences.push(new_occ);
+                }
+            }
+        } else {
+            bag1.vars.insert(var, vinfo.clone());
+        }
+    }
+    for (atom_id, atom) in bag2.atoms.iter() {
+        // atoms don't need to be merged
+        if !bag1.atoms.contains_key(atom_id) {
+            bag1.atoms.insert(atom_id, atom.clone());
+        }
+    }
 }
 
 /// Mutable state tracked during query planning.
