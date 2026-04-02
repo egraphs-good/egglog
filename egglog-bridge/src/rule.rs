@@ -65,17 +65,6 @@ pub enum QueryEntry {
     },
 }
 
-impl QueryEntry {
-    /// Get the variable associated with this entry, panicking if it isn't a
-    /// variable.
-    pub(crate) fn var(&self) -> Variable {
-        match self {
-            QueryEntry::Var(v) => v.clone(),
-            QueryEntry::Const { .. } => panic!("expected variable, found constant"),
-        }
-    }
-}
-
 impl From<Variable> for QueryEntry {
     fn from(var: Variable) -> Self {
         QueryEntry::Var(var)
@@ -306,10 +295,7 @@ impl RuleBuilder<'_> {
             id: res,
             name: None,
         };
-        self.query.vars.push(VarInfo {
-            ty,
-            name: None,
-        });
+        self.query.vars.push(VarInfo { ty, name: None });
         var
     }
 

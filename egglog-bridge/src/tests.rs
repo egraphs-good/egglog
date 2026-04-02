@@ -19,8 +19,8 @@ use num_rational::Rational64;
 use once_cell::sync::Lazy;
 
 use crate::{
-    ColumnTy, DefaultVal, EGraph, FunctionConfig, FunctionId, MergeFn, QueryEntry,
-    add_expressions, define_rule,
+    ColumnTy, DefaultVal, EGraph, FunctionConfig, FunctionId, MergeFn, QueryEntry, add_expressions,
+    define_rule,
 };
 
 /// Run a simple associativity/commutativity test.
