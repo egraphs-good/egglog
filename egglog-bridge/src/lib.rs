@@ -9,7 +9,6 @@
 //! joins, union-finds, etc.
 
 use std::{
-    cmp,
     fmt::Debug,
     hash::Hash,
     iter, mem,
@@ -19,33 +18,27 @@ use std::{
 
 use crate::core_relations::{
     BaseValue, BaseValueId, BaseValues, ColumnId, Constraint, ContainerValue, ContainerValues,
-    CounterId, Database, DisplacedTable, DisplacedTableWithProvenance, ExecutionState,
-    ExternalFunction, ExternalFunctionId, MergeVal, Offset, PlanStrategy, SortedWritesTable,
-    TableId, TaggedRowBuffer, Value, WrappedTable,
+    CounterId, Database, DisplacedTable, ExecutionState, ExternalFunction, ExternalFunctionId,
+    MergeVal, Offset, PlanStrategy, SortedWritesTable, TableId, TaggedRowBuffer, Value,
+    WrappedTable,
 };
-use crate::numeric_id::{DenseIdMap, DenseIdMapWithReuse, IdVec, NumericId, define_id};
+use crate::numeric_id::{DenseIdMap, DenseIdMapWithReuse, NumericId, define_id};
 use egglog_core_relations as core_relations;
 use egglog_numeric_id as numeric_id;
 use egglog_reports::{IterationReport, ReportLevel, RuleSetReport};
 use hashbrown::HashMap;
-use indexmap::{IndexMap, IndexSet, map::Entry};
+use indexmap::IndexSet;
 use log::info;
 use once_cell::sync::Lazy;
-pub use proof_format::{EqProofId, ProofStore, TermProofId};
-use proof_spec::{ProofReason, ProofReconstructionState, ReasonSpecId};
 use smallvec::SmallVec;
 use web_time::{Duration, Instant};
 
 pub mod macros;
-pub mod proof_format;
-pub(crate) mod proof_spec;
 pub(crate) mod rule;
-pub mod syntax;
 #[cfg(test)]
 mod tests;
 
 pub use rule::{Function, QueryEntry, RuleBuilder};
-pub use syntax::{SourceExpr, SourceSyntax, TopLevelLhsExpr};
 use thiserror::Error;
 
 #[derive(Debug, Copy, Clone, Eq, PartialEq, Hash)]
@@ -80,57 +73,6 @@ pub struct EGraph {
     /// also serve as a debugging tool in the case that the number of panic messages grows without
     /// bound.
     panic_funcs: HashMap<String, ExternalFunctionId>,
-    proof_specs: IdVec<ReasonSpecId, Arc<ProofReason>>,
-    cong_spec: ReasonSpecId,
-    /// Side tables used to store proof information. We initialize these lazily
-    /// as a proof object with a given number of parameters is added.
-    reason_tables: IndexMap<usize /* arity */, TableId>,
-    term_tables: IndexMap<usize /* arity */, TableId>,
-    /// Union-find table that records the stable term id for each provisional term id.
-    ///
-    /// This table is only used when proofs are enabled. `core-relations` has a concept of a
-    /// "predicted value" to handle lookups for rows on tables that haven't been created yet. For
-    /// example, in the associativity rewrite:
-    ///
-    /// > (rewrite (add (add x y) z) (add x (add y z)))
-    ///
-    /// The RHS of the rule will check if `(add y z)` is present in the database, and if it isn't
-    /// it will create a new id and insert `(add y z) => id`. This `id` is cached so subsequent
-    /// uses of `(add y z)` will still see `id` within the same rule.
-    ///
-    /// This cache is _local_: so different threads can potentially see different values for `id`.
-    /// In other words, each thread will have its unique id for the new row being added. This is
-    /// fine as all provisional values for `id` will get unioned together and the database will be
-    /// consistent after congruence closure runs. This same logic, however, does not hold true for
-    /// proofs.
-    ///
-    /// When proofs mint a new `id` for a row it is used both as the canonical e-class id in the main
-    /// e-graph and also the *term* id for that specific row. Term ids are used to reconstruct
-    /// proofs and never change. e-class ids can change depending on the result of a UF `union`
-    /// operation. For example, consider these three terms:
-    ///
-    /// > x => term: id0, canon: id0
-    /// > (add x 0) => term: id1, canon: id1
-    /// > (add 0 x) => term: id2, canon: id2
-    ///
-    /// If we have rules like `(add x 0) => x` and `(add x y) => (add y x)` then our e-graph
-    /// may look like this:
-    ///
-    /// > x => term: id0, canon: id0
-    /// > (add x 0) => term: id1, canon: id0
-    /// > (add 0 x) => term: id2, canon: id0
-    ///
-    /// In other words, while canonical ids change over time and need not be unique to a term, term
-    /// ids are unique to the specific shape of the (head of the) term when it was first
-    /// instantiated. This is a problem for local caching because it means that we can have
-    /// multiple term values for the same row. How do we pick the real one?
-    ///
-    /// We have a separate union-find. Duplicate insertions into the term table cause `union`s on
-    /// this union-find, and future lookups of this table canonicalize ids with respect to this
-    /// union-find. In this way, it's a subset of the full union-find in the `uf_table` row, only
-    /// used to resolved temporary inconsistencies in cached term values.
-    term_consistency_table: TableId,
-    tracing: bool,
     report_level: ReportLevel,
 }
 
@@ -145,7 +87,22 @@ impl Default for EGraph {
             iter::empty(),
             iter::empty(),
         );
-        EGraph::create_internal(db, uf_table, false)
+        let id_counter = db.add_counter();
+        let ts_counter = db.add_counter();
+        // Start the timestamp counter at 1.
+        db.inc_counter(ts_counter);
+
+        Self {
+            db,
+            uf_table,
+            id_counter,
+            timestamp_counter: ts_counter,
+            rules: Default::default(),
+            funcs: Default::default(),
+            panic_message: Default::default(),
+            panic_funcs: Default::default(),
+            report_level: Default::default(),
+        }
     }
 }
 
@@ -164,53 +121,6 @@ pub struct FunctionConfig {
 }
 
 impl EGraph {
-    /// Create a new EGraph with tracing (aka 'proofs') enabled.
-    ///
-    /// Execution of queries against a tracing-enabled EGraph will be slower,
-    /// but will annotate the egraph with annotations that can explain how rows
-    /// came to appear.
-    pub fn with_tracing() -> EGraph {
-        let mut db = Database::new();
-        let uf_table = db.add_table_named(
-            DisplacedTableWithProvenance::default(),
-            "$uf".into(),
-            iter::empty(),
-            iter::empty(),
-        );
-        EGraph::create_internal(db, uf_table, true)
-    }
-
-    fn create_internal(mut db: Database, uf_table: TableId, tracing: bool) -> EGraph {
-        let id_counter = db.add_counter();
-        let trace_counter = db.add_counter();
-        let ts_counter = db.add_counter();
-        // Start the timestamp counter at 1.
-        db.inc_counter(ts_counter);
-        let mut proof_specs = IdVec::default();
-        let cong_spec = proof_specs.push(Arc::new(ProofReason::CongRow));
-        let term_consistency_table =
-            db.add_table(DisplacedTable::default(), iter::empty(), iter::empty());
-
-        Self {
-            db,
-            uf_table,
-            id_counter,
-            reason_counter: trace_counter,
-            timestamp_counter: ts_counter,
-            rules: Default::default(),
-            funcs: Default::default(),
-            panic_message: Default::default(),
-            panic_funcs: Default::default(),
-            proof_specs,
-            cong_spec,
-            reason_tables: Default::default(),
-            term_tables: Default::default(),
-            term_consistency_table,
-            report_level: Default::default(),
-            tracing,
-        }
-    }
-
     fn next_ts(&self) -> Timestamp {
         Timestamp::from_usize(self.db.read_counter(self.timestamp_counter))
     }
@@ -316,90 +226,6 @@ impl EGraph {
         }
     }
 
-    fn record_term_consistency(
-        state: &mut ExecutionState,
-        table: TableId,
-        ts_counter: CounterId,
-        from: Value,
-        to: Value,
-    ) {
-        if from == to {
-            return;
-        }
-        let ts = Value::from_usize(state.read_counter(ts_counter));
-        state.stage_insert(table, &[from, to, ts]);
-    }
-
-    fn canonicalize_term_id(&mut self, term_id: Value) -> Value {
-        let table = self.db.get_table(self.term_consistency_table);
-        table
-            .get_row(&[term_id])
-            .map(|row| row.vals[1])
-            .unwrap_or(term_id)
-    }
-
-    fn term_table(&mut self, table: TableId) -> TableId {
-        let info = self.db.get_table_info(table);
-        let spec = info.spec();
-        match self.term_tables.entry(spec.n_keys) {
-            Entry::Occupied(o) => *o.get(),
-            Entry::Vacant(v) => {
-                let term_index = spec.n_keys + 1;
-                let term_consistency_table = self.term_consistency_table;
-                let ts_counter = self.timestamp_counter;
-                let table = SortedWritesTable::new(
-                    spec.n_keys + 1,     // added entry for the tableid
-                    spec.n_keys + 1 + 2, // one value for the term id, one for the reason,
-                    None,
-                    vec![], // no rebuilding needed for term table
-                    Box::new(move |state, old, new, out| {
-                        // We want to pick the minimum term value.
-                        let l_term_id = old[term_index];
-                        let r_term_id = new[term_index];
-                        // NB: we should only need this merge function when we are executing
-                        // rules in parallel. We could consider a simpler merge function if
-                        // parallelism is disabled.
-                        if r_term_id < l_term_id {
-                            EGraph::record_term_consistency(
-                                state,
-                                term_consistency_table,
-                                ts_counter,
-                                l_term_id,
-                                r_term_id,
-                            );
-                            out.extend(new);
-                            true
-                        } else {
-                            false
-                        }
-                    }),
-                );
-                let table_id =
-                    self.db
-                        .add_table(table, iter::empty(), iter::once(term_consistency_table));
-                *v.insert(table_id)
-            }
-        }
-    }
-
-    fn reason_table(&mut self, spec: &ProofReason) -> TableId {
-        let arity = spec.arity();
-        match self.reason_tables.entry(arity) {
-            Entry::Occupied(o) => *o.get(),
-            Entry::Vacant(v) => {
-                let table = SortedWritesTable::new(
-                    arity,
-                    arity + 1, // one value for the reason id
-                    None,
-                    vec![], // no rebuilding needed for reason tables
-                    Box::new(|_, _, _, _| false),
-                );
-                let table_id = self.db.add_table(table, iter::empty(), iter::empty());
-                *v.insert(table_id)
-            }
-        }
-    }
-
     /// Load the given values into the database.
     ///
     /// # Panics
@@ -409,139 +235,20 @@ impl EGraph {
     /// one that allows us to pass through a series of RowBuffers before
     /// incrementing the timestamp.
     pub fn add_values(&mut self, values: impl IntoIterator<Item = (FunctionId, Vec<Value>)>) {
-        self.add_values_with_desc("", values)
-    }
-
-    /// A term-oriented means of adding data to the database: hand back a "term
-    /// id" for the given function and keys for the function. Proofs for this
-    /// term will include `desc`.
-    ///
-    /// # Panics
-    /// This method panics if the values do not match the arity of the function.
-    pub fn add_term(&mut self, func: FunctionId, inputs: &[Value], desc: &str) -> Value {
-        let info = &self.funcs[func];
-        let schema_math = SchemaMath {
-            tracing: self.tracing,
-            subsume: info.can_subsume,
-            func_cols: info.schema.len(),
-        };
-        let mut extended_row = Vec::new();
-        extended_row.extend_from_slice(inputs);
-        let term = self.tracing.then(|| {
-            let reason = self.get_fiat_reason(desc);
-            self.get_term(func, inputs, reason)
-        });
-        let res = term.unwrap_or_else(|| self.fresh_id());
-        schema_math.write_table_row(
-            &mut extended_row,
-            RowVals {
-                timestamp: self.next_ts().to_value(),
-                ret_val: Some(res),
-                proof: term,
-                subsume: schema_math.subsume.then_some(NOT_SUBSUMED),
-            },
-        );
-        extended_row[schema_math.ret_val_col()] = res;
-        let table_id = self.funcs[func].table;
-        self.db.new_buffer(table_id).stage_insert(&extended_row);
-        self.flush_updates();
-        self.get_canon_in_uf(res)
-    }
-
-    /// Get an id corresponding to the given term, inserting the value into the
-    /// corresponding terms table if it isn't there.
-    ///
-    /// This method is really only relevant when tracing is enabled.
-    fn get_term(&mut self, func: FunctionId, key: &[Value], reason: Value) -> Value {
-        let table_id = self.funcs[func].table;
-        let term_table_id = self.term_table(table_id);
-        let table = self.db.get_table(term_table_id);
-        let mut term_key = Vec::with_capacity(key.len() + 1);
-        term_key.push(Value::new(func.rep()));
-        term_key.extend(key);
-        if let Some(row) = table.get_row(&term_key) {
-            row.vals[row.vals.len() - 2]
-        } else {
-            let result = Value::from_usize(self.db.inc_counter(self.id_counter));
-            term_key.push(result);
-            term_key.push(reason);
-            self.db.new_buffer(term_table_id).stage_insert(&term_key);
-            self.db.merge_table(term_table_id);
-            result
-        }
-    }
-
-    /// Lookup the id associated with a function `func` and the given arguments
-    /// (`key`).
-    pub fn lookup_id(&self, func: FunctionId, key: &[Value]) -> Option<Value> {
-        let info = &self.funcs[func];
-        let schema_math = SchemaMath {
-            tracing: self.tracing,
-            subsume: info.can_subsume,
-            func_cols: info.schema.len(),
-        };
-        let table_id = info.table;
-        let table = self.db.get_table(table_id);
-        let row = table.get_row(key)?;
-        Some(row.vals[schema_math.ret_val_col()])
-    }
-
-    fn get_fiat_reason(&mut self, desc: &str) -> Value {
-        let reason = Arc::new(ProofReason::Fiat { desc: desc.into() });
-        let reason_table = self.reason_table(&reason);
-        let reason_spec_id = self.proof_specs.push(reason);
-        let reason_id = Value::from_usize(self.db.inc_counter(self.reason_counter));
-        self.db
-            .new_buffer(reason_table)
-            .stage_insert(&[Value::new(reason_spec_id.rep()), reason_id]);
-        self.db.merge_table(reason_table);
-        reason_id
-    }
-
-    /// Load the given values into the database. If tracing is enabled, the
-    /// proof rows will be tagged with "desc" as their proof.
-    ///
-    /// # Panics
-    /// This method panics if the values do not match the arity of the function.
-    ///
-    /// NB: this is not an efficient interface for bulk loading. We should add
-    /// one that allows us to pass through a series of RowBuffers before
-    /// incrementing the timestamp.
-    pub fn add_values_with_desc(
-        &mut self,
-        desc: &str,
-        values: impl IntoIterator<Item = (FunctionId, Vec<Value>)>,
-    ) {
         let mut extended_row = Vec::<Value>::new();
-        let reason_id = self.tracing.then(|| self.get_fiat_reason(desc));
         let mut bufs = DenseIdMap::default();
         for (func, row) in values.into_iter() {
             let table_info = &self.funcs[func];
             let schema_math = SchemaMath {
-                tracing: self.tracing,
                 subsume: table_info.can_subsume,
                 func_cols: table_info.schema.len(),
             };
             let table_id = table_info.table;
-            let term_id = reason_id.map(|reason| {
-                // Get the term id itself
-                let term_id = self.get_term(func, &row[0..schema_math.num_keys()], reason);
-                let buf = bufs.get_or_insert(self.uf_table, || self.db.new_buffer(self.uf_table));
-                // Then union it with the value being set for this term.
-                buf.stage_insert(&[
-                    *row.last().unwrap(),
-                    term_id,
-                    self.next_ts().to_value(),
-                    reason,
-                ]);
-                term_id
-            });
             extended_row.extend_from_slice(&row);
             schema_math.write_table_row(
                 &mut extended_row,
                 RowVals {
                     timestamp: self.next_ts().to_value(),
-                    proof: term_id,
                     subsume: schema_math.subsume.then_some(NOT_SUBSUMED),
                     ret_val: None, // already filled in.
                 },
@@ -555,62 +262,55 @@ impl EGraph {
         self.flush_updates();
     }
 
+    /// A term-oriented means of adding data to the database: hand back a "term
+    /// id" for the given function and keys for the function.
+    ///
+    /// # Panics
+    /// This method panics if the values do not match the arity of the function.
+    pub fn add_term(&mut self, func: FunctionId, inputs: &[Value]) -> Value {
+        let info = &self.funcs[func];
+        let schema_math = SchemaMath {
+            subsume: info.can_subsume,
+            func_cols: info.schema.len(),
+        };
+        let mut extended_row = Vec::new();
+        extended_row.extend_from_slice(inputs);
+        let res = self.fresh_id();
+        schema_math.write_table_row(
+            &mut extended_row,
+            RowVals {
+                timestamp: self.next_ts().to_value(),
+                ret_val: Some(res),
+                subsume: schema_math.subsume.then_some(NOT_SUBSUMED),
+            },
+        );
+        extended_row[schema_math.ret_val_col()] = res;
+        let table_id = self.funcs[func].table;
+        self.db.new_buffer(table_id).stage_insert(&extended_row);
+        self.flush_updates();
+        self.get_canon_in_uf(res)
+    }
+
+    /// Lookup the id associated with a function `func` and the given arguments
+    /// (`key`).
+    pub fn lookup_id(&self, func: FunctionId, key: &[Value]) -> Option<Value> {
+        let info = &self.funcs[func];
+        let schema_math = SchemaMath {
+            subsume: info.can_subsume,
+            func_cols: info.schema.len(),
+        };
+        let table_id = info.table;
+        let table = self.db.get_table(table_id);
+        let row = table.get_row(key)?;
+        Some(row.vals[schema_math.ret_val_col()])
+    }
+
     pub fn approx_table_size(&self, table: FunctionId) -> usize {
         self.db.estimate_size(self.funcs[table].table, None)
     }
 
     pub fn table_size(&self, table: FunctionId) -> usize {
         self.db.get_table(self.funcs[table].table).len()
-    }
-
-    /// Generate a proof explaining why a given term is in the database.
-    ///
-    /// # Errors
-    /// This method will return an error if tracing is not enabled, or if the row is not in the database.
-    ///
-    /// # Panics
-    /// This method may panic if `key` does not match the arity of the function,
-    /// or is otherwise malformed.
-    pub fn explain_term(&mut self, id: Value, store: &mut ProofStore) -> Result<TermProofId> {
-        if !self.tracing {
-            return Err(ProofReconstructionError::TracingNotEnabled.into());
-        }
-        let mut state = ProofReconstructionState::new(store);
-        Ok(self.explain_term_inner(id, &mut state))
-    }
-
-    /// Generate a proof explaining why the term corresponding to `id1`
-    /// is equal to that corresponding to `id2`.
-    ///
-    /// # Errors
-    /// This method will return an error if tracing is not enabled, if the row
-    /// is not in the database, or if the terms themselves are not equal.
-    pub fn explain_terms_equal(
-        &mut self,
-        id1: Value,
-        id2: Value,
-        store: &mut ProofStore,
-    ) -> Result<EqProofId> {
-        if !self.tracing {
-            return Err(ProofReconstructionError::TracingNotEnabled.into());
-        }
-        let mut state = ProofReconstructionState::new(store);
-        if self.get_canon_in_uf(id1) != self.get_canon_in_uf(id2) {
-            // These terms aren't equal. Reconstruct the relevant terms so as to
-            // get a nicer error message on the way out.
-            let mut buf = Vec::<u8>::new();
-            let term_id_1 = self.reconstruct_term(id1, ColumnTy::Id, &mut state);
-            let term_id_2 = self.reconstruct_term(id2, ColumnTy::Id, &mut state);
-            store.termdag.print_term(term_id_1, &mut buf).unwrap();
-            let term1 = String::from_utf8(buf).unwrap();
-            let mut buf = Vec::<u8>::new();
-            store.termdag.print_term(term_id_2, &mut buf).unwrap();
-            let term2 = String::from_utf8(buf).unwrap();
-            return Err(
-                ProofReconstructionError::EqualityExplanationOfUnequalTerms { term1, term2 }.into(),
-            );
-        }
-        Ok(self.explain_terms_equal_inner(id1, id2, &mut state))
     }
 
     /// Read the contents of the given function.
@@ -629,7 +329,6 @@ impl EGraph {
         let info = &self.funcs[table];
         let table = self.funcs[table].table;
         let schema_math = SchemaMath {
-            tracing: self.tracing,
             subsume: info.can_subsume,
             func_cols: info.schema.len(),
         };
@@ -678,26 +377,6 @@ impl EGraph {
                 )
             });
         }
-
-        info!("=== Term Tables ===");
-        for (_, table_id) in &self.term_tables {
-            let table = self.db.get_table(*table_id);
-            self.scan_table(table, |row| {
-                let name = &self.funcs[FunctionId::new(row[0].rep())].name;
-                let row = &row[1..];
-                info!("Term Table {table_id:?}: {name}, {row:?}")
-            });
-        }
-
-        info!("=== Reason Tables ===");
-        for (_, table_id) in &self.reason_tables {
-            let table = self.db.get_table(*table_id);
-            self.scan_table(table, |row| {
-                let spec = self.proof_specs[ReasonSpecId::new(row[0].rep())].as_ref();
-                let row = &row[1..];
-                info!("Reason Table {table_id:?}: {spec:?}, {row:?}")
-            });
-        }
     }
 
     /// A helper for scanning the entries in a table.
@@ -734,7 +413,6 @@ impl EGraph {
             .map(|(i, _)| ColumnId::from_usize(i))
             .collect();
         let schema_math = SchemaMath {
-            tracing: self.tracing,
             subsume: can_subsume,
             func_cols: schema.len(),
         };
@@ -1230,10 +908,10 @@ impl MergeFn {
                 args.iter()
                     .for_each(|arg| arg.fill_deps(egraph, read_deps, write_deps));
             }
-            UnionId if !egraph.tracing => {
+            UnionId => {
                 write_deps.insert(egraph.uf_table);
             }
-            UnionId | AssertEq | Old | New | Const(..) => {}
+            AssertEq | Old | New | Const(..) => {}
         }
     }
 
@@ -1243,11 +921,6 @@ impl MergeFn {
         function_name: &str,
         egraph: &mut EGraph,
     ) -> Box<core_relations::MergeFn> {
-        assert!(
-            !egraph.tracing || matches!(self, MergeFn::UnionId),
-            "proofs aren't supported for non-union merge functions"
-        );
-
         let resolved = self.resolve(function_name, egraph);
 
         Box::new(move |state, cur, new, out| {
@@ -1270,21 +943,12 @@ impl MergeFn {
                 changed |= cur != out;
                 out
             });
-            let mut proof = None;
-            if schema_math.tracing {
-                let old_term = cur[schema_math.proof_id_col()];
-                let new_term = new[schema_math.proof_id_col()];
-                proof = Some(cmp::min(old_term, new_term));
-                changed |= new_term < old_term;
-            }
-
             if changed {
                 out.extend_from_slice(new);
                 schema_math.write_table_row(
                     out,
                     RowVals {
                         timestamp,
-                        proof,
                         subsume,
                         ret_val: Some(ret_val),
                     },
@@ -1307,7 +971,6 @@ impl MergeFn {
             },
             MergeFn::UnionId => ResolvedMergeFn::UnionId {
                 uf_table: egraph.uf_table,
-                tracing: egraph.tracing,
             },
             // NB: The primitive and function-based merge functions heap allocate a single callback
             // for each layer of nesting. This introduces a bit of overhead, particularly for cases
@@ -1360,7 +1023,6 @@ enum ResolvedMergeFn {
     },
     UnionId {
         uf_table: TableId,
-        tracing: bool,
     },
     Primitive {
         prim: ExternalFunctionId,
@@ -1387,10 +1049,8 @@ impl ResolvedMergeFn {
                 }
                 cur
             }
-            ResolvedMergeFn::UnionId { uf_table, tracing } => {
-                if cur != new && !tracing {
-                    // When proofs are enabled, these are the same term. They are already
-                    // equal and we can just do nothing.
+            ResolvedMergeFn::UnionId { uf_table } => {
+                if cur != new {
                     state.stage_insert(*uf_table, &[cur, new, ts]);
                     // We pick the minimum when unioning. This matches the original egglog
                     // behavior. THIS MUST MATCH THE UNION-FIND IMPLEMENTATION!
@@ -1467,15 +1127,12 @@ impl TableAction {
     /// Create a new `TableAction` to be used later.
     /// This requires access to the `egglog_bridge::EGraph`.
     pub fn new(egraph: &EGraph, func: FunctionId) -> TableAction {
-        assert!(!egraph.tracing, "proofs not supported yet");
-
         let func_info = &egraph.funcs[func];
         TableAction {
             table: func_info.table,
             table_math: SchemaMath {
                 func_cols: func_info.schema.len(),
                 subsume: func_info.can_subsume,
-                tracing: egraph.tracing,
             },
             default: match &func_info.default_val {
                 DefaultVal::FreshId => Some(MergeVal::Counter(egraph.id_counter)),
@@ -1504,7 +1161,6 @@ impl TableAction {
                     &mut merge_vals,
                     RowVals {
                         timestamp,
-                        proof: None,
                         subsume: self
                             .table_math
                             .subsume
@@ -1533,7 +1189,6 @@ impl TableAction {
             &mut self.scratch,
             RowVals {
                 timestamp: ts,
-                proof: None,
                 subsume: self.table_math.subsume.then_some(NOT_SUBSUMED),
                 ret_val: None,
             },
@@ -1560,7 +1215,6 @@ impl TableAction {
             &mut self.scratch,
             RowVals {
                 timestamp: ts,
-                proof: None,
                 subsume: Some(SUBSUMED),
                 ret_val: Some(ret_val),
             },
@@ -1580,7 +1234,6 @@ impl UnionAction {
     /// Create a new `UnionAction` to be used later.
     /// This requires access to the `egglog_bridge::EGraph`.
     pub fn new(egraph: &EGraph) -> UnionAction {
-        assert!(!egraph.tracing, "proofs not supported yet");
         UnionAction {
             table: egraph.uf_table,
             timestamp: egraph.timestamp_counter,
@@ -1642,18 +1295,6 @@ pub type SideChannel<T> = Arc<Mutex<Option<T>>>;
 // TODO: once we have parallelism wired in, we'll want to replace this with a
 // more efficient solution (e.g. one based on crossbeam or arcswap).
 #[derive(Clone)]
-struct GetFirstMatch(SideChannel<Vec<Value>>);
-
-impl ExternalFunction for GetFirstMatch {
-    fn invoke(&self, _: &mut core_relations::ExecutionState, args: &[Value]) -> Option<Value> {
-        let mut guard = self.0.lock().unwrap();
-        if guard.is_some() {
-            return None;
-        }
-        *guard = Some(args.to_vec());
-        Some(Value::new(0))
-    }
-}
 
 /// This is a variant on [`Panic`] that avoids eager construction of the panic message.
 ///
@@ -1728,16 +1369,6 @@ impl ExternalFunction for Panic {
     }
 }
 
-#[derive(Error, Debug)]
-enum ProofReconstructionError {
-    #[error(
-        "attempting to explain a row without tracing enabled. Try constructing with `EGraph::with_tracing`"
-    )]
-    TracingNotEnabled,
-    #[error("attempting to construct a proof that {term1} = {term2}, but they are not equal")]
-    EqualityExplanationOfUnequalTerms { term1: String, term2: String },
-}
-
 /// Heuristic for deciding whether to do an incremental or nonincremental
 /// rebuild for a given table.
 fn incremental_rebuild(uf_size: usize, table_size: usize, parallel: bool) -> bool {
@@ -1760,14 +1391,12 @@ fn combine_subsumed(v1: Value, v2: Value) -> Value {
 /// Functions can have multiple "output columns" in the underlying core-relations layer depending
 /// on whether different features are enabled. Roughly, tables are laid out as:
 ///
-/// > `[key0, ..., keyn, return value, timestamp, proof_id?, subsume?]`
+/// > `[key0, ..., keyn, return value, timestamp, subsume?]`
 ///
 /// Where there are `n+1` key columns and columns marked with a question mark are optional,
 /// depending on the egraph and table-level configuration.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
 struct SchemaMath {
-    /// Whether or not proofs are enabled.
-    tracing: bool,
     /// Whether or not the table is enabled for subsumption.
     subsume: bool,
     /// The number of columns in the function (including the return value).
@@ -1781,8 +1410,6 @@ struct SchemaMath {
 struct RowVals<T> {
     /// The timestamp for the row.
     timestamp: T,
-    /// The proof id (or term id) for the row. Only relevant if tracing is enabled.
-    proof: Option<T>,
     /// The subsumption tag for the row. Only relevant if the table has subsumption enabled.
     subsume: Option<T>,
     /// The return value of the row. Return values are mandatory but callers may have already
@@ -1803,7 +1430,6 @@ impl SchemaMath {
         row: &mut impl HasResizeWith<T>,
         RowVals {
             timestamp,
-            proof,
             subsume,
             ret_val,
         }: RowVals<T>,
@@ -1812,14 +1438,6 @@ impl SchemaMath {
         row[self.ts_col()] = timestamp;
         if let Some(ret_val) = ret_val {
             row[self.ret_val_col()] = ret_val;
-        }
-        if let Some(proof_id) = proof {
-            row[self.proof_id_col()] = proof_id;
-        } else {
-            assert!(
-                !self.tracing,
-                "proof_id must be provided if tracing is enabled"
-            );
         }
         if let Some(subsume) = subsume {
             row[self.subsume_col()] = subsume;
@@ -1836,13 +1454,7 @@ impl SchemaMath {
     }
 
     fn table_columns(&self) -> usize {
-        self.func_cols + 1 /* timestamp */ + if self.tracing { 1 } else { 0 } + if self.subsume { 1 } else { 0 }
-    }
-
-    #[track_caller]
-    fn proof_id_col(&self) -> usize {
-        assert!(self.tracing);
-        self.func_cols + 1
+        self.func_cols + 1 /* timestamp */ + if self.subsume { 1 } else { 0 }
     }
 
     fn ret_val_col(&self) -> usize {
@@ -1856,11 +1468,7 @@ impl SchemaMath {
     #[track_caller]
     fn subsume_col(&self) -> usize {
         assert!(self.subsume);
-        if self.tracing {
-            self.func_cols + 2
-        } else {
-            self.func_cols + 1
-        }
+        self.func_cols + 1
     }
 }
 
