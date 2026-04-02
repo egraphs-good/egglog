@@ -534,48 +534,18 @@ fn decompose_into_bags(original_ctx: &PlanningContext) -> Vec<PlanningContext> {
     );
 
     // bags
-
-    // Remove bags that are subsumed by others
-    let mut pruned_bags: Vec<PlanningContext> = Vec::with_capacity(bags.len());
-    for bag1 in bags.into_iter() {
-        let mut should_add = true;
-        pruned_bags.retain(|bag2| {
-            let leq = bag1.vars.iter().all(|(var, _)| bag2.vars.contains_key(var));
-            let geq = bag2.vars.iter().all(|(var, _)| bag1.vars.contains_key(var));
-            if leq {
-                should_add = false;
-            }
-            // We don't need to add the atoms from one bag to another,
-            // because of the property that the subquery of a smaller bag is
-            // always a subset of the bigger bag.
-            leq || !geq
-        });
-        if should_add {
-            pruned_bags.push(bag1);
-        }
-    }
-
-    // Additionally, we try to merge "ears" with other bags, because expansion of the ears are for free
-    let mut bags = pruned_bags;
-
-    let is_ear = |bag: &PlanningContext| {
-        // A bag is an ear if it only has one atom all of whose variables are in the bag (i.e., the bag only
-        // has one useful relations)
-        bag.atoms
-            .iter()
-            .filter(|a| a.1.vars().all(|var| bag.vars.contains_key(var)))
-            .count()
-            == 1
+    let cmp = |bag1: &PlanningContext, bag2: &PlanningContext| {
+        bag1.vars.iter().all(|(var, _)| bag2.vars.contains_key(var))
     };
+
     let merge_bag = |bag1: &mut PlanningContext, bag2: &PlanningContext| {
         for (var, vinfo) in bag2.vars.iter() {
             if bag1.vars.contains_key(var) {
                 for new_occ in vinfo.occurrences.iter().cloned() {
-                    if bag1.vars[var]
+                    if !bag1.vars[var]
                         .occurrences
                         .iter()
-                        .position(|occ| occ.atom == new_occ.atom)
-                        .is_none()
+                        .any(|occ| occ.atom == new_occ.atom)
                     {
                         bag1.vars[var].occurrences.push(new_occ);
                     }
@@ -590,6 +560,34 @@ fn decompose_into_bags(original_ctx: &PlanningContext) -> Vec<PlanningContext> {
                 bag1.atoms.insert(atom_id, atom.clone());
             }
         }
+    };
+    // Remove bags that are subsumed by others
+    let mut pruned_bags: Vec<PlanningContext> = Vec::with_capacity(bags.len());
+    for mut bag1 in bags.into_iter() {
+        // let mut should_add = true;
+        pruned_bags.retain_mut(|bag2| {
+            let leq = cmp(&bag1, bag2);
+            let geq = cmp(bag2, &bag1);
+            if leq || geq {
+                merge_bag(&mut bag1, bag2);
+                false
+            } else {
+                true
+            }
+        });
+        pruned_bags.push(bag1);
+    }
+
+    // Additionally, we try to merge "ears" with other bags, because expansion of the ears are for free
+    bags = pruned_bags;
+
+    let is_ear = |bag: &PlanningContext| {
+        // A bag is an ear if it only has one atom all of whose variables are in the bag (i.e., the bag only
+        // has one useful relations)
+        bag.atoms.iter().any(|(_atom_id, atom)| {
+            let all_vars = original_ctx.fun_deps.closure(atom.vars());
+            bag.vars.iter().all(|(v, _)| all_vars.contains_key(v))
+        })
     };
     let mut i = 0;
     while i < bags.len() {
@@ -612,10 +610,11 @@ fn decompose_into_bags(original_ctx: &PlanningContext) -> Vec<PlanningContext> {
             .filter(|(_, count)| *count > 0)
             .collect::<Vec<_>>();
 
-        let Some((j, _)) = js.into_iter().max_by_key(|(_, c)| *c) else {
+        if js.len() != 1 {
             i += 1;
             continue;
-        };
+        }
+        let j = js[0].0;
 
         // Invariant: bigger-numbered bags are heavier and should stay at the root of the tree
         if i < j {
@@ -1135,9 +1134,7 @@ pub(crate) fn plan_query(query: Query) -> Plan {
         atoms,
         fun_deps: Arc::new(query.fun_deps),
     };
-    let result = tree_decompose_and_plan(ctx, query.plan_strategy, query.action);
-    // eprintln!("{:?}", result);
-    result
+    tree_decompose_and_plan(ctx, query.plan_strategy, query.action)
 }
 
 /// StageInfo is an intermediate stage used to describe the ordering of
