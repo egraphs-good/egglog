@@ -1680,9 +1680,10 @@ fn sort_plan_by_size(
     binding_info: &mut BindingInfo,
 ) {
     let mut last_pos = start;
-    for i in 0..instrs.len() {
+    for i in start..instrs.len() {
         if matches!(
             &instrs[i],
+            // These nodes don't commute
             JoinStage::FusedIntersectMat {
                 mode: MatScanMode::Lookup(_) | MatScanMode::Value(_) | MatScanMode::Full,
                 ..
@@ -1743,12 +1744,13 @@ fn sort_plan_by_size_inner(
             JoinStage::Intersect { scans, .. } => scans
                 .iter()
                 .map(|scan| times_refined.get(scan.atom).copied().unwrap_or_default())
-                .sum::<i64>(),
+                .max()
+                .unwrap(),
             JoinStage::FusedIntersect { cover, .. } => times_refined
                 .get(cover.to_index.atom)
                 .copied()
                 .unwrap_or_default(),
-            JoinStage::FusedIntersectMat { .. } => 0,
+            JoinStage::FusedIntersectMat { bind, .. } => bind.len() as _,
         };
         (
             -refine,
