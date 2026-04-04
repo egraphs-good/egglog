@@ -1492,7 +1492,7 @@ impl EGraph {
 
         let num_facts = parsed_contents.len();
 
-        let mut table_action = egglog_bridge::TableAction::new(&self.backend, func.backend_id);
+        let table_action = egglog_bridge::TableAction::new(&self.backend, func.backend_id);
 
         if function_type.subtype != FunctionSubtype::Constructor {
             self.backend.with_execution_state(|es| {

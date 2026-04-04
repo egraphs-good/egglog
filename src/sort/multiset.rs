@@ -417,7 +417,7 @@ impl Primitive for FillIndex {
             .get_val::<MultiSetContainer>(args[0])
             .unwrap()
             .clone();
-        let ResolvedFunctionId::Lookup(mut action) = fc.0 else {
+        let ResolvedFunctionId::Lookup(action) = fc.0 else {
             panic!(
                 "Primitive functions cannot be used with unstable-multiset-fill-index, since they cannot be set"
             );

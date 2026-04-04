@@ -1442,25 +1442,12 @@ impl ResolvedMergeFn {
 /// This is an intern-able struct that holds all the data needed
 /// to do table operations with an [`ExecutionState`], assuming
 /// that the [`FunctionId`] for the table is known ahead of time.
-#[derive(Debug, PartialEq, Eq, Hash)]
+#[derive(Debug, PartialEq, Eq, Hash, Clone)]
 pub struct TableAction {
     table: TableId,
     table_math: SchemaMath,
     default: Option<MergeVal>,
     timestamp: CounterId,
-    scratch: Vec<Value>,
-}
-
-impl Clone for TableAction {
-    fn clone(&self) -> Self {
-        Self {
-            table: self.table,
-            table_math: self.table_math,
-            default: self.default,
-            timestamp: self.timestamp,
-            scratch: Vec::new(),
-        }
-    }
 }
 
 impl TableAction {
@@ -1483,7 +1470,6 @@ impl TableAction {
                 DefaultVal::Const(val) => Some(MergeVal::Constant(*val)),
             },
             timestamp: egraph.timestamp_counter,
-            scratch: Vec::new(),
         }
     }
 
@@ -1525,12 +1511,11 @@ impl TableAction {
     }
 
     /// Insert a row into this table.
-    pub fn insert(&mut self, state: &mut ExecutionState, row: impl Iterator<Item = Value>) {
+    pub fn insert(&self, state: &mut ExecutionState, row: impl Iterator<Item = Value>) {
         let ts = Value::from_usize(state.read_counter(self.timestamp));
-        self.scratch.clear();
-        self.scratch.extend(row);
+        let mut scratch = row.collect::<Vec<_>>();
         self.table_math.write_table_row(
-            &mut self.scratch,
+            &mut scratch,
             RowVals {
                 timestamp: ts,
                 proof: None,
@@ -1538,7 +1523,7 @@ impl TableAction {
                 ret_val: None,
             },
         );
-        state.stage_insert(self.table, &self.scratch);
+        state.stage_insert(self.table, &scratch);
     }
 
     /// Delete a row from this table.
@@ -1547,17 +1532,14 @@ impl TableAction {
     }
 
     /// Subsume a row in this table.
-    pub fn subsume(&mut self, state: &mut ExecutionState, key: impl Iterator<Item = Value>) {
+    pub fn subsume(&self, state: &mut ExecutionState, key: impl Iterator<Item = Value>) {
         let ts = Value::from_usize(state.read_counter(self.timestamp));
-        self.scratch.clear();
-        self.scratch.extend(key);
+        let mut scratch = key.collect::<Vec<_>>();
 
-        let ret_val = self
-            .lookup(state, &self.scratch)
-            .expect("subsume lookup failed");
+        let ret_val = self.lookup(state, &scratch).expect("subsume lookup failed");
 
         self.table_math.write_table_row(
-            &mut self.scratch,
+            &mut scratch,
             RowVals {
                 timestamp: ts,
                 proof: None,
@@ -1565,7 +1547,7 @@ impl TableAction {
                 ret_val: Some(ret_val),
             },
         );
-        state.stage_insert(self.table, &self.scratch);
+        state.stage_insert(self.table, &scratch);
     }
 }
 

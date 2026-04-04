@@ -105,7 +105,7 @@ impl Matches {
     fn instantiate(
         mut self,
         state: &mut ExecutionState<'_>,
-        mut table_action: TableAction,
+        table_action: TableAction,
     ) -> Vec<Value> {
         let tuple_len = self.tuple_len();
         let unit = state.base_values().get(());
