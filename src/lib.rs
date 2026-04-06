@@ -476,13 +476,13 @@ impl EGraph {
 
     /// Set the number of threads used for parallel operations.
     ///
-    /// This configures the global rayon thread pool. It can only be called
+    /// This is a helper that simply configures the global rayon thread pool. It can only be called
     /// once per process; subsequent calls will be ignored.
     ///
     /// # Panics
     ///
     /// Panics on wasm if `num_threads > 1`.
-    pub fn with_num_threads(self, num_threads: usize) -> Self {
+    pub fn set_num_threads(num_threads: usize) {
         #[cfg(target_family = "wasm")]
         if num_threads > 1 {
             panic!("cannot use more than 1 thread on wasm");
@@ -490,11 +490,14 @@ impl EGraph {
         #[cfg(not(target_family = "wasm"))]
         {
             // This will fail silently if the global pool has already been configured.
-            let _ = rayon::ThreadPoolBuilder::new()
+            let err = rayon::ThreadPoolBuilder::new()
                 .num_threads(num_threads)
                 .build_global();
+            // print log if successful
+            if matches!(err, Ok(())) {
+                log::info!("Initialize global thread pool with  {num_threads} threads");
+            }
         }
-        self
     }
 
     /// Return the number of threads in the rayon thread pool.
