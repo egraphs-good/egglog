@@ -419,7 +419,7 @@ fn math_test(mut egraph: EGraph, can_subsume: bool) {
     // Print out some debugging info. This gets hidden by default for passing tests.
     debug!("diff_size={:?} vs. 338", egraph.table_size(diff));
     debug!("integral_size={:?} vs. 782 ", egraph.table_size(integral));
-    debug!("sub_size={:?} vs 438", egraph.table_size(sub));
+    debug!("sub_size={:?} vs 483", egraph.table_size(sub));
     debug!("div_size={:?} vs. 3", egraph.table_size(div));
     debug!("pow_size={:?} vs 2", egraph.table_size(pow));
     debug!("ln_size={:?} vs 1", egraph.table_size(ln));
