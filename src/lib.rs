@@ -479,6 +479,41 @@ impl EGraph {
         self
     }
 
+    /// Set the number of threads used for parallel operations.
+    ///
+    /// This is a helper that simply configures the global rayon thread pool. It can only be called
+    /// once per process; subsequent calls will be ignored.
+    ///
+    /// # Panics
+    ///
+    /// Panics on wasm if `num_threads > 1`.
+    pub fn set_num_threads(num_threads: usize) {
+        #[cfg(target_family = "wasm")]
+        if num_threads > 1 {
+            panic!("cannot use more than 1 thread on wasm");
+        }
+        #[cfg(not(target_family = "wasm"))]
+        {
+            // This will fail silently if the global pool has already been configured.
+            let err = rayon::ThreadPoolBuilder::new()
+                .num_threads(num_threads)
+                .build_global();
+            // print log if successful
+            if matches!(err, Ok(())) {
+                log::info!("Initialize global thread pool with  {num_threads} threads");
+            } else {
+                log::warn!(
+                    "Failed to initialize global thread pool with {num_threads} threads. This may be because the thread pool was already initialized with a different number of threads. Error: {err:?}"
+                );
+            }
+        }
+    }
+
+    /// Return the number of threads in the rayon thread pool.
+    pub fn num_threads(&self) -> usize {
+        rayon::current_num_threads()
+    }
+
     /// Add a user-defined command to the e-graph
     /// Get the type information for this e-graph
     pub fn type_info(&mut self) -> &mut TypeInfo {
@@ -1689,7 +1724,6 @@ impl EGraph {
     ) -> Result<Vec<ResolvedCommand>, Error> {
         let parsed = self.parser.get_program_from_string(filename, input)?;
         let res = self.process_program_internal(parsed, false)?;
-
         Ok(res.resolved.into_iter().map(|c| c.to_command()).collect())
     }
 
