@@ -496,6 +496,10 @@ impl EGraph {
             // print log if successful
             if matches!(err, Ok(())) {
                 log::info!("Initialize global thread pool with  {num_threads} threads");
+            } else {
+                log::warn!(
+                    "Failed to initialize global thread pool with {num_threads} threads. This may be because the thread pool was already initialized with a different number of threads. Error: {err:?}"
+                );
             }
         }
     }
