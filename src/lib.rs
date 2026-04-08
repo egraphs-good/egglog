@@ -435,6 +435,50 @@ struct ResolvedNCommandsWithOutput {
 pub struct NotFoundError(String);
 
 impl EGraph {
+    pub fn backend(&self) -> &egglog_bridge::EGraph {
+        &self.backend
+    }
+
+    pub fn names(&self) -> &check_shadowing::Names {
+        &self.names
+    }
+
+    pub fn pushed_egraph(&self) -> &Option<Box<Self>> {
+        &self.pushed_egraph
+    }
+
+    pub fn functions(&self) -> &IndexMap<String, Function> {
+        &self.functions
+    }
+
+    pub fn rulesets(&self) -> &IndexMap<String, Ruleset> {
+        &self.rulesets
+    }
+
+    pub fn overall_run_report(&self) -> &RunReport {
+        &self.overall_run_report
+    }
+
+    pub fn schedulers(&self) -> &DenseIdMap<SchedulerId, SchedulerRecord> {
+        &self.schedulers
+    }
+
+    pub fn commands(&self) -> &IndexMap<String, Arc<dyn UserDefinedCommand>> {
+        &self.commands
+    }
+
+    pub fn warned_about_global_prefix(&self) -> bool {
+        self.warned_about_global_prefix.clone()
+    }
+
+    pub fn proof_state(&self) -> &EncodingState {
+        &self.proof_state
+    }
+
+    pub fn proof_check_program(&self) -> &Vec<ResolvedNCommand> {
+        &self.proof_check_program
+    }
+
     /// Create a new e-graph with the term-encoding pipeline enabled.
     ///
     /// In term-encoding mode the e-graph eagerly instruments every constructor
