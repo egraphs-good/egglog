@@ -1,0 +1,18 @@
+;; This test verifies that check fails when constructor terms are not in the e-graph.
+;; The `check` command runs a query against existing e-graph state, so constructor
+;; terms (eqsort terms) must already be present for a check to succeed.
+
+(datatype Math)
+(constructor Num (i64) Math)
+
+;; This check fails because (Num 6) is not in the e-graph yet
+(fail (check (= (Num 6) (Num 6))))
+
+;; Introduce (Num 6) into the e-graph using let
+(let x (Num 6))
+
+;; Now this succeeds because (Num 6) is in the e-graph
+(check (= x (Num 6)))
+
+;; This still fails because (Num 7) is not in the e-graph
+(fail (check (= (Num 7) (Num 7))))
