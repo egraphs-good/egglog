@@ -14,5 +14,9 @@
 ;; Now this succeeds because (Num 6) is in the e-graph
 (check (= x (Num 6)))
 
+;; Two variable references to the same constructor term are also equal
+(let y (Num 6))
+(check (= x y))
+
 ;; This still fails because (Num 7) is not in the e-graph
 (fail (check (= (Num 7) (Num 7))))
