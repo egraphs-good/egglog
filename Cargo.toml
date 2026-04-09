@@ -8,7 +8,6 @@ members = [
   "numeric-id",
   "union-find",
   "src/sort/add_primitive",
-  "wasm-example"
 ]
 
 [workspace.package]
@@ -80,20 +79,16 @@ egglog-add-primitive = { path = "src/sort/add_primitive", version = "1.0.0" }
 egglog-reports = { path = "egglog-reports", version = "1.0.0" }
 egglog = { path = ".", default-features = false, version = "1.0.0" }
 
-######################
-# wasm
-######################
-wasm-bindgen = "0.2"
-
 [package]
-name = "egglog"
-version = { workspace = true }
-edition = { workspace = true }
-description = { workspace = true }
-repository = { workspace = true }
-keywords = { workspace = true }
-license = { workspace = true }
-readme = { workspace = true }
+name = "poach"
+version = "0.0.1"
+edition = "2024"
+description = "Persisting eqsat results"
+repository = "https://github.com/ajpal/poach.git"
+keywords = ["e-graphs", "persistence"]
+license = "MIT"
+readme = "README.md"
+
 
 [[bench]]
 name = "ci_benchmarking"
@@ -109,7 +104,7 @@ harness = false
 required-features = ["bin"]
 
 [[bin]]
-name = "egglog"
+name = "poach"
 path = "src/main.rs"
 required-features = ["bin"]
 

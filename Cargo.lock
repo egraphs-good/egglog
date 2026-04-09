@@ -484,41 +484,6 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "d0881ea181b1df73ff77ffaaf9c7544ecc11e82fba9b5f27b262a3c73a332555"
 
 [[package]]
-name = "egglog"
-version = "1.0.0"
-dependencies = [
- "chrono",
- "clap",
- "codspeed-divan-compat",
- "csv",
- "dyn-clone",
- "egglog-add-primitive",
- "egglog-ast",
- "egglog-bridge",
- "egglog-core-relations",
- "egglog-numeric-id",
- "egglog-reports",
- "egraph-serialize",
- "env_logger",
- "glob",
- "hashbrown 0.16.0",
- "im-rc",
- "indexmap",
- "insta",
- "libtest-mimic",
- "log",
- "mimalloc",
- "num",
- "ordered-float",
- "rayon",
- "rustc-hash",
- "serde_json",
- "testing_logger",
- "thiserror",
- "web-time",
-]
-
-[[package]]
 name = "egglog-add-primitive"
 version = "1.0.0"
 dependencies = [
@@ -631,15 +596,6 @@ dependencies = [
  "egglog-numeric-id",
  "rand 0.9.2",
  "rayon",
-]
-
-[[package]]
-name = "egglog-wasm-example"
-version = "0.0.0"
-dependencies = [
- "egglog",
- "getrandom",
- "wasm-bindgen",
 ]
 
 [[package]]
@@ -760,11 +716,9 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "26145e563e54f2cadc477553f1ec5ee650b00862f0a58bcd12cbdc5f0ea2d2f4"
 dependencies = [
  "cfg-if",
- "js-sys",
  "libc",
  "r-efi",
  "wasi",
- "wasm-bindgen",
 ]
 
 [[package]]
@@ -1216,6 +1170,41 @@ dependencies = [
  "hashbrown 0.15.5",
  "indexmap",
  "serde",
+]
+
+[[package]]
+name = "poach"
+version = "0.0.1"
+dependencies = [
+ "chrono",
+ "clap",
+ "codspeed-divan-compat",
+ "csv",
+ "dyn-clone",
+ "egglog-add-primitive",
+ "egglog-ast",
+ "egglog-bridge",
+ "egglog-core-relations",
+ "egglog-numeric-id",
+ "egglog-reports",
+ "egraph-serialize",
+ "env_logger",
+ "glob",
+ "hashbrown 0.16.0",
+ "im-rc",
+ "indexmap",
+ "insta",
+ "libtest-mimic",
+ "log",
+ "mimalloc",
+ "num",
+ "ordered-float",
+ "rayon",
+ "rustc-hash",
+ "serde_json",
+ "testing_logger",
+ "thiserror",
+ "web-time",
 ]
 
 [[package]]
