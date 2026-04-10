@@ -12,6 +12,9 @@
 //! those bindings in recursive calls. When parallelism is enabled, this data-structure allows us
 //! hand over an entire batch of recursive calls to a separate thread to process independently.
 
+use std::sync::Arc;
+
+use crate::free_join::execute::TrieNode;
 use crate::numeric_id::{DenseIdMap, define_id};
 
 use crate::{Subset, Value};
@@ -23,14 +26,14 @@ define_id!(pub SubsetId, u32, "An offset into a buffer of subsets");
 #[derive(Debug)]
 pub(super) enum UpdateCell {
     PushBinding(Variable, Value),
-    RefineAtom(AtomId, SubsetId),
+    RefineAtom(AtomId, Arc<TrieNode>),
     EndFrame,
 }
 
 #[derive(Debug)]
 pub(super) enum UpdateInstr {
     PushBinding(Variable, Value),
-    RefineAtom(AtomId, Subset),
+    RefineAtom(AtomId, Arc<TrieNode>),
     /// Marks the end of the current frame. Time to make a recursive call.
     EndFrame,
 }
@@ -60,9 +63,8 @@ impl FrameUpdates {
     }
 
     /// Refine `atom` to consider only the given `subset` in the current frame.
-    pub(super) fn refine_atom(&mut self, atom: AtomId, subset: Subset) {
-        let subset = self.subsets.push(subset);
-        self.updates.push(UpdateCell::RefineAtom(atom, subset));
+    pub(super) fn refine_atom(&mut self, atom: AtomId, node: Arc<TrieNode>) {
+        self.updates.push(UpdateCell::RefineAtom(atom, node));
     }
 
     /// Roll back the updates to the last frame start. Note that repeated calls
@@ -94,9 +96,7 @@ impl FrameUpdates {
             .drain(start..)
             .map(|cell| match cell {
                 UpdateCell::PushBinding(var, val) => UpdateInstr::PushBinding(var, val),
-                UpdateCell::RefineAtom(atom, subset) => {
-                    UpdateInstr::RefineAtom(atom, self.subsets.take(subset).unwrap())
-                }
+                UpdateCell::RefineAtom(atom, subset) => UpdateInstr::RefineAtom(atom, subset),
                 UpdateCell::EndFrame => UpdateInstr::EndFrame,
             })
             .for_each(f);
