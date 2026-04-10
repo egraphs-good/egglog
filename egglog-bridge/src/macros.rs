@@ -1,9 +1,8 @@
 use hashbrown::HashMap;
 
 use crate::{
-    ColumnTy, FunctionId, QueryEntry, RuleBuilder, SourceExpr, SourceSyntax,
+    ColumnTy, FunctionId, QueryEntry, RuleBuilder,
     rule::{Variable, VariableId},
-    syntax::SyntaxId,
 };
 
 #[macro_export]
@@ -79,17 +78,6 @@ macro_rules! parse_rhs_command {
 macro_rules! parse_lhs_atom_args {
     ($ebuilder:expr, $builder:expr, $table:ident, $v:expr, []) => {};
     ($ebuilder:expr, $builder:expr, $table:ident, $v:expr, [{ $e:expr } $( $args:tt)*]) => {
-        $ebuilder.syntax_mapping.insert(
-            $e.clone(),
-            $ebuilder.syntax.add_expr(match $e {
-                $crate::QueryEntry::Var {..} => {
-                    panic!("unsupported syntax (variable in braces)");
-                },
-                $crate::QueryEntry::Const { val, ty} => {
-                    $crate::SourceExpr::Const { val, ty }
-                }
-            }
-            ));
         $v.push($e);
         $crate::parse_lhs_atom_args!($ebuilder, $builder, $table, $v, [$($args),*]);
     };
@@ -120,16 +108,7 @@ macro_rules! parse_lhs_atom {
         let ty = $ebuilder.infer_type($func.into(), vec.len(), &$builder);
         let res = $builder.new_var_named(ty, stringify!($func ($($args)*)));
         vec.push(res.clone());
-        let atom= $builder.query_table($func.into(), &vec, Some(false)).unwrap();
-        let expr = $crate::SourceExpr::FunctionCall {
-            func: $func, atom, args: vec[0..vec.len() - 1].iter().map(|entry| {
-                $ebuilder.syntax_mapping.get(entry).copied().unwrap_or_else(|| {
-                    panic!("No syntax mapping found for entry: {:?}", entry)
-                })
-            }).collect(),
-        };
-        let syntax_id = $ebuilder.syntax.add_expr(expr);
-        $ebuilder.syntax_mapping.insert(res.clone(), syntax_id);
+        $builder.query_table($func.into(), &vec, Some(false)).unwrap();
 
         res
     }};
@@ -144,17 +123,7 @@ macro_rules! parse_lhs_atom_with_ret {
             let mut vec = Vec::<$crate::QueryEntry>::new();
             $crate::parse_lhs_atom_args!($ebuilder, $builder, $func, vec, [$($args)*]);
             vec.push($ret.into());
-            let atom = $builder.query_table($func.into(), &vec, Some(false)).unwrap();
-            let expr = $crate::SourceExpr::FunctionCall {
-                func: $func, atom, args: vec[0..vec.len() - 1].iter().map(|entry| {
-                    $ebuilder.syntax_mapping.get(entry).copied().unwrap_or_else(|| {
-                        panic!("No syntax mapping found for entry: {:?}", entry)
-                    })
-                }).collect(),
-            };
-            let syntax_id = $ebuilder.syntax.add_expr(expr);
-            $ebuilder.syntax.add_toplevel_expr($crate::TopLevelLhsExpr::Exists(syntax_id));
-
+            $builder.query_table($func.into(), &vec, Some(false)).unwrap();
         }
     }};
 }
@@ -179,7 +148,7 @@ macro_rules! define_rule {
         let mut builder = $egraph.new_rule(stringify!(($($lhs)* => $($rhs)*)), true);
         $crate::parse_lhs!(ebuilder, builder, [ $($lhs)* ]);
         $crate::parse_rhs_command!(ebuilder, builder, [ $($rhs)* ]);
-        builder.build_with_syntax(ebuilder.syntax)
+        builder.build()
     }};
 }
 
@@ -191,7 +160,7 @@ macro_rules! add_expression_impl {
         let inner = [
             $($crate::add_expression_impl!([ $egraph ] $args),)*
         ];
-        $egraph.add_term($func, &inner, stringify!($func ($($args)*)))
+        $egraph.add_term($func, &inner)
     }};
 }
 
@@ -210,8 +179,6 @@ macro_rules! add_expressions {
 #[derive(Default)]
 pub struct ExpressionBuilder {
     vars: HashMap<&'static str, QueryEntry>,
-    pub syntax_mapping: HashMap<QueryEntry, SyntaxId>,
-    pub syntax: SourceSyntax,
 }
 
 impl ExpressionBuilder {
@@ -238,15 +205,6 @@ impl ExpressionBuilder {
         }
         let var = builder.new_var_named(ty, name);
         self.vars.insert(name, var.clone());
-        self.syntax_mapping.insert(
-            var.clone(),
-            self.syntax.add_expr(SourceExpr::Var {
-                id: var.var().id,
-                ty,
-                name: name.into(),
-            }),
-        );
-
         var
     }
     pub fn lookup_var(&mut self, name: &'static str) -> Option<QueryEntry> {
@@ -266,14 +224,6 @@ impl ExpressionBuilder {
         let ty = self.infer_type(func, col, rb);
         let var = rb.new_var_named(ty, name);
         self.vars.insert(name, var.clone());
-        self.syntax_mapping.insert(
-            var.clone(),
-            self.syntax.add_expr(SourceExpr::Var {
-                id: var.var().id,
-                ty,
-                name: name.into(),
-            }),
-        );
         var
     }
 
