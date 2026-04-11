@@ -15,20 +15,13 @@
 use std::sync::Arc;
 
 use crate::free_join::execute::TrieNode;
-use crate::numeric_id::{DenseIdMap, define_id};
+use crate::numeric_id::define_id;
 
-use crate::{Subset, Value};
+use crate::Value;
 
 use super::{AtomId, Variable};
 
 define_id!(pub SubsetId, u32, "An offset into a buffer of subsets");
-
-#[derive(Debug)]
-pub(super) enum UpdateCell {
-    PushBinding(Variable, Value),
-    RefineAtom(AtomId, Arc<TrieNode>),
-    EndFrame,
-}
 
 #[derive(Debug)]
 pub(super) enum UpdateInstr {
@@ -41,8 +34,7 @@ pub(super) enum UpdateInstr {
 /// A flat buffer of updates that is used to prepare a sequence of recursive calls to free join.
 #[derive(Default)]
 pub(super) struct FrameUpdates {
-    subsets: DenseIdMap<SubsetId, Subset>,
-    updates: Vec<UpdateCell>,
+    updates: Vec<UpdateInstr>,
     frames: usize,
     last_start: usize,
 }
@@ -50,7 +42,6 @@ pub(super) struct FrameUpdates {
 impl FrameUpdates {
     pub(super) fn with_capacity(capacity: usize) -> FrameUpdates {
         FrameUpdates {
-            subsets: DenseIdMap::with_capacity(capacity),
             updates: Vec::with_capacity(capacity * 2),
             frames: 0,
             last_start: 0,
@@ -59,12 +50,12 @@ impl FrameUpdates {
 
     /// Bind `var` to `val` in the current frame.
     pub(super) fn push_binding(&mut self, var: Variable, val: Value) {
-        self.updates.push(UpdateCell::PushBinding(var, val));
+        self.updates.push(UpdateInstr::PushBinding(var, val));
     }
 
     /// Refine `atom` to consider only the given `subset` in the current frame.
     pub(super) fn refine_atom(&mut self, atom: AtomId, node: Arc<TrieNode>) {
-        self.updates.push(UpdateCell::RefineAtom(atom, node));
+        self.updates.push(UpdateInstr::RefineAtom(atom, node));
     }
 
     /// Roll back the updates to the last frame start. Note that repeated calls
@@ -75,7 +66,7 @@ impl FrameUpdates {
 
     /// Finish the current frame and prepare for the next one.
     pub(super) fn finish_frame(&mut self) {
-        self.updates.push(UpdateCell::EndFrame);
+        self.updates.push(UpdateInstr::EndFrame);
         self.last_start = self.updates.len();
         self.frames += 1;
     }
@@ -86,28 +77,19 @@ impl FrameUpdates {
     }
 
     pub(super) fn clear(&mut self) {
-        self.subsets.clear();
         self.updates.clear();
     }
 
     pub(super) fn drain(&mut self, f: impl FnMut(UpdateInstr)) {
         let start = 0;
-        self.updates
-            .drain(start..)
-            .map(|cell| match cell {
-                UpdateCell::PushBinding(var, val) => UpdateInstr::PushBinding(var, val),
-                UpdateCell::RefineAtom(atom, subset) => UpdateInstr::RefineAtom(atom, subset),
-                UpdateCell::EndFrame => UpdateInstr::EndFrame,
-            })
-            .for_each(f);
-        self.subsets.clear();
+        self.updates.drain(start..).for_each(f);
         self.frames = 0;
         self.last_start = 0;
     }
 
     // for debugging
     #[allow(dead_code)]
-    pub(super) fn updates(&self) -> &[UpdateCell] {
+    pub(super) fn updates(&self) -> &[UpdateInstr] {
         &self.updates
     }
 }
