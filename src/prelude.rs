@@ -419,7 +419,7 @@ struct RustRuleRhs<F: Fn(&mut RustRuleContext, &[Value]) -> Option<()>> {
     name: String,
     inputs: Vec<ArcSort>,
     union_action: egglog_bridge::UnionAction,
-    table_actions: std::sync::Arc<HashMap<String, egglog_bridge::TableAction>>,
+    table_actions: HashMap<String, egglog_bridge::TableAction>,
     panic_id: ExternalFunctionId,
     func: F,
 }
@@ -443,7 +443,7 @@ impl<F: Fn(&mut RustRuleContext, &[Value]) -> Option<()>> Primitive for RustRule
         let mut context = RustRuleContext {
             exec_state,
             union_action: self.union_action,
-            table_actions: self.table_actions.as_ref(),
+            table_actions: &self.table_actions,
             panic_id: self.panic_id,
         };
         (self.func)(&mut context, values)?;
@@ -542,18 +542,17 @@ pub fn rust_rule(
         name: prim_name.clone(),
         inputs: vars.iter().map(|(_, s)| s.clone()).collect(),
         union_action: egglog_bridge::UnionAction::new(&egraph.backend),
-        table_actions: std::sync::Arc::new(
-            egraph
-                .functions
-                .iter()
-                .map(|(k, v)| {
-                    (
-                        k.clone(),
-                        egglog_bridge::TableAction::new(&egraph.backend, v.backend_id),
-                    )
-                })
-                .collect(),
-        ),
+        table_actions: egraph
+            .functions
+            .iter()
+            .map(|(k, v)| {
+                (
+                    k.clone(),
+                    egglog_bridge::TableAction::new(&egraph.backend, v.backend_id),
+                )
+            })
+            .collect(),
+
         panic_id,
         func,
     });
