@@ -1,0 +1,1 @@
+searchState.loadedDescShard("egglog_wasm_example", 0, "")

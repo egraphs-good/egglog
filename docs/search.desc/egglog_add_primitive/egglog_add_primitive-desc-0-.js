@@ -1,0 +1,1 @@
+searchState.loadedDescShard("egglog_add_primitive", 0, "This macro lets the user declare literal primitives with …\nThis macro lets the user declare custom egglog primitives. …\nThis macro lets the user declare custom egglog primitives …")
