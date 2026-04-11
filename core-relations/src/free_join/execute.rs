@@ -941,7 +941,7 @@ impl<'a> JoinState<'a> {
                             updates.push_binding(*var, val[0]);
 
                             let node = if x.size() <= 16 {
-                                let sub = refine_subset(x.to_owned(&ps.get_pool()), &[], &table);
+                                let sub = refine_subset(x.to_owned(&ps.get_pool()), &a.cs, &table);
                                 Arc::new(TrieNode::new(sub))
                             } else {
                                 prober
