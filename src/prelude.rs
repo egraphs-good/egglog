@@ -322,7 +322,7 @@ pub fn rule(
 pub struct RustRuleContext<'a, 'b> {
     exec_state: &'a mut ExecutionState<'b>,
     union_action: egglog_bridge::UnionAction,
-    table_actions: HashMap<String, egglog_bridge::TableAction>,
+    table_actions: &'a HashMap<String, egglog_bridge::TableAction>,
     panic_id: ExternalFunctionId,
 }
 
@@ -354,14 +354,24 @@ impl RustRuleContext<'_, '_> {
             .register_val::<T>(x, self.exec_state)
     }
 
-    fn get_table_action(&self, table: &str) -> egglog_bridge::TableAction {
-        self.table_actions[table].clone()
+    fn get_table_action<'a>(
+        table_actions: &'a HashMap<String, egglog_bridge::TableAction>,
+        table: &str,
+    ) -> &'a egglog_bridge::TableAction {
+        table_actions
+            .get(table)
+            .unwrap_or_else(|| panic!("missing table action for table: {table}"))
     }
 
     /// Do a table lookup. This is potentially a mutable operation!
     /// For more information, see `egglog_bridge::TableAction::lookup`.
     pub fn lookup(&mut self, table: &str, key: &[Value]) -> Option<Value> {
-        self.get_table_action(table).lookup(self.exec_state, key)
+        let RustRuleContext {
+            exec_state,
+            table_actions,
+            ..
+        } = self;
+        Self::get_table_action(table_actions, table).lookup(exec_state, key)
     }
 
     /// Union two values in the e-graph.
@@ -373,19 +383,24 @@ impl RustRuleContext<'_, '_> {
     /// Insert a row into a table.
     /// For more information, see `egglog_bridge::TableAction::insert`.
     pub fn insert(&mut self, table: &str, row: impl Iterator<Item = Value>) {
-        self.get_table_action(table).insert(self.exec_state, row)
+        Self::get_table_action(self.table_actions, table).insert(self.exec_state, row)
     }
 
     /// Remove a row from a table.
     /// For more information, see `egglog_bridge::TableAction::remove`.
     pub fn remove(&mut self, table: &str, key: &[Value]) {
-        self.get_table_action(table).remove(self.exec_state, key)
+        let RustRuleContext {
+            exec_state,
+            table_actions,
+            ..
+        } = self;
+        Self::get_table_action(table_actions, table).remove(exec_state, key)
     }
 
     /// Subsume a row in a table.
     /// For more information, see `egglog_bridge::TableAction::subsume`.
     pub fn subsume(&mut self, table: &str, key: &[Value]) {
-        self.get_table_action(table)
+        Self::get_table_action(self.table_actions, table)
             .subsume(self.exec_state, key.iter().copied())
     }
 
@@ -428,7 +443,7 @@ impl<F: Fn(&mut RustRuleContext, &[Value]) -> Option<()>> Primitive for RustRule
         let mut context = RustRuleContext {
             exec_state,
             union_action: self.union_action,
-            table_actions: self.table_actions.clone(),
+            table_actions: &self.table_actions,
             panic_id: self.panic_id,
         };
         (self.func)(&mut context, values)?;
@@ -537,6 +552,7 @@ pub fn rust_rule(
                 )
             })
             .collect(),
+
         panic_id,
         func,
     });

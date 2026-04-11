@@ -105,7 +105,7 @@ impl Matches {
     fn instantiate(
         mut self,
         state: &mut ExecutionState<'_>,
-        mut table_action: TableAction,
+        table_action: &TableAction,
     ) -> Vec<Value> {
         let tuple_len = self.tuple_len();
         let unit = state.base_values().get(());
@@ -234,7 +234,7 @@ impl EGraph {
                         .scheduler
                         .filter_matches(rule_id, ruleset, &mut matches);
                 let table_action = TableAction::new(&self.backend, rule_info.decided);
-                *rule_info.matches.lock().unwrap() = matches.instantiate(state, table_action);
+                *rule_info.matches.lock().unwrap() = matches.instantiate(state, &table_action);
             }
         });
         self.backend.flush_updates();
