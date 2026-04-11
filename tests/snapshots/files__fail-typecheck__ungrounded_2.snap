@@ -3,4 +3,4 @@ source: tests/files.rs
 expression: err_msg
 ---
 In 1:1-25 of ungrounded-2.egg: (rule ((= 1 (+ x x))) ())
-Variable x is ungrounded
+Variable x is ungrounded. A variable is grounded when it appears as an argument to a constructor or function in the query, not just under primitives or equalities.
