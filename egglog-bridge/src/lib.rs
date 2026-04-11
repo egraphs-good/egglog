@@ -1513,7 +1513,7 @@ impl TableAction {
     /// Insert a row into this table.
     pub fn insert(&self, state: &mut ExecutionState, row: impl Iterator<Item = Value>) {
         let ts = Value::from_usize(state.read_counter(self.timestamp));
-        let mut scratch = row.collect::<Vec<_>>();
+        let mut scratch = row.collect::<SmallVec<[_; 8]>>();
         self.table_math.write_table_row(
             &mut scratch,
             RowVals {
@@ -1534,7 +1534,7 @@ impl TableAction {
     /// Subsume a row in this table.
     pub fn subsume(&self, state: &mut ExecutionState, key: impl Iterator<Item = Value>) {
         let ts = Value::from_usize(state.read_counter(self.timestamp));
-        let mut scratch = key.collect::<Vec<_>>();
+        let mut scratch = key.collect::<SmallVec<[_; 8]>>();
 
         let ret_val = self.lookup(state, &scratch).expect("subsume lookup failed");
 
