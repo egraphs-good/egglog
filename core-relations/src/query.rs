@@ -1,6 +1,6 @@
 //! APIs for building a query of a database.
 
-use std::{iter::once, sync::Arc};
+use std::{iter::once, mem, sync::Arc};
 
 use crate::numeric_id::{DenseIdMap, IdVec, NumericId, define_id};
 use smallvec::SmallVec;
@@ -444,7 +444,71 @@ impl RuleBuilder<'_, '_> {
         }
     }
 
+    fn normalize_single_external_layout(&mut self) {
+        let Some((arg_vars, dst_var)) = single_external_signature(&self.qb.instrs) else {
+            return;
+        };
+
+        let mut preferred = SmallVec::<[Variable; 4]>::new();
+        preferred.extend(arg_vars.iter().copied());
+        preferred.extend(
+            self.qb
+                .query
+                .var_info
+                .iter()
+                .map(|(var, _)| var)
+                .filter(|var| !arg_vars.contains(var)),
+        );
+
+        let current =
+            SmallVec::<[Variable; 4]>::from_iter(self.qb.query.var_info.iter().map(|(var, _)| var));
+        if preferred == current {
+            return;
+        }
+
+        let mut remap = DenseIdMap::with_capacity(self.qb.query.var_info.n_ids());
+        for (idx, old_var) in preferred.iter().enumerate() {
+            remap.insert(*old_var, Variable::from_usize(idx));
+        }
+
+        let mut old_var_info = mem::take(&mut self.qb.query.var_info);
+        for old_var in preferred {
+            self.qb.query.var_info.push(
+                old_var_info
+                    .take(old_var)
+                    .expect("all vars must be present"),
+            );
+        }
+
+        for (_, atom) in self.qb.query.atoms.iter_mut() {
+            let old_var_to_column = mem::take(&mut atom.var_to_column);
+            atom.var_to_column = old_var_to_column
+                .into_iter()
+                .map(|(var, col)| (remap[var], col))
+                .collect();
+            for (_, var) in atom.column_to_var.iter_mut() {
+                *var = remap[*var];
+            }
+        }
+
+        let [Instr::External { args, dst, .. }] = self.qb.instrs.as_mut_slice() else {
+            unreachable!("single_external_signature should guarantee the instruction shape");
+        };
+        args.iter_mut()
+            .for_each(|entry| remap_query_entry(entry, &remap));
+        *dst = remap[dst_var];
+    }
+
+    fn plan_single_external_layout(&mut self) {
+        if !matches!(self.qb.instrs.as_slice(), [Instr::External { .. }]) {
+            return;
+        }
+
+        self.normalize_single_external_layout();
+    }
+
     pub fn build_with_description(mut self, desc: impl Into<String>) -> RuleId {
+        self.plan_single_external_layout();
         let var_info = &self.qb.query.var_info;
         let symbol_map = self.build_symbol_map();
         // Generate an id for our actions and slot them in.
@@ -766,6 +830,30 @@ impl RuleBuilder<'_, '_> {
             }
         }
         Ok(())
+    }
+}
+
+fn single_external_signature(instrs: &[Instr]) -> Option<(SmallVec<[Variable; 4]>, Variable)> {
+    let [Instr::External { args, dst, .. }] = instrs else {
+        return None;
+    };
+
+    let mut vars = SmallVec::<[Variable; 4]>::new();
+    for arg in args {
+        let QueryEntry::Var(var) = arg else {
+            return None;
+        };
+        if vars.contains(var) {
+            return None;
+        }
+        vars.push(*var);
+    }
+    Some((vars, *dst))
+}
+
+fn remap_query_entry(entry: &mut QueryEntry, remap: &DenseIdMap<Variable, Variable>) {
+    if let QueryEntry::Var(var) = entry {
+        *var = remap[*var];
     }
 }
 
