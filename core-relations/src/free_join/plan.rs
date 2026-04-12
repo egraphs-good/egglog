@@ -1,3 +1,49 @@
+//! This module defines query optimization for egglog. The main entry point is `plan_query`, which takes a `Query` and produces a `Plan`.
+//!
+//! At a high level, the query planner has two phases: **(hyper)tree decomposition** and **join planning for each bag**.
+//! Both phases are very subtle, and heuristics are heavily used for good performance.
+//!
+//! # (Hyper)tree Decomposition
+//!
+//! A conjunctive query can be viewed as a hypergraph where variables are vertices and atoms (relations) are hyperedges.
+//! The idea of tree decomposition is to break this hypergraph into a tree of overlapping subqueries called *bags*,
+//! each of which is cheaper to evaluate independently. This is the classical idea behind tree decomposition and the
+//! Yannakakis algorithm.
+//!
+//! The decomposition proceeds via *variable elimination*: we iteratively pick a variable `v` and eliminate the neighborhood
+//! `N(v)` (which also includes `v`) from the hypergraph, and add back a hyperedge consisting of `N(v) - {v}`, until
+//! there are no variables left. Each elimination step gives us a bag. A min-fill heuristic
+//! (`next_var_to_eliminate`) guides the order of elimination to keep bags small. After all variables are eliminated,
+//! redundant bags are pruned: bags subsumed by another (all their variables are covered) are merged, and "ears"
+//! are merged into their parent.
+//!
+//! We then topologically sort the bags and decide which variables are "message variables" and which are private to the bag.
+//! The materialized result of each bag has its output keyed on the *message variables* it shares with
+//! its parent, and the parent uses that materialization to prune its own search space.
+//!
+//! When the query hypergraph is a single connected component with no beneficial decomposition, the planner falls back to
+//! a `SinglePlan` with no materialization steps.
+//!
+//! # Join Planning for a Single Bag
+//!
+//! Once each bag (subquery) is isolated, the planner generates a sequence of `JoinStage` instructions that enumerate
+//! all satisfying tuples for that bag. Two heuristics are supported:
+//!
+//! - **Generic Join** (`PlanStrategy::Gj`): The classic worst-case optimal join algorithm. Each stage picks one variable
+//!   and intersects the columns of atoms that correspond to this variable (`JoinStage::Intersect`).
+//!
+//! - **Free Join** (`PlanStrategy::PureSize` / `PlanStrategy::MinCover`): From Remy's paper. The planning algorithm
+//!   does the following: Each stage it selects a *cover* — a (sub)atom whose columns span the variables being bound in that step — and
+//!   uses it to probe all other atoms that share those variables (`JoinStage::FusedIntersect`). When the cover is an
+//!   entire atom and there is only one relation to probe, this degenerates to a hash join; when covers are single-column
+//!   scans it ~ recovers generic join*.
+//!
+//!   *: although this is not worst-case optimal because it does not necessarily picks the smallest side to scan.
+//!
+//! Both strategies produce a flat list of `JoinStage` instructions that are fused where possible (`JoinStage::fuse`) to
+//! reduce the number of passes over the data. A `JoinHeader` is prepended to each plan to apply constant constraints and
+//! pre-filter the driving relation before the main join loop begins.
+//!
 use std::{collections::BTreeMap, iter, mem, sync::Arc};
 
 use crate::{
@@ -572,7 +618,7 @@ fn decompose_into_bags(original_ctx: &PlanningContext) -> Vec<PlanningContext> {
         let mut pruned_bags: Vec<PlanningContext> = Vec::with_capacity(bags.len());
         for mut bag1 in bags.into_iter() {
             pruned_bags.retain_mut(|bag2| {
-                let leq = bag1.is_subsumed_by(&bag2);
+                let leq = bag1.is_subsumed_by(bag2);
                 let geq = bag2.is_subsumed_by(&bag1);
                 if leq || geq {
                     bag1.merge_bag(bag2);
