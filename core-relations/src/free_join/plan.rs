@@ -611,22 +611,16 @@ fn decompose_into_bags(original_ctx: &PlanningContext) -> Vec<PlanningContext> {
                 .iter()
                 .enumerate()
                 .rev()
-                .filter(|(j, b)| *j != i)
+                .filter(|(j, _)| *j != i)
                 .map(|(j, b)| (j, b.common_vars_with(&bags[i]).count()))
-                // .map(|(j, _)| j)
                 .collect::<Vec<_>>();
 
             let j = parent.into_iter().max_by_key(|(_, count)| *count);
-            // if !is_ear(&bags[i]) || parent.len() != 1 {
-            //     i += 1;
-            //     continue;
-            // }
             if !is_ear(&bags[i]) || j.is_none() || j.unwrap().1 == 0 {
                 i += 1;
                 continue;
             }
             let j = j.unwrap().0;
-            changed = true;
 
             // Invariant: bigger-numbered bags are heavier and should stay at the root of the tree
             if i < j {
@@ -639,11 +633,9 @@ fn decompose_into_bags(original_ctx: &PlanningContext) -> Vec<PlanningContext> {
                 bags.remove(j);
                 i += 1;
             }
+            changed = true;
         }
     }
-    // if bags.len() > 1 {
-    //     eprintln!("{:?}", bags);
-    // }
     bags
 }
 
@@ -658,33 +650,6 @@ fn topologically_sort_bags(bags: Vec<PlanningContext>) -> Vec<PlanningContext> {
     let mut visited = vec![false; bags_opt.len()];
     let mut stack: Vec<(usize, Option<usize>)> = Vec::new();
 
-    // A bag is a leaf if it only fully covers one atom, so it is essentially doing a scan (that semi-join reduces with other atoms).
-    // In this case, merging this bag with its parent bag avoids the expensive algorithm and incurs no overhead.
-    let is_leaf = |bag: &PlanningContext| {
-        let cond_a = bag
-            .atoms
-            .iter()
-            .filter(|(_, atom)| atom.vars().all(|var| bag.vars.contains_key(var)))
-            .count()
-            == 1;
-        //     ||
-        let cond_b = bag
-            .atoms
-            .iter()
-            .filter(|(_, atom)| {
-                let all_vars = bag.fun_deps.closure(atom.vars());
-                bag.vars.iter().all(|(v, _)| all_vars.contains_key(v))
-            })
-            .count()
-            >= 1;
-        // if !cond_b && cond_a {
-        //     println!("{:?}", bag);
-        //     panic!("");
-        // }
-        // cond_a || cond_b
-        cond_b
-    };
-
     // Starting from the last, since early bags are more likely to be leaves and we don't
     // want a leafy bag to be a root.
     for i in (0..bags_opt.len()).rev() {
@@ -696,45 +661,37 @@ fn topologically_sort_bags(bags: Vec<PlanningContext>) -> Vec<PlanningContext> {
 
         while let Some((bag_id, parent)) = stack.pop() {
             let bag = mem::take(&mut bags_opt[bag_id]).unwrap();
-            let mut this = bags_topo.len();
+
+            let this;
             if let Some(parent) = parent {
                 bags_topo[parent].merge_bag(&bag);
                 this = parent;
+            } else {
+                this = bags_topo.len();
             }
 
-            // let can_be_merged = parent != usize::MAX && bag.is_subsumed_by(&bags_topo[parent]);
-            let mut has_children = false;
-            // Find child bags that share variables with this bag
-            for (i, child_bag) in bags_opt
+            let mut all_children: Vec<_> = bags_opt
                 .iter()
                 .enumerate()
                 .filter_map(|(i, b)| Some((i, b.as_ref()?)))
-            {
-                if child_bag.common_vars_with(&bag).next().is_some() && !visited[i] {
-                    visited[i] = true;
-                    if has_children {
-                        stack.push((i, Some(this)));
-                    } else {
-                        stack.push((i, None))
-                    }
+                .map(|(i, b)| (i, b.common_vars_with(&bag).count()))
+                .filter(|(i, count)| *count > 0 && !visited[*i])
+                .collect();
+            all_children.sort_unstable_by_key(|(_, count)| *count);
 
-                    has_children = true;
+            if !all_children.is_empty() {
+                visited[all_children[0].0] = true;
+                stack.push((all_children[0].0, None));
+
+                for &(i, _) in all_children[1..].iter() {
+                    visited[i] = true;
+                    stack.push((i, Some(this)))
                 }
             }
 
-            // if can_be_merged {
-            //     merge_bag(&mut bags_topo[parent], &bag);
-            // } else {
-            //     bags_topo.push(bag);
-            // }
-
-            // if parent != usize::MAX && ((!has_children && is_leaf(&bag)) || can_be_merged) {
-            //     bags_topo[parent].merge_bag(&bag);
-            // } else {
             if parent.is_none() {
                 bags_topo.push(bag);
             }
-            // }
         }
     }
 
