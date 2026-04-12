@@ -283,13 +283,7 @@ fn single_external_borrowed_window(
     instrs: &[Instr],
 ) -> Option<(ExternalFunctionId, Variable, usize, Variable)> {
     match instrs {
-        [
-            Instr::External {
-                func,
-                args,
-                dst,
-            },
-        ] => {
+        [Instr::External { func, args, dst }] => {
             let mut start = None;
             for (idx, arg) in args.iter().enumerate() {
                 let QueryEntry::Var(v) = arg else {

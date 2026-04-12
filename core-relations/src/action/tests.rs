@@ -173,7 +173,10 @@ fn run_instrs_single_external_borrowed_window_executes() {
 
     let instrs = vec![super::Instr::External {
         func: sum,
-        args: vec![Variable::from_usize(0).into(), Variable::from_usize(1).into()],
+        args: vec![
+            Variable::from_usize(0).into(),
+            Variable::from_usize(1).into(),
+        ],
         dst: Variable::from_usize(2),
     }];
 

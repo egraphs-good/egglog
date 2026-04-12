@@ -130,7 +130,9 @@ fn single_external_rule_normalizes_gap_vars_into_consecutive_window() {
         iter::empty(),
         iter::empty(),
     );
-    let echo = db.add_external_function(Box::new(make_external_func(|_, args| args.first().copied())));
+    let echo = db.add_external_function(Box::new(make_external_func(|_, args| {
+        args.first().copied()
+    })));
 
     let mut rsb = RuleSetBuilder::new(&mut db);
     let mut query = rsb.new_rule();
@@ -142,7 +144,9 @@ fn single_external_rule_normalizes_gap_vars_into_consecutive_window() {
         .add_atom(tuple4, &[a.into(), b.into(), c.into(), d.into()], &[])
         .unwrap();
     let mut rule = query.build();
-    let _ = rule.call_external(echo, &[a.into(), b.into(), d.into()]).unwrap();
+    let _ = rule
+        .call_external(echo, &[a.into(), b.into(), d.into()])
+        .unwrap();
     let rule_id = rule.build_with_description("single_external_gap");
     let rule_set = rsb.build();
 
@@ -162,7 +166,11 @@ fn single_external_rule_normalizes_gap_vars_into_consecutive_window() {
 
     assert_eq!(
         vars,
-        vec![crate::free_join::Variable::from_usize(0), crate::free_join::Variable::from_usize(1), crate::free_join::Variable::from_usize(2)],
+        vec![
+            crate::free_join::Variable::from_usize(0),
+            crate::free_join::Variable::from_usize(1),
+            crate::free_join::Variable::from_usize(2)
+        ],
         "eligible single-external rules should normalize arg vars into a consecutive window",
     );
 }
