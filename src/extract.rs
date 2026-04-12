@@ -262,23 +262,23 @@ impl<C: Cost + Ord + Eq + Clone + Debug> Extractor<C> {
                         seen.insert(s.name().to_owned());
                     }
                 }
-            } else if sort.is_eq_sort() {
-                if let Some(head_symbols) = rev_index.get(sort.name()) {
-                    for h in head_symbols {
-                        if !funcs_set.contains(h) {
-                            let func = egraph.functions.get(h).unwrap();
-                            // For view tables, children are all but the last input (which is the e-class)
-                            let num_children = func.extraction_num_children();
-                            for ch in func.schema.input.iter().take(num_children) {
-                                let ch_name = ch.name();
-                                if !seen.contains(ch_name) {
-                                    q.push_back(ch.clone());
-                                    seen.insert(ch_name.to_owned());
-                                }
+            } else if sort.is_eq_sort()
+                && let Some(head_symbols) = rev_index.get(sort.name())
+            {
+                for h in head_symbols {
+                    if !funcs_set.contains(h) {
+                        let func = egraph.functions.get(h).unwrap();
+                        // For view tables, children are all but the last input (which is the e-class)
+                        let num_children = func.extraction_num_children();
+                        for ch in func.schema.input.iter().take(num_children) {
+                            let ch_name = ch.name();
+                            if !seen.contains(ch_name) {
+                                q.push_back(ch.clone());
+                                seen.insert(ch_name.to_owned());
                             }
-                            funcs_set.insert(h.clone());
-                            funcs.push(h.clone());
                         }
+                        funcs_set.insert(h.clone());
+                        funcs.push(h.clone());
                     }
                 }
             }
@@ -467,28 +467,25 @@ impl<C: Cost + Ord + Eq + Clone + Debug> Extractor<C> {
                 if !row.subsumed {
                     let target = &row.vals[output_idx];
                     if let Some(best_cost) = self.costs.get(target_sort.name()).unwrap().get(target)
-                    {
-                        if Some(best_cost.clone())
+                        && Some(best_cost.clone())
                             == self.compute_cost_hyperedge(egraph, &row, func)
-                        {
-                            // one of the possible best parent edges
-                            let target_topo_rnk = *self
-                                .topo_rnk
-                                .get(target_sort.name())
+                    {
+                        // one of the possible best parent edges
+                        let target_topo_rnk = *self
+                            .topo_rnk
+                            .get(target_sort.name())
+                            .unwrap()
+                            .get(target)
+                            .unwrap();
+                        if target_topo_rnk > self.compute_topo_rnk_hyperedge(egraph, &row, func) {
+                            // one of the parent edges that avoids cycles
+                            if let HEntry::Vacant(e) = self
+                                .parent_edge
+                                .get_mut(target_sort.name())
                                 .unwrap()
-                                .get(target)
-                                .unwrap();
-                            if target_topo_rnk > self.compute_topo_rnk_hyperedge(egraph, &row, func)
+                                .entry(*target)
                             {
-                                // one of the parent edges that avoids cycles
-                                if let HEntry::Vacant(e) = self
-                                    .parent_edge
-                                    .get_mut(target_sort.name())
-                                    .unwrap()
-                                    .entry(*target)
-                                {
-                                    e.insert((func.decl.name.clone(), row.vals.to_vec()));
-                                }
+                                e.insert((func.decl.name.clone(), row.vals.to_vec()));
                             }
                         }
                     }

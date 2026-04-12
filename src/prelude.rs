@@ -587,7 +587,7 @@ impl QueryResult {
     /// as the `vars` that were passed to `query`.
     pub fn iter(&self) -> impl Iterator<Item = &[Value]> {
         assert!(self.cols > 0, "no vars; use `any_matches` instead");
-        assert!(self.data.len() % self.cols == 0);
+        assert!(self.data.len().is_multiple_of(self.cols));
         self.data.chunks_exact(self.cols)
     }
 

@@ -19,6 +19,8 @@ eqsat-basic-multiset.egg
 extract-vec-bench.egg
 fibonacci.egg
 fusion.egg
+hardboiled_conv1d_128.egg
+hardboiled_conv1d_32.egg
 herbie-tutorial.egg
 herbie.egg
 interval.egg
