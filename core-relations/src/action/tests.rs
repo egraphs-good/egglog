@@ -1,5 +1,7 @@
 use crate::{
     action::mask::{IterResult, ValueSource},
+    free_join::Variable,
+    numeric_id::NumericId,
     pool::{PoolSet, with_pool_set},
 };
 
@@ -147,4 +149,38 @@ fn test_early_stop_multiple_clones() {
     assert!(state1.should_stop());
     assert!(state2.should_stop());
     assert!(state3.should_stop());
+}
+
+#[test]
+fn run_instrs_single_external_borrowed_window_executes() {
+    let mut db = crate::free_join::Database::default();
+    let sum = db.add_external_function(Box::new(crate::make_external_func(|_, args| {
+        let [x, y] = args else { panic!() };
+        Some(crate::common::Value::from_usize(
+            (x.rep() + y.rep()) as usize,
+        ))
+    })));
+    let mut state = crate::action::ExecutionState::new(db.read_only_view(), Default::default());
+    let mut bindings = super::Bindings::new(8);
+    bindings.insert(
+        Variable::from_usize(0),
+        &[crate::table_shortcuts::v(1), crate::table_shortcuts::v(2)],
+    );
+    bindings.insert(
+        Variable::from_usize(1),
+        &[crate::table_shortcuts::v(10), crate::table_shortcuts::v(20)],
+    );
+
+    let instrs = vec![super::Instr::External {
+        func: sum,
+        args: vec![Variable::from_usize(0).into(), Variable::from_usize(1).into()],
+        dst: Variable::from_usize(2),
+    }];
+
+    let succeeded = state.run_instrs(&instrs, &mut bindings);
+    assert_eq!(succeeded, 2);
+    assert_eq!(
+        &bindings[Variable::from_usize(2)],
+        &[crate::table_shortcuts::v(11), crate::table_shortcuts::v(22)]
+    );
 }

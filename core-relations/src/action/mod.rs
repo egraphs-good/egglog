@@ -279,6 +279,34 @@ impl Bindings {
     }
 }
 
+fn single_external_borrowed_window(
+    instrs: &[Instr],
+) -> Option<(ExternalFunctionId, Variable, usize, Variable)> {
+    match instrs {
+        [
+            Instr::External {
+                func,
+                args,
+                dst,
+            },
+        ] => {
+            let mut start = None;
+            for (idx, arg) in args.iter().enumerate() {
+                let QueryEntry::Var(v) = arg else {
+                    return None;
+                };
+                if idx == 0 {
+                    start = Some(*v);
+                } else if v.index() != start?.index() + idx {
+                    return None;
+                }
+            }
+            start.map(|start| (*func, start, args.len(), *dst))
+        }
+        _ => None,
+    }
+}
+
 /// A binding that has been extracted from a [`Bindings`] struct via the [`Bindings::take`] method.
 ///
 /// This allows for a variable's contents to be read while the [`Bindings`] struct has been
@@ -601,6 +629,33 @@ impl ExecutionState<'_> {
         if bindings.var_offsets.next_id().rep() == 0 {
             // If we have no variables, we want to run the rules once.
             bindings.matches = 1;
+        }
+
+        if let Some((func, start, len, dst)) = single_external_borrowed_window(instrs) {
+            let matches = bindings.matches;
+            let mut out: Pooled<Vec<Value>> = with_pool_set(|ps| ps.get());
+            out.resize(matches, Value::stale());
+            let mut transposed: Pooled<Vec<Value>> = with_pool_set(|ps| ps.get());
+            transposed.resize(matches * len, Value::stale());
+            let start_index = start.index();
+            let mut succeeded = 0usize;
+            for row in 0..matches {
+                for col in 0..len {
+                    transposed[row * len + col] =
+                        bindings[Variable::from_usize(start_index + col)][row];
+                }
+                if self.should_stop() {
+                    break;
+                }
+                if let Some(value) =
+                    self.call_external_func(func, &transposed[row * len..(row + 1) * len])
+                {
+                    out[row] = value;
+                    succeeded += 1;
+                }
+            }
+            bindings.insert(dst, &out);
+            return succeeded;
         }
 
         // Vectorized execution for larger batch sizes
