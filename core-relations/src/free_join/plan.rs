@@ -564,67 +564,86 @@ fn decompose_into_bags(original_ctx: &PlanningContext) -> Vec<PlanningContext> {
         "All atoms should be put into bags"
     );
 
-    // Pruning 1: Remove bags that are subsumed by others. A bag is subsumed by another bag if all of its variables are contained in the other bag,
-    // so the output of this bag must be a subset of the bigger bag.
-    let mut pruned_bags: Vec<PlanningContext> = Vec::with_capacity(bags.len());
-    let is_subsumed = |bag1: &PlanningContext, bag2: &PlanningContext| {
-        bag1.vars.iter().all(|(var, _)| bag2.vars.contains_key(var))
-    };
-    for mut bag1 in bags.into_iter() {
-        pruned_bags.retain_mut(|bag2| {
-            let leq = is_subsumed(&bag1, bag2);
-            let geq = is_subsumed(bag2, &bag1);
-            if leq || geq {
-                merge_bag(&mut bag1, bag2);
-                false
-            } else {
-                true
+    let mut changed = true;
+    while changed {
+        changed = false;
+        // Pruning 1: Remove bags that are subsumed by others. A bag is subsumed by another bag if all of its variables are contained in the other bag,
+        // so the output of this bag must be a subset of the bigger bag.
+        let mut pruned_bags: Vec<PlanningContext> = Vec::with_capacity(bags.len());
+        for mut bag1 in bags.into_iter() {
+            pruned_bags.retain_mut(|bag2| {
+                let leq = bag1.is_subsumed_by(&bag2);
+                let geq = bag2.is_subsumed_by(&bag1);
+                if leq || geq {
+                    bag1.merge_bag(bag2);
+                    changed = true;
+                    false
+                } else {
+                    true
+                }
+            });
+            pruned_bags.push(bag1);
+        }
+
+        // Pruning 2: Find "ears" and merge them with other bags. A bag is an ear if one of its atoms covers all of its variables, i.e., it only has one useful
+        // relation. We can safely remove an ear if it shares variables with only one bag - in this case, that bag is necessarily the parent in the tree decomposition.
+        //
+        // Why removing ears? Let's say an ear has the form R(x, y, z) with message variable {x}. The evaluation of its parent will already intersect on `x` with `R(x, y, z)`,
+        // so if `y` and `z` are expanded at the innermost loop of the evaluation, this does not incur any overhead. Versus if we keep this ear as a separate bag,
+        // we would need to first build a map x -> (y, z) only to enumerate each x to get the corresponding (y, z) values.
+        bags = pruned_bags;
+        let is_ear = |bag: &PlanningContext| {
+            bag.atoms.iter().any(|(_atom_id, atom)| {
+                let all_vars = original_ctx.fun_deps.closure(atom.vars());
+                bag.is_subsumed_by_vars(&all_vars)
+            }) || bag
+                .atoms
+                .iter()
+                .filter(|(_atom_id, atom)| bag.has_vars(atom.vars()))
+                .count()
+                == 1
+        };
+
+        let mut i = 0;
+        while i < bags.len() {
+            // Find the unique parent of this ear, if any
+            let parent = bags
+                .iter()
+                .enumerate()
+                .rev()
+                .filter(|(j, b)| *j != i)
+                .map(|(j, b)| (j, b.common_vars_with(&bags[i]).count()))
+                // .map(|(j, _)| j)
+                .collect::<Vec<_>>();
+
+            let j = parent.into_iter().max_by_key(|(_, count)| *count);
+            // if !is_ear(&bags[i]) || parent.len() != 1 {
+            //     i += 1;
+            //     continue;
+            // }
+            if !is_ear(&bags[i]) || j.is_none() || j.unwrap().1 == 0 {
+                i += 1;
+                continue;
             }
-        });
-        pruned_bags.push(bag1);
-    }
+            let j = j.unwrap().0;
+            changed = true;
 
-    // Pruning 2: Find "ears" and merge them with other bags. A bag is an ear if one of its atoms covers all of its variables, i.e., it only has one useful
-    // relation. We can safely remove an ear if it shares variables with only one bag - in this case, that bag is necessarily the parent in the tree decomposition.
-    //
-    // Why removing ears? Let's say an ear has the form R(x, y, z) with message variable {x}. The evaluation of its parent will already intersect on `x` with `R(x, y, z)`,
-    // so if `y` and `z` are expanded at the innermost loop of the evaluation, this does not incur any overhead. Versus if we keep this ear as a separate bag,
-    // we would need to first build a map x -> (y, z) only to enumerate each x to get the corresponding (y, z) values.
-    bags = pruned_bags;
-    let is_ear = |bag: &PlanningContext| {
-        bag.atoms.iter().any(|(_atom_id, atom)| {
-            let all_vars = original_ctx.fun_deps.closure(atom.vars());
-            bag.vars.iter().all(|(v, _)| all_vars.contains_key(v))
-        })
-    };
-    let mut i = 0;
-    while i < bags.len() {
-        // Find the unique parent of this ear, if any
-        let parent = bags
-            .iter()
-            .enumerate()
-            .filter(|(j, b)| *j != i && b.vars.iter().any(|(v, _)| bags[i].vars.contains_key(v)))
-            .map(|(j, _)| j)
-            .collect::<Vec<_>>();
-
-        if !is_ear(&bags[i]) || parent.len() != 1 {
-            i += 1;
-            continue;
-        }
-        let j = parent[0];
-
-        // Invariant: bigger-numbered bags are heavier and should stay at the root of the tree
-        if i < j {
-            let bag = mem::take(&mut bags[i]);
-            merge_bag(&mut bags[j], &bag);
-            bags.remove(i);
-        } else {
-            let bag = mem::take(&mut bags[j]);
-            merge_bag(&mut bags[i], &bag);
-            bags.remove(j);
-            i += 1;
+            // Invariant: bigger-numbered bags are heavier and should stay at the root of the tree
+            if i < j {
+                let bag = mem::take(&mut bags[i]);
+                bags[j].merge_bag(&bag);
+                bags.remove(i);
+            } else {
+                let bag = mem::take(&mut bags[j]);
+                bags[i].merge_bag(&bag);
+                bags.remove(j);
+                i += 1;
+            }
         }
     }
+    // if bags.len() > 1 {
+    //     eprintln!("{:?}", bags);
+    // }
     bags
 }
 
@@ -633,19 +652,37 @@ fn decompose_into_bags(original_ctx: &PlanningContext) -> Vec<PlanningContext> {
 /// A child bag depends on its parent if they share variables. The result is
 /// ordered from leaves to root, enabling bottom-up processing of Yannakakis.
 fn topologically_sort_bags(bags: Vec<PlanningContext>) -> Vec<PlanningContext> {
+    // println!("{:?}", bags);
     let mut bags_opt = bags.into_iter().map(Some).collect::<Vec<_>>();
     let mut bags_topo = Vec::<PlanningContext>::with_capacity(bags_opt.len());
     let mut visited = vec![false; bags_opt.len()];
-    let mut stack = Vec::new();
+    let mut stack: Vec<(usize, Option<usize>)> = Vec::new();
 
     // A bag is a leaf if it only fully covers one atom, so it is essentially doing a scan (that semi-join reduces with other atoms).
     // In this case, merging this bag with its parent bag avoids the expensive algorithm and incurs no overhead.
     let is_leaf = |bag: &PlanningContext| {
-        bag.atoms
+        let cond_a = bag
+            .atoms
             .iter()
             .filter(|(_, atom)| atom.vars().all(|var| bag.vars.contains_key(var)))
             .count()
-            == 1
+            == 1;
+        //     ||
+        let cond_b = bag
+            .atoms
+            .iter()
+            .filter(|(_, atom)| {
+                let all_vars = bag.fun_deps.closure(atom.vars());
+                bag.vars.iter().all(|(v, _)| all_vars.contains_key(v))
+            })
+            .count()
+            >= 1;
+        // if !cond_b && cond_a {
+        //     println!("{:?}", bag);
+        //     panic!("");
+        // }
+        // cond_a || cond_b
+        cond_b
     };
 
     // Starting from the last, since early bags are more likely to be leaves and we don't
@@ -654,52 +691,50 @@ fn topologically_sort_bags(bags: Vec<PlanningContext>) -> Vec<PlanningContext> {
         if visited[i] {
             continue;
         }
-        stack.push((i, usize::MAX));
+        stack.push((i, None));
         visited[i] = true;
 
         while let Some((bag_id, parent)) = stack.pop() {
             let bag = mem::take(&mut bags_opt[bag_id]).unwrap();
+            let mut this = bags_topo.len();
+            if let Some(parent) = parent {
+                bags_topo[parent].merge_bag(&bag);
+                this = parent;
+            }
 
+            // let can_be_merged = parent != usize::MAX && bag.is_subsumed_by(&bags_topo[parent]);
             let mut has_children = false;
             // Find child bags that share variables with this bag
-            for (i, child_bag) in bags_opt.iter().enumerate().filter(|(_, b)| b.is_some()) {
-                let child_bag = child_bag.as_ref().unwrap();
-                if child_bag
-                    .vars
-                    .iter()
-                    .any(|(var, _)| bag.vars.contains_key(var))
-                    && !visited[i]
-                {
+            for (i, child_bag) in bags_opt
+                .iter()
+                .enumerate()
+                .filter_map(|(i, b)| Some((i, b.as_ref()?)))
+            {
+                if child_bag.common_vars_with(&bag).next().is_some() && !visited[i] {
                     visited[i] = true;
+                    if has_children {
+                        stack.push((i, Some(this)));
+                    } else {
+                        stack.push((i, None))
+                    }
+
                     has_children = true;
-                    stack.push((i, bags_topo.len()));
                 }
             }
 
-            if !has_children && is_leaf(&bag) && parent != usize::MAX {
-                // merging with parent bag
-                let parent_bag = bags_topo.get_mut(parent).unwrap();
-                for (var_id, vinfo) in bag.vars.into_iter() {
-                    if !parent_bag.vars.contains_key(var_id) {
-                        parent_bag.vars.insert(var_id, vinfo);
-                    } else {
-                        let parent_vinfo = parent_bag.vars.get_mut(var_id).unwrap();
-                        parent_vinfo.occurrences.extend(
-                            vinfo
-                                .occurrences
-                                .into_iter()
-                                .filter(|occ| !parent_bag.atoms.contains_key(occ.atom)),
-                        );
-                    }
-                }
-                for (atom_id, atom) in bag.atoms.into_iter() {
-                    if !parent_bag.atoms.contains_key(atom_id) {
-                        parent_bag.atoms.insert(atom_id, atom);
-                    }
-                }
-            } else {
+            // if can_be_merged {
+            //     merge_bag(&mut bags_topo[parent], &bag);
+            // } else {
+            //     bags_topo.push(bag);
+            // }
+
+            // if parent != usize::MAX && ((!has_children && is_leaf(&bag)) || can_be_merged) {
+            //     bags_topo[parent].merge_bag(&bag);
+            // } else {
+            if parent.is_none() {
                 bags_topo.push(bag);
             }
+            // }
         }
     }
 
@@ -1093,27 +1128,51 @@ pub(crate) struct PlanningContext {
     fun_deps: Arc<FunDeps>,
 }
 
-fn merge_bag(bag1: &mut PlanningContext, bag2: &PlanningContext) {
-    for (var, vinfo) in bag2.vars.iter() {
-        if bag1.vars.contains_key(var) {
-            for new_occ in vinfo.occurrences.iter().cloned() {
-                if !bag1.vars[var]
-                    .occurrences
-                    .iter()
-                    .any(|occ| occ.atom == new_occ.atom)
-                {
-                    bag1.vars[var].occurrences.push(new_occ);
+impl PlanningContext {
+    fn is_subsumed_by(&self, bag2: &PlanningContext) -> bool {
+        self.is_subsumed_by_vars(&bag2.vars)
+    }
+
+    fn is_subsumed_by_vars<I>(&self, bag2: &DenseIdMap<Variable, I>) -> bool {
+        self.vars.iter().all(|(var, _)| bag2.contains_key(var))
+    }
+
+    fn merge_bag(&mut self, bag2: &PlanningContext) {
+        for (var, vinfo) in bag2.vars.iter() {
+            if self.vars.contains_key(var) {
+                for new_occ in vinfo.occurrences.iter().cloned() {
+                    if !self.vars[var]
+                        .occurrences
+                        .iter()
+                        .any(|occ| occ.atom == new_occ.atom)
+                    {
+                        self.vars[var].occurrences.push(new_occ);
+                    }
                 }
+            } else {
+                self.vars.insert(var, vinfo.clone());
             }
-        } else {
-            bag1.vars.insert(var, vinfo.clone());
+        }
+        for (atom_id, atom) in bag2.atoms.iter() {
+            // atoms don't need to be merged
+            if !self.atoms.contains_key(atom_id) {
+                self.atoms.insert(atom_id, atom.clone());
+            }
         }
     }
-    for (atom_id, atom) in bag2.atoms.iter() {
-        // atoms don't need to be merged
-        if !bag1.atoms.contains_key(atom_id) {
-            bag1.atoms.insert(atom_id, atom.clone());
-        }
+
+    fn common_vars_with<'a>(
+        &'a self,
+        other: &'a PlanningContext,
+    ) -> impl Iterator<Item = Variable> + 'a {
+        self.vars
+            .iter()
+            .filter(|(var, _)| other.vars.contains_key(*var))
+            .map(|(var, _)| var)
+    }
+
+    fn has_vars(&self, mut vars: impl Iterator<Item = Variable>) -> bool {
+        vars.all(|var| self.vars.contains_key(var))
     }
 }
 
