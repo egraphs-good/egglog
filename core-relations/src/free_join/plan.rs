@@ -209,6 +209,13 @@ impl Plan {
             }
         }
     }
+
+    pub(crate) fn header(&self) -> &[JoinHeader] {
+        match self {
+            Plan::SinglePlan(p) => &p.header,
+            Plan::DecomposedPlan(p) => &p.header,
+        }
+    }
 }
 
 #[derive(Debug, Clone)]
