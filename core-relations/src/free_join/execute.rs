@@ -105,7 +105,6 @@ impl SparseIndex {
             }
             subset_ids[i] = row_id;
         }
-        offsets[n_keys] = n_subsets;
 
         SparseIndex {
             n_keys,
@@ -713,7 +712,7 @@ impl<'a> JoinState<'a> {
                 .unwrap_or(false)
         });
         let whole_table = info.table.all();
-        let dyn_index = if subset.size() < SMALL_RESIDUAL && cols.len() == 1 {
+        let dyn_index = if subset.size() <= SMALL_RESIDUAL && cols.len() == 1 {
             DynamicIndex::Sparse(SparseIndex::new(
                 info.table.as_ref(),
                 subset.as_ref(),
