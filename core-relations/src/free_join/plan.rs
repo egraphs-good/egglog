@@ -40,8 +40,8 @@ define_id!(pub(crate) MatId, u32, "An identifier for materialization within a de
 pub(crate) enum MatScanMode {
     Full,
     KeyOnly,
-    Value(Vec<Variable>),
-    Lookup(Vec<Variable>),
+    Value(SmallVec<[Variable; 16]>),
+    Lookup(SmallVec<[Variable; 16]>),
 }
 
 /// Join headers evaluate constraints on a single atom; they prune the search space before the rest
@@ -225,10 +225,19 @@ pub(crate) struct JoinStages {
 }
 
 /// Specification of the materialization of the intermediate results, as required by tree decomposition.
+/// A materialization has two parts. The message variables are variables that are passed to and joined with later stages,
+/// and the value/private variables are variables that only occur in the current (and maybe previous) bags.
+///
+/// A materialization thus looks like a map from values of the message variables to sets of values of the private variables,
+/// and when we evaluate other bags, only the keys (message variables) are looked up or enumerated. This is because
+/// the private variables are not relevant to the evaluation of other bags. A key idea of tree decomposition is to separate
+/// independent parts of a query and make sure they are evaluated independently.
 #[derive(Debug, Clone)]
 pub(crate) struct MatSpec {
-    pub msg_vars: Vec<Variable>,
-    pub val_vars: Vec<Variable>,
+    // Variables that are used by later stages
+    pub msg_vars: SmallVec<[Variable; 16]>,
+    // Variables that are not used by later stages.
+    pub val_vars: SmallVec<[Variable; 16]>,
 }
 
 #[derive(Debug, Clone)]
@@ -369,14 +378,14 @@ pub enum PlanStrategy {
     Gj,
 }
 
-// Computes the next variable to eliminate and the subquery of its neighborhood.
+/// Pick the next variable to eliminate and computes its neighborhood.
 ///
-/// Uses a min-fill heuristic that prioritizes variables whose elimination creates
-/// neighborhoods that are more subsumed by existing bags. This is a generalization
-/// of the "min-fill" heuristic to hypergraphs.
+/// Each time, we pick a variable that has the least number of occurrences and find its neighborhood* (i.e.,
+/// the set of variables that share an atom with it). We pick the neighborhood based on the "min-fill" heuristic,
+/// which tries to eliminate neighborhood that would introduce the least number of new hyperedges.
+/// A hyperedge is introduced during variable elimination if two variables that don't share an atom before are in the same neighborhood.
 ///
-/// Variables occurring in only one atom are deprioritized until absolutely necessary
-/// (i.e., when the atom is not joined with any other relation).
+/// *: We find the closure of the neighborhood under functional dependencies, since these variables are "for free".
 fn next_var_to_eliminate(
     vars: &DenseIdMap<Variable, VarInfo>,
     atoms: &DenseIdMap<AtomId, Atom>,
@@ -410,8 +419,8 @@ fn next_var_to_eliminate(
 }
 
 /// It updates the hypergraph with the given bag of variables by:
-/// 1. Remove atoms that only contain subquery variables and remove variable occurrences of those atoms, and
-/// 2. Add a covering hyperedge that contains every non-private variable
+/// 1. Remove atoms that only contain variables in the bag and remove those atoms from variable's occurrences,
+/// 2. Add a covering hyperedge that contains every non-private variable.
 fn update_hypergraph(
     subquery_vars: &IndexSet<Variable>,
     vars: &mut DenseIdMap<Variable, VarInfo>,
@@ -477,12 +486,34 @@ fn update_hypergraph(
     }
 }
 
-/// Performs variable elimination to decompose the query into tree-structured bags.
+/// This function does tree decomposition. At a high level, it takes a bag (equivalently, a `PlanningContext`, a subquery, a hypergraph,
+/// or a set of variables + atoms), and returns a list of bags that forms a tree decomposition.
 ///
-/// This is the core tree decomposition algorithm. It iteratively:
-/// 1. Selects the next variable to eliminate using a min-fill heuristic
-/// 2. Creates a bag for the subquery of that variable's neighborhood
-/// 3. Updates variable and atom information for the remaining main query
+/// Recall that a bag is equivalent to a hypergraph, where vertices = variables and hyperedges = atoms.
+///
+/// The algorithm is based on the classical variable elimination, where it iteratively removes neighborhoods until no variables are left.
+/// More specifically, it iteratively
+///
+/// 1. Select a variable `v` and its neighborhood `N(v)`, based on the "min-fill" heuristic. (`next_var_to_eliminate`)
+/// 2. Remove the neighborhood from the working hypergraph. (`update_hypergraph`)
+/// 3. Add a covering atom that contains variables `N(v) - {v}` to the working hypergraph. (`update_hypergraph`)
+/// 4. Step 1-3 gives us a set of variables `N(v)`. We need to construct a subquery from it. This step is a bit subtle.
+///
+///    For example, consider the rectangle query `R(x, y), S(y, z), T(z, w), U(w, x)`. Let's say we pick variable `x` to eliminate.
+///    The neighborhood `N(x)` of `x` is {x, y, z}. A naive approach is to subquery would be `R(x, y), S(y, z)`, but this query can have size quadratic,
+///    even when the final output size is small. The issue here is `x` and `z` are not fully constrained in this subquery.
+///    Another approach is to include every atom that contains variables in `N(x)`, but this gives us the entire query as the subquery for that rectangle query,
+///    which is also not ideal because the rectangle query should be broken into two bags.
+///
+///    The solution is to include every atom that contains variables in `N(x)`, but only keep the variables in `N(x)` in those atoms. For the rectangle example,
+///    this would be `R(x, y), S(y, z), T(z, -), U(-, x)`, where `-` means we don't expand this variable during evaluation. As a result, the produced PlanningContext
+///    may have atoms whose variables are not in `PlanningContext::vars`. The query planner for a single bag handles this correctly.
+///
+/// Now we have collected a list of bags, but they are very redundant. (Remember the variable elimination loop is run |vars| steps, because each iteration eliminates
+/// only one variable.) We need to prune these bags. See the comments in the code for details.
+///
+/// Another invariant we maintain is higher-indexed bags are heavier (closer to the root of the tree decomposition), so they will be evaluated later and constrained
+/// by evaluation of earlier bags.
 fn decompose_into_bags(original_ctx: &PlanningContext) -> Vec<PlanningContext> {
     let mut atoms = original_ctx.atoms.clone();
     let mut vars = original_ctx.vars.clone();
@@ -533,7 +564,8 @@ fn decompose_into_bags(original_ctx: &PlanningContext) -> Vec<PlanningContext> {
         "All atoms should be put into bags"
     );
 
-    // Remove bags that are subsumed by others
+    // Pruning 1: Remove bags that are subsumed by others. A bag is subsumed by another bag if all of its variables are contained in the other bag,
+    // so the output of this bag must be a subset of the bigger bag.
     let mut pruned_bags: Vec<PlanningContext> = Vec::with_capacity(bags.len());
     let is_subsumed = |bag1: &PlanningContext, bag2: &PlanningContext| {
         bag1.vars.iter().all(|(var, _)| bag2.vars.contains_key(var))
@@ -552,11 +584,14 @@ fn decompose_into_bags(original_ctx: &PlanningContext) -> Vec<PlanningContext> {
         pruned_bags.push(bag1);
     }
 
-    // Additionally, we try to merge "ears" with other bags, because expansion of the ears are for free
+    // Pruning 2: Find "ears" and merge them with other bags. A bag is an ear if one of its atoms covers all of its variables, i.e., it only has one useful
+    // relation. We can safely remove an ear if it shares variables with only one bag - in this case, that bag is necessarily the parent in the tree decomposition.
+    //
+    // Why removing ears? Let's say an ear has the form R(x, y, z) with message variable {x}. The evaluation of its parent will already intersect on `x` with `R(x, y, z)`,
+    // so if `y` and `z` are expanded at the innermost loop of the evaluation, this does not incur any overhead. Versus if we keep this ear as a separate bag,
+    // we would need to first build a map x -> (y, z) only to enumerate each x to get the corresponding (y, z) values.
     bags = pruned_bags;
     let is_ear = |bag: &PlanningContext| {
-        // A bag is an ear if it only has one atom all of whose variables are in the bag (i.e., the bag only
-        // has one useful relations)
         bag.atoms.iter().any(|(_atom_id, atom)| {
             let all_vars = original_ctx.fun_deps.closure(atom.vars());
             bag.vars.iter().all(|(v, _)| all_vars.contains_key(v))
@@ -596,7 +631,7 @@ fn decompose_into_bags(original_ctx: &PlanningContext) -> Vec<PlanningContext> {
 /// Topologically sorts bags based on variable dependencies.
 ///
 /// A child bag depends on its parent if they share variables. The result is
-/// ordered from leaves to root, enabling bottom-up processing.
+/// ordered from leaves to root, enabling bottom-up processing of Yannakakis.
 fn topologically_sort_bags(bags: Vec<PlanningContext>) -> Vec<PlanningContext> {
     let mut bags_opt = bags.into_iter().map(Some).collect::<Vec<_>>();
     let mut bags_topo = Vec::<PlanningContext>::with_capacity(bags_opt.len());
@@ -703,8 +738,8 @@ fn plan_single_bag(
     n_used_in_bag: &mut DenseIdMap<Variable, usize>,
     strat: PlanStrategy,
 ) -> (Vec<JoinHeader>, JoinStages, MatSpec) {
-    let mut msg_vars = vec![];
-    let mut val_vars = vec![];
+    let mut msg_vars = smallvec![];
+    let mut val_vars = smallvec![];
 
     // Classify variables as message or value variables
     for (var, vinfo) in bag.vars.iter_mut() {
@@ -944,6 +979,7 @@ fn loop_lifting(stages: JoinStages) -> JoinStages {
     }
 }
 
+/// This is the main entry point for query optimization using tree decomposition.
 pub(crate) fn tree_decompose_and_plan(
     ctx: PlanningContext,
     strat: PlanStrategy,
@@ -982,7 +1018,7 @@ pub(crate) fn tree_decompose_and_plan(
         return fast_path!();
     }
 
-    // Step 3: Count variable usage across bags. Used for deciding if a variable is public (i.e., messaege variables) or private.
+    // Step 3: Count variable usage across bags. Used for deciding if a variable is public (i.e., message variables) or private.
     let mut n_used_in_bag = count_variable_usage_per_bag(&bags);
     let mut has_block_contributed = vec![false; bags.len()];
 
