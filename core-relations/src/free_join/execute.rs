@@ -1179,7 +1179,6 @@ impl<'a> JoinState<'a> {
                 match mode {
                     MatScanMode::Full | MatScanMode::KeyOnly => {
                         // enumerate keys
-                        // for group in cover_mat.iter() {
                         for group in cover_mat.iter() {
                             let group_key = group.0;
                             let group_val = group.1;
