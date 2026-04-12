@@ -477,10 +477,10 @@ fn test_subsumed_unextractable_action_extract() {
             None,
             r#"
             (datatype Math)
-            (constructor exp () Math :cost 100)
+            (constructor expensive () Math :cost 100)
             (constructor cheap () Math :cost 1)
-            (union (exp) (cheap))
-            (extract (exp))
+            (union (expensive) (cheap))
+            (extract (expensive))
             "#,
         )
         .unwrap();
@@ -501,13 +501,13 @@ fn test_subsumed_unextractable_action_extract() {
             None,
             r#"
             (subsume (cheap))
-            (extract (exp))
+            (extract (expensive))
             "#,
         )
         .unwrap();
     assert!(match &outputs[0] {
         CommandOutput::ExtractBest(termdag, _, term_id) => {
-            matches!(termdag.get(*term_id), Term::App(s, ..) if s == "exp")
+            matches!(termdag.get(*term_id), Term::App(s, ..) if s == "expensive")
         }
         _ => false,
     });
@@ -525,21 +525,21 @@ fn test_subsume_unextractable_insert_and_merge() {
             (datatype Expr
                 (f Expr)
                 (Num i64))
-            (constructor exp () Expr :cost 100)
+            (constructor expensive () Expr :cost 100)
 
               (f (Num 1))
               (subsume (f (Num 1)))
               (f (Num 2))
 
               (union (Num 2) (Num 1))
-              (union (f (Num 2)) (exp))
+              (union (f (Num 2)) (expensive))
               (extract (f (Num 2)))
             "#,
         )
         .unwrap();
     assert!(match &outputs[0] {
         CommandOutput::ExtractBest(termdag, _, term_id) => {
-            matches!(termdag.get(*term_id), Term::App(s, ..) if s == "exp")
+            matches!(termdag.get(*term_id), Term::App(s, ..) if s == "expensive")
         }
         _ => false,
     });
@@ -594,9 +594,9 @@ fn test_rewrite_subsumed_unextractable() {
             None,
             r#"
             (datatype Math)
-            (constructor exp () Math :cost 100)
+            (constructor expensive () Math :cost 100)
             (constructor cheap () Math :cost 1)
-            (rewrite (cheap) (exp) :subsume)
+            (rewrite (cheap) (expensive) :subsume)
             (cheap)
             (run 1)
             (extract (cheap))
@@ -604,7 +604,7 @@ fn test_rewrite_subsumed_unextractable() {
         )
         .unwrap();
     // Should give back expenive term, because cheap is unextractable
-    assert_eq!(outputs[1].to_string(), "(exp)\n");
+    assert_eq!(outputs[1].to_string(), "(expensive)\n");
 }
 
 #[test]
@@ -619,9 +619,9 @@ fn test_rewrite_subsumed() {
             None,
             r#"
             (datatype Math)
-            (constructor exp () Math :cost 100)
+            (constructor expensive () Math :cost 100)
             (constructor most-exp () Math :cost 1000)
-            (rewrite (most-exp) (exp) :subsume)
+            (rewrite (most-exp) (expensive) :subsume)
             (most-exp)
             (run 1)
             (constructor cheap () Math :cost 1)
@@ -631,7 +631,7 @@ fn test_rewrite_subsumed() {
             "#,
         )
         .unwrap();
-    assert_eq!(outputs[2].to_string(), "(exp)\n");
+    assert_eq!(outputs[2].to_string(), "(expensive)\n");
 }
 
 #[test]
@@ -745,9 +745,9 @@ fn test_value_to_classid() {
             None,
             r#"
             (datatype Math)
-            (constructor exp () Math )
-            (exp)
-            (extract (exp))
+            (constructor expensive () Math )
+            (expensive)
+            (extract (expensive))
             "#,
         )
         .unwrap();
