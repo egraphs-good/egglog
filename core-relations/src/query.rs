@@ -1,6 +1,6 @@
 //! APIs for building a query of a database.
 
-use std::{iter::once, sync::Arc};
+use std::{iter::once, mem, sync::Arc};
 
 use crate::numeric_id::{DenseIdMap, IdVec, NumericId, define_id};
 use smallvec::SmallVec;
@@ -444,7 +444,60 @@ impl RuleBuilder<'_, '_> {
         }
     }
 
+    fn normalize_single_external_arg_order(&mut self) {
+        let Some(arg_vars) = single_external_arg_vars(&self.qb.instrs) else {
+            return;
+        };
+
+        let mut preferred = SmallVec::<[Variable; 4]>::new();
+        preferred.extend(arg_vars.iter().copied());
+        preferred.extend(
+            self.qb
+                .query
+                .var_info
+                .iter()
+                .map(|(var, _)| var)
+                .filter(|var| !arg_vars.contains(var)),
+        );
+
+        let current = SmallVec::<[Variable; 4]>::from_iter(
+            self.qb.query.var_info.iter().map(|(var, _)| var),
+        );
+        if preferred == current {
+            return;
+        }
+
+        let mut remap = DenseIdMap::with_capacity(self.qb.query.var_info.n_ids());
+        for (idx, old_var) in preferred.iter().enumerate() {
+            remap.insert(*old_var, Variable::from_usize(idx));
+        }
+
+        let mut old_var_info = mem::take(&mut self.qb.query.var_info);
+        for old_var in preferred {
+            self.qb
+                .query
+                .var_info
+                .push(old_var_info.take(old_var).expect("all vars must be present"));
+        }
+
+        for (_, atom) in self.qb.query.atoms.iter_mut() {
+            let old_var_to_column = mem::take(&mut atom.var_to_column);
+            atom.var_to_column = old_var_to_column
+                .into_iter()
+                .map(|(var, col)| (remap[var], col))
+                .collect();
+            for (_, var) in atom.column_to_var.iter_mut() {
+                *var = remap[*var];
+            }
+        }
+
+        for instr in self.qb.instrs.iter_mut() {
+            remap_instr(instr, &remap);
+        }
+    }
+
     pub fn build_with_description(mut self, desc: impl Into<String>) -> RuleId {
+        self.normalize_single_external_arg_order();
         let var_info = &self.qb.query.var_info;
         let symbol_map = self.build_symbol_map();
         // Generate an id for our actions and slot them in.
@@ -766,6 +819,127 @@ impl RuleBuilder<'_, '_> {
             }
         }
         Ok(())
+    }
+}
+
+fn single_external_arg_vars(instrs: &[Instr]) -> Option<SmallVec<[Variable; 4]>> {
+    let [Instr::External { args, .. }] = instrs else {
+        return None;
+    };
+
+    let mut vars = SmallVec::<[Variable; 4]>::new();
+    for arg in args {
+        let QueryEntry::Var(var) = arg else {
+            return None;
+        };
+        if vars.contains(var) {
+            return None;
+        }
+        vars.push(*var);
+    }
+    Some(vars)
+}
+
+fn remap_query_entry(entry: &mut QueryEntry, remap: &DenseIdMap<Variable, Variable>) {
+    if let QueryEntry::Var(var) = entry {
+        *var = remap[*var];
+    }
+}
+
+fn remap_write_val(val: &mut WriteVal, remap: &DenseIdMap<Variable, Variable>) {
+    if let WriteVal::QueryEntry(entry) = val {
+        remap_query_entry(entry, remap);
+    }
+}
+
+fn remap_instr(instr: &mut Instr, remap: &DenseIdMap<Variable, Variable>) {
+    match instr {
+        Instr::LookupOrInsertDefault {
+            args,
+            default,
+            dst_var,
+            ..
+        } => {
+            args.iter_mut()
+                .for_each(|entry| remap_query_entry(entry, remap));
+            default
+                .iter_mut()
+                .for_each(|val| remap_write_val(val, remap));
+            *dst_var = remap[*dst_var];
+        }
+        Instr::LookupWithDefault {
+            args,
+            default,
+            dst_var,
+            ..
+        } => {
+            args.iter_mut()
+                .for_each(|entry| remap_query_entry(entry, remap));
+            remap_query_entry(default, remap);
+            *dst_var = remap[*dst_var];
+        }
+        Instr::Lookup {
+            args, dst_var, ..
+        } => {
+            args.iter_mut()
+                .for_each(|entry| remap_query_entry(entry, remap));
+            *dst_var = remap[*dst_var];
+        }
+        Instr::LookupWithFallback {
+            table_key,
+            func_args,
+            dst_var,
+            ..
+        } => {
+            table_key
+                .iter_mut()
+                .for_each(|entry| remap_query_entry(entry, remap));
+            func_args
+                .iter_mut()
+                .for_each(|entry| remap_query_entry(entry, remap));
+            *dst_var = remap[*dst_var];
+        }
+        Instr::Insert { vals, .. } => {
+            vals.iter_mut()
+                .for_each(|entry| remap_query_entry(entry, remap));
+        }
+        Instr::InsertIfEq { l, r, vals, .. } => {
+            remap_query_entry(l, remap);
+            remap_query_entry(r, remap);
+            vals.iter_mut()
+                .for_each(|entry| remap_query_entry(entry, remap));
+        }
+        Instr::Remove { args, .. } => {
+            args.iter_mut()
+                .for_each(|entry| remap_query_entry(entry, remap));
+        }
+        Instr::External { args, dst, .. } => {
+            args.iter_mut()
+                .for_each(|entry| remap_query_entry(entry, remap));
+            *dst = remap[*dst];
+        }
+        Instr::ExternalWithFallback {
+            args1, args2, dst, ..
+        } => {
+            args1
+                .iter_mut()
+                .for_each(|entry| remap_query_entry(entry, remap));
+            args2
+                .iter_mut()
+                .for_each(|entry| remap_query_entry(entry, remap));
+            *dst = remap[*dst];
+        }
+        Instr::AssertEq(l, r) | Instr::AssertNe(l, r) => {
+            remap_query_entry(l, remap);
+            remap_query_entry(r, remap);
+        }
+        Instr::AssertAnyNe { ops, .. } => {
+            ops.iter_mut()
+                .for_each(|entry| remap_query_entry(entry, remap));
+        }
+        Instr::ReadCounter { dst, .. } => {
+            *dst = remap[*dst];
+        }
     }
 }
 

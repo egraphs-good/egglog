@@ -123,6 +123,51 @@ fn basic_query() {
 }
 
 #[test]
+fn single_external_rule_normalizes_gap_vars_into_consecutive_window() {
+    let mut db = Database::default();
+    let tuple4 = db.add_table(
+        SortedWritesTable::new(4, 4, None, vec![], Box::new(|_, _, _, _| false)),
+        iter::empty(),
+        iter::empty(),
+    );
+    let echo = db.add_external_function(Box::new(make_external_func(|_, args| args.first().copied())));
+
+    let mut rsb = RuleSetBuilder::new(&mut db);
+    let mut query = rsb.new_rule();
+    let a = query.new_var_named("a");
+    let b = query.new_var_named("b");
+    let c = query.new_var_named("c");
+    let d = query.new_var_named("d");
+    query
+        .add_atom(tuple4, &[a.into(), b.into(), c.into(), d.into()], &[])
+        .unwrap();
+    let mut rule = query.build();
+    let _ = rule.call_external(echo, &[a.into(), b.into(), d.into()]).unwrap();
+    let rule_id = rule.build_with_description("single_external_gap");
+    let rule_set = rsb.build();
+
+    let (_, _, _, action_id) = rule_set.plans.get(rule_id).unwrap();
+    let action = &rule_set.actions[*action_id];
+    let [crate::action::Instr::External { args, .. }] = action.instrs.as_ref().as_slice() else {
+        panic!("expected single external instruction");
+    };
+
+    let vars: Vec<_> = args
+        .iter()
+        .map(|arg| match arg {
+            crate::action::QueryEntry::Var(var) => *var,
+            crate::action::QueryEntry::Const(_) => panic!("expected var-only external args"),
+        })
+        .collect();
+
+    assert_eq!(
+        vars,
+        vec![crate::free_join::Variable::from_usize(0), crate::free_join::Variable::from_usize(1), crate::free_join::Variable::from_usize(2)],
+        "eligible single-external rules should normalize arg vars into a consecutive window",
+    );
+}
+
+#[test]
 fn line_graph_1_fj_puresize() {
     line_graph_1_test(PlanStrategy::PureSize);
 }
