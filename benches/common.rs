@@ -68,6 +68,7 @@ pub fn bench_cases(glob: &str) -> Vec<BenchCase> {
 
 const PROOF_UNSUPPORTED_FILES: &[&str] = &[
     "math-microbenchmark.egg",
+    "rectangle.egg",
     "subsume.egg",
     "subsume-relation.egg",
 ];

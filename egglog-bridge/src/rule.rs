@@ -273,10 +273,15 @@ impl RuleBuilder<'_> {
             self.query.plan_strategy = PlanStrategy::MinCover;
         }
         let res = self.query.rule_id;
+        let cached_plan = self
+            .query
+            .build_cached_plan(&mut self.egraph.db, &self.desc)
+            .ok();
         let info = RuleInfo {
             last_run_at: Timestamp::new(0),
             query: self.query,
-            cached_plan: None,
+            // cached_plan: None,
+            cached_plan,
             desc: self.desc,
         };
         debug!("created rule {res:?} / {}", info.desc);

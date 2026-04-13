@@ -806,13 +806,13 @@ impl CoreAction {
             }
             CoreAction::Set(span, head, args, rhs) => {
                 // Check that we're not trying to set a constructor
-                if let Some(func_type) = typeinfo.get_func_type(head) {
-                    if func_type.subtype == crate::ast::FunctionSubtype::Constructor {
-                        return Err(TypeError::SetConstructorDisallowed(
-                            head.clone(),
-                            span.clone(),
-                        ));
-                    }
+                if let Some(func_type) = typeinfo.get_func_type(head)
+                    && func_type.subtype == crate::ast::FunctionSubtype::Constructor
+                {
+                    return Err(TypeError::SetConstructorDisallowed(
+                        head.clone(),
+                        span.clone(),
+                    ));
                 }
 
                 let mut args = args.clone();
@@ -843,14 +843,15 @@ impl CoreAction {
             .chain(once(constraint::eq(lhs.clone(), rhs.clone())))
             .collect()),
             CoreAction::Panic(_ann, _) => Ok(vec![]),
-            CoreAction::LetAtomTerm(span, v, at) => {
-                Ok(get_literal_and_global_constraints(&[at.clone()], typeinfo)
-                    .chain(once(constraint::eq(
-                        AtomTerm::Var(span.clone(), v.clone()),
-                        at.clone(),
-                    )))
-                    .collect())
-            }
+            CoreAction::LetAtomTerm(span, v, at) => Ok(get_literal_and_global_constraints(
+                std::slice::from_ref(at),
+                typeinfo,
+            )
+            .chain(once(constraint::eq(
+                AtomTerm::Var(span.clone(), v.clone()),
+                at.clone(),
+            )))
+            .collect()),
         }
     }
 }

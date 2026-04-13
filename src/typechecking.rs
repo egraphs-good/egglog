@@ -425,10 +425,10 @@ impl TypeInfo {
         let mut results = Vec::new();
         for sort in self.sorts.values() {
             let sort = sort.clone().as_arc_any();
-            if let Ok(sort) = Arc::downcast(sort) {
-                if pred(&sort) {
-                    results.push(sort);
-                }
+            if let Ok(sort) = Arc::downcast(sort)
+                && pred(&sort)
+            {
+                results.push(sort);
             }
         }
         results
@@ -814,13 +814,11 @@ impl TypeInfo {
         use ast::GenericExpr;
 
         expr.find(&mut |e| {
-            if let GenericExpr::Call(span, ResolvedCall::Func(func_type), _) = e {
-                if func_type.subtype == FunctionSubtype::Custom {
-                    // Skip global functions - they get desugared to constructors
-                    if !self.is_global(&func_type.name) {
-                        return Some(span.clone());
-                    }
-                }
+            if let GenericExpr::Call(span, ResolvedCall::Func(func_type), _) = e
+                && func_type.subtype == FunctionSubtype::Custom
+                && !self.is_global(&func_type.name)
+            {
+                return Some(span.clone());
             }
             None
         })
