@@ -399,9 +399,6 @@ impl SinglePlan {
     }
 }
 
-type VarSet = FixedBitSet;
-type AtomSet = FixedBitSet;
-
 /// The algorithm used to produce a join plan.
 #[derive(Default, Copy, Clone)]
 pub enum PlanStrategy {
@@ -610,6 +607,7 @@ fn decompose_into_bags(original_ctx: &PlanningContext) -> Vec<PlanningContext> {
         "All atoms should be put into bags"
     );
 
+    // Iteratively prune the query
     let mut changed = true;
     while changed {
         changed = false;
@@ -642,7 +640,11 @@ fn decompose_into_bags(original_ctx: &PlanningContext) -> Vec<PlanningContext> {
             bag.atoms.iter().any(|(_atom_id, atom)| {
                 let all_vars = original_ctx.fun_deps.closure(atom.vars());
                 bag.is_subsumed_by_vars(&all_vars)
-            }) || bag
+            })
+            // HACK: this weird condition says if there's exactly one atom whose variables are all wanted, then we can also treat it as an ear,
+            // because other atoms in the bag are likely added only to constrain the bag. This is approximately what a bag is, but not really.
+            // However, removing this condition makes some benchmark much worse...
+            || bag
                 .atoms
                 .iter()
                 .filter(|(_atom_id, atom)| bag.has_vars(atom.vars()))
@@ -652,7 +654,12 @@ fn decompose_into_bags(original_ctx: &PlanningContext) -> Vec<PlanningContext> {
 
         let mut i = 0;
         while i < bags.len() {
-            // Find the unique parent of this ear, if any
+            if !is_ear(&bags[i]) {
+                i += 1;
+                continue;
+            }
+
+            // Find the bag that shares the most variables with this ear bag, and merge the ear bag into it.
             let parent = bags
                 .iter()
                 .enumerate()
@@ -662,7 +669,7 @@ fn decompose_into_bags(original_ctx: &PlanningContext) -> Vec<PlanningContext> {
                 .collect::<Vec<_>>();
 
             let j = parent.into_iter().max_by_key(|(_, count)| *count);
-            if !is_ear(&bags[i]) || j.is_none() || j.unwrap().1 == 0 {
+            if j.is_none() || j.unwrap().1 == 0 {
                 i += 1;
                 continue;
             }
@@ -687,10 +694,13 @@ fn decompose_into_bags(original_ctx: &PlanningContext) -> Vec<PlanningContext> {
 
 /// Topologically sorts bags based on variable dependencies.
 ///
-/// A child bag depends on its parent if they share variables. The result is
-/// ordered from leaves to root, enabling bottom-up processing of Yannakakis.
+/// This ensures that we evaluate bags in order.
+///
+/// This method also merges bags. The case where a bag has multiple children in the tree decomposition
+/// has terrible performance currently, because all children but one has to be an innermost lookup.
+/// So in this function, we merge all the non-first children into the parent. This improves HardBoiled benchmarks
+/// significantly.
 fn topologically_sort_bags(bags: Vec<PlanningContext>) -> Vec<PlanningContext> {
-    // println!("{:?}", bags);
     let mut bags_opt = bags.into_iter().map(Some).collect::<Vec<_>>();
     let mut bags_topo = Vec::<PlanningContext>::with_capacity(bags_opt.len());
     let mut visited = vec![false; bags_opt.len()];
@@ -767,7 +777,10 @@ fn count_variable_usage_per_bag(bags: &[PlanningContext]) -> DenseIdMap<Variable
 /// This involves:
 /// - Dividing variables into message variables (passed to later stages) and value variables
 /// - Planning join stages within the bag
-/// - Adding epilogue instructions to look up previous materialized bags
+/// - Adding prologue and epilogue instructions so that the bag is constrained by previous materializations.
+///
+/// This function also sets the `used_in_rhs` field for variables. A variable is not used in RHS during the planning
+/// of a bag if it's not used in later bags.
 fn plan_single_bag(
     bag: &mut PlanningContext,
     blocks: &[(JoinStages, MatSpec)],
@@ -1178,6 +1191,9 @@ impl PlanningContext {
         vars.all(|var| self.vars.contains_key(var))
     }
 }
+
+type VarSet = FixedBitSet;
+type AtomSet = FixedBitSet;
 
 /// Mutable state tracked during query planning.
 #[derive(Clone)]
