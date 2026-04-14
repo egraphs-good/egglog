@@ -11,7 +11,7 @@ use crate::{
     free_join::plan::{JoinStages, MatId, MatScanMode, MatSpec},
     numeric_id::{DenseIdMap, IdVec, NumericId},
     query::Atom,
-    row_buffer::RowBuffer,
+    row_buffer::{RowBuffer, SmallValueVec},
 };
 use crossbeam::utils::CachePadded;
 use dashmap::mapref::entry::Entry;
@@ -71,8 +71,7 @@ impl SparseIndex {
 
     fn new(table: WrappedTableRef<'_>, subset: SubsetRef<'_>, col: ColumnId) -> Self {
         let mut rows = [(Value::new_const(0), RowId::new_const(0)); SMALL_RESIDUAL];
-        let mut buf = TaggedRowBuffer::new(1);
-        buf.clear();
+        let mut buf = TaggedRowBuffer::<SmallValueVec>::new_inline(1);
         let mut pos = 0;
         table.scan_project(
             subset,
