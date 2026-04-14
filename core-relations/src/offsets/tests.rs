@@ -11,9 +11,7 @@ fn o(u: usize) -> RowId {
 fn collect<T: Clone>(range: &impl Offsets, elts: &[T]) -> Vec<T> {
     let mut res = Vec::new();
     range.offsets(|off| res.push(elts[off.index()].clone()));
-    if !res.is_empty() {
-        range.bounds().expect("nonempty range should have bounds");
-    }
+    range.bounds();
     res
 }
 
