@@ -319,7 +319,7 @@ fn generate_tests(glob: &str) -> Vec<Trial> {
         let proof_unsupported_file_list = [
             "math-microbenchmark.egg",
             "rectangle.egg",
-            "eggcc-3mm.egg",
+            "eggcc-2mm.egg",
             "subsume.egg",
             "subsume-relation.egg",
         ];
