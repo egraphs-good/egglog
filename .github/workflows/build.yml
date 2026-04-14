@@ -56,7 +56,7 @@ jobs:
           - stresstest_large_expr
           - typeinfer
           - taylor51
-          - eggcc-3mm
+          - eggcc-2mm
           - rust_rule_fib
           - rust_rule_match_overhead
           - rust_rule_match_with_serialize
