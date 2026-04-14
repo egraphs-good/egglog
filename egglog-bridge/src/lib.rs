@@ -480,6 +480,8 @@ impl EGraph {
         if uf_size_before == uf_size_after {
             // No new unions: skip the full rebuild but still advance the
             // timestamp so that seminaive evaluation sees a fresh epoch.
+            // Rebuilding is only necessary when new unions have been made because ids may need to be updated.
+            // Adding terms doesn't necessarily touch the union-find, only doing a union between existing ids does.
             self.inc_ts();
             return Ok(iteration_report);
         }
@@ -814,6 +816,8 @@ impl EGraph {
         self.inc_ts();
         let uf_size_after = self.db.get_table(self.uf_table).len();
         if uf_size_before != uf_size_after {
+            // Rebuilding is only necessary when new unions have been made because ids may need to be updated.
+            // Adding terms doesn't necessarily touch the union-find, only doing a union between existing ids does.
             self.rebuild().unwrap();
         }
         updated
