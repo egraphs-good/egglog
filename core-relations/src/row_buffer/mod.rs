@@ -17,15 +17,102 @@ use crate::{
 #[cfg(test)]
 mod tests;
 
+/// A trait for types that can store a vector of `Value`s.
+///
+/// Can either be backed by a pool or SmallVec.
+pub trait ValueVec {
+    fn as_values(&self) -> &[Cell<Value>];
+    fn as_values_mut(&mut self) -> &mut [Cell<Value>];
+    fn clear(&mut self);
+    fn push(&mut self, value: Cell<Value>);
+    fn extend_from_values(&mut self, values: &[Value]);
+    /// Refresh the backing allocation from a pool, if applicable.
+    /// The default implementation is a no-op, used by non-pooled backends.
+    fn refresh(&mut self) {}
+}
+
+pub(crate) type PooledValueVec = Pooled<Vec<Cell<Value>>>;
+
+impl ValueVec for PooledValueVec {
+    fn as_values(&self) -> &[Cell<Value>] {
+        self
+    }
+
+    fn as_values_mut(&mut self) -> &mut [Cell<Value>] {
+        self
+    }
+
+    fn clear(&mut self) {
+        // Coerce to &mut Vec to call Vec::clear rather than ValueVec::clear,
+        // which would recurse infinitely.
+        let v: &mut Vec<Cell<Value>> = self;
+        v.clear();
+    }
+
+    fn push(&mut self, value: Cell<Value>) {
+        let v: &mut Vec<Cell<Value>> = self;
+        v.push(value);
+    }
+
+    fn extend_from_values(&mut self, values: &[Value]) {
+        let v: &mut Vec<Cell<Value>> = self;
+        v.extend(values.iter().copied().map(Cell::new));
+    }
+
+    fn refresh(&mut self) {
+        Pooled::refresh(self);
+    }
+}
+
+pub(crate) type SmallValueVec = SmallVec<[Cell<Value>; 64]>;
+
+impl ValueVec for SmallValueVec {
+    fn as_values(&self) -> &[Cell<Value>] {
+        self
+    }
+
+    fn as_values_mut(&mut self) -> &mut [Cell<Value>] {
+        self
+    }
+
+    fn clear(&mut self) {
+        // Coerce to &mut SmallVec to call SmallVec::clear rather than
+        // ValueVec::clear, which would recurse infinitely.
+        let v: &mut SmallVec<[Cell<Value>; 64]> = self;
+        v.clear();
+    }
+
+    fn push(&mut self, value: Cell<Value>) {
+        let v: &mut SmallVec<[Cell<Value>; 64]> = self;
+        v.push(value);
+    }
+
+    fn extend_from_values(&mut self, values: &[Value]) {
+        let v: &mut SmallVec<[Cell<Value>; 64]> = self;
+        for &val in values {
+            v.push(Cell::new(val));
+        }
+    }
+}
+
+/// A trait for types that can receive rows during a scan.
+///
+/// This allows `scan_project` and similar methods to write into different
+/// backing stores (e.g. pool-backed or inline [`TaggedRowBuffer`]) without
+/// making the scan API generic.
+pub trait RowSink {
+    fn add_row(&mut self, row_id: RowId, row: &[Value]);
+}
+
 /// A batch of rows. This is a common enough pattern that it makes sense to make
 /// it its own data-structure. The advantage of this abstraction is that it
 /// allows us to store multiple rows in a single allocation.
 ///
 /// RowBuffer stores data in row-major order.
-pub struct RowBuffer {
+pub struct RowBuffer<V: ValueVec = PooledValueVec> {
     n_columns: usize,
     total_rows: usize,
-    data: Pooled<Vec<Cell<Value>>>,
+    data: V,
 }
 
 // Safety constraints for RowBuffer.
@@ -39,8 +126,12 @@ pub struct RowBuffer {
 // This method enabled multiple threads to write to exclusive rows in the table
 // without performing any additional synchronization, or slowing down future
 // readers by requiring atomic operations for every read.
+// SAFETY: See the module-level safety comment. We manually ensure that
+// concurrent access patterns are safe despite the use of `Cell<Value>`.
 unsafe impl Send for RowBuffer {}
 unsafe impl Sync for RowBuffer {}
+unsafe impl Send for RowBuffer<SmallValueVec> {}
+unsafe impl Sync for RowBuffer<SmallValueVec> {}
 
 impl Clone for RowBuffer {
     fn clone(&self) -> Self {
@@ -52,6 +143,103 @@ impl Clone for RowBuffer {
     }
 }
 
+// Generic methods available for any ValueVec backend.
+impl<V: ValueVec> RowBuffer<V> {
+    /// The size of the rows accepted by this buffer.
+    pub(crate) fn arity(&self) -> usize {
+        self.n_columns
+    }
+
+    /// The number of rows in the buffer.
+    pub(crate) fn len(&self) -> usize {
+        self.total_rows
+    }
+
+    /// Clear the contents of the buffer.
+    pub(crate) fn clear(&mut self) {
+        self.data.clear();
+        self.total_rows = 0;
+    }
+
+    /// Return an iterator over all rows in the buffer.
+    pub(crate) fn iter(&self) -> impl Iterator<Item = &[Value]> {
+        self.data
+            .as_values()
+            .chunks(self.n_columns)
+            // SAFETY: see comment in `non_stale`.
+            .map(|row| unsafe { mem::transmute::<&[Cell<Value>], &[Value]>(row) })
+    }
+
+    /// Get the row corresponding to the given RowId.
+    ///
+    /// # Panics
+    /// This method panics if `row` is out of bounds.
+    pub(crate) fn get_row(&self, row: RowId) -> &[Value] {
+        // SAFETY: see the comment in `non_stale`.
+        unsafe { get_row(self.data.as_values(), self.n_columns, row) }
+    }
+
+    /// Get a mutable reference to the row corresponding to the given RowId.
+    ///
+    /// # Panics
+    /// This method panics if `row` is out of bounds.
+    pub(crate) fn get_row_mut(&mut self, row: RowId) -> &mut [Value] {
+        // SAFETY: see the comment in `non_stale`.
+        unsafe {
+            mem::transmute::<&mut [Cell<Value>], &mut [Value]>(
+                &mut self.data.as_values_mut()
+                    [row.index() * self.n_columns..(row.index() + 1) * self.n_columns],
+            )
+        }
+    }
+
+    /// Return an iterator over the non-stale rows in the buffer.
+    pub(crate) fn non_stale(&self) -> impl Iterator<Item = &[Value]> {
+        self.data
+            .as_values()
+            .chunks(self.n_columns)
+            .filter(|row| !row[0].get().is_stale())
+            // SAFETY: This kind of transmutation is safe so long as no one
+            // modifies any of the values behind the `Cell` while this value is
+            // borrowed.
+            //
+            // The only time we modify these values is in safe methods requiring
+            // a mutable reference (`set_stale`, `get_row_mut`), or in the
+            // unsafe `set_stale_shared` method whose safety requirements imply
+            // that no call will overlap with borrowing such a row.
+            .map(|row| unsafe { mem::transmute::<&[Cell<Value>], &[Value]>(row) })
+    }
+
+    pub(crate) fn non_stale_mut(&mut self) -> impl Iterator<Item = &mut [Value]> {
+        self.data
+            .as_values_mut()
+            .chunks_mut(self.n_columns)
+            .filter(|row| !row[0].get().is_stale())
+            // SAFETY: This kind of transmutation is safe so long as no one
+            // modifies any of the values behind the `Cell` while this value is
+            // borrowed.
+            //
+            // The only time we modify these values is in safe methods requiring
+            // a mutable reference (`set_stale`, `get_row_mut`), or in the
+            // unsafe `set_stale_shared` method whose safety requirements imply
+            // that no call will overlap with borrowing such a row.
+            .map(|row| unsafe { mem::transmute::<&mut [Cell<Value>], &mut [Value]>(row) })
+    }
+
+    /// Set the given row to be stale. By convention, this calls `set_stale` on
+    /// the first column in the row. Returns whether the row was already stale.
+    ///
+    /// # Panics
+    /// This method panics if `row` is out of bounds.
+    pub(crate) fn set_stale(&mut self, row: RowId) -> bool {
+        let row = self.get_row_mut(row);
+        let res = row[0].is_stale();
+        row[0].set_stale();
+        res
+    }
+}
+
+// Methods specific to the pool-backed RowBuffer.
 impl RowBuffer {
     /// Create a new RowBuffer with the given arity.
     pub(crate) fn new(n_columns: usize) -> RowBuffer {
@@ -80,12 +268,8 @@ impl RowBuffer {
 
     /// Reserve space for `additional` rows.
     pub(crate) fn reserve(&mut self, additional: usize) {
-        self.data.reserve(additional * self.n_columns);
-    }
-
-    /// The size of the rows accepted by this buffer.
-    pub(crate) fn arity(&self) -> usize {
-        self.n_columns
+        let v: &mut Vec<Cell<Value>> = &mut self.data;
+        v.reserve(additional * self.n_columns);
     }
 
     pub(crate) fn raw_rows(&self) -> *const Value {
@@ -104,37 +288,6 @@ impl RowBuffer {
         self.total_rows = count;
     }
 
-    /// Return an iterator over the non-stale rows in the buffer.
-    pub(crate) fn non_stale(&self) -> impl Iterator<Item = &[Value]> {
-        self.data
-            .chunks(self.n_columns)
-            .filter(|row| !row[0].get().is_stale())
-            // SAFETY: This kind of transmutation is safe so long as no one
-            // modifies any of the values behind the `Cell` while this value is
-            // borrowed.
-            //
-            // The only time we modify these values is in safe methods requiring
-            // a mutable reference (`set_stale`, `get_row_mut`), or in the
-            // unsafe `set_stale_shared` method whose safety requirements imply
-            // that no call will overlap with borrowing such a row.
-            .map(|row| unsafe { mem::transmute::<&[Cell<Value>], &[Value]>(row) })
-    }
-
-    pub(crate) fn non_stale_mut(&mut self) -> impl Iterator<Item = &mut [Value]> {
-        self.data
-            .chunks_mut(self.n_columns)
-            .filter(|row| !row[0].get().is_stale())
-            // SAFETY: This kind of transmutation is safe so long as no one
-            // modifies any of the values behind the `Cell` while this value is
-            // borrowed.
-            //
-            // The only time we modify these values is in safe methods requiring
-            // a mutable reference (`set_stale`, `get_row_mut`), or in the
-            // unsafe `set_stale_shared` method whose safety requirements imply
-            // that no call will overlap with borrowing such a row.
-            .map(|row| unsafe { mem::transmute::<&mut [Cell<Value>], &mut [Value]>(row) })
-    }
-
     /// A parallel version of [`RowBuffer::iter`].
     pub(crate) fn parallel_iter(&self) -> impl ParallelIterator<Item = &[Value]> {
         use rayon::prelude::*;
@@ -147,25 +300,6 @@ impl RowBuffer {
         // unsafe `set_stale_shared` method whose safety requirements imply
         // that no call will overlap with borrowing such a row.
         unsafe { mem::transmute::<&[Cell<Value>], &[Value]>(&self.data) }.par_chunks(self.n_columns)
-    }
-
-    /// Return an iterator over all rows in the buffer.
-    pub(crate) fn iter(&self) -> impl Iterator<Item = &[Value]> {
-        self.data
-            .chunks(self.n_columns)
-            // SAFETY: see comment in `non_stale`.
-            .map(|row| unsafe { mem::transmute::<&[Cell<Value>], &[Value]>(row) })
-    }
-
-    /// Clear the contents of the buffer.
-    pub(crate) fn clear(&mut self) {
-        self.data.clear();
-        self.total_rows = 0;
-    }
-
-    /// The number of rows in the buffer.
-    pub(crate) fn len(&self) -> usize {
-        self.total_rows
     }
 
     /// Mark a row as stale in the buffer with shared access to it. Returns
@@ -187,15 +321,6 @@ impl RowBuffer {
         was_stale
     }
 
-    /// Get the row corresponding to the given RowId.
-    ///
-    /// # Panics
-    /// This method panics if `row` is out of bounds.
-    pub(crate) fn get_row(&self, row: RowId) -> &[Value] {
-        // SAFETY: see the comment in `non_stale`.
-        unsafe { get_row(&self.data, self.n_columns, row) }
-    }
-
     /// Get the row corresponding to the given RowId without bounds checking.
     pub(crate) unsafe fn get_row_unchecked(&self, row: RowId) -> &[Value] {
         unsafe {
@@ -204,31 +329,6 @@ impl RowBuffer {
                 self.n_columns,
             )
         }
-    }
-
-    /// Get a mutable reference to the row corresponding to the given RowId.
-    ///
-    /// # Panics
-    /// This method panics if `row` is out of bounds.
-    pub(crate) fn get_row_mut(&mut self, row: RowId) -> &mut [Value] {
-        // SAFETY: see the comment in `non_stale`.
-        unsafe {
-            mem::transmute::<&mut [Cell<Value>], &mut [Value]>(
-                &mut self.data[row.index() * self.n_columns..(row.index() + 1) * self.n_columns],
-            )
-        }
-    }
-
-    /// Set the given row to be stale. By convention, this calls `set_stale` on
-    /// the first column in the row. Returns whether the row was already stale.
-    ///
-    /// # Panics
-    /// This method panics if `row` is out of bounds.
-    pub(crate) fn set_stale(&mut self, row: RowId) -> bool {
-        let row = self.get_row_mut(row);
-        let res = row[0].is_stale();
-        row[0].set_stale();
-        res
     }
 
     /// Insert a row into a buffer, returning the RowId for this row.
@@ -246,7 +346,7 @@ impl RowBuffer {
             Pooled::refresh(&mut self.data);
         }
         let res = RowId::from_usize(self.total_rows);
-        self.data.extend(row.iter().copied().map(Cell::new));
+        self.data.extend_from_values(row);
         self.total_rows += 1;
         res
     }
@@ -288,18 +388,41 @@ impl RowBuffer {
 /// A `TaggedRowBuffer` wraps a `RowBuffer` but also keeps track of a _source_
 /// `RowId` for the row it contains. This makes it useful for materializing
 /// the contents of a `Subset` of a table.
-pub struct TaggedRowBuffer {
-    inner: RowBuffer,
+pub struct TaggedRowBuffer<V: ValueVec = PooledValueVec> {
+    inner: RowBuffer<V>,
 }
 
 impl TaggedRowBuffer {
-    /// Create a new buffer with the given arity.
+    /// Create a new pool-backed buffer with the given arity.
     pub fn new(n_columns: usize) -> TaggedRowBuffer {
         TaggedRowBuffer {
             inner: RowBuffer::new(n_columns + 1),
         }
     }
 
+    /// A parallel iterator over the contents of the buffer.
+    pub fn par_iter(&self) -> impl ParallelIterator<Item = (RowId, &[Value])> {
+        self.inner.parallel_iter().map(|row| self.unwrap_row(row))
+    }
+}
+
+impl TaggedRowBuffer<SmallValueVec> {
+    /// Create a new inline (stack-allocated) buffer with the given arity.
+    ///
+    /// Prefer this over [`TaggedRowBuffer::new`] when the buffer is short-lived
+    /// and the number of rows is small, to avoid pool-allocation overhead.
+    pub fn new_inline(n_columns: usize) -> TaggedRowBuffer<SmallValueVec> {
+        TaggedRowBuffer {
+            inner: RowBuffer {
+                n_columns: n_columns + 1,
+                total_rows: 0,
+                data: SmallVec::new(),
+            },
+        }
+    }
+}
+
+impl<V: ValueVec> TaggedRowBuffer<V> {
     /// Clear the contents of the buffer.
     pub fn clear(&mut self) {
         self.inner.clear()
@@ -332,10 +455,10 @@ impl TaggedRowBuffer {
             "attempting to add a row with mismatched arity to table"
         );
         if self.inner.total_rows == 0 {
-            Pooled::refresh(&mut self.inner.data);
+            self.inner.data.refresh();
         }
         let res = RowId::from_usize(self.inner.total_rows);
-        self.inner.data.extend(row.iter().copied().map(Cell::new));
+        self.inner.data.extend_from_values(row);
         self.inner.data.push(Cell::new(Value::new(row_id.rep())));
         self.inner.total_rows += 1;
         res
@@ -360,11 +483,6 @@ impl TaggedRowBuffer {
         self.inner.iter().map(|row| self.unwrap_row(row))
     }
 
-    /// Iterate over the contents of the buffer in parallel.
-    pub fn par_iter(&self) -> impl ParallelIterator<Item = (RowId, &[Value])> {
-        self.inner.parallel_iter().map(|row| self.unwrap_row(row))
-    }
-
     /// Iterate over all rows in the buffer, except for the stale ones.
     pub fn non_stale(&self) -> impl Iterator<Item = (RowId, &[Value])> {
         self.inner.non_stale().map(|row| self.unwrap_row(row))
@@ -387,10 +505,18 @@ impl TaggedRowBuffer {
         let row = &row[..self.base_arity()];
         (RowId::new(row_id.rep()), row)
     }
+
     fn unwrap_row_mut(base_arity: usize, row: &mut [Value]) -> (RowId, &mut [Value]) {
         let row_id = row[base_arity];
         let row = &mut row[..base_arity];
         (RowId::new(row_id.rep()), row)
+    }
+}
+
+impl<V: ValueVec> RowSink for TaggedRowBuffer<V> {
+    fn add_row(&mut self, row_id: RowId, row: &[Value]) {
+        // Explicitly call the inherent method to disambiguate from RowSink::add_row.
+        let _ = TaggedRowBuffer::add_row(self, row_id, row);
     }
 }
 
