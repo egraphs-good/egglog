@@ -3389,12 +3389,12 @@
 (let t2411 4887)
 (let t2412 (Output t2410 t2411))
 
-;(run-schedule
-;    (repeat 10
-;        (saturate expr)
-;        (run)
-;    )
-;    (saturate expr)
-;    (saturate base_cleanup)
-;    (saturate cleanup)
-;)
+(run-schedule
+    (repeat 10
+        (saturate expr)
+        (run)
+    )
+    (saturate expr)
+    (saturate base_cleanup)
+    (saturate cleanup)
+)
