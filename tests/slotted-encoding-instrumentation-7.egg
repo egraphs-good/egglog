@@ -43,14 +43,20 @@
 (rule ((= lhs (App "Add"
                   (App "Add" a b)
                   b)))
-      (...))
+      ((union lhs (App "Add" a (App "Add" b b)))))
 
 
 (rule ((= lhs (App "Add"
-                  (Rename m1 (App "Add" (Rename m2 a) (Rename m3 b))
-                  (Rename m4 b))))
+                  (Rename m1 (App "Add" (Rename m2 a) (Rename m3 b)))
+                  (Rename m4 b)))
        (= (compose m1 m3) m4)
                   )
-      (...))
+      ((union lhs
+          (App "Add" (Rename (compose m1 m2) a)
+                     (App "Add"
+                       (Rename m4 b)
+                       (Rename m4 b))))))
+
+
 
 
