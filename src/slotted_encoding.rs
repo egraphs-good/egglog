@@ -70,11 +70,61 @@ impl<'a> SlottedInstrumentor<'a> {
     // (compose m m2) and (compose m m3)
     fn find_renamings_around_var(
         &self,
-        generic_fact: &ResolvedFact,
-        v: String,
+        generic_fact: &Fact,
+        v: &str,
         current_renaming: Expr,
-    ) -> Vec<String> {
-        todo!()
+    ) -> Vec<Expr> {
+        match generic_fact {
+            Fact::Eq(_, lhs, rhs) => {
+                let mut result = self.find_renamings_in_expr(lhs, v, current_renaming.clone());
+                result.extend(self.find_renamings_in_expr(rhs, v, current_renaming));
+                result
+            }
+            Fact::Fact(expr) => self.find_renamings_in_expr(expr, v, current_renaming),
+        }
+    }
+
+    /// Helper: walk an Expr tree (already containing Rename wrappers) looking for
+    /// occurrences of variable `v`. Accumulates the composition of Rename maps
+    /// along the path and returns the composed renaming for each occurrence.
+    ///
+    /// When we see `(Rename m inner)`, the effective renaming becomes
+    /// `(compose current_renaming m)` and we recurse into `inner`.
+    /// When we reach `Var(name)` where `name == v`, we return `current_renaming`.
+    fn find_renamings_in_expr(
+        &self,
+        expr: &Expr,
+        v: &str,
+        current_renaming: Expr,
+    ) -> Vec<Expr> {
+        match expr {
+            GenericExpr::Var(_, name) => {
+                if name == v {
+                    vec![current_renaming]
+                } else {
+                    vec![]
+                }
+            }
+            GenericExpr::Call(span, head, children) if head == "Rename" && children.len() == 2 => {
+                // (Rename m inner) — compose the current renaming with m
+                let m = &children[0];
+                let inner = &children[1];
+                let composed = Expr::Call(
+                    span.clone(),
+                    "compose".to_string(),
+                    vec![current_renaming, m.clone()],
+                );
+                self.find_renamings_in_expr(inner, v, composed)
+            }
+            GenericExpr::Call(_, _, children) => {
+                let mut result = vec![];
+                for child in children {
+                    result.extend(self.find_renamings_in_expr(child, v, current_renaming.clone()));
+                }
+                result
+            }
+            GenericExpr::Lit(_, _) => vec![],
+        }
     }
 
     fn add_slotted_encoding_one(&mut self, command: ResolvedNCommand) -> Command {
