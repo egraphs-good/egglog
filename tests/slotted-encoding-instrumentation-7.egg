@@ -6,6 +6,13 @@
       ((union (App "Add" a b) (App "Add" b a))))
 
 
+
+(rule ((= lhs (App "id" (Rename m x)))
+       (= x (ProjectLeader (Project x))))
+      ((union lhs x)))
+
+
+
 ;; associativity before
 (rule ((= lhs (App "Add" (App "Add" a b) c)))
       ((union (App "Add" (App "Add" a b) c)
