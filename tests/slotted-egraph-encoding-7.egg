@@ -63,6 +63,9 @@
     ((union (Var n) (Rename (map-insert (map-empty) 0 n) (Var 0))))
 )
 
+
+;; (App f (Rename ... (Var 3)) (Rename ... (Var 0)))
+
 ; shape computation for App
 (rule 
     (
@@ -73,7 +76,10 @@
         ; m_sh :: slots(x) -> shape-slots
     )
     (
-        (union x (Rename (inverse m_sh) (App f (Rename (compose m_sh m1) a1) (Rename (compose m_sh m2) a2))))
+        (union x
+           (Rename (inverse m_sh)
+              (App f
+                (Rename (compose m_sh m1) a1) (Rename (compose m_sh m2) a2))))
     )
 )
 
@@ -92,11 +98,22 @@
 (let $v3 (Var 3))
 (let $v4 (Var 4))
 
-(let $x (App "f" $v1 $v2))
+(let $fv1v2 (App "f" $v1 $v2))
 (let $y (App "f" $v3 $v4))
 
-(let $x2 (App "g" $x $v2))
+(let $gxv2 (App "g" $fv1v2 $v2))
 (let $y2 (App "g" $y $v4))
+
+
+;; a rule that drops the first argument for "id"
+(rule ((= lhs (App "id" (Rename m x) (Rename m2 x2)))
+       (= x (ProjectLeader (Project x)))
+       (= x2 (ProjectLeader (Project x2)))
+       )
+      ((union lhs (Rename m x))))
+
+(let $idapp (App "id" $v1 $v1))
+
 
 (run 1000)
 
@@ -105,4 +122,7 @@
 
 ; Here we check equality up to renaming!
 (check (= (Project $v1) (Project $v4)))
-(check (= (Project $x2) (Project $y2)))
+(check (= (Project $gxv2) (Project $y2)))
+
+(check (= $idapp $v1))
+(check (= (Project $idapp) (Project $v2)))
