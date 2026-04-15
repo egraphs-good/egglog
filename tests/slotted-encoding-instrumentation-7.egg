@@ -38,3 +38,19 @@
 (rule ((= a (App "f" (Rename m (App "f" a2))))
        (= a2 (Rename m a)))
       (...))
+
+;; complex assoc before
+(rule ((= lhs (App "Add"
+                  (App "Add" a b)
+                  b)))
+      (...))
+
+
+(rule ((= lhs (App "Add"
+                  (Rename m1 (App "Add" (Rename m2 a) (Rename m3 b))
+                  (Rename m4 b))))
+       (= (compose m1 m3) m4)
+                  )
+      (...))
+
+
