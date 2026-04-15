@@ -61,6 +61,9 @@ struct Args {
     /// Enable proof testing, turning all `check` statements into `prove` statements
     #[clap(long)]
     proof_testing: bool,
+    /// Run with the slotted encoding for equality saturation
+    #[clap(long)]
+    slotted: bool,
 }
 
 /// Start a command-line interface for the E-graph.
@@ -88,6 +91,10 @@ pub fn cli(mut egraph: EGraph) {
     if args.proof_testing {
         egraph = egraph.with_proofs_enabled();
         egraph = egraph.with_proof_testing();
+    }
+
+    if args.slotted {
+        egraph = egraph.with_slotted_encoding();
     }
 
     EGraph::set_num_threads(args.threads);

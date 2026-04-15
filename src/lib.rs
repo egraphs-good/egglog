@@ -262,6 +262,12 @@ pub struct EGraph {
     proof_state: EncodingState,
     /// In proof mode, this is the program before proof instrumentation and the version we use for proof checking.
     proof_check_program: Vec<ResolvedNCommand>,
+    /// Whether to use the slotted encoding for equality saturation.
+    slotted_encoding: bool,
+    /// When slotted encoding is enabled, this holds a clone of the EGraph
+    /// used for typechecking the original (pre-slotted) program, so that
+    /// the main EGraph can accumulate type info from slotted-encoding symbols.
+    slotted_original_typechecking: Option<Box<Self>>,
 }
 
 /// A user-defined command allows users to inject custom command that can be called
@@ -356,6 +362,8 @@ impl Default for EGraph {
             command_macros: Default::default(),
             proof_state,
             proof_check_program: vec![],
+            slotted_encoding: false,
+            slotted_original_typechecking: None,
         };
         add_base_sort(&mut eg, UnitSort, span!()).unwrap();
         add_base_sort(&mut eg, StringSort, span!()).unwrap();
@@ -477,6 +485,13 @@ impl EGraph {
     /// Enable testing of getting proofs for all `check` commands.
     pub fn with_proof_testing(mut self) -> Self {
         self.proof_state.proof_testing = true;
+        self
+    }
+
+    /// Enable the slotted encoding for equality saturation.
+    pub(crate) fn with_slotted_encoding(mut self) -> Self {
+        self.slotted_original_typechecking = Some(Box::new(self.clone()));
+        self.slotted_encoding = true;
         self
     }
 
@@ -1580,6 +1595,17 @@ impl EGraph {
             }
 
             Ok(proof_form(typechecked, &mut self.parser.symbol_gen))
+        } else if let Some(slotted_typechecking) =
+            self.slotted_original_typechecking.as_mut()
+        {
+            // Typecheck using the original egraph (before slotted-encoding symbols)
+            let mut typechecked = slotted_typechecking.typecheck_program(&desugared)?;
+
+            typechecked = remove_globals::remove_globals(typechecked, &mut self.parser.symbol_gen);
+            for command in &typechecked {
+                self.names.check_shadowing(command)?;
+            }
+            Ok(typechecked)
         } else {
             let mut typechecked = self.typecheck_program(&desugared)?;
 
@@ -1596,6 +1622,26 @@ impl EGraph {
     /// When will_run is true, adds to `desugared_commands_run_so_far`, which is used for proof checking.
     fn resolve_command(&mut self, command: Command) -> Result<ResolvedNCommands, Error> {
         let resolved_before_proofs = self.resolve_command_before_proofs(command)?;
+
+        // add slotted encoding when it is enabled
+        let resolved_before_proofs = if self.slotted_encoding {
+            let slotted_commands = slotted_encoding::SlottedInstrumentor::add_slotted_encoding(
+                self,
+                resolved_before_proofs,
+            );
+            let mut re_resolved = vec![];
+            for cmd in slotted_commands {
+                let desugared =
+                    desugar_command(cmd, &mut self.parser, self.proof_state.proof_testing)?;
+                let typechecked = self.typecheck_program(&desugared)?;
+                let typechecked =
+                    remove_globals::remove_globals(typechecked, &mut self.parser.symbol_gen);
+                re_resolved.extend(typechecked);
+            }
+            re_resolved
+        } else {
+            resolved_before_proofs
+        };
 
         // Add term encoding when it is enabled
         if self.proof_state.original_typechecking.is_none() {
