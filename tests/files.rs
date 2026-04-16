@@ -88,9 +88,9 @@ impl Run {
                     let snapshot_content_across_treatments =
                         self.outputs_to_snapshot_preserved_across_treatments(outputs);
 
-                    // only assert snapshot if the snapshot is non-empty
-                    // proof_testing has different output due to automatic prove-exists, so no snapshot for that
-                    if !snapshot_content_across_treatments.is_empty() && !self.proof_testing {
+                    if self.should_assert_snapshot_across_treatments(
+                        &snapshot_content_across_treatments,
+                    ) {
                         insta::assert_snapshot!(
                             snapshot_name_across_treatments,
                             snapshot_content_across_treatments
@@ -292,6 +292,17 @@ impl Run {
                 .any(|f| self.path.to_string_lossy().contains(f));
             in_list && (self.proofs || self.term_encoding || self.proof_testing)
         }
+    }
+
+    /// only assert snapshot if the snapshot is non-empty
+    /// proof_testing has different output due to automatic prove-exists, so no snapshot for that
+    /// also, eggcc uses :merge old which can cause nondeterminism in parallem mode
+    fn should_assert_snapshot_across_treatments(
+        &self,
+        snapshot_content_across_treatments: &str,
+    ) -> bool {
+        let is_parallel_eggcc = self.name().to_string().contains("eggcc") && self.threads > 1;
+        !snapshot_content_across_treatments.is_empty() && !self.proof_testing && !is_parallel_eggcc
     }
 }
 
