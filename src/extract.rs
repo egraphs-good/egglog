@@ -222,11 +222,12 @@ impl<C: Cost + Ord + Eq + Clone + Debug> Extractor<C> {
                 options.skip_view_tables && func.1.decl.term_constructor.is_some();
             let hidden = func.1.decl.internal_hidden && options.respect_hidden;
 
-            // only extract constructors, skip view tables when requested for proof extraction, and respect unextractable/hidden flag
+            // only extract constructors (and functions with term_constructor), skip view tables when requested for proof extraction, and respect unextractable/hidden flag
             if !unextractable
                 && !should_skip_view
                 && !hidden
-                && func.1.decl.subtype == FunctionSubtype::Constructor
+                && (func.1.decl.subtype == FunctionSubtype::Constructor
+                    || func.1.decl.term_constructor.is_some())
             {
                 let func_name = func.0.clone();
                 // For view tables (with term_constructor in proof mode), the e-class is the last input column

@@ -222,6 +222,12 @@ impl<'a> ProofInstrumentor<'a> {
         let fresh_name = self.egraph.parser.symbol_gen.fresh("delete_rule");
 
         // Subsume could use delete, except that `check` ignores subsumption.
+        // When proofs are enabled, the view is a function (not constructor), so we use delete instead of subsume.
+        let subsume_action = if self.egraph.proof_state.proofs_enabled {
+            format!("(delete ({view_name} {child_names} out))")
+        } else {
+            format!("(subsume ({view_name} {child_names} out))")
+        };
         format!(
             "(rule (({to_delete_name} {child_names})
                     ({view_name} {child_names} out))
@@ -231,7 +237,7 @@ impl<'a> ProofInstrumentor<'a> {
                     :name \"{fresh_name}\")
              (rule (({subsumed_name} {child_names})
                     ({view_name} {child_names} out))
-                   ((subsume ({view_name} {child_names} out)))
+                   ({subsume_action})
                     :ruleset {delete_subsume_ruleset}
                     :name \"{fresh_name}_subsume\")"
         )
@@ -245,7 +251,7 @@ impl<'a> ProofInstrumentor<'a> {
         fdecl: &ResolvedFunctionDecl,
         child_names: &[String],
         child_names_str: &str,
-        view_name: &str,
+        _view_name: &str,
         rebuilding_ruleset: &str,
     ) -> String {
         let name = &fdecl.name;
@@ -260,12 +266,13 @@ impl<'a> ProofInstrumentor<'a> {
 
         let p1_fresh = self.egraph.parser.symbol_gen.fresh("p1");
         let p2_fresh = self.egraph.parser.symbol_gen.fresh("p2");
-        let view_proof_name = self.view_proof_name(&fdecl.name);
+        let view_name = self.view_name(&fdecl.name);
         let rebuilding_cleanup_ruleset = self.proof_names().rebuilding_cleanup_ruleset_name.clone();
         let proof_query = if self.egraph.proof_state.proofs_enabled {
+            // View is a function with proof output; query it directly
             format!(
-                "(= {p1_fresh} ({view_proof_name} {child_names_str} old))
-                     (= {p2_fresh} ({view_proof_name} {child_names_str} new))
+                "(= {p1_fresh} ({view_name} {child_names_str} old))
+                     (= {p2_fresh} ({view_name} {child_names_str} new))
                     "
             )
         } else {
@@ -460,12 +467,29 @@ impl<'a> ProofInstrumentor<'a> {
         if fdecl.internal_let {
             view_flags.push_str(" :internal-let");
         }
+        let view_decl = if self.egraph.proof_state.proofs_enabled {
+            let proof_type = self.proof_names().proof_datatype.clone();
+            // For functions, include all relevant options
+            let mut fn_flags = String::new();
+            if fdecl.unextractable {
+                fn_flags.push_str(" :unextractable");
+            }
+            if fdecl.internal_hidden {
+                fn_flags.push_str(" :internal-hidden");
+            }
+            if fdecl.internal_let {
+                fn_flags.push_str(" :internal-let");
+            }
+            format!("(function {view_name} ({view_sorts}) {proof_type} :merge old :term-constructor {name}{fn_flags})")
+        } else {
+            format!("(constructor {view_name} ({view_sorts}) {fresh_sort} :term-constructor {name}{view_flags})")
+        };
         self.parse_program(&format!(
             "
             (sort {fresh_sort})
             {to_ast_view_sort}
             (constructor {name} ({term_sorts}) {view_sort}{term_flags} :internal-hidden :unextractable)
-            (constructor {view_name} ({view_sorts}) {fresh_sort} :term-constructor {name}{view_flags})
+            {view_decl}
             (constructor {to_delete_name} ({in_sorts}) {fresh_sort} :internal-hidden)
             (constructor {subsumed_name} ({in_sorts}) {fresh_sort} :internal-hidden)
             {proof_constructors}
@@ -474,24 +498,9 @@ impl<'a> ProofInstrumentor<'a> {
         ))
     }
 
-    fn proof_functions(&mut self, fdecl: &ResolvedFunctionDecl, view_sorts: &str) -> String {
-        if !self.egraph.proof_state.proofs_enabled {
-            return "".to_string();
-        }
-
-        let view_proof_name = self.view_proof_name(&fdecl.name);
-        let proof_type = self.proof_names().proof_datatype.clone();
-
-        // A view proof gives a proof that the representative term t_r equals the term in the view.
-        // Example: (AddView 2 3 t_r) proves the proposition that t_r = Add(2, 3) in that direction.
-        // This direction makes proof instrumentation use fewer symmetries, since the goal is to
-        // match the right-hand side of the equality to the concrete syntax
-        // of the original rule.
-        format!(
-            "
-            (function {view_proof_name} ({view_sorts}) {proof_type} :merge old :internal-hidden)
-            "
-        )
+    fn proof_functions(&mut self, _fdecl: &ResolvedFunctionDecl, _view_sorts: &str) -> String {
+        // ViewProof is now merged into the view table as its output column
+        "".to_string()
     }
 
     /// Rules that update the views when children change.
@@ -650,12 +659,11 @@ impl<'a> ProofInstrumentor<'a> {
 
                 let view_name = self.view_name(head.name());
                 let args_str = ListDisplay(new_args, " ");
-                res.push(format!("({view_name} {args_str})",));
 
                 if self.egraph.proof_state.proofs_enabled {
-                    let view_proof_name = self.view_proof_name(head.name());
+                    // View is a function with proof output
                     let proof_var = self.fresh_var();
-                    res.push(format!("(= {proof_var} ({view_proof_name} {args_str}))"));
+                    res.push(format!("(= {proof_var} ({view_name} {args_str}))"));
                     let mut proof = proof_var;
                     for (i, arg_proof) in arg_proofs.into_iter().enumerate() {
                         let congr = &self.proof_names().congr_constructor;
@@ -669,6 +677,7 @@ impl<'a> ProofInstrumentor<'a> {
 
                     proof
                 } else {
+                    res.push(format!("({view_name} {args_str})"));
                     "".to_string()
                 }
             }
@@ -761,13 +770,12 @@ impl<'a> ProofInstrumentor<'a> {
                         let fv = self.fresh_var();
                         let view_name = self.view_name(&func_type.name);
                         let args_str = ListDisplay(new_args, " ");
-                        res.push(format!("({view_name} {args_str} {fv})",));
 
                         let proof = if self.proofs_enabled() {
+                            // View is a function with proof output
                             let view_proof_var = self.fresh_var();
-                            let view_proof_name = self.view_proof_name(&func_type.name);
                             res.push(format!(
-                                "(= {view_proof_var} ({view_proof_name} {args_str} {fv}))"
+                                "(= {view_proof_var} ({view_name} {args_str} {fv}))"
                             ));
                             let mut proof = view_proof_var;
                             for (i, arg_proof) in arg_proofs.into_iter().enumerate() {
@@ -783,6 +791,7 @@ impl<'a> ProofInstrumentor<'a> {
                             }
                             proof
                         } else {
+                            res.push(format!("({view_name} {args_str} {fv})"));
                             "".to_string()
                         };
                         (fv, proof)
@@ -901,21 +910,20 @@ impl<'a> ProofInstrumentor<'a> {
     /// Update the view with the given arguments.
     /// The arguments include the eclass for constructors.
     fn update_view(&mut self, fname: &str, args: &[String], proof: &str) -> String {
-        let mut res = vec![];
-        res.push(format!(
-            "({} {})",
-            self.view_name(fname),
-            ListDisplay(args, " "),
-        ));
-
+        let view_name = self.view_name(fname);
         if self.egraph.proof_state.proofs_enabled {
-            let proof_name = self.view_proof_name(fname);
-            res.push(format!(
-                "(set ({proof_name} {}) {proof})",
-                ListDisplay(args, " ")
-            ));
+            // View is a function with proof output; use set to update it
+            format!(
+                "(set ({view_name} {}) {proof})",
+                ListDisplay(args, " "),
+            )
+        } else {
+            // View is a constructor; just insert the tuple
+            format!(
+                "({view_name} {})",
+                ListDisplay(args, " "),
+            )
         }
-        res.join("\n")
     }
 
     /// Return some code adding to the view and term tables.
@@ -1007,26 +1015,22 @@ impl<'a> ProofInstrumentor<'a> {
 
     /// Returns a query for (fname args) and in proof mode returns a variable for the proof.
     fn query_view_and_get_proof(&mut self, fname: &str, args: &[String]) -> (String, String) {
-        let mut res = vec![];
-        res.push(format!(
-            "({} {})",
-            self.view_name(fname),
-            ListDisplay(args, " "),
-        ));
-
-        let pf_var = if self.egraph.proof_state.proofs_enabled {
-            let proof_name = self.view_proof_name(fname);
+        let view_name = self.view_name(fname);
+        if self.egraph.proof_state.proofs_enabled {
+            // View is a function with proof output; query it and bind the proof
             let pf_var = self.fresh_var();
-            res.push(format!(
-                "(= {pf_var} ({proof_name} {}))",
+            let query = format!(
+                "(= {pf_var} ({view_name} {}))",
                 ListDisplay(args, " ")
-            ));
-            pf_var
+            );
+            (query, pf_var)
         } else {
-            "".to_string()
-        };
-
-        (res.join("\n"), pf_var)
+            let query = format!(
+                "({view_name} {})",
+                ListDisplay(args, " "),
+            );
+            (query, "".to_string())
+        }
     }
 
     // Add to view and term tables, returning a variable for the created term.
