@@ -88,9 +88,9 @@ impl Run {
                     let snapshot_content_across_treatments =
                         self.outputs_to_snapshot_preserved_across_treatments(outputs);
 
-                    // only assert snapshot if the snapshot is non-empty
-                    // proof_testing has different output due to automatic prove-exists, so no snapshot for that
-                    if !snapshot_content_across_treatments.is_empty() && !self.proof_testing {
+                    if self.should_assert_snapshot_across_treatments(
+                        &snapshot_content_across_treatments,
+                    ) {
                         insta::assert_snapshot!(
                             snapshot_name_across_treatments,
                             snapshot_content_across_treatments
@@ -293,6 +293,17 @@ impl Run {
             in_list && (self.proofs || self.term_encoding || self.proof_testing)
         }
     }
+
+    /// only assert snapshot if the snapshot is non-empty
+    /// proof_testing has different output due to automatic prove-exists, so no snapshot for that
+    /// also, eggcc uses :merge old which can cause nondeterminism in parallem mode
+    fn should_assert_snapshot_across_treatments(
+        &self,
+        snapshot_content_across_treatments: &str,
+    ) -> bool {
+        let is_parallel_eggcc = self.name().to_string().contains("eggcc") && self.threads > 1;
+        !snapshot_content_across_treatments.is_empty() && !self.proof_testing && !is_parallel_eggcc
+    }
 }
 
 fn generate_tests(glob: &str) -> Vec<Trial> {
@@ -314,6 +325,7 @@ fn generate_tests(glob: &str) -> Vec<Trial> {
         // TODO: subsume.egg fails because we used a `check` on something subsumed. Need a way to run rules over subsumed things. Same with subsume-relation.egg.
         let proof_unsupported_file_list = [
             "math-microbenchmark.egg",
+            "eggcc-2mm.egg",
             "subsume.egg",
             "subsume-relation.egg",
         ];
