@@ -30,7 +30,6 @@ pub(crate) struct EncodingNames {
     /// For a given function symbol, the name of the function that converts to the AST type.
     pub(crate) sort_to_ast_constructor: HashMap<String, String>,
     pub(crate) fn_to_term_sort: HashMap<String, String>,
-    pub(crate) uf_proof_name: HashMap<String, String>,
     pub(crate) single_parent_ruleset_name: String,
     pub(crate) uf_function_index_ruleset_name: String,
     pub(crate) pcons: String,
@@ -44,7 +43,6 @@ pub(crate) struct EncodingNames {
     pub(crate) view_name: HashMap<String, String>,
     pub(crate) to_delete_name: HashMap<String, String>,
     pub(crate) subsumed_name: HashMap<String, String>,
-    pub(crate) view_proof_name: HashMap<String, String>,
     pub(crate) term_proof_name: HashMap<String, String>,
 }
 
@@ -72,7 +70,6 @@ impl EncodingNames {
             congr_constructor: symbol_gen.fresh("Congr"),
             sort_to_ast_constructor: HashMap::default(),
             fn_to_term_sort: HashMap::default(),
-            uf_proof_name: HashMap::default(),
             single_parent_ruleset_name: symbol_gen.fresh("single_parent"),
             uf_function_index_ruleset_name: symbol_gen.fresh("uf_function_index"),
             pcons: symbol_gen.fresh("PCons"),
@@ -84,7 +81,6 @@ impl EncodingNames {
             view_name: HashMap::default(),
             to_delete_name: HashMap::default(),
             subsumed_name: HashMap::default(),
-            view_proof_name: HashMap::default(),
             term_proof_name: HashMap::default(),
         }
     }
@@ -112,26 +108,6 @@ impl ProofInstrumentor<'_> {
             self.egraph
                 .proof_state
                 .uf_function
-                .insert(sort.to_string(), fresh_name.clone());
-            fresh_name
-        }
-    }
-
-    /// A UF proof gives a proof of equality between two terms.
-    /// Given two terms, gives a proof they are equal.
-    pub(crate) fn uf_proof_name(&mut self, sort: &str) -> String {
-        if let Some(name) = self.egraph.proof_state.proof_names.uf_proof_name.get(sort) {
-            name.clone()
-        } else {
-            let fresh_name = self
-                .egraph
-                .parser
-                .symbol_gen
-                .fresh(&format!("{sort}UFProof"));
-            self.egraph
-                .proof_state
-                .proof_names
-                .uf_proof_name
                 .insert(sort.to_string(), fresh_name.clone());
             fresh_name
         }
@@ -304,33 +280,6 @@ impl ProofInstrumentor<'_> {
             .unwrap_or_else(|| {
                 panic!("Function {fname}'s sort {fn_sort} has no recorded AST constructor")
             })
-    }
-
-    /// A view proof for functions proves ... = t by some justification, where t is the term of the view row.
-    /// A constructor view is more complex, representing f(c1, c2, c3, t_r) where t_r is a representative.
-    /// A proof for a view proves that t_r = f(c1, c2, c3).
-    pub(crate) fn view_proof_name(&mut self, name: &str) -> String {
-        if let Some(n) = self
-            .egraph
-            .proof_state
-            .proof_names
-            .view_proof_name
-            .get(name)
-        {
-            n.clone()
-        } else {
-            let fresh_name = self
-                .egraph
-                .parser
-                .symbol_gen
-                .fresh(&format!("{name}ViewProof"));
-            self.egraph
-                .proof_state
-                .proof_names
-                .view_proof_name
-                .insert(name.to_string(), fresh_name.clone());
-            fresh_name
-        }
     }
 
     pub(crate) fn term_proof_name(&mut self, name: &str) -> String {

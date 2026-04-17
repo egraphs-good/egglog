@@ -70,6 +70,18 @@ rebuild-time congruence (`rebuilding` + `rebuilding_cleanup`), and deferred dele
 (sort uf)
 (constructor UF_Math (Math Math) uf)
 (function UF_Mathf (Math) Math :merge new)
+```
+
+*The union-find* tables for each sort store the equivalence
+  classes of terms of that sort.
+`UF_<Sort>` remains the source of truth for UF maintenance updates,
+  while `UF_<Sort>f` is a function-backed index used by rebuild rules.
+Without proof tracking, `UF_<Sort>` is a constructor.
+When proof tracking is enabled, `UF_<Sort>` becomes a function with `Proof` output
+  (e.g., `(function UF_Math (Math Math) Proof :merge old :internal-hidden)`),
+  so proofs are stored directly in the UF table rather than in a separate table.
+
+```text
 (rule ((UF_Math a b)
       (UF_Math b c)
       (!= b c))
@@ -88,10 +100,7 @@ rebuild-time congruence (`rebuilding` + `rebuilding_cleanup`), and deferred dele
        :ruleset uf_function_index :name "uf_function_index_update")
 ```
 
-*The union-find* tables for each sort store the equivalence
-  classes of terms of that sort.
-`UF_<Sort>` remains the source of truth for UF maintenance updates,
-  while `UF_<Sort>f` is a function-backed index used by rebuild rules.
+*Union-find rules:*
 A couple rules ensure the constructor UF is kept up to date as
   equalities are added, and the indexing ruleset mirrors those rows
   into the function UF.
@@ -286,38 +295,41 @@ The proof proves a proposition `t = t` for
   input term `t`.
 We store the oldest proof currently.
 
+When proof tracking is enabled, the union-find table changes from a constructor
+  to a function whose output column is a `Proof`:
+
 ```text
-(function MathUFProof (Math Math) Proof :merge old)
+(function UF_Math (Math Math) Proof :merge old :internal-hidden)
 ```
 
-Similarly, the union-find table gets a proof table storing
-  proofs of equalities between terms.
-If term `a` has parent `b`, it stores a 
+If term `a` has parent `b`, `(UF_Math a b)` returns a 
   proof of `a = b`.
-The rules that update the union-find tables
-  are instrumented to produce proofs using
-  symmetry (`Sym`) and transitivity (`Trans`) as needed.
+The proof is stored directly in the UF table rather than in a separate table.
+The path compression and single-parent rules are instrumented to produce
+  proofs using symmetry (`Sym`) and transitivity (`Trans`) as needed.
 
+
+When proof tracking is enabled, view tables change from constructors to functions
+  whose output column is the proof.
 
 ```text
-(function AddViewProof (i64 i64 Math) Proof :merge old)
+(function AddView (i64 i64 Math) Proof :merge old :term-constructor Add)
 ```
 
-View tables are the trickiest.
-We store a separate proof table per view table.
 Recall that view tables store a term
   along with the e-class representative.
 For a term `t` with representative `r`,
-  the proof proves that `r = t`.
+  the proof (output of the view function) proves that `r = t`.
 The direction is important, making
   proof production easier later.
-We store the earliest proof currently.
+We store the earliest proof (`:merge old`).
+Because the view is a function, updates use `set` and subsumptions
+  use `delete` instead of `subsume`.
 
 
 ```text
-(rule ((AddView a b v8)
-       ;; proof that v8 = Add a b
-       (= v9 (AddViewProof a b v8)))
+(rule (;; query the view function directly for the proof
+       (= v9 (AddView a b v8)))
       (;; proof list, one per line of the original query
        (let v10 (PCons v9 (PNil )))
        
@@ -327,27 +339,24 @@ We store the earliest proof currently.
        ;; Setting the proof for Add a b
        (set (MathProof v11) v12)
 
-       (AddView a b v11)
-       ;; Setting the proof for the view
-       (set (AddViewProof a b v11) v12)
+       ;; Update the view function (set instead of constructor insertion)
+       (set (AddView a b v11) v12)
 
        (let v13 (Add b a))
        ;; Proof that Add b a = Add b a
        (let v14 (Rule "commutativity" v10 (AstMath v13) (AstMath v13)))
        (set (MathProof v13) v14)
-       (AddView b a v13)
-       (set (AddViewProof b a v13) v14)
+       (set (AddView b a v13) v14)
 
-       (UF_Math (ordering-max v11 v13) (ordering-min v11 v13))
-
-       ;; Set the proof that (Add a b) = (Add b a)
-       (set (MathUFProof (ordering-max v11 v13) (ordering-min v11 v13))
+       ;; Proof stored directly in UF table (since UF_Math is a function with Proof output)
+       (set (UF_Math (ordering-max v11 v13) (ordering-min v11 v13))
             (Rule "commutativity" v10 (AstMath (ordering-max v11 v13)) (AstMath (ordering-min v11 v13)))))
          :name "commutativity")
 ```
 
-Instrumented rules with proof tracking query proof tables,
-  then construct proofs for each action.
+Instrumented rules with proof tracking query the view function directly
+  (since the proof is its output column), then construct proofs for each action.
+View updates use `set` because the view is a function, not a constructor.
 For nested terms, congruence proofs are built to ensure
   the proof terms match the original queries.
 

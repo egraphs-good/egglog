@@ -9,4 +9,4 @@ In 5:1-11:43 of ungrounded-4.egg: (rule
   (= e4 (F (vec-of "a" "b") (vec-of b c))))
  ((F (vec-of "a" "b" "c") (vec-of a b c))
   (F (vec-of "a" "b" "c") (vec-of a b c))))
-Variable a is ungrounded
+Variable c is ungrounded

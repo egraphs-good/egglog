@@ -59,13 +59,11 @@ use extract::{DefaultCost, Extractor, TreeAdditiveCostModel};
 use indexmap::map::Entry;
 use log::{Level, log_enabled};
 use numeric_id::DenseIdMap;
-use numeric_id::NumericId;
 use prelude::*;
 pub use proofs::proof_encoding_helpers::{file_supports_proofs, program_supports_proofs};
 use scheduler::{SchedulerId, SchedulerRecord};
 pub use serialize::{SerializeConfig, SerializeOutput, SerializedNode};
 use sort::*;
-use std::collections::HashSet;
 use std::fmt::{Debug, Display, Formatter};
 use std::fs::File;
 use std::hash::Hash;
@@ -982,31 +980,6 @@ impl EGraph {
                 &self.type_info,
             );
             translator.query(query, false);
-            // When proofs are enabled, skip seminaive variants for proof-tracking
-            // atoms (ViewProof, UFProof, TermProof). These have `:merge old` so
-            // they never produce genuinely new entries — new proof entries only
-            // appear alongside new View/UF entries, whose seminaive variants
-            // already cover those matches.
-            if self.proof_state.proofs_enabled {
-                let pn = &self.proof_state.proof_names;
-                let proof_func_names: HashSet<&String> = pn
-                    .view_proof_name
-                    .values()
-                    .chain(pn.uf_proof_name.values())
-                    .chain(pn.term_proof_name.values())
-                    .collect();
-                for (name, indices) in &translator.func_atom_indices {
-                    if proof_func_names.contains(name) {
-                        for &idx in indices {
-                            translator.rb.skip_seminaive_atom(idx);
-                        }
-                    }
-                }
-                log::info!(
-                    "Rule '{}': atoms {:?}, proof_funcs {:?}, skipped proof atoms",
-                    rule.name, translator.func_atom_indices, proof_func_names
-                );
-            }
             translator.actions(actions)?;
             translator.build()
         };
@@ -1913,8 +1886,6 @@ struct BackendRule<'a> {
     entries: HashMap<core::ResolvedAtomTerm, QueryEntry>,
     functions: &'a IndexMap<String, Function>,
     type_info: &'a TypeInfo,
-    /// Maps function name to bridge atom indices, populated during query().
-    func_atom_indices: HashMap<String, Vec<usize>>,
 }
 
 impl<'a> BackendRule<'a> {
@@ -1928,7 +1899,6 @@ impl<'a> BackendRule<'a> {
             functions,
             type_info,
             entries: Default::default(),
-            func_atom_indices: Default::default(),
         }
     }
 
@@ -2017,15 +1987,13 @@ impl<'a> BackendRule<'a> {
         for atom in &query.atoms {
             match &atom.head {
                 ResolvedCall::Func(f) => {
-                    let name = f.name.clone();
-                    let func_id = self.func(f);
+                    let f = self.func(f);
                     let args = self.args(&atom.args);
                     let is_subsumed = match include_subsumed {
                         true => None,
                         false => Some(false),
                     };
-                    let atom_id = self.rb.query_table(func_id, &args, is_subsumed).unwrap();
-                    self.func_atom_indices.entry(name).or_default().push(atom_id.index());
+                    self.rb.query_table(f, &args, is_subsumed).unwrap();
                 }
                 ResolvedCall::Primitive(p) => {
                     let (p, args, ty) = self.prim(p, &atom.args);
