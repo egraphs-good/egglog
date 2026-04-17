@@ -465,6 +465,7 @@ impl EGraph {
     fn run_rules_inner(&mut self, rules: &[RuleId]) -> Result<IterationReport> {
         let ts = self.next_ts();
 
+        let uf_size_before = self.db.get_table(self.uf_table).len();
         let rule_set_report =
             run_rules_impl(&mut self.db, &mut self.rules, rules, ts, self.report_level)?;
         if let Some(message) = self.panic_message.lock().unwrap().take() {
@@ -475,7 +476,13 @@ impl EGraph {
             rule_set_report,
             rebuild_time: Duration::ZERO,
         };
-        if !iteration_report.changed() {
+        let uf_size_after = self.db.get_table(self.uf_table).len();
+        if uf_size_before == uf_size_after {
+            // No new unions: skip the full rebuild but still advance the
+            // timestamp so that seminaive evaluation sees a fresh epoch.
+            // Rebuilding is only necessary when new unions have been made because ids may need to be updated.
+            // Adding terms doesn't necessarily touch the union-find, only doing a union between existing ids does.
+            self.inc_ts();
             return Ok(iteration_report);
         }
 
@@ -804,9 +811,15 @@ impl EGraph {
     /// Flush the pending update buffers to the EGraph.
     /// Returns `true` if the database is updated.
     pub fn flush_updates(&mut self) -> bool {
+        let uf_size_before = self.db.get_table(self.uf_table).len();
         let updated = self.db.merge_all();
         self.inc_ts();
-        self.rebuild().unwrap();
+        let uf_size_after = self.db.get_table(self.uf_table).len();
+        if uf_size_before != uf_size_after {
+            // Rebuilding is only necessary when new unions have been made because ids may need to be updated.
+            // Adding terms doesn't necessarily touch the union-find, only doing a union between existing ids does.
+            self.rebuild().unwrap();
+        }
         updated
     }
 
