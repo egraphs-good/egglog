@@ -707,7 +707,8 @@ impl EGraph {
 
         let can_subsume = match decl.subtype {
             FunctionSubtype::Constructor => true,
-            FunctionSubtype::Custom => false,
+            // View tables (functions with term_constructor) need subsumption support
+            FunctionSubtype::Custom => decl.term_constructor.is_some(),
         };
 
         use egglog_bridge::{DefaultVal, MergeFn};

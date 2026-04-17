@@ -237,6 +237,20 @@ impl ProofInstrumentor<'_> {
         self.egraph.proof_state.proofs_enabled
     }
 
+    /// Returns the proof output type: `Proof` when proofs are enabled, `Unit` otherwise.
+    pub(crate) fn proof_type_str(&self) -> &str {
+        if self.proofs_enabled() {
+            &self.proof_names().proof_datatype
+        } else {
+            "Unit"
+        }
+    }
+
+    /// Returns the unit proof value `()`, used as a placeholder proof when proofs are disabled.
+    pub(crate) fn unit_proof(&self) -> &str {
+        "()"
+    }
+
     /// Returns code for a constructor that converts from sort to AST.
     /// Adds to the sort to AST constructor map.
     pub(crate) fn add_to_ast(&mut self, sort: &str) -> String {

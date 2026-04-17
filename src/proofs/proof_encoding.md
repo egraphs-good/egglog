@@ -67,8 +67,7 @@ rebuild-time congruence (`rebuilding` + `rebuilding_cleanup`), and deferred dele
 
 ```text
 (sort Math)
-(sort uf)
-(constructor UF_Math (Math Math) uf)
+(function UF_Math (Math Math) Unit :merge old :internal-hidden)
 (function UF_Mathf (Math) Math :merge new)
 ```
 
@@ -76,24 +75,25 @@ rebuild-time congruence (`rebuilding` + `rebuilding_cleanup`), and deferred dele
   classes of terms of that sort.
 `UF_<Sort>` remains the source of truth for UF maintenance updates,
   while `UF_<Sort>f` is a function-backed index used by rebuild rules.
-Without proof tracking, `UF_<Sort>` is a constructor.
-When proof tracking is enabled, `UF_<Sort>` becomes a function with `Proof` output
-  (e.g., `(function UF_Math (Math Math) Proof :merge old :internal-hidden)`),
-  so proofs are stored directly in the UF table rather than in a separate table.
+`UF_<Sort>` is always a function whose output type is `Unit` (without proof tracking)
+  or `Proof` (with proof tracking).
+Using `:merge old` ensures that only the first proof/unit value is kept.
+When proof tracking is enabled, proofs are stored directly in the UF table
+  (e.g., `(function UF_Math (Math Math) Proof :merge old :internal-hidden)`).
 
 ```text
 (rule ((UF_Math a b)
       (UF_Math b c)
       (!= b c))
      ((delete (UF_Math a b))
-      (UF_Math a c))
+      (set (UF_Math a c) ()))
        :ruleset parent :name "uf_update")
 (rule ((UF_Math a b)
       (UF_Math a c)
       (!= b c)
       (= (ordering-max b c) b))
      ((delete (UF_Math a b))
-      (UF_Math b c))
+      (set (UF_Math b c) ()))
        :ruleset single_parent :name "singleparentuf_update")
 (rule ((UF_Math a b))
       ((set (UF_Mathf a) b))
@@ -101,7 +101,7 @@ When proof tracking is enabled, `UF_<Sort>` becomes a function with `Proof` outp
 ```
 
 *Union-find rules:*
-A couple rules ensure the constructor UF is kept up to date as
+A couple rules ensure the UF function is kept up to date as
   equalities are added, and the indexing ruleset mirrors those rows
   into the function UF.
 We use the `ordering-max` and `ordering-min` egglog primitives
@@ -125,7 +125,7 @@ We may want to remove this invariant in the future if we move
 ```text
 (sort view)
 (constructor Add (i64 i64) Math)
-(constructor AddView (i64 i64 Math) view)
+(function AddView (i64 i64 Math) Unit :merge old :term-constructor Add)
 (constructor to_delete_Add (i64 i64) view)
 (constructor to_subsume_Add (i64 i64) view)
 ```
@@ -133,6 +133,8 @@ We may want to remove this invariant in the future if we move
 Each constructor in the original program is expanded to
   a term table (`Add`), a view table (`AddView`), and helpers for deferred deletion/subsumption
   (`to_delete_Add`, `to_subsume_Add`).
+The view table is always a function whose output type is `Unit` (without proof tracking)
+  or `Proof` (with proof tracking), with `:merge old`.
 A view table stores "canonicalized" terms and their e-class representative.
 A canonicalized term has representative terms for its children.
 The last column of the view table is the representative term for the e-class.
@@ -143,13 +145,13 @@ The view tables are kept up to date during rebuilding.
        (AddView c0 c1 old)
        (!= old new)
        (= (ordering-max old new) new))
-      ((UF_Math (ordering-max new old) (ordering-min new old)))
+      ((set (UF_Math (ordering-max new old) (ordering-min new old)) ()))
        :ruleset rebuilding :name "congruence_rule")
-(rule ((AddView c0 c1 c2)
+(rule ((= v9 (AddView c0 c1 c2))
        (= c2_leader (UF_Mathf c2))
        (guard
          (or (bool-!= c2 c2_leader))))
-      ((AddView c0 c1 c2_leader)
+      ((set (AddView c0 c1 c2_leader) ())
        (delete (AddView c0 c1 c2)))
         :ruleset rebuilding :name "rebuild_rule")
 ```
@@ -160,18 +162,20 @@ The congruence rule adds equalities to the union-find table when two constructor
 The rebuild rule updates view tables so that views
   point to representative terms for child e-classes.
 Rebuild rules read representatives from `UF_<Sort>f` (function lookup)
-  rather than joining directly on `UF_<Sort>` (constructor rows),
-  which avoids expensive UF constructor joins during rebuilding.
+  rather than joining directly on `UF_<Sort>`,
+  which avoids expensive UF joins during rebuilding.
 
 ```text
 (function v2 () Math :no-merge)
 (set (v2) (Add 1 2))
-(AddView 1 2 (v2))
+(set (AddView 1 2 (v2)) ())
+(set (UF_Math (v2) (v2)) ())
 ```
 
 Above is the desugaring for `(Add 1 2)`.
 We add to both view and term tables whenever we evaluate
   a constructor or function application.
+The self-loop `(UF_Math (v2) (v2))` initializes the e-class for the new term.
 It's straightforward except for global variables.
 Since global variables are not allowed after this pass,
   we use functions with no arguments to represent them
@@ -179,12 +183,14 @@ Since global variables are not allowed after this pass,
 
 
 ```text
-(rule ((AddView a b v3))
+(rule ((= v3 (AddView a b v4)))
       ((let v5 (Add a b))
-       (AddView a b v5)
+       (set (AddView a b v5) ())
+       (set (UF_Math v5 v5) ())
        (let v6 (Add b a))
-       (AddView b a v6)
-       (UF_Math (ordering-max v5 v6) (ordering-min v5 v6)))
+       (set (AddView b a v6) ())
+       (set (UF_Math v6 v6) ())
+       (set (UF_Math (ordering-max v5 v6) (ordering-min v5 v6)) ()))
        :name "commutativity")
 ```
 
@@ -199,9 +205,9 @@ We add an equality to the union-find table for the two terms, using the `orderin
 
 
 ```text
-(check (AddView 1 2 v7)
-       (AddView 2 1 v8)
-       (= v7 v8))
+(check (= v7 (AddView 1 2 v8))
+       (= v9 (AddView 2 1 v10))
+       (= v8 v10))
 ```
 
 All queries use the view tables, including check commands.
@@ -226,6 +232,7 @@ Finally, deletions and subsumptions are deferred via helper tables.
 For every constructor, we add a `to_delete_<Constructor>` and `to_subsume_<Constructor>` table.
 When a deletion or subsumption is requested, we add to these tables.
 During rebuilding, we process these tables to actually delete or subsume the requested terms.
+View functions support subsumption (via the `:term-constructor` annotation).
 We only need to delete or subsume from the view tables,
   since the term tables are not used for queries.
 This has the added benefit of allowing us to keep terms around
@@ -295,8 +302,7 @@ The proof proves a proposition `t = t` for
   input term `t`.
 We store the oldest proof currently.
 
-When proof tracking is enabled, the union-find table changes from a constructor
-  to a function whose output column is a `Proof`:
+When proof tracking is enabled, the union-find table's output type is `Proof` instead of `Unit`:
 
 ```text
 (function UF_Math (Math Math) Proof :merge old :internal-hidden)
@@ -304,13 +310,11 @@ When proof tracking is enabled, the union-find table changes from a constructor
 
 If term `a` has parent `b`, `(UF_Math a b)` returns a 
   proof of `a = b`.
-The proof is stored directly in the UF table rather than in a separate table.
 The path compression and single-parent rules are instrumented to produce
   proofs using symmetry (`Sym`) and transitivity (`Trans`) as needed.
 
 
-When proof tracking is enabled, view tables change from constructors to functions
-  whose output column is the proof.
+Similarly, the view table's output type is `Proof` instead of `Unit`:
 
 ```text
 (function AddView (i64 i64 Math) Proof :merge old :term-constructor Add)
@@ -323,8 +327,6 @@ For a term `t` with representative `r`,
 The direction is important, making
   proof production easier later.
 We store the earliest proof (`:merge old`).
-Because the view is a function, updates use `set` and subsumptions
-  use `delete` instead of `subsume`.
 
 
 ```text
@@ -348,7 +350,7 @@ Because the view is a function, updates use `set` and subsumptions
        (set (MathProof v13) v14)
        (set (AddView b a v13) v14)
 
-       ;; Proof stored directly in UF table (since UF_Math is a function with Proof output)
+       ;; Store a proof that (Add a b) = (Add b a).
        (set (UF_Math (ordering-max v11 v13) (ordering-min v11 v13))
             (Rule "commutativity" v10 (AstMath (ordering-max v11 v13)) (AstMath (ordering-min v11 v13)))))
          :name "commutativity")
@@ -356,7 +358,8 @@ Because the view is a function, updates use `set` and subsumptions
 
 Instrumented rules with proof tracking query the view function directly
   (since the proof is its output column), then construct proofs for each action.
-View updates use `set` because the view is a function, not a constructor.
+The structure is the same as term mode — view updates use `set`, UF updates use `set` —
+  but the values stored are `Proof` terms instead of `()`.
 For nested terms, congruence proofs are built to ensure
   the proof terms match the original queries.
 

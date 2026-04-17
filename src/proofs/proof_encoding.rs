@@ -60,8 +60,7 @@ impl<'a> ProofInstrumentor<'a> {
         let uf_name = self.uf_name(type_name);
         let smaller = format!("(ordering-min {lhs} {rhs})");
         let larger = format!("(ordering-max {lhs} {rhs})");
-        if self.egraph.proof_state.proofs_enabled {
-            // UF table is a function with Proof output; use set to write both UF edge and proof
+        let proof = if self.egraph.proof_state.proofs_enabled {
             let to_ast_constructor = self
                 .proof_names()
                 .sort_to_ast_constructor
@@ -69,7 +68,7 @@ impl<'a> ProofInstrumentor<'a> {
                 .unwrap();
             let rule_constructor = &self.proof_names().rule_constructor;
             let fiat_constructor = &self.proof_names().fiat_constructor;
-            let proof = match justification {
+            match justification {
                 Justification::Rule(rule_name, proof_list) => format!(
                     "({rule_constructor} \"{rule_name}\" {proof_list} ({to_ast_constructor} {larger}) ({to_ast_constructor} {smaller}))"
                 ),
@@ -80,12 +79,11 @@ impl<'a> ProofInstrumentor<'a> {
                     "Merge functions do not include union actions, so proof should not be by merge"
                 ),
                 Justification::Proof(existing_proof) => existing_proof.clone(),
-            };
-            format!("(set ({uf_name} {larger} {smaller}) {proof})")
+            }
         } else {
-            // UF table is a constructor; just insert the tuple
-            format!("({uf_name} {larger} {smaller})")
-        }
+            self.unit_proof().to_string()
+        };
+        format!("(set ({uf_name} {larger} {smaller}) {proof})")
     }
 
     /// The parent table is the database representation of a union-find datastructure.
@@ -95,7 +93,6 @@ impl<'a> ProofInstrumentor<'a> {
     fn declare_sort(&mut self, sort_name: &str) -> Vec<Command> {
         let pname = self.uf_name(sort_name);
         let uf_function_name = self.uf_function_name(sort_name);
-        let fresh_sort = self.egraph.parser.symbol_gen.fresh("uf");
         let fresh_name = self.egraph.parser.symbol_gen.fresh("uf_update");
         let uf_function_index_name = self.egraph.parser.symbol_gen.fresh("uf_function_index");
 
@@ -104,80 +101,83 @@ impl<'a> ProofInstrumentor<'a> {
         let uf_function_index_ruleset_name =
             self.proof_names().uf_function_index_ruleset_name.clone();
 
-        if self.egraph.proof_state.proofs_enabled {
-            // UF table is a function with Proof output (merges UF data + UF proof into one table)
-            let term_proof_name = self.term_proof_name(sort_name);
-            let proof_type = self.proof_names().proof_datatype.clone();
-            let code = self.add_to_ast(sort_name);
-            let p1_fresh = self.egraph.parser.symbol_gen.fresh("p1");
-            let p2_fresh = self.egraph.parser.symbol_gen.fresh("p2");
-            let trans_constructor = self.proof_names().eq_trans_constructor.clone();
-            let sym_constructor = self.proof_names().eq_sym_constructor.clone();
+        let proof_type = self.proof_type_str().to_string();
 
-            self.parse_program(&format!(
-                "(sort {fresh_sort})
-                 (function {pname} ({sort_name} {sort_name}) {proof_type} :merge old :internal-hidden)
-                 (function {uf_function_name} ({sort_name}) {sort_name} :merge new :unextractable :internal-hidden)
-                 {code}
+        // In proof mode, path compression composes proofs via Trans/Sym.
+        // In term mode, the proof output is Unit and we just write ().
+        let (path_compress_query, path_compress_action, single_parent_query, single_parent_action) =
+            if self.egraph.proof_state.proofs_enabled {
+                let p1_fresh = self.egraph.parser.symbol_gen.fresh("p1");
+                let p2_fresh = self.egraph.parser.symbol_gen.fresh("p2");
+                let trans = self.proof_names().eq_trans_constructor.clone();
+                let sym = self.proof_names().eq_sym_constructor.clone();
+                (
+                    format!(
+                        "(= {p1_fresh} ({pname} a b))
+                        (= {p2_fresh} ({pname} b c))"
+                    ),
+                    format!(
+                        "(delete ({pname} a b))
+                       (set ({pname} a c) ({trans} {p1_fresh} {p2_fresh}))"
+                    ),
+                    format!(
+                        "(= {p1_fresh} ({pname} a b))
+                        (= {p2_fresh} ({pname} a c))"
+                    ),
+                    format!(
+                        "(delete ({pname} a b))
+                       (set ({pname} b c) ({trans} ({sym} {p1_fresh}) {p2_fresh}))"
+                    ),
+                )
+            } else {
+                let unit = self.unit_proof();
+                (
+                    format!("({pname} a b)\n                        ({pname} b c)"),
+                    format!(
+                        "(delete ({pname} a b))\n                       (set ({pname} a c) {unit})"
+                    ),
+                    format!("({pname} a b)\n                        ({pname} a c)"),
+                    format!(
+                        "(delete ({pname} a b))\n                       (set ({pname} b c) {unit})"
+                    ),
+                )
+            };
+
+        let mut code = format!(
+            "(function {pname} ({sort_name} {sort_name}) {proof_type} :merge old :internal-hidden)
+             (function {uf_function_name} ({sort_name}) {sort_name} :merge new :unextractable :internal-hidden)
+             ;; performs path compression, ensuring each term points to the representative
+             (rule ({path_compress_query}
+                    (!= b c))
+                  ({path_compress_action})
+                   :ruleset {path_compress_ruleset_name}
+                   :name \"{fresh_name}\")
+             ;; ensures each term has only one parent
+             (rule ({single_parent_query}
+                    (!= b c)
+                    (= (ordering-max b c) b))
+                  ({single_parent_action})
+                   :ruleset {single_parent_ruleset_name}
+                   :name \"singleparent{fresh_name}\")
+             ;; mirrors UF rows into a function-backed UF index for faster rebuild lookups
+             (rule (({pname} a b))
+                   ((set ({uf_function_name} a) b))
+                   :ruleset {uf_function_index_ruleset_name}
+                   :name \"{uf_function_index_name}\")
+                   "
+        );
+
+        if self.egraph.proof_state.proofs_enabled {
+            let term_proof_name = self.term_proof_name(sort_name);
+            let add_to_ast_code = self.add_to_ast(sort_name);
+            code = format!(
+                "{add_to_ast_code}
                  (function {term_proof_name} ({sort_name}) {proof_type} :merge old :internal-hidden)
-                 ;; performs path compression, ensuring each term points to the representative
-                 (rule ((= {p1_fresh} ({pname} a b))
-                        (= {p2_fresh} ({pname} b c))
-                        (!= b c))
-                      ((delete ({pname} a b))
-                       (set ({pname} a c)
-                            ({trans_constructor} {p1_fresh} {p2_fresh})))
-                       :ruleset {path_compress_ruleset_name}
-                       :name \"{fresh_name}\")
-                 ;; ensures each term has only one parent
-                 (rule ((= {p1_fresh} ({pname} a b))
-                        (= {p2_fresh} ({pname} a c))
-                        (!= b c)
-                        (= (ordering-max b c) b))
-                      ((delete ({pname} a b))
-                       (set ({pname} b c)
-                            ({trans_constructor}
-                               ({sym_constructor} {p1_fresh})
-                               {p2_fresh})))
-                       :ruleset {single_parent_ruleset_name}
-                       :name \"singleparent{fresh_name}\")
-                 ;; mirrors UF rows into a function-backed UF index for faster rebuild lookups
-                 (rule (({pname} a b))
-                       ((set ({uf_function_name} a) b))
-                       :ruleset {uf_function_index_ruleset_name}
-                       :name \"{uf_function_index_name}\")
-                       ",
-            ))
-        } else {
-            self.parse_program(&format!(
-                "(sort {fresh_sort})
-                 (constructor {pname} ({sort_name} {sort_name}) {fresh_sort} :internal-hidden)
-                 (function {uf_function_name} ({sort_name}) {sort_name} :merge new :unextractable :internal-hidden)
-                 ;; performs path compression, ensuring each term points to the representative
-                 (rule (({pname} a b)
-                        ({pname} b c)
-                        (!= b c))
-                      ((delete ({pname} a b))
-                       ({pname} a c))
-                       :ruleset {path_compress_ruleset_name}
-                       :name \"{fresh_name}\")
-                 ;; ensures each term has only one parent
-                 (rule (({pname} a b)
-                        ({pname} a c)
-                        (!= b c)
-                        (= (ordering-max b c) b))
-                      ((delete ({pname} a b))
-                       ({pname} b c))
-                       :ruleset {single_parent_ruleset_name}
-                       :name \"singleparent{fresh_name}\")
-                 ;; mirrors UF rows into a function-backed UF index for faster rebuild lookups
-                 (rule (({pname} a b))
-                       ((set ({uf_function_name} a) b))
-                       :ruleset {uf_function_index_ruleset_name}
-                       :name \"{uf_function_index_name}\")
-                       ",
-            ))
+                 {code}"
+            );
         }
+
+        self.parse_program(&code)
     }
 
     /// Rules that execute deletion and subsumption based on the tables requesting the deletion/subsumption.
@@ -196,13 +196,6 @@ impl<'a> ProofInstrumentor<'a> {
         let delete_subsume_ruleset = self.proof_names().delete_subsume_ruleset_name.clone();
         let fresh_name = self.egraph.parser.symbol_gen.fresh("delete_rule");
 
-        // Subsume could use delete, except that `check` ignores subsumption.
-        // When proofs are enabled, the view is a function (not constructor), so we use delete instead of subsume.
-        let subsume_action = if self.egraph.proof_state.proofs_enabled {
-            format!("(delete ({view_name} {child_names} out))")
-        } else {
-            format!("(subsume ({view_name} {child_names} out))")
-        };
         format!(
             "(rule (({to_delete_name} {child_names})
                     ({view_name} {child_names} out))
@@ -212,7 +205,7 @@ impl<'a> ProofInstrumentor<'a> {
                     :name \"{fresh_name}\")
              (rule (({subsumed_name} {child_names})
                     ({view_name} {child_names} out))
-                   ({subsume_action})
+                   ((subsume ({view_name} {child_names} out)))
                     :ruleset {delete_subsume_ruleset}
                     :name \"{fresh_name}_subsume\")"
         )
@@ -244,16 +237,21 @@ impl<'a> ProofInstrumentor<'a> {
         let view_name = self.view_name(&fdecl.name);
         let rebuilding_cleanup_ruleset = self.proof_names().rebuilding_cleanup_ruleset_name.clone();
         let proof_query = if self.egraph.proof_state.proofs_enabled {
-            // View is a function with proof output; query it directly
+            // View is a function with proof output; bind proof variables
             format!(
                 "(= {p1_fresh} ({view_name} {child_names_str} old))
                      (= {p2_fresh} ({view_name} {child_names_str} new))
                     "
             )
         } else {
+            // View is a function with Unit output; no need to bind the output
             "".to_string()
         };
-        let proof_var = self.fresh_var();
+        let proof_var = if self.egraph.proof_state.proofs_enabled {
+            self.fresh_var()
+        } else {
+            self.unit_proof().to_string()
+        };
         let mut merge_fn_code = vec![];
         let merge_fn_var = self.instrument_action_expr(
             merge_fn,
@@ -428,11 +426,12 @@ impl<'a> ProofInstrumentor<'a> {
         // the view table has child_sorts + the leader term for the eclass
         // Propagate cost, unextractable, hidden, and internal_let flags from the original function
         let mut term_flags = String::new();
-        let mut view_flags = String::new();
         if let Some(cost) = fdecl.cost {
             term_flags.push_str(&format!(" :cost {cost}"));
-            view_flags.push_str(&format!(" :cost {cost}"));
         }
+        // View is always a function (returning Proof or Unit), with :merge old
+        let proof_type = self.proof_type_str().to_string();
+        let mut view_flags = String::new();
         if fdecl.unextractable {
             view_flags.push_str(" :unextractable");
         }
@@ -442,27 +441,9 @@ impl<'a> ProofInstrumentor<'a> {
         if fdecl.internal_let {
             view_flags.push_str(" :internal-let");
         }
-        let view_decl = if self.egraph.proof_state.proofs_enabled {
-            let proof_type = self.proof_names().proof_datatype.clone();
-            // For functions, include all relevant options
-            let mut fn_flags = String::new();
-            if fdecl.unextractable {
-                fn_flags.push_str(" :unextractable");
-            }
-            if fdecl.internal_hidden {
-                fn_flags.push_str(" :internal-hidden");
-            }
-            if fdecl.internal_let {
-                fn_flags.push_str(" :internal-let");
-            }
-            format!(
-                "(function {view_name} ({view_sorts}) {proof_type} :merge old :term-constructor {name}{fn_flags})"
-            )
-        } else {
-            format!(
-                "(constructor {view_name} ({view_sorts}) {fresh_sort} :term-constructor {name}{view_flags})"
-            )
-        };
+        let view_decl = format!(
+            "(function {view_name} ({view_sorts}) {proof_type} :merge old :term-constructor {name}{view_flags})"
+        );
         self.parse_program(&format!(
             "
             (sort {fresh_sort})
@@ -586,7 +567,7 @@ impl<'a> ProofInstrumentor<'a> {
 
             (proof_code_parts.join("\n"), current_proof)
         } else {
-            ("".to_string(), "".to_string())
+            ("".to_string(), self.unit_proof().to_string())
         };
 
         let updated_view = self.update_view(&fdecl.name, &children_updated, &pf_var);
@@ -640,25 +621,23 @@ impl<'a> ProofInstrumentor<'a> {
                 let view_name = self.view_name(head.name());
                 let args_str = ListDisplay(new_args, " ");
 
+                // View is always a function; query it and bind the output
+                let proof_var = self.fresh_var();
+                res.push(format!("(= {proof_var} ({view_name} {args_str}))"));
+
                 if self.egraph.proof_state.proofs_enabled {
-                    // View is a function with proof output
-                    let proof_var = self.fresh_var();
-                    res.push(format!("(= {proof_var} ({view_name} {args_str}))"));
                     let mut proof = proof_var;
                     for (i, arg_proof) in arg_proofs.into_iter().enumerate() {
                         let congr = &self.proof_names().congr_constructor;
-                        // add a congruence from the argument (representative) to the term
                         proof = format!(
                             "
                             ({congr} {proof} {i} {arg_proof})
                             "
                         );
                     }
-
                     proof
                 } else {
-                    res.push(format!("({view_name} {args_str})"));
-                    "".to_string()
+                    self.unit_proof().to_string()
                 }
             }
             ResolvedFact::Eq(_span, left_expr, right_expr) => {
@@ -688,9 +667,9 @@ impl<'a> ProofInstrumentor<'a> {
     ) -> (String, String) {
         match expr {
             ResolvedExpr::Lit(_, lit) => {
-                let fiat_constructor = &self.proof_names().fiat_constructor;
-                let lit_sort = literal_sort(lit);
                 let proof_code = if self.egraph.proof_state.proofs_enabled {
+                    let fiat_constructor = &self.proof_names().fiat_constructor;
+                    let lit_sort = literal_sort(lit);
                     let to_ast = self
                         .proof_names()
                         .sort_to_ast_constructor
@@ -698,7 +677,7 @@ impl<'a> ProofInstrumentor<'a> {
                         .unwrap();
                     format!("({fiat_constructor} ({to_ast} {lit}) ({to_ast} {lit}))")
                 } else {
-                    "".to_string()
+                    self.unit_proof().to_string()
                 };
 
                 (format!("{lit}"), proof_code)
@@ -708,7 +687,7 @@ impl<'a> ProofInstrumentor<'a> {
                 (
                     resolved_var.name.clone(),
                     if !self.egraph.proof_state.proofs_enabled {
-                        "".to_string()
+                        self.unit_proof().to_string()
                     } else if resolved_var.sort.is_eq_sort() {
                         let term_proof_name = self.term_proof_name(resolved_var.sort.name());
                         let fresh_proof = self.fresh_var();
@@ -751,28 +730,28 @@ impl<'a> ProofInstrumentor<'a> {
                         let view_name = self.view_name(&func_type.name);
                         let args_str = ListDisplay(new_args, " ");
 
-                        let proof = if self.proofs_enabled() {
-                            // View is a function with proof output
+                        let proof = {
+                            // View is always a function; query it and bind the output
                             let view_proof_var = self.fresh_var();
                             res.push(format!(
                                 "(= {view_proof_var} ({view_name} {args_str} {fv}))"
                             ));
-                            let mut proof = view_proof_var;
-                            for (i, arg_proof) in arg_proofs.into_iter().enumerate() {
-                                if let Some(arg_proof) = arg_proof {
-                                    let congr = &self.proof_names().congr_constructor;
-                                    // add a congruence from the argument (representative) to the term
-                                    proof = format!(
-                                        "
+                            if self.proofs_enabled() {
+                                let mut proof = view_proof_var;
+                                for (i, arg_proof) in arg_proofs.into_iter().enumerate() {
+                                    if let Some(arg_proof) = arg_proof {
+                                        let congr = &self.proof_names().congr_constructor;
+                                        proof = format!(
+                                            "
                             ({congr} {proof} {i} {arg_proof})
                             "
-                                    );
+                                        );
+                                    }
                                 }
+                                proof
+                            } else {
+                                self.unit_proof().to_string()
                             }
-                            proof
-                        } else {
-                            res.push(format!("({view_name} {args_str} {fv})"));
-                            "".to_string()
                         };
                         (fv, proof)
                     }
@@ -798,7 +777,7 @@ impl<'a> ProofInstrumentor<'a> {
                                 .unwrap();
                             format!("({fiat_constructor} ({to_ast} {fv}) ({to_ast} {fv}))")
                         } else {
-                            "".to_string()
+                            self.unit_proof().to_string()
                         };
 
                         (fv.clone(), proof)
@@ -889,15 +868,10 @@ impl<'a> ProofInstrumentor<'a> {
 
     /// Update the view with the given arguments.
     /// The arguments include the eclass for constructors.
+    /// View is always a function (returning Proof or Unit).
     fn update_view(&mut self, fname: &str, args: &[String], proof: &str) -> String {
         let view_name = self.view_name(fname);
-        if self.egraph.proof_state.proofs_enabled {
-            // View is a function with proof output; use set to update it
-            format!("(set ({view_name} {}) {proof})", ListDisplay(args, " "),)
-        } else {
-            // View is a constructor; just insert the tuple
-            format!("({view_name} {})", ListDisplay(args, " "),)
-        }
+        format!("(set ({view_name} {}) {proof})", ListDisplay(args, " "))
     }
 
     /// Return some code adding to the view and term tables.
@@ -968,7 +942,7 @@ impl<'a> ProofInstrumentor<'a> {
                 proof_var,
             )
         } else {
-            ("".to_string(), "".to_string())
+            ("".to_string(), self.unit_proof().to_string())
         };
 
         res.push(proof_str);
@@ -987,18 +961,13 @@ impl<'a> ProofInstrumentor<'a> {
         (res, fv)
     }
 
-    /// Returns a query for (fname args) and in proof mode returns a variable for the proof.
+    /// Returns a query for (fname args) and a variable for the proof (or Unit) output.
+    /// View is always a function, so we always use `(= var (view ...))` form.
     fn query_view_and_get_proof(&mut self, fname: &str, args: &[String]) -> (String, String) {
         let view_name = self.view_name(fname);
-        if self.egraph.proof_state.proofs_enabled {
-            // View is a function with proof output; query it and bind the proof
-            let pf_var = self.fresh_var();
-            let query = format!("(= {pf_var} ({view_name} {}))", ListDisplay(args, " "));
-            (query, pf_var)
-        } else {
-            let query = format!("({view_name} {})", ListDisplay(args, " "),);
-            (query, "".to_string())
-        }
+        let pf_var = self.fresh_var();
+        let query = format!("(= {pf_var} ({view_name} {}))", ListDisplay(args, " "));
+        (query, pf_var)
     }
 
     // Add to view and term tables, returning a variable for the created term.
