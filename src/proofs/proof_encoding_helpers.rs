@@ -113,6 +113,15 @@ impl ProofInstrumentor<'_> {
         }
     }
 
+    /// Returns the name of the Pair sort used to bundle (leader, proof) in the UF function index.
+    /// Only used in proof mode.
+    pub(crate) fn uf_pair_sort_name(&mut self, sort: &str) -> String {
+        self.egraph
+            .parser
+            .symbol_gen
+            .fresh(&format!("UFPair_{sort}"))
+    }
+
     pub(crate) fn parse_program(&mut self, input: &str) -> Vec<Command> {
         self.egraph.parser.ensure_no_reserved_symbols = false;
         let res = self.egraph.parser.get_program_from_string(None, input);
@@ -244,11 +253,6 @@ impl ProofInstrumentor<'_> {
         } else {
             "Unit"
         }
-    }
-
-    /// Returns the unit proof value `()`, used as a placeholder proof when proofs are disabled.
-    pub(crate) fn unit_proof(&self) -> &str {
-        "()"
     }
 
     /// Returns code for a constructor that converts from sort to AST.

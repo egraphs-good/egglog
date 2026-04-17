@@ -81,7 +81,7 @@ impl<'a> ProofInstrumentor<'a> {
                 Justification::Proof(existing_proof) => existing_proof.clone(),
             }
         } else {
-            self.unit_proof().to_string()
+            "()".to_string()
         };
         format!("(set ({uf_name} {larger} {smaller}) {proof})")
     }
@@ -130,22 +130,43 @@ impl<'a> ProofInstrumentor<'a> {
                     ),
                 )
             } else {
-                let unit = self.unit_proof();
                 (
                     format!("({pname} a b)\n                        ({pname} b c)"),
                     format!(
-                        "(delete ({pname} a b))\n                       (set ({pname} a c) {unit})"
+                        "(delete ({pname} a b))\n                       (set ({pname} a c) ())"
                     ),
                     format!("({pname} a b)\n                        ({pname} a c)"),
                     format!(
-                        "(delete ({pname} a b))\n                       (set ({pname} b c) {unit})"
+                        "(delete ({pname} a b))\n                       (set ({pname} b c) ())"
                     ),
                 )
             };
 
+        // In proof mode, UF function index stores (leader, proof) pairs.
+        // In term mode, it just stores the leader.
+        let (uf_function_output_type, uf_pair_sort_decl, uf_index_query, uf_index_action) =
+            if self.egraph.proof_state.proofs_enabled {
+                let pair_sort = self.uf_pair_sort_name(sort_name);
+                let proof_fresh = self.egraph.parser.symbol_gen.fresh("uf_idx_proof");
+                (
+                    pair_sort.clone(),
+                    format!("(sort {pair_sort} (Pair {sort_name} {proof_type}))"),
+                    format!("(= {proof_fresh} ({pname} a b))"),
+                    format!("(set ({uf_function_name} a) (pair b {proof_fresh}))"),
+                )
+            } else {
+                (
+                    sort_name.to_string(),
+                    "".to_string(),
+                    format!("({pname} a b)"),
+                    format!("(set ({uf_function_name} a) b)"),
+                )
+            };
+
         let mut code = format!(
-            "(function {pname} ({sort_name} {sort_name}) {proof_type} :merge old :internal-hidden)
-             (function {uf_function_name} ({sort_name}) {sort_name} :merge new :unextractable :internal-hidden)
+            "{uf_pair_sort_decl}
+             (function {pname} ({sort_name} {sort_name}) {proof_type} :merge old :internal-hidden)
+             (function {uf_function_name} ({sort_name}) {uf_function_output_type} :merge new :unextractable :internal-hidden)
              ;; performs path compression, ensuring each term points to the representative
              (rule ({path_compress_query}
                     (!= b c))
@@ -160,8 +181,8 @@ impl<'a> ProofInstrumentor<'a> {
                    :ruleset {single_parent_ruleset_name}
                    :name \"singleparent{fresh_name}\")
              ;; mirrors UF rows into a function-backed UF index for faster rebuild lookups
-             (rule (({pname} a b))
-                   ((set ({uf_function_name} a) b))
+             (rule ({uf_index_query})
+                   ({uf_index_action})
                    :ruleset {uf_function_index_ruleset_name}
                    :name \"{uf_function_index_name}\")
                    "
@@ -250,7 +271,7 @@ impl<'a> ProofInstrumentor<'a> {
         let proof_var = if self.egraph.proof_state.proofs_enabled {
             self.fresh_var()
         } else {
-            self.unit_proof().to_string()
+            "()".to_string()
         };
         let mut merge_fn_code = vec![];
         let merge_fn_var = self.instrument_action_expr(
@@ -491,12 +512,12 @@ impl<'a> ProofInstrumentor<'a> {
                 let ci = child(i);
 
                 if self.egraph.proof_state.proofs_enabled {
-                    // UF table is a function with proof output; query it directly
-                    let uf_proof = self.uf_name(ty.name());
-                    let proof_var = self.fresh_var();
+                    // UF function index returns a Pair(leader, proof); one lookup gives both
+                    let pair_var = self.fresh_var();
+                    let proof_var = format!("(pair-second {pair_var})");
                     uf_queries.push(format!(
-                        "(= {leader_var} ({uf_function_name} {ci}))
-                         (= {proof_var} ({uf_proof} {ci} {leader_var}))"
+                        "(= {pair_var} ({uf_function_name} {ci}))
+                         (= {leader_var} (pair-first {pair_var}))"
                     ));
                     uf_proof_vars.push(Some(proof_var));
                 } else {
@@ -567,7 +588,7 @@ impl<'a> ProofInstrumentor<'a> {
 
             (proof_code_parts.join("\n"), current_proof)
         } else {
-            ("".to_string(), self.unit_proof().to_string())
+            ("".to_string(), "()".to_string())
         };
 
         let updated_view = self.update_view(&fdecl.name, &children_updated, &pf_var);
@@ -637,7 +658,7 @@ impl<'a> ProofInstrumentor<'a> {
                     }
                     proof
                 } else {
-                    self.unit_proof().to_string()
+                    "()".to_string()
                 }
             }
             ResolvedFact::Eq(_span, left_expr, right_expr) => {
@@ -677,7 +698,7 @@ impl<'a> ProofInstrumentor<'a> {
                         .unwrap();
                     format!("({fiat_constructor} ({to_ast} {lit}) ({to_ast} {lit}))")
                 } else {
-                    self.unit_proof().to_string()
+                    "()".to_string()
                 };
 
                 (format!("{lit}"), proof_code)
@@ -687,7 +708,7 @@ impl<'a> ProofInstrumentor<'a> {
                 (
                     resolved_var.name.clone(),
                     if !self.egraph.proof_state.proofs_enabled {
-                        self.unit_proof().to_string()
+                        "()".to_string()
                     } else if resolved_var.sort.is_eq_sort() {
                         let term_proof_name = self.term_proof_name(resolved_var.sort.name());
                         let fresh_proof = self.fresh_var();
@@ -750,7 +771,7 @@ impl<'a> ProofInstrumentor<'a> {
                                 }
                                 proof
                             } else {
-                                self.unit_proof().to_string()
+                                "()".to_string()
                             }
                         };
                         (fv, proof)
@@ -777,7 +798,7 @@ impl<'a> ProofInstrumentor<'a> {
                                 .unwrap();
                             format!("({fiat_constructor} ({to_ast} {fv}) ({to_ast} {fv}))")
                         } else {
-                            self.unit_proof().to_string()
+                            "()".to_string()
                         };
 
                         (fv.clone(), proof)
@@ -942,7 +963,7 @@ impl<'a> ProofInstrumentor<'a> {
                 proof_var,
             )
         } else {
-            ("".to_string(), self.unit_proof().to_string())
+            ("".to_string(), "()".to_string())
         };
 
         res.push(proof_str);
