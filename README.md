@@ -89,6 +89,10 @@ We use rayon's global thread pool for parallelism, and the number of threads use
 is set to `1` by default when egglog's CLI is run. If you use egglog as a library,
 you can control the level of parallelism by setting rayon's `num_threads`.
 
+In single-threaded mode (`-j 1`), egglog is intended to produce deterministic
+results for the same input program. In parallel mode, output ordering can differ
+across runs.
+
 ## Benchmarks
 
 All PRs use [`codspeed`](https://codspeed.io/) to evaluate the performance of a

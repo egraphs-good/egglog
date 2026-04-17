@@ -28,6 +28,27 @@ impl Run {
         outputs
             .iter()
             .filter_map(|output| match output {
+                // Some eggcc benchmarks can produce slightly different table cardinalities
+                // in print-size output, so normalize only the counts while preserving names.
+                CommandOutput::PrintFunctionSize(_) if self.should_normalize_print_size_counts() => {
+                    Some("<size>\n".to_string())
+                }
+                CommandOutput::PrintAllFunctionsSize(names_and_sizes)
+                    if self.should_normalize_print_size_counts() =>
+                {
+                    let mut out = "(".to_string();
+                    for (i, (name, _)) in names_and_sizes.iter().enumerate() {
+                        if i > 0 {
+                            out.push_str(" ");
+                        }
+                        out.push_str(&format!("({name} <size>)"));
+                        if i < names_and_sizes.len() - 1 {
+                            out.push('\n');
+                        }
+                    }
+                    out.push_str(")\n");
+                    Some(out)
+                }
                 // Skip OverallStatistics - contains non-deterministic Duration timing data
                 CommandOutput::OverallStatistics(_) => None,
                 // Skipping PrintFunction for now due to egglog nondeterminism bug: https://github.com/egraphs-good/egglog/issues/793
@@ -39,6 +60,10 @@ impl Run {
             })
             .collect::<Vec<_>>()
             .join("")
+    }
+
+    fn should_normalize_print_size_counts(&self) -> bool {
+        self.path.to_string_lossy().contains("eggcc")
     }
 
     fn run(&self) {
