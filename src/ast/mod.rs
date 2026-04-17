@@ -638,8 +638,8 @@ where
         /// Internal-let constructors are let bindings, excluded from print-size output.
         /// Used for global let bindings that are converted to constructors.
         let_binding: bool,
-        /// For view tables in proof encoding: the constructor to use for building
-        /// terms from the first n-1 children during extraction.
+        /// Internal-only metadata for proof-encoding view tables.
+        /// Parsed user syntax only supports `:term-constructor` on `function`.
         term_constructor: Option<String>,
     },
 
