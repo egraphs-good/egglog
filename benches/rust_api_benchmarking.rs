@@ -1,4 +1,5 @@
 mod common;
+mod math_microbenchmark_support;
 
 #[derive(Clone, Copy)]
 struct RustRuleBenchCase {
@@ -256,6 +257,15 @@ fn rust_rule_tableaction_hot_path(bencher: divan::Bencher, case: RustRuleTableAc
         .with_inputs(|| tableaction_hot_path_setup(case))
         .bench_local_refs(|input| {
             run_ruleset(&mut input.egraph, &input.ruleset).unwrap();
+        });
+}
+
+#[divan::bench(sample_count = 10)]
+fn rust_rule_math_microbenchmark(bencher: divan::Bencher) {
+    bencher
+        .with_inputs(math_microbenchmark_support::math_microbenchmark_setup)
+        .bench_local_refs(|input| {
+            math_microbenchmark_support::run_math_microbenchmark(input);
         });
 }
 
