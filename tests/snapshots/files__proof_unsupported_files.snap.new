@@ -29,7 +29,6 @@ levenshtein-distance.egg
 list.egg
 looking_up_global.egg
 looking_up_nonconstructor_in_rewrite_good.egg
-luminal-llama.egg
 map.egg
 math.egg
 merge_read.egg

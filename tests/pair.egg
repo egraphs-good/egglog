@@ -1,0 +1,29 @@
+(sort IntPair (Pair i64 i64))
+(let p (pair 1 2))
+(check (= (pair-first p) 1))
+(check (= (pair-second p) 2))
+(let q (pair 3 4))
+(check (= (pair-first q) 3))
+(check (= (pair-second q) 4))
+
+; test equality
+(check (= p (pair 1 2)))
+(check (!= p q))
+
+; test with string second element
+(sort StrPair (Pair i64 String))
+(let sp (pair 10 "hello"))
+(check (= (pair-first sp) 10))
+(check (= (pair-second sp) "hello"))
+
+; test pair with eq sort and rebuilding
+(datatype Math (Num i64))
+(sort MathPair (Pair Math i64))
+(let a (Num 1))
+(let b (Num 2))
+(let mp (pair a 42))
+(check (= (pair-first mp) a))
+(check (= (pair-second mp) 42))
+(union a b)
+(run 1)
+(check (= (pair-first mp) b))
