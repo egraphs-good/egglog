@@ -57,6 +57,9 @@ jobs:
           - typeinfer
           - taylor51
           - luminal-llama
+          - conv1d_32
+          - conv1d_128
+          - rectangle
           - proof_testing_eqsat-basic
           - proof_testing_unify
           - proof_testing_typecheck
