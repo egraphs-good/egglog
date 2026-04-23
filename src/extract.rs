@@ -115,11 +115,11 @@ impl CostModel<DefaultCost> for TreeAdditiveCostModel {
 
     fn enode_cost(
         &self,
-        _egraph: &EGraph,
+        egraph: &EGraph,
         func: &Function,
         _row: &egglog_bridge::FunctionRow,
     ) -> DefaultCost {
-        func.decl.cost.unwrap_or(DefaultCost::unit())
+        func.extraction_head_cost(egraph)
     }
 }
 
@@ -222,11 +222,12 @@ impl<C: Cost + Ord + Eq + Clone + Debug> Extractor<C> {
                 options.skip_view_tables && func.1.decl.term_constructor.is_some();
             let hidden = func.1.decl.internal_hidden && options.respect_hidden;
 
-            // only extract constructors, skip view tables when requested for proof extraction, and respect unextractable/hidden flag
+            // only extract constructors (and functions with term_constructor), skip view tables when requested for proof extraction, and respect unextractable/hidden flag
             if !unextractable
                 && !should_skip_view
                 && !hidden
-                && func.1.decl.subtype == FunctionSubtype::Constructor
+                && (func.1.decl.subtype == FunctionSubtype::Constructor
+                    || func.1.decl.term_constructor.is_some())
             {
                 let func_name = func.0.clone();
                 // For view tables (with term_constructor in proof mode), the e-class is the last input column
@@ -756,6 +757,20 @@ impl<C: Cost + Ord + Eq + Clone + Debug> Extractor<C> {
 }
 
 impl Function {
+    /// Returns the extraction head cost for this table.
+    /// View tables inherit the cost of their referenced hidden term constructor.
+    pub(crate) fn extraction_head_cost(&self, egraph: &EGraph) -> DefaultCost {
+        if let Some(term_constructor) = &self.decl.term_constructor {
+            egraph
+                .functions
+                .get(term_constructor)
+                .and_then(|func| func.decl.cost)
+                .unwrap_or(DefaultCost::unit())
+        } else {
+            self.decl.cost.unwrap_or(DefaultCost::unit())
+        }
+    }
+
     /// For view tables (with term_constructor), the effective output sort is the last input column.
     /// For regular tables, it's the output sort.
     /// This is used by extraction to determine which sort a table produces values for.

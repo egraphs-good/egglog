@@ -737,6 +737,27 @@ fn test_cant_subsume_merge() {
 }
 
 #[test]
+fn constructor_term_constructor_is_rejected() {
+    let mut egraph = EGraph::default();
+    // Proof-encoding view tables now use this as a function annotation,
+    // so constructor syntax should reject `:internal-term-constructor`.
+    let res = egraph.parse_and_run_program(
+        None,
+        r#"
+        (sort Expr)
+        (sort View)
+        (constructor ExprView (Expr Expr) View :internal-term-constructor Expr)
+        "#,
+    );
+
+    let err = res.unwrap_err();
+    assert!(
+        err.to_string()
+            .contains("could not parse constructor options")
+    );
+}
+
+#[test]
 fn test_value_to_classid() {
     let mut egraph = EGraph::default();
 
