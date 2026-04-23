@@ -639,7 +639,7 @@ where
         /// Used for global let bindings that are converted to constructors.
         let_binding: bool,
         /// Internal-only metadata for proof-encoding view tables.
-        /// Parsed user syntax only supports `:term-constructor` on `function`.
+        /// Parsed user syntax only supports `:internal-term-constructor` on `function`.
         term_constructor: Option<String>,
     },
 
@@ -999,7 +999,7 @@ where
                     write!(f, " :internal-let")?;
                 }
                 if let Some(tc) = term_constructor {
-                    write!(f, " :term-constructor {tc}")?;
+                    write!(f, " :internal-term-constructor {tc}")?;
                 }
                 write!(f, ")")
             }
@@ -1027,7 +1027,7 @@ where
                     write!(f, " :internal-let")?;
                 }
                 if let Some(tc) = term_constructor {
-                    write!(f, " :term-constructor {tc}")?;
+                    write!(f, " :internal-term-constructor {tc}")?;
                 }
                 write!(f, ")")
             }

@@ -463,7 +463,7 @@ impl<'a> ProofInstrumentor<'a> {
             view_flags.push_str(" :internal-let");
         }
         let view_decl = format!(
-            "(function {view_name} ({view_sorts}) {proof_type} :merge old :term-constructor {name}{view_flags})"
+            "(function {view_name} ({view_sorts}) {proof_type} :merge old :internal-term-constructor {name}{view_flags})"
         );
         self.parse_program(&format!(
             "

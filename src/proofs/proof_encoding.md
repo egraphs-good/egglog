@@ -125,7 +125,7 @@ We may want to remove this invariant in the future if we move
 ```text
 (sort view)
 (constructor Add (i64 i64) Math)
-(function AddView (i64 i64 Math) Unit :merge old :term-constructor Add)
+(function AddView (i64 i64 Math) Unit :merge old :internal-term-constructor Add)
 (constructor to_delete_Add (i64 i64) view)
 (constructor to_subsume_Add (i64 i64) view)
 ```
@@ -232,7 +232,7 @@ Finally, deletions and subsumptions are deferred via helper tables.
 For every constructor, we add a `to_delete_<Constructor>` and `to_subsume_<Constructor>` table.
 When a deletion or subsumption is requested, we add to these tables.
 During rebuilding, we process these tables to actually delete or subsume the requested terms.
-View functions support subsumption (via the `:term-constructor` annotation).
+View functions support subsumption (via the `:internal-term-constructor` annotation).
 We only need to delete or subsume from the view tables,
   since the term tables are not used for queries.
 This has the added benefit of allowing us to keep terms around
@@ -317,7 +317,7 @@ The path compression and single-parent rules are instrumented to produce
 Similarly, the view table's output type is `Proof` instead of `Unit`:
 
 ```text
-(function AddView (i64 i64 Math) Proof :merge old :term-constructor Add)
+(function AddView (i64 i64 Math) Proof :merge old :internal-term-constructor Add)
 ```
 
 Recall that view tables store a term

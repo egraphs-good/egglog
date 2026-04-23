@@ -29,7 +29,7 @@ expression: snapshot
         :ruleset __uf_function_index :name "__uf_function_index1")
 (sort __view)
 (constructor Add (i64 i64) Math :unextractable :internal-hidden)
-(function __AddView (i64 i64 Math) Unit :merge old :term-constructor Add)
+(function __AddView (i64 i64 Math) Unit :merge old :internal-term-constructor Add)
 (constructor __to_delete_Add (i64 i64) __view :internal-hidden)
 (constructor __to_subsume_Add (i64 i64) __view :internal-hidden)
 (rule ((= __v (__AddView c0_ c1_ new))

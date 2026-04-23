@@ -877,7 +877,7 @@ pub enum TypeError {
     #[error("{}\nCannot union values of sort {} because it is marked as non-unionable (e.g. from a relation)", .1, .0.name())]
     NonUnionableSort(ArcSort, Span),
     #[error(
-        "{1}\nView table {0} with :term-constructor must have at least one input (the e-class)."
+        "{1}\nView table {0} with :internal-term-constructor must have at least one input (the e-class)."
     )]
     TermConstructorNoInputs(String, Span),
     #[error(

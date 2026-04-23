@@ -364,7 +364,7 @@ impl Parser {
                             (":internal-hidden", []) => hidden = true,
                             (":internal-let", []) => let_binding = true,
                             (":unextractable", []) => unextractable = true,
-                            (":term-constructor", [tc]) => {
+                            (":internal-term-constructor", [tc]) => {
                                 term_constructor = Some(tc.expect_atom("term constructor name")?)
                             }
                             _ => return error!(span, "could not parse function options"),
@@ -401,7 +401,7 @@ impl Parser {
                 // (constructor <name> (<input sort>*) <output sort>)
                 // (constructor <name> (<input sort>*) <output sort> :cost <cost>)
                 // (constructor <name> (<input sort>*) <output sort> :unextractable)
-                // (constructor <name> (<input sort>*) <output sort> :term-constructor <constructor name>)
+                // (constructor <name> (<input sort>*) <output sort> :internal-term-constructor <constructor name>)
                 match tail {
                     [name, inputs, output, rest @ ..] => {
                         let mut cost = None;

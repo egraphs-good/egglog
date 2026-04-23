@@ -740,13 +740,13 @@ fn test_cant_subsume_merge() {
 fn constructor_term_constructor_is_rejected() {
     let mut egraph = EGraph::default();
     // Proof-encoding view tables now use this as a function annotation,
-    // so constructor syntax should reject `:term-constructor`.
+    // so constructor syntax should reject `:internal-term-constructor`.
     let res = egraph.parse_and_run_program(
         None,
         r#"
         (sort Expr)
         (sort View)
-        (constructor ExprView (Expr Expr) View :term-constructor Expr)
+        (constructor ExprView (Expr Expr) View :internal-term-constructor Expr)
         "#,
     );
 
