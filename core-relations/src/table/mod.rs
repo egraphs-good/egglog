@@ -353,10 +353,10 @@ impl Table for SortedWritesTable {
     where
         Self: Sized,
     {
-        let Some((_low, hi)) = subset.bounds() else {
-            // Empty subset
+        if subset.is_empty() {
             return;
-        };
+        }
+        let (_, hi) = subset.bounds();
         assert!(
             hi.index() <= self.data.data.len(),
             "{} vs. {}",
