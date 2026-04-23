@@ -185,10 +185,6 @@ impl SortedOffsetSlice {
             Err(i)
         }
     }
-
-    pub(crate) fn contains(&self, row: RowId) -> bool {
-        self.scan_for_offset(0, row).is_ok()
-    }
 }
 
 impl Offsets for SortedOffsetSlice {
@@ -270,6 +266,45 @@ impl Offsets for BitVecSubset {
 }
 
 impl BitVecSubset {
+    fn apply_range_mask(block_start: usize, block: &mut [u64; 4], lo: usize, hi: usize) {
+        let block_end = block_start + 256;
+        if block_end <= lo || block_start >= hi {
+            *block = [0; 4];
+            return;
+        }
+        if lo <= block_start && block_end <= hi {
+            return;
+        }
+
+        for (wi, word) in block.iter_mut().enumerate() {
+            let word_start = block_start + wi * 64;
+            let word_end = word_start + 64;
+            if word_end <= lo || word_start >= hi {
+                *word = 0;
+                continue;
+            }
+
+            let keep_lo = lo.saturating_sub(word_start);
+            let keep_hi = cmp::min(64, hi.saturating_sub(word_start));
+            if keep_lo >= keep_hi {
+                *word = 0;
+                continue;
+            }
+
+            let hi_mask = if keep_hi == 64 {
+                u64::MAX
+            } else {
+                (1u64 << keep_hi) - 1
+            };
+            let lo_mask = if keep_lo == 0 {
+                0
+            } else {
+                (1u64 << keep_lo) - 1
+            };
+            *word &= hi_mask & !lo_mask;
+        }
+    }
+
     fn block_start_for(row: RowId) -> u32 {
         (row.index() as u32 / 256) * 256
     }
@@ -316,20 +351,90 @@ impl BitVecSubset {
                 }
             }
         }
+    }
+
+    fn retain_within(&mut self, range: OffsetRange) {
+        let lo = range.start.index();
+        let hi = range.end.index();
+        if lo >= hi {
+            self.block_starts.clear();
+            self.blocks.clear();
+            self.size = 0;
+            return;
+        }
+
+        let lo_block = Self::block_start_for(range.start);
+        let hi_block = Self::block_start_for(RowId::from_usize(hi - 1));
+        let mut idx = match self.block_starts.binary_search(&lo_block) {
+            Ok(i) | Err(i) => i,
+        };
+
         let mut keep = 0;
-        let mut new_size = 0;
-        for i in 0..self.blocks.len() {
-            let block_size: usize = self.blocks[i].iter().map(|w| w.count_ones() as usize).sum();
-            if block_size > 0 {
-                self.block_starts.swap(keep, i);
-                self.blocks.swap(keep, i);
-                new_size += block_size;
+        while idx < self.block_starts.len() {
+            let start = self.block_starts[idx];
+            if start > hi_block {
+                break;
+            }
+            Self::apply_range_mask(start as usize, &mut self.blocks[idx], lo, hi);
+            if self.blocks[idx].iter().any(|&w| w != 0) {
+                self.block_starts.swap(keep, idx);
+                self.blocks.swap(keep, idx);
                 keep += 1;
             }
+            idx += 1;
         }
         self.block_starts.truncate(keep);
         self.blocks.truncate(keep);
-        self.size = new_size;
+        self.size = self.blocks.iter().flat_map(|b| b.iter()).map(|w| w.count_ones() as usize).sum();
+    }
+
+    fn maybe_to_sparse(&self) -> Option<Pooled<SortedOffsetVector>> {
+        let (lo, hi) = self.bounds();
+        let range_len = hi.index() - lo.index();
+        if (self.size as f64) >= range_len as f64 * BITVEC_DENSITY_THRESHOLD {
+            return None;
+        }
+
+        let mut sparse = with_pool_set(|pool_set| pool_set.get::<SortedOffsetVector>());
+        self.offsets(|row| {
+            // SAFETY: offsets() yields rows in sorted order.
+            unsafe { sparse.push_unchecked(row) }
+        });
+        Some(sparse)
+    }
+
+    fn intersect_with_range(&self, range: OffsetRange) -> BitVecSubset {
+        let lo = range.start.index();
+        let hi = range.end.index();
+        if lo >= hi {
+            return BitVecSubset::default();
+        }
+
+        let lo_block = Self::block_start_for(range.start);
+        let hi_block = Self::block_start_for(RowId::from_usize(hi - 1));
+        let mut idx = match self.block_starts.binary_search(&lo_block) {
+            Ok(i) | Err(i) => i,
+        };
+
+        let mut out = BitVecSubset::default();
+        while idx < self.block_starts.len() {
+            let start = self.block_starts[idx];
+            if start > hi_block {
+                break;
+            }
+
+            let mut block = self.blocks[idx];
+            Self::apply_range_mask(start as usize, &mut block, lo, hi);
+            let block_size: usize = block.iter().map(|w| w.count_ones() as usize).sum();
+            if block_size > 0 {
+                out.block_starts.push(start);
+                out.blocks.push(block);
+                out.size += block_size;
+            }
+            idx += 1;
+        }
+
+        out
     }
 
     /// AND this bitvec with `other`, keeping only bits present in both.
@@ -367,14 +472,6 @@ impl BitVecSubset {
         self.block_starts.truncate(keep);
         self.blocks.truncate(keep);
         self.size = new_size;
-    }
-
-    pub(crate) fn from_sorted_slice(slice: &SortedOffsetSlice) -> BitVecSubset {
-        let mut bv = BitVecSubset::default();
-        for row in slice.iter() {
-            bv.push_sorted(row);
-        }
-        bv
     }
 }
 
@@ -575,7 +672,10 @@ impl Subset {
                 *self = res;
             }
             Subset::Sparse(offs) => offs.retain(filter),
-            Subset::Bitvec(bv) => bv.retain(filter),
+            Subset::Bitvec(bv) => {
+                bv.retain(filter);
+                self.maybe_to_sparse();
+            }
         }
     }
 
@@ -586,7 +686,7 @@ impl Subset {
             return;
         }
 
-        match (self, other) {
+        match (&mut *self, other) {
             (Subset::Dense(cur), SubsetRef::Dense(other)) => {
                 let resl = cmp::max(cur.start, other.start);
                 let resr = cmp::min(cur.end, other.end);
@@ -607,14 +707,12 @@ impl Subset {
             }
             (x @ Subset::Dense(_), SubsetRef::Bitvec(other)) => {
                 let (low, hi) = x.bounds();
-                let mut result = BitVecSubset::default();
-                // TODO See below, use bounds to avoid enumerating rows outside the range.
-                other.offsets(|row| {
-                    if row >= low && row < hi {
-                        result.push_sorted(row);
-                    }
-                });
-                *x = Subset::Bitvec(result);
+                let result = other.intersect_with_range(OffsetRange::new(low, hi));
+                if let Some(sparse) = result.maybe_to_sparse() {
+                    *x = Subset::Sparse(sparse);
+                } else {
+                    *x = Subset::Bitvec(result);
+                }
             }
             (Subset::Sparse(sparse), SubsetRef::Dense(dense)) => {
                 let r = sparse.slice().binary_search_by_id(dense.end);
@@ -656,16 +754,22 @@ impl Subset {
                 sparse.retain(|row| bv.contains(row));
             }
             (Subset::Bitvec(bv), SubsetRef::Dense(dense)) => {
-                // TODO Make retain takes a bound so that it only enumerates rows within the range.
-                bv.retain(|row| row >= dense.start && row < dense.end);
+                bv.retain_within(dense);
+                self.maybe_to_sparse();
             }
             (Subset::Bitvec(bv), SubsetRef::Sparse(sparse)) => {
-                // TODO save the result as a Sparse instead of BitVec because the result
-                // must be more sparse than Sparse.
-                bv.retain(|row| sparse.contains(row));
+                let mut result = pool.get();
+                sparse.iter().for_each(|row| {
+                    if bv.contains(row) {
+                        // SAFETY: rows from sparse are already sorted.
+                        unsafe { result.push_unchecked(row) }
+                    }
+                });
+                *self = Subset::Sparse(result);
             }
             (Subset::Bitvec(bv_self), SubsetRef::Bitvec(other)) => {
                 bv_self.intersect_with(other);
+                self.maybe_to_sparse();
             }
         }
     }
@@ -694,13 +798,6 @@ impl Subset {
             }
             Subset::Sparse(s) => {
                 s.push(row);
-                // TODO: Don't switch to bitvec here, because the bounds can be an underestimate.
-                let (lo, hi) = s.slice().bounds();
-                let range_len = hi.index().saturating_sub(lo.index());
-                if range_len > 0 && s.0.len() as f64 / range_len as f64 > BITVEC_DENSITY_THRESHOLD {
-                    let bv = BitVecSubset::from_sorted_slice(s.slice());
-                    *self = Subset::Bitvec(bv);
-                }
             }
             Subset::Bitvec(bv) => {
                 bv.push_sorted(row);
@@ -710,5 +807,13 @@ impl Subset {
 
     pub(crate) fn empty() -> Subset {
         Subset::Dense(OffsetRange::new(RowId::new(0), RowId::new(0)))
+    }
+
+    fn maybe_to_sparse(&mut self) {
+        if let Subset::Bitvec(bv) = self {
+            if let Some(sparse) = bv.maybe_to_sparse() {
+                *self = Subset::Sparse(sparse);
+            }
+        }
     }
 }
