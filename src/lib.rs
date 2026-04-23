@@ -124,9 +124,9 @@ pub enum CommandOutput {
     PrintFunctionSize(usize),
     /// The name of all functions and their sizes
     PrintAllFunctionsSize(Vec<(String, usize)>),
-    /// The best function found after extracting
+    /// The best term found after extracting
     ExtractBest(TermDag, DefaultCost, TermId),
-    /// The variants of a function found after extracting
+    /// The variants of a function found after extracting. Like normal extraction, but has to choose one extraction per e-node in the e-class.
     ExtractVariants(TermDag, Vec<TermId>),
     /// A high-level proof witnessing constructor existence
     ProveExists {
