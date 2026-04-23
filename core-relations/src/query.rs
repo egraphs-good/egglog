@@ -2,7 +2,10 @@
 
 use std::{iter::once, sync::Arc};
 
-use crate::numeric_id::{DenseIdMap, IdVec, NumericId, define_id};
+use crate::{
+    free_join::plan::{DecomposedPlan, JoinStageBlocks, SinglePlan},
+    numeric_id::{DenseIdMap, IdVec, NumericId, define_id},
+};
 use smallvec::SmallVec;
 use thiserror::Error;
 
@@ -51,20 +54,20 @@ pub struct RuleSet {
     /// The contents of the queries (i.e. the LHS of the rules) for each rule in the set, along
     /// with a description of the rule.
     ///
-    /// The action here is used to map between rule descriptions and ActionIds. The current
+    /// The action here is used to map between rule descriptions and plans, which contain ActionIds. The current
     /// accounting logic assumes that rules and actions stand in a bijection. If we relaxed that
     /// later on, most of the core logic would still work but the accounting logic could get more
     /// complex.
-    pub(crate) plans: IdVec<RuleId, (Plan, Arc<str> /* description */, SymbolMap, ActionId)>,
+    pub(crate) plans: IdVec<RuleId, (Plan, Arc<str> /* description */, SymbolMap)>,
     pub(crate) actions: DenseIdMap<ActionId, ActionInfo>,
 }
 
 impl RuleSet {
     pub fn build_cached_plan(&self, rule_id: RuleId) -> CachedPlan {
-        let (plan, desc, symbol_map, action_id) = self.plans.get(rule_id).expect("rule must exist");
+        let (plan, desc, symbol_map) = self.plans.get(rule_id).expect("rule must exist");
         let actions = self
             .actions
-            .get(*action_id)
+            .get(plan.actions())
             .expect("action must exist")
             .clone();
         CachedPlan {
@@ -121,7 +124,124 @@ impl<'outer> RuleSetBuilder<'outer> {
                 // start with an invalid ActionId
                 action: ActionId::new(u32::MAX),
                 plan_strategy: Default::default(),
+                fun_deps: Default::default(),
             },
+        }
+    }
+
+    fn reprocess_constraints(
+        &self,
+        table: TableId,
+        atom: AtomId,
+        constraints: &[Constraint],
+    ) -> JoinHeader {
+        let processed = self.db.process_constraints(table, constraints);
+        if !processed.slow.is_empty() {
+            panic!(
+                "Cached plans only support constraints with a fast pushdown. \
+                 Got: {constraints:?} for table {table:?}",
+            );
+        }
+        JoinHeader {
+            atom,
+            constraints: processed.fast,
+            subset: processed.subset,
+        }
+    }
+
+    fn push_extra_constraints(
+        &self,
+        headers: &mut Vec<JoinHeader>,
+        atoms: &Arc<DenseIdMap<AtomId, Atom>>,
+        extra_constraints: &[(AtomId, Constraint)],
+    ) {
+        for (atom_id, constraint) in extra_constraints {
+            let atom_info = atoms.get(*atom_id).expect("atom must exist in plan");
+            let table = atom_info.table;
+
+            let header =
+                self.reprocess_constraints(table, *atom_id, std::slice::from_ref(constraint));
+            headers.push(header);
+        }
+    }
+
+    fn reprocess_existing_headers(
+        &self,
+        headers: &mut Vec<JoinHeader>,
+        atoms: &Arc<DenseIdMap<AtomId, Atom>>,
+        existing: &[JoinHeader],
+    ) {
+        for JoinHeader {
+            atom, constraints, ..
+        } in existing
+        {
+            let atom_info = atoms.get(*atom).expect("atom must exist in plan");
+            let table = atom_info.table;
+
+            headers.push(self.reprocess_constraints(table, *atom, constraints));
+        }
+    }
+
+    fn get_rule_with_extra_constraints(
+        &mut self,
+        cached: &CachedPlan,
+        action_id: ActionId,
+        extra_constraints: &[(AtomId, Constraint)],
+    ) -> Plan {
+        match &cached.plan {
+            Plan::SinglePlan(cached_plan) => {
+                let mut headers = vec![];
+                let stages = JoinStages {
+                    instrs: cached_plan.stages.instrs.clone(),
+                };
+
+                self.push_extra_constraints(&mut headers, &cached_plan.atoms, extra_constraints);
+
+                self.reprocess_existing_headers(
+                    &mut headers,
+                    &cached_plan.atoms,
+                    &cached_plan.header,
+                );
+
+                Plan::SinglePlan(SinglePlan {
+                    atoms: cached_plan.atoms.clone(),
+                    header: headers,
+                    stages,
+                    actions: action_id,
+                })
+            }
+            Plan::DecomposedPlan(cached_plan) => {
+                let mut blocks = Vec::with_capacity(cached_plan.stages.blocks.len());
+                let mut headers = vec![];
+                self.push_extra_constraints(&mut headers, &cached_plan.atoms, extra_constraints);
+                self.reprocess_existing_headers(
+                    &mut headers,
+                    &cached_plan.atoms,
+                    &cached_plan.header,
+                );
+
+                // Process body blocks
+                for cached_block in cached_plan.stages.blocks.iter() {
+                    let stages = JoinStages {
+                        instrs: cached_block.0.instrs.clone(),
+                    };
+
+                    blocks.push((stages, cached_block.1.clone()));
+                }
+
+                // Process result blocks
+                let result_block = JoinStages {
+                    instrs: cached_plan.result_block.instrs.clone(),
+                };
+
+                Plan::DecomposedPlan(DecomposedPlan {
+                    atoms: cached_plan.atoms.clone(),
+                    header: headers,
+                    stages: JoinStageBlocks { blocks },
+                    actions: action_id,
+                    result_block,
+                })
+            }
         }
     }
 
@@ -132,61 +252,10 @@ impl<'outer> RuleSetBuilder<'outer> {
     ) -> RuleId {
         // First, patch in the new action id.
         let action_id = self.rule_set.actions.push(cached.actions.clone());
-        let mut plan = Plan {
-            atoms: cached.plan.atoms.clone(),
-            stages: JoinStages {
-                header: Default::default(),
-                instrs: cached.plan.stages.instrs.clone(),
-                actions: action_id,
-            },
-        };
-
-        // Next, patch in the "extra constraints" that we want to add to the plan.
-        for (atom_id, constraint) in extra_constraints {
-            let atom_info = plan.atoms.get(*atom_id).expect("atom must exist in plan");
-            let table = atom_info.table;
-            let processed = self
-                .db
-                .process_constraints(table, std::slice::from_ref(constraint));
-            if !processed.slow.is_empty() {
-                panic!(
-                    "Cached plans only support constraints with a fast pushdown. Got: {constraint:?} for table {table:?}",
-                );
-            }
-            plan.stages.header.push(JoinHeader {
-                atom: *atom_id,
-                constraints: processed.fast,
-                subset: processed.subset,
-            });
-        }
-
-        // Finally: re-process the rest of the constraints in the plan header and slot in the new
-        // plan.
-        for JoinHeader {
-            atom, constraints, ..
-        } in &cached.plan.stages.header
-        {
-            let atom_info = plan.atoms.get(*atom).expect("atom must exist in plan");
-            let table = atom_info.table;
-            let processed = self.db.process_constraints(table, constraints);
-            if !processed.slow.is_empty() {
-                panic!(
-                    "Cached plans only support constraints with a fast pushdown. Got: {constraints:?} for table {table:?}",
-                );
-            }
-            plan.stages.header.push(JoinHeader {
-                atom: *atom,
-                constraints: processed.fast,
-                subset: processed.subset,
-            });
-        }
-
-        self.rule_set.plans.push((
-            plan,
-            cached.desc.clone(),
-            cached.symbol_map.clone(),
-            action_id,
-        ))
+        let plan = self.get_rule_with_extra_constraints(cached, action_id, extra_constraints);
+        self.rule_set
+            .plans
+            .push((plan, cached.desc.clone(), cached.symbol_map.clone()))
     }
 
     /// Build the ruleset.
@@ -317,8 +386,7 @@ impl<'outer, 'a> QueryBuilder<'outer, 'a> {
         let processed = self.rsb.db.process_constraints(table_id, &cs);
         let mut atom = Atom {
             table: table_id,
-            var_to_column: Default::default(),
-            column_to_var: Default::default(),
+            var_columns: Default::default(),
             constraints: processed,
         };
         let next_atom = AtomId::from_usize(self.query.atoms.n_ids());
@@ -334,13 +402,12 @@ impl<'outer, 'a> QueryBuilder<'outer, 'a> {
                 continue;
             }
             let col = ColumnId::from_usize(i);
-            if let Some(prev) = atom.var_to_column.insert(var, col) {
+            if let Some(prev) = atom.var_columns.insert(var, col) {
                 atom.constraints.slow.push(Constraint::Eq {
                     l_col: col,
                     r_col: prev,
                 })
             };
-            atom.column_to_var.insert(col, var);
             subatoms
                 .entry(var)
                 .or_insert_with(|| SubAtom::new(next_atom))
@@ -355,6 +422,22 @@ impl<'outer, 'a> QueryBuilder<'outer, 'a> {
                 .occurrences
                 .push(subatom);
         }
+
+        // Add functional dependencies for this atom.
+        let get_var = |qe: &QueryEntry| match qe {
+            QueryEntry::Var(v) => Some(*v),
+            QueryEntry::Const(_) => None,
+        };
+        let antecedent = vars[..info.spec().n_keys]
+            .iter()
+            .filter_map(get_var)
+            .collect::<Vec<_>>();
+        let consequent = vars[info.spec().n_keys..]
+            .iter()
+            .filter_map(get_var)
+            .collect::<Vec<_>>();
+        self.query.fun_deps.add_dependency(antecedent, consequent);
+
         Ok(self.query.atoms.push(atom))
     }
 }
@@ -468,7 +551,7 @@ impl RuleBuilder<'_, '_> {
             .rsb
             .rule_set
             .plans
-            .push((plan, desc.into(), symbol_map, action_id))
+            .push((plan, desc.into(), symbol_map))
     }
 
     /// Return a variable containing the result of reading the specified counter.
@@ -772,8 +855,7 @@ impl RuleBuilder<'_, '_> {
 #[derive(Debug, Clone)]
 pub(crate) struct Atom {
     pub(crate) table: TableId,
-    pub(crate) var_to_column: HashMap<Variable, ColumnId>,
-    pub(crate) column_to_var: DenseIdMap<ColumnId, Variable>,
+    pub(crate) var_columns: VarColumnMap,
     /// These constraints are an initial take at processing "fast" constraints as well as a
     /// potential list of "slow" constraints.
     ///
@@ -782,9 +864,162 @@ pub(crate) struct Atom {
     pub(crate) constraints: ProcessedConstraints,
 }
 
+impl Atom {
+    pub(crate) fn vars(&self) -> impl Iterator<Item = Variable> + '_ {
+        self.var_columns.vars()
+    }
+
+    pub(crate) fn get_var(&self, col: ColumnId) -> Option<Variable> {
+        self.var_columns.get_var(col)
+    }
+
+    pub(crate) fn get_col(&self, var: Variable) -> Option<ColumnId> {
+        self.var_columns.get_col(var)
+    }
+}
+
+#[derive(Clone, Default)]
+pub(crate) struct VarColumnMap {
+    var_to_column: DenseIdMap<Variable, ColumnId>,
+    column_to_var: DenseIdMap<ColumnId, Variable>,
+}
+
+impl std::fmt::Debug for VarColumnMap {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        let mut entries: Vec<_> = self.column_to_var.iter().collect();
+        entries.sort_by_key(|(col, _)| col.index());
+
+        f.write_str("VarColumnMap(")?;
+        for (i, (col, var)) in entries.iter().enumerate() {
+            if i > 0 {
+                f.write_str(", ")?;
+            }
+            write!(f, "{col:?} -> {var:?}")?;
+        }
+        f.write_str(")")
+    }
+}
+
+impl VarColumnMap {
+    pub(crate) fn insert(&mut self, var: Variable, col: ColumnId) -> Option<ColumnId> {
+        let prev = self.var_to_column.insert(var, col);
+        self.column_to_var.insert(col, var);
+        prev
+    }
+
+    pub(crate) fn get_col(&self, var: Variable) -> Option<ColumnId> {
+        self.var_to_column.get(var).copied()
+    }
+
+    pub(crate) fn get_var(&self, col: ColumnId) -> Option<Variable> {
+        self.column_to_var.get(col).copied()
+    }
+
+    pub(crate) fn iter(&self) -> impl Iterator<Item = (ColumnId, Variable)> + '_ {
+        self.column_to_var.iter().map(|(col, var)| (col, *var))
+    }
+
+    pub(crate) fn vars(&self) -> impl Iterator<Item = Variable> + '_ {
+        self.iter().map(|(_, var)| var)
+    }
+
+    pub(crate) fn is_empty(&self) -> bool {
+        self.var_to_column.len() == 0
+    }
+}
+
+/// A functional dependency inferencer.
+///
+/// A functional dependency (x, y, ...) -> (u, v, ...) means that if we know
+/// the values of x, y, ..., then we can determine u, v, ...
+///
+/// This data structure can compute the closure of a set of variables under
+/// a set of functional dependencies.
+#[derive(Clone, Default)]
+pub(crate) struct FunDeps {
+    /// List of functional dependencies (antecedent -> consequent)
+    dependencies: Vec<(Vec<Variable>, Vec<Variable>)>,
+}
+
+impl FunDeps {
+    /// Add a functional dependency: antecedent -> consequent.
+    pub fn add_dependency(&mut self, antecedent: Vec<Variable>, consequent: Vec<Variable>) {
+        // Don't add trivial dependencies.
+        if !antecedent.is_empty() {
+            self.dependencies.push((antecedent, consequent));
+        }
+    }
+
+    /// Returns all variables that can be determined from the input variables
+    /// using the functional dependencies.
+    pub fn closure(
+        &self,
+        variables: impl IntoIterator<Item = Variable>,
+    ) -> DenseIdMap<Variable, ()> {
+        let mut result: DenseIdMap<Variable, ()> =
+            DenseIdMap::from_iter(variables.into_iter().map(|v| (v, ())));
+        let mut changed = true;
+
+        while changed {
+            changed = false;
+            for (antecedent, consequent) in &self.dependencies {
+                // If all variables in the antecedent are in the result,
+                // add all variables in the consequent.
+                if antecedent.iter().all(|v| result.contains_key(*v)) {
+                    for v in consequent {
+                        if !result.contains_key(*v) {
+                            result.insert(*v, ());
+                            changed = true;
+                        }
+                    }
+                }
+            }
+        }
+
+        result
+    }
+}
+
+impl std::fmt::Debug for FunDeps {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        use std::fmt::Write;
+
+        let mut deps = String::new();
+
+        for (i, (ant, cons)) in self.dependencies.iter().enumerate() {
+            if i > 0 {
+                deps.push_str("; ");
+            }
+
+            deps.push('{');
+            for (j, v) in ant.iter().enumerate() {
+                if j > 0 {
+                    deps.push_str(", ");
+                }
+                write!(&mut deps, "{v:?}")?;
+            }
+            deps.push('}');
+
+            deps.push_str(" -> ");
+
+            deps.push('{');
+            for (j, v) in cons.iter().enumerate() {
+                if j > 0 {
+                    deps.push_str(", ");
+                }
+                write!(&mut deps, "{v:?}")?;
+            }
+            deps.push('}');
+        }
+
+        write!(f, "FunDeps {{ {deps} }}")
+    }
+}
+
 pub(crate) struct Query {
     pub(crate) var_info: DenseIdMap<Variable, VarInfo>,
     pub(crate) atoms: DenseIdMap<AtomId, Atom>,
     pub(crate) action: ActionId,
     pub(crate) plan_strategy: PlanStrategy,
+    pub(crate) fun_deps: FunDeps,
 }

@@ -285,20 +285,20 @@ impl<C: ContainerValue> DynamicContainerEnv for ContainerEnv<C> {
         subset: Option<SubsetRef>,
         exec_state: &mut ExecutionState,
     ) -> ContainerRebuildSummary {
-        if let Some(subset) = subset {
-            if incremental_rebuild(
+        if let Some(subset) = subset
+            && incremental_rebuild(
                 subset.size(),
                 self.to_id.len(),
                 parallelize_intra_container_op(self.to_id.len()),
-            ) {
-                return self.apply_rebuild_incremental(
-                    table,
-                    rebuilder,
-                    exec_state,
-                    subset,
-                    rebuilder.hint_col().unwrap(),
-                );
-            }
+            )
+        {
+            return self.apply_rebuild_incremental(
+                table,
+                rebuilder,
+                exec_state,
+                subset,
+                rebuilder.hint_col().unwrap(),
+            );
         }
         self.apply_rebuild_nonincremental(rebuilder, exec_state)
     }

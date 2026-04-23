@@ -26,7 +26,7 @@ use crate::{
     row_buffer::{RowBuffer, TaggedRowBuffer},
 };
 
-define_id!(pub ColumnId, u32, "a particular column in a table");
+define_id!(pub ColumnId, u32, "a particular column in a table", pretty "Col");
 define_id!(
     pub Generation,
     u64,

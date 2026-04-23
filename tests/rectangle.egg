@@ -1,0 +1,58 @@
+(relation R (i64 i64))
+(relation S (i64 i64))
+(relation T (i64 i64))
+(relation U (i64 i64))
+
+(relation range (i64))
+(relation range-10 (i64))
+(range 0)
+(range-10 0)
+(ruleset populate)
+(rule ((range i) (< i 1000)) ((range (+ i 1))) :ruleset populate)
+(rule ((range-10 i) (< i 100)) ((range (+ i 1))) :ruleset populate)
+
+(run-schedule (saturate (run populate)))
+
+(ruleset rel)
+(rule (
+    (range x)
+    (range-10 y)
+) (
+    (R x y)
+) :ruleset rel)
+
+(rule (
+    (range-10 y)
+    (range z)
+) (
+    (S y z)
+) :ruleset rel)
+
+(rule (
+    (range z)
+    (range-10 w)
+) (
+    (T z w)
+) :ruleset rel)
+
+(rule (
+    (range x)
+    (range-10 w)
+) (
+    (U w x)
+) :ruleset rel)
+(run-schedule (saturate (run rel)))
+
+(relation result (i64 i64 i64 i64))
+(rule (
+    (R x y)
+    (S y z)
+    (T z w)
+    (U w x)
+) (
+    (result x z y w)
+))
+
+(run 1)
+(print-stats)
+(print-size result)

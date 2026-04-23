@@ -55,16 +55,16 @@ pub(crate) fn run_merge(
     subst.insert("old".to_string(), old_term);
     subst.insert("new".to_string(), new_term);
     for cmd in prog {
-        if let GenericNCommand::Function(func_decl) = cmd {
-            if func_decl.name == func_name {
-                // run the merge function for this function using eval_expr
-                let expr = func_decl.merge.as_ref().ok_or_else(|| {
-                    ProofCheckError::from(ProofCheckErrorKind::FunctionNotFound {
-                        function_name: func_name.to_string(),
-                    })
-                })?;
-                return eval_expr_with_subst("merge_function", expr, term_dag, &subst);
-            }
+        if let GenericNCommand::Function(func_decl) = cmd
+            && func_decl.name == func_name
+        {
+            // run the merge function for this function using eval_expr
+            let expr = func_decl.merge.as_ref().ok_or_else(|| {
+                ProofCheckError::from(ProofCheckErrorKind::FunctionNotFound {
+                    function_name: func_name.to_string(),
+                })
+            })?;
+            return eval_expr_with_subst("merge_function", expr, term_dag, &subst);
         }
     }
     Err(ProofCheckErrorKind::FunctionNotFound {
@@ -458,13 +458,13 @@ impl ProofCheckContext {
         // Check for duplicate rule names
         let mut seen_rule_names: HashSet<&str> = HashSet::default();
         for cmd in prog {
-            if let GenericNCommand::NormRule { rule } = cmd {
-                if !seen_rule_names.insert(&rule.name) {
-                    return Err(ProofCheckErrorKind::DuplicateRuleName {
-                        rule_name: rule.name.clone(),
-                    }
-                    .into());
+            if let GenericNCommand::NormRule { rule } = cmd
+                && !seen_rule_names.insert(&rule.name)
+            {
+                return Err(ProofCheckErrorKind::DuplicateRuleName {
+                    rule_name: rule.name.clone(),
                 }
+                .into());
             }
         }
 
