@@ -1,0 +1,13 @@
+;; Reproducer for proof-mode extraction dropping constructor costs.
+;;
+;; In normal mode, extraction should prefer `Cheap` with cost 5.
+;; Previous bug: in proof/term-encoding modes, extraction goes through the
+;; view table, and if it doesn't include `:cost` the extracted cost
+;; incorrectly falls back to the default cost of 1.
+
+(datatype Expr
+  (Cheap :cost 5)
+  (Expensive :cost 100))
+
+(union (Cheap) (Expensive))
+(extract (Expensive))
