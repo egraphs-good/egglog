@@ -98,6 +98,11 @@ pub type ArcSort = Arc<dyn Sort>;
 /// A trait for implementing custom primitive operations in egglog.
 ///
 /// Primitives are built-in functions that can be called in both rule queries and actions.
+///
+/// NOTE: this trait is being migrated to [`TypedPrimitive`], which carries a
+/// declared state type that governs which contexts (rule query, rule action,
+/// global query, global action) the primitive can be used in. Once all
+/// in-tree primitives are migrated, this trait will be removed.
 pub trait Primitive {
     /// Returns the name of this primitive operation.
     fn name(&self) -> &str;
@@ -110,6 +115,87 @@ pub trait Primitive {
     ///
     /// Returns `Some(value)` if the operation succeeds, or `None` if it fails.
     fn apply(&self, exec_state: &mut ExecutionState, args: &[Value]) -> Option<Value>;
+}
+
+/// A typed primitive whose declared `State` associated type governs which
+/// execution contexts it may be called from.
+///
+/// The GAT `State<'a>` must be one of the four
+/// [`UserState`](egglog_bridge::UserState) wrappers exported from
+/// `egglog_bridge`:
+///
+/// - [`RuleQueryState`](egglog_bridge::RuleQueryState): pure primitive — valid in all contexts.
+/// - [`RuleActionState`](egglog_bridge::RuleActionState): may write the database — valid in rule actions and global actions.
+/// - [`GlobalQueryState`](egglog_bridge::GlobalQueryState): may read the database — valid in global query and global action contexts.
+/// - [`GlobalActionState`](egglog_bridge::GlobalActionState): may read and write — valid only in global actions.
+///
+/// The Rust type checker (not egglog's type checker) enforces at compile
+/// time that the body of `apply` only uses capabilities available on the
+/// declared state wrapper. See issue #772 for the motivation and the
+/// `issue-772-proposal.md` file in the repo for the full design.
+pub trait TypedPrimitive: Send + Sync + 'static
+where
+    for<'a> Self::State<'a>: egglog_bridge::UserState<'a>,
+{
+    /// The minimum state the primitive needs. See the trait docs for the
+    /// four permissible values.
+    type State<'a>;
+
+    /// Returns the name of this primitive.
+    fn name(&self) -> &str;
+
+    /// Constructs a type constraint for this primitive.
+    fn get_type_constraints(&self, span: &Span) -> Box<dyn TypeConstraint>;
+
+    /// Applies the primitive. The Rust type checker enforces that the body
+    /// only uses capabilities available on `Self::State<'a>`.
+    fn apply<'a>(&self, state: &mut Self::State<'a>, args: &[Value]) -> Option<Value>;
+}
+
+/// Internal, dyn-compatible façade over [`TypedPrimitive`].
+///
+/// The `TypedPrimitive` trait is not object-safe (it has a GAT and a method
+/// generic over the associated-type lifetimes). This trait erases those
+/// generics so the primitive can be stored and dispatched at runtime.
+pub(crate) trait ErasedTypedPrimitive: Send + Sync {
+    fn name(&self) -> &str;
+    fn get_type_constraints(&self, span: &Span) -> Box<dyn TypeConstraint>;
+    /// The contexts in which this primitive may be called. Derived from
+    /// `<T::State as UserState>::valid_contexts()` at construction time.
+    fn valid_contexts(&self) -> &'static [egglog_bridge::Context];
+    /// Invoke the primitive. The caller is responsible for ensuring the
+    /// current context is in `valid_contexts()`; the primitive wraps
+    /// `exec_state` into its declared `State` type internally.
+    fn invoke(&self, exec_state: &mut ExecutionState, args: &[Value]) -> Option<Value>;
+}
+
+/// Wraps a `TypedPrimitive` into an `ErasedTypedPrimitive`.
+pub(crate) struct TypedPrimitiveWrap<T: TypedPrimitive>(pub(crate) Arc<T>)
+where
+    for<'a> T::State<'a>: egglog_bridge::UserState<'a>;
+
+impl<T: TypedPrimitive> ErasedTypedPrimitive for TypedPrimitiveWrap<T>
+where
+    for<'a> T::State<'a>: egglog_bridge::UserState<'a>,
+{
+    fn name(&self) -> &str {
+        self.0.name()
+    }
+    fn get_type_constraints(&self, span: &Span) -> Box<dyn TypeConstraint> {
+        self.0.get_type_constraints(span)
+    }
+    fn valid_contexts(&self) -> &'static [egglog_bridge::Context] {
+        <T::State<'static> as egglog_bridge::UserState>::valid_contexts()
+    }
+    fn invoke(&self, exec_state: &mut ExecutionState, args: &[Value]) -> Option<Value> {
+        // SAFETY / LIFETIMES: The wrappers use a single lifetime `'a` on
+        // both the outer borrow and the inner `ExecutionState<'a>`. We
+        // shrink the `ExecutionState<'x>` reference to a shorter lifetime
+        // `'a` that matches the borrow, which is sound because the state is
+        // only used for the duration of the apply call.
+        let mut state = <T::State<'_> as egglog_bridge::UserState>::wrap(exec_state);
+        self.0.apply(&mut state, args)
+    }
 }
 
 /// A user-defined command output trait.
@@ -978,6 +1064,7 @@ impl EGraph {
                 self.backend.new_rule(&rule.name, self.seminaive),
                 &self.functions,
                 &self.type_info,
+                self.seminaive,
             );
             translator.query(query, false);
             translator.actions(actions)?;
@@ -1017,6 +1104,7 @@ impl EGraph {
             self.backend.new_rule("eval_actions", false),
             &self.functions,
             &self.type_info,
+            false, // global action context
         );
         translator.actions(&actions)?;
         let id = translator.build();
@@ -1091,6 +1179,7 @@ impl EGraph {
             self.backend.new_rule("eval_resolved_expr", false),
             &self.functions,
             &self.type_info,
+            false, // global action context
         );
 
         let result_var = ResolvedVar {
@@ -1177,6 +1266,7 @@ impl EGraph {
             self.backend.new_rule("check_facts", false),
             &self.functions,
             &self.type_info,
+            false, // global query context
         );
         translator.query(&query, true);
         translator
@@ -1539,7 +1629,9 @@ impl EGraph {
         } else {
             self.backend.with_execution_state(|es| {
                 for row in parsed_contents.iter() {
-                    table_action.lookup(es, row);
+                    // Constructor semantics: mint a fresh eclass id for
+                    // each missing key.
+                    table_action.lookup_or_insert(es, row);
                 }
                 Some(unit_val)
             });
@@ -1886,6 +1978,12 @@ struct BackendRule<'a> {
     entries: HashMap<core::ResolvedAtomTerm, QueryEntry>,
     functions: &'a IndexMap<String, Function>,
     type_info: &'a TypeInfo,
+    /// Whether this rule is running under seminaive (a real rule) vs. a
+    /// global one-shot (eval, check, etc.). Combined with whether we are in
+    /// the query or action phase, this picks the [`egglog_bridge::Context`]
+    /// used to validate primitive calls against their declared
+    /// `valid_contexts`.
+    seminaive: bool,
 }
 
 impl<'a> BackendRule<'a> {
@@ -1893,12 +1991,34 @@ impl<'a> BackendRule<'a> {
         rb: egglog_bridge::RuleBuilder<'a>,
         functions: &'a IndexMap<String, Function>,
         type_info: &'a TypeInfo,
+        seminaive: bool,
     ) -> BackendRule<'a> {
         BackendRule {
             rb,
             functions,
             type_info,
+            seminaive,
             entries: Default::default(),
+        }
+    }
+
+    /// The [`egglog_bridge::Context`] that applies when compiling
+    /// primitives on the query side (LHS) of this rule.
+    fn query_context(&self) -> egglog_bridge::Context {
+        if self.seminaive {
+            egglog_bridge::Context::RuleQuery
+        } else {
+            egglog_bridge::Context::GlobalQuery
+        }
+    }
+
+    /// The [`egglog_bridge::Context`] that applies when compiling
+    /// primitives on the action side (RHS) of this rule.
+    fn action_context(&self) -> egglog_bridge::Context {
+        if self.seminaive {
+            egglog_bridge::Context::RuleAction
+        } else {
+            egglog_bridge::Context::GlobalAction
         }
     }
 
@@ -1925,7 +2045,23 @@ impl<'a> BackendRule<'a> {
         &mut self,
         prim: &core::SpecializedPrimitive,
         args: &[core::ResolvedAtomTerm],
+        ctx: egglog_bridge::Context,
     ) -> (ExternalFunctionId, Vec<QueryEntry>, ColumnTy) {
+        // Enforce that the primitive is declared valid in this context.
+        //
+        // For legacy (untyped) primitives this check is a no-op — they are
+        // registered with all four contexts. For typed primitives, this is
+        // the point where a query-only / action-only misuse is caught.
+        if !prim.valid_contexts().contains(&ctx) {
+            panic!(
+                "primitive `{}` cannot be used in context {:?} (valid contexts: {:?}); \
+                 this is the seminaive-safety check from issue #772.",
+                prim.name(),
+                ctx,
+                prim.valid_contexts()
+            );
+        }
+
         let mut qe_args = self.args(args);
 
         if prim.name() == "unstable-fn" {
@@ -1996,7 +2132,8 @@ impl<'a> BackendRule<'a> {
                     self.rb.query_table(f, &args, is_subsumed).unwrap();
                 }
                 ResolvedCall::Primitive(p) => {
-                    let (p, args, ty) = self.prim(p, &atom.args);
+                    let ctx = self.query_context();
+                    let (p, args, ty) = self.prim(p, &atom.args, ctx);
                     self.rb.query_prim(p, &args, ty).unwrap()
                 }
             }
@@ -2020,7 +2157,8 @@ impl<'a> BackendRule<'a> {
                         }
                         ResolvedCall::Primitive(p) => {
                             let name = p.name().to_owned();
-                            let (p, args, ty) = self.prim(p, args);
+                            let ctx = self.action_context();
+                            let (p, args, ty) = self.prim(p, args, ctx);
                             let span = span.clone();
                             self.rb.call_external_func(p, &args, ty, move || {
                                 format!("{span}: call of primitive {name} failed")
@@ -2155,12 +2293,21 @@ mod tests {
     use crate::sort::*;
     use crate::*;
 
+    use egglog_bridge::{ExecStateCore, RuleQueryState, UserState};
+
     #[derive(Clone)]
     struct InnerProduct {
         vec: ArcSort,
     }
 
-    impl Primitive for InnerProduct {
+    // Migrated to the new `TypedPrimitive` trait. `InnerProduct` is pure —
+    // it only reads base values and (idempotent) container contents — so it
+    // declares `State = RuleQueryState`, making it usable in all four
+    // contexts. The Rust type checker enforces that the body only uses
+    // methods available on `RuleQueryState`.
+    impl TypedPrimitive for InnerProduct {
+        type State<'a> = RuleQueryState<'a>;
+
         fn name(&self) -> &str {
             "inner-product"
         }
@@ -2174,23 +2321,27 @@ mod tests {
             .into_box()
         }
 
-        fn apply(&self, exec_state: &mut ExecutionState<'_>, args: &[Value]) -> Option<Value> {
+        fn apply<'a>(
+            &self,
+            state: &mut RuleQueryState<'a>,
+            args: &[Value],
+        ) -> Option<Value> {
             let mut sum = 0;
-            let vec1 = exec_state
+            let vec1 = state
                 .container_values()
                 .get_val::<VecContainer>(args[0])
                 .unwrap();
-            let vec2 = exec_state
+            let vec2 = state
                 .container_values()
                 .get_val::<VecContainer>(args[1])
                 .unwrap();
             assert_eq!(vec1.data.len(), vec2.data.len());
             for (a, b) in vec1.data.iter().zip(vec2.data.iter()) {
-                let a = exec_state.base_values().unwrap::<i64>(*a);
-                let b = exec_state.base_values().unwrap::<i64>(*b);
+                let a = state.base_values().unwrap::<i64>(*a);
+                let b = state.base_values().unwrap::<i64>(*b);
                 sum += a * b;
             }
-            Some(exec_state.base_values().get::<i64>(sum))
+            Some(state.base_values().get::<i64>(sum))
         }
     }
 
@@ -2206,7 +2357,7 @@ mod tests {
                 && s.inner_sorts()[0].name() == I64Sort.name()
         });
 
-        egraph.add_primitive(InnerProduct { vec: int_vec_sort });
+        egraph.add_typed_primitive(InnerProduct { vec: int_vec_sort });
 
         egraph
             .parse_and_run_program(
@@ -2231,6 +2382,69 @@ mod tests {
         }
         let egraph = EGraph::default();
         assert!(is_send(&egraph) && is_sync(&egraph));
+    }
+
+    // Issue #772 regression: a primitive that declares
+    // `State = RuleActionState` is rejected when used in a rule-query
+    // (seminaive LHS) context. The check fires at rule-build time via
+    // `PrimitiveWithId::valid_contexts`.
+    #[test]
+    fn test_typed_primitive_rejected_in_rule_query() {
+        use egglog_bridge::{ExecStateCore, RuleActionState};
+
+        // A primitive that writes to the UF table — its declared state is
+        // `RuleActionState`, so it is not valid in a rule-query context.
+        #[derive(Clone)]
+        struct FakeWriter;
+        impl TypedPrimitive for FakeWriter {
+            type State<'a> = RuleActionState<'a>;
+            fn name(&self) -> &str {
+                "fake-writer"
+            }
+            fn get_type_constraints(&self, span: &Span) -> Box<dyn TypeConstraint> {
+                SimpleTypeConstraint::new(
+                    self.name(),
+                    vec![I64Sort.to_arcsort(), I64Sort.to_arcsort()],
+                    span.clone(),
+                )
+                .into_box()
+            }
+            fn apply<'a>(
+                &self,
+                state: &mut RuleActionState<'a>,
+                args: &[Value],
+            ) -> Option<Value> {
+                // Just exercise ExecStateCore — proving body type-checks.
+                let _ = state.base_values();
+                Some(args[0])
+            }
+        }
+
+        let mut egraph = EGraph::default();
+        egraph.add_typed_primitive(FakeWriter);
+
+        // Using a writing primitive in an RHS is fine.
+        egraph
+            .parse_and_run_program(
+                None,
+                "(function f (i64) i64 :no-merge)\n(rule () ((set (f 0) (fake-writer 42))))",
+            )
+            .unwrap();
+
+        // Using it as a filter inside a rule LHS (RuleQuery) must be
+        // rejected. We catch the panic; the real wire-up would surface
+        // this as a build-time error.
+        let result = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+            egraph.parse_and_run_program(
+                None,
+                "(function g (i64) i64 :no-merge)\n\
+                 (rule ((= x (fake-writer 1))) ((set (g 0) x)))",
+            )
+        }));
+        assert!(
+            result.is_err(),
+            "expected panic when using writing primitive in a rule query"
+        );
     }
 
     fn get_function(egraph: &EGraph, name: &str) -> Function {

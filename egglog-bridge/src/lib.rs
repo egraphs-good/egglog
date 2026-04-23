@@ -33,11 +33,16 @@ use once_cell::sync::Lazy;
 use smallvec::SmallVec;
 use web_time::{Duration, Instant};
 
+pub mod exec_state;
 pub mod macros;
 pub(crate) mod rule;
 #[cfg(test)]
 mod tests;
 
+pub use exec_state::{
+    Context, ExecStateCore, ExecStateReadDb, ExecStateWriteDb, GlobalActionState, GlobalQueryState,
+    RuleActionState, RuleQueryState, UserState,
+};
 pub use rule::{Function, QueryEntry, RuleBuilder};
 use thiserror::Error;
 
@@ -1095,7 +1100,12 @@ impl ResolvedMergeFn {
                     .map(|arg| arg.run(state, cur, new, ts))
                     .collect::<Vec<_>>();
 
-                func.lookup(state, &args).unwrap_or_else(|| {
+                // Merge functions dispatch to another function that may be
+                // a constructor (mint fresh id on miss) or a custom function
+                // (return `None` → panic). `lookup_or_insert` preserves
+                // both behaviors; the pure-read `lookup` would skip
+                // constructor minting.
+                func.lookup_or_insert(state, &args).unwrap_or_else(|| {
                     let res = state.call_external_func(*panic, &[]);
                     assert_eq!(res, None);
                     cur
@@ -1136,10 +1146,31 @@ impl TableAction {
         }
     }
 
-    /// A "table lookup" is not a read-only operation. It will insert a row when
-    /// the [`DefaultVal`] for the table is not [`DefaultVal::Fail`] and
-    /// the `key` is not already present in the table.
-    pub fn lookup(&self, state: &mut ExecutionState, key: &[Value]) -> Option<Value> {
+    /// Look up a row and return its return-value column, or `None` if the
+    /// key is not present. **This is a pure read**: it never inserts a row,
+    /// regardless of the table's configured [`DefaultVal`].
+    ///
+    /// For the lookup-or-insert behavior that mints fresh eclass IDs for
+    /// constructors, use [`TableAction::lookup_or_insert`].
+    pub fn lookup(&self, state: &ExecutionState, key: &[Value]) -> Option<Value> {
+        state
+            .get_table(self.table)
+            .get_row(key)
+            .map(|row| row.vals[self.table_math.ret_val_col()])
+    }
+
+    /// Look up a row, inserting the configured default value if absent.
+    /// For constructor tables this mints a fresh eclass ID; for custom
+    /// functions (no default) this behaves identically to
+    /// [`TableAction::lookup`].
+    ///
+    /// This is a write operation — only safe in action contexts. See
+    /// issue #772.
+    pub fn lookup_or_insert(
+        &self,
+        state: &mut ExecutionState,
+        key: &[Value],
+    ) -> Option<Value> {
         match self.default {
             Some(default) => {
                 let timestamp =
@@ -1165,10 +1196,7 @@ impl TableAction {
                         [self.table_math.ret_val_col()],
                 )
             }
-            None => state
-                .get_table(self.table)
-                .get_row(key)
-                .map(|row| row.vals[self.table_math.ret_val_col()]),
+            None => self.lookup(state, key),
         }
     }
 

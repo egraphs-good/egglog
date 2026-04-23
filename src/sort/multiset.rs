@@ -1,5 +1,5 @@
 use super::*;
-use egglog_bridge::UnionAction;
+use egglog_bridge::{UnionAction, UserState};
 use inner::MultiSet;
 
 #[derive(Clone, Debug, PartialEq, Eq, Hash)]
@@ -173,7 +173,7 @@ impl ContainerSort for MultiSetSort {
             // We can't query directly by arcsort type since it's wrapped in a ContainerSort which is not public
                 && f.value_type() == Some(TypeId::of::<MultiSetContainer>())
         }) {
-            eg.add_primitive(SumMultisets {
+            eg.add_typed_primitive(SumMultisets {
                 name: "multiset-sum-multisets".into(),
                 multiset: other_multiset_sort.clone(),
                 multiset_of_multisets: arc.clone(),
@@ -621,7 +621,11 @@ struct SumMultisets {
     multiset_of_multisets: ArcSort,
 }
 
-impl Primitive for SumMultisets {
+// `SumMultisets` flattens a multiset of multisets. Only reads container
+// contents and registers the result — pure.
+impl TypedPrimitive for SumMultisets {
+    type State<'a> = egglog_bridge::RuleQueryState<'a>;
+
     fn name(&self) -> &str {
         &self.name
     }
@@ -635,15 +639,19 @@ impl Primitive for SumMultisets {
         .into_box()
     }
 
-    fn apply(&self, exec_state: &mut ExecutionState, args: &[Value]) -> Option<Value> {
+    fn apply<'a>(
+        &self,
+        state: &mut egglog_bridge::RuleQueryState<'a>,
+        args: &[Value],
+    ) -> Option<Value> {
         let mut data = MultiSet::<Value>::new();
-        let ms_of_ms = exec_state
+        let ms_of_ms = state
             .container_values()
             .get_val::<MultiSetContainer>(args[0])
             .unwrap()
             .clone();
         for (ms_value, counts) in ms_of_ms.data.iter_counts() {
-            let ms = exec_state
+            let ms = state
                 .container_values()
                 .get_val::<MultiSetContainer>(ms_value)
                 .unwrap();
@@ -655,12 +663,7 @@ impl Primitive for SumMultisets {
             data,
             do_rebuild: self.multiset.is_eq_container_sort(),
         };
-        Some(
-            exec_state
-                .clone()
-                .container_values()
-                .register_val(multiset, exec_state),
-        )
+        Some(state.register_container(multiset))
     }
 }
 

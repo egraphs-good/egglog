@@ -1,4 +1,4 @@
-use egglog_bridge::UnionAction;
+use egglog_bridge::{UnionAction, UserState};
 use std::any::TypeId;
 use std::iter::zip;
 
@@ -137,7 +137,7 @@ impl ContainerSort for VecSort {
         add_primitive!(eg, "vec-set"    = |mut xs: @VecContainer (arc), i: i64, x: # (self.element())| -> @VecContainer (arc) {{ xs.data[i as usize] = x;    xs }});
         add_primitive!(eg, "vec-remove" = |mut xs: @VecContainer (arc), i: i64                       | -> @VecContainer (arc) {{ xs.data.remove(i as usize); xs }});
         if self.element.is_eq_sort() {
-            eg.add_primitive(Union {
+            eg.add_typed_primitive(Union {
                 name: "vec-union".into(),
                 vec: arc.clone(),
                 action: eg.new_union_action(),
@@ -285,7 +285,13 @@ struct Union {
     action: UnionAction,
 }
 
-impl Primitive for Union {
+// `Union` unions the corresponding entries of two vecs of equal length.
+// It writes to the union-find (via `UnionAction::union`), so it declares
+// `State = RuleActionState` — valid in rule-action and global-action
+// contexts, rejected at rule-build time if used in a rule query.
+impl TypedPrimitive for Union {
+    type State<'a> = egglog_bridge::RuleActionState<'a>;
+
     fn name(&self) -> &str {
         &self.name
     }
@@ -299,13 +305,17 @@ impl Primitive for Union {
         .into_box()
     }
 
-    fn apply(&self, exec_state: &mut ExecutionState, args: &[Value]) -> Option<Value> {
-        let left = exec_state
+    fn apply<'a>(
+        &self,
+        state: &mut egglog_bridge::RuleActionState<'a>,
+        args: &[Value],
+    ) -> Option<Value> {
+        let left = state
             .container_values()
             .get_val::<VecContainer>(args[0])?
             .clone()
             .data;
-        let right = exec_state
+        let right = state
             .container_values()
             .get_val::<VecContainer>(args[1])?
             .clone()
@@ -313,9 +323,12 @@ impl Primitive for Union {
         if left.len() != right.len() {
             return None;
         }
-        for (l, r) in zip(left, right) {
-            self.action.union(exec_state, l, r);
-        }
+        let action = self.action;
+        state.with_raw_exec_state(|es| {
+            for (l, r) in zip(left, right) {
+                action.union(es, l, r);
+            }
+        });
         Some(args[0])
     }
 }

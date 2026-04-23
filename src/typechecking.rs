@@ -7,6 +7,7 @@ use crate::{
 use ast::{ResolvedAction, ResolvedExpr, ResolvedFact, ResolvedRule, ResolvedVar, Rule};
 use core_relations::ExternalFunction;
 use egglog_ast::generic_ast::GenericAction;
+use egglog_bridge::Context;
 
 #[derive(Clone, Debug)]
 pub struct FuncType {
@@ -59,6 +60,13 @@ pub struct PrimitiveWithId {
     pub(crate) primitive: Arc<dyn Primitive + Send + Sync>,
     pub(crate) id: ExternalFunctionId,
     pub(crate) validator: Option<PrimitiveValidator>,
+    /// The execution contexts in which this primitive may be called.
+    ///
+    /// Legacy primitives registered via [`EGraph::add_primitive`] default to
+    /// all four contexts (preserving existing behavior). Typed primitives
+    /// registered via [`EGraph::add_typed_primitive`] carry the set derived
+    /// from their declared `State` type.
+    pub(crate) valid_contexts: &'static [Context],
 }
 
 impl PrimitiveWithId {
@@ -193,6 +201,92 @@ impl EGraph {
                 primitive,
                 id,
                 validator,
+                // Legacy primitives: available in all contexts. As primitives
+                // migrate to `TypedPrimitive`, they get the narrower set
+                // derived from their declared state.
+                valid_contexts: &Context::ALL,
+            });
+    }
+
+    /// Add a typed primitive whose valid execution contexts are derived from
+    /// its declared `State` associated type.
+    pub fn add_typed_primitive<T>(&mut self, x: T)
+    where
+        T: TypedPrimitive + Clone,
+        for<'a> T::State<'a>: egglog_bridge::UserState<'a>,
+    {
+        self.add_typed_primitive_with_validator(x, None)
+    }
+
+    /// Add a typed primitive with an optional validator.
+    pub fn add_typed_primitive_with_validator<T>(
+        &mut self,
+        x: T,
+        validator: Option<PrimitiveValidator>,
+    ) where
+        T: TypedPrimitive + Clone,
+        for<'a> T::State<'a>: egglog_bridge::UserState<'a>,
+    {
+        // Wrap the TypedPrimitive into an ErasedTypedPrimitive so the rest
+        // of the system can hold it behind a trait object. The erased
+        // wrapper knows how to construct the primitive's declared State
+        // type from an `ExecutionState`, and to report its valid contexts.
+        let arc_typed = Arc::new(x.clone());
+        let erased: Arc<dyn ErasedTypedPrimitive> =
+            Arc::new(TypedPrimitiveWrap(arc_typed.clone()));
+
+        // Bridge a typed primitive to the existing `Primitive` trait so the
+        // rest of the legacy pipeline (typechecking, display, etc.) can
+        // continue to work uniformly while migration proceeds.
+        #[derive(Clone)]
+        struct TypedAsPrimitive {
+            erased: Arc<dyn ErasedTypedPrimitive>,
+            name: String,
+        }
+        impl Primitive for TypedAsPrimitive {
+            fn name(&self) -> &str {
+                &self.name
+            }
+            fn get_type_constraints(&self, span: &Span) -> Box<dyn TypeConstraint> {
+                self.erased.get_type_constraints(span)
+            }
+            fn apply(&self, exec_state: &mut ExecutionState, args: &[Value]) -> Option<Value> {
+                self.erased.invoke(exec_state, args)
+            }
+        }
+
+        // Register the external function. Since the ErasedTypedPrimitive
+        // always produces its primitive's declared State type regardless of
+        // how it is invoked, a single ExternalFunctionId suffices — context
+        // enforcement happens at rule-build time via `valid_contexts`.
+        #[derive(Clone)]
+        struct ExtWrap(Arc<dyn ErasedTypedPrimitive>);
+        impl ExternalFunction for ExtWrap {
+            fn invoke(&self, exec_state: &mut ExecutionState, args: &[Value]) -> Option<Value> {
+                self.0.invoke(exec_state, args)
+            }
+        }
+
+        let valid_contexts = erased.valid_contexts();
+        let name = erased.name().to_owned();
+        let id = self
+            .backend
+            .register_external_func(Box::new(ExtWrap(erased.clone())));
+
+        let bridged: Arc<dyn Primitive + Send + Sync> = Arc::new(TypedAsPrimitive {
+            erased,
+            name: name.clone(),
+        });
+
+        self.type_info
+            .primitives
+            .entry(name)
+            .or_default()
+            .push(PrimitiveWithId {
+                primitive: bridged,
+                id,
+                validator,
+                valid_contexts,
             });
     }
 

@@ -317,10 +317,19 @@ pub fn rule(
     egraph.run_program(vec![Command::Rule { rule }])
 }
 
-/// A wrapper around an `ExecutionState` for rules that are written in Rust.
-/// See the [`rust_rule`] documentation for an example of how to use this.
+/// A context passed to Rust-written rule RHS bodies.
+///
+/// It wraps an [`egglog_bridge::RuleActionState`] so that the Rust type
+/// checker enforces the seminaive-safety rules from #772: the body can
+/// read base values and container contents (pure), stage writes via
+/// `insert`/`remove`/`subsume`/`union`, but cannot read tables.
+///
+/// Table *reads* are intentionally not exposed: per #772, actions must be
+/// pure functions of their matched bindings, so any value needed from the
+/// database must come through the rule's LHS atoms. Pre-split
+/// `RustRuleContext` also had a `lookup` method; it has been removed.
 pub struct RustRuleContext<'a, 'b> {
-    exec_state: &'a mut ExecutionState<'b>,
+    state: &'a mut egglog_bridge::RuleActionState<'b>,
     union_action: egglog_bridge::UnionAction,
     table_actions: &'a HashMap<String, egglog_bridge::TableAction>,
     panic_id: ExternalFunctionId,
@@ -329,7 +338,8 @@ pub struct RustRuleContext<'a, 'b> {
 impl RustRuleContext<'_, '_> {
     /// Convert from an egglog value to a Rust type.
     pub fn value_to_base<T: BaseValue>(&self, x: Value) -> T {
-        self.exec_state.base_values().unwrap::<T>(x)
+        use egglog_bridge::ExecStateCore;
+        self.state.base_values().unwrap::<T>(x)
     }
 
     /// Convert from an egglog value to reference of Rust container type.
@@ -339,19 +349,20 @@ impl RustRuleContext<'_, '_> {
         &mut self,
         x: Value,
     ) -> Option<impl Deref<Target = T>> {
-        self.exec_state.container_values().get_val::<T>(x)
+        use egglog_bridge::UserState;
+        self.state.container_values().get_val::<T>(x)
     }
 
     /// Convert from a Rust type to an egglog value.
     pub fn base_to_value<T: BaseValue>(&self, x: T) -> Value {
-        self.exec_state.base_values().get::<T>(x)
+        use egglog_bridge::ExecStateCore;
+        self.state.base_values().get::<T>(x)
     }
 
-    /// Convert from a Rust container type to an egglog value.
+    /// Convert from a Rust container type to an egglog value. Container
+    /// interning is idempotent, so this is safe in every context.
     pub fn container_to_value<T: ContainerValue>(&mut self, x: T) -> Value {
-        self.exec_state
-            .container_values()
-            .register_val::<T>(x, self.exec_state)
+        self.state.register_container(x)
     }
 
     fn get_table_action<'a>(
@@ -363,45 +374,29 @@ impl RustRuleContext<'_, '_> {
             .unwrap_or_else(|| panic!("missing table action for table: {table}"))
     }
 
-    /// Do a table lookup. This is potentially a mutable operation!
-    /// For more information, see `egglog_bridge::TableAction::lookup`.
-    pub fn lookup(&mut self, table: &str, key: &[Value]) -> Option<Value> {
-        let RustRuleContext {
-            exec_state,
-            table_actions,
-            ..
-        } = self;
-        Self::get_table_action(table_actions, table).lookup(exec_state, key)
-    }
-
     /// Union two values in the e-graph.
-    /// For more information, see `egglog_bridge::UnionAction::union`.
     pub fn union(&mut self, x: Value, y: Value) {
-        self.union_action.union(self.exec_state, x, y)
+        let action = self.union_action;
+        self.state.with_raw_exec_state(|es| action.union(es, x, y));
     }
 
     /// Insert a row into a table.
-    /// For more information, see `egglog_bridge::TableAction::insert`.
     pub fn insert(&mut self, table: &str, row: impl Iterator<Item = Value>) {
-        Self::get_table_action(self.table_actions, table).insert(self.exec_state, row)
+        let action = Self::get_table_action(self.table_actions, table).clone();
+        self.state.with_raw_exec_state(|es| action.insert(es, row));
     }
 
     /// Remove a row from a table.
-    /// For more information, see `egglog_bridge::TableAction::remove`.
     pub fn remove(&mut self, table: &str, key: &[Value]) {
-        let RustRuleContext {
-            exec_state,
-            table_actions,
-            ..
-        } = self;
-        Self::get_table_action(table_actions, table).remove(exec_state, key)
+        let action = Self::get_table_action(self.table_actions, table).clone();
+        self.state.with_raw_exec_state(|es| action.remove(es, key));
     }
 
     /// Subsume a row in a table.
-    /// For more information, see `egglog_bridge::TableAction::subsume`.
     pub fn subsume(&mut self, table: &str, key: &[Value]) {
-        Self::get_table_action(self.table_actions, table)
-            .subsume(self.exec_state, key.iter().copied())
+        let action = Self::get_table_action(self.table_actions, table).clone();
+        self.state
+            .with_raw_exec_state(|es| action.subsume(es, key.iter().copied()));
     }
 
     /// Panic.
@@ -409,7 +404,9 @@ impl RustRuleContext<'_, '_> {
     /// this function, which this function hopefully makes easier by
     /// always returning `None` so that you can use `?`.
     pub fn panic(&mut self) -> Option<()> {
-        self.exec_state.call_external_func(self.panic_id, &[]);
+        let panic_id = self.panic_id;
+        self.state
+            .with_raw_exec_state(|es| es.call_external_func(panic_id, &[]));
         None
     }
 }
@@ -424,7 +421,12 @@ struct RustRuleRhs<F: Fn(&mut RustRuleContext, &[Value]) -> Option<()>> {
     func: F,
 }
 
-impl<F: Fn(&mut RustRuleContext, &[Value]) -> Option<()>> Primitive for RustRuleRhs<F> {
+impl<F> TypedPrimitive for RustRuleRhs<F>
+where
+    F: Fn(&mut RustRuleContext, &[Value]) -> Option<()> + Clone + Send + Sync + 'static,
+{
+    type State<'a> = egglog_bridge::RuleActionState<'a>;
+
     fn name(&self) -> &str {
         &self.name
     }
@@ -439,15 +441,21 @@ impl<F: Fn(&mut RustRuleContext, &[Value]) -> Option<()>> Primitive for RustRule
         SimpleTypeConstraint::new(self.name(), sorts, span.clone()).into_box()
     }
 
-    fn apply(&self, exec_state: &mut ExecutionState, values: &[Value]) -> Option<Value> {
+    fn apply<'a>(
+        &self,
+        state: &mut egglog_bridge::RuleActionState<'a>,
+        values: &[Value],
+    ) -> Option<Value> {
+        use egglog_bridge::ExecStateCore;
+        let unit = state.base_values().get(());
         let mut context = RustRuleContext {
-            exec_state,
+            state,
             union_action: self.union_action,
             table_actions: &self.table_actions,
             panic_id: self.panic_id,
         };
         (self.func)(&mut context, values)?;
-        Some(exec_state.base_values().get(()))
+        Some(unit)
     }
 }
 
@@ -538,7 +546,7 @@ pub fn rust_rule(
 ) -> Result<Vec<CommandOutput>, Error> {
     let prim_name = egraph.parser.symbol_gen.fresh("rust_rule_prim");
     let panic_id = egraph.backend.new_panic(format!("{prim_name}_panic"));
-    egraph.add_primitive(RustRuleRhs {
+    egraph.add_typed_primitive(RustRuleRhs {
         name: prim_name.clone(),
         inputs: vars.iter().map(|(_, s)| s.clone()).collect(),
         union_action: egglog_bridge::UnionAction::new(&egraph.backend),
