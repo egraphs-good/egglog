@@ -72,6 +72,14 @@ impl SpecializedPrimitive {
     pub fn validator(&self) -> Option<&PrimitiveValidator> {
         self.prim_with_id.validator.as_ref()
     }
+
+    /// The execution contexts in which this primitive is valid.
+    ///
+    /// Legacy (untyped) primitives default to all four contexts; typed
+    /// primitives carry the set derived from their declared `State` type.
+    pub(crate) fn valid_contexts(&self) -> &'static [egglog_bridge::Context] {
+        self.prim_with_id.valid_contexts
+    }
 }
 
 impl PartialEq for SpecializedPrimitive {

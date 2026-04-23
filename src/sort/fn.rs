@@ -12,6 +12,8 @@
 //! the list of partially applied arguments.
 use std::sync::Mutex;
 
+use egglog_bridge::ExecStateCore;
+
 use super::*;
 
 #[derive(Clone, Debug)]
@@ -192,7 +194,7 @@ impl Sort for FunctionSort {
     }
 
     fn register_primitives(self: Arc<Self>, eg: &mut EGraph) {
-        eg.add_primitive(Ctor {
+        eg.add_typed_primitive(Ctor {
             name: "unstable-fn".into(),
             function: self.clone(),
         });
@@ -330,7 +332,14 @@ struct Ctor {
     function: Arc<FunctionSort>,
 }
 
-impl Primitive for Ctor {
+// `Ctor` (`unstable-fn "name" [...]`) builds a `FunctionContainer` and
+// interns it via `register_container`. Container interning is idempotent,
+// so it's safe in every context; declaring `State = RuleQueryState`
+// permits this primitive inside rule queries, actions, and global
+// contexts alike.
+impl TypedPrimitive for Ctor {
+    type State<'a> = egglog_bridge::RuleQueryState<'a>;
+
     fn name(&self) -> &str {
         &self.name
     }
@@ -343,13 +352,17 @@ impl Primitive for Ctor {
         })
     }
 
-    fn apply(&self, exec_state: &mut ExecutionState, args: &[Value]) -> Option<Value> {
+    fn apply<'a>(
+        &self,
+        state: &mut egglog_bridge::RuleQueryState<'a>,
+        args: &[Value],
+    ) -> Option<Value> {
         let (rf, args) = args.split_first().unwrap();
         let ResolvedFunction {
             id,
             partial_arcsorts,
             name,
-        } = exec_state.base_values().unwrap(*rf);
+        } = state.base_values().unwrap(*rf);
         self.function
             .partial_arcsorts
             .lock()
@@ -361,12 +374,7 @@ impl Primitive for Ctor {
             .map(|(b, x)| (b.clone(), *x))
             .collect();
         let y = FunctionContainer(id, args, name);
-        Some(
-            exec_state
-                .clone()
-                .container_values()
-                .register_val(y, exec_state),
-        )
+        Some(state.register_container(y))
     }
 }
 
@@ -447,10 +455,19 @@ impl FunctionContainer {
     /// Call function (primitive or table) `name` with value args `args` and return the value.
     ///
     /// Public so that other primitive sorts (external or internal) have access.
+    ///
+    /// NOTE (#772): the `Lookup` branch currently uses
+    /// [`TableAction::lookup_or_insert`], which mints a fresh eclass id
+    /// when the key is missing on a constructor table. That makes this
+    /// method a write in query contexts. This is the main open question in
+    /// `issue-772-proposal.md` open-question #1 — the fix is to split
+    /// `unstable-app` into a pure-read form for queries and a minting form
+    /// for actions, or otherwise decide the semantics. Until then, leave
+    /// the mint-on-miss behavior so existing programs continue to work.
     pub fn apply(&self, exec_state: &mut ExecutionState, args: &[Value]) -> Option<Value> {
         let args: Vec<_> = self.1.iter().map(|(_, x)| x).chain(args).copied().collect();
         match &self.0 {
-            ResolvedFunctionId::Lookup(action) => action.lookup(exec_state, &args),
+            ResolvedFunctionId::Lookup(action) => action.lookup_or_insert(exec_state, &args),
             ResolvedFunctionId::Prim(prim) => exec_state.call_external_func(*prim, &args),
         }
     }
