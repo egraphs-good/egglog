@@ -115,9 +115,6 @@ pub(crate) struct Query {
     /// If set, execute a single rule (rather than O(atoms.len()) rules) during
     /// seminaive, with the given atom as the focus.
     sole_focus: Option<usize>,
-    /// Atoms to skip when generating seminaive variants.
-    /// Variants focused on these atoms will not be generated.
-    skip_seminaive: Vec<usize>,
     seminaive: bool,
     plan_strategy: PlanStrategy,
 }
@@ -146,7 +143,6 @@ impl EGraph {
                 rule_id,
                 seminaive,
                 sole_focus: None,
-                skip_seminaive: Vec::new(),
                 vars: Default::default(),
                 atoms: Default::default(),
                 add_rule: Default::default(),
@@ -288,14 +284,8 @@ impl RuleBuilder<'_> {
         res
     }
 
-    pub fn set_focus(&mut self, focus: usize) {
+    pub(crate) fn set_focus(&mut self, focus: usize) {
         self.query.sole_focus = Some(focus);
-    }
-
-    /// Mark an atom to be skipped during seminaive variant generation.
-    /// Variants focused on skipped atoms will not be generated.
-    pub fn skip_seminaive_atom(&mut self, atom: usize) {
-        self.query.skip_seminaive.push(atom);
     }
 
     /// Bind a new variable of the given type in the query.
@@ -794,20 +784,10 @@ impl Query {
         let mut constraints: Vec<(core_relations::AtomId, Constraint)> =
             Vec::with_capacity(self.atoms.len());
         'outer: for focus_atom in 0..self.atoms.len() {
-            if self.skip_seminaive.contains(&focus_atom) {
-                continue;
-            }
             for (i, (_, _, schema_info)) in self.atoms.iter().enumerate() {
                 let ts_col = ColumnId::from_usize(schema_info.ts_col());
                 match i.cmp(&focus_atom) {
                     Ordering::Less => {
-                        // Skip the "must be old" constraint for atoms we're
-                        // skipping seminaive on — they never drive new
-                        // matches, so constraining them to old would
-                        // incorrectly filter out valid matches.
-                        if self.skip_seminaive.contains(&i) {
-                            continue;
-                        }
                         if mid_ts == Timestamp::new(0) {
                             continue 'outer;
                         }
