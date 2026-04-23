@@ -849,7 +849,14 @@ where
     PrintOverallStatistics(Span, Option<String>),
     /// The `check` command checks that the given facts
     /// match at least once in the current database.
-    /// The list of facts is matched in the same way a [`Command::Rule`] is matched.
+    /// The list of facts is matched in the same way a [`Command::Rule`] is matched,
+    /// i.e., it runs a query against the current e-graph state.
+    ///
+    /// Note: For `eqsort` terms (e.g., constructor applications like `(Num 6)`),
+    /// the terms must already be present in the e-graph for the check to succeed.
+    /// Unlike primitive types (e.g., `i64`), constructor terms are not automatically
+    /// materialized by `check`. This mirrors the behavior of rules, which also only
+    /// match against existing e-graph state.
     ///
     /// Example:
     ///
@@ -866,6 +873,16 @@ where
     /// [INFO ] Checked.
     /// [ERROR] Check failed
     /// [INFO ] Command failed as expected.
+    /// ```
+    ///
+    /// Example using constructor terms (terms must be in the e-graph first):
+    ///
+    /// ```text
+    /// (datatype Math)
+    /// (constructor Num (i64) Math)
+    /// (let x (Num 6))
+    /// (check (= x (Num 6)))       ;; succeeds: (Num 6) is now in the e-graph
+    /// (fail (check (= (Num 7) (Num 7))))  ;; fails: (Num 7) is not in the e-graph
     /// ```
     Check(Span, Vec<GenericFact<Head, Leaf>>),
     Prove(Span, Vec<GenericFact<Head, Leaf>>),
