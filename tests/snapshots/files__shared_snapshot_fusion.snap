@@ -2,6 +2,7 @@
 source: tests/files.rs
 expression: snapshot_content_across_treatments
 ---
+(extraction-costs 2)
 ((Add 6)
  (App 16)
  (CaseSplit 14)

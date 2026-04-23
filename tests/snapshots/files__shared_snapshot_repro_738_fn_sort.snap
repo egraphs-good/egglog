@@ -2,5 +2,6 @@
 source: tests/files.rs
 expression: snapshot_content_across_treatments
 ---
+(extraction-costs 1)
 ((fn 0)
  (x 1))

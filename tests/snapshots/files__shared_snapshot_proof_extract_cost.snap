@@ -2,5 +2,6 @@
 source: tests/files.rs
 expression: snapshot_content_across_treatments
 ---
-(extraction-costs 1)
-((myrel 1))
+(extraction-costs 5)
+((Cheap 1)
+ (Expensive 1))
