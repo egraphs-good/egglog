@@ -46,11 +46,15 @@ use super::{
 
 enum DynamicIndex {
     Cached {
-        intersect_outer: bool,
+        /// When Some(range), intersect each subset from the index with this dense range.
+        /// The range is the Dense outer subset known at Prober construction time.
+        intersect_outer: Option<OffsetRange>,
         table: HashIndex,
     },
     CachedColumn {
-        intersect_outer: bool,
+        /// When Some(range), intersect each subset from the index with this dense range.
+        /// The range is the Dense outer subset known at Prober construction time.
+        intersect_outer: Option<OffsetRange>,
         table: HashColumnIndex,
     },
     Dynamic(TupleIndex),
@@ -101,6 +105,43 @@ impl PotentiallyStale<Subset> {
     }
 }
 
+/// Intersect a `SubsetRef` with a dense `OffsetRange` and return the result as an
+/// owned `Subset`, or `None` if the intersection is empty.
+///
+/// When `v` is Sparse, this copies only the slice elements that fall within
+/// `range` (two binary searches + one extend), rather than copying all elements
+/// first and then filtering (three operations). When `v` is Dense, pure arithmetic.
+#[inline]
+fn intersect_with_dense(
+    v: SubsetRef<'_>,
+    range: OffsetRange,
+    pool: &Pool<SortedOffsetVector>,
+) -> Option<Subset> {
+    match v {
+        SubsetRef::Dense(r) => {
+            let resl = cmp::max(r.start, range.start);
+            let resr = cmp::min(r.end, range.end);
+            if resl >= resr {
+                None
+            } else {
+                Some(Subset::Dense(OffsetRange::new(resl, resr)))
+            }
+        }
+        SubsetRef::Sparse(s) => {
+            let l = s.binary_search_by_id(range.start);
+            let r = s.binary_search_by_id(range.end);
+            if l >= r {
+                None
+            } else {
+                let subslice = s.subslice(l, r);
+                let mut vec = pool.get();
+                vec.extend_nonoverlapping(subslice);
+                Some(Subset::Sparse(vec))
+            }
+        }
+    }
+}
+
 struct Prober {
     node: Arc<TrieNode>,
     pool: Pool<SortedOffsetVector>,
@@ -114,13 +155,11 @@ impl Prober {
                 intersect_outer,
                 table,
             } => {
-                let mut sub = table.get().unwrap().get_subset(key)?.to_owned(&self.pool);
-                if *intersect_outer {
-                    sub.intersect(self.node.subset.as_ref(), &self.pool);
-                    if sub.is_empty() {
-                        return None;
-                    }
-                }
+                let v = table.get().unwrap().get_subset(key)?;
+                let sub = match intersect_outer {
+                    None => v.to_owned(&self.pool),
+                    Some(range) => intersect_with_dense(v, *range, &self.pool)?,
+                };
                 Some(PotentiallyStale::maybe_stale(sub))
             }
             DynamicIndex::CachedColumn {
@@ -128,17 +167,11 @@ impl Prober {
                 table,
             } => {
                 debug_assert_eq!(key.len(), 1);
-                let mut sub = table
-                    .get()
-                    .unwrap()
-                    .get_subset(&key[0])?
-                    .to_owned(&self.pool);
-                if *intersect_outer {
-                    sub.intersect(self.node.subset.as_ref(), &self.pool);
-                    if sub.is_empty() {
-                        return None;
-                    }
-                }
+                let v = table.get().unwrap().get_subset(&key[0])?;
+                let sub = match intersect_outer {
+                    None => v.to_owned(&self.pool),
+                    Some(range) => intersect_with_dense(v, *range, &self.pool)?,
+                };
                 Some(PotentiallyStale::maybe_stale(sub))
             }
             DynamicIndex::Dynamic(tab) => tab
@@ -152,36 +185,36 @@ impl Prober {
     fn for_each(&self, mut f: impl FnMut(&[Value], PotentiallyStale<SubsetRef>)) {
         match &self.ix {
             DynamicIndex::Cached {
-                intersect_outer: true,
+                intersect_outer: Some(range),
                 table,
-            } => table.get().unwrap().for_each(|k, v| {
-                let mut res = v.to_owned(&self.pool);
-                res.intersect(self.node.subset.as_ref(), &self.pool);
-                if !res.is_empty() {
-                    f(k, PotentiallyStale::maybe_stale(res.as_ref()))
-                }
-            }),
+            } => {
+                let range = *range;
+                table.get().unwrap().for_each(|k, v| {
+                    if let Some(res) = intersect_with_dense(v, range, &self.pool) {
+                        f(k, PotentiallyStale::maybe_stale(res.as_ref()))
+                    }
+                });
+            }
             DynamicIndex::Cached {
-                intersect_outer: false,
+                intersect_outer: None,
                 table,
             } => table
                 .get()
                 .unwrap()
                 .for_each(|k, v| f(k, PotentiallyStale::maybe_stale(v))),
             DynamicIndex::CachedColumn {
-                intersect_outer: true,
+                intersect_outer: Some(range),
                 table,
             } => {
+                let range = *range;
                 table.get().unwrap().for_each(|k, v| {
-                    let mut res = v.to_owned(&self.pool);
-                    res.intersect(self.node.subset.as_ref(), &self.pool);
-                    if !res.is_empty() {
+                    if let Some(res) = intersect_with_dense(v, range, &self.pool) {
                         f(&[*k], PotentiallyStale::maybe_stale(res.as_ref()))
                     }
                 });
             }
             DynamicIndex::CachedColumn {
-                intersect_outer: false,
+                intersect_outer: None,
                 table,
             } => {
                 table
@@ -668,8 +701,20 @@ impl<'a> JoinState<'a> {
             if all_cacheable && subset.is_dense() && whole_table.size() / 2 < subset.size() {
                 // Skip intersecting with the subset if we are just looking at the
                 // whole table.
-                let intersect_outer =
+                let needs_intersect =
                     !(whole_table.is_dense() && subset.bounds() == whole_table.bounds());
+                // When intersecting, store the Dense range directly so we can do a
+                // combined copy+filter without a runtime match on subset type later.
+                let intersect_outer = if needs_intersect {
+                    // SAFETY: subset.is_dense() is true at this point.
+                    if let Subset::Dense(range) = subset {
+                        Some(*range)
+                    } else {
+                        unreachable!()
+                    }
+                } else {
+                    None
+                };
                 // heuristic: if the subset we are scanning is somewhat
                 // large _or_ it is most of the table, or we already have a cached
                 // index for it, then return it.
