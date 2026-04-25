@@ -616,3 +616,27 @@ Just archived the new baseline `2026-04-25T06:57:30.csv` after the hardboiled im
 
 **Decision: KEPT.** The deferred allocation approach is strictly better: entries filtered out by the empty-intersection check now incur zero allocation cost.
 
+### Exp 46 — Skip refine_live when table has no stale rows (KEPT)
+
+**Hypothesis:** In `refine_subset`, `table.refine_live(sub.inner)` is called for every entry when `can_be_stale=true`. This involves a vtable dispatch + constraint evaluation scan on the entire subset. But if the table has no stale rows, this scan does nothing useful. `SortedWritesTable` already tracks `stale_rows: usize` — we can expose it as a `has_stale_rows()` check.
+
+**What changed:**
+1. Added `fn has_stale_rows(&self) -> bool { true }` default method to `Table` trait in `table_spec.rs`.
+2. Overrode it in `SortedWritesTable` to return `self.data.stale_rows > 0`.
+3. Changed `refine_subset` in execute.rs: `if sub.can_be_stale && table.has_stale_rows() { ... }`
+
+**Result (vs `2026-04-25T06:57:30.csv` baseline; includes Exp 44+45):**
+
+| Benchmark | Baseline | After | Δ% |
+|---|---|---|---|
+| hardboiled_conv1d_32.egg | 0.303 | 0.300 | **-1.0%** |
+| hardboiled_conv1d_128.egg | 0.858 | 0.833 | **-2.9%** |
+| luminal-llama.egg | 0.119 | 0.116 | **-2.5%** |
+| python_array_optimize.egg | 0.952 | 0.944 | **-0.8%** |
+| cykjson.egg | 0.072 | 0.068 | **-5.6%** |
+| eggcc-extraction.egg | 0.275 | 0.265 | **-3.6%** |
+
+**Summary: 6 faster, 0 slower, across 2 consistent runs. Best result of the session.**
+
+**Decision: KEPT.** The optimization is safe (the default returns `true` for unknown table types), adds only one cheap comparison per `refine_subset` call, and eliminates the entire `refine_live` scan for tables with no stale rows. This is the most impactful single optimization so far.
+

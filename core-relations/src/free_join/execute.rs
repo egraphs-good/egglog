@@ -952,7 +952,7 @@ impl<'a> JoinState<'a> {
             constraints: &[Constraint],
             table: &WrappedTableRef,
         ) -> Subset {
-            let sub = if sub.can_be_stale {
+            let sub = if sub.can_be_stale && table.has_stale_rows() {
                 table.refine_live(sub.inner)
             } else {
                 sub.inner

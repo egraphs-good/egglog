@@ -345,6 +345,10 @@ impl Table for SortedWritesTable {
         Subset::Dense(OffsetRange::new(RowId::new(0), self.data.next_row()))
     }
 
+    fn has_stale_rows(&self) -> bool {
+        self.data.stale_rows > 0
+    }
+
     fn len(&self) -> usize {
         self.data.data.len() - self.data.stale_rows
     }
