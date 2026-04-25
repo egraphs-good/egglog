@@ -389,3 +389,18 @@ No measurable change vs baseline (machine variance ~25% makes it hard to detect 
 
 **Decision: KEPT.** The change is a correct, clean optimization that avoids Arc allocations for rolled-back cover rows. Code is cleaner (no `Arc::new(TrieNode::new(...))` at push time for the Dense cover row case). Enum size unchanged (all variants still fit in 16 bytes). No risk of regression.
 
+### Exp 31 — Fix prune_probers empty-subset bug + Dense subset optimization (KEPT as correctness fix)
+
+**Bug found:** In `FusedIntersectMat`'s `prune_probers` closure, after `refine_subset` there was no check for empty subsets. If `prober.get_subset()` returned `Some` but `refine_subset` produced an empty subset, the code would still call `refine_atom(Arc::new(TrieNode::new(empty)))` and return `true`. This caused:
+1. An Arc allocation for a useless empty-subset TrieNode
+2. A frame being finished and drained
+3. `run_plan(cur+1)` being called with an empty subset (immediately returning after `has_empty_subset` check)
+
+**Fix:** Added `if subset.is_empty() { return false; }` after `refine_subset` in `prune_probers`.
+
+**Also:** Extended `refine_atom_dense` usage to FusedIntersect non-empty path probe results (line ~1214) for Dense subsets, and to `prune_probers` in FusedIntersectMat for Dense subsets. This defers Arc creation to drain time for Dense probe results.
+
+**Result:** No measurable change (within machine noise). The `FusedIntersectMat` path may not be heavily exercised by the benchmark queries. But the correctness fix is real.
+
+**Decision: KEPT.** Correctness improvement + minor allocation reduction for the Dense subset case. 696 tests pass.
+

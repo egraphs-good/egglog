@@ -1211,7 +1211,14 @@ impl<'a> JoinState<'a> {
                                 // There are no possible values for this subset
                                 continue 'mid;
                             }
-                            updates.refine_atom(*atom, Arc::new(TrieNode::new(subset)));
+                            match subset {
+                                Subset::Dense(range) => {
+                                    updates.refine_atom_dense(*atom, range);
+                                }
+                                subset => {
+                                    updates.refine_atom(*atom, Arc::new(TrieNode::new(subset)));
+                                }
+                            }
                         }
                         updates.finish_frame();
                         if updates.frames() >= chunk_size {
@@ -1283,8 +1290,20 @@ impl<'a> JoinState<'a> {
                                     .table
                                     .as_ref(),
                             );
-                            updates
-                                .refine_atom(spec.to_index.atom, Arc::new(TrieNode::new(subset)));
+                            if subset.is_empty() {
+                                return false;
+                            }
+                            match subset {
+                                Subset::Dense(range) => {
+                                    updates.refine_atom_dense(spec.to_index.atom, range);
+                                }
+                                subset => {
+                                    updates.refine_atom(
+                                        spec.to_index.atom,
+                                        Arc::new(TrieNode::new(subset)),
+                                    );
+                                }
+                            }
                         } else {
                             return false;
                         }
