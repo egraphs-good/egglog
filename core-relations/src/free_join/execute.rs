@@ -174,12 +174,11 @@ fn intersect_with_dense_ref<'a>(v: SubsetRef<'a>, range: OffsetRange) -> Option<
 
 struct Prober {
     node: Arc<TrieNode>,
-    pool: Pool<SortedOffsetVector>,
     ix: DynamicIndex,
 }
 
 impl Prober {
-    fn get_subset(&self, key: &[Value]) -> Option<PotentiallyStale<Subset>> {
+    fn get_subset(&self, key: &[Value], pool: &Pool<SortedOffsetVector>) -> Option<PotentiallyStale<Subset>> {
         match &self.ix {
             DynamicIndex::Cached {
                 intersect_outer,
@@ -187,8 +186,8 @@ impl Prober {
             } => {
                 let v = table.get().unwrap().get_subset(key)?;
                 let sub = match intersect_outer {
-                    None => v.to_owned(&self.pool),
-                    Some(range) => intersect_with_dense(v, *range, &self.pool)?,
+                    None => v.to_owned(pool),
+                    Some(range) => intersect_with_dense(v, *range, pool)?,
                 };
                 Some(PotentiallyStale::maybe_stale(sub))
             }
@@ -199,17 +198,17 @@ impl Prober {
                 debug_assert_eq!(key.len(), 1);
                 let v = table.get().unwrap().get_subset(&key[0])?;
                 let sub = match intersect_outer {
-                    None => v.to_owned(&self.pool),
-                    Some(range) => intersect_with_dense(v, *range, &self.pool)?,
+                    None => v.to_owned(pool),
+                    Some(range) => intersect_with_dense(v, *range, pool)?,
                 };
                 Some(PotentiallyStale::maybe_stale(sub))
             }
             DynamicIndex::Dynamic(tab) => tab
                 .get_subset(key)
-                .map(|x| PotentiallyStale::not_stale(x.to_owned(&self.pool))),
+                .map(|x| PotentiallyStale::not_stale(x.to_owned(pool))),
             DynamicIndex::DynamicColumn(tab) => tab
                 .get_subset(&key[0])
-                .map(|x| PotentiallyStale::not_stale(x.to_owned(&self.pool))),
+                .map(|x| PotentiallyStale::not_stale(x.to_owned(pool))),
         }
     }
     fn for_each(&self, mut f: impl FnMut(&[Value], PotentiallyStale<SubsetRef>)) {
@@ -320,7 +319,7 @@ impl Database {
                                     Arc::try_unwrap(binding_info.unwrap_val(*atom)).unwrap();
                                 debug_assert!(cur.cached_subsets.get().is_none());
                                 cur.subset
-                                    .intersect(subset.as_ref(), &with_pool_set(|ps| ps.get_pool()));
+                                    .intersect(subset.as_ref(), &join_state.pool);
                                 if cur.subset.is_empty() {
                                     break 'eval;
                                 }
@@ -458,7 +457,7 @@ impl Database {
                         let mut cur = Arc::try_unwrap(binding_info.unwrap_val(*atom)).unwrap();
                         debug_assert!(cur.cached_subsets.get().is_none());
                         cur.subset
-                            .intersect(subset.as_ref(), &with_pool_set(|ps| ps.get_pool()));
+                            .intersect(subset.as_ref(), &join_state.pool);
                         if cur.subset.is_empty() {
                             break 'eval;
                         }
@@ -761,7 +760,7 @@ impl<'a> JoinState<'a> {
         });
         let whole_table = info.table.all();
         let dyn_index =
-            if all_cacheable && subset.is_dense() && whole_table.size() / 2 < subset.size() {
+            if let Subset::Dense(range) = subset && all_cacheable && whole_table.size() / 2 < subset.size() {
                 // Skip intersecting with the subset if we are just looking at the
                 // whole table.
                 let needs_intersect =
@@ -769,12 +768,7 @@ impl<'a> JoinState<'a> {
                 // When intersecting, store the Dense range directly so we can do a
                 // combined copy+filter without a runtime match on subset type later.
                 let intersect_outer = if needs_intersect {
-                    // SAFETY: subset.is_dense() is true at this point.
-                    if let Subset::Dense(range) = subset {
-                        Some(*range)
-                    } else {
-                        unreachable!()
-                    }
+                    Some(*range)
                 } else {
                     None
                 };
@@ -800,7 +794,6 @@ impl<'a> JoinState<'a> {
             };
         Prober {
             node: trie_node,
-            pool: self.pool.clone(),
             ix: dyn_index,
         }
     }
@@ -975,6 +968,8 @@ impl<'a> JoinState<'a> {
                                     db,
                                     exec_state: exec_state_for_work.clone(),
                                     // Each rayon task uses its own thread-local pool.
+                                    // This makes drain_updates_parallel slightly more expensive 
+                                    // than drain_updates eevn when both are run in single thread
                                     pool: with_pool_set(|ps| ps.get_pool()),
                                 }
                                 .run_plan(
@@ -1012,6 +1007,7 @@ impl<'a> JoinState<'a> {
             }
         }
 
+        let pool = &self.pool;
         match &stages.instrs[instr_order.get(cur)] {
             JoinStage::Intersect { var, scans } => match scans.as_slice() {
                 [] => {}
@@ -1024,8 +1020,6 @@ impl<'a> JoinState<'a> {
                     let table = info.table.as_ref();
                     let has_stale = table.has_stale_rows();
                     let mut updates = FrameUpdates::with_capacity(cmp::min(chunk_size, cur_size));
-                    // Hoist pool clone outside the hot loop to avoid per-iteration Arc increment.
-                    let pool = with_pool_set(|ps| ps.get_pool());
                     prober.for_each(|val, x| {
                         updates.push_binding(*var, val[0]);
                         if x.size() <= 16 {
@@ -1084,10 +1078,8 @@ impl<'a> JoinState<'a> {
                     let small_table = small_info.table.as_ref();
                     let small_has_stale = small_table.has_stale_rows();
                     let mut updates = FrameUpdates::with_capacity(cmp::min(chunk_size, cur_size));
-                    // Hoist pool clone outside the hot loop to avoid per-iteration Arc increment.
-                    let pool = with_pool_set(|ps| ps.get_pool());
                     smaller.for_each(|val, small_sub| {
-                        if let Some(large_sub) = larger.get_subset(val) {
+                        if let Some(large_sub) = larger.get_subset(val, &pool) {
                             updates.push_binding(*var, val[0]);
                             if small_sub.size() <= 16 {
                                 let small_sub = refine_subset(
@@ -1203,16 +1195,13 @@ impl<'a> JoinState<'a> {
                         // Smallest leads the scan
                         let mut updates =
                             FrameUpdates::with_capacity(cmp::min(chunk_size, cur_size));
-                        // Hoist pool clone outside the hot loop to avoid per-iteration
-                        // thread-local access and Arc increment.
-                        let pool = with_pool_set(|ps| ps.get_pool());
                         probers[smallest].for_each(|key, sub| {
                             updates.push_binding(*var, key[0]);
                             for (i, scan) in rest.iter().enumerate() {
                                 if i == smallest {
                                     continue;
                                 }
-                                if let Some(sub) = probers[i].get_subset(key) {
+                                if let Some(sub) = probers[i].get_subset(key, pool) {
                                     let table = self.db.tables[atoms[rest[i].atom].table]
                                         .table
                                         .as_ref();
@@ -1416,7 +1405,7 @@ impl<'a> JoinState<'a> {
                                     .collect();
                                 &index_key_buf
                             };
-                            let Some(subset) = prober.get_subset(index_key) else {
+                            let Some(subset) = prober.get_subset(index_key, pool) else {
                                 updates.rollback();
                                 // There are no possible values for this subset
                                 continue 'mid;
@@ -1511,7 +1500,7 @@ impl<'a> JoinState<'a> {
                             };
                             key.push(val);
                         }
-                        if let Some(subset) = prober.get_subset(&key) {
+                        if let Some(subset) = prober.get_subset(&key, pool) {
                             let subset = refine_subset(
                                 subset,
                                 &spec.constraints,
@@ -1933,6 +1922,10 @@ impl<'a> ActionBuffer<'a, MatId> for InPlaceMaterializer<'a> {
         work: impl for<'b> FnOnce(BorrowedLocalState<'b>, &mut Self) + Send + 'a,
     ) {
         work(local, self)
+    }
+
+    fn supports_parallel_drain(&self) -> bool {
+        false
     }
 }
 

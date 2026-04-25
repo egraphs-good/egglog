@@ -47,6 +47,8 @@ cmd_run() {
   printf "%-40s %s\n" "benchmark" "time (s)"
   printf "%-40s %s\n" "─────────────────────────────────────────" "────────"
 
+  RUNS=15
+
   for bench in "${BENCHMARKS[@]}"; do
     src="$TEST_DIR/$bench"
     if [[ ! -f "$src" ]]; then
@@ -54,20 +56,37 @@ cmd_run() {
       continue
     fi
 
-    START=$(date +%s%3N)   # milliseconds
-    "$EGGLOG" "$src" > /dev/null 2>&1
-    STATUS=$?
-    END=$(date +%s%3N)
+    printf "%-40s " "$bench"
+    TIMES=()
+    FAILED=0
+    for (( i=1; i<=RUNS; i++ )); do
+      START=$(date +%s%3N)
+      "$EGGLOG" "$src" > /dev/null 2>&1
+      STATUS=$?
+      END=$(date +%s%3N)
+      if [[ $STATUS -ne 0 ]]; then
+        FAILED=1
+        break
+      fi
+      TIMES+=( $(( END - START )) )
+    done
 
-    ELAPSED_MS=$(( END - START ))
-    ELAPSED_S=$(awk "BEGIN { printf \"%.3f\", $ELAPSED_MS / 1000 }")
-
-    if [[ $STATUS -ne 0 ]]; then
-      printf "%-40s FAILED (exit %d)\n" "$bench" "$STATUS"
-    else
-      printf "%-40s %s\n" "$bench" "$ELAPSED_S"
-      echo "$TIMESTAMP,$bench,$ELAPSED_S" >> "$RESULT_CSV"
+    if [[ $FAILED -ne 0 ]]; then
+      printf "FAILED (exit %d)\n" "$STATUS"
+      continue
     fi
+
+    MEDIAN_S=$(printf '%s\n' "${TIMES[@]}" | sort -n | awk '
+      BEGIN { n=0 }
+      { a[n++]=$1 }
+      END {
+        if (n % 2 == 1) m = a[int(n/2)]
+        else            m = (a[n/2-1] + a[n/2]) / 2
+        printf "%.3f", m / 1000
+      }
+    ')
+    printf "%s\n" "$MEDIAN_S"
+    echo "$TIMESTAMP,$bench,$MEDIAN_S" >> "$RESULT_CSV"
   done
 
   echo
