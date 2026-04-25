@@ -829,3 +829,24 @@ Just archived the new baseline `2026-04-25T06:57:30.csv` after the hardboiled im
 
 **Decision: KEPT.** The for_each is in the hot path of the `[a]` single-scan case (the most common join pattern). Eliminating flat_map overhead compounds over many iterations.
 
+### Exp 56 — Single-shard fast path in ColumnIndex::len and TupleIndex::len (KEPT)
+
+**Hypothesis:** `ColumnIndex::len` and `TupleIndex::len` compute the total count by summing over all shards. With `n_shards == 1`, this sum is just one value — but the `Iterator::sum()` over the shard vector still goes through iterator machinery. Adding a direct index access for the single-shard case avoids this.
+
+**What changed:** Added `if self.shards.len() == 1 { shards[ShardId::new(0)]... }` fast path in both `ColumnIndex::len` and `TupleIndex::len`.
+
+**Result (vs `2026-04-25T06:57:30.csv` baseline; includes Exp 44-55), confirmed 2 runs:**
+
+| Benchmark | Baseline | After | Δ% |
+|---|---|---|---|
+| hardboiled_conv1d_32.egg | 0.303 | 0.294 | **-3.0%** |
+| hardboiled_conv1d_128.egg | 0.858 | 0.808 | **-5.8%** |
+| luminal-llama.egg | 0.119 | 0.119 | 0.0% |
+| python_array_optimize.egg | 0.952 | 0.917 | **-3.7%** |
+| cykjson.egg | 0.072 | 0.067 | **-6.9%** |
+| eggcc-extraction.egg | 0.275 | 0.267 | **-2.9%** |
+
+**Summary: 5 faster, 0 slower (consistent across 2 runs).**
+
+**Decision: KEPT.** `len()` is called in `Prober::len()` which is used to pick the smaller prober in the `[a, b]` two-scan case. Eliminating the sum overhead is a small but consistent win.
+

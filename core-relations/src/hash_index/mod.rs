@@ -239,7 +239,11 @@ impl IndexBase for ColumnIndex {
         }
     }
     fn len(&self) -> usize {
-        self.shards.iter().map(|(_, shard)| shard.table.len()).sum()
+        if self.shards.len() == 1 {
+            self.shards[ShardId::new(0)].table.len()
+        } else {
+            self.shards.iter().map(|(_, shard)| shard.table.len()).sum()
+        }
     }
 
     fn merge_parallel(&mut self, cols: &[ColumnId], table: WrappedTableRef, subset: SubsetRef) {
@@ -461,10 +465,14 @@ impl IndexBase for TupleIndex {
     }
 
     fn len(&self) -> usize {
-        self.shards
-            .iter()
-            .map(|(_, shard)| shard.table.hash.len())
-            .sum()
+        if self.shards.len() == 1 {
+            self.shards[ShardId::new(0)].table.hash.len()
+        } else {
+            self.shards
+                .iter()
+                .map(|(_, shard)| shard.table.hash.len())
+                .sum()
+        }
     }
 
     fn merge_parallel(&mut self, cols: &[ColumnId], table: WrappedTableRef, subset: SubsetRef) {
