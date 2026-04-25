@@ -24,3 +24,6 @@ scripts/compiled
 tests/*.json
 
 lcov.info
+journal.md
+program.md
+benchmarks
