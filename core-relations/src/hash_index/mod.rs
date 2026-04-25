@@ -222,19 +222,9 @@ impl IndexBase for ColumnIndex {
         }
     }
     fn for_each(&self, mut f: impl FnMut(&Self::Key, SubsetRef)) {
-        if self.shards.len() == 1 {
-            // Fast path: single shard, skip flat_map overhead.
-            let shard = &self.shards[ShardId::new(0)];
+        for (_, shard) in self.shards.iter() {
             for (k, v) in shard.table.iter() {
                 f(k, v.as_ref(&shard.subsets));
-            }
-        } else {
-            for (subsets, (k, v)) in self
-                .shards
-                .iter()
-                .flat_map(|(_, shard)| shard.table.iter().map(|x| (&shard.subsets, x)))
-            {
-                f(k, v.as_ref(subsets));
             }
         }
     }
