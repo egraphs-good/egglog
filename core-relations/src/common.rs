@@ -160,6 +160,9 @@ impl ShardData {
     where
         for<'b> &'b K: Hash,
     {
+        if self.log2_shard_count == 0 {
+            return &table[ShardId::new(0)];
+        }
         let hc = {
             let mut hasher = FxHasher::default();
             val.hash(&mut hasher);
@@ -173,6 +176,9 @@ impl ShardData {
         val: impl Hash,
         table: &'a mut IdVec<ShardId, V>,
     ) -> &'a mut V {
+        if self.log2_shard_count == 0 {
+            return &mut table[ShardId::new(0)];
+        }
         let hc = {
             let mut hasher = FxHasher::default();
             val.hash(&mut hasher);

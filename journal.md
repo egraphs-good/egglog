@@ -724,3 +724,24 @@ Just archived the new baseline `2026-04-25T06:57:30.csv` after the hardboiled im
 
 **Decision: KEPT.** The assertion was defensive but is already enforced at construction time (buffers are created with a fixed arity). Removing the runtime check per row eliminates unnecessary comparisons in the scan-project hot path. The change is safe for production code that compiles correctly.
 
+### Exp 51 — Skip hash computation for single-shard ColumnIndex lookups (KEPT)
+
+**Hypothesis:** `ColumnIndex::get_subset` calls `self.shard_data.get_shard(key, &self.shards)` which always computes a hash and shard index regardless of the number of shards. When running single-threaded (`num_shards() == 1`), `log2_shard_count == 0` and the shard index is always 0. The hash computation (FxHasher over a `Value` u32) is wasted work in the single-shard case. Adding an early return when `log2_shard_count == 0` skips the hash entirely.
+
+**What changed:** Added fast path in `ShardData::get_shard` and `ShardData::get_shard_mut`: when `log2_shard_count == 0`, return `&table[ShardId::new(0)]` immediately without hashing.
+
+**Result (vs `2026-04-25T06:57:30.csv` baseline; includes Exp 44+45+46+47+48+49+50), confirmed 2 runs:**
+
+| Benchmark | Baseline | After | Δ% |
+|---|---|---|---|
+| hardboiled_conv1d_32.egg | 0.303 | 0.299 | **-1.3%** |
+| hardboiled_conv1d_128.egg | 0.858 | 0.834 | **-2.8%** |
+| luminal-llama.egg | 0.119 | 0.118 | **-0.8%** |
+| python_array_optimize.egg | 0.952 | 0.928 | **-2.5%** |
+| cykjson.egg | 0.072 | 0.067 | **-6.9%** |
+| eggcc-extraction.egg | 0.275 | 0.264 | **-4.0%** |
+
+**Summary: 5-6 faster, 0 slower (consistent across 2 runs).**
+
+**Decision: KEPT.** Hash computation accounts for a measurable fraction of index lookup time in the common single-threaded case. The fast path is a simple comparison on a cached field with no semantic change. The multi-shard path is completely unchanged.
+
