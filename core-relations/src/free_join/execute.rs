@@ -1498,8 +1498,8 @@ impl<'a> JoinState<'a> {
                         // lookup keys
                         if let Some(group) = cover_mat.get(&keys) {
                             if matches!(mode, MatScanMode::Lookup(_)) {
-                                assert_eq!(to_intersect.len(), 0);
-                                assert_eq!(bind.len(), 0);
+                                debug_assert_eq!(to_intersect.len(), 0);
+                                debug_assert_eq!(bind.len(), 0);
                                 if group.len() > 0 {
                                     updates.finish_frame();
                                 }

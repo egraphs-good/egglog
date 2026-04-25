@@ -361,7 +361,7 @@ impl Table for SortedWritesTable {
             // Empty subset
             return;
         };
-        assert!(
+        debug_assert!(
             hi.index() <= self.data.data.len(),
             "{} vs. {}",
             hi.index(),

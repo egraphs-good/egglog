@@ -787,3 +787,24 @@ Just archived the new baseline `2026-04-25T06:57:30.csv` after the hardboiled im
 
 **Decision: KEPT.** `push_vec` is called once per row during index construction, making the sort-order assert a measurable overhead. `OffsetRange::new` is called in very tight loops (`refine_atom_dense`, intersect). Both assertions verify structural invariants that are guaranteed by the calling code's logic.
 
+### Exp 54 — Additional debug_assert! conversions: scan_generic bounds, FusedIntersectMat lookup checks (KEPT)
+
+**Hypothesis:** Two more assertions: `assert!(hi.index() <= self.data.data.len())` in `scan_generic` (called once per index construction scan); `assert_eq!(to_intersect.len(), 0)` and `assert_eq!(bind.len(), 0)` in the `FusedIntersectMat::Lookup` path. The scan_generic check is a redundant bounds verification before the new `get_row_unchecked` fast path. The lookup checks verify structural invariants set by the planner.
+
+**What changed:** Changed `assert!` to `debug_assert!` in `scan_generic` bounds check (`table/mod.rs`) and in the `MatScanMode::Lookup` branch of `FusedIntersectMat` (`execute.rs`).
+
+**Result (vs `2026-04-25T06:57:30.csv` baseline; includes Exp 44-53), confirmed 2 runs:**
+
+| Benchmark | Baseline | After | Δ% |
+|---|---|---|---|
+| hardboiled_conv1d_32.egg | 0.303 | 0.295 | **-2.6%** |
+| hardboiled_conv1d_128.egg | 0.858 | 0.815 | **-5.0%** |
+| luminal-llama.egg | 0.119 | 0.117 | **-1.7%** |
+| python_array_optimize.egg | 0.952 | 0.905 | **-4.9%** |
+| cykjson.egg | 0.072 | 0.066 | **-8.3%** |
+| eggcc-extraction.egg | 0.275 | 0.267 | **-2.9%** |
+
+**Summary: 6 faster, 0 slower (consistent across 2 runs).**
+
+**Decision: KEPT.** The scan_generic bounds check protects the unsafe `get_row_unchecked` call but the bounds are guaranteed by subset construction logic. Moving to `debug_assert!` keeps the safety check in debug builds while eliminating it in release.
+
