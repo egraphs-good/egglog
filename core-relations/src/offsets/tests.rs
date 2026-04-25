@@ -2,7 +2,7 @@ use crate::numeric_id::NumericId;
 
 use crate::{OffsetRange, Subset, common::HashSet, pool::with_pool_set};
 
-use super::{Offsets, RowId, SortedOffsetVector};
+use super::{Offsets, RowId};
 
 fn o(u: usize) -> RowId {
     RowId::from_usize(u)
@@ -29,21 +29,25 @@ fn subset_push() {
     assert_eq!(collect(&s, &elts), vec![1, 2, 3, 7]);
 }
 
+#[cfg(debug_assertions)]
 #[test]
 #[should_panic]
 fn bad_offset_range() {
     OffsetRange::new(o(3), o(2));
 }
 
+#[cfg(debug_assertions)]
 #[test]
 #[should_panic]
 fn bad_offset_stride() {
     OffsetRange::new(o(3), o(2));
 }
 
+#[cfg(debug_assertions)]
 #[test]
 #[should_panic]
 fn not_sorted_vec_push() {
+    use crate::offsets::SortedOffsetVector;
     let mut v = SortedOffsetVector::default();
     v.push(o(3));
     v.push(o(1));
