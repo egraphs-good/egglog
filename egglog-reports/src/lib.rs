@@ -36,6 +36,12 @@ pub enum Stage {
         cover: Scan,             // build side
         to_intersect: Vec<Scan>, // probe sides
     },
+    /// A scan/lookup into a materialized intermediate result (used in decomposed/tree-decomposed plans).
+    MatLookup {
+        mat_id: usize,
+        mode: String,
+        vars: Vec<String>,
+    },
 }
 
 #[derive(Serialize, Clone, Debug)]

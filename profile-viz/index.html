@@ -168,7 +168,7 @@
 
         .stats {
             margin-top: 10px;
-            padding: 8px;
+            padding: 10px;
             background: #e8f5e9;
             border-radius: 4px;
             font-size: 0.9em;
@@ -176,6 +176,57 @@
 
         .stats strong {
             color: #27ae60;
+        }
+
+        .stats-bar-container {
+            margin-top: 6px;
+            background: #ddd;
+            border-radius: 4px;
+            height: 10px;
+            overflow: hidden;
+        }
+
+        .stats-bar {
+            height: 100%;
+            border-radius: 4px;
+            transition: width 0.3s;
+        }
+
+        .decomposed-runs {
+            display: flex;
+            gap: 8px;
+            flex-wrap: wrap;
+            margin-bottom: 12px;
+        }
+
+        .run-btn {
+            padding: 4px 10px;
+            border: 1px solid #3498db;
+            background: white;
+            color: #3498db;
+            border-radius: 4px;
+            cursor: pointer;
+            font-size: 0.85em;
+        }
+
+        .run-btn.active {
+            background: #3498db;
+            color: white;
+        }
+
+        .plan-summary {
+            display: flex;
+            gap: 15px;
+            flex-wrap: wrap;
+            margin-bottom: 12px;
+            padding: 8px 12px;
+            background: #eaf3fb;
+            border-radius: 4px;
+            font-size: 0.9em;
+        }
+
+        .plan-summary-item {
+            color: #2980b9;
         }
 
         .hidden {
@@ -625,42 +676,104 @@
             rulesToShow.forEach((ruleName) => {
                 const reports = ruleReports[ruleName];
                 if (!reports) return;
-                reports.forEach((report, reportIndex) => {
-                    if (report.plan && report.plan.stages && report.plan.stages.length > 0) {
-                        const planDiv = document.createElement('div');
-                        planDiv.className = 'query-plan';
+                // Only show rules that have at least one report with a plan.
+                const reportsWithPlan = reports.filter(r => r.plan && r.plan.stages && r.plan.stages.length > 0);
+                if (reportsWithPlan.length === 0) return;
 
-                        const header = document.createElement('div');
-                        header.className = 'rule-header';
-                        header.innerHTML = `
-                            <span>${ruleName} (Iteration ${selectedIteration + 1}, Run ${reportIndex + 1})</span>
-                            <span>
-                                ${report.num_matches} matches | ${formatDuration(report.search_and_apply_time)}
-                                <span class="arrow">▶</span>
-                            </span>
-                        `;
+                const planDiv = document.createElement('div');
+                planDiv.className = 'query-plan';
 
-                        const content = document.createElement('div');
-                        content.className = 'hidden';
-                        content.innerHTML = renderPlan(report.plan);
+                // Aggregate stats across all runs for the header.
+                const totalMatches = reports.reduce((s, r) => s + (r.num_matches || 0), 0);
+                const totalTime = reports.reduce((s, r) => s + durationToMs(r.search_and_apply_time), 0);
+                const totalTimeDur = { secs: Math.floor(totalTime / 1000), nanos: (totalTime % 1000) * 1e6 };
 
-                        header.onclick = () => {
-                            content.classList.toggle('hidden');
-                            header.querySelector('.arrow').classList.toggle('expanded');
+                const header = document.createElement('div');
+                header.className = 'rule-header';
+                const runsLabel = reportsWithPlan.length > 1
+                    ? ` · ${reportsWithPlan.length} decomposed runs`
+                    : '';
+                header.innerHTML = `
+                    <span>${ruleName} (Iteration ${selectedIteration + 1}${runsLabel})</span>
+                    <span>
+                        ${totalMatches} matches | ${formatDuration(totalTimeDur)}
+                        <span class="arrow">▶</span>
+                    </span>
+                `;
+
+                const content = document.createElement('div');
+                content.className = 'hidden';
+
+                if (reportsWithPlan.length > 1) {
+                    // Decomposed plan: show run selector and per-run plan.
+                    const runsDiv = document.createElement('div');
+                    runsDiv.className = 'decomposed-runs';
+                    runsDiv.innerHTML = '<strong style="align-self:center">Run:</strong>';
+
+                    const planContents = [];
+                    reportsWithPlan.forEach((report, idx) => {
+                        const runMs = durationToMs(report.search_and_apply_time);
+                        const btn = document.createElement('button');
+                        btn.className = 'run-btn' + (idx === 0 ? ' active' : '');
+                        btn.textContent = `#${idx + 1} (${runMs.toFixed(1)}ms)`;
+                        runsDiv.appendChild(btn);
+
+                        const planWrap = document.createElement('div');
+                        planWrap.className = idx === 0 ? '' : 'hidden';
+                        planWrap.innerHTML = renderPlan(report.plan, report);
+                        planContents.push(planWrap);
+
+                        btn.onclick = () => {
+                            runsDiv.querySelectorAll('.run-btn').forEach(b => b.classList.remove('active'));
+                            btn.classList.add('active');
+                            planContents.forEach((p, i) => p.classList.toggle('hidden', i !== idx));
                         };
+                    });
 
-                        planDiv.appendChild(header);
-                        planDiv.appendChild(content);
-                        container.appendChild(planDiv);
-                    }
-                });
+                    content.appendChild(runsDiv);
+                    planContents.forEach(p => content.appendChild(p));
+                } else {
+                    content.innerHTML = renderPlan(reportsWithPlan[0].plan, reportsWithPlan[0]);
+                }
+
+                header.onclick = () => {
+                    content.classList.toggle('hidden');
+                    header.querySelector('.arrow').classList.toggle('expanded');
+                };
+
+                planDiv.appendChild(header);
+                planDiv.appendChild(content);
+                container.appendChild(planDiv);
             });
         }
 
-        function renderPlan(plan) {
+        function stageEfficiencyColor(candidates, succeeded) {
+            if (!candidates || candidates === 0) return '#95a5a6';
+            const ratio = succeeded / candidates;
+            // Green (high efficiency) → Red (low efficiency)
+            const r = Math.round(231 * (1 - ratio) + 46 * ratio);
+            const g = Math.round(76 * (1 - ratio) + 204 * ratio);
+            const b = Math.round(60 * (1 - ratio) + 113 * ratio);
+            return `rgb(${r},${g},${b})`;
+        }
+
+        function renderPlan(plan, report) {
+            const hasStats = plan.stages.some(([, stats]) => stats !== null && stats !== undefined);
             let html = '';
+            if (hasStats) {
+                const totalCand = plan.stages.reduce((s, [, stats]) => s + (stats ? stats.num_candidates : 0), 0);
+                const totalSucc = plan.stages.reduce((s, [, stats]) => s + (stats ? stats.num_succeeded : 0), 0);
+                html += `<div class="plan-summary">
+                    <span class="plan-summary-item">Total candidates: <strong>${totalCand.toLocaleString()}</strong></span>
+                    <span class="plan-summary-item">Total succeeded: <strong>${totalSucc.toLocaleString()}</strong></span>
+                    <span class="plan-summary-item">Overall selectivity: <strong>${totalCand > 0 ? (100 * totalSucc / totalCand).toFixed(1) : 'N/A'}%</strong></span>
+                </div>`;
+            }
             plan.stages.forEach(([stage, stats, nextStages], index) => {
-                html += `<div class="stage">`;
+                const borderColor = stats
+                    ? stageEfficiencyColor(stats.num_candidates, stats.num_succeeded)
+                    : '#ddd';
+                html += `<div class="stage" style="border-left: 4px solid ${borderColor};">`;
                 html += `<div class="stage-header">Stage ${index}</div>`;
 
                 if (stage.Intersect) {
@@ -674,22 +787,40 @@
                     const [coverTable, coverScans] = stage.FusedIntersect.cover;
                     html += `<div class="scan-info"><strong>Cover (Build):</strong> ${coverTable}</div>`;
                     coverScans.forEach(([col, val]) => {
-                        html += `<div class="scan-info" style="margin-left: 20px;">  ${col} = ${val}</div>`;
+                        html += `<div class="scan-info" style="margin-left: 20px;">${col} = ${val}</div>`;
                     });
-
-                    html += `<div class="scan-info" style="margin-top: 10px;"><strong>Intersect (Probe):</strong></div>`;
-                    stage.FusedIntersect.to_intersect.forEach(([table, scans]) => {
-                        html += `<div class="scan-info" style="margin-left: 20px;">${table}</div>`;
-                        scans.forEach(([col, val]) => {
-                            html += `<div class="scan-info" style="margin-left: 40px;">  ${col} = ${val}</div>`;
+                    if (stage.FusedIntersect.to_intersect.length > 0) {
+                        html += `<div class="scan-info" style="margin-top: 10px;"><strong>Intersect (Probe):</strong></div>`;
+                        stage.FusedIntersect.to_intersect.forEach(([table, scans]) => {
+                            html += `<div class="scan-info" style="margin-left: 20px;">${table}</div>`;
+                            scans.forEach(([col, val]) => {
+                                html += `<div class="scan-info" style="margin-left: 40px;">${col} = ${val}</div>`;
+                            });
                         });
-                    });
+                    }
+                } else if (stage.MatLookup) {
+                    html += `<span class="stage-type" style="background:#8e44ad;">MatLookup</span>`;
+                    html += `<div class="scan-info"><strong>Mat[${stage.MatLookup.mat_id}]</strong> · mode: ${stage.MatLookup.mode}</div>`;
+                    if (stage.MatLookup.vars.length > 0) {
+                        html += `<div class="scan-info" style="margin-left: 20px;">binds: ${stage.MatLookup.vars.join(', ')}</div>`;
+                    }
                 }
 
                 if (stats) {
+                    const pct = stats.num_candidates > 0
+                        ? (100 * stats.num_succeeded / stats.num_candidates).toFixed(1)
+                        : 'N/A';
+                    const barColor = stageEfficiencyColor(stats.num_candidates, stats.num_succeeded);
+                    const barWidth = stats.num_candidates > 0
+                        ? (100 * stats.num_succeeded / stats.num_candidates).toFixed(1)
+                        : 0;
                     html += `<div class="stats">
-                        <strong>Candidates:</strong> ${stats.num_candidates} | 
-                        <strong>Succeeded:</strong> ${stats.num_succeeded}
+                        <strong>Candidates:</strong> ${stats.num_candidates.toLocaleString()} &nbsp;|&nbsp;
+                        <strong>Succeeded:</strong> ${stats.num_succeeded.toLocaleString()} &nbsp;|&nbsp;
+                        <strong>Selectivity:</strong> ${pct}%
+                        <div class="stats-bar-container">
+                            <div class="stats-bar" style="width:${barWidth}%; background:${barColor};"></div>
+                        </div>
                     </div>`;
                 }
 
