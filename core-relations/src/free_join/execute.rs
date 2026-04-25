@@ -1176,53 +1176,74 @@ impl<'a> JoinState<'a> {
                                         let table = self.db.tables[atoms[rest[i].atom].table]
                                             .table
                                             .as_ref();
-                                        let node = if sub.size() <= 16 {
+                                        if sub.size() <= 16 {
                                             let sub = refine_subset(sub, &rest[i].cs, &table, rest_has_stale[i]);
-                                            Arc::new(TrieNode::new(sub))
+                                            if sub.is_empty() {
+                                                updates.rollback();
+                                                return;
+                                            }
+                                            match sub {
+                                                Subset::Dense(range) => {
+                                                    updates.refine_atom_dense(scan.atom, range);
+                                                }
+                                                sub => {
+                                                    updates.refine_atom(scan.atom, Arc::new(TrieNode::new(sub)));
+                                                }
+                                            }
                                         } else {
-                                            probers[i].node.get_cached_trie_node(
+                                            let node = probers[i].node.get_cached_trie_node(
                                                 scan.column,
                                                 key[0],
                                                 &self.db.tables[atoms[scan.atom].table],
                                                 || refine_subset(sub, &rest[i].cs, &table, rest_has_stale[i]),
-                                            )
-                                        };
-                                        if node.subset.is_empty() {
-                                            updates.rollback();
-                                            return;
+                                            );
+                                            if node.subset.is_empty() {
+                                                updates.rollback();
+                                                return;
+                                            }
+                                            updates.refine_atom(scan.atom, node);
                                         }
-                                        updates.refine_atom(scan.atom, node);
                                     } else {
                                         updates.rollback();
                                         // Empty intersection.
                                         return;
                                     }
                                 }
-                                let main_node = if sub.size() <= 16 {
-                                    let sub = refine_subset(
+                                if sub.size() <= 16 {
+                                    let main_sub = refine_subset(
                                         sub.to_owned(&ps.get_pool()),
                                         &main_spec.cs,
                                         &main_spec_table,
                                         main_spec_has_stale,
                                     );
-                                    Arc::new(TrieNode::new(sub))
+                                    if main_sub.is_empty() {
+                                        updates.rollback();
+                                        return;
+                                    }
+                                    match main_sub {
+                                        Subset::Dense(range) => {
+                                            updates.refine_atom_dense(main_spec.atom, range);
+                                        }
+                                        main_sub => {
+                                            updates.refine_atom(main_spec.atom, Arc::new(TrieNode::new(main_sub)));
+                                        }
+                                    }
                                 } else {
-                                    probers[smallest].node.get_cached_trie_node(
+                                    let main_node = probers[smallest].node.get_cached_trie_node(
                                         main_spec.column,
                                         key[0],
                                         main_spec_info,
                                         || {
                                             let sub = sub.to_owned(&ps.get_pool());
-
                                             refine_subset(sub, &main_spec.cs, &main_spec_table, main_spec_has_stale)
                                         },
-                                    )
-                                };
-                                if main_node.subset.is_empty() {
-                                    updates.rollback();
-                                    return;
+                                    );
+                                    if main_node.subset.is_empty() {
+                                        updates.rollback();
+                                        return;
+                                    }
+                                    updates.refine_atom(main_spec.atom, main_node);
                                 }
-                                updates.refine_atom(main_spec.atom, main_node);
                                 updates.finish_frame();
                                 if updates.frames() >= chunk_size {
                                     drain_updates_parallel!(updates);

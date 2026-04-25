@@ -1024,3 +1024,24 @@ Just archived the new baseline `2026-04-25T06:57:30.csv` after the hardboiled im
 
 **Decision: KEPT.** Extending the Arc-free Dense subset path to the two-scan case gives additional speedups, though variance is higher due to the benchmark's mix of join patterns.
 
+### Exp 65 — Use refine_atom_dense for Dense subsets in N-way Intersect small-subset path (KEPT)
+
+**Hypothesis:** Apply the same `refine_atom_dense` optimization (from Exp 63/64) to the `rest` N-way Intersect case, both for the inner probers and for the `main_spec` leading prober.
+
+**What changed:** In the `rest` Intersect small-subset branches (inner loop probers and main_spec), changed from unconditional `Arc::new(TrieNode::new(sub))` to a match using `refine_atom_dense` for Dense subsets.
+
+**Result (vs `2026-04-25T06:57:30.csv` baseline; includes Exp 44-64), confirmed 1 run:**
+
+| Benchmark | Baseline | After | Δ% |
+|---|---|---|---|
+| hardboiled_conv1d_32.egg | 0.303 | 0.292 | **-3.6%** |
+| hardboiled_conv1d_128.egg | 0.858 | 0.808 | **-5.8%** |
+| luminal-llama.egg | 0.119 | 0.116 | **-2.5%** |
+| python_array_optimize.egg | 0.952 | 0.906 | **-4.8%** |
+| cykjson.egg | 0.072 | 0.070 | **-2.8%** |
+| eggcc-extraction.egg | 0.275 | 0.272 | **-1.1%** |
+
+**Summary: 6 faster, 0 slower.**
+
+**Decision: KEPT.** Completing the refine_atom_dense optimization across all Intersect cases (1, 2, N relations) eliminates Arc allocations for Dense subsets throughout the join execution.
+
