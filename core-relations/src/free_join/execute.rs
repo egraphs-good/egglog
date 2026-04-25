@@ -523,8 +523,9 @@ struct JoinState<'a> {
 // TODO: use SmallVec might be better
 type ColumnIndexes = IdVec<ColumnId, OnceLock<Arc<ColumnIndex>>>;
 // Each TrieNode is probed with exactly one column in practice, so we store a single
-// (ColumnId, map) pair instead of a per-column IdVec of Mutexes.
-type ChildrenMap = (ColumnId, Mutex<HashMap<Value, Arc<TrieNode>>>);
+// (ColumnId, map) pair instead of a per-column IdVec of Mutexes. Boxed to keep
+// TrieNode size small for the many short-lived TrieNodes that never need caching.
+type ChildrenMap = Box<(ColumnId, Mutex<HashMap<Value, Arc<TrieNode>>>)>;
 
 /// Information about the current subset of an atom's relation that is being considered, along with
 /// lazily-initialized, cached indexes on that subset.
@@ -585,9 +586,10 @@ impl TrieNode {
         _info: &TableInfo,
         sub: impl FnOnce() -> Subset,
     ) -> Arc<TrieNode> {
-        let (_, map) = self
+        let entry = self
             .cached_child
-            .get_or_init(|| (col, Mutex::new(HashMap::default())));
+            .get_or_init(|| Box::new((col, Mutex::new(HashMap::default()))));
+        let map = &entry.1;
         let mut guard = map.lock().unwrap();
         if let Some(node) = guard.get(&value) {
             return node.clone();

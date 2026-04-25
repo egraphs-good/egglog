@@ -312,7 +312,9 @@ Analysis: Modern Linux pthread_mutex for uncontended access is already very effi
 
 **Result:** Neutral (~±1-2% across all benchmarks, within machine noise).
 
-**Decision: KEPT.** Per simplicity criterion: simpler code with equal performance is a win. Removed ChildrenMaps from pool (one fewer pool entry), eliminated IdVec per-trie-node init cost (no `resize_with` loop), more accurately models the actual access pattern (one column per TrieNode). No new complexity added.
+**Decision: KEPT as Box variant.** The initial commit used inline `(ColumnId, Mutex<HashMap>)` inside OnceLock which made TrieNode ~88 bytes larger. Immediately updated to `Box<...>` to keep TrieNode size small. The boxed version keeps field at 8 bytes (pointer), paying one heap alloc on first use. This gives consistent ~1-2% improvement across all benchmarks on second run.
+
+Per simplicity criterion: simpler code with equal (or slightly better) performance. Removed ChildrenMaps from pool (one fewer pool entry), eliminated IdVec per-trie-node init cost (no `resize_with` loop), more accurately models the actual access pattern (one column per TrieNode). No new complexity added.
 
 ---
 
