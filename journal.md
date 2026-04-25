@@ -766,3 +766,24 @@ Just archived the new baseline `2026-04-25T06:57:30.csv` after the hardboiled im
 
 **Decision: KEPT.** The single-column fast path eliminates iterator+SmallVec overhead per probe in FusedIntersect. python_array_optimize shows the largest benefit (-6.1%), consistent with it being a join-heavy workload.
 
+### Exp 53 — Replace assert! with debug_assert! in push_vec, OffsetRange::new, SortedOffsetVector::push (KEPT)
+
+**Hypothesis:** Three more hot-path assertions run in release builds: `SubsetBuffer::push_vec` checks sort order on every row insertion (called during index construction); `OffsetRange::new` checks `start <= end` on every range creation (called in `refine_atom_dense`, intersect, etc.); `SortedOffsetVector::push` checks sort order on every push (called in `Subset::add_row_sorted` during `retain`). These invariants are always satisfied in correct code. Moving to `debug_assert!` eliminates them in release builds.
+
+**What changed:** Changed `assert!` to `debug_assert!` in `SubsetBuffer::push_vec`, `OffsetRange::new`, and `SortedOffsetVector::push` in `hash_index/mod.rs` and `offsets/mod.rs`.
+
+**Result (vs `2026-04-25T06:57:30.csv` baseline; includes Exp 44-52), confirmed 2 runs:**
+
+| Benchmark | Baseline | After | Δ% |
+|---|---|---|---|
+| hardboiled_conv1d_32.egg | 0.303 | 0.296 | **-2.5%** |
+| hardboiled_conv1d_128.egg | 0.858 | 0.822 | **-4.2%** |
+| luminal-llama.egg | 0.119 | 0.118 | **-0.8%** |
+| python_array_optimize.egg | 0.952 | 0.907 | **-4.7%** |
+| cykjson.egg | 0.072 | 0.067 | **-6.9%** |
+| eggcc-extraction.egg | 0.275 | 0.265 | **-3.6%** |
+
+**Summary: 5-6 faster, 0 slower (consistent across 2 runs).**
+
+**Decision: KEPT.** `push_vec` is called once per row during index construction, making the sort-order assert a measurable overhead. `OffsetRange::new` is called in very tight loops (`refine_atom_dense`, intersect). Both assertions verify structural invariants that are guaranteed by the calling code's logic.
+

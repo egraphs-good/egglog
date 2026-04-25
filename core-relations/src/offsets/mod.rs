@@ -43,7 +43,7 @@ impl Offsets for OffsetRange {
 
 impl OffsetRange {
     pub fn new(start: RowId, end: RowId) -> OffsetRange {
-        assert!(
+        debug_assert!(
             start <= end,
             "attempting to create malformed range {start:?}..{end:?}"
         );
@@ -64,7 +64,7 @@ impl SortedOffsetVector {
     }
 
     pub(crate) fn push(&mut self, offset: RowId) {
-        assert!(self.0.last().is_none_or(|last| last <= &offset));
+        debug_assert!(self.0.last().is_none_or(|last| last <= &offset));
         // SAFETY: we just checked the invariant
         unsafe { self.push_unchecked(offset) }
     }

@@ -669,7 +669,7 @@ impl SubsetBuffer {
     }
 
     fn push_vec(&mut self, vec: BufferedVec, row: RowId) -> BufferedVec {
-        assert!(
+        debug_assert!(
             vec.is_empty() || self.buf[vec.1.index() - 1] <= row,
             "vec={vec:?}, row={row:?}, last_elt={:?}",
             self.buf[vec.1.index() - 1]
