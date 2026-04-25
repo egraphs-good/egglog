@@ -595,3 +595,24 @@ Just archived the new baseline `2026-04-25T06:57:30.csv` after the hardboiled im
 
 **Decision: KEPT.** Clear improvement across most benchmarks. The key insight: when l==0 (common when the dense range starts at or before the sparse vector's start), we just truncate — zero overhead. When l>0, copy_within is a fast memmove that avoids the per-element retain predicate call.
 
+### Exp 45 — Zero-copy Sparse∩Dense in for_each via SubsetRef subslice (KEPT)
+
+**Hypothesis:** `Prober::for_each` with `intersect_outer: Some(range)` called `intersect_with_dense(v, range, &self.pool)` which allocates a new `SortedOffsetVector` for every Sparse entry, regardless of whether the result is eventually kept or discarded. By returning a `SubsetRef` (borrowing into the source data via `SortedOffsetSlice::subslice`) instead of an owned `Subset`, we defer the allocation to when it's actually needed.
+
+**What changed:** Added `intersect_with_dense_ref<'a>(v, range) -> Option<SubsetRef<'a>>` in execute.rs — same logic as `intersect_with_dense` but returns a zero-copy `SubsetRef::Sparse(s.subslice(l, r))` for Sparse case instead of allocating. Used in `Prober::for_each` for `DynamicIndex::Cached` and `DynamicIndex::CachedColumn` when `intersect_outer: Some(range)`.
+
+**Result (vs `2026-04-25T06:57:30.csv` baseline; includes Exp 44):**
+
+| Benchmark | Baseline | After | Δ% |
+|---|---|---|---|
+| hardboiled_conv1d_32.egg | 0.303 | 0.302 | -0.3% |
+| hardboiled_conv1d_128.egg | 0.858 | 0.836 | **-2.6%** |
+| luminal-llama.egg | 0.119 | 0.119 | 0.0% |
+| python_array_optimize.egg | 0.952 | 0.942 | **-1.1%** |
+| cykjson.egg | 0.072 | 0.068 | **-5.6%** |
+| eggcc-extraction.egg | 0.275 | 0.265 | **-3.6%** |
+
+**Summary: 4 faster, 0 slower, 2 unchanged. Consistent across 3 runs.**
+
+**Decision: KEPT.** The deferred allocation approach is strictly better: entries filtered out by the empty-intersection check now incur zero allocation cost.
+

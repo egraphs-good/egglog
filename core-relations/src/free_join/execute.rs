@@ -142,6 +142,36 @@ fn intersect_with_dense(
     }
 }
 
+/// Intersect a `SubsetRef` with a dense `OffsetRange` and return the result as a
+/// borrowed `SubsetRef`, or `None` if the intersection is empty.
+///
+/// Unlike `intersect_with_dense`, this function never allocates — it borrows into
+/// the source data via `subslice`. Use this in `for_each` paths where the result
+/// may be discarded (e.g., empty after refinement), to avoid pool allocations.
+#[inline]
+fn intersect_with_dense_ref<'a>(v: SubsetRef<'a>, range: OffsetRange) -> Option<SubsetRef<'a>> {
+    match v {
+        SubsetRef::Dense(r) => {
+            let resl = cmp::max(r.start, range.start);
+            let resr = cmp::min(r.end, range.end);
+            if resl >= resr {
+                None
+            } else {
+                Some(SubsetRef::Dense(OffsetRange::new(resl, resr)))
+            }
+        }
+        SubsetRef::Sparse(s) => {
+            let l = s.binary_search_by_id(range.start);
+            let r = s.binary_search_by_id(range.end);
+            if l >= r {
+                None
+            } else {
+                Some(SubsetRef::Sparse(s.subslice(l, r)))
+            }
+        }
+    }
+}
+
 struct Prober {
     node: Arc<TrieNode>,
     pool: Pool<SortedOffsetVector>,
@@ -190,8 +220,8 @@ impl Prober {
             } => {
                 let range = *range;
                 table.get().unwrap().for_each(|k, v| {
-                    if let Some(res) = intersect_with_dense(v, range, &self.pool) {
-                        f(k, PotentiallyStale::maybe_stale(res.as_ref()))
+                    if let Some(res) = intersect_with_dense_ref(v, range) {
+                        f(k, PotentiallyStale::maybe_stale(res))
                     }
                 });
             }
@@ -208,8 +238,8 @@ impl Prober {
             } => {
                 let range = *range;
                 table.get().unwrap().for_each(|k, v| {
-                    if let Some(res) = intersect_with_dense(v, range, &self.pool) {
-                        f(&[*k], PotentiallyStale::maybe_stale(res.as_ref()))
+                    if let Some(res) = intersect_with_dense_ref(v, range) {
+                        f(&[*k], PotentiallyStale::maybe_stale(res))
                     }
                 });
             }
