@@ -927,7 +927,11 @@ impl<'a> JoinState<'a> {
             } else {
                 sub.inner
             };
-            table.refine(sub, constraints)
+            if constraints.is_empty() {
+                sub
+            } else {
+                table.refine(sub, constraints)
+            }
         }
 
         match &stages.instrs[instr_order.get(cur)] {
