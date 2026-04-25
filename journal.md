@@ -957,3 +957,26 @@ Just archived the new baseline `2026-04-25T06:57:30.csv` after the hardboiled im
 
 **Note:** A follow-up commit also fixed a missed second `buffer.non_stale()` call (the one prefixed with `'mid:` label) that the replace-all missed due to the label prefix.
 
+### Exp 62 — Replace non_stale() with iter() in merge_parallel loops + get_row_unchecked in TupleIndex merge_parallel (KEPT)
+
+**Hypothesis:** The `merge_parallel` implementations for `ColumnIndex` and `TupleIndex` both call `buf.non_stale()` to iterate buffers from `scan_project`. Since `scan_project` already filters stale rows, these buffers are stale-free and `non_stale()` wastes one `is_stale()` call per row. Additionally, the `TupleIndex::merge_parallel` inner loop still used `shard.table.keys.get_row(entry.key)` (bounds-checked) in its hash entry closure, just like `get_subset` and `add_row` which were fixed in Exp 60.
+
+**What changed:**
+- Changed all 4 `buf.non_stale()` calls in `merge_parallel` implementations to `buf.iter()`
+- Changed `shard.table.keys.get_row(entry.key)` in TupleIndex `merge_parallel` inner loop to `get_row_unchecked`
+
+**Result (vs `2026-04-25T06:57:30.csv` baseline; includes Exp 44-61), confirmed 1 run:**
+
+| Benchmark | Baseline | After | Δ% |
+|---|---|---|---|
+| hardboiled_conv1d_32.egg | 0.303 | 0.296 | **-2.3%** |
+| hardboiled_conv1d_128.egg | 0.858 | 0.821 | **-4.3%** |
+| luminal-llama.egg | 0.119 | 0.117 | **-1.7%** |
+| python_array_optimize.egg | 0.952 | 0.900 | **-5.5%** |
+| cykjson.egg | 0.072 | 0.068 | **-5.6%** |
+| eggcc-extraction.egg | 0.275 | 0.263 | **-4.4%** |
+
+**Summary: 6 faster, 0 slower.**
+
+**Decision: KEPT.** The merge_parallel paths are used during index construction. Eliminating redundant stale checks and bounds checks in these paths gives a consistent benefit.
+

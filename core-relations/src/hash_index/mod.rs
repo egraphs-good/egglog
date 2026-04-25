@@ -258,7 +258,7 @@ impl IndexBase for ColumnIndex {
         let split_buf = |buf: TaggedRowBuffer| {
             let mut split = IdVec::<ShardId, TaggedRowBuffer>::default();
             split.resize_with(shard_data.n_shards(), || TaggedRowBuffer::new(1));
-            for (row_id, keys) in buf.non_stale() {
+            for (row_id, keys) in buf.iter() {
                 for key in keys {
                     shard_data
                         .get_shard_mut(*key, &mut split)
@@ -297,7 +297,7 @@ impl IndexBase for ColumnIndex {
                 let mut vec = queues[shard_id].lock().unwrap();
                 vec.sort_by_key(|(start, _)| *start);
                 for (_, buf) in vec.drain(..) {
-                    for (row_id, key) in buf.non_stale() {
+                    for (row_id, key) in buf.iter() {
                         debug_assert_eq!(key.len(), 1);
                         match shard.table.entry(key[0]) {
                             Entry::Occupied(mut occ) => {
@@ -493,7 +493,7 @@ impl IndexBase for TupleIndex {
         let split_buf = |buf: TaggedRowBuffer| {
             let mut split = IdVec::<ShardId, TaggedRowBuffer>::default();
             split.resize_with(shard_data.n_shards(), || TaggedRowBuffer::new(cols.len()));
-            for (row_id, key) in buf.non_stale() {
+            for (row_id, key) in buf.iter() {
                 shard_data
                     .get_shard_mut(key, &mut split)
                     .add_row(row_id, key);
@@ -528,12 +528,13 @@ impl IndexBase for TupleIndex {
                 let mut vec = queues[shard_id].lock().unwrap();
                 vec.sort_by_key(|(start, _)| *start);
                 for (_, buf) in vec.drain(..) {
-                    for (row_id, key) in buf.non_stale() {
+                    for (row_id, key) in buf.iter() {
                         let hash = hash_key(key);
                         let table_entry = shard.table.hash.entry(
                             hash,
+                            // SAFETY: entry.key was stored by add_row, which returns a valid RowId.
                             |entry| {
-                                entry.hash == hash && shard.table.keys.get_row(entry.key) == key
+                                entry.hash == hash && unsafe { shard.table.keys.get_row_unchecked(entry.key) } == key
                             },
                             |ent| ent.hash,
                         );
