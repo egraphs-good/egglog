@@ -640,3 +640,24 @@ Just archived the new baseline `2026-04-25T06:57:30.csv` after the hardboiled im
 
 **Decision: KEPT.** The optimization is safe (the default returns `true` for unknown table types), adds only one cheap comparison per `refine_subset` call, and eliminates the entire `refine_live` scan for tables with no stale rows. This is the most impactful single optimization so far.
 
+### Exp 47 — Pre-compute has_stale_rows() outside hot loops (KEPT)
+
+**Hypothesis:** After Exp 46, `refine_subset` calls `table.has_stale_rows()` on every entry in the hot loop — once per trie node entry, not once per table. While the check is cheap (a field comparison), it still involves a vtable dispatch per call. Pre-computing it once per table before the loop avoids repeated indirection.
+
+**What changed:** Changed `refine_subset` signature to accept `has_stale: bool` directly. In each hot loop in execute.rs — `[a]` single-scan, `[a, b]` two-scan, `rest` multi-scan, `FusedIntersect`, and `FusedIntersectMat` — pre-computed `has_stale = table.has_stale_rows()` outside the loop. Used `SmallVec<[bool; N]>` for multi-table cases.
+
+**Result (vs `2026-04-25T06:57:30.csv` baseline; includes Exp 44+45+46), confirmed 2 runs:**
+
+| Benchmark | Baseline | After | Δ% |
+|---|---|---|---|
+| hardboiled_conv1d_32.egg | 0.303 | 0.304 | +0.3% (noise) |
+| hardboiled_conv1d_128.egg | 0.858 | 0.837 | **-2.4%** |
+| luminal-llama.egg | 0.119 | 0.119 | 0.0% |
+| python_array_optimize.egg | 0.952 | 0.929 | **-2.4%** |
+| cykjson.egg | 0.072 | 0.067 | **-6.9%** |
+| eggcc-extraction.egg | 0.275 | 0.264 | **-4.0%** |
+
+**Summary: 4 faster, 0 slower, 2 unchanged (consistent across 2 runs).**
+
+**Decision: KEPT.** Removing repeated vtable dispatch from tight loops is consistently positive, especially for cykjson (-6.9%) and eggcc-extraction (-4.0%).
+

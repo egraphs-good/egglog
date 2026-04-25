@@ -951,8 +951,9 @@ impl<'a> JoinState<'a> {
             sub: PotentiallyStale<Subset>,
             constraints: &[Constraint],
             table: &WrappedTableRef,
+            has_stale: bool,
         ) -> Subset {
-            let sub = if sub.can_be_stale && table.has_stale_rows() {
+            let sub = if sub.can_be_stale && has_stale {
                 table.refine_live(sub.inner)
             } else {
                 sub.inner
@@ -974,19 +975,20 @@ impl<'a> JoinState<'a> {
                     let prober = self.get_column_index(atoms, binding_info, a.atom, a.column);
                     let info = &self.db.tables[atoms[a.atom].table];
                     let table = info.table.as_ref();
+                    let has_stale = table.has_stale_rows();
                     let mut updates = FrameUpdates::with_capacity(cmp::min(chunk_size, cur_size));
                     with_pool_set(|ps| {
                         prober.for_each(|val, x| {
                             updates.push_binding(*var, val[0]);
                             let node = if x.size() <= 16 {
                                 let sub =
-                                    refine_subset(x.to_owned(&ps.get_pool()), &a.cs, &table);
+                                    refine_subset(x.to_owned(&ps.get_pool()), &a.cs, &table, has_stale);
                                 Arc::new(TrieNode::new(sub))
                             } else {
                                 prober
                                     .node
                                     .get_cached_trie_node(a.column, val[0], info, || {
-                                        refine_subset(x.to_owned(&ps.get_pool()), &a.cs, &table)
+                                        refine_subset(x.to_owned(&ps.get_pool()), &a.cs, &table, has_stale)
                                     })
                             };
                             if node.subset.is_empty() {
@@ -1018,8 +1020,10 @@ impl<'a> JoinState<'a> {
                     let larger_atom = larger_scan.atom;
                     let large_info = &self.db.tables[atoms[larger_atom].table];
                     let large_table = large_info.table.as_ref();
+                    let large_has_stale = large_table.has_stale_rows();
                     let small_info = &self.db.tables[atoms[smaller_atom].table];
                     let small_table = small_info.table.as_ref();
+                    let small_has_stale = small_table.has_stale_rows();
                     let mut updates = FrameUpdates::with_capacity(cmp::min(chunk_size, cur_size));
                     with_pool_set(|ps| {
                         smaller.for_each(|val, small_sub| {
@@ -1030,6 +1034,7 @@ impl<'a> JoinState<'a> {
                                         small_sub.to_owned(&ps.get_pool()),
                                         &smaller_scan.cs,
                                         &small_table,
+                                        small_has_stale,
                                     );
                                     Arc::new(TrieNode::new(small_sub))
                                 } else {
@@ -1042,6 +1047,7 @@ impl<'a> JoinState<'a> {
                                                 small_sub.to_owned(&ps.get_pool()),
                                                 &smaller_scan.cs,
                                                 &small_table,
+                                                small_has_stale,
                                             )
                                         },
                                     )
@@ -1053,14 +1059,14 @@ impl<'a> JoinState<'a> {
                                 updates.refine_atom(smaller_atom, smaller_node);
                                 let larger_node = if large_sub.size() <= 16 {
                                     let large_sub =
-                                        refine_subset(large_sub, &larger_scan.cs, &large_table);
+                                        refine_subset(large_sub, &larger_scan.cs, &large_table, large_has_stale);
                                     Arc::new(TrieNode::new(large_sub))
                                 } else {
                                     larger.node.get_cached_trie_node(
                                         larger_scan.column,
                                         val[0],
                                         large_info,
-                                        || refine_subset(large_sub, &larger_scan.cs, &large_table),
+                                        || refine_subset(large_sub, &larger_scan.cs, &large_table, large_has_stale),
                                     )
                                 };
                                 if larger_node.subset.is_empty() {
@@ -1098,6 +1104,17 @@ impl<'a> JoinState<'a> {
                     let main_spec = &rest[smallest];
                     let main_spec_info = &self.db.tables[atoms[main_spec.atom].table];
                     let main_spec_table = main_spec_info.table.as_ref();
+                    let main_spec_has_stale = main_spec_table.has_stale_rows();
+                    // Pre-compute has_stale for each scan to avoid vtable calls in the hot loop.
+                    let rest_has_stale: SmallVec<[bool; 3]> = rest
+                        .iter()
+                        .map(|scan| {
+                            self.db.tables[atoms[scan.atom].table]
+                                .table
+                                .as_ref()
+                                .has_stale_rows()
+                        })
+                        .collect();
 
                     if smallest_size != 0 {
                         // Smallest leads the scan
@@ -1115,14 +1132,14 @@ impl<'a> JoinState<'a> {
                                             .table
                                             .as_ref();
                                         let node = if sub.size() <= 16 {
-                                            let sub = refine_subset(sub, &rest[i].cs, &table);
+                                            let sub = refine_subset(sub, &rest[i].cs, &table, rest_has_stale[i]);
                                             Arc::new(TrieNode::new(sub))
                                         } else {
                                             probers[i].node.get_cached_trie_node(
                                                 scan.column,
                                                 key[0],
                                                 &self.db.tables[atoms[scan.atom].table],
-                                                || refine_subset(sub, &rest[i].cs, &table),
+                                                || refine_subset(sub, &rest[i].cs, &table, rest_has_stale[i]),
                                             )
                                         };
                                         if node.subset.is_empty() {
@@ -1141,6 +1158,7 @@ impl<'a> JoinState<'a> {
                                         sub.to_owned(&ps.get_pool()),
                                         &main_spec.cs,
                                         &main_spec_table,
+                                        main_spec_has_stale,
                                     );
                                     Arc::new(TrieNode::new(sub))
                                 } else {
@@ -1151,7 +1169,7 @@ impl<'a> JoinState<'a> {
                                         || {
                                             let sub = sub.to_owned(&ps.get_pool());
 
-                                            refine_subset(sub, &main_spec.cs, &main_spec_table)
+                                            refine_subset(sub, &main_spec.cs, &main_spec_table, main_spec_has_stale)
                                         },
                                     )
                                 };
@@ -1245,6 +1263,16 @@ impl<'a> JoinState<'a> {
                         )
                     })
                     .collect::<SmallVec<[(usize, AtomId, Prober); 4]>>();
+                // Pre-compute has_stale per prober to avoid vtable calls in the hot loop.
+                let index_has_stale: SmallVec<[bool; 4]> = index_probers
+                    .iter()
+                    .map(|(_, atom, _)| {
+                        self.db.tables[atoms[*atom].table]
+                            .table
+                            .as_ref()
+                            .has_stale_rows()
+                    })
+                    .collect();
                 let proj = SmallVec::<[ColumnId; 4]>::from_iter(bind.iter().map(|(col, _)| *col));
                 let cover_node = binding_info.unwrap_val(cover_atom);
                 let cover_subset = cover_node.subset.as_ref();
@@ -1269,7 +1297,7 @@ impl<'a> JoinState<'a> {
                             updates.push_binding(*var, key[i]);
                         }
                         // now probe each remaining indexes
-                        for (i, atom, prober) in &index_probers {
+                        for (prober_idx, (i, atom, prober)) in index_probers.iter().enumerate() {
                             // create a key: to_intersect indexes into the key from the cover
                             let index_cols = &to_intersect[*i].1;
                             let index_key = index_cols
@@ -1284,7 +1312,7 @@ impl<'a> JoinState<'a> {
                             // apply any constraints needed in this scan.
                             let table_info = &self.db.tables[atoms[*atom].table];
                             let cs = &to_intersect[*i].0.constraints;
-                            let subset = refine_subset(subset, cs, &table_info.table.as_ref());
+                            let subset = refine_subset(subset, cs, &table_info.table.as_ref(), index_has_stale[prober_idx]);
                             if subset.is_empty() {
                                 updates.rollback();
                                 // There are no possible values for this subset
@@ -1340,13 +1368,23 @@ impl<'a> JoinState<'a> {
                         )
                     })
                     .collect::<SmallVec<[Prober; 4]>>();
+                // Pre-compute has_stale per prober to avoid vtable calls in the hot loop.
+                let probers_has_stale: SmallVec<[bool; 4]> = to_intersect
+                    .iter()
+                    .map(|(spec, _)| {
+                        self.db.tables[atoms[spec.to_index.atom].table]
+                            .table
+                            .as_ref()
+                            .has_stale_rows()
+                    })
+                    .collect();
 
                 let mut key = Vec::with_capacity(4);
                 let mut prune_probers = |updates: &mut FrameUpdates,
                                          mat_key: Option<&[Value]>,
                                          mat_non_key: Option<&[Value]>|
                  -> bool {
-                    for ((spec, cols), prober) in to_intersect.iter().zip(probers.iter()) {
+                    for (j, ((spec, cols), prober)) in to_intersect.iter().zip(probers.iter()).enumerate() {
                         key.clear();
                         for col in cols.iter() {
                             let val = match mat_key {
@@ -1368,6 +1406,7 @@ impl<'a> JoinState<'a> {
                                 &self.db.tables[atoms[spec.to_index.atom].table]
                                     .table
                                     .as_ref(),
+                                probers_has_stale[j],
                             );
                             if subset.is_empty() {
                                 return false;
