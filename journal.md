@@ -208,3 +208,42 @@ The branch is ~4–7% slower on hardboiled and python_array_optimize, and ~12% F
 
 ---
 
+## Session 2 — 2026-04-25 (continued)
+
+### New baseline: `2026-04-25T02:36:39.csv` (Mutex commit)
+After committing the ReadOptimizedLock → Mutex simplification:
+
+| hardboiled_conv1d_32 | 0.364 |
+| hardboiled_conv1d_128 | 0.961 |
+| luminal-llama | 0.118 |
+| python_array_optimize | 0.942 |
+| cykjson | 0.069 |
+| eggcc-extraction | 0.266 |
+
+### Experiments 8-13 (all DISCARDED)
+
+**Exp 8 — entry() API in get_cached_trie_node:** Replace `get()`+`insert()` with `entry().or_insert_with()`. Slightly worse (~+2% on hardboiled). The HashMap's entry() takes mutable borrow even on hit, which is slightly slower than immutable `get()` for the common cache-hit path.
+
+**Exp 9 — cur % 4 instead of cur % 3 for dynamic sort:** Reduced sort frequency. First run showed dramatic -19.8% on hardboiled_conv1d_32, but second run showed ~0%. High machine variance at ~25% makes this unreliable. Other benchmarks slightly worse. DISCARDED.
+
+**Exp 10 — Cache key_i in selection sort inner loop:** Pre-compute `key_i` before inner loop and update only on swap. Not measurable improvement. DISCARDED.
+
+**Exp 11 — Vec linear search for ChildrenMaps inner map:** Replace `HashMap<Value, Arc<TrieNode>>` with `Vec<(Value, Arc<TrieNode>)>` and linear scan. Slightly worse — FxHasher on u32 is very fast. DISCARDED.
+
+**Exp 12 — Single combined Mutex map (u64 key):** Tried replacing per-column maps with single `Mutex<HashMap<u64, Arc<TrieNode>>>`. Build complexity too high for benefit. ABANDONED.
+
+**Exp 13 — Early-exit for empty subsets:** Skip `push_binding`+`rollback` by checking emptiness before pushing binding. Neutral — `rollback()` (Vec::truncate) is already cheap. DISCARDED.
+
+### Analysis of remaining bottleneck
+The ~4-7% overhead vs main on hardboiled comes from Mutex CAS + HashMap lookup on every cached trie node access. These appear irreducible with the current approach. The cache IS beneficial — without it, hardboiled would be +23% SLOWER. Net: branch is faster than it would be without the cache, but still slightly slower than main due to overhead.
+
+**Machine variance ~25% makes it hard to reliably detect improvements below ~10%.**
+
+### Exp 14 — Sort early-return for trivial ranges (KEPT as simplification)
+
+Added `if range.len() <= 1 { return; }` at the start of `sort_plan_by_size_inner`.
+Result: Essentially noise (all within ±2.5%). This is a pure simplification — avoids one DenseIdMap allocation from pool + O(n²) loop when range is 0 or 1 element.
+Kept because: simplification win with zero cost.
+
+---
+

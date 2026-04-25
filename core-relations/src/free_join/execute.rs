@@ -1863,6 +1863,10 @@ fn sort_plan_by_size_inner(
     instrs: &[JoinStage],
     binding_info: &mut BindingInfo,
 ) {
+    // Nothing to sort if there's 0 or 1 element.
+    if range.len() <= 1 {
+        return;
+    }
     // How many times an atom has been intersected/joined
     let mut times_refined = with_pool_set(|ps| ps.get::<DenseIdMap<AtomId, i64>>());
 
