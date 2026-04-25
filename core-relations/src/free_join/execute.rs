@@ -522,13 +522,9 @@ struct JoinState<'a> {
 
 // TODO: use SmallVec might be better
 type ColumnIndexes = IdVec<ColumnId, OnceLock<Arc<ColumnIndex>>>;
-// pub(crate) type ChildrenMaps =
-//     IdVec<ColumnId, OnceLock<Arc<HashMap<Value, OnceLock<Arc<TrieNode>>>>>>;
-
-// pub(crate) type ChildrenMaps = IdVec<ColumnId, OnceLock<Arc<DashMap<Value, Arc<TrieNode>>>>>;
-// pub(crate) type ChildrenMaps = IdVec<ColumnId, Arc<DashMap<Value, Arc<TrieNode>>>>;
-// pub(crate) type ChildrenMaps = IdVec<ColumnId, ReadOptimizedLock<HashMap<Value, Arc<TrieNode>>>>;
-pub(crate) type ChildrenMaps = IdVec<ColumnId, Mutex<HashMap<Value, Arc<TrieNode>>>>;
+// Each TrieNode is probed with exactly one column in practice, so we store a single
+// (ColumnId, map) pair instead of a per-column IdVec of Mutexes.
+type ChildrenMap = (ColumnId, Mutex<HashMap<Value, Arc<TrieNode>>>);
 
 /// Information about the current subset of an atom's relation that is being considered, along with
 /// lazily-initialized, cached indexes on that subset.
@@ -542,7 +538,10 @@ pub(crate) struct TrieNode {
     subset: Subset,
     /// Any cached indexes on this subset.
     cached_subsets: OnceLock<Pooled<ColumnIndexes>>,
-    cached_children: OnceLock<Pooled<ChildrenMaps>>,
+    /// Cached child trie nodes, keyed by value. In practice each TrieNode is
+    /// only ever probed with a single column, so we store one (col, map) pair
+    /// instead of an IdVec across all columns.
+    cached_child: OnceLock<ChildrenMap>,
 }
 
 impl std::fmt::Debug for TrieNode {
@@ -558,7 +557,7 @@ impl TrieNode {
         Self {
             subset,
             cached_subsets: Default::default(),
-            cached_children: Default::default(),
+            cached_child: Default::default(),
         }
     }
 
@@ -583,14 +582,12 @@ impl TrieNode {
         &self,
         col: ColumnId,
         value: Value,
-        info: &TableInfo,
+        _info: &TableInfo,
         sub: impl FnOnce() -> Subset,
     ) -> Arc<TrieNode> {
-        let map = &self.cached_children.get_or_init(|| {
-            let mut vec: Pooled<ChildrenMaps> = with_pool_set(|ps| ps.get());
-            vec.resize_with(info.spec.arity(), || Mutex::new(HashMap::default()));
-            vec
-        })[col];
+        let (_, map) = self
+            .cached_child
+            .get_or_init(|| (col, Mutex::new(HashMap::default())));
         let mut guard = map.lock().unwrap();
         if let Some(node) = guard.get(&value) {
             return node.clone();
@@ -611,11 +608,7 @@ struct BindingInfo {
 impl BindingInfo {
     /// Initializes the atom-related metadata in the [`BindingInfo`].
     fn insert_subset(&mut self, atom: AtomId, subset: Subset) {
-        let node = Arc::new(TrieNode {
-            subset,
-            cached_subsets: Default::default(),
-            cached_children: Default::default(),
-        });
+        let node = Arc::new(TrieNode::new(subset));
         self.subsets.insert(atom, node);
     }
 

@@ -245,5 +245,74 @@ Added `if range.len() <= 1 { return; }` at the start of `sort_plan_by_size_inner
 Result: Essentially noise (all within ±2.5%). This is a pure simplification — avoids one DenseIdMap allocation from pool + O(n²) loop when range is 0 or 1 element.
 Kept because: simplification win with zero cost.
 
+### Exp 15 — RwLock (DISCARDED)
+
+Tried replacing Mutex with std::sync::RwLock in ChildrenMaps. Slightly worse (cache reads are write-like — insert on miss). Discarded.
+
+### Exp 16 — Early empty check before binding push (DISCARDED)
+
+Tried checking if subset is empty before push_binding+rollback. Neutral — rollback (Vec::truncate) is cheap. Discarded.
+
+### Exp 17 — Threshold variations (DISCARDED)
+
+Tried size threshold 32 (worse), threshold 8 (machine noise). Discarded.
+
+### Exp 18 — Skip trie cache for SinglePlan (DISCARDED)
+
+Added `use_trie_cache: bool` parameter to run_join_stages/run_plan. Passed `false` for SinglePlan, `true` for DecomposedPlan. Result: UNIFORMLY WORSE across all benchmarks (+2-6%). Confirmed cache is helping even for SinglePlan queries (not just DecomposedPlan). Reverted.
+
+### Exp 19 — Merge duplicate [a] scan branches (KEPT as simplification)
+
+The `[a] if a.cs.is_empty()` and `[a]` branches in the Intersect match arm were identical except for `&[]` vs `&a.cs`. Since `refine(sub, &[])` is a no-op, the two branches produce identical behavior. Merged them into one. Results neutral (±2% noise). Removed ~35 lines of duplicate code.
+
+### Exp 20 — Defer cover_atom Arc creation in FusedIntersect (DISCARDED)
+
+Moved `refine_atom(cover_atom, Arc::new(TrieNode::new(...)))` to AFTER index probing in the FusedIntersect path. This avoids creating Arc<TrieNode> for rows that get pruned. Used SmallVec<[(AtomId, Subset); 4]> to collect probe results first. Results: neutral (±2% noise). Added complexity without measurable speedup. Reverted.
+
+Analysis: The FusedIntersect with non-empty to_intersect may not be a hot path, or the SmallVec overhead cancels the Arc savings.
+
+### Exp 21 — DashMap for ChildrenMaps (DISCARDED)
+
+Changed `ChildrenMaps` from `IdVec<ColumnId, Mutex<HashMap<Value, Arc<TrieNode>>>>` to `IdVec<ColumnId, DashMap<Value, Arc<TrieNode>>>`. DashMap uses parking_lot's sharded RwLock internally.
+
+Result: SIGNIFICANTLY WORSE (+18% hardboiled_conv1d_32, +13% hardboiled_conv1d_128, +25% luminal-llama).
+
+Analysis: DashMap has too much overhead per lookup compared to std::sync::Mutex:
+1. Shard index computation (hash + modulo)
+2. RwLock acquire/release for each operation
+3. More complex data structure per shard
+
+For single-threaded access with no contention, std::sync::Mutex + HashMap is more efficient than DashMap. Reverted immediately.
+
+### Exp 22 — SpinLock for ChildrenMaps (DISCARDED)
+
+Replaced `std::sync::Mutex` with a hand-rolled `SpinLock` (unsafe, using AtomicBool + UnsafeCell). Spinlock for uncontended single-threaded access: 1 CAS (Acquire) + 1 atomic store (Release).
+
+Result: Mixed/neutral (hardboiled_conv1d_128 +3% on second run, python_array_optimize -1.8% on first). Within machine noise.
+
+Analysis: Modern Linux pthread_mutex for uncontended access is already very efficient (avoids futex syscall via optimistic CAS). The spinlock provides no clear advantage. The unsafe complexity is not worth the neutral result. Reverted.
+
+---
+
+## Session 3 — 2026-04-25 (continued)
+
+### Exp 23 — Single ChildrenMap per TrieNode (KEPT as simplification)
+
+**Hypothesis:** Each TrieNode is probed with exactly ONE column in practice (the column comes from the JoinStage spec). The current `ChildrenMaps = IdVec<ColumnId, Mutex<HashMap<Value, Arc<TrieNode>>>>` allocates an IdVec with N Mutexes (one per column), but only 1 is ever used. Replacing it with `ChildrenMap = (ColumnId, Mutex<HashMap<Value, Arc<TrieNode>>>)` directly in `cached_child: OnceLock<ChildrenMap>` would:
+- Eliminate `Pooled<ChildrenMaps>` (no pool get/return)
+- Eliminate `resize_with(arity, || Mutex::new(...))` — no longer need to create N Mutexes
+- Eliminate array indexing by ColumnId
+- Remove the `children_map` pool entry from pool/mod.rs entirely
+
+**What I changed:**
+- Replaced `cached_children: OnceLock<Pooled<ChildrenMaps>>` with `cached_child: OnceLock<ChildrenMap>` in TrieNode
+- Simplified `get_cached_trie_node` to just `get_or_init(|| (col, Mutex::new(HashMap::default())))`
+- Removed `ChildrenMaps` type alias and the `children_map: ChildrenMaps [ 1 << 20 ]` entry from pool/mod.rs
+- Simplified `insert_subset` in BindingInfo to use `TrieNode::new(subset)` directly
+
+**Result:** Neutral (~±1-2% across all benchmarks, within machine noise).
+
+**Decision: KEPT.** Per simplicity criterion: simpler code with equal performance is a win. Removed ChildrenMaps from pool (one fewer pool entry), eliminated IdVec per-trie-node init cost (no `resize_with` loop), more accurately models the actual access pattern (one column per TrieNode). No new complexity added.
+
 ---
 
