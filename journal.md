@@ -316,5 +316,76 @@ Analysis: Modern Linux pthread_mutex for uncontended access is already very effi
 
 Per simplicity criterion: simpler code with equal (or slightly better) performance. Removed ChildrenMaps from pool (one fewer pool entry), eliminated IdVec per-trie-node init cost (no `resize_with` loop), more accurately models the actual access pattern (one column per TrieNode). No new complexity added.
 
+### Exp 25 — ReadOptimizedLock for cached_child (DISCARDED)
+
+**Hypothesis:** The earlier code used `ReadOptimizedLock` and showed 0.306s for hardboiled_conv1d_32. The Mutex switch made it 0.364s. Reverting to ReadOptimizedLock (but now with the single-map Box<(ColumnId, ROL<HashMap>)> structure instead of IdVec) might recover that performance.
+
+**What I changed:** Changed `ChildrenMap` from `Box<(ColumnId, Mutex<HashMap>)>` to `Box<(ColumnId, ReadOptimizedLock<HashMap>)>`. Implemented double-checked locking pattern: `read()` for fast path, `lock()` for slow path with re-check.
+
+**Result:** WORSE than Mutex baseline — hardboiled_conv1d_32: +1.4%, hardboiled_conv1d_128: +2.7%.
+
+**Analysis:** The improvement seen in 8fb58d27 (0.306s) vs Mutex (0.364s) was NOT due to ReadOptimizedLock itself being faster. The difference must be from some other code change made in commit ae1edab9. Specifically, the `[a] if a.cs.is_empty()` branch that was removed in Exp 19 (commit 5507fb88) may have been important. Alternatively, the IdVec-per-column structure gave separate maps per column, reducing HashMap contention and reducing map size (each map only has values for ONE column instead of all values mixed).
+
+Actually wait — since each TrieNode is only ever probed with ONE column, having separate maps per column vs one combined map makes no difference for cache behavior. The maps would have the same entries either way.
+
+The performance difference between 0.306 and 0.364 remains unexplained. It could be machine variance from the very first run of the session.
+
+**Decision: DISCARDED.** ReadOptimizedLock adds complexity without improving performance in single-threaded mode. Reverted.
+
+### Exp 26 — ReadOptimizedLock for cached_child (DISCARDED)
+
+Same as Exp 25 — tried ReadOptimizedLock with double-checked locking. Slightly worse than Mutex. The previous 0.295-0.306 baseline was likely machine variance, not ReadOptimizedLock advantage. Reverted.
+
+### Exp 27 — Cache prober results in FusedIntersect (DISCARDED)
+
+**Hypothesis:** In the FusedIntersect path, when probing index_probers with single-column keys, we don't cache the refined subset results. Adding `prober.node.get_cached_trie_node(col, val, ...)` here would cache results for repeated probe key values.
+
+**What I changed:** Added caching via `get_cached_trie_node` for single-column probes in FusedIntersect (when `index_key.len() == 1 && raw_sub.size() > 16`).
+
+**Result:** WORSE — hardboiled_conv1d_128 +1-1.5%, luminal-llama +2.6%, python_array_optimize +2.5%.
+
+**Analysis:** The FusedIntersect path's probe keys change frequently (each cover row has different keys), so cache hits are rare. The overhead of calling `get_cached_trie_node` (OnceLock + Box alloc on first access + Mutex + HashMap) exceeds the benefit of occasional cache hits.
+
+**Decision: DISCARDED.** Reverted.
+
+### Exp 24 — Store pool in JoinState (DISCARDED)
+
+**Hypothesis:** `with_pool_set` accesses a thread-local (pthread_getspecific, ~5ns) every time a Prober is constructed. Storing the pool in JoinState (obtained once at creation time) and passing `self.pool.clone()` instead would eliminate repeated TLS accesses.
+
+**What I changed:** Added `pool: Pool<SortedOffsetVector>` to JoinState, initialized in `new`. Changed `get_index` to use `self.pool.clone()` instead of `with_pool_set(|ps| ps.get_pool().clone())`.
+
+**Result:** Mixed — hardboiled slightly faster (+0.6%), but python_array_optimize and cykjson slower (+2-4%). Within machine noise.
+
+**Decision: DISCARDED.** Not a significant change. The `Pool::clone()` (Rc::clone) is already ~1-2ns, and `with_pool_set` is ~5ns. The saved 3ns per prober construction is below measurement threshold. Reverted.
+
 ---
+
+## Session 4 — 2026-04-25 (continued)
+
+### Exp 30 — RefineAtomDense: defer Arc<TrieNode> for FusedIntersect cover rows (KEPT as minor optimization)
+
+**Hypothesis:** In the FusedIntersect path, the cover row always has `Subset::Dense(OffsetRange::new(row, row.inc()))` — a single-row dense range. For the non-empty `to_intersect` path, cover rows are pushed before probing. If a probe fails, the cover row is rolled back. The current code creates `Arc::new(TrieNode::new(Subset::Dense(...)))` before knowing if the probe will succeed, wasting an Arc allocation on rollback.
+
+**What I changed:**
+1. Added `RefineAtomDense(AtomId, OffsetRange)` variant to `UpdateInstr` in `frame_update.rs`
+2. Added `refine_atom_dense()` method to `FrameUpdates`
+3. Added `RefineAtomDense` arm to both drain macros in `execute.rs` (calls `binding_info.insert_subset(atom, Subset::Dense(range))`)
+4. Changed FusedIntersect cover row pushes (both empty and non-empty `to_intersect` paths) from `refine_atom(Arc::new(TrieNode::new(...)))` to `refine_atom_dense(OffsetRange::new(row, row.inc()))`
+
+**What this saves:**
+- For rolled-back cover rows in non-empty FusedIntersect: 1 Arc allocation per rollback (when probing fails)
+- For all committed frames: same total Arc allocations, just deferred to drain time
+
+**Result (Session 4 baseline, b31c17ea + this change):**
+| Benchmark | Run 1 median | Run 2 median |
+|---|---|---|
+| hardboiled_conv1d_32 | 283.7ms | 290.3ms |
+| luminal-llama | 114.9ms | 118.2ms |
+| python_array_optimize | 969ms | 994.8ms |
+| cykjson | 72.5ms | 73.1ms |
+| eggcc-extraction | 265.5ms | 272.4ms |
+
+No measurable change vs baseline (machine variance ~25% makes it hard to detect <10% improvements).
+
+**Decision: KEPT.** The change is a correct, clean optimization that avoids Arc allocations for rolled-back cover rows. Code is cleaner (no `Arc::new(TrieNode::new(...))` at push time for the Dense cover row case). Enum size unchanged (all variants still fit in 16 bytes). No risk of regression.
 

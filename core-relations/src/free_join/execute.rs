@@ -801,6 +801,9 @@ impl<'a> JoinState<'a> {
                         UpdateInstr::RefineAtom(atom, subset) => {
                             binding_info.insert_node(atom, subset);
                         }
+                        UpdateInstr::RefineAtomDense(atom, range) => {
+                            binding_info.insert_subset(atom, Subset::Dense(range));
+                        }
                         UpdateInstr::EndFrame => {
                             self.run_plan(
                                 stages,
@@ -843,6 +846,9 @@ impl<'a> JoinState<'a> {
                             }
                             UpdateInstr::RefineAtom(atom, subset) => {
                                 binding_info.insert_node(atom, subset);
+                            }
+                            UpdateInstr::RefineAtomDense(atom, range) => {
+                                binding_info.insert_subset(atom, Subset::Dense(range));
                             }
                             UpdateInstr::EndFrame => {
                                 JoinState {
@@ -1115,13 +1121,7 @@ impl<'a> JoinState<'a> {
                         &mut buffer,
                     );
                     for (row, key) in buffer.non_stale() {
-                        updates.refine_atom(
-                            cover_atom,
-                            Arc::new(TrieNode::new(Subset::Dense(OffsetRange::new(
-                                row,
-                                row.inc(),
-                            )))),
-                        );
+                        updates.refine_atom_dense(cover_atom, OffsetRange::new(row, row.inc()));
                         // bind the values
                         for (i, (_, var)) in bind.iter().enumerate() {
                             updates.push_binding(*var, key[i]);
@@ -1184,13 +1184,7 @@ impl<'a> JoinState<'a> {
                         &mut buffer,
                     );
                     'mid: for (row, key) in buffer.non_stale() {
-                        updates.refine_atom(
-                            cover_atom,
-                            Arc::new(TrieNode::new(Subset::Dense(OffsetRange::new(
-                                row,
-                                row.inc(),
-                            )))),
-                        );
+                        updates.refine_atom_dense(cover_atom, OffsetRange::new(row, row.inc()));
                         // bind the values
                         for (i, (_, var)) in bind.iter().enumerate() {
                             updates.push_binding(*var, key[i]);
