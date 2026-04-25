@@ -16,6 +16,7 @@ use std::sync::Arc;
 
 use crate::free_join::execute::TrieNode;
 use crate::numeric_id::define_id;
+use crate::offsets::OffsetRange;
 
 use crate::Value;
 
@@ -27,6 +28,8 @@ define_id!(pub SubsetId, u32, "An offset into a buffer of subsets");
 pub(super) enum UpdateInstr {
     PushBinding(Variable, Value),
     RefineAtom(AtomId, Arc<TrieNode>),
+    /// Refine an atom to a dense offset range, avoiding an Arc<TrieNode> allocation.
+    RefineAtomDense(AtomId, OffsetRange),
     /// Marks the end of the current frame. Time to make a recursive call.
     EndFrame,
 }
@@ -56,6 +59,12 @@ impl FrameUpdates {
     /// Refine `atom` to consider only the given `subset` in the current frame.
     pub(super) fn refine_atom(&mut self, atom: AtomId, node: Arc<TrieNode>) {
         self.updates.push(UpdateInstr::RefineAtom(atom, node));
+    }
+
+    /// Refine `atom` to consider only the given dense offset range, without
+    /// allocating an Arc<TrieNode> eagerly.
+    pub(super) fn refine_atom_dense(&mut self, atom: AtomId, range: OffsetRange) {
+        self.updates.push(UpdateInstr::RefineAtomDense(atom, range));
     }
 
     /// Roll back the updates to the last frame start. Note that repeated calls

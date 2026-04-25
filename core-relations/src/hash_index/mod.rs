@@ -221,6 +221,7 @@ impl IndexBase for ColumnIndex {
             self.add_row(key, src_id);
         }
     }
+
     fn for_each(&self, mut f: impl FnMut(&Self::Key, SubsetRef)) {
         for (subsets, (k, v)) in self
             .shards
@@ -230,6 +231,7 @@ impl IndexBase for ColumnIndex {
             f(k, v.as_ref(subsets));
         }
     }
+
     fn len(&self) -> usize {
         self.shards.iter().map(|(_, shard)| shard.table.len()).sum()
     }
@@ -246,7 +248,7 @@ impl IndexBase for ColumnIndex {
         let split_buf = |buf: TaggedRowBuffer| {
             let mut split = IdVec::<ShardId, TaggedRowBuffer>::default();
             split.resize_with(shard_data.n_shards(), || TaggedRowBuffer::new(1));
-            for (row_id, keys) in buf.non_stale() {
+            for (row_id, keys) in buf.iter() {
                 for key in keys {
                     shard_data
                         .get_shard_mut(*key, &mut split)
@@ -285,7 +287,7 @@ impl IndexBase for ColumnIndex {
                 let mut vec = queues[shard_id].lock().unwrap();
                 vec.sort_by_key(|(start, _)| *start);
                 for (_, buf) in vec.drain(..) {
-                    for (row_id, key) in buf.non_stale() {
+                    for (row_id, key) in buf.iter() {
                         debug_assert_eq!(key.len(), 1);
                         match shard.table.entry(key[0]) {
                             Entry::Occupied(mut occ) => {
@@ -405,7 +407,8 @@ impl IndexBase for TupleIndex {
         let hash = hash_key(key);
         let shard = &self.shards[self.shard_data.shard_id(hash)];
         let entry = shard.table.hash.find(hash, |entry| {
-            entry.hash == hash && shard.table.keys.get_row(entry.key) == key
+            // SAFETY: entry.key was stored by add_row, which returns a valid RowId.
+            entry.hash == hash && unsafe { shard.table.keys.get_row_unchecked(entry.key) } == key
         })?;
         Some(entry.vals.as_ref(&shard.subsets))
     }
@@ -416,7 +419,11 @@ impl IndexBase for TupleIndex {
         let shard = &mut self.shards[self.shard_data.shard_id(hash)];
         let table_entry = shard.table.hash.entry(
             hash,
-            |entry| entry.hash == hash && shard.table.keys.get_row(entry.key) == key,
+            // SAFETY: entry.key was stored by add_row, which returns a valid RowId.
+            |entry| {
+                entry.hash == hash
+                    && unsafe { shard.table.keys.get_row_unchecked(entry.key) } == key
+            },
             |ent| ent.hash,
         );
         match table_entry {
@@ -446,7 +453,8 @@ impl IndexBase for TupleIndex {
     fn for_each(&self, mut f: impl FnMut(&Self::Key, SubsetRef)) {
         for (_, shard) in self.shards.iter() {
             for entry in shard.table.hash.iter() {
-                let key = shard.table.keys.get_row(entry.key);
+                // SAFETY: entry.key was stored by add_row, so it is always in-bounds.
+                let key = unsafe { shard.table.keys.get_row_unchecked(entry.key) };
                 f(key, entry.vals.as_ref(&shard.subsets));
             }
         }
@@ -474,7 +482,7 @@ impl IndexBase for TupleIndex {
         let split_buf = |buf: TaggedRowBuffer| {
             let mut split = IdVec::<ShardId, TaggedRowBuffer>::default();
             split.resize_with(shard_data.n_shards(), || TaggedRowBuffer::new(cols.len()));
-            for (row_id, key) in buf.non_stale() {
+            for (row_id, key) in buf.iter() {
                 shard_data
                     .get_shard_mut(key, &mut split)
                     .add_row(row_id, key);
@@ -509,12 +517,15 @@ impl IndexBase for TupleIndex {
                 let mut vec = queues[shard_id].lock().unwrap();
                 vec.sort_by_key(|(start, _)| *start);
                 for (_, buf) in vec.drain(..) {
-                    for (row_id, key) in buf.non_stale() {
+                    for (row_id, key) in buf.iter() {
                         let hash = hash_key(key);
                         let table_entry = shard.table.hash.entry(
                             hash,
+                            // SAFETY: entry.key was stored by add_row, which returns a valid RowId.
                             |entry| {
-                                entry.hash == hash && shard.table.keys.get_row(entry.key) == key
+                                entry.hash == hash
+                                    && unsafe { shard.table.keys.get_row_unchecked(entry.key) }
+                                        == key
                             },
                             |ent| ent.hash,
                         );
@@ -669,7 +680,7 @@ impl SubsetBuffer {
     }
 
     fn push_vec(&mut self, vec: BufferedVec, row: RowId) -> BufferedVec {
-        assert!(
+        debug_assert!(
             vec.is_empty() || self.buf[vec.1.index() - 1] <= row,
             "vec={vec:?}, row={row:?}, last_elt={:?}",
             self.buf[vec.1.index() - 1]
