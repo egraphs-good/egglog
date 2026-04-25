@@ -993,7 +993,13 @@ impl SortedWritesTable {
     }
 
     fn get_if(&self, cs: &[Constraint], row: RowId) -> Option<&[Value]> {
-        let row = self.data.get_row(row)?;
+        // Fast path: when no stale rows, skip the stale check.
+        let row = if self.data.stale_rows == 0 {
+            // SAFETY: callers guarantee row is within bounds via subset construction.
+            unsafe { self.data.data.get_row_unchecked(row) }
+        } else {
+            self.data.get_row(row)?
+        };
         let mut res = true;
         for constraint in cs {
             match constraint {

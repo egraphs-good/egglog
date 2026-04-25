@@ -871,3 +871,24 @@ Just archived the new baseline `2026-04-25T06:57:30.csv` after the hardboiled im
 
 **Decision: KEPT.** `shard_id` is called for every hash table lookup and insertion in TupleIndex. Eliminating the bit arithmetic in the single-shard case is measurable.
 
+### Exp 58 — Skip stale check in get_if when stale_rows==0 (KEPT)
+
+**Hypothesis:** `get_if` calls `self.data.get_row(row)?` which does bounds-check + stale-check for every row evaluated against constraints. When `stale_rows == 0`, the stale check is always false. Adding a fast path that calls `get_row_unchecked` directly (no bounds check, no stale check) when stale_rows == 0 eliminates this overhead in the constraint evaluation path (`scan_generic_bounded` with non-empty constraints, called from FusedIntersect scan_project and `refine`).
+
+**What changed:** In `get_if`, added `if self.data.stale_rows == 0 { get_row_unchecked(row) }` fast path.
+
+**Result (vs `2026-04-25T06:57:30.csv` baseline; includes Exp 44-57), confirmed 2 runs:**
+
+| Benchmark | Baseline | After | Δ% |
+|---|---|---|---|
+| hardboiled_conv1d_32.egg | 0.303 | 0.293 | **-3.3%** |
+| hardboiled_conv1d_128.egg | 0.858 | 0.807 | **-5.9%** |
+| luminal-llama.egg | 0.119 | 0.117 | **-1.7%** |
+| python_array_optimize.egg | 0.952 | 0.918 | **-3.6%** |
+| cykjson.egg | 0.072 | 0.068 | **-5.6%** |
+| eggcc-extraction.egg | 0.275 | 0.262 | **-4.7%** |
+
+**Summary: 6 faster, 0 slower (consistent across 2 runs).**
+
+**Decision: KEPT.** The constraint evaluation path is used in `scan_project` for FusedIntersect (cover table has constraints). Removing the stale check per row gives a consistent benefit across all benchmarks.
+
