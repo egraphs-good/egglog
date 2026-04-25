@@ -367,13 +367,21 @@ impl Table for SortedWritesTable {
             hi.index(),
             self.data.data.len()
         );
-        // SAFETY: subsets are sorted, low must be at most hi, and hi is less
-        // than the length of the table.
-        subset.offsets(|row| unsafe {
-            if let Some(vals) = self.data.get_row_unchecked(row) {
-                f(row, vals)
-            }
-        })
+        if self.data.stale_rows == 0 {
+            // Fast path: no stale rows, skip is_stale check per row.
+            // SAFETY: subsets are sorted, low must be at most hi, and hi is less
+            // than the length of the table.
+            subset.offsets(|row| unsafe {
+                f(row, self.data.data.get_row_unchecked(row))
+            })
+        } else {
+            // SAFETY: same as above.
+            subset.offsets(|row| unsafe {
+                if let Some(vals) = self.data.get_row_unchecked(row) {
+                    f(row, vals)
+                }
+            })
+        }
     }
 
     fn scan_generic_bounded(
@@ -388,14 +396,25 @@ impl Table for SortedWritesTable {
         Self: Sized,
     {
         if cs.is_empty() {
-            subset
-                .iter_bounded(start.index(), start.index() + n, |row| {
-                    let Some(entry) = self.data.get_row(row) else {
-                        return;
-                    };
-                    f(row, entry);
-                })
-                .map(Offset::from_usize)
+            if self.data.stale_rows == 0 {
+                // Fast path: no stale rows, skip bounds check and is_stale check.
+                // SAFETY: subsets are valid (bounds within table), so all row IDs are in-bounds.
+                subset
+                    .iter_bounded(start.index(), start.index() + n, |row| {
+                        let entry = unsafe { self.data.data.get_row_unchecked(row) };
+                        f(row, entry);
+                    })
+                    .map(Offset::from_usize)
+            } else {
+                subset
+                    .iter_bounded(start.index(), start.index() + n, |row| {
+                        let Some(entry) = self.data.get_row(row) else {
+                            return;
+                        };
+                        f(row, entry);
+                    })
+                    .map(Offset::from_usize)
+            }
         } else {
             subset
                 .iter_bounded(start.index(), start.index() + n, |row| {

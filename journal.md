@@ -661,3 +661,24 @@ Just archived the new baseline `2026-04-25T06:57:30.csv` after the hardboiled im
 
 **Decision: KEPT.** Removing repeated vtable dispatch from tight loops is consistently positive, especially for cykjson (-6.9%) and eggcc-extraction (-4.0%).
 
+### Exp 48 — Skip stale-check in scan_generic and scan_generic_bounded when stale_rows==0 (KEPT)
+
+**Hypothesis:** In the two hot scan methods of `SortedWritesTable`, every row fetch includes an `is_stale()` check on `row[0]`. When `stale_rows == 0` (the common case after merging), this check is always false — a wasted load + branch. By adding a fast path that uses `get_row_unchecked` (skipping both bounds-check and stale-check), we save one memory read and one branch per row in all scan operations (index construction via `group_by_col`/`group_by_key`, and the `scan_project` calls in FusedIntersect).
+
+**What changed:** In `table/mod.rs`, `scan_generic` and `scan_generic_bounded` now check `self.data.stale_rows == 0` once before the inner loop. The fast path calls `self.data.data.get_row_unchecked(row)` unconditionally (no `Option` wrapper). The stale path remains unchanged as the slow-path fallback.
+
+**Result (vs `2026-04-25T06:57:30.csv` baseline; includes Exp 44+45+46+47), confirmed 2 runs:**
+
+| Benchmark | Baseline | After | Δ% |
+|---|---|---|---|
+| hardboiled_conv1d_32.egg | 0.303 | 0.302 | -0.3% (noise) |
+| hardboiled_conv1d_128.egg | 0.858 | 0.841 | **-2.0%** |
+| luminal-llama.egg | 0.119 | 0.118 | **-0.8%** |
+| python_array_optimize.egg | 0.952 | 0.914 | **-4.0%** |
+| cykjson.egg | 0.072 | 0.068 | **-5.6%** |
+| eggcc-extraction.egg | 0.275 | 0.269 | **-2.2%** |
+
+**Summary: 5 faster, 0 slower, 1 unchanged (consistent across 2 runs).**
+
+**Decision: KEPT.** The fast path is safe: subsets are validated before insertion, so all row IDs in a valid subset are in-bounds. The stale-check branch is entirely dead in the common case, so removing it per row compounds across all index construction and scan operations.
+
