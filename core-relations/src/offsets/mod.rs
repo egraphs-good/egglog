@@ -394,19 +394,36 @@ impl Subset {
                 sparse.retain(|row| row >= dense.start);
             }
             (Subset::Sparse(cur), SubsetRef::Sparse(other)) => {
-                // Two-pointer merge-intersect: O(M+N) instead of O(M log N).
+                // Hybrid intersect: O(1) fast paths for dense matches and already-past
+                // cases, falling back to binary search when other needs to advance.
                 let other_slice = other.inner();
                 let mut other_off = 0;
                 cur.retain(|rowid| {
-                    // Advance other_off past elements less than rowid.
-                    while other_off < other_slice.len() && other_slice[other_off] < rowid {
-                        other_off += 1;
+                    if other_off >= other_slice.len() {
+                        return false;
                     }
-                    if other_off < other_slice.len() && other_slice[other_off] == rowid {
+                    let cur_other = other_slice[other_off];
+                    if cur_other == rowid {
+                        // Dense match: advance and return true.
                         other_off += 1;
-                        true
-                    } else {
-                        false
+                        return true;
+                    }
+                    if cur_other > rowid {
+                        // cur is already past cur's rowid — other hasn't reached it.
+                        return false;
+                    }
+                    // cur_other < rowid: need to advance other_off. Use binary search
+                    // to jump directly rather than scanning linearly.
+                    let rel = other_slice[other_off..].binary_search(&rowid);
+                    match rel {
+                        Ok(i) => {
+                            other_off += i + 1;
+                            true
+                        }
+                        Err(i) => {
+                            other_off += i;
+                            false
+                        }
                     }
                 })
             }
