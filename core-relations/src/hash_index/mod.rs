@@ -221,19 +221,19 @@ impl IndexBase for ColumnIndex {
             self.add_row(key, src_id);
         }
     }
+
     fn for_each(&self, mut f: impl FnMut(&Self::Key, SubsetRef)) {
-        for (_, shard) in self.shards.iter() {
-            for (k, v) in shard.table.iter() {
-                f(k, v.as_ref(&shard.subsets));
-            }
+        for (subsets, (k, v)) in self
+            .shards
+            .iter()
+            .flat_map(|(_, shard)| shard.table.iter().map(|x| (&shard.subsets, x)))
+        {
+            f(k, v.as_ref(subsets));
         }
     }
+
     fn len(&self) -> usize {
-        if self.shards.len() == 1 {
-            self.shards[ShardId::new(0)].table.len()
-        } else {
-            self.shards.iter().map(|(_, shard)| shard.table.len()).sum()
-        }
+        self.shards.iter().map(|(_, shard)| shard.table.len()).sum()
     }
 
     fn merge_parallel(&mut self, cols: &[ColumnId], table: WrappedTableRef, subset: SubsetRef) {
@@ -458,14 +458,10 @@ impl IndexBase for TupleIndex {
     }
 
     fn len(&self) -> usize {
-        if self.shards.len() == 1 {
-            self.shards[ShardId::new(0)].table.hash.len()
-        } else {
-            self.shards
-                .iter()
-                .map(|(_, shard)| shard.table.hash.len())
-                .sum()
-        }
+        self.shards
+            .iter()
+            .map(|(_, shard)| shard.table.hash.len())
+            .sum()
     }
 
     fn merge_parallel(&mut self, cols: &[ColumnId], table: WrappedTableRef, subset: SubsetRef) {
