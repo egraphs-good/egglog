@@ -892,3 +892,24 @@ Just archived the new baseline `2026-04-25T06:57:30.csv` after the hardboiled im
 
 **Decision: KEPT.** The constraint evaluation path is used in `scan_project` for FusedIntersect (cover table has constraints). Removing the stale check per row gives a consistent benefit across all benchmarks.
 
+### Exp 59 — Use get_row_unchecked in TupleIndex::for_each (KEPT)
+
+**Hypothesis:** `TupleIndex::for_each` iterates hash table entries and calls `shard.table.keys.get_row(entry.key)` for each entry, which includes a bounds check. Since `entry.key` was stored during `add_row` (which only stores valid row ids), the bounds check is always going to succeed. Switching to `get_row_unchecked` eliminates this check.
+
+**What changed:** In `TupleIndex::for_each`, changed `shard.table.keys.get_row(entry.key)` to `shard.table.keys.get_row_unchecked(entry.key)` with a `// SAFETY` comment.
+
+**Result (vs `2026-04-25T06:57:30.csv` baseline; includes Exp 44-58), confirmed 1 run:**
+
+| Benchmark | Baseline | After | Δ% |
+|---|---|---|---|
+| hardboiled_conv1d_32.egg | 0.303 | 0.294 | **-3.0%** |
+| hardboiled_conv1d_128.egg | 0.858 | 0.816 | **-4.9%** |
+| luminal-llama.egg | 0.119 | 0.118 | **-0.8%** |
+| python_array_optimize.egg | 0.952 | 0.897 | **-5.8%** |
+| cykjson.egg | 0.072 | 0.067 | **-6.9%** |
+| eggcc-extraction.egg | 0.275 | 0.265 | **-3.6%** |
+
+**Summary: 6 faster, 0 slower.**
+
+**Decision: KEPT.** Removing the bounds check in the for_each hot path continues the trend of incremental gains across all benchmarks.
+

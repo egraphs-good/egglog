@@ -458,7 +458,8 @@ impl IndexBase for TupleIndex {
     fn for_each(&self, mut f: impl FnMut(&Self::Key, SubsetRef)) {
         for (_, shard) in self.shards.iter() {
             for entry in shard.table.hash.iter() {
-                let key = shard.table.keys.get_row(entry.key);
+                // SAFETY: entry.key was stored by add_row, so it is always in-bounds.
+                let key = unsafe { shard.table.keys.get_row_unchecked(entry.key) };
                 f(key, entry.vals.as_ref(&shard.subsets));
             }
         }
