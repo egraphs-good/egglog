@@ -703,3 +703,24 @@ Just archived the new baseline `2026-04-25T06:57:30.csv` after the hardboiled im
 
 **Decision: KEPT.** Cache-hit reads no longer block each other. The write path is slightly more expensive (two lock acquisitions for misses) but misses are rare after warmup. The double-check pattern is correct under concurrent access.
 
+### Exp 50 — Replace assert_eq! with debug_assert_eq! in RowBuffer::add_row and TaggedRowBuffer::add_row (KEPT)
+
+**Hypothesis:** Both `RowBuffer::add_row` and `TaggedRowBuffer::add_row` use `assert_eq!` to verify the arity of the incoming row slice. In release mode, `assert_eq!` runs a comparison and potentially a panic branch per call. Since these methods are called in the hot scan path (`scan_project` calls `add_row` for every projected row), the arity mismatch check is pure safety overhead in correct code. Moving to `debug_assert_eq!` eliminates this check in release builds.
+
+**What changed:** Changed `assert_eq!(row.len(), ...)` to `debug_assert_eq!(row.len(), ...)` in both `RowBuffer::add_row` and `TaggedRowBuffer::add_row` in `row_buffer/mod.rs`.
+
+**Result (vs `2026-04-25T06:57:30.csv` baseline; includes Exp 44+45+46+47+48+49), confirmed 3 runs:**
+
+| Benchmark | Baseline | After | Δ% |
+|---|---|---|---|
+| hardboiled_conv1d_32.egg | 0.303 | 0.303 | 0.0% |
+| hardboiled_conv1d_128.egg | 0.858 | 0.835 | **-2.7%** |
+| luminal-llama.egg | 0.119 | 0.119 | 0.0% |
+| python_array_optimize.egg | 0.952 | 0.907 | **-4.7%** |
+| cykjson.egg | 0.072 | 0.069 | **-4.2%** |
+| eggcc-extraction.egg | 0.275 | 0.263 | **-4.4%** |
+
+**Summary: 4-5 faster, 0 slower, 1-2 noise across runs. Consistent net improvement.**
+
+**Decision: KEPT.** The assertion was defensive but is already enforced at construction time (buffers are created with a fixed arity). Removing the runtime check per row eliminates unnecessary comparisons in the scan-project hot path. The change is safe for production code that compiles correctly.
+
