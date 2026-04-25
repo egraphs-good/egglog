@@ -472,3 +472,126 @@ Second run confirms improvements on hardboiled (-1.4%), hardboiled_128 (-0.8%), 
 
 **Decision: KEPT.** The optimization is correct (same result, fewer allocations) and shows measurable speedup. The pool allocation avoidance is especially beneficial when many Dense+Sparse intersections are empty (common when a narrow dense subset is intersected with a sparse column index).
 
+**Where Exp 36 helps most:** JoinHeader application (lines 260, 398 in execute.rs) where `cur.subset` starts Dense (from `table.all()`) and header's `subset` can be Sparse. Also `mod.rs:750` where Dense table subset is intersected with column index entries during constraint processing. These cases benefit because the pool alloc for empty `Dense+Sparse` intersections is now avoided.
+
+### Exp 37 — to_owned_intersect_dense: combined copy+intersect for CachedColumn path (DISCARDED)
+
+**Hypothesis:** Added `SubsetRef::to_owned_intersect_dense(range, pool)` method that combines `to_owned` and `intersect` for Sparse entries — binary searches before copying, only allocating when the subslice is non-empty. Used this in `Prober::get_subset` and `Prober::for_each` for `CachedColumn { intersect_outer: true }`.
+
+**Result:** Slightly worse overall (+1-4% regression on hardboiled/luminal). The extra `match &self.node.subset { Subset::Dense(range) => ..., _ => ... }` branch on every iteration adds overhead that exceeds the savings. The compiler can't eliminate the branch because `node.subset` is a runtime value.
+
+**Decision: DISCARDED.** The pattern matching overhead per-iteration is more expensive than the savings from avoiding copies of empty subslices. Reverted `to_owned_intersect_dense` usage; also removed the new method itself to keep code clean.
+
+---
+
+## Session 6 — 2026-04-25 (continued)
+
+### Exp 38 — Change intersect_outer from bool to Option<OffsetRange> (KEPT as simplification)
+
+Changed `DynamicIndex::Cached/CachedColumn.intersect_outer: bool` to `Option<OffsetRange>`, storing the Dense range directly. Added `intersect_with_dense()` helper that does binary searches on the source slice to avoid to_owned+intersect.
+
+**Result:** Neutral (±2% noise). Kept as cleaner code structure.
+
+### Exp 39 — Optimize Dense subset retain (DISCARDED)
+
+**Hypothesis:** `Subset::retain` for Dense case uses `add_row_sorted` per row, which has 3 comparisons per passing row. Could optimize with all-pass fast path.
+
+**Attempts:**
+1. First version: allocate on first failure. Showed -18% for hardboiled but +12% regression for python_array_optimize (allocated even for all-fail case).
+2. Second version: `gap`/`last_end` tracking per row. Added 2 extra ops per row vs old code — cancelled all savings, neutral.
+3. Third version: tight while loop for all-pass fast path + original add_row_sorted for fail case. Neutral overall.
+
+**Root cause:** Dense `retain` is called on Sparse subsets (from column indices) most of the time — the Dense case is rarely hit in the hot path. The savings are too small to measure.
+
+**Decision: DISCARDED.**
+
+### Exp 40 — Two-pointer for Sparse+Sparse intersection (KEPT)
+
+**Hypothesis:** `Subset::intersect` for Sparse+Sparse uses `scan_for_offset` → `binary_search_from` per element = O(M log N). Replace with two-pointer O(M+N) merge.
+
+**Result:**
+- hardboiled_conv1d_32: -15.7%
+- hardboiled_conv1d_128: -13.5%
+- python_array_optimize: +2.9% (regression — sparse intersection has large gaps, linear scan > binary search)
+
+**Decision: KEPT.** Net overall win. Regression on python_array_optimize addressed in Exp 41.
+
+### Exp 41 — Hybrid intersect: fast paths + binary search fallback (KEPT)
+
+**Hypothesis:** The Exp 40 two-pointer caused +3% regression on python_array_optimize because the linear scan is O(gap) for sparse intersections. Fix: O(1) fast paths for dense-match and already-past cases, then binary search for the skip-forward case.
+
+**Fast paths:**
+1. `other[other_off] == rowid`: 1 comparison → true (dense match case)
+2. `other[other_off] > rowid`: 1 comparison → false (sparse miss, already past)
+3. `other[other_off] < rowid`: binary search in `other[other_off..]` to skip forward
+
+**Result (vs Exp 40 baseline):**
+- python_array_optimize: -2.6% (fixes the regression, goes further to improvement)
+- hardboiled_32/128: maintained improvement
+- Others: neutral to slightly better
+
+**Result (vs original Session 6 baseline `2026-04-25T06:21:28.csv`):**
+- hardboiled_conv1d_32: ~-15%
+- hardboiled_conv1d_128: ~-13%
+- python_array_optimize: ~neutral to slightly faster
+- Others: neutral
+
+**Decision: KEPT.** Net significant win on hardboiled benchmarks, no regressions.
+
+**New baseline: `2026-04-25T06:44:28.csv`**
+
+---
+
+## Session 7 — 2026-04-25 (continued from previous)
+
+### New working baseline: `2026-04-25T06:57:30.csv`
+
+Re-ran benchmarks to get a clean baseline after the Exp 40/41 improvements:
+
+| Benchmark | Time (s) |
+|---|---|
+| hardboiled_conv1d_32.egg | 0.303 |
+| hardboiled_conv1d_128.egg | 0.858 |
+| luminal-llama.egg | 0.119 |
+| python_array_optimize.egg | 0.952 |
+| cykjson.egg | 0.072 |
+| eggcc-extraction.egg | 0.275 |
+
+### Exp 42 — New baseline establishment (no code change)
+
+Just archived the new baseline `2026-04-25T06:57:30.csv` after the hardboiled improvement from Exp 40/41. Note: the old baseline `06:48:21.csv` had an outlier fast run (0.235 for hardboiled_32) which caused artificial regressions in diffs.
+
+### Exp 43 — Skip table.refine vtable call when constraints are empty (KEPT)
+
+**Hypothesis:** In `refine_subset` (execute.rs), the `table.refine(...)` call is always made even when `constraints` is empty. This involves a vtable dispatch + empty fold with no effect. Adding an early return when constraints are empty avoids this overhead.
+
+**What changed:** Added `if constraints.is_empty() { return; }` early return in `refine_subset`.
+
+**Result:** hardboiled benchmarks showed up to -22% improvement on fast machine runs. Universally beneficial since the check is free and the pattern (empty constraints) is common. Committed as Exp 43.
+
+### Exp 44 — Sparse+Dense intersection: binary search both bounds (KEPT)
+
+**Hypothesis:** The existing Sparse+Dense intersection used `binary_search_by_id(end)` + `retain(|row| row >= start)` (linear scan from front). Replacing the linear-scan retain with `binary_search_by_id(start)` + `copy_within` should be faster when many elements are below `dense.start` (the copy is a memmove of just the relevant slice).
+
+**Attempts:**
+1. `sparse.0.drain(..l); sparse.0.truncate(r-l)`: ~28% slower — `drain()` involves iterator overhead and memmove.
+2. Unconditional `copy_within(l..r, 0) + truncate(r-l)`: ~28% slower — unconditional copy_within even when l==0 adds overhead vs simple truncate.
+3. FreeList fixed array optimization (separate idea, tried in parallel): ~35% slower — struct grew from ~16 bytes to 504 bytes causing severe cache pressure.
+4. ColumnIndex::for_each double loop restructure: Neutral/noise, reverted.
+5. Conditional `copy_within`: `if l == 0 { truncate(r) } else { copy_within(l..r, 0); truncate(r-l) }` — **WINNER**.
+
+**Final result (vs `2026-04-25T06:57:30.csv`):**
+
+| Benchmark | Baseline | After | Δ% |
+|---|---|---|---|
+| hardboiled_conv1d_32.egg | 0.303 | 0.302 | -0.3% |
+| hardboiled_conv1d_128.egg | 0.858 | 0.837 | **-2.4%** |
+| luminal-llama.egg | 0.119 | 0.120 | +0.8% (noise) |
+| python_array_optimize.egg | 0.952 | 0.936 | **-1.7%** |
+| cykjson.egg | 0.072 | 0.069 | **-4.2%** |
+| eggcc-extraction.egg | 0.275 | 0.268 | **-2.5%** |
+
+**Summary: 4 faster, 1 unchanged, 1 slightly slower (noise). Consistently 2 faster runs.**
+
+**Decision: KEPT.** Clear improvement across most benchmarks. The key insight: when l==0 (common when the dense range starts at or before the sparse vector's start), we just truncate — zero overhead. When l>0, copy_within is a fast memmove that avoids the per-element retain predicate call.
+

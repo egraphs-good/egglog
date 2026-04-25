@@ -389,9 +389,15 @@ impl Subset {
                 }
             }
             (Subset::Sparse(sparse), SubsetRef::Dense(dense)) => {
+                // Binary search for both bounds; avoid copy_within if no prefix to remove.
+                let l = sparse.slice().binary_search_by_id(dense.start);
                 let r = sparse.slice().binary_search_by_id(dense.end);
-                sparse.0.truncate(r);
-                sparse.retain(|row| row >= dense.start);
+                if l == 0 {
+                    sparse.0.truncate(r);
+                } else {
+                    sparse.0.copy_within(l..r, 0);
+                    sparse.0.truncate(r - l);
+                }
             }
             (Subset::Sparse(cur), SubsetRef::Sparse(other)) => {
                 // Hybrid intersect: O(1) fast paths for dense matches and already-past
