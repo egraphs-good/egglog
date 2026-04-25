@@ -986,42 +986,42 @@ impl<'a> JoinState<'a> {
                     let table = info.table.as_ref();
                     let has_stale = table.has_stale_rows();
                     let mut updates = FrameUpdates::with_capacity(cmp::min(chunk_size, cur_size));
-                    with_pool_set(|ps| {
-                        prober.for_each(|val, x| {
-                            updates.push_binding(*var, val[0]);
-                            if x.size() <= 16 {
-                                let sub =
-                                    refine_subset(x.to_owned(&ps.get_pool()), &a.cs, &table, has_stale);
-                                if sub.is_empty() {
-                                    updates.rollback();
-                                    return;
-                                }
-                                // Avoid Arc<TrieNode> allocation for Dense subsets.
-                                match sub {
-                                    Subset::Dense(range) => {
-                                        updates.refine_atom_dense(a.atom, range);
-                                    }
-                                    sub => {
-                                        updates.refine_atom(a.atom, Arc::new(TrieNode::new(sub)));
-                                    }
-                                }
-                            } else {
-                                let node = prober
-                                    .node
-                                    .get_cached_trie_node(a.column, val[0], info, || {
-                                        refine_subset(x.to_owned(&ps.get_pool()), &a.cs, &table, has_stale)
-                                    });
-                                if node.subset.is_empty() {
-                                    updates.rollback();
-                                    return;
-                                }
-                                updates.refine_atom(a.atom, node);
+                    // Hoist pool clone outside the hot loop to avoid per-iteration Arc increment.
+                    let pool = with_pool_set(|ps| ps.get_pool());
+                    prober.for_each(|val, x| {
+                        updates.push_binding(*var, val[0]);
+                        if x.size() <= 16 {
+                            let sub =
+                                refine_subset(x.to_owned(&pool), &a.cs, &table, has_stale);
+                            if sub.is_empty() {
+                                updates.rollback();
+                                return;
                             }
-                            updates.finish_frame();
-                            if updates.frames() >= chunk_size {
-                                drain_updates!(updates);
+                            // Avoid Arc<TrieNode> allocation for Dense subsets.
+                            match sub {
+                                Subset::Dense(range) => {
+                                    updates.refine_atom_dense(a.atom, range);
+                                }
+                                sub => {
+                                    updates.refine_atom(a.atom, Arc::new(TrieNode::new(sub)));
+                                }
                             }
-                        })
+                        } else {
+                            let node = prober
+                                .node
+                                .get_cached_trie_node(a.column, val[0], info, || {
+                                    refine_subset(x.to_owned(&pool), &a.cs, &table, has_stale)
+                                });
+                            if node.subset.is_empty() {
+                                updates.rollback();
+                                return;
+                            }
+                            updates.refine_atom(a.atom, node);
+                        }
+                        updates.finish_frame();
+                        if updates.frames() >= chunk_size {
+                            drain_updates!(updates);
+                        }
                     });
                     drain_updates!(updates);
                     binding_info.move_back(a.atom, prober);
@@ -1046,85 +1046,85 @@ impl<'a> JoinState<'a> {
                     let small_table = small_info.table.as_ref();
                     let small_has_stale = small_table.has_stale_rows();
                     let mut updates = FrameUpdates::with_capacity(cmp::min(chunk_size, cur_size));
-                    with_pool_set(|ps| {
-                        smaller.for_each(|val, small_sub| {
-                            if let Some(large_sub) = larger.get_subset(val) {
-                                updates.push_binding(*var, val[0]);
-                                if small_sub.size() <= 16 {
-                                    let small_sub = refine_subset(
-                                        small_sub.to_owned(&ps.get_pool()),
-                                        &smaller_scan.cs,
-                                        &small_table,
-                                        small_has_stale,
-                                    );
-                                    if small_sub.is_empty() {
-                                        updates.rollback();
-                                        return;
-                                    }
-                                    // Avoid Arc<TrieNode> for Dense subsets.
-                                    match small_sub {
-                                        Subset::Dense(range) => {
-                                            updates.refine_atom_dense(smaller_atom, range);
-                                        }
-                                        small_sub => {
-                                            updates.refine_atom(smaller_atom, Arc::new(TrieNode::new(small_sub)));
-                                        }
-                                    }
-                                } else {
-                                    let smaller_node = smaller.node.get_cached_trie_node(
-                                        smaller_scan.column,
-                                        val[0],
-                                        small_info,
-                                        || {
-                                            refine_subset(
-                                                small_sub.to_owned(&ps.get_pool()),
-                                                &smaller_scan.cs,
-                                                &small_table,
-                                                small_has_stale,
-                                            )
-                                        },
-                                    );
-                                    if smaller_node.subset.is_empty() {
-                                        updates.rollback();
-                                        return;
-                                    }
-                                    updates.refine_atom(smaller_atom, smaller_node);
+                    // Hoist pool clone outside the hot loop to avoid per-iteration Arc increment.
+                    let pool = with_pool_set(|ps| ps.get_pool());
+                    smaller.for_each(|val, small_sub| {
+                        if let Some(large_sub) = larger.get_subset(val) {
+                            updates.push_binding(*var, val[0]);
+                            if small_sub.size() <= 16 {
+                                let small_sub = refine_subset(
+                                    small_sub.to_owned(&pool),
+                                    &smaller_scan.cs,
+                                    &small_table,
+                                    small_has_stale,
+                                );
+                                if small_sub.is_empty() {
+                                    updates.rollback();
+                                    return;
                                 }
-                                if large_sub.size() <= 16 {
-                                    let large_sub =
-                                        refine_subset(large_sub, &larger_scan.cs, &large_table, large_has_stale);
-                                    if large_sub.is_empty() {
-                                        updates.rollback();
-                                        return;
+                                // Avoid Arc<TrieNode> for Dense subsets.
+                                match small_sub {
+                                    Subset::Dense(range) => {
+                                        updates.refine_atom_dense(smaller_atom, range);
                                     }
-                                    // Avoid Arc<TrieNode> for Dense subsets.
-                                    match large_sub {
-                                        Subset::Dense(range) => {
-                                            updates.refine_atom_dense(larger_atom, range);
-                                        }
-                                        large_sub => {
-                                            updates.refine_atom(larger_atom, Arc::new(TrieNode::new(large_sub)));
-                                        }
+                                    small_sub => {
+                                        updates.refine_atom(smaller_atom, Arc::new(TrieNode::new(small_sub)));
                                     }
-                                } else {
-                                    let larger_node = larger.node.get_cached_trie_node(
-                                        larger_scan.column,
-                                        val[0],
-                                        large_info,
-                                        || refine_subset(large_sub, &larger_scan.cs, &large_table, large_has_stale),
-                                    );
-                                    if larger_node.subset.is_empty() {
-                                        updates.rollback();
-                                        return;
-                                    }
-                                    updates.refine_atom(larger_atom, larger_node);
                                 }
-                                updates.finish_frame();
-                                if updates.frames() >= chunk_size {
-                                    drain_updates_parallel!(updates);
+                            } else {
+                                let smaller_node = smaller.node.get_cached_trie_node(
+                                    smaller_scan.column,
+                                    val[0],
+                                    small_info,
+                                    || {
+                                        refine_subset(
+                                            small_sub.to_owned(&pool),
+                                            &smaller_scan.cs,
+                                            &small_table,
+                                            small_has_stale,
+                                        )
+                                    },
+                                );
+                                if smaller_node.subset.is_empty() {
+                                    updates.rollback();
+                                    return;
                                 }
+                                updates.refine_atom(smaller_atom, smaller_node);
                             }
-                        });
+                            if large_sub.size() <= 16 {
+                                let large_sub =
+                                    refine_subset(large_sub, &larger_scan.cs, &large_table, large_has_stale);
+                                if large_sub.is_empty() {
+                                    updates.rollback();
+                                    return;
+                                }
+                                // Avoid Arc<TrieNode> for Dense subsets.
+                                match large_sub {
+                                    Subset::Dense(range) => {
+                                        updates.refine_atom_dense(larger_atom, range);
+                                    }
+                                    large_sub => {
+                                        updates.refine_atom(larger_atom, Arc::new(TrieNode::new(large_sub)));
+                                    }
+                                }
+                            } else {
+                                let larger_node = larger.node.get_cached_trie_node(
+                                    larger_scan.column,
+                                    val[0],
+                                    large_info,
+                                    || refine_subset(large_sub, &larger_scan.cs, &large_table, large_has_stale),
+                                );
+                                if larger_node.subset.is_empty() {
+                                    updates.rollback();
+                                    return;
+                                }
+                                updates.refine_atom(larger_atom, larger_node);
+                            }
+                            updates.finish_frame();
+                            if updates.frames() >= chunk_size {
+                                drain_updates_parallel!(updates);
+                            }
+                        }
                     });
                     drain_updates!(updates);
 
@@ -1165,90 +1165,91 @@ impl<'a> JoinState<'a> {
                         // Smallest leads the scan
                         let mut updates =
                             FrameUpdates::with_capacity(cmp::min(chunk_size, cur_size));
+                        // Hoist pool clone outside the hot loop to avoid per-iteration
+                        // thread-local access and Arc increment.
+                        let pool = with_pool_set(|ps| ps.get_pool());
                         probers[smallest].for_each(|key, sub| {
-                            with_pool_set(|ps| {
-                                updates.push_binding(*var, key[0]);
-                                for (i, scan) in rest.iter().enumerate() {
-                                    if i == smallest {
-                                        continue;
-                                    }
-                                    if let Some(sub) = probers[i].get_subset(key) {
-                                        let table = self.db.tables[atoms[rest[i].atom].table]
-                                            .table
-                                            .as_ref();
-                                        if sub.size() <= 16 {
-                                            let sub = refine_subset(sub, &rest[i].cs, &table, rest_has_stale[i]);
-                                            if sub.is_empty() {
-                                                updates.rollback();
-                                                return;
+                            updates.push_binding(*var, key[0]);
+                            for (i, scan) in rest.iter().enumerate() {
+                                if i == smallest {
+                                    continue;
+                                }
+                                if let Some(sub) = probers[i].get_subset(key) {
+                                    let table = self.db.tables[atoms[rest[i].atom].table]
+                                        .table
+                                        .as_ref();
+                                    if sub.size() <= 16 {
+                                        let sub = refine_subset(sub, &rest[i].cs, &table, rest_has_stale[i]);
+                                        if sub.is_empty() {
+                                            updates.rollback();
+                                            return;
+                                        }
+                                        match sub {
+                                            Subset::Dense(range) => {
+                                                updates.refine_atom_dense(scan.atom, range);
                                             }
-                                            match sub {
-                                                Subset::Dense(range) => {
-                                                    updates.refine_atom_dense(scan.atom, range);
-                                                }
-                                                sub => {
-                                                    updates.refine_atom(scan.atom, Arc::new(TrieNode::new(sub)));
-                                                }
+                                            sub => {
+                                                updates.refine_atom(scan.atom, Arc::new(TrieNode::new(sub)));
                                             }
-                                        } else {
-                                            let node = probers[i].node.get_cached_trie_node(
-                                                scan.column,
-                                                key[0],
-                                                &self.db.tables[atoms[scan.atom].table],
-                                                || refine_subset(sub, &rest[i].cs, &table, rest_has_stale[i]),
-                                            );
-                                            if node.subset.is_empty() {
-                                                updates.rollback();
-                                                return;
-                                            }
-                                            updates.refine_atom(scan.atom, node);
                                         }
                                     } else {
-                                        updates.rollback();
-                                        // Empty intersection.
-                                        return;
-                                    }
-                                }
-                                if sub.size() <= 16 {
-                                    let main_sub = refine_subset(
-                                        sub.to_owned(&ps.get_pool()),
-                                        &main_spec.cs,
-                                        &main_spec_table,
-                                        main_spec_has_stale,
-                                    );
-                                    if main_sub.is_empty() {
-                                        updates.rollback();
-                                        return;
-                                    }
-                                    match main_sub {
-                                        Subset::Dense(range) => {
-                                            updates.refine_atom_dense(main_spec.atom, range);
+                                        let node = probers[i].node.get_cached_trie_node(
+                                            scan.column,
+                                            key[0],
+                                            &self.db.tables[atoms[scan.atom].table],
+                                            || refine_subset(sub, &rest[i].cs, &table, rest_has_stale[i]),
+                                        );
+                                        if node.subset.is_empty() {
+                                            updates.rollback();
+                                            return;
                                         }
-                                        main_sub => {
-                                            updates.refine_atom(main_spec.atom, Arc::new(TrieNode::new(main_sub)));
-                                        }
+                                        updates.refine_atom(scan.atom, node);
                                     }
                                 } else {
-                                    let main_node = probers[smallest].node.get_cached_trie_node(
-                                        main_spec.column,
-                                        key[0],
-                                        main_spec_info,
-                                        || {
-                                            let sub = sub.to_owned(&ps.get_pool());
-                                            refine_subset(sub, &main_spec.cs, &main_spec_table, main_spec_has_stale)
-                                        },
-                                    );
-                                    if main_node.subset.is_empty() {
-                                        updates.rollback();
-                                        return;
+                                    updates.rollback();
+                                    // Empty intersection.
+                                    return;
+                                }
+                            }
+                            if sub.size() <= 16 {
+                                let main_sub = refine_subset(
+                                    sub.to_owned(&pool),
+                                    &main_spec.cs,
+                                    &main_spec_table,
+                                    main_spec_has_stale,
+                                );
+                                if main_sub.is_empty() {
+                                    updates.rollback();
+                                    return;
+                                }
+                                match main_sub {
+                                    Subset::Dense(range) => {
+                                        updates.refine_atom_dense(main_spec.atom, range);
                                     }
-                                    updates.refine_atom(main_spec.atom, main_node);
+                                    main_sub => {
+                                        updates.refine_atom(main_spec.atom, Arc::new(TrieNode::new(main_sub)));
+                                    }
                                 }
-                                updates.finish_frame();
-                                if updates.frames() >= chunk_size {
-                                    drain_updates_parallel!(updates);
+                            } else {
+                                let main_node = probers[smallest].node.get_cached_trie_node(
+                                    main_spec.column,
+                                    key[0],
+                                    main_spec_info,
+                                    || {
+                                        let sub = sub.to_owned(&pool);
+                                        refine_subset(sub, &main_spec.cs, &main_spec_table, main_spec_has_stale)
+                                    },
+                                );
+                                if main_node.subset.is_empty() {
+                                    updates.rollback();
+                                    return;
                                 }
-                            })
+                                updates.refine_atom(main_spec.atom, main_node);
+                            }
+                            updates.finish_frame();
+                            if updates.frames() >= chunk_size {
+                                drain_updates_parallel!(updates);
+                            }
                         });
                         drain_updates!(updates);
                     }
