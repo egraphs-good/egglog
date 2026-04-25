@@ -3,7 +3,7 @@
 use std::{
     cmp, iter, mem,
     ops::Range,
-    sync::{Arc, OnceLock, atomic::AtomicUsize},
+    sync::{Arc, Mutex, OnceLock, atomic::AtomicUsize},
 };
 
 use crate::{
@@ -16,7 +16,6 @@ use crate::{
 use crossbeam::utils::CachePadded;
 use dashmap::mapref::entry::Entry;
 use dashmap::mapref::one::RefMut;
-use egglog_concurrency::ReadOptimizedLock;
 use egglog_reports::{ReportLevel, RuleReport, RuleSetReport};
 use smallvec::SmallVec;
 use web_time::Instant;
@@ -528,7 +527,8 @@ type ColumnIndexes = IdVec<ColumnId, OnceLock<Arc<ColumnIndex>>>;
 
 // pub(crate) type ChildrenMaps = IdVec<ColumnId, OnceLock<Arc<DashMap<Value, Arc<TrieNode>>>>>;
 // pub(crate) type ChildrenMaps = IdVec<ColumnId, Arc<DashMap<Value, Arc<TrieNode>>>>;
-pub(crate) type ChildrenMaps = IdVec<ColumnId, ReadOptimizedLock<HashMap<Value, Arc<TrieNode>>>>;
+// pub(crate) type ChildrenMaps = IdVec<ColumnId, ReadOptimizedLock<HashMap<Value, Arc<TrieNode>>>>;
+pub(crate) type ChildrenMaps = IdVec<ColumnId, Mutex<HashMap<Value, Arc<TrieNode>>>>;
 
 /// Information about the current subset of an atom's relation that is being considered, along with
 /// lazily-initialized, cached indexes on that subset.
@@ -588,22 +588,16 @@ impl TrieNode {
     ) -> Arc<TrieNode> {
         let map = &self.cached_children.get_or_init(|| {
             let mut vec: Pooled<ChildrenMaps> = with_pool_set(|ps| ps.get());
-            vec.resize_with(info.spec.arity(), ReadOptimizedLock::default);
+            vec.resize_with(info.spec.arity(), || Mutex::new(HashMap::default()));
             vec
         })[col];
-        let guard = map.read();
+        let mut guard = map.lock().unwrap();
         if let Some(node) = guard.get(&value) {
-            node.clone()
-        } else {
-            drop(guard);
-            let mut guard = map.lock();
-            if let Some(node) = guard.get(&value) {
-                return node.clone();
-            }
-            let new_node = Arc::new(TrieNode::new(sub()));
-            guard.insert(value, new_node.clone());
-            new_node
+            return node.clone();
         }
+        let new_node = Arc::new(TrieNode::new(sub()));
+        guard.insert(value, new_node.clone());
+        new_node
     }
 }
 
