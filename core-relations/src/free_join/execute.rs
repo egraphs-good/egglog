@@ -892,7 +892,7 @@ impl<'a> JoinState<'a> {
                 if self.exec_state.should_stop() {
                     return;
                 }
-                if cur == 0 || cur == 1 {
+                if (cur == 0 || cur == 1) && action_buf.supports_parallel_drain() {
                     drain_updates_parallel!($updates)
                 } else {
                     $updates.drain(|update| match update {
@@ -1662,6 +1662,14 @@ trait ActionBuffer<'state, A: NumericId>: Send {
     fn morsel_size(&mut self, _level: usize, _total: usize) -> usize {
         256
     }
+
+    /// Whether this buffer supports parallel drain operations.
+    ///
+    /// When `false`, `drain_updates` will use the serial path even at `cur <= 1`,
+    /// avoiding the per-frame `ExecutionState::clone()` overhead.
+    fn supports_parallel_drain(&self) -> bool {
+        true
+    }
 }
 
 /// The action buffer we use if we are executing in a single-threaded
@@ -1718,6 +1726,10 @@ impl<'a, 'outer: 'a> ActionBuffer<'a, ActionId> for InPlaceActionBuffer<'outer> 
         work: impl for<'b> FnOnce(BorrowedLocalState<'b>, &mut Self) + Send + 'a,
     ) {
         work(local, self)
+    }
+
+    fn supports_parallel_drain(&self) -> bool {
+        false
     }
 }
 

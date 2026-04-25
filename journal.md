@@ -1087,6 +1087,27 @@ Just archived the new baseline `2026-04-25T06:57:30.csv` after the hardboiled im
 
 **Decision: KEPT.** The direct nested loop is simpler and consistently faster.
 
+### Exp 69 — Avoid per-frame ExecutionState::clone() in serial drain path (KEPT)
+
+**Hypothesis:** In `drain_updates!`, when `cur == 0 || cur == 1`, the code routes through `drain_updates_parallel!` even for single-threaded execution (`InPlaceActionBuffer`). Inside `drain_updates_parallel!`, two `ExecutionState::clone()` calls are made before the drain loop, and one more clone per `EndFrame` inside the loop. Each `ExecutionState::clone()` allocates fresh `Box<Buffer>` handles for every table in the rule plus atomic increments. For `InPlaceActionBuffer`, the parallel drain is never actually parallel (it calls `recur` which just calls work inline), so all these clones are wasted. The fix: add a `supports_parallel_drain() -> bool` method to `ActionBuffer`, defaulting to `true`, overriding to `false` in `InPlaceActionBuffer`. The `drain_updates!` macro checks this flag and uses the cheaper serial path (no clones) when false.
+
+**What changed:** Added `fn supports_parallel_drain(&self) -> bool { true }` to the `ActionBuffer` trait. `InPlaceActionBuffer` overrides it to return `false`. In `drain_updates!`, changed the condition from `if cur == 0 || cur == 1` to `if (cur == 0 || cur == 1) && action_buf.supports_parallel_drain()`.
+
+**Result (vs `2026-04-25T06:57:30.csv` baseline; includes Exp 44-68), 2 runs:**
+
+| Benchmark | Baseline | After | Δ% |
+|---|---|---|---|
+| hardboiled_conv1d_32.egg | 0.303 | 0.288 | **-5.0%** |
+| hardboiled_conv1d_128.egg | 0.858 | 0.786-0.807 | **-5.9 to -8.4%** |
+| luminal-llama.egg | 0.119 | 0.118 | **-0.8%** |
+| python_array_optimize.egg | 0.952 | 0.857-0.888 | **-6.7 to -10.0%** |
+| cykjson.egg | 0.072 | 0.060 | **-16.7%** |
+| eggcc-extraction.egg | 0.275 | 0.257-0.269 | **-2.2 to -6.5%** |
+
+**Summary: 6 faster, 0 slower, consistent across 2 runs.**
+
+**Decision: KEPT.** Eliminating per-frame `ExecutionState::clone()` for serial execution gives consistent wins across all benchmarks. The biggest gains on python_array_optimize (-10%) and hardboiled_128 (-8.4%), suggesting these rules have many level-0/1 frames.
+
 ### Exp 68 — Reuse Arc<TrieNode> in insert_subset via Arc::get_mut + reset() (KEPT)
 
 **Hypothesis:** After a recursive `run_plan` call triggered by `EndFrame`, `move_back` returns the `Arc<TrieNode>` into `binding_info.subsets[atom]` with refcount == 1. When the next `RefineAtomDense` for the same atom fires, `insert_subset` currently does `Arc::new(TrieNode::new(subset))` — allocating a new Arc. If we detect exclusive ownership via `Arc::get_mut`, we can in-place reset the existing node (clearing `OnceLock` caches via `.take()`) instead of allocating.
