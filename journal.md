@@ -808,3 +808,24 @@ Just archived the new baseline `2026-04-25T06:57:30.csv` after the hardboiled im
 
 **Decision: KEPT.** The scan_generic bounds check protects the unsafe `get_row_unchecked` call but the bounds are guaranteed by subset construction logic. Moving to `debug_assert!` keeps the safety check in debug builds while eliminating it in release.
 
+### Exp 55 — Single-shard fast path in ColumnIndex::for_each (KEPT)
+
+**Hypothesis:** `ColumnIndex::for_each` uses a `flat_map` over shards to iterate all entries. With `n_shards == 1` (single-threaded case, from `num_shards()`), `flat_map` over one element incurs unnecessary iterator machinery — it still constructs a `FlatMap` iterator and handles the general n-shard case. Adding a fast path that directly iterates the single shard's `IndexMap` avoids this overhead.
+
+**What changed:** In `ColumnIndex::for_each`, added a check `if self.shards.len() == 1` to directly iterate `shards[ShardId::new(0)].table.iter()`. The general multi-shard path is unchanged.
+
+**Result (vs `2026-04-25T06:57:30.csv` baseline; includes Exp 44-54), confirmed 2 runs:**
+
+| Benchmark | Baseline | After | Δ% |
+|---|---|---|---|
+| hardboiled_conv1d_32.egg | 0.303 | 0.294 | **-3.0%** |
+| hardboiled_conv1d_128.egg | 0.858 | 0.819 | **-4.5%** |
+| luminal-llama.egg | 0.119 | 0.116 | **-2.5%** |
+| python_array_optimize.egg | 0.952 | 0.907 | **-4.7%** |
+| cykjson.egg | 0.072 | 0.068 | **-5.6%** |
+| eggcc-extraction.egg | 0.275 | 0.267 | **-2.9%** |
+
+**Summary: 6 faster, 0 slower (consistent across 2 runs).**
+
+**Decision: KEPT.** The for_each is in the hot path of the `[a]` single-scan case (the most common join pattern). Eliminating flat_map overhead compounds over many iterations.
+
