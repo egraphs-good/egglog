@@ -1139,7 +1139,7 @@ impl<'a> JoinState<'a> {
                             }
                             updates.finish_frame();
                             if updates.frames() >= chunk_size {
-                                drain_updates_parallel!(updates);
+                                drain_updates!(updates);
                             }
                         }
                     });
@@ -1265,7 +1265,7 @@ impl<'a> JoinState<'a> {
                             }
                             updates.finish_frame();
                             if updates.frames() >= chunk_size {
-                                drain_updates_parallel!(updates);
+                                drain_updates!(updates);
                             }
                         });
                         drain_updates!(updates);
@@ -1309,7 +1309,7 @@ impl<'a> JoinState<'a> {
                         }
                         updates.finish_frame();
                         if updates.frames() >= chunk_size {
-                            drain_updates_parallel!(updates);
+                            drain_updates!(updates);
                         }
                     }
                     if let Some(next) = next {
@@ -1420,7 +1420,7 @@ impl<'a> JoinState<'a> {
                         }
                         updates.finish_frame();
                         if updates.frames() >= chunk_size {
-                            drain_updates_parallel!(updates);
+                            drain_updates!(updates);
                         }
                     }
                     if let Some(next) = next {
@@ -1593,7 +1593,7 @@ impl<'a> JoinState<'a> {
                                         updates.rollback();
                                     }
                                     if updates.frames() >= chunk_size {
-                                        drain_updates_parallel!(updates);
+                                        drain_updates!(updates);
                                     }
                                 }
                             }

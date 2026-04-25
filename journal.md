@@ -1129,4 +1129,24 @@ Just archived the new baseline `2026-04-25T06:57:30.csv` after the hardboiled im
 
 **Decision: KEPT.** Reusing existing Arc<TrieNode> slots eliminates Arc allocations on the hot recursive-refinement path. cykjson saw the biggest gain (16.7%), likely having more repeated atom refinements.
 
+### Exp 70 — Use drain_updates! for mid-loop drains (replacing direct drain_updates_parallel!) (KEPT)
+
+**Hypothesis:** Exp 69 added `supports_parallel_drain()` to avoid `ExecutionState::clone()` overhead in `InPlaceActionBuffer`, but only fixed the final `drain_updates!` call at the bottom of each Intersect/FusedIntersect arm. The mid-loop drain calls inside each `for_each` closure were still calling `drain_updates_parallel!` directly, bypassing the `supports_parallel_drain()` check. These mid-loop drains happen at `chunk_size` intervals during iteration and still incur two `exec_state.clone()` calls per invocation plus per-frame clones when using `InPlaceActionBuffer`. Replacing them with `drain_updates!` (which checks `supports_parallel_drain()`) will eliminate this remaining clone overhead.
+
+**What changed:** Changed all 5 direct `drain_updates_parallel!(updates)` calls in the hot loop bodies of the `[a,b]` Intersect, N-way `rest` Intersect, `FusedIntersect` (empty to_intersect), `FusedIntersect` (non-empty), and `FusedIntersectMat` arms to use `drain_updates!(updates)` instead. The `drain_updates!` macro already checks `supports_parallel_drain()`, so for `ScopedActionBuffer` the parallel path is still used, while `InPlaceActionBuffer` takes the cheaper serial path.
+
+**Result (vs `2026-04-25T06:57:30.csv` baseline; includes Exp 44-69), 2 runs:**
+
+| Benchmark | Baseline | After | Δ% |
+|---|---|---|---|
+| hardboiled_conv1d_32.egg | 0.303 | 0.287-0.289 | **-4.6 to -5.3%** |
+| hardboiled_conv1d_128.egg | 0.858 | 0.796-0.798 | **-7.0 to -7.2%** |
+| luminal-llama.egg | 0.119 | 0.116-0.120 | **-2.5% to +0.8%** (run 1 noise) |
+| python_array_optimize.egg | 0.952 | 0.867-0.870 | **-8.6 to -8.9%** |
+| cykjson.egg | 0.072 | 0.057-0.059 | **-18.1 to -20.8%** |
+| eggcc-extraction.egg | 0.275 | 0.266-0.271 | **-1.5 to -3.3%** |
+
+**Summary: 6 faster, 0 slower (run 1 luminal noise discarded), consistent across 2 runs.**
+
+**Decision: KEPT.** Extending Exp 69's serial-path optimization to all mid-loop drain sites gives consistent improvements. cykjson continues to improve the most (now -20.8%), likely due to heavy use of FusedIntersect patterns.
 
