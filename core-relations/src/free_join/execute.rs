@@ -1050,16 +1050,28 @@ impl<'a> JoinState<'a> {
                         smaller.for_each(|val, small_sub| {
                             if let Some(large_sub) = larger.get_subset(val) {
                                 updates.push_binding(*var, val[0]);
-                                let smaller_node = if small_sub.size() <= 16 {
+                                if small_sub.size() <= 16 {
                                     let small_sub = refine_subset(
                                         small_sub.to_owned(&ps.get_pool()),
                                         &smaller_scan.cs,
                                         &small_table,
                                         small_has_stale,
                                     );
-                                    Arc::new(TrieNode::new(small_sub))
+                                    if small_sub.is_empty() {
+                                        updates.rollback();
+                                        return;
+                                    }
+                                    // Avoid Arc<TrieNode> for Dense subsets.
+                                    match small_sub {
+                                        Subset::Dense(range) => {
+                                            updates.refine_atom_dense(smaller_atom, range);
+                                        }
+                                        small_sub => {
+                                            updates.refine_atom(smaller_atom, Arc::new(TrieNode::new(small_sub)));
+                                        }
+                                    }
                                 } else {
-                                    smaller.node.get_cached_trie_node(
+                                    let smaller_node = smaller.node.get_cached_trie_node(
                                         smaller_scan.column,
                                         val[0],
                                         small_info,
@@ -1071,30 +1083,42 @@ impl<'a> JoinState<'a> {
                                                 small_has_stale,
                                             )
                                         },
-                                    )
-                                };
-                                if smaller_node.subset.is_empty() {
-                                    updates.rollback();
-                                    return;
+                                    );
+                                    if smaller_node.subset.is_empty() {
+                                        updates.rollback();
+                                        return;
+                                    }
+                                    updates.refine_atom(smaller_atom, smaller_node);
                                 }
-                                updates.refine_atom(smaller_atom, smaller_node);
-                                let larger_node = if large_sub.size() <= 16 {
+                                if large_sub.size() <= 16 {
                                     let large_sub =
                                         refine_subset(large_sub, &larger_scan.cs, &large_table, large_has_stale);
-                                    Arc::new(TrieNode::new(large_sub))
+                                    if large_sub.is_empty() {
+                                        updates.rollback();
+                                        return;
+                                    }
+                                    // Avoid Arc<TrieNode> for Dense subsets.
+                                    match large_sub {
+                                        Subset::Dense(range) => {
+                                            updates.refine_atom_dense(larger_atom, range);
+                                        }
+                                        large_sub => {
+                                            updates.refine_atom(larger_atom, Arc::new(TrieNode::new(large_sub)));
+                                        }
+                                    }
                                 } else {
-                                    larger.node.get_cached_trie_node(
+                                    let larger_node = larger.node.get_cached_trie_node(
                                         larger_scan.column,
                                         val[0],
                                         large_info,
                                         || refine_subset(large_sub, &larger_scan.cs, &large_table, large_has_stale),
-                                    )
-                                };
-                                if larger_node.subset.is_empty() {
-                                    updates.rollback();
-                                    return;
+                                    );
+                                    if larger_node.subset.is_empty() {
+                                        updates.rollback();
+                                        return;
+                                    }
+                                    updates.refine_atom(larger_atom, larger_node);
                                 }
-                                updates.refine_atom(larger_atom, larger_node);
                                 updates.finish_frame();
                                 if updates.frames() >= chunk_size {
                                     drain_updates_parallel!(updates);

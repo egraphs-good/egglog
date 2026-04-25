@@ -1003,3 +1003,24 @@ Just archived the new baseline `2026-04-25T06:57:30.csv` after the hardboiled im
 
 **Decision: KEPT.** Avoiding `Arc<TrieNode>` allocations for Dense small subsets in the most common join case gives consistent gains. The allocator is a bottleneck in tight loops, so every allocation eliminated counts.
 
+### Exp 64 — Use refine_atom_dense for Dense subsets in [a, b] Intersect small-subset path (KEPT)
+
+**Hypothesis:** The same `refine_atom_dense` optimization from Exp 63 (avoiding `Arc<TrieNode>` for Dense subsets) can be applied to the `[a, b]` two-scan Intersect case for both `smaller_node` and `larger_node` when the subset is small (size <= 16) and Dense after refinement.
+
+**What changed:** In the `[a, b]` Intersect small-subset branches, changed from unconditional `Arc::new(TrieNode::new(sub))` to a match that uses `refine_atom_dense` for Dense subsets and `Arc::new` only for Sparse subsets.
+
+**Result (vs `2026-04-25T06:57:30.csv` baseline; includes Exp 44-63), confirmed 2 runs:**
+
+| Benchmark | Baseline | After | Δ% |
+|---|---|---|---|
+| hardboiled_conv1d_32.egg | 0.303 | 0.291-0.295 | **-2.6% to -4.0%** |
+| hardboiled_conv1d_128.egg | 0.858 | 0.804-0.825 | **-3.8% to -6.3%** |
+| luminal-llama.egg | 0.119 | 0.117-0.120 | **-1.7% to +0.8%** (noise) |
+| python_array_optimize.egg | 0.952 | 0.900-0.933 | **-2.0% to -5.5%** |
+| cykjson.egg | 0.072 | 0.067 | **-6.9%** |
+| eggcc-extraction.egg | 0.275 | 0.263-0.272 | **-1.1% to -4.4%** |
+
+**Summary: 5-6 faster, 0-1 slower (noise), consistent across 2 runs.**
+
+**Decision: KEPT.** Extending the Arc-free Dense subset path to the two-scan case gives additional speedups, though variance is higher due to the benchmark's mix of join patterns.
+
