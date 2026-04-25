@@ -1226,7 +1226,7 @@ impl<'a> JoinState<'a> {
                         &cover.constraints,
                         &mut buffer,
                     );
-                    for (row, key) in buffer.non_stale() {
+                    for (row, key) in buffer.iter() {
                         updates.refine_atom_dense(cover_atom, OffsetRange::new(row, row.inc()));
                         // bind the values
                         for (i, (_, var)) in bind.iter().enumerate() {

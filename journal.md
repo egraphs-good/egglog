@@ -934,3 +934,24 @@ Just archived the new baseline `2026-04-25T06:57:30.csv` after the hardboiled im
 
 **Decision: KEPT.** Eliminating bounds checks in the hash equality closure (called on every probe) gives a measurable speedup across all benchmarks.
 
+### Exp 61 — Use buffer.iter() instead of buffer.non_stale() in FusedIntersect loops (KEPT)
+
+**Hypothesis:** The FusedIntersect scan loops call `buffer.non_stale()` to iterate the `TaggedRowBuffer` returned by `scan_project`. However, `scan_project` internally calls `scan_generic_bounded` which already filters out stale rows (either via the stale-check fast path or by `get_if` returning `None` for stale rows). Thus the buffer can never contain stale rows, and the `non_stale()` check (which calls `is_stale()` per row) is redundant. Switching to `iter()` eliminates this per-row check.
+
+**What changed:** In `execute.rs`, changed both `buffer.non_stale()` calls in the FusedIntersect scan loops to `buffer.iter()`.
+
+**Result (vs `2026-04-25T06:57:30.csv` baseline; includes Exp 44-60), confirmed 2 runs:**
+
+| Benchmark | Baseline | After | Δ% |
+|---|---|---|---|
+| hardboiled_conv1d_32.egg | 0.303 | 0.293-0.294 | **-3.0% to -3.3%** |
+| hardboiled_conv1d_128.egg | 0.858 | 0.814-0.823 | **-4.1% to -5.1%** |
+| luminal-llama.egg | 0.119 | 0.115-0.118 | **-0.8% to -3.4%** |
+| python_array_optimize.egg | 0.952 | 0.885-0.918 | **-3.6% to -7.0%** |
+| cykjson.egg | 0.072 | 0.066-0.068 | **-5.6% to -8.3%** |
+| eggcc-extraction.egg | 0.275 | 0.261-0.273 | **-0.7% to -5.1%** |
+
+**Summary: 6 faster, 0 slower (consistent across 2 runs).**
+
+**Decision: KEPT.** Eliminating the `is_stale()` check per row in the FusedIntersect hot loop is a consistent win. The buffer from `scan_project` is guaranteed stale-free.
+
