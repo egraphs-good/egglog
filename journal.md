@@ -682,3 +682,24 @@ Just archived the new baseline `2026-04-25T06:57:30.csv` after the hardboiled im
 
 **Decision: KEPT.** The fast path is safe: subsets are validated before insertion, so all row IDs in a valid subset are in-bounds. The stale-check branch is entirely dead in the common case, so removing it per row compounds across all index construction and scan operations.
 
+### Exp 49 — Replace Mutex with RwLock in ChildrenMap (KEPT)
+
+**Hypothesis:** `get_cached_trie_node` uses `Mutex<HashMap>` to guard the per-TrieNode child cache. Every call — both cache hits and cache misses — acquires an exclusive lock. In parallel contexts (outer join stages), multiple threads compete for the same mutex when probing the same TrieNode. Switching to `RwLock` with an optimistic read-first pattern allows multiple readers to probe simultaneously without contention.
+
+**What changed:** Changed `ChildrenMap` from `Mutex<HashMap>` to `RwLock<HashMap>`. Updated `get_cached_trie_node` to first try `read()` (shared lock) — the common cache-hit case — and only upgrade to `write()` on a miss, with a double-check after acquiring the write lock to handle concurrent insertions.
+
+**Result (vs `2026-04-25T06:57:30.csv` baseline; includes Exp 44+45+46+47+48), confirmed 2 runs:**
+
+| Benchmark | Baseline | After | Δ% |
+|---|---|---|---|
+| hardboiled_conv1d_32.egg | 0.303 | 0.303 | 0.0% |
+| hardboiled_conv1d_128.egg | 0.858 | 0.843 | **-1.7%** |
+| luminal-llama.egg | 0.119 | 0.117 | **-1.7%** |
+| python_array_optimize.egg | 0.952 | 0.925 | **-2.8%** |
+| cykjson.egg | 0.072 | 0.069 | **-4.2%** |
+| eggcc-extraction.egg | 0.275 | 0.266 | **-3.3%** |
+
+**Summary: 5 faster, 0 slower, 1 unchanged (consistent across 2 runs).**
+
+**Decision: KEPT.** Cache-hit reads no longer block each other. The write path is slightly more expensive (two lock acquisitions for misses) but misses are rare after warmup. The double-check pattern is correct under concurrent access.
+

@@ -3,7 +3,7 @@
 use std::{
     cmp, iter, mem,
     ops::Range,
-    sync::{Arc, Mutex, OnceLock, atomic::AtomicUsize},
+    sync::{Arc, OnceLock, RwLock, atomic::AtomicUsize},
 };
 
 use crate::{
@@ -588,7 +588,7 @@ type ColumnIndexes = IdVec<ColumnId, OnceLock<Arc<ColumnIndex>>>;
 // Each TrieNode is probed with exactly one column in practice, so we store a single
 // (ColumnId, map) pair instead of a per-column IdVec of Mutexes. Boxed to keep
 // TrieNode size small for the many short-lived TrieNodes that never need caching.
-type ChildrenMap = Box<(ColumnId, Mutex<HashMap<Value, Arc<TrieNode>>>)>;
+type ChildrenMap = Box<(ColumnId, RwLock<HashMap<Value, Arc<TrieNode>>>)>;
 
 /// Information about the current subset of an atom's relation that is being considered, along with
 /// lazily-initialized, cached indexes on that subset.
@@ -651,9 +651,18 @@ impl TrieNode {
     ) -> Arc<TrieNode> {
         let entry = self
             .cached_child
-            .get_or_init(|| Box::new((col, Mutex::new(HashMap::default()))));
+            .get_or_init(|| Box::new((col, RwLock::new(HashMap::default()))));
         let map = &entry.1;
-        let mut guard = map.lock().unwrap();
+        // Optimistic read path: most calls are cache hits, so try shared lock first.
+        {
+            let guard = map.read().unwrap();
+            if let Some(node) = guard.get(&value) {
+                return node.clone();
+            }
+        }
+        // Cache miss: acquire write lock and insert.
+        let mut guard = map.write().unwrap();
+        // Double-check in case another thread inserted while we were waiting.
         if let Some(node) = guard.get(&value) {
             return node.clone();
         }
