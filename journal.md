@@ -1045,3 +1045,67 @@ Just archived the new baseline `2026-04-25T06:57:30.csv` after the hardboiled im
 
 **Decision: KEPT.** Completing the refine_atom_dense optimization across all Intersect cases (1, 2, N relations) eliminates Arc allocations for Dense subsets throughout the join execution.
 
+### Exp 66 — Hoist pool clone outside hot Intersect loops (KEPT)
+
+**Hypothesis:** In the `[a]` and `[a, b]` Intersect cases, `ps.get_pool()` (an `Arc` clone via atomic increment) was called inside the `for_each` inner loop for every iterated element. In the `rest` N-way Intersect case, `with_pool_set` (a thread-local storage access) was called inside the loop. Hoisting these outside will reduce per-iteration overhead.
+
+**What changed:** In `[a]`, `[a,b]`, and `rest` Intersect arms: extracted `let pool = with_pool_set(|ps| ps.get_pool())` before the `for_each` call. The `rest` case additionally eliminated a per-iteration thread-local access.
+
+**Result (vs `2026-04-25T06:57:30.csv` baseline; includes Exp 44-65), 2 runs:**
+
+| Benchmark | Baseline | After | Δ% |
+|---|---|---|---|
+| hardboiled_conv1d_32.egg | 0.303 | 0.289-0.290 | **-4.3 to -4.6%** |
+| hardboiled_conv1d_128.egg | 0.858 | 0.807-0.812 | **-5.4 to -5.9%** |
+| luminal-llama.egg | 0.119 | 0.116-0.118 | **-0.8 to -2.5%** |
+| python_array_optimize.egg | 0.952 | 0.884-0.898 | **-5.7 to -7.1%** |
+| cykjson.egg | 0.072 | 0.067 | **-6.9%** |
+| eggcc-extraction.egg | 0.275 | 0.264-0.265 | **-3.6 to -4.0%** |
+
+**Summary: 6 faster, 0 slower, consistent across 2 runs.**
+
+**Decision: KEPT.** Hoisting thread-local and Arc-clone overhead outside the hot `for_each` loop gives consistent improvements across all benchmarks.
+
+### Exp 67 — Simplify ColumnIndex::for_each to direct nested loop (KEPT)
+
+**Hypothesis:** `ColumnIndex::for_each` had a single-shard fast path (direct loop) and a multi-shard path using `flat_map` with a closure. Replacing both with a single direct nested loop eliminates the iterator adapter overhead and allows the compiler to see through the loop structure.
+
+**What changed:** In `hash_index/mod.rs`, removed the `if self.shards.len() == 1` branch and replaced both paths with a single direct nested loop (same pattern as `TupleIndex::for_each`).
+
+**Result (vs `2026-04-25T06:57:30.csv` baseline; includes Exp 44-66), 3 runs:**
+
+| Benchmark | Baseline | After | Δ% |
+|---|---|---|---|
+| hardboiled_conv1d_32.egg | 0.303 | 0.289-0.300 | **-1.0 to -4.6%** |
+| hardboiled_conv1d_128.egg | 0.858 | 0.795-0.810 | **-5.6 to -7.3%** |
+| luminal-llama.egg | 0.119 | 0.116-0.120 | **-0.8 to -2.5%** (run 2 noise) |
+| python_array_optimize.egg | 0.952 | 0.887-0.898 | **-5.7 to -6.8%** |
+| cykjson.egg | 0.072 | 0.067-0.071 | **-1.4 to -6.9%** |
+| eggcc-extraction.egg | 0.275 | 0.262-0.264 | **-4.0 to -4.7%** |
+
+**Summary: 6 faster, 0 slower, consistent across 3 runs.**
+
+**Decision: KEPT.** The direct nested loop is simpler and consistently faster.
+
+### Exp 68 — Reuse Arc<TrieNode> in insert_subset via Arc::get_mut + reset() (KEPT)
+
+**Hypothesis:** After a recursive `run_plan` call triggered by `EndFrame`, `move_back` returns the `Arc<TrieNode>` into `binding_info.subsets[atom]` with refcount == 1. When the next `RefineAtomDense` for the same atom fires, `insert_subset` currently does `Arc::new(TrieNode::new(subset))` — allocating a new Arc. If we detect exclusive ownership via `Arc::get_mut`, we can in-place reset the existing node (clearing `OnceLock` caches via `.take()`) instead of allocating.
+
+**What changed:** Added `TrieNode::reset(&mut self, subset)` that calls `self.cached_subsets.take()` and `self.cached_child.take()`. Updated `BindingInfo::insert_subset` to first attempt `Arc::get_mut` on the existing entry and call `reset` if successful, falling back to `Arc::new` only when the Arc is shared.
+
+**Result (vs `2026-04-25T06:57:30.csv` baseline; includes Exp 44-67):**
+
+| Benchmark | Baseline | After | Δ% |
+|---|---|---|---|
+| hardboiled_conv1d_32.egg | 0.303 | 0.290 | **-4.3%** |
+| hardboiled_conv1d_128.egg | 0.858 | 0.807 | **-5.9%** |
+| luminal-llama.egg | 0.119 | 0.119 | 0.0% |
+| python_array_optimize.egg | 0.952 | 0.890 | **-6.5%** |
+| cykjson.egg | 0.072 | 0.060 | **-16.7%** |
+| eggcc-extraction.egg | 0.275 | 0.264 | **-4.0%** |
+
+**Summary: 5 faster, 0 slower, 1 unchanged.**
+
+**Decision: KEPT.** Reusing existing Arc<TrieNode> slots eliminates Arc allocations on the hot recursive-refinement path. cykjson saw the biggest gain (16.7%), likely having more repeated atom refinements.
+
+

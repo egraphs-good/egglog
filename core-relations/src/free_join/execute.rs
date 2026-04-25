@@ -625,6 +625,15 @@ impl TrieNode {
         }
     }
 
+    /// Reset this TrieNode to hold a new subset, clearing any cached data.
+    /// Requires exclusive ownership (caller must hold the only Arc reference).
+    fn reset(&mut self, subset: Subset) {
+        self.subset = subset;
+        // Drop any cached indexes so the node is fresh for the new subset.
+        self.cached_subsets.take();
+        self.cached_child.take();
+    }
+
     fn size(&self) -> usize {
         self.subset.size()
     }
@@ -682,6 +691,14 @@ struct BindingInfo {
 impl BindingInfo {
     /// Initializes the atom-related metadata in the [`BindingInfo`].
     fn insert_subset(&mut self, atom: AtomId, subset: Subset) {
+        // Try to reuse the existing TrieNode if we exclusively own it,
+        // avoiding Arc::new allocation for the common RefineAtomDense path.
+        if let Some(existing_arc) = self.subsets.get_mut(atom) {
+            if let Some(node) = Arc::get_mut(existing_arc) {
+                node.reset(subset);
+                return;
+            }
+        }
         let node = Arc::new(TrieNode::new(subset));
         self.subsets.insert(atom, node);
     }
