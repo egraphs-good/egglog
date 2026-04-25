@@ -887,7 +887,7 @@ impl<'a> JoinState<'a> {
         match &stages.instrs[instr_order.get(cur)] {
             JoinStage::Intersect { var, scans } => match scans.as_slice() {
                 [] => {}
-                [a] if a.cs.is_empty() => {
+                [a] => {
                     if binding_info.has_empty_subset(a.atom) {
                         return;
                     }
@@ -899,43 +899,8 @@ impl<'a> JoinState<'a> {
                         prober.for_each(|val, x| {
                             updates.push_binding(*var, val[0]);
                             let node = if x.size() <= 16 {
-                                let sub = refine_subset(x.to_owned(&ps.get_pool()), &[], &table);
-                                Arc::new(TrieNode::new(sub))
-                            } else {
-                                prober
-                                    .node
-                                    .get_cached_trie_node(a.column, val[0], info, || {
-                                        refine_subset(x.to_owned(&ps.get_pool()), &[], &table)
-                                    })
-                            };
-                            if node.subset.is_empty() {
-                                updates.rollback();
-                                return;
-                            }
-                            updates.refine_atom(a.atom, node);
-                            updates.finish_frame();
-                            if updates.frames() >= chunk_size {
-                                drain_updates!(updates);
-                            }
-                        })
-                    });
-                    drain_updates!(updates);
-                    binding_info.move_back(a.atom, prober);
-                }
-                [a] => {
-                    if binding_info.has_empty_subset(a.atom) {
-                        return;
-                    }
-                    let prober = self.get_column_index(atoms, binding_info, a.atom, a.column);
-                    let info = &self.db.tables[atoms[a.atom].table];
-                    let table = self.db.tables[atoms[a.atom].table].table.as_ref();
-                    let mut updates = FrameUpdates::with_capacity(cmp::min(chunk_size, cur_size));
-                    with_pool_set(|ps| {
-                        prober.for_each(|val, x| {
-                            updates.push_binding(*var, val[0]);
-
-                            let node = if x.size() <= 16 {
-                                let sub = refine_subset(x.to_owned(&ps.get_pool()), &a.cs, &table);
+                                let sub =
+                                    refine_subset(x.to_owned(&ps.get_pool()), &a.cs, &table);
                                 Arc::new(TrieNode::new(sub))
                             } else {
                                 prober
