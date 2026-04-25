@@ -394,14 +394,18 @@ impl Subset {
                 sparse.retain(|row| row >= dense.start);
             }
             (Subset::Sparse(cur), SubsetRef::Sparse(other)) => {
+                // Two-pointer merge-intersect: O(M+N) instead of O(M log N).
+                let other_slice = other.inner();
                 let mut other_off = 0;
-                cur.retain(|rowid| match other.scan_for_offset(other_off, rowid) {
-                    Ok(found) => {
-                        other_off = found + 1;
-                        true
+                cur.retain(|rowid| {
+                    // Advance other_off past elements less than rowid.
+                    while other_off < other_slice.len() && other_slice[other_off] < rowid {
+                        other_off += 1;
                     }
-                    Err(next_off) => {
-                        other_off = next_off;
+                    if other_off < other_slice.len() && other_slice[other_off] == rowid {
+                        other_off += 1;
+                        true
+                    } else {
                         false
                     }
                 })
