@@ -590,7 +590,7 @@ type ColumnIndexes = IdVec<ColumnId, OnceLock<Arc<ColumnIndex>>>;
 // Each TrieNode is probed with exactly one column in practice, so we store a single
 // (ColumnId, map) pair instead of a per-column IdVec of Mutexes. Boxed to keep
 // TrieNode size small for the many short-lived TrieNodes that never need caching.
-type ChildrenMap = Box<(ColumnId, RwLock<HashMap<Value, Arc<TrieNode>>>)>;
+type ChildrenMaps = IdVec<ColumnId, RwLock<HashMap<Value, Arc<TrieNode>>>>;
 
 /// Information about the current subset of an atom's relation that is being considered, along with
 /// lazily-initialized, cached indexes on that subset.
@@ -607,7 +607,7 @@ pub(crate) struct TrieNode {
     /// Cached child trie nodes, keyed by value. In practice each TrieNode is
     /// only ever probed with a single column, so we store one (col, map) pair
     /// instead of an IdVec across all columns.
-    cached_child: OnceLock<ChildrenMap>,
+    cached_children: OnceLock<Pooled<ChildrenMaps>>,
 }
 
 impl std::fmt::Debug for TrieNode {
@@ -623,7 +623,7 @@ impl TrieNode {
         Self {
             subset,
             cached_subsets: Default::default(),
-            cached_child: Default::default(),
+            cached_children: Default::default(),
         }
     }
 
@@ -633,7 +633,7 @@ impl TrieNode {
         self.subset = subset;
         // Drop any cached indexes so the node is fresh for the new subset.
         self.cached_subsets.take();
-        self.cached_child.take();
+        self.cached_children.take();
     }
 
     fn size(&self) -> usize {
@@ -657,13 +657,14 @@ impl TrieNode {
         &self,
         col: ColumnId,
         value: Value,
-        _info: &TableInfo,
+        info: &TableInfo,
         sub: impl FnOnce() -> Subset,
     ) -> Arc<TrieNode> {
-        let entry = self
-            .cached_child
-            .get_or_init(|| Box::new((col, RwLock::new(HashMap::default()))));
-        let map = &entry.1;
+        let map = &self.cached_children.get_or_init(|| {
+            let mut vec: Pooled<ChildrenMaps> = with_pool_set(|ps| ps.get());
+            vec.resize_with(info.spec.arity(), || RwLock::new(HashMap::default()));
+            vec
+        })[col];
         // Optimistic read path: most calls are cache hits, so try shared lock first.
         {
             let guard = map.read().unwrap();
