@@ -745,3 +745,24 @@ Just archived the new baseline `2026-04-25T06:57:30.csv` after the hardboiled im
 
 **Decision: KEPT.** Hash computation accounts for a measurable fraction of index lookup time in the common single-threaded case. The fast path is a simple comparison on a cached field with no semantic change. The multi-shard path is completely unchanged.
 
+### Exp 52 — Avoid SmallVec collect for single-column index key in FusedIntersect (KEPT)
+
+**Hypothesis:** In the `FusedIntersect` inner loop, for each row from the cover scan, we build an `index_key: SmallVec<[Value; 4]>` via `collect()` for each prober. For the common case of single-column equality joins (`index_cols.len() == 1`), `collect()` still constructs a SmallVec, then `prober.get_subset` indexes `[key[0]]`. We can bypass the SmallVec entirely by using `std::slice::from_ref(&key[col.index()])` as a temporary 1-element slice.
+
+**What changed:** In the `FusedIntersect` hot loop, added a branch: if `index_cols` is a single element, use `std::slice::from_ref` to create a zero-allocation `&[Value]`; otherwise fall back to the SmallVec `collect()`. The `index_key_buf` SmallVec is only declared in the multi-column branch, so it never touches the heap in the single-column case.
+
+**Result (vs `2026-04-25T06:57:30.csv` baseline; includes Exp 44+45+46+47+48+49+50+51), confirmed 2 runs:**
+
+| Benchmark | Baseline | After | Δ% |
+|---|---|---|---|
+| hardboiled_conv1d_32.egg | 0.303 | 0.299 | **-1.3%** |
+| hardboiled_conv1d_128.egg | 0.858 | 0.835 | **-2.7%** |
+| luminal-llama.egg | 0.119 | 0.119 | 0.0% |
+| python_array_optimize.egg | 0.952 | 0.894 | **-6.1%** |
+| cykjson.egg | 0.072 | 0.067 | **-6.9%** |
+| eggcc-extraction.egg | 0.275 | 0.263 | **-4.4%** |
+
+**Summary: 5-6 faster, 0 slower (consistent across 2 runs).**
+
+**Decision: KEPT.** The single-column fast path eliminates iterator+SmallVec overhead per probe in FusedIntersect. python_array_optimize shows the largest benefit (-6.1%), consistent with it being a join-heavy workload.
+

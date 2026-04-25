@@ -1309,11 +1309,18 @@ impl<'a> JoinState<'a> {
                         for (prober_idx, (i, atom, prober)) in index_probers.iter().enumerate() {
                             // create a key: to_intersect indexes into the key from the cover
                             let index_cols = &to_intersect[*i].1;
-                            let index_key = index_cols
-                                .iter()
-                                .map(|col| key[col.index()])
-                                .collect::<SmallVec<[Value; 4]>>();
-                            let Some(subset) = prober.get_subset(&index_key) else {
+                            // Fast path for the common single-column case: avoid SmallVec collect.
+                            let index_key_buf: SmallVec<[Value; 4]>;
+                            let index_key: &[Value] = if let [col] = index_cols.as_slice() {
+                                std::slice::from_ref(&key[col.index()])
+                            } else {
+                                index_key_buf = index_cols
+                                    .iter()
+                                    .map(|col| key[col.index()])
+                                    .collect();
+                                &index_key_buf
+                            };
+                            let Some(subset) = prober.get_subset(index_key) else {
                                 updates.rollback();
                                 // There are no possible values for this subset
                                 continue 'mid;
