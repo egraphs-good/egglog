@@ -913,15 +913,27 @@ impl<'a> JoinState<'a> {
                             binding_info.insert_subset(atom, Subset::Dense(range));
                         }
                         UpdateInstr::EndFrame => {
-                            self.run_plan(
-                                stages,
-                                atoms,
-                                action,
-                                instr_order,
-                                cur + 1,
-                                binding_info,
-                                action_buf,
-                            );
+                            // Inline leaf-level: if cur+1 is the leaf (no more
+                            // join stages), call push_bindings directly without
+                            // a recursive run_plan call, avoiding function call
+                            // overhead + an extra should_stop() check.
+                            if cur + 1 >= instr_order.len() {
+                                action_buf.push_bindings(
+                                    action,
+                                    &binding_info.bindings,
+                                    || self.exec_state.clone(),
+                                );
+                            } else {
+                                self.run_plan(
+                                    stages,
+                                    atoms,
+                                    action,
+                                    instr_order,
+                                    cur + 1,
+                                    binding_info,
+                                    action_buf,
+                                );
+                            }
                         }
                     })
                 }

@@ -1171,3 +1171,24 @@ Just archived the new baseline `2026-04-25T06:57:30.csv` after the hardboiled im
 
 **Decision: KEPT.** Marginal improvement over Exp 70, within noise for most benchmarks. The pool caching eliminates per-call TLS overhead in get_index for multi-level joins. No regressions observed.
 
+### Exp 72 — Inline leaf-level push_bindings in serial drain, avoiding run_plan function call (KEPT)
+
+**Hypothesis:** In the serial `drain_updates!` path, `UpdateInstr::EndFrame` triggers `self.run_plan(stages, atoms, action, instr_order, cur+1, binding_info, action_buf)`. When `cur+1 >= instr_order.len()` (leaf level — no more join stages), `run_plan` immediately calls `push_bindings` and returns. For single-stage plans at level 0, every frame triggers a `run_plan(cur=1)` call which is just `push_bindings`. The function call overhead + `should_stop()` check in `run_plan` is wasted. Inlining the leaf case directly in the EndFrame arm avoids a function call per frame.
+
+**What changed:** In the `EndFrame` arm of the serial drain in `drain_updates!`, added a check `if cur + 1 >= instr_order.len()`. If true (leaf), call `push_bindings` directly. Otherwise, call `run_plan` as before.
+
+**Result (vs `2026-04-25T06:57:30.csv` baseline; includes Exp 44-71), 3 runs:**
+
+| Benchmark | Baseline | After | Δ% |
+|---|---|---|---|
+| hardboiled_conv1d_32.egg | 0.303 | 0.284-0.286 | **-5.6 to -6.3%** |
+| hardboiled_conv1d_128.egg | 0.858 | 0.778-0.806 | **-6.1 to -9.3%** |
+| luminal-llama.egg | 0.119 | 0.116-0.121 | -2.5 to +1.7% (noise) |
+| python_array_optimize.egg | 0.952 | 0.846-0.864 | **-9.2 to -11.1%** |
+| cykjson.egg | 0.072 | 0.055-0.056 | **-22.2 to -23.6%** |
+| eggcc-extraction.egg | 0.275 | 0.259-0.269 | **-2.2 to -5.8%** |
+
+**Summary: 5-6 faster, 0-1 marginal noise, consistent across 3 runs.**
+
+**Decision: KEPT.** The leaf-level inlining saves a function call + should_stop() check per leaf frame. Most significant for single-stage plans where all frames are leaf frames. cykjson continues to improve (now -22.2 to -23.6%), python shows -9.2 to -11.1%.
+
