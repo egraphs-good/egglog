@@ -372,12 +372,17 @@ impl Subset {
             (x @ Subset::Dense(_), SubsetRef::Sparse(sparse)) => {
                 let (low, hi) = x.bounds().unwrap();
                 if sparse.bounds().is_some() {
-                    let mut res = pool.get();
                     let l = sparse.binary_search_by_id(low);
                     let r = sparse.binary_search_by_id(hi);
-                    let subslice = sparse.subslice(l, r);
-                    res.extend_nonoverlapping(subslice);
-                    *x = Subset::Sparse(res);
+                    // Check emptiness before allocating from the pool.
+                    if l >= r {
+                        *x = Subset::Dense(OffsetRange::new(RowId::new(0), RowId::new(0)));
+                    } else {
+                        let subslice = sparse.subslice(l, r);
+                        let mut res = pool.get();
+                        res.extend_nonoverlapping(subslice);
+                        *x = Subset::Sparse(res);
+                    }
                 } else {
                     // empty range
                     *x = Subset::Dense(OffsetRange::new(RowId::new(0), RowId::new(0)));

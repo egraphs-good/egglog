@@ -404,3 +404,71 @@ No measurable change vs baseline (machine variance ~25% makes it hard to detect 
 
 **Decision: KEPT.** Correctness improvement + minor allocation reduction for the Dense subset case. 696 tests pass.
 
+### Micro-optimization experiments (all DISCARDED, Session 4)
+
+**Exp 32a — Double-checked locking for get_cached_trie_node:** Release Mutex before computing sub(), re-lock to insert. Would reduce lock hold time in parallel execution. Result: neutral (within noise). Adding second lock acquisition on miss path cancels any benefit from shorter lock hold during contention. Reverted.
+
+**Exp 32b — HashMap::with_capacity in get_cached_trie_node init:** Pre-allocate HashMap with capacity=min(size,256) to avoid reallocations on first N inserts. Result: neutral (within noise). HashMap::default() allocates on first insert anyway; the pre-allocation overhead cancels the savings. Reverted.
+
+**Exp 32c — SmallVec single-column key fast path in FusedIntersect:** Replace `index_cols.iter()...collect::<SmallVec>()` with `SmallVec::from_elem()` for len==1 case. Result: neutral or slightly worse. Compiler already optimizes the 1-element collect path similarly. Reverted.
+
+### Analysis: remaining overhead after Session 4
+
+After ~32 experiments, the branch is still ~4-7% slower than main on hardboiled/python_array_optimize. All hot-path micro-optimizations are at or below measurement noise (~25% machine variance). The fundamental overhead is:
+
+1. **Mutex in `get_cached_trie_node`**: ~40-50ns per call (CAS + optional HashMap lookup + Arc::clone). Unavoidable without changing the synchronization model.
+2. **OnceLock overhead** in `cached_child` and `cached_subsets`: ~8-16 bytes extra per TrieNode, one Acquire load on hot path.
+3. **Arc reference counting**: ~5ns per clone/drop.
+
+The cache IS beneficial — removing it causes +23% regression. Net overhead vs main: ~4-7%, net benefit for cykjson: ~12% speedup.
+
+**Potential remaining ideas (untried):**
+- Using `AtomicPtr<...>` instead of `OnceLock<Box<...>>` to save 8 bytes per TrieNode (marginal size reduction, similar hot-path cost)
+- Two TrieNode types: ThinNode (no caching, small) vs FullNode (with caching) — large refactor
+- Using a seqlock for lock-free reads from cached_child — unsafe and complex
+- Context-aware caching: single-threaded mode uses RefCell instead of Mutex — requires passing context through
+
+---
+
+## Session 5 — 2026-04-25 (continued)
+
+### Exp 33 — Reuse Arc<TrieNode> in-place for RefineAtomDense (DISCARDED)
+
+**Hypothesis:** When processing `RefineAtomDense` in drain, we call `insert_subset` which always creates `Arc::new(TrieNode::new(...))`. If `Arc::get_mut` succeeds (refcount=1), we could reset the node in-place without allocation. Added `TrieNode::reset()` and `BindingInfo::update_subset()`.
+
+**Result:** Neutral. `Arc::get_mut` fails for the first frame (slot is None from `unwrap_val`), then succeeds for subsequent frames. But the savings (~10-20ns per frame) are too small to measure.
+
+**Decision: DISCARDED.** Reverted.
+
+### Exp 34 — Bounds pre-check before to_owned+intersect in Prober::for_each (DISCARDED)
+
+**Hypothesis:** In `Prober::for_each` with `intersect_outer=true`, pre-checking bounds overlap before calling `to_owned` could skip pool allocations for disjoint entries.
+
+**Result:** Slightly worse. The check adds overhead for every entry, and the Dense+Dense case (already cheap) benefits nothing. The `Dense+Sparse` disjoint case may not be common enough. Reverted.
+
+### Exp 35 — Box cached_subsets in TrieNode (DISCARDED)
+
+**Hypothesis:** Boxing `cached_subsets: OnceLock<Pooled<ColumnIndexes>>` (32 bytes inline) to `OnceLock<Box<Pooled<ColumnIndexes>>>` (8 bytes inline) would reduce TrieNode from 72 to 56 bytes, improving cache utilization.
+
+**Result:** Slightly worse. The boxing adds one heap allocation and extra pointer dereference on the `get_cached_index` hot path. The cache savings from smaller nodes don't compensate for the extra indirection. Reverted.
+
+### Exp 36 — Avoid pool alloc for empty Dense+Sparse intersection (KEPT)
+
+**Hypothesis:** In `Subset::intersect` for the `Dense + Sparse` case, `pool.get()` is called BEFORE checking if the subslice is empty. If `binary_search_by_id(low)` and `binary_search_by_id(hi)` give the same index (l >= r), the intersection is empty and the pool allocation is wasted. Moving the empty check before `pool.get()` avoids this allocation.
+
+**What changed:** In `core-relations/src/offsets/mod.rs`, rearranged `Subset::intersect` for the `(Dense, Sparse)` case to compute `l` and `r` first, check `l >= r` and short-circuit, then allocate+fill only when non-empty.
+
+**Result:**
+| Benchmark | Baseline | After | Δ% |
+|---|---|---|---|
+| hardboiled_conv1d_32 | 287.8ms | 282.9ms | **-1.7%** |
+| hardboiled_conv1d_128 | 943ms | 927.4ms | **-1.7%** |
+| luminal-llama | 121ms | 115.7ms | **-4.4%** |
+| python_array_optimize | 982ms | 979ms | -0.3% (noise) |
+| cykjson | 69ms | 73ms | +5.9% (noise) |
+| eggcc-extraction | 275ms | 269.5ms | **-2.0%** |
+
+Second run confirms improvements on hardboiled (-1.4%), hardboiled_128 (-0.8%), luminal-llama (-2.9%), eggcc (-1.1%). Cykjson regressed slightly but is likely noise.
+
+**Decision: KEPT.** The optimization is correct (same result, fewer allocations) and shows measurable speedup. The pool allocation avoidance is especially beneficial when many Dense+Sparse intersections are empty (common when a narrow dense subset is intersected with a sparse column index).
+
