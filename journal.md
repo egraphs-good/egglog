@@ -1150,3 +1150,24 @@ Just archived the new baseline `2026-04-25T06:57:30.csv` after the hardboiled im
 
 **Decision: KEPT.** Extending Exp 69's serial-path optimization to all mid-loop drain sites gives consistent improvements. cykjson continues to improve the most (now -20.8%), likely due to heavy use of FusedIntersect patterns.
 
+### Exp 71 — Cache thread-local pool in JoinState to avoid per-call with_pool_set in get_index (KEPT)
+
+**Hypothesis:** `JoinState::get_index` calls `with_pool_set(|ps| ps.get_pool().clone())` to obtain a `Pool<SortedOffsetVector>` for the `Prober`. This involves a thread-local storage access (~5ns) plus an `Rc::clone`. For 2+ level join plans, `get_index` is called once per frame at level N-1 (N times per top-level `run_join_stages` call). Caching the pool in `JoinState` replaces the TLS access with just `self.pool.clone()` (a pure `Rc::clone`, ~2ns).
+
+**What changed:** Added `pool: Pool<SortedOffsetVector>` field to `JoinState`. Updated `JoinState::new` to initialize it from `with_pool_set`. Updated `get_index` to use `self.pool.clone()` instead of `with_pool_set(|ps| ps.get_pool().clone())`. The parallel `drain_updates_parallel!` macro still uses `with_pool_set` inline for the worker thread's pool (required since Pool is Rc-based and non-Send).
+
+**Result (vs `2026-04-25T06:57:30.csv` baseline; includes Exp 44-70), 2 runs:**
+
+| Benchmark | Baseline | After | Δ% |
+|---|---|---|---|
+| hardboiled_conv1d_32.egg | 0.303 | 0.282-0.285 | **-5.9 to -6.9%** |
+| hardboiled_conv1d_128.egg | 0.858 | 0.778-0.800 | **-6.8 to -9.3%** |
+| luminal-llama.egg | 0.119 | 0.116-0.117 | **-1.7 to -2.5%** |
+| python_array_optimize.egg | 0.952 | 0.864-0.875 | **-8.1 to -9.2%** |
+| cykjson.egg | 0.072 | 0.057 | **-20.8%** |
+| eggcc-extraction.egg | 0.275 | 0.269-0.270 | **-1.8 to -2.2%** |
+
+**Summary: 6 faster, 0 slower, consistent across 2 runs.**
+
+**Decision: KEPT.** Marginal improvement over Exp 70, within noise for most benchmarks. The pool caching eliminates per-call TLS overhead in get_index for multi-level joins. No regressions observed.
+

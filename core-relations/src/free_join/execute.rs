@@ -581,6 +581,9 @@ impl Default for ActionState {
 struct JoinState<'a> {
     db: &'a Database,
     exec_state: ExecutionState<'a>,
+    /// Cached thread-local pool for SortedOffsetVector allocations.
+    /// Stored here to avoid a per-call `with_pool_set` TLS access in `get_index`.
+    pool: Pool<SortedOffsetVector>,
 }
 
 // TODO: use SmallVec might be better
@@ -728,7 +731,11 @@ impl BindingInfo {
 
 impl<'a> JoinState<'a> {
     fn new(db: &'a Database, exec_state: ExecutionState<'a>) -> Self {
-        Self { db, exec_state }
+        Self {
+            db,
+            exec_state,
+            pool: with_pool_set(|ps| ps.get_pool()),
+        }
     }
 
     fn get_index(
@@ -793,7 +800,7 @@ impl<'a> JoinState<'a> {
             };
         Prober {
             node: trie_node,
-            pool: with_pool_set(|ps| ps.get_pool().clone()),
+            pool: self.pool.clone(),
             ix: dyn_index,
         }
     }
@@ -955,6 +962,8 @@ impl<'a> JoinState<'a> {
                                 JoinState {
                                     db,
                                     exec_state: exec_state_for_work.clone(),
+                                    // Each rayon task uses its own thread-local pool.
+                                    pool: with_pool_set(|ps| ps.get_pool()),
                                 }
                                 .run_plan(
                                     stages,
