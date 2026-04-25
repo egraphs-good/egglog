@@ -980,3 +980,26 @@ Just archived the new baseline `2026-04-25T06:57:30.csv` after the hardboiled im
 
 **Decision: KEPT.** The merge_parallel paths are used during index construction. Eliminating redundant stale checks and bounds checks in these paths gives a consistent benefit.
 
+### Exp 63 — Use refine_atom_dense for Dense subsets in [a] Intersect small-subset path (KEPT)
+
+**Hypothesis:** In the `[a]` single-scan Intersect case, small subsets (size <= 16) are refined with `refine_subset` and then wrapped in `Arc::new(TrieNode::new(sub))`, even when the resulting `Subset` is `Dense`. The FusedIntersect code already uses `refine_atom_dense` for Dense subsets (via `UpdateInstr::RefineAtomDense`) to avoid the `Arc<TrieNode>` allocation. Applying the same pattern to the `[a]` Intersect case eliminates `Arc` allocations for every match where the subset is Dense and small.
+
+**What changed:** In the `[a]` Intersect small-subset branch, changed the code to match on the result of `refine_subset`:
+- `Subset::Dense(range)` → `updates.refine_atom_dense(a.atom, range)` (no Arc alloc)
+- `Subset::Sparse(_)` → `updates.refine_atom(a.atom, Arc::new(TrieNode::new(sub)))` (same as before)
+
+**Result (vs `2026-04-25T06:57:30.csv` baseline; includes Exp 44-62), confirmed 1 run:**
+
+| Benchmark | Baseline | After | Δ% |
+|---|---|---|---|
+| hardboiled_conv1d_32.egg | 0.303 | 0.293 | **-3.3%** |
+| hardboiled_conv1d_128.egg | 0.858 | 0.809 | **-5.7%** |
+| luminal-llama.egg | 0.119 | 0.115 | **-3.4%** |
+| python_array_optimize.egg | 0.952 | 0.890 | **-6.5%** |
+| cykjson.egg | 0.072 | 0.069 | **-4.2%** |
+| eggcc-extraction.egg | 0.275 | 0.260 | **-5.5%** |
+
+**Summary: 6 faster, 0 slower.**
+
+**Decision: KEPT.** Avoiding `Arc<TrieNode>` allocations for Dense small subsets in the most common join case gives consistent gains. The allocator is a bottleneck in tight loops, so every allocation eliminated counts.
+

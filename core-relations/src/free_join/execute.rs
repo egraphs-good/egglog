@@ -989,22 +989,34 @@ impl<'a> JoinState<'a> {
                     with_pool_set(|ps| {
                         prober.for_each(|val, x| {
                             updates.push_binding(*var, val[0]);
-                            let node = if x.size() <= 16 {
+                            if x.size() <= 16 {
                                 let sub =
                                     refine_subset(x.to_owned(&ps.get_pool()), &a.cs, &table, has_stale);
-                                Arc::new(TrieNode::new(sub))
+                                if sub.is_empty() {
+                                    updates.rollback();
+                                    return;
+                                }
+                                // Avoid Arc<TrieNode> allocation for Dense subsets.
+                                match sub {
+                                    Subset::Dense(range) => {
+                                        updates.refine_atom_dense(a.atom, range);
+                                    }
+                                    sub => {
+                                        updates.refine_atom(a.atom, Arc::new(TrieNode::new(sub)));
+                                    }
+                                }
                             } else {
-                                prober
+                                let node = prober
                                     .node
                                     .get_cached_trie_node(a.column, val[0], info, || {
                                         refine_subset(x.to_owned(&ps.get_pool()), &a.cs, &table, has_stale)
-                                    })
-                            };
-                            if node.subset.is_empty() {
-                                updates.rollback();
-                                return;
+                                    });
+                                if node.subset.is_empty() {
+                                    updates.rollback();
+                                    return;
+                                }
+                                updates.refine_atom(a.atom, node);
                             }
-                            updates.refine_atom(a.atom, node);
                             updates.finish_frame();
                             if updates.frames() >= chunk_size {
                                 drain_updates!(updates);
