@@ -29,15 +29,19 @@ RESULT_CSV="$BENCH_DIR/result.csv"
 # ── run ──────────────────────────────────────────────────────────────────────
 
 cmd_run() {
+  if [[ -f "$RESULT_CSV" ]]; then
+    echo "Error: $RESULT_CSV already exists."
+    echo "  archive — keep results: ./scripts/bench.sh archive"
+    echo "  clear   — discard results: ./scripts/bench.sh clear"
+    exit 1
+  fi
+
   echo "Building egglog (release)..."
   cargo build --release --manifest-path "$REPO_ROOT/Cargo.toml" 2>&1
 
   TIMESTAMP="$(date +%Y-%m-%dT%H:%M:%S)"
 
-  # Write header only when creating the file fresh
-  if [[ ! -f "$RESULT_CSV" ]]; then
-    echo "timestamp,benchmark,time_s" > "$RESULT_CSV"
-  fi
+  echo "timestamp,benchmark,time_s" > "$RESULT_CSV"
 
   echo "Running benchmarks at $TIMESTAMP"
   printf "%-40s %s\n" "benchmark" "time (s)"
