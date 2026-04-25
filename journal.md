@@ -955,3 +955,5 @@ Just archived the new baseline `2026-04-25T06:57:30.csv` after the hardboiled im
 
 **Decision: KEPT.** Eliminating the `is_stale()` check per row in the FusedIntersect hot loop is a consistent win. The buffer from `scan_project` is guaranteed stale-free.
 
+**Note:** A follow-up commit also fixed a missed second `buffer.non_stale()` call (the one prefixed with `'mid:` label) that the replace-all missed due to the label prefix.
+
