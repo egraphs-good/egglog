@@ -358,6 +358,7 @@ impl Subset {
         }
     }
     /// Remove any elements of the current subset not present in `other`.
+    #[inline]
     pub(crate) fn intersect(&mut self, other: SubsetRef, pool: &Pool<SortedOffsetVector>) {
         match (self, other) {
             (Subset::Dense(cur), SubsetRef::Dense(other)) => {

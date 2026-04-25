@@ -99,53 +99,10 @@ impl PotentiallyStale<SubsetRef<'_>> {
     }
 }
 
-impl PotentiallyStale<Subset> {
-    fn size(&self) -> usize {
-        self.inner.size()
-    }
-}
-
-/// Intersect a `SubsetRef` with a dense `OffsetRange` and return the result as an
-/// owned `Subset`, or `None` if the intersection is empty.
-///
-/// When `v` is Sparse, this copies only the slice elements that fall within
-/// `range` (two binary searches + one extend), rather than copying all elements
-/// first and then filtering (three operations). When `v` is Dense, pure arithmetic.
-#[inline]
-fn intersect_with_dense(
-    v: SubsetRef<'_>,
-    range: OffsetRange,
-    pool: &Pool<SortedOffsetVector>,
-) -> Option<Subset> {
-    match v {
-        SubsetRef::Dense(r) => {
-            let resl = cmp::max(r.start, range.start);
-            let resr = cmp::min(r.end, range.end);
-            if resl >= resr {
-                None
-            } else {
-                Some(Subset::Dense(OffsetRange::new(resl, resr)))
-            }
-        }
-        SubsetRef::Sparse(s) => {
-            let l = s.binary_search_by_id(range.start);
-            let r = s.binary_search_by_id(range.end);
-            if l >= r {
-                None
-            } else {
-                let subslice = s.subslice(l, r);
-                let mut vec = pool.get();
-                vec.extend_nonoverlapping(subslice);
-                Some(Subset::Sparse(vec))
-            }
-        }
-    }
-}
-
 /// Intersect a `SubsetRef` with a dense `OffsetRange` and return the result as a
 /// borrowed `SubsetRef`, or `None` if the intersection is empty.
 ///
-/// Unlike `intersect_with_dense`, this function never allocates — it borrows into
+/// This function never allocates — it borrows into
 /// the source data via `subslice`. Use this in `for_each` paths where the result
 /// may be discarded (e.g., empty after refinement), to avoid pool allocations.
 #[inline]
@@ -178,37 +135,39 @@ struct Prober {
 }
 
 impl Prober {
-    fn get_subset(&self, key: &[Value], pool: &Pool<SortedOffsetVector>) -> Option<PotentiallyStale<Subset>> {
+    fn get_subset<'a>(&'a self, key: &'a [Value]) -> Option<PotentiallyStale<SubsetRef<'a>>> {
         match &self.ix {
             DynamicIndex::Cached {
                 intersect_outer,
                 table,
             } => {
-                let v = table.get().unwrap().get_subset(key)?;
-                let sub = match intersect_outer {
-                    None => v.to_owned(pool),
-                    Some(range) => intersect_with_dense(v, *range, pool)?,
+                let subset_ref = table.get().unwrap().get_subset(key)?;
+                let subset = if let Some(range) = intersect_outer {
+                    intersect_with_dense_ref(subset_ref, *range)?
+                } else {
+                    subset_ref
                 };
-                Some(PotentiallyStale::maybe_stale(sub))
+                Some(PotentiallyStale::maybe_stale(subset))
             }
             DynamicIndex::CachedColumn {
                 intersect_outer,
                 table,
             } => {
                 debug_assert_eq!(key.len(), 1);
-                let v = table.get().unwrap().get_subset(&key[0])?;
-                let sub = match intersect_outer {
-                    None => v.to_owned(pool),
-                    Some(range) => intersect_with_dense(v, *range, pool)?,
+                let subset_ref = table.get().unwrap().get_subset(&key[0])?;
+                let subset = if let Some(range) = intersect_outer {
+                    intersect_with_dense_ref(subset_ref, *range)?
+                } else {
+                    subset_ref
                 };
-                Some(PotentiallyStale::maybe_stale(sub))
+                Some(PotentiallyStale::maybe_stale(subset))
             }
             DynamicIndex::Dynamic(tab) => tab
                 .get_subset(key)
-                .map(|x| PotentiallyStale::not_stale(x.to_owned(pool))),
+                .map(|x| PotentiallyStale::not_stale(x)),
             DynamicIndex::DynamicColumn(tab) => tab
                 .get_subset(&key[0])
-                .map(|x| PotentiallyStale::not_stale(x.to_owned(pool))),
+                .map(|x| PotentiallyStale::not_stale(x)),
         }
     }
     fn for_each(&self, mut f: impl FnMut(&[Value], PotentiallyStale<SubsetRef>)) {
@@ -1080,7 +1039,7 @@ impl<'a> JoinState<'a> {
                     let small_has_stale = small_table.has_stale_rows();
                     let mut updates = FrameUpdates::with_capacity(cmp::min(chunk_size, cur_size));
                     smaller.for_each(|val, small_sub| {
-                        if let Some(large_sub) = larger.get_subset(val, &pool) {
+                        if let Some(large_sub) = larger.get_subset(val) {
                             updates.push_binding(*var, val[0]);
                             if small_sub.size() <= 16 {
                                 let small_sub = refine_subset(
@@ -1124,7 +1083,7 @@ impl<'a> JoinState<'a> {
                             }
                             if large_sub.size() <= 16 {
                                 let large_sub =
-                                    refine_subset(large_sub, &larger_scan.cs, &large_table, large_has_stale);
+                                    refine_subset(large_sub.to_owned(pool), &larger_scan.cs, &large_table, large_has_stale);
                                 if large_sub.is_empty() {
                                     updates.rollback();
                                     return;
@@ -1143,7 +1102,7 @@ impl<'a> JoinState<'a> {
                                     larger_scan.column,
                                     val[0],
                                     large_info,
-                                    || refine_subset(large_sub, &larger_scan.cs, &large_table, large_has_stale),
+                                    || refine_subset(large_sub.to_owned(pool), &larger_scan.cs, &large_table, large_has_stale),
                                 );
                                 if larger_node.subset.is_empty() {
                                     updates.rollback();
@@ -1202,12 +1161,12 @@ impl<'a> JoinState<'a> {
                                 if i == smallest {
                                     continue;
                                 }
-                                if let Some(sub) = probers[i].get_subset(key, pool) {
+                                if let Some(sub) = probers[i].get_subset(key) {
                                     let table = self.db.tables[atoms[rest[i].atom].table]
                                         .table
                                         .as_ref();
                                     if sub.size() <= 16 {
-                                        let sub = refine_subset(sub, &rest[i].cs, &table, rest_has_stale[i]);
+                                        let sub = refine_subset(sub.to_owned(pool), &rest[i].cs, &table, rest_has_stale[i]);
                                         if sub.is_empty() {
                                             updates.rollback();
                                             return;
@@ -1225,7 +1184,7 @@ impl<'a> JoinState<'a> {
                                             scan.column,
                                             key[0],
                                             &self.db.tables[atoms[scan.atom].table],
-                                            || refine_subset(sub, &rest[i].cs, &table, rest_has_stale[i]),
+                                            || refine_subset(sub.to_owned(pool), &rest[i].cs, &table, rest_has_stale[i]),
                                         );
                                         if node.subset.is_empty() {
                                             updates.rollback();
@@ -1406,7 +1365,7 @@ impl<'a> JoinState<'a> {
                                     .collect();
                                 &index_key_buf
                             };
-                            let Some(subset) = prober.get_subset(index_key, pool) else {
+                            let Some(subset) = prober.get_subset(index_key) else {
                                 updates.rollback();
                                 // There are no possible values for this subset
                                 continue 'mid;
@@ -1414,7 +1373,7 @@ impl<'a> JoinState<'a> {
                             // apply any constraints needed in this scan.
                             let table_info = &self.db.tables[atoms[*atom].table];
                             let cs = &to_intersect[*i].0.constraints;
-                            let subset = refine_subset(subset, cs, &table_info.table.as_ref(), index_has_stale[prober_idx]);
+                            let subset = refine_subset(subset.to_owned(pool), cs, &table_info.table.as_ref(), index_has_stale[prober_idx]);
                             if subset.is_empty() {
                                 updates.rollback();
                                 // There are no possible values for this subset
@@ -1501,9 +1460,9 @@ impl<'a> JoinState<'a> {
                             };
                             key.push(val);
                         }
-                        if let Some(subset) = prober.get_subset(&key, pool) {
+                        if let Some(subset) = prober.get_subset(&key) {
                             let subset = refine_subset(
-                                subset,
+                                subset.to_owned(pool),
                                 &spec.constraints,
                                 &self.db.tables[atoms[spec.to_index.atom].table]
                                     .table
