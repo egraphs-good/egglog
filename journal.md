@@ -913,3 +913,24 @@ Just archived the new baseline `2026-04-25T06:57:30.csv` after the hardboiled im
 
 **Decision: KEPT.** Removing the bounds check in the for_each hot path continues the trend of incremental gains across all benchmarks.
 
+### Exp 60 — Use get_row_unchecked in TupleIndex::get_subset and add_row closures (KEPT)
+
+**Hypothesis:** `TupleIndex::get_subset` and `TupleIndex::add_row` both use `shard.table.keys.get_row(entry.key)` inside hashbrown find/entry closures to compare keys. These are called for every key lookup and every insertion in the tuple index. Since `entry.key` is always a valid RowId (set by `add_row`), the bounds check is redundant. Switching to `get_row_unchecked` eliminates it.
+
+**What changed:** In `TupleIndex::get_subset` and `TupleIndex::add_row`, changed `shard.table.keys.get_row(entry.key)` to `unsafe { shard.table.keys.get_row_unchecked(entry.key) }` with SAFETY comments.
+
+**Result (vs `2026-04-25T06:57:30.csv` baseline; includes Exp 44-59), confirmed 1 run:**
+
+| Benchmark | Baseline | After | Δ% |
+|---|---|---|---|
+| hardboiled_conv1d_32.egg | 0.303 | 0.291 | **-4.0%** |
+| hardboiled_conv1d_128.egg | 0.858 | 0.813 | **-5.2%** |
+| luminal-llama.egg | 0.119 | 0.117 | **-1.7%** |
+| python_array_optimize.egg | 0.952 | 0.892 | **-6.3%** |
+| cykjson.egg | 0.072 | 0.069 | **-4.2%** |
+| eggcc-extraction.egg | 0.275 | 0.266 | **-3.3%** |
+
+**Summary: 6 faster, 0 slower.**
+
+**Decision: KEPT.** Eliminating bounds checks in the hash equality closure (called on every probe) gives a measurable speedup across all benchmarks.
+

@@ -417,7 +417,8 @@ impl IndexBase for TupleIndex {
         let hash = hash_key(key);
         let shard = &self.shards[self.shard_data.shard_id(hash)];
         let entry = shard.table.hash.find(hash, |entry| {
-            entry.hash == hash && shard.table.keys.get_row(entry.key) == key
+            // SAFETY: entry.key was stored by add_row, which returns a valid RowId.
+            entry.hash == hash && unsafe { shard.table.keys.get_row_unchecked(entry.key) } == key
         })?;
         Some(entry.vals.as_ref(&shard.subsets))
     }
@@ -428,7 +429,8 @@ impl IndexBase for TupleIndex {
         let shard = &mut self.shards[self.shard_data.shard_id(hash)];
         let table_entry = shard.table.hash.entry(
             hash,
-            |entry| entry.hash == hash && shard.table.keys.get_row(entry.key) == key,
+            // SAFETY: entry.key was stored by add_row, which returns a valid RowId.
+            |entry| entry.hash == hash && unsafe { shard.table.keys.get_row_unchecked(entry.key) } == key,
             |ent| ent.hash,
         );
         match table_entry {
