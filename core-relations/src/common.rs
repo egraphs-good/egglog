@@ -152,6 +152,9 @@ impl ShardData {
         1 << self.log2_shard_count
     }
     pub(crate) fn shard_id(&self, hash: u64) -> ShardId {
+        if self.log2_shard_count == 0 {
+            return ShardId::new(0);
+        }
         let high_bits = (hash.wrapping_shr(64 - (self.log2_shard_count + 7)))
             & ((1 << self.log2_shard_count) - 1);
         ShardId::from_usize(high_bits as usize)

@@ -850,3 +850,24 @@ Just archived the new baseline `2026-04-25T06:57:30.csv` after the hardboiled im
 
 **Decision: KEPT.** `len()` is called in `Prober::len()` which is used to pick the smaller prober in the `[a, b]` two-scan case. Eliminating the sum overhead is a small but consistent win.
 
+### Exp 57 — Fast path in ShardData::shard_id when log2_shard_count==0 (KEPT)
+
+**Hypothesis:** `TupleIndex::get_subset` and `TupleIndex::add_row` directly call `self.shard_data.shard_id(hash)` (rather than `get_shard`). The `shard_id` function does bit arithmetic even when `log2_shard_count == 0` (always returns 0). Adding a fast path to `shard_id` saves two bit operations + one shift per call.
+
+**What changed:** Added `if self.log2_shard_count == 0 { return ShardId::new(0); }` to `ShardData::shard_id`.
+
+**Result (vs `2026-04-25T06:57:30.csv` baseline; includes Exp 44-56), confirmed 2 runs:**
+
+| Benchmark | Baseline | After | Δ% |
+|---|---|---|---|
+| hardboiled_conv1d_32.egg | 0.303 | 0.293 | **-3.3%** |
+| hardboiled_conv1d_128.egg | 0.858 | 0.810 | **-5.6%** |
+| luminal-llama.egg | 0.119 | 0.118 | **-0.8%** |
+| python_array_optimize.egg | 0.952 | 0.904 | **-5.0%** |
+| cykjson.egg | 0.072 | 0.069 | **-4.2%** |
+| eggcc-extraction.egg | 0.275 | 0.269 | **-2.2%** |
+
+**Summary: 5-6 faster, 0 slower (consistent across 2 runs).**
+
+**Decision: KEPT.** `shard_id` is called for every hash table lookup and insertion in TupleIndex. Eliminating the bit arithmetic in the single-shard case is measurable.
+
