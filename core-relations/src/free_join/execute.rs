@@ -671,6 +671,7 @@ impl<'a> JoinState<'a> {
                 return;
             }
         }
+        // eprintln!("Running rule");
         let mut order = InstrOrder::from_iter(0..stages.instrs.len());
         sort_plan_by_size(&mut order, 0, &stages.instrs, binding_info);
         self.run_plan(

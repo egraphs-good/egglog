@@ -766,14 +766,14 @@ impl Query {
         // For N atoms, we create N queries for seminaive evaluation. We can reuse the cached plan
         // directly.
         if !self.seminaive || (self.atoms.is_empty() && mid_ts == Timestamp::new(0)) {
-            rsb.add_rule_from_cached_plan(&cached_plan.plan, &[]);
+            let _ = rsb.add_rule_from_cached_plan(&cached_plan.plan, &[]);
             return Ok(());
         }
         if let Some(focus_atom) = self.sole_focus {
             // There is a single "focus" atom that we will constrain to look at new values.
             let (_, _, schema_info) = &self.atoms[focus_atom];
             let ts_col = ColumnId::from_usize(schema_info.ts_col());
-            rsb.add_rule_from_cached_plan(
+            let _ = rsb.add_rule_from_cached_plan(
                 &cached_plan.plan,
                 &[(
                     cached_plan.atom_mapping[focus_atom],
@@ -814,7 +814,7 @@ impl Query {
                     Ordering::Greater => {}
                 };
             }
-            rsb.add_rule_from_cached_plan(&cached_plan.plan, &constraints);
+            let _ = rsb.add_rule_from_cached_plan(&cached_plan.plan, &constraints);
             constraints.clear();
         }
         Ok(())
