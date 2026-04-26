@@ -46,7 +46,7 @@ use super::{
 
 const SMALL_RESIDUAL: usize = 8;
 
-struct SparseIndex {
+struct SparseColumnIndex {
     n_keys: usize,
     n_subsets: usize,
     keys: [Value; SMALL_RESIDUAL],
@@ -54,7 +54,7 @@ struct SparseIndex {
     subset_ids: [RowId; SMALL_RESIDUAL],
 }
 
-impl SparseIndex {
+impl SparseColumnIndex {
     fn keys(&self) -> &[Value] {
         &self.keys[..self.n_keys]
     }
@@ -105,7 +105,7 @@ impl SparseIndex {
             subset_ids[i] = row_id;
         }
 
-        SparseIndex {
+        SparseColumnIndex {
             n_keys,
             n_subsets,
             keys,
@@ -155,7 +155,7 @@ enum DynamicIndex {
     },
     Dynamic(TupleIndex),
     DynamicColumn(Arc<ColumnIndex>),
-    Sparse(SparseIndex),
+    SparseColumn(SparseColumnIndex),
 }
 
 struct Prober {
@@ -202,7 +202,7 @@ impl Prober {
             DynamicIndex::DynamicColumn(tab) => {
                 tab.get_subset(&key[0]).map(|x| x.to_owned(&self.pool))
             }
-            DynamicIndex::Sparse(tab) => {
+            DynamicIndex::SparseColumn(tab) => {
                 debug_assert_eq!(key.len(), 1);
                 tab.get_subset(key[0]).map(|x| x.to_owned(&self.pool))
             }
@@ -248,7 +248,7 @@ impl Prober {
             DynamicIndex::DynamicColumn(tab) => tab.for_each(|k, v| {
                 f(&[*k], v);
             }),
-            DynamicIndex::Sparse(tab) => {
+            DynamicIndex::SparseColumn(tab) => {
                 tab.for_each(f);
             }
         }
@@ -260,7 +260,7 @@ impl Prober {
             DynamicIndex::CachedColumn { table, .. } => table.get().unwrap().len(),
             DynamicIndex::Dynamic(tab) => tab.len(),
             DynamicIndex::DynamicColumn(tab) => tab.len(),
-            DynamicIndex::Sparse(tab) => tab.len(),
+            DynamicIndex::SparseColumn(tab) => tab.len(),
         }
     }
 }
@@ -712,7 +712,7 @@ impl<'a> JoinState<'a> {
         });
         let whole_table = info.table.all();
         let dyn_index = if subset.size() <= SMALL_RESIDUAL && cols.len() == 1 {
-            DynamicIndex::Sparse(SparseIndex::new(
+            DynamicIndex::SparseColumn(SparseColumnIndex::new(
                 info.table.as_ref(),
                 subset.as_ref(),
                 cols[0],
