@@ -23,7 +23,7 @@ use crate::{
     hash_index::{ColumnIndex, IndexBase, TupleIndex},
     offsets::{RowId, Subset, SubsetRef},
     pool::{PoolSet, Pooled, with_pool_set},
-    row_buffer::{RowBuffer, TaggedRowBuffer},
+    row_buffer::{RowBuffer, RowSink, TaggedRowBuffer},
 };
 
 define_id!(pub ColumnId, u32, "a particular column in a table", pretty "Col");
@@ -440,7 +440,7 @@ impl<T: Table> TableWrapper for WrapperImpl<T> {
         start: Offset,
         n: usize,
         cs: &[Constraint],
-        out: &mut TaggedRowBuffer,
+        out: &mut dyn RowSink,
     ) -> Option<Offset> {
         let table = table.as_any().downcast_ref::<T>().unwrap();
         match cols {
@@ -590,7 +590,7 @@ impl WrappedTable {
         start: Offset,
         n: usize,
         cs: &[Constraint],
-        out: &mut TaggedRowBuffer,
+        out: &mut dyn RowSink,
     ) -> Option<Offset> {
         self.as_ref().scan_project(subset, cols, start, n, cs, out)
     }
@@ -673,7 +673,7 @@ pub(crate) trait TableWrapper: Send + Sync {
         start: Offset,
         n: usize,
         cs: &[Constraint],
-        out: &mut TaggedRowBuffer,
+        out: &mut dyn RowSink,
     ) -> Option<Offset>;
 
     fn scan(&self, table: &dyn Table, subset: SubsetRef) -> TaggedRowBuffer {
@@ -763,7 +763,7 @@ impl WrappedTableRef<'_> {
         start: Offset,
         n: usize,
         cs: &[Constraint],
-        out: &mut TaggedRowBuffer,
+        out: &mut dyn RowSink,
     ) -> Option<Offset> {
         self.wrapper
             .scan_project(self.inner, subset, cols, start, n, cs, out)
