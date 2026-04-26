@@ -632,6 +632,17 @@ impl TrieNode {
     }
 }
 
+impl FrameUpdates {
+    /// Refine `atom` to `subset`, using the dense fast path to avoid an
+    /// `Arc<TrieNode>` allocation when the subset is already a contiguous range.
+    fn refine_atom_subset(&mut self, atom: AtomId, subset: Subset) {
+        match subset {
+            Subset::Dense(range) => self.refine_atom_dense(atom, range),
+            sub => self.refine_atom(atom, Arc::new(TrieNode::new(sub))),
+        }
+    }
+}
+
 #[derive(Default, Clone)]
 struct BindingInfo {
     bindings: DenseIdMap<Variable, Value>,
@@ -965,15 +976,7 @@ impl<'a> JoinState<'a> {
                                 updates.rollback();
                                 return;
                             }
-                            // Avoid Arc<TrieNode> allocation for Dense subsets.
-                            match sub {
-                                Subset::Dense(range) => {
-                                    updates.refine_atom_dense(a.atom, range);
-                                }
-                                sub => {
-                                    updates.refine_atom(a.atom, Arc::new(TrieNode::new(sub)));
-                                }
-                            }
+                            updates.refine_atom_subset(a.atom, sub);
                         } else {
                             let node =
                                 prober
@@ -1029,18 +1032,7 @@ impl<'a> JoinState<'a> {
                                     updates.rollback();
                                     return;
                                 }
-                                // Avoid Arc<TrieNode> for Dense subsets.
-                                match small_sub {
-                                    Subset::Dense(range) => {
-                                        updates.refine_atom_dense(smaller_atom, range);
-                                    }
-                                    small_sub => {
-                                        updates.refine_atom(
-                                            smaller_atom,
-                                            Arc::new(TrieNode::new(small_sub)),
-                                        );
-                                    }
-                                }
+                                updates.refine_atom_subset(smaller_atom, small_sub);
                             } else {
                                 let smaller_node = smaller.node.get_cached_trie_node(
                                     smaller_scan.column,
@@ -1072,18 +1064,7 @@ impl<'a> JoinState<'a> {
                                     updates.rollback();
                                     return;
                                 }
-                                // Avoid Arc<TrieNode> for Dense subsets.
-                                match large_sub {
-                                    Subset::Dense(range) => {
-                                        updates.refine_atom_dense(larger_atom, range);
-                                    }
-                                    large_sub => {
-                                        updates.refine_atom(
-                                            larger_atom,
-                                            Arc::new(TrieNode::new(large_sub)),
-                                        );
-                                    }
-                                }
+                                updates.refine_atom_subset(larger_atom, large_sub);
                             } else {
                                 let larger_node = larger.node.get_cached_trie_node(
                                     larger_scan.column,
@@ -1169,17 +1150,7 @@ impl<'a> JoinState<'a> {
                                             updates.rollback();
                                             return;
                                         }
-                                        match sub {
-                                            Subset::Dense(range) => {
-                                                updates.refine_atom_dense(scan.atom, range);
-                                            }
-                                            sub => {
-                                                updates.refine_atom(
-                                                    scan.atom,
-                                                    Arc::new(TrieNode::new(sub)),
-                                                );
-                                            }
-                                        }
+                                        updates.refine_atom_subset(scan.atom, sub);
                                     } else {
                                         let node = probers[i].node.get_cached_trie_node(
                                             scan.column,
@@ -1217,17 +1188,7 @@ impl<'a> JoinState<'a> {
                                     updates.rollback();
                                     return;
                                 }
-                                match main_sub {
-                                    Subset::Dense(range) => {
-                                        updates.refine_atom_dense(main_spec.atom, range);
-                                    }
-                                    main_sub => {
-                                        updates.refine_atom(
-                                            main_spec.atom,
-                                            Arc::new(TrieNode::new(main_sub)),
-                                        );
-                                    }
-                                }
+                                updates.refine_atom_subset(main_spec.atom, main_sub);
                             } else {
                                 let main_node = probers[smallest].node.get_cached_trie_node(
                                     main_spec.column,
@@ -1398,14 +1359,7 @@ impl<'a> JoinState<'a> {
                                 // There are no possible values for this subset
                                 continue 'mid;
                             }
-                            match subset {
-                                Subset::Dense(range) => {
-                                    updates.refine_atom_dense(*atom, range);
-                                }
-                                subset => {
-                                    updates.refine_atom(*atom, Arc::new(TrieNode::new(subset)));
-                                }
-                            }
+                            updates.refine_atom_subset(*atom, subset);
                         }
                         updates.finish_frame();
                         if updates.frames() >= chunk_size {
@@ -1493,17 +1447,7 @@ impl<'a> JoinState<'a> {
                             if subset.is_empty() {
                                 return false;
                             }
-                            match subset {
-                                Subset::Dense(range) => {
-                                    updates.refine_atom_dense(spec.to_index.atom, range);
-                                }
-                                subset => {
-                                    updates.refine_atom(
-                                        spec.to_index.atom,
-                                        Arc::new(TrieNode::new(subset)),
-                                    );
-                                }
-                            }
+                            updates.refine_atom_subset(spec.to_index.atom, subset);
                         } else {
                             return false;
                         }
