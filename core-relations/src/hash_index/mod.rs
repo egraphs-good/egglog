@@ -420,7 +420,10 @@ impl IndexBase for TupleIndex {
         let table_entry = shard.table.hash.entry(
             hash,
             // SAFETY: entry.key was stored by add_row, which returns a valid RowId.
-            |entry| entry.hash == hash && unsafe { shard.table.keys.get_row_unchecked(entry.key) } == key,
+            |entry| {
+                entry.hash == hash
+                    && unsafe { shard.table.keys.get_row_unchecked(entry.key) } == key
+            },
             |ent| ent.hash,
         );
         match table_entry {
@@ -520,7 +523,9 @@ impl IndexBase for TupleIndex {
                             hash,
                             // SAFETY: entry.key was stored by add_row, which returns a valid RowId.
                             |entry| {
-                                entry.hash == hash && unsafe { shard.table.keys.get_row_unchecked(entry.key) } == key
+                                entry.hash == hash
+                                    && unsafe { shard.table.keys.get_row_unchecked(entry.key) }
+                                        == key
                             },
                             |ent| ent.hash,
                         );

@@ -371,9 +371,7 @@ impl Table for SortedWritesTable {
             // Fast path: no stale rows, skip is_stale check per row.
             // SAFETY: subsets are sorted, low must be at most hi, and hi is less
             // than the length of the table.
-            subset.offsets(|row| unsafe {
-                f(row, self.data.data.get_row_unchecked(row))
-            })
+            subset.offsets(|row| unsafe { f(row, self.data.data.get_row_unchecked(row)) })
         } else {
             // SAFETY: same as above.
             subset.offsets(|row| unsafe {

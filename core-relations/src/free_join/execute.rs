@@ -162,12 +162,12 @@ impl Prober {
                 };
                 Some(PotentiallyStale::maybe_stale(subset))
             }
-            DynamicIndex::Dynamic(tab) => tab
-                .get_subset(key)
-                .map(|x| PotentiallyStale::not_stale(x)),
+            DynamicIndex::Dynamic(tab) => {
+                tab.get_subset(key).map(PotentiallyStale::not_stale)
+            }
             DynamicIndex::DynamicColumn(tab) => tab
                 .get_subset(&key[0])
-                .map(|x| PotentiallyStale::not_stale(x)),
+                .map(PotentiallyStale::not_stale),
         }
     }
     fn for_each(&self, mut f: impl FnMut(&[Value], PotentiallyStale<SubsetRef>)) {
@@ -277,8 +277,7 @@ impl Database {
                                 let mut cur =
                                     Arc::try_unwrap(binding_info.unwrap_val(*atom)).unwrap();
                                 debug_assert!(cur.cached_subsets.get().is_none());
-                                cur.subset
-                                    .intersect(subset.as_ref(), &join_state.pool);
+                                cur.subset.intersect(subset.as_ref(), &join_state.pool);
                                 if cur.subset.is_empty() {
                                     break 'eval;
                                 }
@@ -415,8 +414,7 @@ impl Database {
                         }
                         let mut cur = Arc::try_unwrap(binding_info.unwrap_val(*atom)).unwrap();
                         debug_assert!(cur.cached_subsets.get().is_none());
-                        cur.subset
-                            .intersect(subset.as_ref(), &join_state.pool);
+                        cur.subset.intersect(subset.as_ref(), &join_state.pool);
                         if cur.subset.is_empty() {
                             break 'eval;
                         }
@@ -586,15 +584,6 @@ impl TrieNode {
         }
     }
 
-    /// Reset this TrieNode to hold a new subset, clearing any cached data.
-    /// Requires exclusive ownership (caller must hold the only Arc reference).
-    fn reset(&mut self, subset: Subset) {
-        self.subset = subset;
-        // Drop any cached indexes so the node is fresh for the new subset.
-        self.cached_subsets.take();
-        self.cached_children.take();
-    }
-
     fn size(&self) -> usize {
         self.subset.size()
     }
@@ -651,16 +640,8 @@ struct BindingInfo {
 }
 
 impl BindingInfo {
-    /// Initializes the atom-related metadata in the [`BindingInfo`].
+    /// Initializes the atom-related metadata in the [`BindingInfo`].    
     fn insert_subset(&mut self, atom: AtomId, subset: Subset) {
-        // Try to reuse the existing TrieNode if we exclusively own it,
-        // avoiding Arc::new allocation for the common RefineAtomDense path.
-        if let Some(existing_arc) = self.subsets.get_mut(atom) {
-            if let Some(node) = Arc::get_mut(existing_arc) {
-                node.reset(subset);
-                return;
-            }
-        }
         let node = Arc::new(TrieNode::new(subset));
         self.subsets.insert(atom, node);
     }
@@ -719,39 +700,37 @@ impl<'a> JoinState<'a> {
                 .unwrap_or(false)
         });
         let whole_table = info.table.all();
-        let dyn_index =
-            if let Subset::Dense(range) = subset && all_cacheable && whole_table.size() / 2 < subset.size() {
-                // Skip intersecting with the subset if we are just looking at the
-                // whole table.
-                let needs_intersect =
-                    !(whole_table.is_dense() && subset.bounds() == whole_table.bounds());
-                // When intersecting, store the Dense range directly so we can do a
-                // combined copy+filter without a runtime match on subset type later.
-                let intersect_outer = if needs_intersect {
-                    Some(*range)
-                } else {
-                    None
-                };
-                // heuristic: if the subset we are scanning is somewhat
-                // large _or_ it is most of the table, or we already have a cached
-                // index for it, then return it.
-                if cols.len() != 1 {
-                    DynamicIndex::Cached {
-                        intersect_outer,
-                        table: get_index_from_tableinfo(info, &cols),
-                    }
-                } else {
-                    DynamicIndex::CachedColumn {
-                        intersect_outer,
-                        table: get_column_index_from_tableinfo(info, cols[0]).clone(),
-                    }
+        let dyn_index = if let Subset::Dense(range) = subset
+            && all_cacheable
+            && whole_table.size() / 2 < subset.size()
+        {
+            // Skip intersecting with the subset if we are just looking at the
+            // whole table.
+            let needs_intersect =
+                !(whole_table.is_dense() && subset.bounds() == whole_table.bounds());
+            // When intersecting, store the Dense range directly so we can do a
+            // combined copy+filter without a runtime match on subset type later.
+            let intersect_outer = if needs_intersect { Some(*range) } else { None };
+            // heuristic: if the subset we are scanning is somewhat
+            // large _or_ it is most of the table, or we already have a cached
+            // index for it, then return it.
+            if cols.len() != 1 {
+                DynamicIndex::Cached {
+                    intersect_outer,
+                    table: get_index_from_tableinfo(info, &cols),
                 }
-            } else if cols.len() != 1 {
-                // NB: we should have a caching strategy for non-column indexes.
-                DynamicIndex::Dynamic(info.table.group_by_key(subset.as_ref(), &cols))
             } else {
-                DynamicIndex::DynamicColumn(trie_node.get_cached_index(cols[0], info))
-            };
+                DynamicIndex::CachedColumn {
+                    intersect_outer,
+                    table: get_column_index_from_tableinfo(info, cols[0]).clone(),
+                }
+            }
+        } else if cols.len() != 1 {
+            // NB: we should have a caching strategy for non-column indexes.
+            DynamicIndex::Dynamic(info.table.group_by_key(subset.as_ref(), &cols))
+        } else {
+            DynamicIndex::DynamicColumn(trie_node.get_cached_index(cols[0], info))
+        };
         Prober {
             node: trie_node,
             ix: dyn_index,
@@ -871,11 +850,9 @@ impl<'a> JoinState<'a> {
                             // a recursive run_plan call, avoiding function call
                             // overhead + an extra should_stop() check.
                             if cur + 1 >= instr_order.len() {
-                                action_buf.push_bindings(
-                                    action,
-                                    &binding_info.bindings,
-                                    || self.exec_state.clone(),
-                                );
+                                action_buf.push_bindings(action, &binding_info.bindings, || {
+                                    self.exec_state.clone()
+                                });
                             } else {
                                 self.run_plan(
                                     stages,
@@ -928,7 +905,7 @@ impl<'a> JoinState<'a> {
                                     db,
                                     exec_state: exec_state_for_work.clone(),
                                     // Each rayon task uses its own thread-local pool.
-                                    // This makes drain_updates_parallel slightly more expensive 
+                                    // This makes drain_updates_parallel slightly more expensive
                                     // than drain_updates eevn when both are run in single thread
                                     pool: with_pool_set(|ps| ps.get_pool()),
                                 }
@@ -983,8 +960,7 @@ impl<'a> JoinState<'a> {
                     prober.for_each(|val, x| {
                         updates.push_binding(*var, val[0]);
                         if x.size() <= 16 {
-                            let sub =
-                                refine_subset(x.to_owned(&pool), &a.cs, &table, has_stale);
+                            let sub = refine_subset(x.to_owned(pool), &a.cs, &table, has_stale);
                             if sub.is_empty() {
                                 updates.rollback();
                                 return;
@@ -999,11 +975,12 @@ impl<'a> JoinState<'a> {
                                 }
                             }
                         } else {
-                            let node = prober
-                                .node
-                                .get_cached_trie_node(a.column, val[0], info, || {
-                                    refine_subset(x.to_owned(&pool), &a.cs, &table, has_stale)
-                                });
+                            let node =
+                                prober
+                                    .node
+                                    .get_cached_trie_node(a.column, val[0], info, || {
+                                        refine_subset(x.to_owned(pool), &a.cs, &table, has_stale)
+                                    });
                             if node.subset.is_empty() {
                                 updates.rollback();
                                 return;
@@ -1043,7 +1020,7 @@ impl<'a> JoinState<'a> {
                             updates.push_binding(*var, val[0]);
                             if small_sub.size() <= 16 {
                                 let small_sub = refine_subset(
-                                    small_sub.to_owned(&pool),
+                                    small_sub.to_owned(pool),
                                     &smaller_scan.cs,
                                     &small_table,
                                     small_has_stale,
@@ -1058,7 +1035,10 @@ impl<'a> JoinState<'a> {
                                         updates.refine_atom_dense(smaller_atom, range);
                                     }
                                     small_sub => {
-                                        updates.refine_atom(smaller_atom, Arc::new(TrieNode::new(small_sub)));
+                                        updates.refine_atom(
+                                            smaller_atom,
+                                            Arc::new(TrieNode::new(small_sub)),
+                                        );
                                     }
                                 }
                             } else {
@@ -1068,7 +1048,7 @@ impl<'a> JoinState<'a> {
                                     small_info,
                                     || {
                                         refine_subset(
-                                            small_sub.to_owned(&pool),
+                                            small_sub.to_owned(pool),
                                             &smaller_scan.cs,
                                             &small_table,
                                             small_has_stale,
@@ -1082,8 +1062,12 @@ impl<'a> JoinState<'a> {
                                 updates.refine_atom(smaller_atom, smaller_node);
                             }
                             if large_sub.size() <= 16 {
-                                let large_sub =
-                                    refine_subset(large_sub.to_owned(pool), &larger_scan.cs, &large_table, large_has_stale);
+                                let large_sub = refine_subset(
+                                    large_sub.to_owned(pool),
+                                    &larger_scan.cs,
+                                    &large_table,
+                                    large_has_stale,
+                                );
                                 if large_sub.is_empty() {
                                     updates.rollback();
                                     return;
@@ -1094,7 +1078,10 @@ impl<'a> JoinState<'a> {
                                         updates.refine_atom_dense(larger_atom, range);
                                     }
                                     large_sub => {
-                                        updates.refine_atom(larger_atom, Arc::new(TrieNode::new(large_sub)));
+                                        updates.refine_atom(
+                                            larger_atom,
+                                            Arc::new(TrieNode::new(large_sub)),
+                                        );
                                     }
                                 }
                             } else {
@@ -1102,7 +1089,14 @@ impl<'a> JoinState<'a> {
                                     larger_scan.column,
                                     val[0],
                                     large_info,
-                                    || refine_subset(large_sub.to_owned(pool), &larger_scan.cs, &large_table, large_has_stale),
+                                    || {
+                                        refine_subset(
+                                            large_sub.to_owned(pool),
+                                            &larger_scan.cs,
+                                            &large_table,
+                                            large_has_stale,
+                                        )
+                                    },
                                 );
                                 if larger_node.subset.is_empty() {
                                     updates.rollback();
@@ -1162,11 +1156,15 @@ impl<'a> JoinState<'a> {
                                     continue;
                                 }
                                 if let Some(sub) = probers[i].get_subset(key) {
-                                    let table = self.db.tables[atoms[rest[i].atom].table]
-                                        .table
-                                        .as_ref();
+                                    let table =
+                                        self.db.tables[atoms[rest[i].atom].table].table.as_ref();
                                     if sub.size() <= 16 {
-                                        let sub = refine_subset(sub.to_owned(pool), &rest[i].cs, &table, rest_has_stale[i]);
+                                        let sub = refine_subset(
+                                            sub.to_owned(pool),
+                                            &rest[i].cs,
+                                            &table,
+                                            rest_has_stale[i],
+                                        );
                                         if sub.is_empty() {
                                             updates.rollback();
                                             return;
@@ -1176,7 +1174,10 @@ impl<'a> JoinState<'a> {
                                                 updates.refine_atom_dense(scan.atom, range);
                                             }
                                             sub => {
-                                                updates.refine_atom(scan.atom, Arc::new(TrieNode::new(sub)));
+                                                updates.refine_atom(
+                                                    scan.atom,
+                                                    Arc::new(TrieNode::new(sub)),
+                                                );
                                             }
                                         }
                                     } else {
@@ -1184,7 +1185,14 @@ impl<'a> JoinState<'a> {
                                             scan.column,
                                             key[0],
                                             &self.db.tables[atoms[scan.atom].table],
-                                            || refine_subset(sub.to_owned(pool), &rest[i].cs, &table, rest_has_stale[i]),
+                                            || {
+                                                refine_subset(
+                                                    sub.to_owned(pool),
+                                                    &rest[i].cs,
+                                                    &table,
+                                                    rest_has_stale[i],
+                                                )
+                                            },
                                         );
                                         if node.subset.is_empty() {
                                             updates.rollback();
@@ -1200,7 +1208,7 @@ impl<'a> JoinState<'a> {
                             }
                             if sub.size() <= 16 {
                                 let main_sub = refine_subset(
-                                    sub.to_owned(&pool),
+                                    sub.to_owned(pool),
                                     &main_spec.cs,
                                     &main_spec_table,
                                     main_spec_has_stale,
@@ -1214,7 +1222,10 @@ impl<'a> JoinState<'a> {
                                         updates.refine_atom_dense(main_spec.atom, range);
                                     }
                                     main_sub => {
-                                        updates.refine_atom(main_spec.atom, Arc::new(TrieNode::new(main_sub)));
+                                        updates.refine_atom(
+                                            main_spec.atom,
+                                            Arc::new(TrieNode::new(main_sub)),
+                                        );
                                     }
                                 }
                             } else {
@@ -1223,8 +1234,13 @@ impl<'a> JoinState<'a> {
                                     key[0],
                                     main_spec_info,
                                     || {
-                                        let sub = sub.to_owned(&pool);
-                                        refine_subset(sub, &main_spec.cs, &main_spec_table, main_spec_has_stale)
+                                        let sub = sub.to_owned(pool);
+                                        refine_subset(
+                                            sub,
+                                            &main_spec.cs,
+                                            &main_spec_table,
+                                            main_spec_has_stale,
+                                        )
                                     },
                                 );
                                 if main_node.subset.is_empty() {
@@ -1359,10 +1375,8 @@ impl<'a> JoinState<'a> {
                             let index_key: &[Value] = if let [col] = index_cols.as_slice() {
                                 std::slice::from_ref(&key[col.index()])
                             } else {
-                                index_key_buf = index_cols
-                                    .iter()
-                                    .map(|col| key[col.index()])
-                                    .collect();
+                                index_key_buf =
+                                    index_cols.iter().map(|col| key[col.index()]).collect();
                                 &index_key_buf
                             };
                             let Some(subset) = prober.get_subset(index_key) else {
@@ -1373,7 +1387,12 @@ impl<'a> JoinState<'a> {
                             // apply any constraints needed in this scan.
                             let table_info = &self.db.tables[atoms[*atom].table];
                             let cs = &to_intersect[*i].0.constraints;
-                            let subset = refine_subset(subset.to_owned(pool), cs, &table_info.table.as_ref(), index_has_stale[prober_idx]);
+                            let subset = refine_subset(
+                                subset.to_owned(pool),
+                                cs,
+                                &table_info.table.as_ref(),
+                                index_has_stale[prober_idx],
+                            );
                             if subset.is_empty() {
                                 updates.rollback();
                                 // There are no possible values for this subset
@@ -1445,7 +1464,9 @@ impl<'a> JoinState<'a> {
                                          mat_key: Option<&[Value]>,
                                          mat_non_key: Option<&[Value]>|
                  -> bool {
-                    for (j, ((spec, cols), prober)) in to_intersect.iter().zip(probers.iter()).enumerate() {
+                    for (j, ((spec, cols), prober)) in
+                        to_intersect.iter().zip(probers.iter()).enumerate()
+                    {
                         key.clear();
                         for col in cols.iter() {
                             let val = match mat_key {
