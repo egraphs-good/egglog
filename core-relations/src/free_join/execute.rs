@@ -2148,8 +2148,12 @@ fn sort_plan_by_size_inner(
     // We prioritize variables by
     //
     //   (1) how many times an atom with this variable has been refined,
-    //   (2) then by how many relations joins on this variable
-    //   (3) then by the cardinality of the variable to be enumerated
+    //   (2) then by the cardinality of the variable to be enumerated (smaller → earlier)
+    //   (3) then by how many relations join on this variable (more → earlier)
+    //
+    // Estimate size is second so that stages with very small cardinality (e.g. FunDep
+    // consequents with exactly 1 value) are run before multi-relation stages that happen
+    // to have a larger current estimate.
     let key_fn = |join_stage: &JoinStage,
                   binding_info: &BindingInfo,
                   times_refined: &DenseIdMap<AtomId, i64>| {
@@ -2167,8 +2171,8 @@ fn sort_plan_by_size_inner(
         };
         (
             -refine,
-            -num_intersected_rels(join_stage),
             estimate_size(join_stage, binding_info),
+            -num_intersected_rels(join_stage),
         )
     };
 
