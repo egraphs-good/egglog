@@ -766,14 +766,14 @@ impl Query {
         // For N atoms, we create N queries for seminaive evaluation. We can reuse the cached plan
         // directly.
         if !self.seminaive || (self.atoms.is_empty() && mid_ts == Timestamp::new(0)) {
-            rsb.add_rule_from_cached_plan(&cached_plan.plan, &[]);
+            let _ = rsb.add_rule_from_cached_plan(&cached_plan.plan, &[]);
             return Ok(());
         }
         if let Some(focus_atom) = self.sole_focus {
             // There is a single "focus" atom that we will constrain to look at new values.
             let (_, _, schema_info) = &self.atoms[focus_atom];
             let ts_col = ColumnId::from_usize(schema_info.ts_col());
-            rsb.add_rule_from_cached_plan(
+            let _ = rsb.add_rule_from_cached_plan(
                 &cached_plan.plan,
                 &[(
                     cached_plan.atom_mapping[focus_atom],
@@ -789,13 +789,11 @@ impl Query {
         let mut constraints: Vec<(core_relations::AtomId, Constraint)> =
             Vec::with_capacity(self.atoms.len());
         'outer: for focus_atom in 0..self.atoms.len() {
-            for (i, (_, _, schema_info)) in self.atoms.iter().enumerate() {
+            constraints.clear();
+            let mut work = |i: usize, schema_info: &SchemaMath| {
                 let ts_col = ColumnId::from_usize(schema_info.ts_col());
                 match i.cmp(&focus_atom) {
                     Ordering::Less => {
-                        if mid_ts == Timestamp::new(0) {
-                            continue 'outer;
-                        }
                         constraints.push((
                             cached_plan.atom_mapping[i],
                             Constraint::LtConst {
@@ -813,9 +811,18 @@ impl Query {
                     )),
                     Ordering::Greater => {}
                 };
+            };
+            // start with the focus atom since `add_rule_from_cached_plan` will apply the
+            // constraints in order, and the focus atom may have an empty delta, which
+            // will let it bail early.
+            work(focus_atom, &self.atoms[focus_atom].2);
+            for (i, (_, _, schema_info)) in self.atoms[0..focus_atom].iter().enumerate() {
+                if mid_ts == Timestamp::new(0) {
+                    continue 'outer;
+                }
+                work(i, schema_info);
             }
-            rsb.add_rule_from_cached_plan(&cached_plan.plan, &constraints);
-            constraints.clear();
+            let _ = rsb.add_rule_from_cached_plan(&cached_plan.plan, &constraints);
         }
         Ok(())
     }

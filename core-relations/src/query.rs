@@ -134,7 +134,7 @@ impl<'outer> RuleSetBuilder<'outer> {
         table: TableId,
         atom: AtomId,
         constraints: &[Constraint],
-    ) -> JoinHeader {
+    ) -> Option<JoinHeader> {
         let processed = self.db.process_constraints(table, constraints);
         if !processed.slow.is_empty() {
             panic!(
@@ -142,11 +142,14 @@ impl<'outer> RuleSetBuilder<'outer> {
                  Got: {constraints:?} for table {table:?}",
             );
         }
-        JoinHeader {
+        if processed.subset.size() == 0 {
+            return None;
+        }
+        Some(JoinHeader {
             atom,
             constraints: processed.fast,
             subset: processed.subset,
-        }
+        })
     }
 
     fn push_extra_constraints(
@@ -154,15 +157,17 @@ impl<'outer> RuleSetBuilder<'outer> {
         headers: &mut Vec<JoinHeader>,
         atoms: &Arc<DenseIdMap<AtomId, Atom>>,
         extra_constraints: &[(AtomId, Constraint)],
-    ) {
+    ) -> Option<()> {
         for (atom_id, constraint) in extra_constraints {
             let atom_info = atoms.get(*atom_id).expect("atom must exist in plan");
             let table = atom_info.table;
-
-            let header =
-                self.reprocess_constraints(table, *atom_id, std::slice::from_ref(constraint));
-            headers.push(header);
+            headers.push(self.reprocess_constraints(
+                table,
+                *atom_id,
+                std::slice::from_ref(constraint),
+            )?);
         }
+        Some(())
     }
 
     fn reprocess_existing_headers(
@@ -170,92 +175,101 @@ impl<'outer> RuleSetBuilder<'outer> {
         headers: &mut Vec<JoinHeader>,
         atoms: &Arc<DenseIdMap<AtomId, Atom>>,
         existing: &[JoinHeader],
-    ) {
+    ) -> Option<()> {
         for JoinHeader {
             atom, constraints, ..
         } in existing
         {
             let atom_info = atoms.get(*atom).expect("atom must exist in plan");
             let table = atom_info.table;
-
-            headers.push(self.reprocess_constraints(table, *atom, constraints));
+            headers.push(self.reprocess_constraints(table, *atom, constraints)?);
         }
+        Some(())
     }
 
     fn get_rule_with_extra_constraints(
-        &mut self,
+        &self,
         cached: &CachedPlan,
         action_id: ActionId,
         extra_constraints: &[(AtomId, Constraint)],
-    ) -> Plan {
+    ) -> Option<Plan> {
         match &cached.plan {
             Plan::SinglePlan(cached_plan) => {
                 let mut headers = vec![];
                 let stages = JoinStages {
                     instrs: cached_plan.stages.instrs.clone(),
                 };
-
-                self.push_extra_constraints(&mut headers, &cached_plan.atoms, extra_constraints);
-
+                self.push_extra_constraints(&mut headers, &cached_plan.atoms, extra_constraints)?;
                 self.reprocess_existing_headers(
                     &mut headers,
                     &cached_plan.atoms,
                     &cached_plan.header,
-                );
-
-                Plan::SinglePlan(SinglePlan {
+                )?;
+                Some(Plan::SinglePlan(SinglePlan {
                     atoms: cached_plan.atoms.clone(),
                     header: headers,
                     stages,
                     actions: action_id,
-                })
+                }))
             }
             Plan::DecomposedPlan(cached_plan) => {
                 let mut blocks = Vec::with_capacity(cached_plan.stages.blocks.len());
                 let mut headers = vec![];
-                self.push_extra_constraints(&mut headers, &cached_plan.atoms, extra_constraints);
+                self.push_extra_constraints(&mut headers, &cached_plan.atoms, extra_constraints)?;
                 self.reprocess_existing_headers(
                     &mut headers,
                     &cached_plan.atoms,
                     &cached_plan.header,
-                );
-
-                // Process body blocks
+                )?;
                 for cached_block in cached_plan.stages.blocks.iter() {
                     let stages = JoinStages {
                         instrs: cached_block.0.instrs.clone(),
                     };
-
                     blocks.push((stages, cached_block.1.clone()));
                 }
-
-                // Process result blocks
                 let result_block = JoinStages {
                     instrs: cached_plan.result_block.instrs.clone(),
                 };
-
-                Plan::DecomposedPlan(DecomposedPlan {
+                Some(Plan::DecomposedPlan(DecomposedPlan {
                     atoms: cached_plan.atoms.clone(),
                     header: headers,
                     stages: JoinStageBlocks { blocks },
                     actions: action_id,
                     result_block,
-                })
+                }))
             }
         }
     }
 
+    /// Add a rule to this rule set based on a previously cached plan, optionally
+    /// with additional constraints applied on top.
+    ///
+    /// Returns `None` if the query is provably empty given the current database
+    /// state (i.e. some constraint narrows a table to zero matching rows), in
+    /// which case no rule or action is allocated. Returns `Some(RuleId)` otherwise.
+    ///
+    /// The primary use-case is seminaive evaluation: an egglog rule is compiled
+    /// once into a [`CachedPlan`] and then added to a fresh [`RuleSet`] each
+    /// iteration with timestamp constraints (e.g. `GeConst` on the focus atom)
+    /// that select only new tuples. If no new tuples exist for an atom, the
+    /// `None` return allows the caller to skip that variant entirely.
     pub fn add_rule_from_cached_plan(
         &mut self,
         cached: &CachedPlan,
         extra_constraints: &[(AtomId, Constraint)],
-    ) -> RuleId {
-        // First, patch in the new action id.
-        let action_id = self.rule_set.actions.push(cached.actions.clone());
-        let plan = self.get_rule_with_extra_constraints(cached, action_id, extra_constraints);
-        self.rule_set
-            .plans
-            .push((plan, cached.desc.clone(), cached.symbol_map.clone()))
+    ) -> Option<RuleId> {
+        // Peek at the action_id without allocating it yet, so we don't break
+        // the rules<->actions bijection if the query turns out to be empty.
+        let action_id = self.rule_set.actions.next_id();
+        let plan = self.get_rule_with_extra_constraints(cached, action_id, extra_constraints)?;
+        // The query is non-empty: now commit the action and the plan.
+        let actual_action_id = self.rule_set.actions.push(cached.actions.clone());
+        debug_assert_eq!(action_id, actual_action_id);
+        Some(
+            self.rule_set
+                .plans
+                .push((plan, cached.desc.clone(), cached.symbol_map.clone())),
+        )
     }
 
     /// Build the ruleset.
