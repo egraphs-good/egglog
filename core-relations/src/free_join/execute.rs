@@ -162,12 +162,10 @@ impl Prober {
                 };
                 Some(PotentiallyStale::maybe_stale(subset))
             }
-            DynamicIndex::Dynamic(tab) => {
-                tab.get_subset(key).map(PotentiallyStale::not_stale)
+            DynamicIndex::Dynamic(tab) => tab.get_subset(key).map(PotentiallyStale::not_stale),
+            DynamicIndex::DynamicColumn(tab) => {
+                tab.get_subset(&key[0]).map(PotentiallyStale::not_stale)
             }
-            DynamicIndex::DynamicColumn(tab) => tab
-                .get_subset(&key[0])
-                .map(PotentiallyStale::not_stale),
         }
     }
     fn for_each(&self, mut f: impl FnMut(&[Value], PotentiallyStale<SubsetRef>)) {
