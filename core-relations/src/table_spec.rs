@@ -398,7 +398,6 @@ impl<T: Table> TableWrapper for WrapperImpl<T> {
         })
     }
     fn group_by_col(&self, table: &dyn Table, subset: SubsetRef, col: ColumnId) -> ColumnIndex {
-        // eprintln!("{}, {:?}", subset.size(), subset.bounds());
         let table = table.as_any().downcast_ref::<T>().unwrap();
         let mut res = ColumnIndex::new();
         table.scan_generic(subset, |row_id, row| {
