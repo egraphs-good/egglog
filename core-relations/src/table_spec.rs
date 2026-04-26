@@ -10,10 +10,7 @@ use std::{
     ops::{Deref, DerefMut},
 };
 
-use crate::{
-    numeric_id::{DenseIdMap, NumericId, define_id},
-    offsets::Offsets,
-};
+use crate::numeric_id::{DenseIdMap, NumericId, define_id};
 use smallvec::SmallVec;
 
 use crate::{

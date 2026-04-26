@@ -157,17 +157,17 @@ impl<'outer> RuleSetBuilder<'outer> {
         headers: &mut Vec<JoinHeader>,
         atoms: &Arc<DenseIdMap<AtomId, Atom>>,
         extra_constraints: &[(AtomId, Constraint)],
-    ) -> bool {
+    ) -> Option<()> {
         for (atom_id, constraint) in extra_constraints {
             let atom_info = atoms.get(*atom_id).expect("atom must exist in plan");
             let table = atom_info.table;
-
-            match self.reprocess_constraints(table, *atom_id, std::slice::from_ref(constraint)) {
-                Some(header) => headers.push(header),
-                None => return false,
-            }
+            headers.push(self.reprocess_constraints(
+                table,
+                *atom_id,
+                std::slice::from_ref(constraint),
+            )?);
         }
-        true
+        Some(())
     }
 
     fn reprocess_existing_headers(
@@ -175,20 +175,16 @@ impl<'outer> RuleSetBuilder<'outer> {
         headers: &mut Vec<JoinHeader>,
         atoms: &Arc<DenseIdMap<AtomId, Atom>>,
         existing: &[JoinHeader],
-    ) -> bool {
+    ) -> Option<()> {
         for JoinHeader {
             atom, constraints, ..
         } in existing
         {
             let atom_info = atoms.get(*atom).expect("atom must exist in plan");
             let table = atom_info.table;
-
-            match self.reprocess_constraints(table, *atom, constraints) {
-                Some(header) => headers.push(header),
-                None => return false,
-            }
+            headers.push(self.reprocess_constraints(table, *atom, constraints)?);
         }
-        true
+        Some(())
     }
 
     fn get_rule_with_extra_constraints(
@@ -203,19 +199,12 @@ impl<'outer> RuleSetBuilder<'outer> {
                 let stages = JoinStages {
                     instrs: cached_plan.stages.instrs.clone(),
                 };
-
-                if !self.push_extra_constraints(&mut headers, &cached_plan.atoms, extra_constraints) {
-                    return None;
-                }
-
-                if !self.reprocess_existing_headers(
+                self.push_extra_constraints(&mut headers, &cached_plan.atoms, extra_constraints)?;
+                self.reprocess_existing_headers(
                     &mut headers,
                     &cached_plan.atoms,
                     &cached_plan.header,
-                ) {
-                    return None;
-                }
-
+                )?;
                 Some(Plan::SinglePlan(SinglePlan {
                     atoms: cached_plan.atoms.clone(),
                     header: headers,
@@ -226,31 +215,21 @@ impl<'outer> RuleSetBuilder<'outer> {
             Plan::DecomposedPlan(cached_plan) => {
                 let mut blocks = Vec::with_capacity(cached_plan.stages.blocks.len());
                 let mut headers = vec![];
-                if !self.push_extra_constraints(&mut headers, &cached_plan.atoms, extra_constraints) {
-                    return None;
-                }
-                if !self.reprocess_existing_headers(
+                self.push_extra_constraints(&mut headers, &cached_plan.atoms, extra_constraints)?;
+                self.reprocess_existing_headers(
                     &mut headers,
                     &cached_plan.atoms,
                     &cached_plan.header,
-                ) {
-                    return None;
-                }
-
-                // Process body blocks
+                )?;
                 for cached_block in cached_plan.stages.blocks.iter() {
                     let stages = JoinStages {
                         instrs: cached_block.0.instrs.clone(),
                     };
-
                     blocks.push((stages, cached_block.1.clone()));
                 }
-
-                // Process result blocks
                 let result_block = JoinStages {
                     instrs: cached_plan.result_block.instrs.clone(),
                 };
-
                 Some(Plan::DecomposedPlan(DecomposedPlan {
                     atoms: cached_plan.atoms.clone(),
                     header: headers,
@@ -262,6 +241,18 @@ impl<'outer> RuleSetBuilder<'outer> {
         }
     }
 
+    /// Add a rule to this rule set based on a previously cached plan, optionally
+    /// with additional constraints applied on top.
+    ///
+    /// Returns `None` if the query is provably empty given the current database
+    /// state (i.e. some constraint narrows a table to zero matching rows), in
+    /// which case no rule or action is allocated. Returns `Some(RuleId)` otherwise.
+    ///
+    /// The primary use-case is seminaive evaluation: an egglog rule is compiled
+    /// once into a [`CachedPlan`] and then added to a fresh [`RuleSet`] each
+    /// iteration with timestamp constraints (e.g. `GeConst` on the focus atom)
+    /// that select only new tuples. If no new tuples exist for an atom, the
+    /// `None` return allows the caller to skip that variant entirely.
     pub fn add_rule_from_cached_plan(
         &mut self,
         cached: &CachedPlan,
