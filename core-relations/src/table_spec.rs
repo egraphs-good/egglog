@@ -263,6 +263,13 @@ pub trait Table: Any + Send + Sync {
         }
     }
 
+    /// Returns true if the table contains any stale rows (rows whose first column
+    /// has been set to [`Value::stale()`]). The default implementation returns `true`
+    /// (conservative). Tables that track stale-row counts should override this.
+    fn has_stale_rows(&self) -> bool {
+        true
+    }
+
     /// Filter a given subset of the table for the rows that are live
     fn refine_live(&self, subset: Subset) -> Subset {
         // NB: This relies on Value::stale() being strictly larger than any other value in the table.

@@ -345,6 +345,10 @@ impl Table for SortedWritesTable {
         Subset::Dense(OffsetRange::new(RowId::new(0), self.data.next_row()))
     }
 
+    fn has_stale_rows(&self) -> bool {
+        self.data.stale_rows > 0
+    }
+
     fn len(&self) -> usize {
         self.data.data.len() - self.data.stale_rows
     }
@@ -357,19 +361,25 @@ impl Table for SortedWritesTable {
             // Empty subset
             return;
         };
-        assert!(
+        debug_assert!(
             hi.index() <= self.data.data.len(),
             "{} vs. {}",
             hi.index(),
             self.data.data.len()
         );
-        // SAFETY: subsets are sorted, low must be at most hi, and hi is less
-        // than the length of the table.
-        subset.offsets(|row| unsafe {
-            if let Some(vals) = self.data.get_row_unchecked(row) {
-                f(row, vals)
-            }
-        })
+        if self.data.stale_rows == 0 {
+            // Fast path: no stale rows, skip is_stale check per row.
+            // SAFETY: subsets are sorted, low must be at most hi, and hi is less
+            // than the length of the table.
+            subset.offsets(|row| unsafe { f(row, self.data.data.get_row_unchecked(row)) })
+        } else {
+            // SAFETY: same as above.
+            subset.offsets(|row| unsafe {
+                if let Some(vals) = self.data.get_row_unchecked(row) {
+                    f(row, vals)
+                }
+            })
+        }
     }
 
     fn scan_generic_bounded(
@@ -384,14 +394,25 @@ impl Table for SortedWritesTable {
         Self: Sized,
     {
         if cs.is_empty() {
-            subset
-                .iter_bounded(start.index(), start.index() + n, |row| {
-                    let Some(entry) = self.data.get_row(row) else {
-                        return;
-                    };
-                    f(row, entry);
-                })
-                .map(Offset::from_usize)
+            if self.data.stale_rows == 0 {
+                // Fast path: no stale rows, skip bounds check and is_stale check.
+                // SAFETY: subsets are valid (bounds within table), so all row IDs are in-bounds.
+                subset
+                    .iter_bounded(start.index(), start.index() + n, |row| {
+                        let entry = unsafe { self.data.data.get_row_unchecked(row) };
+                        f(row, entry);
+                    })
+                    .map(Offset::from_usize)
+            } else {
+                subset
+                    .iter_bounded(start.index(), start.index() + n, |row| {
+                        let Some(entry) = self.data.get_row(row) else {
+                            return;
+                        };
+                        f(row, entry);
+                    })
+                    .map(Offset::from_usize)
+            }
         } else {
             subset
                 .iter_bounded(start.index(), start.index() + n, |row| {
@@ -970,7 +991,13 @@ impl SortedWritesTable {
     }
 
     fn get_if(&self, cs: &[Constraint], row: RowId) -> Option<&[Value]> {
-        let row = self.data.get_row(row)?;
+        // Fast path: when no stale rows, skip the stale check.
+        let row = if self.data.stale_rows == 0 {
+            // SAFETY: callers guarantee row is within bounds via subset construction.
+            unsafe { self.data.data.get_row_unchecked(row) }
+        } else {
+            self.data.get_row(row)?
+        };
         let mut res = true;
         for constraint in cs {
             match constraint {

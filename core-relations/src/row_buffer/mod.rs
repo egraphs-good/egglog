@@ -237,7 +237,7 @@ impl RowBuffer {
     /// This method panics if the length of `row` does not match the arity of
     /// the RowBuffer.
     pub(crate) fn add_row(&mut self, row: &[Value]) -> RowId {
-        assert_eq!(
+        debug_assert_eq!(
             row.len(),
             self.n_columns,
             "attempting to add a row with mismatched arity to table"
@@ -326,7 +326,7 @@ impl TaggedRowBuffer {
         //
         // Changes to the implementation of one method should probably also
         // change the other.
-        assert_eq!(
+        debug_assert_eq!(
             row.len(),
             self.base_arity(),
             "attempting to add a row with mismatched arity to table"

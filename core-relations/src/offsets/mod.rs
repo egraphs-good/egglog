@@ -43,7 +43,7 @@ impl Offsets for OffsetRange {
 
 impl OffsetRange {
     pub fn new(start: RowId, end: RowId) -> OffsetRange {
-        assert!(
+        debug_assert!(
             start <= end,
             "attempting to create malformed range {start:?}..{end:?}"
         );
@@ -64,7 +64,7 @@ impl SortedOffsetVector {
     }
 
     pub(crate) fn push(&mut self, offset: RowId) {
-        assert!(self.0.last().is_none_or(|last| last <= &offset));
+        debug_assert!(self.0.last().is_none_or(|last| last <= &offset));
         // SAFETY: we just checked the invariant
         unsafe { self.push_unchecked(offset) }
     }
@@ -358,6 +358,7 @@ impl Subset {
         }
     }
     /// Remove any elements of the current subset not present in `other`.
+    #[inline]
     pub(crate) fn intersect(&mut self, other: SubsetRef, pool: &Pool<SortedOffsetVector>) {
         match (self, other) {
             (Subset::Dense(cur), SubsetRef::Dense(other)) => {
@@ -372,34 +373,62 @@ impl Subset {
             (x @ Subset::Dense(_), SubsetRef::Sparse(sparse)) => {
                 let (low, hi) = x.bounds().unwrap();
                 if sparse.bounds().is_some() {
-                    let mut res = pool.get();
                     let l = sparse.binary_search_by_id(low);
                     let r = sparse.binary_search_by_id(hi);
-                    let subslice = sparse.subslice(l, r);
-                    res.extend_nonoverlapping(subslice);
-                    *x = Subset::Sparse(res);
+                    // Check emptiness before allocating from the pool.
+                    if l >= r {
+                        *x = Subset::Dense(OffsetRange::new(RowId::new(0), RowId::new(0)));
+                    } else {
+                        let subslice = sparse.subslice(l, r);
+                        let mut res = pool.get();
+                        res.extend_nonoverlapping(subslice);
+                        *x = Subset::Sparse(res);
+                    }
                 } else {
                     // empty range
                     *x = Subset::Dense(OffsetRange::new(RowId::new(0), RowId::new(0)));
                 }
             }
             (Subset::Sparse(sparse), SubsetRef::Dense(dense)) => {
+                // Binary search for both bounds; avoid copy_within if no prefix to remove.
+                let l = sparse.slice().binary_search_by_id(dense.start);
                 let r = sparse.slice().binary_search_by_id(dense.end);
-                sparse.0.truncate(r);
-                sparse.retain(|row| row >= dense.start);
+                if l == 0 {
+                    sparse.0.truncate(r);
+                } else {
+                    sparse.0.copy_within(l..r, 0);
+                    sparse.0.truncate(r - l);
+                }
             }
             (Subset::Sparse(cur), SubsetRef::Sparse(other)) => {
+                // Hybrid intersect: O(1) fast paths for dense matches and already-past
+                // cases, falling back to binary search when other needs to advance.
                 let mut other_off = 0;
-                cur.retain(|rowid| match other.scan_for_offset(other_off, rowid) {
-                    Ok(found) => {
-                        other_off = found + 1;
-                        true
+                cur.retain(|rowid| {
+                    if other_off >= other.inner().len() {
+                        return false;
                     }
-                    Err(next_off) => {
-                        other_off = next_off;
-                        false
+                    let cur_other = other.inner()[other_off];
+                    if cur_other == rowid {
+                        // Dense match: advance and return true.
+                        other_off += 1;
+                        return true;
                     }
-                })
+                    if cur_other > rowid {
+                        // cur is already past cur's rowid — other hasn't reached it.
+                        return false;
+                    }
+                    match other.scan_for_offset(other_off, rowid) {
+                        Ok(found) => {
+                            other_off = found + 1;
+                            true
+                        }
+                        Err(next_off) => {
+                            other_off = next_off;
+                            false
+                        }
+                    }
+                });
             }
         }
     }
