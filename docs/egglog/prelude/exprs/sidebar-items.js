@@ -1,0 +1,1 @@
+window.SIDEBAR_ITEMS = {"fn":["bool","call","float","int","string","unit","var"]};

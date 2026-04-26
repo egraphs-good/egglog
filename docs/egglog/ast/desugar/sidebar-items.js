@@ -1,0 +1,1 @@
+window.SIDEBAR_ITEMS = {"fn":["rule_name"]};

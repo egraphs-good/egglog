@@ -1,0 +1,1 @@
+window.SIDEBAR_ITEMS = {"mod":["parallel_writer"],"struct":["BitSet","ConcurrentVec","MutexReader","MutexWriter","Notification","NotificationList","ReadOptimizedLock","ResettableOnceLock"]};
