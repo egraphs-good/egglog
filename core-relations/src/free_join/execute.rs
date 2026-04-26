@@ -3,7 +3,10 @@
 use std::{
     cmp, iter, mem,
     ops::Range,
-    sync::{Arc, OnceLock, atomic::AtomicUsize},
+    sync::{
+        Arc, OnceLock,
+        atomic::{AtomicUsize, Ordering},
+    },
 };
 
 use crate::{
@@ -282,20 +285,28 @@ impl Database {
             let db: &Database = self;
             rayon::in_place_scope(|scope| {
                 for (plan, desc, symbol_map) in rule_set.plans.values() {
-                    // TODO: add stats
-                    let report_plan = match report_level {
-                        ReportLevel::TimeOnly => None,
-                        ReportLevel::WithPlan | ReportLevel::StageInfo => {
-                            Some(plan.to_report(symbol_map))
-                        }
-                    };
+                    let stage_stats: Option<Arc<PlanStageStats>> =
+                        if matches!(report_level, ReportLevel::StageInfo) {
+                            match plan {
+                                Plan::SinglePlan(p) => {
+                                    Some(Arc::new(PlanStageStats::new(p.stages.instrs.len())))
+                                }
+                                Plan::DecomposedPlan(_) => None,
+                            }
+                        } else {
+                            None
+                        };
 
                     let dash_rule_reports = dash_rule_reports.clone();
                     let desc = desc.clone();
                     let exec_state = exec_state.clone();
                     let match_counter = match_counter.clone();
                     scope.spawn(move |rule_scope| {
-                        let join_state = JoinState::new(db, exec_state.clone());
+                        let join_state = JoinState {
+                            db,
+                            exec_state: exec_state.clone(),
+                            stage_stats,
+                        };
                         let mut binding_info = BindingInfo::default();
                         for (id, info) in plan.atoms().iter() {
                             let table = join_state.db.get_table(info.table);
@@ -417,6 +428,16 @@ impl Database {
                         if action_buf.needs_flush {
                             action_buf.flush(&mut exec_state.clone());
                         }
+                        // Build report after execution so StageInfo can read collected stats.
+                        let report_plan = match report_level {
+                            ReportLevel::TimeOnly => None,
+                            ReportLevel::WithPlan => Some(plan.to_report(symbol_map, None)),
+                            ReportLevel::StageInfo => {
+                                let stats =
+                                    join_state.stage_stats.as_ref().map(|s| s.collect());
+                                Some(plan.to_report(symbol_map, stats.as_deref()))
+                            }
+                        };
                         let mut rule_report: RefMut<'_, Arc<str>, Vec<RuleReport>> =
                             dash_rule_reports.entry(desc).or_default();
                         rule_report.value_mut().push(RuleReport {
@@ -433,20 +454,28 @@ impl Database {
                 .collect();
         } else {
             rule_reports = HashMap::default();
-            let join_state = JoinState::new(self, exec_state.clone());
-            // Just run all of the plans in order with a single in-place action
-            // buffer.
+            // Just run all of the plans in order with a single in-place action buffer.
             let mut action_buf = InPlaceActionBuffer {
                 rule_set,
                 match_counter: match_counter.as_ref(),
                 batches: Default::default(),
             };
             for (plan, desc, symbol_map) in rule_set.plans.values() {
-                let report_plan = match report_level {
-                    ReportLevel::TimeOnly => None,
-                    ReportLevel::WithPlan | ReportLevel::StageInfo => {
-                        Some(plan.to_report(symbol_map))
-                    }
+                let stage_stats: Option<Arc<PlanStageStats>> =
+                    if matches!(report_level, ReportLevel::StageInfo) {
+                        match plan {
+                            Plan::SinglePlan(p) => {
+                                Some(Arc::new(PlanStageStats::new(p.stages.instrs.len())))
+                            }
+                            Plan::DecomposedPlan(_) => None,
+                        }
+                    } else {
+                        None
+                    };
+                let join_state = JoinState {
+                    db: self,
+                    exec_state: exec_state.clone(),
+                    stage_stats,
                 };
                 let mut binding_info = BindingInfo::default();
 
@@ -539,6 +568,16 @@ impl Database {
                 }
                 let search_and_apply_time = search_and_apply_timer.elapsed();
 
+                // Build report after execution so StageInfo can read collected stats.
+                let report_plan = match report_level {
+                    ReportLevel::TimeOnly => None,
+                    ReportLevel::WithPlan => Some(plan.to_report(symbol_map, None)),
+                    ReportLevel::StageInfo => {
+                        let stats = join_state.stage_stats.as_ref().map(|s| s.collect());
+                        Some(plan.to_report(symbol_map, stats.as_deref()))
+                    }
+                };
+
                 // TODO: unnecessary cloning in many cases
                 let rule_report = rule_reports.entry(desc.clone()).or_default();
                 rule_report.push(RuleReport {
@@ -595,9 +634,46 @@ impl Default for ActionState {
     }
 }
 
+/// Per-stage execution statistics accumulated atomically across parallel recursive calls.
+struct PlanStageStats {
+    // (num_candidates, num_succeeded) per stage index
+    data: Vec<(CachePadded<AtomicUsize>, CachePadded<AtomicUsize>)>,
+}
+
+impl PlanStageStats {
+    fn new(n_stages: usize) -> Self {
+        let mut data = Vec::with_capacity(n_stages);
+        for _ in 0..n_stages {
+            data.push((
+                CachePadded::new(AtomicUsize::new(0)),
+                CachePadded::new(AtomicUsize::new(0)),
+            ));
+        }
+        Self { data }
+    }
+
+    fn add(&self, stage_idx: usize, candidates: usize, succeeded: usize) {
+        if stage_idx < self.data.len() {
+            self.data[stage_idx].0.fetch_add(candidates, Ordering::Relaxed);
+            self.data[stage_idx].1.fetch_add(succeeded, Ordering::Relaxed);
+        }
+    }
+
+    fn collect(&self) -> Vec<egglog_reports::StageStats> {
+        self.data
+            .iter()
+            .map(|(c, s)| egglog_reports::StageStats {
+                num_candidates: c.load(Ordering::Relaxed),
+                num_succeeded: s.load(Ordering::Relaxed),
+            })
+            .collect()
+    }
+}
+
 struct JoinState<'a> {
     db: &'a Database,
     exec_state: ExecutionState<'a>,
+    stage_stats: Option<Arc<PlanStageStats>>,
 }
 
 type ColumnIndexes = IdVec<ColumnId, OnceLock<Arc<ColumnIndex>>>;
@@ -685,8 +761,10 @@ impl BindingInfo {
 }
 
 impl<'a> JoinState<'a> {
-    fn new(db: &'a Database, exec_state: ExecutionState<'a>) -> Self {
-        Self { db, exec_state }
+    fn record_stage_stats(&self, stage_idx: usize, candidates: usize, succeeded: usize) {
+        if let Some(stats) = &self.stage_stats {
+            stats.add(stage_idx, candidates, succeeded);
+        }
     }
 
     fn get_index(
@@ -876,6 +954,7 @@ impl<'a> JoinState<'a> {
                 let db = self.db;
                 let exec_state_for_factory = self.exec_state.clone();
                 let exec_state_for_work = self.exec_state.clone();
+                let stage_stats_parallel = self.stage_stats.clone();
                 action_buf.recur(
                     BorrowedLocalState {
                         binding_info,
@@ -900,6 +979,7 @@ impl<'a> JoinState<'a> {
                                 JoinState {
                                     db,
                                     exec_state: exec_state_for_work.clone(),
+                                    stage_stats: stage_stats_parallel.clone(),
                                 }
                                 .run_plan(
                                     stages,
@@ -927,7 +1007,8 @@ impl<'a> JoinState<'a> {
             table.refine(sub, constraints)
         }
 
-        match &stages.instrs[instr_order.get(cur)] {
+        let stage_idx = instr_order.get(cur);
+        match &stages.instrs[stage_idx] {
             JoinStage::Intersect { var, scans } => match scans.as_slice() {
                 [] => {}
                 [a] if a.cs.is_empty() => {
@@ -937,14 +1018,18 @@ impl<'a> JoinState<'a> {
                     let prober = self.get_column_index(atoms, binding_info, a.atom, a.column);
                     let table = self.db.tables[atoms[a.atom].table].table.as_ref();
                     let mut updates = FrameUpdates::with_capacity(cmp::min(chunk_size, cur_size));
+                    let mut n_cand = 0usize;
+                    let mut n_succ = 0usize;
                     with_pool_set(|ps| {
                         prober.for_each(|val, x| {
+                            n_cand += 1;
                             updates.push_binding(*var, val[0]);
                             let sub = refine_subset(x.to_owned(&ps.get_pool()), &[], &table);
                             if sub.is_empty() {
                                 updates.rollback();
                                 return;
                             }
+                            n_succ += 1;
                             updates.refine_atom(a.atom, sub);
                             updates.finish_frame();
                             if updates.frames() >= chunk_size {
@@ -954,6 +1039,7 @@ impl<'a> JoinState<'a> {
                     });
                     drain_updates!(updates);
                     binding_info.move_back(a.atom, prober);
+                    self.record_stage_stats(stage_idx, n_cand, n_succ);
                 }
                 [a] => {
                     if binding_info.has_empty_subset(a.atom) {
@@ -962,14 +1048,18 @@ impl<'a> JoinState<'a> {
                     let prober = self.get_column_index(atoms, binding_info, a.atom, a.column);
                     let table = self.db.tables[atoms[a.atom].table].table.as_ref();
                     let mut updates = FrameUpdates::with_capacity(cmp::min(chunk_size, cur_size));
+                    let mut n_cand = 0usize;
+                    let mut n_succ = 0usize;
                     with_pool_set(|ps| {
                         prober.for_each(|val, x| {
+                            n_cand += 1;
                             updates.push_binding(*var, val[0]);
                             let sub = refine_subset(x.to_owned(&ps.get_pool()), &a.cs, &table);
                             if sub.is_empty() {
                                 updates.rollback();
                                 return;
                             }
+                            n_succ += 1;
                             updates.refine_atom(a.atom, sub);
                             updates.finish_frame();
                             if updates.frames() >= chunk_size {
@@ -979,6 +1069,7 @@ impl<'a> JoinState<'a> {
                     });
                     drain_updates!(updates);
                     binding_info.move_back(a.atom, prober);
+                    self.record_stage_stats(stage_idx, n_cand, n_succ);
                 }
                 [a, b] => {
                     let a_prober = self.get_column_index(atoms, binding_info, a.atom, a.column);
@@ -996,8 +1087,11 @@ impl<'a> JoinState<'a> {
                     let large_table = self.db.tables[atoms[larger_atom].table].table.as_ref();
                     let small_table = self.db.tables[atoms[smaller_atom].table].table.as_ref();
                     let mut updates = FrameUpdates::with_capacity(cmp::min(chunk_size, cur_size));
+                    let mut n_cand = 0usize;
+                    let mut n_succ = 0usize;
                     with_pool_set(|ps| {
                         smaller.for_each(|val, small_sub| {
+                            n_cand += 1;
                             if let Some(mut large_sub) = larger.get_subset(val) {
                                 large_sub = refine_subset(large_sub, &larger_scan.cs, &large_table);
                                 if large_sub.is_empty() {
@@ -1013,6 +1107,7 @@ impl<'a> JoinState<'a> {
                                     updates.rollback();
                                     return;
                                 }
+                                n_succ += 1;
                                 updates.push_binding(*var, val[0]);
                                 updates.refine_atom(smaller_atom, small_sub);
                                 updates.refine_atom(larger_atom, large_sub);
@@ -1027,6 +1122,7 @@ impl<'a> JoinState<'a> {
 
                     binding_info.move_back(a.atom, a_prober);
                     binding_info.move_back(b.atom, b_prober);
+                    self.record_stage_stats(stage_idx, n_cand, n_succ);
                 }
                 rest => {
                     let mut smallest = 0;
@@ -1047,11 +1143,14 @@ impl<'a> JoinState<'a> {
                     let main_spec_table =
                         self.db.tables[atoms[main_spec.atom].table].table.as_ref();
 
+                    let mut n_cand = 0usize;
+                    let mut n_succ = 0usize;
                     if smallest_size != 0 {
                         // Smallest leads the scan
                         let mut updates =
                             FrameUpdates::with_capacity(cmp::min(chunk_size, cur_size));
                         probers[smallest].for_each(|key, sub| {
+                            n_cand += 1;
                             with_pool_set(|ps| {
                                 updates.push_binding(*var, key[0]);
                                 for (i, scan) in rest.iter().enumerate() {
@@ -1080,6 +1179,7 @@ impl<'a> JoinState<'a> {
                                     updates.rollback();
                                     return;
                                 }
+                                n_succ += 1;
                                 updates.refine_atom(main_spec.atom, sub);
                                 updates.finish_frame();
                                 if updates.frames() >= chunk_size {
@@ -1092,6 +1192,7 @@ impl<'a> JoinState<'a> {
                     for (spec, prober) in rest.iter().zip(probers.into_iter()) {
                         binding_info.move_back(spec.atom, prober);
                     }
+                    self.record_stage_stats(stage_idx, n_cand, n_succ);
                 }
             },
             JoinStage::FusedIntersect {
@@ -1109,6 +1210,7 @@ impl<'a> JoinState<'a> {
                 let mut cur = Offset::new(0);
                 let mut buffer = TaggedRowBuffer::new(bind.len());
                 let mut updates = FrameUpdates::with_capacity(cmp::min(chunk_size, cur_size));
+                let mut n_cand = 0usize;
                 loop {
                     buffer.clear();
                     let table = &self.db.tables[atoms[cover_atom].table].table;
@@ -1121,6 +1223,7 @@ impl<'a> JoinState<'a> {
                         &mut buffer,
                     );
                     for (row, key) in buffer.non_stale() {
+                        n_cand += 1;
                         updates.refine_atom(
                             cover_atom,
                             Subset::Dense(OffsetRange::new(row, row.inc())),
@@ -1143,6 +1246,8 @@ impl<'a> JoinState<'a> {
                 drain_updates!(updates);
                 // Restore the subsets we swapped out.
                 binding_info.move_back_node(cover_atom, cover_node);
+                // All scanned rows pass (constraints are applied in scan_project).
+                self.record_stage_stats(stage_idx, n_cand, n_cand);
             }
             JoinStage::FusedIntersect {
                 cover,
@@ -1175,6 +1280,8 @@ impl<'a> JoinState<'a> {
                 let mut cur = Offset::new(0);
                 let mut buffer = TaggedRowBuffer::new(bind.len());
                 let mut updates = FrameUpdates::with_capacity(cmp::min(chunk_size, cur_size));
+                let mut n_cand = 0usize;
+                let mut n_succ = 0usize;
                 loop {
                     buffer.clear();
                     let table = &self.db.tables[atoms[cover_atom].table].table;
@@ -1187,6 +1294,7 @@ impl<'a> JoinState<'a> {
                         &mut buffer,
                     );
                     'mid: for (row, key) in buffer.non_stale() {
+                        n_cand += 1;
                         updates.refine_atom(
                             cover_atom,
                             Subset::Dense(OffsetRange::new(row, row.inc())),
@@ -1219,6 +1327,7 @@ impl<'a> JoinState<'a> {
                             }
                             updates.refine_atom(*atom, subset);
                         }
+                        n_succ += 1;
                         updates.finish_frame();
                         if updates.frames() >= chunk_size {
                             drain_updates_parallel!(updates);
@@ -1240,6 +1349,7 @@ impl<'a> JoinState<'a> {
                 for (_, atom, prober) in index_probers {
                     binding_info.move_back(atom, prober);
                 }
+                self.record_stage_stats(stage_idx, n_cand, n_succ);
             }
             JoinStage::FusedIntersectMat {
                 cover,
