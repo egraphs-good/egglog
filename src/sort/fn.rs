@@ -552,22 +552,6 @@ impl Primitive for ApplyFull {
 }
 
 impl FunctionContainer {
-    /// Legacy dispatch through a raw `ExecutionState`. Kept for callers
-    /// that have not yet migrated to `Primitive`; new code should
-    /// prefer `apply_in` (for pure query dispatch) or `apply_mut` (for
-    /// write-capable dispatch). Behaves like the pre-#772 method: mints
-    /// on constructor lookups, forwards everything else.
-    pub fn apply(&self, exec_state: &mut ExecutionState, args: &[Value]) -> Option<Value> {
-        let args: Vec<_> = self.1.iter().map(|(_, x)| x).chain(args).copied().collect();
-        match &self.0 {
-            ResolvedFunctionId::ConstructorLookup(action) => {
-                action.lookup_or_insert(exec_state, &args)
-            }
-            ResolvedFunctionId::CustomLookup(action) => action.lookup(exec_state, &args),
-            ResolvedFunctionId::Prim { id, .. } => exec_state.call_external_func(*id, &args),
-        }
-    }
-
     /// Query-safe dispatch: call the wrapped function from a pure (query)
     /// state. Each branch checks that its required capabilities are a
     /// superset of the caller state's `valid_contexts`. Returns `None`

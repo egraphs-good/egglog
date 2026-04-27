@@ -998,12 +998,18 @@ pub trait TypeConstraint {
     /// primitive and are auto-deduped at constraint-build time. This is
     /// the mechanism that lets context-specialized siblings (e.g.
     /// `unstable-multiset-map`'s pure / global-query / full triple) be
-    /// registered without an explicit `add_primitive_in_group`
-    /// dedup string — they all produce identical type constraints and
-    /// thus identical signature keys.
+    /// registered without an explicit
+    /// `add_primitive_with_dedup_key` dedup string — they all produce
+    /// identical type constraints and thus identical signature keys.
     ///
     /// Returning `None` (the default) opts out of auto-dedup; the
     /// constraint is treated as unique per registration.
+    ///
+    /// Implementors should produce a **span-independent** key. The key
+    /// is computed at registration time using `Span::Panic` and is
+    /// then compared across primitive registrations that happen at
+    /// arbitrary source locations. Including a real span would cause
+    /// otherwise-identical siblings to fail to dedup.
     fn signature_key(&self) -> Option<String> {
         None
     }
