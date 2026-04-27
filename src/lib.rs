@@ -2070,17 +2070,41 @@ impl<'a> BackendRule<'a> {
         // name (e.g. unstable-app has `ApplyPure` + `ApplyFull`). Pick
         // the one valid in this context, preferring the typechecker's
         // choice if it matches.
-        let resolved_id = if prim.valid_contexts().contains(&ctx) {
-            prim.external_id()
-        } else if let Some(alts) = self.type_info.get_prims(prim.name()) {
-            // Re-resolve: find an alternative with the same signature
-            // that is valid in the current context.
+        let resolved_id = {
+            // Re-resolve to pick the most specific matching variant for
+            // the current context. The typechecker may have picked any
+            // of several dedup-grouped registrations (e.g.
+            // unstable-app's ApplyPure / ApplyFull, or multiset-map's
+            // MapPure / MapGlobalQuery / MapFull).
+            //
+            // Preference order:
+            //   1. Narrower `valid_contexts` (= more specialized) wins.
+            //   2. Among same-cardinality variants, prefer those that
+            //      include `Context::RuleAction` — i.e. write-capable
+            //      action variants — so e.g. `GlobalAction` callers
+            //      that have a write-capable variant available pick it
+            //      over a query-only one.
+            let alts = self
+                .type_info
+                .get_prims(prim.name())
+                .expect("primitive must exist in registry");
             let mut sig = Vec::with_capacity(prim.input().len() + 1);
             sig.extend(prim.input().iter().cloned());
             sig.push(prim.output().clone());
-            let picked = alts.iter().find(|alt| {
-                alt.valid_contexts.contains(&ctx) && alt.accept(&sig, self.type_info)
-            });
+            let picked = alts
+                .iter()
+                .filter(|alt| {
+                    alt.valid_contexts.contains(&ctx) && alt.accept(&sig, self.type_info)
+                })
+                .min_by_key(|alt| {
+                    let count = alt.valid_contexts.len();
+                    // `false` < `true`, so the variant that DOES include
+                    // RuleAction (= !contains is false) sorts first.
+                    let lacks_rule_action = !alt
+                        .valid_contexts
+                        .contains(&egglog_bridge::Context::RuleAction);
+                    (count, lacks_rule_action)
+                });
             match picked {
                 Some(p) => p.id,
                 None => panic!(
@@ -2091,11 +2115,6 @@ impl<'a> BackendRule<'a> {
                     ctx,
                 ),
             }
-        } else {
-            panic!(
-                "primitive `{}` not found in the primitive registry",
-                prim.name()
-            )
         };
 
         let mut qe_args = self.args(args);
@@ -2105,10 +2124,19 @@ impl<'a> BackendRule<'a> {
                 panic!("expected string literal after `unstable-fn`")
             };
             let id = if let Some(f) = self.type_info.get_func_type(name) {
-                ResolvedFunctionId::Lookup(egglog_bridge::TableAction::new(
-                    self.rb.egraph(),
-                    self.func(f),
-                ))
+                // Distinguish constructor-table lookups (write-on-miss
+                // via `lookup_or_insert`) from custom-function lookups
+                // (pure read via `lookup`). `FunctionContainer::apply_in`
+                // uses this distinction to allow `unstable-app` over a
+                // custom function in safe contexts (e.g. global checks)
+                // while still refusing constructor minting in queries.
+                let action = egglog_bridge::TableAction::new(self.rb.egraph(), self.func(f));
+                match f.subtype {
+                    ast::FunctionSubtype::Constructor => {
+                        ResolvedFunctionId::ConstructorLookup(action)
+                    }
+                    ast::FunctionSubtype::Custom => ResolvedFunctionId::CustomLookup(action),
+                }
             } else if let Some(possible) = self.type_info.get_prims(name) {
                 let mut ps: Vec<_> = possible.iter().collect();
                 ps.retain(|p| {

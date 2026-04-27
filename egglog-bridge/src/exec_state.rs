@@ -53,6 +53,7 @@ use core_relations::{
 };
 
 use crate::core_relations;
+use crate::TableAction;
 
 /// The four contexts a primitive may run in.
 ///
@@ -231,6 +232,20 @@ pub trait UserState<'a>: Sized + ExecStateCore {
         id: ExternalFunctionId,
         args: &[Value],
     ) -> Option<Value>;
+
+    /// Trust-boundary escape used by `FunctionContainer::apply_in` to
+    /// dispatch a custom-function table lookup (pure read, no insert)
+    /// from a state wrapper that may not otherwise expose
+    /// [`ExecStateReadDb`]. **Not a stable public API.** The caller must
+    /// verify the lookup is safe in the current context — namely, that
+    /// `Self::valid_contexts()` does not include
+    /// [`Context::RuleQuery`] (where untracked reads break seminaive).
+    #[doc(hidden)]
+    fn __table_lookup_unchecked(
+        &mut self,
+        action: &TableAction,
+        key: &[Value],
+    ) -> Option<Value>;
 }
 
 macro_rules! define_state_wrapper {
@@ -350,6 +365,21 @@ macro_rules! impl_register_container {
     };
 }
 
+// Pure-read table lookup escape, identical across wrappers. The dyn
+// trait already exposes raw `&mut ExecutionState` via `with_raw`; we
+// borrow it as `&` for the lookup, which only reads.
+macro_rules! impl_table_lookup {
+    () => {
+        fn __table_lookup_unchecked(
+            &mut self,
+            action: &TableAction,
+            key: &[Value],
+        ) -> Option<Value> {
+            with_raw_result(self.inner, |es| action.lookup(es, key))
+        }
+    };
+}
+
 impl<'a> UserState<'a> for RuleQueryState<'a> {
     fn wrap(state: &'a mut ExecutionState<'_>) -> Self {
         RuleQueryState { inner: state }
@@ -362,6 +392,7 @@ impl<'a> UserState<'a> for RuleQueryState<'a> {
     }
     impl_unchecked_dispatch!();
     impl_register_container!();
+    impl_table_lookup!();
 }
 
 impl<'a> UserState<'a> for RuleActionState<'a> {
@@ -376,6 +407,7 @@ impl<'a> UserState<'a> for RuleActionState<'a> {
     }
     impl_unchecked_dispatch!();
     impl_register_container!();
+    impl_table_lookup!();
 }
 
 impl<'a> UserState<'a> for GlobalQueryState<'a> {
@@ -390,6 +422,7 @@ impl<'a> UserState<'a> for GlobalQueryState<'a> {
     }
     impl_unchecked_dispatch!();
     impl_register_container!();
+    impl_table_lookup!();
 }
 
 impl<'a> UserState<'a> for GlobalActionState<'a> {
@@ -404,4 +437,5 @@ impl<'a> UserState<'a> for GlobalActionState<'a> {
     }
     impl_unchecked_dispatch!();
     impl_register_container!();
+    impl_table_lookup!();
 }

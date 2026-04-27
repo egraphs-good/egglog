@@ -192,7 +192,7 @@ impl ContainerSort for MultiSetSort {
             try_registering_multiset_non_map_primitives(eg, fn_sort.clone(), arc.clone());
         }
         if self.element.is_eq_sort() {
-            eg.add_primitive(UnionValues {
+            eg.add_typed_primitive(UnionValues {
                 name: "multiset-union-values".into(),
                 multiset: arc.clone(),
                 action: eg.new_union_action(),
@@ -231,12 +231,21 @@ pub(crate) fn try_registering_multiset_map(
     {
         return;
     }
-    eg.add_primitive(Map {
+    let dedup_key = format!(
+        "unstable-multiset-map::{}::{}::{}",
+        input_ms.name(),
+        fn_.name(),
+        output_ms.name(),
+    );
+    let base = Map {
         name: "unstable-multiset-map".into(),
         multiset: input_ms,
         output_multiset: output_ms,
         fn_: fn_.clone(),
-    });
+    };
+    eg.add_typed_primitive_in_group(MapPure(base.clone()), dedup_key.clone());
+    eg.add_typed_primitive_in_group(MapGlobalQuery(base.clone()), dedup_key.clone());
+    eg.add_typed_primitive_in_group(MapFull(base), dedup_key);
 }
 
 pub(crate) fn register_multiset_primitives_for_function(eg: &mut EGraph, fn_: Arc<FunctionSort>) {
@@ -265,18 +274,38 @@ fn try_registering_multiset_non_map_primitives(
         && fn_.inputs()[0].name() == element_name
         && fn_.output().name() == "Unit"
     {
-        eg.add_primitive(Filter {
+        let filter = Filter {
             name: "unstable-multiset-filter".into(),
             multiset: multiset.clone(),
             fn_: fn_.clone(),
             skip_empty: true,
-        });
-        eg.add_primitive(Filter {
+        };
+        let filter_key = format!(
+            "unstable-multiset-filter::{}::{}",
+            multiset.name(),
+            fn_.name()
+        );
+        eg.add_typed_primitive_in_group(FilterPure(filter.clone()), filter_key.clone());
+        eg.add_typed_primitive_in_group(FilterGlobalQuery(filter.clone()), filter_key.clone());
+        eg.add_typed_primitive_in_group(FilterFull(filter), filter_key);
+
+        let filter_not = Filter {
             name: "unstable-multiset-filter-not".into(),
             multiset: multiset.clone(),
             fn_: fn_.clone(),
             skip_empty: false,
-        });
+        };
+        let filter_not_key = format!(
+            "unstable-multiset-filter-not::{}::{}",
+            multiset.name(),
+            fn_.name()
+        );
+        eg.add_typed_primitive_in_group(FilterPure(filter_not.clone()), filter_not_key.clone());
+        eg.add_typed_primitive_in_group(
+            FilterGlobalQuery(filter_not.clone()),
+            filter_not_key.clone(),
+        );
+        eg.add_typed_primitive_in_group(FilterFull(filter_not), filter_not_key);
     }
 
     if fn_.inputs().len() == 2
@@ -284,12 +313,21 @@ fn try_registering_multiset_non_map_primitives(
         && fn_.inputs()[1].name() == element_name
         && fn_.output().name() == element_name
     {
-        eg.add_primitive(Reduce {
+        let reduce = Reduce {
             name: "unstable-multiset-reduce".into(),
             multiset: multiset.clone(),
             fn_: fn_.clone(),
             element: element.clone(),
-        });
+        };
+        let key = format!(
+            "unstable-multiset-reduce::{}::{}::{}",
+            multiset.name(),
+            fn_.name(),
+            element.name()
+        );
+        eg.add_typed_primitive_in_group(ReducePure(reduce.clone()), key.clone());
+        eg.add_typed_primitive_in_group(ReduceGlobalQuery(reduce.clone()), key.clone());
+        eg.add_typed_primitive_in_group(ReduceFull(reduce), key);
     }
 
     if fn_.inputs().len() == 2
@@ -298,13 +336,13 @@ fn try_registering_multiset_non_map_primitives(
         && fn_.output().name() == "i64"
     {
         let unit = eg.type_info.get_sort_by_name("Unit").unwrap().clone();
-        eg.add_primitive(FillIndex {
+        eg.add_typed_primitive(FillIndex {
             name: "unstable-multiset-fill-index".into(),
             multiset: multiset.clone(),
             unit: unit.clone(),
             fn_: fn_.clone(),
         });
-        eg.add_primitive(ClearIndex {
+        eg.add_typed_primitive(ClearIndex {
             name: "unstable-multiset-clear-index".into(),
             multiset: multiset.clone(),
             unit,
@@ -316,11 +354,19 @@ fn try_registering_multiset_non_map_primitives(
         && fn_.inputs()[0].name() == element_name
         && fn_.output().name() == multiset.name()
     {
-        eg.add_primitive(FlatMap {
+        let dedup_key = format!(
+            "unstable-multiset-flat-map::{}::{}",
+            multiset.name(),
+            fn_.name(),
+        );
+        let base = FlatMap {
             name: "unstable-multiset-flat-map".into(),
             multiset,
             fn_: fn_.clone(),
-        });
+        };
+        eg.add_typed_primitive_in_group(FlatMapPure(base.clone()), dedup_key.clone());
+        eg.add_typed_primitive_in_group(FlatMapGlobalQuery(base.clone()), dedup_key.clone());
+        eg.add_typed_primitive_in_group(FlatMapFull(base), dedup_key);
     }
 }
 
@@ -332,23 +378,16 @@ struct Map {
     output_multiset: ArcSort,
 }
 
-// NOTE (#772): `Map` stays on the legacy `Primitive` trait for now. The
-// tricky case is `(check (= (multiset-map <custom-fn> xs) ...))` — a
-// GlobalQuery context that calls a custom function (Fail default) on
-// each element. `FunctionContainer::apply_in` refuses all `Lookup`
-// variants because RuleQueryState's `valid_contexts` includes RuleQuery
-// (where reads are unsound), so dual-registering MapPure here breaks
-// the check. A proper fix splits `ResolvedFunctionId::Lookup` into
-// `CustomLookup` + `ConstructorLookup` and adds a read-capable dispatch
-// path for GlobalQuery-only variants. Deferred.
-impl Primitive for Map {
-    fn name(&self) -> &str {
-        &self.name
-    }
-
-    fn get_type_constraints(&self, span: &Span) -> Box<dyn TypeConstraint> {
+// `Map` is dual-registered (issue #772). A pure variant runs in
+// query-style contexts and dispatches via `FunctionContainer::apply_in`,
+// which (now that `ResolvedFunctionId::Lookup` is split) allows custom-
+// function reads when the caller's state excludes `RuleQuery`. A full
+// variant runs in action contexts and dispatches via `apply_mut`, with
+// constructor minting on miss.
+impl Map {
+    fn type_constraints(&self, span: &Span) -> Box<dyn TypeConstraint> {
         SimpleTypeConstraint::new(
-            self.name(),
+            "unstable-multiset-map",
             vec![
                 self.fn_.clone(),
                 self.multiset.clone(),
@@ -359,33 +398,92 @@ impl Primitive for Map {
         .into_box()
     }
 
-    fn apply(&self, exec_state: &mut ExecutionState, args: &[Value]) -> Option<Value> {
-        let fc = exec_state
+    fn run<'a, S, D>(&self, state: &mut S, args: &[Value], dispatch: D) -> Option<Value>
+    where
+        S: egglog_bridge::UserState<'a>,
+        D: Fn(&FunctionContainer, &mut S, &[Value]) -> Option<Value>,
+    {
+        let fc = state
             .container_values()
             .get_val::<FunctionContainer>(args[0])
             .unwrap()
             .clone();
-        let multiset = exec_state
+        let multiset = state
             .container_values()
             .get_val::<MultiSetContainer>(args[1])
             .unwrap()
             .clone();
         let mut new_data = MultiSet::<Value>::new();
         for (v, c) in multiset.data.iter_counts() {
-            if let Some(mapped_v) = fc.apply(exec_state, &[v]) {
-                new_data.insert_multiple_mut(mapped_v, c);
+            if let Some(mapped) = dispatch(&fc, state, &[v]) {
+                new_data.insert_multiple_mut(mapped, c);
             }
         }
-        let multiset = MultiSetContainer {
+        let new_ms = MultiSetContainer {
             data: new_data,
             ..multiset
         };
-        Some(
-            exec_state
-                .clone()
-                .container_values()
-                .register_val(multiset, exec_state),
-        )
+        Some(state.register_container(new_ms))
+    }
+}
+
+#[derive(Clone)]
+struct MapPure(Map);
+
+impl TypedPrimitive for MapPure {
+    type State<'a> = egglog_bridge::RuleQueryState<'a>;
+    fn name(&self) -> &str {
+        &self.0.name
+    }
+    fn get_type_constraints(&self, span: &Span) -> Box<dyn TypeConstraint> {
+        self.0.type_constraints(span)
+    }
+    fn apply<'a>(
+        &self,
+        state: &mut egglog_bridge::RuleQueryState<'a>,
+        args: &[Value],
+    ) -> Option<Value> {
+        self.0.run(state, args, |fc, s, a| fc.apply_in(s, a))
+    }
+}
+
+#[derive(Clone)]
+struct MapGlobalQuery(Map);
+
+impl TypedPrimitive for MapGlobalQuery {
+    type State<'a> = egglog_bridge::GlobalQueryState<'a>;
+    fn name(&self) -> &str {
+        &self.0.name
+    }
+    fn get_type_constraints(&self, span: &Span) -> Box<dyn TypeConstraint> {
+        self.0.type_constraints(span)
+    }
+    fn apply<'a>(
+        &self,
+        state: &mut egglog_bridge::GlobalQueryState<'a>,
+        args: &[Value],
+    ) -> Option<Value> {
+        self.0.run(state, args, |fc, s, a| fc.apply_in(s, a))
+    }
+}
+
+#[derive(Clone)]
+struct MapFull(Map);
+
+impl TypedPrimitive for MapFull {
+    type State<'a> = egglog_bridge::RuleActionState<'a>;
+    fn name(&self) -> &str {
+        &self.0.name
+    }
+    fn get_type_constraints(&self, span: &Span) -> Box<dyn TypeConstraint> {
+        self.0.type_constraints(span)
+    }
+    fn apply<'a>(
+        &self,
+        state: &mut egglog_bridge::RuleActionState<'a>,
+        args: &[Value],
+    ) -> Option<Value> {
+        self.0.run(state, args, |fc, s, a| fc.apply_mut(s, a))
     }
 }
 
@@ -399,7 +497,10 @@ struct FillIndex {
     fn_: Arc<FunctionSort>,
 }
 
-impl Primitive for FillIndex {
+// `FillIndex` writes table rows; action-only.
+impl TypedPrimitive for FillIndex {
+    type State<'a> = egglog_bridge::RuleActionState<'a>;
+
     fn name(&self) -> &str {
         &self.name
     }
@@ -413,33 +514,40 @@ impl Primitive for FillIndex {
         .into_box()
     }
 
-    fn apply(&self, exec_state: &mut ExecutionState, args: &[Value]) -> Option<Value> {
-        let fc = exec_state
+    fn apply<'a>(
+        &self,
+        state: &mut egglog_bridge::RuleActionState<'a>,
+        args: &[Value],
+    ) -> Option<Value> {
+        let fc = state
             .container_values()
             .get_val::<FunctionContainer>(args[1])
             .unwrap()
             .clone();
-        let multiset = exec_state
+        let multiset = state
             .container_values()
             .get_val::<MultiSetContainer>(args[0])
             .unwrap()
             .clone();
-        let ResolvedFunctionId::Lookup(action) = fc.0 else {
-            panic!(
+        let action = match fc.0 {
+            ResolvedFunctionId::ConstructorLookup(a) | ResolvedFunctionId::CustomLookup(a) => a,
+            ResolvedFunctionId::Prim { .. } => panic!(
                 "Primitive functions cannot be used with unstable-multiset-fill-index, since they cannot be set"
-            );
+            ),
         };
-        for (v, c) in multiset.data.iter_counts() {
-            let mut row = vec![args[0], v];
-            // If we have already filled this multiset once, skip since it should still be accurate with the right
-            // merge function
-            if action.lookup(exec_state, &row).is_some() {
-                break;
+        let unit_val = state.base_values().get::<()>(());
+        state.with_raw_exec_state(|es| {
+            for (v, c) in multiset.data.iter_counts() {
+                let mut row = vec![args[0], v];
+                // Skip if already filled — assumes a working merge.
+                if action.lookup(es, &row).is_some() {
+                    break;
+                }
+                row.push(es.base_values().get::<i64>(c.try_into().unwrap()));
+                action.insert(es, row.into_iter());
             }
-            row.push(exec_state.base_values().get::<i64>(c.try_into().unwrap()));
-            action.insert(exec_state, row.into_iter());
-        }
-        Some(exec_state.base_values().get::<()>(()))
+        });
+        Some(unit_val)
     }
 }
 
@@ -453,7 +561,10 @@ struct ClearIndex {
     fn_: Arc<FunctionSort>,
 }
 
-impl Primitive for ClearIndex {
+// `ClearIndex` removes table rows; action-only.
+impl TypedPrimitive for ClearIndex {
+    type State<'a> = egglog_bridge::RuleActionState<'a>;
+
     fn name(&self) -> &str {
         &self.name
     }
@@ -467,26 +578,34 @@ impl Primitive for ClearIndex {
         .into_box()
     }
 
-    fn apply(&self, exec_state: &mut ExecutionState, args: &[Value]) -> Option<Value> {
-        let fc = exec_state
+    fn apply<'a>(
+        &self,
+        state: &mut egglog_bridge::RuleActionState<'a>,
+        args: &[Value],
+    ) -> Option<Value> {
+        let fc = state
             .container_values()
             .get_val::<FunctionContainer>(args[1])
             .unwrap()
             .clone();
-        let multiset = exec_state
+        let multiset = state
             .container_values()
             .get_val::<MultiSetContainer>(args[0])
             .unwrap()
             .clone();
-        let ResolvedFunctionId::Lookup(action) = fc.0 else {
-            panic!(
+        let action = match fc.0 {
+            ResolvedFunctionId::ConstructorLookup(a) | ResolvedFunctionId::CustomLookup(a) => a,
+            ResolvedFunctionId::Prim { .. } => panic!(
                 "Primitive functions cannot be used with unstable-multiset-clear-index, since they cannot be deleted"
-            );
+            ),
         };
-        for (v, _) in multiset.data.iter_counts() {
-            action.remove(exec_state, &[args[0], v]);
-        }
-        Some(exec_state.base_values().get::<()>(()))
+        let unit_val = state.base_values().get::<()>(());
+        state.with_raw_exec_state(|es| {
+            for (v, _) in multiset.data.iter_counts() {
+                action.remove(es, &[args[0], v]);
+            }
+        });
+        Some(unit_val)
     }
 }
 
@@ -500,16 +619,11 @@ struct FlatMap {
     fn_: Arc<FunctionSort>,
 }
 
-// NOTE (#772): FlatMap is on legacy `Primitive` for the same reason
-// `Map` is (see comment on `Map`).
-impl Primitive for FlatMap {
-    fn name(&self) -> &str {
-        &self.name
-    }
-
-    fn get_type_constraints(&self, span: &Span) -> Box<dyn TypeConstraint> {
+// `FlatMap` is triple-registered like `Map` (see comment on `Map`).
+impl FlatMap {
+    fn type_constraints(&self, span: &Span) -> Box<dyn TypeConstraint> {
         SimpleTypeConstraint::new(
-            self.name(),
+            "unstable-multiset-flat-map",
             vec![
                 self.fn_.clone(),
                 self.multiset.clone(),
@@ -520,22 +634,26 @@ impl Primitive for FlatMap {
         .into_box()
     }
 
-    fn apply(&self, exec_state: &mut ExecutionState, args: &[Value]) -> Option<Value> {
-        let fc = exec_state
+    fn run<'a, S, D>(&self, state: &mut S, args: &[Value], dispatch: D) -> Option<Value>
+    where
+        S: egglog_bridge::UserState<'a>,
+        D: Fn(&FunctionContainer, &mut S, &[Value]) -> Option<Value>,
+    {
+        let fc = state
             .container_values()
             .get_val::<FunctionContainer>(args[0])
             .unwrap()
             .clone();
-        let multiset = exec_state
+        let multiset = state
             .container_values()
             .get_val::<MultiSetContainer>(args[1])
             .unwrap()
             .clone();
         let mut new_data = MultiSet::<Value>::new();
         for (v, c) in multiset.data.iter_counts() {
-            let mapped = fc.apply(exec_state, &[v]);
+            let mapped = dispatch(&fc, state, &[v]);
             if let Some(mapped_ms) = mapped {
-                let mapped_ms = exec_state
+                let mapped_ms = state
                     .container_values()
                     .get_val::<MultiSetContainer>(mapped_ms)
                     .unwrap();
@@ -550,12 +668,58 @@ impl Primitive for FlatMap {
             data: new_data,
             ..multiset
         };
-        Some(
-            exec_state
-                .clone()
-                .container_values()
-                .register_val(new_container, exec_state),
-        )
+        Some(state.register_container(new_container))
+    }
+}
+
+#[derive(Clone)]
+struct FlatMapPure(FlatMap);
+impl TypedPrimitive for FlatMapPure {
+    type State<'a> = egglog_bridge::RuleQueryState<'a>;
+    fn name(&self) -> &str { &self.0.name }
+    fn get_type_constraints(&self, span: &Span) -> Box<dyn TypeConstraint> {
+        self.0.type_constraints(span)
+    }
+    fn apply<'a>(
+        &self,
+        state: &mut egglog_bridge::RuleQueryState<'a>,
+        args: &[Value],
+    ) -> Option<Value> {
+        self.0.run(state, args, |fc, s, a| fc.apply_in(s, a))
+    }
+}
+
+#[derive(Clone)]
+struct FlatMapGlobalQuery(FlatMap);
+impl TypedPrimitive for FlatMapGlobalQuery {
+    type State<'a> = egglog_bridge::GlobalQueryState<'a>;
+    fn name(&self) -> &str { &self.0.name }
+    fn get_type_constraints(&self, span: &Span) -> Box<dyn TypeConstraint> {
+        self.0.type_constraints(span)
+    }
+    fn apply<'a>(
+        &self,
+        state: &mut egglog_bridge::GlobalQueryState<'a>,
+        args: &[Value],
+    ) -> Option<Value> {
+        self.0.run(state, args, |fc, s, a| fc.apply_in(s, a))
+    }
+}
+
+#[derive(Clone)]
+struct FlatMapFull(FlatMap);
+impl TypedPrimitive for FlatMapFull {
+    type State<'a> = egglog_bridge::RuleActionState<'a>;
+    fn name(&self) -> &str { &self.0.name }
+    fn get_type_constraints(&self, span: &Span) -> Box<dyn TypeConstraint> {
+        self.0.type_constraints(span)
+    }
+    fn apply<'a>(
+        &self,
+        state: &mut egglog_bridge::RuleActionState<'a>,
+        args: &[Value],
+    ) -> Option<Value> {
+        self.0.run(state, args, |fc, s, a| fc.apply_mut(s, a))
     }
 }
 
@@ -570,16 +734,11 @@ struct Filter {
     skip_empty: bool,
 }
 
-// NOTE (#772): Filter is on legacy `Primitive` for the same reason
-// `Map` is (see comment on `Map`).
-impl Primitive for Filter {
-    fn name(&self) -> &str {
-        &self.name
-    }
-
-    fn get_type_constraints(&self, span: &Span) -> Box<dyn TypeConstraint> {
+// `Filter` is triple-registered like `Map` (see comment on `Map`).
+impl Filter {
+    fn type_constraints(&self, span: &Span) -> Box<dyn TypeConstraint> {
         SimpleTypeConstraint::new(
-            self.name(),
+            &self.name,
             vec![
                 self.fn_.clone(),
                 self.multiset.clone(),
@@ -590,34 +749,84 @@ impl Primitive for Filter {
         .into_box()
     }
 
-    fn apply(&self, exec_state: &mut ExecutionState, args: &[Value]) -> Option<Value> {
-        let fc = exec_state
+    fn run<'a, S, D>(&self, state: &mut S, args: &[Value], dispatch: D) -> Option<Value>
+    where
+        S: egglog_bridge::UserState<'a>,
+        D: Fn(&FunctionContainer, &mut S, &[Value]) -> Option<Value>,
+    {
+        let fc = state
             .container_values()
             .get_val::<FunctionContainer>(args[0])
             .unwrap()
             .clone();
-        let multiset = exec_state
+        let multiset = state
             .container_values()
             .get_val::<MultiSetContainer>(args[1])
             .unwrap()
             .clone();
         let mut new_data = MultiSet::<Value>::new();
         for (v, c) in multiset.data.iter_counts() {
-            let mapped = fc.apply(exec_state, &[v]);
+            let mapped = dispatch(&fc, state, &[v]);
             if mapped.is_some() == self.skip_empty {
                 new_data.insert_multiple_mut(v, c);
             }
         }
-        let multiset = MultiSetContainer {
+        let new_ms = MultiSetContainer {
             data: new_data,
             ..multiset
         };
-        Some(
-            exec_state
-                .clone()
-                .container_values()
-                .register_val(multiset, exec_state),
-        )
+        Some(state.register_container(new_ms))
+    }
+}
+
+#[derive(Clone)]
+struct FilterPure(Filter);
+impl TypedPrimitive for FilterPure {
+    type State<'a> = egglog_bridge::RuleQueryState<'a>;
+    fn name(&self) -> &str { &self.0.name }
+    fn get_type_constraints(&self, span: &Span) -> Box<dyn TypeConstraint> {
+        self.0.type_constraints(span)
+    }
+    fn apply<'a>(
+        &self,
+        state: &mut egglog_bridge::RuleQueryState<'a>,
+        args: &[Value],
+    ) -> Option<Value> {
+        self.0.run(state, args, |fc, s, a| fc.apply_in(s, a))
+    }
+}
+
+#[derive(Clone)]
+struct FilterGlobalQuery(Filter);
+impl TypedPrimitive for FilterGlobalQuery {
+    type State<'a> = egglog_bridge::GlobalQueryState<'a>;
+    fn name(&self) -> &str { &self.0.name }
+    fn get_type_constraints(&self, span: &Span) -> Box<dyn TypeConstraint> {
+        self.0.type_constraints(span)
+    }
+    fn apply<'a>(
+        &self,
+        state: &mut egglog_bridge::GlobalQueryState<'a>,
+        args: &[Value],
+    ) -> Option<Value> {
+        self.0.run(state, args, |fc, s, a| fc.apply_in(s, a))
+    }
+}
+
+#[derive(Clone)]
+struct FilterFull(Filter);
+impl TypedPrimitive for FilterFull {
+    type State<'a> = egglog_bridge::RuleActionState<'a>;
+    fn name(&self) -> &str { &self.0.name }
+    fn get_type_constraints(&self, span: &Span) -> Box<dyn TypeConstraint> {
+        self.0.type_constraints(span)
+    }
+    fn apply<'a>(
+        &self,
+        state: &mut egglog_bridge::RuleActionState<'a>,
+        args: &[Value],
+    ) -> Option<Value> {
+        self.0.run(state, args, |fc, s, a| fc.apply_mut(s, a))
     }
 }
 
@@ -688,16 +897,11 @@ struct Reduce {
     element: ArcSort,
 }
 
-// NOTE (#772): Reduce is on legacy `Primitive` for the same reason
-// `Map` is (see comment on `Map`).
-impl Primitive for Reduce {
-    fn name(&self) -> &str {
-        &self.name
-    }
-
-    fn get_type_constraints(&self, span: &Span) -> Box<dyn TypeConstraint> {
+// `Reduce` is triple-registered like `Map` (see comment on `Map`).
+impl Reduce {
+    fn type_constraints(&self, span: &Span) -> Box<dyn TypeConstraint> {
         SimpleTypeConstraint::new(
-            self.name(),
+            "unstable-multiset-reduce",
             vec![
                 self.fn_.clone(),
                 self.element.clone(),
@@ -709,14 +913,18 @@ impl Primitive for Reduce {
         .into_box()
     }
 
-    fn apply(&self, exec_state: &mut ExecutionState, args: &[Value]) -> Option<Value> {
-        let fc = exec_state
+    fn run<'a, S, D>(&self, state: &mut S, args: &[Value], dispatch: D) -> Option<Value>
+    where
+        S: egglog_bridge::UserState<'a>,
+        D: Fn(&FunctionContainer, &mut S, &[Value]) -> Option<Value>,
+    {
+        let fc = state
             .container_values()
             .get_val::<FunctionContainer>(args[0])
             .unwrap()
             .clone();
         let initial = args[1];
-        let multiset = exec_state
+        let multiset = state
             .container_values()
             .get_val::<MultiSetContainer>(args[2])
             .unwrap()
@@ -728,9 +936,60 @@ impl Primitive for Reduce {
             values.remove(0)
         };
         for v in values {
-            acc = fc.apply(exec_state, &[acc, v])?;
+            acc = dispatch(&fc, state, &[acc, v])?;
         }
         Some(acc)
+    }
+}
+
+#[derive(Clone)]
+struct ReducePure(Reduce);
+impl TypedPrimitive for ReducePure {
+    type State<'a> = egglog_bridge::RuleQueryState<'a>;
+    fn name(&self) -> &str { &self.0.name }
+    fn get_type_constraints(&self, span: &Span) -> Box<dyn TypeConstraint> {
+        self.0.type_constraints(span)
+    }
+    fn apply<'a>(
+        &self,
+        state: &mut egglog_bridge::RuleQueryState<'a>,
+        args: &[Value],
+    ) -> Option<Value> {
+        self.0.run(state, args, |fc, s, a| fc.apply_in(s, a))
+    }
+}
+
+#[derive(Clone)]
+struct ReduceGlobalQuery(Reduce);
+impl TypedPrimitive for ReduceGlobalQuery {
+    type State<'a> = egglog_bridge::GlobalQueryState<'a>;
+    fn name(&self) -> &str { &self.0.name }
+    fn get_type_constraints(&self, span: &Span) -> Box<dyn TypeConstraint> {
+        self.0.type_constraints(span)
+    }
+    fn apply<'a>(
+        &self,
+        state: &mut egglog_bridge::GlobalQueryState<'a>,
+        args: &[Value],
+    ) -> Option<Value> {
+        self.0.run(state, args, |fc, s, a| fc.apply_in(s, a))
+    }
+}
+
+#[derive(Clone)]
+struct ReduceFull(Reduce);
+impl TypedPrimitive for ReduceFull {
+    type State<'a> = egglog_bridge::RuleActionState<'a>;
+    fn name(&self) -> &str { &self.0.name }
+    fn get_type_constraints(&self, span: &Span) -> Box<dyn TypeConstraint> {
+        self.0.type_constraints(span)
+    }
+    fn apply<'a>(
+        &self,
+        state: &mut egglog_bridge::RuleActionState<'a>,
+        args: &[Value],
+    ) -> Option<Value> {
+        self.0.run(state, args, |fc, s, a| fc.apply_mut(s, a))
     }
 }
 
@@ -745,7 +1004,10 @@ struct UnionValues {
     action: UnionAction,
 }
 
-impl Primitive for UnionValues {
+// `UnionValues` writes to the union-find; action-only.
+impl TypedPrimitive for UnionValues {
+    type State<'a> = egglog_bridge::RuleActionState<'a>;
+
     fn name(&self) -> &str {
         &self.name
     }
@@ -759,8 +1021,12 @@ impl Primitive for UnionValues {
         .into_box()
     }
 
-    fn apply(&self, exec_state: &mut ExecutionState, args: &[Value]) -> Option<Value> {
-        let values = exec_state
+    fn apply<'a>(
+        &self,
+        state: &mut egglog_bridge::RuleActionState<'a>,
+        args: &[Value],
+    ) -> Option<Value> {
+        let values = state
             .container_values()
             .get_val::<MultiSetContainer>(args[0])?
             .clone()
@@ -770,9 +1036,12 @@ impl Primitive for UnionValues {
             return None;
         }
         let first = values[0];
-        for v in values.into_iter().skip(1) {
-            self.action.union(exec_state, first, v);
-        }
+        let action = self.action;
+        state.with_raw_exec_state(|es| {
+            for v in values.into_iter().skip(1) {
+                action.union(es, first, v);
+            }
+        });
         Some(first)
     }
 }
