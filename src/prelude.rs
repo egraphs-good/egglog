@@ -1,10 +1,26 @@
 //! This module makes it easier to use `egglog` from Rust.
-//! It is intended to be imported fully.
 //! ```
 //! use egglog::prelude::*;
 //! ```
-//! See also [`rule`], [`rust_rule`], [`query`], [`BaseSort`],
-//! and [`ContainerSort`].
+//!
+//! Common entry points:
+//!
+//! - [`rule`] / [`rust_rule`] — add rules whose RHS is egglog code or a
+//!   Rust closure ([`RustRuleContext`] is the action-side state).
+//! - [`query`] — run a one-shot query and read out matches.
+//! - [`BaseSort`] / [`ContainerSort`] — declare custom sort types.
+//! - [`crate::Primitive`] (re-exported via `egglog::*` here) and
+//!   [`EGraph::add_primitive`](crate::EGraph::add_primitive) — register
+//!   custom primitives. The `Primitive` trait carries a `type State<'a>`
+//!   GAT that picks one of four context-aware state wrappers, which
+//!   together govern what the primitive's body can do and which
+//!   contexts it can be called from. See the [`Primitive`] trait docs
+//!   for the full table.
+//! - The [`add_primitive!`] / [`add_primitive_with_validator!`] /
+//!   [`add_literal_prim!`] macros (re-exported via `egglog::*`) cover
+//!   the "pure native function" case ergonomically — they generate
+//!   primitives with `State = RuleQueryState` and pull base-value
+//!   conversions for you.
 
 use crate::*;
 use std::any::{Any, TypeId};
