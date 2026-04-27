@@ -35,8 +35,8 @@
 //!   rule builder enforces at build time that the primitive is only
 //!   invoked from contexts its state is valid in. See [`Primitive`] for
 //!   the full state→context table.
-//! - **Rust-bodied rule RHS**: register via [`prelude::rust_rule`]
-//!   ([`prelude::RustRuleContext`] is the action-side state handle).
+//! - **Rust-bodied rule RHS**: register via [`prelude::rust_rule`]; the
+//!   closure receives an [`egglog_bridge::RuleActionState`].
 //! - **Sorts and container types**: see [`Sort`], [`BaseSort`], and
 //!   [`ContainerSort`] (re-exported from the [`prelude`]).
 //!
@@ -221,19 +221,30 @@ pub(crate) trait ErasedPrimitive: Send + Sync {
 }
 
 /// Wraps a [`Primitive`] into an [`ErasedPrimitive`].
-pub(crate) struct PrimitiveWrap<T: Primitive>(pub(crate) Arc<T>)
+///
+/// Carries an `Arc` to the bridge `EGraph`'s
+/// [`NamedActionRegistry`](egglog_bridge::NamedActionRegistry) so the
+/// primitive's declared `State` wrapper can expose name-indexed
+/// `insert` / `remove` / `subsume` / `union` / `panic` helpers at
+/// invoke time. The registry is read-locked for the duration of each
+/// `apply` call.
+pub(crate) struct PrimitiveWrap<T: Primitive>
 where
-    for<'a> T::State<'a>: egglog_bridge::UserState<'a>;
+    for<'a> T::State<'a>: egglog_bridge::UserState<'a>,
+{
+    pub(crate) inner: Arc<T>,
+    pub(crate) registry: Arc<std::sync::RwLock<egglog_bridge::NamedActionRegistry>>,
+}
 
 impl<T: Primitive> ErasedPrimitive for PrimitiveWrap<T>
 where
     for<'a> T::State<'a>: egglog_bridge::UserState<'a>,
 {
     fn name(&self) -> &str {
-        self.0.name()
+        self.inner.name()
     }
     fn get_type_constraints(&self, span: &Span) -> Box<dyn TypeConstraint> {
-        self.0.get_type_constraints(span)
+        self.inner.get_type_constraints(span)
     }
     fn valid_contexts(&self) -> &'static [egglog_bridge::Context] {
         <T::State<'static> as egglog_bridge::UserState>::valid_contexts()
@@ -244,8 +255,10 @@ where
         // `ExecutionState<'x>` reference to a shorter lifetime `'a`
         // matching the borrow; this is sound because the state is only
         // used for the duration of the apply call.
-        let mut state = <T::State<'_> as egglog_bridge::UserState>::wrap(exec_state);
-        self.0.apply(&mut state, args)
+        let registry = self.registry.read().unwrap();
+        let mut state =
+            <T::State<'_> as egglog_bridge::UserState>::wrap(exec_state, &registry);
+        self.inner.apply(&mut state, args)
     }
 }
 
@@ -2098,96 +2111,12 @@ impl<'a> BackendRule<'a> {
         &mut self,
         prim: &core::SpecializedPrimitive,
         args: &[core::ResolvedAtomTerm],
-        ctx: egglog_bridge::Context,
+        _ctx: egglog_bridge::Context,
     ) -> (ExternalFunctionId, Vec<QueryEntry>, ColumnTy) {
-        // Context-aware primitive selection. The typechecker may have
-        // picked an arbitrary one of several registrations with the same
-        // name (e.g. unstable-app has `ApplyPure` + `ApplyFull`). Pick
-        // the one valid in this context, preferring the typechecker's
-        // choice if it matches.
-        let resolved_id = {
-            // Re-resolve to pick the most specific matching variant for
-            // the current context. The typechecker may have picked any
-            // of several dedup-grouped registrations (e.g.
-            // unstable-app's ApplyPure / ApplyFull, or multiset-map's
-            // MapPure / MapGlobalQuery / MapFull).
-            //
-            // Preference order:
-            //   1. Narrower `valid_contexts` (= more specialized) wins.
-            //   2. Among same-cardinality variants, prefer those that
-            //      include `Context::RuleAction` — i.e. write-capable
-            //      action variants — so e.g. `GlobalAction` callers
-            //      that have a write-capable variant available pick it
-            //      over a query-only one.
-            let alts = self
-                .type_info
-                .get_prims(prim.name())
-                .expect("primitive must exist in registry");
-            let mut sig = Vec::with_capacity(prim.input().len() + 1);
-            sig.extend(prim.input().iter().cloned());
-            sig.push(prim.output().clone());
-            let picked = alts
-                .iter()
-                .filter(|alt| {
-                    alt.valid_contexts.contains(&ctx) && alt.accept(&sig, self.type_info)
-                })
-                .min_by_key(|alt| {
-                    let count = alt.valid_contexts.len();
-                    // `false` < `true`, so the variant that DOES include
-                    // RuleAction (= !contains is false) sorts first.
-                    let lacks_rule_action = !alt
-                        .valid_contexts
-                        .contains(&egglog_bridge::Context::RuleAction);
-                    (count, lacks_rule_action)
-                });
-            match picked {
-                Some(p) => p.id,
-                None => {
-                    // List the contexts this primitive (or any sibling
-                    // sharing the name+signature) IS valid in, so the
-                    // user knows whether to move the call site or
-                    // register a different state variant.
-                    let mut available: Vec<egglog_bridge::Context> = alts
-                        .iter()
-                        .filter(|alt| alt.accept(&sig, self.type_info))
-                        .flat_map(|alt| alt.valid_contexts.iter().copied())
-                        .collect();
-                    available.sort_by_key(|c| format!("{c:?}"));
-                    available.dedup();
-                    panic!(
-                        "primitive `{name}` cannot be used in {ctx_human}.\n\
-                         \n\
-                         Where it IS valid: {available:?}\n\
-                         Why: this primitive's `State` type declares it as \
-                         {ctx_summary}; #772 disallows {ctx_human} \
-                         because it would break seminaive evaluation.\n\
-                         \n\
-                         Fixes:\n\
-                         - move the call to a context where the primitive is valid \
-                         (typically: writing primitives belong on a rule's RHS, \
-                         not its LHS or a `check`);\n\
-                         - if you authored the primitive, pick a more permissive \
-                         `Primitive::State` (e.g. `RuleQueryState` for pure ops). \
-                         See the `egglog::Primitive` trait docs for the \
-                         state -> context table.",
-                        name = prim.name(),
-                        ctx_human = match ctx {
-                            egglog_bridge::Context::RuleQuery => "the LHS of a rule (RuleQuery)",
-                            egglog_bridge::Context::RuleAction => "the RHS of a rule (RuleAction)",
-                            egglog_bridge::Context::GlobalQuery =>
-                                "a top-level query (GlobalQuery, e.g. `check`/`query-extract`)",
-                            egglog_bridge::Context::GlobalAction =>
-                                "a top-level action (GlobalAction, e.g. `let`/`set`/`run`)",
-                        },
-                        ctx_summary = match prim.input().is_empty() {
-                            true => "context-restricted",
-                            false => "context-restricted (read- or write-capable)",
-                        },
-                        available = available,
-                    )
-                }
-            }
-        };
+        // The typechecker has already picked the context-best
+        // registration via `ResolvedCall::from_resolution`; we just
+        // use its id directly.
+        let resolved_id = prim.external_id();
 
         let mut qe_args = self.args(args);
 

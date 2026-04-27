@@ -51,19 +51,18 @@ fn typed_primitive_rejected_in_rule_query() {
         )
         .unwrap();
 
-    // Using it as a filter inside a rule LHS (RuleQuery) must be rejected.
-    // We catch the panic; the real wire-up would surface this as a
-    // build-time error.
-    let result = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
-        egraph.parse_and_run_program(
-            None,
-            "(function g (i64) i64 :no-merge)\n\
-             (rule ((= x (fake-writer 1))) ((set (g 0) x)))",
-        )
-    }));
+    // Using it as a filter inside a rule LHS (RuleQuery) must be rejected
+    // by the typechecker, which filters primitives to those whose
+    // `valid_contexts` include the call site's context before building
+    // the XOR.
+    let result = egraph.parse_and_run_program(
+        None,
+        "(function g (i64) i64 :no-merge)\n\
+         (rule ((= x (fake-writer 1))) ((set (g 0) x)))",
+    );
     assert!(
         result.is_err(),
-        "expected panic when using writing primitive in a rule query"
+        "expected a typechecker error when using writing primitive in a rule query"
     );
 }
 

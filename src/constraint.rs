@@ -3,6 +3,7 @@ use crate::{
         Atom, CoreAction, CoreRule, GenericCoreActions, GenericCoreRule, HeadOrEq, Query,
         StringOrEq,
     },
+    typechecking::PrimitiveWithId,
     *,
 };
 use std::{cmp, rc::Rc};
@@ -510,6 +511,7 @@ impl Assignment<AtomTerm, ArcSort> {
         &self,
         expr: &GenericExpr<CorrespondingVar<String, String>, String>,
         typeinfo: &TypeInfo,
+        ctx: egglog_bridge::Context,
     ) -> ResolvedExpr {
         match &expr {
             GenericExpr::Lit(span, literal) => ResolvedExpr::Lit(span.clone(), literal.clone()),
@@ -539,7 +541,7 @@ impl Assignment<AtomTerm, ArcSort> {
                 // get the resolved call using resolve_rule
                 let args: Vec<_> = args
                     .iter()
-                    .map(|arg| self.annotate_expr(arg, typeinfo))
+                    .map(|arg| self.annotate_expr(arg, typeinfo, ctx))
                     .collect();
                 let types: Vec<_> = args
                     .iter()
@@ -550,7 +552,7 @@ impl Assignment<AtomTerm, ArcSort> {
                             .clone(),
                     ))
                     .collect();
-                let resolved_call = ResolvedCall::from_resolution(head, &types, typeinfo);
+                let resolved_call = ResolvedCall::from_resolution(head, &types, typeinfo, ctx);
                 GenericExpr::Call(span.clone(), resolved_call, args)
             }
         }
@@ -560,14 +562,17 @@ impl Assignment<AtomTerm, ArcSort> {
         &self,
         facts: &GenericFact<CorrespondingVar<String, String>, String>,
         typeinfo: &TypeInfo,
+        ctx: egglog_bridge::Context,
     ) -> ResolvedFact {
         match facts {
             GenericFact::Eq(span, e1, e2) => ResolvedFact::Eq(
                 span.clone(),
-                self.annotate_expr(e1, typeinfo),
-                self.annotate_expr(e2, typeinfo),
+                self.annotate_expr(e1, typeinfo, ctx),
+                self.annotate_expr(e2, typeinfo, ctx),
             ),
-            GenericFact::Fact(expr) => ResolvedFact::Fact(self.annotate_expr(expr, typeinfo)),
+            GenericFact::Fact(expr) => {
+                ResolvedFact::Fact(self.annotate_expr(expr, typeinfo, ctx))
+            }
         }
     }
 
@@ -575,10 +580,11 @@ impl Assignment<AtomTerm, ArcSort> {
         &self,
         mapped_facts: &[GenericFact<CorrespondingVar<String, String>, String>],
         typeinfo: &TypeInfo,
+        ctx: egglog_bridge::Context,
     ) -> Vec<ResolvedFact> {
         mapped_facts
             .iter()
-            .map(|fact| self.annotate_fact(fact, typeinfo))
+            .map(|fact| self.annotate_fact(fact, typeinfo, ctx))
             .collect()
     }
 
@@ -586,6 +592,7 @@ impl Assignment<AtomTerm, ArcSort> {
         &self,
         action: &MappedAction,
         typeinfo: &TypeInfo,
+        ctx: egglog_bridge::Context,
     ) -> Result<ResolvedAction, TypeError> {
         match action {
             GenericAction::Let(span, var, expr) => {
@@ -599,7 +606,7 @@ impl Assignment<AtomTerm, ArcSort> {
                         sort: ty.clone(),
                         is_global_ref: false,
                     },
-                    self.annotate_expr(expr, typeinfo),
+                    self.annotate_expr(expr, typeinfo, ctx),
                 ))
             }
             // Note mapped_var for set is a dummy variable that does not mean anything
@@ -614,15 +621,15 @@ impl Assignment<AtomTerm, ArcSort> {
             ) => {
                 let children: Vec<_> = children
                     .iter()
-                    .map(|child| self.annotate_expr(child, typeinfo))
+                    .map(|child| self.annotate_expr(child, typeinfo, ctx))
                     .collect();
-                let rhs = self.annotate_expr(rhs, typeinfo);
+                let rhs = self.annotate_expr(rhs, typeinfo, ctx);
                 let types: Vec<_> = children
                     .iter()
                     .map(|child| child.output_type())
                     .chain(once(rhs.output_type()))
                     .collect();
-                let resolved_call = ResolvedCall::from_resolution(head, &types, typeinfo);
+                let resolved_call = ResolvedCall::from_resolution(head, &types, typeinfo, ctx);
                 if !matches!(resolved_call, ResolvedCall::Func(_)) {
                     return Err(TypeError::UnboundFunction(head.clone(), span.clone()));
                 }
@@ -645,7 +652,7 @@ impl Assignment<AtomTerm, ArcSort> {
             ) => {
                 let children: Vec<_> = children
                     .iter()
-                    .map(|child| self.annotate_expr(child, typeinfo))
+                    .map(|child| self.annotate_expr(child, typeinfo, ctx))
                     .collect();
                 let types: Vec<_> = children.iter().map(|child| child.output_type()).collect();
                 let resolved_call =
@@ -659,8 +666,8 @@ impl Assignment<AtomTerm, ArcSort> {
                 ))
             }
             GenericAction::Union(span, lhs, rhs) => {
-                let lhs = self.annotate_expr(lhs, typeinfo);
-                let rhs = self.annotate_expr(rhs, typeinfo);
+                let lhs = self.annotate_expr(lhs, typeinfo, ctx);
+                let rhs = self.annotate_expr(rhs, typeinfo, ctx);
 
                 let sort = lhs.output_type();
                 assert_eq!(sort.name(), rhs.output_type().name());
@@ -676,7 +683,7 @@ impl Assignment<AtomTerm, ArcSort> {
             GenericAction::Panic(span, msg) => Ok(ResolvedAction::Panic(span.clone(), msg.clone())),
             GenericAction::Expr(span, expr) => Ok(ResolvedAction::Expr(
                 span.clone(),
-                self.annotate_expr(expr, typeinfo),
+                self.annotate_expr(expr, typeinfo, ctx),
             )),
         }
     }
@@ -685,10 +692,11 @@ impl Assignment<AtomTerm, ArcSort> {
         &self,
         mapped_actions: &GenericActions<CorrespondingVar<String, String>, String>,
         typeinfo: &TypeInfo,
+        ctx: egglog_bridge::Context,
     ) -> Result<ResolvedActions, TypeError> {
         let actions = mapped_actions
             .iter()
-            .map(|action| self.annotate_action(action, typeinfo))
+            .map(|action| self.annotate_action(action, typeinfo, ctx))
             .collect::<Result<_, _>>()?;
 
         Ok(ResolvedActions::new(actions))
@@ -731,8 +739,10 @@ impl Problem<AtomTerm, ArcSort> {
         &mut self,
         query: &Query<StringOrEq, String>,
         typeinfo: &TypeInfo,
+        ctx: egglog_bridge::Context,
     ) -> Result<(), TypeError> {
-        self.constraints.extend(query.get_constraints(typeinfo)?);
+        self.constraints
+            .extend(query.get_constraints(typeinfo, ctx)?);
         self.range.extend(query.atom_terms());
         Ok(())
     }
@@ -742,10 +752,11 @@ impl Problem<AtomTerm, ArcSort> {
         actions: &GenericCoreActions<String, String>,
         typeinfo: &TypeInfo,
         symbol_gen: &mut SymbolGen,
+        ctx: egglog_bridge::Context,
     ) -> Result<(), TypeError> {
         for action in actions.0.iter() {
             self.constraints
-                .extend(action.get_constraints(typeinfo, symbol_gen)?);
+                .extend(action.get_constraints(typeinfo, symbol_gen, ctx)?);
 
             // bound vars are added to range
             match action {
@@ -772,8 +783,15 @@ impl Problem<AtomTerm, ArcSort> {
             head,
             body,
         } = rule;
-        self.add_query(body, typeinfo)?;
-        self.add_actions(head, typeinfo, symbol_gen)?;
+        // Rule body atoms run as the LHS query; head atoms run as the
+        // RHS action under seminaive semantics.
+        self.add_query(body, typeinfo, egglog_bridge::Context::RuleQuery)?;
+        self.add_actions(
+            head,
+            typeinfo,
+            symbol_gen,
+            egglog_bridge::Context::RuleAction,
+        )?;
         Ok(())
     }
 
@@ -794,6 +812,7 @@ impl CoreAction {
         &self,
         typeinfo: &TypeInfo,
         symbol_gen: &mut SymbolGen,
+        ctx: egglog_bridge::Context,
     ) -> Result<Vec<Box<dyn Constraint<AtomTerm, ArcSort>>>, TypeError> {
         match self {
             CoreAction::Let(span, symbol, f, args) => {
@@ -801,7 +820,9 @@ impl CoreAction {
                 args.push(AtomTerm::Var(span.clone(), symbol.clone()));
 
                 Ok(get_literal_and_global_constraints(&args, typeinfo)
-                    .chain(get_atom_application_constraints(f, &args, span, typeinfo)?)
+                    .chain(get_atom_application_constraints(
+                        f, &args, span, typeinfo, ctx,
+                    )?)
                     .collect())
             }
             CoreAction::Set(span, head, args, rhs) => {
@@ -820,7 +841,7 @@ impl CoreAction {
 
                 Ok(get_literal_and_global_constraints(&args, typeinfo)
                     .chain(get_atom_application_constraints(
-                        head, &args, span, typeinfo,
+                        head, &args, span, typeinfo, ctx,
                     )?)
                     .collect())
             }
@@ -832,7 +853,7 @@ impl CoreAction {
 
                 Ok(get_literal_and_global_constraints(&args, typeinfo)
                     .chain(get_atom_application_constraints(
-                        head, &args, span, typeinfo,
+                        head, &args, span, typeinfo, ctx,
                     )?)
                     .collect())
             }
@@ -860,6 +881,7 @@ impl Atom<StringOrEq> {
     pub(crate) fn get_constraints(
         &self,
         type_info: &TypeInfo,
+        ctx: egglog_bridge::Context,
     ) -> Result<Vec<Box<dyn Constraint<AtomTerm, ArcSort>>>, TypeError> {
         let literal_constraints = get_literal_and_global_constraints(&self.args, type_info);
         match &self.head {
@@ -875,7 +897,7 @@ impl Atom<StringOrEq> {
             }
             StringOrEq::Head(head) => Ok(literal_constraints
                 .chain(get_atom_application_constraints(
-                    head, &self.args, &self.span, type_info,
+                    head, &self.args, &self.span, type_info, ctx,
                 )?)
                 .collect()),
         }
@@ -887,6 +909,7 @@ fn get_atom_application_constraints(
     args: &[AtomTerm],
     span: &Span,
     type_info: &TypeInfo,
+    ctx: egglog_bridge::Context,
 ) -> Result<Vec<Box<dyn Constraint<AtomTerm, ArcSort>>>, TypeError> {
     // An atom can have potentially different semantics due to polymorphism
     // e.g. (set-empty) can mean any empty set with some element type.
@@ -927,19 +950,38 @@ fn get_atom_application_constraints(
 
     // primitive atom constraints
     if let Some(primitives) = type_info.get_prims(head) {
-        // Primitives that share a `dedup_key` (e.g., `unstable-app`'s
-        // pure/write variants per issue #772) produce identical
-        // constraints; emit only the first of each group so the XOR
-        // below ("exactly one branch satisfied") doesn't reject every
-        // solution for satisfying both branches simultaneously. The
-        // rule builder picks the context-matching variant later via
-        // `PrimitiveWithId::valid_contexts`.
-        let mut seen_dedup_keys: HashSet<&str> = Default::default();
+        // Same-name siblings can have overlapping `valid_contexts`
+        // (e.g., `unstable-app`'s `ApplyPure` is valid in every
+        // context, `ApplyFull` only in action contexts; in
+        // `RuleAction` both apply). Their structural type constraints
+        // are identical, so two satisfied branches under XOR
+        // ("exactly one") would reject every solution. We resolve
+        // this at constraint-build time: group siblings by
+        // `signature_key` and emit only the context-best variant per
+        // group. Primitives whose `signature_key` is `None` are
+        // treated as a unique group of one.
+        let mut groups: indexmap::IndexMap<String, Vec<&PrimitiveWithId>> = Default::default();
+        let mut ungrouped: Vec<&PrimitiveWithId> = Vec::new();
         for p in primitives {
-            if let Some(key) = &p.dedup_key {
-                if !seen_dedup_keys.insert(key.as_str()) {
-                    continue;
-                }
+            match p.primitive.get_type_constraints(span).signature_key() {
+                Some(k) => groups.entry(k).or_default().push(p),
+                None => ungrouped.push(p),
+            }
+        }
+        for siblings in groups.values() {
+            if let Some(picked) =
+                crate::typechecking::pick_for_context(siblings.iter().copied(), ctx)
+            {
+                let constraints = picked
+                    .primitive
+                    .get_type_constraints(span)
+                    .get(args, type_info);
+                xor_constraints.push(constraints);
+            }
+        }
+        for p in ungrouped {
+            if !p.valid_contexts.contains(&ctx) {
+                continue;
             }
             let constraints = p.primitive.get_type_constraints(span).get(args, type_info);
             xor_constraints.push(constraints);

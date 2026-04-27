@@ -18,20 +18,34 @@
 //! (Two lifetimes would force a HRTB-bound GAT, which hits
 //! rust-lang/rust#100013.)
 //!
+//! # Name-indexed convenience methods
+//!
+//! `RuleActionState` and `GlobalActionState` carry a borrow of the
+//! bridge's [`NamedActionRegistry`] and expose inherent
+//! `insert(name, …)`, `remove`, `subsume`, `lookup`, `union`, and
+//! `panic` methods that resolve the underlying handles from there.
+//! The registry is populated and kept up-to-date by
+//! `crate::EGraph::add_table`. Read-only wrappers carry the same
+//! reference for a uniform `wrap` signature but expose no name-indexed
+//! methods of their own.
+//!
 //! # Trust boundaries
 //!
-//! The `#[doc(hidden)]` `UserState::__call_external_func_unchecked` and
-//! the `ExecStateWriteDb::with_raw_exec_state` methods are explicit
-//! escapes out of the typed system:
+//! A few methods in this module step outside the typed-state contract.
+//! They're plain safe Rust, but a careless caller can violate
+//! seminaive evaluation; per-method docs spell out the constraint.
 //!
-//! - `__call_external_func_unchecked` (every wrapper) — the `__` prefix
-//!   and `_unchecked` suffix flag this as "caller is responsible for
-//!   checking". Intended solely for `FunctionContainer::apply_in` in
-//!   the egglog crate, which verifies the callee's `valid_contexts`
-//!   covers the caller's state before dispatching.
-//!
-//! - `with_raw_exec_state` (only on write-capable wrappers) — hands out
-//!   a raw `&mut ExecutionState`. Used to invoke `UnionAction::union`,
+//! - [`UserState::call_external_func`] (every wrapper) — invoke an
+//!   external function from any state. Caller must ensure the callee's
+//!   `valid_contexts` covers the caller's state. Used by
+//!   `FunctionContainer::apply_in` in the egglog crate, which performs
+//!   the check.
+//! - [`UserState::table_lookup`] (every wrapper) — pure-read table
+//!   lookup; safe everywhere except [`Context::RuleQuery`], where it's
+//!   an untracked seminaive read.
+//! - [`ExecStateWriteDb::with_raw_exec_state`] (only on write-capable
+//!   wrappers) — hands out a raw `&mut ExecutionState`. Used to invoke
+//!   `UnionAction::union`,
 //!   `TableAction::{insert,remove,subsume,lookup_or_insert}`, and any
 //!   other operation that needs simultaneous `&ContainerValues` and
 //!   `&mut ExecutionState` access. Available on `RuleActionState` and
@@ -40,17 +54,68 @@
 //!
 //! Other raw escapes exist elsewhere in the public API:
 //! [`crate::EGraph::with_execution_state`] and
-//! [`crate::EGraph::register_external_func`], plus the legacy
-//! `egglog::Primitive` trait. Each is documented in place as a trust
-//! boundary.
+//! [`crate::EGraph::register_external_func`]. Each is documented in
+//! place as a trust boundary.
+
+use std::collections::HashMap;
+use std::ops::Deref;
 
 use core_relations::{
-    BaseValues, ContainerValue, ContainerValues, CounterId, ExecutionState, ExternalFunctionId,
-    TableId, Value,
+    BaseValue, BaseValues, ContainerValue, ContainerValues, CounterId, ExecutionState,
+    ExternalFunctionId, TableId, Value,
 };
+use smallvec::SmallVec;
 
 use crate::core_relations;
-use crate::TableAction;
+use crate::{TableAction, UnionAction};
+
+/// A live registry of name-indexed action handles for use by typed
+/// primitives. Owned by the bridge `EGraph` and shared with state
+/// wrappers at invoke time.
+///
+/// Action-side state wrappers (`RuleActionState`, `GlobalActionState`)
+/// expose name-indexed convenience methods (`insert`, `remove`,
+/// `subsume`, `union`, `panic`) that look up their underlying handles
+/// here.
+pub struct NamedActionRegistry {
+    table_actions: HashMap<String, TableAction>,
+    union_action: UnionAction,
+    default_panic_id: ExternalFunctionId,
+}
+
+impl NamedActionRegistry {
+    pub(crate) fn new(
+        union_action: UnionAction,
+        default_panic_id: ExternalFunctionId,
+    ) -> Self {
+        Self {
+            table_actions: HashMap::new(),
+            union_action,
+            default_panic_id,
+        }
+    }
+
+    pub(crate) fn register_table(&mut self, name: String, action: TableAction) {
+        self.table_actions.insert(name, action);
+    }
+
+    /// Look up the [`TableAction`] for a table by name, or `None` if
+    /// no table with that name has been registered.
+    pub fn lookup_table(&self, name: &str) -> Option<&TableAction> {
+        self.table_actions.get(name)
+    }
+
+    /// The shared [`UnionAction`] for this EGraph's union-find.
+    pub fn union_action(&self) -> &UnionAction {
+        &self.union_action
+    }
+
+    /// The default panic external function id, used by
+    /// [`RuleActionState::panic`] and [`GlobalActionState::panic`].
+    pub fn default_panic_id(&self) -> ExternalFunctionId {
+        self.default_panic_id
+    }
+}
 
 /// The four contexts a primitive may run in.
 ///
@@ -196,7 +261,7 @@ pub trait ExecStateWriteDb: ExecStateCore {
 /// rustdoc cannot link to it across crates here, but see the egglog
 /// crate root for the trait.)
 pub trait UserState<'a>: Sized + ExecStateCore {
-    fn wrap(state: &'a mut ExecutionState<'_>) -> Self;
+    fn wrap(state: &'a mut ExecutionState<'_>, registry: &'a NamedActionRegistry) -> Self;
     fn valid_contexts() -> &'static [Context];
     fn container_values(&self) -> &ContainerValues;
 
@@ -208,35 +273,71 @@ pub trait UserState<'a>: Sized + ExecStateCore {
     /// table row (a separate write). Safe in every context.
     fn register_container<C: ContainerValue>(&mut self, container: C) -> Value;
 
-    /// Trust-boundary escape used by the core `FunctionContainer::apply_in`
-    /// dispatch to invoke an external function from a pure-capability
-    /// state. **Not a stable public API.** The caller must verify the
-    /// function's `valid_contexts` is compatible with `Self` before calling.
-    #[doc(hidden)]
-    fn __call_external_func_unchecked(
+    /// Invoke an external function from any state.
+    ///
+    /// Trust boundary: the caller must verify that the function's
+    /// `valid_contexts` covers `Self::valid_contexts()` before calling
+    /// — otherwise the called primitive may execute in a context where
+    /// its declared `State` would be unsound. See the module-level
+    /// "Trust boundaries" section. The intended caller is
+    /// `FunctionContainer::apply_in` in the egglog crate, which
+    /// performs the check.
+    fn call_external_func(
         &mut self,
         id: ExternalFunctionId,
         args: &[Value],
     ) -> Option<Value>;
 
-    /// Trust-boundary escape used by `FunctionContainer::apply_in` to
-    /// dispatch a custom-function table lookup (pure read, no insert)
-    /// from any state wrapper. **Not a stable public API.** The caller
-    /// must verify the lookup is safe in the current context — namely,
-    /// that `Self::valid_contexts()` does not include
-    /// [`Context::RuleQuery`] (where untracked reads break seminaive).
-    #[doc(hidden)]
-    fn __table_lookup_unchecked(
+    /// Look up a row in a function table — pure read, never inserts.
+    ///
+    /// Trust boundary: safe everywhere except [`Context::RuleQuery`],
+    /// where the read would be untracked by seminaive. The caller must
+    /// verify that `Self::valid_contexts()` does not include
+    /// `Context::RuleQuery` before calling. See the module-level
+    /// "Trust boundaries" section.
+    fn table_lookup(
         &mut self,
         action: &TableAction,
         key: &[Value],
     ) -> Option<Value>;
+
+    /// Convert an egglog [`Value`] to a Rust base type.
+    /// Sugar over `self.base_values().unwrap::<T>(x)`.
+    fn value_to_base<T: BaseValue>(&self, x: Value) -> T {
+        self.base_values().unwrap::<T>(x)
+    }
+
+    /// Convert a Rust base type to an egglog [`Value`].
+    /// Sugar over `self.base_values().get::<T>(x)`.
+    fn base_to_value<T: BaseValue>(&self, x: T) -> Value {
+        self.base_values().get::<T>(x)
+    }
+
+    /// Look up the Rust container behind an egglog [`Value`], if any.
+    /// Sugar over `self.container_values().get_val::<T>(x)`.
+    fn value_to_container<T: ContainerValue>(
+        &self,
+        x: Value,
+    ) -> Option<impl Deref<Target = T> + '_> {
+        self.container_values().get_val::<T>(x)
+    }
+
+    /// Intern a Rust container into the e-graph and return its
+    /// [`Value`]. Sugar over `self.register_container(x)`.
+    fn container_to_value<T: ContainerValue>(&mut self, x: T) -> Value {
+        self.register_container(x)
+    }
 }
 
 macro_rules! define_state_wrapper {
     ($name:ident) => {
         pub struct $name<'a> {
             pub(crate) inner: &'a mut (dyn ExecStateDyn + 'a),
+            // Used by the action-side wrappers' inherent name-indexed
+            // methods. Read-only wrappers carry it for a uniform `wrap`
+            // signature but never read from it.
+            #[allow(dead_code)]
+            pub(crate) registry: &'a NamedActionRegistry,
         }
 
         impl<'a> ExecStateCore for $name<'a> {
@@ -308,14 +409,14 @@ impl<'a> ExecStateWriteDb for GlobalActionState<'a> {
 // UserState impls. `valid_contexts()` encodes that a narrower (more
 // restricted) wrapper is usable in every context that a wider one is:
 // `RuleQueryState` works everywhere, `GlobalActionState` only as itself.
-// The trust-boundary escape `__call_external_func_unchecked` is identical
-// across all four wrappers — it reaches through the dyn trait to the raw
-// `ExecutionState` and invokes the given function. The safety contract is
-// caller-side (the only intended caller is
+// `call_external_func` is identical across all four wrappers — it
+// reaches through the dyn trait to the raw `ExecutionState` and invokes
+// the given function. The seminaive-soundness contract is caller-side
+// (the only intended caller is
 // `egglog::sort::fn::FunctionContainer::apply_in`).
-macro_rules! impl_unchecked_dispatch {
+macro_rules! impl_call_external_func {
     () => {
-        fn __call_external_func_unchecked(
+        fn call_external_func(
             &mut self,
             id: ExternalFunctionId,
             args: &[Value],
@@ -343,7 +444,7 @@ macro_rules! impl_register_container {
 // borrow it as `&` for the lookup, which only reads.
 macro_rules! impl_table_lookup {
     () => {
-        fn __table_lookup_unchecked(
+        fn table_lookup(
             &mut self,
             action: &TableAction,
             key: &[Value],
@@ -354,8 +455,8 @@ macro_rules! impl_table_lookup {
 }
 
 impl<'a> UserState<'a> for RuleQueryState<'a> {
-    fn wrap(state: &'a mut ExecutionState<'_>) -> Self {
-        RuleQueryState { inner: state }
+    fn wrap(state: &'a mut ExecutionState<'_>, registry: &'a NamedActionRegistry) -> Self {
+        RuleQueryState { inner: state, registry }
     }
     fn valid_contexts() -> &'static [Context] {
         &Context::ALL
@@ -363,14 +464,14 @@ impl<'a> UserState<'a> for RuleQueryState<'a> {
     fn container_values(&self) -> &ContainerValues {
         self.inner.container_values()
     }
-    impl_unchecked_dispatch!();
+    impl_call_external_func!();
     impl_register_container!();
     impl_table_lookup!();
 }
 
 impl<'a> UserState<'a> for RuleActionState<'a> {
-    fn wrap(state: &'a mut ExecutionState<'_>) -> Self {
-        RuleActionState { inner: state }
+    fn wrap(state: &'a mut ExecutionState<'_>, registry: &'a NamedActionRegistry) -> Self {
+        RuleActionState { inner: state, registry }
     }
     fn valid_contexts() -> &'static [Context] {
         &[Context::RuleAction, Context::GlobalAction]
@@ -378,14 +479,14 @@ impl<'a> UserState<'a> for RuleActionState<'a> {
     fn container_values(&self) -> &ContainerValues {
         self.inner.container_values()
     }
-    impl_unchecked_dispatch!();
+    impl_call_external_func!();
     impl_register_container!();
     impl_table_lookup!();
 }
 
 impl<'a> UserState<'a> for GlobalQueryState<'a> {
-    fn wrap(state: &'a mut ExecutionState<'_>) -> Self {
-        GlobalQueryState { inner: state }
+    fn wrap(state: &'a mut ExecutionState<'_>, registry: &'a NamedActionRegistry) -> Self {
+        GlobalQueryState { inner: state, registry }
     }
     fn valid_contexts() -> &'static [Context] {
         &[Context::GlobalQuery, Context::GlobalAction]
@@ -393,14 +494,14 @@ impl<'a> UserState<'a> for GlobalQueryState<'a> {
     fn container_values(&self) -> &ContainerValues {
         self.inner.container_values()
     }
-    impl_unchecked_dispatch!();
+    impl_call_external_func!();
     impl_register_container!();
     impl_table_lookup!();
 }
 
 impl<'a> UserState<'a> for GlobalActionState<'a> {
-    fn wrap(state: &'a mut ExecutionState<'_>) -> Self {
-        GlobalActionState { inner: state }
+    fn wrap(state: &'a mut ExecutionState<'_>, registry: &'a NamedActionRegistry) -> Self {
+        GlobalActionState { inner: state, registry }
     }
     fn valid_contexts() -> &'static [Context] {
         &[Context::GlobalAction]
@@ -408,7 +509,71 @@ impl<'a> UserState<'a> for GlobalActionState<'a> {
     fn container_values(&self) -> &ContainerValues {
         self.inner.container_values()
     }
-    impl_unchecked_dispatch!();
+    impl_call_external_func!();
     impl_register_container!();
     impl_table_lookup!();
+}
+
+/// Inherent name-indexed convenience methods shared by both write-capable
+/// state wrappers. Each method looks the underlying [`TableAction`] /
+/// [`UnionAction`] / panic id up in the [`NamedActionRegistry`]; the
+/// registry is populated and kept in sync by the bridge as tables are
+/// added.
+macro_rules! impl_named_action_methods {
+    () => {
+        fn lookup_table_action(&self, name: &str) -> &TableAction {
+            self.registry.lookup_table(name).unwrap_or_else(|| {
+                panic!("missing table action for table: {name}")
+            })
+        }
+
+        /// Insert a row into the named table.
+        pub fn insert(&mut self, name: &str, row: impl Iterator<Item = Value>) {
+            let action = self.lookup_table_action(name).clone();
+            let row: SmallVec<[Value; 8]> = row.collect();
+            with_raw_result(self.inner, |es| action.insert(es, row.into_iter()));
+        }
+
+        /// Look up the return-value column of a row in the named
+        /// table — pure read, never inserts. Returns `None` if the
+        /// key is not present.
+        pub fn lookup(&mut self, name: &str, key: &[Value]) -> Option<Value> {
+            let action = self.lookup_table_action(name).clone();
+            with_raw_result(self.inner, |es| action.lookup(es, key))
+        }
+
+        /// Remove a row from the named table.
+        pub fn remove(&mut self, name: &str, key: &[Value]) {
+            let action = self.lookup_table_action(name).clone();
+            with_raw_result(self.inner, |es| action.remove(es, key));
+        }
+
+        /// Subsume a row in the named table.
+        pub fn subsume(&mut self, name: &str, key: &[Value]) {
+            let action = self.lookup_table_action(name).clone();
+            with_raw_result(self.inner, |es| action.subsume(es, key.iter().copied()));
+        }
+
+        /// Union two values in the e-graph's union-find.
+        pub fn union(&mut self, x: Value, y: Value) {
+            let action = *self.registry.union_action();
+            with_raw_result(self.inner, |es| action.union(es, x, y));
+        }
+
+        /// Trigger a panic from a primitive. Always returns `None` so
+        /// the caller can propagate with `?`.
+        pub fn panic(&mut self) -> Option<()> {
+            let panic_id = self.registry.default_panic_id();
+            with_raw_result(self.inner, |es| es.call_external_func(panic_id, &[]));
+            None
+        }
+    };
+}
+
+impl<'a> RuleActionState<'a> {
+    impl_named_action_methods!();
+}
+
+impl<'a> GlobalActionState<'a> {
+    impl_named_action_methods!();
 }

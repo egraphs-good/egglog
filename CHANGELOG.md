@@ -10,7 +10,7 @@
   - `unstable-app`, `multiset-map` / `flat-map` / `filter` / `reduce`, and `vec-map` are dual- or triple-registered so the same name picks a context-appropriate variant — pure dispatch in queries, full dispatch (including constructor minting) in actions.
   - Container constructors (`unstable-fn`, `vec-of`, `multiset-of`, `set-insert`, etc.) are now declared pure and usable in any context, since container interning is idempotent.
   - `FunctionContainer::apply_in` (pure dispatch) and `apply_mut` (full dispatch) replace the previous single `apply`. `ResolvedFunctionId::Lookup` was split into `ConstructorLookup` and `CustomLookup` so dispatch can distinguish writes from pure reads.
-  - `RustRuleContext::lookup` was removed — actions cannot read tables, per the soundness rules.
+  - `RustRuleContext` collapsed into a type alias for `egglog_bridge::RuleActionState`. Its name-indexed helpers (`insert` / `remove` / `subsume` / `lookup` / `union` / `panic`) live on `RuleActionState` (and `GlobalActionState`, where applicable) directly, looked up via a new shared `egglog_bridge::NamedActionRegistry` owned by the bridge `EGraph`. The base/container conversion sugar (`value_to_base`, `base_to_value`, `value_to_container`, `container_to_value`) is provided by default methods on the `UserState` trait and is therefore available on every state wrapper.
   - Crate-root rustdoc gained an "Extending egglog from Rust" section linking to [`Primitive`], [`prelude::rust_rule`], and the sort traits. The `Primitive` trait carries a state→context table for picking the right wrapper. The error message for using a primitive in a forbidden context now lists the contexts where it IS valid and points back to the trait docs.
 
 ## [2.0.0] - 2026-02-11

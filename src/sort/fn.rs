@@ -560,9 +560,9 @@ impl FunctionContainer {
     /// would mint a fresh eclass), and a custom-function lookup is safe
     /// everywhere except `RuleQuery` (untracked seminaive read).
     ///
-    /// This is a core-crate-only mechanism — the trust-boundary escapes
-    /// on `UserState` (`__call_external_func_unchecked`,
-    /// `__table_lookup_unchecked`) are intended only for this dispatch.
+    /// This is the only intended caller of `UserState::call_external_func`
+    /// and `UserState::table_lookup`; both of those methods document a
+    /// per-call seminaive-soundness contract that this body satisfies.
     pub fn apply_in<'a, S>(&self, state: &mut S, args: &[Value]) -> Option<Value>
     where
         S: egglog_bridge::UserState<'a>,
@@ -591,14 +591,14 @@ impl FunctionContainer {
             ResolvedFunctionId::ConstructorLookup(action)
             | ResolvedFunctionId::CustomLookup(action) => {
                 if callee_safe(LOOKUP_READ_CONTEXTS) {
-                    state.__table_lookup_unchecked(action, &args)
+                    state.table_lookup(action, &args)
                 } else {
                     None
                 }
             }
             ResolvedFunctionId::Prim { id, valid_contexts } => {
                 if callee_safe(valid_contexts) {
-                    state.__call_external_func_unchecked(*id, &args)
+                    state.call_external_func(*id, &args)
                 } else {
                     None
                 }

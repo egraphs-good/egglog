@@ -13,7 +13,7 @@ use std::{
     hash::Hash,
     iter, mem,
     ops::{Index, IndexMut},
-    sync::{Arc, Mutex},
+    sync::{Arc, Mutex, RwLock},
 };
 
 use crate::core_relations::{
@@ -40,8 +40,8 @@ pub(crate) mod rule;
 mod tests;
 
 pub use exec_state::{
-    Context, ExecStateCore, ExecStateWriteDb, GlobalActionState, GlobalQueryState, RuleActionState,
-    RuleQueryState, UserState,
+    Context, ExecStateCore, ExecStateWriteDb, GlobalActionState, GlobalQueryState,
+    NamedActionRegistry, RuleActionState, RuleQueryState, UserState,
 };
 pub use rule::{Function, QueryEntry, RuleBuilder};
 use thiserror::Error;
@@ -78,6 +78,12 @@ pub struct EGraph {
     /// bound.
     panic_funcs: HashMap<String, ExternalFunctionId>,
     report_level: ReportLevel,
+    /// Live registry of name-indexed action handles. Shared (via `Arc`)
+    /// with state wrappers and primitive callbacks in the egglog
+    /// crate so [`RuleActionState`] / [`GlobalActionState`] can
+    /// implement `insert(name, ...)`, `union`, etc. Updated on every
+    /// [`add_table`](EGraph::add_table) call.
+    action_registry: Arc<RwLock<NamedActionRegistry>>,
 }
 
 pub type Result<T> = std::result::Result<T, anyhow::Error>;
@@ -96,6 +102,25 @@ impl Default for EGraph {
         // Start the timestamp counter at 1.
         db.inc_counter(ts_counter);
 
+        // Register a default panic external function so the typed
+        // state wrappers' `panic()` method has an id to call. This
+        // also seeds `panic_funcs` so a later `new_panic` with the
+        // same message reuses the id.
+        let panic_message: SideChannel<String> = Default::default();
+        let mut panic_funcs: HashMap<String, ExternalFunctionId> = Default::default();
+        let default_panic_msg = "primitive panicked".to_string();
+        let default_panic_id = db.add_external_function(Box::new(Panic(
+            default_panic_msg.clone(),
+            panic_message.clone(),
+        )));
+        panic_funcs.insert(default_panic_msg, default_panic_id);
+
+        let union_action = UnionAction::from_parts(uf_table, ts_counter);
+        let action_registry = Arc::new(RwLock::new(NamedActionRegistry::new(
+            union_action,
+            default_panic_id,
+        )));
+
         Self {
             db,
             uf_table,
@@ -103,9 +128,10 @@ impl Default for EGraph {
             timestamp_counter: ts_counter,
             rules: Default::default(),
             funcs: Default::default(),
-            panic_message: Default::default(),
-            panic_funcs: Default::default(),
+            panic_message,
+            panic_funcs,
             report_level: Default::default(),
+            action_registry,
         }
     }
 }
@@ -469,7 +495,22 @@ impl EGraph {
         let info = &mut self.funcs[res];
         info.incremental_rebuild_rules = incremental_rebuild_rules;
         info.nonincremental_rebuild_rule = nonincremental_rebuild_rule;
+        let action = TableAction::new(self, res);
+        let table_name = self.funcs[res].name.to_string();
+        self.action_registry
+            .write()
+            .unwrap()
+            .register_table(table_name, action);
         res
+    }
+
+    /// A handle to the live [`NamedActionRegistry`] for this EGraph.
+    /// The handle is shared (`Arc`); cloning it does not duplicate the
+    /// underlying registry. Used by the egglog crate's primitive
+    /// machinery to thread the registry into state wrappers at invoke
+    /// time.
+    pub fn action_registry(&self) -> Arc<RwLock<NamedActionRegistry>> {
+        self.action_registry.clone()
     }
 
     /// Run the given rules, returning whether the database changed.
@@ -1277,6 +1318,13 @@ impl UnionAction {
             table: egraph.uf_table,
             timestamp: egraph.timestamp_counter,
         }
+    }
+
+    /// Construct a `UnionAction` directly from its constituent ids.
+    /// Used by the bridge to build a default union action during
+    /// `EGraph::default()` (when `&self` does not yet exist).
+    pub(crate) fn from_parts(table: TableId, timestamp: CounterId) -> UnionAction {
+        UnionAction { table, timestamp }
     }
 
     /// Union two values.
