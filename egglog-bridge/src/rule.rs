@@ -4,7 +4,7 @@
 //! parameterized by a range of timestamps used as constraints during seminaive
 //! evaluation.
 
-use std::{cmp::Ordering, sync::Arc};
+use std::sync::Arc;
 
 use crate::core_relations;
 use crate::core_relations::{
@@ -762,18 +762,18 @@ impl Query {
         rsb: &mut RuleSetBuilder,
         mid_ts: Timestamp,
         cached_plan: &CachedPlanInfo,
-    ) -> Result<()> {
+    ) {
         // For N atoms, we create N queries for seminaive evaluation. We can reuse the cached plan
         // directly.
         if !self.seminaive || (self.atoms.is_empty() && mid_ts == Timestamp::new(0)) {
-            rsb.add_rule_from_cached_plan(&cached_plan.plan, &[]);
-            return Ok(());
+            let _ = rsb.add_rule_from_cached_plan(&cached_plan.plan, &[]);
+            return;
         }
         if let Some(focus_atom) = self.sole_focus {
             // There is a single "focus" atom that we will constrain to look at new values.
             let (_, _, schema_info) = &self.atoms[focus_atom];
             let ts_col = ColumnId::from_usize(schema_info.ts_col());
-            rsb.add_rule_from_cached_plan(
+            let _ = rsb.add_rule_from_cached_plan(
                 &cached_plan.plan,
                 &[(
                     cached_plan.atom_mapping[focus_atom],
@@ -783,41 +783,47 @@ impl Query {
                     },
                 )],
             );
-            return Ok(());
+            return;
         }
         // Use the cached plan atoms.len() times with different constraints on each atom.
+        // The semi-naive set of queries will generate N variants of the rule, each with a different "focus" atom that looks at new values only.
+        // For a query A x B x C, we will generate the following rules:
+        //
+        //     A_new x B x C + A_old x B_new x C + A_old x B_old x C_new
+        //
         let mut constraints: Vec<(core_relations::AtomId, Constraint)> =
             Vec::with_capacity(self.atoms.len());
         'outer: for focus_atom in 0..self.atoms.len() {
-            for (i, (_, _, schema_info)) in self.atoms.iter().enumerate() {
-                let ts_col = ColumnId::from_usize(schema_info.ts_col());
-                match i.cmp(&focus_atom) {
-                    Ordering::Less => {
-                        if mid_ts == Timestamp::new(0) {
-                            continue 'outer;
-                        }
-                        constraints.push((
-                            cached_plan.atom_mapping[i],
-                            Constraint::LtConst {
-                                col: ts_col,
-                                val: mid_ts.to_value(),
-                            },
-                        ));
-                    }
-                    Ordering::Equal => constraints.push((
-                        cached_plan.atom_mapping[i],
-                        Constraint::GeConst {
-                            col: ts_col,
-                            val: mid_ts.to_value(),
-                        },
-                    )),
-                    Ordering::Greater => {}
-                };
-            }
-            rsb.add_rule_from_cached_plan(&cached_plan.plan, &constraints);
             constraints.clear();
+            // start with the focus atom since `add_rule_from_cached_plan` will apply the
+            // constraints in order, and the focus atom may have an empty delta, which
+            // will let it bail early.
+            {
+                let (_, _, schema_info) = &self.atoms[focus_atom];
+                let ts_col = ColumnId::from_usize(schema_info.ts_col());
+                constraints.push((
+                    cached_plan.atom_mapping[focus_atom],
+                    Constraint::GeConst {
+                        col: ts_col,
+                        val: mid_ts.to_value(),
+                    },
+                ))
+            }
+            for (i, (_, _, schema_info)) in self.atoms[0..focus_atom].iter().enumerate() {
+                if mid_ts == Timestamp::new(0) {
+                    continue 'outer;
+                }
+                let ts_col = ColumnId::from_usize(schema_info.ts_col());
+                constraints.push((
+                    cached_plan.atom_mapping[i],
+                    Constraint::LtConst {
+                        col: ts_col,
+                        val: mid_ts.to_value(),
+                    },
+                ));
+            }
+            let _ = rsb.add_rule_from_cached_plan(&cached_plan.plan, &constraints);
         }
-        Ok(())
     }
 }
 
