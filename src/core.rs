@@ -142,40 +142,37 @@ impl ResolvedCall {
         None
     }
 
-    pub fn from_resolution(head: &str, types: &[ArcSort], typeinfo: &TypeInfo) -> ResolvedCall {
-        let mut resolved_call = Vec::with_capacity(1);
+    pub fn from_resolution(
+        head: &str,
+        types: &[ArcSort],
+        typeinfo: &TypeInfo,
+        ctx: egglog_bridge::Context,
+    ) -> ResolvedCall {
         if let Some(ty) = typeinfo.get_func_type(head) {
             let expected = ty.input.iter().chain(once(&ty.output)).map(|s| s.name());
             let actual = types.iter().map(|s| s.name());
             if expected.eq(actual) {
-                resolved_call.push(ResolvedCall::Func(ty.clone()));
+                return ResolvedCall::Func(ty.clone());
             }
         }
 
-        if let Some(primitives) = typeinfo.get_prims(head) {
-            for primitive in primitives {
-                if primitive.accept(types, typeinfo) {
-                    let (out, inp) = types.split_last().unwrap();
-                    resolved_call.push(ResolvedCall::Primitive(SpecializedPrimitive {
-                        prim_with_id: primitive.clone(),
-                        input: inp.to_vec(),
-                        output: out.clone(),
-                    }));
-                }
-            }
+        if let Some(primitives) = typeinfo.get_prims(head)
+            && let Some(picked) = typechecking::pick_for_context_and_sig(
+                primitives.iter(),
+                ctx,
+                types,
+                typeinfo,
+            )
+        {
+            let (out, inp) = types.split_last().unwrap();
+            return ResolvedCall::Primitive(SpecializedPrimitive {
+                prim_with_id: picked.clone(),
+                input: inp.to_vec(),
+                output: out.clone(),
+            });
         }
-        assert!(
-            !resolved_call.is_empty(),
-            "No resolution for {head:?}",
-        );
-        // With the #772 typed-primitive design, a single logical primitive
-        // (e.g., `unstable-app`) may be registered multiple times under
-        // the same name to cover different contexts (pure vs write). All
-        // such registrations share the same signature, so `accept` picks
-        // them all. Context-specific selection happens at rule-build time
-        // in `BackendRule::prim`; here we keep one arbitrary entry so
-        // downstream code has a stable resolution.
-        resolved_call.pop().unwrap()
+
+        panic!("No resolution for {head:?} in context {ctx:?}");
     }
 }
 
@@ -365,10 +362,11 @@ impl Query<StringOrEq, String> {
     pub fn get_constraints(
         &self,
         type_info: &TypeInfo,
+        ctx: egglog_bridge::Context,
     ) -> Result<Vec<Box<dyn Constraint<AtomTerm, ArcSort>>>, TypeError> {
         let mut constraints = vec![];
         for atom in self.atoms.iter() {
-            constraints.extend(atom.get_constraints(type_info)?.into_iter());
+            constraints.extend(atom.get_constraints(type_info, ctx)?.into_iter());
         }
         Ok(constraints)
     }

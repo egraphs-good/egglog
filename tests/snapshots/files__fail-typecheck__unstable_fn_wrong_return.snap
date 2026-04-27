@@ -1,10 +1,9 @@
 ---
 source: tests/files.rs
+assertion_line: 103
 expression: err_msg
 ---
 All alternative definitions considered failed
-  In 11:4-5 of unstable-fn-wrong-return.egg: $x
- Expect expression $x to have type String, but get type Math
   In 11:4-5 of unstable-fn-wrong-return.egg: $x
  Expect expression $x to have type i64, but get type Math
   In 11:4-5 of unstable-fn-wrong-return.egg: $x
@@ -13,3 +12,5 @@ All alternative definitions considered failed
  Expect expression $x to have type BigInt, but get type Math
   In 11:4-5 of unstable-fn-wrong-return.egg: $x
  Expect expression $x to have type BigRat, but get type Math
+  In 11:4-5 of unstable-fn-wrong-return.egg: $x
+ Expect expression $x to have type String, but get type Math

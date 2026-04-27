@@ -6,7 +6,8 @@
 //! Common entry points:
 //!
 //! - [`rule`] / [`rust_rule`] — add rules whose RHS is egglog code or a
-//!   Rust closure ([`RustRuleContext`] is the action-side state).
+//!   Rust closure (the closure receives an
+//!   [`egglog_bridge::RuleActionState`]).
 //! - [`query`] — run a one-shot query and read out matches.
 //! - [`BaseSort`] / [`ContainerSort`] — declare custom sort types.
 //! - [`crate::Primitive`] (re-exported via `egglog::*` here) and
@@ -31,6 +32,10 @@ pub use egglog::sort::{BigIntSort, BigRatSort, BoolSort, F64Sort, I64Sort, Strin
 pub use egglog::{CommandMacro, CommandMacroRegistry};
 pub use egglog::{EGraph, span};
 pub use egglog::{action, actions, datatype, expr, fact, facts, sort, vars};
+pub use egglog::{
+    ExecStateCore, ExecStateWriteDb, GlobalActionState, GlobalQueryState, RuleActionState,
+    RuleQueryState, UserState,
+};
 
 /// Trait for types that can be converted to/from Literal for use in validated primitives.
 /// This enables automatic validator generation for literal primitives.
@@ -333,119 +338,43 @@ pub fn rule(
     egraph.run_program(vec![Command::Rule { rule }])
 }
 
-/// A context passed to Rust-written rule RHS bodies.
+/// The action-side state handle passed to `rust_rule` callbacks.
 ///
-/// It wraps an [`egglog_bridge::RuleActionState`] so that the Rust type
-/// checker enforces the seminaive-safety rules from #772: the body can
-/// read base values and container contents (pure), stage writes via
-/// `insert`/`remove`/`subsume`/`union`, but cannot read tables.
-///
-/// Table *reads* are intentionally not exposed: per #772, actions must be
-/// pure functions of their matched bindings, so any value needed from the
-/// database must come through the rule's LHS atoms. Pre-split
-/// `RustRuleContext` also had a `lookup` method; it has been removed.
-pub struct RustRuleContext<'a, 'b> {
-    state: &'a mut egglog_bridge::RuleActionState<'b>,
-    union_action: egglog_bridge::UnionAction,
-    table_actions: &'a HashMap<String, egglog_bridge::TableAction>,
-    panic_id: ExternalFunctionId,
-}
-
-impl RustRuleContext<'_, '_> {
-    /// Convert from an egglog value to a Rust type.
-    pub fn value_to_base<T: BaseValue>(&self, x: Value) -> T {
-        use egglog_bridge::ExecStateCore;
-        self.state.base_values().unwrap::<T>(x)
-    }
-
-    /// Convert from an egglog value to reference of Rust container type.
-    ///
-    /// See [`EGraph::value_to_container`].
-    pub fn value_to_container<T: ContainerValue>(
-        &mut self,
-        x: Value,
-    ) -> Option<impl Deref<Target = T>> {
-        use egglog_bridge::UserState;
-        self.state.container_values().get_val::<T>(x)
-    }
-
-    /// Convert from a Rust type to an egglog value.
-    pub fn base_to_value<T: BaseValue>(&self, x: T) -> Value {
-        use egglog_bridge::ExecStateCore;
-        self.state.base_values().get::<T>(x)
-    }
-
-    /// Convert from a Rust container type to an egglog value. Container
-    /// interning is idempotent, so this is safe in every context.
-    pub fn container_to_value<T: ContainerValue>(&mut self, x: T) -> Value {
-        use egglog_bridge::UserState;
-        self.state.register_container(x)
-    }
-
-    fn get_table_action<'a>(
-        table_actions: &'a HashMap<String, egglog_bridge::TableAction>,
-        table: &str,
-    ) -> &'a egglog_bridge::TableAction {
-        table_actions
-            .get(table)
-            .unwrap_or_else(|| panic!("missing table action for table: {table}"))
-    }
-
-    /// Union two values in the e-graph.
-    pub fn union(&mut self, x: Value, y: Value) {
-        use egglog_bridge::ExecStateWriteDb;
-        let action = self.union_action;
-        self.state.with_raw_exec_state(|es| action.union(es, x, y));
-    }
-
-    /// Insert a row into a table.
-    pub fn insert(&mut self, table: &str, row: impl Iterator<Item = Value>) {
-        use egglog_bridge::ExecStateWriteDb;
-        let action = Self::get_table_action(self.table_actions, table).clone();
-        self.state.with_raw_exec_state(|es| action.insert(es, row));
-    }
-
-    /// Remove a row from a table.
-    pub fn remove(&mut self, table: &str, key: &[Value]) {
-        use egglog_bridge::ExecStateWriteDb;
-        let action = Self::get_table_action(self.table_actions, table).clone();
-        self.state.with_raw_exec_state(|es| action.remove(es, key));
-    }
-
-    /// Subsume a row in a table.
-    pub fn subsume(&mut self, table: &str, key: &[Value]) {
-        use egglog_bridge::ExecStateWriteDb;
-        let action = Self::get_table_action(self.table_actions, table).clone();
-        self.state
-            .with_raw_exec_state(|es| action.subsume(es, key.iter().copied()));
-    }
-
-    /// Panic.
-    /// You should also return `None` from your callback if you call
-    /// this function, which this function hopefully makes easier by
-    /// always returning `None` so that you can use `?`.
-    pub fn panic(&mut self) -> Option<()> {
-        use egglog_bridge::ExecStateWriteDb;
-        let panic_id = self.panic_id;
-        self.state
-            .with_raw_exec_state(|es| es.call_external_func(panic_id, &[]));
-        None
-    }
-}
+/// This is just [`egglog_bridge::RuleActionState`] — the legacy name
+/// remains as a type alias for back-compat. All operations, including
+/// the name-indexed helpers
+/// ([`insert`](egglog_bridge::RuleActionState::insert),
+/// [`remove`](egglog_bridge::RuleActionState::remove),
+/// [`subsume`](egglog_bridge::RuleActionState::subsume),
+/// [`lookup`](egglog_bridge::RuleActionState::lookup),
+/// [`union`](egglog_bridge::RuleActionState::union),
+/// [`panic`](egglog_bridge::RuleActionState::panic)) and the
+/// base/container conversion sugar
+/// ([`value_to_base`](egglog_bridge::UserState::value_to_base) etc.),
+/// live on `RuleActionState` directly.
+pub type RustRuleContext<'a> = egglog_bridge::RuleActionState<'a>;
 
 #[derive(Clone)]
-struct RustRuleRhs<F: Fn(&mut RustRuleContext, &[Value]) -> Option<()>> {
+struct RustRuleRhs<F>
+where
+    F: for<'a> Fn(&mut egglog_bridge::RuleActionState<'a>, &[Value]) -> Option<()>
+        + Clone
+        + Send
+        + Sync
+        + 'static,
+{
     name: String,
     inputs: Vec<ArcSort>,
-    union_action: egglog_bridge::UnionAction,
-    table_actions: HashMap<String, egglog_bridge::TableAction>,
-    panic_id: ExternalFunctionId,
     func: F,
 }
 
 impl<F> Primitive for RustRuleRhs<F>
 where
-    F: Fn(&mut RustRuleContext, &[Value]) -> Option<()> + Clone + Send + Sync + 'static,
+    F: for<'a> Fn(&mut egglog_bridge::RuleActionState<'a>, &[Value]) -> Option<()>
+        + Clone
+        + Send
+        + Sync
+        + 'static,
 {
     type State<'a> = egglog_bridge::RuleActionState<'a>;
 
@@ -470,13 +399,7 @@ where
     ) -> Option<Value> {
         use egglog_bridge::ExecStateCore;
         let unit = state.base_values().get(());
-        let mut context = RustRuleContext {
-            state,
-            union_action: self.union_action,
-            table_actions: &self.table_actions,
-            panic_id: self.panic_id,
-        };
-        (self.func)(&mut context, values)?;
+        (self.func)(state, values)?;
         Some(unit)
     }
 }
@@ -564,26 +487,16 @@ pub fn rust_rule(
     ruleset: &str,
     vars: &[(&str, ArcSort)],
     facts: Facts<String, String>,
-    func: impl Fn(&mut RustRuleContext, &[Value]) -> Option<()> + Clone + Send + Sync + 'static,
+    func: impl for<'a> Fn(&mut egglog_bridge::RuleActionState<'a>, &[Value]) -> Option<()>
+    + Clone
+    + Send
+    + Sync
+    + 'static,
 ) -> Result<Vec<CommandOutput>, Error> {
     let prim_name = egraph.parser.symbol_gen.fresh("rust_rule_prim");
-    let panic_id = egraph.backend.new_panic(format!("{prim_name}_panic"));
     egraph.add_primitive(RustRuleRhs {
         name: prim_name.clone(),
         inputs: vars.iter().map(|(_, s)| s.clone()).collect(),
-        union_action: egglog_bridge::UnionAction::new(&egraph.backend),
-        table_actions: egraph
-            .functions
-            .iter()
-            .map(|(k, v)| {
-                (
-                    k.clone(),
-                    egglog_bridge::TableAction::new(&egraph.backend, v.backend_id),
-                )
-            })
-            .collect(),
-
-        panic_id,
         func,
     });
 

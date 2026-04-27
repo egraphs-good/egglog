@@ -64,22 +64,6 @@ pub struct PrimitiveWithId {
     /// derived from its declared [`Primitive::State`] type via
     /// [`UserState::valid_contexts()`](egglog_bridge::UserState::valid_contexts).
     pub(crate) valid_contexts: &'static [Context],
-    /// When two primitives are registered under the same name with the
-    /// same signature (e.g., `unstable-app`'s `ApplyPure` / `ApplyFull`
-    /// per issue #772), their `get_type_constraints` output is identical
-    /// and the typechecker's XOR ("exactly one branch") fails because
-    /// every solution satisfies both branches. Primitives that share a
-    /// `dedup_key` are collapsed into a single XOR branch at constraint-
-    /// generation time; the rule builder later picks the context-
-    /// matching variant via `valid_contexts`.
-    ///
-    /// `None` for ordinary primitives — they participate in overload
-    /// resolution normally, even across same-name siblings with different
-    /// signatures. The key must be unique to each (name, signature)
-    /// pair — for example `unstable-app`'s key includes the function
-    /// sort name so `unstable-app` overloads for `MathFn` versus
-    /// `i64Fun` stay distinct XOR branches.
-    pub(crate) dedup_key: Option<String>,
 }
 
 impl PrimitiveWithId {
@@ -104,6 +88,54 @@ impl PrimitiveWithId {
         };
         problem.solve(|sort| sort.name()).is_ok()
     }
+}
+
+/// Sort key used to pick among same-name primitive registrations whose
+/// `valid_contexts` overlap on the calling context. Smaller is more
+/// specific.
+///
+/// Order:
+///   1. Narrower `valid_contexts` (fewer contexts) wins — a sibling
+///      registered for exactly this context group is preferred over one
+///      registered for "everywhere".
+///   2. Among same-cardinality candidates, prefer those that include
+///      `Context::RuleAction` (i.e., write-capable action variants), so
+///      e.g. `GlobalAction` callers pick the write-capable sibling over
+///      a query-only one.
+fn pick_priority(p: &PrimitiveWithId) -> (usize, bool) {
+    let count = p.valid_contexts.len();
+    let lacks_rule_action = !p.valid_contexts.contains(&Context::RuleAction);
+    (count, lacks_rule_action)
+}
+
+/// Among `candidates` (all sharing a name), pick the most specific
+/// registration that is valid in `ctx`. Returns `None` if none of them
+/// are valid in `ctx`.
+pub(crate) fn pick_for_context<'a, I>(candidates: I, ctx: Context) -> Option<&'a PrimitiveWithId>
+where
+    I: IntoIterator<Item = &'a PrimitiveWithId>,
+{
+    candidates
+        .into_iter()
+        .filter(|p| p.valid_contexts.contains(&ctx))
+        .min_by_key(|p| pick_priority(p))
+}
+
+/// Like [`pick_for_context`] but additionally requires the primitive to
+/// accept the given fully-resolved sort signature.
+pub(crate) fn pick_for_context_and_sig<'a, I>(
+    candidates: I,
+    ctx: Context,
+    sig: &[Arc<dyn Sort>],
+    typeinfo: &TypeInfo,
+) -> Option<&'a PrimitiveWithId>
+where
+    I: IntoIterator<Item = &'a PrimitiveWithId>,
+{
+    candidates
+        .into_iter()
+        .filter(|p| p.valid_contexts.contains(&ctx) && p.accept(sig, typeinfo))
+        .min_by_key(|p| pick_priority(p))
 }
 
 impl Debug for PrimitiveWithId {
@@ -192,11 +224,11 @@ impl EGraph {
     ///   enforced by Rust's type checker).
     ///
     /// Registering more than once under the same name with the same
-    /// signature but different `State` types is supported: the
-    /// constraint-level typechecker auto-dedupes siblings whose
-    /// [`crate::constraint::TypeConstraint::signature_key`] matches,
-    /// and the rule builder picks the variant valid in the
-    /// caller's context. This is how `unstable-app` and the
+    /// signature but different `State` types is supported: at
+    /// constraint-build time the typechecker groups same-name siblings
+    /// by [`crate::constraint::TypeConstraint::signature_key`] and
+    /// picks the variant whose `valid_contexts` best matches the
+    /// calling context. This is how `unstable-app` and the
     /// `multiset-map` family expose the same name in queries (pure
     /// dispatch) and actions (full dispatch).
     pub fn add_primitive<T>(&mut self, x: T)
@@ -204,7 +236,7 @@ impl EGraph {
         T: Primitive + Clone,
         for<'a> T::State<'a>: egglog_bridge::UserState<'a>,
     {
-        self.add_primitive_full(x, None, None)
+        self.add_primitive_full(x, None)
     }
 
     /// Register a user-defined primitive together with a validator.
@@ -221,33 +253,13 @@ impl EGraph {
         T: Primitive + Clone,
         for<'a> T::State<'a>: egglog_bridge::UserState<'a>,
     {
-        self.add_primitive_full(x, validator, None)
-    }
-
-    /// Add a primitive with an explicit dedup key.
-    ///
-    /// Most callers should prefer [`Self::add_primitive`], which
-    /// auto-derives a dedup key from the primitive's name and the
-    /// `signature_key` reported by its [`TypeConstraint`]. This override
-    /// exists for primitives whose `TypeConstraint` returns `None` from
-    /// `signature_key` but still want context-specialized siblings to
-    /// dedup at constraint-build time. It is currently unused in-tree
-    /// and is kept `pub(crate)` until an external need surfaces — when
-    /// that happens, promoting to `pub` is a one-line change.
-    #[allow(dead_code)]
-    pub(crate) fn add_primitive_with_dedup_key<T>(&mut self, x: T, dedup_key: String)
-    where
-        T: Primitive + Clone,
-        for<'a> T::State<'a>: egglog_bridge::UserState<'a>,
-    {
-        self.add_primitive_full(x, None, Some(dedup_key))
+        self.add_primitive_full(x, validator)
     }
 
     fn add_primitive_full<T>(
         &mut self,
         x: T,
         validator: Option<PrimitiveValidator>,
-        dedup_key: Option<String>,
     ) where
         T: Primitive + Clone,
         for<'a> T::State<'a>: egglog_bridge::UserState<'a>,
@@ -258,7 +270,10 @@ impl EGraph {
         // State type from an `ExecutionState`, and to report its
         // valid contexts.
         let arc_typed = Arc::new(x);
-        let erased: Arc<dyn ErasedPrimitive> = Arc::new(PrimitiveWrap(arc_typed));
+        let erased: Arc<dyn ErasedPrimitive> = Arc::new(PrimitiveWrap {
+            inner: arc_typed,
+            registry: self.backend.action_registry(),
+        });
 
         // Register the external function. Since the ErasedPrimitive
         // always produces its primitive's declared State type
@@ -279,24 +294,6 @@ impl EGraph {
             .backend
             .register_external_func(Box::new(ExtWrap(erased.clone())));
 
-        // Auto-derive a dedup_key from the primitive's name + the
-        // structural fingerprint of its type constraint. Two
-        // registrations under the same name with the same signature
-        // (the only legitimate context-specialization shape) get
-        // collapsed in the typechecker's XOR builder; legitimate
-        // overloads (different signatures) stay distinct.
-        //
-        // An explicit `dedup_key` always wins; we only auto-derive
-        // when the caller didn't pass one. Primitives whose
-        // `TypeConstraint` does not return a `signature_key` opt out
-        // of auto-dedup entirely.
-        let dedup_key = dedup_key.or_else(|| {
-            let constraint = erased.get_type_constraints(&Span::Panic);
-            constraint
-                .signature_key()
-                .map(|sig| format!("auto::{}::{}", name, sig))
-        });
-
         self.type_info
             .primitives
             .entry(name)
@@ -306,7 +303,6 @@ impl EGraph {
                 id,
                 validator,
                 valid_contexts,
-                dedup_key,
             });
     }
 
@@ -739,7 +735,7 @@ impl TypeInfo {
         let mut constraints = vec![];
 
         let (query, mapped_query) = Facts(body.clone()).to_query(self, symbol_gen);
-        constraints.extend(query.get_constraints(self)?);
+        constraints.extend(query.get_constraints(self, Context::RuleQuery)?);
 
         let mut binding = query.get_vars();
         // We lower to core actions with `union_to_set_optimization`
@@ -762,8 +758,10 @@ impl TypeInfo {
             .solve(|sort: &ArcSort| sort.name())
             .map_err(|e| e.to_type_error())?;
 
-        let body: Vec<ResolvedFact> = assignment.annotate_facts(&mapped_query, self);
-        let actions: ResolvedActions = assignment.annotate_actions(&mapped_action, self)?;
+        let body: Vec<ResolvedFact> =
+            assignment.annotate_facts(&mapped_query, self, Context::RuleQuery);
+        let actions: ResolvedActions =
+            assignment.annotate_actions(&mapped_action, self, Context::RuleAction)?;
 
         self.check_lookup_actions(&actions)?;
 
@@ -819,11 +817,11 @@ impl TypeInfo {
     ) -> Result<Vec<ResolvedFact>, TypeError> {
         let (query, mapped_facts) = Facts(facts.to_vec()).to_query(self, symbol_gen);
         let mut problem = Problem::default();
-        problem.add_query(&query, self)?;
+        problem.add_query(&query, self, Context::GlobalQuery)?;
         let assignment = problem
             .solve(|sort: &ArcSort| sort.name())
             .map_err(|e| e.to_type_error())?;
-        let annotated_facts = assignment.annotate_facts(&mapped_facts, self);
+        let annotated_facts = assignment.annotate_facts(&mapped_facts, self, Context::GlobalQuery);
         Ok(annotated_facts)
     }
 
@@ -842,7 +840,7 @@ impl TypeInfo {
         let mut problem = Problem::default();
 
         // add actions to problem
-        problem.add_actions(&actions, self, symbol_gen)?;
+        problem.add_actions(&actions, self, symbol_gen, Context::GlobalAction)?;
 
         // add bindings from the context
         for (var, (span, sort)) in binding {
@@ -853,7 +851,8 @@ impl TypeInfo {
             .solve(|sort: &ArcSort| sort.name())
             .map_err(|e| e.to_type_error())?;
 
-        let annotated_actions = assignment.annotate_actions(&mapped_action, self)?;
+        let annotated_actions =
+            assignment.annotate_actions(&mapped_action, self, Context::GlobalAction)?;
         Ok(annotated_actions)
     }
 
