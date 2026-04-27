@@ -1253,7 +1253,7 @@ fn run_rules_impl(
         let info = &mut rule_info[*rule];
         let cached_plan = info.cached_plan.as_ref().unwrap();
         info.query
-            .add_rules_from_cached(&mut rsb, info.last_run_at, cached_plan)?;
+            .add_rules_from_cached(&mut rsb, info.last_run_at, cached_plan);
         info.last_run_at = next_ts;
     }
     let ruleset = rsb.build();
