@@ -178,10 +178,13 @@ fn build_add_primitive_impl(parsed: AddPrimitive, validator: Option<Expr>) -> To
             quote!(let [#(#x),*] = args else { panic!("wrong number of arguments") };)
         };
 
-        // Cast the arguments to the desired type.
+        // Cast the arguments to the desired type. `state` is the
+        // TypedPrimitive `RuleQueryState<'a>` wrapper from egglog_bridge;
+        // `base_values()` comes from `ExecStateCore` and `container_values()`
+        // from `UserState`, both imported below.
         let cast1 = |x, t: &syn::Type, is_container| match is_container {
-            false => quote!(exec_state.base_values().unwrap::<#t>(*#x)),
-            true => quote!(exec_state.container_values().get_val::<#t>(*#x).unwrap().clone()),
+            false => quote!(state.base_values().unwrap::<#t>(*#x)),
+            true => quote!(state.container_values().get_val::<#t>(*#x).unwrap().clone()),
         };
         let cast = if is_varargs {
             let Arg { x, t, is_mutable } = &args[0];
@@ -210,16 +213,17 @@ fn build_add_primitive_impl(parsed: AddPrimitive, validator: Option<Expr>) -> To
 
         // If the primitive is fallible, put a `?` after the body.
         let fail = if is_fallible { quote!(?) } else { quote!() };
-        // Cast the result back to an interned value.
+        // Cast the result back to an interned value. For container
+        // returns we go through `state.register_container`, which is a
+        // `UserState` method and (per #772) safe in every context since
+        // container interning is idempotent.
         let (yt, ret) = match &ret.cast {
             None => (&value_type, quote!(#y)),
             Some((t, is_container)) => (
                 t,
                 match is_container {
-                    false => quote!(exec_state.base_values().get::<#t>(#y)),
-                    true => quote!(
-                        exec_state.container_values().register_val::<#t>(#y, exec_state)
-                    ),
+                    false => quote!(state.base_values().get::<#t>(#y)),
+                    true => quote!(state.register_container::<#t>(#y)),
                 },
             ),
         };
@@ -233,9 +237,19 @@ fn build_add_primitive_impl(parsed: AddPrimitive, validator: Option<Expr>) -> To
     };
 
     // This is the big `quote!` block that ties everything together.
+    //
+    // Macro-generated primitives are registered via the typed entry
+    // points (`add_typed_primitive` / `add_typed_primitive_with_validator`)
+    // so they participate in the #772 context-enforcement system. They
+    // declare `State = RuleQueryState<'a>` (valid in all four contexts)
+    // because every code path the macro emits is pure: it reads base /
+    // container values and registers containers, which are all safe
+    // everywhere per `ExecStateCore` / `UserState`. If a future
+    // extension of the macro introduces a non-pure emission path, the
+    // declared state would need to narrow accordingly.
     let add_call = match validator {
-        None => quote!(eg.add_primitive(#prim_use);),
-        Some(validator_expr) => quote!(eg.add_primitive_with_validator(
+        None => quote!(eg.add_typed_primitive(#prim_use);),
+        Some(validator_expr) => quote!(eg.add_typed_primitive_with_validator(
             #prim_use,
             Some(::std::sync::Arc::new(#validator_expr))
         );),
@@ -248,7 +262,9 @@ fn build_add_primitive_impl(parsed: AddPrimitive, validator: Option<Expr>) -> To
         #[derive(Clone)]
         #prim_def
 
-        impl Primitive for Prim {
+        impl TypedPrimitive for Prim {
+            type State<'a> = RuleQueryState<'a>;
+
             fn name(&self) -> &str {
                 #name
             }
@@ -257,7 +273,11 @@ fn build_add_primitive_impl(parsed: AddPrimitive, validator: Option<Expr>) -> To
                 #type_constraint
             }
 
-            fn apply(&self, exec_state: &mut ExecutionState, args: &[Value]) -> Option<Value> {
+            fn apply<'a>(
+                &self,
+                state: &mut RuleQueryState<'a>,
+                args: &[Value],
+            ) -> Option<Value> {
                 #apply
             }
         }

@@ -362,6 +362,7 @@ impl RustRuleContext<'_, '_> {
     /// Convert from a Rust container type to an egglog value. Container
     /// interning is idempotent, so this is safe in every context.
     pub fn container_to_value<T: ContainerValue>(&mut self, x: T) -> Value {
+        use egglog_bridge::UserState;
         self.state.register_container(x)
     }
 
@@ -376,24 +377,28 @@ impl RustRuleContext<'_, '_> {
 
     /// Union two values in the e-graph.
     pub fn union(&mut self, x: Value, y: Value) {
+        use egglog_bridge::ExecStateWriteDb;
         let action = self.union_action;
         self.state.with_raw_exec_state(|es| action.union(es, x, y));
     }
 
     /// Insert a row into a table.
     pub fn insert(&mut self, table: &str, row: impl Iterator<Item = Value>) {
+        use egglog_bridge::ExecStateWriteDb;
         let action = Self::get_table_action(self.table_actions, table).clone();
         self.state.with_raw_exec_state(|es| action.insert(es, row));
     }
 
     /// Remove a row from a table.
     pub fn remove(&mut self, table: &str, key: &[Value]) {
+        use egglog_bridge::ExecStateWriteDb;
         let action = Self::get_table_action(self.table_actions, table).clone();
         self.state.with_raw_exec_state(|es| action.remove(es, key));
     }
 
     /// Subsume a row in a table.
     pub fn subsume(&mut self, table: &str, key: &[Value]) {
+        use egglog_bridge::ExecStateWriteDb;
         let action = Self::get_table_action(self.table_actions, table).clone();
         self.state
             .with_raw_exec_state(|es| action.subsume(es, key.iter().copied()));
@@ -404,6 +409,7 @@ impl RustRuleContext<'_, '_> {
     /// this function, which this function hopefully makes easier by
     /// always returning `None` so that you can use `?`.
     pub fn panic(&mut self) -> Option<()> {
+        use egglog_bridge::ExecStateWriteDb;
         let panic_id = self.panic_id;
         self.state
             .with_raw_exec_state(|es| es.call_external_func(panic_id, &[]));

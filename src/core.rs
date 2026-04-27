@@ -172,9 +172,16 @@ impl ResolvedCall {
             }
         }
         assert!(
-            resolved_call.len() == 1,
-            "Ambiguous resolution for {head:?}",
+            !resolved_call.is_empty(),
+            "No resolution for {head:?}",
         );
+        // With the #772 typed-primitive design, a single logical primitive
+        // (e.g., `unstable-app`) may be registered multiple times under
+        // the same name to cover different contexts (pure vs write). All
+        // such registrations share the same signature, so `accept` picks
+        // them all. Context-specific selection happens at rule-build time
+        // in `BackendRule::prim`; here we keep one arbitrary entry so
+        // downstream code has a stable resolution.
         resolved_call.pop().unwrap()
     }
 }

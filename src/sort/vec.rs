@@ -1,4 +1,4 @@
-use egglog_bridge::{UnionAction, UserState};
+use egglog_bridge::{ExecStateWriteDb, UnionAction, UserState};
 use std::any::TypeId;
 use std::iter::zip;
 
@@ -150,7 +150,7 @@ impl ContainerSort for VecSort {
                 data: {
                     let end: usize = end.try_into().unwrap_or(0);
                     (0..end)
-                        .map(|i| exec_state.base_values().get::<i64>(i as i64))
+                        .map(|i| state.base_values().get::<i64>(i as i64))
                         .collect()
                 }
             } });
