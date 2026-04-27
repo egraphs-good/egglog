@@ -194,6 +194,17 @@ impl EGraph {
         }
     }
 
+    /// Register a low-level external function. The callback receives a
+    /// raw `&mut ExecutionState`.
+    ///
+    /// # Seminaive-safety trust boundary
+    ///
+    /// Like [`EGraph::with_execution_state`], this is a raw escape —
+    /// the registered function has unrestricted access and is not
+    /// tracked by the per-context validity system. Prefer building
+    /// primitives via the higher-level [`egglog::TypedPrimitive`] /
+    /// `add_typed_primitive` API, which enforces #772's seminaive-safety
+    /// contract.
     pub fn register_external_func(
         &mut self,
         func: Box<dyn ExternalFunction + 'static>,
@@ -809,6 +820,17 @@ impl EGraph {
     ///
     /// The staged updates are not immediately reflected in the EGraph, so you may want to
     /// manually flush the updates using [`EGraph::flush_updates`].
+    ///
+    /// # Seminaive-safety trust boundary
+    ///
+    /// This method hands out a raw `&mut ExecutionState`, which bypasses
+    /// the typed state wrappers ([`RuleQueryState`],
+    /// [`RuleActionState`], [`GlobalQueryState`], [`GlobalActionState`])
+    /// that enforce #772's seminaive-safety model. Treat it as
+    /// top-level / global-action context: appropriate for one-shot
+    /// database manipulation from outside any rule, not for use inside
+    /// primitive implementations. New primitive code should use
+    /// [`crate::exec_state::UserState`]-based wrappers instead.
     pub fn with_execution_state<R>(&self, f: impl FnOnce(&mut ExecutionState<'_>) -> R) -> R {
         self.db.with_execution_state(f)
     }

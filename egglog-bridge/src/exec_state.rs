@@ -20,10 +20,36 @@
 //! hits a known Rust limitation (rust-lang/rust#100013). To work around
 //! that, the wrappers hold a `&mut dyn ExecStateDyn` trait object that
 //! erases `'db` entirely.
+//!
+//! # Trust boundaries
+//!
+//! The `#[doc(hidden)]` `UserState::__call_external_func_unchecked` and
+//! the `ExecStateWriteDb::with_raw_exec_state` methods are explicit
+//! escapes out of the typed system:
+//!
+//! - `__call_external_func_unchecked` (every wrapper) — the `__` prefix
+//!   and `_unchecked` suffix flag this as "caller is responsible for
+//!   checking". Intended solely for `FunctionContainer::apply_in` in
+//!   the egglog crate, which verifies the callee's `valid_contexts`
+//!   covers the caller's state before dispatching.
+//!
+//! - `with_raw_exec_state` (only on write-capable wrappers) — hands out
+//!   a raw `&mut ExecutionState`. Used to invoke `UnionAction::union`,
+//!   `TableAction::{insert,remove,subsume,lookup_or_insert}`, and any
+//!   other operation that needs simultaneous `&ContainerValues` and
+//!   `&mut ExecutionState` access. Available on `RuleActionState` and
+//!   `GlobalActionState` only; query-side states cannot reach this
+//!   escape.
+//!
+//! Other raw escapes exist elsewhere in the public API:
+//! [`crate::EGraph::with_execution_state`] and
+//! [`crate::EGraph::register_external_func`], plus the legacy
+//! `egglog::Primitive` trait. Each is documented in place as a trust
+//! boundary.
 
 use core_relations::{
-    BaseValues, ContainerValue, ContainerValues, CounterId, ExecutionState, TableId, Value,
-    WrappedTable,
+    BaseValues, ContainerValue, ContainerValues, CounterId, ExecutionState, ExternalFunctionId,
+    TableId, Value, WrappedTable,
 };
 
 use crate::core_relations;
@@ -159,10 +185,22 @@ pub trait ExecStateReadDb: ExecStateCore {
 /// Database-write capabilities.
 ///
 /// Only enabled on wrappers that run outside of a seminaive rule query:
-/// `RuleActionState` and `GlobalActionState`.
+/// `RuleActionState` and `GlobalActionState`. Note that `ExecStateWriteDb`
+/// is not object-safe — the generic `with_raw_exec_state` method rules
+/// that out — so it should be used as a bound, not a `dyn` type.
 pub trait ExecStateWriteDb: ExecStateCore {
     fn stage_insert(&mut self, table: TableId, row: &[Value]);
     fn stage_remove(&mut self, table: TableId, key: &[Value]);
+
+    /// Raw `&mut ExecutionState` access. Used by primitives that need to
+    /// invoke operations requiring both `&ContainerValues` and
+    /// `&mut ExecutionState` at once — `UnionAction::union`,
+    /// `TableAction::{insert, remove, subsume, lookup_or_insert}`, and
+    /// nested external-function calls.
+    fn with_raw_exec_state<R>(
+        &mut self,
+        f: impl FnOnce(&mut ExecutionState<'_>) -> R,
+    ) -> R;
 }
 
 /// Common trait for the user-facing state wrappers.
@@ -174,6 +212,25 @@ pub trait UserState<'a>: Sized + ExecStateCore {
     fn wrap(state: &'a mut ExecutionState<'_>) -> Self;
     fn valid_contexts() -> &'static [Context];
     fn container_values(&self) -> &ContainerValues;
+
+    /// Register a container value, returning its interned `Value`.
+    ///
+    /// Container interning is idempotent: registering an existing
+    /// container returns the same `Value`, and a freshly-interned
+    /// container is not observable by any rule until it appears in a
+    /// table row (a separate write). Safe in every context.
+    fn register_container<C: ContainerValue>(&mut self, container: C) -> Value;
+
+    /// Trust-boundary escape used by the core `FunctionContainer::apply_in`
+    /// dispatch to invoke an external function from a pure-capability
+    /// state. **Not a stable public API.** The caller must verify the
+    /// function's `valid_contexts` is compatible with `Self` before calling.
+    #[doc(hidden)]
+    fn __call_external_func_unchecked(
+        &mut self,
+        id: ExternalFunctionId,
+        args: &[Value],
+    ) -> Option<Value>;
 }
 
 macro_rules! define_state_wrapper {
@@ -230,6 +287,12 @@ impl<'a> ExecStateWriteDb for RuleActionState<'a> {
     fn stage_remove(&mut self, table: TableId, key: &[Value]) {
         self.inner.stage_remove(table, key)
     }
+    fn with_raw_exec_state<R>(
+        &mut self,
+        f: impl FnOnce(&mut ExecutionState<'_>) -> R,
+    ) -> R {
+        with_raw_result(self.inner, f)
+    }
 }
 impl<'a> ExecStateWriteDb for GlobalActionState<'a> {
     fn stage_insert(&mut self, table: TableId, row: &[Value]) {
@@ -238,64 +301,55 @@ impl<'a> ExecStateWriteDb for GlobalActionState<'a> {
     fn stage_remove(&mut self, table: TableId, key: &[Value]) {
         self.inner.stage_remove(table, key)
     }
+    fn with_raw_exec_state<R>(
+        &mut self,
+        f: impl FnOnce(&mut ExecutionState<'_>) -> R,
+    ) -> R {
+        with_raw_result(self.inner, f)
+    }
 }
 
-// `register_container` is an inherent method on every wrapper because it
-// is generic over `C: ContainerValue`, and generic methods cannot live on
-// a dyn-compatible trait. Container registration is idempotent interning
-// and safe in every context, so all four wrappers expose it. See #772.
-macro_rules! define_container_registrar {
-    ($name:ident) => {
-        impl<'a> $name<'a> {
-            /// Register a container value, returning its interned `Value`.
-            ///
-            /// Container interning is idempotent: registering an existing
-            /// container returns the same `Value`, and a freshly-interned
-            /// container is not observable by any rule until it appears in
-            /// a table row (a separate write). Safe in every context.
-            pub fn register_container<C: ContainerValue>(&mut self, container: C) -> Value {
-                with_raw_result(self.inner, |es| {
-                    es.clone().container_values().register_val(container, es)
-                })
-            }
-        }
-    };
-}
+// `register_container` lives on the `UserState` trait (see above) via the
+// `impl_register_container!` macro included in each `UserState for X`
+// impl below.
 
-define_container_registrar!(RuleQueryState);
-define_container_registrar!(RuleActionState);
-define_container_registrar!(GlobalQueryState);
-define_container_registrar!(GlobalActionState);
 
-// `with_raw_exec_state` is a temporary escape hatch restricted to
-// write-capable wrappers. It hands out raw `&mut ExecutionState`, so it
-// permits both reads and writes; we keep it off the non-action wrappers
-// to preserve seminaive soundness guarantees. Each typed method that
-// currently uses it is a candidate to become a first-class capability
-// method on its respective trait.
-macro_rules! define_raw_exec_state_escape {
-    ($name:ident) => {
-        impl<'a> $name<'a> {
-            /// Raw `&mut ExecutionState` access. Used by
-            /// `UnionAction::union`, `TableAction::{insert,remove,subsume,
-            /// lookup_or_insert}`, and similar operations that need both
-            /// `&ContainerValues` and `&mut ExecutionState` at once.
-            pub fn with_raw_exec_state<R>(
-                &mut self,
-                f: impl FnOnce(&mut ExecutionState<'_>) -> R,
-            ) -> R {
-                with_raw_result(self.inner, f)
-            }
-        }
-    };
-}
-
-define_raw_exec_state_escape!(RuleActionState);
-define_raw_exec_state_escape!(GlobalActionState);
+// `with_raw_exec_state` lives on the `ExecStateWriteDb` trait (see above),
+// so `RuleActionState` and `GlobalActionState` get it automatically.
 
 // UserState impls. `valid_contexts()` encodes that a narrower (more
 // restricted) wrapper is usable in every context that a wider one is:
 // `RuleQueryState` works everywhere, `GlobalActionState` only as itself.
+// The trust-boundary escape `__call_external_func_unchecked` is identical
+// across all four wrappers — it reaches through the dyn trait to the raw
+// `ExecutionState` and invokes the given function. The safety contract is
+// caller-side (the only intended caller is
+// `egglog::sort::fn::FunctionContainer::apply_in`).
+macro_rules! impl_unchecked_dispatch {
+    () => {
+        fn __call_external_func_unchecked(
+            &mut self,
+            id: ExternalFunctionId,
+            args: &[Value],
+        ) -> Option<Value> {
+            with_raw_result(self.inner, |es| es.call_external_func(id, args))
+        }
+    };
+}
+
+// `register_container` is also identical across wrappers. It's generic in
+// `C: ContainerValue`, which is fine on the `UserState` trait because the
+// trait is used as a bound, not a `dyn` type.
+macro_rules! impl_register_container {
+    () => {
+        fn register_container<C: ContainerValue>(&mut self, container: C) -> Value {
+            with_raw_result(self.inner, |es| {
+                es.clone().container_values().register_val(container, es)
+            })
+        }
+    };
+}
+
 impl<'a> UserState<'a> for RuleQueryState<'a> {
     fn wrap(state: &'a mut ExecutionState<'_>) -> Self {
         RuleQueryState { inner: state }
@@ -306,6 +360,8 @@ impl<'a> UserState<'a> for RuleQueryState<'a> {
     fn container_values(&self) -> &ContainerValues {
         self.inner.container_values()
     }
+    impl_unchecked_dispatch!();
+    impl_register_container!();
 }
 
 impl<'a> UserState<'a> for RuleActionState<'a> {
@@ -318,6 +374,8 @@ impl<'a> UserState<'a> for RuleActionState<'a> {
     fn container_values(&self) -> &ContainerValues {
         self.inner.container_values()
     }
+    impl_unchecked_dispatch!();
+    impl_register_container!();
 }
 
 impl<'a> UserState<'a> for GlobalQueryState<'a> {
@@ -330,6 +388,8 @@ impl<'a> UserState<'a> for GlobalQueryState<'a> {
     fn container_values(&self) -> &ContainerValues {
         self.inner.container_values()
     }
+    impl_unchecked_dispatch!();
+    impl_register_container!();
 }
 
 impl<'a> UserState<'a> for GlobalActionState<'a> {
@@ -342,4 +402,6 @@ impl<'a> UserState<'a> for GlobalActionState<'a> {
     fn container_values(&self) -> &ContainerValues {
         self.inner.container_values()
     }
+    impl_unchecked_dispatch!();
+    impl_register_container!();
 }

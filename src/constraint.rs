@@ -927,7 +927,20 @@ fn get_atom_application_constraints(
 
     // primitive atom constraints
     if let Some(primitives) = type_info.get_prims(head) {
+        // Primitives that share a `dedup_key` (e.g., `unstable-app`'s
+        // pure/write variants per issue #772) produce identical
+        // constraints; emit only the first of each group so the XOR
+        // below ("exactly one branch satisfied") doesn't reject every
+        // solution for satisfying both branches simultaneously. The
+        // rule builder picks the context-matching variant later via
+        // `PrimitiveWithId::valid_contexts`.
+        let mut seen_dedup_keys: HashSet<&str> = Default::default();
         for p in primitives {
+            if let Some(key) = &p.dedup_key {
+                if !seen_dedup_keys.insert(key.as_str()) {
+                    continue;
+                }
+            }
             let constraints = p.primitive.get_type_constraints(span).get(args, type_info);
             xor_constraints.push(constraints);
         }

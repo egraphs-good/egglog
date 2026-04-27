@@ -12,7 +12,12 @@
 //! the list of partially applied arguments.
 use std::sync::Mutex;
 
-use egglog_bridge::ExecStateCore;
+// These three traits are all used by `FunctionContainer::apply_in` /
+// `apply_mut` plus `TypedPrimitive for Ctor`. Some usages are method
+// calls behind trait bounds so they can read as unused to the compiler;
+// silence those warnings by importing the triple in one place.
+#[allow(unused_imports)]
+use egglog_bridge::{ExecStateCore, ExecStateWriteDb, UserState};
 
 use super::*;
 
@@ -198,10 +203,24 @@ impl Sort for FunctionSort {
             name: "unstable-fn".into(),
             function: self.clone(),
         });
-        eg.add_primitive(Apply {
-            name: "unstable-app".into(),
-            function: self.clone(),
-        });
+        // Dual-registered under a shared per-function-sort dedup key so
+        // the typechecker sees a single XOR branch per overload while
+        // keeping `unstable-app` for distinct `FunctionSort`s separate.
+        let key = unstable_app_dedup_key(self.as_ref());
+        eg.add_typed_primitive_in_group(
+            ApplyPure {
+                name: "unstable-app".into(),
+                function: self.clone(),
+            },
+            key.clone(),
+        );
+        eg.add_typed_primitive_in_group(
+            ApplyFull {
+                name: "unstable-app".into(),
+                function: self.clone(),
+            },
+            key,
+        );
 
         register_vec_primitives_for_function(eg, self.clone());
         register_multiset_primitives_for_function(eg, self.clone());
@@ -417,58 +436,193 @@ impl BaseValue for ResolvedFunction {}
 
 #[derive(Clone, Debug, PartialEq, Eq, Hash)]
 pub enum ResolvedFunctionId {
+    /// Wraps a function-table lookup. In query contexts this is unsafe —
+    /// constructor tables mint a fresh eclass id on miss (a write) and
+    /// custom-function tables are untracked reads that seminaive cannot
+    /// re-fire on. `apply_in` refuses to dispatch this variant.
     Lookup(egglog_bridge::TableAction),
-    Prim(ExternalFunctionId),
+    /// Wraps a primitive. `valid_contexts` carries the primitive's
+    /// declared capability profile so `FunctionContainer::apply_in` can
+    /// decide at dispatch time whether the inner call is safe for the
+    /// caller's context.
+    Prim {
+        id: ExternalFunctionId,
+        valid_contexts: &'static [egglog_bridge::Context],
+    },
 }
 
 // (unstable-app <function> [<arg1>, <arg2>, ...])
+//
+// Registered as two context-specialized variants under the same name
+// (issue #772):
+//
+// - `ApplyPure` (`State = RuleQueryState`, valid in all four contexts)
+//   dispatches through `FunctionContainer::apply_in`. In a query context
+//   the inner primitive must be declared valid in that context
+//   (typically "pure" — e.g. `+` on i64); constructors, custom-function
+//   lookups, and writing primitives all cause the match to fail (None).
+//
+// - `ApplyFull` (`State = RuleActionState`, valid in rule + global
+//   actions) dispatches through `FunctionContainer::apply_mut` which has
+//   full access — constructors mint fresh eclass ids, custom functions
+//   report None on miss, primitives dispatch unconditionally.
+//
+// Both variants share an identical signature so they are registered in
+// the same dedup group. The constraint-level typechecker treats them as
+// one branch during overload resolution; `BackendRule::prim` later
+// picks the variant whose `valid_contexts` contains the caller's
+// context. The group key includes the function sort name so that
+// `unstable-app` for `MathFn` stays a distinct overload from
+// `unstable-app` for `i64Fun`, etc.
+fn unstable_app_dedup_key(function_sort: &FunctionSort) -> String {
+    format!("unstable-app::{}", function_sort.name())
+}
+
 #[derive(Clone)]
-struct Apply {
+struct ApplyPure {
     name: String,
     function: Arc<FunctionSort>,
 }
 
-impl Primitive for Apply {
+#[derive(Clone)]
+struct ApplyFull {
+    name: String,
+    function: Arc<FunctionSort>,
+}
+
+fn apply_type_constraints(
+    name: &str,
+    function: &Arc<FunctionSort>,
+    span: &Span,
+) -> Box<dyn TypeConstraint> {
+    let mut sorts: Vec<ArcSort> = vec![function.clone()];
+    sorts.extend(function.inputs.clone());
+    sorts.push(function.output.clone());
+    SimpleTypeConstraint::new(name, sorts, span.clone()).into_box()
+}
+
+impl TypedPrimitive for ApplyPure {
+    type State<'a> = egglog_bridge::RuleQueryState<'a>;
+
     fn name(&self) -> &str {
         &self.name
     }
 
     fn get_type_constraints(&self, span: &Span) -> Box<dyn TypeConstraint> {
-        let mut sorts: Vec<ArcSort> = vec![self.function.clone()];
-        sorts.extend(self.function.inputs.clone());
-        sorts.push(self.function.output.clone());
-        SimpleTypeConstraint::new(self.name(), sorts, span.clone()).into_box()
+        apply_type_constraints(&self.name, &self.function, span)
     }
 
-    fn apply(&self, exec_state: &mut ExecutionState, args: &[Value]) -> Option<Value> {
-        let (fc, args) = args.split_first().unwrap();
-        let fc = exec_state
+    fn apply<'a>(
+        &self,
+        state: &mut egglog_bridge::RuleQueryState<'a>,
+        args: &[Value],
+    ) -> Option<Value> {
+        let (fc_val, args) = args.split_first().unwrap();
+        let fc = state
             .container_values()
-            .get_val::<FunctionContainer>(*fc)
+            .get_val::<FunctionContainer>(*fc_val)
             .unwrap()
             .clone();
-        fc.apply(exec_state, args)
+        fc.apply_in(state, args)
+    }
+}
+
+impl TypedPrimitive for ApplyFull {
+    type State<'a> = egglog_bridge::RuleActionState<'a>;
+
+    fn name(&self) -> &str {
+        &self.name
+    }
+
+    fn get_type_constraints(&self, span: &Span) -> Box<dyn TypeConstraint> {
+        apply_type_constraints(&self.name, &self.function, span)
+    }
+
+    fn apply<'a>(
+        &self,
+        state: &mut egglog_bridge::RuleActionState<'a>,
+        args: &[Value],
+    ) -> Option<Value> {
+        let (fc_val, args) = args.split_first().unwrap();
+        let fc = state
+            .container_values()
+            .get_val::<FunctionContainer>(*fc_val)
+            .unwrap()
+            .clone();
+        fc.apply_mut(state, args)
     }
 }
 
 impl FunctionContainer {
-    /// Call function (primitive or table) `name` with value args `args` and return the value.
-    ///
-    /// Public so that other primitive sorts (external or internal) have access.
-    ///
-    /// NOTE (#772): the `Lookup` branch currently uses
-    /// [`TableAction::lookup_or_insert`], which mints a fresh eclass id
-    /// when the key is missing on a constructor table. That makes this
-    /// method a write in query contexts. This is the main open question in
-    /// `issue-772-proposal.md` open-question #1 — the fix is to split
-    /// `unstable-app` into a pure-read form for queries and a minting form
-    /// for actions, or otherwise decide the semantics. Until then, leave
-    /// the mint-on-miss behavior so existing programs continue to work.
+    /// Legacy dispatch through a raw `ExecutionState`. Kept for callers
+    /// that have not yet migrated to `TypedPrimitive`; new code should
+    /// prefer `apply_in` (for pure query dispatch) or `apply_mut` (for
+    /// write-capable dispatch). Behaves like the pre-#772 method: mints
+    /// on constructor lookups, forwards everything else.
     pub fn apply(&self, exec_state: &mut ExecutionState, args: &[Value]) -> Option<Value> {
         let args: Vec<_> = self.1.iter().map(|(_, x)| x).chain(args).copied().collect();
         match &self.0 {
             ResolvedFunctionId::Lookup(action) => action.lookup_or_insert(exec_state, &args),
-            ResolvedFunctionId::Prim(prim) => exec_state.call_external_func(*prim, &args),
+            ResolvedFunctionId::Prim { id, .. } => exec_state.call_external_func(*id, &args),
         }
+    }
+
+    /// Query-safe dispatch: call the wrapped function from a pure (query)
+    /// state. Succeeds only when the inner function is a primitive whose
+    /// declared `valid_contexts` includes the caller's narrowest context;
+    /// returns `None` on a constructor/custom-function lookup or a
+    /// writing primitive.
+    ///
+    /// The runtime check here is what lets `unstable-app` be used in a
+    /// rule query when the wrapped function is pure (e.g., `+` over i64)
+    /// and automatically refuse when it is a constructor or writing
+    /// primitive. This is a core-crate-only mechanism — a user's
+    /// [`TypedPrimitive`] cannot replicate it because the
+    /// `__call_external_func_unchecked` escape on the state wrapper is a
+    /// trust boundary intended only for this dispatch.
+    pub fn apply_in<'a, S>(&self, state: &mut S, args: &[Value]) -> Option<Value>
+    where
+        S: egglog_bridge::UserState<'a>,
+    {
+        let args: Vec<_> = self.1.iter().map(|(_, x)| x).chain(args).copied().collect();
+        match &self.0 {
+            // A `Lookup` inside `apply_in` would be either a constructor
+            // (writes a fresh eclass on miss) or a custom-function read
+            // (an untracked read that seminaive cannot re-fire on).
+            // Either way — refuse.
+            ResolvedFunctionId::Lookup(_) => None,
+            // For a primitive, check that its declared capability profile
+            // is a superset of the caller's narrowest context. If yes,
+            // dispatch through the trust-boundary escape; otherwise fail.
+            ResolvedFunctionId::Prim { id, valid_contexts } => {
+                let caller_contexts = S::valid_contexts();
+                let callee_ok = caller_contexts
+                    .iter()
+                    .all(|c| valid_contexts.contains(c));
+                if callee_ok {
+                    state.__call_external_func_unchecked(*id, &args)
+                } else {
+                    None
+                }
+            }
+        }
+    }
+
+    /// Full dispatch: call the wrapped function from a write-capable
+    /// state. This is the "do what you meant" variant, used by
+    /// `unstable-app` on the RHS of rules. For constructor lookups it
+    /// mints a fresh eclass id; for custom-function lookups it returns
+    /// `None` on miss; for primitives it dispatches through raw
+    /// `ExecutionState`.
+    pub fn apply_mut<'a, S>(&self, state: &mut S, args: &[Value]) -> Option<Value>
+    where
+        S: egglog_bridge::UserState<'a> + egglog_bridge::ExecStateWriteDb,
+    {
+        let args: Vec<_> = self.1.iter().map(|(_, x)| x).chain(args).copied().collect();
+        let rfid = self.0.clone();
+        state.with_raw_exec_state(|es| match rfid {
+            ResolvedFunctionId::Lookup(action) => action.lookup_or_insert(es, &args),
+            ResolvedFunctionId::Prim { id, .. } => es.call_external_func(id, &args),
+        })
     }
 }

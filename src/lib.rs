@@ -51,6 +51,13 @@ use egglog_ast::generic_ast::{Change, GenericExpr, Literal};
 use egglog_ast::span::Span;
 use egglog_ast::util::ListDisplay;
 pub use egglog_bridge::FunctionRow;
+// Re-exports so the `add_primitive!` proc-macro can name the typed
+// primitive surface without requiring user crates to depend on
+// `egglog_bridge` directly.
+pub use egglog_bridge::{
+    ExecStateCore, ExecStateReadDb, ExecStateWriteDb, GlobalActionState, GlobalQueryState,
+    RuleActionState, RuleQueryState, UserState,
+};
 use egglog_bridge::{ColumnTy, QueryEntry, UnionAction};
 use egglog_core_relations as core_relations;
 use egglog_numeric_id as numeric_id;
@@ -99,10 +106,21 @@ pub type ArcSort = Arc<dyn Sort>;
 ///
 /// Primitives are built-in functions that can be called in both rule queries and actions.
 ///
-/// NOTE: this trait is being migrated to [`TypedPrimitive`], which carries a
-/// declared state type that governs which contexts (rule query, rule action,
-/// global query, global action) the primitive can be used in. Once all
-/// in-tree primitives are migrated, this trait will be removed.
+/// # Seminaive-safety trust boundary
+///
+/// This trait is a **trust boundary** for issue #772's seminaive-safety
+/// model: `apply` receives a raw `&mut ExecutionState` and can do
+/// anything, including reads and writes that break seminaive
+/// assumptions. It is registered as valid in all four contexts (see
+/// [`egglog_bridge::Context`]) and is therefore not subject to the
+/// context enforcement applied to [`TypedPrimitive`].
+///
+/// **New code should use [`TypedPrimitive`]**, which carries a declared
+/// state type that governs which contexts the primitive is allowed in
+/// (rule query, rule action, global query, global action). The Rust
+/// type system enforces that the body only uses capabilities available
+/// on the declared state. Once all in-tree primitives migrate, this
+/// trait will be removed.
 pub trait Primitive {
     /// Returns the name of this primitive operation.
     fn name(&self) -> &str;
@@ -2047,20 +2065,38 @@ impl<'a> BackendRule<'a> {
         args: &[core::ResolvedAtomTerm],
         ctx: egglog_bridge::Context,
     ) -> (ExternalFunctionId, Vec<QueryEntry>, ColumnTy) {
-        // Enforce that the primitive is declared valid in this context.
-        //
-        // For legacy (untyped) primitives this check is a no-op — they are
-        // registered with all four contexts. For typed primitives, this is
-        // the point where a query-only / action-only misuse is caught.
-        if !prim.valid_contexts().contains(&ctx) {
+        // Context-aware primitive selection. The typechecker may have
+        // picked an arbitrary one of several registrations with the same
+        // name (e.g. unstable-app has `ApplyPure` + `ApplyFull`). Pick
+        // the one valid in this context, preferring the typechecker's
+        // choice if it matches.
+        let resolved_id = if prim.valid_contexts().contains(&ctx) {
+            prim.external_id()
+        } else if let Some(alts) = self.type_info.get_prims(prim.name()) {
+            // Re-resolve: find an alternative with the same signature
+            // that is valid in the current context.
+            let mut sig = Vec::with_capacity(prim.input().len() + 1);
+            sig.extend(prim.input().iter().cloned());
+            sig.push(prim.output().clone());
+            let picked = alts.iter().find(|alt| {
+                alt.valid_contexts.contains(&ctx) && alt.accept(&sig, self.type_info)
+            });
+            match picked {
+                Some(p) => p.id,
+                None => panic!(
+                    "primitive `{}` cannot be used in context {:?} \
+                     (no registration with matching signature valid in this context); \
+                     this is the seminaive-safety check from issue #772.",
+                    prim.name(),
+                    ctx,
+                ),
+            }
+        } else {
             panic!(
-                "primitive `{}` cannot be used in context {:?} (valid contexts: {:?}); \
-                 this is the seminaive-safety check from issue #772.",
-                prim.name(),
-                ctx,
-                prim.valid_contexts()
-            );
-        }
+                "primitive `{}` not found in the primitive registry",
+                prim.name()
+            )
+        };
 
         let mut qe_args = self.args(args);
 
@@ -2092,7 +2128,14 @@ impl<'a> BackendRule<'a> {
                         })
                 });
                 assert!(ps.len() == 1, "options for {name}: {ps:?}");
-                ResolvedFunctionId::Prim(ps.into_iter().next().unwrap().id)
+                let picked = ps.into_iter().next().unwrap();
+                // Record the wrapped primitive's capability profile so
+                // `FunctionContainer::apply_in` can refuse dispatch in
+                // query contexts when the inner function isn't pure.
+                ResolvedFunctionId::Prim {
+                    id: picked.id,
+                    valid_contexts: picked.valid_contexts,
+                }
             } else {
                 panic!("no callable for {name}");
             };
@@ -2106,7 +2149,7 @@ impl<'a> BackendRule<'a> {
         }
 
         (
-            prim.external_id(),
+            resolved_id,
             qe_args,
             prim.output().column_ty(self.rb.egraph()),
         )
@@ -2444,6 +2487,59 @@ mod tests {
         assert!(
             result.is_err(),
             "expected panic when using writing primitive in a rule query"
+        );
+    }
+
+    // Issue #772: `unstable-app` is registered as two context-specialized
+    // variants (ApplyPure + ApplyFull). In a query context (`check`, rule
+    // LHS) the pure variant dispatches through
+    // `FunctionContainer::apply_in`, which succeeds only when the inner
+    // function is a primitive valid in that context — e.g. `+` over i64 —
+    // and fails (returning None, so the match is filtered out) for
+    // constructors.
+    #[test]
+    fn test_unstable_app_query_with_pure_primitive() {
+        let mut egraph = EGraph::default();
+        // `(unstable-fn "+")` wraps the i64 primitive `+`; `+` is pure,
+        // valid in every context, so `unstable-app` in a `check` works.
+        egraph
+            .parse_and_run_program(
+                None,
+                r#"
+                (sort IntFn (UnstableFn (i64 i64) i64))
+                (let plus (unstable-fn "+"))
+                (check (= (unstable-app plus 2 3) 5))
+                "#,
+            )
+            .unwrap();
+    }
+
+    #[test]
+    fn test_unstable_app_query_with_constructor_is_filtered() {
+        // Check that a query using `unstable-app` wrapping a constructor
+        // does NOT silently mint a fresh eclass — `apply_in` returns None
+        // for that case, so the match filters out.
+        let mut egraph = EGraph::default();
+        egraph
+            .parse_and_run_program(
+                None,
+                r#"
+                (datatype Math (Num i64))
+                (sort MathFn (UnstableFn (i64) Math))
+                (let make (unstable-fn "Num"))
+                ; (Num 99) has not been created, so `unstable-app make 99`
+                ; inside a check must not mint one — the check must fail.
+                "#,
+            )
+            .unwrap();
+        let result = egraph.parse_and_run_program(
+            None,
+            r#"(check (= (unstable-app make 99) (Num 99)))"#,
+        );
+        assert!(
+            result.is_err(),
+            "check should fail: `unstable-app` on a constructor in a query \
+             must return None rather than mint an eclass"
         );
     }
 

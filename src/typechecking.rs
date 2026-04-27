@@ -67,6 +67,22 @@ pub struct PrimitiveWithId {
     /// registered via [`EGraph::add_typed_primitive`] carry the set derived
     /// from their declared `State` type.
     pub(crate) valid_contexts: &'static [Context],
+    /// When two primitives are registered under the same name with the
+    /// same signature (e.g., `unstable-app`'s `ApplyPure` / `ApplyFull`
+    /// per issue #772), their `get_type_constraints` output is identical
+    /// and the typechecker's XOR ("exactly one branch") fails because
+    /// every solution satisfies both branches. Primitives that share a
+    /// `dedup_key` are collapsed into a single XOR branch at constraint-
+    /// generation time; the rule builder later picks the context-
+    /// matching variant via `valid_contexts`.
+    ///
+    /// `None` for ordinary primitives — they participate in overload
+    /// resolution normally, even across same-name siblings with different
+    /// signatures. The key must be unique to each (name, signature)
+    /// pair — for example `unstable-app`'s key includes the function
+    /// sort name so `unstable-app` overloads for `MathFn` versus
+    /// `i64Fun` stay distinct XOR branches.
+    pub(crate) dedup_key: Option<String>,
 }
 
 impl PrimitiveWithId {
@@ -205,6 +221,7 @@ impl EGraph {
                 // migrate to `TypedPrimitive`, they get the narrower set
                 // derived from their declared state.
                 valid_contexts: &Context::ALL,
+                dedup_key: None,
             });
     }
 
@@ -215,7 +232,7 @@ impl EGraph {
         T: TypedPrimitive + Clone,
         for<'a> T::State<'a>: egglog_bridge::UserState<'a>,
     {
-        self.add_typed_primitive_with_validator(x, None)
+        self.add_typed_primitive_full(x, None, None)
     }
 
     /// Add a typed primitive with an optional validator.
@@ -223,6 +240,38 @@ impl EGraph {
         &mut self,
         x: T,
         validator: Option<PrimitiveValidator>,
+    ) where
+        T: TypedPrimitive + Clone,
+        for<'a> T::State<'a>: egglog_bridge::UserState<'a>,
+    {
+        self.add_typed_primitive_full(x, validator, None)
+    }
+
+    /// Add a typed primitive that is a context-specialized sibling of
+    /// another primitive registered under the same name with the same
+    /// signature. All siblings sharing `dedup_key` are collapsed into a
+    /// single branch during typechecking's XOR overload resolution so
+    /// identical constraints don't make inference ambiguous. The rule
+    /// builder later dispatches to the one matching the current context
+    /// via `valid_contexts`.
+    ///
+    /// The `dedup_key` must uniquely identify this `(name, signature)`
+    /// group — for primitives parameterized by a sort (e.g. `unstable-app`
+    /// for each `FunctionSort`), include the sort name in the key so
+    /// genuinely different overloads are not conflated.
+    pub fn add_typed_primitive_in_group<T>(&mut self, x: T, dedup_key: String)
+    where
+        T: TypedPrimitive + Clone,
+        for<'a> T::State<'a>: egglog_bridge::UserState<'a>,
+    {
+        self.add_typed_primitive_full(x, None, Some(dedup_key))
+    }
+
+    fn add_typed_primitive_full<T>(
+        &mut self,
+        x: T,
+        validator: Option<PrimitiveValidator>,
+        dedup_key: Option<String>,
     ) where
         T: TypedPrimitive + Clone,
         for<'a> T::State<'a>: egglog_bridge::UserState<'a>,
@@ -287,6 +336,7 @@ impl EGraph {
                 id,
                 validator,
                 valid_contexts,
+                dedup_key,
             });
     }
 

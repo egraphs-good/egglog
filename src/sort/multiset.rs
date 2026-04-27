@@ -332,6 +332,15 @@ struct Map {
     output_multiset: ArcSort,
 }
 
+// NOTE (#772): `Map` stays on the legacy `Primitive` trait for now. The
+// tricky case is `(check (= (multiset-map <custom-fn> xs) ...))` — a
+// GlobalQuery context that calls a custom function (Fail default) on
+// each element. `FunctionContainer::apply_in` refuses all `Lookup`
+// variants because RuleQueryState's `valid_contexts` includes RuleQuery
+// (where reads are unsound), so dual-registering MapPure here breaks
+// the check. A proper fix splits `ResolvedFunctionId::Lookup` into
+// `CustomLookup` + `ConstructorLookup` and adds a read-capable dispatch
+// path for GlobalQuery-only variants. Deferred.
 impl Primitive for Map {
     fn name(&self) -> &str {
         &self.name
@@ -362,10 +371,8 @@ impl Primitive for Map {
             .unwrap()
             .clone();
         let mut new_data = MultiSet::<Value>::new();
-        // Filter out any elements which do not have the function defined for them
         for (v, c) in multiset.data.iter_counts() {
-            let mapped = fc.apply(exec_state, &[v]);
-            if let Some(mapped_v) = mapped {
+            if let Some(mapped_v) = fc.apply(exec_state, &[v]) {
                 new_data.insert_multiple_mut(mapped_v, c);
             }
         }
@@ -493,6 +500,8 @@ struct FlatMap {
     fn_: Arc<FunctionSort>,
 }
 
+// NOTE (#772): FlatMap is on legacy `Primitive` for the same reason
+// `Map` is (see comment on `Map`).
 impl Primitive for FlatMap {
     fn name(&self) -> &str {
         &self.name
@@ -561,6 +570,8 @@ struct Filter {
     skip_empty: bool,
 }
 
+// NOTE (#772): Filter is on legacy `Primitive` for the same reason
+// `Map` is (see comment on `Map`).
 impl Primitive for Filter {
     fn name(&self) -> &str {
         &self.name
@@ -591,7 +602,6 @@ impl Primitive for Filter {
             .unwrap()
             .clone();
         let mut new_data = MultiSet::<Value>::new();
-        // Filter out any elements which do not have the function defined for them
         for (v, c) in multiset.data.iter_counts() {
             let mapped = fc.apply(exec_state, &[v]);
             if mapped.is_some() == self.skip_empty {
@@ -678,6 +688,8 @@ struct Reduce {
     element: ArcSort,
 }
 
+// NOTE (#772): Reduce is on legacy `Primitive` for the same reason
+// `Map` is (see comment on `Map`).
 impl Primitive for Reduce {
     fn name(&self) -> &str {
         &self.name
@@ -713,9 +725,7 @@ impl Primitive for Reduce {
         let mut acc = if values.is_empty() {
             initial
         } else {
-            let first = values[0];
-            values.remove(0);
-            first
+            values.remove(0)
         };
         for v in values {
             acc = fc.apply(exec_state, &[acc, v])?;
