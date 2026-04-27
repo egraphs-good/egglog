@@ -436,11 +436,17 @@ impl BaseValue for ResolvedFunction {}
 
 #[derive(Clone, Debug, PartialEq, Eq, Hash)]
 pub enum ResolvedFunctionId {
-    /// Wraps a function-table lookup. In query contexts this is unsafe —
-    /// constructor tables mint a fresh eclass id on miss (a write) and
-    /// custom-function tables are untracked reads that seminaive cannot
-    /// re-fire on. `apply_in` refuses to dispatch this variant.
-    Lookup(egglog_bridge::TableAction),
+    /// Wraps a constructor-table lookup. `lookup_or_insert` mints a
+    /// fresh eclass id on miss — that's a write. Only safe in action
+    /// contexts (RuleAction, GlobalAction). `apply_in` refuses this
+    /// variant.
+    ConstructorLookup(egglog_bridge::TableAction),
+    /// Wraps a custom-function (`:no-merge`/`Fail`) lookup. `lookup` is
+    /// a pure read returning `None` on miss. Safe everywhere except
+    /// `RuleQuery` — there it's an untracked read that seminaive cannot
+    /// re-fire on (issue #772, future-work primitive-declares-its-reads
+    /// path).
+    CustomLookup(egglog_bridge::TableAction),
     /// Wraps a primitive. `valid_contexts` carries the primitive's
     /// declared capability profile so `FunctionContainer::apply_in` can
     /// decide at dispatch time whether the inner call is safe for the
@@ -562,44 +568,60 @@ impl FunctionContainer {
     pub fn apply(&self, exec_state: &mut ExecutionState, args: &[Value]) -> Option<Value> {
         let args: Vec<_> = self.1.iter().map(|(_, x)| x).chain(args).copied().collect();
         match &self.0 {
-            ResolvedFunctionId::Lookup(action) => action.lookup_or_insert(exec_state, &args),
+            ResolvedFunctionId::ConstructorLookup(action) => {
+                action.lookup_or_insert(exec_state, &args)
+            }
+            ResolvedFunctionId::CustomLookup(action) => action.lookup(exec_state, &args),
             ResolvedFunctionId::Prim { id, .. } => exec_state.call_external_func(*id, &args),
         }
     }
 
     /// Query-safe dispatch: call the wrapped function from a pure (query)
-    /// state. Succeeds only when the inner function is a primitive whose
-    /// declared `valid_contexts` includes the caller's narrowest context;
-    /// returns `None` on a constructor/custom-function lookup or a
-    /// writing primitive.
+    /// state. Each branch checks that its required capabilities are a
+    /// superset of the caller state's `valid_contexts`. Returns `None`
+    /// when the inner function isn't safe in the caller's context — for
+    /// example, a constructor lookup is never safe via `apply_in` (it
+    /// would mint a fresh eclass), and a custom-function lookup is safe
+    /// everywhere except `RuleQuery` (untracked seminaive read).
     ///
-    /// The runtime check here is what lets `unstable-app` be used in a
-    /// rule query when the wrapped function is pure (e.g., `+` over i64)
-    /// and automatically refuse when it is a constructor or writing
-    /// primitive. This is a core-crate-only mechanism — a user's
-    /// [`TypedPrimitive`] cannot replicate it because the
-    /// `__call_external_func_unchecked` escape on the state wrapper is a
-    /// trust boundary intended only for this dispatch.
+    /// This is a core-crate-only mechanism — the trust-boundary escapes
+    /// on `UserState` (`__call_external_func_unchecked`,
+    /// `__table_lookup_unchecked`) are intended only for this dispatch.
     pub fn apply_in<'a, S>(&self, state: &mut S, args: &[Value]) -> Option<Value>
     where
         S: egglog_bridge::UserState<'a>,
     {
         let args: Vec<_> = self.1.iter().map(|(_, x)| x).chain(args).copied().collect();
+        // Capability set for any table lookup as a pure read. Both
+        // constructor and custom-function lookups behave the same way in
+        // `apply_in`: we call `TableAction::lookup` (no mint), which is
+        // safe everywhere except `RuleQuery` (untracked seminaive read).
+        // The difference between the two variants only matters in
+        // `apply_mut` — constructor lookups there mint on miss.
+        const LOOKUP_READ_CONTEXTS: &[egglog_bridge::Context] = &[
+            egglog_bridge::Context::RuleAction,
+            egglog_bridge::Context::GlobalQuery,
+            egglog_bridge::Context::GlobalAction,
+        ];
+
+        let caller_contexts = S::valid_contexts();
+        let callee_safe = |callee_contexts: &[egglog_bridge::Context]| {
+            caller_contexts
+                .iter()
+                .all(|c| callee_contexts.contains(c))
+        };
+
         match &self.0 {
-            // A `Lookup` inside `apply_in` would be either a constructor
-            // (writes a fresh eclass on miss) or a custom-function read
-            // (an untracked read that seminaive cannot re-fire on).
-            // Either way — refuse.
-            ResolvedFunctionId::Lookup(_) => None,
-            // For a primitive, check that its declared capability profile
-            // is a superset of the caller's narrowest context. If yes,
-            // dispatch through the trust-boundary escape; otherwise fail.
+            ResolvedFunctionId::ConstructorLookup(action)
+            | ResolvedFunctionId::CustomLookup(action) => {
+                if callee_safe(LOOKUP_READ_CONTEXTS) {
+                    state.__table_lookup_unchecked(action, &args)
+                } else {
+                    None
+                }
+            }
             ResolvedFunctionId::Prim { id, valid_contexts } => {
-                let caller_contexts = S::valid_contexts();
-                let callee_ok = caller_contexts
-                    .iter()
-                    .all(|c| valid_contexts.contains(c));
-                if callee_ok {
+                if callee_safe(valid_contexts) {
                     state.__call_external_func_unchecked(*id, &args)
                 } else {
                     None
@@ -621,7 +643,8 @@ impl FunctionContainer {
         let args: Vec<_> = self.1.iter().map(|(_, x)| x).chain(args).copied().collect();
         let rfid = self.0.clone();
         state.with_raw_exec_state(|es| match rfid {
-            ResolvedFunctionId::Lookup(action) => action.lookup_or_insert(es, &args),
+            ResolvedFunctionId::ConstructorLookup(action) => action.lookup_or_insert(es, &args),
+            ResolvedFunctionId::CustomLookup(action) => action.lookup(es, &args),
             ResolvedFunctionId::Prim { id, .. } => es.call_external_func(id, &args),
         })
     }

@@ -202,12 +202,21 @@ pub(crate) fn try_registering_vec_map(
     {
         return;
     }
-    eg.add_primitive(VecMap {
+    let dedup_key = format!(
+        "unstable-vec-map::{}::{}::{}",
+        input_vec.name(),
+        fn_.name(),
+        output_vec.name(),
+    );
+    let base = VecMap {
         name: "unstable-vec-map".into(),
         vec: input_vec,
         output_vec,
         fn_: fn_.clone(),
-    });
+    };
+    eg.add_typed_primitive_in_group(VecMapPure(base.clone()), dedup_key.clone());
+    eg.add_typed_primitive_in_group(VecMapGlobalQuery(base.clone()), dedup_key.clone());
+    eg.add_typed_primitive_in_group(VecMapFull(base), dedup_key);
 }
 
 pub(crate) fn register_vec_primitives_for_function(eg: &mut EGraph, fn_: Arc<FunctionSort>) {
@@ -231,47 +240,97 @@ struct VecMap {
     fn_: Arc<FunctionSort>,
 }
 
-impl Primitive for VecMap {
-    fn name(&self) -> &str {
-        &self.name
-    }
-
-    fn get_type_constraints(&self, span: &Span) -> Box<dyn TypeConstraint> {
+// `VecMap` is triple-registered like multiset `Map` (issue #772). The
+// pure / global-query / full triple lets it be used in rule queries
+// (only with pure inner functions), in checks / extracts (with custom-
+// function reads), and in actions (with constructor minting).
+impl VecMap {
+    fn type_constraints(&self, span: &Span) -> Box<dyn TypeConstraint> {
         SimpleTypeConstraint::new(
-            self.name(),
+            "unstable-vec-map",
             vec![self.fn_.clone(), self.vec.clone(), self.output_vec.clone()],
             span.clone(),
         )
         .into_box()
     }
 
-    fn apply(&self, exec_state: &mut ExecutionState, args: &[Value]) -> Option<Value> {
-        let fc = exec_state
+    fn run<'a, S, D>(&self, state: &mut S, args: &[Value], dispatch: D) -> Option<Value>
+    where
+        S: egglog_bridge::UserState<'a>,
+        D: Fn(&FunctionContainer, &mut S, &[Value]) -> Option<Value>,
+    {
+        let fc = state
             .container_values()
             .get_val::<FunctionContainer>(args[0])
             .unwrap()
             .clone();
-        let vec = exec_state
+        let vec = state
             .container_values()
             .get_val::<VecContainer>(args[1])
             .unwrap()
             .clone();
         let mut new_data = Vec::with_capacity(vec.data.len());
         for v in vec.data {
-            if let Some(mapped) = fc.apply(exec_state, &[v]) {
+            if let Some(mapped) = dispatch(&fc, state, &[v]) {
                 new_data.push(mapped);
             }
         }
-        let vec = VecContainer {
+        let new_vec = VecContainer {
             do_rebuild: self.output_vec.is_eq_container_sort(),
             data: new_data,
         };
-        Some(
-            exec_state
-                .clone()
-                .container_values()
-                .register_val(vec, exec_state),
-        )
+        Some(state.register_container(new_vec))
+    }
+}
+
+#[derive(Clone)]
+struct VecMapPure(VecMap);
+impl TypedPrimitive for VecMapPure {
+    type State<'a> = egglog_bridge::RuleQueryState<'a>;
+    fn name(&self) -> &str { &self.0.name }
+    fn get_type_constraints(&self, span: &Span) -> Box<dyn TypeConstraint> {
+        self.0.type_constraints(span)
+    }
+    fn apply<'a>(
+        &self,
+        state: &mut egglog_bridge::RuleQueryState<'a>,
+        args: &[Value],
+    ) -> Option<Value> {
+        self.0.run(state, args, |fc, s, a| fc.apply_in(s, a))
+    }
+}
+
+#[derive(Clone)]
+struct VecMapGlobalQuery(VecMap);
+impl TypedPrimitive for VecMapGlobalQuery {
+    type State<'a> = egglog_bridge::GlobalQueryState<'a>;
+    fn name(&self) -> &str { &self.0.name }
+    fn get_type_constraints(&self, span: &Span) -> Box<dyn TypeConstraint> {
+        self.0.type_constraints(span)
+    }
+    fn apply<'a>(
+        &self,
+        state: &mut egglog_bridge::GlobalQueryState<'a>,
+        args: &[Value],
+    ) -> Option<Value> {
+        self.0.run(state, args, |fc, s, a| fc.apply_in(s, a))
+    }
+}
+
+#[derive(Clone)]
+struct VecMapFull(VecMap);
+impl TypedPrimitive for VecMapFull {
+    type State<'a> = egglog_bridge::RuleActionState<'a>;
+    fn name(&self) -> &str { &self.0.name }
+    fn get_type_constraints(&self, span: &Span) -> Box<dyn TypeConstraint> {
+        self.0.type_constraints(span)
+    }
+    fn apply<'a>(
+        &self,
+        state: &mut egglog_bridge::RuleActionState<'a>,
+        args: &[Value],
+    ) -> Option<Value> {
+        self.0.run(state, args, |fc, s, a| fc.apply_mut(s, a))
     }
 }
 
