@@ -3,7 +3,6 @@ use crate::{
         Atom, CoreAction, CoreRule, GenericCoreActions, GenericCoreRule, HeadOrEq, Query,
         StringOrEq,
     },
-    typechecking::PrimitiveWithId,
     *,
 };
 use std::{cmp, rc::Rc};
@@ -950,36 +949,14 @@ fn get_atom_application_constraints(
 
     // primitive atom constraints
     if let Some(primitives) = type_info.get_prims(head) {
-        // Same-name siblings can have overlapping `valid_contexts`
-        // (e.g., `unstable-app`'s `ApplyPure` is valid in every
-        // context, `ApplyFull` only in action contexts; in
-        // `RuleAction` both apply). Their structural type constraints
-        // are identical, so two satisfied branches under XOR
-        // ("exactly one") would reject every solution. We resolve
-        // this at constraint-build time: group siblings by
-        // `signature_key` and emit only the context-best variant per
-        // group. Primitives whose `signature_key` is `None` are
-        // treated as a unique group of one.
-        let mut groups: indexmap::IndexMap<String, Vec<&PrimitiveWithId>> = Default::default();
-        let mut ungrouped: Vec<&PrimitiveWithId> = Vec::new();
+        // `valid_contexts` is the **disjoint** set of contexts where
+        // this variant is the chosen pick — overlapping siblings
+        // (e.g. `unstable-app`'s `ApplyPure` + `ApplyFull`) had their
+        // contexts partitioned at registration time via
+        // `add_primitive_group`, so for a given call site at most one
+        // variant per group survives this filter and the XOR resolves
+        // cleanly.
         for p in primitives {
-            match p.primitive.get_type_constraints(span).signature_key() {
-                Some(k) => groups.entry(k).or_default().push(p),
-                None => ungrouped.push(p),
-            }
-        }
-        for siblings in groups.values() {
-            if let Some(picked) =
-                crate::typechecking::pick_for_context(siblings.iter().copied(), ctx)
-            {
-                let constraints = picked
-                    .primitive
-                    .get_type_constraints(span)
-                    .get(args, type_info);
-                xor_constraints.push(constraints);
-            }
-        }
-        for p in ungrouped {
             if !p.valid_contexts.contains(&ctx) {
                 continue;
             }
@@ -1033,28 +1010,6 @@ pub trait TypeConstraint {
         typeinfo: &TypeInfo,
     ) -> Vec<Box<dyn Constraint<AtomTerm, ArcSort>>>;
 
-    /// Optional structural fingerprint of this constraint.
-    ///
-    /// When `Some`, two primitives that share both their primitive name
-    /// and their `signature_key` are considered the same logical
-    /// primitive and are auto-deduped at constraint-build time. This is
-    /// the mechanism that lets context-specialized siblings (e.g.
-    /// `unstable-multiset-map`'s pure / global-query / full triple) be
-    /// registered without an explicit
-    /// `add_primitive_with_dedup_key` dedup string — they all produce
-    /// identical type constraints and thus identical signature keys.
-    ///
-    /// Returning `None` (the default) opts out of auto-dedup; the
-    /// constraint is treated as unique per registration.
-    ///
-    /// Implementors should produce a **span-independent** key. The key
-    /// is computed at registration time using `Span::Panic` and is
-    /// then compared across primitive registrations that happen at
-    /// arbitrary source locations. Including a real span would cause
-    /// otherwise-identical siblings to fail to dedup.
-    fn signature_key(&self) -> Option<String> {
-        None
-    }
 }
 
 /// A type constraint that assigns specific sorts to each argument position.
@@ -1103,20 +1058,6 @@ impl TypeConstraint for SimpleTypeConstraint {
                 .map(|(arg, sort)| constraint::assign(arg, sort))
                 .collect()
         }
-    }
-
-    fn signature_key(&self) -> Option<String> {
-        // Fingerprint: "<name>|<sort1>|<sort2>|...". Sort names uniquely
-        // identify ArcSorts within an EGraph (sorts are interned by name
-        // in TypeInfo), so name-based concatenation is a safe key for
-        // the auto-dedup machinery in `add_primitive`.
-        let mut s = String::new();
-        s.push_str(&self.name);
-        for sort in &self.sorts {
-            s.push('|');
-            s.push_str(sort.name());
-        }
-        Some(s)
     }
 }
 

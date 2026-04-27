@@ -203,17 +203,24 @@ impl Sort for FunctionSort {
             name: "unstable-fn".into(),
             function: self.clone(),
         });
-        // Dual-registered: `add_primitive` auto-dedupes by
-        // `(name, signature)` via `SimpleTypeConstraint::signature_key`,
-        // so the typechecker sees one XOR branch per overload while
-        // keeping `unstable-app` for distinct `FunctionSort`s separate.
-        eg.add_primitive(ApplyPure {
-            name: "unstable-app".into(),
-            function: self.clone(),
-        });
-        eg.add_primitive(ApplyFull {
-            name: "unstable-app".into(),
-            function: self.clone(),
+        // Two context-specialized variants of `unstable-app` registered
+        // as one overload group. Their `valid_contexts` overlap
+        // (ApplyPure is sound everywhere, ApplyFull only in action
+        // contexts); the group registration partitions the contexts so
+        // ApplyFull claims action contexts and ApplyPure keeps the
+        // query contexts. Different `FunctionSort`s register
+        // independent groups under the same `unstable-app` name and
+        // are dispatched by signature.
+        let function = self.clone();
+        eg.add_primitive_group(|g| {
+            g.add(ApplyPure {
+                name: "unstable-app".into(),
+                function: function.clone(),
+            });
+            g.add(ApplyFull {
+                name: "unstable-app".into(),
+                function,
+            });
         });
 
         register_vec_primitives_for_function(eg, self.clone());
@@ -447,7 +454,7 @@ pub enum ResolvedFunctionId {
     /// caller's context.
     Prim {
         id: ExternalFunctionId,
-        valid_contexts: &'static [egglog_bridge::Context],
+        valid_contexts: Vec<egglog_bridge::Context>,
     },
 }
 
@@ -597,7 +604,7 @@ impl FunctionContainer {
                 }
             }
             ResolvedFunctionId::Prim { id, valid_contexts } => {
-                if callee_safe(valid_contexts) {
+                if callee_safe(valid_contexts.as_slice()) {
                     state.call_external_func(*id, &args)
                 } else {
                     None

@@ -155,11 +155,12 @@ pub type ArcSort = Arc<dyn Sort>;
 /// Pick the **most permissive** wrapper the body can compile under
 /// (one with the fewest capabilities). A pure primitive belongs on
 /// `RuleQueryState`; a writing one belongs on `RuleActionState`. Same
-/// logical primitive needed in multiple contexts? Register it more
-/// than once with different `State` types — the constraint-level
-/// typechecker auto-dedupes siblings whose
-/// [`crate::constraint::TypeConstraint::signature_key`]
-/// matches.
+/// logical primitive needed in multiple contexts? Register the
+/// variants together via
+/// [`EGraph::add_primitive_group`](EGraph::add_primitive_group); the
+/// group's `valid_contexts` are partitioned into disjoint sets at
+/// registration time so each call site dispatches to a single
+/// variant.
 ///
 /// # Examples in this crate
 ///
@@ -2163,7 +2164,7 @@ impl<'a> BackendRule<'a> {
                 // query contexts when the inner function isn't pure.
                 ResolvedFunctionId::Prim {
                     id: picked.id,
-                    valid_contexts: picked.valid_contexts,
+                    valid_contexts: picked.valid_contexts.clone(),
                 }
             } else {
                 panic!("no callable for {name}");

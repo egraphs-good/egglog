@@ -202,19 +202,22 @@ pub(crate) fn try_registering_vec_map(
     {
         return;
     }
-    // Dedup key auto-derived from the primitive name + signature
-    // (`SimpleTypeConstraint::signature_key`), so all three context-
-    // specialized variants collapse into one XOR branch in the
-    // typechecker.
+    // Three context-specialized variants registered as one overload
+    // group; group registration partitions their `valid_contexts` so
+    // exactly one matches each call site (Full claims action
+    // contexts, GlobalQuery claims `GlobalQuery`, Pure keeps
+    // `RuleQuery`).
     let base = VecMap {
         name: "unstable-vec-map".into(),
         vec: input_vec,
         output_vec,
         fn_: fn_.clone(),
     };
-    eg.add_primitive(VecMapPure(base.clone()));
-    eg.add_primitive(VecMapGlobalQuery(base.clone()));
-    eg.add_primitive(VecMapFull(base));
+    eg.add_primitive_group(|g| {
+        g.add(VecMapPure(base.clone()));
+        g.add(VecMapGlobalQuery(base.clone()));
+        g.add(VecMapFull(base));
+    });
 }
 
 pub(crate) fn register_vec_primitives_for_function(eg: &mut EGraph, fn_: Arc<FunctionSort>) {

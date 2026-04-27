@@ -156,13 +156,13 @@ impl ResolvedCall {
             }
         }
 
+        // After `add_primitive_group` partitioning, at most one
+        // registration matches a given (signature, context) pair, so a
+        // simple find is enough — no specificity tiebreaker needed.
         if let Some(primitives) = typeinfo.get_prims(head)
-            && let Some(picked) = typechecking::pick_for_context_and_sig(
-                primitives.iter(),
-                ctx,
-                types,
-                typeinfo,
-            )
+            && let Some(picked) = primitives
+                .iter()
+                .find(|p| p.valid_contexts.contains(&ctx) && p.accept(types, typeinfo))
         {
             let (out, inp) = types.split_last().unwrap();
             return ResolvedCall::Primitive(SpecializedPrimitive {
