@@ -13,7 +13,7 @@
 use std::sync::Mutex;
 
 // These three traits are all used by `FunctionContainer::apply_in` /
-// `apply_mut` plus `TypedPrimitive for Ctor`. Some usages are method
+// `apply_mut` plus `Primitive for Ctor`. Some usages are method
 // calls behind trait bounds so they can read as unused to the compiler;
 // silence those warnings by importing the triple in one place.
 #[allow(unused_imports)]
@@ -199,28 +199,22 @@ impl Sort for FunctionSort {
     }
 
     fn register_primitives(self: Arc<Self>, eg: &mut EGraph) {
-        eg.add_typed_primitive(Ctor {
+        eg.add_primitive(Ctor {
             name: "unstable-fn".into(),
             function: self.clone(),
         });
-        // Dual-registered under a shared per-function-sort dedup key so
-        // the typechecker sees a single XOR branch per overload while
+        // Dual-registered: `add_primitive` auto-dedupes by
+        // `(name, signature)` via `SimpleTypeConstraint::signature_key`,
+        // so the typechecker sees one XOR branch per overload while
         // keeping `unstable-app` for distinct `FunctionSort`s separate.
-        let key = unstable_app_dedup_key(self.as_ref());
-        eg.add_typed_primitive_in_group(
-            ApplyPure {
-                name: "unstable-app".into(),
-                function: self.clone(),
-            },
-            key.clone(),
-        );
-        eg.add_typed_primitive_in_group(
-            ApplyFull {
-                name: "unstable-app".into(),
-                function: self.clone(),
-            },
-            key,
-        );
+        eg.add_primitive(ApplyPure {
+            name: "unstable-app".into(),
+            function: self.clone(),
+        });
+        eg.add_primitive(ApplyFull {
+            name: "unstable-app".into(),
+            function: self.clone(),
+        });
 
         register_vec_primitives_for_function(eg, self.clone());
         register_multiset_primitives_for_function(eg, self.clone());
@@ -356,7 +350,7 @@ struct Ctor {
 // so it's safe in every context; declaring `State = RuleQueryState`
 // permits this primitive inside rule queries, actions, and global
 // contexts alike.
-impl TypedPrimitive for Ctor {
+impl Primitive for Ctor {
     type State<'a> = egglog_bridge::RuleQueryState<'a>;
 
     fn name(&self) -> &str {
@@ -473,16 +467,14 @@ pub enum ResolvedFunctionId {
 //   full access — constructors mint fresh eclass ids, custom functions
 //   report None on miss, primitives dispatch unconditionally.
 //
-// Both variants share an identical signature so they are registered in
-// the same dedup group. The constraint-level typechecker treats them as
-// one branch during overload resolution; `BackendRule::prim` later
-// picks the variant whose `valid_contexts` contains the caller's
-// context. The group key includes the function sort name so that
-// `unstable-app` for `MathFn` stays a distinct overload from
-// `unstable-app` for `i64Fun`, etc.
-fn unstable_app_dedup_key(function_sort: &FunctionSort) -> String {
-    format!("unstable-app::{}", function_sort.name())
-}
+// Both variants share an identical type constraint, so the auto-
+// derived dedup key from `add_primitive` (name + signature)
+// collapses them into one XOR branch during overload resolution.
+// `BackendRule::prim` then picks the variant whose `valid_contexts`
+// contains the caller's context. Distinct `FunctionSort`s produce
+// different signature keys (since the function sort name appears in
+// the constraint), so `unstable-app` for `MathFn` stays a separate
+// overload from `unstable-app` for `i64Fun`.
 
 #[derive(Clone)]
 struct ApplyPure {
@@ -507,7 +499,7 @@ fn apply_type_constraints(
     SimpleTypeConstraint::new(name, sorts, span.clone()).into_box()
 }
 
-impl TypedPrimitive for ApplyPure {
+impl Primitive for ApplyPure {
     type State<'a> = egglog_bridge::RuleQueryState<'a>;
 
     fn name(&self) -> &str {
@@ -533,7 +525,7 @@ impl TypedPrimitive for ApplyPure {
     }
 }
 
-impl TypedPrimitive for ApplyFull {
+impl Primitive for ApplyFull {
     type State<'a> = egglog_bridge::RuleActionState<'a>;
 
     fn name(&self) -> &str {
@@ -561,7 +553,7 @@ impl TypedPrimitive for ApplyFull {
 
 impl FunctionContainer {
     /// Legacy dispatch through a raw `ExecutionState`. Kept for callers
-    /// that have not yet migrated to `TypedPrimitive`; new code should
+    /// that have not yet migrated to `Primitive`; new code should
     /// prefer `apply_in` (for pure query dispatch) or `apply_mut` (for
     /// write-capable dispatch). Behaves like the pre-#772 method: mints
     /// on constructor lookups, forwards everything else.

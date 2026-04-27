@@ -46,9 +46,13 @@ fn test_add_primitive_with_validator_method() {
     let mut egraph = EGraph::default();
 
     // Create a simple primitive that adds two numbers
+    use egglog::{ExecStateCore, RuleQueryState};
+
     #[derive(Clone)]
     struct TestAdd;
     impl Primitive for TestAdd {
+        type State<'a> = RuleQueryState<'a>;
+
         fn name(&self) -> &str {
             "test-add"
         }
@@ -64,10 +68,14 @@ fn test_add_primitive_with_validator_method() {
             )
             .into_box()
         }
-        fn apply(&self, exec_state: &mut ExecutionState, args: &[Value]) -> Option<Value> {
-            let a = exec_state.base_values().unwrap::<i64>(args[0]);
-            let b = exec_state.base_values().unwrap::<i64>(args[1]);
-            Some(exec_state.base_values().get(a + b))
+        fn apply<'a>(
+            &self,
+            state: &mut RuleQueryState<'a>,
+            args: &[Value],
+        ) -> Option<Value> {
+            let a = state.base_values().unwrap::<i64>(args[0]);
+            let b = state.base_values().unwrap::<i64>(args[1]);
+            Some(state.base_values().get(a + b))
         }
     }
 

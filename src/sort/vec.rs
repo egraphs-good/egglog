@@ -137,7 +137,7 @@ impl ContainerSort for VecSort {
         add_primitive!(eg, "vec-set"    = |mut xs: @VecContainer (arc), i: i64, x: # (self.element())| -> @VecContainer (arc) {{ xs.data[i as usize] = x;    xs }});
         add_primitive!(eg, "vec-remove" = |mut xs: @VecContainer (arc), i: i64                       | -> @VecContainer (arc) {{ xs.data.remove(i as usize); xs }});
         if self.element.is_eq_sort() {
-            eg.add_typed_primitive(Union {
+            eg.add_primitive(Union {
                 name: "vec-union".into(),
                 vec: arc.clone(),
                 action: eg.new_union_action(),
@@ -202,21 +202,19 @@ pub(crate) fn try_registering_vec_map(
     {
         return;
     }
-    let dedup_key = format!(
-        "unstable-vec-map::{}::{}::{}",
-        input_vec.name(),
-        fn_.name(),
-        output_vec.name(),
-    );
+    // Dedup key auto-derived from the primitive name + signature
+    // (`SimpleTypeConstraint::signature_key`), so all three context-
+    // specialized variants collapse into one XOR branch in the
+    // typechecker.
     let base = VecMap {
         name: "unstable-vec-map".into(),
         vec: input_vec,
         output_vec,
         fn_: fn_.clone(),
     };
-    eg.add_typed_primitive_in_group(VecMapPure(base.clone()), dedup_key.clone());
-    eg.add_typed_primitive_in_group(VecMapGlobalQuery(base.clone()), dedup_key.clone());
-    eg.add_typed_primitive_in_group(VecMapFull(base), dedup_key);
+    eg.add_primitive(VecMapPure(base.clone()));
+    eg.add_primitive(VecMapGlobalQuery(base.clone()));
+    eg.add_primitive(VecMapFull(base));
 }
 
 pub(crate) fn register_vec_primitives_for_function(eg: &mut EGraph, fn_: Arc<FunctionSort>) {
@@ -285,7 +283,7 @@ impl VecMap {
 
 #[derive(Clone)]
 struct VecMapPure(VecMap);
-impl TypedPrimitive for VecMapPure {
+impl Primitive for VecMapPure {
     type State<'a> = egglog_bridge::RuleQueryState<'a>;
     fn name(&self) -> &str { &self.0.name }
     fn get_type_constraints(&self, span: &Span) -> Box<dyn TypeConstraint> {
@@ -302,7 +300,7 @@ impl TypedPrimitive for VecMapPure {
 
 #[derive(Clone)]
 struct VecMapGlobalQuery(VecMap);
-impl TypedPrimitive for VecMapGlobalQuery {
+impl Primitive for VecMapGlobalQuery {
     type State<'a> = egglog_bridge::GlobalQueryState<'a>;
     fn name(&self) -> &str { &self.0.name }
     fn get_type_constraints(&self, span: &Span) -> Box<dyn TypeConstraint> {
@@ -319,7 +317,7 @@ impl TypedPrimitive for VecMapGlobalQuery {
 
 #[derive(Clone)]
 struct VecMapFull(VecMap);
-impl TypedPrimitive for VecMapFull {
+impl Primitive for VecMapFull {
     type State<'a> = egglog_bridge::RuleActionState<'a>;
     fn name(&self) -> &str { &self.0.name }
     fn get_type_constraints(&self, span: &Span) -> Box<dyn TypeConstraint> {
@@ -348,7 +346,7 @@ struct Union {
 // It writes to the union-find (via `UnionAction::union`), so it declares
 // `State = RuleActionState` — valid in rule-action and global-action
 // contexts, rejected at rule-build time if used in a rule query.
-impl TypedPrimitive for Union {
+impl Primitive for Union {
     type State<'a> = egglog_bridge::RuleActionState<'a>;
 
     fn name(&self) -> &str {
