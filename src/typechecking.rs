@@ -57,15 +57,12 @@ pub type PrimitiveValidator = Arc<dyn Fn(&mut TermDag, &[TermId]) -> Option<Term
 
 #[derive(Clone)]
 pub struct PrimitiveWithId {
-    pub(crate) primitive: Arc<dyn Primitive + Send + Sync>,
+    pub(crate) primitive: Arc<dyn ErasedPrimitive>,
     pub(crate) id: ExternalFunctionId,
     pub(crate) validator: Option<PrimitiveValidator>,
-    /// The execution contexts in which this primitive may be called.
-    ///
-    /// Legacy primitives registered via [`EGraph::add_primitive`] default to
-    /// all four contexts (preserving existing behavior). Typed primitives
-    /// registered via [`EGraph::add_typed_primitive`] carry the set derived
-    /// from their declared `State` type.
+    /// The execution contexts in which this primitive may be called,
+    /// derived from its declared [`Primitive::State`] type via
+    /// [`UserState::valid_contexts()`](egglog_bridge::UserState::valid_contexts).
     pub(crate) valid_contexts: &'static [Context],
     /// When two primitives are registered under the same name with the
     /// same signature (e.g., `unstable-app`'s `ApplyPure` / `ApplyFull`
@@ -182,134 +179,69 @@ impl EGraph {
         }
     }
 
-    /// Add a user-defined primitive
+    /// Add a user-defined primitive whose valid execution contexts are
+    /// derived from its declared `State` associated type.
     pub fn add_primitive<T>(&mut self, x: T)
     where
-        T: Clone + Primitive + Send + Sync + 'static,
-    {
-        self.add_primitive_with_validator(x, None)
-    }
-
-    /// Add a user-defined primitive with an optional validator
-    pub fn add_primitive_with_validator<T>(&mut self, x: T, validator: Option<PrimitiveValidator>)
-    where
-        T: Clone + Primitive + Send + Sync + 'static,
-    {
-        // We need to use a wrapper because of the orphan rule.
-        // If we just try to implement `ExternalFunction` directly on
-        // all `PrimitiveLike`s then it would be possible for a
-        // downstream crate to create a conflict.
-        #[derive(Clone)]
-        struct Wrapper<T>(T);
-        impl<T: Clone + Primitive + Send + Sync> ExternalFunction for Wrapper<T> {
-            fn invoke(&self, exec_state: &mut ExecutionState, args: &[Value]) -> Option<Value> {
-                self.0.apply(exec_state, args)
-            }
-        }
-
-        let primitive = Arc::new(x.clone());
-        let id = self.backend.register_external_func(Box::new(Wrapper(x)));
-        self.type_info
-            .primitives
-            .entry(primitive.name().to_owned())
-            .or_default()
-            .push(PrimitiveWithId {
-                primitive,
-                id,
-                validator,
-                // Legacy primitives: available in all contexts. As primitives
-                // migrate to `TypedPrimitive`, they get the narrower set
-                // derived from their declared state.
-                valid_contexts: &Context::ALL,
-                dedup_key: None,
-            });
-    }
-
-    /// Add a typed primitive whose valid execution contexts are derived from
-    /// its declared `State` associated type.
-    pub fn add_typed_primitive<T>(&mut self, x: T)
-    where
-        T: TypedPrimitive + Clone,
+        T: Primitive + Clone,
         for<'a> T::State<'a>: egglog_bridge::UserState<'a>,
     {
-        self.add_typed_primitive_full(x, None, None)
+        self.add_primitive_full(x, None, None)
     }
 
-    /// Add a typed primitive with an optional validator.
-    pub fn add_typed_primitive_with_validator<T>(
+    /// Add a user-defined primitive with an optional validator.
+    pub fn add_primitive_with_validator<T>(
         &mut self,
         x: T,
         validator: Option<PrimitiveValidator>,
     ) where
-        T: TypedPrimitive + Clone,
+        T: Primitive + Clone,
         for<'a> T::State<'a>: egglog_bridge::UserState<'a>,
     {
-        self.add_typed_primitive_full(x, validator, None)
+        self.add_primitive_full(x, validator, None)
     }
 
-    /// Add a typed primitive that is a context-specialized sibling of
-    /// another primitive registered under the same name with the same
-    /// signature. All siblings sharing `dedup_key` are collapsed into a
-    /// single branch during typechecking's XOR overload resolution so
-    /// identical constraints don't make inference ambiguous. The rule
-    /// builder later dispatches to the one matching the current context
-    /// via `valid_contexts`.
+    /// Add a primitive with an explicit dedup key.
     ///
-    /// The `dedup_key` must uniquely identify this `(name, signature)`
-    /// group — for primitives parameterized by a sort (e.g. `unstable-app`
-    /// for each `FunctionSort`), include the sort name in the key so
-    /// genuinely different overloads are not conflated.
-    pub fn add_typed_primitive_in_group<T>(&mut self, x: T, dedup_key: String)
+    /// Most callers should prefer [`Self::add_primitive`], which
+    /// auto-derives a dedup key from the primitive's name and the
+    /// `signature_key` reported by its [`TypeConstraint`]. Use this
+    /// override only when the constraint cannot produce a useful
+    /// signature fingerprint (e.g. custom `TypeConstraint` impls that
+    /// leave `signature_key` returning `None`) but you still want
+    /// context-specialized siblings to dedup at constraint-build time.
+    pub fn add_primitive_with_dedup_key<T>(&mut self, x: T, dedup_key: String)
     where
-        T: TypedPrimitive + Clone,
+        T: Primitive + Clone,
         for<'a> T::State<'a>: egglog_bridge::UserState<'a>,
     {
-        self.add_typed_primitive_full(x, None, Some(dedup_key))
+        self.add_primitive_full(x, None, Some(dedup_key))
     }
 
-    fn add_typed_primitive_full<T>(
+    fn add_primitive_full<T>(
         &mut self,
         x: T,
         validator: Option<PrimitiveValidator>,
         dedup_key: Option<String>,
     ) where
-        T: TypedPrimitive + Clone,
+        T: Primitive + Clone,
         for<'a> T::State<'a>: egglog_bridge::UserState<'a>,
     {
-        // Wrap the TypedPrimitive into an ErasedTypedPrimitive so the rest
-        // of the system can hold it behind a trait object. The erased
-        // wrapper knows how to construct the primitive's declared State
-        // type from an `ExecutionState`, and to report its valid contexts.
-        let arc_typed = Arc::new(x.clone());
-        let erased: Arc<dyn ErasedTypedPrimitive> =
-            Arc::new(TypedPrimitiveWrap(arc_typed.clone()));
+        // Wrap the Primitive into an ErasedPrimitive so the rest of
+        // the system can hold it behind a trait object. The erased
+        // wrapper knows how to construct the primitive's declared
+        // State type from an `ExecutionState`, and to report its
+        // valid contexts.
+        let arc_typed = Arc::new(x);
+        let erased: Arc<dyn ErasedPrimitive> = Arc::new(PrimitiveWrap(arc_typed));
 
-        // Bridge a typed primitive to the existing `Primitive` trait so the
-        // rest of the legacy pipeline (typechecking, display, etc.) can
-        // continue to work uniformly while migration proceeds.
+        // Register the external function. Since the ErasedPrimitive
+        // always produces its primitive's declared State type
+        // regardless of how it is invoked, a single ExternalFunctionId
+        // suffices — context enforcement happens at rule-build time
+        // via `valid_contexts`.
         #[derive(Clone)]
-        struct TypedAsPrimitive {
-            erased: Arc<dyn ErasedTypedPrimitive>,
-            name: String,
-        }
-        impl Primitive for TypedAsPrimitive {
-            fn name(&self) -> &str {
-                &self.name
-            }
-            fn get_type_constraints(&self, span: &Span) -> Box<dyn TypeConstraint> {
-                self.erased.get_type_constraints(span)
-            }
-            fn apply(&self, exec_state: &mut ExecutionState, args: &[Value]) -> Option<Value> {
-                self.erased.invoke(exec_state, args)
-            }
-        }
-
-        // Register the external function. Since the ErasedTypedPrimitive
-        // always produces its primitive's declared State type regardless of
-        // how it is invoked, a single ExternalFunctionId suffices — context
-        // enforcement happens at rule-build time via `valid_contexts`.
-        #[derive(Clone)]
-        struct ExtWrap(Arc<dyn ErasedTypedPrimitive>);
+        struct ExtWrap(Arc<dyn ErasedPrimitive>);
         impl ExternalFunction for ExtWrap {
             fn invoke(&self, exec_state: &mut ExecutionState, args: &[Value]) -> Option<Value> {
                 self.0.invoke(exec_state, args)
@@ -322,9 +254,22 @@ impl EGraph {
             .backend
             .register_external_func(Box::new(ExtWrap(erased.clone())));
 
-        let bridged: Arc<dyn Primitive + Send + Sync> = Arc::new(TypedAsPrimitive {
-            erased,
-            name: name.clone(),
+        // Auto-derive a dedup_key from the primitive's name + the
+        // structural fingerprint of its type constraint. Two
+        // registrations under the same name with the same signature
+        // (the only legitimate context-specialization shape) get
+        // collapsed in the typechecker's XOR builder; legitimate
+        // overloads (different signatures) stay distinct.
+        //
+        // An explicit `dedup_key` always wins; we only auto-derive
+        // when the caller didn't pass one. Primitives whose
+        // `TypeConstraint` does not return a `signature_key` opt out
+        // of auto-dedup entirely.
+        let dedup_key = dedup_key.or_else(|| {
+            let constraint = erased.get_type_constraints(&Span::Panic);
+            constraint
+                .signature_key()
+                .map(|sig| format!("auto::{}::{}", name, sig))
         });
 
         self.type_info
@@ -332,7 +277,7 @@ impl EGraph {
             .entry(name)
             .or_default()
             .push(PrimitiveWithId {
-                primitive: bridged,
+                primitive: erased,
                 id,
                 validator,
                 valid_contexts,

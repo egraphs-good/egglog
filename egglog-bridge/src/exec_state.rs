@@ -207,7 +207,7 @@ pub trait ExecStateWriteDb: ExecStateCore {
 /// Common trait for the user-facing state wrappers.
 ///
 /// Lets registration machinery derive a primitive's valid contexts from its
-/// declared [`TypedPrimitive::State`] type without caring which of the four
+/// declared [`Primitive::State`] type without caring which of the four
 /// concrete wrappers it is.
 pub trait UserState<'a>: Sized + ExecStateCore {
     fn wrap(state: &'a mut ExecutionState<'_>) -> Self;

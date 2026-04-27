@@ -179,7 +179,7 @@ fn build_add_primitive_impl(parsed: AddPrimitive, validator: Option<Expr>) -> To
         };
 
         // Cast the arguments to the desired type. `state` is the
-        // TypedPrimitive `RuleQueryState<'a>` wrapper from egglog_bridge;
+        // Primitive `RuleQueryState<'a>` wrapper from egglog_bridge;
         // `base_values()` comes from `ExecStateCore` and `container_values()`
         // from `UserState`, both imported below.
         let cast1 = |x, t: &syn::Type, is_container| match is_container {
@@ -239,7 +239,7 @@ fn build_add_primitive_impl(parsed: AddPrimitive, validator: Option<Expr>) -> To
     // This is the big `quote!` block that ties everything together.
     //
     // Macro-generated primitives are registered via the typed entry
-    // points (`add_typed_primitive` / `add_typed_primitive_with_validator`)
+    // points (`add_primitive` / `add_primitive_with_validator`)
     // so they participate in the #772 context-enforcement system. They
     // declare `State = RuleQueryState<'a>` (valid in all four contexts)
     // because every code path the macro emits is pure: it reads base /
@@ -248,8 +248,8 @@ fn build_add_primitive_impl(parsed: AddPrimitive, validator: Option<Expr>) -> To
     // extension of the macro introduces a non-pure emission path, the
     // declared state would need to narrow accordingly.
     let add_call = match validator {
-        None => quote!(eg.add_typed_primitive(#prim_use);),
-        Some(validator_expr) => quote!(eg.add_typed_primitive_with_validator(
+        None => quote!(eg.add_primitive(#prim_use);),
+        Some(validator_expr) => quote!(eg.add_primitive_with_validator(
             #prim_use,
             Some(::std::sync::Arc::new(#validator_expr))
         );),
@@ -262,7 +262,7 @@ fn build_add_primitive_impl(parsed: AddPrimitive, validator: Option<Expr>) -> To
         #[derive(Clone)]
         #prim_def
 
-        impl TypedPrimitive for Prim {
+        impl Primitive for Prim {
             type State<'a> = RuleQueryState<'a>;
 
             fn name(&self) -> &str {

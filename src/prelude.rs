@@ -427,7 +427,7 @@ struct RustRuleRhs<F: Fn(&mut RustRuleContext, &[Value]) -> Option<()>> {
     func: F,
 }
 
-impl<F> TypedPrimitive for RustRuleRhs<F>
+impl<F> Primitive for RustRuleRhs<F>
 where
     F: Fn(&mut RustRuleContext, &[Value]) -> Option<()> + Clone + Send + Sync + 'static,
 {
@@ -552,7 +552,7 @@ pub fn rust_rule(
 ) -> Result<Vec<CommandOutput>, Error> {
     let prim_name = egraph.parser.symbol_gen.fresh("rust_rule_prim");
     let panic_id = egraph.backend.new_panic(format!("{prim_name}_panic"));
-    egraph.add_typed_primitive(RustRuleRhs {
+    egraph.add_primitive(RustRuleRhs {
         name: prim_name.clone(),
         inputs: vars.iter().map(|(_, s)| s.clone()).collect(),
         union_action: egglog_bridge::UnionAction::new(&egraph.backend),

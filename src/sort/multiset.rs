@@ -173,7 +173,7 @@ impl ContainerSort for MultiSetSort {
             // We can't query directly by arcsort type since it's wrapped in a ContainerSort which is not public
                 && f.value_type() == Some(TypeId::of::<MultiSetContainer>())
         }) {
-            eg.add_typed_primitive(SumMultisets {
+            eg.add_primitive(SumMultisets {
                 name: "multiset-sum-multisets".into(),
                 multiset: other_multiset_sort.clone(),
                 multiset_of_multisets: arc.clone(),
@@ -192,7 +192,7 @@ impl ContainerSort for MultiSetSort {
             try_registering_multiset_non_map_primitives(eg, fn_sort.clone(), arc.clone());
         }
         if self.element.is_eq_sort() {
-            eg.add_typed_primitive(UnionValues {
+            eg.add_primitive(UnionValues {
                 name: "multiset-union-values".into(),
                 multiset: arc.clone(),
                 action: eg.new_union_action(),
@@ -231,21 +231,15 @@ pub(crate) fn try_registering_multiset_map(
     {
         return;
     }
-    let dedup_key = format!(
-        "unstable-multiset-map::{}::{}::{}",
-        input_ms.name(),
-        fn_.name(),
-        output_ms.name(),
-    );
     let base = Map {
         name: "unstable-multiset-map".into(),
         multiset: input_ms,
         output_multiset: output_ms,
         fn_: fn_.clone(),
     };
-    eg.add_typed_primitive_in_group(MapPure(base.clone()), dedup_key.clone());
-    eg.add_typed_primitive_in_group(MapGlobalQuery(base.clone()), dedup_key.clone());
-    eg.add_typed_primitive_in_group(MapFull(base), dedup_key);
+    eg.add_primitive(MapPure(base.clone()));
+    eg.add_primitive(MapGlobalQuery(base.clone()));
+    eg.add_primitive(MapFull(base));
 }
 
 pub(crate) fn register_multiset_primitives_for_function(eg: &mut EGraph, fn_: Arc<FunctionSort>) {
@@ -280,14 +274,9 @@ fn try_registering_multiset_non_map_primitives(
             fn_: fn_.clone(),
             skip_empty: true,
         };
-        let filter_key = format!(
-            "unstable-multiset-filter::{}::{}",
-            multiset.name(),
-            fn_.name()
-        );
-        eg.add_typed_primitive_in_group(FilterPure(filter.clone()), filter_key.clone());
-        eg.add_typed_primitive_in_group(FilterGlobalQuery(filter.clone()), filter_key.clone());
-        eg.add_typed_primitive_in_group(FilterFull(filter), filter_key);
+        eg.add_primitive(FilterPure(filter.clone()));
+        eg.add_primitive(FilterGlobalQuery(filter.clone()));
+        eg.add_primitive(FilterFull(filter));
 
         let filter_not = Filter {
             name: "unstable-multiset-filter-not".into(),
@@ -295,17 +284,9 @@ fn try_registering_multiset_non_map_primitives(
             fn_: fn_.clone(),
             skip_empty: false,
         };
-        let filter_not_key = format!(
-            "unstable-multiset-filter-not::{}::{}",
-            multiset.name(),
-            fn_.name()
-        );
-        eg.add_typed_primitive_in_group(FilterPure(filter_not.clone()), filter_not_key.clone());
-        eg.add_typed_primitive_in_group(
-            FilterGlobalQuery(filter_not.clone()),
-            filter_not_key.clone(),
-        );
-        eg.add_typed_primitive_in_group(FilterFull(filter_not), filter_not_key);
+        eg.add_primitive(FilterPure(filter_not.clone()));
+        eg.add_primitive(FilterGlobalQuery(filter_not.clone()));
+        eg.add_primitive(FilterFull(filter_not));
     }
 
     if fn_.inputs().len() == 2
@@ -319,15 +300,9 @@ fn try_registering_multiset_non_map_primitives(
             fn_: fn_.clone(),
             element: element.clone(),
         };
-        let key = format!(
-            "unstable-multiset-reduce::{}::{}::{}",
-            multiset.name(),
-            fn_.name(),
-            element.name()
-        );
-        eg.add_typed_primitive_in_group(ReducePure(reduce.clone()), key.clone());
-        eg.add_typed_primitive_in_group(ReduceGlobalQuery(reduce.clone()), key.clone());
-        eg.add_typed_primitive_in_group(ReduceFull(reduce), key);
+        eg.add_primitive(ReducePure(reduce.clone()));
+        eg.add_primitive(ReduceGlobalQuery(reduce.clone()));
+        eg.add_primitive(ReduceFull(reduce));
     }
 
     if fn_.inputs().len() == 2
@@ -336,13 +311,13 @@ fn try_registering_multiset_non_map_primitives(
         && fn_.output().name() == "i64"
     {
         let unit = eg.type_info.get_sort_by_name("Unit").unwrap().clone();
-        eg.add_typed_primitive(FillIndex {
+        eg.add_primitive(FillIndex {
             name: "unstable-multiset-fill-index".into(),
             multiset: multiset.clone(),
             unit: unit.clone(),
             fn_: fn_.clone(),
         });
-        eg.add_typed_primitive(ClearIndex {
+        eg.add_primitive(ClearIndex {
             name: "unstable-multiset-clear-index".into(),
             multiset: multiset.clone(),
             unit,
@@ -354,19 +329,14 @@ fn try_registering_multiset_non_map_primitives(
         && fn_.inputs()[0].name() == element_name
         && fn_.output().name() == multiset.name()
     {
-        let dedup_key = format!(
-            "unstable-multiset-flat-map::{}::{}",
-            multiset.name(),
-            fn_.name(),
-        );
         let base = FlatMap {
             name: "unstable-multiset-flat-map".into(),
             multiset,
             fn_: fn_.clone(),
         };
-        eg.add_typed_primitive_in_group(FlatMapPure(base.clone()), dedup_key.clone());
-        eg.add_typed_primitive_in_group(FlatMapGlobalQuery(base.clone()), dedup_key.clone());
-        eg.add_typed_primitive_in_group(FlatMapFull(base), dedup_key);
+        eg.add_primitive(FlatMapPure(base.clone()));
+        eg.add_primitive(FlatMapGlobalQuery(base.clone()));
+        eg.add_primitive(FlatMapFull(base));
     }
 }
 
@@ -430,7 +400,7 @@ impl Map {
 #[derive(Clone)]
 struct MapPure(Map);
 
-impl TypedPrimitive for MapPure {
+impl Primitive for MapPure {
     type State<'a> = egglog_bridge::RuleQueryState<'a>;
     fn name(&self) -> &str {
         &self.0.name
@@ -450,7 +420,7 @@ impl TypedPrimitive for MapPure {
 #[derive(Clone)]
 struct MapGlobalQuery(Map);
 
-impl TypedPrimitive for MapGlobalQuery {
+impl Primitive for MapGlobalQuery {
     type State<'a> = egglog_bridge::GlobalQueryState<'a>;
     fn name(&self) -> &str {
         &self.0.name
@@ -470,7 +440,7 @@ impl TypedPrimitive for MapGlobalQuery {
 #[derive(Clone)]
 struct MapFull(Map);
 
-impl TypedPrimitive for MapFull {
+impl Primitive for MapFull {
     type State<'a> = egglog_bridge::RuleActionState<'a>;
     fn name(&self) -> &str {
         &self.0.name
@@ -498,7 +468,7 @@ struct FillIndex {
 }
 
 // `FillIndex` writes table rows; action-only.
-impl TypedPrimitive for FillIndex {
+impl Primitive for FillIndex {
     type State<'a> = egglog_bridge::RuleActionState<'a>;
 
     fn name(&self) -> &str {
@@ -562,7 +532,7 @@ struct ClearIndex {
 }
 
 // `ClearIndex` removes table rows; action-only.
-impl TypedPrimitive for ClearIndex {
+impl Primitive for ClearIndex {
     type State<'a> = egglog_bridge::RuleActionState<'a>;
 
     fn name(&self) -> &str {
@@ -674,7 +644,7 @@ impl FlatMap {
 
 #[derive(Clone)]
 struct FlatMapPure(FlatMap);
-impl TypedPrimitive for FlatMapPure {
+impl Primitive for FlatMapPure {
     type State<'a> = egglog_bridge::RuleQueryState<'a>;
     fn name(&self) -> &str { &self.0.name }
     fn get_type_constraints(&self, span: &Span) -> Box<dyn TypeConstraint> {
@@ -691,7 +661,7 @@ impl TypedPrimitive for FlatMapPure {
 
 #[derive(Clone)]
 struct FlatMapGlobalQuery(FlatMap);
-impl TypedPrimitive for FlatMapGlobalQuery {
+impl Primitive for FlatMapGlobalQuery {
     type State<'a> = egglog_bridge::GlobalQueryState<'a>;
     fn name(&self) -> &str { &self.0.name }
     fn get_type_constraints(&self, span: &Span) -> Box<dyn TypeConstraint> {
@@ -708,7 +678,7 @@ impl TypedPrimitive for FlatMapGlobalQuery {
 
 #[derive(Clone)]
 struct FlatMapFull(FlatMap);
-impl TypedPrimitive for FlatMapFull {
+impl Primitive for FlatMapFull {
     type State<'a> = egglog_bridge::RuleActionState<'a>;
     fn name(&self) -> &str { &self.0.name }
     fn get_type_constraints(&self, span: &Span) -> Box<dyn TypeConstraint> {
@@ -781,7 +751,7 @@ impl Filter {
 
 #[derive(Clone)]
 struct FilterPure(Filter);
-impl TypedPrimitive for FilterPure {
+impl Primitive for FilterPure {
     type State<'a> = egglog_bridge::RuleQueryState<'a>;
     fn name(&self) -> &str { &self.0.name }
     fn get_type_constraints(&self, span: &Span) -> Box<dyn TypeConstraint> {
@@ -798,7 +768,7 @@ impl TypedPrimitive for FilterPure {
 
 #[derive(Clone)]
 struct FilterGlobalQuery(Filter);
-impl TypedPrimitive for FilterGlobalQuery {
+impl Primitive for FilterGlobalQuery {
     type State<'a> = egglog_bridge::GlobalQueryState<'a>;
     fn name(&self) -> &str { &self.0.name }
     fn get_type_constraints(&self, span: &Span) -> Box<dyn TypeConstraint> {
@@ -815,7 +785,7 @@ impl TypedPrimitive for FilterGlobalQuery {
 
 #[derive(Clone)]
 struct FilterFull(Filter);
-impl TypedPrimitive for FilterFull {
+impl Primitive for FilterFull {
     type State<'a> = egglog_bridge::RuleActionState<'a>;
     fn name(&self) -> &str { &self.0.name }
     fn get_type_constraints(&self, span: &Span) -> Box<dyn TypeConstraint> {
@@ -842,7 +812,7 @@ struct SumMultisets {
 
 // `SumMultisets` flattens a multiset of multisets. Only reads container
 // contents and registers the result — pure.
-impl TypedPrimitive for SumMultisets {
+impl Primitive for SumMultisets {
     type State<'a> = egglog_bridge::RuleQueryState<'a>;
 
     fn name(&self) -> &str {
@@ -944,7 +914,7 @@ impl Reduce {
 
 #[derive(Clone)]
 struct ReducePure(Reduce);
-impl TypedPrimitive for ReducePure {
+impl Primitive for ReducePure {
     type State<'a> = egglog_bridge::RuleQueryState<'a>;
     fn name(&self) -> &str { &self.0.name }
     fn get_type_constraints(&self, span: &Span) -> Box<dyn TypeConstraint> {
@@ -961,7 +931,7 @@ impl TypedPrimitive for ReducePure {
 
 #[derive(Clone)]
 struct ReduceGlobalQuery(Reduce);
-impl TypedPrimitive for ReduceGlobalQuery {
+impl Primitive for ReduceGlobalQuery {
     type State<'a> = egglog_bridge::GlobalQueryState<'a>;
     fn name(&self) -> &str { &self.0.name }
     fn get_type_constraints(&self, span: &Span) -> Box<dyn TypeConstraint> {
@@ -978,7 +948,7 @@ impl TypedPrimitive for ReduceGlobalQuery {
 
 #[derive(Clone)]
 struct ReduceFull(Reduce);
-impl TypedPrimitive for ReduceFull {
+impl Primitive for ReduceFull {
     type State<'a> = egglog_bridge::RuleActionState<'a>;
     fn name(&self) -> &str { &self.0.name }
     fn get_type_constraints(&self, span: &Span) -> Box<dyn TypeConstraint> {
@@ -1005,7 +975,7 @@ struct UnionValues {
 }
 
 // `UnionValues` writes to the union-find; action-only.
-impl TypedPrimitive for UnionValues {
+impl Primitive for UnionValues {
     type State<'a> = egglog_bridge::RuleActionState<'a>;
 
     fn name(&self) -> &str {

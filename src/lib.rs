@@ -102,43 +102,17 @@ pub const GLOBAL_NAME_PREFIX: &str = "$";
 
 pub type ArcSort = Arc<dyn Sort>;
 
-/// A trait for implementing custom primitive operations in egglog.
+/// A custom primitive operation in egglog.
 ///
-/// Primitives are built-in functions that can be called in both rule queries and actions.
+/// Each primitive declares — via the GAT [`Primitive::State`] — the
+/// minimum state wrapper its body needs. The Rust type checker (not
+/// egglog's type checker) enforces at compile time that the body only
+/// uses capabilities available on that wrapper. The state choice in
+/// turn determines which execution contexts (rule query, rule action,
+/// global query, global action) the primitive may be called from; see
+/// issue #772 for the seminaive-safety reasoning.
 ///
-/// # Seminaive-safety trust boundary
-///
-/// This trait is a **trust boundary** for issue #772's seminaive-safety
-/// model: `apply` receives a raw `&mut ExecutionState` and can do
-/// anything, including reads and writes that break seminaive
-/// assumptions. It is registered as valid in all four contexts (see
-/// [`egglog_bridge::Context`]) and is therefore not subject to the
-/// context enforcement applied to [`TypedPrimitive`].
-///
-/// **New code should use [`TypedPrimitive`]**, which carries a declared
-/// state type that governs which contexts the primitive is allowed in
-/// (rule query, rule action, global query, global action). The Rust
-/// type system enforces that the body only uses capabilities available
-/// on the declared state. Once all in-tree primitives migrate, this
-/// trait will be removed.
-pub trait Primitive {
-    /// Returns the name of this primitive operation.
-    fn name(&self) -> &str;
-
-    /// Constructs a type constraint for the primitive that uses the span information
-    /// for error localization.
-    fn get_type_constraints(&self, span: &Span) -> Box<dyn TypeConstraint>;
-
-    /// Applies the primitive operation to the given arguments.
-    ///
-    /// Returns `Some(value)` if the operation succeeds, or `None` if it fails.
-    fn apply(&self, exec_state: &mut ExecutionState, args: &[Value]) -> Option<Value>;
-}
-
-/// A typed primitive whose declared `State` associated type governs which
-/// execution contexts it may be called from.
-///
-/// The GAT `State<'a>` must be one of the four
+/// The `State<'a>` GAT must be one of the four
 /// [`UserState`](egglog_bridge::UserState) wrappers exported from
 /// `egglog_bridge`:
 ///
@@ -146,12 +120,7 @@ pub trait Primitive {
 /// - [`RuleActionState`](egglog_bridge::RuleActionState): may write the database — valid in rule actions and global actions.
 /// - [`GlobalQueryState`](egglog_bridge::GlobalQueryState): may read the database — valid in global query and global action contexts.
 /// - [`GlobalActionState`](egglog_bridge::GlobalActionState): may read and write — valid only in global actions.
-///
-/// The Rust type checker (not egglog's type checker) enforces at compile
-/// time that the body of `apply` only uses capabilities available on the
-/// declared state wrapper. See issue #772 for the motivation and the
-/// `issue-772-proposal.md` file in the repo for the full design.
-pub trait TypedPrimitive: Send + Sync + 'static
+pub trait Primitive: Send + Sync + 'static
 where
     for<'a> Self::State<'a>: egglog_bridge::UserState<'a>,
 {
@@ -170,12 +139,12 @@ where
     fn apply<'a>(&self, state: &mut Self::State<'a>, args: &[Value]) -> Option<Value>;
 }
 
-/// Internal, dyn-compatible façade over [`TypedPrimitive`].
+/// Internal, dyn-compatible façade over [`Primitive`].
 ///
-/// The `TypedPrimitive` trait is not object-safe (it has a GAT and a method
+/// The `Primitive` trait is not object-safe (it has a GAT and a method
 /// generic over the associated-type lifetimes). This trait erases those
 /// generics so the primitive can be stored and dispatched at runtime.
-pub(crate) trait ErasedTypedPrimitive: Send + Sync {
+pub(crate) trait ErasedPrimitive: Send + Sync {
     fn name(&self) -> &str;
     fn get_type_constraints(&self, span: &Span) -> Box<dyn TypeConstraint>;
     /// The contexts in which this primitive may be called. Derived from
@@ -187,12 +156,12 @@ pub(crate) trait ErasedTypedPrimitive: Send + Sync {
     fn invoke(&self, exec_state: &mut ExecutionState, args: &[Value]) -> Option<Value>;
 }
 
-/// Wraps a `TypedPrimitive` into an `ErasedTypedPrimitive`.
-pub(crate) struct TypedPrimitiveWrap<T: TypedPrimitive>(pub(crate) Arc<T>)
+/// Wraps a [`Primitive`] into an [`ErasedPrimitive`].
+pub(crate) struct PrimitiveWrap<T: Primitive>(pub(crate) Arc<T>)
 where
     for<'a> T::State<'a>: egglog_bridge::UserState<'a>;
 
-impl<T: TypedPrimitive> ErasedTypedPrimitive for TypedPrimitiveWrap<T>
+impl<T: Primitive> ErasedPrimitive for PrimitiveWrap<T>
 where
     for<'a> T::State<'a>: egglog_bridge::UserState<'a>,
 {
@@ -206,11 +175,11 @@ where
         <T::State<'static> as egglog_bridge::UserState>::valid_contexts()
     }
     fn invoke(&self, exec_state: &mut ExecutionState, args: &[Value]) -> Option<Value> {
-        // SAFETY / LIFETIMES: The wrappers use a single lifetime `'a` on
-        // both the outer borrow and the inner `ExecutionState<'a>`. We
-        // shrink the `ExecutionState<'x>` reference to a shorter lifetime
-        // `'a` that matches the borrow, which is sound because the state is
-        // only used for the duration of the apply call.
+        // The wrappers use a single lifetime `'a` on both the outer
+        // borrow and the inner `ExecutionState<'a>`. We shrink the
+        // `ExecutionState<'x>` reference to a shorter lifetime `'a`
+        // matching the borrow; this is sound because the state is only
+        // used for the duration of the apply call.
         let mut state = <T::State<'_> as egglog_bridge::UserState>::wrap(exec_state);
         self.0.apply(&mut state, args)
     }
@@ -2373,12 +2342,12 @@ mod tests {
         vec: ArcSort,
     }
 
-    // Migrated to the new `TypedPrimitive` trait. `InnerProduct` is pure —
+    // Migrated to the new `Primitive` trait. `InnerProduct` is pure —
     // it only reads base values and (idempotent) container contents — so it
     // declares `State = RuleQueryState`, making it usable in all four
     // contexts. The Rust type checker enforces that the body only uses
     // methods available on `RuleQueryState`.
-    impl TypedPrimitive for InnerProduct {
+    impl Primitive for InnerProduct {
         type State<'a> = RuleQueryState<'a>;
 
         fn name(&self) -> &str {
@@ -2430,7 +2399,7 @@ mod tests {
                 && s.inner_sorts()[0].name() == I64Sort.name()
         });
 
-        egraph.add_typed_primitive(InnerProduct { vec: int_vec_sort });
+        egraph.add_primitive(InnerProduct { vec: int_vec_sort });
 
         egraph
             .parse_and_run_program(
@@ -2455,122 +2424,6 @@ mod tests {
         }
         let egraph = EGraph::default();
         assert!(is_send(&egraph) && is_sync(&egraph));
-    }
-
-    // Issue #772 regression: a primitive that declares
-    // `State = RuleActionState` is rejected when used in a rule-query
-    // (seminaive LHS) context. The check fires at rule-build time via
-    // `PrimitiveWithId::valid_contexts`.
-    #[test]
-    fn test_typed_primitive_rejected_in_rule_query() {
-        use egglog_bridge::{ExecStateCore, RuleActionState};
-
-        // A primitive that writes to the UF table — its declared state is
-        // `RuleActionState`, so it is not valid in a rule-query context.
-        #[derive(Clone)]
-        struct FakeWriter;
-        impl TypedPrimitive for FakeWriter {
-            type State<'a> = RuleActionState<'a>;
-            fn name(&self) -> &str {
-                "fake-writer"
-            }
-            fn get_type_constraints(&self, span: &Span) -> Box<dyn TypeConstraint> {
-                SimpleTypeConstraint::new(
-                    self.name(),
-                    vec![I64Sort.to_arcsort(), I64Sort.to_arcsort()],
-                    span.clone(),
-                )
-                .into_box()
-            }
-            fn apply<'a>(
-                &self,
-                state: &mut RuleActionState<'a>,
-                args: &[Value],
-            ) -> Option<Value> {
-                // Just exercise ExecStateCore — proving body type-checks.
-                let _ = state.base_values();
-                Some(args[0])
-            }
-        }
-
-        let mut egraph = EGraph::default();
-        egraph.add_typed_primitive(FakeWriter);
-
-        // Using a writing primitive in an RHS is fine.
-        egraph
-            .parse_and_run_program(
-                None,
-                "(function f (i64) i64 :no-merge)\n(rule () ((set (f 0) (fake-writer 42))))",
-            )
-            .unwrap();
-
-        // Using it as a filter inside a rule LHS (RuleQuery) must be
-        // rejected. We catch the panic; the real wire-up would surface
-        // this as a build-time error.
-        let result = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
-            egraph.parse_and_run_program(
-                None,
-                "(function g (i64) i64 :no-merge)\n\
-                 (rule ((= x (fake-writer 1))) ((set (g 0) x)))",
-            )
-        }));
-        assert!(
-            result.is_err(),
-            "expected panic when using writing primitive in a rule query"
-        );
-    }
-
-    // Issue #772: `unstable-app` is registered as two context-specialized
-    // variants (ApplyPure + ApplyFull). In a query context (`check`, rule
-    // LHS) the pure variant dispatches through
-    // `FunctionContainer::apply_in`, which succeeds only when the inner
-    // function is a primitive valid in that context — e.g. `+` over i64 —
-    // and fails (returning None, so the match is filtered out) for
-    // constructors.
-    #[test]
-    fn test_unstable_app_query_with_pure_primitive() {
-        let mut egraph = EGraph::default();
-        // `(unstable-fn "+")` wraps the i64 primitive `+`; `+` is pure,
-        // valid in every context, so `unstable-app` in a `check` works.
-        egraph
-            .parse_and_run_program(
-                None,
-                r#"
-                (sort IntFn (UnstableFn (i64 i64) i64))
-                (let plus (unstable-fn "+"))
-                (check (= (unstable-app plus 2 3) 5))
-                "#,
-            )
-            .unwrap();
-    }
-
-    #[test]
-    fn test_unstable_app_query_with_constructor_is_filtered() {
-        // Check that a query using `unstable-app` wrapping a constructor
-        // does NOT silently mint a fresh eclass — `apply_in` returns None
-        // for that case, so the match filters out.
-        let mut egraph = EGraph::default();
-        egraph
-            .parse_and_run_program(
-                None,
-                r#"
-                (datatype Math (Num i64))
-                (sort MathFn (UnstableFn (i64) Math))
-                (let make (unstable-fn "Num"))
-                ; (Num 99) has not been created, so `unstable-app make 99`
-                ; inside a check must not mint one — the check must fail.
-                "#,
-            )
-            .unwrap();
-        let result = egraph.parse_and_run_program(
-            None,
-            r#"(check (= (unstable-app make 99) (Num 99)))"#,
-        );
-        assert!(
-            result.is_err(),
-            "check should fail: `unstable-app` on a constructor in a query \
-             must return None rather than mint an eclass"
-        );
     }
 
     fn get_function(egraph: &EGraph, name: &str) -> Function {

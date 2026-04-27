@@ -990,6 +990,23 @@ pub trait TypeConstraint {
         arguments: &[AtomTerm],
         typeinfo: &TypeInfo,
     ) -> Vec<Box<dyn Constraint<AtomTerm, ArcSort>>>;
+
+    /// Optional structural fingerprint of this constraint.
+    ///
+    /// When `Some`, two primitives that share both their primitive name
+    /// and their `signature_key` are considered the same logical
+    /// primitive and are auto-deduped at constraint-build time. This is
+    /// the mechanism that lets context-specialized siblings (e.g.
+    /// `unstable-multiset-map`'s pure / global-query / full triple) be
+    /// registered without an explicit `add_primitive_in_group`
+    /// dedup string — they all produce identical type constraints and
+    /// thus identical signature keys.
+    ///
+    /// Returning `None` (the default) opts out of auto-dedup; the
+    /// constraint is treated as unique per registration.
+    fn signature_key(&self) -> Option<String> {
+        None
+    }
 }
 
 /// A type constraint that assigns specific sorts to each argument position.
@@ -1038,6 +1055,20 @@ impl TypeConstraint for SimpleTypeConstraint {
                 .map(|(arg, sort)| constraint::assign(arg, sort))
                 .collect()
         }
+    }
+
+    fn signature_key(&self) -> Option<String> {
+        // Fingerprint: "<name>|<sort1>|<sort2>|...". Sort names uniquely
+        // identify ArcSorts within an EGraph (sorts are interned by name
+        // in TypeInfo), so name-based concatenation is a safe key for
+        // the auto-dedup machinery in `add_primitive`.
+        let mut s = String::new();
+        s.push_str(&self.name);
+        for sort in &self.sorts {
+            s.push('|');
+            s.push_str(sort.name());
+        }
+        Some(s)
     }
 }
 
