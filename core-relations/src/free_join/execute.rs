@@ -203,7 +203,6 @@ impl PotentiallyStale<Subset> {
     }
 }
 
-
 struct Prober {
     node: Arc<TrieNode>,
     pool: Pool<SortedOffsetVector>,
@@ -252,7 +251,8 @@ impl Prober {
                 .map(|x| PotentiallyStale::not_stale(x.to_owned(&self.pool))),
             DynamicIndex::SparseColumn(tab) => {
                 debug_assert_eq!(key.len(), 1);
-                tab.get_subset(key[0]).map(|x| PotentiallyStale::not_stale(x.to_owned(&self.pool)))
+                tab.get_subset(key[0])
+                    .map(|x| PotentiallyStale::not_stale(x.to_owned(&self.pool)))
             }
         }
     }
