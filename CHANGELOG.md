@@ -4,6 +4,13 @@
 
 - Desugar `relation`s to `constructor`s to simplify the language and implementation. Relations no longer return unit `()` values.
 - Refactored API to use [`TermId`] more consistently instead of `Term` where possible, simplifying egglog code.
+- **Typed `Primitive` trait for seminaive safety (#772).** The `Primitive` trait now carries a `type State<'a>` GAT that picks one of four user-facing state wrappers — `RuleQueryState`, `RuleActionState`, `GlobalQueryState`, `GlobalActionState` — exported from `egglog_bridge`. The Rust type checker enforces at compile time that a primitive's `apply` body only uses capabilities available on its declared state, and the rule builder enforces at build time that the primitive is only invoked from contexts its state is valid in. The wrappers gate database reads and writes via `ExecStateCore` / `ExecStateWriteDb` traits.
+  - Breaking: every `impl Primitive for X` now requires `type State<'a> = …;` and the new `apply<'a>(&self, state: &mut Self::State<'a>, args: &[Value])` signature.
+  - `add_primitive` and `add_primitive_with_validator` keep their names but accept the new typed `Primitive`.
+  - `unstable-app`, `multiset-map` / `flat-map` / `filter` / `reduce`, and `vec-map` are dual- or triple-registered so the same name picks a context-appropriate variant — pure dispatch in queries, full dispatch (including constructor minting) in actions.
+  - Container constructors (`unstable-fn`, `vec-of`, `multiset-of`, `set-insert`, etc.) are now declared pure and usable in any context, since container interning is idempotent.
+  - `FunctionContainer::apply_in` (pure dispatch) and `apply_mut` (full dispatch) replace the previous single `apply`. `ResolvedFunctionId::Lookup` was split into `ConstructorLookup` and `CustomLookup` so dispatch can distinguish writes from pure reads.
+  - `RustRuleContext::lookup` was removed — actions cannot read tables, per the soundness rules.
 
 ## [2.0.0] - 2026-02-11
 

@@ -205,12 +205,14 @@ impl EGraph {
     ///
     /// Most callers should prefer [`Self::add_primitive`], which
     /// auto-derives a dedup key from the primitive's name and the
-    /// `signature_key` reported by its [`TypeConstraint`]. Use this
-    /// override only when the constraint cannot produce a useful
-    /// signature fingerprint (e.g. custom `TypeConstraint` impls that
-    /// leave `signature_key` returning `None`) but you still want
-    /// context-specialized siblings to dedup at constraint-build time.
-    pub fn add_primitive_with_dedup_key<T>(&mut self, x: T, dedup_key: String)
+    /// `signature_key` reported by its [`TypeConstraint`]. This override
+    /// exists for primitives whose `TypeConstraint` returns `None` from
+    /// `signature_key` but still want context-specialized siblings to
+    /// dedup at constraint-build time. It is currently unused in-tree
+    /// and is kept `pub(crate)` until an external need surfaces — when
+    /// that happens, promoting to `pub` is a one-line change.
+    #[allow(dead_code)]
+    pub(crate) fn add_primitive_with_dedup_key<T>(&mut self, x: T, dedup_key: String)
     where
         T: Primitive + Clone,
         for<'a> T::State<'a>: egglog_bridge::UserState<'a>,

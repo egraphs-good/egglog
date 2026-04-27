@@ -55,8 +55,8 @@ pub use egglog_bridge::FunctionRow;
 // primitive surface without requiring user crates to depend on
 // `egglog_bridge` directly.
 pub use egglog_bridge::{
-    ExecStateCore, ExecStateReadDb, ExecStateWriteDb, GlobalActionState, GlobalQueryState,
-    RuleActionState, RuleQueryState, UserState,
+    ExecStateCore, ExecStateWriteDb, GlobalActionState, GlobalQueryState, RuleActionState,
+    RuleQueryState, UserState,
 };
 use egglog_bridge::{ColumnTy, QueryEntry, UnionAction};
 use egglog_core_relations as core_relations;
@@ -108,18 +108,50 @@ pub type ArcSort = Arc<dyn Sort>;
 /// minimum state wrapper its body needs. The Rust type checker (not
 /// egglog's type checker) enforces at compile time that the body only
 /// uses capabilities available on that wrapper. The state choice in
-/// turn determines which execution contexts (rule query, rule action,
-/// global query, global action) the primitive may be called from; see
-/// issue #772 for the seminaive-safety reasoning.
+/// turn determines which execution contexts the primitive may be
+/// called from; see issue #772 for the seminaive-safety reasoning.
 ///
-/// The `State<'a>` GAT must be one of the four
-/// [`UserState`](egglog_bridge::UserState) wrappers exported from
-/// `egglog_bridge`:
+/// # Choosing a `State`
 ///
-/// - [`RuleQueryState`](egglog_bridge::RuleQueryState): pure primitive — valid in all contexts.
-/// - [`RuleActionState`](egglog_bridge::RuleActionState): may write the database — valid in rule actions and global actions.
-/// - [`GlobalQueryState`](egglog_bridge::GlobalQueryState): may read the database — valid in global query and global action contexts.
-/// - [`GlobalActionState`](egglog_bridge::GlobalActionState): may read and write — valid only in global actions.
+/// | `State<'a>` | DB reads | DB writes | Valid contexts |
+/// |---|:---:|:---:|---|
+/// | [`RuleQueryState`](egglog_bridge::RuleQueryState) | no | no | all four (rule query, rule action, global query, global action) |
+/// | [`RuleActionState`](egglog_bridge::RuleActionState) | no | yes | rule action, global action |
+/// | [`GlobalQueryState`](egglog_bridge::GlobalQueryState) | yes | no | global query, global action |
+/// | [`GlobalActionState`](egglog_bridge::GlobalActionState) | yes | yes | global action only |
+///
+/// Pick the **most permissive** wrapper the body can compile under
+/// (one with the fewest capabilities). A pure primitive belongs on
+/// `RuleQueryState`; a writing one belongs on `RuleActionState`. Same
+/// logical primitive needed in multiple contexts? Register it more
+/// than once with different `State` types — the constraint-level
+/// typechecker auto-dedupes siblings whose
+/// [`TypeConstraint::signature_key`](crate::constraint::TypeConstraint::signature_key)
+/// matches.
+///
+/// # Examples in this crate
+///
+/// - **Pure primitive**: [`crate::sort::vec`]'s `vec-of` and similar
+///   constructors (via the `add_primitive!` macro) declare
+///   `State = RuleQueryState`. Container interning is idempotent and
+///   thus safe in every context.
+/// - **Writing primitive**: `vec-union` (in [`crate::sort::vec`])
+///   declares `State = RuleActionState` because it stages
+///   `UnionAction::union` calls.
+/// - **Triple registration**: `unstable-multiset-map` registers as a
+///   pure variant for queries, a global-query variant that allows
+///   custom-function reads, and a full variant for actions — all under
+///   one name, deduped automatically by signature.
+///
+/// # Public API trust boundaries
+///
+/// The new typed surface replaces a previous untyped `Primitive` trait
+/// that handed out raw `&mut ExecutionState`. A small number of escape
+/// hatches still exist for advanced users; each is documented in place:
+/// [`egglog_bridge::EGraph::with_execution_state`],
+/// [`egglog_bridge::EGraph::register_external_func`], and (on
+/// write-capable wrappers only)
+/// [`egglog_bridge::ExecStateWriteDb::with_raw_exec_state`].
 pub trait Primitive: Send + Sync + 'static
 where
     for<'a> Self::State<'a>: egglog_bridge::UserState<'a>,

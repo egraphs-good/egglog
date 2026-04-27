@@ -13,13 +13,10 @@
 //! Capabilities are expressed via three traits; each wrapper implements the
 //! ones that match its cell in the table.
 //!
-//! The wrappers use a single lifetime parameter. `ExecutionState<'db>`
-//! carries its own lifetime for internal database borrows, but exposing
-//! both an outer borrow lifetime and an inner `'db` would force a two-
-//! lifetime GAT, and the implied `'db: 'outer` bound combined with HRTB
-//! hits a known Rust limitation (rust-lang/rust#100013). To work around
-//! that, the wrappers hold a `&mut dyn ExecStateDyn` trait object that
-//! erases `'db` entirely.
+//! The wrappers use a single lifetime parameter; the inner
+//! `&mut dyn ExecStateDyn` trait object hides the database lifetime.
+//! (Two lifetimes would force a HRTB-bound GAT, which hits
+//! rust-lang/rust#100013.)
 //!
 //! # Trust boundaries
 //!
@@ -49,7 +46,7 @@
 
 use core_relations::{
     BaseValues, ContainerValue, ContainerValues, CounterId, ExecutionState, ExternalFunctionId,
-    TableId, Value, WrappedTable,
+    TableId, Value,
 };
 
 use crate::core_relations;
@@ -89,7 +86,6 @@ pub(crate) trait ExecStateDyn: Send + Sync {
     fn trigger_early_stop(&self);
     fn should_stop(&self) -> bool;
     fn table_name(&self, table: TableId) -> Option<&str>;
-    fn get_table(&self, table: TableId) -> &WrappedTable;
     fn stage_insert(&mut self, table: TableId, row: &[Value]);
     fn stage_remove(&mut self, table: TableId, key: &[Value]);
 
@@ -123,9 +119,6 @@ impl<'db> ExecStateDyn for ExecutionState<'db> {
     }
     fn table_name(&self, table: TableId) -> Option<&str> {
         ExecutionState::table_name(self, table)
-    }
-    fn get_table(&self, table: TableId) -> &WrappedTable {
-        ExecutionState::get_table(self, table)
     }
     fn stage_insert(&mut self, table: TableId, row: &[Value]) {
         ExecutionState::stage_insert(self, table, row)
@@ -172,15 +165,6 @@ pub trait ExecStateCore {
     fn trigger_early_stop(&self);
     fn should_stop(&self) -> bool;
     fn table_name(&self, table: TableId) -> Option<&str>;
-}
-
-/// Database-read capabilities.
-///
-/// Only enabled on wrappers that run outside of a seminaive rule query:
-/// `GlobalQueryState` and `GlobalActionState`. See the proposal for issue
-/// #772 for the soundness reasoning.
-pub trait ExecStateReadDb: ExecStateCore {
-    fn get_table(&self, table: TableId) -> &WrappedTable;
 }
 
 /// Database-write capabilities.
@@ -235,10 +219,9 @@ pub trait UserState<'a>: Sized + ExecStateCore {
 
     /// Trust-boundary escape used by `FunctionContainer::apply_in` to
     /// dispatch a custom-function table lookup (pure read, no insert)
-    /// from a state wrapper that may not otherwise expose
-    /// [`ExecStateReadDb`]. **Not a stable public API.** The caller must
-    /// verify the lookup is safe in the current context — namely, that
-    /// `Self::valid_contexts()` does not include
+    /// from any state wrapper. **Not a stable public API.** The caller
+    /// must verify the lookup is safe in the current context — namely,
+    /// that `Self::valid_contexts()` does not include
     /// [`Context::RuleQuery`] (where untracked reads break seminaive).
     #[doc(hidden)]
     fn __table_lookup_unchecked(
@@ -281,18 +264,6 @@ define_state_wrapper!(RuleQueryState);
 define_state_wrapper!(RuleActionState);
 define_state_wrapper!(GlobalQueryState);
 define_state_wrapper!(GlobalActionState);
-
-// Reads: only on global contexts.
-impl<'a> ExecStateReadDb for GlobalQueryState<'a> {
-    fn get_table(&self, table: TableId) -> &WrappedTable {
-        self.inner.get_table(table)
-    }
-}
-impl<'a> ExecStateReadDb for GlobalActionState<'a> {
-    fn get_table(&self, table: TableId) -> &WrappedTable {
-        self.inner.get_table(table)
-    }
-}
 
 // Writes: only on action contexts.
 impl<'a> ExecStateWriteDb for RuleActionState<'a> {

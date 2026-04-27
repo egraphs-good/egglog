@@ -40,8 +40,8 @@ pub(crate) mod rule;
 mod tests;
 
 pub use exec_state::{
-    Context, ExecStateCore, ExecStateReadDb, ExecStateWriteDb, GlobalActionState, GlobalQueryState,
-    RuleActionState, RuleQueryState, UserState,
+    Context, ExecStateCore, ExecStateWriteDb, GlobalActionState, GlobalQueryState, RuleActionState,
+    RuleQueryState, UserState,
 };
 pub use rule::{Function, QueryEntry, RuleBuilder};
 use thiserror::Error;
