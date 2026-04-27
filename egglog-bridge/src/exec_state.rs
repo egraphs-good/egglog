@@ -69,14 +69,19 @@ use smallvec::SmallVec;
 use crate::core_relations;
 use crate::{TableAction, UnionAction};
 
-/// A live registry of name-indexed action handles for use by typed
-/// primitives. Owned by the bridge `EGraph` and shared with state
-/// wrappers at invoke time.
+/// A live registry of action handles for use by typed primitives.
+/// Owned by the bridge `EGraph` and shared with state wrappers at
+/// invoke time.
 ///
-/// Action-side state wrappers (`RuleActionState`, `GlobalActionState`)
-/// expose name-indexed convenience methods (`insert`, `remove`,
-/// `subsume`, `union`, `panic`) that look up their underlying handles
-/// here.
+/// Three independent kinds of handles, each in its own field:
+/// - `table_actions` — one [`TableAction`] per user-defined function,
+///   keyed by table name. Grows as `add_table` is called. Used by
+///   the action wrappers' `insert(name, …)` / `remove(name, …)` /
+///   `subsume(name, …)` / `lookup(name, …)` methods.
+/// - `union_action` — the single union-find handle for this EGraph,
+///   used by the wrappers' `union(x, y)` method.
+/// - `default_panic_id` — a shared `ExternalFunctionId` for the
+///   wrappers' `panic()` method.
 pub struct NamedActionRegistry {
     table_actions: HashMap<String, TableAction>,
     union_action: UnionAction,
