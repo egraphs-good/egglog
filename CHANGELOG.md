@@ -11,6 +11,7 @@
   - Container constructors (`unstable-fn`, `vec-of`, `multiset-of`, `set-insert`, etc.) are now declared pure and usable in any context, since container interning is idempotent.
   - `FunctionContainer::apply_in` (pure dispatch) and `apply_mut` (full dispatch) replace the previous single `apply`. `ResolvedFunctionId::Lookup` was split into `ConstructorLookup` and `CustomLookup` so dispatch can distinguish writes from pure reads.
   - `RustRuleContext::lookup` was removed — actions cannot read tables, per the soundness rules.
+  - Crate-root rustdoc gained an "Extending egglog from Rust" section linking to [`Primitive`], [`prelude::rust_rule`], and the sort traits. The `Primitive` trait carries a state→context table for picking the right wrapper. The error message for using a primitive in a forbidden context now lists the contexts where it IS valid and points back to the trait docs.
 
 ## [2.0.0] - 2026-02-11
 

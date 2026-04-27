@@ -10,6 +10,38 @@
 //! We have a [text tutorial](https://egraphs-good.github.io/egglog-tutorial/01-basics.html) on egglog and how to use it.
 //! We also have a slightly outdated [video tutorial](https://www.youtube.com/watch?v=N2RDQGRBrSY).
 //!
+//! # Using egglog from Rust
+//!
+//! Start with the [**`prelude`**](prelude) module — it re-exports the
+//! types and macros most Rust callers need and documents the common
+//! entry points (`rule`, `rust_rule`, `query`, the sort traits, the
+//! [`Primitive`] trait, and the `add_primitive!` macros). Almost every
+//! example in this crate's docs assumes `use egglog::prelude::*;`.
+//!
+//! For driving egglog as a script, [`EGraph::parse_and_run_program`]
+//! is the one-stop entry point.
+//!
+//! ## Extending egglog with your own native code
+//!
+//! When the prelude isn't enough — when you want to plug Rust functions
+//! or types into the egraph — the extension points are:
+//!
+//! - **Custom primitives**: implement [`Primitive`] and register with
+//!   [`EGraph::add_primitive`]. Each primitive declares (via a GAT) the
+//!   minimum [state wrapper](egglog_bridge::UserState) it needs —
+//!   [`RuleQueryState`] for pure ones, [`RuleActionState`] for writing
+//!   ones, and so on. The Rust type checker enforces at compile time
+//!   that the body matches its declared capability profile, and the
+//!   rule builder enforces at build time that the primitive is only
+//!   invoked from contexts its state is valid in. See [`Primitive`] for
+//!   the full state→context table.
+//! - **Rust-bodied rule RHS**: register via [`prelude::rust_rule`]
+//!   ([`prelude::RustRuleContext`] is the action-side state handle).
+//! - **Sorts and container types**: see [`Sort`], [`BaseSort`], and
+//!   [`ContainerSort`] (re-exported from the [`prelude`]).
+//!
+//! See issue #772 / `issue-772-proposal.md` in the repo for the
+//! seminaive-safety reasoning behind the typed primitive surface.
 //!
 //!
 pub mod ast;
@@ -115,10 +147,10 @@ pub type ArcSort = Arc<dyn Sort>;
 ///
 /// | `State<'a>` | DB reads | DB writes | Valid contexts |
 /// |---|:---:|:---:|---|
-/// | [`RuleQueryState`](egglog_bridge::RuleQueryState) | no | no | all four (rule query, rule action, global query, global action) |
-/// | [`RuleActionState`](egglog_bridge::RuleActionState) | no | yes | rule action, global action |
-/// | [`GlobalQueryState`](egglog_bridge::GlobalQueryState) | yes | no | global query, global action |
-/// | [`GlobalActionState`](egglog_bridge::GlobalActionState) | yes | yes | global action only |
+/// | [`RuleQueryState`] | no | no | all four (rule query, rule action, global query, global action) |
+/// | [`RuleActionState`] | no | yes | rule action, global action |
+/// | [`GlobalQueryState`] | yes | no | global query, global action |
+/// | [`GlobalActionState`] | yes | yes | global action only |
 ///
 /// Pick the **most permissive** wrapper the body can compile under
 /// (one with the fewest capabilities). A pure primitive belongs on
@@ -126,18 +158,18 @@ pub type ArcSort = Arc<dyn Sort>;
 /// logical primitive needed in multiple contexts? Register it more
 /// than once with different `State` types — the constraint-level
 /// typechecker auto-dedupes siblings whose
-/// [`TypeConstraint::signature_key`](crate::constraint::TypeConstraint::signature_key)
+/// [`crate::constraint::TypeConstraint::signature_key`]
 /// matches.
 ///
 /// # Examples in this crate
 ///
-/// - **Pure primitive**: [`crate::sort::vec`]'s `vec-of` and similar
-///   constructors (via the `add_primitive!` macro) declare
+/// - **Pure primitive**: `vec-of` and similar constructors in
+///   `src/sort/vec.rs` (via the `add_primitive!` macro) declare
 ///   `State = RuleQueryState`. Container interning is idempotent and
 ///   thus safe in every context.
-/// - **Writing primitive**: `vec-union` (in [`crate::sort::vec`])
-///   declares `State = RuleActionState` because it stages
-///   `UnionAction::union` calls.
+/// - **Writing primitive**: `vec-union` in `src/sort/vec.rs` declares
+///   `State = RuleActionState` because it stages `UnionAction::union`
+///   calls.
 /// - **Triple registration**: `unstable-multiset-map` registers as a
 ///   pure variant for queries, a global-query variant that allows
 ///   custom-function reads, and a full variant for actions — all under
@@ -2108,13 +2140,50 @@ impl<'a> BackendRule<'a> {
                 });
             match picked {
                 Some(p) => p.id,
-                None => panic!(
-                    "primitive `{}` cannot be used in context {:?} \
-                     (no registration with matching signature valid in this context); \
-                     this is the seminaive-safety check from issue #772.",
-                    prim.name(),
-                    ctx,
-                ),
+                None => {
+                    // List the contexts this primitive (or any sibling
+                    // sharing the name+signature) IS valid in, so the
+                    // user knows whether to move the call site or
+                    // register a different state variant.
+                    let mut available: Vec<egglog_bridge::Context> = alts
+                        .iter()
+                        .filter(|alt| alt.accept(&sig, self.type_info))
+                        .flat_map(|alt| alt.valid_contexts.iter().copied())
+                        .collect();
+                    available.sort_by_key(|c| format!("{c:?}"));
+                    available.dedup();
+                    panic!(
+                        "primitive `{name}` cannot be used in {ctx_human}.\n\
+                         \n\
+                         Where it IS valid: {available:?}\n\
+                         Why: this primitive's `State` type declares it as \
+                         {ctx_summary}; #772 disallows {ctx_human} \
+                         because it would break seminaive evaluation.\n\
+                         \n\
+                         Fixes:\n\
+                         - move the call to a context where the primitive is valid \
+                         (typically: writing primitives belong on a rule's RHS, \
+                         not its LHS or a `check`);\n\
+                         - if you authored the primitive, pick a more permissive \
+                         `Primitive::State` (e.g. `RuleQueryState` for pure ops). \
+                         See the `egglog::Primitive` trait docs for the \
+                         state -> context table.",
+                        name = prim.name(),
+                        ctx_human = match ctx {
+                            egglog_bridge::Context::RuleQuery => "the LHS of a rule (RuleQuery)",
+                            egglog_bridge::Context::RuleAction => "the RHS of a rule (RuleAction)",
+                            egglog_bridge::Context::GlobalQuery =>
+                                "a top-level query (GlobalQuery, e.g. `check`/`query-extract`)",
+                            egglog_bridge::Context::GlobalAction =>
+                                "a top-level action (GlobalAction, e.g. `let`/`set`/`run`)",
+                        },
+                        ctx_summary = match prim.input().is_empty() {
+                            true => "context-restricted",
+                            false => "context-restricted (read- or write-capable)",
+                        },
+                        available = available,
+                    )
+                }
             }
         };
 

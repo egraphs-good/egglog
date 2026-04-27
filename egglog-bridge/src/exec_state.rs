@@ -191,8 +191,10 @@ pub trait ExecStateWriteDb: ExecStateCore {
 /// Common trait for the user-facing state wrappers.
 ///
 /// Lets registration machinery derive a primitive's valid contexts from its
-/// declared [`Primitive::State`] type without caring which of the four
-/// concrete wrappers it is.
+/// declared `Primitive::State` type without caring which of the four
+/// concrete wrappers it is. (`Primitive` lives in the egglog crate;
+/// rustdoc cannot link to it across crates here, but see the egglog
+/// crate root for the trait.)
 pub trait UserState<'a>: Sized + ExecStateCore {
     fn wrap(state: &'a mut ExecutionState<'_>) -> Self;
     fn valid_contexts() -> &'static [Context];

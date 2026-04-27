@@ -179,8 +179,26 @@ impl EGraph {
         }
     }
 
-    /// Add a user-defined primitive whose valid execution contexts are
-    /// derived from its declared `State` associated type.
+    /// Register a user-defined primitive.
+    ///
+    /// `T: `[`Primitive`] declares (via a GAT) the minimum state
+    /// wrapper its body needs — see the [`Primitive`] trait docs for
+    /// the four state types and the contexts each is valid in. The
+    /// declared state determines:
+    ///
+    /// - which contexts the primitive may be invoked from (rule query,
+    ///   rule action, global query, global action);
+    /// - which capability methods the body can call (compile-time
+    ///   enforced by Rust's type checker).
+    ///
+    /// Registering more than once under the same name with the same
+    /// signature but different `State` types is supported: the
+    /// constraint-level typechecker auto-dedupes siblings whose
+    /// [`crate::constraint::TypeConstraint::signature_key`] matches,
+    /// and the rule builder picks the variant valid in the
+    /// caller's context. This is how `unstable-app` and the
+    /// `multiset-map` family expose the same name in queries (pure
+    /// dispatch) and actions (full dispatch).
     pub fn add_primitive<T>(&mut self, x: T)
     where
         T: Primitive + Clone,
@@ -189,7 +207,12 @@ impl EGraph {
         self.add_primitive_full(x, None, None)
     }
 
-    /// Add a user-defined primitive with an optional validator.
+    /// Register a user-defined primitive together with a validator.
+    ///
+    /// The validator is consulted by the proof-checker to compute a
+    /// term-level result for an applied primitive without running the
+    /// primitive itself. See [`add_primitive`](Self::add_primitive)
+    /// for the typed-primitive registration mechanics.
     pub fn add_primitive_with_validator<T>(
         &mut self,
         x: T,
