@@ -237,9 +237,11 @@ pub(crate) fn try_registering_multiset_map(
         output_multiset: output_ms,
         fn_: fn_.clone(),
     };
-    eg.add_primitive(MapPure(base.clone()));
-    eg.add_primitive(MapGlobalQuery(base.clone()));
-    eg.add_primitive(MapFull(base));
+    eg.add_primitive_group(|g| {
+        g.add(MapPure(base.clone()));
+        g.add(MapGlobalQuery(base.clone()));
+        g.add(MapFull(base));
+    });
 }
 
 pub(crate) fn register_multiset_primitives_for_function(eg: &mut EGraph, fn_: Arc<FunctionSort>) {
@@ -274,9 +276,11 @@ fn try_registering_multiset_non_map_primitives(
             fn_: fn_.clone(),
             skip_empty: true,
         };
-        eg.add_primitive(FilterPure(filter.clone()));
-        eg.add_primitive(FilterGlobalQuery(filter.clone()));
-        eg.add_primitive(FilterFull(filter));
+        eg.add_primitive_group(|g| {
+            g.add(FilterPure(filter.clone()));
+            g.add(FilterGlobalQuery(filter.clone()));
+            g.add(FilterFull(filter));
+        });
 
         let filter_not = Filter {
             name: "unstable-multiset-filter-not".into(),
@@ -284,9 +288,11 @@ fn try_registering_multiset_non_map_primitives(
             fn_: fn_.clone(),
             skip_empty: false,
         };
-        eg.add_primitive(FilterPure(filter_not.clone()));
-        eg.add_primitive(FilterGlobalQuery(filter_not.clone()));
-        eg.add_primitive(FilterFull(filter_not));
+        eg.add_primitive_group(|g| {
+            g.add(FilterPure(filter_not.clone()));
+            g.add(FilterGlobalQuery(filter_not.clone()));
+            g.add(FilterFull(filter_not));
+        });
     }
 
     if fn_.inputs().len() == 2
@@ -300,9 +306,11 @@ fn try_registering_multiset_non_map_primitives(
             fn_: fn_.clone(),
             element: element.clone(),
         };
-        eg.add_primitive(ReducePure(reduce.clone()));
-        eg.add_primitive(ReduceGlobalQuery(reduce.clone()));
-        eg.add_primitive(ReduceFull(reduce));
+        eg.add_primitive_group(|g| {
+            g.add(ReducePure(reduce.clone()));
+            g.add(ReduceGlobalQuery(reduce.clone()));
+            g.add(ReduceFull(reduce));
+        });
     }
 
     if fn_.inputs().len() == 2
@@ -334,9 +342,11 @@ fn try_registering_multiset_non_map_primitives(
             multiset,
             fn_: fn_.clone(),
         };
-        eg.add_primitive(FlatMapPure(base.clone()));
-        eg.add_primitive(FlatMapGlobalQuery(base.clone()));
-        eg.add_primitive(FlatMapFull(base));
+        eg.add_primitive_group(|g| {
+            g.add(FlatMapPure(base.clone()));
+            g.add(FlatMapGlobalQuery(base.clone()));
+            g.add(FlatMapFull(base));
+        });
     }
 }
 

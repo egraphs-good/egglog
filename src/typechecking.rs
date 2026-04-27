@@ -60,10 +60,18 @@ pub struct PrimitiveWithId {
     pub(crate) primitive: Arc<dyn ErasedPrimitive>,
     pub(crate) id: ExternalFunctionId,
     pub(crate) validator: Option<PrimitiveValidator>,
-    /// The execution contexts in which this primitive may be called,
-    /// derived from its declared [`Primitive::State`] type via
-    /// [`UserState::valid_contexts()`](egglog_bridge::UserState::valid_contexts).
-    pub(crate) valid_contexts: &'static [Context],
+    /// The execution contexts in which this primitive should be picked
+    /// at this call site. Initially seeded from
+    /// [`UserState::valid_contexts()`](egglog_bridge::UserState::valid_contexts)
+    /// (where the body is sound). For primitives registered via
+    /// [`EGraph::add_primitive_group`], the group's variants are
+    /// **partitioned** into disjoint context sets so that exactly one
+    /// variant matches each context — the more specific variant claims
+    /// its contexts first, and broader siblings keep only the
+    /// remaining contexts. After partitioning the field is the set
+    /// "where this variant is the chosen pick", which is always a
+    /// subset of "where the body is sound".
+    pub(crate) valid_contexts: Vec<Context>,
 }
 
 impl PrimitiveWithId {
@@ -90,52 +98,15 @@ impl PrimitiveWithId {
     }
 }
 
-/// Sort key used to pick among same-name primitive registrations whose
-/// `valid_contexts` overlap on the calling context. Smaller is more
-/// specific.
+/// Specificity ordering used to partition a group's `valid_contexts`.
+/// Smaller is more specific, claimed first.
 ///
-/// Order:
-///   1. Narrower `valid_contexts` (fewer contexts) wins — a sibling
-///      registered for exactly this context group is preferred over one
-///      registered for "everywhere".
-///   2. Among same-cardinality candidates, prefer those that include
-///      `Context::RuleAction` (i.e., write-capable action variants), so
-///      e.g. `GlobalAction` callers pick the write-capable sibling over
-///      a query-only one.
-fn pick_priority(p: &PrimitiveWithId) -> (usize, bool) {
-    let count = p.valid_contexts.len();
-    let lacks_rule_action = !p.valid_contexts.contains(&Context::RuleAction);
-    (count, lacks_rule_action)
-}
-
-/// Among `candidates` (all sharing a name), pick the most specific
-/// registration that is valid in `ctx`. Returns `None` if none of them
-/// are valid in `ctx`.
-pub(crate) fn pick_for_context<'a, I>(candidates: I, ctx: Context) -> Option<&'a PrimitiveWithId>
-where
-    I: IntoIterator<Item = &'a PrimitiveWithId>,
-{
-    candidates
-        .into_iter()
-        .filter(|p| p.valid_contexts.contains(&ctx))
-        .min_by_key(|p| pick_priority(p))
-}
-
-/// Like [`pick_for_context`] but additionally requires the primitive to
-/// accept the given fully-resolved sort signature.
-pub(crate) fn pick_for_context_and_sig<'a, I>(
-    candidates: I,
-    ctx: Context,
-    sig: &[Arc<dyn Sort>],
-    typeinfo: &TypeInfo,
-) -> Option<&'a PrimitiveWithId>
-where
-    I: IntoIterator<Item = &'a PrimitiveWithId>,
-{
-    candidates
-        .into_iter()
-        .filter(|p| p.valid_contexts.contains(&ctx) && p.accept(sig, typeinfo))
-        .min_by_key(|p| pick_priority(p))
+///   1. Narrower context sets (fewer contexts) are more specific.
+///   2. Within the same cardinality, sets that include
+///      `Context::RuleAction` (write-capable action variants) are
+///      claimed before query-only siblings.
+fn partition_priority(valid: &[Context]) -> (usize, bool) {
+    (valid.len(), !valid.contains(&Context::RuleAction))
 }
 
 impl Debug for PrimitiveWithId {
@@ -223,20 +194,18 @@ impl EGraph {
     /// - which capability methods the body can call (compile-time
     ///   enforced by Rust's type checker).
     ///
-    /// Registering more than once under the same name with the same
-    /// signature but different `State` types is supported: at
-    /// constraint-build time the typechecker groups same-name siblings
-    /// by [`crate::constraint::TypeConstraint::signature_key`] and
-    /// picks the variant whose `valid_contexts` best matches the
-    /// calling context. This is how `unstable-app` and the
-    /// `multiset-map` family expose the same name in queries (pure
-    /// dispatch) and actions (full dispatch).
+    /// Distinct registrations under the same name are treated as
+    /// **separate overloads** (signature-based dispatch). To register
+    /// multiple variants of the same logical primitive (e.g.
+    /// context-specialized siblings whose `valid_contexts` overlap),
+    /// see [`add_primitive_group`](Self::add_primitive_group).
     pub fn add_primitive<T>(&mut self, x: T)
     where
         T: Primitive + Clone,
         for<'a> T::State<'a>: egglog_bridge::UserState<'a>,
     {
-        self.add_primitive_full(x, None)
+        let entry = self.build_primitive_entry(x, None);
+        self.commit_primitive(entry);
     }
 
     /// Register a user-defined primitive together with a validator.
@@ -253,14 +222,65 @@ impl EGraph {
         T: Primitive + Clone,
         for<'a> T::State<'a>: egglog_bridge::UserState<'a>,
     {
-        self.add_primitive_full(x, validator)
+        let entry = self.build_primitive_entry(x, validator);
+        self.commit_primitive(entry);
     }
 
-    fn add_primitive_full<T>(
+    /// Register multiple primitive variants as a single overload group.
+    ///
+    /// Variants in a group are alternatives for the same logical
+    /// primitive (typically same signature, differing only in their
+    /// declared `Primitive::State` type and thus in
+    /// `valid_contexts`). At registration time the group's variants
+    /// have their `valid_contexts` **partitioned into disjoint
+    /// context sets**: the most specific variant claims its contexts
+    /// first, and broader siblings keep only the unclaimed remainder.
+    /// After partitioning each call site has at most one matching
+    /// variant, so the constraint solver's XOR resolves the call
+    /// without any extra grouping or picking machinery.
+    ///
+    /// Different groups (whether multi-prim or single-prim via
+    /// [`add_primitive`](Self::add_primitive)) participate in normal
+    /// XOR-based overload resolution.
+    ///
+    /// ```ignore
+    /// egraph.add_primitive_group(|g| {
+    ///     g.add(ApplyPure { /* ... */ });
+    ///     g.add(ApplyFull { /* ... */ });
+    /// });
+    /// ```
+    pub fn add_primitive_group<F>(&mut self, f: F)
+    where
+        F: FnOnce(&mut PrimitiveGroup<'_>),
+    {
+        let mut group = PrimitiveGroup {
+            egraph: self,
+            entries: Vec::new(),
+        };
+        f(&mut group);
+        let mut entries = std::mem::take(&mut group.entries);
+
+        // Partition `valid_contexts` so each context is claimed by at
+        // most one variant. Most-specific (narrowest) first; among
+        // ties prefer write-capable. Each subsequent variant keeps
+        // only the contexts not already claimed.
+        entries.sort_by_key(|e| partition_priority(&e.valid_contexts));
+        let mut claimed: Vec<Context> = Vec::new();
+        for entry in entries.iter_mut() {
+            entry.valid_contexts.retain(|c| !claimed.contains(c));
+            claimed.extend(entry.valid_contexts.iter().copied());
+        }
+        for entry in entries {
+            self.commit_primitive(entry);
+        }
+    }
+
+    fn build_primitive_entry<T>(
         &mut self,
         x: T,
         validator: Option<PrimitiveValidator>,
-    ) where
+    ) -> PendingPrimitive
+    where
         T: Primitive + Clone,
         for<'a> T::State<'a>: egglog_bridge::UserState<'a>,
     {
@@ -278,7 +298,7 @@ impl EGraph {
         // Register the external function. Since the ErasedPrimitive
         // always produces its primitive's declared State type
         // regardless of how it is invoked, a single ExternalFunctionId
-        // suffices — context enforcement happens at rule-build time
+        // suffices — context-aware dispatch happens at typecheck time
         // via `valid_contexts`.
         #[derive(Clone)]
         struct ExtWrap(Arc<dyn ErasedPrimitive>);
@@ -288,24 +308,92 @@ impl EGraph {
             }
         }
 
-        let valid_contexts = erased.valid_contexts();
+        let valid_contexts = erased.valid_contexts().to_vec();
         let name = erased.name().to_owned();
         let id = self
             .backend
             .register_external_func(Box::new(ExtWrap(erased.clone())));
 
+        PendingPrimitive {
+            primitive: erased,
+            id,
+            validator,
+            valid_contexts,
+            name,
+        }
+    }
+
+    fn commit_primitive(&mut self, entry: PendingPrimitive) {
+        let PendingPrimitive {
+            primitive,
+            id,
+            validator,
+            valid_contexts,
+            name,
+        } = entry;
         self.type_info
             .primitives
             .entry(name)
             .or_default()
             .push(PrimitiveWithId {
-                primitive: erased,
+                primitive,
                 id,
                 validator,
                 valid_contexts,
             });
     }
+}
 
+/// A primitive that's been erased and registered with the bridge but
+/// not yet pushed into the `TypeInfo` registry. Used inside
+/// `add_primitive_group` so we can adjust `valid_contexts` (the
+/// disjoint partition) before committing.
+struct PendingPrimitive {
+    primitive: Arc<dyn ErasedPrimitive>,
+    id: ExternalFunctionId,
+    validator: Option<PrimitiveValidator>,
+    valid_contexts: Vec<Context>,
+    name: String,
+}
+
+/// Builder handle handed to the closure passed to
+/// [`EGraph::add_primitive_group`]. Each `.add(...)` call registers
+/// one primitive into the group; the group's `valid_contexts`
+/// partition is computed when the closure returns.
+pub struct PrimitiveGroup<'a> {
+    egraph: &'a mut EGraph,
+    entries: Vec<PendingPrimitive>,
+}
+
+impl<'a> PrimitiveGroup<'a> {
+    /// Register a primitive into this overload group.
+    pub fn add<T>(&mut self, x: T) -> &mut Self
+    where
+        T: Primitive + Clone,
+        for<'b> T::State<'b>: egglog_bridge::UserState<'b>,
+    {
+        let entry = self.egraph.build_primitive_entry(x, None);
+        self.entries.push(entry);
+        self
+    }
+
+    /// Register a primitive with a validator into this overload group.
+    pub fn add_with_validator<T>(
+        &mut self,
+        x: T,
+        validator: Option<PrimitiveValidator>,
+    ) -> &mut Self
+    where
+        T: Primitive + Clone,
+        for<'b> T::State<'b>: egglog_bridge::UserState<'b>,
+    {
+        let entry = self.egraph.build_primitive_entry(x, validator);
+        self.entries.push(entry);
+        self
+    }
+}
+
+impl EGraph {
     pub(crate) fn typecheck_program(
         &mut self,
         program: &Vec<NCommand>,
