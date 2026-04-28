@@ -7,21 +7,21 @@
 //!
 //! - [`rule`] / [`rust_rule`] — add rules whose RHS is egglog code or a
 //!   Rust closure (the closure receives an
-//!   [`egglog_bridge::RuleActionState`]).
+//!   [`egglog_bridge::WriteState`]).
 //! - [`query`] — run a one-shot query and read out matches.
 //! - [`BaseSort`] / [`ContainerSort`] — declare custom sort types.
 //! - [`crate::PrimitiveCommon`] + one of four kind-specific traits
-//!   ([`crate::RuleQueryPrim`], [`crate::RuleActionPrim`],
-//!   [`crate::GlobalQueryPrim`], [`crate::GlobalActionPrim`]) —
+//!   ([`crate::PurePrim`], [`crate::WritePrim`],
+//!   [`crate::ReadPrim`], [`crate::FullPrim`]) —
 //!   register custom primitives. Each kind names its state wrapper
 //!   directly; pick the trait matching what the body actually needs
-//!   and register via [`crate::EGraph::add_rule_query_primitive`]
+//!   and register via [`crate::EGraph::add_pure_primitive`]
 //!   etc. The Rust type checker enforces that the body only uses
 //!   methods the chosen state allows.
 //! - The [`add_primitive!`] / [`add_primitive_with_validator!`] /
 //!   [`add_literal_prim!`] macros (re-exported via `egglog::*`) cover
 //!   the "pure native function" case ergonomically — they generate
-//!   `RuleQueryPrim` impls and pull base-value conversions for you.
+//!   `PurePrim` impls and pull base-value conversions for you.
 
 use crate::*;
 use std::any::{Any, TypeId};
@@ -32,10 +32,7 @@ pub use egglog::sort::{BigIntSort, BigRatSort, BoolSort, F64Sort, I64Sort, Strin
 pub use egglog::{CommandMacro, CommandMacroRegistry};
 pub use egglog::{EGraph, span};
 pub use egglog::{action, actions, datatype, expr, fact, facts, sort, vars};
-pub use egglog::{
-    ExecStateCore, ExecStateWriteDb, GlobalActionState, GlobalQueryState, RuleActionState,
-    RuleQueryState, UserState,
-};
+pub use egglog::{FullState, ReadState, WriteState, PureState};
 
 /// Trait for types that can be converted to/from Literal for use in validated primitives.
 /// This enables automatic validator generation for literal primitives.
@@ -338,26 +335,10 @@ pub fn rule(
     egraph.run_program(vec![Command::Rule { rule }])
 }
 
-/// The action-side state handle passed to `rust_rule` callbacks.
-///
-/// This is just [`egglog_bridge::RuleActionState`] — the legacy name
-/// remains as a type alias for back-compat. All operations, including
-/// the name-indexed helpers
-/// ([`insert`](egglog_bridge::RuleActionState::insert),
-/// [`remove`](egglog_bridge::RuleActionState::remove),
-/// [`subsume`](egglog_bridge::RuleActionState::subsume),
-/// [`lookup`](egglog_bridge::RuleActionState::lookup),
-/// [`union`](egglog_bridge::RuleActionState::union),
-/// [`panic`](egglog_bridge::RuleActionState::panic)) and the
-/// base/container conversion sugar
-/// ([`value_to_base`](egglog_bridge::RuleActionState::value_to_base) etc.),
-/// live on `RuleActionState` directly.
-pub type RustRuleContext<'a, 'db> = egglog_bridge::RuleActionState<'a, 'db>;
-
 #[derive(Clone)]
 struct RustRuleRhs<F>
 where
-    F: for<'a, 'db> Fn(&mut egglog_bridge::RuleActionState<'a, 'db>, &[Value]) -> Option<()>
+    F: for<'a, 'db> Fn(&mut egglog_bridge::WriteState<'a, 'db>, &[Value]) -> Option<()>
         + Clone
         + Send
         + Sync
@@ -370,7 +351,7 @@ where
 
 impl<F> PrimitiveCommon for RustRuleRhs<F>
 where
-    F: for<'a, 'db> Fn(&mut egglog_bridge::RuleActionState<'a, 'db>, &[Value]) -> Option<()>
+    F: for<'a, 'db> Fn(&mut egglog_bridge::WriteState<'a, 'db>, &[Value]) -> Option<()>
         + Clone
         + Send
         + Sync
@@ -391,9 +372,9 @@ where
     }
 }
 
-impl<F> RuleActionPrim for RustRuleRhs<F>
+impl<F> WritePrim for RustRuleRhs<F>
 where
-    F: for<'a, 'db> Fn(&mut egglog_bridge::RuleActionState<'a, 'db>, &[Value]) -> Option<()>
+    F: for<'a, 'db> Fn(&mut egglog_bridge::WriteState<'a, 'db>, &[Value]) -> Option<()>
         + Clone
         + Send
         + Sync
@@ -401,10 +382,9 @@ where
 {
     fn apply<'a, 'db>(
         &self,
-        state: &mut egglog_bridge::RuleActionState<'a, 'db>,
+        state: &mut egglog_bridge::WriteState<'a, 'db>,
         values: &[Value],
     ) -> Option<Value> {
-        use egglog_bridge::ExecStateCore;
         let unit = state.base_values().get(());
         (self.func)(state, values)?;
         Some(unit)
@@ -494,18 +474,21 @@ pub fn rust_rule(
     ruleset: &str,
     vars: &[(&str, ArcSort)],
     facts: Facts<String, String>,
-    func: impl for<'a, 'db> Fn(&mut egglog_bridge::RuleActionState<'a, 'db>, &[Value]) -> Option<()>
+    func: impl for<'a, 'db> Fn(&mut egglog_bridge::WriteState<'a, 'db>, &[Value]) -> Option<()>
     + Clone
     + Send
     + Sync
     + 'static,
 ) -> Result<Vec<CommandOutput>, Error> {
     let prim_name = egraph.parser.symbol_gen.fresh("rust_rule_prim");
-    egraph.add_rule_action_primitive(RustRuleRhs {
-        name: prim_name.clone(),
-        inputs: vars.iter().map(|(_, s)| s.clone()).collect(),
-        func,
-    });
+    egraph.add_write_primitive(
+        RustRuleRhs {
+            name: prim_name.clone(),
+            inputs: vars.iter().map(|(_, s)| s.clone()).collect(),
+            func,
+        },
+        None,
+    );
 
     let rule = Rule {
         span: span!(),

@@ -182,128 +182,133 @@ impl EGraph {
         }
     }
 
-    /// Register a [`RuleQueryPrim`] — a pure primitive runnable in
+    /// Register a [`PurePrim`] — a pure primitive runnable in
     /// every context (rule query / rule action / global query /
     /// global action). Each call creates a fresh overload group; for
     /// context-specialized siblings (e.g. `unstable-app`'s pure +
     /// write variants), see
     /// [`add_primitive_group`](Self::add_primitive_group).
     ///
-    /// The four traits ([`RuleQueryPrim`], [`RuleActionPrim`],
-    /// [`GlobalQueryPrim`], [`GlobalActionPrim`]) name the state
+    /// The four traits ([`PurePrim`], [`WritePrim`],
+    /// [`ReadPrim`], [`FullPrim`]) name the state
     /// wrapper they want directly. Pick the one matching what the
-    /// body actually does — pure → `RuleQueryPrim`; writes →
-    /// `RuleActionPrim`; reads tables → `GlobalQueryPrim`;
-    /// reads-and-writes → `GlobalActionPrim`. The Rust type checker
+    /// body actually does — pure → `PurePrim`; writes →
+    /// `WritePrim`; reads tables → `ReadPrim`;
+    /// reads-and-writes → `FullPrim`. The Rust type checker
     /// enforces that the body only uses methods the chosen state
     /// allows.
-    pub fn add_rule_query_primitive<T>(&mut self, x: T)
-    where
-        T: RuleQueryPrim + Clone,
-    {
-        let entry = self.build_rule_query_entry(x, None);
-        self.commit_primitive(entry);
-    }
-
-    /// Register a [`RuleQueryPrim`] together with a validator.
-    pub fn add_rule_query_primitive_with_validator<T>(
+    pub fn add_pure_primitive<T>(
         &mut self,
         x: T,
         validator: Option<PrimitiveValidator>,
     ) where
-        T: RuleQueryPrim + Clone,
+        T: PurePrim + Clone,
     {
-        let entry = self.build_rule_query_entry(x, validator);
+        let entry = self.build_pure_entry(x, validator);
         self.commit_primitive(entry);
     }
 
-    /// Register a [`RuleActionPrim`] — runs in rule-action and
-    /// global-action contexts.
-    pub fn add_rule_action_primitive<T>(&mut self, x: T)
-    where
-        T: RuleActionPrim + Clone,
-    {
-        let entry = self.build_rule_action_entry(x, None);
-        self.commit_primitive(entry);
-    }
-
-    /// Register a [`RuleActionPrim`] together with a validator.
-    pub fn add_rule_action_primitive_with_validator<T>(
+    /// Register a [`WritePrim`] — runs in rule-action and
+    /// global-action contexts. Pass `None` for the validator if not
+    /// using the proof checker.
+    pub fn add_write_primitive<T>(
         &mut self,
         x: T,
         validator: Option<PrimitiveValidator>,
     ) where
-        T: RuleActionPrim + Clone,
+        T: WritePrim + Clone,
     {
-        let entry = self.build_rule_action_entry(x, validator);
+        let entry = self.build_write_entry(x, validator);
         self.commit_primitive(entry);
     }
 
-    /// Register a [`GlobalQueryPrim`] — runs in global-query and
-    /// global-action contexts.
-    pub fn add_global_query_primitive<T>(&mut self, x: T)
-    where
-        T: GlobalQueryPrim + Clone,
-    {
-        let entry = self.build_global_query_entry(x, None);
-        self.commit_primitive(entry);
-    }
-
-    /// Register a [`GlobalQueryPrim`] together with a validator.
-    pub fn add_global_query_primitive_with_validator<T>(
+    /// Register a [`ReadPrim`] — runs in global-query and
+    /// global-action contexts. Pass `None` for the validator if not
+    /// using the proof checker.
+    pub fn add_read_primitive<T>(
         &mut self,
         x: T,
         validator: Option<PrimitiveValidator>,
     ) where
-        T: GlobalQueryPrim + Clone,
+        T: ReadPrim + Clone,
     {
-        let entry = self.build_global_query_entry(x, validator);
+        let entry = self.build_read_entry(x, validator);
         self.commit_primitive(entry);
     }
 
-    /// Register a [`GlobalActionPrim`] — runs only in the
-    /// global-action context.
-    pub fn add_global_action_primitive<T>(&mut self, x: T)
-    where
-        T: GlobalActionPrim + Clone,
-    {
-        let entry = self.build_global_action_entry(x, None);
-        self.commit_primitive(entry);
-    }
-
-    /// Register a [`GlobalActionPrim`] together with a validator.
-    pub fn add_global_action_primitive_with_validator<T>(
+    /// Register a [`FullPrim`] — runs only in the
+    /// global-action context. Pass `None` for the validator if not
+    /// using the proof checker.
+    pub fn add_full_primitive<T>(
         &mut self,
         x: T,
         validator: Option<PrimitiveValidator>,
     ) where
-        T: GlobalActionPrim + Clone,
+        T: FullPrim + Clone,
     {
-        let entry = self.build_global_action_entry(x, validator);
+        let entry = self.build_full_entry(x, validator);
         self.commit_primitive(entry);
     }
 
     /// Register multiple primitive variants as a single overload group.
     ///
-    /// Variants in a group are alternatives for the same logical
-    /// primitive (typically same signature, differing only in their
-    /// declared `Primitive::State` type and thus in
-    /// `valid_contexts`). At registration time the group's variants
-    /// have their `valid_contexts` **partitioned into disjoint
-    /// context sets**: the most specific variant claims its contexts
-    /// first, and broader siblings keep only the unclaimed remainder.
-    /// After partitioning each call site has at most one matching
-    /// variant, so the constraint solver's XOR resolves the call
-    /// without any extra grouping or picking machinery.
+    /// Variants in a group are **alternatives that compute the same
+    /// thing** under their respective state types — same input/output
+    /// signature, same observable result for any callable context;
+    /// the only thing that differs is which capabilities the body
+    /// needs. The grouping tells the typechecker "for this name, here
+    /// are the variants that exist for different contexts; pick the
+    /// best one per call site."
+    ///
+    /// At registration time the group's `valid_contexts` are
+    /// **partitioned into disjoint context sets**, most specific
+    /// (narrowest) first; among ties, write-capable variants claim
+    /// their contexts before query-only ones. Subsequent variants
+    /// keep only the unclaimed contexts. After partitioning each
+    /// call site has at most one matching variant, so the constraint
+    /// solver's XOR resolves the call without grouping or picking
+    /// machinery.
+    ///
+    /// **Worked example: triple-registered `unstable-multiset-map`.**
+    /// The three variants enter with overlapping default contexts:
+    ///
+    /// | Variant            | Trait     | `valid_contexts`           |
+    /// |--------------------|-----------|----------------------------|
+    /// | `MapPure`          | `PurePrim`  | `{RQ, RA, GQ, GA}`        |
+    /// | `MapGlobalQuery`   | `ReadPrim`  | `{GQ, GA}`                |
+    /// | `MapFull`          | `WritePrim` | `{RA, GA}`                |
+    ///
+    /// Sorted by specificity (narrowest first; among ties, write-
+    /// capable first) → `MapFull (size 2, has RA)`,
+    /// `MapGlobalQuery (size 2, no RA)`, `MapPure (size 4)`.
+    ///
+    /// Partition processing:
+    /// - `MapFull` claims `{RA, GA}` → `claimed = {RA, GA}`.
+    /// - `MapGlobalQuery`: `{GQ, GA}` − `{RA, GA}` = `{GQ}` → claims it.
+    /// - `MapPure`: all 4 − `{RA, GA, GQ}` = `{RQ}` → keeps that.
+    ///
+    /// Final picks: `MapPure` runs in `RQ`, `MapGlobalQuery` in `GQ`,
+    /// `MapFull` in `RA` and `GA`.
+    ///
+    /// **Invariant grouped variants must uphold:** they must
+    /// produce the same observable answer for any context where
+    /// they're all callable. Within a group the partition is
+    /// arbitrary in the same sense: the implementation is free to
+    /// pick whichever variant the priority rule lands on, so any
+    /// program that observes a difference between variants would
+    /// be rejected as ill-formed by the typed-state contract. If
+    /// you need genuinely-different semantics, register them as
+    /// separate (non-grouped) primitives so the typechecker treats
+    /// them as distinct overloads.
     ///
     /// Different groups (whether multi-prim or single-prim via
-    /// [`add_rule_query_primitive`](Self::add_rule_query_primitive)
+    /// [`add_pure_primitive`](Self::add_pure_primitive)
     /// etc.) participate in normal XOR-based overload resolution.
     ///
     /// ```ignore
     /// egraph.add_primitive_group(|g| {
-    ///     g.add_rule_query(ApplyPure { /* ... */ });
-    ///     g.add_rule_action(ApplyFull { /* ... */ });
+    ///     g.add_pure(ApplyPure { /* ... */ }, None);
+    ///     g.add_write(ApplyFull { /* ... */ }, None);
     /// });
     /// ```
     pub fn add_primitive_group<F>(&mut self, f: F)
@@ -332,48 +337,46 @@ impl EGraph {
         }
     }
 
-    fn build_rule_query_entry<T: RuleQueryPrim + Clone>(
+    fn build_pure_entry<T: PurePrim + Clone>(
         &mut self,
         x: T,
         validator: Option<PrimitiveValidator>,
     ) -> PendingPrimitive {
-        let erased: Arc<dyn ErasedPrimitive> = Arc::new(PrimitiveWrapRuleQuery {
+        let erased: Arc<dyn ErasedPrimitive> = Arc::new(PrimitiveWrapPure {
+            inner: Arc::new(x),
+        });
+        self.finalize_pending(erased, validator)
+    }
+
+    fn build_write_entry<T: WritePrim + Clone>(
+        &mut self,
+        x: T,
+        validator: Option<PrimitiveValidator>,
+    ) -> PendingPrimitive {
+        let erased: Arc<dyn ErasedPrimitive> = Arc::new(PrimitiveWrapWrite {
             inner: Arc::new(x),
             registry: self.backend.action_registry(),
         });
         self.finalize_pending(erased, validator)
     }
 
-    fn build_rule_action_entry<T: RuleActionPrim + Clone>(
+    fn build_read_entry<T: ReadPrim + Clone>(
         &mut self,
         x: T,
         validator: Option<PrimitiveValidator>,
     ) -> PendingPrimitive {
-        let erased: Arc<dyn ErasedPrimitive> = Arc::new(PrimitiveWrapRuleAction {
+        let erased: Arc<dyn ErasedPrimitive> = Arc::new(PrimitiveWrapRead {
             inner: Arc::new(x),
-            registry: self.backend.action_registry(),
         });
         self.finalize_pending(erased, validator)
     }
 
-    fn build_global_query_entry<T: GlobalQueryPrim + Clone>(
+    fn build_full_entry<T: FullPrim + Clone>(
         &mut self,
         x: T,
         validator: Option<PrimitiveValidator>,
     ) -> PendingPrimitive {
-        let erased: Arc<dyn ErasedPrimitive> = Arc::new(PrimitiveWrapGlobalQuery {
-            inner: Arc::new(x),
-            registry: self.backend.action_registry(),
-        });
-        self.finalize_pending(erased, validator)
-    }
-
-    fn build_global_action_entry<T: GlobalActionPrim + Clone>(
-        &mut self,
-        x: T,
-        validator: Option<PrimitiveValidator>,
-    ) -> PendingPrimitive {
-        let erased: Arc<dyn ErasedPrimitive> = Arc::new(PrimitiveWrapGlobalAction {
+        let erased: Arc<dyn ErasedPrimitive> = Arc::new(PrimitiveWrapFull {
             inner: Arc::new(x),
             registry: self.backend.action_registry(),
         });
@@ -456,74 +459,47 @@ pub struct PrimitiveGroup<'a> {
 }
 
 impl<'a> PrimitiveGroup<'a> {
-    /// Register a [`RuleQueryPrim`] into this overload group.
-    pub fn add_rule_query<T: RuleQueryPrim + Clone>(&mut self, x: T) -> &mut Self {
-        let entry = self.egraph.build_rule_query_entry(x, None);
-        self.entries.push(entry);
-        self
-    }
-
-    /// Register a [`RuleQueryPrim`] with a validator into this group.
-    pub fn add_rule_query_with_validator<T: RuleQueryPrim + Clone>(
+    /// Register a [`PurePrim`] into this overload group. Pass
+    /// `None` for the validator if not using the proof checker.
+    pub fn add_pure<T: PurePrim + Clone>(
         &mut self,
         x: T,
         validator: Option<PrimitiveValidator>,
     ) -> &mut Self {
-        let entry = self.egraph.build_rule_query_entry(x, validator);
+        let entry = self.egraph.build_pure_entry(x, validator);
         self.entries.push(entry);
         self
     }
 
-    /// Register a [`RuleActionPrim`] into this overload group.
-    pub fn add_rule_action<T: RuleActionPrim + Clone>(&mut self, x: T) -> &mut Self {
-        let entry = self.egraph.build_rule_action_entry(x, None);
-        self.entries.push(entry);
-        self
-    }
-
-    /// Register a [`RuleActionPrim`] with a validator into this group.
-    pub fn add_rule_action_with_validator<T: RuleActionPrim + Clone>(
+    /// Register a [`WritePrim`] into this overload group.
+    pub fn add_write<T: WritePrim + Clone>(
         &mut self,
         x: T,
         validator: Option<PrimitiveValidator>,
     ) -> &mut Self {
-        let entry = self.egraph.build_rule_action_entry(x, validator);
+        let entry = self.egraph.build_write_entry(x, validator);
         self.entries.push(entry);
         self
     }
 
-    /// Register a [`GlobalQueryPrim`] into this overload group.
-    pub fn add_global_query<T: GlobalQueryPrim + Clone>(&mut self, x: T) -> &mut Self {
-        let entry = self.egraph.build_global_query_entry(x, None);
-        self.entries.push(entry);
-        self
-    }
-
-    /// Register a [`GlobalQueryPrim`] with a validator into this group.
-    pub fn add_global_query_with_validator<T: GlobalQueryPrim + Clone>(
+    /// Register a [`ReadPrim`] into this overload group.
+    pub fn add_read<T: ReadPrim + Clone>(
         &mut self,
         x: T,
         validator: Option<PrimitiveValidator>,
     ) -> &mut Self {
-        let entry = self.egraph.build_global_query_entry(x, validator);
+        let entry = self.egraph.build_read_entry(x, validator);
         self.entries.push(entry);
         self
     }
 
-    /// Register a [`GlobalActionPrim`] into this overload group.
-    pub fn add_global_action<T: GlobalActionPrim + Clone>(&mut self, x: T) -> &mut Self {
-        let entry = self.egraph.build_global_action_entry(x, None);
-        self.entries.push(entry);
-        self
-    }
-
-    /// Register a [`GlobalActionPrim`] with a validator into this group.
-    pub fn add_global_action_with_validator<T: GlobalActionPrim + Clone>(
+    /// Register a [`FullPrim`] into this overload group.
+    pub fn add_full<T: FullPrim + Clone>(
         &mut self,
         x: T,
         validator: Option<PrimitiveValidator>,
     ) -> &mut Self {
-        let entry = self.egraph.build_global_action_entry(x, validator);
+        let entry = self.egraph.build_full_entry(x, validator);
         self.entries.push(entry);
         self
     }

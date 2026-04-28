@@ -179,7 +179,7 @@ fn build_add_primitive_impl(parsed: AddPrimitive, validator: Option<Expr>) -> To
         };
 
         // Cast the arguments to the desired type. `state` is the
-        // Primitive `RuleQueryState<'a>` wrapper from egglog_bridge;
+        // Primitive `PureState<'a>` wrapper from egglog_bridge;
         // `base_values()` comes from `ExecStateCore` and `container_values()`
         // from `UserState`, both imported below.
         let cast1 = |x, t: &syn::Type, is_container| match is_container {
@@ -241,15 +241,15 @@ fn build_add_primitive_impl(parsed: AddPrimitive, validator: Option<Expr>) -> To
     // Macro-generated primitives are registered via the typed entry
     // points (`add_primitive` / `add_primitive_with_validator`)
     // so they participate in the #772 context-enforcement system. They
-    // declare `State = RuleQueryState<'a>` (valid in all four contexts)
+    // declare `State = PureState<'a>` (valid in all four contexts)
     // because every code path the macro emits is pure: it reads base /
     // container values and registers containers, which are all safe
     // everywhere per `ExecStateCore` / `UserState`. If a future
     // extension of the macro introduces a non-pure emission path, the
     // declared state would need to narrow accordingly.
     let add_call = match validator {
-        None => quote!(eg.add_rule_query_primitive(#prim_use);),
-        Some(validator_expr) => quote!(eg.add_rule_query_primitive_with_validator(
+        None => quote!(eg.add_pure_primitive(#prim_use, None);),
+        Some(validator_expr) => quote!(eg.add_pure_primitive(
             #prim_use,
             Some(::std::sync::Arc::new(#validator_expr))
         );),
@@ -272,10 +272,10 @@ fn build_add_primitive_impl(parsed: AddPrimitive, validator: Option<Expr>) -> To
             }
         }
 
-        impl RuleQueryPrim for Prim {
+        impl PurePrim for Prim {
             fn apply<'a, 'db>(
                 &self,
-                state: &mut RuleQueryState<'a, 'db>,
+                state: &mut PureState<'a, 'db>,
                 args: &[Value],
             ) -> Option<Value> {
                 #apply

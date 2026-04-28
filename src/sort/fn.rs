@@ -18,7 +18,6 @@ use std::sync::Mutex;
 // silence those warnings by importing the triple in one place.
 #[allow(unused_imports)]
 use crate::ExecutionState;
-use egglog_bridge::{ExecStateCore, UserState};
 
 use super::*;
 
@@ -200,10 +199,13 @@ impl Sort for FunctionSort {
     }
 
     fn register_primitives(self: Arc<Self>, eg: &mut EGraph) {
-        eg.add_rule_query_primitive(Ctor {
-            name: "unstable-fn".into(),
-            function: self.clone(),
-        });
+        eg.add_pure_primitive(
+            Ctor {
+                name: "unstable-fn".into(),
+                function: self.clone(),
+            },
+            None,
+        );
         // Two context-specialized variants of `unstable-app` registered
         // as one overload group. Their `valid_contexts` overlap
         // (ApplyPure is sound everywhere, ApplyFull only in action
@@ -214,14 +216,20 @@ impl Sort for FunctionSort {
         // are dispatched by signature.
         let function = self.clone();
         eg.add_primitive_group(|g| {
-            g.add_rule_query(ApplyPure {
-                name: "unstable-app".into(),
-                function: function.clone(),
-            });
-            g.add_rule_action(ApplyFull {
-                name: "unstable-app".into(),
-                function,
-            });
+            g.add_pure(
+                ApplyPure {
+                    name: "unstable-app".into(),
+                    function: function.clone(),
+                },
+                None,
+            );
+            g.add_write(
+                ApplyFull {
+                    name: "unstable-app".into(),
+                    function,
+                },
+                None,
+            );
         });
 
         register_vec_primitives_for_function(eg, self.clone());
@@ -355,7 +363,7 @@ struct Ctor {
 
 // `Ctor` (`unstable-fn "name" [...]`) builds a `FunctionContainer` and
 // interns it via `register_container`. Container interning is idempotent,
-// so it's safe in every context; declaring `State = RuleQueryState`
+// so it's safe in every context; declaring `State = PureState`
 // permits this primitive inside rule queries, actions, and global
 // contexts alike.
 impl PrimitiveCommon for Ctor {
@@ -374,10 +382,10 @@ impl PrimitiveCommon for Ctor {
     
 }
 
-impl RuleQueryPrim for Ctor {
+impl PurePrim for Ctor {
     fn apply<'a, 'db>(
         &self,
-        state: &mut egglog_bridge::RuleQueryState<'a, 'db>,
+        state: &mut egglog_bridge::PureState<'a, 'db>,
         args: &[Value],
     ) -> Option<Value> {
         let (rf, args) = args.split_first().unwrap();
@@ -466,13 +474,13 @@ pub enum ResolvedFunctionId {
 // Registered as two context-specialized variants under the same name
 // (issue #772):
 //
-// - `ApplyPure` (`State = RuleQueryState`, valid in all four contexts)
+// - `ApplyPure` (`State = PureState`, valid in all four contexts)
 //   dispatches through `FunctionContainer::apply_in`. In a query context
 //   the inner primitive must be declared valid in that context
 //   (typically "pure" — e.g. `+` on i64); constructors, custom-function
 //   lookups, and writing primitives all cause the match to fail (None).
 //
-// - `ApplyFull` (`State = RuleActionState`, valid in rule + global
+// - `ApplyFull` (`State = WriteState`, valid in rule + global
 //   actions) dispatches through `FunctionContainer::apply_mut` which has
 //   full access — constructors mint fresh eclass ids, custom functions
 //   report None on miss, primitives dispatch unconditionally.
@@ -521,10 +529,10 @@ impl PrimitiveCommon for ApplyPure {
     
 }
 
-impl RuleQueryPrim for ApplyPure {
+impl PurePrim for ApplyPure {
     fn apply<'a, 'db>(
         &self,
-        state: &mut egglog_bridge::RuleQueryState<'a, 'db>,
+        state: &mut egglog_bridge::PureState<'a, 'db>,
         args: &[Value],
     ) -> Option<Value> {
         let (fc_val, args) = args.split_first().unwrap();
@@ -549,10 +557,10 @@ impl PrimitiveCommon for ApplyFull {
     
 }
 
-impl RuleActionPrim for ApplyFull {
+impl WritePrim for ApplyFull {
     fn apply<'a, 'db>(
         &self,
-        state: &mut egglog_bridge::RuleActionState<'a, 'db>,
+        state: &mut egglog_bridge::WriteState<'a, 'db>,
         args: &[Value],
     ) -> Option<Value> {
         let (fc_val, args) = args.split_first().unwrap();
