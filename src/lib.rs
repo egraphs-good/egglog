@@ -124,9 +124,9 @@ pub enum CommandOutput {
     PrintFunctionSize(usize),
     /// The name of all functions and their sizes
     PrintAllFunctionsSize(Vec<(String, usize)>),
-    /// The best function found after extracting
+    /// The best term found after extracting
     ExtractBest(TermDag, DefaultCost, TermId),
-    /// The variants of a function found after extracting
+    /// The variants of a function found after extracting. Like normal extraction, but has to choose one extraction per e-node in the e-class.
     ExtractVariants(TermDag, Vec<TermId>),
     /// A high-level proof witnessing constructor existence
     ProveExists {
@@ -368,6 +368,7 @@ impl Default for EGraph {
         eg.type_info.add_presort::<VecSort>(span!()).unwrap();
         eg.type_info.add_presort::<FunctionSort>(span!()).unwrap();
         eg.type_info.add_presort::<MultiSetSort>(span!()).unwrap();
+        eg.type_info.add_presort::<PairSort>(span!()).unwrap();
 
         // Add != with a validator that computes inequality result
         let neq_validator = |termdag: &mut TermDag, args: &[TermId]| -> Option<TermId> {
@@ -707,7 +708,8 @@ impl EGraph {
 
         let can_subsume = match decl.subtype {
             FunctionSubtype::Constructor => true,
-            FunctionSubtype::Custom => false,
+            // View tables (functions with term_constructor) need subsumption support
+            FunctionSubtype::Custom => decl.term_constructor.is_some(),
         };
 
         use egglog_bridge::{DefaultVal, MergeFn};

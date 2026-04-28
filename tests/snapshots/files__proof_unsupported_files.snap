@@ -1,5 +1,6 @@
 ---
 source: tests/files.rs
+assertion_line: 392
 expression: snapshot
 ---
 array.egg
@@ -35,6 +36,7 @@ map.egg
 math.egg
 merge_read.egg
 multiset.egg
+pair.egg
 prims.egg
 print-function.egg
 python_array_optimize.egg

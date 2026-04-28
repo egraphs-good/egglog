@@ -702,6 +702,8 @@ pub fn add_function(
         merge,
         hidden: false,
         let_binding: false,
+        term_constructor: None,
+        unextractable: false,
     }])
 }
 

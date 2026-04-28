@@ -2,6 +2,7 @@
 source: tests/files.rs
 expression: snapshot_content_across_treatments
 ---
+(extraction-costs 0)
 ((Add 0)
  (Cons 12)
  (Mul 8)
