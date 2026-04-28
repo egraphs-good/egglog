@@ -64,7 +64,6 @@ use core_relations::{
     BaseValue, BaseValues, ContainerValue, ContainerValues, CounterId, ExecutionState,
     ExternalFunctionId, TableId, Value,
 };
-use smallvec::SmallVec;
 
 use crate::core_relations;
 use crate::{TableAction, UnionAction};
@@ -82,6 +81,7 @@ use crate::{TableAction, UnionAction};
 ///   used by the wrappers' `union(x, y)` method.
 /// - `default_panic_id` — a shared `ExternalFunctionId` for the
 ///   wrappers' `panic()` method.
+#[derive(Clone)]
 pub struct NamedActionRegistry {
     table_actions: HashMap<String, TableAction>,
     union_action: UnionAction,
@@ -535,8 +535,7 @@ macro_rules! impl_named_action_methods {
         /// Insert a row into the named table.
         pub fn insert(&mut self, name: &str, row: impl Iterator<Item = Value>) {
             let action = self.lookup_table_action(name).clone();
-            let row: SmallVec<[Value; 8]> = row.collect();
-            with_raw_result(self.inner, |es| action.insert(es, row.into_iter()));
+            with_raw_result(self.inner, |es| action.insert(es, row));
         }
 
         /// Look up the return-value column of a row in the named

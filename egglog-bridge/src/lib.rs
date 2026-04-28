@@ -13,8 +13,10 @@ use std::{
     hash::Hash,
     iter, mem,
     ops::{Index, IndexMut},
-    sync::{Arc, Mutex, RwLock},
+    sync::{Arc, Mutex},
 };
+
+use arc_swap::ArcSwap;
 
 use crate::core_relations::{
     BaseValue, BaseValueId, BaseValues, ColumnId, Constraint, ContainerValue, ContainerValues,
@@ -78,12 +80,15 @@ pub struct EGraph {
     /// bound.
     panic_funcs: HashMap<String, ExternalFunctionId>,
     report_level: ReportLevel,
-    /// Live registry of name-indexed action handles. Shared (via `Arc`)
-    /// with state wrappers and primitive callbacks in the egglog
-    /// crate so [`RuleActionState`] / [`GlobalActionState`] can
-    /// implement `insert(name, ...)`, `union`, etc. Updated on every
-    /// [`add_table`](EGraph::add_table) call.
-    action_registry: Arc<RwLock<NamedActionRegistry>>,
+    /// Live registry of name-indexed action handles. Shared (via
+    /// `Arc<ArcSwap<_>>`) with state wrappers and primitive callbacks
+    /// in the egglog crate so [`RuleActionState`] /
+    /// [`GlobalActionState`] can implement `insert(name, ...)`,
+    /// `union`, etc. `ArcSwap` is used (over `RwLock`) because the
+    /// hot-path read happens on every primitive invocation, while
+    /// updates only happen between top-level commands via
+    /// [`add_table`](EGraph::add_table); we want lock-free reads.
+    action_registry: Arc<ArcSwap<NamedActionRegistry>>,
 }
 
 pub type Result<T> = std::result::Result<T, anyhow::Error>;
@@ -116,7 +121,7 @@ impl Default for EGraph {
         panic_funcs.insert(default_panic_msg, default_panic_id);
 
         let union_action = UnionAction::from_parts(uf_table, ts_counter);
-        let action_registry = Arc::new(RwLock::new(NamedActionRegistry::new(
+        let action_registry = Arc::new(ArcSwap::from_pointee(NamedActionRegistry::new(
             union_action,
             default_panic_id,
         )));
@@ -497,19 +502,22 @@ impl EGraph {
         info.nonincremental_rebuild_rule = nonincremental_rebuild_rule;
         let action = TableAction::new(self, res);
         let table_name = self.funcs[res].name.to_string();
-        self.action_registry
-            .write()
-            .unwrap()
-            .register_table(table_name, action);
+        // `ArcSwap` doesn't expose mutation; rebuild a new registry
+        // from the current snapshot and atomically swap it in. This
+        // is rare — only on `add_table`, which only happens between
+        // top-level commands.
+        let mut updated = (**self.action_registry.load()).clone();
+        updated.register_table(table_name, action);
+        self.action_registry.store(Arc::new(updated));
         res
     }
 
     /// A handle to the live [`NamedActionRegistry`] for this EGraph.
-    /// The handle is shared (`Arc`); cloning it does not duplicate the
-    /// underlying registry. Used by the egglog crate's primitive
-    /// machinery to thread the registry into state wrappers at invoke
-    /// time.
-    pub fn action_registry(&self) -> Arc<RwLock<NamedActionRegistry>> {
+    /// The handle is shared (`Arc<ArcSwap<_>>`); cloning the outer
+    /// `Arc` does not duplicate the underlying registry. Used by the
+    /// egglog crate's primitive machinery to thread the registry into
+    /// state wrappers at invoke time via cheap `load()` reads.
+    pub fn action_registry(&self) -> Arc<ArcSwap<NamedActionRegistry>> {
         self.action_registry.clone()
     }
 
