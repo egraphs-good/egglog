@@ -63,14 +63,7 @@ pub struct PrimitiveWithId {
     /// The execution contexts in which this primitive should be picked
     /// at this call site. Initially seeded from
     /// [`UserState::valid_contexts()`](egglog_bridge::UserState::valid_contexts)
-    /// (where the body is sound). For primitives registered via
-    /// [`EGraph::add_primitive_group`], the group's variants are
-    /// **partitioned** into disjoint context sets so that exactly one
-    /// variant matches each context — the more specific variant claims
-    /// its contexts first, and broader siblings keep only the
-    /// remaining contexts. After partitioning the field is the set
-    /// "where this variant is the chosen pick", which is always a
-    /// subset of "where the body is sound".
+    /// (where the body is sound).
     pub(crate) valid_contexts: Vec<Context>,
 }
 
@@ -197,11 +190,8 @@ impl EGraph {
     /// reads-and-writes → `FullPrim`. The Rust type checker
     /// enforces that the body only uses methods the chosen state
     /// allows.
-    pub fn add_pure_primitive<T>(
-        &mut self,
-        x: T,
-        validator: Option<PrimitiveValidator>,
-    ) where
+    pub fn add_pure_primitive<T>(&mut self, x: T, validator: Option<PrimitiveValidator>)
+    where
         T: PurePrim + Clone,
     {
         let entry = self.build_pure_entry(x, validator);
@@ -211,11 +201,8 @@ impl EGraph {
     /// Register a [`WritePrim`] — runs in rule-action and
     /// global-action contexts. Pass `None` for the validator if not
     /// using the proof checker.
-    pub fn add_write_primitive<T>(
-        &mut self,
-        x: T,
-        validator: Option<PrimitiveValidator>,
-    ) where
+    pub fn add_write_primitive<T>(&mut self, x: T, validator: Option<PrimitiveValidator>)
+    where
         T: WritePrim + Clone,
     {
         let entry = self.build_write_entry(x, validator);
@@ -225,11 +212,8 @@ impl EGraph {
     /// Register a [`ReadPrim`] — runs in global-query and
     /// global-action contexts. Pass `None` for the validator if not
     /// using the proof checker.
-    pub fn add_read_primitive<T>(
-        &mut self,
-        x: T,
-        validator: Option<PrimitiveValidator>,
-    ) where
+    pub fn add_read_primitive<T>(&mut self, x: T, validator: Option<PrimitiveValidator>)
+    where
         T: ReadPrim + Clone,
     {
         let entry = self.build_read_entry(x, validator);
@@ -239,11 +223,8 @@ impl EGraph {
     /// Register a [`FullPrim`] — runs only in the
     /// global-action context. Pass `None` for the validator if not
     /// using the proof checker.
-    pub fn add_full_primitive<T>(
-        &mut self,
-        x: T,
-        validator: Option<PrimitiveValidator>,
-    ) where
+    pub fn add_full_primitive<T>(&mut self, x: T, validator: Option<PrimitiveValidator>)
+    where
         T: FullPrim + Clone,
     {
         let entry = self.build_full_entry(x, validator);
@@ -342,9 +323,7 @@ impl EGraph {
         x: T,
         validator: Option<PrimitiveValidator>,
     ) -> PendingPrimitive {
-        let erased: Arc<dyn ErasedPrimitive> = Arc::new(PrimitiveWrapPure {
-            inner: Arc::new(x),
-        });
+        let erased: Arc<dyn ErasedPrimitive> = Arc::new(PrimitiveWrapPure { inner: Arc::new(x) });
         self.finalize_pending(erased, validator)
     }
 
@@ -365,9 +344,7 @@ impl EGraph {
         x: T,
         validator: Option<PrimitiveValidator>,
     ) -> PendingPrimitive {
-        let erased: Arc<dyn ErasedPrimitive> = Arc::new(PrimitiveWrapRead {
-            inner: Arc::new(x),
-        });
+        let erased: Arc<dyn ErasedPrimitive> = Arc::new(PrimitiveWrapRead { inner: Arc::new(x) });
         self.finalize_pending(erased, validator)
     }
 
