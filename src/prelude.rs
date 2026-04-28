@@ -10,18 +10,18 @@
 //!   [`egglog_bridge::RuleActionState`]).
 //! - [`query`] — run a one-shot query and read out matches.
 //! - [`BaseSort`] / [`ContainerSort`] — declare custom sort types.
-//! - [`crate::Primitive`] (re-exported via `egglog::*` here) and
-//!   [`EGraph::add_primitive`](crate::EGraph::add_primitive) — register
-//!   custom primitives. The `Primitive` trait carries a `type State<'a>`
-//!   GAT that picks one of four context-aware state wrappers, which
-//!   together govern what the primitive's body can do and which
-//!   contexts it can be called from. See the [`Primitive`] trait docs
-//!   for the full table.
+//! - [`crate::PrimitiveCommon`] + one of four kind-specific traits
+//!   ([`crate::RuleQueryPrim`], [`crate::RuleActionPrim`],
+//!   [`crate::GlobalQueryPrim`], [`crate::GlobalActionPrim`]) —
+//!   register custom primitives. Each kind names its state wrapper
+//!   directly; pick the trait matching what the body actually needs
+//!   and register via [`crate::EGraph::add_rule_query_primitive`]
+//!   etc. The Rust type checker enforces that the body only uses
+//!   methods the chosen state allows.
 //! - The [`add_primitive!`] / [`add_primitive_with_validator!`] /
 //!   [`add_literal_prim!`] macros (re-exported via `egglog::*`) cover
 //!   the "pure native function" case ergonomically — they generate
-//!   primitives with `State = RuleQueryState` and pull base-value
-//!   conversions for you.
+//!   `RuleQueryPrim` impls and pull base-value conversions for you.
 
 use crate::*;
 use std::any::{Any, TypeId};
@@ -350,14 +350,14 @@ pub fn rule(
 /// [`union`](egglog_bridge::RuleActionState::union),
 /// [`panic`](egglog_bridge::RuleActionState::panic)) and the
 /// base/container conversion sugar
-/// ([`value_to_base`](egglog_bridge::UserState::value_to_base) etc.),
+/// ([`value_to_base`](egglog_bridge::RuleActionState::value_to_base) etc.),
 /// live on `RuleActionState` directly.
-pub type RustRuleContext<'a> = egglog_bridge::RuleActionState<'a>;
+pub type RustRuleContext<'a, 'db> = egglog_bridge::RuleActionState<'a, 'db>;
 
 #[derive(Clone)]
 struct RustRuleRhs<F>
 where
-    F: for<'a> Fn(&mut egglog_bridge::RuleActionState<'a>, &[Value]) -> Option<()>
+    F: for<'a, 'db> Fn(&mut egglog_bridge::RuleActionState<'a, 'db>, &[Value]) -> Option<()>
         + Clone
         + Send
         + Sync
@@ -368,16 +368,14 @@ where
     func: F,
 }
 
-impl<F> Primitive for RustRuleRhs<F>
+impl<F> PrimitiveCommon for RustRuleRhs<F>
 where
-    F: for<'a> Fn(&mut egglog_bridge::RuleActionState<'a>, &[Value]) -> Option<()>
+    F: for<'a, 'db> Fn(&mut egglog_bridge::RuleActionState<'a, 'db>, &[Value]) -> Option<()>
         + Clone
         + Send
         + Sync
         + 'static,
 {
-    type State<'a> = egglog_bridge::RuleActionState<'a>;
-
     fn name(&self) -> &str {
         &self.name
     }
@@ -391,10 +389,19 @@ where
             .collect();
         SimpleTypeConstraint::new(self.name(), sorts, span.clone()).into_box()
     }
+}
 
-    fn apply<'a>(
+impl<F> RuleActionPrim for RustRuleRhs<F>
+where
+    F: for<'a, 'db> Fn(&mut egglog_bridge::RuleActionState<'a, 'db>, &[Value]) -> Option<()>
+        + Clone
+        + Send
+        + Sync
+        + 'static,
+{
+    fn apply<'a, 'db>(
         &self,
-        state: &mut egglog_bridge::RuleActionState<'a>,
+        state: &mut egglog_bridge::RuleActionState<'a, 'db>,
         values: &[Value],
     ) -> Option<Value> {
         use egglog_bridge::ExecStateCore;
@@ -487,14 +494,14 @@ pub fn rust_rule(
     ruleset: &str,
     vars: &[(&str, ArcSort)],
     facts: Facts<String, String>,
-    func: impl for<'a> Fn(&mut egglog_bridge::RuleActionState<'a>, &[Value]) -> Option<()>
+    func: impl for<'a, 'db> Fn(&mut egglog_bridge::RuleActionState<'a, 'db>, &[Value]) -> Option<()>
     + Clone
     + Send
     + Sync
     + 'static,
 ) -> Result<Vec<CommandOutput>, Error> {
     let prim_name = egraph.parser.symbol_gen.fresh("rust_rule_prim");
-    egraph.add_primitive(RustRuleRhs {
+    egraph.add_rule_action_primitive(RustRuleRhs {
         name: prim_name.clone(),
         inputs: vars.iter().map(|(_, s)| s.clone()).collect(),
         func,

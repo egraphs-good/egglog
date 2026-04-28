@@ -182,47 +182,104 @@ impl EGraph {
         }
     }
 
-    /// Register a user-defined primitive.
+    /// Register a [`RuleQueryPrim`] — a pure primitive runnable in
+    /// every context (rule query / rule action / global query /
+    /// global action). Each call creates a fresh overload group; for
+    /// context-specialized siblings (e.g. `unstable-app`'s pure +
+    /// write variants), see
+    /// [`add_primitive_group`](Self::add_primitive_group).
     ///
-    /// `T: `[`Primitive`] declares (via a GAT) the minimum state
-    /// wrapper its body needs — see the [`Primitive`] trait docs for
-    /// the four state types and the contexts each is valid in. The
-    /// declared state determines:
-    ///
-    /// - which contexts the primitive may be invoked from (rule query,
-    ///   rule action, global query, global action);
-    /// - which capability methods the body can call (compile-time
-    ///   enforced by Rust's type checker).
-    ///
-    /// Distinct registrations under the same name are treated as
-    /// **separate overloads** (signature-based dispatch). To register
-    /// multiple variants of the same logical primitive (e.g.
-    /// context-specialized siblings whose `valid_contexts` overlap),
-    /// see [`add_primitive_group`](Self::add_primitive_group).
-    pub fn add_primitive<T>(&mut self, x: T)
+    /// The four traits ([`RuleQueryPrim`], [`RuleActionPrim`],
+    /// [`GlobalQueryPrim`], [`GlobalActionPrim`]) name the state
+    /// wrapper they want directly. Pick the one matching what the
+    /// body actually does — pure → `RuleQueryPrim`; writes →
+    /// `RuleActionPrim`; reads tables → `GlobalQueryPrim`;
+    /// reads-and-writes → `GlobalActionPrim`. The Rust type checker
+    /// enforces that the body only uses methods the chosen state
+    /// allows.
+    pub fn add_rule_query_primitive<T>(&mut self, x: T)
     where
-        T: Primitive + Clone,
-        for<'a> T::State<'a>: egglog_bridge::UserState<'a>,
+        T: RuleQueryPrim + Clone,
     {
-        let entry = self.build_primitive_entry(x, None);
+        let entry = self.build_rule_query_entry(x, None);
         self.commit_primitive(entry);
     }
 
-    /// Register a user-defined primitive together with a validator.
-    ///
-    /// The validator is consulted by the proof-checker to compute a
-    /// term-level result for an applied primitive without running the
-    /// primitive itself. See [`add_primitive`](Self::add_primitive)
-    /// for the typed-primitive registration mechanics.
-    pub fn add_primitive_with_validator<T>(
+    /// Register a [`RuleQueryPrim`] together with a validator.
+    pub fn add_rule_query_primitive_with_validator<T>(
         &mut self,
         x: T,
         validator: Option<PrimitiveValidator>,
     ) where
-        T: Primitive + Clone,
-        for<'a> T::State<'a>: egglog_bridge::UserState<'a>,
+        T: RuleQueryPrim + Clone,
     {
-        let entry = self.build_primitive_entry(x, validator);
+        let entry = self.build_rule_query_entry(x, validator);
+        self.commit_primitive(entry);
+    }
+
+    /// Register a [`RuleActionPrim`] — runs in rule-action and
+    /// global-action contexts.
+    pub fn add_rule_action_primitive<T>(&mut self, x: T)
+    where
+        T: RuleActionPrim + Clone,
+    {
+        let entry = self.build_rule_action_entry(x, None);
+        self.commit_primitive(entry);
+    }
+
+    /// Register a [`RuleActionPrim`] together with a validator.
+    pub fn add_rule_action_primitive_with_validator<T>(
+        &mut self,
+        x: T,
+        validator: Option<PrimitiveValidator>,
+    ) where
+        T: RuleActionPrim + Clone,
+    {
+        let entry = self.build_rule_action_entry(x, validator);
+        self.commit_primitive(entry);
+    }
+
+    /// Register a [`GlobalQueryPrim`] — runs in global-query and
+    /// global-action contexts.
+    pub fn add_global_query_primitive<T>(&mut self, x: T)
+    where
+        T: GlobalQueryPrim + Clone,
+    {
+        let entry = self.build_global_query_entry(x, None);
+        self.commit_primitive(entry);
+    }
+
+    /// Register a [`GlobalQueryPrim`] together with a validator.
+    pub fn add_global_query_primitive_with_validator<T>(
+        &mut self,
+        x: T,
+        validator: Option<PrimitiveValidator>,
+    ) where
+        T: GlobalQueryPrim + Clone,
+    {
+        let entry = self.build_global_query_entry(x, validator);
+        self.commit_primitive(entry);
+    }
+
+    /// Register a [`GlobalActionPrim`] — runs only in the
+    /// global-action context.
+    pub fn add_global_action_primitive<T>(&mut self, x: T)
+    where
+        T: GlobalActionPrim + Clone,
+    {
+        let entry = self.build_global_action_entry(x, None);
+        self.commit_primitive(entry);
+    }
+
+    /// Register a [`GlobalActionPrim`] together with a validator.
+    pub fn add_global_action_primitive_with_validator<T>(
+        &mut self,
+        x: T,
+        validator: Option<PrimitiveValidator>,
+    ) where
+        T: GlobalActionPrim + Clone,
+    {
+        let entry = self.build_global_action_entry(x, validator);
         self.commit_primitive(entry);
     }
 
@@ -240,13 +297,13 @@ impl EGraph {
     /// without any extra grouping or picking machinery.
     ///
     /// Different groups (whether multi-prim or single-prim via
-    /// [`add_primitive`](Self::add_primitive)) participate in normal
-    /// XOR-based overload resolution.
+    /// [`add_rule_query_primitive`](Self::add_rule_query_primitive)
+    /// etc.) participate in normal XOR-based overload resolution.
     ///
     /// ```ignore
     /// egraph.add_primitive_group(|g| {
-    ///     g.add(ApplyPure { /* ... */ });
-    ///     g.add(ApplyFull { /* ... */ });
+    ///     g.add_rule_query(ApplyPure { /* ... */ });
+    ///     g.add_rule_action(ApplyFull { /* ... */ });
     /// });
     /// ```
     pub fn add_primitive_group<F>(&mut self, f: F)
@@ -275,26 +332,59 @@ impl EGraph {
         }
     }
 
-    fn build_primitive_entry<T>(
+    fn build_rule_query_entry<T: RuleQueryPrim + Clone>(
         &mut self,
         x: T,
         validator: Option<PrimitiveValidator>,
-    ) -> PendingPrimitive
-    where
-        T: Primitive + Clone,
-        for<'a> T::State<'a>: egglog_bridge::UserState<'a>,
-    {
-        // Wrap the Primitive into an ErasedPrimitive so the rest of
-        // the system can hold it behind a trait object. The erased
-        // wrapper knows how to construct the primitive's declared
-        // State type from an `ExecutionState`, and to report its
-        // valid contexts.
-        let arc_typed = Arc::new(x);
-        let erased: Arc<dyn ErasedPrimitive> = Arc::new(PrimitiveWrap {
-            inner: arc_typed,
+    ) -> PendingPrimitive {
+        let erased: Arc<dyn ErasedPrimitive> = Arc::new(PrimitiveWrapRuleQuery {
+            inner: Arc::new(x),
             registry: self.backend.action_registry(),
         });
+        self.finalize_pending(erased, validator)
+    }
 
+    fn build_rule_action_entry<T: RuleActionPrim + Clone>(
+        &mut self,
+        x: T,
+        validator: Option<PrimitiveValidator>,
+    ) -> PendingPrimitive {
+        let erased: Arc<dyn ErasedPrimitive> = Arc::new(PrimitiveWrapRuleAction {
+            inner: Arc::new(x),
+            registry: self.backend.action_registry(),
+        });
+        self.finalize_pending(erased, validator)
+    }
+
+    fn build_global_query_entry<T: GlobalQueryPrim + Clone>(
+        &mut self,
+        x: T,
+        validator: Option<PrimitiveValidator>,
+    ) -> PendingPrimitive {
+        let erased: Arc<dyn ErasedPrimitive> = Arc::new(PrimitiveWrapGlobalQuery {
+            inner: Arc::new(x),
+            registry: self.backend.action_registry(),
+        });
+        self.finalize_pending(erased, validator)
+    }
+
+    fn build_global_action_entry<T: GlobalActionPrim + Clone>(
+        &mut self,
+        x: T,
+        validator: Option<PrimitiveValidator>,
+    ) -> PendingPrimitive {
+        let erased: Arc<dyn ErasedPrimitive> = Arc::new(PrimitiveWrapGlobalAction {
+            inner: Arc::new(x),
+            registry: self.backend.action_registry(),
+        });
+        self.finalize_pending(erased, validator)
+    }
+
+    fn finalize_pending(
+        &mut self,
+        erased: Arc<dyn ErasedPrimitive>,
+        validator: Option<PrimitiveValidator>,
+    ) -> PendingPrimitive {
         // Register the external function. Since the ErasedPrimitive
         // always produces its primitive's declared State type
         // regardless of how it is invoked, a single ExternalFunctionId
@@ -366,28 +456,74 @@ pub struct PrimitiveGroup<'a> {
 }
 
 impl<'a> PrimitiveGroup<'a> {
-    /// Register a primitive into this overload group.
-    pub fn add<T>(&mut self, x: T) -> &mut Self
-    where
-        T: Primitive + Clone,
-        for<'b> T::State<'b>: egglog_bridge::UserState<'b>,
-    {
-        let entry = self.egraph.build_primitive_entry(x, None);
+    /// Register a [`RuleQueryPrim`] into this overload group.
+    pub fn add_rule_query<T: RuleQueryPrim + Clone>(&mut self, x: T) -> &mut Self {
+        let entry = self.egraph.build_rule_query_entry(x, None);
         self.entries.push(entry);
         self
     }
 
-    /// Register a primitive with a validator into this overload group.
-    pub fn add_with_validator<T>(
+    /// Register a [`RuleQueryPrim`] with a validator into this group.
+    pub fn add_rule_query_with_validator<T: RuleQueryPrim + Clone>(
         &mut self,
         x: T,
         validator: Option<PrimitiveValidator>,
-    ) -> &mut Self
-    where
-        T: Primitive + Clone,
-        for<'b> T::State<'b>: egglog_bridge::UserState<'b>,
-    {
-        let entry = self.egraph.build_primitive_entry(x, validator);
+    ) -> &mut Self {
+        let entry = self.egraph.build_rule_query_entry(x, validator);
+        self.entries.push(entry);
+        self
+    }
+
+    /// Register a [`RuleActionPrim`] into this overload group.
+    pub fn add_rule_action<T: RuleActionPrim + Clone>(&mut self, x: T) -> &mut Self {
+        let entry = self.egraph.build_rule_action_entry(x, None);
+        self.entries.push(entry);
+        self
+    }
+
+    /// Register a [`RuleActionPrim`] with a validator into this group.
+    pub fn add_rule_action_with_validator<T: RuleActionPrim + Clone>(
+        &mut self,
+        x: T,
+        validator: Option<PrimitiveValidator>,
+    ) -> &mut Self {
+        let entry = self.egraph.build_rule_action_entry(x, validator);
+        self.entries.push(entry);
+        self
+    }
+
+    /// Register a [`GlobalQueryPrim`] into this overload group.
+    pub fn add_global_query<T: GlobalQueryPrim + Clone>(&mut self, x: T) -> &mut Self {
+        let entry = self.egraph.build_global_query_entry(x, None);
+        self.entries.push(entry);
+        self
+    }
+
+    /// Register a [`GlobalQueryPrim`] with a validator into this group.
+    pub fn add_global_query_with_validator<T: GlobalQueryPrim + Clone>(
+        &mut self,
+        x: T,
+        validator: Option<PrimitiveValidator>,
+    ) -> &mut Self {
+        let entry = self.egraph.build_global_query_entry(x, validator);
+        self.entries.push(entry);
+        self
+    }
+
+    /// Register a [`GlobalActionPrim`] into this overload group.
+    pub fn add_global_action<T: GlobalActionPrim + Clone>(&mut self, x: T) -> &mut Self {
+        let entry = self.egraph.build_global_action_entry(x, None);
+        self.entries.push(entry);
+        self
+    }
+
+    /// Register a [`GlobalActionPrim`] with a validator into this group.
+    pub fn add_global_action_with_validator<T: GlobalActionPrim + Clone>(
+        &mut self,
+        x: T,
+        validator: Option<PrimitiveValidator>,
+    ) -> &mut Self {
+        let entry = self.egraph.build_global_action_entry(x, validator);
         self.entries.push(entry);
         self
     }

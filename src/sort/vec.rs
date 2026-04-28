@@ -1,4 +1,4 @@
-use egglog_bridge::{ExecStateWriteDb, UnionAction, UserState};
+use egglog_bridge::UnionAction;
 use std::any::TypeId;
 use std::iter::zip;
 
@@ -137,7 +137,7 @@ impl ContainerSort for VecSort {
         add_primitive!(eg, "vec-set"    = |mut xs: @VecContainer (arc), i: i64, x: # (self.element())| -> @VecContainer (arc) {{ xs.data[i as usize] = x;    xs }});
         add_primitive!(eg, "vec-remove" = |mut xs: @VecContainer (arc), i: i64                       | -> @VecContainer (arc) {{ xs.data.remove(i as usize); xs }});
         if self.element.is_eq_sort() {
-            eg.add_primitive(Union {
+            eg.add_rule_action_primitive(Union {
                 name: "vec-union".into(),
                 vec: arc.clone(),
                 action: eg.new_union_action(),
@@ -214,9 +214,9 @@ pub(crate) fn try_registering_vec_map(
         fn_: fn_.clone(),
     };
     eg.add_primitive_group(|g| {
-        g.add(VecMapPure(base.clone()));
-        g.add(VecMapGlobalQuery(base.clone()));
-        g.add(VecMapFull(base));
+        g.add_rule_query(VecMapPure(base.clone()));
+        g.add_global_query(VecMapGlobalQuery(base.clone()));
+        g.add_rule_action(VecMapFull(base));
     });
 }
 
@@ -255,9 +255,9 @@ impl VecMap {
         .into_box()
     }
 
-    fn run<'a, S, D>(&self, state: &mut S, args: &[Value], dispatch: D) -> Option<Value>
+    fn run<'a, 'db, S, D>(&self, state: &mut S, args: &[Value], dispatch: D) -> Option<Value>
     where
-        S: egglog_bridge::UserState<'a>,
+        S: egglog_bridge::UserState<'a, 'db>,
         D: Fn(&FunctionContainer, &mut S, &[Value]) -> Option<Value>,
     {
         let fc = state
@@ -286,15 +286,16 @@ impl VecMap {
 
 #[derive(Clone)]
 struct VecMapPure(VecMap);
-impl Primitive for VecMapPure {
-    type State<'a> = egglog_bridge::RuleQueryState<'a>;
+impl PrimitiveCommon for VecMapPure {
     fn name(&self) -> &str { &self.0.name }
     fn get_type_constraints(&self, span: &Span) -> Box<dyn TypeConstraint> {
         self.0.type_constraints(span)
     }
-    fn apply<'a>(
+}
+impl RuleQueryPrim for VecMapPure {
+    fn apply<'a, 'db>(
         &self,
-        state: &mut egglog_bridge::RuleQueryState<'a>,
+        state: &mut egglog_bridge::RuleQueryState<'a, 'db>,
         args: &[Value],
     ) -> Option<Value> {
         self.0.run(state, args, |fc, s, a| fc.apply_in(s, a))
@@ -303,15 +304,16 @@ impl Primitive for VecMapPure {
 
 #[derive(Clone)]
 struct VecMapGlobalQuery(VecMap);
-impl Primitive for VecMapGlobalQuery {
-    type State<'a> = egglog_bridge::GlobalQueryState<'a>;
+impl PrimitiveCommon for VecMapGlobalQuery {
     fn name(&self) -> &str { &self.0.name }
     fn get_type_constraints(&self, span: &Span) -> Box<dyn TypeConstraint> {
         self.0.type_constraints(span)
     }
-    fn apply<'a>(
+}
+impl GlobalQueryPrim for VecMapGlobalQuery {
+    fn apply<'a, 'db>(
         &self,
-        state: &mut egglog_bridge::GlobalQueryState<'a>,
+        state: &mut egglog_bridge::GlobalQueryState<'a, 'db>,
         args: &[Value],
     ) -> Option<Value> {
         self.0.run(state, args, |fc, s, a| fc.apply_in(s, a))
@@ -320,18 +322,19 @@ impl Primitive for VecMapGlobalQuery {
 
 #[derive(Clone)]
 struct VecMapFull(VecMap);
-impl Primitive for VecMapFull {
-    type State<'a> = egglog_bridge::RuleActionState<'a>;
+impl PrimitiveCommon for VecMapFull {
     fn name(&self) -> &str { &self.0.name }
     fn get_type_constraints(&self, span: &Span) -> Box<dyn TypeConstraint> {
         self.0.type_constraints(span)
     }
-    fn apply<'a>(
+}
+impl RuleActionPrim for VecMapFull {
+    fn apply<'a, 'db>(
         &self,
-        state: &mut egglog_bridge::RuleActionState<'a>,
+        state: &mut egglog_bridge::RuleActionState<'a, 'db>,
         args: &[Value],
     ) -> Option<Value> {
-        self.0.run(state, args, |fc, s, a| fc.apply_mut(s, a))
+        self.0.run(state, args, |fc, s, a| fc.apply_mut(s.exec_state_mut(), a))
     }
 }
 
@@ -346,12 +349,10 @@ struct Union {
 }
 
 // `Union` unions the corresponding entries of two vecs of equal length.
-// It writes to the union-find (via `UnionAction::union`), so it declares
-// `State = RuleActionState` — valid in rule-action and global-action
+// It writes to the union-find (via `UnionAction::union`), so it
+// implements `RuleActionPrim` — valid in rule-action and global-action
 // contexts, rejected at rule-build time if used in a rule query.
-impl Primitive for Union {
-    type State<'a> = egglog_bridge::RuleActionState<'a>;
-
+impl PrimitiveCommon for Union {
     fn name(&self) -> &str {
         &self.name
     }
@@ -364,10 +365,12 @@ impl Primitive for Union {
         )
         .into_box()
     }
+}
 
-    fn apply<'a>(
+impl RuleActionPrim for Union {
+    fn apply<'a, 'db>(
         &self,
-        state: &mut egglog_bridge::RuleActionState<'a>,
+        state: &mut egglog_bridge::RuleActionState<'a, 'db>,
         args: &[Value],
     ) -> Option<Value> {
         let left = state
@@ -384,11 +387,10 @@ impl Primitive for Union {
             return None;
         }
         let action = self.action;
-        state.with_raw_exec_state(|es| {
-            for (l, r) in zip(left, right) {
-                action.union(es, l, r);
-            }
-        });
+        let es = state.exec_state_mut();
+        for (l, r) in zip(left, right) {
+            action.union(es, l, r);
+        }
         Some(args[0])
     }
 }

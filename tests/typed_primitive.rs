@@ -5,19 +5,18 @@ use egglog::ast::Span;
 use egglog::constraint::{SimpleTypeConstraint, TypeConstraint};
 use egglog::sort::I64Sort;
 use egglog::{ExecStateCore, RuleActionState};
-use egglog::{EGraph, Primitive, Value, prelude::*};
+use egglog::{EGraph, PrimitiveCommon, RuleActionPrim, Value, prelude::*};
 
-/// A primitive that declares `State = RuleActionState` is rejected when
-/// used in a rule-query (seminaive LHS) context. The check fires at
-/// rule-build time via `PrimitiveWithId::valid_contexts`.
+/// A primitive implementing `RuleActionPrim` is rejected when used in
+/// a rule-query (seminaive LHS) context. The check fires at typecheck
+/// time via `PrimitiveWithId::valid_contexts`.
 #[test]
 fn typed_primitive_rejected_in_rule_query() {
-    // A primitive that writes to the UF table — its declared state is
-    // `RuleActionState`, so it is not valid in a rule-query context.
+    // A primitive that writes to the UF table — `RuleActionPrim` is
+    // valid only in action contexts, never in a rule query.
     #[derive(Clone)]
     struct FakeWriter;
-    impl Primitive for FakeWriter {
-        type State<'a> = RuleActionState<'a>;
+    impl PrimitiveCommon for FakeWriter {
         fn name(&self) -> &str {
             "fake-writer"
         }
@@ -29,9 +28,11 @@ fn typed_primitive_rejected_in_rule_query() {
             )
             .into_box()
         }
-        fn apply<'a>(
+    }
+    impl RuleActionPrim for FakeWriter {
+        fn apply<'a, 'db>(
             &self,
-            state: &mut RuleActionState<'a>,
+            state: &mut RuleActionState<'a, 'db>,
             args: &[Value],
         ) -> Option<Value> {
             // Just exercise ExecStateCore — proving the body type-checks.
@@ -41,7 +42,7 @@ fn typed_primitive_rejected_in_rule_query() {
     }
 
     let mut egraph = EGraph::default();
-    egraph.add_primitive(FakeWriter);
+    egraph.add_rule_action_primitive(FakeWriter);
 
     // Using a writing primitive in an RHS is fine.
     egraph

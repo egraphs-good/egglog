@@ -17,7 +17,8 @@ use std::sync::Mutex;
 // calls behind trait bounds so they can read as unused to the compiler;
 // silence those warnings by importing the triple in one place.
 #[allow(unused_imports)]
-use egglog_bridge::{ExecStateCore, ExecStateWriteDb, UserState};
+use crate::ExecutionState;
+use egglog_bridge::{ExecStateCore, UserState};
 
 use super::*;
 
@@ -199,7 +200,7 @@ impl Sort for FunctionSort {
     }
 
     fn register_primitives(self: Arc<Self>, eg: &mut EGraph) {
-        eg.add_primitive(Ctor {
+        eg.add_rule_query_primitive(Ctor {
             name: "unstable-fn".into(),
             function: self.clone(),
         });
@@ -213,11 +214,11 @@ impl Sort for FunctionSort {
         // are dispatched by signature.
         let function = self.clone();
         eg.add_primitive_group(|g| {
-            g.add(ApplyPure {
+            g.add_rule_query(ApplyPure {
                 name: "unstable-app".into(),
                 function: function.clone(),
             });
-            g.add(ApplyFull {
+            g.add_rule_action(ApplyFull {
                 name: "unstable-app".into(),
                 function,
             });
@@ -357,9 +358,7 @@ struct Ctor {
 // so it's safe in every context; declaring `State = RuleQueryState`
 // permits this primitive inside rule queries, actions, and global
 // contexts alike.
-impl Primitive for Ctor {
-    type State<'a> = egglog_bridge::RuleQueryState<'a>;
-
+impl PrimitiveCommon for Ctor {
     fn name(&self) -> &str {
         &self.name
     }
@@ -372,9 +371,13 @@ impl Primitive for Ctor {
         })
     }
 
-    fn apply<'a>(
+    
+}
+
+impl RuleQueryPrim for Ctor {
+    fn apply<'a, 'db>(
         &self,
-        state: &mut egglog_bridge::RuleQueryState<'a>,
+        state: &mut egglog_bridge::RuleQueryState<'a, 'db>,
         args: &[Value],
     ) -> Option<Value> {
         let (rf, args) = args.split_first().unwrap();
@@ -506,9 +509,7 @@ fn apply_type_constraints(
     SimpleTypeConstraint::new(name, sorts, span.clone()).into_box()
 }
 
-impl Primitive for ApplyPure {
-    type State<'a> = egglog_bridge::RuleQueryState<'a>;
-
+impl PrimitiveCommon for ApplyPure {
     fn name(&self) -> &str {
         &self.name
     }
@@ -517,9 +518,13 @@ impl Primitive for ApplyPure {
         apply_type_constraints(&self.name, &self.function, span)
     }
 
-    fn apply<'a>(
+    
+}
+
+impl RuleQueryPrim for ApplyPure {
+    fn apply<'a, 'db>(
         &self,
-        state: &mut egglog_bridge::RuleQueryState<'a>,
+        state: &mut egglog_bridge::RuleQueryState<'a, 'db>,
         args: &[Value],
     ) -> Option<Value> {
         let (fc_val, args) = args.split_first().unwrap();
@@ -532,9 +537,7 @@ impl Primitive for ApplyPure {
     }
 }
 
-impl Primitive for ApplyFull {
-    type State<'a> = egglog_bridge::RuleActionState<'a>;
-
+impl PrimitiveCommon for ApplyFull {
     fn name(&self) -> &str {
         &self.name
     }
@@ -543,9 +546,13 @@ impl Primitive for ApplyFull {
         apply_type_constraints(&self.name, &self.function, span)
     }
 
-    fn apply<'a>(
+    
+}
+
+impl RuleActionPrim for ApplyFull {
+    fn apply<'a, 'db>(
         &self,
-        state: &mut egglog_bridge::RuleActionState<'a>,
+        state: &mut egglog_bridge::RuleActionState<'a, 'db>,
         args: &[Value],
     ) -> Option<Value> {
         let (fc_val, args) = args.split_first().unwrap();
@@ -554,7 +561,7 @@ impl Primitive for ApplyFull {
             .get_val::<FunctionContainer>(*fc_val)
             .unwrap()
             .clone();
-        fc.apply_mut(state, args)
+        fc.apply_mut(state.exec_state_mut(), args)
     }
 }
 
@@ -570,9 +577,9 @@ impl FunctionContainer {
     /// This is the only intended caller of `UserState::call_external_func`
     /// and `UserState::table_lookup`; both of those methods document a
     /// per-call seminaive-soundness contract that this body satisfies.
-    pub fn apply_in<'a, S>(&self, state: &mut S, args: &[Value]) -> Option<Value>
+    pub fn apply_in<'a, 'db, S>(&self, state: &mut S, args: &[Value]) -> Option<Value>
     where
-        S: egglog_bridge::UserState<'a>,
+        S: egglog_bridge::UserState<'a, 'db>,
     {
         let args: Vec<_> = self.1.iter().map(|(_, x)| x).chain(args).copied().collect();
         // Capability set for any table lookup as a pure read. Both
@@ -613,22 +620,19 @@ impl FunctionContainer {
         }
     }
 
-    /// Full dispatch: call the wrapped function from a write-capable
-    /// state. This is the "do what you meant" variant, used by
-    /// `unstable-app` on the RHS of rules. For constructor lookups it
-    /// mints a fresh eclass id; for custom-function lookups it returns
-    /// `None` on miss; for primitives it dispatches through raw
-    /// `ExecutionState`.
-    pub fn apply_mut<'a, S>(&self, state: &mut S, args: &[Value]) -> Option<Value>
-    where
-        S: egglog_bridge::UserState<'a> + egglog_bridge::ExecStateWriteDb,
-    {
+    /// Full dispatch: call the wrapped function with raw
+    /// `&mut ExecutionState`. This is the "do what you meant" variant
+    /// used by `unstable-app` on the RHS of rules — for constructor
+    /// lookups it mints a fresh eclass id; for custom-function lookups
+    /// it returns `None` on miss; for primitives it dispatches through
+    /// the raw state. Action-side callers reach the underlying
+    /// `&mut ExecutionState` via `state.exec_state_mut()`.
+    pub fn apply_mut(&self, es: &mut ExecutionState, args: &[Value]) -> Option<Value> {
         let args: Vec<_> = self.1.iter().map(|(_, x)| x).chain(args).copied().collect();
-        let rfid = self.0.clone();
-        state.with_raw_exec_state(|es| match rfid {
+        match &self.0 {
             ResolvedFunctionId::ConstructorLookup(action) => action.lookup_or_insert(es, &args),
             ResolvedFunctionId::CustomLookup(action) => action.lookup(es, &args),
-            ResolvedFunctionId::Prim { id, .. } => es.call_external_func(id, &args),
-        })
+            ResolvedFunctionId::Prim { id, .. } => es.call_external_func(*id, &args),
+        }
     }
 }
