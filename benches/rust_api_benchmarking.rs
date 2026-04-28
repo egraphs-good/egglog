@@ -262,10 +262,16 @@ fn rust_rule_tableaction_hot_path(bencher: divan::Bencher, case: RustRuleTableAc
 
 #[divan::bench(sample_count = 10)]
 fn rust_rule_math_microbenchmark(bencher: divan::Bencher) {
+    const EXPECTED_MATH_MICROBENCHMARK_TUPLES: usize = 1_047_896;
+
     bencher
         .with_inputs(math_microbenchmark_support::math_microbenchmark_setup)
         .bench_local_refs(|input| {
             math_microbenchmark_support::run_math_microbenchmark(input);
+            assert_eq!(
+                input.egraph.num_tuples(),
+                EXPECTED_MATH_MICROBENCHMARK_TUPLES
+            );
         });
 }
 
