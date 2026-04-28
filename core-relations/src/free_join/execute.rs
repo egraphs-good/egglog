@@ -653,9 +653,10 @@ struct JoinState<'a> {
 
 /// Per-column indexes on a trie node's subset, lazily initialized on first access per column.
 type ColumnIndexes = IdVec<ColumnId, OnceLock<Arc<ColumnIndex>>>;
-// Single flat map keyed by (column, value). Boxed to keep TrieNode size small
-// and avoid the per-column-IdVec pool/TLS overhead on initialization.
-type ChildrenMap = RwLock<HashMap<(ColumnId, Value), Arc<TrieNode>>>;
+// Each TrieNode is probed with exactly one column in practice, so we store a single
+// (ColumnId, map) pair instead of a per-column IdVec of Mutexes. Boxed to keep
+// TrieNode size small for the many short-lived TrieNodes that never need caching.
+type ChildrenMaps = IdVec<ColumnId, RwLock<HashMap<Value, Arc<TrieNode>>>>;
 
 /// Information about the current subset of an atom's relation that is being considered, along with
 /// lazily-initialized, cached indexes on that subset.
@@ -669,9 +670,10 @@ pub(crate) struct TrieNode {
     subset: Subset,
     /// Any cached indexes on this subset.
     cached_subsets: OnceLock<Pooled<ColumnIndexes>>,
-    /// Cached child trie nodes, keyed by (column, value). Boxed to keep TrieNode
-    /// small and avoid pool/TLS overhead; a single map covers all columns.
-    cached_children: OnceLock<Box<ChildrenMap>>,
+    /// Cached child trie nodes, keyed by value. In practice each TrieNode is
+    /// only ever probed with a single column, so we store one (col, map) pair
+    /// instead of an IdVec across all columns.
+    cached_children: OnceLock<Pooled<ChildrenMaps>>,
 }
 
 impl std::fmt::Debug for TrieNode {
@@ -712,27 +714,29 @@ impl TrieNode {
         &self,
         col: ColumnId,
         value: Value,
+        info: &TableInfo,
         sub: impl FnOnce() -> Subset,
     ) -> Arc<TrieNode> {
-        let map = self.cached_children.get_or_init(|| {
-            Box::new(RwLock::new(HashMap::default()))
-        });
-        let key = (col, value);
+        let map = &self.cached_children.get_or_init(|| {
+            let mut vec: Pooled<ChildrenMaps> = with_pool_set(|ps| ps.get());
+            vec.resize_with(info.spec.arity(), || RwLock::new(HashMap::default()));
+            vec
+        })[col];
         // Optimistic read path: most calls are cache hits, so try shared lock first.
         {
             let guard = map.read().unwrap();
-            if let Some(node) = guard.get(&key) {
+            if let Some(node) = guard.get(&value) {
                 return node.clone();
             }
         }
         // Cache miss: acquire write lock and insert.
         let mut guard = map.write().unwrap();
         // Double-check in case another thread inserted while we were waiting.
-        if let Some(node) = guard.get(&key) {
+        if let Some(node) = guard.get(&value) {
             return node.clone();
         }
         let new_node = Arc::new(TrieNode::new(sub()));
-        guard.insert(key, new_node.clone());
+        guard.insert(value, new_node.clone());
         new_node
     }
 }
@@ -1098,7 +1102,7 @@ impl<'a> JoinState<'a> {
                             let node =
                                 prober
                                     .node
-                                    .get_cached_trie_node(a.column, val[0], || {
+                                    .get_cached_trie_node(a.column, val[0], info, || {
                                         refine_subset(x.to_owned(pool), &a.cs, &table, has_stale)
                                     });
                             if node.subset.is_empty() {
@@ -1154,6 +1158,7 @@ impl<'a> JoinState<'a> {
                                 let smaller_node = smaller.node.get_cached_trie_node(
                                     smaller_scan.column,
                                     val[0],
+                                    small_info,
                                     || {
                                         refine_subset(
                                             small_sub.to_owned(pool),
@@ -1185,6 +1190,7 @@ impl<'a> JoinState<'a> {
                                 let larger_node = larger.node.get_cached_trie_node(
                                     larger_scan.column,
                                     val[0],
+                                    large_info,
                                     || {
                                         refine_subset(
                                             large_sub.to_owned(pool),
@@ -1270,6 +1276,7 @@ impl<'a> JoinState<'a> {
                                         let node = probers[i].node.get_cached_trie_node(
                                             scan.column,
                                             key[0],
+                                            &self.db.tables[atoms[scan.atom].table],
                                             || {
                                                 refine_subset(
                                                     sub.to_owned(pool),
@@ -1307,6 +1314,7 @@ impl<'a> JoinState<'a> {
                                 let main_node = probers[smallest].node.get_cached_trie_node(
                                     main_spec.column,
                                     key[0],
+                                    main_spec_info,
                                     || {
                                         let sub = sub.to_owned(pool);
                                         refine_subset(
@@ -2113,31 +2121,31 @@ fn sort_plan_by_size_inner(
     if range.len() <= 1 {
         return;
     }
-    // How many times an atom has been intersected/joined.
-    // Use a fixed-size stack array to avoid pool/TLS overhead. Atom IDs in a
-    // plan are dense starting from 0 and typically < 20; 64 is a safe bound.
-    const MAX_ATOMS: usize = 64;
-    let mut times_refined = [0i64; MAX_ATOMS];
+    // How many times an atom has been intersected/joined
+    let mut times_refined = with_pool_set(|ps| ps.get::<DenseIdMap<AtomId, i64>>());
 
     // Count how many times each atom has been refined so far.
     for ins in instrs[..range.start].iter() {
         match ins {
             JoinStage::Intersect { scans, .. } => scans.iter().for_each(|scan| {
-                times_refined[scan.atom.index()] += 1;
+                *times_refined.get_or_default(scan.atom) += 1;
             }),
             JoinStage::FusedIntersect {
                 cover,
                 to_intersect,
                 ..
             } => {
-                times_refined[cover.to_index.atom.index()] += cover.to_index.vars.len() as i64;
+                *times_refined.get_or_default(cover.to_index.atom) +=
+                    cover.to_index.vars.len() as i64;
                 to_intersect.iter().for_each(|(spec, _)| {
-                    times_refined[spec.to_index.atom.index()] += spec.to_index.vars.len() as i64;
+                    *times_refined.get_or_default(spec.to_index.atom) +=
+                        spec.to_index.vars.len() as i64;
                 });
             }
             JoinStage::FusedIntersectMat { to_intersect, .. } => {
                 to_intersect.iter().for_each(|(spec, _)| {
-                    times_refined[spec.to_index.atom.index()] += spec.to_index.vars.len() as i64;
+                    *times_refined.get_or_default(spec.to_index.atom) +=
+                        spec.to_index.vars.len() as i64;
                 });
             }
         }
@@ -2154,14 +2162,17 @@ fn sort_plan_by_size_inner(
     // to have a larger current estimate.
     let key_fn = |join_stage: &JoinStage,
                   binding_info: &BindingInfo,
-                  times_refined: &[i64; MAX_ATOMS]| {
+                  times_refined: &DenseIdMap<AtomId, i64>| {
         let refine = match join_stage {
             JoinStage::Intersect { scans, .. } => scans
                 .iter()
-                .map(|scan| times_refined[scan.atom.index()])
+                .map(|scan| times_refined.get(scan.atom).copied().unwrap_or_default())
                 .max()
-                .unwrap_or(0),
-            JoinStage::FusedIntersect { cover, .. } => times_refined[cover.to_index.atom.index()],
+                .unwrap(),
+            JoinStage::FusedIntersect { cover, .. } => times_refined
+                .get(cover.to_index.atom)
+                .copied()
+                .unwrap_or_default(),
             JoinStage::FusedIntersectMat { bind, .. } => bind.len() as _,
         };
         (
@@ -2182,22 +2193,24 @@ fn sort_plan_by_size_inner(
         // Update the counts after a new instruction is selected.
         match &instrs[order.get(i)] {
             JoinStage::Intersect { scans, .. } => scans.iter().for_each(|scan| {
-                times_refined[scan.atom.index()] += 1;
+                *times_refined.get_or_default(scan.atom) += 1;
             }),
             JoinStage::FusedIntersect {
                 cover,
                 to_intersect,
                 ..
             } => {
-                times_refined[cover.to_index.atom.index()] += cover.to_index.vars.len() as i64;
+                *times_refined.get_or_default(cover.to_index.atom) +=
+                    cover.to_index.vars.len() as i64;
 
                 to_intersect.iter().for_each(|(spec, _)| {
-                    times_refined[spec.to_index.atom.index()] += spec.to_index.vars.len() as i64;
+                    *times_refined.get_or_default(spec.to_index.atom) +=
+                        spec.to_index.vars.len() as i64;
                 });
             }
             JoinStage::FusedIntersectMat { to_intersect, .. } => {
                 to_intersect.iter().for_each(|(spec, _)| {
-                    times_refined[spec.to_index.atom.index()] +=
+                    *times_refined.get_or_default(spec.to_index.atom) +=
                         spec.to_index.vars.len() as i64;
                 });
             }

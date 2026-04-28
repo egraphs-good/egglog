@@ -60,11 +60,6 @@ impl SortedWritesTable {
             // Incremental rebuilds are possible if we can scan the subset of the columns that are
             // relevant.
             let to_scan = self.subset_tracker.recent_updates(table_id, table);
-            // If there are no new displacements in the UF since the last rebuild, no values in
-            // this table could have become non-canonical. Skip the scan entirely.
-            if to_scan.is_empty() {
-                return false;
-            }
             if incremental_rebuild(
                 to_scan.size(),
                 self.data.next_row().index(),
