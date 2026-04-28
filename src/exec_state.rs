@@ -44,8 +44,8 @@
 //!
 //! # Privileged seams
 //!
-//! A few methods step outside the typed-state contract — they're plain
-//! safe Rust, but a careless caller can violate seminaive evaluation.
+//! A few methods step outside the typed-state callers must
+//! be careful with respect to seminaive evaluation.
 //! They are `pub(crate)` so only this crate can reach them; user code
 //! cannot. Internal call sites (the `FunctionContainer` higher-order
 //! dispatch in `sort/fn.rs`, container helpers in `sort/multiset.rs`

@@ -374,8 +374,6 @@ impl PrimitiveCommon for Ctor {
             span: span.clone(),
         })
     }
-
-    
 }
 
 impl PurePrim for Ctor {
@@ -521,8 +519,6 @@ impl PrimitiveCommon for ApplyPure {
     fn get_type_constraints(&self, span: &Span) -> Box<dyn TypeConstraint> {
         apply_type_constraints(&self.name, &self.function, span)
     }
-
-    
 }
 
 impl PurePrim for ApplyPure {
@@ -549,8 +545,6 @@ impl PrimitiveCommon for ApplyFull {
     fn get_type_constraints(&self, span: &Span) -> Box<dyn TypeConstraint> {
         apply_type_constraints(&self.name, &self.function, span)
     }
-
-    
 }
 
 impl WritePrim for ApplyFull {
@@ -601,9 +595,7 @@ impl FunctionContainer {
 
         let caller_contexts = S::valid_contexts();
         let callee_safe = |callee_contexts: &[crate::Context]| {
-            caller_contexts
-                .iter()
-                .all(|c| callee_contexts.contains(c))
+            caller_contexts.iter().all(|c| callee_contexts.contains(c))
         };
 
         let view = state.pure_view();
@@ -618,6 +610,8 @@ impl FunctionContainer {
             }
             ResolvedFunctionId::Prim { id, valid_contexts } => {
                 if callee_safe(valid_contexts.as_slice()) {
+                    // Escape hatch- call external func, which is pub(crate) in egglog.
+                    // We just checked for the right context so this should be fine.
                     view.call_external_func(*id, &args)
                 } else {
                     None
