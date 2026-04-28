@@ -960,7 +960,6 @@ impl<'a> JoinState<'a> {
         if cur >= instr_order.len() {
             action_buf.push_bindings_factorized(
                 action,
-                self.db,
                 &mut binding_info.bindings,
                 &binding_info.binding_sets,
                 || self.exec_state.clone(),
@@ -1005,7 +1004,6 @@ impl<'a> JoinState<'a> {
                             if cur + 1 >= instr_order.len() {
                                 action_buf.push_bindings_factorized(
                                     action,
-                                    self.db,
                                     &mut binding_info.bindings,
                                     &binding_info.binding_sets,
                                     || self.exec_state.clone(),
@@ -1742,24 +1740,18 @@ trait ActionBuffer<'state, A: NumericId>: Send {
     type AsLocal<'a>: ActionBuffer<'state, A>
     where
         'state: 'a;
-    /// Push the given bindings to be executed for the specified action. If this
-    /// buffer has built up a sufficient batch size, it may execute
-    /// `to_exec_state` and then execute the action.
-    ///
-    /// NB: `push_bindings` makes module-specific assumptions on what values are passed to
-    /// `bindings` for a common `action`. This is not a general-purpose trait for that reason and
-    /// it should not, in general, be used outside of this module.
+    
+    /// Expand the binding sets to individual bindings and 
+    /// call push_bindings
     fn push_bindings_factorized(
         &mut self,
         action: A,
-        db: &Database,
         bindings: &mut DenseIdMap<Variable, Value>,
         binding_sets: &BindingSet,
         mut to_exec_state: impl FnMut() -> ExecutionState<'state>,
     ) {
         expand_binding_sets(
             self,
-            db,
             action,
             bindings,
             &binding_sets,
@@ -1768,6 +1760,13 @@ trait ActionBuffer<'state, A: NumericId>: Send {
         );
     }
 
+    /// Push the given bindings to be executed for the specified action. If this
+    /// buffer has built up a sufficient batch size, it may execute
+    /// `to_exec_state` and then execute the action.
+    ///
+    /// NB: `push_bindings` makes module-specific assumptions on what values are passed to
+    /// `bindings` for a common `action`. This is not a general-purpose trait for that reason and
+    /// it should not, in general, be used outside of this module.
     fn push_bindings(
         &mut self,
         action: A,
@@ -1982,7 +1981,6 @@ impl<'scope> ActionBuffer<'scope, ActionId> for ScopedActionBuffer<'_, 'scope> {
 
 fn expand_binding_sets<'state, A: NumericId, BUF: ActionBuffer<'state, A> + ?Sized>(
     action_buf: &mut BUF,
-    db: &Database,
     action: A,
     bindings: &mut DenseIdMap<Variable, Value>,
     binding_sets: &BindingSet,
@@ -2010,7 +2008,6 @@ fn expand_binding_sets<'state, A: NumericId, BUF: ActionBuffer<'state, A> + ?Siz
         }
         expand_binding_sets(
             action_buf,
-            db,
             action,
             bindings,
             binding_sets,
