@@ -5,7 +5,6 @@ use crate::{
     *,
 };
 use ast::{ResolvedAction, ResolvedExpr, ResolvedFact, ResolvedRule, ResolvedVar, Rule};
-use core_relations::ExternalFunction;
 use egglog_ast::generic_ast::GenericAction;
 use crate::Context;
 
@@ -57,7 +56,7 @@ pub type PrimitiveValidator = Arc<dyn Fn(&mut TermDag, &[TermId]) -> Option<Term
 
 #[derive(Clone)]
 pub struct PrimitiveWithId {
-    pub(crate) primitive: Arc<dyn ErasedPrimitive>,
+    pub(crate) primitive: Arc<dyn PrimitiveCommon>,
     pub(crate) id: ExternalFunctionId,
     pub(crate) validator: Option<PrimitiveValidator>,
     /// The execution contexts in which this primitive should be picked
@@ -323,20 +322,22 @@ impl EGraph {
         x: T,
         validator: Option<PrimitiveValidator>,
     ) -> PendingPrimitive {
-        let erased: Arc<dyn ErasedPrimitive> = Arc::new(PrimitiveWrapPure { inner: Arc::new(x) });
-        self.finalize_pending(erased, validator)
-    }
-
-    fn build_write_entry<T: WritePrim + Clone>(
-        &mut self,
-        x: T,
-        validator: Option<PrimitiveValidator>,
-    ) -> PendingPrimitive {
-        let erased: Arc<dyn ErasedPrimitive> = Arc::new(PrimitiveWrapWrite {
-            inner: Arc::new(x),
-            registry: self.backend.action_registry(),
-        });
-        self.finalize_pending(erased, validator)
+        let prim = Arc::new(x);
+        let primitive: Arc<dyn PrimitiveCommon> = prim.clone();
+        let invoke_prim = prim;
+        let id = self
+            .backend
+            .register_external_func(Box::new(make_external_func(move |exec_state, args| {
+                let mut state = PureState::wrap(exec_state);
+                invoke_prim.apply(&mut state, args)
+            })));
+        PendingPrimitive {
+            valid_contexts: PureState::valid_contexts().to_vec(),
+            name: primitive.name().to_owned(),
+            primitive,
+            id,
+            validator,
+        }
     }
 
     fn build_read_entry<T: ReadPrim + Clone>(
@@ -344,8 +345,47 @@ impl EGraph {
         x: T,
         validator: Option<PrimitiveValidator>,
     ) -> PendingPrimitive {
-        let erased: Arc<dyn ErasedPrimitive> = Arc::new(PrimitiveWrapRead { inner: Arc::new(x) });
-        self.finalize_pending(erased, validator)
+        let prim = Arc::new(x);
+        let primitive: Arc<dyn PrimitiveCommon> = prim.clone();
+        let invoke_prim = prim;
+        let id = self
+            .backend
+            .register_external_func(Box::new(make_external_func(move |exec_state, args| {
+                let mut state = ReadState::wrap(exec_state);
+                invoke_prim.apply(&mut state, args)
+            })));
+        PendingPrimitive {
+            valid_contexts: ReadState::valid_contexts().to_vec(),
+            name: primitive.name().to_owned(),
+            primitive,
+            id,
+            validator,
+        }
+    }
+
+    fn build_write_entry<T: WritePrim + Clone>(
+        &mut self,
+        x: T,
+        validator: Option<PrimitiveValidator>,
+    ) -> PendingPrimitive {
+        let prim = Arc::new(x);
+        let primitive: Arc<dyn PrimitiveCommon> = prim.clone();
+        let invoke_prim = prim;
+        let registry = self.backend.action_registry();
+        let id = self
+            .backend
+            .register_external_func(Box::new(make_external_func(move |exec_state, args| {
+                let registry = registry.load();
+                let mut state = WriteState::wrap(exec_state, &registry);
+                invoke_prim.apply(&mut state, args)
+            })));
+        PendingPrimitive {
+            valid_contexts: WriteState::valid_contexts().to_vec(),
+            name: primitive.name().to_owned(),
+            primitive,
+            id,
+            validator,
+        }
     }
 
     fn build_full_entry<T: FullPrim + Clone>(
@@ -353,43 +393,23 @@ impl EGraph {
         x: T,
         validator: Option<PrimitiveValidator>,
     ) -> PendingPrimitive {
-        let erased: Arc<dyn ErasedPrimitive> = Arc::new(PrimitiveWrapFull {
-            inner: Arc::new(x),
-            registry: self.backend.action_registry(),
-        });
-        self.finalize_pending(erased, validator)
-    }
-
-    fn finalize_pending(
-        &mut self,
-        erased: Arc<dyn ErasedPrimitive>,
-        validator: Option<PrimitiveValidator>,
-    ) -> PendingPrimitive {
-        // Register the external function. Since the ErasedPrimitive
-        // always produces its primitive's declared State type
-        // regardless of how it is invoked, a single ExternalFunctionId
-        // suffices — context-aware dispatch happens at typecheck time
-        // via `valid_contexts`.
-        #[derive(Clone)]
-        struct ExtWrap(Arc<dyn ErasedPrimitive>);
-        impl ExternalFunction for ExtWrap {
-            fn invoke(&self, exec_state: &mut ExecutionState, args: &[Value]) -> Option<Value> {
-                self.0.invoke(exec_state, args)
-            }
-        }
-
-        let valid_contexts = erased.valid_contexts().to_vec();
-        let name = erased.name().to_owned();
+        let prim = Arc::new(x);
+        let primitive: Arc<dyn PrimitiveCommon> = prim.clone();
+        let invoke_prim = prim;
+        let registry = self.backend.action_registry();
         let id = self
             .backend
-            .register_external_func(Box::new(ExtWrap(erased.clone())));
-
+            .register_external_func(Box::new(make_external_func(move |exec_state, args| {
+                let registry = registry.load();
+                let mut state = FullState::wrap(exec_state, &registry);
+                invoke_prim.apply(&mut state, args)
+            })));
         PendingPrimitive {
-            primitive: erased,
+            valid_contexts: FullState::valid_contexts().to_vec(),
+            name: primitive.name().to_owned(),
+            primitive,
             id,
             validator,
-            valid_contexts,
-            name,
         }
     }
 
@@ -419,7 +439,7 @@ impl EGraph {
 /// `add_primitive_group` so we can adjust `valid_contexts` (the
 /// disjoint partition) before committing.
 struct PendingPrimitive {
-    primitive: Arc<dyn ErasedPrimitive>,
+    primitive: Arc<dyn PrimitiveCommon>,
     id: ExternalFunctionId,
     validator: Option<PrimitiveValidator>,
     valid_contexts: Vec<Context>,
