@@ -653,10 +653,9 @@ struct JoinState<'a> {
 
 /// Per-column indexes on a trie node's subset, lazily initialized on first access per column.
 type ColumnIndexes = IdVec<ColumnId, OnceLock<Arc<ColumnIndex>>>;
-
-/// Per-column maps from a value to the child trie node for that value, lazily populated on first
-/// lookup per (column, value) pair.
-pub(crate) type ChildrenMaps = IdVec<ColumnId, RwLock<HashMap<Value, Arc<TrieNode>>>>;
+// Single flat map keyed by (column, value). Boxed to keep TrieNode size small
+// and avoid the per-column-IdVec pool/TLS overhead on initialization.
+type ChildrenMap = RwLock<HashMap<(ColumnId, Value), Arc<TrieNode>>>;
 
 /// Information about the current subset of an atom's relation that is being considered, along with
 /// lazily-initialized, cached indexes on that subset.
@@ -670,10 +669,9 @@ pub(crate) struct TrieNode {
     subset: Subset,
     /// Any cached indexes on this subset.
     cached_subsets: OnceLock<Pooled<ColumnIndexes>>,
-    /// Cached child trie nodes, keyed by value. In practice each TrieNode is
-    /// only ever probed with a single column, so we store one (col, map) pair
-    /// instead of an IdVec across all columns.
-    cached_children: OnceLock<Pooled<ChildrenMaps>>,
+    /// Cached child trie nodes, keyed by (column, value). Boxed to keep TrieNode
+    /// small and avoid pool/TLS overhead; a single map covers all columns.
+    cached_children: OnceLock<Box<ChildrenMap>>,
 }
 
 impl std::fmt::Debug for TrieNode {
@@ -714,29 +712,27 @@ impl TrieNode {
         &self,
         col: ColumnId,
         value: Value,
-        info: &TableInfo,
         sub: impl FnOnce() -> Subset,
     ) -> Arc<TrieNode> {
-        let map = &self.cached_children.get_or_init(|| {
-            let mut vec: Pooled<ChildrenMaps> = with_pool_set(|ps| ps.get());
-            vec.resize_with(info.spec.arity(), || RwLock::new(HashMap::default()));
-            vec
-        })[col];
+        let map = self.cached_children.get_or_init(|| {
+            Box::new(RwLock::new(HashMap::default()))
+        });
+        let key = (col, value);
         // Optimistic read path: most calls are cache hits, so try shared lock first.
         {
             let guard = map.read().unwrap();
-            if let Some(node) = guard.get(&value) {
+            if let Some(node) = guard.get(&key) {
                 return node.clone();
             }
         }
         // Cache miss: acquire write lock and insert.
         let mut guard = map.write().unwrap();
         // Double-check in case another thread inserted while we were waiting.
-        if let Some(node) = guard.get(&value) {
+        if let Some(node) = guard.get(&key) {
             return node.clone();
         }
         let new_node = Arc::new(TrieNode::new(sub()));
-        guard.insert(value, new_node.clone());
+        guard.insert(key, new_node.clone());
         new_node
     }
 }
@@ -1102,7 +1098,7 @@ impl<'a> JoinState<'a> {
                             let node =
                                 prober
                                     .node
-                                    .get_cached_trie_node(a.column, val[0], info, || {
+                                    .get_cached_trie_node(a.column, val[0], || {
                                         refine_subset(x.to_owned(pool), &a.cs, &table, has_stale)
                                     });
                             if node.subset.is_empty() {
@@ -1158,7 +1154,6 @@ impl<'a> JoinState<'a> {
                                 let smaller_node = smaller.node.get_cached_trie_node(
                                     smaller_scan.column,
                                     val[0],
-                                    small_info,
                                     || {
                                         refine_subset(
                                             small_sub.to_owned(pool),
@@ -1190,7 +1185,6 @@ impl<'a> JoinState<'a> {
                                 let larger_node = larger.node.get_cached_trie_node(
                                     larger_scan.column,
                                     val[0],
-                                    large_info,
                                     || {
                                         refine_subset(
                                             large_sub.to_owned(pool),
@@ -1276,7 +1270,6 @@ impl<'a> JoinState<'a> {
                                         let node = probers[i].node.get_cached_trie_node(
                                             scan.column,
                                             key[0],
-                                            &self.db.tables[atoms[scan.atom].table],
                                             || {
                                                 refine_subset(
                                                     sub.to_owned(pool),
@@ -1314,7 +1307,6 @@ impl<'a> JoinState<'a> {
                                 let main_node = probers[smallest].node.get_cached_trie_node(
                                     main_spec.column,
                                     key[0],
-                                    main_spec_info,
                                     || {
                                         let sub = sub.to_owned(pool);
                                         refine_subset(
