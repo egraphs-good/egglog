@@ -87,9 +87,7 @@ use egglog_ast::span::Span;
 use egglog_ast::util::ListDisplay;
 pub use egglog_bridge::FunctionRow;
 use egglog_bridge::{ColumnTy, QueryEntry, UnionAction};
-pub use exec_state::{
-    ActionView, Context, FullState, PureState, PureView, ReadState, UserState, WriteState,
-};
+pub use exec_state::{Context, Core, FullState, PureState, ReadState, UserState, Write, WriteState};
 use egglog_core_relations as core_relations;
 use egglog_numeric_id as numeric_id;
 use egglog_reports::{ReportLevel, RunReport};
