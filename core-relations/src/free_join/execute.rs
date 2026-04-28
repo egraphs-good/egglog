@@ -11,7 +11,7 @@ use crate::{
     free_join::plan::{JoinStages, MatId, MatScanMode, MatSpec},
     numeric_id::{DenseIdMap, IdVec, NumericId},
     query::Atom,
-    row_buffer::{RowBuffer, SmallValueVec},
+    row_buffer::RowBuffer,
 };
 use crossbeam::utils::CachePadded;
 use dashmap::mapref::entry::Entry;
@@ -71,20 +71,11 @@ impl SparseColumnIndex {
 
     fn new(table: WrappedTableRef<'_>, subset: SubsetRef<'_>, col: ColumnId) -> Self {
         let mut rows = [(Value::new_const(0), RowId::new_const(0)); SMALL_RESIDUAL];
-        let mut buf = TaggedRowBuffer::<SmallValueVec>::new_inline(1);
         let mut pos = 0;
-        table.scan_project(
-            subset,
-            &[col],
-            Offset::new_const(0),
-            subset.size(),
-            &[],
-            &mut buf,
-        );
-        for (row_id, key) in buf.iter() {
-            rows[pos] = (key[0], row_id);
+        table.for_each_col(subset, col, &mut |row_id, val| {
+            rows[pos] = (val, row_id);
             pos += 1;
-        }
+        });
         let n_subsets = pos;
 
         rows[..pos].sort_unstable();
@@ -2183,11 +2174,12 @@ fn sort_plan_by_size_inner(
     };
 
     for i in range.clone() {
+        let mut key_i = key_fn(&instrs[order.get(i)], binding_info, &times_refined);
         for j in (i + 1)..range.end {
-            let key_i = key_fn(&instrs[order.get(i)], binding_info, &times_refined);
             let key_j = key_fn(&instrs[order.get(j)], binding_info, &times_refined);
             if key_j < key_i {
                 order.data.swap(i, j);
+                key_i = key_j;
             }
         }
         // Update the counts after a new instruction is selected.

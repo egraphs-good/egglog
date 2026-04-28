@@ -439,6 +439,20 @@ impl<T: Table> TableWrapper for WrapperImpl<T> {
         }
         res
     }
+    fn for_each_col(
+        &self,
+        table: &dyn Table,
+        subset: SubsetRef,
+        col: ColumnId,
+        f: &mut dyn FnMut(RowId, Value),
+    ) {
+        let table = table.as_any().downcast_ref::<T>().unwrap();
+        let col_idx = col.index();
+        table.scan_generic(subset, |row_id, row| {
+            f(row_id, row[col_idx]);
+        });
+    }
+
     fn scan_project(
         &self,
         table: &dyn Table,
@@ -671,6 +685,17 @@ pub(crate) trait TableWrapper: Send + Sync {
     fn group_by_col(&self, table: &dyn Table, subset: SubsetRef, col: ColumnId) -> ColumnIndex;
     fn group_by_key(&self, table: &dyn Table, subset: SubsetRef, cols: &[ColumnId]) -> TupleIndex;
 
+    /// Scan each row in `subset`, calling `f(row_id, col_value)` for each.
+    /// Unlike `scan_project`, this writes directly to the callback with no
+    /// intermediate buffer, which is faster for small (≤8 row) subsets.
+    fn for_each_col(
+        &self,
+        table: &dyn Table,
+        subset: SubsetRef,
+        col: ColumnId,
+        f: &mut dyn FnMut(RowId, Value),
+    );
+
     #[allow(clippy::too_many_arguments)]
     fn scan_project(
         &self,
@@ -759,6 +784,18 @@ impl WrappedTableRef<'_> {
     /// A multi-column vairant of [`WrappedTable::group_by_col`].
     pub(crate) fn group_by_key(&self, subset: SubsetRef, cols: &[ColumnId]) -> TupleIndex {
         self.wrapper.group_by_key(self.inner, subset, cols)
+    }
+
+    /// Scan each row in `subset` and call `f(row_id, col_value)` for each.
+    /// This is a zero-copy alternative to `scan_project` for single-column
+    /// scans over small subsets where an intermediate buffer is wasteful.
+    pub(crate) fn for_each_col(
+        &self,
+        subset: SubsetRef,
+        col: ColumnId,
+        f: &mut dyn FnMut(RowId, Value),
+    ) {
+        self.wrapper.for_each_col(self.inner, subset, col, f);
     }
 
     /// A variant fo [`WrappedTable::scan_bounded`] that projects a subset of

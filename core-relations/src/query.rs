@@ -957,6 +957,14 @@ pub(crate) struct FunDeps {
 
 impl FunDeps {
     /// Add a functional dependency: antecedent -> consequent.
+    pub(crate) fn iter_deps(
+        &self,
+    ) -> impl Iterator<Item = (&[Variable], &[Variable])> {
+        self.dependencies
+            .iter()
+            .map(|(ant, cq)| (ant.as_slice(), cq.as_slice()))
+    }
+
     pub fn add_dependency(&mut self, antecedent: Vec<Variable>, consequent: Vec<Variable>) {
         // Don't add trivial dependencies.
         if !antecedent.is_empty() {
@@ -991,6 +999,47 @@ impl FunDeps {
         }
 
         result
+    }
+
+    /// Compute a "FD depth" for each variable in `vars`.
+    ///
+    /// Depth 0 = not determined by any FD antecedent in scope.
+    /// Depth d+1 = determined by antecedents whose max depth is d.
+    ///
+    /// Ordering by depth (ascending) ensures antecedents are planned before
+    /// their consequents, enabling the SparseColumn fast-path in the executor
+    /// once a key is bound (the corresponding value column has size 1).
+    #[allow(dead_code)]
+    pub(crate) fn fd_depths(
+        &self,
+        vars: impl Iterator<Item = Variable>,
+    ) -> DenseIdMap<Variable, u32> {
+        let mut depths: DenseIdMap<Variable, u32> =
+            DenseIdMap::from_iter(vars.map(|v| (v, 0u32)));
+        // Cap at n_vars to handle cyclic FDs without looping forever.
+        let cap = depths.n_ids() as u32;
+        let mut changed = true;
+        while changed {
+            changed = false;
+            for (antecedents, consequents) in &self.dependencies {
+                let max_ant = antecedents
+                    .iter()
+                    .filter_map(|&v| depths.get(v).copied())
+                    .max();
+                if let Some(d) = max_ant {
+                    let new_depth = (d + 1).min(cap);
+                    for &cq in consequents {
+                        if let Some(cq_depth) = depths.get_mut(cq) {
+                            if *cq_depth < new_depth {
+                                *cq_depth = new_depth;
+                                changed = true;
+                            }
+                        }
+                    }
+                }
+            }
+        }
+        depths
     }
 }
 
