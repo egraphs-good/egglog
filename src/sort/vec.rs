@@ -1,3 +1,4 @@
+use crate::exec_state::__internal::Internal;
 use egglog_bridge::UnionAction;
 use std::any::TypeId;
 use std::iter::zip;
@@ -265,13 +266,13 @@ impl VecMap {
         D: Fn(&FunctionContainer, &mut S, &[Value]) -> Option<Value>,
     {
         let fc = state
-            .pure_view()
+            
             .container_values()
             .get_val::<FunctionContainer>(args[0])
             .unwrap()
             .clone();
         let vec = state
-            .pure_view()
+            
             .container_values()
             .get_val::<VecContainer>(args[1])
             .unwrap()
@@ -286,7 +287,7 @@ impl VecMap {
             do_rebuild: self.output_vec.is_eq_container_sort(),
             data: new_data,
         };
-        Some(state.pure_view().register_container(new_vec))
+        Some(state.register_container(new_vec))
     }
 }
 

@@ -1,5 +1,5 @@
 use super::*;
-use crate::UserState;
+use crate::exec_state::__internal::Internal;
 use egglog_bridge::UnionAction;
 use inner::MultiSet;
 
@@ -398,13 +398,13 @@ impl Map {
         D: Fn(&FunctionContainer, &mut S, &[Value]) -> Option<Value>,
     {
         let fc = state
-            .pure_view()
+            
             .container_values()
             .get_val::<FunctionContainer>(args[0])
             .unwrap()
             .clone();
         let multiset = state
-            .pure_view()
+            
             .container_values()
             .get_val::<MultiSetContainer>(args[1])
             .unwrap()
@@ -419,7 +419,7 @@ impl Map {
             data: new_data,
             ..multiset
         };
-        Some(state.pure_view().register_container(new_ms))
+        Some(state.register_container(new_ms))
     }
 }
 
@@ -530,13 +530,13 @@ impl FullPrim for FillIndex {
         args: &[Value],
     ) -> Option<Value> {
         let fc = state
-            .pure_view()
+            
             .container_values()
             .get_val::<FunctionContainer>(args[1])
             .unwrap()
             .clone();
         let multiset = state
-            .pure_view()
+            
             .container_values()
             .get_val::<MultiSetContainer>(args[0])
             .unwrap()
@@ -597,13 +597,13 @@ impl WritePrim for ClearIndex {
         args: &[Value],
     ) -> Option<Value> {
         let fc = state
-            .pure_view()
+            
             .container_values()
             .get_val::<FunctionContainer>(args[1])
             .unwrap()
             .clone();
         let multiset = state
-            .pure_view()
+            
             .container_values()
             .get_val::<MultiSetContainer>(args[0])
             .unwrap()
@@ -655,13 +655,13 @@ impl FlatMap {
         D: Fn(&FunctionContainer, &mut S, &[Value]) -> Option<Value>,
     {
         let fc = state
-            .pure_view()
+            
             .container_values()
             .get_val::<FunctionContainer>(args[0])
             .unwrap()
             .clone();
         let multiset = state
-            .pure_view()
+            
             .container_values()
             .get_val::<MultiSetContainer>(args[1])
             .unwrap()
@@ -671,7 +671,7 @@ impl FlatMap {
             let mapped = dispatch(&fc, state, &[v]);
             if let Some(mapped_ms) = mapped {
                 let mapped_ms = state
-                    .pure_view()
+                    
                     .container_values()
                     .get_val::<MultiSetContainer>(mapped_ms)
                     .unwrap();
@@ -686,7 +686,7 @@ impl FlatMap {
             data: new_data,
             ..multiset
         };
-        Some(state.pure_view().register_container(new_container))
+        Some(state.register_container(new_container))
     }
 }
 
@@ -783,13 +783,13 @@ impl Filter {
         D: Fn(&FunctionContainer, &mut S, &[Value]) -> Option<Value>,
     {
         let fc = state
-            .pure_view()
+            
             .container_values()
             .get_val::<FunctionContainer>(args[0])
             .unwrap()
             .clone();
         let multiset = state
-            .pure_view()
+            
             .container_values()
             .get_val::<MultiSetContainer>(args[1])
             .unwrap()
@@ -805,7 +805,7 @@ impl Filter {
             data: new_data,
             ..multiset
         };
-        Some(state.pure_view().register_container(new_ms))
+        Some(state.register_container(new_ms))
     }
 }
 
@@ -906,14 +906,14 @@ impl PurePrim for SumMultisets {
     ) -> Option<Value> {
         let mut data = MultiSet::<Value>::new();
         let ms_of_ms = state
-            .pure_view()
+            
             .container_values()
             .get_val::<MultiSetContainer>(args[0])
             .unwrap()
             .clone();
         for (ms_value, counts) in ms_of_ms.data.iter_counts() {
             let ms = state
-                .pure_view()
+                
                 .container_values()
                 .get_val::<MultiSetContainer>(ms_value)
                 .unwrap();
@@ -925,7 +925,7 @@ impl PurePrim for SumMultisets {
             data,
             do_rebuild: self.multiset.is_eq_container_sort(),
         };
-        Some(state.pure_view().register_container(multiset))
+        Some(state.register_container(multiset))
     }
 }
 
@@ -963,14 +963,14 @@ impl Reduce {
         D: Fn(&FunctionContainer, &mut S, &[Value]) -> Option<Value>,
     {
         let fc = state
-            .pure_view()
+            
             .container_values()
             .get_val::<FunctionContainer>(args[0])
             .unwrap()
             .clone();
         let initial = args[1];
         let multiset = state
-            .pure_view()
+            
             .container_values()
             .get_val::<MultiSetContainer>(args[2])
             .unwrap()
@@ -1084,7 +1084,7 @@ impl WritePrim for UnionValues {
         args: &[Value],
     ) -> Option<Value> {
         let values = state
-            .pure_view()
+            
             .container_values()
             .get_val::<MultiSetContainer>(args[0])?
             .clone()

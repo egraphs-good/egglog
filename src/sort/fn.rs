@@ -14,6 +14,7 @@ use std::sync::Mutex;
 
 #[allow(unused_imports)]
 use crate::ExecutionState;
+use crate::exec_state::__internal::Internal;
 
 use super::*;
 
@@ -598,7 +599,7 @@ impl FunctionContainer {
             caller_contexts.iter().all(|c| callee_contexts.contains(c))
         };
 
-        let view = state.pure_view();
+        let view = state;
         match &self.0 {
             ResolvedFunctionId::ConstructorLookup(action)
             | ResolvedFunctionId::CustomLookup(action) => {
