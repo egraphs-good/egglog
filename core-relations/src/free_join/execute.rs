@@ -762,14 +762,13 @@ struct BindingInfo {
 impl BindingInfo {
     /// Initializes the atom-related metadata in the [`BindingInfo`].    
     fn insert_subset(&mut self, atom: AtomId, subset: Subset) {
-        if let Some(slot) = self.subsets.get_mut(atom) {
-            if let Some(node) = Arc::get_mut(slot) {
+        if let Some(slot) = self.subsets.get_mut(atom)
+            && let Some(node) = Arc::get_mut(slot) {
                 node.cached_subsets.take();
                 node.cached_children.take();
                 node.subset = subset;
                 return;
             }
-        }
         self.subsets.insert(atom, Arc::new(TrieNode::new(subset)));
     }
 
