@@ -147,6 +147,7 @@ pub(crate) enum JoinStage {
         bind: SmallVec<[(ColumnId, Variable); 2]>,
         // to_intersect.1 is the index into the cover atom.
         to_intersect: Vec<(ScanSpec, SmallVec<[ColumnId; 2]>)>,
+        is_leaf_scan: bool,
     },
     FusedIntersectMat {
         cover: MatId,
@@ -163,65 +164,112 @@ impl JoinStage {
     /// scans that do no filtering whatsoever.
     fn fuse(&mut self, other: &JoinStage) -> bool {
         use JoinStage::*;
-        match (self, other) {
+        match (&*self, other) {
             (
                 FusedIntersect {
-                    cover,
-                    bind,
-                    to_intersect,
+                    cover: cover1,
+                    bind: bind1,
+                    to_intersect: to_intersect1,
+                    is_leaf_scan: is_leaf_scan1,
                 },
-                Intersect { var, scans },
-            ) if to_intersect.is_empty()
-                && scans.len() == 1
-                && cover.to_index.atom == scans[0].atom
-                && scans[0].cs.is_empty() =>
+                FusedIntersect {
+                    cover: cover2,
+                    bind: bind2,
+                    to_intersect: to_intersect2,
+                    is_leaf_scan: is_leaf_scan2,
+                },
+            ) if cover1.to_index.atom == cover2.to_index.atom
+                && to_intersect1.is_empty()
+                && to_intersect2.is_empty()
+                && (cover1.constraints.is_empty() || cover2.constraints.is_empty()) =>
             {
-                let col = scans[0].column;
-                bind.push((col, *var));
-                cover.to_index.vars.push(col);
-                true
-            }
-            (
-                x,
-                Intersect {
-                    var: var2,
-                    scans: scans2,
-                },
-            ) => {
-                // This is all somewhat mangled because of the borrowing rules
-                // when we pass &mut self into a tuple.
-                let (var1, mut scans1) = if let Intersect {
-                    var: var1,
-                    scans: scans1,
-                } = x
-                {
-                    if !(scans1.len() == 1
-                        && scans2.len() == 1
-                        && scans1[0].atom == scans2[0].atom
-                        && scans2[0].cs.is_empty())
-                    {
-                        return false;
-                    }
-                    (*var1, mem::take(scans1))
-                } else {
-                    return false;
+                assert!(!*is_leaf_scan1 && !is_leaf_scan2);
+                let to_index = SubAtom {
+                    atom: cover1.to_index.atom,
+                    vars: cover1
+                        .to_index
+                        .vars
+                        .iter()
+                        .chain(cover2.to_index.vars.iter())
+                        .copied()
+                        .collect(),
                 };
-                let atom = scans1[0].atom;
-                let col1 = scans1[0].column;
-                let col2 = scans2[0].column;
-                *x = FusedIntersect {
+                let bind = bind1.iter().chain(bind2.iter()).copied().collect();
+                *self = FusedIntersect {
                     cover: ScanSpec {
-                        to_index: SubAtom {
-                            atom,
-                            vars: smallvec![col1, col2],
-                        },
-                        constraints: mem::take(&mut scans1[0].cs),
+                        to_index,
+                        constraints: cover1
+                            .constraints
+                            .iter()
+                            .chain(cover2.constraints.iter())
+                            .cloned()
+                            .collect(),
                     },
-                    bind: smallvec![(col1, var1), (col2, *var2)],
+                    bind,
                     to_intersect: Default::default(),
+                    is_leaf_scan: false,
                 };
                 true
             }
+            // (
+            //     FusedIntersect {
+            //         cover,
+            //         bind,
+            //         to_intersect,
+            //         is_leaf_scan: _,
+            //     },
+            //     Intersect { var, scans },
+            // ) if to_intersect.is_empty()
+            //     && scans.len() == 1
+            //     && cover.to_index.atom == scans[0].atom
+            //     && scans[0].cs.is_empty() =>
+            // {
+            //     let col = scans[0].column;
+            //     bind.push((col, *var));
+            //     cover.to_index.vars.push(col);
+            //     true
+            // }
+            // (
+            //     x,
+            //     Intersect {
+            //         var: var2,
+            //         scans: scans2,
+            //     },
+            // ) => {
+            //     // This is all somewhat mangled because of the borrowing rules
+            //     // when we pass &mut self into a tuple.
+            //     let (var1, mut scans1) = if let Intersect {
+            //         var: var1,
+            //         scans: scans1,
+            //     } = x
+            //     {
+            //         if !(scans1.len() == 1
+            //             && scans2.len() == 1
+            //             && scans1[0].atom == scans2[0].atom
+            //             && scans2[0].cs.is_empty())
+            //         {
+            //             return false;
+            //         }
+            //         (*var1, mem::take(scans1))
+            //     } else {
+            //         return false;
+            //     };
+            //     let atom = scans1[0].atom;
+            //     let col1 = scans1[0].column;
+            //     let col2 = scans2[0].column;
+            //     *x = FusedIntersect {
+            //         cover: ScanSpec {
+            //             to_index: SubAtom {
+            //                 atom,
+            //                 vars: smallvec![col1, col2],
+            //             },
+            //             constraints: mem::take(&mut scans1[0].cs),
+            //         },
+            //         bind: smallvec![(col1, var1), (col2, *var2)],
+            //         to_intersect: Default::default(),
+            //     };
+            //     true
+            // }
             _ => false,
         }
     }
@@ -352,6 +400,7 @@ impl SinglePlan {
                     cover,
                     bind: _,
                     to_intersect,
+                    is_leaf_scan: _,
                 } => {
                     let cover_atom_name = get_atom(cover.to_index.atom);
                     let cover_cols: Vec<(String, i64)> = cover
@@ -1523,6 +1572,39 @@ fn plan_gj(
         }
         stages.push(next_stage);
     }
+    for i in 0..stages.len() {
+        if let JoinStage::FusedIntersect {
+            cover,
+            to_intersect,
+            ..
+        } = &stages[i]
+            && to_intersect.is_empty()
+        {
+            let cover_atom = cover.to_index.atom;
+            let mut used_later = false;
+            for j in (i + 1)..stages.len() {
+                used_later = used_later
+                    || match &stages[j] {
+                        JoinStage::Intersect { scans, .. } => {
+                            scans.iter().any(|scan| scan.atom == cover_atom)
+                        }
+                        JoinStage::FusedIntersect { cover, .. } => {
+                            cover.to_index.atom == cover_atom
+                        }
+                        JoinStage::FusedIntersectMat { .. } => unreachable!(),
+                    };
+                if used_later {
+                    break;
+                }
+            }
+            if !used_later {
+                let JoinStage::FusedIntersect { is_leaf_scan, .. } = &mut stages[i] else {
+                    unreachable!();
+                };
+                *is_leaf_scan = true;
+            }
+        }
+    }
 }
 
 /// Compile a stage info into a concrete join stage, updating constraint state.
@@ -1548,7 +1630,8 @@ fn compile_stage(
         }
     }
 
-    if vars.len() == 1 {
+    // Only do this if it's a join of more than one relations
+    if vars.len() == 1 && !filters.is_empty() {
         let scans = SmallVec::<[SingleScanSpec; 3]>::from_iter(
             iter::once(&cover)
                 .chain(filters.iter().map(|(x, _)| x))
@@ -1595,5 +1678,6 @@ fn compile_stage(
         cover: cover_spec,
         bind,
         to_intersect,
+        is_leaf_scan: false,
     }
 }
