@@ -20,6 +20,7 @@ anyhow = { workspace = true }
 num-rational = { workspace = true }
 log = { workspace = true }
 indexmap = { workspace = true }
+arc-swap = { workspace = true }
 web-time = { workspace = true }
 rayon = { workspace = true }
 dyn-clone = { workspace = true }

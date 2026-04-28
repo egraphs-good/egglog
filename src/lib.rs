@@ -223,18 +223,18 @@ pub(crate) trait ErasedPrimitive: Send + Sync {
 
 /// Wraps a [`Primitive`] into an [`ErasedPrimitive`].
 ///
-/// Carries an `Arc` to the bridge `EGraph`'s
+/// Carries an `ArcSwap` of the bridge `EGraph`'s
 /// [`NamedActionRegistry`](egglog_bridge::NamedActionRegistry) so the
 /// primitive's declared `State` wrapper can expose name-indexed
 /// `insert` / `remove` / `subsume` / `union` / `panic` helpers at
-/// invoke time. The registry is read-locked for the duration of each
-/// `apply` call.
+/// invoke time. The hot-path read is a lock-free `load()`; updates
+/// happen rarely (only on `add_table`, between top-level commands).
 pub(crate) struct PrimitiveWrap<T: Primitive>
 where
     for<'a> T::State<'a>: egglog_bridge::UserState<'a>,
 {
     pub(crate) inner: Arc<T>,
-    pub(crate) registry: Arc<std::sync::RwLock<egglog_bridge::NamedActionRegistry>>,
+    pub(crate) registry: Arc<arc_swap::ArcSwap<egglog_bridge::NamedActionRegistry>>,
 }
 
 impl<T: Primitive> ErasedPrimitive for PrimitiveWrap<T>
@@ -256,7 +256,7 @@ where
         // `ExecutionState<'x>` reference to a shorter lifetime `'a`
         // matching the borrow; this is sound because the state is only
         // used for the duration of the apply call.
-        let registry = self.registry.read().unwrap();
+        let registry = self.registry.load();
         let mut state =
             <T::State<'_> as egglog_bridge::UserState>::wrap(exec_state, &registry);
         self.inner.apply(&mut state, args)
