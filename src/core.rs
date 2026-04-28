@@ -146,7 +146,7 @@ impl ResolvedCall {
         head: &str,
         types: &[ArcSort],
         typeinfo: &TypeInfo,
-        ctx: egglog_bridge::Context,
+        ctx: crate::Context,
     ) -> ResolvedCall {
         if let Some(ty) = typeinfo.get_func_type(head) {
             let expected = ty.input.iter().chain(once(&ty.output)).map(|s| s.name());
@@ -362,7 +362,7 @@ impl Query<StringOrEq, String> {
     pub fn get_constraints(
         &self,
         type_info: &TypeInfo,
-        ctx: egglog_bridge::Context,
+        ctx: crate::Context,
     ) -> Result<Vec<Box<dyn Constraint<AtomTerm, ArcSort>>>, TypeError> {
         let mut constraints = vec![];
         for atom in self.atoms.iter() {

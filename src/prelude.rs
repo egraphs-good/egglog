@@ -7,7 +7,7 @@
 //!
 //! - [`rule`] / [`rust_rule`] — add rules whose RHS is egglog code or a
 //!   Rust closure (the closure receives an
-//!   [`egglog_bridge::WriteState`]).
+//!   [`crate::WriteState`]).
 //! - [`query`] — run a one-shot query and read out matches.
 //! - [`BaseSort`] / [`ContainerSort`] — declare custom sort types.
 //! - [`crate::PrimitiveCommon`] + one of four kind-specific traits
@@ -338,7 +338,7 @@ pub fn rule(
 #[derive(Clone)]
 struct RustRuleRhs<F>
 where
-    F: for<'a, 'db> Fn(&mut egglog_bridge::WriteState<'a, 'db>, &[Value]) -> Option<()>
+    F: for<'a, 'db> Fn(&mut crate::WriteState<'a, 'db>, &[Value]) -> Option<()>
         + Clone
         + Send
         + Sync
@@ -351,7 +351,7 @@ where
 
 impl<F> PrimitiveCommon for RustRuleRhs<F>
 where
-    F: for<'a, 'db> Fn(&mut egglog_bridge::WriteState<'a, 'db>, &[Value]) -> Option<()>
+    F: for<'a, 'db> Fn(&mut crate::WriteState<'a, 'db>, &[Value]) -> Option<()>
         + Clone
         + Send
         + Sync
@@ -374,7 +374,7 @@ where
 
 impl<F> WritePrim for RustRuleRhs<F>
 where
-    F: for<'a, 'db> Fn(&mut egglog_bridge::WriteState<'a, 'db>, &[Value]) -> Option<()>
+    F: for<'a, 'db> Fn(&mut crate::WriteState<'a, 'db>, &[Value]) -> Option<()>
         + Clone
         + Send
         + Sync
@@ -382,7 +382,7 @@ where
 {
     fn apply<'a, 'db>(
         &self,
-        state: &mut egglog_bridge::WriteState<'a, 'db>,
+        state: &mut crate::WriteState<'a, 'db>,
         values: &[Value],
     ) -> Option<Value> {
         let unit = state.base_values().get(());
@@ -474,7 +474,7 @@ pub fn rust_rule(
     ruleset: &str,
     vars: &[(&str, ArcSort)],
     facts: Facts<String, String>,
-    func: impl for<'a, 'db> Fn(&mut egglog_bridge::WriteState<'a, 'db>, &[Value]) -> Option<()>
+    func: impl for<'a, 'db> Fn(&mut crate::WriteState<'a, 'db>, &[Value]) -> Option<()>
     + Clone
     + Send
     + Sync

@@ -7,7 +7,7 @@ use crate::{
 use ast::{ResolvedAction, ResolvedExpr, ResolvedFact, ResolvedRule, ResolvedVar, Rule};
 use core_relations::ExternalFunction;
 use egglog_ast::generic_ast::GenericAction;
-use egglog_bridge::Context;
+use crate::Context;
 
 #[derive(Clone, Debug)]
 pub struct FuncType {

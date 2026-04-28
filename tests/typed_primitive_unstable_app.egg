@@ -1,0 +1,49 @@
+; Tests for typed-primitive dispatch of `unstable-app` (#772).
+;
+; `unstable-app` has two registered variants in one overload group:
+;   - ApplyPure (PurePrim, dispatches via apply_in — pure-read)
+;   - ApplyFull (WritePrim, dispatches via apply_mut — full)
+; The constraint builder partitions their `valid_contexts` so queries
+; pick ApplyPure and rule actions pick ApplyFull.
+
+; --- 1. unstable-app over a pure primitive (`+`) works in a query.
+(sort IntFn (UnstableFn (i64 i64) i64))
+(let plus (unstable-fn "+"))
+(check (= (unstable-app plus 2 3) 5))
+
+; --- 2. unstable-app over a constructor in an action mints the eclass.
+(datatype Math (Num i64))
+(sort MathFn (UnstableFn (i64) Math))
+(let make (unstable-fn "Num"))
+; Before the rule fires, (Num 99) does not exist.
+(fail (check (Num 99)))
+
+(relation Trigger ())
+(Trigger)
+(rule ((Trigger)) ((let $minted (unstable-app make 99))))
+(run 1)
+; After the rule, (Num 99) exists in the e-graph.
+(check (Num 99))
+
+; --- 3. unstable-app over a constructor in a *query* must NOT mint.
+;     `apply_in` returns None for constructors, so the check fails.
+(fail (check (= (unstable-app make 42) (Num 42))))
+; And the rule above did not unintentionally mint (Num 42).
+(fail (check (Num 42)))
+
+; --- 4. unstable-app over a custom (non-constructor) function in an
+;     action context reads the existing row's value.
+(function dbl (i64) i64 :no-merge)
+(set (dbl 7) 14)
+(sort I2I (UnstableFn (i64) i64))
+(let twice (unstable-fn "dbl"))
+(function dbl-out (i64) i64 :no-merge)
+(rule ((Trigger)) ((set (dbl-out 7) (unstable-app twice 7))))
+(run 1)
+(check (= (dbl-out 7) 14))
+
+; --- 5. The same custom-function lookup in a top-level `check`
+;     (GlobalQuery) is conservatively refused — the same dispatch
+;     wrapper might be reachable from a rule LHS, where the read
+;     would be untracked by seminaive.
+(fail (check (= (unstable-app twice 7) 14)))
