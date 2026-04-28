@@ -1,4 +1,4 @@
-use egglog_bridge::UnionAction;
+use egglog_bridge::{UnionAction, UserState};
 use std::any::TypeId;
 use std::iter::zip;
 
@@ -261,14 +261,17 @@ impl VecMap {
     fn run<'a, 'db, S, D>(&self, state: &mut S, args: &[Value], dispatch: D) -> Option<Value>
     where
         S: egglog_bridge::UserState<'a, 'db>,
+        'db: 'a,
         D: Fn(&FunctionContainer, &mut S, &[Value]) -> Option<Value>,
     {
         let fc = state
+            .pure_view()
             .container_values()
             .get_val::<FunctionContainer>(args[0])
             .unwrap()
             .clone();
         let vec = state
+            .pure_view()
             .container_values()
             .get_val::<VecContainer>(args[1])
             .unwrap()
@@ -283,7 +286,7 @@ impl VecMap {
             do_rebuild: self.output_vec.is_eq_container_sort(),
             data: new_data,
         };
-        Some(state.register_container(new_vec))
+        Some(state.pure_view().register_container(new_vec))
     }
 }
 
@@ -337,7 +340,7 @@ impl WritePrim for VecMapFull {
         state: &mut egglog_bridge::WriteState<'a, 'db>,
         args: &[Value],
     ) -> Option<Value> {
-        self.0.run(state, args, |fc, s, a| fc.apply_mut(s.exec_state_mut(), a))
+        self.0.run(state, args, |fc, s, a| fc.apply_mut(s.raw_exec_state(), a))
     }
 }
 
@@ -390,7 +393,7 @@ impl WritePrim for Union {
             return None;
         }
         let action = self.action;
-        let es = state.exec_state_mut();
+        let es = state.raw_exec_state();
         for (l, r) in zip(left, right) {
             action.union(es, l, r);
         }

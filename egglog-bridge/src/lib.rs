@@ -42,8 +42,8 @@ pub(crate) mod rule;
 mod tests;
 
 pub use exec_state::{
-    Context, FullState, ReadState, ActionRegistry, WriteState,
-    PureState, UserState,
+    ActionRegistry, ActionView, Context, FullState, PureState, PureView, ReadState, UserState,
+    WriteState,
 };
 pub use rule::{Function, QueryEntry, RuleBuilder};
 use thiserror::Error;

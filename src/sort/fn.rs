@@ -12,12 +12,9 @@
 //! the list of partially applied arguments.
 use std::sync::Mutex;
 
-// These three traits are all used by `FunctionContainer::apply_in` /
-// `apply_mut` plus `Primitive for Ctor`. Some usages are method
-// calls behind trait bounds so they can read as unused to the compiler;
-// silence those warnings by importing the triple in one place.
 #[allow(unused_imports)]
 use crate::ExecutionState;
+use egglog_bridge::UserState;
 
 use super::*;
 
@@ -569,7 +566,7 @@ impl WritePrim for ApplyFull {
             .get_val::<FunctionContainer>(*fc_val)
             .unwrap()
             .clone();
-        fc.apply_mut(state.exec_state_mut(), args)
+        fc.apply_mut(state.raw_exec_state(), args)
     }
 }
 
@@ -588,6 +585,7 @@ impl FunctionContainer {
     pub fn apply_in<'a, 'db, S>(&self, state: &mut S, args: &[Value]) -> Option<Value>
     where
         S: egglog_bridge::UserState<'a, 'db>,
+        'db: 'a,
     {
         let args: Vec<_> = self.1.iter().map(|(_, x)| x).chain(args).copied().collect();
         // Capability set for any table lookup as a pure read. Both
@@ -609,18 +607,19 @@ impl FunctionContainer {
                 .all(|c| callee_contexts.contains(c))
         };
 
+        let view = state.pure_view();
         match &self.0 {
             ResolvedFunctionId::ConstructorLookup(action)
             | ResolvedFunctionId::CustomLookup(action) => {
                 if callee_safe(LOOKUP_READ_CONTEXTS) {
-                    state.table_lookup(action, &args)
+                    view.table_lookup(action, &args)
                 } else {
                     None
                 }
             }
             ResolvedFunctionId::Prim { id, valid_contexts } => {
                 if callee_safe(valid_contexts.as_slice()) {
-                    state.call_external_func(*id, &args)
+                    view.call_external_func(*id, &args)
                 } else {
                     None
                 }
@@ -634,7 +633,7 @@ impl FunctionContainer {
     /// lookups it mints a fresh eclass id; for custom-function lookups
     /// it returns `None` on miss; for primitives it dispatches through
     /// the raw state. Action-side callers reach the underlying
-    /// `&mut ExecutionState` via `state.exec_state_mut()`.
+    /// `&mut ExecutionState` via `state.raw_exec_state()`.
     pub fn apply_mut(&self, es: &mut ExecutionState, args: &[Value]) -> Option<Value> {
         let args: Vec<_> = self.1.iter().map(|(_, x)| x).chain(args).copied().collect();
         match &self.0 {

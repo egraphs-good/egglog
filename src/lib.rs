@@ -88,9 +88,7 @@ pub use egglog_bridge::FunctionRow;
 // Re-exports so the `add_primitive!` proc-macro can name the typed
 // primitive surface without requiring user crates to depend on
 // `egglog_bridge` directly.
-pub use egglog_bridge::{
-    FullState, ReadState, WriteState, PureState, UserState,
-};
+pub use egglog_bridge::{ActionView, FullState, PureState, PureView, ReadState, WriteState};
 use egglog_bridge::{ColumnTy, QueryEntry, UnionAction};
 use egglog_core_relations as core_relations;
 use egglog_numeric_id as numeric_id;
@@ -159,11 +157,7 @@ pub trait PrimitiveCommon: Send + Sync + 'static {
 /// Register via [`EGraph::add_pure_primitive`] or via
 /// [`EGraph::add_primitive_group`] inside a `g.add_pure(..., None)`.
 pub trait PurePrim: PrimitiveCommon {
-    fn apply<'a, 'db>(
-        &self,
-        state: &mut PureState<'a, 'db>,
-        args: &[Value],
-    ) -> Option<Value>;
+    fn apply<'a, 'db>(&self, state: &mut PureState<'a, 'db>, args: &[Value]) -> Option<Value>;
 }
 
 /// A primitive that writes to the e-graph. Body sees a
@@ -171,11 +165,7 @@ pub trait PurePrim: PrimitiveCommon {
 /// `insert` / `remove` / `subsume` / `union` / `panic`. Valid only in
 /// rule-action and global-action contexts.
 pub trait WritePrim: PrimitiveCommon {
-    fn apply<'a, 'db>(
-        &self,
-        state: &mut WriteState<'a, 'db>,
-        args: &[Value],
-    ) -> Option<Value>;
+    fn apply<'a, 'db>(&self, state: &mut WriteState<'a, 'db>, args: &[Value]) -> Option<Value>;
 }
 
 /// A primitive that reads from the database but doesn't write. Body
@@ -183,21 +173,13 @@ pub trait WritePrim: PrimitiveCommon {
 /// global-query and global-action contexts (reading from a database
 /// during a rule query would be untracked by seminaive — see #772).
 pub trait ReadPrim: PrimitiveCommon {
-    fn apply<'a, 'db>(
-        &self,
-        state: &mut ReadState<'a, 'db>,
-        args: &[Value],
-    ) -> Option<Value>;
+    fn apply<'a, 'db>(&self, state: &mut ReadState<'a, 'db>, args: &[Value]) -> Option<Value>;
 }
 
 /// A primitive that needs both DB reads and DB writes. Body sees a
 /// [`FullState`]. Valid only in the global-action context.
 pub trait FullPrim: PrimitiveCommon {
-    fn apply<'a, 'db>(
-        &self,
-        state: &mut FullState<'a, 'db>,
-        args: &[Value],
-    ) -> Option<Value>;
+    fn apply<'a, 'db>(&self, state: &mut FullState<'a, 'db>, args: &[Value]) -> Option<Value>;
 }
 
 /// Internal, dyn-compatible façade over the four kind-specific primitive
@@ -234,11 +216,7 @@ macro_rules! define_pure_primitive_wrap {
             fn valid_contexts(&self) -> &'static [egglog_bridge::Context] {
                 $state_ty::valid_contexts()
             }
-            fn invoke(
-                &self,
-                exec_state: &mut ExecutionState,
-                args: &[Value],
-            ) -> Option<Value> {
+            fn invoke(&self, exec_state: &mut ExecutionState, args: &[Value]) -> Option<Value> {
                 let mut state = $state_ty::wrap(exec_state);
                 self.inner.apply(&mut state, args)
             }
@@ -267,11 +245,7 @@ macro_rules! define_action_primitive_wrap {
             fn valid_contexts(&self) -> &'static [egglog_bridge::Context] {
                 $state_ty::valid_contexts()
             }
-            fn invoke(
-                &self,
-                exec_state: &mut ExecutionState,
-                args: &[Value],
-            ) -> Option<Value> {
+            fn invoke(&self, exec_state: &mut ExecutionState, args: &[Value]) -> Option<Value> {
                 let registry = self.registry.load();
                 let mut state = $state_ty::wrap(exec_state, &registry);
                 self.inner.apply(&mut state, args)
@@ -282,16 +256,8 @@ macro_rules! define_action_primitive_wrap {
 
 define_pure_primitive_wrap!(PrimitiveWrapPure, PurePrim, PureState);
 define_action_primitive_wrap!(PrimitiveWrapWrite, WritePrim, WriteState);
-define_pure_primitive_wrap!(
-    PrimitiveWrapRead,
-    ReadPrim,
-    ReadState
-);
-define_action_primitive_wrap!(
-    PrimitiveWrapFull,
-    FullPrim,
-    FullState
-);
+define_pure_primitive_wrap!(PrimitiveWrapRead, ReadPrim, ReadState);
+define_action_primitive_wrap!(PrimitiveWrapFull, FullPrim, FullState);
 
 /// A user-defined command output trait.
 pub trait UserDefinedCommandOutput: Debug + std::fmt::Display + Send + Sync {}
@@ -2391,7 +2357,6 @@ pub enum Error {
 #[cfg(test)]
 mod tests {
     use crate::constraint::SimpleTypeConstraint;
-    use crate::sort::*;
     use crate::*;
 
     use egglog_bridge::PureState;
@@ -2419,16 +2384,10 @@ mod tests {
             )
             .into_box()
         }
-
-        
     }
 
-impl PurePrim for InnerProduct {
-    fn apply<'a, 'db>(
-            &self,
-            state: &mut PureState<'a, 'db>,
-            args: &[Value],
-        ) -> Option<Value> {
+    impl PurePrim for InnerProduct {
+        fn apply<'a, 'db>(&self, state: &mut PureState<'a, 'db>, args: &[Value]) -> Option<Value> {
             let mut sum = 0;
             let vec1 = state
                 .container_values()
@@ -2446,7 +2405,7 @@ impl PurePrim for InnerProduct {
             }
             Some(state.base_values().get::<i64>(sum))
         }
-}
+    }
 
     #[test]
     fn test_user_defined_primitive() {

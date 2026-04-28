@@ -1,5 +1,5 @@
 use super::*;
-use egglog_bridge::UnionAction;
+use egglog_bridge::{UnionAction, UserState};
 use inner::MultiSet;
 
 #[derive(Clone, Debug, PartialEq, Eq, Hash)]
@@ -393,14 +393,17 @@ impl Map {
     fn run<'a, 'db, S, D>(&self, state: &mut S, args: &[Value], dispatch: D) -> Option<Value>
     where
         S: egglog_bridge::UserState<'a, 'db>,
+        'db: 'a,
         D: Fn(&FunctionContainer, &mut S, &[Value]) -> Option<Value>,
     {
         let fc = state
+            .pure_view()
             .container_values()
             .get_val::<FunctionContainer>(args[0])
             .unwrap()
             .clone();
         let multiset = state
+            .pure_view()
             .container_values()
             .get_val::<MultiSetContainer>(args[1])
             .unwrap()
@@ -415,7 +418,7 @@ impl Map {
             data: new_data,
             ..multiset
         };
-        Some(state.register_container(new_ms))
+        Some(state.pure_view().register_container(new_ms))
     }
 }
 
@@ -484,7 +487,7 @@ impl WritePrim for MapFull {
         state: &mut egglog_bridge::WriteState<'a, 'db>,
         args: &[Value],
     ) -> Option<Value> {
-        self.0.run(state, args, |fc, s, a| fc.apply_mut(s.exec_state_mut(), a))
+        self.0.run(state, args, |fc, s, a| fc.apply_mut(s.raw_exec_state(), a))
     }
 }
 
@@ -523,11 +526,13 @@ impl WritePrim for FillIndex {
         args: &[Value],
     ) -> Option<Value> {
         let fc = state
+            .pure_view()
             .container_values()
             .get_val::<FunctionContainer>(args[1])
             .unwrap()
             .clone();
         let multiset = state
+            .pure_view()
             .container_values()
             .get_val::<MultiSetContainer>(args[0])
             .unwrap()
@@ -539,7 +544,7 @@ impl WritePrim for FillIndex {
             ),
         };
         let unit_val = state.base_values().get::<()>(());
-        let es = state.exec_state_mut();
+        let es = state.raw_exec_state();
         for (v, c) in multiset.data.iter_counts() {
             let mut row = vec![args[0], v];
             // Skip if already filled — assumes a working merge.
@@ -588,11 +593,13 @@ impl WritePrim for ClearIndex {
         args: &[Value],
     ) -> Option<Value> {
         let fc = state
+            .pure_view()
             .container_values()
             .get_val::<FunctionContainer>(args[1])
             .unwrap()
             .clone();
         let multiset = state
+            .pure_view()
             .container_values()
             .get_val::<MultiSetContainer>(args[0])
             .unwrap()
@@ -604,7 +611,7 @@ impl WritePrim for ClearIndex {
             ),
         };
         let unit_val = state.base_values().get::<()>(());
-        let es = state.exec_state_mut();
+        let es = state.raw_exec_state();
         for (v, _) in multiset.data.iter_counts() {
             action.remove(es, &[args[0], v]);
         }
@@ -640,14 +647,17 @@ impl FlatMap {
     fn run<'a, 'db, S, D>(&self, state: &mut S, args: &[Value], dispatch: D) -> Option<Value>
     where
         S: egglog_bridge::UserState<'a, 'db>,
+        'db: 'a,
         D: Fn(&FunctionContainer, &mut S, &[Value]) -> Option<Value>,
     {
         let fc = state
+            .pure_view()
             .container_values()
             .get_val::<FunctionContainer>(args[0])
             .unwrap()
             .clone();
         let multiset = state
+            .pure_view()
             .container_values()
             .get_val::<MultiSetContainer>(args[1])
             .unwrap()
@@ -657,6 +667,7 @@ impl FlatMap {
             let mapped = dispatch(&fc, state, &[v]);
             if let Some(mapped_ms) = mapped {
                 let mapped_ms = state
+                    .pure_view()
                     .container_values()
                     .get_val::<MultiSetContainer>(mapped_ms)
                     .unwrap();
@@ -671,7 +682,7 @@ impl FlatMap {
             data: new_data,
             ..multiset
         };
-        Some(state.register_container(new_container))
+        Some(state.pure_view().register_container(new_container))
     }
 }
 
@@ -731,7 +742,7 @@ impl WritePrim for FlatMapFull {
         state: &mut egglog_bridge::WriteState<'a, 'db>,
         args: &[Value],
     ) -> Option<Value> {
-        self.0.run(state, args, |fc, s, a| fc.apply_mut(s.exec_state_mut(), a))
+        self.0.run(state, args, |fc, s, a| fc.apply_mut(s.raw_exec_state(), a))
     }
 }
 
@@ -764,14 +775,17 @@ impl Filter {
     fn run<'a, 'db, S, D>(&self, state: &mut S, args: &[Value], dispatch: D) -> Option<Value>
     where
         S: egglog_bridge::UserState<'a, 'db>,
+        'db: 'a,
         D: Fn(&FunctionContainer, &mut S, &[Value]) -> Option<Value>,
     {
         let fc = state
+            .pure_view()
             .container_values()
             .get_val::<FunctionContainer>(args[0])
             .unwrap()
             .clone();
         let multiset = state
+            .pure_view()
             .container_values()
             .get_val::<MultiSetContainer>(args[1])
             .unwrap()
@@ -787,7 +801,7 @@ impl Filter {
             data: new_data,
             ..multiset
         };
-        Some(state.register_container(new_ms))
+        Some(state.pure_view().register_container(new_ms))
     }
 }
 
@@ -847,7 +861,7 @@ impl WritePrim for FilterFull {
         state: &mut egglog_bridge::WriteState<'a, 'db>,
         args: &[Value],
     ) -> Option<Value> {
-        self.0.run(state, args, |fc, s, a| fc.apply_mut(s.exec_state_mut(), a))
+        self.0.run(state, args, |fc, s, a| fc.apply_mut(s.raw_exec_state(), a))
     }
 }
 
@@ -888,12 +902,14 @@ impl PurePrim for SumMultisets {
     ) -> Option<Value> {
         let mut data = MultiSet::<Value>::new();
         let ms_of_ms = state
+            .pure_view()
             .container_values()
             .get_val::<MultiSetContainer>(args[0])
             .unwrap()
             .clone();
         for (ms_value, counts) in ms_of_ms.data.iter_counts() {
             let ms = state
+                .pure_view()
                 .container_values()
                 .get_val::<MultiSetContainer>(ms_value)
                 .unwrap();
@@ -905,7 +921,7 @@ impl PurePrim for SumMultisets {
             data,
             do_rebuild: self.multiset.is_eq_container_sort(),
         };
-        Some(state.register_container(multiset))
+        Some(state.pure_view().register_container(multiset))
     }
 }
 
@@ -939,15 +955,18 @@ impl Reduce {
     fn run<'a, 'db, S, D>(&self, state: &mut S, args: &[Value], dispatch: D) -> Option<Value>
     where
         S: egglog_bridge::UserState<'a, 'db>,
+        'db: 'a,
         D: Fn(&FunctionContainer, &mut S, &[Value]) -> Option<Value>,
     {
         let fc = state
+            .pure_view()
             .container_values()
             .get_val::<FunctionContainer>(args[0])
             .unwrap()
             .clone();
         let initial = args[1];
         let multiset = state
+            .pure_view()
             .container_values()
             .get_val::<MultiSetContainer>(args[2])
             .unwrap()
@@ -1021,7 +1040,7 @@ impl WritePrim for ReduceFull {
         state: &mut egglog_bridge::WriteState<'a, 'db>,
         args: &[Value],
     ) -> Option<Value> {
-        self.0.run(state, args, |fc, s, a| fc.apply_mut(s.exec_state_mut(), a))
+        self.0.run(state, args, |fc, s, a| fc.apply_mut(s.raw_exec_state(), a))
     }
 }
 
@@ -1061,6 +1080,7 @@ impl WritePrim for UnionValues {
         args: &[Value],
     ) -> Option<Value> {
         let values = state
+            .pure_view()
             .container_values()
             .get_val::<MultiSetContainer>(args[0])?
             .clone()
@@ -1071,7 +1091,7 @@ impl WritePrim for UnionValues {
         }
         let first = values[0];
         let action = self.action;
-        let es = state.exec_state_mut();
+        let es = state.raw_exec_state();
         for v in values.into_iter().skip(1) {
             action.union(es, first, v);
         }
