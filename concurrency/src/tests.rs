@@ -1,18 +1,20 @@
 use std::{
+    cell::Cell,
     mem,
     sync::{
-        Arc, Barrier,
+        Arc, Barrier, Mutex,
         atomic::{AtomicUsize, Ordering},
     },
     thread::{self, sleep},
     time::Duration,
 };
 
+use proptest::prelude::*;
 use smallvec::SmallVec;
 
 use crate::{
-    ConcurrentVec, Notification, NotificationList, ParallelVecWriter, ReadOptimizedLock,
-    ResettableOnceLock,
+    BitSet, ConcurrentVec, Notification, NotificationList, ParallelVecWriter, ReadOptimizedLock,
+    ResettableOnceLock, SharedArena, SharedRef, parallel_writer::write_cell_slice,
 };
 
 #[test]
@@ -57,6 +59,23 @@ fn notification_times_out() {
     for t in threads {
         t.join().unwrap();
     }
+}
+
+#[test]
+fn notification_timeout_observes_notification() {
+    let n = Notification::default();
+    n.notify();
+    assert!(n.wait_with_timeout(Duration::from_millis(1)));
+
+    let n = Arc::new(Notification::default());
+    let n_inner = n.clone();
+    let notifier = thread::spawn(move || {
+        thread::sleep(Duration::from_millis(1));
+        n_inner.notify();
+    });
+
+    assert!(n.wait_with_timeout(Duration::from_secs(1)));
+    notifier.join().unwrap();
 }
 
 #[test]
@@ -155,6 +174,56 @@ fn simple_mutex() {
 }
 
 #[test]
+fn read_optimized_lock_convenience_methods() {
+    let mut lock = ReadOptimizedLock::<Vec<usize>>::default();
+    lock.as_mut_ref().extend([1, 2, 3]);
+    assert_eq!(lock.into_inner(), vec![1, 2, 3]);
+}
+
+#[test]
+fn read_optimized_lock_waits_for_ongoing_writer() {
+    let lock = Arc::new(ReadOptimizedLock::new(0usize));
+    let writer = lock.lock();
+    let attempted = Arc::new(Notification::new());
+    let acquired = Arc::new(Notification::new());
+
+    let lock_inner = lock.clone();
+    let attempted_inner = attempted.clone();
+    let acquired_inner = acquired.clone();
+    let waiter = thread::spawn(move || {
+        attempted_inner.notify();
+        let mut guard = lock_inner.lock();
+        *guard = 1;
+        acquired_inner.notify();
+    });
+
+    attempted.wait();
+    sleep(Duration::from_millis(1));
+    assert!(!acquired.has_been_notified());
+    mem::drop(writer);
+    acquired.wait();
+    waiter.join().unwrap();
+    assert_eq!(*lock.read(), 1);
+}
+
+#[test]
+fn bitset_get_set_resize_and_clear() {
+    let bits = BitSet::with_capacity(0);
+    assert!(!bits.get(5));
+    assert!(!bits.get(130));
+
+    bits.set(5, true);
+    bits.set(130, true);
+    assert!(bits.get(5));
+    assert!(bits.get(130));
+    assert!(!bits.get(6));
+
+    bits.set(5, false);
+    assert!(!bits.get(5));
+    assert!(bits.get(130));
+}
+
+#[test]
 fn basic_parallel_vec_push() {
     const N_THREADS: usize = 10;
     const PER_THREAD: usize = 10;
@@ -189,6 +258,26 @@ fn basic_parallel_vec_push() {
         results,
         (0..(N_THREADS * PER_THREAD)).collect::<Vec<usize>>()
     );
+}
+
+#[test]
+fn concurrent_vec_drops_initialized_values() {
+    struct DropCounter(Arc<AtomicUsize>);
+
+    impl Drop for DropCounter {
+        fn drop(&mut self) {
+            self.0.fetch_add(1, Ordering::SeqCst);
+        }
+    }
+
+    let drops = Arc::new(AtomicUsize::new(0));
+    {
+        let v = ConcurrentVec::with_capacity(0);
+        v.push(DropCounter(drops.clone()));
+        v.push(DropCounter(drops.clone()));
+    }
+
+    assert_eq!(drops.load(Ordering::SeqCst), 2);
 }
 
 #[test]
@@ -327,6 +416,76 @@ fn basic_parallel_vec_write_slice() {
     let mut v = Arc::try_unwrap(v).ok().unwrap().finish();
     v.sort();
     assert_eq!(v, (0..200).collect::<Vec<usize>>());
+}
+
+#[test]
+fn parallel_vec_writer_unsafe_read_access_reads_written_ranges() {
+    let v = ParallelVecWriter::new(vec![1, 2]);
+    let start = v.write_contents([3, 4].into_iter());
+    let access = v.unsafe_read_access();
+
+    // SAFETY: indices 0..2 were initialized in the input vector, and
+    // `start..start + 2` was initialized by the completed write above.
+    unsafe {
+        assert_eq!(*access.get_unchecked(0), 1);
+        assert_eq!(access.get_unchecked_slice(start..start + 2), &[3, 4]);
+    }
+
+    assert_eq!(v.finish(), vec![1, 2, 3, 4]);
+}
+
+#[test]
+fn parallel_vec_writer_take_resets_writer() {
+    let mut v = ParallelVecWriter::new(vec![1]);
+    v.write_contents([2, 3].into_iter());
+    assert_eq!(v.take(), vec![1, 2, 3]);
+
+    v.write_contents([4].into_iter());
+    assert_eq!(v.finish(), vec![4]);
+}
+
+#[test]
+fn parallel_vec_writer_writes_cell_slices() {
+    let v = ParallelVecWriter::new(vec![Cell::new(1)]);
+    let start = write_cell_slice(&v, &[Cell::new(2), Cell::new(3)]);
+    assert_eq!(start, 1);
+
+    let values = v
+        .finish()
+        .into_iter()
+        .map(|cell| cell.get())
+        .collect::<Vec<_>>();
+    assert_eq!(values, vec![1, 2, 3]);
+}
+
+#[test]
+#[should_panic(expected = "passed ExactSizeIterator with incorrect number of items")]
+fn parallel_vec_writer_panics_on_incorrect_exact_size_iterator() {
+    struct BadExactSizeIterator {
+        yielded: bool,
+    }
+
+    impl Iterator for BadExactSizeIterator {
+        type Item = usize;
+
+        fn next(&mut self) -> Option<Self::Item> {
+            if self.yielded {
+                None
+            } else {
+                self.yielded = true;
+                Some(1)
+            }
+        }
+    }
+
+    impl ExactSizeIterator for BadExactSizeIterator {
+        fn len(&self) -> usize {
+            2
+        }
+    }
+
+    let v = ParallelVecWriter::new(Vec::new());
+    v.write_contents(BadExactSizeIterator { yielded: false });
 }
 
 #[test]
@@ -476,4 +635,154 @@ fn resettable_once_lock_send_sync() {
 
     let result = handle.join().unwrap();
     assert_eq!(result, 43);
+}
+
+#[test]
+fn shared_arena_refs_outlive_handles() {
+    let arena = SharedArena::new();
+    let value;
+    let text;
+
+    {
+        let handle = arena.new_handle();
+        value = handle.alloc(42usize);
+        text = handle.alloc(String::from("arena allocated"));
+        assert_eq!(*value, 42);
+        assert_eq!(text.as_str(), "arena allocated");
+    }
+
+    assert_eq!(*value, 42);
+    assert_eq!(text.as_str(), "arena allocated");
+}
+
+#[test]
+fn shared_arena_allocates_from_scoped_threads() {
+    const N_THREADS: usize = 8;
+    const PER_THREAD: usize = 64;
+
+    let arena = SharedArena::new();
+    let refs = Mutex::new(Vec::new());
+
+    thread::scope(|scope| {
+        for thread_id in 0..N_THREADS {
+            let arena = &arena;
+            let refs = &refs;
+            scope.spawn(move || {
+                let handle = arena.new_handle();
+                for offset in 0..PER_THREAD {
+                    refs.lock()
+                        .unwrap()
+                        .push(handle.alloc(thread_id * PER_THREAD + offset));
+                }
+            });
+        }
+    });
+
+    let mut values = refs
+        .into_inner()
+        .unwrap()
+        .into_iter()
+        .map(|value| *value)
+        .collect::<Vec<_>>();
+    values.sort_unstable();
+    assert_eq!(values, (0..N_THREADS * PER_THREAD).collect::<Vec<_>>());
+}
+
+#[test]
+fn shared_arena_drops_values_lifo_within_a_handle() {
+    #[derive(Debug)]
+    struct DropRecorder {
+        value: usize,
+        drops: Arc<Mutex<Vec<usize>>>,
+    }
+
+    impl Drop for DropRecorder {
+        fn drop(&mut self) {
+            self.drops.lock().unwrap().push(self.value);
+        }
+    }
+
+    let drops = Arc::new(Mutex::new(Vec::new()));
+    {
+        let arena = SharedArena::new();
+        let handle = arena.new_handle();
+        for value in 0..4 {
+            handle.alloc(DropRecorder {
+                value,
+                drops: drops.clone(),
+            });
+        }
+        assert!(drops.lock().unwrap().is_empty());
+    }
+
+    assert_eq!(*drops.lock().unwrap(), vec![3, 2, 1, 0]);
+}
+
+#[test]
+fn shared_arena_send_sync_bounds() {
+    fn assert_send_sync<T: Send + Sync>() {}
+
+    assert_send_sync::<SharedArena>();
+    assert_send_sync::<SharedRef<'static, usize>>();
+}
+
+#[test]
+fn shared_arena_default_and_clone_ref() {
+    fn clone_through_trait<T: Clone>(value: &T) -> T {
+        value.clone()
+    }
+
+    let arena = SharedArena::default();
+    let handle = arena.new_handle();
+    let value = handle.alloc(11usize);
+    let cloned = clone_through_trait(&value);
+
+    assert_eq!(*cloned, 11);
+}
+
+proptest! {
+    #[test]
+    fn shared_arena_alloc_preserves_values(values in proptest::collection::vec(any::<i64>(), 0..256)) {
+        let arena = SharedArena::new();
+        let handle = arena.new_handle();
+        let refs = values
+            .iter()
+            .copied()
+            .map(|value| handle.alloc(value))
+            .collect::<Vec<_>>();
+        let got = refs.iter().map(|value| **value).collect::<Vec<_>>();
+
+        prop_assert_eq!(got, values);
+    }
+
+    #[test]
+    fn shared_arena_drops_every_registered_value(values in proptest::collection::vec(0usize..1024, 0..128)) {
+        #[derive(Debug)]
+        struct DropRecorder {
+            value: usize,
+            drops: Arc<Mutex<Vec<usize>>>,
+        }
+
+        impl Drop for DropRecorder {
+            fn drop(&mut self) {
+                self.drops.lock().unwrap().push(self.value);
+            }
+        }
+
+        let drops = Arc::new(Mutex::new(Vec::new()));
+        {
+            let arena = SharedArena::new();
+            let handle = arena.new_handle();
+            for &value in &values {
+                handle.alloc(DropRecorder {
+                    value,
+                    drops: drops.clone(),
+                });
+            }
+        }
+
+        let expected = values.into_iter().rev().collect::<Vec<_>>();
+        let got = drops.lock().unwrap();
+        prop_assert_eq!(got.as_slice(), expected.as_slice());
+    }
 }
