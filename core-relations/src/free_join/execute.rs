@@ -2113,31 +2113,31 @@ fn sort_plan_by_size_inner(
     if range.len() <= 1 {
         return;
     }
-    // How many times an atom has been intersected/joined
-    let mut times_refined = with_pool_set(|ps| ps.get::<DenseIdMap<AtomId, i64>>());
+    // How many times an atom has been intersected/joined.
+    // Use a fixed-size stack array to avoid pool/TLS overhead. Atom IDs in a
+    // plan are dense starting from 0 and typically < 20; 64 is a safe bound.
+    const MAX_ATOMS: usize = 64;
+    let mut times_refined = [0i64; MAX_ATOMS];
 
     // Count how many times each atom has been refined so far.
     for ins in instrs[..range.start].iter() {
         match ins {
             JoinStage::Intersect { scans, .. } => scans.iter().for_each(|scan| {
-                *times_refined.get_or_default(scan.atom) += 1;
+                times_refined[scan.atom.index()] += 1;
             }),
             JoinStage::FusedIntersect {
                 cover,
                 to_intersect,
                 ..
             } => {
-                *times_refined.get_or_default(cover.to_index.atom) +=
-                    cover.to_index.vars.len() as i64;
+                times_refined[cover.to_index.atom.index()] += cover.to_index.vars.len() as i64;
                 to_intersect.iter().for_each(|(spec, _)| {
-                    *times_refined.get_or_default(spec.to_index.atom) +=
-                        spec.to_index.vars.len() as i64;
+                    times_refined[spec.to_index.atom.index()] += spec.to_index.vars.len() as i64;
                 });
             }
             JoinStage::FusedIntersectMat { to_intersect, .. } => {
                 to_intersect.iter().for_each(|(spec, _)| {
-                    *times_refined.get_or_default(spec.to_index.atom) +=
-                        spec.to_index.vars.len() as i64;
+                    times_refined[spec.to_index.atom.index()] += spec.to_index.vars.len() as i64;
                 });
             }
         }
@@ -2154,17 +2154,14 @@ fn sort_plan_by_size_inner(
     // to have a larger current estimate.
     let key_fn = |join_stage: &JoinStage,
                   binding_info: &BindingInfo,
-                  times_refined: &DenseIdMap<AtomId, i64>| {
+                  times_refined: &[i64; MAX_ATOMS]| {
         let refine = match join_stage {
             JoinStage::Intersect { scans, .. } => scans
                 .iter()
-                .map(|scan| times_refined.get(scan.atom).copied().unwrap_or_default())
+                .map(|scan| times_refined[scan.atom.index()])
                 .max()
-                .unwrap(),
-            JoinStage::FusedIntersect { cover, .. } => times_refined
-                .get(cover.to_index.atom)
-                .copied()
-                .unwrap_or_default(),
+                .unwrap_or(0),
+            JoinStage::FusedIntersect { cover, .. } => times_refined[cover.to_index.atom.index()],
             JoinStage::FusedIntersectMat { bind, .. } => bind.len() as _,
         };
         (
@@ -2185,24 +2182,22 @@ fn sort_plan_by_size_inner(
         // Update the counts after a new instruction is selected.
         match &instrs[order.get(i)] {
             JoinStage::Intersect { scans, .. } => scans.iter().for_each(|scan| {
-                *times_refined.get_or_default(scan.atom) += 1;
+                times_refined[scan.atom.index()] += 1;
             }),
             JoinStage::FusedIntersect {
                 cover,
                 to_intersect,
                 ..
             } => {
-                *times_refined.get_or_default(cover.to_index.atom) +=
-                    cover.to_index.vars.len() as i64;
+                times_refined[cover.to_index.atom.index()] += cover.to_index.vars.len() as i64;
 
                 to_intersect.iter().for_each(|(spec, _)| {
-                    *times_refined.get_or_default(spec.to_index.atom) +=
-                        spec.to_index.vars.len() as i64;
+                    times_refined[spec.to_index.atom.index()] += spec.to_index.vars.len() as i64;
                 });
             }
             JoinStage::FusedIntersectMat { to_intersect, .. } => {
                 to_intersect.iter().for_each(|(spec, _)| {
-                    *times_refined.get_or_default(spec.to_index.atom) +=
+                    times_refined[spec.to_index.atom.index()] +=
                         spec.to_index.vars.len() as i64;
                 });
             }
