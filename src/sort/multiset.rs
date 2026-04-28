@@ -173,7 +173,7 @@ impl ContainerSort for MultiSetSort {
             // We can't query directly by arcsort type since it's wrapped in a ContainerSort which is not public
                 && f.value_type() == Some(TypeId::of::<MultiSetContainer>())
         }) {
-            eg.add_primitive(SumMultisets {
+            eg.add_rule_query_primitive(SumMultisets {
                 name: "multiset-sum-multisets".into(),
                 multiset: other_multiset_sort.clone(),
                 multiset_of_multisets: arc.clone(),
@@ -192,7 +192,7 @@ impl ContainerSort for MultiSetSort {
             try_registering_multiset_non_map_primitives(eg, fn_sort.clone(), arc.clone());
         }
         if self.element.is_eq_sort() {
-            eg.add_primitive(UnionValues {
+            eg.add_rule_action_primitive(UnionValues {
                 name: "multiset-union-values".into(),
                 multiset: arc.clone(),
                 action: eg.new_union_action(),
@@ -238,9 +238,9 @@ pub(crate) fn try_registering_multiset_map(
         fn_: fn_.clone(),
     };
     eg.add_primitive_group(|g| {
-        g.add(MapPure(base.clone()));
-        g.add(MapGlobalQuery(base.clone()));
-        g.add(MapFull(base));
+        g.add_rule_query(MapPure(base.clone()));
+        g.add_global_query(MapGlobalQuery(base.clone()));
+        g.add_rule_action(MapFull(base));
     });
 }
 
@@ -277,9 +277,9 @@ fn try_registering_multiset_non_map_primitives(
             skip_empty: true,
         };
         eg.add_primitive_group(|g| {
-            g.add(FilterPure(filter.clone()));
-            g.add(FilterGlobalQuery(filter.clone()));
-            g.add(FilterFull(filter));
+            g.add_rule_query(FilterPure(filter.clone()));
+            g.add_global_query(FilterGlobalQuery(filter.clone()));
+            g.add_rule_action(FilterFull(filter));
         });
 
         let filter_not = Filter {
@@ -289,9 +289,9 @@ fn try_registering_multiset_non_map_primitives(
             skip_empty: false,
         };
         eg.add_primitive_group(|g| {
-            g.add(FilterPure(filter_not.clone()));
-            g.add(FilterGlobalQuery(filter_not.clone()));
-            g.add(FilterFull(filter_not));
+            g.add_rule_query(FilterPure(filter_not.clone()));
+            g.add_global_query(FilterGlobalQuery(filter_not.clone()));
+            g.add_rule_action(FilterFull(filter_not));
         });
     }
 
@@ -307,9 +307,9 @@ fn try_registering_multiset_non_map_primitives(
             element: element.clone(),
         };
         eg.add_primitive_group(|g| {
-            g.add(ReducePure(reduce.clone()));
-            g.add(ReduceGlobalQuery(reduce.clone()));
-            g.add(ReduceFull(reduce));
+            g.add_rule_query(ReducePure(reduce.clone()));
+            g.add_global_query(ReduceGlobalQuery(reduce.clone()));
+            g.add_rule_action(ReduceFull(reduce));
         });
     }
 
@@ -319,13 +319,13 @@ fn try_registering_multiset_non_map_primitives(
         && fn_.output().name() == "i64"
     {
         let unit = eg.type_info.get_sort_by_name("Unit").unwrap().clone();
-        eg.add_primitive(FillIndex {
+        eg.add_rule_action_primitive(FillIndex {
             name: "unstable-multiset-fill-index".into(),
             multiset: multiset.clone(),
             unit: unit.clone(),
             fn_: fn_.clone(),
         });
-        eg.add_primitive(ClearIndex {
+        eg.add_rule_action_primitive(ClearIndex {
             name: "unstable-multiset-clear-index".into(),
             multiset: multiset.clone(),
             unit,
@@ -343,9 +343,9 @@ fn try_registering_multiset_non_map_primitives(
             fn_: fn_.clone(),
         };
         eg.add_primitive_group(|g| {
-            g.add(FlatMapPure(base.clone()));
-            g.add(FlatMapGlobalQuery(base.clone()));
-            g.add(FlatMapFull(base));
+            g.add_rule_query(FlatMapPure(base.clone()));
+            g.add_global_query(FlatMapGlobalQuery(base.clone()));
+            g.add_rule_action(FlatMapFull(base));
         });
     }
 }
@@ -378,9 +378,9 @@ impl Map {
         .into_box()
     }
 
-    fn run<'a, S, D>(&self, state: &mut S, args: &[Value], dispatch: D) -> Option<Value>
+    fn run<'a, 'db, S, D>(&self, state: &mut S, args: &[Value], dispatch: D) -> Option<Value>
     where
-        S: egglog_bridge::UserState<'a>,
+        S: egglog_bridge::UserState<'a, 'db>,
         D: Fn(&FunctionContainer, &mut S, &[Value]) -> Option<Value>,
     {
         let fc = state
@@ -410,17 +410,20 @@ impl Map {
 #[derive(Clone)]
 struct MapPure(Map);
 
-impl Primitive for MapPure {
-    type State<'a> = egglog_bridge::RuleQueryState<'a>;
+impl PrimitiveCommon for MapPure {
     fn name(&self) -> &str {
         &self.0.name
     }
     fn get_type_constraints(&self, span: &Span) -> Box<dyn TypeConstraint> {
         self.0.type_constraints(span)
     }
-    fn apply<'a>(
+    
+}
+
+impl RuleQueryPrim for MapPure {
+    fn apply<'a, 'db>(
         &self,
-        state: &mut egglog_bridge::RuleQueryState<'a>,
+        state: &mut egglog_bridge::RuleQueryState<'a, 'db>,
         args: &[Value],
     ) -> Option<Value> {
         self.0.run(state, args, |fc, s, a| fc.apply_in(s, a))
@@ -430,17 +433,20 @@ impl Primitive for MapPure {
 #[derive(Clone)]
 struct MapGlobalQuery(Map);
 
-impl Primitive for MapGlobalQuery {
-    type State<'a> = egglog_bridge::GlobalQueryState<'a>;
+impl PrimitiveCommon for MapGlobalQuery {
     fn name(&self) -> &str {
         &self.0.name
     }
     fn get_type_constraints(&self, span: &Span) -> Box<dyn TypeConstraint> {
         self.0.type_constraints(span)
     }
-    fn apply<'a>(
+    
+}
+
+impl GlobalQueryPrim for MapGlobalQuery {
+    fn apply<'a, 'db>(
         &self,
-        state: &mut egglog_bridge::GlobalQueryState<'a>,
+        state: &mut egglog_bridge::GlobalQueryState<'a, 'db>,
         args: &[Value],
     ) -> Option<Value> {
         self.0.run(state, args, |fc, s, a| fc.apply_in(s, a))
@@ -450,20 +456,23 @@ impl Primitive for MapGlobalQuery {
 #[derive(Clone)]
 struct MapFull(Map);
 
-impl Primitive for MapFull {
-    type State<'a> = egglog_bridge::RuleActionState<'a>;
+impl PrimitiveCommon for MapFull {
     fn name(&self) -> &str {
         &self.0.name
     }
     fn get_type_constraints(&self, span: &Span) -> Box<dyn TypeConstraint> {
         self.0.type_constraints(span)
     }
-    fn apply<'a>(
+    
+}
+
+impl RuleActionPrim for MapFull {
+    fn apply<'a, 'db>(
         &self,
-        state: &mut egglog_bridge::RuleActionState<'a>,
+        state: &mut egglog_bridge::RuleActionState<'a, 'db>,
         args: &[Value],
     ) -> Option<Value> {
-        self.0.run(state, args, |fc, s, a| fc.apply_mut(s, a))
+        self.0.run(state, args, |fc, s, a| fc.apply_mut(s.exec_state_mut(), a))
     }
 }
 
@@ -478,9 +487,7 @@ struct FillIndex {
 }
 
 // `FillIndex` writes table rows; action-only.
-impl Primitive for FillIndex {
-    type State<'a> = egglog_bridge::RuleActionState<'a>;
-
+impl PrimitiveCommon for FillIndex {
     fn name(&self) -> &str {
         &self.name
     }
@@ -494,9 +501,13 @@ impl Primitive for FillIndex {
         .into_box()
     }
 
-    fn apply<'a>(
+    
+}
+
+impl RuleActionPrim for FillIndex {
+    fn apply<'a, 'db>(
         &self,
-        state: &mut egglog_bridge::RuleActionState<'a>,
+        state: &mut egglog_bridge::RuleActionState<'a, 'db>,
         args: &[Value],
     ) -> Option<Value> {
         let fc = state
@@ -516,17 +527,16 @@ impl Primitive for FillIndex {
             ),
         };
         let unit_val = state.base_values().get::<()>(());
-        state.with_raw_exec_state(|es| {
-            for (v, c) in multiset.data.iter_counts() {
-                let mut row = vec![args[0], v];
-                // Skip if already filled — assumes a working merge.
-                if action.lookup(es, &row).is_some() {
-                    break;
-                }
-                row.push(es.base_values().get::<i64>(c.try_into().unwrap()));
-                action.insert(es, row.into_iter());
+        let es = state.exec_state_mut();
+        for (v, c) in multiset.data.iter_counts() {
+            let mut row = vec![args[0], v];
+            // Skip if already filled — assumes a working merge.
+            if action.lookup(es, &row).is_some() {
+                break;
             }
-        });
+            row.push(es.base_values().get::<i64>(c.try_into().unwrap()));
+            action.insert(es, row.into_iter());
+        }
         Some(unit_val)
     }
 }
@@ -542,9 +552,7 @@ struct ClearIndex {
 }
 
 // `ClearIndex` removes table rows; action-only.
-impl Primitive for ClearIndex {
-    type State<'a> = egglog_bridge::RuleActionState<'a>;
-
+impl PrimitiveCommon for ClearIndex {
     fn name(&self) -> &str {
         &self.name
     }
@@ -558,9 +566,13 @@ impl Primitive for ClearIndex {
         .into_box()
     }
 
-    fn apply<'a>(
+    
+}
+
+impl RuleActionPrim for ClearIndex {
+    fn apply<'a, 'db>(
         &self,
-        state: &mut egglog_bridge::RuleActionState<'a>,
+        state: &mut egglog_bridge::RuleActionState<'a, 'db>,
         args: &[Value],
     ) -> Option<Value> {
         let fc = state
@@ -580,11 +592,10 @@ impl Primitive for ClearIndex {
             ),
         };
         let unit_val = state.base_values().get::<()>(());
-        state.with_raw_exec_state(|es| {
-            for (v, _) in multiset.data.iter_counts() {
-                action.remove(es, &[args[0], v]);
-            }
-        });
+        let es = state.exec_state_mut();
+        for (v, _) in multiset.data.iter_counts() {
+            action.remove(es, &[args[0], v]);
+        }
         Some(unit_val)
     }
 }
@@ -614,9 +625,9 @@ impl FlatMap {
         .into_box()
     }
 
-    fn run<'a, S, D>(&self, state: &mut S, args: &[Value], dispatch: D) -> Option<Value>
+    fn run<'a, 'db, S, D>(&self, state: &mut S, args: &[Value], dispatch: D) -> Option<Value>
     where
-        S: egglog_bridge::UserState<'a>,
+        S: egglog_bridge::UserState<'a, 'db>,
         D: Fn(&FunctionContainer, &mut S, &[Value]) -> Option<Value>,
     {
         let fc = state
@@ -654,15 +665,18 @@ impl FlatMap {
 
 #[derive(Clone)]
 struct FlatMapPure(FlatMap);
-impl Primitive for FlatMapPure {
-    type State<'a> = egglog_bridge::RuleQueryState<'a>;
+impl PrimitiveCommon for FlatMapPure {
     fn name(&self) -> &str { &self.0.name }
     fn get_type_constraints(&self, span: &Span) -> Box<dyn TypeConstraint> {
         self.0.type_constraints(span)
     }
-    fn apply<'a>(
+    
+}
+
+impl RuleQueryPrim for FlatMapPure {
+    fn apply<'a, 'db>(
         &self,
-        state: &mut egglog_bridge::RuleQueryState<'a>,
+        state: &mut egglog_bridge::RuleQueryState<'a, 'db>,
         args: &[Value],
     ) -> Option<Value> {
         self.0.run(state, args, |fc, s, a| fc.apply_in(s, a))
@@ -671,15 +685,18 @@ impl Primitive for FlatMapPure {
 
 #[derive(Clone)]
 struct FlatMapGlobalQuery(FlatMap);
-impl Primitive for FlatMapGlobalQuery {
-    type State<'a> = egglog_bridge::GlobalQueryState<'a>;
+impl PrimitiveCommon for FlatMapGlobalQuery {
     fn name(&self) -> &str { &self.0.name }
     fn get_type_constraints(&self, span: &Span) -> Box<dyn TypeConstraint> {
         self.0.type_constraints(span)
     }
-    fn apply<'a>(
+    
+}
+
+impl GlobalQueryPrim for FlatMapGlobalQuery {
+    fn apply<'a, 'db>(
         &self,
-        state: &mut egglog_bridge::GlobalQueryState<'a>,
+        state: &mut egglog_bridge::GlobalQueryState<'a, 'db>,
         args: &[Value],
     ) -> Option<Value> {
         self.0.run(state, args, |fc, s, a| fc.apply_in(s, a))
@@ -688,18 +705,21 @@ impl Primitive for FlatMapGlobalQuery {
 
 #[derive(Clone)]
 struct FlatMapFull(FlatMap);
-impl Primitive for FlatMapFull {
-    type State<'a> = egglog_bridge::RuleActionState<'a>;
+impl PrimitiveCommon for FlatMapFull {
     fn name(&self) -> &str { &self.0.name }
     fn get_type_constraints(&self, span: &Span) -> Box<dyn TypeConstraint> {
         self.0.type_constraints(span)
     }
-    fn apply<'a>(
+    
+}
+
+impl RuleActionPrim for FlatMapFull {
+    fn apply<'a, 'db>(
         &self,
-        state: &mut egglog_bridge::RuleActionState<'a>,
+        state: &mut egglog_bridge::RuleActionState<'a, 'db>,
         args: &[Value],
     ) -> Option<Value> {
-        self.0.run(state, args, |fc, s, a| fc.apply_mut(s, a))
+        self.0.run(state, args, |fc, s, a| fc.apply_mut(s.exec_state_mut(), a))
     }
 }
 
@@ -729,9 +749,9 @@ impl Filter {
         .into_box()
     }
 
-    fn run<'a, S, D>(&self, state: &mut S, args: &[Value], dispatch: D) -> Option<Value>
+    fn run<'a, 'db, S, D>(&self, state: &mut S, args: &[Value], dispatch: D) -> Option<Value>
     where
-        S: egglog_bridge::UserState<'a>,
+        S: egglog_bridge::UserState<'a, 'db>,
         D: Fn(&FunctionContainer, &mut S, &[Value]) -> Option<Value>,
     {
         let fc = state
@@ -761,15 +781,18 @@ impl Filter {
 
 #[derive(Clone)]
 struct FilterPure(Filter);
-impl Primitive for FilterPure {
-    type State<'a> = egglog_bridge::RuleQueryState<'a>;
+impl PrimitiveCommon for FilterPure {
     fn name(&self) -> &str { &self.0.name }
     fn get_type_constraints(&self, span: &Span) -> Box<dyn TypeConstraint> {
         self.0.type_constraints(span)
     }
-    fn apply<'a>(
+    
+}
+
+impl RuleQueryPrim for FilterPure {
+    fn apply<'a, 'db>(
         &self,
-        state: &mut egglog_bridge::RuleQueryState<'a>,
+        state: &mut egglog_bridge::RuleQueryState<'a, 'db>,
         args: &[Value],
     ) -> Option<Value> {
         self.0.run(state, args, |fc, s, a| fc.apply_in(s, a))
@@ -778,15 +801,18 @@ impl Primitive for FilterPure {
 
 #[derive(Clone)]
 struct FilterGlobalQuery(Filter);
-impl Primitive for FilterGlobalQuery {
-    type State<'a> = egglog_bridge::GlobalQueryState<'a>;
+impl PrimitiveCommon for FilterGlobalQuery {
     fn name(&self) -> &str { &self.0.name }
     fn get_type_constraints(&self, span: &Span) -> Box<dyn TypeConstraint> {
         self.0.type_constraints(span)
     }
-    fn apply<'a>(
+    
+}
+
+impl GlobalQueryPrim for FilterGlobalQuery {
+    fn apply<'a, 'db>(
         &self,
-        state: &mut egglog_bridge::GlobalQueryState<'a>,
+        state: &mut egglog_bridge::GlobalQueryState<'a, 'db>,
         args: &[Value],
     ) -> Option<Value> {
         self.0.run(state, args, |fc, s, a| fc.apply_in(s, a))
@@ -795,18 +821,21 @@ impl Primitive for FilterGlobalQuery {
 
 #[derive(Clone)]
 struct FilterFull(Filter);
-impl Primitive for FilterFull {
-    type State<'a> = egglog_bridge::RuleActionState<'a>;
+impl PrimitiveCommon for FilterFull {
     fn name(&self) -> &str { &self.0.name }
     fn get_type_constraints(&self, span: &Span) -> Box<dyn TypeConstraint> {
         self.0.type_constraints(span)
     }
-    fn apply<'a>(
+    
+}
+
+impl RuleActionPrim for FilterFull {
+    fn apply<'a, 'db>(
         &self,
-        state: &mut egglog_bridge::RuleActionState<'a>,
+        state: &mut egglog_bridge::RuleActionState<'a, 'db>,
         args: &[Value],
     ) -> Option<Value> {
-        self.0.run(state, args, |fc, s, a| fc.apply_mut(s, a))
+        self.0.run(state, args, |fc, s, a| fc.apply_mut(s.exec_state_mut(), a))
     }
 }
 
@@ -822,9 +851,7 @@ struct SumMultisets {
 
 // `SumMultisets` flattens a multiset of multisets. Only reads container
 // contents and registers the result — pure.
-impl Primitive for SumMultisets {
-    type State<'a> = egglog_bridge::RuleQueryState<'a>;
-
+impl PrimitiveCommon for SumMultisets {
     fn name(&self) -> &str {
         &self.name
     }
@@ -838,9 +865,13 @@ impl Primitive for SumMultisets {
         .into_box()
     }
 
-    fn apply<'a>(
+    
+}
+
+impl RuleQueryPrim for SumMultisets {
+    fn apply<'a, 'db>(
         &self,
-        state: &mut egglog_bridge::RuleQueryState<'a>,
+        state: &mut egglog_bridge::RuleQueryState<'a, 'db>,
         args: &[Value],
     ) -> Option<Value> {
         let mut data = MultiSet::<Value>::new();
@@ -893,9 +924,9 @@ impl Reduce {
         .into_box()
     }
 
-    fn run<'a, S, D>(&self, state: &mut S, args: &[Value], dispatch: D) -> Option<Value>
+    fn run<'a, 'db, S, D>(&self, state: &mut S, args: &[Value], dispatch: D) -> Option<Value>
     where
-        S: egglog_bridge::UserState<'a>,
+        S: egglog_bridge::UserState<'a, 'db>,
         D: Fn(&FunctionContainer, &mut S, &[Value]) -> Option<Value>,
     {
         let fc = state
@@ -924,15 +955,18 @@ impl Reduce {
 
 #[derive(Clone)]
 struct ReducePure(Reduce);
-impl Primitive for ReducePure {
-    type State<'a> = egglog_bridge::RuleQueryState<'a>;
+impl PrimitiveCommon for ReducePure {
     fn name(&self) -> &str { &self.0.name }
     fn get_type_constraints(&self, span: &Span) -> Box<dyn TypeConstraint> {
         self.0.type_constraints(span)
     }
-    fn apply<'a>(
+    
+}
+
+impl RuleQueryPrim for ReducePure {
+    fn apply<'a, 'db>(
         &self,
-        state: &mut egglog_bridge::RuleQueryState<'a>,
+        state: &mut egglog_bridge::RuleQueryState<'a, 'db>,
         args: &[Value],
     ) -> Option<Value> {
         self.0.run(state, args, |fc, s, a| fc.apply_in(s, a))
@@ -941,15 +975,18 @@ impl Primitive for ReducePure {
 
 #[derive(Clone)]
 struct ReduceGlobalQuery(Reduce);
-impl Primitive for ReduceGlobalQuery {
-    type State<'a> = egglog_bridge::GlobalQueryState<'a>;
+impl PrimitiveCommon for ReduceGlobalQuery {
     fn name(&self) -> &str { &self.0.name }
     fn get_type_constraints(&self, span: &Span) -> Box<dyn TypeConstraint> {
         self.0.type_constraints(span)
     }
-    fn apply<'a>(
+    
+}
+
+impl GlobalQueryPrim for ReduceGlobalQuery {
+    fn apply<'a, 'db>(
         &self,
-        state: &mut egglog_bridge::GlobalQueryState<'a>,
+        state: &mut egglog_bridge::GlobalQueryState<'a, 'db>,
         args: &[Value],
     ) -> Option<Value> {
         self.0.run(state, args, |fc, s, a| fc.apply_in(s, a))
@@ -958,18 +995,21 @@ impl Primitive for ReduceGlobalQuery {
 
 #[derive(Clone)]
 struct ReduceFull(Reduce);
-impl Primitive for ReduceFull {
-    type State<'a> = egglog_bridge::RuleActionState<'a>;
+impl PrimitiveCommon for ReduceFull {
     fn name(&self) -> &str { &self.0.name }
     fn get_type_constraints(&self, span: &Span) -> Box<dyn TypeConstraint> {
         self.0.type_constraints(span)
     }
-    fn apply<'a>(
+    
+}
+
+impl RuleActionPrim for ReduceFull {
+    fn apply<'a, 'db>(
         &self,
-        state: &mut egglog_bridge::RuleActionState<'a>,
+        state: &mut egglog_bridge::RuleActionState<'a, 'db>,
         args: &[Value],
     ) -> Option<Value> {
-        self.0.run(state, args, |fc, s, a| fc.apply_mut(s, a))
+        self.0.run(state, args, |fc, s, a| fc.apply_mut(s.exec_state_mut(), a))
     }
 }
 
@@ -985,9 +1025,7 @@ struct UnionValues {
 }
 
 // `UnionValues` writes to the union-find; action-only.
-impl Primitive for UnionValues {
-    type State<'a> = egglog_bridge::RuleActionState<'a>;
-
+impl PrimitiveCommon for UnionValues {
     fn name(&self) -> &str {
         &self.name
     }
@@ -1001,9 +1039,13 @@ impl Primitive for UnionValues {
         .into_box()
     }
 
-    fn apply<'a>(
+    
+}
+
+impl RuleActionPrim for UnionValues {
+    fn apply<'a, 'db>(
         &self,
-        state: &mut egglog_bridge::RuleActionState<'a>,
+        state: &mut egglog_bridge::RuleActionState<'a, 'db>,
         args: &[Value],
     ) -> Option<Value> {
         let values = state
@@ -1017,11 +1059,10 @@ impl Primitive for UnionValues {
         }
         let first = values[0];
         let action = self.action;
-        state.with_raw_exec_state(|es| {
-            for v in values.into_iter().skip(1) {
-                action.union(es, first, v);
-            }
-        });
+        let es = state.exec_state_mut();
+        for v in values.into_iter().skip(1) {
+            action.union(es, first, v);
+        }
         Some(first)
     }
 }

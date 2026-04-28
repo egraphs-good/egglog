@@ -248,8 +248,8 @@ fn build_add_primitive_impl(parsed: AddPrimitive, validator: Option<Expr>) -> To
     // extension of the macro introduces a non-pure emission path, the
     // declared state would need to narrow accordingly.
     let add_call = match validator {
-        None => quote!(eg.add_primitive(#prim_use);),
-        Some(validator_expr) => quote!(eg.add_primitive_with_validator(
+        None => quote!(eg.add_rule_query_primitive(#prim_use);),
+        Some(validator_expr) => quote!(eg.add_rule_query_primitive_with_validator(
             #prim_use,
             Some(::std::sync::Arc::new(#validator_expr))
         );),
@@ -262,9 +262,7 @@ fn build_add_primitive_impl(parsed: AddPrimitive, validator: Option<Expr>) -> To
         #[derive(Clone)]
         #prim_def
 
-        impl Primitive for Prim {
-            type State<'a> = RuleQueryState<'a>;
-
+        impl PrimitiveCommon for Prim {
             fn name(&self) -> &str {
                 #name
             }
@@ -272,10 +270,12 @@ fn build_add_primitive_impl(parsed: AddPrimitive, validator: Option<Expr>) -> To
             fn get_type_constraints(&self, span: &Span) -> Box<dyn TypeConstraint> {
                 #type_constraint
             }
+        }
 
-            fn apply<'a>(
+        impl RuleQueryPrim for Prim {
+            fn apply<'a, 'db>(
                 &self,
-                state: &mut RuleQueryState<'a>,
+                state: &mut RuleQueryState<'a, 'db>,
                 args: &[Value],
             ) -> Option<Value> {
                 #apply

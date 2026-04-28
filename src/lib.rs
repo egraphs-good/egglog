@@ -15,7 +15,8 @@
 //! Start with the [**`prelude`**](prelude) module — it re-exports the
 //! types and macros most Rust callers need and documents the common
 //! entry points (`rule`, `rust_rule`, `query`, the sort traits, the
-//! [`Primitive`] trait, and the `add_primitive!` macros). Almost every
+//! [`PrimitiveCommon`] / [`RuleQueryPrim`] traits, and the
+//! `add_primitive!` macros). Almost every
 //! example in this crate's docs assumes `use egglog::prelude::*;`.
 //!
 //! For driving egglog as a script, [`EGraph::parse_and_run_program`]
@@ -26,15 +27,16 @@
 //! When the prelude isn't enough — when you want to plug Rust functions
 //! or types into the egraph — the extension points are:
 //!
-//! - **Custom primitives**: implement [`Primitive`] and register with
-//!   [`EGraph::add_primitive`]. Each primitive declares (via a GAT) the
-//!   minimum [state wrapper](egglog_bridge::UserState) it needs —
-//!   [`RuleQueryState`] for pure ones, [`RuleActionState`] for writing
-//!   ones, and so on. The Rust type checker enforces at compile time
-//!   that the body matches its declared capability profile, and the
-//!   rule builder enforces at build time that the primitive is only
-//!   invoked from contexts its state is valid in. See [`Primitive`] for
-//!   the full state→context table.
+//! - **Custom primitives**: implement [`PrimitiveCommon`] plus one of
+//!   the four kind-specific traits ([`RuleQueryPrim`],
+//!   [`RuleActionPrim`], [`GlobalQueryPrim`], [`GlobalActionPrim`])
+//!   and register via the matching `EGraph::add_*_primitive` method.
+//!   The chosen trait names the state wrapper its body sees —
+//!   [`RuleQueryState`] for pure ops, [`RuleActionState`] for writes,
+//!   etc. The Rust type checker enforces that the body only uses
+//!   capabilities that wrapper exposes; the typechecker enforces that
+//!   the primitive is only invoked from contexts the wrapper is valid
+//!   in. See each kind trait's docs for the state→context details.
 //! - **Rust-bodied rule RHS**: register via [`prelude::rust_rule`]; the
 //!   closure receives an [`egglog_bridge::RuleActionState`].
 //! - **Sorts and container types**: see [`Sort`], [`BaseSort`], and
@@ -134,134 +136,129 @@ pub const GLOBAL_NAME_PREFIX: &str = "$";
 
 pub type ArcSort = Arc<dyn Sort>;
 
-/// A custom primitive operation in egglog.
+/// Methods shared by every kind-specific primitive trait.
 ///
-/// Each primitive declares — via the GAT [`Primitive::State`] — the
-/// minimum state wrapper its body needs. The Rust type checker (not
-/// egglog's type checker) enforces at compile time that the body only
-/// uses capabilities available on that wrapper. The state choice in
-/// turn determines which execution contexts the primitive may be
-/// called from; see issue #772 for the seminaive-safety reasoning.
-///
-/// # Choosing a `State`
-///
-/// | `State<'a>` | DB reads | DB writes | Valid contexts |
-/// |---|:---:|:---:|---|
-/// | [`RuleQueryState`] | no | no | all four (rule query, rule action, global query, global action) |
-/// | [`RuleActionState`] | no | yes | rule action, global action |
-/// | [`GlobalQueryState`] | yes | no | global query, global action |
-/// | [`GlobalActionState`] | yes | yes | global action only |
-///
-/// Pick the **most permissive** wrapper the body can compile under
-/// (one with the fewest capabilities). A pure primitive belongs on
-/// `RuleQueryState`; a writing one belongs on `RuleActionState`. Same
-/// logical primitive needed in multiple contexts? Register the
-/// variants together via
-/// [`EGraph::add_primitive_group`](EGraph::add_primitive_group); the
-/// group's `valid_contexts` are partitioned into disjoint sets at
-/// registration time so each call site dispatches to a single
-/// variant.
-///
-/// # Examples in this crate
-///
-/// - **Pure primitive**: `vec-of` and similar constructors in
-///   `src/sort/vec.rs` (via the `add_primitive!` macro) declare
-///   `State = RuleQueryState`. Container interning is idempotent and
-///   thus safe in every context.
-/// - **Writing primitive**: `vec-union` in `src/sort/vec.rs` declares
-///   `State = RuleActionState` because it stages `UnionAction::union`
-///   calls.
-/// - **Triple registration**: `unstable-multiset-map` registers as a
-///   pure variant for queries, a global-query variant that allows
-///   custom-function reads, and a full variant for actions — all under
-///   one name, deduped automatically by signature.
-///
-/// # Public API trust boundaries
-///
-/// The new typed surface replaces a previous untyped `Primitive` trait
-/// that handed out raw `&mut ExecutionState`. A small number of escape
-/// hatches still exist for advanced users; each is documented in place:
-/// [`egglog_bridge::EGraph::with_execution_state`],
-/// [`egglog_bridge::EGraph::register_external_func`], and (on
-/// write-capable wrappers only)
-/// [`egglog_bridge::ExecStateWriteDb::with_raw_exec_state`].
-pub trait Primitive: Send + Sync + 'static
-where
-    for<'a> Self::State<'a>: egglog_bridge::UserState<'a>,
-{
-    /// The minimum state the primitive needs. See the trait docs for the
-    /// four permissible values.
-    type State<'a>;
-
+/// `name` and `get_type_constraints` aren't capability-dependent, so
+/// the four kind-specific traits ([`RuleQueryPrim`], [`RuleActionPrim`],
+/// [`GlobalQueryPrim`], [`GlobalActionPrim`]) require this as a
+/// supertrait rather than duplicating the methods.
+pub trait PrimitiveCommon: Send + Sync + 'static {
     /// Returns the name of this primitive.
     fn name(&self) -> &str;
 
     /// Constructs a type constraint for this primitive.
     fn get_type_constraints(&self, span: &Span) -> Box<dyn TypeConstraint>;
-
-    /// Applies the primitive. The Rust type checker enforces that the body
-    /// only uses capabilities available on `Self::State<'a>`.
-    fn apply<'a>(&self, state: &mut Self::State<'a>, args: &[Value]) -> Option<Value>;
 }
 
-/// Internal, dyn-compatible façade over [`Primitive`].
+/// A pure primitive — runs in any of the four contexts. Body sees a
+/// [`RuleQueryState`]: no DB reads, no DB writes, just base values,
+/// counters, container interning, and `call_external_func` /
+/// `table_lookup` escapes (caller-checked).
 ///
-/// The `Primitive` trait is not object-safe (it has a GAT and a method
-/// generic over the associated-type lifetimes). This trait erases those
-/// generics so the primitive can be stored and dispatched at runtime.
+/// Most primitives are pure (e.g., `+`, `<`, `vec-of`). The macros
+/// `add_primitive!` / `add_literal_prim!` generate impls of this trait.
+/// Register via [`EGraph::add_rule_query_primitive`] or via
+/// [`EGraph::add_primitive_group`] inside a `g.add_rule_query(...)`.
+pub trait RuleQueryPrim: PrimitiveCommon {
+    fn apply<'a, 'db>(
+        &self,
+        state: &mut RuleQueryState<'a, 'db>,
+        args: &[Value],
+    ) -> Option<Value>;
+}
+
+/// A primitive that writes to the e-graph. Body sees a
+/// [`RuleActionState`]: pure ops + DB writes + name-indexed
+/// `insert` / `remove` / `subsume` / `union` / `panic`. Valid only in
+/// rule-action and global-action contexts.
+pub trait RuleActionPrim: PrimitiveCommon {
+    fn apply<'a, 'db>(
+        &self,
+        state: &mut RuleActionState<'a, 'db>,
+        args: &[Value],
+    ) -> Option<Value>;
+}
+
+/// A primitive that reads from the database but doesn't write. Body
+/// sees a [`GlobalQueryState`]: pure ops + table reads. Valid only in
+/// global-query and global-action contexts (reading from a database
+/// during a rule query would be untracked by seminaive — see #772).
+pub trait GlobalQueryPrim: PrimitiveCommon {
+    fn apply<'a, 'db>(
+        &self,
+        state: &mut GlobalQueryState<'a, 'db>,
+        args: &[Value],
+    ) -> Option<Value>;
+}
+
+/// A primitive that needs both DB reads and DB writes. Body sees a
+/// [`GlobalActionState`]. Valid only in the global-action context.
+pub trait GlobalActionPrim: PrimitiveCommon {
+    fn apply<'a, 'db>(
+        &self,
+        state: &mut GlobalActionState<'a, 'db>,
+        args: &[Value],
+    ) -> Option<Value>;
+}
+
+/// Internal, dyn-compatible façade over the four kind-specific primitive
+/// traits. The four `PrimitiveWrap*` types each implement this and
+/// dispatch to the appropriate state wrapper in `invoke`.
 pub(crate) trait ErasedPrimitive: Send + Sync {
     fn name(&self) -> &str;
     fn get_type_constraints(&self, span: &Span) -> Box<dyn TypeConstraint>;
-    /// The contexts in which this primitive may be called. Derived from
-    /// `<T::State as UserState>::valid_contexts()` at construction time.
+    /// The contexts in which this primitive may be called. One of the
+    /// four `<StateType>::valid_contexts()` slices.
     fn valid_contexts(&self) -> &'static [egglog_bridge::Context];
     /// Invoke the primitive. The caller is responsible for ensuring the
     /// current context is in `valid_contexts()`; the primitive wraps
-    /// `exec_state` into its declared `State` type internally.
+    /// `exec_state` into its declared state type internally.
     fn invoke(&self, exec_state: &mut ExecutionState, args: &[Value]) -> Option<Value>;
 }
 
-/// Wraps a [`Primitive`] into an [`ErasedPrimitive`].
-///
-/// Carries an `ArcSwap` of the bridge `EGraph`'s
-/// [`NamedActionRegistry`](egglog_bridge::NamedActionRegistry) so the
-/// primitive's declared `State` wrapper can expose name-indexed
-/// `insert` / `remove` / `subsume` / `union` / `panic` helpers at
-/// invoke time. The hot-path read is a lock-free `load()`; updates
-/// happen rarely (only on `add_table`, between top-level commands).
-pub(crate) struct PrimitiveWrap<T: Primitive>
-where
-    for<'a> T::State<'a>: egglog_bridge::UserState<'a>,
-{
-    pub(crate) inner: Arc<T>,
-    pub(crate) registry: Arc<arc_swap::ArcSwap<egglog_bridge::NamedActionRegistry>>,
+/// Generates an `ErasedPrimitive` impl for one of the four kind-specific
+/// wrapper types. The hot-path `invoke` does a lock-free `ArcSwap::load`
+/// to grab the current `NamedActionRegistry` and constructs the typed
+/// state wrapper directly from `&mut ExecutionState` (no `dyn` dispatch
+/// for inner state operations).
+macro_rules! define_primitive_wrap {
+    ($wrap_name:ident, $kind_trait:ident, $state_ty:ident) => {
+        pub(crate) struct $wrap_name<T: $kind_trait> {
+            pub(crate) inner: Arc<T>,
+            pub(crate) registry: Arc<arc_swap::ArcSwap<egglog_bridge::NamedActionRegistry>>,
+        }
+
+        impl<T: $kind_trait> ErasedPrimitive for $wrap_name<T> {
+            fn name(&self) -> &str {
+                self.inner.name()
+            }
+            fn get_type_constraints(&self, span: &Span) -> Box<dyn TypeConstraint> {
+                self.inner.get_type_constraints(span)
+            }
+            fn valid_contexts(&self) -> &'static [egglog_bridge::Context] {
+                $state_ty::valid_contexts()
+            }
+            fn invoke(
+                &self,
+                exec_state: &mut ExecutionState,
+                args: &[Value],
+            ) -> Option<Value> {
+                let registry = self.registry.load();
+                let mut state = $state_ty::wrap(exec_state, &registry);
+                self.inner.apply(&mut state, args)
+            }
+        }
+    };
 }
 
-impl<T: Primitive> ErasedPrimitive for PrimitiveWrap<T>
-where
-    for<'a> T::State<'a>: egglog_bridge::UserState<'a>,
-{
-    fn name(&self) -> &str {
-        self.inner.name()
-    }
-    fn get_type_constraints(&self, span: &Span) -> Box<dyn TypeConstraint> {
-        self.inner.get_type_constraints(span)
-    }
-    fn valid_contexts(&self) -> &'static [egglog_bridge::Context] {
-        <T::State<'static> as egglog_bridge::UserState>::valid_contexts()
-    }
-    fn invoke(&self, exec_state: &mut ExecutionState, args: &[Value]) -> Option<Value> {
-        // The wrappers use a single lifetime `'a` on both the outer
-        // borrow and the inner `ExecutionState<'a>`. We shrink the
-        // `ExecutionState<'x>` reference to a shorter lifetime `'a`
-        // matching the borrow; this is sound because the state is only
-        // used for the duration of the apply call.
-        let registry = self.registry.load();
-        let mut state =
-            <T::State<'_> as egglog_bridge::UserState>::wrap(exec_state, &registry);
-        self.inner.apply(&mut state, args)
-    }
-}
+define_primitive_wrap!(PrimitiveWrapRuleQuery, RuleQueryPrim, RuleQueryState);
+define_primitive_wrap!(PrimitiveWrapRuleAction, RuleActionPrim, RuleActionState);
+define_primitive_wrap!(PrimitiveWrapGlobalQuery, GlobalQueryPrim, GlobalQueryState);
+define_primitive_wrap!(
+    PrimitiveWrapGlobalAction,
+    GlobalActionPrim,
+    GlobalActionState
+);
 
 /// A user-defined command output trait.
 pub trait UserDefinedCommandOutput: Debug + std::fmt::Display + Send + Sync {}
@@ -2378,9 +2375,7 @@ mod tests {
     // declares `State = RuleQueryState`, making it usable in all four
     // contexts. The Rust type checker enforces that the body only uses
     // methods available on `RuleQueryState`.
-    impl Primitive for InnerProduct {
-        type State<'a> = RuleQueryState<'a>;
-
+    impl PrimitiveCommon for InnerProduct {
         fn name(&self) -> &str {
             "inner-product"
         }
@@ -2394,9 +2389,13 @@ mod tests {
             .into_box()
         }
 
-        fn apply<'a>(
+        
+    }
+
+impl RuleQueryPrim for InnerProduct {
+    fn apply<'a, 'db>(
             &self,
-            state: &mut RuleQueryState<'a>,
+            state: &mut RuleQueryState<'a, 'db>,
             args: &[Value],
         ) -> Option<Value> {
             let mut sum = 0;
@@ -2416,7 +2415,7 @@ mod tests {
             }
             Some(state.base_values().get::<i64>(sum))
         }
-    }
+}
 
     #[test]
     fn test_user_defined_primitive() {
@@ -2430,7 +2429,7 @@ mod tests {
                 && s.inner_sorts()[0].name() == I64Sort.name()
         });
 
-        egraph.add_primitive(InnerProduct { vec: int_vec_sort });
+        egraph.add_rule_query_primitive(InnerProduct { vec: int_vec_sort });
 
         egraph
             .parse_and_run_program(

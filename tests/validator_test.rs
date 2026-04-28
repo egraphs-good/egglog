@@ -50,9 +50,7 @@ fn test_add_primitive_with_validator_method() {
 
     #[derive(Clone)]
     struct TestAdd;
-    impl Primitive for TestAdd {
-        type State<'a> = RuleQueryState<'a>;
-
+    impl PrimitiveCommon for TestAdd {
         fn name(&self) -> &str {
             "test-add"
         }
@@ -68,9 +66,11 @@ fn test_add_primitive_with_validator_method() {
             )
             .into_box()
         }
-        fn apply<'a>(
+    }
+    impl RuleQueryPrim for TestAdd {
+        fn apply<'a, 'db>(
             &self,
-            state: &mut RuleQueryState<'a>,
+            state: &mut RuleQueryState<'a, 'db>,
             args: &[Value],
         ) -> Option<Value> {
             let a = state.base_values().unwrap::<i64>(args[0]);
@@ -99,7 +99,7 @@ fn test_add_primitive_with_validator_method() {
         });
 
     // Add the primitive with validator using the direct method
-    egraph.add_primitive_with_validator(TestAdd, Some(validator));
+    egraph.add_rule_query_primitive_with_validator(TestAdd, Some(validator));
 
     // Verify the primitive works
     egraph
