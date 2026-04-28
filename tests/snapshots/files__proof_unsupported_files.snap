@@ -54,6 +54,7 @@ taylor51.egg
 towers-of-hanoi.egg
 tricky-type-checking.egg
 type-constraints-tests.egg
+typed_primitive_unstable_app.egg
 typeinfer.egg
 uf-extraction.egg
 unstable-fn.egg

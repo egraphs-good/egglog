@@ -38,7 +38,7 @@
 //!   the primitive is only invoked from contexts the wrapper is valid
 //!   in. See each kind trait's docs for the state→context details.
 //! - **Rust-bodied rule RHS**: register via [`prelude::rust_rule`]; the
-//!   closure receives an [`egglog_bridge::WriteState`].
+//!   closure receives an [`crate::WriteState`].
 //! - **Sorts and container types**: see [`Sort`], [`BaseSort`], and
 //!   [`ContainerSort`] (re-exported from the [`prelude`]).
 //!
@@ -52,6 +52,7 @@ mod cli;
 mod command_macro;
 pub mod constraint;
 mod core;
+mod exec_state;
 pub mod extract;
 pub mod prelude;
 mod proofs;
@@ -85,11 +86,10 @@ use egglog_ast::generic_ast::{Change, GenericExpr, Literal};
 use egglog_ast::span::Span;
 use egglog_ast::util::ListDisplay;
 pub use egglog_bridge::FunctionRow;
-// Re-exports so the `add_primitive!` proc-macro can name the typed
-// primitive surface without requiring user crates to depend on
-// `egglog_bridge` directly.
-pub use egglog_bridge::{ActionView, FullState, PureState, PureView, ReadState, WriteState};
 use egglog_bridge::{ColumnTy, QueryEntry, UnionAction};
+pub use exec_state::{
+    ActionView, Context, FullState, PureState, PureView, ReadState, UserState, WriteState,
+};
 use egglog_core_relations as core_relations;
 use egglog_numeric_id as numeric_id;
 use egglog_reports::{ReportLevel, RunReport};
@@ -190,7 +190,7 @@ pub(crate) trait ErasedPrimitive: Send + Sync {
     fn get_type_constraints(&self, span: &Span) -> Box<dyn TypeConstraint>;
     /// The contexts in which this primitive may be called. One of the
     /// four `<StateType>::valid_contexts()` slices.
-    fn valid_contexts(&self) -> &'static [egglog_bridge::Context];
+    fn valid_contexts(&self) -> &'static [crate::Context];
     /// Invoke the primitive. The caller is responsible for ensuring the
     /// current context is in `valid_contexts()`; the primitive wraps
     /// `exec_state` into its declared state type internally.
@@ -213,7 +213,7 @@ macro_rules! define_pure_primitive_wrap {
             fn get_type_constraints(&self, span: &Span) -> Box<dyn TypeConstraint> {
                 self.inner.get_type_constraints(span)
             }
-            fn valid_contexts(&self) -> &'static [egglog_bridge::Context] {
+            fn valid_contexts(&self) -> &'static [crate::Context] {
                 $state_ty::valid_contexts()
             }
             fn invoke(&self, exec_state: &mut ExecutionState, args: &[Value]) -> Option<Value> {
@@ -242,7 +242,7 @@ macro_rules! define_action_primitive_wrap {
             fn get_type_constraints(&self, span: &Span) -> Box<dyn TypeConstraint> {
                 self.inner.get_type_constraints(span)
             }
-            fn valid_contexts(&self) -> &'static [egglog_bridge::Context] {
+            fn valid_contexts(&self) -> &'static [crate::Context] {
                 $state_ty::valid_contexts()
             }
             fn invoke(&self, exec_state: &mut ExecutionState, args: &[Value]) -> Option<Value> {
@@ -2041,7 +2041,7 @@ struct BackendRule<'a> {
     type_info: &'a TypeInfo,
     /// Whether this rule is running under seminaive (a real rule) vs. a
     /// global one-shot (eval, check, etc.). Combined with whether we are in
-    /// the query or action phase, this picks the [`egglog_bridge::Context`]
+    /// the query or action phase, this picks the [`crate::Context`]
     /// used to validate primitive calls against their declared
     /// `valid_contexts`.
     seminaive: bool,
@@ -2063,23 +2063,23 @@ impl<'a> BackendRule<'a> {
         }
     }
 
-    /// The [`egglog_bridge::Context`] that applies when compiling
+    /// The [`crate::Context`] that applies when compiling
     /// primitives on the query side (LHS) of this rule.
-    fn query_context(&self) -> egglog_bridge::Context {
+    fn query_context(&self) -> crate::Context {
         if self.seminaive {
-            egglog_bridge::Context::RuleQuery
+            crate::Context::RuleQuery
         } else {
-            egglog_bridge::Context::GlobalQuery
+            crate::Context::GlobalQuery
         }
     }
 
-    /// The [`egglog_bridge::Context`] that applies when compiling
+    /// The [`crate::Context`] that applies when compiling
     /// primitives on the action side (RHS) of this rule.
-    fn action_context(&self) -> egglog_bridge::Context {
+    fn action_context(&self) -> crate::Context {
         if self.seminaive {
-            egglog_bridge::Context::RuleAction
+            crate::Context::RuleAction
         } else {
-            egglog_bridge::Context::GlobalAction
+            crate::Context::GlobalAction
         }
     }
 
@@ -2106,7 +2106,7 @@ impl<'a> BackendRule<'a> {
         &mut self,
         prim: &core::SpecializedPrimitive,
         args: &[core::ResolvedAtomTerm],
-        _ctx: egglog_bridge::Context,
+        _ctx: crate::Context,
     ) -> (ExternalFunctionId, Vec<QueryEntry>, ColumnTy) {
         // The typechecker has already picked the context-best
         // registration via `ResolvedCall::from_resolution`; we just
@@ -2359,7 +2359,7 @@ mod tests {
     use crate::constraint::SimpleTypeConstraint;
     use crate::*;
 
-    use egglog_bridge::PureState;
+    use crate::PureState;
 
     #[derive(Clone)]
     struct InnerProduct {

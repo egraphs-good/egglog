@@ -1,5 +1,6 @@
 use super::*;
-use egglog_bridge::{UnionAction, UserState};
+use crate::UserState;
+use egglog_bridge::UnionAction;
 use inner::MultiSet;
 
 #[derive(Clone, Debug, PartialEq, Eq, Hash)]
@@ -325,7 +326,7 @@ fn try_registering_multiset_non_map_primitives(
         && fn_.output().name() == "i64"
     {
         let unit = eg.type_info.get_sort_by_name("Unit").unwrap().clone();
-        eg.add_write_primitive(
+        eg.add_full_primitive(
             FillIndex {
                 name: "unstable-multiset-fill-index".into(),
                 multiset: multiset.clone(),
@@ -392,7 +393,7 @@ impl Map {
 
     fn run<'a, 'db, S, D>(&self, state: &mut S, args: &[Value], dispatch: D) -> Option<Value>
     where
-        S: egglog_bridge::UserState<'a, 'db>,
+        S: crate::UserState<'a, 'db>,
         'db: 'a,
         D: Fn(&FunctionContainer, &mut S, &[Value]) -> Option<Value>,
     {
@@ -438,7 +439,7 @@ impl PrimitiveCommon for MapPure {
 impl PurePrim for MapPure {
     fn apply<'a, 'db>(
         &self,
-        state: &mut egglog_bridge::PureState<'a, 'db>,
+        state: &mut crate::PureState<'a, 'db>,
         args: &[Value],
     ) -> Option<Value> {
         self.0.run(state, args, |fc, s, a| fc.apply_in(s, a))
@@ -461,7 +462,7 @@ impl PrimitiveCommon for MapGlobalQuery {
 impl ReadPrim for MapGlobalQuery {
     fn apply<'a, 'db>(
         &self,
-        state: &mut egglog_bridge::ReadState<'a, 'db>,
+        state: &mut crate::ReadState<'a, 'db>,
         args: &[Value],
     ) -> Option<Value> {
         self.0.run(state, args, |fc, s, a| fc.apply_in(s, a))
@@ -484,7 +485,7 @@ impl PrimitiveCommon for MapFull {
 impl WritePrim for MapFull {
     fn apply<'a, 'db>(
         &self,
-        state: &mut egglog_bridge::WriteState<'a, 'db>,
+        state: &mut crate::WriteState<'a, 'db>,
         args: &[Value],
     ) -> Option<Value> {
         self.0.run(state, args, |fc, s, a| fc.apply_mut(s.raw_exec_state(), a))
@@ -501,7 +502,10 @@ struct FillIndex {
     fn_: Arc<FunctionSort>,
 }
 
-// `FillIndex` writes table rows; action-only.
+// `FillIndex` reads existing rows (to skip already-filled keys) and
+// then writes — that read makes its effect depend on live DB state, so
+// it cannot run in `RuleAction` without breaking saturation detection.
+// Registered as a `FullPrim` (GlobalAction-only).
 impl PrimitiveCommon for FillIndex {
     fn name(&self) -> &str {
         &self.name
@@ -519,10 +523,10 @@ impl PrimitiveCommon for FillIndex {
     
 }
 
-impl WritePrim for FillIndex {
+impl FullPrim for FillIndex {
     fn apply<'a, 'db>(
         &self,
-        state: &mut egglog_bridge::WriteState<'a, 'db>,
+        state: &mut crate::FullState<'a, 'db>,
         args: &[Value],
     ) -> Option<Value> {
         let fc = state
@@ -589,7 +593,7 @@ impl PrimitiveCommon for ClearIndex {
 impl WritePrim for ClearIndex {
     fn apply<'a, 'db>(
         &self,
-        state: &mut egglog_bridge::WriteState<'a, 'db>,
+        state: &mut crate::WriteState<'a, 'db>,
         args: &[Value],
     ) -> Option<Value> {
         let fc = state
@@ -646,7 +650,7 @@ impl FlatMap {
 
     fn run<'a, 'db, S, D>(&self, state: &mut S, args: &[Value], dispatch: D) -> Option<Value>
     where
-        S: egglog_bridge::UserState<'a, 'db>,
+        S: crate::UserState<'a, 'db>,
         'db: 'a,
         D: Fn(&FunctionContainer, &mut S, &[Value]) -> Option<Value>,
     {
@@ -699,7 +703,7 @@ impl PrimitiveCommon for FlatMapPure {
 impl PurePrim for FlatMapPure {
     fn apply<'a, 'db>(
         &self,
-        state: &mut egglog_bridge::PureState<'a, 'db>,
+        state: &mut crate::PureState<'a, 'db>,
         args: &[Value],
     ) -> Option<Value> {
         self.0.run(state, args, |fc, s, a| fc.apply_in(s, a))
@@ -719,7 +723,7 @@ impl PrimitiveCommon for FlatMapGlobalQuery {
 impl ReadPrim for FlatMapGlobalQuery {
     fn apply<'a, 'db>(
         &self,
-        state: &mut egglog_bridge::ReadState<'a, 'db>,
+        state: &mut crate::ReadState<'a, 'db>,
         args: &[Value],
     ) -> Option<Value> {
         self.0.run(state, args, |fc, s, a| fc.apply_in(s, a))
@@ -739,7 +743,7 @@ impl PrimitiveCommon for FlatMapFull {
 impl WritePrim for FlatMapFull {
     fn apply<'a, 'db>(
         &self,
-        state: &mut egglog_bridge::WriteState<'a, 'db>,
+        state: &mut crate::WriteState<'a, 'db>,
         args: &[Value],
     ) -> Option<Value> {
         self.0.run(state, args, |fc, s, a| fc.apply_mut(s.raw_exec_state(), a))
@@ -774,7 +778,7 @@ impl Filter {
 
     fn run<'a, 'db, S, D>(&self, state: &mut S, args: &[Value], dispatch: D) -> Option<Value>
     where
-        S: egglog_bridge::UserState<'a, 'db>,
+        S: crate::UserState<'a, 'db>,
         'db: 'a,
         D: Fn(&FunctionContainer, &mut S, &[Value]) -> Option<Value>,
     {
@@ -818,7 +822,7 @@ impl PrimitiveCommon for FilterPure {
 impl PurePrim for FilterPure {
     fn apply<'a, 'db>(
         &self,
-        state: &mut egglog_bridge::PureState<'a, 'db>,
+        state: &mut crate::PureState<'a, 'db>,
         args: &[Value],
     ) -> Option<Value> {
         self.0.run(state, args, |fc, s, a| fc.apply_in(s, a))
@@ -838,7 +842,7 @@ impl PrimitiveCommon for FilterGlobalQuery {
 impl ReadPrim for FilterGlobalQuery {
     fn apply<'a, 'db>(
         &self,
-        state: &mut egglog_bridge::ReadState<'a, 'db>,
+        state: &mut crate::ReadState<'a, 'db>,
         args: &[Value],
     ) -> Option<Value> {
         self.0.run(state, args, |fc, s, a| fc.apply_in(s, a))
@@ -858,7 +862,7 @@ impl PrimitiveCommon for FilterFull {
 impl WritePrim for FilterFull {
     fn apply<'a, 'db>(
         &self,
-        state: &mut egglog_bridge::WriteState<'a, 'db>,
+        state: &mut crate::WriteState<'a, 'db>,
         args: &[Value],
     ) -> Option<Value> {
         self.0.run(state, args, |fc, s, a| fc.apply_mut(s.raw_exec_state(), a))
@@ -897,7 +901,7 @@ impl PrimitiveCommon for SumMultisets {
 impl PurePrim for SumMultisets {
     fn apply<'a, 'db>(
         &self,
-        state: &mut egglog_bridge::PureState<'a, 'db>,
+        state: &mut crate::PureState<'a, 'db>,
         args: &[Value],
     ) -> Option<Value> {
         let mut data = MultiSet::<Value>::new();
@@ -954,7 +958,7 @@ impl Reduce {
 
     fn run<'a, 'db, S, D>(&self, state: &mut S, args: &[Value], dispatch: D) -> Option<Value>
     where
-        S: egglog_bridge::UserState<'a, 'db>,
+        S: crate::UserState<'a, 'db>,
         'db: 'a,
         D: Fn(&FunctionContainer, &mut S, &[Value]) -> Option<Value>,
     {
@@ -997,7 +1001,7 @@ impl PrimitiveCommon for ReducePure {
 impl PurePrim for ReducePure {
     fn apply<'a, 'db>(
         &self,
-        state: &mut egglog_bridge::PureState<'a, 'db>,
+        state: &mut crate::PureState<'a, 'db>,
         args: &[Value],
     ) -> Option<Value> {
         self.0.run(state, args, |fc, s, a| fc.apply_in(s, a))
@@ -1017,7 +1021,7 @@ impl PrimitiveCommon for ReduceGlobalQuery {
 impl ReadPrim for ReduceGlobalQuery {
     fn apply<'a, 'db>(
         &self,
-        state: &mut egglog_bridge::ReadState<'a, 'db>,
+        state: &mut crate::ReadState<'a, 'db>,
         args: &[Value],
     ) -> Option<Value> {
         self.0.run(state, args, |fc, s, a| fc.apply_in(s, a))
@@ -1037,7 +1041,7 @@ impl PrimitiveCommon for ReduceFull {
 impl WritePrim for ReduceFull {
     fn apply<'a, 'db>(
         &self,
-        state: &mut egglog_bridge::WriteState<'a, 'db>,
+        state: &mut crate::WriteState<'a, 'db>,
         args: &[Value],
     ) -> Option<Value> {
         self.0.run(state, args, |fc, s, a| fc.apply_mut(s.raw_exec_state(), a))
@@ -1076,7 +1080,7 @@ impl PrimitiveCommon for UnionValues {
 impl WritePrim for UnionValues {
     fn apply<'a, 'db>(
         &self,
-        state: &mut egglog_bridge::WriteState<'a, 'db>,
+        state: &mut crate::WriteState<'a, 'db>,
         args: &[Value],
     ) -> Option<Value> {
         let values = state

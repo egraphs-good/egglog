@@ -1,4 +1,4 @@
-use egglog_bridge::{UnionAction, UserState};
+use egglog_bridge::UnionAction;
 use std::any::TypeId;
 use std::iter::zip;
 
@@ -260,7 +260,7 @@ impl VecMap {
 
     fn run<'a, 'db, S, D>(&self, state: &mut S, args: &[Value], dispatch: D) -> Option<Value>
     where
-        S: egglog_bridge::UserState<'a, 'db>,
+        S: crate::UserState<'a, 'db>,
         'db: 'a,
         D: Fn(&FunctionContainer, &mut S, &[Value]) -> Option<Value>,
     {
@@ -301,7 +301,7 @@ impl PrimitiveCommon for VecMapPure {
 impl PurePrim for VecMapPure {
     fn apply<'a, 'db>(
         &self,
-        state: &mut egglog_bridge::PureState<'a, 'db>,
+        state: &mut crate::PureState<'a, 'db>,
         args: &[Value],
     ) -> Option<Value> {
         self.0.run(state, args, |fc, s, a| fc.apply_in(s, a))
@@ -319,7 +319,7 @@ impl PrimitiveCommon for VecMapGlobalQuery {
 impl ReadPrim for VecMapGlobalQuery {
     fn apply<'a, 'db>(
         &self,
-        state: &mut egglog_bridge::ReadState<'a, 'db>,
+        state: &mut crate::ReadState<'a, 'db>,
         args: &[Value],
     ) -> Option<Value> {
         self.0.run(state, args, |fc, s, a| fc.apply_in(s, a))
@@ -337,7 +337,7 @@ impl PrimitiveCommon for VecMapFull {
 impl WritePrim for VecMapFull {
     fn apply<'a, 'db>(
         &self,
-        state: &mut egglog_bridge::WriteState<'a, 'db>,
+        state: &mut crate::WriteState<'a, 'db>,
         args: &[Value],
     ) -> Option<Value> {
         self.0.run(state, args, |fc, s, a| fc.apply_mut(s.raw_exec_state(), a))
@@ -376,7 +376,7 @@ impl PrimitiveCommon for Union {
 impl WritePrim for Union {
     fn apply<'a, 'db>(
         &self,
-        state: &mut egglog_bridge::WriteState<'a, 'db>,
+        state: &mut crate::WriteState<'a, 'db>,
         args: &[Value],
     ) -> Option<Value> {
         let left = state

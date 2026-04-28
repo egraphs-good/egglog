@@ -14,7 +14,6 @@ use std::sync::Mutex;
 
 #[allow(unused_imports)]
 use crate::ExecutionState;
-use egglog_bridge::UserState;
 
 use super::*;
 
@@ -382,7 +381,7 @@ impl PrimitiveCommon for Ctor {
 impl PurePrim for Ctor {
     fn apply<'a, 'db>(
         &self,
-        state: &mut egglog_bridge::PureState<'a, 'db>,
+        state: &mut crate::PureState<'a, 'db>,
         args: &[Value],
     ) -> Option<Value> {
         let (rf, args) = args.split_first().unwrap();
@@ -462,7 +461,7 @@ pub enum ResolvedFunctionId {
     /// caller's context.
     Prim {
         id: ExternalFunctionId,
-        valid_contexts: Vec<egglog_bridge::Context>,
+        valid_contexts: Vec<crate::Context>,
     },
 }
 
@@ -529,7 +528,7 @@ impl PrimitiveCommon for ApplyPure {
 impl PurePrim for ApplyPure {
     fn apply<'a, 'db>(
         &self,
-        state: &mut egglog_bridge::PureState<'a, 'db>,
+        state: &mut crate::PureState<'a, 'db>,
         args: &[Value],
     ) -> Option<Value> {
         let (fc_val, args) = args.split_first().unwrap();
@@ -557,7 +556,7 @@ impl PrimitiveCommon for ApplyFull {
 impl WritePrim for ApplyFull {
     fn apply<'a, 'db>(
         &self,
-        state: &mut egglog_bridge::WriteState<'a, 'db>,
+        state: &mut crate::WriteState<'a, 'db>,
         args: &[Value],
     ) -> Option<Value> {
         let (fc_val, args) = args.split_first().unwrap();
@@ -584,7 +583,7 @@ impl FunctionContainer {
     /// per-call seminaive-soundness contract that this body satisfies.
     pub fn apply_in<'a, 'db, S>(&self, state: &mut S, args: &[Value]) -> Option<Value>
     where
-        S: egglog_bridge::UserState<'a, 'db>,
+        S: crate::UserState<'a, 'db>,
         'db: 'a,
     {
         let args: Vec<_> = self.1.iter().map(|(_, x)| x).chain(args).copied().collect();
@@ -594,14 +593,14 @@ impl FunctionContainer {
         // safe everywhere except `RuleQuery` (untracked seminaive read).
         // The difference between the two variants only matters in
         // `apply_mut` — constructor lookups there mint on miss.
-        const LOOKUP_READ_CONTEXTS: &[egglog_bridge::Context] = &[
-            egglog_bridge::Context::RuleAction,
-            egglog_bridge::Context::GlobalQuery,
-            egglog_bridge::Context::GlobalAction,
+        const LOOKUP_READ_CONTEXTS: &[crate::Context] = &[
+            crate::Context::RuleAction,
+            crate::Context::GlobalQuery,
+            crate::Context::GlobalAction,
         ];
 
         let caller_contexts = S::valid_contexts();
-        let callee_safe = |callee_contexts: &[egglog_bridge::Context]| {
+        let callee_safe = |callee_contexts: &[crate::Context]| {
             caller_contexts
                 .iter()
                 .all(|c| callee_contexts.contains(c))

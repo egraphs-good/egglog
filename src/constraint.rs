@@ -510,7 +510,7 @@ impl Assignment<AtomTerm, ArcSort> {
         &self,
         expr: &GenericExpr<CorrespondingVar<String, String>, String>,
         typeinfo: &TypeInfo,
-        ctx: egglog_bridge::Context,
+        ctx: crate::Context,
     ) -> ResolvedExpr {
         match &expr {
             GenericExpr::Lit(span, literal) => ResolvedExpr::Lit(span.clone(), literal.clone()),
@@ -561,7 +561,7 @@ impl Assignment<AtomTerm, ArcSort> {
         &self,
         facts: &GenericFact<CorrespondingVar<String, String>, String>,
         typeinfo: &TypeInfo,
-        ctx: egglog_bridge::Context,
+        ctx: crate::Context,
     ) -> ResolvedFact {
         match facts {
             GenericFact::Eq(span, e1, e2) => ResolvedFact::Eq(
@@ -579,7 +579,7 @@ impl Assignment<AtomTerm, ArcSort> {
         &self,
         mapped_facts: &[GenericFact<CorrespondingVar<String, String>, String>],
         typeinfo: &TypeInfo,
-        ctx: egglog_bridge::Context,
+        ctx: crate::Context,
     ) -> Vec<ResolvedFact> {
         mapped_facts
             .iter()
@@ -591,7 +591,7 @@ impl Assignment<AtomTerm, ArcSort> {
         &self,
         action: &MappedAction,
         typeinfo: &TypeInfo,
-        ctx: egglog_bridge::Context,
+        ctx: crate::Context,
     ) -> Result<ResolvedAction, TypeError> {
         match action {
             GenericAction::Let(span, var, expr) => {
@@ -691,7 +691,7 @@ impl Assignment<AtomTerm, ArcSort> {
         &self,
         mapped_actions: &GenericActions<CorrespondingVar<String, String>, String>,
         typeinfo: &TypeInfo,
-        ctx: egglog_bridge::Context,
+        ctx: crate::Context,
     ) -> Result<ResolvedActions, TypeError> {
         let actions = mapped_actions
             .iter()
@@ -738,7 +738,7 @@ impl Problem<AtomTerm, ArcSort> {
         &mut self,
         query: &Query<StringOrEq, String>,
         typeinfo: &TypeInfo,
-        ctx: egglog_bridge::Context,
+        ctx: crate::Context,
     ) -> Result<(), TypeError> {
         self.constraints
             .extend(query.get_constraints(typeinfo, ctx)?);
@@ -751,7 +751,7 @@ impl Problem<AtomTerm, ArcSort> {
         actions: &GenericCoreActions<String, String>,
         typeinfo: &TypeInfo,
         symbol_gen: &mut SymbolGen,
-        ctx: egglog_bridge::Context,
+        ctx: crate::Context,
     ) -> Result<(), TypeError> {
         for action in actions.0.iter() {
             self.constraints
@@ -784,12 +784,12 @@ impl Problem<AtomTerm, ArcSort> {
         } = rule;
         // Rule body atoms run as the LHS query; head atoms run as the
         // RHS action under seminaive semantics.
-        self.add_query(body, typeinfo, egglog_bridge::Context::RuleQuery)?;
+        self.add_query(body, typeinfo, crate::Context::RuleQuery)?;
         self.add_actions(
             head,
             typeinfo,
             symbol_gen,
-            egglog_bridge::Context::RuleAction,
+            crate::Context::RuleAction,
         )?;
         Ok(())
     }
@@ -811,7 +811,7 @@ impl CoreAction {
         &self,
         typeinfo: &TypeInfo,
         symbol_gen: &mut SymbolGen,
-        ctx: egglog_bridge::Context,
+        ctx: crate::Context,
     ) -> Result<Vec<Box<dyn Constraint<AtomTerm, ArcSort>>>, TypeError> {
         match self {
             CoreAction::Let(span, symbol, f, args) => {
@@ -880,7 +880,7 @@ impl Atom<StringOrEq> {
     pub(crate) fn get_constraints(
         &self,
         type_info: &TypeInfo,
-        ctx: egglog_bridge::Context,
+        ctx: crate::Context,
     ) -> Result<Vec<Box<dyn Constraint<AtomTerm, ArcSort>>>, TypeError> {
         let literal_constraints = get_literal_and_global_constraints(&self.args, type_info);
         match &self.head {
@@ -908,7 +908,7 @@ fn get_atom_application_constraints(
     args: &[AtomTerm],
     span: &Span,
     type_info: &TypeInfo,
-    ctx: egglog_bridge::Context,
+    ctx: crate::Context,
 ) -> Result<Vec<Box<dyn Constraint<AtomTerm, ArcSort>>>, TypeError> {
     // An atom can have potentially different semantics due to polymorphism
     // e.g. (set-empty) can mean any empty set with some element type.
