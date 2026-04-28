@@ -42,8 +42,8 @@ pub(crate) mod rule;
 mod tests;
 
 pub use exec_state::{
-    Context, ExecStateCore, ExecStateWriteDb, GlobalActionState, GlobalQueryState,
-    NamedActionRegistry, RuleActionState, RuleQueryState, UserState,
+    Context, FullState, ReadState, ActionRegistry, WriteState,
+    PureState, UserState,
 };
 pub use rule::{Function, QueryEntry, RuleBuilder};
 use thiserror::Error;
@@ -82,13 +82,13 @@ pub struct EGraph {
     report_level: ReportLevel,
     /// Live registry of name-indexed action handles. Shared (via
     /// `Arc<ArcSwap<_>>`) with state wrappers and primitive callbacks
-    /// in the egglog crate so [`RuleActionState`] /
-    /// [`GlobalActionState`] can implement `insert(name, ...)`,
+    /// in the egglog crate so [`WriteState`] /
+    /// [`FullState`] can implement `insert(name, ...)`,
     /// `union`, etc. `ArcSwap` is used (over `RwLock`) because the
     /// hot-path read happens on every primitive invocation, while
     /// updates only happen between top-level commands via
     /// [`add_table`](EGraph::add_table); we want lock-free reads.
-    action_registry: Arc<ArcSwap<NamedActionRegistry>>,
+    action_registry: Arc<ArcSwap<ActionRegistry>>,
 }
 
 pub type Result<T> = std::result::Result<T, anyhow::Error>;
@@ -121,7 +121,7 @@ impl Default for EGraph {
         panic_funcs.insert(default_panic_msg, default_panic_id);
 
         let union_action = UnionAction::from_parts(uf_table, ts_counter);
-        let action_registry = Arc::new(ArcSwap::from_pointee(NamedActionRegistry::new(
+        let action_registry = Arc::new(ArcSwap::from_pointee(ActionRegistry::new(
             union_action,
             default_panic_id,
         )));
@@ -512,12 +512,12 @@ impl EGraph {
         res
     }
 
-    /// A handle to the live [`NamedActionRegistry`] for this EGraph.
+    /// A handle to the live [`ActionRegistry`] for this EGraph.
     /// The handle is shared (`Arc<ArcSwap<_>>`); cloning the outer
     /// `Arc` does not duplicate the underlying registry. Used by the
     /// egglog crate's primitive machinery to thread the registry into
     /// state wrappers at invoke time via cheap `load()` reads.
-    pub fn action_registry(&self) -> Arc<ArcSwap<NamedActionRegistry>> {
+    pub fn action_registry(&self) -> Arc<ArcSwap<ActionRegistry>> {
         self.action_registry.clone()
     }
 
@@ -874,8 +874,8 @@ impl EGraph {
     /// # Seminaive-safety trust boundary
     ///
     /// This method hands out a raw `&mut ExecutionState`, which bypasses
-    /// the typed state wrappers ([`RuleQueryState`],
-    /// [`RuleActionState`], [`GlobalQueryState`], [`GlobalActionState`])
+    /// the typed state wrappers ([`PureState`],
+    /// [`WriteState`], [`ReadState`], [`FullState`])
     /// that enforce #772's seminaive-safety model. Treat it as
     /// top-level / global-action context: appropriate for one-shot
     /// database manipulation from outside any rule, not for use inside

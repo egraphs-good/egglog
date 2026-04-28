@@ -239,7 +239,7 @@ fn tableaction_hot_path_setup(case: RustRuleTableActionBenchCase) -> RustRuleBen
 }
 
 // Mimics eggplant's `math-microbenchmark` hotspot pattern:
-// many matches, and each match does several `RustRuleContext` table ops
+// many matches, and each match does several `WriteState` table ops
 // (insert + lookup + union). Also inflates the number of tables to make any
 // per-match table-action cloning/lookup overhead visible.
 // which is more representative of real-world Rust rule usage patterns than insert_loop_setup.

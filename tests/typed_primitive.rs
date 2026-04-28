@@ -1,82 +1,306 @@
-//! Tests for the typed [`egglog::Primitive`] API and the seminaive-safety
+//! Tests for the typed primitive surface and the seminaive-safety
 //! enforcement added in issue #772.
+//!
+//! Covers:
+//! - Pure / write / read / full primitives accepted only in their
+//!   respective valid contexts (typechecker rejects others).
+//! - `unstable-fn` over a constructor in a query context is filtered
+//!   (does NOT mint an eclass), but works in actions.
+//! - `unstable-fn` over a custom function is filtered in rule queries.
+//! - `add_primitive_group` partitions overlapping `valid_contexts` so
+//!   each call site sees exactly one variant.
+//! - Two non-grouped same-signature registrations cause a typecheck
+//!   error (XOR rejects the ambiguous match).
 
 use egglog::ast::Span;
 use egglog::constraint::{SimpleTypeConstraint, TypeConstraint};
 use egglog::sort::I64Sort;
-use egglog::{ExecStateCore, RuleActionState};
-use egglog::{EGraph, PrimitiveCommon, RuleActionPrim, Value, prelude::*};
+use egglog::{
+    EGraph, FullPrim, FullState, PrimitiveCommon, PurePrim, PureState, ReadPrim, ReadState, Value,
+    WritePrim, WriteState, prelude::*,
+};
 
-/// A primitive implementing `RuleActionPrim` is rejected when used in
-/// a rule-query (seminaive LHS) context. The check fires at typecheck
-/// time via `PrimitiveWithId::valid_contexts`.
+// --- shared test fixtures ---
+
+/// A pure primitive that adds two i64s. Trivially safe in every context.
+#[derive(Clone)]
+struct PureAdd(&'static str);
+impl PrimitiveCommon for PureAdd {
+    fn name(&self) -> &str {
+        self.0
+    }
+    fn get_type_constraints(&self, span: &Span) -> Box<dyn TypeConstraint> {
+        SimpleTypeConstraint::new(
+            self.name(),
+            vec![
+                I64Sort.to_arcsort(),
+                I64Sort.to_arcsort(),
+                I64Sort.to_arcsort(),
+            ],
+            span.clone(),
+        )
+        .into_box()
+    }
+}
+impl PurePrim for PureAdd {
+    fn apply<'a, 'db>(&self, state: &mut PureState<'a, 'db>, args: &[Value]) -> Option<Value> {
+        let a = state.base_values().unwrap::<i64>(args[0]);
+        let b = state.base_values().unwrap::<i64>(args[1]);
+        Some(state.base_values().get(a + b))
+    }
+}
+
+/// A write primitive (touches the wrapper's `WriteState` surface). It
+/// just returns its first arg; the body uses `&mut self`-shaped methods
+/// so it only type-checks against `WriteState`.
+#[derive(Clone)]
+struct WriteEcho(&'static str);
+impl PrimitiveCommon for WriteEcho {
+    fn name(&self) -> &str {
+        self.0
+    }
+    fn get_type_constraints(&self, span: &Span) -> Box<dyn TypeConstraint> {
+        SimpleTypeConstraint::new(
+            self.name(),
+            vec![I64Sort.to_arcsort(), I64Sort.to_arcsort()],
+            span.clone(),
+        )
+        .into_box()
+    }
+}
+impl WritePrim for WriteEcho {
+    fn apply<'a, 'db>(&self, state: &mut WriteState<'a, 'db>, args: &[Value]) -> Option<Value> {
+        let _ = state.base_values();
+        Some(args[0])
+    }
+}
+
+/// A write primitive with the same `(i64, i64) -> i64` signature as
+/// `PureAdd`, used for grouped-registration tests where both variants
+/// must share a signature.
+#[derive(Clone)]
+struct WriteAdd(&'static str);
+impl PrimitiveCommon for WriteAdd {
+    fn name(&self) -> &str {
+        self.0
+    }
+    fn get_type_constraints(&self, span: &Span) -> Box<dyn TypeConstraint> {
+        SimpleTypeConstraint::new(
+            self.name(),
+            vec![
+                I64Sort.to_arcsort(),
+                I64Sort.to_arcsort(),
+                I64Sort.to_arcsort(),
+            ],
+            span.clone(),
+        )
+        .into_box()
+    }
+}
+impl WritePrim for WriteAdd {
+    fn apply<'a, 'db>(&self, state: &mut WriteState<'a, 'db>, args: &[Value]) -> Option<Value> {
+        let a = state.base_values().unwrap::<i64>(args[0]);
+        let b = state.base_values().unwrap::<i64>(args[1]);
+        Some(state.base_values().get(a + b))
+    }
+}
+
+/// A read primitive — uses `ReadState` (no writes, but reads the DB).
+#[derive(Clone)]
+struct ReadEcho(&'static str);
+impl PrimitiveCommon for ReadEcho {
+    fn name(&self) -> &str {
+        self.0
+    }
+    fn get_type_constraints(&self, span: &Span) -> Box<dyn TypeConstraint> {
+        SimpleTypeConstraint::new(
+            self.name(),
+            vec![I64Sort.to_arcsort(), I64Sort.to_arcsort()],
+            span.clone(),
+        )
+        .into_box()
+    }
+}
+impl ReadPrim for ReadEcho {
+    fn apply<'a, 'db>(&self, state: &mut ReadState<'a, 'db>, args: &[Value]) -> Option<Value> {
+        let _ = state.base_values();
+        Some(args[0])
+    }
+}
+
+/// A full primitive — uses `FullState` (writes + reads).
+#[derive(Clone)]
+struct FullEcho(&'static str);
+impl PrimitiveCommon for FullEcho {
+    fn name(&self) -> &str {
+        self.0
+    }
+    fn get_type_constraints(&self, span: &Span) -> Box<dyn TypeConstraint> {
+        SimpleTypeConstraint::new(
+            self.name(),
+            vec![I64Sort.to_arcsort(), I64Sort.to_arcsort()],
+            span.clone(),
+        )
+        .into_box()
+    }
+}
+impl FullPrim for FullEcho {
+    fn apply<'a, 'db>(&self, state: &mut FullState<'a, 'db>, args: &[Value]) -> Option<Value> {
+        let _ = state.base_values();
+        Some(args[0])
+    }
+}
+
+// --- per-context acceptance ---
+
+/// A pure primitive runs in any of the four contexts.
 #[test]
-fn typed_primitive_rejected_in_rule_query() {
-    // A primitive that writes to the UF table — `RuleActionPrim` is
-    // valid only in action contexts, never in a rule query.
-    #[derive(Clone)]
-    struct FakeWriter;
-    impl PrimitiveCommon for FakeWriter {
-        fn name(&self) -> &str {
-            "fake-writer"
-        }
-        fn get_type_constraints(&self, span: &Span) -> Box<dyn TypeConstraint> {
-            SimpleTypeConstraint::new(
-                self.name(),
-                vec![I64Sort.to_arcsort(), I64Sort.to_arcsort()],
-                span.clone(),
-            )
-            .into_box()
-        }
-    }
-    impl RuleActionPrim for FakeWriter {
-        fn apply<'a, 'db>(
-            &self,
-            state: &mut RuleActionState<'a, 'db>,
-            args: &[Value],
-        ) -> Option<Value> {
-            // Just exercise ExecStateCore — proving the body type-checks.
-            let _ = state.base_values();
-            Some(args[0])
-        }
-    }
-
+fn pure_primitive_accepted_everywhere() {
     let mut egraph = EGraph::default();
-    egraph.add_rule_action_primitive(FakeWriter);
+    egraph.add_pure_primitive(PureAdd("p-add"), None);
 
-    // Using a writing primitive in an RHS is fine.
+    // global query — `check`
+    egraph
+        .parse_and_run_program(None, "(check (= (p-add 2 3) 5))")
+        .unwrap();
+    // global action — top-level eval
+    egraph
+        .parse_and_run_program(None, "(let $x (p-add 7 8))")
+        .unwrap();
+    // rule query (LHS) and rule action (RHS)
     egraph
         .parse_and_run_program(
             None,
-            "(function f (i64) i64 :no-merge)\n(rule () ((set (f 0) (fake-writer 42))))",
+            "(function f (i64) i64 :no-merge)\n\
+             (rule ((= y (p-add 1 2))) ((set (f y) (p-add 10 20))))\n\
+             (run 1)",
+        )
+        .unwrap();
+}
+
+/// A `WritePrim` is rejected in any query context (rule LHS, global query).
+#[test]
+fn write_primitive_rejected_in_queries() {
+    let mut egraph = EGraph::default();
+    egraph.add_write_primitive(WriteEcho("w-echo"), None);
+
+    // RHS of a rule (RuleAction) — fine.
+    egraph
+        .parse_and_run_program(
+            None,
+            "(function g (i64) i64 :no-merge)\n\
+             (rule () ((set (g 0) (w-echo 42))))",
         )
         .unwrap();
 
-    // Using it as a filter inside a rule LHS (RuleQuery) must be rejected
-    // by the typechecker, which filters primitives to those whose
-    // `valid_contexts` include the call site's context before building
-    // the XOR.
-    let result = egraph.parse_and_run_program(
+    // LHS of a rule (RuleQuery) — must be rejected.
+    let mut egraph2 = EGraph::default();
+    egraph2.add_write_primitive(WriteEcho("w-echo"), None);
+    let result = egraph2.parse_and_run_program(
         None,
         "(function g (i64) i64 :no-merge)\n\
-         (rule ((= x (fake-writer 1))) ((set (g 0) x)))",
+         (rule ((= x (w-echo 1))) ((set (g 0) x)))",
     );
     assert!(
         result.is_err(),
-        "expected a typechecker error when using writing primitive in a rule query"
+        "WritePrim must be rejected on a rule LHS"
+    );
+
+    // Top-level `check` (GlobalQuery) — must be rejected.
+    let mut egraph3 = EGraph::default();
+    egraph3.add_write_primitive(WriteEcho("w-echo"), None);
+    let result = egraph3.parse_and_run_program(None, "(check (= (w-echo 1) 1))");
+    assert!(
+        result.is_err(),
+        "WritePrim must be rejected in `check` (GlobalQuery)"
     );
 }
 
-/// `unstable-app` is registered as two context-specialized variants
-/// (ApplyPure + ApplyFull). In a query context the pure variant
-/// dispatches through `FunctionContainer::apply_in`, which succeeds only
-/// when the inner function is a primitive valid in that context — e.g.
-/// `+` over i64.
+/// A `ReadPrim` is rejected in rule contexts (both query and action) —
+/// it's only valid in `GlobalQuery` and `GlobalAction`.
+#[test]
+fn read_primitive_rejected_in_rule_contexts() {
+    let mut egraph = EGraph::default();
+    egraph.add_read_primitive(ReadEcho("r-echo"), None);
+
+    // GlobalQuery — fine.
+    egraph
+        .parse_and_run_program(None, "(check (= (r-echo 7) 7))")
+        .unwrap();
+    // GlobalAction — fine.
+    egraph
+        .parse_and_run_program(None, "(let $rr (r-echo 7))")
+        .unwrap();
+
+    // Rule LHS — rejected.
+    let mut egraph2 = EGraph::default();
+    egraph2.add_read_primitive(ReadEcho("r-echo"), None);
+    let result = egraph2.parse_and_run_program(
+        None,
+        "(function f (i64) i64 :no-merge)\n\
+         (rule ((= x (r-echo 1))) ((set (f 0) x)))",
+    );
+    assert!(result.is_err(), "ReadPrim must be rejected on a rule LHS");
+
+    // Rule RHS — also rejected (ReadPrim is GlobalQuery+GlobalAction
+    // only; RuleAction doesn't qualify).
+    let mut egraph3 = EGraph::default();
+    egraph3.add_read_primitive(ReadEcho("r-echo"), None);
+    let result = egraph3.parse_and_run_program(
+        None,
+        "(function f (i64) i64 :no-merge)\n\
+         (rule () ((set (f 0) (r-echo 1))))",
+    );
+    assert!(result.is_err(), "ReadPrim must be rejected on a rule RHS");
+}
+
+/// A `FullPrim` is valid only in `GlobalAction`.
+#[test]
+fn full_primitive_accepted_only_in_global_action() {
+    let mut egraph = EGraph::default();
+    egraph.add_full_primitive(FullEcho("f-echo"), None);
+
+    // GlobalAction — fine.
+    egraph
+        .parse_and_run_program(None, "(let $ff (f-echo 7))")
+        .unwrap();
+
+    // GlobalQuery — rejected.
+    let mut egraph2 = EGraph::default();
+    egraph2.add_full_primitive(FullEcho("f-echo"), None);
+    let result = egraph2.parse_and_run_program(None, "(check (= (f-echo 1) 1))");
+    assert!(
+        result.is_err(),
+        "FullPrim must be rejected in GlobalQuery (`check`)"
+    );
+
+    // Rule LHS — rejected.
+    let mut egraph3 = EGraph::default();
+    egraph3.add_full_primitive(FullEcho("f-echo"), None);
+    let result = egraph3.parse_and_run_program(
+        None,
+        "(function f (i64) i64 :no-merge)\n\
+         (rule ((= x (f-echo 1))) ((set (f 0) x)))",
+    );
+    assert!(result.is_err(), "FullPrim must be rejected on a rule LHS");
+
+    // Rule RHS — rejected.
+    let mut egraph4 = EGraph::default();
+    egraph4.add_full_primitive(FullEcho("f-echo"), None);
+    let result = egraph4.parse_and_run_program(
+        None,
+        "(function f (i64) i64 :no-merge)\n\
+         (rule () ((set (f 0) (f-echo 1))))",
+    );
+    assert!(result.is_err(), "FullPrim must be rejected on a rule RHS");
+}
+
+// --- unstable-fn / unstable-app ---
+
+/// `unstable-app` over a primitive function works in queries.
 #[test]
 fn unstable_app_query_with_pure_primitive() {
     let mut egraph = EGraph::default();
-    // `(unstable-fn "+")` wraps the i64 primitive `+`; `+` is pure, valid
-    // in every context, so `unstable-app` inside a `check` works.
     egraph
         .parse_and_run_program(
             None,
@@ -89,9 +313,9 @@ fn unstable_app_query_with_pure_primitive() {
         .unwrap();
 }
 
-/// `unstable-app` over a constructor in a query context does NOT
-/// silently mint a fresh eclass — `apply_in` returns None for that case,
-/// so the match filters out and the check fails.
+/// `unstable-app` over a constructor in a query context is filtered
+/// (does NOT mint an eclass) — `apply_in` returns None when the
+/// wrapped function is a constructor, so the check fails.
 #[test]
 fn unstable_app_query_with_constructor_is_filtered() {
     let mut egraph = EGraph::default();
@@ -102,8 +326,6 @@ fn unstable_app_query_with_constructor_is_filtered() {
             (datatype Math (Num i64))
             (sort MathFn (UnstableFn (i64) Math))
             (let make (unstable-fn "Num"))
-            ; (Num 99) has not been created, so `unstable-app make 99`
-            ; inside a check must not mint one — the check must fail.
             "#,
         )
         .unwrap();
@@ -116,4 +338,137 @@ fn unstable_app_query_with_constructor_is_filtered() {
         "check should fail: `unstable-app` on a constructor in a query \
          must return None rather than mint an eclass"
     );
+}
+
+/// `unstable-app` over a constructor in an action context DOES mint
+/// — `apply_mut` calls `lookup_or_insert`. So a rule RHS using
+/// `unstable-app make N` makes `(Num N)` exist; a subsequent check
+/// finds it.
+#[test]
+fn unstable_app_action_with_constructor_mints_eclass() {
+    let mut egraph = EGraph::default();
+    egraph
+        .parse_and_run_program(
+            None,
+            r#"
+            (datatype Math (Num i64))
+            (sort MathFn (UnstableFn (i64) Math))
+            (let make (unstable-fn "Num"))
+            (relation Trigger ())
+            (Trigger)
+            (rule ((Trigger)) (
+                (let $minted (unstable-app make 99))
+            ))
+            (run 1)
+            (check (= (Num 99) (Num 99)))
+            "#,
+        )
+        .unwrap();
+}
+
+/// `unstable-app` over a custom (non-constructor) function in a rule
+/// action context reads the existing row's value (`apply_mut` calls
+/// `TableAction::lookup`). In a pure-query context (a `check`),
+/// `apply_in` conservatively refuses because the same dispatch path
+/// can also be invoked from a rule LHS where the read would be
+/// untracked by seminaive — so the `check` form fails.
+#[test]
+fn unstable_app_action_over_custom_function_reads_existing_row() {
+    let mut egraph = EGraph::default();
+    egraph
+        .parse_and_run_program(
+            None,
+            r#"
+            (function dbl (i64) i64 :no-merge)
+            (set (dbl 7) 14)
+            (sort I2I (UnstableFn (i64) i64))
+            (let twice (unstable-fn "dbl"))
+            (function out (i64) i64 :no-merge)
+            (relation Trigger ())
+            (Trigger)
+            (rule ((Trigger)) ((set (out 7) (unstable-app twice 7))))
+            (run 1)
+            (check (= (out 7) 14))
+            "#,
+        )
+        .unwrap();
+
+    // In a pure-query context (a top-level `check`), `apply_in`
+    // refuses custom-function lookups because the same dispatch
+    // wrapper might also be reached from a rule LHS — see the
+    // "Trust boundaries" notes on `table_lookup`.
+    let mut egraph2 = EGraph::default();
+    let result = egraph2.parse_and_run_program(
+        None,
+        r#"
+        (function dbl (i64) i64 :no-merge)
+        (set (dbl 7) 14)
+        (sort I2I (UnstableFn (i64) i64))
+        (let twice (unstable-fn "dbl"))
+        (check (= (unstable-app twice 7) 14))
+        "#,
+    );
+    assert!(
+        result.is_err(),
+        "`check` (GlobalQuery) of unstable-app over a custom function \
+         must fail: apply_in conservatively refuses since the same \
+         path is reachable from a rule query"
+    );
+}
+
+// --- group registration ---
+
+/// **Known gap, documented as a regression guard.** Two same-name
+/// same-signature primitives registered separately (NOT via
+/// `add_primitive_group`) currently *both* survive the constraint
+/// builder's context filter and produce identical XOR branches. The
+/// solver's XOR doesn't reject ambiguous-but-equivalent matches when
+/// the surrounding constraints fully pin the sort assignment, so the
+/// program type-checks and `from_resolution` picks the first
+/// registration arbitrarily.
+///
+/// Ideally the typechecker would reject this as ambiguous; for now
+/// this test pins the silent-first-wins behavior so we notice if it
+/// changes.
+#[test]
+fn two_non_grouped_same_signature_registrations_silently_pick_first() {
+    let mut egraph = EGraph::default();
+    egraph.add_pure_primitive(PureAdd("dup-add"), None);
+    egraph.add_pure_primitive(PureAdd("dup-add"), None);
+
+    egraph
+        .parse_and_run_program(None, "(check (= (dup-add 1 2) 3))")
+        .unwrap();
+}
+
+/// Same-signature pure + write variants registered as a group. The
+/// partition assigns query contexts to the pure variant and action
+/// contexts to the write variant. Both implementations of `g-add`
+/// compute `a + b`, so the result is the same in both contexts —
+/// matching the group invariant that variants must agree on outputs.
+#[test]
+fn grouped_same_signature_registrations_dispatch_cleanly() {
+    let mut egraph = EGraph::default();
+    egraph.add_primitive_group(|g| {
+        g.add_pure(PureAdd("g-add"), None);
+        g.add_write(WriteAdd("g-add"), None);
+    });
+
+    // Query: pure variant runs.
+    egraph
+        .parse_and_run_program(None, "(check (= (g-add 1 2) 3))")
+        .unwrap();
+
+    // Action: write variant runs.
+    egraph
+        .parse_and_run_program(
+            None,
+            "(function r (i64) i64 :no-merge)\n\
+             (relation Trigger ())\n\
+             (Trigger)\n\
+             (rule ((Trigger)) ((set (r 0) (g-add 7 8))))\n\
+             (run 1)\n\
+             (check (= (r 0) 15))",
+        )
+        .unwrap();
 }

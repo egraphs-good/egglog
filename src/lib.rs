@@ -15,7 +15,7 @@
 //! Start with the [**`prelude`**](prelude) module — it re-exports the
 //! types and macros most Rust callers need and documents the common
 //! entry points (`rule`, `rust_rule`, `query`, the sort traits, the
-//! [`PrimitiveCommon`] / [`RuleQueryPrim`] traits, and the
+//! [`PrimitiveCommon`] / [`PurePrim`] traits, and the
 //! `add_primitive!` macros). Almost every
 //! example in this crate's docs assumes `use egglog::prelude::*;`.
 //!
@@ -28,17 +28,17 @@
 //! or types into the egraph — the extension points are:
 //!
 //! - **Custom primitives**: implement [`PrimitiveCommon`] plus one of
-//!   the four kind-specific traits ([`RuleQueryPrim`],
-//!   [`RuleActionPrim`], [`GlobalQueryPrim`], [`GlobalActionPrim`])
+//!   the four kind-specific traits ([`PurePrim`],
+//!   [`WritePrim`], [`ReadPrim`], [`FullPrim`])
 //!   and register via the matching `EGraph::add_*_primitive` method.
 //!   The chosen trait names the state wrapper its body sees —
-//!   [`RuleQueryState`] for pure ops, [`RuleActionState`] for writes,
+//!   [`PureState`] for pure ops, [`WriteState`] for writes,
 //!   etc. The Rust type checker enforces that the body only uses
 //!   capabilities that wrapper exposes; the typechecker enforces that
 //!   the primitive is only invoked from contexts the wrapper is valid
 //!   in. See each kind trait's docs for the state→context details.
 //! - **Rust-bodied rule RHS**: register via [`prelude::rust_rule`]; the
-//!   closure receives an [`egglog_bridge::RuleActionState`].
+//!   closure receives an [`egglog_bridge::WriteState`].
 //! - **Sorts and container types**: see [`Sort`], [`BaseSort`], and
 //!   [`ContainerSort`] (re-exported from the [`prelude`]).
 //!
@@ -89,8 +89,7 @@ pub use egglog_bridge::FunctionRow;
 // primitive surface without requiring user crates to depend on
 // `egglog_bridge` directly.
 pub use egglog_bridge::{
-    ExecStateCore, ExecStateWriteDb, GlobalActionState, GlobalQueryState, RuleActionState,
-    RuleQueryState, UserState,
+    FullState, ReadState, WriteState, PureState, UserState,
 };
 use egglog_bridge::{ColumnTy, QueryEntry, UnionAction};
 use egglog_core_relations as core_relations;
@@ -139,8 +138,8 @@ pub type ArcSort = Arc<dyn Sort>;
 /// Methods shared by every kind-specific primitive trait.
 ///
 /// `name` and `get_type_constraints` aren't capability-dependent, so
-/// the four kind-specific traits ([`RuleQueryPrim`], [`RuleActionPrim`],
-/// [`GlobalQueryPrim`], [`GlobalActionPrim`]) require this as a
+/// the four kind-specific traits ([`PurePrim`], [`WritePrim`],
+/// [`ReadPrim`], [`FullPrim`]) require this as a
 /// supertrait rather than duplicating the methods.
 pub trait PrimitiveCommon: Send + Sync + 'static {
     /// Returns the name of this primitive.
@@ -151,52 +150,52 @@ pub trait PrimitiveCommon: Send + Sync + 'static {
 }
 
 /// A pure primitive — runs in any of the four contexts. Body sees a
-/// [`RuleQueryState`]: no DB reads, no DB writes, just base values,
+/// [`PureState`]: no DB reads, no DB writes, just base values,
 /// counters, container interning, and `call_external_func` /
 /// `table_lookup` escapes (caller-checked).
 ///
 /// Most primitives are pure (e.g., `+`, `<`, `vec-of`). The macros
 /// `add_primitive!` / `add_literal_prim!` generate impls of this trait.
-/// Register via [`EGraph::add_rule_query_primitive`] or via
-/// [`EGraph::add_primitive_group`] inside a `g.add_rule_query(...)`.
-pub trait RuleQueryPrim: PrimitiveCommon {
+/// Register via [`EGraph::add_pure_primitive`] or via
+/// [`EGraph::add_primitive_group`] inside a `g.add_pure(..., None)`.
+pub trait PurePrim: PrimitiveCommon {
     fn apply<'a, 'db>(
         &self,
-        state: &mut RuleQueryState<'a, 'db>,
+        state: &mut PureState<'a, 'db>,
         args: &[Value],
     ) -> Option<Value>;
 }
 
 /// A primitive that writes to the e-graph. Body sees a
-/// [`RuleActionState`]: pure ops + DB writes + name-indexed
+/// [`WriteState`]: pure ops + DB writes + name-indexed
 /// `insert` / `remove` / `subsume` / `union` / `panic`. Valid only in
 /// rule-action and global-action contexts.
-pub trait RuleActionPrim: PrimitiveCommon {
+pub trait WritePrim: PrimitiveCommon {
     fn apply<'a, 'db>(
         &self,
-        state: &mut RuleActionState<'a, 'db>,
+        state: &mut WriteState<'a, 'db>,
         args: &[Value],
     ) -> Option<Value>;
 }
 
 /// A primitive that reads from the database but doesn't write. Body
-/// sees a [`GlobalQueryState`]: pure ops + table reads. Valid only in
+/// sees a [`ReadState`]: pure ops + table reads. Valid only in
 /// global-query and global-action contexts (reading from a database
 /// during a rule query would be untracked by seminaive — see #772).
-pub trait GlobalQueryPrim: PrimitiveCommon {
+pub trait ReadPrim: PrimitiveCommon {
     fn apply<'a, 'db>(
         &self,
-        state: &mut GlobalQueryState<'a, 'db>,
+        state: &mut ReadState<'a, 'db>,
         args: &[Value],
     ) -> Option<Value>;
 }
 
 /// A primitive that needs both DB reads and DB writes. Body sees a
-/// [`GlobalActionState`]. Valid only in the global-action context.
-pub trait GlobalActionPrim: PrimitiveCommon {
+/// [`FullState`]. Valid only in the global-action context.
+pub trait FullPrim: PrimitiveCommon {
     fn apply<'a, 'db>(
         &self,
-        state: &mut GlobalActionState<'a, 'db>,
+        state: &mut FullState<'a, 'db>,
         args: &[Value],
     ) -> Option<Value>;
 }
@@ -216,16 +215,46 @@ pub(crate) trait ErasedPrimitive: Send + Sync {
     fn invoke(&self, exec_state: &mut ExecutionState, args: &[Value]) -> Option<Value>;
 }
 
-/// Generates an `ErasedPrimitive` impl for one of the four kind-specific
-/// wrapper types. The hot-path `invoke` does a lock-free `ArcSwap::load`
-/// to grab the current `NamedActionRegistry` and constructs the typed
-/// state wrapper directly from `&mut ExecutionState` (no `dyn` dispatch
-/// for inner state operations).
-macro_rules! define_primitive_wrap {
+/// Generates an `ErasedPrimitive` impl for a query-side primitive
+/// wrapper. Query wrappers don't carry the action registry — there's
+/// nothing for them to look up by name.
+macro_rules! define_pure_primitive_wrap {
     ($wrap_name:ident, $kind_trait:ident, $state_ty:ident) => {
         pub(crate) struct $wrap_name<T: $kind_trait> {
             pub(crate) inner: Arc<T>,
-            pub(crate) registry: Arc<arc_swap::ArcSwap<egglog_bridge::NamedActionRegistry>>,
+        }
+
+        impl<T: $kind_trait> ErasedPrimitive for $wrap_name<T> {
+            fn name(&self) -> &str {
+                self.inner.name()
+            }
+            fn get_type_constraints(&self, span: &Span) -> Box<dyn TypeConstraint> {
+                self.inner.get_type_constraints(span)
+            }
+            fn valid_contexts(&self) -> &'static [egglog_bridge::Context] {
+                $state_ty::valid_contexts()
+            }
+            fn invoke(
+                &self,
+                exec_state: &mut ExecutionState,
+                args: &[Value],
+            ) -> Option<Value> {
+                let mut state = $state_ty::wrap(exec_state);
+                self.inner.apply(&mut state, args)
+            }
+        }
+    };
+}
+
+/// Generates an `ErasedPrimitive` impl for an action-side primitive
+/// wrapper. The hot-path `invoke` does a lock-free `ArcSwap::load` to
+/// grab the current `ActionRegistry` and threads it into the
+/// typed state wrapper.
+macro_rules! define_action_primitive_wrap {
+    ($wrap_name:ident, $kind_trait:ident, $state_ty:ident) => {
+        pub(crate) struct $wrap_name<T: $kind_trait> {
+            pub(crate) inner: Arc<T>,
+            pub(crate) registry: Arc<arc_swap::ArcSwap<egglog_bridge::ActionRegistry>>,
         }
 
         impl<T: $kind_trait> ErasedPrimitive for $wrap_name<T> {
@@ -251,13 +280,17 @@ macro_rules! define_primitive_wrap {
     };
 }
 
-define_primitive_wrap!(PrimitiveWrapRuleQuery, RuleQueryPrim, RuleQueryState);
-define_primitive_wrap!(PrimitiveWrapRuleAction, RuleActionPrim, RuleActionState);
-define_primitive_wrap!(PrimitiveWrapGlobalQuery, GlobalQueryPrim, GlobalQueryState);
-define_primitive_wrap!(
-    PrimitiveWrapGlobalAction,
-    GlobalActionPrim,
-    GlobalActionState
+define_pure_primitive_wrap!(PrimitiveWrapPure, PurePrim, PureState);
+define_action_primitive_wrap!(PrimitiveWrapWrite, WritePrim, WriteState);
+define_pure_primitive_wrap!(
+    PrimitiveWrapRead,
+    ReadPrim,
+    ReadState
+);
+define_action_primitive_wrap!(
+    PrimitiveWrapFull,
+    FullPrim,
+    FullState
 );
 
 /// A user-defined command output trait.
@@ -2361,7 +2394,7 @@ mod tests {
     use crate::sort::*;
     use crate::*;
 
-    use egglog_bridge::{ExecStateCore, RuleQueryState, UserState};
+    use egglog_bridge::PureState;
 
     #[derive(Clone)]
     struct InnerProduct {
@@ -2370,9 +2403,9 @@ mod tests {
 
     // Migrated to the new `Primitive` trait. `InnerProduct` is pure —
     // it only reads base values and (idempotent) container contents — so it
-    // declares `State = RuleQueryState`, making it usable in all four
+    // declares `State = PureState`, making it usable in all four
     // contexts. The Rust type checker enforces that the body only uses
-    // methods available on `RuleQueryState`.
+    // methods available on `PureState`.
     impl PrimitiveCommon for InnerProduct {
         fn name(&self) -> &str {
             "inner-product"
@@ -2390,10 +2423,10 @@ mod tests {
         
     }
 
-impl RuleQueryPrim for InnerProduct {
+impl PurePrim for InnerProduct {
     fn apply<'a, 'db>(
             &self,
-            state: &mut RuleQueryState<'a, 'db>,
+            state: &mut PureState<'a, 'db>,
             args: &[Value],
         ) -> Option<Value> {
             let mut sum = 0;
@@ -2427,7 +2460,7 @@ impl RuleQueryPrim for InnerProduct {
                 && s.inner_sorts()[0].name() == I64Sort.name()
         });
 
-        egraph.add_rule_query_primitive(InnerProduct { vec: int_vec_sort });
+        egraph.add_pure_primitive(InnerProduct { vec: int_vec_sort }, None);
 
         egraph
             .parse_and_run_program(

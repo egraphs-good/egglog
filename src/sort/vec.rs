@@ -137,11 +137,14 @@ impl ContainerSort for VecSort {
         add_primitive!(eg, "vec-set"    = |mut xs: @VecContainer (arc), i: i64, x: # (self.element())| -> @VecContainer (arc) {{ xs.data[i as usize] = x;    xs }});
         add_primitive!(eg, "vec-remove" = |mut xs: @VecContainer (arc), i: i64                       | -> @VecContainer (arc) {{ xs.data.remove(i as usize); xs }});
         if self.element.is_eq_sort() {
-            eg.add_rule_action_primitive(Union {
-                name: "vec-union".into(),
-                vec: arc.clone(),
-                action: eg.new_union_action(),
-            });
+            eg.add_write_primitive(
+                Union {
+                    name: "vec-union".into(),
+                    vec: arc.clone(),
+                    action: eg.new_union_action(),
+                },
+                None,
+            );
         }
         // vec-range
         if self.element.name() == "i64" {
@@ -214,9 +217,9 @@ pub(crate) fn try_registering_vec_map(
         fn_: fn_.clone(),
     };
     eg.add_primitive_group(|g| {
-        g.add_rule_query(VecMapPure(base.clone()));
-        g.add_global_query(VecMapGlobalQuery(base.clone()));
-        g.add_rule_action(VecMapFull(base));
+        g.add_pure(VecMapPure(base.clone()), None);
+        g.add_read(VecMapGlobalQuery(base.clone()), None);
+        g.add_write(VecMapFull(base), None);
     });
 }
 
@@ -292,10 +295,10 @@ impl PrimitiveCommon for VecMapPure {
         self.0.type_constraints(span)
     }
 }
-impl RuleQueryPrim for VecMapPure {
+impl PurePrim for VecMapPure {
     fn apply<'a, 'db>(
         &self,
-        state: &mut egglog_bridge::RuleQueryState<'a, 'db>,
+        state: &mut egglog_bridge::PureState<'a, 'db>,
         args: &[Value],
     ) -> Option<Value> {
         self.0.run(state, args, |fc, s, a| fc.apply_in(s, a))
@@ -310,10 +313,10 @@ impl PrimitiveCommon for VecMapGlobalQuery {
         self.0.type_constraints(span)
     }
 }
-impl GlobalQueryPrim for VecMapGlobalQuery {
+impl ReadPrim for VecMapGlobalQuery {
     fn apply<'a, 'db>(
         &self,
-        state: &mut egglog_bridge::GlobalQueryState<'a, 'db>,
+        state: &mut egglog_bridge::ReadState<'a, 'db>,
         args: &[Value],
     ) -> Option<Value> {
         self.0.run(state, args, |fc, s, a| fc.apply_in(s, a))
@@ -328,10 +331,10 @@ impl PrimitiveCommon for VecMapFull {
         self.0.type_constraints(span)
     }
 }
-impl RuleActionPrim for VecMapFull {
+impl WritePrim for VecMapFull {
     fn apply<'a, 'db>(
         &self,
-        state: &mut egglog_bridge::RuleActionState<'a, 'db>,
+        state: &mut egglog_bridge::WriteState<'a, 'db>,
         args: &[Value],
     ) -> Option<Value> {
         self.0.run(state, args, |fc, s, a| fc.apply_mut(s.exec_state_mut(), a))
@@ -350,7 +353,7 @@ struct Union {
 
 // `Union` unions the corresponding entries of two vecs of equal length.
 // It writes to the union-find (via `UnionAction::union`), so it
-// implements `RuleActionPrim` — valid in rule-action and global-action
+// implements `WritePrim` — valid in rule-action and global-action
 // contexts, rejected at rule-build time if used in a rule query.
 impl PrimitiveCommon for Union {
     fn name(&self) -> &str {
@@ -367,10 +370,10 @@ impl PrimitiveCommon for Union {
     }
 }
 
-impl RuleActionPrim for Union {
+impl WritePrim for Union {
     fn apply<'a, 'db>(
         &self,
-        state: &mut egglog_bridge::RuleActionState<'a, 'db>,
+        state: &mut egglog_bridge::WriteState<'a, 'db>,
         args: &[Value],
     ) -> Option<Value> {
         let left = state

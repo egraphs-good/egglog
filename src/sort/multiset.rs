@@ -1,5 +1,5 @@
 use super::*;
-use egglog_bridge::{UnionAction, UserState};
+use egglog_bridge::UnionAction;
 use inner::MultiSet;
 
 #[derive(Clone, Debug, PartialEq, Eq, Hash)]
@@ -173,11 +173,14 @@ impl ContainerSort for MultiSetSort {
             // We can't query directly by arcsort type since it's wrapped in a ContainerSort which is not public
                 && f.value_type() == Some(TypeId::of::<MultiSetContainer>())
         }) {
-            eg.add_rule_query_primitive(SumMultisets {
-                name: "multiset-sum-multisets".into(),
-                multiset: other_multiset_sort.clone(),
-                multiset_of_multisets: arc.clone(),
-            });
+            eg.add_pure_primitive(
+                SumMultisets {
+                    name: "multiset-sum-multisets".into(),
+                    multiset: other_multiset_sort.clone(),
+                    multiset_of_multisets: arc.clone(),
+                },
+                None,
+            );
         }
         let all_ms_sorts = eg
             .type_info
@@ -192,12 +195,15 @@ impl ContainerSort for MultiSetSort {
             try_registering_multiset_non_map_primitives(eg, fn_sort.clone(), arc.clone());
         }
         if self.element.is_eq_sort() {
-            eg.add_rule_action_primitive(UnionValues {
-                name: "multiset-union-values".into(),
-                multiset: arc.clone(),
-                action: eg.new_union_action(),
-                element: self.element.clone(),
-            });
+            eg.add_write_primitive(
+                UnionValues {
+                    name: "multiset-union-values".into(),
+                    multiset: arc.clone(),
+                    action: eg.new_union_action(),
+                    element: self.element.clone(),
+                },
+                None,
+            );
         }
     }
 
@@ -238,9 +244,9 @@ pub(crate) fn try_registering_multiset_map(
         fn_: fn_.clone(),
     };
     eg.add_primitive_group(|g| {
-        g.add_rule_query(MapPure(base.clone()));
-        g.add_global_query(MapGlobalQuery(base.clone()));
-        g.add_rule_action(MapFull(base));
+        g.add_pure(MapPure(base.clone()), None);
+        g.add_read(MapGlobalQuery(base.clone()), None);
+        g.add_write(MapFull(base), None);
     });
 }
 
@@ -277,9 +283,9 @@ fn try_registering_multiset_non_map_primitives(
             skip_empty: true,
         };
         eg.add_primitive_group(|g| {
-            g.add_rule_query(FilterPure(filter.clone()));
-            g.add_global_query(FilterGlobalQuery(filter.clone()));
-            g.add_rule_action(FilterFull(filter));
+            g.add_pure(FilterPure(filter.clone()), None);
+            g.add_read(FilterGlobalQuery(filter.clone()), None);
+            g.add_write(FilterFull(filter), None);
         });
 
         let filter_not = Filter {
@@ -289,9 +295,9 @@ fn try_registering_multiset_non_map_primitives(
             skip_empty: false,
         };
         eg.add_primitive_group(|g| {
-            g.add_rule_query(FilterPure(filter_not.clone()));
-            g.add_global_query(FilterGlobalQuery(filter_not.clone()));
-            g.add_rule_action(FilterFull(filter_not));
+            g.add_pure(FilterPure(filter_not.clone()), None);
+            g.add_read(FilterGlobalQuery(filter_not.clone()), None);
+            g.add_write(FilterFull(filter_not), None);
         });
     }
 
@@ -307,9 +313,9 @@ fn try_registering_multiset_non_map_primitives(
             element: element.clone(),
         };
         eg.add_primitive_group(|g| {
-            g.add_rule_query(ReducePure(reduce.clone()));
-            g.add_global_query(ReduceGlobalQuery(reduce.clone()));
-            g.add_rule_action(ReduceFull(reduce));
+            g.add_pure(ReducePure(reduce.clone()), None);
+            g.add_read(ReduceGlobalQuery(reduce.clone()), None);
+            g.add_write(ReduceFull(reduce), None);
         });
     }
 
@@ -319,18 +325,24 @@ fn try_registering_multiset_non_map_primitives(
         && fn_.output().name() == "i64"
     {
         let unit = eg.type_info.get_sort_by_name("Unit").unwrap().clone();
-        eg.add_rule_action_primitive(FillIndex {
-            name: "unstable-multiset-fill-index".into(),
-            multiset: multiset.clone(),
-            unit: unit.clone(),
-            fn_: fn_.clone(),
-        });
-        eg.add_rule_action_primitive(ClearIndex {
-            name: "unstable-multiset-clear-index".into(),
-            multiset: multiset.clone(),
-            unit,
-            fn_: fn_.clone(),
-        });
+        eg.add_write_primitive(
+            FillIndex {
+                name: "unstable-multiset-fill-index".into(),
+                multiset: multiset.clone(),
+                unit: unit.clone(),
+                fn_: fn_.clone(),
+            },
+            None,
+        );
+        eg.add_write_primitive(
+            ClearIndex {
+                name: "unstable-multiset-clear-index".into(),
+                multiset: multiset.clone(),
+                unit,
+                fn_: fn_.clone(),
+            },
+            None,
+        );
     }
 
     if fn_.inputs().len() == 1
@@ -343,9 +355,9 @@ fn try_registering_multiset_non_map_primitives(
             fn_: fn_.clone(),
         };
         eg.add_primitive_group(|g| {
-            g.add_rule_query(FlatMapPure(base.clone()));
-            g.add_global_query(FlatMapGlobalQuery(base.clone()));
-            g.add_rule_action(FlatMapFull(base));
+            g.add_pure(FlatMapPure(base.clone()), None);
+            g.add_read(FlatMapGlobalQuery(base.clone()), None);
+            g.add_write(FlatMapFull(base), None);
         });
     }
 }
@@ -420,10 +432,10 @@ impl PrimitiveCommon for MapPure {
     
 }
 
-impl RuleQueryPrim for MapPure {
+impl PurePrim for MapPure {
     fn apply<'a, 'db>(
         &self,
-        state: &mut egglog_bridge::RuleQueryState<'a, 'db>,
+        state: &mut egglog_bridge::PureState<'a, 'db>,
         args: &[Value],
     ) -> Option<Value> {
         self.0.run(state, args, |fc, s, a| fc.apply_in(s, a))
@@ -443,10 +455,10 @@ impl PrimitiveCommon for MapGlobalQuery {
     
 }
 
-impl GlobalQueryPrim for MapGlobalQuery {
+impl ReadPrim for MapGlobalQuery {
     fn apply<'a, 'db>(
         &self,
-        state: &mut egglog_bridge::GlobalQueryState<'a, 'db>,
+        state: &mut egglog_bridge::ReadState<'a, 'db>,
         args: &[Value],
     ) -> Option<Value> {
         self.0.run(state, args, |fc, s, a| fc.apply_in(s, a))
@@ -466,10 +478,10 @@ impl PrimitiveCommon for MapFull {
     
 }
 
-impl RuleActionPrim for MapFull {
+impl WritePrim for MapFull {
     fn apply<'a, 'db>(
         &self,
-        state: &mut egglog_bridge::RuleActionState<'a, 'db>,
+        state: &mut egglog_bridge::WriteState<'a, 'db>,
         args: &[Value],
     ) -> Option<Value> {
         self.0.run(state, args, |fc, s, a| fc.apply_mut(s.exec_state_mut(), a))
@@ -504,10 +516,10 @@ impl PrimitiveCommon for FillIndex {
     
 }
 
-impl RuleActionPrim for FillIndex {
+impl WritePrim for FillIndex {
     fn apply<'a, 'db>(
         &self,
-        state: &mut egglog_bridge::RuleActionState<'a, 'db>,
+        state: &mut egglog_bridge::WriteState<'a, 'db>,
         args: &[Value],
     ) -> Option<Value> {
         let fc = state
@@ -569,10 +581,10 @@ impl PrimitiveCommon for ClearIndex {
     
 }
 
-impl RuleActionPrim for ClearIndex {
+impl WritePrim for ClearIndex {
     fn apply<'a, 'db>(
         &self,
-        state: &mut egglog_bridge::RuleActionState<'a, 'db>,
+        state: &mut egglog_bridge::WriteState<'a, 'db>,
         args: &[Value],
     ) -> Option<Value> {
         let fc = state
@@ -673,10 +685,10 @@ impl PrimitiveCommon for FlatMapPure {
     
 }
 
-impl RuleQueryPrim for FlatMapPure {
+impl PurePrim for FlatMapPure {
     fn apply<'a, 'db>(
         &self,
-        state: &mut egglog_bridge::RuleQueryState<'a, 'db>,
+        state: &mut egglog_bridge::PureState<'a, 'db>,
         args: &[Value],
     ) -> Option<Value> {
         self.0.run(state, args, |fc, s, a| fc.apply_in(s, a))
@@ -693,10 +705,10 @@ impl PrimitiveCommon for FlatMapGlobalQuery {
     
 }
 
-impl GlobalQueryPrim for FlatMapGlobalQuery {
+impl ReadPrim for FlatMapGlobalQuery {
     fn apply<'a, 'db>(
         &self,
-        state: &mut egglog_bridge::GlobalQueryState<'a, 'db>,
+        state: &mut egglog_bridge::ReadState<'a, 'db>,
         args: &[Value],
     ) -> Option<Value> {
         self.0.run(state, args, |fc, s, a| fc.apply_in(s, a))
@@ -713,10 +725,10 @@ impl PrimitiveCommon for FlatMapFull {
     
 }
 
-impl RuleActionPrim for FlatMapFull {
+impl WritePrim for FlatMapFull {
     fn apply<'a, 'db>(
         &self,
-        state: &mut egglog_bridge::RuleActionState<'a, 'db>,
+        state: &mut egglog_bridge::WriteState<'a, 'db>,
         args: &[Value],
     ) -> Option<Value> {
         self.0.run(state, args, |fc, s, a| fc.apply_mut(s.exec_state_mut(), a))
@@ -789,10 +801,10 @@ impl PrimitiveCommon for FilterPure {
     
 }
 
-impl RuleQueryPrim for FilterPure {
+impl PurePrim for FilterPure {
     fn apply<'a, 'db>(
         &self,
-        state: &mut egglog_bridge::RuleQueryState<'a, 'db>,
+        state: &mut egglog_bridge::PureState<'a, 'db>,
         args: &[Value],
     ) -> Option<Value> {
         self.0.run(state, args, |fc, s, a| fc.apply_in(s, a))
@@ -809,10 +821,10 @@ impl PrimitiveCommon for FilterGlobalQuery {
     
 }
 
-impl GlobalQueryPrim for FilterGlobalQuery {
+impl ReadPrim for FilterGlobalQuery {
     fn apply<'a, 'db>(
         &self,
-        state: &mut egglog_bridge::GlobalQueryState<'a, 'db>,
+        state: &mut egglog_bridge::ReadState<'a, 'db>,
         args: &[Value],
     ) -> Option<Value> {
         self.0.run(state, args, |fc, s, a| fc.apply_in(s, a))
@@ -829,10 +841,10 @@ impl PrimitiveCommon for FilterFull {
     
 }
 
-impl RuleActionPrim for FilterFull {
+impl WritePrim for FilterFull {
     fn apply<'a, 'db>(
         &self,
-        state: &mut egglog_bridge::RuleActionState<'a, 'db>,
+        state: &mut egglog_bridge::WriteState<'a, 'db>,
         args: &[Value],
     ) -> Option<Value> {
         self.0.run(state, args, |fc, s, a| fc.apply_mut(s.exec_state_mut(), a))
@@ -868,10 +880,10 @@ impl PrimitiveCommon for SumMultisets {
     
 }
 
-impl RuleQueryPrim for SumMultisets {
+impl PurePrim for SumMultisets {
     fn apply<'a, 'db>(
         &self,
-        state: &mut egglog_bridge::RuleQueryState<'a, 'db>,
+        state: &mut egglog_bridge::PureState<'a, 'db>,
         args: &[Value],
     ) -> Option<Value> {
         let mut data = MultiSet::<Value>::new();
@@ -963,10 +975,10 @@ impl PrimitiveCommon for ReducePure {
     
 }
 
-impl RuleQueryPrim for ReducePure {
+impl PurePrim for ReducePure {
     fn apply<'a, 'db>(
         &self,
-        state: &mut egglog_bridge::RuleQueryState<'a, 'db>,
+        state: &mut egglog_bridge::PureState<'a, 'db>,
         args: &[Value],
     ) -> Option<Value> {
         self.0.run(state, args, |fc, s, a| fc.apply_in(s, a))
@@ -983,10 +995,10 @@ impl PrimitiveCommon for ReduceGlobalQuery {
     
 }
 
-impl GlobalQueryPrim for ReduceGlobalQuery {
+impl ReadPrim for ReduceGlobalQuery {
     fn apply<'a, 'db>(
         &self,
-        state: &mut egglog_bridge::GlobalQueryState<'a, 'db>,
+        state: &mut egglog_bridge::ReadState<'a, 'db>,
         args: &[Value],
     ) -> Option<Value> {
         self.0.run(state, args, |fc, s, a| fc.apply_in(s, a))
@@ -1003,10 +1015,10 @@ impl PrimitiveCommon for ReduceFull {
     
 }
 
-impl RuleActionPrim for ReduceFull {
+impl WritePrim for ReduceFull {
     fn apply<'a, 'db>(
         &self,
-        state: &mut egglog_bridge::RuleActionState<'a, 'db>,
+        state: &mut egglog_bridge::WriteState<'a, 'db>,
         args: &[Value],
     ) -> Option<Value> {
         self.0.run(state, args, |fc, s, a| fc.apply_mut(s.exec_state_mut(), a))
@@ -1042,10 +1054,10 @@ impl PrimitiveCommon for UnionValues {
     
 }
 
-impl RuleActionPrim for UnionValues {
+impl WritePrim for UnionValues {
     fn apply<'a, 'db>(
         &self,
-        state: &mut egglog_bridge::RuleActionState<'a, 'db>,
+        state: &mut egglog_bridge::WriteState<'a, 'db>,
         args: &[Value],
     ) -> Option<Value> {
         let values = state
