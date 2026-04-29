@@ -156,9 +156,11 @@ impl ResolvedCall {
             }
         }
 
-        // After `add_primitive_group` partitioning, at most one
-        // registration matches a given (signature, context) pair, so a
-        // simple find is enough — no specificity tiebreaker needed.
+        // For a given (signature, context) pair, at most one
+        // registration matches — `add_higher_order_primitive`
+        // registers one id per context with disjoint `valid_contexts`,
+        // and the single-kind `add_*_primitive` methods produce
+        // overloads keyed by signature. Simple find is enough.
         if let Some(primitives) = typeinfo.get_prims(head)
             && let Some(picked) = primitives
                 .iter()

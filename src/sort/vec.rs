@@ -206,22 +206,15 @@ pub(crate) fn try_registering_vec_map(
     {
         return;
     }
-    // Three context-specialized variants registered as one overload
-    // group; group registration partitions their `valid_contexts` so
-    // exactly one matches each call site (Full claims action
-    // contexts, GlobalQuery claims `GlobalQuery`, Pure keeps
-    // `RuleQuery`).
-    let base = VecMap {
-        name: "unstable-vec-map".into(),
-        vec: input_vec,
-        output_vec,
-        fn_: fn_.clone(),
-    };
-    eg.add_primitive_group(|g| {
-        g.add_pure(VecMapPure(base.clone()), None);
-        g.add_read(VecMapGlobalQuery(base.clone()), None);
-        g.add_write(VecMapFull(base), None);
-    });
+    eg.add_higher_order_primitive(
+        VecMap {
+            name: "unstable-vec-map".into(),
+            vec: input_vec,
+            output_vec,
+            fn_: fn_.clone(),
+        },
+        None,
+    );
 }
 
 pub(crate) fn register_vec_primitives_for_function(eg: &mut EGraph, fn_: Arc<FunctionSort>) {
@@ -245,41 +238,39 @@ struct VecMap {
     fn_: Arc<FunctionSort>,
 }
 
-// `VecMap` is triple-registered like multiset `Map` (issue #772). The
-// pure / global-query / full triple lets it be used in rule queries
-// (only with pure inner functions), in checks / extracts (with custom-
-// function reads), and in actions (with constructor minting).
-impl VecMap {
-    fn type_constraints(&self, span: &Span) -> Box<dyn TypeConstraint> {
+impl PrimitiveCommon for VecMap {
+    fn name(&self) -> &str {
+        &self.name
+    }
+    fn get_type_constraints(&self, span: &Span) -> Box<dyn TypeConstraint> {
         SimpleTypeConstraint::new(
-            "unstable-vec-map",
+            &self.name,
             vec![self.fn_.clone(), self.vec.clone(), self.output_vec.clone()],
             span.clone(),
         )
         .into_box()
     }
+}
 
-    fn run<'a, 'db, S, D>(&self, state: &mut S, args: &[Value], dispatch: D) -> Option<Value>
-    where
-        S: crate::UserState<'a, 'db>,
-        'db: 'a,
-        D: Fn(&FunctionContainer, &mut S, &[Value]) -> Option<Value>,
-    {
+impl PurePrim for VecMap {
+    fn apply<'a, 'db>(
+        &self,
+        state: &mut crate::PureState<'a, 'db>,
+        args: &[Value],
+    ) -> Option<Value> {
         let fc = state
-            
             .container_values()
             .get_val::<FunctionContainer>(args[0])
             .unwrap()
             .clone();
         let vec = state
-            
             .container_values()
             .get_val::<VecContainer>(args[1])
             .unwrap()
             .clone();
         let mut new_data = Vec::with_capacity(vec.data.len());
         for v in vec.data {
-            if let Some(mapped) = dispatch(&fc, state, &[v]) {
+            if let Some(mapped) = fc.apply(state, &[v]) {
                 new_data.push(mapped);
             }
         }
@@ -288,60 +279,6 @@ impl VecMap {
             data: new_data,
         };
         Some(state.register_container(new_vec))
-    }
-}
-
-#[derive(Clone)]
-struct VecMapPure(VecMap);
-impl PrimitiveCommon for VecMapPure {
-    fn name(&self) -> &str { &self.0.name }
-    fn get_type_constraints(&self, span: &Span) -> Box<dyn TypeConstraint> {
-        self.0.type_constraints(span)
-    }
-}
-impl PurePrim for VecMapPure {
-    fn apply<'a, 'db>(
-        &self,
-        state: &mut crate::PureState<'a, 'db>,
-        args: &[Value],
-    ) -> Option<Value> {
-        self.0.run(state, args, |fc, s, a| fc.apply_in(s, a))
-    }
-}
-
-#[derive(Clone)]
-struct VecMapGlobalQuery(VecMap);
-impl PrimitiveCommon for VecMapGlobalQuery {
-    fn name(&self) -> &str { &self.0.name }
-    fn get_type_constraints(&self, span: &Span) -> Box<dyn TypeConstraint> {
-        self.0.type_constraints(span)
-    }
-}
-impl ReadPrim for VecMapGlobalQuery {
-    fn apply<'a, 'db>(
-        &self,
-        state: &mut crate::ReadState<'a, 'db>,
-        args: &[Value],
-    ) -> Option<Value> {
-        self.0.run(state, args, |fc, s, a| fc.apply_in(s, a))
-    }
-}
-
-#[derive(Clone)]
-struct VecMapFull(VecMap);
-impl PrimitiveCommon for VecMapFull {
-    fn name(&self) -> &str { &self.0.name }
-    fn get_type_constraints(&self, span: &Span) -> Box<dyn TypeConstraint> {
-        self.0.type_constraints(span)
-    }
-}
-impl WritePrim for VecMapFull {
-    fn apply<'a, 'db>(
-        &self,
-        state: &mut crate::WriteState<'a, 'db>,
-        args: &[Value],
-    ) -> Option<Value> {
-        self.0.run(state, args, |fc, s, a| fc.apply_mut(s.raw_exec_state(), a))
     }
 }
 

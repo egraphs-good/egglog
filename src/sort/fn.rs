@@ -203,31 +203,21 @@ impl Sort for FunctionSort {
             },
             None,
         );
-        // Two context-specialized variants of `unstable-app` registered
-        // as one overload group. Their `valid_contexts` overlap
-        // (ApplyPure is sound everywhere, ApplyFull only in action
-        // contexts); the group registration partitions the contexts so
-        // ApplyFull claims action contexts and ApplyPure keeps the
-        // query contexts. Different `FunctionSort`s register
-        // independent groups under the same `unstable-app` name and
-        // are dispatched by signature.
-        let function = self.clone();
-        eg.add_primitive_group(|g| {
-            g.add_pure(
-                ApplyPure {
-                    name: "unstable-app".into(),
-                    function: function.clone(),
-                },
-                None,
-            );
-            g.add_write(
-                ApplyFull {
-                    name: "unstable-app".into(),
-                    function,
-                },
-                None,
-            );
-        });
+        // Higher-order primitive: registers two `ExternalFunctionId`s
+        // (one for query contexts, one for action contexts) that share
+        // a single body. `FunctionContainer::apply` reads
+        // `state.current_context()` at runtime to choose pure-side vs
+        // action-side dispatch — pure-side returns `None` for
+        // constructor and custom-function lookups (would be unsound in
+        // queries), action-side mints constructors and reads custom
+        // functions.
+        eg.add_higher_order_primitive(
+            Apply {
+                name: "unstable-app".into(),
+                function: self.clone(),
+            },
+            None,
+        );
 
         register_vec_primitives_for_function(eg, self.clone());
         register_multiset_primitives_for_function(eg, self.clone());
@@ -443,21 +433,20 @@ impl BaseValue for ResolvedFunction {}
 
 #[derive(Clone, Debug, PartialEq, Eq, Hash)]
 pub enum ResolvedFunctionId {
-    /// Wraps a constructor-table lookup. `lookup_or_insert` mints a
-    /// fresh eclass id on miss — that's a write. Only safe in action
-    /// contexts (RuleAction, GlobalAction). `apply_in` refuses this
-    /// variant.
+    /// Wraps a constructor-table lookup. In an action context
+    /// `FunctionContainer::apply` mints a fresh eclass via
+    /// `lookup_or_insert`; in `GlobalQuery` it does a read-only
+    /// `lookup`; in `RuleQuery` it returns `None` (no DB ops).
     ConstructorLookup(egglog_bridge::TableAction),
-    /// Wraps a custom-function (`:no-merge`/`Fail`) lookup. `lookup` is
-    /// a pure read returning `None` on miss. Safe everywhere except
-    /// `RuleQuery` — there it's an untracked read that seminaive cannot
-    /// re-fire on (issue #772, future-work primitive-declares-its-reads
-    /// path).
+    /// Wraps a custom-function (`:no-merge`/`Fail`) lookup. Pure read
+    /// returning `None` on miss. `FunctionContainer::apply` allows
+    /// this in every context except `RuleQuery` (where it would be an
+    /// untracked seminaive read).
     CustomLookup(egglog_bridge::TableAction),
     /// Wraps a primitive. `valid_contexts` carries the primitive's
-    /// declared capability profile so `FunctionContainer::apply_in` can
-    /// decide at dispatch time whether the inner call is safe for the
-    /// caller's context.
+    /// declared capability profile so `FunctionContainer::apply` can
+    /// decide at dispatch time whether the inner call is valid in
+    /// the runtime context.
     Prim {
         id: ExternalFunctionId,
         valid_contexts: Vec<crate::Context>,
@@ -466,63 +455,37 @@ pub enum ResolvedFunctionId {
 
 // (unstable-app <function> [<arg1>, <arg2>, ...])
 //
-// Registered as two context-specialized variants under the same name
-// (issue #772):
-//
-// - `ApplyPure` (`State = PureState`, valid in all four contexts)
-//   dispatches through `FunctionContainer::apply_in`. In a query context
-//   the inner primitive must be declared valid in that context
-//   (typically "pure" — e.g. `+` on i64); constructors, custom-function
-//   lookups, and writing primitives all cause the match to fail (None).
-//
-// - `ApplyFull` (`State = WriteState`, valid in rule + global
-//   actions) dispatches through `FunctionContainer::apply_mut` which has
-//   full access — constructors mint fresh eclass ids, custom functions
-//   report None on miss, primitives dispatch unconditionally.
-//
-// Both variants share an identical type constraint, so the auto-
-// derived dedup key from `add_primitive` (name + signature)
-// collapses them into one XOR branch during overload resolution.
-// `BackendRule::prim` then picks the variant whose `valid_contexts`
-// contains the caller's context. Distinct `FunctionSort`s produce
-// different signature keys (since the function sort name appears in
-// the constraint), so `unstable-app` for `MathFn` stays a separate
+// Registered via `EGraph::add_higher_order_primitive` (issue #772).
+// That helper registers four `ExternalFunctionId`s under the same name
+// — one per `Context` variant — each closure stamping its specific
+// context onto `ExecutionState` before invoking the shared body.
+// `FunctionContainer::apply` reads back the runtime context and
+// chooses pure-side vs action-side dispatch (no mint in queries; mint
+// constructors in action contexts; `RuleQuery` refuses all DB ops).
+// Distinct `FunctionSort`s produce different signature keys, so
+// `unstable-app` for `MathFn` stays a separate
 // overload from `unstable-app` for `i64Fun`.
 
 #[derive(Clone)]
-struct ApplyPure {
+struct Apply {
     name: String,
     function: Arc<FunctionSort>,
 }
 
-#[derive(Clone)]
-struct ApplyFull {
-    name: String,
-    function: Arc<FunctionSort>,
-}
-
-fn apply_type_constraints(
-    name: &str,
-    function: &Arc<FunctionSort>,
-    span: &Span,
-) -> Box<dyn TypeConstraint> {
-    let mut sorts: Vec<ArcSort> = vec![function.clone()];
-    sorts.extend(function.inputs.clone());
-    sorts.push(function.output.clone());
-    SimpleTypeConstraint::new(name, sorts, span.clone()).into_box()
-}
-
-impl PrimitiveCommon for ApplyPure {
+impl PrimitiveCommon for Apply {
     fn name(&self) -> &str {
         &self.name
     }
 
     fn get_type_constraints(&self, span: &Span) -> Box<dyn TypeConstraint> {
-        apply_type_constraints(&self.name, &self.function, span)
+        let mut sorts: Vec<ArcSort> = vec![self.function.clone()];
+        sorts.extend(self.function.inputs.clone());
+        sorts.push(self.function.output.clone());
+        SimpleTypeConstraint::new(&self.name, sorts, span.clone()).into_box()
     }
 }
 
-impl PurePrim for ApplyPure {
+impl PurePrim for Apply {
     fn apply<'a, 'db>(
         &self,
         state: &mut crate::PureState<'a, 'db>,
@@ -534,106 +497,70 @@ impl PurePrim for ApplyPure {
             .get_val::<FunctionContainer>(*fc_val)
             .unwrap()
             .clone();
-        fc.apply_in(state, args)
-    }
-}
-
-impl PrimitiveCommon for ApplyFull {
-    fn name(&self) -> &str {
-        &self.name
-    }
-
-    fn get_type_constraints(&self, span: &Span) -> Box<dyn TypeConstraint> {
-        apply_type_constraints(&self.name, &self.function, span)
-    }
-}
-
-impl WritePrim for ApplyFull {
-    fn apply<'a, 'db>(
-        &self,
-        state: &mut crate::WriteState<'a, 'db>,
-        args: &[Value],
-    ) -> Option<Value> {
-        let (fc_val, args) = args.split_first().unwrap();
-        let fc = state
-            .container_values()
-            .get_val::<FunctionContainer>(*fc_val)
-            .unwrap()
-            .clone();
-        fc.apply_mut(state.raw_exec_state(), args)
+        fc.apply(state, args)
     }
 }
 
 impl FunctionContainer {
-    /// Query-safe dispatch: call the wrapped function from a pure (query)
-    /// state. Each branch checks that its required capabilities are a
-    /// superset of the caller state's `valid_contexts`. Returns `None`
-    /// when the inner function isn't safe in the caller's context — for
-    /// example, a constructor lookup is never safe via `apply_in` (it
-    /// would mint a fresh eclass), and a custom-function lookup is safe
-    /// everywhere except `RuleQuery` (untracked seminaive read).
+    /// Apply the wrapped function. Dispatch is keyed off
+    /// [`Internal::current_context`](crate::exec_state::__internal::Internal::current_context),
+    /// which the wrapper closure registered for each higher-order
+    /// primitive stamps before invoking the body:
     ///
-    /// This is the only intended caller of `UserState::call_external_func`
-    /// and `UserState::table_lookup`; both of those methods document a
-    /// per-call seminaive-soundness contract that this body satisfies.
-    pub fn apply_in<'a, 'db, S>(&self, state: &mut S, args: &[Value]) -> Option<Value>
+    /// - In a query context (`RuleQuery` / `GlobalQuery`),
+    ///   constructor and custom-function lookups return `None` —
+    ///   minting an eclass would be unsound and a custom-function
+    ///   read would be untracked by seminaive. Only wrapped
+    ///   primitives whose own `valid_contexts` cover the current
+    ///   context dispatch.
+    /// - In an action context (`RuleAction` / `GlobalAction`),
+    ///   constructor lookups mint via `lookup_or_insert`,
+    ///   custom-function lookups read via `lookup`, and primitives
+    ///   dispatch through the raw `ExecutionState`.
+    pub fn apply<'a, 'db, S>(&self, state: &mut S, args: &[Value]) -> Option<Value>
     where
-        S: crate::UserState<'a, 'db>,
+        S: Internal<'a, 'db>,
         'db: 'a,
     {
         let args: Vec<_> = self.1.iter().map(|(_, x)| x).chain(args).copied().collect();
-        // Capability set for any table lookup as a pure read. Both
-        // constructor and custom-function lookups behave the same way in
-        // `apply_in`: we call `TableAction::lookup` (no mint), which is
-        // safe everywhere except `RuleQuery` (untracked seminaive read).
-        // The difference between the two variants only matters in
-        // `apply_mut` — constructor lookups there mint on miss.
-        const LOOKUP_READ_CONTEXTS: &[crate::Context] = &[
-            crate::Context::RuleAction,
-            crate::Context::GlobalQuery,
-            crate::Context::GlobalAction,
-        ];
-
-        let caller_contexts = S::valid_contexts();
-        let callee_safe = |callee_contexts: &[crate::Context]| {
-            caller_contexts.iter().all(|c| callee_contexts.contains(c))
-        };
-
-        let view = state;
+        let ctx = state.current_context();
+        // Constructor minting requires write capability (action contexts).
+        let can_mint = matches!(
+            ctx,
+            crate::Context::RuleAction | crate::Context::GlobalAction
+        );
+        // Read access: forbidden in `RuleQuery` (untracked by
+        // seminaive); allowed everywhere else. `RuleAction` reads are
+        // *technically* unsound under strict seminaive, but the
+        // existing `apply_mut` semantics permit them — preserved here
+        // for back-compat.
+        let can_read = !matches!(ctx, crate::Context::RuleQuery);
         match &self.0 {
-            ResolvedFunctionId::ConstructorLookup(action)
-            | ResolvedFunctionId::CustomLookup(action) => {
-                if callee_safe(LOOKUP_READ_CONTEXTS) {
-                    view.table_lookup(action, &args)
+            ResolvedFunctionId::ConstructorLookup(action) => {
+                if can_mint {
+                    action.lookup_or_insert(state.raw_exec_state(), &args)
+                } else if can_read {
+                    // Read-only path (e.g. `GlobalQuery`): existing
+                    // eclasses are visible, but we don't mint.
+                    action.lookup(state.raw_exec_state(), &args)
+                } else {
+                    None
+                }
+            }
+            ResolvedFunctionId::CustomLookup(action) => {
+                if can_read {
+                    action.lookup(state.raw_exec_state(), &args)
                 } else {
                     None
                 }
             }
             ResolvedFunctionId::Prim { id, valid_contexts } => {
-                if callee_safe(valid_contexts.as_slice()) {
-                    // Escape hatch- call external func, which is pub(crate) in egglog.
-                    // We just checked for the right context so this should be fine.
-                    view.call_external_func(*id, &args)
+                if valid_contexts.contains(&ctx) {
+                    state.call_external_func(*id, &args)
                 } else {
                     None
                 }
             }
-        }
-    }
-
-    /// Full dispatch: call the wrapped function with raw
-    /// `&mut ExecutionState`. This is the "do what you meant" variant
-    /// used by `unstable-app` on the RHS of rules — for constructor
-    /// lookups it mints a fresh eclass id; for custom-function lookups
-    /// it returns `None` on miss; for primitives it dispatches through
-    /// the raw state. Action-side callers reach the underlying
-    /// `&mut ExecutionState` via `state.raw_exec_state()`.
-    pub fn apply_mut(&self, es: &mut ExecutionState, args: &[Value]) -> Option<Value> {
-        let args: Vec<_> = self.1.iter().map(|(_, x)| x).chain(args).copied().collect();
-        match &self.0 {
-            ResolvedFunctionId::ConstructorLookup(action) => action.lookup_or_insert(es, &args),
-            ResolvedFunctionId::CustomLookup(action) => action.lookup(es, &args),
-            ResolvedFunctionId::Prim { id, .. } => es.call_external_func(*id, &args),
         }
     }
 }

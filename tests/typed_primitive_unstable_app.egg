@@ -1,10 +1,10 @@
 ; Tests for typed-primitive dispatch of `unstable-app` (#772).
 ;
-; `unstable-app` has two registered variants in one overload group:
-;   - ApplyPure (PurePrim, dispatches via apply_in — pure-read)
-;   - ApplyFull (WritePrim, dispatches via apply_mut — full)
-; The constraint builder partitions their `valid_contexts` so queries
-; pick ApplyPure and rule actions pick ApplyFull.
+; `unstable-app` is registered via `add_higher_order_primitive`, which
+; produces one `ExternalFunctionId` per `Context` variant. At runtime
+; the closure for the chosen id stamps its specific context onto the
+; `ExecutionState`, and `FunctionContainer::apply` reads it back and
+; chooses pure-side vs action-side dispatch.
 
 ; --- 1. unstable-app over a pure primitive (`+`) works in a query.
 (sort IntFn (UnstableFn (i64 i64) i64))
@@ -26,7 +26,9 @@
 (check (Num 99))
 
 ; --- 3. unstable-app over a constructor in a *query* must NOT mint.
-;     `apply_in` returns None for constructors, so the check fails.
+;     `FunctionContainer::apply` does a read-only `lookup` in
+;     `GlobalQuery` (no mint), so the eclass for `(Num 42)` does not
+;     exist and the check fails.
 (fail (check (= (unstable-app make 42) (Num 42))))
 ; And the rule above did not unintentionally mint (Num 42).
 (fail (check (Num 42)))
@@ -43,7 +45,9 @@
 (check (= (dbl-out 7) 14))
 
 ; --- 5. The same custom-function lookup in a top-level `check`
-;     (GlobalQuery) is conservatively refused — the same dispatch
-;     wrapper might be reachable from a rule LHS, where the read
-;     would be untracked by seminaive.
-(fail (check (= (unstable-app twice 7) 14)))
+;     (GlobalQuery) succeeds — top-level queries don't have
+;     seminaive's "untracked read" concern, so reading the existing
+;     row's value is sound. (Inside a rule LHS the typechecker emits
+;     the RuleQuery-tagged variant of `unstable-app`, whose body
+;     refuses custom-function reads — see [`FunctionContainer::apply`].)
+(check (= (unstable-app twice 7) 14))

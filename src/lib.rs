@@ -152,8 +152,7 @@ pub trait PrimitiveCommon: Send + Sync + 'static {
 ///
 /// Most primitives are pure (e.g., `+`, `<`, `vec-of`). The macros
 /// `add_primitive!` / `add_literal_prim!` generate impls of this trait.
-/// Register via [`EGraph::add_pure_primitive`] or via
-/// [`EGraph::add_primitive_group`] inside a `g.add_pure(..., None)`.
+/// Register via [`EGraph::add_pure_primitive`].
 pub trait PurePrim: PrimitiveCommon {
     fn apply<'a, 'db>(&self, state: &mut PureState<'a, 'db>, args: &[Value]) -> Option<Value>;
 }
@@ -2045,7 +2044,7 @@ impl<'a> BackendRule<'a> {
             let id = if let Some(f) = self.type_info.get_func_type(name) {
                 // Distinguish constructor-table lookups (write-on-miss
                 // via `lookup_or_insert`) from custom-function lookups
-                // (pure read via `lookup`). `FunctionContainer::apply_in`
+                // (pure read via `lookup`). `FunctionContainer::apply`
                 // uses this distinction to allow `unstable-app` over a
                 // custom function in safe contexts (e.g. global checks)
                 // while still refusing constructor minting in queries.
@@ -2077,8 +2076,8 @@ impl<'a> BackendRule<'a> {
                 assert!(ps.len() == 1, "options for {name}: {ps:?}");
                 let picked = ps.into_iter().next().unwrap();
                 // Record the wrapped primitive's capability profile so
-                // `FunctionContainer::apply_in` can refuse dispatch in
-                // query contexts when the inner function isn't pure.
+                // `FunctionContainer::apply` can refuse dispatch in
+                // contexts where the inner function isn't valid.
                 ResolvedFunctionId::Prim {
                     id: picked.id,
                     valid_contexts: picked.valid_contexts.clone(),

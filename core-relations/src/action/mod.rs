@@ -352,6 +352,29 @@ pub(crate) struct DbView<'a> {
 /// the next call to `merge` on the underlying table.
 ///
 /// ## Predicted Values
+/// The four contexts in which an external function may be invoked.
+/// Set on [`ExecutionState`] by the wrapper closure that the egglog
+/// crate generates around each registered primitive, so primitive
+/// bodies that need to dispatch differently per context (notably
+/// `unstable-app` and friends) can read it. Used only by higher-order
+/// dispatch — most primitives ignore it.
+#[derive(Copy, Clone, Debug, PartialEq, Eq, Hash)]
+pub enum Context {
+    RuleQuery,
+    RuleAction,
+    GlobalQuery,
+    GlobalAction,
+}
+
+impl Context {
+    pub const ALL: [Context; 4] = [
+        Context::RuleQuery,
+        Context::RuleAction,
+        Context::GlobalQuery,
+        Context::GlobalAction,
+    ];
+}
+
 /// ExecutionStates provide a means of synchronizing the results of a pending write across
 /// different executions of a rule. This is particularly important in the case where the result of
 /// an operation (such as "lookup or insert new id" operatiosn) is a fresh id. A common
@@ -366,6 +389,14 @@ pub struct ExecutionState<'a> {
     /// Atomic flag for early stopping of rule execution.
     /// This flag is shared across all handles (clones) of this ExecutionState.
     stop_match: Arc<AtomicBool>,
+    /// The execution context an external function is being invoked
+    /// in. Most primitives ignore this; higher-order dispatch (e.g.
+    /// `unstable-app`) reads it to choose between pure-side and
+    /// action-side semantics. Stamped by the closure registered for
+    /// each external primitive; default is [`Context::GlobalAction`]
+    /// (the most permissive setting — primitives that don't set it
+    /// also don't read it).
+    current_context: Context,
 }
 
 /// A basic wrapper around an map from table id to a mutation buffer for that table that also
@@ -417,6 +448,7 @@ impl Clone for ExecutionState<'_> {
             buffers: self.buffers.clone(),
             changed: false,
             stop_match: Arc::clone(&self.stop_match),
+            current_context: self.current_context,
         }
     }
 }
@@ -432,7 +464,23 @@ impl<'a> ExecutionState<'a> {
             buffers: MutationBuffers::new(db.notification_list, buffers),
             changed: false,
             stop_match: Arc::new(AtomicBool::new(false)),
+            current_context: Context::GlobalAction,
         }
+    }
+
+    /// The [`Context`] this `ExecutionState` is currently invoking
+    /// primitives in. Defaults to [`Context::GlobalAction`]; the
+    /// closure wrapping each registered primitive stamps the
+    /// appropriate context before dispatching.
+    pub fn current_context(&self) -> Context {
+        self.current_context
+    }
+
+    /// Set the current execution context. Called by the wrapper
+    /// closure around each registered primitive, before invoking the
+    /// primitive's body.
+    pub fn set_current_context(&mut self, ctx: Context) {
+        self.current_context = ctx;
     }
 
     /// Stage an insertion of the given row into `table`.
