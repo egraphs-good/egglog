@@ -116,6 +116,11 @@ name = "egglog"
 path = "src/main.rs"
 required-features = ["bin"]
 
+[[bin]]
+name = "dd-core-rule-canary"
+path = "src/bin/dd_core_rule_canary.rs"
+required-features = ["bin"]
+
 [features]
 default = ["bin"]
 

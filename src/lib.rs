@@ -18,6 +18,9 @@ mod cli;
 mod command_macro;
 pub mod constraint;
 mod core;
+#[cfg(feature = "bin")]
+#[doc(hidden)]
+pub mod dd_core_rule_canary;
 pub mod extract;
 pub mod prelude;
 mod proofs;
