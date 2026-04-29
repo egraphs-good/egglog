@@ -238,17 +238,15 @@ pub(crate) fn try_registering_multiset_map(
     {
         return;
     }
-    let base = Map {
-        name: "unstable-multiset-map".into(),
-        multiset: input_ms,
-        output_multiset: output_ms,
-        fn_: fn_.clone(),
-    };
-    eg.add_primitive_group(|g| {
-        g.add_pure(MapPure(base.clone()), None);
-        g.add_read(MapGlobalQuery(base.clone()), None);
-        g.add_write(MapFull(base), None);
-    });
+    eg.add_higher_order_primitive(
+        Map {
+            name: "unstable-multiset-map".into(),
+            multiset: input_ms,
+            output_multiset: output_ms,
+            fn_: fn_.clone(),
+        },
+        None,
+    );
 }
 
 pub(crate) fn register_multiset_primitives_for_function(eg: &mut EGraph, fn_: Arc<FunctionSort>) {
@@ -277,29 +275,24 @@ fn try_registering_multiset_non_map_primitives(
         && fn_.inputs()[0].name() == element_name
         && fn_.output().name() == "Unit"
     {
-        let filter = Filter {
-            name: "unstable-multiset-filter".into(),
-            multiset: multiset.clone(),
-            fn_: fn_.clone(),
-            skip_empty: true,
-        };
-        eg.add_primitive_group(|g| {
-            g.add_pure(FilterPure(filter.clone()), None);
-            g.add_read(FilterGlobalQuery(filter.clone()), None);
-            g.add_write(FilterFull(filter), None);
-        });
-
-        let filter_not = Filter {
-            name: "unstable-multiset-filter-not".into(),
-            multiset: multiset.clone(),
-            fn_: fn_.clone(),
-            skip_empty: false,
-        };
-        eg.add_primitive_group(|g| {
-            g.add_pure(FilterPure(filter_not.clone()), None);
-            g.add_read(FilterGlobalQuery(filter_not.clone()), None);
-            g.add_write(FilterFull(filter_not), None);
-        });
+        eg.add_higher_order_primitive(
+            Filter {
+                name: "unstable-multiset-filter".into(),
+                multiset: multiset.clone(),
+                fn_: fn_.clone(),
+                skip_empty: true,
+            },
+            None,
+        );
+        eg.add_higher_order_primitive(
+            Filter {
+                name: "unstable-multiset-filter-not".into(),
+                multiset: multiset.clone(),
+                fn_: fn_.clone(),
+                skip_empty: false,
+            },
+            None,
+        );
     }
 
     if fn_.inputs().len() == 2
@@ -307,17 +300,15 @@ fn try_registering_multiset_non_map_primitives(
         && fn_.inputs()[1].name() == element_name
         && fn_.output().name() == element_name
     {
-        let reduce = Reduce {
-            name: "unstable-multiset-reduce".into(),
-            multiset: multiset.clone(),
-            fn_: fn_.clone(),
-            element: element.clone(),
-        };
-        eg.add_primitive_group(|g| {
-            g.add_pure(ReducePure(reduce.clone()), None);
-            g.add_read(ReduceGlobalQuery(reduce.clone()), None);
-            g.add_write(ReduceFull(reduce), None);
-        });
+        eg.add_higher_order_primitive(
+            Reduce {
+                name: "unstable-multiset-reduce".into(),
+                multiset: multiset.clone(),
+                fn_: fn_.clone(),
+                element: element.clone(),
+            },
+            None,
+        );
     }
 
     if fn_.inputs().len() == 2
@@ -350,16 +341,14 @@ fn try_registering_multiset_non_map_primitives(
         && fn_.inputs()[0].name() == element_name
         && fn_.output().name() == multiset.name()
     {
-        let base = FlatMap {
-            name: "unstable-multiset-flat-map".into(),
-            multiset,
-            fn_: fn_.clone(),
-        };
-        eg.add_primitive_group(|g| {
-            g.add_pure(FlatMapPure(base.clone()), None);
-            g.add_read(FlatMapGlobalQuery(base.clone()), None);
-            g.add_write(FlatMapFull(base), None);
-        });
+        eg.add_higher_order_primitive(
+            FlatMap {
+                name: "unstable-multiset-flat-map".into(),
+                multiset,
+                fn_: fn_.clone(),
+            },
+            None,
+        );
     }
 }
 
@@ -371,16 +360,13 @@ struct Map {
     output_multiset: ArcSort,
 }
 
-// `Map` is dual-registered (issue #772). A pure variant runs in
-// query-style contexts and dispatches via `FunctionContainer::apply_in`,
-// which (now that `ResolvedFunctionId::Lookup` is split) allows custom-
-// function reads when the caller's state excludes `RuleQuery`. A full
-// variant runs in action contexts and dispatches via `apply_mut`, with
-// constructor minting on miss.
-impl Map {
-    fn type_constraints(&self, span: &Span) -> Box<dyn TypeConstraint> {
+impl PrimitiveCommon for Map {
+    fn name(&self) -> &str {
+        &self.name
+    }
+    fn get_type_constraints(&self, span: &Span) -> Box<dyn TypeConstraint> {
         SimpleTypeConstraint::new(
-            "unstable-multiset-map",
+            &self.name,
             vec![
                 self.fn_.clone(),
                 self.multiset.clone(),
@@ -390,28 +376,27 @@ impl Map {
         )
         .into_box()
     }
+}
 
-    fn run<'a, 'db, S, D>(&self, state: &mut S, args: &[Value], dispatch: D) -> Option<Value>
-    where
-        S: crate::UserState<'a, 'db>,
-        'db: 'a,
-        D: Fn(&FunctionContainer, &mut S, &[Value]) -> Option<Value>,
-    {
+impl PurePrim for Map {
+    fn apply<'a, 'db>(
+        &self,
+        state: &mut crate::PureState<'a, 'db>,
+        args: &[Value],
+    ) -> Option<Value> {
         let fc = state
-            
             .container_values()
             .get_val::<FunctionContainer>(args[0])
             .unwrap()
             .clone();
         let multiset = state
-            
             .container_values()
             .get_val::<MultiSetContainer>(args[1])
             .unwrap()
             .clone();
         let mut new_data = MultiSet::<Value>::new();
         for (v, c) in multiset.data.iter_counts() {
-            if let Some(mapped) = dispatch(&fc, state, &[v]) {
+            if let Some(mapped) = fc.apply(state, &[v]) {
                 new_data.insert_multiple_mut(mapped, c);
             }
         }
@@ -420,75 +405,6 @@ impl Map {
             ..multiset
         };
         Some(state.register_container(new_ms))
-    }
-}
-
-#[derive(Clone)]
-struct MapPure(Map);
-
-impl PrimitiveCommon for MapPure {
-    fn name(&self) -> &str {
-        &self.0.name
-    }
-    fn get_type_constraints(&self, span: &Span) -> Box<dyn TypeConstraint> {
-        self.0.type_constraints(span)
-    }
-    
-}
-
-impl PurePrim for MapPure {
-    fn apply<'a, 'db>(
-        &self,
-        state: &mut crate::PureState<'a, 'db>,
-        args: &[Value],
-    ) -> Option<Value> {
-        self.0.run(state, args, |fc, s, a| fc.apply_in(s, a))
-    }
-}
-
-#[derive(Clone)]
-struct MapGlobalQuery(Map);
-
-impl PrimitiveCommon for MapGlobalQuery {
-    fn name(&self) -> &str {
-        &self.0.name
-    }
-    fn get_type_constraints(&self, span: &Span) -> Box<dyn TypeConstraint> {
-        self.0.type_constraints(span)
-    }
-    
-}
-
-impl ReadPrim for MapGlobalQuery {
-    fn apply<'a, 'db>(
-        &self,
-        state: &mut crate::ReadState<'a, 'db>,
-        args: &[Value],
-    ) -> Option<Value> {
-        self.0.run(state, args, |fc, s, a| fc.apply_in(s, a))
-    }
-}
-
-#[derive(Clone)]
-struct MapFull(Map);
-
-impl PrimitiveCommon for MapFull {
-    fn name(&self) -> &str {
-        &self.0.name
-    }
-    fn get_type_constraints(&self, span: &Span) -> Box<dyn TypeConstraint> {
-        self.0.type_constraints(span)
-    }
-    
-}
-
-impl WritePrim for MapFull {
-    fn apply<'a, 'db>(
-        &self,
-        state: &mut crate::WriteState<'a, 'db>,
-        args: &[Value],
-    ) -> Option<Value> {
-        self.0.run(state, args, |fc, s, a| fc.apply_mut(s.raw_exec_state(), a))
     }
 }
 
@@ -633,11 +549,13 @@ struct FlatMap {
     fn_: Arc<FunctionSort>,
 }
 
-// `FlatMap` is triple-registered like `Map` (see comment on `Map`).
-impl FlatMap {
-    fn type_constraints(&self, span: &Span) -> Box<dyn TypeConstraint> {
+impl PrimitiveCommon for FlatMap {
+    fn name(&self) -> &str {
+        &self.name
+    }
+    fn get_type_constraints(&self, span: &Span) -> Box<dyn TypeConstraint> {
         SimpleTypeConstraint::new(
-            "unstable-multiset-flat-map",
+            &self.name,
             vec![
                 self.fn_.clone(),
                 self.multiset.clone(),
@@ -647,31 +565,29 @@ impl FlatMap {
         )
         .into_box()
     }
+}
 
-    fn run<'a, 'db, S, D>(&self, state: &mut S, args: &[Value], dispatch: D) -> Option<Value>
-    where
-        S: crate::UserState<'a, 'db>,
-        'db: 'a,
-        D: Fn(&FunctionContainer, &mut S, &[Value]) -> Option<Value>,
-    {
+impl PurePrim for FlatMap {
+    fn apply<'a, 'db>(
+        &self,
+        state: &mut crate::PureState<'a, 'db>,
+        args: &[Value],
+    ) -> Option<Value> {
         let fc = state
-            
             .container_values()
             .get_val::<FunctionContainer>(args[0])
             .unwrap()
             .clone();
         let multiset = state
-            
             .container_values()
             .get_val::<MultiSetContainer>(args[1])
             .unwrap()
             .clone();
         let mut new_data = MultiSet::<Value>::new();
         for (v, c) in multiset.data.iter_counts() {
-            let mapped = dispatch(&fc, state, &[v]);
+            let mapped = fc.apply(state, &[v]);
             if let Some(mapped_ms) = mapped {
                 let mapped_ms = state
-                    
                     .container_values()
                     .get_val::<MultiSetContainer>(mapped_ms)
                     .unwrap();
@@ -690,66 +606,6 @@ impl FlatMap {
     }
 }
 
-#[derive(Clone)]
-struct FlatMapPure(FlatMap);
-impl PrimitiveCommon for FlatMapPure {
-    fn name(&self) -> &str { &self.0.name }
-    fn get_type_constraints(&self, span: &Span) -> Box<dyn TypeConstraint> {
-        self.0.type_constraints(span)
-    }
-    
-}
-
-impl PurePrim for FlatMapPure {
-    fn apply<'a, 'db>(
-        &self,
-        state: &mut crate::PureState<'a, 'db>,
-        args: &[Value],
-    ) -> Option<Value> {
-        self.0.run(state, args, |fc, s, a| fc.apply_in(s, a))
-    }
-}
-
-#[derive(Clone)]
-struct FlatMapGlobalQuery(FlatMap);
-impl PrimitiveCommon for FlatMapGlobalQuery {
-    fn name(&self) -> &str { &self.0.name }
-    fn get_type_constraints(&self, span: &Span) -> Box<dyn TypeConstraint> {
-        self.0.type_constraints(span)
-    }
-    
-}
-
-impl ReadPrim for FlatMapGlobalQuery {
-    fn apply<'a, 'db>(
-        &self,
-        state: &mut crate::ReadState<'a, 'db>,
-        args: &[Value],
-    ) -> Option<Value> {
-        self.0.run(state, args, |fc, s, a| fc.apply_in(s, a))
-    }
-}
-
-#[derive(Clone)]
-struct FlatMapFull(FlatMap);
-impl PrimitiveCommon for FlatMapFull {
-    fn name(&self) -> &str { &self.0.name }
-    fn get_type_constraints(&self, span: &Span) -> Box<dyn TypeConstraint> {
-        self.0.type_constraints(span)
-    }
-    
-}
-
-impl WritePrim for FlatMapFull {
-    fn apply<'a, 'db>(
-        &self,
-        state: &mut crate::WriteState<'a, 'db>,
-        args: &[Value],
-    ) -> Option<Value> {
-        self.0.run(state, args, |fc, s, a| fc.apply_mut(s.raw_exec_state(), a))
-    }
-}
-
 // (unstable-multiset-filter (MultiSet[X], [X] -> Unit) -> MultiSet[X])
 // will filter the elements in the multiset based on whether the function is defined for them.
 // If skip_empty is true, it will keep elements where the function is defined, otherwise it will keep elements where the function is not defined.
@@ -761,9 +617,11 @@ struct Filter {
     skip_empty: bool,
 }
 
-// `Filter` is triple-registered like `Map` (see comment on `Map`).
-impl Filter {
-    fn type_constraints(&self, span: &Span) -> Box<dyn TypeConstraint> {
+impl PrimitiveCommon for Filter {
+    fn name(&self) -> &str {
+        &self.name
+    }
+    fn get_type_constraints(&self, span: &Span) -> Box<dyn TypeConstraint> {
         SimpleTypeConstraint::new(
             &self.name,
             vec![
@@ -775,28 +633,27 @@ impl Filter {
         )
         .into_box()
     }
+}
 
-    fn run<'a, 'db, S, D>(&self, state: &mut S, args: &[Value], dispatch: D) -> Option<Value>
-    where
-        S: crate::UserState<'a, 'db>,
-        'db: 'a,
-        D: Fn(&FunctionContainer, &mut S, &[Value]) -> Option<Value>,
-    {
+impl PurePrim for Filter {
+    fn apply<'a, 'db>(
+        &self,
+        state: &mut crate::PureState<'a, 'db>,
+        args: &[Value],
+    ) -> Option<Value> {
         let fc = state
-            
             .container_values()
             .get_val::<FunctionContainer>(args[0])
             .unwrap()
             .clone();
         let multiset = state
-            
             .container_values()
             .get_val::<MultiSetContainer>(args[1])
             .unwrap()
             .clone();
         let mut new_data = MultiSet::<Value>::new();
         for (v, c) in multiset.data.iter_counts() {
-            let mapped = dispatch(&fc, state, &[v]);
+            let mapped = fc.apply(state, &[v]);
             if mapped.is_some() == self.skip_empty {
                 new_data.insert_multiple_mut(v, c);
             }
@@ -806,66 +663,6 @@ impl Filter {
             ..multiset
         };
         Some(state.register_container(new_ms))
-    }
-}
-
-#[derive(Clone)]
-struct FilterPure(Filter);
-impl PrimitiveCommon for FilterPure {
-    fn name(&self) -> &str { &self.0.name }
-    fn get_type_constraints(&self, span: &Span) -> Box<dyn TypeConstraint> {
-        self.0.type_constraints(span)
-    }
-    
-}
-
-impl PurePrim for FilterPure {
-    fn apply<'a, 'db>(
-        &self,
-        state: &mut crate::PureState<'a, 'db>,
-        args: &[Value],
-    ) -> Option<Value> {
-        self.0.run(state, args, |fc, s, a| fc.apply_in(s, a))
-    }
-}
-
-#[derive(Clone)]
-struct FilterGlobalQuery(Filter);
-impl PrimitiveCommon for FilterGlobalQuery {
-    fn name(&self) -> &str { &self.0.name }
-    fn get_type_constraints(&self, span: &Span) -> Box<dyn TypeConstraint> {
-        self.0.type_constraints(span)
-    }
-    
-}
-
-impl ReadPrim for FilterGlobalQuery {
-    fn apply<'a, 'db>(
-        &self,
-        state: &mut crate::ReadState<'a, 'db>,
-        args: &[Value],
-    ) -> Option<Value> {
-        self.0.run(state, args, |fc, s, a| fc.apply_in(s, a))
-    }
-}
-
-#[derive(Clone)]
-struct FilterFull(Filter);
-impl PrimitiveCommon for FilterFull {
-    fn name(&self) -> &str { &self.0.name }
-    fn get_type_constraints(&self, span: &Span) -> Box<dyn TypeConstraint> {
-        self.0.type_constraints(span)
-    }
-    
-}
-
-impl WritePrim for FilterFull {
-    fn apply<'a, 'db>(
-        &self,
-        state: &mut crate::WriteState<'a, 'db>,
-        args: &[Value],
-    ) -> Option<Value> {
-        self.0.run(state, args, |fc, s, a| fc.apply_mut(s.raw_exec_state(), a))
     }
 }
 
@@ -940,11 +737,13 @@ struct Reduce {
     element: ArcSort,
 }
 
-// `Reduce` is triple-registered like `Map` (see comment on `Map`).
-impl Reduce {
-    fn type_constraints(&self, span: &Span) -> Box<dyn TypeConstraint> {
+impl PrimitiveCommon for Reduce {
+    fn name(&self) -> &str {
+        &self.name
+    }
+    fn get_type_constraints(&self, span: &Span) -> Box<dyn TypeConstraint> {
         SimpleTypeConstraint::new(
-            "unstable-multiset-reduce",
+            &self.name,
             vec![
                 self.fn_.clone(),
                 self.element.clone(),
@@ -955,22 +754,21 @@ impl Reduce {
         )
         .into_box()
     }
+}
 
-    fn run<'a, 'db, S, D>(&self, state: &mut S, args: &[Value], dispatch: D) -> Option<Value>
-    where
-        S: crate::UserState<'a, 'db>,
-        'db: 'a,
-        D: Fn(&FunctionContainer, &mut S, &[Value]) -> Option<Value>,
-    {
+impl PurePrim for Reduce {
+    fn apply<'a, 'db>(
+        &self,
+        state: &mut crate::PureState<'a, 'db>,
+        args: &[Value],
+    ) -> Option<Value> {
         let fc = state
-            
             .container_values()
             .get_val::<FunctionContainer>(args[0])
             .unwrap()
             .clone();
         let initial = args[1];
         let multiset = state
-            
             .container_values()
             .get_val::<MultiSetContainer>(args[2])
             .unwrap()
@@ -982,69 +780,9 @@ impl Reduce {
             values.remove(0)
         };
         for v in values {
-            acc = dispatch(&fc, state, &[acc, v])?;
+            acc = fc.apply(state, &[acc, v])?;
         }
         Some(acc)
-    }
-}
-
-#[derive(Clone)]
-struct ReducePure(Reduce);
-impl PrimitiveCommon for ReducePure {
-    fn name(&self) -> &str { &self.0.name }
-    fn get_type_constraints(&self, span: &Span) -> Box<dyn TypeConstraint> {
-        self.0.type_constraints(span)
-    }
-    
-}
-
-impl PurePrim for ReducePure {
-    fn apply<'a, 'db>(
-        &self,
-        state: &mut crate::PureState<'a, 'db>,
-        args: &[Value],
-    ) -> Option<Value> {
-        self.0.run(state, args, |fc, s, a| fc.apply_in(s, a))
-    }
-}
-
-#[derive(Clone)]
-struct ReduceGlobalQuery(Reduce);
-impl PrimitiveCommon for ReduceGlobalQuery {
-    fn name(&self) -> &str { &self.0.name }
-    fn get_type_constraints(&self, span: &Span) -> Box<dyn TypeConstraint> {
-        self.0.type_constraints(span)
-    }
-    
-}
-
-impl ReadPrim for ReduceGlobalQuery {
-    fn apply<'a, 'db>(
-        &self,
-        state: &mut crate::ReadState<'a, 'db>,
-        args: &[Value],
-    ) -> Option<Value> {
-        self.0.run(state, args, |fc, s, a| fc.apply_in(s, a))
-    }
-}
-
-#[derive(Clone)]
-struct ReduceFull(Reduce);
-impl PrimitiveCommon for ReduceFull {
-    fn name(&self) -> &str { &self.0.name }
-    fn get_type_constraints(&self, span: &Span) -> Box<dyn TypeConstraint> {
-        self.0.type_constraints(span)
-    }
-    
-}
-
-impl WritePrim for ReduceFull {
-    fn apply<'a, 'db>(
-        &self,
-        state: &mut crate::WriteState<'a, 'db>,
-        args: &[Value],
-    ) -> Option<Value> {
-        self.0.run(state, args, |fc, s, a| fc.apply_mut(s.raw_exec_state(), a))
     }
 }
 

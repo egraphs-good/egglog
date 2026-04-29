@@ -7,10 +7,8 @@
 //! - `unstable-fn` over a constructor in a query context is filtered
 //!   (does NOT mint an eclass), but works in actions.
 //! - `unstable-fn` over a custom function is filtered in rule queries.
-//! - `add_primitive_group` partitions overlapping `valid_contexts` so
-//!   each call site sees exactly one variant.
-//! - Two non-grouped same-signature registrations cause a typecheck
-//!   error (XOR rejects the ambiguous match).
+//! - Two same-signature registrations: silent-pick-first behavior
+//!   (regression guard).
 
 use egglog::ast::Span;
 use egglog::constraint::{SimpleTypeConstraint, TypeConstraint};
@@ -72,36 +70,6 @@ impl WritePrim for WriteEcho {
     fn apply<'a, 'db>(&self, state: &mut WriteState<'a, 'db>, args: &[Value]) -> Option<Value> {
         let _ = state.base_values();
         Some(args[0])
-    }
-}
-
-/// A write primitive with the same `(i64, i64) -> i64` signature as
-/// `PureAdd`, used for grouped-registration tests where both variants
-/// must share a signature.
-#[derive(Clone)]
-struct WriteAdd(&'static str);
-impl PrimitiveCommon for WriteAdd {
-    fn name(&self) -> &str {
-        self.0
-    }
-    fn get_type_constraints(&self, span: &Span) -> Box<dyn TypeConstraint> {
-        SimpleTypeConstraint::new(
-            self.name(),
-            vec![
-                I64Sort.to_arcsort(),
-                I64Sort.to_arcsort(),
-                I64Sort.to_arcsort(),
-            ],
-            span.clone(),
-        )
-        .into_box()
-    }
-}
-impl WritePrim for WriteAdd {
-    fn apply<'a, 'db>(&self, state: &mut WriteState<'a, 'db>, args: &[Value]) -> Option<Value> {
-        let a = state.base_values().unwrap::<i64>(args[0]);
-        let b = state.base_values().unwrap::<i64>(args[1]);
-        Some(state.base_values().get(a + b))
     }
 }
 
@@ -300,59 +268,26 @@ fn full_primitive_accepted_only_in_global_action() {
 // primitives, so the `.egg` form is more direct than building an
 // EGraph from Rust.
 
-// --- group registration ---
+// --- duplicate registration regression ---
 
 /// **Known gap, documented as a regression guard.** Two same-name
-/// same-signature primitives registered separately (NOT via
-/// `add_primitive_group`) currently *both* survive the constraint
-/// builder's context filter and produce identical XOR branches. The
-/// solver's XOR doesn't reject ambiguous-but-equivalent matches when
-/// the surrounding constraints fully pin the sort assignment, so the
-/// program type-checks and `from_resolution` picks the first
-/// registration arbitrarily.
+/// same-signature primitives registered separately currently *both*
+/// survive the constraint builder's context filter and produce
+/// identical XOR branches. The solver's XOR doesn't reject
+/// ambiguous-but-equivalent matches when the surrounding constraints
+/// fully pin the sort assignment, so the program type-checks and
+/// `from_resolution` picks the first registration arbitrarily.
 ///
 /// Ideally the typechecker would reject this as ambiguous; for now
 /// this test pins the silent-first-wins behavior so we notice if it
 /// changes.
 #[test]
-fn two_non_grouped_same_signature_registrations_silently_pick_first() {
+fn two_same_signature_registrations_silently_pick_first() {
     let mut egraph = EGraph::default();
     egraph.add_pure_primitive(PureAdd("dup-add"), None);
     egraph.add_pure_primitive(PureAdd("dup-add"), None);
 
     egraph
         .parse_and_run_program(None, "(check (= (dup-add 1 2) 3))")
-        .unwrap();
-}
-
-/// Same-signature pure + write variants registered as a group. The
-/// partition assigns query contexts to the pure variant and action
-/// contexts to the write variant. Both implementations of `g-add`
-/// compute `a + b`, so the result is the same in both contexts —
-/// matching the group invariant that variants must agree on outputs.
-#[test]
-fn grouped_same_signature_registrations_dispatch_cleanly() {
-    let mut egraph = EGraph::default();
-    egraph.add_primitive_group(|g| {
-        g.add_pure(PureAdd("g-add"), None);
-        g.add_write(WriteAdd("g-add"), None);
-    });
-
-    // Query: pure variant runs.
-    egraph
-        .parse_and_run_program(None, "(check (= (g-add 1 2) 3))")
-        .unwrap();
-
-    // Action: write variant runs.
-    egraph
-        .parse_and_run_program(
-            None,
-            "(function r (i64) i64 :no-merge)\n\
-             (relation Trigger ())\n\
-             (Trigger)\n\
-             (rule ((Trigger)) ((set (r 0) (g-add 7 8))))\n\
-             (run 1)\n\
-             (check (= (r 0) 15))",
-        )
         .unwrap();
 }

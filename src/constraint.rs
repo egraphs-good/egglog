@@ -949,13 +949,12 @@ fn get_atom_application_constraints(
 
     // primitive atom constraints
     if let Some(primitives) = type_info.get_prims(head) {
-        // `valid_contexts` is the **disjoint** set of contexts where
-        // this variant is the chosen pick — overlapping siblings
-        // (e.g. `unstable-app`'s `ApplyPure` + `ApplyFull`) had their
-        // contexts partitioned at registration time via
-        // `add_primitive_group`, so for a given call site at most one
-        // variant per group survives this filter and the XOR resolves
-        // cleanly.
+        // `valid_contexts` is disjoint across registrations of the
+        // same name: `add_higher_order_primitive` registers one id
+        // per `Context` variant, and the single-kind `add_*_primitive`
+        // methods produce different signatures. So for a given (name,
+        // context, signature) at most one variant survives this
+        // filter and the XOR resolves cleanly.
         for p in primitives {
             if !p.valid_contexts.contains(&ctx) {
                 continue;

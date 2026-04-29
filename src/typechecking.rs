@@ -90,17 +90,6 @@ impl PrimitiveWithId {
     }
 }
 
-/// Specificity ordering used to partition a group's `valid_contexts`.
-/// Smaller is more specific, claimed first.
-///
-///   1. Narrower context sets (fewer contexts) are more specific.
-///   2. Within the same cardinality, sets that include
-///      `Context::RuleAction` (write-capable action variants) are
-///      claimed before query-only siblings.
-fn partition_priority(valid: &[Context]) -> (usize, bool) {
-    (valid.len(), !valid.contains(&Context::RuleAction))
-}
-
 impl Debug for PrimitiveWithId {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         write!(f, "Prim({})", self.primitive.name())
@@ -176,10 +165,7 @@ impl EGraph {
 
     /// Register a [`PurePrim`] — a pure primitive runnable in
     /// every context (rule query / rule action / global query /
-    /// global action). Each call creates a fresh overload group; for
-    /// context-specialized siblings (e.g. `unstable-app`'s pure +
-    /// write variants), see
-    /// [`add_primitive_group`](Self::add_primitive_group).
+    /// global action).
     ///
     /// The four traits ([`PurePrim`], [`WritePrim`],
     /// [`ReadPrim`], [`FullPrim`]) name the state
@@ -230,90 +216,73 @@ impl EGraph {
         self.commit_primitive(entry);
     }
 
-    /// Register multiple primitive variants as a single overload group.
+    /// Register a higher-order primitive — one whose body dispatches a
+    /// wrapped `unstable-fn` value via [`FunctionContainer::apply`]
+    /// and therefore needs to behave differently in query versus
+    /// action contexts.
     ///
-    /// Variants in a group are **alternatives that compute the same
-    /// thing** under their respective state types — same input/output
-    /// signature, same observable result for any callable context;
-    /// the only thing that differs is which capabilities the body
-    /// needs. The grouping tells the typechecker "for this name, here
-    /// are the variants that exist for different contexts; pick the
-    /// best one per call site."
+    /// Internally this registers the primitive twice: one
+    /// [`ExternalFunctionId`] tagged with [`Context::RuleQuery`]
+    /// (claims `{RuleQuery, GlobalQuery}` at the typechecker), one
+    /// tagged with [`Context::RuleAction`] (claims `{RuleAction,
+    /// GlobalAction}`). Both ids share the same body — the wrapper
+    /// closure stamps the appropriate context on the
+    /// `ExecutionState` before invoking, so
+    /// `FunctionContainer::apply` reads back the right value at
+    /// runtime and chooses pure-side vs action-side dispatch
+    /// accordingly. This keeps the user-facing definition single-bodied
+    /// while still letting the typechecker reject HOF calls in
+    /// contexts where they wouldn't make sense.
     ///
-    /// At registration time the group's `valid_contexts` are
-    /// **partitioned into disjoint context sets**, most specific
-    /// (narrowest) first; among ties, write-capable variants claim
-    /// their contexts before query-only ones. Subsequent variants
-    /// keep only the unclaimed contexts. After partitioning each
-    /// call site has at most one matching variant, so the constraint
-    /// solver's XOR resolves the call without grouping or picking
-    /// machinery.
+    /// `T: PurePrim` because the body's `state` parameter is always a
+    /// [`PureState`]; action-side dispatch happens through privileged
+    /// access (the `__internal::Internal` trait), which `PureState`
+    /// implements crate-internally.
     ///
-    /// **Worked example: triple-registered `unstable-multiset-map`.**
-    /// The three variants enter with overlapping default contexts:
+    /// Crate-private: this is the implementation hook for
+    /// `unstable-app`, `unstable-multiset-map` / `flat-map` /
+    /// `filter` / `reduce`, and `unstable-vec-map`. External users
+    /// don't need it; if a use case appears later it can be promoted.
     ///
-    /// | Variant            | Trait     | `valid_contexts`           |
-    /// |--------------------|-----------|----------------------------|
-    /// | `MapPure`          | `PurePrim`  | `{RQ, RA, GQ, GA}`        |
-    /// | `MapGlobalQuery`   | `ReadPrim`  | `{GQ, GA}`                |
-    /// | `MapFull`          | `WritePrim` | `{RA, GA}`                |
-    ///
-    /// Sorted by specificity (narrowest first; among ties, write-
-    /// capable first) → `MapFull (size 2, has RA)`,
-    /// `MapGlobalQuery (size 2, no RA)`, `MapPure (size 4)`.
-    ///
-    /// Partition processing:
-    /// - `MapFull` claims `{RA, GA}` → `claimed = {RA, GA}`.
-    /// - `MapGlobalQuery`: `{GQ, GA}` − `{RA, GA}` = `{GQ}` → claims it.
-    /// - `MapPure`: all 4 − `{RA, GA, GQ}` = `{RQ}` → keeps that.
-    ///
-    /// Final picks: `MapPure` runs in `RQ`, `MapGlobalQuery` in `GQ`,
-    /// `MapFull` in `RA` and `GA`.
-    ///
-    /// **Invariant grouped variants must uphold:** they must
-    /// produce the same observable answer for any context where
-    /// they're all callable. Within a group the partition is
-    /// arbitrary in the same sense: the implementation is free to
-    /// pick whichever variant the priority rule lands on, so any
-    /// program that observes a difference between variants would
-    /// be rejected as ill-formed by the typed-state contract. If
-    /// you need genuinely-different semantics, register them as
-    /// separate (non-grouped) primitives so the typechecker treats
-    /// them as distinct overloads.
-    ///
-    /// Different groups (whether multi-prim or single-prim via
-    /// [`add_pure_primitive`](Self::add_pure_primitive)
-    /// etc.) participate in normal XOR-based overload resolution.
-    ///
-    /// ```ignore
-    /// egraph.add_primitive_group(|g| {
-    ///     g.add_pure(ApplyPure { /* ... */ }, None);
-    ///     g.add_write(ApplyFull { /* ... */ }, None);
-    /// });
-    /// ```
-    pub fn add_primitive_group<F>(&mut self, f: F)
+    /// [`FunctionContainer::apply`]: crate::sort::FunctionContainer::apply
+    /// [`ExternalFunctionId`]: crate::core_relations::ExternalFunctionId
+    /// [`Context`]: crate::Context
+    /// [`PureState`]: crate::PureState
+    pub(crate) fn add_higher_order_primitive<T>(
+        &mut self,
+        x: T,
+        validator: Option<PrimitiveValidator>,
+    )
     where
-        F: FnOnce(&mut PrimitiveGroup<'_>),
+        T: PurePrim + Clone,
     {
-        let mut group = PrimitiveGroup {
-            egraph: self,
-            entries: Vec::new(),
-        };
-        f(&mut group);
-        let mut entries = std::mem::take(&mut group.entries);
+        let prim = Arc::new(x);
+        let primitive: Arc<dyn PrimitiveCommon> = prim.clone();
+        let name = primitive.name().to_owned();
 
-        // Partition `valid_contexts` so each context is claimed by at
-        // most one variant. Most-specific (narrowest) first; among
-        // ties prefer write-capable. Each subsequent variant keeps
-        // only the contexts not already claimed.
-        entries.sort_by_key(|e| partition_priority(&e.valid_contexts));
-        let mut claimed: Vec<Context> = Vec::new();
-        for entry in entries.iter_mut() {
-            entry.valid_contexts.retain(|c| !claimed.contains(c));
-            claimed.extend(entry.valid_contexts.iter().copied());
-        }
-        for entry in entries {
-            self.commit_primitive(entry);
+        // Register one `ExternalFunctionId` per [`Context`] variant.
+        // Each closure stamps its exact context onto `ExecutionState`
+        // before invoking the shared body, so
+        // `FunctionContainer::apply` reads back the precise context
+        // and chooses the right dispatch (e.g. `GlobalQuery` allows
+        // custom-function reads but not constructor minting).
+        for &ctx in &Context::ALL {
+            let invoke_prim = prim.clone();
+            let id = self
+                .backend
+                .register_external_func(Box::new(make_external_func(move |exec_state, args| {
+                    exec_state.set_current_context(ctx);
+                    let mut state = PureState::wrap(exec_state);
+                    invoke_prim.apply(&mut state, args)
+                })));
+            let pending = PendingPrimitive {
+                primitive: primitive.clone(),
+                id,
+                validator: validator.clone(),
+                valid_contexts: vec![ctx],
+                name: name.clone(),
+            };
+            self.commit_primitive(pending);
         }
     }
 
@@ -434,72 +403,16 @@ impl EGraph {
     }
 }
 
-/// A primitive that's been erased and registered with the bridge but
-/// not yet pushed into the `TypeInfo` registry. Used inside
-/// `add_primitive_group` so we can adjust `valid_contexts` (the
-/// disjoint partition) before committing.
+/// A primitive that's been registered with the bridge but not yet
+/// pushed into the `TypeInfo` registry. Used by
+/// [`EGraph::add_higher_order_primitive`] which commits multiple
+/// per-context entries in a row.
 struct PendingPrimitive {
     primitive: Arc<dyn PrimitiveCommon>,
     id: ExternalFunctionId,
     validator: Option<PrimitiveValidator>,
     valid_contexts: Vec<Context>,
     name: String,
-}
-
-/// Builder handle handed to the closure passed to
-/// [`EGraph::add_primitive_group`]. Each `.add(...)` call registers
-/// one primitive into the group; the group's `valid_contexts`
-/// partition is computed when the closure returns.
-pub struct PrimitiveGroup<'a> {
-    egraph: &'a mut EGraph,
-    entries: Vec<PendingPrimitive>,
-}
-
-impl<'a> PrimitiveGroup<'a> {
-    /// Register a [`PurePrim`] into this overload group. Pass
-    /// `None` for the validator if not using the proof checker.
-    pub fn add_pure<T: PurePrim + Clone>(
-        &mut self,
-        x: T,
-        validator: Option<PrimitiveValidator>,
-    ) -> &mut Self {
-        let entry = self.egraph.build_pure_entry(x, validator);
-        self.entries.push(entry);
-        self
-    }
-
-    /// Register a [`WritePrim`] into this overload group.
-    pub fn add_write<T: WritePrim + Clone>(
-        &mut self,
-        x: T,
-        validator: Option<PrimitiveValidator>,
-    ) -> &mut Self {
-        let entry = self.egraph.build_write_entry(x, validator);
-        self.entries.push(entry);
-        self
-    }
-
-    /// Register a [`ReadPrim`] into this overload group.
-    pub fn add_read<T: ReadPrim + Clone>(
-        &mut self,
-        x: T,
-        validator: Option<PrimitiveValidator>,
-    ) -> &mut Self {
-        let entry = self.egraph.build_read_entry(x, validator);
-        self.entries.push(entry);
-        self
-    }
-
-    /// Register a [`FullPrim`] into this overload group.
-    pub fn add_full<T: FullPrim + Clone>(
-        &mut self,
-        x: T,
-        validator: Option<PrimitiveValidator>,
-    ) -> &mut Self {
-        let entry = self.egraph.build_full_entry(x, validator);
-        self.entries.push(entry);
-        self
-    }
 }
 
 impl EGraph {

@@ -36,23 +36,9 @@ use crate::core_relations::{
 };
 use egglog_bridge::{ActionRegistry, TableAction};
 
-/// The four contexts a primitive may run in.
-#[derive(Copy, Clone, Debug, PartialEq, Eq, Hash)]
-pub enum Context {
-    RuleQuery,
-    RuleAction,
-    GlobalQuery,
-    GlobalAction,
-}
-
-impl Context {
-    pub const ALL: [Context; 4] = [
-        Context::RuleQuery,
-        Context::RuleAction,
-        Context::GlobalQuery,
-        Context::GlobalAction,
-    ];
-}
+/// The four contexts a primitive may run in. Re-exported from
+/// `core_relations` so the egglog API surface stays in one place.
+pub use crate::core_relations::Context;
 
 mod sealed {
     use crate::core_relations::ExecutionState;
@@ -93,11 +79,17 @@ pub(crate) mod __internal {
         fn raw_exec_state(&mut self) -> &mut ExecutionState<'db> {
             self.es_mut()
         }
+        /// The current execution context this primitive is being
+        /// invoked from. Used by `FunctionContainer::apply` to choose
+        /// pure-side vs action-side dispatch.
+        fn current_context(&self) -> super::Context {
+            self.es().current_context()
+        }
     }
 }
 
-/// Internal dispatch interface used by `FunctionContainer::apply_in`
-/// and similar helpers that need to operate generically over the four
+/// Internal dispatch interface used by `FunctionContainer::apply` and
+/// similar helpers that need to operate generically over the four
 /// state wrappers. **Users do not normally implement or import this
 /// trait directly** — call methods on the concrete wrapper instead.
 #[doc(hidden)]
