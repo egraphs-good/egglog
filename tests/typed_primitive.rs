@@ -301,24 +301,19 @@ fn full_primitive_accepted_only_in_global_action() {
 
 // --- duplicate registration regression ---
 
-/// **Known gap, documented as a regression guard.** Two same-name
-/// same-signature primitives registered separately currently *both*
-/// survive the constraint builder's context filter and produce
-/// identical XOR branches. The solver's XOR doesn't reject
-/// ambiguous-but-equivalent matches when the surrounding constraints
-/// fully pin the sort assignment, so the program type-checks and
-/// `from_resolution` picks the first registration arbitrarily.
-///
-/// Ideally the typechecker would reject this as ambiguous; for now
-/// this test pins the silent-first-wins behavior so we notice if it
-/// changes.
+/// Two same-name same-signature primitives registered separately
+/// pass the constraint-builder context filter (both are valid in
+/// every context) and the typechecker doesn't reject equivalent XOR
+/// branches when the surrounding constraints pin the sort assignment.
+/// `ResolvedCall::from_resolution` catches this on the use site by
+/// requiring exactly one match for `(name, signature, context)` and
+/// panicking with a clear message otherwise.
 #[test]
-fn two_same_signature_registrations_silently_pick_first() {
+#[should_panic(expected = "Ambiguous primitive resolution")]
+fn two_same_signature_registrations_panic_on_use() {
     let mut egraph = EGraph::default();
     egraph.add_pure_primitive(PureAdd("dup-add"), None);
     egraph.add_pure_primitive(PureAdd("dup-add"), None);
 
-    egraph
-        .parse_and_run_program(None, "(check (= (dup-add 1 2) 3))")
-        .unwrap();
+    let _ = egraph.parse_and_run_program(None, "(check (= (dup-add 1 2) 3))");
 }
