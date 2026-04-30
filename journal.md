@@ -131,3 +131,40 @@ The fix would require indirection (Box<SparseColumnIndex32>) but that adds its o
 overhead. Left as future work.
 
 ---
+
+## CC1: Adaptive LSB radix sort in ColumnIndex::rebuild_full (2026-04-30)
+
+**Hypothesis:** Profiling (perf at -F 200) shows sort_unstable inside ColumnIndex::rebuild_full
+accounts for ~10.4% of runtime (5.75% small_sort_network + 4.68% quicksort). This sort is
+called for every group_by_col invocation with subset size ≥512 (G2's threshold). Value is a
+u32 (egglog handle), and after union-find compaction, handles are small integers (typically
+< 65,536). An adaptive LSB radix sort needs only 2 passes instead of O(N log N) comparisons,
+beating comparison sort for medium N (512-10,000).
+
+**Key correctness properties:**
+1. **Stable within Value groups**: Since for_each_col scans rows in RowId order, all pairs
+   with the same Value are already in RowId order in the input. LSB radix sort is stable →
+   within-group RowId order is preserved → Dense detection still works correctly.
+2. **Same HashMap insertion order**: Both sort_unstable and radix sort produce Value-ascending
+   output for distinct keys. ColumnIndex's HashMap is populated in the same order → same
+   for_each iteration order → no python_array_optimize regression risk.
+3. **Multi-column fallback**: When cols.len() > 1, dedup() requires RowIds to be sorted
+   within each Value group; we fall back to sort_unstable() + dedup() for correctness.
+4. **Small-N fallback**: n < 64 uses sort_unstable (radix setup overhead not worth it).
+
+**Approach:** Add `radix_sort_pairs_by_value` with adaptive 1-4 passes based on max(Value):
+- 1 pass if max < 256, 2 if < 65536 (typical egglog), 3 if < 16M, 4 for full u32.
+- Double-buffer with raw pointer swap; odd-pass-count copies buf back to pairs.
+- Replace `pairs.sort_unstable()` with this in the single-column branch of rebuild_full.
+
+**Results:**
+- hardboiled_conv1d_32: 0.350s → 0.333s (-4.9%)
+- hardboiled_conv1d_128: 0.977s → 0.909s (-7.0%)
+- luminal-llama: essentially unchanged (~0.224s)
+- python_array_optimize: essentially unchanged (~0.528s)
+- cykjson: essentially unchanged (~0.113s)
+- eggcc-extraction: essentially unchanged (~0.471s)
+
+**Verdict:** KEPT. ≥5% speedup on hardboiled_128, no regressions anywhere.
+
+---
