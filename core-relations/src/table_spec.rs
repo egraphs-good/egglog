@@ -405,11 +405,17 @@ impl<T: Table> TableWrapper for WrapperImpl<T> {
         })
     }
     fn group_by_col(&self, table: &dyn Table, subset: SubsetRef, col: ColumnId) -> ColumnIndex {
-        let table = table.as_any().downcast_ref::<T>().unwrap();
         let mut res = ColumnIndex::new();
-        table.scan_generic(subset, |row_id, row| {
-            res.add_row(&[row[col.index()]], row_id);
-        });
+        if subset.size() >= 32 {
+            // For larger subsets, use the sort-based bulk approach (eliminates push_vec doubling).
+            let wrapped = WrappedTableRef { inner: table, wrapper: self };
+            res.rebuild_full(&[col], wrapped, subset);
+        } else {
+            let table = table.as_any().downcast_ref::<T>().unwrap();
+            table.scan_generic(subset, |row_id, row| {
+                res.add_row(&[row[col.index()]], row_id);
+            });
+        }
         res
     }
     fn group_by_key(&self, table: &dyn Table, subset: SubsetRef, cols: &[ColumnId]) -> TupleIndex {
