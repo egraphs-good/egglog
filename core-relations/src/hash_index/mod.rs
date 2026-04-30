@@ -330,19 +330,26 @@ impl IndexBase for ColumnIndex {
     /// Sort-based full rebuild: collect all (value, row_id) pairs, sort by (value, row_id),
     /// then build each key's subset with a single pre-sized allocation — eliminating the
     /// doubling memmoves from `push_vec` that occur in the row-at-a-time `add_row` path.
+    ///
+    /// Supports multiple columns (e.g. rebuild_index covering all value columns): pairs from
+    /// all columns are merged into one sorted list, so each value maps to the union of rows
+    /// containing it in any of the covered columns.
     fn rebuild_full(&mut self, cols: &[ColumnId], table: WrappedTableRef, subset: SubsetRef) {
-        debug_assert_eq!(cols.len(), 1);
-        let col = cols[0];
-        let n = subset.size();
+        let n = subset.size() * cols.len();
 
         let mut pairs: Vec<(Value, RowId)> = Vec::with_capacity(n);
-        table.for_each_col(subset, col, &mut |row_id, val| {
-            pairs.push((val, row_id));
-        });
+        for &col in cols {
+            table.for_each_col(subset, col, &mut |row_id, val| {
+                pairs.push((val, row_id));
+            });
+        }
 
         // Sort by (value, row_id): rows with the same key are adjacent and in row_id order,
         // satisfying the add_row_sorted invariant without any reordering within each group.
+        // Dedup is needed for multi-column rebuilds where the same row_id may appear more than
+        // once for a value (e.g. a row has the same egraph id in two rebuild columns).
         pairs.sort_unstable();
+        pairs.dedup();
 
         let mut i = 0;
         while i < pairs.len() {
