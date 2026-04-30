@@ -77,7 +77,11 @@ pub(crate) trait Internal<'a, 'db: 'a>: 'a {
     }
 }
 
-pub(crate) trait WriteSealed<'a, 'db: 'a>: Internal<'a, 'db> {
+/// Sealed accessor for the [`ActionRegistry`]. Implemented by every
+/// wrapper that has a registry (`ReadState`, `WriteState`, `FullState`)
+/// — the read- and write-side traits both look up `TableAction`s by
+/// name through it.
+pub(crate) trait RegistrySealed<'a, 'db: 'a>: Internal<'a, 'db> {
     fn registry(&self) -> &ActionRegistry;
 }
 
@@ -158,11 +162,25 @@ pub trait Core<'a, 'db: 'a>: Internal<'a, 'db> {
     }
 }
 
+/// Read-side methods — name-indexed table lookup. Implemented for
+/// [`ReadState`] and [`FullState`]; *not* for [`PureState`] or
+/// [`WriteState`] (a `RuleAction` body must not depend on live DB
+/// state). Returns `None` if the row is absent — never inserts.
+#[allow(private_bounds)]
+pub trait Read<'a, 'db: 'a>: Core<'a, 'db> + RegistrySealed<'a, 'db> {
+    /// Look up the return-value column of a row in the named table.
+    /// Returns `None` if the key is not present.
+    fn lookup(&self, name: &str, key: &[Value]) -> Option<Value> {
+        let action = lookup_action(self.registry(), name);
+        action.lookup(self.es(), key)
+    }
+}
+
 /// Action-side write methods — name-indexed inserts/removes/subsumes
 /// plus union and panic. Implemented for [`WriteState`] and
 /// [`FullState`]; *not* for [`PureState`] or [`ReadState`].
 #[allow(private_bounds)]
-pub trait Write<'a, 'db: 'a>: Core<'a, 'db> + WriteSealed<'a, 'db> {
+pub trait Write<'a, 'db: 'a>: Core<'a, 'db> + RegistrySealed<'a, 'db> {
     /// Insert a row into the named table.
     fn insert(&mut self, name: &str, row: impl Iterator<Item = Value>) {
         let action = lookup_action(self.registry(), name).clone();
@@ -234,10 +252,12 @@ pub struct PureState<'a, 'db> {
 }
 
 /// Typed view for read-only primitives. Valid in `GlobalQuery` and
-/// `GlobalAction` contexts. Implements [`Core`] only.
-#[repr(transparent)]
+/// `GlobalAction` contexts. Implements [`Core`] + [`Read`] —
+/// name-indexed table lookups (`state.lookup("name", &[args])`)
+/// return the row's value or `None`.
 pub struct ReadState<'a, 'db> {
     pub(crate) inner: &'a mut ExecutionState<'db>,
+    pub(crate) registry: &'a ActionRegistry,
 }
 
 /// Typed view for primitives running on the RHS of a rule. Valid in
@@ -285,8 +305,11 @@ impl<'a, 'db: 'a> PureState<'a, 'db> {
 }
 
 impl<'a, 'db: 'a> ReadState<'a, 'db> {
-    pub(crate) fn wrap(es: &'a mut ExecutionState<'db>) -> Self {
-        Self { inner: es }
+    pub(crate) fn wrap(es: &'a mut ExecutionState<'db>, registry: &'a ActionRegistry) -> Self {
+        Self {
+            inner: es,
+            registry,
+        }
     }
     pub const fn valid_contexts() -> &'static [Context] {
         &[Context::GlobalQuery, Context::GlobalAction]
@@ -340,7 +363,13 @@ impl<'a, 'db: 'a> Internal<'a, 'db> for ReadState<'a, 'db> {
         self.inner
     }
 }
+impl<'a, 'db: 'a> RegistrySealed<'a, 'db> for ReadState<'a, 'db> {
+    fn registry(&self) -> &ActionRegistry {
+        self.registry
+    }
+}
 impl<'a, 'db: 'a> Core<'a, 'db> for ReadState<'a, 'db> {}
+impl<'a, 'db: 'a> Read<'a, 'db> for ReadState<'a, 'db> {}
 
 impl<'a, 'db: 'a> Internal<'a, 'db> for WriteState<'a, 'db> {
     fn es(&self) -> &ExecutionState<'db> {
@@ -350,7 +379,7 @@ impl<'a, 'db: 'a> Internal<'a, 'db> for WriteState<'a, 'db> {
         self.inner
     }
 }
-impl<'a, 'db: 'a> WriteSealed<'a, 'db> for WriteState<'a, 'db> {
+impl<'a, 'db: 'a> RegistrySealed<'a, 'db> for WriteState<'a, 'db> {
     fn registry(&self) -> &ActionRegistry {
         self.registry
     }
@@ -366,10 +395,11 @@ impl<'a, 'db: 'a> Internal<'a, 'db> for FullState<'a, 'db> {
         self.inner
     }
 }
-impl<'a, 'db: 'a> WriteSealed<'a, 'db> for FullState<'a, 'db> {
+impl<'a, 'db: 'a> RegistrySealed<'a, 'db> for FullState<'a, 'db> {
     fn registry(&self) -> &ActionRegistry {
         self.registry
     }
 }
 impl<'a, 'db: 'a> Core<'a, 'db> for FullState<'a, 'db> {}
+impl<'a, 'db: 'a> Read<'a, 'db> for FullState<'a, 'db> {}
 impl<'a, 'db: 'a> Write<'a, 'db> for FullState<'a, 'db> {}

@@ -14,8 +14,8 @@ use egglog::ast::Span;
 use egglog::constraint::{SimpleTypeConstraint, TypeConstraint};
 use egglog::sort::I64Sort;
 use egglog::{
-    EGraph, FullPrim, FullState, PrimitiveCommon, PurePrim, PureState, ReadPrim, ReadState, Value,
-    WritePrim, WriteState, prelude::*,
+    EGraph, FullPrim, FullState, PrimitiveCommon, PurePrim, PureState, Read, ReadPrim, ReadState,
+    Value, WritePrim, WriteState, prelude::*,
 };
 
 // --- shared test fixtures ---
@@ -41,7 +41,7 @@ impl PrimitiveCommon for PureAdd {
     }
 }
 impl PurePrim for PureAdd {
-    fn apply<'a, 'db>(&self, mut state: PureState<'a, 'db>, args: &[Value]) -> Option<Value> {
+    fn apply<'a, 'db>(&self, state: PureState<'a, 'db>, args: &[Value]) -> Option<Value> {
         let a = state.base_values().unwrap::<i64>(args[0]);
         let b = state.base_values().unwrap::<i64>(args[1]);
         Some(state.base_values().get(a + b))
@@ -67,18 +67,23 @@ impl PrimitiveCommon for WriteEcho {
     }
 }
 impl WritePrim for WriteEcho {
-    fn apply<'a, 'db>(&self, mut state: WriteState<'a, 'db>, args: &[Value]) -> Option<Value> {
+    fn apply<'a, 'db>(&self, state: WriteState<'a, 'db>, args: &[Value]) -> Option<Value> {
         let _ = state.base_values();
         Some(args[0])
     }
 }
 
-/// A read primitive — uses `ReadState` (no writes, but reads the DB).
+/// A read primitive — looks up a row in the table named by
+/// `table_name` and returns the row's value column. Returns `None` if
+/// the row is absent. Demonstrates the `Read::lookup` API.
 #[derive(Clone)]
-struct ReadEcho(&'static str);
-impl PrimitiveCommon for ReadEcho {
+struct ReadLookup {
+    name: &'static str,
+    table_name: &'static str,
+}
+impl PrimitiveCommon for ReadLookup {
     fn name(&self) -> &str {
-        self.0
+        self.name
     }
     fn get_type_constraints(&self, span: &Span) -> Box<dyn TypeConstraint> {
         SimpleTypeConstraint::new(
@@ -89,10 +94,9 @@ impl PrimitiveCommon for ReadEcho {
         .into_box()
     }
 }
-impl ReadPrim for ReadEcho {
-    fn apply<'a, 'db>(&self, mut state: ReadState<'a, 'db>, args: &[Value]) -> Option<Value> {
-        let _ = state.base_values();
-        Some(args[0])
+impl ReadPrim for ReadLookup {
+    fn apply<'a, 'db>(&self, state: ReadState<'a, 'db>, args: &[Value]) -> Option<Value> {
+        state.lookup(self.table_name, args)
     }
 }
 
@@ -113,7 +117,7 @@ impl PrimitiveCommon for FullEcho {
     }
 }
 impl FullPrim for FullEcho {
-    fn apply<'a, 'db>(&self, mut state: FullState<'a, 'db>, args: &[Value]) -> Option<Value> {
+    fn apply<'a, 'db>(&self, state: FullState<'a, 'db>, args: &[Value]) -> Option<Value> {
         let _ = state.base_values();
         Some(args[0])
     }
@@ -185,39 +189,66 @@ fn write_primitive_rejected_in_queries() {
 }
 
 /// A `ReadPrim` is rejected in rule contexts (both query and action) —
-/// it's only valid in `GlobalQuery` and `GlobalAction`.
+/// it's only valid in `GlobalQuery` and `GlobalAction`. Also exercises
+/// the actual `Read::lookup` API: `lookup-f` reads rows from a custom
+/// `f` table.
 #[test]
 fn read_primitive_rejected_in_rule_contexts() {
     let mut egraph = EGraph::default();
-    egraph.add_read_primitive(ReadEcho("r-echo"), None);
+    egraph.add_read_primitive(
+        ReadLookup {
+            name: "lookup-f",
+            table_name: "f",
+        },
+        None,
+    );
 
-    // GlobalQuery — fine.
+    // Populate the `f` table at top level, then use `lookup-f` from a
+    // GlobalQuery (`check`) and a GlobalAction (`let`). Both should
+    // see the value populated by `set`.
     egraph
-        .parse_and_run_program(None, "(check (= (r-echo 7) 7))")
-        .unwrap();
-    // GlobalAction — fine.
-    egraph
-        .parse_and_run_program(None, "(let $rr (r-echo 7))")
+        .parse_and_run_program(
+            None,
+            "(function f (i64) i64 :no-merge)\n\
+             (set (f 7) 42)\n\
+             (check (= (lookup-f 7) 42))\n\
+             (let $r (lookup-f 7))\n\
+             (check (= $r 42))",
+        )
         .unwrap();
 
-    // Rule LHS — rejected.
+    // Rule LHS — rejected (RuleQuery isn't in `ReadPrim`'s valid contexts).
     let mut egraph2 = EGraph::default();
-    egraph2.add_read_primitive(ReadEcho("r-echo"), None);
+    egraph2.add_read_primitive(
+        ReadLookup {
+            name: "lookup-f",
+            table_name: "f",
+        },
+        None,
+    );
     let result = egraph2.parse_and_run_program(
         None,
         "(function f (i64) i64 :no-merge)\n\
-         (rule ((= x (r-echo 1))) ((set (f 0) x)))",
+         (function g (i64) i64 :no-merge)\n\
+         (rule ((= x (lookup-f 1))) ((set (g 0) x)))",
     );
     assert!(result.is_err(), "ReadPrim must be rejected on a rule LHS");
 
     // Rule RHS — also rejected (ReadPrim is GlobalQuery+GlobalAction
     // only; RuleAction doesn't qualify).
     let mut egraph3 = EGraph::default();
-    egraph3.add_read_primitive(ReadEcho("r-echo"), None);
+    egraph3.add_read_primitive(
+        ReadLookup {
+            name: "lookup-f",
+            table_name: "f",
+        },
+        None,
+    );
     let result = egraph3.parse_and_run_program(
         None,
         "(function f (i64) i64 :no-merge)\n\
-         (rule () ((set (f 0) (r-echo 1))))",
+         (function g (i64) i64 :no-merge)\n\
+         (rule () ((set (g 0) (lookup-f 1))))",
     );
     assert!(result.is_err(), "ReadPrim must be rejected on a rule RHS");
 }

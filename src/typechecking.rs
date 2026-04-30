@@ -11,62 +11,33 @@ use crate::Context;
 use egglog_bridge::ActionRegistry;
 use std::sync::RwLock;
 
-// `ExternalFunction` wrapper for query-side primitives (`PurePrim`,
-// `ReadPrim`). The wrapper holds the user's primitive directly (not
-// behind `Arc`/`Box`) so the dispatch chain
-// `external_funcs[id].invoke(...)` → `T::apply(...)` is just one
-// vtable hop plus a direct call — no closure indirection that defeats
-// inlining.
+// `ExternalFunction` wrapper for `PurePrim`. Holds the primitive
+// directly so the dispatch chain `external_funcs[id].invoke(...)` →
+// `T::apply(...)` is just one vtable hop plus a direct call — no
+// closure indirection that defeats inlining.
 #[derive(Clone)]
-struct QuerySidePrimWrapper<T, S> {
+struct PurePrimWrapper<T> {
     prim: T,
-    _wrap: std::marker::PhantomData<fn() -> S>,
 }
 
-// Trait abstracting "build the right state from `&mut ExecutionState`
-// and call apply". Implemented inline below for each kind so
-// `QuerySidePrimWrapper<T, S>::invoke` monomorphizes to a concrete call.
-trait QueryWrap<T>: Clone + Send + Sync {
-    fn invoke(prim: &T, exec_state: &mut ExecutionState, args: &[Value]) -> Option<Value>;
-}
-
-#[derive(Clone)]
-struct WrapPure;
-impl<T: PurePrim> QueryWrap<T> for WrapPure {
-    #[inline]
-    fn invoke(prim: &T, exec_state: &mut ExecutionState, args: &[Value]) -> Option<Value> {
-        prim.apply(PureState::wrap(exec_state), args)
-    }
-}
-#[derive(Clone)]
-struct WrapRead;
-impl<T: ReadPrim> QueryWrap<T> for WrapRead {
-    #[inline]
-    fn invoke(prim: &T, exec_state: &mut ExecutionState, args: &[Value]) -> Option<Value> {
-        prim.apply(ReadState::wrap(exec_state), args)
-    }
-}
-
-impl<T: Clone + Send + Sync + 'static, S: QueryWrap<T> + 'static> ExternalFunction
-    for QuerySidePrimWrapper<T, S>
-{
+impl<T: PurePrim + Clone> ExternalFunction for PurePrimWrapper<T> {
     fn invoke(&self, exec_state: &mut ExecutionState, args: &[Value]) -> Option<Value> {
-        S::invoke(&self.prim, exec_state, args)
+        self.prim.apply(PureState::wrap(exec_state), args)
     }
 }
 
-// `ExternalFunction` wrapper for action-side primitives (`WritePrim`,
-// `FullPrim`). Carries the shared `ActionRegistry` handle so name-
-// indexed write methods (`insert` / `remove` / `union` / `panic`) can
-// resolve at invoke time.
+// `ExternalFunction` wrapper for primitives that need the
+// `ActionRegistry` (`ReadPrim`, `WritePrim`, `FullPrim`). One generic
+// over the `Wrap` strategy that knows how to construct the right
+// state type and dispatch to the primitive's `apply`.
 #[derive(Clone)]
-struct ActionSidePrimWrapper<T, S> {
+struct RegistryPrimWrapper<T, S> {
     prim: T,
     registry: Arc<RwLock<ActionRegistry>>,
     _wrap: std::marker::PhantomData<fn() -> S>,
 }
 
-trait ActionWrap<T>: Clone + Send + Sync {
+trait RegistryWrap<T>: Clone + Send + Sync {
     fn invoke(
         prim: &T,
         exec_state: &mut ExecutionState,
@@ -76,8 +47,21 @@ trait ActionWrap<T>: Clone + Send + Sync {
 }
 
 #[derive(Clone)]
+struct WrapRead;
+impl<T: ReadPrim> RegistryWrap<T> for WrapRead {
+    #[inline]
+    fn invoke(
+        prim: &T,
+        exec_state: &mut ExecutionState,
+        args: &[Value],
+        registry: &ActionRegistry,
+    ) -> Option<Value> {
+        prim.apply(ReadState::wrap(exec_state, registry), args)
+    }
+}
+#[derive(Clone)]
 struct WrapWrite;
-impl<T: WritePrim> ActionWrap<T> for WrapWrite {
+impl<T: WritePrim> RegistryWrap<T> for WrapWrite {
     #[inline]
     fn invoke(
         prim: &T,
@@ -90,7 +74,7 @@ impl<T: WritePrim> ActionWrap<T> for WrapWrite {
 }
 #[derive(Clone)]
 struct WrapFull;
-impl<T: FullPrim> ActionWrap<T> for WrapFull {
+impl<T: FullPrim> RegistryWrap<T> for WrapFull {
     #[inline]
     fn invoke(
         prim: &T,
@@ -102,8 +86,8 @@ impl<T: FullPrim> ActionWrap<T> for WrapFull {
     }
 }
 
-impl<T: Clone + Send + Sync + 'static, S: ActionWrap<T> + 'static> ExternalFunction
-    for ActionSidePrimWrapper<T, S>
+impl<T: Clone + Send + Sync + 'static, S: RegistryWrap<T> + 'static> ExternalFunction
+    for RegistryPrimWrapper<T, S>
 {
     fn invoke(&self, exec_state: &mut ExecutionState, args: &[Value]) -> Option<Value> {
         let registry = self.registry.read().unwrap();
@@ -413,10 +397,7 @@ impl EGraph {
         let primitive: Arc<dyn PrimitiveCommon> = Arc::new(x.clone());
         let id = self
             .backend
-            .register_external_func(Box::new(QuerySidePrimWrapper::<T, WrapPure> {
-                prim: x,
-                _wrap: std::marker::PhantomData,
-            }));
+            .register_external_func(Box::new(PurePrimWrapper { prim: x }));
         PendingPrimitive {
             valid_contexts: PureState::valid_contexts().to_vec(),
             name: primitive.name().to_owned(),
@@ -432,10 +413,12 @@ impl EGraph {
         validator: Option<PrimitiveValidator>,
     ) -> PendingPrimitive {
         let primitive: Arc<dyn PrimitiveCommon> = Arc::new(x.clone());
+        let registry = self.backend.action_registry();
         let id = self
             .backend
-            .register_external_func(Box::new(QuerySidePrimWrapper::<T, WrapRead> {
+            .register_external_func(Box::new(RegistryPrimWrapper::<T, WrapRead> {
                 prim: x,
+                registry,
                 _wrap: std::marker::PhantomData,
             }));
         PendingPrimitive {
@@ -456,7 +439,7 @@ impl EGraph {
         let registry = self.backend.action_registry();
         let id = self
             .backend
-            .register_external_func(Box::new(ActionSidePrimWrapper::<T, WrapWrite> {
+            .register_external_func(Box::new(RegistryPrimWrapper::<T, WrapWrite> {
                 prim: x,
                 registry,
                 _wrap: std::marker::PhantomData,
@@ -479,7 +462,7 @@ impl EGraph {
         let registry = self.backend.action_registry();
         let id = self
             .backend
-            .register_external_func(Box::new(ActionSidePrimWrapper::<T, WrapFull> {
+            .register_external_func(Box::new(RegistryPrimWrapper::<T, WrapFull> {
                 prim: x,
                 registry,
                 _wrap: std::marker::PhantomData,
