@@ -182,9 +182,9 @@ pub struct PrimitiveWithId {
     pub(crate) id: ExternalFunctionId,
     pub(crate) validator: Option<PrimitiveValidator>,
     /// The execution contexts in which this primitive should be picked
-    /// at this call site. Initially seeded from
-    /// [`UserState::valid_contexts()`](egglog_bridge::UserState::valid_contexts)
-    /// (where the body is sound).
+    /// at this call site. Seeded from the wrapper type's
+    /// `valid_contexts()` (e.g. [`PureState::valid_contexts`] is all
+    /// four; [`WriteState::valid_contexts`] is the action contexts).
     pub(crate) valid_contexts: Vec<Context>,
 }
 
@@ -358,7 +358,7 @@ impl EGraph {
     ///
     /// `T: PurePrim` because the body's `state` parameter is always a
     /// [`PureState`]; action-side dispatch happens through privileged
-    /// access (the `__internal::Internal` trait), which `PureState`
+    /// access (the `Internal` trait), which `PureState`
     /// implements crate-internally.
     ///
     /// Crate-private: this is the implementation hook for

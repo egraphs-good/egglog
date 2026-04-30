@@ -382,7 +382,7 @@ where
 {
     fn apply<'a, 'db>(
         &self,
-        mut state: crate::WriteState<'a, 'db>,
+        state: crate::WriteState<'a, 'db>,
         values: &[Value],
     ) -> Option<Value> {
         let unit = state.base_values().get(());
