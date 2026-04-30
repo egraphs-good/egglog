@@ -68,6 +68,7 @@ jobs:
           - rust_rule_match_with_serialize
           - rust_rule_insert_loop
           - rust_rule_tableaction_hot_path
+          - factoring-multisets
     steps:
       - run: echo "CARGO_INCREMENTAL=0" >> "$GITHUB_ENV"
       - uses: actions/checkout@v4

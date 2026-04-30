@@ -1,6 +1,5 @@
 ---
 source: tests/files.rs
-assertion_line: 392
 expression: snapshot
 ---
 array.egg
@@ -18,6 +17,7 @@ delete.egg
 eggcc-extraction.egg
 eqsat-basic-multiset.egg
 extract-vec-bench.egg
+factoring-multisets.egg
 fibonacci.egg
 fusion.egg
 hardboiled_conv1d_128.egg
