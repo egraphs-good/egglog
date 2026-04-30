@@ -156,22 +156,42 @@ impl ResolvedCall {
             }
         }
 
-        // For a given (signature, context) pair, at most one
-        // registration matches — `add_higher_order_primitive`
+        // For a given (signature, context) pair, exactly one
+        // registration must match — `add_higher_order_primitive`
         // registers one id per context with disjoint `valid_contexts`,
         // and the single-kind `add_*_primitive` methods produce
-        // overloads keyed by signature. Simple find is enough.
-        if let Some(primitives) = typeinfo.get_prims(head)
-            && let Some(picked) = primitives
+        // overloads keyed by signature. If two primitives accept the
+        // same signature in the same context, registration was
+        // ambiguous (e.g. the same primitive added twice); panic
+        // here rather than silently picking one.
+        if let Some(primitives) = typeinfo.get_prims(head) {
+            let matches: Vec<_> = primitives
                 .iter()
-                .find(|p| p.valid_contexts.contains(&ctx) && p.accept(types, typeinfo))
-        {
-            let (out, inp) = types.split_last().unwrap();
-            return ResolvedCall::Primitive(SpecializedPrimitive {
-                prim_with_id: picked.clone(),
-                input: inp.to_vec(),
-                output: out.clone(),
-            });
+                .filter(|p| p.valid_contexts.contains(&ctx) && p.accept(types, typeinfo))
+                .collect();
+            match matches.as_slice() {
+                [] => {}
+                [picked] => {
+                    let (out, inp) = types.split_last().unwrap();
+                    return ResolvedCall::Primitive(SpecializedPrimitive {
+                        prim_with_id: (*picked).clone(),
+                        input: inp.to_vec(),
+                        output: out.clone(),
+                    });
+                }
+                multiple => {
+                    let sig: Vec<_> = types.iter().map(|s| s.name().to_string()).collect();
+                    panic!(
+                        "Ambiguous primitive resolution for {head:?} in context {ctx:?} \
+                         with signature [{}]: {} registrations accept this call. \
+                         Each (name, signature, context) tuple must map to a unique \
+                         primitive — was {head:?} registered more than once with the \
+                         same type?",
+                        sig.join(", "),
+                        multiple.len(),
+                    );
+                }
+            }
         }
 
         panic!("No resolution for {head:?} in context {ctx:?}");
