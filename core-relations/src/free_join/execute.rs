@@ -16,6 +16,7 @@ use crate::{
 use crossbeam::utils::CachePadded;
 use dashmap::mapref::entry::Entry;
 use dashmap::mapref::one::RefMut;
+use egglog_concurrency::ReadOptimizedLock;
 use egglog_reports::{ReportLevel, RuleReport, RuleSetReport};
 use smallvec::SmallVec;
 use web_time::Instant;
@@ -158,14 +159,58 @@ enum DynamicIndex {
     SparseColumn(SparseColumnIndex),
 }
 
+/// This struct is used to mark subsets that can contain non-stale entries.
+/// Whether a subset can be stale depends on the type of index it came from.
+/// Indices that come from a table may contain stale entries, while
+/// those that are built on the fly will not.
+struct PotentiallyStale<T> {
+    inner: T,
+    can_be_stale: bool,
+}
+
+impl<T> PotentiallyStale<T> {
+    fn maybe_stale(inner: T) -> Self {
+        Self {
+            inner,
+            can_be_stale: true,
+        }
+    }
+
+    fn not_stale(inner: T) -> Self {
+        Self {
+            inner,
+            can_be_stale: false,
+        }
+    }
+}
+
+impl PotentiallyStale<SubsetRef<'_>> {
+    fn size(&self) -> usize {
+        self.inner.size()
+    }
+
+    fn to_owned(&self, pool: &Pool<SortedOffsetVector>) -> PotentiallyStale<Subset> {
+        PotentiallyStale {
+            inner: self.inner.to_owned(pool),
+            can_be_stale: self.can_be_stale,
+        }
+    }
+}
+
+impl PotentiallyStale<Subset> {
+    fn size(&self) -> usize {
+        self.inner.size()
+    }
+}
+
 struct Prober {
-    node: TrieNode,
+    node: Arc<TrieNode>,
     pool: Pool<SortedOffsetVector>,
     ix: DynamicIndex,
 }
 
 impl Prober {
-    fn get_subset(&self, key: &[Value]) -> Option<Subset> {
+    fn get_subset(&self, key: &[Value]) -> Option<PotentiallyStale<Subset>> {
         match &self.ix {
             DynamicIndex::Cached {
                 intersect_outer,
@@ -178,7 +223,7 @@ impl Prober {
                         return None;
                     }
                 }
-                Some(sub)
+                Some(PotentiallyStale::maybe_stale(sub))
             }
             DynamicIndex::CachedColumn {
                 intersect_outer,
@@ -196,19 +241,22 @@ impl Prober {
                         return None;
                     }
                 }
-                Some(sub)
+                Some(PotentiallyStale::maybe_stale(sub))
             }
-            DynamicIndex::Dynamic(tab) => tab.get_subset(key).map(|x| x.to_owned(&self.pool)),
-            DynamicIndex::DynamicColumn(tab) => {
-                tab.get_subset(&key[0]).map(|x| x.to_owned(&self.pool))
-            }
+            DynamicIndex::Dynamic(tab) => tab
+                .get_subset(key)
+                .map(|x| PotentiallyStale::not_stale(x.to_owned(&self.pool))),
+            DynamicIndex::DynamicColumn(tab) => tab
+                .get_subset(&key[0])
+                .map(|x| PotentiallyStale::not_stale(x.to_owned(&self.pool))),
             DynamicIndex::SparseColumn(tab) => {
                 debug_assert_eq!(key.len(), 1);
-                tab.get_subset(key[0]).map(|x| x.to_owned(&self.pool))
+                tab.get_subset(key[0])
+                    .map(|x| PotentiallyStale::not_stale(x.to_owned(&self.pool)))
             }
         }
     }
-    fn for_each(&self, mut f: impl FnMut(&[Value], SubsetRef)) {
+    fn for_each(&self, mut f: impl FnMut(&[Value], PotentiallyStale<SubsetRef>)) {
         match &self.ix {
             DynamicIndex::Cached {
                 intersect_outer: true,
@@ -217,13 +265,16 @@ impl Prober {
                 let mut res = v.to_owned(&self.pool);
                 res.intersect(self.node.subset.as_ref(), &self.pool);
                 if !res.is_empty() {
-                    f(k, res.as_ref())
+                    f(k, PotentiallyStale::maybe_stale(res.as_ref()))
                 }
             }),
             DynamicIndex::Cached {
                 intersect_outer: false,
                 table,
-            } => table.get().unwrap().for_each(|k, v| f(k, v)),
+            } => table
+                .get()
+                .unwrap()
+                .for_each(|k, v| f(k, PotentiallyStale::maybe_stale(v))),
             DynamicIndex::CachedColumn {
                 intersect_outer: true,
                 table,
@@ -232,7 +283,7 @@ impl Prober {
                     let mut res = v.to_owned(&self.pool);
                     res.intersect(self.node.subset.as_ref(), &self.pool);
                     if !res.is_empty() {
-                        f(&[*k], res.as_ref())
+                        f(&[*k], PotentiallyStale::maybe_stale(res.as_ref()))
                     }
                 });
             }
@@ -240,16 +291,19 @@ impl Prober {
                 intersect_outer: false,
                 table,
             } => {
-                table.get().unwrap().for_each(|k, v| f(&[*k], v));
+                table
+                    .get()
+                    .unwrap()
+                    .for_each(|k, v| f(&[*k], PotentiallyStale::maybe_stale(v)));
             }
             DynamicIndex::Dynamic(tab) => {
-                tab.for_each(f);
+                tab.for_each(|k, v| f(k, PotentiallyStale::not_stale(v)));
             }
             DynamicIndex::DynamicColumn(tab) => tab.for_each(|k, v| {
-                f(&[*k], v);
+                f(&[*k], PotentiallyStale::not_stale(v));
             }),
             DynamicIndex::SparseColumn(tab) => {
-                tab.for_each(f);
+                tab.for_each(|k, v| f(k, PotentiallyStale::not_stale(v)));
             }
         }
     }
@@ -304,21 +358,25 @@ impl Database {
                         let mut action_buf =
                             ScopedActionBuffer::new(rule_scope, rule_set, match_counter.clone());
                         let search_and_apply_timer = Instant::now();
+
                         'eval: {
+                            for JoinHeader { atom, subset, .. } in plan.header() {
+                                if subset.is_empty() {
+                                    break 'eval;
+                                }
+                                let mut cur =
+                                    Arc::try_unwrap(binding_info.unwrap_val(*atom)).unwrap();
+                                debug_assert!(cur.cached_subsets.get().is_none());
+                                cur.subset
+                                    .intersect(subset.as_ref(), &with_pool_set(|ps| ps.get_pool()));
+                                if cur.subset.is_empty() {
+                                    break 'eval;
+                                }
+                                binding_info.move_back_node(*atom, Arc::new(cur));
+                            }
+
                             match plan {
                                 Plan::SinglePlan(plan) => {
-                                    for JoinHeader { atom, subset, .. } in &plan.header {
-                                        if subset.is_empty() {
-                                            break 'eval;
-                                        }
-                                        let mut cur = binding_info.unwrap_val(*atom);
-                                        debug_assert!(cur.cached_subsets.get().is_none());
-                                        cur.subset.intersect(
-                                            subset.as_ref(),
-                                            &with_pool_set(|ps| ps.get_pool()),
-                                        );
-                                        binding_info.move_back_node(*atom, cur);
-                                    }
                                     join_state.run_join_stages(
                                         &plan.stages,
                                         &plan.atoms,
@@ -328,22 +386,6 @@ impl Database {
                                     );
                                 }
                                 Plan::DecomposedPlan(plan) => {
-                                    for JoinHeader { atom, subset, .. } in plan.header.iter() {
-                                        if subset.is_empty() {
-                                            break 'eval;
-                                        }
-                                        let mut cur = binding_info.unwrap_val(*atom);
-                                        debug_assert!(cur.cached_subsets.get().is_none());
-                                        cur.subset.intersect(
-                                            subset.as_ref(),
-                                            &with_pool_set(|ps| ps.get_pool()),
-                                        );
-                                        if cur.subset.is_empty() {
-                                            break 'eval;
-                                        }
-                                        binding_info.move_back_node(*atom, cur);
-                                    }
-
                                     let mut materializations: DenseIdMap<
                                         MatId,
                                         Arc<DashMap<Vec<Value>, RowBuffer>>,
@@ -457,18 +499,23 @@ impl Database {
 
                 let search_and_apply_timer = Instant::now();
                 'eval: {
+                    for JoinHeader { atom, subset, .. } in plan.header() {
+                        if subset.is_empty() {
+                            break 'eval;
+                        }
+                        // Before query execution, Arc<TrieNode> is owned exclusively by the binding info.
+                        // Trie nodes are only shared once we start running the query.
+                        let mut cur = Arc::try_unwrap(binding_info.unwrap_val(*atom)).unwrap();
+                        debug_assert!(cur.cached_subsets.get().is_none());
+                        cur.subset
+                            .intersect(subset.as_ref(), &with_pool_set(|ps| ps.get_pool()));
+                        if cur.subset.is_empty() {
+                            break 'eval;
+                        }
+                        binding_info.move_back_node(*atom, Arc::new(cur));
+                    }
                     match plan {
                         Plan::SinglePlan(plan) => {
-                            for JoinHeader { atom, subset, .. } in &plan.header {
-                                if subset.is_empty() {
-                                    break 'eval;
-                                }
-                                let mut cur = binding_info.unwrap_val(*atom);
-                                debug_assert!(cur.cached_subsets.get().is_none());
-                                cur.subset
-                                    .intersect(subset.as_ref(), &with_pool_set(|ps| ps.get_pool()));
-                                binding_info.move_back_node(*atom, cur);
-                            }
                             join_state.run_join_stages(
                                 &plan.stages,
                                 &plan.atoms,
@@ -478,20 +525,6 @@ impl Database {
                             );
                         }
                         Plan::DecomposedPlan(plan) => {
-                            for JoinHeader { atom, subset, .. } in plan.header.iter() {
-                                if subset.is_empty() {
-                                    break 'eval;
-                                }
-                                let mut cur = binding_info.unwrap_val(*atom);
-                                debug_assert!(cur.cached_subsets.get().is_none());
-                                cur.subset
-                                    .intersect(subset.as_ref(), &with_pool_set(|ps| ps.get_pool()));
-                                if cur.subset.is_empty() {
-                                    break 'eval;
-                                }
-                                binding_info.move_back_node(*atom, cur);
-                            }
-
                             let mut materializations =
                                 DenseIdMap::with_capacity(plan.stages.blocks.len());
                             for i in 0..plan.stages.blocks.len() {
@@ -600,7 +633,12 @@ struct JoinState<'a> {
     exec_state: ExecutionState<'a>,
 }
 
+/// Per-column indexes on a trie node's subset, lazily initialized on first access per column.
 type ColumnIndexes = IdVec<ColumnId, OnceLock<Arc<ColumnIndex>>>;
+
+/// Per-column maps from a value to the child trie node for that value, lazily populated on first
+/// lookup per (column, value) pair.
+pub(crate) type ChildrenMaps = IdVec<ColumnId, ReadOptimizedLock<HashMap<Value, Arc<TrieNode>>>>;
 
 /// Information about the current subset of an atom's relation that is being considered, along with
 /// lazily-initialized, cached indexes on that subset.
@@ -609,14 +647,31 @@ type ColumnIndexes = IdVec<ColumnId, OnceLock<Arc<ColumnIndex>>>;
 /// implementation and the FJ paper. It currently does not handle non-column indexes, but that
 /// should be a fairly straightforward extension if we start generating plans that need those.
 /// (Right now, most plans iterating over more than one column just do a scan anyway).
-struct TrieNode {
+pub(crate) struct TrieNode {
     /// The actual subset of the corresponding atom.
     subset: Subset,
     /// Any cached indexes on this subset.
-    cached_subsets: OnceLock<Arc<Pooled<ColumnIndexes>>>,
+    cached_subsets: OnceLock<Pooled<ColumnIndexes>>,
+    cached_children: OnceLock<Pooled<ChildrenMaps>>,
+}
+
+impl std::fmt::Debug for TrieNode {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("TrieNode")
+            .field("subset", &self.subset)
+            .finish()
+    }
 }
 
 impl TrieNode {
+    fn new(subset: Subset) -> Self {
+        Self {
+            subset,
+            cached_subsets: Default::default(),
+            cached_children: Default::default(),
+        }
+    }
+
     fn size(&self) -> usize {
         self.subset.size()
     }
@@ -625,7 +680,7 @@ impl TrieNode {
             // Pre-size the vector so we do not need to borrow it mutably to initialize the index.
             let mut vec: Pooled<ColumnIndexes> = with_pool_set(|ps| ps.get());
             vec.resize_with(info.spec.arity(), OnceLock::new);
-            Arc::new(vec)
+            vec
         })[col]
             .get_or_init(|| {
                 let col_index = info.table.group_by_col(self.subset.as_ref(), col);
@@ -633,17 +688,31 @@ impl TrieNode {
             })
             .clone()
     }
-}
 
-impl Clone for TrieNode {
-    fn clone(&self) -> Self {
-        let cached_subsets = OnceLock::new();
-        if let Some(cached) = self.cached_subsets.get() {
-            cached_subsets.set(cached.clone()).ok().unwrap();
-        }
-        Self {
-            subset: self.subset.clone(),
-            cached_subsets,
+    fn get_cached_trie_node(
+        &self,
+        col: ColumnId,
+        value: Value,
+        info: &TableInfo,
+        sub: impl FnOnce() -> Subset,
+    ) -> Arc<TrieNode> {
+        let map = &self.cached_children.get_or_init(|| {
+            let mut vec: Pooled<ChildrenMaps> = with_pool_set(|ps| ps.get());
+            vec.resize_with(info.spec.arity(), ReadOptimizedLock::default);
+            vec
+        })[col];
+        let guard = map.read();
+        if let Some(node) = guard.get(&value) {
+            node.clone()
+        } else {
+            drop(guard);
+            let mut guard = map.lock();
+            if let Some(node) = guard.get(&value) {
+                return node.clone();
+            }
+            let new_node = Arc::new(TrieNode::new(sub()));
+            guard.insert(value, new_node.clone());
+            new_node
         }
     }
 }
@@ -651,17 +720,22 @@ impl Clone for TrieNode {
 #[derive(Default, Clone)]
 struct BindingInfo {
     bindings: DenseIdMap<Variable, Value>,
-    subsets: DenseIdMap<AtomId, TrieNode>,
+    subsets: DenseIdMap<AtomId, Arc<TrieNode>>,
     materializations: DenseIdMap<MatId, Arc<HashMap<Vec<Value>, RowBuffer>>>,
 }
 
 impl BindingInfo {
     /// Initializes the atom-related metadata in the [`BindingInfo`].
     fn insert_subset(&mut self, atom: AtomId, subset: Subset) {
-        let node = TrieNode {
+        let node = Arc::new(TrieNode {
             subset,
             cached_subsets: Default::default(),
-        };
+            cached_children: Default::default(),
+        });
+        self.subsets.insert(atom, node);
+    }
+
+    fn insert_node(&mut self, atom: AtomId, node: Arc<TrieNode>) {
         self.subsets.insert(atom, node);
     }
 
@@ -671,7 +745,7 @@ impl BindingInfo {
         self.subsets.insert(atom, prober.node);
     }
 
-    fn move_back_node(&mut self, atom: AtomId, node: TrieNode) {
+    fn move_back_node(&mut self, atom: AtomId, node: Arc<TrieNode>) {
         self.subsets.insert(atom, node);
     }
 
@@ -679,7 +753,7 @@ impl BindingInfo {
         self.subsets[atom].subset.is_empty()
     }
 
-    fn unwrap_val(&mut self, atom: AtomId) -> TrieNode {
+    fn unwrap_val(&mut self, atom: AtomId) -> Arc<TrieNode> {
         self.subsets.unwrap_val(atom)
     }
 }
@@ -851,7 +925,7 @@ impl<'a> JoinState<'a> {
                             binding_info.bindings.insert(var, val);
                         }
                         UpdateInstr::RefineAtom(atom, subset) => {
-                            binding_info.insert_subset(atom, subset);
+                            binding_info.insert_node(atom, subset);
                         }
                         UpdateInstr::EndFrame => {
                             self.run_plan(
@@ -894,7 +968,7 @@ impl<'a> JoinState<'a> {
                                 binding_info.bindings.insert(var, val);
                             }
                             UpdateInstr::RefineAtom(atom, subset) => {
-                                binding_info.insert_subset(atom, subset);
+                                binding_info.insert_node(atom, subset);
                             }
                             UpdateInstr::EndFrame => {
                                 JoinState {
@@ -919,11 +993,15 @@ impl<'a> JoinState<'a> {
         }
 
         fn refine_subset(
-            sub: Subset,
+            sub: PotentiallyStale<Subset>,
             constraints: &[Constraint],
             table: &WrappedTableRef,
         ) -> Subset {
-            let sub = table.refine_live(sub);
+            let sub = if sub.can_be_stale {
+                table.refine_live(sub.inner)
+            } else {
+                sub.inner
+            };
             table.refine(sub, constraints)
         }
 
@@ -935,17 +1013,27 @@ impl<'a> JoinState<'a> {
                         return;
                     }
                     let prober = self.get_column_index(atoms, binding_info, a.atom, a.column);
-                    let table = self.db.tables[atoms[a.atom].table].table.as_ref();
+                    let info = &self.db.tables[atoms[a.atom].table];
+                    let table = info.table.as_ref();
                     let mut updates = FrameUpdates::with_capacity(cmp::min(chunk_size, cur_size));
                     with_pool_set(|ps| {
                         prober.for_each(|val, x| {
                             updates.push_binding(*var, val[0]);
-                            let sub = refine_subset(x.to_owned(&ps.get_pool()), &[], &table);
-                            if sub.is_empty() {
+                            let node = if x.size() <= 16 {
+                                let sub = refine_subset(x.to_owned(&ps.get_pool()), &[], &table);
+                                Arc::new(TrieNode::new(sub))
+                            } else {
+                                prober
+                                    .node
+                                    .get_cached_trie_node(a.column, val[0], info, || {
+                                        refine_subset(x.to_owned(&ps.get_pool()), &[], &table)
+                                    })
+                            };
+                            if node.subset.is_empty() {
                                 updates.rollback();
                                 return;
                             }
-                            updates.refine_atom(a.atom, sub);
+                            updates.refine_atom(a.atom, node);
                             updates.finish_frame();
                             if updates.frames() >= chunk_size {
                                 drain_updates!(updates);
@@ -960,17 +1048,28 @@ impl<'a> JoinState<'a> {
                         return;
                     }
                     let prober = self.get_column_index(atoms, binding_info, a.atom, a.column);
+                    let info = &self.db.tables[atoms[a.atom].table];
                     let table = self.db.tables[atoms[a.atom].table].table.as_ref();
                     let mut updates = FrameUpdates::with_capacity(cmp::min(chunk_size, cur_size));
                     with_pool_set(|ps| {
                         prober.for_each(|val, x| {
                             updates.push_binding(*var, val[0]);
-                            let sub = refine_subset(x.to_owned(&ps.get_pool()), &a.cs, &table);
-                            if sub.is_empty() {
+
+                            let node = if x.size() <= 16 {
+                                let sub = refine_subset(x.to_owned(&ps.get_pool()), &a.cs, &table);
+                                Arc::new(TrieNode::new(sub))
+                            } else {
+                                prober
+                                    .node
+                                    .get_cached_trie_node(a.column, val[0], info, || {
+                                        refine_subset(x.to_owned(&ps.get_pool()), &a.cs, &table)
+                                    })
+                            };
+                            if node.subset.is_empty() {
                                 updates.rollback();
                                 return;
                             }
-                            updates.refine_atom(a.atom, sub);
+                            updates.refine_atom(a.atom, node);
                             updates.finish_frame();
                             if updates.frames() >= chunk_size {
                                 drain_updates!(updates);
@@ -993,29 +1092,58 @@ impl<'a> JoinState<'a> {
 
                     let smaller_atom = smaller_scan.atom;
                     let larger_atom = larger_scan.atom;
-                    let large_table = self.db.tables[atoms[larger_atom].table].table.as_ref();
-                    let small_table = self.db.tables[atoms[smaller_atom].table].table.as_ref();
+                    let large_info = &self.db.tables[atoms[larger_atom].table];
+                    let large_table = large_info.table.as_ref();
+                    let small_info = &self.db.tables[atoms[smaller_atom].table];
+                    let small_table = small_info.table.as_ref();
                     let mut updates = FrameUpdates::with_capacity(cmp::min(chunk_size, cur_size));
                     with_pool_set(|ps| {
                         smaller.for_each(|val, small_sub| {
-                            if let Some(mut large_sub) = larger.get_subset(val) {
-                                large_sub = refine_subset(large_sub, &larger_scan.cs, &large_table);
-                                if large_sub.is_empty() {
-                                    updates.rollback();
-                                    return;
-                                }
-                                let small_sub = refine_subset(
-                                    small_sub.to_owned(&ps.get_pool()),
-                                    &smaller_scan.cs,
-                                    &small_table,
-                                );
-                                if small_sub.is_empty() {
-                                    updates.rollback();
-                                    return;
-                                }
+                            if let Some(large_sub) = larger.get_subset(val) {
                                 updates.push_binding(*var, val[0]);
-                                updates.refine_atom(smaller_atom, small_sub);
-                                updates.refine_atom(larger_atom, large_sub);
+                                let smaller_node = if small_sub.size() <= 16 {
+                                    let small_sub = refine_subset(
+                                        small_sub.to_owned(&ps.get_pool()),
+                                        &smaller_scan.cs,
+                                        &small_table,
+                                    );
+                                    Arc::new(TrieNode::new(small_sub))
+                                } else {
+                                    smaller.node.get_cached_trie_node(
+                                        smaller_scan.column,
+                                        val[0],
+                                        small_info,
+                                        || {
+                                            refine_subset(
+                                                small_sub.to_owned(&ps.get_pool()),
+                                                &smaller_scan.cs,
+                                                &small_table,
+                                            )
+                                        },
+                                    )
+                                };
+                                if smaller_node.subset.is_empty() {
+                                    updates.rollback();
+                                    return;
+                                }
+                                updates.refine_atom(smaller_atom, smaller_node);
+                                let larger_node = if large_sub.size() <= 16 {
+                                    let large_sub =
+                                        refine_subset(large_sub, &larger_scan.cs, &large_table);
+                                    Arc::new(TrieNode::new(large_sub))
+                                } else {
+                                    larger.node.get_cached_trie_node(
+                                        larger_scan.column,
+                                        val[0],
+                                        large_info,
+                                        || refine_subset(large_sub, &larger_scan.cs, &large_table),
+                                    )
+                                };
+                                if larger_node.subset.is_empty() {
+                                    updates.rollback();
+                                    return;
+                                }
+                                updates.refine_atom(larger_atom, larger_node);
                                 updates.finish_frame();
                                 if updates.frames() >= chunk_size {
                                     drain_updates_parallel!(updates);
@@ -1044,8 +1172,8 @@ impl<'a> JoinState<'a> {
                     }
 
                     let main_spec = &rest[smallest];
-                    let main_spec_table =
-                        self.db.tables[atoms[main_spec.atom].table].table.as_ref();
+                    let main_spec_info = &self.db.tables[atoms[main_spec.atom].table];
+                    let main_spec_table = main_spec_info.table.as_ref();
 
                     if smallest_size != 0 {
                         // Smallest leads the scan
@@ -1058,29 +1186,56 @@ impl<'a> JoinState<'a> {
                                     if i == smallest {
                                         continue;
                                     }
-                                    if let Some(mut sub) = probers[i].get_subset(key) {
+                                    if let Some(sub) = probers[i].get_subset(key) {
                                         let table = self.db.tables[atoms[rest[i].atom].table]
                                             .table
                                             .as_ref();
-                                        sub = refine_subset(sub, &rest[i].cs, &table);
-                                        if sub.is_empty() {
+                                        let node = if sub.size() <= 16 {
+                                            let sub = refine_subset(sub, &rest[i].cs, &table);
+                                            Arc::new(TrieNode::new(sub))
+                                        } else {
+                                            probers[i].node.get_cached_trie_node(
+                                                scan.column,
+                                                key[0],
+                                                &self.db.tables[atoms[scan.atom].table],
+                                                || refine_subset(sub, &rest[i].cs, &table),
+                                            )
+                                        };
+                                        if node.subset.is_empty() {
                                             updates.rollback();
                                             return;
                                         }
-                                        updates.refine_atom(scan.atom, sub)
+                                        updates.refine_atom(scan.atom, node);
                                     } else {
                                         updates.rollback();
                                         // Empty intersection.
                                         return;
                                     }
                                 }
-                                let sub = sub.to_owned(&ps.get_pool());
-                                let sub = refine_subset(sub, &main_spec.cs, &main_spec_table);
-                                if sub.is_empty() {
+                                let main_node = if sub.size() <= 16 {
+                                    let sub = refine_subset(
+                                        sub.to_owned(&ps.get_pool()),
+                                        &main_spec.cs,
+                                        &main_spec_table,
+                                    );
+                                    Arc::new(TrieNode::new(sub))
+                                } else {
+                                    probers[smallest].node.get_cached_trie_node(
+                                        main_spec.column,
+                                        key[0],
+                                        main_spec_info,
+                                        || {
+                                            let sub = sub.to_owned(&ps.get_pool());
+
+                                            refine_subset(sub, &main_spec.cs, &main_spec_table)
+                                        },
+                                    )
+                                };
+                                if main_node.subset.is_empty() {
                                     updates.rollback();
                                     return;
                                 }
-                                updates.refine_atom(main_spec.atom, sub);
+                                updates.refine_atom(main_spec.atom, main_node);
                                 updates.finish_frame();
                                 if updates.frames() >= chunk_size {
                                     drain_updates_parallel!(updates);
@@ -1123,7 +1278,10 @@ impl<'a> JoinState<'a> {
                     for (row, key) in buffer.non_stale() {
                         updates.refine_atom(
                             cover_atom,
-                            Subset::Dense(OffsetRange::new(row, row.inc())),
+                            Arc::new(TrieNode::new(Subset::Dense(OffsetRange::new(
+                                row,
+                                row.inc(),
+                            )))),
                         );
                         // bind the values
                         for (i, (_, var)) in bind.iter().enumerate() {
@@ -1189,7 +1347,10 @@ impl<'a> JoinState<'a> {
                     'mid: for (row, key) in buffer.non_stale() {
                         updates.refine_atom(
                             cover_atom,
-                            Subset::Dense(OffsetRange::new(row, row.inc())),
+                            Arc::new(TrieNode::new(Subset::Dense(OffsetRange::new(
+                                row,
+                                row.inc(),
+                            )))),
                         );
                         // bind the values
                         for (i, (_, var)) in bind.iter().enumerate() {
@@ -1203,7 +1364,7 @@ impl<'a> JoinState<'a> {
                                 .iter()
                                 .map(|col| key[col.index()])
                                 .collect::<SmallVec<[Value; 4]>>();
-                            let Some(mut subset) = prober.get_subset(&index_key) else {
+                            let Some(subset) = prober.get_subset(&index_key) else {
                                 updates.rollback();
                                 // There are no possible values for this subset
                                 continue 'mid;
@@ -1211,13 +1372,13 @@ impl<'a> JoinState<'a> {
                             // apply any constraints needed in this scan.
                             let table_info = &self.db.tables[atoms[*atom].table];
                             let cs = &to_intersect[*i].0.constraints;
-                            subset = refine_subset(subset, cs, &table_info.table.as_ref());
+                            let subset = refine_subset(subset, cs, &table_info.table.as_ref());
                             if subset.is_empty() {
                                 updates.rollback();
                                 // There are no possible values for this subset
                                 continue 'mid;
                             }
-                            updates.refine_atom(*atom, subset);
+                            updates.refine_atom(*atom, Arc::new(TrieNode::new(subset)));
                         }
                         updates.finish_frame();
                         if updates.frames() >= chunk_size {
@@ -1282,7 +1443,15 @@ impl<'a> JoinState<'a> {
                             key.push(val);
                         }
                         if let Some(subset) = prober.get_subset(&key) {
-                            updates.refine_atom(spec.to_index.atom, subset);
+                            let subset = refine_subset(
+                                subset,
+                                &spec.constraints,
+                                &self.db.tables[atoms[spec.to_index.atom].table]
+                                    .table
+                                    .as_ref(),
+                            );
+                            updates
+                                .refine_atom(spec.to_index.atom, Arc::new(TrieNode::new(subset)));
                         } else {
                             return false;
                         }
