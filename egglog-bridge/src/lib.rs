@@ -16,8 +16,6 @@ use std::{
     sync::{Arc, Mutex},
 };
 
-use arc_swap::ArcSwap;
-
 use crate::core_relations::{
     BaseValue, BaseValueId, BaseValues, ColumnId, Constraint, ContainerValue, ContainerValues,
     CounterId, Database, DisplacedTable, ExecutionState, ExternalFunction, ExternalFunctionId,
@@ -50,8 +48,10 @@ use thiserror::Error;
 /// bridge `EGraph`. The state wrappers (`PureState`/`ReadState`/
 /// `WriteState`/`FullState`) live in the `egglog` crate; they read
 /// from this registry at invoke time to back name-indexed action
-/// methods. Stored behind an [`ArcSwap`] so the hot-path read on every
-/// primitive invocation is lock-free.
+/// methods. Held by the bridge `EGraph` inside an `Arc<RwLock<_>>` so
+/// `add_table` can mutate in place — full-registry clones on every
+/// declaration showed up as a hot path on programs that declare many
+/// constructors.
 #[derive(Clone)]
 pub struct ActionRegistry {
     table_actions: hashbrown::HashMap<String, TableAction>,
@@ -123,14 +123,15 @@ pub struct EGraph {
     panic_funcs: HashMap<String, ExternalFunctionId>,
     report_level: ReportLevel,
     /// Live registry of name-indexed action handles. Shared (via
-    /// `Arc<ArcSwap<_>>`) with state wrappers and primitive callbacks
-    /// in the egglog crate so [`WriteState`] /
-    /// [`FullState`] can implement `insert(name, ...)`,
-    /// `union`, etc. `ArcSwap` is used (over `RwLock`) because the
-    /// hot-path read happens on every primitive invocation, while
-    /// updates only happen between top-level commands via
-    /// [`add_table`](EGraph::add_table); we want lock-free reads.
-    action_registry: Arc<ArcSwap<ActionRegistry>>,
+    /// `Arc<RwLock<_>>`) with state wrappers and primitive callbacks
+    /// in the egglog crate so [`WriteState`] / [`FullState`] can
+    /// implement `insert(name, ...)`, `union`, etc. Mutated in place
+    /// from [`add_table`](EGraph::add_table) — `RwLock` (over
+    /// `ArcSwap`) avoids cloning the entire registry on every
+    /// declaration, which is O(n²) cumulative for files that declare
+    /// many constructors. Hot-path reads are still cheap (read lock
+    /// is contended only by other readers in normal use).
+    action_registry: Arc<std::sync::RwLock<ActionRegistry>>,
 }
 
 pub type Result<T> = std::result::Result<T, anyhow::Error>;
@@ -163,7 +164,7 @@ impl Default for EGraph {
         panic_funcs.insert(default_panic_msg, default_panic_id);
 
         let union_action = UnionAction::from_parts(uf_table, ts_counter);
-        let action_registry = Arc::new(ArcSwap::from_pointee(ActionRegistry::new(
+        let action_registry = Arc::new(std::sync::RwLock::new(ActionRegistry::new(
             union_action,
             default_panic_id,
         )));
@@ -544,22 +545,22 @@ impl EGraph {
         info.nonincremental_rebuild_rule = nonincremental_rebuild_rule;
         let action = TableAction::new(self, res);
         let table_name = self.funcs[res].name.to_string();
-        // `ArcSwap` doesn't expose mutation; rebuild a new registry
-        // from the current snapshot and atomically swap it in. This
-        // is rare — only on `add_table`, which only happens between
-        // top-level commands.
-        let mut updated = (**self.action_registry.load()).clone();
-        updated.register_table(table_name, action);
-        self.action_registry.store(Arc::new(updated));
+        // Mutate in place — no full-registry clone. `add_table` is
+        // only called during single-threaded setup between top-level
+        // commands, so the `RwLock` write is uncontended.
+        self.action_registry
+            .write()
+            .unwrap()
+            .register_table(table_name, action);
         res
     }
 
     /// A handle to the live [`ActionRegistry`] for this EGraph.
-    /// The handle is shared (`Arc<ArcSwap<_>>`); cloning the outer
+    /// The handle is shared (`Arc<RwLock<_>>`); cloning the outer
     /// `Arc` does not duplicate the underlying registry. Used by the
     /// egglog crate's primitive machinery to thread the registry into
-    /// state wrappers at invoke time via cheap `load()` reads.
-    pub fn action_registry(&self) -> Arc<ArcSwap<ActionRegistry>> {
+    /// state wrappers at invoke time.
+    pub fn action_registry(&self) -> Arc<std::sync::RwLock<ActionRegistry>> {
         self.action_registry.clone()
     }
 

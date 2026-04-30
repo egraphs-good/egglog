@@ -381,7 +381,7 @@ impl PrimitiveCommon for Map {
 impl PurePrim for Map {
     fn apply<'a, 'db>(
         &self,
-        state: &mut crate::PureState<'a, 'db>,
+        mut state: crate::PureState<'a, 'db>,
         args: &[Value],
     ) -> Option<Value> {
         let fc = state
@@ -396,7 +396,7 @@ impl PurePrim for Map {
             .clone();
         let mut new_data = MultiSet::<Value>::new();
         for (v, c) in multiset.data.iter_counts() {
-            if let Some(mapped) = fc.apply(state, &[v]) {
+            if let Some(mapped) = fc.apply(&mut state, &[v]) {
                 new_data.insert_multiple_mut(mapped, c);
             }
         }
@@ -442,7 +442,7 @@ impl PrimitiveCommon for FillIndex {
 impl FullPrim for FillIndex {
     fn apply<'a, 'db>(
         &self,
-        state: &mut crate::FullState<'a, 'db>,
+        mut state: crate::FullState<'a, 'db>,
         args: &[Value],
     ) -> Option<Value> {
         let fc = state
@@ -509,7 +509,7 @@ impl PrimitiveCommon for ClearIndex {
 impl WritePrim for ClearIndex {
     fn apply<'a, 'db>(
         &self,
-        state: &mut crate::WriteState<'a, 'db>,
+        mut state: crate::WriteState<'a, 'db>,
         args: &[Value],
     ) -> Option<Value> {
         let fc = state
@@ -570,7 +570,7 @@ impl PrimitiveCommon for FlatMap {
 impl PurePrim for FlatMap {
     fn apply<'a, 'db>(
         &self,
-        state: &mut crate::PureState<'a, 'db>,
+        mut state: crate::PureState<'a, 'db>,
         args: &[Value],
     ) -> Option<Value> {
         let fc = state
@@ -585,7 +585,7 @@ impl PurePrim for FlatMap {
             .clone();
         let mut new_data = MultiSet::<Value>::new();
         for (v, c) in multiset.data.iter_counts() {
-            let mapped = fc.apply(state, &[v]);
+            let mapped = fc.apply(&mut state, &[v]);
             if let Some(mapped_ms) = mapped {
                 let mapped_ms = state
                     .container_values()
@@ -638,7 +638,7 @@ impl PrimitiveCommon for Filter {
 impl PurePrim for Filter {
     fn apply<'a, 'db>(
         &self,
-        state: &mut crate::PureState<'a, 'db>,
+        mut state: crate::PureState<'a, 'db>,
         args: &[Value],
     ) -> Option<Value> {
         let fc = state
@@ -653,7 +653,7 @@ impl PurePrim for Filter {
             .clone();
         let mut new_data = MultiSet::<Value>::new();
         for (v, c) in multiset.data.iter_counts() {
-            let mapped = fc.apply(state, &[v]);
+            let mapped = fc.apply(&mut state, &[v]);
             if mapped.is_some() == self.skip_empty {
                 new_data.insert_multiple_mut(v, c);
             }
@@ -698,7 +698,7 @@ impl PrimitiveCommon for SumMultisets {
 impl PurePrim for SumMultisets {
     fn apply<'a, 'db>(
         &self,
-        state: &mut crate::PureState<'a, 'db>,
+        mut state: crate::PureState<'a, 'db>,
         args: &[Value],
     ) -> Option<Value> {
         let mut data = MultiSet::<Value>::new();
@@ -759,7 +759,7 @@ impl PrimitiveCommon for Reduce {
 impl PurePrim for Reduce {
     fn apply<'a, 'db>(
         &self,
-        state: &mut crate::PureState<'a, 'db>,
+        mut state: crate::PureState<'a, 'db>,
         args: &[Value],
     ) -> Option<Value> {
         let fc = state
@@ -780,7 +780,7 @@ impl PurePrim for Reduce {
             values.remove(0)
         };
         for v in values {
-            acc = fc.apply(state, &[acc, v])?;
+            acc = fc.apply(&mut state, &[acc, v])?;
         }
         Some(acc)
     }
@@ -818,7 +818,7 @@ impl PrimitiveCommon for UnionValues {
 impl WritePrim for UnionValues {
     fn apply<'a, 'db>(
         &self,
-        state: &mut crate::WriteState<'a, 'db>,
+        mut state: crate::WriteState<'a, 'db>,
         args: &[Value],
     ) -> Option<Value> {
         let values = state

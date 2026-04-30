@@ -338,7 +338,7 @@ pub fn rule(
 #[derive(Clone)]
 struct RustRuleRhs<F>
 where
-    F: for<'a, 'db> Fn(&mut crate::WriteState<'a, 'db>, &[Value]) -> Option<()>
+    F: for<'a, 'db> Fn(crate::WriteState<'a, 'db>, &[Value]) -> Option<()>
         + Clone
         + Send
         + Sync
@@ -351,7 +351,7 @@ where
 
 impl<F> PrimitiveCommon for RustRuleRhs<F>
 where
-    F: for<'a, 'db> Fn(&mut crate::WriteState<'a, 'db>, &[Value]) -> Option<()>
+    F: for<'a, 'db> Fn(crate::WriteState<'a, 'db>, &[Value]) -> Option<()>
         + Clone
         + Send
         + Sync
@@ -374,7 +374,7 @@ where
 
 impl<F> WritePrim for RustRuleRhs<F>
 where
-    F: for<'a, 'db> Fn(&mut crate::WriteState<'a, 'db>, &[Value]) -> Option<()>
+    F: for<'a, 'db> Fn(crate::WriteState<'a, 'db>, &[Value]) -> Option<()>
         + Clone
         + Send
         + Sync
@@ -382,7 +382,7 @@ where
 {
     fn apply<'a, 'db>(
         &self,
-        state: &mut crate::WriteState<'a, 'db>,
+        mut state: crate::WriteState<'a, 'db>,
         values: &[Value],
     ) -> Option<Value> {
         let unit = state.base_values().get(());
@@ -436,7 +436,7 @@ where
 ///         (= f0 (fib x))
 ///         (= f1 (fib (+ x 1)))
 ///     ],
-///     move |ctx, values| {
+///     move |mut ctx, values| {
 ///         let [x, f0, f1] = values else { unreachable!() };
 ///         let x = ctx.value_to_base::<i64>(*x);
 ///         let f0 = ctx.value_to_base::<i64>(*f0);
@@ -474,7 +474,7 @@ pub fn rust_rule(
     ruleset: &str,
     vars: &[(&str, ArcSort)],
     facts: Facts<String, String>,
-    func: impl for<'a, 'db> Fn(&mut crate::WriteState<'a, 'db>, &[Value]) -> Option<()>
+    func: impl for<'a, 'db> Fn(crate::WriteState<'a, 'db>, &[Value]) -> Option<()>
     + Clone
     + Send
     + Sync
@@ -1012,7 +1012,7 @@ mod tests {
                 (= f0 (fib x))
                 (= f1 (fib (+ x 1)))
             ],
-            move |ctx, values| {
+            move |mut ctx, values| {
                 let [x, f0, f1] = values else { unreachable!() };
                 let x = ctx.value_to_base::<i64>(*x);
                 let f0 = ctx.value_to_base::<i64>(*f0);

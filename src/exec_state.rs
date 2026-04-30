@@ -109,52 +109,70 @@ where
 /// Always seminaive-safe.
 pub trait Core<'a, 'db: 'a>: sealed::CoreSealed<'a, 'db> {
     /// Base-value pool (interned primitives like `i64`, `String`, …).
+    #[inline]
     fn base_values(&self) -> &'a BaseValues {
         self.es().base_values()
     }
     /// Read a counter's current value.
+    #[inline]
     fn read_counter(&self, ctr: CounterId) -> usize {
         self.es().read_counter(ctr)
     }
     /// Increment and read a counter atomically.
+    #[inline]
     fn inc_counter(&mut self, ctr: CounterId) -> usize {
         self.es_mut().inc_counter(ctr)
     }
     /// Signal that rule execution should stop after this firing.
+    #[inline]
     fn trigger_early_stop(&self) {
         self.es().trigger_early_stop()
     }
     /// Has someone called `trigger_early_stop`?
+    #[inline]
     fn should_stop(&self) -> bool {
         self.es().should_stop()
     }
     /// Human-readable name for a table id, if registered.
+    #[inline]
     fn table_name(&self, table: TableId) -> Option<&'a str> {
         self.es().table_name(table)
     }
 
     /// Container values for this EGraph.
+    #[inline]
     fn container_values(&self) -> &'a ContainerValues {
         self.es().container_values()
     }
 
     /// Register a container value, returning its interned `Value`.
+    #[inline]
     fn register_container<C: ContainerValue>(&mut self, container: C) -> Value {
+        // `container_values()` returns `&'a ContainerValues` — a reference
+        // tied to the inner ExecutionState's lifetime, not to `&self` —
+        // so it doesn't conflict with the subsequent `&mut` reborrow.
+        // Avoiding the clone of `ExecutionState` here matters: this is
+        // hot-path code (every container intern goes through it) and
+        // the clone copies a non-trivial amount of state.
+        let cv = self.container_values();
         let es = self.es_mut();
-        es.clone().container_values().register_val(container, es)
+        cv.register_val(container, es)
     }
 
     /// Convert an egglog [`Value`] to a Rust base type.
+    #[inline]
     fn value_to_base<T: BaseValue>(&self, x: Value) -> T {
         self.es().base_values().unwrap::<T>(x)
     }
 
     /// Convert a Rust base type to an egglog [`Value`].
+    #[inline]
     fn base_to_value<T: BaseValue>(&self, x: T) -> Value {
         self.es().base_values().get::<T>(x)
     }
 
     /// Look up the Rust container behind an egglog [`Value`], if any.
+    #[inline]
     fn value_to_container<T: ContainerValue>(
         &self,
         x: Value,
@@ -164,6 +182,7 @@ pub trait Core<'a, 'db: 'a>: sealed::CoreSealed<'a, 'db> {
 
     /// Intern a Rust container into the e-graph and return its
     /// [`Value`]. Sugar over `self.register_container(x)`.
+    #[inline]
     fn container_to_value<T: ContainerValue>(&mut self, x: T) -> Value {
         self.register_container(x)
     }
@@ -238,12 +257,14 @@ fn lookup_action<'r>(registry: &'r ActionRegistry, name: &str) -> &'r TableActio
 ///     state.raw_exec_state();
 /// }
 /// ```
+#[repr(transparent)]
 pub struct PureState<'a, 'db> {
     pub(crate) inner: &'a mut ExecutionState<'db>,
 }
 
 /// Typed view for read-only primitives. Valid in `GlobalQuery` and
 /// `GlobalAction` contexts. Implements [`Core`] only.
+#[repr(transparent)]
 pub struct ReadState<'a, 'db> {
     pub(crate) inner: &'a mut ExecutionState<'db>,
 }
@@ -284,6 +305,7 @@ pub struct FullState<'a, 'db> {
 }
 
 impl<'a, 'db: 'a> PureState<'a, 'db> {
+    #[inline]
     pub(crate) fn wrap(es: &'a mut ExecutionState<'db>) -> Self {
         Self { inner: es }
     }
@@ -331,9 +353,11 @@ impl<'a, 'db: 'a> FullState<'a, 'db> {
 // =====================================================================
 
 impl<'a, 'db: 'a> sealed::CoreSealed<'a, 'db> for PureState<'a, 'db> {
+    #[inline]
     fn es(&self) -> &ExecutionState<'db> {
         self.inner
     }
+    #[inline]
     fn es_mut(&mut self) -> &mut ExecutionState<'db> {
         self.inner
     }
@@ -347,9 +371,11 @@ impl<'a, 'db: 'a> UserState<'a, 'db> for PureState<'a, 'db> {
 }
 
 impl<'a, 'db: 'a> sealed::CoreSealed<'a, 'db> for ReadState<'a, 'db> {
+    #[inline]
     fn es(&self) -> &ExecutionState<'db> {
         self.inner
     }
+    #[inline]
     fn es_mut(&mut self) -> &mut ExecutionState<'db> {
         self.inner
     }
@@ -363,9 +389,11 @@ impl<'a, 'db: 'a> UserState<'a, 'db> for ReadState<'a, 'db> {
 }
 
 impl<'a, 'db: 'a> sealed::CoreSealed<'a, 'db> for WriteState<'a, 'db> {
+    #[inline]
     fn es(&self) -> &ExecutionState<'db> {
         self.inner
     }
+    #[inline]
     fn es_mut(&mut self) -> &mut ExecutionState<'db> {
         self.inner
     }
@@ -385,9 +413,11 @@ impl<'a, 'db: 'a> UserState<'a, 'db> for WriteState<'a, 'db> {
 }
 
 impl<'a, 'db: 'a> sealed::CoreSealed<'a, 'db> for FullState<'a, 'db> {
+    #[inline]
     fn es(&self) -> &ExecutionState<'db> {
         self.inner
     }
+    #[inline]
     fn es_mut(&mut self) -> &mut ExecutionState<'db> {
         self.inner
     }

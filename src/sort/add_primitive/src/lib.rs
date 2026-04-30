@@ -275,7 +275,7 @@ fn build_add_primitive_impl(parsed: AddPrimitive, validator: Option<Expr>) -> To
         impl PurePrim for Prim {
             fn apply<'a, 'db>(
                 &self,
-                state: &mut PureState<'a, 'db>,
+                #[allow(unused_mut)] mut state: PureState<'a, 'db>,
                 args: &[Value],
             ) -> Option<Value> {
                 #apply

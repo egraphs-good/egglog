@@ -70,7 +70,7 @@ fn test_add_primitive_with_validator_method() {
     impl PurePrim for TestAdd {
         fn apply<'a, 'db>(
             &self,
-            state: &mut PureState<'a, 'db>,
+            mut state: PureState<'a, 'db>,
             args: &[Value],
         ) -> Option<Value> {
             let a = state.base_values().unwrap::<i64>(args[0]);

@@ -5,8 +5,130 @@ use crate::{
     *,
 };
 use ast::{ResolvedAction, ResolvedExpr, ResolvedFact, ResolvedRule, ResolvedVar, Rule};
+use core_relations::ExternalFunction;
 use egglog_ast::generic_ast::GenericAction;
 use crate::Context;
+use egglog_bridge::ActionRegistry;
+use std::sync::RwLock;
+
+// `ExternalFunction` wrapper for query-side primitives (`PurePrim`,
+// `ReadPrim`). The wrapper holds the user's primitive directly (not
+// behind `Arc`/`Box`) so the dispatch chain
+// `external_funcs[id].invoke(...)` → `T::apply(...)` is just one
+// vtable hop plus a direct call — no closure indirection that defeats
+// inlining.
+#[derive(Clone)]
+struct QuerySidePrimWrapper<T, S> {
+    prim: T,
+    _wrap: std::marker::PhantomData<fn() -> S>,
+}
+
+// Trait abstracting "build the right state from `&mut ExecutionState`
+// and call apply". Implemented inline below for each kind so
+// `QuerySidePrimWrapper<T, S>::invoke` monomorphizes to a concrete call.
+trait QueryWrap<T>: Clone + Send + Sync {
+    fn invoke(prim: &T, exec_state: &mut ExecutionState, args: &[Value]) -> Option<Value>;
+}
+
+#[derive(Clone)]
+struct WrapPure;
+impl<T: PurePrim> QueryWrap<T> for WrapPure {
+    #[inline]
+    fn invoke(prim: &T, exec_state: &mut ExecutionState, args: &[Value]) -> Option<Value> {
+        prim.apply(PureState::wrap(exec_state), args)
+    }
+}
+#[derive(Clone)]
+struct WrapRead;
+impl<T: ReadPrim> QueryWrap<T> for WrapRead {
+    #[inline]
+    fn invoke(prim: &T, exec_state: &mut ExecutionState, args: &[Value]) -> Option<Value> {
+        prim.apply(ReadState::wrap(exec_state), args)
+    }
+}
+
+impl<T: Clone + Send + Sync + 'static, S: QueryWrap<T> + 'static> ExternalFunction
+    for QuerySidePrimWrapper<T, S>
+{
+    fn invoke(&self, exec_state: &mut ExecutionState, args: &[Value]) -> Option<Value> {
+        S::invoke(&self.prim, exec_state, args)
+    }
+}
+
+// `ExternalFunction` wrapper for action-side primitives (`WritePrim`,
+// `FullPrim`). Carries the shared `ActionRegistry` handle so name-
+// indexed write methods (`insert` / `remove` / `union` / `panic`) can
+// resolve at invoke time.
+#[derive(Clone)]
+struct ActionSidePrimWrapper<T, S> {
+    prim: T,
+    registry: Arc<RwLock<ActionRegistry>>,
+    _wrap: std::marker::PhantomData<fn() -> S>,
+}
+
+trait ActionWrap<T>: Clone + Send + Sync {
+    fn invoke(
+        prim: &T,
+        exec_state: &mut ExecutionState,
+        args: &[Value],
+        registry: &ActionRegistry,
+    ) -> Option<Value>;
+}
+
+#[derive(Clone)]
+struct WrapWrite;
+impl<T: WritePrim> ActionWrap<T> for WrapWrite {
+    #[inline]
+    fn invoke(
+        prim: &T,
+        exec_state: &mut ExecutionState,
+        args: &[Value],
+        registry: &ActionRegistry,
+    ) -> Option<Value> {
+        prim.apply(WriteState::wrap(exec_state, registry), args)
+    }
+}
+#[derive(Clone)]
+struct WrapFull;
+impl<T: FullPrim> ActionWrap<T> for WrapFull {
+    #[inline]
+    fn invoke(
+        prim: &T,
+        exec_state: &mut ExecutionState,
+        args: &[Value],
+        registry: &ActionRegistry,
+    ) -> Option<Value> {
+        prim.apply(FullState::wrap(exec_state, registry), args)
+    }
+}
+
+impl<T: Clone + Send + Sync + 'static, S: ActionWrap<T> + 'static> ExternalFunction
+    for ActionSidePrimWrapper<T, S>
+{
+    fn invoke(&self, exec_state: &mut ExecutionState, args: &[Value]) -> Option<Value> {
+        let registry = self.registry.read().unwrap();
+        S::invoke(&self.prim, exec_state, args, &registry)
+    }
+}
+
+// `ExternalFunction` wrapper for higher-order primitives. Like the
+// pure-side wrapper but stamps a specific [`Context`] onto
+// `ExecutionState` before invoking the body, so
+// `FunctionContainer::apply` reads back the right context and chooses
+// pure-side vs action-side dispatch. One id per context variant; the
+// typechecker picks based on the call site.
+#[derive(Clone)]
+struct HigherOrderPrimWrapper<T> {
+    prim: T,
+    ctx: Context,
+}
+
+impl<T: PurePrim + Clone> ExternalFunction for HigherOrderPrimWrapper<T> {
+    fn invoke(&self, exec_state: &mut ExecutionState, args: &[Value]) -> Option<Value> {
+        exec_state.set_current_context(self.ctx);
+        self.prim.apply(PureState::wrap(exec_state), args)
+    }
+}
 
 #[derive(Clone, Debug)]
 pub struct FuncType {
@@ -256,8 +378,7 @@ impl EGraph {
     where
         T: PurePrim + Clone,
     {
-        let prim = Arc::new(x);
-        let primitive: Arc<dyn PrimitiveCommon> = prim.clone();
+        let primitive: Arc<dyn PrimitiveCommon> = Arc::new(x.clone());
         let name = primitive.name().to_owned();
 
         // Register one `ExternalFunctionId` per [`Context`] variant.
@@ -267,14 +388,12 @@ impl EGraph {
         // and chooses the right dispatch (e.g. `GlobalQuery` allows
         // custom-function reads but not constructor minting).
         for &ctx in &Context::ALL {
-            let invoke_prim = prim.clone();
             let id = self
                 .backend
-                .register_external_func(Box::new(make_external_func(move |exec_state, args| {
-                    exec_state.set_current_context(ctx);
-                    let mut state = PureState::wrap(exec_state);
-                    invoke_prim.apply(&mut state, args)
-                })));
+                .register_external_func(Box::new(HigherOrderPrimWrapper {
+                    prim: x.clone(),
+                    ctx,
+                }));
             let pending = PendingPrimitive {
                 primitive: primitive.clone(),
                 id,
@@ -291,15 +410,13 @@ impl EGraph {
         x: T,
         validator: Option<PrimitiveValidator>,
     ) -> PendingPrimitive {
-        let prim = Arc::new(x);
-        let primitive: Arc<dyn PrimitiveCommon> = prim.clone();
-        let invoke_prim = prim;
+        let primitive: Arc<dyn PrimitiveCommon> = Arc::new(x.clone());
         let id = self
             .backend
-            .register_external_func(Box::new(make_external_func(move |exec_state, args| {
-                let mut state = PureState::wrap(exec_state);
-                invoke_prim.apply(&mut state, args)
-            })));
+            .register_external_func(Box::new(QuerySidePrimWrapper::<T, WrapPure> {
+                prim: x,
+                _wrap: std::marker::PhantomData,
+            }));
         PendingPrimitive {
             valid_contexts: PureState::valid_contexts().to_vec(),
             name: primitive.name().to_owned(),
@@ -314,15 +431,13 @@ impl EGraph {
         x: T,
         validator: Option<PrimitiveValidator>,
     ) -> PendingPrimitive {
-        let prim = Arc::new(x);
-        let primitive: Arc<dyn PrimitiveCommon> = prim.clone();
-        let invoke_prim = prim;
+        let primitive: Arc<dyn PrimitiveCommon> = Arc::new(x.clone());
         let id = self
             .backend
-            .register_external_func(Box::new(make_external_func(move |exec_state, args| {
-                let mut state = ReadState::wrap(exec_state);
-                invoke_prim.apply(&mut state, args)
-            })));
+            .register_external_func(Box::new(QuerySidePrimWrapper::<T, WrapRead> {
+                prim: x,
+                _wrap: std::marker::PhantomData,
+            }));
         PendingPrimitive {
             valid_contexts: ReadState::valid_contexts().to_vec(),
             name: primitive.name().to_owned(),
@@ -337,17 +452,15 @@ impl EGraph {
         x: T,
         validator: Option<PrimitiveValidator>,
     ) -> PendingPrimitive {
-        let prim = Arc::new(x);
-        let primitive: Arc<dyn PrimitiveCommon> = prim.clone();
-        let invoke_prim = prim;
+        let primitive: Arc<dyn PrimitiveCommon> = Arc::new(x.clone());
         let registry = self.backend.action_registry();
         let id = self
             .backend
-            .register_external_func(Box::new(make_external_func(move |exec_state, args| {
-                let registry = registry.load();
-                let mut state = WriteState::wrap(exec_state, &registry);
-                invoke_prim.apply(&mut state, args)
-            })));
+            .register_external_func(Box::new(ActionSidePrimWrapper::<T, WrapWrite> {
+                prim: x,
+                registry,
+                _wrap: std::marker::PhantomData,
+            }));
         PendingPrimitive {
             valid_contexts: WriteState::valid_contexts().to_vec(),
             name: primitive.name().to_owned(),
@@ -362,17 +475,15 @@ impl EGraph {
         x: T,
         validator: Option<PrimitiveValidator>,
     ) -> PendingPrimitive {
-        let prim = Arc::new(x);
-        let primitive: Arc<dyn PrimitiveCommon> = prim.clone();
-        let invoke_prim = prim;
+        let primitive: Arc<dyn PrimitiveCommon> = Arc::new(x.clone());
         let registry = self.backend.action_registry();
         let id = self
             .backend
-            .register_external_func(Box::new(make_external_func(move |exec_state, args| {
-                let registry = registry.load();
-                let mut state = FullState::wrap(exec_state, &registry);
-                invoke_prim.apply(&mut state, args)
-            })));
+            .register_external_func(Box::new(ActionSidePrimWrapper::<T, WrapFull> {
+                prim: x,
+                registry,
+                _wrap: std::marker::PhantomData,
+            }));
         PendingPrimitive {
             valid_contexts: FullState::valid_contexts().to_vec(),
             name: primitive.name().to_owned(),

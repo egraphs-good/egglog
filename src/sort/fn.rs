@@ -370,7 +370,7 @@ impl PrimitiveCommon for Ctor {
 impl PurePrim for Ctor {
     fn apply<'a, 'db>(
         &self,
-        state: &mut crate::PureState<'a, 'db>,
+        mut state: crate::PureState<'a, 'db>,
         args: &[Value],
     ) -> Option<Value> {
         let (rf, args) = args.split_first().unwrap();
@@ -488,7 +488,7 @@ impl PrimitiveCommon for Apply {
 impl PurePrim for Apply {
     fn apply<'a, 'db>(
         &self,
-        state: &mut crate::PureState<'a, 'db>,
+        mut state: crate::PureState<'a, 'db>,
         args: &[Value],
     ) -> Option<Value> {
         let (fc_val, args) = args.split_first().unwrap();
@@ -497,7 +497,7 @@ impl PurePrim for Apply {
             .get_val::<FunctionContainer>(*fc_val)
             .unwrap()
             .clone();
-        fc.apply(state, args)
+        fc.apply(&mut state, args)
     }
 }
 
