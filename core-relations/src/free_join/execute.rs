@@ -269,8 +269,7 @@ impl Prober {
             }
             DynamicIndex::SparseColumn(tab) => {
                 debug_assert_eq!(key.len(), 1);
-                tab.get_subset(key[0])
-                    .map(PotentiallyStale::not_stale)
+                tab.get_subset(key[0]).map(PotentiallyStale::not_stale)
             }
         }
     }
