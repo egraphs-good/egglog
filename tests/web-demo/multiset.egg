@@ -140,26 +140,27 @@
         (multiset-of (Num 2) (Num 2) (Num 2) (Num 2) (Num 3) (Num 3))))
 (pop)
 
-;; Verify unstable multiset fill index and counting.
-;; `unstable-multiset-fill-index` reads the target table to skip
-;; already-filled rows, so it is registered as `FullPrim`
-;; (GlobalAction-only). Calling it from a rule action would be
-;; unsound under seminaive — its effect would depend on live DB
-;; state, breaking saturation detection (see #772).
+;; Verify unstable multiset fill index and counting
 (push)
 (union (Num 1) (Num 2))
+(constructor product (Maths) Math)
+(let $zz (product $xs))
 
 (function ms-count (Maths Math) i64 :merge (+ old new))
 (sort MSIndexFn (UnstableFn (Maths Math) i64))
-; Fill index table at top level (GlobalAction).
-(unstable-multiset-fill-index $xs (unstable-fn "ms-count"))
+; Fill index tables for products
+(rule
+    ((= outer (product inner)))
+    ((unstable-multiset-fill-index inner (unstable-fn "ms-count")))
+)
+(run 10)
 (check (= 2 (ms-count $xs (Num 1))))
 ; Verify updates properly after unioning child
 (union (Num 1) (Num 3))
 (check (= 3 (ms-count $xs (Num 1))))
 
 ;; check clear index
-(unstable-multiset-clear-index $xs (unstable-fn "ms-count"))
+(unstable-multiset-clear-index  $xs (unstable-fn "ms-count"))
 (fail (ms-count $xs (Num 1)))
 
 (pop)

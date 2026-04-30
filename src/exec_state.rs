@@ -31,7 +31,7 @@
 use std::ops::Deref;
 
 use crate::core_relations::{
-    BaseValue, BaseValues, ContainerValue, ContainerValues, CounterId, ExecutionState,
+    BaseValue, BaseValues, ContainerValue, ContainerValues, ExecutionState,
     ExternalFunctionId, TableId, Value,
 };
 use egglog_bridge::{ActionRegistry, TableAction};
@@ -97,14 +97,6 @@ pub trait Core<'a, 'db: 'a>: Internal<'a, 'db> {
     /// Base-value pool (interned primitives like `i64`, `String`, …).
     fn base_values(&self) -> &'a BaseValues {
         self.es().base_values()
-    }
-    /// Read a counter's current value.
-    fn read_counter(&self, ctr: CounterId) -> usize {
-        self.es().read_counter(ctr)
-    }
-    /// Increment and read a counter atomically.
-    fn inc_counter(&mut self, ctr: CounterId) -> usize {
-        self.es_mut().inc_counter(ctr)
     }
     /// Signal that rule execution should stop after this firing.
     fn trigger_early_stop(&self) {
