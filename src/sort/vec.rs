@@ -255,7 +255,7 @@ impl PrimitiveCommon for VecMap {
 impl PurePrim for VecMap {
     fn apply<'a, 'db>(
         &self,
-        state: &mut crate::PureState<'a, 'db>,
+        mut state: crate::PureState<'a, 'db>,
         args: &[Value],
     ) -> Option<Value> {
         let fc = state
@@ -270,7 +270,7 @@ impl PurePrim for VecMap {
             .clone();
         let mut new_data = Vec::with_capacity(vec.data.len());
         for v in vec.data {
-            if let Some(mapped) = fc.apply(state, &[v]) {
+            if let Some(mapped) = fc.apply(&mut state, &[v]) {
                 new_data.push(mapped);
             }
         }
@@ -314,7 +314,7 @@ impl PrimitiveCommon for Union {
 impl WritePrim for Union {
     fn apply<'a, 'db>(
         &self,
-        state: &mut crate::WriteState<'a, 'db>,
+        mut state: crate::WriteState<'a, 'db>,
         args: &[Value],
     ) -> Option<Value> {
         let left = state

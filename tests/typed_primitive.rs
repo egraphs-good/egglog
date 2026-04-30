@@ -41,7 +41,7 @@ impl PrimitiveCommon for PureAdd {
     }
 }
 impl PurePrim for PureAdd {
-    fn apply<'a, 'db>(&self, state: &mut PureState<'a, 'db>, args: &[Value]) -> Option<Value> {
+    fn apply<'a, 'db>(&self, mut state: PureState<'a, 'db>, args: &[Value]) -> Option<Value> {
         let a = state.base_values().unwrap::<i64>(args[0]);
         let b = state.base_values().unwrap::<i64>(args[1]);
         Some(state.base_values().get(a + b))
@@ -67,7 +67,7 @@ impl PrimitiveCommon for WriteEcho {
     }
 }
 impl WritePrim for WriteEcho {
-    fn apply<'a, 'db>(&self, state: &mut WriteState<'a, 'db>, args: &[Value]) -> Option<Value> {
+    fn apply<'a, 'db>(&self, mut state: WriteState<'a, 'db>, args: &[Value]) -> Option<Value> {
         let _ = state.base_values();
         Some(args[0])
     }
@@ -90,7 +90,7 @@ impl PrimitiveCommon for ReadEcho {
     }
 }
 impl ReadPrim for ReadEcho {
-    fn apply<'a, 'db>(&self, state: &mut ReadState<'a, 'db>, args: &[Value]) -> Option<Value> {
+    fn apply<'a, 'db>(&self, mut state: ReadState<'a, 'db>, args: &[Value]) -> Option<Value> {
         let _ = state.base_values();
         Some(args[0])
     }
@@ -113,7 +113,7 @@ impl PrimitiveCommon for FullEcho {
     }
 }
 impl FullPrim for FullEcho {
-    fn apply<'a, 'db>(&self, state: &mut FullState<'a, 'db>, args: &[Value]) -> Option<Value> {
+    fn apply<'a, 'db>(&self, mut state: FullState<'a, 'db>, args: &[Value]) -> Option<Value> {
         let _ = state.base_values();
         Some(args[0])
     }

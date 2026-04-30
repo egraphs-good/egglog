@@ -154,7 +154,7 @@ pub trait PrimitiveCommon: Send + Sync + 'static {
 /// `add_primitive!` / `add_literal_prim!` generate impls of this trait.
 /// Register via [`EGraph::add_pure_primitive`].
 pub trait PurePrim: PrimitiveCommon {
-    fn apply<'a, 'db>(&self, state: &mut PureState<'a, 'db>, args: &[Value]) -> Option<Value>;
+    fn apply<'a, 'db>(&self, state: PureState<'a, 'db>, args: &[Value]) -> Option<Value>;
 }
 
 /// A primitive that writes to the e-graph. Body sees a
@@ -162,7 +162,7 @@ pub trait PurePrim: PrimitiveCommon {
 /// `insert` / `remove` / `subsume` / `union` / `panic`. Valid only in
 /// rule-action and global-action contexts.
 pub trait WritePrim: PrimitiveCommon {
-    fn apply<'a, 'db>(&self, state: &mut WriteState<'a, 'db>, args: &[Value]) -> Option<Value>;
+    fn apply<'a, 'db>(&self, state: WriteState<'a, 'db>, args: &[Value]) -> Option<Value>;
 }
 
 /// A primitive that reads from the database but doesn't write. Body
@@ -170,13 +170,13 @@ pub trait WritePrim: PrimitiveCommon {
 /// global-query and global-action contexts (reading from a database
 /// during a rule query would be untracked by seminaive — see #772).
 pub trait ReadPrim: PrimitiveCommon {
-    fn apply<'a, 'db>(&self, state: &mut ReadState<'a, 'db>, args: &[Value]) -> Option<Value>;
+    fn apply<'a, 'db>(&self, state: ReadState<'a, 'db>, args: &[Value]) -> Option<Value>;
 }
 
 /// A primitive that needs both DB reads and DB writes. Body sees a
 /// [`FullState`]. Valid only in the global-action context.
 pub trait FullPrim: PrimitiveCommon {
-    fn apply<'a, 'db>(&self, state: &mut FullState<'a, 'db>, args: &[Value]) -> Option<Value>;
+    fn apply<'a, 'db>(&self, state: FullState<'a, 'db>, args: &[Value]) -> Option<Value>;
 }
 
 /// A user-defined command output trait.
@@ -2309,7 +2309,7 @@ mod tests {
     }
 
     impl PurePrim for InnerProduct {
-        fn apply<'a, 'db>(&self, state: &mut PureState<'a, 'db>, args: &[Value]) -> Option<Value> {
+        fn apply<'a, 'db>(&self, state: PureState<'a, 'db>, args: &[Value]) -> Option<Value> {
             let mut sum = 0;
             let vec1 = state
                 .container_values()
