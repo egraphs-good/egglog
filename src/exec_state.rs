@@ -41,30 +41,24 @@ use egglog_bridge::{ActionRegistry, TableAction};
 pub use crate::core_relations::Context;
 
 // =====================================================================
-// Sealed accessor traits.
+// Sealed traits.
 //
 // These traits are `pub(crate)`: external users cannot bring them
 // into scope, so they cannot call the methods defined here even on
-// values they have. They exist to give the public capability traits
-// (`Core`, `Write`) a way to reach the underlying `ExecutionState`
-// from default methods.
+// values they have. They give the public capability traits (`Core`,
+// `Write`) a way to reach the underlying `ExecutionState` from
+// default methods, and carry the privileged seams used by the
+// `FunctionContainer` higher-order dispatch.
 // =====================================================================
 
-pub(crate) trait CoreSealed<'a, 'db: 'a>: 'a {
+/// Crate-private accessor + privileged-dispatch trait. Required
+/// methods are the accessors that every wrapper supplies; default
+/// methods are the privileged seams used by the `FunctionContainer`
+/// higher-order dispatch.
+pub(crate) trait Internal<'a, 'db: 'a>: 'a {
     fn es(&self) -> &ExecutionState<'db>;
     fn es_mut(&mut self) -> &mut ExecutionState<'db>;
-}
 
-pub(crate) trait WriteSealed<'a, 'db: 'a>: CoreSealed<'a, 'db> {
-    fn registry(&self) -> &ActionRegistry;
-}
-
-/// Crate-private privileged-dispatch trait for the
-/// `FunctionContainer` higher-order dispatch and similar in-tree
-/// helpers — the only call sites that legitimately need raw external-
-/// func dispatch, raw `&mut ExecutionState`, or the runtime context
-/// flag.
-pub(crate) trait Internal<'a, 'db: 'a>: CoreSealed<'a, 'db> {
     fn call_external_func(
         &mut self,
         id: ExternalFunctionId,
@@ -83,6 +77,10 @@ pub(crate) trait Internal<'a, 'db: 'a>: CoreSealed<'a, 'db> {
     }
 }
 
+pub(crate) trait WriteSealed<'a, 'db: 'a>: Internal<'a, 'db> {
+    fn registry(&self) -> &ActionRegistry;
+}
+
 // =====================================================================
 // Public capability traits.
 // =====================================================================
@@ -91,46 +89,38 @@ pub(crate) trait Internal<'a, 'db: 'a>: CoreSealed<'a, 'db> {
 /// counters, container interning, value/base/container conversion sugar.
 /// Always seminaive-safe.
 #[allow(private_bounds)]
-pub trait Core<'a, 'db: 'a>: CoreSealed<'a, 'db> {
+pub trait Core<'a, 'db: 'a>: Internal<'a, 'db> {
     /// Base-value pool (interned primitives like `i64`, `String`, …).
-    #[inline]
     fn base_values(&self) -> &'a BaseValues {
         self.es().base_values()
     }
     /// Read a counter's current value.
-    #[inline]
     fn read_counter(&self, ctr: CounterId) -> usize {
         self.es().read_counter(ctr)
     }
     /// Increment and read a counter atomically.
-    #[inline]
     fn inc_counter(&mut self, ctr: CounterId) -> usize {
         self.es_mut().inc_counter(ctr)
     }
     /// Signal that rule execution should stop after this firing.
-    #[inline]
     fn trigger_early_stop(&self) {
         self.es().trigger_early_stop()
     }
     /// Has someone called `trigger_early_stop`?
-    #[inline]
     fn should_stop(&self) -> bool {
         self.es().should_stop()
     }
     /// Human-readable name for a table id, if registered.
-    #[inline]
     fn table_name(&self, table: TableId) -> Option<&'a str> {
         self.es().table_name(table)
     }
 
     /// Container values for this EGraph.
-    #[inline]
     fn container_values(&self) -> &'a ContainerValues {
         self.es().container_values()
     }
 
     /// Register a container value, returning its interned `Value`.
-    #[inline]
     fn register_container<C: ContainerValue>(&mut self, container: C) -> Value {
         // `container_values()` returns `&'a ContainerValues` — a reference
         // tied to the inner ExecutionState's lifetime, not to `&self` —
@@ -144,19 +134,16 @@ pub trait Core<'a, 'db: 'a>: CoreSealed<'a, 'db> {
     }
 
     /// Convert an egglog [`Value`] to a Rust base type.
-    #[inline]
     fn value_to_base<T: BaseValue>(&self, x: Value) -> T {
         self.es().base_values().unwrap::<T>(x)
     }
 
     /// Convert a Rust base type to an egglog [`Value`].
-    #[inline]
     fn base_to_value<T: BaseValue>(&self, x: T) -> Value {
         self.es().base_values().get::<T>(x)
     }
 
     /// Look up the Rust container behind an egglog [`Value`], if any.
-    #[inline]
     fn value_to_container<T: ContainerValue>(
         &self,
         x: Value,
@@ -166,7 +153,6 @@ pub trait Core<'a, 'db: 'a>: CoreSealed<'a, 'db> {
 
     /// Intern a Rust container into the e-graph and return its
     /// [`Value`]. Sugar over `self.register_container(x)`.
-    #[inline]
     fn container_to_value<T: ContainerValue>(&mut self, x: T) -> Value {
         self.register_container(x)
     }
@@ -290,7 +276,6 @@ pub struct FullState<'a, 'db> {
 }
 
 impl<'a, 'db: 'a> PureState<'a, 'db> {
-    #[inline]
     pub(crate) fn wrap(es: &'a mut ExecutionState<'db>) -> Self {
         Self { inner: es }
     }
@@ -337,38 +322,30 @@ impl<'a, 'db: 'a> FullState<'a, 'db> {
 // the public capability traits' default methods do all the rest.
 // =====================================================================
 
-impl<'a, 'db: 'a> CoreSealed<'a, 'db> for PureState<'a, 'db> {
-    #[inline]
+impl<'a, 'db: 'a> Internal<'a, 'db> for PureState<'a, 'db> {
     fn es(&self) -> &ExecutionState<'db> {
         self.inner
     }
-    #[inline]
     fn es_mut(&mut self) -> &mut ExecutionState<'db> {
         self.inner
     }
 }
 impl<'a, 'db: 'a> Core<'a, 'db> for PureState<'a, 'db> {}
-impl<'a, 'db: 'a> Internal<'a, 'db> for PureState<'a, 'db> {}
 
-impl<'a, 'db: 'a> CoreSealed<'a, 'db> for ReadState<'a, 'db> {
-    #[inline]
+impl<'a, 'db: 'a> Internal<'a, 'db> for ReadState<'a, 'db> {
     fn es(&self) -> &ExecutionState<'db> {
         self.inner
     }
-    #[inline]
     fn es_mut(&mut self) -> &mut ExecutionState<'db> {
         self.inner
     }
 }
 impl<'a, 'db: 'a> Core<'a, 'db> for ReadState<'a, 'db> {}
-impl<'a, 'db: 'a> Internal<'a, 'db> for ReadState<'a, 'db> {}
 
-impl<'a, 'db: 'a> CoreSealed<'a, 'db> for WriteState<'a, 'db> {
-    #[inline]
+impl<'a, 'db: 'a> Internal<'a, 'db> for WriteState<'a, 'db> {
     fn es(&self) -> &ExecutionState<'db> {
         self.inner
     }
-    #[inline]
     fn es_mut(&mut self) -> &mut ExecutionState<'db> {
         self.inner
     }
@@ -380,14 +357,11 @@ impl<'a, 'db: 'a> WriteSealed<'a, 'db> for WriteState<'a, 'db> {
 }
 impl<'a, 'db: 'a> Core<'a, 'db> for WriteState<'a, 'db> {}
 impl<'a, 'db: 'a> Write<'a, 'db> for WriteState<'a, 'db> {}
-impl<'a, 'db: 'a> Internal<'a, 'db> for WriteState<'a, 'db> {}
 
-impl<'a, 'db: 'a> CoreSealed<'a, 'db> for FullState<'a, 'db> {
-    #[inline]
+impl<'a, 'db: 'a> Internal<'a, 'db> for FullState<'a, 'db> {
     fn es(&self) -> &ExecutionState<'db> {
         self.inner
     }
-    #[inline]
     fn es_mut(&mut self) -> &mut ExecutionState<'db> {
         self.inner
     }
@@ -399,4 +373,3 @@ impl<'a, 'db: 'a> WriteSealed<'a, 'db> for FullState<'a, 'db> {
 }
 impl<'a, 'db: 'a> Core<'a, 'db> for FullState<'a, 'db> {}
 impl<'a, 'db: 'a> Write<'a, 'db> for FullState<'a, 'db> {}
-impl<'a, 'db: 'a> Internal<'a, 'db> for FullState<'a, 'db> {}
