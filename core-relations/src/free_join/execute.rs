@@ -503,6 +503,8 @@ impl Database {
                         if subset.is_empty() {
                             break 'eval;
                         }
+                        // Before query execution, Arc<TrieNode> is owned exclusively by the binding info.
+                        // Trie nodes are only shared once we start running the query.
                         let mut cur = Arc::try_unwrap(binding_info.unwrap_val(*atom)).unwrap();
                         debug_assert!(cur.cached_subsets.get().is_none());
                         cur.subset
@@ -631,13 +633,11 @@ struct JoinState<'a> {
     exec_state: ExecutionState<'a>,
 }
 
-// TODO: use SmallVec might be better
+/// Per-column indexes on a trie node's subset, lazily initialized on first access per column.
 type ColumnIndexes = IdVec<ColumnId, OnceLock<Arc<ColumnIndex>>>;
-// pub(crate) type ChildrenMaps =
-//     IdVec<ColumnId, OnceLock<Arc<HashMap<Value, OnceLock<Arc<TrieNode>>>>>>;
 
-// pub(crate) type ChildrenMaps = IdVec<ColumnId, OnceLock<Arc<DashMap<Value, Arc<TrieNode>>>>>;
-// pub(crate) type ChildrenMaps = IdVec<ColumnId, Arc<DashMap<Value, Arc<TrieNode>>>>;
+/// Per-column maps from a value to the child trie node for that value, lazily populated on first
+/// lookup per (column, value) pair.
 pub(crate) type ChildrenMaps = IdVec<ColumnId, ReadOptimizedLock<HashMap<Value, Arc<TrieNode>>>>;
 
 /// Information about the current subset of an atom's relation that is being considered, along with
