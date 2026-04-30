@@ -9,7 +9,7 @@ use core_relations::ExternalFunction;
 use egglog_ast::generic_ast::GenericAction;
 use crate::Context;
 use egglog_bridge::ActionRegistry;
-use std::sync::RwLock;
+use std::sync::{Arc, RwLock};
 
 // `ExternalFunction` wrapper for `PurePrim`. Holds the primitive
 // directly so the dispatch chain `external_funcs[id].invoke(...)` →

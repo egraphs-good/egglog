@@ -502,7 +502,6 @@ checksum = "d0881ea181b1df73ff77ffaaf9c7544ecc11e82fba9b5f27b262a3c73a332555"
 name = "egglog"
 version = "2.0.0"
 dependencies = [
- "arc-swap",
  "chrono",
  "clap",
  "codspeed-divan-compat",
@@ -555,7 +554,6 @@ name = "egglog-bridge"
 version = "2.0.0"
 dependencies = [
  "anyhow",
- "arc-swap",
  "dyn-clone",
  "egglog-core-relations",
  "egglog-numeric-id",

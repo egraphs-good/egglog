@@ -126,11 +126,11 @@ pub struct EGraph {
     /// `Arc<RwLock<_>>`) with state wrappers and primitive callbacks
     /// in the egglog crate so [`WriteState`] / [`FullState`] can
     /// implement `insert(name, ...)`, `union`, etc. Mutated in place
-    /// from [`add_table`](EGraph::add_table) — `RwLock` (over
-    /// `ArcSwap`) avoids cloning the entire registry on every
-    /// declaration, which is O(n²) cumulative for files that declare
-    /// many constructors. Hot-path reads are still cheap (read lock
-    /// is contended only by other readers in normal use).
+    /// from [`add_table`](EGraph::add_table) under the `RwLock`,
+    /// which avoids cloning the entire registry on every
+    /// declaration (O(n²) cumulative for files that declare many
+    /// constructors). Hot-path reads are still cheap (read lock is
+    /// contended only by other readers in normal use).
     action_registry: Arc<std::sync::RwLock<ActionRegistry>>,
 }
 
