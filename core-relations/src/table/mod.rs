@@ -361,7 +361,7 @@ impl Table for SortedWritesTable {
             // Empty subset
             return;
         };
-        debug_assert!(
+        assert!(
             hi.index() <= self.data.data.len(),
             "{} vs. {}",
             hi.index(),
@@ -393,10 +393,20 @@ impl Table for SortedWritesTable {
     where
         Self: Sized,
     {
+        let Some((_low, hi)) = subset.bounds() else {
+            // Empty subset
+            return None;
+        };
+        assert!(
+            hi.index() <= self.data.data.len(),
+            "{} vs. {}",
+            hi.index(),
+            self.data.data.len()
+        );
         if cs.is_empty() {
             if self.data.stale_rows == 0 {
                 // Fast path: no stale rows, skip bounds check and is_stale check.
-                // SAFETY: subsets are valid (bounds within table), so all row IDs are in-bounds.
+                // SAFETY: all row IDs are in-bounds.
                 subset
                     .iter_bounded(start.index(), start.index() + n, |row| {
                         let entry = unsafe { self.data.data.get_row_unchecked(row) };
@@ -406,7 +416,8 @@ impl Table for SortedWritesTable {
             } else {
                 subset
                     .iter_bounded(start.index(), start.index() + n, |row| {
-                        let Some(entry) = self.data.get_row(row) else {
+                        // SAFETY: all row IDs are in-bounds.
+                        let Some(entry) = (unsafe { self.data.get_row_unchecked(row) }) else {
                             return;
                         };
                         f(row, entry);
@@ -416,7 +427,8 @@ impl Table for SortedWritesTable {
         } else {
             subset
                 .iter_bounded(start.index(), start.index() + n, |row| {
-                    let Some(entry) = self.get_if(cs, row) else {
+                    // SAFETY: all row IDs are in-bounds.
+                    let Some(entry) = (unsafe { self.get_if_unchecked(cs, row) }) else {
                         return;
                     };
                     f(row, entry);
@@ -990,26 +1002,33 @@ impl SortedWritesTable {
         self.get_if(cs, row).is_some()
     }
 
-    fn get_if(&self, cs: &[Constraint], row: RowId) -> Option<&[Value]> {
-        // Fast path: when no stale rows, skip the stale check.
-        let row = if self.data.stale_rows == 0 {
-            // SAFETY: callers guarantee row is within bounds via subset construction.
-            unsafe { self.data.data.get_row_unchecked(row) }
+    fn eval_constraints(cs: &[Constraint], row: &[Value]) -> bool {
+        cs.iter().all(|constraint| match constraint {
+            Constraint::Eq { l_col, r_col } => row[l_col.index()] == row[r_col.index()],
+            Constraint::EqConst { col, val } => row[col.index()] == *val,
+            Constraint::LtConst { col, val } => row[col.index()] < *val,
+            Constraint::GtConst { col, val } => row[col.index()] > *val,
+            Constraint::LeConst { col, val } => row[col.index()] <= *val,
+            Constraint::GeConst { col, val } => row[col.index()] >= *val,
+        })
+    }
+
+    unsafe fn get_if_unchecked(&self, cs: &[Constraint], row: RowId) -> Option<&[Value]> {
+        let row = unsafe { self.data.data.get_row_unchecked(row) };
+        if Self::eval_constraints(cs, row) {
+            Some(row)
         } else {
-            self.data.get_row(row)?
-        };
-        let mut res = true;
-        for constraint in cs {
-            match constraint {
-                Constraint::Eq { l_col, r_col } => res &= row[l_col.index()] == row[r_col.index()],
-                Constraint::EqConst { col, val } => res &= row[col.index()] == *val,
-                Constraint::LtConst { col, val } => res &= row[col.index()] < *val,
-                Constraint::GtConst { col, val } => res &= row[col.index()] > *val,
-                Constraint::LeConst { col, val } => res &= row[col.index()] <= *val,
-                Constraint::GeConst { col, val } => res &= row[col.index()] >= *val,
-            }
+            None
         }
-        if res { Some(row) } else { None }
+    }
+
+    fn get_if(&self, cs: &[Constraint], row: RowId) -> Option<&[Value]> {
+        let row = self.data.get_row(row)?;
+        if Self::eval_constraints(cs, row) {
+            Some(row)
+        } else {
+            None
+        }
     }
 
     fn maybe_rehash(&mut self) {
