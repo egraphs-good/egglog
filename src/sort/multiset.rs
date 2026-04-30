@@ -496,8 +496,6 @@ impl PrimitiveCommon for ClearIndex {
         )
         .into_box()
     }
-
-    
 }
 
 impl WritePrim for ClearIndex {
@@ -507,13 +505,11 @@ impl WritePrim for ClearIndex {
         args: &[Value],
     ) -> Option<Value> {
         let fc = state
-            
             .container_values()
             .get_val::<FunctionContainer>(args[1])
             .unwrap()
             .clone();
         let multiset = state
-            
             .container_values()
             .get_val::<MultiSetContainer>(args[0])
             .unwrap()
@@ -685,8 +681,6 @@ impl PrimitiveCommon for SumMultisets {
         )
         .into_box()
     }
-
-    
 }
 
 impl PurePrim for SumMultisets {
@@ -697,14 +691,12 @@ impl PurePrim for SumMultisets {
     ) -> Option<Value> {
         let mut data = MultiSet::<Value>::new();
         let ms_of_ms = state
-            
             .container_values()
             .get_val::<MultiSetContainer>(args[0])
             .unwrap()
             .clone();
         for (ms_value, counts) in ms_of_ms.data.iter_counts() {
             let ms = state
-                
                 .container_values()
                 .get_val::<MultiSetContainer>(ms_value)
                 .unwrap();
@@ -805,8 +797,6 @@ impl PrimitiveCommon for UnionValues {
         )
         .into_box()
     }
-
-    
 }
 
 impl WritePrim for UnionValues {
@@ -816,7 +806,6 @@ impl WritePrim for UnionValues {
         args: &[Value],
     ) -> Option<Value> {
         let values = state
-            
             .container_values()
             .get_val::<MultiSetContainer>(args[0])?
             .clone()

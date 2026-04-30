@@ -30,9 +30,9 @@ use std::any::{Any, TypeId};
 pub use egglog::ast::{Action, Fact, Facts, GenericActions, RustSpan, Span};
 pub use egglog::sort::{BigIntSort, BigRatSort, BoolSort, F64Sort, I64Sort, StringSort, UnitSort};
 pub use egglog::{CommandMacro, CommandMacroRegistry};
+pub use egglog::{Core, FullState, PureState, ReadState, Write, WriteState};
 pub use egglog::{EGraph, span};
 pub use egglog::{action, actions, datatype, expr, fact, facts, sort, vars};
-pub use egglog::{Core, FullState, PureState, ReadState, Write, WriteState};
 
 /// Trait for types that can be converted to/from Literal for use in validated primitives.
 /// This enables automatic validator generation for literal primitives.
@@ -380,11 +380,7 @@ where
         + Sync
         + 'static,
 {
-    fn apply<'a, 'db>(
-        &self,
-        state: crate::WriteState<'a, 'db>,
-        values: &[Value],
-    ) -> Option<Value> {
+    fn apply<'a, 'db>(&self, state: crate::WriteState<'a, 'db>, values: &[Value]) -> Option<Value> {
         let unit = state.base_values().get(());
         (self.func)(state, values)?;
         Some(unit)

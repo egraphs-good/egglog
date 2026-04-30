@@ -173,10 +173,7 @@ fn write_primitive_rejected_in_queries() {
         "(function g (i64) i64 :no-merge)\n\
          (rule ((= x (w-echo 1))) ((set (g 0) x)))",
     );
-    assert!(
-        result.is_err(),
-        "WritePrim must be rejected on a rule LHS"
-    );
+    assert!(result.is_err(), "WritePrim must be rejected on a rule LHS");
 
     // Top-level `check` (GlobalQuery) — must be rejected.
     let mut egraph3 = EGraph::default();

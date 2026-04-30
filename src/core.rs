@@ -72,7 +72,6 @@ impl SpecializedPrimitive {
     pub fn validator(&self) -> Option<&PrimitiveValidator> {
         self.prim_with_id.validator.as_ref()
     }
-
 }
 
 impl PartialEq for SpecializedPrimitive {

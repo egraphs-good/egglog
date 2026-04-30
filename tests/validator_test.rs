@@ -68,11 +68,7 @@ fn test_add_primitive_with_validator_method() {
         }
     }
     impl PurePrim for TestAdd {
-        fn apply<'a, 'db>(
-            &self,
-            mut state: PureState<'a, 'db>,
-            args: &[Value],
-        ) -> Option<Value> {
+        fn apply<'a, 'db>(&self, state: PureState<'a, 'db>, args: &[Value]) -> Option<Value> {
             let a = state.base_values().unwrap::<i64>(args[0]);
             let b = state.base_values().unwrap::<i64>(args[1]);
             Some(state.base_values().get(a + b))

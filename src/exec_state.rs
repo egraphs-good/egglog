@@ -31,8 +31,8 @@
 use std::ops::Deref;
 
 use crate::core_relations::{
-    BaseValue, BaseValues, ContainerValue, ContainerValues, ExecutionState,
-    ExternalFunctionId, TableId, Value,
+    BaseValue, BaseValues, ContainerValue, ContainerValues, ExecutionState, ExternalFunctionId,
+    TableId, Value,
 };
 use egglog_bridge::{ActionRegistry, TableAction};
 
@@ -59,11 +59,7 @@ pub(crate) trait Internal<'a, 'db: 'a>: 'a {
     fn es(&self) -> &ExecutionState<'db>;
     fn es_mut(&mut self) -> &mut ExecutionState<'db>;
 
-    fn call_external_func(
-        &mut self,
-        id: ExternalFunctionId,
-        args: &[Value],
-    ) -> Option<Value> {
+    fn call_external_func(&mut self, id: ExternalFunctionId, args: &[Value]) -> Option<Value> {
         self.es_mut().call_external_func(id, args)
     }
     fn raw_exec_state(&mut self) -> &mut ExecutionState<'db> {
