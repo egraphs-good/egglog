@@ -515,6 +515,16 @@ impl ColumnIndex {
             ColumnIndex { shard_data, shards }
         })
     }
+
+    /// Pre-reserve capacity in each shard's HashMap for `n` rows total.
+    /// Eliminates hashbrown rehashing during add_row for the small-subset path.
+    pub(crate) fn reserve_for_n_rows(&mut self, n: usize) {
+        let n_shards = self.shards.len();
+        let per_shard = n / n_shards + 2;
+        for (_, shard) in self.shards.iter_mut() {
+            shard.table.reserve(per_shard);
+        }
+    }
 }
 
 #[derive(Clone)]

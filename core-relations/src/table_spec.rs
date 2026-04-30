@@ -412,6 +412,7 @@ impl<T: Table> TableWrapper for WrapperImpl<T> {
             res.rebuild_full(&[col], wrapped, subset);
         } else {
             let table = table.as_any().downcast_ref::<T>().unwrap();
+            res.reserve_for_n_rows(subset.size());
             table.scan_generic(subset, |row_id, row| {
                 res.add_row(&[row[col.index()]], row_id);
             });

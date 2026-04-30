@@ -168,3 +168,42 @@ beating comparison sort for medium N (512-10,000).
 **Verdict:** KEPT. ≥5% speedup on hardboiled_128, no regressions anywhere.
 
 ---
+
+## D3: Four get_index micro-optimizations (EE1+GG1+LL1+NN1) (2026-04-30)
+
+**Hypothesis:** `get_index` and `get_column_index` have avoidable overhead on every call:
+1. (EE1) The SparseColumnIndex fast path (subset.size() ≤ 8, single column) is checked AFTER
+   computing `all_cacheable` (uncacheable_columns lookup) and `whole_table.all()` (table scan),
+   wasting 2 memory accesses for the common small-subset path.
+2. (GG1) SparseColumnIndex returns `SubsetRef::Sparse([r])` for single-row keys, causing a
+   pool allocation + memcpy in `SubsetRef::to_owned`. A 1-row Sparse is identical to Dense(r..r+1).
+3. (LL1) `group_by_col` for sizes 9-511 uses `add_row` into an unreserved HashMap, triggering
+   hashbrown rehashing at ~1.15% of cycles.
+4. (NN1) `get_column_index` delegates to `get_index` which first creates a 1-element
+   SmallVec via `from_iter(iter::once(col))` and then checks `cols.len() == 1` multiple times.
+
+**Approach:**
+- EE1: Move SparseColumnIndex check to first position in get_index, before all_cacheable/whole_table
+- GG1: Add `sparse_subset_ref()` helper returning Dense(r..r+1) for 1-element ranges in
+  SparseColumnIndex::get_subset and SparseColumnIndex::for_each
+- LL1: Add `ColumnIndex::reserve_for_n_rows(n)` (reserves n/n_shards+2 per shard) and call it
+  in `group_by_col` before the add_row scan for sizes 9-511
+- NN1: Expand `get_column_index` into a specialized single-column implementation — eliminates
+  SmallVec creation, iter::once, `cols.len()` runtime checks, and unreachable multi-col branches
+
+**Results (CC1 baseline: hardboiled_128 ≈ 0.904s):**
+- hardboiled_conv1d_32: 0.333s → 0.322s (-3.3%)
+- hardboiled_conv1d_128: 0.904s → 0.849s (-6.1%)
+- luminal-llama: 0.224s → 0.219s (-2.2%)
+- python_array_optimize: 0.528s → 0.525s (-0.6%)
+- cykjson: 0.113s → 0.114s (+0.9%, within noise)
+- eggcc-extraction: 0.471s → 0.471s (unchanged)
+
+**Breakdown (incremental):**
+- EE1+GG1: ~2.6% on hardboiled_128 (EE1 moves early exit before costly reads; GG1 avoids pool alloc)
+- LL1: <0.5% (reserve eliminates hashbrown rehash overhead — measured noise level)
+- NN1: ~3.7% on hardboiled_128 (eliminating SmallVec + iterator overhead per get_column_index call)
+
+**Verdict:** KEPT. ≥5% speedup on hardboiled_128 (-6.1%), no regressions.
+
+---
