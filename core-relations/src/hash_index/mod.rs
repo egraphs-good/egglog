@@ -344,12 +344,17 @@ impl IndexBase for ColumnIndex {
             });
         }
 
-        // Sort by (value, row_id): rows with the same key are adjacent and in row_id order,
-        // satisfying the add_row_sorted invariant without any reordering within each group.
-        // Dedup is needed for multi-column rebuilds where the same row_id may appear more than
-        // once for a value (e.g. a row has the same egraph id in two rebuild columns).
-        pairs.sort_unstable();
-        pairs.dedup();
+        if cols.len() == 1 {
+            // Single-column: scan order gives RowIds sorted within each Value group, so a
+            // stable sort by Value only is equivalent to sort_unstable() + dedup (which is
+            // a no-op for single-column). Radix sort beats comparison sort for medium-N.
+            radix_sort_pairs_by_value(&mut pairs);
+        } else {
+            // Multi-column: dedup requires RowIds to be sorted within each Value group, so we
+            // must sort by (Value, RowId) fully and then deduplicate.
+            pairs.sort_unstable();
+            pairs.dedup();
+        }
 
         let mut i = 0;
         while i < pairs.len() {
@@ -418,6 +423,84 @@ fn run_in_thread_pool_and_block<'a>(pool: &rayon::ThreadPool, f: impl FnMut() + 
         inner.notify();
     });
     n.wait()
+}
+
+/// Adaptive stable LSB radix sort for (Value, RowId) pairs, sorting by the Value field.
+///
+/// Chooses 1–4 passes of 8-bit radix sort based on the observed maximum Value, so that
+/// only the actually-used bit range is processed.  Within each Value group the original
+/// order (scan order = RowId-ascending) is preserved by the LSB stability guarantee,
+/// satisfying the add_row_sorted invariant without an explicit RowId sort.
+///
+/// Falls back to `sort_unstable()` for n < 64 where radix setup overhead dominates.
+fn radix_sort_pairs_by_value(pairs: &mut Vec<(Value, RowId)>) {
+    let n = pairs.len();
+    if n < 64 {
+        pairs.sort_unstable();
+        return;
+    }
+
+    let max_val = pairs.iter().map(|&(v, _)| v.rep()).max().unwrap_or(0);
+    let n_passes: u32 = if max_val < 256 {
+        1
+    } else if max_val < 65_536 {
+        2
+    } else if max_val < (1 << 24) {
+        3
+    } else {
+        4
+    };
+
+    let null_pair = (Value::new_const(0), RowId::new_const(0));
+    let mut buf: Vec<(Value, RowId)> = vec![null_pair; n];
+
+    // Double-buffer: alternate scatter between `pairs` and `buf`.
+    // Raw pointers avoid simultaneous-borrow conflicts in safe Rust.
+    let mut src: *mut (Value, RowId) = pairs.as_mut_ptr();
+    let mut dst: *mut (Value, RowId) = buf.as_mut_ptr();
+
+    for pass in 0..n_passes {
+        let shift = pass * 8;
+        let mut count = [0u32; 256];
+
+        // Count occurrences of the relevant byte of each Value.
+        unsafe {
+            for i in 0..n {
+                let bucket = ((*src.add(i)).0.rep() >> shift) & 0xFF;
+                count[bucket as usize] += 1;
+            }
+        }
+
+        // Convert counts to exclusive prefix sums (start positions per bucket).
+        let mut prefix = 0u32;
+        for c in &mut count {
+            let prev = *c;
+            *c = prefix;
+            prefix += prev;
+        }
+
+        // Stable scatter: write each element to its bucket's next position.
+        unsafe {
+            for i in 0..n {
+                let pair = *src.add(i);
+                let bucket = ((pair.0.rep() >> shift) & 0xFF) as usize;
+                *dst.add(count[bucket] as usize) = pair;
+                count[bucket] += 1;
+            }
+        }
+
+        core::mem::swap(&mut src, &mut dst);
+    }
+
+    // After `n_passes` swaps, `src` points to the sorted data.
+    // Odd passes: src == buf.as_mut_ptr(); copy back to pairs.
+    // Even passes: src == pairs.as_mut_ptr(); already in place.
+    if n_passes % 2 == 1 {
+        // SAFETY: src (buf) and dst (pairs) are non-overlapping allocations of length n.
+        unsafe {
+            core::ptr::copy_nonoverlapping(src, dst, n);
+        }
+    }
 }
 
 impl ColumnIndex {
