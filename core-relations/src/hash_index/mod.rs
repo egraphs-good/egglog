@@ -67,7 +67,8 @@ impl<TI: IndexBase> Index<TI> {
         if cur_version == self.updated_to {
             return;
         }
-        let subset = if cur_version.major != self.updated_to.major {
+        let is_full = cur_version.major != self.updated_to.major;
+        let subset = if is_full {
             self.table.clear();
             table.all()
         } else {
@@ -75,6 +76,8 @@ impl<TI: IndexBase> Index<TI> {
         };
         if parallelize_index_construction(subset.size()) {
             self.table.merge_parallel(&self.key, table, subset.as_ref());
+        } else if is_full {
+            self.table.rebuild_full(&self.key, table, subset.as_ref());
         } else {
             self.refresh_serial(table, subset);
         }
@@ -160,6 +163,24 @@ pub(crate) trait IndexBase {
     fn len(&self) -> usize;
 
     fn merge_parallel(&mut self, cols: &[ColumnId], table: WrappedTableRef, subset: SubsetRef);
+
+    /// Bulk-rebuild this index from scratch (called on major version change after clear()).
+    /// The default implementation batches via `scan_project`+`merge_rows`. Implementations
+    /// can override this for more efficient bulk construction.
+    fn rebuild_full(&mut self, cols: &[ColumnId], table: WrappedTableRef, subset: SubsetRef) {
+        let mut buf = TaggedRowBuffer::new(cols.len());
+        let mut cur = Offset::new(0);
+        loop {
+            buf.clear();
+            if let Some(next) = table.scan_project(subset, cols, cur, 1024, &[], &mut buf) {
+                cur = next;
+                self.merge_rows(&buf);
+            } else {
+                self.merge_rows(&buf);
+                break;
+            }
+        }
+    }
 }
 
 struct ColumnIndexShard {
@@ -304,6 +325,54 @@ impl IndexBase for ColumnIndex {
                 }
             });
         });
+    }
+
+    /// Sort-based full rebuild: collect all (value, row_id) pairs, sort by (value, row_id),
+    /// then build each key's subset with a single pre-sized allocation — eliminating the
+    /// doubling memmoves from `push_vec` that occur in the row-at-a-time `add_row` path.
+    fn rebuild_full(&mut self, cols: &[ColumnId], table: WrappedTableRef, subset: SubsetRef) {
+        debug_assert_eq!(cols.len(), 1);
+        let col = cols[0];
+        let n = subset.size();
+
+        let mut pairs: Vec<(Value, RowId)> = Vec::with_capacity(n);
+        table.for_each_col(subset, col, &mut |row_id, val| {
+            pairs.push((val, row_id));
+        });
+
+        // Sort by (value, row_id): rows with the same key are adjacent and in row_id order,
+        // satisfying the add_row_sorted invariant without any reordering within each group.
+        pairs.sort_unstable();
+
+        let mut i = 0;
+        while i < pairs.len() {
+            let key = pairs[i].0;
+            let start = i;
+            while i < pairs.len() && pairs[i].0 == key {
+                i += 1;
+            }
+            let shard = self.shard_data.get_shard_mut(&key, &mut self.shards);
+            let count = i - start;
+            let buffered = if count == 1 {
+                // Singleton: use Dense subset, no SubsetBuffer allocation needed.
+                BufferedSubset::singleton(pairs[start].1)
+            } else {
+                let first = pairs[start].1;
+                let last = pairs[i - 1].1;
+                if last.rep() - first.rep() == (count - 1) as u32 {
+                    // Contiguous RowIds: use Dense range (same representation as add_row_sorted).
+                    BufferedSubset::Dense(OffsetRange::new(first, last.inc()))
+                } else {
+                    // Non-contiguous: pre-allocate exactly the right size, no doubling memmoves.
+                    let bv = shard
+                        .subsets
+                        .new_vec(pairs[start..i].iter().map(|&(_, r)| r));
+                    BufferedSubset::Sparse(bv)
+                }
+            };
+            // After clear(), the table is empty, so direct insert is safe.
+            shard.table.insert(key, buffered);
+        }
     }
 }
 
