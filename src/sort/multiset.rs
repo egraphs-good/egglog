@@ -317,7 +317,7 @@ fn try_registering_multiset_non_map_primitives(
         && fn_.output().name() == "i64"
     {
         let unit = eg.type_info.get_sort_by_name("Unit").unwrap().clone();
-        eg.add_full_primitive(
+        eg.add_write_primitive(
             FillIndex {
                 name: "unstable-multiset-fill-index".into(),
                 multiset: multiset.clone(),
@@ -418,10 +418,12 @@ struct FillIndex {
     fn_: Arc<FunctionSort>,
 }
 
-// `FillIndex` reads existing rows (to skip already-filled keys) and
-// then writes — that read makes its effect depend on live DB state, so
-// it cannot run in `RuleAction` without breaking saturation detection.
-// Registered as a `FullPrim` (GlobalAction-only).
+// `FillIndex` does pure writes: inserts one row per multiset element
+// into the index table (key `(multiset, element)`, value `count`). Safe
+// to call from a rule action — re-firing on the same multiset
+// reinserts the same rows, so the operation is idempotent under any
+// merge function that respects equal values (in particular, no skip
+// is needed to protect accumulator-style merges from double-counting).
 impl PrimitiveCommon for FillIndex {
     fn name(&self) -> &str {
         &self.name
@@ -435,24 +437,20 @@ impl PrimitiveCommon for FillIndex {
         )
         .into_box()
     }
-
-    
 }
 
-impl FullPrim for FillIndex {
+impl WritePrim for FillIndex {
     fn apply<'a, 'db>(
         &self,
-        mut state: crate::FullState<'a, 'db>,
+        mut state: crate::WriteState<'a, 'db>,
         args: &[Value],
     ) -> Option<Value> {
         let fc = state
-            
             .container_values()
             .get_val::<FunctionContainer>(args[1])
             .unwrap()
             .clone();
         let multiset = state
-            
             .container_values()
             .get_val::<MultiSetContainer>(args[0])
             .unwrap()
@@ -467,10 +465,6 @@ impl FullPrim for FillIndex {
         let es = state.raw_exec_state();
         for (v, c) in multiset.data.iter_counts() {
             let mut row = vec![args[0], v];
-            // Skip if already filled — assumes a working merge.
-            if action.lookup(es, &row).is_some() {
-                break;
-            }
             row.push(es.base_values().get::<i64>(c.try_into().unwrap()));
             action.insert(es, row.into_iter());
         }
