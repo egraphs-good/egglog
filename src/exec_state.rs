@@ -273,7 +273,7 @@ pub struct WriteState<'a, 'db> {
 
 /// Typed view for top-level action sites with both read and write
 /// access. Valid in `GlobalAction` only. Implements [`Core`] +
-/// [`Write`].
+/// [`Read`] + [`Write`].
 ///
 /// ```compile_fail
 /// // Even `FullState` cannot reach the raw `ExecutionState` —

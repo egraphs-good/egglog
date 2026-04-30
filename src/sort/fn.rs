@@ -12,8 +12,6 @@
 //! the list of partially applied arguments.
 use std::sync::Mutex;
 
-#[allow(unused_imports)]
-use crate::ExecutionState;
 use crate::exec_state::Internal;
 
 use super::*;
@@ -507,16 +505,17 @@ impl FunctionContainer {
     /// which the wrapper closure registered for each higher-order
     /// primitive stamps before invoking the body:
     ///
-    /// - In a query context (`RuleQuery` / `GlobalQuery`),
-    ///   constructor and custom-function lookups return `None` —
-    ///   minting an eclass would be unsound and a custom-function
-    ///   read would be untracked by seminaive. Only wrapped
-    ///   primitives whose own `valid_contexts` cover the current
-    ///   context dispatch.
+    /// - In `RuleQuery`, constructor and custom-function lookups
+    ///   return `None`. Constructor minting would be unsound, and
+    ///   custom-function reads would be untracked by seminaive.
+    /// - In `GlobalQuery`, constructor lookups go through read-only
+    ///   `lookup` (existing eclasses are visible, no minting), and
+    ///   custom-function lookups also read via `lookup`.
     /// - In an action context (`RuleAction` / `GlobalAction`),
-    ///   constructor lookups mint via `lookup_or_insert`,
-    ///   custom-function lookups read via `lookup`, and primitives
-    ///   dispatch through the raw `ExecutionState`.
+    ///   constructor lookups mint via `lookup_or_insert`, and
+    ///   custom-function lookups read via `lookup`.
+    /// - In all four contexts, wrapped primitives dispatch only when
+    ///   their `valid_contexts` cover the current context.
     pub(crate) fn apply<'a, 'db, S>(
         &self,
         state: &mut S,
