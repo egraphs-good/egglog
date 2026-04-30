@@ -917,13 +917,11 @@ impl EGraph {
     /// # Seminaive-safety trust boundary
     ///
     /// This method hands out a raw `&mut ExecutionState`, which bypasses
-    /// the typed state wrappers ([`PureState`],
-    /// [`WriteState`], [`ReadState`], [`FullState`])
-    /// that enforce #772's seminaive-safety model. Treat it as
-    /// top-level / global-action context: appropriate for one-shot
-    /// database manipulation from outside any rule, not for use inside
-    /// primitive implementations. New primitive code should use
-    /// [`crate::exec_state::UserState`]-based wrappers instead.
+    /// the typed state wrappers (`PureState`, `WriteState`, `ReadState`,
+    /// `FullState`) that the egglog crate uses to enforce #772's
+    /// seminaive-safety model. Treat it as top-level / global-action
+    /// context: appropriate for one-shot database manipulation from
+    /// outside any rule, not for use inside primitive implementations.
     pub fn with_execution_state<R>(&self, f: impl FnOnce(&mut ExecutionState<'_>) -> R) -> R {
         self.db.with_execution_state(f)
     }
@@ -1281,11 +1279,7 @@ impl TableAction {
     ///
     /// This is a write operation — only safe in action contexts. See
     /// issue #772.
-    pub fn lookup_or_insert(
-        &self,
-        state: &mut ExecutionState,
-        key: &[Value],
-    ) -> Option<Value> {
+    pub fn lookup_or_insert(&self, state: &mut ExecutionState, key: &[Value]) -> Option<Value> {
         match self.default {
             Some(default) => {
                 let timestamp =

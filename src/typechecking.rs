@@ -1,5 +1,6 @@
 use std::hash::Hasher;
 
+use crate::Context;
 use crate::{
     core::{CoreActionContext, CoreRule, GenericActionsExt, ResolvedCall},
     *,
@@ -7,7 +8,6 @@ use crate::{
 use ast::{ResolvedAction, ResolvedExpr, ResolvedFact, ResolvedRule, ResolvedVar, Rule};
 use core_relations::ExternalFunction;
 use egglog_ast::generic_ast::GenericAction;
-use crate::Context;
 use egglog_bridge::ActionRegistry;
 use std::sync::{Arc, RwLock};
 
@@ -358,8 +358,7 @@ impl EGraph {
         &mut self,
         x: T,
         validator: Option<PrimitiveValidator>,
-    )
-    where
+    ) where
         T: PurePrim + Clone,
     {
         let primitive: Arc<dyn PrimitiveCommon> = Arc::new(x.clone());
@@ -414,13 +413,13 @@ impl EGraph {
     ) -> PendingPrimitive {
         let primitive: Arc<dyn PrimitiveCommon> = Arc::new(x.clone());
         let registry = self.backend.action_registry();
-        let id = self
-            .backend
-            .register_external_func(Box::new(RegistryPrimWrapper::<T, WrapRead> {
-                prim: x,
-                registry,
-                _wrap: std::marker::PhantomData,
-            }));
+        let id =
+            self.backend
+                .register_external_func(Box::new(RegistryPrimWrapper::<T, WrapRead> {
+                    prim: x,
+                    registry,
+                    _wrap: std::marker::PhantomData,
+                }));
         PendingPrimitive {
             valid_contexts: ReadState::valid_contexts().to_vec(),
             name: primitive.name().to_owned(),
@@ -437,13 +436,13 @@ impl EGraph {
     ) -> PendingPrimitive {
         let primitive: Arc<dyn PrimitiveCommon> = Arc::new(x.clone());
         let registry = self.backend.action_registry();
-        let id = self
-            .backend
-            .register_external_func(Box::new(RegistryPrimWrapper::<T, WrapWrite> {
-                prim: x,
-                registry,
-                _wrap: std::marker::PhantomData,
-            }));
+        let id =
+            self.backend
+                .register_external_func(Box::new(RegistryPrimWrapper::<T, WrapWrite> {
+                    prim: x,
+                    registry,
+                    _wrap: std::marker::PhantomData,
+                }));
         PendingPrimitive {
             valid_contexts: WriteState::valid_contexts().to_vec(),
             name: primitive.name().to_owned(),
@@ -460,13 +459,13 @@ impl EGraph {
     ) -> PendingPrimitive {
         let primitive: Arc<dyn PrimitiveCommon> = Arc::new(x.clone());
         let registry = self.backend.action_registry();
-        let id = self
-            .backend
-            .register_external_func(Box::new(RegistryPrimWrapper::<T, WrapFull> {
-                prim: x,
-                registry,
-                _wrap: std::marker::PhantomData,
-            }));
+        let id =
+            self.backend
+                .register_external_func(Box::new(RegistryPrimWrapper::<T, WrapFull> {
+                    prim: x,
+                    registry,
+                    _wrap: std::marker::PhantomData,
+                }));
         PendingPrimitive {
             valid_contexts: FullState::valid_contexts().to_vec(),
             name: primitive.name().to_owned(),

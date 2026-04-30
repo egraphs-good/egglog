@@ -87,12 +87,10 @@ use egglog_ast::span::Span;
 use egglog_ast::util::ListDisplay;
 pub use egglog_bridge::FunctionRow;
 use egglog_bridge::{ColumnTy, QueryEntry, UnionAction};
-pub use exec_state::{
-    Context, Core, FullState, PureState, Read, ReadState, Write, WriteState,
-};
 use egglog_core_relations as core_relations;
 use egglog_numeric_id as numeric_id;
 use egglog_reports::{ReportLevel, RunReport};
+pub use exec_state::{Context, Core, FullState, PureState, Read, ReadState, Write, WriteState};
 use extract::{DefaultCost, Extractor, TreeAdditiveCostModel};
 use indexmap::map::Entry;
 use log::{Level, log_enabled};

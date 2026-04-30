@@ -516,11 +516,7 @@ impl FunctionContainer {
     ///   custom-function lookups read via `lookup`.
     /// - In all four contexts, wrapped primitives dispatch only when
     ///   their `valid_contexts` cover the current context.
-    pub(crate) fn apply<'a, 'db, S>(
-        &self,
-        state: &mut S,
-        args: &[Value],
-    ) -> Option<Value>
+    pub(crate) fn apply<'a, 'db, S>(&self, state: &mut S, args: &[Value]) -> Option<Value>
     where
         S: Internal<'a, 'db>,
         'db: 'a,

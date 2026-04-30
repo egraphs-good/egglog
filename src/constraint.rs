@@ -569,9 +569,7 @@ impl Assignment<AtomTerm, ArcSort> {
                 self.annotate_expr(e1, typeinfo, ctx),
                 self.annotate_expr(e2, typeinfo, ctx),
             ),
-            GenericFact::Fact(expr) => {
-                ResolvedFact::Fact(self.annotate_expr(expr, typeinfo, ctx))
-            }
+            GenericFact::Fact(expr) => ResolvedFact::Fact(self.annotate_expr(expr, typeinfo, ctx)),
         }
     }
 
@@ -785,12 +783,7 @@ impl Problem<AtomTerm, ArcSort> {
         // Rule body atoms run as the LHS query; head atoms run as the
         // RHS action under seminaive semantics.
         self.add_query(body, typeinfo, crate::Context::RuleQuery)?;
-        self.add_actions(
-            head,
-            typeinfo,
-            symbol_gen,
-            crate::Context::RuleAction,
-        )?;
+        self.add_actions(head, typeinfo, symbol_gen, crate::Context::RuleAction)?;
         Ok(())
     }
 
@@ -1008,7 +1001,6 @@ pub trait TypeConstraint {
         arguments: &[AtomTerm],
         typeinfo: &TypeInfo,
     ) -> Vec<Box<dyn Constraint<AtomTerm, ArcSort>>>;
-
 }
 
 /// A type constraint that assigns specific sorts to each argument position.

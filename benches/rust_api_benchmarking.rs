@@ -144,7 +144,7 @@ fn insert_loop_setup(case: RustRuleInsertLoopBenchCase) -> RustRuleBenchInput {
         vars![x: i64],
         facts![(R x)],
         // insert f(x) = x + 1, f(x+1) = x + 2, ..., f(x+n_ops-1) = x + n_ops in one rule run
-        move |ctx, _values| {
+        move |mut ctx, _values| {
             for i in 0..case.n_ops {
                 let k = ctx.base_to_value::<i64>(i as i64);
                 let y = ctx.base_to_value::<i64>(i as i64 + 1);
@@ -196,7 +196,7 @@ fn tableaction_hot_path_setup(case: RustRuleTableActionBenchCase) -> RustRuleBen
         fill_ruleset,
         vars![x: i64],
         facts![(R x)],
-        move |ctx, values| {
+        move |mut ctx, values| {
             let [x] = values else { unreachable!() };
             let x = ctx.value_to_base::<i64>(*x);
             let k = ctx.base_to_value::<i64>(x);
@@ -209,22 +209,25 @@ fn tableaction_hot_path_setup(case: RustRuleTableActionBenchCase) -> RustRuleBen
     )
     .unwrap();
 
+    // Read `f` via pattern match on the rule body (`(= out (f x))`).
+    // Rule actions can't read tables — that would be unsound under
+    // seminaive — so the read happens as part of matching, and the
+    // action just unions the bound `out` with a freshly-derived value.
     rust_rule(
         &mut egraph,
         "rust_rule_tableaction_hot_path_read",
         read_ruleset,
-        vars![x: i64],
-        facts![(R x)],
-        move |ctx, values| {
-            let [x] = values else { unreachable!() };
+        vars![x: i64, out: i64],
+        facts![
+            (R x)
+            (= out (f x))
+        ],
+        move |mut ctx, values| {
+            let [x, out] = values else { unreachable!() };
             let x = ctx.value_to_base::<i64>(*x);
-            let k = ctx.base_to_value::<i64>(x);
             let y = ctx.base_to_value::<i64>(x + 1);
 
-            // Stress the Rust API table ops in the action:
-            // lookup should succeed because we pre-filled the table.
-            let out = ctx.lookup("f", &[k]).expect("f(x) should exist");
-            ctx.union(out, y);
+            ctx.union(*out, y);
             Some(())
         },
     )
@@ -301,7 +304,7 @@ fn fib_setup() -> RustRuleBenchInput {
             (= f0 (fib x))
             (= f1 (fib (+ x 1)))
         ],
-        move |ctx, values| {
+        move |mut ctx, values| {
             let [x, f0, f1] = values else { unreachable!() };
             let x = ctx.value_to_base::<i64>(*x);
             let f0 = ctx.value_to_base::<i64>(*f0);
