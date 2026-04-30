@@ -20,8 +20,8 @@
 //!
 //! Privileged seams (`call_external_func`, `table_lookup`, raw
 //! `&mut ExecutionState`) used by the `FunctionContainer` higher-order
-//! dispatch live on the crate-private `__internal::Internal` trait.
-//! User code cannot reach them.
+//! dispatch live on the crate-private [`Internal`] trait. User code
+//! cannot reach them.
 //!
 //! [`PurePrim`]: crate::PurePrim
 //! [`WritePrim`]: crate::WritePrim
@@ -31,8 +31,8 @@
 use std::ops::Deref;
 
 use crate::core_relations::{
-    BaseValue, BaseValues, ContainerValue, ContainerValues, CounterId, ExecutionState, TableId,
-    Value,
+    BaseValue, BaseValues, ContainerValue, ContainerValues, CounterId, ExecutionState,
+    ExternalFunctionId, TableId, Value,
 };
 use egglog_bridge::{ActionRegistry, TableAction};
 
@@ -40,64 +40,47 @@ use egglog_bridge::{ActionRegistry, TableAction};
 /// `core_relations` so the egglog API surface stays in one place.
 pub use crate::core_relations::Context;
 
-mod sealed {
-    use crate::core_relations::ExecutionState;
-    use egglog_bridge::ActionRegistry;
+// =====================================================================
+// Sealed accessor traits.
+//
+// These traits are `pub(crate)`: external users cannot bring them
+// into scope, so they cannot call the methods defined here even on
+// values they have. They exist to give the public capability traits
+// (`Core`, `Write`) a way to reach the underlying `ExecutionState`
+// from default methods.
+// =====================================================================
 
-    /// Crate-private accessor trait. Lives in a private module so
-    /// external users cannot bring it into scope to call its methods.
-    pub trait CoreSealed<'a, 'db: 'a>: 'a {
-        fn es(&self) -> &ExecutionState<'db>;
-        fn es_mut(&mut self) -> &mut ExecutionState<'db>;
-    }
-    pub trait WriteSealed<'a, 'db: 'a>: CoreSealed<'a, 'db> {
-        fn registry(&self) -> &ActionRegistry;
-    }
+pub(crate) trait CoreSealed<'a, 'db: 'a>: 'a {
+    fn es(&self) -> &ExecutionState<'db>;
+    fn es_mut(&mut self) -> &mut ExecutionState<'db>;
 }
 
-/// Crate-private surface for the `FunctionContainer` higher-order
-/// dispatch and similar helpers — the only call sites that
-/// legitimately need raw external-func dispatch, raw table reads, or
-/// raw `&mut ExecutionState`. Lives in a `pub(crate)` module, so
-/// external users cannot bring it into scope.
-pub(crate) mod __internal {
-    use super::sealed::CoreSealed;
-    use crate::core_relations::{ExecutionState, ExternalFunctionId, Value};
-    use egglog_bridge::TableAction;
-
-    pub trait Internal<'a, 'db: 'a>: CoreSealed<'a, 'db> {
-        fn call_external_func(
-            &mut self,
-            id: ExternalFunctionId,
-            args: &[Value],
-        ) -> Option<Value> {
-            self.es_mut().call_external_func(id, args)
-        }
-        fn table_lookup(&self, action: &TableAction, key: &[Value]) -> Option<Value> {
-            action.lookup(self.es(), key)
-        }
-        fn raw_exec_state(&mut self) -> &mut ExecutionState<'db> {
-            self.es_mut()
-        }
-        /// The current execution context this primitive is being
-        /// invoked from. Used by `FunctionContainer::apply` to choose
-        /// pure-side vs action-side dispatch.
-        fn current_context(&self) -> super::Context {
-            self.es().current_context()
-        }
-    }
+pub(crate) trait WriteSealed<'a, 'db: 'a>: CoreSealed<'a, 'db> {
+    fn registry(&self) -> &ActionRegistry;
 }
 
-/// Internal dispatch interface used by `FunctionContainer::apply` and
-/// similar helpers that need to operate generically over the four
-/// state wrappers. **Users do not normally implement or import this
-/// trait directly** — call methods on the concrete wrapper instead.
-#[doc(hidden)]
-pub trait UserState<'a, 'db>: Core<'a, 'db> + __internal::Internal<'a, 'db>
-where
-    'db: 'a,
-{
-    fn valid_contexts() -> &'static [Context];
+/// Crate-private privileged-dispatch trait for the
+/// `FunctionContainer` higher-order dispatch and similar in-tree
+/// helpers — the only call sites that legitimately need raw external-
+/// func dispatch, raw `&mut ExecutionState`, or the runtime context
+/// flag.
+pub(crate) trait Internal<'a, 'db: 'a>: CoreSealed<'a, 'db> {
+    fn call_external_func(
+        &mut self,
+        id: ExternalFunctionId,
+        args: &[Value],
+    ) -> Option<Value> {
+        self.es_mut().call_external_func(id, args)
+    }
+    fn raw_exec_state(&mut self) -> &mut ExecutionState<'db> {
+        self.es_mut()
+    }
+    /// The current execution context this primitive is being invoked
+    /// from. Used by `FunctionContainer::apply` to choose pure-side
+    /// vs action-side dispatch.
+    fn current_context(&self) -> Context {
+        self.es().current_context()
+    }
 }
 
 // =====================================================================
@@ -107,7 +90,8 @@ where
 /// Core methods available on every state wrapper: base values,
 /// counters, container interning, value/base/container conversion sugar.
 /// Always seminaive-safe.
-pub trait Core<'a, 'db: 'a>: sealed::CoreSealed<'a, 'db> {
+#[allow(private_bounds)]
+pub trait Core<'a, 'db: 'a>: CoreSealed<'a, 'db> {
     /// Base-value pool (interned primitives like `i64`, `String`, …).
     #[inline]
     fn base_values(&self) -> &'a BaseValues {
@@ -191,7 +175,8 @@ pub trait Core<'a, 'db: 'a>: sealed::CoreSealed<'a, 'db> {
 /// Action-side write methods — name-indexed inserts/removes/subsumes
 /// plus union and panic. Implemented for [`WriteState`] and
 /// [`FullState`]; *not* for [`PureState`] or [`ReadState`].
-pub trait Write<'a, 'db: 'a>: Core<'a, 'db> + sealed::WriteSealed<'a, 'db> {
+#[allow(private_bounds)]
+pub trait Write<'a, 'db: 'a>: Core<'a, 'db> + WriteSealed<'a, 'db> {
     /// Insert a row into the named table.
     fn insert(&mut self, name: &str, row: impl Iterator<Item = Value>) {
         let action = lookup_action(self.registry(), name).clone();
@@ -352,7 +337,7 @@ impl<'a, 'db: 'a> FullState<'a, 'db> {
 // the public capability traits' default methods do all the rest.
 // =====================================================================
 
-impl<'a, 'db: 'a> sealed::CoreSealed<'a, 'db> for PureState<'a, 'db> {
+impl<'a, 'db: 'a> CoreSealed<'a, 'db> for PureState<'a, 'db> {
     #[inline]
     fn es(&self) -> &ExecutionState<'db> {
         self.inner
@@ -363,14 +348,9 @@ impl<'a, 'db: 'a> sealed::CoreSealed<'a, 'db> for PureState<'a, 'db> {
     }
 }
 impl<'a, 'db: 'a> Core<'a, 'db> for PureState<'a, 'db> {}
-impl<'a, 'db: 'a> __internal::Internal<'a, 'db> for PureState<'a, 'db> {}
-impl<'a, 'db: 'a> UserState<'a, 'db> for PureState<'a, 'db> {
-    fn valid_contexts() -> &'static [Context] {
-        Self::valid_contexts()
-    }
-}
+impl<'a, 'db: 'a> Internal<'a, 'db> for PureState<'a, 'db> {}
 
-impl<'a, 'db: 'a> sealed::CoreSealed<'a, 'db> for ReadState<'a, 'db> {
+impl<'a, 'db: 'a> CoreSealed<'a, 'db> for ReadState<'a, 'db> {
     #[inline]
     fn es(&self) -> &ExecutionState<'db> {
         self.inner
@@ -381,14 +361,9 @@ impl<'a, 'db: 'a> sealed::CoreSealed<'a, 'db> for ReadState<'a, 'db> {
     }
 }
 impl<'a, 'db: 'a> Core<'a, 'db> for ReadState<'a, 'db> {}
-impl<'a, 'db: 'a> __internal::Internal<'a, 'db> for ReadState<'a, 'db> {}
-impl<'a, 'db: 'a> UserState<'a, 'db> for ReadState<'a, 'db> {
-    fn valid_contexts() -> &'static [Context] {
-        Self::valid_contexts()
-    }
-}
+impl<'a, 'db: 'a> Internal<'a, 'db> for ReadState<'a, 'db> {}
 
-impl<'a, 'db: 'a> sealed::CoreSealed<'a, 'db> for WriteState<'a, 'db> {
+impl<'a, 'db: 'a> CoreSealed<'a, 'db> for WriteState<'a, 'db> {
     #[inline]
     fn es(&self) -> &ExecutionState<'db> {
         self.inner
@@ -398,21 +373,16 @@ impl<'a, 'db: 'a> sealed::CoreSealed<'a, 'db> for WriteState<'a, 'db> {
         self.inner
     }
 }
-impl<'a, 'db: 'a> sealed::WriteSealed<'a, 'db> for WriteState<'a, 'db> {
+impl<'a, 'db: 'a> WriteSealed<'a, 'db> for WriteState<'a, 'db> {
     fn registry(&self) -> &ActionRegistry {
         self.registry
     }
 }
 impl<'a, 'db: 'a> Core<'a, 'db> for WriteState<'a, 'db> {}
 impl<'a, 'db: 'a> Write<'a, 'db> for WriteState<'a, 'db> {}
-impl<'a, 'db: 'a> __internal::Internal<'a, 'db> for WriteState<'a, 'db> {}
-impl<'a, 'db: 'a> UserState<'a, 'db> for WriteState<'a, 'db> {
-    fn valid_contexts() -> &'static [Context] {
-        Self::valid_contexts()
-    }
-}
+impl<'a, 'db: 'a> Internal<'a, 'db> for WriteState<'a, 'db> {}
 
-impl<'a, 'db: 'a> sealed::CoreSealed<'a, 'db> for FullState<'a, 'db> {
+impl<'a, 'db: 'a> CoreSealed<'a, 'db> for FullState<'a, 'db> {
     #[inline]
     fn es(&self) -> &ExecutionState<'db> {
         self.inner
@@ -422,16 +392,11 @@ impl<'a, 'db: 'a> sealed::CoreSealed<'a, 'db> for FullState<'a, 'db> {
         self.inner
     }
 }
-impl<'a, 'db: 'a> sealed::WriteSealed<'a, 'db> for FullState<'a, 'db> {
+impl<'a, 'db: 'a> WriteSealed<'a, 'db> for FullState<'a, 'db> {
     fn registry(&self) -> &ActionRegistry {
         self.registry
     }
 }
 impl<'a, 'db: 'a> Core<'a, 'db> for FullState<'a, 'db> {}
 impl<'a, 'db: 'a> Write<'a, 'db> for FullState<'a, 'db> {}
-impl<'a, 'db: 'a> __internal::Internal<'a, 'db> for FullState<'a, 'db> {}
-impl<'a, 'db: 'a> UserState<'a, 'db> for FullState<'a, 'db> {
-    fn valid_contexts() -> &'static [Context] {
-        Self::valid_contexts()
-    }
-}
+impl<'a, 'db: 'a> Internal<'a, 'db> for FullState<'a, 'db> {}

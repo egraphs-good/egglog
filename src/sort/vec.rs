@@ -1,4 +1,4 @@
-use crate::exec_state::__internal::Internal;
+use crate::exec_state::Internal;
 use egglog_bridge::UnionAction;
 use std::any::TypeId;
 use std::iter::zip;

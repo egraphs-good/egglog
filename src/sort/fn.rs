@@ -14,7 +14,7 @@ use std::sync::Mutex;
 
 #[allow(unused_imports)]
 use crate::ExecutionState;
-use crate::exec_state::__internal::Internal;
+use crate::exec_state::Internal;
 
 use super::*;
 
@@ -503,7 +503,7 @@ impl PurePrim for Apply {
 
 impl FunctionContainer {
     /// Apply the wrapped function. Dispatch is keyed off
-    /// [`Internal::current_context`](crate::exec_state::__internal::Internal::current_context),
+    /// [`Internal::current_context`](crate::exec_state::Internal::current_context),
     /// which the wrapper closure registered for each higher-order
     /// primitive stamps before invoking the body:
     ///
@@ -517,7 +517,11 @@ impl FunctionContainer {
     ///   constructor lookups mint via `lookup_or_insert`,
     ///   custom-function lookups read via `lookup`, and primitives
     ///   dispatch through the raw `ExecutionState`.
-    pub fn apply<'a, 'db, S>(&self, state: &mut S, args: &[Value]) -> Option<Value>
+    pub(crate) fn apply<'a, 'db, S>(
+        &self,
+        state: &mut S,
+        args: &[Value],
+    ) -> Option<Value>
     where
         S: Internal<'a, 'db>,
         'db: 'a,
