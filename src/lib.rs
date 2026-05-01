@@ -1042,12 +1042,18 @@ impl EGraph {
         )?;
         let (query, actions) = (&core_rule.body, &core_rule.head);
 
+        // The `:naive` rule option opts a single rule out of seminaive
+        // evaluation. This widens primitive-context selection from
+        // RuleQuery/RuleAction to GlobalQuery/GlobalAction, so primitives
+        // that read or write the database can run inside this rule.
+        let seminaive = self.seminaive && !rule.naive;
+
         let rule_id = {
             let mut translator = BackendRule::new(
-                self.backend.new_rule(&rule.name, self.seminaive),
+                self.backend.new_rule(&rule.name, seminaive),
                 &self.functions,
                 &self.type_info,
-                self.seminaive,
+                seminaive,
             );
             translator.query(query, false);
             translator.actions(actions)?;
@@ -1228,6 +1234,7 @@ impl EGraph {
             body: facts.to_vec(),
             name: fresh_name.clone(),
             ruleset: fresh_ruleset.clone(),
+            naive: false,
         };
         let core_rule = rule.to_canonicalized_core_rule(
             &self.type_info,
@@ -2028,7 +2035,7 @@ impl<'a> BackendRule<'a> {
         &mut self,
         prim: &core::SpecializedPrimitive,
         args: &[core::ResolvedAtomTerm],
-        _ctx: crate::Context,
+        ctx: crate::Context,
     ) -> (ExternalFunctionId, Vec<QueryEntry>, ColumnTy) {
         // The typechecker has already picked the context-best
         // registration via `ResolvedCall::from_resolution`; we just
@@ -2073,7 +2080,17 @@ impl<'a> BackendRule<'a> {
                             p.accept(&types, self.type_info)
                         })
                 });
-                assert!(ps.len() == 1, "options for {name}: {ps:?}");
+                // Higher-order primitives are registered once per
+                // [`Context`], so a name like `unstable-multiset-flat-map`
+                // produces four candidates whose only difference is
+                // `valid_contexts`. Pick the one tagged with the same
+                // context as the surrounding `unstable-fn`, so the
+                // wrapped function dispatches consistently with the
+                // outer call at runtime.
+                if ps.len() > 1 {
+                    ps.retain(|p| p.valid_contexts.contains(&ctx));
+                }
+                assert!(ps.len() == 1, "options for {name} in {ctx:?}: {ps:?}");
                 let picked = ps.into_iter().next().unwrap();
                 // Record the wrapped primitive's capability profile so
                 // `FunctionContainer::apply` can refuse dispatch in

@@ -774,6 +774,8 @@ impl Problem<AtomTerm, ArcSort> {
         rule: &CoreRule,
         typeinfo: &TypeInfo,
         symbol_gen: &mut SymbolGen,
+        query_ctx: crate::Context,
+        action_ctx: crate::Context,
     ) -> Result<(), TypeError> {
         let CoreRule {
             span: _,
@@ -781,9 +783,12 @@ impl Problem<AtomTerm, ArcSort> {
             body,
         } = rule;
         // Rule body atoms run as the LHS query; head atoms run as the
-        // RHS action under seminaive semantics.
-        self.add_query(body, typeinfo, crate::Context::RuleQuery)?;
-        self.add_actions(head, typeinfo, symbol_gen, crate::Context::RuleAction)?;
+        // RHS action. Contexts come from the caller: a normal rule
+        // uses `RuleQuery`/`RuleAction`; a `:naive` rule uses
+        // `GlobalQuery`/`GlobalAction` so primitives that read/write
+        // the database are admissible.
+        self.add_query(body, typeinfo, query_ctx)?;
+        self.add_actions(head, typeinfo, symbol_gen, action_ctx)?;
         Ok(())
     }
 

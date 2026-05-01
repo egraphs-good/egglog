@@ -934,11 +934,21 @@ impl TypeInfo {
             body,
             name,
             ruleset,
+            naive,
         } = rule;
         let mut constraints = vec![];
 
+        // A `:naive` rule disables seminaive evaluation, so it can use
+        // primitives that read or write the database in either the
+        // query or the action — the same surface as global commands.
+        let (query_ctx, action_ctx) = if *naive {
+            (Context::GlobalQuery, Context::GlobalAction)
+        } else {
+            (Context::RuleQuery, Context::RuleAction)
+        };
+
         let (query, mapped_query) = Facts(body.clone()).to_query(self, symbol_gen);
-        constraints.extend(query.get_constraints(self, Context::RuleQuery)?);
+        constraints.extend(query.get_constraints(self, query_ctx)?);
 
         let mut binding = query.get_vars();
         // We lower to core actions with `union_to_set_optimization`
@@ -955,6 +965,8 @@ impl TypeInfo {
             },
             self,
             symbol_gen,
+            query_ctx,
+            action_ctx,
         )?;
 
         let assignment = problem
@@ -962,9 +974,9 @@ impl TypeInfo {
             .map_err(|e| e.to_type_error())?;
 
         let body: Vec<ResolvedFact> =
-            assignment.annotate_facts(&mapped_query, self, Context::RuleQuery);
+            assignment.annotate_facts(&mapped_query, self, query_ctx);
         let actions: ResolvedActions =
-            assignment.annotate_actions(&mapped_action, self, Context::RuleAction)?;
+            assignment.annotate_actions(&mapped_action, self, action_ctx)?;
 
         self.check_lookup_actions(&actions)?;
 
@@ -974,6 +986,7 @@ impl TypeInfo {
             head: actions,
             name: name.clone(),
             ruleset: ruleset.clone(),
+            naive: *naive,
         })
     }
 
