@@ -956,15 +956,6 @@ pub(crate) struct FunDeps {
 }
 
 impl FunDeps {
-    /// Add a functional dependency: antecedent -> consequent.
-    pub(crate) fn iter_deps(
-        &self,
-    ) -> impl Iterator<Item = (&[Variable], &[Variable])> {
-        self.dependencies
-            .iter()
-            .map(|(ant, cq)| (ant.as_slice(), cq.as_slice()))
-    }
-
     pub fn add_dependency(&mut self, antecedent: Vec<Variable>, consequent: Vec<Variable>) {
         // Don't add trivial dependencies.
         if !antecedent.is_empty() {
@@ -1014,8 +1005,7 @@ impl FunDeps {
         &self,
         vars: impl Iterator<Item = Variable>,
     ) -> DenseIdMap<Variable, u32> {
-        let mut depths: DenseIdMap<Variable, u32> =
-            DenseIdMap::from_iter(vars.map(|v| (v, 0u32)));
+        let mut depths: DenseIdMap<Variable, u32> = DenseIdMap::from_iter(vars.map(|v| (v, 0u32)));
         // Cap at n_vars to handle cyclic FDs without looping forever.
         let cap = depths.n_ids() as u32;
         let mut changed = true;
@@ -1029,12 +1019,11 @@ impl FunDeps {
                 if let Some(d) = max_ant {
                     let new_depth = (d + 1).min(cap);
                     for &cq in consequents {
-                        if let Some(cq_depth) = depths.get_mut(cq) {
-                            if *cq_depth < new_depth {
+                        if let Some(cq_depth) = depths.get_mut(cq)
+                            && *cq_depth < new_depth {
                                 *cq_depth = new_depth;
                                 changed = true;
                             }
-                        }
                     }
                 }
             }
