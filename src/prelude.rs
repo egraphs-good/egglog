@@ -33,14 +33,7 @@ pub use egglog::{CommandMacro, CommandMacroRegistry};
 pub use egglog::{Core, FullState, PureState, ReadState, Write, WriteState};
 pub use egglog::{EGraph, span};
 pub use egglog::{action, actions, datatype, expr, fact, facts, sort, vars};
-pub use egglog::{rust_rule_extract, rust_rule_field_ty};
-// NOTE on `rust_rule!`: the macro shares its name with the existing
-// `rust_rule` function below, so we cannot `pub use egglog::rust_rule;`
-// from this prelude — `pub use` of a macro creates a value-namespace
-// import that collides with the function definition. The macro is
-// `#[macro_export]`-ed at the crate root, so users who want it should
-// add `use egglog::rust_rule;` alongside `use egglog::prelude::*`. See
-// the [`crate::rust_rule!`] macro docs for details.
+pub use egglog::{rust_rule, rust_rule_extract, rust_rule_field_ty};
 
 /// Trait for types that can be converted to/from Literal for use in validated primitives.
 /// This enables automatic validator generation for literal primitives.
@@ -431,7 +424,7 @@ where
 /// add_ruleset(&mut egraph, ruleset)?;
 ///
 /// // add the rule from `build_test_database` to the egraph
-/// rust_rule(
+/// add_rust_rule(
 ///     &mut egraph,
 ///     "fib_rule",
 ///     ruleset,
@@ -472,7 +465,7 @@ where
 ///
 /// # Ok::<(), egglog::Error>(())
 /// ```
-pub fn rust_rule(
+pub fn add_rust_rule(
     egraph: &mut EGraph,
     rule_name: &str,
     ruleset: &str,
@@ -657,7 +650,7 @@ macro_rules! rust_rule {
             $(pub $v: $crate::rust_rule_field_ty!($t),)*
         }
 
-        $crate::prelude::rust_rule(
+        $crate::prelude::add_rust_rule(
             $egraph,
             $rule_name,
             $ruleset,
@@ -755,7 +748,7 @@ pub fn query(
     let ruleset = egraph.parser.symbol_gen.fresh("query_ruleset");
     add_ruleset(egraph, &ruleset)?;
 
-    rust_rule(egraph, "query", &ruleset, vars, facts, move |_, values| {
+    add_rust_rule(egraph, "query", &ruleset, vars, facts, move |_, values| {
         let arc = results_weak.upgrade().unwrap();
         let mut results = arc.lock().unwrap();
         results.rows += 1;
@@ -1174,7 +1167,7 @@ mod tests {
         add_ruleset(&mut egraph, ruleset)?;
 
         // add the rule from `build_test_database` to the egraph
-        rust_rule(
+        add_rust_rule(
             &mut egraph,
             "demo_rule",
             ruleset,
