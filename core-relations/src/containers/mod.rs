@@ -152,7 +152,7 @@ impl ContainerValues {
     pub fn register_val<C: ContainerValue>(
         &self,
         container: C,
-        exec_state: &mut ExecutionState,
+        exec_state: &ExecutionState,
     ) -> Value {
         let env = self
             .get::<C>()
@@ -315,7 +315,7 @@ impl<C: ContainerValue> ContainerEnv<C> {
         }
     }
 
-    fn get_or_insert(&self, container: &C, exec_state: &mut ExecutionState) -> Value {
+    fn get_or_insert(&self, container: &C, exec_state: &ExecutionState) -> Value {
         if let Some(value) = self.to_id.get(container) {
             return *value;
         }
