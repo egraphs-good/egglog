@@ -33,6 +33,14 @@ pub use egglog::{CommandMacro, CommandMacroRegistry};
 pub use egglog::{Core, FullState, PureState, ReadState, Write, WriteState};
 pub use egglog::{EGraph, span};
 pub use egglog::{action, actions, datatype, expr, fact, facts, sort, vars};
+pub use egglog::{rust_rule_extract, rust_rule_field_ty};
+// NOTE on `rust_rule!`: the macro shares its name with the existing
+// `rust_rule` function below, so we cannot `pub use egglog::rust_rule;`
+// from this prelude — `pub use` of a macro creates a value-namespace
+// import that collides with the function definition. The macro is
+// `#[macro_export]`-ed at the crate root, so users who want it should
+// add `use egglog::rust_rule;` alongside `use egglog::prelude::*`. See
+// the [`crate::rust_rule!`] macro docs for details.
 
 /// Trait for types that can be converted to/from Literal for use in validated primitives.
 /// This enables automatic validator generation for literal primitives.
@@ -501,6 +509,173 @@ pub fn rust_rule(
     };
 
     egraph.run_program(vec![Command::Rule { rule }])
+}
+
+/// Helper macro: maps a `vars!`-style type token to the Rust type the
+/// generated bindings struct should use as the field type. For built-in
+/// base sorts (`i64`, `String`, `bool`, `f64`, `Unit`, `BigInt`, `BigRat`)
+/// this picks an ergonomic Rust type. For any other type token, the type
+/// is used as-is.
+#[doc(hidden)]
+#[macro_export]
+macro_rules! rust_rule_field_ty {
+    (i64) => {
+        i64
+    };
+    (bool) => {
+        bool
+    };
+    (String) => {
+        String
+    };
+    (f64) => {
+        f64
+    };
+    (Unit) => {
+        ()
+    };
+    (BigInt) => {
+        $crate::sort::Z
+    };
+    (BigRat) => {
+        $crate::sort::Q
+    };
+    ($t:ty) => {
+        $t
+    };
+}
+
+/// Helper macro: extracts a `Value` into the Rust type chosen by
+/// [`rust_rule_field_ty!`]. The selection mirrors the per-sort base type
+/// used internally: e.g. `String` is stored as `Boxed<String>` so we
+/// extract the `Boxed` and unwrap the inner `String`.
+#[doc(hidden)]
+#[macro_export]
+macro_rules! rust_rule_extract {
+    (i64, $ctx:expr, $v:expr) => {
+        $ctx.value_to_base::<i64>(*$v)
+    };
+    (bool, $ctx:expr, $v:expr) => {
+        $ctx.value_to_base::<bool>(*$v)
+    };
+    (String, $ctx:expr, $v:expr) => {
+        $ctx.value_to_base::<$crate::sort::S>(*$v).0
+    };
+    (f64, $ctx:expr, $v:expr) => {
+        $ctx.value_to_base::<$crate::sort::F>(*$v).0
+    };
+    (Unit, $ctx:expr, $v:expr) => {
+        $ctx.value_to_base::<()>(*$v)
+    };
+    (BigInt, $ctx:expr, $v:expr) => {
+        $ctx.value_to_base::<$crate::sort::Z>(*$v)
+    };
+    (BigRat, $ctx:expr, $v:expr) => {
+        $ctx.value_to_base::<$crate::sort::Q>(*$v)
+    };
+    ($t:ty, $ctx:expr, $v:expr) => {
+        $ctx.value_to_base::<$t>(*$v)
+    };
+}
+
+/// Add a rule to the e-graph whose right-hand side is a Rust callback,
+/// like [`rust_rule`], but the closure receives a generated bindings
+/// struct with **typed, named fields** instead of a positional `&[Value]`
+/// slice.
+///
+/// **Import note:** the macro shares its name with the [`rust_rule`]
+/// function in the prelude. Because `pub use` of a macro creates a
+/// value-namespace alias, the macro is *not* re-exported through the
+/// prelude. Add `use egglog::rust_rule;` explicitly to bring the macro
+/// into scope alongside the rest of the prelude.
+///
+/// ```
+/// use egglog::prelude::*;
+/// use egglog::rust_rule;
+///
+/// let mut egraph = EGraph::default();
+/// egraph.parse_and_run_program(
+///     None,
+///     "
+/// (function fib (i64) i64 :no-merge)
+/// (set (fib 0) 0)
+/// (set (fib 1) 1)
+///     ",
+/// )?;
+///
+/// let ruleset = "fib_ruleset";
+/// add_ruleset(&mut egraph, ruleset)?;
+///
+/// rust_rule!(&mut egraph, "fib_rule", ruleset,
+///     vars![x: i64, f0: i64, f1: i64],
+///     facts![
+///         (= f0 (fib x))
+///         (= f1 (fib (+ x 1)))
+///     ],
+///     |ctx, b| {
+///         let y = ctx.base_to_value::<i64>(b.x + 2);
+///         let f2 = ctx.base_to_value::<i64>(b.f0 + b.f1);
+///         ctx.insert("fib", [y, f2].into_iter());
+///         Some(())
+///     }
+/// )?;
+///
+/// for _ in 0..10 {
+///     run_ruleset(&mut egraph, ruleset)?;
+/// }
+///
+/// # Ok::<(), egglog::Error>(())
+/// ```
+///
+/// The macro:
+/// 1. Defines a local `__Bindings` struct, one typed field per declared
+///    variable.
+/// 2. Builds the runtime `&[(name, ArcSort)]` slice (same shape as
+///    [`vars!`]).
+/// 3. Wraps the user's closure so it gets a `&__Bindings` with all values
+///    pre-extracted via `value_to_base` (no per-arg `value_to_base::<T>`
+///    boilerplate needed).
+///
+/// **Supported types** (via the helper [`rust_rule_field_ty!`] /
+/// [`rust_rule_extract!`] macros): `i64`, `bool`, `String`, `f64`,
+/// `Unit`, `BigInt`, `BigRat`. Any other type is passed through directly
+/// to `value_to_base::<T>`, so user-defined `BaseValue` types work as
+/// long as they match the sort's actual base type. For non-base sorts
+/// (eclasses / container values), fall back to the lower-level
+/// [`rust_rule`] function.
+#[macro_export]
+macro_rules! rust_rule {
+    ($egraph:expr, $rule_name:expr, $ruleset:expr,
+     vars![$($v:ident : $t:tt),* $(,)?],
+     $facts:expr,
+     |$ctx:ident, $b:ident| $body:expr $(,)?
+    ) => {{
+        // Generated bindings struct with one typed field per var. Local to
+        // the macro expansion so users never see / collide with the name.
+        #[allow(non_camel_case_types, dead_code)]
+        struct __RustRuleBindings {
+            $(pub $v: $crate::rust_rule_field_ty!($t),)*
+        }
+
+        $crate::prelude::rust_rule(
+            $egraph,
+            $rule_name,
+            $ruleset,
+            $crate::vars![$($v: $t),*],
+            $facts,
+            move |__ctx, __values| {
+                // Destructure the positional `&[Value]` slice into named
+                // bindings. The slice length is guaranteed by the runtime
+                // typechecker to match the `vars!` arity.
+                let [$($v),*] = __values else { unreachable!() };
+                let $b = __RustRuleBindings {
+                    $($v: $crate::rust_rule_extract!($t, __ctx, $v),)*
+                };
+                let mut $ctx = __ctx;
+                $body
+            },
+        )
+    }};
 }
 
 /// The result of a query.
