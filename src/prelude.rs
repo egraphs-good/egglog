@@ -617,36 +617,84 @@ pub fn add_sort(egraph: &mut EGraph, name: &str) -> Result<Vec<CommandOutput>, E
     }])
 }
 
-/// Builder returned by [`EGraph::declare`] used to create a new function,
-/// constructor, or relation table.
+/// A builder for declaring tables (`function`s, `constructor`s, and `relation`s)
+/// without manually constructing a [`Schema`].
+///
+/// Created via [`EGraph::declare`]. Chain `.input(sort_name)` for each input
+/// column, then `.output(sort_name)` for the output column (skip for relations),
+/// and finish with `.function(...)`, `.constructor(...)`, or `.relation()`.
 ///
 /// ```
-/// use egglog::ast::Schema;
 /// use egglog::prelude::*;
 ///
 /// let mut egraph = EGraph::default();
-/// // declare a function table
-/// egraph.declare("f").function(
-///     Schema { input: vec!["i64".to_owned()], output: "i64".to_owned() },
-///     None,
-/// )?;
-///
-/// // declare a relation table
-/// egraph.declare("R").relation(vec!["i64".to_owned(), "i64".to_owned()])?;
+/// egraph.declare("f").input("i64").output("i64").function(None)?;
+/// egraph.declare("R").input("i64").input("i64").relation()?;
 /// # Ok::<(), egglog::Error>(())
 /// ```
+///
+/// # Missing output
+/// Calling `.function(...)` or `.constructor(...)` without first calling
+/// `.output(...)` panics with a clear message. Output is required to construct
+/// a `Schema`, and panicking gives a tight, immediately-actionable signal to
+/// the caller (no new `Error` variant is needed). `.relation()` does not
+/// require an output and ignores any that was set.
 pub struct DeclareTable<'a> {
     eg: &'a mut EGraph,
     name: String,
+    inputs: Vec<String>,
+    output: Option<String>,
 }
 
 impl<'a> DeclareTable<'a> {
-    /// Declare this table as a function.
+    /// Append an input column with the given sort name.
+    pub fn input(mut self, sort_name: &str) -> Self {
+        self.inputs.push(sort_name.to_owned());
+        self
+    }
+
+    /// Set the output column's sort name. Calling this multiple times keeps
+    /// the most-recent value.
+    pub fn output(mut self, sort_name: &str) -> Self {
+        self.output = Some(sort_name.to_owned());
+        self
+    }
+
+    /// Type-level shortcut for [`DeclareTable::input`]: maps a Rust primitive
+    /// type to the corresponding egglog sort name (e.g. `i64` -> `"i64"`,
+    /// `bool` -> `"bool"`). Only supported for built-in primitives via the
+    /// [`BaseSortName`] trait. For user-defined sorts use [`DeclareTable::input`].
+    pub fn input_base<T: BaseSortName>(self) -> Self {
+        self.input(T::SORT_NAME)
+    }
+
+    /// Type-level shortcut for [`DeclareTable::output`]. See
+    /// [`DeclareTable::input_base`].
+    pub fn output_base<T: BaseSortName>(self) -> Self {
+        self.output(T::SORT_NAME)
+    }
+
+    fn schema_or_panic(&self) -> Schema {
+        let output = self.output.clone().unwrap_or_else(|| {
+            panic!(
+                "DeclareTable: no output sort set for `{}`; call .output(\"<sort>\") \
+                 (or use .relation() if no output column is intended)",
+                self.name
+            )
+        });
+        Schema {
+            input: self.inputs.clone(),
+            output,
+        }
+    }
+
+    /// Finish declaring this table as a `function` with the given (optional)
+    /// merge expression. Panics if `.output(...)` was not called.
     pub fn function(
         self,
-        schema: Schema,
         merge: Option<GenericExpr<String, String>>,
     ) -> Result<Vec<CommandOutput>, Error> {
+        let schema = self.schema_or_panic();
         self.eg.run_program(vec![Command::Function {
             span: span!(),
             name: self.name,
@@ -657,13 +705,14 @@ impl<'a> DeclareTable<'a> {
         }])
     }
 
-    /// Declare this table as a constructor.
+    /// Finish declaring this table as a `constructor`. Panics if
+    /// `.output(...)` was not called.
     pub fn constructor(
         self,
-        schema: Schema,
         cost: Option<DefaultCost>,
         unextractable: bool,
     ) -> Result<Vec<CommandOutput>, Error> {
+        let schema = self.schema_or_panic();
         self.eg.run_program(vec![Command::Constructor {
             span: span!(),
             name: self.name,
@@ -676,52 +725,72 @@ impl<'a> DeclareTable<'a> {
         }])
     }
 
-    /// Declare this table as a relation.
-    pub fn relation(self, inputs: Vec<String>) -> Result<Vec<CommandOutput>, Error> {
+    /// Finish declaring this table as a `relation`. Any output sort previously
+    /// set via [`DeclareTable::output`] is ignored.
+    pub fn relation(self) -> Result<Vec<CommandOutput>, Error> {
         self.eg.run_program(vec![Command::Relation {
             span: span!(),
             name: self.name,
-            inputs,
+            inputs: self.inputs,
         }])
     }
 }
 
+/// Maps a Rust primitive type to its egglog sort name. Used by
+/// [`DeclareTable::input_base`] / [`DeclareTable::output_base`] for type-level
+/// convenience when declaring tables. Implemented for the built-in primitive
+/// types only; user-defined sorts should use the string-based methods.
+pub trait BaseSortName {
+    const SORT_NAME: &'static str;
+}
+
+impl BaseSortName for i64 {
+    const SORT_NAME: &'static str = "i64";
+}
+impl BaseSortName for bool {
+    const SORT_NAME: &'static str = "bool";
+}
+impl BaseSortName for () {
+    const SORT_NAME: &'static str = "Unit";
+}
+impl BaseSortName for egglog::sort::F {
+    const SORT_NAME: &'static str = "f64";
+}
+impl BaseSortName for egglog::sort::S {
+    const SORT_NAME: &'static str = "String";
+}
+
 impl EGraph {
-    /// Begin declaring a new table. Use the returned [`DeclareTable`] builder
-    /// to specify whether the table is a function, constructor, or relation.
-    ///
-    /// ```
-    /// use egglog::ast::Schema;
-    /// use egglog::prelude::*;
-    ///
-    /// let mut egraph = EGraph::default();
-    /// egraph.declare("f").function(
-    ///     Schema { input: vec!["i64".to_owned()], output: "i64".to_owned() },
-    ///     None,
-    /// )?;
-    /// # Ok::<(), egglog::Error>(())
-    /// ```
+    /// Begin declaring a new table named `name`. See [`DeclareTable`] for
+    /// usage examples.
     pub fn declare(&mut self, name: &str) -> DeclareTable<'_> {
         DeclareTable {
             eg: self,
             name: name.to_owned(),
+            inputs: Vec::new(),
+            output: None,
         }
     }
 }
 
 /// Declare a new function table.
-#[deprecated(note = "Use `eg.declare(name).function(...)` instead")]
+#[deprecated(note = "Use `eg.declare(name).input(...).output(...).function(...)` instead")]
 pub fn add_function(
     egraph: &mut EGraph,
     name: &str,
     schema: Schema,
     merge: Option<GenericExpr<String, String>>,
 ) -> Result<Vec<CommandOutput>, Error> {
-    egraph.declare(name).function(schema, merge)
+    let mut b = egraph.declare(name);
+    for inp in &schema.input {
+        b = b.input(inp);
+    }
+    b = b.output(&schema.output);
+    b.function(merge)
 }
 
 /// Declare a new constructor table.
-#[deprecated(note = "Use `eg.declare(name).constructor(...)` instead")]
+#[deprecated(note = "Use `eg.declare(name).input(...).output(...).constructor(...)` instead")]
 pub fn add_constructor(
     egraph: &mut EGraph,
     name: &str,
@@ -729,19 +798,26 @@ pub fn add_constructor(
     cost: Option<DefaultCost>,
     unextractable: bool,
 ) -> Result<Vec<CommandOutput>, Error> {
-    egraph
-        .declare(name)
-        .constructor(schema, cost, unextractable)
+    let mut b = egraph.declare(name);
+    for inp in &schema.input {
+        b = b.input(inp);
+    }
+    b = b.output(&schema.output);
+    b.constructor(cost, unextractable)
 }
 
 /// Declare a new relation table.
-#[deprecated(note = "Use `eg.declare(name).relation(...)` instead")]
+#[deprecated(note = "Use `eg.declare(name).input(...).input(...).relation()` instead")]
 pub fn add_relation(
     egraph: &mut EGraph,
     name: &str,
     inputs: Vec<String>,
 ) -> Result<Vec<CommandOutput>, Error> {
-    egraph.declare(name).relation(inputs)
+    let mut b = egraph.declare(name);
+    for inp in &inputs {
+        b = b.input(inp);
+    }
+    b.relation()
 }
 
 /// Adds sorts and constructor tables to the database.
@@ -749,14 +825,12 @@ pub fn add_relation(
 macro_rules! datatype {
     ($egraph:expr, (datatype $sort:ident $(($name:ident $($args:ident)* $(:cost $cost:expr)?))*)) => {
         add_sort($egraph, stringify!($sort))?;
-        $($egraph.declare(stringify!($name)).constructor(
-            Schema {
-                input: vec![$(stringify!($args).to_owned()),*],
-                output: stringify!($sort).to_owned(),
-            },
-            [$($cost)*].first().copied(),
-            false,
-        )?;)*
+        $({
+            let mut __b = $egraph.declare(stringify!($name));
+            $(__b = __b.input(stringify!($args));)*
+            __b.output(stringify!($sort))
+                .constructor([$($cost)*].first().copied(), false)?;
+        })*
     };
 }
 
