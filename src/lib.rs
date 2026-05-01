@@ -1044,8 +1044,8 @@ impl EGraph {
 
         // The `:naive` rule option opts a single rule out of seminaive
         // evaluation. This widens primitive-context selection from
-        // RuleQuery/RuleAction to GlobalQuery/GlobalAction, so primitives
-        // that read or write the database can run inside this rule.
+        // Pure/Write to Read/Full, so primitives that read or write the
+        // database can run inside this rule.
         let seminaive = self.seminaive && !rule.naive;
 
         let rule_id = {
@@ -1993,22 +1993,29 @@ impl<'a> BackendRule<'a> {
     }
 
     /// The [`crate::Context`] that applies when compiling
-    /// primitives on the query side (LHS) of this rule.
+    /// primitives on the query side (LHS) of this rule. Under
+    /// seminaive evaluation, queries are pure (no DB reads or
+    /// writes); a `:naive` rule (or `eg.seminaive = false`) widens
+    /// this to [`Context::Read`] so reads from primitives are
+    /// admissible.
     fn query_context(&self) -> crate::Context {
         if self.seminaive {
-            crate::Context::RuleQuery
+            crate::Context::Pure
         } else {
-            crate::Context::GlobalQuery
+            crate::Context::Read
         }
     }
 
     /// The [`crate::Context`] that applies when compiling
-    /// primitives on the action side (RHS) of this rule.
+    /// primitives on the action side (RHS) of this rule. Under
+    /// seminaive, actions may write but not read; a `:naive` rule
+    /// widens to [`Context::Full`] so writes and reads are both
+    /// admissible.
     fn action_context(&self) -> crate::Context {
         if self.seminaive {
-            crate::Context::RuleAction
+            crate::Context::Write
         } else {
-            crate::Context::GlobalAction
+            crate::Context::Full
         }
     }
 

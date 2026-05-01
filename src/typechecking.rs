@@ -327,13 +327,11 @@ impl EGraph {
     /// and therefore needs to behave differently in query versus
     /// action contexts.
     ///
-    /// Internally this registers the primitive twice: one
-    /// [`ExternalFunctionId`] tagged with [`Context::RuleQuery`]
-    /// (claims `{RuleQuery, GlobalQuery}` at the typechecker), one
-    /// tagged with [`Context::RuleAction`] (claims `{RuleAction,
-    /// GlobalAction}`). Both ids share the same body — the wrapper
-    /// closure stamps the appropriate context on the
-    /// `ExecutionState` before invoking, so
+    /// Internally this registers the primitive four times — once per
+    /// [`Context`] variant ([`Context::Pure`] / [`Context::Write`] /
+    /// [`Context::Read`] / [`Context::Full`]). Each `ExternalFunctionId`
+    /// shares the same body, but the wrapper closure stamps its
+    /// specific context onto `ExecutionState` before invoking, so
     /// `FunctionContainer::apply` reads back the right value at
     /// runtime and chooses pure-side vs action-side dispatch
     /// accordingly. This keeps the user-facing definition single-bodied
@@ -368,7 +366,7 @@ impl EGraph {
         // Each closure stamps its exact context onto `ExecutionState`
         // before invoking the shared body, so
         // `FunctionContainer::apply` reads back the precise context
-        // and chooses the right dispatch (e.g. `GlobalQuery` allows
+        // and chooses the right dispatch (e.g. `Read` allows
         // custom-function reads but not constructor minting).
         for &ctx in &Context::ALL {
             let id = self
@@ -942,9 +940,9 @@ impl TypeInfo {
         // primitives that read or write the database in either the
         // query or the action — the same surface as global commands.
         let (query_ctx, action_ctx) = if *naive {
-            (Context::GlobalQuery, Context::GlobalAction)
+            (Context::Read, Context::Full)
         } else {
-            (Context::RuleQuery, Context::RuleAction)
+            (Context::Pure, Context::Write)
         };
 
         let (query, mapped_query) = Facts(body.clone()).to_query(self, symbol_gen);
@@ -1033,11 +1031,13 @@ impl TypeInfo {
     ) -> Result<Vec<ResolvedFact>, TypeError> {
         let (query, mapped_facts) = Facts(facts.to_vec()).to_query(self, symbol_gen);
         let mut problem = Problem::default();
-        problem.add_query(&query, self, Context::GlobalQuery)?;
+        // Top-level query-shaped commands (e.g. `check`) are read-only:
+        // primitives may inspect the database but not write to it.
+        problem.add_query(&query, self, Context::Read)?;
         let assignment = problem
             .solve(|sort: &ArcSort| sort.name())
             .map_err(|e| e.to_type_error())?;
-        let annotated_facts = assignment.annotate_facts(&mapped_facts, self, Context::GlobalQuery);
+        let annotated_facts = assignment.annotate_facts(&mapped_facts, self, Context::Read);
         Ok(annotated_facts)
     }
 
@@ -1055,8 +1055,10 @@ impl TypeInfo {
         let (actions, mapped_action) = actions.to_core_actions(&mut ctx)?;
         let mut problem = Problem::default();
 
-        // add actions to problem
-        problem.add_actions(&actions, self, symbol_gen, Context::GlobalAction)?;
+        // Top-level action-shaped commands (e.g. `eval`, `let`) get the
+        // most permissive context: primitives may both read and write
+        // the database.
+        problem.add_actions(&actions, self, symbol_gen, Context::Full)?;
 
         // add bindings from the context
         for (var, (span, sort)) in binding {
@@ -1068,7 +1070,7 @@ impl TypeInfo {
             .map_err(|e| e.to_type_error())?;
 
         let annotated_actions =
-            assignment.annotate_actions(&mapped_action, self, Context::GlobalAction)?;
+            assignment.annotate_actions(&mapped_action, self, Context::Full)?;
         Ok(annotated_actions)
     }
 

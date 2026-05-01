@@ -431,14 +431,14 @@ impl BaseValue for ResolvedFunction {}
 
 #[derive(Clone, Debug, PartialEq, Eq, Hash)]
 pub enum ResolvedFunctionId {
-    /// Wraps a constructor-table lookup. In an action context
-    /// `FunctionContainer::apply` mints a fresh eclass via
-    /// `lookup_or_insert`; in `GlobalQuery` it does a read-only
-    /// `lookup`; in `RuleQuery` it returns `None` (no DB ops).
+    /// Wraps a constructor-table lookup. In a write-capable context
+    /// (`Write`/`Full`) `FunctionContainer::apply` mints a fresh
+    /// eclass via `lookup_or_insert`; in `Read` it does a read-only
+    /// `lookup`; in `Pure` it returns `None` (no DB ops).
     ConstructorLookup(egglog_bridge::TableAction),
     /// Wraps a custom-function (`:no-merge`/`Fail`) lookup. Pure read
     /// returning `None` on miss. `FunctionContainer::apply` allows
-    /// this in every context except `RuleQuery` (where it would be an
+    /// this in every context except `Pure` (where it would be an
     /// untracked seminaive read).
     CustomLookup(egglog_bridge::TableAction),
     /// Wraps a primitive. `valid_contexts` carries the primitive's
@@ -459,7 +459,7 @@ pub enum ResolvedFunctionId {
 // context onto `ExecutionState` before invoking the shared body.
 // `FunctionContainer::apply` reads back the runtime context and
 // chooses pure-side vs action-side dispatch (no mint in queries; mint
-// constructors in action contexts; `RuleQuery` refuses all DB ops).
+// constructors in action contexts; `Pure` refuses all DB ops).
 // Distinct `FunctionSort`s produce different signature keys, so
 // `unstable-app` for `MathFn` stays a separate
 // overload from `unstable-app` for `i64Fun`.
@@ -505,13 +505,13 @@ impl FunctionContainer {
     /// which the wrapper closure registered for each higher-order
     /// primitive stamps before invoking the body:
     ///
-    /// - In `RuleQuery`, constructor and custom-function lookups
+    /// - In `Pure`, constructor and custom-function lookups
     ///   return `None`. Constructor minting would be unsound, and
     ///   custom-function reads would be untracked by seminaive.
-    /// - In `GlobalQuery`, constructor lookups go through read-only
+    /// - In `Read`, constructor lookups go through read-only
     ///   `lookup` (existing eclasses are visible, no minting), and
     ///   custom-function lookups also read via `lookup`.
-    /// - In an action context (`RuleAction` / `GlobalAction`),
+    /// - In a write-capable context (`Write` / `Full`),
     ///   constructor lookups mint via `lookup_or_insert`, and
     ///   custom-function lookups read via `lookup`.
     /// - In all four contexts, wrapped primitives dispatch only when
@@ -524,23 +524,19 @@ impl FunctionContainer {
         let args: Vec<_> = self.1.iter().map(|(_, x)| x).chain(args).copied().collect();
         let ctx = state.current_context();
         // Constructor minting requires write capability (action contexts).
-        let can_mint = matches!(
-            ctx,
-            crate::Context::RuleAction | crate::Context::GlobalAction
-        );
-        // Read access: forbidden in `RuleQuery` (untracked by
-        // seminaive); allowed everywhere else. `RuleAction` reads are
-        // *technically* unsound under strict seminaive, but the
-        // existing `apply_mut` semantics permit them — preserved here
-        // for back-compat.
-        let can_read = !matches!(ctx, crate::Context::RuleQuery);
+        let can_mint = matches!(ctx, crate::Context::Write | crate::Context::Full);
+        // Read access: forbidden in `Pure` (untracked by seminaive);
+        // allowed everywhere else. `Write` reads are *technically*
+        // unsound under strict seminaive, but the existing `apply_mut`
+        // semantics permit them — preserved here for back-compat.
+        let can_read = !matches!(ctx, crate::Context::Pure);
         match &self.0 {
             ResolvedFunctionId::ConstructorLookup(action) => {
                 if can_mint {
                     action.lookup_or_insert(state.raw_exec_state(), &args)
                 } else if can_read {
-                    // Read-only path (e.g. `GlobalQuery`): existing
-                    // eclasses are visible, but we don't mint.
+                    // Read-only path (e.g. `Read`): existing eclasses
+                    // are visible, but we don't mint.
                     action.lookup(state.raw_exec_state(), &args)
                 } else {
                     None

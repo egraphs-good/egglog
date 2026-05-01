@@ -784,9 +784,8 @@ impl Problem<AtomTerm, ArcSort> {
         } = rule;
         // Rule body atoms run as the LHS query; head atoms run as the
         // RHS action. Contexts come from the caller: a normal rule
-        // uses `RuleQuery`/`RuleAction`; a `:naive` rule uses
-        // `GlobalQuery`/`GlobalAction` so primitives that read/write
-        // the database are admissible.
+        // uses `Pure`/`Write`; a `:naive` rule uses `Read`/`Full` so
+        // primitives that read/write the database are admissible.
         self.add_query(body, typeinfo, query_ctx)?;
         self.add_actions(head, typeinfo, symbol_gen, action_ctx)?;
         Ok(())

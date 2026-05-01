@@ -156,7 +156,7 @@ fn write_primitive_rejected_in_queries() {
     let mut egraph = EGraph::default();
     egraph.add_write_primitive(WriteEcho("w-echo"), None);
 
-    // RHS of a rule (RuleAction) — fine.
+    // RHS of a rule (Context::Write) — fine.
     egraph
         .parse_and_run_program(
             None,
@@ -165,7 +165,7 @@ fn write_primitive_rejected_in_queries() {
         )
         .unwrap();
 
-    // LHS of a rule (RuleQuery) — must be rejected.
+    // LHS of a rule (Context::Pure) — must be rejected.
     let mut egraph2 = EGraph::default();
     egraph2.add_write_primitive(WriteEcho("w-echo"), None);
     let result = egraph2.parse_and_run_program(
@@ -175,18 +175,18 @@ fn write_primitive_rejected_in_queries() {
     );
     assert!(result.is_err(), "WritePrim must be rejected on a rule LHS");
 
-    // Top-level `check` (GlobalQuery) — must be rejected.
+    // Top-level `check` (Context::Read) — must be rejected.
     let mut egraph3 = EGraph::default();
     egraph3.add_write_primitive(WriteEcho("w-echo"), None);
     let result = egraph3.parse_and_run_program(None, "(check (= (w-echo 1) 1))");
     assert!(
         result.is_err(),
-        "WritePrim must be rejected in `check` (GlobalQuery)"
+        "WritePrim must be rejected in `check` (Context::Read)"
     );
 }
 
 /// A `ReadPrim` is rejected in rule contexts (both query and action) —
-/// it's only valid in `GlobalQuery` and `GlobalAction`. Also exercises
+/// it's only valid in `Context::Read` and `Context::Full`. Also exercises
 /// the actual `Read::lookup` API: `lookup-f` reads rows from a custom
 /// `f` table.
 #[test]
@@ -201,7 +201,7 @@ fn read_primitive_rejected_in_rule_contexts() {
     );
 
     // Populate the `f` table at top level, then use `lookup-f` from a
-    // GlobalQuery (`check`) and a GlobalAction (`let`). Both should
+    // Context::Read (`check`) and a Context::Full (`let`). Both should
     // see the value populated by `set`.
     egraph
         .parse_and_run_program(
@@ -214,7 +214,7 @@ fn read_primitive_rejected_in_rule_contexts() {
         )
         .unwrap();
 
-    // Rule LHS — rejected (RuleQuery isn't in `ReadPrim`'s valid contexts).
+    // Rule LHS — rejected (Context::Pure isn't in `ReadPrim`'s valid contexts).
     let mut egraph2 = EGraph::default();
     egraph2.add_read_primitive(
         ReadLookup {
@@ -231,8 +231,8 @@ fn read_primitive_rejected_in_rule_contexts() {
     );
     assert!(result.is_err(), "ReadPrim must be rejected on a rule LHS");
 
-    // Rule RHS — also rejected (ReadPrim is GlobalQuery+GlobalAction
-    // only; RuleAction doesn't qualify).
+    // Rule RHS — also rejected (ReadPrim is Read+Full only;
+    // Context::Write doesn't qualify).
     let mut egraph3 = EGraph::default();
     egraph3.add_read_primitive(
         ReadLookup {
@@ -250,24 +250,24 @@ fn read_primitive_rejected_in_rule_contexts() {
     assert!(result.is_err(), "ReadPrim must be rejected on a rule RHS");
 }
 
-/// A `FullPrim` is valid only in `GlobalAction`.
+/// A `FullPrim` is valid only in `Context::Full`.
 #[test]
 fn full_primitive_accepted_only_in_global_action() {
     let mut egraph = EGraph::default();
     egraph.add_full_primitive(FullEcho("f-echo"), None);
 
-    // GlobalAction — fine.
+    // Context::Full — fine.
     egraph
         .parse_and_run_program(None, "(let $ff (f-echo 7))")
         .unwrap();
 
-    // GlobalQuery — rejected.
+    // Context::Read — rejected.
     let mut egraph2 = EGraph::default();
     egraph2.add_full_primitive(FullEcho("f-echo"), None);
     let result = egraph2.parse_and_run_program(None, "(check (= (f-echo 1) 1))");
     assert!(
         result.is_err(),
-        "FullPrim must be rejected in GlobalQuery (`check`)"
+        "FullPrim must be rejected in Context::Read (`check`)"
     );
 
     // Rule LHS — rejected.

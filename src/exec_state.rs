@@ -152,7 +152,7 @@ pub trait Core<'a, 'db: 'a>: Internal<'a, 'db> {
 
 /// Read-side methods — name-indexed table lookup. Implemented for
 /// [`ReadState`] and [`FullState`]; *not* for [`PureState`] or
-/// [`WriteState`] (a `RuleAction` body must not depend on live DB
+/// [`WriteState`] (a `Write` context body must not depend on live DB
 /// state). Returns `None` if the row is absent — never inserts.
 #[allow(private_bounds)]
 pub trait Read<'a, 'db: 'a>: Core<'a, 'db> + RegistrySealed<'a, 'db> {
@@ -239,9 +239,10 @@ pub struct PureState<'a, 'db> {
     pub(crate) inner: &'a mut ExecutionState<'db>,
 }
 
-/// Typed view for read-only primitives. Valid in `GlobalQuery` and
-/// `GlobalAction` contexts. Implements [`Core`] + [`Read`] —
-/// name-indexed table lookups (`state.lookup("name", &[args])`)
+/// Typed view for read-only primitives. Valid in [`Context::Read`]
+/// and [`Context::Full`] (top-level query-shaped commands and the
+/// body / actions of a `:naive` rule). Implements [`Core`] + [`Read`]
+/// — name-indexed table lookups (`state.lookup("name", &[args])`)
 /// return the row's value or `None`.
 pub struct ReadState<'a, 'db> {
     pub(crate) inner: &'a mut ExecutionState<'db>,
@@ -249,8 +250,8 @@ pub struct ReadState<'a, 'db> {
 }
 
 /// Typed view for primitives running on the RHS of a rule. Valid in
-/// `RuleAction` and `GlobalAction` contexts. Implements [`Core`] +
-/// [`Write`].
+/// [`Context::Write`] and [`Context::Full`] (the head of any rule and
+/// any top-level action). Implements [`Core`] + [`Write`].
 ///
 /// `WriteState` exposes writes (`insert`/`remove`/`subsume`/`union`/
 /// `panic`) but no DB reads — a rule action that depends on live
@@ -268,8 +269,9 @@ pub struct WriteState<'a, 'db> {
 }
 
 /// Typed view for top-level action sites with both read and write
-/// access. Valid in `GlobalAction` only. Implements [`Core`] +
-/// [`Read`] + [`Write`].
+/// access. Valid in [`Context::Full`] only (top-level actions and the
+/// head of a `:naive` rule). Implements [`Core`] + [`Read`] +
+/// [`Write`].
 ///
 /// ```compile_fail
 /// // Even `FullState` cannot reach the raw `ExecutionState` —
@@ -300,7 +302,7 @@ impl<'a, 'db: 'a> ReadState<'a, 'db> {
         }
     }
     pub const fn valid_contexts() -> &'static [Context] {
-        &[Context::GlobalQuery, Context::GlobalAction]
+        &[Context::Read, Context::Full]
     }
 }
 
@@ -312,7 +314,7 @@ impl<'a, 'db: 'a> WriteState<'a, 'db> {
         }
     }
     pub const fn valid_contexts() -> &'static [Context] {
-        &[Context::RuleAction, Context::GlobalAction]
+        &[Context::Write, Context::Full]
     }
 }
 
@@ -324,7 +326,7 @@ impl<'a, 'db: 'a> FullState<'a, 'db> {
         }
     }
     pub const fn valid_contexts() -> &'static [Context] {
-        &[Context::GlobalAction]
+        &[Context::Full]
     }
 }
 
