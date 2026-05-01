@@ -77,7 +77,35 @@ use core::AtomTerm;
 use core::CoreActionContext;
 use core::ResolvedAtomTerm;
 pub use core::ResolvedCall;
-pub use core_relations::{BaseValue, ContainerValue, ExecutionState, Value};
+pub(crate) use core_relations::ExecutionState;
+pub use core_relations::{BaseValue, ContainerValue, Value};
+
+/// Surface-level regression guards (only exists for its doctests).
+///
+/// `ExecutionState` is the raw, low-level mutable handle to the
+/// database. It used to be re-exported as `egglog::ExecutionState` but
+/// that surface was unused externally and leaked internal plumbing.
+/// Users who need raw DB access should go through the typed state
+/// wrappers (`PureState` / `WriteState` / `ReadState` / `FullState`),
+/// which carry an `&mut ExecutionState` internally and only expose
+/// the methods that are seminaive-safe in their context.
+///
+/// `egglog::ExecutionState` is gone:
+///
+/// ```compile_fail
+/// fn _no_raw_execstate(_s: &mut egglog::ExecutionState<'_>) {}
+/// ```
+///
+/// The typed alternatives are reachable:
+///
+/// ```
+/// fn _pure(_s: egglog::PureState<'_, '_>) {}
+/// fn _write(_s: egglog::WriteState<'_, '_>) {}
+/// fn _read(_s: egglog::ReadState<'_, '_>) {}
+/// fn _full(_s: egglog::FullState<'_, '_>) {}
+/// ```
+#[doc(hidden)]
+pub mod __surface_guards {}
 use core_relations::{ExternalFunctionId, make_external_func};
 use csv::Writer;
 pub use egglog_add_primitive::add_literal_prim;
