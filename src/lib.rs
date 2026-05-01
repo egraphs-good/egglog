@@ -68,14 +68,15 @@ pub use command_macro::{CommandMacro, CommandMacroRegistry};
 // This is used to allow the `add_primitive` macro to work in
 // both this crate and other crates by referring to `::egglog`.
 extern crate self as egglog;
-pub use ast::{ResolvedExpr, ResolvedFact, ResolvedVar};
+pub use ast::ResolvedVar;
+pub(crate) use ast::{ResolvedExpr, ResolvedFact};
 #[cfg(feature = "bin")]
 pub use cli::*;
 use constraint::{Constraint, Problem, SimpleTypeConstraint, TypeConstraint};
+use core::AtomTerm;
 use core::CoreActionContext;
 use core::ResolvedAtomTerm;
-pub use core::{Atom, AtomTerm};
-pub use core::{ResolvedCall, SpecializedPrimitive};
+pub use core::ResolvedCall;
 pub use core_relations::{BaseValue, ContainerValue, ExecutionState, Value};
 use core_relations::{ExternalFunctionId, make_external_func};
 use csv::Writer;

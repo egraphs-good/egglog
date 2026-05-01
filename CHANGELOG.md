@@ -5,6 +5,18 @@
 - Desugar `relation`s to `constructor`s to simplify the language and implementation. Relations no longer return unit `()` values.
 - Refactored API to use [`TermId`] more consistently instead of `Term` where possible, simplifying egglog code.
 - **Typed primitive surface for seminaive safety (#772).** Custom primitives now implement `PrimitiveCommon` (name + type constraint) plus one of four kind-specific traits — `PurePrim`, `WritePrim`, `ReadPrim`, `FullPrim` — corresponding to the state wrapper their body receives (`PureState` / `WriteState` / `ReadState` / `FullState`). Methods on the wrappers come from sealed capability traits (`Core`, `Write`); the Rust type system makes only the kind's allowed operations callable, and the egglog typechecker rejects calls from contexts the kind is not valid in (e.g. a `WritePrim` used inside a query). Register with the matching `add_pure_primitive` / `add_write_primitive` / `add_read_primitive` / `add_full_primitive`. `rust_rule` callbacks now take `&mut WriteState` directly, replacing `RustRuleContext`. Higher-order primitives (`unstable-app`, `unstable-multiset-map` / `flat-map` / `filter` / `reduce`, `unstable-vec-map`) dispatch via a runtime `Context` flag on `ExecutionState` — single-bodied registration works in both queries and actions.
+- Hide internal IR types from the public surface (issue #751). The following items are no longer re-exported from the `egglog` crate root:
+  - `Atom`, `AtomTerm`, `SpecializedPrimitive` (now `pub(crate)` re-exports; `SpecializedPrimitive` remains structurally `pub` only because it appears in `ResolvedCall::Primitive`, but its fields are private and it is no longer reachable from `egglog::*`).
+  - `ResolvedExpr`, `ResolvedFact` (now `pub(crate)` type aliases; only the internal IR uses them).
+  - `TypeInfo::expr_has_function_lookup` is now `pub(crate)` — it took a `ResolvedExpr` and only had internal callers.
+  - `ResolvedVar` and `ResolvedCall` remain public because the public `EGraph::resolve_program` returns `Vec<ResolvedCommand>` (`= GenericCommand<ResolvedCall, ResolvedVar>`), which is consumed by external callers (e.g. `sanitize_internal_names`).
+  - `egglog_bridge::FunctionId` is verified to NOT be re-exported from the `egglog` crate; the `Function` struct's `backend_id` field is private.
+- Added a builder API for declaring tables: `EGraph::declare(name).function(...)`, `.constructor(...)`, `.relation(...)`. The free functions `add_function`, `add_constructor`, and `add_relation` in `egglog::prelude` are now `#[deprecated]` thin wrappers over the builder.
+
+### Migration notes
+
+- If you imported `egglog::Atom`, `egglog::AtomTerm`, `egglog::SpecializedPrimitive`, `egglog::ResolvedExpr`, or `egglog::ResolvedFact`, those imports will fail. These types are internal IR; if you need them, please open an issue describing your use case. `ResolvedCall` and `ResolvedVar` (and `egglog::ast::ResolvedCommand`) remain available.
+- Replace `add_function(eg, name, schema, merge)` with `eg.declare(name).function(schema, merge)`. Same for `add_constructor` (`.constructor(...)`) and `add_relation` (`.relation(...)`). The deprecated free functions still work for one release.
 
 ## [2.0.0] - 2026-02-11
 

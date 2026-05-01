@@ -617,24 +617,111 @@ pub fn add_sort(egraph: &mut EGraph, name: &str) -> Result<Vec<CommandOutput>, E
     }])
 }
 
+/// Builder returned by [`EGraph::declare`] used to create a new function,
+/// constructor, or relation table.
+///
+/// ```
+/// use egglog::ast::Schema;
+/// use egglog::prelude::*;
+///
+/// let mut egraph = EGraph::default();
+/// // declare a function table
+/// egraph.declare("f").function(
+///     Schema { input: vec!["i64".to_owned()], output: "i64".to_owned() },
+///     None,
+/// )?;
+///
+/// // declare a relation table
+/// egraph.declare("R").relation(vec!["i64".to_owned(), "i64".to_owned()])?;
+/// # Ok::<(), egglog::Error>(())
+/// ```
+pub struct DeclareTable<'a> {
+    eg: &'a mut EGraph,
+    name: String,
+}
+
+impl<'a> DeclareTable<'a> {
+    /// Declare this table as a function.
+    pub fn function(
+        self,
+        schema: Schema,
+        merge: Option<GenericExpr<String, String>>,
+    ) -> Result<Vec<CommandOutput>, Error> {
+        self.eg.run_program(vec![Command::Function {
+            span: span!(),
+            name: self.name,
+            schema,
+            merge,
+            hidden: false,
+            let_binding: false,
+        }])
+    }
+
+    /// Declare this table as a constructor.
+    pub fn constructor(
+        self,
+        schema: Schema,
+        cost: Option<DefaultCost>,
+        unextractable: bool,
+    ) -> Result<Vec<CommandOutput>, Error> {
+        self.eg.run_program(vec![Command::Constructor {
+            span: span!(),
+            name: self.name,
+            schema,
+            cost,
+            unextractable,
+            hidden: false,
+            let_binding: false,
+            term_constructor: None,
+        }])
+    }
+
+    /// Declare this table as a relation.
+    pub fn relation(self, inputs: Vec<String>) -> Result<Vec<CommandOutput>, Error> {
+        self.eg.run_program(vec![Command::Relation {
+            span: span!(),
+            name: self.name,
+            inputs,
+        }])
+    }
+}
+
+impl EGraph {
+    /// Begin declaring a new table. Use the returned [`DeclareTable`] builder
+    /// to specify whether the table is a function, constructor, or relation.
+    ///
+    /// ```
+    /// use egglog::ast::Schema;
+    /// use egglog::prelude::*;
+    ///
+    /// let mut egraph = EGraph::default();
+    /// egraph.declare("f").function(
+    ///     Schema { input: vec!["i64".to_owned()], output: "i64".to_owned() },
+    ///     None,
+    /// )?;
+    /// # Ok::<(), egglog::Error>(())
+    /// ```
+    pub fn declare(&mut self, name: &str) -> DeclareTable<'_> {
+        DeclareTable {
+            eg: self,
+            name: name.to_owned(),
+        }
+    }
+}
+
 /// Declare a new function table.
+#[deprecated(note = "Use `eg.declare(name).function(...)` instead")]
 pub fn add_function(
     egraph: &mut EGraph,
     name: &str,
     schema: Schema,
     merge: Option<GenericExpr<String, String>>,
 ) -> Result<Vec<CommandOutput>, Error> {
-    egraph.run_program(vec![Command::Function {
-        span: span!(),
-        name: name.to_owned(),
-        schema,
-        merge,
-        hidden: false,
-        let_binding: false,
-    }])
+    egraph.declare(name).function(schema, merge)
 }
 
 /// Declare a new constructor table.
+#[deprecated(note = "Use `eg.declare(name).constructor(...)` instead")]
 pub fn add_constructor(
     egraph: &mut EGraph,
     name: &str,
@@ -642,29 +729,19 @@ pub fn add_constructor(
     cost: Option<DefaultCost>,
     unextractable: bool,
 ) -> Result<Vec<CommandOutput>, Error> {
-    egraph.run_program(vec![Command::Constructor {
-        span: span!(),
-        name: name.to_owned(),
-        schema,
-        cost,
-        unextractable,
-        hidden: false,
-        let_binding: false,
-        term_constructor: None,
-    }])
+    egraph
+        .declare(name)
+        .constructor(schema, cost, unextractable)
 }
 
 /// Declare a new relation table.
+#[deprecated(note = "Use `eg.declare(name).relation(...)` instead")]
 pub fn add_relation(
     egraph: &mut EGraph,
     name: &str,
     inputs: Vec<String>,
 ) -> Result<Vec<CommandOutput>, Error> {
-    egraph.run_program(vec![Command::Relation {
-        span: span!(),
-        name: name.to_owned(),
-        inputs,
-    }])
+    egraph.declare(name).relation(inputs)
 }
 
 /// Adds sorts and constructor tables to the database.
@@ -672,9 +749,7 @@ pub fn add_relation(
 macro_rules! datatype {
     ($egraph:expr, (datatype $sort:ident $(($name:ident $($args:ident)* $(:cost $cost:expr)?))*)) => {
         add_sort($egraph, stringify!($sort))?;
-        $(add_constructor(
-            $egraph,
-            stringify!($name),
+        $($egraph.declare(stringify!($name)).constructor(
             Schema {
                 input: vec![$(stringify!($args).to_owned()),*],
                 output: stringify!($sort).to_owned(),
