@@ -5,9 +5,16 @@
 //!
 //! Common entry points:
 //!
-//! - [`rule`] / [`rust_rule`] — add rules whose RHS is egglog code or a
-//!   Rust closure (the closure receives an
-//!   [`crate::WriteState`]).
+//! - [`rule`] — add rules whose RHS is egglog code.
+//! - [`rust_rule!`](crate::rust_rule) — macro form of `add_rust_rule`
+//!   that generates a typed bindings struct from `vars![...]` so the
+//!   closure body can use `b.x: i64` directly instead of indexing
+//!   `&[Value]` and calling `value_to_base::<T>` per arg. Recommended
+//!   for the common base-value case.
+//! - [`add_rust_rule`] — lower-level form that takes a closure
+//!   `Fn(&mut WriteState, &[Value]) -> Option<()>`. Use when the
+//!   `rust_rule!` macro doesn't fit (e.g. eclass-typed bindings or
+//!   dynamically-built rule shapes).
 //! - [`query`] — run a one-shot query and read out matches.
 //! - [`BaseSort`] / [`ContainerSort`] — declare custom sort types.
 //! - [`crate::PrimitiveCommon`] + one of four kind-specific traits

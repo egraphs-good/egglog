@@ -17,6 +17,8 @@
 //!   sugar. Implemented for all four wrappers.
 //! - [`Write`] — name-indexed writes (`insert`/`remove`/`subsume`/
 //!   `union`/`panic`). Implemented for [`WriteState`] and [`FullState`].
+//!   (After the typed-EGraph PR lands these will become `set`/`add_node`
+//!   in line with the EGraph methods of the same names.)
 //!
 //! Privileged seams (`call_external_func`, `table_lookup`, raw
 //! `&mut ExecutionState`) used by the `FunctionContainer` higher-order
