@@ -687,7 +687,7 @@ pub(crate) trait TableWrapper: Send + Sync {
 
     /// Scan each row in `subset`, calling `f(row_id, col_value)` for each.
     /// Unlike `scan_project`, this writes directly to the callback with no
-    /// intermediate buffer, which is faster for small (≤8 row) subsets.
+    /// intermediate buffer.
     fn for_each_col(
         &self,
         table: &dyn Table,

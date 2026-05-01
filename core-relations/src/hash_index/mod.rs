@@ -824,26 +824,10 @@ static THREAD_POOL: Lazy<rayon::ThreadPool> = Lazy::new(|| {
 ///
 /// Size classes are indexed by their log2 value (i.e., size_class = 2^idx), so a 32-entry
 /// array covers all power-of-two sizes from 1 (idx=0) up to 2^31. This replaces the
-/// previous HashMap with an O(1) array index + trailing_zeros(), eliminating hash computation
-/// and table probe overhead in the hot path.
+/// previous HashMap with an O(1) array index + trailing_zeros().
+#[derive(Clone, Default)]
 pub(super) struct FreeList {
     data: [Vec<BufferIndex>; 32],
-}
-
-impl Default for FreeList {
-    fn default() -> Self {
-        FreeList {
-            data: std::array::from_fn(|_| Vec::new()),
-        }
-    }
-}
-
-impl Clone for FreeList {
-    fn clone(&self) -> Self {
-        FreeList {
-            data: std::array::from_fn(|i| self.data[i].clone()),
-        }
-    }
 }
 
 impl FreeList {
