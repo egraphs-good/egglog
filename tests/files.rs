@@ -202,17 +202,17 @@ impl Run {
             // We use a local rayon pool here because `build_global()` can only
             // be called once per process, but libtest-mimic runs many trials
             // (with different thread counts) in the same process.
+            // The threads == 1 case also goes through pool.install so the trial
+            // doesn't fall through to the default global rayon pool (which uses
+            // num_cpus threads and would make "single-threaded" tests
+            // nondeterministic).
             // TODO: when we move to per-EGraph local thread pools, replace this
             // with `egraph.with_num_threads()` and remove the explicit pool.
-            if self.threads > 1 {
-                let pool = rayon::ThreadPoolBuilder::new()
-                    .num_threads(self.threads)
-                    .build()
-                    .expect("failed to build rayon thread pool");
-                pool.install(|| self.run());
-            } else {
-                self.run();
-            }
+            let pool = rayon::ThreadPoolBuilder::new()
+                .num_threads(self.threads)
+                .build()
+                .expect("failed to build rayon thread pool");
+            pool.install(|| self.run());
             Ok(())
         })
     }

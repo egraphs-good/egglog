@@ -1,5 +1,6 @@
 ---
 source: tests/files.rs
+assertion_line: 94
 expression: snapshot_content_across_treatments
 ---
 ((Abs 1)
@@ -185,7 +186,7 @@ expression: snapshot_content_across_treatments
  (Shl 1)
  (Shr 1)
  (Single 957)
- (Smaller 1845)
+ (Smaller 1874)
  (Smax 1)
  (Smin 1)
  (StateT 1)
@@ -195,7 +196,7 @@ expression: snapshot_content_across_treatments
  (SuffixAt-List<PtrPointees> 0)
  (SuffixAt-List<i64+IntInterval> 0)
  (Switch 0)
- (TCPair 2789)
+ (TCPair 2765)
  (TCons 318)
  (TLConcat 1649)
  (TNil 1)
@@ -203,7 +204,7 @@ expression: snapshot_content_across_treatments
  (TermArg 1)
  (TermBop 134)
  (TermCall 0)
- (TermConcat 1952)
+ (TermConcat 1928)
  (TermCons 0)
  (TermConst 22)
  (TermEmpty 0)
@@ -245,8 +246,8 @@ expression: snapshot_content_across_treatments
  (_GeneratedFreshTable4294 0)
  (bop->string 24)
  (bop-of-type 9)
- (bound-max 15)
- (bound-min 5)
+ (bound-max 10)
+ (bound-min 0)
  (bpred-of-type 12)
  (hi-bound 164)
  (is-inv-Expr 995)
