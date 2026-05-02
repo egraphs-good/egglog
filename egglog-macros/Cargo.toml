@@ -1,0 +1,23 @@
+[package]
+name = "egglog-macros"
+version.workspace = true
+edition.workspace = true
+description = "Proc-macros for compile-time validation of egglog programs embedded in Rust"
+repository.workspace = true
+license.workspace = true
+keywords.workspace = true
+
+[lib]
+proc-macro = true
+
+[dependencies]
+# The proc macro runs the egglog parser + typechecker at compile time
+# to validate the embedded program. Pulls in the full egglog crate as
+# a build-time dependency. (The proposal in egglog-block-macro-proposal.md
+# step 1 is to split this into an `egglog-frontend` crate so the proc
+# macro doesn't have to pull in the runtime backend; this draft skips
+# that split and uses the full crate.)
+egglog = { path = ".." }
+proc-macro2 = "1"
+quote = "1"
+syn = "2"

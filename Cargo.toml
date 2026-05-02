@@ -5,6 +5,7 @@ members = [
   "core-relations",
   "egglog-ast",
   "egglog-bridge",
+  "egglog-macros",
   "numeric-id",
   "union-find",
   "src/sort/add_primitive",
@@ -165,6 +166,7 @@ libtest-mimic = { workspace = true }
 testing_logger = "0.1"
 insta = "1.40"
 serial_test = "3"
+egglog-macros = { path = "egglog-macros" }
 
 [profile.release]
 incremental = true

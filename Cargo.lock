@@ -496,6 +496,7 @@ dependencies = [
  "egglog-ast",
  "egglog-bridge",
  "egglog-core-relations",
+ "egglog-macros",
  "egglog-numeric-id",
  "egglog-reports",
  "egraph-serialize",
@@ -598,6 +599,16 @@ dependencies = [
  "smallvec",
  "thiserror",
  "web-time",
+]
+
+[[package]]
+name = "egglog-macros"
+version = "2.0.0"
+dependencies = [
+ "egglog",
+ "proc-macro2",
+ "quote",
+ "syn 2.0.106",
 ]
 
 [[package]]
