@@ -5,6 +5,9 @@
 //!
 //! Common entry points:
 //!
+//! - [`crate::EGraph::declare`] — chainable builder for declaring a
+//!   `(function ...)`, `(constructor ...)`, or `(relation ...)` table
+//!   without constructing a raw `Schema`.
 //! - [`rule`] / [`rust_rule`] — add rules whose RHS is egglog code or a
 //!   Rust closure (the closure receives an
 //!   [`crate::WriteState`]).
