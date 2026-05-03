@@ -1,9 +1,7 @@
 //! Core free join execution.
 
 use std::{
-    cmp, mem,
-    ops::Range,
-    sync::{Arc, OnceLock, RwLock, atomic::AtomicUsize},
+    cmp, iter, mem, ops::Range, sync::{Arc, OnceLock, RwLock, atomic::AtomicUsize}
 };
 
 use crate::{
@@ -815,8 +813,6 @@ impl<'a> JoinState<'a> {
 
         let table_id = atoms[atom].table;
         let info = &self.db.tables[table_id];
-        // EE1: check SparseColumnIndex first — skips uncacheable_columns lookup and
-        // whole_table.all() for the common small-subset path.
         let dyn_index = if subset.size() <= SMALL_RESIDUAL && cols.len() == 1 {
             DynamicIndex::SparseColumn(SparseColumnIndex::new(
                 info.table.as_ref(),
@@ -877,44 +873,7 @@ impl<'a> JoinState<'a> {
         atom: AtomId,
         col: ColumnId,
     ) -> Prober {
-        // NN1: specialize for single-column — avoids SmallVec creation and multi-col branch checks.
-        let trie_node = binding_info.subsets.unwrap_val(atom);
-        let subset = &trie_node.subset;
-        let table_id = atoms[atom].table;
-        let info = &self.db.tables[table_id];
-        let dyn_index = if subset.size() <= SMALL_RESIDUAL {
-            DynamicIndex::SparseColumn(SparseColumnIndex::new(
-                info.table.as_ref(),
-                subset.as_ref(),
-                col,
-            ))
-        } else {
-            let all_cacheable = !info
-                .spec
-                .uncacheable_columns
-                .get(col)
-                .copied()
-                .unwrap_or(false);
-            let whole_table = info.table.all();
-            if let Subset::Dense(range) = subset
-                && all_cacheable
-                && whole_table.size() / 2 < subset.size()
-            {
-                let needs_intersect =
-                    !(whole_table.is_dense() && subset.bounds() == whole_table.bounds());
-                let intersect_outer = if needs_intersect { Some(*range) } else { None };
-                DynamicIndex::CachedColumn {
-                    intersect_outer,
-                    table: get_column_index_from_tableinfo(info, col).clone(),
-                }
-            } else {
-                DynamicIndex::DynamicColumn(trie_node.get_cached_index(col, info))
-            }
-        };
-        Prober {
-            node: trie_node,
-            ix: dyn_index,
-        }
+        self.get_index(atoms, atom, binding_info, iter::once(col))
     }
 
     /// Runs the free join plan, starting with the header.
