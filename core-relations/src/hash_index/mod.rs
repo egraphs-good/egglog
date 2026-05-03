@@ -1,5 +1,6 @@
 //! Hash-based secondary indexes.
 use std::{
+    cmp,
     hash::{Hash, Hasher},
     mem,
     sync::{Arc, Mutex},
@@ -335,7 +336,7 @@ impl IndexBase for ColumnIndex {
     /// all columns are merged into one sorted list, so each value maps to the union of rows
     /// containing it in any of the covered columns.
     fn rebuild_full(&mut self, cols: &[ColumnId], table: WrappedTableRef, subset: SubsetRef) {
-        let n = subset.size() * cols.len();
+        let n = table.all().size() * cols.len();
 
         let mut pairs: Vec<(Value, RowId)> = Vec::with_capacity(n);
         for &col in cols {
@@ -344,15 +345,9 @@ impl IndexBase for ColumnIndex {
             });
         }
 
-        if cols.len() == 1 {
-            // Single-column: scan order gives RowIds sorted within each Value group, so a
-            // stable sort by Value only is equivalent to sort_unstable() + dedup (which is
-            // a no-op for single-column). Radix sort beats comparison sort for medium-N.
-            radix_sort_pairs_by_value(&mut pairs);
-        } else {
-            // Multi-column: dedup requires RowIds to be sorted within each Value group, so we
-            // must sort by (Value, RowId) fully and then deduplicate.
-            pairs.sort_unstable();
+        radix_sort_pairs_by_value(&mut pairs);
+        if cols.len() > 1 {
+            // Remove duplicates (same value in multiple columns of the same row).
             pairs.dedup();
         }
 
@@ -360,29 +355,25 @@ impl IndexBase for ColumnIndex {
         while i < pairs.len() {
             let key = pairs[i].0;
             let start = i;
+            let mut first = pairs[i].1;
+            let mut last = pairs[i].1;
             while i < pairs.len() && pairs[i].0 == key {
+                last = cmp::max(last, pairs[i].1);
+                first = cmp::min(first, pairs[i].1);
                 i += 1;
             }
             let shard = self.shard_data.get_shard_mut(&key, &mut self.shards);
             let count = i - start;
-            let buffered = if count == 1 {
-                // Singleton: use Dense subset, no SubsetBuffer allocation needed.
-                BufferedSubset::singleton(pairs[start].1)
+            let buffered = if last.rep() - first.rep() == (count - 1) as u32 {
+                // If the row ids are contiguous, we can represent the subset as a dense range
+                // to avoid allocations
+                BufferedSubset::Dense(OffsetRange::new(first, last.inc()))
             } else {
-                let first = pairs[start].1;
-                let last = pairs[i - 1].1;
-                if last.rep() - first.rep() == (count - 1) as u32 {
-                    // Contiguous RowIds: use Dense range (same representation as add_row_sorted).
-                    BufferedSubset::Dense(OffsetRange::new(first, last.inc()))
-                } else {
-                    // Non-contiguous: pre-allocate exactly the right size, no doubling memmoves.
-                    let bv = shard
-                        .subsets
-                        .new_vec(pairs[start..i].iter().map(|&(_, r)| r));
-                    BufferedSubset::Sparse(bv)
-                }
+                let bv = shard
+                    .subsets
+                    .new_vec(pairs[start..i].iter().map(|&(_, r)| r));
+                BufferedSubset::Sparse(bv)
             };
-            // After clear(), the table is empty, so direct insert is safe.
             shard.table.insert(key, buffered);
         }
     }
@@ -425,7 +416,7 @@ fn run_in_thread_pool_and_block<'a>(pool: &rayon::ThreadPool, f: impl FnMut() + 
     n.wait()
 }
 
-/// Adaptive stable LSB radix sort for (Value, RowId) pairs, sorting by the Value field.
+/// Adaptive LSB radix sort for (Value, RowId) pairs, sorting by the Value field.
 ///
 /// Chooses 1–4 passes of 8-bit radix sort based on the observed maximum Value, so that
 /// only the actually-used bit range is processed.  Within each Value group the original
