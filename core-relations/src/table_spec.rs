@@ -407,7 +407,7 @@ impl<T: Table> TableWrapper for WrapperImpl<T> {
     fn group_by_col(&self, table: &dyn Table, subset: SubsetRef, col: ColumnId) -> ColumnIndex {
         let mut res = ColumnIndex::new();
         if subset.size() >= 512 {
-            // For larger subsets, use the sort-based bulk approach (eliminates push_vec doubling).
+            // For larger subsets, use the sort-based bulk approach.
             let wrapped = WrappedTableRef {
                 inner: table,
                 wrapper: self,

@@ -329,8 +329,8 @@ impl IndexBase for ColumnIndex {
     }
 
     /// Sort-based full rebuild: collect all (value, row_id) pairs, sort by (value, row_id),
-    /// then build each key's subset with a single pre-sized allocation — eliminating the
-    /// doubling memmoves from `push_vec` that occur in the row-at-a-time `add_row` path.
+    /// then build each key's subset with a single pre-sized allocation. Compared to `merge_rows`,
+    /// this eliminates the doubling memmoves from `push_vec` that occur in the row-at-a-time `add_row` path.
     ///
     /// Supports multiple columns (e.g. rebuild_index covering all value columns): pairs from
     /// all columns are merged into one sorted list, so each value maps to the union of rows
