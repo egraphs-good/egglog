@@ -1,7 +1,9 @@
 //! Core free join execution.
 
 use std::{
-    cmp, iter, mem, ops::Range, sync::{Arc, OnceLock, RwLock, atomic::AtomicUsize}
+    cmp, iter, mem,
+    ops::Range,
+    sync::{Arc, OnceLock, RwLock, atomic::AtomicUsize},
 };
 
 use crate::{
@@ -130,7 +132,10 @@ impl SparseColumnIndex {
         }
         for i in 0..self.n_keys {
             let range = self.get_offset_for(i);
-            f(&self.keys[i..i + 1], sparse_subset_ref(&self.subset_ids, range));
+            f(
+                &self.keys[i..i + 1],
+                sparse_subset_ref(&self.subset_ids, range),
+            );
         }
     }
 

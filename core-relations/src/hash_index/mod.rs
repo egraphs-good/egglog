@@ -362,7 +362,7 @@ impl IndexBase for ColumnIndex {
                 first = cmp::min(first, pairs[i].1);
                 i += 1;
             }
-            let shard = self.shard_data.get_shard_mut(&key, &mut self.shards);
+            let shard = self.shard_data.get_shard_mut(key, &mut self.shards);
             let count = i - start;
             let buffered = if last.rep() - first.rep() == (count - 1) as u32 {
                 // If the row ids are contiguous, we can represent the subset as a dense range
@@ -424,6 +424,7 @@ fn run_in_thread_pool_and_block<'a>(pool: &rayon::ThreadPool, f: impl FnMut() + 
 /// satisfying the add_row_sorted invariant without an explicit RowId sort.
 ///
 /// Falls back to `sort_unstable()` for n < 64 where radix setup overhead dominates.
+#[allow(clippy::needless_range_loop)]
 fn radix_sort_pairs_by_value(pairs: &mut Vec<(Value, RowId)>) {
     let n = pairs.len();
     if n < 64 {
@@ -445,21 +446,17 @@ fn radix_sort_pairs_by_value(pairs: &mut Vec<(Value, RowId)>) {
     let null_pair = (Value::new_const(0), RowId::new_const(0));
     let mut buf: Vec<(Value, RowId)> = vec![null_pair; n];
 
-    // Double-buffer: alternate scatter between `pairs` and `buf`.
-    // Raw pointers avoid simultaneous-borrow conflicts in safe Rust.
-    let mut src: *mut (Value, RowId) = pairs.as_mut_ptr();
-    let mut dst: *mut (Value, RowId) = buf.as_mut_ptr();
+    let mut src: &mut Vec<(Value, RowId)> = pairs;
+    let mut dst: &mut Vec<(Value, RowId)> = &mut buf;
 
     for pass in 0..n_passes {
         let shift = pass * 8;
         let mut count = [0u32; 256];
 
         // Count occurrences of the relevant byte of each Value.
-        unsafe {
-            for i in 0..n {
-                let bucket = ((*src.add(i)).0.rep() >> shift) & 0xFF;
-                count[bucket as usize] += 1;
-            }
+        for i in 0..n {
+            let bucket = (src[i].0.rep() >> shift) & 0xFF;
+            count[bucket as usize] += 1;
         }
 
         // Convert counts to exclusive prefix sums (start positions per bucket).
@@ -471,13 +468,11 @@ fn radix_sort_pairs_by_value(pairs: &mut Vec<(Value, RowId)>) {
         }
 
         // Stable scatter: write each element to its bucket's next position.
-        unsafe {
-            for i in 0..n {
-                let pair = *src.add(i);
-                let bucket = ((pair.0.rep() >> shift) & 0xFF) as usize;
-                *dst.add(count[bucket] as usize) = pair;
-                count[bucket] += 1;
-            }
+        for i in 0..n {
+            let pair = src[i];
+            let bucket = ((pair.0.rep() >> shift) & 0xFF) as usize;
+            dst[count[bucket] as usize] = pair;
+            count[bucket] += 1;
         }
 
         core::mem::swap(&mut src, &mut dst);
@@ -487,10 +482,7 @@ fn radix_sort_pairs_by_value(pairs: &mut Vec<(Value, RowId)>) {
     // Odd passes: src == buf.as_mut_ptr(); copy back to pairs.
     // Even passes: src == pairs.as_mut_ptr(); already in place.
     if n_passes % 2 == 1 {
-        // SAFETY: src (buf) and dst (pairs) are non-overlapping allocations of length n.
-        unsafe {
-            core::ptr::copy_nonoverlapping(src, dst, n);
-        }
+        dst.copy_from_slice(src);
     }
 }
 
