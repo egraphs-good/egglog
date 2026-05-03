@@ -744,11 +744,6 @@ impl FrameUpdates {
     fn refine_atom_subset(&mut self, atom: AtomId, subset: Subset) {
         match subset {
             Subset::Dense(range) => self.refine_atom_dense(atom, range),
-            Subset::Sparse(ref offsets) if offsets.slice().inner().len() == 1 => {
-                // Single-entry Sparse ≡ Dense(r..r+1) — avoids Arc<TrieNode> allocation.
-                let row = offsets.slice().inner()[0];
-                self.refine_atom_dense(atom, OffsetRange::new(row, row.inc()));
-            }
             sub => self.refine_atom(atom, Arc::new(TrieNode::new(sub))),
         }
     }
