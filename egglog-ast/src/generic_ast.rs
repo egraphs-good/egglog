@@ -93,12 +93,6 @@ where
     pub name: String,
     /// The ruleset this rule belongs to. Defaults to `""`.
     pub ruleset: String,
-    /// If `true`, this rule disables seminaive evaluation. The body is
-    /// matched against the entire database every iteration and the
-    /// query/action are compiled with the global (read+write) primitive
-    /// contexts, allowing primitives that read or write the database
-    /// inside queries and actions. Set via the `:naive` rule option.
-    pub naive: bool,
 }
 
 /// Change a function entry.

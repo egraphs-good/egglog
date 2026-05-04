@@ -72,6 +72,15 @@ impl SpecializedPrimitive {
     pub fn validator(&self) -> Option<&PrimitiveValidator> {
         self.prim_with_id.validator.as_ref()
     }
+
+    /// The execution contexts in which the registration this call resolved
+    /// to was declared. Used by the rule-add path to detect rules that
+    /// must opt out of seminaive (a query primitive whose
+    /// `valid_contexts` lacks `Pure`, or an action primitive whose
+    /// `valid_contexts` lacks `Write`).
+    pub(crate) fn valid_contexts(&self) -> &[crate::Context] {
+        &self.prim_with_id.valid_contexts
+    }
 }
 
 impl PartialEq for SpecializedPrimitive {

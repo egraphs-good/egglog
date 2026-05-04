@@ -932,18 +932,17 @@ impl TypeInfo {
             body,
             name,
             ruleset,
-            naive,
         } = rule;
         let mut constraints = vec![];
 
-        // A `:naive` rule disables seminaive evaluation, so it can use
-        // primitives that read or write the database in either the
-        // query or the action — the same surface as global commands.
-        let (query_ctx, action_ctx) = if *naive {
-            (Context::Read, Context::Full)
-        } else {
-            (Context::Pure, Context::Write)
-        };
+        // Rule bodies always typecheck under the most permissive
+        // contexts: `Read` for the query and `Full` for actions. This
+        // admits primitives that read or write the database; whether
+        // the rule then needs to opt out of seminaive evaluation is
+        // determined post-typecheck by walking the resolved program
+        // for non-Pure / non-Write primitives (see [`needs_naive`] in
+        // the EGraph rule-add path).
+        let (query_ctx, action_ctx) = (Context::Read, Context::Full);
 
         let (query, mapped_query) = Facts(body.clone()).to_query(self, symbol_gen);
         constraints.extend(query.get_constraints(self, query_ctx)?);
@@ -983,7 +982,6 @@ impl TypeInfo {
             head: actions,
             name: name.clone(),
             ruleset: ruleset.clone(),
-            naive: *naive,
         })
     }
 

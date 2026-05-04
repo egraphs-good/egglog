@@ -124,7 +124,6 @@ fn remove_globals_cmd(cmd: ResolvedNCommand) -> Vec<ResolvedNCommand> {
                 ),
                 name: rule.name.clone(),
                 ruleset: rule.ruleset.clone(),
-                naive: rule.naive,
             };
             vec![GenericNCommand::NormRule { rule: new_rule }]
         }

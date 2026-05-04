@@ -259,7 +259,6 @@ fn desugar_prove(parser: &mut Parser, span: Span, query: Vec<Fact>) -> Vec<NComm
                 )),
                 ruleset: ruleset.clone(),
                 name,
-                naive: false,
             },
         },
         // run the rule
@@ -347,7 +346,6 @@ fn desugar_rewrite(
             head,
             ruleset,
             name,
-            naive: false,
         },
     }]
 }
