@@ -1,7 +1,7 @@
 use std::fmt::{self, Display, Formatter};
 use std::time::{Duration, Instant};
 
-use serde::Serialize;
+use serde::{Serialize, Serializer};
 
 type TimerHandle = usize;
 
@@ -30,6 +30,7 @@ struct TimingStep {
     tags: Vec<String>,
     #[serde(with = "serde_millis")]
     total: Duration,
+    #[serde(serialize_with = "serialize_duration_breakdown")]
     breakdown: Vec<Duration>,
 }
 
@@ -109,9 +110,24 @@ impl Display for TimingStep {
         writeln!(f, "  name: {}", self.name)?;
         writeln!(f, "  tags: {:?}", self.tags)?;
         writeln!(f, "  total: {}", self.total.as_secs_f64())?;
-        writeln!(f, "  breakdown: {:?}", self.breakdown)?;
+        writeln!(
+            f,
+            "  breakdown: {:?}",
+            self.breakdown
+                .iter()
+                .map(Duration::as_millis)
+                .collect::<Vec<_>>()
+        )?;
         Ok(())
     }
+}
+
+fn serialize_duration_breakdown<S>(breakdown: &[Duration], serializer: S) -> Result<S::Ok, S::Error>
+where
+    S: Serializer,
+{
+    let breakdown_millis: Vec<_> = breakdown.iter().map(Duration::as_millis).collect();
+    breakdown_millis.serialize(serializer)
 }
 
 fn write_metric_section<T>(f: &mut Formatter<'_>, title: &str, metrics: &[T]) -> fmt::Result

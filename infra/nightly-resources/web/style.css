@@ -31,6 +31,44 @@ h1 {
   margin: 0 0 16px;
 }
 
+.suite {
+  margin: 0 0 24px;
+}
+
+.suite-tab {
+  appearance: none;
+  border: 1px solid #ccc;
+  background: #f0f0f0;
+  color: inherit;
+  padding: 8px 12px;
+  margin: 0 8px 12px 0;
+  font: inherit;
+  cursor: pointer;
+}
+
+.suite-tab.is-active {
+  background: #111;
+  border-color: #111;
+  color: #fff;
+}
+
+.suite-header {
+  display: flex;
+  align-items: baseline;
+  justify-content: space-between;
+  gap: 16px;
+  margin: 0 0 8px;
+}
+
+.suite-header p {
+  margin: 0;
+}
+
+h3 {
+  margin: 0;
+  font-size: 1rem;
+}
+
 h2 {
   margin: 0 0 8px;
   font-size: 1.1rem;
