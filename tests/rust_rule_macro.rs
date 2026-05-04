@@ -1,10 +1,12 @@
-//! Tests for the `rust_rule!` macro (PR 6 of the API redesign).
+//! Tests for the `rust_rule!` macro.
 
 use egglog::Error;
 use egglog::prelude::*;
 use egglog::rust_rule;
 
-fn fib_setup() -> Result<(EGraph, &'static str), Error> {
+const FIB_RULESET: &str = "fib_ruleset";
+
+fn fib_setup() -> Result<EGraph, Error> {
     let mut egraph = EGraph::default();
     egraph.parse_and_run_program(
         None,
@@ -14,15 +16,15 @@ fn fib_setup() -> Result<(EGraph, &'static str), Error> {
 (set (fib 1) 1)
         ",
     )?;
-    let ruleset = "fib_ruleset";
-    add_ruleset(&mut egraph, ruleset)?;
-    Ok((egraph, ruleset))
+    add_ruleset(&mut egraph, FIB_RULESET)?;
+    Ok(egraph)
 }
 
 /// Basic case: i64 vars, parallel to `benches/rust_api_benchmarking.rs:fib_setup`.
 #[test]
 fn rust_rule_macro_basic_i64() -> Result<(), Error> {
-    let (mut egraph, ruleset) = fib_setup()?;
+    let mut egraph = fib_setup()?;
+    let ruleset = FIB_RULESET;
 
     rust_rule!(
         &mut egraph,
@@ -153,7 +155,8 @@ fn rust_rule_macro_empty_vars() -> Result<(), Error> {
 /// generated struct's field were the wrong type.
 #[test]
 fn rust_rule_macro_typed_fields() -> Result<(), Error> {
-    let (mut egraph, ruleset) = fib_setup()?;
+    let mut egraph = fib_setup()?;
+    let ruleset = FIB_RULESET;
 
     use std::sync::{Arc, Mutex};
     let captured: Arc<Mutex<Vec<(i64, i64, i64)>>> = Arc::new(Mutex::new(Vec::new()));
