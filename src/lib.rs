@@ -13,14 +13,34 @@
 //! # Using egglog from Rust
 //!
 //! Start with the [**`prelude`**](prelude) module — it re-exports the
-//! types and macros most Rust callers need and documents the common
-//! entry points (`rule`, `rust_rule`, `query`, the sort traits, the
-//! [`PrimitiveCommon`] / [`PurePrim`] traits, and the
-//! `add_primitive!` macros). Almost every
-//! example in this crate's docs assumes `use egglog::prelude::*;`.
+//! types and macros most Rust callers need. Almost every example in
+//! this crate's docs assumes `use egglog::prelude::*;`.
 //!
-//! For driving egglog as a script, [`EGraph::parse_and_run_program`]
-//! is the one-stop entry point.
+//! Two ways to drive an [`EGraph`]:
+//!
+//! 1. **Egglog DSL via `parse_and_run_program`** —
+//!    [`EGraph::parse_and_run_program`] takes a string of egglog
+//!    commands. Good when you have a self-contained egglog program.
+//! 2. **Typed Rust methods** — first-class `EGraph` methods that mirror
+//!    the egglog DSL one-to-one:
+//!     - [`EGraph::set`] writes a function table cell:
+//!       `(set (f k1 k2) v)`.
+//!     - [`EGraph::add_node`] mints / looks up a constructor eclass:
+//!       `(Cons k1 k2)`. Also used for relations.
+//!     - [`EGraph::lookup`] reads a function's output value (returns
+//!       `Option<V: BaseValue>`).
+//!     - [`EGraph::eclass_of`] reads a constructor's eclass without
+//!       minting (returns `Option<EClass<M>>`).
+//!     - [`EGraph::contains`] / [`EGraph::remove`] work on any subtype.
+//!     - [`EGraph::query`] iterates table rows as typed tuples;
+//!       [`EGraph::query_pattern`] does pattern-style queries with
+//!       typed return rows.
+//!     - [`EGraph::intern`] / [`EGraph::extract`] convert between Rust
+//!       base values and egglog [`Value`]s.
+//!
+//! Use [`crate::api::EClass<M>`](crate::api::EClass) for typed eclass
+//! handles — declare a marker once via [`crate::api::EqSortMarker`]
+//! and pass typed handles instead of bare [`Value`]s.
 //!
 //! ## Extending egglog with your own native code
 //!
@@ -46,6 +66,7 @@
 //! seminaive-safety reasoning behind the typed primitive surface.
 //!
 //!
+pub mod api;
 pub mod ast;
 #[cfg(feature = "bin")]
 mod cli;
@@ -1903,6 +1924,49 @@ impl EGraph {
         })
     }
 
+    /// Convert a Rust base value into an interned egglog [`Value`].
+    ///
+    /// This is the preferred way to obtain a [`Value`] for a primitive
+    /// (`i64`, `String`, `bool`, ...) without having to spawn a rule.
+    ///
+    /// # Examples
+    ///
+    /// ```
+    /// use egglog::*;
+    ///
+    /// let mut egraph = EGraph::default();
+    /// egraph
+    ///     .parse_and_run_program(None, "(function f (i64) i64 :no-merge) (set (f 1) 42)")
+    ///     .unwrap();
+    ///
+    /// // Look up `(f 1)` in the e-graph.
+    /// let key = egraph.intern::<i64>(1);
+    /// let out = egraph.lookup_function("f", &[key]).unwrap();
+    /// assert_eq!(egraph.extract::<i64>(out), 42);
+    /// ```
+    pub fn intern<T: BaseValue>(&self, x: T) -> Value {
+        self.base_to_value::<T>(x)
+    }
+
+    /// Read out a Rust base value from an egglog [`Value`].
+    ///
+    /// Panics if the value isn't of type `T`.
+    ///
+    /// See [`EGraph::intern`] for an example.
+    pub fn extract<T: BaseValue>(&self, v: Value) -> T {
+        self.value_to_base::<T>(v)
+    }
+
+    /// Convert a Rust container value into an interned egglog [`Value`].
+    ///
+    /// This is currently an alias for [`EGraph::container_to_value`] and
+    /// requires `&mut self`. A future change will relax this to `&self`
+    /// once the underlying container store's interior mutability is
+    /// surfaced.
+    pub fn intern_container<T: ContainerValue>(&mut self, x: T) -> Value {
+        self.container_to_value::<T>(x)
+    }
+
     /// Get the size of a function in the e-graph.
     ///
     /// `panics` if the function does not exist.
@@ -1952,7 +2016,365 @@ impl EGraph {
     pub fn new_union_action(&self) -> egglog_bridge::UnionAction {
         UnionAction::new(&self.backend)
     }
+
+    /// Set a function table's value at the given key, mirroring the
+    /// egglog `(set (f k1 k2 ...) v)` action.
+    ///
+    /// `key` is the input columns; `value` is the output column.
+    /// Subject to the function's `:merge` expression: re-`set`ing the
+    /// same key combines old and new via the merge function.
+    ///
+    /// **Only valid for `function` tables.** For constructors and
+    /// relations, use [`EGraph::add_node`] instead — they don't have a
+    /// user-supplied output column (the eclass id is minted for you).
+    ///
+    /// Returns `Err` if `table` is not a function, or doesn't exist.
+    ///
+    /// # Example
+    /// ```
+    /// use egglog::EGraph;
+    /// let mut eg = EGraph::default();
+    /// eg.parse_and_run_program(None, "(function f (i64) i64 :no-merge)").unwrap();
+    /// eg.set("f", (1_i64,), 42_i64).unwrap();
+    /// assert_eq!(eg.lookup::<_, i64>("f", 1_i64).unwrap(), Some(42));
+    /// ```
+    pub fn set<K: IntoRow, V: IntoColumn>(
+        &mut self,
+        table: &str,
+        key: K,
+        value: V,
+    ) -> Result<(), Error> {
+        let func = self.functions.get(table).ok_or_else(|| {
+            Error::TypeError(TypeError::UnboundFunction(table.to_string(), span!()))
+        })?;
+        let backend_id = func.backend_id;
+        let subtype = self
+            .type_info
+            .get_func_type(table)
+            .map(|ft| ft.subtype)
+            .ok_or_else(|| {
+                Error::TypeError(TypeError::UnboundFunction(table.to_string(), span!()))
+            })?;
+
+        if subtype != FunctionSubtype::Custom {
+            return Err(Error::TypeError(TypeError::WrongTableSubtype {
+                name: table.to_string(),
+                expected: "function",
+                actual: "constructor or relation",
+                span: span!(),
+            }));
+        }
+
+        let bv = self.backend.base_values();
+        let mut row = key.into_values(bv);
+        row.push(value.into_value(bv));
+
+        let table_action = egglog_bridge::TableAction::new(&self.backend, backend_id);
+        self.backend.with_execution_state(|es| {
+            table_action.insert(es, row.iter().copied());
+        });
+        self.backend.flush_updates();
+        Ok(())
+    }
+
+    /// Mint or look up an eclass for a constructor (or relation
+    /// — relations are sugar for constructors with a synthetic
+    /// non-unionable output sort), mirroring the egglog `(Cons k1 k2 ...)`
+    /// expression form or the `(R x y)` relation-assertion form.
+    ///
+    /// Pass the inputs only — the output eclass id is minted by the
+    /// e-graph (or returned if a row with these inputs already exists).
+    /// Returns the resulting eclass as a raw [`Value`]; use
+    /// [`EGraph::typed_eclass`] to upgrade it to a typed [`crate::api::EClass<M>`].
+    ///
+    /// **Only valid for constructor and relation tables.** For
+    /// functions, use [`EGraph::set`] instead.
+    ///
+    /// Returns `Err` if `table` is not a constructor / relation, or
+    /// doesn't exist.
+    ///
+    /// # Note on zero-arg constructors
+    ///
+    /// For nullary constructors like `(Nil)`, pass
+    /// `RawValues(vec![])` rather than `()` — the unit literal is a
+    /// single Unit column, not "no columns."
+    ///
+    /// # Example
+    /// ```
+    /// use egglog::{EGraph, RawValues};
+    /// let mut eg = EGraph::default();
+    /// eg.parse_and_run_program(None, "(datatype List (Cons i64 List) (Nil))").unwrap();
+    /// let nil = eg.add_node("Nil", RawValues(vec![])).unwrap();
+    /// let cons = eg.add_node("Cons", (1_i64, nil)).unwrap();
+    /// // Calling again with the same inputs returns the same eclass.
+    /// assert_eq!(eg.add_node("Cons", (1_i64, nil)).unwrap(), cons);
+    /// ```
+    pub fn add_node<R: IntoRow>(&mut self, table: &str, inputs: R) -> Result<Value, Error> {
+        let func = self.functions.get(table).ok_or_else(|| {
+            Error::TypeError(TypeError::UnboundFunction(table.to_string(), span!()))
+        })?;
+        let backend_id = func.backend_id;
+        let subtype = self
+            .type_info
+            .get_func_type(table)
+            .map(|ft| ft.subtype)
+            .ok_or_else(|| {
+                Error::TypeError(TypeError::UnboundFunction(table.to_string(), span!()))
+            })?;
+
+        if subtype != FunctionSubtype::Constructor {
+            // Functions go through `set`, which expects an output column.
+            return Err(Error::TypeError(TypeError::WrongTableSubtype {
+                name: table.to_string(),
+                expected: "constructor or relation",
+                actual: "function",
+                span: span!(),
+            }));
+        }
+
+        let key_values = inputs.into_values(self.backend.base_values());
+        let table_action = egglog_bridge::TableAction::new(&self.backend, backend_id);
+        let result = self
+            .backend
+            .with_execution_state(|es| table_action.lookup_or_insert(es, &key_values));
+        self.backend.flush_updates();
+        result
+            .ok_or_else(|| Error::TypeError(TypeError::UnboundFunction(table.to_string(), span!())))
+    }
+
+    /// Look up a function's output value at the given key.
+    ///
+    /// Returns `Ok(None)` if the row is absent. Read-only — never
+    /// mints or modifies.
+    ///
+    /// **Only valid for `function` tables.** For constructors /
+    /// relations whose output is an eclass id, use [`EGraph::eclass_of`].
+    ///
+    /// # Example
+    /// ```
+    /// use egglog::EGraph;
+    /// let mut eg = EGraph::default();
+    /// eg.parse_and_run_program(None, "(function f (i64) i64 :no-merge)").unwrap();
+    /// eg.set("f", (1_i64,), 42_i64).unwrap();
+    /// assert_eq!(eg.lookup::<_, i64>("f", 1_i64).unwrap(), Some(42));
+    /// ```
+    pub fn lookup<K: IntoRow, V: BaseValue>(
+        &self,
+        table: &str,
+        key: K,
+    ) -> Result<Option<V>, Error> {
+        let subtype = self
+            .type_info
+            .get_func_type(table)
+            .map(|ft| ft.subtype)
+            .ok_or_else(|| {
+                Error::TypeError(TypeError::UnboundFunction(table.to_string(), span!()))
+            })?;
+        if subtype != FunctionSubtype::Custom {
+            // Constructors and relations have eclass-id outputs; route
+            // those through `eclass_of` instead.
+            return Err(Error::TypeError(TypeError::WrongTableSubtype {
+                name: table.to_string(),
+                expected: "function",
+                actual: "constructor or relation",
+                span: span!(),
+            }));
+        }
+        let bv = self.backend.base_values();
+        let key_values = key.into_values(bv);
+        Ok(self
+            .lookup_function(table, &key_values)
+            .map(|v| bv.unwrap::<V>(v)))
+    }
+
+    /// Look up a constructor's eclass at the given inputs, **without**
+    /// minting a fresh one if the row is absent.
+    ///
+    /// Returns `Ok(None)` if no row exists. Read-only — contrast with
+    /// [`EGraph::add_node`], which mints on miss.
+    ///
+    /// `M` is an [`EqSortMarker`] for the constructor's output sort.
+    /// Returns `Err` if `M::NAME` doesn't match the table's declared
+    /// output sort, if `table` isn't a constructor, or if `table`
+    /// doesn't exist.
+    ///
+    /// **Only valid for constructor tables.** For functions use
+    /// [`EGraph::lookup`]; for relations use [`EGraph::contains`]
+    /// (the synthetic output eclass isn't useful to read).
+    ///
+    /// # Example
+    /// ```
+    /// use egglog::{EClass, EGraph, EqSortMarker, RawValues};
+    /// struct List;
+    /// impl EqSortMarker for List { const NAME: &'static str = "List"; }
+    ///
+    /// let mut eg = EGraph::default();
+    /// eg.parse_and_run_program(None, "(datatype List (Cons i64 List) (Nil))").unwrap();
+    /// let nil = eg.add_node("Nil", RawValues(vec![])).unwrap();
+    /// eg.add_node("Cons", (1_i64, nil)).unwrap();
+    ///
+    /// let cons: Option<EClass<List>> = eg.eclass_of::<_, List>("Cons", (1_i64, nil)).unwrap();
+    /// assert!(cons.is_some());
+    ///
+    /// // Missing input returns None — does NOT mint a fresh eclass.
+    /// let absent: Option<EClass<List>> = eg.eclass_of::<_, List>("Cons", (99_i64, nil)).unwrap();
+    /// assert!(absent.is_none());
+    /// ```
+    pub fn eclass_of<K: IntoRow, M: EqSortMarker>(
+        &self,
+        table: &str,
+        inputs: K,
+    ) -> Result<Option<EClass<M>>, Error> {
+        let func_type = self.type_info.get_func_type(table).ok_or_else(|| {
+            Error::TypeError(TypeError::UnboundFunction(table.to_string(), span!()))
+        })?;
+        if func_type.subtype != FunctionSubtype::Constructor {
+            return Err(Error::TypeError(TypeError::WrongTableSubtype {
+                name: table.to_string(),
+                expected: "constructor",
+                actual: "function",
+                span: span!(),
+            }));
+        }
+        if func_type.output.name() != M::NAME {
+            return Err(Error::TypeError(TypeError::EClassSortMismatch {
+                table: table.to_string(),
+                marker_sort: M::NAME.to_string(),
+                actual_sort: func_type.output.name().to_string(),
+                span: span!(),
+            }));
+        }
+        let bv = self.backend.base_values();
+        let key_values = inputs.into_values(bv);
+        Ok(self
+            .lookup_function(table, &key_values)
+            .map(EClass::from_value_unchecked))
+    }
+
+    /// True iff a row with the given key exists in the table.
+    ///
+    /// Works for both functions and constructors/relations: it checks for
+    /// row presence without minting a fresh id for missing constructor rows.
+    pub fn contains<K: IntoRow>(&self, table: &str, key: K) -> bool {
+        if !self.functions.contains_key(table) {
+            return false;
+        }
+        let key_values = key.into_values(self.backend.base_values());
+        self.lookup_function(table, &key_values).is_some()
+    }
+
+    /// Remove a row from a function, constructor, or relation table.
+    ///
+    /// No-op if the row is not present.
+    pub fn remove<K: IntoRow>(&mut self, table: &str, key: K) -> Result<(), Error> {
+        let func = self.functions.get(table).ok_or_else(|| {
+            Error::TypeError(TypeError::UnboundFunction(table.to_string(), span!()))
+        })?;
+        let backend_id = func.backend_id;
+        let key_values = key.into_values(self.backend.base_values());
+
+        let table_action = egglog_bridge::TableAction::new(&self.backend, backend_id);
+        self.backend.with_execution_state(|es| {
+            table_action.remove(es, &key_values);
+        });
+        self.backend.flush_updates();
+        Ok(())
+    }
+
+    /// Iterate all rows of a function, constructor, or relation as typed
+    /// tuples.
+    ///
+    /// For relations declared with `(relation R (i64 ...))`, the
+    /// internal table has an extra synthetic eq-sort output column —
+    /// this method strips it, so `query::<(i64,)>("R")` returns just
+    /// the input column. For constructors with a non-base output (e.g.
+    /// `(constructor Add (i64 i64) Math)`), use `Vec<Value>` and
+    /// extract the eclass id manually.
+    pub fn query<R: FromRow>(&self, table: &str) -> Result<Vec<R>, Error> {
+        let func = self.functions.get(table).ok_or_else(|| {
+            Error::TypeError(TypeError::UnboundFunction(table.to_string(), span!()))
+        })?;
+        let backend_id = func.backend_id;
+        let strip_synthetic = matches!(func.decl.subtype, FunctionSubtype::Constructor)
+            && self.is_synthetic_relation_sort(&func.decl.schema.output);
+        let bv = self.backend.base_values();
+        let mut out = Vec::new();
+        self.backend.for_each(backend_id, |row| {
+            let slice = row.vals;
+            let view: &[Value] = if strip_synthetic {
+                &slice[..slice.len() - 1]
+            } else {
+                slice
+            };
+            out.push(R::from_values(view, bv));
+        });
+        Ok(out)
+    }
+
+    /// Pattern query — bind the named variables against the facts and
+    /// return one typed row per match.
+    ///
+    /// With zero vars, returns one empty `R` per match (so `Vec<()>`
+    /// has length = number of matches).
+    pub fn query_pattern<R: FromRow>(
+        &mut self,
+        vars: &[(&str, ArcSort)],
+        facts: ast::Facts<String, String>,
+    ) -> Result<Vec<R>, Error> {
+        let raw = prelude::query(self, vars, facts)?;
+        let bv = self.backend.base_values();
+        if vars.is_empty() {
+            // QueryResult::iter() panics on cols == 0; use rows count.
+            let n = if raw.any_matches() { 1 } else { 0 };
+            Ok((0..n).map(|_| R::from_values(&[], bv)).collect())
+        } else {
+            Ok(raw.iter().map(|row| R::from_values(row, bv)).collect())
+        }
+    }
+
+    /// True iff this output sort name is the synthetic non-unionable
+    /// eq-sort generated when a `(relation R ...)` desugars into a
+    /// constructor. Keeps relation rows looking like just-their-inputs
+    /// to users of [`EGraph::query`].
+    fn is_synthetic_relation_sort(&self, sort_name: &str) -> bool {
+        self.type_info.non_unionable_sorts.contains(sort_name)
+    }
+
+    /// Wrap a raw [`Value`] as a typed [`EClass<M>`] handle. Returns
+    /// `None` if the marker's `NAME` doesn't match a known eq-sort.
+    ///
+    /// This only checks that `M::NAME` resolves to an existing eq-sort
+    /// in this EGraph — it does **not** verify the value belongs to
+    /// that sort (every `Value` is just a `u32`). Within a typed
+    /// query, primary use is just stamping the type tag on values that
+    /// the caller already knows the column type of.
+    ///
+    /// ```
+    /// use egglog::api::{EClass, EqSortMarker};
+    /// use egglog::prelude::*;
+    ///
+    /// struct Math;
+    /// impl EqSortMarker for Math {
+    ///     const NAME: &'static str = "Math";
+    /// }
+    ///
+    /// let mut eg = EGraph::default();
+    /// eg.parse_and_run_program(None, "(datatype Math (Num i64)) (let $n (Num 7))")?;
+    /// let raw = eg.lookup_function("Num", &[eg.intern::<i64>(7)]).unwrap();
+    /// let typed: EClass<Math> = eg.typed_eclass::<Math>(raw).unwrap();
+    /// assert_eq!(typed.value(), raw);
+    /// # Ok::<(), egglog::Error>(())
+    /// ```
+    pub fn typed_eclass<M: EqSortMarker>(&self, value: Value) -> Option<EClass<M>> {
+        let sort = self.type_info.get_sort_by_name(M::NAME)?;
+        if !sort.is_eq_sort() {
+            return None;
+        }
+        Some(EClass::from_value_unchecked(value))
+    }
 }
+
+pub use crate::api::{EClass, EqSortMarker, FromColumn, FromRow, IntoColumn, IntoRow, RawValues};
 
 struct BackendRule<'a> {
     rb: egglog_bridge::RuleBuilder<'a>,

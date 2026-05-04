@@ -15,8 +15,9 @@
 //!
 //! - [`Core`] — base values, counters, container interning, conversion
 //!   sugar. Implemented for all four wrappers.
-//! - [`Write`] — name-indexed writes (`insert`/`remove`/`subsume`/
-//!   `union`/`panic`). Implemented for [`WriteState`] and [`FullState`].
+//! - [`Write`] — name-indexed writes (`set`/`add_node`/`remove`/
+//!   `subsume`/`union`/`panic`). Implemented for [`WriteState`] and
+//!   [`FullState`].
 //!
 //! Privileged seams (`call_external_func`, `table_lookup`, raw
 //! `&mut ExecutionState`) used by the `FunctionContainer` higher-order
@@ -169,10 +170,35 @@ pub trait Read<'a, 'db: 'a>: Core<'a, 'db> + RegistrySealed<'a, 'db> {
 /// [`FullState`]; *not* for [`PureState`] or [`ReadState`].
 #[allow(private_bounds)]
 pub trait Write<'a, 'db: 'a>: Core<'a, 'db> + RegistrySealed<'a, 'db> {
-    /// Insert a row into the named table.
-    fn insert(&mut self, name: &str, row: impl Iterator<Item = Value>) {
+    /// Set a function table's value at the given key — mirrors
+    /// [`crate::EGraph::set`] and the egglog `(set (f k) v)` action.
+    ///
+    /// **Only valid for `function` tables.** Constructors / relations
+    /// don't take a user-supplied output column; use [`Write::add_node`].
+    fn set<K: crate::api::IntoRow, V: crate::api::IntoColumn>(
+        &mut self,
+        name: &str,
+        key: K,
+        value: V,
+    ) {
         let action = lookup_action(self.registry(), name).clone();
-        action.insert(self.es_mut(), row);
+        let bv = self.base_values();
+        let mut row = key.into_values(bv);
+        row.push(value.into_value(bv));
+        action.insert(self.es_mut(), row.into_iter());
+    }
+
+    /// Mint or look up an eclass for a constructor — mirrors
+    /// [`crate::EGraph::add_node`] and the egglog `(Cons k1 k2 ...)`
+    /// expression form. Pass inputs only; the output eclass is minted
+    /// (or returned, if a row with these inputs already exists).
+    ///
+    /// **Only valid for constructor / relation tables.**
+    fn add_node<R: crate::api::IntoRow>(&mut self, name: &str, inputs: R) -> Option<Value> {
+        let action = lookup_action(self.registry(), name).clone();
+        let bv = self.base_values();
+        let key = inputs.into_values(bv);
+        action.lookup_or_insert(self.es_mut(), &key)
     }
 
     /// Remove a row from the named table.
@@ -221,10 +247,10 @@ fn lookup_action<'r>(registry: &'r ActionRegistry, name: &str) -> &'r TableActio
 /// cannot reach them.
 ///
 /// ```compile_fail
-/// // Pure context cannot insert: `Write` is not implemented.
+/// // Pure context cannot write: `Write` is not implemented.
 /// use egglog::Write;
 /// fn _no_writes<'a, 'db>(state: &mut egglog::PureState<'a, 'db>) {
-///     state.insert("foo", std::iter::empty());
+///     state.set("foo", (1_i64,), 2_i64);
 /// }
 /// ```
 ///
