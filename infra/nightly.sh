@@ -18,7 +18,7 @@ mkdir -p nightly/output nightly/tmp
 # Standalone runs do their own setup (toolchain + benchmarks clone). When
 # driven by the combined orchestrator, POACH_NIGHTLY_COMBINED=1 and the
 # benchmarks dir is supplied via POACH_BENCHMARKS_DIR.
-if [ -z "${POACH_NIGHTLY_COMBINED:-}" ]; then
+if [ ! -v POACH_NIGHTLY_COMBINED ]; then
   bash infra/setup.sh
 fi
 
