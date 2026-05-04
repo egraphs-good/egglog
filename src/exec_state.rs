@@ -114,16 +114,13 @@ pub trait Core<'a, 'db: 'a>: Internal<'a, 'db> {
     }
 
     /// Register a container value, returning its interned `Value`.
-    fn register_container<C: ContainerValue>(&mut self, container: C) -> Value {
-        // `container_values()` returns `&'a ContainerValues` — a reference
-        // tied to the inner ExecutionState's lifetime, not to `&self` —
-        // so it doesn't conflict with the subsequent `&mut` reborrow.
-        // Avoiding the clone of `ExecutionState` here matters: this is
-        // hot-path code (every container intern goes through it) and
-        // the clone copies a non-trivial amount of state.
-        let cv = self.container_values();
-        let es = self.es_mut();
-        cv.register_val(container, es)
+    ///
+    /// Container interning is idempotent and `ContainerValues` is
+    /// internally synchronized, so this only needs `&self`. The
+    /// `register_val` call routes through `ExecutionState::inc_counter`,
+    /// which itself takes `&self`.
+    fn register_container<C: ContainerValue>(&self, container: C) -> Value {
+        self.container_values().register_val(container, self.es())
     }
 
     /// Convert an egglog [`Value`] to a Rust base type.
@@ -146,7 +143,7 @@ pub trait Core<'a, 'db: 'a>: Internal<'a, 'db> {
 
     /// Intern a Rust container into the e-graph and return its
     /// [`Value`]. Sugar over `self.register_container(x)`.
-    fn container_to_value<T: ContainerValue>(&mut self, x: T) -> Value {
+    fn container_to_value<T: ContainerValue>(&self, x: T) -> Value {
         self.register_container(x)
     }
 }

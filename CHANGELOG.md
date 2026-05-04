@@ -15,6 +15,9 @@
   - `EGraph::intern::<T>(x)` / `EGraph::extract::<T>(v)` — base-value conversion.
   - `EClass<M>` (with the `EqSortMarker` trait) gives compile-time sort tags to eclass handles. Plugs into the row trait surface (`IntoRow`, `IntoColumn`, `FromRow`, `FromColumn` from `crate::api`).
   - Each subtype-specific method errors loudly when called on the wrong subtype (`set` on a constructor, `add_node` on a function, `lookup` on a constructor, `eclass_of` on a function).
+- **Rust-rule callback ergonomics (#696).** Two changes:
+  - `Core::register_container` and `container_to_value` now take `&self` (the underlying container store is interior-mutable). User closures no longer need spurious `mut ctx` for container interning.
+  - New `rust_rule!` macro generates a typed bindings struct from `vars![...]`. Inside the closure, `b.x: i64` is the extracted Rust value — no manual `value_to_base::<T>(*v)` per arg, no positional `let [x, y] = values else { unreachable!() };`. The macro covers base-value vars; eclass / container vars fall back to the lower-level `add_rust_rule()` function. The function `rust_rule()` is renamed to `add_rust_rule()` so the macro can sit alongside it in the prelude.
 
 ## [2.0.0] - 2026-02-11
 

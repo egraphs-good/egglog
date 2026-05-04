@@ -366,11 +366,7 @@ impl PrimitiveCommon for Ctor {
 }
 
 impl PurePrim for Ctor {
-    fn apply<'a, 'db>(
-        &self,
-        mut state: crate::PureState<'a, 'db>,
-        args: &[Value],
-    ) -> Option<Value> {
+    fn apply<'a, 'db>(&self, state: crate::PureState<'a, 'db>, args: &[Value]) -> Option<Value> {
         let (rf, args) = args.split_first().unwrap();
         let ResolvedFunction {
             id,

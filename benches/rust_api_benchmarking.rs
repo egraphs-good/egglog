@@ -42,7 +42,7 @@ fn match_only_rust_rule_setup(case: RustRuleBenchCase) -> RustRuleBenchInput {
     let ruleset = "rust_rule_bench";
     add_ruleset(&mut egraph, ruleset).unwrap();
 
-    rust_rule(
+    add_rust_rule(
         &mut egraph,
         "rust_rule_bench",
         ruleset,
@@ -137,7 +137,7 @@ fn insert_loop_setup(case: RustRuleInsertLoopBenchCase) -> RustRuleBenchInput {
     let ruleset = "rust_rule_insert_loop";
     add_ruleset(&mut egraph, ruleset).unwrap();
 
-    rust_rule(
+    add_rust_rule(
         &mut egraph,
         "rust_rule_insert_loop",
         ruleset,
@@ -190,7 +190,7 @@ fn tableaction_hot_path_setup(case: RustRuleTableActionBenchCase) -> RustRuleBen
     add_ruleset(&mut egraph, fill_ruleset).unwrap();
     add_ruleset(&mut egraph, read_ruleset).unwrap();
 
-    rust_rule(
+    add_rust_rule(
         &mut egraph,
         "rust_rule_tableaction_hot_path_fill",
         fill_ruleset,
@@ -213,7 +213,7 @@ fn tableaction_hot_path_setup(case: RustRuleTableActionBenchCase) -> RustRuleBen
     // Rule actions can't read tables — that would be unsound under
     // seminaive — so the read happens as part of matching, and the
     // action just unions the bound `out` with a freshly-derived value.
-    rust_rule(
+    add_rust_rule(
         &mut egraph,
         "rust_rule_tableaction_hot_path_read",
         read_ruleset,
@@ -295,7 +295,7 @@ fn fib_setup() -> RustRuleBenchInput {
     egraph.parse_and_run_program(None, &program).unwrap();
     let ruleset = "fib_ruleset";
     add_ruleset(&mut egraph, ruleset).unwrap();
-    rust_rule(
+    add_rust_rule(
         &mut egraph,
         "fib_rule",
         ruleset,
