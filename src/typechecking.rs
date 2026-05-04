@@ -1182,6 +1182,24 @@ pub enum TypeError {
     ConstructorOutputNotSort(String, Span),
     #[error("{1}\nValue lookup of non-constructor function {0} in rule is disallowed.")]
     LookupInRuleDisallowed(String, Span),
+    #[error(
+        "{span}\nTable `{name}` is a {actual}; this method is only valid for {expected} tables."
+    )]
+    WrongTableSubtype {
+        name: String,
+        expected: &'static str,
+        actual: &'static str,
+        span: Span,
+    },
+    #[error(
+        "{span}\n`eclass_of::<_, {marker_sort}>(\"{table}\", ...)` requested sort `{marker_sort}`, but `{table}` returns sort `{actual_sort}`."
+    )]
+    EClassSortMismatch {
+        table: String,
+        marker_sort: String,
+        actual_sort: String,
+        span: Span,
+    },
     #[error("{1}\nCannot set constructor {0}. Use `union` instead or declare {0} as a function.")]
     SetConstructorDisallowed(String, Span),
     #[error("All alternative definitions considered failed\n{}", .0.iter().map(|e| format!("  {e}\n")).collect::<Vec<_>>().join(""))]

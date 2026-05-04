@@ -148,7 +148,7 @@ fn insert_loop_setup(case: RustRuleInsertLoopBenchCase) -> RustRuleBenchInput {
             for i in 0..case.n_ops {
                 let k = ctx.base_to_value::<i64>(i as i64);
                 let y = ctx.base_to_value::<i64>(i as i64 + 1);
-                ctx.insert("f", [k, y].into_iter());
+                ctx.set("f", (k,), y);
             }
             Some(())
         },
@@ -203,7 +203,7 @@ fn tableaction_hot_path_setup(case: RustRuleTableActionBenchCase) -> RustRuleBen
             let y = ctx.base_to_value::<i64>(x + 1);
 
             // Populate f(x)=x+1. (No lookup here; it may not be visible within the same callback.)
-            ctx.insert("f", [k, y].into_iter());
+            ctx.set("f", (k,), y);
             Some(())
         },
     )
@@ -312,7 +312,7 @@ fn fib_setup() -> RustRuleBenchInput {
 
             let y = ctx.base_to_value::<i64>(x + 2);
             let f2 = ctx.base_to_value::<i64>(f0 + f1);
-            ctx.insert("fib", [y, f2].into_iter());
+            ctx.set("fib", (y,), f2);
 
             Some(())
         },

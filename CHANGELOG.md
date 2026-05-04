@@ -5,6 +5,16 @@
 - Desugar `relation`s to `constructor`s to simplify the language and implementation. Relations no longer return unit `()` values.
 - Refactored API to use [`TermId`] more consistently instead of `Term` where possible, simplifying egglog code.
 - **Typed primitive surface for seminaive safety (#772).** Custom primitives now implement `PrimitiveCommon` (name + type constraint) plus one of four kind-specific traits — `PurePrim`, `WritePrim`, `ReadPrim`, `FullPrim` — corresponding to the state wrapper their body receives (`PureState` / `WriteState` / `ReadState` / `FullState`). Methods on the wrappers come from sealed capability traits (`Core`, `Write`); the Rust type system makes only the kind's allowed operations callable, and the egglog typechecker rejects calls from contexts the kind is not valid in (e.g. a `WritePrim` used inside a query). Register with the matching `add_pure_primitive` / `add_write_primitive` / `add_read_primitive` / `add_full_primitive`. `rust_rule` callbacks now take `&mut WriteState` directly, replacing `RustRuleContext`. Higher-order primitives (`unstable-app`, `unstable-multiset-map` / `flat-map` / `filter` / `reduce`, `unstable-vec-map`) dispatch via a runtime `Context` flag on `ExecutionState` — single-bodied registration works in both queries and actions.
+- **Typed `EGraph` user API (#745, #751).** First-class read/write methods on `EGraph` that mirror the egglog DSL one-to-one and don't require `parse_and_run_program`:
+  - `EGraph::set(table, key, value)` — set a function table cell, mirrors `(set (f k) v)`.
+  - `EGraph::add_node(table, inputs)` — mint or look up a constructor / relation eclass, mirrors `(Cons k1 k2)` and `(R k1 k2)`. Returns the eclass `Value`.
+  - `EGraph::lookup::<_, V: BaseValue>(table, key)` — read a function's output value, returns `Option<V>`.
+  - `EGraph::eclass_of::<_, M: EqSortMarker>(table, inputs)` — read a constructor's eclass without minting, returns `Option<EClass<M>>`.
+  - `EGraph::contains` / `EGraph::remove` — work on any subtype.
+  - `EGraph::query::<R: FromRow>(table)` / `EGraph::query_pattern::<R>(vars, facts)` — typed iteration / pattern matching.
+  - `EGraph::intern::<T>(x)` / `EGraph::extract::<T>(v)` — base-value conversion.
+  - `EClass<M>` (with the `EqSortMarker` trait) gives compile-time sort tags to eclass handles. Plugs into the row trait surface (`IntoRow`, `IntoColumn`, `FromRow`, `FromColumn` from `crate::api`).
+  - Each subtype-specific method errors loudly when called on the wrong subtype (`set` on a constructor, `add_node` on a function, `lookup` on a constructor, `eclass_of` on a function).
 
 ## [2.0.0] - 2026-02-11
 

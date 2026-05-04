@@ -5,10 +5,20 @@
 //!
 //! Common entry points:
 //!
+//! - **Direct fact ops on `EGraph`** — read and write the e-graph
+//!   without writing rules:
+//!     - [`crate::EGraph::set`] for function tables
+//!     - [`crate::EGraph::add_node`] for constructors and relations
+//!     - [`crate::EGraph::lookup`] for function reads
+//!     - [`crate::EGraph::eclass_of`] for constructor reads
+//!     - [`crate::EGraph::contains`] / [`crate::EGraph::remove`] for
+//!       any subtype
+//!     - [`crate::EGraph::query`] / [`crate::EGraph::query_pattern`] for
+//!       typed iteration / pattern matching
 //! - [`rule`] / [`rust_rule`] — add rules whose RHS is egglog code or a
-//!   Rust closure (the closure receives an
-//!   [`crate::WriteState`]).
-//! - [`query`] — run a one-shot query and read out matches.
+//!   Rust closure (the closure receives an [`crate::WriteState`]).
+//! - [`query`] — legacy free-function form of `EGraph::query_pattern`,
+//!   returns untyped `Vec<Value>` rows.
 //! - [`BaseSort`] / [`ContainerSort`] — declare custom sort types.
 //! - [`crate::PrimitiveCommon`] + one of four kind-specific traits
 //!   ([`crate::PurePrim`], [`crate::WritePrim`],
@@ -440,7 +450,7 @@ where
 ///
 ///         let y = ctx.base_to_value::<i64>(x + 2);
 ///         let f2 = ctx.base_to_value::<i64>(f0 + f1);
-///         ctx.insert("fib", [y, f2].into_iter());
+///         ctx.set("fib", (y,), f2);
 ///
 ///         Some(())
 ///     },
@@ -1016,7 +1026,7 @@ mod tests {
 
                 let y = ctx.base_to_value::<i64>(x + 2);
                 let f2 = ctx.base_to_value::<i64>(f0 + f1);
-                ctx.insert("fib", [y, f2].into_iter());
+                ctx.set("fib", (y,), f2);
 
                 Some(())
             },
