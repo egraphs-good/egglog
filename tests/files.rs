@@ -91,9 +91,9 @@ impl Run {
                     let snapshot_content_across_treatments =
                         self.outputs_to_snapshot_preserved_across_treatments(outputs);
 
-                    // only assert snapshot if the snapshot is non-empty
-                    // proof_testing has different output due to automatic prove-exists, so no snapshot for that
-                    if !snapshot_content_across_treatments.is_empty() && !self.proof_testing {
+                    if self.should_assert_snapshot_across_treatments(
+                        &snapshot_content_across_treatments,
+                    ) {
                         insta::assert_snapshot!(
                             snapshot_name_across_treatments,
                             snapshot_content_across_treatments
@@ -202,17 +202,17 @@ impl Run {
             // We use a local rayon pool here because `build_global()` can only
             // be called once per process, but libtest-mimic runs many trials
             // (with different thread counts) in the same process.
+            // The threads == 1 case also goes through pool.install so the trial
+            // doesn't fall through to the default global rayon pool (which uses
+            // num_cpus threads and would make "single-threaded" tests
+            // nondeterministic).
             // TODO: when we move to per-EGraph local thread pools, replace this
             // with `egraph.with_num_threads()` and remove the explicit pool.
-            if self.threads > 1 {
-                let pool = rayon::ThreadPoolBuilder::new()
-                    .num_threads(self.threads)
-                    .build()
-                    .expect("failed to build rayon thread pool");
-                pool.install(|| self.run());
-            } else {
-                self.run();
-            }
+            let pool = rayon::ThreadPoolBuilder::new()
+                .num_threads(self.threads)
+                .build()
+                .expect("failed to build rayon thread pool");
+            pool.install(|| self.run());
             Ok(())
         })
     }
@@ -297,6 +297,15 @@ impl Run {
             in_list && (self.proofs || self.term_encoding || self.proof_testing)
         }
     }
+
+    /// only assert snapshot if the snapshot is non-empty
+    /// proof_testing has different output due to automatic prove-exists, so no snapshot for that
+    fn should_assert_snapshot_across_treatments(
+        &self,
+        snapshot_content_across_treatments: &str,
+    ) -> bool {
+        !snapshot_content_across_treatments.is_empty() && !self.proof_testing
+    }
 }
 
 fn generate_tests(glob: &str) -> Vec<Trial> {
@@ -319,6 +328,7 @@ fn generate_tests(glob: &str) -> Vec<Trial> {
         let proof_unsupported_file_list = [
             "math-microbenchmark.egg",
             "rectangle.egg",
+            "eggcc-2mm.egg",
             "subsume.egg",
             "subsume-relation.egg",
         ];
