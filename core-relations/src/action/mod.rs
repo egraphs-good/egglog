@@ -390,12 +390,7 @@ pub enum Context {
 }
 
 impl Context {
-    pub const ALL: [Context; 4] = [
-        Context::Pure,
-        Context::Write,
-        Context::Read,
-        Context::Full,
-    ];
+    pub const ALL: [Context; 4] = [Context::Pure, Context::Write, Context::Read, Context::Full];
 }
 
 /// ExecutionStates provide a means of synchronizing the results of a pending write across

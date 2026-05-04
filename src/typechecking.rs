@@ -971,8 +971,7 @@ impl TypeInfo {
             .solve(|sort: &ArcSort| sort.name())
             .map_err(|e| e.to_type_error())?;
 
-        let body: Vec<ResolvedFact> =
-            assignment.annotate_facts(&mapped_query, self, query_ctx);
+        let body: Vec<ResolvedFact> = assignment.annotate_facts(&mapped_query, self, query_ctx);
         let actions: ResolvedActions =
             assignment.annotate_actions(&mapped_action, self, action_ctx)?;
 
@@ -1069,8 +1068,7 @@ impl TypeInfo {
             .solve(|sort: &ArcSort| sort.name())
             .map_err(|e| e.to_type_error())?;
 
-        let annotated_actions =
-            assignment.annotate_actions(&mapped_action, self, Context::Full)?;
+        let annotated_actions = assignment.annotate_actions(&mapped_action, self, Context::Full)?;
         Ok(annotated_actions)
     }
 
