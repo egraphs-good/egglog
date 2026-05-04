@@ -37,9 +37,8 @@ fn rust_rule_macro_basic_i64() -> Result<(), Error> {
         ],
         |ctx, b| {
             // b.x, b.f0, b.f1 are typed i64 — no per-arg `value_to_base`.
-            let y = ctx.base_to_value::<i64>(b.x + 2);
-            let f2 = ctx.base_to_value::<i64>(b.f0 + b.f1);
-            ctx.insert("fib", [y, f2].into_iter());
+            // ctx.set takes typed key + value tuples directly.
+            ctx.set("fib", (b.x + 2,), b.f0 + b.f1);
             Some(())
         }
     )?;
@@ -90,9 +89,7 @@ fn rust_rule_macro_mixed_types() -> Result<(), Error> {
         |ctx, b| {
             // b.name: String, b.a: i64
             assert!(b.name == "alice" || b.name == "bob");
-            let key = ctx.base_to_value::<egglog::sort::S>(b.name.clone().into());
-            let val = ctx.base_to_value::<i64>(b.a * b.a);
-            ctx.insert("age_squared", [key, val].into_iter());
+            ctx.set("age_squared", (b.name.clone(),), b.a * b.a);
             Some(())
         }
     )?;
@@ -138,8 +135,8 @@ fn rust_rule_macro_empty_vars() -> Result<(), Error> {
         facts![(trigger)],
         |ctx, _b| {
             counter_clone.fetch_add(1, Ordering::SeqCst);
-            let v = ctx.base_to_value::<i64>(42);
-            ctx.insert("flag", [v].into_iter());
+            // Zero-arg function key uses RawValues(vec![]); see add_node docs.
+            ctx.set("flag", egglog::RawValues(vec![]), 42_i64);
             Some(())
         }
     )?;

@@ -18,6 +18,19 @@
 - **Rust-rule callback ergonomics (#696).** Two changes:
   - `Core::register_container` and `container_to_value` now take `&self` (the underlying container store is interior-mutable). User closures no longer need spurious `mut ctx` for container interning.
   - New `rust_rule!` macro generates a typed bindings struct from `vars![...]`. Inside the closure, `b.x: i64` is the extracted Rust value — no manual `value_to_base::<T>(*v)` per arg, no positional `let [x, y] = values else { unreachable!() };`. The macro covers base-value vars; eclass / container vars fall back to the lower-level `add_rust_rule()` function. The function `rust_rule()` is renamed to `add_rust_rule()` so the macro can sit alongside it in the prelude.
+- Hide internal IR types from the public surface (issue #751). The following items are no longer re-exported from the `egglog` crate root:
+  - `Atom`, `AtomTerm`, `SpecializedPrimitive` (now `pub(crate)` re-exports; `SpecializedPrimitive` remains structurally `pub` only because it appears in `ResolvedCall::Primitive`, but its fields are private and it is no longer reachable from `egglog::*`).
+  - `ResolvedExpr`, `ResolvedFact` (now `pub(crate)` type aliases; only the internal IR uses them).
+  - `TypeInfo::expr_has_function_lookup` is now `pub(crate)` — it took a `ResolvedExpr` and only had internal callers.
+  - `ResolvedVar` and `ResolvedCall` remain public because the public `EGraph::resolve_program` returns `Vec<ResolvedCommand>` (`= GenericCommand<ResolvedCall, ResolvedVar>`), which is consumed by external callers (e.g. `sanitize_internal_names`).
+  - `egglog_bridge::FunctionId` is verified to NOT be re-exported from the `egglog` crate; the `Function` struct's `backend_id` field is private.
+- Added a builder API for declaring tables: `EGraph::declare(name).input(...).output(...).function(...)` / `.constructor(...)` / `.relation()`. The free functions `add_function`, `add_constructor`, and `add_relation` in `egglog::prelude` are now `#[deprecated]` thin wrappers over the builder.
+- New `egglog!` proc macro from `egglog-macros` validates an embedded egglog program at compile time and expands to `parse_and_run_program`. Typechecker errors become Rust compile errors.
+
+### Migration notes
+
+- If you imported `egglog::Atom`, `egglog::AtomTerm`, `egglog::SpecializedPrimitive`, `egglog::ResolvedExpr`, or `egglog::ResolvedFact`, those imports will fail. These types are internal IR; if you need them, please open an issue describing your use case. `ResolvedCall` and `ResolvedVar` (and `egglog::ast::ResolvedCommand`) remain available.
+- Replace `add_function(eg, name, schema, merge)` with `eg.declare(name).input(...).output(...).function(merge)`. Same for `add_constructor` and `add_relation`. The deprecated free functions still work for one release.
 
 ## [2.0.0] - 2026-02-11
 
