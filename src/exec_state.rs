@@ -58,18 +58,17 @@ pub use crate::core_relations::Context;
 pub(crate) trait Internal<'a, 'db: 'a>: 'a {
     fn es(&self) -> &ExecutionState<'db>;
     fn es_mut(&mut self) -> &mut ExecutionState<'db>;
+    /// The call-site [`Context`] this primitive was invoked from.
+    /// Stamped onto the wrapper at construction time by the
+    /// `ExternalFunction` wrapper closure; read by
+    /// [`Core::apply_function`] to route higher-order dispatch.
+    fn ctx(&self) -> Context;
 
     fn call_external_func(&mut self, id: ExternalFunctionId, args: &[Value]) -> Option<Value> {
         self.es_mut().call_external_func(id, args)
     }
     fn raw_exec_state(&mut self) -> &mut ExecutionState<'db> {
         self.es_mut()
-    }
-    /// The current execution context this primitive is being invoked
-    /// from. Used by `FunctionContainer::apply` to choose pure-side
-    /// vs action-side dispatch.
-    fn current_context(&self) -> Context {
-        self.es().current_context()
     }
 }
 
@@ -147,6 +146,25 @@ pub trait Core<'a, 'db: 'a>: Internal<'a, 'db> {
     /// [`Value`]. Sugar over `self.register_container(x)`.
     fn container_to_value<T: ContainerValue>(&mut self, x: T) -> Value {
         self.register_container(x)
+    }
+
+    /// Dispatch a wrapped `unstable-fn` value. This is the public entry
+    /// point for higher-order primitive bodies: the call-site
+    /// [`Context`] is stamped onto the state by the registration
+    /// wrapper (see [`EGraph::add_higher_order_primitive`] and the
+    /// `_read` / `_write` / `_full` variants), so the caller can't
+    /// supply a wrong context — there is no `ctx` parameter to lie
+    /// about.
+    ///
+    /// [`EGraph::add_higher_order_primitive`]: crate::EGraph::add_higher_order_primitive
+    fn apply_function(
+        &mut self,
+        fc: &crate::sort::FunctionContainer,
+        args: &[Value],
+    ) -> Option<Value> {
+        let ctx = self.ctx();
+        let mut pure = PureState::wrap(self.raw_exec_state(), ctx);
+        fc.apply(&mut pure, ctx, args)
     }
 }
 
@@ -234,9 +252,13 @@ fn lookup_action<'r>(registry: &'r ActionRegistry, name: &str) -> &'r TableActio
 ///     state.raw_exec_state();
 /// }
 /// ```
-#[repr(transparent)]
 pub struct PureState<'a, 'db> {
     pub(crate) inner: &'a mut ExecutionState<'db>,
+    /// The call-site [`Context`] the wrapping primitive was invoked
+    /// from. Stamped by the wrapper closure at invocation time and
+    /// read by [`PureState::apply_function`]; user code cannot
+    /// observe or modify it directly.
+    pub(crate) ctx: Context,
 }
 
 /// Typed view for read-only primitives. Valid in [`Context::Read`]
@@ -247,6 +269,7 @@ pub struct PureState<'a, 'db> {
 pub struct ReadState<'a, 'db> {
     pub(crate) inner: &'a mut ExecutionState<'db>,
     pub(crate) registry: &'a ActionRegistry,
+    pub(crate) ctx: Context,
 }
 
 /// Typed view for primitives running on the RHS of a rule. Valid in
@@ -266,6 +289,7 @@ pub struct ReadState<'a, 'db> {
 pub struct WriteState<'a, 'db> {
     pub(crate) inner: &'a mut ExecutionState<'db>,
     pub(crate) registry: &'a ActionRegistry,
+    pub(crate) ctx: Context,
 }
 
 /// Typed view for top-level action sites with both read and write
@@ -283,11 +307,12 @@ pub struct WriteState<'a, 'db> {
 pub struct FullState<'a, 'db> {
     pub(crate) inner: &'a mut ExecutionState<'db>,
     pub(crate) registry: &'a ActionRegistry,
+    pub(crate) ctx: Context,
 }
 
 impl<'a, 'db: 'a> PureState<'a, 'db> {
-    pub(crate) fn wrap(es: &'a mut ExecutionState<'db>) -> Self {
-        Self { inner: es }
+    pub(crate) fn wrap(es: &'a mut ExecutionState<'db>, ctx: Context) -> Self {
+        Self { inner: es, ctx }
     }
     pub const fn valid_contexts() -> &'static [Context] {
         &Context::ALL
@@ -295,10 +320,15 @@ impl<'a, 'db: 'a> PureState<'a, 'db> {
 }
 
 impl<'a, 'db: 'a> ReadState<'a, 'db> {
-    pub(crate) fn wrap(es: &'a mut ExecutionState<'db>, registry: &'a ActionRegistry) -> Self {
+    pub(crate) fn wrap(
+        es: &'a mut ExecutionState<'db>,
+        registry: &'a ActionRegistry,
+        ctx: Context,
+    ) -> Self {
         Self {
             inner: es,
             registry,
+            ctx,
         }
     }
     pub const fn valid_contexts() -> &'static [Context] {
@@ -307,10 +337,15 @@ impl<'a, 'db: 'a> ReadState<'a, 'db> {
 }
 
 impl<'a, 'db: 'a> WriteState<'a, 'db> {
-    pub(crate) fn wrap(es: &'a mut ExecutionState<'db>, registry: &'a ActionRegistry) -> Self {
+    pub(crate) fn wrap(
+        es: &'a mut ExecutionState<'db>,
+        registry: &'a ActionRegistry,
+        ctx: Context,
+    ) -> Self {
         Self {
             inner: es,
             registry,
+            ctx,
         }
     }
     pub const fn valid_contexts() -> &'static [Context] {
@@ -319,10 +354,15 @@ impl<'a, 'db: 'a> WriteState<'a, 'db> {
 }
 
 impl<'a, 'db: 'a> FullState<'a, 'db> {
-    pub(crate) fn wrap(es: &'a mut ExecutionState<'db>, registry: &'a ActionRegistry) -> Self {
+    pub(crate) fn wrap(
+        es: &'a mut ExecutionState<'db>,
+        registry: &'a ActionRegistry,
+        ctx: Context,
+    ) -> Self {
         Self {
             inner: es,
             registry,
+            ctx,
         }
     }
     pub const fn valid_contexts() -> &'static [Context] {
@@ -342,6 +382,9 @@ impl<'a, 'db: 'a> Internal<'a, 'db> for PureState<'a, 'db> {
     fn es_mut(&mut self) -> &mut ExecutionState<'db> {
         self.inner
     }
+    fn ctx(&self) -> Context {
+        self.ctx
+    }
 }
 impl<'a, 'db: 'a> Core<'a, 'db> for PureState<'a, 'db> {}
 
@@ -351,6 +394,9 @@ impl<'a, 'db: 'a> Internal<'a, 'db> for ReadState<'a, 'db> {
     }
     fn es_mut(&mut self) -> &mut ExecutionState<'db> {
         self.inner
+    }
+    fn ctx(&self) -> Context {
+        self.ctx
     }
 }
 impl<'a, 'db: 'a> RegistrySealed<'a, 'db> for ReadState<'a, 'db> {
@@ -368,6 +414,9 @@ impl<'a, 'db: 'a> Internal<'a, 'db> for WriteState<'a, 'db> {
     fn es_mut(&mut self) -> &mut ExecutionState<'db> {
         self.inner
     }
+    fn ctx(&self) -> Context {
+        self.ctx
+    }
 }
 impl<'a, 'db: 'a> RegistrySealed<'a, 'db> for WriteState<'a, 'db> {
     fn registry(&self) -> &ActionRegistry {
@@ -383,6 +432,9 @@ impl<'a, 'db: 'a> Internal<'a, 'db> for FullState<'a, 'db> {
     }
     fn es_mut(&mut self) -> &mut ExecutionState<'db> {
         self.inner
+    }
+    fn ctx(&self) -> Context {
+        self.ctx
     }
 }
 impl<'a, 'db: 'a> RegistrySealed<'a, 'db> for FullState<'a, 'db> {

@@ -18,11 +18,20 @@ use std::sync::{Arc, RwLock};
 #[derive(Clone)]
 struct PurePrimWrapper<T> {
     prim: T,
+    /// The call-site [`Context`] this wrapper stamps onto the
+    /// `PureState` before dispatching. For non-HOF registrations the
+    /// natural choice is [`Context::Pure`] (fail-closed: HOF dispatch
+    /// via `apply_function` would refuse mint/read). For HOF
+    /// registrations, [`EGraph::add_higher_order_primitive`] registers
+    /// one wrapper per `Context` variant so the typechecker's pick at
+    /// each call site is encoded directly here.
+    ctx: Context,
 }
 
 impl<T: PurePrim + Clone> ExternalFunction for PurePrimWrapper<T> {
     fn invoke(&self, exec_state: &mut ExecutionState, args: &[Value]) -> Option<Value> {
-        self.prim.apply(PureState::wrap(exec_state), args)
+        self.prim
+            .apply(PureState::wrap(exec_state, self.ctx), args)
     }
 }
 
@@ -34,6 +43,9 @@ impl<T: PurePrim + Clone> ExternalFunction for PurePrimWrapper<T> {
 struct RegistryPrimWrapper<T, S> {
     prim: T,
     registry: Arc<RwLock<ActionRegistry>>,
+    /// Stamped onto the state wrapper. Same role as
+    /// [`PurePrimWrapper::ctx`].
+    ctx: Context,
     _wrap: std::marker::PhantomData<fn() -> S>,
 }
 
@@ -41,6 +53,7 @@ trait RegistryWrap<T>: Clone + Send + Sync {
     fn invoke(
         prim: &T,
         exec_state: &mut ExecutionState,
+        ctx: Context,
         args: &[Value],
         registry: &ActionRegistry,
     ) -> Option<Value>;
@@ -53,10 +66,11 @@ impl<T: ReadPrim> RegistryWrap<T> for WrapRead {
     fn invoke(
         prim: &T,
         exec_state: &mut ExecutionState,
+        ctx: Context,
         args: &[Value],
         registry: &ActionRegistry,
     ) -> Option<Value> {
-        prim.apply(ReadState::wrap(exec_state, registry), args)
+        prim.apply(ReadState::wrap(exec_state, registry, ctx), args)
     }
 }
 #[derive(Clone)]
@@ -66,10 +80,11 @@ impl<T: WritePrim> RegistryWrap<T> for WrapWrite {
     fn invoke(
         prim: &T,
         exec_state: &mut ExecutionState,
+        ctx: Context,
         args: &[Value],
         registry: &ActionRegistry,
     ) -> Option<Value> {
-        prim.apply(WriteState::wrap(exec_state, registry), args)
+        prim.apply(WriteState::wrap(exec_state, registry, ctx), args)
     }
 }
 #[derive(Clone)]
@@ -79,10 +94,11 @@ impl<T: FullPrim> RegistryWrap<T> for WrapFull {
     fn invoke(
         prim: &T,
         exec_state: &mut ExecutionState,
+        ctx: Context,
         args: &[Value],
         registry: &ActionRegistry,
     ) -> Option<Value> {
-        prim.apply(FullState::wrap(exec_state, registry), args)
+        prim.apply(FullState::wrap(exec_state, registry, ctx), args)
     }
 }
 
@@ -91,26 +107,7 @@ impl<T: Clone + Send + Sync + 'static, S: RegistryWrap<T> + 'static> ExternalFun
 {
     fn invoke(&self, exec_state: &mut ExecutionState, args: &[Value]) -> Option<Value> {
         let registry = self.registry.read().unwrap();
-        S::invoke(&self.prim, exec_state, args, &registry)
-    }
-}
-
-// `ExternalFunction` wrapper for higher-order primitives. Like the
-// pure-side wrapper but stamps a specific [`Context`] onto
-// `ExecutionState` before invoking the body, so
-// `FunctionContainer::apply` reads back the right context and chooses
-// pure-side vs action-side dispatch. One id per context variant; the
-// typechecker picks based on the call site.
-#[derive(Clone)]
-struct HigherOrderPrimWrapper<T> {
-    prim: T,
-    ctx: Context,
-}
-
-impl<T: PurePrim + Clone> ExternalFunction for HigherOrderPrimWrapper<T> {
-    fn invoke(&self, exec_state: &mut ExecutionState, args: &[Value]) -> Option<Value> {
-        exec_state.set_current_context(self.ctx);
-        self.prim.apply(PureState::wrap(exec_state), args)
+        S::invoke(&self.prim, exec_state, self.ctx, args, &registry)
     }
 }
 
@@ -160,16 +157,64 @@ impl Hash for FuncType {
 /// or None if it is invalid.
 pub type PrimitiveValidator = Arc<dyn Fn(&mut TermDag, &[TermId]) -> Option<TermId> + Send + Sync>;
 
+/// The trait kind a primitive was registered as. Implies its full
+/// capability profile — see [`PrimKind::allows`].
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
+pub enum PrimKind {
+    /// Registered via [`EGraph::add_pure_primitive`]. Body sees
+    /// [`PureState`]; valid in any ambient context.
+    ///
+    /// [`PureState`]: crate::PureState
+    Pure,
+    /// Registered via [`EGraph::add_read_primitive`]. Body sees
+    /// [`ReadState`]; valid in `Read` and `Full` ambients.
+    ///
+    /// [`ReadState`]: crate::ReadState
+    Read,
+    /// Registered via [`EGraph::add_write_primitive`]. Body sees
+    /// [`WriteState`]; valid in `Write` and `Full` ambients.
+    ///
+    /// [`WriteState`]: crate::WriteState
+    Write,
+    /// Registered via [`EGraph::add_full_primitive`]. Body sees
+    /// [`FullState`]; valid only in the `Full` ambient.
+    ///
+    /// [`FullState`]: crate::FullState
+    Full,
+}
+
+impl PrimKind {
+    /// Whether a primitive of this kind can run when the ambient
+    /// [`Context`] is `ctx`. The seminaive-compatibility check uses
+    /// this to decide whether a rule has to be demoted to naive.
+    pub fn allows(self, ctx: Context) -> bool {
+        match (self, ctx) {
+            (PrimKind::Pure, _) => true,
+            (PrimKind::Read, Context::Read | Context::Full) => true,
+            (PrimKind::Write, Context::Write | Context::Full) => true,
+            (PrimKind::Full, Context::Full) => true,
+            _ => false,
+        }
+    }
+}
+
 #[derive(Clone)]
 pub struct PrimitiveWithId {
     pub(crate) primitive: Arc<dyn PrimitiveCommon>,
     pub(crate) id: ExternalFunctionId,
     pub(crate) validator: Option<PrimitiveValidator>,
-    /// The execution contexts in which this primitive should be picked
-    /// at this call site. Seeded from the wrapper type's
-    /// `valid_contexts()` (e.g. [`PureState::valid_contexts`] is all
-    /// four; [`WriteState::valid_contexts`] is the action contexts).
-    pub(crate) valid_contexts: Vec<Context>,
+    /// The single context this registration was created for. Each
+    /// `add_*_primitive` call commits one registration per context
+    /// the trait permits, so the constraint solver filters by
+    /// `selection_ctx == ambient_ctx` to pick exactly one id per
+    /// call site.
+    pub(crate) selection_ctx: Context,
+    /// The trait kind this primitive was registered as. Determines
+    /// the primitive's capability profile (which contexts it can run
+    /// in) — used by the rule-add path to decide seminaive
+    /// compatibility, separate from the (singleton) `selection_ctx`
+    /// used by the constraint solver.
+    pub(crate) kind: PrimKind,
 }
 
 impl PrimitiveWithId {
@@ -285,8 +330,13 @@ impl EGraph {
     where
         T: PurePrim + Clone,
     {
-        let entry = self.build_pure_entry(x, validator);
-        self.commit_primitive(entry);
+        self.register_per_context(
+            x,
+            validator,
+            PrimKind::Pure,
+            PureState::valid_contexts(),
+            |x, ctx| Box::new(PurePrimWrapper { prim: x, ctx }),
+        );
     }
 
     /// Register a [`WritePrim`] — runs in rule-action and
@@ -296,8 +346,21 @@ impl EGraph {
     where
         T: WritePrim + Clone,
     {
-        let entry = self.build_write_entry(x, validator);
-        self.commit_primitive(entry);
+        let registry = self.backend.action_registry();
+        self.register_per_context(
+            x,
+            validator,
+            PrimKind::Write,
+            WriteState::valid_contexts(),
+            move |x, ctx| {
+                Box::new(RegistryPrimWrapper::<T, WrapWrite> {
+                    prim: x,
+                    registry: registry.clone(),
+                    ctx,
+                    _wrap: std::marker::PhantomData,
+                })
+            },
+        );
     }
 
     /// Register a [`ReadPrim`] — runs in global-query and
@@ -307,8 +370,21 @@ impl EGraph {
     where
         T: ReadPrim + Clone,
     {
-        let entry = self.build_read_entry(x, validator);
-        self.commit_primitive(entry);
+        let registry = self.backend.action_registry();
+        self.register_per_context(
+            x,
+            validator,
+            PrimKind::Read,
+            ReadState::valid_contexts(),
+            move |x, ctx| {
+                Box::new(RegistryPrimWrapper::<T, WrapRead> {
+                    prim: x,
+                    registry: registry.clone(),
+                    ctx,
+                    _wrap: std::marker::PhantomData,
+                })
+            },
+        );
     }
 
     /// Register a [`FullPrim`] — runs only in the
@@ -318,158 +394,61 @@ impl EGraph {
     where
         T: FullPrim + Clone,
     {
-        let entry = self.build_full_entry(x, validator);
-        self.commit_primitive(entry);
+        let registry = self.backend.action_registry();
+        self.register_per_context(
+            x,
+            validator,
+            PrimKind::Full,
+            FullState::valid_contexts(),
+            move |x, ctx| {
+                Box::new(RegistryPrimWrapper::<T, WrapFull> {
+                    prim: x,
+                    registry: registry.clone(),
+                    ctx,
+                    _wrap: std::marker::PhantomData,
+                })
+            },
+        );
     }
 
-    /// Register a higher-order primitive — one whose body dispatches a
-    /// wrapped `unstable-fn` value via [`FunctionContainer::apply`]
-    /// and therefore needs to behave differently in query versus
-    /// action contexts.
+    /// Shared registration engine. Registers `x` once per `Context` in
+    /// `valid_ctxs`, with each wrapper carrying its specific context
+    /// stamped onto the state wrapper at invoke time.
     ///
-    /// Internally this registers the primitive four times — once per
-    /// [`Context`] variant ([`Context::Pure`] / [`Context::Write`] /
-    /// [`Context::Read`] / [`Context::Full`]). Each `ExternalFunctionId`
-    /// shares the same body, but the wrapper closure stamps its
-    /// specific context onto `ExecutionState` before invoking, so
-    /// `FunctionContainer::apply` reads back the right value at
-    /// runtime and chooses pure-side vs action-side dispatch
-    /// accordingly. This keeps the user-facing definition single-bodied
-    /// while still letting the typechecker reject HOF calls in
-    /// contexts where they wouldn't make sense.
-    ///
-    /// `T: PurePrim` because the body's `state` parameter is always a
-    /// [`PureState`]; action-side dispatch happens through privileged
-    /// access (the `Internal` trait), which `PureState`
-    /// implements crate-internally.
-    ///
-    /// Crate-private: this is the implementation hook for
-    /// `unstable-app`, `unstable-multiset-map` / `flat-map` /
-    /// `filter` / `reduce`, and `unstable-vec-map`. External users
-    /// don't need it; if a use case appears later it can be promoted.
+    /// Every primitive is registered per-context. The typechecker's
+    /// `valid_contexts` filter selects exactly one candidate at each
+    /// call site; an `unstable-fn` value built around the primitive
+    /// bakes *all* signature-matching candidates, and
+    /// [`FunctionContainer::apply`] picks the one whose
+    /// `valid_contexts` covers the application ctx — so values flow
+    /// freely across contexts.
     ///
     /// [`FunctionContainer::apply`]: crate::sort::FunctionContainer::apply
-    /// [`ExternalFunctionId`]: crate::core_relations::ExternalFunctionId
-    /// [`Context`]: crate::Context
-    /// [`PureState`]: crate::PureState
-    pub(crate) fn add_higher_order_primitive<T>(
+    fn register_per_context<T, F>(
         &mut self,
         x: T,
         validator: Option<PrimitiveValidator>,
+        kind: PrimKind,
+        valid_ctxs: &[Context],
+        mut build_wrapper: F,
     ) where
-        T: PurePrim + Clone,
+        T: PrimitiveCommon + Clone,
+        F: FnMut(T, Context) -> Box<dyn ExternalFunction>,
     {
         let primitive: Arc<dyn PrimitiveCommon> = Arc::new(x.clone());
         let name = primitive.name().to_owned();
-
-        // Register one `ExternalFunctionId` per [`Context`] variant.
-        // Each closure stamps its exact context onto `ExecutionState`
-        // before invoking the shared body, so
-        // `FunctionContainer::apply` reads back the precise context
-        // and chooses the right dispatch (e.g. `Read` allows
-        // custom-function reads but not constructor minting).
-        for &ctx in &Context::ALL {
+        for &ctx in valid_ctxs {
             let id = self
                 .backend
-                .register_external_func(Box::new(HigherOrderPrimWrapper {
-                    prim: x.clone(),
-                    ctx,
-                }));
-            let pending = PendingPrimitive {
+                .register_external_func(build_wrapper(x.clone(), ctx));
+            self.commit_primitive(PendingPrimitive {
                 primitive: primitive.clone(),
                 id,
                 validator: validator.clone(),
-                valid_contexts: vec![ctx],
+                selection_ctx: ctx,
+                kind,
                 name: name.clone(),
-            };
-            self.commit_primitive(pending);
-        }
-    }
-
-    fn build_pure_entry<T: PurePrim + Clone>(
-        &mut self,
-        x: T,
-        validator: Option<PrimitiveValidator>,
-    ) -> PendingPrimitive {
-        let primitive: Arc<dyn PrimitiveCommon> = Arc::new(x.clone());
-        let id = self
-            .backend
-            .register_external_func(Box::new(PurePrimWrapper { prim: x }));
-        PendingPrimitive {
-            valid_contexts: PureState::valid_contexts().to_vec(),
-            name: primitive.name().to_owned(),
-            primitive,
-            id,
-            validator,
-        }
-    }
-
-    fn build_read_entry<T: ReadPrim + Clone>(
-        &mut self,
-        x: T,
-        validator: Option<PrimitiveValidator>,
-    ) -> PendingPrimitive {
-        let primitive: Arc<dyn PrimitiveCommon> = Arc::new(x.clone());
-        let registry = self.backend.action_registry();
-        let id =
-            self.backend
-                .register_external_func(Box::new(RegistryPrimWrapper::<T, WrapRead> {
-                    prim: x,
-                    registry,
-                    _wrap: std::marker::PhantomData,
-                }));
-        PendingPrimitive {
-            valid_contexts: ReadState::valid_contexts().to_vec(),
-            name: primitive.name().to_owned(),
-            primitive,
-            id,
-            validator,
-        }
-    }
-
-    fn build_write_entry<T: WritePrim + Clone>(
-        &mut self,
-        x: T,
-        validator: Option<PrimitiveValidator>,
-    ) -> PendingPrimitive {
-        let primitive: Arc<dyn PrimitiveCommon> = Arc::new(x.clone());
-        let registry = self.backend.action_registry();
-        let id =
-            self.backend
-                .register_external_func(Box::new(RegistryPrimWrapper::<T, WrapWrite> {
-                    prim: x,
-                    registry,
-                    _wrap: std::marker::PhantomData,
-                }));
-        PendingPrimitive {
-            valid_contexts: WriteState::valid_contexts().to_vec(),
-            name: primitive.name().to_owned(),
-            primitive,
-            id,
-            validator,
-        }
-    }
-
-    fn build_full_entry<T: FullPrim + Clone>(
-        &mut self,
-        x: T,
-        validator: Option<PrimitiveValidator>,
-    ) -> PendingPrimitive {
-        let primitive: Arc<dyn PrimitiveCommon> = Arc::new(x.clone());
-        let registry = self.backend.action_registry();
-        let id =
-            self.backend
-                .register_external_func(Box::new(RegistryPrimWrapper::<T, WrapFull> {
-                    prim: x,
-                    registry,
-                    _wrap: std::marker::PhantomData,
-                }));
-        PendingPrimitive {
-            valid_contexts: FullState::valid_contexts().to_vec(),
-            name: primitive.name().to_owned(),
-            primitive,
-            id,
-            validator,
+            });
         }
     }
 
@@ -478,7 +457,8 @@ impl EGraph {
             primitive,
             id,
             validator,
-            valid_contexts,
+            selection_ctx,
+            kind,
             name,
         } = entry;
         self.type_info
@@ -489,20 +469,22 @@ impl EGraph {
                 primitive,
                 id,
                 validator,
-                valid_contexts,
+                selection_ctx,
+                kind,
             });
     }
 }
 
 /// A primitive that's been registered with the bridge but not yet
-/// pushed into the `TypeInfo` registry. Used by
-/// [`EGraph::add_higher_order_primitive`] which commits multiple
-/// per-context entries in a row.
+/// pushed into the `TypeInfo` registry. The four `add_*_primitive`
+/// helpers commit one of these per [`Context`] variant the trait
+/// supports.
 struct PendingPrimitive {
     primitive: Arc<dyn PrimitiveCommon>,
     id: ExternalFunctionId,
     validator: Option<PrimitiveValidator>,
-    valid_contexts: Vec<Context>,
+    selection_ctx: Context,
+    kind: PrimKind,
     name: String,
 }
 

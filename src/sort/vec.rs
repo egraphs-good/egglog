@@ -206,7 +206,7 @@ pub(crate) fn try_registering_vec_map(
     {
         return;
     }
-    eg.add_higher_order_primitive(
+    eg.add_pure_primitive(
         VecMap {
             name: "unstable-vec-map".into(),
             vec: input_vec,
@@ -270,7 +270,7 @@ impl PurePrim for VecMap {
             .clone();
         let mut new_data = Vec::with_capacity(vec.data.len());
         for v in vec.data {
-            if let Some(mapped) = fc.apply(&mut state, &[v]) {
+            if let Some(mapped) = state.apply_function(&fc, &[v]) {
                 new_data.push(mapped);
             }
         }

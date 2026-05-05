@@ -201,15 +201,11 @@ impl Sort for FunctionSort {
             },
             None,
         );
-        // Higher-order primitive: registers two `ExternalFunctionId`s
-        // (one for query contexts, one for action contexts) that share
-        // a single body. `FunctionContainer::apply` reads
-        // `state.current_context()` at runtime to choose pure-side vs
-        // action-side dispatch — pure-side returns `None` for
-        // constructor and custom-function lookups (would be unsound in
-        // queries), action-side mints constructors and reads custom
-        // functions.
-        eg.add_higher_order_primitive(
+        // Higher-order primitive: registers four `ExternalFunctionId`s
+        // (one per `Context` variant). Each wrapper stamps its specific
+        // ctx onto the `PureState`, and `Core::apply_function` reads it
+        // back to choose pure-side vs action-side dispatch.
+        eg.add_pure_primitive(
             Apply {
                 name: "unstable-app".into(),
                 function: self.clone(),
@@ -441,13 +437,16 @@ pub enum ResolvedFunctionId {
     /// this in every context except `Pure` (where it would be an
     /// untracked seminaive read).
     CustomLookup(egglog_bridge::TableAction),
-    /// Wraps a primitive. `valid_contexts` carries the primitive's
-    /// declared capability profile so `FunctionContainer::apply` can
-    /// decide at dispatch time whether the inner call is valid in
-    /// the runtime context.
+    /// Wraps a primitive. Carries every signature-matching
+    /// registration the typechecker found at build time, paired with
+    /// its `selection_ctx`. At dispatch time
+    /// [`FunctionContainer::apply`] picks the candidate whose
+    /// `selection_ctx` matches the application context — so the
+    /// runtime selection is independent of the build-site context,
+    /// and an `unstable-fn` value may flow freely from one context to
+    /// another.
     Prim {
-        id: ExternalFunctionId,
-        valid_contexts: Vec<crate::Context>,
+        candidates: Vec<(ExternalFunctionId, crate::Context)>,
     },
 }
 
@@ -495,34 +494,40 @@ impl PurePrim for Apply {
             .get_val::<FunctionContainer>(*fc_val)
             .unwrap()
             .clone();
-        fc.apply(&mut state, args)
+        state.apply_function(&fc, args)
     }
 }
 
 impl FunctionContainer {
-    /// Apply the wrapped function. Dispatch is keyed off
-    /// [`Internal::current_context`](crate::exec_state::Internal::current_context),
-    /// which the wrapper closure registered for each higher-order
-    /// primitive stamps before invoking the body:
+    /// Apply the wrapped function. The caller passes the [`Context`] the
+    /// HOF is being invoked from. This method is crate-private — the
+    /// public path for users is [`PureState::apply_function`], which
+    /// reads `ctx` from the wrapper's stamped state and forwards here.
     ///
-    /// - In `Pure`, constructor and custom-function lookups
-    ///   return `None`. Constructor minting would be unsound, and
+    /// - In `Pure`, constructor and custom-function lookups return
+    ///   `None`. Constructor minting would be unsound, and
     ///   custom-function reads would be untracked by seminaive.
-    /// - In `Read`, constructor lookups go through read-only
-    ///   `lookup` (existing eclasses are visible, no minting), and
+    /// - In `Read`, constructor lookups go through read-only `lookup`
+    ///   (existing eclasses are visible, no minting), and
     ///   custom-function lookups also read via `lookup`.
-    /// - In a write-capable context (`Write` / `Full`),
-    ///   constructor lookups mint via `lookup_or_insert`, and
-    ///   custom-function lookups read via `lookup`.
+    /// - In a write-capable context (`Write` / `Full`), constructor
+    ///   lookups mint via `lookup_or_insert`, and custom-function
+    ///   lookups read via `lookup`.
     /// - In all four contexts, wrapped primitives dispatch only when
-    ///   their `valid_contexts` cover the current context.
-    pub(crate) fn apply<'a, 'db, S>(&self, state: &mut S, args: &[Value]) -> Option<Value>
+    ///   their `valid_contexts` cover `ctx`.
+    ///
+    /// [`Context`]: crate::Context
+    /// [`PureState::apply_function`]: crate::PureState::apply_function
+    pub(crate) fn apply<'a, 'db>(
+        &self,
+        state: &mut crate::PureState<'a, 'db>,
+        ctx: crate::Context,
+        args: &[Value],
+    ) -> Option<Value>
     where
-        S: Internal<'a, 'db>,
         'db: 'a,
     {
         let args: Vec<_> = self.1.iter().map(|(_, x)| x).chain(args).copied().collect();
-        let ctx = state.current_context();
         // Constructor minting requires write capability (action contexts).
         let can_mint = matches!(ctx, crate::Context::Write | crate::Context::Full);
         // Read access: forbidden in `Pure` (untracked by seminaive);
@@ -549,13 +554,17 @@ impl FunctionContainer {
                     None
                 }
             }
-            ResolvedFunctionId::Prim { id, valid_contexts } => {
-                if valid_contexts.contains(&ctx) {
-                    state.call_external_func(*id, &args)
-                } else {
-                    None
+            ResolvedFunctionId::Prim { candidates } => {
+                // Pick the registration whose `selection_ctx` equals
+                // the application ctx. Each `add_*_primitive` commits
+                // disjoint singletons across the trait's valid ctxs,
+                // so exactly one candidate matches.
+                match candidates.iter().find(|(_, c)| *c == ctx) {
+                    Some((id, _)) => state.call_external_func(*id, &args),
+                    None => None,
                 }
             }
         }
     }
 }
+

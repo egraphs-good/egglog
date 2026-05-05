@@ -2099,25 +2099,17 @@ impl<'a> BackendRule<'a> {
                             p.accept(&types, self.type_info)
                         })
                 });
-                // Higher-order primitives are registered once per
-                // [`Context`], so a name like `unstable-multiset-flat-map`
-                // produces four candidates whose only difference is
-                // `valid_contexts`. Pick the one tagged with the same
-                // context as the surrounding `unstable-fn`, so the
-                // wrapped function dispatches consistently with the
-                // outer call at runtime.
-                if ps.len() > 1 {
-                    ps.retain(|p| p.valid_contexts.contains(&ctx));
-                }
-                assert!(ps.len() == 1, "options for {name} in {ctx:?}: {ps:?}");
-                let picked = ps.into_iter().next().unwrap();
-                // Record the wrapped primitive's capability profile so
-                // `FunctionContainer::apply` can refuse dispatch in
-                // contexts where the inner function isn't valid.
-                ResolvedFunctionId::Prim {
-                    id: picked.id,
-                    valid_contexts: picked.valid_contexts.clone(),
-                }
+                // Bake every signature-matching registration. The
+                // *application*-time context (carried on `state.ctx`
+                // by the wrapping HOF) selects which candidate
+                // dispatches — independent of the build-site `ctx`.
+                // Each registration carries a singleton `selection_ctx`;
+                // dispatch picks the one matching the application ctx.
+                let _ = ctx;
+                assert!(!ps.is_empty(), "no callable for {name}");
+                let candidates: Vec<_> =
+                    ps.into_iter().map(|p| (p.id, p.selection_ctx)).collect();
+                ResolvedFunctionId::Prim { candidates }
             } else {
                 panic!("no callable for {name}");
             };
@@ -2238,12 +2230,19 @@ impl<'a> BackendRule<'a> {
 }
 
 /// Walk a rule's resolved body and head looking for primitives whose
-/// registration is incompatible with seminaive evaluation. A query
+/// trait kind is incompatible with seminaive evaluation. A query
 /// primitive must be valid in [`Context::Pure`] (no DB reads); an
-/// action primitive must be valid in [`Context::Write`] (no DB reads,
-/// writes only). Any primitive failing those checks is returned by
-/// name; the caller emits a warning and demotes the rule to naive
+/// action primitive must be valid in [`Context::Write`] (no reads,
+/// writes only). Any primitive failing the relevant check is returned
+/// by name; the caller emits a warning and demotes the rule to naive
 /// evaluation.
+///
+/// The check asks each resolved primitive's `kind` — the trait it was
+/// registered as — whether that kind permits the seminaive context.
+/// `PurePrim` permits anything; `ReadPrim` does not permit `Pure`;
+/// `WritePrim` does not permit `Pure` either; `FullPrim` permits only
+/// `Full`. We don't look at the singleton `selection_ctx` here —
+/// that's just which sibling registration the constraint solver picked.
 fn collect_naive_culprits(
     query: &core::Query<ResolvedCall, ResolvedVar>,
     actions: &core::ResolvedCoreActions,
@@ -2253,7 +2252,7 @@ fn collect_naive_culprits(
 
     let record = |names: &mut IndexSet<String>, call: &ResolvedCall, ctx: Context| {
         if let ResolvedCall::Primitive(p) = call
-            && !p.valid_contexts().contains(&ctx)
+            && !p.kind().allows(ctx)
         {
             names.insert(p.name().to_owned());
         }

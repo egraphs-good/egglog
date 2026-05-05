@@ -946,14 +946,13 @@ fn get_atom_application_constraints(
 
     // primitive atom constraints
     if let Some(primitives) = type_info.get_prims(head) {
-        // `valid_contexts` is disjoint across registrations of the
-        // same name: `add_higher_order_primitive` registers one id
-        // per `Context` variant, and the single-kind `add_*_primitive`
-        // methods produce different signatures. So for a given (name,
-        // context, signature) at most one variant survives this
-        // filter and the XOR resolves cleanly.
+        // Each `add_*_primitive` call commits one registration per
+        // context the trait permits, with disjoint `selection_ctx`
+        // values. For a given (name, signature, ctx) tuple at most
+        // one variant survives this filter and the XOR resolves
+        // cleanly.
         for p in primitives {
-            if !p.valid_contexts.contains(&ctx) {
+            if p.selection_ctx != ctx {
                 continue;
             }
             let constraints = p.primitive.get_type_constraints(span).get(args, type_info);

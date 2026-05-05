@@ -73,13 +73,15 @@ impl SpecializedPrimitive {
         self.prim_with_id.validator.as_ref()
     }
 
-    /// The execution contexts in which the registration this call resolved
-    /// to was declared. Used by the rule-add path to detect rules that
-    /// must opt out of seminaive (a query primitive whose
-    /// `valid_contexts` lacks `Pure`, or an action primitive whose
-    /// `valid_contexts` lacks `Write`).
-    pub(crate) fn valid_contexts(&self) -> &[crate::Context] {
-        &self.prim_with_id.valid_contexts
+    /// The trait this primitive was registered as. Implies its
+    /// capability profile (which ambient contexts it can run in) —
+    /// see [`PrimKind::allows`]. Used by the rule-add path to decide
+    /// seminaive compatibility, separately from the singleton
+    /// `selection_ctx` the constraint solver picks at the call site.
+    ///
+    /// [`PrimKind::allows`]: crate::typechecking::PrimKind::allows
+    pub(crate) fn kind(&self) -> crate::typechecking::PrimKind {
+        self.prim_with_id.kind
     }
 }
 
@@ -175,7 +177,7 @@ impl ResolvedCall {
         if let Some(primitives) = typeinfo.get_prims(head) {
             let matches: Vec<_> = primitives
                 .iter()
-                .filter(|p| p.valid_contexts.contains(&ctx) && p.accept(types, typeinfo))
+                .filter(|p| p.selection_ctx == ctx && p.accept(types, typeinfo))
                 .collect();
             match matches.as_slice() {
                 [] => {}

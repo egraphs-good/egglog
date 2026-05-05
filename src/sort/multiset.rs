@@ -238,7 +238,7 @@ pub(crate) fn try_registering_multiset_map(
     {
         return;
     }
-    eg.add_higher_order_primitive(
+    eg.add_pure_primitive(
         Map {
             name: "unstable-multiset-map".into(),
             multiset: input_ms,
@@ -275,7 +275,7 @@ fn try_registering_multiset_non_map_primitives(
         && fn_.inputs()[0].name() == element_name
         && fn_.output().name() == "Unit"
     {
-        eg.add_higher_order_primitive(
+        eg.add_pure_primitive(
             Filter {
                 name: "unstable-multiset-filter".into(),
                 multiset: multiset.clone(),
@@ -284,7 +284,7 @@ fn try_registering_multiset_non_map_primitives(
             },
             None,
         );
-        eg.add_higher_order_primitive(
+        eg.add_pure_primitive(
             Filter {
                 name: "unstable-multiset-filter-not".into(),
                 multiset: multiset.clone(),
@@ -300,7 +300,7 @@ fn try_registering_multiset_non_map_primitives(
         && fn_.inputs()[1].name() == element_name
         && fn_.output().name() == element_name
     {
-        eg.add_higher_order_primitive(
+        eg.add_pure_primitive(
             Reduce {
                 name: "unstable-multiset-reduce".into(),
                 multiset: multiset.clone(),
@@ -341,7 +341,7 @@ fn try_registering_multiset_non_map_primitives(
         && fn_.inputs()[0].name() == element_name
         && fn_.output().name() == multiset.name()
     {
-        eg.add_higher_order_primitive(
+        eg.add_pure_primitive(
             FlatMap {
                 name: "unstable-multiset-flat-map".into(),
                 multiset,
@@ -396,7 +396,7 @@ impl PurePrim for Map {
             .clone();
         let mut new_data = MultiSet::<Value>::new();
         for (v, c) in multiset.data.iter_counts() {
-            if let Some(mapped) = fc.apply(&mut state, &[v]) {
+            if let Some(mapped) = state.apply_function(&fc, &[v]) {
                 new_data.insert_multiple_mut(mapped, c);
             }
         }
@@ -575,7 +575,7 @@ impl PurePrim for FlatMap {
             .clone();
         let mut new_data = MultiSet::<Value>::new();
         for (v, c) in multiset.data.iter_counts() {
-            let mapped = fc.apply(&mut state, &[v]);
+            let mapped = state.apply_function(&fc, &[v]);
             if let Some(mapped_ms) = mapped {
                 let mapped_ms = state
                     .container_values()
@@ -643,7 +643,7 @@ impl PurePrim for Filter {
             .clone();
         let mut new_data = MultiSet::<Value>::new();
         for (v, c) in multiset.data.iter_counts() {
-            let mapped = fc.apply(&mut state, &[v]);
+            let mapped = state.apply_function(&fc, &[v]);
             if mapped.is_some() == self.skip_empty {
                 new_data.insert_multiple_mut(v, c);
             }
@@ -766,7 +766,7 @@ impl PurePrim for Reduce {
             values.remove(0)
         };
         for v in values {
-            acc = fc.apply(&mut state, &[acc, v])?;
+            acc = state.apply_function(&fc, &[acc, v])?;
         }
         Some(acc)
     }
