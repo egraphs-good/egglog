@@ -209,25 +209,27 @@ fn tableaction_hot_path_setup(case: RustRuleTableActionBenchCase) -> RustRuleBen
     )
     .unwrap();
 
-    // Read `f` via pattern match on the rule body (`(= out (f x))`).
-    // Rule actions can't read tables — that would be unsound under
-    // seminaive — so the read happens as part of matching, and the
-    // action just unions the bound `out` with a freshly-derived value.
-    rust_rule(
+    // Stress the Rust API table ops in the action: do the `f(x)`
+    // lookup inside the callback (not via matcher binding). This uses
+    // `rust_rule_full` so the closure receives a `FullState` with read
+    // capability; the rule auto-demotes to naive evaluation as a
+    // result, which is the cost we want to measure for action-side
+    // reads.
+    rust_rule_full(
         &mut egraph,
         "rust_rule_tableaction_hot_path_read",
         read_ruleset,
-        vars![x: i64, out: i64],
-        facts![
-            (R x)
-            (= out (f x))
-        ],
+        vars![x: i64],
+        facts![(R x)],
         move |mut ctx, values| {
-            let [x, out] = values else { unreachable!() };
+            let [x] = values else { unreachable!() };
             let x = ctx.value_to_base::<i64>(*x);
+            let k = ctx.base_to_value::<i64>(x);
             let y = ctx.base_to_value::<i64>(x + 1);
 
-            ctx.union(*out, y);
+            // lookup should succeed because we pre-filled the table.
+            let out = ctx.lookup("f", &[k]).expect("f(x) should exist");
+            ctx.union(out, y);
             Some(())
         },
     )

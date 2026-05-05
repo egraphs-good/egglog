@@ -30,7 +30,7 @@ use std::any::{Any, TypeId};
 pub use egglog::ast::{Action, Fact, Facts, GenericActions, RustSpan, Span};
 pub use egglog::sort::{BigIntSort, BigRatSort, BoolSort, F64Sort, I64Sort, StringSort, UnitSort};
 pub use egglog::{CommandMacro, CommandMacroRegistry};
-pub use egglog::{Core, FullState, PureState, ReadState, Write, WriteState};
+pub use egglog::{Core, FullState, PureState, Read, ReadState, Write, WriteState};
 pub use egglog::{EGraph, span};
 pub use egglog::{action, actions, datatype, expr, fact, facts, sort, vars};
 
@@ -479,6 +479,104 @@ pub fn rust_rule(
     let prim_name = egraph.parser.symbol_gen.fresh("rust_rule_prim");
     egraph.add_write_primitive(
         RustRuleRhs {
+            name: prim_name.clone(),
+            inputs: vars.iter().map(|(_, s)| s.clone()).collect(),
+            func,
+        },
+        None,
+    );
+
+    let rule = Rule {
+        span: span!(),
+        head: GenericActions(vec![GenericAction::Expr(
+            span!(),
+            exprs::call(
+                &prim_name,
+                vars.iter().map(|(v, _)| exprs::var(v)).collect(),
+            ),
+        )]),
+        body: facts.0,
+        name: egraph.parser.symbol_gen.fresh(rule_name),
+        ruleset: ruleset.into(),
+    };
+
+    egraph.run_program(vec![Command::Rule { rule }])
+}
+
+#[derive(Clone)]
+struct RustRuleFullRhs<F>
+where
+    F: for<'a, 'db> Fn(crate::FullState<'a, 'db>, &[Value]) -> Option<()>
+        + Clone
+        + Send
+        + Sync
+        + 'static,
+{
+    name: String,
+    inputs: Vec<ArcSort>,
+    func: F,
+}
+
+impl<F> PrimitiveCommon for RustRuleFullRhs<F>
+where
+    F: for<'a, 'db> Fn(crate::FullState<'a, 'db>, &[Value]) -> Option<()>
+        + Clone
+        + Send
+        + Sync
+        + 'static,
+{
+    fn name(&self) -> &str {
+        &self.name
+    }
+
+    fn get_type_constraints(&self, span: &Span) -> Box<dyn TypeConstraint> {
+        let sorts: Vec<_> = self
+            .inputs
+            .iter()
+            .chain(once(&UnitSort.to_arcsort()))
+            .cloned()
+            .collect();
+        SimpleTypeConstraint::new(self.name(), sorts, span.clone()).into_box()
+    }
+}
+
+impl<F> crate::FullPrim for RustRuleFullRhs<F>
+where
+    F: for<'a, 'db> Fn(crate::FullState<'a, 'db>, &[Value]) -> Option<()>
+        + Clone
+        + Send
+        + Sync
+        + 'static,
+{
+    fn apply<'a, 'db>(&self, state: crate::FullState<'a, 'db>, values: &[Value]) -> Option<Value> {
+        let unit = state.base_values().get(());
+        (self.func)(state, values)?;
+        Some(unit)
+    }
+}
+
+/// Like [`rust_rule`], but the action callback receives a [`FullState`]
+/// — it can read tables (`ctx.lookup`) in addition to writing them.
+/// Because the body uses DB reads, the rule auto-demotes to naive
+/// evaluation: it scans the full database every iteration instead of
+/// using the seminaive delta. Use this when the action genuinely needs
+/// to look up rows; prefer [`rust_rule`] when the data can be bound
+/// via the matcher in the rule body.
+pub fn rust_rule_full(
+    egraph: &mut EGraph,
+    rule_name: &str,
+    ruleset: &str,
+    vars: &[(&str, ArcSort)],
+    facts: Facts<String, String>,
+    func: impl for<'a, 'db> Fn(crate::FullState<'a, 'db>, &[Value]) -> Option<()>
+    + Clone
+    + Send
+    + Sync
+    + 'static,
+) -> Result<Vec<CommandOutput>, Error> {
+    let prim_name = egraph.parser.symbol_gen.fresh("rust_rule_full_prim");
+    egraph.add_full_primitive(
+        RustRuleFullRhs {
             name: prim_name.clone(),
             inputs: vars.iter().map(|(_, s)| s.clone()).collect(),
             func,
