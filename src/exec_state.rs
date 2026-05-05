@@ -263,7 +263,7 @@ pub struct PureState<'a, 'db> {
 
 /// Typed view for read-only primitives. Valid in [`Context::Read`]
 /// and [`Context::Full`] (top-level query-shaped commands and the
-/// body / actions of a `:naive` rule). Implements [`Core`] + [`Read`]
+/// body of an auto-demoted naive rule). Implements [`Core`] + [`Read`]
 /// — name-indexed table lookups (`state.lookup("name", &[args])`)
 /// return the row's value or `None`.
 pub struct ReadState<'a, 'db> {
@@ -294,7 +294,7 @@ pub struct WriteState<'a, 'db> {
 
 /// Typed view for top-level action sites with both read and write
 /// access. Valid in [`Context::Full`] only (top-level actions and the
-/// head of a `:naive` rule). Implements [`Core`] + [`Read`] +
+/// head of an auto-demoted naive rule). Implements [`Core`] + [`Read`] +
 /// [`Write`].
 ///
 /// ```compile_fail

@@ -167,13 +167,12 @@ impl ResolvedCall {
         }
 
         // For a given (signature, context) pair, exactly one
-        // registration must match — `add_higher_order_primitive`
-        // registers one id per context with disjoint `valid_contexts`,
-        // and the single-kind `add_*_primitive` methods produce
-        // overloads keyed by signature. If two primitives accept the
-        // same signature in the same context, registration was
-        // ambiguous (e.g. the same primitive added twice); panic
-        // here rather than silently picking one.
+        // registration must match. Each `add_*_primitive` call commits
+        // one id per context the trait permits, with disjoint
+        // `selection_ctx` values. If two primitives accept the same
+        // signature in the same context, registration was ambiguous
+        // (e.g. the same primitive added twice); panic here rather
+        // than silently picking one.
         if let Some(primitives) = typeinfo.get_prims(head) {
             let matches: Vec<_> = primitives
                 .iter()

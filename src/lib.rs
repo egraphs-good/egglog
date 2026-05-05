@@ -1980,11 +1980,14 @@ struct BackendRule<'a> {
     entries: HashMap<core::ResolvedAtomTerm, QueryEntry>,
     functions: &'a IndexMap<String, Function>,
     type_info: &'a TypeInfo,
-    /// Whether this rule is running under seminaive (a real rule) vs. a
-    /// global one-shot (eval, check, etc.). Combined with whether we are in
-    /// the query or action phase, this picks the [`crate::Context`]
-    /// used to validate primitive calls against their declared
-    /// `valid_contexts`.
+    /// `true` for a regular seminaive rule; `false` for any of:
+    /// (a) global one-shots (`eval`, `check`, top-level actions),
+    /// (b) auto-demoted naive rules (a body or action primitive's
+    /// kind isn't seminaive-compatible — see `collect_naive_culprits`),
+    /// (c) `EGraph::seminaive == false` (the global opt-out).
+    /// Combined with whether we're in the query or action phase, this
+    /// picks the [`crate::Context`] used to select primitive
+    /// registrations by `selection_ctx` at each call site.
     seminaive: bool,
 }
 
@@ -2100,11 +2103,14 @@ impl<'a> BackendRule<'a> {
                         })
                 });
                 // Bake every signature-matching registration. The
+                // build-site `ctx` here is intentionally unused: the
                 // *application*-time context (carried on `state.ctx`
-                // by the wrapping HOF) selects which candidate
-                // dispatches — independent of the build-site `ctx`.
-                // Each registration carries a singleton `selection_ctx`;
-                // dispatch picks the one matching the application ctx.
+                // by the wrapping HOF body) selects which candidate
+                // dispatches at runtime. Filtering by build-site ctx
+                // would trap an `unstable-fn` value in the context it
+                // was constructed in (e.g. a `let`-bound function value
+                // built at top-level `Full` couldn't be applied later
+                // from a `Read` query).
                 let _ = ctx;
                 assert!(!ps.is_empty(), "no callable for {name}");
                 let candidates: Vec<_> =

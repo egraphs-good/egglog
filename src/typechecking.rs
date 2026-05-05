@@ -160,7 +160,7 @@ pub type PrimitiveValidator = Arc<dyn Fn(&mut TermDag, &[TermId]) -> Option<Term
 /// The trait kind a primitive was registered as. Implies its full
 /// capability profile — see [`PrimKind::allows`].
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
-pub enum PrimKind {
+pub(crate) enum PrimKind {
     /// Registered via [`EGraph::add_pure_primitive`]. Body sees
     /// [`PureState`]; valid in any ambient context.
     ///
@@ -187,14 +187,14 @@ impl PrimKind {
     /// Whether a primitive of this kind can run when the ambient
     /// [`Context`] is `ctx`. The seminaive-compatibility check uses
     /// this to decide whether a rule has to be demoted to naive.
-    pub fn allows(self, ctx: Context) -> bool {
-        match (self, ctx) {
-            (PrimKind::Pure, _) => true,
-            (PrimKind::Read, Context::Read | Context::Full) => true,
-            (PrimKind::Write, Context::Write | Context::Full) => true,
-            (PrimKind::Full, Context::Full) => true,
-            _ => false,
-        }
+    pub(crate) fn allows(self, ctx: Context) -> bool {
+        matches!(
+            (self, ctx),
+            (PrimKind::Pure, _)
+                | (PrimKind::Read, Context::Read | Context::Full)
+                | (PrimKind::Write, Context::Write | Context::Full)
+                | (PrimKind::Full, Context::Full)
+        )
     }
 }
 
