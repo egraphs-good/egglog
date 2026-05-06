@@ -48,10 +48,7 @@ use thiserror::Error;
 /// bridge `EGraph`. The state wrappers (`PureState`/`ReadState`/
 /// `WriteState`/`FullState`) live in the `egglog` crate; they read
 /// from this registry at invoke time to back name-indexed action
-/// methods. Held by the bridge `EGraph` inside an `Arc<RwLock<_>>` so
-/// `add_table` can mutate in place — full-registry clones on every
-/// declaration showed up as a hot path on programs that declare many
-/// constructors.
+/// methods. Held by the bridge `EGraph` inside an `Arc<RwLock<_>>`.
 #[derive(Clone)]
 pub struct ActionRegistry {
     table_actions: hashbrown::HashMap<String, TableAction>,
