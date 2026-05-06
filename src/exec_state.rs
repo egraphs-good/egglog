@@ -54,8 +54,9 @@ pub enum Context {
     Pure,
     /// DB writes allowed, DB reads forbidden. Used for the head (RHS)
     /// of a rule running under seminaive evaluation: actions may
-    /// stage writes, but reads of live database state would make a
-    /// match's effect depend on iteration order and break saturation.
+    /// stage writes, but reads aren't tracked either — if the read
+    /// row's contents change in a later iteration, seminaive won't
+    /// re-fire the rule for the now-different match.
     Write,
     /// DB reads allowed, DB writes forbidden. Used for top-level
     /// query-shaped commands (`check`, condition evaluation) and for

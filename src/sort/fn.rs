@@ -529,13 +529,10 @@ impl FunctionContainer {
         'db: 'a,
     {
         let args: Vec<_> = self.1.iter().map(|(_, x)| x).chain(args).copied().collect();
-        // Constructor minting requires write capability (action contexts).
+        // See [`Context`] for why each capability is admitted only in
+        // these contexts.
         let can_mint = matches!(ctx, crate::Context::Write | crate::Context::Full);
-        // Read access: forbidden in `Pure` (untracked by seminaive);
-        // allowed everywhere else. `Write` reads are *technically*
-        // unsound under strict seminaive, but the existing `apply_mut`
-        // semantics permit them — preserved here for back-compat.
-        let can_read = !matches!(ctx, crate::Context::Pure);
+        let can_read = matches!(ctx, crate::Context::Read | crate::Context::Full);
         match &self.0 {
             ResolvedFunctionId::ConstructorLookup(action) => {
                 if can_mint {
