@@ -30,8 +30,7 @@ struct PurePrimWrapper<T> {
 
 impl<T: PurePrim + Clone> ExternalFunction for PurePrimWrapper<T> {
     fn invoke(&self, exec_state: &mut ExecutionState, args: &[Value]) -> Option<Value> {
-        self.prim
-            .apply(PureState::wrap(exec_state, self.ctx), args)
+        self.prim.apply(PureState::wrap(exec_state, self.ctx), args)
     }
 }
 

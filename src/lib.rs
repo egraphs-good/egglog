@@ -42,8 +42,8 @@
 //! - **Sorts and container types**: see [`Sort`], [`BaseSort`], and
 //!   [`ContainerSort`] (re-exported from the [`prelude`]).
 //!
-//! See issue #772 in the repo for the
-//! seminaive-safety reasoning behind the typed primitive surface.
+//! See issue #772 in the repo for the seminaive-safety reasoning
+//! behind the typed primitive surface.
 //!
 //!
 pub mod ast;
@@ -2113,8 +2113,7 @@ impl<'a> BackendRule<'a> {
                 // from a `Read` query).
                 let _ = ctx;
                 assert!(!ps.is_empty(), "no callable for {name}");
-                let candidates: Vec<_> =
-                    ps.into_iter().map(|p| (p.id, p.selection_ctx)).collect();
+                let candidates: Vec<_> = ps.into_iter().map(|p| (p.id, p.selection_ctx)).collect();
                 ResolvedFunctionId::Prim { candidates }
             } else {
                 panic!("no callable for {name}");

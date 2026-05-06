@@ -439,12 +439,11 @@ pub enum ResolvedFunctionId {
     CustomLookup(egglog_bridge::TableAction),
     /// Wraps a primitive. Carries every signature-matching
     /// registration the typechecker found at build time, paired with
-    /// its `selection_ctx`. At dispatch time
-    /// [`FunctionContainer::apply`] picks the candidate whose
-    /// `selection_ctx` matches the application context — so the
-    /// runtime selection is independent of the build-site context,
-    /// and an `unstable-fn` value may flow freely from one context to
-    /// another.
+    /// its `selection_ctx`. At dispatch time `FunctionContainer::apply`
+    /// picks the candidate whose `selection_ctx` matches the
+    /// application context — so the runtime selection is independent
+    /// of the build-site context, and an `unstable-fn` value may flow
+    /// freely from one context to another.
     Prim {
         candidates: Vec<(ExternalFunctionId, crate::Context)>,
     },
@@ -513,8 +512,10 @@ impl FunctionContainer {
     /// - In a write-capable context (`Write` / `Full`), constructor
     ///   lookups mint via `lookup_or_insert`, and custom-function
     ///   lookups read via `lookup`.
-    /// - In all four contexts, wrapped primitives dispatch only when
-    ///   their `valid_contexts` cover `ctx`.
+    /// - For wrapped primitives, dispatch picks the candidate whose
+    ///   `selection_ctx` matches the application `ctx` (each
+    ///   `add_*_primitive` commits one id per context the trait
+    ///   permits, so exactly one or zero candidates match).
     ///
     /// [`Context`]: crate::Context
     /// [`PureState::apply_function`]: crate::PureState::apply_function
@@ -567,4 +568,3 @@ impl FunctionContainer {
         }
     }
 }
-

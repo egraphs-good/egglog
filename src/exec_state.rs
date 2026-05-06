@@ -15,6 +15,8 @@
 //!
 //! - [`Core`] — base values, counters, container interning, conversion
 //!   sugar. Implemented for all four wrappers.
+//! - [`Read`] — name-indexed table lookup (`state.lookup("name", &[…])`).
+//!   Implemented for [`ReadState`] and [`FullState`].
 //! - [`Write`] — name-indexed writes (`insert`/`remove`/`subsume`/
 //!   `union`/`panic`). Implemented for [`WriteState`] and [`FullState`].
 //!
@@ -36,9 +38,39 @@ use crate::core_relations::{
 };
 use egglog_bridge::{ActionRegistry, TableAction};
 
-/// The four contexts a primitive may run in. Re-exported from
-/// `core_relations` so the egglog API surface stays in one place.
-pub use crate::core_relations::Context;
+/// The four contexts a primitive may run in, named after the
+/// capability profile they grant. Each variant maps 1:1 to one of the
+/// state wrappers below: `Pure` ↔ [`PureState`], `Write` ↔ [`WriteState`],
+/// `Read` ↔ [`ReadState`], `Full` ↔ [`FullState`]. The egglog
+/// typechecker filters primitive registrations by their
+/// `selection_ctx` against the surrounding `Context` at each call
+/// site.
+#[derive(Copy, Clone, Debug, PartialEq, Eq, Hash)]
+pub enum Context {
+    /// No DB reads, no DB writes. Used for the body (LHS) of a rule
+    /// running under seminaive evaluation: queries cannot read or
+    /// write the database, since either would defeat seminaive's
+    /// dependency tracking. Only pure primitives are admitted.
+    Pure,
+    /// DB writes allowed, DB reads forbidden. Used for the head (RHS)
+    /// of a rule running under seminaive evaluation: actions may
+    /// stage writes, but reads of live database state would make a
+    /// match's effect depend on iteration order and break saturation.
+    Write,
+    /// DB reads allowed, DB writes forbidden. Used for top-level
+    /// query-shaped commands (`check`, condition evaluation) and for
+    /// the body of an auto-demoted naive rule. Reads are safe because
+    /// there is no seminaive epoch to violate.
+    Read,
+    /// DB reads and writes both allowed. Used for top-level
+    /// action-shaped commands (`eval`, `let`, action-mode
+    /// `run-schedule`) and for the head of an auto-demoted naive rule.
+    Full,
+}
+
+impl Context {
+    pub const ALL: [Context; 4] = [Context::Pure, Context::Write, Context::Read, Context::Full];
+}
 
 // =====================================================================
 // Sealed traits.
@@ -151,12 +183,12 @@ pub trait Core<'a, 'db: 'a>: Internal<'a, 'db> {
     /// Dispatch a wrapped `unstable-fn` value. This is the public entry
     /// point for higher-order primitive bodies: the call-site
     /// [`Context`] is stamped onto the state by the registration
-    /// wrapper (see [`EGraph::add_higher_order_primitive`] and the
-    /// `_read` / `_write` / `_full` variants), so the caller can't
-    /// supply a wrong context — there is no `ctx` parameter to lie
-    /// about.
+    /// wrapper (see [`EGraph::add_pure_primitive`] and the matching
+    /// `add_read_primitive` / `add_write_primitive` /
+    /// `add_full_primitive`), so the caller can't supply a wrong
+    /// context — there is no `ctx` parameter to lie about.
     ///
-    /// [`EGraph::add_higher_order_primitive`]: crate::EGraph::add_higher_order_primitive
+    /// [`EGraph::add_pure_primitive`]: crate::EGraph::add_pure_primitive
     fn apply_function(
         &mut self,
         fc: &crate::sort::FunctionContainer,

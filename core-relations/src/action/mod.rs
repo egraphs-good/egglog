@@ -352,47 +352,6 @@ pub(crate) struct DbView<'a> {
 /// the next call to `merge` on the underlying table.
 ///
 /// ## Predicted Values
-/// The four contexts in which an external function may be invoked,
-/// named after the capability profile they grant.
-///
-/// Each variant maps 1:1 to one of the user-facing state wrappers:
-/// `Pure` ↔ `PureState`, `Write` ↔ `WriteState`, `Read` ↔ `ReadState`,
-/// `Full` ↔ `FullState`. A primitive's `valid_contexts` lists every
-/// context it admits; the egglog typechecker rejects the call if the
-/// surrounding context is not in that list.
-///
-/// Set on [`ExecutionState`] by the wrapper closure that the egglog
-/// crate generates around each registered primitive, so primitive
-/// bodies that need to dispatch differently per context (notably
-/// `unstable-app` and friends) can read it. Used only by higher-order
-/// dispatch — most primitives ignore it.
-#[derive(Copy, Clone, Debug, PartialEq, Eq, Hash)]
-pub enum Context {
-    /// No DB reads, no DB writes. Used for the body (LHS) of a rule
-    /// running under seminaive evaluation: queries cannot read or
-    /// write the database, since either would defeat seminaive's
-    /// dependency tracking. Only pure primitives are admitted.
-    Pure,
-    /// DB writes allowed, DB reads forbidden. Used for the head (RHS)
-    /// of a rule running under seminaive evaluation: actions may
-    /// stage writes, but reads of live database state would make a
-    /// match's effect depend on iteration order and break saturation.
-    Write,
-    /// DB reads allowed, DB writes forbidden. Used for top-level
-    /// query-shaped commands (`check`, condition evaluation) and for
-    /// the body of a `:naive` rule (which opts out of seminaive).
-    /// Reads are safe because there is no seminaive epoch to violate.
-    Read,
-    /// DB reads and writes both allowed. Used for top-level
-    /// action-shaped commands (`eval`, `let`, action-mode
-    /// `run-schedule`) and for the head of a `:naive` rule.
-    Full,
-}
-
-impl Context {
-    pub const ALL: [Context; 4] = [Context::Pure, Context::Write, Context::Read, Context::Full];
-}
-
 /// ExecutionStates provide a means of synchronizing the results of a pending write across
 /// different executions of a rule. This is particularly important in the case where the result of
 /// an operation (such as "lookup or insert new id" operatiosn) is a fresh id. A common

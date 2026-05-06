@@ -121,13 +121,11 @@ pub struct EGraph {
     report_level: ReportLevel,
     /// Live registry of name-indexed action handles. Shared (via
     /// `Arc<RwLock<_>>`) with state wrappers and primitive callbacks
-    /// in the egglog crate so [`WriteState`] / [`FullState`] can
-    /// implement `insert(name, ...)`, `union`, etc. Mutated in place
-    /// from [`add_table`](EGraph::add_table) under the `RwLock`,
-    /// which avoids cloning the entire registry on every
-    /// declaration (O(n²) cumulative for files that declare many
-    /// constructors). Hot-path reads are still cheap (read lock is
-    /// contended only by other readers in normal use).
+    /// in the egglog crate so name-indexed action methods on
+    /// [`WriteState`] / [`FullState`] can resolve table actions at
+    /// invoke time. Mutated in place from
+    /// [`add_table`](EGraph::add_table) to avoid cloning the entire
+    /// registry on every declaration.
     action_registry: Arc<std::sync::RwLock<ActionRegistry>>,
 }
 
