@@ -140,6 +140,6 @@ impl ProofInstrumentor<'_> {
             .check_proof(simplified_proof, &self.egraph.proof_check_program)
             .expect("simplified existence proof should still be valid");
 
-        Ok((proof_store, extra_rule_removed))
+        Ok((proof_store, simplified_proof))
     }
 }
