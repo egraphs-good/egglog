@@ -542,9 +542,6 @@ impl EGraph {
         info.nonincremental_rebuild_rule = nonincremental_rebuild_rule;
         let action = TableAction::new(self, res);
         let table_name = self.funcs[res].name.to_string();
-        // Mutate in place — no full-registry clone. `add_table` is
-        // only called during single-threaded setup between top-level
-        // commands, so the `RwLock` write is uncontended.
         self.action_registry
             .write()
             .unwrap()

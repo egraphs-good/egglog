@@ -42,7 +42,7 @@
 //! - **Sorts and container types**: see [`Sort`], [`BaseSort`], and
 //!   [`ContainerSort`] (re-exported from the [`prelude`]).
 //!
-//! See issue #772 / `issue-772-proposal.md` in the repo for the
+//! See issue #772 in the repo for the
 //! seminaive-safety reasoning behind the typed primitive surface.
 //!
 //!
