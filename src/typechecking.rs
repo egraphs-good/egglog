@@ -156,47 +156,6 @@ impl Hash for FuncType {
 /// or None if it is invalid.
 pub type PrimitiveValidator = Arc<dyn Fn(&mut TermDag, &[TermId]) -> Option<TermId> + Send + Sync>;
 
-/// The trait kind a primitive was registered as. Implies its full
-/// capability profile — see [`PrimKind::allows`].
-#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
-pub(crate) enum PrimKind {
-    /// Registered via [`EGraph::add_pure_primitive`]. Body sees
-    /// [`PureState`]; valid in any ambient context.
-    ///
-    /// [`PureState`]: crate::PureState
-    Pure,
-    /// Registered via [`EGraph::add_read_primitive`]. Body sees
-    /// [`ReadState`]; valid in `Read` and `Full` ambients.
-    ///
-    /// [`ReadState`]: crate::ReadState
-    Read,
-    /// Registered via [`EGraph::add_write_primitive`]. Body sees
-    /// [`WriteState`]; valid in `Write` and `Full` ambients.
-    ///
-    /// [`WriteState`]: crate::WriteState
-    Write,
-    /// Registered via [`EGraph::add_full_primitive`]. Body sees
-    /// [`FullState`]; valid only in the `Full` ambient.
-    ///
-    /// [`FullState`]: crate::FullState
-    Full,
-}
-
-impl PrimKind {
-    /// Whether a primitive of this kind can run when the ambient
-    /// [`Context`] is `ctx`. The seminaive-compatibility check uses
-    /// this to decide whether a rule has to be demoted to naive.
-    pub(crate) fn allows(self, ctx: Context) -> bool {
-        matches!(
-            (self, ctx),
-            (PrimKind::Pure, _)
-                | (PrimKind::Read, Context::Read | Context::Full)
-                | (PrimKind::Write, Context::Write | Context::Full)
-                | (PrimKind::Full, Context::Full)
-        )
-    }
-}
-
 #[derive(Clone)]
 pub struct PrimitiveWithId {
     pub(crate) primitive: Arc<dyn PrimitiveCommon>,
@@ -208,12 +167,6 @@ pub struct PrimitiveWithId {
     /// `selection_ctx == ambient_ctx` to pick exactly one id per
     /// call site.
     pub(crate) selection_ctx: Context,
-    /// The trait kind this primitive was registered as. Determines
-    /// the primitive's capability profile (which contexts it can run
-    /// in) — used by the rule-add path to decide seminaive
-    /// compatibility, separate from the (singleton) `selection_ctx`
-    /// used by the constraint solver.
-    pub(crate) kind: PrimKind,
 }
 
 impl PrimitiveWithId {
@@ -329,13 +282,9 @@ impl EGraph {
     where
         T: PurePrim + Clone,
     {
-        self.register_per_context(
-            x,
-            validator,
-            PrimKind::Pure,
-            PureState::valid_contexts(),
-            |x, ctx| Box::new(PurePrimWrapper { prim: x, ctx }),
-        );
+        self.register_per_context(x, validator, PureState::valid_contexts(), |x, ctx| {
+            Box::new(PurePrimWrapper { prim: x, ctx })
+        });
     }
 
     /// Register a [`WritePrim`] — runs in rule-action and
@@ -346,20 +295,14 @@ impl EGraph {
         T: WritePrim + Clone,
     {
         let registry = self.backend.action_registry();
-        self.register_per_context(
-            x,
-            validator,
-            PrimKind::Write,
-            WriteState::valid_contexts(),
-            move |x, ctx| {
-                Box::new(RegistryPrimWrapper::<T, WrapWrite> {
-                    prim: x,
-                    registry: registry.clone(),
-                    ctx,
-                    _wrap: std::marker::PhantomData,
-                })
-            },
-        );
+        self.register_per_context(x, validator, WriteState::valid_contexts(), move |x, ctx| {
+            Box::new(RegistryPrimWrapper::<T, WrapWrite> {
+                prim: x,
+                registry: registry.clone(),
+                ctx,
+                _wrap: std::marker::PhantomData,
+            })
+        });
     }
 
     /// Register a [`ReadPrim`] — runs in global-query and
@@ -370,20 +313,14 @@ impl EGraph {
         T: ReadPrim + Clone,
     {
         let registry = self.backend.action_registry();
-        self.register_per_context(
-            x,
-            validator,
-            PrimKind::Read,
-            ReadState::valid_contexts(),
-            move |x, ctx| {
-                Box::new(RegistryPrimWrapper::<T, WrapRead> {
-                    prim: x,
-                    registry: registry.clone(),
-                    ctx,
-                    _wrap: std::marker::PhantomData,
-                })
-            },
-        );
+        self.register_per_context(x, validator, ReadState::valid_contexts(), move |x, ctx| {
+            Box::new(RegistryPrimWrapper::<T, WrapRead> {
+                prim: x,
+                registry: registry.clone(),
+                ctx,
+                _wrap: std::marker::PhantomData,
+            })
+        });
     }
 
     /// Register a [`FullPrim`] — runs only in the
@@ -394,20 +331,14 @@ impl EGraph {
         T: FullPrim + Clone,
     {
         let registry = self.backend.action_registry();
-        self.register_per_context(
-            x,
-            validator,
-            PrimKind::Full,
-            FullState::valid_contexts(),
-            move |x, ctx| {
-                Box::new(RegistryPrimWrapper::<T, WrapFull> {
-                    prim: x,
-                    registry: registry.clone(),
-                    ctx,
-                    _wrap: std::marker::PhantomData,
-                })
-            },
-        );
+        self.register_per_context(x, validator, FullState::valid_contexts(), move |x, ctx| {
+            Box::new(RegistryPrimWrapper::<T, WrapFull> {
+                prim: x,
+                registry: registry.clone(),
+                ctx,
+                _wrap: std::marker::PhantomData,
+            })
+        });
     }
 
     /// Shared registration engine. Registers `x` once per `Context` in
@@ -415,19 +346,16 @@ impl EGraph {
     /// stamped onto the state wrapper at invoke time.
     ///
     /// Every primitive is registered per-context. The typechecker's
-    /// `valid_contexts` filter selects exactly one candidate at each
+    /// `selection_ctx` filter selects exactly one candidate at each
     /// call site; an `unstable-fn` value built around the primitive
     /// bakes *all* signature-matching candidates, and
-    /// [`FunctionContainer::apply`] picks the one whose
-    /// `valid_contexts` covers the application ctx — so values flow
-    /// freely across contexts.
-    ///
-    /// [`FunctionContainer::apply`]: crate::sort::FunctionContainer::apply
+    /// `FunctionContainer::apply` picks the one whose `selection_ctx`
+    /// matches the application ctx — so values flow freely across
+    /// contexts.
     fn register_per_context<T, F>(
         &mut self,
         x: T,
         validator: Option<PrimitiveValidator>,
-        kind: PrimKind,
         valid_ctxs: &[Context],
         mut build_wrapper: F,
     ) where
@@ -445,7 +373,6 @@ impl EGraph {
                 id,
                 validator: validator.clone(),
                 selection_ctx: ctx,
-                kind,
                 name: name.clone(),
             });
         }
@@ -457,7 +384,6 @@ impl EGraph {
             id,
             validator,
             selection_ctx,
-            kind,
             name,
         } = entry;
         self.type_info
@@ -469,7 +395,6 @@ impl EGraph {
                 id,
                 validator,
                 selection_ctx,
-                kind,
             });
     }
 }
@@ -483,7 +408,6 @@ struct PendingPrimitive {
     id: ExternalFunctionId,
     validator: Option<PrimitiveValidator>,
     selection_ctx: Context,
-    kind: PrimKind,
     name: String,
 }
 
@@ -913,17 +837,18 @@ impl TypeInfo {
             body,
             name,
             ruleset,
+            naive,
         } = rule;
         let mut constraints = vec![];
 
-        // Rule bodies always typecheck under the most permissive
-        // contexts: `Read` for the query and `Full` for actions. This
-        // admits primitives that read or write the database; whether
-        // the rule then needs to opt out of seminaive evaluation is
-        // determined post-typecheck by walking the resolved program
-        // for non-Pure / non-Write primitives (see [`needs_naive`] in
-        // the EGraph rule-add path).
-        let (query_ctx, action_ctx) = (Context::Read, Context::Full);
+        // A `:naive` rule disables seminaive evaluation, so it can use
+        // primitives that read or write the database in either the
+        // query or the action — the same surface as global commands.
+        let (query_ctx, action_ctx) = if *naive {
+            (Context::Read, Context::Full)
+        } else {
+            (Context::Pure, Context::Write)
+        };
 
         let (query, mapped_query) = Facts(body.clone()).to_query(self, symbol_gen);
         constraints.extend(query.get_constraints(self, query_ctx)?);
@@ -963,6 +888,7 @@ impl TypeInfo {
             head: actions,
             name: name.clone(),
             ruleset: ruleset.clone(),
+            naive: *naive,
         })
     }
 

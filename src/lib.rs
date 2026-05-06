@@ -1042,24 +1042,11 @@ impl EGraph {
         )?;
         let (query, actions) = (&core_rule.body, &core_rule.head);
 
-        // Auto-detect whether this rule must opt out of seminaive
-        // evaluation: a body primitive whose registration is not valid
-        // in `Pure`, or an action primitive not valid in `Write`, means
-        // the rule reads/writes the database in a way that seminaive's
-        // delta-relation reasoning would not track. We warn so users
-        // notice the demotion (and the cost it implies).
-        let demote_culprits = collect_naive_culprits(query, actions);
-        let needs_naive = !demote_culprits.is_empty();
-        if needs_naive {
-            let names: Vec<&str> = demote_culprits.iter().map(String::as_str).collect();
-            log::warn!(
-                "Rule `{}` opts out of seminaive evaluation because of primitive(s) {} \
-                 that read or write the database.",
-                rule.name,
-                names.join(", "),
-            );
-        }
-        let seminaive = self.seminaive && !needs_naive;
+        // The `:naive` rule option opts a single rule out of seminaive
+        // evaluation. This widens primitive-context selection from
+        // Pure/Write to Read/Full, so primitives that read or write the
+        // database can run inside this rule.
+        let seminaive = self.seminaive && !rule.naive;
 
         let rule_id = {
             let mut translator = BackendRule::new(
@@ -1247,6 +1234,7 @@ impl EGraph {
             body: facts.to_vec(),
             name: fresh_name.clone(),
             ruleset: fresh_ruleset.clone(),
+            naive: false,
         };
         let core_rule = rule.to_canonicalized_core_rule(
             &self.type_info,
@@ -1982,8 +1970,7 @@ struct BackendRule<'a> {
     type_info: &'a TypeInfo,
     /// `true` for a regular seminaive rule; `false` for any of:
     /// (a) global one-shots (`eval`, `check`, top-level actions),
-    /// (b) auto-demoted naive rules (a body or action primitive's
-    /// kind isn't seminaive-compatible — see `collect_naive_culprits`),
+    /// (b) rules with the `:naive` option,
     /// (c) `EGraph::seminaive == false` (the global opt-out).
     /// Combined with whether we're in the query or action phase, this
     /// picks the [`crate::Context`] used to select primitive
@@ -2232,55 +2219,6 @@ impl<'a> BackendRule<'a> {
     fn build(self) -> egglog_bridge::RuleId {
         self.rb.build()
     }
-}
-
-/// Walk a rule's resolved body and head looking for primitives whose
-/// trait kind is incompatible with seminaive evaluation. A query
-/// primitive must be valid in [`Context::Pure`] (no DB reads); an
-/// action primitive must be valid in [`Context::Write`] (no reads,
-/// writes only). Any primitive failing the relevant check is returned
-/// by name; the caller emits a warning and demotes the rule to naive
-/// evaluation.
-///
-/// The check asks each resolved primitive's `kind` — the trait it was
-/// registered as — whether that kind permits the seminaive context.
-/// `PurePrim` permits anything; `ReadPrim` does not permit `Pure`;
-/// `WritePrim` does not permit `Pure` either; `FullPrim` permits only
-/// `Full`. We don't look at the singleton `selection_ctx` here —
-/// that's just which sibling registration the constraint solver picked.
-fn collect_naive_culprits(
-    query: &core::Query<ResolvedCall, ResolvedVar>,
-    actions: &core::ResolvedCoreActions,
-) -> Vec<String> {
-    use indexmap::IndexSet;
-    let mut names: IndexSet<String> = IndexSet::default();
-
-    let record = |names: &mut IndexSet<String>, call: &ResolvedCall, ctx: Context| {
-        if let ResolvedCall::Primitive(p) = call
-            && !p.kind().allows(ctx)
-        {
-            names.insert(p.name().to_owned());
-        }
-    };
-
-    for atom in query.atoms.iter() {
-        record(&mut names, &atom.head, Context::Pure);
-    }
-
-    for action in actions.0.iter() {
-        match action {
-            core::GenericCoreAction::Let(_, _, head, _)
-            | core::GenericCoreAction::Set(_, head, _, _)
-            | core::GenericCoreAction::Change(_, _, head, _) => {
-                record(&mut names, head, Context::Write)
-            }
-            core::GenericCoreAction::Union(..)
-            | core::GenericCoreAction::Panic(..)
-            | core::GenericCoreAction::LetAtomTerm(..) => {}
-        }
-    }
-
-    names.into_iter().collect()
 }
 
 fn literal_to_entry(egraph: &egglog_bridge::EGraph, l: &Literal) -> QueryEntry {

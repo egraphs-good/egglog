@@ -185,11 +185,11 @@ fn write_primitive_rejected_in_queries() {
     );
 }
 
-/// A `ReadPrim` is accepted in rule contexts; the rule auto-demotes
-/// to naive evaluation. Also exercises the `Read::lookup` API:
-/// `lookup-f` reads rows from a custom `f` table.
+/// A `ReadPrim` is rejected in rule contexts (both query and action) —
+/// it's only valid in `Context::Read` and `Context::Full`. To use one
+/// inside a rule, the rule must opt out of seminaive with `:naive`.
 #[test]
-fn read_primitive_in_rule_demotes_to_naive() {
+fn read_primitive_rejected_in_rule_contexts() {
     let mut egraph = EGraph::default();
     egraph.add_read_primitive(
         ReadLookup {
@@ -213,9 +213,8 @@ fn read_primitive_in_rule_demotes_to_naive() {
         )
         .unwrap();
 
-    // Rule LHS — accepted; the rule reads `f` so it's auto-demoted to
-    // naive. Driving the rule should populate `g 1` with the value of
-    // `(f 1)`.
+    // Rule LHS without `:naive` — rejected (Context::Pure isn't in
+    // `ReadPrim`'s valid contexts).
     let mut egraph2 = EGraph::default();
     egraph2.add_read_primitive(
         ReadLookup {
@@ -224,20 +223,16 @@ fn read_primitive_in_rule_demotes_to_naive() {
         },
         None,
     );
-    egraph2
-        .parse_and_run_program(
-            None,
-            "(function f (i64) i64 :no-merge)\n\
-             (function g (i64) i64 :no-merge)\n\
-             (set (f 1) 99)\n\
-             (rule ((= x (lookup-f 1))) ((set (g 0) x)))\n\
-             (run 1)\n\
-             (check (= (g 0) 99))",
-        )
-        .unwrap();
+    let result = egraph2.parse_and_run_program(
+        None,
+        "(function f (i64) i64 :no-merge)\n\
+         (function g (i64) i64 :no-merge)\n\
+         (rule ((= x (lookup-f 1))) ((set (g 0) x)))",
+    );
+    assert!(result.is_err(), "ReadPrim must be rejected on a rule LHS");
 
-    // Rule RHS — accepted; the read primitive in the action still
-    // forces naive evaluation.
+    // Rule RHS without `:naive` — also rejected (ReadPrim is Read+Full
+    // only; Context::Write doesn't qualify).
     let mut egraph3 = EGraph::default();
     egraph3.add_read_primitive(
         ReadLookup {
@@ -246,27 +241,40 @@ fn read_primitive_in_rule_demotes_to_naive() {
         },
         None,
     );
-    egraph3
+    let result = egraph3.parse_and_run_program(
+        None,
+        "(function f (i64) i64 :no-merge)\n\
+         (function g (i64) i64 :no-merge)\n\
+         (rule () ((set (g 0) (lookup-f 1))))",
+    );
+    assert!(result.is_err(), "ReadPrim must be rejected on a rule RHS");
+
+    // With `:naive` — both LHS and RHS accepted; the rule scans the
+    // whole DB each iteration, so reads are sound.
+    let mut egraph4 = EGraph::default();
+    egraph4.add_read_primitive(
+        ReadLookup {
+            name: "lookup-f",
+            table_name: "f",
+        },
+        None,
+    );
+    egraph4
         .parse_and_run_program(
             None,
             "(function f (i64) i64 :no-merge)\n\
              (function g (i64) i64 :no-merge)\n\
-             (function trigger () i64 :no-merge)\n\
-             (set (f 1) 77)\n\
-             (set (trigger) 1)\n\
-             (rule ((= _ (trigger))) ((set (g 0) (lookup-f 1))))\n\
+             (set (f 1) 99)\n\
+             (rule ((= x (lookup-f 1))) ((set (g 0) x)) :naive)\n\
              (run 1)\n\
-             (check (= (g 0) 77))",
+             (check (= (g 0) 99))",
         )
         .unwrap();
 }
 
-/// A `FullPrim` is valid only in `Context::Full`. It is rejected in
-/// query contexts (top-level `check` and rule LHS — both Read), but
-/// accepted in action contexts (top-level `let` and rule RHS — both
-/// Full); a rule using one in its RHS auto-demotes to naive.
+/// A `FullPrim` is valid only in `Context::Full`.
 #[test]
-fn full_primitive_accepted_only_in_full_contexts() {
+fn full_primitive_accepted_only_in_global_action() {
     let mut egraph = EGraph::default();
     egraph.add_full_primitive(FullEcho("f-echo"), None);
 
@@ -284,8 +292,7 @@ fn full_primitive_accepted_only_in_full_contexts() {
         "FullPrim must be rejected in Context::Read (`check`)"
     );
 
-    // Rule LHS — rejected (rule queries typecheck under Context::Read,
-    // and FullPrim is Full-only).
+    // Rule LHS without `:naive` — rejected.
     let mut egraph3 = EGraph::default();
     egraph3.add_full_primitive(FullEcho("f-echo"), None);
     let result = egraph3.parse_and_run_program(
@@ -295,16 +302,28 @@ fn full_primitive_accepted_only_in_full_contexts() {
     );
     assert!(result.is_err(), "FullPrim must be rejected on a rule LHS");
 
-    // Rule RHS — accepted; the FullPrim drives auto-demotion to naive.
+    // Rule RHS without `:naive` — rejected (action ctx is Write,
+    // FullPrim is Full-only).
     let mut egraph4 = EGraph::default();
     egraph4.add_full_primitive(FullEcho("f-echo"), None);
-    egraph4
+    let result = egraph4.parse_and_run_program(
+        None,
+        "(function f (i64) i64 :no-merge)\n\
+         (rule () ((set (f 0) (f-echo 1))))",
+    );
+    assert!(result.is_err(), "FullPrim must be rejected on a rule RHS");
+
+    // With `:naive`, both LHS and RHS accept FullPrim (action ctx
+    // widens to Full).
+    let mut egraph5 = EGraph::default();
+    egraph5.add_full_primitive(FullEcho("f-echo"), None);
+    egraph5
         .parse_and_run_program(
             None,
             "(function f (i64) i64 :no-merge)\n\
              (function trigger () i64 :no-merge)\n\
              (set (trigger) 1)\n\
-             (rule ((= _ (trigger))) ((set (f 0) (f-echo 5))))\n\
+             (rule ((= _ (trigger))) ((set (f 0) (f-echo 5))) :naive)\n\
              (run 1)\n\
              (check (= (f 0) 5))",
         )

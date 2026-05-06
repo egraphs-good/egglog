@@ -5,7 +5,7 @@
 - Desugar `relation`s to `constructor`s to simplify the language and implementation. Relations no longer return unit `()` values.
 - Refactored API to use [`TermId`] more consistently instead of `Term` where possible, simplifying egglog code.
 - **Typed primitive surface for seminaive safety (#772).** Custom primitives now pick one of `PurePrim` / `ReadPrim` / `WritePrim` / `FullPrim` based on what the body needs, and register via the matching `add_*_primitive`. Rust enforces capability bounds via the state wrapper passed to the body; the egglog typechecker enforces context bounds. See the `egglog::exec_state` module docs and the `*Prim` trait docs for the full picture. Migration: `rust_rule` callbacks now take `&mut WriteState` (replacing `RustRuleContext`); a new `rust_rule_full` gives action callbacks read access. Higher-order primitives over `unstable-fn` values dispatch via `state.apply_function(&fc, args)`.
-- **Automatic naive demotion.** Rules that read or write the database in ways seminaive can't track auto-demote, with a `log::warn!` naming the offending primitive(s).
+- **`:naive` rule option.** Individual rules can opt out of seminaive evaluation with `:naive` (e.g. `(rule (...) (...) :ruleset r :naive)`). The query and actions then typecheck under the permissive `Read` / `Full` contexts so primitives that read or write the database — including HOFs that wrap custom-function lookups — can run inside the rule. The rule is matched against the entire database every iteration. Use this when correctness depends on reading e-graph state from inside a query and the seminaive trade-offs (untracked dependencies, missed re-firings) are unacceptable.
 
 ## [2.0.0] - 2026-02-11
 

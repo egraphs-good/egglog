@@ -330,6 +330,7 @@ pub fn rule(
         body: facts.0,
         name: "".into(),
         ruleset: ruleset.into(),
+        naive: false,
     };
 
     egraph.run_program(vec![Command::Rule { rule }])
@@ -498,6 +499,7 @@ pub fn rust_rule(
         body: facts.0,
         name: egraph.parser.symbol_gen.fresh(rule_name),
         ruleset: ruleset.into(),
+        naive: false,
     };
 
     egraph.run_program(vec![Command::Rule { rule }])
@@ -557,11 +559,12 @@ where
 
 /// Like [`rust_rule`], but the action callback receives a [`FullState`]
 /// — it can read tables (`ctx.lookup`) in addition to writing them.
-/// Because the body uses DB reads, the rule auto-demotes to naive
-/// evaluation: it scans the full database every iteration instead of
-/// using the seminaive delta. Use this when the action genuinely needs
-/// to look up rows; prefer [`rust_rule`] when the data can be bound
-/// via the matcher in the rule body.
+/// Action callbacks of `FullPrim` are only valid in `Context::Full`,
+/// so this helper marks the generated rule `:naive`: the body matches
+/// against the entire database every iteration instead of using the
+/// seminaive delta. Use this when the action genuinely needs to look
+/// up rows; prefer [`rust_rule`] when the data can be bound via the
+/// matcher in the rule body.
 pub fn rust_rule_full(
     egraph: &mut EGraph,
     rule_name: &str,
@@ -596,6 +599,9 @@ pub fn rust_rule_full(
         body: facts.0,
         name: egraph.parser.symbol_gen.fresh(rule_name),
         ruleset: ruleset.into(),
+        // FullPrim action requires `Context::Full`, which is only
+        // available in `:naive` rules.
+        naive: true,
     };
 
     egraph.run_program(vec![Command::Rule { rule }])

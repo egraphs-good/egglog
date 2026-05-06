@@ -59,12 +59,12 @@ pub enum Context {
     Write,
     /// DB reads allowed, DB writes forbidden. Used for top-level
     /// query-shaped commands (`check`, condition evaluation) and for
-    /// the body of an auto-demoted naive rule. Reads are safe because
+    /// the body of an `:naive` rule. Reads are safe because
     /// there is no seminaive epoch to violate.
     Read,
     /// DB reads and writes both allowed. Used for top-level
     /// action-shaped commands (`eval`, `let`, action-mode
-    /// `run-schedule`) and for the head of an auto-demoted naive rule.
+    /// `run-schedule`) and for the head of an `:naive` rule.
     Full,
 }
 
@@ -295,7 +295,7 @@ pub struct PureState<'a, 'db> {
 
 /// Typed view for read-only primitives. Valid in [`Context::Read`]
 /// and [`Context::Full`] (top-level query-shaped commands and the
-/// body of an auto-demoted naive rule). Implements [`Core`] + [`Read`]
+/// body of an `:naive` rule). Implements [`Core`] + [`Read`]
 /// — name-indexed table lookups (`state.lookup("name", &[args])`)
 /// return the row's value or `None`.
 pub struct ReadState<'a, 'db> {
@@ -326,7 +326,7 @@ pub struct WriteState<'a, 'db> {
 
 /// Typed view for top-level action sites with both read and write
 /// access. Valid in [`Context::Full`] only (top-level actions and the
-/// head of an auto-demoted naive rule). Implements [`Core`] + [`Read`] +
+/// head of an `:naive` rule). Implements [`Core`] + [`Read`] +
 /// [`Write`].
 ///
 /// ```compile_fail

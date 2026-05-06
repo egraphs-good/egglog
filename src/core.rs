@@ -72,17 +72,6 @@ impl SpecializedPrimitive {
     pub fn validator(&self) -> Option<&PrimitiveValidator> {
         self.prim_with_id.validator.as_ref()
     }
-
-    /// The trait this primitive was registered as. Implies its
-    /// capability profile (which ambient contexts it can run in) —
-    /// see [`PrimKind::allows`]. Used by the rule-add path to decide
-    /// seminaive compatibility, separately from the singleton
-    /// `selection_ctx` the constraint solver picks at the call site.
-    ///
-    /// [`PrimKind::allows`]: crate::typechecking::PrimKind::allows
-    pub(crate) fn kind(&self) -> crate::typechecking::PrimKind {
-        self.prim_with_id.kind
-    }
 }
 
 impl PartialEq for SpecializedPrimitive {
