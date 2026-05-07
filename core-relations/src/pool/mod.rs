@@ -15,6 +15,7 @@ use crate::{
     free_join::execute::TrieNode,
     numeric_id::{DenseIdMap, IdVec},
 };
+use egglog_concurrency::SharedRef;
 use fixedbitset::FixedBitSet;
 use hashbrown::HashTable;
 
@@ -441,7 +442,11 @@ pool_set! {
         cached_subsets: IdVec<ColumnId, std::sync::OnceLock<std::sync::Arc<ColumnIndex>>> [ 4 << 20 ],
         intersected_on: DenseIdMap<AtomId, i64> [ 1 << 20 ],
 
-        cached_child: IdVec<ColumnId, std::sync::RwLock<HashMap<Value, std::sync::Arc<TrieNode>>>> [ 1 << 20 ],
+        // Pool storage uses `SharedRef<'static, TrieNode>` as a layout-compatible placeholder
+        // for `SharedRef<'arena, TrieNode>`. The pool only ever holds *empty* (cleared) maps,
+        // so no SharedRef survives a pool round trip; lifetimes are reconciled by transmute
+        // at the use site in `TrieNode::get_cached_trie_node`.
+        cached_child: IdVec<ColumnId, std::sync::RwLock<HashMap<Value, SharedRef<'static, TrieNode>>>> [ 1 << 20 ],
     }
 }
 
