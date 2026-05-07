@@ -16,6 +16,7 @@ use crate::{
 use crossbeam::utils::CachePadded;
 use dashmap::mapref::entry::Entry;
 use dashmap::mapref::one::RefMut;
+use egglog_concurrency::{Handle, SharedArena, SharedRef};
 use egglog_reports::{ReportLevel, RuleReport, RuleSetReport};
 use smallvec::SmallVec;
 use web_time::Instant;
@@ -230,12 +231,12 @@ fn intersect_with_dense_ref<'a>(v: SubsetRef<'a>, range: OffsetRange) -> Option<
     }
 }
 
-struct Prober {
-    node: Arc<TrieNode>,
+struct Prober<'arena> {
+    node: SharedRef<'arena, TrieNode>,
     ix: DynamicIndex,
 }
 
-impl Prober {
+impl<'arena> Prober<'arena> {
     fn get_subset<'a>(&'a self, key: &'a [Value]) -> Option<PotentiallyStale<SubsetRef<'a>>> {
         match &self.ix {
             DynamicIndex::Cached {
@@ -365,116 +366,130 @@ impl Database {
                     let desc = desc.clone();
                     let exec_state = exec_state.clone();
                     let match_counter = match_counter.clone();
-                    scope.spawn(move |rule_scope| {
-                        let join_state = JoinState::new(db, exec_state.clone());
-                        let mut binding_info = BindingInfo::default();
-                        for (id, info) in plan.atoms().iter() {
-                            let table = join_state.db.get_table(info.table);
-                            binding_info.insert_subset(id, table.all());
-                        }
-                        let mut action_buf =
-                            ScopedActionBuffer::new(rule_scope, rule_set, match_counter.clone());
+                    scope.spawn(move |_outer_scope| {
+                        // Fresh per-plan arena: dropped at end of this task so
+                        // `Pooled<ChildrenMaps>` recycles between plans (mirroring
+                        // the lifetime of TrieNodes in the prior Arc-based design).
+                        // The nested `in_place_scope` is needed so that the inner
+                        // `ScopedActionBuffer::recur` spawns can borrow `&arena`.
+                        let arena = SharedArena::new();
                         let search_and_apply_timer = Instant::now();
-
-                        'eval: {
-                            for JoinHeader { atom, subset, .. } in plan.header() {
-                                if subset.is_empty() {
-                                    break 'eval;
-                                }
-                                let mut cur =
-                                    Arc::try_unwrap(binding_info.unwrap_val(*atom)).unwrap();
-                                debug_assert!(cur.cached_subsets.get().is_none());
-                                cur.subset.intersect(subset.as_ref(), &join_state.pool);
-                                if cur.subset.is_empty() {
-                                    break 'eval;
-                                }
-                                binding_info.move_back_node(*atom, Arc::new(cur));
+                        let search_and_apply_time = rayon::in_place_scope(|rule_scope| {
+                            let join_state = JoinState::new(db, exec_state.clone(), &arena);
+                            let mut binding_info = BindingInfo::default();
+                            for (id, info) in plan.atoms().iter() {
+                                let table = join_state.db.get_table(info.table);
+                                binding_info.insert_subset(id, table.all(), &join_state.handle);
                             }
+                            let mut action_buf = ScopedActionBuffer::new(
+                                rule_scope,
+                                rule_set,
+                                match_counter.clone(),
+                            );
 
-                            match plan {
-                                Plan::SinglePlan(plan) => {
-                                    join_state.run_join_stages(
-                                        &plan.stages,
-                                        &plan.atoms,
-                                        plan.actions,
-                                        &mut binding_info,
-                                        &mut action_buf,
+                            'eval: {
+                                for JoinHeader { atom, subset, .. } in plan.header() {
+                                    if subset.is_empty() {
+                                        break 'eval;
+                                    }
+                                    let cur = binding_info.unwrap_val(*atom);
+                                    debug_assert!(cur.cached_subsets.get().is_none());
+                                    let mut new_subset = cur.subset.clone();
+                                    new_subset.intersect(subset.as_ref(), &join_state.pool);
+                                    if new_subset.is_empty() {
+                                        break 'eval;
+                                    }
+                                    binding_info.move_back_node(
+                                        *atom,
+                                        join_state.handle.alloc(TrieNode::new(new_subset)),
                                     );
                                 }
-                                Plan::DecomposedPlan(plan) => {
-                                    let mut materializations: DenseIdMap<
-                                        MatId,
-                                        Arc<DashMap<Vec<Value>, RowBuffer>>,
-                                    > = DenseIdMap::with_capacity(plan.stages.blocks.len());
-                                    for i in 0..plan.stages.blocks.len() {
-                                        materializations.insert(
-                                            MatId::from_usize(i),
-                                            Arc::new(Default::default()),
+
+                                match plan {
+                                    Plan::SinglePlan(plan) => {
+                                        join_state.run_join_stages(
+                                            &plan.stages,
+                                            &plan.atoms,
+                                            plan.actions,
+                                            &mut binding_info,
+                                            &mut action_buf,
                                         );
                                     }
-                                    let specs: Arc<DenseIdMap<MatId, MatSpec>> = Arc::new(
-                                        plan.stages
-                                            .blocks
-                                            .iter()
-                                            .enumerate()
-                                            .map(|(i, block)| {
-                                                (MatId::from_usize(i), block.1.clone())
-                                            })
-                                            .collect(),
-                                    );
-                                    let mut materializations = Arc::new(materializations);
-
-                                    for (mat_id, stage_block) in
-                                        plan.stages.blocks.iter().enumerate()
-                                    {
-                                        let mat_id = MatId::from_usize(mat_id);
-                                        rayon::in_place_scope(|stage_scope| {
-                                            let mut materializer = ScopedMaterializer {
-                                                scope: stage_scope,
-                                                specs: specs.clone(),
-                                                materializations: materializations.clone(),
-                                                scratch_key: Default::default(),
-                                                scratch_val: Default::default(),
-                                            };
-                                            join_state.run_join_stages(
-                                                &stage_block.0,
-                                                &plan.atoms,
-                                                mat_id,
-                                                &mut binding_info,
-                                                &mut materializer,
+                                    Plan::DecomposedPlan(plan) => {
+                                        let mut materializations: DenseIdMap<
+                                            MatId,
+                                            Arc<DashMap<Vec<Value>, RowBuffer>>,
+                                        > = DenseIdMap::with_capacity(plan.stages.blocks.len());
+                                        for i in 0..plan.stages.blocks.len() {
+                                            materializations.insert(
+                                                MatId::from_usize(i),
+                                                Arc::new(Default::default()),
                                             );
-                                        });
-                                        if materializations[mat_id].is_empty() {
-                                            break 'eval;
                                         }
-                                        assert_eq!(Arc::strong_count(&materializations), 1);
-                                        let mut materializations_dearc =
-                                            Arc::unwrap_or_clone(materializations);
-                                        let materialization = mem::take(
-                                            Arc::get_mut(&mut materializations_dearc[mat_id])
-                                                .unwrap(),
-                                        )
-                                        .into_iter()
-                                        .collect::<HashMap<_, _>>();
-                                        binding_info
-                                            .materializations
-                                            .insert(mat_id, Arc::new(materialization));
-                                        materializations = Arc::new(materializations_dearc);
+                                        let specs: Arc<DenseIdMap<MatId, MatSpec>> = Arc::new(
+                                            plan.stages
+                                                .blocks
+                                                .iter()
+                                                .enumerate()
+                                                .map(|(i, block)| {
+                                                    (MatId::from_usize(i), block.1.clone())
+                                                })
+                                                .collect(),
+                                        );
+                                        let mut materializations = Arc::new(materializations);
+
+                                        for (mat_id, stage_block) in
+                                            plan.stages.blocks.iter().enumerate()
+                                        {
+                                            let mat_id = MatId::from_usize(mat_id);
+                                            rayon::in_place_scope(|stage_scope| {
+                                                let mut materializer = ScopedMaterializer {
+                                                    scope: stage_scope,
+                                                    specs: specs.clone(),
+                                                    materializations: materializations.clone(),
+                                                    scratch_key: Default::default(),
+                                                    scratch_val: Default::default(),
+                                                };
+                                                join_state.run_join_stages(
+                                                    &stage_block.0,
+                                                    &plan.atoms,
+                                                    mat_id,
+                                                    &mut binding_info,
+                                                    &mut materializer,
+                                                );
+                                            });
+                                            if materializations[mat_id].is_empty() {
+                                                break 'eval;
+                                            }
+                                            assert_eq!(Arc::strong_count(&materializations), 1);
+                                            let mut materializations_dearc =
+                                                Arc::unwrap_or_clone(materializations);
+                                            let materialization = mem::take(
+                                                Arc::get_mut(&mut materializations_dearc[mat_id])
+                                                    .unwrap(),
+                                            )
+                                            .into_iter()
+                                            .collect::<HashMap<_, _>>();
+                                            binding_info
+                                                .materializations
+                                                .insert(mat_id, Arc::new(materialization));
+                                            materializations = Arc::new(materializations_dearc);
+                                        }
+                                        join_state.run_join_stages(
+                                            &plan.result_block,
+                                            &plan.atoms,
+                                            plan.actions,
+                                            &mut binding_info,
+                                            &mut action_buf,
+                                        );
                                     }
-                                    join_state.run_join_stages(
-                                        &plan.result_block,
-                                        &plan.atoms,
-                                        plan.actions,
-                                        &mut binding_info,
-                                        &mut action_buf,
-                                    );
                                 }
                             }
-                        }
-                        let search_and_apply_time = search_and_apply_timer.elapsed();
-                        if action_buf.needs_flush {
-                            action_buf.flush(&mut exec_state.clone());
-                        }
+                            if action_buf.needs_flush {
+                                action_buf.flush(&mut exec_state.clone());
+                            }
+                            search_and_apply_timer.elapsed()
+                        });
                         let mut rule_report: RefMut<'_, Arc<str>, Vec<RuleReport>> =
                             dash_rule_reports.entry(desc).or_default();
                         rule_report.value_mut().push(RuleReport {
@@ -491,7 +506,6 @@ impl Database {
                 .collect();
         } else {
             rule_reports = HashMap::default();
-            let join_state = JoinState::new(self, exec_state.clone());
             // Just run all of the plans in order with a single in-place action
             // buffer.
             let mut action_buf = InPlaceActionBuffer {
@@ -506,11 +520,16 @@ impl Database {
                         Some(plan.to_report(symbol_map))
                     }
                 };
+                // Fresh per-plan arena: dropped at end of this iteration so
+                // `Pooled<ChildrenMaps>` recycles between plans (mirroring the
+                // lifetime of TrieNodes in the prior Arc-based design).
+                let arena = SharedArena::new();
+                let join_state = JoinState::new(self, exec_state.clone(), &arena);
                 let mut binding_info = BindingInfo::default();
 
                 for (id, info) in plan.atoms().iter() {
                     let table = join_state.db.get_table(info.table);
-                    binding_info.insert_subset(id, table.all());
+                    binding_info.insert_subset(id, table.all(), &join_state.handle);
                 }
 
                 let search_and_apply_timer = Instant::now();
@@ -519,15 +538,17 @@ impl Database {
                         if subset.is_empty() {
                             break 'eval;
                         }
-                        // Before query execution, Arc<TrieNode> is owned exclusively by the binding info.
-                        // Trie nodes are only shared once we start running the query.
-                        let mut cur = Arc::try_unwrap(binding_info.unwrap_val(*atom)).unwrap();
+                        let cur = binding_info.unwrap_val(*atom);
                         debug_assert!(cur.cached_subsets.get().is_none());
-                        cur.subset.intersect(subset.as_ref(), &join_state.pool);
-                        if cur.subset.is_empty() {
+                        let mut new_subset = cur.subset.clone();
+                        new_subset.intersect(subset.as_ref(), &join_state.pool);
+                        if new_subset.is_empty() {
                             break 'eval;
                         }
-                        binding_info.move_back_node(*atom, Arc::new(cur));
+                        binding_info.move_back_node(
+                            *atom,
+                            join_state.handle.alloc(TrieNode::new(new_subset)),
+                        );
                     }
                     match plan {
                         Plan::SinglePlan(plan) => {
@@ -643,12 +664,17 @@ impl Default for ActionState {
     }
 }
 
-struct JoinState<'a> {
+struct JoinState<'a, 'arena> {
     db: &'a Database,
     exec_state: ExecutionState<'a>,
     /// Cached thread-local pool for SortedOffsetVector allocations.
     /// Stored here to avoid a per-call `with_pool_set` TLS access in `get_index`.
     pool: Pool<SortedOffsetVector>,
+    /// Reference to the shared arena, used to create new per-thread handles
+    /// when execution forks via `recur`.
+    arena: &'arena SharedArena,
+    /// Thread-local handle into the shared arena for allocating `TrieNode`s.
+    handle: Handle<'arena>,
 }
 
 /// Per-column indexes on a trie node's subset, lazily initialized on first access per column.
@@ -656,7 +682,12 @@ type ColumnIndexes = IdVec<ColumnId, OnceLock<Arc<ColumnIndex>>>;
 
 /// Per-column maps from a value to the child trie node for that value, lazily populated on first
 /// lookup per (column, value) pair.
-pub(crate) type ChildrenMaps = IdVec<ColumnId, RwLock<HashMap<Value, Arc<TrieNode>>>>;
+///
+/// The lifetime `'a` records the arena lifetime of the contained `TrieNode`s. The version stored
+/// in the per-thread pool uses `'static` as a placeholder; lifetimes are transmuted at the
+/// boundary in [`TrieNode::get_cached_trie_node`]. This is safe because `SharedRef` has no `Drop`
+/// and the pool only ever holds *empty* (cleared) maps.
+pub(crate) type ChildrenMaps<'a> = IdVec<ColumnId, RwLock<HashMap<Value, SharedRef<'a, TrieNode>>>>;
 
 /// Information about the current subset of an atom's relation that is being considered, along with
 /// lazily-initialized, cached indexes on that subset.
@@ -670,10 +701,10 @@ pub(crate) struct TrieNode {
     subset: Subset,
     /// Any cached indexes on this subset.
     cached_subsets: OnceLock<Pooled<ColumnIndexes>>,
-    /// Cached child trie nodes, keyed by value. In practice each TrieNode is
-    /// only ever probed with a single column, so we store one (col, map) pair
-    /// instead of an IdVec across all columns.
-    cached_children: OnceLock<Pooled<ChildrenMaps>>,
+    /// Cached child trie nodes, keyed by value. The `'static` is a placeholder for the
+    /// per-thread pool; the actual `SharedRef` values point into the arena owned by the
+    /// surrounding `JoinState`. Lifetimes are reconciled by transmute at insert/lookup time.
+    cached_children: OnceLock<Pooled<ChildrenMaps<'static>>>,
 }
 
 impl std::fmt::Debug for TrieNode {
@@ -710,73 +741,85 @@ impl TrieNode {
             .clone()
     }
 
-    fn get_cached_trie_node(
+    fn get_cached_trie_node<'arena>(
         &self,
         col: ColumnId,
         value: Value,
         info: &TableInfo,
+        handle: &Handle<'arena>,
         sub: impl FnOnce() -> Subset,
-    ) -> Arc<TrieNode> {
-        let map = &self.cached_children.get_or_init(|| {
-            let mut vec: Pooled<ChildrenMaps> = with_pool_set(|ps| ps.get());
+    ) -> SharedRef<'arena, TrieNode> {
+        let map_static = &self.cached_children.get_or_init(|| {
+            let mut vec: Pooled<ChildrenMaps<'static>> = with_pool_set(|ps| ps.get());
             vec.resize_with(info.spec.arity(), || RwLock::new(HashMap::default()));
             vec
         })[col];
+        // SAFETY: `RwLock<HashMap<_, SharedRef<'static, TrieNode>>>` and
+        // `RwLock<HashMap<_, SharedRef<'arena, TrieNode>>>` differ only in the lifetime
+        // parameter of `SharedRef`, which is `PhantomData` (zero-sized) — they have identical
+        // layout. Every `SharedRef` we ever insert into this map was allocated by the same
+        // arena `'arena` as the parent TrieNode, and the per-thread pool returns *empty*
+        // (cleared) maps, so we never alias entries from a different arena.
+        #[allow(clippy::unnecessary_cast)] // Seems like a bug with clippy
+        let map: &RwLock<HashMap<Value, SharedRef<'arena, TrieNode>>> = unsafe {
+            &*((map_static as *const RwLock<HashMap<Value, SharedRef<'static, TrieNode>>>)
+                as *const RwLock<HashMap<Value, SharedRef<'arena, TrieNode>>>)
+        };
         // Optimistic read path: most calls are cache hits, so try shared lock first.
         {
             let guard = map.read().unwrap();
             if let Some(node) = guard.get(&value) {
-                return node.clone();
+                return *node;
             }
         }
         // Cache miss: acquire write lock and insert.
         let mut guard = map.write().unwrap();
         // Double-check in case another thread inserted while we were waiting.
         if let Some(node) = guard.get(&value) {
-            return node.clone();
+            return *node;
         }
-        let new_node = Arc::new(TrieNode::new(sub()));
-        guard.insert(value, new_node.clone());
+        let new_node = handle.alloc(TrieNode::new(sub()));
+        guard.insert(value, new_node);
         new_node
     }
 }
 
-impl FrameUpdates {
-    /// Refine `atom` to `subset`, using the dense fast path to avoid an
-    /// `Arc<TrieNode>` allocation when the subset is already a contiguous range.
-    fn refine_atom_subset(&mut self, atom: AtomId, subset: Subset) {
+impl<'a> FrameUpdates<'a> {
+    /// Refine `atom` to `subset`, using the dense fast path to avoid a
+    /// TrieNode allocation when the subset is already a contiguous range.
+    fn refine_atom_subset(&mut self, atom: AtomId, subset: Subset, handle: &Handle<'a>) {
         match subset {
             Subset::Dense(range) => self.refine_atom_dense(atom, range),
-            sub => self.refine_atom(atom, Arc::new(TrieNode::new(sub))),
+            sub => self.refine_atom(atom, handle.alloc(TrieNode::new(sub))),
         }
     }
 }
 
 #[derive(Default, Clone)]
-struct BindingInfo {
+struct BindingInfo<'arena> {
     bindings: DenseIdMap<Variable, Value>,
-    subsets: DenseIdMap<AtomId, Arc<TrieNode>>,
+    subsets: DenseIdMap<AtomId, SharedRef<'arena, TrieNode>>,
     materializations: DenseIdMap<MatId, Arc<HashMap<Vec<Value>, RowBuffer>>>,
 }
 
-impl BindingInfo {
-    /// Initializes the atom-related metadata in the [`BindingInfo`].    
-    fn insert_subset(&mut self, atom: AtomId, subset: Subset) {
-        let node = Arc::new(TrieNode::new(subset));
+impl<'arena> BindingInfo<'arena> {
+    /// Initializes the atom-related metadata in the [`BindingInfo`].
+    fn insert_subset(&mut self, atom: AtomId, subset: Subset, handle: &Handle<'arena>) {
+        let node = handle.alloc(TrieNode::new(subset));
         self.subsets.insert(atom, node);
     }
 
-    fn insert_node(&mut self, atom: AtomId, node: Arc<TrieNode>) {
+    fn insert_node(&mut self, atom: AtomId, node: SharedRef<'arena, TrieNode>) {
         self.subsets.insert(atom, node);
     }
 
     /// Probers returned from [`JoinState::get_index`] will move atom-related state out of the
     /// [`BindingInfo`]. Once the caller is done using a prober, this method moves it back.
-    fn move_back(&mut self, atom: AtomId, prober: Prober) {
+    fn move_back(&mut self, atom: AtomId, prober: Prober<'arena>) {
         self.subsets.insert(atom, prober.node);
     }
 
-    fn move_back_node(&mut self, atom: AtomId, node: Arc<TrieNode>) {
+    fn move_back_node(&mut self, atom: AtomId, node: SharedRef<'arena, TrieNode>) {
         self.subsets.insert(atom, node);
     }
 
@@ -784,17 +827,22 @@ impl BindingInfo {
         self.subsets[atom].subset.is_empty()
     }
 
-    fn unwrap_val(&mut self, atom: AtomId) -> Arc<TrieNode> {
+    fn unwrap_val(&mut self, atom: AtomId) -> SharedRef<'arena, TrieNode> {
         self.subsets.unwrap_val(atom)
     }
 }
 
-impl<'a> JoinState<'a> {
-    fn new(db: &'a Database, exec_state: ExecutionState<'a>) -> Self {
+impl<'a, 'arena> JoinState<'a, 'arena>
+where
+    'a: 'arena,
+{
+    fn new(db: &'a Database, exec_state: ExecutionState<'a>, arena: &'arena SharedArena) -> Self {
         Self {
             db,
             exec_state,
             pool: with_pool_set(|ps| ps.get_pool()),
+            arena,
+            handle: arena.new_handle(),
         }
     }
 
@@ -802,9 +850,9 @@ impl<'a> JoinState<'a> {
         &self,
         atoms: &Arc<DenseIdMap<AtomId, Atom>>,
         atom: AtomId,
-        binding_info: &mut BindingInfo,
+        binding_info: &mut BindingInfo<'arena>,
         cols: impl Iterator<Item = ColumnId>,
-    ) -> Prober {
+    ) -> Prober<'arena> {
         let cols = SmallVec::<[ColumnId; 4]>::from_iter(cols);
         let trie_node = binding_info.subsets.unwrap_val(atom);
         let subset = &trie_node.subset;
@@ -865,10 +913,10 @@ impl<'a> JoinState<'a> {
     fn get_column_index(
         &self,
         atoms: &Arc<DenseIdMap<AtomId, Atom>>,
-        binding_info: &mut BindingInfo,
+        binding_info: &mut BindingInfo<'arena>,
         atom: AtomId,
         col: ColumnId,
-    ) -> Prober {
+    ) -> Prober<'arena> {
         self.get_index(atoms, atom, binding_info, iter::once(col))
     }
 
@@ -881,16 +929,14 @@ impl<'a> JoinState<'a> {
     /// `plan.stages.instrs[instr_order[i]]` at stage `i`.
     ///
     /// This is also a stepping stone towards supporting fully dynamic variable ordering.
-    fn run_join_stages<'buf, A: NumericId + 'buf, BUF: ActionBuffer<'buf, A>>(
+    fn run_join_stages<A: NumericId + 'arena, BUF: ActionBuffer<'arena, A>>(
         &self,
-        stages: &'buf JoinStages,
-        atoms: &'buf Arc<DenseIdMap<AtomId, Atom>>,
+        stages: &'arena JoinStages,
+        atoms: &'arena Arc<DenseIdMap<AtomId, Atom>>,
         action: A,
-        binding_info: &mut BindingInfo,
+        binding_info: &mut BindingInfo<'arena>,
         action_buf: &mut BUF,
-    ) where
-        'a: 'buf,
-    {
+    ) {
         if log::log_enabled!(log::Level::Debug) {
             log::debug!("Starting running query stages:\n{stages:#?}");
         }
@@ -921,18 +967,16 @@ impl<'a> JoinState<'a> {
     /// currently used as a heuristic to determine if we should increase parallelism more than the
     /// default.
     #[allow(clippy::too_many_arguments)]
-    fn run_plan<'buf, A: NumericId + 'buf, BUF: ActionBuffer<'buf, A>>(
+    fn run_plan<A: NumericId + 'arena, BUF: ActionBuffer<'arena, A>>(
         &self,
-        stages: &'buf JoinStages,
-        atoms: &'buf Arc<DenseIdMap<AtomId, Atom>>,
+        stages: &'arena JoinStages,
+        atoms: &'arena Arc<DenseIdMap<AtomId, Atom>>,
         action: A,
         instr_order: &mut InstrOrder,
         cur: usize,
-        binding_info: &mut BindingInfo,
+        binding_info: &mut BindingInfo<'arena>,
         action_buf: &mut BUF,
-    ) where
-        'a: 'buf,
-    {
+    ) {
         if self.exec_state.should_stop() {
             return;
         }
@@ -960,6 +1004,7 @@ impl<'a> JoinState<'a> {
                 if (cur == 0 || cur == 1) && action_buf.supports_parallel_drain() {
                     drain_updates_parallel!($updates)
                 } else {
+                    let handle = &self.handle;
                     $updates.drain(|update| match update {
                         UpdateInstr::PushBinding(var, val) => {
                             binding_info.bindings.insert(var, val);
@@ -968,7 +1013,7 @@ impl<'a> JoinState<'a> {
                             binding_info.insert_node(atom, subset);
                         }
                         UpdateInstr::RefineAtomDense(atom, range) => {
-                            binding_info.insert_subset(atom, Subset::Dense(range));
+                            binding_info.insert_subset(atom, Subset::Dense(range), handle);
                         }
                         UpdateInstr::EndFrame => {
                             // Inline leaf-level: if cur+1 is the leaf (no more
@@ -1001,6 +1046,7 @@ impl<'a> JoinState<'a> {
                     return;
                 }
                 let db = self.db;
+                let arena = self.arena;
                 let exec_state_for_factory = self.exec_state.clone();
                 let exec_state_for_work = self.exec_state.clone();
                 action_buf.recur(
@@ -1024,7 +1070,11 @@ impl<'a> JoinState<'a> {
                                 binding_info.insert_node(atom, subset);
                             }
                             UpdateInstr::RefineAtomDense(atom, range) => {
-                                binding_info.insert_subset(atom, Subset::Dense(range));
+                                binding_info.insert_subset(
+                                    atom,
+                                    Subset::Dense(range),
+                                    &arena.new_handle(),
+                                );
                             }
                             UpdateInstr::EndFrame => {
                                 JoinState {
@@ -1034,6 +1084,8 @@ impl<'a> JoinState<'a> {
                                     // This makes drain_updates_parallel slightly more expensive
                                     // than drain_updates eevn when both are run in single thread
                                     pool: with_pool_set(|ps| ps.get_pool()),
+                                    arena,
+                                    handle: arena.new_handle(),
                                 }
                                 .run_plan(
                                     stages,
@@ -1071,6 +1123,7 @@ impl<'a> JoinState<'a> {
         }
 
         let pool = &self.pool;
+        let handle = &self.handle;
         match &stages.instrs[instr_order.get(cur)] {
             JoinStage::Intersect { var, scans } => match scans.as_slice() {
                 [] => {}
@@ -1091,14 +1144,15 @@ impl<'a> JoinState<'a> {
                                 updates.rollback();
                                 return;
                             }
-                            updates.refine_atom_subset(a.atom, sub);
+                            updates.refine_atom_subset(a.atom, sub, handle);
                         } else {
-                            let node =
-                                prober
-                                    .node
-                                    .get_cached_trie_node(a.column, val[0], info, || {
-                                        refine_subset(x.to_owned(pool), &a.cs, &table, has_stale)
-                                    });
+                            let node = prober.node.get_cached_trie_node(
+                                a.column,
+                                val[0],
+                                info,
+                                handle,
+                                || refine_subset(x.to_owned(pool), &a.cs, &table, has_stale),
+                            );
                             if node.subset.is_empty() {
                                 updates.rollback();
                                 return;
@@ -1147,12 +1201,13 @@ impl<'a> JoinState<'a> {
                                     updates.rollback();
                                     return;
                                 }
-                                updates.refine_atom_subset(smaller_atom, small_sub);
+                                updates.refine_atom_subset(smaller_atom, small_sub, handle);
                             } else {
                                 let smaller_node = smaller.node.get_cached_trie_node(
                                     smaller_scan.column,
                                     val[0],
                                     small_info,
+                                    handle,
                                     || {
                                         refine_subset(
                                             small_sub.to_owned(pool),
@@ -1179,12 +1234,13 @@ impl<'a> JoinState<'a> {
                                     updates.rollback();
                                     return;
                                 }
-                                updates.refine_atom_subset(larger_atom, large_sub);
+                                updates.refine_atom_subset(larger_atom, large_sub, handle);
                             } else {
                                 let larger_node = larger.node.get_cached_trie_node(
                                     larger_scan.column,
                                     val[0],
                                     large_info,
+                                    handle,
                                     || {
                                         refine_subset(
                                             large_sub.to_owned(pool),
@@ -1265,12 +1321,13 @@ impl<'a> JoinState<'a> {
                                             updates.rollback();
                                             return;
                                         }
-                                        updates.refine_atom_subset(scan.atom, sub);
+                                        updates.refine_atom_subset(scan.atom, sub, handle);
                                     } else {
                                         let node = probers[i].node.get_cached_trie_node(
                                             scan.column,
                                             key[0],
                                             &self.db.tables[atoms[scan.atom].table],
+                                            handle,
                                             || {
                                                 refine_subset(
                                                     sub.to_owned(pool),
@@ -1303,12 +1360,13 @@ impl<'a> JoinState<'a> {
                                     updates.rollback();
                                     return;
                                 }
-                                updates.refine_atom_subset(main_spec.atom, main_sub);
+                                updates.refine_atom_subset(main_spec.atom, main_sub, handle);
                             } else {
                                 let main_node = probers[smallest].node.get_cached_trie_node(
                                     main_spec.column,
                                     key[0],
                                     main_spec_info,
+                                    handle,
                                     || {
                                         let sub = sub.to_owned(pool);
                                         refine_subset(
@@ -1474,7 +1532,7 @@ impl<'a> JoinState<'a> {
                                 // There are no possible values for this subset
                                 continue 'mid;
                             }
-                            updates.refine_atom_subset(*atom, subset);
+                            updates.refine_atom_subset(*atom, subset, handle);
                         }
                         updates.finish_frame();
                         if updates.frames() >= chunk_size {
@@ -1529,7 +1587,7 @@ impl<'a> JoinState<'a> {
                     .collect();
 
                 let mut key = Vec::with_capacity(4);
-                let mut prune_probers = |updates: &mut FrameUpdates,
+                let mut prune_probers = |updates: &mut FrameUpdates<'arena>,
                                          mat_key: Option<&[Value]>,
                                          mat_non_key: Option<&[Value]>|
                  -> bool {
@@ -1562,7 +1620,7 @@ impl<'a> JoinState<'a> {
                             if subset.is_empty() {
                                 return false;
                             }
-                            updates.refine_atom_subset(spec.to_index.atom, subset);
+                            updates.refine_atom_subset(spec.to_index.atom, subset, handle);
                         } else {
                             return false;
                         }
@@ -1697,12 +1755,15 @@ trait ActionBuffer<'state, A: NumericId>: Send {
     /// should assume that `local` _is_ modified synchronously.
     // NB: Earlier versions of this method had BorrowedLocalState be a generic instead, but this
     // ran into difficulties when we needed to pass multiple mutable references.
-    fn recur<'local>(
+    fn recur<'local, 'arena>(
         &mut self,
-        local: BorrowedLocalState<'local>,
+        local: BorrowedLocalState<'local, 'arena>,
         to_exec_state: impl FnMut() -> ExecutionState<'state> + Send + 'state,
-        work: impl for<'a> FnOnce(BorrowedLocalState<'a>, &mut Self::AsLocal<'a>) + Send + 'state,
-    );
+        work: impl for<'a> FnOnce(BorrowedLocalState<'a, 'arena>, &mut Self::AsLocal<'a>)
+        + Send
+        + 'state,
+    ) where
+        'arena: 'state;
 
     /// The unit at which you should batch updates passed to calls to `recur`,
     /// potentially depending on the current level of recursion.
@@ -1769,12 +1830,14 @@ impl<'a, 'outer: 'a> ActionBuffer<'a, ActionId> for InPlaceActionBuffer<'outer> 
         );
     }
 
-    fn recur<'local>(
+    fn recur<'local, 'arena>(
         &mut self,
-        local: BorrowedLocalState<'local>,
+        local: BorrowedLocalState<'local, 'arena>,
         _to_exec_state: impl FnMut() -> ExecutionState<'a> + Send + 'a,
-        work: impl for<'b> FnOnce(BorrowedLocalState<'b>, &mut Self) + Send + 'a,
-    ) {
+        work: impl for<'b> FnOnce(BorrowedLocalState<'b, 'arena>, &mut Self) + Send + 'a,
+    ) where
+        'arena: 'a,
+    {
         work(local, self)
     }
 
@@ -1851,14 +1914,16 @@ impl<'scope> ActionBuffer<'scope, ActionId> for ScopedActionBuffer<'_, 'scope> {
         );
         self.needs_flush = false;
     }
-    fn recur<'local>(
+    fn recur<'local, 'arena>(
         &mut self,
-        mut local: BorrowedLocalState<'local>,
+        mut local: BorrowedLocalState<'local, 'arena>,
         mut to_exec_state: impl FnMut() -> ExecutionState<'scope> + Send + 'scope,
-        work: impl for<'a> FnOnce(BorrowedLocalState<'a>, &mut ScopedActionBuffer<'a, 'scope>)
+        work: impl for<'a> FnOnce(BorrowedLocalState<'a, 'arena>, &mut ScopedActionBuffer<'a, 'scope>)
         + Send
         + 'scope,
-    ) {
+    ) where
+        'arena: 'scope,
+    {
         let rule_set = self.rule_set;
         let match_counter = self.match_counter.clone();
         let mut inner = local.clone_state();
@@ -1955,12 +2020,14 @@ impl<'a> ActionBuffer<'a, MatId> for InPlaceMaterializer<'a> {
         // No-op for in-place materializer.
     }
 
-    fn recur<'local>(
+    fn recur<'local, 'arena>(
         &mut self,
-        local: BorrowedLocalState<'local>,
+        local: BorrowedLocalState<'local, 'arena>,
         _to_exec_state: impl FnMut() -> ExecutionState<'a> + Send + 'a,
-        work: impl for<'b> FnOnce(BorrowedLocalState<'b>, &mut Self) + Send + 'a,
-    ) {
+        work: impl for<'b> FnOnce(BorrowedLocalState<'b, 'arena>, &mut Self) + Send + 'a,
+    ) where
+        'arena: 'a,
+    {
         work(local, self)
     }
 
@@ -2018,14 +2085,16 @@ impl<'scope> ActionBuffer<'scope, MatId> for ScopedMaterializer<'_, 'scope> {
         // No-op for scoped materializer since we always write to the materialization in-place.
     }
 
-    fn recur<'local>(
+    fn recur<'local, 'arena>(
         &mut self,
-        mut local: BorrowedLocalState<'local>,
+        mut local: BorrowedLocalState<'local, 'arena>,
         _to_exec_state: impl FnMut() -> ExecutionState<'scope> + Send + 'scope,
-        work: impl for<'a> FnOnce(BorrowedLocalState<'a>, &mut ScopedMaterializer<'a, 'scope>)
+        work: impl for<'a> FnOnce(BorrowedLocalState<'a, 'arena>, &mut ScopedMaterializer<'a, 'scope>)
         + Send
         + 'scope,
-    ) {
+    ) where
+        'arena: 'scope,
+    {
         let scope = self.scope;
         let specs = self.specs.clone();
         let materializations = self.materializations.clone();
@@ -2062,7 +2131,7 @@ impl MatchCounter {
     }
 }
 
-fn estimate_size(join_stage: &JoinStage, binding_info: &BindingInfo) -> usize {
+fn estimate_size(join_stage: &JoinStage, binding_info: &BindingInfo<'_>) -> usize {
     match join_stage {
         JoinStage::Intersect { scans, .. } => scans
             .iter()
@@ -2086,7 +2155,7 @@ fn sort_plan_by_size(
     order: &mut InstrOrder,
     start: usize,
     instrs: &[JoinStage],
-    binding_info: &mut BindingInfo,
+    binding_info: &mut BindingInfo<'_>,
 ) {
     let mut last_pos = start;
     for i in start..instrs.len() {
@@ -2109,7 +2178,7 @@ fn sort_plan_by_size_inner(
     order: &mut InstrOrder,
     range: Range<usize>,
     instrs: &[JoinStage],
-    binding_info: &mut BindingInfo,
+    binding_info: &mut BindingInfo<'_>,
 ) {
     // Nothing to sort if there's 0 or 1 element.
     if range.len() <= 1 {
@@ -2151,7 +2220,7 @@ fn sort_plan_by_size_inner(
     //   (2) then by how many relations joins on this variable
     //   (3) then by the cardinality of the variable to be enumerated
     let key_fn = |join_stage: &JoinStage,
-                  binding_info: &BindingInfo,
+                  binding_info: &BindingInfo<'_>,
                   times_refined: &DenseIdMap<AtomId, i64>| {
         let refine = match join_stage {
             JoinStage::Intersect { scans, .. } => scans
@@ -2235,14 +2304,14 @@ impl InstrOrder {
     }
 }
 
-struct BorrowedLocalState<'a> {
+struct BorrowedLocalState<'a, 'arena> {
     instr_order: &'a mut InstrOrder,
-    binding_info: &'a mut BindingInfo,
-    updates: &'a mut FrameUpdates,
+    binding_info: &'a mut BindingInfo<'arena>,
+    updates: &'a mut FrameUpdates<'arena>,
 }
 
-impl BorrowedLocalState<'_> {
-    fn clone_state(&mut self) -> LocalState {
+impl<'arena> BorrowedLocalState<'_, 'arena> {
+    fn clone_state(&mut self) -> LocalState<'arena> {
         LocalState {
             instr_order: self.instr_order.clone(),
             binding_info: self.binding_info.clone(),
@@ -2251,14 +2320,14 @@ impl BorrowedLocalState<'_> {
     }
 }
 
-struct LocalState {
+struct LocalState<'arena> {
     instr_order: InstrOrder,
-    binding_info: BindingInfo,
-    updates: FrameUpdates,
+    binding_info: BindingInfo<'arena>,
+    updates: FrameUpdates<'arena>,
 }
 
-impl LocalState {
-    fn borrow_mut<'a>(&'a mut self) -> BorrowedLocalState<'a> {
+impl<'arena> LocalState<'arena> {
+    fn borrow_mut<'a>(&'a mut self) -> BorrowedLocalState<'a, 'arena> {
         BorrowedLocalState {
             instr_order: &mut self.instr_order,
             binding_info: &mut self.binding_info,

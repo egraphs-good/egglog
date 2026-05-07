@@ -2,7 +2,7 @@
 //! execution.
 //!
 //! Free Join is a recursive algorithm that that discovers a candidate binding for a particular
-//! variable in a query and then recursively runs the rest of the join restricted for that binding
+//! variable in a query and then recursively runs the rest of the join restricted for that variable
 //! holding. Once the "sub-join" finishes, the outer recursive call backtracks, adds a separate
 //! binding, and then repeats.
 //!
@@ -12,7 +12,7 @@
 //! those bindings in recursive calls. When parallelism is enabled, this data-structure allows us
 //! hand over an entire batch of recursive calls to a separate thread to process independently.
 
-use std::sync::Arc;
+use egglog_concurrency::SharedRef;
 
 use crate::free_join::execute::TrieNode;
 use crate::numeric_id::define_id;
@@ -24,26 +24,42 @@ use super::{AtomId, Variable};
 
 define_id!(pub SubsetId, u32, "An offset into a buffer of subsets");
 
-#[derive(Debug)]
-pub(super) enum UpdateInstr {
+pub(super) enum UpdateInstr<'a> {
     PushBinding(Variable, Value),
-    RefineAtom(AtomId, Arc<TrieNode>),
-    /// Refine an atom to a dense offset range, avoiding an Arc<TrieNode> allocation.
+    RefineAtom(AtomId, SharedRef<'a, TrieNode>),
+    /// Refine an atom to a dense offset range, avoiding a TrieNode allocation.
     RefineAtomDense(AtomId, OffsetRange),
     /// Marks the end of the current frame. Time to make a recursive call.
     EndFrame,
 }
 
+impl std::fmt::Debug for UpdateInstr<'_> {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            UpdateInstr::PushBinding(var, val) => {
+                f.debug_tuple("PushBinding").field(var).field(val).finish()
+            }
+            UpdateInstr::RefineAtom(atom, _) => f.debug_tuple("RefineAtom").field(atom).finish(),
+            UpdateInstr::RefineAtomDense(atom, range) => f
+                .debug_tuple("RefineAtomDense")
+                .field(atom)
+                .field(range)
+                .finish(),
+            UpdateInstr::EndFrame => f.debug_tuple("EndFrame").finish(),
+        }
+    }
+}
+
 /// A flat buffer of updates that is used to prepare a sequence of recursive calls to free join.
 #[derive(Default)]
-pub(super) struct FrameUpdates {
-    updates: Vec<UpdateInstr>,
+pub(super) struct FrameUpdates<'a> {
+    updates: Vec<UpdateInstr<'a>>,
     frames: usize,
     last_start: usize,
 }
 
-impl FrameUpdates {
-    pub(super) fn with_capacity(capacity: usize) -> FrameUpdates {
+impl<'a> FrameUpdates<'a> {
+    pub(super) fn with_capacity(capacity: usize) -> FrameUpdates<'a> {
         FrameUpdates {
             updates: Vec::with_capacity(capacity * 2),
             frames: 0,
@@ -57,12 +73,12 @@ impl FrameUpdates {
     }
 
     /// Refine `atom` to consider only the given `subset` in the current frame.
-    pub(super) fn refine_atom(&mut self, atom: AtomId, node: Arc<TrieNode>) {
+    pub(super) fn refine_atom(&mut self, atom: AtomId, node: SharedRef<'a, TrieNode>) {
         self.updates.push(UpdateInstr::RefineAtom(atom, node));
     }
 
     /// Refine `atom` to consider only the given dense offset range, without
-    /// allocating an Arc<TrieNode> eagerly.
+    /// allocating a TrieNode eagerly.
     pub(super) fn refine_atom_dense(&mut self, atom: AtomId, range: OffsetRange) {
         self.updates.push(UpdateInstr::RefineAtomDense(atom, range));
     }
@@ -89,7 +105,7 @@ impl FrameUpdates {
         self.updates.clear();
     }
 
-    pub(super) fn drain(&mut self, f: impl FnMut(UpdateInstr)) {
+    pub(super) fn drain(&mut self, f: impl FnMut(UpdateInstr<'a>)) {
         let start = 0;
         self.updates.drain(start..).for_each(f);
         self.frames = 0;
@@ -98,7 +114,7 @@ impl FrameUpdates {
 
     // for debugging
     #[allow(dead_code)]
-    pub(super) fn updates(&self) -> &[UpdateInstr] {
+    pub(super) fn updates(&self) -> &[UpdateInstr<'a>] {
         &self.updates
     }
 }
