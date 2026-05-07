@@ -760,8 +760,9 @@ impl TrieNode {
         // layout. Every `SharedRef` we ever insert into this map was allocated by the same
         // arena `'arena` as the parent TrieNode, and the per-thread pool returns *empty*
         // (cleared) maps, so we never alias entries from a different arena.
+        #[allow(clippy::unnecessary_cast)] // Seems like a bug with clippy
         let map: &RwLock<HashMap<Value, SharedRef<'arena, TrieNode>>> = unsafe {
-            &*(map_static as *const RwLock<HashMap<Value, SharedRef<'static, TrieNode>>>
+            &*((map_static as *const RwLock<HashMap<Value, SharedRef<'static, TrieNode>>>)
                 as *const RwLock<HashMap<Value, SharedRef<'arena, TrieNode>>>)
         };
         // Optimistic read path: most calls are cache hits, so try shared lock first.
