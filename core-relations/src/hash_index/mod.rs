@@ -424,7 +424,6 @@ fn run_in_thread_pool_and_block<'a>(pool: &rayon::ThreadPool, f: impl FnMut() + 
 /// satisfying the add_row_sorted invariant without an explicit RowId sort.
 ///
 /// Falls back to `sort_unstable()` for n < 64 where radix setup overhead dominates.
-#[allow(clippy::needless_range_loop)]
 fn radix_sort_pairs_by_value(pairs: &mut Vec<(Value, RowId)>) {
     let n = pairs.len();
     if n < 64 {
@@ -454,8 +453,8 @@ fn radix_sort_pairs_by_value(pairs: &mut Vec<(Value, RowId)>) {
         let mut count = [0u32; 256];
 
         // Count occurrences of the relevant byte of each Value.
-        for i in 0..n {
-            let bucket = (src[i].0.rep() >> shift) & 0xFF;
+        for pair in src.iter() {
+            let bucket = (pair.0.rep() >> shift) & 0xFF;
             count[bucket as usize] += 1;
         }
 
@@ -468,8 +467,7 @@ fn radix_sort_pairs_by_value(pairs: &mut Vec<(Value, RowId)>) {
         }
 
         // Stable scatter: write each element to its bucket's next position.
-        for i in 0..n {
-            let pair = src[i];
+        for &pair in src.iter() {
             let bucket = ((pair.0.rep() >> shift) & 0xFF) as usize;
             dst[count[bucket] as usize] = pair;
             count[bucket] += 1;
@@ -507,6 +505,27 @@ impl ColumnIndex {
         for (_, shard) in self.shards.iter_mut() {
             shard.table.reserve(per_shard);
         }
+    }
+
+    /// Build a single-column index for `subset` of `table`. Picks between a
+    /// sort-based bulk path and a per-row scan based on subset size: large
+    /// subsets amortize the sort overhead, small ones avoid the buffer copy.
+    pub(crate) fn build_for_subset(
+        table: WrappedTableRef,
+        subset: SubsetRef,
+        col: ColumnId,
+    ) -> ColumnIndex {
+        const SORT_BULK_THRESHOLD: usize = 512;
+        let mut res = ColumnIndex::new();
+        if subset.size() >= SORT_BULK_THRESHOLD {
+            res.rebuild_full(&[col], table, subset);
+        } else {
+            res.reserve_for_n_rows(subset.size());
+            table.for_each_col(subset, col, &mut |row_id, val| {
+                res.add_row(&[val], row_id);
+            });
+        }
+        res
     }
 }
 

@@ -56,12 +56,18 @@ struct SparseColumnIndex {
 
 /// Return a SubsetRef for the given range of rows in a SparseColumnIndex.
 /// Single-row ranges become Dense to skip pool allocation in to_owned.
+///
+/// # Safety
+/// `ids[range]` must be sorted in non-decreasing order. The wider `ids` slice
+/// need not be sorted as a whole; only the indicated sub-range. This is the
+/// invariant of `SortedOffsetSlice::new_unchecked`.
 #[inline]
-fn sparse_subset_ref(ids: &[RowId], range: Range<usize>) -> SubsetRef<'_> {
+unsafe fn sparse_subset_ref(ids: &[RowId], range: Range<usize>) -> SubsetRef<'_> {
     if range.len() == 1 {
         let row = ids[range.start];
         SubsetRef::Dense(OffsetRange::new(row, row.inc()))
     } else {
+        // SAFETY: caller guarantees `ids[range]` is sorted.
         SubsetRef::Sparse(unsafe { SortedOffsetSlice::new_unchecked(&ids[range]) })
     }
 }
@@ -123,7 +129,10 @@ impl SparseColumnIndex {
         }
         let found = self.keys().binary_search(&key).ok()?;
         let range = self.get_offset_for(found);
-        Some(sparse_subset_ref(&self.subset_ids, range))
+        // SAFETY: `subset_ids` was populated from rows sorted by (Value, RowId),
+        // so RowIds within any single per-key range (as returned by
+        // `get_offset_for`) are in non-decreasing order.
+        Some(unsafe { sparse_subset_ref(&self.subset_ids, range) })
     }
 
     fn for_each(&self, mut f: impl FnMut(&[Value], SubsetRef)) {
@@ -132,10 +141,9 @@ impl SparseColumnIndex {
         }
         for i in 0..self.n_keys {
             let range = self.get_offset_for(i);
-            f(
-                &self.keys[i..i + 1],
-                sparse_subset_ref(&self.subset_ids, range),
-            );
+            // SAFETY: see `get_subset` — each per-key range of `subset_ids` is sorted.
+            let subset = unsafe { sparse_subset_ref(&self.subset_ids, range) };
+            f(&self.keys[i..i + 1], subset);
         }
     }
 
