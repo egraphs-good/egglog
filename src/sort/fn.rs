@@ -21,6 +21,11 @@ pub struct FunctionContainer(
     pub ResolvedFunctionId,
     pub Vec<(ArcSort, Value)>,
     pub String,
+    /// Pre-registered panic id used by `FunctionContainer::apply`
+    /// on capability mismatch (see [`ResolvedFunction::panic_id`]).
+    /// Excluded from equality/hash — two function values that differ
+    /// only in their panic id are still the same function value.
+    pub ExternalFunctionId,
 );
 
 // implement hash and equality based on values only not arcsorts, since
@@ -372,6 +377,7 @@ impl PurePrim for Ctor {
             id,
             partial_arcsorts,
             name,
+            panic_id,
         } = state.base_values().unwrap(*rf);
         self.function
             .partial_arcsorts
@@ -383,7 +389,7 @@ impl PurePrim for Ctor {
             .zip(args)
             .map(|(b, x)| (b.clone(), *x))
             .collect();
-        let y = FunctionContainer(id, args, name);
+        let y = FunctionContainer(id, args, name, panic_id);
         Some(state.register_container(y))
     }
 }
@@ -393,6 +399,14 @@ pub struct ResolvedFunction {
     pub id: ResolvedFunctionId,
     pub partial_arcsorts: Vec<ArcSort>,
     pub name: String,
+    /// Pre-registered runtime-panic id used by `FunctionContainer::apply`
+    /// when an `unstable-fn` value is applied in a context where its
+    /// wrapped function isn't valid (e.g. constructor minting in a
+    /// rule body without `:naive`). Calling this id writes a
+    /// descriptive message to the egraph's panic side channel and
+    /// triggers early stop, so `run_rules` returns an `Err` rather
+    /// than the calling thread unwinding.
+    pub panic_id: ExternalFunctionId,
 }
 // implement equality and hash based on id and  arcsort names, since arcsorts are not comparable
 
@@ -498,27 +512,9 @@ impl PurePrim for Apply {
 }
 
 impl FunctionContainer {
-    /// Apply the wrapped function. The caller passes the [`Context`] the
-    /// HOF is being invoked from. This method is crate-private — the
-    /// public path for users is [`PureState::apply_function`], which
-    /// reads `ctx` from the wrapper's stamped state and forwards here.
-    ///
-    /// - In `Pure`, constructor and custom-function lookups return
-    ///   `None`. Constructor minting would be unsound, and
-    ///   custom-function reads would be untracked by seminaive.
-    /// - In `Read`, constructor lookups go through read-only `lookup`
-    ///   (existing eclasses are visible, no minting), and
-    ///   custom-function lookups also read via `lookup`.
-    /// - In a write-capable context (`Write` / `Full`), constructor
-    ///   lookups mint via `lookup_or_insert`, and custom-function
-    ///   lookups read via `lookup`.
-    /// - For wrapped primitives, dispatch picks the candidate whose
-    ///   `selection_ctx` matches the application `ctx` (each
-    ///   `add_*_primitive` commits one id per context the trait
-    ///   permits, so exactly one or zero candidates match).
-    ///
-    /// [`Context`]: crate::Context
-    /// [`PureState::apply_function`]: crate::PureState::apply_function
+    /// Apply the wrapped function. `None` means the wrapped function
+    /// produced no result for this input; capability mismatch
+    /// triggers `panic_id` instead of silently returning `None`.
     pub(crate) fn apply<'a, 'db>(
         &self,
         state: &mut crate::PureState<'a, 'db>,
@@ -533,6 +529,15 @@ impl FunctionContainer {
         // these contexts.
         let can_mint = matches!(ctx, crate::Context::Write | crate::Context::Full);
         let can_read = matches!(ctx, crate::Context::Read | crate::Context::Full);
+        let panic_id = self.3;
+        // On capability mismatch, trigger the egglog runtime panic
+        // pre-registered at the `unstable-fn` build site (see
+        // `BackendRule::prim`). The panic writes to the egraph's
+        // panic side channel and triggers early stop, so `run_rules`
+        // surfaces the misuse as an `Err`.
+        let mismatch = |state: &mut crate::PureState<'a, 'db>| -> Option<Value> {
+            state.call_external_func(panic_id, &[])
+        };
         match &self.0 {
             ResolvedFunctionId::ConstructorLookup(action) => {
                 if can_mint {
@@ -542,14 +547,14 @@ impl FunctionContainer {
                     // are visible, but we don't mint.
                     action.lookup(state.raw_exec_state(), &args)
                 } else {
-                    None
+                    mismatch(state)
                 }
             }
             ResolvedFunctionId::CustomLookup(action) => {
                 if can_read {
                     action.lookup(state.raw_exec_state(), &args)
                 } else {
-                    None
+                    mismatch(state)
                 }
             }
             ResolvedFunctionId::Prim { candidates } => {
@@ -559,7 +564,7 @@ impl FunctionContainer {
                 // so exactly one candidate matches.
                 match candidates.iter().find(|(_, c)| *c == ctx) {
                     Some((id, _)) => state.call_external_func(*id, &args),
-                    None => None,
+                    None => mismatch(state),
                 }
             }
         }

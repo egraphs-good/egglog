@@ -1,21 +1,17 @@
 //! `:naive` covers the case static analysis can't: an `unstable-fn`
-//! value reaches the rule **body** indirectly through a `let`-bound
-//! global. Static peek-through can't tell what function the rule's
-//! `unstable-app` will dispatch — we only see `$f` as a variable.
+//! value reaches the rule body or action indirectly through a
+//! `let`-bound global. Static peek-through can't tell what function
+//! the rule's `unstable-app` will dispatch — we only see `$f` as a
+//! variable.
 //!
-//! The wrapped function here is a custom-function table lookup, which
-//! `FunctionContainer::apply` returns `None` for in `Pure` (because
-//! reads aren't tracked by seminaive). So:
-//!
-//! 1. **Without `:naive`** — the rule typechecks (the typechecker
-//!    can't see that `$f` wraps a custom-function read), but at
-//!    runtime the body's `unstable-app` returns `None` in the `Pure`
-//!    query context, so the body match never succeeds and the rule
-//!    silently doesn't fire.
-//!
-//! 2. **With `:naive`** — the body typechecks under `Read`,
-//!    `unstable-app`'s wrapped `dbl` lookup dispatches in `Read`, the
-//!    rule fires, and `out 0` ends up at 14.
+//! The wrapped function here is a custom-function table lookup,
+//! which `FunctionContainer::apply` refuses in `Pure` (rule body
+//! without `:naive`) and `Write` (rule action without `:naive`)
+//! because seminaive can't track those reads. The mismatch triggers
+//! the egglog runtime panic that was pre-registered at the
+//! `unstable-fn` build site, so `run_rules` returns an `Err` rather
+//! than silently dropping the match. With `:naive` the body widens
+//! to `Read` / action widens to `Full` and the rule works.
 
 use egglog::EGraph;
 
@@ -45,23 +41,67 @@ fn naive_rule_with_unstable_fn_via_global_works() {
 }
 
 #[test]
-fn rule_without_naive_using_unstable_fn_via_global_silently_misses() {
+fn rule_body_without_naive_using_unstable_fn_via_global_hard_errors() {
     let mut egraph = EGraph::default();
     let program = format!(
         "{PROGRAM_PREFIX}
 ;; No `:naive`. The body typechecks (the typechecker can't peek
 ;; through the global to see the wrapped custom-function), but at
-;; runtime `unstable-app` returns `None` in `Pure`, so the body
-;; match never succeeds and `out 0` is never set.
+;; runtime the capability mismatch triggers the pre-registered
+;; egglog panic and `run_rules` returns `Err`.
 (rule ((= y (unstable-app $f 7))) ((set (out 0) y)))
+(run 1)
+"
+    );
+    let err = egraph
+        .parse_and_run_program(None, &program)
+        .expect_err("expected a hard error for capability mismatch");
+    let msg = format!("{err}");
+    assert!(
+        msg.contains("unstable-fn") && msg.contains("dbl") && msg.contains(":naive"),
+        "expected error to name the wrapped fn `dbl` and mention `:naive`; got: {msg}"
+    );
+}
+
+/// `unstable-app` over a custom-function lookup in a rule **action**
+/// (not body) is also unsound under seminaive: the action runs at
+/// `Context::Write`, where reads of live state aren't tracked, so the
+/// rule won't re-fire when the read row's contents change.
+/// `FunctionContainer::apply` refuses, the pre-registered panic
+/// triggers, and `run_rules` returns `Err`. `:naive` widens the
+/// action to `Full` and the rule works.
+#[test]
+fn rule_action_using_unstable_fn_custom_function_requires_naive() {
+    // Without :naive — action ctx is Write, custom-function lookup
+    // refuses, hard error.
+    let mut egraph1 = EGraph::default();
+    let bad = format!(
+        "{PROGRAM_PREFIX}
+(function trigger () i64 :no-merge)
+(set (trigger) 1)
+(rule ((= _ (trigger))) ((set (out 0) (unstable-app $f 7))))
+(run 1)
+"
+    );
+    let err = egraph1
+        .parse_and_run_program(None, &bad)
+        .expect_err("expected a hard error for capability mismatch");
+    let msg = format!("{err}");
+    assert!(
+        msg.contains("unstable-fn") && msg.contains("dbl") && msg.contains(":naive"),
+        "expected error to name the wrapped fn `dbl` and mention `:naive`; got: {msg}"
+    );
+
+    // With :naive — action ctx widens to Full, dispatch succeeds.
+    let mut egraph2 = EGraph::default();
+    let good = format!(
+        "{PROGRAM_PREFIX}
+(function trigger () i64 :no-merge)
+(set (trigger) 1)
+(rule ((= _ (trigger))) ((set (out 0) (unstable-app $f 7))) :naive)
 (run 1)
 (check (= (out 0) 14))
 "
     );
-    let result = egraph.parse_and_run_program(None, &program);
-    assert!(
-        result.is_err(),
-        "expected the rule without :naive to silently miss and the \
-         `(check (= (out 0) 14))` to fail, but the program ran cleanly"
-    );
+    egraph2.parse_and_run_program(None, &good).unwrap();
 }

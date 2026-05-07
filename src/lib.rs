@@ -2107,10 +2107,22 @@ impl<'a> BackendRule<'a> {
             };
             let partial_arcsorts = prim.input().iter().skip(1).cloned().collect();
 
+            // Pre-register a panic id used by `FunctionContainer::apply`
+            // when the wrapped function is applied in a context that
+            // doesn't admit it. Triggered at runtime via the egglog
+            // panic side channel so misuse surfaces as an `Err` from
+            // `run_rules` rather than a thread unwind.
+            let panic_id = self.rb.new_panic(format!(
+                "unstable-fn over `{name}` was applied in a context where its wrapped \
+                 function is not valid; if the call should be sound, add `:naive` to the \
+                 surrounding rule"
+            ));
+
             qe_args[0] = self.rb.egraph().base_value_constant(ResolvedFunction {
                 id,
                 partial_arcsorts,
                 name: name.clone(),
+                panic_id,
             });
         }
 

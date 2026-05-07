@@ -47,25 +47,24 @@ use egglog_bridge::{ActionRegistry, TableAction};
 /// site.
 #[derive(Copy, Clone, Debug, PartialEq, Eq, Hash)]
 pub enum Context {
-    /// No DB reads, no DB writes. Used for the body (LHS) of a rule
-    /// running under seminaive evaluation: queries cannot read or
-    /// write the database, since either would defeat seminaive's
-    /// dependency tracking. Only pure primitives are admitted.
+    /// No DB reads, no DB writes. The body (LHS) of a rule running
+    /// under seminaive evaluation: a body read of live state means
+    /// the rule won't re-fire when the read row's contents change
+    /// in a later iteration; a body write makes no semantic sense.
     Pure,
-    /// DB writes allowed, DB reads forbidden. Used for the head (RHS)
-    /// of a rule running under seminaive evaluation: actions may
-    /// stage writes, but reads aren't tracked either — if the read
-    /// row's contents change in a later iteration, seminaive won't
-    /// re-fire the rule for the now-different match.
+    /// DB writes allowed, DB reads forbidden. The head (RHS) of a
+    /// rule running under seminaive evaluation: same re-firing
+    /// concern as `Pure` rules out reads, but staged writes are
+    /// fine.
     Write,
-    /// DB reads allowed, DB writes forbidden. Used for top-level
-    /// query-shaped commands (`check`, condition evaluation) and for
-    /// the body of an `:naive` rule. Reads are safe because
-    /// there is no seminaive epoch to violate.
+    /// DB reads allowed, DB writes forbidden. Top-level query-shaped
+    /// commands (`check`, condition evaluation) and the body of a
+    /// `:naive` rule. Reads are safe because there is no seminaive
+    /// epoch to violate.
     Read,
-    /// DB reads and writes both allowed. Used for top-level
-    /// action-shaped commands (`eval`, `let`, action-mode
-    /// `run-schedule`) and for the head of an `:naive` rule.
+    /// DB reads and writes both allowed. Top-level action-shaped
+    /// commands (`eval`, `let`, action-mode `run-schedule`) and the
+    /// head of a `:naive` rule.
     Full,
 }
 
