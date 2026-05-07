@@ -964,6 +964,8 @@ impl<'a> JoinState<'a> {
                 if self.exec_state.should_stop() {
                     return;
                 }
+                // TODO: `supports_parallel_drain`` is a hack because currently
+                // `drain_updates_parallel!`` is a bit slower because of the additional ExecutionState clone.
                 if (cur == 0 || cur == 1) && action_buf.supports_parallel_drain() {
                     drain_updates_parallel!($updates)
                 } else {
