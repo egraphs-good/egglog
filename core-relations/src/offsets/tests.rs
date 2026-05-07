@@ -2,7 +2,7 @@ use crate::numeric_id::NumericId;
 
 use crate::{OffsetRange, Subset, common::HashSet, pool::with_pool_set};
 
-use super::{Offsets, RowId, SortedOffsetVector};
+use super::{Offsets, RowId};
 
 fn o(u: usize) -> RowId {
     RowId::from_usize(u)
@@ -29,21 +29,25 @@ fn subset_push() {
     assert_eq!(collect(&s, &elts), vec![1, 2, 3, 7]);
 }
 
+#[cfg(debug_assertions)]
 #[test]
 #[should_panic]
 fn bad_offset_range() {
     OffsetRange::new(o(3), o(2));
 }
 
+#[cfg(debug_assertions)]
 #[test]
 #[should_panic]
 fn bad_offset_stride() {
     OffsetRange::new(o(3), o(2));
 }
 
+#[cfg(debug_assertions)]
 #[test]
 #[should_panic]
 fn not_sorted_vec_push() {
+    use crate::offsets::SortedOffsetVector;
     let mut v = SortedOffsetVector::default();
     v.push(o(3));
     v.push(o(1));
@@ -52,7 +56,7 @@ fn not_sorted_vec_push() {
 
 #[test]
 fn intersect() {
-    let elts = vec![
+    let elts = [
         vec![1, 3, 4, 8, 9, 12, 20],
         vec![3, 4, 8, 9, 11, 12, 15, 18, 20],
         vec![3, 4, 8, 9, 11, 12, 15, 18, 20, 22, 24],
@@ -63,22 +67,31 @@ fn intersect() {
         Vec::from_iter(4..50),
     ];
 
-    for l in &elts {
-        for r in &elts {
+    // Also include size-skewed pairs that exercise the two-pointer/galloping boundary.
+    // Two-pointer fires when max/min < 4; galloping fires otherwise.
+    let skewed: Vec<Vec<usize>> = vec![
+        Vec::from_iter(0..5),
+        Vec::from_iter(0..100), // 20x skew → galloping path
+        Vec::from_iter((0..100).filter(|x| x % 7 == 0)),
+    ];
+    let all_elts: Vec<&Vec<usize>> = elts.iter().chain(skewed.iter()).collect();
+
+    for l in &all_elts {
+        for r in &all_elts {
             let mut l_sub = Subset::empty();
             let mut r_sub = Subset::empty();
             let l_set = HashSet::from_iter(l.iter().copied().map(o));
             let r_set = HashSet::from_iter(r.iter().copied().map(o));
-            for row in l {
+            for row in l.iter() {
                 l_sub.add_row_sorted(o(*row));
             }
-            for row in r {
+            for row in r.iter() {
                 r_sub.add_row_sorted(o(*row));
             }
             let mut expected = Vec::from_iter(l_set.intersection(&r_set).copied());
             l_sub.intersect(
                 r_sub.as_ref(),
-                &with_pool_set(|pool_set| pool_set.get_pool().clone()),
+                &with_pool_set(|pool_set| pool_set.get_pool()),
             );
             expected.sort();
             let mut got = Vec::new();
