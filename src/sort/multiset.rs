@@ -317,7 +317,7 @@ fn try_registering_multiset_non_map_primitives(
         && fn_.output().name() == "i64"
     {
         let unit = eg.type_info.get_sort_by_name("Unit").unwrap().clone();
-        eg.add_write_primitive(
+        eg.add_full_primitive(
             FillIndex {
                 name: "unstable-multiset-fill-index".into(),
                 multiset: multiset.clone(),
@@ -418,12 +418,12 @@ struct FillIndex {
     fn_: Arc<FunctionSort>,
 }
 
-// `FillIndex` does pure writes: inserts one row per multiset element
-// into the index table (key `(multiset, element)`, value `count`). Safe
-// to call from a rule action — re-firing on the same multiset
-// reinserts the same rows, so the operation is idempotent under any
-// merge function that respects equal values (in particular, no skip
-// is needed to protect accumulator-style merges from double-counting).
+// `FillIndex` reads the target table to skip already-filled rows
+// (so re-firing doesn't double-count under accumulator-style merges
+// like `+ old new`). The read makes its effect depend on live DB
+// state, so it's only valid in `Context::Full` — registered as a
+// `FullPrim` and only callable from a `:naive` rule (or from a
+// global action).
 impl PrimitiveCommon for FillIndex {
     fn name(&self) -> &str {
         &self.name
@@ -439,10 +439,10 @@ impl PrimitiveCommon for FillIndex {
     }
 }
 
-impl WritePrim for FillIndex {
+impl FullPrim for FillIndex {
     fn apply<'a, 'db>(
         &self,
-        mut state: crate::WriteState<'a, 'db>,
+        mut state: crate::FullState<'a, 'db>,
         args: &[Value],
     ) -> Option<Value> {
         let fc = state
@@ -465,6 +465,10 @@ impl WritePrim for FillIndex {
         let es = state.raw_exec_state();
         for (v, c) in multiset.data.iter_counts() {
             let mut row = vec![args[0], v];
+            // Skip if already filled — assumes a working merge.
+            if action.lookup(es, &row).is_some() {
+                break;
+            }
             row.push(es.base_values().get::<i64>(c.try_into().unwrap()));
             action.insert(es, row.into_iter());
         }

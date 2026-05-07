@@ -144,15 +144,24 @@
 (push)
 (union (Num 1) (Num 2))
 (constructor product (Maths) Math)
+(let $aa (Num 100))
 (let $zz (product $xs))
 
 (function ms-count (Maths Math) i64 :merge (+ old new))
 (sort MSIndexFn (UnstableFn (Maths Math) i64))
-; Fill index tables for products
+; Fill index tables for products. The rule body matches a row in the
+; `product` table, so each `(product …)` eclass should fire the rule
+; once. `:naive` keeps it that way: under seminaive, canonicalization
+; after a later union would re-fire the rule on the same row and
+; double-count via `ms-count`'s `+ old new` merge.
 (rule
     ((= outer (product inner)))
     ((unstable-multiset-fill-index inner (unstable-fn "ms-count")))
-)
+    :naive)
+(run 10)
+(check (= 2 (ms-count $xs (Num 1))))
+; Verify stays the same even if unioned and run again
+(union $zz $aa)
 (run 10)
 (check (= 2 (ms-count $xs (Num 1))))
 ; Verify updates properly after unioning child
