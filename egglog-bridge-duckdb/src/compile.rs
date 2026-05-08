@@ -9,7 +9,7 @@
 use anyhow::{Result, anyhow};
 use std::collections::HashMap;
 
-use crate::{Action, Atom, CompiledRule, FunctionInfo, Rule, Term, conflict_clause};
+use crate::{Action, Atom, CompiledRule, FunctionInfo, Rule, Term, conflict_clause, q};
 
 pub(crate) fn compile_rule(
     rule: &Rule,
@@ -33,16 +33,25 @@ pub(crate) fn compile_rule(
         }
     }
     for action in &rule.actions {
-        let Action::Insert { name, args } = action;
+        let (name, expected_args) = match action {
+            Action::Insert { name, args } => (name, args.len()),
+            // Delete provides input columns only; the function's
+            // arity for Delete validation is just the inputs.
+            Action::Delete { name, key_args } => (name, key_args.len()),
+        };
         let info = functions
             .get(name)
             .ok_or_else(|| anyhow!("rule {}: unknown action target {name}", rule.name))?;
-        if args.len() != info.arity() {
+        let allowed = match action {
+            Action::Insert { .. } => info.arity(),
+            Action::Delete { .. } => info.inputs_len,
+        };
+        if expected_args != allowed {
             return Err(anyhow!(
                 "rule {}: action target {name} has {} args, expected {}",
                 rule.name,
-                args.len(),
-                info.arity()
+                expected_args,
+                allowed,
             ));
         }
     }
@@ -88,23 +97,49 @@ fn compile_variant(
 
     let mut sqls = Vec::with_capacity(rule.actions.len());
     for action in &rule.actions {
-        let Action::Insert {
-            name: target,
-            args: targs,
-        } = action;
-        let info = &functions[target];
-        let select_cols: Vec<String> = targs
-            .iter()
-            .map(|t| term_sql(t, &binding, &rule.name))
-            .collect::<Result<_>>()?;
-        let target_cols: Vec<String> = (0..targs.len()).map(|i| format!("c{i}")).collect();
-        // ?2 is :next_ts.
-        let select_list = format!("{}, ?2", select_cols.join(", "));
-        let insert_cols = format!("{}, ts", target_cols.join(", "));
-        let conflict = conflict_clause(info);
-        sqls.push(format!(
-            "INSERT INTO {target} ({insert_cols}) SELECT {select_list} FROM {from}{where_clause} {conflict}"
-        ));
+        match action {
+            Action::Insert {
+                name: target,
+                args: targs,
+            } => {
+                let info = &functions[target];
+                let select_cols: Vec<String> = targs
+                    .iter()
+                    .map(|t| term_sql(t, &binding, &rule.name))
+                    .collect::<Result<_>>()?;
+                let target_cols: Vec<String> =
+                    (0..targs.len()).map(|i| format!("c{i}")).collect();
+                let select_list = format!("{}, ?2", select_cols.join(", "));
+                let insert_cols = format!("{}, ts", target_cols.join(", "));
+                let conflict = conflict_clause(info);
+                sqls.push(format!(
+                    "INSERT INTO {} ({insert_cols}) SELECT {select_list} FROM {from}{where_clause} {conflict}",
+                    q(target),
+                ));
+            }
+            Action::Delete {
+                name: target,
+                key_args,
+            } => {
+                // DELETE FROM t WHERE EXISTS (matching body) AND
+                // key columns equal the rule's key bindings. Use a
+                // correlated subquery so the rule's joins still apply.
+                // Emit as `DELETE FROM t WHERE (c0, c1, ...) IN
+                // (SELECT key_cols FROM <body>)`.
+                let key_cols: Vec<String> =
+                    (0..key_args.len()).map(|i| format!("c{i}")).collect();
+                let key_select: Vec<String> = key_args
+                    .iter()
+                    .map(|t| term_sql(t, &binding, &rule.name))
+                    .collect::<Result<_>>()?;
+                sqls.push(format!(
+                    "DELETE FROM {} WHERE ({}) IN (SELECT {} FROM {from}{where_clause})",
+                    q(target),
+                    key_cols.join(", "),
+                    key_select.join(", "),
+                ));
+            }
+        }
     }
     Ok(sqls)
 }
@@ -126,7 +161,7 @@ fn build_query(
         match atom {
             Atom::Func { name, args } => {
                 let alias = format!("t{i}");
-                from_parts.push(format!("{name} {alias}"));
+                from_parts.push(format!("{} {alias}", q(name)));
                 for (col, term) in args.iter().enumerate() {
                     let lhs = format!("{alias}.c{col}");
                     match term {
@@ -138,7 +173,7 @@ fn build_query(
                                 where_parts.push(format!("{prev} = {lhs}"));
                             }
                         },
-                        Term::Lit(_) | Term::Prim(_, _) => {
+                        Term::Lit(_) | Term::Prim(_, _) | Term::FuncCall { .. } => {
                             let rhs = term_sql(term, &binding, &rule.name)?;
                             where_parts.push(format!("{lhs} = {rhs}"));
                         }
@@ -158,6 +193,13 @@ fn build_query(
     Ok((from, where_clause, binding))
 }
 
+/// Compile a `Term` to SQL with an empty variable binding. Used for
+/// top-level (non-rule) contexts where `Term::Var` shouldn't appear.
+pub(crate) fn term_sql_no_binding(t: &Term, ctx: &str) -> Result<String> {
+    let empty = HashMap::new();
+    term_sql(t, &empty, ctx)
+}
+
 /// Compile a `Term` to its SQL text given the current variable
 /// binding. Variables must already be bound (introduced by an
 /// earlier function-table atom).
@@ -174,6 +216,30 @@ fn term_sql(t: &Term, binding: &HashMap<String, String>, rule_name: &str) -> Res
                 .map(|a| term_sql(a, binding, rule_name))
                 .collect::<Result<_>>()?;
             prim_sql(op, &arg_sqls, rule_name)
+        }
+        Term::FuncCall { name, args } => {
+            let arg_sqls: Vec<String> = args
+                .iter()
+                .map(|a| term_sql(a, binding, rule_name))
+                .collect::<Result<_>>()?;
+            // Output column is c<inputs.len()>. Without function
+            // metadata in this layer, we conservatively assume the
+            // output column is c<args.len()>.
+            let out_col = args.len();
+            let where_clause = if arg_sqls.is_empty() {
+                String::new()
+            } else {
+                let conjs: Vec<String> = arg_sqls
+                    .iter()
+                    .enumerate()
+                    .map(|(i, s)| format!("c{i} = {s}"))
+                    .collect();
+                format!(" WHERE {}", conjs.join(" AND "))
+            };
+            Ok(format!(
+                "(SELECT c{out_col} FROM {}{where_clause} LIMIT 1)",
+                q(name)
+            ))
         }
     }
 }
@@ -200,16 +266,34 @@ fn prim_sql(op: &str, args: &[String], rule_name: &str) -> Result<String> {
         }
         Ok(format!("({sql_op} {})", args[0]))
     };
+    let func = |sql_func: &str| -> Result<String> {
+        Ok(format!("{sql_func}({})", args.join(", ")))
+    };
+    let variadic_join = |sql_op: &str, identity: &str| -> Result<String> {
+        if args.is_empty() {
+            return Ok(format!("({identity})"));
+        }
+        Ok(format!("({})", args.join(&format!(" {sql_op} "))))
+    };
     match op {
         "+" | "-" | "*" | "/" => binop(op),
         "<" | "<=" | ">" | ">=" => binop(op),
         "=" => binop("="),
-        "!=" | "<>" => binop("<>"),
+        "!=" | "<>" | "bool-!=" => binop("<>"),
+        // `and` is binary in egglog; `or` is variadic.
         "and" => binop("AND"),
-        "or" => binop("OR"),
+        "or" => variadic_join("OR", "FALSE"),
         "not" => unop("NOT"),
+        // Term encoding uses ordering-max/-min to deterministically
+        // pick a parent in UF maintenance. SQL has direct primitives.
+        "ordering-max" => func("GREATEST"),
+        "ordering-min" => func("LEAST"),
+        // `guard(b)` as a body atom means "rule fires only if b is
+        // true". Inline its argument; the surrounding Atom::Filter
+        // already enforces truthy semantics.
+        "guard" => unop(""),
         _ => Err(anyhow!(
-            "rule {rule_name}: unknown primitive `{op}` (supported: +, -, *, /, <, <=, >, >=, =, !=, and, or, not)"
+            "rule {rule_name}: unknown primitive `{op}`"
         )),
     }
 }

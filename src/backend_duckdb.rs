@@ -43,8 +43,15 @@ pub struct DuckdbBackend {
 
 impl DuckdbBackend {
     pub fn new() -> anyhow::Result<Self> {
+        // Term encoding is mandatory for the DuckDB backend: any
+        // program with `(datatype ...)`, `(union ...)`, or custom
+        // merges only makes sense after the term-encoding pass turns
+        // those into ordinary relational rules. We turn it on
+        // unconditionally — the cost on programs that don't need it
+        // (pure Datalog like path.egg) is small extra setup.
+        let typechecker = EGraph::default().with_term_encoding_enabled();
         Ok(Self {
-            typechecker: EGraph::default(),
+            typechecker,
             db: duck::EGraph::new()?,
             registered: hashbrown::HashSet::default(),
             sorts: hashbrown::HashMap::default(),
@@ -144,19 +151,40 @@ impl DuckdbBackend {
 
         let mut as_relation = false;
 
-        // Constructor whose output is a non-unionable user sort is
-        // the desugaring of `(relation foo ...)`. Treat as a relation.
+        // A constructor is treated as a relation here when its
+        // output sort is presence-only:
+        //   - non-unionable sorts (the `(relation foo)` desugar),
+        //   - `:internal-hidden` constructors (term encoding's
+        //     `to_delete_X`, `to_subsume_X`, cleanup helpers, etc.,
+        //     whose output IDs are never read — only their rows'
+        //     existence matters).
+        // A constructor that's neither — e.g. `(constructor Add
+        // (i64 i64) Math)` returning a real, unionable EqSort —
+        // requires UF tables to model. Term encoding has emitted
+        // `Add`'s UF and view tables alongside, so for our backend
+        // the term table itself is also presence-only: it stores
+        // (i64, i64, Math) tuples without any `set` semantics on
+        // the output column.
         if decl.subtype == FunctionSubtype::Constructor {
-            match self.sorts.get(output_sort) {
-                Some(false) => {
-                    as_relation = true;
-                }
-                _ => {
-                    return Err(DuckdbBackendError::Unsupported(format!(
-                        "constructor `{}` returning unionable EqSort `{output_sort}` (term encoding not yet wired up)",
-                        decl.name
-                    )));
-                }
+            let unionable = self.sorts.get(output_sort).copied().unwrap_or(true);
+            if !unionable || decl.internal_hidden {
+                as_relation = true;
+            } else {
+                // Real EqSort constructor (e.g. `Add`). Term encoding
+                // has lowered all "interesting" semantics (UF, view,
+                // congruence) into companion tables and rules. The
+                // term table itself stores (inputs..., id) tuples
+                // with no merge semantics — model as a relation
+                // whose key columns are inputs + output, all stored,
+                // with no `set` operations.
+                let mut full_inputs = inputs.clone();
+                full_inputs.push(duck::ColumnTy::I64); // the EqSort ID
+                self.db
+                    .add_relation(&decl.name, &full_inputs)
+                    .map_err(DuckdbBackendError::Backend)?;
+                self.is_relation.insert(decl.name.clone(), false);
+                self.registered.insert(decl.name.clone());
+                return Ok(());
             }
         }
 
@@ -232,10 +260,8 @@ impl DuckdbBackend {
     ) -> Result<(), DuckdbBackendError> {
         // Top-level actions in the resolved IR are typically:
         // - `Set(span, Func, args, val)` for explicit function sets.
-        // - `Expr(span, Call(Func, args))` for relation insertions
-        //   like `(edge 1 2)`.
-        // Other forms (Let, Union, Change, Panic) aren't yet
-        // supported.
+        // - `Expr(span, Call(Func, args))` for relation insertions.
+        // Other forms (Let, Union, Change, Panic) aren't yet handled.
         match action {
             GenericAction::Set(_, head, args, val) => {
                 let ResolvedCall::Func(f) = head else {
@@ -244,24 +270,30 @@ impl DuckdbBackend {
                         head.name()
                     )));
                 };
-                let mut lits: Vec<duck::Literal> = args
+                let mut tr_args: Vec<duck::Term> = args
                     .iter()
-                    .map(expr_to_literal)
-                    .collect::<Result<Vec<_>, _>>()?;
-                lits.push(expr_to_literal(val)?);
+                    .map(|e| self.translate_expr(e))
+                    .collect::<Result<_, _>>()?;
+                if !self.name_is_relation(&f.name) {
+                    tr_args.push(self.translate_expr(val)?);
+                }
                 self.db
-                    .insert(&f.name, &lits)
+                    .insert_terms(&f.name, &tr_args)
                     .map_err(DuckdbBackendError::Backend)
             }
             GenericAction::Expr(_, GenericExpr::Call(_, ResolvedCall::Func(f), args)) => {
-                let lits: Vec<duck::Literal> = args
+                let tr_args: Vec<duck::Term> = args
                     .iter()
-                    .map(expr_to_literal)
-                    .collect::<Result<Vec<_>, _>>()?;
+                    .map(|e| self.translate_expr(e))
+                    .collect::<Result<_, _>>()?;
                 self.db
-                    .insert(&f.name, &lits)
+                    .insert_terms(&f.name, &tr_args)
                     .map_err(DuckdbBackendError::Backend)
             }
+            // No-op: a primitive expression at top level (e.g. a
+            // standalone `(check-fact)` desugaring artifact) doesn't
+            // change tables.
+            GenericAction::Expr(_, GenericExpr::Call(_, ResolvedCall::Primitive(_), _)) => Ok(()),
             other => Err(DuckdbBackendError::Unsupported(format!(
                 "top-level action: {other}"
             ))),
@@ -402,13 +434,25 @@ impl DuckdbBackend {
 }
 
 /// Convert an egglog sort name to our duckdb-backend column type.
+/// Primitives map to their natural types; user sorts (EqSorts, like
+/// `Math` or `@pathSort`) are stored as BIGINT IDs. Term encoding
+/// runs upstream of this backend, so we don't see ad-hoc EqSort
+/// values in queries — only IDs.
 fn sort_to_column_ty(sort: &str) -> Result<duck::ColumnTy, DuckdbBackendError> {
     match sort {
         "i64" => Ok(duck::ColumnTy::I64),
         "bool" => Ok(duck::ColumnTy::Bool),
-        other => Err(DuckdbBackendError::Unsupported(format!(
-            "sort `{other}` (only i64 and bool supported in Phase 1.3)"
-        ))),
+        // Unit shouldn't reach this function (it's filtered upstream
+        // when deciding relation-vs-function), but if it does we'd
+        // be storing a constant — treat as i64 placeholder.
+        "Unit" => Ok(duck::ColumnTy::I64),
+        // All other sort names are user EqSorts. Term encoding has
+        // already lowered any ad-hoc structure into rule operations
+        // over IDs, so we can safely store them as BIGINT.
+        // Primitive types we don't support yet (f64, String, etc.)
+        // would also fall here and produce wrong results — we'll
+        // need to add them as we hit them.
+        _ => Ok(duck::ColumnTy::I64),
     }
 }
 
@@ -529,12 +573,26 @@ impl DuckdbBackend {
                     .collect::<Result<_, _>>()?;
                 Ok(duck::Term::prim(p.name(), tr))
             }
-            GenericExpr::Call(_, ResolvedCall::Func(f), _) => Err(DuckdbBackendError::Unsupported(
-                format!(
-                    "function call `{}` in expression position (only allowed as body atom or top-level action)",
-                    f.name
-                ),
-            )),
+            // Function call in expression position: a read.
+            // Compiles to a SQL subquery that fetches the function's
+            // output for the given arg values. Term encoding emits
+            // these for global accesses like `(__v9 )`.
+            GenericExpr::Call(_, ResolvedCall::Func(f), args) => {
+                if self.name_is_relation(&f.name) {
+                    return Err(DuckdbBackendError::Unsupported(format!(
+                        "relation `{}` read in expression position (relations have no value)",
+                        f.name
+                    )));
+                }
+                let tr: Vec<duck::Term> = args
+                    .iter()
+                    .map(|e| self.translate_expr(e))
+                    .collect::<Result<_, _>>()?;
+                Ok(duck::Term::FuncCall {
+                    name: f.name.clone(),
+                    args: tr,
+                })
+            }
         }
     }
 
@@ -554,7 +612,12 @@ impl DuckdbBackend {
                     .iter()
                     .map(|e| self.translate_expr(e))
                     .collect::<Result<_, _>>()?;
-                tr_args.push(self.translate_expr(val)?);
+                // For relations the duckdb table has no output column,
+                // and the val is `()` (Unit) which we can't represent
+                // anyway. Skip the val push in that case.
+                if !self.name_is_relation(&f.name) {
+                    tr_args.push(self.translate_expr(val)?);
+                }
                 Ok(vec![duck::Action::Insert {
                     name: f.name.clone(),
                     args: tr_args,
@@ -573,6 +636,40 @@ impl DuckdbBackend {
             GenericAction::Expr(_, GenericExpr::Call(_, ResolvedCall::Primitive(_), _)) => {
                 Ok(Vec::new())
             }
+            // (delete (f a b)) — match key columns only. The body
+            // resolution is handled in compile.rs at SQL emit time.
+            GenericAction::Change(_, egglog_ast::generic_ast::Change::Delete, head, args) => {
+                let ResolvedCall::Func(f) = head else {
+                    return Err(DuckdbBackendError::Unsupported(format!(
+                        "(delete ({}) ...) on non-function head",
+                        head.name()
+                    )));
+                };
+                let tr_args: Vec<duck::Term> = args
+                    .iter()
+                    .map(|e| self.translate_expr(e))
+                    .collect::<Result<_, _>>()?;
+                Ok(vec![duck::Action::Delete {
+                    name: f.name.clone(),
+                    key_args: tr_args,
+                }])
+            }
+            // Subsume: not modeled yet — the underlying duck::EGraph
+            // doesn't have a "subsumed" flag. Skip silently for now;
+            // subsumed-aware queries aren't generated by anything we
+            // currently translate.
+            GenericAction::Change(_, egglog_ast::generic_ast::Change::Subsume, _, _) => {
+                Ok(Vec::new())
+            }
+            // Let bindings in actions: bind a fresh value-typed
+            // variable for use later in the same action sequence.
+            // We don't currently support this — the term-encoded
+            // examples mostly use `let v (Add a b)` which, after our
+            // term-encoding-friendly translation, becomes a function
+            // call we can already insert. For now, error.
+            GenericAction::Let(_, _, _) => Err(DuckdbBackendError::Unsupported(format!(
+                "(let ...) in rule actions: {action}"
+            ))),
             other => Err(DuckdbBackendError::Unsupported(format!(
                 "rule action: {other}"
             ))),
@@ -584,6 +681,10 @@ fn literal_to_duck(l: &EgLit) -> Result<duck::Literal, DuckdbBackendError> {
     match l {
         EgLit::Int(i) => Ok(duck::Literal::I64(*i)),
         EgLit::Bool(b) => Ok(duck::Literal::Bool(*b)),
+        // Unit is the "value" for relations. We shouldn't reach here
+        // for inserts (those skip the value column for relations) but
+        // if some context forces a Unit-typed value, encode it as 0.
+        EgLit::Unit => Ok(duck::Literal::I64(0)),
         other => Err(DuckdbBackendError::Unsupported(format!(
             "literal type: {other:?}"
         ))),

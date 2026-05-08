@@ -20,6 +20,13 @@ use std::collections::HashMap;
 
 mod compile;
 
+/// Quote a SQL identifier with double quotes, escaping any embedded
+/// double quote. Necessary because egglog identifiers can contain
+/// `@`, `$`, etc., which DuckDB rejects in unquoted form.
+pub(crate) fn q(name: &str) -> String {
+    format!("\"{}\"", name.replace('"', "\"\""))
+}
+
 /// The (very small) set of column types we currently understand.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum ColumnTy {
@@ -72,6 +79,13 @@ pub enum Term {
     /// (`and`, `or`, `not`). The op name is mapped to a SQL
     /// operator at codegen; see `compile.rs::prim_sql`.
     Prim(String, Vec<Term>),
+    /// Read a function's output value as an expression. Compiles to
+    /// `(SELECT c<out> FROM <name> WHERE c0 = arg0 AND … LIMIT 1)`.
+    /// Used for term-encoding's globals: `(let v (foo 1 2))` becomes
+    /// a synthetic `(function v () Sort :no-merge)` plus `(set (v)
+    /// ...)`, and later references `(v)` are reads of this function.
+    /// Cannot be used on relations (no output column).
+    FuncCall { name: String, args: Vec<Term> },
 }
 
 impl Term {
@@ -100,10 +114,16 @@ pub enum Atom {
     Filter(Term),
 }
 
-/// A rule action: insert a row into a function/relation table.
+/// A rule action.
 #[derive(Debug, Clone)]
 pub enum Action {
+    /// Insert a row. The trailing arg is the output value for
+    /// functions; for relations all args are key columns.
     Insert { name: String, args: Vec<Term> },
+    /// Delete a row matched by its key columns. For functions, the
+    /// args are the input columns only (output is ignored). For
+    /// relations, args are all the columns.
+    Delete { name: String, key_args: Vec<Term> },
 }
 
 /// A whole rule.
@@ -221,7 +241,8 @@ impl EGraph {
             format!(", PRIMARY KEY ({})", pk.join(", "))
         };
         let sql = format!(
-            "CREATE TABLE {name} ({}, ts BIGINT NOT NULL{pk_clause})",
+            "CREATE TABLE {} ({}, ts BIGINT NOT NULL{pk_clause})",
+            q(name),
             col_decls.join(", "),
         );
         self.conn.execute(&sql, [])?;
@@ -257,12 +278,45 @@ impl EGraph {
         let cols: Vec<String> = (0..args.len()).map(|i| format!("c{i}")).collect();
         let conflict = conflict_clause(info);
         let sql = format!(
-            "INSERT INTO {name} ({}, ts) VALUES ({}, 0) {conflict}",
+            "INSERT INTO {} ({}, ts) VALUES ({}, 0) {conflict}",
+            q(name),
             cols.join(", "),
             placeholders.join(", "),
         );
         let params: Vec<&dyn ToSql> = args.iter().map(|a| a as &dyn ToSql).collect();
         self.conn.execute(&sql, params.as_slice())?;
+        Ok(())
+    }
+
+    /// Insert at `ts = 0` with arbitrary `Term` values (literals,
+    /// primitive expressions, or subquery reads of other functions).
+    /// Used for term-encoded top-level sets where the value column
+    /// references another global table.
+    pub fn insert_terms(&mut self, name: &str, args: &[Term]) -> Result<()> {
+        let info = self
+            .functions
+            .get(name)
+            .ok_or_else(|| anyhow!("no such function {name}"))?;
+        if args.len() != info.arity() {
+            return Err(anyhow!(
+                "wrong arity for {name}: got {}, expected {}",
+                args.len(),
+                info.arity()
+            ));
+        }
+        let cols: Vec<String> = (0..args.len()).map(|i| format!("c{i}")).collect();
+        let arg_sqls: Vec<String> = args
+            .iter()
+            .map(|t| compile::term_sql_no_binding(t, "<top-level>"))
+            .collect::<Result<_>>()?;
+        let conflict = conflict_clause(info);
+        let sql = format!(
+            "INSERT INTO {} ({}, ts) SELECT {}, 0 {conflict}",
+            q(name),
+            cols.join(", "),
+            arg_sqls.join(", "),
+        );
+        self.conn.execute(&sql, [])?;
         Ok(())
     }
 
@@ -318,7 +372,8 @@ impl EGraph {
             .map(|i| format!("c{i} = ?{}", i + 1))
             .collect();
         let sql = format!(
-            "SELECT COUNT(*) FROM {name} WHERE {}",
+            "SELECT COUNT(*) FROM {} WHERE {}",
+            q(name),
             where_parts.join(" AND "),
         );
         let params: Vec<&dyn ToSql> = args.iter().map(|a| a as &dyn ToSql).collect();
@@ -351,7 +406,8 @@ impl EGraph {
             .collect();
         let out_col = info.inputs_len;
         let sql = format!(
-            "SELECT c{out_col} FROM {name} WHERE {}",
+            "SELECT c{out_col} FROM {} WHERE {}",
+            q(name),
             where_parts.join(" AND "),
         );
         let params: Vec<&dyn ToSql> = inputs.iter().map(|a| a as &dyn ToSql).collect();
@@ -365,9 +421,11 @@ impl EGraph {
     }
 
     pub fn count(&self, name: &str) -> Result<i64> {
-        Ok(self
-            .conn
-            .query_row(&format!("SELECT COUNT(*) FROM {name}"), [], |r| r.get(0))?)
+        Ok(self.conn.query_row(
+            &format!("SELECT COUNT(*) FROM {}", q(name)),
+            [],
+            |r| r.get(0),
+        )?)
     }
 }
 
