@@ -1,0 +1,19 @@
+;; Commutativity-only benchmark — finite term space (n! permutations of n terms).
+;; Big enough to get meaningful timing.
+
+(datatype G
+    (Const i64)
+    (g* G G))
+
+(rewrite (g* a b) (g* b a))
+(rewrite (g* (g* a b) c) (g* a (g* b c)))
+
+;; Many seed terms to amplify the workload.
+(g* (Const 1) (g* (Const 2) (g* (Const 3) (g* (Const 4) (Const 5)))))
+(g* (Const 6) (g* (Const 7) (g* (Const 8) (g* (Const 9) (Const 10)))))
+(g* (Const 11) (g* (Const 12) (g* (Const 13) (g* (Const 14) (Const 15)))))
+(g* (Const 16) (g* (Const 17) (g* (Const 18) (g* (Const 19) (Const 20)))))
+
+(run 10 :until (= 1 0))
+
+(print-size g*)

@@ -1,0 +1,34 @@
+// Q3: what indexes does Souffle's auto-indexer pick for our access patterns?
+//
+// Patterns we care about (taken from the encoded egglog program):
+//   1. UF(c, leader) — first column ground, second free (function-style lookup)
+//   2. AddView(a, b, leader) — first two ground, third free
+//   3. UF(a, b), UF(b, c) — chain join on second/first column
+//   4. AddView(c0, c1, t), AddView(c0, c1, t') — co-key join on first two columns
+
+.decl UF(child: number, parent: number)
+.decl AddView(a: number, b: number, l: number)
+
+UF(1, 2). UF(2, 3).
+AddView(1, 2, 100).
+
+// Pattern 1: function-style lookup
+.decl Q1(p: number)
+Q1(p) :- UF(1, p).
+
+// Pattern 2: AddView (a,b) lookup
+.decl Q2(l: number)
+Q2(l) :- AddView(1, 2, l).
+
+// Pattern 3: UF chain
+.decl Q3(a: number, c: number)
+Q3(a, c) :- UF(a, b), UF(b, c).
+
+// Pattern 4: AddView congruence-style co-key
+.decl Q4(l1: number, l2: number)
+Q4(l1, l2) :- AddView(a, b, l1), AddView(a, b, l2), l1 != l2.
+
+.output Q1(IO=stdout)
+.output Q2(IO=stdout)
+.output Q3(IO=stdout)
+.output Q4(IO=stdout)

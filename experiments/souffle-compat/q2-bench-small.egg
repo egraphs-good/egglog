@@ -1,0 +1,24 @@
+;; Q2 benchmark for apples-to-apples comparison with q2-bench.dl.
+;; Single seed term, run to saturation (matches Souffle's fixpoint).
+
+(datatype Math
+    (Const i64)
+    (Add Math Math)
+    (Mul Math Math))
+
+(rewrite (Add a b) (Add b a))
+(rewrite (Mul a b) (Mul b a))
+(rewrite (Add a (Add b c)) (Add (Add a b) c))
+(rewrite (Mul a (Mul b c)) (Mul (Mul a b) c))
+(rewrite (Mul a (Add b c)) (Add (Mul a b) (Mul a c)))
+(rewrite (Add a (Const 0)) a)
+(rewrite (Mul a (Const 1)) a)
+
+;; Single seed (matches q2-bench.dl).
+(Mul (Add (Const 1) (Add (Const 2) (Const 3)))
+     (Add (Const 4) (Mul (Const 5) (Add (Const 6) (Const 7)))))
+
+(run 100 :until (= 1 0))  ;; run until quiescent (the until-check is impossible to ensure full fixpoint)
+
+(print-size Add)
+(print-size Mul)

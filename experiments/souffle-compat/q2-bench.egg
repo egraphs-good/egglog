@@ -1,0 +1,28 @@
+;; Q2 benchmark: small but non-trivial workload for perf comparison.
+(datatype Math
+    (Const i64)
+    (Add Math Math)
+    (Mul Math Math))
+
+(rewrite (Add a b) (Add b a))
+(rewrite (Mul a b) (Mul b a))
+(rewrite (Add a (Add b c)) (Add (Add a b) c))
+(rewrite (Mul a (Mul b c)) (Mul (Mul a b) c))
+(rewrite (Mul a (Add b c)) (Add (Mul a b) (Mul a c)))
+(rewrite (Add a (Const 0)) a)
+(rewrite (Mul a (Const 1)) a)
+
+;; Deep seed terms — drive enough congruence + rewrite work.
+(Mul (Add (Const 1) (Add (Const 2) (Const 3)))
+     (Add (Const 4) (Mul (Const 5) (Add (Const 6) (Const 7)))))
+(Mul (Add (Const 1) (Mul (Const 2) (Const 3)))
+     (Mul (Add (Const 4) (Const 5)) (Add (Const 6) (Const 7))))
+(Add (Mul (Add (Const 1) (Const 2)) (Const 3))
+     (Mul (Const 4) (Add (Mul (Const 5) (Const 6)) (Const 7))))
+(Mul (Add (Mul (Const 1) (Const 2)) (Const 3))
+     (Add (Const 4) (Mul (Const 5) (Const 6))))
+
+(run 14)
+
+(print-size Add)
+(print-size Mul)

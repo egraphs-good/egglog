@@ -1,0 +1,26 @@
+// Q5 attempt C: physically delete via subsumption when *something else* dominates.
+// Trick: the rule body can refer to ANY relation. If we fabricate a "ghost"
+// dominating tuple from another relation that has the same shape, subsumption
+// can delete the real tuple — at the cost of an extra tuple in the relation.
+.decl AddView(a: number, b: number, l: number)
+.decl ToDelete(a: number, b: number)
+
+AddView(1, 2, 100).
+AddView(3, 4, 200).
+AddView(5, 6, 300).
+ToDelete(1, 2).
+ToDelete(5, 6).
+
+// Inject a ghost row for any to-be-deleted tuple that dominates the real row.
+// We use leader = -1 as a sentinel "tombstone" leader.
+AddView(a, b, -1) :- ToDelete(a, b).
+
+// Subsumption: a real row is dominated by the tombstone. The tombstone wins.
+AddView(a, b, l) <= AddView(a, b, -1) :- l != -1.
+
+// To get the live view, filter out tombstones.
+.decl AddViewLive(a: number, b: number, l: number)
+AddViewLive(a, b, l) :- AddView(a, b, l), l != -1.
+
+.output AddView(IO=stdout)
+.output AddViewLive(IO=stdout)

@@ -1,0 +1,15 @@
+// Test our new .limititerations directive.
+// Without the bound, this rule diverges (records always grow).
+// With .limititerations P(n=5), the SCC's fixpoint loop exits after 5 iterations.
+
+.type Tree = [a: Tree]
+
+.decl P(t: Tree)
+P(nil).
+
+// Divergent rule: each iteration wraps the existing tree in another layer.
+P([t]) :- P(t).
+
+.limititerations P(n=5)
+
+.printsize P

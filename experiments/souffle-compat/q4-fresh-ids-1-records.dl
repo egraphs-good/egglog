@@ -1,0 +1,9 @@
+.type Tup = [a: number, b: number]
+
+.decl P(x: number)
+.decl Q(t: Tup)
+
+P(1). P(2).
+Q([x, y]) :- P(x), P(y).
+
+.output Q(IO=stdout)

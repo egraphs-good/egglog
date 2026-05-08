@@ -1,0 +1,26 @@
+// Q1: does Souffle subsumption fire continuously during fixpoint, or only at end?
+//
+// Test design: build a chain a->b->c via union, then have a SAME-STRATUM rule
+// observe the chain length. If subsumption fires continuously, the observer
+// sees only short paths (because longer chains immediately subsume shorter).
+// If subsumption fires only at the end, the observer sees all intermediate
+// chain rows.
+
+.decl UF(child: number, parent: number)
+.decl Observer(c: number, p: number)
+
+// Initial chain: 1 -> 2 -> 3 -> 4
+UF(1, 2). UF(2, 3). UF(3, 4).
+
+// Path compression: compose chain edges.
+UF(a, c) :- UF(a, b), UF(b, c), b != c.
+
+// Subsumption: shorter chain dominated by longer.
+UF(a, b) <= UF(a, c) :- UF(b, c), b != c.
+
+// Observer: copies UF in the same SCC. If subsumption is mid-fixpoint,
+// observer sees only post-subsumption tuples.
+Observer(a, b) :- UF(a, b).
+
+.output UF(IO=stdout)
+.output Observer(IO=stdout)

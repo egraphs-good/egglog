@@ -1,0 +1,44 @@
+.type Math = [tag: number, a: Math, b: Math, n: number]
+
+.decl Term(t: Math)
+.decl AddView(a: Math, b: Math, leader: Math)
+.decl UF(child: Math, parent: Math)
+
+Term([0, nil, nil, 1]).
+Term([0, nil, nil, 2]).
+Term([1, [0, nil, nil, 1], [0, nil, nil, 2], 0]).
+UF(t, t) :- Term(t).
+AddView([0, nil, nil, 1], [0, nil, nil, 2],
+        [1, [0, nil, nil, 1], [0, nil, nil, 2], 0]).
+
+// Commutativity rule
+Term([1, a, b, 0]) :- AddView(a, b, _).
+Term([1, b, a, 0]) :- AddView(a, b, _).
+UF([1, a, b, 0], [1, a, b, 0]) :- AddView(a, b, _).
+UF([1, b, a, 0], [1, b, a, 0]) :- AddView(a, b, _).
+AddView(a, b, [1, a, b, 0]) :- AddView(a, b, _).
+AddView(b, a, [1, b, a, 0]) :- AddView(a, b, _).
+// Union with deterministic direction (larger -> smaller via ord())
+UF(t1, t2) :- AddView(a, b, _),
+              t1 = [1, a, b, 0], t2 = [1, b, a, 0],
+              ord(t1) > ord(t2).
+UF(t2, t1) :- AddView(a, b, _),
+              t1 = [1, a, b, 0], t2 = [1, b, a, 0],
+              ord(t2) > ord(t1).
+
+// Path compression
+UF(a, b) <= UF(a, c) :- UF(b, c), b != c.
+
+// Find rep
+.decl Rep(t: Math, r: Math)
+Rep(t, r) :- UF(t, r), UF(r, r).
+
+.decl Add12Rep(r: Math)
+.decl Add21Rep(r: Math)
+Add12Rep(r) :- Rep([1, [0, nil, nil, 1], [0, nil, nil, 2], 0], r).
+Add21Rep(r) :- Rep([1, [0, nil, nil, 2], [0, nil, nil, 1], 0], r).
+
+.printsize UF
+.output UF(IO=stdout)
+.output Add12Rep(IO=stdout)
+.output Add21Rep(IO=stdout)

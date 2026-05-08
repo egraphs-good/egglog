@@ -1,0 +1,27 @@
+;; Cyclic group benchmark — finite term space, both engines reach fixpoint.
+;; Adapted from tests/calc.egg without push/pop.
+
+(datatype G
+    (I)            ;; identity
+    (A)            ;; generator
+    (g* G G)
+    (inv G))
+
+;; Group axioms
+(rewrite (g* (g* a b) c) (g* a (g* b c)))   ;; assoc
+(rewrite (g* (I) a) a)                       ;; idl
+(rewrite (g* a (I)) a)                       ;; idr
+(rewrite (g* (inv a) a) (I))                 ;; invl
+(rewrite (g* a (inv a)) (I))                 ;; invr
+
+;; A is cyclic of period 4
+(rewrite (g* (A) (g* (A) (g* (A) (A)))) (I))
+
+;; Seed terms
+(g* (g* (A) (A)) (g* (A) (A)))
+(g* (A) (g* (A) (g* (A) (A))))
+(g* (inv (A)) (A))
+
+(run 30)
+
+(print-size g*)

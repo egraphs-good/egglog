@@ -1,0 +1,14 @@
+// Q5 attempt A: try direct cross-relation subsumption (expected to fail).
+.decl AddView(a: number, b: number, l: number)
+.decl ToDelete(a: number, b: number)
+
+AddView(1, 2, 100).
+AddView(3, 4, 200).
+ToDelete(1, 2).
+
+// Try: subsume AddView based on a body referencing ToDelete.
+// Souffle requires the dominating tuple to exist — there's no "delete unconditionally".
+// This compiles, but does nothing useful: dominated and dominating are the same row.
+AddView(a, b, l) <= AddView(a, b, l) :- ToDelete(a, b).
+
+.output AddView(IO=stdout)

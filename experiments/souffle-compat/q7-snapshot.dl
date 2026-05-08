@@ -1,0 +1,36 @@
+// Test the .snapshot R_snap(of="R") directive.
+//
+// Two strata: a "user" stratum that produces tuples, and a "rebuild" stratum
+// that canonicalizes them. They communicate via a buffer (user-write) and a
+// canonical (rebuild-write). User reads the canonical's snapshot, breaking
+// the cycle.
+//
+// Story: numbers and their canonical leaders. User rule says "if x is in
+// canonical with leader y, propose y as a new term." Rebuild canonicalizes.
+
+.pragma "outer-saturate" "5"
+
+.decl Canonical(t: number, leader: number)
+.decl CanonicalSnap(t: number, leader: number)
+.decl Buffer(t: number)
+
+// Snapshot directive: CanonicalSnap is refreshed from Canonical at each outer
+// iteration's start.
+.snapshot CanonicalSnap(of = "Canonical")
+
+// Initial state: 1 -> 1, 2 -> 1, 3 -> 1
+Canonical(1, 1).
+Canonical(2, 1).
+Canonical(3, 1).
+
+// User rule: if t has leader l in the snapshot, propose l in the buffer.
+// Reads CanonicalSnap (not Canonical) to break the cycle.
+Buffer(l) :- CanonicalSnap(_, l).
+
+// Rebuild rule: each buffered term becomes its own canonical leader.
+Canonical(t, t) :- Buffer(t).
+
+.printsize Canonical
+.printsize CanonicalSnap
+.printsize Buffer
+.output Canonical(IO=stdout)

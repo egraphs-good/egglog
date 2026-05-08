@@ -1,0 +1,18 @@
+// Recursive record type: each Math term has a tag, two subterms, and a literal.
+// tag=0 (Lit): n holds the value, a and b are nil
+// tag=1 (Add): a and b are subterms
+.type Math = [tag: number, a: Math, b: Math, n: number]
+
+.decl Term(t: Math)
+Term([0, nil, nil, 1]).
+Term([0, nil, nil, 2]).
+
+// Build Add(1, 2)
+Term([1, a, b, 0]) :- Term(a), Term(b),
+                      a = [0, _, _, 1],
+                      b = [0, _, _, 2].
+
+// Commutativity: if Add(a, b), also Add(b, a)
+Term([1, b, a, 0]) :- Term([1, a, b, 0]).
+
+.output Term(IO=stdout)

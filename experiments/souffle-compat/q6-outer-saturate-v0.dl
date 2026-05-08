@@ -1,0 +1,19 @@
+// Test the .pragma "outer-saturate" "N" directive.
+// This v0 just wraps the SCC sequence in an outer Loop bounded by N iterations.
+// No snapshot logic yet — re-runs each SCC from scratch each outer iteration.
+// Should produce same result as without the pragma (just slower).
+
+.pragma "outer-saturate" "5"
+
+.decl P(x: number)
+.decl Q(x: number)
+.decl R(x: number)
+
+P(1). P(2). P(3).
+Q(x) :- P(x).
+R(x) :- Q(x), x < 3.
+
+.printsize P
+.printsize Q
+.printsize R
+.output R(IO=stdout)

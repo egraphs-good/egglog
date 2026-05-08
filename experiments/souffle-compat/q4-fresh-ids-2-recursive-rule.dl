@@ -1,0 +1,9 @@
+.type Tup = [a: number, b: number]
+
+.decl P(t: Tup)
+P([1, 2]).
+
+// Mimic commutativity: if P([a, b]), also P([b, a])
+P([b, a]) :- P([a, b]).
+
+.output P(IO=stdout)

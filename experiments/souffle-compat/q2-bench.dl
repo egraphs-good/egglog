@@ -1,0 +1,189 @@
+// Q2 benchmark, hand-translated from q2-bench.egg to Souffle.
+//
+// Translation rules:
+//   - Math terms => recursive record [tag, a, b, n]
+//     tag=0: Const, n holds value, a=b=nil
+//     tag=1: Add, a=lhs, b=rhs, n=0
+//     tag=2: Mul, a=lhs, b=rhs, n=0
+//   - For each constructor C: a view relation CView(args, leader).
+//   - Path compression via subsumption on UF.
+//   - Rebuild rule per view table follows the egglog souffle_compat shape.
+//   - ord() comparison replaces ordering-max/ordering-min for deterministic
+//     union direction.
+
+.type Math = [tag: number, a: Math, b: Math, n: number]
+
+.decl Term(t: Math)
+.decl ConstView(n: number, leader: Math)
+.decl AddView(a: Math, b: Math, leader: Math)
+.decl MulView(a: Math, b: Math, leader: Math)
+.decl UF(child: Math, parent: Math)
+
+// Helper: introduce a term — adds Term + self-loop UF.
+.decl IntroTerm(t: Math)
+Term(t) :- IntroTerm(t).
+UF(t, t) :- IntroTerm(t).
+
+// === Const ===
+IntroTerm([0, nil, nil, n]) :- ConstView(n, _).
+ConstView(n, [0, nil, nil, n]) :- ConstView(n, _).  // self-canonicalize
+
+// === Add ===
+IntroTerm([1, a, b, 0]) :- AddView(a, b, _).
+AddView(a, b, [1, a, b, 0]) :- AddView(a, b, _).
+
+// === Mul ===
+IntroTerm([2, a, b, 0]) :- MulView(a, b, _).
+MulView(a, b, [2, a, b, 0]) :- MulView(a, b, _).
+
+// === Initial seed terms (mirroring the egglog source) ===
+// Mul (Add (Const 1) (Add (Const 2) (Const 3)))
+//     (Add (Const 4) (Mul (Const 5) (Add (Const 6) (Const 7))))
+ConstView(1,  [0, nil, nil, 1]).
+ConstView(2,  [0, nil, nil, 2]).
+ConstView(3,  [0, nil, nil, 3]).
+ConstView(4,  [0, nil, nil, 4]).
+ConstView(5,  [0, nil, nil, 5]).
+ConstView(6,  [0, nil, nil, 6]).
+ConstView(7,  [0, nil, nil, 7]).
+ConstView(0,  [0, nil, nil, 0]).
+
+// Seed term 1
+AddView([0, nil, nil, 2], [0, nil, nil, 3],
+        [1, [0, nil, nil, 2], [0, nil, nil, 3], 0]).
+AddView([0, nil, nil, 1],
+        [1, [0, nil, nil, 2], [0, nil, nil, 3], 0],
+        [1, [0, nil, nil, 1], [1, [0, nil, nil, 2], [0, nil, nil, 3], 0], 0]).
+AddView([0, nil, nil, 6], [0, nil, nil, 7],
+        [1, [0, nil, nil, 6], [0, nil, nil, 7], 0]).
+MulView([0, nil, nil, 5],
+        [1, [0, nil, nil, 6], [0, nil, nil, 7], 0],
+        [2, [0, nil, nil, 5], [1, [0, nil, nil, 6], [0, nil, nil, 7], 0], 0]).
+AddView([0, nil, nil, 4],
+        [2, [0, nil, nil, 5], [1, [0, nil, nil, 6], [0, nil, nil, 7], 0], 0],
+        [1, [0, nil, nil, 4], [2, [0, nil, nil, 5], [1, [0, nil, nil, 6], [0, nil, nil, 7], 0], 0], 0]).
+MulView([1, [0, nil, nil, 1], [1, [0, nil, nil, 2], [0, nil, nil, 3], 0], 0],
+        [1, [0, nil, nil, 4], [2, [0, nil, nil, 5], [1, [0, nil, nil, 6], [0, nil, nil, 7], 0], 0], 0],
+        [2, [1, [0, nil, nil, 1], [1, [0, nil, nil, 2], [0, nil, nil, 3], 0], 0],
+            [1, [0, nil, nil, 4], [2, [0, nil, nil, 5], [1, [0, nil, nil, 6], [0, nil, nil, 7], 0], 0], 0], 0]).
+
+// (To save space the other 3 seed terms aren't included; this gives a
+// meaningful but smaller workload than the egglog version.)
+
+// === Rewrites ===
+
+// (rewrite (Add a b) (Add b a))
+.decl Sw_add_t1(a: Math, b: Math)
+Sw_add_t1(a, b) :- AddView(a, b, _).
+AddView(b, a, [1, b, a, 0]) :- Sw_add_t1(a, b).
+UF(t1, t2) :- Sw_add_t1(a, b),
+              t1 = [1, a, b, 0], t2 = [1, b, a, 0],
+              ord(t1) > ord(t2).
+UF(t2, t1) :- Sw_add_t1(a, b),
+              t1 = [1, a, b, 0], t2 = [1, b, a, 0],
+              ord(t2) > ord(t1).
+
+// (rewrite (Mul a b) (Mul b a))
+.decl Sw_mul_t1(a: Math, b: Math)
+Sw_mul_t1(a, b) :- MulView(a, b, _).
+MulView(b, a, [2, b, a, 0]) :- Sw_mul_t1(a, b).
+UF(t1, t2) :- Sw_mul_t1(a, b),
+              t1 = [2, a, b, 0], t2 = [2, b, a, 0],
+              ord(t1) > ord(t2).
+UF(t2, t1) :- Sw_mul_t1(a, b),
+              t1 = [2, a, b, 0], t2 = [2, b, a, 0],
+              ord(t2) > ord(t1).
+
+// (rewrite (Add a (Add b c)) (Add (Add a b) c))
+.decl Sw_assoc_add(a: Math, b: Math, c: Math)
+Sw_assoc_add(a, b, c) :- AddView(a, bc, _), AddView(b, c, bc).
+AddView(a, b, [1, a, b, 0]) :- Sw_assoc_add(a, b, _).  // ensure inner exists
+AddView([1, a, b, 0], c, [1, [1, a, b, 0], c, 0]) :- Sw_assoc_add(a, b, c).
+UF(t1, t2) :- Sw_assoc_add(a, b, c),
+              ab = [1, a, b, 0], bc = [1, b, c, 0],
+              t1 = [1, a, bc, 0], t2 = [1, ab, c, 0],
+              ord(t1) > ord(t2).
+UF(t2, t1) :- Sw_assoc_add(a, b, c),
+              ab = [1, a, b, 0], bc = [1, b, c, 0],
+              t1 = [1, a, bc, 0], t2 = [1, ab, c, 0],
+              ord(t2) > ord(t1).
+
+// (rewrite (Mul a (Mul b c)) (Mul (Mul a b) c))
+.decl Sw_assoc_mul(a: Math, b: Math, c: Math)
+Sw_assoc_mul(a, b, c) :- MulView(a, bc, _), MulView(b, c, bc).
+MulView(a, b, [2, a, b, 0]) :- Sw_assoc_mul(a, b, _).
+MulView([2, a, b, 0], c, [2, [2, a, b, 0], c, 0]) :- Sw_assoc_mul(a, b, c).
+UF(t1, t2) :- Sw_assoc_mul(a, b, c),
+              ab = [2, a, b, 0], bc = [2, b, c, 0],
+              t1 = [2, a, bc, 0], t2 = [2, ab, c, 0],
+              ord(t1) > ord(t2).
+UF(t2, t1) :- Sw_assoc_mul(a, b, c),
+              ab = [2, a, b, 0], bc = [2, b, c, 0],
+              t1 = [2, a, bc, 0], t2 = [2, ab, c, 0],
+              ord(t2) > ord(t1).
+
+// (rewrite (Mul a (Add b c)) (Add (Mul a b) (Mul a c)))
+.decl Sw_distrib(a: Math, b: Math, c: Math)
+Sw_distrib(a, b, c) :- MulView(a, bc, _), AddView(b, c, bc).
+MulView(a, b, [2, a, b, 0]) :- Sw_distrib(a, b, _).
+MulView(a, c, [2, a, c, 0]) :- Sw_distrib(a, _, c).
+AddView([2, a, b, 0], [2, a, c, 0], [1, [2, a, b, 0], [2, a, c, 0], 0]) :- Sw_distrib(a, b, c).
+UF(t1, t2) :- Sw_distrib(a, b, c),
+              bc = [1, b, c, 0],
+              t1 = [2, a, bc, 0],
+              t2 = [1, [2, a, b, 0], [2, a, c, 0], 0],
+              ord(t1) > ord(t2).
+UF(t2, t1) :- Sw_distrib(a, b, c),
+              bc = [1, b, c, 0],
+              t1 = [2, a, bc, 0],
+              t2 = [1, [2, a, b, 0], [2, a, c, 0], 0],
+              ord(t2) > ord(t1).
+
+// (rewrite (Add a (Const 0)) a) — direct identity
+UF(t, a) :- AddView(a, [0, nil, nil, 0], _),
+            t = [1, a, [0, nil, nil, 0], 0],
+            ord(t) > ord(a).
+UF(a, t) :- AddView(a, [0, nil, nil, 0], _),
+            t = [1, a, [0, nil, nil, 0], 0],
+            ord(a) > ord(t).
+
+// (rewrite (Mul a (Const 1)) a)
+UF(t, a) :- MulView(a, [0, nil, nil, 1], _),
+            t = [2, a, [0, nil, nil, 1], 0],
+            ord(t) > ord(a).
+UF(a, t) :- MulView(a, [0, nil, nil, 1], _),
+            t = [2, a, [0, nil, nil, 1], 0],
+            ord(a) > ord(t).
+
+// === Path compression ===
+UF(a, b) <= UF(a, c) :- UF(b, c), b != c.
+
+// === Congruence: same args, different leaders => union ===
+UF(o, n) :- AddView(a, b, o), AddView(a, b, n), o != n, ord(o) > ord(n).
+UF(o, n) :- MulView(a, b, o), MulView(a, b, n), o != n, ord(o) > ord(n).
+UF(o, n) :- ConstView(c, o), ConstView(c, n), o != n, ord(o) > ord(n).
+
+// === Rebuild: produce canonical view entries, subsume non-canonical ===
+// Insert the canonical version, then subsume the non-canonical.
+AddView(a, b, l_can) :- AddView(a, b, l), UF(l, l_can), l != l_can.
+AddView(a, b, l) <= AddView(a, b, l_can) :- UF(l, l_can), l != l_can.
+
+MulView(a, b, l_can) :- MulView(a, b, l), UF(l, l_can), l != l_can.
+MulView(a, b, l) <= MulView(a, b, l_can) :- UF(l, l_can), l != l_can.
+
+// Argument canonicalization (for left arg)
+AddView(a_can, b, l) :- AddView(a, b, l), UF(a, a_can), a != a_can.
+AddView(a, b, l) <= AddView(a_can, b, l) :- UF(a, a_can), a != a_can.
+MulView(a_can, b, l) :- MulView(a, b, l), UF(a, a_can), a != a_can.
+MulView(a, b, l) <= MulView(a_can, b, l) :- UF(a, a_can), a != a_can.
+
+// Argument canonicalization (for right arg)
+AddView(a, b_can, l) :- AddView(a, b, l), UF(b, b_can), b != b_can.
+AddView(a, b, l) <= AddView(a, b_can, l) :- UF(b, b_can), b != b_can.
+MulView(a, b_can, l) :- MulView(a, b, l), UF(b, b_can), b != b_can.
+MulView(a, b, l) <= MulView(a, b_can, l) :- UF(b, b_can), b != b_can.
+
+// === Output sizes for sanity check ===
+.printsize AddView
+.printsize MulView
+.printsize UF
