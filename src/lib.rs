@@ -457,6 +457,13 @@ impl EGraph {
         egraph
     }
 
+    /// Enable the Souffle-compatible variant of the term encoding on this
+    /// e-graph. See souffle-backend-plan.md for the experiment context.
+    pub fn with_souffle_compat(mut self) -> Self {
+        self.proof_state.souffle_compat = true;
+        self
+    }
+
     /// Enable the term-encoding pipeline on an existing `EGraph`.
     ///
     /// This method is to support the current CLI implementation with egglog-experimental (https://github.com/egraphs-good/egglog/issues/768)

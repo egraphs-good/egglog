@@ -13,6 +13,9 @@ struct Run {
     /// proof_testing mode adds automatic prove-exists commands, which produce
     /// proof output that differs from normal mode. This should use separate snapshots.
     proof_testing: bool,
+    /// Run the term encoding in Souffle-compatible mode (drops :merge new
+    /// function-index table). See souffle-backend-plan.md.
+    souffle_compat: bool,
     threads: usize,
 }
 
@@ -65,6 +68,7 @@ impl Run {
                 term_encoding: false,
                 proofs: false,
                 proof_testing: false,
+                souffle_compat: false,
                 threads: self.threads,
             };
             let proof_check_prog = if self.proof_testing {
@@ -110,7 +114,7 @@ impl Run {
     }
 
     fn egraph(&self) -> EGraph {
-        if self.proof_testing {
+        let mut egraph = if self.proof_testing {
             EGraph::new_with_proofs().with_proof_testing()
         } else if self.proofs {
             EGraph::new_with_proofs()
@@ -118,7 +122,11 @@ impl Run {
             EGraph::new_with_term_encoding()
         } else {
             EGraph::default()
+        };
+        if self.souffle_compat {
+            egraph = egraph.with_souffle_compat();
         }
+        egraph
     }
 
     // Returns a string of the desugared program and a string for the desugared program without proofs
@@ -255,6 +263,9 @@ impl Run {
                 if self.0.proof_testing {
                     write!(f, "_proof_testing")?;
                 }
+                if self.0.souffle_compat {
+                    write!(f, "_souffle_compat")?;
+                }
 
                 if self.0.threads > 1 {
                     write!(f, "_{}threads", self.0.threads)?;
@@ -294,7 +305,7 @@ impl Run {
             let in_list = proof_skip_list
                 .iter()
                 .any(|f| self.path.to_string_lossy().contains(f));
-            in_list && (self.proofs || self.term_encoding || self.proof_testing)
+            in_list && (self.proofs || self.term_encoding || self.proof_testing || self.souffle_compat)
         }
     }
 
@@ -319,6 +330,7 @@ fn generate_tests(glob: &str) -> Vec<Trial> {
             term_encoding: false,
             proofs: false,
             proof_testing: false,
+            souffle_compat: false,
             threads: 1,
         };
         let should_fail = run.should_fail();
@@ -356,12 +368,24 @@ fn generate_tests(glob: &str) -> Vec<Trial> {
                 term_encoding: true,
                 ..run.clone()
             });
+            // Same trial under the Souffle-compatible variant of term encoding.
+            push_trial(Run {
+                term_encoding: true,
+                souffle_compat: true,
+                ..run.clone()
+            });
         }
 
         // proofs mode (without proof_testing) should produce the same output as normal mode
         if !should_fail && supports_proofs {
             push_trial(Run {
                 proofs: true,
+                ..run.clone()
+            });
+            // Proofs + Souffle-compatible encoding.
+            push_trial(Run {
+                proofs: true,
+                souffle_compat: true,
                 ..run.clone()
             });
         }

@@ -143,16 +143,25 @@ impl ProofInstrumentor<'_> {
 
     /// Header commands for term encoding, setting up rulesets.
     pub(crate) fn term_header(&mut self) -> Vec<Command> {
+        // In souffle_compat mode the UF function-index ruleset is unused; omit
+        // the declaration so it doesn't clutter the encoded program.
+        let uf_function_index_ruleset = if self.egraph.proof_state.souffle_compat {
+            String::new()
+        } else {
+            format!(
+                "(ruleset {})",
+                self.proof_names().uf_function_index_ruleset_name
+            )
+        };
         let str = format!(
             "(ruleset {})
              (ruleset {})
-             (ruleset {})
+             {uf_function_index_ruleset}
              (ruleset {})
              (ruleset {})
              (ruleset {})",
             self.proof_names().path_compress_ruleset_name,
             self.proof_names().single_parent_ruleset_name,
-            self.proof_names().uf_function_index_ruleset_name,
             self.proof_names().rebuilding_ruleset_name,
             self.proof_names().rebuilding_cleanup_ruleset_name,
             self.proof_names().delete_subsume_ruleset_name

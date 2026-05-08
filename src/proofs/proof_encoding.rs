@@ -17,6 +17,11 @@ pub(crate) struct EncodingState {
     pub original_typechecking: Option<Box<EGraph>>,
     pub proofs_enabled: bool,
     pub proof_testing: bool,
+    /// When true, emit a Souffle-compatible variant of the term encoding:
+    /// drop the `__UF_<Sort>f` function-index table (and the `__UFPair_<Sort>`
+    /// sort in proof mode), drop its maintenance ruleset, and rewrite the
+    /// rebuild rule to query `__UF_<Sort>` directly. See souffle-backend-plan.md.
+    pub souffle_compat: bool,
     pub proof_names: EncodingNames,
 }
 
@@ -31,6 +36,7 @@ impl EncodingState {
             proofs_enabled: false,
             proof_names: EncodingNames::new(symbol_gen),
             proof_testing: false,
+            souffle_compat: false,
         }
     }
 }
@@ -142,31 +148,52 @@ impl<'a> ProofInstrumentor<'a> {
                 )
             };
 
-        // In proof mode, UF function index stores (leader, proof) pairs.
-        // In term mode, it just stores the leader.
-        let (uf_function_output_type, uf_pair_sort_decl, uf_index_query, uf_index_action) =
-            if self.egraph.proof_state.proofs_enabled {
-                let pair_sort = self.uf_pair_sort_name(sort_name);
-                let proof_fresh = self.egraph.parser.symbol_gen.fresh("uf_idx_proof");
-                (
-                    pair_sort.clone(),
-                    format!("(sort {pair_sort} (Pair {sort_name} {proof_type}))"),
-                    format!("(= {proof_fresh} ({pname} a b))"),
-                    format!("(set ({uf_function_name} a) (pair b {proof_fresh}))"),
-                )
+        // In souffle_compat mode, drop the UF function-index table and its
+        // maintenance rule entirely. The rebuild rule queries __UF_<Sort>
+        // directly. Otherwise:
+        //   - In proof mode, UF function index stores (leader, proof) pairs.
+        //   - In term-only mode, it just stores the leader.
+        let (uf_pair_sort_decl, uf_function_decl, uf_index_rule) =
+            if self.egraph.proof_state.souffle_compat {
+                (String::new(), String::new(), String::new())
             } else {
+                let (uf_function_output_type, uf_pair_sort_decl, uf_index_query, uf_index_action) =
+                    if self.egraph.proof_state.proofs_enabled {
+                        let pair_sort = self.uf_pair_sort_name(sort_name);
+                        let proof_fresh = self.egraph.parser.symbol_gen.fresh("uf_idx_proof");
+                        (
+                            pair_sort.clone(),
+                            format!("(sort {pair_sort} (Pair {sort_name} {proof_type}))"),
+                            format!("(= {proof_fresh} ({pname} a b))"),
+                            format!("(set ({uf_function_name} a) (pair b {proof_fresh}))"),
+                        )
+                    } else {
+                        (
+                            sort_name.to_string(),
+                            "".to_string(),
+                            format!("({pname} a b)"),
+                            format!("(set ({uf_function_name} a) b)"),
+                        )
+                    };
                 (
-                    sort_name.to_string(),
-                    "".to_string(),
-                    format!("({pname} a b)"),
-                    format!("(set ({uf_function_name} a) b)"),
+                    uf_pair_sort_decl,
+                    format!(
+                        "(function {uf_function_name} ({sort_name}) {uf_function_output_type} :merge new :unextractable :internal-hidden)"
+                    ),
+                    format!(
+                        ";; mirrors UF rows into a function-backed UF index for faster rebuild lookups
+                         (rule ({uf_index_query})
+                               ({uf_index_action})
+                               :ruleset {uf_function_index_ruleset_name}
+                               :name \"{uf_function_index_name}\")"
+                    ),
                 )
             };
 
         let mut code = format!(
             "{uf_pair_sort_decl}
              (function {pname} ({sort_name} {sort_name}) {proof_type} :merge old :internal-hidden)
-             (function {uf_function_name} ({sort_name}) {uf_function_output_type} :merge new :unextractable :internal-hidden)
+             {uf_function_decl}
              ;; performs path compression, ensuring each term points to the representative
              (rule ({path_compress_query}
                     (!= b c))
@@ -180,11 +207,7 @@ impl<'a> ProofInstrumentor<'a> {
                   ({single_parent_action})
                    :ruleset {single_parent_ruleset_name}
                    :name \"singleparent{fresh_name}\")
-             ;; mirrors UF rows into a function-backed UF index for faster rebuild lookups
-             (rule ({uf_index_query})
-                   ({uf_index_action})
-                   :ruleset {uf_function_index_ruleset_name}
-                   :name \"{uf_function_index_name}\")
+             {uf_index_rule}
                    "
         );
 
@@ -508,21 +531,38 @@ impl<'a> ProofInstrumentor<'a> {
         for (i, ty) in types.iter().enumerate() {
             if ty.is_eq_sort() {
                 let leader_var = format!("c{i}_leader_");
-                let uf_function_name = self.uf_function_name(ty.name());
                 let ci = child(i);
 
-                if self.egraph.proof_state.proofs_enabled {
-                    // UF function index returns a Pair(leader, proof); one lookup gives both
-                    let pair_var = self.fresh_var();
-                    let proof_var = format!("(pair-second {pair_var})");
-                    uf_queries.push(format!(
-                        "(= {pair_var} ({uf_function_name} {ci}))
-                         (= {leader_var} (pair-first {pair_var}))"
-                    ));
-                    uf_proof_vars.push(Some(proof_var));
+                if self.egraph.proof_state.souffle_compat {
+                    // Query the UF relation directly. Its output column is the
+                    // proof (in proof mode) or () (in term-only mode), so one
+                    // lookup gives both leader and proof.
+                    let uf_name = self.uf_name(ty.name());
+                    if self.egraph.proof_state.proofs_enabled {
+                        let proof_var = self.fresh_var();
+                        uf_queries.push(format!(
+                            "(= {proof_var} ({uf_name} {ci} {leader_var}))"
+                        ));
+                        uf_proof_vars.push(Some(proof_var));
+                    } else {
+                        uf_queries.push(format!("({uf_name} {ci} {leader_var})"));
+                        uf_proof_vars.push(None);
+                    }
                 } else {
-                    uf_queries.push(format!("(= {leader_var} ({uf_function_name} {ci}))"));
-                    uf_proof_vars.push(None);
+                    let uf_function_name = self.uf_function_name(ty.name());
+                    if self.egraph.proof_state.proofs_enabled {
+                        // UF function index returns a Pair(leader, proof); one lookup gives both
+                        let pair_var = self.fresh_var();
+                        let proof_var = format!("(pair-second {pair_var})");
+                        uf_queries.push(format!(
+                            "(= {pair_var} ({uf_function_name} {ci}))
+                             (= {leader_var} (pair-first {pair_var}))"
+                        ));
+                        uf_proof_vars.push(Some(proof_var));
+                    } else {
+                        uf_queries.push(format!("(= {leader_var} ({uf_function_name} {ci}))"));
+                        uf_proof_vars.push(None);
+                    }
                 }
 
                 bool_neq_exprs.push(format!("(bool-!= {ci} {leader_var})"));
@@ -1091,17 +1131,24 @@ impl<'a> ProofInstrumentor<'a> {
     fn rebuild(&mut self) -> Schedule {
         let path_compress_ruleset = self.proof_names().path_compress_ruleset_name.clone();
         let single_parent = self.proof_names().single_parent_ruleset_name.clone();
-        let uf_function_index = self.proof_names().uf_function_index_ruleset_name.clone();
         let rebuilding_cleanup_ruleset = self.proof_names().rebuilding_cleanup_ruleset_name.clone();
         let rebuilding_ruleset = self.proof_names().rebuilding_ruleset_name.clone();
         let delete_ruleset = self.proof_names().delete_subsume_ruleset_name.clone();
+        // In souffle_compat mode the UF function-index step is omitted since
+        // the rebuild rule queries __UF_<Sort> directly.
+        let uf_index_step = if self.egraph.proof_state.souffle_compat {
+            String::new()
+        } else {
+            let uf_function_index = self.proof_names().uf_function_index_ruleset_name.clone();
+            format!("(saturate {uf_function_index})")
+        };
         self.parse_schedule(format!(
             "(seq
               (saturate
                   {rebuilding_cleanup_ruleset}
                   (saturate {single_parent})
                   (saturate {path_compress_ruleset})
-                  (saturate {uf_function_index})
+                  {uf_index_step}
                   {rebuilding_ruleset})
               {delete_ruleset})"
         ))

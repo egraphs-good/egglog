@@ -61,6 +61,10 @@ struct Args {
     /// Enable proof testing, turning all `check` statements into `prove` statements
     #[clap(long)]
     proof_testing: bool,
+    /// Use the Souffle-compatible variant of the term encoding (experimental;
+    /// see souffle-backend-plan.md). Implies --term-encoding.
+    #[clap(long)]
+    souffle_compat: bool,
 }
 
 /// Start a command-line interface for the E-graph.
@@ -77,7 +81,7 @@ pub fn cli(mut egraph: EGraph) {
 
     let args = Args::parse();
 
-    if args.term_encoding {
+    if args.term_encoding || args.souffle_compat {
         egraph = egraph.with_term_encoding_enabled();
     }
 
@@ -88,6 +92,10 @@ pub fn cli(mut egraph: EGraph) {
     if args.proof_testing {
         egraph = egraph.with_proofs_enabled();
         egraph = egraph.with_proof_testing();
+    }
+
+    if args.souffle_compat {
+        egraph = egraph.with_souffle_compat();
     }
 
     EGraph::set_num_threads(args.threads);

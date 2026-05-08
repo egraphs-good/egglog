@@ -47,4 +47,116 @@ mod tests {
 
         insta::assert_snapshot!("doc_example_add_function1", snapshot);
     }
+
+    #[test]
+    fn dump_souffle_baseline() {
+        let commands = term_encode(
+            r#"
+(sort Math)
+(constructor Add (i64 i64) Math)
+(Add 1 2)
+(rule ((Add a b))
+      ((union (Add a b) (Add b a)))
+     :name "commutativity")
+(run 1)
+(check (= (Add 1 2) (Add 2 1)))
+            "#,
+        );
+
+        let snapshot = sanitize_internal_names(&commands)
+            .iter()
+            .map(|cmd| cmd.to_string())
+            .collect::<Vec<_>>()
+            .join("\n");
+
+        std::fs::write("/tmp/souffle-baseline-output.txt", &snapshot).unwrap();
+        eprintln!("WROTE TO /tmp/souffle-baseline-output.txt");
+    }
+
+    #[test]
+    fn dump_souffle_compat() {
+        let mut egraph = crate::EGraph::new_with_term_encoding().with_souffle_compat();
+        let commands = egraph
+            .resolve_program(
+                None,
+                r#"
+(sort Math)
+(constructor Add (i64 i64) Math)
+(Add 1 2)
+(rule ((Add a b))
+      ((union (Add a b) (Add b a)))
+     :name "commutativity")
+(run 1)
+(check (= (Add 1 2) (Add 2 1)))
+            "#,
+            )
+            .unwrap();
+
+        let snapshot = sanitize_internal_names(&commands)
+            .iter()
+            .map(|cmd| cmd.to_string())
+            .collect::<Vec<_>>()
+            .join("\n");
+
+        std::fs::write("/tmp/souffle-compat-output.txt", &snapshot).unwrap();
+        eprintln!("WROTE TO /tmp/souffle-compat-output.txt");
+    }
+
+    #[test]
+    fn dump_souffle_compat_proofs() {
+        let mut egraph = crate::EGraph::new_with_proofs().with_souffle_compat();
+        let commands = egraph
+            .resolve_program(
+                None,
+                r#"
+(sort Math)
+(constructor Add (i64 i64) Math)
+(Add 1 2)
+(rule ((Add a b))
+      ((union (Add a b) (Add b a)))
+     :name "commutativity")
+(run 1)
+(check (= (Add 1 2) (Add 2 1)))
+            "#,
+            )
+            .unwrap();
+
+        let snapshot = sanitize_internal_names(&commands)
+            .iter()
+            .map(|cmd| cmd.to_string())
+            .collect::<Vec<_>>()
+            .join("\n");
+
+        std::fs::write("/tmp/souffle-compat-proofs-output.txt", &snapshot).unwrap();
+        eprintln!("WROTE TO /tmp/souffle-compat-proofs-output.txt");
+    }
+
+    #[test]
+    fn dump_souffle_baseline_proofs() {
+        let mut egraph = crate::EGraph::new_with_proofs();
+        let commands = egraph
+            .resolve_program(
+                None,
+                r#"
+(sort Math)
+(constructor Add (i64 i64) Math)
+(Add 1 2)
+(rule ((Add a b))
+      ((union (Add a b) (Add b a)))
+     :name "commutativity")
+(run 1)
+(check (= (Add 1 2) (Add 2 1)))
+            "#,
+            )
+            .unwrap();
+
+        let snapshot = sanitize_internal_names(&commands)
+            .iter()
+            .map(|cmd| cmd.to_string())
+            .collect::<Vec<_>>()
+            .join("\n");
+
+        std::fs::write("/tmp/souffle-baseline-proofs-output.txt", &snapshot).unwrap();
+        eprintln!("WROTE TO /tmp/souffle-baseline-proofs-output.txt");
+    }
 }
