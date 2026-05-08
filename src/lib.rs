@@ -249,6 +249,18 @@ pub struct EGraph {
     rulesets: IndexMap<String, Ruleset>,
     pub fact_directory: Option<PathBuf>,
     pub seminaive: bool,
+    /// Enable the seminaive-as-encoding pass. See
+    /// `seminaive-encoding-experiment.md` at the repo root.
+    pub seminaive_encoding_enabled: bool,
+    /// Whether the seminaive-encoding pass has already emitted its
+    /// `next_ts` header. The pass is invoked once per command, but
+    /// `next_ts` should only be declared once per session.
+    pub(crate) seminaive_encoding_header_emitted: bool,
+    /// Functions/constructors/relations seen so far by the
+    /// seminaive-encoding pass, accumulated across per-command
+    /// invocations. Needed because a rule in command N can reference
+    /// a function declared in command M < N.
+    pub(crate) seminaive_tracked: HashSet<String>,
     type_info: TypeInfo,
     /// The run report unioned over all runs so far.
     overall_run_report: RunReport,
@@ -346,6 +358,9 @@ impl Default for EGraph {
             rulesets: Default::default(),
             fact_directory: None,
             seminaive: true,
+            seminaive_encoding_enabled: false,
+            seminaive_encoding_header_emitted: false,
+            seminaive_tracked: HashSet::default(),
             overall_run_report: Default::default(),
             type_info: Default::default(),
             schedulers: Default::default(),
@@ -477,6 +492,16 @@ impl EGraph {
     /// Enable testing of getting proofs for all `check` commands.
     pub fn with_proof_testing(mut self) -> Self {
         self.proof_state.proof_testing = true;
+        self
+    }
+
+    /// Enable the seminaive-as-encoding experiment. Adds a pass after
+    /// term encoding that lifts seminaive evaluation into the IR via
+    /// per-rule timestamp predicates. Requires term encoding to also
+    /// be enabled. See `seminaive-encoding-experiment.md` at the repo
+    /// root.
+    pub fn with_seminaive_encoding_enabled(mut self) -> Self {
+        self.seminaive_encoding_enabled = true;
         self
     }
 
@@ -935,34 +960,84 @@ impl EGraph {
     ///
     /// This will return an error if an egglog primitive returns None in an action.
     pub fn step_rules(&mut self, ruleset: &str) -> Result<RunReport, Error> {
-        fn collect_rule_ids(
+        fn collect(
             ruleset: &str,
             rulesets: &IndexMap<String, Ruleset>,
             ids: &mut Vec<egglog_bridge::RuleId>,
+            names: &mut Vec<String>,
         ) {
             match &rulesets[ruleset] {
                 Ruleset::Rules(rules) => {
-                    for (_, id) in rules.values() {
+                    for (n, (_, id)) in rules.iter() {
                         ids.push(*id);
+                        names.push(n.clone());
                     }
                 }
                 Ruleset::Combined(sub_rulesets) => {
                     for sub_ruleset in sub_rulesets {
-                        collect_rule_ids(sub_ruleset, rulesets, ids);
+                        collect(sub_ruleset, rulesets, ids, names);
                     }
                 }
             }
         }
 
         let mut rule_ids = Vec::new();
-        collect_rule_ids(ruleset, &self.rulesets, &mut rule_ids);
+        let mut rule_names = Vec::new();
+        collect(ruleset, &self.rulesets, &mut rule_ids, &mut rule_names);
+
+        // Seminaive-encoding hook: bump next_ts before the iteration if the
+        // program defines it. No-op for programs that don't use the encoding.
+        let new_ts = self.bump_next_ts_global();
 
         let iteration_report = self
             .backend
             .run_rules(&rule_ids)
             .map_err(|e| Error::BackendError(e.to_string()))?;
 
+        // After the iteration, set last_run_at_<src> to the bumped value for
+        // every source rule that ran. The source name is the rule name with
+        // any `@<digits>` variant suffix stripped.
+        if let Some(ts) = new_ts {
+            self.update_last_run_at_globals(&rule_names, ts);
+        }
+
         Ok(RunReport::singleton(ruleset, iteration_report))
+    }
+
+    /// If the program defines a nullary i64 function `next_ts`, increment
+    /// it by 1 and return the new value. Returns `None` otherwise.
+    fn bump_next_ts_global(&mut self) -> Option<i64> {
+        let func = self.functions.get("next_ts")?;
+        let id = func.backend_id;
+        let cur_val = self.backend.lookup_id(id, &[])?;
+        let cur: i64 = self.backend.base_values().unwrap::<i64>(cur_val);
+        let new = cur + 1;
+        let new_val = self.backend.base_values().get::<i64>(new);
+        self.backend.add_values([(id, vec![new_val])]);
+        Some(new)
+    }
+
+    /// For every rule name in `rule_names`, if a nullary i64 function
+    /// `last_run_at_<source>` exists (where `<source>` is the rule name
+    /// minus any `@<digits>` variant suffix), set it to `ts`.
+    fn update_last_run_at_globals(&mut self, rule_names: &[String], ts: i64) {
+        let mut sources: HashSet<&str> = HashSet::default();
+        for n in rule_names {
+            sources.insert(n.split('@').next().unwrap_or(n.as_str()));
+        }
+        let ts_val = self.backend.base_values().get::<i64>(ts);
+        let updates: Vec<_> = sources
+            .into_iter()
+            .filter_map(|src| {
+                let global = format!("last_run_at_{src}");
+                self.functions
+                    .get(&global)
+                    .map(|f| (f.backend_id, vec![ts_val]))
+            })
+            .collect();
+        if !updates.is_empty() {
+            self.backend.add_values(updates);
+        }
     }
 
     fn add_rule(&mut self, rule: ast::ResolvedRule) -> Result<String, Error> {
@@ -1614,8 +1689,18 @@ impl EGraph {
                 self.names.check_shadowing(command)?;
             }
 
-            let term_encoding_added =
+            let mut term_encoding_added =
                 ProofInstrumentor::add_term_encoding(self, typechecked_no_globals);
+            if self.seminaive_encoding_enabled {
+                let emit_header = !self.seminaive_encoding_header_emitted;
+                term_encoding_added = proofs::seminaive_encoding::add_seminaive_encoding(
+                    term_encoding_added,
+                    &mut self.parser,
+                    &mut self.seminaive_tracked,
+                    emit_header,
+                );
+                self.seminaive_encoding_header_emitted = true;
+            }
             let mut new_typechecked = vec![];
             for new_cmd in term_encoding_added {
                 let desugared =

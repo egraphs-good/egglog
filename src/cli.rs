@@ -61,6 +61,11 @@ struct Args {
     /// Enable proof testing, turning all `check` statements into `prove` statements
     #[clap(long)]
     proof_testing: bool,
+    /// Enable the seminaive-as-encoding experiment. Implies `--term-encoding`
+    /// and `--naive` (the latter so the backend's built-in seminaive doesn't
+    /// duplicate the encoded predicates).
+    #[clap(long)]
+    seminaive_encoding: bool,
 }
 
 /// Start a command-line interface for the E-graph.
@@ -77,7 +82,7 @@ pub fn cli(mut egraph: EGraph) {
 
     let args = Args::parse();
 
-    if args.term_encoding {
+    if args.term_encoding || args.seminaive_encoding {
         egraph = egraph.with_term_encoding_enabled();
     }
 
@@ -90,9 +95,16 @@ pub fn cli(mut egraph: EGraph) {
         egraph = egraph.with_proof_testing();
     }
 
+    if args.seminaive_encoding {
+        egraph = egraph.with_seminaive_encoding_enabled();
+    }
+
     EGraph::set_num_threads(args.threads);
     egraph.fact_directory.clone_from(&args.fact_directory);
-    egraph.seminaive = !args.naive;
+    // --seminaive-encoding implies --naive (the encoded predicates do
+    // the seminaive work; the backend's built-in version would fight
+    // with them).
+    egraph.seminaive = !args.naive && !args.seminaive_encoding;
     egraph.set_report_level(args.report_level);
     if args.strict_mode {
         egraph.set_strict_mode(true);
