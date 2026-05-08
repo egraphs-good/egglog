@@ -304,21 +304,19 @@ fn build_variant(
     // re-resolved consistently.
     let mut body_lines = Vec::<String>::new();
 
-    // Mirror each function-call atom with a `_ts` query and, if it's
-    // the focused one, the focus predicate.
+    // Add a `_ts` query and focus predicate for the focused atom
+    // only. Unfocused atoms don't need the ts — they just need to
+    // match against current state. This keeps join arity O(N+1)
+    // instead of O(2N) and avoids burdening the planner with N-1
+    // useless `_ts` lookups per rule.
     for (i, fact) in rule.body.iter().enumerate() {
         body_lines.push(format!("{fact}"));
-        if function_atom_head(fact)
-            .map(|h| tracked.contains(h))
-            .unwrap_or(false)
-        {
+        if Some(i) == focus_idx {
+            // Safe: focus_idx is only set when the indexed fact is a
+            // tracked function atom (see collect_function_atom_indices).
             let head = function_atom_head(fact).unwrap();
             let args = function_atom_args(fact);
-            let args_s = args
-                .iter()
-                .map(|a| format!("{a}"))
-                .collect::<Vec<_>>()
-                .join(" ");
+            let args_s = exprs_text(&args);
             let ts_var = parser.symbol_gen.fresh(&format!("ts{i}"));
             body_lines.push(format!(
                 "(= {} ({} {}))",
@@ -326,11 +324,9 @@ fn build_variant(
                 ts_name(head),
                 args_s
             ));
-            if Some(i) == focus_idx {
-                let lan = last_run_at_name(source_name);
-                body_lines.push(format!("(= {last_var} ({lan}))"));
-                body_lines.push(format!("(>= {ts_var} {last_var})"));
-            }
+            let lan = last_run_at_name(source_name);
+            body_lines.push(format!("(= {last_var} ({lan}))"));
+            body_lines.push(format!("(>= {ts_var} {last_var})"));
         }
     }
     // Bind `now` once per variant. It's referenced from action
