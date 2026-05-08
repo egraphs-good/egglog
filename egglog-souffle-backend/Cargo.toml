@@ -1,0 +1,22 @@
+[package]
+name = "egglog-souffle-backend"
+version = { workspace = true }
+edition = { workspace = true }
+description = "Translates the term-encoded form of an egglog program to Souffle Datalog (.dl)."
+repository = { workspace = true }
+keywords = { workspace = true }
+license = { workspace = true }
+readme = { workspace = true }
+
+# Translator from souffle_compat-encoded egglog to Souffle .dl source.
+# Goal: enable running egglog programs through a Souffle backend (oflatt/souffle
+# fork on branch `bounded-iteration`, with .pragma "outer-saturate", .snapshot,
+# and .limititerations directives).
+
+[dependencies]
+egglog-ast = { path = "../egglog-ast" }
+ordered-float = { workspace = true }
+thiserror = { workspace = true }
+
+[features]
+default = []

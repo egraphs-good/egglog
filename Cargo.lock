@@ -638,6 +638,15 @@ dependencies = [
 ]
 
 [[package]]
+name = "egglog-souffle-backend"
+version = "2.0.0"
+dependencies = [
+ "egglog-ast",
+ "ordered-float",
+ "thiserror",
+]
+
+[[package]]
 name = "egglog-union-find"
 version = "2.0.0"
 dependencies = [

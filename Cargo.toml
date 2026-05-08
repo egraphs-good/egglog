@@ -5,6 +5,7 @@ members = [
   "core-relations",
   "egglog-ast",
   "egglog-bridge",
+  "egglog-souffle-backend",
   "numeric-id",
   "union-find",
   "src/sort/add_primitive",
@@ -77,6 +78,7 @@ egglog-numeric-id = { path = "numeric-id", version = "2.0.0" }
 egglog-union-find = { path = "union-find", version = "2.0.0" }
 egglog-add-primitive = { path = "src/sort/add_primitive", version = "2.0.0" }
 egglog-reports = { path = "egglog-reports", version = "2.0.0" }
+egglog-souffle-backend = { path = "egglog-souffle-backend", version = "2.0.0" }
 egglog = { path = ".", default-features = false, version = "2.0.0" }
 
 ######################
