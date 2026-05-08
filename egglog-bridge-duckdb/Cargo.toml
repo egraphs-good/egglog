@@ -17,3 +17,11 @@ path = "examples/transitive_closure.rs"
 [[example]]
 name = "function_outputs"
 path = "examples/function_outputs.rs"
+
+[[example]]
+name = "path_egg"
+path = "examples/path_egg.rs"
+
+[[example]]
+name = "arith"
+path = "examples/arith.rs"

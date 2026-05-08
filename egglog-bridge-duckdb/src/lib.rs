@@ -62,12 +62,16 @@ impl ToSql for Literal {
     }
 }
 
-/// A term in a rule body or action: either a free variable (bound by
-/// matching) or a literal.
+/// A term in a rule body or action.
 #[derive(Debug, Clone)]
 pub enum Term {
     Var(String),
     Lit(Literal),
+    /// A primitive expression: arithmetic (`+`, `-`, `*`, `/`),
+    /// comparison (`<`, `<=`, `>`, `>=`, `=`, `!=`), or boolean
+    /// (`and`, `or`, `not`). The op name is mapped to a SQL
+    /// operator at codegen; see `compile.rs::prim_sql`.
+    Prim(String, Vec<Term>),
 }
 
 impl Term {
@@ -77,17 +81,23 @@ impl Term {
     pub fn i64(v: i64) -> Self {
         Term::Lit(Literal::I64(v))
     }
+    pub fn prim(op: impl Into<String>, args: Vec<Term>) -> Self {
+        Term::Prim(op.into(), args)
+    }
 }
 
 /// A body atom of a rule.
-///
-/// `args.len()` must match the function's full arity:
-/// - For relations: equal to the number of inputs.
-/// - For functions with outputs: number of inputs + 1, with the
-///   last term binding the output.
 #[derive(Debug, Clone)]
 pub enum Atom {
+    /// A function-table atom. `args.len()` must match the function's
+    /// full arity (inputs for relations; inputs + 1 for functions
+    /// with outputs).
     Func { name: String, args: Vec<Term> },
+    /// A pure-primitive constraint: the term must evaluate to true.
+    /// Examples: `(< x 5)`, `(!= a b)`, `(= z (+ x y))`. The last
+    /// form is treated as a filter, not a binding — we don't yet
+    /// support computed-variable bindings in the body.
+    Filter(Term),
 }
 
 /// A rule action: insert a row into a function/relation table.
