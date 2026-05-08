@@ -3,6 +3,7 @@ resolver = "3"
 members = [
   "concurrency",
   "core-relations",
+  "duckdb-spike",
   "egglog-ast",
   "egglog-bridge",
   "numeric-id",

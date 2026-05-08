@@ -561,15 +561,50 @@ The plan is designed so that each phase produces something
 *independently useful*: each one either proves a hypothesis or shoots
 it down before the next phase commits more code.
 
-### Phase 0 — Spike (1–2 weeks, throwaway code)
+### Phase 0 — Spike (1–2 weeks, throwaway code)  ✅ done
 
-- Translate one tiny program (the running `Add` example from
-  `proof_encoding.md`) by hand into DuckDB SQL.
-- Wire `duckdb-rs` to a stub frontend; run one rule iteration end to
-  end on `commutativity`.
-- Compare runtime against today's backend on the same input.
+- Translate one tiny program by hand into DuckDB SQL. ✅
+- Wire `duckdb-rs` to a stub frontend; run rule iterations end to
+  end. ✅ See `duckdb-spike/` (workspace member).
+- Compare runtime against today's backend on the same input. ✅
 - **Decision gate**: if the per-iteration overhead is >10x and we have
   no plan to amortize it, stop. If it's within ~2x, continue.
+
+**Phase 0 results** (transitive closure on a chain of N edges,
+best-of-3 wall time):
+
+```
+N        egglog    --term-encoding   duckdb spike
+  10     0.00s     0.00s             0.03s
+ 100     0.00s     0.02s             0.17s
+ 500     0.05s     0.91s             0.95s
+1000     0.21s     7.10s             2.38s
+2000     0.86s    56.69s             7.29s
+```
+
+Reading:
+
+- **Crossover with `--term-encoding` lands around N≈500–1000.** At
+  N=1000, DuckDB beats `--term-encoding` by 3×; at N=2000, by 8×.
+  Term encoding scales badly on this workload (saturate goes from
+  0.91s to 56.69s for 4× more edges); DuckDB scales near-linearly
+  (0.95s → 7.29s).
+- **Process startup is ~25 ms for the DuckDB spike**, dominating
+  small-N runs. The actual rule loop at N=1 takes ~4 ms; CREATE +
+  seed takes <1 ms. The 30 ms floor is bundled-DuckDB init + rust
+  binary launch.
+- **Baseline egglog (no term encoding) is faster than DuckDB at
+  every N** by 4–9×. That's the workload the current backend was
+  built for; we're not trying to replace it for that case. The plan
+  is term-encoded mode only.
+
+**Decision**: pass. The per-iteration overhead is well within 2× of
+`--term-encoding` and at scale DuckDB is significantly faster.
+Proceeding to Phase 1.
+
+(Spike is in `duckdb-spike/` — single binary, ~150 lines including
+schema, seed, schedule loop, and verification. Throwaway code as
+planned.)
 
 ### Phase 1 — Proof of concept (4–6 weeks)
 

@@ -1,0 +1,14 @@
+[package]
+name = "duckdb-spike"
+version.workspace = true
+edition.workspace = true
+description = "Phase 0 hand spike for the DuckDB backend (see ../duckdb-backend-plan.md)"
+license.workspace = true
+publish = false
+
+[dependencies]
+duckdb = { version = "1.5", features = ["bundled"] }
+
+[[bin]]
+name = "add-example"
+path = "src/add_example.rs"
