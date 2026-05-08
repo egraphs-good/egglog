@@ -74,6 +74,7 @@ libtest-mimic = "0.8"
 egglog-core-relations = { path = "core-relations", version = "2.0.0" }
 egglog-ast = { path = "egglog-ast", version = "2.0.0" }
 egglog-bridge = { path = "egglog-bridge", version = "2.0.0" }
+egglog-bridge-duckdb = { path = "egglog-bridge-duckdb", version = "2.0.0" }
 egglog-concurrency = { path = "concurrency", version = "2.0.0" }
 egglog-numeric-id = { path = "numeric-id", version = "2.0.0" }
 egglog-union-find = { path = "union-find", version = "2.0.0" }
@@ -151,7 +152,9 @@ csv = { workspace = true }
 egglog-core-relations = { workspace = true }
 egglog-ast = { workspace = true }
 egglog-bridge = { workspace = true }
+egglog-bridge-duckdb = { workspace = true }
 egglog-numeric-id = { workspace = true }
+anyhow = { workspace = true }
 egglog-add-primitive = { workspace = true }
 egglog-reports = { workspace = true }
 rayon = { workspace = true }

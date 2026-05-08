@@ -66,6 +66,11 @@ struct Args {
     /// duplicate the encoded predicates).
     #[clap(long)]
     seminaive_encoding: bool,
+    /// Run the program on the experimental DuckDB backend (Phase 1.3).
+    /// Bypasses the default `egglog-bridge` execution path. Many features
+    /// are not yet supported; see `src/backend_duckdb.rs` for current scope.
+    #[clap(long = "duckdb")]
+    duckdb_backend: bool,
 }
 
 /// Start a command-line interface for the E-graph.
@@ -123,6 +128,26 @@ pub fn cli(mut egraph: EGraph) {
                 let arg = input.to_string_lossy();
                 panic!("Failed to read file {arg}")
             });
+
+            // DuckDB backend: bypass the regular pipeline entirely.
+            // We resolve via the egglog frontend (so type info, term
+            // encoding, etc., still apply for the parts we support)
+            // but dispatch each ResolvedNCommand to DuckDB.
+            if args.duckdb_backend {
+                let mut backend =
+                    egglog::backend_duckdb::DuckdbBackend::new().unwrap_or_else(|err| {
+                        log::error!("failed to start DuckDB backend: {err}");
+                        std::process::exit(1);
+                    });
+                if let Err(err) = backend.run_program(
+                    Some(input.to_str().unwrap().into()),
+                    &program,
+                ) {
+                    log::error!("{err}");
+                    std::process::exit(1);
+                }
+                continue;
+            }
 
             match run_commands(
                 &mut egraph,

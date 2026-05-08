@@ -13,6 +13,7 @@
 //!
 //!
 pub mod ast;
+pub mod backend_duckdb;
 #[cfg(feature = "bin")]
 mod cli;
 mod command_macro;
@@ -1728,6 +1729,19 @@ impl EGraph {
 
     /// Run a program, returning the desugared outputs as well as the CommandOutputs.
     /// Can optionally not run the commands, just adding type information.
+    /// Parse + resolve a program into the normalized IR
+    /// (`ResolvedNCommand`s) without executing it. Used by alternative
+    /// backends (e.g. DuckDB) that consume the resolved IR directly.
+    pub(crate) fn resolve_program_to_ncommands(
+        &mut self,
+        filename: Option<String>,
+        input: &str,
+    ) -> Result<Vec<ResolvedNCommand>, Error> {
+        let parsed = self.parser.get_program_from_string(filename, input)?;
+        let res = self.process_program_internal(parsed, false)?;
+        Ok(res.resolved)
+    }
+
     fn process_program_internal(
         &mut self,
         program: Vec<Command>,
