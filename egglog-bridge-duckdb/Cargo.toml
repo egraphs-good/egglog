@@ -13,3 +13,7 @@ anyhow = "1"
 [[example]]
 name = "transitive_closure"
 path = "examples/transitive_closure.rs"
+
+[[example]]
+name = "function_outputs"
+path = "examples/function_outputs.rs"

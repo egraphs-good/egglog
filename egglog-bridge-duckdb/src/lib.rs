@@ -1,19 +1,18 @@
 //! DuckDB-backed executor for a small subset of egglog's resolved IR.
 //!
-//! Phase 1.0 scope: enough to run pure Datalog (no term encoding, no
-//! UF, no merges, no primitives beyond what naturally falls out of
-//! variable equality). See `../duckdb-backend-plan.md` for the full
-//! plan and where this fits.
+//! Phase 1.1 scope: relations + functions with outputs and merge
+//! modes (`:merge old`, `:merge new`). No term encoding, no UF, no
+//! primitives. See `../duckdb-backend-plan.md` for the full plan.
 //!
 //! Design notes:
-//! - One DuckDB table per registered function.
+//! - One DuckDB table per registered relation/function.
 //! - Every table carries a `ts BIGINT NOT NULL` column for seminaive.
 //! - `next_ts` and `last_run_at_<rule>` live in Rust state; they are
-//!   bind parameters in the generated SQL, never database rows.
+//!   bind parameters in generated SQL, never database rows.
 //! - Each rule with N function-table atoms compiles to N seminaive
 //!   variants (one per focused atom), emitted as separate prepared
-//!   `INSERT INTO target SELECT ... WHERE focused.ts >= :last`
-//!   statements.
+//!   `INSERT INTO target SELECT ...` statements with appropriate
+//!   `ON CONFLICT` clauses depending on merge mode.
 
 use anyhow::{Result, anyhow};
 use duckdb::{Connection, ToSql};
@@ -37,6 +36,16 @@ impl ColumnTy {
     }
 }
 
+/// Merge mode for functions with outputs. Mirrors egglog's
+/// `:merge old` / `:merge new` keywords.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum MergeMode {
+    /// First-set wins. `ON CONFLICT DO NOTHING`.
+    Old,
+    /// Latest-set wins. `ON CONFLICT DO UPDATE` of the output and ts.
+    New,
+}
+
 /// A literal value usable in seed inserts and `check`/`lookup`.
 #[derive(Debug, Clone)]
 pub enum Literal {
@@ -54,8 +63,7 @@ impl ToSql for Literal {
 }
 
 /// A term in a rule body or action: either a free variable (bound by
-/// matching) or a literal. We currently don't carry types on terms;
-/// the schema does the type checking implicitly.
+/// matching) or a literal.
 #[derive(Debug, Clone)]
 pub enum Term {
     Var(String),
@@ -72,11 +80,13 @@ impl Term {
 }
 
 /// A body atom of a rule.
+///
+/// `args.len()` must match the function's full arity:
+/// - For relations: equal to the number of inputs.
+/// - For functions with outputs: number of inputs + 1, with the
+///   last term binding the output.
 #[derive(Debug, Clone)]
 pub enum Atom {
-    /// A function-table atom: `(f arg0 arg1 ...)`.  All non-output
-    /// columns are matched/bound; functions with logical "outputs"
-    /// would be handled by a future variant.
     Func { name: String, args: Vec<Term> },
 }
 
@@ -94,26 +104,44 @@ pub struct Rule {
     pub actions: Vec<Action>,
 }
 
+/// Internal: schema for a single registered function.
 #[derive(Debug, Clone)]
-struct FunctionInfo {
-    schema: Vec<ColumnTy>,
+pub(crate) struct FunctionInfo {
+    /// All schema columns (inputs followed by output, if any).
+    pub(crate) cols: Vec<ColumnTy>,
+    /// Number of input columns. Output column, if present, is at
+    /// index `inputs_len`.
+    pub(crate) inputs_len: usize,
+    /// `Some` if this is a function with an output column; `None`
+    /// for relations.
+    pub(crate) merge: Option<MergeMode>,
+}
+
+impl FunctionInfo {
+    pub(crate) fn arity(&self) -> usize {
+        self.cols.len()
+    }
+    pub(crate) fn has_output(&self) -> bool {
+        self.merge.is_some()
+    }
 }
 
 /// The executor.
 pub struct EGraph {
     conn: Connection,
-    functions: HashMap<String, FunctionInfo>,
+    pub(crate) functions: HashMap<String, FunctionInfo>,
     rules: Vec<CompiledRule>,
     next_ts: i64,
-    /// Per source-rule "last run at" — the ts at which it last ran,
-    /// used to bound the focused atom in seminaive variants.
+    /// Per source-rule "last run at" — the ts at which it last ran.
     last_run_at: HashMap<String, i64>,
 }
 
 struct CompiledRule {
     name: String,
-    /// Each variant is one prepared SQL statement.
-    variants: Vec<String>,
+    /// Each variant is one or more SQL statements (one per action).
+    /// Inner Vec lets multi-action rules execute their actions in
+    /// order from a single firing of the variant.
+    variants: Vec<Vec<String>>,
 }
 
 impl EGraph {
@@ -127,38 +155,72 @@ impl EGraph {
         })
     }
 
-    /// Register a function (egglog `relation`/`function`) with the
-    /// given column types. The DuckDB table is created with all
-    /// schema columns plus an extra `ts BIGINT NOT NULL`. PRIMARY
-    /// KEY covers all schema columns (relation semantics; functions
-    /// would key on a prefix).
-    pub fn add_function(&mut self, name: &str, schema: &[ColumnTy]) -> Result<()> {
+    /// Register a relation (no output column). Inserts use
+    /// `ON CONFLICT DO NOTHING` — duplicates are silently dropped.
+    pub fn add_relation(&mut self, name: &str, inputs: &[ColumnTy]) -> Result<()> {
+        self.declare(
+            name,
+            FunctionInfo {
+                cols: inputs.to_vec(),
+                inputs_len: inputs.len(),
+                merge: None,
+            },
+        )
+    }
+
+    /// Register a function with an output column and merge mode.
+    /// PRIMARY KEY covers only the input columns; the output column
+    /// is updated or kept on conflict according to `merge`.
+    pub fn add_function(
+        &mut self,
+        name: &str,
+        inputs: &[ColumnTy],
+        output: ColumnTy,
+        merge: MergeMode,
+    ) -> Result<()> {
+        let mut cols = inputs.to_vec();
+        cols.push(output);
+        self.declare(
+            name,
+            FunctionInfo {
+                cols,
+                inputs_len: inputs.len(),
+                merge: Some(merge),
+            },
+        )
+    }
+
+    fn declare(&mut self, name: &str, info: FunctionInfo) -> Result<()> {
         if self.functions.contains_key(name) {
             return Err(anyhow!("function {name} already registered"));
         }
-        let cols: Vec<String> = schema
+        let col_decls: Vec<String> = info
+            .cols
             .iter()
             .enumerate()
             .map(|(i, ty)| format!("c{i} {} NOT NULL", ty.sql()))
             .collect();
-        let pk: Vec<String> = (0..schema.len()).map(|i| format!("c{i}")).collect();
+        let pk: Vec<String> = (0..info.inputs_len).map(|i| format!("c{i}")).collect();
+        let pk_clause = if pk.is_empty() {
+            // 0-input nullary function: PRIMARY KEY () isn't a thing
+            // in DuckDB. Skip the clause; we'll enforce via UNIQUE
+            // not-supported workaround later. For now, accept duplicates
+            // for nullary tables (which we don't yet generate).
+            String::new()
+        } else {
+            format!(", PRIMARY KEY ({})", pk.join(", "))
+        };
         let sql = format!(
-            "CREATE TABLE {name} ({}, ts BIGINT NOT NULL, PRIMARY KEY ({}))",
-            cols.join(", "),
-            pk.join(", "),
+            "CREATE TABLE {name} ({}, ts BIGINT NOT NULL{pk_clause})",
+            col_decls.join(", "),
         );
         self.conn.execute(&sql, [])?;
-        self.functions.insert(
-            name.to_string(),
-            FunctionInfo {
-                schema: schema.to_vec(),
-            },
-        );
+        self.functions.insert(name.to_string(), info);
         Ok(())
     }
 
     /// Compile and store a rule. Compilation produces one SQL
-    /// statement per seminaive variant.
+    /// statement per (variant × action).
     pub fn add_rule(&mut self, rule: Rule) -> Result<()> {
         let compiled = compile::compile_rule(&rule, &self.functions)?;
         self.last_run_at.insert(rule.name.clone(), 0);
@@ -166,8 +228,7 @@ impl EGraph {
         Ok(())
     }
 
-    /// Seed an initial fact. Picks `ts = 0` (everything seeded is
-    /// "from before any iteration"). With the seminaive predicate
+    /// Seed an initial fact at `ts = 0`. With seminaive predicate
     /// `focused.ts >= last_run_at` and `last_run_at` starting at 0,
     /// the first iteration will see all seeded rows.
     pub fn insert(&mut self, name: &str, args: &[Literal]) -> Result<()> {
@@ -175,87 +236,145 @@ impl EGraph {
             .functions
             .get(name)
             .ok_or_else(|| anyhow!("no such function {name}"))?;
-        if args.len() != info.schema.len() {
+        if args.len() != info.arity() {
             return Err(anyhow!(
                 "wrong arity for {name}: got {}, expected {}",
                 args.len(),
-                info.schema.len()
+                info.arity()
             ));
         }
         let placeholders: Vec<String> = (1..=args.len()).map(|i| format!("?{i}")).collect();
         let cols: Vec<String> = (0..args.len()).map(|i| format!("c{i}")).collect();
+        let conflict = conflict_clause(info);
         let sql = format!(
-            "INSERT INTO {name} ({}, ts) VALUES ({}, 0) ON CONFLICT DO NOTHING",
+            "INSERT INTO {name} ({}, ts) VALUES ({}, 0) {conflict}",
             cols.join(", "),
             placeholders.join(", "),
         );
-        // Bind args.
         let params: Vec<&dyn ToSql> = args.iter().map(|a| a as &dyn ToSql).collect();
         self.conn.execute(&sql, params.as_slice())?;
         Ok(())
     }
 
-    /// Run all rules once, then advance bookkeeping. Returns the
-    /// total number of rows inserted across all rules / variants.
+    /// Run all rules once. Returns total rows inserted across rules
+    /// and variants.
     pub fn run_iteration(&mut self) -> Result<usize> {
         self.next_ts += 1;
         let cur = self.next_ts;
-        let mut total_inserted: usize = 0;
-        // Collect (name, last_run_at) so we don't borrow self
-        // mutably across the rule loop.
+        let mut total: usize = 0;
         let last_run_ats: HashMap<String, i64> = self.last_run_at.clone();
         for rule in &self.rules {
             let last = *last_run_ats.get(&rule.name).unwrap_or(&0);
-            for sql in &rule.variants {
-                // `prepare_cached` reuses an LRU-cached plan keyed
-                // by SQL string, so we don't re-plan per iteration.
-                let mut stmt = self.conn.prepare_cached(sql)?;
-                let n = stmt.execute(duckdb::params![last, cur])?;
-                total_inserted += n;
+            for variant in &rule.variants {
+                for sql in variant {
+                    let mut stmt = self.conn.prepare_cached(sql)?;
+                    total += stmt.execute(duckdb::params![last, cur])?;
+                }
             }
             self.last_run_at.insert(rule.name.clone(), cur);
         }
-        Ok(total_inserted)
+        Ok(total)
     }
 
-    /// Run iterations until none of them add any rows. Returns
-    /// `(iterations, final_ts)`.
+    /// Run iterations until no rule adds any rows.
     pub fn run_to_saturation(&mut self) -> Result<(usize, i64)> {
         let mut iters = 0;
         loop {
             iters += 1;
-            let added = self.run_iteration()?;
-            if added == 0 {
+            if self.run_iteration()? == 0 {
                 return Ok((iters, self.next_ts));
             }
         }
     }
 
-    /// Return whether a row exists in the named function.  The check
-    /// matches the row by the supplied arg values; ts is ignored.
+    /// Whether a row matching the given args exists. For functions
+    /// with outputs, you may pass either input-only args (asks "is
+    /// this key present?") or full args including output (asks "is
+    /// this exact row present?").
     pub fn check_exists(&self, name: &str, args: &[Literal]) -> Result<bool> {
         let info = self
             .functions
             .get(name)
             .ok_or_else(|| anyhow!("no such function {name}"))?;
-        if args.len() != info.schema.len() {
-            return Err(anyhow!("wrong arity for {name}"));
+        if args.len() != info.arity() && args.len() != info.inputs_len {
+            return Err(anyhow!(
+                "check_exists arity for {name}: got {}, want {} or {}",
+                args.len(),
+                info.inputs_len,
+                info.arity(),
+            ));
         }
-        let where_parts: Vec<String> = (0..args.len()).map(|i| format!("c{i} = ?{}", i + 1)).collect();
+        let where_parts: Vec<String> = (0..args.len())
+            .map(|i| format!("c{i} = ?{}", i + 1))
+            .collect();
         let sql = format!(
             "SELECT COUNT(*) FROM {name} WHERE {}",
             where_parts.join(" AND "),
         );
         let params: Vec<&dyn ToSql> = args.iter().map(|a| a as &dyn ToSql).collect();
-        let n: i64 = self
-            .conn
-            .query_row(&sql, params.as_slice(), |r| r.get(0))?;
+        let n: i64 = self.conn.query_row(&sql, params.as_slice(), |r| r.get(0))?;
         Ok(n > 0)
     }
 
-    /// Return the total number of rows in the named function.
+    /// Look up the output value of a function for given inputs.
+    /// Returns `None` for missing rows; errors if called on a relation.
+    pub fn lookup_i64(&self, name: &str, inputs: &[Literal]) -> Result<Option<i64>> {
+        let info = self
+            .functions
+            .get(name)
+            .ok_or_else(|| anyhow!("no such function {name}"))?;
+        if !info.has_output() {
+            return Err(anyhow!("{name} is a relation; lookup_i64 not applicable"));
+        }
+        if inputs.len() != info.inputs_len {
+            return Err(anyhow!(
+                "lookup_i64 arity for {name}: got {}, expected {}",
+                inputs.len(),
+                info.inputs_len,
+            ));
+        }
+        if info.cols[info.inputs_len] != ColumnTy::I64 {
+            return Err(anyhow!("{name}'s output is not i64"));
+        }
+        let where_parts: Vec<String> = (0..inputs.len())
+            .map(|i| format!("c{i} = ?{}", i + 1))
+            .collect();
+        let out_col = info.inputs_len;
+        let sql = format!(
+            "SELECT c{out_col} FROM {name} WHERE {}",
+            where_parts.join(" AND "),
+        );
+        let params: Vec<&dyn ToSql> = inputs.iter().map(|a| a as &dyn ToSql).collect();
+        let mut stmt = self.conn.prepare(&sql)?;
+        let mut rows = stmt.query(params.as_slice())?;
+        if let Some(row) = rows.next()? {
+            Ok(Some(row.get(0)?))
+        } else {
+            Ok(None)
+        }
+    }
+
     pub fn count(&self, name: &str) -> Result<i64> {
-        let sql = format!("SELECT COUNT(*) FROM {name}");
-        Ok(self.conn.query_row(&sql, [], |r| r.get(0))?)
+        Ok(self
+            .conn
+            .query_row(&format!("SELECT COUNT(*) FROM {name}"), [], |r| r.get(0))?)
+    }
+}
+
+/// Build the `ON CONFLICT ...` clause for an INSERT into the given
+/// table. Used by both seeding (`EGraph::insert`) and rule-action
+/// codegen (`compile.rs`).
+pub(crate) fn conflict_clause(info: &FunctionInfo) -> String {
+    match info.merge {
+        // Relation: presence-only, conflicts are no-ops.
+        None => "ON CONFLICT DO NOTHING".to_string(),
+        Some(MergeMode::Old) => "ON CONFLICT DO NOTHING".to_string(),
+        Some(MergeMode::New) => {
+            // Update the output and ts on conflict.
+            let out_col = info.inputs_len;
+            format!(
+                "ON CONFLICT DO UPDATE SET c{out_col} = EXCLUDED.c{out_col}, ts = EXCLUDED.ts"
+            )
+        }
     }
 }

@@ -1,41 +1,61 @@
-//! Compile a high-level `Rule` into one SQL string per seminaive
-//! variant.
+//! Compile a high-level `Rule` into one SQL string per (variant ×
+//! action).
 //!
 //! A rule with N function-table atoms produces N variants. Variant i
-//! adds a `WHERE alias_i.ts >= ?1` predicate on the focused atom and
-//! reads the current epoch as `?2`. Both come in as bind parameters
-//! at execution time.
+//! adds `WHERE alias_i.ts >= ?1` on the focused atom and reads the
+//! current epoch as `?2`. Both come in as bind parameters at run
+//! time. Each variant runs all its actions in order on every match.
 
 use anyhow::{Result, anyhow};
 use std::collections::HashMap;
 
-use crate::{Action, Atom, CompiledRule, FunctionInfo, Rule, Term};
+use crate::{Action, Atom, CompiledRule, FunctionInfo, Rule, Term, conflict_clause};
 
 pub(crate) fn compile_rule(
     rule: &Rule,
     functions: &HashMap<String, FunctionInfo>,
 ) -> Result<CompiledRule> {
-    // Validate that every atom references a registered function.
+    // Validate atoms.
     for atom in &rule.body {
         let Atom::Func { name, args } = atom;
         let info = functions
             .get(name)
             .ok_or_else(|| anyhow!("rule {}: unknown function {name}", rule.name))?;
-        if args.len() != info.schema.len() {
+        if args.len() != info.arity() {
             return Err(anyhow!(
                 "rule {}: atom {name} has {} args, expected {}",
                 rule.name,
                 args.len(),
-                info.schema.len()
+                info.arity()
+            ));
+        }
+    }
+    // Validate actions.
+    for action in &rule.actions {
+        let Action::Insert { name, args } = action;
+        let info = functions
+            .get(name)
+            .ok_or_else(|| anyhow!("rule {}: unknown action target {name}", rule.name))?;
+        if args.len() != info.arity() {
+            return Err(anyhow!(
+                "rule {}: action target {name} has {} args, expected {}",
+                rule.name,
+                args.len(),
+                info.arity()
             ));
         }
     }
 
-    // No function atoms → one variant with no focus restriction.
     let function_atom_count = rule.body.len();
     if function_atom_count == 0 {
         return Err(anyhow!(
             "rule {} has no body atoms; not yet supported",
+            rule.name
+        ));
+    }
+    if rule.actions.is_empty() {
+        return Err(anyhow!(
+            "rule {} has no actions; not yet supported",
             rule.name
         ));
     }
@@ -50,68 +70,23 @@ pub(crate) fn compile_rule(
     })
 }
 
+/// Build one SQL string per action in the rule, all sharing the
+/// same FROM/WHERE clauses derived from the body atoms with the
+/// focus on `focus_idx`.
 fn compile_variant(
     rule: &Rule,
     focus: usize,
-    _functions: &HashMap<String, FunctionInfo>,
-) -> Result<String> {
-    // Strategy:
-    // 1. Each body atom becomes a table reference in the FROM clause
-    //    with alias `t<idx>`.
-    // 2. Variables are resolved to `t<idx>.c<col>` using the FIRST
-    //    atom that mentions them; later occurrences become equality
-    //    constraints in the WHERE clause.
-    // 3. Literal arguments in body atoms become equality constraints.
-    // 4. The focused atom adds `t<focus>.ts >= ?1`.
-    // 5. Each action becomes one `INSERT INTO ... SELECT ... ON
-    //    CONFLICT DO NOTHING`. We emit one SQL string per variant
-    //    that runs all actions; if there are multiple actions, we
-    //    chain them with `;`.
+    functions: &HashMap<String, FunctionInfo>,
+) -> Result<Vec<String>> {
+    let (from, where_clause, binding) = build_query(rule, focus)?;
 
-    let mut binding: HashMap<String, String> = HashMap::new(); // var -> "tN.cM"
-    let mut from_parts: Vec<String> = Vec::new();
-    let mut where_parts: Vec<String> = Vec::new();
-
-    for (i, atom) in rule.body.iter().enumerate() {
-        let Atom::Func { name, args } = atom;
-        let alias = format!("t{i}");
-        from_parts.push(format!("{name} {alias}"));
-        for (col, term) in args.iter().enumerate() {
-            let lhs = format!("{alias}.c{col}");
-            match term {
-                Term::Var(v) => match binding.get(v) {
-                    None => {
-                        binding.insert(v.clone(), lhs.clone());
-                    }
-                    Some(prev) => {
-                        where_parts.push(format!("{prev} = {lhs}"));
-                    }
-                },
-                Term::Lit(l) => {
-                    where_parts.push(format!("{lhs} = {}", lit_sql(l)));
-                }
-            }
-        }
-    }
-
-    // Focus predicate.
-    where_parts.push(format!("t{focus}.ts >= ?1"));
-
-    let from = from_parts.join(", ");
-    let where_clause = if where_parts.is_empty() {
-        String::new()
-    } else {
-        format!(" WHERE {}", where_parts.join(" AND "))
-    };
-
-    // Build the inserts. With multiple actions we join them with `;`
-    // — DuckDB executes them in order.
-    let mut inserts: Vec<String> = Vec::new();
+    let mut sqls = Vec::with_capacity(rule.actions.len());
     for action in &rule.actions {
         let Action::Insert {
             name: target,
             args: targs,
         } = action;
+        let info = &functions[target];
         let select_cols: Vec<String> = targs
             .iter()
             .map(|t| match t {
@@ -126,27 +101,53 @@ fn compile_variant(
         // ?2 is :next_ts.
         let select_list = format!("{}, ?2", select_cols.join(", "));
         let insert_cols = format!("{}, ts", target_cols.join(", "));
-        inserts.push(format!(
-            "INSERT INTO {target} ({insert_cols}) SELECT {select_list} FROM {from}{where_clause} ON CONFLICT DO NOTHING"
+        let conflict = conflict_clause(info);
+        sqls.push(format!(
+            "INSERT INTO {target} ({insert_cols}) SELECT {select_list} FROM {from}{where_clause} {conflict}"
         ));
     }
-    if inserts.is_empty() {
-        return Err(anyhow!(
-            "rule {} has no actions; not yet supported",
-            rule.name
-        ));
+    Ok(sqls)
+}
+
+/// Walk the body atoms and produce `(from_clause, where_clause,
+/// var_binding)`. The first occurrence of each variable defines its
+/// binding location (`tN.cM`); later occurrences become `=`
+/// constraints. Literal arguments become `=` constraints. The
+/// focused atom contributes a `tFOCUS.ts >= ?1` predicate.
+fn build_query(
+    rule: &Rule,
+    focus: usize,
+) -> Result<(String, String, HashMap<String, String>)> {
+    let mut binding: HashMap<String, String> = HashMap::new();
+    let mut from_parts: Vec<String> = Vec::new();
+    let mut where_parts: Vec<String> = Vec::new();
+
+    for (i, atom) in rule.body.iter().enumerate() {
+        let Atom::Func { name, args } = atom;
+        let alias = format!("t{i}");
+        from_parts.push(format!("{name} {alias}"));
+        for (col, term) in args.iter().enumerate() {
+            let lhs = format!("{alias}.c{col}");
+            match term {
+                Term::Var(v) => match binding.get(v) {
+                    None => {
+                        binding.insert(v.clone(), lhs);
+                    }
+                    Some(prev) => {
+                        where_parts.push(format!("{prev} = {lhs}"));
+                    }
+                },
+                Term::Lit(l) => {
+                    where_parts.push(format!("{lhs} = {}", lit_sql(l)));
+                }
+            }
+        }
     }
-    // Multiple actions in the same statement: chain with `;`. DuckDB
-    // accepts batch statements via `execute_batch`, but `prepare` is
-    // single-statement, so for now restrict to one action per rule.
-    if inserts.len() > 1 {
-        return Err(anyhow!(
-            "rule {} has {} actions; multi-action rules not yet supported (todo: split into multiple prepared statements)",
-            rule.name,
-            inserts.len()
-        ));
-    }
-    Ok(inserts.into_iter().next().unwrap())
+    where_parts.push(format!("t{focus}.ts >= ?1"));
+
+    let from = from_parts.join(", ");
+    let where_clause = format!(" WHERE {}", where_parts.join(" AND "));
+    Ok((from, where_clause, binding))
 }
 
 fn lit_sql(l: &crate::Literal) -> String {

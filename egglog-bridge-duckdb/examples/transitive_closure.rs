@@ -14,8 +14,8 @@ fn main() -> Result<()> {
         .unwrap_or(100);
 
     let mut eg = EGraph::new()?;
-    eg.add_function("edge", &[ColumnTy::I64, ColumnTy::I64])?;
-    eg.add_function("path", &[ColumnTy::I64, ColumnTy::I64])?;
+    eg.add_relation("edge", &[ColumnTy::I64, ColumnTy::I64])?;
+    eg.add_relation("path", &[ColumnTy::I64, ColumnTy::I64])?;
 
     // (rule ((edge a b)) ((path a b)) :name "base")
     eg.add_rule(Rule {
