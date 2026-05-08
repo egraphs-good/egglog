@@ -1009,6 +1009,14 @@ dependencies = [
 ]
 
 [[package]]
+name = "egglog-bridge-duckdb"
+version = "2.0.0"
+dependencies = [
+ "anyhow",
+ "duckdb",
+]
+
+[[package]]
 name = "egglog-concurrency"
 version = "2.0.0"
 dependencies = [

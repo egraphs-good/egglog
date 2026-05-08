@@ -6,6 +6,7 @@ members = [
   "duckdb-spike",
   "egglog-ast",
   "egglog-bridge",
+  "egglog-bridge-duckdb",
   "numeric-id",
   "union-find",
   "src/sort/add_primitive",

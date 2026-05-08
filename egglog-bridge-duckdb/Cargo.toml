@@ -1,0 +1,15 @@
+[package]
+name = "egglog-bridge-duckdb"
+version.workspace = true
+edition.workspace = true
+description = "DuckDB-backed executor for egglog's resolved IR (Phase 1 of the DuckDB backend; see ../duckdb-backend-plan.md)"
+license.workspace = true
+publish = false
+
+[dependencies]
+duckdb = { version = "1.5", features = ["bundled"] }
+anyhow = "1"
+
+[[example]]
+name = "transitive_closure"
+path = "examples/transitive_closure.rs"
