@@ -58,8 +58,14 @@ pub struct Ctx {
     /// Constructor name → numeric tag (assigned in declaration order).
     /// Used to build Skolem records when inlining let-bindings.
     pub tag_of: HashMap<String, i64>,
-    /// Set of sort names we've seen. v0 collapses all sorts to a single
-    /// `Math` record type.
+    /// User-defined sort names (where `unionable=true` or `uf=Some(_)`).
+    /// All user sorts collapse to the single Math record type in v0.
+    /// Internal helper sorts (e.g. `__view`) are distinguished so that
+    /// constructors targeting them get a regular `.decl` instead of being
+    /// treated as records — the helper-marker pattern (e.g.
+    /// `__to_delete_Add`) needs a real relation we can read and negate.
+    pub user_sorts: std::collections::HashSet<String>,
+    /// Set of sort names we've seen.
     pub sorts: Vec<String>,
     /// Globals: 0-arg functions whose value was set at the top level.
     /// When we see `(set (g) X)` for a 0-arg function `g`, record
@@ -69,6 +75,11 @@ pub struct Ctx {
     /// 0-arg function declarations seen — needed so we know to look up
     /// their values when we see them in expressions.
     pub zero_arg_funcs: std::collections::HashSet<String>,
+    /// Relation arities — used to pad body atoms with wildcards when the
+    /// egglog source specifies fewer args than the Souffle relation has
+    /// columns (egglog's `(R a b)` body fact doesn't include the output
+    /// column, but Souffle requires every column matched explicitly).
+    pub relation_arity: HashMap<String, usize>,
     /// Drain entries: target_relation → list of (helper_relation, arity).
     /// Each helper acts as a filter for the live view: the live view excludes
     /// rows whose key is in any of the helper relations. Two patterns are
@@ -142,12 +153,19 @@ fn ensure_helpers(ctx: &mut Ctx, p: &mut Program) {
     if ctx.emitted_helpers {
         return;
     }
+    // v0 schema: every "term ID" is a record [tag, a, b, n] of numbers.
+    // - i64 constructor args land directly in `a` / `b` / `n` as numbers.
+    // - For nested constructor args (e.g., (Add (Add 1 2) ...)), wrap the
+    //   inner record with `ord(...)` to get a stable numeric handle (the
+    //   record table interns identical structures to the same ord).
+    // This trades off some type-safety for a uniform-typed schema that
+    // accepts both i64 literals and structural sub-record references.
     p.types.push(TypeDecl {
         name: MATH.into(),
         kind: TypeKind::Record(vec![
             ("tag".into(), "number".into()),
-            ("a".into(), MATH.into()),
-            ("b".into(), MATH.into()),
+            ("a".into(), "number".into()),
+            ("b".into(), "number".into()),
             ("n".into(), "number".into()),
         ]),
     });
@@ -161,18 +179,40 @@ fn translate_command(
 ) -> Result<(), TranslateError> {
     use ResolvedCommand as C;
     match cmd {
-        C::Sort { name, .. } => {
+        C::Sort { name, uf, .. } => {
             ensure_helpers(ctx, p);
             ctx.sorts.push(name.to_string());
+            // User sorts have a `:internal-uf` annotation set by the term
+            // encoding; internal helper sorts (like __view) don't. Track
+            // user sorts so we can decide whether a constructor's output
+            // means "this is a term-record" or "this is a helper relation".
+            if uf.is_some() {
+                ctx.user_sorts.insert(name.to_string());
+            }
             Ok(())
         }
         C::Constructor { name, schema, .. } => {
             ensure_helpers(ctx, p);
-            let tag = ctx.tag_of.len() as i64;
-            ctx.tag_of.insert(name.to_string(), tag);
-            // Record arity for build_record_for_tag (currently re-derived
-            // from args at use site, but we could cache it here).
-            let _ = schema;
+            // Constructors targeting a user sort (e.g. Math) are term
+            // constructors — record their tag and skip emitting a .decl.
+            // Constructors targeting an internal helper sort (e.g. __view,
+            // for `__to_delete_<C>`) are helper relations — emit a .decl
+            // for the input columns so the live-view rule can negate
+            // against them.
+            if ctx.user_sorts.contains(schema.output.as_str()) {
+                let tag = ctx.tag_of.len() as i64;
+                ctx.tag_of.insert(name.to_string(), tag);
+            } else {
+                // Helper relation. Use the constructor's INPUT columns as
+                // the relation's columns (the output column is the helper
+                // sort, which we don't model — it's just a marker).
+                let mut cols = vec![];
+                for (i, sort) in schema.input.iter().enumerate() {
+                    cols.push((format!("c{i}"), sort_to_souffle_type(sort.as_str())));
+                }
+                ctx.relation_arity.insert(name.to_string(), cols.len());
+                p.relations.push(RelationDecl { name: name.to_string(), columns: cols });
+            }
             Ok(())
         }
         C::Function { name, schema, .. } => {
@@ -185,6 +225,7 @@ fn translate_command(
             }
             // Other functions (UF, view tables, etc.) become Souffle relations.
             let cols = function_columns(schema, ctx)?;
+            ctx.relation_arity.insert(name.to_string(), cols.len());
             p.relations.push(RelationDecl {
                 name: name.to_string(),
                 columns: cols,
@@ -306,7 +347,12 @@ fn translate_rule(
             }
             GenericAction::Set(_, head, args, val) => {
                 // Detect ordering-max/min in any arg or val. If present,
-                // produce two variants of this set.
+                // produce two variants of this set — one per direction.
+                // Special case: if both operands of ordering-max/min are
+                // syntactically the same expression (a self-loop pattern,
+                // e.g. `(ordering-max v v)`), the comparison ord(v) > ord(v)
+                // is always false. Skip expansion and just substitute both
+                // ordering-max and ordering-min with the operand.
                 let pair = first_ordering_pair_in_args(args, val);
                 let variants: Vec<(Vec<ResolvedExpr>, ResolvedExpr, Vec<IrLit>)> = if let Some(
                     (a, b),
@@ -317,26 +363,37 @@ fn translate_rule(
                     let bv = translate_value_expr(&b, ctx)?;
                     let av = substitute(&av, &lets);
                     let bv = substitute(&bv, &lets);
-                    let guard_a_max = IrLit::Constraint(
-                        BinaryOp::Gt,
-                        Expr::Ord(Box::new(av.clone())),
-                        Expr::Ord(Box::new(bv.clone())),
-                    );
-                    let guard_b_max = IrLit::Constraint(
-                        BinaryOp::Gt,
-                        Expr::Ord(Box::new(bv.clone())),
-                        Expr::Ord(Box::new(av.clone())),
-                    );
-                    let args_a_max: Vec<ResolvedExpr> =
-                        args.iter().map(|x| rewrite_ordering(x, &a, &b)).collect();
-                    let val_a_max = rewrite_ordering(val, &a, &b);
-                    let args_b_max: Vec<ResolvedExpr> =
-                        args.iter().map(|x| rewrite_ordering(x, &b, &a)).collect();
-                    let val_b_max = rewrite_ordering(val, &b, &a);
-                    vec![
-                        (args_a_max, val_a_max, vec![guard_a_max]),
-                        (args_b_max, val_b_max, vec![guard_b_max]),
-                    ]
+                    // Self-loop: ordering-max/min applied to the same value
+                    // (a == b post-translation). Skip expansion; just
+                    // substitute both with `a`. This avoids generating
+                    // ord(v) > ord(v) guards that are never satisfiable.
+                    if av == bv {
+                        let args_v: Vec<ResolvedExpr> =
+                            args.iter().map(|x| rewrite_ordering(x, &a, &a)).collect();
+                        let val_v = rewrite_ordering(val, &a, &a);
+                        vec![(args_v, val_v, vec![])]
+                    } else {
+                        let guard_a_max = IrLit::Constraint(
+                            BinaryOp::Gt,
+                            Expr::Ord(Box::new(av.clone())),
+                            Expr::Ord(Box::new(bv.clone())),
+                        );
+                        let guard_b_max = IrLit::Constraint(
+                            BinaryOp::Gt,
+                            Expr::Ord(Box::new(bv.clone())),
+                            Expr::Ord(Box::new(av.clone())),
+                        );
+                        let args_a_max: Vec<ResolvedExpr> =
+                            args.iter().map(|x| rewrite_ordering(x, &a, &b)).collect();
+                        let val_a_max = rewrite_ordering(val, &a, &b);
+                        let args_b_max: Vec<ResolvedExpr> =
+                            args.iter().map(|x| rewrite_ordering(x, &b, &a)).collect();
+                        let val_b_max = rewrite_ordering(val, &b, &a);
+                        vec![
+                            (args_a_max, val_a_max, vec![guard_a_max]),
+                            (args_b_max, val_b_max, vec![guard_b_max]),
+                        ]
+                    }
                 } else {
                     vec![(args.to_vec(), val.clone(), vec![])]
                 };
@@ -738,7 +795,9 @@ fn translate_eq_fact(
 }
 
 /// Build a Souffle atom for `(R args)` — for body facts where R is a relation.
-/// All args are translated as values; R has no implicit output binding.
+/// Translates each arg, then pads with wildcards if the relation has more
+/// columns than the egglog source specified (egglog's `(R a b)` body fact
+/// doesn't include the output column).
 fn build_atom(
     relation: &str,
     args: &[ResolvedExpr],
@@ -747,6 +806,11 @@ fn build_atom(
     let mut souffle_args = Vec::with_capacity(args.len());
     for a in args {
         souffle_args.push(translate_value_expr(a, ctx)?);
+    }
+    if let Some(&arity) = ctx.relation_arity.get(relation) {
+        while souffle_args.len() < arity {
+            souffle_args.push(Expr::Wildcard);
+        }
     }
     Ok(Atom { relation: relation.to_string(), args: souffle_args })
 }
@@ -814,27 +878,50 @@ fn build_record_for_tag(
     args: &[ResolvedExpr],
     ctx: &mut Ctx,
 ) -> Result<Expr, TranslateError> {
-    // Same shape as in our examples: [tag, a, b, n]
+    // Wrap a Record arg in ord(...) so it fits into a number-typed column.
+    fn as_num(e: Expr) -> Expr {
+        if matches!(e, Expr::Record(_)) {
+            Expr::Ord(Box::new(e))
+        } else {
+            e
+        }
+    }
+    // [tag, a, b, n] of numbers. Args land in a/b for arity ≤ 2;
+    // single-arg constructors with i64 args put the value in n.
     match args.len() {
         0 => Ok(Expr::Record(vec![
             Expr::Number(tag),
-            Expr::Nil,
-            Expr::Nil,
+            Expr::Number(0),
+            Expr::Number(0),
             Expr::Number(0),
         ])),
         1 => {
-            // If the single arg is an i64 lit, put it in the n column.
             let a = translate_value_expr(&args[0], ctx)?;
             if matches!(a, Expr::Number(_)) {
-                Ok(Expr::Record(vec![Expr::Number(tag), Expr::Nil, Expr::Nil, a]))
+                Ok(Expr::Record(vec![
+                    Expr::Number(tag),
+                    Expr::Number(0),
+                    Expr::Number(0),
+                    a,
+                ]))
             } else {
-                Ok(Expr::Record(vec![Expr::Number(tag), a, Expr::Nil, Expr::Number(0)]))
+                Ok(Expr::Record(vec![
+                    Expr::Number(tag),
+                    as_num(a),
+                    Expr::Number(0),
+                    Expr::Number(0),
+                ]))
             }
         }
         2 => {
             let a = translate_value_expr(&args[0], ctx)?;
             let b = translate_value_expr(&args[1], ctx)?;
-            Ok(Expr::Record(vec![Expr::Number(tag), a, b, Expr::Number(0)]))
+            Ok(Expr::Record(vec![
+                Expr::Number(tag),
+                as_num(a),
+                as_num(b),
+                Expr::Number(0),
+            ]))
         }
         n => Err(TranslateError::Unsupported(format!(
             "constructor arity {n} > 2 in v0"

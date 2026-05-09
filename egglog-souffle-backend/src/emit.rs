@@ -11,6 +11,17 @@ pub fn emit(program: &Program) -> String {
     out
 }
 
+/// Souffle disallows `@` (and other characters) in identifiers, but egglog's
+/// term encoding generates internal names like `@UF_Math` and `@to_delete_Add`.
+/// Map every `@`-prefixed name to a Souffle-safe `Eg_` prefix.
+fn sanitize(name: &str) -> String {
+    if let Some(rest) = name.strip_prefix('@') {
+        format!("Eg_{rest}")
+    } else {
+        name.to_string()
+    }
+}
+
 fn emit_into(out: &mut String, program: &Program) -> std::fmt::Result {
     // Pragmas first — they affect global config.
     for (k, v) in &program.pragmas {
@@ -54,12 +65,12 @@ fn emit_into(out: &mut String, program: &Program) -> std::fmt::Result {
 fn emit_type(out: &mut String, ty: &TypeDecl) -> std::fmt::Result {
     match &ty.kind {
         TypeKind::Record(fields) => {
-            write!(out, ".type {} = [", ty.name)?;
+            write!(out, ".type {} = [", sanitize(&ty.name))?;
             for (i, (n, t)) in fields.iter().enumerate() {
                 if i > 0 {
                     write!(out, ", ")?;
                 }
-                write!(out, "{n}: {t}")?;
+                write!(out, "{n}: {}", sanitize(t))?;
             }
             writeln!(out, "]")?;
         }
@@ -68,12 +79,12 @@ fn emit_type(out: &mut String, ty: &TypeDecl) -> std::fmt::Result {
 }
 
 fn emit_relation_decl(out: &mut String, rel: &RelationDecl) -> std::fmt::Result {
-    write!(out, ".decl {}(", rel.name)?;
+    write!(out, ".decl {}(", sanitize(&rel.name))?;
     for (i, (n, t)) in rel.columns.iter().enumerate() {
         if i > 0 {
             write!(out, ", ")?;
         }
-        write!(out, "{n}: {t}")?;
+        write!(out, "{n}: {}", sanitize(t))?;
     }
     writeln!(out, ")")?;
     Ok(())
@@ -81,9 +92,9 @@ fn emit_relation_decl(out: &mut String, rel: &RelationDecl) -> std::fmt::Result 
 
 fn emit_directive(out: &mut String, d: &Directive) -> std::fmt::Result {
     match d {
-        Directive::PrintSize(r) => writeln!(out, ".printsize {r}"),
+        Directive::PrintSize(r) => writeln!(out, ".printsize {}", sanitize(r)),
         Directive::Output { relation, params } => {
-            write!(out, ".output {relation}")?;
+            write!(out, ".output {}", sanitize(relation))?;
             if !params.is_empty() {
                 write!(out, "(")?;
                 for (i, (k, v)) in params.iter().enumerate() {
@@ -97,10 +108,10 @@ fn emit_directive(out: &mut String, d: &Directive) -> std::fmt::Result {
             writeln!(out)
         }
         Directive::LimitIterations { relation, n } => {
-            writeln!(out, ".limititerations {relation}(n={n})")
+            writeln!(out, ".limititerations {}(n={n})", sanitize(relation))
         }
         Directive::Snapshot { snap, source } => {
-            writeln!(out, ".snapshot {snap}(of = \"{source}\")")
+            writeln!(out, ".snapshot {}(of = \"{}\")", sanitize(snap), sanitize(source))
         }
     }
 }
@@ -139,7 +150,7 @@ fn emit_body(out: &mut String, body: &[Literal]) -> std::fmt::Result {
 }
 
 fn emit_atom(out: &mut String, atom: &Atom) -> std::fmt::Result {
-    write!(out, "{}(", atom.relation)?;
+    write!(out, "{}(", sanitize(&atom.relation))?;
     for (i, e) in atom.args.iter().enumerate() {
         if i > 0 {
             write!(out, ", ")?;
@@ -174,7 +185,7 @@ fn emit_literal(out: &mut String, lit: &Literal) -> std::fmt::Result {
 
 fn emit_expr(out: &mut String, e: &Expr) -> std::fmt::Result {
     match e {
-        Expr::Var(s) => write!(out, "{s}"),
+        Expr::Var(s) => write!(out, "{}", sanitize(s)),
         Expr::Wildcard => write!(out, "_"),
         Expr::Number(n) => write!(out, "{n}"),
         Expr::Symbol(s) => write!(out, "\"{s}\""),
@@ -190,9 +201,18 @@ fn emit_expr(out: &mut String, e: &Expr) -> std::fmt::Result {
             write!(out, "]")
         }
         Expr::Ord(inner) => {
-            write!(out, "ord(")?;
-            emit_expr(out, inner)?;
-            write!(out, ")")
+            // Souffle requires a type annotation when `ord`'s argument is a
+            // bare record literal — otherwise the record's type can't be
+            // inferred from context. Cast to the universal Math type.
+            if matches!(inner.as_ref(), Expr::Record(_)) {
+                write!(out, "ord(as(")?;
+                emit_expr(out, inner)?;
+                write!(out, ", Math))")
+            } else {
+                write!(out, "ord(")?;
+                emit_expr(out, inner)?;
+                write!(out, ")")
+            }
         }
     }
 }
