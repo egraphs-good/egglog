@@ -513,6 +513,7 @@ dependencies = [
  "egglog-core-relations",
  "egglog-numeric-id",
  "egglog-reports",
+ "egglog-souffle-backend",
  "egraph-serialize",
  "env_logger",
  "glob",

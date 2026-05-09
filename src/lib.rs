@@ -25,6 +25,7 @@ mod proofs;
 pub mod scheduler;
 mod serialize;
 pub mod sort;
+pub mod souffle_translator;
 mod termdag;
 mod typechecking;
 pub mod util;
