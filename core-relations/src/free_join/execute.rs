@@ -131,13 +131,41 @@ impl SparseColumnIndex {
             };
         }
 
-        // General path (unchanged below this point)
+        // General path: 2..=8 rows.
+        // Try to downcast to SortedWritesTable and read values directly, bypassing
+        // the vtable → downcast → scan_generic → iterator → dyn-closure chain that
+        // for_each_col goes through (6 indirection layers per row).
         let mut rows = [(Value::new_const(0), RowId::new_const(0)); SMALL_RESIDUAL];
         let mut pos = 0;
-        table.for_each_col(subset, col, &mut |row_id, val| {
-            rows[pos] = (val, row_id);
-            pos += 1;
-        });
+
+        if let Some(swt) = table.inner_as_any().downcast_ref::<SortedWritesTable>() {
+            match subset {
+                SubsetRef::Dense(r) => {
+                    for row_idx in r.start.index()..r.end.index() {
+                        let row = RowId::from_usize(row_idx);
+                        // SAFETY: row is in [start, end) of the table-bounded subset.
+                        if let Some(val) = unsafe { swt.read_value_at_row_unchecked(row, col) } {
+                            rows[pos] = (val, row);
+                            pos += 1;
+                        }
+                    }
+                }
+                SubsetRef::Sparse(s) => {
+                    for &row in s.inner() {
+                        // SAFETY: rows in a SubsetRef are bounded by the table's row count.
+                        if let Some(val) = unsafe { swt.read_value_at_row_unchecked(row, col) } {
+                            rows[pos] = (val, row);
+                            pos += 1;
+                        }
+                    }
+                }
+            }
+        } else {
+            table.for_each_col(subset, col, &mut |row_id, val| {
+                rows[pos] = (val, row_id);
+                pos += 1;
+            });
+        }
         let n_subsets = pos;
 
         rows[..pos].sort_unstable();
