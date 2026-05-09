@@ -59,6 +59,14 @@ pub struct Ctx {
     /// Set of sort names we've seen. v0 collapses all sorts to a single
     /// `Math` record type.
     pub sorts: Vec<String>,
+    /// Globals: 0-arg functions whose value was set at the top level.
+    /// When we see `(set (g) X)` for a 0-arg function `g`, record
+    /// `g -> translated(X)` here. Later expressions referencing `(g)` are
+    /// inlined to the recorded value.
+    pub globals: HashMap<String, Expr>,
+    /// 0-arg function declarations seen — needed so we know to look up
+    /// their values when we see them in expressions.
+    pub zero_arg_funcs: std::collections::HashSet<String>,
     /// Whether the `Math` type and Term/UF helper relations have been emitted.
     emitted_helpers: bool,
 }
@@ -115,7 +123,13 @@ fn translate_command(
         }
         C::Function { name, schema, .. } => {
             ensure_helpers(ctx, p);
-            // Functions (UF, view tables, etc.) become Souffle relations.
+            // 0-arg functions are globals — track them so we know to inline
+            // their values rather than emitting a relation.
+            if schema.input.is_empty() {
+                ctx.zero_arg_funcs.insert(name.to_string());
+                return Ok(());
+            }
+            // Other functions (UF, view tables, etc.) become Souffle relations.
             let cols = function_columns(schema, ctx)?;
             p.relations.push(RelationDecl {
                 name: name.to_string(),
@@ -126,9 +140,20 @@ fn translate_command(
         C::AddRuleset(..) | C::UnstableCombinedRuleset(..) => Ok(()),
         C::Rule { rule } => translate_rule(rule, ctx, p),
         C::Action(action) => {
-            // Top-level action — wrap in a degenerate rule (empty body) and
-            // reuse translate_rule's logic so ordering-max/min expansion
-            // and delete+set pairing apply uniformly.
+            // Special case: top-level `(set (g) X)` where `g` is a 0-arg
+            // function recorded as a global — capture X into ctx.globals
+            // for later inlining; don't emit a Souffle rule.
+            if let GenericAction::Set(_, head, args, val) = action
+                && args.is_empty()
+                && ctx.zero_arg_funcs.contains(head.name())
+            {
+                let v = translate_value_expr(val, ctx)?;
+                ctx.globals.insert(head.name().to_string(), v);
+                return Ok(());
+            }
+            // Otherwise wrap in a degenerate rule (empty body) and reuse
+            // translate_rule's logic so ordering-max/min expansion and
+            // delete+set pairing apply uniformly.
             let span = match action {
                 GenericAction::Let(s, _, _)
                 | GenericAction::Set(s, _, _, _)
@@ -447,17 +472,44 @@ fn translate_fact_expr(
                 Ok(())
             }
             ResolvedCall::Primitive(prim) => {
-                if prim.name() == "!=" && args.len() == 2 {
+                let name = prim.name();
+                if name == "!=" && args.len() == 2 {
                     let a = translate_value_expr(&args[0], ctx)?;
                     let b = translate_value_expr(&args[1], ctx)?;
                     out.push(IrLit::Constraint(BinaryOp::Ne, a, b));
-                    Ok(())
-                } else {
-                    Err(TranslateError::Unsupported(format!(
-                        "body primitive not yet supported: {}",
-                        prim.name()
-                    )))
+                    return Ok(());
                 }
+                if name == "guard" && args.len() == 1 {
+                    // (guard expr) — recurse into expr as a body fact.
+                    return translate_fact_expr(&args[0], ctx, out);
+                }
+                if name == "or" {
+                    // (or e1 e2 ...) — boolean OR primitive (sort/bool.rs).
+                    // In a guard body, this evaluates to true iff any disjunct
+                    // is true. Souffle has no boolean-OR in rule bodies; for
+                    // multi-disjunct cases we'd need to fan out a separate
+                    // rule per disjunct. v0: handle only the single-disjunct
+                    // case, which is what the encoded form produces today
+                    // (the `(or (bool-!= ...))` shape).
+                    if args.len() == 1 {
+                        return translate_fact_expr(&args[0], ctx, out);
+                    }
+                    return Err(TranslateError::Unsupported(format!(
+                        "boolean or with {} disjuncts in body (would need rule fan-out)",
+                        args.len()
+                    )));
+                }
+                if name == "bool-!=" && args.len() == 2 {
+                    // bool-!= returns true iff a != b. As a body fact, it's
+                    // the same as the != constraint.
+                    let a = translate_value_expr(&args[0], ctx)?;
+                    let b = translate_value_expr(&args[1], ctx)?;
+                    out.push(IrLit::Constraint(BinaryOp::Ne, a, b));
+                    return Ok(());
+                }
+                Err(TranslateError::Unsupported(format!(
+                    "body primitive not yet supported: {name}"
+                )))
             }
         }
     } else {
@@ -574,20 +626,29 @@ fn translate_value_expr(
         GenericExpr::Call(_, head, args) => {
             // Constructor call → inline record [tag, args...]
             if let Some(&tag) = ctx.tag_of.get(head.name()) {
-                build_record_for_tag(tag, args, ctx)
-            } else if let ResolvedCall::Primitive(prim) = head {
-                // Handle ordering-max / ordering-min as ord() comparisons —
-                // these are used for deterministic union direction in the
-                // encoded form. For now, return Unsupported; we'll handle
-                // these specially when we encounter them in actions.
+                return build_record_for_tag(tag, args, ctx);
+            }
+            // 0-arg global lookup: inline the recorded value.
+            if args.is_empty() && ctx.zero_arg_funcs.contains(head.name()) {
+                if let Some(val) = ctx.globals.get(head.name()) {
+                    return Ok(val.clone());
+                }
+                // Function declared but not yet set — refuse for now;
+                // ordering-of-commands ought to always set first.
+                return Err(TranslateError::Unsupported(format!(
+                    "global {} referenced before its value was set",
+                    head.name()
+                )));
+            }
+            if let ResolvedCall::Primitive(prim) = head {
                 Err(TranslateError::Unsupported(format!(
                     "value-position primitive: {}",
                     prim.name()
                 )))
             } else {
-                // Function call in value position — e.g., `(__UF_Mathf c)` —
-                // can't be a value in plain Datalog; would need to be lifted
-                // to a body fact. v0: refuse.
+                // Function call in value position — e.g., `(__UF_Mathf c)`.
+                // Plain Datalog can't have functions in value positions;
+                // would need to lift to a body fact. v0: refuse.
                 Err(TranslateError::Unsupported(format!(
                     "function in value position: {}",
                     head.name()
@@ -637,67 +698,6 @@ fn substitute(e: &Expr, lets: &HashMap<String, Expr>) -> Expr {
         Expr::Record(fields) => Expr::Record(fields.iter().map(|f| substitute(f, lets)).collect()),
         Expr::Ord(inner) => Expr::Ord(Box::new(substitute(inner, lets))),
         _ => e.clone(),
-    }
-}
-
-/// Translate one rule action. Some actions only mutate the let-binding map
-/// (returning no clauses); others emit one or more Souffle clauses.
-fn translate_action(
-    action: &ResolvedAction,
-    lets: &mut HashMap<String, Expr>,
-    body: &[IrLit],
-    ctx: &mut Ctx,
-) -> Result<Vec<Clause>, TranslateError> {
-    match action {
-        GenericAction::Let(_, var, expr) => {
-            // The let mints a Skolem record. Inline at use sites.
-            let val = translate_value_expr(expr, ctx)?;
-            // Apply let-bindings to the result so chained lets work.
-            let val = substitute(&val, lets);
-            lets.insert(var.name.to_string(), val);
-            Ok(vec![])
-        }
-        GenericAction::Set(_, head, args, val) => {
-            let mut souffle_args = Vec::with_capacity(args.len() + 1);
-            for a in args {
-                let e = translate_value_expr(a, ctx)?;
-                souffle_args.push(substitute(&e, lets));
-            }
-            let val_e = translate_value_expr(val, ctx)?;
-            souffle_args.push(substitute(&val_e, lets));
-            let head_atom = Atom {
-                relation: head.name().to_string(),
-                args: souffle_args,
-            };
-            // Apply let substitution to body too (in case body literals
-            // mention names that got rebound — rare but possible).
-            let body_subst: Vec<IrLit> = body.iter().map(|l| substitute_literal(l, lets)).collect();
-            Ok(vec![Clause::rule(head_atom, body_subst)])
-        }
-        GenericAction::Change(_, change_kind, head, args) => {
-            // Both Delete and Subsume → Souffle subsumption rule that removes
-            // the matching tuple. Without a "more general" tuple to dominate,
-            // this is the tombstone-style deletion: the rule body says when
-            // to delete, but we need to dominate by something.
-            //
-            // For v0, a single-relation subsumption removes the row by being
-            // dominated by ITSELF (no-op) — that's wrong. The real fix is
-            // tombstone-via-helper-relation. Mark unsupported until we get
-            // the helper-relation pattern wired up.
-            let _ = (change_kind, head, args, lets, body, ctx);
-            Err(TranslateError::Unsupported(
-                "delete/subsume actions need tombstone-relation support (TODO)".into(),
-            ))
-        }
-        GenericAction::Union(..) => Err(TranslateError::Unsupported(
-            "union should be lowered to set in encoded form".into(),
-        )),
-        GenericAction::Panic(..) => Err(TranslateError::Unsupported("panic action".into())),
-        GenericAction::Expr(_, _) => {
-            // Expression-statement at action position — evaluating an
-            // expression for side effects. v0: skip.
-            Ok(vec![])
-        }
     }
 }
 
