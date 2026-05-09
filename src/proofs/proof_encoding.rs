@@ -22,6 +22,12 @@ pub(crate) struct EncodingState {
     /// sort in proof mode), drop its maintenance ruleset, and rewrite the
     /// rebuild rule to query `__UF_<Sort>` directly. See souffle-backend-plan.md.
     pub souffle_compat: bool,
+    /// Extends `souffle_compat` with the buffer/canon/snap strata split
+    /// described in souffle-strata-design.md. Required to faithfully
+    /// preserve `(run N)` semantics when running through the Souffle
+    /// backend. Implementation is incremental — flag is plumbed through
+    /// today; the encoder rewrite lands in follow-ups.
+    pub souffle_compat_strata: bool,
     pub proof_names: EncodingNames,
 }
 
@@ -37,6 +43,7 @@ impl EncodingState {
             proof_names: EncodingNames::new(symbol_gen),
             proof_testing: false,
             souffle_compat: false,
+            souffle_compat_strata: false,
         }
     }
 }

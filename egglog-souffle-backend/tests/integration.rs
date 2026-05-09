@@ -25,7 +25,11 @@ fn run_souffle(source: &str) -> Result<String, String> {
     let dir = tempdir();
     let dl_path = format!("{dir}/program.dl");
     std::fs::write(&dl_path, source).map_err(|e| format!("write: {e}"))?;
-    let output = Command::new(&bin)
+    // Hard 10-second timeout to keep an emitted program that fails to
+    // terminate from eating the machine.
+    let output = Command::new("timeout")
+        .arg("10")
+        .arg(&bin)
         .arg(&dl_path)
         .output()
         .map_err(|e| format!("spawn: {e}"))?;

@@ -60,7 +60,12 @@ fn full_pipeline_smoke() {
     let path = format!("/tmp/souffle-pipeline-{pid}-{nanos}.dl");
     std::fs::write(&path, &dl).expect("write");
 
-    let output = std::process::Command::new(&bin)
+    // Hard 10-second timeout — early translator versions could emit programs
+    // that didn't terminate or grew memory quickly; the wrapper prevents a
+    // runaway from eating the dev machine while we iterate.
+    let output = std::process::Command::new("timeout")
+        .arg("10")
+        .arg(&bin)
         .arg(&path)
         .output()
         .expect("spawn souffle");

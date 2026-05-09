@@ -268,9 +268,13 @@ fn translate_command(
             translate_rule(&fake_rule, ctx, p)
         }
         C::RunSchedule(_) => {
-            if !p.pragmas.iter().any(|(k, _)| k == "outer-saturate") {
-                p.pragmas.push(("outer-saturate".into(), "100".into()));
-            }
+            // v0: drop the schedule. Every encoded program has rebuild
+            // run-schedules; Souffle's natural fixpoint handles them.
+            // Setting `outer-saturate=100` here was causing 100 iterations
+            // of every translated program — the SCC was being run many
+            // times unnecessarily and growing relations fast on anything
+            // non-trivial. Faithful (run N) translation will arrive with
+            // the buffer/canon strata split (souffle-strata-design.md).
             Ok(())
         }
         // Everything else: silently skip in v0 (driver-side or not yet

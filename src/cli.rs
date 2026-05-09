@@ -65,6 +65,10 @@ struct Args {
     /// see souffle-backend-plan.md). Implies --term-encoding.
     #[clap(long)]
     souffle_compat: bool,
+    /// Like --souffle-compat plus the buffer/canon/snap strata split for
+    /// (run N) fidelity. See souffle-strata-design.md.
+    #[clap(long)]
+    souffle_compat_strata: bool,
 }
 
 /// Start a command-line interface for the E-graph.
@@ -81,7 +85,7 @@ pub fn cli(mut egraph: EGraph) {
 
     let args = Args::parse();
 
-    if args.term_encoding || args.souffle_compat {
+    if args.term_encoding || args.souffle_compat || args.souffle_compat_strata {
         egraph = egraph.with_term_encoding_enabled();
     }
 
@@ -96,6 +100,10 @@ pub fn cli(mut egraph: EGraph) {
 
     if args.souffle_compat {
         egraph = egraph.with_souffle_compat();
+    }
+
+    if args.souffle_compat_strata {
+        egraph = egraph.with_souffle_compat_strata();
     }
 
     EGraph::set_num_threads(args.threads);

@@ -465,6 +465,17 @@ impl EGraph {
         self
     }
 
+    /// Enable the strata extension of souffle_compat: split each rebuilt
+    /// relation into buffer/canon/snap so user rules and rebuild rules end
+    /// up in separate SCCs. Required to preserve (run N) semantics when
+    /// the encoded form is run through Souffle. See souffle-strata-design.md.
+    /// Implies `with_souffle_compat`.
+    pub fn with_souffle_compat_strata(mut self) -> Self {
+        self.proof_state.souffle_compat = true;
+        self.proof_state.souffle_compat_strata = true;
+        self
+    }
+
     /// Enable the term-encoding pipeline on an existing `EGraph`.
     ///
     /// This method is to support the current CLI implementation with egglog-experimental (https://github.com/egraphs-good/egglog/issues/768)
